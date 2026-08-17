@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>EmbyMpvClient</AssemblyName>
+    <RootNamespace>EmbyMpvClient</RootNamespace>
+    <ApplicationIcon>..\..\app.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Required by [LibraryImport] source generation (Theme/Win11.cs). No unsafe code is
+         written by hand anywhere in the project. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- Generated into ApplicationConfiguration.Initialize() by the WinForms SDK. -->
+  <PropertyGroup>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Microsoft YaHei UI, 9pt</ApplicationDefaultFont>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EmbyMpvClient.Core\EmbyMpvClient.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The embedded backend is self-contained: shaders, the mpv.conf/input.conf copies and the
+       dll dependencies (lua51, vulkan-1…) are shipped along on publish so a published build
+       never touches the external mpv installation; the app itself imports the same files on
+       first run as a fallback. -->
+  <Target Name="ShipEmbeddedResources" AfterTargets="Publish">
+    <ItemGroup>
+      <ShaderFiles Include="C:\mpv_config-2026.08.12\portable_config\shaders\**\*" />
+      <DependencyDlls Include="C:\mpv_config-2026.08.12\*.dll" />
+      <LocalLibMpv Include="..\..\libmpv-2.dll" Condition="Exists('..\..\libmpv-2.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ShaderFiles)" DestinationFiles="$(PublishDir)\shaders\%(RecursiveDir)%(Filename)%(Extension)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(DependencyDlls)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(LocalLibMpv)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

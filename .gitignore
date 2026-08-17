@@ -1,0 +1,16 @@
+bin/
+obj/
+publish/
+*.user
+*.suo
+.vs/
+.idea/
+artifacts/
+*.log
+
+# 37 MB 的 mpv 运行库，仅在存在时被复制进 publish/（见 EmbyMpvClient.App.csproj），不入库
+libmpv-2.dll
+
+# 构建与测试时重定向到文件的控制台输出
+testrun.txt
+pubout.txt

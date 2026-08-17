@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Platform-neutral core: Emby access, mpv launching/IPC, settings, mpv.conf parsing.
+    Deliberately has no WinForms/System.Drawing reference so it stays unit-testable
+    from a plain console test host.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>EmbyMpvClient.Core</AssemblyName>
+    <RootNamespace>EmbyMpvClient</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EmbyMpvClient" />
+    <InternalsVisibleTo Include="EmbyMpvClient.Tests" />
+  </ItemGroup>
+
+</Project>
