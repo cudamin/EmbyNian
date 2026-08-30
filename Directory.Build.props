@@ -2,8 +2,12 @@
 
   <!--
     Shared build settings for every project in the solution.
-    Kept deliberately dependency-free: this machine has an empty NuGet cache,
-    so the whole solution must build offline against the shared frameworks only.
+
+    Core and Tests still take no package references at all, which is worth keeping: it makes
+    them buildable against the shared frameworks alone and keeps the test project honest about what
+    it is testing. That is a preference now rather than a constraint — this used to say the machine
+    had an empty NuGet cache and had to build offline, which is no longer true. EmbyNian.Shell
+    references Microsoft.WindowsAppSDK, restored from nuget.org (pinned in nuget.config).
   -->
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
@@ -17,13 +21,22 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Product>Emby MPV Client</Product>
-    <Company>EmbyMpvClient</Company>
-    <Version>2.0.0</Version>
-    <AssemblyVersion>2.0.0.0</AssemblyVersion>
-    <FileVersion>2.0.0.0</FileVersion>
-    <Copyright>Emby MPV Client</Copyright>
+    <Product>EmbyNian</Product>
+    <Company>EmbyNian</Company>
+    <Version>3.0.0</Version>
+    <AssemblyVersion>3.0.0.0</AssemblyVersion>
+    <FileVersion>3.0.0.0</FileVersion>
+    <Copyright>EmbyNian</Copyright>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\work\**\*;$(MSBuildProjectDirectory)\work-*\**\*</DefaultItemExcludes>
   </PropertyGroup>
+
+  <!-- Keep agent/build scratch folders under a project from becoming source files.  This is
+       especially important for WinUI, whose generated XAML files are ordinary .cs files. -->
+  <ItemGroup>
+    <Compile Remove="work\**" />
+    <EmbeddedResource Remove="work\**" />
+    <None Remove="work\**" />
+  </ItemGroup>
 
 </Project>

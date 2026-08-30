@@ -1,0 +1,106 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The WinUI 3 shell. It is the only desktop application in the solution.
+
+    The window model here was settled by measurement rather than argument (see Shell/HostWindow.cs):
+    the top-level window is our own CreateWindowEx HWND, mpv stays a child HWND embedded with its
+    "wid" option, and every pixel of chrome lives in a DesktopWindowXamlSource island above the
+    video. A real Microsoft.UI.Xaml.Window was tried and rejected: it composites its backdrop into
+    the island surface, which makes the island permanently opaque and hides the video child entirely.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <AssemblyName>EmbyNian</AssemblyName>
+    <RootNamespace>EmbyNian.Shell</RootNamespace>
+    <ApplicationIcon>..\..\app.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Required by [LibraryImport] source generation in Interop/Native.cs. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <UseWinUI>true</UseWinUI>
+    <!-- Unpackaged: no MSIX, no identity, a plain exe next to libmpv-2.dll. The generated
+         bootstrapper resolves the Windows App Runtime at startup, so the SDK version has to be one
+         this machine can actually bootstrap. The 1.x line needed a per-release
+         MicrosoftCorporationII.WinAppRuntime.Main package, and only 1.4, 1.5 and 1.8 were installed
+         (1.6 and 1.7 restored but could not bootstrap). The 2.x line packages its runtime
+         differently — one Microsoft.WindowsAppRuntime.2 framework package, present here at 2.4.0.0 —
+         so 2.4.0 bootstraps unpackaged and the startup self-check passes against it. (Spelling that
+         switch with its two leading dashes here is what an XML comment cannot hold: MSB4025, and the
+         whole project stops loading.) -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <EnableMsixTooling>true</EnableMsixTooling>
+
+    <!-- WinUI 3 cannot run as AnyCPU. The solution maps its Any CPU configuration onto x64 so a
+         plain `dotnet build EmbyNian.sln` still builds this project, and Platform is pinned as
+         well as Platforms so that building the csproj on its own lands in the same bin\x64 folder
+         rather than a second bin\Debug one. -->
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+
+    <!-- We write Main ourselves: the process has to migrate the data directory, take the
+         single-instance mutex and start logging before any XAML exists. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- Override this for a release machine whose bundled mpv configuration lives elsewhere. -->
+    <MpvConfigRoot Condition="'$(MpvConfigRoot)' == ''">C:\mpv_config-2026.08.12</MpvConfigRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
+    <!-- MVVM, source-generated. The pages bind to view models rather than reaching for named XAML
+         elements, and this package is what makes that cheap enough to be worth doing everywhere:
+         [ObservableProperty] on a partial property writes the backing field, the setter and the
+         change notification, and [NotifyPropertyChangedFor] wires a derived property to its source
+         so a Visibility that follows a bool cannot go stale. Hand-written INotifyPropertyChanged is
+         what CardItem does — 40 lines of Raise() calls that a reviewer has to check by eye — and
+         doing that eight more times, once per page, is how the notifications start being wrong. -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- The container the services are registered in. It replaces a composition root that built the
+         same objects by hand, and the reason to prefer it is ValidateOnBuild: an object that cannot be
+         constructed is now a startup failure naming the missing dependency, where the hand-written
+         version could only fail later, as a NullReferenceException on whichever page happened to touch
+         it first. Registered in Composition/ShellServices.cs; the container itself stays in this
+         project so Core keeps taking no package references and the test runner can still reach the
+         services without one. Same major as the framework, for the reason given just below. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <!-- DPAPI, for the saved password and token. WinUI does not reference the desktop framework, so
+         this is an explicit package. Kept on the same major as the target framework: an 8.0.x here
+         drags the 8.0 System.Runtime contract into a net10.0 build for no reason. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EmbyNian.Core\EmbyNian.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The player is libmpv loaded in-process, so the DLL has to sit next to the exe in every
+       configuration and not only in a publish. It is 36 MB; PreserveNewest means it is copied once and
+       then skipped, and the Condition means a checkout without it still builds and simply reports the
+       missing backend at play time instead of failing the build. -->
+  <ItemGroup>
+    <None Include="..\..\libmpv-2.dll" Condition="Exists('..\..\libmpv-2.dll')">
+      <Link>libmpv-2.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- The shader tree and libmpv dependencies ship beside the exe. -->
+  <Target Name="ShipEmbeddedResources" AfterTargets="Publish">
+    <ItemGroup>
+      <ShaderFiles Include="$(MpvConfigRoot)\portable_config\shaders\**\*" />
+      <DependencyDlls Include="$(MpvConfigRoot)\*.dll" />
+      <LocalLibMpv Include="..\..\libmpv-2.dll" Condition="Exists('..\..\libmpv-2.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ShaderFiles)" DestinationFiles="$(PublishDir)\shaders\%(RecursiveDir)%(Filename)%(Extension)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(DependencyDlls)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(LocalLibMpv)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

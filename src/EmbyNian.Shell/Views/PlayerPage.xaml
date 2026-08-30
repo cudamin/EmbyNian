@@ -1,0 +1,778 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The player's on-screen controls, as a sibling of the navigation shell rather than a page in its
+  frame: the pane and the header must not stay on screen behind a film.
+
+  Everything here is drawn over a transparent island with mpv's child HWND showing through it. That
+  is what fact 1 in HostWindow's remarks bought, and it is why this file replaces the WinForms
+  shell's five hand-painted layered top-level windows (PlayerBar 1291 lines, PlayerFlyout 813,
+  VolumeRail 283, SkipSectionButton 205, Chrome 696) with declarative XAML in one visual tree. The
+  four consequences worth naming:
+
+    * Requirement 1, resizing. Nine SetWindowPos calls per WM_SIZE became one MoveAndResize for the
+      island plus one for the video child. The chrome resizes because it is laid out, not moved.
+    * Requirement 12, the mess when switching episodes. The island is above the video by
+      construction, so nothing has to be brought to the front and the handover cover cannot lose a
+      z-order race it used to lose.
+    * Requirements 9/10/11, the reveal rule. Real pointer events arrive here, so ChromeReveal is
+      driven one event at a time instead of off a 40 ms Cursor.Position poll.
+    * The pickers. MenuFlyout gets a genuine DesktopAcrylicBackdrop from the framework's own
+      generic.xaml, keyboard navigation and narrator names, none of which PlayerFlyout had.
+
+  No transitions and no fades on the two overlays the pointer's own bands reveal: requirement 9 was
+  「不要淡入淡出了，鼠标移动到对应位置直接显示」, so the transport bar and the title strip are Visibility
+  flips. The volume rail is the exception the user asked for afterwards —
+  「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」 — and it fades through an
+  implicit ScalarTransition on its own Opacity, explained where it is declared. The one storyboard in
+  the file is PulseBadge's, which nobody reveals — it is the one-second 暂停/播放 acknowledgement the
+  user asked to have an animation, and it explains itself down there.
+
+  Every readout here is bound to PlayerViewModel with x:Bind rather than assigned from code-behind —
+  the clock, the seek and volume sliders, the play glyph, the source line, the skip offer, the chapter
+  peek and the handover cover — and the transport buttons are Command bindings. What is left as a
+  Click= or an Opened= handler is there because it is a WinUI behaviour rather than player state: the
+  window commands, the fullscreen and 置顶 toggles, the six menus (whose rows are built on open), the
+  seek track's own size and hover, and the mute button, which flashes the volume rail as well as
+  muting. Visibility on Bar/TitleStrip/ThinLine and the rail's Opacity stay code-owned for the same
+  reason: they are the reveal rule's output, not a property of what is playing.
+
+  The scrims are gradients rather than an in-app AcrylicBrush, and deliberately. WinUI 3 has no
+  host-backdrop acrylic, so an AcrylicBrush here would sample the transparent island above the video
+  rather than the picture, and blur nothing — it would come out a flat tint pretending to be a
+  material. A gradient is also simply the better answer over arbitrary video: acrylic's luminosity
+  tint washes out over a bright frame, and a scrim that fades to nothing keeps the picture readable
+  right up to the controls.
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.PlayerPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    xmlns:vm="using:EmbyNian.Shell.ViewModels"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    RequestedTheme="Dark"
+    FontFamily="{StaticResource EgUiFontFamily}"
+    FontSize="{StaticResource EgBodyFontSize}"
+    IsTabStop="True"
+    UseSystemFocusVisuals="False"
+    Visibility="Collapsed">
+
+    <UserControl.Resources>
+        <!-- Turns the slider's own 0..1000 into a clock, which is what makes hovering the seek bar
+             say 「1:07:32」 for free. A stateful converter because the duration is the file's, not the
+             slider's; the page keeps it current. -->
+        <local:SeekClockConverter x:Key="SeekClockConverter" />
+
+        <!-- Flat, borderless and see-through until pointed at: over a picture, a button's own filled
+             background is more visible than its glyph and reads as a panel rather than a control. -->
+        <Style x:Key="OsdButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="#FFF2F4F7" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="MinWidth" Value="40" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="FontFamily" Value="{StaticResource EgUiFontFamily}" />
+        </Style>
+
+        <Style x:Key="OsdGlyphStyle" TargetType="FontIcon">
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="16" />
+        </Style>
+
+        <LinearGradientBrush x:Key="BottomScrim" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Offset="0.0" Color="#000C0E11" />
+            <GradientStop Offset="0.35" Color="#8C0C0E11" />
+            <GradientStop Offset="1.0" Color="#F00C0E11" />
+        </LinearGradientBrush>
+
+        <LinearGradientBrush x:Key="TopScrim" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Offset="0.0" Color="#E60C0E11" />
+            <GradientStop Offset="1.0" Color="#000C0E11" />
+        </LinearGradientBrush>
+
+        <!-- 章节刻度. A brush rather than a colour per tick: the marks are rebuilt on every resize and
+             on every chapter list, and a hundred brushes for a hundred chapters is a hundred more
+             composition objects than the picture needs. -->
+        <SolidColorBrush x:Key="ChapterTickBrush" Color="#B3FFFFFF" />
+
+        <!-- The 暂停/播放 badge's one second, and the only storyboard in the file — see PulseBadge for
+             why this one is not the fade the reveal rule refuses.
+
+             Held together rather than split in two because the pause pulse and the resume pulse are the
+             same gesture with a different glyph; the page sets the glyph and begins this. Opacity is up
+             within 90 ms so the acknowledgement is immediate, holds while it is read, and is gone by
+             1000 ms; the scale starts small and ends slightly over, so it grows on arrival and drifts
+             outward as it goes rather than shrinking back into nothing — a badge that retreated the way
+             it came would read as being cancelled rather than acknowledged.
+
+             Opacity and scale are both composition properties, so this runs off the UI thread and needs
+             no EnableDependentAnimation. Completed collapses the badge: left visible at zero opacity it
+             would still be a hit-test-free but laid-out element on every subsequent frame. -->
+        <Storyboard x:Key="PulseStoryboard" Completed="OnPulseCompleted">
+            <DoubleAnimationUsingKeyFrames
+                Storyboard.TargetName="PulseBadge"
+                Storyboard.TargetProperty="Opacity">
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.09" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.62" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:1" Value="0" />
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames
+                Storyboard.TargetName="PulseScale"
+                Storyboard.TargetProperty="ScaleX">
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.72" />
+                <SplineDoubleKeyFrame KeyTime="0:0:0.22" KeySpline="0.1,0.9 0.2,1" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:1" Value="1.18" />
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames
+                Storyboard.TargetName="PulseScale"
+                Storyboard.TargetProperty="ScaleY">
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.72" />
+                <SplineDoubleKeyFrame KeyTime="0:0:0.22" KeySpline="0.1,0.9 0.2,1" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:1" Value="1.18" />
+            </DoubleAnimationUsingKeyFrames>
+        </Storyboard>
+    </UserControl.Resources>
+
+    <!-- Transparent, not null: a null background is not hit-testable, and every pointer event the
+         reveal rule runs on lands on this grid. It is also what lets the video show through. -->
+    <Grid x:Name="Root" Background="Transparent" SizeChanged="OnRootResized">
+
+        <!-- ================= 右键画面菜单 =================
+             The tree is PlayerMenuCatalog's, harvested from the bundled input.conf's own uosc menu, so
+             「右键 → 画面 → 开/关 裁切填充」 is where someone who has used that configuration expects it.
+             Built on first open rather than in XAML because it is a hundred-odd rows of data, and as a
+             ContextFlyout rather than a RightTapped handler so the menu key and Shift+F10 reach it too. -->
+        <Grid.ContextFlyout>
+            <MenuFlyout x:Name="PictureMenu" Opening="OnPictureMenuOpening" />
+        </Grid.ContextFlyout>
+
+        <!-- ================= 顶部：标题与窗口操作 =================
+             The three window commands are the last column rather than a separate overlay of the shell's,
+             and that is the whole of 「全屏后右上角的图标不会自动隐藏，鼠标移到左上角时会跟置顶跟统计重叠」:
+             an overlay outside this strip could neither come and go with the reveal rule nor be kept out
+             of 统计/置顶's corner, and it did both wrong at once. As a column it hides with the strip and
+             the grid guarantees no two of them can ever share a pixel.
+
+             The strip pads only its left edge, so those buttons reach the top-right corner the way every
+             other window's do; everything else in the row carries its own top inset instead. -->
+        <Grid
+            x:Name="TitleStrip"
+            Height="96"
+            VerticalAlignment="Top"
+            Background="{StaticResource TopScrim}"
+            Padding="16,0,0,0"
+            ColumnSpacing="8"
+            Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button
+                x:Name="BackButton"
+                Command="{x:Bind ViewModel.StopCommand}"
+                Style="{StaticResource OsdButtonStyle}"
+                VerticalAlignment="Top"
+                Margin="0,10,0,0"
+                ToolTipService.ToolTip="返回（Esc）">
+                <FontIcon Glyph="&#xE72B;" Style="{StaticResource OsdGlyphStyle}" />
+            </Button>
+
+            <StackPanel Grid.Column="1" VerticalAlignment="Top" Margin="4,12,0,0">
+                <TextBlock
+                    x:Name="TitleText"
+                    FontSize="{StaticResource EgTitleFontSize}"
+                    FontWeight="SemiBold"
+                    MaxLines="1"
+                    Text="{x:Bind ViewModel.Title, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis" />
+                <TextBlock
+                    x:Name="SubtitleText"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="#FFA5ADBA"
+                    MaxLines="1"
+                    Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis"
+                    Visibility="{x:Bind ViewModel.SubtitleVisibility, Mode=OneWay}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top" Spacing="2" Margin="0,10,0,0">
+                <!-- 需求 7：字幕字体. A search box rather than a menu of families: there are a few thousand of
+                     them on a machine with fonts installed, and no flyout that long is navigable. The rows
+                     are drawn in the family they offer, same as the 设置 card's list.
+
+                     The text is the search, not the value — taking the keyboard clears it and opens the
+                     whole list, and leaving puts the family currently in use back. The current family also
+                     stays in the list whatever is typed (SettingFontRow.Refilter has the why), so a search
+                     that matches nothing still has one row; Resolve is what keeps Enter from picking it by
+                     accident.
+
+                     Everything the box does to the rest of the player is in PlayerPage.Fonts.cs: it pins the
+                     chrome while it has focus, and it silences the player's single-letter keys — F, M, N, P
+                     and Space are all commands and all letters a font name is spelled with. -->
+                <AutoSuggestBox
+                    x:Name="FontBox"
+                    Width="188"
+                    Margin="0,0,6,0"
+                    VerticalAlignment="Top"
+                    GotFocus="OnFontBoxFocus"
+                    ItemsSource="{x:Bind ViewModel.SubtitleFont.Matches, Mode=OneWay}"
+                    KeyDown="OnFontBoxKeyDown"
+                    LostFocus="OnFontBoxBlur"
+                    PlaceholderText="字幕字体"
+                    QuerySubmitted="OnFontQuerySubmitted"
+                    SuggestionChosen="OnFontSuggestionChosen"
+                    TextChanged="OnFontBoxTextChanged"
+                    TextMemberPath="Name"
+                    ToolTipService.ToolTip="字幕字体：输入任意一段名字搜索，回车或点一下就换，正在播的片子立刻生效">
+                    <AutoSuggestBox.QueryIcon>
+                        <SymbolIcon Symbol="Find" />
+                    </AutoSuggestBox.QueryIcon>
+                    <AutoSuggestBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:FontOption">
+                            <StackPanel Padding="0,2,0,2">
+                                <TextBlock
+                                    FontFamily="{x:Bind Preview}"
+                                    FontSize="15"
+                                    Text="{x:Bind Name}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <TextBlock
+                                    FontFamily="{x:Bind Preview}"
+                                    FontSize="12"
+                                    Opacity="0.7"
+                                    Text="{x:Bind Localized}"
+                                    TextTrimming="CharacterEllipsis"
+                                    Visibility="{x:Bind LocalizedVisibility}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </AutoSuggestBox.ItemTemplate>
+                </AutoSuggestBox>
+
+                <!-- 统计. A toggle, because the panel it opens stays up until it is closed again: it is
+                     read while something is going wrong, and a readout that vanished when the chrome
+                     hid itself would be gone exactly when it was being watched. -->
+                <ToggleButton
+                    x:Name="StatsButton"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Content="统计"
+                    CornerRadius="6"
+                    FontFamily="{StaticResource EgUiFontFamily}"
+                    IsChecked="{x:Bind ViewModel.StatsOpen, Mode=TwoWay}"
+                    Padding="10,6"
+                    ToolTipService.ToolTip="播放统计" />
+
+                <ToggleButton
+                    x:Name="PinButton"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Click="OnTogglePin"
+                    CornerRadius="6"
+                    Padding="10,6"
+                    ToolTipService.ToolTip="窗口置顶（T）">
+                    <FontIcon Glyph="&#xE718;" Style="{StaticResource OsdGlyphStyle}" />
+                </ToggleButton>
+            </StackPanel>
+
+            <!-- 最小化 / 最大化 / 关闭. Real client-area buttons, because playback removes WS_CAPTION so the
+                 picture can reach the top edge — Windows draws no caption buttons to inherit. Flush to the
+                 corner and 32 tall, which is where the hand already expects them. 最大化 goes away in
+                 fullscreen: the window's edges are the monitor's there, so the button could only do
+                 nothing. -->
+            <StackPanel
+                x:Name="WindowButtons"
+                Grid.Column="3"
+                Orientation="Horizontal"
+                VerticalAlignment="Top">
+                <Button
+                    x:Name="MinimizeButton"
+                    Click="OnMinimizeWindow"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="0"
+                    Width="46"
+                    Height="32"
+                    ToolTipService.ToolTip="最小化">
+                    <FontIcon
+                        FontSize="10"
+                        Foreground="#FFF2F4F7"
+                        Glyph="&#xE921;"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
+                <Button
+                    x:Name="MaximizeButton"
+                    Click="OnToggleMaximizeWindow"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="0"
+                    Width="46"
+                    Height="32"
+                    ToolTipService.ToolTip="最大化或还原">
+                    <FontIcon
+                        x:Name="MaximizeGlyph"
+                        FontSize="10"
+                        Foreground="#FFF2F4F7"
+                        Glyph="&#xE922;"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
+                <Button
+                    x:Name="CloseButton"
+                    Click="OnCloseWindow"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="0"
+                    Width="46"
+                    Height="32"
+                    ToolTipService.ToolTip="关闭">
+                    <FontIcon
+                        FontSize="10"
+                        Foreground="#FFF2F4F7"
+                        Glyph="&#xE8BB;"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- ================= 播放统计面板 =================
+             Drawn here rather than by mpv's stats.lua, and not by choice: the bundled libmpv-2.dll is
+             built without Lua, so the script that would have drawn it was never loaded. PlaybackStats
+             owns which properties are read and what the rows say; this is where they land.
+
+             Below the title strip and outside the reveal rule — the strip comes and goes with the
+             pointer, and a panel that came and went with it could not be read. -->
+        <Border
+            x:Name="StatsPanel"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            Margin="20,104,0,0"
+            Padding="14,10"
+            Background="#D91E2126"
+            BorderBrush="#4DFFFFFF"
+            BorderThickness="1"
+            CornerRadius="10"
+            IsHitTestVisible="False"
+            Visibility="{x:Bind ViewModel.StatsVisibility, Mode=OneWay}">
+            <Grid x:Name="StatsRows" ColumnSpacing="16" RowSpacing="3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+            </Grid>
+        </Border>
+
+        <!-- ================= 右侧：音量条 =================
+             Its own overlay rather than a slider inside the transport bar. The pointer reaches the
+             right edge far more often than it reaches one particular button, and the requests were
+             「鼠标滚轮调整音量时要显示音量条」 and then 「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近
+             右边的中心显示越明显」 — none of which a control living inside the bar could answer. It no
+             longer comes up with the bar: 「显示进度条的时候不需要同步显示音量条」.
+
+             Opacity rather than Visibility, and the only overlay here that works that way. The
+             ScalarTransition below is what makes it a fade — an implicit transition, so PlayerPage's
+             FadeRail assigns the strength the rule decided and the compositor spends 220 ms getting
+             there, which keeps 「is the rail up」 readable as a property instead of as a frame of an
+             animation. Starts at zero with hit testing off, because the shell builds this page long
+             before anything plays and an invisible rail must not answer clicks meant for the picture. -->
+        <Border
+            x:Name="Rail"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Center"
+            Margin="0,0,22,0"
+            Padding="10,18"
+            Background="#E61E2126"
+            BorderBrush="#59FFFFFF"
+            BorderThickness="1"
+            CornerRadius="28"
+            Opacity="0"
+            IsHitTestVisible="False">
+            <Border.OpacityTransition>
+                <ScalarTransition Duration="0:0:0.22" />
+            </Border.OpacityTransition>
+            <StackPanel Spacing="10" HorizontalAlignment="Center">
+                <TextBlock
+                    x:Name="VolumeText"
+                    FontSize="16"
+                    FontWeight="SemiBold"
+                    HorizontalAlignment="Center"
+                    Text="{x:Bind ViewModel.VolumeLabel, Mode=OneWay}" />
+
+                <Slider
+                    x:Name="VolumeSlider"
+                    Height="240"
+                    Width="44"
+                    HorizontalAlignment="Center"
+                    IsThumbToolTipEnabled="False"
+                    Maximum="100"
+                    Minimum="0"
+                    Orientation="Vertical"
+                    StepFrequency="1"
+                    Value="{x:Bind ViewModel.Volume, Mode=TwoWay}" />
+
+                <Button
+                    x:Name="MuteButton"
+                    Click="OnToggleMute"
+                    Style="{StaticResource OsdButtonStyle}"
+                    Padding="10"
+                    MinWidth="44"
+                    ToolTipService.ToolTip="静音（M）">
+                    <FontIcon x:Name="MuteGlyph" Glyph="{x:Bind ViewModel.SoundGlyph, Mode=OneWay}" Style="{StaticResource OsdGlyphStyle}" FontSize="18" />
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- ================= 跳过片头/片尾 ================= -->
+        <Button
+            x:Name="SkipButton"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            Margin="0,0,28,148"
+            Padding="16,10"
+            Background="#E62E333B"
+            BorderBrush="#66FFFFFF"
+            BorderThickness="1"
+            CornerRadius="20"
+            Command="{x:Bind ViewModel.TakeSkipCommand}"
+            Visibility="{x:Bind ViewModel.SkipVisibility, Mode=OneWay}">
+            <StackPanel Spacing="6">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE893;" Style="{StaticResource OsdGlyphStyle}" />
+                    <TextBlock x:Name="SkipText" Text="{x:Bind ViewModel.SkipCaption, Mode=OneWay}" />
+                    <TextBlock x:Name="SkipTip" Text="{x:Bind ViewModel.SkipTip, Mode=OneWay}" Foreground="#FF8B93A0" FontSize="{StaticResource EgCaptionFontSize}" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <!-- The offer's own fifteen seconds, drawn rather than merely counted: a button that is
+                     about to lapse should look like one. SkipPrompt.Remaining runs 1 down to 0. -->
+                <ProgressBar
+                    x:Name="SkipCountdown"
+                    Height="2"
+                    Maximum="1"
+                    Minimum="0"
+                    Value="{x:Bind ViewModel.SkipRemaining, Mode=OneWay}"
+                    Background="#26FFFFFF"
+                    Foreground="#FF8B93A0" />
+            </StackPanel>
+        </Button>
+
+        <!-- ================= 底部：进度与传输控制 ================= -->
+        <Grid
+            x:Name="Bar"
+            VerticalAlignment="Bottom"
+            Background="{StaticResource BottomScrim}"
+            Padding="20,26,20,12"
+            RowSpacing="2"
+            Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- 进度 -->
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    x:Name="PositionText"
+                    FontFamily="Consolas,Cascadia Mono,Segoe UI"
+                    Foreground="#FFF2F4F7"
+                    Text="{x:Bind ViewModel.PositionClock, Mode=OneWay}"
+                    VerticalAlignment="Center" />
+
+                <Grid Grid.Column="1" x:Name="SeekTrack" VerticalAlignment="Center" SizeChanged="OnSeekTrackResized">
+                    <!-- The buffered-ahead readout, behind the slider's own track rather than beside
+                         it: two bars would have the user comparing positions instead of reading one. -->
+                    <ProgressBar
+                        x:Name="CacheBar"
+                        Height="4"
+                        Maximum="1"
+                        Minimum="0"
+                        Value="{x:Bind ViewModel.CacheFraction, Mode=OneWay}"
+                        VerticalAlignment="Center"
+                        Background="#33FFFFFF"
+                        Foreground="#59FFFFFF"
+                        IsIndeterminate="False" />
+
+                    <!-- 章节刻度. Between the cache bar and the slider so the thumb passes over the
+                         marks rather than under them, and never hit-testable: a tick is a thing to aim
+                         at with the slider, not a thing to click. -->
+                    <Canvas
+                        x:Name="ChapterTicks"
+                        Height="12"
+                        VerticalAlignment="Center"
+                        IsHitTestVisible="False" />
+
+                    <Slider
+                        x:Name="SeekSlider"
+                        Margin="0,-1,0,0"
+                        Background="Transparent"
+                        Maximum="1000"
+                        Minimum="0"
+                        StepFrequency="1"
+                        ThumbToolTipValueConverter="{StaticResource SeekClockConverter}"
+                        Value="{x:Bind ViewModel.SeekValue, Mode=TwoWay}" />
+                </Grid>
+
+                <TextBlock
+                    Grid.Column="2"
+                    x:Name="DurationText"
+                    FontFamily="Consolas,Cascadia Mono,Segoe UI"
+                    Foreground="#FFA5ADBA"
+                    Text="{x:Bind ViewModel.DurationClock, Mode=OneWay}"
+                    VerticalAlignment="Center" />
+            </Grid>
+
+            <!-- 控制
+                 Ranked rather than evenly weighted, as the WinForms bar was: play in the middle at
+                 twice the size, the two episode steps beside it, the pickers pushed right, and the
+                 things nobody presses twice an hour inside ⚙. -->
+            <Grid Grid.Row="1" Margin="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                    <Button
+                        x:Name="PreviousButton"
+                        Command="{x:Bind ViewModel.PreviousEpisodeCommand}"
+                        Style="{StaticResource OsdButtonStyle}"
+                        ToolTipService.ToolTip="上一集"
+                        Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
+                        <FontIcon Glyph="&#xE892;" Style="{StaticResource OsdGlyphStyle}" />
+                    </Button>
+                    <Button
+                        x:Name="PlayButton"
+                        Command="{x:Bind ViewModel.TogglePauseCommand}"
+                        Style="{StaticResource OsdButtonStyle}"
+                        Padding="12,6"
+                        ToolTipService.ToolTip="播放/暂停（空格）">
+                        <FontIcon x:Name="PlayGlyph" Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" Style="{StaticResource OsdGlyphStyle}" FontSize="20" />
+                    </Button>
+                    <Button
+                        x:Name="NextButton"
+                        Command="{x:Bind ViewModel.NextEpisodeCommand}"
+                        Style="{StaticResource OsdButtonStyle}"
+                        ToolTipService.ToolTip="下一集"
+                        Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
+                        <FontIcon Glyph="&#xE893;" Style="{StaticResource OsdGlyphStyle}" />
+                    </Button>
+                </StackPanel>
+
+                <!-- What is actually being decoded — 「1080p · HEVC · 8.4 GB」. The middle of the bar is
+                     the one place nothing else wants, and this is the question a viewer asks of a file
+                     often enough to be worth answering without opening a dialog for it. -->
+                <TextBlock
+                    Grid.Column="1"
+                    x:Name="SourceText"
+                    Foreground="#FFA5ADBA"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    MaxLines="1"
+                    Text="{x:Bind ViewModel.SourceLabel, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis"
+                    VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="2" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                    <Button
+                        x:Name="EpisodeButton"
+                        Content="选集"
+                        Style="{StaticResource OsdButtonStyle}"
+                        ToolTipService.ToolTip="本季剧集"
+                        Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="EpisodeMenu" Placement="Top" Opening="OnEpisodeMenuOpening" />
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button x:Name="AudioButton" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="音轨">
+                        <FontIcon Glyph="&#xE8D6;" Style="{StaticResource OsdGlyphStyle}" />
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="AudioMenu" Placement="Top" Opening="OnAudioMenuOpening" />
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button x:Name="SubtitleButton" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="字幕">
+                        <FontIcon Glyph="&#xED1E;" Style="{StaticResource OsdGlyphStyle}" />
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="SubtitleMenu" Placement="Top" Opening="OnSubtitleMenuOpening" />
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button x:Name="SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="播放速度">
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="SpeedMenu" Placement="Top" Opening="OnSpeedMenuOpening" />
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button x:Name="MoreButton" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="更多">
+                        <FontIcon Glyph="&#xE713;" Style="{StaticResource OsdGlyphStyle}" />
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="MoreMenu" Placement="Top" Opening="OnMoreMenuOpening" />
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button
+                        x:Name="FullscreenButton"
+                        Click="OnToggleFullscreen"
+                        Style="{StaticResource OsdButtonStyle}"
+                        ToolTipService.ToolTip="全屏（F）">
+                        <FontIcon x:Name="FullscreenGlyph" Glyph="&#xE740;" Style="{StaticResource OsdGlyphStyle}" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <!-- ================= 浮层收起时的细进度线 =================
+             Two pixels at the very bottom edge, shown only while the chrome is hidden: with the bar
+             gone there is nothing on screen that says how far in we are, and the answer is worth two
+             pixels. Not hit-testable — reaching for it reveals the real bar, which is the thing that
+             can be dragged. Inverse of Bar's visibility, so the two are never both up. -->
+        <ProgressBar
+            x:Name="ThinLine"
+            Height="2"
+            Maximum="1"
+            Minimum="0"
+            Value="{x:Bind ViewModel.ThinFraction, Mode=OneWay}"
+            VerticalAlignment="Bottom"
+            Background="#26FFFFFF"
+            Foreground="#FFE0E4EA"
+            IsHitTestVisible="False"
+            Visibility="Collapsed" />
+
+        <!-- ================= 暂停/播放提示 =================
+             「暂停后显示一秒暂停图标就行（开启播放也弄个一秒的动画），别什么进度条标题音量条都持久显示在
+             画面上」. Pausing used to pin the whole chrome — bar, title strip and volume rail — for as long
+             as the file stayed paused, on the reasoning that a frozen frame has nothing to watch so the way
+             out should stay visible. But 「the way out」 is one bit of information, and three overlays is not
+             how you spell it: they cover the frame the pause was called to look at. So the pin is gone (see
+             OnStatusApplied) and this is what says it instead — one glyph, in the middle, for a second.
+
+             The one animation in this file, and the exception to the header's 「no storyboards anywhere」.
+             That rule is about reveals the pointer asks for: a control you are already reaching for must be
+             there the instant you arrive, and a fade only delays it. This is the opposite kind of thing —
+             nobody is reaching for it, it appears and leaves on its own, and 「弄个一秒的动画」 is the request.
+             A badge that simply blinked on and off for a second would read as a glitch; growing and fading
+             reads as an acknowledgement.
+
+             Not hit-testable, and starts collapsed with zero opacity so a layout pass before the first
+             pause cannot flash it.
+
+             「不要黑色的圆形边框，只要白色的三角形就可以，然后再放大一些」: the dark plate and its hairline
+             ring are gone, and what is left is the glyph itself at three and a half times the size it was
+             inside the circle. The only thing behind it is a second copy of the same glyph, black and a
+             little larger — a rim that hugs the shape rather than a plate the shape sits on, because a
+             white triangle over a white wall is otherwise not there at all. -->
+        <Border
+            x:Name="PulseBadge"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            IsHitTestVisible="False"
+            Opacity="0"
+            RenderTransformOrigin="0.5,0.5"
+            Visibility="Collapsed">
+            <Border.RenderTransform>
+                <ScaleTransform x:Name="PulseScale" ScaleX="1" ScaleY="1" />
+            </Border.RenderTransform>
+            <Grid>
+                <FontIcon
+                    x:Name="PulseRim"
+                    FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
+                    FontSize="152"
+                    Foreground="#59000000"
+                    Glyph="&#xE769;" />
+                <FontIcon
+                    x:Name="PulseGlyph"
+                    FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
+                    FontSize="140"
+                    Foreground="#FFFFFFFF"
+                    Glyph="&#xE769;" />
+            </Grid>
+        </Border>
+        <!-- ================= 章节缩略图 =================
+             Emby's own chapter still for wherever the pointer is over the seek bar. The server drew
+             these when it scanned the file, so this is a cache read rather than a decode — mpv cannot
+             be asked for a frame it is not currently showing without seeking to it, and seeking to
+             every pixel the pointer crosses is not a preview.
+
+             A server that extracted no chapter images has none to send, and quite a few do not: the
+             extraction is off by default on some builds and skipped for some containers. So the picture
+             is collapsed rather than left as an empty frame — 「预览没有画面」 was a 212×119 hole with a
+             chapter name under it — and what is left is an honest chip: which chapter, and the moment
+             the pointer is on.
+
+             Positioned in code: Left/Top alignment plus a TranslateTransform the page sets from
+             SeekTrack's own position, which is the only way the popup can sit above the bar without
+             this file knowing how tall the bar happens to be. -->
+        <Border
+            x:Name="ChapterPeek"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            Padding="4"
+            Background="#F21E2126"
+            BorderBrush="#59FFFFFF"
+            BorderThickness="1"
+            CornerRadius="8"
+            IsHitTestVisible="False"
+            Visibility="Collapsed">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="ChapterPeekOffset" />
+            </Border.RenderTransform>
+            <StackPanel Spacing="4">
+                <Image
+                    x:Name="ChapterImage"
+                    Source="{x:Bind ViewModel.ChapterStill, Mode=OneWay}"
+                    Width="212"
+                    Height="119"
+                    Stretch="UniformToFill"
+                    Visibility="{x:Bind ViewModel.ChapterStillVisibility, Mode=OneWay}" />
+                <TextBlock
+                    x:Name="ChapterCaption"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="#FFE0E4EA"
+                    HorizontalAlignment="Center"
+                    MaxLines="1"
+                    MaxWidth="212"
+                    Text="{x:Bind ViewModel.ChapterCaption, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis" />
+
+                <!-- The hovered moment. The slider's own thumb tooltip only appears while the thumb is
+                     being dragged, so hovering the track had no time readout at all. -->
+                <TextBlock
+                    x:Name="ChapterClock"
+                    FontFamily="Consolas,Cascadia Mono,Segoe UI"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="#FFA5ADBA"
+                    HorizontalAlignment="Center"
+                    Text="{x:Bind ViewModel.ChapterClock, Mode=OneWay}" />
+            </StackPanel>
+        </Border>
+
+        <!-- ================= 换集时的遮挡层 =================
+             Requirement 12. The video surface and mpv's child inside it both stay alive across an
+             episode change, which is what stops the window from collapsing and rebuilding — but it
+             also means the last frame of the finished episode sits there while mpv tears down one
+             file and opens the next at whatever size and format it turns out to be. Nothing is wrong
+             with the decode; it is simply nobody's job to have painted over it. This is that job.
+
+             Opaque, and above everything else in the grid, so it cannot lose the race the WinForms
+             cover kept losing. -->
+        <Grid x:Name="Cover" Background="#FF0C0E11" Visibility="{x:Bind ViewModel.CoverVisibility, Mode=OneWay}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
+                <ProgressRing IsActive="True" Width="40" Height="40" />
+                <TextBlock x:Name="CoverText" HorizontalAlignment="Center" Foreground="#FFA5ADBA" Text="{x:Bind ViewModel.CoverMessage, Mode=OneWay}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

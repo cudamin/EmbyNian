@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  场记板：每一页最上面那一块。
+
+  一页只有一种横向结构，就是这里最下面那条通栏发丝线 —— 线上面是「这是哪儿」，线下面是内容。原来七个
+  页面各自写一段 StackPanel（一个 34 号粗体标题加一行 12 号灰字），字号字体全靠 StaticResource 各写一遍，
+  于是它们看着像同一个框架的默认页，而不是同一台仪器上的七块牌子。现在那七段都换成这一个控件。
+
+  三行字各有各的职责，互不代劳：
+
+    · 眉字（左上）  等宽、拉开字距、最淡的一档，写的是这一区的代号 —— HOME / LIBRARY / SETTINGS。
+                    只有拉丁字母：它的活是定位而不是被读，而等宽 + 大写 + 字距正是铭牌上那种刻法。
+    · 读数（右上）  和眉字同一行同一种字，右端对齐 —— 条目数、服务器名这类数字和标识。数字走等宽字，
+                    所以右端这一列在任何一页上都对得齐。
+    · 标题（第二行）窄体大字，写的是这一页具体是什么：「电视节目」、「设置」、剧名。
+
+  Trailing 是标题右边那一格，给页面自己的工具条（LibraryPage 的排序/视图/筛选就在那儿）。窗口窄到放不下
+  时把 TrailingBelow 打开，那一格整块挪到线下面去靠右排 —— 挪的是同一个 ContentPresenter，不是两份拷贝，
+  所以工具条不会有两套键盘顺序。
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.PageSlate"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock
+            x:Name="EyebrowText"
+            MaxLines="1"
+            Style="{StaticResource EgEyebrowStyle}"
+            TextTrimming="CharacterEllipsis" />
+
+        <!-- 读数借眉字的样式，不是另起一个：它们是同一行的左右两端，换了字或换了淡度就不像一行了。
+             靠下对齐，因为眉字用的是 Tight 行界，两边的基线要自己对上。 -->
+        <TextBlock
+            x:Name="NoteText"
+            Grid.Column="1"
+            Margin="12,0,0,0"
+            Style="{StaticResource EgEyebrowStyle}"
+            VerticalAlignment="Bottom" />
+
+        <TextBlock
+            x:Name="TitleText"
+            Grid.Row="1"
+            MaxLines="1"
+            Style="{StaticResource EgPageTitleStyle}"
+            TextTrimming="CharacterEllipsis" />
+
+        <!-- 起始位置是标题右边这一格；TrailingBelow 会把它搬到第 3 行去。 -->
+        <ContentPresenter
+            x:Name="TrailingHost"
+            Grid.Row="1"
+            Grid.Column="1"
+            Margin="12,0,0,0"
+            VerticalAlignment="Bottom" />
+
+        <!-- 通栏线。ColumnSpan 2 是它「通栏」的全部实现 —— 内容和线同宽，所以页头和下面的内容左右都对齐。
+             压在剧照上时收起，见 PageSlate.OnScrim：那一条线是「线上是哪儿、线下是内容」的分界，而图上
+             没有线下面那一半。 -->
+        <Border
+            x:Name="Rule"
+            Grid.Row="2"
+            Grid.ColumnSpan="2"
+            Margin="0,8,0,0"
+            Style="{StaticResource EgRuleStyle}" />
+    </Grid>
+</UserControl>

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  右缘的字母跳转条，参考 Emby Theater 的 alphaPicker（桌面布局 fixed-right）：
+
+  - 一列小按钮：#、A…Z。点击 → 页面把网格滚到该字母的第一项。
+  - 当前位置的字母高亮（accent 色加粗），随滚动更新 —— 对应 alphaPickerButton-current。
+  - 高度不足时先压缩按钮，再收起整条，和 alphaPicker 的响应式规则一致。
+
+  按钮用 RepeatButton 的外观参数不行 —— MenuFlyout 之外最轻的选项就是 Button 去掉边框
+  缩小字号。竖排 27 个按钮用 ItemsRepeater + 纵向 StackLayout，容器本身不滚动
+  （alphaPicker 桌面版也不滚，靠字号压缩）。
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.AlphaBar"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="False"
+    SizeChanged="OnSizeChanged">
+
+    <VisualStateManager.VisualStateGroups>
+        <VisualStateGroup x:Name="HeightStates">
+            <VisualState x:Name="Full" />
+            <VisualState x:Name="Compact">
+                <VisualState.Setters>
+                    <Setter Target="Rail.Padding" Value="0,3" />
+                    <Setter Target="Rail.CornerRadius" Value="12" />
+                </VisualState.Setters>
+            </VisualState>
+            <VisualState x:Name="Hidden">
+                <VisualState.Setters>
+                    <Setter Target="Rail.Visibility" Value="Collapsed" />
+                </VisualState.Setters>
+            </VisualState>
+        </VisualStateGroup>
+    </VisualStateManager.VisualStateGroups>
+
+    <UserControl.Resources>
+        <!-- 一个字母按钮。BasedOn 必须有：Button 的模板来自框架的隐式样式，不 BasedOn 就没模板。 -->
+        <Style x:Key="EgAlphaButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="18" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{ThemeResource EgTextFaintBrush}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+
+        <!-- 当前字母：accent 色 + 加粗。FontWeight 在样式里设不了（要跟着 IsCurrent 走），
+             由代码在点击/滚动更新时切换两个样式的引用。 -->
+        <Style x:Key="EgAlphaCurrentStyle" TargetType="Button" BasedOn="{StaticResource EgAlphaButtonStyle}">
+            <Setter Property="Foreground" Value="{ThemeResource EgAccentBrush}" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+
+        <Style x:Key="EgAlphaCompactButtonStyle" TargetType="Button" BasedOn="{StaticResource EgAlphaButtonStyle}">
+            <Setter Property="Height" Value="14" />
+            <Setter Property="FontSize" Value="9" />
+        </Style>
+
+        <Style x:Key="EgAlphaCompactCurrentStyle" TargetType="Button" BasedOn="{StaticResource EgAlphaCompactButtonStyle}">
+            <Setter Property="Foreground" Value="{ThemeResource EgAccentBrush}" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid x:Name="Root">
+        <!-- 覆盖在网格右缘之上，不占布局位置（对应 alphaPicker-fixed 的 position:fixed）。字母列在
+             代码里建（见 .xaml.cs），27 个按钮是一次循环的事，写进 XAML 只是抄一遍字母表。 -->
+        <Border
+            x:Name="Rail"
+            Background="{ThemeResource EgSurfaceBrush}"
+            BorderBrush="{ThemeResource EgBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="13"
+            HorizontalAlignment="Right"
+            Margin="0,4,2,4"
+            Padding="0,5"
+            VerticalAlignment="Center">
+            <ContentControl x:Name="Letters" HorizontalContentAlignment="Center" />
+        </Border>
+    </Grid>
+</UserControl>

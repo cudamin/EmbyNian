@@ -1,0 +1,538 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The settings page. Categories on the left, cards on the right, around sixty rows in total.
+
+  The rows are data, not markup: the view model builds a list of typed row objects and a
+  DataTemplateSelector picks the shape for each. Writing sixty rows out by hand would mean the labels,
+  ranges and notes live here while the settings they touch live in the view model, and the two drift.
+
+  x:Bind with x:DataType on every template, so a renamed row property fails the build instead of drawing a
+  blank control. The colours and metrics are theme resources rather than the literals the procedural version
+  used, which is the same palette by value and now follows the theme.
+-->
+<Page
+    x:Class="EmbyNian.Shell.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:automation="using:Microsoft.UI.Xaml.Automation"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives"
+    xmlns:vm="using:EmbyNian.Shell.ViewModels"
+    Background="{ThemeResource LayerFillColorDefaultBrush}">
+
+    <Page.Resources>
+        <!--
+          The label and its optional second line, shared by every row shape that has a label column.
+          正文字和小字两档都从词表里来（Theme/Styles.xaml）—— 这两个样式以前只写了字号和颜色，没写字体，
+          于是整页六十行标签落回框架默认那支字，比界面里别处的正文大一点也不是同一种字。
+        -->
+        <Style x:Key="EgSettingLabel" TargetType="TextBlock" BasedOn="{StaticResource EgBodyStyle}">
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="EgSettingNote" TargetType="TextBlock" BasedOn="{StaticResource EgCaptionStyle}">
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <!--
+          色板那一块。整块的底色、强调条和字都是那一套主题自己的颜色（在 ThemeSwatch 里做成固定画刷），
+          所以按钮自己在四个状态下都必须是透明的 —— 视觉状态里的画刷会盖过本地值，指针一压上去就把那套
+          主题的底色刷成框架的悬停灰。状态改这一圈线：胶片格的规矩，指针或焦点上来整圈变强调色。
+          封面改圆角之后这六块留方（EgBleedCornerRadius）：里面那块底色是按钮的内容，按钮的圆角剪不动它，
+          圆角一上就是底色的直角戳在框线外面。
+        -->
+        <Style x:Key="EgSwatchStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{ThemeResource EgBorderBrush}" />
+            <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
+            <Setter Property="CornerRadius" Value="{StaticResource EgBleedCornerRadius}" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,0,12,12" />
+            <!-- 定死的一块，而不是按内容撑开：色板是拿来比颜色的，六块一样大才好比；名字长一个字宽一截的话，
+                 那点差别看着就像是颜色以外还差了别的什么。同样的道理，一格 224×100 也就写在这里一处。 -->
+            <Setter Property="Width" Value="224" />
+            <Setter Property="Height" Value="100" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        </Style>
+
+        <!--
+          Keyed rather than inlined into the selector below, because the passthrough group renders the same
+          shape for each of its own toggles and a DataTemplate can be used by both.
+          <para>
+          This is the group's shape only, where a switch sits under a heading among its siblings and carries
+          its own label above itself. A switch that is a row on its own uses EgSettingToggleRow instead.
+          </para>
+        -->
+        <DataTemplate x:Key="EgSettingToggle" x:DataType="vm:SettingToggleRow">
+            <ToggleSwitch
+                Margin="0,3,0,3"
+                Header="{x:Bind Label}"
+                HorizontalAlignment="Left"
+                IsOn="{x:Bind IsOn, Mode=TwoWay}"
+                OffContent="关"
+                OnContent="开"
+                ToolTipService.ToolTip="{x:Bind Note}" />
+        </DataTemplate>
+
+        <!--
+          一行一个开关：标签在左边那 190 的一列里，控件从右边一列起头 —— 跟同一张卡片上的下拉框、数字框、
+          输入框一样。ToggleSwitch 自带的 Header 会把标签摆到开关上头去，那一行于是成了整张卡片上唯一一行
+          标签不在同一条竖线上的，所以这里的标签不走 Header，而是和别的行共用 EgSettingLabel。
+        -->
+        <DataTemplate x:Key="EgSettingToggleRow" x:DataType="vm:SettingToggleRow">
+            <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="190" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="2">
+                    <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                    <TextBlock
+                        Style="{StaticResource EgSettingNote}"
+                        Text="{x:Bind Note}"
+                        Visibility="{x:Bind NoteVisibility}" />
+                </StackPanel>
+                <ToggleSwitch
+                    Grid.Column="1"
+                    HorizontalAlignment="Left"
+                    IsOn="{x:Bind IsOn, Mode=TwoWay}"
+                    OffContent="关"
+                    OnContent="开"
+                    VerticalAlignment="Center" />
+            </Grid>
+        </DataTemplate>
+
+        <local:SettingRowTemplates x:Key="EgSettingRows" Toggle="{StaticResource EgSettingToggleRow}">
+
+            <local:SettingRowTemplates.Choice>
+                <DataTemplate x:DataType="vm:SettingChoiceRow">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="190" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <ComboBox
+                            Grid.Column="1"
+                            DisplayMemberPath="Label"
+                            HorizontalAlignment="Stretch"
+                            ItemsSource="{x:Bind Choices}"
+                            MinWidth="260"
+                            SelectedItem="{x:Bind Selected, Mode=TwoWay}" />
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Choice>
+
+            <!--
+              A heading and a tighter stack, for switches that are one setting each but read as one
+              question. The outer spacing matches the card's so the heading sits away from the group the
+              way it did when the two were separate children of the card.
+            -->
+            <local:SettingRowTemplates.ToggleGroup>
+                <DataTemplate x:DataType="vm:SettingToggleGroupRow">
+                    <StackPanel Spacing="10">
+                        <!-- 词表里的小标题（Theme/Styles.xaml 的 EgSubheadStyle）：以前这里只写了 SemiBold，
+                             没写字体也没写字号，一组开关的标题于是比同一张卡片上的别的字都大一点。 -->
+                        <TextBlock Style="{StaticResource EgSubheadStyle}" Text="{x:Bind Label}" />
+                        <ItemsControl
+                            ItemTemplate="{StaticResource EgSettingToggle}"
+                            ItemsSource="{x:Bind Toggles}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </StackPanel>
+                </DataTemplate>
+            </local:SettingRowTemplates.ToggleGroup>
+
+            <!--
+              主题那一行：几块色板，点哪块是哪块 —— 一套配色该让人看见它的颜色，而不是读它的名字。
+              每一块都是那一套主题的一个缩影：顶上一条它的「面」色好比标题栏，底下一整片它的「窗」色，
+              左边一道它的强调色，名字和深浅两行字用它自己的墨。看到的是「选了它整个界面会是什么样」，
+              而不是六个方块。
+              右上角那颗角标沿用胶片格那一颗（和海报上「全看完」同一颗）。它跟着当前主题走，而这里正好对得上：
+              带角标的永远只有正在用的那一套，那一套的强调色就是角标的底色。
+            -->
+            <local:SettingRowTemplates.Theme>
+                <DataTemplate x:DataType="vm:SettingThemeRow">
+                    <StackPanel Spacing="10">
+                        <TextBlock Style="{StaticResource EgSubheadStyle}" Text="{x:Bind Label}" />
+                        <TextBlock
+                            Style="{StaticResource EgSettingNote}"
+                            Text="{x:Bind Note}"
+                            Visibility="{x:Bind NoteVisibility}" />
+                        <ItemsControl ItemsSource="{x:Bind Swatches}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <!-- 一格 236×112，块本身 224×100（见 EgSwatchStyle），差出来的就是块与块之间
+                                         那道缝。卡片里放得下三块，所以六套是整齐的两行三列；窗口窄了就折成两块
+                                         一行，因为它到底还是个折行的网格。 -->
+                                    <VariableSizedWrapGrid
+                                        ItemHeight="112"
+                                        ItemWidth="236"
+                                        Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ThemeSwatch">
+                                    <Button
+                                        automation:AutomationProperties.Name="{x:Bind Name}"
+                                        Command="{x:Bind PickCommand}"
+                                        Style="{StaticResource EgSwatchStyle}"
+                                        ToolTipService.ToolTip="{x:Bind Note}">
+                                        <Button.Resources>
+                                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                                            <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="EgAccentBrush" />
+                                            <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="EgAccentBrush" />
+                                        </Button.Resources>
+                                        <Grid Background="{x:Bind Window}">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="28" />
+                                                <RowDefinition Height="*" />
+                                            </Grid.RowDefinitions>
+                                            <!-- 上面一条是这套主题的「面」色，下面一大片是它的「窗」色：跟这套
+                                                 主题真画出来的窗口一个关系 —— 标题栏一条，底下一整片。 -->
+                                            <Border Background="{x:Bind Surface}" />
+                                            <StackPanel
+                                                Grid.Row="1"
+                                                Margin="16,0,12,0"
+                                                VerticalAlignment="Center">
+                                                <TextBlock
+                                                    FontFamily="{StaticResource EgUiFontFamily}"
+                                                    FontSize="{StaticResource EgSubheadFontSize}"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{x:Bind Ink}"
+                                                    Text="{x:Bind Name}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <TextBlock
+                                                    FontFamily="{StaticResource EgDataFontFamily}"
+                                                    FontSize="{StaticResource EgEyebrowFontSize}"
+                                                    Foreground="{x:Bind InkDim}"
+                                                    Text="{x:Bind Kind}" />
+                                            </StackPanel>
+                                            <Border
+                                                Background="{x:Bind Accent}"
+                                                Grid.RowSpan="2"
+                                                HorizontalAlignment="Left"
+                                                Width="6" />
+                                            <Border
+                                                Grid.RowSpan="2"
+                                                Style="{StaticResource EgCornerBadgeStyle}"
+                                                Visibility="{x:Bind CheckVisibility, Mode=OneWay}">
+                                                <FontIcon
+                                                    FontSize="12"
+                                                    Foreground="{ThemeResource EgTextOnAccentBrush}"
+                                                    Glyph="&#xE73E;" />
+                                            </Border>
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </DataTemplate>
+            </local:SettingRowTemplates.Theme>
+
+            <local:SettingRowTemplates.Number>
+                <DataTemplate x:DataType="vm:SettingNumberRow">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="190" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <NumberBox
+                            Grid.Column="1"
+                            HorizontalAlignment="Left"
+                            Maximum="{x:Bind Maximum}"
+                            Minimum="{x:Bind Minimum}"
+                            SpinButtonPlacementMode="Compact"
+                            Value="{x:Bind Value, Mode=TwoWay}"
+                            Width="160" />
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Number>
+
+            <local:SettingRowTemplates.Slider>
+                <DataTemplate x:DataType="vm:SettingSliderRow">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="190" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <Slider
+                            Grid.Column="1"
+                            automation:AutomationProperties.Name="mpv 参数滑块"
+                            HorizontalAlignment="Stretch"
+                            Maximum="{x:Bind Maximum}"
+                            Minimum="{x:Bind Minimum}"
+                            MinWidth="260"
+                            SnapsTo="StepValues"
+                            StepFrequency="{x:Bind Step}"
+                            TickFrequency="{x:Bind Step}"
+                            TickPlacement="None"
+                            Value="{x:Bind Value, Mode=TwoWay}" />
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Slider>
+
+            <!--
+              No UpdateSourceTrigger here on purpose: x:Bind commits TextBox.Text on lost focus unless told
+              otherwise, which is what these want. A path saved per keystroke would rewrite the settings file
+              a dozen times while it is being typed, and would hand mpv half a font name.
+            -->
+            <local:SettingRowTemplates.Text>
+                <DataTemplate x:DataType="vm:SettingTextRow">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="190" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <TextBox
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            MinWidth="260"
+                            PlaceholderText="{x:Bind Placeholder}"
+                            Text="{x:Bind Text, Mode=TwoWay}" />
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Text>
+
+            <!--
+              The font picker. The box above the list searches; it is not the value, so unlike every other
+              text row here it does commit per keystroke — filtering per keystroke is the whole point, and
+              since the setting is written by picking a family out of the list, a half-typed name can never
+              reach the settings file. Each line is drawn in the font it offers, which is why a font list
+              beats a text box in the first place.
+            -->
+            <local:SettingRowTemplates.Font>
+                <DataTemplate x:DataType="vm:SettingFontRow">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="190" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Top">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" MinWidth="260" Spacing="6">
+                            <TextBox
+                                HorizontalAlignment="Stretch"
+                                PlaceholderText="搜索字体：yahei、雅黑、mono…"
+                                Text="{x:Bind Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <ListView
+                                Height="252"
+                                ItemsSource="{x:Bind Matches}"
+                                SelectedItem="{x:Bind Selected, Mode=TwoWay}"
+                                SelectionMode="Single">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:FontOption">
+                                        <StackPanel Padding="0,2,0,2">
+                                            <TextBlock
+                                                FontFamily="{x:Bind Preview}"
+                                                FontSize="15"
+                                                Text="{x:Bind Name}"
+                                                TextTrimming="CharacterEllipsis" />
+                                            <TextBlock
+                                                FontFamily="{x:Bind Preview}"
+                                                FontSize="12"
+                                                Foreground="{ThemeResource EgTextDimBrush}"
+                                                Text="{x:Bind Localized}"
+                                                TextTrimming="CharacterEllipsis"
+                                                Visibility="{x:Bind LocalizedVisibility}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Status, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Font>
+
+            <local:SettingRowTemplates.ConfigEditor>
+                <DataTemplate x:DataType="vm:SettingConfigEditorRow">
+                    <StackPanel Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ComboBox
+                                DisplayMemberPath="Label"
+                                HorizontalAlignment="Left"
+                                ItemsSource="{x:Bind Kinds}"
+                                MinWidth="220"
+                                SelectedItem="{x:Bind SelectedKind, Mode=TwoWay}" />
+                            <Button Command="{x:Bind ReloadCommand}" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <SymbolIcon Symbol="Refresh" />
+                                    <TextBlock Text="重新载入" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Command="{x:Bind StoreCommand}" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <SymbolIcon Symbol="Save" />
+                                    <TextBlock Text="保存并备份" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Command="{x:Bind RestoreCommand}" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <SymbolIcon Symbol="Undo" />
+                                    <TextBlock Text="撤销未保存修改" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+
+                        <InfoBar
+                            IsClosable="False"
+                            IsOpen="True"
+                            Message="{x:Bind Status, Mode=OneWay}"
+                            Severity="{x:Bind StatusSeverity, Mode=OneWay}" />
+
+                        <!--
+                          PropertyChanged here, unlike the plain text rows: the status line under the toolbar
+                          says whether there are unsaved changes, and on lost focus it would only start
+                          saying so once the box was left.
+                        -->
+                        <TextBox
+                            AcceptsReturn="True"
+                            automation:AutomationProperties.Name="mpv 配置文件内容"
+                            FontFamily="Cascadia Mono,Consolas,Microsoft YaHei UI"
+                            HorizontalAlignment="Stretch"
+                            IsSpellCheckEnabled="False"
+                            MinHeight="420"
+                            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                            Text="{x:Bind EditorText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            TextWrapping="NoWrap" />
+                    </StackPanel>
+                </DataTemplate>
+            </local:SettingRowTemplates.ConfigEditor>
+        </local:SettingRowTemplates>
+    </Page.Resources>
+
+    <Grid Margin="{StaticResource EgPageMargin}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <local:PageSlate
+            Eyebrow="SETTINGS"
+            Note="改动即时保存"
+            Title="设置" />
+
+        <Grid Grid.Row="1" Margin="0,12,0,0" ColumnSpacing="18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ListView
+                IsItemClickEnabled="False"
+                ItemsSource="{x:Bind ViewModel.Categories}"
+                SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}" />
+
+            <!--
+              需求 2 的后半句：「诊断和服务器移动到设置里」. The left-hand list now ends with two entries that are
+              not cards — 服务器 and 诊断 are whole pages, with a server list that talks to the network and a
+              log view that tails a file, and neither is expressible as a stack of setting rows.
+
+              So the right-hand column holds two things and shows one: the cards, and a frame the two pages
+              are navigated into. Which one is visible follows the selected category, decided in the view
+              model rather than here so the page and the self-check read the same flag.
+            -->
+            <Grid Grid.Column="1">
+                <!--
+                  Every card is built and kept, and picking a category only changes which one is shown — the
+                  same as before. There is no server data on this page, so building all eight costs nothing
+                  measurable, and a card that stays alive keeps half-typed config text across a trip through the
+                  category list.
+                -->
+                <ScrollView
+                    VerticalScrollBarVisibility="Auto"
+                    Visibility="{x:Bind ViewModel.CardsVisibility, Mode=OneWay}">
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Sections}" MaxWidth="900">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="14" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SettingSection">
+                                <Border
+                                    Padding="18"
+                                    Background="{ThemeResource EgSurfaceAltBrush}"
+                                    BorderBrush="{ThemeResource EgBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{StaticResource EgCardCornerRadius}"
+                                    Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
+                                    <StackPanel Spacing="10">
+                                        <!--
+                                          设置卡片的牌子和卡片带的牌子是同一块木头（local:ShelfHead）：分区标题、
+                                          右端一个等宽读数、底下一条通栏发丝线。这一页原先自己写了个标题 —— 只有
+                                          字号和 SemiBold、没写字体，于是每张卡片的名字比媒体库那些带子的名字大
+                                          一点，而且是另一种字；那条线也没有，八张卡片全靠间距分家。
+                                        -->
+                                        <local:ShelfHead Note="{x:Bind Count}" Title="{x:Bind Title}" />
+                                        <TextBlock
+                                            Style="{StaticResource EgSettingNote}"
+                                            Text="{x:Bind Description}" />
+                                        <ItemsControl
+                                            ItemTemplateSelector="{StaticResource EgSettingRows}"
+                                            ItemsSource="{x:Bind Rows}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Spacing="10" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollView>
+
+                <!-- Transitions cleared for the same reason the shell's frame clears them (requirement 9). -->
+                <Frame
+                    x:Name="HostedFrame"
+                    Transitions="{x:Null}"
+                    Visibility="{x:Bind ViewModel.HostedVisibility, Mode=OneWay}" />
+            </Grid>
+        </Grid>
+    </Grid>
+</Page>

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  需求 8：把 Emby 自己的网页控制台嵌进设置页 —— 设置里的第三个内嵌页面，和「服务器」「诊断」走同一条路。
+
+  No ViewModel, unlike the other two hosted pages, and deliberately: there is no state here to project. What
+  the page shows is the WebView's own lifecycle — did the control come up, did the page load, what did the
+  web client end up on — and a view model would only be a second copy of it. So: Click handlers and named
+  elements, which is what the layering rules allow for a page that is only UI.
+
+  The address bar is a TextBlock, not a box. This is one fixed page on the signed-in server, not a browser;
+  the address is here so a person can see which server they are looking at, and copy it if they want it in a
+  real browser (the 用浏览器打开 button does that in one click).
+-->
+<Page
+    x:Class="EmbyNian.Shell.Views.DashboardPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    Background="{ThemeResource LayerFillColorDefaultBrush}">
+
+    <Grid Margin="{StaticResource EgPageMargin}" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 地址和载入状态合成一行读数（见 Say）：两个都是机器串，等宽字里它们本来就是同一种东西，
+             而页头不该为「正在载入…」这种一闪而过的字长出第三行来。 -->
+        <local:PageSlate x:Name="Slate" Eyebrow="DASHBOARD" Title="服务器控制台">
+            <local:PageSlate.Trailing>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Click="OnRefresh" ToolTipService.ToolTip="重新载入控制台">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE72C;" />
+                            <TextBlock Text="刷新" />
+                        </StackPanel>
+                    </Button>
+                    <Button Click="OnOpenInBrowser" ToolTipService.ToolTip="在系统默认浏览器里打开同一个页面">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE8A7;" />
+                            <TextBlock Text="用浏览器打开" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </local:PageSlate.Trailing>
+        </local:PageSlate>
+
+        <Border
+            Grid.Row="1"
+            BorderBrush="{ThemeResource EgBorderBrush}"
+            BorderThickness="1">
+            <Grid>
+                <WebView2 x:Name="Web" />
+                <TextBlock
+                    x:Name="Notice"
+                    Margin="32"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource EgTextDimBrush}"
+                    Text=""
+                    TextAlignment="Center"
+                    TextWrapping="Wrap"
+                    Visibility="Collapsed" />
+            </Grid>
+        </Border>
+    </Grid>
+</Page>

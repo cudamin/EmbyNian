@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主页最上面那条大图轮播 —— 「参考"主页轮播大图版-misty-4.9.css"给主页轮播功能」。
+
+  一整条剧照铺满窗口顶上那一整块：上到窗口的顶边（标题栏和页眉都浮在图上）、左到侧边栏、右到窗口边沿。
+  左边压一层横向的暗罩、底下压一层纵向的、顶上再压一条给标题栏和页眉垫底，标题、集号、简介和播放键站在
+  左边的暗处，剧集的徽标盖在右下角。指针进到带上时两侧浮出翻页箭头，底边一排小横条说共有几张、现在是第
+  几张，没人碰的时候每八秒自己走一张。
+
+  幻灯片取「最近添加」的头几个条目，继续观看和接下来看在后面补位（见 HomeCarousel.Slides）。
+
+  那份参考 CSS 的 100vh 大图这一版是照着做的：带宽等于整个工作区的宽，带高按宽算（HomeCarousel.Height，
+  2.2:1，下限 240，上限是窗口高的一份额），所以窗口越宽图越大，但底下那排卡片一定还留在屏幕上 —— 参考里那排
+  「媒体库」卡片是浮在带的下沿上的（position:absolute; bottom:0），这里没照搬：那要把媒体库从 Shelves 里单独
+  拎出来，而主页现在是「一份标记、四行数据」，为一处装饰把那个结构拆开不值得。
+
+  上限是份额而不是一个写死的数，这一条就是「调整窗口大小时候，轮播画面不会被裁切」：剧照是 UniformToFill，
+  裁掉多少只由带子的比例决定，而写死的上限会让那个比例跟着窗口大小走。设置里「锁定窗口比例大小」开着的时候
+  上限一次都不咬，带子永远正好 2.2:1，于是裁掉的永远是同一份（19%）。
+
+  渐变里的颜色全是写死的 ARGB，不是 ThemeResource 的颜色键 —— 高对比度那本词典里只有画刷没有颜色键，写键
+  会在运行时抛（同 DetailPage 的头图）。带上的字压在剧照上，所以也不跟主题走。
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.HomeBanner"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <UserControl.Resources>
+        <!-- 翻页箭头的三个态，同 ShelfStrip 里那三个：盖在剧照上，所以跟主题无关。 -->
+        <SolidColorBrush x:Key="EgBannerPageRestBrush" Color="#8C0C0E11" />
+        <SolidColorBrush x:Key="EgBannerPageHoverBrush" Color="#D90C0E11" />
+        <SolidColorBrush x:Key="EgBannerPagePressBrush" Color="#F20C0E11" />
+
+        <!-- 底边那排小横条。代码里按 Resources 取键，所以键少一个会在自检里就抛出来。 -->
+        <SolidColorBrush x:Key="EgBannerDotBrush" Color="#59F3F5F8" />
+        <SolidColorBrush x:Key="EgBannerDotOnBrush" Color="#FFF3F5F8" />
+
+        <!-- 播放键原来是一块写死的白底黑字，四支画刷四个态。改成跟主题走的强调色之后那四支全没用了 ——
+             详情页头图上的播放键本来就是强调色，同一个产品两个最大的画面上，最主要的那颗键不该一个白
+             一个绿。 -->
+        <SolidColorBrush x:Key="EgBannerGhostRestBrush" Color="#3DF3F5F8" />
+        <SolidColorBrush x:Key="EgBannerGhostHoverBrush" Color="#5CF3F5F8" />
+        <SolidColorBrush x:Key="EgBannerGhostPressBrush" Color="#7AF3F5F8" />
+
+        <!-- 三个键的高度和圆角都取词表，跟详情页头图上那六颗一样：38 高、圆角 8。BasedOn 是必须的，见
+             ShelfStrip 里同一处注释：隐式样式只在没设过 Style 时生效。
+             左右边距 8（原来 14）：这两颗贴着带的边沿走，「按钮旁边移动一些」—— 它们占的那一段（8 到 46）是
+             留给箭头的一条窄栏，字块从这条窄栏右边起（见下面 Info 的 Margin），两边不同列，所以字块沉下去
+             之后箭头落在片名那一行也压不到字。 -->
+        <Style x:Key="EgBannerPageButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Width" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="CornerRadius" Value="{StaticResource EgCardCornerRadius}" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="8,0,8,0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Background" Value="{StaticResource EgBannerPageRestBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+            <!-- 默认收起：指针在带上才浮出，同 ShelfStrip。 -->
+            <Setter Property="Visibility" Value="Collapsed" />
+        </Style>
+
+        <Style x:Key="EgBannerPlayStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="MinWidth" Value="118" />
+            <Setter Property="CornerRadius" Value="{StaticResource EgCardCornerRadius}" />
+            <Setter Property="Padding" Value="18,0,20,2" />
+        </Style>
+
+        <Style x:Key="EgBannerGhostStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="CornerRadius" Value="{StaticResource EgCardCornerRadius}" />
+            <Setter Property="Padding" Value="16,0,18,2" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="{StaticResource EgBannerGhostRestBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+        </Style>
+    </UserControl.Resources>
+
+    <!--
+      IsTabStop 在带本身上，左右方向键翻页：翻页箭头默认是收起的，收起的按键接不了焦点，所以不用键盘的人靠
+      箭头、用键盘的人靠这里，底边那排小横条则两边都能点。
+    -->
+    <Grid
+        x:Name="Root"
+        Background="Transparent"
+        IsTabStop="True"
+        UseSystemFocusVisuals="True"
+        AutomationProperties.Name="主页轮播"
+        AutomationProperties.HelpText="按左右方向键切换幻灯片"
+        PointerEntered="OnPointerEntered"
+        PointerMoved="OnPointerEntered"
+        PointerExited="OnPointerExited"
+        KeyDown="OnKeyDown">
+
+        <!-- 整条带就是一格特别大的胶片，零圆角 —— 封面改圆角之后它是明确留方的一块（见 Styles.xaml 的
+             EgBleedCornerRadius）：这一块的三条边就是窗口的边和侧边栏那道竖线，圆角会在窗口角上剪出一个三角
+             形的缺口；而外面这层是 Grid 不是 Border，圆角也剪不动里面那两张图，只会让底色缩进去露出直角。
+             发丝线只留下沿那一根：往上画一条等于在图的顶上补一道黑边 —— 而顶上那道黑边正是「全填充上海报」要
+             去掉的东西。下沿这一根还在，它是这一块和第一排卡片之间的交代，和详情页头图下沿那一根同一根。 -->
+        <Grid
+            x:Name="Band"
+            CornerRadius="{StaticResource EgBleedCornerRadius}"
+            BorderBrush="{ThemeResource EgBorderBrush}"
+            BorderThickness="0,0,0,1"
+            Background="{ThemeResource EgSurfaceAltBrush}">
+
+            <!--
+              两层剧照轮着上：走下一张时新的那层淡入、旧的那层淡出，所以带上任何时候都有图，不会闪一下底色。
+              UniformToFill 会把图裁到带的比例上，剧照的重心在中间偏上，所以对齐的是中间。
+            -->
+            <Image x:Name="LayerA" Stretch="UniformToFill" Opacity="0" />
+            <Image x:Name="LayerB" Stretch="UniformToFill" Opacity="0" />
+
+            <!-- 横着的暗罩：字站在左边，所以左边暗、右边把剧照放出来。 -->
+            <Border>
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Offset="0" Color="#E60C0E11" />
+                        <GradientStop Offset="0.38" Color="#A60C0E11" />
+                        <GradientStop Offset="0.82" Color="#000C0E11" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!-- 竖着的那层：把下沿压黑，底边那排小横条才站得住，带跟底下的卡片之间也有个交代。 -->
+            <Border>
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                        <GradientStop Offset="0.5" Color="#000C0E11" />
+                        <GradientStop Offset="1" Color="#B30C0E11" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!--
+              顶上那一条：给标题栏那五颗按钮、系统那三颗窗口按钮和页眉垫底。写死 120 像素而不是按比例
+              取一段渐变 —— 带高会随窗口宽在 240 到 560 之间变，而要垫的那一条永远是 32 加页眉那两行。
+              摆在徽标和字块之前，所以它压的只有剧照。
+              浓度按最亮的剧照定：一张顶上接近纯白的剧照（比如「卓别林」那张），页眉右边那行读数（「果服 ·
+              29 项」）和三颗窗口按钮就都站在白上。0.5 那一档管的正好是那行读数所在的高度。
+            -->
+            <Border Height="120" VerticalAlignment="Top">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                        <GradientStop Offset="0" Color="#CC0C0E11" />
+                        <GradientStop Offset="0.5" Color="#A60C0E11" />
+                        <GradientStop Offset="1" Color="#000C0E11" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!-- 徽标在右下角，不在右上角：右上角现在是页眉那行读数（「果服 · 29 项」）和系统的三颗窗口按钮。
+                 底下这个角本来空着，只有中间那排小横条，徽标搁在这儿正好和左边那块字对平。 -->
+            <Image
+                x:Name="LogoImage"
+                Stretch="Uniform"
+                Opacity="0"
+                MaxHeight="86"
+                MaxWidth="240"
+                Margin="0,0,34,30"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom">
+                <Image.RenderTransform>
+                    <TranslateTransform x:Name="LogoShift" />
+                </Image.RenderTransform>
+            </Image>
+
+            <!--
+              字块站在左边的暗处。四行各有自己的 TranslateTransform，因为换一张时它们是错着抬起来的（见
+              HomeBanner.Rise）；动画在代码里搭，Storyboard.TargetName 只在运行时解析，写在这里编译不出错、
+              跑起来才抛。
+
+              整块还压着一个 InfoShift，把字从正中往下挪一点（「红框中的字体往下移动一些」）：正中读着像贴在
+              画面中线上的图注，主角的字该在下半张。挪的量由 HomeCarousel.InfoDrop 按带高算，Resize 里写进来。
+              这里用 transform 而不是上边距，是因为上边距对一个居中的孩子只生效一半（余下的空间上下均分），
+              而且它要占版面 —— 带子缩到 240 那个下限时，占掉的正是让播放键留在带子里的那点余量。
+
+              左边距 60（原来 28，页面那条脊线的位置）：「翻页的按钮会挡住字体」—— 两颗箭头贴着带的边沿、在带的
+              竖向正中，占到 46 为止；字沉下去之后箭头正好落在片名那一行上，所以让开的只能是列，不是高度。空出来
+              的这一段就是箭头那条窄栏，余下 14 是它和字之间的一口气（「片名向右移动一些」）。字块因此不再和上面
+              那块牌子（「HOME / 主页」，28）左对齐 —— 那两样本来不是一层：牌子是页面的抬头，和底下第一排卡片同
+              一条脊线；这一块是压在剧照上的内容，边沿本就该留得比页面多，箭头也从这一段里出来。
+            -->
+            <StackPanel
+                x:Name="Info"
+                Margin="60,0,0,0"
+                MaxWidth="620"
+                Spacing="10"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Center">
+                <StackPanel.RenderTransform>
+                    <TranslateTransform x:Name="InfoShift" />
+                </StackPanel.RenderTransform>
+
+                <!-- 字号字体字色全在 EgDisplayTitleStyle 里，和详情页头图上的片名是同一个键。原来这里写死
+                     40/Bold 而没写字体，于是主页最大的一块字是「更大的正文字」；前景取的还是播放键那支画
+                     刷 —— 一支键的画刷去画字，改主题时那两处必然各走各的。 -->
+                <TextBlock
+                    x:Name="TitleText"
+                    Style="{StaticResource EgDisplayTitleStyle}"
+                    MaxLines="1"
+                    TextTrimming="CharacterEllipsis">
+                    <TextBlock.RenderTransform>
+                        <TranslateTransform x:Name="TitleShift" />
+                    </TextBlock.RenderTransform>
+                </TextBlock>
+
+                <!-- 集号和那串读数（「S03E09 · 2024 · 1080P · 2H14M」），所以走等宽的那一支 —— 和详情页头图
+                     上同一行东西同一种字。 -->
+                <TextBlock
+                    x:Name="CaptionText"
+                    Style="{StaticResource EgOnScrimDataStrongStyle}"
+                    MaxLines="1"
+                    TextTrimming="CharacterEllipsis">
+                    <TextBlock.RenderTransform>
+                        <TranslateTransform x:Name="CaptionShift" />
+                    </TextBlock.RenderTransform>
+                </TextBlock>
+
+                <!-- 两行就够：这条带是「看一眼决定看不看」，不是简介页。字比上面那行读数暗一档 —— 原来这里
+                     是 Opacity 0.86 装出来的暗，而暗一档本来就是一支画刷的事。 -->
+                <TextBlock
+                    x:Name="SynopsisText"
+                    Style="{StaticResource EgOnScrimBodyStyle}"
+                    Foreground="{StaticResource EgOnScrimDimBrush}"
+                    LineHeight="22"
+                    MaxLines="2"
+                    TextWrapping="Wrap"
+                    TextTrimming="CharacterEllipsis">
+                    <TextBlock.RenderTransform>
+                        <TranslateTransform x:Name="SynopsisShift" />
+                    </TextBlock.RenderTransform>
+                </TextBlock>
+
+                <StackPanel x:Name="Actions" Orientation="Horizontal" Spacing="10" Margin="0,6,0,0">
+                    <StackPanel.RenderTransform>
+                        <TranslateTransform x:Name="ActionsShift" />
+                    </StackPanel.RenderTransform>
+
+                    <!-- 强调色键，四个态全交给 AccentButtonStyle：Palette 那三份词典连 AccentFillColor* 一起
+                         改，ThemeHost 换主题时也一起重涂，所以这颗键跟着主题走（同详情页头图上那一颗）。 -->
+                    <Button x:Name="PlayButton" Style="{StaticResource EgBannerPlayStyle}" Click="OnPlayClicked">
+                        <StackPanel Orientation="Horizontal" Spacing="9">
+                            <FontIcon
+                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                FontSize="13"
+                                Glyph="&#xE768;" />
+                            <TextBlock x:Name="PlayText" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button
+                        x:Name="OpenButton"
+                        Content="详情"
+                        Style="{StaticResource EgBannerGhostStyle}"
+                        Click="OnOpenClicked">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgBannerGhostHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgBannerGhostPressBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimBrush" />
+                        </Button.Resources>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+
+            <Button
+                x:Name="PrevButton"
+                Style="{StaticResource EgBannerPageButtonStyle}"
+                HorizontalAlignment="Left"
+                Content="&#xE76B;"
+                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                FontSize="14"
+                IsTabStop="False"
+                AutomationProperties.Name="上一张"
+                Click="OnPrevClicked">
+                <Button.Resources>
+                    <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgBannerPageHoverBrush" />
+                    <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgBannerPagePressBrush" />
+                    <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
+                    <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimBrush" />
+                </Button.Resources>
+            </Button>
+
+            <Button
+                x:Name="NextButton"
+                Style="{StaticResource EgBannerPageButtonStyle}"
+                HorizontalAlignment="Right"
+                Content="&#xE76C;"
+                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                FontSize="14"
+                IsTabStop="False"
+                AutomationProperties.Name="下一张"
+                Click="OnNextClicked">
+                <Button.Resources>
+                    <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgBannerPageHoverBrush" />
+                    <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgBannerPagePressBrush" />
+                    <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
+                    <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimBrush" />
+                </Button.Resources>
+            </Button>
+
+            <!-- 小横条在代码里按幻灯片数目造，见 HomeBanner.BuildDots。 -->
+            <StackPanel
+                x:Name="Dots"
+                Orientation="Horizontal"
+                Spacing="7"
+                Margin="0,0,0,18"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom" />
+        </Grid>
+    </Grid>
+</UserControl>

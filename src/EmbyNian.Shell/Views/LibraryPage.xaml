@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A library, a folder, a season, a person's credits, or a set of search results: all five are the same
+  page with a different query behind it.
+
+  What the WinForms grid could not do and this one gets for nothing: containers are virtualised and
+  recycled, the columns reflow to whatever width the window has, and the page keeps scrolling instead
+  of stopping at the first hundred items.
+
+  There are no literal sizes left in here. The cell, the card and the bitmap the card was decoded for
+  all come from 设置 → 海报宽度 by way of LibraryViewModel, which is what the three numbers that used to
+  be written out below — CardWidth 170, PosterHeight 255, MinItemWidth 170 — quietly prevented: moving
+  that slider resized the home page and left this one, the page it is obviously about, untouched.
+
+  Requirement 4's sort keys and requirement 5's filters are chosen in the two flyouts and decided in the
+  view model; requirement 6 (已看/收藏/编辑) is the ContextRequested handler on the card template.
+-->
+<Page
+    x:Class="EmbyNian.Shell.Views.LibraryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    Background="{ThemeResource LayerFillColorDefaultBrush}">
+
+    <Page.Resources>
+        <!-- ItemsView 的格子在指针下面会自己铺一层灰底（SubtleFillColorSecondary），按下去再深一档。
+             这一套里「指针在这张卡上」是卡片外面那圈胶片格整圈变强调色说的（见 Theme/Styles.xaml 的
+             EgFrameStyle），格子那层灰底叠上去就成了两句话说同一件事，而且它比卡片大一圈、圆角也不是同
+             一档 —— 一面墙扫过去，跟着指针走的是一块灰影，不是那张卡。
+
+             改成透明而不是去掉 ItemContainer：焦点框、键盘调用、回收都在它身上，只有这一层底不要。
+             放在页级资源里，三个模板（海报、缩略图、列表）共用一份 —— 查这两个键是从格子往上走到这儿的。
+             静止和边框那三个键默认就是透明的，不必重说。 -->
+        <SolidColorBrush x:Key="ItemContainerPointerOverBackground" Color="Transparent" />
+        <SolidColorBrush x:Key="ItemContainerPressedBackground" Color="Transparent" />
+
+        <DataTemplate x:Key="PosterTemplate" x:DataType="local:CardItem">
+            <!-- ItemContainer, not a Button in a Border: it is the one element that gives an
+                 ItemsView child its hover state, keyboard focus and invoke handling for free. -->
+            <ItemContainer>
+                <!-- The card carries its own drawn size, which is provably the width its bitmap was
+                     decoded for; see CardSize. -->
+                <local:PosterCard
+                    ActionRequested="OnCardActionRequested"
+                    Card="{x:Bind}"
+                    CardWidth="{x:Bind CardWidth}"
+                    ContextRequested="OnCardContextRequested"
+                    PosterHeight="{x:Bind PosterHeight}" />
+            </ItemContainer>
+        </DataTemplate>
+
+        <!-- 缩略图视图：16:9 宽卡。PosterCard 本身就支持宽幅（CardItem 的 wide 决定取剧照优先），
+             这里只需要让卡片以自己的宽高绘制 —— 数据驱动，模板零分支。 -->
+        <DataTemplate x:Key="ThumbTemplate" x:DataType="local:CardItem">
+            <ItemContainer>
+                <local:PosterCard
+                    ActionRequested="OnCardActionRequested"
+                    Card="{x:Bind}"
+                    CardWidth="{x:Bind CardWidth}"
+                    ContextRequested="OnCardContextRequested"
+                    PosterHeight="{x:Bind PosterHeight}" />
+            </ItemContainer>
+        </DataTemplate>
+
+        <!-- 列表视图：EpisodeRow —— 详情页单集列表的同一个行控件，列表视图就是那个样子：左小图
+             右标题/信息行/简介。ItemContainer 提供悬浮/焦点/调用；右键菜单和另外两个模板一样挂在
+             行上 —— 行的悬浮层只有一个播放键，已观看/收藏/更多都在这个菜单里。 -->
+        <DataTemplate x:Key="ListTemplate" x:DataType="local:CardItem">
+            <ItemContainer>
+                <local:EpisodeRow
+                    ActionRequested="OnCardActionRequested"
+                    Card="{x:Bind}"
+                    ContextRequested="OnCardContextRequested" />
+            </ItemContainer>
+        </DataTemplate>
+
+        <!-- 列表视图自己的布局：一行占满页宽，所以是 StackLayout，不是下面那个网格。UniformGridLayout
+             只会按 MinItemWidth 铺格子，一页铺四格 —— 而这一行是「左边图、右边字」，格子那么窄，图被
+             裁掉一截，标题、信息行、简介整段被挤到格子外面，列表看上去就是一堆没有字的小图。行高不用
+             算：图有自己的高，字排完就是行的高。 -->
+        <StackLayout x:Key="ListLayout" Spacing="12" />
+    </Page.Resources>
+
+    <Grid x:Name="PageRoot" Margin="{StaticResource EgPageMargin}" RowSpacing="12">
+        <!--
+            The desktop shell keeps the slate's title and its actions on one line. At medium widths the
+            actions become icon-first controls; at phone-sized widths the same controls tighten their
+            chrome and the whole toolbar drops below the slate's rule. Keeping one set of commands means
+            the keyboard order and flyouts do not fork just because the window was resized.
+        -->
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="ResponsiveStates">
+                <!-- The un-triggered state is the fallback below the first breakpoint. Adaptive
+                     states progressively restore the roomier desktop chrome as width becomes available. -->
+                <VisualState x:Name="Narrow">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="PageRoot.Margin" Value="16,12,16,12" />
+                        <!-- 标题和一整条工具条挤不进同一行了，把工具条整块挪到通栏线下面去靠右排 ——
+                             搬的是场记板里那同一个 ContentPresenter，所以工具条不会分出两套键盘顺序。 -->
+                        <Setter Target="Slate.TrailingBelow" Value="True" />
+                        <Setter Target="SortText.Visibility" Value="Collapsed" />
+                        <Setter Target="ViewText.Visibility" Value="Collapsed" />
+                        <Setter Target="FilterText.Visibility" Value="Collapsed" />
+                        <Setter Target="Toolbar.Spacing" Value="4" />
+                        <Setter Target="SortButton.Width" Value="42" />
+                        <Setter Target="ViewButton.Width" Value="42" />
+                        <Setter Target="FilterButton.Width" Value="42" />
+                        <Setter Target="PlayAllButton.Width" Value="36" />
+                        <Setter Target="PlayRandomButton.Width" Value="36" />
+                        <Setter Target="SortButton.Padding" Value="0" />
+                        <Setter Target="ViewButton.Padding" Value="0" />
+                        <Setter Target="FilterButton.Padding" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Medium">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="760" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="SortText.Visibility" Value="Collapsed" />
+                        <Setter Target="ViewText.Visibility" Value="Collapsed" />
+                        <Setter Target="FilterText.Visibility" Value="Collapsed" />
+                        <Setter Target="SortButton.Width" Value="48" />
+                        <Setter Target="ViewButton.Width" Value="48" />
+                        <Setter Target="FilterButton.Width" Value="48" />
+                        <Setter Target="PlayAllButton.Width" Value="40" />
+                        <Setter Target="PlayRandomButton.Width" Value="40" />
+                        <Setter Target="SortButton.Padding" Value="0" />
+                        <Setter Target="ViewButton.Padding" Value="0" />
+                        <Setter Target="FilterButton.Padding" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Wide">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1040" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="HeaderGrid" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- 场记板。代号来自请求本身（LibraryRequest.Eyebrow），所以往剧里点进去它说 SEASONS、
+                 往季里点进去说 EPISODES —— 这一页是五种网格合一的，标题只说得出「叫什么」。 -->
+            <local:PageSlate
+                x:Name="Slate"
+                Eyebrow="{x:Bind ViewModel.Eyebrow, Mode=OneWay}"
+                Note="{x:Bind ViewModel.Subheading, Mode=OneWay}"
+                Title="{x:Bind ViewModel.Heading, Mode=OneWay}">
+                <local:PageSlate.Trailing>
+                    <StackPanel
+                        x:Name="Toolbar"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        VerticalAlignment="Bottom">
+
+                        <!-- One control for both halves of a sort: the left half flips the direction, the
+                             right half picks the key. A ComboBox would need two controls and would be
+                             unusable with nineteen keys in the list.
+
+                             IsChecked is two-way, so clicking the toggle half is a sort change rather than
+                             a picture of one — and the glyph and the tooltip beside it are derived from the
+                             same flag, so the three cannot come apart. -->
+                        <ToggleSplitButton
+                            x:Name="SortButton"
+                            HorizontalContentAlignment="Center"
+                            IsChecked="{x:Bind ViewModel.SortDescending, Mode=TwoWay}"
+                            MinWidth="0"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.SortTooltip, Mode=OneWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon FontSize="14" Glyph="{x:Bind ViewModel.SortGlyph, Mode=OneWay}" />
+                                <TextBlock x:Name="SortText" Text="{x:Bind ViewModel.SortLabel, Mode=OneWay}" />
+                            </StackPanel>
+                            <ToggleSplitButton.Flyout>
+                                <!-- Filled in code on every open: a MenuFlyout has an Items list and no
+                                     ItemsSource, so there is nothing for a template to bind to. Which keys
+                                     belong in it is decided in LibraryViewModel.SortEntries. -->
+                                <MenuFlyout
+                                    x:Name="SortMenu"
+                                    Opening="OnSortMenuOpening"
+                                    Placement="BottomEdgeAlignedRight" />
+                            </ToggleSplitButton.Flyout>
+                        </ToggleSplitButton>
+
+                        <!-- 播放全部 / 随机播放：Emby 工具栏的 btnPlay / btnShuffle。命令在视图模型里，载入
+                             中自己就是灰的，与排序/筛选的即时行为一致。 -->
+                        <Button
+                            x:Name="PlayAllButton"
+                            Command="{x:Bind ViewModel.PlayAllCommand}"
+                            HorizontalContentAlignment="Center"
+                            MinWidth="0"
+                            Padding="0"
+                            ToolTipService.ToolTip="播放全部">
+                            <FontIcon FontSize="14" Glyph="&#xE768;" />
+                        </Button>
+                        <Button
+                            x:Name="PlayRandomButton"
+                            Command="{x:Bind ViewModel.PlayRandomCommand}"
+                            HorizontalContentAlignment="Center"
+                            MinWidth="0"
+                            Padding="0"
+                            ToolTipService.ToolTip="随机播放">
+                            <FontIcon FontSize="14" Glyph="&#xE8B1;" />
+                        </Button>
+
+                        <!-- 视图切换：Emby 收在 ⋯ 菜单里；这里直接放一个下拉按钮 —— 三个选项用不上对话框。
+                             字形跟着当前视图走，点开是三个单选项。 -->
+                        <DropDownButton
+                            x:Name="ViewButton"
+                            HorizontalContentAlignment="Center"
+                            MinWidth="0"
+                            ToolTipService.ToolTip="切换视图">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon FontSize="14" Glyph="{x:Bind ViewModel.ViewGlyph, Mode=OneWay}" />
+                                <TextBlock x:Name="ViewText" Text="{x:Bind ViewModel.ViewLabel, Mode=OneWay}" />
+                            </StackPanel>
+                            <DropDownButton.Flyout>
+                                <MenuFlyout x:Name="ViewMenu" Placement="BottomEdgeAlignedRight">
+                                    <RadioMenuFlyoutItem Click="OnViewChosen" Tag="Poster" Text="海报" />
+                                    <RadioMenuFlyoutItem Click="OnViewChosen" Tag="Thumb" Text="缩略图" />
+                                    <RadioMenuFlyoutItem Click="OnViewChosen" Tag="List" Text="列表" />
+                                </MenuFlyout>
+                            </DropDownButton.Flyout>
+                        </DropDownButton>
+
+                        <Button
+                            x:Name="FilterButton"
+                            HorizontalContentAlignment="Center"
+                            MinWidth="0"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.FilterTooltip, Mode=OneWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon FontSize="14" Glyph="&#xE71C;" />
+                                <TextBlock x:Name="FilterText" Text="筛选" />
+                                <!-- How many filters are on, without spending a row of the page saying so. -->
+                                <InfoBadge
+                                    Value="{x:Bind ViewModel.FilterCount, Mode=OneWay}"
+                                    Visibility="{x:Bind ViewModel.FilterBadgeVisibility, Mode=OneWay}" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <!-- Built in code on every open, from EmbyFilterBy plus whatever the server
+                                     says this grid's rows actually contain: see FilterPanel. -->
+                                <Flyout x:Name="FilterFlyout" Opening="OnFilterOpening" Placement="BottomEdgeAlignedRight">
+                                    <Flyout.FlyoutPresenterStyle>
+                                        <!-- BasedOn is not optional: a FlyoutPresenter style without it
+                                             replaces the implicit style that carries the control's template,
+                                             and the panel would come up as unpainted content with no border. -->
+                                        <Style BasedOn="{StaticResource DefaultFlyoutPresenterStyle}" TargetType="FlyoutPresenter">
+                                            <Setter Property="Padding" Value="16,12,16,16" />
+                                            <Setter Property="MinWidth" Value="0" />
+                                            <Setter Property="MaxWidth" Value="440" />
+                                            <Setter Property="MaxHeight" Value="620" />
+                                            <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled" />
+                                            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+                                        </Style>
+                                    </Flyout.FlyoutPresenterStyle>
+                                    <local:FilterPanel x:Name="FilterPane" Changed="OnFilterChanged" />
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                    </StackPanel>
+                </local:PageSlate.Trailing>
+            </local:PageSlate>
+
+            <!-- 搜索页 only, and the reason the search results are this page rather than a page of their
+                 own: the box is the one thing a search adds, and everything under it — sort, filters, the
+                 three view shapes, paging, the letter bar — is this grid already.
+
+                 Under the slate rather than beside the title: the toolbar already owns that end of the
+                 slate, and a box squeezed between the two would be narrower than the words it holds. -->
+            <AutoSuggestBox
+                x:Name="SearchInput"
+                Grid.Row="1"
+                HorizontalAlignment="Left"
+                Width="440"
+                PlaceholderText="搜索影片、剧集、演员"
+                QueryIcon="Find"
+                QuerySubmitted="OnSearchSubmitted"
+                Text="{x:Bind ViewModel.SearchText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.SearchVisibility, Mode=OneWay}" />
+        </Grid>
+
+        <!-- Indeterminate and one row of its own: a ring in the middle of the page would move the
+             grid when it appeared, and the grid is already showing whatever arrived first. -->
+        <ProgressBar
+            Grid.Row="1"
+            IsIndeterminate="True"
+            Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+
+        <!-- TwoWay on IsOpen, so dismissing the bar is recorded rather than only drawn: the next
+             failure has to be able to reopen it. -->
+        <InfoBar
+            Grid.Row="1"
+            IsClosable="True"
+            IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+            Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+            Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+            Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
+
+        <!-- Grid so the letter bar can sit over the scroller's right edge without taking a column
+             away from it（Emby 的 alphaPicker 是 position:fixed 的覆盖层，不是布局成员）。 -->
+        <Grid Grid.Row="2">
+            <ItemsView
+                x:Name="Cards"
+                IsItemInvokedEnabled="True"
+                ItemInvoked="OnItemInvoked"
+                ItemTemplate="{StaticResource PosterTemplate}"
+                ItemTransitionProvider="{x:Null}"
+                ItemsSource="{x:Bind ViewModel.Cards}"
+                SelectionMode="None">
+                <ItemsView.Layout>
+                    <!-- ItemsStretch="Fill" is what makes the grid reflow instead of leaving a ragged
+                         right margin, and it is the reason resizing looks settled (requirement 1).
+
+                         The cell size follows 设置 → 海报宽度 and the current view shape; the height is
+                         the picture plus the two lines of text under it, worked out in the view model
+                         rather than typed in here.
+
+                         行距比列距大：卡片底下那两行字是它自己的（离画面 8 像素），一行一行之间要是和一列
+                         一列之间一样宽，那两行字就悬在两张画面中间，读起来像是下一排卡片的标题。24 对 16
+                         把每张画面和它自己的字归成一组，一面墙也就读成一行一行，而不是一片方块。 -->
+                    <UniformGridLayout
+                        x:Name="CardLayout"
+                        ItemsStretch="Fill"
+                        MinColumnSpacing="16"
+                        MinItemHeight="{x:Bind ViewModel.RowHeight, Mode=OneWay}"
+                        MinItemWidth="{x:Bind ViewModel.CellWidth, Mode=OneWay}"
+                        MinRowSpacing="24" />
+                </ItemsView.Layout>
+            </ItemsView>
+
+            <!-- 字母跳转条：只在按名称排序且有足够条目时出现（对应 Emby 的 enableAlphaPicker +
+                 总数 > 30）。点击跳到该字母第一项；当前字母高亮随滚动更新。 -->
+            <local:AlphaBar
+                x:Name="Alpha"
+                JumpRequested="OnAlphaJump"
+                Visibility="{x:Bind ViewModel.AlphaVisibility, Mode=OneWay}" />
+        </Grid>
+
+        <TextBlock
+            Grid.Row="2"
+            Foreground="{ThemeResource EgTextFaintBrush}"
+            HorizontalAlignment="Center"
+            Margin="0,60,0,0"
+            Text="{x:Bind ViewModel.EmptyNotice, Mode=OneWay}"
+            VerticalAlignment="Top"
+            Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
+    </Grid>
+</Page>

@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  一条横向卡片带：主页的每个分区、详情页的「更多来自」和「演职人员」都是这一个控件。
+
+  以前每条带都是一个 ScrollView，底下挂着一条水平滚动条 —— 要看后面的卡片就得把指针放到那条几像素高
+  的条上拖，而这三条带在页面里的位置各不相同，拖到一半还会把纵向滚动抢走。改成翻页：滚动条藏掉，指针
+  移到带上时两边浮出翻页箭头，一次翻整整一屏卡片。
+
+  箭头压在卡片图片上，所以底色是固定的深色而不是主题色 —— 卡片图片在浅色主题下也是图片。高度也只盖到
+  图片下沿：卡片底下那两行字不该被压住（见 CardSize.Chrome）。
+
+  Shift+滚轮的横向滚动是 ScrollView 自己的默认行为，这里没有动过，触摸拖动也照旧。
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.ShelfStrip"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <UserControl.Resources>
+        <!-- 三个状态一组固定的深色。不进 Palette.xaml：这三个刷子盖在剧照上，跟主题无关，而调色板里
+             每加一个键就要在 Default 和 Light 两份字典里各加一遍（自检的「调色板浅色主题完整性」盯着
+             这件事）。EgScrimColor 的色相，透明度按状态递增。 -->
+        <SolidColorBrush x:Key="EgShelfPageRestBrush" Color="#B00C0E11" />
+        <SolidColorBrush x:Key="EgShelfPageHoverBrush" Color="#DE0C0E11" />
+        <SolidColorBrush x:Key="EgShelfPagePressBrush" Color="#F20C0E11" />
+
+        <!-- BasedOn 是必须的，不是习惯：Button 的模板是框架用隐式样式给的，而隐式样式只在 Style 没被
+             设过时生效，所以设了这一个又不 BasedOn 就等于把模板拿掉了。同 PosterCard 里那一个。
+             高和宽都取那一个按键高度：全套界面上你会按的东西只有 38 这一档，原来这一颗是 42 宽、高度
+             随内容落到框架的 32，于是它和轮播上同样职责的那两颗差着 6 像素。 -->
+        <Style x:Key="EgShelfPageButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Width" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+            <Setter Property="Background" Value="{StaticResource EgShelfPageRestBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <!-- 默认收起：显不显示由指针位置和还能不能翻决定，见 ShelfStrip.SyncArrows。 -->
+            <Setter Property="Visibility" Value="Collapsed" />
+        </Style>
+    </UserControl.Resources>
+
+    <!-- Background 是 Transparent 才命中测试得到：没有画底的 Grid 不接指针事件，箭头就只在指针正好压在
+         某张卡片上时才出现。 -->
+    <Grid
+        x:Name="Root"
+        AutomationProperties.HelpText="使用左右方向键浏览媒体，按 Enter 打开"
+        AutomationProperties.Name="媒体卡片列表"
+        Background="Transparent"
+        GotFocus="OnGotFocus"
+        IsTabStop="False"
+        KeyDown="OnKeyDown"
+        NoFocusCandidateFound="OnNoFocusCandidateFound"
+        TabFocusNavigation="Local"
+        PointerEntered="OnPointerEntered"
+        PointerMoved="OnPointerEntered"
+        PointerExited="OnPointerExited"
+        XYFocusKeyboardNavigation="Enabled">
+
+        <ScrollView
+            x:Name="Scroller"
+            ContentOrientation="Horizontal"
+            HorizontalScrollBarVisibility="Hidden"
+            IsTabStop="False"
+            VerticalScrollBarVisibility="Hidden"
+            SizeChanged="OnContentResized"
+            ViewChanged="OnViewChanged">
+            <ItemsRepeater
+                x:Name="Repeater"
+                ElementPrepared="OnElementPrepared"
+                IsTabStop="False"
+                SizeChanged="OnContentResized">
+                <ItemsRepeater.Layout>
+                    <StackLayout Orientation="Horizontal" Spacing="16" />
+                </ItemsRepeater.Layout>
+            </ItemsRepeater>
+        </ScrollView>
+
+        <!-- 两个按钮各自改掉 ButtonBackgroundPointerOver 一族：框架那几个键是半透明的浅色叠加，压在
+             剧照上等于把箭头的深色底洗掉 —— 指针一进来箭头反而看不清了。键写在按钮自己的 Resources 里
+             而不是 UserControl.Resources 里，因为卡片模板里的那个 Button 也在这棵树下，写高一层会把卡片
+             的悬停底色一起改掉。
+             圆角只圆里侧那两个角：这两颗是贴着带的左右边沿的，外侧那两个角圆了就成了浮在空处的药丸。
+             数是 8，跟所有「你会去按的东西」一个数（原来是 6，不在任何一档上）。 -->
+        <Button
+            x:Name="Prev"
+            AutomationProperties.Name="上一页"
+            Click="OnPrevClicked"
+            CornerRadius="0,8,8,0"
+            HorizontalAlignment="Left"
+            IsTabStop="False"
+            Style="{StaticResource EgShelfPageButtonStyle}"
+            ToolTipService.ToolTip="上一页">
+            <Button.Resources>
+                <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgShelfPageHoverBrush" />
+                <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgShelfPagePressBrush" />
+                <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
+                <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimDimBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="EgShelfPageHoverBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="EgShelfPagePressBrush" />
+            </Button.Resources>
+            <FontIcon FontSize="16" Glyph="&#xE76B;" />
+        </Button>
+
+        <Button
+            x:Name="Next"
+            AutomationProperties.Name="下一页"
+            Click="OnNextClicked"
+            CornerRadius="8,0,0,8"
+            HorizontalAlignment="Right"
+            IsTabStop="False"
+            Style="{StaticResource EgShelfPageButtonStyle}"
+            ToolTipService.ToolTip="下一页">
+            <Button.Resources>
+                <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgShelfPageHoverBrush" />
+                <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgShelfPagePressBrush" />
+                <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
+                <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimDimBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="EgShelfPageHoverBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="EgShelfPagePressBrush" />
+            </Button.Resources>
+            <FontIcon FontSize="16" Glyph="&#xE76C;" />
+        </Button>
+    </Grid>
+</UserControl>

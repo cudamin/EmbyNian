@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RequestedTheme is pinned Dark here, and it stays pinned even though the app now has six themes and one
+  of them is light. The property can only be written before content loads, so it cannot be the switch;
+  what it is instead is a fixed answer to 「which ThemeDictionary does an application-scope lookup use」.
+  Two readers resolve at application scope on purpose — DiagnosticsViewModel.Resolve and
+  PlayerPage.BrushFor — and with this pinned they always read Palette.xaml's Default dictionary, whatever
+  the Windows app mode is. Unpinned they followed the app mode: on a light-mode machine anything resolved
+  outside the tree came back in light ink and got drawn on a near-black surface. That is not
+  hypothetical: ShellSelfCheck's palette check exited non-zero on a light-mode machine with nothing wrong
+  with it, and DiagnosticsViewModel's log levels came out light-on-dark for the same reason.
+
+  What actually changes the theme is Theme/ThemeHost.cs. It writes the chosen theme's colours into the
+  SolidColorBrush objects of *both* ThemeDictionaries — Default and Light — and sets ElementTheme on the
+  registered roots to match, so the framework's own hundreds of unoverridden brushes flip with it.
+  Writing both is what keeps those two app-scope readers agreeing with the trees they draw into: whatever
+  dictionary a lookup lands in, it holds the same theme.
+
+  Palette.xaml is merged after XamlControlsResources so its keys shadow the framework's. Styles.xaml comes
+  after Palette.xaml, and that order is load-bearing: Palette.xaml holds only colour now, Styles.xaml holds
+  the type, the geometry and the reusable shapes, and one of its styles reaches back for a colour key.
+-->
+<Application
+    x:Class="EmbyNian.Shell.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    RequestedTheme="Dark">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <ResourceDictionary Source="ms-appx:///Theme/Palette.xaml" />
+                <ResourceDictionary Source="ms-appx:///Theme/Styles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

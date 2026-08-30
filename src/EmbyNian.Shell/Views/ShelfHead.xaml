@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  卡片带的牌子：一行标题、右端一个读数、右端可以再挂一个控件，底下一条通栏发丝线。
+
+  就是场记板往下一级。页头那块 PageSlate 说的是「这是哪一页」，这一块说的是「下面这一带是什么」，而
+  一页只有一种横向结构 —— 同一条线、同一个左沿、读数同样在右端对齐，只是字号小一档。原来主页和详情页
+  各自写一个光秃秃的 TextBlock，四个标题里还有一个漏了标题字体（详情页那个 EgShelfHeadingStyle 只设了
+  字号和字重，于是它是「更大的 YaHei」而不是标题字），一带一带之间没有任何结构，全靠 24 的行距分家。
+
+  读数走等宽：它写的是「24 项」这种数，和场记板右上角那一列、卡片第二行、详情页信息行同一支字。
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.ShelfHead"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock
+            x:Name="TitleText"
+            MaxLines="1"
+            Style="{StaticResource EgSectionTitleStyle}"
+            TextTrimming="CharacterEllipsis"
+            VerticalAlignment="Bottom" />
+
+        <!-- 读数和挂件同在右端。靠下对齐，和左边那行标题的基线对上 —— 挂件（详情页的季下拉框）比标题高，
+             居中对齐会把标题顶起来，那条线也就跟着离标题远了。
+
+             两者之间那 12 写在挂件的外边距上，不写成 StackPanel 的 Spacing：挂件收起来的时候，外边距跟着
+             它一起不算，读数才留在右沿上。 -->
+        <StackPanel
+            Grid.Column="1"
+            Margin="12,0,0,0"
+            Orientation="Horizontal"
+            VerticalAlignment="Bottom">
+            <TextBlock
+                x:Name="NoteText"
+                Style="{StaticResource EgDataStyle}"
+                VerticalAlignment="Bottom" />
+            <ContentPresenter
+                x:Name="TrailingHost"
+                Margin="12,0,0,0"
+                VerticalAlignment="Bottom" />
+        </StackPanel>
+
+        <!-- 通栏线，ColumnSpan 2 —— 和场记板那条同一个样式键，只是离标题近一点。 -->
+        <Border
+            Grid.Row="1"
+            Grid.ColumnSpan="2"
+            Margin="0,6,0,0"
+            Style="{StaticResource EgRuleStyle}" />
+    </Grid>
+</UserControl>

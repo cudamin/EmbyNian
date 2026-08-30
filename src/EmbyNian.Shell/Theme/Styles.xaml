@@ -1,0 +1,290 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  字、尺寸、以及界面里反复出现的那几种形状。Palette.xaml 管颜色，这里管其余的一切。
+
+  这两个文件分工的判据是「换主题会不会动它」：颜色会，字号和圆角不会。所以 Palette.xaml 里那三份
+  ThemeDictionaries 只剩颜色，原来挂在它尾巴上的「与主题无关」那一段整段搬到了这里 —— 唯独两个
+  EgOnScrim* 画刷留在那边，它们是颜色，只是恰好不跟主题走。
+
+  方向是「放映室」：这个客户端没有东西要卖给谁，它是一台把片子交给 mpv 的仪器。所以剧照是胶片，围着
+  它的每一样东西都是刻度和标签 —— 标题用机器和仪表上刻的那种字，数字一律等宽，结构靠发丝线而不靠
+  色块，海报是方的胶片格而不是圆角卡片。
+
+  在 App.xaml 里并在 Palette.xaml 之后。两份都在应用级，所以谁引用谁的键都解析得到。
+-->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ============================ 三种字 ============================ -->
+
+    <!--
+      正文。WinForms 那版用的就是它，换过来时保留，两边看着才像同一个产品；Segoe UI Variable 在这里
+      没有能用的汉字覆盖。这一个必须留在树根上 —— 自检有一条盯着 ShellPage.FontFamily 就是它。
+    -->
+    <FontFamily x:Key="EgUiFontFamily">Microsoft YaHei UI</FontFamily>
+    <FontFamily x:Key="ContentControlThemeFontFamily">Microsoft YaHei UI</FontFamily>
+
+    <!--
+      标题字：Bahnschrift 是微软自带的 DIN 1451 可变字体（Win10 1709 起随系统），也就是刻在胶片罐、
+      推子条和放映机铭牌上的那种字。SemiCondensed 这一档窄，所以同样的版面能放下更大的号 —— 页面
+      标题因此从 28 提到 34 而没有变宽。
+      逗号后面那个不是保险，是分工：Bahnschrift 没有汉字，中文标题由 Microsoft YaHei UI 接着画，
+      一串里前面的字体缺哪个字就往后落一个。整套字体缺席时（非 Windows 10 1709+）也是落到它，界面
+      退回全 YaHei，只是失去这一层区分。
+    -->
+    <FontFamily x:Key="EgDisplayFontFamily">Bahnschrift SemiCondensed, Microsoft YaHei UI</FontFamily>
+
+    <!--
+      数字字。时长、年份、分辨率、码率、集号、条目数一律走它 —— 等宽之后同一列里的数字对得齐，而且
+      数字从「一句话里的词」变成「仪表上的读数」，这是整套里最出身份的一个决定。
+      Cascadia Mono 排在前面是机会性的：装了 Windows Terminal 或 VS 的机器上有，本机没有，于是落到
+      Consolas（`C:\Windows\Fonts\consola.ttf`，每台 Windows 都有）。最后一档兜汉字。
+    -->
+    <FontFamily x:Key="EgDataFontFamily">Cascadia Mono, Consolas, Microsoft YaHei UI</FontFamily>
+
+    <!-- 字号阶。14 和 12 一个没动 —— 界面里上百处引用它们。 -->
+    <x:Double x:Key="EgEyebrowFontSize">11</x:Double>
+    <x:Double x:Key="EgCaptionFontSize">12</x:Double>
+    <x:Double x:Key="EgBodyFontSize">14</x:Double>
+    <x:Double x:Key="EgSubheadFontSize">16</x:Double>
+    <x:Double x:Key="EgTitleFontSize">20</x:Double>
+    <x:Double x:Key="EgHeaderFontSize">34</x:Double>
+    <x:Double x:Key="EgDisplayFontSize">44</x:Double>
+
+    <!--
+      眉字的字距，千分之一 em 为单位（CharacterSpacing 就是这个单位）。0.14 em 是「小号大写要读得开」
+      的那一档；正文一律不动字距。
+    -->
+    <x:Int32 x:Key="EgEyebrowSpacing">140</x:Int32>
+
+    <!-- ============================ 几何 ============================ -->
+
+    <!-- 你会去点的面板：设置卡片、账号那一块、对话框、浮出菜单。留着圆角，手感上它还是个 Windows 应用。 -->
+    <CornerRadius x:Key="EgCardCornerRadius">8</CornerRadius>
+
+    <!--
+      封面的圆角（「把封面改成圆角的」）：海报、剧照、单集缩略图那一格，也就是 EgFrameStyle 和详情页头部
+      那张海报。8 和上面那个面板的圆角同一个数 —— 整套界面只有这一档圆角，两个键是为了以后能各自改。
+      在这之前它是 0：胶片格本来是方的，一墙密排的海报靠直角读得清。现在照用户说的走，圆角回来了。
+      圆角只有 Border 剪得动 —— Border 会按自己的 CornerRadius 裁掉孩子，Grid 和 Panel 只是把自己的底色
+      和框线画圆，孩子照旧方着。所以凡是「里面那张图自己铺到四边」的块，用下面那个 0，见那条说明。
+    -->
+    <CornerRadius x:Key="EgPosterCornerRadius">8</CornerRadius>
+
+    <!--
+      还是方的那几块：主页那条通栏轮播（四边就是窗口的边和侧边栏那道竖线，圆角会在窗口角上剪出三角形的
+      缺口）、详情页头图那一格、设置里那六块色板。它们的共同点不是「大」，是**里面的东西自己画到边而外面
+      那层剪不动它**：这三处外面都是 Grid 或 Button，不是 Border，圆角只会让底色缩进去、露出孩子的直角。
+    -->
+    <CornerRadius x:Key="EgBleedCornerRadius">0</CornerRadius>
+
+    <!-- 发丝线的粗细。结构靠它，不靠色块 —— 所以只有一档，加粗只发生在框线变强调色的时候。 -->
+    <Thickness x:Key="EgHairline">1</Thickness>
+
+    <!-- 胶片格右上角那颗方块的边长：一个数字或一个对勾刚好放得下。 -->
+    <x:Double x:Key="EgCornerBadgeSize">20</x:Double>
+
+    <!-- 看到一半时压在下边框线上的那条进度，2px —— 比发丝线粗一档，才看得出它是「读数」不是「边」。 -->
+    <x:Double x:Key="EgProgressThickness">2</x:Double>
+
+    <!--
+      按键的高度。整套界面只有这一个 —— 头图上的播放键、轮播的播放和详情、翻页箭头、圆图标键，以前是
+      38/40/44 三档混着，差 2 像素的两颗键并排放着只会显得没对齐。方形图标键的边长也是它。
+    -->
+    <x:Double x:Key="EgActionHeight">38</x:Double>
+
+    <!--
+      页面四边。左右 28 是给场记板那条通栏线留的余量 —— 内容和线同宽，页头因此和内容对得齐。
+    -->
+    <Thickness x:Key="EgPageMargin">28,20,28,20</Thickness>
+
+    <!-- ============================ 文字 ============================ -->
+    <!--
+      全部带 x:Key，一个隐式样式都没有：应用级的 `Style TargetType="TextBlock"` 会命中界面上每一块
+      文字，包括框架控件模板内部的那些。
+    -->
+
+    <!--
+      眉字：场记板最上面那一行小字，写的是「这是哪一区」。等宽 + 字距拉开 + 一档更淡的字，它的职责
+      是定位而不是被读 —— 所以它绝不承担标题的内容，标题在它下面那行。
+    -->
+    <Style x:Key="EgEyebrowStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource EgDataFontFamily}" />
+        <Setter Property="FontSize" Value="{StaticResource EgEyebrowFontSize}" />
+        <Setter Property="CharacterSpacing" Value="{StaticResource EgEyebrowSpacing}" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextFaintBrush}" />
+        <Setter Property="TextLineBounds" Value="Tight" />
+    </Style>
+
+    <!-- 页面标题：场记板的第二行，通栏线的上面。 -->
+    <Style x:Key="EgPageTitleStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource EgDisplayFontFamily}" />
+        <Setter Property="FontSize" Value="{StaticResource EgHeaderFontSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextBrush}" />
+        <Setter Property="TextLineBounds" Value="Tight" />
+    </Style>
+
+    <!--
+      片名：详情页头图上那一个，主页轮播上那一个，共用这一个 —— 页面标题再大一档。两处都是整屏最大的
+      一块字，它们不该一个 40 一个 34，也不该都落回正文字。
+    -->
+    <Style x:Key="EgDisplayTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource EgPageTitleStyle}">
+        <Setter Property="FontSize" Value="{StaticResource EgDisplayFontSize}" />
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+    </Style>
+
+    <!-- 分区标题：卡片带的名字、设置页每张卡片的名字。 -->
+    <Style x:Key="EgSectionTitleStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource EgDisplayFontFamily}" />
+        <Setter Property="FontSize" Value="{StaticResource EgTitleFontSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextBrush}" />
+    </Style>
+
+    <Style x:Key="EgSubheadStyle" TargetType="TextBlock" BasedOn="{StaticResource EgSectionTitleStyle}">
+        <Setter Property="FontSize" Value="{StaticResource EgSubheadFontSize}" />
+    </Style>
+
+    <!--
+      读数。凡是数字都走这两个：时长、年份、分辨率、码率、集号、条目数。等宽不只是好看 —— 一列里的
+      数字对得齐，而「2024 · 1080P · 2H14M」这种一行几段的读数不会因为字宽不同而挤成一团。
+    -->
+    <Style x:Key="EgDataStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource EgDataFontFamily}" />
+        <Setter Property="FontSize" Value="{StaticResource EgCaptionFontSize}" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextDimBrush}" />
+    </Style>
+
+    <Style x:Key="EgDataStrongStyle" TargetType="TextBlock" BasedOn="{StaticResource EgDataStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource EgTextBrush}" />
+    </Style>
+
+    <Style x:Key="EgBodyStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource EgUiFontFamily}" />
+        <Setter Property="FontSize" Value="{StaticResource EgBodyFontSize}" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextBrush}" />
+    </Style>
+
+    <Style x:Key="EgCaptionStyle" TargetType="TextBlock" BasedOn="{StaticResource EgBodyStyle}">
+        <Setter Property="FontSize" Value="{StaticResource EgCaptionFontSize}" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextDimBrush}" />
+    </Style>
+
+    <!--
+      压在剧照上的那几行：详情页头部和主页轮播。两处的暗罩都是写死的黑（浅色主题也一样，压的是照片不是
+      主题色），所以字也不跟主题走 —— 颜色取 Palette 里那两支 EgOnScrim 画刷。
+
+      除了颜色，字体和字号跟页面里的完全同一套，一档都不新造：以前这两处各写各的 FontSize="40"、
+      FontSize="34"、Opacity="0.86"，于是同一个产品的两个大画面，字不一样大、也不是同一种字。
+    -->
+    <Style x:Key="EgOnScrimEyebrowStyle" TargetType="TextBlock" BasedOn="{StaticResource EgEyebrowStyle}">
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimDimBrush}" />
+    </Style>
+
+    <Style x:Key="EgOnScrimBodyStyle" TargetType="TextBlock" BasedOn="{StaticResource EgBodyStyle}">
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+    </Style>
+
+    <Style x:Key="EgOnScrimDataStyle" TargetType="TextBlock" BasedOn="{StaticResource EgDataStyle}">
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimDimBrush}" />
+    </Style>
+
+    <Style x:Key="EgOnScrimDataStrongStyle" TargetType="TextBlock" BasedOn="{StaticResource EgDataStyle}">
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+    </Style>
+
+    <!--
+      场记板压在剧照上的那一份：主页的大图铺到窗口顶边之后，页眉就站在图上了（见 PageSlate.OnScrim）。
+      只换颜色，字体字号一档不改 —— 同一块场记板换个底，不该顺手换成另一个字号。
+    -->
+    <Style x:Key="EgOnScrimPageTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource EgPageTitleStyle}">
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+    </Style>
+
+    <!-- ============================ 形状 ============================ -->
+
+    <!--
+      通栏发丝线。场记板下面那一条，也是任何两块内容之间要分开时用的那一条 —— 整页只有这一种横向
+      结构。用 Border 而不是 Rectangle：它在 Grid 里横向 Stretch 是默认行为，不用写宽度。
+    -->
+    <Style x:Key="EgRuleStyle" TargetType="Border">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{ThemeResource EgBorderBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Bottom" />
+    </Style>
+
+    <!--
+      胶片格：海报、缩略图、剧照外面那一圈。签名元素就是这根线 —— 卡片的所有状态都由它和它四个角上
+      的东西表达，不靠药丸徽章、不靠阴影、不靠缩放：
+
+        · 静止        1px 发丝框，圆角 8（「把封面改成圆角的」，见 EgPosterCornerRadius）
+        · 指针/焦点   整圈变强调色（唯一会给整圈上色的事，所以它和持久状态永不撞车）
+        · 看到一半    2px 强调色压在下边框线上，长度就是进度
+        · 还剩几集    右上角一颗强调色方块，里面是等宽的数字
+        · 全看完      同一颗方块，里面换成对勾
+        · 没开始看    什么都不加 —— 一屋子海报里绝大多数都是没看过的，标它等于标了全场
+
+      圆角一上来，里面那几件东西是被这一圈剪着的（Border 会按 CornerRadius 裁孩子）：右上角那颗方块
+      跟着圆了一个角，底边那条进度两头各被切掉两三个像素。两处都是对的 —— 它们本来就说自己是「框的
+      一部分」，框圆了它们就该跟着圆。
+    -->
+    <Style x:Key="EgFrameStyle" TargetType="Border">
+        <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource EgBorderBrush}" />
+        <Setter Property="CornerRadius" Value="{StaticResource EgPosterCornerRadius}" />
+        <Setter Property="Background" Value="{ThemeResource EgSurfaceAltBrush}" />
+    </Style>
+
+    <!-- 指针在上面、或者键盘焦点落在上面时的同一根线。 -->
+    <Style x:Key="EgFrameActiveStyle" TargetType="Border" BasedOn="{StaticResource EgFrameStyle}">
+        <Setter Property="BorderBrush" Value="{ThemeResource EgAccentBrush}" />
+    </Style>
+
+    <!--
+      正文里的一块板 —— 详情页那几个板块（媒体源、简介、单集、剧季、相似、演职人员）各是一块。
+
+      形状和底色都照设置页那些卡片抄（内边距 18、1px 发丝框、圆角 8、EgSurfaceAltBrush）：整个界面上
+      「一块能放东西的板」只有一种长相。内容因此落在页边 28 + 框 1 + 内边距 18 = 47 上，和设置页每一张
+      卡里的字同一条线。
+
+      底色是实心的，不是亚克力 ——「滑到下面不用显示背景了，五颜六色的太丑了」。中间那一版让每块板都透着
+      背后那张固定的剧照、块与块之间留缝漏图，读起来就是一页花的：板上的字压在剧照的颜色上，缝里露出的是
+      被切成条的画面。图现在只在头上那一格露着，正文是一张不透明的纸（见 DetailPage 的 BodySheet）。
+
+      给 StackPanel 而不是 Border：正文那几块本来就是 StackPanel（一叠东西，自带 Spacing），包一层
+      Border 会让每一块多一级嵌套，而 WinUI 的 StackPanel 自己就有 Background/BorderBrush/Padding/
+      CornerRadius 这四样 —— Panel 没有 Padding，所以 TargetType 只能是 StackPanel。
+    -->
+    <Style x:Key="EgBodyPanelStyle" TargetType="StackPanel">
+        <Setter Property="Background" Value="{ThemeResource EgSurfaceAltBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource EgBorderBrush}" />
+        <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
+        <Setter Property="CornerRadius" Value="{StaticResource EgCardCornerRadius}" />
+        <Setter Property="Padding" Value="18" />
+    </Style>
+
+    <!--
+      右上角那颗方块。数字和对勾用同一颗，因为它们说的是同一件事 ——「还剩多少」，对勾就是「零」。
+      跟框线齐平（没有外边距），它是框的一部分而不是浮在图上的贴纸。
+    -->
+    <Style x:Key="EgCornerBadgeStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource EgAccentBrush}" />
+        <Setter Property="MinWidth" Value="{StaticResource EgCornerBadgeSize}" />
+        <Setter Property="Height" Value="{StaticResource EgCornerBadgeSize}" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Top" />
+        <Setter Property="Padding" Value="4,0,4,0" />
+    </Style>
+
+    <Style x:Key="EgCornerBadgeTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource EgDataFontFamily}" />
+        <Setter Property="FontSize" Value="{StaticResource EgEyebrowFontSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextOnAccentBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+</ResourceDictionary>

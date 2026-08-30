@@ -1,0 +1,15 @@
+# 这个仓库里的文本文件一律是 LF，包括 .ps1。写在这里而不是靠每台机器的 core.autocrlf：
+# 那个开关在本机是 true，一次新的检出会把每个文件换成 CRLF，于是「谁都没改过的文件」
+# 在另一台机器上全成了改动。eol=lf 把工作区也钉成 LF，两边就一致了。
+#
+# PowerShell 脚本另有一条规矩（见 README）：存成带 BOM 的 UTF-8，否则 Windows PowerShell
+# 会把里面的中文按本地代码页读，报错信息全是乱码。BOM 是文件内容的一部分，不受这里影响。
+* text=auto eol=lf
+
+# 二进制：不做任何行尾转换，也不要试着做差异比较。
+*.ico binary
+*.png binary
+*.jpg binary
+*.zip binary
+*.dll binary
+*.exe binary

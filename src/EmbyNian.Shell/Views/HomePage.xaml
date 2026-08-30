@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The home page: 一张铺满的大图，底下 继续观看、媒体库、接下来看、最近添加 四排卡片。
+
+  大图是这一页的第一句话 —— 它铺满窗口顶上那一整块（左到侧边栏、右到窗口边、上到窗口的顶边，标题栏和页眉
+  都浮在图上），图源是「最近添加」。原来它是页面里的一格：四边留着 28 的页边距、上面还压着一块页眉，于是
+  整页最大的一块画面被一圈黑边框着，看起来像贴在纸上的一张照片，而不是这一页本身。
+
+  Rows that scroll sideways, which is the shape every Emby client uses and the one thing the WinForms
+  shell never managed — its home page was the same square grid as a library, so a half-watched episode
+  looked exactly like a film nobody had opened.
+
+  There is one row of markup here, not four. A row is a CardShelf, the page draws whatever shelves the
+  view model hands it, and the two card shapes are one template because a card carries its own drawn
+  size. Before this the file repeated the same twenty lines per row with the height and the template
+  swapped, and each of those heights was a literal nobody could re-derive.
+-->
+<Page
+    x:Class="EmbyNian.Shell.Views.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    xmlns:vm="using:EmbyNian.Shell.ViewModels"
+    Background="{ThemeResource LayerFillColorDefaultBrush}">
+
+    <Page.Resources>
+        <!-- Declared before the shelf template that reaches for it: a StaticResource inside a
+             DataTemplate is resolved as the dictionary is parsed, so a forward reference fails. -->
+        <DataTemplate x:Key="CardTemplate" x:DataType="local:CardItem">
+            <!-- A Button rather than a bare card: click, keyboard activation, focus visual and hover
+                 state for free, and its own chrome removed so only the card shows. -->
+            <Button
+                Background="Transparent"
+                BorderThickness="0"
+                Click="OnCardClicked"
+                ContextRequested="OnCardContextRequested"
+                Padding="0">
+                <local:PosterCard
+                    ActionRequested="OnCardActionRequested"
+                    Card="{x:Bind}"
+                    CardWidth="{x:Bind CardWidth}"
+                    PosterHeight="{x:Bind PosterHeight}" />
+            </Button>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ShelfTemplate" x:DataType="vm:CardShelf">
+            <StackPanel Spacing="10">
+                <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。 -->
+                <local:ShelfHead Note="{x:Bind Note, Mode=OneWay}" Title="{x:Bind Title, Mode=OneWay}" />
+                <!-- Height bound rather than fixed: a horizontal strip inside a vertical stack has
+                     no other way to know how tall a row of cards is, and the shelf works it out from
+                     the card size instead of the markup carrying the answer.
+
+                     ShelfStrip rather than a ScrollView with a scrollbar under it: 「下方拖动的这种不是
+                     很好用」 — the row pages now, one screenful of cards per chevron. -->
+                <local:ShelfStrip
+                    Height="{x:Bind RowHeight}"
+                    ItemSpacing="16"
+                    ItemTemplate="{StaticResource CardTemplate}"
+                    ItemsSource="{x:Bind Cards}" />
+            </StackPanel>
+        </DataTemplate>
+    </Page.Resources>
+
+    <!--
+      整页就是一个滚动条，第一块是那张铺满的大图。
+
+      Margin 顶上 -32 是把 ContentHost 留给标题栏的那 32 像素顶回去（见 ShellPage.xaml）：「红框框出来的地方
+      全填充上海报」，那块红框是从窗口的顶边量起的，图上留一条 32 高的实心条就等于留了一道黑边。整套里只有
+      这一页这么做，别的页照旧从第 32 行起画。
+
+      进度条和提示条也在滚动条里面，跟着内容一起滚 —— 它们原来在滚动条外面，占着页面顶上的两行；页眉现在
+      浮在图上，那两行没有别的地方可去。两条都自带 12 的下边距，而不是靠 StackPanel.Spacing：收起来的时候
+      它们该一个像素都不占。
+    -->
+    <ScrollView x:Name="Scroller" Margin="0,-32,0,0" VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+            <!-- 大图那一整块：图铺到窗口的顶边和左右边沿，页眉站在图上。一张幻灯片也没有时轮播自己收起来
+                 （见 HomeBanner.Apply），这一块就只剩那块牌子，牌子也跟着换回页面里的墨色（OnScrim）。 -->
+            <Grid x:Name="Hero">
+                <local:HomeBanner
+                    x:Name="Banner"
+                    OpenRequested="OnBannerOpenRequested"
+                    PlayRequested="OnBannerPlayRequested"
+                    Slides="{x:Bind ViewModel.Slides, Mode=OneWay}" />
+
+                <!-- 顶上 44 = 标题栏那 32 加一口气：眉字不该贴着窗口的上沿，也不该压在那五颗按钮上。
+                     左右 28 和底下的卡片带同一条竖线，所以「HOME / 主页」和第一排卡片左对齐。 -->
+                <local:PageSlate
+                    x:Name="Slate"
+                    Eyebrow="HOME"
+                    Margin="28,44,28,0"
+                    Note="{x:Bind ViewModel.Subheading, Mode=OneWay}"
+                    OnScrim="{x:Bind ViewModel.HeroFilled, Mode=OneWay}"
+                    Title="主页"
+                    VerticalAlignment="Top" />
+            </Grid>
+
+            <StackPanel Margin="28,24,28,28">
+                <ProgressBar
+                    IsIndeterminate="True"
+                    Margin="0,0,0,12"
+                    Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+
+                <!-- TwoWay on IsOpen, so dismissing the bar is recorded rather than only drawn: the next
+                     failure has to be able to reopen it, and a view model that thinks it is still open would
+                     leave the second one invisible. -->
+                <InfoBar
+                    IsClosable="True"
+                    IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+                    Margin="0,0,0,12"
+                    Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+                    Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+                    Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
+
+                <ItemsRepeater ItemTemplate="{StaticResource ShelfTemplate}" ItemsSource="{x:Bind ViewModel.Shelves}">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Orientation="Vertical" Spacing="24" />
+                    </ItemsRepeater.Layout>
+                </ItemsRepeater>
+
+                <TextBlock
+                    Foreground="{ThemeResource EgTextFaintBrush}"
+                    Margin="0,40,0,0"
+                    Style="{StaticResource EgBodyStyle}"
+                    Text="服务器上还没有可以显示的内容"
+                    Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollView>
+</Page>

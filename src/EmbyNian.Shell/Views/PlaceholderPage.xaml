@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Fallback content for a destination that has not been implemented yet.
+
+  It used to carry a mock poster grid, which is how ItemsView, UniformGridLayout and ItemContainer
+  were proven at scale before any of them were trusted with real data. That job is done — LibraryPage
+  now runs the same grid off the server — so what is left here is an honest list of what each of these
+  three pages will hold, rather than 48 fake rows pretending to be a library.
+-->
+<Page
+    x:Class="EmbyNian.Shell.Views.PlaceholderPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    Background="{ThemeResource LayerFillColorDefaultBrush}">
+
+    <Grid Margin="{StaticResource EgPageMargin}" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 三行字都由 OnNavigatedTo 填，因为这一页就是「同一块牌子换三套字」。 -->
+        <local:PageSlate x:Name="Slate" Eyebrow="PENDING" />
+
+        <Border
+            Grid.Row="1"
+            Background="{ThemeResource EgSurfaceAltBrush}"
+            BorderBrush="{ThemeResource EgBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="{StaticResource EgCardCornerRadius}"
+            HorizontalAlignment="Left"
+            MaxWidth="620"
+            Padding="24"
+            VerticalAlignment="Top">
+
+            <StackPanel Spacing="12">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <FontIcon
+                        x:Name="PageIcon"
+                        FontSize="18"
+                        Foreground="{ThemeResource EgAccentBrush}"
+                        Glyph="&#xE713;"
+                        VerticalAlignment="Center" />
+                    <TextBlock
+                        Style="{StaticResource EgSectionTitleStyle}"
+                        Text="尚在移植中"
+                        VerticalAlignment="Center" />
+                </StackPanel>
+
+                <TextBlock
+                    Foreground="{ThemeResource EgTextDimBrush}"
+                    Style="{StaticResource EgBodyStyle}"
+                    Text="这一页仍在完善中，计划包含："
+                    TextWrapping="Wrap" />
+
+                <ItemsControl x:Name="Points">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnSpacing="10" Margin="0,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon
+                                    FontSize="12"
+                                    Foreground="{ThemeResource EgAccentBrush}"
+                                    Glyph="&#xE73E;"
+                                    VerticalAlignment="Top" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Style="{StaticResource EgBodyStyle}"
+                                    Text="{Binding}"
+                                    TextWrapping="Wrap" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Page>

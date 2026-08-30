@@ -1,0 +1,9 @@
+{
+  "//": "The .NET 10 SDK is required, not merely preferred: every project targets net10.0 and the 8.0 SDK cannot build that TFM. Pinned rather than left to whatever is on PATH so an SDK-8 machine fails with a clear message naming what it needs, instead of producing a confusing TFM error.",
+  "//dotnet": "This box has the 10.0.400 SDK under %USERPROFILE%\\.dotnet, which is NOT the dotnet on PATH (that root has 8.0.403 only). Build with \"%USERPROFILE%\\.dotnet\\dotnet.exe\" — see README.",
+  "sdk": {
+    "version": "10.0.400",
+    "rollForward": "latestMinor",
+    "allowPrerelease": false
+  }
+}

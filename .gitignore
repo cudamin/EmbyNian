@@ -6,11 +6,20 @@ publish/
 .vs/
 .idea/
 artifacts/
+work/
+work-*/
+outputs/
 *.log
 
-# 37 MB 的 mpv 运行库，仅在存在时被复制进 publish/（见 EmbyMpvClient.App.csproj），不入库
+# 117 MB 的 mpv 运行库，仅在存在时被复制进发布目录（见 Shell 项目），不入库
 libmpv-2.dll
 
 # 构建与测试时重定向到文件的控制台输出
 testrun.txt
 pubout.txt
+
+# 验证用的截图。留在磁盘上供翻阅，但不入库：git 存不了 PNG 的增量，这三处合起来 50 MB 出头，
+# 一旦进了历史就永远在里面。PROGRESS.md 引用它们时用的是路径，路径在本机照旧打得开。
+shots/
+docs/shots/
+shell.png

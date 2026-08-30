@@ -1,0 +1,862 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  一个条目的详情页：电影、剧、季、单集共用这一页。
+
+  头部是条目自己的剧照虚化压暗，做法和 WinForms 版一样 —— 先把图解到 520 逻辑像素宽，再让
+  Stretch=UniformToFill 把它放大铺满，等于让光栅器免费做一遍盒式模糊。这里比 WinForms 省一整套
+  缓存：合成是保留模式的，透明子元素不需要把父元素的绘制重跑一遍。
+
+  文字用 EgOnScrim 两个刷子，它们不随主题走 —— 头图上永远压着深色遮罩，浅色主题的深色字会看不见。
+
+  以前这一页有条规矩：「可见性只在 LayoutPage() 里赋值，任何地方都不读回 Visibility」。那条规矩现在
+  不需要了 —— 这里没有一处赋值，每一行的显隐都绑在 DetailViewModel 上一个由它所依赖的值算出来的属性，
+  而算出来的值不用等页面显示就能读，测试里也能读。
+-->
+<Page
+    x:Class="EmbyNian.Shell.Views.DetailPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    xmlns:emby="using:EmbyNian.Emby"
+    Background="{ThemeResource LayerFillColorDefaultBrush}">
+
+    <Page.Resources>
+        <!-- 头图上那六颗键：带字的两颗一个高度，只有图标的四颗是同边长的方块。三个样式的高度、边长和
+             圆角都取词表 —— 以前是写死的 38 配 19，19 是「一半高」也就是药丸，而这一版里圆角只有两档：
+             图是 0，你会去按的东西是 8。两个都必须 BasedOn 框架自己的样式，否则连模板都拿不到。 -->
+        <Style x:Key="EgPillButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="CornerRadius" Value="{StaticResource EgCardCornerRadius}" />
+            <Setter Property="Padding" Value="18,0,20,2" />
+        </Style>
+
+        <Style x:Key="EgPlayButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="CornerRadius" Value="{StaticResource EgCardCornerRadius}" />
+            <Setter Property="Padding" Value="18,0,20,2" />
+        </Style>
+
+        <Style x:Key="EgRoundButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Width" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="CornerRadius" Value="{StaticResource EgCardCornerRadius}" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+
+        <!-- 卡片带的标题现在是 local:ShelfHead（标题、读数、挂件位、通栏线），不再是这儿的一个
+             EgShelfHeadingStyle TextBlock —— 那个样式只设了字号和字重，漏了标题字体，于是四条带子的
+             标题是「更大的 YaHei」而不是标题字，和主页的同一种东西也不长一样。 -->
+
+        <!-- 卡片：单集、季、推荐都用这一个 —— 普通海报卡，有悬浮播放键（有未看集时可整季续播）、
+             右键菜单、已看角标。三处的点击都只是「打开这张卡的条目」，所以一个模板一个处理器。 -->
+        <DataTemplate x:Key="CardTemplate" x:DataType="local:CardItem">
+            <Button
+                Background="Transparent"
+                BorderThickness="0"
+                Click="OnCardClicked"
+                ContextRequested="OnCardContextRequested"
+                Padding="0">
+                <local:PosterCard
+                    ActionRequested="OnCardActionRequested"
+                    Card="{x:Bind}"
+                    CardWidth="{x:Bind CardWidth}"
+                    PosterHeight="{x:Bind PosterHeight}" />
+            </Button>
+        </DataTemplate>
+
+        <!-- 人物卡：Person 不是可播放类型，所以卡上不会长出播放键，也没有已看和收藏，
+             右键也不挂菜单 —— 那些命令都是针对可播放条目的。 -->
+        <DataTemplate x:Key="PersonTemplate" x:DataType="local:CardItem">
+            <Button
+                Background="Transparent"
+                BorderThickness="0"
+                Click="OnCardClicked"
+                Padding="0">
+                <local:PosterCard
+                    Card="{x:Bind}"
+                    CardWidth="{x:Bind CardWidth}"
+                    PosterHeight="{x:Bind PosterHeight}" />
+            </Button>
+        </DataTemplate>
+
+        <!-- 单集的一行：控件本身和媒体库列表模式用的是同一个 EpisodeRow，只是外面包的不一样 ——
+             那边是 ItemsView 的 ItemContainer（打开由 ItemInvoked 报出），这边没有 ItemsView，
+             于是和上面几个卡片模板一样包一个 Button，点击、右键、悬浮播放键三个处理器也就跟卡片
+             共用同一套。
+
+             两个 Stretch 都得写：Button 默认把内容居中并只要内容那么宽，不写的话一行只在页面
+             中间占着剧照加文字的宽度，右边一大片点不着，也对不齐。 -->
+        <DataTemplate x:Key="EpisodeRowTemplate" x:DataType="local:CardItem">
+            <Button
+                Background="Transparent"
+                BorderThickness="0"
+                Click="OnCardClicked"
+                ContextRequested="OnCardContextRequested"
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Stretch"
+                Padding="0">
+                <local:EpisodeRow
+                    ActionRequested="OnCardActionRequested"
+                    Card="{x:Bind}" />
+            </Button>
+        </DataTemplate>
+
+        <!-- 媒体信息 的一行：右对齐的标签一列，值一到两列。三列的宽度在每一行里各算一次，但第一列是
+             定宽、后两列都是 *，每一行又都是同一个页宽，所以三列在行与行之间自然对齐 —— 不需要
+             共享的列定义，也不需要把整张表塞进一个 Grid 里手写行号。
+
+             值的列数由 InfoRow.Span 给：字幕成对时各占一列，其余（文件名这种）占满两列。第三个
+             TextBlock 占着第三列不动，没有第二个值时它的文字是空的，什么都不画，正好让跨两列的
+             第一个值从它上面穿过去。 -->
+        <DataTemplate x:Key="InfoRowTemplate" x:DataType="emby:InfoRow">
+            <Grid Margin="0,0,0,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="72" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="{ThemeResource EgTextFaintBrush}"
+                    HorizontalAlignment="Right"
+                    LineHeight="20"
+                    Margin="0,0,12,0"
+                    Text="{x:Bind Label}" />
+
+                <TextBlock
+                    Grid.Column="1"
+                    Grid.ColumnSpan="{x:Bind Span}"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="{ThemeResource EgTextDimBrush}"
+                    IsTextSelectionEnabled="True"
+                    LineHeight="20"
+                    Text="{x:Bind Value}"
+                    TextWrapping="Wrap" />
+
+                <TextBlock
+                    Grid.Column="2"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="{ThemeResource EgTextDimBrush}"
+                    IsTextSelectionEnabled="True"
+                    LineHeight="20"
+                    Text="{x:Bind Second}"
+                    TextWrapping="Wrap" />
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid>
+
+        <!-- ============ 固定在背景里的那张剧照 ============ -->
+        <!-- 「当前任务的背景要用亚克力遮罩，固定在背景中，而不是往下翻页就消失了，而且要跟主页一样，占满标题栏」
+             —— 三句话对着三处。往下翻页它不动：这一层在滚动视图外面，图放在里面就只能跟着里面那一叠一起走（况且
+             ScrollView 会把自己的内容裁掉）。压暗：站在图上的那几行字靠的是这一层里的两道罩子。占满标题栏：负的
+             上边距把这一层顶到窗口的上沿，见 DetailPage.LiftBackdrop。
+             不写高 —— 这一层铺满整页，所以头上那一格里任何一处都在这张图上，接不出缝来。往下滚看不见它，不是因为
+             它走了，而是因为正文那张纸不透明，压着它过去（「滑到下面不用显示背景了，五颜六色的太丑了」，见下面
+             BodySheet）。
+             整层跟着「服务器上有没有这张图」开合，不是跟着「位图解出来了没有」（见 HeroArtVisibility）：层先站好，
+             罩子就先压住了标题栏那行字，图到了只是这一层里多一张画面。 -->
+        <Grid x:Name="Backdrop" Visibility="{x:Bind ViewModel.HeroArtVisibility, Mode=OneWay}">
+
+            <!-- UniformToFill：按短边铺满、长边裁掉，所以窗口是什么形状图就填满什么形状。
+                 0.9 是原来的 0.6 抬上来的 —— 六成是那格 376 高的带子上的数，整页铺开之后这张图就是这一页的
+                 样子，压到六成只剩一块灰。要压暗的是站着字的那两块，那件事交给两道罩子，不该整张图陪着一起
+                 暗。解码宽度也跟着上去了，见 DetailViewModel.HeroDecodeWidth。 -->
+            <Image
+                Opacity="0.9"
+                Source="{x:Bind ViewModel.HeroImage, Mode=OneWay}"
+                Stretch="UniformToFill"
+                Visibility="{x:Bind ViewModel.HeroVisibility, Mode=OneWay}" />
+
+            <!-- 顶上那一道罩子。它和图一样从窗口的上沿起，因为它压的就是那一段上面的字：三颗系统窗口按钮、左上
+                 角那颗齿轮、和面包屑那一行 —— 有图的时候那几处走的是 EgOnScrim 那套白墨（ShellPage 的
+                 SetTitleOnScrim），白字直接压在一张亮剧照上读不出来。220 高是量出来的：标题栏 32、面包屑那行
+                 连上下留白约 38、右上角那枚徽标离页顶 28 再高 64，一百六出头，罩子得比它再长一截才淡得看不出
+                 边。写死 #0C0E11 那一家（同主页大图）：它压的是一张照片，不是主题色；况且 HighContrast 那本
+                 词典里只有画刷没有颜色键，渐变里写 ThemeResource 的颜色键会在运行时抛。 -->
+            <Border Height="220" VerticalAlignment="Top">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                        <GradientStop Color="#990C0E11" Offset="0" />
+                        <GradientStop Color="#000C0E11" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!-- 标题栏那一条上的洗 —— 「往下拉之后标题颜色要渐变，变的和下方背景一样」。
+                 只盖标题栏加面包屑那一条（高由 LiftBackdrop 量出来写进来，就是这一页在工作区里让开的那么多），
+                 底和高都在代码里给（PaintWash）：洗的颜色要取正文那张纸此刻的颜色，而 HighContrast 那本
+                 词典里只有画刷没有颜色键，渐变的停点上写不了 ThemeResource。浓度跟着滚动走，见 DetailHero.TopWash。
+                 不接指针：它盖在标题栏上，那一条要能拖窗口。 -->
+            <Border x:Name="TitleWash" IsHitTestVisible="False" VerticalAlignment="Top" />
+        </Grid>
+
+        <!-- ScrollView, not ScrollViewer: its HorizontalScrollBarVisibility is a
+             ScrollingScrollBarVisibility (Auto/Visible/Hidden), which has no Disabled member — saying
+             "never sideways" is HorizontalScrollMode plus a vertical ContentOrientation, and the
+             latter is what actually constrains the content to the viewport width.
+             SizeChanged 量的是这个滚动视图自己的高，也就是「这一页看得见的那一段」：头图不再跟着它走，可是
+             正文那张纸的下限是它减掉头图（见 DetailHero.BodyHeight），短页面靠这个数才盖得住背后的图。
+             ViewChanged 是另一件事：滚到哪儿决定标题栏那一条洗到多浓（见上面的 TitleWash）。 -->
+        <ScrollView
+            x:Name="Body"
+            ContentOrientation="Vertical"
+            HorizontalScrollMode="Disabled"
+            SizeChanged="OnBodySizeChanged"
+            ViewChanged="OnBodyViewChanged">
+            <StackPanel>
+
+                <!-- ============ 头部 ============ -->
+                <!-- 这一格自己不画图了，它是那张固定剧照上的一段位置 —— 「让背景图填满页面，别只显示一个框」：
+                     图在上面那一层（Backdrop），这里量的是「让开多高」，让海报、片名、六颗键站在图上。
+                     高由内容定，不跟窗口走（见 DetailHero.ArtHeight）—— 跟窗口走的那一版把这几样东西压到窗口
+                     下沿，上面留出大半屏没有一个字的画面，就是「图一页面怎么改的一大片空白，改回去」说的那处。
+                     不描框、不留圆角：有图的时候这一格是透明的，一根发丝线画在透明的一格上就是画在图上的一道
+                     线，一个圆角剪不动它下面那张铺满的图。这一块和正文之间也不用画那道线 —— 正文是一张不透明的
+                     纸，纸的上沿自己就是交代（见 BodySheet）。
+                     罩子写死成 #0C0E11 那一家（同主页大图）：它压的是一张照片，不是主题色；况且 HighContrast
+                     那本词典里只有画刷没有颜色键，渐变里写 ThemeResource 的颜色键会在运行时抛。 -->
+                <Grid
+                    x:Name="HeroBand"
+                    Height="{x:Bind ViewModel.HeroHeight, Mode=OneWay}">
+
+                    <!-- 没有剧照的条目上（DetailHero.PlainHeight 那一档）这一格自己当底：一层底色，加顶上那道
+                         罩子垫着右上角那枚徽标 —— 一张白字徽标压在浅色主题的面上会看不见。有图的时候这两样都由
+                         Backdrop 那一层管，这一层必须整个让开：一块不透明的底色会把那张图盖掉，而两道顶罩叠起来
+                         会在这一格的上沿接出一道横线。 -->
+                    <Border
+                        Background="{ThemeResource EgSurfaceBrush}"
+                        Visibility="{x:Bind ViewModel.HeroPlainVisibility, Mode=OneWay}">
+                        <Border Height="190" VerticalAlignment="Top">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                                    <GradientStop Color="#8C0C0E11" Offset="0" />
+                                    <GradientStop Color="#000C0E11" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                    </Border>
+
+                    <!-- 底下那一块：海报、字和六颗键都站在它上面，白字压在剧照上靠的就是这一层。同样写死 440
+                         高 —— 要垫的是那一叠东西，而它多高跟窗口没关系：带子高过 440 时上面全是干净的画面，
+                         矮到 460 那个下限时这块几乎盖满整格，正是原来那副样子。四档里最上面那两档管的是两行
+                         片名和副标题，最下面那两档管读数和按钮 —— 越往下的字越小，罩子也越浓。
+                         这五个停点还是另一处的源头：标题条上那层洗照着它算（DetailHero.TopWash，理由在那儿），
+                         两边对不上就是标题条上一道横缝，所以自检拿这几个停点跟那张表对一遍（见 WashRead）。
+                         末档是 #B8 而不是满黑 ——「太黑了都看不清背景」：满黑那一版把这一格下半和底下那段尾部
+                         一起压死，整屏只剩黑，那张铺满页面的剧照白铺了。理由和这个数怎么来的写在
+                         DetailHero.ScrimCeiling 上（它由简介那行最淡的小字定），底下那块尾部必须同色。
+                         曲线也跟着改陡：0.62 处就到 0xAA，末段只走 0xAA→0xB8，几乎放平 —— 片名、读数、按键都在
+                         下面那三分之一里，浓度得在它们头上爬够；而末端斜率接近零，接上同色的尾部时连折角都没有。 -->
+                    <Border x:Name="HeroScrim" Height="440" VerticalAlignment="Bottom">
+                        <Border.Background>
+                            <LinearGradientBrush x:Name="HeroScrimBrush" StartPoint="0.5,0" EndPoint="0.5,1">
+                                <GradientStop Color="#000C0E11" Offset="0" />
+                                <GradientStop Color="#400C0E11" Offset="0.14" />
+                                <GradientStop Color="#7A0C0E11" Offset="0.34" />
+                                <GradientStop Color="#AA0C0E11" Offset="0.62" />
+                                <GradientStop Color="#B80C0E11" Offset="1" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
+
+                    <!-- 三栏：海报、字、右上角那枚徽标。徽标自己占一栏而不是压在字那一栏的右上角 —— 片名是
+                         两行可折行的字，栏宽由布局给，压上去的那一版在长片名的窗口上会被字追上。占一栏之后
+                         「会不会盖到字」不用算：栏宽由图自己给，图没解出来时这一栏就是 0 宽，只剩栏距那 22
+                         像素，而这一栏里没有一样东西是右对齐的，那 22 看不出来。
+                         左右 60 而不是页面那 28：这一块是压在剧照上的内容，边沿本就该留得比页面多（同主页大图
+                         上那块字，理由写在 HomeBanner.xaml）。底下留 64 —— 图铺满一屏之后这一叠东西就站在窗口
+                         的下沿上，贴着边读着像被截了一截。 -->
+                    <Grid Margin="60,28,60,64" ColumnSpacing="22">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- 单集是 16:9 剧照，其余是 2:3 海报 —— 把海报裁成宽幅会切掉写着片名的那一半。
+                             这一张的尺寸不跟 设置 里的海报宽度走，是全应用唯一的例外，理由见
+                             DetailViewModel.PosterStillWidth。 -->
+                        <Border
+                            VerticalAlignment="Bottom"
+                            Background="#33000000"
+                            CornerRadius="{StaticResource EgPosterCornerRadius}"
+                            Height="{x:Bind ViewModel.StillHeight, Mode=OneWay}"
+                            Visibility="{x:Bind ViewModel.StillVisibility, Mode=OneWay}"
+                            Width="{x:Bind ViewModel.StillWidth, Mode=OneWay}">
+                            <Image
+                                Source="{x:Bind ViewModel.StillImage, Mode=OneWay}"
+                                Stretch="UniformToFill" />
+                        </Border>
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="10">
+                            <!-- 「喜剧之王上面的那个电影太突兀了，删掉或者移动到别的地方」—— 这一栏原来的第一
+                                 行是一行眉字（电影／剧集／单集），和标题裹在一个间距 2 的小壳里算一组。眉字删了，
+                                 那层壳也跟着去了：一个只剩一个孩子的容器只会让下一个读它的人去找那个不存在的
+                                 兄弟。「这是个什么」没搬到别处去，因为已经有三处在说：上面那行面包屑、副标题那
+                                 一行的类型列表、和 信息 那张表里的 类型 一行。整页最大的一块字上面顶一行小字
+                                 标签，看着就是突兀。 -->
+                            <!-- 标题在单集页上是剧名（「99.9 刑事专业律师」压在「S2:E7 - …」上面），点它进这一集
+                                 所属的季 —— 剧名是个能兑现的承诺。其它页的标题说的就是本页自己，命令的
+                                 CanExecute 是 false，按钮点不动。
+                                 要让它看着还是一行标题而不是一个按钮，得同时拆掉底和框：四个背景刷子改成透明/
+                                 半透明（默认样式的 Disabled 态会在标题后面垫一块灰底，电影页上那块灰底毫无来
+                                 由），BorderThickness 归零（默认那道 1 像素描边四个状态都在画，只改背景的话标题
+                                 就被一个圆角方框圈起来）。Padding 往外撑一点、Margin 补回来，悬停时的底板不至于
+                                 贴着字。 -->
+                            <Button
+                                BorderThickness="0"
+                                Command="{x:Bind ViewModel.OpenTitleCommand}"
+                                HorizontalAlignment="Left"
+                                HorizontalContentAlignment="Left"
+                                Margin="-8,0,0,0"
+                                MinHeight="0"
+                                MinWidth="0"
+                                Padding="8,2,8,4"
+                                ToolTipService.ToolTip="{x:Bind ViewModel.TitleTip, Mode=OneWay}">
+                                <Button.Resources>
+                                    <SolidColorBrush x:Key="ButtonBackground" Color="Transparent" />
+                                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#26FFFFFF" />
+                                    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#3DFFFFFF" />
+                                    <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+                                </Button.Resources>
+                                <!-- 这一格就是片名本身（「把当前页面徽标所在地方替换为剧名」）。原来这里是一格
+                                     里摆着两样东西：徽标图解出来了就顶替文字标题，两个 Visibility 一对反的，永远
+                                     只有一样在。现在徽标挂到了带子的右上角（见下面 CornerPlate），这一格只剩文
+                                     字，于是「名字什么时候画」也不再是个问题 —— 片名永远在，图到不到只决定右上角
+                                     多不多一枚牌子。
+                                     字号字体字色全在 EgDisplayTitleStyle 里，和主页轮播上的片名是同一个键：以前
+                                     这里写死 34/SemiBold，漏了标题字体，于是整页最大的一块字是「更大的 YaHei」。 -->
+                                <TextBlock
+                                    x:Name="TitleText"
+                                    Style="{StaticResource EgDisplayTitleStyle}"
+                                    MaxLines="2"
+                                    Text="{x:Bind ViewModel.Title, Mode=OneWay}"
+                                    TextTrimming="CharacterEllipsis"
+                                    TextWrapping="Wrap" />
+                            </Button>
+
+                            <!-- 副标题：单集页上是「S2:E7 - 集名」，也就是人真正来看的那一行，所以字号、字重
+                                 和字色都由 ViewModel 给（标题号 + SemiBold + 不压暗）；电影和剧上这一行是类型
+                                 列表，回到正文号、暗一档。 -->
+                            <TextBlock
+                                FontSize="{x:Bind ViewModel.SublineFontSize, Mode=OneWay}"
+                                FontWeight="{x:Bind ViewModel.SublineFontWeight, Mode=OneWay}"
+                                Foreground="{x:Bind ViewModel.SublineBrush, Mode=OneWay}"
+                                MaxLines="1"
+                                Text="{x:Bind ViewModel.Subline, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis"
+                                Visibility="{x:Bind ViewModel.SublineVisibility, Mode=OneWay}" />
+
+                            <!-- 评分和那行读数：★ 后面跟等宽的分数，不再是一颗红色圆角药丸 —— 药丸是「徽章」
+                                 的写法，而这里要的是仪表上的一个读数，况且那颗药丸的红色和「危险」共用一支
+                                 画刷，一个 8.4 分没有任何危险。星是整个头部除播放键之外唯一一处颜色，所以它
+                                 跟着主题走。 -->
+                            <StackPanel Orientation="Horizontal" Spacing="14">
+                                <StackPanel
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Spacing="5"
+                                    Visibility="{x:Bind ViewModel.ScoreVisibility, Mode=OneWay}">
+                                    <FontIcon
+                                        VerticalAlignment="Center"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource EgAccentBrush}"
+                                        Glyph="&#xE735;" />
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource EgOnScrimDataStrongStyle}"
+                                        Text="{x:Bind ViewModel.Score, Mode=OneWay}" />
+                                </StackPanel>
+
+                                <TextBlock
+                                    x:Name="HeroFacts"
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource EgOnScrimDataStyle}"
+                                    Text="{x:Bind ViewModel.Facts, Mode=OneWay}" />
+                            </StackPanel>
+
+                            <TextBlock
+                                Style="{StaticResource EgOnScrimDataStyle}"
+                                Text="{x:Bind ViewModel.VideoLine, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.VideoVisibility, Mode=OneWay}" />
+
+                            <!-- 播放键在断点存在时写成「继续播放 12:00」，所以「从头开始」是一个按钮
+                                 而不是一个开关：断点已经写在按钮上了。
+
+                                 六个键都绑命令，不再挂 Click。载入中命令自己就是灰的 —— 以前
+                                 「换季的同时按播放」会把上一季选中的那一集播出去。 -->
+                            <StackPanel
+                                Margin="0,4,0,0"
+                                Orientation="Horizontal"
+                                Spacing="10">
+                                <Button
+                                    Command="{x:Bind ViewModel.PlayCommand}"
+                                    Style="{StaticResource EgPlayButtonStyle}"
+                                    Visibility="{x:Bind ViewModel.PlayVisibility, Mode=OneWay}">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon FontSize="14" Glyph="&#xE768;" />
+                                        <TextBlock Text="{x:Bind ViewModel.PlayText, Mode=OneWay}" />
+                                    </StackPanel>
+                                </Button>
+
+                                <Button
+                                    Command="{x:Bind ViewModel.RestartCommand}"
+                                    Style="{StaticResource EgPillButtonStyle}"
+                                    Visibility="{x:Bind ViewModel.RestartVisibility, Mode=OneWay}">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon FontSize="14" Glyph="&#xE892;" />
+                                        <TextBlock Text="从头开始" />
+                                    </StackPanel>
+                                </Button>
+
+                                <Button
+                                    Command="{x:Bind ViewModel.ToggleWatchedCommand}"
+                                    Style="{StaticResource EgRoundButtonStyle}"
+                                    ToolTipService.ToolTip="标记已看 / 未看">
+                                    <Grid>
+                                        <FontIcon
+                                            FontSize="15"
+                                            Glyph="&#xE73E;"
+                                            Visibility="{x:Bind ViewModel.NotWatchedVisibility, Mode=OneWay}" />
+                                        <FontIcon
+                                            FontSize="15"
+                                            Foreground="{ThemeResource EgAccentBrush}"
+                                            Glyph="&#xE73E;"
+                                            Visibility="{x:Bind ViewModel.WatchedVisibility, Mode=OneWay}" />
+                                    </Grid>
+                                </Button>
+
+                                <Button
+                                    Command="{x:Bind ViewModel.ToggleFavoriteCommand}"
+                                    Style="{StaticResource EgRoundButtonStyle}"
+                                    ToolTipService.ToolTip="收藏">
+                                    <Grid>
+                                        <FontIcon
+                                            FontSize="15"
+                                            Glyph="&#xEB51;"
+                                            Visibility="{x:Bind ViewModel.NotFavoriteVisibility, Mode=OneWay}" />
+                                        <FontIcon
+                                            FontSize="15"
+                                            Foreground="{ThemeResource EgDangerBrush}"
+                                            Glyph="&#xEB52;"
+                                            Visibility="{x:Bind ViewModel.FavoriteVisibility, Mode=OneWay}" />
+                                    </Grid>
+                                </Button>
+
+                                <Button
+                                    Command="{x:Bind ViewModel.OpenBrowserCommand}"
+                                    Style="{StaticResource EgRoundButtonStyle}"
+                                    ToolTipService.ToolTip="在网页端打开">
+                                    <FontIcon FontSize="15" Glyph="&#xE8A7;" />
+                                </Button>
+
+                                <!-- 唯一还挂 Click 的键：弹出菜单要一个锚点元素，而锚点是视图才有的东西。 -->
+                                <Button
+                                    x:Name="MoreButton"
+                                    Click="OnMoreClicked"
+                                    Style="{StaticResource EgRoundButtonStyle}"
+                                    ToolTipService.ToolTip="更多">
+                                    <FontIcon FontSize="15" Glyph="&#xE712;" />
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!--
+                          徽标搁在带子的右上角（「徽标移动到右上角」）。它是条目自己那张写着片名的图，横幅图是
+                          它的备选（见 ItemArtwork.Plate）—— 原来它站在片名那一格里顶替文字，现在片名归文字，
+                          这一枚是个记号：那个角本来空着，一枚牌子搁上去说的是「这是谁家的片子」。
+                          名字因此在这一格上出现两回（一回是字、一回是图）—— 这是要的：图上那几个字是片方自己
+                          排的，而下面那一行是能选、能读屏、长了会截的标题，两样不是同一件东西。
+
+                          Uniform 配 220×64 的上限：宽幅的横幅图由宽度收住、方正的徽标由高度收住，两种都盖不过
+                          底下那行片名 —— 记号不该比标题响。解码宽度跟着这个上限走，见
+                          DetailViewModel.PlateDecodeWidth。
+
+                          压在这个角上的是窗口顶上那道罩子（六成往下淡到透明，见 Backdrop；底下那道到九成半），
+                          所以这个角比底下亮：一张白字徽标压在最亮的剧照上仍有 4.8:1 上下的对比，够一块大图形看，
+                          而再压一层局部罩子就是在角上贴一块黑补丁。读屏跳过它（AccessibilityView=Raw）：片名就在
+                          底下那一行，念两遍不是无障碍。
+                        -->
+                        <Image
+                            x:Name="CornerPlate"
+                            Grid.Column="2"
+                            AutomationProperties.AccessibilityView="Raw"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            MaxHeight="64"
+                            MaxWidth="220"
+                            Source="{x:Bind ViewModel.PlateImage, Mode=OneWay}"
+                            Stretch="Uniform"
+                            Visibility="{x:Bind ViewModel.PlateVisibility, Mode=OneWay}" />
+                    </Grid>
+                </Grid>
+
+                <!-- ============ 头图尾部与正文 ============ -->
+                <!-- 用户在音轨和剧情说明下面标出的那条线，是头图深色尾部与主题正文纸面的分界。原来 BodySheet
+                     紧接 HeroBand，于是这条线横在两个下拉框上面；现在 BodyRegion 分成两行：HeroTail 接住头图
+                     罩子的末色 #0C0E11，BodySheet 从剧情说明之后才开始。
+
+                     MinHeight 仍由「视口高 − 头图高」给整个区域，而不是只给其中一行：HeroTail 多高由实际可见的
+                     下一集、轨道和简介决定，剩下的高度交给星号行里的 BodySheet，因此短页面的纸面下沿仍会补到
+                     窗口底。BodySeal 读的还是 BodySheet 本身，确认真正的纸面不透明且没有在左右和底下漏图。 -->
+                <Grid
+                    x:Name="BodyRegion"
+                    MinHeight="{x:Bind ViewModel.BodyMinHeight, Mode=OneWay}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- 这一段不是又一张卡片：它是头图下沿那块压暗了的画面接着往下延。固定色必须和 HeroScrim 的
+                         最后一个停点一致（现在两边都是 #B8 —— 七成二的黑，见 DetailHero.ScrimCeiling），才能让
+                         原来那条分界消失；同时那张固定的剧照在这一段背后仍然透着，「太黑了都看不清背景」说的就是
+                         上一版这里写满黑、把画面压死的那副样子。
+                         alpha 小于 1 不影响标题栏那一条：它洗的是同一个 alpha 的同一个色，压在同一张不动的剧照上，
+                         所以视口上沿那一行两边照旧一样深（见 ApplyWash 的第 2、3 档）。
+                         SizeChanged 用来在简介展开、下拉显隐或窗口换宽之后重算真正纸面到标题栏的距离。 -->
+                    <StackPanel
+                        x:Name="HeroTail"
+                        Background="#B80C0E11"
+                        Padding="28,28,28,8"
+                        SizeChanged="OnHeroTailSizeChanged"
+                        Spacing="20">
+
+                        <!-- 下一集：图一在按钮那排底下写的就是这一行 —— 接着播的是哪一集，以及它还剩多久。
+                             留在这一段最上面而不是塞进头图里：头上那一格是按内容量的（DetailHero.ArtHeight），再往里
+                             加一行就得把它整格撑高，而这一格越高，正文离第一屏就越远。文字取的是 PlayTarget，跟旁边
+                             那颗 继续播放 键同一个来源，所以两者不可能各说一集。
+
+                             和底下那两块一样，外圈和底色都不画（「去掉音频字幕还有剧情说明周围那一圈的边框和背景」）：
+                             这一整段站在已经压黑的画面上，一圈发丝线画在上面就是在图上描一个框。样式还留着，只借它
+                             那 18 的内边距 —— 这三块的字因此和红线底下纸上几块卡里的字落在同一条竖线上。
+                             字和那条进度轨于是都得走压在图上那一套（EgOnScrim*）：主题自己的墨在这一段的黑底上，
+                             三套浅色主题会看不见。 -->
+                        <StackPanel
+                            Style="{StaticResource EgBodyPanelStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Spacing="6"
+                            Visibility="{x:Bind ViewModel.NextUpVisibility, Mode=OneWay}">
+                            <TextBlock
+                                Style="{StaticResource EgOnScrimBodyStyle}"
+                                MaxLines="1"
+                                Text="{x:Bind ViewModel.NextUpText, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis" />
+                            <StackPanel
+                                Orientation="Horizontal"
+                                Spacing="12"
+                                Visibility="{x:Bind ViewModel.NextUpProgressVisibility, Mode=OneWay}">
+                                <!-- 一条轨、一段强调色，和卡片下沿那条进度同一个写法（三个理由写在 PosterCard
+                                     那边，最要紧的一条是框架那支 ProgressBar 的前景在字典解析时就冻住了，换主题
+                                     它不跟着走）。轨要画出来：这里底下没有卡片那根边框线接着它，只画填充的那一段
+                                     会像一条飘着的短线。轨不用主题那根边框线的颜色 —— 那根线在这一段的黑底上就是
+                                     一条看不见的线，改用压在图上那支浅墨压到三成半，读着仍是「底下还有一截」。 -->
+                                <Grid
+                                    VerticalAlignment="Center"
+                                    Height="{StaticResource EgProgressThickness}"
+                                    Width="320">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="{x:Bind ViewModel.NextUpDone, Mode=OneWay}" />
+                                        <ColumnDefinition Width="{x:Bind ViewModel.NextUpLeft, Mode=OneWay}" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border
+                                        Grid.ColumnSpan="2"
+                                        Background="{StaticResource EgOnScrimDimBrush}"
+                                        Opacity="0.35" />
+                                    <Border Background="{ThemeResource EgAccentBrush}" />
+                                </Grid>
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource EgOnScrimDataStyle}"
+                                    Text="{x:Bind ViewModel.NextUpRemaining, Mode=OneWay}" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- 三个文件选项下拉刻意不撑满整行：撑满会读成表格的一行，而 Header 是前缀不是列标题。
+
+                             SelectedItem 是双向的，所以「选了哪一个」是视图模型上的一个值，而不是要去问控件的
+                             一件事。音频和字幕两个下拉不再需要 SelectionChanged —— 以前那个处理器只是去重排
+                             一遍显隐，而显隐只跟行数有关，跟选了哪一行无关。季选择器在下面单集列表的标题旁，
+                             因为它替换的是那排单集，不是当前文件的轨道。
+
+                             外圈和底色去掉（见上一块）：三个下拉自己那圈框还在，读的时候一眼能看出哪儿能点 ——
+                             用户要去掉的是围着这三个下拉的那一圈，不是下拉自己。Header 那三行字压在图上，所以
+                             取固定的浅墨；自检拿这一块的名字读它是不是真的没框没底（BodySeal 里的 Bare）。 -->
+                        <StackPanel
+                            x:Name="PickerPanel"
+                            Style="{StaticResource EgBodyPanelStyle}"
+                            Orientation="Horizontal"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Spacing="14"
+                            Visibility="{x:Bind ViewModel.PickersVisibility, Mode=OneWay}">
+                            <ComboBox
+                                DisplayMemberPath="Text"
+                                ItemsSource="{x:Bind ViewModel.Sources}"
+                                MinWidth="260"
+                                SelectedItem="{x:Bind ViewModel.SelectedSource, Mode=TwoWay}"
+                                Visibility="{x:Bind ViewModel.SourceVisibility, Mode=OneWay}">
+                                <ComboBox.Header>
+                                    <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="媒体源" />
+                                </ComboBox.Header>
+                            </ComboBox>
+                            <ComboBox
+                                DisplayMemberPath="Text"
+                                ItemsSource="{x:Bind ViewModel.AudioTracks}"
+                                MinWidth="200"
+                                SelectedItem="{x:Bind ViewModel.SelectedAudio, Mode=TwoWay}"
+                                Visibility="{x:Bind ViewModel.AudioVisibility, Mode=OneWay}">
+                                <ComboBox.Header>
+                                    <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="音频" />
+                                </ComboBox.Header>
+                            </ComboBox>
+                            <ComboBox
+                                DisplayMemberPath="Text"
+                                ItemsSource="{x:Bind ViewModel.SubtitleTracks}"
+                                MinWidth="200"
+                                SelectedItem="{x:Bind ViewModel.SelectedSubtitle, Mode=TwoWay}"
+                                Visibility="{x:Bind ViewModel.SubtitleVisibility, Mode=OneWay}">
+                                <ComboBox.Header>
+                                    <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="字幕" />
+                                </ComboBox.Header>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <!-- MaxLines + IsTextTrimmed 是 WinUI 自己就有的东西，WinForms 版那两次测量相减
+                             求行距的活儿这里不用干。IsTextTrimmedChanged 是这一页唯一往回走的一条线：
+                             四行够不够，只有量过之后的元素知道。
+
+                             这一块原来不判显隐：一段空简介占的高是零，屏上看不出来。有了内边距之后空的一块也占
+                             37 的高，所以显隐得问视图模型 —— 简介和导演两行都空才收起来（OverviewVisibility）。
+
+                             这是压在图上的最后一块：用户画的那条红线就在它的下沿，往下才换成主题的纸色。所以它的
+                             位置是自检要读的一个数（BodySeal：纸的上沿必须紧跟在这一块底下，只隔尾部那 8 的余量），
+                             它到底有没有去掉外圈也在那儿读（Bare）。展开简介、下拉显隐、窗口换宽都会挪动这条线，
+                             挪完由 OnHeroTailSizeChanged 重画标题栏那一条。 -->
+                        <StackPanel
+                            x:Name="OverviewPanel"
+                            Style="{StaticResource EgBodyPanelStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Spacing="2"
+                            Visibility="{x:Bind ViewModel.OverviewVisibility, Mode=OneWay}">
+                            <TextBlock
+                                x:Name="Overview"
+                                FontSize="{StaticResource EgBodyFontSize}"
+                                Foreground="{StaticResource EgOnScrimDimBrush}"
+                                IsTextSelectionEnabled="True"
+                                IsTextTrimmedChanged="OnOverviewTrimmedChanged"
+                                LineHeight="24"
+                                MaxLines="{x:Bind ViewModel.OverviewMaxLines, Mode=OneWay}"
+                                Text="{x:Bind ViewModel.Overview, Mode=OneWay}"
+                                TextTrimming="{x:Bind ViewModel.OverviewTrimming, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                            <HyperlinkButton
+                                Command="{x:Bind ViewModel.ToggleOverviewCommand}"
+                                Content="{x:Bind ViewModel.ReadMoreText, Mode=OneWay}"
+                                Padding="0,4,0,4"
+                                Visibility="{x:Bind ViewModel.ReadMoreVisibility, Mode=OneWay}" />
+                            <!-- 导演 prose 行，Emby 的详情页把导演放在简介底下而不是只埋在演职人员里。 -->
+                            <TextBlock
+                                Margin="0,6,0,0"
+                                FontSize="{StaticResource EgBodyFontSize}"
+                                Foreground="{StaticResource EgOnScrimDimBrush}"
+                                Text="{x:Bind ViewModel.Directors, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.DirectorsVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- ============ 真正的正文纸面 ============ -->
+                    <!-- 从用户标出的红线开始才换回主题自己的纸色。后续单集、媒体信息、剧季、相似和演职人员仍
+                         使用原来的板块样式；这次只去掉上面音轨选择和剧情说明两块的外圈。 -->
+                    <StackPanel
+                        x:Name="BodySheet"
+                        Grid.Row="1"
+                        Padding="28"
+                        Background="{ThemeResource EgWindowBrush}"
+                        Spacing="20">
+
+                        <!-- 单集：季页一行一集的竖置列表，剧页和集页一条横向翻页带 ——「只有季页的集使用竖置
+                             列表列表就好，另外两个页面使用竖置翻页」。两种形状共用上面这一个标题和季切换（切换
+                             季替换的就是下面这批集），也共用同一个 EpisodeShelf；露哪一个由 DetailViewModel 按
+                             页面自己的类型算（ItemDetail.EpisodesAsList），视图这边不判断类型 —— 四种页面共用
+                             这一份 markup，上一次把判断写在这儿，给季页改的列表就连剧页和集页一起改掉了。
+
+                             季页读的是「这一季有哪些集」，所以一行一集：左边 16:9 剧照，右边「1. 集名」、
+                             「日期 · 时长」和两行简介，正在打开的那一集左缘一条 accent 竖条。剧页和集页上这批集
+                             只是旁边的邻居，横着一条、箭头一次翻一屏，不占着整页的高度 —— 代价是横卡放不下那两行
+                             简介，「你在这里」也改由 FocusIndex 表达（带子直接开在正在看的那一集上）。
+
+                             页面本身已经在 ScrollView 里，所以列表这边不套第二个滚动条；两边视口外的项都由
+                             ItemsRepeater 自己回收，长季不会一次解码几十张图，收起来的那一种一张都不会解码。 -->
+                        <StackPanel
+                            Style="{StaticResource EgBodyPanelStyle}"
+                            Spacing="10"
+                            Visibility="{x:Bind ViewModel.EpisodeVisibility, Mode=OneWay}">
+                            <!-- 季下拉框挂在牌子右端那一格里（ShelfHead.Trailing），不再是自己开一个两列 Grid：
+                                 读数、挂件、通栏线的横向关系是牌子的事，一带一带地重写一遍就会各自跑偏。这一带
+                                 不报读数 —— 季数集数已经写在标题里了（「更多来自：第一季 · 12 集，已看 3 集」）。 -->
+                            <local:ShelfHead Title="{x:Bind ViewModel.EpisodeShelf.Title, Mode=OneWay}">
+                                <local:ShelfHead.Trailing>
+                                    <ComboBox
+                                        AutomationProperties.Name="切换季"
+                                        DisplayMemberPath="Name"
+                                        ItemsSource="{x:Bind ViewModel.Seasons}"
+                                        MaxWidth="280"
+                                        MinWidth="180"
+                                        SelectedItem="{x:Bind ViewModel.SelectedSeason, Mode=TwoWay}"
+                                        ToolTipService.ToolTip="切换季"
+                                        Visibility="{x:Bind ViewModel.SeasonVisibility, Mode=OneWay}" />
+                                </local:ShelfHead.Trailing>
+                            </local:ShelfHead>
+                            <ItemsRepeater
+                                x:Name="EpisodeList"
+                                ItemTemplate="{StaticResource EpisodeRowTemplate}"
+                                ItemsSource="{x:Bind ViewModel.EpisodeShelf.Cards, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.EpisodeListVisibility, Mode=OneWay}">
+                                <ItemsRepeater.Layout>
+                                    <StackLayout Orientation="Vertical" Spacing="8" />
+                                </ItemsRepeater.Layout>
+                            </ItemsRepeater>
+                            <local:ShelfStrip
+                                x:Name="EpisodeStrip"
+                                FocusIndex="{x:Bind ViewModel.EpisodeFocus, Mode=OneWay}"
+                                Height="{x:Bind ViewModel.EpisodeShelf.RowHeight, Mode=OneWay}"
+                                ItemSpacing="16"
+                                ItemTemplate="{StaticResource CardTemplate}"
+                                ItemsSource="{x:Bind ViewModel.EpisodeShelf.Cards, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.EpisodeStripVisibility, Mode=OneWay}" />
+                        </StackPanel>
+
+                        <!-- 媒体信息紧跟在单集下面：这一段说的是「正在放的这个文件」（文件名、格式、音频、
+                             字幕），和上面那排集是同一件事的两个粒度，隔着三条卡片带就对不上了。
+
+                             默认展开，而且只在电影页和单集页出现 —— 视图这边不判断，DetailViewModel 只在
+                             页面自己就是个文件的时候才往 InfoRows 里放东西，剧页和季页那一列永远是空的，
+                             这一整块也就跟着收起来。展开的东西不该藏着，收着的东西不该占位。
+
+                             这一块是八块板里唯一一个控件（要能收起来，所以不能改成一块 EgBodyPanelStyle 的
+                             板），底色因此要分两处上：Background 走本地值（框架那份样式把它设成
+                             ExpanderContentBackground，本地值压得过样式里的 Setter），牌子那一条是模板里
+                             写死的 ToggleButton，只能从这里的 Resources 换掉它认的那几个键 —— 它们是
+                             ThemeResource 读的，所以换得动；牌子的内边距是 StaticResource 读的（16，比别的
+                             板少 2），换不动，也就不换。
+                             悬停和按下换成调色板自己那两级面色（Hover / Elevated），不是框架那层半透明的白：
+                             白色叠在什么上面出什么色，而这块牌子的底色是主题给的，两套灰撞在一起就是另一种灰。
+                             BorderThickness 不动：框架给的是「牌子画上沿和两边、正文画两边和下沿」，合起来正好
+                             是一圈，跟别的板那一圈发丝框对得上。 -->
+                        <Expander
+                            x:Name="InfoPanel"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            Background="{ThemeResource EgSurfaceAltBrush}"
+                            BorderBrush="{ThemeResource EgBorderBrush}"
+                            CornerRadius="{StaticResource EgCardCornerRadius}"
+                            IsExpanded="True"
+                            Visibility="{x:Bind ViewModel.InfoVisibility, Mode=OneWay}">
+                            <Expander.Resources>
+                                <StaticResource x:Key="ExpanderHeaderBackground" ResourceKey="EgSurfaceAltBrush" />
+                                <StaticResource x:Key="ExpanderHeaderPointerOverBackground" ResourceKey="EgSurfaceHoverBrush" />
+                                <StaticResource x:Key="ExpanderHeaderPressedBackground" ResourceKey="EgSurfaceElevatedBrush" />
+                                <StaticResource x:Key="ExpanderHeaderDisabledBackground" ResourceKey="EgSurfaceAltBrush" />
+                                <StaticResource x:Key="ExpanderHeaderBorderBrush" ResourceKey="EgBorderBrush" />
+                            </Expander.Resources>
+                            <Expander.Header>
+                                <TextBlock Text="媒体信息" />
+                            </Expander.Header>
+                            <ItemsRepeater
+                                x:Name="InfoTable"
+                                ItemTemplate="{StaticResource InfoRowTemplate}"
+                                ItemsSource="{x:Bind ViewModel.InfoRows}">
+                                <ItemsRepeater.Layout>
+                                    <StackLayout Orientation="Vertical" />
+                                </ItemsRepeater.Layout>
+                            </ItemsRepeater>
+                        </Expander>
+
+                        <!-- 全部剧季：剧集页的季卡横带，点季卡进那一季自己的页面。 -->
+                        <StackPanel
+                            Style="{StaticResource EgBodyPanelStyle}"
+                            Spacing="10"
+                            Visibility="{x:Bind ViewModel.SeasonShelfVisibility, Mode=OneWay}">
+                            <local:ShelfHead
+                                Note="{x:Bind ViewModel.SeasonShelf.Note, Mode=OneWay}"
+                                Title="{x:Bind ViewModel.SeasonShelf.Title, Mode=OneWay}" />
+                            <local:ShelfStrip
+                                x:Name="SeasonRow"
+                                Height="{x:Bind ViewModel.SeasonShelf.RowHeight, Mode=OneWay}"
+                                ItemSpacing="16"
+                                ItemTemplate="{StaticResource CardTemplate}"
+                                ItemsSource="{x:Bind ViewModel.SeasonShelf.Cards, Mode=OneWay}" />
+                        </StackPanel>
+
+                        <!-- 更多类似。 -->
+                        <StackPanel
+                            Style="{StaticResource EgBodyPanelStyle}"
+                            Spacing="10"
+                            Visibility="{x:Bind ViewModel.SimilarVisibility, Mode=OneWay}">
+                            <local:ShelfHead
+                                Note="{x:Bind ViewModel.SimilarShelf.Note, Mode=OneWay}"
+                                Title="{x:Bind ViewModel.SimilarShelf.Title, Mode=OneWay}" />
+                            <local:ShelfStrip
+                                x:Name="SimilarRow"
+                                Height="{x:Bind ViewModel.SimilarShelf.RowHeight, Mode=OneWay}"
+                                ItemSpacing="16"
+                                ItemTemplate="{StaticResource CardTemplate}"
+                                ItemsSource="{x:Bind ViewModel.SimilarShelf.Cards, Mode=OneWay}" />
+                        </StackPanel>
+
+                        <!-- 演职人员压在最后一段：这一排是「这部片子背后是谁」，翻它的人已经看完了上面所有
+                             关于「看什么」的东西。 -->
+                        <StackPanel
+                            Style="{StaticResource EgBodyPanelStyle}"
+                            Spacing="10"
+                            Visibility="{x:Bind ViewModel.CastVisibility, Mode=OneWay}">
+                            <local:ShelfHead
+                                Note="{x:Bind ViewModel.CastShelf.Note, Mode=OneWay}"
+                                Title="{x:Bind ViewModel.CastShelf.Title, Mode=OneWay}" />
+                            <local:ShelfStrip
+                                x:Name="CastRow"
+                                Height="{x:Bind ViewModel.CastShelf.RowHeight, Mode=OneWay}"
+                                ItemSpacing="16"
+                                ItemTemplate="{StaticResource PersonTemplate}"
+                                ItemsSource="{x:Bind ViewModel.CastShelf.Cards, Mode=OneWay}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </ScrollView>
+
+        <!-- ============ 进度条和通知条 ============ -->
+        <!-- 「点击主页封面后窗口会闪一下，然后才会进入页面」的后一半。这两条原来占着一个 Auto 行，读完了就收起
+             来；那一收滚动视图的高就变了，而正文那张纸的下限是按滚动视图的高算的（DetailHero.BodyHeight），于是
+             版面在加载结束的那一刻整个重排一次 —— 屏上就是闪一下。压成浮在最上面的一层之后，这一页的可视高从第
+             一帧到最后一帧都是同一个数。
+             放在整棵树的最后一个孩子：Grid 里后面的孩子画在前面的上面，不必给 ZIndex。两条都收起来时这一层高是
+             0，也就挡不着底下那张图上的任何一次点击。 -->
+        <StackPanel
+            Margin="28,0,28,0"
+            Spacing="8"
+            VerticalAlignment="Top">
+            <ProgressBar
+                IsIndeterminate="True"
+                Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+
+            <!-- TwoWay on IsOpen, so dismissing the bar is recorded rather than only drawn: the next
+                 failure has to be able to reopen it, and a view model that thinks it is still open would
+                 leave the second one invisible. -->
+            <InfoBar
+                IsClosable="True"
+                IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+                Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+                Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+                Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
+        </StackPanel>
+    </Grid>
+</Page>
