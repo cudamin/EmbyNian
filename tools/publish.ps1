@@ -10,6 +10,11 @@ param(
 
     [switch]$Msix,
 
+    # 打包那一步跳过。开发回路上每跑一次关卡都要把 375 MB 用 Optimal 压成一个 148 MB 的 zip，一两分钟就
+    # 花在这里 —— 而自检要的是 artifacts\publish\win-x64 下面那个 exe，压缩包谁都不看。默认仍然打包：
+    # 那个 zip 才是交出去的东西，少打包是迭代时的选择，不是发布时的。
+    [switch]$NoArchive,
+
     # Off by default: publishing is something CI or a build script does, and writing to someone's desktop is
     # not. Pass it on the machine that actually runs the app.
     [switch]$Shortcut,
@@ -93,6 +98,7 @@ foreach ($path in @($publishRoot, $stageRoot)) {
         Remove-Item -LiteralPath $resolved -Recurse -Force
     }
 }
+# 上一次的压缩包一律删掉，-NoArchive 也删：一个跟刚发布的目录对不上的 zip 比没有 zip 更坏。
 foreach ($archive in @($zipPath, $msixPath)) {
     if (Test-Path -LiteralPath $archive -PathType Leaf) { Remove-Item -LiteralPath $archive -Force }
 }
@@ -120,8 +126,12 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败，退出码 $LASTEXITCOD
 & $verify -PublishRoot $publishRoot -RepositoryRoot $repo -SelfContained:$selfContained
 if ($LASTEXITCODE -ne 0) { throw '发布验证失败。' }
 
-Compress-Archive -Path (Join-Path $publishRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
-Write-Output "ZIP 已生成：$zipPath"
+if ($NoArchive) {
+    Write-Output '按 -NoArchive 跳过打包。'
+} else {
+    Compress-Archive -Path (Join-Path $publishRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
+    Write-Output "ZIP 已生成：$zipPath"
+}
 
 if ($Shortcut) {
     & $shortcutScript -Exe (Join-Path $publishRoot 'EmbyNian.exe')
