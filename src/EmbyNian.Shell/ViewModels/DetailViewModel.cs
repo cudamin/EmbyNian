@@ -686,6 +686,13 @@ public sealed partial class DetailViewModel : PageViewModel
 
             Apply(detail);
 
+            // 更多类似 only needs the item this page is about, so it has no business waiting behind the
+            // 剧季 → 单集 → 播放目标 chain — which is three round trips on a series page. Started here and
+            // awaited at the end: one fewer trip on the way to a finished page, and it still has to be
+            // finished before the page calls itself loaded. Started after Apply, which clears the shelf
+            // it fills.
+            var similar = LoadSimilarAsync(detail, token);
+
             switch (detail.Type)
             {
                 case EmbyItemType.Series:
@@ -703,7 +710,8 @@ public sealed partial class DetailViewModel : PageViewModel
                     break;
             }
 
-            await LoadSimilarAsync(detail, token).ConfigureAwait(true);
+            // Cannot throw: it swallows its own failures, on purpose — see its own note.
+            await similar.ConfigureAwait(true);
 
             EndLoad(token);
         }
@@ -976,29 +984,24 @@ public sealed partial class DetailViewModel : PageViewModel
     {
         if (!Attached) return;
 
+        // An episode's own Primary is the still from the episode; a film's is its poster, and its
+        // Backdrop is the same picture already blurred behind the title, so it is not offered here.
+        var episode = item.Type == EmbyItemType.Episode;
+        var types = episode
+            ? new[] { EmbyImageStore.Primary, EmbyImageStore.Thumb, EmbyImageStore.Backdrop }
+            : [EmbyImageStore.Primary, EmbyImageStore.Thumb];
+
         try
         {
-            // The plate first: it is the smallest of the three, and the corner it goes in is empty until it
-            // arrives — the headline no longer waits on it, being the text title in every case.
-            var plate = await DecodePlateAsync(item, art.Token).ConfigureAwait(true);
-            if (Fresh(art, item) && plate is not null) PlateImage = plate;
-
-            // 头图按 ItemArtwork.Hero 排的那一串挨着取 —— 集页和季页头上那两档是剧集那一层的图，标签属于剧集
-            // 那一头的 id，所以这一串走的是「按 id 和标签取」那条路，跟名牌一样（见 DecodeFirstAsync 的两个重载）。
-            var hero = await DecodeFirstAsync(ItemArtwork.Hero(item), HeroDecodeWidth, art.Token)
+            // 三张图分头去取。以前是一张接一张：名牌回来了才开始要头图，头图回来了才开始要剧照 —— 三次往返
+            // 排成一队，慢的那一张拖住后面两张。它们之间没有任何依赖，谁先回来谁先显示，版面不看先后。
+            await Task.WhenAll(
+                    Paint(DecodePlateAsync(item, art.Token), picture => PlateImage = picture),
+                    Paint(DecodeFirstAsync(ItemArtwork.Hero(item), HeroDecodeWidth, art.Token),
+                        picture => HeroImage = picture),
+                    Paint(DecodeFirstAsync(item, types, episode ? EpisodeStillWidth : PosterStillWidth, art.Token),
+                        picture => StillImage = picture))
                 .ConfigureAwait(true);
-            if (Fresh(art, item) && hero is not null) HeroImage = hero;
-
-            // An episode's own Primary is the still from the episode; a film's is its poster, and its
-            // Backdrop is the same picture already blurred behind the title, so it is not offered here.
-            var episode = item.Type == EmbyItemType.Episode;
-            var types = episode
-                ? new[] { EmbyImageStore.Primary, EmbyImageStore.Thumb, EmbyImageStore.Backdrop }
-                : [EmbyImageStore.Primary, EmbyImageStore.Thumb];
-
-            var still = await DecodeFirstAsync(item, types,
-                episode ? EpisodeStillWidth : PosterStillWidth, art.Token).ConfigureAwait(true);
-            if (Fresh(art, item) && still is not null) StillImage = still;
         }
         catch (OperationCanceledException)
         {
@@ -1007,6 +1010,14 @@ public sealed partial class DetailViewModel : PageViewModel
         {
             // A missing picture is not worth a notice bar; the page reads perfectly well without one.
             Log.Debug(Category, $"加载详情图片失败：{error.Message}");
+        }
+
+        // Every one of the three ends the same way: show it if it arrived and if this page is still the
+        // page that asked. Both halves of that check matter — see Fresh.
+        async Task Paint(Task<BitmapImage?> decode, Action<BitmapImage> assign)
+        {
+            var picture = await decode.ConfigureAwait(true);
+            if (Fresh(art, item) && picture is not null) assign(picture);
         }
     }
 
@@ -1232,7 +1243,13 @@ public sealed partial class DetailViewModel : PageViewModel
                     (client, token) => client.SetFavoriteAsync(item.Id, !favorite, token), CancellationToken.None)
                 .ConfigureAwait(true);
 
-            await LoadAsync().ConfigureAwait(true);
+            // One flag, flipped where it is kept. 观看状态 above re-reads the item because the server moves
+            // other things with it; 收藏 moves nothing — and a reload here cost the page its artwork, its
+            // 演职人员 row and its 更多类似 row, all re-fetched to answer a question the click already
+            // answered. The item's own copy is updated too, so the next click reads the current value.
+            item.UserData ??= new EmbyUserData();
+            item.UserData.IsFavorite = !favorite;
+            Favorite = !favorite;
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {

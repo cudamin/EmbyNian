@@ -274,6 +274,14 @@ public sealed class CardItem : INotifyPropertyChanged
     {
         if (_imageType is null || _missing || _poster is not null || _loading is not null) return;
 
+        // Already decoded once this run: hand it straight over. Synchronous on purpose — a container
+        // coming back to a poster it has shown before should not flicker through an empty frame first.
+        if (PosterKey() is { } key && PosterCache.TryGet(key, out var kept))
+        {
+            Poster = kept;
+            return;
+        }
+
         var cts = new CancellationTokenSource();
         _loading = cts;
 
@@ -287,13 +295,16 @@ public sealed class CardItem : INotifyPropertyChanged
             if (bytes is null || bytes.Length == 0)
             {
                 // Remembered, so scrolling past an artwork-less item repeatedly does not re-ask the
-                // server every time its container comes back.
+                // server every time its container comes back. Only a genuine 「no such image」 reaches
+                // here: a load this card gave up on throws instead, and is caught below without a mark.
                 _missing = true;
                 return;
             }
 
             var bitmap = await PosterLoader.DecodeAsync(bytes, _width).ConfigureAwait(true);
             if (cts.IsCancellationRequested) return;
+
+            if (bitmap is not null && PosterKey() is { } name) PosterCache.Remember(name, bitmap);
 
             Poster = bitmap;
         }
@@ -317,6 +328,10 @@ public sealed class CardItem : INotifyPropertyChanged
     /// <summary>
     /// Drops the decoded bitmap and abandons any load in flight. Called when a container is recycled:
     /// without it, a long scroll ends up holding every poster it has ever passed.
+    /// <para>
+    /// Dropped from the card, not from <see cref="PosterCache"/> — that one has its own ceiling, and it
+    /// is what makes scrolling back up instant instead of a second trip to the disk.
+    /// </para>
     /// </summary>
     public void ReleasePoster()
     {
@@ -324,6 +339,16 @@ public sealed class CardItem : INotifyPropertyChanged
         _loading = null;
         Poster = null;
     }
+
+    /// <summary>
+    /// The name this card's decoded picture goes under, or null when the item has no artwork of the kind
+    /// this card wants. Built each time rather than kept: the tag in it is the server's, and artwork
+    /// replaced there has to read as a different picture.
+    /// </summary>
+    private string? PosterKey() =>
+        _imageType is not null && EmbyImageStore.TagFor(_item, _imageType) is { } tag
+            ? PosterCache.Key(_item.Id, _imageType, tag, _width)
+            : null;
 
     /// <summary>Re-reads the badges after the item's user data changes. Requirement 6 calls this.</summary>
     public void RefreshUserData()

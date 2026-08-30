@@ -15,6 +15,7 @@ internal static class Program
         MpvWorkspaceTests.Register();
         FontTests.Register();
         EmbyTests.Register();
+        ImageCacheTests.Register();
         ItemDetailTests.Register();
         ItemArtworkTests.Register();
         HomeCarouselTests.Register();

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using EmbyNian.Diagnostics;
 using EmbyNian.Infrastructure;
 
@@ -29,7 +28,13 @@ public sealed class EmbyImageStore
     private readonly EmbySession _session;
     private readonly string _directory;
     private readonly long _maxBytes;
-    private readonly ConcurrentDictionary<string, Task<byte[]?>> _inFlight = new();
+
+    /// <summary>
+    /// One download per artwork, however many callers want it at once, and belonging to none of them.
+    /// Which caller cancels is not allowed to decide whether the others get their picture — see
+    /// <see cref="SharedWork{TResult}"/> for what that cost before it was written down.
+    /// </summary>
+    private readonly SharedWork<byte[]?> _downloads = new();
 
     public EmbyImageStore(EmbySession session, string directory, long maxBytes = 400L * 1024 * 1024)
     {
@@ -67,21 +72,25 @@ public sealed class EmbyImageStore
     public static int RequestWidth(int controlWidth) =>
         Math.Clamp((int)Math.Ceiling(Math.Max(1, controlWidth) * 2 / 80.0) * 80, 160, 1280);
 
-    /// <summary>Returns null when the item simply has no such image; throws only on real errors.</summary>
-    public Task<byte[]?> GetAsync(EmbyItem item, string imageType, int width, CancellationToken cancellationToken)
+    /// <summary>
+    /// Which tag identifies <paramref name="imageType"/> on this item, or null when it has none of that
+    /// kind. Public because the poster the shelves keep in memory is keyed by it: the tag is what makes
+    /// artwork replaced on the server a different picture rather than the same one, and the memory cache
+    /// has to agree with the disk cache about that or a changed poster never comes back.
+    /// </summary>
+    public static string? TagFor(EmbyItem item, string imageType) => imageType switch
     {
-        var tag = imageType switch
-        {
-            Primary => item.PrimaryImageTag,
-            Thumb => item.ThumbImageTag,
-            Backdrop => item.BackdropImageTags.FirstOrDefault(),
-            _ => item.ImageTags.TryGetValue(imageType, out var value) ? value : null
-        };
+        Primary => item.PrimaryImageTag,
+        Thumb => item.ThumbImageTag,
+        Backdrop => item.BackdropImageTags.FirstOrDefault(),
+        _ => item.ImageTags.TryGetValue(imageType, out var value) ? value : null
+    };
 
-        return tag is null
-            ? Task.FromResult<byte[]?>(null)
-            : GetAsync(item.Id, imageType, tag, width, cancellationToken);
-    }
+    /// <summary>Returns null when the item simply has no such image; throws only on real errors.</summary>
+    public Task<byte[]?> GetAsync(EmbyItem item, string imageType, int width, CancellationToken cancellationToken) =>
+        TagFor(item, imageType) is { } tag
+            ? GetAsync(item.Id, imageType, tag, width, cancellationToken)
+            : Task.FromResult<byte[]?>(null);
 
     public Task<byte[]?> GetAsync(string itemId, string imageType, string tag, int width, CancellationToken cancellationToken) =>
         Fetch(
@@ -102,7 +111,7 @@ public sealed class EmbyImageStore
             $"{itemId}/Chapter/{index}",
             cancellationToken);
 
-    private Task<byte[]?> Fetch(
+    private async Task<byte[]?> Fetch(
         string key,
         Func<EmbyClient, CancellationToken, Task<byte[]>> download,
         string description,
@@ -110,23 +119,30 @@ public sealed class EmbyImageStore
     {
         var path = Path.Combine(_directory, key);
 
-        if (TryReadCached(path, out var cached)) return Task.FromResult<byte[]?>(cached);
+        // A hit is a file read, and it used to be a synchronous one — on the UI thread, because that is
+        // who asks. A screen of forty cards therefore stopped forty times waiting on the disk, which is
+        // exactly the stutter a fast scroll showed. Off the thread, the scroll keeps moving.
+        if (await ReadCachedAsync(path, cancellationToken).ConfigureAwait(false) is { } cached) return cached;
 
-        // Collapse duplicate requests: a fast scroll asks for the same poster repeatedly.
-        var task = _inFlight.GetOrAdd(key, _ => DownloadAsync(download, description, path, cancellationToken));
-        _ = task.ContinueWith(completed => _inFlight.TryRemove(key, out _), TaskScheduler.Default);
-        return task;
+        // Collapse duplicate requests: a fast scroll asks for the same poster repeatedly. The shared
+        // download belongs to nobody, so a caller that walks away no longer empties the answer the
+        // caller beside it was waiting for.
+        return await _downloads
+            .RunAsync(key, () => DownloadAsync(download, description, path), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<byte[]?> DownloadAsync(
         Func<EmbyClient, CancellationToken, Task<byte[]>> download,
         string description,
-        string path,
-        CancellationToken cancellationToken)
+        string path)
     {
         try
         {
-            var bytes = await _session.ExecuteAsync<byte[]>(download, cancellationToken).ConfigureAwait(false);
+            // CancellationToken.None on purpose: whoever asked first may be gone by now, and the bytes
+            // are still wanted — by the other cards waiting on this one download, and by the disk cache
+            // that makes the next visit instant. The request is bounded by the HTTP timeout instead.
+            var bytes = await _session.ExecuteAsync<byte[]>(download, CancellationToken.None).ConfigureAwait(false);
 
             if (bytes.Length == 0) return null;
 
@@ -154,26 +170,27 @@ public sealed class EmbyImageStore
         }
         catch (OperationCanceledException)
         {
+            // Only the HTTP timeout can land here now that no caller's token reaches the request.
             return null;
         }
     }
 
-    private static bool TryReadCached(string path, out byte[] bytes)
+    private static async Task<byte[]?> ReadCachedAsync(string path, CancellationToken cancellationToken)
     {
-        bytes = [];
         try
         {
-            if (!File.Exists(path)) return false;
-            bytes = File.ReadAllBytes(path);
-            return bytes.Length > 0;
+            if (!File.Exists(path)) return null;
+
+            var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            return bytes.Length > 0 ? bytes : null;
         }
         catch (IOException)
         {
-            return false;
+            return null;
         }
         catch (UnauthorizedAccessException)
         {
-            return false;
+            return null;
         }
     }
 

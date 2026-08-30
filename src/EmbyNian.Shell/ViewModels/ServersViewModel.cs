@@ -6,6 +6,7 @@ using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using EmbyNian.Services;
+using EmbyNian.Shell.Media;
 using EmbyNian.Shell.Views;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -354,6 +355,10 @@ public sealed partial class ServersViewModel : PageViewModel
         {
             var removed = await _images!.ClearAsync().ConfigureAwait(true);
             if (!IsCurrent(token)) return;
+
+            // The decoded ones too, or the covers already on screen keep showing from memory and the
+            // 「清除了」 notice is about files the user cannot see.
+            PosterCache.Clear();
 
             Notify("已清除图片缓存", $"删除了 {removed:N0} 个文件。", InfoBarSeverity.Success);
         }
