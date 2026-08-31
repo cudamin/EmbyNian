@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Xaml;
 
@@ -304,4 +305,38 @@ public sealed partial class SettingTextRow : SettingRow
         _save();
         _after?.Invoke();
     }
+}
+
+/// <summary>
+/// 一行读数，加一颗可有可无的按钮 —— 「关于」那张卡上的每一行都是这个形状：左边是标签，底下一行是值
+/// （版本号、一个目录），右边那颗按钮把那个目录在资源管理器里打开。
+/// <para>
+/// 和别的行反着：这一行不写设置，所以它没有读写对，也没有 <c>Save</c>。它存在的理由是「这一页上有些事只是
+/// 要说出来」—— 在它之前，整个程序没有一处显示自己的版本号，也没有一处能一键打开日志目录（诊断页那颗按钮
+/// 只开日志，设置文件和缓存都得自己去找）。
+/// </para>
+/// </summary>
+public sealed partial class SettingFactRow : SettingRow
+{
+    private readonly Action? _act;
+
+    internal SettingFactRow(string label, string? note, string value, string? actionLabel = null, Action? act = null)
+        : base(label, note)
+    {
+        Value = value;
+        ActionLabel = actionLabel ?? "";
+        _act = act;
+    }
+
+    /// <summary>那一行值。等宽字排，因为多数时候它是一个路径。</summary>
+    public string Value { get; }
+
+    public string ActionLabel { get; }
+
+    /// <summary>没有按钮的那几行不给它留位置，同 <see cref="SettingRow.NoteVisibility"/>。</summary>
+    public Visibility ActionVisibility =>
+        _act is null || ActionLabel.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+    [RelayCommand]
+    private void Run() => _act?.Invoke();
 }

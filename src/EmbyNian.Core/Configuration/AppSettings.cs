@@ -469,11 +469,9 @@ public sealed class UiSettings
     /// 锁定窗口比例大小: whether dragging a window edge keeps the client area at
     /// <see cref="Emby.HomeCarousel.WindowAspect"/> instead of taking whatever shape the pointer implies.
     /// <para>
-    /// On by default, and the default is the reason the setting exists: the home page's banner crops a 16:9
-    /// backdrop into a 2.2:1 band, and how much it crops follows the window's shape
-    /// (<see cref="Emby.HomeCarousel.HeightShare"/>). Held to one shape, the picture is cropped by the same
-    /// amount at every size; free, a wide short window flattens the band and cuts the picture further.
-    /// Off is for anyone who would rather have the window any shape they like than have the banner keep still.
+    /// On by default. At this shape the home page uses its strict first-screen layout: the complete 继续观看
+    /// shelf fits below the banner and the following 媒体库 shelf begins outside the viewport, whether the
+    /// navigation pane is open or collapsed. Other window shapes keep the ordinary width-based banner rule.
     /// </para>
     /// <para>
     /// Only while browsing. A file that is playing has its own ratio and it wins — a locked window during

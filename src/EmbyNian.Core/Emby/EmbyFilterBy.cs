@@ -420,4 +420,65 @@ public static class EmbyFilterBy
 
     /// <summary>The label to show for an id, falling back to the id itself.</summary>
     public static string LabelOf(string? id) => Find(id)?.Label ?? id ?? "";
+
+    /// <summary>
+    /// 当前生效的每一条筛选，一条一格 —— 工具栏底下那一行可以逐个点掉的筛选条。
+    /// <para>
+    /// 在这之前「筛的是什么」只有那颗按钮上的一个数字（<see cref="ItemFilters.Count"/>）：屏上写着「筛选 1」，
+    /// 而到底筛的是「未播放」还是「高清」得点开面板才知道 —— 而这个选择是跨会话记住的，于是很容易忘了自己开着
+    /// 筛选、反过来以为库里少了东西。
+    /// </para>
+    /// <para>
+    /// 顺序和面板一致：先是开关（按 <see cref="All"/> 的顺序，不是按存进设置的顺序 —— 存的顺序是点的顺序，
+    /// 一行会跟着上次怎么点而重排），再是三张列表（<see cref="Lists"/> 的顺序）。认不出来的开关 id 不出格，
+    /// 和那个数字一致：那个数也不数它们，一格点不掉又说不出名字的筛选条比不出更糟。
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<FilterChip> Chips(ItemFilters filters)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+
+        var chips = new List<FilterChip>(filters.Count);
+
+        foreach (var option in All)
+        {
+            if (filters.Has(option.Id))
+                chips.Add(new FilterChip { Label = option.Label, Key = "", Value = option.Id });
+        }
+
+        foreach (var list in Lists)
+        {
+            foreach (var value in filters.Values(list.Key))
+                chips.Add(new FilterChip { Label = $"{list.Label}：{value}", Key = list.Key, Value = value });
+        }
+
+        return chips;
+    }
+}
+
+/// <summary>
+/// 一格筛选条：屏上那句话，加上「点掉它」要动的那一处。见 <see cref="EmbyFilterBy.Chips"/>。
+/// </summary>
+public sealed record FilterChip
+{
+    /// <summary>屏上那句话：开关是它自己的标签（「未播放」），列表是「类型：动画」。</summary>
+    public required string Label { get; init; }
+
+    /// <summary>
+    /// 空的时候这一格是个开关，<see cref="Value"/> 是它的 <see cref="EmbyFilterOption.Id"/>；否则是
+    /// <see cref="EmbyFilterBy.Lists"/> 里那个 key，<see cref="Value"/> 是那张列表里的一个值。
+    /// </summary>
+    public required string Key { get; init; }
+
+    /// <inheritdoc cref="Key"/>
+    public required string Value { get; init; }
+
+    /// <summary>把这一格从选择里去掉。改的是传进来那一份，和面板上打勾去勾走的是同一条路。</summary>
+    public void Remove(ItemFilters filters)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+
+        if (Key.Length == 0) filters.Toggles.Remove(Value);
+        else filters.Values(Key).Remove(Value);
+    }
 }

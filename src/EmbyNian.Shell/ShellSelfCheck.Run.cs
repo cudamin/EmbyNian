@@ -49,16 +49,15 @@ internal static partial class ShellSelfCheck
 
         Check("客户区尺寸", width > 0 && height > 0, $"{width}x{height} 物理像素");
 
-        // 「锁定主页的窗口长宽」：客户区真是那个形状。这一条比它看着重要 —— 主页那条带的高度按宽算，裁掉剧照
-        // 多少只由带子的比例决定，而带子的比例只有在窗口形状不变时才不变（见 HomeCarousel.HeightShare）。
+        // 「锁定主页的窗口长宽」：客户区真是那个形状。主页从 HostWindow 的真实锁定状态启用严格首屏；侧边栏
+        // 两档各自有没有完整放下继续观看，由下面「主页首屏只露继续观看」在真实 XAML 树上另量。
         // 开关关掉时（BrowseAspect 是 0）就只报形状不判：那时窗口本来就随便拉。
         var clientShape = height > 0 ? (double)width / height : 0;
         Check("锁定窗口比例",
             window.BrowseAspect <= 0 || Math.Abs(clientShape - window.BrowseAspect) < 0.01,
             $"客户区 {clientShape:0.000}:1"
                 + (window.BrowseAspect > 0
-                    ? $"，锁在 {window.BrowseAspect:0.000}:1（带子因此正好 {HomeCarousel.Aspect:0.0}:1，"
-                        + $"16:9 的剧照裁掉 {1 - (16d / 9) / HomeCarousel.Aspect:P0}，与窗口大小无关）"
+                    ? $"，锁在 {window.BrowseAspect:0.000}:1（主页首屏按完整继续观看排版）"
                     : "，未锁定"));
 
         // 上面那一条量的是窗口现在的形状，这一条量的是「拖边沿的时候还保持这个形状」—— 两回事：形状对可以只是
@@ -206,6 +205,11 @@ internal static partial class ShellSelfCheck
             // 「红框框出来的地方全填充上海报」：那一块从窗口的顶边量起，一直到右边沿。图有没有解码是上面
             // 那行读数的事，这一行只问那块地方铺满了没有 —— 顶上少让开的 32 像素在图上就是一道黑边。
             Check("主页大图贴边", home.BleedOk, home.Bleed);
+
+            // 锁定窗口比例时侧边栏收放会改内容宽度；首屏不能跟着变成一档截掉继续观看、另一档又露出媒体库。
+            // 这条在真实 XAML 树上把两档各摆一次，量的是两排货架相对窗口下沿的坐标。
+            if (home.FoldOk is { } foldOk) Check("主页首屏只露继续观看", foldOk, home.Fold);
+            else report.AppendLine($"[信息] 主页首屏只露继续观看 — {home.Fold}");
 
             // 同一块地方的第二问：图铺到标题栏底下以后，那三颗窗口按钮站在剧照上，墨得跟着换（见 ReadInk）。
             // 少了这一行，浅色主题下主页右上角就是三颗看不见的按钮，而上面那行读数一个数都不会变。

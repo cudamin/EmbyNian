@@ -50,6 +50,13 @@ public sealed record StartupOptions
     public bool ShowSettings { get; init; }
 
     /// <summary>
+    /// Which card <see cref="ShowSettings"/> opens on: <c>--show-settings 关于</c>. Null means 「界面」, which
+    /// is what a shot of this window is usually wanted for (the theme swatches). Named as a value on the same
+    /// switch rather than a second switch, so 「open the settings window」 and 「on this card」 cannot disagree.
+    /// </summary>
+    public string? SettingsCategory { get; init; }
+
+    /// <summary>
     /// Tooling only: open the first library and click the first row that drills down, leaving the app on
     /// that detail page. A click rather than a navigation, because 「what does clicking a poster get you」
     /// is the question, and for a series it was once answered with a grid of season folders.
@@ -196,6 +203,7 @@ internal static class Program
                 ?? (selfCheck ? ScreenPlacement.NotThePrimary : ScreenPlacement.WhereverWindows),
             ShowLibrary = Has(args, "--show-library"),
             ShowSettings = Has(args, "--show-settings"),
+            SettingsCategory = Text(args, "--show-settings"),
             ShowDetail = Has(args, "--show-detail"),
             ShowEpisode = Has(args, "--show-episode"),
             ScrollEnd = Has(args, "--scroll-end"),

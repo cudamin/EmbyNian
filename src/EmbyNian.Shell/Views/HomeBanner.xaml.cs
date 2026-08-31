@@ -93,6 +93,18 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private XamlRoot? _viewport;
 
+    /// <summary>
+    /// 锁定比例的窗口里，轮播下面要留给「上方间距 + 完整继续观看货架」的实测高度。主页在货架生成后交进来；
+    /// 0 表示还没量到，或者这次根本没有继续观看，届时仍走普通的按宽度计算。
+    /// </summary>
+    private double _belowFold;
+
+    /// <summary>由主页从真实窗口状态传进来；不能拿当前几何是否碰巧是 1.6:1 来猜开关状态。</summary>
+    private bool _foldEnabled;
+
+    /// <summary>严格首屏为大卡片让位后，横幅低于常规内容所需高度。</summary>
+    private bool _compact;
+
     public HomeBanner()
     {
         InitializeComponent();
@@ -229,7 +241,7 @@ public sealed partial class HomeBanner : UserControl
     {
         Dots.Children.Clear();
         _bars.Clear();
-        Dots.Visibility = count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        Dots.Visibility = !_compact && count > 1 ? Visibility.Visible : Visibility.Collapsed;
 
         var dim = (Brush)Resources["EgBannerDotBrush"];
 
@@ -312,7 +324,7 @@ public sealed partial class HomeBanner : UserControl
     private void PaintLogo(BannerSlide slide)
     {
         LogoImage.Source = slide.Logo;
-        LogoImage.Visibility = slide.LogoVisibility;
+        LogoImage.Visibility = !_compact ? slide.LogoVisibility : Visibility.Collapsed;
 
         if (slide.Logo is null)
         {
@@ -455,7 +467,7 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private void SyncArrows()
     {
-        var shown = _hover && _slides.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        var shown = !_compact && _hover && _slides.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
 
         PrevButton.Visibility = shown;
         NextButton.Visibility = shown;
@@ -475,7 +487,9 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
-    /// 带多高、字块多宽、字块往下沉多少。高度按页宽算（<see cref="HomeCarousel.Height"/>），字块不超过带的一半
+    /// 带多高、字块多宽、字块往下沉多少。普通窗口高度按页宽算（<see cref="HomeCarousel.Height"/>）；锁定比例
+    /// 且主页已经量到第一排货架时，改由 <see cref="HomeCarousel.FoldHeight"/> 把第一排的下沿正好放到视口底部。
+    /// 字块不超过带的一半
     /// 多一点：右边要留出剧照本身，而横向那层暗罩到 0.82 才透干净。下沉量同样是算出来的
     /// （<see cref="HomeCarousel.InfoDrop"/>）—— 带子越高沉得越多，缩到下限就不沉。
     /// <para>
@@ -486,14 +500,56 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     internal void Resize(double width)
     {
-        var height = HomeCarousel.Height(width, XamlRoot?.Size.Height ?? 0);
+        var viewport = XamlRoot?.Size ?? default;
+        var height = HomeCarousel.FoldHeight(width, viewport.Height, _belowFold, _foldEnabled);
 
         // 还没量过时高度是 NaN，而 NaN 参与的比较全是假 —— 少了这一句，第一次布局就设不上高度。
         if (double.IsNaN(Root.Height) || Math.Abs(Root.Height - height) > 0.5) Root.Height = height;
 
+        SetCompact(_foldEnabled && height < HomeCarousel.MinHeight);
+
         Info.MaxWidth = Math.Clamp(width * 0.54, 280, 620);
         InfoShift.Y = HomeCarousel.InfoDrop(height);
     }
+
+    /// <summary>显式同步比例锁定状态；最大化、播放和关闭开关都必须立即退出严格首屏。</summary>
+    internal void SetFoldEnabled(bool enabled)
+    {
+        if (_foldEnabled == enabled) return;
+
+        _foldEnabled = enabled;
+        if (ActualWidth > 0) Resize(ActualWidth);
+    }
+
+    /// <summary>
+    /// 主页量到第一排货架后把它要占的视口高度交进来。只在值真的变了时重排，避免货架的 SizeChanged 和轮播的
+    /// Height 互相喊出一串没有几何变化的布局轮次。
+    /// </summary>
+    internal void SetBelowFold(double height)
+    {
+        height = Math.Max(0, height);
+        if (Math.Abs(_belowFold - height) <= 0.5) return;
+
+        _belowFold = height;
+        if (ActualWidth > 0) Resize(ActualWidth);
+    }
+
+    /// <summary>
+    /// 极小锁定窗口配大卡片时优先兑现“完整继续观看”。横幅仍保留画面，但收起放不下的标题、徽标和翻页控件，
+    /// 避免它们越过缩短后的带子压到货架上。
+    /// </summary>
+    private void SetCompact(bool compact)
+    {
+        if (_compact == compact) return;
+
+        _compact = compact;
+        Info.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        Dots.Visibility = !compact && _slides.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        LogoImage.Visibility = !compact && Current is { } slide ? slide.LogoVisibility : Visibility.Collapsed;
+        SyncArrows();
+    }
+
+    internal bool Compact => _compact;
 
     // ---- 事件 -------------------------------------------------------------------
 
@@ -710,8 +766,8 @@ public sealed partial class HomeBanner : UserControl
                 + $"（下限 {HomeCarousel.MinHeight:0}，上限是窗口高的 {HomeCarousel.HeightShare:P0}，"
                 + $"量不到窗口高时 {HomeCarousel.UnmeasuredHeight:0}），"
                 + $"1080p 全屏 页宽1864×窗口高1040→{HomeCarousel.Height(1864, 1040):0}"
-                + $"（{1864 / HomeCarousel.Height(1864, 1040):0.00}:1；锁定 {HomeCarousel.WindowAspect:0.0} 的窗口"
-                + $"给的是 {HomeCarousel.Aspect:0.0}:1，裁掉 19%）；"
+                + $"（{1864 / HomeCarousel.Height(1864, 1040):0.00}:1；这是未量到首排时的普通高度路径，"
+                + "严格首屏另由实页探针测）；"
                 + $"字块宽 页宽1100→{wide:0}、量不到→{banner.Info.MaxWidth:0}；"
                 + $"字块下沉 带高500→{drop:0}、下限那档→{banner.InfoShift.Y:0}"
                 + $"（最多 {HomeCarousel.InfoDrop(HomeCarousel.UnmeasuredHeight):0}）；"
@@ -736,9 +792,8 @@ public sealed partial class HomeBanner : UserControl
     /// 底边那排小横条占 22。
     /// </para>
     /// <para>
-    /// 带自己的形状也报，那是「调整窗口大小时候，轮播画面不会被裁切」唯一能从屏上读出来的数：剧照是
-    /// <c>UniformToFill</c>，所以裁掉多少只由这个比例决定 —— 2.2 裁掉 19%，3.3 裁掉 46%。锁着比例的窗口上它
-    /// 应当正好是 <see cref="HomeCarousel.Aspect"/>，也就是上限一次都没咬（上限一并报出来对照）。
+    /// 带自己的形状也报作诊断：普通高度路径以 <see cref="HomeCarousel.Aspect"/> 为首选，严格首屏则允许为了
+    /// 完整放下第一排而改变比例。后者是否正确由 <see cref="HomePage.FoldRead"/> 在真实页面上量货架边界。
     /// </para>
     /// </summary>
     internal string State
@@ -753,7 +808,7 @@ public sealed partial class HomeBanner : UserControl
             return $"带高 {height:0}、字块宽 {Info.MaxWidth:0}、"
                 + $"字块高 {Info.ActualHeight:0} 往下沉 {InfoShift.Y:0}、"
                 + $"带 {(height > 0 ? Root.ActualWidth / height : 0):0.00}:1"
-                + $"（窗口高 {viewport:0}，上限 {HomeCarousel.Cap(viewport):0}）、"
+                + $"（窗口高 {viewport:0}，普通上限 {HomeCarousel.Cap(viewport):0}）、"
                 + $"{HomeCarousel.Position(_index, _slides.Count)}、"
                 + $"剧照{(FrontLayer.Source is null ? "还在取" : "已上图")}、"
                 + $"徽标{(LogoImage.Source is null ? "无" : "有")}";

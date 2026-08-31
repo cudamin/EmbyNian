@@ -23,6 +23,16 @@ internal interface IShellActions
 
     bool TryOpenLibrary(string id);
 
+    /// <summary>
+    /// 按类型浏览：详情页上那一行类型现在是点得动的，点一个类型就是一格「这个类型下的全部影片和剧集」。
+    /// <para>
+    /// 走外壳而不是页面自己开：跳到哪一页、面包屑怎么写、侧边栏的高亮归谁，这三件事只有外壳知道 —— 同
+    /// <see cref="OpenItem"/>。类型是一句话而不是一个 id：Emby 的类型没有 id，查询发的就是这个名字
+    /// （<c>ItemQuery.Genre</c>）。
+    /// </para>
+    /// </summary>
+    void OpenGenre(string genre);
+
     void OpenSignIn(ServerProfile? server = null);
 
     Task SwitchProfileAsync(ServerProfile server, AccountProfile? account);

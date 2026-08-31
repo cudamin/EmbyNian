@@ -130,11 +130,11 @@ public partial class App : Application
         await shell.StartAsync().ConfigureAwait(true);
 
         // Tooling: --show-settings presses 设置, which is a second window and therefore the one part of the
-        // UI a screenshot cannot reach by waiting. On 界面 rather than the card the button opens on, because
-        // what a shot of this window is wanted for is the theme swatches; another card is a different string
-        // here. First of the four, because it takes activation: a flyout left open by --show-library would
-        // light-dismiss the moment it appeared.
-        if (_options.ShowSettings) shell.ShowSettings("界面");
+        // UI a screenshot cannot reach by waiting. Defaults to 界面 rather than the card the button opens on,
+        // because what a shot of this window is usually wanted for is the theme swatches; another card is
+        // 「--show-settings 关于」. First of the four, because it takes activation: a flyout left open by
+        // --show-library would light-dismiss the moment it appeared.
+        if (_options.ShowSettings) shell.ShowSettings(_options.SettingsCategory ?? "界面");
 
         // Tooling: --show-library leaves the app on a library with its sort menu open, which is the
         // one state a screenshot has to be taken from and cannot be reached by waiting.

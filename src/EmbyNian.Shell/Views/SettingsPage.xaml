@@ -22,6 +22,14 @@
 
     <Page.Resources>
         <!--
+          控件那一列有多宽。一个数写在一处，六种行（开关、下拉、数字、滑块、输入、字体）共用：这几行的控件
+          必须落在同一条竖线上，各写一遍的下场是它们各自跟着自己那点内容飘。
+          左边那一列是 *，所以标签和说明拿的是剩下的全部 —— 说明原来被挤在 190 宽里折两行，而右边空着
+          四百多像素。
+        -->
+        <GridLength x:Key="EgSettingControlWidth">320</GridLength>
+
+        <!--
           The label and its optional second line, shared by every row shape that has a label column.
           正文字和小字两档都从词表里来（Theme/Styles.xaml）—— 这两个样式以前只写了字号和颜色，没写字体，
           于是整页六十行标签落回框架默认那支字，比界面里别处的正文大一点也不是同一种字。
@@ -75,15 +83,18 @@
         </DataTemplate>
 
         <!--
-          一行一个开关：标签在左边那 190 的一列里，控件从右边一列起头 —— 跟同一张卡片上的下拉框、数字框、
-          输入框一样。ToggleSwitch 自带的 Header 会把标签摆到开关上头去，那一行于是成了整张卡片上唯一一行
-          标签不在同一条竖线上的，所以这里的标签不走 Header，而是和别的行共用 EgSettingLabel。
+          一行一个开关：标签和说明占左边那一整片，控件在右边那条固定宽的控件列里 —— 跟同一张卡片上的下拉框、
+          数字框、输入框一样，所有控件因此落在同一条竖线上。ToggleSwitch 自带的 Header 会把标签摆到开关上头
+          去，那一行于是成了整张卡片上唯一一行标签不在同一条竖线上的，所以这里的标签不走 Header，而是和别的
+          行共用 EgSettingLabel。
+          标签列是 * 而不是写死的 190：说明那一行原来被挤在 190 里折两行，而右边空着四百多像素 —— 该宽的地方
+          窄、该窄的地方宽是同一件事的两头。
         -->
         <DataTemplate x:Key="EgSettingToggleRow" x:DataType="vm:SettingToggleRow">
-            <Grid Margin="0,3,0,3" ColumnSpacing="16">
+            <Grid Margin="0,3,0,3" ColumnSpacing="24">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="190" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Spacing="2">
                     <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
@@ -106,10 +117,10 @@
 
             <local:SettingRowTemplates.Choice>
                 <DataTemplate x:DataType="vm:SettingChoiceRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="190" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="2">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
@@ -244,10 +255,10 @@
 
             <local:SettingRowTemplates.Number>
                 <DataTemplate x:DataType="vm:SettingNumberRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="190" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="2">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
@@ -270,10 +281,10 @@
 
             <local:SettingRowTemplates.Slider>
                 <DataTemplate x:DataType="vm:SettingSliderRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="190" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="2">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
@@ -305,10 +316,10 @@
             -->
             <local:SettingRowTemplates.Text>
                 <DataTemplate x:DataType="vm:SettingTextRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="190" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="2">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
@@ -336,10 +347,10 @@
             -->
             <local:SettingRowTemplates.Font>
                 <DataTemplate x:DataType="vm:SettingFontRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="16">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="190" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="2" VerticalAlignment="Top">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
@@ -385,6 +396,40 @@
                     </Grid>
                 </DataTemplate>
             </local:SettingRowTemplates.Font>
+
+            <!--
+              一行读数：左边标签、底下一行值（等宽，多半是个路径，所以要能折行），右边一颗可有可无的按钮。
+              值不摆进控件列 —— 那一列只有 320 宽，一个路径在里面要折三行；标签列本来就宽，值跟着标签走。
+            -->
+            <local:SettingRowTemplates.Fact>
+                <DataTemplate x:DataType="vm:SettingFactRow">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                IsTextSelectionEnabled="True"
+                                Style="{StaticResource EgDataStyle}"
+                                Text="{x:Bind Value}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <Button
+                            Grid.Column="1"
+                            Command="{x:Bind RunCommand}"
+                            Content="{x:Bind ActionLabel}"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top"
+                            Visibility="{x:Bind ActionVisibility}" />
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Fact>
 
             <local:SettingRowTemplates.ConfigEditor>
                 <DataTemplate x:DataType="vm:SettingConfigEditorRow">

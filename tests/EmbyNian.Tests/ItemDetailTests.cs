@@ -103,6 +103,38 @@ internal static class ItemDetailTests
             Assert.Equal("", ItemDetail.Subline(new EmbyItem { Name = "无信息", Type = EmbyItemType.Movie }));
         });
 
+        // 那一行里的类型现在一个一个点得动（详情页上一个类型是一格「这个类型下的全部影片和剧集」）。屏上那一行
+        // 由这一份列表搭出来，而整行的字仍旧由 Subline 给 —— 两处必须是同一批、同一个顺序、同一个上限。
+        Test("详情：那一行的类型是可点的一份列表，和整行的字对得上", () =>
+        {
+            var movie = new EmbyItem { Name = "你的名字", Type = EmbyItemType.Movie, Genres = ["动画", "爱情", "奇幻"] };
+            Assert.Equal("动画,爱情,奇幻", string.Join(',', ItemDetail.SublineGenres(movie)));
+            Assert.Equal(string.Join("  ·  ", ItemDetail.SublineGenres(movie)), ItemDetail.Subline(movie));
+
+            // 超过六个截到六个，两处截的是同一批 —— 屏上那一行和点得动的那几个不能各说各话。
+            var many = new EmbyItem
+            {
+                Name = "类型很多",
+                Type = EmbyItemType.Movie,
+                Genres = ["一", "二", "三", "四", "五", "六", "七", "八"]
+            };
+            Assert.Equal(6, ItemDetail.SublineGenres(many).Count);
+            Assert.Equal(string.Join("  ·  ", ItemDetail.SublineGenres(many)), ItemDetail.Subline(many));
+
+            // 单集页那一行是「S1:E2 - 集名」，没有类型可点；季页只剩剧名的那一档同理。空表示「照旧画一行字」。
+            var episode = new EmbyItem
+            {
+                Name = "旅途的终点",
+                Type = EmbyItemType.Episode,
+                ParentIndexNumber = 1,
+                IndexNumber = 2,
+                Genres = ["动画"]
+            };
+            Assert.Equal(0, ItemDetail.SublineGenres(episode).Count);
+            Assert.Equal(0, ItemDetail.SublineGenres(
+                new EmbyItem { Name = "第一季", Type = EmbyItemType.Season, SeriesName = "葬送的芙莉莲" }).Count);
+        });
+
         Test("详情：评分用不变文化格式化，0 与缺失都当作没有", () =>
         {
             Assert.Equal("8.4", ItemDetail.Score(new EmbyItem { CommunityRating = 8.4f }));
@@ -817,21 +849,85 @@ internal static class ItemDetailTests
         {
             // 887 高的视口减去 460 的带子，剩下的 427 是整个 BodyRegion 的下限。HeroTail 先占实际内容高，
             // 星号行再把余下高度交给 BodySheet；不给这个下限，短页面的下半屏就漏出背景图。
-            Assert.Equal(427d, DetailHero.BodyHeight(887, true));
-            Assert.Equal(507d, DetailHero.BodyHeight(887, false));
+            Assert.Equal(427d, DetailHero.BodyHeight(887, DetailHero.ArtHeight));
+            Assert.Equal(507d, DetailHero.BodyHeight(887, DetailHero.PlainHeight));
 
             // 视口是小数的那一下（缩放比不是整数时常有），四舍五入到整像素，不留半像素的缝。
-            Assert.Equal(427d, DetailHero.BodyHeight(886.6, true));
+            Assert.Equal(427d, DetailHero.BodyHeight(886.6, DetailHero.ArtHeight));
+
+            // 集页的带子按第一屏收窄，这张纸的下限跟着变宽 —— 传进来的是那一次真正的带高，不是两档之一。
+            Assert.Equal(459d, DetailHero.BodyHeight(887, 428));
         });
 
         Test("正文：比头图还矮的窗口上不要负数", () =>
         {
             // 窗口矮到带子都放不下时，纸没有下限可言 —— 该滚动，而不是撑出一格负高来。
-            Assert.Equal(0d, DetailHero.BodyHeight(300, true));
+            Assert.Equal(0d, DetailHero.BodyHeight(300, DetailHero.ArtHeight));
 
             // 还没量到视口的那一下不是「窗口很矮」而是「还没量」，同样给 0。
-            Assert.Equal(0d, DetailHero.BodyHeight(0, true));
-            Assert.Equal(0d, DetailHero.BodyHeight(-40, true));
+            Assert.Equal(0d, DetailHero.BodyHeight(0, DetailHero.ArtHeight));
+            Assert.Equal(0d, DetailHero.BodyHeight(-40, DetailHero.ArtHeight));
+        });
+
+        // 参考图上那两支往上的箭头 —— 集页那一格的高。别的页面照旧按内容分两档，这一支只管集页：从视口里减掉
+        // 底下那一整段（音轨那一行、同季那一带集、剧情说明）实测要占的地方，剩下的给带子，而下限是那一叠字和键
+        // 量出来的高 —— 「为什么中间要留空」说的就是那一版把富余高度都留给了带子。
+        // 「集拉大窗口后会导致左上角空空的，画面不协调，电影那边处理的就很好」—— 集页那一格的高由里面那一叠给，
+        // 跟窗口无关。电影页「处理的很好」不是另一套算法，是那一页的 460 恰好就是它量出来的内容高。
+        Test("集页头图：高由里面那一叠量出来，不跟窗口走", () =>
+        {
+            // 216 的那一叠 → 216 的带子：那一叠是底对齐的，所以带子高出来多少，它头上就空多少。
+            Assert.Equal(216d, DetailHero.EpisodeHeight(216));
+
+            // 半像素的那一下（缩放比不是整数时常有）四舍五入到整像素，不留半像素的缝。
+            Assert.Equal(216d, DetailHero.EpisodeHeight(215.6));
+
+            // 电影页那一档在这儿没有位置：一张 16:9 剧照配上少两行的字撑不到 460，撑不到的那一截就是空白。
+            Assert.True(DetailHero.EpisodeHeight(216) < DetailHero.ArtHeight);
+
+            // 不封顶：片名折两行、窄窗口上读数换行的时候那一叠会超过 460，带子得跟着长 —— 封了顶就是把那一叠
+            // 挤到底下的音轨那一行上。
+            Assert.Equal(520d, DetailHero.EpisodeHeight(520));
+
+            // 还没量到（0）就按兜底那个数：给 0 的话第一帧没有带子，给 460 的话每进一次集页都要当场缩一次，
+            // 而这个数和一张 16:9 剧照加两道留白只差几像素，屏上看不出挪动。量出来比它还矮也一样兜住。
+            Assert.Equal(DetailHero.EpisodeFloor, DetailHero.EpisodeHeight(0));
+            Assert.Equal(DetailHero.EpisodeFloor, DetailHero.EpisodeHeight(-40));
+            Assert.Equal(DetailHero.EpisodeFloor, DetailHero.EpisodeHeight(180));
+            Assert.True(DetailHero.EpisodeFloor < DetailHero.PlainHeight);
+        });
+
+        // 带子收窄之后那道罩子得跟着收：罩子比带子还高就从带子的上沿溢出去，而标题条上那层洗按收完的那一块算。
+        Test("头图罩子：跟着带子收，最高还是那一档", () =>
+        {
+            // 内容那一档上一个字没变 —— 460 的带子上罩子照旧是 440，上面留 20。
+            Assert.Equal(DetailHero.ScrimHeight, DetailHero.ScrimSpan(DetailHero.ArtHeight));
+            Assert.Equal(DetailHero.ScrimHeight, DetailHero.ScrimSpan(600));
+
+            // 收窄的那一档：带高减去上面那道 20。
+            Assert.Equal(408d, DetailHero.ScrimSpan(428));
+            Assert.Equal(280d - DetailHero.ScrimInset, DetailHero.ScrimSpan(280));
+
+            // 还没量到时按那一档给，不给一个负数。
+            Assert.Equal(DetailHero.ScrimHeight, DetailHero.ScrimSpan(0));
+            Assert.Equal(0d, DetailHero.ScrimSpan(10));
+        });
+
+        // 洗那条曲线跟着收完的罩子走：两头和拐点都按新的位置读，不然标题条上那道横缝就回来了。
+        Test("标题条：带子收窄之后洗的还是屏上那道罩子", () =>
+        {
+            // 收窄的带子上，罩子的上沿仍在 20 —— 那条线以上一点不洗。
+            Assert.Equal(0d, DetailHero.TopWash(20, true, 428));
+
+            // 末档落在带子的下沿上，而不是原来那个 460 上。
+            Assert.Equal(DetailHero.ScrimCeiling / 255d, DetailHero.TopWash(428, true, 428));
+
+            // 不传带高的那个重载就是内容那一档，两种写法在 460 上必须一个数。
+            Assert.Equal(DetailHero.TopWash(300, true), DetailHero.TopWash(300, true, DetailHero.ArtHeight));
+
+            // 同一个百分比在收窄的带子上落得更早：0.62 那一档在 20 + 0.62×408 上。
+            Assert.True(Math.Abs(DetailHero.TopWash(20 + (0.62 * 408), true, 428) - (0xAA / 255d)) < 0.001,
+                "0.62 那一档该正好是 #AA");
         });
 
         // 「往下拉之后标题颜色要渐变，变的和下方背景一样」—— 洗多浓这件事的那条曲线。它读的是头图底下那道渐深的

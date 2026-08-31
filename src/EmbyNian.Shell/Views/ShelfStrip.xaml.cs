@@ -49,6 +49,17 @@ public sealed partial class ShelfStrip : UserControl
         new PropertyMetadata(0, OnFocusIndexChanged));
 
     /// <summary>
+    /// 这一带压在一张剧照上，而不是站在页面那张纸上 —— 集页把同季那一带摆在头图底下的画面里
+    /// （见 <c>DetailPage.PlaceEpisodes</c>）。这里只负责把它传给每张卡，见
+    /// <see cref="PosterCard.OnScrim"/>。
+    /// </summary>
+    public static readonly DependencyProperty OnScrimProperty = DependencyProperty.Register(
+        nameof(OnScrim),
+        typeof(bool),
+        typeof(ShelfStrip),
+        new PropertyMetadata(false, OnScrimSwitched));
+
+    /// <summary>
     /// 箭头只盖卡片的图片，不盖图片下面那两行字 —— 带的高度里有 <see cref="CardSize.Chrome"/> 是那两行
     /// 的。这个下限管的是还没量过的那一瞬间：高度是 0 时按 0 减出来是负数，按钮会直接消失。
     /// </summary>
@@ -144,6 +155,52 @@ public sealed partial class ShelfStrip : UserControl
     }
 
     private StackLayout Rows => (StackLayout)Repeater.Layout;
+
+    /// <inheritdoc cref="OnScrimProperty"/>
+    public bool OnScrim
+    {
+        get => (bool)GetValue(OnScrimProperty);
+        set => SetValue(OnScrimProperty, value);
+    }
+
+    /// <summary>
+    /// 这一档交给每张卡（<see cref="PosterCard.OnScrim"/>）。卡片是回收着用的，所以两处都要：这里过一遍
+    /// 已经建出来的，<see cref="OnElementPrepared"/> 管之后建出来的和回收回来的那些。
+    /// </summary>
+    private static void OnScrimSwitched(DependencyObject sender, DependencyPropertyChangedEventArgs args)
+    {
+        var strip = (ShelfStrip)sender;
+
+        for (var index = 0; index < strip.ItemCount; index++)
+            if (strip.Repeater.TryGetElement(index) is { } element) strip.PaintInk(element);
+    }
+
+    /// <summary>
+    /// 一张卡在这条带里该用哪套墨。卡在模板里，所以从容器往下找 —— 先看逻辑内容那一路
+    /// （<c>ContentControl.Content</c>），因为刚建出来的容器还没套上自己的模板，那一刻可视树里一个孩子都没有：
+    /// 只走可视树的那一版会漏掉除第一张之外的每一张卡，屏上是浅色主题下几张卡的片名整行消失。
+    /// </summary>
+    private void PaintInk(DependencyObject container)
+    {
+        if (Card(container) is { } found) found.OnScrim = OnScrim;
+
+        static PosterCard? Card(DependencyObject? node)
+        {
+            switch (node)
+            {
+                case null: return null;
+                case PosterCard card: return card;
+                case ContentControl { Content: DependencyObject content } when Card(content) is { } inside:
+                    return inside;
+            }
+
+            var children = VisualTreeHelper.GetChildrenCount(node);
+            for (var index = 0; index < children; index++)
+                if (Card(VisualTreeHelper.GetChild(node, index)) is { } inside) return inside;
+
+            return null;
+        }
+    }
 
     // ---- 规则 -------------------------------------------------------------------
     //
@@ -288,6 +345,10 @@ public sealed partial class ShelfStrip : UserControl
         // in this shelf and the total count without forcing every card to be realized.
         AutomationProperties.SetPositionInSet(element, args.Index + 1);
         AutomationProperties.SetSizeOfSet(element, ItemCount);
+
+        // 这一带压在剧照上时（集页那一带）卡片底下那两行字要换墨。放在这里而不是只在开关翻转时过一遍：
+        // 容器是回收着用的，翻页翻出来的那些是「之后才建的」，漏掉就会有几张卡的字读不出来。
+        PaintInk(element);
     }
 
     /// <summary>

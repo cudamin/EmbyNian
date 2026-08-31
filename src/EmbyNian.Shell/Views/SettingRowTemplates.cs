@@ -37,12 +37,16 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
 
     public DataTemplate? Theme { get; set; }
 
+    /// <summary>一行读数加一颗可有可无的按钮，见 <see cref="SettingFactRow"/>。</summary>
+    public DataTemplate? Fact { get; set; }
+
     protected override DataTemplate? SelectTemplateCore(object item) => item switch
     {
         // Before the two numeric rows, because a slider row is not a number row but reads like one; and
         // before the plain toggle, because a group of toggles is not one toggle.
         SettingConfigEditorRow => ConfigEditor,
         SettingThemeRow => Theme,
+        SettingFactRow => Fact,
         SettingChoiceRow => Choice,
         SettingToggleGroupRow => ToggleGroup,
         SettingToggleRow => Toggle,

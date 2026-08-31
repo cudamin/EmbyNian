@@ -552,7 +552,8 @@ public sealed partial class PlayerPage : UserControl
     /// <summary>
     /// 缩放窗口时按画面比例联动 / 窗口化时视频有黑边: the shape the window holds its client area in while an
     /// edge is dragged, and a one-off reshape so the first frame of a film is not letterboxed either.
-    /// Zero is 「stop keeping」, and is not fitted to — there is nothing to fit to.
+    /// Zero is 「the picture has released the window」. If the browsing ratio lock is enabled, hand the
+    /// window straight back to that shape so returning home immediately gets the strict first-screen layout.
     /// </summary>
     private void OnPictureAspectChanged(double aspect)
     {
@@ -560,6 +561,7 @@ public sealed partial class PlayerPage : UserControl
 
         _window.PictureAspect = aspect;
         if (aspect > 0) _window.FitToPicture();
+        else _window.FitToShape();
     }
 
     /// <summary>

@@ -195,6 +195,11 @@
         <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
     </Style>
 
+    <!-- 卡片带那块牌子压在剧照上时的标题（ShelfHead.OnScrim）：集页把同季那一带摆在头图底下的画面里。 -->
+    <Style x:Key="EgOnScrimSectionTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource EgSectionTitleStyle}">
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+    </Style>
+
     <!--
       场记板压在剧照上的那一份：主页的大图铺到窗口顶边之后，页眉就站在图上了（见 PageSlate.OnScrim）。
       只换颜色，字体字号一档不改 —— 同一块场记板换个底，不该顺手换成另一个字号。

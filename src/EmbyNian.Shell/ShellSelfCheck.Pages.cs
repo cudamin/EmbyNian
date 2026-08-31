@@ -354,19 +354,24 @@ internal static partial class ShellSelfCheck
 
         // The same claim on the page of a file, which is the other half of what was reported — and a claim
         // only that page can make: everything above was snapshotted on the show's page, before the walk
-        // clicked into an episode. A 电影 page has no 单集 at all, so a page that drew neither shape is
-        // reported rather than failed.
-        if (_fileEpisodesDrawn is { } file && file.Rows + file.Cards > 0)
+        // clicked into an episode. A 电影 page has no 单集 at all, so a model with no rows is reported rather
+        // than failed. When the model does have rows, drawing none is a real failure — it is exactly the
+        // async-visibility regression this page used to hide as 「没有单集可数」.
+        if (_fileEpisodesDrawn is { Models: > 0 } file)
         {
             var fileList = ItemDetail.EpisodesAsList(file.Type);
-            check("详情单集形状（文件页）", fileList ? file.Cards == 0 : file.Rows == 0,
+            check("详情单集形状（文件页）",
+                file.Rows + file.Cards > 0 && (fileList ? file.Cards == 0 : file.Rows == 0),
                 $"{file.Type} 页要{(fileList ? "竖置列表" : "横向翻页带")}，"
-                    + $"实渲染 {file.Rows} 行 / {file.Cards} 张卡");
+                    + $"模型 {file.Models} 集、实渲染 {file.Rows} 行 / {file.Cards} 张卡");
+
+            if (file.Type == EmbyItemType.Episode)
+                check("集页首屏（文件页）", file.ScreenOk, file.Screen);
         }
         else
         {
             report.AppendLine("[信息] 详情单集形状（文件页）— "
-                + (_fileEpisodesDrawn is { } empty ? $"{empty.Type} 页没有单集可数" : "这次没走到文件页"));
+                + (_fileEpisodesDrawn is { } empty ? $"{empty.Type} 页模型没有同季单集" : "这次没走到文件页"));
         }
 
         // Informational: what the server actually had to say about this item. 年份区间 and 制作方 are
@@ -462,6 +467,10 @@ internal static partial class ShellSelfCheck
         if (_filePickers is { } picks)
             check("文件页文件选项", picks.Ok, $"{picks.Type} 页，{picks.Detail}");
         else report.AppendLine("[信息] 文件页文件选项 — 这次没走到文件页");
+
+        // 那一行类型点不点得动。搭空了屏上就是一行看着一模一样的字，点下去什么都不发生 —— 别的读数一个都不响。
+        if (_detailGenres is { } genres) check("详情类型可点", genres.Ok, genres.Detail);
+        else report.AppendLine("[信息] 详情类型可点 — 这次没走到详情页");
     }
 
     /// <summary>

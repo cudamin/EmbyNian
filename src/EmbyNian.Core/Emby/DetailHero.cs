@@ -49,6 +49,37 @@ public static class DetailHero
     public static double Height(bool artwork) => artwork ? ArtHeight : PlainHeight;
 
     /// <summary>
+    /// 集页那一格最矮能到多少，同时也是还没量到那一叠字和键有多高时用的那个数（见 <see cref="EpisodeHeight"/>）。
+    /// 一张 16:9 剧照加上下那两道留白就是这个量级，所以第一帧按它布出来的版面和量完之后只差几个像素，屏上看不
+    /// 出挪动 —— 反过来拿 <see cref="ArtHeight"/> 兜底的那一版每进一次集页都要从 460 缩到实测值，那是一次看得
+    /// 见的跳。比这个数再矮也不是「紧凑」而是「什么都放不下」。
+    /// </summary>
+    public const double EpisodeFloor = 200;
+
+    /// <summary>
+    /// 集页那一格的高：由它里面那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测给出。
+    /// <para>
+    /// 规矩和别的页面是同一条 —— 高由内容定、不跟窗口走（<see cref="ArtHeight"/> 上那一段），只是这一页量在
+    /// 运行时。为什么不能跟着用 460：单集配的是一张 16:9 剧照，比 2:3 的海报矮一大截，那一叠字也比电影页少
+    /// 两行，而这一叠是底对齐的 —— 给它 460 就等于在它头上留出两百来像素只有画面的地方，「集拉大窗口后会导致
+    /// 左上角空空的，画面不协调，电影那边处理的就很好」说的正是那一块。电影页之所以「处理的很好」，恰恰因为
+    /// 460 就是那一页量出来的内容高。
+    /// </para>
+    /// <para>
+    /// 上一版是「从视口里减掉底下那一段」：窗口越高带子越高，一直到 460 封顶，于是那块空白跟着窗口一起长 ——
+    /// 拉大窗口才看得明显。那一版夹着的下限就是这里的实测值本身，所以矮窗口上的版面一个像素没变（音轨那一行
+    /// 和同季那一带集照旧尽量落在第一屏里，只是靠「带子不多占」而不是靠「带子算得准」）；变的只是高窗口上
+    /// 不再拿画面去凑高度。
+    /// </para>
+    /// </summary>
+    /// <param name="heroRoom">
+    /// 那一叠连上下留白实测要占多高，由页面量出来交进来（<c>DetailPage.OnHeroStackSizeChanged</c>）。不封顶：
+    /// 片名折两行、窗口窄到读数换行的时候它会超过 <see cref="ArtHeight"/>，那时候带子就该跟着长 —— 封了顶的
+    /// 那一版会让那一叠从带子里溢出去，压在底下的音轨那一行上。0 是「还没量」，按 <see cref="EpisodeFloor"/> 给。
+    /// </param>
+    public static double EpisodeHeight(double heroRoom) => Math.Max(EpisodeFloor, Math.Round(heroRoom));
+
+    /// <summary>
     /// 头图下面那整段至少要多高 —— 「滑到下面不用显示背景了，五颜六色的太丑了」。
     /// <para>
     /// 背景那一层铺满整个窗口并且固定不动，所以底下这一整段必须至少补满视口减掉头图后的空间。页面把这个
@@ -61,13 +92,14 @@ public static class DetailHero
     /// </para>
     /// </summary>
     /// <param name="viewport">页面可视区的高，也就是滚动视图自己的高。</param>
-    /// <param name="artwork">同 <see cref="Height"/>：服务器上有没有那张图。</param>
-    public static double BodyHeight(double viewport, bool artwork) =>
-        viewport <= 0 ? 0 : Math.Max(0, Math.Round(viewport) - Height(artwork));
+    /// <param name="heroHeight">头图那一格这一次真正的高（<see cref="Height"/> 或 <see cref="EpisodeHeight"/>）。</param>
+    public static double BodyHeight(double viewport, double heroHeight) =>
+        viewport <= 0 ? 0 : Math.Max(0, Math.Round(viewport) - heroHeight);
 
     /// <summary>
     /// 头图底下那道渐深的罩子：它坐在带子的下沿，上面留 <see cref="ScrimInset"/>，自己高
-    /// <see cref="ScrimHeight"/>，五个停点各说「走了这道罩子的百分之几」和「那儿有多黑」。
+    /// <see cref="ScrimSpan"/>（最高 <see cref="ScrimHeight"/>），五个停点各说「走了这道罩子的百分之几」和
+    /// 「那儿有多黑」。
     /// <para>
     /// 屏上那支画刷就是拿这张表生成的（<c>DetailPage.PaintScrim</c>）—— 从前 DetailPage.xaml 里另写了一份
     /// 同样的五个停点，一份看得见、一份算得出，改一份忘另一份就是标题条上接出一道横缝。现在只有这一份。
@@ -79,10 +111,23 @@ public static class DetailHero
 
     /// <inheritdoc cref="ScrimInset"/>
     /// <remarks>
-    /// 写死的一个数，不跟着带子走：要垫的是海报、片名和那排键那一叠东西，而那一叠多高跟窗口没关系。带子高过
-    /// 440 时上面剩的全是干净的画面，矮到 <see cref="PlainHeight"/> 那个下限时这块几乎盖满整格。
+    /// 上限，不是定值：要垫的是海报、片名和那排键那一叠东西，而那一叠多高跟窗口没关系，所以带子高过 460 时
+    /// 这道罩子就停在 440，上面剩的全是干净的画面。带子比它矮的时候（集页按那一叠实测给的那一档，见
+    /// <see cref="EpisodeHeight"/>）由 <see cref="ScrimSpan"/> 把它收到「带高减去上面那道 <see
+    /// cref="ScrimInset"/>」—— 罩子比带子还高就会从带子的上沿溢出去，屏上是顶边突然暗一档，而标题条那层洗
+    /// 照着另一套坐标算，两边就错开。
     /// </remarks>
     public const double ScrimHeight = 440;
+
+    /// <summary>
+    /// 这一格里那道罩子真正有多高：坐在带子的下沿，上面留 <see cref="ScrimInset"/>，最高
+    /// <see cref="ScrimHeight"/>。带子和罩子的高一旦各说各话，标题条上那道横缝就回来了（见
+    /// <see cref="TopWash"/>），所以屏上那一块和算浓度的这一支读的是同一个函数。
+    /// </summary>
+    /// <param name="bandHeight">头图那一格这一次的高；0 或负数当「还没量」，按 <see cref="ScrimHeight"/> 给。</param>
+    public static double ScrimSpan(double bandHeight) => bandHeight <= 0
+        ? ScrimHeight
+        : Math.Min(ScrimHeight, Math.Max(0, bandHeight - ScrimInset));
 
     /// <summary>
     /// 罩子最浓那一档有多不透明 —— 「太黑了都看不清背景」。
@@ -142,20 +187,33 @@ public static class DetailHero
     /// </summary>
     /// <param name="offset">页面滚到哪儿了（滚动视图的竖向偏移，也就是视口上沿在内容里的位置）。</param>
     /// <param name="artwork">同 <see cref="Height"/>：服务器上有没有那张图。没有图就没有那道罩子，也就不用洗。</param>
-    public static double TopWash(double offset, bool artwork)
+    public static double TopWash(double offset, bool artwork) => TopWash(offset, artwork, ArtHeight);
+
+    /// <inheritdoc cref="TopWash(double, bool)"/>
+    /// <param name="offset">同上。</param>
+    /// <param name="artwork">同上。</param>
+    /// <param name="bandHeight">
+    /// 头图那一格这一次的高。集页那一格按里面那一叠实测给（<see cref="EpisodeHeight"/>），罩子跟着收
+    /// （<see cref="ScrimSpan"/>），这条曲线也就得按收完的那一块算 —— 不传的那个重载按
+    /// <see cref="ArtHeight"/> 算，也就是别的页面上那一格。
+    /// </param>
+    public static double TopWash(double offset, bool artwork, double bandHeight)
     {
         if (!artwork) return 0;
 
-        var y = Math.Clamp(offset, 0, Height(true));
+        var band = bandHeight > 0 ? bandHeight : ArtHeight;
+        var span = ScrimSpan(band);
+        var top = band - span;
+        var y = Math.Clamp(offset, 0, band);
         var fromY = 0d;
         var fromValue = 0d;
 
         foreach (var (along, alpha) in ScrimStops)
         {
-            var at = ScrimInset + (along * ScrimHeight);
+            var at = top + (along * span);
             var value = alpha / 255d;
 
-            // 第一个停点在 ScrimInset 上而不是 0 上：罩子的上沿以上没有罩子，那一段是平的 0。
+            // 第一个停点在罩子的上沿上而不是 0 上：那条线以上没有罩子，那一段是平的 0。
             if (y <= at) return at <= fromY ? value : fromValue + ((value - fromValue) * (y - fromY) / (at - fromY));
 
             (fromY, fromValue) = (at, value);

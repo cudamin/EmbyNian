@@ -593,9 +593,9 @@ internal sealed class HostWindow : IDisposable
     /// <para>
     /// Set from <c>UiSettings.LockWindowShape</c> at startup and whenever that switch is flipped
     /// (<see cref="ShellPrefs"/>), and the value is the home page's
-    /// (<see cref="EmbyNian.Emby.HomeCarousel.WindowAspect"/>) because the banner is what the lock is for:
-    /// its 2.2:1 band crops a 16:9 backdrop, and how much it crops follows the window's shape. One shape,
-    /// one crop, at every size — 「调整窗口大小时候，轮播画面不会被裁切」.
+    /// (<see cref="EmbyNian.Emby.HomeCarousel.WindowAspect"/>). That shape is also how the home page recognises
+    /// the mode in which its first screen is strict: the complete 继续观看 shelf fits below the banner and the
+    /// next 媒体库 shelf starts outside the viewport, independent of the navigation pane state.
     /// </para>
     /// <para>
     /// Second to <see cref="PictureAspect"/> rather than beside it: a file that is playing has a shape of its
@@ -605,6 +605,23 @@ internal sealed class HostWindow : IDisposable
     /// </para>
     /// </summary>
     public double BrowseAspect { get; set; }
+
+    /// <summary>
+    /// Whether the browsing ratio lock owns the window geometry right now. Playback owns the shape while it
+    /// has a picture; fullscreen, maximized and Windows-snapped windows belong to the monitor instead. The
+    /// setting alone is not enough: after playback the restored window can still have the film's shape, so
+    /// the current client area must also be within rounding distance of <see cref="BrowseAspect"/>.
+    /// </summary>
+    internal bool BrowseFoldActive
+    {
+        get
+        {
+            if (BrowseAspect <= 0 || PictureAspect > 0 || Fullscreen || IsMaximized) return false;
+
+            var (width, height) = ClientSize;
+            return width > 0 && height > 0 && Math.Abs(width - (BrowseAspect * height)) <= 2;
+        }
+    }
 
     /// <summary>
     /// Which of the two ratios the window is actually held to right now: the picture's while something is

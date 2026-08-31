@@ -35,7 +35,7 @@ public static class HomeCarousel
     public const double UnmeasuredHeight = 560;
 
     /// <summary>
-    /// The most of the window's height the band is allowed to take — 「调整窗口大小时候，轮播画面不会被裁切」.
+    /// The most of the window's height the ordinary width-based band is allowed to take.
     /// <para>
     /// This used to be an absolute 560, and that absolute number is the whole of the bug. The band's shape is
     /// what decides how much of a 16:9 backdrop is thrown away (<see cref="Aspect"/>), and a fixed ceiling
@@ -47,29 +47,25 @@ public static class HomeCarousel
     /// written for: a quarter of the window is left for the first row of cards.
     /// </para>
     /// <para>
-    /// Above <see cref="WindowAspect"/> ÷ <see cref="Aspect"/> = 0.727, and that is the whole reason for the
-    /// third decimal: at the locked window shape the width rule has to be the one that binds, or the band
-    /// would be a shade flatter than 2.2 and the crop would drift with the size again. The margin covers the
-    /// rounding at both ends and the smallest window the shell allows; it is not large enough to give away
-    /// height the ceiling was not asked for.
+    /// Above <see cref="WindowAspect"/> ÷ <see cref="Aspect"/> = 0.727, so the ordinary <see cref="Height"/>
+    /// path can still draw its preferred 2.2:1 band in an 8:5 window before the first shelf has been measured.
+    /// Once that measurement exists, the stricter locked-window path is <see cref="FoldHeight"/> instead.
     /// </para>
     /// </summary>
     public const double HeightShare = 0.74;
 
     /// <summary>
-    /// 锁定窗口比例大小: the shape the window's client area is held in — width ÷ height — so that the band's
-    /// own shape, and with it how much of the picture is cropped, stops depending on the window's size.
+    /// 锁定窗口比例大小: the shape the browsing client area is held in, expressed as width ÷ height.
     /// <para>
     /// 1.6 is 8:5, which is the shape the window already opens at (1280×800). Nothing about the number is
     /// derived: it is the size this app has always started at and the one the carousel was drawn against.
-    /// What is derived is <see cref="HeightShare"/>, which has to stay above this ÷ <see cref="Aspect"/> for
-    /// the lock to mean anything.
+    /// It is also the shape the home page recognises for its strict first-screen layout.
     /// </para>
     /// <para>
-    /// The rail on the left makes the band narrower than the client area, by 48 collapsed and by the pane's
-    /// full width when it is open. Both only ever make the band <em>shorter</em> than the ceiling — a
-    /// narrower band at the same height is a smaller quotient — so the lock holds with the pane open or shut,
-    /// and the picture is cropped by the same 19% either way.
+    /// The home page uses this same shape as the signal for its stricter first-screen layout: once the first
+    /// shelf has been measured, <see cref="FoldHeight"/> gives the banner exactly the space left above it.
+    /// That keeps the complete 继续观看 shelf on screen and the following 媒体库 shelf outside the viewport,
+    /// whether the navigation pane is open or collapsed. Other window shapes keep the ordinary width rule.
     /// </para>
     /// </summary>
     public const double WindowAspect = 1.6;
@@ -82,25 +78,21 @@ public static class HomeCarousel
     public static readonly TimeSpan Dwell = TimeSpan.FromSeconds(8);
 
     /// <summary>
-    /// 2.2:1, rather than the artwork's own 16:9. The band fills the top of the window edge to edge — the
-    /// reference's own full-bleed banner — but not <c>max-height:100vh</c>: a 16:9 band 1800 wide is 1000
-    /// tall, which is every shelf pushed off the screen on a page whose whole point is the shelves.
-    /// Cropping the picture is the compromise: it still fills the width, and the first row of cards stays
-    /// in sight. <see cref="HeightShare"/> is the other half of the same promise.
+    /// The preferred band shape for the ordinary <see cref="Height"/> path: 2.2:1 rather than the artwork's
+    /// own 16:9. The band fills the top of the window edge to edge without pushing every shelf off screen;
+    /// <see cref="HeightShare"/> is the other half of that fallback rule.
     /// <para>
-    /// The number is also the exact size of the crop, which is why it is public: a 2.2 band showing a 16:9
-    /// picture <c>UniformToFill</c> keeps (9/16) ÷ (1/2.2) = 80.8% of its height, so 19.2% of every backdrop
-    /// is off screen. That figure is allowed to be what it is; what it is not allowed to do is change while
-    /// the user drags a window edge.
+    /// When that preferred shape is actually used, a 16:9 picture drawn with <c>UniformToFill</c> keeps
+    /// (9/16) ÷ (1/2.2) = 80.8% of its height. The strict locked-window path may choose a different band
+    /// height so the complete first shelf fits; its correctness is the shelf boundary, not a fixed crop.
     /// </para>
     /// </summary>
     public const double Aspect = 2.2;
 
     /// <summary>
-    /// The tallest band this window may have: <see cref="HeightShare"/> of the window's own height, or
-    /// <see cref="UnmeasuredHeight"/> while nobody has measured the window yet. Never below
-    /// <see cref="MinHeight"/> — a ceiling under the floor is not a window shape, it is a window nobody can
-    /// see the page in, and <see cref="Height"/> clamps between the two.
+    /// The ordinary <see cref="Height"/> path's ceiling: <see cref="HeightShare"/> of the window's own height,
+    /// or <see cref="UnmeasuredHeight"/> while nobody has measured the window yet. Never below
+    /// <see cref="MinHeight"/>; the strict first-screen path is calculated separately by <see cref="FoldHeight"/>.
     /// </summary>
     /// <param name="viewport">The window's client height, or 0 for 「not measured yet」.</param>
     public static double Cap(double viewport) => viewport <= 0
@@ -117,6 +109,31 @@ public static class HomeCarousel
     public static double Height(double width, double viewport) => width <= 0
         ? MinHeight
         : Math.Clamp(Math.Round(width / Aspect), MinHeight, Cap(viewport));
+
+    /// <summary>
+    /// The locked browsing window's first-screen height. <paramref name="belowFold"/> is the measured room
+    /// occupied by the gap above the first shelf plus that shelf itself, so subtracting it from the viewport
+    /// puts the shelf's bottom on the window's bottom edge. The next shelf starts after its own layout gap and
+    /// is therefore completely outside the viewport.
+    /// <para>
+    /// Only an explicitly active browsing-shape lock takes this path. Maximized, snapped and freely resized
+    /// windows pass <see langword="false"/> and keep <see cref="Height"/>. A missing measurement also keeps
+    /// the old rule, which is the detached self-check path and the first frame before any shelf exists.
+    /// </para>
+    /// </summary>
+    public static double FoldHeight(
+        double contentWidth,
+        double viewportHeight,
+        double belowFold,
+        bool enabled)
+    {
+        if (!enabled || viewportHeight <= 0 || belowFold <= 0)
+            return Height(contentWidth, viewportHeight);
+
+        // In this mode the shelf boundary is the contract. Keeping the ordinary 240px floor would make the
+        // first shelf impossible to fit at the supported minimum window size when cards are set near maximum.
+        return Math.Max(0, Math.Round(viewportHeight - belowFold));
+    }
 
     /// <summary>
     /// How far below the band's middle the text block sits — 「红框中的字体往下移动一些」. Dead centre reads as

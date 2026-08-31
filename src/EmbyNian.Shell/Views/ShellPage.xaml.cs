@@ -628,7 +628,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         if (tag == "home")
         {
-            Open(typeof(HomePage), new HomeRequest(_services, _libraryViews.ToArray()), "主页", tag);
+            Open(typeof(HomePage), new HomeRequest(_services, _libraryViews.ToArray(), _window), "主页", tag);
             return;
         }
 
@@ -759,6 +759,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
     void IShellActions.OpenItem(EmbyItem item) => OpenItem(item);
 
     bool IShellActions.TryOpenLibrary(string id) => TryOpenLibrary(id);
+
+    void IShellActions.OpenGenre(string genre) => OpenGenre(genre);
 
     void IShellActions.OpenSignIn(ServerProfile? server) => OpenSignIn(server);
 
@@ -1206,6 +1208,25 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     private void OnSignedIn(object? sender, EventArgs e) => _ = EnterShellAsync();
+
+    /// <summary>
+    /// 按类型浏览，见 <see cref="IShellActions.OpenGenre"/>。和搜索页同一个形状：一格网格，排序、筛选、三种
+    /// 视图、翻页、字母条都跟着来 —— 所以它是一个请求，不是又一页。
+    /// <para>
+    /// 不带 tag：侧边栏没有一项指着某个类型，所以这是一次下钻（面包屑上多一节，高亮不动），同往剧里点进去。
+    /// </para>
+    /// </summary>
+    public void OpenGenre(string genre)
+    {
+        if (_services is null) return;
+
+        var name = genre.Trim();
+        if (name.Length == 0) return;
+
+        Log.Info(Category, $"按类型浏览：{name}");
+
+        Open(typeof(LibraryPage), LibraryRequest.ForGenre(_services, name), name, tag: "");
+    }
 
     /// <summary>
     /// Swaps the sign-in card for the browsing shell: reads this account's libraries, fills the pane

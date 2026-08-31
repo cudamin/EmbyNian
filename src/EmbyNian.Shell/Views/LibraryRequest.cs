@@ -45,6 +45,13 @@ internal sealed record LibraryRequest
     public bool IsSearch => SearchTerm is not null;
 
     /// <summary>
+    /// 按类型浏览的那一格：详情页上那一行类型点一个就到这儿。<see cref="ParentId"/> 是空的 —— 一个类型不是
+    /// 一个文件夹，它横跨这个账号能看的所有媒体库，所以查询是全库递归加一个 <c>Genres</c>
+    /// （见 <c>ItemQuery.Genre</c>）。
+    /// </summary>
+    public string? Genre { get; init; }
+
+    /// <summary>
     /// 演职人员：whose credits this grid lists, or null for every other kind of grid. Set only by
     /// <see cref="ForPerson"/>; see <see cref="ItemQuery.PersonId"/> for why it is one id and not a list.
     /// </summary>
@@ -72,6 +79,7 @@ internal sealed record LibraryRequest
     /// </summary>
     public string Eyebrow => IsSearch ? "SEARCH"
         : PersonId is not null ? "CREDITS"
+        : Genre is not null ? "GENRE"
         : CollectionType is not null ? "LIBRARY"
         : ParentType switch
         {
@@ -137,5 +145,16 @@ internal sealed record LibraryRequest
         Services = services,
         Title = person.Name,
         PersonId = person.Id
+    };
+
+    /// <summary>
+    /// 按类型浏览，见 <see cref="Genre"/>。标题就是那个类型自己 —— 页头那行代号已经说了这是个类型
+    /// （GENRE），标题再写一遍「类型：动画」就是同一句话说两遍。
+    /// </summary>
+    public static LibraryRequest ForGenre(IServiceProvider services, string genre) => new()
+    {
+        Services = services,
+        Title = genre.Trim(),
+        Genre = genre.Trim()
     };
 }

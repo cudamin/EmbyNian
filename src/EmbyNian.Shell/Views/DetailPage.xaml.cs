@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Navigation;
 using System.ComponentModel;
 using Windows.Foundation;
@@ -130,8 +131,8 @@ public sealed partial class DetailPage : Page, IShellContent
     {
         var ink = DetailHero.ScrimInk;
 
-        HeroScrim.Height = DetailHero.ScrimHeight;
-
+        // 高不在这里设：它跟着带子走（集页那一格按里面那一叠实测给，比 460 矮），所以绑在 ViewModel.ScrimHeight
+        // 上。停点是比例，收窄不改它们，所以这五个仍然画一次就够。
         HeroScrimBrush.GradientStops.Clear();
         foreach (var (along, alpha) in DetailHero.ScrimStops)
             HeroScrimBrush.GradientStops.Add(new GradientStop
@@ -182,6 +183,88 @@ public sealed partial class DetailPage : Page, IShellContent
     /// which, and the pair says which one actually happened.
     /// </summary>
     internal (int Rows, int Cards) EpisodeShapes => (Count(EpisodeList), Count(EpisodeStrip));
+
+    /// <summary>
+    /// 自检：集页的第一屏 —— 参考图上那两支往上的箭头加「音频字幕和集数的位置调换」：那一叠字和键不能被带子挤
+    /// 出去、带子也不许比那一叠高（「集拉大窗口后会导致左上角空空的」），音轨那一行和同季那一带集要落在这一页看
+    /// 得见的那一段里、剧情说明至少露出头，而那一带排在音轨底下、剧情说明上面。
+    /// <para>
+    /// 比的是 <c>Body</c> 自己的下沿，不是窗口的下沿 —— 头上还压着标题栏和面包屑那两行。窗口连「带子加尾部」都
+    /// 装不下的时候，落在屏里那几条只报不判：带子已经是它里面那一叠量出来的高（见
+    /// <see cref="DetailHero.EpisodeHeight"/>），再没有可让的地方，那是「窗口太矮」而不是版面算错了。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) FirstScreenRead()
+    {
+        if (XamlRoot?.Content is not UIElement root) return (false, "页面还没上树");
+
+        var hero = Box(HeroBand);
+        var page = Box(Body);
+        var stack = Box(HeroStack);
+        var actions = Box(HeroActions);
+        var tail = Box(HeroTail);
+        var room = Math.Max(ViewModel.HeroRoom, DetailHero.EpisodeFloor);
+        var roomy = hero.Height + tail.Height <= page.Height + 0.5;
+
+        // 一头一条，合起来是「带子正好那一叠那么高」：那一叠字往上撑（它是底对齐的）、那排键在它最底下，所以
+        // 收窄过头两头都读得出来；而带子不许比那一叠还高 —— 高出来那一截全落在底对齐的那一叠头上，也就是
+        // 「左上角空空的」。两条都无条件判：带高跟窗口有多大没关系（见 DetailHero.EpisodeHeight）。
+        var fits = stack.Top >= hero.Top - 0.5 && actions.Bottom <= hero.Bottom + 0.5;
+        var snug = hero.Height <= room + 0.5;
+        var read = new List<string>();
+        var ok = fits && snug;
+
+        foreach (var (name, panel) in new[]
+        {
+            ("音轨", (FrameworkElement)PickerPanel),
+            ("集带", EpisodePanel),
+            ("剧情说明", OverviewPanel)
+        })
+        {
+            if (panel.Visibility != Visibility.Visible)
+            {
+                read.Add($"{name}这一条目没有");
+                continue;
+            }
+
+            var box = Box(panel);
+
+            // 剧情说明只要求「露头」：四行折起来的一段加上前面那三块，在矮窗口上凑不出一屏，而这一条问的是
+            // 「进页面看不看得见它」—— 见得到开头就能往下读，整段都在屏外才是坏的。
+            var inside = name == "剧情说明"
+                ? box.Top <= page.Bottom - 24
+                : box.Bottom <= page.Bottom + 0.5;
+
+            ok &= inside || !roomy;
+            read.Add($"{name} {box.Top:0}–{box.Bottom:0}{(inside ? "" : "（出屏）")}");
+        }
+
+        // 顺序那一条：那一带在音轨底下、剧情说明上面。压在图上的那一档还要没有板底和外圈 ——
+        // 「去掉集列表的黑边」，同 BodySeal 里那两块读的 Bare。
+        if (EpisodePanel.Visibility == Visibility.Visible && ViewModel.EpisodesOnScrim)
+        {
+            var order = Box(EpisodePanel).Top >= Box(PickerPanel).Bottom - 0.5
+                || PickerPanel.Visibility != Visibility.Visible;
+            var above = OverviewPanel.Visibility != Visibility.Visible
+                || Box(EpisodePanel).Bottom <= Box(OverviewPanel).Top + 0.5;
+            var bare = EpisodePanel.Background is null or SolidColorBrush { Color.A: 0 }
+                && EpisodePanel.BorderThickness is { Left: 0, Top: 0, Right: 0, Bottom: 0 };
+
+            ok &= order && above && bare;
+            read.Add(order && above ? "集带夹在音轨和剧情说明之间" : "集带没夹在音轨和剧情说明之间");
+            read.Add(bare ? "集带外圈已去掉" : "集带仍有外圈或底色");
+        }
+
+        return (ok, $"带高 {hero.Height:0}（内容量出来 {room:0}、其中字键那一叠 {stack.Height:0}）、"
+            + $"尾部 {tail.Height:0}、可视段到 {page.Bottom:0}；{string.Join("、", read)}"
+            + (fits ? "" : $"，那一叠 {stack.Top:0}–{actions.Bottom:0} 被挤出带子 {hero.Top:0}–{hero.Bottom:0}")
+            + (snug ? "" : $"，带子比内容高出 {hero.Height - room:0}（左上角就空这么多）")
+            + (roomy ? "" : "，窗口连带子加尾部都装不下（只报不判）"));
+
+        Rect Box(FrameworkElement element) => element
+            .TransformToVisual(root)
+            .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+    }
 
     /// <summary>
     /// 需求 4 as the title band came out: whether the 徽标 mark is on screen and how large it drew, and —
@@ -318,7 +401,10 @@ public sealed partial class DetailPage : Page, IShellContent
     internal (bool Ok, string Detail) HeroFill()
     {
         var art = ViewModel.HeroArt;
-        var want = DetailHero.Height(art);
+
+        // 视图模型算出来的那个数，不是 DetailHero.Height 那两档：集页那一格按里面那一叠实测给、落在两档之下
+        // （见 DetailViewModel.HeroHeight），拿两档当判据的话那一页每次都会报「高该是 460」。
+        var want = ViewModel.HeroHeight;
         var wide = HeroBand.ActualWidth >= Body.ActualWidth - 0.5;
         var tall = Math.Abs(HeroBand.ActualHeight - want) < 0.5;
         var detail = $"头图 {HeroBand.ActualWidth:0}×{HeroBand.ActualHeight:0}、"
@@ -522,8 +608,8 @@ public sealed partial class DetailPage : Page, IShellContent
 
         // 两个过渡都在滚到底的页面上量不到：先强制画头图罩子的半程，再强制让纸面上沿走到标题栏正中。
         // 两次都走真正的 ApplyWash，读完再按实际滚动位置画回去。
-        var halfOffset = DetailHero.ArtHeight / 2;
-        var half = DetailHero.TopWash(halfOffset, true);
+        var halfOffset = BandHeight / 2;
+        var half = DetailHero.TopWash(halfOffset, true, BandHeight);
         ApplyWash(halfOffset, force: true);
         var (halfOk, halfHow) = ScrimPaint(half, tail);
 
@@ -533,12 +619,14 @@ public sealed partial class DetailPage : Page, IShellContent
         var (paperOk, paperHow) = PaperPaint(paperHalf, tail, sheet);
         PaintWash(force: true);
 
-        // 曲线读的得是屏上这道罩子：Core 那张表和 DetailPage.xaml 里那五个停点是同一组数的两份写法。
+        // 曲线读的得是屏上这道罩子：Core 那张表和它算出来的高是同一组数的两份写法。集页的带子收窄时罩子跟着
+        // 收（DetailHero.ScrimSpan），所以这里按屏上那一块的高和位置反算，不写死 440。
         var band = HeroScrim.ActualHeight;
         var inset = HeroBand.ActualHeight - band;
         var stops = HeroScrimBrush.GradientStops;
         var curve = band > 0 && stops.All(stop =>
-            Math.Abs(DetailHero.TopWash(inset + (stop.Offset * band), true) - (stop.Color.A / 255d)) < 0.005);
+            Math.Abs(DetailHero.TopWash(inset + (stop.Offset * band), true, BandHeight) - (stop.Color.A / 255d))
+                < 0.005);
 
         // 外壳那一层：有图就一层都不该有，见上面那段和 SyncTitleInk。
         var bare = trailBase is null;
@@ -573,15 +661,21 @@ public sealed partial class DetailPage : Page, IShellContent
 
         if (cover > 0) return PaperPaint(cover, tail, sheet);
 
-        var heroBottom = HeroBand.ActualHeight > 0 ? HeroBand.ActualHeight : DetailHero.ArtHeight;
+        var heroBottom = BandHeight;
         if (offset >= heroBottom)
         {
             var same = ReferenceEquals(TitleWash.Background, HeroTail.Background);
             return (same, same ? "黑色尾部经过，整条复用尾部画刷" : "黑色尾部经过，可标题栏不是同一支画刷");
         }
 
-        return ScrimPaint(DetailHero.TopWash(offset, true), tail);
+        return ScrimPaint(DetailHero.TopWash(offset, true, BandHeight), tail);
     }
+
+    /// <summary>
+    /// 头上那一格这一次多高。布好版面就读屏上那个，还没布好就读视图模型算出来的那个 —— 罩子的曲线、洗到
+    /// 多浓、尾部从哪儿开始，三处都得按同一个数算，见 <see cref="DetailHero.ScrimSpan"/>。
+    /// </summary>
+    private double BandHeight => HeroBand.ActualHeight > 0 ? HeroBand.ActualHeight : ViewModel.HeroHeight;
 
     /// <summary>逐个停点核对头图罩子的半透明黑，差一级就可能重新长出横缝。</summary>
     private (bool Ok, string How) ScrimPaint(double want, Color tail)
@@ -646,14 +740,15 @@ public sealed partial class DetailPage : Page, IShellContent
     /// 这一条只在这个位置上看得见。滚到 0 时标题栏那一条一点没洗；拉到底时它整条就是正文那张纸，也就看不出是
     /// 渐变；而那道横缝出在中间。
     /// <para>
-    /// 偏移和 <see cref="WashRead"/> 试画那一档用的是同一个数（<c>DetailHero.ArtHeight / 2</c>），所以这里拍下
-    /// 来的一张图和那一条读数说的是同一个版面，不是两个看着差不多的状态。
+    /// 偏移和 <see cref="WashRead"/> 试画那一档用的是同一个数（带子的一半高），所以这里拍下来的一张图和那一条
+    /// 读数说的是同一个版面，不是两个看着差不多的状态。读带子自己的高而不是 <c>DetailHero.ArtHeight</c>：集页
+    /// 的带子按里面那一叠实测给、比那一档矮，写死那一档就会拍到罩子的另一个位置。
     /// </para>
     /// </summary>
     internal void ScrollToWash()
     {
         Body.UpdateLayout();
-        Body.ScrollTo(0, DetailHero.ArtHeight / 2d, new ScrollingScrollOptions(ScrollingAnimationMode.Disabled));
+        Body.ScrollTo(0, BandHeight / 2, new ScrollingScrollOptions(ScrollingAnimationMode.Disabled));
     }
 
     /// <summary>
@@ -667,7 +762,7 @@ public sealed partial class DetailPage : Page, IShellContent
     /// </summary>
     internal async Task<string> ScrollToWashAsync()
     {
-        const double target = DetailHero.ArtHeight / 2d;
+        var target = BandHeight / 2;
 
         var room = await SettleExtentAsync(target).ConfigureAwait(true);
         ScrollToWash();
@@ -836,12 +931,81 @@ public sealed partial class DetailPage : Page, IShellContent
         _washedInk = false;
         PaintWash(force: true);
 
+        // 那一带集摆在图上还是纸上，也是复用实例那一路要显式说一遍的事：上一个条目可能是另一种页面，而这一次
+        // 的种类要等 Apply 才知道 —— 那时会再来一次通知（见 OnViewModelChanged）。
+        PlaceEpisodes(ViewModel.EpisodesOnScrim);
+
         _ = ViewModel.ReloadAsync();
     }
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs args)
     {
         if (args.PropertyName == nameof(DetailViewModel.HeroArt)) PaintWash(force: true);
+        if (args.PropertyName == nameof(DetailViewModel.EpisodesOnScrim))
+            PlaceEpisodes(ViewModel.EpisodesOnScrim);
+        if (args.PropertyName == nameof(DetailViewModel.SublineGenres)) PaintGenres();
+    }
+
+    /// <summary>
+    /// 自检：那一行类型真的一个一个点得动 —— 视图模型说有几个，屏上就得有几段 <c>Hyperlink</c>，而且每一段都
+    /// 挂着一个去处。
+    /// <para>
+    /// 值得读，是因为这一行是代码搭的（见 <see cref="PaintGenres"/>）：搭空了、或者只搭出中间那几个「·」，
+    /// 屏上是一行看着和以前一模一样的字，点下去什么都不发生 —— 截图挑不出错，别的读数一个都不会响。
+    /// 这一条目没有类型（服务器没给）时不判，只报：那一行本来就该是一行普通的字。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) GenreRead()
+    {
+        var wanted = ViewModel.SublineGenres;
+        if (wanted.Count == 0)
+            return (true, $"这一条目没有类型可点（{ViewModel.ItemType} 页，那一行是「{ViewModel.Subline}」）");
+
+        var links = GenreLine.Inlines.OfType<Hyperlink>().ToList();
+        var texts = links
+            .Select(link => string.Concat(link.Inlines.OfType<Run>().Select(run => run.Text)))
+            .ToList();
+
+        var drawn = GenreLine.Visibility == Visibility.Visible;
+        var same = texts.Count == wanted.Count && texts.SequenceEqual(wanted, StringComparer.Ordinal);
+
+        return (drawn && same,
+            $"那一行 {wanted.Count} 个类型，屏上 {links.Count} 段可点：{string.Join('、', texts)}"
+                + (drawn ? "" : "，可那一行没画出来")
+                + (same ? "" : $"，和视图模型那份对不上（要的是 {string.Join('、', wanted)}）"));
+    }
+
+    /// <summary>
+    /// 副标题那一行的类型，一个类型一个入口 —— 点一个就是一格「这个类型下的全部影片和剧集」。
+    /// <para>
+    /// 在代码里搭而不是绑出来：能点的内联元素只有 <see cref="Hyperlink"/>，而内联元素不是
+    /// <c>UIElement</c>，<c>ItemsControl</c> 装不了它们，<c>x:Bind</c> 也接不上它的 <c>Click</c>。
+    /// 换成一排按钮就要放弃那一行的样子（一行字、中间「·」隔开、超长省略号），而那一行紧贴在整页最大的
+    /// 片名底下，它多高、断在哪儿都是版面的事。
+    /// </para>
+    /// <para>
+    /// 不画下划线：这一行的字色、字号跟着 <see cref="DetailViewModel.SublineBrush"/> 走，和改之前一模一样，
+    /// 变的只有「指针移上去是一只手、按得下去」。分隔符那几段用普通 <c>Run</c>，所以它们不可点 —— 点在两个
+    /// 类型中间的空当上不该开出一格来。
+    /// </para>
+    /// </summary>
+    private void PaintGenres()
+    {
+        GenreLine.Inlines.Clear();
+
+        foreach (var genre in ViewModel.SublineGenres)
+        {
+            if (GenreLine.Inlines.Count > 0) GenreLine.Inlines.Add(new Run { Text = "  ·  " });
+
+            var link = new Hyperlink { UnderlineStyle = UnderlineStyle.None };
+            link.Inlines.Add(new Run { Text = genre });
+
+            // 捕获一份自己的：委托跑起来的时候循环那个变量已经走到下一个了。
+            var name = genre;
+            link.Click += (_, _) => ViewModel.OpenGenre(name);
+
+            GenreLine.Inlines.Add(link);
+        }
     }
 
     public void Release() => ViewModel.Cancel();
@@ -870,6 +1034,64 @@ public sealed partial class DetailPage : Page, IShellContent
     /// <see cref="ScrollView.ViewChanged"/> 不会再来一次，所以在这里主动重画标题栏。
     /// </summary>
     private void OnHeroTailSizeChanged(object sender, SizeChangedEventArgs e) => PaintWash(force: true);
+
+    /// <summary>
+    /// 带子里那一叠字和键有多高 —— 片名折成两行、窗口换窄都会变。集页那一格的高就是它，见
+    /// <see cref="DetailViewModel.HeroRoom"/>。
+    /// <para>
+    /// 那一叠是底对齐的，所以它的 <c>ActualHeight</c> 就是它自己要的高，不是这一格给它的高 —— 拉伸的那种
+    /// 量出来永远等于带子，带高也就永远等于当前值，一个自己咬着自己的数。上下那两道留白从那一格自己的外边距上
+    /// 取，不写死 44。海报也算进去：一张 16:9 剧照比那一叠矮，可短片名的条目上反过来。
+    /// </para>
+    /// </summary>
+    private void OnHeroStackSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var pad = HeroContent.Margin.Top + HeroContent.Margin.Bottom;
+        ViewModel.HeroRoom = Math.Max(HeroStack.ActualHeight, ViewModel.StillHeight) + pad;
+    }
+
+    /// <summary>
+    /// 同季那一带集摆在哪儿 —— 集页压在头图底下那段画面里（音轨那一行底下、剧情说明上面），别的页面摆在
+    /// 正文那张纸上。参考图上那两支往上的箭头加上「音频字幕和集数的位置调换」说的就是这件事。
+    /// <para>
+    /// 搬同一份 markup 而不是再复制一份：复制的那一版正是被退回的那一版。压在图上那一档还要去掉板底和外圈
+    /// （「去掉集列表的黑边」），并把牌子和卡片那两行字换成压在图上那套墨 —— 主题自己的墨在晴昼下是近黑色，
+    /// 压在那层黑罩子上就没了。回到纸上时用 <c>ClearValue</c> 把底和外圈还给样式，不是抄一份样式里的值。
+    /// </para>
+    /// </summary>
+    private void PlaceEpisodes(bool onScrim)
+    {
+        var host = onScrim ? HeroTail : (Panel)BodySheet;
+
+        if (EpisodePanel.Parent is Panel current && !ReferenceEquals(current, host))
+        {
+            current.Children.Remove(EpisodePanel);
+
+            // 图上那一档插在剧情说明前面，纸上那一档回到第一块（媒体信息紧跟在它后面，见 BodySheet 那段注释）。
+            var at = onScrim ? HeroTail.Children.IndexOf(OverviewPanel) : 0;
+            host.Children.Insert(at < 0 ? host.Children.Count : at, EpisodePanel);
+        }
+
+        if (onScrim)
+        {
+            EpisodePanel.Background = null;
+            EpisodePanel.BorderThickness = new Thickness(0);
+
+            // 上下那两道内边距在图上是纯粹的空气（没有板底可言），而第一屏就差这么二三十像素；左右留着，
+            // 这一带的字才和音轨、剧情说明落在同一条竖线上。
+            EpisodePanel.Padding = new Thickness(EpisodePanel.Padding.Left, 0, EpisodePanel.Padding.Right, 0);
+        }
+        else
+        {
+            // 板自己那几支，不是这一页（Control）继承来的同名依赖属性 —— 清错了那一带回到纸上就一直是光的。
+            EpisodePanel.ClearValue(Panel.BackgroundProperty);
+            EpisodePanel.ClearValue(StackPanel.BorderThicknessProperty);
+            EpisodePanel.ClearValue(StackPanel.PaddingProperty);
+        }
+
+        EpisodeHead.OnScrim = onScrim;
+        EpisodeStrip.OnScrim = onScrim;
+    }
 
     /// <summary>
     /// The second fact that has to travel from the view back to the view model: how tall this page's visible
@@ -933,11 +1155,7 @@ public sealed partial class DetailPage : Page, IShellContent
     private void PaintWash(bool force = false) => ApplyWash(Body.VerticalOffset, force);
 
     /// <summary>真正主题纸面在滚动内容里的纵坐标：头图带子加上黑色尾部的实测高度。</summary>
-    private double PaperOffset()
-    {
-        var hero = HeroBand.ActualHeight > 0 ? HeroBand.ActualHeight : ViewModel.HeroHeight;
-        return hero + HeroTail.ActualHeight;
-    }
+    private double PaperOffset() => BandHeight + HeroTail.ActualHeight;
 
     /// <summary>
     /// <see cref="PaintWash"/> 的后半截。接收滚动位置而不是单独一个浓度，因为浓度爬到顶（
@@ -947,12 +1165,12 @@ public sealed partial class DetailPage : Page, IShellContent
     private void ApplyWash(double offset, bool force)
     {
         var artwork = ViewModel.HeroArt;
-        var wash = DetailHero.TopWash(offset, artwork);
+        var wash = DetailHero.TopWash(offset, artwork, BandHeight);
         var paperTop = PaperOffset();
         var paperCover = artwork
             ? DetailHero.PaperCover(offset, paperTop, TitleWash.ActualHeight)
             : 0;
-        var heroBottom = HeroBand.ActualHeight > 0 ? HeroBand.ActualHeight : DetailHero.Height(artwork);
+        var heroBottom = BandHeight;
         var phase = !artwork ? 0
             : paperCover >= 1 ? 4
             : paperCover > 0 ? 3

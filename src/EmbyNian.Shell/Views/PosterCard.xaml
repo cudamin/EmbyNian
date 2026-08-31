@@ -259,15 +259,19 @@
 
         <!-- 片名一行、读数一行。左边距归零，字的左沿因此正好压在上面那根框线上 —— 场记板的标题和卡片带
              的标题都是这么对的，一页只有一条左沿。
-             第二行走等宽：它写的是「S02E09 · 剧名」「2024 · 3 季」这类读数，和详情页的信息行同一支字。 -->
+             第二行走等宽：它写的是「S02E09 · 剧名」「2024 · 3 季」这类读数，和详情页的信息行同一支字。
+             两行都有名字，因为 OnScrim 那一档要把样式换成压在图上的那一套（见 OnScrimProperty）：卡片站在
+             页面那张纸上时用主题墨，压在一张剧照上时用写死的浅墨。 -->
         <StackPanel Grid.Row="1" Margin="0,8,0,0">
             <TextBlock
+                x:Name="TitleLine"
                 MaxLines="1"
                 Style="{StaticResource EgBodyStyle}"
                 Text="{x:Bind Card.Title, Mode=OneWay}"
                 TextTrimming="CharacterEllipsis"
                 ToolTipService.ToolTip="{x:Bind Card.Title, Mode=OneWay}" />
             <TextBlock
+                x:Name="SubLine"
                 MaxLines="1"
                 Style="{StaticResource EgDataStyle}"
                 Text="{x:Bind Card.Subtitle, Mode=OneWay}"

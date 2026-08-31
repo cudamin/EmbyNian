@@ -102,6 +102,17 @@ public sealed partial class PosterCard : UserControl
         new PropertyMetadata(255d));
 
     /// <summary>
+    /// 这张卡压在一张剧照上，而不是站在页面那张纸上 —— 集页把同季那一带摆在头图底下的画面里
+    /// （见 <c>DetailPage.PlaceEpisodes</c>）。底下那两行字于是得换成压在图上那一套不随主题走的墨：
+    /// 主题自己的墨在晴昼（唯一那套浅色）下是近黑色，压在七成二的黑罩子上一个字都读不出来。
+    /// </summary>
+    public static readonly DependencyProperty OnScrimProperty = DependencyProperty.Register(
+        nameof(OnScrim),
+        typeof(bool),
+        typeof(PosterCard),
+        new PropertyMetadata(false, OnScrimChanged));
+
+    /// <summary>
     /// Tracked rather than read from <c>IsLoaded</c>: the two events below are the authority on when a
     /// recycled container is in the tree, and a field cannot disagree with them.
     /// </summary>
@@ -173,6 +184,29 @@ public sealed partial class PosterCard : UserControl
         set => SetValue(PosterHeightProperty, value);
     }
 
+    /// <inheritdoc cref="OnScrimProperty"/>
+    public bool OnScrim
+    {
+        get => (bool)GetValue(OnScrimProperty);
+        set => SetValue(OnScrimProperty, value);
+    }
+
+    /// <summary>
+    /// 底下那两行字换一套墨。换的是样式而不是画刷：压在图上那两支是写死的浅墨，可主题那两支是
+    /// <c>ThemeResource</c>，抄一份画刷引用过来就再也不跟着换主题了。两个键都 <c>BasedOn</c> 主题那一套，
+    /// 只改前景 —— 所以字体和字号在两种底上是同一份。
+    /// </summary>
+    private static void OnScrimChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
+    {
+        var card = (PosterCard)sender;
+        var scrim = (bool)args.NewValue;
+
+        card.TitleLine.Style = Ink(scrim ? "EgOnScrimBodyStyle" : "EgBodyStyle");
+        card.SubLine.Style = Ink(scrim ? "EgOnScrimDataStyle" : "EgDataStyle");
+
+        static Style Ink(string key) => (Style)Application.Current.Resources[key];
+    }
+
     private static void OnCardChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var card = (PosterCard)sender;
@@ -189,7 +223,25 @@ public sealed partial class PosterCard : UserControl
     {
         _live = true;
         _focus.Attach();
+
+        // 这张卡站在什么底上，问的是它所在的那条带（ShelfStrip.OnScrim）。上树这一刻问是唯一一定问得到的时机：
+        // 带那边翻开关时这张卡可能还没建出来，而建出来的那一刻它自己还没套上模板。找不到带就是别处用的卡片
+        // （媒体库那一格的网格），保持本来那一档。
+        if (Up<ShelfStrip>(this) is { } strip) OnScrim = strip.OnScrim;
+
         Begin();
+    }
+
+    /// <summary>往上找最近的一个 <typeparamref name="T"/>：卡片是模板里的内容，带在它外面好几层。</summary>
+    private static T? Up<T>(DependencyObject node) where T : DependencyObject
+    {
+        for (var current = VisualTreeHelper.GetParent(node); current is not null;
+            current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is T found) return found;
+        }
+
+        return null;
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)

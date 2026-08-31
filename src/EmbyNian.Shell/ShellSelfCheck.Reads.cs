@@ -29,15 +29,16 @@ internal static partial class ShellSelfCheck
     /// home page」 test is one copy too many.
     /// </summary>
     private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool BleedOk,
-        string Bleed) ReadHome(ShellPage shell)
+        string Bleed, bool? FoldOk, string Fold) ReadHome(ShellPage shell)
     {
         if (shell.Pages.Content is not HomePage home)
-            return (false, -1, "未读取", "未读取", false, "未读取", false, "未读取");
+            return (false, -1, "未读取", "未读取", false, "未读取", false, "未读取", false, "未读取");
 
         var (typeOk, type) = home.BannerType();
         var (bleedOk, bleed) = home.BleedRead();
+        var (foldOk, fold) = shell.ProbeHomeFold();
         return (shell.CurrentTag == "home", home.LoadedCount, home.ShelfSummary, home.BannerSummary, typeOk, type,
-            bleedOk, bleed);
+            bleedOk, bleed, foldOk, fold);
     }
 
     /// <summary>
@@ -232,11 +233,11 @@ internal static partial class ShellSelfCheck
 
         var model = page.ViewModel;
 
-        // Episodes counted across both scroll positions, cast at whichever one this is. The list at the top
-        // and the strip at the bottom cannot both be on screen, and an ItemsRepeater unbuilds what leaves
-        // its viewport — so the pre-scroll reading taken in ScrollDetail is the one that has seen 单集, and
-        // this one is the only one that ever sees 演职人员. Both of 单集's shapes are carried separately: the
-        // hidden one realises nothing, and that zero is the evidence this page kind picked the other.
+        // Episodes counted across both scroll positions, cast at whichever one this is. 单集 sits near the top
+        // of the paper and cast is at the bottom, and an ItemsRepeater unbuilds what leaves its viewport — so
+        // the pre-scroll reading taken in ScrollDetail is the one that has seen 单集, and this one is the only
+        // one that ever sees 演职人员. Both of 单集's shapes are carried separately: the hidden one realises
+        // nothing, and that zero is the evidence this page kind picked the other.
         var (rows, cards) = page.EpisodeShapes;
         var cast = page.Realised.Cast;
 

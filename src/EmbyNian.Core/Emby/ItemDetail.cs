@@ -145,10 +145,26 @@ public static class ItemDetail
     {
         if (item.Type == EmbyItemType.Episode) return EpisodeLabel(item);
 
-        if (item.Genres.Count > 0) return string.Join("  ·  ", item.Genres.Take(6));
+        if (item.Genres.Count > 0) return string.Join("  ·  ", SublineGenres(item));
 
         return item.Type == EmbyItemType.Season && item.SeriesName is { Length: > 0 } series ? series : "";
     }
+
+    /// <summary>
+    /// 副标题那一行里点得动的那几个类型 —— 详情页上那一行现在一个类型是一个入口（见
+    /// <c>IShellActions.OpenGenre</c>）。
+    /// <para>
+    /// 空表示这一行不是类型列表：单集页上它是「S2:E7 - 集名」，没有类型的季页上是剧名 —— 那两种照旧画一行
+    /// 普通的字。<see cref="Subline"/> 拿的是同一份，所以「最多几个」和「哪几个」两处不会分叉。
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> SublineGenres(EmbyItem item) =>
+        item.Type == EmbyItemType.Episode ? [] : [.. item.Genres.Take(SublineGenreLimit)];
+
+    /// <summary>
+    /// 那一行最多列几个类型。六个是版面给的：再多就要折行，而它上面就是整页最大的那行片名。
+    /// </summary>
+    private const int SublineGenreLimit = 6;
 
     /// <summary>
     /// 「S1:E2 - 旅途的终点」 — an episode named the way it is read in prose, wherever it is named: under

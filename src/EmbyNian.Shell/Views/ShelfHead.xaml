@@ -51,8 +51,10 @@
                 VerticalAlignment="Bottom" />
         </StackPanel>
 
-        <!-- 通栏线，ColumnSpan 2 —— 和场记板那条同一个样式键，只是离标题近一点。 -->
+        <!-- 通栏线，ColumnSpan 2 —— 和场记板那条同一个样式键，只是离标题近一点。压在图上那一档由
+             ShelfHead.OnScrim 换成浅墨压到三成半：主题那根边框线在剧照上是一条看不见的线。 -->
         <Border
+            x:Name="Rule"
             Grid.Row="1"
             Grid.ColumnSpan="2"
             Margin="0,6,0,0"

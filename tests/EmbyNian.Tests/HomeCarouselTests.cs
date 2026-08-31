@@ -16,6 +16,7 @@ internal static class HomeCarouselTests
         RegisterSlides();
         RegisterStep();
         RegisterHeight();
+        RegisterFoldHeight();
         RegisterText();
     }
 
@@ -122,8 +123,7 @@ internal static class HomeCarouselTests
 
         Test("轮播：上限跟着窗口高走，不是一个写死的数", () =>
         {
-            // 这条就是「调整窗口大小时候，轮播画面不会被裁切」的修法：上限从 560 这个绝对值换成窗口高的
-            // 一份额。同样形状的窗口于是给出同样形状的带子 —— 而带子的形状就是裁掉多少。
+            // 普通高度路径的上限从 560 这个绝对值换成窗口高的一份额。同样形状的窗口于是给出同样形状的带子。
             Assert.Equal(592d, HomeCarousel.Cap(800));
             Assert.Equal(1036d, HomeCarousel.Cap(1400));
 
@@ -149,11 +149,10 @@ internal static class HomeCarouselTests
                     $"窗口高 {window} 时带子吃掉了 {HomeCarousel.Height(window * 4, window)}");
         });
 
-        Test("轮播：锁住窗口比例之后，画面裁掉的那一份不再跟着窗口大小变", () =>
+        Test("轮播：普通高度规则在 8:5 窗口里仍按页宽计算", () =>
         {
-            // 用户报的就是这件事。锁定之后客户区是 8:5，带宽是客户区的宽减掉左边那条侧边栏（收起 48／
-            // 张开三百多），而这一条断言的是：这么算出来的带子永远正好是 2.2:1 —— 上限一次都不咬。
-            // 带子是 2.2:1，16:9 的剧照就永远只裁掉 19.2%，跟窗口是 900 宽还是 3800 宽无关。
+            // 这是还没量到首排时的普通 Height 路径，不是锁定主页最终使用的 FoldHeight。客户区是 8:5 时，
+            // 侧边栏无论收起还是展开，普通路径的上限都不会把按页宽算出的 2.2:1 带子再压矮。
             foreach (var rail in new[] { 0d, 49, 320 })
                 for (var window = 560d; window <= 2400; window += 10)
                 {
@@ -166,16 +165,15 @@ internal static class HomeCarouselTests
                     Assert.Equal(wanted, HomeCarousel.Height(width, window));
                 }
 
-            // 上面那一圈成立的条件写在这里，免得改了份额或者比例之后只剩一圈过不了的断言：份额必须压得住
-            // 「锁定比例 ÷ 带子比例」，而侧边栏只会让带子更矮，所以 rail = 0 是最紧的那一档。
+            // 这条是普通路径在 8:5 形状下的设计约束；严格首屏的货架边界由 RegisterFoldHeight 另测。
             Assert.True(
                 HomeCarousel.HeightShare > HomeCarousel.WindowAspect / HomeCarousel.Aspect,
                 $"份额 {HomeCarousel.HeightShare} 压不住 {HomeCarousel.WindowAspect / HomeCarousel.Aspect}");
         });
 
-        Test("轮播：不锁比例时上限咬住，可是咬住的那一档也只跟形状有关", () =>
+        Test("轮播：普通高度上限咬住时，同形窗口仍给出同形横幅", () =>
         {
-            // 不锁的时候一个又宽又矮的窗口还是会把带子压平 —— 那是没法两全的事。这里守的是另一半：压平多少
+            // 一个又宽又矮的窗口会把普通高度路径压平。这里守的是另一半：压平多少
             // 只跟窗口的形状有关，跟它多大无关。两个 2.4:1 的窗口，一个 1200 宽一个 2400 宽，带子形状一样。
             // 侧边栏那 48 像素不跟着窗口缩放，所以真到屏幕上还差一点点（1200 那档 3.11、2400 那档 3.18，也就是
             // 裁掉 42.9% 对 44.0%）；这里按带宽等于客户区宽来算，量的是这条规则本身。
@@ -215,6 +213,35 @@ internal static class HomeCarouselTests
                 Assert.True(drop >= 0, $"带高 {h} 时沉了 {drop}");
                 Assert.True(drop <= (h - HomeCarousel.MinHeight) / 2 + 0.001, $"带高 {h} 时沉了 {drop}，吃掉了下边的余量");
             }
+        });
+    }
+
+    private static void RegisterFoldHeight()
+    {
+        Test("轮播：锁定窗口把完整继续观看留在首屏", () =>
+        {
+            // 继续观看连同它上面的空隙实测占 293。客户区锁在 1.6:1 时，无论侧边栏给轮播留下 1232
+            // 还是 1032 的实际宽度，带高都只由视口减掉这一块，第一排下沿因此落在同一个位置。
+            Assert.Equal(507d, HomeCarousel.FoldHeight(1232, 800, 293, enabled: true));
+            Assert.Equal(507d, HomeCarousel.FoldHeight(1032, 800, 293, enabled: true));
+
+            // 副屏上那档同样成立，不是只替默认窗口凑出来的数。
+            Assert.Equal(372d, HomeCarousel.FoldHeight(1016, 665, 293, enabled: true));
+            Assert.Equal(372d, HomeCarousel.FoldHeight(816, 665, 293, enabled: true));
+        });
+
+        Test("轮播：锁定未启用或没有货架读数时保留原高度规则", () =>
+        {
+            Assert.Equal(HomeCarousel.Height(1232, 800), HomeCarousel.FoldHeight(1232, 800, 0, enabled: true));
+            Assert.Equal(HomeCarousel.Height(1232, 800), HomeCarousel.FoldHeight(1232, 800, 293, enabled: false));
+            Assert.Equal(HomeCarousel.Height(1232, 0), HomeCarousel.FoldHeight(1232, 0, 293, enabled: true));
+
+            // 严格首屏不能再套普通路径的 240 下限，否则大卡片在最小窗口里必然被截断。
+            Assert.Equal(62d, HomeCarousel.FoldHeight(600, 562.5, 500, enabled: true));
+
+            // 第一排恰好吃完整个视口时，0 是合法的最终横幅高度；页面不能把它误认成「还没量到」后
+            // 又恢复普通高度，否则两种高度会在 LayoutUpdated 之间来回振荡。
+            Assert.Equal(0d, HomeCarousel.FoldHeight(600, 560, 560, enabled: true));
         });
     }
 

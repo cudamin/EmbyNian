@@ -1,3 +1,4 @@
+using EmbyNian.Infrastructure;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using EmbyNian.Configuration;
@@ -101,6 +102,8 @@ public sealed partial class SettingsViewModel : PageViewModel
     private ISettingsService? _settings;
     private ShaderStaging? _shaders;
     private FontLibrary? _fonts;
+    private AppPaths? _paths;
+    private Platform.ISystemLauncher? _launcher;
     private MpvConfigLocation? _location;
     private SettingTextRow? _mpvConfigPath;
     private SettingTextRow? _inputConfigPath;
@@ -110,7 +113,7 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
     private static readonly string[] CardCategories =
-        ["播放器", "配置文件", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "界面"];
+        ["播放器", "配置文件", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "界面", "关于"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -188,16 +191,24 @@ public sealed partial class SettingsViewModel : PageViewModel
         section.Rows.Sum(row => row is SettingToggleGroupRow group ? 1 + group.Toggles.Count : 1);
 
     /// <summary>
-    /// The three capabilities this page needs, and nothing else: the settings document with its write-back,
-    /// the shader catalogue the 着色器 card offers, and the machine's fonts for the 字幕 card's picker. Named
-    /// rather than handed the whole composition root — a page that edits settings has no business being able
-    /// to reach the session or the player.
+    /// The capabilities this page needs, and nothing else: the settings document with its write-back, the
+    /// shader catalogue the 着色器 card offers, the machine's fonts for the 字幕 card's picker, and — for the
+    /// 关于 card — where this app keeps its files and how to show a folder. Named rather than handed the whole
+    /// composition root — a page that edits settings has no business being able to reach the session or the
+    /// player.
     /// </summary>
-    internal void Attach(ISettingsService settings, ShaderStaging shaders, FontLibrary fonts)
+    internal void Attach(
+        ISettingsService settings,
+        ShaderStaging shaders,
+        FontLibrary fonts,
+        AppPaths paths,
+        Platform.ISystemLauncher launcher)
     {
         _settings = settings;
         _shaders = shaders;
         _fonts = fonts;
+        _paths = paths;
+        _launcher = launcher;
     }
 
     /// <summary>
@@ -239,6 +250,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         Sections.Add(AudioCard());
         Sections.Add(ShaderCard());
         Sections.Add(InterfaceCard());
+        Sections.Add(AboutCard());
 
         ShowCategory(SelectedCategory);
         IsReady = true;
@@ -505,7 +517,7 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             // 这两个和上面那几块色板一样：写进设置之后当场喊一声（ShellPrefs），主窗口和外壳各自跟上。设置页
             // 是另一个窗口，手上没有主窗口的 HWND 也没有那一页，所以只能这么喊。
-            Toggle("锁定窗口比例大小", $"拖窗口边沿时保持 {Emby.HomeCarousel.WindowAspect:0.0}:1，主页轮播的大图不会被裁掉更多",
+            Toggle("锁定窗口比例大小", $"拖窗口边沿时保持 {Emby.HomeCarousel.WindowAspect:0.0}:1，主页首屏完整显示继续观看",
                 () => ui.LockWindowShape,
                 value =>
                 {
@@ -527,6 +539,41 @@ public sealed partial class SettingsViewModel : PageViewModel
             Number("海报宽度（像素）", 120, 340, () => ui.PosterWidth, value => ui.PosterWidth = value),
             Toggle("显示观看状态标记", "在海报角上显示已看和收藏状态", () => ui.ShowWatchedIndicators, value => ui.ShowWatchedIndicators = value)
         ]);
+    }
+
+    /// <summary>
+    /// 关于：这份程序是哪一版、拿哪个内核在放、它的东西放在磁盘上哪儿。
+    /// <para>
+    /// 在这张卡之前，版本号只写进日志和自检报告 —— 界面上一次都没出现过，所以「你用的是哪一版」这句话答不上来；
+    /// 而设置文件和缓存目录也没有一处能一键打开（诊断页那颗按钮只开日志）。三行读数由 Core 那边算
+    /// （<see cref="AboutFacts"/>，读不到就明说读不到），三行目录各带一颗按钮。
+    /// </para>
+    /// <para>
+    /// 没有 <see cref="AppPaths"/> 或者打不开资源管理器的时候（测试和自检的那一路）这张卡照旧建出来，只是那三颗
+    /// 按钮不画：一张空卡比一张会抛的卡好，而「这一版是哪一版」不该因为拿不到路径就说不出来。
+    /// </para>
+    /// </summary>
+    private SettingSection AboutCard()
+    {
+        var home = AppContext.BaseDirectory;
+        var rows = new List<SettingRow>
+        {
+            Fact("客户端版本", "改动记在 PROGRESS.md 里，版本号不随每次改动走", AboutFacts.Client),
+            Fact("构建时间", "这份 exe 落到磁盘上的时间", AboutFacts.BuiltAt(Path.Combine(home, "EmbyNian.exe"))),
+            Fact("播放内核", "这个文件的版本不要换", AboutFacts.PlaybackCore(home))
+        };
+
+        if (_paths is { } paths)
+        {
+            rows.Add(Fact("设置文件", "所有设置都在这一份 JSON 里，token 是 DPAPI 包过的", paths.SettingsFile,
+                "打开所在文件夹", () => _launcher?.OpenFolder(paths.Root)));
+            rows.Add(Fact("日志目录", "自检报告和界面树也在这儿", paths.LogDirectory,
+                "打开", () => _launcher?.OpenFolder(paths.LogDirectory)));
+            rows.Add(Fact("缓存目录", "海报和着色器缓存，删掉不会丢设置", Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root,
+                "打开", () => _launcher?.OpenFolder(Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root)));
+        }
+
+        return new SettingSection("关于", "关于", "版本、播放内核，和这个程序在磁盘上的几个位置。", rows);
     }
 
     /// <summary>
@@ -632,6 +679,13 @@ public sealed partial class SettingsViewModel : PageViewModel
             write(value);
             return value;
         }, Save, after);
+
+    /// <summary>
+    /// 一行读数，见 <see cref="SettingFactRow"/>。不接设置，所以不带 <see cref="Save"/> —— 它只是把一件事
+    /// 说出来，顺带给一个去处。
+    /// </summary>
+    private static SettingFactRow Fact(string label, string? note, string value, string? actionLabel = null, Action? act = null) =>
+        new(label, note, value, actionLabel, act);
 
     /// <summary>
     /// A text box holding a filesystem path. <see cref="Text"/> with one pair of surrounding double quotes

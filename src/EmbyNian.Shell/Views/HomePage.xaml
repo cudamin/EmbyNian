@@ -113,7 +113,12 @@
                     Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
                     Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
 
-                <ItemsRepeater ItemTemplate="{StaticResource ShelfTemplate}" ItemsSource="{x:Bind ViewModel.Shelves}">
+                <ItemsRepeater
+                    x:Name="ShelfRepeater"
+                    ItemTemplate="{StaticResource ShelfTemplate}"
+                    ItemsSource="{x:Bind ViewModel.Shelves}"
+                    LayoutUpdated="OnShelvesLayoutUpdated"
+                    SizeChanged="OnShelvesSizeChanged">
                     <ItemsRepeater.Layout>
                         <StackLayout Orientation="Vertical" Spacing="24" />
                     </ItemsRepeater.Layout>

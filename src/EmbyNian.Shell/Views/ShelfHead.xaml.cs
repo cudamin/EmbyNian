@@ -31,6 +31,18 @@ public sealed partial class ShelfHead : UserControl
         typeof(ShelfHead),
         new PropertyMetadata(null, OnTrailingChanged));
 
+    /// <summary>
+    /// 这块牌子压在一张剧照上，而不是站在页面那张纸上 —— 集页把同季那一带摆在头图底下的画面里
+    /// （见 <c>DetailPage.PlaceEpisodes</c>）。标题、读数和那条通栏线于是都换成压在图上那一套不随主题走的
+    /// 浅墨：主题自己的墨在晴昼（唯一那套浅色）下是近黑色，压在那层黑罩子上读不出来；而那条线用的
+    /// <c>EgBorderBrush</c> 在图上本来就是一条看不见的线。
+    /// </summary>
+    public static readonly DependencyProperty OnScrimProperty = DependencyProperty.Register(
+        nameof(OnScrim),
+        typeof(bool),
+        typeof(ShelfHead),
+        new PropertyMetadata(false, OnScrimChanged));
+
     public ShelfHead() => InitializeComponent();
 
     /// <summary>挂件那一格的 Visibility 监听票据，见 <see cref="OnTrailingChanged"/>。</summary>
@@ -56,6 +68,40 @@ public sealed partial class ShelfHead : UserControl
         get => GetValue(TrailingProperty);
         set => SetValue(TrailingProperty, value);
     }
+
+    /// <inheritdoc cref="OnScrimProperty"/>
+    public bool OnScrim
+    {
+        get => (bool)GetValue(OnScrimProperty);
+        set => SetValue(OnScrimProperty, value);
+    }
+
+    /// <summary>
+    /// 换那一套墨。标题和读数换样式（两个键都 <c>BasedOn</c> 主题那一套、只改前景，所以字体字号不变），
+    /// 那条线改成同一支浅墨压到三成半 —— 和头图尾部那条进度轨同一个写法，理由也一样。
+    /// </summary>
+    private static void OnScrimChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
+    {
+        var head = (ShelfHead)sender;
+        var scrim = (bool)args.NewValue;
+
+        head.TitleText.Style = Resource<Style>(scrim ? "EgOnScrimSectionTitleStyle" : "EgSectionTitleStyle");
+        head.NoteText.Style = Resource<Style>(scrim ? "EgOnScrimDataStyle" : "EgDataStyle");
+
+        if (scrim)
+        {
+            head.Rule.Background = Resource<Microsoft.UI.Xaml.Media.Brush>("EgOnScrimDimBrush");
+            head.Rule.Opacity = 0.35;
+            return;
+        }
+
+        // Border 自己那支，不是这个 UserControl 继承来的 Control.Background —— 两个是不同的依赖属性，
+        // 清错一个的症状是那条线在回到纸面之后一直是浅墨。
+        head.Rule.ClearValue(Border.BackgroundProperty);
+        head.Rule.ClearValue(OpacityProperty);
+    }
+
+    private static T Resource<T>(string key) => (T)Application.Current.Resources[key];
 
     private static void OnTitleChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args) =>
         SetLine(((ShelfHead)sender).TitleText, args.NewValue);

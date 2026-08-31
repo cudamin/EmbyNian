@@ -251,8 +251,14 @@
                          WashRead）：生成本身也会坏 —— 没赋上、画反、被样式盖掉。
                          末档是 #B8 而不是满黑 ——「太黑了都看不清背景」：满黑那一版把这一格下半和底下那段尾部
                          一起压死，整屏只剩黑，那张铺满页面的剧照白铺了。理由和这个数怎么来的写在
-                         DetailHero.ScrimCeiling 上（它由简介那行最淡的小字定），底下那块尾部必须同色。 -->
-                    <Border x:Name="HeroScrim" VerticalAlignment="Bottom">
+                         DetailHero.ScrimCeiling 上（它由简介那行最淡的小字定），底下那块尾部必须同色。
+                         高是绑上来的而不是 PaintScrim 里设死的 440：集页的带子按里面那一叠实测给、比 460 矮（见
+                         DetailViewModel.HeroHeight），罩子得跟着收，不然它从带子的上沿溢出去，而标题条上那层
+                         洗按收完的那一块算（DetailHero.ScrimSpan）—— 两边错开就是那道横缝。 -->
+                    <Border
+                        x:Name="HeroScrim"
+                        Height="{x:Bind ViewModel.ScrimHeight, Mode=OneWay}"
+                        VerticalAlignment="Bottom">
                         <Border.Background>
                             <LinearGradientBrush x:Name="HeroScrimBrush" StartPoint="0.5,0" EndPoint="0.5,1" />
                         </Border.Background>
@@ -265,7 +271,10 @@
                          左右 60 而不是页面那 28：这一块是压在剧照上的内容，边沿本就该留得比页面多（同主页大图
                          上那块字，理由写在 HomeBanner.xaml）。底下留 64 —— 图铺满一屏之后这一叠东西就站在窗口
                          的下沿上，贴着边读着像被截了一截。 -->
-                    <Grid Margin="60,28,60,64" ColumnSpacing="22">
+                    <Grid
+                        x:Name="HeroContent"
+                        ColumnSpacing="22"
+                        Margin="{x:Bind ViewModel.HeroInset, Mode=OneWay}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
@@ -287,7 +296,12 @@
                                 Stretch="UniformToFill" />
                         </Border>
 
-                        <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="10">
+                        <StackPanel
+                            x:Name="HeroStack"
+                            Grid.Column="1"
+                            SizeChanged="OnHeroStackSizeChanged"
+                            VerticalAlignment="Bottom"
+                            Spacing="10">
                             <!-- 「喜剧之王上面的那个电影太突兀了，删掉或者移动到别的地方」—— 这一栏原来的第一
                                  行是一行眉字（电影／剧集／单集），和标题裹在一个间距 2 的小壳里算一组。眉字删了，
                                  那层壳也跟着去了：一个只剩一个孩子的容器只会让下一个读它的人去找那个不存在的
@@ -336,7 +350,10 @@
 
                             <!-- 副标题：单集页上是「S2:E7 - 集名」，也就是人真正来看的那一行，所以字号、字重
                                  和字色都由 ViewModel 给（标题号 + SemiBold + 不压暗）；电影和剧上这一行是类型
-                                 列表，回到正文号、暗一档。 -->
+                                 列表，回到正文号、暗一档。
+                                 两个 TextBlock 一个位置，一次只画一个：类型那一行的每个类型都是点得动的
+                                 （Hyperlink，见 DetailPage.PaintGenres），而 Hyperlink 是内联元素、绑不出来，
+                                 只能在代码里搭。别的页面那一行是一句话，照旧一个绑定完事。 -->
                             <TextBlock
                                 FontSize="{x:Bind ViewModel.SublineFontSize, Mode=OneWay}"
                                 FontWeight="{x:Bind ViewModel.SublineFontWeight, Mode=OneWay}"
@@ -345,6 +362,14 @@
                                 Text="{x:Bind ViewModel.Subline, Mode=OneWay}"
                                 TextTrimming="CharacterEllipsis"
                                 Visibility="{x:Bind ViewModel.SublineVisibility, Mode=OneWay}" />
+
+                            <TextBlock
+                                x:Name="GenreLine"
+                                FontSize="{x:Bind ViewModel.SublineFontSize, Mode=OneWay}"
+                                Foreground="{x:Bind ViewModel.SublineBrush, Mode=OneWay}"
+                                MaxLines="1"
+                                TextTrimming="CharacterEllipsis"
+                                Visibility="{x:Bind ViewModel.GenreVisibility, Mode=OneWay}" />
 
                             <!-- 评分和那行读数：★ 后面跟等宽的分数，不再是一颗红色圆角药丸 —— 药丸是「徽章」
                                  的写法，而这里要的是仪表上的一个读数，况且那颗药丸的红色和「危险」共用一支
@@ -385,6 +410,7 @@
                                  六个键都绑命令，不再挂 Click。载入中命令自己就是灰的 —— 以前
                                  「换季的同时按播放」会把上一季选中的那一集播出去。 -->
                             <StackPanel
+                                x:Name="HeroActions"
                                 Margin="0,4,0,0"
                                 Orientation="Horizontal"
                                 Spacing="10">
@@ -516,7 +542,7 @@
                          SizeChanged 用来在简介展开、下拉显隐或窗口换宽之后重算真正纸面到标题栏的距离。 -->
                     <StackPanel
                         x:Name="HeroTail"
-                        Padding="28,28,28,8"
+                        Padding="{x:Bind ViewModel.TailInset, Mode=OneWay}"
                         SizeChanged="OnHeroTailSizeChanged"
                         Spacing="20">
 
@@ -689,6 +715,14 @@
                              页面自己的类型算（ItemDetail.EpisodesAsList），视图这边不判断类型 —— 四种页面共用
                              这一份 markup，上一次把判断写在这儿，给季页改的列表就连剧页和集页一起改掉了。
 
+                             集页上这一带不在这张纸上，而是压在头图底下那段画面里、排在音轨那一行和剧情说明
+                             之间 —— 「音频字幕和集数的位置调换」加上参考图上那两支往上的箭头。搬家由
+                             DetailPage.PlaceEpisodes 在运行时做（同一份 markup 换个父级），不是再复制一份：
+                             复制的那一版就是被退回的那一版 —— 它用负边距提进头图里压住了播放键，四周那圈板底
+                             压在剧照上就是一个黑框（「去掉集列表的黑边」）。压在图上那一档不画板底和外圈，
+                             牌子和卡片底下那两行字也换成压在图上那套不随主题走的墨（ShelfHead.OnScrim、
+                             PosterCard.OnScrim），否则晴昼那套浅色主题下它们会消失在黑罩子里。
+
                              季页读的是「这一季有哪些集」，所以一行一集：左边 16:9 剧照，右边「1. 集名」、
                              「日期 · 时长」和两行简介，正在打开的那一集左缘一条 accent 竖条。剧页和集页上这批集
                              只是旁边的邻居，横着一条、箭头一次翻一屏，不占着整页的高度 —— 代价是横卡放不下那两行
@@ -697,13 +731,14 @@
                              页面本身已经在 ScrollView 里，所以列表这边不套第二个滚动条；两边视口外的项都由
                              ItemsRepeater 自己回收，长季不会一次解码几十张图，收起来的那一种一张都不会解码。 -->
                         <StackPanel
+                            x:Name="EpisodePanel"
                             Style="{StaticResource EgBodyPanelStyle}"
                             Spacing="10"
                             Visibility="{x:Bind ViewModel.EpisodeVisibility, Mode=OneWay}">
                             <!-- 季下拉框挂在牌子右端那一格里（ShelfHead.Trailing），不再是自己开一个两列 Grid：
                                  读数、挂件、通栏线的横向关系是牌子的事，一带一带地重写一遍就会各自跑偏。这一带
                                  不报读数 —— 季数集数已经写在标题里了（「更多来自：第一季 · 12 集，已看 3 集」）。 -->
-                            <local:ShelfHead Title="{x:Bind ViewModel.EpisodeShelf.Title, Mode=OneWay}">
+                            <local:ShelfHead x:Name="EpisodeHead" Title="{x:Bind ViewModel.EpisodeShelf.Title, Mode=OneWay}">
                                 <local:ShelfHead.Trailing>
                                     <ComboBox
                                         AutomationProperties.Name="切换季"

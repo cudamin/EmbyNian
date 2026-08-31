@@ -207,6 +207,7 @@ public sealed partial class DetailViewModel : PageViewModel
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
     [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
     [NotifyPropertyChangedFor(nameof(HeroArtVisibility))]
     [NotifyPropertyChangedFor(nameof(HeroPlainVisibility))]
@@ -215,22 +216,75 @@ public sealed partial class DetailViewModel : PageViewModel
     /// <summary>
     /// 这一页看得见的那一段有多高，由视图在每次改尺寸时量给（<c>DetailPage.OnBodySizeChanged</c>）。它自己
     /// 不上屏，是 <see cref="BodyMinHeight"/> 的那个自变量：视口高只有布好的版面知道，而拿它算什么归这里。
+    /// <para>
+    /// 头上那一格不看它 —— 三种页面的带高都由内容给（见 <see cref="HeroHeight"/>）。跟着视口走过的两版，一版
+    /// 把片名和那排键压到窗口下沿（「图一页面怎么改的一大片空白」），一版在高窗口上把带子撑到 460 而那一叠只有
+    /// 两百来高（「集拉大窗口后会导致左上角空空的」）—— 同一个错的两种长相。
+    /// </para>
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
     public partial double Viewport { get; set; }
 
     /// <summary>
-    /// 头上那一格的高 —— 规则在 <see cref="DetailHero.Height"/>：有剧照一档、没有再矮一档，两档都跟窗口无关
-    /// （「图一页面怎么改的一大片空白，改回去」）。判据是 <see cref="HeroArt"/>，导航那一刻就已经知道。
+    /// 带子里那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测要占多高，由视图量给
+    /// （<c>DetailPage.OnHeroStackSizeChanged</c>）。集页那一格的高就是它，见
+    /// <see cref="DetailHero.EpisodeHeight"/>；别的页面不用它。
+    /// <para>
+    /// 量出来而不是写死：片名折成两行的条目、窄窗口上那一叠会长高，写死一个数就会在那些页面上把字和键挤出
+    /// 带子；而剧照比那一叠矮的条目上反过来 —— 写死的那个数在那些页面上就是一格空白。
+    /// </para>
     /// </summary>
-    public double HeroHeight => DetailHero.Height(HeroArt);
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
+    [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
+    public partial double HeroRoom { get; set; }
+
+    /// <summary>
+    /// 头上那一格的高，三种页面同一条规矩：高由站在它里面那一叠东西定，跟窗口无关（「图一页面怎么改的一大片
+    /// 空白，改回去」）。电影、剧、季走 <see cref="DetailHero.Height"/> —— 那两档 460／380 是手量出来的内容高，
+    /// 判据 <see cref="HeroArt"/> 在导航那一刻就知道，所以第一帧的版面就是最后的版面。
+    /// <para>
+    /// 集页量在运行时（<see cref="HeroRoom"/> → <see cref="DetailHero.EpisodeHeight"/>）：单集配的是一张 16:9
+    /// 剧照，比 2:3 海报矮一大截，那一叠字也少两行，跟着用 460 就等于在底对齐的那一叠头上留两百来像素只有画面
+    /// 的地方 —— 「集拉大窗口后会导致左上角空空的，画面不协调，电影那边处理的就很好」。
+    /// </para>
+    /// </summary>
+    public double HeroHeight => IsEpisodePage
+        ? DetailHero.EpisodeHeight(HeroRoom)
+        : DetailHero.Height(HeroArt);
+
+    /// <summary>
+    /// 同季那一带集摆在哪儿：集页压在头图底下那段画面里（音轨那一行底下、剧情说明上面），别的页面摆在正文
+    /// 那张纸上。<c>DetailPage.PlaceEpisodes</c> 照着它搬，两处的墨也照着它换。
+    /// </summary>
+    public bool EpisodesOnScrim => IsEpisodePage;
+
+    /// <summary>
+    /// 带子里那一叠字和键四周的留白。集页把底下那道 64 收到 16 —— 「为什么中间要留空，导致下方的剧情说明
+    /// 看不到？」：那 64 是给「这一格铺到窗口下沿」写的（贴着窗口边读着像被截了一截），可集页底下紧跟着音轨
+    /// 那一行和那一带集，于是它就是纯粹的空气，而下面的剧情说明正差这一截。别的页面照旧。
+    /// </summary>
+    public Thickness HeroInset => new(60, 28, 60, IsEpisodePage ? 16 : 64);
+
+    /// <summary>
+    /// 带子底下那一段的内边距。同 <see cref="HeroInset"/>：集页把上面那道 28 收到 12，那一叠键和「音频」
+    /// 之间因此只隔 28，和那一段里几块之间的 20 是同一个量级。
+    /// </summary>
+    public Thickness TailInset => new(28, IsEpisodePage ? 12 : 28, 28, 8);
+
+    /// <summary>
+    /// 带子下沿那道渐深罩子这一次有多高 —— <see cref="DetailHero.ScrimSpan"/>：带子收窄了它就跟着收，
+    /// 不然它会从带子的上沿溢出去，而标题条上那层洗（<see cref="DetailHero.TopWash"/>）算的是收完的那一块。
+    /// </summary>
+    public double ScrimHeight => DetailHero.ScrimSpan(HeroHeight);
 
     /// <summary>
     /// 正文那张纸的下限 —— 见 <see cref="DetailHero.BodyHeight"/>：内容短的页面上把看得见的那一段补满，
     /// 「滑到下面不用显示背景」靠的是这张纸真的盖住了背后那张图。
     /// </summary>
-    public double BodyMinHeight => DetailHero.BodyHeight(Viewport, HeroArt);
+    public double BodyMinHeight => DetailHero.BodyHeight(Viewport, HeroHeight);
 
     /// <summary>
     /// The file 播放 would start: the item itself for a film, the next unwatched episode for a show.
@@ -262,7 +316,29 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(NotFavoriteVisibility))]
     public partial bool Favorite { get; set; }
 
-    public Visibility SublineVisibility => Show(!string.IsNullOrWhiteSpace(Subline));
+    /// <summary>
+    /// 副标题那一行画的是一行字还是一排点得动的类型：有类型就是后者（见 <see cref="SublineGenres"/>），
+    /// 单集页和只剩剧名的季页还是前者。
+    /// </summary>
+    public Visibility SublineVisibility => Show(!string.IsNullOrWhiteSpace(Subline) && SublineGenres.Count == 0);
+
+    /// <inheritdoc cref="SublineVisibility"/>
+    public Visibility GenreVisibility => Show(SublineGenres.Count > 0);
+
+    /// <summary>
+    /// 那一行里点得动的几个类型。空的时候那一行照旧是一行字 —— 规则在
+    /// <see cref="ItemDetail.SublineGenres"/>，这里只是把它端上屏。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SublineVisibility))]
+    [NotifyPropertyChangedFor(nameof(GenreVisibility))]
+    public partial IReadOnlyList<string> SublineGenres { get; set; } = [];
+
+    /// <summary>
+    /// 点了一个类型：交给外壳开一格「这个类型下的全部影片和剧集」（<see cref="IShellActions.OpenGenre"/>）。
+    /// 视图那边把这一行的每一个类型接到这儿来，同卡片上的点击接到 <see cref="OpenCard"/>。
+    /// </summary>
+    internal void OpenGenre(string genre) => _actions?.OpenGenre(genre);
 
     /// <summary>
     /// 副标题的字号. On an episode page this line is 「S2:E7 - 集名」, which is the one thing the reader
@@ -749,6 +825,16 @@ public sealed partial class DetailViewModel : PageViewModel
         OnPropertyChanged(nameof(EpisodeListVisibility));
         OnPropertyChanged(nameof(EpisodeStripVisibility));
 
+        // 带子的高也跟着页面的种类走（集页按里面那一叠实测给，见 HeroHeight），那一带集摆在图上还是纸上同理。
+        // 同样是「条目的事」而不是「谁的值变了」：从一部电影翻到一集时 HeroArt 和视口都可能一个字没改，
+        // 那两处的通知一次都不会来。
+        OnPropertyChanged(nameof(HeroHeight));
+        OnPropertyChanged(nameof(ScrimHeight));
+        OnPropertyChanged(nameof(BodyMinHeight));
+        OnPropertyChanged(nameof(EpisodesOnScrim));
+        OnPropertyChanged(nameof(HeroInset));
+        OnPropertyChanged(nameof(TailInset));
+
         EpisodeFocus = 0;
 
         EpisodeShelf?.Clear();
@@ -763,6 +849,7 @@ public sealed partial class DetailViewModel : PageViewModel
         Title = ItemDetail.Title(item);
         TitleLink = ItemDetail.TitleTarget(item);
         Subline = ItemDetail.Subline(item);
+        SublineGenres = ItemDetail.SublineGenres(item);
         Score = ItemDetail.Score(item);
         Facts = ItemDetail.Facts(item);
         Directors = ItemDetail.Directors(item);

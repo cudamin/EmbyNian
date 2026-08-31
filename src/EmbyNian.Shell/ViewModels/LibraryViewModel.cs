@@ -33,6 +33,35 @@ public sealed record SortEntry(EmbySortOption? Option, bool IsChecked)
 }
 
 /// <summary>
+/// 一格筛选条：屏上那句话，加上点掉它这个动作。<see cref="FilterChip"/> 是 Core 那半（这一格是什么、点掉它
+/// 要动哪一处），这里加上的只有 <c>x:Bind</c> 要的那个命令。
+/// <para>
+/// 单独一个类型而不是直接把 <see cref="FilterChip"/> 摆上屏：那一格是 Core 里的一个记录，给它挂一个
+/// <c>RelayCommand</c> 就等于把 UI 的东西装进 Core。
+/// </para>
+/// </summary>
+public sealed partial class FilterChipRow
+{
+    private readonly Action<FilterChip> _drop;
+
+    internal FilterChipRow(FilterChip chip, Action<FilterChip> drop)
+    {
+        Chip = chip;
+        _drop = drop;
+    }
+
+    internal FilterChip Chip { get; }
+
+    public string Label => Chip.Label;
+
+    /// <summary>读屏软件念出来的那一句：光一个片名念不出「点它会怎样」。</summary>
+    public string AutomationName => $"去掉筛选：{Chip.Label}";
+
+    [RelayCommand]
+    private void Drop() => _drop(Chip);
+}
+
+/// <summary>
 /// A library, a folder, a season, a person's credits or a set of search results: one grid, whose only
 /// difference from the next is the <see cref="LibraryRequest"/> behind it.
 /// <para>
@@ -240,6 +269,14 @@ public sealed partial class LibraryViewModel : PageViewModel
     public partial int FilterCount { get; set; }
 
     public Visibility FilterBadgeVisibility => Show(FilterCount > 0);
+
+    /// <summary>
+    /// 工具栏底下那一行筛选条，一条筛选一格。见 <see cref="EmbyFilterBy.Chips"/>：那颗按钮上的数字说「筛了
+    /// 几条」，这一行说「筛的是哪几条」，而且每一格自己能被点掉。
+    /// </summary>
+    public ObservableCollection<FilterChipRow> FilterChips { get; } = [];
+
+    public Visibility FilterChipsVisibility => Show(FilterChips.Count > 0);
 
     /// <summary>
     /// Whether the letter bar belongs on this grid — Emby's own rule: name-ordered, and enough rows
@@ -937,6 +974,36 @@ public sealed partial class LibraryViewModel : PageViewModel
     {
         FilterCount = _filters.Count;
         FilterTooltip = FilterCount == 0 ? "筛选" : _filters.Describe();
+
+        // 工具栏底下那一行：一条筛选一格，点一下去掉那一条。整行重建而不是逐格对账 —— 一次改动最多动一格，
+        // 而这一行最长也就十几格，重建一遍比「哪一格该留」这道题便宜得多，也不会算错。
+        FilterChips.Clear();
+        foreach (var chip in EmbyFilterBy.Chips(_filters))
+            FilterChips.Add(new FilterChipRow(chip, DropFilter));
+
+        OnPropertyChanged(nameof(FilterChipsVisibility));
+    }
+
+    /// <summary>
+    /// 点掉一格筛选条。走的是面板打勾去勾的同一条路（<see cref="ApplyFilters"/>）：写进设置、重查、
+    /// 那颗按钮上的数跟着变。
+    /// </summary>
+    private void DropFilter(FilterChip chip)
+    {
+        chip.Remove(_filters);
+        ApplyFilters();
+    }
+
+    /// <summary>整行清空 —— 那一行末尾那颗键。</summary>
+    [RelayCommand]
+    private void ClearFilters()
+    {
+        if (_filters.IsBlank) return;
+
+        _filters.Toggles.Clear();
+        foreach (var list in EmbyFilterBy.Lists) _filters.Values(list.Key).Clear();
+
+        ApplyFilters();
     }
 
     /// <summary>
@@ -997,6 +1064,28 @@ public sealed partial class LibraryViewModel : PageViewModel
                 PersonId = personId,
                 Recursive = true,
                 IncludeItemTypes = ItemQuery.CreditedTypes,
+                SortBy = SortKey,
+                Descending = SortDescending,
+                StartIndex = start,
+                Limit = limit,
+                Filters = _filters
+            };
+        }
+
+        // 按类型浏览：一个类型横跨所有媒体库，所以没有 ParentId，全库递归加一个 Genres。排在文件夹那一支
+        // 前面，理由和演职人员那一支一样 —— 它也没有父级，落到下面就成了「服务器的媒体库列表」。
+        // 类型不进 Filters 而是走请求自己那一格：它是「这一页是什么」，不是「在这一页里再筛一下」，所以工具栏
+        // 底下那一行筛选条点不掉它 —— 点掉了这一页就没有身份了。
+        if (request.Genre is { Length: > 0 } genre)
+        {
+            return new ItemQuery
+            {
+                Genre = genre,
+                Recursive = true,
+
+                // 不含单集：一集继承整部剧的类型，带上它就是同一部剧在这一格里出现二十遍。音乐同理不在内
+                // （同搜索那一支）。
+                IncludeItemTypes = [EmbyItemType.Movie, EmbyItemType.Series, EmbyItemType.Video],
                 SortBy = SortKey,
                 Descending = SortDescending,
                 StartIndex = start,

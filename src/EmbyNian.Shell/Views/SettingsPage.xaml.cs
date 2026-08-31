@@ -1,3 +1,4 @@
+using EmbyNian.Infrastructure;
 using EmbyNian.Diagnostics;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
@@ -193,7 +194,9 @@ public sealed partial class SettingsPage : Page, IShellContent
             ViewModel.Attach(
                 request.Services.GetRequiredService<ISettingsService>(),
                 request.Services.GetRequiredService<ShaderStaging>(),
-                request.Services.GetRequiredService<FontLibrary>());
+                request.Services.GetRequiredService<FontLibrary>(),
+                request.Services.GetRequiredService<AppPaths>(),
+                request.Services.GetRequiredService<Platform.ISystemLauncher>());
             _ = ViewModel.ReloadAsync();
         }
 

@@ -62,10 +62,12 @@ Emby 访问令牌以 DPAPI 包裹存放。**绝不打印、绝不写进日志、
 
 ## Git
 
-- 没有远端。HEAD 在 `winui3-rewrite`。
-- `master` 用 `git push . winui3-rewrite:master` 前移，**不 checkout**；推之前先确认 `git merge-base --is-ancestor master winui3-rewrite` 成立、且 `winui3-rewrite..master` 是空的。
+- 远端 `origin` 是 `https://github.com/cudamin/EmbyNian.git`，**私有仓库**。凭据由这台机器的 Git Credential Manager 保管，不要把令牌写进命令、脚本或远端地址。
+- HEAD 在 `winui3-rewrite`，GitHub 上的默认分支也是它。
+- `master` 用 `git push . winui3-rewrite:master` 前移，**不 checkout**；推之前先确认 `git merge-base --is-ancestor master winui3-rewrite` 成立、且 `winui3-rewrite..master` 是空的。前移完两条一起推：`git push origin winui3-rewrite master`。
 - **不要 reset / checkout / 回退工作树里的迁移成果**（WinForms → WinUI 3 那一整次）。
 - 只在用户明确要求时提交。提交信息中文正文 + `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`。源码一律 LF。
+- 提交完顺手推到 `origin`，不用再问一遍（2026-09-01 用户定的）。没有定时任务，推送只跟在提交后面发生；未提交的工作区改动不入库、也不上传。
 
 ## 这台机器上的坑
 
@@ -73,7 +75,7 @@ Emby 访问令牌以 DPAPI 包裹存放。**绝不打印、绝不写进日志、
 - 没有 `python`。
 - PowerShell 脚本必须存成 **UTF-8 带 BOM**，否则中文输出乱码。
 - shell 里有个自定义的 `cut()` 函数会盖掉 `/usr/bin/cut`；要截断就用 `awk '{print substr($0,1,N)}'`。
-- 命令行开关（全部）：`--dump-ui`、`--maximized`、`--play`、`--screen`、`--scroll-end`、`--scroll-half`、`--self-check`、`--show-detail`、`--show-episode`、`--show-library`、`--show-settings`、`--theme`。
+- 命令行开关（全部）：`--dump-ui`、`--maximized`、`--play`、`--screen`、`--scroll-end`、`--scroll-half`、`--self-check`、`--show-detail`、`--show-episode`、`--show-library`、`--show-settings`（可跟一个分类名，如 `--show-settings 关于`，默认开在「界面」）、`--theme`。
 
 ## 怎么汇报
 

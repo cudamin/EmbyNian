@@ -63,7 +63,7 @@ internal static partial class ShellSelfCheck
     /// a time. Null when it never got that far.
     /// </summary>
     private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool BleedOk,
-        string Bleed)? _home;
+        string Bleed, bool? FoldOk, string Fold)? _home;
 
     /// <summary>
     /// 需求 6 的两处改动：what the home page's own cards offer under the pointer. Snapshotted with the
@@ -150,7 +150,7 @@ internal static partial class ShellSelfCheck
     /// <see cref="InfoState"/> is its own record: it belongs to a different page, and one of the two page
     /// kinds the user reported is exactly this one. Taken before <see cref="ShowInfo"/> scrolls away from it.
     /// </summary>
-    private static (string Type, int Rows, int Cards)? _fileEpisodesDrawn;
+    private static (string Type, int Models, int Rows, int Cards, bool ScreenOk, string Screen)? _fileEpisodesDrawn;
 
     /// <summary>
     /// 需求 4's name plate on the page of a file, kept apart from <see cref="_detail"/>'s reading for the
@@ -167,6 +167,13 @@ internal static partial class ShellSelfCheck
     /// 和 <see cref="_fileArtwork"/> 一样在 <see cref="ShowInfo"/> 里读 —— 那是这一页滚走之前的最后一拍。
     /// </summary>
     private static (string Type, bool Ok, string Detail)? _filePickers;
+
+    /// <summary>
+    /// 详情页那一行类型点不点得动。在剧页上量（<see cref="ScrollDetail"/> 那一拍）：那一行的每个类型都是一段
+    /// <c>Hyperlink</c>，而它们是代码搭的 —— 搭空了屏上就是一行普通的字，看着和以前一模一样，点下去什么都不
+    /// 发生，别的读数一个都不会响。
+    /// </summary>
+    private static (bool Ok, string Detail)? _detailGenres;
 
     /// <summary>
     /// 文件页上那张头图到底取回来解出来了没有。规则那一半由 <see cref="_fileArtwork"/> 判 —— 「集页面要用这个剧
@@ -763,6 +770,7 @@ internal static partial class ShellSelfCheck
 
         _detailScrolled = true;
         _detailEpisodesDrawn = page.EpisodeShapes;
+        _detailGenres = page.GenreRead();
         page.ScrollToEnd();
         return true;
     }
@@ -805,7 +813,14 @@ internal static partial class ShellSelfCheck
         _infoScrolled = true;
 
         var (rows, cards) = page.EpisodeShapes;
-        _fileEpisodesDrawn = (page.ViewModel.ItemType, rows, cards);
+        var (screenOk, screen) = page.FirstScreenRead();
+        _fileEpisodesDrawn = (
+            page.ViewModel.ItemType,
+            page.ViewModel.EpisodeShelf?.Cards.Count ?? 0,
+            rows,
+            cards,
+            screenOk,
+            screen);
         _fileArtwork = (page.ViewModel.ItemType, ReadArtwork(page, page.ViewModel));
 
         // 这一行也只有在这儿量得到：三个下拉都在头图尾巴上，滚下去看媒体信息表格之后它们就出了视口。

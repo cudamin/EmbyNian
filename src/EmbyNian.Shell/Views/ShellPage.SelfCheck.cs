@@ -14,6 +14,55 @@ public sealed partial class ShellPage
     internal sealed record TitleActionProbe(bool Ok, string Detail, double X, double Y, double Width, double Height);
 
     /// <summary>
+    /// 自检：侧边栏收起和展开时各量一次主页首屏。两档必须都完整放下继续观看，并且都不露出下一排媒体库。
+    /// </summary>
+    internal (bool? Ok, string Detail) ProbeHomeFold()
+    {
+        if (Pages.Content is not HomePage home) return (false, "当前不是主页");
+        if (_window is null) return (false, "量不到主窗口的比例锁定状态");
+        if (!_window.BrowseFoldActive)
+            return (null, "窗口比例锁定当前未接管浏览窗口，跳过首屏边界读数");
+
+        var paneWasOpen = Navigation.IsPaneOpen;
+
+        try
+        {
+            (bool? Ok, string Detail, double Width, bool Open) Read(bool open)
+            {
+                Navigation.IsPaneOpen = open;
+                SyncPane();
+
+                // HomeBanner 的 SizeChanged 会在这一轮布局里改高度，再走一轮让货架拿到最终坐标。
+                Navigation.UpdateLayout();
+                UpdateLayout();
+                home.UpdateLayout();
+                UpdateLayout();
+                var fold = home.FoldRead();
+                return (fold.Ok, fold.Detail, home.ActualWidth, Navigation.IsPaneOpen);
+            }
+
+            var folded = Read(false);
+            var spread = Read(true);
+            var detail = $"收起（页宽 {folded.Width:0}）：{folded.Detail}；"
+                + $"展开（页宽 {spread.Width:0}）：{spread.Detail}";
+            if (folded.Ok is null || spread.Ok is null) return (null, detail);
+
+            var stateOk = !folded.Open && spread.Open;
+            var expected = Navigation.OpenPaneLength - Navigation.CompactPaneLength;
+            var difference = folded.Width - spread.Width;
+            var widthOk = folded.Width > 0 && spread.Width > 0 && Math.Abs(difference - expected) <= 2;
+            return (folded.Ok == true && spread.Ok == true && stateOk && widthOk,
+                detail + $"；两档宽差 {difference:0}（应约 {expected:0}）");
+        }
+        finally
+        {
+            Navigation.IsPaneOpen = paneWasOpen;
+            SyncPane();
+            UpdateLayout();
+        }
+    }
+
+    /// <summary>
     /// 把这一排按键的几种状态各摆一遍，量出来对一遍：折叠侧边栏、设置、搜索三颗任何时候都按得动；两头都走不
     /// 动时两支箭头都在、都是暗的；能退不能进时只有返回亮；两样都能走又有两层路径时，两支箭头加面包屑那一行。
     /// 侧边栏收放两档也各摆一遍，量整排让开了没有；顺带问一句现场：进来的时候侧边栏本来就该是收着的。

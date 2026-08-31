@@ -13,7 +13,10 @@ using Windows.Foundation;
 namespace EmbyNian.Shell.Views;
 
 /// <summary>What <see cref="HomePage"/> needs; see <see cref="LibraryRequest"/> for why it is passed.</summary>
-internal sealed record HomeRequest(IServiceProvider Services, IReadOnlyList<EmbyItem> LibraryViews);
+internal sealed record HomeRequest(
+    IServiceProvider Services,
+    IReadOnlyList<EmbyItem> LibraryViews,
+    Windowing.HostWindow? Window);
 
 /// <summary>
 /// The home page's view. All of it: what is left here is the three translations XAML cannot do for
@@ -34,6 +37,8 @@ public sealed partial class HomePage : Page, IShellContent
     /// </summary>
     private EmbySession? _session;
     private IShellActions? _actions;
+    private Windowing.HostWindow? _window;
+    private bool _lockWindowShape;
 
     /// <summary>
     /// 自检那一条「点卡片不挪页」的现场：按焦点之前这一页停在哪儿（-1 是还没按过）、焦点交出去了没有、这一页
@@ -111,6 +116,102 @@ public sealed partial class HomePage : Page, IShellContent
 
         return (ok, $"起点 ({at.X:0},{at.Y:0})、{Hero.ActualWidth:0}×{Hero.ActualHeight:0}"
             + $"，右沿 {right:0} 对窗口宽 {window:0}");
+    }
+
+    /// <summary>
+    /// 自检：主页首屏完整放下继续观看，同时让下一排媒体库从视口外开始。只有这两排都存在时才有得量；一个从未
+    /// 播放过任何内容的账号没有继续观看，那是正常数据，不该把版式自检判红。
+    /// </summary>
+    internal (bool? Ok, string Detail) FoldRead()
+    {
+        if (ViewModel.Shelves.Count < 2
+            || ViewModel.Shelves[0].Title != "继续观看"
+            || ViewModel.Shelves[1].Title != "媒体库")
+        {
+            return (null, "这次没有连续的继续观看、媒体库两排，跳过首屏边界读数");
+        }
+
+        if (XamlRoot is not { } root || root.Size.Height <= 0)
+            return (false, "量不到窗口视口高度");
+
+        var first = ShelfRepeater.TryGetElement(0) ?? ShelfRepeater.GetOrCreateElement(0);
+        var second = ShelfRepeater.TryGetElement(1) ?? ShelfRepeater.GetOrCreateElement(1);
+        UpdateLayout();
+        UpdateLayout();
+
+        if (first is not FrameworkElement continueShelf || second is not FrameworkElement libraryShelf)
+            return (false, "两排货架没有生成可测量的根元素");
+
+        static double Top(FrameworkElement element) =>
+            element.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+
+        var viewport = root.Size.Height;
+        var continueTop = Top(continueShelf);
+        var continueBottom = continueTop + continueShelf.ActualHeight;
+        var libraryTop = Top(libraryShelf);
+        var continueVisible = continueTop >= -0.5 && continueBottom <= viewport + 0.5;
+        var libraryHidden = libraryTop >= viewport - 0.5;
+        var cards = new List<PosterCard>();
+        Collect(continueShelf, cards);
+        var drawnCards = cards
+            .Where(card => card.Visibility == Visibility.Visible && card.ActualWidth > 0.5 && card.ActualHeight > 0.5)
+            .ToArray();
+        var cardsVisible = drawnCards.Any(card =>
+        {
+            var top = Top(card);
+            return top >= -0.5 && top + card.ActualHeight <= viewport + 0.5;
+        });
+        var shelfReady = continueShelf.ActualHeight >= ViewModel.Shelves[0].RowHeight
+            && drawnCards.Length > 0
+            && cardsVisible;
+
+        return (continueVisible && libraryHidden && shelfReady,
+            $"继续观看 {continueTop:0}–{continueBottom:0}，媒体库从 {libraryTop:0} 起，视口 0–{viewport:0}；"
+                + $"继续观看{(continueVisible ? "完整" : "被截断")}、实绘 {drawnCards.Length} 张"
+                + (cardsVisible ? "（卡片完整在视口内）" : "（没有完整卡片在视口内）") + "，"
+                + $"媒体库{(libraryHidden ? "未露出" : "已经露出")}");
+    }
+
+    private void OnShelvesSizeChanged(object sender, SizeChangedEventArgs e) => SyncBannerFold();
+
+    // Busy/notice rows collapsing moves the shelves without resizing them. Re-read their position after layout too.
+    private void OnShelvesLayoutUpdated(object sender, object e) => SyncBannerFold();
+
+    /// <summary>
+    /// 把第一排真正画出来的高度交给轮播。间距不抄 XAML 里的 24，而是量 Hero 下沿到货架上沿的实际距离；以后
+    /// 那处留白改了，这里不会继续拿旧数把媒体库顶进首屏。
+    /// </summary>
+    private void SyncBannerFold()
+    {
+        var foldEnabled = _lockWindowShape && _window?.BrowseFoldActive == true;
+        Banner.SetFoldEnabled(foldEnabled);
+
+        if (ViewModel.Shelves.Count == 0
+            || ViewModel.Shelves[0].Title != "继续观看"
+            || ShelfRepeater.TryGetElement(0) is not FrameworkElement first
+            || first.ActualHeight <= 0)
+        {
+            Banner.SetBelowFold(0);
+            Hero.MinHeight = 0;
+            Slate.Visibility = Visibility.Visible;
+            return;
+        }
+
+        static double Top(FrameworkElement element) =>
+            element.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+
+        var gap = Math.Max(0, Top(first) - (Top(Hero) + Hero.ActualHeight));
+        var belowFold = gap + first.ActualHeight;
+        Banner.SetBelowFold(belowFold);
+
+        // 没有宽图时 HomeBanner 整体收起，不能再由它的 Root.Height 留住首屏边界。严格模式改由 Hero
+        // 自己占据同一份剩余高度：上面仍是普通主页标题，继续观看完整落下，下一排从视口外开始。
+        Hero.MinHeight = foldEnabled && Banner.Visibility != Visibility.Visible && XamlRoot is { } root
+            ? Math.Max(0, root.Size.Height - belowFold)
+            : 0;
+        Slate.Visibility = Banner.Visibility == Visibility.Visible && Banner.Compact
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     /// <summary>
@@ -218,6 +319,7 @@ public sealed partial class HomePage : Page, IShellContent
         }
 
         _request = request;
+        _window = request.Window;
         Tag = "home";
 
         // The one place this page resolves anything. It is deliberately a single block: it is the line
@@ -226,13 +328,19 @@ public sealed partial class HomePage : Page, IShellContent
         var services = request.Services;
         _session = services.GetRequiredService<EmbySession>();
         _actions = services.GetRequiredService<IShellActions>();
+        var settings = services.GetRequiredService<ISettingsService>();
+        _lockWindowShape = settings.Settings.Ui.LockWindowShape;
 
         ViewModel.Attach(
             _actions,
             request.LibraryViews,
-            services.GetRequiredService<ISettingsService>(),
+            settings,
             _session,
             services.GetRequiredService<EmbyImageStore>());
+
+        ShellPrefs.Changed -= OnShellPrefsChanged;
+        ShellPrefs.Changed += OnShellPrefsChanged;
+        SyncBannerFold();
 
         // 标题栏那几颗按钮要知道自己站在哪种底上。现在说一遍（回到这一页时那些幻灯片可能已经在手上了），
         // 之后每次那一块从「一张图」变成「页面的底色」或者反过来时再说一遍。
@@ -251,12 +359,22 @@ public sealed partial class HomePage : Page, IShellContent
     /// <summary>这一页顶上那一块：那条大图铺到窗口顶边就是一张剧照，没有幻灯片时是页面自己的底色。</summary>
     private TitleStrip Strip() => ViewModel.HeroFilled ? TitleStrip.OnScrim : TitleStrip.Plain;
 
-    public void Release() => ViewModel.Cancel();
+    private void OnShellPrefsChanged(Configuration.UiSettings ui)
+    {
+        _lockWindowShape = ui.LockWindowShape;
+        SyncBannerFold();
+    }
+
+    public void Release()
+    {
+        ViewModel.PropertyChanged -= OnViewModelChanged;
+        ShellPrefs.Changed -= OnShellPrefsChanged;
+        ViewModel.Cancel();
+    }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         // 走出这一页，顶上那一块就是别的页面自己的底色了 —— 那几颗按钮得把墨还回来。
-        ViewModel.PropertyChanged -= OnViewModelChanged;
         _actions?.SetTitleStrip(TitleStrip.Plain);
 
         Release();

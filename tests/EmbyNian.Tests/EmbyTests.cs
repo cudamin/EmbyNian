@@ -493,6 +493,54 @@ internal static class EmbyTests
     /// </summary>
     private static void RegisterFilters()
     {
+        // 工具栏底下那一行筛选条：那颗按钮上的数字说「筛了几条」，这一行说「筛的是哪几条」，而且每一格能被
+        // 点掉。两句话必须对得上，所以这里逐条比的是「格数 = 那个数」和「点掉一格只掉一条」。
+        Test("筛选条：一条筛选一格，顺序跟面板一样", () =>
+        {
+            var filters = new ItemFilters();
+            filters.Toggles.Add("favorite");
+            filters.Toggles.Add("unplayed");
+            filters.Genres.Add("动画");
+            filters.Years.Add("2019");
+            filters.Tags.Add("剧场版");
+
+            var chips = EmbyFilterBy.Chips(filters);
+
+            // 开关按目录顺序（未播放在收藏前面），不是按点的顺序；三张列表按面板顺序：类型、标签、年份。
+            Assert.Equal("未播放,收藏,类型：动画,标签：剧场版,年份：2019",
+                string.Join(',', chips.Select(chip => chip.Label)));
+            Assert.Equal(filters.Count, chips.Count);
+        });
+
+        Test("筛选条：点掉一格只掉那一条", () =>
+        {
+            var filters = new ItemFilters();
+            filters.Toggles.Add("favorite");
+            filters.Genres.Add("动画");
+            filters.Genres.Add("科幻");
+
+            var chips = EmbyFilterBy.Chips(filters);
+            chips.First(chip => chip.Label == "类型：动画").Remove(filters);
+
+            Assert.Equal("收藏,类型：科幻", string.Join(',', EmbyFilterBy.Chips(filters).Select(chip => chip.Label)));
+            Assert.Equal(2, filters.Count);
+
+            chips.First(chip => chip.Label == "收藏").Remove(filters);
+            Assert.Equal("类型：科幻", string.Join(',', EmbyFilterBy.Chips(filters).Select(chip => chip.Label)));
+        });
+
+        Test("筛选条：认不出来的开关不出格，和那个数字一致", () =>
+        {
+            var filters = new ItemFilters();
+            filters.Toggles.Add("这是以后的版本写进来的");
+            filters.Toggles.Add("favorite");
+
+            // 一格点不掉又说不出名字的筛选条比不出更糟 —— Count 也不数它，两处于是同一个答案。
+            Assert.Equal(1, EmbyFilterBy.Chips(filters).Count);
+            Assert.Equal(filters.Count, EmbyFilterBy.Chips(filters).Count);
+            Assert.Equal(0, EmbyFilterBy.Chips(new ItemFilters()).Count);
+        });
+
         Test("筛选：目录本身是自洽的", () =>
         {
             foreach (var option in EmbyFilterBy.All)
