@@ -105,14 +105,24 @@ public sealed class RingBufferLogSink : ILogSink
     }
 }
 
-/// <summary>Appends to a per-day file and prunes files older than <paramref name="retainDays"/>.</summary>
-public sealed class FileLogSink : ILogSink
+/// <summary>
+/// Appends to a per-day file and prunes files older than <paramref name="retainDays"/>.
+/// <para>
+/// The handle stays open. Every line used to be a <see cref="File.AppendAllText"/> of its own — open the
+/// file, seek to the end, write, close — tens of thousands of times a day, on whichever thread happened
+/// to log, including the UI thread during a scroll. Holding one handle costs one handle and buys all of
+/// that back. <see cref="StreamWriter.AutoFlush"/> stays on, because the tail of the log is exactly what
+/// must survive when the thing being debugged takes the process down with it; the file is opened
+/// shareable so tail viewers, and the next run's prune, are not locked out.
+/// </para>
+/// </summary>
+public sealed class FileLogSink : ILogSink, IDisposable
 {
     private readonly string _directory;
     private readonly object _gate = new();
     private readonly LogLevel _minimum;
     private DateOnly _currentDay;
-    private string? _currentPath;
+    private StreamWriter? _writer;
 
     public FileLogSink(string directory, LogLevel minimum = LogLevel.Debug, int retainDays = 14)
     {
@@ -131,21 +141,62 @@ public sealed class FileLogSink : ILogSink
             try
             {
                 var day = DateOnly.FromDateTime(entry.Timestamp.LocalDateTime);
-                if (_currentPath is null || day != _currentDay)
-                {
-                    _currentDay = day;
-                    _currentPath = Path.Combine(_directory, $"app-{day:yyyyMMdd}.log");
-                }
+                if (_writer is null || day != _currentDay) Open(day);
 
-                File.AppendAllText(_currentPath, line + Environment.NewLine);
+                _writer!.WriteLine(line);
             }
             catch (IOException)
             {
-                // Logging must never break the app.
+                // Logging must never break the app. Drop the handle so the next line opens a fresh one:
+                // the usual causes — the file deleted underneath us, a full disk — are ones a reopen
+                // recovers from, and a writer that has already faulted never writes again.
+                Close();
             }
             catch (UnauthorizedAccessException)
             {
+                Close();
             }
+        }
+    }
+
+    /// <summary>
+    /// Closes the file. Nothing in the app does — the sink lives as long as the process and
+    /// <see cref="StreamWriter.AutoFlush"/> means there is nothing buffered to lose — but a handle owner
+    /// that cannot be closed is a handle leak in anything with a shorter life than a process, tests
+    /// included.
+    /// </summary>
+    public void Dispose()
+    {
+        lock (_gate) Close();
+    }
+
+    /// <summary>
+    /// Switches to one day's file, closing the previous day's first so a run that crosses midnight does
+    /// not hold yesterday's handle for the rest of its life.
+    /// </summary>
+    private void Open(DateOnly day)
+    {
+        Close();
+        _currentDay = day;
+        var path = Path.Combine(_directory, $"app-{day:yyyyMMdd}.log");
+        var stream = new FileStream(path, FileMode.Append, FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+        _writer = new StreamWriter(stream) { AutoFlush = true };
+    }
+
+    private void Close()
+    {
+        try
+        {
+            _writer?.Dispose();
+        }
+        catch (IOException)
+        {
+            // A failed flush on the way out is not worth taking anything down for.
+        }
+        finally
+        {
+            _writer = null;
         }
     }
 

@@ -69,6 +69,10 @@ dotnet run --project .\tests\EmbyNian.Tests\EmbyNian.Tests.csproj
 `-Msix`；脚本会在 Windows SDK 找到 `makeappx.exe` 时生成未签名的
 `artifacts\EmbyNian-3.0.0-win-x64.msix`，否则明确报出安装 SDK 的提示。
 
+改完代码只是要一个能跑的 exe 时传 `-NoArchive`：跳过打包那一步，同一次发布从一两分钟降到二十来秒
+（375 MB 压成 148 MB 的 zip 就是那一两分钟）。上一次的 zip 照旧先删 —— 一个跟刚发布的目录对不上的
+压缩包比没有压缩包更坏。交付前照旧不带这个开关：那个 zip 才是交出去的东西。
+
 发布需要仓库根目录的匹配版 `libmpv-2.dll`，以及 `C:\mpv_config-2026.08.12\portable_config\shaders`；
 配置不在该路径时用 `-MpvRoot <目录>` 指定包含 `portable_config\shaders` 的目录。
 

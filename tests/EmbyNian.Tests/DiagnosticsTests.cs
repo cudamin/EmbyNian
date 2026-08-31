@@ -8,6 +8,11 @@ namespace EmbyNian.Tests;
 /// is checked by <c>--self-check</c> instead, but everything it reads from — the ring buffer's ordering,
 /// its capacity and its <see cref="RingBufferLogSink.Written"/> event — is plain synchronous code and
 /// belongs here, where a failure names the reason instead of showing up as an empty log panel.
+/// <para>
+/// The file sink is here for a different reason: it holds a handle open for the life of the process, and
+/// the two things that buys — the tail readable before the writer closes, a new file after midnight —
+/// are invisible until the day someone needs the log of a crash.
+/// </para>
 /// </summary>
 internal static class DiagnosticsTests
 {
@@ -18,6 +23,7 @@ internal static class DiagnosticsTests
         RegisterRingBuffer();
         RegisterWrittenEvent();
         RegisterEntryText();
+        RegisterFileSink();
     }
 
     // ---- 环形缓冲 --------------------------------------------------------------
@@ -167,6 +173,126 @@ internal static class DiagnosticsTests
         });
     }
 
+    // ---- 落盘的日志 ------------------------------------------------------------
+
+    private static void RegisterFileSink()
+    {
+        Test("磁盘日志：写进当天那个文件，一行一条", () => InTempDirectory(directory =>
+        {
+            var now = DateTimeOffset.Now;
+            using (var sink = new FileLogSink(directory))
+            {
+                sink.Write(Entry("第一条", LogLevel.Info, now));
+                sink.Write(Entry("第二条", LogLevel.Warn, now));
+            }
+
+            var lines = File.ReadAllLines(LogPath(directory, now));
+            Assert.Equal(2, lines.Length);
+            Assert.Contains("第一条", lines[0]);
+            Assert.Contains("第二条", lines[1]);
+        }));
+
+        Test("磁盘日志：句柄还开着的时候就已经读得到", () => InTempDirectory(directory =>
+        {
+            var now = DateTimeOffset.Now;
+            using var sink = new FileLogSink(directory);
+            sink.Write(Entry("崩之前最后一句", LogLevel.Error, now));
+
+            // 这一条钉的是这次改动的要害：句柄常开省掉了每行一次的开关文件，但日志的用处正在于进程被
+            // 它自己在查的那个毛病带走时最后那几行还在盘上。所以必须是「写完立刻可读」，不能等关闭。
+            Assert.Contains("崩之前最后一句", ReadWhileOpen(LogPath(directory, now)));
+        }));
+
+        Test("磁盘日志：低于门槛的那些不落盘", () => InTempDirectory(directory =>
+        {
+            var now = DateTimeOffset.Now;
+            using (var sink = new FileLogSink(directory, LogLevel.Warn))
+            {
+                sink.Write(Entry("啰嗦话", LogLevel.Debug, now));
+                sink.Write(Entry("平常话", LogLevel.Info, now));
+                sink.Write(Entry("要紧话", LogLevel.Warn, now));
+            }
+
+            var text = File.ReadAllText(LogPath(directory, now));
+            Assert.Contains("要紧话", text);
+            Assert.DoesNotContain("啰嗦话", text);
+            Assert.DoesNotContain("平常话", text);
+        }));
+
+        Test("磁盘日志：跨过午夜就换一个文件", () => InTempDirectory(directory =>
+        {
+            var now = DateTimeOffset.Now;
+            var yesterday = now.AddDays(-1);
+            using (var sink = new FileLogSink(directory))
+            {
+                sink.Write(Entry("昨天的", LogLevel.Info, yesterday));
+                sink.Write(Entry("今天的", LogLevel.Info, now));
+            }
+
+            // 一直开着一个句柄的代价就是这个：换天时要真的换文件。写串了的话，通宵跑的那一遍会把第二天
+            // 全部记进前一天的文件里。
+            Assert.Contains("昨天的", File.ReadAllText(LogPath(directory, yesterday)));
+            Assert.Contains("今天的", File.ReadAllText(LogPath(directory, now)));
+        }));
+
+        Test("磁盘日志：过期的旧日志开机时清掉", () => InTempDirectory(directory =>
+        {
+            Directory.CreateDirectory(directory);
+            var stale = Path.Combine(directory, "app-20250101.log");
+            var fresh = Path.Combine(directory, "app-20260830.log");
+            File.WriteAllText(stale, "很久以前");
+            File.WriteAllText(fresh, "前几天");
+            File.SetLastWriteTime(stale, DateTime.Now.AddDays(-30));
+            File.SetLastWriteTime(fresh, DateTime.Now.AddDays(-2));
+
+            using var sink = new FileLogSink(directory, LogLevel.Debug, retainDays: 14);
+
+            Assert.False(File.Exists(stale), "过了保留期的该删");
+            Assert.True(File.Exists(fresh), "保留期内的不能连坐");
+        }));
+    }
+
     private static LogEntry Entry(string message) =>
         new(DateTimeOffset.Now, LogLevel.Info, Category, message, null);
+
+    private static LogEntry Entry(string message, LogLevel level, DateTimeOffset when) =>
+        new(when, level, Category, message, null);
+
+    /// <summary>
+    /// Runs a case against a directory of its own and takes it away afterwards. Every sink inside has to
+    /// be disposed before the body returns, or the directory cannot be removed on Windows.
+    /// </summary>
+    private static void InTempDirectory(Action<string> body)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "EmbyNian-日志-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            body(directory);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    private static string LogPath(string directory, DateTimeOffset when) =>
+        Path.Combine(directory, $"app-{when.LocalDateTime:yyyyMMdd}.log");
+
+    /// <summary>
+    /// Reads a file the sink still has open. <see cref="FileShare.ReadWrite"/> is not optional here: a
+    /// plain <see cref="File.ReadAllText"/> asks that nobody else be writing, and the writer inside is,
+    /// so it would fail with a sharing violation. Anything that tails this log needs the same.
+    /// </summary>
+    private static string ReadWhileOpen(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 }
