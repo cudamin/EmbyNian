@@ -551,6 +551,86 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 同 <see cref="ScrollToWash"/>，但先等页面真的长到滚得下去，滚完再把落点读出来。<c>--scroll-half</c> 走这一支。
+    /// <para>
+    /// 那个开关一度除了开窗什么都没做，根子在时机：它在页面报 <see cref="IsReady"/> 的那一下就下令，而那时候
+    /// 内容还只有一个视口高 —— 滚不动，<c>ScrollTo</c> 把偏移夹回 0，而后来内容长高了也没人补滚，于是「洗到
+    /// 一半」那一档的截图和滚到 0 的那一张一模一样，看不出坏了。所以这里先等 <c>ScrollableHeight</c> 够得着
+    /// 目标，落地后再读一次真正的偏移：还是被夹住的话，报告里直接说出来，不假装拍到了。
+    /// </para>
+    /// </summary>
+    internal async Task<string> ScrollToWashAsync()
+    {
+        const double target = DetailHero.ArtHeight / 2d;
+
+        var room = await SettleExtentAsync(target).ConfigureAwait(true);
+        ScrollToWash();
+        var landed = await SettleOffsetAsync(target).ConfigureAwait(true);
+
+        return $"目标 {target:0}，可滚 {room:0}，落在 {landed:0}"
+            + (Math.Abs(landed - target) < 1 ? "" : "（内容不够高，偏移被夹住了）");
+    }
+
+    /// <summary>
+    /// 同 <see cref="ScrollToEnd"/>，但先等内容不再长高。<c>--scroll-end</c> 走这一支。
+    /// <para>
+    /// 「最底下」是拿当时的 <c>ScrollableHeight</c> 量的，所以带子还没回来时的「底」不是真的底 —— 那一张截图
+    /// 里演职人员那条会整条缺掉，而画面本身挑不出错来。
+    /// </para>
+    /// </summary>
+    internal async Task<string> ScrollToEndAsync()
+    {
+        var room = await SettleExtentAsync(double.PositiveInfinity).ConfigureAwait(true);
+        ScrollToEnd();
+        var landed = await SettleOffsetAsync(room).ConfigureAwait(true);
+
+        return $"可滚 {room:0}，落在 {landed:0}";
+    }
+
+    /// <summary>
+    /// 等页面长到滚得下 <paramref name="wanted"/>，或者等它不再长了；返回当时的 <c>ScrollableHeight</c>。
+    /// <para>
+    /// 「不再长了」的判据是连着五眼一样高、并且至少已经等过一秒 —— 一条带子回来得慢的时候，头几眼的「一样高」
+    /// 只说明它还没回来。传 <see cref="double.PositiveInfinity"/> 就是「等它长完」，也就是拉到底要的那个。
+    /// </para>
+    /// </summary>
+    private async Task<double> SettleExtentAsync(double wanted)
+    {
+        var last = double.NaN;
+        var stable = 0;
+
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            Body.UpdateLayout();
+            var room = Body.ScrollableHeight;
+            if (room >= wanted) return room;
+
+            stable = Math.Abs(room - last) < 0.5 ? stable + 1 : 0;
+            last = room;
+            if (attempt >= 10 && stable >= 5) return room;
+
+            await Task.Delay(100).ConfigureAwait(true);
+        }
+
+        return Body.ScrollableHeight;
+    }
+
+    /// <summary>
+    /// 等滚动真的走到 <paramref name="wanted"/>；返回停下来的偏移。<c>ScrollTo</c> 是排进队里的一次操作，不是
+    /// 一句赋值，所以刚下令那一眼读到的还是原来那个数。
+    /// </summary>
+    private async Task<double> SettleOffsetAsync(double wanted)
+    {
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            await Task.Delay(50).ConfigureAwait(true);
+            if (Math.Abs(Body.VerticalOffset - wanted) < 1) break;
+        }
+
+        return Body.VerticalOffset;
+    }
+
+    /// <summary>
     /// Brings 媒体信息 into view, for the self-check. <see cref="ScrollToEnd"/> lands past it — the table sits
     /// between 单集 and the row of faces — and a repeater whose rows were never in the viewport has drawn
     /// none of them.

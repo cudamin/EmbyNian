@@ -100,13 +100,26 @@ MSIX 仍需用受信任证书签名后才能安装。
 .\EmbyNian.exe --self-check
 ```
 
-加上 `--dump-ui` 会把每个页面和浮层的截图写进 `%LOCALAPPDATA%\EmbyNian\logs\ui`：
+加上 `--dump-ui` 会多写两份东西到 `%LOCALAPPDATA%\EmbyNian\logs`：`selfcheck-shell.png` 是自检走完最后
+一页时那一帧的界面截图，`selfcheck-shell-tree.txt` 是同一时刻的可视化树。整套页面的截图不在这里 ——
+自检自己只留一张，逐页拍照是 `tools\shot.ps1` 的活。
 
 ```powershell
 .\EmbyNian.exe --self-check --dump-ui
 ```
 
-这台机器上保存过账号时，自检会等它自己登录回来，再拿真实的媒体库把每个页面走一遍，截图里也就有内容；没有保存账号时除 `detail-filled.png` 之外的页面截图都是空页面 —— 那一张是「详情页排版」用样例条目填出来的。样例刻意不带图片 tag，图片仓库只会去取有 tag 的图，所以这一张里虚化背景和卡片剧照仍然是占位图。
+这台机器上保存过账号时，自检会等它自己登录回来，再拿真实的媒体库把每个页面走一遍，那张截图和报告里的读数
+也就都是真实内容；没有保存账号时它停在登录页，「详情页排版」那一关改用一个样例条目自己填。样例刻意不带图片
+tag，图片仓库只会去取有 tag 的图，所以那一关里虚化背景和卡片剧照仍然是占位图。
+
+`--theme <id>` 让这一次运行换一套主题（`--theme daylight`，也接受 `--theme=daylight`），认不出来的 id
+回落到默认那套。**它只改这一次运行看到的颜色，不写设置文件** —— 六套配色里换主题的唯一入口是设置页上点一
+块色板，而「晴昼」是唯一的浅色，浅色主题下才会露出来的毛病（没登记进 `ThemeHost` 的画刷、系统自己画的那
+块标题栏）本来只能靠手点才看得见。配合 `tools\shot.ps1` 就是一条命令一张照片：
+
+```powershell
+.\tools\shot.ps1 -Exe artifacts\publish\win-x64\EmbyNian.exe -Out shots\daylight.png -ExeArgs "--theme daylight --show-settings" -WindowTitle 设置
+```
 
 自检不会替你输密码，只认已经保存下来的账号。让程序真跑一段时间的活交给冒烟脚本：启动一段时间后报告进程是否还活着，并打印本次运行的日志。
 

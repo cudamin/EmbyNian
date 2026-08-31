@@ -4,6 +4,7 @@ using EmbyNian.Services;
 using EmbyNian.Shell.Composition;
 using EmbyNian.Shell.Views;
 using EmbyNian.Shell.Windowing;
+using EmbyNian.Theming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -67,7 +68,16 @@ public partial class App : Application
             // 主题在任何一个控件出现之前先落地。晚一步就会看见「先绿一下再变成紫」那种闪色，因为
             // Palette.xaml 里的字面值先画了第一帧。这里只改画刷的颜色，不动 Application.RequestedTheme
             // —— 那个属性只在内容加载前可写，而浅色主题靠的是各元素树的 ElementTheme（见 ThemeHost）。
-            ThemeHost.Apply(ui.Theme);
+            //
+            // --theme 只压住这一次运行看到的颜色，故意不写回 ui.Theme：关窗时 OnWindowClosed 会把整份设置
+            // 存盘，赋一次值就等于替用户改了主题。
+            var theme = UiThemes.Resolve(_options.Theme ?? ui.Theme);
+            ThemeHost.Apply(theme);
+
+            if (_options.Theme is { Length: > 0 } asked)
+                Log.Info(Category, string.Equals(theme.Id, asked, StringComparison.OrdinalIgnoreCase)
+                    ? $"--theme：这一次用「{theme.Name}」（{theme.Id}），设置文件里仍是「{ui.Theme}」"
+                    : $"--theme：认不出「{asked}」，回落到「{theme.Name}」（{theme.Id}）");
 
             // The one piece of startup housekeeping, started and not awaited: pruning the image cache is a
             // walk of a directory tree, and nothing on screen is waiting for it.

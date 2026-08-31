@@ -1923,7 +1923,7 @@ internal static class ShellSelfCheck
                     ? $"Light 覆盖了 Default 的全部 {dark.Count} 个键"
                     : $"Light 缺 {missing.Length} 个键，这些会回退到深色的值：{string.Join("、", missing.Take(8))}{(missing.Length > 8 ? " 等" : "")}");
 
-        ReportTheme(services, shell, report, Check);
+        ReportTheme(services, shell, options, report, Check);
         ReportStyles(report, Check);
 
         var pageBackground = (shell.Pages.Content as Page)?.Background as SolidColorBrush;
@@ -3046,38 +3046,55 @@ internal static class ShellSelfCheck
     /// <summary>
     /// 主题这一套真的画到界面上了没有。
     /// <para>
-    /// 三条，都是「构造上无法自证」的那种。第一条问生效的是不是设置文件里存的那一套，顺带问外壳那棵树的深浅
-    /// 跟不跟着走 —— 树没翻过去的话，浅色主题下就是白底配框架自己的深色控件。第二条问 <c>ThemeHost</c> 那张
-    /// 表和 <c>Palette.xaml</c> 对不对得上：表里多一个键是白写，字典里多一个 <c>Eg*Brush</c> 是界面上留了一块
-    /// 换不掉的颜色 —— 那块会永远停在第一帧的字面值上。第三条把几个锚点的颜色读回来比一遍，两个字典都读，
-    /// 因为「两份写成同一套」正是那两个按应用级解析的读者能和元素树一致的全部原因。
+    /// 三条，都是「构造上无法自证」的那种。第一条问生效的是不是这一次该生效的那一套 —— 平常是设置文件里存的，
+    /// 带了 <c>--theme</c> 就是命令行要的那一套（那个开关故意不写设置文件，所以拿存的去比会红一整片）——
+    /// 顺带问外壳那棵树的深浅跟不跟着走：树没翻过去的话，浅色主题下就是白底配框架自己的深色控件。第二条问
+    /// <c>ThemeHost</c> 那张表和 <c>Palette.xaml</c> 对不对得上：表里多一个键是白写，字典里多一个
+    /// <c>Eg*Brush</c> 是界面上留了一块换不掉的颜色 —— 那块会永远停在第一帧的字面值上。第三条把几个锚点的
+    /// 颜色读回来比一遍，两个字典都读，因为「两份写成同一套」正是那两个按应用级解析的读者能和元素树一致的
+    /// 全部原因。
     /// </para>
     /// </summary>
     private static void ReportTheme(
         IServiceProvider services,
         ShellPage shell,
+        StartupOptions options,
         StringBuilder report,
         Action<string, bool, string> check)
     {
         var theme = ThemeHost.Current;
         var stored = services.GetRequiredService<ISettingsService>().Settings.Ui.Theme;
 
+        // 这一次该生效的是哪一套。--theme 只压住这一次运行看到的颜色，设置文件一个字不动，所以那个开关在的
+        // 时候要跟它比 —— 并且把「存的那个还是原来那个」也报出来，那正是这个开关唯一容易出错的地方。
+        var asked = options.Theme is { Length: > 0 } flag ? UiThemes.Resolve(flag).Id : null;
+        var effective = asked ?? stored;
+
         report.AppendLine(
             $"[信息] 主题目录 — 共 {UiThemes.All.Count} 套：" +
             string.Join("、", UiThemes.All.Select(one => $"{one.Name}（{one.Id}，{(one.IsDark ? "深" : "浅")}）")));
+
+        if (asked is not null)
+            report.AppendLine(
+                "[信息] 主题来自命令行 — "
+                + (string.Equals(options.Theme, asked, StringComparison.OrdinalIgnoreCase)
+                    ? $"--theme 要 {asked}"
+                    : $"--theme 写的是「{options.Theme}」，认不出，回落到 {asked}")
+                + $"，设置文件里仍是 {stored}，这一次运行不写它");
 
         // 正文压在窗口底上的对比度，按当前这套算。测试里六套都卡着 4.5:1，这里报的是「跑起来之后真的是这个数」。
         report.AppendLine(
             $"[信息] 主题正文对比度 — {theme.Name}：{ThemeColor.Contrast(theme.Colors.Text, theme.Colors.Window):0.00}:1");
 
         var wanted = theme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
-        var sameId = string.Equals(theme.Id, stored, StringComparison.OrdinalIgnoreCase);
+        var sameId = string.Equals(theme.Id, effective, StringComparison.OrdinalIgnoreCase);
         var sameTree = shell.RequestedTheme == wanted;
         check("主题已生效", sameId && sameTree,
             !sameId
-                ? $"设置文件里是 {stored}，生效的却是 {theme.Id} — ThemeHost.Apply 没按设置跑"
+                ? $"{(asked is null ? "设置文件里" : "--theme 要的")}是 {effective}，生效的却是 {theme.Id}"
+                  + $" — ThemeHost.Apply 没按{(asked is null ? "设置" : "命令行")}跑"
                 : sameTree
-                    ? $"{theme.Name}（{theme.Id}），外壳那棵树是 {shell.RequestedTheme}"
+                    ? $"{theme.Name}（{theme.Id}{(asked is null ? "" : "，来自命令行")}），外壳那棵树是 {shell.RequestedTheme}"
                     : $"{theme.Name}（{theme.Id}）是{(theme.IsDark ? "深" : "浅")}色，外壳那棵树却是 {shell.RequestedTheme} — 没登记到 ThemeHost");
 
         var painted = ThemeHost.BrushKeys.ToHashSet(StringComparer.Ordinal);

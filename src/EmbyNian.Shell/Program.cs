@@ -85,6 +85,17 @@ public sealed record StartupOptions
     /// </summary>
     public bool PlayFirst { get; init; }
 
+    /// <summary>
+    /// Tooling only: 这一次运行用哪套主题（<c>--theme misty</c> 或 <c>--theme=misty</c>），认不出来的 id 由
+    /// <c>UiThemes.Resolve</c> 拨回默认那套。
+    /// <para>
+    /// 六套主题里换主题的唯一入口是设置页上点一块色板 —— 于是除了默认那套，另外五套一张截图都拍不到，
+    /// 而其中「晴昼」是唯一的浅色，「浅色主题下没登记过的画刷会是白底配白字」这类毛病只在它身上看得见。
+    /// **只改这一次运行看到的颜色，不写进设置文件**：一次截图不该把用户挑的那套换掉。
+    /// </para>
+    /// </summary>
+    public string? Theme { get; init; }
+
     public required AppPaths Paths { get; init; }
 }
 
@@ -187,6 +198,7 @@ internal static class Program
             ScrollEnd = Has(args, "--scroll-end"),
             ScrollHalf = Has(args, "--scroll-half"),
             PlayFirst = Has(args, "--play"),
+            Theme = Text(args, "--theme"),
             Paths = paths
         };
 
@@ -225,12 +237,12 @@ internal static class Program
             argument.TrimStart('-', '/'), flag.TrimStart('-'), StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// The number given to <paramref name="flag"/>, written either way round — <c>--screen 2</c> or
-    /// <c>--screen=2</c> — or null when the flag is absent or what follows it is not a number. Its own
-    /// small parser rather than an option table, because this is the one argument the shell takes that is
-    /// not a plain switch.
+    /// The value given to <paramref name="flag"/>, written either way round — <c>--theme misty</c> or
+    /// <c>--theme=misty</c> — or null when the flag is absent or nothing follows it. A separate token that
+    /// itself looks like a flag does not count as the value, so <c>--theme --dump-ui</c> reads as 「主题开关
+    /// 没给值」 rather than as a theme called <c>--dump-ui</c>.
     /// </summary>
-    private static int? Number(string[] args, string flag)
+    private static string? Text(string[] args, string flag)
     {
         var name = flag.TrimStart('-');
 
@@ -239,15 +251,29 @@ internal static class Program
             var argument = args[index].TrimStart('-', '/');
 
             if (argument.StartsWith($"{name}=", StringComparison.OrdinalIgnoreCase))
-                return int.TryParse(argument[(name.Length + 1)..], out var inline) ? inline : null;
+                return Whole(argument[(name.Length + 1)..]);
 
             if (!string.Equals(argument, name, StringComparison.OrdinalIgnoreCase)) continue;
 
-            return index + 1 < args.Length && int.TryParse(args[index + 1], out var next) ? next : null;
+            if (index + 1 >= args.Length) return null;
+
+            var next = args[index + 1];
+            return next.StartsWith('-') || next.StartsWith('/') ? null : Whole(next);
         }
 
         return null;
+
+        static string? Whole(string value) => value.Length == 0 ? null : value;
     }
+
+    /// <summary>
+    /// The number given to <paramref name="flag"/>, written either way round — <c>--screen 2</c> or
+    /// <c>--screen=2</c> — or null when the flag is absent or what follows it is not a number. Its own
+    /// small parser rather than an option table, because this and <c>--theme</c> are the only arguments
+    /// the shell takes that are not plain switches.
+    /// </summary>
+    private static int? Number(string[] args, string flag) =>
+        int.TryParse(Text(args, flag), out var value) ? value : null;
 
     private static void StartLogging(AppPaths paths)
     {

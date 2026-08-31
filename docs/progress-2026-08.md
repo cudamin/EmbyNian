@@ -11,6 +11,18 @@
 
 ## 做完的活（新的在前）
 
+### 上一件活（**做完了**，2026-08-31）：发布件瘦掉 52 MB —— 拆开 Windows App SDK 那个总包，复核第三条
+
+发布件里一直躺着 39 MB 的 AI 推理运行时（`onnxruntime.dll` 20.7 MB、`DirectML.dll` 17.8 MB），而这个客户端一行推理都不跑。
+
+- **它是顺着包进来的，不是谁写代码引的。** `Microsoft.WindowsAppSDK 2.4.0` 是个总包，底下十个子包：`.Base`、`.Foundation`、`.InteractiveExperiences`、`.WinUI`、`.DWrite`、`.Runtime`，加上一个视频客户端用不到的四个 —— `.ML`、`.AI`、`.Search`、`.Widgets`。那两个大 dll 从 `.ML` → `Microsoft.Windows.AI.MachineLearning 2.1.74` 下来，按字节数在包缓存里比对得上；`.Search` 自己还拽着 `.AI`。
+- **改法是只引用真正用到的那六个**，版本一个不改 —— 全部照总包的 nuspec 解出来的那份写，所以引导器找的还是同一个框架包（这台机器上的 `Microsoft.WindowsAppRuntime.2 2.4.0.0`）：同一份运行时，少复制一堆文件。回退是一行，把总包写回去、删掉那六行。
+- **动手前先证明了没人用它们**：`src` 和 `tests` 里搜 `Microsoft.Windows.AI`、`.Search`、`.Widgets`、`MachineLearning`（排掉 `obj`）一个都不命中；那个总包自己的 `build\*.props/targets` 也是空壳，只声明一个 VS 用的 `ProjectCapability`。
+- **没有直接删发布目录里的文件** —— 删了发布验证会红，下一次还原又原样长回来。这是包引用层面的事，就得在包引用上改。
+- 顺手把 csproj 里 `libmpv-2.dll`「是 36 MB」那个数改对了：实际 117 MB。`Directory.Build.props` 和 README 里「引用 `Microsoft.WindowsAppSDK`」那两句也跟着改成子包。
+
+**四道闸门：** 构建 0 警告 0 错误；测试 488 项全过；发布验证 **649 个文件 / 375.1 MB → 585 个文件 / 323.1 MB**（少 64 个文件、52.0 MB），ZIP **148 MB → 126.3 MB**，`onnx|directml|Microsoft.Windows.AI|Widgets|Search|MachineLearning` 在发布目录里一个都不剩；发布件 `--self-check --dump-ui --screen 2` 退出码 0、`结果：全部通过`、`token` 命中 0 —— 自检跑起来这件事本身就是「拆完还引导得起来」的证据。
+
 ### 上一件活（**做完了**，2026-08-31）：仓库瘦身、进度记录搬家、日志改成常开句柄 —— 复核第六条
 
 四件小事，一起说：

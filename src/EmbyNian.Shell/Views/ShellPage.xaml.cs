@@ -849,12 +849,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
             : $"{flag}：点「{item.Name}」落在 {ContentFrame.Content?.GetType().Name}，不是详情页面");
 
         // The same primitive the self-check scrolls with, so a screenshot and the 正文留缝 reading are
-        // looking at the same layout rather than two states that merely resemble each other.
+        // looking at the same layout rather than two states that merely resemble each other. Both wait for
+        // the page to finish growing first: 「拉到底」 measured against a page whose shelves have not come
+        // back yet is not the bottom, and 「一半」 was silently clamped to 0 by exactly that.
         if (scrollEnd && ContentFrame.Content is DetailPage bottom)
         {
-            bottom.ScrollToEnd();
+            var how = await bottom.ScrollToEndAsync().ConfigureAwait(true);
             await Task.Delay(400).ConfigureAwait(true);
-            Log.Info(Category, "--scroll-end：已把详情页面拉到最底下");
+            Log.Info(Category, $"--scroll-end：已把详情页面拉到最底下 —— {how}");
         }
 
         // Half a hero band down, which is the offset the 标题条洗到正文色 reading dry-runs the wash at: a shot
@@ -862,9 +864,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // other. Only meaningful on its own —— 拉到底的时候那一条整条就是正文那张纸，看不出它是渐变。
         if (scrollHalf && !scrollEnd && ContentFrame.Content is DetailPage middle)
         {
-            middle.ScrollToWash();
+            var how = await middle.ScrollToWashAsync().ConfigureAwait(true);
             await Task.Delay(400).ConfigureAwait(true);
-            Log.Info(Category, "--scroll-half：已把详情页面拉到剧照的一半高处");
+            Log.Info(Category, $"--scroll-half：已把详情页面拉到剧照的一半高处 —— {how}");
         }
 
         // A detail page reports ready once, when its own load finishes; a click that opens another one

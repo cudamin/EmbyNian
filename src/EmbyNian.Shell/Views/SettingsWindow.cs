@@ -267,7 +267,11 @@ internal sealed class SettingsWindow
 
             titleBar.BackgroundColor = ThemeHost.ToColor(theme.Colors.Window);
             titleBar.ForegroundColor = ThemeHost.ToColor(theme.Colors.Text);
-            titleBar.ButtonBackgroundColor = Color.FromArgb(0, 0, 0, 0);
+
+            // 不透明，和 HostWindow 那份故意相反：那个窗口把内容铺进了标题栏，所以按键底色透明是让底下的
+            // XAML 透出来；这个窗口没铺，透明背后什么都没有，DWM 就拿自己那套默认色填 —— 深色主题下看不出
+            // 来，浅色主题下就是浅色标题栏右端一块黑。「--theme daylight 拍一张」找出来的就是这一块。
+            titleBar.ButtonBackgroundColor = titleBar.BackgroundColor;
             titleBar.ButtonForegroundColor = ThemeHost.ToColor(theme.Colors.Text);
             titleBar.ButtonHoverBackgroundColor = theme.IsDark
                 ? Color.FromArgb(35, 255, 255, 255)
