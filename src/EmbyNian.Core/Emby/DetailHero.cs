@@ -1,3 +1,5 @@
+using EmbyNian.Theming;
+
 namespace EmbyNian.Emby;
 
 /// <summary>
@@ -67,13 +69,20 @@ public static class DetailHero
     /// 头图底下那道渐深的罩子：它坐在带子的下沿，上面留 <see cref="ScrimInset"/>，自己高
     /// <see cref="ScrimHeight"/>，五个停点各说「走了这道罩子的百分之几」和「那儿有多黑」。
     /// <para>
-    /// 和 DetailPage.xaml 里那一段必须是同一组数 —— 那边是看得见的那一份，这边是算得出的那一份。两份对不上
-    /// 就是标题条上接出一道横缝，所以自检拿元素上真正的那几个停点跟这张表对一遍（<c>DetailPage.WashRead</c>）。
+    /// 屏上那支画刷就是拿这张表生成的（<c>DetailPage.PaintScrim</c>）—— 从前 DetailPage.xaml 里另写了一份
+    /// 同样的五个停点，一份看得见、一份算得出，改一份忘另一份就是标题条上接出一道横缝。现在只有这一份。
+    /// 自检照旧拿元素上真正的那几个停点跟这张表对一遍（<c>DetailPage.WashRead</c>）：生成这件事本身也会坏 ——
+    /// 画刷没赋上、方向画反、被样式盖掉，都得有人看着。
     /// </para>
     /// </summary>
-    private const double ScrimInset = 20;
+    public const double ScrimInset = 20;
 
-    private const double ScrimHeight = 440;
+    /// <inheritdoc cref="ScrimInset"/>
+    /// <remarks>
+    /// 写死的一个数，不跟着带子走：要垫的是海报、片名和那排键那一叠东西，而那一叠多高跟窗口没关系。带子高过
+    /// 440 时上面剩的全是干净的画面，矮到 <see cref="PlainHeight"/> 那个下限时这块几乎盖满整格。
+    /// </remarks>
+    public const double ScrimHeight = 440;
 
     /// <summary>
     /// 罩子最浓那一档有多不透明 —— 「太黑了都看不清背景」。
@@ -98,9 +107,23 @@ public static class DetailHero
     /// 五个停点。曲线比等比缩放更陡、末段几乎放平：片名、读数和那排键都落在带子下面那三分之一里，所以浓度
     /// 要在它们头上就爬够（0.62 处已经到 0xAA），而最后那 38% 只走 0xAA→0xB8 —— 末端的斜率接近零，接上那块
     /// 同色的尾部时连一道折角都看不出来。
+    /// <para>
+    /// 公开是为了让屏上那支画刷直接由它生成，见 <see cref="ScrimInset"/> 上那一段。<c>Along</c> 是「走了这道
+    /// 罩子的百分之几」，正好就是渐变停点的 <c>Offset</c>；<c>Alpha</c> 配上 <see cref="ScrimInk"/> 就是那一
+    /// 档的颜色。
+    /// </para>
     /// </summary>
-    private static readonly (double Along, byte Alpha)[] ScrimStops =
+    public static IReadOnlyList<(double Along, byte Alpha)> ScrimStops { get; } =
         [(0, 0x00), (0.14, 0x40), (0.34, 0x7A), (0.62, 0xAA), (1, ScrimCeiling)];
+
+    /// <summary>
+    /// 罩子那支墨的底色。停点之间变的只有 alpha，RGB 全程是这一个。
+    /// <para>
+    /// 和主题里那支 <c>UiTheme.Scrim</c> 同色，但不是同一件事，所以没有共用一个来源：那一支跟着主题深浅换
+    /// alpha，这一支不换 —— 它压的是一张剧照，剧照不会因为用户挑了浅色主题就变亮，白墨的字也照旧压在它上面。
+    /// </para>
+    /// </summary>
+    public static ThemeColor ScrimInk { get; } = ThemeColor.Parse("#0C0E11");
 
     /// <summary>
     /// 标题栏那一条上要压多浓 —— 0 是不压，<see cref="ScrimCeiling"/>／255 是头图罩子已经走到最浓的末端。
@@ -158,7 +181,7 @@ public static class DetailHero
     /// <summary>
     /// 正文纸面覆盖到这么多时，标题栏那行字该不该换回主题自己的墨。
     /// <para>
-    /// 压在剧照和黑色 HeroTail 上都用固定浅墨（<c>EgOnScrimBrush</c>）；三套浅色主题的纸盖上来之后，白字会
+    /// 压在剧照和黑色 HeroTail 上都用固定浅墨（<c>EgOnScrimBrush</c>）；浅色主题那张纸盖上来之后，白字会
     /// 消失，所以这件事只跟纸面覆盖比例翻，不能再跟头图罩子的浓度翻。
     /// </para>
     /// <para>

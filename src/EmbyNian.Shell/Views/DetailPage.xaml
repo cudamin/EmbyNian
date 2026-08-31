@@ -242,26 +242,19 @@
                         </Border>
                     </Border>
 
-                    <!-- 底下那一块：海报、字和六颗键都站在它上面，白字压在剧照上靠的就是这一层。同样写死 440
-                         高 —— 要垫的是那一叠东西，而它多高跟窗口没关系：带子高过 440 时上面全是干净的画面，
-                         矮到 460 那个下限时这块几乎盖满整格，正是原来那副样子。四档里最上面那两档管的是两行
-                         片名和副标题，最下面那两档管读数和按钮 —— 越往下的字越小，罩子也越浓。
-                         这五个停点还是另一处的源头：标题条上那层洗照着它算（DetailHero.TopWash，理由在那儿），
-                         两边对不上就是标题条上一道横缝，所以自检拿这几个停点跟那张表对一遍（见 WashRead）。
+                    <!-- 底下那一块：海报、字和六颗键都站在它上面，白字压在剧照上靠的就是这一层。四档里最上面
+                         那两档管的是两行片名和副标题，最下面那两档管读数和按钮 —— 越往下的字越小，罩子也越浓。
+                         高和那五个停点这儿一个都不写：它们全由 Core 那张表生成（DetailHero.ScrimStops，画的
+                         地方是 PaintScrim）。从前这儿另写了一份一模一样的停点，而标题条上那层洗照着 Core 那份
+                         算（DetailHero.TopWash），两份数改一份忘一份就是标题条上接出一道横缝 —— 所以只留一份，
+                         由算得出的那一份去画看得见的这一份。自检照旧把元素上真正的停点跟那张表对一遍（见
+                         WashRead）：生成本身也会坏 —— 没赋上、画反、被样式盖掉。
                          末档是 #B8 而不是满黑 ——「太黑了都看不清背景」：满黑那一版把这一格下半和底下那段尾部
                          一起压死，整屏只剩黑，那张铺满页面的剧照白铺了。理由和这个数怎么来的写在
-                         DetailHero.ScrimCeiling 上（它由简介那行最淡的小字定），底下那块尾部必须同色。
-                         曲线也跟着改陡：0.62 处就到 0xAA，末段只走 0xAA→0xB8，几乎放平 —— 片名、读数、按键都在
-                         下面那三分之一里，浓度得在它们头上爬够；而末端斜率接近零，接上同色的尾部时连折角都没有。 -->
-                    <Border x:Name="HeroScrim" Height="440" VerticalAlignment="Bottom">
+                         DetailHero.ScrimCeiling 上（它由简介那行最淡的小字定），底下那块尾部必须同色。 -->
+                    <Border x:Name="HeroScrim" VerticalAlignment="Bottom">
                         <Border.Background>
-                            <LinearGradientBrush x:Name="HeroScrimBrush" StartPoint="0.5,0" EndPoint="0.5,1">
-                                <GradientStop Color="#000C0E11" Offset="0" />
-                                <GradientStop Color="#400C0E11" Offset="0.14" />
-                                <GradientStop Color="#7A0C0E11" Offset="0.34" />
-                                <GradientStop Color="#AA0C0E11" Offset="0.62" />
-                                <GradientStop Color="#B80C0E11" Offset="1" />
-                            </LinearGradientBrush>
+                            <LinearGradientBrush x:Name="HeroScrimBrush" StartPoint="0.5,0" EndPoint="0.5,1" />
                         </Border.Background>
                     </Border>
 
@@ -513,16 +506,16 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <!-- 这一段不是又一张卡片：它是头图下沿那块压暗了的画面接着往下延。固定色必须和 HeroScrim 的
-                         最后一个停点一致（现在两边都是 #B8 —— 七成二的黑，见 DetailHero.ScrimCeiling），才能让
-                         原来那条分界消失；同时那张固定的剧照在这一段背后仍然透着，「太黑了都看不清背景」说的就是
-                         上一版这里写满黑、把画面压死的那副样子。
+                    <!-- 这一段不是又一张卡片：它是头图下沿那块压暗了的画面接着往下延。底色必须和 HeroScrim 的
+                         最后一个停点一模一样（七成二的黑，见 DetailHero.ScrimCeiling），才能让原来那条分界消失 ——
+                         所以它也在 PaintScrim 里由同一张表画上，这儿不写颜色：两处各写一个 #B8 就是又一份会分叉的
+                         数。同时那张固定的剧照在这一段背后仍然透着，「太黑了都看不清背景」说的就是上一版这里写
+                         满黑、把画面压死的那副样子。
                          alpha 小于 1 不影响标题栏那一条：它洗的是同一个 alpha 的同一个色，压在同一张不动的剧照上，
                          所以视口上沿那一行两边照旧一样深（见 ApplyWash 的第 2、3 档）。
                          SizeChanged 用来在简介展开、下拉显隐或窗口换宽之后重算真正纸面到标题栏的距离。 -->
                     <StackPanel
                         x:Name="HeroTail"
-                        Background="#B80C0E11"
                         Padding="28,28,28,8"
                         SizeChanged="OnHeroTailSizeChanged"
                         Spacing="20">

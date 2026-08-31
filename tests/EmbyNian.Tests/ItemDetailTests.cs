@@ -835,7 +835,7 @@ internal static class ItemDetailTests
         });
 
         // 「往下拉之后标题颜色要渐变，变的和下方背景一样」—— 洗多浓这件事的那条曲线。它读的是头图底下那道渐深的
-        // 罩子在视口上沿那一行的浓度，所以下面这几个数就是 DetailPage.xaml 里那五个停点，只是换到了页面坐标上。
+        // 罩子在视口上沿那一行的浓度，所以下面这几个数就是屏上那道罩子的五个停点，只是换到了页面坐标上。
         Test("标题条：洗的浓度读的是那道罩子自己的曲线", () =>
         {
             // 罩子上沿以上没有罩子：还没往下拉的那一下一点都不洗，也就是已经定下来的那一版原样不动。
@@ -847,7 +847,8 @@ internal static class ItemDetailTests
             Assert.Equal(0d, DetailHero.TopWash(300, false));
 
             // 那五个停点：#00@0、#40@0.14、#7A@0.34、#AA@0.62、#B8@1。罩子高 440，坐在 460 那格带子的下沿上，
-            // 所以页面坐标要让出 20。这几个数和 XAML 那份对不上，标题条底下就接出一道缝来。
+            // 所以页面坐标要让出 20。这里照旧写死这几个数：DetailHero.ScrimStops 现在是屏上那支画刷的唯一来源，
+            // 拿它自己去算就成了同一句话说两遍 —— 写死才拦得住「把表改了、曲线跟着变了，可谁都没发觉」。
             Near(0x40 / 255d, DetailHero.TopWash(20 + (0.14 * 440), true));
             Near(0x7A / 255d, DetailHero.TopWash(20 + (0.34 * 440), true));
             Near(0xAA / 255d, DetailHero.TopWash(20 + (0.62 * 440), true));
@@ -878,6 +879,48 @@ internal static class ItemDetailTests
             }
 
             Assert.Equal(DetailHero.ScrimCeiling / 255d, last);
+        });
+
+        // 屏上那支画刷现在是拿 ScrimStops 生成的（DetailPage.PaintScrim），XAML 里那份手写的副本已经撤掉。
+        // 所以这张表从「一份注释」变成了「画面本身」：它错一格，屏上就跟着错一格，而这一层没有眼睛看着。
+        Test("罩子：那张表本身站得住", () =>
+        {
+            var stops = DetailHero.ScrimStops;
+
+            // 一支渐变至少要有头有尾。生成那一支画刷时是照着表一格一格加停点的，表空了屏上就是一格不透明的墨。
+            Assert.True(stops.Count >= 2, $"表上只有 {stops.Count} 个停点");
+
+            // 头尾必须正好落在 0 和 1：渐变停点的 Offset 就是这个数，头不在 0 上、罩子上沿就凭空出现一道边；
+            // 尾不在 1 上、末段就留一截没有停点的地方，由画刷自己按最后一格铺平 —— 那一截和 HeroTail 的接缝
+            // 位置就跟着表走，而 BodySeal 只看颜色对不对，看不出它提前平了多少。
+            Assert.Equal(0d, stops[0].Along);
+            Assert.Equal(1d, stops[^1].Along);
+
+            // 上沿透明、末档就是 ScrimCeiling：前者是「罩子上面还能看见剧照」，后者是尾部那一块要接住的颜色
+            // （HeroTail 的底色取的是末档，见 PaintScrim）。
+            Assert.Equal(0x00, stops[0].Alpha);
+            Assert.Equal(DetailHero.ScrimCeiling, stops[^1].Alpha);
+
+            // 一路往下只深不浅，位置也只往下走。TopWash 那两条测的是「读出来的曲线」，这一条测的是「表本身」：
+            // 表上掉一次头，屏上的罩子中间就浅一道，而 TopWash 照旧读得出同一道浅 —— 两边一起错就没人报警。
+            for (var i = 1; i < stops.Count; i++)
+            {
+                Assert.True(stops[i].Along > stops[i - 1].Along,
+                    $"第 {i} 个停点没往下走：{stops[i - 1].Along:0.00}→{stops[i].Along:0.00}");
+                Assert.True(stops[i].Alpha >= stops[i - 1].Alpha,
+                    $"第 {i} 个停点浅回去了：0x{stops[i - 1].Alpha:X2}→0x{stops[i].Alpha:X2}");
+            }
+
+            // 罩子下沿正好落在带子下沿上：它是 VerticalAlignment=Bottom 加一个写死的高，所以上面让出的那段
+            // （自检拿 带子高 - 罩子高 读回来当 inset）必须就是 ScrimInset。这两个数任一动了而另一个没动，
+            // TopWash 算的那条曲线就和屏上的罩子错开一段。
+            Assert.Equal(DetailHero.ArtHeight, DetailHero.ScrimInset + DetailHero.ScrimHeight);
+
+            // 那支墨的 RGB。生成停点时只取 R/G/B、alpha 由表给，所以这三个数就是罩子的颜色本身；
+            // 尾部那一块也是拿它上色的，差一位就是尾部和罩子之间横着一道色差。
+            Assert.Equal(0x0C, DetailHero.ScrimInk.R);
+            Assert.Equal(0x0E, DetailHero.ScrimInk.G);
+            Assert.Equal(0x11, DetailHero.ScrimInk.B);
         });
 
         // 「太黑了都看不清背景」的另一半：透光到什么程度算过头，由字说话，不由眼睛说话。这一条把

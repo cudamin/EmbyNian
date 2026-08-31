@@ -80,6 +80,7 @@ public sealed partial class DetailPage : Page, IShellContent
         // would leave every one of them showing nothing until the first property changed.
         ViewModel = new DetailViewModel();
         InitializeComponent();
+        PaintScrim();
 
         // 上树之后把背景那一层顶到窗口的上沿一次。第一次量得到「这一页坐在工作区的哪儿」就是这时候 ——
         // 构造的时候页面还不在树上，量出来的是 0。
@@ -106,6 +107,42 @@ public sealed partial class DetailPage : Page, IShellContent
 
     /// <summary>换了主题：正文那张纸换了颜色，标题栏那一条洗的就是那个颜色。见 <see cref="PaintWash"/>。</summary>
     private void OnThemeChanged(UiTheme theme) => PaintWash(force: true);
+
+    /// <summary>
+    /// 把头图底下那道罩子画上 —— 高、五个停点、还有底下那块尾部的底色，全从 <see cref="DetailHero"/> 那张表来。
+    /// <para>
+    /// 这些数从前在 DetailPage.xaml 里另写了一份：五个 <c>GradientStop</c>、一个 <c>Height="440"</c>、一个
+    /// <c>Background="#B80C0E11"</c>，而算得出的那一份（<see cref="DetailHero.TopWash"/>，标题条上那层洗照着
+    /// 它算）在 Core 里。两份数没有谁管着谁，改一份忘一份的下场是标题条上重新长出那道横缝，而两边看着都「对」。
+    /// 现在只有 Core 那一份，屏上这一份由它生成。
+    /// </para>
+    /// <para>
+    /// 在构造里画而不是在 <c>Loaded</c> 里：这一页的实例会被复用，而这些数一辈子不变，画一次就够；上树之后才画
+    /// 的话第一帧是一格没有罩子的亮画面，压在上面的白字那一帧读不出来。
+    /// </para>
+    /// <para>
+    /// 不跟主题走，所以也不挂 <see cref="ThemeHost.Changed"/>：这道罩子压的是一张剧照，剧照不会因为用户挑了
+    /// 浅色主题就变亮（同 <see cref="DetailHero.ScrimInk"/> 上那一段）。
+    /// </para>
+    /// </summary>
+    private void PaintScrim()
+    {
+        var ink = DetailHero.ScrimInk;
+
+        HeroScrim.Height = DetailHero.ScrimHeight;
+
+        HeroScrimBrush.GradientStops.Clear();
+        foreach (var (along, alpha) in DetailHero.ScrimStops)
+            HeroScrimBrush.GradientStops.Add(new GradientStop
+            {
+                Offset = along,
+                Color = Color.FromArgb(alpha, ink.R, ink.G, ink.B)
+            });
+
+        // 尾部接的是罩子的末档 —— 同一个 alpha 同一个色，否则两块之间横着一道明暗接缝（自检里「尾部接住头图
+        // 末色」读的就是这个）。取表上最后那一档而不是 ScrimCeiling：表要是哪天不以最浓收尾，这里跟着走。
+        HeroTail.Background = new SolidColorBrush(HeroScrimBrush.GradientStops[^1].Color);
+    }
 
     internal DetailViewModel ViewModel { get; }
 
