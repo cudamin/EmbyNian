@@ -712,6 +712,11 @@
              chapter name under it — and what is left is an honest chip: which chapter, and the moment
              the pointer is on.
 
+             Each of the three lines stands on its own, because a file can be missing any of them. No
+             chapter marks at all — which is a whole class of server, not an edge case — leaves the time
+             by itself, and that is still worth showing: the slider's own tooltip appears only while the
+             thumb is being dragged, so hovering the bar would otherwise read as nothing at all.
+
              Positioned in code: Left/Top alignment plus a TranslateTransform the page sets from
              SeekTrack's own position, which is the only way the popup can sit above the bar without
              this file knowing how tall the bar happens to be. -->
@@ -745,7 +750,8 @@
                     MaxLines="1"
                     MaxWidth="212"
                     Text="{x:Bind ViewModel.ChapterCaption, Mode=OneWay}"
-                    TextTrimming="CharacterEllipsis" />
+                    TextTrimming="CharacterEllipsis"
+                    Visibility="{x:Bind ViewModel.ChapterCaptionVisibility, Mode=OneWay}" />
 
                 <!-- The hovered moment. The slider's own thumb tooltip only appears while the thumb is
                      being dragged, so hovering the track had no time readout at all. -->

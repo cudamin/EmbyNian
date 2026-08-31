@@ -99,13 +99,15 @@ public sealed partial class PlayerPage
     /// <summary>
     /// 章节预览: where the hover box lands, what it contains, and that it leaves with the bar it belongs to.
     /// <para>
-    /// Three separate things have been wrong here and none of them is visible to a compiler. The box is
+    /// Four separate things have been wrong here and none of them is visible to a compiler. The box is
     /// placed by a <c>TranslateTransform</c> this page computes rather than by layout, so an off-by-a-box-width
     /// sends it off the side of the picture — and the pointer is at the far end of the seek bar exactly when
     /// that happens, which is the one place a user will notice and the one place a centred test would not.
     /// The second is 视频进度条预览不会自动消失: the preview outliving its bar, stranded over the film with
     /// nothing to explain it. The third is 预览没有画面 — a fixed-size <c>Image</c> holding no source, which
-    /// is what every file looks like on a server that never extracted chapter stills.
+    /// is what every file looks like on a server that never extracted chapter stills. The fourth is the
+    /// floor under that one: no chapter marks at all, where the box is down to its time readout and an
+    /// empty caption would leave a name-shaped gap above it.
     /// </para>
     /// <para>
     /// Three positions rather than one, and the two ends are the point: the middle of the bar cannot be
@@ -168,6 +170,23 @@ public sealed partial class PlayerPage
                      && textOnly.Height > 0
                      && textOnly.Height < withStill.Height - 100;
 
+        // And the floor under that: a file the server extracted no chapter marks from at all, which is a
+        // whole class of server rather than an edge case. No picture and no name leaves the time on its
+        // own — and it has to be left, because the slider's own tooltip only shows while the thumb is
+        // being dragged, so hovering such a file used to produce nothing whatsoever. The empty caption
+        // has to collapse rather than hold an empty line, or the chip is a name-shaped gap over a clock.
+        ViewModel.ChapterCaption = "";
+        UpdateLayout();
+
+        var clockOnly = BoundsOf(ChapterPeek);
+        var chip = ChapterCaption.Visibility == Visibility.Collapsed
+                   && ChapterClock.Visibility == Visibility.Visible
+                   && clockOnly.Height > 0
+                   && clockOnly.Height < textOnly.Height - 8;
+
+        ViewModel.ChapterCaption = "片头";
+        UpdateLayout();
+
         // With the bar up the preview is the pointer's own business and must be left alone.
         Render();
         var kept = ChapterPeek.Visibility == Visibility.Visible;
@@ -184,12 +203,13 @@ public sealed partial class PlayerPage
         Visibility = was;
         UpdateLayout();
 
-        var ok = track > 0 && strayed.Count == 0 && framed && hollow && kept && gone;
+        var ok = track > 0 && strayed.Count == 0 && framed && hollow && chip && kept && gone;
 
         return (ok, $"进度条 {track:0} 逻辑像素宽，预览三处定位"
                     + (strayed.Count == 0 ? "都在画面内" : string.Join('、', strayed))
                     + $"；有缩略图时{(framed ? $"显示画面（{withStill.Height:0} 高）" : "没有显示画面")}"
                     + $"，没有缩略图时{(hollow ? $"只剩文字（{textOnly.Height:0} 高）" : "仍留着空画框")}"
+                    + $"，连章节名也没有时{(chip ? $"只剩时间（{clockOnly.Height:0} 高）" : "仍留着空行")}"
                     + $"；浮层在时{(kept ? "保留" : "被收走")}"
                     + $"，浮层收起后{(gone ? "随之消失" : "仍然停留")}");
     }

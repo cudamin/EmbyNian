@@ -138,8 +138,20 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>The last aspect handed to the window, so an unchanged one is not written again.</summary>
     private double _aspect;
 
-    /// <summary>Which chapter the preview is showing, so a hover inside one does no work.</summary>
+    /// <summary>
+    /// Emby's own chapter marks for what is playing, converted once. Two things need them: the 跳过 plan
+    /// the file starts with, and the hover preview's still — which is indexed against this list and no
+    /// other, because that index is the whole meaning of <c>/Items/{id}/Images/Chapter/{index}</c>.
+    /// </summary>
+    private IReadOnlyList<SkipChapter> _embyMarks = [];
+
+    /// <summary>
+    /// Which chapter the preview is naming and which one it is showing a picture of, so a hover that stays
+    /// inside both does no work. Two numbers because the two lists can disagree — see
+    /// <see cref="ChapterTimeline"/>.
+    /// </summary>
     private int _peekChapter = -1;
+    private int _peekStill = -1;
 
     /// <summary>Whether <see cref="Connect"/> has taken up the player events; a second call does nothing.</summary>
     private bool _connected;
@@ -405,6 +417,7 @@ public sealed partial class PlayerViewModel : ObservableObject
     public partial string? CoverMessage { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ChapterCaptionVisibility))]
     public partial string? ChapterCaption { get; set; }
 
     /// <summary>The hovered moment, as a clock. Updated on every pointer move along the seek track.</summary>
@@ -442,6 +455,14 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// 「预览没有画面」. The name and the time are still worth having, so the picture collapses and they stay.
     /// </summary>
     public Visibility ChapterStillVisibility => Show(ChapterStill is not null);
+
+    /// <summary>
+    /// Whether there is a chapter to name. A file whose marks the server never extracted — and one hovered
+    /// before its first mark — has none, and an empty <c>TextBlock</c> still takes a line's height plus the
+    /// stack's spacing, which would leave a gap over the clock. Collapsed, the box becomes an honest time
+    /// chip instead.
+    /// </summary>
+    public Visibility ChapterCaptionVisibility => Show(ChapterCaption is { Length: > 0 });
 
     private static Visibility Show(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1024,6 +1045,7 @@ public sealed partial class PlayerViewModel : ObservableObject
         // Everything the bar drew about this particular file. The stills especially: they are keyed by
         // chapter index, and the next file's chapter 3 is not this one's.
         ChapterMarks = [];
+        _embyMarks = [];
         _chapterStills.Clear();
         ClearChapterPeek();
         StatsOpen = false;
@@ -1077,12 +1099,17 @@ public sealed partial class PlayerViewModel : ObservableObject
             && string.Equals(_episodeSwitchTargetId, item.Id, StringComparison.Ordinal))
             _episodeSwitchTargetId = null;
         Tracks = [];
-        _skips.Begin(SkipSectionPlanner.Resolve(item), TimeFormat.ToSeconds(item?.RunTimeTicks));
+
+        // Converted once and kept: the 跳过 plan and the preview's still both read Emby's marks, and the
+        // preview reads them on every pointer move.
+        _embyMarks = item is null ? [] : SkipSectionPlanner.FromEmby(item.Chapters);
+        var runtime = TimeFormat.ToSeconds(item?.RunTimeTicks);
+        _skips.Begin(SkipSectionPlanner.Resolve(_embyMarks, runtime), runtime);
 
         // The server's marks are what the bar draws until mpv publishes its own, for the same reason the
         // 跳过 offer uses them: they are available immediately, and a bar that grew its ticks two seconds
         // in would look like a glitch rather than a refinement.
-        ChapterMarks = item is null ? [] : SkipSectionPlanner.FromEmby(item.Chapters);
+        ChapterMarks = _embyMarks;
         _chapterStills.Clear();
         ClearChapterPeek();
         ChaptersChanged?.Invoke();
@@ -1561,39 +1588,38 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// Which chapter a hovered moment falls in, and its still if the server extracted one. The page owns
     /// where the box goes; this owns what is in it.
     /// </summary>
-    /// <returns>Whether there is a chapter to preview at that moment at all.</returns>
+    /// <returns>Whether there is anything to preview at that moment, which there is for any open file.</returns>
     internal bool PeekChapterAt(double seconds)
     {
         if (_nowPlaying is null) return false;
 
-        // The chapter the hovered moment is inside, which is the last one starting at or before it.
-        var chapter = -1;
-        for (var index = 0; index < _nowPlaying.Chapters.Count; index++)
-        {
-            if (_nowPlaying.Chapters[index].StartSeconds <= seconds + 0.001) chapter = index;
-            else break;
-        }
-
-        if (chapter < 0)
-        {
-            ClearChapterPeek();
-            return false;
-        }
+        var moment = Math.Max(0, seconds);
 
         // Every pixel of movement, unlike the contents below: the time is the one part of the box that is
-        // about where the pointer is rather than about which chapter it landed in.
-        ChapterClock = TimeFormat.Clock(TimeSpan.FromSeconds(Math.Max(0, seconds)));
+        // about where the pointer is rather than about which chapter it landed in. Written before anything
+        // can return, because the readout is the half that is always available — plenty of servers extract
+        // no chapters at all, and the slider's own tooltip only appears while the thumb is being dragged,
+        // so hovering such a file used to show nothing whatsoever.
+        ChapterClock = TimeFormat.Clock(TimeSpan.FromSeconds(moment));
+
+        // Two lookups against two lists, both correct — see ChapterTimeline. The name comes from whichever
+        // marks the bar is currently drawing, which is mpv's once it has published them; the picture is
+        // indexed against Emby's own list, because that index is what the image request means.
+        var named = ChapterTimeline.IndexAt(ChapterMarks, moment);
+        var still = ChapterTimeline.IndexAt(_embyMarks, moment);
 
         // Contents only when the chapter changes: the box follows the pointer along the bar, and reloading
         // the same still for every pixel of that would be absurd.
-        if (chapter == _peekChapter) return true;
+        if (named == _peekChapter && still == _peekStill) return true;
 
-        _peekChapter = chapter;
-        var info = _nowPlaying.Chapters[chapter];
-        ChapterCaption = string.IsNullOrWhiteSpace(info.Name) ? $"章节 {chapter + 1}" : info.Name!;
+        _peekChapter = named;
+        _peekStill = still;
+        ChapterCaption = ChapterTimeline.Caption(ChapterMarks, named);
 
-        if (info.HasImage) _ = LoadChapterStillAsync(_generation, _nowPlaying.Id, chapter, info.ImageTag);
-        else ChapterStill = null;
+        if (still >= 0 && _nowPlaying.Chapters[still] is { HasImage: true } info)
+            _ = LoadChapterStillAsync(_generation, _nowPlaying.Id, still, info.ImageTag);
+        else
+            ChapterStill = null;
 
         return true;
     }
@@ -1601,20 +1627,22 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal void ClearChapterPeek()
     {
         _peekChapter = -1;
+        _peekStill = -1;
         ChapterStill = null;
+        ChapterCaption = null;
         ChapterClock = null;
     }
 
     /// <summary>
     /// Fetches and decodes one chapter still, once. Cached by index in <c>_chapterStills</c> including the
     /// misses, because a scrub back and forth over a chapter the server has no picture for would otherwise
-    /// ask again on every pass.
+    /// ask again on every pass. The index is Emby's, so what it is checked against is <c>_peekStill</c>.
     /// </summary>
     private async Task LoadChapterStillAsync(int generation, string itemId, int chapter, string? tag)
     {
         if (_chapterStills.TryGetValue(chapter, out var cached))
         {
-            if (_peekChapter == chapter) ChapterStill = cached;
+            if (_peekStill == chapter) ChapterStill = cached;
             return;
         }
 
@@ -1637,7 +1665,7 @@ public sealed partial class PlayerViewModel : ObservableObject
             if (generation != _generation) return;
 
             _chapterStills[chapter] = bitmap;
-            if (_peekChapter == chapter) ChapterStill = bitmap;
+            if (_peekStill == chapter) ChapterStill = bitmap;
         }
         catch (OperationCanceledException)
         {

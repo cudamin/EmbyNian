@@ -27,6 +27,7 @@ internal static class PlaybackTests
         RegisterTrackSelection();
         RegisterOutputOptions();
         RegisterSkipSections();
+        RegisterChapterTimeline();
         RegisterSkipCoordinator();
         RegisterChromeReveal();
         RegisterPlaybackStats();
@@ -1409,6 +1410,55 @@ internal static class PlaybackTests
             Assert.False(section.Covers(154.6), "临界半秒内不再提示，免得点了原地不动");
             Assert.False(section.Covers(160));
             Assert.False(section.Covers(-1), "尚未拿到位置时不提示");
+        });
+    }
+
+    // ---- 进度条上的章节读数 ----------------------------------------------------
+
+    private static void RegisterChapterTimeline()
+    {
+        Test("章节读数：落在最后一个不晚于该时刻的章节里", () =>
+        {
+            IReadOnlyList<SkipChapter> marks =
+            [
+                new SkipChapter(0, "片头"),
+                new SkipChapter(90, "正片"),
+                new SkipChapter(1380, "片尾")
+            ];
+
+            Assert.Equal(0, ChapterTimeline.IndexAt(marks, 0));
+            Assert.Equal(0, ChapterTimeline.IndexAt(marks, 89.9));
+            Assert.Equal(1, ChapterTimeline.IndexAt(marks, 90), "章节起点那一秒算在这一章里");
+            Assert.Equal(1, ChapterTimeline.IndexAt(marks, 1379));
+            Assert.Equal(2, ChapterTimeline.IndexAt(marks, 5000), "超出末尾仍留在最后一章");
+        });
+
+        Test("章节读数：没有章节，或者停在第一个之前，都是没有", () =>
+        {
+            Assert.Equal(-1, ChapterTimeline.IndexAt([], 42), "服务器没抽过章节的文件");
+            Assert.Equal(-1, ChapterTimeline.IndexAt([new SkipChapter(12, null)], 5), "第一个标记之前");
+            Assert.Equal(-1, ChapterTimeline.IndexAt([new SkipChapter(0, null)], -3), "还没量到位置");
+        });
+
+        Test("章节读数：没有名字就叫「章节 N」，编号从 1 起", () =>
+        {
+            IReadOnlyList<SkipChapter> marks =
+            [
+                new SkipChapter(0, null),
+                new SkipChapter(90, "  正片  "),
+                new SkipChapter(600, "   ")
+            ];
+
+            Assert.Equal("章节 1", ChapterTimeline.Caption(marks, 0));
+            Assert.Equal("正片", ChapterTimeline.Caption(marks, 1), "两头的空白不要带进浮层");
+            Assert.Equal("章节 3", ChapterTimeline.Caption(marks, 2), "只有空白等于没有名字");
+        });
+
+        Test("章节读数：没有章节时给空串，让那一行整条收起来", () =>
+        {
+            Assert.Equal("", ChapterTimeline.Caption([], 0));
+            Assert.Equal("", ChapterTimeline.Caption([new SkipChapter(0, "片头")], -1));
+            Assert.Equal("", ChapterTimeline.Caption([new SkipChapter(0, "片头")], 7), "越界不能抛");
         });
     }
 
