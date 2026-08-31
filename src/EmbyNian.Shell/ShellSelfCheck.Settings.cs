@@ -262,6 +262,13 @@ internal static partial class ShellSelfCheck
         check("底材归属", window.UseBackdrop && !window.VideoVisible,
             $"UseBackdrop={window.UseBackdrop}，VideoVisible={window.VideoVisible}");
 
+        // Before anything reads a colour off this page: every brush in it is declared empty in the markup
+        // and painted from PlayerPalette in the constructor, so one the painter missed resolves fine and
+        // draws nothing at all. Transparent OSD text over a film is not something a build or a unit test
+        // can see — and the test project cannot reference this assembly to begin with.
+        var palette = player.ProbePalette();
+        check("播放层配色", palette.Ok, palette.Detail);
+
         // Requirements 9/10/11, driven through the page's own Render: each step now says what it expects,
         // so a bar that stopped hiding is a failed check rather than a line someone has to read.
         var reveal = player.ProbeReveal();

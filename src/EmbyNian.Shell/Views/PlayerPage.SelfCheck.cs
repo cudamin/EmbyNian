@@ -25,6 +25,10 @@ namespace EmbyNian.Shell.Views;
 /// 是细进度线和统计，<c>.Menus</c> 是六个浮出菜单，<c>.Input</c> 是按下去会动的那三关，<c>.Window</c> 是窗口
 /// 按键、章节预览和画面比例。拆开只是搬家 —— 一行代码没改，验收就是自检报告一字不差。
 /// </para>
+/// <para>
+/// 还有第八关在这七个文件外面：<c>ProbePalette</c> 和它要验的那件事（<c>PaintPalette</c>）同住
+/// <c>PlayerPage.Palette.cs</c>。一支画刷有没有被填上，只有填它的那段代码旁边才看得清。
+/// </para>
 /// </summary>
 public sealed partial class PlayerPage
 {

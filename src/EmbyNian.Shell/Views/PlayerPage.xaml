@@ -65,12 +65,56 @@
              slider's; the page keeps it current. -->
         <local:SeekClockConverter x:Key="SeekClockConverter" />
 
+        <!-- ================= The palette =================
+             Eighteen brushes and two scrims, every one of them declared without a colour: the values
+             are PlayerPalette's, in Core, and PaintPalette fills these shells in from that table right
+             after InitializeComponent. A SolidColorBrush is a shared object and Color is a dependency
+             property, so painting it there reaches every StaticResource consumer below — the same
+             mechanism DetailPage.PaintScrim uses for the hero's gradient.
+
+             Why Core and not here: thirty-five literals lived in this file, nine distinct colours
+             written between two and seven times each, and nothing could check them. The table can be
+             unit-tested — the ink rungs really do descend in luminance, the three panels really do
+             ascend in opacity, the ticks really are brighter than the buffered fill — and the test
+             project cannot reference this assembly, only Core.
+
+             A brush per role rather than a colour per use also matters for the ticks: the chapter marks
+             are rebuilt on every resize and every chapter list, and a hundred brushes for a hundred
+             chapters is a hundred more composition objects than the picture needs.
+
+             Unpainted, a SolidColorBrush is transparent — invisible text, not a crash — which is why
+             ProbePalette walks this dictionary against the same table on every self-check. -->
+        <SolidColorBrush x:Key="PlayerInkBrush" />
+        <SolidColorBrush x:Key="PlayerInkSoftBrush" />
+        <SolidColorBrush x:Key="PlayerInkDimBrush" />
+        <SolidColorBrush x:Key="PlayerInkFaintBrush" />
+        <SolidColorBrush x:Key="PlayerStatsBrush" />
+        <SolidColorBrush x:Key="PlayerRailBrush" />
+        <SolidColorBrush x:Key="PlayerPeekBrush" />
+        <SolidColorBrush x:Key="PlayerSkipBrush" />
+        <SolidColorBrush x:Key="PlayerCoverBrush" />
+        <SolidColorBrush x:Key="PlayerEdgeFaintBrush" />
+        <SolidColorBrush x:Key="PlayerEdgeBrush" />
+        <SolidColorBrush x:Key="PlayerEdgeStrongBrush" />
+        <SolidColorBrush x:Key="PlayerTickBrush" />
+        <SolidColorBrush x:Key="PlayerTrackBrush" />
+        <SolidColorBrush x:Key="PlayerTrackFillBrush" />
+        <SolidColorBrush x:Key="PlayerLineBrush" />
+        <SolidColorBrush x:Key="PlayerPulseBrush" />
+        <SolidColorBrush x:Key="PlayerPulseRimBrush" />
+
+        <!-- Top to bottom in both cases, and the stops come from the table too: the transport's scrim
+             deepens downward and the title strip's fades out, so a direction reversed by an edit here
+             would be a hard band across the middle of the picture rather than an obvious mistake. -->
+        <LinearGradientBrush x:Key="PlayerBottomScrim" StartPoint="0,0" EndPoint="0,1" />
+        <LinearGradientBrush x:Key="PlayerTopScrim" StartPoint="0,0" EndPoint="0,1" />
+
         <!-- Flat, borderless and see-through until pointed at: over a picture, a button's own filled
              background is more visible than its glyph and reads as a panel rather than a control. -->
         <Style x:Key="OsdButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Foreground" Value="#FFF2F4F7" />
+            <Setter Property="Foreground" Value="{StaticResource PlayerInkBrush}" />
             <Setter Property="Padding" Value="10,6" />
             <Setter Property="MinWidth" Value="40" />
             <Setter Property="CornerRadius" Value="6" />
@@ -81,22 +125,6 @@
             <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets" />
             <Setter Property="FontSize" Value="16" />
         </Style>
-
-        <LinearGradientBrush x:Key="BottomScrim" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Offset="0.0" Color="#000C0E11" />
-            <GradientStop Offset="0.35" Color="#8C0C0E11" />
-            <GradientStop Offset="1.0" Color="#F00C0E11" />
-        </LinearGradientBrush>
-
-        <LinearGradientBrush x:Key="TopScrim" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Offset="0.0" Color="#E60C0E11" />
-            <GradientStop Offset="1.0" Color="#000C0E11" />
-        </LinearGradientBrush>
-
-        <!-- 章节刻度. A brush rather than a colour per tick: the marks are rebuilt on every resize and
-             on every chapter list, and a hundred brushes for a hundred chapters is a hundred more
-             composition objects than the picture needs. -->
-        <SolidColorBrush x:Key="ChapterTickBrush" Color="#B3FFFFFF" />
 
         <!-- The 暂停/播放 badge's one second, and the only storyboard in the file — see PulseBadge for
              why this one is not the fade the reveal rule refuses.
@@ -163,7 +191,7 @@
             x:Name="TitleStrip"
             Height="96"
             VerticalAlignment="Top"
-            Background="{StaticResource TopScrim}"
+            Background="{StaticResource PlayerTopScrim}"
             Padding="16,0,0,0"
             ColumnSpacing="8"
             Visibility="Collapsed">
@@ -195,7 +223,7 @@
                 <TextBlock
                     x:Name="SubtitleText"
                     FontSize="{StaticResource EgCaptionFontSize}"
-                    Foreground="#FFA5ADBA"
+                    Foreground="{StaticResource PlayerInkDimBrush}"
                     MaxLines="1"
                     Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}"
                     TextTrimming="CharacterEllipsis"
@@ -301,7 +329,7 @@
                     ToolTipService.ToolTip="最小化">
                     <FontIcon
                         FontSize="10"
-                        Foreground="#FFF2F4F7"
+                        Foreground="{StaticResource PlayerInkBrush}"
                         Glyph="&#xE921;"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center" />
@@ -318,7 +346,7 @@
                     <FontIcon
                         x:Name="MaximizeGlyph"
                         FontSize="10"
-                        Foreground="#FFF2F4F7"
+                        Foreground="{StaticResource PlayerInkBrush}"
                         Glyph="&#xE922;"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center" />
@@ -334,7 +362,7 @@
                     ToolTipService.ToolTip="关闭">
                     <FontIcon
                         FontSize="10"
-                        Foreground="#FFF2F4F7"
+                        Foreground="{StaticResource PlayerInkBrush}"
                         Glyph="&#xE8BB;"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center" />
@@ -355,8 +383,8 @@
             VerticalAlignment="Top"
             Margin="20,104,0,0"
             Padding="14,10"
-            Background="#D91E2126"
-            BorderBrush="#4DFFFFFF"
+            Background="{StaticResource PlayerStatsBrush}"
+            BorderBrush="{StaticResource PlayerEdgeFaintBrush}"
             BorderThickness="1"
             CornerRadius="10"
             IsHitTestVisible="False"
@@ -388,8 +416,8 @@
             VerticalAlignment="Center"
             Margin="0,0,22,0"
             Padding="10,18"
-            Background="#E61E2126"
-            BorderBrush="#59FFFFFF"
+            Background="{StaticResource PlayerRailBrush}"
+            BorderBrush="{StaticResource PlayerEdgeBrush}"
             BorderThickness="1"
             CornerRadius="28"
             Opacity="0"
@@ -436,8 +464,8 @@
             VerticalAlignment="Bottom"
             Margin="0,0,28,148"
             Padding="16,10"
-            Background="#E62E333B"
-            BorderBrush="#66FFFFFF"
+            Background="{StaticResource PlayerSkipBrush}"
+            BorderBrush="{StaticResource PlayerEdgeStrongBrush}"
             BorderThickness="1"
             CornerRadius="20"
             Command="{x:Bind ViewModel.TakeSkipCommand}"
@@ -446,7 +474,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE893;" Style="{StaticResource OsdGlyphStyle}" />
                     <TextBlock x:Name="SkipText" Text="{x:Bind ViewModel.SkipCaption, Mode=OneWay}" />
-                    <TextBlock x:Name="SkipTip" Text="{x:Bind ViewModel.SkipTip, Mode=OneWay}" Foreground="#FF8B93A0" FontSize="{StaticResource EgCaptionFontSize}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="SkipTip" Text="{x:Bind ViewModel.SkipTip, Mode=OneWay}" Foreground="{StaticResource PlayerInkFaintBrush}" FontSize="{StaticResource EgCaptionFontSize}" VerticalAlignment="Center" />
                 </StackPanel>
 
                 <!-- The offer's own fifteen seconds, drawn rather than merely counted: a button that is
@@ -457,8 +485,8 @@
                     Maximum="1"
                     Minimum="0"
                     Value="{x:Bind ViewModel.SkipRemaining, Mode=OneWay}"
-                    Background="#26FFFFFF"
-                    Foreground="#FF8B93A0" />
+                    Background="{StaticResource PlayerLineBrush}"
+                    Foreground="{StaticResource PlayerInkFaintBrush}" />
             </StackPanel>
         </Button>
 
@@ -466,7 +494,7 @@
         <Grid
             x:Name="Bar"
             VerticalAlignment="Bottom"
-            Background="{StaticResource BottomScrim}"
+            Background="{StaticResource PlayerBottomScrim}"
             Padding="20,26,20,12"
             RowSpacing="2"
             Visibility="Collapsed">
@@ -486,7 +514,7 @@
                 <TextBlock
                     x:Name="PositionText"
                     FontFamily="Consolas,Cascadia Mono,Segoe UI"
-                    Foreground="#FFF2F4F7"
+                    Foreground="{StaticResource PlayerInkBrush}"
                     Text="{x:Bind ViewModel.PositionClock, Mode=OneWay}"
                     VerticalAlignment="Center" />
 
@@ -500,8 +528,8 @@
                         Minimum="0"
                         Value="{x:Bind ViewModel.CacheFraction, Mode=OneWay}"
                         VerticalAlignment="Center"
-                        Background="#33FFFFFF"
-                        Foreground="#59FFFFFF"
+                        Background="{StaticResource PlayerTrackBrush}"
+                        Foreground="{StaticResource PlayerTrackFillBrush}"
                         IsIndeterminate="False" />
 
                     <!-- 章节刻度. Between the cache bar and the slider so the thumb passes over the
@@ -528,7 +556,7 @@
                     Grid.Column="2"
                     x:Name="DurationText"
                     FontFamily="Consolas,Cascadia Mono,Segoe UI"
-                    Foreground="#FFA5ADBA"
+                    Foreground="{StaticResource PlayerInkDimBrush}"
                     Text="{x:Bind ViewModel.DurationClock, Mode=OneWay}"
                     VerticalAlignment="Center" />
             </Grid>
@@ -577,7 +605,7 @@
                 <TextBlock
                     Grid.Column="1"
                     x:Name="SourceText"
-                    Foreground="#FFA5ADBA"
+                    Foreground="{StaticResource PlayerInkDimBrush}"
                     FontSize="{StaticResource EgCaptionFontSize}"
                     MaxLines="1"
                     Text="{x:Bind ViewModel.SourceLabel, Mode=OneWay}"
@@ -646,8 +674,8 @@
             Minimum="0"
             Value="{x:Bind ViewModel.ThinFraction, Mode=OneWay}"
             VerticalAlignment="Bottom"
-            Background="#26FFFFFF"
-            Foreground="#FFE0E4EA"
+            Background="{StaticResource PlayerLineBrush}"
+            Foreground="{StaticResource PlayerInkSoftBrush}"
             IsHitTestVisible="False"
             Visibility="Collapsed" />
 
@@ -690,13 +718,13 @@
                     x:Name="PulseRim"
                     FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
                     FontSize="152"
-                    Foreground="#59000000"
+                    Foreground="{StaticResource PlayerPulseRimBrush}"
                     Glyph="&#xE769;" />
                 <FontIcon
                     x:Name="PulseGlyph"
                     FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
                     FontSize="140"
-                    Foreground="#FFFFFFFF"
+                    Foreground="{StaticResource PlayerPulseBrush}"
                     Glyph="&#xE769;" />
             </Grid>
         </Border>
@@ -725,8 +753,8 @@
             HorizontalAlignment="Left"
             VerticalAlignment="Top"
             Padding="4"
-            Background="#F21E2126"
-            BorderBrush="#59FFFFFF"
+            Background="{StaticResource PlayerPeekBrush}"
+            BorderBrush="{StaticResource PlayerEdgeBrush}"
             BorderThickness="1"
             CornerRadius="8"
             IsHitTestVisible="False"
@@ -745,7 +773,7 @@
                 <TextBlock
                     x:Name="ChapterCaption"
                     FontSize="{StaticResource EgCaptionFontSize}"
-                    Foreground="#FFE0E4EA"
+                    Foreground="{StaticResource PlayerInkSoftBrush}"
                     HorizontalAlignment="Center"
                     MaxLines="1"
                     MaxWidth="212"
@@ -759,7 +787,7 @@
                     x:Name="ChapterClock"
                     FontFamily="Consolas,Cascadia Mono,Segoe UI"
                     FontSize="{StaticResource EgCaptionFontSize}"
-                    Foreground="#FFA5ADBA"
+                    Foreground="{StaticResource PlayerInkDimBrush}"
                     HorizontalAlignment="Center"
                     Text="{x:Bind ViewModel.ChapterClock, Mode=OneWay}" />
             </StackPanel>
@@ -774,10 +802,10 @@
 
              Opaque, and above everything else in the grid, so it cannot lose the race the WinForms
              cover kept losing. -->
-        <Grid x:Name="Cover" Background="#FF0C0E11" Visibility="{x:Bind ViewModel.CoverVisibility, Mode=OneWay}">
+        <Grid x:Name="Cover" Background="{StaticResource PlayerCoverBrush}" Visibility="{x:Bind ViewModel.CoverVisibility, Mode=OneWay}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
                 <ProgressRing IsActive="True" Width="40" Height="40" />
-                <TextBlock x:Name="CoverText" HorizontalAlignment="Center" Foreground="#FFA5ADBA" Text="{x:Bind ViewModel.CoverMessage, Mode=OneWay}" />
+                <TextBlock x:Name="CoverText" HorizontalAlignment="Center" Foreground="{StaticResource PlayerInkDimBrush}" Text="{x:Bind ViewModel.CoverMessage, Mode=OneWay}" />
             </StackPanel>
         </Grid>
     </Grid>

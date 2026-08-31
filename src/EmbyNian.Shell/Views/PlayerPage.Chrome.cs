@@ -610,7 +610,7 @@ public sealed partial class PlayerPage
         {
             // Asked once rather than per tick: the brush is the same object for every mark, and it is a
             // dictionary walk to find.
-            var brush = BrushFor("ChapterTickBrush");
+            var brush = BrushFor("PlayerTickBrush");
 
             foreach (var mark in marks)
             {

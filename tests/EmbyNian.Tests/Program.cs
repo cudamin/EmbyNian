@@ -26,6 +26,7 @@ internal static class Program
         WrapLayoutTests.Register();
         StartupArgsTests.Register();
         ThemeTests.Register();
+        PlayerPaletteTests.Register();
 
         return TestHarness.Run();
     }

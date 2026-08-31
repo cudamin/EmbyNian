@@ -243,6 +243,10 @@ public sealed partial class PlayerPage : UserControl
     {
         InitializeComponent();
 
+        // Before anything else that draws: the XAML declares the overlay's brushes empty and this fills
+        // them from PlayerPalette. Unpainted they are transparent, not missing — see PlayerPage.Palette.cs.
+        PaintPalette();
+
         _seekClock = (SeekClockConverter)Resources["SeekClockConverter"];
         _seekClock.Scale = PlayerViewModel.SeekScale;
 

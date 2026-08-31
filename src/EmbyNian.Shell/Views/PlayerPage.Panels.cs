@@ -39,7 +39,7 @@ public sealed partial class PlayerPage
     /// dictionary — it does not walk up to <c>App.xaml</c> — and indexing a key that is not in it throws
     /// a bare <c>COMException</c> reading 「未指定的错误」 rather than returning null. So a builder asking
     /// for one of Palette.xaml's brushes would crash the first time a user opened the thing that draws it.
-    /// <c>ChapterTickBrush</c> is local to this page and <c>EgTextBrush</c> is the app's; both have to
+    /// <c>PlayerTickBrush</c> is local to this page and <c>EgTextBrush</c> is the app's; both have to
     /// work, and only this resolves both.
     /// </para>
     /// <para>
