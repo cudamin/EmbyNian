@@ -451,7 +451,7 @@ public sealed partial class HomeBanner : UserControl
 
     /// <summary>
     /// 箭头在不在屏上。指针在带上、并且有第二张可翻才浮出来 —— 只有一张时两个箭头都点不动，而一个点了没反应的
-    /// 按钮比没有按钮更难解释（同 <see cref="ShelfStrip.ArrowsFor"/> 那条注释）。
+    /// 按钮比没有按钮更难解释（同 <see cref="EmbyNian.Infrastructure.CardStrip.ArrowsFor"/> 那条注释）。
     /// </summary>
     private void SyncArrows()
     {

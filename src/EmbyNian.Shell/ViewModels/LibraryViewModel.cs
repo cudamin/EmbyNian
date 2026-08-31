@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
 using EmbyNian.Services;
 using EmbyNian.Shell.Views;
 using Microsoft.UI.Xaml;
@@ -150,7 +151,7 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// be six pixels short of the card it was sizing. Same arithmetic as
     /// <see cref="CardShelf.RowHeight"/>, for the same reason.
     /// </summary>
-    public double RowHeight => CardItem.HeightFor(CardBuildWidth, CardBuildWide) + CardSize.Chrome;
+    public double RowHeight => CardSize.HeightFor(CardBuildWidth, CardBuildWide) + CardSize.Chrome;
 
     /// <summary>The cell width the live layout should be using, in the current view.</summary>
     /// <remarks>

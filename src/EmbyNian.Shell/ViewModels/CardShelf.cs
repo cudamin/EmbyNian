@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
 using EmbyNian.Shell.Views;
 
 namespace EmbyNian.Shell.ViewModels;
@@ -46,7 +47,7 @@ public sealed partial class CardShelf : ObservableObject
         _wide = wide;
         _indicators = indicators;
 
-        RowHeight = CardItem.HeightFor(width, wide) + CardSize.Chrome;
+        RowHeight = CardSize.HeightFor(width, wide) + CardSize.Chrome;
 
         // 读数跟着内容走。挂在集合的事件上而不是在 Clear/Fill/FillRows 里各喊一遍：那三个方法之外还有
         // 别人往 Cards 里加东西（详情页换季就是），漏喊一处的症状是牌子右端那个数字停在上一季。

@@ -3,6 +3,7 @@ using EmbyNian.Infrastructure;
 using EmbyNian.Shell.Interop;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using static EmbyNian.Infrastructure.StartupArgs;
 
 namespace EmbyNian.Shell;
 
@@ -183,6 +184,8 @@ internal static class Program
         AppDomain.CurrentDomain.UnhandledException += OnDomainException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
+        // Has／Text／Number 在 Core 的 EmbyNian.Infrastructure.StartupArgs 上（using static 引进来的），由
+        // StartupArgsTests 钉着：整套验证工具都要先过这三个函数，而最容易读错的几种写法屏上一次也碰不到。
         var options = new StartupOptions
         {
             ActivationEventName = ActivationEventName,
@@ -231,49 +234,6 @@ internal static class Program
             return 1;
         }
     }
-
-    private static bool Has(string[] args, string flag) =>
-        args.Any(argument => string.Equals(
-            argument.TrimStart('-', '/'), flag.TrimStart('-'), StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// The value given to <paramref name="flag"/>, written either way round — <c>--theme misty</c> or
-    /// <c>--theme=misty</c> — or null when the flag is absent or nothing follows it. A separate token that
-    /// itself looks like a flag does not count as the value, so <c>--theme --dump-ui</c> reads as 「主题开关
-    /// 没给值」 rather than as a theme called <c>--dump-ui</c>.
-    /// </summary>
-    private static string? Text(string[] args, string flag)
-    {
-        var name = flag.TrimStart('-');
-
-        for (var index = 0; index < args.Length; index++)
-        {
-            var argument = args[index].TrimStart('-', '/');
-
-            if (argument.StartsWith($"{name}=", StringComparison.OrdinalIgnoreCase))
-                return Whole(argument[(name.Length + 1)..]);
-
-            if (!string.Equals(argument, name, StringComparison.OrdinalIgnoreCase)) continue;
-
-            if (index + 1 >= args.Length) return null;
-
-            var next = args[index + 1];
-            return next.StartsWith('-') || next.StartsWith('/') ? null : Whole(next);
-        }
-
-        return null;
-
-        static string? Whole(string value) => value.Length == 0 ? null : value;
-    }
-
-    /// <summary>
-    /// The number given to <paramref name="flag"/>, written either way round — <c>--screen 2</c> or
-    /// <c>--screen=2</c> — or null when the flag is absent or what follows it is not a number. Its own
-    /// small parser rather than an option table, because this and <c>--theme</c> are the only arguments
-    /// the shell takes that are not plain switches.
-    /// </summary>
-    private static int? Number(string[] args, string flag) =>
-        int.TryParse(Text(args, flag), out var value) ? value : null;
 
     private static void StartLogging(AppPaths paths)
     {

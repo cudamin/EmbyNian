@@ -21,6 +21,10 @@ internal static class Program
         HomeCarouselTests.Register();
         DiagnosticsTests.Register();
         ScreenTests.Register();
+        CardStripTests.Register();
+        CardSizeTests.Register();
+        WrapLayoutTests.Register();
+        StartupArgsTests.Register();
         ThemeTests.Register();
 
         return TestHarness.Run();

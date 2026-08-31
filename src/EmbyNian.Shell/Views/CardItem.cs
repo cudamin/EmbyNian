@@ -158,15 +158,7 @@ public sealed class CardItem : INotifyPropertyChanged
     /// </summary>
     public double CardWidth => _width;
 
-    public double PosterHeight => HeightFor(_width, _wide);
-
-    /// <summary>
-    /// A card's picture height for a given width and shape: 16:9 for a still, 2:3 for a poster. Rounded,
-    /// which reproduces the two numbers the markup used to carry (300 → 169, 170 → 255) and keeps giving
-    /// whole pixels for the widths 设置 → 海报宽度 allows.
-    /// </summary>
-    public static double HeightFor(int width, bool wide) =>
-        Math.Round(width * (wide ? 9.0 / 16.0 : 3.0 / 2.0));
+    public double PosterHeight => CardSize.HeightFor(_width, _wide);
 
     public BitmapImage? Poster
     {

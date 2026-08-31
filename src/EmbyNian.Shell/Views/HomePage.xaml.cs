@@ -148,8 +148,8 @@ public sealed partial class HomePage : Page, IShellContent
     /// </para>
     /// <para>
     /// 不用指针也测得出来，这很关键：这台机器上注不进鼠标事件。<c>Focus(FocusState.Pointer)</c> 走的是同一条
-    /// 路 —— 同一个 <c>GotFocus</c>、同一段 <see cref="ShelfStrip.RevealFor"/>，只是没有那次点击，所以既不会
-    /// 打开条目也不会碰服务器。
+    /// 路 —— 同一个 <c>GotFocus</c>、同一段 <see cref="EmbyNian.Infrastructure.CardStrip.RevealFor"/>，只是
+    /// 没有那次点击，所以既不会打开条目也不会碰服务器。
     /// </para>
     /// </summary>
     internal bool StayFocus()

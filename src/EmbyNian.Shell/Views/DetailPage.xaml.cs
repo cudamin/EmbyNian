@@ -1,5 +1,6 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
 using EmbyNian.Services;
 using EmbyNian.Shell.Platform;
 using EmbyNian.Shell.ViewModels;

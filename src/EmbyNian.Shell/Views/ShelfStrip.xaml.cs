@@ -1,3 +1,4 @@
+using EmbyNian.Infrastructure;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -15,10 +16,10 @@ namespace EmbyNian.Shell.Views;
 /// 时两边浮出箭头，一次翻整整一屏卡片。
 /// </para>
 /// <para>
-/// 翻多远是这里唯一算得上规则的东西，所以它是三个纯函数（<see cref="StepFor"/>、
-/// <see cref="TargetFor"/>、<see cref="ArrowsFor"/>）：一屏放得下几张卡就翻几张，正好落在下一张卡的左
-/// 边沿，两头夹住。测试项目只看得见 Core，所以这三个函数由 <c>--self-check</c> 的
-/// <see cref="Probe"/> 驱动。
+/// 翻多远是这里唯一算得上规则的东西，所以它不在这个文件里：四条规则（一屏放得下几张卡就翻几张、翻过去
+/// 落在哪、哪个箭头该在屏上、要让第几张卡露出来得滚到哪儿）都在 Core 的
+/// <see cref="EmbyNian.Infrastructure.CardStrip"/> 上，由单元测试钉着。这里剩下的是量：视口多宽、卡片
+/// 间距多大、还有多少可滚 —— 只有屏上问得出来，所以 <see cref="Probe"/> 只问这些。
 /// </para>
 /// </summary>
 public sealed partial class ShelfStrip : UserControl
@@ -52,9 +53,6 @@ public sealed partial class ShelfStrip : UserControl
     /// 的。这个下限管的是还没量过的那一瞬间：高度是 0 时按 0 减出来是负数，按钮会直接消失。
     /// </summary>
     private const double MinBandHeight = 48;
-
-    /// <summary>一像素的余量。滚动位置是浮点数，「到头了」不该指望它正好等于可滚动的宽度。</summary>
-    private const double Edge = 1;
 
     /// <summary>指针在带上。箭头是悬停才出现的，同卡片上那排按钮。</summary>
     private bool _hover;
@@ -148,84 +146,10 @@ public sealed partial class ShelfStrip : UserControl
     private StackLayout Rows => (StackLayout)Repeater.Layout;
 
     // ---- 规则 -------------------------------------------------------------------
-
-    /// <summary>
-    /// 哪个箭头该在屏上。内容一屏放得下就两个都不要 —— 那时没有「后面」，一个点了没反应的按钮比没有按钮
-    /// 更难解释。到头的那一侧也收起来。
-    /// </summary>
-    internal static (bool Prev, bool Next) ArrowsFor(double offset, double scrollable, bool hover) =>
-        !hover || scrollable <= Edge
-            ? (false, false)
-            : (offset > Edge, offset < scrollable - Edge);
-
-    /// <summary>
-    /// 一页翻多远。按卡片间距的整数倍，所以翻完之后卡片仍然是左边沿对齐的 —— 按视口宽度直接翻会把某张卡
-    /// 切成两半留在边上，下一次翻页把这个偏差累积下去。
-    /// <para>
-    /// 一屏放得下几张：<c>(视口 + 间隔) / 间距</c> 向下取整，加一个间隔是因为最后一张卡后面不需要间隔。
-    /// 至少一张，否则一张比视口还宽的卡（窗口很窄时的 16:9 剧照）会让步长变成 0，箭头点不动。量不到卡片
-    /// 宽度时退回视口的九成，留一成重叠好让人知道是同一条带。
-    /// </para>
-    /// </summary>
-    internal static double StepFor(double viewport, double pitch, double spacing)
-    {
-        if (viewport <= 0) return 0;
-        if (pitch <= 0) return viewport * 0.9;
-
-        var perPage = Math.Max(1, Math.Floor((viewport + spacing) / pitch));
-        return perPage * pitch;
-    }
-
-    /// <summary>翻过去落在哪里。两头夹住，所以最后一页停在末尾而不是越过去。</summary>
-    internal static double TargetFor(double offset, int direction, double step, double scrollable) =>
-        scrollable <= 0 ? 0 : Math.Clamp(offset + direction * step, 0, scrollable);
-
-    /// <summary>
-    /// 要让第 <paramref name="index"/> 张卡露出来，带该停在哪里 —— 单集页的「更多来自」要开在正在看的那一
-    /// 集上，而不是开在第一集上然后让人自己往后翻。
-    /// <para>
-    /// 落在第一屏里就不动（返回 0）：第二集的页面开在带子的开头本来就看得见它，为了把它顶到左边沿而滚一
-    /// 段，只是把它前面的一集推出屏幕。再往后的就对齐到左边沿，末尾照旧夹住，所以最后一集的页面停在带尾而
-    /// 不是越过去留一片空白。
-    /// </para>
-    /// </summary>
-    internal static double OffsetFor(int index, double pitch, double viewport, double scrollable)
-    {
-        if (index <= 0 || pitch <= 0 || scrollable <= 0) return 0;
-
-        var left = index * pitch;
-        return left + pitch <= viewport ? 0 : Math.Clamp(left, 0, scrollable);
-    }
-
-    /// <summary>
-    /// 要让第 <paramref name="index"/> 张卡整张露出来，这条带该滚到哪儿；已经整张露着就返回 -1，也就是「别动」。
-    /// <para>
-    /// 「点击主页继续观看、媒体库、最近添加的封面之后会先跳转到页面下方，然后才会进入页面」说的就是这件事以前
-    /// 是怎么做的：焦点一落到卡片上就 <c>StartBringIntoView</c>，而那个请求会一路往上冒到主页那个<em>竖着</em>
-    /// 滚的 <c>ScrollView</c>，被读成「把这张卡的上沿对到视口的上沿」—— 整页往下滑一大段，滑完才轮到导航。所以
-    /// 现在这件事在这条带自己的滚动视图里做完，一句请求都不往外发：横着露出一张卡本来就与页面无关。
-    /// </para>
-    /// <para>
-    /// 已经露着就不动是这条规则的一半：鼠标按下去的那一刻卡片就拿到了焦点（<c>Click</c> 是松手才发的），而人按
-    /// 的那张卡当然看得见 —— 那一档要是还挪一下，就还是原来那个样子，只是挪的方向变了。露不全的那一档把它的左
-    /// 边沿对到视口的左边沿，和卡片的排布同一个节奏，不留半张卡在边上（末尾照旧夹住）。
-    /// </para>
-    /// </summary>
-    /// <param name="pitch">卡片间距：卡片宽加一个间隔，见 <see cref="Measure"/>。</param>
-    /// <param name="spacing">卡片之间的间隔 —— 卡片自己有多宽是 <paramref name="pitch"/> 减掉它。</param>
-    internal static double RevealFor(int index, double pitch, double spacing, double offset, double viewport, double scrollable)
-    {
-        if (index < 0 || pitch <= 0 || viewport <= 0 || scrollable <= 0) return -1;
-
-        var left = index * pitch;
-        var right = left + Math.Max(0, pitch - spacing);
-
-        if (left >= offset - Edge && right <= offset + viewport + Edge) return -1;
-
-        return Math.Clamp(left, 0, scrollable);
-    }
-
-    // ---- 屏上的样子 --------------------------------------------------------------
+    //
+    // 翻多远、落在哪、哪个箭头该在屏上、要让第几张卡露出来得滚到哪儿 —— 四条规则都在 Core 的
+    // EmbyNian.Infrastructure.CardStrip 上，由单元测试钉着（CardStripTests）。留在这里的是量：视口多宽、
+    // 卡片间距多大、还有多少可滚，只有屏上问得出来。
 
     /// <summary>
     /// 翻一页并返回请求的位置。<paramref name="direction"/> 是 -1 或 1。
@@ -237,7 +161,7 @@ public sealed partial class ShelfStrip : UserControl
     private double Page(int direction)
     {
         var scrollable = Scroller.ScrollableWidth;
-        var target = TargetFor(Scroller.HorizontalOffset, direction, Step, scrollable);
+        var target = CardStrip.TargetFor(Scroller.HorizontalOffset, direction, Step, scrollable);
 
         _requested = target;
 
@@ -250,7 +174,7 @@ public sealed partial class ShelfStrip : UserControl
 
     /// <summary>一页多远，按当前视口和量到的卡片间距。</summary>
     private double Step =>
-        StepFor(Scroller.ViewportWidth > 0 ? Scroller.ViewportWidth : ActualWidth, Measure(), ItemSpacing);
+        CardStrip.StepFor(Scroller.ViewportWidth > 0 ? Scroller.ViewportWidth : ActualWidth, Measure(), ItemSpacing);
 
     /// <summary>
     /// 把第 <paramref name="index"/> 张卡定位到屏上。<see cref="FocusIndex"/> 一变就叫，也就是数据刚填进来
@@ -288,7 +212,7 @@ public sealed partial class ShelfStrip : UserControl
     private double ScrollToIndex(int index)
     {
         var viewport = Scroller.ViewportWidth > 0 ? Scroller.ViewportWidth : ActualWidth;
-        var target = OffsetFor(index, Measure(), viewport, Scroller.ScrollableWidth);
+        var target = CardStrip.OffsetFor(index, Measure(), viewport, Scroller.ScrollableWidth);
 
         _requested = target;
 
@@ -311,7 +235,7 @@ public sealed partial class ShelfStrip : UserControl
 
     private void SyncArrows()
     {
-        var arrows = ArrowsFor(Scroller.HorizontalOffset, Scroller.ScrollableWidth, _hover);
+        var arrows = CardStrip.ArrowsFor(Scroller.HorizontalOffset, Scroller.ScrollableWidth, _hover);
 
         Prev.Visibility = arrows.Prev ? Visibility.Visible : Visibility.Collapsed;
         Next.Visibility = arrows.Next ? Visibility.Visible : Visibility.Collapsed;
@@ -338,7 +262,7 @@ public sealed partial class ShelfStrip : UserControl
     /// <para>
     /// 露出这件事在这条带自己的滚动视图里做完，一句 <c>BringIntoView</c> 都不往外发 —— 「点击主页继续观看、
     /// 媒体库、最近添加的封面之后会先跳转到页面下方，然后才会进入页面」正是往外发的那一版，理由和这一版的规则
-    /// 都在 <see cref="RevealFor"/> 上。
+    /// 都在 <see cref="CardStrip.RevealFor"/> 上。
     /// </para>
     /// </summary>
     private void OnGotFocus(object sender, RoutedEventArgs e)
@@ -432,7 +356,7 @@ public sealed partial class ShelfStrip : UserControl
 
     /// <summary>
     /// 当前焦点落到带内的一张卡上时，把它横着露出来 —— 在这条带自己的滚动视图里做完，见
-    /// <see cref="RevealFor"/>。
+    /// <see cref="CardStrip.RevealFor"/>。
     /// <para>
     /// 位置按索引算，不按元素量：这里最要紧的一次调用来自 <see cref="FocusItem"/>，那时目标容器可能是
     /// <c>GetOrCreateElement</c> 刚建出来的，还没量过，问它自己在哪儿问到的是 0。一条带里的卡是同一个模板，
@@ -449,7 +373,8 @@ public sealed partial class ShelfStrip : UserControl
 
         var index = Repeater.GetElementIndex(element);
         var viewport = Scroller.ViewportWidth > 0 ? Scroller.ViewportWidth : ActualWidth;
-        var target = RevealFor(index, Measure(), ItemSpacing, Scroller.HorizontalOffset, viewport, Scroller.ScrollableWidth);
+        var target = CardStrip.RevealFor(
+            index, Measure(), ItemSpacing, Scroller.HorizontalOffset, viewport, Scroller.ScrollableWidth);
 
         if (target >= 0) Scroller.ScrollTo(target, Scroller.VerticalOffset);
     }
@@ -492,7 +417,7 @@ public sealed partial class ShelfStrip : UserControl
     private void FocusByPage(int direction)
     {
         var step = Step;
-        var targetOffset = TargetFor(Scroller.HorizontalOffset, direction, step, Scroller.ScrollableWidth);
+        var targetOffset = CardStrip.TargetFor(Scroller.HorizontalOffset, direction, step, Scroller.ScrollableWidth);
 
         if (step <= 0 || Scroller.ScrollableWidth <= 0)
         {
@@ -622,8 +547,13 @@ public sealed partial class ShelfStrip : UserControl
     // ---- 自检 -------------------------------------------------------------------
 
     /// <summary>
-    /// 翻页规则的全部，加上这份标记自己能不能解析。自检时没有服务器，三条带一张卡都没有，所以规则用给定的
-    /// 数走一遍 —— 视口和卡片宽度是这条规则唯一的输入，给出来和量出来是同一件事。
+    /// 这条带只在屏上才问得出来的那几件：这份标记解析得了、间隔真进了布局、还没量过时两个箭头是收着的、点下
+    /// 去和「让第几张露出来」这两条路真的把要到的位置记下来了。
+    /// <para>
+    /// 翻多远、落在哪、哪个箭头该在屏上、露出第几张卡要滚到哪儿 —— 这四条规则从前也在这里，拿几个写死的数走
+    /// 一遍。现在它们在 Core 的 <see cref="CardStrip"/> 上，由 <c>CardStripTests</c> 钉着：同样的数字，钉在一
+    /// 个每次构建都跑、不用开窗口的地方。留在这儿的是那几个数拿不到的东西。
+    /// </para>
     /// <para>
     /// 顺带证明的那件事同样值钱：<c>new ShelfStrip()</c> 会把这份标记解析一遍，里面每个资源键（
     /// <c>DefaultButtonStyle</c>、<c>EgOnScrimBrush</c>、那六个改掉的按钮状态键）解析不了就在这里抛，而
@@ -640,40 +570,6 @@ public sealed partial class ShelfStrip : UserControl
         strip.SyncArrows();
         var quiet = !strip.PrevShown && !strip.NextShown && strip.Prev.Height >= MinBandHeight;
 
-        // 视口 900，海报卡 170 宽 → 间距 186，(900+16)/186 取整是 4 张，步长 744，不超过一屏。
-        var step = StepFor(900, 186, 16);
-        var paged = Math.Abs(step - 744) < 0.01 && step <= 900;
-        var narrow = Math.Abs(StepFor(200, 316, 16) - 316) < 0.01;
-        var blind = Math.Abs(StepFor(900, 0, 16) - 810) < 0.01;
-        var unmeasured = StepFor(0, 186, 16) == 0;
-
-        var forward = Math.Abs(TargetFor(0, 1, 744, 2000) - 744) < 0.01;
-        var tailStop = Math.Abs(TargetFor(1800, 1, 744, 2000) - 2000) < 0.01;
-        var headStop = TargetFor(300, -1, 744, 2000) == 0;
-        var still = TargetFor(0, 1, 744, 0) == 0;
-
-        var head = ArrowsFor(0, 2000, true) == (false, true);
-        var middle = ArrowsFor(500, 2000, true) == (true, true);
-        var tail = ArrowsFor(2000, 2000, true) == (true, false);
-        var fits = ArrowsFor(0, 0, true) == (false, false);
-        var away = ArrowsFor(500, 2000, false) == (false, false);
-
-        // 定位：第一张和第一屏里的都不动，第 5 张对齐左边沿（5×186=930），远处的夹在带尾，翻不动就不动。
-        var first = OffsetFor(0, 186, 900, 2000) == 0;
-        var onscreen = OffsetFor(2, 186, 900, 2000) == 0;
-        var aligned = Math.Abs(OffsetFor(5, 186, 900, 2000) - 930) < 0.01;
-        var clamped = Math.Abs(OffsetFor(40, 186, 900, 2000) - 2000) < 0.01;
-        var flat = OffsetFor(5, 186, 900, 0) == 0;
-
-        // 露出一张卡（焦点落上来时走的那条）：第 3 张整张露着 → 别动，这一档就是「点了哪张卡不挪页」；第 6 张
-        // 在右边外面 → 930，和 OffsetFor 同一个节奏；远处的夹在带尾；已经滚到 930 时第 1 张在左边外面 → 回到
-        // 0；翻不动的带上什么都不做。
-        var here = RevealFor(2, 186, 16, 0, 900, 2000) < 0;
-        var ahead = Math.Abs(RevealFor(5, 186, 16, 0, 900, 2000) - 930) < 0.01;
-        var far = Math.Abs(RevealFor(40, 186, 16, 0, 900, 2000) - 2000) < 0.01;
-        var back = RevealFor(0, 186, 16, 930, 900, 2000) == 0;
-        var stuck = RevealFor(5, 186, 16, 0, 900, 0) < 0;
-
         // 点下去这条路本身：Page 记下要到的位置，而这一份控件没有余量可翻，所以要到的位置是 0。
         var clicked = strip.Page(1) == 0 && strip.Requested == 0;
 
@@ -681,30 +577,13 @@ public sealed partial class ShelfStrip : UserControl
         strip.FocusOn(5);
         var pending = strip.PendingFocus == 5;
 
-        var ok = spacing && quiet && clicked && pending
-            && paged && narrow && blind && unmeasured
-            && forward && tailStop && headStop && still
-            && head && middle && tail && fits && away
-            && first && onscreen && aligned && clamped && flat
-            && here && ahead && far && back && stuck;
+        var ok = spacing && quiet && clicked && pending;
 
         return (ok,
-            $"步长 视口900/间距186 → {step:0}（{step / 186:0} 张）、窄视口 {StepFor(200, 316, 16):0}、"
-                + $"量不到 {StepFor(900, 0, 16):0}；夹取 {TargetFor(0, 1, 744, 2000):0}/"
-                + $"{TargetFor(1800, 1, 744, 2000):0}/{TargetFor(300, -1, 744, 2000):0}；"
-                + $"箭头 头{Say(ArrowsFor(0, 2000, true))} 中{Say(ArrowsFor(500, 2000, true))} "
-                + $"尾{Say(ArrowsFor(2000, 2000, true))} 放得下{Say(ArrowsFor(0, 0, true))} "
-                + $"离开{Say(ArrowsFor(500, 2000, false))}；定位 第1张 {OffsetFor(0, 186, 900, 2000):0}、"
-                + $"第3张 {OffsetFor(2, 186, 900, 2000):0}、第6张 {OffsetFor(5, 186, 900, 2000):0}、"
-                + $"第41张 {OffsetFor(40, 186, 900, 2000):0}，量不到时请求留着；"
-                + $"露出 第3张{(RevealFor(2, 186, 16, 0, 900, 2000) < 0 ? "别动" : "要挪")}、"
-                + $"第6张 {RevealFor(5, 186, 16, 0, 900, 2000):0}、第41张 {RevealFor(40, 186, 16, 0, 900, 2000):0}、"
-                + $"退回 {RevealFor(0, 186, 16, 930, 900, 2000):0}；间隔 {strip.Rows.Spacing:0} 已进布局，"
-                + $"静止时箭头收起、高 {strip.Prev.Height:0}");
+            $"标记解析通过；间隔 {strip.Rows.Spacing:0} 已进布局；还没量过时两个箭头收起、高 "
+                + $"{strip.Prev.Height:0}；翻页要到 {strip.Requested:0}；定位第 6 张的请求留着（"
+                + $"{strip.PendingFocus}）等布局。四条算术规则见 CardStripTests");
     }
-
-    private static string Say((bool Prev, bool Next) arrows) =>
-        $"({(arrows.Prev ? "有" : "无")}{(arrows.Next ? "有" : "无")})";
 
     /// <summary>自检用：<c>Visibility</c> 是这条规则唯一看得见的结果。</summary>
     internal bool PrevShown => Prev.Visibility == Visibility.Visible;

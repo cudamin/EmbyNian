@@ -1,3 +1,4 @@
+using EmbyNian.Infrastructure;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Foundation;
@@ -23,7 +24,8 @@ namespace EmbyNian.Shell.Views;
 /// </para>
 /// <para>
 /// WinUI 3 自己没有这样一个面板（<c>WrapGrid</c> 只服务列表控件，社区工具包那支 <c>WrapPanel</c> 要多引一个
-/// 包），所以这里自己写一个。量和排走同一份代码（<see cref="Layout"/>），否则两遍算出来的换行位置迟早会分叉。
+/// 包），所以这里自己写一个。换行那点算术在 Core 的 <see cref="WrapLayout"/> 上，量和排都走它
+/// （<see cref="Layout"/>），否则两遍算出来的换行位置迟早会分叉。
 /// </para>
 /// </summary>
 public sealed class WrapRow : Panel
@@ -74,13 +76,20 @@ public sealed class WrapRow : Panel
     /// <summary>
     /// 摆一遍，顺便算出总共占多大。<paramref name="arrange"/> 为假时只量不摆（<c>MeasureOverride</c>），
     /// 为真时按量过的尺寸摆（<c>ArrangeOverride</c>）—— 两遍看的是同一段判断，换行位置因此不会两样。
+    /// <para>
+    /// 换行本身在 Core 的 <see cref="WrapLayout"/> 上，由单元测试钉着（<c>WrapLayoutTests</c>）：那几个下拉的
+    /// 宽度按服务器上最长那条轨道名撑，所以「这一次到底会不会换行」屏上碰不碰得到全靠运气。留在这里的是量 ——
+    /// 每个孩子想要多大，只有框架答得出。
+    /// </para>
     /// </summary>
     private Size Layout(double width, bool arrange)
     {
         // 宽度可以是无限（放进一个横向能滚的容器里就是），那时候永远不换行。
-        var limit = double.IsInfinity(width) || double.IsNaN(width) ? double.PositiveInfinity : width;
+        var limit = WrapLayout.Bound(width);
 
-        double x = 0, y = 0, rowHeight = 0, widest = 0;
+        // 每个孩子都按「整行的宽度」去量，不是按无限宽量 —— 理由见类注释里「每个孩子都按」那一段。
+        var kids = new List<UIElement>(Children.Count);
+        var boxes = new List<(double Width, double Height)>(Children.Count);
 
         foreach (var child in Children)
         {
@@ -88,24 +97,21 @@ public sealed class WrapRow : Panel
 
             if (!arrange) child.Measure(new Size(limit, double.PositiveInfinity));
 
-            var size = child.DesiredSize;
-
-            // 本行已经有人，再放下去就出界 —— 换行。空行不判，见类注释最后一段。
-            if (x > 0 && x + Spacing + size.Width > limit + 0.5)
-            {
-                y += rowHeight + RowSpacing;
-                x = 0;
-                rowHeight = 0;
-            }
-
-            var left = x > 0 ? x + Spacing : 0;
-            if (arrange) child.Arrange(new Rect(left, y, size.Width, size.Height));
-
-            x = left + size.Width;
-            rowHeight = Math.Max(rowHeight, size.Height);
-            widest = Math.Max(widest, x);
+            kids.Add(child);
+            boxes.Add((child.DesiredSize.Width, child.DesiredSize.Height));
         }
 
-        return new Size(double.IsInfinity(limit) ? widest : Math.Min(widest, limit), y + rowHeight);
+        var plan = WrapLayout.Place(boxes, width, Spacing, RowSpacing);
+
+        if (arrange)
+        {
+            for (var i = 0; i < kids.Count; i++)
+            {
+                var (left, top) = plan.Spots[i];
+                kids[i].Arrange(new Rect(left, top, boxes[i].Width, boxes[i].Height));
+            }
+        }
+
+        return new Size(plan.Width, plan.Height);
     }
 }

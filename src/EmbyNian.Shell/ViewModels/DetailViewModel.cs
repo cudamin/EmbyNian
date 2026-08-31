@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.Diagnostics;

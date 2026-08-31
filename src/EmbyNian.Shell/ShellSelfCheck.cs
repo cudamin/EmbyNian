@@ -1811,7 +1811,7 @@ internal static class ShellSelfCheck
 
             // 「点击主页继续观看、媒体库、最近添加的封面之后会先跳转到页面下方，然后才会进入页面」：按下去的那一
             // 刻卡片先拿到焦点，横带以前会替它要一次 BringIntoView，请求冒到这一页竖着滚的那层就把整页拽下去了。
-            // 现在露出一张卡在带自己的滚动视图里做完（ShelfStrip.RevealFor），一句请求都不往外发。这条读数按
+            // 现在露出一张卡在带自己的滚动视图里做完（CardStrip.RevealFor），一句请求都不往外发。这条读数按
             // Focus(FocusState.Pointer) 走同一条路，不点，也就不会开条目；隔一拍再量，见 HomePage.StayFocus。
             if (_stay is { } stay) Check("点卡片不挪页", stay.Ok, stay.Detail);
             else report.AppendLine("[信息] 点卡片不挪页 — 主页没有已渲染的卡片");
@@ -1869,9 +1869,10 @@ internal static class ShellSelfCheck
                 : "导航栏的设置项已关掉，设置在标题栏那一排里");
 
         // 卡片带翻页. Data-independent on purpose, hence outside the branch above: a self-check has no
-        // server, so the three strips on screen hold no cards at all, and what there is to be wrong about
-        // is the arithmetic — how far one page is, where it stops at either end, which chevron is up. The
-        // probe also parses the control's markup, which is the half no build checks.
+        // server, so the three strips on screen hold no cards at all. The arithmetic — how far one page is,
+        // where it stops at either end, which chevron is up — now lives in Core's CardStrip and is pinned by
+        // CardStripTests, so what is left here is the half no unit test can reach: the control's markup
+        // parses, ItemSpacing reached the layout, and the click and focus paths record the offset they want.
         var strip = ShelfStrip.Probe();
         Check("卡片带翻页", strip.Ok, strip.Detail);
 
