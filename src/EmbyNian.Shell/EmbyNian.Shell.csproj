@@ -53,7 +53,27 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
+    <!--
+      The parts of the Windows App SDK this app uses, rather than the Microsoft.WindowsAppSDK
+      meta-package. That package is ten sub-packages in a trench coat, and four of them are for
+      features a video client does not have: .ML pulls in Microsoft.Windows.AI.MachineLearning, whose
+      onnxruntime.dll (21 MB) and DirectML.dll (18 MB) were 39 MB of inference runtime shipped beside
+      a player that runs no inference, and .Search (which drags .AI along), .AI and .Widgets add
+      several more. Nothing in this repository names Microsoft.Windows.AI, .Search or .Widgets, and
+      the meta-package contributes nothing else — its props and targets only declare a VS project
+      capability.
+
+      The versions are exactly what Microsoft.WindowsAppSDK 2.4.0's nuspec resolves to, so the
+      framework package the bootstrapper finds (Microsoft.WindowsAppRuntime.2 2.4.0.0 on this
+      machine) is unchanged: same runtime, fewer files copied. Going back is one line — put the
+      meta-package reference back and delete these six.
+    -->
+    <PackageReference Include="Microsoft.WindowsAppSDK.Base" Version="2.0.4" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.6" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.6" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="2.1.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="[2.4.0]" />
     <!-- MVVM, source-generated. The pages bind to view models rather than reaching for named XAML
          elements, and this package is what makes that cheap enough to be worth doing everywhere:
          [ObservableProperty] on a partial property writes the backing field, the setter and the
@@ -81,7 +101,7 @@
   </ItemGroup>
 
   <!-- The player is libmpv loaded in-process, so the DLL has to sit next to the exe in every
-       configuration and not only in a publish. It is 36 MB; PreserveNewest means it is copied once and
+       configuration and not only in a publish. It is 117 MB; PreserveNewest means it is copied once and
        then skipped, and the Condition means a checkout without it still builds and simply reports the
        missing backend at play time instead of failing the build. -->
   <ItemGroup>

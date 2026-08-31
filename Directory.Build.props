@@ -7,7 +7,8 @@
     them buildable against the shared frameworks alone and keeps the test project honest about what
     it is testing. That is a preference now rather than a constraint — this used to say the machine
     had an empty NuGet cache and had to build offline, which is no longer true. EmbyNian.Shell
-    references Microsoft.WindowsAppSDK, restored from nuget.org (pinned in nuget.config).
+    references the Windows App SDK as its own sub-packages (Microsoft.WindowsAppSDK.Base and five
+    more, see that csproj), restored from nuget.org (pinned in nuget.config).
   -->
   <PropertyGroup>
     <LangVersion>latest</LangVersion>

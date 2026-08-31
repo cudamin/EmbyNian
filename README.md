@@ -1,7 +1,8 @@
 # EmbyNian
 
 面向 Emby 4.9.x 的现代化 Windows 桌面客户端，基于 .NET 10 WinUI 3，用 mpv 播放原始视频流。
-Core 与测试项目不引用 NuGet；WinUI 3 外壳通过 `Microsoft.WindowsAppSDK` 还原依赖。
+Core 与测试项目不引用 NuGet；WinUI 3 外壳按需引用 Windows App SDK 的子包（`Microsoft.WindowsAppSDK.Base`
+等六个，不用那个把十个子包裹在一起的 `Microsoft.WindowsAppSDK` 总包），从 nuget.org 还原。
 
 ## 功能
 
@@ -70,7 +71,7 @@ dotnet run --project .\tests\EmbyNian.Tests\EmbyNian.Tests.csproj
 `artifacts\EmbyNian-3.0.0-win-x64.msix`，否则明确报出安装 SDK 的提示。
 
 改完代码只是要一个能跑的 exe 时传 `-NoArchive`：跳过打包那一步，同一次发布从一两分钟降到二十来秒
-（375 MB 压成 148 MB 的 zip 就是那一两分钟）。上一次的 zip 照旧先删 —— 一个跟刚发布的目录对不上的
+（323 MB 压成 126 MB 的 zip 就是那一两分钟）。上一次的 zip 照旧先删 —— 一个跟刚发布的目录对不上的
 压缩包比没有压缩包更坏。交付前照旧不带这个开关：那个 zip 才是交出去的东西。
 
 发布需要仓库根目录的匹配版 `libmpv-2.dll`，以及 `C:\mpv_config-2026.08.12\portable_config\shaders`；
