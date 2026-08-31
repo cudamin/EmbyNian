@@ -402,12 +402,17 @@
              owns which properties are read and what the rows say; this is where they land.
 
              Below the title strip and outside the reveal rule — the strip comes and goes with the
-             pointer, and a panel that came and went with it could not be read. -->
+             pointer, and a panel that came and went with it could not be read.
+
+             The top inset is absent on purpose: how far down this sits is 「under the title strip」, and
+             PlayerPage.PlaceOverlays works it out from the strip's own height. It used to be written here
+             as 104, which was that height plus a gap, restated in a file that would not have noticed the
+             strip changing. The left inset stays — that one is this panel's own taste, not a clearance. -->
         <Border
             x:Name="StatsPanel"
             HorizontalAlignment="Left"
             VerticalAlignment="Top"
-            Margin="20,104,0,0"
+            Margin="20,0,0,0"
             Padding="14,10"
             Background="{StaticResource PlayerStatsBrush}"
             BorderBrush="{StaticResource PlayerEdgeFaintBrush}"
@@ -493,12 +498,18 @@
              It needs a declared name at all because its content is a panel — a button announces its own
              content only when that content is text, and 「跳过片头」 sitting one level down inside a
              StackPanel is not text as far as the announcement is concerned. Measured: with the name
-             removed this was the single control the narration probe reported as 哑的. -->
+             removed this was the single control the narration probe reported as 哑的.
+
+             No bottom inset here either: it sits above the transport bar, and the bar has no declared
+             height at all — two auto rows and its padding, so its height is whatever its buttons and its
+             fonts come to. PlayerPage.PlaceOverlays measures it. The 148 that used to be here was a guess
+             at that height, and one larger font in the transport row would have had this offer drawn
+             across the seek slider. -->
         <Button
             x:Name="SkipButton"
             HorizontalAlignment="Right"
             VerticalAlignment="Bottom"
-            Margin="0,0,28,148"
+            Margin="0,0,28,0"
             Padding="16,10"
             Background="{StaticResource PlayerSkipBrush}"
             BorderBrush="{StaticResource PlayerEdgeStrongBrush}"
@@ -539,6 +550,7 @@
             Background="{StaticResource PlayerBottomScrim}"
             Padding="20,26,20,12"
             RowSpacing="2"
+            SizeChanged="OnBarResized"
             Visibility="Collapsed">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />

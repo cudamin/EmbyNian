@@ -49,7 +49,7 @@ public sealed partial class PlayerPage
 
     // ---- 几何 ---------------------------------------------------------------------
     //
-    // The three questions the two geometry probes ask of the live tree, in Root's own logical coordinates.
+    // The three questions the geometry probes ask of the live tree, in Root's own logical coordinates.
     // Half a pixel of slack throughout: layout rounding puts a 46-wide button at 45.9996 often enough that
     // an exact comparison would report a button as having escaped the strip that clips it.
 

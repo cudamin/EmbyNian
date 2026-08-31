@@ -76,6 +76,13 @@ public sealed class PlaybackService(
     /// </summary>
     public bool CanControl => _current is IPlayerControl && _current.HasControlChannel;
 
+    /// <summary>
+    /// True when the backend in use answers several property reads at once, which is how the statistics
+    /// panel decides between asking for its whole batch together and asking one at a time. False when
+    /// nothing is playing, because there is nobody to ask.
+    /// </summary>
+    public bool ReadsOverlap => _current?.ReadsOverlap ?? false;
+
     public PlaybackPlanner Planner => planner;
 
     /// <summary>

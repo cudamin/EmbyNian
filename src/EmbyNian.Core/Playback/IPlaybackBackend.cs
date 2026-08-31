@@ -49,6 +49,19 @@ public interface IPlaybackHandle : IAsyncDisposable
     /// <summary>The current track list, or empty when it cannot be read.</summary>
     Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Whether several property reads may be in flight at once, which decides how the statistics panel
+    /// asks for its twenty-one properties: together, or one after another.
+    /// <para>
+    /// False by default, and false for the in-process player, where a read is a native call made on the
+    /// calling thread behind a one-at-a-time gate — issuing them together would serialise anyway and only
+    /// add scheduling. True across the pipe to an external <c>mpv.exe</c>, where each read is a real round
+    /// trip matched to its reply by request id: twenty-one of those in sequence can outlast the second
+    /// they were meant to fill, and the same twenty-one pipelined cost one wait.
+    /// </para>
+    /// </summary>
+    bool ReadsOverlap => false;
+
     /// <summary>A numeric property (e.g. volume), or null when it cannot be read.</summary>
     Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken);
 

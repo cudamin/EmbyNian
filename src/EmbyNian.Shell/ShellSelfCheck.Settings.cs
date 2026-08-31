@@ -334,6 +334,14 @@ internal static partial class ShellSelfCheck
         var skips = player.ProbeSkipAndChapters();
         check("跳过片头与章节刻度", skips.Ok, skips.Detail);
 
+        // The two overlays that have to clear another overlay, put up together — which no state of the reveal
+        // rule produces on its own. Both insets used to be written down; the panel's restated the strip's own
+        // height in a second file, and the button's was a guess at a height nothing declares at all, so one
+        // larger font in the transport row would have drawn the 跳过 offer across the seek slider. Asserted as
+        // distances, with the numbers printed rather than expected.
+        var clearance = player.ProbeClearance();
+        check("浮层让开控制条", clearance.Ok, clearance.Detail);
+
         var peek = player.ProbePeek();
         check("章节预览定位", peek.Ok, peek.Detail);
 

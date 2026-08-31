@@ -5,8 +5,9 @@ using Windows.Foundation;
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
-/// 管「什么时候看得见」的那两关：<c>ProbeReveal</c> 把显隐规则按一只指针的走法推一遍，<c>ProbeRailFade</c> 问
-/// 右边那条音量条的淡入淡出。
+/// 管「什么时候看得见」和「看得见的时候摆在哪」：<c>ProbeReveal</c> 把显隐规则按一只指针的走法推一遍，
+/// <c>ProbeRailFade</c> 问右边那条音量条的淡入淡出，<c>ProbeClearance</c> 量两条浮层跟它们要让开的那两条带
+/// 之间的距离。
 /// <para>
 /// 规则本身是 Core 的、在那儿由单元测试钉着；这两关钉的是这一页把一个状态铺到三个 <c>Visibility</c> 上的那段
 /// 接线 —— 把 <c>Bar</c> 接到轨道那一支上的写法编译得过、读起来也对，直到有人按了播放。拆成几个文件的缘由见
@@ -284,6 +285,135 @@ public sealed partial class PlayerPage
         _chrome.Tick(clock + SettleMilliseconds);
         SetCursorHidden(false);
         Render();
+
+        return (wrong.Count == 0,
+            string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));
+    }
+
+    /// <summary>
+    /// Puts both overlays up at once and measures what they were supposed to be clearing: 统计 under the
+    /// title strip, 跳过 over the transport bar.
+    /// <para>
+    /// Both insets used to be written down — 104 and 148 — and both were wrong in a way no build could
+    /// see. The panel's 104 was the strip's own 96 plus a gap restated in a second file, so a strip that
+    /// changed height would have taken the panel with it in the markup and nowhere else. The button's 148
+    /// was a guess at a height nothing declares at all: the bar's height comes out of its fonts and its
+    /// padding, and one larger font in the transport row would have drawn the 跳过 offer across the seek
+    /// slider. Both are computed now, off the thing they have to clear, which is why this probe asserts a
+    /// distance rather than a number — the numbers are printed for the record and are free to change.
+    /// </para>
+    /// <para>
+    /// The measure fallback gets driven on purpose too. Before a film's first frame the bar is visible and
+    /// has never been arranged, which is the one moment <see cref="BarHeight"/> has to measure it by hand;
+    /// here the arranged height is already known, so the two can be put side by side. That comparison is
+    /// the only way to find out that the hand measurement is measuring the same bar.
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ProbeClearance()
+    {
+        if (!Attached) return (false, "播放层未接线");
+
+        var was = Visibility;
+        var wasOffer = ViewModel.SkipOffered;
+        var wasCaption = ViewModel.SkipCaption;
+        var wasStats = ViewModel.StatsOpen;
+
+        Visibility = Visibility.Visible;
+        UpdateLayout();
+
+        // Everything up at once, which no reveal state produces on its own: the offer stands outside the
+        // rule and is the one thing that can be on screen while the bar is down.
+        var clock = Now;
+        _chrome.WakeFully(clock);
+        Render();
+
+        ViewModel.SkipOffered = true;
+        ViewModel.SkipCaption = "跳过片头";
+        ViewModel.StatsOpen = true;
+
+        // Filled through the real formatting path so the panel has the height it has in front of a person.
+        // A partial reading set, the same way ProbeStats does it.
+        RenderStatRows(PlaybackStats.Format(new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["width"] = "1920",
+            ["height"] = "1080",
+            ["video-codec"] = "h264 (High)",
+            ["audio-codec-name"] = "aac",
+            ["hwdec-current"] = "d3d11va-copy",
+            ["current-vo"] = "gpu-next",
+            ["video-bitrate"] = "4200000",
+            ["avsync"] = "-0.002",
+            ["container-fps"] = "23.976"
+        }));
+        UpdateLayout();
+
+        // The placement itself, called the way EnterPlayer and the bar's own SizeChanged call it.
+        PlaceOverlays();
+        UpdateLayout();
+
+        var picture = BoundsOf(Root);
+        var strip = BoundsOf(TitleStrip);
+        var bar = BoundsOf(Bar);
+        var stats = BoundsOf(StatsPanel);
+        var skip = BoundsOf(SkipButton);
+
+        var report = new List<string>();
+        var wrong = new List<string>();
+
+        void Want(string what, bool ok)
+        {
+            if (!ok) wrong.Add(what);
+        }
+
+        var above = stats.Top - strip.Bottom;
+        var below = bar.Top - skip.Bottom;
+
+        report.Add($"标题栏高 {strip.Height:F0}，统计面板 {stats.Width:F0}×{stats.Height:F0} 让开 {above:F1}");
+        report.Add($"进度条高 {bar.Height:F0}，跳过按钮 {skip.Width:F0}×{skip.Height:F0} 让开 {below:F1}");
+
+        Want("四样都得有尺寸", strip.Height > 0 && bar.Height > 0 && stats.Height > 0 && skip.Height > 0);
+        Want("统计面板不压标题栏", !Overlaps(stats, strip));
+        Want("跳过按钮不压进度条", !Overlaps(skip, bar));
+        Want("统计面板在画面里", Encloses(picture, stats));
+        Want("跳过按钮在画面里", Encloses(picture, skip));
+
+        // The distances themselves, which is what says they were derived rather than typed: each overlay
+        // sits exactly one gap off the edge of what it clears. A margin re-hardcoded to some number that
+        // happens not to overlap today would pass the two checks above and fail these two.
+        Want("统计面板的间距是量出来的", Math.Abs(above - OverlayGap) < GeometrySlack);
+        Want("跳过按钮的间距是量出来的", Math.Abs(below - OverlayGap) < GeometrySlack);
+
+        // 量具本身. Take the bar out of the layout so its ActualHeight really is 0 — the state it is in
+        // before the first film — and make the fallback do the work.
+        var arranged = bar.Height;
+        var wasBar = Bar.Visibility;
+        Bar.Visibility = Visibility.Collapsed;
+        UpdateLayout();
+
+        _barHeight = 0;
+        var measured = BarHeight();
+
+        Bar.Visibility = wasBar;
+        UpdateLayout();
+
+        report.Add($"没排版过时量得 {measured:F0}，排版后 {arranged:F0}");
+        Want("量具跟排版结果对得上", Math.Abs(measured - arranged) < 1);
+
+        // Put everything back, page first, so the last Render leaves nothing of the player's over the
+        // library grid behind it. Closing 统计 is what empties the grid.
+        ViewModel.SkipOffered = wasOffer;
+        ViewModel.SkipCaption = wasCaption;
+        ViewModel.StatsOpen = wasStats;
+        Visibility = was;
+        _chrome.Reset(++clock);
+        _chrome.Tick(clock + SettleMilliseconds);
+        SetCursorHidden(false);
+        Render();
+        UpdateLayout();
+
+        // And the remembered height back to the arranged one, since the fallback above left it holding a
+        // measurement taken with the bar out of the tree.
+        PlaceOverlays();
 
         return (wrong.Count == 0,
             string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));

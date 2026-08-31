@@ -62,6 +62,20 @@ public sealed partial class PlayerViewModel : ObservableObject
     private const int VolumeGlyphCode = 0xE767;
     private const int MutedGlyphCode = 0xE74F;
 
+    /// <summary>
+    /// How many times, and how far apart, the three things that can only be learned by asking again keep
+    /// asking: the track list, mpv's own chapter marks and the picture's shape. Six seconds in half-second
+    /// steps, which covers a file that takes its time to open and gives up rather than polling a stuck
+    /// backend forever.
+    /// <para>
+    /// Both numbers were written out three times each, once per poller, and they were only the same by
+    /// coincidence — nothing would have complained if a fix to one had left the other two alone.
+    /// </para>
+    /// </summary>
+    private const int PollAttempts = 12;
+
+    private const int PollIntervalMilliseconds = 500;
+
     /// <summary>The chapter preview's picture width, mirrored from the XAML so the two cannot drift.</summary>
     internal const int ChapterPeekWidth = 212;
 
@@ -1250,77 +1264,94 @@ public sealed partial class PlayerViewModel : ObservableObject
     }
 
     /// <summary>
-    /// mpv publishes its track list only once the file is actually being decoded, so the pickers are
-    /// refilled in a loop until the list stops being empty. A stuck backend runs out of attempts and
-    /// leaves the placeholder rows in place.
+    /// Asks again until the answer arrives. Three things about a file cannot be known when playback starts and
+    /// have no notification to wait for — the track list, mpv's own chapter marks and the displayed picture
+    /// size — so each is polled, and this is the polling.
     /// </summary>
-    private async Task PopulateTracksAsync(int generation)
+    /// <param name="generation">
+    /// The playback this poll belongs to. Checked before every attempt, because six seconds is long enough for
+    /// the viewer to have switched episodes twice and an answer about the previous file must not be applied to
+    /// this one.
+    /// </param>
+    /// <param name="pauseFirst">
+    /// Whether to wait before the first attempt as well as between them. True for the two that ask mpv about
+    /// the file directly: right after a switch mpv is still answering about the file that just ended, and a
+    /// prompt answer is the wrong one rather than an early one. False for the track list, which asks the
+    /// client's own service and can be answered at once when the file was already open.
+    /// </param>
+    /// <param name="attempt">
+    /// One attempt. True means stop asking — either it worked, or the answer that came back says no amount of
+    /// waiting will change it (a file with fewer than two chapters has no 「OP」 to find).
+    /// </param>
+    private async Task PollAsync(int generation, bool pauseFirst, Func<Task<bool>> attempt)
     {
-        for (var attempt = 0; attempt < 12; attempt++)
+        for (var round = 0; round < PollAttempts; round++)
         {
+            if (pauseFirst || round > 0) await Task.Delay(PollIntervalMilliseconds).ConfigureAwait(true);
+
             if (generation != _generation || !_playback.IsPlaying) return;
-
-            var tracks = await _playback.GetTracksAsync().ConfigureAwait(true);
-            if (generation != _generation) return;
-
-            if (tracks.Count > 0)
-            {
-                Tracks = tracks;
-                return;
-            }
-
-            await Task.Delay(500).ConfigureAwait(true);
+            if (await attempt().ConfigureAwait(true)) return;
         }
     }
+
+    /// <summary>
+    /// mpv publishes its track list only once the file is actually being decoded, so the pickers are
+    /// refilled until the list stops being empty. A stuck backend runs out of attempts and leaves the
+    /// placeholder rows in place.
+    /// </summary>
+    private Task PopulateTracksAsync(int generation) => PollAsync(generation, false, async () =>
+    {
+        var tracks = await _playback.GetTracksAsync().ConfigureAwait(true);
+        if (generation != _generation) return true;
+
+        if (tracks.Count == 0) return false;
+
+        Tracks = tracks;
+        return true;
+    });
 
     /// <summary>
     /// Swaps Emby's chapter marks for mpv's own, which arrive a second or two after playback starts and
     /// are the ones a release group actually wrote 「OP」 in.
     /// </summary>
-    private async Task RefineSkipSectionsAsync(int generation)
+    private Task RefineSkipSectionsAsync(int generation) => PollAsync(generation, true, async () =>
     {
-        for (var attempt = 0; attempt < 12; attempt++)
+        var count = await _playback.GetNumberAsync("chapter-list/count").ConfigureAwait(true);
+
+        // Null means the property is not there yet; a real answer of 0 or 1 means this file has
+        // nothing to read and waiting longer will not change that.
+        if (count is null) return false;
+        if (count < 2) return true;
+
+        var chapters = new List<SkipChapter>((int)count.Value);
+        for (var index = 0; index < (int)count.Value; index++)
         {
-            await Task.Delay(500).ConfigureAwait(true);
-            if (generation != _generation || !_playback.IsPlaying) return;
+            if (generation != _generation) return true;
 
-            var count = await _playback.GetNumberAsync("chapter-list/count").ConfigureAwait(true);
+            var start = await _playback.GetNumberAsync($"chapter-list/{index}/time").ConfigureAwait(true);
+            if (start is null) return true;
 
-            // Null means the property is not there yet; a real answer of 0 or 1 means this file has
-            // nothing to read and waiting longer will not change that.
-            if (count is null) continue;
-            if (count < 2) return;
-
-            var chapters = new List<SkipChapter>((int)count.Value);
-            for (var index = 0; index < (int)count.Value; index++)
-            {
-                if (generation != _generation) return;
-
-                var start = await _playback.GetNumberAsync($"chapter-list/{index}/time").ConfigureAwait(true);
-                if (start is null) return;
-
-                var title = await _playback.GetTextAsync($"chapter-list/{index}/title").ConfigureAwait(true);
-                chapters.Add(new SkipChapter(start.Value, title));
-            }
-
-            if (generation != _generation) return;
-
-            var duration = await _playback.GetNumberAsync("duration").ConfigureAwait(true)
-                           ?? _playback.Status.Duration;
-            if (generation != _generation) return;
-
-            _skips.Refine(SkipSectionPlanner.Resolve(chapters, duration), duration);
-
-            // The ticks get the same upgrade. Emby's marks and mpv's usually agree, but a file remuxed
-            // after the library scan is exactly the case where they do not, and the picture on screen is
-            // the one to believe.
-            ChapterMarks = chapters;
-            ChaptersChanged?.Invoke();
-
-            ApplySkipOffer();
-            return;
+            var title = await _playback.GetTextAsync($"chapter-list/{index}/title").ConfigureAwait(true);
+            chapters.Add(new SkipChapter(start.Value, title));
         }
-    }
+
+        if (generation != _generation) return true;
+
+        var duration = await _playback.GetNumberAsync("duration").ConfigureAwait(true)
+                       ?? _playback.Status.Duration;
+        if (generation != _generation) return true;
+
+        _skips.Refine(SkipSectionPlanner.Resolve(chapters, duration), duration);
+
+        // The ticks get the same upgrade. Emby's marks and mpv's usually agree, but a file remuxed
+        // after the library scan is exactly the case where they do not, and the picture on screen is
+        // the one to believe.
+        ChapterMarks = chapters;
+        ChaptersChanged?.Invoke();
+
+        ApplySkipOffer();
+        return true;
+    });
 
     // ---- 跳过片头/片尾 -----------------------------------------------------------
 
@@ -1549,10 +1580,28 @@ public sealed partial class PlayerViewModel : ObservableObject
     // ---- 播放统计 ----------------------------------------------------------------
 
     /// <summary>
-    /// Reads the panel's properties and hands the formatted rows to the page. One round trip per property,
-    /// which is what <see cref="PlaybackService.GetTextAsync"/> offers and is cheap enough at one hertz; the
-    /// guard is what matters, because a read that took longer than the refresh interval would otherwise
-    /// start another before the first came back and the two would interleave into the same grid.
+    /// Reads the panel's properties and hands the formatted rows to the page, once a second while the panel
+    /// is open. How it asks is the backend's answer, not this method's guess: see
+    /// <see cref="PlaybackService.ReadsOverlap"/>.
+    /// <para>
+    /// Neither branch runs the batch the way this used to. Awaiting an already-completed task continues
+    /// synchronously, and the in-process player's reads <em>are</em> already complete when they come back —
+    /// each one is a native call made on the calling thread — so twenty-one 「awaited」 reads were in truth
+    /// twenty-one native calls in a single unbroken stretch of the UI thread, every second, for as long as
+    /// the panel stood open. Nothing about that is visible in a frame rate counter; it is visible in a
+    /// pointer that moves in steps while the panel is up.
+    /// </para>
+    /// <para>
+    /// So: across a pipe, ask for all of them at once and wait once — the cost there is round trips, and they
+    /// pipeline. In-process, keep the single file (a shared gate would serialise them anyway) but run the whole
+    /// stretch off the UI thread. The per-read 「已经关掉了就别问了」 bail survives only in the second branch,
+    /// where reads still happen one after another; in the first they are all already in flight by the time the
+    /// panel could close, and the two checks around the batch are what stop a late answer from being drawn.
+    /// </para>
+    /// <para>
+    /// The re-entry guard is what matters most either way: a batch that took longer than the refresh interval
+    /// would otherwise start another before the first came back, and the two would interleave into the same grid.
+    /// </para>
     /// </summary>
     private async Task RefreshStatsAsync()
     {
@@ -1561,14 +1610,29 @@ public sealed partial class PlayerViewModel : ObservableObject
         _statsBusy = true;
         try
         {
-            var readings = new Dictionary<string, string?>(PlaybackStats.Fields.Count, StringComparer.Ordinal);
+            var fields = PlaybackStats.Fields;
+            var readings = new Dictionary<string, string?>(fields.Count, StringComparer.Ordinal);
 
-            foreach (var field in PlaybackStats.Fields)
+            if (_playback.ReadsOverlap)
             {
-                // Every await is a chance for the panel to have been closed or the file to have changed.
-                if (!StatsOpen) return;
+                var pending = new Task<string?>[fields.Count];
+                for (var index = 0; index < fields.Count; index++) pending[index] = _playback.GetTextAsync(fields[index]);
 
-                readings[field] = await _playback.GetTextAsync(field).ConfigureAwait(true);
+                var values = await Task.WhenAll(pending).ConfigureAwait(true);
+                for (var index = 0; index < fields.Count; index++) readings[fields[index]] = values[index];
+            }
+            else
+            {
+                // ConfigureAwait(true) on the way back: the invoke below touches the page's grid.
+                await Task.Run(async () =>
+                {
+                    foreach (var field in fields)
+                    {
+                        if (!StatsOpen) return;
+
+                        readings[field] = await _playback.GetTextAsync(field).ConfigureAwait(false);
+                    }
+                }).ConfigureAwait(true);
             }
 
             if (!StatsOpen) return;
@@ -1688,21 +1752,18 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// decoded, and there is no notification to wait for.
     /// </para>
     /// </summary>
-    private async Task ApplyAspectAsync(int generation)
+    private Task ApplyAspectAsync(int generation)
     {
-        if (!Embedded) return;
+        if (!Embedded) return Task.CompletedTask;
 
-        for (var attempt = 0; attempt < 12; attempt++)
+        return PollAsync(generation, true, async () =>
         {
-            await Task.Delay(500).ConfigureAwait(true);
-            if (generation != _generation || !_playback.IsPlaying) return;
-
             var displayWidth = await _playback.GetNumberAsync("dwidth").ConfigureAwait(true);
             var displayHeight = await _playback.GetNumberAsync("dheight").ConfigureAwait(true);
-            if (generation != _generation) return;
+            if (generation != _generation) return true;
 
             var aspect = AspectLock.Ratio(displayWidth ?? 0, displayHeight ?? 0, 0, 0);
-            if (aspect <= 0) continue;
+            if (aspect <= 0) return false;
 
             // Only on a change, so switching episodes inside one series does not shuffle the window the
             // viewer has already placed.
@@ -1713,8 +1774,8 @@ public sealed partial class PlayerViewModel : ObservableObject
                 Log.Debug(Category, $"画面比例 {aspect.ToString("0.000", CultureInfo.InvariantCulture)}，缩放已联动");
             }
 
-            return;
-        }
+            return true;
+        });
     }
 
     // ---- the ten-hertz tick ------------------------------------------------------

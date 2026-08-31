@@ -68,6 +68,14 @@ public sealed partial class PlayerPage : UserControl
     private const double ChapterTickWidth = 3;
 
     /// <summary>
+    /// The gap the two overlays that must clear another overlay leave between themselves and it: the 统计
+    /// panel under the title strip, and the 跳过 button over the transport bar. See
+    /// <see cref="PlaceOverlays"/> for why that is all this needs to say — the two distances themselves are
+    /// measured off what they have to clear rather than written down here.
+    /// </summary>
+    private const double OverlayGap = 8;
+
+    /// <summary>
     /// How far the pointer has to travel, in logical pixels, before a showing cursor treats it as somebody
     /// moving the mouse. Two, which is under a millimetre and over any jitter a resting mouse produces —
     /// and it applies only while the cursor is visible, so nothing here delays bringing it back.
@@ -199,6 +207,13 @@ public sealed partial class PlayerPage : UserControl
     /// update for the rest of the film.
     /// </summary>
     private double _ticksFor;
+
+    /// <summary>
+    /// The transport bar's height the last time it was laid out, which is what the 跳过 button is placed
+    /// above. Remembered rather than read on the spot, because the offer stands outside the reveal rule —
+    /// it is up while the bar is down, and a bar that is down measures nothing at all.
+    /// </summary>
+    private double _barHeight;
 
     /// <summary>
     /// What the last applied status said about <c>pause</c>, or null before the first status of a playback.
@@ -400,6 +415,11 @@ public sealed partial class PlayerPage : UserControl
 
         _chrome.Reset(Now);
         Render();
+
+        // Both overlays that have to clear another one are placed from what they clear, and this is the one
+        // moment before a film where the measurement can be taken: the bar has just been made visible by the
+        // line above but nothing has been laid out yet, so it still measures nothing of its own.
+        PlaceOverlays();
 
         // 需求 7's box reads as the family in use whenever nobody is searching with it, and a film may have
         // been started after the settings window changed that family.

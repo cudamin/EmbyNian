@@ -187,6 +187,78 @@ public sealed partial class PlayerPage
         if (Attached) ReseedPointer();
     }
 
+    // ---- 两处竖直间距 -------------------------------------------------------------
+
+    /// <summary>
+    /// The transport bar was laid out, so what stands above it may have to move. Raised the first time the
+    /// bar comes up, and again whenever its height changes — a dragged window edge, a font the settings
+    /// window changed, a row that grew.
+    /// </summary>
+    private void OnBarResized(object sender, SizeChangedEventArgs e) => PlaceOverlays();
+
+    /// <summary>
+    /// Places the two overlays whose position is really a statement about a different overlay: 统计 sits
+    /// under the title strip, and the 跳过 button sits over the transport bar.
+    /// <para>
+    /// Both were written down instead. The panel's 104 was the strip's declared 96 plus a gap, restated in a
+    /// second file where nothing would notice the two drifting apart; the button's 148 was a guess at a
+    /// height nothing declares at all — the bar has no <c>Height</c>, it is two auto rows and its padding,
+    /// so it is whatever its buttons and its fonts come to. That number was never checked against the bar
+    /// and had no way to follow it: one larger font in the transport row and the 跳过 offer would have been
+    /// drawn across the seek slider, which is the one control it must never cover.
+    /// </para>
+    /// <para>
+    /// Only the vertical halves are computed. The left and right insets are the overlays' own — how far from
+    /// the edge of the picture they sit is a matter of taste rather than of clearance — so they stay in the
+    /// markup where they can be seen, and are read back out of the margin here rather than restated.
+    /// </para>
+    /// <para>
+    /// Each margin is written only when it has actually changed, which matters more than it looks: this is
+    /// called every time the bar's size changes, and the bar changes size every time the chrome goes down or
+    /// comes up. A margin assigned again with the number it already held would invalidate layout under a
+    /// pointer that has not moved, and WinUI answers a change to the tree beneath the pointer with a
+    /// <c>PointerMoved</c> — which the reveal rule can only read as a hand on the mouse, restarting the two
+    /// seconds before the cursor hides, every time, forever.
+    /// </para>
+    /// </summary>
+    private void PlaceOverlays()
+    {
+        // Declared, so it answers even while the strip is collapsed, which it is whenever the pointer has
+        // been still — and 统计 is pinned open by a button and outlives the strip on purpose.
+        Nudge(StatsPanel, new Thickness(StatsPanel.Margin.Left, TitleStrip.Height + OverlayGap, 0, 0));
+
+        Nudge(SkipButton, new Thickness(0, 0, SkipButton.Margin.Right, BarHeight() + OverlayGap));
+
+        static void Nudge(FrameworkElement element, Thickness margin)
+        {
+            if (element.Margin != margin) element.Margin = margin;
+        }
+    }
+
+    /// <summary>
+    /// How tall the transport bar is, from the last time it was arranged if it has been and from a measure
+    /// on the spot if it has not.
+    /// <para>
+    /// The fallback is not hypothetical bookkeeping: this is called before the first frame of a playback, at
+    /// a point where the bar has been made visible but nothing has been laid out yet, so
+    /// <c>ActualHeight</c> is still zero. A collapsed or unarranged element measures nothing, hence the flip
+    /// — the same trick the probes use, and safe for the same reason: it is put back inside this call, so no
+    /// frame is composed with the bar up.
+    /// </para>
+    /// </summary>
+    private double BarHeight()
+    {
+        if (Bar.ActualHeight > 0) return _barHeight = Bar.ActualHeight;
+        if (_barHeight > 0) return _barHeight;
+
+        var was = Bar.Visibility;
+        Bar.Visibility = Visibility.Visible;
+        Bar.Measure(new Size(Root.ActualWidth > 0 ? Root.ActualWidth : double.PositiveInfinity, double.PositiveInfinity));
+        Bar.Visibility = was;
+
+        return _barHeight = Bar.DesiredSize.Height;
+    }
+
     /// <summary>
     /// Whether a tap at <paramref name="point"/> landed on the picture rather than on something drawn
     /// over it. Everything hidden answers 「picture」, which is the common case: with the chrome down the

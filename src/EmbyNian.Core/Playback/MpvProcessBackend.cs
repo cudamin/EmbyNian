@@ -439,6 +439,15 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
             : 0;
     }
 
+    /// <summary>
+    /// True: every read here is a JSON line down the pipe carrying a request id, and
+    /// <see cref="MpvIpcClient.RequestAsync"/> matches each reply back to its own waiter, so reads
+    /// issued together do not confuse one another. What they save is the waiting — a round trip is
+    /// mpv's scheduling latency, not this client's, and twenty-one of them in single file can outlast
+    /// the second of statistics they were meant to fill.
+    /// </summary>
+    public bool ReadsOverlap => true;
+
     public async Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken)
     {
         if (_ipc is not { IsConnected: true }) return null;
