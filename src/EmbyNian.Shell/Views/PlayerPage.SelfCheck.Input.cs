@@ -95,6 +95,11 @@ public sealed partial class PlayerPage
     /// top of its own play button would pass. Both flips happen inside this one call, so no frame is
     /// composed between them and the transport never appears over the library behind it.
     /// </para>
+    /// <para>
+    /// While it is laid out, the same pass measures the arithmetic underneath all of those answers:
+    /// <see cref="OriginIn"/> against the <c>TransformToVisual</c> it replaced, element by element. See that
+    /// method for why the two agree here and what would stop them.
+    /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbeTap()
     {
@@ -131,6 +136,43 @@ public sealed partial class PlayerPage
             if (element.Visibility == Visibility.Visible && TapOnPicture(Middle(element))) missed.Add(name);
         }
 
+        // The origin every hit test above was computed from, checked against WinUI's own answer for it.
+        // Covers sums ActualOffset up the tree rather than asking for a GeneralTransform, which is exact
+        // only while nothing between the element and Root is scaled or render-transformed — a property of
+        // this page's layout, not a law, and one a future overlay could quietly break. So it is measured
+        // here rather than asserted in a comment: TransformToVisual is deliberately still used, because it
+        // is the thing being compared against.
+        var walked = 0;
+        var offBy = 0d;
+        var skewed = new List<string>();
+
+        foreach (var (name, element) in new (string Name, FrameworkElement Element)[]
+                 {
+                     ("控制条", Bar),
+                     ("标题条", TitleStrip),
+                     ("音量条", Rail),
+                     ("进度条", SeekTrack),
+                     ("跳过", SkipButton),
+                     ("统计", StatsPanel),
+                     ("切换遮罩", Cover)
+                 })
+        {
+            // Only the ones Covers would really ask about: it short-circuits on anything unmeasured, and a
+            // collapsed element's two answers are both about a layout slot it was never given.
+            if (element.ActualWidth <= 0 || element.ActualHeight <= 0) continue;
+
+            var mine = OriginIn(element);
+            var theirs = element.TransformToVisual(Root).TransformPoint(new Point(0, 0));
+            var gap = Math.Max(Math.Abs(mine.X - theirs.X), Math.Abs(mine.Y - theirs.Y));
+
+            walked++;
+            offBy = Math.Max(offBy, gap);
+
+            // A twentieth of a pixel: ActualOffset is a float and the transform is doubles, so a layout
+            // rounded onto a fractional scale differs in the sixth decimal and nothing else may.
+            if (gap > 0.05) skewed.Add($"{name}差 {gap:0.###}");
+        }
+
         // Chrome down: the strip is gone and its pixels are the film again, so the same point must pause.
         _chrome.Reset(++clock);
         _chrome.Tick(clock + SettleMilliseconds);
@@ -143,11 +185,14 @@ public sealed partial class PlayerPage
         UpdateLayout();
 
         var ok = width > 0 && height > 0 && centre && missed.Count == 0 && uncovered
-                 && !ChromeShown && Visibility == was;
+                 && !ChromeShown && Visibility == was
+                 && walked >= 4 && skewed.Count == 0;
 
         return (ok, $"{width:0}×{height:0} 逻辑像素：画面中央→{(centre ? "暂停" : "不暂停")}"
                     + $"；浮层五处控件{(missed.Count == 0 ? "都不暂停" : $"有 {string.Join('、', missed)} 会误触")}"
-                    + $"；浮层收起后底边→{(uncovered ? "暂停" : "不暂停")}");
+                    + $"；浮层收起后底边→{(uncovered ? "暂停" : "不暂停")}"
+                    + $"；{walked} 处控件的原点与 TransformToVisual "
+                    + (skewed.Count == 0 ? $"一致（最大差 {offBy:0.###} 像素）" : $"不一致：{string.Join('、', skewed)}"));
     }
 
     /// <summary>The centre of <paramref name="element"/> in <c>Root</c>'s own coordinates.</summary>

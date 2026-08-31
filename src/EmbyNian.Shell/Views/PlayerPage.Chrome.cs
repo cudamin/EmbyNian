@@ -5,6 +5,7 @@ using EmbyNian.Shell.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 
 namespace EmbyNian.Shell.Views;
@@ -24,6 +25,34 @@ public sealed partial class PlayerPage
     // ---- where the pointer is ---------------------------------------------------
 
     /// <summary>
+    /// Where the pointer is on the desktop, asked of the OS once per tick and shared for the rest of it.
+    /// <para>
+    /// Four things in one tick want to know — 「has it moved since last time」, 「is it still inside the
+    /// window」, a held button standing in for the events a motionless drag never sends, and the guard that
+    /// takes a stranded chapter preview away — and each used to ask user32 for itself. The cost is the
+    /// smaller half of why that is wrong: separate readings make one tick incoherent, because the pointer
+    /// can move between two of them. The reseed can place it on a control and the departure check can then
+    /// find it outside the window, and the chrome goes away under a hand that is on it. One reading makes
+    /// the tick's answers agree with each other.
+    /// </para>
+    /// <para>
+    /// Shared only for the length of the tick that took it. A pointer event or a probe asking in between
+    /// reads the OS as it always did: a position from up to a tenth of a second ago is precisely the wrong
+    /// answer to 「did the pointer really leave the track」.
+    /// </para>
+    /// </summary>
+    private bool CursorScreen(out NativePoint screen)
+    {
+        if (_cursorShared)
+        {
+            screen = _cursorAt;
+            return _cursorAtKnown;
+        }
+
+        return Native.GetCursorPos(out screen);
+    }
+
+    /// <summary>
     /// Whether the cursor is over our own client area, according to the OS. Falls back to 「inside」
     /// whenever it cannot tell, because the cost of a wrong 「outside」 is chrome vanishing under a hand
     /// that is still using it, and the cost of a wrong 「inside」 is one more 100 ms tick before it goes.
@@ -33,7 +62,7 @@ public sealed partial class PlayerPage
         var handle = _window?.Handle ?? IntPtr.Zero;
         if (handle == IntPtr.Zero) return true;
 
-        if (!Native.GetCursorPos(out var cursor)) return true;
+        if (!CursorScreen(out var cursor)) return true;
         if (!Native.ScreenToClient(handle, ref cursor)) return true;
         if (!Native.GetClientRect(handle, out var client)) return true;
 
@@ -54,7 +83,7 @@ public sealed partial class PlayerPage
         var handle = _window?.Handle ?? IntPtr.Zero;
         if (handle == IntPtr.Zero) return false;
 
-        if (!Native.GetCursorPos(out var cursor)) return false;
+        if (!CursorScreen(out var cursor)) return false;
         if (!Native.ScreenToClient(handle, ref cursor)) return false;
 
         var scale = XamlRoot?.RasterizationScale ?? 1;
@@ -124,7 +153,7 @@ public sealed partial class PlayerPage
     /// </summary>
     private void PollPointer()
     {
-        if (!Native.GetCursorPos(out var screen)) return;
+        if (!CursorScreen(out var screen)) return;
 
         var dx = _polledKnown ? Math.Abs(screen.X - _polled.X) : int.MaxValue;
         var dy = _polledKnown ? Math.Abs(screen.Y - _polled.Y) : int.MaxValue;
@@ -215,9 +244,45 @@ public sealed partial class PlayerPage
             || element.ActualWidth <= 0 || element.ActualHeight <= 0)
             return false;
 
-        var origin = element.TransformToVisual(Root).TransformPoint(new Point(0, 0));
+        var origin = OriginIn(element);
         return point.X >= origin.X && point.X <= origin.X + element.ActualWidth
             && point.Y >= origin.Y && point.Y <= origin.Y + element.ActualHeight;
+    }
+
+    /// <summary>
+    /// Where <paramref name="element"/>'s top-left corner sits in <c>Root</c>'s own coordinates, summed out
+    /// of what Arrange already worked out rather than asked for as a transform.
+    /// <para>
+    /// <c>TransformToVisual</c> answers the same question and builds a <c>GeneralTransform</c> across the
+    /// WinRT boundary to do it. That is nothing once — but <see cref="PartAt"/> asks it of up to four
+    /// elements per pointer move as well as per tick, and a hand crossing the picture raises hundreds of
+    /// moves a second. <c>ActualOffset</c> is a struct read of a value that is already computed, so this
+    /// walk allocates nothing whatever.
+    /// </para>
+    /// <para>
+    /// The two answers agree for as long as nothing between the element and <c>Root</c> is scaled or
+    /// render-transformed. That holds for everything asked about here — this page's only two
+    /// <c>TranslateTransform</c>s are on the 暂停 badge and on the preview box, and neither is ever the
+    /// subject of a hit test — and the self-check compares the two answers element by element, so it is a
+    /// measurement rather than a promise.
+    /// </para>
+    /// </summary>
+    private Point OriginIn(FrameworkElement element)
+    {
+        var x = 0d;
+        var y = 0d;
+
+        DependencyObject? node = element;
+
+        while (node is UIElement step && !ReferenceEquals(node, Root))
+        {
+            var offset = step.ActualOffset;
+            x += offset.X;
+            y += offset.Y;
+            node = VisualTreeHelper.GetParent(node);
+        }
+
+        return new Point(x, y);
     }
 
     // ---- what that comes to on screen -------------------------------------------
@@ -418,12 +483,23 @@ public sealed partial class PlayerPage
     /// <summary>
     /// Ten hertz, and the three things that expire rather than happen. Two of them are here because a
     /// pointer can leave without saying so; the third is the view model's, and is simply handed the tick.
+    /// <para>
+    /// The tick opens by asking the OS where the cursor is, once, and closes by giving that answer back. Up
+    /// to four of the steps below want the position and every one of them used to ask for itself — see
+    /// <see cref="CursorScreen"/> for why that made a single tick able to disagree with itself.
+    /// </para>
     /// </summary>
     private void OnTick(object? sender, object e)
     {
         if (!Attached) return;
 
         _tickCount++;
+
+        // Eagerly, not on first use: the sharing has to cover every step below equally, and a lazy read
+        // would put the reading inside whichever of them happened to run first — which on a tick where the
+        // pointer left the window is a different step from the tick before.
+        _cursorAtKnown = Native.GetCursorPos(out _cursorAt);
+        _cursorShared = true;
 
         // A drag in progress, ten times a second, whatever the pointer events are doing. They are the fast
         // path and this is the guarantee: the window is moving with the cursor, so the cursor is not moving
@@ -480,6 +556,11 @@ public sealed partial class PlayerPage
         // The coalesced seek, the 统计 refresh and the 跳过 countdown: all three are about what is
         // playing rather than about what is on screen, so all three are one call.
         ViewModel.Tick();
+
+        // And the shared reading expires with the tick that took it. Not in a finally: this page's tick
+        // cannot swallow an exception — App leaves Handled false on purpose, so a throw here takes the
+        // process with it — and there is nothing to put back afterwards.
+        _cursorShared = false;
     }
 
     // ---- 章节刻度与缩略图 ---------------------------------------------------------
@@ -512,32 +593,55 @@ public sealed partial class PlayerPage
     /// Borders rather than <c>Shapes.Rectangle</c>: a rectangle needs a <c>Fill</c> brush and would drag
     /// <c>Microsoft.UI.Xaml.Shapes</c> in for something a one-pixel-wide bordered box already does.
     /// </para>
+    /// <para>
+    /// The ticks already on the canvas are moved rather than thrown away and made again. Which matters for
+    /// one caller in particular: the track's <c>SizeChanged</c> redraws them, and a dragged window edge
+    /// raises that once a frame — so a file with chapters used to discard and rebuild its whole tick row
+    /// sixty times a second for as long as the hand held the edge. Only the tail is really added or removed,
+    /// and only when the number of boundaries changes, which is when the file does.
+    /// </para>
     /// </summary>
     private void RenderChapterTicks(IReadOnlyList<SkipChapter> marks, double width, double duration)
     {
-        ChapterTicks.Children.Clear();
+        var drawn = 0;
 
         // Two marks is the minimum that says anything: a single chapter at zero is every file.
-        if (width <= 0 || duration <= 0 || marks.Count < 2) return;
-
-        var brush = BrushFor("ChapterTickBrush");
-
-        foreach (var mark in marks)
+        if (width > 0 && duration > 0 && marks.Count >= 2)
         {
-            // The mark at zero is the start of the file, not a boundary anyone would want to see.
-            if (mark.Start <= 0.5 || mark.Start >= duration) continue;
+            // Asked once rather than per tick: the brush is the same object for every mark, and it is a
+            // dictionary walk to find.
+            var brush = BrushFor("ChapterTickBrush");
 
-            var tick = new Border
+            foreach (var mark in marks)
             {
-                Width = ChapterTickWidth,
-                Height = ChapterTicks.Height,
-                Background = brush,
-                CornerRadius = new CornerRadius(1)
-            };
+                // The mark at zero is the start of the file, not a boundary anyone would want to see.
+                if (mark.Start <= 0.5 || mark.Start >= duration) continue;
 
-            Canvas.SetLeft(tick, Math.Clamp(mark.Start / duration * width - ChapterTickWidth / 2, 0, width - ChapterTickWidth));
-            ChapterTicks.Children.Add(tick);
+                Border tick;
+
+                if (drawn < ChapterTicks.Children.Count)
+                {
+                    tick = (Border)ChapterTicks.Children[drawn];
+                }
+                else
+                {
+                    tick = new Border { Width = ChapterTickWidth, CornerRadius = new CornerRadius(1) };
+                    ChapterTicks.Children.Add(tick);
+                }
+
+                // Assigned every time, not only at creation: the canvas's height is fixed but the brush is
+                // the theme's, and a theme can change under a file that is already playing.
+                tick.Height = ChapterTicks.Height;
+                tick.Background = brush;
+
+                Canvas.SetLeft(tick, Math.Clamp(mark.Start / duration * width - ChapterTickWidth / 2, 0, width - ChapterTickWidth));
+                drawn++;
+            }
         }
+
+        // Whatever the last file left behind: fewer boundaries than this one has, or — leaving the player —
+        // none at all, which is what has to clear the canvas rather than leave ticks over the library grid.
+        while (ChapterTicks.Children.Count > drawn) ChapterTicks.Children.RemoveAt(ChapterTicks.Children.Count - 1);
     }
 
     /// <summary>
@@ -584,7 +688,7 @@ public sealed partial class PlayerPage
     {
         if (SeekTrack.ActualWidth <= 0 || !CursorPoint(out var point)) return false;
 
-        var origin = SeekTrack.TransformToVisual(Root).TransformPoint(new Point(0, 0));
+        var origin = OriginIn(SeekTrack);
 
         // A generous vertical band, because the track is a dozen pixels tall and the preview should not
         // flicker off at its edge.
@@ -598,7 +702,7 @@ public sealed partial class PlayerPage
     /// </summary>
     private void PositionChapterPeek(double trackX)
     {
-        var origin = SeekTrack.TransformToVisual(Root).TransformPoint(new Point(0, 0));
+        var origin = OriginIn(SeekTrack);
         var boxWidth = ChapterPeek.ActualWidth > 0 ? ChapterPeek.ActualWidth : PlayerViewModel.ChapterPeekWidth + 10;
         var boxHeight = ChapterPeek.ActualHeight > 0 ? ChapterPeek.ActualHeight : 160;
 

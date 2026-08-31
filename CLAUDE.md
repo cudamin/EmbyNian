@@ -32,8 +32,10 @@ Emby 桌面客户端。WinUI 3 + Windows App SDK 2.4.0 + .NET 10 + C#，非打�
 2. 测试
 
    ```
-   %USERPROFILE%\.dotnet\dotnet.exe run --project .\tests\EmbyNian.Tests\EmbyNian.Tests.csproj --no-build
+   %USERPROFILE%\.dotnet\dotnet.exe run --project .\tests\EmbyNian.Tests\EmbyNian.Tests.csproj -c Release --no-build
    ```
+
+   **`-c Release` 不能省。** `dotnet run` 默认找 Debug 那份输出，配上 `--no-build` 就会跑 `bin\Debug` 里那个不知道多久以前的旧程序，还照样打「全部通过」外加一个 0 退出码 —— 2026-08-31 抓到时，那份 Debug 二进制已经是两天前的，比源码少一百六十项测试。省掉这个开关等于把这一关关掉。
 
 3. 发布：`powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive`
 4. 自检：`artifacts/publish/win-x64/EmbyNian.exe --self-check --dump-ui`，然后读 `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt`，要退出码 0、末尾是「结果：全部通过」。

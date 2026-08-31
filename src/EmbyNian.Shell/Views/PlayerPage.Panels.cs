@@ -18,6 +18,20 @@ namespace EmbyNian.Shell.Views;
 public sealed partial class PlayerPage
 {
     /// <summary>
+    /// The typeface the 统计 numbers and the 播放信息 body are set in, held once rather than named at each
+    /// use. Monospaced, and that is not decoration: the numbers change every second, and a proportional
+    /// font makes 「2.41 Mbps」 jump sideways as its digits change width.
+    /// <para>
+    /// One object for the whole page because a <c>FontFamily</c> is immutable and interned by name anyway —
+    /// the panel used to construct twenty-one of them a second, one per value row, and every one of them was
+    /// this. An instance field rather than a static: a static initialiser on a WinUI type can run on
+    /// whichever thread first touches the class, and a <c>FontFamily</c> made off the UI thread is a
+    /// wrong-thread failure waiting for the first film.
+    /// </para>
+    /// </summary>
+    private readonly FontFamily _mono = new("Consolas,Cascadia Mono,Microsoft YaHei UI");
+
+    /// <summary>
     /// A brush by resource key, looked up the way XAML itself would: this page's own dictionary first,
     /// then the application's.
     /// <para>
@@ -44,57 +58,91 @@ public sealed partial class PlayerPage
         (Brush)(Resources.TryGetValue(key, out var local) ? local : Application.Current.Resources[key]);
 
     /// <summary>
-    /// Draws the rows into the panel's grid. Rebuilt rather than updated in place because the row set
-    /// itself changes: <see cref="PlaybackStats.Format"/> omits a property mpv had no answer for, so a
-    /// silent file has no 声道与采样率 row at all and one that gains audio mid-stream grows one.
+    /// Draws the rows into the panel's grid, reusing the text blocks already in it.
+    /// <para>
+    /// The row set itself changes between one second and the next — <see cref="PlaybackStats.Format"/> omits
+    /// a property mpv had no answer for, so a silent file has no 声道与采样率 row at all and one that gains
+    /// audio mid-stream grows one — which is why the grid is drawn rather than bound. It used to be cleared
+    /// and rebuilt for that same reason, and that was the expensive part: the panel refreshes once a second
+    /// for as long as it is open, and each refresh discarded and remade some forty text blocks, twenty-one
+    /// font families and twenty-one row definitions, then measured and arranged the lot from nothing.
+    /// </para>
+    /// <para>
+    /// So the cells are addressed by position instead: two children to a row, the label at <c>2i</c> and its
+    /// value at <c>2i + 1</c>, appended in that order and only ever trimmed from the end. A cell's row and
+    /// column are therefore a consequence of where it sits in <c>Children</c>, which is why both are set once
+    /// when it is made and never again — and because only a few of the twenty-one values differ from one
+    /// second to the next, only those few rows are re-measured.
+    /// </para>
+    /// <para>
+    /// The 「nothing read yet」 row is still built fresh, being a single cell spanning both columns rather than
+    /// half a pair. That it is a single cell is also load-bearing: an odd child count is what tells the next
+    /// refresh with real rows that the grid is holding a placeholder rather than pairs.
+    /// </para>
     /// </summary>
     private void RenderStatRows(IReadOnlyList<PlaybackStatRow> rows)
     {
-        StatsRows.Children.Clear();
-        StatsRows.RowDefinitions.Clear();
-
+        // Both asked for every time and before anything else, so a key that stopped resolving fails on the
+        // first refresh rather than on the first file that happens to have the row it is used by — see
+        // BrushFor, and the misremembered key the self-check caught there.
         var muted = BrushFor("EgOnScrimDimBrush");
         var plain = BrushFor("EgOnScrimBrush");
 
-        for (var index = 0; index < rows.Count; index++)
+        if (rows.Count == 0)
         {
+            StatsRows.Children.Clear();
+            StatsRows.RowDefinitions.Clear();
             StatsRows.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            var label = new TextBlock
-            {
-                Text = rows[index].Label,
-                FontSize = 12,
-                Foreground = muted
-            };
-            Grid.SetRow(label, index);
-            Grid.SetColumn(label, 0);
-            StatsRows.Children.Add(label);
-
-            // Monospaced, and that is not decoration: the numbers change every second, and a
-            // proportional font makes 「2.41 Mbps」 jump sideways as its digits change width.
-            var value = new TextBlock
-            {
-                Text = rows[index].Value,
-                FontSize = 12,
-                FontFamily = new FontFamily("Consolas,Cascadia Mono,Microsoft YaHei UI"),
-                Foreground = plain
-            };
-            Grid.SetRow(value, index);
-            Grid.SetColumn(value, 1);
-            StatsRows.Children.Add(value);
+            var waiting = new TextBlock { Text = "正在读取播放统计…", FontSize = 12, Foreground = muted };
+            Grid.SetColumnSpan(waiting, 2);
+            StatsRows.Children.Add(waiting);
+            return;
         }
 
-        if (rows.Count != 0) return;
+        // The placeholder, if that is what is in there: one child where every pair is two, spanning both
+        // columns, so it cannot stand in for a label.
+        if (StatsRows.Children.Count % 2 != 0) StatsRows.Children.Clear();
 
-        StatsRows.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var waiting = new TextBlock
+        while (StatsRows.RowDefinitions.Count < rows.Count)
+            StatsRows.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        for (var index = 0; index < rows.Count; index++)
         {
-            Text = "正在读取播放统计…",
-            FontSize = 12,
-            Foreground = muted
-        };
-        Grid.SetColumnSpan(waiting, 2);
-        StatsRows.Children.Add(waiting);
+            Write(Cell(index * 2, index, 0), rows[index].Label, muted);
+            Write(Cell(index * 2 + 1, index, 1), rows[index].Value, plain);
+        }
+
+        // The tail the last refresh left: a file that lost a row, or one whose panel was opened on a longer
+        // reading than this one.
+        while (StatsRows.Children.Count > rows.Count * 2)
+            StatsRows.Children.RemoveAt(StatsRows.Children.Count - 1);
+
+        while (StatsRows.RowDefinitions.Count > rows.Count)
+            StatsRows.RowDefinitions.RemoveAt(StatsRows.RowDefinitions.Count - 1);
+
+        // The cell at a position, made if it is not there yet. Row and column are set only here, because
+        // they follow from the position and the position never changes for a cell that survives a refresh.
+        TextBlock Cell(int at, int row, int column)
+        {
+            if (at < StatsRows.Children.Count) return (TextBlock)StatsRows.Children[at];
+
+            var cell = new TextBlock { FontSize = 12 };
+            if (column == 1) cell.FontFamily = _mono;
+
+            Grid.SetRow(cell, row);
+            Grid.SetColumn(cell, column);
+            StatsRows.Children.Add(cell);
+            return cell;
+        }
+
+        // Guarded rather than assigned: an identical assignment still invalidates measure, and most of the
+        // twenty-one rows say this second exactly what they said last.
+        static void Write(TextBlock cell, string text, Brush ink)
+        {
+            if (!string.Equals(cell.Text, text, StringComparison.Ordinal)) cell.Text = text;
+            if (!ReferenceEquals(cell.Foreground, ink)) cell.Foreground = ink;
+        }
     }
 
     /// <summary>
@@ -115,7 +163,7 @@ public sealed partial class PlayerPage
                 Text = ViewModel.MediaInfoText(),
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
-                FontFamily = new FontFamily("Consolas,Cascadia Mono,Microsoft YaHei UI")
+                FontFamily = _mono
             }
         };
 

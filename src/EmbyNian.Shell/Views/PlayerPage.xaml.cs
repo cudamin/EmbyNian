@@ -169,6 +169,24 @@ public sealed partial class PlayerPage : UserControl
     private int _polledMoves;
 
     /// <summary>
+    /// The one cursor position a tick works from, whether the OS gave it up, and whether a tick is currently
+    /// in progress and therefore sharing it. See <see cref="CursorScreen"/> for what the sharing is for: four
+    /// separate readings inside one tick can disagree with each other, and the tick then acts on two
+    /// different pointers.
+    /// <para>
+    /// <see cref="_cursorShared"/> is what keeps that scope honest. It is set at the top of
+    /// <see cref="OnTick"/> and cleared at the bottom, so a pointer event or a probe arriving in between goes
+    /// back to asking the OS: a hundred-millisecond-old position is the wrong answer to 「is the pointer on
+    /// the track right now」.
+    /// </para>
+    /// </summary>
+    private NativePoint _cursorAt;
+
+    private bool _cursorAtKnown;
+
+    private bool _cursorShared;
+
+    /// <summary>
     /// How many ticks found a real shape back on the queue while the cursor was supposed to be hidden. Reset
     /// at each hide and printed at the show, so an ordinary film says whether anything is fighting us for the
     /// cursor — the one explanation for 「藏了但屏幕上还有箭头」 that no probe can stage.

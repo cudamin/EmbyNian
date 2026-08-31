@@ -184,7 +184,7 @@ public sealed partial class PlayerPage
             return;
         }
 
-        if (Native.GetCursorPos(out var cursor)) _window.DragTo(cursor);
+        if (CursorScreen(out var cursor)) _window.DragTo(cursor);
     }
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
