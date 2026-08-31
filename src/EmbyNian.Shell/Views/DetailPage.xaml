@@ -587,45 +587,53 @@
 
                              外圈和底色去掉（见上一块）：三个下拉自己那圈框还在，读的时候一眼能看出哪儿能点 ——
                              用户要去掉的是围着这三个下拉的那一圈，不是下拉自己。Header 那三行字压在图上，所以
-                             取固定的浅墨；自检拿这一块的名字读它是不是真的没框没底（BodySeal 里的 Bare）。 -->
+                             取固定的浅墨；自检拿这一块的名字读它是不是真的没框没底（BodySeal 里的 Bare）。
+
+                             里面那一层是 WrapRow 而不是横排的 StackPanel：下拉的宽度按各自最长那条轨道名撑，
+                             窄窗口下三个加起来能超过一行，横排会把最右边那个切在窗口右沿上。宽窗口下两者摆出来
+                             一模一样，见 WrapRow 的注释。外面这一层照旧是 StackPanel —— 板子的内边距和自检读的
+                             那两样（没框、没底）都在它身上。 -->
                         <StackPanel
                             x:Name="PickerPanel"
                             Style="{StaticResource EgBodyPanelStyle}"
-                            Orientation="Horizontal"
                             Background="Transparent"
                             BorderThickness="0"
-                            Spacing="14"
                             Visibility="{x:Bind ViewModel.PickersVisibility, Mode=OneWay}">
-                            <ComboBox
-                                DisplayMemberPath="Text"
-                                ItemsSource="{x:Bind ViewModel.Sources}"
-                                MinWidth="260"
-                                SelectedItem="{x:Bind ViewModel.SelectedSource, Mode=TwoWay}"
-                                Visibility="{x:Bind ViewModel.SourceVisibility, Mode=OneWay}">
-                                <ComboBox.Header>
-                                    <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="媒体源" />
-                                </ComboBox.Header>
-                            </ComboBox>
-                            <ComboBox
-                                DisplayMemberPath="Text"
-                                ItemsSource="{x:Bind ViewModel.AudioTracks}"
-                                MinWidth="200"
-                                SelectedItem="{x:Bind ViewModel.SelectedAudio, Mode=TwoWay}"
-                                Visibility="{x:Bind ViewModel.AudioVisibility, Mode=OneWay}">
-                                <ComboBox.Header>
-                                    <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="音频" />
-                                </ComboBox.Header>
-                            </ComboBox>
-                            <ComboBox
-                                DisplayMemberPath="Text"
-                                ItemsSource="{x:Bind ViewModel.SubtitleTracks}"
-                                MinWidth="200"
-                                SelectedItem="{x:Bind ViewModel.SelectedSubtitle, Mode=TwoWay}"
-                                Visibility="{x:Bind ViewModel.SubtitleVisibility, Mode=OneWay}">
-                                <ComboBox.Header>
-                                    <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="字幕" />
-                                </ComboBox.Header>
-                            </ComboBox>
+                            <local:WrapRow RowSpacing="10" Spacing="14">
+                                <ComboBox
+                                    x:Name="SourcePicker"
+                                    DisplayMemberPath="Text"
+                                    ItemsSource="{x:Bind ViewModel.Sources}"
+                                    MinWidth="260"
+                                    SelectedItem="{x:Bind ViewModel.SelectedSource, Mode=TwoWay}"
+                                    Visibility="{x:Bind ViewModel.SourceVisibility, Mode=OneWay}">
+                                    <ComboBox.Header>
+                                        <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="媒体源" />
+                                    </ComboBox.Header>
+                                </ComboBox>
+                                <ComboBox
+                                    x:Name="AudioPicker"
+                                    DisplayMemberPath="Text"
+                                    ItemsSource="{x:Bind ViewModel.AudioTracks}"
+                                    MinWidth="200"
+                                    SelectedItem="{x:Bind ViewModel.SelectedAudio, Mode=TwoWay}"
+                                    Visibility="{x:Bind ViewModel.AudioVisibility, Mode=OneWay}">
+                                    <ComboBox.Header>
+                                        <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="音频" />
+                                    </ComboBox.Header>
+                                </ComboBox>
+                                <ComboBox
+                                    x:Name="SubtitlePicker"
+                                    DisplayMemberPath="Text"
+                                    ItemsSource="{x:Bind ViewModel.SubtitleTracks}"
+                                    MinWidth="200"
+                                    SelectedItem="{x:Bind ViewModel.SelectedSubtitle, Mode=TwoWay}"
+                                    Visibility="{x:Bind ViewModel.SubtitleVisibility, Mode=OneWay}">
+                                    <ComboBox.Header>
+                                        <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="字幕" />
+                                    </ComboBox.Header>
+                                </ComboBox>
+                            </local:WrapRow>
                         </StackPanel>
 
                         <!-- MaxLines + IsTextTrimmed 是 WinUI 自己就有的东西，WinForms 版那两次测量相减

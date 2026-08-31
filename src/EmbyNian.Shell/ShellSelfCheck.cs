@@ -173,6 +173,13 @@ internal static class ShellSelfCheck
     private static (string Type, ArtworkRead Artwork)? _fileArtwork;
 
     /// <summary>
+    /// 「媒体源／音频／字幕」那三个下拉在文件页上的几何，同样和 <see cref="_detail"/> 那一份分开存：这一页才是三个
+    /// 下拉都露面的那一页（媒体源只在文件上才有得选），所以窄窗口下一行装不下、最右边那个被切掉的事只在这里看得见。
+    /// 和 <see cref="_fileArtwork"/> 一样在 <see cref="ShowInfo"/> 里读 —— 那是这一页滚走之前的最后一拍。
+    /// </summary>
+    private static (string Type, bool Ok, string Detail)? _filePickers;
+
+    /// <summary>
     /// 文件页上那张头图到底取回来解出来了没有。规则那一半由 <see cref="_fileArtwork"/> 判 —— 「集页面要用这个剧
     /// 的背景图或缩略图」挑的是剧集那一头的标签，而那种标签只能按剧集自己的 id 去取；按本条目的 id 去取会拿回一个
     /// 空答案，而这一格照旧按有图那一档留着 460 的高，屏上就是一格空画面。这一句就是那件事的读数。
@@ -268,6 +275,8 @@ internal static class ShellSelfCheck
         string HeroFill,
         bool BodySealOk,
         string BodySeal,
+        bool PickerFitOk,
+        string PickerFit,
         bool WashOk,
         string Wash);
 
@@ -810,6 +819,10 @@ internal static class ShellSelfCheck
         _fileEpisodesDrawn = (page.ViewModel.ItemType, rows, cards);
         _fileArtwork = (page.ViewModel.ItemType, ReadArtwork(page, page.ViewModel));
 
+        // 这一行也只有在这儿量得到：三个下拉都在头图尾巴上，滚下去看媒体信息表格之后它们就出了视口。
+        var (fitOk, fit) = page.PickerFit();
+        _filePickers = (page.ViewModel.ItemType, fitOk, fit);
+
         page.ScrollToInfo();
         return true;
     }
@@ -1078,6 +1091,7 @@ internal static class ShellSelfCheck
         var (typeOk, type) = page.HeroType();
         var (fillOk, fill) = page.HeroFill();
         var (sealOk, seal) = page.BodySeal();
+        var (fitOk, fit) = page.PickerFit();
         var (washOk, wash) = page.WashRead(shell.TrailBase);
 
         return new DetailState(
@@ -1113,6 +1127,8 @@ internal static class ShellSelfCheck
             fill,
             sealOk,
             seal,
+            fitOk,
+            fit,
             washOk,
             wash);
 
@@ -2367,6 +2383,16 @@ internal static class ShellSelfCheck
         // 四周故意留 28 的缝，这一条在那一版上三条都不过。几何在 DetailPage.BodySeal 里读，同样是滚到底之后读的。
         check("正文盖住背景", detail.BodySealOk, detail.BodySeal);
 
+        // 「媒体源／音频／字幕」那三个下拉有没有被窗口右沿切掉。它们的宽度按各自最长那条轨道名撑，所以「一行装
+        // 得下」跟这台服务器上的轨道叫什么名字、跟窗口有多宽都有关 —— 原来那个横排 StackPanel 装不下的时候既不
+        // 换行也不收窄，只把最右边那个切在窗口边上，而这台机器的副屏是竖屏、客户区锁了 1.6:1，窗口就只有一千零
+        // 几十像素宽，屏上真的缺了一块。现在里面那一层是 WrapRow，装不下换行；这一条读换完之后没人出界，读数里
+        // 那句「摆成几行」就是「这一次窄没窄」的证据。几何在 DetailPage.PickerFit 里读。
+        //
+        // 这一份是这一页（剧集那一层）的读数，那上面「媒体源」是收着的 —— 一部剧不是一个文件，没有源可挑。三个
+        // 都露面、也就是真会换行的那一页是文件页，它的读数在下面「文件页文件选项」那一条上，见 _filePickers。
+        check("文件选项没出界", detail.PickerFitOk, detail.PickerFit);
+
         // 「往下拉之后标题颜色要渐变，变的和下方背景一样」：剧照和它顶上那层罩子钉在窗口上，而带子底下那道渐深的
         // 罩子跟着内容滚，于是滚到一半时视口上沿那一行就是一道横线 —— 线上面只有剧照，线下面多了那么浓的罩子，
         // 就是「一往下拉颜色就不一样了」。修法是把那一行的浓度洗到标题栏那一条上去（DetailPage.PaintWash，浓度
@@ -2406,6 +2432,13 @@ internal static class ShellSelfCheck
             check("文件页头图取谁的图", band.Artwork.HeroOk,
                 $"{band.Type} 页，{band.Artwork.Hero}；{(_fileHero ? "已解码" : "还没解出来")}");
         else report.AppendLine("[信息] 文件页头图 — 这次没走到文件页");
+
+        // 上面那一条的正主：只有文件页上「媒体源」才有得挑，所以只有这一页会把三个下拉一齐摆出来，也只有这一页
+        // 会在窄窗口下真的排不下。读的那一拍是 ShowInfo —— 页面往下滚去看媒体信息表格之前的最后一拍，那之后这
+        // 一行就出了视口、量出来的是滚过之后的坐标。读数里「摆成 2 行」就是换行真的接住了；换回横排会直接红。
+        if (_filePickers is { } picks)
+            check("文件页文件选项", picks.Ok, $"{picks.Type} 页，{picks.Detail}");
+        else report.AppendLine("[信息] 文件页文件选项 — 这次没走到文件页");
     }
 
     /// <summary>

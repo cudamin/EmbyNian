@@ -375,6 +375,74 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 自检：「媒体源／音频／字幕」那三个下拉有没有被窗口右沿切掉。
+    /// <para>
+    /// 三个下拉的宽度是按各自最长那条轨道名撑出来的，所以「一行装得下」不是一句能算出来的话 —— 它跟这台
+    /// 服务器上的轨道叫什么名字、跟窗口有多宽都有关。原来那个横排 <c>StackPanel</c> 在装不下的时候不换行也
+    /// 不收窄，只是把最右边那个切在窗口右沿上：屏上是「字幕」那一格缺了一块，而报告里三条读数一条都不会响。
+    /// 现在里面那一层是 <see cref="WrapRow"/>，装不下就换行，这一条读的就是「换完之后真的没人出界」。
+    /// </para>
+    /// <para>
+    /// 比的是这一块板自己的内边距围出来的那条右沿，不是窗口的右沿 —— 板子有 18 的内边距，压着边框画到窗口
+    /// 上就已经是错的。窗口宽一起报出来，因为这一条在宽窗口上永远成立：它只在窄窗口下才有话说，而读数里那句
+    /// 「摆成几行」正是「这一次到底窄没窄」的证据。
+    /// </para>
+    /// <para>
+    /// 顺带钉住第二件事：整排必须贴着那条左沿。换行的面板要是把「我占了多宽」当成摆完的尺寸交回去，框架会把
+    /// 差出来的空当对半分（<see cref="WrapRow.ArrangeOverride"/> 那一段），整排就往右飘 —— 三个下拉照旧全在
+    /// 界内，只有这一句会响。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) PickerFit()
+    {
+        if (XamlRoot?.Content is not UIElement root) return (false, "页面还没上树");
+        if (PickerPanel.Visibility != Visibility.Visible) return (true, "这一条目没有文件选项那一行");
+
+        var panel = PickerPanel.TransformToVisual(root)
+            .TransformBounds(new Rect(0, 0, PickerPanel.ActualWidth, PickerPanel.ActualHeight));
+        var edge = panel.Right - PickerPanel.Padding.Right;
+        var window = XamlRoot.Size;
+
+        var read = new List<string>();
+        var rows = new List<double>();
+        var lefts = new List<double>();
+        var ok = true;
+
+        foreach (var (name, picker) in new[]
+        {
+            ("媒体源", SourcePicker),
+            ("音频", AudioPicker),
+            ("字幕", SubtitlePicker)
+        })
+        {
+            if (picker.Visibility != Visibility.Visible) continue;
+
+            var box = picker.TransformToVisual(root)
+                .TransformBounds(new Rect(0, 0, picker.ActualWidth, picker.ActualHeight));
+            var fits = box.Right <= edge + 0.5;
+            ok &= fits;
+
+            if (!rows.Any(top => Math.Abs(top - box.Top) < 1.5)) rows.Add(box.Top);
+            lefts.Add(box.Left);
+            read.Add($"{name} {box.Left:0}–{box.Right:0}{(fits ? "" : "（出界）")}");
+        }
+
+        if (read.Count == 0) return (true, "三个下拉这一次都没露面");
+
+        // 每一行都从这一块板的内容左沿起排，所以最靠左那个必须正好贴着它。这一句钉的是另一种坏法：面板摆完之后
+        // 要是交回「我占了多宽」而不是「给我的这一格多宽」，框架就把差出来的那点空当对半分到两边（Stretch 算对齐
+        // 偏移时和 Center 同一支），整排往右挪 —— 挪多少还跟着轨道名的长短变。屏上是它比上下两段都缩进一块，
+        // 而三个下拉全在界内、换行也对，只看上面那三条读数一个都不会响。
+        var contentLeft = panel.Left + PickerPanel.Padding.Left;
+        var drift = lefts.Min() - contentLeft;
+        ok &= drift < 1.5;
+
+        return (ok, $"{string.Join("、", read)}，可用 {contentLeft:0}–{edge:0}"
+            + $"（窗口宽 {window.Width:0}），摆成 {rows.Count} 行"
+            + (drift < 1.5 ? "，整排贴着左边" : $"，整排右移了 {drift:0}"));
+    }
+
+    /// <summary>
     /// 自检：标题栏那一条洗到正文那张纸的颜色了没有 —— 「往下拉之后标题颜色要渐变，变的和下方背景一样」。
     /// <para>
     /// 三件事，各对一种不出声的坏法。那一条的位置：它必须正好盖住标题栏让出来的那一格，短一像素就是原来那道
