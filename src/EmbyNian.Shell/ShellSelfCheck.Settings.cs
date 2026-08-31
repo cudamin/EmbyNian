@@ -269,6 +269,15 @@ internal static partial class ShellSelfCheck
         var palette = player.ProbePalette();
         check("播放层配色", palette.Ok, palette.Detail);
 
+        // The same kind of fact, one layer over: a name is markup too, and a button whose whole content is a
+        // glyph from the icon font's private-use area is announced as 「按钮」 and nothing else. Nine of the
+        // transport's twelve were exactly that. Asked of the automation peer, which is what a screen reader
+        // asks — the attached property alone would not tell the two kinds of button apart. The handover
+        // ring rides along because it fails the same invisible way: it used to spin behind a collapsed grid
+        // from launch until exit.
+        var narration = player.ProbeNarration();
+        check("读屏与焦点", narration.Ok, narration.Detail);
+
         // Requirements 9/10/11, driven through the page's own Render: each step now says what it expects,
         // so a bar that stopped hiding is a failed check rather than a line someone has to read.
         var reveal = player.ProbeReveal();

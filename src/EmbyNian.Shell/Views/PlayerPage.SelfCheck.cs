@@ -20,13 +20,14 @@ namespace EmbyNian.Shell.Views;
 /// this page's own resource scope, that a click on the strip's empty half is not a click on the film.
 /// </para>
 /// <para>
-/// 这个类的自检那一半拆在七个文件里，都是同一个 <c>partial</c>：本文件留的是共用的那点东西 —— 每一关把时钟
+/// 这个类的自检那一半拆在八个文件里，都是同一个 <c>partial</c>：本文件留的是共用的那点东西 —— 每一关把时钟
 /// 推多远，加上末尾那三个量具；<c>.Chrome</c> 是显隐和音量条，<c>.Cursor</c> 是鼠标指针那两关，<c>.Picture</c>
 /// 是细进度线和统计，<c>.Menus</c> 是六个浮出菜单，<c>.Input</c> 是按下去会动的那三关，<c>.Window</c> 是窗口
-/// 按键、章节预览和画面比例。拆开只是搬家 —— 一行代码没改，验收就是自检报告一字不差。
+/// 按键、章节预览和画面比例，<c>.Access</c> 是读屏软件和键盘那一面。前七个是从两个大文件里拆出来的，拆开只是
+/// 搬家 —— 一行代码没改，验收就是自检报告一字不差。
 /// </para>
 /// <para>
-/// 还有第八关在这七个文件外面：<c>ProbePalette</c> 和它要验的那件事（<c>PaintPalette</c>）同住
+/// 还有一关在这八个文件外面：<c>ProbePalette</c> 和它要验的那件事（<c>PaintPalette</c>）同住
 /// <c>PlayerPage.Palette.cs</c>。一支画刷有没有被填上，只有填它的那段代码旁边才看得清。
 /// </para>
 /// </summary>

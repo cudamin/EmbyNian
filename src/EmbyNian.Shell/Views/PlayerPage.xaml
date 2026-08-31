@@ -110,7 +110,14 @@
         <LinearGradientBrush x:Key="PlayerTopScrim" StartPoint="0,0" EndPoint="0,1" />
 
         <!-- Flat, borderless and see-through until pointed at: over a picture, a button's own filled
-             background is more visible than its glyph and reads as a panel rather than a control. -->
+             background is more visible than its glyph and reads as a panel rather than a control.
+
+             The focus rectangle is asked for explicitly here. The page itself refuses one (see
+             UseSystemFocusVisuals on the UserControl above) because the page is a tab stop — it has to be,
+             the single-letter commands are its own — and a ring drawn around the whole film would be
+             absurd. That reasoning does not extend to the controls inside it: someone driving the transport
+             from the keyboard has no pointer to look at, so the only thing telling them which button Space
+             will press is this rectangle. -->
         <Style x:Key="OsdButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -119,6 +126,7 @@
             <Setter Property="MinWidth" Value="40" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="FontFamily" Value="{StaticResource EgUiFontFamily}" />
+            <Setter Property="UseSystemFocusVisuals" Value="True" />
         </Style>
 
         <Style x:Key="OsdGlyphStyle" TargetType="FontIcon">
@@ -202,12 +210,24 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
+            <!-- Every glyph-only control from here down carries an AutomationProperties.Name, and they are
+                 not decoration. A Button whose whole content is a FontIcon has no text for a screen reader
+                 to read: the glyph is a private-use codepoint in an icon font, so Narrator announces the
+                 control as 「按钮」 and nothing else — nine of the transport's twelve buttons were that. The
+                 tooltip does not stand in for it (a tooltip is a pointer affordance, and this is the case
+                 where there is no pointer), and neither does the name of the command behind it.
+
+                 Where the player also owns a single key for the same action, that key is AcceleratorKey
+                 rather than part of the name, which is what keeps the announcement 「返回」 instead of
+                 「返回左括号 Esc 右括号」 while still telling a keyboard user the shortcut exists. -->
             <Button
                 x:Name="BackButton"
                 Command="{x:Bind ViewModel.StopCommand}"
                 Style="{StaticResource OsdButtonStyle}"
                 VerticalAlignment="Top"
                 Margin="0,10,0,0"
+                AutomationProperties.Name="返回"
+                AutomationProperties.AcceleratorKey="Esc"
                 ToolTipService.ToolTip="返回（Esc）">
                 <FontIcon Glyph="&#xE72B;" Style="{StaticResource OsdGlyphStyle}" />
             </Button>
@@ -249,6 +269,7 @@
                     Width="188"
                     Margin="0,0,6,0"
                     VerticalAlignment="Top"
+                    AutomationProperties.Name="字幕字体"
                     GotFocus="OnFontBoxFocus"
                     ItemsSource="{x:Bind ViewModel.SubtitleFont.Matches, Mode=OneWay}"
                     KeyDown="OnFontBoxKeyDown"
@@ -303,6 +324,8 @@
                     Click="OnTogglePin"
                     CornerRadius="6"
                     Padding="10,6"
+                    AutomationProperties.Name="窗口置顶"
+                    AutomationProperties.AcceleratorKey="T"
                     ToolTipService.ToolTip="窗口置顶（T）">
                     <FontIcon Glyph="&#xE718;" Style="{StaticResource OsdGlyphStyle}" />
                 </ToggleButton>
@@ -326,6 +349,7 @@
                     Padding="0"
                     Width="46"
                     Height="32"
+                    AutomationProperties.Name="最小化"
                     ToolTipService.ToolTip="最小化">
                     <FontIcon
                         FontSize="10"
@@ -342,6 +366,7 @@
                     Padding="0"
                     Width="46"
                     Height="32"
+                    AutomationProperties.Name="最大化或还原"
                     ToolTipService.ToolTip="最大化或还原">
                     <FontIcon
                         x:Name="MaximizeGlyph"
@@ -359,6 +384,7 @@
                     Padding="0"
                     Width="46"
                     Height="32"
+                    AutomationProperties.Name="关闭"
                     ToolTipService.ToolTip="关闭">
                     <FontIcon
                         FontSize="10"
@@ -438,6 +464,7 @@
                     Height="240"
                     Width="44"
                     HorizontalAlignment="Center"
+                    AutomationProperties.Name="音量"
                     IsThumbToolTipEnabled="False"
                     Maximum="100"
                     Minimum="0"
@@ -451,13 +478,22 @@
                     Style="{StaticResource OsdButtonStyle}"
                     Padding="10"
                     MinWidth="44"
+                    AutomationProperties.Name="静音"
+                    AutomationProperties.AcceleratorKey="M"
                     ToolTipService.ToolTip="静音（M）">
                     <FontIcon x:Name="MuteGlyph" Glyph="{x:Bind ViewModel.SoundGlyph, Mode=OneWay}" Style="{StaticResource OsdGlyphStyle}" FontSize="18" />
                 </Button>
             </StackPanel>
         </Border>
 
-        <!-- ================= 跳过片头/片尾 ================= -->
+        <!-- ================= 跳过片头/片尾 =================
+
+             The one button here whose name is bound rather than written: what it says depends on what is
+             being offered （跳过片头, 跳过片尾, 跳过预告）, so a fixed name would be wrong half the time.
+             It needs a declared name at all because its content is a panel — a button announces its own
+             content only when that content is text, and 「跳过片头」 sitting one level down inside a
+             StackPanel is not text as far as the announcement is concerned. Measured: with the name
+             removed this was the single control the narration probe reported as 哑的. -->
         <Button
             x:Name="SkipButton"
             HorizontalAlignment="Right"
@@ -469,6 +505,7 @@
             BorderThickness="1"
             CornerRadius="20"
             Command="{x:Bind ViewModel.TakeSkipCommand}"
+            AutomationProperties.Name="{x:Bind ViewModel.SkipCaption, Mode=OneWay}"
             Visibility="{x:Bind ViewModel.SkipVisibility, Mode=OneWay}">
             <StackPanel Spacing="6">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -478,13 +515,18 @@
                 </StackPanel>
 
                 <!-- The offer's own fifteen seconds, drawn rather than merely counted: a button that is
-                     about to lapse should look like one. SkipPrompt.Remaining runs 1 down to 0. -->
+                     about to lapse should look like one. SkipPrompt.Remaining runs 1 down to 0.
+
+                     Raw, like the other three bars that are pictures of something already said in words:
+                     inside a button it would otherwise be read out as a second child with a percentage,
+                     and 「跳过片头 15 秒后消失 · 87%」 is not the button's name. -->
                 <ProgressBar
                     x:Name="SkipCountdown"
                     Height="2"
                     Maximum="1"
                     Minimum="0"
                     Value="{x:Bind ViewModel.SkipRemaining, Mode=OneWay}"
+                    AutomationProperties.AccessibilityView="Raw"
                     Background="{StaticResource PlayerLineBrush}"
                     Foreground="{StaticResource PlayerInkFaintBrush}" />
             </StackPanel>
@@ -530,6 +572,7 @@
                         VerticalAlignment="Center"
                         Background="{StaticResource PlayerTrackBrush}"
                         Foreground="{StaticResource PlayerTrackFillBrush}"
+                        AutomationProperties.AccessibilityView="Raw"
                         IsIndeterminate="False" />
 
                     <!-- 章节刻度. Between the cache bar and the slider so the thumb passes over the
@@ -539,12 +582,14 @@
                         x:Name="ChapterTicks"
                         Height="12"
                         VerticalAlignment="Center"
+                        AutomationProperties.AccessibilityView="Raw"
                         IsHitTestVisible="False" />
 
                     <Slider
                         x:Name="SeekSlider"
                         Margin="0,-1,0,0"
                         Background="Transparent"
+                        AutomationProperties.Name="播放进度"
                         Maximum="1000"
                         Minimum="0"
                         StepFrequency="1"
@@ -577,6 +622,7 @@
                         x:Name="PreviousButton"
                         Command="{x:Bind ViewModel.PreviousEpisodeCommand}"
                         Style="{StaticResource OsdButtonStyle}"
+                        AutomationProperties.Name="上一集"
                         ToolTipService.ToolTip="上一集"
                         Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
                         <FontIcon Glyph="&#xE892;" Style="{StaticResource OsdGlyphStyle}" />
@@ -586,6 +632,8 @@
                         Command="{x:Bind ViewModel.TogglePauseCommand}"
                         Style="{StaticResource OsdButtonStyle}"
                         Padding="12,6"
+                        AutomationProperties.Name="播放或暂停"
+                        AutomationProperties.AcceleratorKey="Space"
                         ToolTipService.ToolTip="播放/暂停（空格）">
                         <FontIcon x:Name="PlayGlyph" Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" Style="{StaticResource OsdGlyphStyle}" FontSize="20" />
                     </Button>
@@ -593,6 +641,7 @@
                         x:Name="NextButton"
                         Command="{x:Bind ViewModel.NextEpisodeCommand}"
                         Style="{StaticResource OsdButtonStyle}"
+                        AutomationProperties.Name="下一集"
                         ToolTipService.ToolTip="下一集"
                         Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
                         <FontIcon Glyph="&#xE893;" Style="{StaticResource OsdGlyphStyle}" />
@@ -624,27 +673,27 @@
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="AudioButton" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="音轨">
+                    <Button x:Name="AudioButton" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="音轨" ToolTipService.ToolTip="音轨">
                         <FontIcon Glyph="&#xE8D6;" Style="{StaticResource OsdGlyphStyle}" />
                         <Button.Flyout>
                             <MenuFlyout x:Name="AudioMenu" Placement="Top" Opening="OnAudioMenuOpening" />
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="SubtitleButton" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="字幕">
+                    <Button x:Name="SubtitleButton" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="字幕" ToolTipService.ToolTip="字幕">
                         <FontIcon Glyph="&#xED1E;" Style="{StaticResource OsdGlyphStyle}" />
                         <Button.Flyout>
                             <MenuFlyout x:Name="SubtitleMenu" Placement="Top" Opening="OnSubtitleMenuOpening" />
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="播放速度">
+                    <Button x:Name="SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="播放速度" ToolTipService.ToolTip="播放速度">
                         <Button.Flyout>
                             <MenuFlyout x:Name="SpeedMenu" Placement="Top" Opening="OnSpeedMenuOpening" />
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="MoreButton" Style="{StaticResource OsdButtonStyle}" ToolTipService.ToolTip="更多">
+                    <Button x:Name="MoreButton" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="更多" ToolTipService.ToolTip="更多">
                         <FontIcon Glyph="&#xE713;" Style="{StaticResource OsdGlyphStyle}" />
                         <Button.Flyout>
                             <MenuFlyout x:Name="MoreMenu" Placement="Top" Opening="OnMoreMenuOpening" />
@@ -655,6 +704,8 @@
                         x:Name="FullscreenButton"
                         Click="OnToggleFullscreen"
                         Style="{StaticResource OsdButtonStyle}"
+                        AutomationProperties.Name="全屏或退出全屏"
+                        AutomationProperties.AcceleratorKey="F"
                         ToolTipService.ToolTip="全屏（F）">
                         <FontIcon x:Name="FullscreenGlyph" Glyph="&#xE740;" Style="{StaticResource OsdGlyphStyle}" />
                     </Button>
@@ -674,6 +725,7 @@
             Minimum="0"
             Value="{x:Bind ViewModel.ThinFraction, Mode=OneWay}"
             VerticalAlignment="Bottom"
+            AutomationProperties.AccessibilityView="Raw"
             Background="{StaticResource PlayerLineBrush}"
             Foreground="{StaticResource PlayerInkSoftBrush}"
             IsHitTestVisible="False"
@@ -706,6 +758,7 @@
             x:Name="PulseBadge"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
+            AutomationProperties.AccessibilityView="Raw"
             IsHitTestVisible="False"
             Opacity="0"
             RenderTransformOrigin="0.5,0.5"
@@ -753,6 +806,7 @@
             HorizontalAlignment="Left"
             VerticalAlignment="Top"
             Padding="4"
+            AutomationProperties.AccessibilityView="Raw"
             Background="{StaticResource PlayerPeekBrush}"
             BorderBrush="{StaticResource PlayerEdgeBrush}"
             BorderThickness="1"
@@ -804,7 +858,17 @@
              cover kept losing. -->
         <Grid x:Name="Cover" Background="{StaticResource PlayerCoverBrush}" Visibility="{x:Bind ViewModel.CoverVisibility, Mode=OneWay}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
-                <ProgressRing IsActive="True" Width="40" Height="40" />
+                <!-- IsActive follows the cover rather than sitting on True. A ProgressRing animates through
+                     the compositor, which does not stop because an ancestor is collapsed — and this page is
+                     built when the shell starts, so a ring left active would be spinning behind a collapsed
+                     grid from launch until exit, for every minute the app is not changing episodes. Bound to
+                     CoverUp rather than to the Visibility it produces so there is one source for the state. -->
+                <ProgressRing
+                    x:Name="CoverRing"
+                    IsActive="{x:Bind ViewModel.CoverUp, Mode=OneWay}"
+                    Width="40"
+                    Height="40"
+                    AutomationProperties.AccessibilityView="Raw" />
                 <TextBlock x:Name="CoverText" HorizontalAlignment="Center" Foreground="{StaticResource PlayerInkDimBrush}" Text="{x:Bind ViewModel.CoverMessage, Mode=OneWay}" />
             </StackPanel>
         </Grid>
