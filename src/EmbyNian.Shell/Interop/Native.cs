@@ -116,6 +116,14 @@ internal static partial class Native
     /// </summary>
     public const uint WmSizing = 0x0214;
 
+    /// <summary>
+    /// WM_EXITSIZEMOVE, sent once when a move or resize drag ends. The moment 「how big is this window and
+    /// where」 is worth writing down: <see cref="WmSizing"/> and <see cref="WmSize"/> both arrive dozens of
+    /// times per drag, and every intermediate rectangle the pointer passed through is a size the user did
+    /// not choose.
+    /// </summary>
+    public const uint WmExitSizeMove = 0x0232;
+
     public const uint WmDpiChanged = 0x02E0;
 
     /// <summary>

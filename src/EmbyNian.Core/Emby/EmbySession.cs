@@ -21,12 +21,33 @@ public sealed class EmbySession : IDisposable
 
     private EmbyClient? _client;
 
+    /// <summary>
+    /// The library list <see cref="TryRestoreAsync"/> already has in hand, waiting to be collected by the
+    /// shell that is about to ask for the same thing. See <see cref="TakeRestoredViews"/>.
+    /// </summary>
+    private List<EmbyItem>? _restoredViews;
+
     public EmbySession(AppSettings settings, SettingsStore store, CredentialVault vault, DeviceIdentity device)
+        : this(settings, store, vault, device, null)
+    {
+    }
+
+    /// <summary>
+    /// The same session with its transport handed in. For tests only, and it is what lets the restore path
+    /// be exercised at all: 「一个刚过期的令牌」「服务器答了但没有媒体库」这几档在真服务器上是碰不到的，而它们
+    /// 正是这一层出过事的地方。
+    /// </summary>
+    internal EmbySession(
+        AppSettings settings,
+        SettingsStore store,
+        CredentialVault vault,
+        DeviceIdentity device,
+        HttpMessageHandler? handler)
     {
         _settings = settings;
         _store = store;
         _vault = vault;
-        _http = new EmbyHttp();
+        _http = new EmbyHttp(handler);
         Gateway = new EmbyServerGateway(_http, device);
         Device = device;
     }
@@ -87,8 +108,12 @@ public sealed class EmbySession : IDisposable
 
         try
         {
-            await candidate.GetViewsAsync(cancellationToken).ConfigureAwait(false);
+            // 这一趟同时是两件事：它既证明这个令牌还好使，又正好取回了外壳紧接着就要的那份媒体库列表 ——
+            // 所以答案存下来给它，见 TakeRestoredViews。从前是扔掉的，于是每次启动这个接口都被问两遍
+            // （日志里两行「读取到 N 个媒体库」相隔 20 毫秒）。
+            var views = await candidate.GetViewsAsync(cancellationToken).ConfigureAwait(false);
             Adopt(server, account, await NameServerAsync(apiBase, connection, cancellationToken).ConfigureAwait(false));
+            _restoredViews = views;
             Log.Info(Category, "已使用保存的令牌恢复登录");
             return true;
         }
@@ -116,6 +141,26 @@ public sealed class EmbySession : IDisposable
             Log.Warn(Category, "使用保存的密码自动登录失败", error);
             return false;
         }
+    }
+
+    /// <summary>
+    /// 恢复登录时那一趟已经取回来的媒体库列表，交出去一次就没了；从来没有过、或者已经被领走了就是 null，
+    /// 那时候调用方照旧自己去问服务器。
+    /// <para>
+    /// <see cref="TryRestoreAsync"/> 拿「取一次媒体库列表」当令牌有效性的探针，而外壳启动时紧接着要的正是同
+    /// 一份列表 —— 从前那个答案被扔掉，于是每次启动这个接口都被问两遍。局域网上是二十来毫秒，走反代或者外网
+    /// 就是几百毫秒，而它压在「看到第一屏」的路上。
+    /// </para>
+    /// <para>
+    /// **只给一次**是要紧的：刷新（换账号回来、手动重新读取）必须真去问服务器，否则新加的媒体库永远不出现。
+    /// 换连接也作废（见 <c>Adopt</c>）—— 留着就是拿上一个账号的库给这一个账号建导航栏。
+    /// </para>
+    /// </summary>
+    public List<EmbyItem>? TakeRestoredViews()
+    {
+        var views = _restoredViews;
+        _restoredViews = null;
+        return views;
     }
 
     public async Task<T> ExecuteAsync<T>(Func<EmbyClient, CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
@@ -196,6 +241,10 @@ public sealed class EmbySession : IDisposable
 
     private void Adopt(ServerProfile server, AccountProfile account, EmbyConnection connection)
     {
+        // 换了连接就作废：那一份是上一个账号（或者上一台服务器）的媒体库，交出去就是拿别人的库建导航栏。
+        // 恢复登录那一路在这一句之后才存，见 TryRestoreAsync。
+        _restoredViews = null;
+
         // A profile still carrying a stand-in name picks up what the server calls itself, so the
         // login page's server list and the rail agree. A name the user typed is left alone.
         if (connection.ServerName.Length > 0 && server.HasPlaceholderName) server.Name = connection.ServerName;

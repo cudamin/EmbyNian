@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
-using EmbyNian.Shell.Diagnostics;
+using EmbyNian.Diagnostics;
+using EmbyNian.Infrastructure;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -38,8 +39,15 @@ internal delegate Task<bool> ConfirmRequest(string title, string message, string
 /// </summary>
 public abstract partial class PageViewModel : ObservableObject, IDisposable
 {
-    /// <summary>The newest load. Cancelled by the next one, and by navigating away.</summary>
-    private CancellationTokenSource? _cancel;
+    /// <summary>
+    /// The newest load. Cancelled by the next one, and by navigating away.
+    /// <para>
+    /// 「哪一趟是最新的」那一段在 Core（<see cref="LoadGeneration"/>），因为它能在那儿被钉住：判错了的页面屏上看着
+    /// 完全正常，只是内容属于另一个条目 —— 连着点两个媒体库就会撞上。这里剩下的是「一趟开始和结束时屏上该是什么
+    /// 样」，那才是这一层的事。
+    /// </para>
+    /// </summary>
+    private readonly LoadGeneration _loads = new();
 
     /// <summary>Set by the page that owns this view model; see <see cref="ConfirmRequest"/>.</summary>
     private ConfirmRequest? _confirm;
@@ -152,23 +160,20 @@ public abstract partial class PageViewModel : ObservableObject, IDisposable
     /// </summary>
     protected CancellationToken BeginLoad()
     {
-        _cancel?.Cancel();
-        _cancel?.Dispose();
-        _cancel = new CancellationTokenSource();
+        var token = _loads.Begin();
 
         Busy = true;
         IsReady = false;
         NoticeOpen = false;
 
-        return _cancel.Token;
+        return token;
     }
 
     /// <summary>
     /// Whether the load this token came from is still the newest one. False means a later load has
     /// started, and the caller must return without touching any bound state.
     /// </summary>
-    protected bool IsCurrent(CancellationToken token) =>
-        _cancel is { IsCancellationRequested: false } current && current.Token == token;
+    protected bool IsCurrent(CancellationToken token) => _loads.IsCurrent(token);
 
     /// <summary>Marks a load finished, if it is still the one that matters.</summary>
     protected void EndLoad(CancellationToken token)
@@ -182,7 +187,7 @@ public abstract partial class PageViewModel : ObservableObject, IDisposable
     /// <summary>Abandons the load in flight. Called when the page is navigated away from.</summary>
     public virtual void Cancel()
     {
-        _cancel?.Cancel();
+        _loads.Cancel();
         Busy = false;
     }
 
@@ -206,8 +211,6 @@ public abstract partial class PageViewModel : ObservableObject, IDisposable
 
     public virtual void Dispose()
     {
-        _cancel?.Cancel();
-        _cancel?.Dispose();
-        _cancel = null;
+        _loads.Dispose();
     }
 }

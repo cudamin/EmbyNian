@@ -254,29 +254,6 @@ public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
         }
     }
 
-    /// <summary>
-    /// Every session the account is allowed to see: an administrator gets the whole server,
-    /// anyone else gets their own. Returns a bare array, not an ItemsResult.
-    /// </summary>
-    public Task<List<EmbySessionInfo>> GetSessionsAsync(CancellationToken cancellationToken) =>
-        http.GetJsonAsync<List<EmbySessionInfo>>(EmbyUrl.Combine(ApiBase, "Sessions"), Context, cancellationToken);
-
-    /// <summary>
-    /// The server's activity log, newest first. <paramref name="hasUserId"/> is the split Emby's own
-    /// dashboard uses: false leaves the user-driven noise out (that is the 行为记录 feed — failed
-    /// logins, plug-in updates), true keeps only it (浏览记录 — who started and stopped what).
-    /// Administrators-only; the page reports the 403 rather than hiding the feed.
-    /// </summary>
-    public async Task<List<EmbyActivityEntry>> GetActivityAsync(bool? hasUserId, int limit, CancellationToken cancellationToken)
-    {
-        var url = EmbyUrl.Combine(ApiBase, "System/ActivityLog/Entries",
-            ("StartIndex", "0"),
-            ("Limit", limit.ToString()),
-            ("HasUserId", hasUserId is { } value ? value ? "true" : "false" : null));
-        var result = await http.GetJsonAsync<EmbyActivityResult>(url, Context, cancellationToken).ConfigureAwait(false);
-        return result.Items;
-    }
-
     // ---- media ---------------------------------------------------------------
 
     public Task<byte[]> GetImageBytesAsync(string itemId, string imageType, string? tag, int maxWidth, CancellationToken cancellationToken)

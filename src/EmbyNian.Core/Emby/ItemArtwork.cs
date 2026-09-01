@@ -215,6 +215,44 @@ public static class ItemArtwork
     }
 
     /// <summary>
+    /// Whether these two versions of one item would draw the same pictures — the hero behind the page, the
+    /// mark in the corner, the plate, and the poster or still in the band.
+    /// <para>
+    /// 存在的理由是详情页现在**先用点进来那张卡片画一屏**，完整条目回来再补上评分、工作室、演职人员和播放目标。
+    /// 图是最慢的那一样，所以这一句决定的是：那一批图能不能就这么留着。答案是「能」的时候完整条目那一趟一张图都
+    /// 不用重取 —— 而重取的代价不是一次下载（缓存都在），是屏上的图先被清空再回来，也就是一次闪。
+    /// </para>
+    /// <para>
+    /// 比的是**算出来的那几张图**而不是逐个字段：哪一张归谁、按哪个标签取，全在这个类里定，两边的答案一样就意味
+    /// 着要取的是同一批文件。id 不同一律是 false，所以从一个条目翻到另一个条目时旧图不会留下来。
+    /// </para>
+    /// </summary>
+    public static bool SamePictures(EmbyItem? left, EmbyItem? right)
+    {
+        if (left is null || right is null) return false;
+        if (!string.Equals(left.Id, right.Id, StringComparison.Ordinal)) return false;
+        if (left.Type != right.Type) return false;
+
+        if (Mark(left) != Mark(right)) return false;
+        if (Plate(left) != Plate(right)) return false;
+        if (!Hero(left).SequenceEqual(Hero(right))) return false;
+
+        // 带子里那一张（海报，集页上是剧照）不走 ArtworkRef —— 它是拿条目自己按类型挨着退的，所以逐个类型比标签。
+        foreach (var imageType in StillOrder)
+            if (EmbyImageStore.TagFor(left, imageType) != EmbyImageStore.TagFor(right, imageType))
+                return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// 带子里那一张挨着往下退的次序，也是 <see cref="SamePictures"/> 要比的那几种。集页上多一档背景图，但多比一
+    /// 种不会把「一样」判成「不一样」，所以这里一张单子管两种页面。
+    /// </summary>
+    private static readonly IReadOnlyList<string> StillOrder =
+        [EmbyImageStore.Primary, EmbyImageStore.Thumb, EmbyImageStore.Backdrop];
+
+    /// <summary>
     /// Whether the server holds this kind for this item. 背景图 is asked of its own list, because Emby sends
     /// backdrops as an array (an item can have several) and everything else as one tag.
     /// </summary>

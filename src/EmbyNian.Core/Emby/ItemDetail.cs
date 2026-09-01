@@ -127,7 +127,8 @@ public static class ItemDetail
             {
                 Id = seriesId,
                 Name = item.SeriesName ?? item.Name,
-                Type = EmbyItemType.Series
+                Type = EmbyItemType.Series,
+                IsStub = true
             };
 
         return null;
@@ -496,7 +497,13 @@ public static class ItemDetail
             if (person.Id.Length == 0 || person.Name.Length == 0) continue;
             if (!seen.Add(person.Id)) continue;
 
-            var card = new EmbyItem { Id = person.Id, Name = person.Name, Type = EmbyItemType.Person };
+            var card = new EmbyItem
+            {
+                Id = person.Id,
+                Name = person.Name,
+                Type = EmbyItemType.Person,
+                IsStub = true
+            };
             if (person.PrimaryImageTag is { Length: > 0 } tag) card.ImageTags["Primary"] = tag;
 
             cast.Add(new CastCredit(card, person.Credit));

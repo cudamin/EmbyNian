@@ -1,8 +1,10 @@
+using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Services;
-using EmbyNian.Shell.Diagnostics;
+using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Platform;
 using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Views;
@@ -22,6 +24,89 @@ namespace EmbyNian.Shell;
 /// </summary>
 internal static partial class ShellSelfCheck
 {
+    /// <summary>
+    /// 自检：「窗口关了就忘了自己多大」那一条修好了没有。三件事，都是屏上和单测都看不见的：
+    /// <list type="number">
+    /// <item>窗口正在往下记 —— <c>HostWindow.Placement</c> 里那个矩形和现在真的量出来的一样，而且没把自检这一
+    /// 次当成最大化。记漏了的话屏上一模一样，只有下次开窗才看得出，而那时候已经晚了。</item>
+    /// <item>存档里那一份摆到这台机器上仍然落在某块真屏幕里。编三个矩形过一遍
+    /// <c>ScreenPlacement.Restore</c>：一个正常的、一个整个在桌面外面的（显示器拔了）、一个比屏幕还大的
+    /// （换了小屏）。**这一条只有真显示器答得出** —— 单测里的屏幕是我编的，这里的是这台机器现在接着的那几块。
+    /// 答错的下场是一个标题栏在桌面外面的窗口：鼠标拖不动、也点不到关闭。</item>
+    /// <item>这一次带着 <c>--screen</c>（自检默认就带），所以窗口**没有**去读存档 —— 报告里那些几何读数因此
+    /// 每次可比。哪天有人把这个前提去掉，客户区尺寸和 16:9 那两行就会跟着用户上次拉到多大变。</item>
+    /// </list>
+    /// </summary>
+    private static (bool Ok, string Detail) ReportRememberedWindow(
+        HostWindow window,
+        AppSettings settings,
+        StartupOptions options)
+    {
+        var (recorded, maximized) = window.Placement;
+
+        var live = Native.GetWindowRect(window.Handle, out var rect)
+            ? new WindowBounds(rect.Left, rect.Top, rect.Right, rect.Bottom)
+            : default;
+
+        var tracks = live.Width > 0 && recorded == live;
+        var ok = tracks && !maximized;
+
+        var ui = settings.Ui;
+        var archived = ui.WindowWidth > 0 && ui.WindowHeight > 0
+            ? $"{ui.WindowWidth}×{ui.WindowHeight} @ {ui.WindowLeft},{ui.WindowTop}"
+                + (ui.WindowMaximized ? "、最大化" : "")
+            : "还没记过" + (ui.WindowMaximized ? "（但记着最大化）" : "");
+
+        // 这台机器现在接着的那几块屏，主屏在前 —— 和开窗那一刻问的是同一份。
+        var screens = HostWindow.WorkAreas();
+        var seats = new List<string>();
+
+        if (screens.Count == 0)
+        {
+            ok = false;
+            seats.Add("问不出屏幕");
+        }
+        else
+        {
+            // 三种存档，一个都不许摆到桌面外面去。第一个照着这个窗口现在的样子编（正常那一档），另两个是真出过
+            // 事的那两种：显示器拔掉、换成更小的屏。
+            var main = screens[0];
+            (string Name, WindowBounds Saved)[] cases =
+            [
+                ("原样", new WindowBounds(main.Left + 40, main.Top + 40, main.Left + 40 + 1200, main.Top + 40 + 700)),
+                ("屏幕拔了", new WindowBounds(-9000, -9000, -9000 + 1200, -9000 + 700)),
+                ("屏幕变小", new WindowBounds(main.Left, main.Top, main.Left + 30000, main.Top + 30000))
+            ];
+
+            foreach (var (name, saved) in cases)
+            {
+                var seat = ScreenPlacement.Restore(saved, screens, window.MinimumClientSize.Width, window.MinimumClientSize.Height);
+
+                var inside = seat.Width > 0 && screens.Any(screen =>
+                    seat.Left >= screen.Left && seat.Top >= screen.Top
+                    && seat.Right <= screen.Right && seat.Bottom <= screen.Bottom);
+
+                if (!inside) ok = false;
+                seats.Add($"{name} → {seat.Width}×{seat.Height} @ {seat.Left},{seat.Top}{(inside ? "" : " 出界了")}");
+            }
+        }
+
+        // 命令行点过名的那一次不许沿用存档，否则报告里的几何就没了基准。自检默认带 --screen（副屏），所以这
+        // 一条正常总是走「没沿用」那一支；有人哪天把默认改成不带，它当场变成一句真的断言。
+        var directed = options.Screen != ScreenPlacement.WhereverWindows;
+        var adopted = ui.WindowWidth > 0 && recorded.Width == ui.WindowWidth && recorded.Height == ui.WindowHeight;
+        if (directed && adopted) ok = false;
+
+        return (ok,
+            $"记下来的是 {recorded.Width}×{recorded.Height} @ {recorded.Left},{recorded.Top}"
+                + $"（现场量 {live.Width}×{live.Height} @ {live.Left},{live.Top}，一致={tracks}）"
+                + $"、最大化={maximized}；设置里存着 {archived}；"
+                + $"{screens.Count} 块屏上试摆：{string.Join("、", seats)}；"
+                + (directed
+                    ? $"这一次 --screen 点了名，没沿用存档={!adopted}"
+                    : "这一次是普通启动，开窗时沿用了存档"));
+    }
+
     /// <summary>
     /// The home page's own state, read from wherever the frame happens to be. One reader rather than
     /// the same tuple built at both call sites: the check reads this twice — once before it walks off

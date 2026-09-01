@@ -1,7 +1,6 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
-using EmbyNian.Shell.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -347,7 +346,7 @@ internal static class ItemCommands
         }
     }
 
-    /// <summary>Segoe Fluent codepoints; see the note in <see cref="PlaceholderPage"/> on why numbers.</summary>
+    /// <summary>Segoe Fluent codepoints; see the note in <see cref="CardItem"/> on why numbers.</summary>
     private static class Glyph
     {
         public static readonly string Play = Of(0xE768);

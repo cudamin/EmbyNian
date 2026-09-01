@@ -35,7 +35,7 @@ Core 与测试项目不引用 NuGet；WinUI 3 外壳按需引用 Windows App SDK
 - `src/EmbyNian.Shell`：当前 WinUI 3 外壳 —— 登录、主页、媒体库、搜索、详情页、设置、服务器管理、诊断与播放界面。
 - `tests/EmbyNian.Tests`：手写的离线测试宿主，`dotnet run` 本身就是 runner，不用任何 NuGet 包。
 
-第一代单项目源码（`MainForm.cs`、`MediaLibraryView.cs`、`ConfigEditorView.cs`、`UiTheme.cs`、`EmbyApiClient.cs` 等）保留在 `legacy/v1/`，只作参考，不参与构建。
+第一代单项目源码（`MainForm.cs`、`MediaLibraryView.cs`、`ConfigEditorView.cs`、`UiTheme.cs`、`EmbyApiClient.cs` 等）曾经放在 `legacy/v1/` 供参考，2026-09-02 从工作树里删掉了：它不参与构建、也没有任何代码引用，而 git 历史里那一份是完整的（`git log -- legacy/v1` 找得到，`git show <提交>:legacy/v1/MainForm.cs` 读得出）。留在工作树里只会让人以为它还在这套东西里占着位置。
 
 ## 构建与运行
 

@@ -480,6 +480,11 @@ internal static partial class ShellSelfCheck
         // 那一行类型点不点得动。搭空了屏上就是一行看着一模一样的字，点下去什么都不发生 —— 别的读数一个都不响。
         if (_detailGenres is { } genres) check("详情类型可点", genres.Ok, genres.Detail);
         else report.AppendLine("[信息] 详情类型可点 — 这次没走到详情页");
+
+        // 「点封面进详情页要空等一趟服务器往返」：第一屏是拿点进来那张卡片画的，而完整条目回来之后那四张图不许被
+        // 重取一遍。两件屏上都看不见 —— 截图只能拍到已经载完的那一页，而白重取一遍是一百毫秒的闪。
+        if (_detailPreview is { } preview) check("详情页先用卡片画一屏", preview.Ok, preview.Detail);
+        else report.AppendLine("[信息] 详情页先用卡片画一屏 — 这次没走到详情页");
     }
 
     /// <summary>

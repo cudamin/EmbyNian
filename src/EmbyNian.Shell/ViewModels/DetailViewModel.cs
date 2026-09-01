@@ -8,7 +8,6 @@ using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Services;
-using EmbyNian.Shell.Diagnostics;
 using EmbyNian.Shell.Media;
 using EmbyNian.Shell.Platform;
 using EmbyNian.Shell.Views;
@@ -117,6 +116,17 @@ public sealed partial class DetailViewModel : PageViewModel
     /// load would lose the picture on every flick of the drop-down.
     /// </summary>
     private CancellationTokenSource? _art;
+
+    /// <summary>
+    /// 自检用的两个数：先画那一屏落下的片名（null = 这一页没先画，存根导航或者还没载入），和这一次载入里那四张图
+    /// 被起过几次。1 是对的 —— 先画那一屏起一次，完整条目回来时图没变就不再起（见 <see cref="Apply"/>）。
+    /// <para>
+    /// 屏上看不出来：2 次的下场是点一张封面进来图闪一下，一百毫秒的事，截图抓不住，而这正是这一条要修的东西。
+    /// </para>
+    /// </summary>
+    private string? _previewed;
+
+    private int _artStarts;
 
     public DetailViewModel()
     {
@@ -680,6 +690,31 @@ public sealed partial class DetailViewModel : PageViewModel
     /// </summary>
     internal string ItemType => _detail?.Type ?? _seed?.Type ?? "未定";
 
+    /// <summary>
+    /// 自检：「点封面进详情页要空等一趟服务器往返」那一条修好了没有。两句话 —— 第一屏是拿点进来那张卡片画的
+    /// （落下的片名就是证据），以及完整条目回来之后那四张图**没有**被重取一遍。
+    /// <para>
+    /// 这两件屏上都看不出来。第一屏画得早不早，截图只能拍到已经载完的那一页；图白重取一遍是一百毫秒的闪，抓不住。
+    /// 所以这里报的是数：图起了 1 次就是对的，2 次说明 <c>ItemArtwork.SamePictures</c> 把「同一批」判成了「不一样」。
+    /// </para>
+    /// <para>
+    /// 存根导航（集页那行剧名、演职人员那一排）故意不先画，那一档报「没先画」并且不判红 —— 见 <c>Preview</c>。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) PreviewRead()
+    {
+        if (_seed is { IsStub: true })
+            return (true, $"存根导航（{_seed.Type}），故意不先画；图起了 {_artStarts} 次");
+
+        var painted = _previewed is { Length: > 0 };
+        var once = _artStarts == 1;
+
+        return (painted && once,
+            (painted ? $"第一屏用卡片画的，片名「{_previewed}」" : "第一屏没先画（片名是空的）")
+                + $"；图起了 {_artStarts} 次"
+                + (once ? "（完整条目回来后没重取）" : "，多于 1 次 —— 完整条目回来把图白重取了一遍"));
+    }
+
     private bool CanAct => !Busy;
 
     private bool CanPlay => !Busy && PlayTarget is not null;
@@ -785,6 +820,14 @@ public sealed partial class DetailViewModel : PageViewModel
 
         try
         {
+            _previewed = null;
+            _artStarts = 0;
+
+            // 先用点进来那张卡片画一屏，**在这一趟往返之前**。片名、副标题那一行类型、简介、已看和收藏、还有那四张
+            // 图，卡片手上全都有（列表接口那份字段集就带着 Overview / ProductionYear / Genres / ImageTags），从前
+            // 它们一律在等详情接口 —— 于是点一张封面进来先看一屏「正在读取」，而这是整个客户端里点得最多的动作。
+            Preview(seed);
+
             var detail = await _session!
                 .ExecuteAsync((client, ct) => client.GetItemAsync(seed.Id, ct), token).ConfigureAwait(true);
             if (!IsCurrent(token)) return;
@@ -837,16 +880,68 @@ public sealed partial class DetailViewModel : PageViewModel
     }
 
     /// <summary>
-    /// Everything the item itself says, before anything else is fetched. Also the reset: every list and
-    /// every string that belongs to the previous item is cleared here rather than left to whichever
-    /// later step happens to overwrite it.
+    /// 用点进来那张卡片先画一屏，早于详情那一趟往返。只写卡片真的知道的那几样 —— 列表接口要的字段集
+    /// （<c>EmbyFields.Browse</c>）带着 Overview、ProductionYear、Genres、Tags 和全部图片标签，所以片名、副标题
+    /// 那一行类型、简介、已看与收藏、以及四张图在这一拍就都齐了。
+    /// <para>
+    /// **不写详情接口才有的那几样**：评分（CommunityRating）、事实那一行（分级、完结年份、工作室）、导演和演职
+    /// 人员（People）、还有播放目标和它那三个文件选项（MediaSources）。那些字段在卡片上不是「空的」而是「没问过」
+    /// —— 拿空值先画一遍，屏上就是一行事实凭空长出来、一个播放按钮先指着一个没有片源的目标。
+    /// </para>
+    /// <para>
+    /// <see cref="Apply"/> 紧接着会用完整条目把整页重写一遍，包括这里写过的每一样；那时候相同的值不会再通知一次
+    /// （生成的 setter 只在真变了的时候通知），而那四张图在图没变的时候整个留着（见 <see cref="Apply"/>）。
+    /// </para>
     /// </summary>
-    private void Apply(EmbyItem item)
+    private void Preview(EmbyItem seed)
     {
-        _detail = item;
-        _loadedSeason = null;
-        _episodes.Clear();
+        // 存根不够画一屏：集页那行剧名点过去、演职人员那一排点过去，交出来的只有 id、名字和类型（见
+        // EmbyItem.IsStub）。拿它先画就是先写一遍「暂无简介」、头图的位置先空一下再长出来 —— 那是闪，不是快。
+        if (seed.IsStub) return;
 
+        _detail = seed;
+
+        // 这一页讲的是哪一类东西，从这一拍起就定了 —— 带子的高、名牌落哪个角、那一行文件选项开不开。少喊这一句的
+        // 下场是第一屏用「没有条目」那一档的答案画，详情回来再跳一次。
+        AnnounceShape();
+
+        // 这一份和 Apply 里那一段同源，所以两处的答案不会分叉 —— 这里少的正是「卡片答不出的那几样」。
+        Title = ItemDetail.Title(seed);
+        TitleLink = ItemDetail.TitleTarget(seed);
+        Subline = ItemDetail.Subline(seed);
+        SublineGenres = ItemDetail.SublineGenres(seed);
+        Overview = string.IsNullOrWhiteSpace(seed.Overview) ? "暂无简介。" : seed.Overview.Trim();
+
+        Watched = seed.IsWatched;
+        Favorite = seed.UserData?.IsFavorite == true;
+
+        var episode = seed.Type == EmbyItemType.Episode;
+        StillWidth = episode ? EpisodeStillWidth : PosterStillWidth;
+        StillHeight = episode ? EpisodeStillHeight : PosterStillHeight;
+
+        HeroArt = ItemArtwork.Hero(seed).Count > 0;
+
+        // 四张图现在就开始取 —— 它们是最慢的一样，而卡片手上的标签和详情接口给的是同一批。
+        _art?.Cancel();
+        _art?.Dispose();
+        _art = new CancellationTokenSource();
+        _artStarts++;
+        _ = LoadArtworkAsync(seed, _art);
+
+        _previewed = Title;
+    }
+
+    /// <summary>
+    /// 「这一页讲的是哪一类东西」变了之后要重新问一遍的那一批算得属性。<see cref="Preview"/> 和
+    /// <see cref="Apply"/> 各喊一次 —— 前者是第一次（在这之前 <see cref="_detail"/> 是 null，那几个属性答的是
+    /// 「没有条目」那一档，屏上就是一格算错高的带子），后者是完整条目到手之后。
+    /// <para>
+    /// 一处集中而不是散在两边：这几个属性的共同点是它们跟着**条目的种类**走，不跟着任何一个字段走，所以生成的
+    /// setter 一个都不会替它们通知。少喊一个的下场是屏上某一格停在上一档 —— 编译看不见，测试也进不来。
+    /// </para>
+    /// </summary>
+    private void AnnounceShape()
+    {
         // 单集 changes shape with the kind of page this is, and that is a fact about the item rather than
         // about the shelf — no collection has changed here, so nothing else would say it. Raised right after
         // the assignment, before anything can read a visibility off the item that is no longer showing.
@@ -872,6 +967,25 @@ public sealed partial class DetailViewModel : PageViewModel
         // 那一行文件选项也按页面的种类开合（见 PickersVisibility）：剧页和季页不摆。轨道那几个集合是上一个条目
         // 留下的，从一部剧翻到一集时它们可能一个都没变，那边的通知一次不会来。
         OnPropertyChanged(nameof(PickersVisibility));
+    }
+
+    /// <summary>
+    /// Everything the item itself says, before anything else is fetched. Also the reset: every list and
+    /// every string that belongs to the previous item is cleared here rather than left to whichever
+    /// later step happens to overwrite it.
+    /// </summary>
+    private void Apply(EmbyItem item)
+    {
+        // 这一趟要不要重取那四张图：<see cref="Preview"/> 刚用卡片那一份起过一次，而完整条目回来时那几个图片标签
+        // 通常一个字都没变 —— 那时候整批留着。重取的代价不是一次下载（缓存都在），是屏上的图先被清空再回来，
+        // 也就是点一张封面进来看见的那一次闪。
+        var keepArtwork = ItemArtwork.SamePictures(_detail, item);
+
+        _detail = item;
+        _loadedSeason = null;
+        _episodes.Clear();
+
+        AnnounceShape();
 
         EpisodeFocus = 0;
 
@@ -899,22 +1013,34 @@ public sealed partial class DetailViewModel : PageViewModel
         // A poster cropped to 16:9 loses the half with the title on it, so only an episode gets the wide
         // shape; the rest keep 2:3. 这两个数是上限，不是定值 —— 图解出来之后按它自己的形状收窄，见 ShowStill。
         var episode = item.Type == EmbyItemType.Episode;
-        StillWidth = episode ? EpisodeStillWidth : PosterStillWidth;
-        StillHeight = episode ? EpisodeStillHeight : PosterStillHeight;
+
+        // 图留着的那一档连这两个数一起留着：海报到手时 ShowStill 已经把它们按图自己的形状收窄过，写回上限就是把那
+        // 一格重新撑开一次，屏上是海报周围凭空多出一条边再收回去。
+        if (!keepArtwork)
+        {
+            StillWidth = episode ? EpisodeStillWidth : PosterStillWidth;
+            StillHeight = episode ? EpisodeStillHeight : PosterStillHeight;
+        }
 
         // 再问一遍，因为完整条目才是权威的那一份 —— 列表上的条目偶尔比它少几个标签。多数时候两次的答案一样，
         // 于是这一句什么也不改：生成的 setter 只在值真变了的时候才通知。
         HeroArt = ItemArtwork.Hero(item).Count > 0;
 
-        HeroImage = null;
-        StillImage = null;
-        PlateImage = null;
-        MarkImage = null;
+        // 图一样就整批留着，连正在飞的那一趟一起（Fresh 比的是「要画的还是这批图」而不是「还是同一个对象」，
+        // 所以卡片那一份起的解码回来照样贴得上）。不一样才清空重取 —— 换季、翻页、或者服务器上换过图。
+        if (!keepArtwork)
+        {
+            HeroImage = null;
+            StillImage = null;
+            PlateImage = null;
+            MarkImage = null;
 
-        _art?.Cancel();
-        _art?.Dispose();
-        _art = new CancellationTokenSource();
-        _ = LoadArtworkAsync(item, _art);
+            _art?.Cancel();
+            _art?.Dispose();
+            _art = new CancellationTokenSource();
+            _artStarts++;
+            _ = LoadArtworkAsync(item, _art);
+        }
 
         CastShelf?.Fill(ItemDetail.Cast(item).Select(credit => (credit.Card, (string?)credit.Credit)));
 
@@ -1193,9 +1319,15 @@ public sealed partial class DetailViewModel : PageViewModel
     /// questions rather than one: a season switch leaves the artwork alone on purpose, so the token
     /// alone would let a stale picture through, and a reload replaces the item object, so the item alone
     /// would let a cancelled one through.
+    /// <para>
+    /// 第二问比的是「要画的还不还是这批图」而不是「还不还是同一个对象」（<c>ItemArtwork.SamePictures</c>）：
+    /// 详情页现在先用点进来那张卡片起这一趟，完整条目回来时 <see cref="_detail"/> 换成了另一个对象，而要取的是同
+    /// 一批文件 —— 按对象比就等于把卡片那一份起的解码全部丢掉，也就白起了。换条目、换季、服务器上换过图，这几种
+    /// id 或者标签会变，照旧判 false。
+    /// </para>
     /// </summary>
     private bool Fresh(CancellationTokenSource art, EmbyItem item) =>
-        ReferenceEquals(_art, art) && ReferenceEquals(_detail, item);
+        ReferenceEquals(_art, art) && ItemArtwork.SamePictures(_detail, item);
 
     private async Task<BitmapImage?> DecodeFirstAsync(
         EmbyItem item, IReadOnlyList<string> types, int width, CancellationToken token)

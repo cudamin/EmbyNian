@@ -1,5 +1,7 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
+using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.Composition;
 using EmbyNian.Shell.Views;
@@ -93,7 +95,18 @@ public partial class App : Application
             // 锁定窗口比例大小, before the window is on screen: the first drag of an edge asks for this value,
             // and a window that opened unlocked and got locked on its first WM_SIZING would jump.
             _window.BrowseAspect = ui.LockWindowShape ? HomeCarousel.WindowAspect : 0;
-            _window.Show(_options.StartMaximized, _options.Screen);
+
+            // 上次关掉时的尺寸、位置和最大化状态。`--maximized` 说了就最大化，没说就照上次那一档 —— 命令行是
+            // 「这一次这么开」，记下来的那一份是「平时就这么开」，两者不冲突。摆得下摆不下由 HostWindow 问屏幕。
+            _window.Show(
+                _options.StartMaximized || ui.WindowMaximized,
+                _options.Screen,
+                new WindowBounds(
+                    ui.WindowLeft,
+                    ui.WindowTop,
+                    ui.WindowLeft + ui.WindowWidth,
+                    ui.WindowTop + ui.WindowHeight));
+
 
             // And once it is: the default client area is already the locked shape exactly — a 16:9 browsing
             // area plus the rail the ratio does not count — so this normally changes nothing. It is here for
@@ -167,8 +180,14 @@ public partial class App : Application
     }
 
     private void OnWindowClosed()
-    {        _activation?.Dispose();
+    {
+        _activation?.Dispose();
         _activation = null;
+
+        // 窗口关了就忘了自己多大、在哪块屏：这一句是把它记住的地方。趁 _shell 和容器都还在，而窗口那一头已经在
+        // WM_CLOSE 上把几何量下来了（发出这个事件的 WM_DESTROY 里 Handle 已经是 0，那时候什么都问不出来）。
+        // 写进那份就地编辑的设置对象，底下那句 Save 一并落盘 —— 单独写一次盘就是同一个文件在一次退出里写两遍。
+        RememberWindow();
 
         // Before the container: the player holds a cancellation source tied to the session, and a poll still
         // waiting on a half-second delay would otherwise come back to a session that had been disposed.
@@ -187,5 +206,34 @@ public partial class App : Application
 
         Log.Info(Category, "主窗口已关闭");
         Exit();
+    }
+
+    /// <summary>
+    /// Copies where the window ended up into the settings object, for <see cref="OnLaunched"/> to open at
+    /// next time. Nothing is written when the run was told which screen to use (<c>--screen</c>, which every
+    /// self-check carries): those runs drive the window on purpose — fullscreen, frame drags, a locked ratio
+    /// switched on and off — and letting them write would mean a verification run decides what size the app
+    /// opens at tomorrow.
+    /// <para>
+    /// A size of zero is left alone rather than stored, which is what a session that opened maximized and was
+    /// never restored reports: 0 means 「never recorded」 and must keep meaning that, or the next launch would
+    /// try to honour a window 0 pixels wide.
+    /// </para>
+    /// </summary>
+    private void RememberWindow()
+    {
+        if (_window is null || _options.Screen != ScreenPlacement.WhereverWindows) return;
+        if (_container?.GetService<ISettingsService>()?.Settings.Ui is not { } ui) return;
+
+        var (bounds, maximized) = _window.Placement;
+
+        ui.WindowMaximized = maximized;
+
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        ui.WindowLeft = bounds.Left;
+        ui.WindowTop = bounds.Top;
+        ui.WindowWidth = bounds.Width;
+        ui.WindowHeight = bounds.Height;
     }
 }

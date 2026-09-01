@@ -351,6 +351,22 @@ public sealed class EmbyItem
 
     public string Name { get; set; } = "";
 
+    /// <summary>
+    /// 这一份是个存根：只有 id、名字、类型（顶多再加一张海报的标签），别的字段不是「空的」而是「没问过」。
+    /// <para>
+    /// 两处会造这种东西：<c>ItemDetail.TitleTarget</c>（集页上那行剧名点过去）和 <c>ItemDetail.Cast</c>（演职人员
+    /// 那一排卡片）。它们手上只有父条目或者演员的 id 和名字，落到详情页之后由那一页按 id 重新问一遍。
+    /// </para>
+    /// <para>
+    /// 详情页拿这一位决定要不要「先用手上这份画一屏」（<c>DetailViewModel.Preview</c>）：列表接口回来的条目带着
+    /// 简介、类型和全部图片标签，先画一屏是白赚的；而拿一个存根先画，屏上就是先写一遍「暂无简介」再换成真的、
+    /// 头图的位置先空一下再长出来 —— 那不是快，是闪。显式一位而不是「看看有没有简介」那类猜法：一部真的没写简介
+    /// 的电影和一个存根，猜法分不出来。
+    /// </para>
+    /// </summary>
+    [JsonIgnore]
+    public bool IsStub { get; set; }
+
     public string? OriginalTitle { get; set; }
 
     public string? SortName { get; set; }

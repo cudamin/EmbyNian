@@ -314,6 +314,67 @@ internal static class SettingsTests
             Assert.Equal("limited", settings.Video.OutputLevels, "接电视特意选了 16-235 的人不该被改回来");
         });
 
+        // v6 是第一个真的把窗口尺寸读回来的版本。v5 之前那三个字段每次保存都写、谁也不读 —— v1 的 WinForms
+        // 外壳会还原它们，WinUI 外壳从来没有 —— 所以 v5 文件里那个数要么来自一个已经不存在的外壳，要么就是
+        // v5 自己那个没有任何窗口是这个尺寸的默认值 1360×860。
+        Test("迁移：v5 里那份没人读过的窗口尺寸，v6 清掉", () =>
+        {
+            const string v5 = """
+            {
+              "SchemaVersion": 5,
+              "Servers": [ { "Name": "果服", "Url": "http://h:8896" } ],
+              "Ui": { "WindowWidth": 1360, "WindowHeight": 860, "WindowMaximized": true }
+            }
+            """;
+
+            var settings = SettingsMigration.FromJson(v5, Protector);
+
+            Assert.Equal(0, settings.Ui.WindowWidth, "0 就是「还没记过」，下次照外壳算出来的尺寸开");
+            Assert.Equal(0, settings.Ui.WindowHeight);
+            Assert.Equal(0, settings.Ui.WindowLeft);
+            Assert.Equal(0, settings.Ui.WindowTop);
+            Assert.False(settings.Ui.WindowMaximized, "连最大化那一位也不算数：它也从来没被读过");
+        });
+
+        Test("迁移：v6 记下来的窗口尺寸原样留着", () =>
+        {
+            const string v6 = """
+            {
+              "SchemaVersion": 6,
+              "Servers": [ { "Name": "果服", "Url": "http://h:8896" } ],
+              "Ui": { "WindowLeft": 300, "WindowTop": 200, "WindowWidth": 1471, "WindowHeight": 839 }
+            }
+            """;
+
+            var settings = SettingsMigration.FromJson(v6, Protector);
+
+            Assert.Equal(300, settings.Ui.WindowLeft);
+            Assert.Equal(200, settings.Ui.WindowTop);
+            Assert.Equal(1471, settings.Ui.WindowWidth);
+            Assert.Equal(839, settings.Ui.WindowHeight);
+        });
+
+        Test("校正：没记过的窗口尺寸不许被夹成 400×300", () =>
+        {
+            // 夹一下就等于替用户宣布他拉过一个 400 宽的窗口，而下次开窗就真的是那个尺寸。
+            var fresh = SettingsMigration.Normalize(new AppSettings());
+
+            Assert.Equal(0, fresh.Ui.WindowWidth);
+            Assert.Equal(0, fresh.Ui.WindowHeight);
+        });
+
+        Test("校正：手改出来的荒唐窗口尺寸还是要夹", () =>
+        {
+            var settings = new AppSettings();
+            settings.Ui.WindowWidth = 60;
+            settings.Ui.WindowHeight = 99999;
+
+            SettingsMigration.Normalize(settings);
+
+            Assert.Equal(400, settings.Ui.WindowWidth);
+            Assert.Equal(8000, settings.Ui.WindowHeight);
+        });
+
         Test("迁移：旧文件里 mpv.conf / input.conf 的路径直接丢掉", () =>
         {
             const string v1 = """

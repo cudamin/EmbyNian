@@ -650,6 +650,106 @@ internal static class ItemArtworkTests
             // A report is not the place to throw: 「Disc」 read back as 「Disc」 is still a readable line.
             Assert.Equal("Disc", ItemArtwork.Name("Disc"));
         });
+
+        RegisterSamePictures();
+    }
+
+    /// <summary>
+    /// 「这两份是同一批图吗」。详情页先用点进来那张卡片画一屏、完整条目回来再补差额，而这一句决定的是那一批图能不能
+    /// 就这么留着 —— 判错成「不一样」的下场是点一张封面进来图闪一下，判错成「一样」的下场是换季或者换条目之后屏上
+    /// 留着上一个的图。两种屏上都不好抓，所以钉在这里。
+    /// </summary>
+    private static void RegisterSamePictures()
+    {
+        Test("同一批图：卡片那一份和完整条目那一份，图是同一批", () =>
+        {
+            // 真实差别就是这样：完整条目多了评分、分级、片源，图片标签一个字没变。
+            var card = Item("film40", (EmbyImageStore.Primary, "p1"), (EmbyImageStore.Logo, "l1"));
+            card.Type = EmbyItemType.Movie;
+
+            var full = Item("film40", (EmbyImageStore.Primary, "p1"), (EmbyImageStore.Logo, "l1"));
+            full.Type = EmbyItemType.Movie;
+            full.CommunityRating = 8.4f;
+            full.OfficialRating = "TV-14";
+            full.Overview = "完整条目才带的那一段";
+
+            Assert.True(ItemArtwork.SamePictures(card, full), "多几个字段不改变要取哪几张图");
+        });
+
+        Test("同一批图：换了条目一律不算", () =>
+        {
+            var one = Item("film41", (EmbyImageStore.Primary, "p1"));
+            var other = Item("film42", (EmbyImageStore.Primary, "p1"));
+
+            Assert.False(ItemArtwork.SamePictures(one, other), "id 不同就不是同一批 —— 标签碰巧一样也不行");
+            Assert.False(ItemArtwork.SamePictures(one, null), "没有条目就没有图");
+            Assert.False(ItemArtwork.SamePictures(null, one));
+            Assert.False(ItemArtwork.SamePictures(null, null));
+        });
+
+        Test("同一批图：服务器上换过图就要重取", () =>
+        {
+            var before = Item("film43", (EmbyImageStore.Primary, "p1"));
+            var after = Item("film43", (EmbyImageStore.Primary, "p2"));
+
+            Assert.False(ItemArtwork.SamePictures(before, after), "海报换了版本，标签跟着变");
+
+            // 徽标换了也算 —— 它就是左上角那一张（Mark 退回的那一档）。
+            var logo = Item("film44", (EmbyImageStore.Primary, "p1"), (EmbyImageStore.Logo, "l1"));
+            var relogo = Item("film44", (EmbyImageStore.Primary, "p1"), (EmbyImageStore.Logo, "l2"));
+            Assert.False(ItemArtwork.SamePictures(logo, relogo));
+
+            // 背景图那一张归 Hero。
+            var backdrop = Item("film45", (EmbyImageStore.Primary, "p1"));
+            backdrop.BackdropImageTags.Add("bd1");
+            var rebackdrop = Item("film45", (EmbyImageStore.Primary, "p1"));
+            rebackdrop.BackdropImageTags.Add("bd2");
+            Assert.False(ItemArtwork.SamePictures(backdrop, rebackdrop));
+        });
+
+        Test("同一批图：类型不同不算，哪怕 id 一样", () =>
+        {
+            // 集页和别的页面画的不是同一批（头图借剧集那一层、名牌换角、带子那一张是剧照），所以类型是判据的一部分。
+            var asMovie = Item("x46", (EmbyImageStore.Primary, "p1"));
+            asMovie.Type = EmbyItemType.Movie;
+
+            var asEpisode = Item("x46", (EmbyImageStore.Primary, "p1"));
+            asEpisode.Type = EmbyItemType.Episode;
+
+            Assert.False(ItemArtwork.SamePictures(asMovie, asEpisode));
+        });
+
+        Test("同一批图：集页借来的那几张也要比", () =>
+        {
+            // 集页头上那张图是剧集那一层的，所以它换了也得重取 —— 而这几个标签正是卡片和完整条目之间最容易差的。
+            var card = Episode("ep47", (EmbyImageStore.Primary, "still"));
+            card.SeriesId = "series5";
+            card.ParentBackdropItemId = "series5";
+            card.ParentBackdropImageTags.Add("pbd1");
+
+            var same = Episode("ep47", (EmbyImageStore.Primary, "still"));
+            same.SeriesId = "series5";
+            same.ParentBackdropItemId = "series5";
+            same.ParentBackdropImageTags.Add("pbd1");
+
+            Assert.True(ItemArtwork.SamePictures(card, same));
+
+            var changed = Episode("ep47", (EmbyImageStore.Primary, "still"));
+            changed.SeriesId = "series5";
+            changed.ParentBackdropItemId = "series5";
+            changed.ParentBackdropImageTags.Add("pbd2");
+
+            Assert.False(ItemArtwork.SamePictures(card, changed), "剧集那张背景图换了版本");
+        });
+
+        Test("同一批图：一张图都没有的两份也算同一批", () =>
+        {
+            // 「都没有图」是个真答案，不是「不知道」：两边都不画，留着什么都不留也是对的。
+            var one = Item("film48");
+            var other = Item("film48");
+
+            Assert.True(ItemArtwork.SamePictures(one, other));
+        });
     }
 
     private static EmbyItem Item(string id, params (string Type, string Tag)[] tags)

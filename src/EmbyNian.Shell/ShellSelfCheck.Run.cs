@@ -1,9 +1,11 @@
 using System.Text;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Services;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Views;
 using EmbyNian.Shell.Windowing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -76,6 +78,11 @@ internal static partial class ShellSelfCheck
         // 机器上注入是被挡着的，所以这里直接把一条 WM_SIZING 送进窗口自己的消息处理里看它回什么。
         var dragLock = window.ProbeShapeLock();
         Check("拖边保持比例", dragLock.Ok, dragLock.Detail);
+
+        // 「窗口关了就忘了自己多大、在哪块屏」那一条。屏上看不出来 —— 记漏了、或者摆回一个桌面外面的位置，都得
+        // 等下一次开窗才现形，而那时候窗口已经拖不动了。所以这一关在这一次运行里就把三种存档过一遍真显示器。
+        var remembered = ReportRememberedWindow(window, services.GetRequiredService<ISettingsService>().Settings, options);
+        Check("窗口尺寸记得住", remembered.Ok, remembered.Detail);
 
         // Exercise the same title-bar transition playback uses, and measure what it does to the frame rather
         // than what it does to the style bits. Dropping WS_CAPTION for playback is exactly how

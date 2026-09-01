@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -525,11 +525,39 @@ public sealed class UiSettings
     /// </summary>
     public Dictionary<string, LibraryView> Views { get; set; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// 窗口关掉时它多大、在哪儿 —— 下次照这个开。桌面坐标，物理像素，不含最大化那一档（那一档是
+    /// <see cref="WindowMaximized"/> 的事，尺寸记的始终是还原之后的那个）。
+    /// <para>
+    /// <see cref="WindowWidth"/> 或 <see cref="WindowHeight"/> 是 0 就是「还没记过」，这时候开窗尺寸由
+    /// 外壳自己算（16:9 的页面加侧边栏那条），也就是第一次运行看到的那个样子。所以这四个数不设默认值 ——
+    /// 写一个进去就等于替用户决定了他从没拉过的那个尺寸。
+    /// </para>
+    /// <para>
+    /// 摆到哪块屏、要不要缩进工作区，由 <see cref="Infrastructure.ScreenPlacement.Restore"/> 定：显示器
+    /// 拔掉了、分辨率变小了、笔记本离开扩展坞之后，照原样摆回去就是一个标题栏在桌面外面的窗口，鼠标既
+    /// 拖不动也关不掉。
+    /// </para>
+    /// <para>
+    /// <c>--screen</c> 明确指定过的那一次不读这几个数（自检默认就带着它）：那一路要的是每次都一样的几何，
+    /// 而报告里量的正是客户区尺寸和比例。
+    /// </para>
+    /// </summary>
+    public int WindowLeft { get; set; }
 
-    public int WindowWidth { get; set; } = 1360;
+    /// <inheritdoc cref="WindowLeft"/>
+    public int WindowTop { get; set; }
 
-    public int WindowHeight { get; set; } = 860;
+    /// <inheritdoc cref="WindowLeft"/>
+    public int WindowWidth { get; set; }
 
+    /// <inheritdoc cref="WindowLeft"/>
+    public int WindowHeight { get; set; }
+
+    /// <summary>
+    /// 关掉的时候是不是最大化着。下次照样最大化开，而 <see cref="WindowWidth"/> 那一份记的是还原之后的
+    /// 尺寸 —— 所以从最大化状态退出的窗口，取消最大化之后回到的还是用户自己拉出来的那个大小。
+    /// </summary>
     public bool WindowMaximized { get; set; }
 
     /// <summary>

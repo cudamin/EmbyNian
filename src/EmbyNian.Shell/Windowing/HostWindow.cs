@@ -461,6 +461,22 @@ internal sealed class HostWindow : IDisposable
     public event Action? Closed;
 
     /// <summary>
+    /// 这个窗口现在有多大、在哪儿、是不是最大化着 —— 也就是下次开窗该照着的那一份。写盘的是
+    /// <c>App.OnWindowClosed</c>（那一头本来就要存一次设置），这里只负责一直是对的。
+    /// <para>
+    /// 记的始终是**还原之后**那个矩形：最大化和全屏时窗口的边归显示器，那时候的尺寸不是用户挑的，所以那两
+    /// 档只改 <c>Maximized</c> 这一位、尺寸留着上一次量到的。全屏干脆不记 —— 进全屏之前刚记过一次，而那一
+    /// 份正是想要的。
+    /// </para>
+    /// <para>
+    /// 在拖动结束（<see cref="Native.WmExitSizeMove"/>）、最大化与还原（<see cref="Native.WmSize"/>）、
+    /// 以及关窗前（<see cref="Native.WmClose"/>）各记一次。前两处是为了崩了也不丢：<c>WM_CLOSE</c> 那一次
+    /// 走不到的时候，最后一次落定的尺寸已经在手上了。
+    /// </para>
+    /// </summary>
+    public (WindowBounds Bounds, bool Maximized) Placement { get; private set; }
+
+    /// <summary>
     /// The XAML tree filling the client area. Assigning before <see cref="Show"/> avoids a frame of
     /// empty window; assigning later swaps the whole shell.
     /// </summary>
@@ -694,6 +710,32 @@ internal sealed class HostWindow : IDisposable
     public void FitToPicture() => FitToAspect(PictureAspect, 0, "按画面比例调整窗口");
 
     /// <summary>
+    /// Writes down what <see cref="Placement"/> promises. Cheap enough to call on every drag that ends and
+    /// every maximize that lands — two <c>user32</c> reads and a struct assignment, no allocation.
+    /// <para>
+    /// Silent in the three states whose geometry is not the user's choice: fullscreen (the edges are the
+    /// monitor's, and the rectangle from just before entering it is already recorded), minimized (there is
+    /// no shape to record), and before the window exists. Maximized keeps the recorded size and only raises
+    /// the flag, which is what makes 「取消最大化」 come back to the size the user actually dragged.
+    /// </para>
+    /// </summary>
+    private void RememberPlacement()
+    {
+        if (Handle == IntPtr.Zero || Fullscreen || Native.IsIconic(Handle)) return;
+
+        if (Native.IsZoomed(Handle))
+        {
+            Placement = (Placement.Bounds, true);
+            return;
+        }
+
+        if (!Native.GetWindowRect(Handle, out var rect)) return;
+        if (rect.Width <= 0 || rect.Height <= 0) return;
+
+        Placement = (new WindowBounds(rect.Left, rect.Top, rect.Right, rect.Bottom), false);
+    }
+
+    /// <summary>
     /// 锁定窗口比例大小 just went on — or the app just started with it on: reshapes the window to
     /// <see cref="BrowseAspect"/>, because <c>WM_SIZING</c> only holds a shape while an edge is being dragged
     /// and the window it is switched on in is whatever shape it already was.
@@ -869,6 +911,48 @@ internal sealed class HostWindow : IDisposable
 
         var work = info.Work;
         return new WindowBounds(work.Left, work.Top, work.Right, work.Bottom);
+    }
+
+    /// <summary>
+    /// Every attached screen's usable rectangle, the primary first. What <see cref="ScreenPlacement.Restore"/>
+    /// needs to decide whether a remembered window still has somewhere to be — the single-monitor
+    /// <see cref="WorkArea"/> above cannot answer that, because the monitor the window is on right now is
+    /// wherever Windows just put it, not the one it was on last time.
+    /// <para>
+    /// Primary first so that a window whose screen has been unplugged lands on the main one rather than on
+    /// whichever the OS happens to enumerate first. Indexed rather than enumerated for the reason spelled
+    /// out in <see cref="MoveToScreen"/>: this projection throws on <c>GetEnumerator</c>.
+    /// </para>
+    /// <para>
+    /// <c>internal</c> for the self-check, which asks the same question of the same screens: 「would a
+    /// remembered window still land somewhere visible on this desktop」 is the one part of this that a unit
+    /// test cannot answer, because the answer is the monitor layout.
+    /// </para>
+    /// </summary>
+    internal static List<WindowBounds> WorkAreas()
+    {
+        var seats = new List<WindowBounds>();
+
+        try
+        {
+            var areas = DisplayArea.FindAll();
+            for (var each = 0; each < areas.Count; each++)
+            {
+                var work = areas[each].WorkArea;
+                var seat = new WindowBounds(work.X, work.Y, work.X + work.Width, work.Y + work.Height);
+
+                if (areas[each].IsPrimary) seats.Insert(0, seat);
+                else seats.Add(seat);
+            }
+        }
+        catch (Exception error)
+        {
+            // No screens listed reads as 「nothing remembered」 in Restore, which falls back to the computed
+            // default — the same thing that happens on a first run.
+            Log.Warn(Category, "读取屏幕工作区失败，窗口按默认尺寸开", error);
+        }
+
+        return seats;
     }
 
     /// <summary>Minimizes the host from the playback title bar.</summary>
@@ -1159,7 +1243,18 @@ internal sealed class HostWindow : IDisposable
                bar.ButtonForegroundColor, bar.ButtonInactiveForegroundColor)
             : null;
 
-    public void Show(bool maximized, int screen = ScreenPlacement.WhereverWindows)
+    /// <summary>
+    /// Creates the window, seats it, and shows it.
+    /// </summary>
+    /// <param name="maximized">Open maximized — <c>--maximized</c>, or what the last session was left in.</param>
+    /// <param name="screen">Which monitor, see <see cref="ScreenPlacement"/>.</param>
+    /// <param name="saved">
+    /// Where the last session left this window, in desktop physical pixels, or <c>default</c> for 「never
+    /// recorded」. Honoured only when <paramref name="screen"/> is <see cref="ScreenPlacement.WhereverWindows"/>
+    /// — an ordinary launch. A run that named its screen gets the computed default, so the self-check's
+    /// geometry readings stay comparable between runs.
+    /// </param>
+    public void Show(bool maximized, int screen = ScreenPlacement.WhereverWindows, WindowBounds saved = default)
     {
         var instance = Native.GetModuleHandle(null);
         EnsureClassRegistered(instance);
@@ -1197,7 +1292,35 @@ internal sealed class HostWindow : IDisposable
         if (dpi is > 0 and not 96)
             Native.AdjustWindowRectExForDpi(ref bounds, Native.WsOverlappedWindow, false, 0, dpi);
 
-        if (ScreenPlacement.Centre(work, bounds.Width, bounds.Height) is { Width: > 0 } seat)
+        // 上次关掉时的尺寸和位置，如果记过的话。**只有普通启动读它** —— 命令行点了名的那一次（`--screen`，
+        // 自检默认就带着）要的是每次都一样的几何，而自检报告里量的正是客户区尺寸和 16:9 那个比例；跟着用户上次
+        // 拉到多大走，那几行读数就再也没有可比的基准了。
+        //
+        // 记下来的是物理像素，所以尺寸不用按 dpi 缩放；下限要缩，它是按 96 写的。
+        var restored = screen == ScreenPlacement.WhereverWindows
+            ? ScreenPlacement.Restore(
+                saved,
+                WorkAreas(),
+                MinimumWidth * (int)dpi / 96,
+                MinimumHeight * (int)dpi / 96)
+            : default;
+
+        if (restored.Width > 0)
+        {
+            Native.SetWindowPos(
+                Handle, Native.HwndTop,
+                restored.Left, restored.Top, restored.Width, restored.Height,
+                Native.SwpNoZOrder | Native.SwpNoActivate);
+
+            Log.Info(
+                Category,
+                saved.Left == restored.Left && saved.Top == restored.Top
+                    && saved.Width == restored.Width && saved.Height == restored.Height
+                    ? $"沿用上次的窗口 {restored.Width}x{restored.Height} @ {restored.Left},{restored.Top}"
+                    : $"上次的窗口 {saved.Width}x{saved.Height} @ {saved.Left},{saved.Top} 放不进现在的桌面，"
+                      + $"改成 {restored.Width}x{restored.Height} @ {restored.Left},{restored.Top}");
+        }
+        else if (ScreenPlacement.Centre(work, bounds.Width, bounds.Height) is { Width: > 0 } seat)
         {
             Native.SetWindowPos(
                 Handle, Native.HwndTop,
@@ -1232,6 +1355,11 @@ internal sealed class HostWindow : IDisposable
             FitToShape();
         };
         ShellPrefs.Changed += _reshape;
+
+        // 基线。拖过一次边、最大化过一次之后这一份会被盖掉，可从开窗到那一刻之间关掉窗口也得记住些什么 ——
+        // 而 --maximized 开起来的那一次这里只抬得起那一位，尺寸留空（0 就是「还没记过」），下次照默认尺寸开、
+        // 照旧最大化，这正是对的。
+        RememberPlacement();
 
         Log.Info(Category, $"主窗口已创建 hwnd=0x{Handle:X} dpi={dpi}");
     }
@@ -1779,6 +1907,10 @@ internal sealed class HostWindow : IDisposable
 
             case Native.WmSize:
                 OnSize();
+
+                // 最大化和还原也在这里落定 —— 那两下不是拖动，不发 WM_EXITSIZEMOVE。最大化那一档只抬那一位、
+                // 尺寸留着上一次量到的，见 RememberPlacement。
+                RememberPlacement();
                 break;
 
             case Native.WmGetMinMaxInfo:
@@ -1787,6 +1919,10 @@ internal sealed class HostWindow : IDisposable
 
             case Native.WmSizing:
                 return LockAspectDuringResize(window, wParam, lParam);
+
+            case Native.WmExitSizeMove:
+                RememberPlacement();
+                break;
 
             case Native.WmActivateApp:
                 ApplyFullscreenZOrder(wParam != IntPtr.Zero);
@@ -1807,6 +1943,10 @@ internal sealed class HostWindow : IDisposable
                 return IntPtr.Zero;
 
             case Native.WmClose:
+                // 最后一次，而且必须在 DestroyWindow 之前：Closed 事件由 WM_DESTROY 发出，那时候 Handle 已经
+                // 是 0，问不出这个窗口的任何几何了。程序化挪过的窗口（FitToShape、按画面比例联动）也只有这一
+                // 处兜得住 —— 那几下不经过拖动，收不到 WM_EXITSIZEMOVE。
+                RememberPlacement();
                 Native.DestroyWindow(window);
                 return IntPtr.Zero;
 

@@ -74,4 +74,74 @@ public static class ScreenPlacement
 
         return new WindowBounds(left, top, left + fittedWidth, top + fittedHeight);
     }
+
+    /// <summary>
+    /// Where a window last left at <paramref name="saved"/> should open now, given the work areas of the
+    /// screens attached at this moment. <c>default</c> — an empty rectangle — means 「nothing usable was
+    /// recorded」 and is the caller's cue to fall back to its own centred default.
+    /// <para>
+    /// The desktop is not the one the size was written on. A monitor gets unplugged, a laptop comes back
+    /// from a dock, a screen changes resolution — and a window restored verbatim onto a desktop that no
+    /// longer has those pixels is a window with no visible title bar, which cannot be moved or closed by
+    /// hand. So the saved rectangle is placed on the screen it overlaps most, clamped to fit that screen,
+    /// and shifted until all of it is inside.
+    /// </para>
+    /// <para>
+    /// When it overlaps nothing at all the size is still honoured and only the position is given up: the
+    /// window is centred on <paramref name="screens"/>[0]. Keeping the size is the point — 「the monitor I
+    /// had it on is gone」 is not a reason to also forget how big the user made it.
+    /// </para>
+    /// </summary>
+    /// <param name="saved">The bounds recorded last time, in desktop coordinates. Empty when none were.</param>
+    /// <param name="screens">Every attached screen's work area. The first is where a homeless window lands.</param>
+    /// <param name="minimumWidth">The window's own floor, itself clamped to the screen: a 900-wide minimum
+    /// cannot be honoured on an 800-wide screen, and obeying it there would push the frame off the edge.</param>
+    /// <param name="minimumHeight">Likewise for the height.</param>
+    public static WindowBounds Restore(
+        WindowBounds saved,
+        IReadOnlyList<WindowBounds> screens,
+        int minimumWidth = 0,
+        int minimumHeight = 0)
+    {
+        if (saved.Width <= 0 || saved.Height <= 0 || screens.Count == 0) return default;
+
+        var seat = screens[0];
+        var most = 0L;
+        foreach (var screen in screens)
+        {
+            if (screen.Width <= 0 || screen.Height <= 0) continue;
+
+            var shared = Overlap(saved, screen);
+            if (shared <= most) continue;
+
+            most = shared;
+            seat = screen;
+        }
+
+        if (seat.Width <= 0 || seat.Height <= 0) return default;
+
+        var width = Math.Clamp(saved.Width, Math.Min(minimumWidth, seat.Width), seat.Width);
+        var height = Math.Clamp(saved.Height, Math.Min(minimumHeight, seat.Height), seat.Height);
+
+        // most == 0: the screen it was on is not here any more, so the position is meaningless and only
+        // the size survives. Otherwise keep the corner the user left it at, pulled inside this screen.
+        var left = most > 0
+            ? Math.Clamp(saved.Left, seat.Left, seat.Right - width)
+            : seat.Left + ((seat.Width - width) / 2);
+
+        var top = most > 0
+            ? Math.Clamp(saved.Top, seat.Top, seat.Bottom - height)
+            : seat.Top + ((seat.Height - height) / 2);
+
+        return new WindowBounds(left, top, left + width, top + height);
+    }
+
+    /// <summary>How many pixels the two rectangles share. 0 when they do not touch.</summary>
+    private static long Overlap(WindowBounds left, WindowBounds right)
+    {
+        var width = Math.Min(left.Right, right.Right) - Math.Max(left.Left, right.Left);
+        var height = Math.Min(left.Bottom, right.Bottom) - Math.Max(left.Top, right.Top);
+
+        return width > 0 && height > 0 ? (long)width * height : 0;
+    }
 }

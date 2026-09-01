@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
-using EmbyNian.Shell.Diagnostics;
 using Microsoft.UI.Xaml;
 
 namespace EmbyNian.Shell.ViewModels;

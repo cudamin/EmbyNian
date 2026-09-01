@@ -122,7 +122,13 @@ public sealed class EmbyImageStore
         // A hit is a file read, and it used to be a synchronous one — on the UI thread, because that is
         // who asks. A screen of forty cards therefore stopped forty times waiting on the disk, which is
         // exactly the stutter a fast scroll showed. Off the thread, the scroll keeps moving.
-        if (await ReadCachedAsync(path, cancellationToken).ConfigureAwait(false) is { } cached) return cached;
+        if (await ReadCachedAsync(path, cancellationToken).ConfigureAwait(false) is { } cached)
+        {
+            // 看过一眼就把这张的时间戳往前推 —— 淘汰按的就是这个时间（见 Prune）。不这么做的话「最旧」说的是
+            // 「最早下载的」，于是天天看的那部剧的海报因为下得早，会先于上个月下过一次再没碰过的那张被删掉。
+            Touch(path);
+            return cached;
+        }
 
         // Collapse duplicate requests: a fast scroll asks for the same poster repeatedly. The shared
         // download belongs to nobody, so a caller that walks away no longer empties the answer the
@@ -161,6 +167,13 @@ public sealed class EmbyImageStore
                 Log.Warn(Category, "写入图片缓存失败", error);
             }
 
+            // 又下了一张。攒够一批就再清一次 —— 从前只在开机清，一次长会话里缓存可以一路涨过预算。
+            if (Interlocked.Increment(ref _sincePrune) >= PruneEvery)
+            {
+                Interlocked.Exchange(ref _sincePrune, 0);
+                PruneInBackground();
+            }
+
             return bytes;
         }
         catch (EmbyApiException error)
@@ -194,6 +207,36 @@ public sealed class EmbyImageStore
         }
     }
 
+    /// <summary>
+    /// 把这一张的时间戳推到现在，让 <see cref="Prune"/> 眼里的「最旧」真的是「最久没看过的」。
+    /// <para>
+    /// 写的是最后修改时间而不是最后访问时间：Windows 从 Vista 起默认关掉 NTFS 的最后访问时间更新
+    /// （<c>NtfsDisableLastAccessUpdate</c>），所以那个字段在多数机器上根本不动 —— 拿它当依据的淘汰规则会退化成
+    /// 「随便删」。
+    /// </para>
+    /// <para>
+    /// **只在这一张确实旧了的时候才写**（<see cref="ImageCachePolicy.WorthTouching"/>）。每次命中都写一次的话，
+    /// 一次快速滚动就是几十次元数据写入，而滚动正是最不该多花时间的地方；隔一段才推一次，「最久没看过」这个次序
+    /// 照样成立，代价却几乎是零。
+    /// </para>
+    /// </summary>
+    private static void Touch(string path)
+    {
+        try
+        {
+            if (!ImageCachePolicy.WorthTouching(File.GetLastWriteTimeUtc(path), DateTime.UtcNow)) return;
+
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+        }
+        catch (IOException)
+        {
+            // 推不动就算了：淘汰次序差一点点，而这条路上没有任何东西值得为它失败。
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private static string BuildKey(string itemId, string imageType, string tag, int width)
     {
         // Emby ids and tags are hex strings, so they are already filename-safe;
@@ -207,6 +250,18 @@ public sealed class EmbyImageStore
     /// 「1.1 GB」 on its own does not tell anyone whether the cache is misbehaving or working as asked.
     /// </summary>
     public long MaxBytes => _maxBytes;
+
+    /// <summary>
+    /// 距离上一次清理又下载了多少张就再清一次。**清理从前只在开机跑一次** —— 一次会话里连着刷两小时媒体库，缓存
+    /// 就一路涨过预算，要等下次启动才收得回来。
+    /// <para>
+    /// 按下载张数而不是按时间：涨得快是因为在下载，闲着的会话不需要一遍遍去数一个没变过的目录。200 张海报大约
+    /// 十几兆，也就是两次清理之间最多超出这么多；代价是每 200 次下载多走一趟目录枚举。
+    /// </para>
+    /// </summary>
+    private const int PruneEvery = 200;
+
+    private int _sincePrune;
 
     /// <summary>Trims the oldest files when the cache grows past its budget. Fire-and-forget at startup.</summary>
     public void PruneInBackground() => Task.Run(Prune);
@@ -293,23 +348,34 @@ public sealed class EmbyImageStore
             var total = files.Sum(file => file.Length);
             if (total <= _maxBytes) return;
 
-            var target = (long)(_maxBytes * 0.8);
+            // 删哪几张由 Core 那一句说（ImageCachePolicy.Evict）：最久没看过的先走，删到降回预算的八成为止。
+            // 「最久没看过」靠的是命中时把时间戳往前推，见 Touch。
+            var doomed = ImageCachePolicy.Evict(
+                files.Select(file => (file.FullName, file.Length, file.LastWriteTimeUtc)),
+                total,
+                _maxBytes);
+
             var removed = 0;
-            foreach (var file in files.OrderBy(file => file.LastWriteTimeUtc))
+            var freed = 0L;
+            foreach (var (path, length) in doomed)
             {
-                if (total <= target) break;
-                total -= file.Length;
                 try
                 {
-                    file.Delete();
+                    File.Delete(path);
                     removed++;
+                    freed += length;
                 }
                 catch (IOException)
                 {
                 }
+                catch (UnauthorizedAccessException)
+                {
+                }
             }
 
-            Log.Info(Category, $"图片缓存已清理 {removed} 个文件");
+            Log.Info(Category,
+                $"图片缓存已清理 {removed} 个文件，腾出 {freed / (1024 * 1024)} MB"
+                    + $"（清理前 {total / (1024 * 1024)} MB，预算 {_maxBytes / (1024 * 1024)} MB）");
         }
         catch (Exception error)
         {

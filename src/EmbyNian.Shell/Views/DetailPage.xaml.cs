@@ -1068,6 +1068,12 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 自检：详情页的第一屏是不是先用点进来那张卡片画上的，以及完整条目回来后那四张图没被白重取一遍。
+    /// 判据全在视图模型里（<see cref="DetailViewModel.PreviewRead"/>），这里只是转一手。
+    /// </summary>
+    internal (bool Ok, string Detail) PreviewRead() => ViewModel.PreviewRead();
+
+    /// <summary>
     /// 自检：那一行类型真的一个一个点得动 —— 视图模型说有几个，屏上就得有几段 <c>Hyperlink</c>，而且每一段都
     /// 挂着一个去处。
     /// <para>

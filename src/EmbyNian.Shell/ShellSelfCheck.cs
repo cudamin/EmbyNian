@@ -183,6 +183,12 @@ internal static partial class ShellSelfCheck
     private static (bool Ok, string Detail)? _detailGenres;
 
     /// <summary>
+    /// 「第一屏是先用卡片画的、图没白重取」那一条的读数。和 <see cref="_detailGenres"/> 一起在走到详情页的那一拍
+    /// 攒下来 —— 走完之后页面会被换掉，视图模型跟着走，那两个计数就问不到了。
+    /// </summary>
+    private static (bool Ok, string Detail)? _detailPreview;
+
+    /// <summary>
     /// 文件页上那张头图到底取回来解出来了没有。规则那一半由 <see cref="_fileArtwork"/> 判 —— 「集页面要用这个剧
     /// 的背景图或缩略图」挑的是剧集那一头的标签，而那种标签只能按剧集自己的 id 去取；按本条目的 id 去取会拿回一个
     /// 空答案，而这一格照旧按有图那一档留着 460 的高，屏上就是一格空画面。这一句就是那件事的读数。
@@ -779,6 +785,7 @@ internal static partial class ShellSelfCheck
         _detailScrolled = true;
         _detailEpisodesDrawn = page.EpisodeShapes;
         _detailGenres = page.GenreRead();
+        _detailPreview = page.PreviewRead();
         page.ScrollToEnd();
         return true;
     }

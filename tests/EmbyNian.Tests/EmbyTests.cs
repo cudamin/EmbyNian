@@ -1224,6 +1224,180 @@ internal static class EmbyTests
             Assert.Equal(1280, EmbyImageStore.RequestWidth(4000));
             Assert.Equal(EmbyImageStore.RequestWidth(171), EmbyImageStore.RequestWidth(170));
         });
+
+        RegisterImageCachePolicy();
+    }
+
+    /// <summary>
+    /// 淘汰规则：**最久没看过的先走**，以及「什么时候值得去动一次时间戳」。
+    /// <para>
+    /// 从前这两条都是错的，而两种错法屏上都看不见：按「最早下载」删，于是天天看的那部剧的海报因为下得早会先被删掉
+    /// —— 用户看见的只是「怎么又在转」；而清理只在开机跑一次，一次会话里缓存可以一路涨过预算，谁也不会注意。
+    /// </para>
+    /// </summary>
+    private static void RegisterImageCachePolicy()
+    {
+        var now = new DateTime(2026, 9, 2, 12, 0, 0, DateTimeKind.Utc);
+
+        Test("缓存淘汰：没超预算一张都不删", () =>
+        {
+            (string, long, DateTime)[] files =
+            [
+                ("a.img", 400, now.AddDays(-30)),
+                ("b.img", 400, now)
+            ];
+
+            Assert.Equal(0, ImageCachePolicy.Evict(files, 800, 1000).Count);
+            Assert.Equal(0, ImageCachePolicy.Evict(files, 1000, 1000).Count, "正好等于预算也不算超");
+        });
+
+        Test("缓存淘汰：最久没看过的先走，不是最早下载的", () =>
+        {
+            // 这就是那个毛病的形状：old 是上个月下的、每天都在看（时间戳被推到今天），fresh 是今天下的、看过一次
+            // 就没再碰。按「最早下载」删会先删 old —— 而它正是最该留的那一张。
+            (string, long, DateTime)[] files =
+            [
+                ("每天看的.img", 500, now.AddMinutes(-5)),
+                ("下过一次就没碰的.img", 500, now.AddDays(-40)),
+                ("上周看过的.img", 500, now.AddDays(-7))
+            ];
+
+            // 1500 → 预算 1000 → 削到 800，也就是要腾出 700，两张 500 就够。
+            var doomed = ImageCachePolicy.Evict(files, 1500, 1000);
+
+            Assert.Equal(2, doomed.Count);
+            Assert.Equal("下过一次就没碰的.img", doomed[0].Path, "最久没看过的第一个走");
+            Assert.Equal("上周看过的.img", doomed[1].Path);
+        });
+
+        Test("缓存淘汰：删到降回预算的八成就停手", () =>
+        {
+            var files = Enumerable.Range(0, 10)
+                .Select(index => ($"{index}.img", 100L, now.AddDays(-index)))
+                .ToList();
+
+            // 1000 → 预算 500 → 削到 400，要腾出 600，也就是 6 张。一超就只削到预算上的话，下一张图落地又超了，
+            // 于是每下载几张就走一趟目录枚举。
+            var doomed = ImageCachePolicy.Evict(files, 1000, 500);
+
+            Assert.Equal(6, doomed.Count);
+            Assert.Equal("9.img", doomed[0].Path, "最旧的（9 天前）第一个走");
+        });
+
+        Test("缓存淘汰：预算是 0 就全删", () =>
+        {
+            (string, long, DateTime)[] files = [("a.img", 100, now), ("b.img", 100, now.AddDays(-1))];
+
+            Assert.Equal(2, ImageCachePolicy.Evict(files, 200, 0).Count);
+        });
+
+        Test("缓存淘汰：时间戳一样时次序是稳定的", () =>
+        {
+            // 一屏卡片就是同一秒落地的一批。次序不稳的话「同一份缓存、同一次清理删的是同一批」这句话就钉不住。
+            (string, long, DateTime)[] files =
+            [
+                ("c.img", 100, now),
+                ("a.img", 100, now),
+                ("b.img", 100, now)
+            ];
+
+            var first = ImageCachePolicy.Evict(files, 300, 200);
+            var again = ImageCachePolicy.Evict(files, 300, 200);
+
+            Assert.Equal("a.img", first[0].Path);
+            Assert.True(first.Select(file => file.Path).SequenceEqual(again.Select(file => file.Path)));
+        });
+
+        Test("缓存淘汰：空缓存不炸", () =>
+            Assert.Equal(0, ImageCachePolicy.Evict([], 0, 1000).Count));
+
+        Test("推时间戳：刚看过的不重复写，久没看的才推", () =>
+        {
+            Assert.False(ImageCachePolicy.WorthTouching(now.AddMinutes(-1), now), "一分钟前刚推过");
+            Assert.False(ImageCachePolicy.WorthTouching(now, now));
+            Assert.True(ImageCachePolicy.WorthTouching(now - ImageCachePolicy.TouchInterval, now), "正好到期就推");
+            Assert.True(ImageCachePolicy.WorthTouching(now.AddDays(-3), now));
+        });
+
+        Test("推时间戳：时间戳在未来的也要拉回来", () =>
+        {
+            // 手改过系统时钟、或者从别的机器上拷过来的缓存。留着一个未来的时间戳就意味着这一张永远排在最后、
+            // 永远轮不到被淘汰。
+            Assert.True(ImageCachePolicy.WorthTouching(now.AddYears(1), now));
+        });
+
+        // 上面几条钉的是次序，这一条钉的是它接到真磁盘上还成立 —— glob、排序和删除三件事一起走通，而
+        // 「清除缓存」那个按钮的教训就是：算得对不等于删对了东西。
+        Test("图片缓存：清理真的按最久没看过删，并且只删 .img", () =>
+        {
+            var root = TempDirectory();
+            try
+            {
+                var stamp = new DateTime(2026, 9, 2, 12, 0, 0, DateTimeKind.Utc);
+
+                // 十张各 100 字节，第 index 张是 index 天前看的。
+                for (var index = 0; index < 10; index++)
+                {
+                    var path = Path.Combine(root, $"item{index}-Primary-tag-400.img");
+                    File.WriteAllBytes(path, new byte[100]);
+                    File.SetLastWriteTimeUtc(path, stamp.AddDays(-index));
+                }
+
+                File.WriteAllText(Path.Combine(root, "settings.json"), "{}");
+
+                // 1000 字节，预算 500 → 削到 400，也就是要删掉 6 张：9 天前那张起，一路删到 4 天前那张。
+                var store = new EmbyImageStore(Session(), root, maxBytes: 500);
+                store.PruneInBackground();
+
+                Assert.True(
+                    Spin(() => EmbyImageStore.Measure(root).Files == 4),
+                    $"清理没把缓存降到 4 张（现在 {EmbyImageStore.Measure(root).Files} 张）");
+
+                for (var index = 0; index <= 3; index++)
+                    Assert.True(
+                        File.Exists(Path.Combine(root, $"item{index}-Primary-tag-400.img")),
+                        $"最近看过的第 {index} 张不该被删");
+
+                for (var index = 4; index < 10; index++)
+                    Assert.False(
+                        File.Exists(Path.Combine(root, $"item{index}-Primary-tag-400.img")),
+                        $"{index} 天没看过的第 {index} 张该走了");
+
+                Assert.True(File.Exists(Path.Combine(root, "settings.json")), "清理也只碰 .img");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+    }
+
+    /// <summary>
+    /// 一个没登录的会话，只为把 <see cref="EmbyImageStore"/> 构造出来 —— 清理那一路一次都不碰它。什么都不落盘：
+    /// <c>AppPaths</c> 只拼字符串，那个临时目录名从来不会被建出来。
+    /// </summary>
+    private static EmbySession Session() => new(
+        new Configuration.AppSettings(),
+        new Configuration.SettingsStore(
+            new AppPaths(Path.Combine(Path.GetTempPath(), $"embynian-prune-{Guid.NewGuid():N}")),
+            Configuration.PassthroughSecretProtector.Instance),
+        new Configuration.CredentialVault(Configuration.PassthroughSecretProtector.Instance),
+        DeviceIdentity.Create("device-1", "3.0.0"));
+
+    /// <summary>
+    /// 等一件后台的事发生，最多五秒。清理是 fire-and-forget 的（开机时它不该拦住任何东西），所以这里只能等 ——
+    /// 而等不到就是真的没做，不是「还没轮到」。
+    /// </summary>
+    private static bool Spin(Func<bool> done)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (done()) return true;
+            Thread.Sleep(25);
+        }
+
+        return done();
     }
 
     private static string TempDirectory()

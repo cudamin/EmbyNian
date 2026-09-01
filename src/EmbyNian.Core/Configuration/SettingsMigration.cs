@@ -47,6 +47,22 @@ public static class SettingsMigration
         // are gone, and the deserializer ignores a key it has nowhere to put.
         if (version < 5 && string.IsNullOrWhiteSpace(settings.Video.OutputLevels)) settings.Video.OutputLevels = "full";
 
+        // v6 is the first version in which anything reads the window size back. Up to v5 the three
+        // Ui.Window* fields were written on every save and read by nobody — v1's WinForms shell restored
+        // them, the WinUI shell never did — so whatever a v5 file holds is a number from a shell that no
+        // longer exists, or v5's own default of 1360×860 that no window was ever that size for. Cleared
+        // rather than carried over: 0 means 「never recorded」, so the first launch after the upgrade opens
+        // at the computed default and starts remembering from there. Keeping them would restore a size the
+        // user never chose and call it their preference.
+        if (version < 6)
+        {
+            settings.Ui.WindowLeft = 0;
+            settings.Ui.WindowTop = 0;
+            settings.Ui.WindowWidth = 0;
+            settings.Ui.WindowHeight = 0;
+            settings.Ui.WindowMaximized = false;
+        }
+
         settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
         return Normalize(settings);
     }
@@ -70,12 +86,15 @@ public static class SettingsMigration
         // 而且设置里那个下拉框会显示成空的。这里换掉，用户下次保存就落盘成一个真的 id。
         settings.Ui.Theme = Theming.UiThemes.Resolve(settings.Ui.Theme).Id;
 
-        // 400×300 rather than the old 1040×680: 「窗口缩小到一定程度就无法缩小了」 lowered the window's own
-        // MinimumSize, and a floor here that sat above it would silently grow the window back on the next
-        // launch. It only has to reject a garbage number now — MainForm clamps to the real minimum for the
-        // current DPI when it restores the size, which is the only place that knows it.
-        settings.Ui.WindowWidth = Math.Clamp(settings.Ui.WindowWidth, 400, 8000);
-        settings.Ui.WindowHeight = Math.Clamp(settings.Ui.WindowHeight, 300, 8000);
+        // 记下来的窗口尺寸只做「不是垃圾数字」这一道校验，摆到哪块屏、要不要缩进工作区由
+        // ScreenPlacement.Restore 在开窗那一刻定 —— 只有那时候才知道现在接着几块屏、各自多大。0 是
+        // 「还没记过」，必须原样留着：夹成 400×300 就等于替用户宣布他拉过一个 400 宽的窗口。
+        if (settings.Ui.WindowWidth != 0 || settings.Ui.WindowHeight != 0)
+        {
+            settings.Ui.WindowWidth = Math.Clamp(settings.Ui.WindowWidth, 400, 8000);
+            settings.Ui.WindowHeight = Math.Clamp(settings.Ui.WindowHeight, 300, 8000);
+        }
+
         settings.Playback.MarkWatchedPercent = Math.Clamp(settings.Playback.MarkWatchedPercent, 50, 100);
         settings.Playback.ProgressReportIntervalSeconds = Math.Clamp(settings.Playback.ProgressReportIntervalSeconds, 1, 60);
         settings.Playback.SeekForwardSeconds = Math.Clamp(settings.Playback.SeekForwardSeconds, 1, 600);

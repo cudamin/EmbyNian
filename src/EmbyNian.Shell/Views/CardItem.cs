@@ -27,7 +27,11 @@ public sealed class CardItem : INotifyPropertyChanged
 {
     private const string Category = "卡片";
 
-    /// <summary>Segoe Fluent codepoints; see the note in <see cref="PlaceholderPage"/> on why numbers.</summary>
+    /// <summary>
+    /// Segoe Fluent codepoints, spelled as numbers rather than as characters. The characters are in the
+    /// Unicode private-use area: pasted into source they are invisible in a diff, and any tool that
+    /// re-encodes the file can silently replace them with a replacement character.
+    /// </summary>
     private const int MovieGlyph = 0xE8B2;
     private const int SeriesGlyph = 0xE7F4;
     private const int FolderGlyph = 0xE8B7;

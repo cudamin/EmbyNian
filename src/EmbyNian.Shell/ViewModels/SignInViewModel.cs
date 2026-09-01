@@ -6,7 +6,6 @@ using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Services;
-using EmbyNian.Shell.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 

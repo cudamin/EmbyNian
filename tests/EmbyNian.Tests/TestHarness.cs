@@ -90,15 +90,22 @@ internal static class Assert
         throw new AssertionException($"期望不包含 <{unexpected}>，实际 <{Truncate(actual)}> {message}");
     }
 
-    public static void Throws<TException>(Action action, string message = "") where TException : Exception
+    public static void Throws<TException>(Action action, string message = "") where TException : Exception =>
+        Catch<TException>(action, message);
+
+    /// <summary>
+    /// 同 <see cref="Throws{TException}"/>，但把抓到的那个异常交回来 —— 有些断言要看它里面那句话，而那句话正是
+    /// 用户唯一看得见的东西（见 <c>Failure.Describe</c>）。
+    /// </summary>
+    public static TException Catch<TException>(Action action, string message = "") where TException : Exception
     {
         try
         {
             action();
         }
-        catch (TException)
+        catch (TException expected)
         {
-            return;
+            return expected;
         }
         catch (Exception error)
         {

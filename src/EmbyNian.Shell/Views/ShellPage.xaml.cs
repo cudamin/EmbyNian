@@ -4,7 +4,6 @@ using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Playback;
 using EmbyNian.Services;
-using EmbyNian.Shell.Diagnostics;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -1266,9 +1265,12 @@ public sealed partial class ShellPage : UserControl, IShellActions
         List<EmbyItem> views;
         try
         {
-            views = await _session!
-                .ExecuteAsync((client, token) => client.GetViewsAsync(token), CancellationToken.None)
-                .ConfigureAwait(true);
+            // 恢复登录那一趟已经取回过一份（它拿这个接口当令牌探针），领得到就用它 —— 每次启动省掉一趟往返，
+            // 而这一趟压在「看到第一屏」的路上。只给一次，所以下面每一次刷新照旧真去问服务器。
+            views = _session!.TakeRestoredViews()
+                ?? await _session
+                    .ExecuteAsync((client, token) => client.GetViewsAsync(token), CancellationToken.None)
+                    .ConfigureAwait(true);
         }
         catch (Exception error)
         {
