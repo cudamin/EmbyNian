@@ -63,8 +63,8 @@ Emby 访问令牌以 DPAPI 包裹存放。**绝不打印、绝不写进日志、
 ## Git
 
 - 远端 `origin` 是 `https://github.com/cudamin/EmbyNian.git`，**私有仓库**。凭据由这台机器的 Git Credential Manager 保管，不要把令牌写进命令、脚本或远端地址。
-- **只有一条长期分支 `winui3-rewrite`**，HEAD 在它上面，GitHub 上的默认分支也是它。名字是 WinForms → WinUI 3 那次改造留下的，现在它就是主干。
-- **没有 `master` 了**（2026-09-02 用户拍的，本地和远端一起删掉）。以前那条 `master` 只是无条件跟随的镜像，白占一次快进和一次推送。别再造它，也别再写 `git push . winui3-rewrite:master`。推送就一句 `git push origin winui3-rewrite`。
+- **只有一条长期分支 `master`**，HEAD 在它上面。它原名 `winui3-rewrite`（WinForms → WinUI 3 那次改造留下的名字），2026-09-02 用户拍板改名为 `master`；旧名字在同一天从远端删掉，历史记录里提到 `winui3-rewrite` 的地方讲的都是改名之前的事。
+- **不要再造第二条分支去跟随主干。** 从前有一条无条件跟随的镜像分支，白占每次提交后的一次快进和一次推送，已经删了。推送就一句 `git push origin master`，也不要再写 `git push . <分支>:<分支>` 那套改引用的挪法。
 - **不要 reset / checkout / 回退工作树里的迁移成果**（WinForms → WinUI 3 那一整次）。
 - 只在用户明确要求时提交。提交信息中文正文 + `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`。源码一律 LF。
 - 提交完顺手推到 `origin`，不用再问一遍（2026-09-01 用户定的）。没有定时任务，推送只跟在提交后面发生；未提交的工作区改动不入库、也不上传。
