@@ -14,16 +14,19 @@ public readonly record struct ArtworkRef(string ItemId, string ImageType, string
 /// <list type="bullet">
 /// <item>徽标 <c>Logo</c> and 横幅图 <c>Banner</c> are name plates — a picture of the title. They replace the
 /// text title in the detail page's hero (<see cref="Plate"/>).</item>
-/// <item>艺术图 <c>Art</c> is wide artwork, so it stands behind the hero when there is no 背景图
-/// (<see cref="HeroOrder"/>).</item>
+/// <item>艺术图 <c>Art</c> is wide artwork with no title on it, and it has two places: 「把艺术图添加到
+/// 窗口右下」 puts it in the band's bottom-right corner (<see cref="Corner"/>), and when the item has no
+/// 背景图 it is instead what the whole page stands on (<see cref="HeroOrder"/>).</item>
 /// <item>背景图 <c>Backdrop</c> is what the hero wants first; 缩略图 <c>Thumb</c> is what a 16:9 card wants
 /// first (<c>CardItem.PreferWide</c>) and the hero's third choice.</item>
 /// <item>The home page's carousel is the same three wide kinds and nothing else
 /// (<see cref="BannerOrder"/>): it is the full width of the window, which is no place for a poster.</item>
 /// </list>
 /// <para>
-/// One job each, and no kind in two lists. Two orders that overlapped would put the same picture on the
-/// page twice — 艺术图 as the name plate and again behind it — which is worse than either place alone.
+/// One job each, with one exception and a rule that keeps it honest. 艺术图 is in two lists, so
+/// <see cref="Corner"/> asks the other one first: the corner is empty exactly when the band behind it is
+/// already standing on that same picture. Anything looser puts one picture on the page twice — a 260 wide
+/// copy of the wallpaper, pinned to the corner of the wallpaper — which is worse than either place alone.
 /// </para>
 /// <para>
 /// 三处向上借一层：名牌、轮播底图和集页/季页的头图都会用剧集那一层的图（<see cref="Plate"/>、
@@ -94,6 +97,31 @@ public static class ItemArtwork
         return item is { ParentLogoItemId: { Length: > 0 } parent, ParentLogoImageTag: { Length: > 0 } inherited }
             ? new ArtworkRef(parent, EmbyImageStore.Logo, inherited)
             : null;
+    }
+
+    /// <summary>
+    /// 头图右下角那张画，没有就是 null —— 「把艺术图添加到窗口右下」。取的是这个条目自己的艺术图，而背后那一整页
+    /// 已经站在同一张图上时它是空的。
+    /// <para>
+    /// 艺术图是横的、上面没有字，所以它当得起「角上摆一张画」这件事：徽标那一头是名牌（<see cref="Plate"/>），
+    /// 海报是竖的，缩略图和背景图各有各的活。而它同时是 <see cref="HeroOrder"/> 的第二档 —— 一个条目没有背景图
+    /// 的时候，铺满整页的就是这张艺术图。两处都画就是同一张图在一页上出现两次：整页那么大一张，右下角再钉一张
+    /// 260 宽的缩印本。所以这里先问 <see cref="Hero"/> 头一档是谁，答案正好是这张就让角上空着。
+    /// </para>
+    /// <para>
+    /// 「自己的」没有上溯：借来的那几种（<see cref="Inherited"/>）是给「铺满整页」和「名牌」用的，而角上这张是
+    /// 装饰 —— 一集没有自己的艺术图，就让那个角空着，而不是把剧集那一层的图缩一张钉上去。服务器也不往下发
+    /// 艺术图：ParentLogo、ParentBackdrop、ParentThumb 都有，ParentArt 没有。
+    /// </para>
+    /// </summary>
+    public static ArtworkRef? Corner(EmbyItem? item)
+    {
+        if (item is null) return null;
+        if (Tag(item, EmbyImageStore.Art) is not { Length: > 0 } tag) return null;
+
+        var corner = new ArtworkRef(item.Id, EmbyImageStore.Art, tag);
+
+        return Hero(item) is [var behind, ..] && behind == corner ? null : corner;
     }
 
     /// <summary>

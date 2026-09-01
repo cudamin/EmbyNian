@@ -60,6 +60,13 @@ public sealed partial class DetailViewModel : PageViewModel
     private const int PlateDecodeWidth = 220;
 
     /// <summary>
+    /// 右下角那张艺术图（<see cref="ItemArtwork.Corner"/>）的解码宽度，和版面给它的宽度一样：markup 把那个角
+    /// 封在 260×146 里、按比例缩放，所以一张 16:9 的艺术图正好填满这个宽。比名牌那枚宽一档是因为它是一张画而
+    /// 不是一行字 —— 字缩糊了还认得出，画糊了就是一块脏。
+    /// </summary>
+    private const int CornerDecodeWidth = 260;
+
+    /// <summary>
     /// The still beside the title. Fixed rather than scaled with 设置 → 海报宽度, unlike every other card in
     /// the app. 头上那一格的高是按内容定死的（<see cref="DetailHero.ArtHeight"/> = 460），再让这一张的宽跟着
     /// 滑杆走，那格带子就装不下它了 —— 滑杆拉到 340 时一张 2:3 海报要 510 高。
@@ -189,6 +196,15 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(PlateVisibility))]
     public partial ImageSource? PlateImage { get; set; }
 
+    /// <summary>
+    /// 艺术图，画在头图那一格的右下角 —— 「把艺术图添加到窗口右下」。哪张归这儿是
+    /// <see cref="ItemArtwork.Corner"/> 的事（这个条目自己的艺术图，而整页正站在同一张图上时是空的）；这里只
+    /// 存解出来的那张。服务器没有、或者背后那张铺的就是它时是 null，那个角就空着。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CornerArtVisibility))]
+    public partial ImageSource? CornerArtImage { get; set; }
+
     [ObservableProperty]
     public partial double StillWidth { get; set; }
 
@@ -295,13 +311,6 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(PlayVisibility))]
     [NotifyPropertyChangedFor(nameof(RestartVisibility))]
     [NotifyPropertyChangedFor(nameof(InfoVisibility))]
-    [NotifyPropertyChangedFor(nameof(NextUpText))]
-    [NotifyPropertyChangedFor(nameof(NextUpRemaining))]
-    [NotifyPropertyChangedFor(nameof(NextUpProgress))]
-    [NotifyPropertyChangedFor(nameof(NextUpDone))]
-    [NotifyPropertyChangedFor(nameof(NextUpLeft))]
-    [NotifyPropertyChangedFor(nameof(NextUpVisibility))]
-    [NotifyPropertyChangedFor(nameof(NextUpProgressVisibility))]
     [NotifyCanExecuteChangedFor(nameof(PlayCommand))]
     [NotifyCanExecuteChangedFor(nameof(RestartCommand))]
     public partial EmbyItem? PlayTarget { get; set; }
@@ -423,41 +432,19 @@ public sealed partial class DetailViewModel : PageViewModel
     /// </summary>
     public Visibility PlateVisibility => Show(PlateImage is not null);
 
+    /// <summary>
+    /// 右下角那张艺术图画不画 —— 同 <see cref="PlateVisibility"/>，只问「图解出来了没有」。「这个条目该不该有
+    /// 这张」是取图那一遍的事（<see cref="LoadArtworkAsync"/> 问 <see cref="ItemArtwork.Corner"/>），页面上留
+    /// 一个读得到的值，自检就不用去猜一张图有没有到。
+    /// </summary>
+    public Visibility CornerArtVisibility => Show(CornerArtImage is not null);
+
     /// <summary>「播放」, 「播放 S01E02」 or 「继续播放 20:34」 — the resume clock is on the button itself.</summary>
     public string PlayText => ItemDetail.PlayText(PlayTarget);
 
     public Visibility PlayVisibility => Show(PlayTarget is not null);
 
     public Visibility RestartVisibility => Show(PlayTarget?.HasResumePosition == true);
-
-    /// <summary>
-    /// 「S2:E7 - 逮捕才干的律师」 — the episode the button beside it would start, on a show's page. Reads
-    /// off <see cref="PlayTarget"/>, so it cannot drift from what 播放 actually does.
-    /// </summary>
-    public string NextUpText => _detail is { } page ? ItemDetail.NextUpTitle(page, PlayTarget) : "";
-
-    /// <summary>「剩余 44 分钟」 for a part-watched next episode; empty for one nobody has started.</summary>
-    public string NextUpRemaining => ItemDetail.NextUpRemaining(PlayTarget);
-
-    public double NextUpProgress => ItemDetail.NextUpProgress(PlayTarget);
-
-    /// <summary>
-    /// 那条进度的两段宽度，星号单位。和卡片下沿那条进度同一个写法（见 <c>CardItem.ProgressDone</c>）：
-    /// 屏上要的只是两段宽度，用两列一个 <c>Border</c> 说，而不是一个 <c>ProgressBar</c> —— 框架那支的
-    /// 前景是从 <c>SystemAccentColor</c> 解析出来的画刷，在字典解析时就冻住了，换主题它不跟着走。
-    /// </summary>
-    public GridLength NextUpDone => new(NextUpProgress, GridUnitType.Star);
-
-    /// <inheritdoc cref="NextUpDone"/>
-    public GridLength NextUpLeft => new(100 - NextUpProgress, GridUnitType.Star);
-
-    public Visibility NextUpVisibility => Show(!string.IsNullOrWhiteSpace(NextUpText));
-
-    /// <summary>
-    /// The thin bar and its 剩余 caption, which come and go together: both describe a resume position,
-    /// and a bar sitting at zero beside no caption would only look like a rendering fault.
-    /// </summary>
-    public Visibility NextUpProgressVisibility => Show(!string.IsNullOrWhiteSpace(NextUpRemaining));
 
     public Visibility WatchedVisibility => Show(Watched);
 
@@ -505,12 +492,21 @@ public sealed partial class DetailViewModel : PageViewModel
     public Visibility SubtitleVisibility => Show(SubtitleTracks.Count > AutoRows + 1);
 
     /// <summary>
-    /// The file-specific pickers under the hero. The season picker lives with the episode shelf now,
-    /// beside the content it replaces; including it here would leave an empty row on a show whose
-    /// selected episode has only one source and no selectable tracks.
+    /// 头图底下那一行文件选项画不画。两句话都得成立：这一页说的是一个文件，而且那一行里真有的可选。
+    /// <para>
+    /// 「说的是一个文件」和 媒体信息 那一句同一条理（见 <see cref="ShowSource"/>）：媒体源、音频、字幕讲的都是
+    /// 某一个文件里的事，而剧页面和季页面讲的是一整部剧。一部剧的页面上摆着「这一集走哪条音轨」，答的是没人问
+    /// 的问题 —— 那一集自己的页面就在一次点击之外，在那儿这一行本来就是摊开的。轨道照旧照读：从剧页面按下播放，
+    /// 交给 mpv 的还是解析好的那一路，收起来的只是屏上那一行。
+    /// </para>
+    /// <para>
+    /// 季选择器不在这一行里：它跟着那一带集走，摆在它替掉的那块内容边上。算进来的话，一部剧的选中集只有一个
+    /// 媒体源、又没有可选轨道时，屏上会剩一行空的。
+    /// </para>
     /// </summary>
     public Visibility PickersVisibility => Show(
-        Sources.Count > 1 || AudioTracks.Count > AutoRows || SubtitleTracks.Count > AutoRows + 1);
+        _detail is { IsPlayable: true }
+        && (Sources.Count > 1 || AudioTracks.Count > AutoRows || SubtitleTracks.Count > AutoRows + 1));
 
     /// <summary>The 自动 row every track picker carries whether the file has tracks or not.</summary>
     private const int AutoRows = 1;
@@ -835,6 +831,10 @@ public sealed partial class DetailViewModel : PageViewModel
         OnPropertyChanged(nameof(HeroInset));
         OnPropertyChanged(nameof(TailInset));
 
+        // 那一行文件选项也按页面的种类开合（见 PickersVisibility）：剧页和季页不摆。轨道那几个集合是上一个条目
+        // 留下的，从一部剧翻到一集时它们可能一个都没变，那边的通知一次不会来。
+        OnPropertyChanged(nameof(PickersVisibility));
+
         EpisodeFocus = 0;
 
         EpisodeShelf?.Clear();
@@ -871,6 +871,7 @@ public sealed partial class DetailViewModel : PageViewModel
         HeroImage = null;
         StillImage = null;
         PlateImage = null;
+        CornerArtImage = null;
 
         _art?.Cancel();
         _art?.Dispose();
@@ -1079,14 +1080,22 @@ public sealed partial class DetailViewModel : PageViewModel
             ? new[] { EmbyImageStore.Primary, EmbyImageStore.Thumb, EmbyImageStore.Backdrop }
             : [EmbyImageStore.Primary, EmbyImageStore.Thumb];
 
+        // 右下角那张艺术图（「把艺术图添加到窗口右下」）。哪张归那个角是 ItemArtwork.Corner 的事；这儿只多一句
+        // 「集页不摆」：那一格的高是按里面那一叠实测给的（见 HeroHeight），两百来像素装不下右上角那枚名牌再加
+        // 一张 146 高的画，硬摆就是两张图叠在一处。集自己也几乎不会有艺术图 —— 服务器压根不往下发（有
+        // ParentLogo、ParentBackdrop、ParentThumb，没有 ParentArt），所以这一句拦掉的是个空集。
+        var corner = episode ? null : ItemArtwork.Corner(item);
+
         try
         {
-            // 三张图分头去取。以前是一张接一张：名牌回来了才开始要头图，头图回来了才开始要剧照 —— 三次往返
+            // 四张图分头去取。以前是一张接一张：名牌回来了才开始要头图，头图回来了才开始要剧照 —— 三次往返
             // 排成一队，慢的那一张拖住后面两张。它们之间没有任何依赖，谁先回来谁先显示，版面不看先后。
             await Task.WhenAll(
                     Paint(DecodePlateAsync(item, art.Token), picture => PlateImage = picture),
                     Paint(DecodeFirstAsync(ItemArtwork.Hero(item), HeroDecodeWidth, art.Token),
                         picture => HeroImage = picture),
+                    Paint(DecodeFirstAsync(corner is { } one ? [one] : [], CornerDecodeWidth, art.Token),
+                        picture => CornerArtImage = picture),
                     Paint(DecodeFirstAsync(item, types, episode ? EpisodeStillWidth : PosterStillWidth, art.Token),
                         picture => StillImage = picture))
                 .ConfigureAwait(true);
@@ -1100,7 +1109,7 @@ public sealed partial class DetailViewModel : PageViewModel
             Log.Debug(Category, $"加载详情图片失败：{error.Message}");
         }
 
-        // Every one of the three ends the same way: show it if it arrived and if this page is still the
+        // Every one of the four ends the same way: show it if it arrived and if this page is still the
         // page that asked. Both halves of that check matter — see Fresh.
         async Task Paint(Task<BitmapImage?> decode, Action<BitmapImage> assign)
         {
@@ -1372,9 +1381,10 @@ public sealed partial class DetailViewModel : PageViewModel
     private void ToggleOverview() => Expanded = !Expanded;
 
     /// <summary>
-    /// The headline on an episode page — 「99.9 刑事专业律师」 above 「S2:E7 - …」 — opens the season that
-    /// episode belongs to. Where that goes is <see cref="ItemDetail.TitleTarget"/>'s decision; this only
-    /// hands it to the shell, the same way a card click does.
+    /// The headline on an episode page — 「99.9 刑事专业律师」 above 「S2:E7 - …」 — opens 那部剧自己的页面.
+    /// Where that goes is <see cref="ItemDetail.TitleTarget"/>'s decision; this only hands it to the
+    /// shell, the same way a card click does. 季页面不从这儿进（见那边的注），它的入口是剧页面上
+    /// 「全部剧季」那一格。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanOpenTitle))]
     private void OpenTitle()

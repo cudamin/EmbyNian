@@ -15,6 +15,7 @@ public sealed partial class ShellPage
 
     /// <summary>
     /// 自检：侧边栏收起和展开时各量一次主页首屏。两档必须都完整放下继续观看，并且都不露出下一排媒体库。
+    /// 顺带对一遍锁定比例扣掉的那一条和现场那条窄条是不是同一个数。
     /// </summary>
     internal (bool? Ok, string Detail) ProbeHomeFold()
     {
@@ -51,8 +52,22 @@ public sealed partial class ShellPage
             var expected = Navigation.OpenPaneLength - Navigation.CompactPaneLength;
             var difference = folded.Width - spread.Width;
             var widthOk = folded.Width > 0 && spread.Width > 0 && Math.Abs(difference - expected) <= 2;
-            return (folded.Ok == true && spread.Ok == true && stateOk && widthOk,
-                detail + $"；两档宽差 {difference:0}（应约 {expected:0}）");
+
+            // 「计算比例时要排除侧边栏」：锁定比例扣掉的那一条就是收起来的窄条加它右边那道竖线，两个数都写在
+            // 标记里，而比例那一头握着的是 Core 的一个常数。所以这里拿现场对一遍 —— 标记里把 CompactPaneLength
+            // 改了，锁定的形状就悄悄错开一档，而屏幕上只是窗口宽了几十像素，谁也看不出来。顺带量一句「收起那
+            // 一档的页宽就是被锁的那一片」：那才是这条锁真正想说的话。
+            var rail = Navigation.CompactPaneLength + 1;
+            var lockRail = EmbyNian.Emby.HomeCarousel.SideRail;
+            var railOk = Math.Abs(rail - lockRail) < 0.5;
+            var client = XamlRoot?.Size.Width ?? 0;
+            var browseOk = client > 0 && Math.Abs(folded.Width - (client - rail)) <= 2;
+
+            return (folded.Ok == true && spread.Ok == true && stateOk && widthOk && railOk && browseOk,
+                detail + $"；两档宽差 {difference:0}（应约 {expected:0}）"
+                    + $"；侧边栏那一条 {rail:0}，比例扣的是 {lockRail}{(railOk ? "" : "（两个数对不上）")}"
+                    + $"；客户区宽 {client:0} 减掉它 = {client - rail:0}"
+                    + (browseOk ? "，正是收起那一档的页宽" : "，和收起那一档的页宽对不上"));
         }
         finally
         {

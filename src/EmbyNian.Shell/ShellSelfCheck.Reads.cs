@@ -271,8 +271,6 @@ internal static partial class ShellSelfCheck
             model.PlayTarget?.Name,
             model.PlayTarget?.Type,
             model.PlayText,
-            model.NextUpText,
-            model.NextUpRemaining,
             model.InfoRows.Count,
             model.HeroImage is not null,
             model.StillImage is not null,
@@ -301,12 +299,14 @@ internal static partial class ShellSelfCheck
     /// <summary>
     /// 需求 4 as this page came out: the 徽标 the item's artwork entitles it to, whether the mark or only the
     /// text title actually drew, where the mark landed, and which of the five artworks the server holds for it —
-    /// plus whose picture the band behind it stands on（「集页面要用这个剧的背景图或缩略图」）.
+    /// plus whose picture the band behind it stands on（「集页面要用这个剧的背景图或缩略图」）and whether the
+    /// 艺术图 reached the band's bottom-right corner（「把艺术图添加到窗口右下」）.
     /// <para>
     /// Read off the elements rather than off the view model, because what is worth testing is the markup: the
     /// text title has to be there on every page (the mark used to replace it, and 「no name on the hero band」
     /// looks exactly like artwork that never arrived over the network), and the mark has to be in the corner it
-    /// was moved to rather than back on the words. See <see cref="DetailPage.TitleShapes"/>.
+    /// was moved to rather than back on the words. See <see cref="DetailPage.TitleShapes"/> and
+    /// <see cref="DetailPage.CornerArtShape"/>.
     /// </para>
     /// </summary>
     private static ArtworkRead ReadArtwork(DetailPage page, DetailViewModel model)
@@ -314,9 +314,41 @@ internal static partial class ShellSelfCheck
         var (plate, text, width, height, corner, where) = page.TitleShapes;
         var item = model.CurrentItem;
         var (heroOk, hero) = Band(item);
+        var (cornerArtOk, cornerArt) = CornerArt(page, model, item);
 
         return new ArtworkRead(Wanted(item), plate, text, width, height, corner, where,
-            item is null ? "没有条目" : ItemArtwork.Kinds(item), hero, heroOk);
+            item is null ? "没有条目" : ItemArtwork.Kinds(item), cornerArtOk, cornerArt, hero, heroOk);
+
+        // 「把艺术图添加到窗口右下」：一句话里两件事 —— 规矩说该不该画（ItemArtwork.Corner，加上集页整个不摆：
+        // 那一条带子只有 200 高，摆不下名牌加一张画），和屏上真画了没有、画在哪儿（DetailPage.CornerArtShape）。
+        //
+        // 「该画却没画」不算失败：位图是从网上解出来的，这一拍还没到手是常态。反过来「不该画却画了」是这一条真
+        // 会红的那一种 —— 整页已经站在同一张艺术图上时角上再钉一张，屏上就是同一张图出现两次。
+        static (bool Ok, string Detail) CornerArt(DetailPage page, DetailViewModel model, EmbyItem? item)
+        {
+            var (drawn, artWidth, artHeight, placed, geometry) = page.CornerArtShape;
+            var episode = model.ItemType == EmbyItemType.Episode;
+            var allowed = item is not null && !episode && ItemArtwork.Corner(item) is not null;
+            var wanted = Wanted();
+
+            var says = drawn
+                ? $"该有的是{wanted}，画了 {artWidth:0}×{artHeight:0}；{geometry}"
+                    + (allowed ? "" : "；**规矩说这个角该空着**")
+                : $"该有的是{wanted}，右下角空着{(allowed ? "（有图，这一拍还没解出来）" : "")}";
+
+            return (placed && (!drawn || allowed), says);
+
+            string Wanted()
+            {
+                if (item is null) return "没有条目";
+                if (episode) return "无（单集这一条带子摆不下）";
+                if (allowed) return "自己的艺术图";
+
+                return ItemArtwork.Has(item, EmbyImageStore.Art)
+                    ? "无（整页已经站在这张艺术图上）"
+                    : "无（这一条没有艺术图）";
+            }
+        }
 
         // The id matters as much as the kind: on an episode or a season the logo is the show's, fetched
         // under the show's id, and 「徽标」 on its own would not say which of the two paths ran.
@@ -538,9 +570,9 @@ internal static partial class ShellSelfCheck
         if (target is null)
             return (null, $"季 {page.Seasons.Count} 行，边界两侧的季都不在选择器里（打开在「{opened?.Name ?? "无"}」）");
 
-        // Which properties the switch announces, not merely which values it ends up with. 下一集 is a
-        // computed property fanned out from PlayTarget by an attribute, and reading it after the fact would
-        // pass whether or not that attribute is there — the page binds once and then listens.
+        // Which properties the switch announces, not merely which values it ends up with. 播放按钮上的字是
+        // 从 PlayTarget 上靠一个特性扇出来的算得属性，事后读一遍它的值不管那个特性在不在都会通过 —— 页面只绑
+        // 一次，之后靠通知。
         var announced = new HashSet<string>(StringComparer.Ordinal);
         page.PropertyChanged += (_, args) =>
         {
@@ -568,15 +600,16 @@ internal static partial class ShellSelfCheck
             && wanted is not null
             && page.PlayTarget?.Id == wanted.Id
             && page.PlayTarget?.SeasonId == target.Id
-            && page.NextUpText.Contains(wanted.Name, StringComparison.Ordinal)
-            && announced.Contains(nameof(DetailViewModel.NextUpText));
+            && page.PlayText == ItemDetail.PlayText(wanted)
+            && announced.Contains(nameof(DetailViewModel.PlayText));
 
         return (switched,
             $"《{series.Name}》季 {page.Seasons.Count} 行，打开在「{opened?.Name ?? "无"}」"
                 + $"（规则应为「{expected?.Name ?? "无"}」）；切到「{target.Name}」后 {rows.Count} 集"
                 + $"{(strayed > 0 ? $"，其中 {strayed} 集不属于该季" : "，全部属于该季")}，"
                 + $"标题「{heading}」，播放目标「{page.PlayTarget?.Name ?? "无"}」{Code(page.PlayTarget)}，"
-                + $"下一集「{page.NextUpText}」"
-                + (announced.Contains(nameof(DetailViewModel.NextUpText)) ? "（已通知）" : "（**没有通知**）"));
+                + $"按钮「{page.PlayText}」"
+                + $"（该季应播「{(wanted is null ? "无" : ItemDetail.EpisodeLabel(wanted))}」）"
+                + (announced.Contains(nameof(DetailViewModel.PlayText)) ? "（已通知）" : "（**没有通知**）"));
     }
 }

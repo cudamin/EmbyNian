@@ -38,7 +38,9 @@ public readonly record struct WindowBounds(int Left, int Top, int Right, int Bot
 /// The rectangle Windows offers is the whole window, frame included, while the aspect ratio belongs to
 /// the client area — so the frame is subtracted, the client corrected, and the frame added back.
 /// Getting that backwards leaves a thin band of letterboxing that grows as the window shrinks, because
-/// the caption's share of the height is larger at small sizes.
+/// the caption's share of the height is larger at small sizes. <c>insetWidth</c> is the same subtraction
+/// one level in, for a shape that belongs to part of the client area rather than all of it: the browsing
+/// window's ratio is the page's, and the navigation rail stands beside the page.
 /// </para>
 /// <para>
 /// Which edge moves follows what the hand is doing: dragging a vertical edge makes the width
@@ -69,6 +71,13 @@ public static class AspectLock
     /// <param name="frameHeight">Window height minus client height, in pixels.</param>
     /// <param name="minimumClientWidth">The smallest client area the window is allowed to have.</param>
     /// <param name="minimumClientHeight">The same for its height.</param>
+    /// <param name="insetWidth">
+    /// A strip of the client width the ratio does not own, so the shape belongs to what is left of it —
+    /// 「计算比例时要排除侧边栏」. 0 for a picture, which fills the client area edge to edge; the browsing
+    /// window passes its navigation rail, whose pixels are chrome standing beside the page rather than part of
+    /// it. The minimums stay claims about the whole client area: this is subtracted from
+    /// <paramref name="minimumClientWidth"/> too, so a lock cannot make the window narrower than the floor.
+    /// </param>
     public static WindowBounds Apply(
         WindowBounds proposed,
         ResizeEdge edge,
@@ -76,14 +85,19 @@ public static class AspectLock
         int frameWidth,
         int frameHeight,
         int minimumClientWidth = 0,
-        int minimumClientHeight = 0)
+        int minimumClientHeight = 0,
+        int insetWidth = 0)
     {
         // An aspect nobody could be watching. Zero is the ordinary case — it is what the ratio reads as
         // before mpv has opened a file — and a rectangle is not corrected towards a guess.
         if (!double.IsFinite(aspect) || aspect < SmallestAspect || aspect > LargestAspect) return proposed;
         if (edge == ResizeEdge.None) return proposed;
 
-        var clientWidth = proposed.Width - frameWidth;
+        var inset = Math.Max(0, insetWidth);
+        var minimumWidth = Math.Max(0, minimumClientWidth - inset);
+
+        // What the ratio owns: the client area less the strip that is not part of the shape.
+        var clientWidth = proposed.Width - frameWidth - inset;
         var clientHeight = proposed.Height - frameHeight;
 
         // A frame wider than the window it is supposed to be inside: the caller has the two numbers the
@@ -96,7 +110,7 @@ public static class AspectLock
 
         if (widthLeads)
         {
-            clientWidth = Math.Max(clientWidth, minimumClientWidth);
+            clientWidth = Math.Max(clientWidth, minimumWidth);
             clientHeight = (int)Math.Round(clientWidth / aspect);
 
             // The minimum wins over the ratio: a window that cannot be that short has to be wider
@@ -112,14 +126,14 @@ public static class AspectLock
             clientHeight = Math.Max(clientHeight, minimumClientHeight);
             clientWidth = (int)Math.Round(clientHeight * aspect);
 
-            if (clientWidth < minimumClientWidth)
+            if (clientWidth < minimumWidth)
             {
-                clientWidth = minimumClientWidth;
+                clientWidth = minimumWidth;
                 clientHeight = (int)Math.Round(clientWidth / aspect);
             }
         }
 
-        var width = clientWidth + frameWidth;
+        var width = clientWidth + inset + frameWidth;
         var height = clientHeight + frameHeight;
 
         // The edge the hand is not holding is the one that moves. Top-anchored for anything dragged by
@@ -135,10 +149,11 @@ public static class AspectLock
     }
 
     /// <summary>
-    /// The window rectangle whose client area is exactly <paramref name="aspect"/>, for a window that is
-    /// already on screen at <paramref name="current"/>. <see cref="Apply"/>'s other half: that one keeps
-    /// the shape while an edge is being dragged, this one takes a window that was never the right shape in
-    /// the first place — 窗口化时视频有黑边 — and makes it one, so mpv has nothing left to letterbox.
+    /// The window rectangle whose client area — less <paramref name="insetWidth"/> — is exactly
+    /// <paramref name="aspect"/>, for a window that is already on screen at <paramref name="current"/>.
+    /// <see cref="Apply"/>'s other half: that one keeps the shape while an edge is being dragged, this one
+    /// takes a window that was never the right shape in the first place — 窗口化时视频有黑边 — and makes it
+    /// one, so mpv has nothing left to letterbox.
     /// <para>
     /// The width is authoritative and the height follows, the same way a side drag behaves, because the
     /// width is the dimension a viewer chose deliberately. The centre stays put rather than the top-left
@@ -154,6 +169,11 @@ public static class AspectLock
     /// <paramref name="current"/> itself when the client area is already the right shape, so a caller can
     /// compare and skip the <c>SetWindowPos</c> rather than nudging the window by a pixel on every file.
     /// </returns>
+    /// <param name="insetWidth">
+    /// The strip of client width the ratio does not own — see <see cref="Apply"/>. The monitor's room is
+    /// measured the same way, so a browsing window pushed against the edge of the screen gives the page the
+    /// shape it asked for and lets the rail have the rest.
+    /// </param>
     public static WindowBounds Fit(
         WindowBounds current,
         double aspect,
@@ -161,15 +181,18 @@ public static class AspectLock
         int frameHeight,
         WindowBounds workArea = default,
         int minimumClientWidth = 0,
-        int minimumClientHeight = 0)
+        int minimumClientHeight = 0,
+        int insetWidth = 0)
     {
         if (!double.IsFinite(aspect) || aspect < SmallestAspect || aspect > LargestAspect) return current;
 
-        var clientWidth = current.Width - frameWidth;
+        var inset = Math.Max(0, insetWidth);
+
+        var clientWidth = current.Width - frameWidth - inset;
         var clientHeight = current.Height - frameHeight;
         if (clientWidth <= 0 || clientHeight <= 0) return current;
 
-        clientWidth = Math.Max(clientWidth, minimumClientWidth);
+        clientWidth = Math.Max(clientWidth, Math.Max(0, minimumClientWidth - inset));
         clientHeight = (int)Math.Round(clientWidth / aspect);
 
         if (clientHeight < minimumClientHeight)
@@ -181,7 +204,7 @@ public static class AspectLock
         // Nothing may end up larger than the screen it has to be watched on. Width first and then height,
         // which converges in one pass: a width cut that leaves the height too tall means the height cut
         // was the binding one, and its width is then smaller than the one just rejected.
-        var roomWidth = workArea.Width - frameWidth;
+        var roomWidth = workArea.Width - frameWidth - inset;
         var roomHeight = workArea.Height - frameHeight;
         if (roomWidth > 0 && roomHeight > 0)
         {
@@ -198,7 +221,7 @@ public static class AspectLock
             }
         }
 
-        var width = clientWidth + frameWidth;
+        var width = clientWidth + inset + frameWidth;
         var height = clientHeight + frameHeight;
 
         // One pixel of rounding is not a black bar. Reporting 「already right」 keeps this off the critical

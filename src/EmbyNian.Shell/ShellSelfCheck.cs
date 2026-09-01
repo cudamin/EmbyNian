@@ -169,6 +169,13 @@ internal static partial class ShellSelfCheck
     private static (string Type, bool Ok, string Detail)? _filePickers;
 
     /// <summary>
+    /// 集页上那行剧名按下去落在哪儿（<c>DetailPage.TitleLinkRead</c>）——「点击剧名之后应该进[入]剧页面而不是季
+    /// 页面」。和 <see cref="_filePickers"/> 同一拍读，理由也一样：剧名那一行在头图里，页面滚去看媒体信息之后
+    /// 它就出了视口，而这一条要的是那颗按钮真接上了、提示真说的是那部剧。
+    /// </summary>
+    private static (string Type, bool Ok, string Detail)? _fileTitleLink;
+
+    /// <summary>
     /// 详情页那一行类型点不点得动。在剧页上量（<see cref="ScrollDetail"/> 那一拍）：那一行的每个类型都是一段
     /// <c>Hyperlink</c>，而它们是代码搭的 —— 搭空了屏上就是一行普通的字，看着和以前一模一样，点下去什么都不
     /// 发生，别的读数一个都不会响。
@@ -254,8 +261,6 @@ internal static partial class ShellSelfCheck
         string? Target,
         string? TargetType,
         string Play,
-        string NextUp,
-        string Remaining,
         int Info,
         bool Hero,
         bool Still,
@@ -297,6 +302,12 @@ internal static partial class ShellSelfCheck
     /// Which artworks the server holds for this one item, 「海报、缩略图、背景图」. Informational: a thin
     /// catalogue is not a defect, and what it answers is whether the new artwork will ever be seen here.
     /// </param>
+    /// <param name="CornerArtOk">
+    /// 「把艺术图添加到窗口右下」：右下角那张艺术图，画了的那一次必须是规矩允许画的那一张
+    /// （<see cref="ItemArtwork.Corner"/>），而且落在带子的右下角、不溢出带子、不压着片名或右上角那枚记号。
+    /// 没画的那一次这句话空着成立 —— 服务器没有这一种图，或者整页已经站在同一张图上，两种都该空着。说法在
+    /// <paramref name="CornerArt"/> 里，几何在 <see cref="DetailPage.CornerArtShape"/> 读。
+    /// </param>
     /// <param name="Hero">
     /// 头上那一格铺的是谁的哪一种，用词说 —— 「剧集的背景图（取自条目 5687）」、「自己的海报」、「无」。
     /// <see cref="ItemArtwork.Hero"/> 排的那一串的头一个，所以这是应用自己那条规则的答案，不是这个文件的猜测。
@@ -315,6 +326,8 @@ internal static partial class ShellSelfCheck
         bool Corner,
         string Where,
         string Kinds,
+        bool CornerArtOk,
+        string CornerArt,
         string Hero,
         bool HeroOk);
 
@@ -826,6 +839,10 @@ internal static partial class ShellSelfCheck
         // 这一行也只有在这儿量得到：三个下拉都在头图尾巴上，滚下去看媒体信息表格之后它们就出了视口。
         var (fitOk, fit) = page.PickerFit();
         _filePickers = (page.ViewModel.ItemType, fitOk, fit);
+
+        // 同一拍：剧名那一行也在头图里，滚下去就出了视口。
+        var (linkOk, linkRead) = page.TitleLinkRead();
+        _fileTitleLink = (page.ViewModel.ItemType, linkOk, linkRead);
 
         page.ScrollToInfo();
         return true;

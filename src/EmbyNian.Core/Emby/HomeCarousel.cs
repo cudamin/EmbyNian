@@ -28,11 +28,11 @@ public static class HomeCarousel
 
     /// <summary>
     /// The band's height ceiling before anyone has measured the window — the first layout pass, and the
-    /// self-check's readings, which have no window at all. 560 is the band the app opens at (a 1280-wide
-    /// client less the 48-wide rail, over <see cref="Aspect"/>), so the first frame is already the size the
-    /// second one will be.
+    /// self-check's readings, which have no window at all. 592 is <see cref="HeightShare"/> of the 800-tall
+    /// client the app opens at, which is also what that window's first measured pass produces, so the first
+    /// frame is already the size the second one will be.
     /// </summary>
-    public const double UnmeasuredHeight = 560;
+    public const double UnmeasuredHeight = 592;
 
     /// <summary>
     /// The most of the window's height the ordinary width-based band is allowed to take.
@@ -47,19 +47,29 @@ public static class HomeCarousel
     /// written for: a quarter of the window is left for the first row of cards.
     /// </para>
     /// <para>
-    /// Above <see cref="WindowAspect"/> ÷ <see cref="Aspect"/> = 0.727, so the ordinary <see cref="Height"/>
-    /// path can still draw its preferred 2.2:1 band in an 8:5 window before the first shelf has been measured.
-    /// Once that measurement exists, the stricter locked-window path is <see cref="FoldHeight"/> instead.
+    /// Under <see cref="WindowAspect"/> ÷ <see cref="Aspect"/> = 0.808, so in a window of the locked shape it
+    /// is this share and not the width that settles the ordinary <see cref="Height"/> path: a pre-measurement
+    /// band of 74% of the window, 2.4:1 rather than the preferred 2.2:1. That is the right way round — the
+    /// quarter left for the first row of cards is a promise about the screen, while 2.2:1 is a preference —
+    /// and the locked window's real band is <see cref="FoldHeight"/>'s anyway, from the moment the first shelf
+    /// has been measured.
     /// </para>
     /// </summary>
     public const double HeightShare = 0.74;
 
     /// <summary>
-    /// 锁定窗口比例大小: the shape the browsing client area is held in, expressed as width ÷ height.
+    /// 锁定窗口比例大小: the shape the browsing area is held in, as width ÷ height — 16:9.
     /// <para>
-    /// 1.6 is 8:5, which is the shape the window already opens at (1280×800). Nothing about the number is
-    /// derived: it is the size this app has always started at and the one the carousel was drawn against.
-    /// It is also the shape the home page recognises for its strict first-screen layout.
+    /// 「计算比例时要排除侧边栏」: the area this ratio describes is the client area less
+    /// <see cref="SideRail"/>, which is the page rather than the window. The rail is chrome, and counting it
+    /// meant the page was never the shape the lock named — the old 1.6:1 window drew its pages at 1.54:1.
+    /// 16:9 is the shape of the pictures those pages are built around: every backdrop, thumb and still the
+    /// server sends is 16:9, and the home page's own band is a full-width one of them.
+    /// </para>
+    /// <para>
+    /// Nothing is excluded vertically, which is a decision rather than an omission: the title bar's 32 is
+    /// drawn over the page rather than above it, and on the home page the picture starts at the window's very
+    /// top edge — so the whole client height is the picture's.
     /// </para>
     /// <para>
     /// The home page uses this same shape as the signal for its stricter first-screen layout: once the first
@@ -68,7 +78,27 @@ public static class HomeCarousel
     /// whether the navigation pane is open or collapsed. Other window shapes keep the ordinary width rule.
     /// </para>
     /// </summary>
-    public const double WindowAspect = 1.6;
+    public const double WindowAspect = 16.0 / 9.0;
+
+    /// <summary>The ratio in the language the setting says it in, rather than as 1.78:1.</summary>
+    public const string WindowAspectLabel = "16:9";
+
+    /// <summary>
+    /// The strip of client width <see cref="WindowAspect"/> does not count: the collapsed navigation rail
+    /// (<c>NavigationView.CompactPaneLength</c>, 48) plus the hairline down its right edge. Device-independent
+    /// pixels — a window rectangle is physical, so whoever applies it scales by their own dpi first.
+    /// <para>
+    /// The collapsed width on purpose, rather than whatever the pane happens to be showing. Following the live
+    /// pane would resize the window on every toggle of the rail, and the strict first screen has to hold in
+    /// both pane states （「不管收起还是展开侧边栏，都要看到完整的继续观看」）: an opened pane borrows its 200
+    /// from the page instead. 「侧边栏默认为折叠状态」, so this is also the width the window opens with.
+    /// </para>
+    /// <para>
+    /// Both numbers belong to the shell, so the shell's self-check pins them against the real
+    /// <c>NavigationView</c> instead of trusting this constant to have kept up with the markup.
+    /// </para>
+    /// </summary>
+    public const int SideRail = 49;
 
     /// <summary>
     /// How long a slide stands before the carousel moves on, and how long it waits again after someone
@@ -83,8 +113,10 @@ public static class HomeCarousel
     /// <see cref="HeightShare"/> is the other half of that fallback rule.
     /// <para>
     /// When that preferred shape is actually used, a 16:9 picture drawn with <c>UniformToFill</c> keeps
-    /// (9/16) ÷ (1/2.2) = 80.8% of its height. The strict locked-window path may choose a different band
-    /// height so the complete first shelf fits; its correctness is the shelf boundary, not a fixed crop.
+    /// (9/16) ÷ (1/2.2) = 80.8% of its height. In a window of the locked shape it is not used: the share
+    /// (<see cref="HeightShare"/>) binds first, giving a 2.4:1 band that keeps 74%. The strict locked-window
+    /// path may choose a different band height again so the complete first shelf fits; its correctness is the
+    /// shelf boundary, not a fixed crop.
     /// </para>
     /// </summary>
     public const double Aspect = 2.2;

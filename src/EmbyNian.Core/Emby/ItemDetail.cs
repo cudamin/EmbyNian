@@ -102,30 +102,25 @@ public static class ItemDetail
 
     /// <summary>
     /// Where the headline leads, or null when it leads nowhere. An episode is billed under its show's
-    /// name (see <see cref="Title"/>), and pressing that name is asking for the thing it names: the
-    /// season, which is the page that lists this episode among its siblings.
+    /// name (see <see cref="Title"/>), and pressing that name is asking for the thing it names: 剧页面.
+    /// <para>
+    /// 剧而不是季 —— 「点击剧名之后应该进[入]剧页面而不是季页面，季页面只能通过[剧页面上「全部剧季」那一格]
+    /// 进入」。从前这里先挑季（理由是「这一集坐在哪张单子里」更窄），可屏上那行字写的是剧名，按下去落在
+    /// 「第 1 季」上就是承诺和兑现不是同一件事；而季页面本来就有它自己的入口，剧页面底下那一格「全部剧季」。
+    /// </para>
     /// <para>
     /// A stub item rather than the parent itself — the same shape <see cref="Cast"/> builds. An episode
     /// carries only its parents' ids and names, and the detail page re-fetches whatever it is handed by
     /// id, so id, name and type are the whole of what a navigation needs.
     /// </para>
     /// <para>
-    /// The season is preferred over the show because that is the narrower answer to 「where is this
-    /// episode」; a server that left the season id out falls back to the show, and an episode with
-    /// neither has no link at all rather than a button that goes nowhere.
+    /// 没有剧的 id 就没有链接，而不是退回季：那一行字说的是剧，退回季等于把人送到一个它没说过的地方。
+    /// 这时候按钮点不动（<c>DetailViewModel.CanOpenTitle</c>），面包屑仍然是回去的路。
     /// </para>
     /// </summary>
     public static EmbyItem? TitleTarget(EmbyItem item)
     {
         if (item.Type != EmbyItemType.Episode) return null;
-
-        if (item.SeasonId is { Length: > 0 } seasonId)
-            return new EmbyItem
-            {
-                Id = seasonId,
-                Name = item.SeasonName ?? item.SeriesName ?? item.Name,
-                Type = EmbyItemType.Season
-            };
 
         if (item.SeriesId is { Length: > 0 } seriesId)
             return new EmbyItem
@@ -271,44 +266,6 @@ public static class ItemDetail
         _ when target.Type == EmbyItemType.Episode && target.EpisodeCode.Length > 0 => $"播放 {target.EpisodeCode}",
         _ => "播放"
     };
-
-    /// <summary>
-    /// The 下一集 line on a show's page: 「S2:E7 - 逮捕才干的律师」, the episode 播放 would start.
-    /// <para>
-    /// Empty on an episode's own page, where the same string is already the second line of the headline,
-    /// and empty for a film, whose next thing to watch is itself. Built from what this client resolved
-    /// (<see cref="PickSeason"/> then <see cref="PickEpisode"/>) rather than from the server's
-    /// <c>Shows/NextUp</c>: two answers to 「what plays next」 that can disagree is one too many, and the
-    /// button beside this line obeys the resolved one.
-    /// </para>
-    /// </summary>
-    public static string NextUpTitle(EmbyItem page, EmbyItem? target)
-    {
-        if (page.Type == EmbyItemType.Episode) return "";
-        if (target is null || target.Type != EmbyItemType.Episode) return "";
-
-        return EpisodeLabel(target);
-    }
-
-    /// <summary>
-    /// 「剩余 44 分钟」 — what is left of the episode from where it was paused. Empty unless there is a
-    /// pause to be left of: an untouched episode's remainder is its runtime, which the facts line above
-    /// already states, and repeating it as 「剩余」 would read like progress nobody made.
-    /// </summary>
-    public static string NextUpRemaining(EmbyItem? target)
-    {
-        if (target is not { HasResumePosition: true }) return "";
-        if (target.RunTimeTicks is not { } total || total <= target.ResumeTicks) return "";
-
-        return $"剩余 {TimeFormat.Duration(total - target.ResumeTicks)}";
-    }
-
-    /// <summary>
-    /// How far into the next episode the bar sits, 0..100 for a <c>ProgressBar</c>'s own scale. Zero
-    /// when nothing was watched, which the page reads as 「no bar to draw」.
-    /// </summary>
-    public static double NextUpProgress(EmbyItem? target) =>
-        target is { HasResumePosition: true } ? target.ProgressFraction * 100 : 0;
 
     /// <summary>
     /// A media source as the picker lists it. The name is what Emby calls the file, which for a

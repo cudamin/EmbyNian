@@ -51,7 +51,7 @@ internal static class ItemDetailTests
             Assert.Equal("特别篇", ItemDetail.Subline(episode));
         });
 
-        Test("详情：单集的标题点得动，去它自己的季", () =>
+        Test("详情：单集的标题点得动，去的是那部剧", () =>
         {
             var episode = new EmbyItem
             {
@@ -64,15 +64,15 @@ internal static class ItemDetailTests
                 SeasonName = "第二季"
             };
 
-            // The season, not the show: the headline reads 「99.9刑事专业律师」 but the list the reader wants
-            // next is the one this episode sits in. Only Id and Type have to be right — the page it opens
-            // re-fetches by id — and the name rides along so the tooltip can say where the click goes.
-            var season = ItemDetail.TitleTarget(episode);
-            Assert.Equal("season2", season?.Id);
-            Assert.Equal(EmbyItemType.Season, season?.Type);
-            Assert.Equal("第二季", season?.Name);
+            // 剧，不是季 ——「点击剧名之后应该进[入]剧页面而不是季页面，季页面只能通过[「全部剧季」那一格]进入」。
+            // 屏上那行字写的是剧名，落点就得是那部剧；季有它自己的入口。只有 Id 和 Type 必须对（开出来的页面
+            // 按 id 重新取），名字捎着走是为了让悬停提示说得出去哪儿。
+            var series = ItemDetail.TitleTarget(episode);
+            Assert.Equal("series1", series?.Id);
+            Assert.Equal(EmbyItemType.Series, series?.Type);
+            Assert.Equal("99.9刑事专业律师", series?.Name);
 
-            // A show with flat episodes and no seasons still has somewhere to go.
+            // 没有季的剧（集是平铺的）走的是同一条路 —— 从前这里是「先挑季、挑不到才退回剧」的那半边。
             var loose = ItemDetail.TitleTarget(new EmbyItem
             {
                 Id = "ep7",
@@ -89,6 +89,16 @@ internal static class ItemDetailTests
             // headline is the movie, and an orphaned episode has no parent to name.
             Assert.Null(ItemDetail.TitleTarget(new EmbyItem { Id = "m1", Type = EmbyItemType.Movie }));
             Assert.Null(ItemDetail.TitleTarget(new EmbyItem { Id = "ep7", Type = EmbyItemType.Episode }));
+
+            // 只有季的 id、没有剧的 id：不给链接，也不偷偷退回季 —— 那一行字说的是剧。
+            Assert.Null(ItemDetail.TitleTarget(new EmbyItem
+            {
+                Id = "ep7",
+                Name = "某集",
+                Type = EmbyItemType.Episode,
+                SeasonId = "season2",
+                SeasonName = "第二季"
+            }));
         });
 
         Test("详情：电影第二行是类型，季退回剧名", () =>
@@ -266,32 +276,6 @@ internal static class ItemDetailTests
             episode.Studios.Add(new EmbyStudio { Name = "TBS" });
             Assert.Equal("", ItemDetail.Studio(episode));
             Assert.Equal("", ItemDetail.Facts(new EmbyItem { Type = EmbyItemType.Movie }));
-        });
-
-        Test("详情：下一集一行说出是哪一集，并只在有断点时说剩余", () =>
-        {
-            var series = new EmbyItem { Id = "series1", Name = "99.9", Type = EmbyItemType.Series };
-            var next = Episode("逮捕才干的律师", 2, 7, "99.9");
-            next.RunTimeTicks = 46 * Minute;
-            next.UserData = new EmbyUserData { PlaybackPositionTicks = 67 * 10_000_000L };
-
-            Assert.Equal("S2:E7 - 逮捕才干的律师", ItemDetail.NextUpTitle(series, next));
-            Assert.Equal("剩余 44 分钟", ItemDetail.NextUpRemaining(next));
-            Assert.True(ItemDetail.NextUpProgress(next) is > 2 and < 3, "进度是百分数，不是 0..1");
-
-            // Nobody has started it: 「剩余 46 分钟」 would only repeat the runtime as if it were progress.
-            var fresh = Episode("第一集", 1, 1, "99.9");
-            fresh.RunTimeTicks = 46 * Minute;
-            Assert.Equal("S1:E1 - 第一集", ItemDetail.NextUpTitle(series, fresh));
-            Assert.Equal("", ItemDetail.NextUpRemaining(fresh));
-            Assert.Equal(0d, ItemDetail.NextUpProgress(fresh));
-
-            // An episode page already carries the same line as its headline's second row, and a film's
-            // next thing to watch is itself.
-            Assert.Equal("", ItemDetail.NextUpTitle(next, next));
-            Assert.Equal("", ItemDetail.NextUpTitle(series, null));
-            Assert.Equal("", ItemDetail.NextUpTitle(series, new EmbyItem { Name = "电影", Type = EmbyItemType.Movie }));
-            Assert.Equal("", ItemDetail.NextUpRemaining(null));
         });
 
         Test("详情：播放按钮说出续播位置，否则说出集号", () =>

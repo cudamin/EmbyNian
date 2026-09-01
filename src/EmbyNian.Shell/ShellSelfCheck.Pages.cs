@@ -302,7 +302,7 @@ internal static partial class ShellSelfCheck
         check("详情播放目标", coherent,
             detail.Target is null
                 ? $"无可播放目标（{detail.Type}），四个选择器都是空的"
-                : $"「{detail.Target}」·「{detail.Play}」");
+                : $"「{detail.Target}」（{EmbyItemType.ToChinese(detail.TargetType)}）·「{detail.Play}」");
 
         // 媒体信息 describes a file, so it is filled on the page of a file and empty everywhere else — the
         // panel's visibility is nothing but 「are there rows」, so this one claim covers both halves. It is
@@ -314,19 +314,6 @@ internal static partial class ShellSelfCheck
             filePage
                 ? $"{detail.Type} 页，{detail.Info} 行"
                 : $"{detail.Type} 页，没有这一块（{detail.Info} 行）");
-
-        // 下一集 has to say what the button beside it does, and only where that is news: a show whose 播放
-        // resolved to an episode names it, an episode page does not repeat its own headline, and a film has
-        // no next thing. Both readings are legitimate, so this holds on any server's catalogue.
-        var showPage = detail.Type is EmbyItemType.Series or EmbyItemType.Season;
-        var nextUpOk = showPage && detail.TargetType == EmbyItemType.Episode
-            ? detail.NextUp.Length > 0
-            : detail.NextUp.Length == 0;
-
-        check("详情下一集", nextUpOk,
-            detail.NextUp.Length > 0
-                ? $"「{detail.NextUp}」{(detail.Remaining.Length > 0 ? $"，{detail.Remaining}" : "，没有断点")}"
-                : $"没有这一行（{detail.Type}，播放目标 {detail.TargetType ?? "无"}）");
 
         // Bound and realised for both, and 「realised」 is why the stage takes two ticks: see ScrollDetail.
         // A row the item genuinely has nothing for is not counted against the page. 单集 is a list on a 季 page
@@ -413,12 +400,13 @@ internal static partial class ShellSelfCheck
 
         // 「媒体源／音频／字幕」那三个下拉有没有被窗口右沿切掉。它们的宽度按各自最长那条轨道名撑，所以「一行装
         // 得下」跟这台服务器上的轨道叫什么名字、跟窗口有多宽都有关 —— 原来那个横排 StackPanel 装不下的时候既不
-        // 换行也不收窄，只把最右边那个切在窗口边上，而这台机器的副屏是竖屏、客户区锁了 1.6:1，窗口就只有一千零
+        // 换行也不收窄，只把最右边那个切在窗口边上，而这台机器的副屏是竖屏、浏览区锁了 16:9，窗口就只有一千零
         // 几十像素宽，屏上真的缺了一块。现在里面那一层是 WrapRow，装不下换行；这一条读换完之后没人出界，读数里
         // 那句「摆成几行」就是「这一次窄没窄」的证据。几何在 DetailPage.PickerFit 里读。
         //
-        // 这一份是这一页（剧集那一层）的读数，那上面「媒体源」是收着的 —— 一部剧不是一个文件，没有源可挑。三个
-        // 都露面、也就是真会换行的那一页是文件页，它的读数在下面「文件页文件选项」那一条上，见 _filePickers。
+        // 这一份是这一页（剧集那一层）的读数，那上面这一行整个是收着的 —— 一部剧不是一个文件，没有源和轨道可挑，
+        // 所以这一条在剧页上钉的是「它没有冒出来」。三个都露面、也就是真会换行的那一页是文件页，它的读数在下面
+        // 「文件页文件选项」那一条上，见 _filePickers。
         check("文件选项没出界", detail.PickerFitOk, detail.PickerFit);
 
         // 「往下拉之后标题颜色要渐变，变的和下方背景一样」：剧照和它顶上那层罩子钉在窗口上，而带子底下那道渐深的
@@ -441,6 +429,12 @@ internal static partial class ShellSelfCheck
         // depending on whether 徽标 appears here.
         report.AppendLine($"[信息] 详情图片种类 — {artwork.Kinds}");
 
+        // 「把艺术图添加到窗口右下」：艺术图是横的、上面没有字，所以它当得起「角上摆一张画」这件事。红的只有两种
+        // 情形：画歪了（不在带子右下角、顶出了带子、或者压在片名和右上角那枚记号上），以及规矩说这个角该空着却画了
+        // —— 一个条目没有背景图的时候铺满整页的就是这张艺术图，那时候角上再钉一张 260 宽的缩印本，就是同一张图在
+        // 一页上出现两次。服务器没有这一种图（上一行读数里没有「艺术图」的那些条目）时这一条空着成立。
+        check("详情右下角艺术图", artwork.CornerArtOk, $"{detail.Type} 页，{artwork.CornerArt}");
+
         // 需求 4, informational and the half of it code alone could not settle: on the page of an episode the
         // 徽标 is the show's, sent under a different item's id, and whether this server fills that pair at all
         // is a question only its own answer settles. 「剧集的徽标」 here is that answer.
@@ -461,12 +455,25 @@ internal static partial class ShellSelfCheck
                 $"{band.Type} 页，{band.Artwork.Hero}；{(_fileHero ? "已解码" : "还没解出来")}");
         else report.AppendLine("[信息] 文件页头图 — 这次没走到文件页");
 
+        // 同一条规矩在文件页上的那一半。集页上这个角一律空着 —— 那一条带子只有 200 高，摆不下名牌加一张画，而且
+        // 服务器也不往下发艺术图（ParentLogo、ParentBackdrop、ParentThumb 都有，ParentArt 没有）。电影页是它真会
+        // 出现的另一种页面。
+        if (_fileArtwork is { } fileCorner)
+            check("文件页右下角艺术图", fileCorner.Artwork.CornerArtOk,
+                $"{fileCorner.Type} 页，{fileCorner.Artwork.CornerArt}");
+
         // 上面那一条的正主：只有文件页上「媒体源」才有得挑，所以只有这一页会把三个下拉一齐摆出来，也只有这一页
         // 会在窄窗口下真的排不下。读的那一拍是 ShowInfo —— 页面往下滚去看媒体信息表格之前的最后一拍，那之后这
         // 一行就出了视口、量出来的是滚过之后的坐标。读数里「摆成 2 行」就是换行真的接住了；换回横排会直接红。
         if (_filePickers is { } picks)
             check("文件页文件选项", picks.Ok, $"{picks.Type} 页，{picks.Detail}");
         else report.AppendLine("[信息] 文件页文件选项 — 这次没走到文件页");
+
+        // 「点击剧名之后应该进[入]剧页面而不是季页面」：集页上那行大字写的是剧名，落点就得是那部剧。落成季的那一版
+        // 屏上一模一样，截图也看不出来 —— 分别只在悬停提示那一句和按下去开的那一页里。
+        if (_fileTitleLink is { } titleLink)
+            check("集页剧名落点", titleLink.Ok, titleLink.Detail);
+        else report.AppendLine("[信息] 集页剧名落点 — 这次没走到文件页");
 
         // 那一行类型点不点得动。搭空了屏上就是一行看着一模一样的字，点下去什么都不发生 —— 别的读数一个都不响。
         if (_detailGenres is { } genres) check("详情类型可点", genres.Ok, genres.Detail);

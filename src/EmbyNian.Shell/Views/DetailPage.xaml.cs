@@ -267,6 +267,40 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 自检：集页上那行剧名按下去落在哪儿 —— 「点击剧名之后应该进[入]剧页面而不是季页面，季页面只能通过[剧页面上
+    /// 「全部剧季」那一格]进入」。
+    /// <para>
+    /// 读的是屏上这颗按钮和它背后那个落点，不是 <see cref="ItemDetail.TitleTarget"/> 本身（那一头有单测）：这一条
+    /// 要的是「服务器这一次真给了剧的 id、按钮真接上了、提示真说的是那部剧」。落点写成季的那一版屏上一样好看，
+    /// 单测过不了它 —— 可反过来，命令没绑上、按钮被样式停用、剧名那一行根本不是这颗按钮，单测一个都拦不住。
+    /// </para>
+    /// <para>
+    /// 集页之外这颗按钮该是停用的：那一行字说的就是本页自己（<c>DetailViewModel.CanOpenTitle</c>）。整条链上
+    /// 唯一不判的是「这一集连剧的 id 都没有」—— 那是服务器给的答案缺一块，不是版面错了，所以只报。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) TitleLinkRead()
+    {
+        var episode = ViewModel.ItemType == EmbyItemType.Episode;
+        var link = ViewModel.TitleLink;
+        var kind = link is null ? "没有落点" : $"{EmbyItemType.ToChinese(link.Type)}「{link.Name}」";
+        var tip = ViewModel.TitleTip ?? "没有提示";
+        var live = TitleButton.IsEnabled;
+
+        if (!episode)
+            return (link is null && !live,
+                $"{ViewModel.ItemType} 页，剧名那一行说的就是本页自己：落点 {kind}、按钮{(live ? "还点得动" : "点不动")}");
+
+        if (link is null)
+            return (true, $"单集页，这一集没带剧的 id，剧名那一行点不动（只报不判）；按钮{(live ? "却还点得动" : "确实点不动")}");
+
+        var ok = link.Type == EmbyItemType.Series && live;
+
+        return (ok, $"单集页，剧名那一行落在 {kind}、按钮{(live ? "点得动" : "点不动")}、提示「{tip}」"
+            + (link.Type == EmbyItemType.Series ? "" : "；落点该是剧而不是季（季只从剧页面那格「全部剧季」进）"));
+    }
+
+    /// <summary>
     /// 需求 4 as the title band came out: whether the 徽标 mark is on screen and how large it drew, and —
     /// since 「把当前页面徽标所在地方替换为剧名，徽标移动到右上角」 — whether it really is in the band's
     /// top-right corner with the words left to the text title.
@@ -317,6 +351,63 @@ public sealed partial class DetailPage : Page, IShellContent
                     + (clear ? "" : "，压到片名了"));
 
             // 两个盒子都换算到带自己的坐标里，报告里的数就是「在图上指哪儿」。
+            Rect Box(FrameworkElement element) => element
+                .TransformToVisual(HeroBand)
+                .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+        }
+    }
+
+    /// <summary>
+    /// 自检：右下角那张艺术图 —— 「把艺术图添加到窗口右下」。画了没有、画多大、在不在带子的右下角，以及有没有
+    /// 碰上右上角那枚记号或者片名那一叠。
+    /// <para>
+    /// 和 <see cref="TitleShapes"/> 同一个道理：这一条的说法是几何的，而「没画」有两种长相 —— 服务器没有这张图
+    /// （常态，规矩上就该空着），和这一版把它摆错了地方或者摆在了字上面。截图里两者都是「右下角没有画」。摆错的
+    /// 那一版还有个更不明显的坏法：这一栏的宽由图自己给，一张没收住的艺术图会把片名那一栏挤窄，而屏上只看得出
+    /// 「片名怎么折行了」。
+    /// </para>
+    /// <para>
+    /// 该不该有这张图不在这儿判（那是 <see cref="ItemArtwork.Corner"/> 的事，那一头有单测）：没画就是没画，
+    /// 报一行「服务器有没有这一种」留给 <c>ShellSelfCheck.ReadArtwork</c> 去说。
+    /// </para>
+    /// </summary>
+    internal (bool Drawn, double Width, double Height, bool Placed, string Where) CornerArtShape
+    {
+        get
+        {
+            // 服务器没这一种图是常态，规矩上就该空着 —— 这时「摆在右下角」这句话是空的，不是错的。
+            if (CornerArt.Visibility != Visibility.Visible)
+            {
+                return (false, CornerArt.ActualWidth, CornerArt.ActualHeight, true, "艺术图没画");
+            }
+
+            var art = Box(CornerArt);
+            var mark = Box(CornerPlate);
+            var title = Box(TitleText);
+
+            var lowerRight = art.Bottom > HeroBand.ActualHeight / 2 && art.Right > HeroBand.ActualWidth / 2;
+
+            // 带子的高由内容定，所以「没溢出」得单独问一句：一张比这一栏还高的图会把带子顶开，而屏上看着只是
+            // 「这一页的头图怎么变高了」。半个像素的余量留给布局取整。
+            var inside = art.Bottom <= HeroBand.ActualHeight + 0.5 && art.Top >= -0.5;
+
+            var clearOfTitle = Apart(art, title);
+            var clearOfMark = CornerPlate.Visibility != Visibility.Visible || Apart(art, mark);
+
+            return (true, CornerArt.ActualWidth, CornerArt.ActualHeight,
+                lowerRight && inside && clearOfTitle && clearOfMark,
+                $"艺术图 {art.Left:0},{art.Top:0} 到 {art.Right:0},{art.Bottom:0}"
+                    + $"（带 {HeroBand.ActualWidth:0}×{HeroBand.ActualHeight:0}）"
+                    + (lowerRight ? "" : "，不在右下角")
+                    + (inside ? "" : "，溢出带子")
+                    + (clearOfTitle ? "" : "，压到片名了")
+                    + (clearOfMark ? "" : "，撞上右上角那枚记号了"));
+
+            // 两个矩形不相交 —— 和 TitleShapes 那一条同一个判据，问的是盒子而不是「谁在谁下面」，因为这两块
+            // 在同一栏里上下分家，靠的是栏而不是行。
+            static bool Apart(Rect one, Rect other) => one.Right <= other.Left || other.Right <= one.Left
+                || one.Bottom <= other.Top || other.Bottom <= one.Top;
+
             Rect Box(FrameworkElement element) => element
                 .TransformToVisual(HeroBand)
                 .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
@@ -499,7 +590,12 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
-    /// 自检：「媒体源／音频／字幕」那三个下拉有没有被窗口右沿切掉。
+    /// 自检：「媒体源／音频／字幕」那一行该不该有，以及有的那一次三个下拉有没有被窗口右沿切掉。
+    /// <para>
+    /// 该不该有：这一行讲的是「这一个文件放哪一条轨道」，所以它只摆在讲一个文件的页面上 —— 电影和单集有，剧和
+    /// 季没有（判据在 <c>DetailViewModel.PickersVisibility</c>，和 媒体信息 那张表同一条理）。剧页上那三个下拉
+    /// 底下什么都没有可挑：一部剧不是一个文件。收着的那一次这一句成立，而它在剧页上冒出来是这一条会红的那种坏法。
+    /// </para>
     /// <para>
     /// 三个下拉的宽度是按各自最长那条轨道名撑出来的，所以「一行装得下」不是一句能算出来的话 —— 它跟这台
     /// 服务器上的轨道叫什么名字、跟窗口有多宽都有关。原来那个横排 <c>StackPanel</c> 在装不下的时候不换行也
@@ -520,7 +616,19 @@ public sealed partial class DetailPage : Page, IShellContent
     internal (bool Ok, string Detail) PickerFit()
     {
         if (XamlRoot?.Content is not UIElement root) return (false, "页面还没上树");
-        if (PickerPanel.Visibility != Visibility.Visible) return (true, "这一条目没有文件选项那一行");
+
+        // 这一行只摆在讲一个文件的页面上 —— 电影和单集有，剧和季没有（判据在 DetailViewModel.PickersVisibility）。
+        // 剧页上那三个下拉底下什么都没有：一部剧不是一个文件，源只有一个、轨道是解析出来的那一集的。所以「剧页上
+        // 它又冒出来了」是一种坏法，而不是一次多余的读数。
+        var filePage = EmbyItemType.IsPlayable(ViewModel.ItemType);
+        var kind = EmbyItemType.ToChinese(ViewModel.ItemType);
+
+        if (PickerPanel.Visibility != Visibility.Visible)
+        {
+            return (true, filePage ? $"{kind}页，没什么可挑的，那一行收着" : $"{kind}页不摆这一行");
+        }
+
+        if (!filePage) return (false, $"{kind}页不该有文件选项那一行，可它画出来了");
 
         var panel = PickerPanel.TransformToVisual(root)
             .TransformBounds(new Rect(0, 0, PickerPanel.ActualWidth, PickerPanel.ActualHeight));

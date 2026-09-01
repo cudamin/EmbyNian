@@ -95,9 +95,10 @@ public partial class App : Application
             _window.BrowseAspect = ui.LockWindowShape ? HomeCarousel.WindowAspect : 0;
             _window.Show(_options.StartMaximized, _options.Screen);
 
-            // And once it is: the default client area is already 1280×800, which is the locked shape exactly,
-            // so this normally changes nothing — it is here for the monitor whose DPI rounding leaves the
-            // centred window a pixel off, and it bows out on its own when started --maximized.
+            // And once it is: the default client area is already the locked shape exactly — a 16:9 browsing
+            // area plus the rail the ratio does not count — so this normally changes nothing. It is here for
+            // the monitor whose DPI rounding leaves the centred window a pixel off, for the screen too small
+            // to hold that window at all, and it bows out on its own when started --maximized.
             _window.FitToShape();
 
             // The entire video contract, closed here: the host window hands out a child HWND and

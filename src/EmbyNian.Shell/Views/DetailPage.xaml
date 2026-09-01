@@ -264,10 +264,10 @@
                         </Border.Background>
                     </Border>
 
-                    <!-- 三栏：海报、字、右上角那枚徽标。徽标自己占一栏而不是压在字那一栏的右上角 —— 片名是
-                         两行可折行的字，栏宽由布局给，压上去的那一版在长片名的窗口上会被字追上。占一栏之后
-                         「会不会盖到字」不用算：栏宽由图自己给，图没解出来时这一栏就是 0 宽，只剩栏距那 22
-                         像素，而这一栏里没有一样东西是右对齐的，那 22 看不出来。
+                    <!-- 三栏：海报、字、右边那一栏（上面一枚徽标，下面一张艺术图）。它们占一栏而不是压在字那一栏
+                         的两个角上 —— 片名是两行可折行的字，栏宽由布局给，压上去的那一版在长片名的窗口上会被字
+                         追上。占一栏之后「会不会盖到字」不用算：栏宽由图自己给，两张都没解出来时这一栏就是 0 宽，
+                         只剩栏距那 22 像素，而这一栏里没有一样东西是右对齐的，那 22 看不出来。
                          左右 60 而不是页面那 28：这一块是压在剧照上的内容，边沿本就该留得比页面多（同主页大图
                          上那块字，理由写在 HomeBanner.xaml）。底下留 64 —— 图铺满一屏之后这一叠东西就站在窗口
                          的下沿上，贴着边读着像被截了一截。 -->
@@ -308,15 +308,17 @@
                                  兄弟。「这是个什么」没搬到别处去，因为已经有三处在说：上面那行面包屑、副标题那
                                  一行的类型列表、和 信息 那张表里的 类型 一行。整页最大的一块字上面顶一行小字
                                  标签，看着就是突兀。 -->
-                            <!-- 标题在单集页上是剧名（「99.9 刑事专业律师」压在「S2:E7 - …」上面），点它进这一集
-                                 所属的季 —— 剧名是个能兑现的承诺。其它页的标题说的就是本页自己，命令的
-                                 CanExecute 是 false，按钮点不动。
+                            <!-- 标题在单集页上是剧名（「99.9 刑事专业律师」压在「S2:E7 - …」上面），点它进这部剧
+                                 自己的页面 —— 剧名是个能兑现的承诺（「点击剧名之后应该进[入]剧页面而不是季页面」）。
+                                 季页面不从这儿进，它的入口是剧页面底下那一格「全部剧季」。其它页的标题说的就是本页
+                                 自己，命令的 CanExecute 是 false，按钮点不动。
                                  要让它看着还是一行标题而不是一个按钮，得同时拆掉底和框：四个背景刷子改成透明/
                                  半透明（默认样式的 Disabled 态会在标题后面垫一块灰底，电影页上那块灰底毫无来
                                  由），BorderThickness 归零（默认那道 1 像素描边四个状态都在画，只改背景的话标题
                                  就被一个圆角方框圈起来）。Padding 往外撑一点、Margin 补回来，悬停时的底板不至于
                                  贴着字。 -->
                             <Button
+                                x:Name="TitleButton"
                                 BorderThickness="0"
                                 Command="{x:Bind ViewModel.OpenTitleCommand}"
                                 HorizontalAlignment="Left"
@@ -513,6 +515,32 @@
                             Source="{x:Bind ViewModel.PlateImage, Mode=OneWay}"
                             Stretch="Uniform"
                             Visibility="{x:Bind ViewModel.PlateVisibility, Mode=OneWay}" />
+
+                        <!-- 「把艺术图添加到窗口右下」。和上面那枚记号同一栏、同一侧，一个贴上一个贴下：这一栏
+                             的宽由这两张图里宽的那张给，所以「会不会盖到片名」照旧不用算，而两张图分居一栏的
+                             两头，中间隔着整格带子的高，不会碰上。摆在这儿而不是浮在窗口的右下角：窗口下沿是
+                             正文那张不透明的纸（BodySheet），钉在那儿的图会被纸盖掉，浮在纸上面的图会压在
+                             「全部剧季」「相似」那几排卡片上，晴昼那套主题里还是压在白纸上。
+
+                             哪个条目有这张、哪个没有，全在 ItemArtwork.Corner：这一张是这个条目自己的艺术图，而
+                             整页正铺着同一张图时这个角是空的 —— 那会儿右下角这一张就是背后那张壁纸的缩印本。
+                             集页不摆（见 DetailViewModel.LoadArtworkAsync），那一格只有两百来高，装不下一上一下
+                             两张图。
+
+                             260×146 的上限是一格 16:9：艺术图上没有字，缩到这个大小仍是一张认得出的画，再大就开始
+                             和片名那一叠抢地方（这一栏比原来只宽 40）。Uniform 保住比例，读屏跳过它
+                             （AccessibilityView=Raw）—— 它是装饰，页面上每一句话都另有出处。 -->
+                        <Image
+                            x:Name="CornerArt"
+                            Grid.Column="2"
+                            AutomationProperties.AccessibilityView="Raw"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom"
+                            MaxHeight="146"
+                            MaxWidth="260"
+                            Source="{x:Bind ViewModel.CornerArtImage, Mode=OneWay}"
+                            Stretch="Uniform"
+                            Visibility="{x:Bind ViewModel.CornerArtVisibility, Mode=OneWay}" />
                     </Grid>
                 </Grid>
 
@@ -522,7 +550,7 @@
                      罩子的末色 #0C0E11，BodySheet 从剧情说明之后才开始。
 
                      MinHeight 仍由「视口高 − 头图高」给整个区域，而不是只给其中一行：HeroTail 多高由实际可见的
-                     下一集、轨道和简介决定，剩下的高度交给星号行里的 BodySheet，因此短页面的纸面下沿仍会补到
+                     文件选项和简介决定，剩下的高度交给星号行里的 BodySheet，因此短页面的纸面下沿仍会补到
                      窗口底。BodySeal 读的还是 BodySheet 本身，确认真正的纸面不透明且没有在左右和底下漏图。 -->
                 <Grid
                     x:Name="BodyRegion"
@@ -546,67 +574,23 @@
                         SizeChanged="OnHeroTailSizeChanged"
                         Spacing="20">
 
-                        <!-- 下一集：图一在按钮那排底下写的就是这一行 —— 接着播的是哪一集，以及它还剩多久。
-                             留在这一段最上面而不是塞进头图里：头上那一格是按内容量的（DetailHero.ArtHeight），再往里
-                             加一行就得把它整格撑高，而这一格越高，正文离第一屏就越远。文字取的是 PlayTarget，跟旁边
-                             那颗 继续播放 键同一个来源，所以两者不可能各说一集。
-
-                             和底下那两块一样，外圈和底色都不画（「去掉音频字幕还有剧情说明周围那一圈的边框和背景」）：
-                             这一整段站在已经压黑的画面上，一圈发丝线画在上面就是在图上描一个框。样式还留着，只借它
-                             那 18 的内边距 —— 这三块的字因此和红线底下纸上几块卡里的字落在同一条竖线上。
-                             字和那条进度轨于是都得走压在图上那一套（EgOnScrim*）：主题自己的墨在这一段的黑底上，
-                             三套浅色主题会看不见。 -->
-                        <StackPanel
-                            Style="{StaticResource EgBodyPanelStyle}"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Spacing="6"
-                            Visibility="{x:Bind ViewModel.NextUpVisibility, Mode=OneWay}">
-                            <TextBlock
-                                Style="{StaticResource EgOnScrimBodyStyle}"
-                                MaxLines="1"
-                                Text="{x:Bind ViewModel.NextUpText, Mode=OneWay}"
-                                TextTrimming="CharacterEllipsis" />
-                            <StackPanel
-                                Orientation="Horizontal"
-                                Spacing="12"
-                                Visibility="{x:Bind ViewModel.NextUpProgressVisibility, Mode=OneWay}">
-                                <!-- 一条轨、一段强调色，和卡片下沿那条进度同一个写法（三个理由写在 PosterCard
-                                     那边，最要紧的一条是框架那支 ProgressBar 的前景在字典解析时就冻住了，换主题
-                                     它不跟着走）。轨要画出来：这里底下没有卡片那根边框线接着它，只画填充的那一段
-                                     会像一条飘着的短线。轨不用主题那根边框线的颜色 —— 那根线在这一段的黑底上就是
-                                     一条看不见的线，改用压在图上那支浅墨压到三成半，读着仍是「底下还有一截」。 -->
-                                <Grid
-                                    VerticalAlignment="Center"
-                                    Height="{StaticResource EgProgressThickness}"
-                                    Width="320">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="{x:Bind ViewModel.NextUpDone, Mode=OneWay}" />
-                                        <ColumnDefinition Width="{x:Bind ViewModel.NextUpLeft, Mode=OneWay}" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border
-                                        Grid.ColumnSpan="2"
-                                        Background="{StaticResource EgOnScrimDimBrush}"
-                                        Opacity="0.35" />
-                                    <Border Background="{ThemeResource EgAccentBrush}" />
-                                </Grid>
-                                <TextBlock
-                                    VerticalAlignment="Center"
-                                    Style="{StaticResource EgOnScrimDataStyle}"
-                                    Text="{x:Bind ViewModel.NextUpRemaining, Mode=OneWay}" />
-                            </StackPanel>
-                        </StackPanel>
-
                         <!-- 三个文件选项下拉刻意不撑满整行：撑满会读成表格的一行，而 Header 是前缀不是列标题。
+
+                             这一行只摆在讲一个文件的页面上 —— 电影和单集有，剧和季没有（判据在
+                             DetailViewModel.PickersVisibility，和 媒体信息 那张表同一条理）。
 
                              SelectedItem 是双向的，所以「选了哪一个」是视图模型上的一个值，而不是要去问控件的
                              一件事。音频和字幕两个下拉不再需要 SelectionChanged —— 以前那个处理器只是去重排
                              一遍显隐，而显隐只跟行数有关，跟选了哪一行无关。季选择器在下面单集列表的标题旁，
                              因为它替换的是那排单集，不是当前文件的轨道。
 
-                             外圈和底色去掉（见上一块）：三个下拉自己那圈框还在，读的时候一眼能看出哪儿能点 ——
-                             用户要去掉的是围着这三个下拉的那一圈，不是下拉自己。Header 那三行字压在图上，所以
-                             取固定的浅墨；自检拿这一块的名字读它是不是真的没框没底（BodySeal 里的 Bare）。
+                             外圈和底色都不画（「去掉音频字幕还有剧情说明周围那一圈的边框和背景」）：这一整段站在
+                             已经压黑的画面上，一圈发丝线画在上面就是在图上描一个框。样式还留着，只借它那 18 的
+                             内边距 —— 这一块的字因此和红线底下纸上几块卡里的字落在同一条竖线上。三个下拉自己那圈
+                             框还在，读的时候一眼能看出哪儿能点 —— 用户要去掉的是围着这三个下拉的那一圈，不是下拉
+                             自己。Header 那三行字压在图上，所以取固定的浅墨（EgOnScrim*，主题自己的墨在这一段的
+                             黑底上，三套浅色主题会看不见）；自检拿这一块的名字读它是不是真的没框没底（BodySeal
+                             里的 Bare）。
 
                              里面那一层是 WrapRow 而不是横排的 StackPanel：下拉的宽度按各自最长那条轨道名撑，
                              窄窗口下三个加起来能超过一行，横排会把最右边那个切在窗口右沿上。宽窗口下两者摆出来

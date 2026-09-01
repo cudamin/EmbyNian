@@ -2370,6 +2370,52 @@ internal static class PlaybackTests
             Assert.Equal(window, AspectLock.Fit(window, 16d / 9, 1400, 900), "边框比窗口还大");
         });
 
+        Test("浏览窗口：比例不算侧边栏那一条", () =>
+        {
+            // 「锁定比例大小改为 16:9，计算比例时要排除侧边栏」：锁的是侧边栏右边那一片，所以客户区比 16:9
+            // 宽出那一条（这里 49）。1487 宽的窗口减掉 16 的边框是 1471 的客户区，减掉 49 就是 1422 的页面，
+            // 1422 ÷ 16:9 = 800，窗口于是 839 高。
+            var dragged = AspectLock.Apply(
+                Rect(0, 0, 1487, 1000), ResizeEdge.Right, 16d / 9, 16, 39, 0, 0, 49);
+
+            Assert.Equal(1487, dragged.Width, "宽领头那一档宽度不动");
+            Assert.Equal(839, dragged.Height, "高度按页面那一片算");
+            Assert.Equal(800, dragged.Height - 39);
+            Assert.Equal(1422, dragged.Width - 16 - 49);
+
+            // 拖上下边沿那一档反过来：高度说话，宽度是页面加上那一条再加边框。
+            var vertical = AspectLock.Apply(
+                Rect(0, 0, 900, 839), ResizeEdge.Bottom, 16d / 9, 16, 39, 0, 0, 49);
+            Assert.Equal(1487, vertical.Width);
+
+            // 开窗那一下（Fit）走同一条算术，工作区也按同一条量。
+            var fitted = AspectLock.Fit(Rect(0, 0, 1487, 900), 16d / 9, 16, 39, default, 0, 0, 49);
+            Assert.Equal(839, fitted.Height);
+            Assert.Equal(1487, fitted.Width);
+
+            // 不给这个参数就是原来那条规矩：播放中的窗口整块都是画面，一个像素也不让出去。
+            Assert.Equal(
+                AspectLock.Apply(Rect(0, 0, 1487, 1000), ResizeEdge.Right, 16d / 9, 16, 39, 0, 0, 0),
+                AspectLock.Apply(Rect(0, 0, 1487, 1000), ResizeEdge.Right, 16d / 9, 16, 39));
+        });
+
+        Test("浏览窗口：最小尺寸说的还是整个客户区", () =>
+        {
+            // 扣掉侧边栏之后仍然不许把窗口挤到最小尺寸以下：900×560 是对客户区说的，不是对页面说的。
+            var bounds = AspectLock.Apply(
+                Rect(0, 0, 500, 500), ResizeEdge.Right, 16d / 9, 16, 39, 900, 560, 49);
+
+            Assert.Equal(560, bounds.Height - 39, "高度顶住了下限");
+            Assert.True(bounds.Width - 16 >= 900, $"客户区只剩 {bounds.Width - 16} 宽");
+            Assert.Equal(996, bounds.Width - 16 - 49, "页面按高度反算");
+
+            // 只差一点点的那一档：页面的下限是 900 减去那一条，而不是 900。
+            var floored = AspectLock.Fit(
+                Rect(0, 0, 400, 2000), 16d / 9, 16, 39, default, 900, 0, 49);
+            Assert.Equal(900, floored.Width - 16, "客户区正好卡在下限上");
+            Assert.Equal(851, floored.Width - 16 - 49);
+        });
+
         static WindowBounds Rect(int left, int top, int right, int bottom) => new(left, top, right, bottom);
     }
 

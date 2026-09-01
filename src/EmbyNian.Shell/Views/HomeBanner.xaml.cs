@@ -99,7 +99,7 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private double _belowFold;
 
-    /// <summary>由主页从真实窗口状态传进来；不能拿当前几何是否碰巧是 1.6:1 来猜开关状态。</summary>
+    /// <summary>由主页从真实窗口状态传进来；不能拿当前几何是否碰巧是 16:9 来猜开关状态。</summary>
     private bool _foldEnabled;
 
     /// <summary>严格首屏为大卡片让位后，横幅低于常规内容所需高度。</summary>

@@ -466,8 +466,13 @@ public sealed class UiSettings
     public bool ShowWatchedIndicators { get; set; } = true;
 
     /// <summary>
-    /// 锁定窗口比例大小: whether dragging a window edge keeps the client area at
+    /// 锁定窗口比例大小: whether dragging a window edge keeps the browsing area at
     /// <see cref="Emby.HomeCarousel.WindowAspect"/> instead of taking whatever shape the pointer implies.
+    /// <para>
+    /// The browsing area rather than the whole client area: 「计算比例时要排除侧边栏」, so the rail's width
+    /// (<see cref="Emby.HomeCarousel.SideRail"/>) is added on top of the shape rather than counted inside it,
+    /// and the page comes out 16:9 — the shape of the artwork it is built around.
+    /// </para>
     /// <para>
     /// On by default. At this shape the home page uses its strict first-screen layout: the complete 继续观看
     /// shelf fits below the banner and the following 媒体库 shelf begins outside the viewport, whether the

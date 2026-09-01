@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using EmbyNian.Diagnostics;
+using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
@@ -46,10 +47,16 @@ internal sealed class HostWindow : IDisposable
     /// <summary>Matches <c>Palette.Window</c> (#16181C) as a COLORREF, which is 0x00BBGGRR.</summary>
     private const uint BaseColorRef = 0x001C1816;
 
-    private const int DefaultWidth = 1280;
     private const int DefaultHeight = 800;
     private const int MinimumWidth = 900;
     private const int MinimumHeight = 560;
+
+    /// <summary>
+    /// 开窗就是锁定的那个形状：浏览区（客户区去掉侧边栏那一条）16:9，加回那一条的宽。算出来而不是写死，因为
+    /// 「锁着比例却开在别的形状上」的窗口会被 <see cref="FitToShape"/> 在第一帧之后拽一下，屏幕上就是一跳。
+    /// </summary>
+    private static readonly int DefaultWidth =
+        (int)Math.Round(HomeCarousel.WindowAspect * DefaultHeight) + HomeCarousel.SideRail;
 
     /// <summary>
     /// Held in a static field for the process lifetime: Windows keeps the raw thunk, so letting the
@@ -588,12 +595,14 @@ internal sealed class HostWindow : IDisposable
     public double PictureAspect { get; set; }
 
     /// <summary>
-    /// 锁定窗口比例大小: the shape the client area is held in while nobody is watching anything — the browsing
-    /// window's own ratio, as width ÷ height, or 0 for 「resize it however you like」.
+    /// 锁定窗口比例大小: the shape the browsing area is held in while nobody is watching anything — as
+    /// width ÷ height, or 0 for 「resize it however you like」.
     /// <para>
-    /// Set from <c>UiSettings.LockWindowShape</c> at startup and whenever that switch is flipped
+    /// The browsing area, not the client area: 「计算比例时要排除侧边栏」, so the ratio owns the client area
+    /// less <see cref="SideInset"/> and the window is that much wider than its own shape. Set from
+    /// <c>UiSettings.LockWindowShape</c> at startup and whenever that switch is flipped
     /// (<see cref="ShellPrefs"/>), and the value is the home page's
-    /// (<see cref="EmbyNian.Emby.HomeCarousel.WindowAspect"/>). That shape is also how the home page recognises
+    /// (<see cref="HomeCarousel.WindowAspect"/>). That shape is also how the home page recognises
     /// the mode in which its first screen is strict: the complete 继续观看 shelf fits below the banner and the
     /// next 媒体库 shelf starts outside the viewport, independent of the navigation pane state.
     /// </para>
@@ -601,16 +610,49 @@ internal sealed class HostWindow : IDisposable
     /// Second to <see cref="PictureAspect"/> rather than beside it: a file that is playing has a shape of its
     /// own and it wins, or 「缩放窗口时按画面比例联动」 would have been undone by this. So the window is held to
     /// the picture while there is one and to this the rest of the time, and <see cref="LockedAspect"/> is that
-    /// sentence.
+    /// sentence. A picture fills the client area edge to edge, which is why the inset goes with the ratio
+    /// (<see cref="LockedInset"/>) instead of being a property of the window.
     /// </para>
     /// </summary>
     public double BrowseAspect { get; set; }
 
     /// <summary>
+    /// 侧边栏那一条在这块屏上占多少物理像素 —— <see cref="BrowseAspect"/> 管的是它右边那一片。
+    /// <see cref="HomeCarousel.SideRail"/> 是逻辑像素，而窗口矩形一律是物理像素，所以要按这个窗口的 dpi 放大。
+    /// </summary>
+    internal int SideInset => SideInsetFor(WindowDpi);
+
+    private static int SideInsetFor(uint dpi) => (int)Math.Round(HomeCarousel.SideRail * dpi / 96.0);
+
+    /// <summary>这个窗口所在那块屏的 dpi，问不到就按 96 算 —— 和下面几处 <c>GetDpiForWindow</c> 同一个兜底。</summary>
+    private uint WindowDpi
+    {
+        get
+        {
+            var dpi = Handle == IntPtr.Zero ? 0 : Native.GetDpiForWindow(Handle);
+            return dpi == 0 ? 96 : dpi;
+        }
+    }
+
+    /// <summary>
+    /// 自检用：这个窗口的客户区最小能到多大，物理像素。比例撞上它的时候形状要让位（<see cref="AspectLock"/> 里
+    /// 那条「最小尺寸压得住比例」），所以读锁定形状的那一关得知道这个数才不会把「让位」报成「锁坏了」。
+    /// </summary>
+    internal (int Width, int Height) MinimumClientSize
+    {
+        get
+        {
+            var dpi = (int)WindowDpi;
+            return (MinimumWidth * dpi / 96, MinimumHeight * dpi / 96);
+        }
+    }
+
+    /// <summary>
     /// Whether the browsing ratio lock owns the window geometry right now. Playback owns the shape while it
     /// has a picture; fullscreen, maximized and Windows-snapped windows belong to the monitor instead. The
     /// setting alone is not enough: after playback the restored window can still have the film's shape, so
-    /// the current client area must also be within rounding distance of <see cref="BrowseAspect"/>.
+    /// the browsing area must also be within rounding distance of <see cref="BrowseAspect"/> — the client area
+    /// less the rail, which is what the ratio was applied to in the first place.
     /// </summary>
     internal bool BrowseFoldActive
     {
@@ -619,7 +661,8 @@ internal sealed class HostWindow : IDisposable
             if (BrowseAspect <= 0 || PictureAspect > 0 || Fullscreen || IsMaximized) return false;
 
             var (width, height) = ClientSize;
-            return width > 0 && height > 0 && Math.Abs(width - (BrowseAspect * height)) <= 2;
+            var browse = width - SideInset;
+            return browse > 0 && height > 0 && Math.Abs(browse - (BrowseAspect * height)) <= 2;
         }
     }
 
@@ -628,6 +671,12 @@ internal sealed class HostWindow : IDisposable
     /// playing into this window, the browsing shape otherwise, 0 when neither is set.
     /// </summary>
     private double LockedAspect => PictureAspect > 0 ? PictureAspect : BrowseAspect;
+
+    /// <summary>
+    /// And which part of the client area that ratio describes: all of it for a picture, everything right of
+    /// the navigation rail while the browsing lock has the window.
+    /// </summary>
+    private int LockedInset(uint dpi) => PictureAspect > 0 ? 0 : SideInsetFor(dpi);
 
     /// <summary>
     /// 窗口化时视频有黑边: reshapes the window so its client area is exactly <see cref="PictureAspect"/>,
@@ -642,7 +691,7 @@ internal sealed class HostWindow : IDisposable
     /// is being watched on.
     /// </para>
     /// </summary>
-    public void FitToPicture() => FitToAspect(PictureAspect, "按画面比例调整窗口");
+    public void FitToPicture() => FitToAspect(PictureAspect, 0, "按画面比例调整窗口");
 
     /// <summary>
     /// 锁定窗口比例大小 just went on — or the app just started with it on: reshapes the window to
@@ -660,17 +709,19 @@ internal sealed class HostWindow : IDisposable
     {
         if (PictureAspect > 0) return;
 
-        FitToAspect(BrowseAspect, "按锁定比例调整窗口");
+        FitToAspect(BrowseAspect, SideInset, "按锁定比例调整窗口");
     }
 
     /// <summary>
-    /// The body both of the above share: reshape this window's client area to <paramref name="aspect"/> where
-    /// its shape is ours to choose, and say so in the log under <paramref name="reason"/>. Two callers with one
-    /// arithmetic — the guards, the measured frame and the work-area ceiling are the same questions whichever
-    /// ratio is being applied, and a second copy of them is a second place for the caption-height trap
+    /// The body both of the above share: reshape this window so the part of its client area the ratio owns —
+    /// all of it for a picture, everything right of the rail for the browsing lock
+    /// (<paramref name="inset"/>) — is exactly <paramref name="aspect"/> where its shape is ours to choose,
+    /// and say so in the log under <paramref name="reason"/>. Two callers with one arithmetic — the guards,
+    /// the measured frame and the work-area ceiling are the same questions whichever ratio is being applied,
+    /// and a second copy of them is a second place for the caption-height trap
     /// (<see cref="FrameThickness"/>) to be got wrong.
     /// </summary>
-    private void FitToAspect(double aspect, string reason)
+    private void FitToAspect(double aspect, int inset, string reason)
     {
         if (Handle == IntPtr.Zero || aspect <= 0) return;
         if (Fullscreen || Native.IsZoomed(Handle) || Native.IsIconic(Handle)) return;
@@ -688,7 +739,8 @@ internal sealed class HostWindow : IDisposable
             frame.Height,
             WorkArea(),
             MinimumWidth * (int)dpi / 96,
-            MinimumHeight * (int)dpi / 96);
+            MinimumHeight * (int)dpi / 96,
+            inset);
 
         if (fitted.Left == bounds.Left && fitted.Top == bounds.Top
             && fitted.Width == bounds.Width && fitted.Height == bounds.Height)
@@ -728,6 +780,7 @@ internal sealed class HostWindow : IDisposable
 
         var frame = FrameThickness(dpi);
         var locked = LockedAspect;
+        var inset = LockedInset(dpi);
 
         // 右边沿往外 240：宽领头那一档，左边沿该原地不动。
         var wanted = new NativeRect
@@ -753,7 +806,10 @@ internal sealed class HostWindow : IDisposable
         }
 
         var client = (Width: answered.Width - frame.Width, Height: answered.Height - frame.Height);
-        var shape = client.Height > 0 ? (double)client.Width / client.Height : 0;
+
+        // 比例管的是 inset 右边那一片：播放时那是整个客户区，浏览时是客户区去掉侧边栏那一条。
+        var owned = client.Width - inset;
+        var shape = client.Height > 0 && owned > 0 ? (double)owned / client.Height : 0;
         var untouched = answered.Width == wanted.Width && answered.Height == wanted.Height;
 
         var ok = locked > 0
@@ -762,7 +818,8 @@ internal sealed class HostWindow : IDisposable
 
         return (ok,
             locked > 0
-                ? $"右边沿外拉 240 → 客户区 {client.Width}×{client.Height} = {shape:0.000}:1"
+                ? $"右边沿外拉 240 → 客户区 {client.Width}×{client.Height}，"
+                    + (inset > 0 ? $"去掉侧边栏那 {inset} 后 {owned}×{client.Height} = {shape:0.000}:1" : $"{shape:0.000}:1")
                     + $"（要的是 {locked:0.000}），左边沿{(answered.Left == wanted.Left ? "没动" : "被挪了")}，"
                     + $"窗口{(claimed != IntPtr.Zero ? "改写了这个矩形" : "没接手 —— 锁没生效")}"
                 : $"未锁定：右边沿外拉 240 → {answered.Width}×{answered.Height}，"
@@ -1131,8 +1188,8 @@ internal sealed class HostWindow : IDisposable
 
         Windows[Handle] = this;
 
-        // Which screen, before anything is measured: 「how big is 1280×800 here」 is a question about a
-        // monitor, and until the window has been moved onto the one it is to open on, the answer below
+        // Which screen, before anything is measured: 「how big is the default window here」 is a question about
+        // a monitor, and until the window has been moved onto the one it is to open on, the answer below
         // would be the other monitor's.
         var work = MoveToScreen(screen);
 
@@ -1171,7 +1228,7 @@ internal sealed class HostWindow : IDisposable
         // 够，WM_SIZING 要等到用户下一次去拖边才问。委托存下来是为了退订，见 _reshape。
         _reshape = ui =>
         {
-            BrowseAspect = ui.LockWindowShape ? EmbyNian.Emby.HomeCarousel.WindowAspect : 0;
+            BrowseAspect = ui.LockWindowShape ? HomeCarousel.WindowAspect : 0;
             FitToShape();
         };
         ShellPrefs.Changed += _reshape;
@@ -1793,7 +1850,9 @@ internal sealed class HostWindow : IDisposable
     /// The shape is <see cref="LockedAspect"/> — the picture's while a file is playing into our own window,
     /// the browsing ratio while 「锁定窗口比例大小」 is on, and 0 when neither holds, which is the ordinary
     /// window that resizes however the pointer says. Fullscreen and maximized are off regardless: those
-    /// edges are the monitor's and constraining them would fight the OS.
+    /// edges are the monitor's and constraining them would fight the OS. Which part of the client area that
+    /// shape describes comes with it (<see cref="LockedInset"/>): a picture is the whole of it, the browsing
+    /// window is everything right of the rail.
     /// </para>
     /// <para>
     /// The frame thickness is measured from the window rather than derived from its styles — see
@@ -1827,7 +1886,8 @@ internal sealed class HostWindow : IDisposable
             frame.Width,
             frame.Height,
             MinimumWidth * (int)dpi / 96,
-            MinimumHeight * (int)dpi / 96);
+            MinimumHeight * (int)dpi / 96,
+            LockedInset(dpi));
 
         proposed.Left = locked.Left;
         proposed.Top = locked.Top;
@@ -1839,22 +1899,30 @@ internal sealed class HostWindow : IDisposable
         return new IntPtr(1);
     }
 
-    private static void ClampMinimumSize(IntPtr window, IntPtr lParam)
+    /// <summary>
+    /// 窗口能拖到多小。<see cref="MinimumWidth"/> 和 <see cref="MinimumHeight"/> 说的是客户区，所以这里按这个
+    /// 窗口量出来的边框折成窗口尺寸（<see cref="FrameThickness"/>），而不是照样式位算 —— 样式里还留着
+    /// <c>WS_CAPTION</c>，照它算出来的下限比真的高出整整一条标题栏（96 dpi 下 31 像素），而客户区正铺在那一条
+    /// 上面。
+    /// <para>
+    /// 这一条差单看窗口不显眼，撞上比例锁才现形：锁要的高度落在那 31 像素里时，系统把窗口顶回它自己那个下限，
+    /// 屏上的形状于是永远差一点，而谁也不会报错 —— 副屏那种窄屏上（窗口宽被工作区卡住、只能靠压低高度凑形状）
+    /// 就是这样。量出来的边框是客户区真正会拿到的那个差值，比例那一头用的也是它，两处一致这个洞才关得住。
+    /// </para>
+    /// </summary>
+    private void ClampMinimumSize(IntPtr window, IntPtr lParam)
     {
         var dpi = Native.GetDpiForWindow(window);
         if (dpi == 0) dpi = 96;
 
-        var frame = new NativeRect
-        {
-            Left = 0,
-            Top = 0,
-            Right = MinimumWidth * (int)dpi / 96,
-            Bottom = MinimumHeight * (int)dpi / 96
-        };
-        Native.AdjustWindowRectExForDpi(ref frame, Native.WsOverlappedWindow, false, 0, dpi);
+        var frame = FrameThickness(dpi);
 
         var info = Marshal.PtrToStructure<MinMaxInfo>(lParam);
-        info.MinTrackSize = new NativePoint { X = frame.Width, Y = frame.Height };
+        info.MinTrackSize = new NativePoint
+        {
+            X = (MinimumWidth * (int)dpi / 96) + frame.Width,
+            Y = (MinimumHeight * (int)dpi / 96) + frame.Height
+        };
         Marshal.StructureToPtr(info, lParam, false);
     }
 

@@ -517,7 +517,8 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             // 这两个和上面那几块色板一样：写进设置之后当场喊一声（ShellPrefs），主窗口和外壳各自跟上。设置页
             // 是另一个窗口，手上没有主窗口的 HWND 也没有那一页，所以只能这么喊。
-            Toggle("锁定窗口比例大小", $"拖窗口边沿时保持 {Emby.HomeCarousel.WindowAspect:0.0}:1，主页首屏完整显示继续观看",
+            Toggle("锁定窗口比例大小",
+                $"拖窗口边沿时侧边栏右边那一片保持 {Emby.HomeCarousel.WindowAspectLabel}，主页首屏完整显示继续观看",
                 () => ui.LockWindowShape,
                 value =>
                 {

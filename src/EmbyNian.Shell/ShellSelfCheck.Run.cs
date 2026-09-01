@@ -49,15 +49,26 @@ internal static partial class ShellSelfCheck
 
         Check("客户区尺寸", width > 0 && height > 0, $"{width}x{height} 物理像素");
 
-        // 「锁定主页的窗口长宽」：客户区真是那个形状。主页从 HostWindow 的真实锁定状态启用严格首屏；侧边栏
-        // 两档各自有没有完整放下继续观看，由下面「主页首屏只露继续观看」在真实 XAML 树上另量。
-        // 开关关掉时（BrowseAspect 是 0）就只报形状不判：那时窗口本来就随便拉。
-        var clientShape = height > 0 ? (double)width / height : 0;
+        // 「锁定主页的窗口长宽」：浏览区真是那个形状。锁的是客户区去掉侧边栏那一条之后剩下的那一片
+        // （「计算比例时要排除侧边栏」），所以这里量的是那一片，而不是整个客户区。主页从 HostWindow 的真实锁定
+        // 状态启用严格首屏；侧边栏两档各自有没有完整放下继续观看，由下面「主页首屏只露继续观看」在真实 XAML
+        // 树上另量。开关关掉时（BrowseAspect 是 0）就只报形状不判：那时窗口本来就随便拉。
+        var sideInset = window.SideInset;
+        var browseWidth = width - sideInset;
+        var browseShape = height > 0 && browseWidth > 0 ? (double)browseWidth / height : 0;
+
+        // 窄屏上这条锁凑不出形状：宽被工作区卡住，只能压低高度，而高度到了最小尺寸就不能再降。那是
+        // AspectLock 自己写着的「最小尺寸压得住比例」，不是锁坏了 —— 所以顶到下限的那一档报出来，不判红。
+        var floor = window.MinimumClientSize;
+        var pinned = height <= floor.Height + 1;
         Check("锁定窗口比例",
-            window.BrowseAspect <= 0 || Math.Abs(clientShape - window.BrowseAspect) < 0.01,
-            $"客户区 {clientShape:0.000}:1"
+            window.BrowseAspect <= 0 || pinned || Math.Abs(browseShape - window.BrowseAspect) < 0.01,
+            $"浏览区 {browseWidth}×{height} = {browseShape:0.000}:1"
+                + $"（客户区宽 {width}，侧边栏那一条 {sideInset} 不算）"
                 + (window.BrowseAspect > 0
-                    ? $"，锁在 {window.BrowseAspect:0.000}:1（主页首屏按完整继续观看排版）"
+                    ? $"，锁在 {HomeCarousel.WindowAspectLabel} = {window.BrowseAspect:0.000}:1"
+                        + "（主页首屏按完整继续观看排版）"
+                        + (pinned ? $"；已经顶到最小高度 {floor.Height}，这一档形状让位" : "")
                     : "，未锁定"));
 
         // 上面那一条量的是窗口现在的形状，这一条量的是「拖边沿的时候还保持这个形状」—— 两回事：形状对可以只是
