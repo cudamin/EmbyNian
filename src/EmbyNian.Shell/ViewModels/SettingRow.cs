@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Xaml;
@@ -319,7 +320,6 @@ public sealed partial class SettingTextRow : SettingRow
 public sealed partial class SettingFactRow : SettingRow
 {
     private readonly Action? _act;
-
     internal SettingFactRow(string label, string? note, string value, string? actionLabel = null, Action? act = null)
         : base(label, note)
     {
@@ -339,4 +339,120 @@ public sealed partial class SettingFactRow : SettingRow
 
     [RelayCommand]
     private void Run() => _act?.Invoke();
+}
+
+/// <summary>
+/// 主页版面那一行：一张可以拖着换次序、每一项自己带一个勾的表 —— 「新增页里拖拽决定这些列表的顺序，勾选显示
+/// 或者不勾选取消显示」。
+/// <para>
+/// 和别的行不一样，它管的不是一个开关而是一份有序清单，所以读写那一对换成了「拿到这一份」和「这一份变了」：拖过
+/// 一次、或者点过一个勾，都当场写回设置并喊一声（见 <see cref="SettingsViewModel"/> 里造它的那一段）。
+/// </para>
+/// <para>
+/// 表里那几项是 <see cref="HomeRowChoice"/>，顺序就是集合自己的顺序 —— <c>ListView</c> 拖动时改的正是这个集合，
+/// 所以「屏上的次序」和「要存的次序」是同一件东西，不用在两处之间对齐。
+/// </para>
+/// </summary>
+public sealed partial class SettingHomeLayoutRow : SettingRow
+{
+    private readonly Action<IReadOnlyList<HomeRowChoice>> _changed;
+    private bool _quiet;
+
+    internal SettingHomeLayoutRow(
+        string label,
+        string? note,
+        IEnumerable<HomeRowChoice> rows,
+        Action<IReadOnlyList<HomeRowChoice>> changed)
+        : base(label, note)
+    {
+        _changed = changed;
+
+        foreach (var row in rows)
+        {
+            row.Changed = Save;
+            Rows.Add(row);
+        }
+
+        Rows.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(ListHeight));
+            Save();
+        };
+    }
+
+    /// <summary>屏上那张表，顺序就是主页上那几排的顺序。</summary>
+    public ObservableCollection<HomeRowChoice> Rows { get; } = [];
+
+    /// <summary>
+    /// 这张表要多高。给死高度而不是让它自己滚：设置页本来就是一整页滚动条，表里再套一个滚动条的话，拖到边上
+    /// 时两个滚动条会互相抢，一项都拖不到看不见的地方去。
+    /// </summary>
+    public double ListHeight => (Rows.Count * RowHeight) + 8;
+
+    /// <summary>一项占多高。<c>ListViewItem</c> 默认那一档加上勾和把手之后量出来的数。</summary>
+    private const double RowHeight = 40;
+
+    /// <summary>装表的时候先别喊 —— 那不是用户改的。</summary>
+    internal void Seed(IEnumerable<HomeRowChoice> rows)
+    {
+        _quiet = true;
+
+        try
+        {
+            Rows.Clear();
+            foreach (var row in rows)
+            {
+                row.Changed = Save;
+                Rows.Add(row);
+            }
+        }
+        finally
+        {
+            _quiet = false;
+        }
+
+        OnPropertyChanged(nameof(ListHeight));
+    }
+
+    private void Save()
+    {
+        if (_quiet) return;
+
+        _changed([.. Rows]);
+    }
+}
+
+/// <summary>
+/// 主页版面表里的一项：屏上那句标题、认它的那把钥匙、勾了没有。
+/// <para>
+/// 勾变了就地喊回去（<see cref="Changed"/>），因为 <c>CheckBox</c> 改的是这一项而不是那张表，集合自己的
+/// <c>CollectionChanged</c> 听不见。
+/// </para>
+/// </summary>
+public sealed partial class HomeRowChoice : ObservableObject
+{
+    internal HomeRowChoice(string key, string title, bool visible)
+    {
+        Key = key;
+        Title = title;
+
+        // 直接写属性：这一刻 Changed 还是空的（造完才由那一行挂上），所以不会把「装表」当成「用户点了勾」。
+        Visible = visible;
+    }
+
+    /// <summary>见 <see cref="EmbyNian.Emby.HomeLayout"/>。</summary>
+    public string Key { get; }
+
+    public string Title { get; }
+
+    /// <summary>勾变了的时候喊一声；由 <see cref="SettingHomeLayoutRow"/> 挂上。</summary>
+    internal Action? Changed { get; set; }
+
+    [ObservableProperty]
+    public partial bool Visible { get; set; }
+
+    partial void OnVisibleChanged(bool value) => Changed?.Invoke();
+
+    /// <summary>读屏的人听到的那一句，也是拖动时那块浮起来的东西的名字。</summary>
+    public override string ToString() => Title;
 }

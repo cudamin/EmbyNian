@@ -38,7 +38,6 @@ public sealed partial class HomePage : Page, IShellContent
     private EmbySession? _session;
     private IShellActions? _actions;
     private Windowing.HostWindow? _window;
-    private bool _lockWindowShape;
 
     /// <summary>
     /// 自检那一条「点卡片不挪页」的现场：按焦点之前这一页停在哪儿（-1 是还没按过）、焦点交出去了没有、这一页
@@ -99,6 +98,12 @@ public sealed partial class HomePage : Page, IShellContent
     /// <summary>自检：那条带上的字体和键高，见 <see cref="HomeBanner.TypeRead"/>。</summary>
     internal (bool Ok, string Detail) BannerType() => Banner.TypeRead();
 
+    /// <summary>自检：剧照整张画出来了没有，见 <see cref="HomeBanner.PictureRead"/>。</summary>
+    internal (bool Ok, string Detail) BannerPicture() => Banner.PictureRead();
+
+    /// <summary>自检：屏上那几排真按设置里那份版面来的，见 <see cref="HomeViewModel.LayoutRead"/>。</summary>
+    internal (bool Ok, string Detail) LayoutRead() => ViewModel.LayoutRead();
+
     /// <summary>
     /// 自检：顶上那一整块到底铺没铺满 —— 「红框框出来的地方全填充上海报」。
     /// <para>
@@ -119,8 +124,10 @@ public sealed partial class HomePage : Page, IShellContent
     }
 
     /// <summary>
-    /// 自检：主页首屏完整放下继续观看，同时让下一排媒体库从视口外开始。只有这两排都存在时才有得量；一个从未
-    /// 播放过任何内容的账号没有继续观看，那是正常数据，不该把版式自检判红。
+    /// 自检：主页第一屏完整放下继续观看，同时让下一排媒体库从视口外开始。大图占满整整一屏，继续观看那一排压在
+    /// 它的下半截上（没有板底，只有带子自己那层竖向暗罩）—— 所以这一条量的是「那一排真压在大图上」加上原来那
+    /// 两句边界。只有那两排都存在时才有得量；一个从未播放过任何内容的账号没有继续观看，那是正常数据，不该把
+    /// 版式自检判红。
     /// </summary>
     internal (bool? Ok, string Detail) FoldRead()
     {
@@ -165,54 +172,64 @@ public sealed partial class HomePage : Page, IShellContent
             && drawnCards.Length > 0
             && cardsVisible;
 
-        return (continueVisible && libraryHidden && shelfReady,
+        // 大图占满一屏，那一叠压在它下半截上：那一叠的上沿要落在大图里面（不是接在它下面），大图的下沿要落在
+        // 窗口下沿上。少了这一条，「继续观看在第一屏里」也可能是靠把大图压矮换来的 —— 那正是上一版的做法。
+        var heroBottom = Top(Hero) + Hero.ActualHeight;
+        var overlayTop = Top(Overlay);
+        var filled = Banner.Visibility != Visibility.Visible || Math.Abs(heroBottom - viewport) <= 2;
+        var stacked = overlayTop < heroBottom - 1;
+
+        return (continueVisible && libraryHidden && shelfReady && filled && stacked,
             $"继续观看 {continueTop:0}–{continueBottom:0}，媒体库从 {libraryTop:0} 起，视口 0–{viewport:0}；"
                 + $"继续观看{(continueVisible ? "完整" : "被截断")}、实绘 {drawnCards.Length} 张"
                 + (cardsVisible ? "（卡片完整在视口内）" : "（没有完整卡片在视口内）") + "，"
-                + $"媒体库{(libraryHidden ? "未露出" : "已经露出")}");
+                + $"媒体库{(libraryHidden ? "未露出" : "已经露出")}；"
+                + $"大图下沿 {heroBottom:0}{(filled ? "，占满一屏" : "，没占满一屏")}、"
+                + $"货架上沿 {overlayTop:0}{(stacked ? "，压在大图上" : "，没压在大图上")}"
+                + $"，{(ViewModel.Shelves[0].OnScrim ? "第一排走压在图上那套浅墨" : "第一排还在用主题的墨（会消失在暗罩里）")}");
     }
 
-    private void OnShelvesSizeChanged(object sender, SizeChangedEventArgs e) => SyncBannerFold();
+    private void OnShelvesSizeChanged(object sender, SizeChangedEventArgs e) => SyncShelfOverlay();
 
     // Busy/notice rows collapsing moves the shelves without resizing them. Re-read their position after layout too.
-    private void OnShelvesLayoutUpdated(object sender, object e) => SyncBannerFold();
+    private void OnShelvesLayoutUpdated(object sender, object e) => SyncShelfOverlay();
 
     /// <summary>
-    /// 把第一排真正画出来的高度交给轮播。间距不抄 XAML 里的 24，而是量 Hero 下沿到货架上沿的实际距离；以后
-    /// 那处留白改了，这里不会继续拿旧数把媒体库顶进首屏。
+    /// 压在图上那一叠往上提多少，和它盖住了大图多少 —— 「主页的继续播放参考集页面的集列表那样修改」＋「背景，要
+    /// 能看到完整的轮播背景图」：大图占满第一屏，继续观看那一排压在它的下半截上，没有板底，整张剧照因此看得见。
+    /// <para>
+    /// 提的量是量出来的，不是抄标记里那几个数：「那一叠顶上那段留白 + 第一排整块」有多高，跟卡片尺寸那个设置、
+    /// 跟提示条这一刻在不在，都有关系。量的是那一叠自己顶边到第一排下沿的实际距离，所以那几处留白以后改了，这里
+    /// 不会拿旧数把媒体库顶进第一屏。
+    /// </para>
+    /// <para>
+    /// 提完还要告诉带子一声（<see cref="HomeBanner.SetShelfInset"/>）：字块、底边那排小横条和徽标都得从那一排底下
+    /// 让出来，否则播放键就藏在继续观看后面；带子那层竖向暗罩也跟着从那一沿起压暗，浅墨的牌子和说明才读得出来。
+    /// 没有宽图（整条带收起）或者还没量到第一排时提零 —— 那时屏上就是一页普通的货架列表。
+    /// </para>
     /// </summary>
-    private void SyncBannerFold()
+    private void SyncShelfOverlay()
     {
-        var foldEnabled = _lockWindowShape && _window?.BrowseFoldActive == true;
-        Banner.SetFoldEnabled(foldEnabled);
+        var lift = 0d;
 
-        if (ViewModel.Shelves.Count == 0
-            || ViewModel.Shelves[0].Title != "继续观看"
-            || ShelfRepeater.TryGetElement(0) is not FrameworkElement first
-            || first.ActualHeight <= 0)
+        if (Banner.Visibility == Visibility.Visible
+            && ShelfRepeater.TryGetElement(0) is FrameworkElement first
+            && first.ActualHeight > 0)
         {
-            Banner.SetBelowFold(0);
-            Hero.MinHeight = 0;
-            Slate.Visibility = Visibility.Visible;
-            return;
+            static double Top(FrameworkElement element) =>
+                element.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+
+            var within = Top(first) - Top(Overlay) + first.ActualHeight;
+            lift = HomeCarousel.ShelfLift(Hero.ActualHeight, within, ShelfBreath);
         }
 
-        static double Top(FrameworkElement element) =>
-            element.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+        if (Math.Abs(Overlay.Margin.Top + lift) > 0.5) Overlay.Margin = new Thickness(0, -lift, 0, 0);
 
-        var gap = Math.Max(0, Top(first) - (Top(Hero) + Hero.ActualHeight));
-        var belowFold = gap + first.ActualHeight;
-        Banner.SetBelowFold(belowFold);
-
-        // 没有宽图时 HomeBanner 整体收起，不能再由它的 Root.Height 留住首屏边界。严格模式改由 Hero
-        // 自己占据同一份剩余高度：上面仍是普通主页标题，继续观看完整落下，下一排从视口外开始。
-        Hero.MinHeight = foldEnabled && Banner.Visibility != Visibility.Visible && XamlRoot is { } root
-            ? Math.Max(0, root.Size.Height - belowFold)
-            : 0;
-        Slate.Visibility = Banner.Visibility == Visibility.Visible && Banner.Compact
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        Banner.SetShelfInset(lift);
     }
+
+    /// <summary>第一排下沿到窗口下沿留的一口气。</summary>
+    private const double ShelfBreath = 16;
 
     /// <summary>
     /// 自检：the cards this page has actually realised, in tree order. Which row each came from is not
@@ -329,7 +346,6 @@ public sealed partial class HomePage : Page, IShellContent
         _session = services.GetRequiredService<EmbySession>();
         _actions = services.GetRequiredService<IShellActions>();
         var settings = services.GetRequiredService<ISettingsService>();
-        _lockWindowShape = settings.Settings.Ui.LockWindowShape;
 
         ViewModel.Attach(
             _actions,
@@ -338,9 +354,11 @@ public sealed partial class HomePage : Page, IShellContent
             _session,
             services.GetRequiredService<EmbyImageStore>());
 
+        // 版面（拖拽出来的次序、勾掉的那几排）改完当场生效：设置页在另一个窗口里，它改完喊一声，这一页重排。
         ShellPrefs.Changed -= OnShellPrefsChanged;
         ShellPrefs.Changed += OnShellPrefsChanged;
-        SyncBannerFold();
+
+        SyncShelfOverlay();
 
         // 标题栏那几颗按钮要知道自己站在哪种底上。现在说一遍（回到这一页时那些幻灯片可能已经在手上了），
         // 之后每次那一块从「一张图」变成「页面的底色」或者反过来时再说一遍。
@@ -359,18 +377,18 @@ public sealed partial class HomePage : Page, IShellContent
     /// <summary>这一页顶上那一块：那条大图铺到窗口顶边就是一张剧照，没有幻灯片时是页面自己的底色。</summary>
     private TitleStrip Strip() => ViewModel.HeroFilled ? TitleStrip.OnScrim : TitleStrip.Plain;
 
-    private void OnShellPrefsChanged(Configuration.UiSettings ui)
-    {
-        _lockWindowShape = ui.LockWindowShape;
-        SyncBannerFold();
-    }
-
     public void Release()
     {
         ViewModel.PropertyChanged -= OnViewModelChanged;
         ShellPrefs.Changed -= OnShellPrefsChanged;
         ViewModel.Cancel();
     }
+
+    /// <summary>
+    /// 设置里那份主页版面改了（拖拽排序或者勾选），照新的重排一遍。卡片尺寸那几个数不在这一句里 —— 它们是
+    /// <see cref="HomeViewModel.Attach"/> 时的快照，下次开这一页才换（见那一段说明）。
+    /// </summary>
+    private void OnShellPrefsChanged(Configuration.UiSettings ui) => _ = ViewModel.ApplyLayoutAsync();
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {

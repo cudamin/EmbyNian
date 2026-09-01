@@ -27,35 +27,10 @@ public static class HomeCarousel
     public const double MinHeight = 240;
 
     /// <summary>
-    /// The band's height ceiling before anyone has measured the window — the first layout pass, and the
-    /// self-check's readings, which have no window at all. 592 is <see cref="HeightShare"/> of the 800-tall
-    /// client the app opens at, which is also what that window's first measured pass produces, so the first
-    /// frame is already the size the second one will be.
+    /// 量不到窗口高的那一下这条带有多高（第一帧，还有自检里那份没有 <c>XamlRoot</c> 的控件）。800 就是开窗那一
+    /// 档的客户区高，而这条带占满一屏（<see cref="Height"/>），所以第一帧已经是第二帧的样子。
     /// </summary>
-    public const double UnmeasuredHeight = 592;
-
-    /// <summary>
-    /// The most of the window's height the ordinary width-based band is allowed to take.
-    /// <para>
-    /// This used to be an absolute 560, and that absolute number is the whole of the bug. The band's shape is
-    /// what decides how much of a 16:9 backdrop is thrown away (<see cref="Aspect"/>), and a fixed ceiling
-    /// means the shape changes with the window's size: at 1280 wide the width rule and the ceiling agreed
-    /// exactly, so every pixel of width past the default flattened the band and cut more off the top and
-    /// bottom of the picture — 1864 wide gave a band of 3.3:1, which is 「被裁切」 by 46% instead of 19%.
-    /// A share of the height cannot do that. Two windows of the same shape now get the same band shape and
-    /// therefore the same picture, whatever their size, and the ceiling still keeps the promise it was
-    /// written for: a quarter of the window is left for the first row of cards.
-    /// </para>
-    /// <para>
-    /// Under <see cref="WindowAspect"/> ÷ <see cref="Aspect"/> = 0.808, so in a window of the locked shape it
-    /// is this share and not the width that settles the ordinary <see cref="Height"/> path: a pre-measurement
-    /// band of 74% of the window, 2.4:1 rather than the preferred 2.2:1. That is the right way round — the
-    /// quarter left for the first row of cards is a promise about the screen, while 2.2:1 is a preference —
-    /// and the locked window's real band is <see cref="FoldHeight"/>'s anyway, from the moment the first shelf
-    /// has been measured.
-    /// </para>
-    /// </summary>
-    public const double HeightShare = 0.74;
+    public const double UnmeasuredHeight = 800;
 
     /// <summary>
     /// 锁定窗口比例大小: the shape the browsing area is held in, as width ÷ height — 16:9.
@@ -72,10 +47,9 @@ public static class HomeCarousel
     /// top edge — so the whole client height is the picture's.
     /// </para>
     /// <para>
-    /// The home page uses this same shape as the signal for its stricter first-screen layout: once the first
-    /// shelf has been measured, <see cref="FoldHeight"/> gives the banner exactly the space left above it.
-    /// That keeps the complete 继续观看 shelf on screen and the following 媒体库 shelf outside the viewport,
-    /// whether the navigation pane is open or collapsed. Other window shapes keep the ordinary width rule.
+    /// 这个形状还有第二个用处：主页第一屏那一块就是一屏（<see cref="Height"/>），而剧照在里面整张画出来，所以
+    /// 窗口锁在这个比例上的时候，那一块正好被一张不裁切的 16:9 剧照铺满 —— 两件事对得上不是巧合，服务器发来的
+    /// 宽图都是这个形状。
     /// </para>
     /// </summary>
     public const double WindowAspect = 16.0 / 9.0;
@@ -108,64 +82,35 @@ public static class HomeCarousel
     public static readonly TimeSpan Dwell = TimeSpan.FromSeconds(8);
 
     /// <summary>
-    /// The preferred band shape for the ordinary <see cref="Height"/> path: 2.2:1 rather than the artwork's
-    /// own 16:9. The band fills the top of the window edge to edge without pushing every shelf off screen;
-    /// <see cref="HeightShare"/> is the other half of that fallback rule.
+    /// 这条带有多高：一屏 —— 「轮播页面占满窗口」。第一屏就是这一块，继续观看那一排坐在一层亚克力玻璃上压在它
+    /// 的下半截（那一层由 <c>HomePage</c> 往上提，提多少量出来算），所以「占满窗口」和「留着继续观看」这两句话
+    /// 同时成立。
     /// <para>
-    /// When that preferred shape is actually used, a 16:9 picture drawn with <c>UniformToFill</c> keeps
-    /// (9/16) ÷ (1/2.2) = 80.8% of its height. In a window of the locked shape it is not used: the share
-    /// (<see cref="HeightShare"/>) binds first, giving a 2.4:1 band that keeps 74%. The strict locked-window
-    /// path may choose a different band height again so the complete first shelf fits; its correctness is the
-    /// shelf boundary, not a fixed crop.
+    /// 剧照在这一块里按自己的比例整张画出来、站在正中（见 <c>HomeBanner.xaml</c>）：窗口锁在
+    /// <see cref="WindowAspect"/> 时那正好铺满这一块，锁着别的形状时左右或上下留一条底色 —— 一个像素都不裁。
     /// </para>
-    /// </summary>
-    public const double Aspect = 2.2;
-
-    /// <summary>
-    /// The ordinary <see cref="Height"/> path's ceiling: <see cref="HeightShare"/> of the window's own height,
-    /// or <see cref="UnmeasuredHeight"/> while nobody has measured the window yet. Never below
-    /// <see cref="MinHeight"/>; the strict first-screen path is calculated separately by <see cref="FoldHeight"/>.
+    /// <para>
+    /// 量不到窗口高的那一下（第一帧、还有自检里那份没有 <c>XamlRoot</c> 的控件）用
+    /// <see cref="UnmeasuredHeight"/>，那就是开窗那一档的客户区高，所以第一帧已经是第二帧的样子。下限
+    /// <see cref="MinHeight"/> 兜的是矮到不像话的窗口。
+    /// </para>
     /// </summary>
     /// <param name="viewport">The window's client height, or 0 for 「not measured yet」.</param>
-    public static double Cap(double viewport) => viewport <= 0
-        ? UnmeasuredHeight
-        : Math.Max(MinHeight, Math.Round(viewport * HeightShare));
+    public static double Height(double viewport) => viewport > 0
+        ? Math.Max(MinHeight, Math.Round(viewport))
+        : UnmeasuredHeight;
 
     /// <summary>
-    /// The band's height for the width it has to fill, inside the room the window has. The floor is for the
-    /// moment before the first measurement, when the width is still zero: a band of no height decodes no
-    /// picture and never asks again, because nothing about it changes afterwards.
-    /// </summary>
-    /// <param name="width">How wide the band is — the page's width, rail excluded.</param>
-    /// <param name="viewport">The window's client height; see <see cref="Cap"/>.</param>
-    public static double Height(double width, double viewport) => width <= 0
-        ? MinHeight
-        : Math.Clamp(Math.Round(width / Aspect), MinHeight, Cap(viewport));
-
-    /// <summary>
-    /// The locked browsing window's first-screen height. <paramref name="belowFold"/> is the measured room
-    /// occupied by the gap above the first shelf plus that shelf itself, so subtracting it from the viewport
-    /// puts the shelf's bottom on the window's bottom edge. The next shelf starts after its own layout gap and
-    /// is therefore completely outside the viewport.
+    /// 压在大图上那一叠货架往上提多少，才刚好压住它的下半截而不遮住别的东西 —— 「把继续观看那个地方的背景改成
+    /// 亚克力半透明材质，轮播页面占满窗口」。<paramref name="within"/> 是那一叠从自己的顶边到第一排下沿实测的
+    /// 高度（那一叠顶上那段留白算在里面），<paramref name="breath"/> 是第一排下沿到窗口下沿留的一口气。
     /// <para>
-    /// Only an explicitly active browsing-shape lock takes this path. Maximized, snapped and freely resized
-    /// windows pass <see langword="false"/> and keep <see cref="Height"/>. A missing measurement also keeps
-    /// the old rule, which is the detached self-check path and the first frame before any shelf exists.
+    /// 提的量不超过这一块自己的高度：提过头那一叠就顶到窗口顶边上去，而顶上那一条是页眉和标题栏的地方。也不小于
+    /// 零 —— 一叠还没量出来的时候提零，那时屏上就是「大图占满一屏、货架在屏外」，滚一下就到。
     /// </para>
     /// </summary>
-    public static double FoldHeight(
-        double contentWidth,
-        double viewportHeight,
-        double belowFold,
-        bool enabled)
-    {
-        if (!enabled || viewportHeight <= 0 || belowFold <= 0)
-            return Height(contentWidth, viewportHeight);
-
-        // In this mode the shelf boundary is the contract. Keeping the ordinary 240px floor would make the
-        // first shelf impossible to fit at the supported minimum window size when cards are set near maximum.
-        return Math.Max(0, Math.Round(viewportHeight - belowFold));
-    }
+    public static double ShelfLift(double band, double within, double breath) =>
+        band <= 0 || within <= 0 ? 0 : Math.Clamp(Math.Round(within + breath), 0, Math.Round(band));
 
     /// <summary>
     /// How far below the band's middle the text block sits — 「红框中的字体往下移动一些」. Dead centre reads as

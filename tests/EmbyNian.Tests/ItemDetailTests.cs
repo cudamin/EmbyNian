@@ -881,6 +881,68 @@ internal static class ItemDetailTests
             Assert.True(DetailHero.EpisodeFloor < DetailHero.PlainHeight);
         });
 
+        // 「海报下方会被裁切，要能看到完整的海报」—— 那一格按图自己的形状收窄，一个像素都不裁。
+        Test("头图海报：按图自己的形状装进那一格，不裁", () =>
+        {
+            // 2:3 的海报装进原来那个 210×300 的框：高吃满，宽收到 200 —— 收掉的那 10 就是从前上下各裁掉的那几像素
+            // 换来的。0.7:1 那个框本身不是海报的形状，只是一格看着差不多的方框。
+            Assert.Equal((200d, 300d), DetailHero.StillBox(667, 1000, 210, 300));
+
+            // 图正好就是那个形状时一分不动。
+            Assert.Equal((210d, 300d), DetailHero.StillBox(210, 300, 210, 300));
+
+            // 没有海报的条目退到缩略图，那是一张 16:9 的图：这时候宽吃满、高收到 118，而不是把中间那一条裁出来。
+            Assert.Equal((210d, 118d), DetailHero.StillBox(1280, 720, 210, 300));
+
+            // 集页那一格（16:9，300×169）：16:9 的剧照正好填满，4:3 的老剧收窄到 225 宽 —— 两边都是整张画得下。
+            Assert.Equal((300d, 169d), DetailHero.StillBox(1280, 720, 300, 169));
+            Assert.Equal((225d, 169d), DetailHero.StillBox(1024, 768, 300, 169));
+        });
+
+        Test("头图海报：那一格只会收窄，不会撑大", () =>
+        {
+            // 版面全指望这一句：那一栏的宽由这张图给、带子的高按海报那一档算，撑大了就是把片名那一栏挤窄、
+            // 把带子顶开。一张比框小的图也照样按框来 —— 收窄是为了不裁，不是为了照原尺寸画。
+            foreach (var (pixelWidth, pixelHeight) in new[] { (667, 1000), (1280, 720), (60, 60), (4000, 20) })
+            {
+                var (width, height) = DetailHero.StillBox(pixelWidth, pixelHeight, 210, 300)!.Value;
+
+                Assert.True(width <= 210 && height <= 300, $"{pixelWidth}×{pixelHeight} 撑出了框：{width}×{height}");
+                Assert.True(width > 0 && height > 0, $"{pixelWidth}×{pixelHeight} 收成了一条线：{width}×{height}");
+            }
+        });
+
+        Test("头图海报：尺寸不成话就不动那一格", () =>
+        {
+            // 位图还没解出来、或者报了个 0：那一格照旧用默认那一档，而不是缩成一条线。
+            Assert.Null(DetailHero.StillBox(0, 1000, 210, 300));
+            Assert.Null(DetailHero.StillBox(667, 0, 210, 300));
+            Assert.Null(DetailHero.StillBox(-4, 1000, 210, 300));
+            Assert.Null(DetailHero.StillBox(double.NaN, 1000, 210, 300));
+            Assert.Null(DetailHero.StillBox(667, 1000, 0, 300));
+            Assert.Null(DetailHero.StillBox(667, 1000, 210, double.PositiveInfinity));
+        });
+
+        // 「把艺术图的位置改到左上角」—— 那一张能有多高，是海报头上剩下的那点地方。
+        Test("左上角那一张：高就是海报头上剩下的那点地方", () =>
+        {
+            // 默认那一档：460 的带子、上下 28 和 64、海报 300，留一线 8 —— 60。
+            Assert.Equal(60d, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 300));
+
+            // 海报矮一点它就高一点，一比一。
+            Assert.Equal(100d, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 260));
+
+            // 剩不下就不画，不给负数 —— 集页那种矮带子上就是这一档（写死一个高的那一版会压进剧照的上沿）。
+            Assert.Equal(0d, DetailHero.MarkRoom(200, 28, 16, 169));
+            Assert.Equal(0d, DetailHero.MarkRoom(0, 28, 64, 300));
+
+            // 没有海报的条目上剩下的是一整格带子，那时候封住：一张一格半带子那么高的图不是记号。
+            Assert.Equal(DetailHero.MarkCap, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 0));
+
+            // 半像素那一下（缩放比不是整数时常有）四舍五入到整像素。
+            Assert.Equal(60d, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 299.6));
+        });
+
         // 带子收窄之后那道罩子得跟着收：罩子比带子还高就从带子的上沿溢出去，而标题条上那层洗按收完的那一块算。
         Test("头图罩子：跟着带子收，最高还是那一档", () =>
         {

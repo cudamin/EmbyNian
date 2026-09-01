@@ -45,8 +45,13 @@
 
         <DataTemplate x:Key="ShelfTemplate" x:DataType="vm:CardShelf">
             <StackPanel Spacing="10">
-                <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。 -->
-                <local:ShelfHead Note="{x:Bind Note, Mode=OneWay}" Title="{x:Bind Title, Mode=OneWay}" />
+                <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。
+                     OnScrim 绑着这一排是不是压在大图上（第一排是）：那一档牌子和卡片底下那两行字换成不随主题
+                     走的浅墨，否则晴昼那套浅色的近黑字会消失在图上那层暗罩里。 -->
+                <local:ShelfHead
+                    Note="{x:Bind Note, Mode=OneWay}"
+                    OnScrim="{x:Bind OnScrim, Mode=OneWay}"
+                    Title="{x:Bind Title, Mode=OneWay}" />
                 <!-- Height bound rather than fixed: a horizontal strip inside a vertical stack has
                      no other way to know how tall a row of cards is, and the shelf works it out from
                      the card size instead of the markup carrying the answer.
@@ -57,7 +62,8 @@
                     Height="{x:Bind RowHeight}"
                     ItemSpacing="16"
                     ItemTemplate="{StaticResource CardTemplate}"
-                    ItemsSource="{x:Bind Cards}" />
+                    ItemsSource="{x:Bind Cards}"
+                    OnScrim="{x:Bind OnScrim, Mode=OneWay}" />
             </StackPanel>
         </DataTemplate>
     </Page.Resources>
@@ -96,41 +102,60 @@
                     VerticalAlignment="Top" />
             </Grid>
 
-            <StackPanel Margin="28,24,28,28">
-                <ProgressBar
-                    IsIndeterminate="True"
-                    Margin="0,0,0,12"
-                    Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+            <!-- 继续观看那一排压在大图的下半截上（「主页的继续播放参考集页面的集列表那样修改」＋「背景，要能看到
+                 完整的轮播背景图」）：大图占满第一屏，这一叠由 HomePage.SyncGlass 用一个负的上边距往上提，提的量
+                 正好是「顶上那段留白 + 第一排整块 + 一口气」，于是第一排完整落在窗口里，媒体库从窗口外开始。
 
-                <!-- TwoWay on IsOpen, so dismissing the bar is recorded rather than only drawn: the next
-                     failure has to be able to reopen it, and a view model that thinks it is still open would
-                     leave the second one invisible. -->
-                <InfoBar
-                    IsClosable="True"
-                    IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
-                    Margin="0,0,0,12"
-                    Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
-                    Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
-                    Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
+                 这一层自己不上底色 —— 整张剧照要看得见，压在它上面的只有带子自己那层竖向暗罩（跟着这一排的上沿
+                 走，见 HomeBanner.ShadeEdge）。和集页上那条单集带同一个做法：没有板底、没有外圈，字换成压在图上
+                 那套浅墨（ShelfHead/ShelfStrip 的 OnScrim）。Transparent 而不是不设：不设的那一档整层不接指针，
+                 卡片之间的缝会把悬停透给底下的轮播，翻页箭头于是在货架上乱冒。
 
-                <ItemsRepeater
-                    x:Name="ShelfRepeater"
-                    ItemTemplate="{StaticResource ShelfTemplate}"
-                    ItemsSource="{x:Bind ViewModel.Shelves}"
-                    LayoutUpdated="OnShelvesLayoutUpdated"
-                    SizeChanged="OnShelvesSizeChanged">
-                    <ItemsRepeater.Layout>
-                        <StackLayout Orientation="Vertical" Spacing="24" />
-                    </ItemsRepeater.Layout>
-                </ItemsRepeater>
+                 左右那 28 走 Padding：和大图上那块牌子对齐。 -->
+            <Grid
+                x:Name="Overlay"
+                Background="Transparent"
+                Padding="28,18,28,28"
+                SizeChanged="OnShelvesSizeChanged">
+                <StackPanel>
+                    <ProgressBar
+                        IsIndeterminate="True"
+                        Margin="0,0,0,12"
+                        Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
 
-                <TextBlock
-                    Foreground="{ThemeResource EgTextFaintBrush}"
-                    Margin="0,40,0,0"
-                    Style="{StaticResource EgBodyStyle}"
-                    Text="服务器上还没有可以显示的内容"
-                    Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
-            </StackPanel>
+                    <!-- TwoWay on IsOpen, so dismissing the bar is recorded rather than only drawn: the next
+                         failure has to be able to reopen it, and a view model that thinks it is still open
+                         would leave the second one invisible.
+                         Visibility 也绑上：InfoBar 关着的时候只收里面的东西，控件自己还是 Visible，那 12 的
+                         下边距就一直占着 —— 那一叠顶上因此永远多 12 个谁也看不见的像素。 -->
+                    <InfoBar
+                        IsClosable="True"
+                        IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+                        Margin="0,0,0,12"
+                        Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+                        Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+                        Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
+
+                    <ItemsRepeater
+                        x:Name="ShelfRepeater"
+                        ItemTemplate="{StaticResource ShelfTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Shelves}"
+                        LayoutUpdated="OnShelvesLayoutUpdated"
+                        SizeChanged="OnShelvesSizeChanged">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Orientation="Vertical" Spacing="24" />
+                        </ItemsRepeater.Layout>
+                    </ItemsRepeater>
+
+                    <TextBlock
+                        Foreground="{ThemeResource EgTextFaintBrush}"
+                        Margin="0,40,0,0"
+                        Style="{StaticResource EgBodyStyle}"
+                        Text="服务器上还没有可以显示的内容"
+                        Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
         </StackPanel>
     </ScrollView>
 </Page>

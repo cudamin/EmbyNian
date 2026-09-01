@@ -531,6 +531,37 @@ public sealed class UiSettings
     public int WindowHeight { get; set; } = 860;
 
     public bool WindowMaximized { get; set; }
+
+    /// <summary>
+    /// 主页上那几排的顺序和显示与否 —— 「新增页里拖拽决定这些列表的顺序，勾选显示或者不勾选取消显示」。
+    /// <para>
+    /// 顺序就是这个列表的顺序，每一项自己带一个勾。空着（第一次运行、或者手改设置时删掉了）就是
+    /// <see cref="Emby.HomeLayout"/> 里那份默认版面：继续观看、媒体库、接下来看、最近添加，然后每个媒体库
+    /// 一排它自己的最近添加，全部显示。
+    /// </para>
+    /// <para>
+    /// 主页每次读完都把归一化之后的版面写回来（<see cref="Emby.HomeLayout.Plan"/>）：服务器上新加的媒体库
+    /// 因此自己排到末尾，删掉的那个自己消失，改过名的那一排把新名字带回来。
+    /// </para>
+    /// </summary>
+    public List<HomeRowSetting> HomeRows { get; set; } = [];
+}
+
+/// <summary>
+/// 主页上一排的记档：认它的那把钥匙、上一次看见的名字，和显示与否。
+/// <para>
+/// 名字也存下来是为了设置窗口：那一头有设置文档，却没有这个账号的媒体库列表（它甚至可能开在服务器连不上的
+/// 时候），而拖拽排序那张表要写得出每一排叫什么。主页读完会把新名字写回来，所以它最多旧一次。
+/// </para>
+/// </summary>
+public sealed class HomeRowSetting
+{
+    /// <summary>见 <see cref="Emby.HomeLayout"/>：四排固定的各有一把，媒体库那几排是 <c>library:{id}</c>。</summary>
+    public string Key { get; set; } = "";
+
+    public string Title { get; set; } = "";
+
+    public bool Visible { get; set; } = true;
 }
 
 /// <summary>One library's remembered sort: an Emby <c>SortBy</c> value and a direction.</summary>

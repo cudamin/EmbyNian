@@ -160,6 +160,12 @@ internal static partial class ShellSelfCheck
         check("主题色板", swatches is { Ok: true },
             swatches is { } read ? read.Detail : "没有建出主题行");
 
+        // 主页那张卡片里那张可拖拽的表：存着的每一排在表里都在，屏上也都画出来了（见 MeasureHomeRows）。什么都
+        // 不拖也不点 —— 这一行只在拖过或点过勾之后写盘。
+        var homeRows = page.MeasureHomeRows();
+        check("主页版面设置表", homeRows is { Ok: true },
+            homeRows is { } layout ? layout.Detail : "没有建出主页版面行");
+
         // The one path this page's cache guard exists for. Pressing 设置 again re-navigates the settings
         // window's frame to this same page type, and a page that rebuilt itself on the way in would throw
         // away whatever is unsaved in the config editor. Checked by object identity and not by counts: a

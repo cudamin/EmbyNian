@@ -62,8 +62,8 @@ internal static partial class ShellSelfCheck
     /// What the home page looked like before the check walked off it, since the frame keeps one page at
     /// a time. Null when it never got that far.
     /// </summary>
-    private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool BleedOk,
-        string Bleed, bool? FoldOk, string Fold)? _home;
+    private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool PictureOk,
+        string Picture, bool LayoutOk, string Layout, bool BleedOk, string Bleed, bool? FoldOk, string Fold)? _home;
 
     /// <summary>
     /// 需求 6 的两处改动：what the home page's own cards offer under the pointer. Snapshotted with the
@@ -279,34 +279,31 @@ internal static partial class ShellSelfCheck
         bool PickerFitOk,
         string PickerFit,
         bool WashOk,
-        string Wash);
+        string Wash,
+        bool StillShapeOk,
+        string StillShape);
 
     /// <summary>
     /// 需求 4 on the detail page: 「把媒体的徽标…融入对应媒体的 ui 界面」 as the page really came out.
     /// </summary>
     /// <param name="Wanted">
-    /// What this page had to make a name plate out of, in words — 「自己的徽标」, 「剧集的徽标」, 「无」. Worked
-    /// out through <see cref="ItemArtwork.Plate"/>, so it is the app's own rule saying what the page meant to
-    /// show rather than this file's guess at it.
+    /// What the rule says belongs in this page's one corner, in words — 「自己的艺术图」, 「自己的徽标」,
+    /// 「剧集的徽标（取自条目 5687）」, 「无」. Worked out through <see cref="ItemArtwork.Mark"/> (or, on an
+    /// episode page, <see cref="ItemArtwork.Plate"/>), so it is the app's own rule saying what the page meant
+    /// to show rather than this file's guess at it.
     /// </param>
-    /// <param name="Plate">
-    /// Whether the 徽标 mark is on screen, and <paramref name="Text"/> whether the text title is. The text
+    /// <param name="Mark">
+    /// Whether the corner mark is on screen, and <paramref name="Text"/> whether the text title is. The text
     /// title is now unconditional and the mark merely optional — see 详情名牌 in <see cref="ReportDetail"/>.
     /// </param>
-    /// <param name="Corner">
-    /// Whether the mark really landed in the band's top-right corner, clear of the title —
-    /// 「徽标移动到右上角」. True by vacuity on an item the server holds no 徽标 for; the geometry it was read
-    /// from is in <paramref name="Where"/>.
+    /// <param name="Placed">
+    /// Whether the mark really landed in the corner it belongs in, clear of the title and of the poster ——
+    /// 「把艺术图的位置改到左上角」（集页照旧右上角）. True by vacuity on an item the server holds neither
+    /// artwork for; the geometry it was read from is in <paramref name="Where"/>.
     /// </param>
     /// <param name="Kinds">
     /// Which artworks the server holds for this one item, 「海报、缩略图、背景图」. Informational: a thin
     /// catalogue is not a defect, and what it answers is whether the new artwork will ever be seen here.
-    /// </param>
-    /// <param name="CornerArtOk">
-    /// 「把艺术图添加到窗口右下」：右下角那张艺术图，画了的那一次必须是规矩允许画的那一张
-    /// （<see cref="ItemArtwork.Corner"/>），而且落在带子的右下角、不溢出带子、不压着片名或右上角那枚记号。
-    /// 没画的那一次这句话空着成立 —— 服务器没有这一种图，或者整页已经站在同一张图上，两种都该空着。说法在
-    /// <paramref name="CornerArt"/> 里，几何在 <see cref="DetailPage.CornerArtShape"/> 读。
     /// </param>
     /// <param name="Hero">
     /// 头上那一格铺的是谁的哪一种，用词说 —— 「剧集的背景图（取自条目 5687）」、「自己的海报」、「无」。
@@ -319,15 +316,13 @@ internal static partial class ShellSelfCheck
     /// </param>
     private sealed record ArtworkRead(
         string Wanted,
-        bool Plate,
+        bool Mark,
         bool Text,
         double Width,
         double Height,
-        bool Corner,
+        bool Placed,
         string Where,
         string Kinds,
-        bool CornerArtOk,
-        string CornerArt,
         string Hero,
         bool HeroOk);
 

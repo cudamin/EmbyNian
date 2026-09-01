@@ -64,6 +64,15 @@ public sealed partial class CardShelf : ObservableObject
     [ObservableProperty]
     public partial string Title { get; set; }
 
+    /// <summary>
+    /// 这一排是不是压在一张剧照上。主页第一排是（大图占满第一屏，这一排坐在它的下半截上），详情页的单集带在
+    /// 集页上也是 —— 两处要的是同一件事：牌子和卡片底下那两行字换成压在图上那套不随主题走的浅墨，否则晴昼那套
+    /// 浅色主题的近黑字会消失在暗罩里。开关本身在 <see cref="Views.ShelfHead.OnScrim"/>、
+    /// <see cref="Views.ShelfStrip.OnScrim"/> 和 <see cref="Views.PosterCard.OnScrim"/>；这一支是让标记绑得到它。
+    /// </summary>
+    [ObservableProperty]
+    public partial bool OnScrim { get; set; }
+
     public ObservableCollection<CardItem> Cards { get; } = [];
 
     /// <summary>

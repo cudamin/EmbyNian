@@ -80,6 +80,76 @@ public static class DetailHero
     public static double EpisodeHeight(double heroRoom) => Math.Max(EpisodeFloor, Math.Round(heroRoom));
 
     /// <summary>
+    /// 片名左边那张海报（集页上是剧照）真正画多大 —— 「海报下方会被裁切，要能看到完整的海报」。
+    /// <para>
+    /// 把这张图整个装进 <paramref name="maxWidth"/>×<paramref name="maxHeight"/> 那个盒子里，比例一分不动，所以
+    /// 一张图要么贴着盒子的宽、要么贴着它的高，另一边比盒子小 —— 那一边少掉的宽度就是从前被裁掉的部分。盒子只会
+    /// 收窄不会变宽（结果两边都不超过传进来的上限），于是版面一格都不用改：那一栏的宽由这张图给，带子的高按海报
+    /// 那一档算，两个数原来是什么量级现在还是。
+    /// </para>
+    /// <para>
+    /// 从前这一格是写死的 210×300（0.7:1），图按 <c>UniformToFill</c> 铺满它 —— 而服务器上的海报是 2:3
+    /// （0.667:1），于是上下各裁掉七八个像素。海报底下那一条常常正是片名和演员表，所以「裁掉一点」屏上就是
+    /// 「这张海报缺了一块」。0.7 这个数本身也不是海报的形状，只是一格看着差不多的方框。
+    /// </para>
+    /// <para>
+    /// 传进来的是这张位图自己的像素尺寸，不是服务器那个 <c>PrimaryImageAspectRatio</c>：屏上画的是解出来的这一张，
+    /// 而它可能压根不是海报（没有海报的条目退到缩略图，那是一张 16:9 的图）。两个数不一样的时候，对得上屏幕的
+    /// 是位图那一份。
+    /// </para>
+    /// </summary>
+    /// <param name="pixelWidth">解出来那张位图的像素宽。</param>
+    /// <param name="pixelHeight">同上，像素高。</param>
+    /// <param name="maxWidth">这一格最宽能到多少 —— 海报那一档 210，集页那张 16:9 剧照 300。</param>
+    /// <param name="maxHeight">这一格最高能到多少 —— 海报那一档 300，集页 169。</param>
+    /// <returns>
+    /// 这一格该画多大，取整到像素。位图的尺寸还不成话（没解出来、或者报的是 0）就是 null —— 那一格照旧用默认
+    /// 那一档，而不是缩成一条线。
+    /// </returns>
+    public static (double Width, double Height)? StillBox(
+        double pixelWidth, double pixelHeight, double maxWidth, double maxHeight)
+    {
+        if (!Sane(pixelWidth) || !Sane(pixelHeight) || !Sane(maxWidth) || !Sane(maxHeight)) return null;
+
+        var scale = Math.Min(maxWidth / pixelWidth, maxHeight / pixelHeight);
+
+        return (Math.Min(Math.Round(pixelWidth * scale), maxWidth),
+            Math.Min(Math.Round(pixelHeight * scale), maxHeight));
+
+        static bool Sane(double value) => double.IsFinite(value) && value > 0;
+    }
+
+    /// <summary>
+    /// 左上角那张图最高能画多少 —— 「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」。
+    /// <para>
+    /// 就是海报头上剩下的那点地方：这一格的高，减掉上下两道留白，再减掉海报本身，再让出 <see cref="MarkGap"/>
+    /// 一线。海报是底对齐的，所以那点地方全在它头上；算出来是多少就给多少，摆不下就是 0（那一张干脆不画）——
+    /// 写死一个数的那一版会在窄一点的窗口上把那张图压到海报的上沿里，而屏上看着只是「这张海报怎么被盖了一角」。
+    /// </para>
+    /// <para>
+    /// 默认那一档上这个数是 60：460 的带子、上下 28 和 64、海报 300、留一线 8。所以左上角那一张是一枚小记号，
+    /// 不是一张画 —— 竖构图的艺术图在那儿只有五十几像素宽。要它大就得动海报那 300 或者带子那 460，两个数都
+    /// 在别处（<see cref="ArtHeight"/> 和 <c>DetailViewModel.PosterStillHeight</c>）。
+    /// </para>
+    /// </summary>
+    /// <param name="bandHeight">头图那一格这一次的高（<see cref="Height"/> 或 <see cref="EpisodeHeight"/>）。</param>
+    /// <param name="insetTop">这一格上面那道留白。</param>
+    /// <param name="insetBottom">同上，下面那道。</param>
+    /// <param name="stillHeight">海报（或剧照）这一次的高，见 <see cref="StillBox"/>。</param>
+    public static double MarkRoom(double bandHeight, double insetTop, double insetBottom, double stillHeight) =>
+        Math.Clamp(Math.Round(bandHeight - insetTop - insetBottom - stillHeight - MarkGap), 0, MarkCap);
+
+    /// <summary>左上角那张图和海报之间留的一线。贴着海报的上沿画就成了海报的一部分。</summary>
+    public const double MarkGap = 8;
+
+    /// <summary>
+    /// 左上角那张图的上限。海报头上剩多少就给多少（<see cref="MarkRoom"/>），可「没有海报」的条目上剩下的是
+    /// 一整格带子，那时候封住 —— 一张一格半带子那么高的艺术图不是记号，是把这一页的画面换成了它。146 是它从前
+    /// 站在右下角时的那个上限，一格 16:9。
+    /// </summary>
+    public const double MarkCap = 146;
+
+    /// <summary>
     /// 头图下面那整段至少要多高 —— 「滑到下面不用显示背景了，五颜六色的太丑了」。
     /// <para>
     /// 背景那一层铺满整个窗口并且固定不动，所以底下这一整段必须至少补满视口减掉头图后的空间。页面把这个

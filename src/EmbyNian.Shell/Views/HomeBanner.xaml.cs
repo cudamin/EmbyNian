@@ -87,23 +87,17 @@ public sealed partial class HomeBanner : UserControl
     private BannerSlide? _current;
 
     /// <summary>
-    /// 订着的那个 <c>XamlRoot</c>，也就是窗口的客户区。带高的上限跟着窗口高走
-    /// （<see cref="HomeCarousel.Cap"/>），而只拖下边沿的那一下这条带自己的尺寸一点没变 —— <c>SizeChanged</c>
-    /// 因此不响，上限却已经换了一个数。存下来是为了退订：进树时的 XamlRoot 和离树后能不能问到不是一回事。
+    /// 订着的那个 <c>XamlRoot</c>，也就是窗口的客户区。带高就是一屏（<see cref="HomeCarousel.Height"/>），而只拖
+    /// 下边沿的那一下这条带自己的宽度一点没变 —— <c>SizeChanged</c> 因此不响，一屏有多高却已经换了一个数。存下来
+    /// 是为了退订：进树时的 XamlRoot 和离树后能不能问到不是一回事。
     /// </summary>
     private XamlRoot? _viewport;
 
     /// <summary>
-    /// 锁定比例的窗口里，轮播下面要留给「上方间距 + 完整继续观看货架」的实测高度。主页在货架生成后交进来；
-    /// 0 表示还没量到，或者这次根本没有继续观看，届时仍走普通的按宽度计算。
+    /// 压在图上那一排货架从下往上盖住了这条带多少。主页量出来交进来（<see cref="SetShelfInset"/>）；0 是还没量到
+    /// 或者这一页没有货架，那时整条带都是自己的。
     /// </summary>
-    private double _belowFold;
-
-    /// <summary>由主页从真实窗口状态传进来；不能拿当前几何是否碰巧是 16:9 来猜开关状态。</summary>
-    private bool _foldEnabled;
-
-    /// <summary>严格首屏为大卡片让位后，横幅低于常规内容所需高度。</summary>
-    private bool _compact;
+    private double _shelf;
 
     public HomeBanner()
     {
@@ -241,7 +235,7 @@ public sealed partial class HomeBanner : UserControl
     {
         Dots.Children.Clear();
         _bars.Clear();
-        Dots.Visibility = !_compact && count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        Dots.Visibility = count > 1 ? Visibility.Visible : Visibility.Collapsed;
 
         var dim = (Brush)Resources["EgBannerDotBrush"];
 
@@ -324,7 +318,7 @@ public sealed partial class HomeBanner : UserControl
     private void PaintLogo(BannerSlide slide)
     {
         LogoImage.Source = slide.Logo;
-        LogoImage.Visibility = !_compact ? slide.LogoVisibility : Visibility.Collapsed;
+        LogoImage.Visibility = slide.LogoVisibility;
 
         if (slide.Logo is null)
         {
@@ -467,7 +461,7 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private void SyncArrows()
     {
-        var shown = !_compact && _hover && _slides.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        var shown = _hover && _slides.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
 
         PrevButton.Visibility = shown;
         NextButton.Visibility = shown;
@@ -487,69 +481,105 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
-    /// 带多高、字块多宽、字块往下沉多少。普通窗口高度按页宽算（<see cref="HomeCarousel.Height"/>）；锁定比例
-    /// 且主页已经量到第一排货架时，改由 <see cref="HomeCarousel.FoldHeight"/> 把第一排的下沿正好放到视口底部。
-    /// 字块不超过带的一半
-    /// 多一点：右边要留出剧照本身，而横向那层暗罩到 0.82 才透干净。下沉量同样是算出来的
-    /// （<see cref="HomeCarousel.InfoDrop"/>）—— 带子越高沉得越多，缩到下限就不沉。
+    /// 带多高、字块多宽、字块往下沉多少。带高就是一屏（<see cref="HomeCarousel.Height"/>）—— 「轮播页面占满
+    /// 窗口」，而剧照在里面整张画出来站在正中，锁定比例的窗口里那正好是一张不裁切的 16:9 铺满一屏。字块不超过
+    /// 带的一半多一点：右边要留出剧照本身，而横向那层暗罩到淡出点才透干净。
     /// <para>
-    /// 高度那一头还要问窗口有多高（<see cref="HomeCarousel.Cap"/>）：带子最多吃掉窗口的一份额，剩下的要留给
-    /// 底下第一排卡片。问的是 <c>XamlRoot.Size</c>，也就是整个客户区 —— 和自检里 <c>BleedRead</c> 问的同一
-    /// 个数；量不到（自检里这份控件没有 XamlRoot）就是 0，那时上限走默认窗口那一档。
+    /// 底下那一截归货架（<see cref="SetShelfInset"/>）：继续观看那一块坐在一层亚克力上、压在大图的下半截，所以
+    /// 字块沉多少、底边那排小横条和徽标站在哪儿，算的都是「一屏减掉玻璃」那一片，不是整条带。少了这一下，播放
+    /// 键、小横条和徽标就都藏在货架后面。
+    /// </para>
+    /// <para>
+    /// 一屏有多高问的是 <c>XamlRoot.Size</c>，也就是整个客户区 —— 和自检里 <c>BleedRead</c> 问的同一个数；量不到
+    /// （自检里这份控件没有 XamlRoot）就是 0，那时按开窗那一档算。
     /// </para>
     /// </summary>
     internal void Resize(double width)
     {
         var viewport = XamlRoot?.Size ?? default;
-        var height = HomeCarousel.FoldHeight(width, viewport.Height, _belowFold, _foldEnabled);
+        var height = HomeCarousel.Height(viewport.Height);
 
         // 还没量过时高度是 NaN，而 NaN 参与的比较全是假 —— 少了这一句，第一次布局就设不上高度。
         if (double.IsNaN(Root.Height) || Math.Abs(Root.Height - height) > 0.5) Root.Height = height;
 
-        SetCompact(_foldEnabled && height < HomeCarousel.MinHeight);
+        // 货架底下那一片不算：字块在剩下的那一片里居中、再按它沉一点。
+        var clear = Math.Max(HomeCarousel.MinHeight / 2, height - _shelf);
 
         Info.MaxWidth = Math.Clamp(width * 0.54, 280, 620);
-        InfoShift.Y = HomeCarousel.InfoDrop(height);
+        Info.Margin = new Thickness(InfoInset, 0, 0, _shelf);
+        InfoShift.Y = HomeCarousel.InfoDrop(clear);
+        ShadeEdge(width, height);
     }
 
-    /// <summary>显式同步比例锁定状态；最大化、播放和关闭开关都必须立即退出严格首屏。</summary>
-    internal void SetFoldEnabled(bool enabled)
-    {
-        if (_foldEnabled == enabled) return;
+    /// <summary>字块离带子左沿多远。见标记里 Info 那一段：让开的是翻页箭头那条窄栏。</summary>
+    private const double InfoInset = 60;
 
-        _foldEnabled = enabled;
+    /// <summary>
+    /// 压在图上那一排货架盖住了这条带底下多少。主页量出来交进来（见 <c>HomePage.SyncShelfOverlay</c>）—— 带子自己不知道
+    /// 上面压着什么，而字块、小横条和徽标都得让开那一片。
+    /// </summary>
+    internal void SetShelfInset(double inset)
+    {
+        inset = Math.Max(0, inset);
+        if (Math.Abs(_shelf - inset) <= 0.5) return;
+
+        _shelf = inset;
         if (ActualWidth > 0) Resize(ActualWidth);
     }
 
     /// <summary>
-    /// 主页量到第一排货架后把它要占的视口高度交进来。只在值真的变了时重排，避免货架的 SizeChanged 和轮播的
-    /// Height 互相喊出一串没有几何变化的布局轮次。
+    /// 两层暗罩跟着剧照的边沿走。剧照按自己的 16:9 整张画出来、站在带子正中（见 HomeBanner.xaml 里
+    /// LayerA/LayerB），所以左右各剩一条底色，剩多少完全由带子的形状决定：2.2:1 的带每边留一成四，锁定比例那种
+    /// 更扁的带每边留两成。
+    /// <para>
+    /// 左边那层托着整块字：从带的左沿起就浓，过了字块才淡出，所以它的淡出点按那条留白往右推。右边那层只有一件
+    /// 事 —— 把剧照右边沿那道硬边融进底色里，所以它就贴在那条留白上。徽标也跟着挪：图居中之后，带的右沿和图的
+    /// 右沿差了一条留白，徽标该贴着图，不是贴着带。
+    /// </para>
+    /// <para>
+    /// 按 16:9 算而不是问那一层元素：图是解码完才到的，而这一层的尺寸在那之前是 0。整套「不裁切」就建立在
+    /// 「服务器发来的宽图是 16:9」上，所以这里用同一个假设；真到了一张别的比例的图，差的只是这两道渐变落在哪儿。
+    /// </para>
     /// </summary>
-    internal void SetBelowFold(double height)
+    private void ShadeEdge(double width, double height)
     {
-        height = Math.Max(0, height);
-        if (Math.Abs(_belowFold - height) <= 0.5) return;
+        if (width <= 0 || height <= 0) return;
 
-        _belowFold = height;
-        if (ActualWidth > 0) Resize(ActualWidth);
+        var picture = Math.Min(width, height * HomeCarousel.WindowAspect);
+        var strip = Math.Max(0, (width - picture) / 2);
+        var share = Math.Clamp(strip / width, 0, 0.5);
+
+        ScrimMid.Offset = Math.Min(1, share + 0.18);
+        ScrimFar.Offset = Math.Min(1, share + 0.52);
+
+        EdgeNear.Offset = Math.Min(1, share);
+        EdgeFar.Offset = Math.Min(1, share + 0.10);
+
+        LogoImage.Margin = new Thickness(0, 0, strip + LogoInset, _shelf + LogoBaseline);
+        Dots.Margin = new Thickness(0, 0, 0, _shelf + DotsBaseline);
+
+        // 左右那两层暗罩停在那一排货架的上沿：它们是为字块和图的边沿准备的，往下伸到货架底下只会把左边压得比
+        // 右边黑。整张剧照因此在货架上面那一段一点没被动过。
+        ShadeSide.Margin = new Thickness(0, 0, 0, _shelf);
+        ShadeEdgeLayer.Margin = new Thickness(0, 0, 0, _shelf);
+
+        // 竖着那层反过来：它要在货架底下铺一层足够暗的底（浅墨才读得出），所以从货架的上沿开始压。上面那一段
+        // 一点不压 —— 「背景，要能看到完整的轮播背景图」。
+        if (height > 0)
+        {
+            var edge = Math.Clamp((height - _shelf) / height, 0, 1);
+
+            FootNear.Offset = Math.Max(0, edge - 0.12);
+            FootMid.Offset = edge;
+        }
     }
 
-    /// <summary>
-    /// 极小锁定窗口配大卡片时优先兑现“完整继续观看”。横幅仍保留画面，但收起放不下的标题、徽标和翻页控件，
-    /// 避免它们越过缩短后的带子压到货架上。
-    /// </summary>
-    private void SetCompact(bool compact)
-    {
-        if (_compact == compact) return;
+    /// <summary>徽标离剧照右沿和带子下沿各多远，加上底边那排小横条离下沿多远。</summary>
+    private const double LogoInset = 34;
 
-        _compact = compact;
-        Info.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        Dots.Visibility = !compact && _slides.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
-        LogoImage.Visibility = !compact && Current is { } slide ? slide.LogoVisibility : Visibility.Collapsed;
-        SyncArrows();
-    }
+    private const double LogoBaseline = 30;
 
-    internal bool Compact => _compact;
+    private const double DotsBaseline = 18;
 
     // ---- 事件 -------------------------------------------------------------------
 
@@ -718,18 +748,31 @@ public sealed partial class HomeBanner : UserControl
         banner.BuildDots(1);
         var lonely = banner.Dots.Visibility == Visibility.Collapsed;
 
-        // 带高落到布局上，而不只是算出来。量不到宽度时退到下限 —— 高度是 0 的带一张图都不会解码。
-        // 顺带问那一沉：500 的带该沉一点，缩到下限那一档一点都不沉，字块正正居中（播放键就靠这一条留在带里）。
-        // 这份控件没有 XamlRoot，量不到窗口高，所以上限走的是默认窗口那一档（UnmeasuredHeight）—— 页宽 1100
-        // 于是照宽度算，正好 500。
+        // 带高落到布局上，而不只是算出来：这份控件没有 XamlRoot，量不到一屏有多高，所以走的是开窗那一档
+        // （UnmeasuredHeight 800）。顺带问那一沉：那么高的带子该沉到上限那一档。
         banner.Resize(1100);
         var wide = banner.Info.MaxWidth;
         var drop = banner.InfoShift.Y;
-        var tall = Math.Abs(banner.Root.Height - 500) < 0.01 && wide <= 620
-            && Math.Abs(drop - HomeCarousel.InfoDrop(500)) < 0.01 && drop > 0;
+        var tall = Math.Abs(banner.Root.Height - HomeCarousel.UnmeasuredHeight) < 0.01 && wide <= 620
+            && Math.Abs(drop - HomeCarousel.InfoDrop(HomeCarousel.UnmeasuredHeight)) < 0.01 && drop > 0;
 
-        banner.Resize(0);
-        var floor = Math.Abs(banner.Root.Height - HomeCarousel.MinHeight) < 0.01 && banner.InfoShift.Y == 0;
+        // 那一排货架压住这条带底下 300 的时候，字块、小横条和徽标一起让开那一片：字块按剩下的那一片沉，另外两样
+        // 把那 300 加进自己的下边距，左右两层暗罩也停在那一沿上。竖着那层反过来 —— 它要从那一沿起把底下压暗，
+        // 浅墨的牌子和卡片说明才读得出来（800 的带、货架占 300，压暗从 0.625 那一档开始）。
+        // 交进来之后自己再排一次：这份控件没上树，量不到自己的宽度，而 SetShelfInset 只在量到宽度时重排。
+        banner.SetShelfInset(300);
+        banner.Resize(1100);
+        var lifted = Math.Abs(banner.Info.Margin.Bottom - 300) < 0.01
+            && Math.Abs(banner.InfoShift.Y - HomeCarousel.InfoDrop(HomeCarousel.UnmeasuredHeight - 300)) < 0.01
+            && Math.Abs(banner.Dots.Margin.Bottom - (300 + DotsBaseline)) < 0.01
+            && Math.Abs(banner.LogoImage.Margin.Bottom - (300 + LogoBaseline)) < 0.01
+            && Math.Abs(banner.ShadeSide.Margin.Bottom - 300) < 0.01
+            && banner.ShadeFoot.Margin.Bottom == 0
+            && Math.Abs(banner.FootMid.Offset - (HomeCarousel.UnmeasuredHeight - 300) / HomeCarousel.UnmeasuredHeight)
+                < 0.001;
+
+        banner.SetShelfInset(0);
+        banner.Resize(1100);
 
         // 翻页箭头和字块不同列（「翻页的按钮会挡住字体」）。箭头贴着带的边沿、在竖向正中，字沉下去之后它正好
         // 落在片名那一行上 —— 所以这一条判的是列，不是高度。两边都从设死的边距和宽度上读，箭头默认是收起的、
@@ -757,20 +800,17 @@ public sealed partial class HomeBanner : UserControl
         banner.Rise();
         var risen = banner.TitleText.Opacity == 1 && banner.TitleShift.Y == 0 && banner.ActionsShift.Y == 0;
 
-        var ok = quiet && dots && lonely && tall && floor && layered && risen && apart;
+        var ok = quiet && dots && lonely && tall && lifted && layered && risen && apart;
 
         return (ok,
             $"没有幻灯片时{(quiet ? "整条带收起、钟不走" : "带还在屏上或钟在走")}；"
                 + $"横条 3 根亮第 2 根{(dots ? "" : "（不对）")}、1 张时整排{(lonely ? "收起" : "还在")}；"
-                + $"带高 页宽1100→{HomeCarousel.Height(1100, 0):0}、量不到→{HomeCarousel.Height(0, 0):0}"
-                + $"（下限 {HomeCarousel.MinHeight:0}，上限是窗口高的 {HomeCarousel.HeightShare:P0}，"
-                + $"量不到窗口高时 {HomeCarousel.UnmeasuredHeight:0}），"
-                + $"1080p 全屏 页宽1864×窗口高1040→{HomeCarousel.Height(1864, 1040):0}"
-                + $"（{1864 / HomeCarousel.Height(1864, 1040):0.00}:1；这是未量到首排时的普通高度路径，"
-                + "严格首屏另由实页探针测）；"
+                + $"带高就是一屏，量不到窗口高时 {HomeCarousel.UnmeasuredHeight:0}"
+                + $"（下限 {HomeCarousel.MinHeight:0}）；"
                 + $"字块宽 页宽1100→{wide:0}、量不到→{banner.Info.MaxWidth:0}；"
-                + $"字块下沉 带高500→{drop:0}、下限那档→{banner.InfoShift.Y:0}"
+                + $"字块下沉 带高{HomeCarousel.UnmeasuredHeight:0}→{drop:0}"
                 + $"（最多 {HomeCarousel.InfoDrop(HomeCarousel.UnmeasuredHeight):0}）；"
+                + $"货架压住 300 时{(lifted ? "字块、小横条和徽标都让开了" : "有东西没让开，会被玻璃盖住")}；"
                 + $"箭头占到 {strip:0}、字块从 {banner.Info.Margin.Left:0} 起"
                 + $"{(apart ? "，两边不同列" : "，压到字了")}；"
                 + $"两层剧照{(layered ? "轮着上，同一张不重来" : "没换过位置")}；"
@@ -792,8 +832,9 @@ public sealed partial class HomeBanner : UserControl
     /// 底边那排小横条占 22。
     /// </para>
     /// <para>
-    /// 带自己的形状也报作诊断：普通高度路径以 <see cref="HomeCarousel.Aspect"/> 为首选，严格首屏则允许为了
-    /// 完整放下第一排而改变比例。后者是否正确由 <see cref="HomePage.FoldRead"/> 在真实页面上量货架边界。
+    /// 带自己占没占满一屏也报作诊断：它该就是窗口的客户区高（<see cref="HomeCarousel.Height"/>）。继续观看那块
+    /// 货架盖住底下多少一起报 —— 那是字块和小横条让开的那一片。屏上是不是真这样，由
+    /// <see cref="HomePage.FoldRead"/> 在真实页面上量。
     /// </para>
     /// </summary>
     internal string State
@@ -808,11 +849,60 @@ public sealed partial class HomeBanner : UserControl
             return $"带高 {height:0}、字块宽 {Info.MaxWidth:0}、"
                 + $"字块高 {Info.ActualHeight:0} 往下沉 {InfoShift.Y:0}、"
                 + $"带 {(height > 0 ? Root.ActualWidth / height : 0):0.00}:1"
-                + $"（窗口高 {viewport:0}，普通上限 {HomeCarousel.Cap(viewport):0}）、"
+                + $"（窗口高 {viewport:0}，货架盖住底下 {_shelf:0}）、"
                 + $"{HomeCarousel.Position(_index, _slides.Count)}、"
                 + $"剧照{(FrontLayer.Source is null ? "还在取" : "已上图")}、"
                 + $"徽标{(LogoImage.Source is null ? "无" : "有")}";
         }
+    }
+
+    /// <summary>
+    /// 自检：剧照真的整张画出来了没有 —— 「轮播的海报能保持16:9」。
+    /// <para>
+    /// 量的是台上那一层元素自己的尺寸。这只有在 <c>Stretch="Uniform"</c> 加一个不是 <c>Stretch</c> 的横向对齐
+    /// 下才说得上话：那时这个元素的大小就是画出来那张图的大小。填满整格的那种拉伸会让它等于整条带，怎么裁的
+    /// 都量不出来 —— 而「裁掉了三成半」在屏幕上只是一张构图不太对的图，没人能指着它说这是个错。
+    /// </para>
+    /// <para>
+    /// 判三件事：画出来的形状就是原图的形状（没裁也没拉）、高度吃满带子（能画多大就画多大）、左右两条留白一样
+    /// 宽（「轮播图移到画面中间」）。留白多宽一起报出来，左边那条是字块站的地方。图还没解码回来时没有得量，那一
+    /// 档只报不判 —— 那是网络的事，不是版面的事。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) PictureRead()
+    {
+        var layer = FrontLayer;
+        var band = (Width: Band.ActualWidth, Height: Band.ActualHeight);
+        var drawn = (Width: layer.ActualWidth, Height: layer.ActualHeight);
+
+        if (layer.Source is null || drawn.Width <= 1 || drawn.Height <= 1)
+            return (true, $"剧照还没解出来，带 {band.Width:0}×{band.Height:0}");
+
+        var shape = drawn.Width / drawn.Height;
+        var source = layer.Source as BitmapImage;
+        var sourceShape = source is { PixelWidth: > 0, PixelHeight: > 0 }
+            ? (double)source.PixelWidth / source.PixelHeight
+            : 0;
+
+        var at = layer.TransformToVisual(Band).TransformPoint(new Windows.Foundation.Point(0, 0));
+        var left = at.X;
+        var right = band.Width - (at.X + drawn.Width);
+
+        var whole = sourceShape <= 0 || Math.Abs(shape - sourceShape) < 0.02;
+        var tall = Math.Abs(drawn.Height - band.Height) <= 1.5;
+        var centred = Math.Abs(left - right) <= 1.5;
+
+        return (whole && tall && centred,
+            $"剧照 {drawn.Width:0}×{drawn.Height:0} = {shape:0.000}:1"
+                + (sourceShape > 0
+                    ? $"（原图 {source!.PixelWidth}×{source.PixelHeight} = {sourceShape:0.000}:1"
+                        + (whole ? "，没裁也没拉）" : "，画出来的形状和原图不一样）")
+                    : "（问不到原图尺寸）")
+                + $"；带 {band.Width:0}×{band.Height:0}"
+                + (tall ? "，高度吃满" : "，没吃满带高")
+                + $"；左右各留 {left:0} 和 {right:0}"
+                + (centred ? "，居中" : "，没居中")
+                + $"（字块最宽 {Info.MaxWidth:0}）");
     }
 
     /// <summary>

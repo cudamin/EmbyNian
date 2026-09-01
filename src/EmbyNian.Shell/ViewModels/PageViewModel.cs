@@ -63,6 +63,7 @@ public abstract partial class PageViewModel : ObservableObject, IDisposable
     /// and the rest go to the log.
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NoticeVisibility))]
     public partial bool NoticeOpen { get; set; }
 
     [ObservableProperty]
@@ -82,6 +83,13 @@ public abstract partial class PageViewModel : ObservableObject, IDisposable
     /// the pair cannot come apart the way a hand-written <c>Raise()</c> list can.
     /// </summary>
     public Visibility BusyVisibility => Show(Busy);
+
+    /// <summary>
+    /// 提示条那一条自己的可见性。<c>InfoBar</c> 关着的时候只是把里面的东西收起来，控件本身还在树上、还是
+    /// <c>Visible</c>，于是它那 12 的下边距照旧占着一行 —— 一条谁也看不见的提示，在页面顶上留 12 像素的空。
+    /// 关着就整个收起来，那 12 才真的不占地方。
+    /// </summary>
+    public Visibility NoticeVisibility => Show(NoticeOpen);
 
     /// <summary>
     /// The generator calls this from <see cref="Busy"/>'s setter. It has to live in this class — the

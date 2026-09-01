@@ -28,17 +28,20 @@ internal static partial class ShellSelfCheck
     /// the page and once at report time, whichever came first — and two copies of the 「is it even the
     /// home page」 test is one copy too many.
     /// </summary>
-    private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool BleedOk,
-        string Bleed, bool? FoldOk, string Fold) ReadHome(ShellPage shell)
+    private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool PictureOk,
+        string Picture, bool LayoutOk, string Layout, bool BleedOk, string Bleed, bool? FoldOk, string Fold) ReadHome(ShellPage shell)
     {
         if (shell.Pages.Content is not HomePage home)
-            return (false, -1, "未读取", "未读取", false, "未读取", false, "未读取", false, "未读取");
+            return (false, -1, "未读取", "未读取", false, "未读取", false, "未读取", false, "未读取", false, "未读取",
+                false, "未读取");
 
         var (typeOk, type) = home.BannerType();
+        var (pictureOk, picture) = home.BannerPicture();
+        var (layoutOk, layout) = home.LayoutRead();
         var (bleedOk, bleed) = home.BleedRead();
         var (foldOk, fold) = shell.ProbeHomeFold();
         return (shell.CurrentTag == "home", home.LoadedCount, home.ShelfSummary, home.BannerSummary, typeOk, type,
-            bleedOk, bleed, foldOk, fold);
+            pictureOk, picture, layoutOk, layout, bleedOk, bleed, foldOk, fold);
     }
 
     /// <summary>
@@ -254,6 +257,7 @@ internal static partial class ShellSelfCheck
         var (sealOk, seal) = page.BodySeal();
         var (fitOk, fit) = page.PickerFit();
         var (washOk, wash) = page.WashRead(shell.TrailBase);
+        var (stillOk, still) = page.StillShape();
 
         return new DetailState(
             page.IsReady,
@@ -289,7 +293,9 @@ internal static partial class ShellSelfCheck
             fitOk,
             fit,
             washOk,
-            wash);
+            wash,
+            stillOk,
+            still);
 
         // A list with rows has to point at one of them; an empty list has to point at nothing.
         static bool Holds<T>(IReadOnlyList<T> rows, T? chosen) where T : class =>
@@ -297,66 +303,41 @@ internal static partial class ShellSelfCheck
     }
 
     /// <summary>
-    /// 需求 4 as this page came out: the 徽标 the item's artwork entitles it to, whether the mark or only the
-    /// text title actually drew, where the mark landed, and which of the five artworks the server holds for it —
-    /// plus whose picture the band behind it stands on（「集页面要用这个剧的背景图或缩略图」）and whether the
-    /// 艺术图 reached the band's bottom-right corner（「把艺术图添加到窗口右下」）.
+    /// 需求 4 as this page came out: which picture the rule says belongs in this page's one corner, whether it
+    /// or only the text title actually drew, where it landed, and which of the five artworks the server holds
+    /// for this item — plus whose picture the band behind it stands on（「集页面要用这个剧的背景图或缩略图」）.
     /// <para>
     /// Read off the elements rather than off the view model, because what is worth testing is the markup: the
     /// text title has to be there on every page (the mark used to replace it, and 「no name on the hero band」
     /// looks exactly like artwork that never arrived over the network), and the mark has to be in the corner it
-    /// was moved to rather than back on the words. See <see cref="DetailPage.TitleShapes"/> and
-    /// <see cref="DetailPage.CornerArtShape"/>.
+    /// was moved to rather than back on the words or on the poster. See <see cref="DetailPage.TitleShapes"/>.
     /// </para>
     /// </summary>
     private static ArtworkRead ReadArtwork(DetailPage page, DetailViewModel model)
     {
-        var (plate, text, width, height, corner, where) = page.TitleShapes;
+        var (mark, text, width, height, placed, where) = page.TitleShapes;
         var item = model.CurrentItem;
         var (heroOk, hero) = Band(item);
-        var (cornerArtOk, cornerArt) = CornerArt(page, model, item);
 
-        return new ArtworkRead(Wanted(item), plate, text, width, height, corner, where,
-            item is null ? "没有条目" : ItemArtwork.Kinds(item), cornerArtOk, cornerArt, hero, heroOk);
+        return new ArtworkRead(Wanted(item, model.ItemType == EmbyItemType.Episode), mark, text, width, height,
+            placed, where, item is null ? "没有条目" : ItemArtwork.Kinds(item), hero, heroOk);
 
-        // 「把艺术图添加到窗口右下」：一句话里两件事 —— 规矩说该不该画（ItemArtwork.Corner，加上集页整个不摆：
-        // 那一条带子只有 200 高，摆不下名牌加一张画），和屏上真画了没有、画在哪儿（DetailPage.CornerArtShape）。
-        //
-        // 「该画却没画」不算失败：位图是从网上解出来的，这一拍还没到手是常态。反过来「不该画却画了」是这一条真
-        // 会红的那一种 —— 整页已经站在同一张艺术图上时角上再钉一张，屏上就是同一张图出现两次。
-        static (bool Ok, string Detail) CornerArt(DetailPage page, DetailViewModel model, EmbyItem? item)
+        // 「有艺术图优先显示艺术图，没艺术图就显示徽标」：这一句就是规矩给的答案，用词说。集页问的是名牌那一支
+        // （那一页照旧只摆右上角那一枚，见 DetailViewModel.PlateVisibility）。id 和种类一样要紧：集页和季页上
+        // 徽标是剧集那一头发的，按这一页自己的 id 去取会取回一个空答案，而「徽标」两个字自己说不出走了哪一条路。
+        static string Wanted(EmbyItem? item, bool episode)
         {
-            var (drawn, artWidth, artHeight, placed, geometry) = page.CornerArtShape;
-            var episode = model.ItemType == EmbyItemType.Episode;
-            var allowed = item is not null && !episode && ItemArtwork.Corner(item) is not null;
-            var wanted = Wanted();
+            if (item is null) return "没有条目";
 
-            var says = drawn
-                ? $"该有的是{wanted}，画了 {artWidth:0}×{artHeight:0}；{geometry}"
-                    + (allowed ? "" : "；**规矩说这个角该空着**")
-                : $"该有的是{wanted}，右下角空着{(allowed ? "（有图，这一拍还没解出来）" : "")}";
+            var pick = episode ? ItemArtwork.Plate(item) : ItemArtwork.Mark(item);
 
-            return (placed && (!drawn || allowed), says);
+            if (pick is not { } chosen)
+                return episode ? "无（只有文字标题可用）" : "无（这一条既没有艺术图也没有名牌）";
 
-            string Wanted()
-            {
-                if (item is null) return "没有条目";
-                if (episode) return "无（单集这一条带子摆不下）";
-                if (allowed) return "自己的艺术图";
+            var kind = ItemArtwork.Name(chosen.ImageType);
 
-                return ItemArtwork.Has(item, EmbyImageStore.Art)
-                    ? "无（整页已经站在这张艺术图上）"
-                    : "无（这一条没有艺术图）";
-            }
+            return chosen.ItemId == item.Id ? $"自己的{kind}" : $"剧集的{kind}（取自条目 {chosen.ItemId}）";
         }
-
-        // The id matters as much as the kind: on an episode or a season the logo is the show's, fetched
-        // under the show's id, and 「徽标」 on its own would not say which of the two paths ran.
-        static string Wanted(EmbyItem? item) => ItemArtwork.Plate(item) is not { } plate
-            ? "无（只有文字标题可用）"
-            : plate.ItemId == item!.Id
-                ? $"自己的{ItemArtwork.Name(plate.ImageType)}"
-                : $"剧集的{ItemArtwork.Name(plate.ImageType)}（取自条目 {plate.ItemId}）";
 
         // 同上一句，问的是铺在背后那张图 —— 「集页面要用这个剧的背景图或缩略图」。判据里的 Inherited 是「服务器
         // 发下来了什么」，所以这句话在一台没有剧集宽幅图的服务器上空着成立，而不是报一条修不了的失败。

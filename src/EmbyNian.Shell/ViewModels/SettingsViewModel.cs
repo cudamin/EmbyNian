@@ -113,7 +113,7 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
     private static readonly string[] CardCategories =
-        ["播放器", "配置文件", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "界面", "关于"];
+        ["播放器", "配置文件", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -249,6 +249,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         Sections.Add(VideoCard());
         Sections.Add(AudioCard());
         Sections.Add(ShaderCard());
+        Sections.Add(HomeCard());
         Sections.Add(InterfaceCard());
         Sections.Add(AboutCard());
 
@@ -505,6 +506,68 @@ public sealed partial class SettingsViewModel : PageViewModel
     {
         _highResThreshold?.Reseed(Settings.Shaders.HighResThresholdHeight);
         _lowResThreshold?.Reseed(Settings.Shaders.LowResThresholdHeight);
+    }
+
+    /// <summary>
+    /// 主页：那几排的次序和显示与否 —— 「把媒体库的列表也添加到主页之中，新增页里拖拽决定这些列表的顺序，勾选
+    /// 显示或者不勾选取消显示」。
+    /// <para>
+    /// 表里那几项从设置文件里那份版面读（<see cref="Emby.HomeLayout"/> 归一化过的那一份，主页每次读完都写回来），
+    /// 所以这一头不用问服务器有哪几个媒体库 —— 设置窗口连不上服务器时这张卡照样写得出每一排叫什么。改一下（拖过
+    /// 或者点过勾）就立刻写回设置并喊一声（<see cref="ShellPrefs"/>），主页那一头照新的重排。
+    /// </para>
+    /// </summary>
+    private SettingSection HomeCard()
+    {
+        var ui = Settings.Ui;
+        var plan = Emby.HomeLayout.Plan(ui.HomeRows, null);
+
+        HomeRows = new SettingHomeLayoutRow(
+            "主页上排哪几排",
+            "按住一行往上下拖决定次序，取消勾选就不显示。媒体库那几排装的是那个库最近添加的内容。",
+            plan.Select(row => new HomeRowChoice(row.Key, row.Title, row.Visible)),
+            rows =>
+            {
+                ui.HomeRows = [.. rows.Select(row => new Configuration.HomeRowSetting
+                {
+                    Key = row.Key,
+                    Title = row.Title,
+                    Visible = row.Visible
+                })];
+
+                Save();
+                ShellPrefs.Apply(ui);
+            });
+
+        return new SettingSection("主页", "主页", "主页上那几排的次序和显示与否，包括每个媒体库自己那一排。",
+        [
+            HomeRows
+        ]);
+    }
+
+    /// <summary>自检用：那张可拖拽的表这一次建出来的那一行。</summary>
+    internal SettingHomeLayoutRow? HomeRows { get; private set; }
+
+    /// <summary>
+    /// 自检：那张表和设置文件里那一份对得上没有 —— 存着几排，表里就该有几排，钥匙和次序都一样。
+    /// <para>
+    /// 这一条盯的是设置窗口这一头拿不到服务器那份媒体库列表：媒体库那几排的名字只能从存档里记着的那句标题来
+    /// （见 <see cref="Emby.HomeLayout.Plan"/> 里那一手）。那一手断掉的样子是屏上一张只有四行固定排的表 ——
+    /// 看着完全正常，而用户在上面随手拖一下，就把媒体库那几排从设置文件里抹掉了。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureHomeRows()
+    {
+        if (HomeRows is not { } row) return null;
+
+        var saved = Settings.Ui.HomeRows;
+        var keys = row.Rows.Select(choice => choice.Key).ToList();
+        var ok = keys.Count == saved.Count
+            && saved.Select(entry => entry.Key).SequenceEqual(keys, StringComparer.Ordinal);
+
+        return (ok, $"表里 {keys.Count} 排、存档 {saved.Count} 排"
+            + $"：{(keys.Count == 0 ? "无" : string.Join('、', row.Rows.Select(choice =>
+                $"{choice.Title}{(choice.Visible ? "✓" : "✗")}")))}");
     }
 
     private SettingSection InterfaceCard()

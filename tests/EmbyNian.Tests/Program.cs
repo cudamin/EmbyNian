@@ -19,6 +19,7 @@ internal static class Program
         ItemDetailTests.Register();
         ItemArtworkTests.Register();
         HomeCarouselTests.Register();
+        HomeLayoutTests.Register();
         DiagnosticsTests.Register();
         ScreenTests.Register();
         CardStripTests.Register();

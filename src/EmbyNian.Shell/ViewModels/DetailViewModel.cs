@@ -52,7 +52,7 @@ public sealed partial class DetailViewModel : PageViewModel
     private const int HeroDecodeWidth = 1280;
 
     /// <summary>
-    /// 右上角那枚徽标 —— 徽标 or 横幅图, see <see cref="ItemArtwork.Plate"/>. Decoded at the widest it can be
+    /// 集页右上角那枚名牌 —— 徽标 or 横幅图, see <see cref="ItemArtwork.Plate"/>. Decoded at the widest it can be
     /// drawn: the markup caps the corner mark at 220×64 and stretches it uniformly, so a wide 横幅图 fills
     /// that width exactly and a squarer 徽标 is shrunk by the height cap instead. It came down from 360 with
     /// the mark itself — the plate used to stand in for the text title and was drawn nearly twice this wide.
@@ -60,11 +60,11 @@ public sealed partial class DetailViewModel : PageViewModel
     private const int PlateDecodeWidth = 220;
 
     /// <summary>
-    /// 右下角那张艺术图（<see cref="ItemArtwork.Corner"/>）的解码宽度，和版面给它的宽度一样：markup 把那个角
-    /// 封在 260×146 里、按比例缩放，所以一张 16:9 的艺术图正好填满这个宽。比名牌那枚宽一档是因为它是一张画而
-    /// 不是一行字 —— 字缩糊了还认得出，画糊了就是一块脏。
+    /// 左上角那一张（<see cref="ItemArtwork.Mark"/>：艺术图，没有就退回名牌）的解码宽度。比它画出来的那个盒子
+    /// （最宽就是海报那一栏，210）宽一档：那一张是一幅画而不是一行字 —— 字缩糊了还认得出，画糊了就是一块脏，而
+    /// 高分屏上一个逻辑像素不止一个物理像素。
     /// </summary>
-    private const int CornerDecodeWidth = 260;
+    private const int MarkDecodeWidth = 260;
 
     /// <summary>
     /// The still beside the title. Fixed rather than scaled with 设置 → 海报宽度, unlike every other card in
@@ -188,27 +188,32 @@ public sealed partial class DetailViewModel : PageViewModel
     public partial ImageSource? StillImage { get; set; }
 
     /// <summary>
-    /// 徽标 or 横幅图, drawn as a mark in the hero band's top-right corner — 「徽标移动到右上角」. Null on an
-    /// item the server holds neither for, which is the ordinary case and what collapses the corner; the text
-    /// title says the name either way, so nothing on this page waits on this picture any more.
+    /// 徽标 or 横幅图 —— 名牌。集页上它画在带子的右上角（「徽标移动到右上角」）；别的页面上名牌是
+    /// <see cref="MarkImage"/> 那个左上角位置的第二档，所以这一张只在集页上用（见 <see cref="PlateVisibility"/>）。
+    /// 服务器两种都没有的条目上是 null，那个角就空着 —— 片名那一行照旧把名字说全，这一页没有一样东西等这张图。
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PlateVisibility))]
     public partial ImageSource? PlateImage { get; set; }
 
     /// <summary>
-    /// 艺术图，画在头图那一格的右下角 —— 「把艺术图添加到窗口右下」。哪张归这儿是
-    /// <see cref="ItemArtwork.Corner"/> 的事（这个条目自己的艺术图，而整页正站在同一张图上时是空的）；这里只
-    /// 存解出来的那张。服务器没有、或者背后那张铺的就是它时是 null，那个角就空着。
+    /// 头图左上角那一张 —— 「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」。哪一张归
+    /// 这儿是 <see cref="ItemArtwork.Mark"/> 的事（先艺术图，再名牌）；这里只存解出来的那张。两种都没有就是
+    /// null，那个角空着。
     /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CornerArtVisibility))]
-    public partial ImageSource? CornerArtImage { get; set; }
+    [NotifyPropertyChangedFor(nameof(MarkVisibility))]
+    public partial ImageSource? MarkImage { get; set; }
 
     [ObservableProperty]
     public partial double StillWidth { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeroRoom))]
+    [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
+    [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
+    [NotifyPropertyChangedFor(nameof(MarkHeight))]
     public partial double StillHeight { get; set; }
 
     /// <summary>
@@ -243,19 +248,32 @@ public sealed partial class DetailViewModel : PageViewModel
     public partial double Viewport { get; set; }
 
     /// <summary>
-    /// 带子里那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测要占多高，由视图量给
-    /// （<c>DetailPage.OnHeroStackSizeChanged</c>）。集页那一格的高就是它，见
-    /// <see cref="DetailHero.EpisodeHeight"/>；别的页面不用它。
+    /// 带子里那一叠字和键（片名、副标题、读数、那排键）实测有多高，由视图量给
+    /// （<c>DetailPage.OnHeroStackSizeChanged</c>）。它自己不上屏，是 <see cref="HeroRoom"/> 的自变量。
     /// <para>
     /// 量出来而不是写死：片名折成两行的条目、窄窗口上那一叠会长高，写死一个数就会在那些页面上把字和键挤出
     /// 带子；而剧照比那一叠矮的条目上反过来 —— 写死的那个数在那些页面上就是一格空白。
     /// </para>
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeroRoom))]
     [NotifyPropertyChangedFor(nameof(HeroHeight))]
     [NotifyPropertyChangedFor(nameof(ScrimHeight))]
     [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
-    public partial double HeroRoom { get; set; }
+    [NotifyPropertyChangedFor(nameof(MarkHeight))]
+    public partial double StackRoom { get; set; }
+
+    /// <summary>
+    /// 带子里那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测要占多高。集页那一格的高就是它，见
+    /// <see cref="DetailHero.EpisodeHeight"/>；别的页面不用它。
+    /// <para>
+    /// 算在这儿而不在视图里：视图量得到的只有那一叠字键有多高（<see cref="StackRoom"/>），而「剧照也算进去」
+    /// 和「加上这一格自己的上下留白」两句是规矩。海报按图自己的形状收窄之后（<see cref="DetailHero.StillBox"/>）
+    /// 剧照的高会变，写在视图那个尺寸回调里的那一版只在字键那一叠也跟着变的时候才会重算 —— 带子于是比内容高
+    /// 出那么一截，正是「左上角空空的」那种坏法。
+    /// </para>
+    /// </summary>
+    public double HeroRoom => Math.Max(StackRoom, StillHeight) + HeroInset.Top + HeroInset.Bottom;
 
     /// <summary>
     /// 头上那一格的高，三种页面同一条规矩：高由站在它里面那一叠东西定，跟窗口无关（「图一页面怎么改的一大片
@@ -283,6 +301,16 @@ public sealed partial class DetailViewModel : PageViewModel
     /// 那一行和那一带集，于是它就是纯粹的空气，而下面的剧情说明正差这一截。别的页面照旧。
     /// </summary>
     public Thickness HeroInset => new(60, 28, 60, IsEpisodePage ? 16 : 64);
+
+    /// <summary>
+    /// 左上角那一张最高画多少 —— 海报头上剩下的那点地方，见 <see cref="DetailHero.MarkRoom"/>。默认窗口上是 60。
+    /// <para>
+    /// 宽度不在这儿：那一张封在海报那一栏里（<see cref="StillWidth"/>），所以它再宽也不会把片名那一栏挤窄，
+    /// 而且左右两沿和海报对齐 —— 屏上像海报头上的一行题头，不像一张浮在旁边的贴纸。
+    /// </para>
+    /// </summary>
+    public double MarkHeight =>
+        DetailHero.MarkRoom(HeroHeight, HeroInset.Top, HeroInset.Bottom, StillHeight);
 
     /// <summary>
     /// 带子底下那一段的内边距。同 <see cref="HeroInset"/>：集页把上面那道 28 收到 12，那一叠键和「音频」
@@ -422,22 +450,26 @@ public sealed partial class DetailViewModel : PageViewModel
     public Visibility StillVisibility => Show(StillImage is not null);
 
     /// <summary>
-    /// 右上角那枚徽标画不画 —— 只问「图解出来了没有」。以前它还管另一半：徽标是一张写着片名的图，站在片名
-    /// 那一格里顶替文字标题，所以这里算出来的是一对反的两个 Visibility。徽标挪到右上角之后（「把当前页面
-    /// 徽标所在地方替换为剧名，徽标移动到右上角」）片名永远是文字，这里就只剩一句话了。
+    /// 集页右上角那枚名牌画不画 —— 两句话：图解出来了没有，以及这一页是不是集页。
     /// <para>
-    /// 算出来的而不是谁解完图顺手把元素显出来：这样「右上角那一枚在不在」是页面上一个可读的值，自检能从树上
-    /// 读到它，而不是去猜一张图有没有到。
+    /// 后半句是「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」落地之后剩下的那一处：
+    /// 电影、剧、季上名牌是左上角那个位置的第二档（<see cref="MarkVisibility"/>），只有集页照旧摆在右上角。
+    /// 集页那一格的高是按里面那一叠字键实测给的（见 <see cref="HeroHeight"/>），而左上角那一块地方要从海报头上
+    /// 让出来 —— 集页配的是一张 16:9 剧照、上面几乎不剩空间，所以那一枚留在它一直站着的地方（那是字那一栏的
+    /// 右边，跟剧照没有关系）。
+    /// </para>
+    /// <para>
+    /// 算出来的而不是谁解完图顺手把元素显出来：这样「那一枚在不在」是页面上一个可读的值，自检能从树上读到它，
+    /// 而不是去猜一张图有没有到。
     /// </para>
     /// </summary>
-    public Visibility PlateVisibility => Show(PlateImage is not null);
+    public Visibility PlateVisibility => Show(PlateImage is not null && IsEpisodePage);
 
     /// <summary>
-    /// 右下角那张艺术图画不画 —— 同 <see cref="PlateVisibility"/>，只问「图解出来了没有」。「这个条目该不该有
-    /// 这张」是取图那一遍的事（<see cref="LoadArtworkAsync"/> 问 <see cref="ItemArtwork.Corner"/>），页面上留
-    /// 一个读得到的值，自检就不用去猜一张图有没有到。
+    /// 左上角那一张画不画 —— 同 <see cref="PlateVisibility"/>，只问「图解出来了没有」。哪一张该摆在那儿是取图
+    /// 那一遍的事（<see cref="LoadArtworkAsync"/> 问 <see cref="ItemArtwork.Mark"/>：先艺术图，再名牌）。
     /// </summary>
-    public Visibility CornerArtVisibility => Show(CornerArtImage is not null);
+    public Visibility MarkVisibility => Show(MarkImage is not null);
 
     /// <summary>「播放」, 「播放 S01E02」 or 「继续播放 20:34」 — the resume clock is on the button itself.</summary>
     public string PlayText => ItemDetail.PlayText(PlayTarget);
@@ -830,6 +862,12 @@ public sealed partial class DetailViewModel : PageViewModel
         OnPropertyChanged(nameof(EpisodesOnScrim));
         OnPropertyChanged(nameof(HeroInset));
         OnPropertyChanged(nameof(TailInset));
+        OnPropertyChanged(nameof(HeroRoom));
+        OnPropertyChanged(nameof(MarkHeight));
+
+        // 名牌摆在哪一个角也跟着页面的种类走 —— 集页右上角，别的页面是左上角那个位置的第二档
+        // （见 PlateVisibility）。同上：图本身可能还是上一个条目那张，那边的通知一次不会来。
+        OnPropertyChanged(nameof(PlateVisibility));
 
         // 那一行文件选项也按页面的种类开合（见 PickersVisibility）：剧页和季页不摆。轨道那几个集合是上一个条目
         // 留下的，从一部剧翻到一集时它们可能一个都没变，那边的通知一次不会来。
@@ -859,7 +897,7 @@ public sealed partial class DetailViewModel : PageViewModel
         Favorite = item.UserData?.IsFavorite == true;
 
         // A poster cropped to 16:9 loses the half with the title on it, so only an episode gets the wide
-        // shape; the rest keep 2:3.
+        // shape; the rest keep 2:3. 这两个数是上限，不是定值 —— 图解出来之后按它自己的形状收窄，见 ShowStill。
         var episode = item.Type == EmbyItemType.Episode;
         StillWidth = episode ? EpisodeStillWidth : PosterStillWidth;
         StillHeight = episode ? EpisodeStillHeight : PosterStillHeight;
@@ -871,7 +909,7 @@ public sealed partial class DetailViewModel : PageViewModel
         HeroImage = null;
         StillImage = null;
         PlateImage = null;
-        CornerArtImage = null;
+        MarkImage = null;
 
         _art?.Cancel();
         _art?.Dispose();
@@ -1080,24 +1118,25 @@ public sealed partial class DetailViewModel : PageViewModel
             ? new[] { EmbyImageStore.Primary, EmbyImageStore.Thumb, EmbyImageStore.Backdrop }
             : [EmbyImageStore.Primary, EmbyImageStore.Thumb];
 
-        // 右下角那张艺术图（「把艺术图添加到窗口右下」）。哪张归那个角是 ItemArtwork.Corner 的事；这儿只多一句
-        // 「集页不摆」：那一格的高是按里面那一叠实测给的（见 HeroHeight），两百来像素装不下右上角那枚名牌再加
-        // 一张 146 高的画，硬摆就是两张图叠在一处。集自己也几乎不会有艺术图 —— 服务器压根不往下发（有
-        // ParentLogo、ParentBackdrop、ParentThumb，没有 ParentArt），所以这一句拦掉的是个空集。
-        var corner = episode ? null : ItemArtwork.Corner(item);
+        // 左上角那一张：有艺术图用艺术图，没有就退回名牌（ItemArtwork.Mark）。集页不走这一路 —— 那一格的高按
+        // 里面那一叠字键实测给（见 HeroHeight），左上角那点地方要从剧照头上让，而一张 16:9 剧照头上几乎不剩空间；
+        // 那一页的名牌照旧摆在右上角，也就是字那一栏的右边，跟剧照没有关系。
+        var mark = episode ? null : ItemArtwork.Mark(item);
+        var plate = episode ? ItemArtwork.Plate(item) : null;
 
         try
         {
             // 四张图分头去取。以前是一张接一张：名牌回来了才开始要头图，头图回来了才开始要剧照 —— 三次往返
             // 排成一队，慢的那一张拖住后面两张。它们之间没有任何依赖，谁先回来谁先显示，版面不看先后。
             await Task.WhenAll(
-                    Paint(DecodePlateAsync(item, art.Token), picture => PlateImage = picture),
+                    Paint(DecodeFirstAsync(Refs(plate), PlateDecodeWidth, art.Token),
+                        picture => PlateImage = picture),
                     Paint(DecodeFirstAsync(ItemArtwork.Hero(item), HeroDecodeWidth, art.Token),
                         picture => HeroImage = picture),
-                    Paint(DecodeFirstAsync(corner is { } one ? [one] : [], CornerDecodeWidth, art.Token),
-                        picture => CornerArtImage = picture),
+                    Paint(DecodeFirstAsync(Refs(mark), MarkDecodeWidth, art.Token),
+                        picture => MarkImage = picture),
                     Paint(DecodeFirstAsync(item, types, episode ? EpisodeStillWidth : PosterStillWidth, art.Token),
-                        picture => StillImage = picture))
+                        picture => ShowStill(picture, episode)))
                 .ConfigureAwait(true);
         }
         catch (OperationCanceledException)
@@ -1116,28 +1155,37 @@ public sealed partial class DetailViewModel : PageViewModel
             var picture = await decode.ConfigureAwait(true);
             if (Fresh(art, item) && picture is not null) assign(picture);
         }
+
+        // 一张图或者一张都没有，都写成那个重载要的那一串。null 是「这一页不摆这一张」或者「服务器没有」，两种都
+        // 走同一条空路 —— 空串取不到东西，那个位置就一直空着。
+        static IReadOnlyList<ArtworkRef> Refs(ArtworkRef? one) => one is { } single ? [single] : [];
     }
 
     /// <summary>
-    /// The 徽标/横幅图 plate, or null when the server has neither and the text title stands.
+    /// 海报（集页上是剧照）到了：连它该画多大一起换上 —— 「海报下方会被裁切，要能看到完整的海报」。
     /// <para>
-    /// The one artwork on this page fetched by id and tag rather than 「this item, this kind」: on an episode
-    /// or a season the logo usually belongs to the show, and Emby answers that by sending the parent's id
-    /// alongside the parent's tag. Asking for it under this item's own id gets nothing back — which is not
-    /// an error, just a page that quietly never shows a plate — so <see cref="ItemArtwork.Plate"/> decides
-    /// whose it is and this only fetches what it named.
+    /// 那一格原来是写死的 210×300、图按 <c>UniformToFill</c> 铺满它，而服务器上的海报是 2:3，于是上下各裁掉七八
+    /// 个像素。现在那一格按这张图自己的形状收窄（<see cref="DetailHero.StillBox"/>），一个像素都不裁。
+    /// </para>
+    /// <para>
+    /// 换尺寸和换图是同一拍里的两件事，顺序也就要紧：先尺寸再图。反过来的那一版会先按上一档尺寸画一帧、再收窄，
+    /// 屏上是海报出现之后抖一下。而在这之前这一格整个是收着的（<see cref="StillVisibility"/> 问的就是有没有图），
+    /// 所以这一拍之前那个尺寸谁也没看见。
     /// </para>
     /// </summary>
-    private async Task<BitmapImage?> DecodePlateAsync(EmbyItem item, CancellationToken token)
+    private void ShowStill(BitmapImage picture, bool episode)
     {
-        if (!Attached || ItemArtwork.Plate(item) is not { } plate) return null;
+        var box = DetailHero.StillBox(picture.PixelWidth, picture.PixelHeight,
+            episode ? EpisodeStillWidth : PosterStillWidth,
+            episode ? EpisodeStillHeight : PosterStillHeight);
 
-        var bytes = await _images!
-            .GetAsync(plate.ItemId, plate.ImageType, plate.Tag,
-                EmbyImageStore.RequestWidth(PlateDecodeWidth), token)
-            .ConfigureAwait(true);
+        if (box is { } fit)
+        {
+            StillWidth = fit.Width;
+            StillHeight = fit.Height;
+        }
 
-        return bytes is { Length: > 0 } ? await PosterLoader.DecodeAsync(bytes, PlateDecodeWidth).ConfigureAwait(true) : null;
+        StillImage = picture;
     }
 
     /// <summary>

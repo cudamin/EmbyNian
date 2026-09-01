@@ -102,6 +102,25 @@ public sealed partial class SettingsPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 自检：主页版面那张可拖拽的表 —— 那一行自己答的（见 <see cref="SettingsViewModel.MeasureHomeRows"/>），
+    /// 加上屏上真的画出了几行。null 表示主页那张卡片还没建出来。
+    /// <para>
+    /// 屏上那半非得在树上数：模板选择器少一个 case，屏上就是一行标题底下空着一块，而这一页别的数字一个都不会动
+    /// （同 <see cref="MeasureThemeSwatches"/>）。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureHomeRows()
+    {
+        if (ViewModel.MeasureHomeRows() is not { } probe) return null;
+
+        var drawn = 0;
+        CountHomeRows(this, ref drawn);
+
+        var expected = ViewModel.HomeRows?.Rows.Count ?? 0;
+        return (probe.Ok && drawn == expected, $"{probe.Detail}；屏上 {drawn} 行");
+    }
+
+    /// <summary>
     /// What the self-check reports: the cards and rows that were built, the category on screen, and what
     /// the config editor has to say about the file it opened.
     /// </summary>
@@ -342,5 +361,15 @@ public sealed partial class SettingsPage : Page, IShellContent
         var children = VisualTreeHelper.GetChildrenCount(node);
         for (var index = 0; index < children; index++)
             CountSwatches(VisualTreeHelper.GetChild(node, index), ref swatches);
+    }
+
+    /// <summary>同上，数主页版面那张表画出来的行。见 <see cref="MeasureHomeRows"/>。</summary>
+    private static void CountHomeRows(DependencyObject node, ref int rows)
+    {
+        if (node is ContentPresenter { Content: HomeRowChoice }) rows++;
+
+        var children = VisualTreeHelper.GetChildrenCount(node);
+        for (var index = 0; index < children; index++)
+            CountHomeRows(VisualTreeHelper.GetChild(node, index), ref rows);
     }
 }

@@ -3,9 +3,10 @@
   主页最上面那条大图轮播 —— 「参考"主页轮播大图版-misty-4.9.css"给主页轮播功能」。
 
   一整条剧照铺满窗口顶上那一整块：上到窗口的顶边（标题栏和页眉都浮在图上）、左到侧边栏、右到窗口边沿。
-  左边压一层横向的暗罩、底下压一层纵向的、顶上再压一条给标题栏和页眉垫底，标题、集号、简介和播放键站在
-  左边的暗处，剧集的徽标盖在右下角。指针进到带上时两侧浮出翻页箭头，底边一排小横条说共有几张、现在是第
-  几张，没人碰的时候每八秒自己走一张。
+  剧照本身按 16:9 整张画出来、站在正中（「轮播的海报能保持16:9」＋「轮播图移到画面中间」），左右各剩一条带子
+  自己的底色，字块站在左边那条上。左边压一层横向的暗罩、右边一层薄的把图的边沿融掉、底下压一层纵向的、顶上
+  再压一条给标题栏和页眉垫底，标题、集号、简介和播放键站在左边的暗处，剧集的徽标贴着剧照的右下角。指针进到
+  带上时两侧浮出翻页箭头，底边一排小横条说共有几张、现在是第几张，没人碰的时候每八秒自己走一张。
 
   幻灯片取「最近添加」的头几个条目，继续观看和接下来看在后面补位（见 HomeCarousel.Slides）。
 
@@ -30,6 +31,11 @@
         <!-- 底边那排小横条。代码里按 Resources 取键，所以键少一个会在自检里就抛出来。 -->
         <SolidColorBrush x:Key="EgBannerDotBrush" Color="#59F3F5F8" />
         <SolidColorBrush x:Key="EgBannerDotOnBrush" Color="#FFF3F5F8" />
+
+        <!-- 带子自己的底：剧照整张画出来（Stretch="Uniform"，见下面 LayerA/LayerB），所以左边总会留出一条
+             不是图的地方 —— 字块正站在那儿。这一支写死不跟主题走，和带上那几层暗罩、带上的字是同一个决定：
+             晴昼那套浅色里主题底是近白的，那条留白就会变成「白底白字」。 -->
+        <SolidColorBrush x:Key="EgBannerBaseBrush" Color="#FF0C0E11" />
 
         <!-- 播放键原来是一块写死的白底黑字，四支画刷四个态。改成跟主题走的强调色之后那四支全没用了 ——
              详情页头图上的播放键本来就是强调色，同一个产品两个最大的画面上，最主要的那颗键不该一个白
@@ -101,32 +107,56 @@
             CornerRadius="{StaticResource EgBleedCornerRadius}"
             BorderBrush="{ThemeResource EgBorderBrush}"
             BorderThickness="0,0,0,1"
-            Background="{ThemeResource EgSurfaceAltBrush}">
+            Background="{StaticResource EgBannerBaseBrush}">
 
             <!--
               两层剧照轮着上：走下一张时新的那层淡入、旧的那层淡出，所以带上任何时候都有图，不会闪一下底色。
-              UniformToFill 会把图裁到带的比例上，剧照的重心在中间偏上，所以对齐的是中间。
-            -->
-            <Image x:Name="LayerA" Stretch="UniformToFill" Opacity="0" />
-            <Image x:Name="LayerB" Stretch="UniformToFill" Opacity="0" />
 
-            <!-- 横着的暗罩：字站在左边，所以左边暗、右边把剧照放出来。 -->
-            <Border>
+              Uniform ＋ 居中（「轮播的海报能保持16:9」＋「轮播图移到画面中间」）：整张剧照按自己的比例画出来，
+              一个像素都不裁，高度吃满带子、宽度跟着算，然后站在带子正中。带比 16:9 扁，所以左右各剩一条底色 ——
+              左边那条是字块站的地方（横着那层暗罩在那儿最浓），右边那条只有一道缝，由下面那层薄的把它融掉。
+              以前是 UniformToFill：图裁到带的比例上，2.2:1 那一档要切掉三成半的画面高度。
+            -->
+            <Image x:Name="LayerA" Stretch="Uniform" HorizontalAlignment="Center" Opacity="0" />
+            <Image x:Name="LayerB" Stretch="Uniform" HorizontalAlignment="Center" Opacity="0" />
+
+            <!-- 横着的暗罩：字站在左边，所以左边暗、右边把剧照放出来。后两个位置在 Resize 里跟着剧照的左边沿
+                 走（见 HomeBanner.ShadeEdge）—— 剧照居中，左右各留一条底色，而这一层要托住整块字，所以从带的
+                 左沿起就浓，过了字块才淡出。写在这里的三个数是量不到尺寸时的起手值。
+                 下边距同样在那儿设：继续观看那块玻璃盖住的那一片不要压暗 —— 亚克力采样的就是它后面这张图，压暗
+                 了就只剩一块深色板子，看不出底下压着一张剧照。 -->
+            <Border x:Name="ShadeSide">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
                         <GradientStop Offset="0" Color="#E60C0E11" />
-                        <GradientStop Offset="0.38" Color="#A60C0E11" />
-                        <GradientStop Offset="0.82" Color="#000C0E11" />
+                        <GradientStop x:Name="ScrimMid" Offset="0.38" Color="#A60C0E11" />
+                        <GradientStop x:Name="ScrimFar" Offset="0.72" Color="#000C0E11" />
                     </LinearGradientBrush>
                 </Border.Background>
             </Border>
 
-            <!-- 竖着的那层：把下沿压黑，底边那排小横条才站得住，带跟底下的卡片之间也有个交代。 -->
-            <Border>
+            <!-- 右边那一层薄的：剧照居中之后右边也剩一条底色，图的右边沿在那儿会留一道硬边，这一层只把那道边
+                 融进底色里。浓度比左边那层低得多 —— 左边那层要托住整块字，这一层只管一条缝。位置同样跟着剧照
+                 的右边沿走。渐变是反着的：StartPoint 在右边，所以 Offset 0 就是带的右沿。 -->
+            <Border x:Name="ShadeEdgeLayer">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="1,0.5" EndPoint="0,0.5">
+                        <GradientStop x:Name="EdgeNear" Offset="0.18" Color="#B30C0E11" />
+                        <GradientStop x:Name="EdgeFar" Offset="0.30" Color="#000C0E11" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!-- 竖着的那层：把下沿压暗。它管两件事 —— 底边那排小横条站得住，以及压在图上那一排货架（继续观看）
+                 底下有一层足够暗的底，牌子和卡片下面那两行浅墨才读得出来。三个位置在 Resize 里跟着那一排的上沿
+                 走（见 HomeBanner.ShadeEdge）：上面那一段一点不压，整张剧照看得见；到那一排的上沿开始压，往下
+                 一路压到底。写在这里的三个数是量不到尺寸时的起手值。 -->
+            <Border x:Name="ShadeFoot">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
-                        <GradientStop Offset="0.5" Color="#000C0E11" />
-                        <GradientStop Offset="1" Color="#B30C0E11" />
+                        <GradientStop x:Name="FootNear" Offset="0.45" Color="#000C0E11" />
+                        <GradientStop x:Name="FootMid" Offset="0.62" Color="#8C0C0E11" />
+                        <GradientStop Offset="1" Color="#BF0C0E11" />
                     </LinearGradientBrush>
                 </Border.Background>
             </Border>
@@ -149,7 +179,9 @@
             </Border>
 
             <!-- 徽标在右下角，不在右上角：右上角现在是页眉那行读数（「果服 · 29 项」）和系统的三颗窗口按钮。
-                 底下这个角本来空着，只有中间那排小横条，徽标搁在这儿正好和左边那块字对平。 -->
+                 底下这个角本来空着，只有中间那排小横条，徽标搁在这儿正好和左边那块字对平。
+                 右边距在 Resize 里改成「居中留出的那一条 + 34」（见 HomeBanner.ShadeEdge）：剧照居中之后带的
+                 右沿和图的右沿差了一条留白，徽标该贴着图。这里写的是量不到尺寸时的起手值。 -->
             <Image
                 x:Name="LogoImage"
                 Stretch="Uniform"

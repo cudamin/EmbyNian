@@ -10,11 +10,13 @@ using Microsoft.UI.Xaml;
 namespace EmbyNian.Shell.ViewModels;
 
 /// <summary>
-/// The home page: 继续观看, 媒体库, 接下来看 and 最近添加, each from its own source.
+/// The home page: 继续观看, 媒体库, 接下来看, 最近添加, 加上每个媒体库自己那一排最近添加 —— each from its own
+/// source. 排哪几排、什么次序、哪几排显示，由设置里那份版面说（<see cref="HomeLayout"/>，「新增页里拖拽决定这些
+/// 列表的顺序，勾选显示或者不勾选取消显示」）。
 /// <para>
-/// The three server rows go out together and are reported on separately. They fail independently on a
+/// The server rows go out together and are reported on separately. They fail independently on a
 /// real server — 接下来看 is empty for an account that only watches films, and some endpoints are
-/// administrator-only — so one of them returning nothing must not cost the page the other two.
+/// administrator-only — so one of them returning nothing must not cost the page the others.
 /// </para>
 /// <para>
 /// 媒体库 costs no request at all: the shell already read the account's view list once to fill the
@@ -22,6 +24,9 @@ namespace EmbyNian.Shell.ViewModels;
 /// there, even for an account that has never played anything — which is why it stays on the page even
 /// though 继续观看 now goes first（「把图中的媒体库和继续观看位置调换」）: 上次停在哪儿是一个用过的账号打开
 /// 主页最想看见的一句话，而媒体库那一排在侧边栏里另有一份。
+/// </para>
+/// <para>
+/// 勾掉的那一排连请求一起省掉：媒体库那几排各是一次「这个库的最近添加」，不看的库不该每次开主页都问一遍。
 /// </para>
 /// </summary>
 public sealed partial class HomeViewModel : PageViewModel
@@ -44,13 +49,20 @@ public sealed partial class HomeViewModel : PageViewModel
     private EmbySession? _session;
     private IShellActions? _actions;
     private EmbyImageStore? _images;
+    private ISettingsService? _settings;
     private IReadOnlyList<EmbyItem> _libraryViews = [];
 
+    /// <summary>卡片尺寸和角标那三个数，<see cref="Attach"/> 时取一次的快照 —— 见那一段的说明。</summary>
+    private int _poster;
+    private int _still;
+    private bool _badges;
+
     /// <summary>
-    /// The four rows, in the order they are drawn. Rebuilt on every <see cref="Attach"/> rather than
-    /// once, so a card size changed in 设置 takes effect the next time the page is opened.
+    /// 这一次要排哪几排、什么次序、哪几排显示（<see cref="HomeLayout.Plan"/>），和它们各自那一排。
+    /// 每次 <see cref="Attach"/> 和每次版面改过（<see cref="ApplyLayoutAsync"/>）都重建：设置里改的卡片尺寸和
+    /// 拖出来的新次序都要在这里落地。
     /// </summary>
-    private CardShelf[] _all = [];
+    private (HomeRowPlan Row, CardShelf Shelf)[] _all = [];
 
     public HomeViewModel()
     {
@@ -122,23 +134,57 @@ public sealed partial class HomeViewModel : PageViewModel
         _libraryViews = libraryViews;
         _session = session;
         _images = images;
+        _settings = settings;
 
         var ui = settings.Settings.Ui;
 
         // Clamped again here rather than trusted: the settings row offers 120–300 and the migration
         // clamps to 120–340, but a hand-edited settings.json is a supported way to configure this app
         // and a 4000px decode width is one poster the size of the screen.
-        var poster = Math.Clamp(ui.PosterWidth, 120, 340);
-        var still = CardSize.WideFor(poster);
-        var badges = ui.ShowWatchedIndicators;
+        _poster = Math.Clamp(ui.PosterWidth, 120, 340);
+        _still = CardSize.WideFor(_poster);
+        _badges = ui.ShowWatchedIndicators;
 
-        _all =
-        [
-            new CardShelf("继续观看", images, still, wide: true, badges),
-            new CardShelf("媒体库", images, still, wide: true, indicators: false),
-            new CardShelf("接下来看", images, still, wide: true, badges),
-            new CardShelf("最近添加", images, poster, wide: false, badges)
-        ];
+        BuildShelves();
+    }
+
+    /// <summary>
+    /// 按存档里那份版面（<see cref="HomeLayout.Plan"/>）造出这一次的每一排。归一化之后的版面顺手写回设置文件 ——
+    /// 服务器上新加的媒体库因此自己排到末尾、删掉的自己消失、改了名的把新名字带回去，而拖拽那张表读的就是这一份。
+    /// </summary>
+    private void BuildShelves()
+    {
+        if (_images is not { } images) return;
+
+        var ui = _settings?.Settings.Ui;
+        var plan = HomeLayout.Plan(ui?.HomeRows, _libraryViews);
+
+        if (ui is not null && !HomeLayout.Same(ui.HomeRows, plan))
+        {
+            ui.HomeRows = HomeLayout.Save(plan);
+            _settings?.Save();
+        }
+
+        // 继续观看、媒体库、接下来看走 16:9 的宽卡（那三排讲的是「你在看的那一格画面」）；最近添加和每个媒体库
+        // 自己那一排走海报 —— 一整排新片的封面比一整排剧照读得快。媒体库那一排不上角标：一个库没有「已看」。
+        _all = [.. plan.Select(row =>
+        {
+            var wide = row.Key is HomeLayout.Resume or HomeLayout.Libraries or HomeLayout.NextUp;
+            var width = wide ? _still : _poster;
+            var badges = row.Key != HomeLayout.Libraries && _badges;
+
+            return (row, new CardShelf(row.Title, images, width, wide, badges));
+        })];
+    }
+
+    /// <summary>
+    /// 版面改过了（拖拽排序、或者勾掉了一排）：重建每一排再读一遍。设置窗口那一头改完喊一声
+    /// （<c>ShellPrefs</c>），主页这一头照这句话重排 ——「改完要重启才算」的设置读起来就是坏的。
+    /// </summary>
+    internal Task ApplyLayoutAsync()
+    {
+        BuildShelves();
+        return LoadAsync();
     }
 
     public override Task ReloadAsync() => LoadAsync();
@@ -150,13 +196,23 @@ public sealed partial class HomeViewModel : PageViewModel
         var token = BeginLoad();
         Subheading = "正在读取…";
 
-        // Started together rather than awaited one after another: three round trips in sequence is
-        // three times the latency, and none of them depends on another's answer.
+        // Started together rather than awaited one after another: a round trip per row in sequence is
+        // a page that takes a second per shelf, and none of them depends on another's answer.
         var resume = FetchAsync("继续观看", (client, ct) => client.GetResumeAsync(ShelfSize, ct), token);
         var nextUp = FetchAsync("接下来看", (client, ct) => client.GetNextUpAsync(ShelfSize, ct), token);
         var latest = FetchAsync("最近添加", (client, ct) => client.GetLatestAsync(null, LatestSize, ct), token);
 
-        await Task.WhenAll(resume, nextUp, latest).ConfigureAwait(true);
+        // 媒体库那几排各问一次自己那个库的最近添加。只问勾着的那几排 —— 勾掉一排就是连这次请求一起省掉。
+        var perLibrary = new Dictionary<string, Task<List<EmbyItem>>>(StringComparer.Ordinal);
+        foreach (var (row, _) in _all)
+        {
+            if (!row.Visible || HomeLayout.LibraryId(row.Key) is not { Length: > 0 } id) continue;
+
+            perLibrary[row.Key] = FetchAsync(
+                row.Title, (client, ct) => client.GetLatestAsync(id, LatestSize, ct), token);
+        }
+
+        await Task.WhenAll(perLibrary.Values.Append(resume).Append(nextUp).Append(latest)).ConfigureAwait(true);
 
         if (!IsCurrent(token)) return;
 
@@ -168,16 +224,34 @@ public sealed partial class HomeViewModel : PageViewModel
         var next = WithoutMusic(nextUp.Result);
         var added = WithoutMusic(latest.Result);
 
-        // 装数据这四句跟上面 _all 那个数组同一次序：0 继续观看、1 媒体库、2 接下来看、3 最近添加。要再调换先后
-        // 就得两边一起动 —— 只动一边的后果是条目装错排，而标题照旧写着原来那个名字，屏上看着像服务器发疯了。
-        _all[0].Fill(resumed);
-        _all[1].Fill(_libraryViews);
-        _all[2].Fill(next);
-        _all[3].Fill(added);
+        // 每一排装什么由它那把钥匙说，不再是「数组第几个」—— 次序现在是用户拖出来的，位置说明不了任何事。
+        foreach (var (row, shelf) in _all)
+        {
+            if (!row.Visible)
+            {
+                shelf.Clear();
+                continue;
+            }
+
+            shelf.Fill(row.Key switch
+            {
+                HomeLayout.Resume => resumed,
+                HomeLayout.Libraries => _libraryViews,
+                HomeLayout.NextUp => next,
+                HomeLayout.Latest => added,
+                _ => perLibrary.TryGetValue(row.Key, out var library) ? WithoutMusic(library.Result) : []
+            });
+        }
 
         Shelves.Clear();
-        foreach (var shelf in _all)
-            if (shelf.Cards.Count > 0) Shelves.Add(shelf);
+        foreach (var (row, shelf) in _all)
+            if (row.Visible && shelf.Cards.Count > 0) Shelves.Add(shelf);
+
+        // 第一排压在大图上（大图占满第一屏，这一排坐在它的下半截上，见 HomePage.SyncGlass），所以它的牌子和卡片
+        // 底下那两行字要换成压在图上那套浅墨；后面几排在图的下沿外面，照旧走主题的墨。按位置定而不是按名字定：
+        // 哪一排排在最前面取决于这个账号有没有继续观看，而压着图的永远是最前面那一排。
+        for (var index = 0; index < Shelves.Count; index++)
+            Shelves[index].OnScrim = index == 0;
 
         // 需求 5：轮播站在这三行的头几个条目上，不额外问服务器一次 —— 「最近添加」的第一张剧照就是这条带的第
         // 一张幻灯片，而它已经在手上了。哪几个上得了台是 HomeCarousel 的事（要有宽图、一个剧集只占一张）。
@@ -195,6 +269,32 @@ public sealed partial class HomeViewModel : PageViewModel
             : $"{_session.ServerDisplayName}  ·  {LoadedCount} 项";
 
         EndLoad(token);
+    }
+
+    /// <summary>
+    /// 自检：这一次的版面 ——「继续观看✓、媒体库✓、最近添加 · 电影✗」。屏上那几排（<see cref="Shelves"/>）只有
+    /// 装到了东西的才在，所以这一句是唯一能看出「勾掉的那一排真的没排」和「拖出来的次序真的生效了」的地方。
+    /// </summary>
+    internal string LayoutSummary => _all.Length == 0
+        ? "未读取"
+        : string.Join("、", _all.Select(entry =>
+            $"{entry.Row.Title}{(entry.Row.Visible ? "✓" : "✗")}{(entry.Shelf.Cards.Count > 0 ? "" : "（空）")}"));
+
+    /// <summary>
+    /// 自检：屏上那几排真按版面来的 —— 次序一样、勾掉的那几排真没排。两边各算一次再比：版面那一份是设置文件说的
+    /// （<see cref="HomeLayout.Plan"/>），屏上那一份是 <see cref="Shelves"/>，中间隔着「装到了东西才排」这一条。
+    /// </summary>
+    internal (bool Ok, string Detail) LayoutRead()
+    {
+        var wanted = _all
+            .Where(entry => entry.Row.Visible && entry.Shelf.Cards.Count > 0)
+            .Select(entry => entry.Row.Title)
+            .ToList();
+
+        var onScreen = Shelves.Select(shelf => shelf.Title).ToList();
+        var ok = _all.Length > 0 && wanted.SequenceEqual(onScreen, StringComparer.Ordinal);
+
+        return (ok, $"版面 {LayoutSummary}；屏上 {(onScreen.Count == 0 ? "无" : string.Join('、', onScreen))}");
     }
 
     /// <summary>

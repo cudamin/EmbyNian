@@ -14,9 +14,9 @@ public readonly record struct ArtworkRef(string ItemId, string ImageType, string
 /// <list type="bullet">
 /// <item>徽标 <c>Logo</c> and 横幅图 <c>Banner</c> are name plates — a picture of the title. They replace the
 /// text title in the detail page's hero (<see cref="Plate"/>).</item>
-/// <item>艺术图 <c>Art</c> is wide artwork with no title on it, and it has two places: 「把艺术图添加到
-/// 窗口右下」 puts it in the band's bottom-right corner (<see cref="Corner"/>), and when the item has no
-/// 背景图 it is instead what the whole page stands on (<see cref="HeroOrder"/>).</item>
+/// <item>艺术图 <c>Art</c> is wide artwork with no title on it, and it has two places: 「把艺术图的位置改到
+/// 左上角」 puts it in the band's top-left corner (<see cref="Corner"/>, picked by <see cref="Mark"/>), and
+/// when the item has no 背景图 it is instead what the whole page stands on (<see cref="HeroOrder"/>).</item>
 /// <item>背景图 <c>Backdrop</c> is what the hero wants first; 缩略图 <c>Thumb</c> is what a 16:9 card wants
 /// first (<c>CardItem.PreferWide</c>) and the hero's third choice.</item>
 /// <item>The home page's carousel is the same three wide kinds and nothing else
@@ -100,18 +100,18 @@ public static class ItemArtwork
     }
 
     /// <summary>
-    /// 头图右下角那张画，没有就是 null —— 「把艺术图添加到窗口右下」。取的是这个条目自己的艺术图，而背后那一整页
-    /// 已经站在同一张图上时它是空的。
+    /// 头图左上角那张画，没有就是 null —— 「有艺术图优先显示艺术图」。取的是这个条目自己的艺术图，而背后那一整页
+    /// 已经站在同一张图上时它是空的（那时候那个角画名牌，见 <see cref="Mark"/>）。
     /// <para>
     /// 艺术图是横的、上面没有字，所以它当得起「角上摆一张画」这件事：徽标那一头是名牌（<see cref="Plate"/>），
     /// 海报是竖的，缩略图和背景图各有各的活。而它同时是 <see cref="HeroOrder"/> 的第二档 —— 一个条目没有背景图
-    /// 的时候，铺满整页的就是这张艺术图。两处都画就是同一张图在一页上出现两次：整页那么大一张，右下角再钉一张
-    /// 260 宽的缩印本。所以这里先问 <see cref="Hero"/> 头一档是谁，答案正好是这张就让角上空着。
+    /// 的时候，铺满整页的就是这张艺术图。两处都画就是同一张图在一页上出现两次：整页那么大一张，角上再钉一张
+    /// 缩印本。所以这里先问 <see cref="Hero"/> 头一档是谁，答案正好是这张就让这个角退回名牌。
     /// </para>
     /// <para>
     /// 「自己的」没有上溯：借来的那几种（<see cref="Inherited"/>）是给「铺满整页」和「名牌」用的，而角上这张是
-    /// 装饰 —— 一集没有自己的艺术图，就让那个角空着，而不是把剧集那一层的图缩一张钉上去。服务器也不往下发
-    /// 艺术图：ParentLogo、ParentBackdrop、ParentThumb 都有，ParentArt 没有。
+    /// 装饰 —— 一集没有自己的艺术图，就退回名牌（<see cref="Mark"/>），而不是把剧集那一层的图缩一张钉上去。
+    /// 服务器也不往下发艺术图：ParentLogo、ParentBackdrop、ParentThumb 都有，ParentArt 没有。
     /// </para>
     /// </summary>
     public static ArtworkRef? Corner(EmbyItem? item)
@@ -123,6 +123,20 @@ public static class ItemArtwork
 
         return Hero(item) is [var behind, ..] && behind == corner ? null : corner;
     }
+
+    /// <summary>
+    /// 头图左上角那一张 —— 「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」。
+    /// 两句话就是这一支：先问艺术图（<see cref="Corner"/>），问不着才退到名牌（<see cref="Plate"/>）。
+    /// <para>
+    /// 一个角上一张图，而不是从前那样一枚名牌钉在右上角、一张画钉在右下角。所以这两种图现在是同一个位置的两档，
+    /// 而不是各占一角 —— 也因此这里不需要「两张都有的时候谁让谁」那种规矩：艺术图有就是它。
+    /// </para>
+    /// <para>
+    /// 退档的那一手连着 <see cref="Corner"/> 自己那条「整页已经站在这张艺术图上就空着」：那种条目上这个角画的是
+    /// 名牌，而不是空着 —— 空着是从前右下角的答案（那会儿右上角还另有一枚名牌），现在这个角是页面上唯一的记号位。
+    /// </para>
+    /// </summary>
+    public static ArtworkRef? Mark(EmbyItem? item) => Corner(item) ?? Plate(item);
 
     /// <summary>
     /// The picture for one carousel slide, or null when the item has no wide artwork and so cannot be one.

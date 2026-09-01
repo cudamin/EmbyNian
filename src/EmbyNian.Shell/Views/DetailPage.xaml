@@ -264,10 +264,11 @@
                         </Border.Background>
                     </Border>
 
-                    <!-- 三栏：海报、字、右边那一栏（上面一枚徽标，下面一张艺术图）。它们占一栏而不是压在字那一栏
-                         的两个角上 —— 片名是两行可折行的字，栏宽由布局给，压上去的那一版在长片名的窗口上会被字
-                         追上。占一栏之后「会不会盖到字」不用算：栏宽由图自己给，两张都没解出来时这一栏就是 0 宽，
-                         只剩栏距那 22 像素，而这一栏里没有一样东西是右对齐的，那 22 看不出来。
+                    <!-- 三栏：海报那一栏（海报，和它头上那张记号）、字、右边那一栏（只剩集页在用，一枚名牌）。
+                         右边那一枚占一栏而不是压在字那一栏的右上角 —— 片名是两行可折行的字，栏宽由布局给，压上去
+                         的那一版在长片名的窗口上会被字追上。占一栏之后「会不会盖到字」不用算：栏宽由图自己给，
+                         没解出来时这一栏就是 0 宽，只剩栏距那 22 像素，而这一栏里没有一样东西是右对齐的，那 22
+                         看不出来。左边那一张同理封在海报那一栏的宽里（见 HeroMark）。
                          左右 60 而不是页面那 28：这一块是压在剧照上的内容，边沿本就该留得比页面多（同主页大图
                          上那块字，理由写在 HomeBanner.xaml）。底下留 64 —— 图铺满一屏之后这一叠东西就站在窗口
                          的下沿上，贴着边读着像被截了一截。 -->
@@ -283,8 +284,12 @@
 
                         <!-- 单集是 16:9 剧照，其余是 2:3 海报 —— 把海报裁成宽幅会切掉写着片名的那一半。
                              这一张的尺寸不跟 设置 里的海报宽度走，是全应用唯一的例外，理由见
-                             DetailViewModel.PosterStillWidth。 -->
+                             DetailViewModel.PosterStillWidth。
+                             宽高是绑上来的而不是写死的两个数：图到手之后这一格按它自己的形状收窄（见
+                             DetailHero.StillBox），所以「海报下方会被裁切」那件事在这一格的尺寸上就没了。Uniform
+                             因此只是那道保险 —— 盒子和图已经同形，取整差的那半像素宁可留一线底色，不要裁掉。 -->
                         <Border
+                            x:Name="PosterStill"
                             VerticalAlignment="Bottom"
                             Background="#33000000"
                             CornerRadius="{StaticResource EgPosterCornerRadius}"
@@ -292,9 +297,34 @@
                             Visibility="{x:Bind ViewModel.StillVisibility, Mode=OneWay}"
                             Width="{x:Bind ViewModel.StillWidth, Mode=OneWay}">
                             <Image
+                                x:Name="PosterImage"
                                 Source="{x:Bind ViewModel.StillImage, Mode=OneWay}"
-                                Stretch="UniformToFill" />
+                                Stretch="Uniform" />
                         </Border>
+
+                        <!--
+                          左上角那一张 —— 「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」。
+                          一个角上一张图：艺术图和名牌现在是同一个位置的两档（ItemArtwork.Mark），不再是一枚名牌钉
+                          右上角、一张画钉右下角。
+
+                          摆在海报那一栏里、顶对齐：海报是底对齐的，所以这一张站在它头上那点地方，两张图左右两沿
+                          对齐 —— 屏上像海报头上的一行题头。高由那点地方给（DetailViewModel.MarkHeight，默认窗口上
+                          60），宽最多就是海报那一栏，于是它既盖不到海报，也不会把片名那一栏挤窄。写死一个高的那一版
+                          会在窄窗口上压进海报的上沿，而屏上看着只是「这张海报怎么被盖了一角」。
+
+                          读屏跳过它（AccessibilityView=Raw）：名字就在底下那一行字里，念两遍不是无障碍；艺术图那一档
+                          是装饰，页面上每一句话都另有出处。
+                        -->
+                        <Image
+                            x:Name="HeroMark"
+                            AutomationProperties.AccessibilityView="Raw"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top"
+                            MaxHeight="{x:Bind ViewModel.MarkHeight, Mode=OneWay}"
+                            MaxWidth="{x:Bind ViewModel.StillWidth, Mode=OneWay}"
+                            Source="{x:Bind ViewModel.MarkImage, Mode=OneWay}"
+                            Stretch="Uniform"
+                            Visibility="{x:Bind ViewModel.MarkVisibility, Mode=OneWay}" />
 
                         <StackPanel
                             x:Name="HeroStack"
@@ -336,9 +366,9 @@
                                 </Button.Resources>
                                 <!-- 这一格就是片名本身（「把当前页面徽标所在地方替换为剧名」）。原来这里是一格
                                      里摆着两样东西：徽标图解出来了就顶替文字标题，两个 Visibility 一对反的，永远
-                                     只有一样在。现在徽标挂到了带子的右上角（见下面 CornerPlate），这一格只剩文
-                                     字，于是「名字什么时候画」也不再是个问题 —— 片名永远在，图到不到只决定右上角
-                                     多不多一枚牌子。
+                                     只有一样在。现在徽标挪去了角上（海报头上那张记号 HeroMark，集页是右上角那枚
+                                     CornerPlate），这一格只剩文字，于是「名字什么时候画」也不再是个问题 —— 片名
+                                     永远在，图到不到只决定角上多不多一枚牌子。
                                      字号字体字色全在 EgDisplayTitleStyle 里，和主页轮播上的片名是同一个键：以前
                                      这里写死 34/SemiBold，漏了标题字体，于是整页最大的一块字是「更大的 YaHei」。 -->
                                 <TextBlock
@@ -489,11 +519,17 @@
                         </StackPanel>
 
                         <!--
-                          徽标搁在带子的右上角（「徽标移动到右上角」）。它是条目自己那张写着片名的图，横幅图是
+                          集页那一格右上角那枚名牌（「徽标移动到右上角」）。它是条目自己那张写着片名的图，横幅图是
                           它的备选（见 ItemArtwork.Plate）—— 原来它站在片名那一格里顶替文字，现在片名归文字，
                           这一枚是个记号：那个角本来空着，一枚牌子搁上去说的是「这是谁家的片子」。
                           名字因此在这一格上出现两回（一回是字、一回是图）—— 这是要的：图上那几个字是片方自己
                           排的，而下面那一行是能选、能读屏、长了会截的标题，两样不是同一件东西。
+
+                          只剩集页在用这一枚（DetailViewModel.PlateVisibility）：电影、剧、季上名牌是左上角那个
+                          位置的第二档（见上面 HeroMark）。集页不跟着搬，是因为左上角那点地方要从海报头上让，而
+                          集页配的是一张 16:9 剧照、那一格的高又按里面那一叠字键实测给（见
+                          DetailViewModel.HeroHeight），剧照头上几乎不剩空间；这一枚站的是字那一栏的右边，跟剧照
+                          没有关系。
 
                           Uniform 配 220×64 的上限：宽幅的横幅图由宽度收住、方正的徽标由高度收住，两种都盖不过
                           底下那行片名 —— 记号不该比标题响。解码宽度跟着这个上限走，见
@@ -515,32 +551,6 @@
                             Source="{x:Bind ViewModel.PlateImage, Mode=OneWay}"
                             Stretch="Uniform"
                             Visibility="{x:Bind ViewModel.PlateVisibility, Mode=OneWay}" />
-
-                        <!-- 「把艺术图添加到窗口右下」。和上面那枚记号同一栏、同一侧，一个贴上一个贴下：这一栏
-                             的宽由这两张图里宽的那张给，所以「会不会盖到片名」照旧不用算，而两张图分居一栏的
-                             两头，中间隔着整格带子的高，不会碰上。摆在这儿而不是浮在窗口的右下角：窗口下沿是
-                             正文那张不透明的纸（BodySheet），钉在那儿的图会被纸盖掉，浮在纸上面的图会压在
-                             「全部剧季」「相似」那几排卡片上，晴昼那套主题里还是压在白纸上。
-
-                             哪个条目有这张、哪个没有，全在 ItemArtwork.Corner：这一张是这个条目自己的艺术图，而
-                             整页正铺着同一张图时这个角是空的 —— 那会儿右下角这一张就是背后那张壁纸的缩印本。
-                             集页不摆（见 DetailViewModel.LoadArtworkAsync），那一格只有两百来高，装不下一上一下
-                             两张图。
-
-                             260×146 的上限是一格 16:9：艺术图上没有字，缩到这个大小仍是一张认得出的画，再大就开始
-                             和片名那一叠抢地方（这一栏比原来只宽 40）。Uniform 保住比例，读屏跳过它
-                             （AccessibilityView=Raw）—— 它是装饰，页面上每一句话都另有出处。 -->
-                        <Image
-                            x:Name="CornerArt"
-                            Grid.Column="2"
-                            AutomationProperties.AccessibilityView="Raw"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Bottom"
-                            MaxHeight="146"
-                            MaxWidth="260"
-                            Source="{x:Bind ViewModel.CornerArtImage, Mode=OneWay}"
-                            Stretch="Uniform"
-                            Visibility="{x:Bind ViewModel.CornerArtVisibility, Mode=OneWay}" />
                     </Grid>
                 </Grid>
 
