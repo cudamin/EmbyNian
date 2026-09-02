@@ -93,7 +93,7 @@ The Emby access token is stored DPAPI-wrapped. **Never print it, never log it, n
 - There is no `python`.
 - PowerShell scripts must be saved as **UTF-8 with BOM**, or Chinese output comes out as mojibake.
 - A custom `cut()` function in the shell shadows `/usr/bin/cut`; truncate with `awk '{print substr($0,1,N)}'` instead.
-- Command-line switches, all of them: `--dump-ui`, `--maximized`, `--play`, `--screen`, `--scroll-end`, `--scroll-half`, `--self-check`, `--show-detail`, `--show-episode`, `--show-library`, `--show-settings` (optionally followed by a category name, e.g. `--show-settings 关于`; defaults to 「界面」), `--theme`.
+- Command-line switches, all of them: `--dump-ui`, `--maximized`, `--play`, `--screen`, `--scroll-end`, `--scroll-half`, `--self-check`, `--show-detail`, `--show-episode`, `--show-library`, `--show-menu` (pops the first home-page card's 更多 menu open, for a screenshot — use it on its own), `--show-settings` (optionally followed by a category name, e.g. `--show-settings 关于`; defaults to 「界面」), `--theme`.
 
 ## How To Report（怎么汇报）
 

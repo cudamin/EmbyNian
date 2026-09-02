@@ -804,6 +804,37 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
+    /// Tooling: 把主页第一张卡的「更多」菜单弹开，好给它拍一张。
+    /// <para>
+    /// 有这个开关是因为这张菜单是代码搭的、又只能靠指针打开，而这台机器上注不进鼠标事件（<c>SendInput</c> 返回
+    /// 成功而光标不动）。自检只读得出「搭了几行、每行写什么」，字形在那台机器的字体里到底有没有、菜单在浅色
+    /// 主题下读不读得出来，都得看照片。
+    /// </para>
+    /// </summary>
+    internal async Task ShowCardMenuAsync()
+    {
+        // 等主页把该有的几排读回来、卡片真的画出来。它自己报一次 IsReady，而卡片是那之后一个布局回合的事。
+        for (var attempt = 0; attempt < 40 && ContentFrame.Content is not HomePage { IsReady: true }; attempt++)
+            await Task.Delay(250).ConfigureAwait(true);
+
+        await Task.Delay(400).ConfigureAwait(true);
+
+        if (ContentFrame.Content is not HomePage home)
+        {
+            Log.Warn(Category, "--show-menu：这一刻框里不是主页");
+            return;
+        }
+
+        if (home.ShowFirstCardMenu() is not { } title)
+        {
+            Log.Warn(Category, "--show-menu：主页上还没有渲染出卡片");
+            return;
+        }
+
+        Log.Info(Category, $"--show-menu：已弹开「{title}」的更多菜单");
+    }
+
+    /// <summary>
     /// Tooling: opens the first library, clicks the first row in it that has a detail page, and stays
     /// wherever that click went. A click rather than a navigation of its own, because the point is what
     /// clicking a poster really opens — which for a series was once another grid, of season folders.

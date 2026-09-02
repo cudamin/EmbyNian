@@ -1,6 +1,5 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
-using EmbyNian.Infrastructure;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -10,20 +9,24 @@ using Windows.Foundation;
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
-/// 需求 6：已看、收藏、编辑. The commands one item offers, in one place so that a poster on the home
-/// page, one in a library and one in a set of search results all behave identically.
+/// 需求 6：一张卡片能做的事都在这一处 —— 主页上的一张海报、媒体库里的一张、搜索结果里的一张，点开「更多」
+/// 看到的是同一张菜单。
 /// <para>
-/// Built per open rather than declared in XAML. Every label depends on the item — 立即播放 or
-/// 继续播放（12:34）, 标记为已观看 or 标记为未观看 — and a static menu would have to be walked and
-/// relabelled on each open anyway, which is the same work with the item's state spread over two files.
+/// <b>菜单上有哪几条、每条写什么字，答案在 Core</b>（<see cref="ItemMenu"/>）；这个文件把它变成
+/// <c>MenuFlyout</c> 的几行，再把每一行接到一件事上（<see cref="Invoke"/>）。分开是为了覆盖：单元测试只够得到
+/// Core，而「一部剧上不该有搜索字幕」「一张媒体库卡片上不该有删除」正是那种写错了屏上也看着正常的判断。
 /// </para>
 /// <para>
-/// The session and the shell are taken directly rather than as a <see cref="LibraryRequest"/>: the home
-/// page has no such request, and nothing here needs one — a menu opens items, it does not list them.
-/// Every command below is one request and a repaint, so the session is the only capability involved.
+/// 每次打开重新搭一张而不是在 XAML 里摆好：菜单上的字跟着条目走（继续播放（12:34）还是立即播放、标记为已观看
+/// 还是未观看），摆好的那张每次打开也得整条走一遍改字 —— 同样的活儿，只是把条目的状态摊到了两个文件里。
+/// </para>
+/// <para>
+/// 这里直接拿着 <see cref="EmbySession"/> 而不是走一层服务：主页上没有 <see cref="LibraryRequest"/>，而这里
+/// 也不需要一个 —— 菜单是打开一个条目，不是列出一批。会碰服务器的那几条在
+/// <c>ItemCommands.Server.cs</c>（同一个 partial）。
 /// </para>
 /// </summary>
-internal static class ItemCommands
+internal static partial class ItemCommands
 {
     private const string Category = "ui";
 
@@ -102,8 +105,10 @@ internal static class ItemCommands
     /// user is looking at instead of a fresh request. Null when the neighbours are not episodes.
     /// </param>
     /// <param name="changed">
-    /// Run after a change the menu could not apply locally — a metadata save, which can alter the title,
-    /// the artwork and the sort position at once. User-state changes do not use it: they patch the card.
+    /// Run after a change this menu could not apply to the card on the spot — a metadata save, a
+    /// deletion, 从继续观看中移除, a new cover. Every one of those can move the title, the artwork or
+    /// whether the item belongs in this row at all, and no amount of patching one card covers that.
+    /// User-state changes do not use it: they patch the card.
     /// </param>
     public static void Show(
         EmbySession session,
@@ -114,102 +119,177 @@ internal static class ItemCommands
         IReadOnlyList<EmbyItem>? siblings = null,
         Action? changed = null)
     {
-        var item = card.Item;
-        var menu = new MenuFlyout { Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft };
-
-        if (item.IsPlayable)
-        {
-            menu.Items.Add(Entry(
-                item.HasResumePosition ? $"继续播放（{TimeFormat.Clock(item.ResumeTicks)}）" : "立即播放",
-                Glyph.Play,
-                () => _ = shell.PlayAsync(item, episodes: siblings)));
-
-            menu.Items.Add(Entry("详细信息", Glyph.Info, () => shell.OpenItem(item)));
-        }
-        else
-        {
-            // 打开 rather than two entries: for a series this is the detail page and for a box set it is
-            // another grid, and which of the two it is is not a decision to put in front of the user.
-            menu.Items.Add(Entry("打开", Glyph.Open, () => shell.OpenItem(item)));
-        }
-
-        // 已观看/收藏 only where they exist. A 媒体库 and a 演职人员 have no such state, and the
-        // separator goes with them or the menu ends up with two rules in a row.
-        if (item.TracksUserState)
-        {
-            menu.Items.Add(new MenuFlyoutSeparator());
-
-            var played = item.UserData?.Played == true;
-            menu.Items.Add(Entry(
-                played ? "标记为未观看" : "标记为已观看",
-                played ? Glyph.Unwatched : Glyph.Watched,
-                () => ToggleWatched(session, shell, card)));
-
-            var favourite = item.UserData?.IsFavorite == true;
-            menu.Items.Add(Entry(
-                favourite ? "取消收藏" : "添加到收藏",
-                favourite ? Glyph.Unfavorite : Glyph.Favorite,
-                () => ToggleFavorite(session, shell, card)));
-        }
-
-        menu.Items.Add(new MenuFlyoutSeparator());
-        menu.Items.Add(Entry("编辑元数据…", Glyph.Edit, () => _ = EditAsync(session, shell, owner, card, changed)));
-
-        if (item.Type == EmbyItemType.Episode && item.SeriesId is { Length: > 0 } seriesId)
-        {
-            menu.Items.Add(new MenuFlyoutSeparator());
-            menu.Items.Add(Entry("打开所属剧集", Glyph.Series, () => Run(
-                session,
-                shell,
-                "打开剧集失败",
-                async (client, token) =>
-                {
-                    var series = await client.GetItemAsync(seriesId, token).ConfigureAwait(true);
-                    shell.OpenItem(series);
-                    return (EmbyUserData?)null;
-                },
-                null)));
-        }
+        var menu = Build(session, shell, owner, card, siblings, changed);
 
         if (position is { } point) menu.ShowAt(owner, new FlyoutShowOptions { Position = point });
         else menu.ShowAt(owner);
     }
 
     /// <summary>
-    /// 已看. Reached from the menu and from the card's hover strip, which is why the current state is
-    /// read here and not passed in: between building a menu and clicking it, the strip may already have
-    /// flipped it.
+    /// 把 <see cref="ItemMenu.For"/> 排好的那几行搭成一张真菜单。
     /// <para>
-    /// Ends in a patch of the card rather than a reload of the page: the server has just told us the new
-    /// state, and rebuilding a grid of two hundred posters to move one tick mark would be absurd.
+    /// 单独一支而不是并进 <see cref="Show"/>，是为了自检够得着：搭出来的行数、每行的字、每行带的那条命令
+    /// （放在 <c>Tag</c> 上）都能读回来对账，而不用真把一张浮层弹到屏幕上 —— 弹出来会挡住自检接着要走的几步。
+    /// 「代码搭的东西搭空了，屏上看着像一行普通的字」这种事这个项目撞过（详情页那一行类型）。
     /// </para>
     /// </summary>
-    public static void ToggleWatched(EmbySession session, IShellActions shell, CardItem card)
+    internal static MenuFlyout Build(
+        EmbySession session,
+        IShellActions shell,
+        FrameworkElement owner,
+        CardItem card,
+        IReadOnlyList<EmbyItem>? siblings = null,
+        Action? changed = null)
     {
-        var played = card.Item.UserData?.Played == true;
+        var menu = new MenuFlyout { Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft };
 
+        foreach (var row in ItemMenu.For(card.Item))
+        {
+            if (row.Command is not { } command)
+            {
+                menu.Items.Add(new MenuFlyoutSeparator());
+                continue;
+            }
+
+            menu.Items.Add(Entry(row.Label, command, () =>
+                Invoke(command, session, shell, owner, card, siblings, changed)));
+        }
+
+        return menu;
+    }
+
+    /// <summary>
+    /// 按下一行之后做什么。一处 switch 而不是把动作塞进 <see cref="ItemMenu"/>：那一头是「有哪几条」，这一头
+    /// 才有服务器、外壳和对话框。每一条命令在这里都必须有着落 —— 漏一条的下场是点下去什么都不发生。
+    /// </summary>
+    private static void Invoke(
+        ItemCommand command,
+        EmbySession session,
+        IShellActions shell,
+        FrameworkElement owner,
+        CardItem card,
+        IReadOnlyList<EmbyItem>? siblings,
+        Action? changed)
+    {
+        var item = card.Item;
+
+        switch (command)
+        {
+            case ItemCommand.Play:
+                _ = shell.PlayAsync(item, episodes: siblings);
+                break;
+
+            // 打开 rather than two entries for a series or a box set: for one this is the detail page and
+            // for the other another grid, and which of the two it is is not a decision to put in front of
+            // the user.
+            case ItemCommand.Details:
+            case ItemCommand.Open:
+                shell.OpenItem(item);
+                break;
+
+            // 菜单上这两条是指定方向的（两条会同时出现，见 ItemMenu.UserState），所以不能走那个读当前状态再
+            // 翻面的 ToggleWatched —— 那是悬浮层上那颗按钮的活儿。
+            case ItemCommand.MarkPlayed:
+            case ItemCommand.MarkUnplayed:
+                SetWatched(session, shell, card, played: command == ItemCommand.MarkPlayed);
+                break;
+
+            case ItemCommand.Favorite:
+            case ItemCommand.Unfavorite:
+                SetFavorite(session, shell, card, favourite: command == ItemCommand.Favorite);
+                break;
+
+            case ItemCommand.HideFromResume:
+                HideFromResume(session, shell, card, changed);
+                break;
+
+            case ItemCommand.AddToCollection:
+                _ = CollectAsync(session, shell, owner, card);
+                break;
+
+            case ItemCommand.Download:
+                _ = DownloadAsync(session, shell, card);
+                break;
+
+            case ItemCommand.EditMetadata:
+                _ = EditAsync(session, shell, owner, card, changed);
+                break;
+
+            case ItemCommand.ChangeCover:
+                _ = CoverAsync(session, shell, owner, card, changed);
+                break;
+
+            case ItemCommand.Subtitles:
+                _ = SubtitlesAsync(session, shell, owner, card, changed);
+                break;
+
+            case ItemCommand.Scrape:
+                _ = ScrapeAsync(session, shell, owner, card);
+                break;
+
+            case ItemCommand.RefreshMetadata:
+                Refresh(session, shell, card);
+                break;
+
+            case ItemCommand.ScanLibrary:
+                ScanLibrary(session, shell);
+                break;
+
+            case ItemCommand.OpenSeries:
+                OpenSeries(session, shell, item);
+                break;
+
+            case ItemCommand.Delete:
+                _ = DeleteAsync(session, shell, owner, card, changed);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 已看，从悬浮层那颗按钮上按下的。当前状态在这里读而不是传进来：一颗按钮说的是「翻到另一面」，而它按下的
+    /// 那一刻的状态才算数。
+    /// </summary>
+    public static void ToggleWatched(EmbySession session, IShellActions shell, CardItem card) =>
+        SetWatched(session, shell, card, played: card.Item.UserData?.Played != true);
+
+    /// <summary>收藏。同上。</summary>
+    public static void ToggleFavorite(EmbySession session, IShellActions shell, CardItem card) =>
+        SetFavorite(session, shell, card, favourite: card.Item.UserData?.IsFavorite != true);
+
+    /// <summary>
+    /// 标记为已观看 / 未观看。
+    /// <para>
+    /// 落地是打一次这张卡片的补丁，而不是重读整页：服务器刚把新状态告诉我们，为了移动一个对勾去重建两百张海报
+    /// 的网格是荒唐的。
+    /// </para>
+    /// </summary>
+    private static void SetWatched(EmbySession session, IShellActions shell, CardItem card, bool played) =>
         Run(
             session,
             shell,
-            played ? "标记未观看失败" : "标记已观看失败",
+            played ? "标记已观看失败" : "标记未观看失败",
             (client, token) => played
-                ? client.MarkUnplayedAsync(card.Item.Id, token)
-                : client.MarkPlayedAsync(card.Item.Id, token),
-            data => Patch(card, data, state => state.Played = !played));
-    }
+                ? client.MarkPlayedAsync(card.Item.Id, token)
+                : client.MarkUnplayedAsync(card.Item.Id, token),
+            data => Patch(card, data, state =>
+            {
+                state.Played = played;
 
-    /// <summary>收藏. As above.</summary>
-    public static void ToggleFavorite(EmbySession session, IShellActions shell, CardItem card)
-    {
-        var favourite = card.Item.UserData?.IsFavorite == true;
+                // 标记为未观看在服务器上连进度一起清掉 —— 服务器没回话的那一次，手上这张卡也得跟着清，否则
+                // 底边那条进度还在，而它讲的是一个已经不存在的续播点。
+                if (played) return;
+                state.PlaybackPositionTicks = 0;
+                state.PlayedPercentage = 0;
+            }));
 
+    /// <summary>收藏。同上。</summary>
+    private static void SetFavorite(EmbySession session, IShellActions shell, CardItem card, bool favourite) =>
         Run(
             session,
             shell,
             "更新收藏失败",
-            (client, token) => client.SetFavoriteAsync(card.Item.Id, !favourite, token),
-            data => Patch(card, data, state => state.IsFavorite = !favourite));
-    }
+            (client, token) => client.SetFavoriteAsync(card.Item.Id, favourite, token),
+            data => Patch(card, data, state => state.IsFavorite = favourite));
 
     /// <summary>
     /// The card the gesture landed on. Read off the element rather than passed in, because the sender is
@@ -226,9 +306,19 @@ internal static class ItemCommands
         _ => null
     };
 
-    private static MenuFlyoutItem Entry(string text, string glyph, Action invoke)
+    /// <summary>
+    /// 菜单上的一行。<c>Tag</c> 上带着它是哪一条命令 —— 自检靠它认出搭出来的这一行是不是该在的那一行，见
+    /// <see cref="Build"/>。
+    /// </summary>
+    private static MenuFlyoutItem Entry(string text, ItemCommand command, Action invoke)
     {
-        var entry = new MenuFlyoutItem { Text = text, Icon = new FontIcon { Glyph = glyph } };
+        var entry = new MenuFlyoutItem
+        {
+            Text = text,
+            Icon = new FontIcon { Glyph = Glyph.Of(command) },
+            Tag = command
+        };
+
         entry.Click += (_, _) => invoke();
         return entry;
     }
@@ -290,75 +380,37 @@ internal static class ItemCommands
         }
     }
 
-    /// <summary>
-    /// 编辑元数据. Reads the item back before showing the form — the grid's copy came from a browse query
-    /// with a limited field set, so editing from it would offer a blank 简介 and then save that blank
-    /// over the real one.
-    /// </summary>
-    private static async Task EditAsync(
-        EmbySession session,
-        IShellActions shell,
-        FrameworkElement owner,
-        CardItem card,
-        Action? changed)
-    {
-        var item = card.Item;
-
-        try
-        {
-            var json = await session
-                .ExecuteAsync((client, token) => client.GetItemJsonAsync(item.Id, token), CancellationToken.None)
-                .ConfigureAwait(true);
-
-            var dialog = new MetadataDialog(item, ItemMetadataEdit.Read(json)) { XamlRoot = owner.XamlRoot };
-
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-
-            // Nothing to send is a success, not a no-op to report: the user opened the form, looked, and
-            // pressed 保存. Saying 「已保存」 for a request that never went out would be a lie, and an
-            // error for it would be nonsense.
-            if (!dialog.Edit.ApplyTo(json))
-            {
-                Log.Debug(Category, $"编辑元数据：{item.Name} 没有改动");
-                return;
-            }
-
-            await session
-                .ExecuteAsync((client, token) => client.UpdateItemAsync(item.Id, json, token), CancellationToken.None)
-                .ConfigureAwait(true);
-
-            shell.Notify($"已保存「{dialog.Edit.Name}」的元数据");
-
-            // A metadata save can change the title, the sort position and the artwork at once, and no
-            // amount of patching one card covers that. This is the one command that reloads.
-            changed?.Invoke();
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "编辑元数据失败", error);
-            shell.Notify($"编辑元数据失败：{Failure.Describe(error)}", InfoBarSeverity.Error);
-        }
-    }
-
     /// <summary>Segoe Fluent codepoints; see the note in <see cref="CardItem"/> on why numbers.</summary>
     private static class Glyph
     {
-        public static readonly string Play = Of(0xE768);
-        public static readonly string Open = Of(0xE8B7);
-        public static readonly string Info = Of(0xE946);
-        public static readonly string Watched = Of(0xE73E);
-        public static readonly string Unwatched = Of(0xE738);
-        public static readonly string Favorite = Of(0xE734);
-        public static readonly string Unfavorite = Of(0xE8D9);
-        public static readonly string Edit = Of(0xE70F);
-        public static readonly string Series = Of(0xE7F4);
+        /// <summary>
+        /// 菜单上这一条前面画什么。方向相反的两条（已观看／未观看、收藏／取消收藏）用同一族的两个字形。
+        /// </summary>
+        public static string Of(ItemCommand command) => Text(command switch
+        {
+            ItemCommand.Play => 0xE768,
+            ItemCommand.Details => 0xE946,
+            ItemCommand.Open => 0xE8B7,
+            ItemCommand.MarkPlayed => 0xE73E,
+            ItemCommand.MarkUnplayed => 0xE738,
+            ItemCommand.Favorite => 0xE734,
+            ItemCommand.Unfavorite => 0xE8D9,
+            ItemCommand.HideFromResume => 0xE894,
+            ItemCommand.AddToCollection => 0xE8F4,
+            ItemCommand.Download => 0xE896,
+            ItemCommand.EditMetadata => 0xE70F,
+            ItemCommand.ChangeCover => 0xE91B,
+            ItemCommand.Subtitles => 0xED1E,
+            ItemCommand.Scrape => 0xE774,
+            ItemCommand.RefreshMetadata => 0xE72C,
+            ItemCommand.ScanLibrary => 0xE895,
+            ItemCommand.OpenSeries => 0xE7F4,
+            ItemCommand.Delete => 0xE74D,
 
-        private static string Of(int codepoint) => char.ConvertFromUtf32(codepoint);
+            // 漏登记一条不该在屏上变成一个空框：退到「更多」那三个点。
+            _ => 0xE712
+        });
+
+        private static string Text(int codepoint) => char.ConvertFromUtf32(codepoint);
     }
 }

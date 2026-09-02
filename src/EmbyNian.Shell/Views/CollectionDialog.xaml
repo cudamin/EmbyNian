@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「添加到合集」。两条路摆在一张表上：挑一个已有的合集，或者当场起一个新的。
+
+  两者互斥，而且是在代码里互斥的（见 OnPicked / OnTyped）：一组单选按钮加一个输入框在这里更啰嗦 ——
+  用户点了列表里的一行，就是选了它；往框里打了字，就是要新建一个。谁最后动过，谁算数。
+-->
+<ContentDialog
+    x:Class="EmbyNian.Shell.Views.CollectionDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="添加到合集"
+    CloseButtonText="取消"
+    DefaultButton="Primary"
+    PrimaryButtonText="确定">
+
+    <StackPanel Spacing="12">
+        <TextBlock
+            x:Name="Empty"
+            Style="{StaticResource EgDataStyle}"
+            Text="服务器上还没有合集，在下面起一个名字就能新建一个。"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
+
+        <!-- 单选：一个条目一次只进一个合集。要进第二个再点一次菜单 —— 多选会把这张表变成一件需要「保存」
+             的事，而现在按下「确定」就是一趟请求。 -->
+        <ListView
+            x:Name="List"
+            DisplayMemberPath="Name"
+            MaxHeight="260"
+            SelectionChanged="OnPicked"
+            SelectionMode="Single" />
+
+        <TextBox
+            x:Name="NewBox"
+            Header="或者新建一个合集"
+            PlaceholderText="合集名称"
+            TextChanged="OnTyped" />
+    </StackPanel>
+</ContentDialog>

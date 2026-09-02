@@ -41,6 +41,15 @@ public static class EmbyFields
     /// </summary>
     public const string Detail =
         "PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,EndDate,ChildCount,DateCreated,Genres,Tags,Studios,MediaSources,Path,OfficialRating,CommunityRating,ParentId,Chapters";
+
+    /// <summary>
+    /// 只要「这个条目背后是哪个文件」—— 下载到设备和搜索字幕都只需要这一样。
+    /// <para>
+    /// 单独一份而不是借 <see cref="Detail"/>：下载一整部剧要一次问回二十几集，而 <see cref="Detail"/> 里的
+    /// 章节表能把那一趟的响应撑到几百 KB，其中没有一个字节用得上。
+    /// </para>
+    /// </summary>
+    public const string Files = "MediaSources,Path";
 }
 
 /// <summary>

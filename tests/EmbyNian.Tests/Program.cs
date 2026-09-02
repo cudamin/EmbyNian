@@ -20,6 +20,7 @@ internal static class Program
         ImageCacheTests.Register();
         ItemDetailTests.Register();
         ItemArtworkTests.Register();
+        ItemMenuTests.Register();
         HomeCarouselTests.Register();
         HomeLayoutTests.Register();
         DiagnosticsTests.Register();

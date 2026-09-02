@@ -154,6 +154,10 @@ public partial class App : Application
         // one state a screenshot has to be taken from and cannot be reached by waiting.
         if (_options.ShowLibrary) await shell.ShowLibrarySortAsync().ConfigureAwait(true);
 
+        // Tooling: --show-menu 把主页第一张卡的「更多」菜单弹开 —— 同上，一张浮层等不出来，而这台机器上注不进
+        // 鼠标事件。摆在换页的那几个开关之前：一次导航就把浮层散掉了。
+        if (_options.ShowMenu) await shell.ShowCardMenuAsync().ConfigureAwait(true);
+
         // Tooling: --show-detail clicks a poster and stays on whatever that click opened, which is how a
         // screenshot can be compared against Emby Theater's own detail page. --show-episode clicks one
         // card further, onto the page of a file, which is the only page 媒体信息 appears on. --scroll-end

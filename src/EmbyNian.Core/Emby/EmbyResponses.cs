@@ -91,3 +91,115 @@ public sealed record EmbyConnection(
     string UserName,
     string ServerName,
     DeviceIdentity Device);
+
+/// <summary>新建合集之后服务器答的那一句：这个合集的 id 和名字。</summary>
+public sealed class CollectionCreationResult
+{
+    public string Id { get; set; } = "";
+
+    public string? Name { get; set; }
+}
+
+/// <summary>
+/// 「修改媒体封面图」问服务器要来的那一批候选图：各家刮削源上这个条目有哪些封面。
+/// <see cref="Providers"/> 是这个条目能问的几家，一家都没有的时候那一批也是空的（服务器没装刮削插件、
+/// 或者这个条目没有对上任何一家的记录）。
+/// </summary>
+public sealed class RemoteImageResult
+{
+    public List<RemoteImageInfo> Images { get; set; } = [];
+
+    public int TotalRecordCount { get; set; }
+
+    public List<string> Providers { get; set; } = [];
+}
+
+/// <summary>候选图中的一张。</summary>
+public sealed class RemoteImageInfo
+{
+    public string? ProviderName { get; set; }
+
+    /// <summary>原图地址。下载那一下交回给服务器，由服务器去取（客户端不一定连得上刮削源）。</summary>
+    public string Url { get; set; } = "";
+
+    /// <summary>缩略图地址，多数刮削源会给；没给就退回 <see cref="Url"/>。</summary>
+    public string? ThumbnailUrl { get; set; }
+
+    public int? Width { get; set; }
+
+    public int? Height { get; set; }
+
+    public double? CommunityRating { get; set; }
+
+    public int? VoteCount { get; set; }
+
+    public string? Language { get; set; }
+
+    public string? DisplayLanguage { get; set; }
+
+    /// <summary>"Primary"、"Backdrop"…… 问的时候点了名，所以回来的都是那一种。</summary>
+    public string? Type { get; set; }
+
+    /// <summary>一行给人看的说明：哪家、多大、什么语言。</summary>
+    public string Describe()
+    {
+        var parts = new List<string>(4);
+        if (!string.IsNullOrWhiteSpace(ProviderName)) parts.Add(ProviderName!);
+        if (Width is > 0 && Height is > 0) parts.Add($"{Width}×{Height}");
+        if (DisplayLanguage is { Length: > 0 } language) parts.Add(language);
+        else if (Language is { Length: > 0 } code) parts.Add(code);
+        if (CommunityRating is { } rating and > 0) parts.Add($"{rating:0.#} 分");
+        return string.Join("  ·  ", parts);
+    }
+}
+
+/// <summary>字幕搜索结果中的一条。</summary>
+public sealed class RemoteSubtitleInfo
+{
+    /// <summary>下载时交回给服务器的那个记号，不是给人看的。</summary>
+    public string Id { get; set; } = "";
+
+    public string? ProviderName { get; set; }
+
+    public string? Name { get; set; }
+
+    public string? Format { get; set; }
+
+    public string? Author { get; set; }
+
+    public string? Comment { get; set; }
+
+    public string? Language { get; set; }
+
+    public float? CommunityRating { get; set; }
+
+    public int? DownloadCount { get; set; }
+
+    /// <summary>按文件哈希对上的 —— 这一条基本可以肯定是这个文件的字幕，而不是同名影片的另一个版本。</summary>
+    public bool? IsHashMatch { get; set; }
+
+    public bool? IsForced { get; set; }
+
+    public bool? IsHearingImpaired { get; set; }
+
+    /// <summary>列表里那一行：名字，加上能说清「这一条靠不靠得住」的几样。</summary>
+    public string Describe()
+    {
+        var parts = new List<string>(6);
+        if (!string.IsNullOrWhiteSpace(ProviderName)) parts.Add(ProviderName!);
+        if (!string.IsNullOrWhiteSpace(Language)) parts.Add(Language!);
+        if (!string.IsNullOrWhiteSpace(Format)) parts.Add(Format!.ToUpperInvariant());
+        if (IsHashMatch == true) parts.Add("文件精确匹配");
+        if (DownloadCount is { } count and > 0) parts.Add($"{count} 次下载");
+        if (CommunityRating is { } rating and > 0) parts.Add($"{rating:0.#} 分");
+        if (IsForced == true) parts.Add("强制");
+        if (IsHearingImpaired == true) parts.Add("听障");
+        return string.Join("  ·  ", parts);
+    }
+}
+
+/// <summary>下载一条字幕之后服务器答的：它在这个文件里成了第几条轨道。</summary>
+public sealed class SubtitleDownloadResult
+{
+    public int? NewIndex { get; set; }
+}

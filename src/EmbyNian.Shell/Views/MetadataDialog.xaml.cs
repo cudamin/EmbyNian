@@ -24,6 +24,10 @@ public sealed partial class MetadataDialog : ContentDialog
     {
         InitializeComponent();
 
+        // 同 ConfirmDialog 里那段说明：对话框摆在 XamlRoot 的浮层根上，从提出它的那棵树上继承不到主题，不点明
+        // 就按 Windows 的应用模式来 —— 用户在晴昼（唯一那套浅色）下会得到一张深色的表。
+        RequestedTheme = ThemeHost.Current.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+
         // The title says what is being done; this says what it is being done to. Worth the line: the
         // menu that opened this dialog is gone by the time it is up, and a form full of somebody else's
         // 简介 is easy to mistake for the right one.

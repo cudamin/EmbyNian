@@ -688,4 +688,217 @@ internal static partial class ShellSelfCheck
                 + $"（该季应播「{(wanted is null ? "无" : ItemDetail.EpisodeLabel(wanted))}」）"
                 + (announced.Contains(nameof(DetailViewModel.PlayText)) ? "（已通知）" : "（**没有通知**）"));
     }
+
+    /// <summary>
+    /// 自检：「更多」菜单上那四条会弹表的命令，表本身搭得起来。
+    /// <para>
+    /// 只造不弹（造出来就够）：<c>InitializeComponent</c> 那一步会把标记整棵解析一遍，而这一族最可能的坏法正是
+    /// 那里 —— 引用了一个不存在的样式键、或者一个模板的 <c>x:DataType</c> 指着一个非公开的类。它抛的是构造函数
+    /// 里的异常，屏上的症状只有提示条上一句「……失败」，而菜单看着一切正常。
+    /// </para>
+    /// <para>
+    /// 用编出来的条目而不是服务器上的：这四张表不问服务器（要问的那几趟在 <c>ItemCommands</c> 里，弹表之前就
+    /// 问完了），所以这一关和网络无关，一台连不上服务器的机器上照样咬得住。
+    /// </para>
+    /// </summary>
+    private static (bool Ok, string Detail) ReadDialogs()
+    {
+        var item = new EmbyItem { Id = "selfcheck", Name = "自检用的条目", Type = EmbyItemType.Movie };
+        var source = new MediaSource { Id = "1", Container = "mkv" };
+        source.MediaStreams.Add(new MediaStream
+        {
+            Index = 2,
+            Type = "Subtitle",
+            Codec = "srt",
+            Language = "chi",
+            IsExternal = true
+        });
+
+        var notes = new List<string>();
+        var ok = true;
+
+        Try("添加到合集", () => new CollectionDialog(item, [item]));
+
+        Try("修改媒体封面图", () => new CoverDialog(
+            item,
+            new RemoteImageResult
+            {
+                Images = [new RemoteImageInfo { Url = "https://selfcheck.invalid/a.jpg", ProviderName = "自检" }],
+                Providers = ["自检"]
+            },
+            _ => Task.FromResult<byte[]>([])));
+
+        Try("搜索和修改字幕", () => new SubtitleDialog(
+            item,
+            source,
+            _ => Task.FromResult(new List<RemoteSubtitleInfo>()),
+            _ => Task.CompletedTask,
+            _ => Task.CompletedTask));
+
+        Try("编辑元数据", () => new MetadataDialog(item, new ItemMetadataEdit()));
+
+        return (ok, string.Join("；", notes));
+
+        void Try(string what, Func<Microsoft.UI.Xaml.Controls.ContentDialog> build)
+        {
+            try
+            {
+                var dialog = build();
+                notes.Add($"{what}「{dialog.Title}」");
+            }
+            catch (Exception error)
+            {
+                ok = false;
+                notes.Add($"**{what} 搭不起来**（{Failure.Describe(error)}）");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 「更多」菜单上那几条新命令背后的接口，在真服务器上问一遍。
+    /// <para>
+    /// 这一条钉的是<b>请求发对了没有</b> —— 路径、参数名、回来那份 JSON 认不认得。四道闸门里没有别的东西碰得到
+    /// 它：单元测试里没有服务器，屏上一张菜单画得再好也不代表点下去那一趟发得对，而发错的样子是 400 或者 404，
+    /// 只有点了才知道。
+    /// </para>
+    /// <para>
+    /// <b>只问不改。</b>三条是 GET；刷新那一条走的是 <c>ValidationOnly</c> —— 那一档服务器什么都不改，用来确认
+    /// 这条 POST 的路由和参数真的通着，而不用拿用户的真实媒体库去试一次覆盖。会写东西的那几条（刮削、扫库、
+    /// 删除、下载、改封面、挂字幕）自检一律不碰。
+    /// </para>
+    /// <para>
+    /// 判红只判「请求本身错了」：400、404、405，或者答回来的 JSON 解不动（那意味着 DTO 对不上）。连不上、超时、
+    /// 403（这个账号不是管理员）都只报不判 —— 那些是网络和账号的事，把它们判红就是把一关的成败交给网络。
+    /// </para>
+    /// </summary>
+    private static async Task<(bool Ok, string Detail)?> ProbeCommandsAsync(IServiceProvider services)
+    {
+        var session = services.GetRequiredService<EmbySession>();
+        if (!session.IsSignedIn) return null;
+
+        // 自己的一份预算：这一条排在整段走完之后，那时候按拍算的期限早就花完了。
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var notes = new List<string>();
+        var ok = true;
+        ItemsResult found;
+
+        try
+        {
+            found = await session.ExecuteAsync((client, token) => client.GetItemsAsync(new ItemQuery
+            {
+                Recursive = true,
+                IncludeItemTypes = [EmbyItemType.Movie, EmbyItemType.Episode],
+                Fields = EmbyFields.Files,
+                Limit = 1
+            }, token), budget.Token).ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            // 连找一个条目都没成，那是这台服务器或者这条网线的事，不是这几条命令的事。
+            return (true, $"问不到可以拿来试的条目，跳过（{Failure.Describe(error)}）");
+        }
+
+        if (found.Items.FirstOrDefault() is not { } file) return (true, "服务器上没有可以拿来问的文件，跳过");
+
+
+        await Step("合集列表", async token =>
+        {
+            var list = await session.ExecuteAsync((client, t) => client.GetCollectionsAsync(t), token)
+                .ConfigureAwait(true);
+            return $"合集 {list.Count} 个";
+        }).ConfigureAwait(true);
+
+        await Step("候选封面", async token =>
+        {
+            var images = await session
+                .ExecuteAsync((client, t) => client.GetRemoteImagesAsync(file.Id, EmbyImageStore.Primary, t), token)
+                .ConfigureAwait(true);
+
+            return $"候选封面 {images.Images.Count} 张（刮削源 {images.Providers.Count} 家）";
+        }).ConfigureAwait(true);
+
+        await Step("刷新元数据", async token =>
+        {
+            await session
+                .ExecuteAsync((client, t) => client.RefreshItemAsync(file.Id, replace: false, t, mode: "ValidationOnly"),
+                    token)
+                .ConfigureAwait(true);
+
+            return "刷新接口通（只走 ValidationOnly，没改任何东西）";
+        }).ConfigureAwait(true);
+
+        // 最后一条：搜字幕要服务器去问字幕站，慢起来是十几秒，前面几条不该等它。
+        if (file.DefaultMediaSource is { } source)
+        {
+            await Step("字幕搜索", async token =>
+            {
+                var subtitles = await session
+                    .ExecuteAsync((client, t) => client.SearchSubtitlesAsync(file.Id, source.Id, "chi", t), token)
+                    .ConfigureAwait(true);
+
+                return $"中文字幕 {subtitles.Count} 条";
+            }).ConfigureAwait(true);
+        }
+        else
+        {
+            notes.Add("字幕搜索 跳过（这个条目没有媒体源）");
+        }
+
+        // 「下载一整部剧」靠的是这一句：单集列表点名要 MediaSources 的时候到底带不带回来。带的话一趟就够，不带
+        // 的话下每一集之前要各补问一次（见 ItemCommands 的 SaveAsync）—— 两条路都通，可这台服务器走的是哪一条
+        // 只有问过才知道，而它决定的是一次下载发 1 趟还是 25 趟请求。
+        await Step("单集列表带媒体源", async token =>
+        {
+            var shows = await session.ExecuteAsync((client, t) => client.GetItemsAsync(new ItemQuery
+            {
+                Recursive = true,
+                IncludeItemTypes = [EmbyItemType.Series],
+                Fields = "",
+                Limit = 1
+            }, t), token).ConfigureAwait(true);
+
+            if (shows.Items.FirstOrDefault() is not { } show) return "单集列表带媒体源 没有剧集可问";
+
+            var episodes = await session
+                .ExecuteAsync((client, t) => client.GetEpisodesAsync(show.Id, null, t, EmbyFields.Files), token)
+                .ConfigureAwait(true);
+
+            var withSource = episodes.Count(episode => episode.DefaultMediaSource is not null);
+            return $"《{show.Name}》{episodes.Count} 集里 {withSource} 集带媒体源";
+        }).ConfigureAwait(true);
+
+        return (ok, $"拿《{file.Name}》问的：{string.Join("；", notes)}");
+
+        async Task Step(string what, Func<CancellationToken, Task<string>> work)
+        {
+            try
+            {
+                notes.Add(await work(budget.Token).ConfigureAwait(true));
+            }
+            catch (Exception error) when (Fatal(error))
+            {
+                ok = false;
+                notes.Add($"**{what} 把请求发错了**（{Failure.Describe(error)}）");
+            }
+            catch (Exception error)
+            {
+                notes.Add($"{what} 没答上来（{Failure.Describe(error)}）");
+            }
+        }
+
+        // 请求本身错了：路由不存在、参数服务器不认、或者答回来的 JSON 和 DTO 对不上。
+        static bool Fatal(Exception error) => error switch
+        {
+            EmbyUnreachableException => false,
+            EmbyApiException { InnerException: System.Text.Json.JsonException } => true,
+            EmbyApiException
+            {
+                StatusCode: System.Net.HttpStatusCode.BadRequest
+                    or System.Net.HttpStatusCode.NotFound
+                    or System.Net.HttpStatusCode.MethodNotAllowed
+            } => true,
+            _ => false
+        };
+    }
 }

@@ -248,6 +248,82 @@ public sealed partial class HomePage : Page, IShellContent
         return cards;
     }
 
+    /// <summary>
+    /// 工具：把第一张卡的「更多」菜单弹开（<c>--show-menu</c>），返回那张卡的片名；一张卡都没渲染出来时是 null。
+    /// <para>
+    /// 挑的是有续播位置的那一张 —— 那一档菜单最长（「从继续观看中移除」只在它上面出现），也正是要拍的那一张。
+    /// </para>
+    /// </summary>
+    internal string? ShowFirstCardMenu()
+    {
+        if (_session is null || _actions is null) return null;
+
+        var cards = RealisedCards();
+        var target = cards.FirstOrDefault(poster => poster.Card?.Item.HasResumePosition == true)
+            ?? cards.FirstOrDefault(poster => poster.Card?.Item.IsPlayable == true)
+            ?? cards.FirstOrDefault();
+
+        if (target?.Card is not { } card) return null;
+
+        ItemCommands.Show(_session, _actions, target, card, position: null, changed: Reload);
+        return card.Title;
+    }
+
+    /// <summary>
+    /// 自检：「更多」点开的那张菜单真的搭出来了 —— 行数、每行的字、每行带的那条命令，都和 Core 排的那一份
+    /// （<see cref="ItemMenu.For"/>）对得上，而且每一行都有图标、按得动。
+    /// <para>
+    /// 这一条是给「代码搭出来的界面」留的口子：菜单不在 XAML 里，搭空了、少接一行、某一行忘了接命令，屏上都
+    /// 只是「菜单短了一条」，没人会去数。这个项目已经这么漏过一次（详情页那一行类型的 <c>Hyperlink</c>）。
+    /// </para>
+    /// <para>
+    /// 只搭不弹（<see cref="ItemCommands.Build"/>）：真弹一张浮层出来会挡住自检接着要走的那几步。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MenuRead()
+    {
+        if (_session is null || _actions is null) return null;
+
+        var cards = RealisedCards();
+        var card = (cards.FirstOrDefault(poster => poster.Card?.Item.IsPlayable == true) ?? cards.FirstOrDefault())?.Card;
+        if (card is null) return null;
+
+        var plan = ItemMenu.For(card.Item);
+        var menu = ItemCommands.Build(_session, _actions, this, card);
+        var labels = new List<string>(menu.Items.Count);
+        var ok = menu.Items.Count == plan.Count;
+
+        for (var index = 0; index < Math.Min(menu.Items.Count, plan.Count); index++)
+        {
+            var wanted = plan[index];
+
+            switch (menu.Items[index])
+            {
+                case MenuFlyoutSeparator:
+                    ok &= wanted.IsRule;
+                    labels.Add("──");
+                    break;
+
+                case MenuFlyoutItem entry:
+                    ok &= !wanted.IsRule
+                        && entry.Text == wanted.Label
+                        && entry.Tag is ItemCommand command && command == wanted.Command
+                        && entry.Icon is FontIcon { Glyph.Length: > 0 }
+                        && entry.IsEnabled;
+                    labels.Add(entry.Text);
+                    break;
+
+                default:
+                    ok = false;
+                    labels.Add("？");
+                    break;
+            }
+        }
+
+        return (ok, $"「{card.Title}」（{card.Item.DisplayTypeName}）搭了 {menu.Items.Count} 行"
+            + $"，规矩说 {plan.Count} 行：{string.Join(" ｜ ", labels)}");
+    }
+
     private static void Collect(DependencyObject node, List<PosterCard> into)
     {
         if (node is PosterCard card)

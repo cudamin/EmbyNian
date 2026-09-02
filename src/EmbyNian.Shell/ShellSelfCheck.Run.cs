@@ -249,6 +249,21 @@ internal static partial class ShellSelfCheck
             if (_cards is { } hover) Check("卡片悬浮按钮", hover.Ok, hover.Detail);
             else report.AppendLine("[信息] 卡片悬浮按钮 — 主页没有已渲染的卡片");
 
+            // 「更多」那颗按钮点开的菜单是代码搭的：哪几条出现由 Core 排（ItemMenu.For），这里核对屏上那张真菜单
+            // 一行不差 —— 行数、每行的字、每行带的那条命令、图标和按不按得动。搭空了或者少接一行，屏上只是「菜单
+            // 短了一条」，没人会去数；这个项目已经这么漏过一次（详情页那一行类型的 Hyperlink）。
+            if (_menu is { } menu) Check("卡片更多菜单", menu.Ok, menu.Detail);
+            else report.AppendLine("[信息] 卡片更多菜单 — 主页没有已渲染的卡片");
+
+            // 那几条命令背后的接口在真服务器上问了一遍：路径、参数名、回来那份 JSON 认不认得。只问不改 ——
+            // 刷新走的是 ValidationOnly，会写东西的那几条（刮削、扫库、删除、下载、改封面、挂字幕）一律不碰。
+            if (_commands is { } commands) Check("更多菜单的接口", commands.Ok, commands.Detail);
+            else report.AppendLine("[信息] 更多菜单的接口 — 未登录，没问");
+
+            // 那四张表造得出来。标记里引错一个样式键的症状只是「点下去什么都没有」，而菜单看着一切正常。
+            var dialogs = ReadDialogs();
+            Check("更多菜单的对话框", dialogs.Ok, dialogs.Detail);
+
             // 「点击主页继续观看、媒体库、最近添加的封面之后会先跳转到页面下方，然后才会进入页面」：按下去的那一
             // 刻卡片先拿到焦点，横带以前会替它要一次 BringIntoView，请求冒到这一页竖着滚的那层就把整页拽下去了。
             // 现在露出一张卡在带自己的滚动视图里做完（CardStrip.RevealFor），一句请求都不往外发。这条读数按

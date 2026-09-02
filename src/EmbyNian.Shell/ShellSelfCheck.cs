@@ -73,6 +73,18 @@ internal static partial class ShellSelfCheck
     private static (bool Ok, string Detail)? _cards;
 
     /// <summary>
+    /// 「更多」那颗按钮点开的菜单搭成了什么样，见 <see cref="HomePage.MenuRead"/>。跟着 stage 0 一起快照，
+    /// 理由同上：框里一次只有一页。这一页上一张卡都没渲染出来时是 null。
+    /// </summary>
+    private static (bool Ok, string Detail)? _menu;
+
+    /// <summary>
+    /// 那几条新命令背后的接口在真服务器上答得对不对，见 <see cref="ProbeCommandsAsync"/>。整段走完之后才问
+    /// （它有自己的往返），没登录时是 null。
+    /// </summary>
+    private static (bool Ok, string Detail)? _commands;
+
+    /// <summary>
     /// 按一张卡片会不会让整页先滑一段 —— 「点击主页继续观看、媒体库、最近添加的封面之后会先跳转到页面下方，
     /// 然后才会进入页面」。跟着 stage 0 一起快照，理由和上面几条一样：框里一次只有一页。空的主页上是 null。
     /// </summary>
@@ -526,6 +538,9 @@ internal static partial class ShellSelfCheck
                 // cannot ride along on a synchronous tick. Never throws — see ProbeSeasonsAsync.
                 if (!shell.SignInVisible) _seasons = await ProbeSeasonsAsync(shell, services);
 
+                // 同上：更多菜单那几条新命令的接口，在真服务器上问一遍（只问不改，见 ProbeCommandsAsync）。
+                if (!shell.SignInVisible) _commands = await ProbeCommandsAsync(services);
+
                 Run(window, shell, services, options);
 
                 // After the report, not inside it: the picture is the slow part and it is the report that
@@ -590,6 +605,7 @@ internal static partial class ShellSelfCheck
             {
                 _home ??= ReadHome(shell);
                 _cards ??= ReadCards(shell);
+                _menu ??= (shell.Pages.Content as HomePage)?.MenuRead();
                 _ink ??= ReadInk(shell, window);
 
                 // 多一拍：这一拍把焦点按到第一张卡上，下一拍才量这一页挪没挪。三个读数在按之前拿，所以焦点

@@ -39,6 +39,16 @@ public sealed record StartupOptions
     public bool ShowLibrary { get; init; }
 
     /// <summary>
+    /// Tooling only: 把主页第一张卡的「更多」菜单弹开，好给它拍一张。挑的是有续播位置的那张（那一档菜单最长，
+    /// 「从继续观看中移除」只在它上面出现），没有就退到第一张能播的。
+    /// <para>
+    /// 单独用。它留下的是一张浮层，而<see cref="ShowSettings"/>、<see cref="ShowLibrary"/> 和两个详情开关都会
+    /// 抢走激活或者换页，那一下浮层自己就散了。
+    /// </para>
+    /// </summary>
+    public bool ShowMenu { get; init; }
+
+    /// <summary>
     /// Tooling only: press 设置 on the way up, on the 界面 card, so the settings window and its six theme
     /// swatches are on screen for a screenshot. Its own flag because 设置 is a second top-level window:
     /// waiting for the app to settle gets the main window and nothing else.
@@ -202,6 +212,7 @@ internal static class Program
             Screen = Number(args, "--screen")
                 ?? (selfCheck ? ScreenPlacement.NotThePrimary : ScreenPlacement.WhereverWindows),
             ShowLibrary = Has(args, "--show-library"),
+            ShowMenu = Has(args, "--show-menu"),
             ShowSettings = Has(args, "--show-settings"),
             SettingsCategory = Text(args, "--show-settings"),
             ShowDetail = Has(args, "--show-detail"),

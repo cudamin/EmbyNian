@@ -22,7 +22,23 @@ public sealed class EmbyHttp : IDisposable
     private const int MaxLoggedBodyLength = 2000;
 
     private readonly HttpClient _http;
-    private readonly bool _ownsClient;
+
+    /// <summary>
+    /// 同一个连接池上的第二个客户端，只给「下载到设备」用，区别只有一样：<b>没有整体超时</b>。
+    /// <para>
+    /// <see cref="HttpClient.Timeout"/> 管的是整趟请求，连读响应体那一段一起算 —— 就算按
+    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/> 只等到响应头，那个计时器也不会停。于是一个
+    /// 十几个 G 的影片文件必然在 30 秒上被掐断，症状是「下载总是失败」。下载那一路的边界改成调用方自己的
+    /// 取消令牌加上连接超时（那一条在 <see cref="SocketsHttpHandler.ConnectTimeout"/> 上，仍然管用）。
+    /// </para>
+    /// <para>
+    /// 共用上面那个 handler，所以这不是第二个连接池 —— 两个客户端都不负责释放它，由本类
+    /// <see cref="Dispose"/> 统一放掉。
+    /// </para>
+    /// </summary>
+    private readonly HttpClient _long;
+
+    private readonly HttpMessageHandler _handler;
 
     public EmbyHttp(HttpMessageHandler? handler = null)
     {
@@ -34,8 +50,9 @@ public sealed class EmbyHttp : IDisposable
             ConnectTimeout = TimeSpan.FromSeconds(8)
         };
 
-        _http = new HttpClient(handler, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(30) };
-        _ownsClient = true;
+        _handler = handler;
+        _http = new HttpClient(handler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(30) };
+        _long = new HttpClient(handler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     public static JsonSerializerOptions Json { get; } = new()
@@ -110,12 +127,92 @@ public sealed class EmbyHttp : IDisposable
         return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 「下载到设备」：把一个地址上的东西边下边写到磁盘上，写完返回一共多少字节。
+    /// <para>
+    /// 先落成 <c>.part</c> 再改名，所以一次中断（关掉程序、断网）留下的是一个一眼看得出没下完的文件，而不是
+    /// 一个大小不对却叫着正确名字的影片。整个内容不进内存：一个「读成 byte[] 再写」的写法在这里就是把十几个
+    /// G 装进内存。
+    /// </para>
+    /// </summary>
+    /// <param name="progress">
+    /// 已经下了多少、一共多少（服务器没说长度时后者为空）。隔一段才报一次，见 <see cref="ReportEvery"/>。
+    /// 拿 <see cref="Progress{T}"/> 造出来的话，回调会自己回到造它的那个线程上，界面不用再marshal一次。
+    /// </param>
+    public async Task<long> DownloadToFileAsync(
+        Uri url,
+        string path,
+        RequestContext context,
+        IProgress<(long Done, long? Total)>? progress,
+        CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(HttpMethod.Get, url, null, context, cancellationToken, _long)
+            .ConfigureAwait(false);
+
+        var total = response.Content.Headers.ContentLength;
+        var temporary = path + ".part";
+        var done = 0L;
+
+        if (Path.GetDirectoryName(path) is { Length: > 0 } directory) Directory.CreateDirectory(directory);
+
+        try
+        {
+            var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var target = new FileStream(
+                temporary, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true);
+
+            await using (source.ConfigureAwait(false))
+            await using (target.ConfigureAwait(false))
+            {
+                var buffer = new byte[1 << 20];
+                var reported = 0L;
+
+                while (true)
+                {
+                    var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    if (read <= 0) break;
+
+                    await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    done += read;
+
+                    if (done - reported < ReportEvery) continue;
+                    reported = done;
+                    progress?.Report((done, total));
+                }
+            }
+
+            File.Move(temporary, path, overwrite: true);
+            progress?.Report((done, total ?? done));
+            return done;
+        }
+        catch
+        {
+            // 下坏的那半个文件不留在磁盘上。删不掉就算了 —— 这一路已经在往上抛一个更值得说的错误。
+            try
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>下载进度隔多少字节报一次。每一兆报一次的话，一个大文件就是上万条提示。</summary>
+    private const long ReportEvery = 4L << 20;
+
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
         Uri url,
         object? body,
         RequestContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HttpClient? via = null)
     {
         using var request = new HttpRequestMessage(method, url);
         request.Headers.TryAddWithoutValidation("X-Emby-Authorization", context.Device.ToAuthorizationHeader());
@@ -137,7 +234,8 @@ public sealed class EmbyHttp : IDisposable
         HttpResponseMessage response;
         try
         {
-            response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            response = await (via ?? _http)
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (TaskCanceledException error) when (!cancellationToken.IsCancellationRequested)
@@ -218,7 +316,10 @@ public sealed class EmbyHttp : IDisposable
 
     public void Dispose()
     {
-        if (_ownsClient) _http.Dispose();
+        // 两个客户端都不持有 handler（disposeHandler: false），所以它在这里放，而且只放一次。
+        _http.Dispose();
+        _long.Dispose();
+        _handler.Dispose();
     }
 
     public readonly record struct RequestContext(DeviceIdentity Device, string? AccessToken, bool IsAuthenticationAttempt = false);
