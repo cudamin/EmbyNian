@@ -558,10 +558,7 @@ public sealed partial class HomeBanner : UserControl
         LogoImage.Margin = new Thickness(0, 0, strip + LogoInset, _shelf + LogoBaseline);
         Dots.Margin = new Thickness(0, 0, 0, _shelf + DotsBaseline);
 
-        // 左右那两层暗罩停在那一排货架的上沿：它们是为字块和图的边沿准备的，往下伸到货架底下只会把左边压得比
-        // 右边黑。整张剧照因此在货架上面那一段一点没被动过。
-        ShadeSide.Margin = new Thickness(0, 0, 0, _shelf);
-        ShadeEdgeLayer.Margin = new Thickness(0, 0, 0, _shelf);
+        // 左右那两层暗罩不在这儿收边 —— 它们铺满整条带的高度，原因写在 HomeBanner.xaml 里 ShadeSide 那一段。
 
         // 竖着那层反过来：它要在货架底下铺一层足够暗的底（浅墨才读得出），所以从货架的上沿开始压。上面那一段
         // 一点不压 —— 「背景，要能看到完整的轮播背景图」。
@@ -757,8 +754,9 @@ public sealed partial class HomeBanner : UserControl
             && Math.Abs(drop - HomeCarousel.InfoDrop(HomeCarousel.UnmeasuredHeight)) < 0.01 && drop > 0;
 
         // 那一排货架压住这条带底下 300 的时候，字块、小横条和徽标一起让开那一片：字块按剩下的那一片沉，另外两样
-        // 把那 300 加进自己的下边距，左右两层暗罩也停在那一沿上。竖着那层反过来 —— 它要从那一沿起把底下压暗，
-        // 浅墨的牌子和卡片说明才读得出来（800 的带、货架占 300，压暗从 0.625 那一档开始）。
+        // 把那 300 加进自己的下边距。左右两层暗罩偏偏不让开 —— 它们铺满整条带，在那一沿收边会留一道横着的亮痕
+        // （见 HomeBanner.xaml 里 ShadeSide 那一段）。竖着那层反过来 —— 它要从那一沿起把底下压暗，浅墨的牌子和
+        // 卡片说明才读得出来（800 的带、货架占 300，压暗从 0.625 那一档开始）。
         // 交进来之后自己再排一次：这份控件没上树，量不到自己的宽度，而 SetShelfInset 只在量到宽度时重排。
         banner.SetShelfInset(300);
         banner.Resize(1100);
@@ -766,10 +764,18 @@ public sealed partial class HomeBanner : UserControl
             && Math.Abs(banner.InfoShift.Y - HomeCarousel.InfoDrop(HomeCarousel.UnmeasuredHeight - 300)) < 0.01
             && Math.Abs(banner.Dots.Margin.Bottom - (300 + DotsBaseline)) < 0.01
             && Math.Abs(banner.LogoImage.Margin.Bottom - (300 + LogoBaseline)) < 0.01
-            && Math.Abs(banner.ShadeSide.Margin.Bottom - 300) < 0.01
+            && banner.ShadeSide.Margin.Bottom == 0
+            && banner.ShadeEdgeLayer.Margin.Bottom == 0
             && banner.ShadeFoot.Margin.Bottom == 0
             && Math.Abs(banner.FootMid.Offset - (HomeCarousel.UnmeasuredHeight - 300) / HomeCarousel.UnmeasuredHeight)
                 < 0.001;
+
+        // 继续观看那块玻璃有多深 —— 「主页继续观看亚克力背景颜色弄深一点」。三段只能越往下越浓：上面那一段一点
+        // 不压（剧照的上大半整张看得见），到货架的上沿开始压，到带的下沿最浓。中间那一段要是比下面浓，屏上就是
+        // 一道横着的亮痕 —— 那是改这三个数时最容易踩的一脚，而张数、带高、字块那几行读数一个都不会动。
+        var glass = banner.FootNear.Color.A == 0
+            && banner.FootMid.Color.A > banner.FootNear.Color.A
+            && banner.FootFar.Color.A > banner.FootMid.Color.A;
 
         banner.SetShelfInset(0);
         banner.Resize(1100);
@@ -800,7 +806,7 @@ public sealed partial class HomeBanner : UserControl
         banner.Rise();
         var risen = banner.TitleText.Opacity == 1 && banner.TitleShift.Y == 0 && banner.ActionsShift.Y == 0;
 
-        var ok = quiet && dots && lonely && tall && lifted && layered && risen && apart;
+        var ok = quiet && dots && lonely && tall && lifted && glass && layered && risen && apart;
 
         return (ok,
             $"没有幻灯片时{(quiet ? "整条带收起、钟不走" : "带还在屏上或钟在走")}；"
@@ -810,7 +816,9 @@ public sealed partial class HomeBanner : UserControl
                 + $"字块宽 页宽1100→{wide:0}、量不到→{banner.Info.MaxWidth:0}；"
                 + $"字块下沉 带高{HomeCarousel.UnmeasuredHeight:0}→{drop:0}"
                 + $"（最多 {HomeCarousel.InfoDrop(HomeCarousel.UnmeasuredHeight):0}）；"
-                + $"货架压住 300 时{(lifted ? "字块、小横条和徽标都让开了" : "有东西没让开，会被玻璃盖住")}；"
+                + $"货架压住 300 时{(lifted ? "字块、小横条和徽标都让开了、左右两层暗罩照旧铺到下沿" : "有东西没让开会被玻璃盖住，或左右两层暗罩在货架上沿收了边（会留一道横线）")}；"
+                + $"玻璃那层 上沿 {banner.FootMid.Color.A * 100 / 255}%、下沿 {banner.FootFar.Color.A * 100 / 255}%"
+                + $"{(glass ? "，越往下越浓" : "，中间比下面浓（会有一道横着的亮痕）")}；"
                 + $"箭头占到 {strip:0}、字块从 {banner.Info.Margin.Left:0} 起"
                 + $"{(apart ? "，两边不同列" : "，压到字了")}；"
                 + $"两层剧照{(layered ? "轮着上，同一张不重来" : "没换过位置")}；"

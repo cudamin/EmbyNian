@@ -343,6 +343,7 @@ internal static partial class ShellSelfCheck
         var (fitOk, fit) = page.PickerFit();
         var (washOk, wash) = page.WashRead(shell.TrailBase);
         var (stillOk, still) = page.StillShape();
+        var (footerOk, footer) = page.FooterRead();
 
         return new DetailState(
             page.IsReady,
@@ -380,7 +381,9 @@ internal static partial class ShellSelfCheck
             washOk,
             wash,
             stillOk,
-            still);
+            still,
+            footerOk,
+            footer);
 
         // A list with rows has to point at one of them; an empty list has to point at nothing.
         static bool Holds<T>(IReadOnlyList<T> rows, T? chosen) where T : class =>
@@ -388,36 +391,43 @@ internal static partial class ShellSelfCheck
     }
 
     /// <summary>
-    /// 需求 4 as this page came out: which picture the rule says belongs in this page's one corner, whether it
-    /// or only the text title actually drew, where it landed, and which of the five artworks the server holds
-    /// for this item — plus whose picture the band behind it stands on（「集页面要用这个剧的背景图或缩略图」）.
+    /// 需求 4 as this page came out: which picture the rule says belongs above the title and which one in the
+    /// top-right corner, whether each of them or only the text title actually drew, where they landed, and
+    /// which of the five artworks the server holds for this item — plus whose picture the band behind them
+    /// stands on（「集页面要用这个剧的背景图或缩略图」）.
     /// <para>
     /// Read off the elements rather than off the view model, because what is worth testing is the markup: the
-    /// text title has to be there on every page (the mark used to replace it, and 「no name on the hero band」
-    /// looks exactly like artwork that never arrived over the network), and the mark has to be in the corner it
-    /// was moved to rather than back on the words or on the poster. See <see cref="DetailPage.TitleShapes"/>.
+    /// text title has to be there on every page (the plate used to replace it, and 「no name on the hero band」
+    /// looks exactly like artwork that never arrived over the network), and each picture has to be in the place
+    /// it was moved to rather than back on the words or on the poster. See <see cref="DetailPage.PlateShape"/>
+    /// and <see cref="DetailPage.CornerShape"/>.
     /// </para>
     /// </summary>
     private static ArtworkRead ReadArtwork(DetailPage page, DetailViewModel model)
     {
-        var (mark, text, width, height, placed, where) = page.TitleShapes;
         var item = model.CurrentItem;
         var (heroOk, hero) = Band(item);
 
-        return new ArtworkRead(Wanted(item, model.ItemType == EmbyItemType.Episode), mark, text, width, height,
-            placed, where, item is null ? "没有条目" : ItemArtwork.Kinds(item), hero, heroOk);
+        return new ArtworkRead(
+            Mark(page.PlateShape, Wanted(item, ItemArtwork.Plate(item), "名牌")),
+            Mark(page.CornerShape, Wanted(item, ItemArtwork.Corner(item), "角上那张画")),
+            page.TitleDrawn,
+            item is null ? "没有条目" : ItemArtwork.Kinds(item),
+            hero,
+            heroOk);
 
-        // 「有艺术图优先显示艺术图，没艺术图就显示徽标」：这一句就是规矩给的答案，用词说。集页问的是名牌那一支
-        // （那一页照旧只摆右上角那一枚，见 DetailViewModel.PlateVisibility）。id 和种类一样要紧：集页和季页上
+        // 屏上量到的那一片几何，配上规矩那一句答案，凑成一格读数。
+        static MarkRead Mark(
+            (bool Drawn, double Width, double Height, bool Placed, string Where) shape, string wanted) =>
+            new(wanted, shape.Drawn, shape.Width, shape.Height, shape.Placed, shape.Where);
+
+        // 「统一改为在剧名上方显示徽标，右上角显示艺术图」：这一句就是规矩给的答案，用词说。两个位置各问各的那一支
+        // （ItemArtwork.Plate 和 ItemArtwork.Corner），因为它们之间不再互相退档。id 和种类一样要紧：集页和季页上
         // 徽标是剧集那一头发的，按这一页自己的 id 去取会取回一个空答案，而「徽标」两个字自己说不出走了哪一条路。
-        static string Wanted(EmbyItem? item, bool episode)
+        static string Wanted(EmbyItem? item, ArtworkRef? pick, string what)
         {
             if (item is null) return "没有条目";
-
-            var pick = episode ? ItemArtwork.Plate(item) : ItemArtwork.Mark(item);
-
-            if (pick is not { } chosen)
-                return episode ? "无（只有文字标题可用）" : "无（这一条既没有艺术图也没有名牌）";
+            if (pick is not { } chosen) return $"无（这一条没有能当{what}的图）";
 
             var kind = ItemArtwork.Name(chosen.ImageType);
 

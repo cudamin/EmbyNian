@@ -160,11 +160,19 @@ internal static partial class ShellSelfCheck
         check("主题色板", swatches is { Ok: true },
             swatches is { } read ? read.Detail : "没有建出主题行");
 
-        // 主页那张卡片里那张可拖拽的表：存着的每一排在表里都在，屏上也都画出来了（见 MeasureHomeRows）。什么都
-        // 不拖也不点 —— 这一行只在拖过或点过勾之后写盘。
+        // 主页那张卡片里那张换得了次序的表：存着的每一排在表里都在，屏上也都画出来了、也都装得下（见
+        // MeasureHomeRows）。什么都不拖也不点 —— 这一行只在换过次序或者点过勾之后写盘。
         var homeRows = page.MeasureHomeRows();
         check("主页版面设置表", homeRows is { Ok: true },
             homeRows is { } layout ? layout.Detail : "没有建出主页版面行");
+
+        // 那张表换得了次序没有 —— 「设置里新增拖拽排序」。两条路一起问：拖那条路按官方配方接齐了没有，以及那两颗
+        // 箭头在一张假表上真按得动次序（见 MeasureHomeDrag）。这台机器上注不进鼠标事件，拖的那一下没法自动做一遍，
+        // 所以箭头那条路是这件事唯一验得到的形式；一张换不了次序的表在屏上和换得了的一模一样，上面那一行读数也一个
+        // 字不差。
+        var homeDrag = page.MeasureHomeDrag();
+        check("主页版面表换得了次序", homeDrag is { Ok: true },
+            homeDrag is { } drag ? drag.Detail : "没有建出主页版面表");
 
         // The one path this page's cache guard exists for. Pressing 设置 again re-navigates the settings
         // window's frame to this same page type, and a page that rebuilt itself on the way in would throw

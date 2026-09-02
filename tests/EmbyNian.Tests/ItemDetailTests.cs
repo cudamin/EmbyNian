@@ -831,8 +831,9 @@ internal static class ItemDetailTests
 
         Test("正文：补满头图下面看得见的那一段", () =>
         {
-            // 887 高的视口减去 460 的带子，剩下的 427 是整个 BodyRegion 的下限。HeroTail 先占实际内容高，
-            // 星号行再把余下高度交给 BodySheet；不给这个下限，短页面的下半屏就漏出背景图。
+            // 887 高的视口减去 460 的带子，剩下的 427 是整个 BodyRegion 的下限。没有剧照的那一档靠它补满：
+            // HeroTail 先占实际内容高，星号行再把余下高度交给 BodySheet，不给这个下限，短页面的下半屏就露底。
+            // 有剧照的那一档富余高度改由尾部吃掉（见下面「尾部：撑到封顶就停」那一条），这一支同时就是那个数。
             Assert.Equal(427d, DetailHero.BodyHeight(887, DetailHero.ArtHeight));
             Assert.Equal(507d, DetailHero.BodyHeight(887, DetailHero.PlainHeight));
 
@@ -851,6 +852,103 @@ internal static class ItemDetailTests
             // 还没量到视口的那一下不是「窗口很矮」而是「还没量」，同样给 0。
             Assert.Equal(0d, DetailHero.BodyHeight(0, DetailHero.ArtHeight));
             Assert.Equal(0d, DetailHero.BodyHeight(-40, DetailHero.ArtHeight));
+        });
+
+        // 「下方的媒体信息等，要往下滑才能看到」加上「拉大或拉小窗口会导致背景图被遮挡」—— 同一处。富余的高度
+        // 从纸挪给尾部：尾部里那一叠顶对齐，撑高它只是在剧情说明底下多出一段同色的画面；撑高纸是把那道不透明的
+        // 边往上提，也就是压在剧照上的那块板子。
+        Test("尾部：撑到封顶就停，纸露出来的量一像素一像素地长", () =>
+        {
+            // 矮窗口上尾部就是「补满第一屏」那个数：带子加尾部正好一屏，纸的上沿落在视口下沿上。写死的那一版
+            // （纸的上沿只由内容定）在这些窗口上碰巧看不见，拉高就露出三百像素的板子。
+            Assert.Equal(140d, DetailHero.TailHeight(600, DetailHero.ArtHeight, true));
+
+            // 集页的带子按里面那一叠实测给，尾部跟着变宽：传进来的是那一次真正的带高，不是两档之一。
+            Assert.Equal(172d, DetailHero.TailHeight(600, 428, true));
+
+            // 半像素的那一下四舍五入到整像素，不留半像素的缝。
+            Assert.Equal(241d, DetailHero.TailHeight(700.6, DetailHero.ArtHeight, true));
+
+            // 封顶之前带子加尾部都不短于一屏 —— 也就是纸的上沿不在第一屏里。460 的带子上这一档一直到 740。
+            foreach (var viewport in new double[] { 400, 600, 730, 740 })
+            {
+                var band = DetailHero.ArtHeight;
+                Assert.Equal(Math.Max(viewport, band), band + DetailHero.TailHeight(viewport, band, true));
+            }
+
+            // 「下面越改空位越大」：撑起来的是剧情说明底下那一段压暗的空画面，所以封的是尾部自己 —— 撑到 TailCap
+            // 就不再撑，多出来的高度全归正文那张纸。于是那段空画面不管窗口多高都是同一个长度，而第一屏底下多出来
+            // 的是 媒体信息 那一叠内容。上一版封的是第一屏（860 → 900 → 1000 三档），那正是空地跟着窗口长的原因。
+            foreach (var viewport in new double[] { 741, 795, 856, 900, 1004, 1314, 1400 })
+            {
+                Assert.Equal(DetailHero.TailCap, DetailHero.TailHeight(viewport, DetailHero.ArtHeight, true));
+            }
+
+            // 封在尾部身上，带子矮的页面就早一点露出纸来 —— 这是认下的代价，不是漏算：集页的带子只有两百来，
+            // 要把同一个第一屏补满就得撑出更长的一段空画面，而那正是这一条要修的东西。
+            Assert.Equal(DetailHero.TailCap, DetailHero.TailHeight(795, 222, true));
+
+            // 「拉大窗口之后下面突然冒出一大截」：纸露出来的量只许跟着窗口一像素一像素地长，不许有台阶。上一版
+            // 在这儿留了一道 120 的门槛（露不够那么多就当封顶不存在），于是视口过 860 的那一下纸整块跳上来 120。
+            var revealed = 0d;
+
+            for (var viewport = 500d; viewport <= 1400d; viewport++)
+            {
+                var reveal = viewport - DetailHero.ArtHeight
+                    - DetailHero.TailHeight(viewport, DetailHero.ArtHeight, true);
+
+                Assert.True(reveal >= revealed - 0.001, $"视口 {viewport} 上纸反而缩回去了（{revealed} → {reveal}）");
+                Assert.True(reveal - revealed <= 1.001, $"视口 {viewport} 上纸一下多露了 {reveal - revealed}");
+                revealed = reveal;
+            }
+
+            // 分界因此落在「补满第一屏正好等于封顶」上，而且两边接得上：740 那一下纸的上沿还在第一屏下沿，
+            // 741 起每高一像素多露一像素。
+            Assert.Equal(0d, 740 - DetailHero.ArtHeight - DetailHero.TailHeight(740, DetailHero.ArtHeight, true));
+            Assert.Equal(1d, 741 - DetailHero.ArtHeight - DetailHero.TailHeight(741, DetailHero.ArtHeight, true));
+
+            // 没有剧照的条目上不撑：背后没有图可露，撑起来只是一段空黑，而 媒体信息 却要多滚一屏才看得到。
+            Assert.Equal(0d, DetailHero.TailHeight(887, DetailHero.PlainHeight, false));
+
+            // 窗口矮到带子都放不下、以及还没量到视口的那一下，同 BodyHeight：给 0，该滚动。
+            Assert.Equal(0d, DetailHero.TailHeight(300, DetailHero.ArtHeight, true));
+            Assert.Equal(0d, DetailHero.TailHeight(0, DetailHero.ArtHeight, true));
+        });
+
+        Test("正文：纸自己至少一整屏", () =>
+        {
+            // 纸不再接在尾部的内容后面、跟它合起来正好一屏，而是从第一屏的下沿起（封顶那一档从更早一点起）——
+            // 滚到底的那一屏只能有纸，所以纸得自己站满一屏。纸的内容凑不满一屏的条目（没有单集、相似也寥寥的
+            // 电影）少了这个下限，滚到底时屏幕上沿会漏出一截剧照。跟 TailCap 无关：封顶只改纸从哪儿开始。
+            Assert.Equal(887d, DetailHero.PaperHeight(887, true));
+            Assert.Equal(887d, DetailHero.PaperHeight(886.6, true));
+
+            // 没有剧照的那一档不撑尾部，也就不用撑纸：那一页照旧一整页一屏，由 BodyHeight 把富余高度交给纸。
+            Assert.Equal(0d, DetailHero.PaperHeight(887, false));
+
+            // 还没量到视口的那一下给 0，同 BodyHeight。
+            Assert.Equal(0d, DetailHero.PaperHeight(0, true));
+            Assert.Equal(0d, DetailHero.PaperHeight(-40, true));
+        });
+
+        // 「窗口缩小到一定程度自动隐藏」—— 右上角那张艺术图。它占带子里的一整栏，栏宽由图自己给，所以它宽多少
+        // 片名那一栏就窄多少；图放大之后窄窗口上片名会先折成两三行。装饰让位给片名，不是反过来。
+        Test("角上那张画：页面窄到一定程度就不画", () =>
+        {
+            // 默认窗口（页宽 1422）、用户那个窗口（1537）都摆得下。
+            Assert.True(DetailHero.CornerFits(1422));
+            Assert.True(DetailHero.CornerFits(1537));
+
+            // 分界正好在 CornerFloor 上，往下就不画了 —— 自检那块副屏上的窗口（页宽 1015）就在线下面。
+            Assert.True(DetailHero.CornerFits(DetailHero.CornerFloor));
+            Assert.False(DetailHero.CornerFits(DetailHero.CornerFloor - 1));
+            Assert.False(DetailHero.CornerFits(1015));
+
+            // 还没量到页宽的那一下也不画：这一张是装饰，先不画再补上去，比先画错一格再收回去好。
+            Assert.False(DetailHero.CornerFits(0));
+
+            // 这条线要真能碰到才算数：窗口最窄 900，那时候页面比这条线窄得多。
+            Assert.True(DetailHero.CornerFloor > 900);
         });
 
         // 参考图上那两支往上的箭头 —— 集页那一格的高。别的页面照旧按内容分两档，这一支只管集页：从视口里减掉
@@ -921,26 +1019,6 @@ internal static class ItemDetailTests
             Assert.Null(DetailHero.StillBox(double.NaN, 1000, 210, 300));
             Assert.Null(DetailHero.StillBox(667, 1000, 0, 300));
             Assert.Null(DetailHero.StillBox(667, 1000, 210, double.PositiveInfinity));
-        });
-
-        // 「把艺术图的位置改到左上角」—— 那一张能有多高，是海报头上剩下的那点地方。
-        Test("左上角那一张：高就是海报头上剩下的那点地方", () =>
-        {
-            // 默认那一档：460 的带子、上下 28 和 64、海报 300，留一线 8 —— 60。
-            Assert.Equal(60d, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 300));
-
-            // 海报矮一点它就高一点，一比一。
-            Assert.Equal(100d, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 260));
-
-            // 剩不下就不画，不给负数 —— 集页那种矮带子上就是这一档（写死一个高的那一版会压进剧照的上沿）。
-            Assert.Equal(0d, DetailHero.MarkRoom(200, 28, 16, 169));
-            Assert.Equal(0d, DetailHero.MarkRoom(0, 28, 64, 300));
-
-            // 没有海报的条目上剩下的是一整格带子，那时候封住：一张一格半带子那么高的图不是记号。
-            Assert.Equal(DetailHero.MarkCap, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 0));
-
-            // 半像素那一下（缩放比不是整数时常有）四舍五入到整像素。
-            Assert.Equal(60d, DetailHero.MarkRoom(DetailHero.ArtHeight, 28, 64, 299.6));
         });
 
         // 带子收窄之后那道罩子得跟着收：罩子比带子还高就从带子的上沿溢出去，而标题条上那层洗按收完的那一块算。

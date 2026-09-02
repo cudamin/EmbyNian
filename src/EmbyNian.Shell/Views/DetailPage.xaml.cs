@@ -307,67 +307,118 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
-    /// 自检：角上那一张记号 —— 「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」，加上
-    /// 从前那句「把当前页面徽标所在地方替换为剧名，徽标移动到右上角」。画了没有、画多大、落在该落的那个角里，
-    /// 以及它和片名、和海报都不相交。
+    /// 自检：片名那一行在不在。单独拎出来，是因为它换过形状 —— 最早徽标和片名是一对反的 <c>Visibility</c>（图到了
+    /// 就顶掉文字标题），于是「头图上没有名字」和「一张没取到的图」在截图里长得一模一样。现在片名无条件在，两张
+    /// 图各是可有可无的记号。
+    /// </summary>
+    internal bool TitleDrawn => TitleText.Visibility == Visibility.Visible;
+
+    /// <summary>
+    /// 自检：片名头上那一枚徽标 —— 「统一改为在剧名上方显示徽标」。画了没有、画多大、真落在片名的上方而且左沿跟
+    /// 它对齐，以及它没顶出带子、没压到海报。
     /// <para>
-    /// 读元素而不是读视图模型，因为这一条的说法就是关于标记本身的，而它换过两次形状：最早徽标和片名是一对反的
-    /// <c>Visibility</c>（图到了就顶掉文字标题），那时候该检的是「两者恰好一个在」；后来片名永远是文字、徽标变成
-    /// 角上一枚记号，该检的就成了几何；这一版又把那一枚从右上角挪到海报头上，并让艺术图占先。「头图上没有名字」
-    /// 和「记号压在字上」在截图里都长得像一张没到的图，两种都得有人看着。
+    /// 读元素而不是读视图模型，因为这一条的说法就是关于标记本身的，而它换过三个位置：顶替文字标题 → 集页右上角、
+    /// 别的页面左上角（那时候艺术图占先） → 四种页面一律片名上方。「记号压在字上」在截图里也像一张缺了的图，所以
+    /// 这几何得有人读。
     /// </para>
     /// <para>
-    /// 集页照旧在右上角（那一格的高按里面那一叠字键实测给，剧照头上不剩地方 —— 见
-    /// <see cref="DetailViewModel.PlateVisibility"/>），所以「哪个角」是按页面的种类问的。尺寸那两个数说的是
-    /// 上限真的收住了：一张没收住的徽标从服务器下来有一千多像素宽，而左上角那一张的高是从海报头上算出来的
-    /// （<see cref="DetailHero.MarkRoom"/>）—— 它一旦算错，这一条会在「和海报相交」上红。
+    /// 「没顶出带子」是这一版最要紧的那一句：这一枚站在那一叠字里，而电影、剧、季三页的带高写死 460 —— 那一叠撑过
+    /// 让给它的 368 就从带子的上沿溢出去，屏上是徽标压在面包屑那一行上。集页反过来是带子跟着那一叠长高（那一页的
+    /// 高按实测给），所以那一头不会溢，会溢的正是写死高度的这三页。
     /// </para>
     /// </summary>
-    internal (bool Mark, bool Text, double Width, double Height, bool Placed, string Where) TitleShapes
+    internal (bool Drawn, double Width, double Height, bool Placed, string Where) PlateShape
     {
         get
         {
-            var episode = ViewModel.ItemType == EmbyItemType.Episode;
-            var image = episode ? CornerPlate : HeroMark;
-            var side = episode ? "右上角" : "左上角";
-            var drawn = image.Visibility == Visibility.Visible;
-            var text = TitleText.Visibility == Visibility.Visible;
+            // 没东西可摆、也没东西可压：服务器两种名牌都不给的条目是常态，那一次这句话是空的，不是没过。
+            if (TitlePlate.Visibility != Visibility.Visible)
+                return (false, TitlePlate.ActualWidth, TitlePlate.ActualHeight, true, "剧名上方没画");
 
-            // Nothing to place and nothing to collide with: an item whose server holds neither artwork is the
-            // ordinary case, and the corner claim is vacuous rather than failed.
-            if (!drawn) return (false, text, image.ActualWidth, image.ActualHeight, true, $"{side}没画");
+            var plate = BandBox(TitlePlate);
+            var title = BandBox(TitleText);
+            var still = BandBox(PosterStill);
 
-            var mark = Box(image);
-            var title = Box(TitleText);
-            var still = Box(PosterStill);
+            // 在片名的上方、左沿跟它对齐：这一枚和那行字是一组，错开一两像素屏上就是「歪了」。
+            var above = plate.Bottom <= title.Top + 0.5;
+            var aligned = Math.Abs(plate.Left - title.Left) <= 1.5;
 
-            // 上半格里，而且靠对的那一边。带子的高由内容定，所以「没顶出带子」得单独问一句：一张比让给它的地方
-            // 还高的图会把带子顶开，而屏上看着只是「这一页的头图怎么变高了」。
-            var corner = mark.Top < HeroBand.ActualHeight / 2
-                && (episode ? mark.Right > HeroBand.ActualWidth / 2 : mark.Left < HeroBand.ActualWidth / 2);
-            var inside = mark.Top >= -0.5 && mark.Bottom <= HeroBand.ActualHeight + 0.5;
+            var inside = plate.Top >= -0.5 && plate.Bottom <= HeroBand.ActualHeight + 0.5;
+            var clearOfStill = PosterStill.Visibility != Visibility.Visible || Apart(plate, still);
 
-            // 两个矩形不相交：片名怎么折行都碰不上它（集页上两行片名比这一枚的下沿还高，两者靠的是栏而不是行），
-            // 海报也一样 —— 左上角那一张就压在海报头上，让出来的那点地方算错了它就盖住海报的上沿，而「海报被盖了
-            // 一角」和「这张海报本来就这样」在截图里分不出来。
-            var clearOfTitle = Apart(mark, title);
-            var clearOfStill = PosterStill.Visibility != Visibility.Visible || Apart(mark, still);
-
-            return (true, text, image.ActualWidth, image.ActualHeight, corner && inside && clearOfTitle && clearOfStill,
-                $"记号 {mark.Left:0},{mark.Top:0} 到 {mark.Right:0},{mark.Bottom:0}、"
+            return (true, TitlePlate.ActualWidth, TitlePlate.ActualHeight,
+                above && aligned && inside && clearOfStill,
+                $"徽标 {plate.Left:0},{plate.Top:0} 到 {plate.Right:0},{plate.Bottom:0}、"
                     + $"片名 {title.Left:0},{title.Top:0} 到 {title.Right:0},{title.Bottom:0}"
-                    + $"（带 {HeroBand.ActualWidth:0}×{HeroBand.ActualHeight:0}，该在{side}）"
-                    + (corner ? "" : $"，不在{side}")
+                    + $"（带 {HeroBand.ActualWidth:0}×{HeroBand.ActualHeight:0}，该在剧名上方）"
+                    + (above ? "" : "，没在片名上方")
+                    + (aligned ? "" : "，左沿没跟片名对齐")
                     + (inside ? "" : "，顶出了带子")
-                    + (clearOfTitle ? "" : "，压到片名了")
                     + (clearOfStill ? "" : "，压到海报了"));
-
-            // 两个盒子都换算到带自己的坐标里，报告里的数就是「在图上指哪儿」。
-            Rect Box(FrameworkElement element) => element
-                .TransformToVisual(HeroBand)
-                .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
         }
     }
+
+    /// <summary>
+    /// 自检：右上角那张艺术图 —— 「右上角显示艺术图」。画了没有、画多大、真落在带子的右上角，以及它和字那一栏的
+    /// 两样（片名、徽标）、和海报都不相交。
+    /// <para>
+    /// 「没顶出带子」在这一条上是那 146 的上限唯一的看守：那个数是写死的，靠的是「最矮的一档带子减掉上下留白还剩
+    /// 156」（见 <see cref="DetailHero.EpisodeFloor"/>）。一张比让给它的地方还高的图会把带子顶开，而屏上看着只是
+    /// 「这一页的头图怎么变高了」—— 谁把那两个数往下调，红在这里。
+    /// </para>
+    /// <para>
+    /// 服务器上没有艺术图的条目占大多数（这台服务器三十一个条目里十六个有），那一次这句话是空的、成立 —— 它跟
+    /// <see cref="PlateShape"/> 各空各的，这正是「两个位置各归一样图，不再互相退档」的意思。
+    /// </para>
+    /// </summary>
+    internal (bool Drawn, double Width, double Height, bool Placed, string Where) CornerShape
+    {
+        get
+        {
+            if (CornerArt.Visibility != Visibility.Visible)
+            {
+                // 窄窗口上它是被规矩收起来的，不是「服务器没这张图」（见 DetailHero.CornerFits ——「窗口缩小到
+                // 一定程度自动隐藏」）。两种「没画」在报告里读起来一样，所以这一档把量到的页宽一起说出来，那也
+                // 正好是「页宽真的送到视图模型里了」的证据 —— 送不到的话这一张在任何窗口上都不画。
+                var narrow = !DetailHero.CornerFits(ViewModel.PageWidth);
+
+                return (false, CornerArt.ActualWidth, CornerArt.ActualHeight, true,
+                    narrow
+                        ? $"右上角没画（页面 {ViewModel.PageWidth:0} 窄过 {DetailHero.CornerFloor:0}，规矩说收起来）"
+                        : "右上角没画");
+            }
+
+            var art = BandBox(CornerArt);
+            var title = BandBox(TitleText);
+            var plate = BandBox(TitlePlate);
+            var still = BandBox(PosterStill);
+
+            var corner = art.Top < HeroBand.ActualHeight / 2 && art.Right > HeroBand.ActualWidth / 2;
+            var inside = art.Top >= -0.5 && art.Bottom <= HeroBand.ActualHeight + 0.5;
+
+            // 跟字那一栏里的两样都不相交：片名怎么折行都碰不上它（两者靠的是栏而不是行），徽标同理。海报也一样。
+            var clearOfTitle = Apart(art, title);
+            var clearOfPlate = TitlePlate.Visibility != Visibility.Visible || Apart(art, plate);
+            var clearOfStill = PosterStill.Visibility != Visibility.Visible || Apart(art, still);
+
+            return (true, CornerArt.ActualWidth, CornerArt.ActualHeight,
+                corner && inside && clearOfTitle && clearOfPlate && clearOfStill,
+                $"艺术图 {art.Left:0},{art.Top:0} 到 {art.Right:0},{art.Bottom:0}"
+                    + $"（带 {HeroBand.ActualWidth:0}×{HeroBand.ActualHeight:0}，该在右上角）"
+                    + (corner ? "" : "，不在右上角")
+                    + (inside ? "" : "，顶出了带子")
+                    + (clearOfTitle ? "" : "，压到片名了")
+                    + (clearOfPlate ? "" : "，压到徽标了")
+                    + (clearOfStill ? "" : "，压到海报了"));
+        }
+    }
+
+    /// <summary>
+    /// 把一个元素的盒子换算到头图那一格自己的坐标里 —— 报告里那几个数就是「在这张图上指哪儿」。
+    /// </summary>
+    private Rect BandBox(FrameworkElement element) => element
+        .TransformToVisual(HeroBand)
+        .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
 
     /// <summary>
     /// 自检：片名左边那张海报一个像素都没裁 —— 「海报下方会被裁切，要能看到完整的海报」。
@@ -531,6 +582,71 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 自检：页尾那张横幅 —— 「在电影页面 剧页面 集页面的底部添加横幅」。
+    /// <para>
+    /// 三件屏上不容易看出来的事：规矩说该有哪一张（<see cref="ItemArtwork.Footer"/> 自己答，不是这个文件猜的）、
+    /// 该有的时候屏上真画了而且没超出那张纸的左右、以及<em>该空的时候真空着</em>。最后那一句是这一条的正题：没有
+    /// 徽标的条目上剧名头上那一枚已经是这张横幅，页尾再来一张就是同一张图在一页上出现两次 —— 而屏上单看每一处
+    /// 都挺好，只有一起看才看出重了。季页也在这一句里（用户点的名只有电影、剧、集）。
+    /// </para>
+    /// <para>
+    /// 「画了没有」本身只报不判：那一步要等一趟网络加一次解码，而一台答不出这张图的服务器不是版面的错。判的是
+    /// 落点和那两个「该空」。这一条读在自检把页面滚到底之后，所以这张图这时候一定已经在视口里 —— 它就在最底下。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) FooterRead()
+    {
+        if (XamlRoot?.Content is not UIElement root) return (false, "页面还没上树");
+
+        var item = ViewModel.CurrentItem;
+        var pick = ViewModel.FooterPick;
+        var plate = ItemArtwork.Plate(item);
+        var kind = EmbyItemType.ToChinese(ViewModel.ItemType);
+        var page = ViewModel.ItemType is EmbyItemType.Movie or EmbyItemType.Series or EmbyItemType.Episode;
+        var drawn = FooterBanner.Visibility == Visibility.Visible;
+
+        // 规矩那一句用词说，同「详情徽标与艺术图」那一关：屏上那张图自己说不出它走了哪条路，而这一处正有两条路
+        // （自己的、借剧集那一层的）。
+        var says = item is null ? "没有条目"
+            : !page ? $"无（{kind}页不摆）"
+            : pick is null ? "无（这一条和剧集那一层都没有横幅图，或者名牌已经用了它）"
+            : pick.Value.ItemId == item.Id ? "自己的横幅图"
+            : $"借剧集那张（取自条目 {pick.Value.ItemId}）";
+
+        // 防重那一句在这儿再对一遍：页尾那张不许和剧名头上那一枚是同一张图。规矩那一头有单测，这一条读的是
+        // 「屏上这一次真的不是同一张」。
+        var distinct = pick is null || plate is null || pick.Value != plate.Value;
+        var allowed = page && pick is not null;
+
+        if (!drawn)
+        {
+            return (distinct, $"{kind}页，规矩说该有的是{says}；屏上没画"
+                + (allowed ? "（图还在路上或者服务器没给，只报不判）" : "")
+                + (distinct ? "" : "，而且它和剧名头上那一枚是同一张"));
+        }
+
+        var box = FooterBanner.TransformToVisual(root)
+            .TransformBounds(new Rect(0, 0, FooterBanner.ActualWidth, FooterBanner.ActualHeight));
+        var sheet = BodySheet.TransformToVisual(root)
+            .TransformBounds(new Rect(0, 0, BodySheet.ActualWidth, BodySheet.ActualHeight));
+        var inside = box.Left >= sheet.Left + BodySheet.Padding.Left - 0.5
+            && box.Right <= sheet.Right - BodySheet.Padding.Right + 0.5;
+        var last = box.Bottom <= sheet.Bottom + 0.5 && box.Top >= Box(CastRow).Bottom - 0.5;
+
+        return (allowed && distinct && inside && last,
+            $"{kind}页，规矩说该有的是{says}；屏上画了 {box.Width:0}×{box.Height:0}，"
+                + $"落在 {box.Left:0},{box.Top:0}（纸 {sheet.Left:0},{sheet.Top:0} 到 {sheet.Right:0},{sheet.Bottom:0}）"
+                + (allowed ? "" : "，可规矩说这儿该空着")
+                + (distinct ? "" : "，而且它和剧名头上那一枚是同一张")
+                + (inside ? "" : "，超出了纸的左右")
+                + (last ? "" : "，不在演职人员那一排之后或者越过了纸的下沿"));
+
+        Rect Box(FrameworkElement element) => element
+            .TransformToVisual(root)
+            .TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+    }
+
+    /// <summary>
     /// 自检：往下滚的时候背景图是不是真被盖住了 —— 「滑到下面不用显示背景了，五颜六色的太丑了」。
     /// <para>
     /// 背景那一层铺满整个窗口而且固定不动（见 <see cref="HeroFill"/>），所以「看不见它」全靠正文那张纸遮：
@@ -539,8 +655,20 @@ public sealed partial class DetailPage : Page, IShellContent
     /// </para>
     /// <para>
     /// 底下那条是关键：纸只有内容那么高，而一部没有单集、相似又寥寥的电影可能填不满一屏，所以纸有个跟着视口
-    /// 走的下限（<see cref="DetailViewModel.BodyMinHeight"/>）。这一条读的是那个下限真的生效了，不是内容碰巧
+    /// 走的下限（<see cref="DetailViewModel.PaperMinHeight"/>）。这一条读的是那个下限真的生效了，不是内容碰巧
     /// 够长 —— 短页面上根本滚不动，纸的下沿就得自己站到窗口的下沿上。
+    /// </para>
+    /// <para>
+    /// 另外两条读的是纸的上沿 ——「下方的媒体信息等，要往下滑才能看到」加上「拉大或拉小窗口会导致背景图被遮挡」。
+    /// 那道边落在哪儿从前只由内容定，于是同一个条目在矮窗口上看不见它、拉高就有三百像素的纸浮在剧照上。现在
+    /// 富余高度归尾部（<see cref="DetailHero.TailHeight"/>），所以要读两句：纸的上沿在第一屏外面，而且尾部撑到的
+    /// 正是「内容和这一次该补的量两者取大」（封了顶就是那个顶）——多撑一分就是在剧情说明底下留一段没人要的空气，
+    /// 少撑一分那道边就回到剧照上。屏上这两件事只在某些窗口尺寸下看得出来，而自检只跑一个尺寸，所以读的是数。
+    /// </para>
+    /// <para>
+    /// 「在第一屏外面」那一句在尾部封顶之后不问（<see cref="DetailHero.TailCap"/>）：那一档纸本来就该露在第一屏
+    /// 底下 —— 再撑下去只是在剧情说明底下留一段越来越长的空画面（「下面越改空位越大」）。封了顶之后撑到多少仍旧
+    /// 由上一句（尾部撑得对不对）咬着，所以这一档不是没人看，只是换了一句问法。
     /// </para>
     /// <para>
     /// 左右两条比的是这一页（<c>Body</c>）而不是窗口：页面左边是侧边栏，纸本来就不该盖过去。
@@ -574,18 +702,39 @@ public sealed partial class DetailPage : Page, IShellContent
         var right = box.Right >= page.Right - 0.5;
         var below = box.Bottom >= window.Height - 0.5;
         var opaque = BodySheet.Background is SolidColorBrush { Color.A: 255 };
-        var moved = Math.Abs(box.Top - tail.Bottom) < 0.5
-            && (last is null || (box.Top >= end - 0.5 && box.Top - end <= HeroTail.Padding.Bottom + 0.5));
+        var moved = Math.Abs(box.Top - tail.Bottom) < 0.5;
+
+        // 尾部该多高：内容和「这一次该补多少」两者取大（见 DetailHero.TailHeight）。内容那一头按最后一块的
+        // 下沿加上尾部自己的下留白算 —— 那就是不撑的时候这一段的高。
+        var content = last is null ? HeroTail.ActualHeight : end - tail.Top + HeroTail.Padding.Bottom;
+        var want = Math.Max(content, ViewModel.TailMinHeight);
+        var snug = Math.Abs(HeroTail.ActualHeight - want) < 0.5;
+
+        // 纸的上沿不许落进第一屏。读的是内容坐标（带高加尾部实高）而不是屏上位置：这一条问的是「滚到顶时它在
+        // 哪儿」，而自检读到这里时页面已经滚到底了。两档不问：没有剧照的那一档不撑尾部，以及尾部封了顶那一档
+        // ——「下面越改空位越大」，那时候富余的高度归纸，纸本来就该露一条。
+        var paperTop = PaperOffset();
+        var capped = Math.Abs(ViewModel.TailMinHeight - DetailHero.TailCap) < 0.5;
+        var beyond = paperTop >= Body.ActualHeight - 0.5;
+        var folded = !ViewModel.HeroArt || capped || beyond;
         var joined = HeroTail.Background is SolidColorBrush { Color: var tailColor }
             && tailColor == HeroScrimBrush.GradientStops[^1].Color;
         var pickersBare = Bare(PickerPanel);
         var overviewBare = Bare(OverviewPanel);
 
-        return (left && right && below && opaque && moved && joined && pickersBare && overviewBare,
+        return (left && right && below && opaque && moved && snug && folded && joined
+                && pickersBare && overviewBare,
             $"正文 {box.Left:0},{box.Top:0} 到 {box.Right:0},{box.Bottom:0}，"
                 + $"页面 {page.Left:0},{page.Right:0}、窗口高 {window.Height:0}（已滚到底）"
                 + (opaque ? "，底色不透明" : "，底色透光")
-                + (moved ? $"，分界在{name}下面" : $"，分界没贴住尾部（尾部到底 {tail.Bottom:0}、{name}到底 {end:0}）")
+                + (moved ? $"，分界紧接{name}那一段" : $"，分界没贴住尾部（尾部到底 {tail.Bottom:0}）")
+                + (snug ? $"，尾部撑到 {HeroTail.ActualHeight:0}（内容 {content:0}、第一屏要 {ViewModel.TailMinHeight:0}）"
+                    : $"，尾部撑得不对（实测 {HeroTail.ActualHeight:0}、该是 {want:0}）")
+                + (beyond ? $"，纸的上沿 {paperTop:0} 在第一屏 {Body.ActualHeight:0} 外面"
+                    : capped
+                        ? $"，纸的上沿 {paperTop:0} 露在第一屏 {Body.ActualHeight:0} 里"
+                            + $"（尾部封在 {DetailHero.TailCap:0} 上，富余的高度归纸）"
+                        : $"，纸的上沿 {paperTop:0} 浮在第一屏 {Body.ActualHeight:0} 里")
                 + (joined ? "，尾部接住头图末色" : "，尾部和头图末色不同")
                 + (pickersBare ? "，音轨外圈已去掉" : "，音轨仍有外圈或底色")
                 + (overviewBare ? "，剧情说明外圈已去掉" : "，剧情说明仍有外圈或底色")
@@ -630,18 +779,18 @@ public sealed partial class DetailPage : Page, IShellContent
     {
         if (XamlRoot?.Content is not UIElement root) return (false, "页面还没上树");
 
-        // 这一行只摆在讲一个文件的页面上 —— 电影和单集有，剧和季没有（判据在 DetailViewModel.PickersVisibility）。
-        // 剧页上那三个下拉底下什么都没有：一部剧不是一个文件，源只有一个、轨道是解析出来的那一集的。所以「剧页上
-        // 它又冒出来了」是一种坏法，而不是一次多余的读数。
-        var filePage = EmbyItemType.IsPlayable(ViewModel.ItemType);
+        // 这一行说的是播放键指着的那个文件 —— 电影和单集是自己，剧页和季页是解析出来的那一集（判据在
+        // DetailViewModel.PickersVisibility）。所以判的不再是「这一页是不是文件」，而是「有没有那个落点」：
+        // 落点是空的（人物页，或者一部剧的集还没回来）还把这一行画出来，挑的就是另一个条目留下的轨道。
+        var target = ViewModel.PlayTarget;
         var kind = EmbyItemType.ToChinese(ViewModel.ItemType);
 
         if (PickerPanel.Visibility != Visibility.Visible)
         {
-            return (true, filePage ? $"{kind}页，没什么可挑的，那一行收着" : $"{kind}页不摆这一行");
+            return (true, target is null ? $"{kind}页没有播放落点，那一行收着" : $"{kind}页，没什么可挑的，那一行收着");
         }
 
-        if (!filePage) return (false, $"{kind}页不该有文件选项那一行，可它画出来了");
+        if (target is null) return (false, $"{kind}页没有播放落点，可文件选项那一行画出来了");
 
         var panel = PickerPanel.TransformToVisual(root)
             .TransformBounds(new Rect(0, 0, PickerPanel.ActualWidth, PickerPanel.ActualHeight));
@@ -1096,10 +1245,16 @@ public sealed partial class DetailPage : Page, IShellContent
         var drawn = GenreLine.Visibility == Visibility.Visible;
         var same = texts.Count == wanted.Count && texts.SequenceEqual(wanted, StringComparer.Ordinal);
 
-        return (drawn && same,
+        // 墨也要和上一行同一支。Hyperlink 自带框架的强调色，忘了压就是这一行独自变亮 —— 而它是整页最大那行片名
+        // 底下紧贴的一行，屏上非常扎眼（用户为此提过一次）。比的是画刷对象本身：那一支不跟主题走，全程同一个。
+        var wantedInk = ViewModel.SublineBrush;
+        var ink = links.All(link => ReferenceEquals(link.Foreground, wantedInk));
+
+        return (drawn && same && ink,
             $"那一行 {wanted.Count} 个类型，屏上 {links.Count} 段可点：{string.Join('、', texts)}"
                 + (drawn ? "" : "，可那一行没画出来")
-                + (same ? "" : $"，和视图模型那份对不上（要的是 {string.Join('、', wanted)}）"));
+                + (same ? "" : $"，和视图模型那份对不上（要的是 {string.Join('、', wanted)}）")
+                + (ink ? "，墨和副标题同一支" : "，墨不是副标题那一支 —— 框架的强调色没压住"));
     }
 
     /// <summary>
@@ -1111,9 +1266,13 @@ public sealed partial class DetailPage : Page, IShellContent
     /// 片名底下，它多高、断在哪儿都是版面的事。
     /// </para>
     /// <para>
-    /// 不画下划线：这一行的字色、字号跟着 <see cref="DetailViewModel.SublineBrush"/> 走，和改之前一模一样，
-    /// 变的只有「指针移上去是一只手、按得下去」。分隔符那几段用普通 <c>Run</c>，所以它们不可点 —— 点在两个
-    /// 类型中间的空当上不该开出一格来。
+    /// **字色显式压成副标题那一支**（<see cref="DetailViewModel.SublineBrush"/>）。这一句非写不可：
+    /// <see cref="Hyperlink"/> 自带框架的链接色（强调色，这套主题下是偏亮的绿），它盖在 <c>GenreLine</c> 从标记里
+    /// 继承下来的那一支上面 —— 于是这一行从「和上一行同一支暗墨」变成了整个头部最扎眼的一行。用户看出来的就是这个
+    /// （「想要它跟以前一样暗」）。不画下划线同理，变的只该是「指针移上去是一只手、按得下去」。
+    /// </para>
+    /// <para>
+    /// 分隔符那几段用普通 <c>Run</c>，所以它们不可点 —— 点在两个类型中间的空当上不该开出一格来。
     /// </para>
     /// </summary>
     private void PaintGenres()
@@ -1124,7 +1283,11 @@ public sealed partial class DetailPage : Page, IShellContent
         {
             if (GenreLine.Inlines.Count > 0) GenreLine.Inlines.Add(new Run { Text = "  ·  " });
 
-            var link = new Hyperlink { UnderlineStyle = UnderlineStyle.None };
+            var link = new Hyperlink
+            {
+                UnderlineStyle = UnderlineStyle.None,
+                Foreground = ViewModel.SublineBrush
+            };
             link.Inlines.Add(new Run { Text = genre });
 
             // 捕获一份自己的：委托跑起来的时候循环那个变量已经走到下一个了。
@@ -1236,6 +1399,10 @@ public sealed partial class DetailPage : Page, IShellContent
     private void OnBodySizeChanged(object sender, SizeChangedEventArgs e)
     {
         ViewModel.Viewport = Body.ActualHeight;
+
+        // 同一趟量的另一个数：这一页有多宽。右上角那张画窄了就不画（DetailHero.CornerFits ——「窗口缩小到一定
+        // 程度自动隐藏」），而「多宽」只有布好的版面知道。量页面不量窗口：侧边栏一展开页面就窄掉两百来像素。
+        ViewModel.PageWidth = Body.ActualWidth;
 
         // 同一件事的另一头：这个滚动视图变高变矮，正是因为它上面那行面包屑出现或收起，也就是背景那一层该往上
         // 顶多少变了的那一刻。见 LiftBackdrop。

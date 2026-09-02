@@ -51,10 +51,12 @@ internal static partial class ShellSelfCheck
 
         Check("客户区尺寸", width > 0 && height > 0, $"{width}x{height} 物理像素");
 
-        // 「锁定主页的窗口长宽」：浏览区真是那个形状。锁的是客户区去掉侧边栏那一条之后剩下的那一片
-        // （「计算比例时要排除侧边栏」），所以这里量的是那一片，而不是整个客户区。主页从 HostWindow 的真实锁定
-        // 状态启用严格首屏；侧边栏两档各自有没有完整放下继续观看，由下面「主页首屏只露继续观看」在真实 XAML
-        // 树上另量。开关关掉时（BrowseAspect 是 0）就只报形状不判：那时窗口本来就随便拉。
+        // 「锁定主页的窗口长宽避免调整窗口大小时轮播画面被裁切」：浏览区真是那个形状。锁的是客户区去掉侧边栏那一条
+        // 之后剩下的那一片（「计算比例时要排除侧边栏」），所以这里量的是那一片，而不是整个客户区。**这条锁买到的
+        // 是那张 16:9 剧照正好铺满第一屏、上下左右都不留底色** —— 图本身在任何形状下都不裁（`Stretch="Uniform"`，
+        // 由下面「主页大图不裁切」量）。「继续观看完整落在第一屏里」是另一回事，靠的是把那一排压在图上（ShelfLift），
+        // 跟这条锁开不开没有关系，由下面「主页首屏只露继续观看」在真实 XAML 树上另量。
+        // 开关关掉时（BrowseAspect 是 0）就只报形状不判：那时窗口本来就随便拉。
         var sideInset = window.SideInset;
         var browseWidth = width - sideInset;
         var browseShape = height > 0 && browseWidth > 0 ? (double)browseWidth / height : 0;
@@ -69,7 +71,7 @@ internal static partial class ShellSelfCheck
                 + $"（客户区宽 {width}，侧边栏那一条 {sideInset} 不算）"
                 + (window.BrowseAspect > 0
                     ? $"，锁在 {HomeCarousel.WindowAspectLabel} = {window.BrowseAspect:0.000}:1"
-                        + "（主页首屏按完整继续观看排版）"
+                        + "（一张不裁切的 16:9 轮播图正好铺满第一屏）"
                         + (pinned ? $"；已经顶到最小高度 {floor.Height}，这一档形状让位" : "")
                     : "，未锁定"));
 

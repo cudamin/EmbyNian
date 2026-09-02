@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Xaml;
@@ -342,15 +343,21 @@ public sealed partial class SettingFactRow : SettingRow
 }
 
 /// <summary>
-/// 主页版面那一行：一张可以拖着换次序、每一项自己带一个勾的表 —— 「新增页里拖拽决定这些列表的顺序，勾选显示
+/// 主页版面那一行：一张可以换次序、每一项自己带一个勾的表 —— 「新增页里拖拽决定这些列表的顺序，勾选显示
 /// 或者不勾选取消显示」。
 /// <para>
-/// 和别的行不一样，它管的不是一个开关而是一份有序清单，所以读写那一对换成了「拿到这一份」和「这一份变了」：拖过
-/// 一次、或者点过一个勾，都当场写回设置并喊一声（见 <see cref="SettingsViewModel"/> 里造它的那一段）。
+/// 和别的行不一样，它管的不是一个开关而是一份有序清单，所以读写那一对换成了「拿到这一份」和「这一份变了」：换过
+/// 一次次序、或者点过一个勾，都当场写回设置并喊一声（见 <see cref="SettingsViewModel"/> 里造它的那一段）。
 /// </para>
 /// <para>
 /// 表里那几项是 <see cref="HomeRowChoice"/>，顺序就是集合自己的顺序 —— <c>ListView</c> 拖动时改的正是这个集合，
 /// 所以「屏上的次序」和「要存的次序」是同一件东西，不用在两处之间对齐。
+/// </para>
+/// <para>
+/// 换次序有两条路：按住往上下拖，或者按那一行右边的两颗箭头（<see cref="HomeRowChoice.UpCommand"/>）。两颗箭头
+/// 不是替代品，是这件事唯一验得到的形式 —— 这台机器上注不进鼠标事件（见 CLAUDE.md），拖那一下没法自动做一遍，
+/// 而一张拖不动的表在屏上和拖得动的长得一模一样。箭头这条路由 <see cref="Probe"/> 钉着，顺带也给了不使指针的人
+/// 一条路。
 /// </para>
 /// </summary>
 public sealed partial class SettingHomeLayoutRow : SettingRow
@@ -367,17 +374,23 @@ public sealed partial class SettingHomeLayoutRow : SettingRow
     {
         _changed = changed;
 
-        foreach (var row in rows)
-        {
-            row.Changed = Save;
-            Rows.Add(row);
-        }
+        foreach (var row in rows) Adopt(row);
 
-        Rows.CollectionChanged += (_, _) =>
+        Rows.CollectionChanged += (_, args) =>
         {
             OnPropertyChanged(nameof(ListHeight));
+            MarkEnds();
+
+            // 拖一次是两下：先把那一排摘掉，再插到新位置上（ListView 换位走的是 Remove ＋ Add，不是 Move）。
+            // 摘掉那一下不写盘 —— 那一刻表里少一排，写出去主页就照少一排重排一遍，被拖的那一排在屏上闪一下
+            // 不见了，紧接着插回来的那一下又重排一遍。插回去那一下才是最终次序。
+            // 箭头那条路走的是 Move，一下就是一下（见 Shift），所以它落在下面那句上。
+            if (args.Action is NotifyCollectionChangedAction.Remove) return;
+
             Save();
         };
+
+        MarkEnds();
     }
 
     /// <summary>屏上那张表，顺序就是主页上那几排的顺序。</summary>
@@ -400,11 +413,7 @@ public sealed partial class SettingHomeLayoutRow : SettingRow
         try
         {
             Rows.Clear();
-            foreach (var row in rows)
-            {
-                row.Changed = Save;
-                Rows.Add(row);
-            }
+            foreach (var row in rows) Adopt(row);
         }
         finally
         {
@@ -420,13 +429,88 @@ public sealed partial class SettingHomeLayoutRow : SettingRow
 
         _changed([.. Rows]);
     }
+
+    /// <summary>把一项收进表里，接上它那两根线：勾变了要写盘，箭头按了要换位。</summary>
+    private void Adopt(HomeRowChoice row)
+    {
+        row.Changed = Save;
+        row.Shift = Shift;
+        Rows.Add(row);
+    }
+
+    /// <summary>
+    /// 把一项往上或者往下挪一格 —— 那两颗箭头按的就是这个。
+    /// <para>
+    /// 走 <c>Move</c> 而不是自己摘了再插：那是一次集合变动、一次写盘，摘＋插是两次（见上头造它时那段说明）。
+    /// 到顶或者到底时什么都不做 —— 那时那颗按钮本来就是灰的，这一句防的是键盘和读屏那条路。
+    /// </para>
+    /// </summary>
+    private void Shift(HomeRowChoice row, int delta)
+    {
+        var from = Rows.IndexOf(row);
+        var to = from + delta;
+        if (from < 0 || to < 0 || to >= Rows.Count) return;
+
+        Rows.Move(from, to);
+    }
+
+    /// <summary>头一排的「上移」和末一排的「下移」置灰 —— 按下去也不动的按钮不该是亮的。</summary>
+    private void MarkEnds()
+    {
+        for (var index = 0; index < Rows.Count; index++)
+        {
+            Rows[index].CanUp = index > 0;
+            Rows[index].CanDown = index < Rows.Count - 1;
+        }
+    }
+
+    /// <summary>
+    /// 自检：那两颗箭头真换得了次序。就地造一张三行的假表按几下，不碰设置文件、也不碰屏上那一张（同 HomeBanner
+    /// 那颗探针的做法）。
+    /// <para>
+    /// 这一条非有不可：单元测试进不到外壳这个程序集，而这台机器上注不进鼠标事件，拖那一下没法自动做一遍。少了它，
+    /// 「换次序」就只剩一张截图能说明，而拖得动和拖不动的表拍出来一模一样。
+    /// </para>
+    /// <para>
+    /// 数写盘次数是这一条的一半：一次换位只能写一遍盘 —— 写两遍主页就重排两遍，被挪的那一排在屏上闪一下。
+    /// </para>
+    /// </summary>
+    internal static (bool Ok, string Detail) Probe()
+    {
+        var saves = 0;
+        var table = new SettingHomeLayoutRow(
+            "探针",
+            null,
+            [new HomeRowChoice("a", "甲", true), new HomeRowChoice("b", "乙", true), new HomeRowChoice("c", "丙", true)],
+            _ => saves++);
+
+        string Order() => string.Concat(table.Rows.Select(row => row.Key));
+
+        var ends = !table.Rows[0].CanUp && table.Rows[0].CanDown
+            && table.Rows[2].CanUp && !table.Rows[2].CanDown;
+
+        table.Rows[1].DownCommand.Execute(null);
+        var down = Order() == "acb" && saves == 1;
+
+        table.Rows[2].UpCommand.Execute(null);
+        var up = Order() == "abc" && saves == 2;
+
+        table.Rows[0].UpCommand.Execute(null);
+        var stop = Order() == "abc" && saves == 2;
+
+        return (ends && down && up && stop,
+            $"三行假表：两头{(ends ? "置灰" : "没置灰")}、下移{(down ? "换得动" : "没换动")}、"
+                + $"上移{(up ? "换得回" : "没换回")}、到顶再上移{(stop ? "不动也不写盘" : "动了或者写了盘")}"
+                + $"，末了 {Order()}、写盘 {saves} 次");
+    }
 }
 
 /// <summary>
-/// 主页版面表里的一项：屏上那句标题、认它的那把钥匙、勾了没有。
+/// 主页版面表里的一项：屏上那句标题、认它的那把钥匙、勾了没有，加上换次序那两颗箭头。
 /// <para>
 /// 勾变了就地喊回去（<see cref="Changed"/>），因为 <c>CheckBox</c> 改的是这一项而不是那张表，集合自己的
-/// <c>CollectionChanged</c> 听不见。
+/// <c>CollectionChanged</c> 听不见。箭头反过来 —— 它要动的是整张表的次序，所以那一下交回给表去做
+/// （<see cref="Shift"/>），写盘还是走集合那条路，和拖一下走的是同一段。
 /// </para>
 /// </summary>
 public sealed partial class HomeRowChoice : ObservableObject
@@ -448,10 +532,27 @@ public sealed partial class HomeRowChoice : ObservableObject
     /// <summary>勾变了的时候喊一声；由 <see cref="SettingHomeLayoutRow"/> 挂上。</summary>
     internal Action? Changed { get; set; }
 
+    /// <summary>按了箭头往哪边挪一格；同上，由那张表挂上。</summary>
+    internal Action<HomeRowChoice, int>? Shift { get; set; }
+
     [ObservableProperty]
     public partial bool Visible { get; set; }
 
+    /// <summary>那两颗箭头亮不亮：头一排不能再往上，末一排不能再往下。由那张表在次序变动后重算。</summary>
+    [ObservableProperty]
+    public partial bool CanUp { get; set; }
+
+    /// <inheritdoc cref="CanUp"/>
+    [ObservableProperty]
+    public partial bool CanDown { get; set; }
+
     partial void OnVisibleChanged(bool value) => Changed?.Invoke();
+
+    [RelayCommand]
+    private void Up() => Shift?.Invoke(this, -1);
+
+    [RelayCommand]
+    private void Down() => Shift?.Invoke(this, 1);
 
     /// <summary>读屏的人听到的那一句，也是拖动时那块浮起来的东西的名字。</summary>
     public override string ToString() => Title;

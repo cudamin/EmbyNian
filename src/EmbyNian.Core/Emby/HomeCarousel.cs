@@ -35,21 +35,25 @@ public static class HomeCarousel
     /// <summary>
     /// 锁定窗口比例大小: the shape the browsing area is held in, as width ÷ height — 16:9.
     /// <para>
+    /// **这条锁的用处是「调整窗口大小时轮播画面不被裁切」**，也就是它当初被要来做的那件事。剧照本身在任何窗口形状
+    /// 下都不裁（<see cref="Height"/> 那一块里按自己的比例整张画出来），锁买到的是**上下左右都不留底色**：第一屏
+    /// 就是一屏，页面锁在 16:9，而服务器发来的宽图全是 16:9，所以那一屏正好被一张完整的剧照铺满。锁着别的形状或者
+    /// 最大化时图还是完整的，只是四周多两条底色。
+    /// </para>
+    /// <para>
+    /// 「继续观看完整落在第一屏里」不是这条锁的事，别把两者绑在一起 —— 那一排是压在图上的（<see cref="ShelfLift"/>
+    /// 把它往上提），锁开不开都成立。中间有一版把锁改成「视口减掉第一排货架」来兑现那句话，代价是带子不再是整屏、
+    /// 也就不再有「不裁切」这个承诺；那一版已经删了。
+    /// </para>
+    /// <para>
     /// 「计算比例时要排除侧边栏」: the area this ratio describes is the client area less
     /// <see cref="SideRail"/>, which is the page rather than the window. The rail is chrome, and counting it
     /// meant the page was never the shape the lock named — the old 1.6:1 window drew its pages at 1.54:1.
-    /// 16:9 is the shape of the pictures those pages are built around: every backdrop, thumb and still the
-    /// server sends is 16:9, and the home page's own band is a full-width one of them.
     /// </para>
     /// <para>
     /// Nothing is excluded vertically, which is a decision rather than an omission: the title bar's 32 is
     /// drawn over the page rather than above it, and on the home page the picture starts at the window's very
     /// top edge — so the whole client height is the picture's.
-    /// </para>
-    /// <para>
-    /// 这个形状还有第二个用处：主页第一屏那一块就是一屏（<see cref="Height"/>），而剧照在里面整张画出来，所以
-    /// 窗口锁在这个比例上的时候，那一块正好被一张不裁切的 16:9 剧照铺满 —— 两件事对得上不是巧合，服务器发来的
-    /// 宽图都是这个形状。
     /// </para>
     /// </summary>
     public const double WindowAspect = 16.0 / 9.0;

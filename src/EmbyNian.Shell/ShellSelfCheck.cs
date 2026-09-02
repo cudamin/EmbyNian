@@ -137,6 +137,17 @@ internal static partial class ShellSelfCheck
     private static bool _detailScrolled;
 
     /// <summary>
+    /// 「详情页重新读取过一遍了」。这一步存在的理由是 <c>DetailViewModel.Preview</c> 那条规矩只有重新读取时才验得到：
+    /// 先用卡片画一屏是对的，可**重新读取时再拿那张卡片盖一遍就是把整页退回旧值** —— 屏上看得见的那一处是
+    /// 「标记为已观看」之后那个勾先跳回未看、一趟往返之后才变回来。一百毫秒的事，截图抓不住，只有数得出来。
+    /// <para>
+    /// 摆在这一段的最后，在 <see cref="OpenFilePage"/> 和 <see cref="ShowInfo"/> 之后：重新读取会先清空集带再重新
+    /// 填，夹在那两步之前会让「点第一张集卡片」找不到卡可点，把 媒体信息 那几关整片变成「这次没走到文件页」。
+    /// </para>
+    /// </summary>
+    private static bool _detailReloaded;
+
+    /// <summary>
     /// What 单集 had drawn before that scroll, split by shape — rows off the vertical list, cards off the
     /// horizontal strip. 单集 sits at the top of the page and 演职人员 at the bottom, so the two counts belong
     /// to different scroll positions; keeping this one lets <see cref="ReadDetail"/> report the best each ever
@@ -287,25 +298,56 @@ internal static partial class ShellSelfCheck
         bool WashOk,
         string Wash,
         bool StillShapeOk,
-        string StillShape);
+        string StillShape,
+        bool FooterOk,
+        string Footer);
+
+    /// <summary>
+    /// 一张记号在页面上的样子：规矩说该有哪一张、屏上画了没有、画多大、落对了没有，和它是从哪一片几何读出来的。
+    /// <para>
+    /// 两枚各一份而不是一份带个「哪个角」—— 「统一改为在剧名上方显示徽标，右上角显示艺术图」之后它们是两个各自
+    /// 独立的位置，各空各的、各错各的，一份读数说不清是哪一样没落对。
+    /// </para>
+    /// </summary>
+    /// <param name="Wanted">
+    /// 规矩说这一格该有哪一张，用词说 —— 「自己的艺术图」、「自己的徽标」、「剧集的徽标（取自条目 5687）」、「无」。
+    /// 由 <see cref="ItemArtwork"/> 自己那两支算出来（<see cref="ItemArtwork.Plate"/> 和
+    /// <see cref="ItemArtwork.Corner"/>），所以这是应用自己那条规则的答案，不是这个文件对它的猜测。id 一样要紧：
+    /// 集页和季页上徽标是剧集那一头发的，按这一页自己的 id 去取会取回一个空答案，而「徽标」两个字自己说不出走了
+    /// 哪一条路。
+    /// </param>
+    /// <param name="Drawn">
+    /// 屏上画了没有。服务器没有这一张的条目占大多数，那一次它是 false 而 <paramref name="Placed"/> 空着成立。
+    /// </param>
+    /// <param name="Placed">
+    /// 真落在该落的地方没有：徽标要在片名的上方、左沿跟它对齐，艺术图要在带子的右上角，两者都不许顶出带子、也
+    /// 不许压到海报。几何在 <paramref name="Where"/> 里，读的地方是 <see cref="DetailPage.PlateShape"/> 和
+    /// <see cref="DetailPage.CornerShape"/>。
+    /// </param>
+    private sealed record MarkRead(
+        string Wanted,
+        bool Drawn,
+        double Width,
+        double Height,
+        bool Placed,
+        string Where);
+
+    /// <summary>
+    /// 一格记号在报告里的那一句：画了没有、画多大、规矩说该是哪一张，加上量到的几何。三处共用（详情页那一条、
+    /// 文件页那一行信息、文件页那一条落点），所以措辞只有一份 —— 三处各写一遍的结果是同一件事在报告里三种说法。
+    /// </summary>
+    private static string Say(string what, MarkRead read) =>
+        $"{what}{(read.Drawn ? $"画了（{read.Width:0}×{read.Height:0}）" : "没画")}"
+            + $" —— 规矩说该有的是{read.Wanted}；{read.Where}";
 
     /// <summary>
     /// 需求 4 on the detail page: 「把媒体的徽标…融入对应媒体的 ui 界面」 as the page really came out.
     /// </summary>
-    /// <param name="Wanted">
-    /// What the rule says belongs in this page's one corner, in words — 「自己的艺术图」, 「自己的徽标」,
-    /// 「剧集的徽标（取自条目 5687）」, 「无」. Worked out through <see cref="ItemArtwork.Mark"/> (or, on an
-    /// episode page, <see cref="ItemArtwork.Plate"/>), so it is the app's own rule saying what the page meant
-    /// to show rather than this file's guess at it.
-    /// </param>
-    /// <param name="Mark">
-    /// Whether the corner mark is on screen, and <paramref name="Text"/> whether the text title is. The text
-    /// title is now unconditional and the mark merely optional — see 详情名牌 in <see cref="ReportDetail"/>.
-    /// </param>
-    /// <param name="Placed">
-    /// Whether the mark really landed in the corner it belongs in, clear of the title and of the poster ——
-    /// 「把艺术图的位置改到左上角」（集页照旧右上角）. True by vacuity on an item the server holds neither
-    /// artwork for; the geometry it was read from is in <paramref name="Where"/>.
+    /// <param name="Plate">剧名上方那一枚徽标（徽标 or 横幅图）。</param>
+    /// <param name="Corner">右上角那一张艺术图。</param>
+    /// <param name="Text">
+    /// Whether the text title is on screen. It is now unconditional and both pictures merely optional —
+    /// see 详情徽标与艺术图 in <see cref="ReportDetail"/>.
     /// </param>
     /// <param name="Kinds">
     /// Which artworks the server holds for this one item, 「海报、缩略图、背景图」. Informational: a thin
@@ -321,13 +363,9 @@ internal static partial class ShellSelfCheck
     /// 服务器一张都没发的那一次这句话空着成立 —— 那时候退回自己的画面是对的。
     /// </param>
     private sealed record ArtworkRead(
-        string Wanted,
-        bool Mark,
+        MarkRead Plate,
+        MarkRead Corner,
         bool Text,
-        double Width,
-        double Height,
-        bool Placed,
-        string Where,
         string Kinds,
         string Hero,
         bool HeroOk);
@@ -597,7 +635,11 @@ internal static partial class ShellSelfCheck
                     return true;
                 }
 
+                // 最后一步：重新读取一遍，再问那三个数。见 _detailReloaded 上的说明 —— 「先画」那条规矩的另一半
+                // 只有在这里才验得到，而它必须排在上面两步之后。
+                if (ReloadDetail(shell)) return true;
 
+                _detailPreview ??= (shell.Pages.Content as DetailPage)?.PreviewRead();
             }
             else if (_stage == 3) _servers = ReadServers(shell);
             else if (_stage == 4) _diagnostics = ReadDiagnostics(shell);
@@ -785,8 +827,24 @@ internal static partial class ShellSelfCheck
         _detailScrolled = true;
         _detailEpisodesDrawn = page.EpisodeShapes;
         _detailGenres = page.GenreRead();
-        _detailPreview = page.PreviewRead();
         page.ScrollToEnd();
+        return true;
+    }
+
+    /// <summary>
+    /// 让屏上那一页重新读取一遍，然后交出一拍等它落定。见 <see cref="_detailReloaded"/>：这一步只为验
+    /// <c>DetailViewModel.Preview</c> 那条规矩的另一半 —— 重新读取时不许再拿卡片那一份把整页盖一遍。
+    /// <para>
+    /// 只是重新读，不改服务器上的任何东西（那几个请求全是 GET）。真正会写状态的是「标记为已观看」，而它走的正是同
+    /// 一个重新读取，所以这一步验的就是那条路。
+    /// </para>
+    /// </summary>
+    private static bool ReloadDetail(ShellPage shell)
+    {
+        if (_detailReloaded || shell.Pages.Content is not DetailPage page) return false;
+
+        _detailReloaded = true;
+        page.ViewModel.Reload();
         return true;
     }
 
@@ -802,8 +860,7 @@ internal static partial class ShellSelfCheck
     /// </para>
     /// </summary>
     private static bool OpenFilePage(ShellPage shell)
-    {
-        if (_fileOpened || shell.Pages.Content is not DetailPage page) return false;
+    {        if (_fileOpened || shell.Pages.Content is not DetailPage page) return false;
 
         _fileOpened = true;
         if (EmbyItemType.IsPlayable(page.ViewModel.ItemType)) return false;

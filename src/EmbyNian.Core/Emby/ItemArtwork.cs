@@ -12,16 +12,22 @@ public readonly record struct ArtworkRef(string ItemId, string ImageType, string
 /// 背景图融入对应媒体的 ui 界面」 —— the five are the server's, and this is the one place that says what each
 /// one is for:
 /// <list type="bullet">
-/// <item>徽标 <c>Logo</c> and 横幅图 <c>Banner</c> are name plates — a picture of the title. They replace the
-/// text title in the detail page's hero (<see cref="Plate"/>).</item>
-/// <item>艺术图 <c>Art</c> is wide artwork with no title on it, and it has two places: 「把艺术图的位置改到
-/// 左上角」 puts it in the band's top-left corner (<see cref="Corner"/>, picked by <see cref="Mark"/>), and
-/// when the item has no 背景图 it is instead what the whole page stands on (<see cref="HeroOrder"/>).</item>
+/// <item>徽标 <c>Logo</c> and 横幅图 <c>Banner</c> are name plates — a picture of the title. 「统一改为在剧名
+/// 上方显示徽标」 puts one just above the text title on every detail page (<see cref="Plate"/>).</item>
+/// <item>艺术图 <c>Art</c> is wide artwork with no title on it, and it has two places: 「右上角显示艺术图」
+/// puts it in the band's top-right corner (<see cref="Corner"/>), and when the item has no 背景图 it is
+/// instead what the whole page stands on (<see cref="HeroOrder"/>).</item>
 /// <item>背景图 <c>Backdrop</c> is what the hero wants first; 缩略图 <c>Thumb</c> is what a 16:9 card wants
 /// first (<c>CardItem.PreferWide</c>) and the hero's third choice.</item>
 /// <item>The home page's carousel is the same three wide kinds and nothing else
 /// (<see cref="BannerOrder"/>): it is the full width of the window, which is no place for a poster.</item>
 /// </list>
+/// <para>
+/// 一个位置一样图，两样之间不再互相退档 —— 「统一改为在剧名上方显示徽标，右上角显示艺术图」。从前那一版把
+/// 两者合成一个角的两档（艺术图优先，没有就摆徽标），于是同一个位置在不同条目上说着不同的话；现在徽标只
+/// 认剧名上方那一格、艺术图只认右上角那一格，服务器没有的那一样就是那一格空着。<em>两个位置各空各的</em>：
+/// 一条只有徽标的条目右上角空着，只有艺术图的条目剧名上方空着，两种都没有的条目还是从前那副样子。
+/// </para>
 /// <para>
 /// One job each, with one exception and a rule that keeps it honest. 艺术图 is in two lists, so
 /// <see cref="Corner"/> asks the other one first: the corner is empty exactly when the band behind it is
@@ -49,7 +55,8 @@ public static class ItemArtwork
     /// 徽标 is the show's wordmark, and a 横幅图 carries the title across its own artwork. 海报 is the title
     /// page rather than the title, and would land beside the poster already in the band; 艺术图 is 16:9
     /// artwork with no title on it, so at plate size it reads as a small picture where a name should be,
-    /// and <see cref="HeroOrder"/> has a better use for it.
+    /// and it has its own corner to stand in (<see cref="Corner"/>) besides the use <see cref="HeroOrder"/>
+    /// has for it.
     /// </para>
     /// </summary>
     public static readonly IReadOnlyList<string> PlateOrder = [EmbyImageStore.Logo, EmbyImageStore.Banner];
@@ -78,7 +85,14 @@ public static class ItemArtwork
         [EmbyImageStore.Backdrop, EmbyImageStore.Art, EmbyImageStore.Thumb];
 
     /// <summary>
-    /// The name plate for a page, or null when the item has none to show and the text title stands.
+    /// 剧名上方那一枚徽标（横幅图是它的备选），服务器两种都没有就是 null —— 那一格空着，片名那一行照旧把名字
+    /// 说全，这一页没有一样东西等这张图。
+    /// <para>
+    /// 位置是「剧名的正上方」而不是从前的某个角 —— 「统一改为在剧名上方显示徽标」。名字因此在一页上出现两回
+    /// （一回是图、一回是字），这是要的：图上那几个字是片方自己排的，而下面那一行是能选、能读屏、长了会截的
+    /// 标题，两样不是同一件东西。更早那一版是「图到了就顶掉文字标题」，坏在「服务器没有徽标」和「徽标没画
+    /// 出来」在屏上长得一模一样。
+    /// </para>
     /// <para>
     /// The fallback to the show's logo is why this returns an <see cref="ArtworkRef"/> rather than a kind:
     /// an episode or a season rarely has a logo of its own, and Emby answers that by sending the parent's
@@ -100,18 +114,22 @@ public static class ItemArtwork
     }
 
     /// <summary>
-    /// 头图左上角那张画，没有就是 null —— 「有艺术图优先显示艺术图」。取的是这个条目自己的艺术图，而背后那一整页
-    /// 已经站在同一张图上时它是空的（那时候那个角画名牌，见 <see cref="Mark"/>）。
+    /// 头图右上角那张画，没有就是 null —— 「右上角显示艺术图」。取的是这个条目自己的艺术图，而背后那一整页
+    /// 已经站在同一张图上时它是空的。
     /// <para>
-    /// 艺术图是横的、上面没有字，所以它当得起「角上摆一张画」这件事：徽标那一头是名牌（<see cref="Plate"/>），
-    /// 海报是竖的，缩略图和背景图各有各的活。而它同时是 <see cref="HeroOrder"/> 的第二档 —— 一个条目没有背景图
-    /// 的时候，铺满整页的就是这张艺术图。两处都画就是同一张图在一页上出现两次：整页那么大一张，角上再钉一张
-    /// 缩印本。所以这里先问 <see cref="Hero"/> 头一档是谁，答案正好是这张就让这个角退回名牌。
+    /// 艺术图是横的、上面没有字，所以它当得起「角上摆一张画」这件事：徽标那一头是名牌、归剧名上方那一格
+    /// （<see cref="Plate"/>），海报是竖的，缩略图和背景图各有各的活。而它同时是 <see cref="HeroOrder"/> 的第二
+    /// 档 —— 一个条目没有背景图的时候，铺满整页的就是这张艺术图。两处都画就是同一张图在一页上出现两次：整页那么
+    /// 大一张，角上再钉一张缩印本。所以这里先问 <see cref="Hero"/> 头一档是谁，答案正好是这张就让这个角空着。
+    /// </para>
+    /// <para>
+    /// <em>空着就是空着</em>，不再退回名牌：徽标现在自己有一格（剧名上方），拿它来填这个角就等于让同一枚牌子
+    /// 在不同条目上出现在不同位置 —— 而「统一」正是这次要的东西。
     /// </para>
     /// <para>
     /// 「自己的」没有上溯：借来的那几种（<see cref="Inherited"/>）是给「铺满整页」和「名牌」用的，而角上这张是
-    /// 装饰 —— 一集没有自己的艺术图，就退回名牌（<see cref="Mark"/>），而不是把剧集那一层的图缩一张钉上去。
-    /// 服务器也不往下发艺术图：ParentLogo、ParentBackdrop、ParentThumb 都有，ParentArt 没有。
+    /// 装饰 —— 一集没有自己的艺术图，那个角就空着，而不是把剧集那一层的图缩一张钉上去。服务器也不往下发艺术图：
+    /// ParentLogo、ParentBackdrop、ParentThumb 都有，ParentArt 没有。
     /// </para>
     /// </summary>
     public static ArtworkRef? Corner(EmbyItem? item)
@@ -125,18 +143,47 @@ public static class ItemArtwork
     }
 
     /// <summary>
-    /// 头图左上角那一张 —— 「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」。
-    /// 两句话就是这一支：先问艺术图（<see cref="Corner"/>），问不着才退到名牌（<see cref="Plate"/>）。
+    /// 页面最底下那张横幅，没有就是 null —— 「在电影页面 剧页面 集页面的底部添加横幅」。取的是这个条目自己的
+    /// 横幅图（<c>Banner</c>，一张宽约 5:1、上面写着片名的图），而剧名上方那一枚名牌已经用掉这张图的时候它是空的。
     /// <para>
-    /// 一个角上一张图，而不是从前那样一枚名牌钉在右上角、一张画钉在右下角。所以这两种图现在是同一个位置的两档，
-    /// 而不是各占一角 —— 也因此这里不需要「两张都有的时候谁让谁」那种规矩：艺术图有就是它。
+    /// 只认横幅图一种，不退档：这一处要的正是「一条横的、带着片名的收尾」，而别的几种都不是那个形状 —— 艺术图上
+    /// 没有字（它在右上角那个角里），缩略图和背景图是 16:9 的画面（页尾摆一张 16:9 就是又一块头图），海报是竖的。
+    /// 服务器上这一库 31 个条目里 29 个有横幅图，所以「没有就空着」在这儿不是常态。
     /// </para>
     /// <para>
-    /// 退档的那一手连着 <see cref="Corner"/> 自己那条「整页已经站在这张艺术图上就空着」：那种条目上这个角画的是
-    /// 名牌，而不是空着 —— 空着是从前右下角的答案（那会儿右上角还另有一枚名牌），现在这个角是页面上唯一的记号位。
+    /// 和 <see cref="Corner"/> 同一条防重：<see cref="Plate"/> 在没有徽标的条目上会退到横幅图，那时候这张图已经
+    /// 挂在剧名头上了，页尾再来一张就是同一张图在一页上出现两次。判的是名牌这一次真的取了哪一种，不是「这个条目
+    /// 有没有徽标」—— 两句话在借来的那一档（集页用剧集的徽标）上不是一回事。
+    /// </para>
+    /// <para>
+    /// 「自己的」之外多一档<em>借来的</em>，而且只在调用方把剧集那一层交进来的时候才走：一集自己几乎不会有横幅图
+    /// （服务器把它挂在剧集那一层，同徽标），而用户点的名里有集页面 —— 一集页面上永远空着就等于那一句没做。借的
+    /// 是剧集那张，和它头上那一枚借来的徽标同一个道理（<see cref="Plate"/>），两者不会撞：一枚是 <c>Logo</c>、
+    /// 一张是 <c>Banner</c>。服务器不下发这一层（没有 ParentBanner 字段），所以剧集那个条目要调用方自己去取 ——
+    /// 这也是为什么这里收的是条目而不是 id。
     /// </para>
     /// </summary>
-    public static ArtworkRef? Mark(EmbyItem? item) => Corner(item) ?? Plate(item);
+    /// <param name="item">这一页的条目。</param>
+    /// <param name="parent">
+    /// 剧集那一层的条目，调用方取到了才交（集页）。null 就是「不借」—— 电影页和剧页自己那张就是答案。
+    /// </param>
+    public static ArtworkRef? Footer(EmbyItem? item, EmbyItem? parent = null)
+    {
+        if (item is null) return null;
+
+        if (Tag(item, EmbyImageStore.Banner) is { Length: > 0 } own)
+        {
+            // 名牌退到横幅图的条目上（这一条没有徽标）这张图已经挂在剧名头上了 —— 页尾再来一张就是重的。
+            // 那时候也不借上一层：这一页上这张图已经出现过。
+            return Plate(item) is { ImageType: EmbyImageStore.Banner }
+                ? null
+                : new ArtworkRef(item.Id, EmbyImageStore.Banner, own);
+        }
+
+        return parent is not null && Tag(parent, EmbyImageStore.Banner) is { Length: > 0 } borrowed
+            ? new ArtworkRef(parent.Id, EmbyImageStore.Banner, borrowed)
+            : null;
+    }
 
     /// <summary>
     /// The picture for one carousel slide, or null when the item has no wide artwork and so cannot be one.
@@ -216,7 +263,7 @@ public static class ItemArtwork
 
     /// <summary>
     /// Whether these two versions of one item would draw the same pictures — the hero behind the page, the
-    /// mark in the corner, the plate, and the poster or still in the band.
+    /// 艺术图 in the top-right corner, the 徽标 above the title, and the poster or still in the band.
     /// <para>
     /// 存在的理由是详情页现在**先用点进来那张卡片画一屏**，完整条目回来再补上评分、工作室、演职人员和播放目标。
     /// 图是最慢的那一样，所以这一句决定的是：那一批图能不能就这么留着。答案是「能」的时候完整条目那一趟一张图都
@@ -233,7 +280,7 @@ public static class ItemArtwork
         if (!string.Equals(left.Id, right.Id, StringComparison.Ordinal)) return false;
         if (left.Type != right.Type) return false;
 
-        if (Mark(left) != Mark(right)) return false;
+        if (Corner(left) != Corner(right)) return false;
         if (Plate(left) != Plate(right)) return false;
         if (!Hero(left).SequenceEqual(Hero(right))) return false;
 

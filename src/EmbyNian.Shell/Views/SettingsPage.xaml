@@ -64,6 +64,23 @@
         </Style>
 
         <!--
+          换次序那两颗箭头。小、透明、只占一个字符宽：它们要塞进一行 40 像素里，还不能把标题那一列挤窄
+          （行高写在 SettingHomeLayoutRow.RowHeight）。按钮默认样式在这个尺寸上是一块灰底方砖，一行里并排两块
+          比那一行的字还抢眼，所以底色和边框都撤掉 —— 指针压上去那点反馈还在，视觉状态刷的是模板里那一块，盖得过
+          这里的透明（同上头色板那一段，只是那儿要的正好相反）。
+        -->
+        <Style x:Key="EgHomeShiftStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <!-- 墨走角色表，不吃按钮自己那档：框架那档在 daylight 下是白底上的一层浅灰，两颗箭头几乎看不出在那儿。
+                 置灰那一档不受影响 —— 「不可用」是视觉状态刷的，盖得过这里的设定（同上头色板那一段）。 -->
+            <Setter Property="Foreground" Value="{ThemeResource EgTextBrush}" />
+            <Setter Property="Padding" Value="6,1,6,1" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!--
           Keyed rather than inlined into the selector below, because the passthrough group renders the same
           shape for each of its own toggles and a DataTemplate can be used by both.
           <para>
@@ -398,14 +415,21 @@
             </local:SettingRowTemplates.Font>
 
             <!--
-              主页版面那张表：一行一排，勾选决定显不显示，按住往上下拖决定次序（「新增页里拖拽决定这些列表的
-              顺序，勾选显示或者不勾选取消显示」）。
+              主页版面那张表：一行一排，勾选决定显不显示，按住往上下拖、或者按右边那两颗箭头决定次序（「新增页里
+              拖拽决定这些列表的顺序，勾选显示或者不勾选取消显示」）。
 
-              ListView 而不是 ItemsRepeater：拖拽换位是 ListView 自带的（CanReorderItems ＋ AllowDrop ＋
-              ReorderMode），它改的就是绑上来那个 ObservableCollection 自己的次序，所以「屏上的次序」和「要存的
-              次序」是同一件东西。SelectionMode 关掉：这张表没有「选中」这个概念，点一行只有一个意思，就是那个勾。
-              高度由行数算（ListHeight）而不是让它自己滚：设置页本来就是一整页滚动条，套一个内层滚动条之后，
-              拖到边上时两个滚动条互相抢，一项都拖不到看不见的地方去。
+              ListView 而不是 ItemsRepeater：拖拽换位是 ListView 自带的（CanReorderItems ＋ AllowDrop 是鼠标
+              拖得动的那两位，ReorderMode 管触摸那条路），它改的就是绑上来那个 ObservableCollection 自己的次序，
+              所以「屏上的次序」和「要存的次序」是同一件东西。SelectionMode 关掉：这张表没有「选中」这个概念，点一行
+              只有一个意思，就是那个勾。高度由行数算（ListHeight）而不是让它自己滚：设置页本来就是一整页滚动条，套
+              一个内层滚动条之后，拖到边上时两个滚动条互相抢，一项都拖不到看不见的地方去。
+
+              CanDragItems 留着是为了「把一项当数据拖出去」那条路和 DragItemsStarting 那两个事件；换位不经过它，
+              每个容器上的 CanDrag 也只是它的回声 —— 别拿那一位判断这张表拖不拖得动（自检那一行只把它当读数报）。
+
+              那两颗箭头不是拖拽的备胎，是这件事唯一验得到的形式：这台机器上注不进鼠标事件，拖那一下没法自动做一遍，
+              而一张拖不动的表拍出来和拖得动的一模一样（见 SettingHomeLayoutRow 上那段说明）。顺带，不使指针的人也
+              有了一条路。
             -->
             <local:SettingRowTemplates.HomeLayout>
                 <DataTemplate x:DataType="vm:SettingHomeLayoutRow">
@@ -418,6 +442,7 @@
 
                         <ListView
                             AllowDrop="True"
+                            CanDragItems="True"
                             CanReorderItems="True"
                             Height="{x:Bind ListHeight, Mode=OneWay}"
                             ItemsSource="{x:Bind Rows}"
@@ -429,6 +454,8 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
 
@@ -442,10 +469,38 @@
                                             Text="{x:Bind Title}"
                                             VerticalAlignment="Center" />
 
+                                        <!-- 换次序那两颗。到顶的「上移」和到底的「下移」置灰（CanUp/CanDown）：
+                                             按下去也不动的按钮亮着，第一次按的人只会以为这张表是坏的。 -->
+                                        <Button
+                                            Grid.Column="2"
+                                            AutomationProperties.Name="上移"
+                                            Command="{x:Bind UpCommand}"
+                                            IsEnabled="{x:Bind CanUp, Mode=OneWay}"
+                                            Style="{StaticResource EgHomeShiftStyle}"
+                                            ToolTipService.ToolTip="往上挪一排">
+                                            <FontIcon
+                                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                FontSize="12"
+                                                Glyph="&#xE70E;" />
+                                        </Button>
+
+                                        <Button
+                                            Grid.Column="3"
+                                            AutomationProperties.Name="下移"
+                                            Command="{x:Bind DownCommand}"
+                                            IsEnabled="{x:Bind CanDown, Mode=OneWay}"
+                                            Style="{StaticResource EgHomeShiftStyle}"
+                                            ToolTipService.ToolTip="往下挪一排">
+                                            <FontIcon
+                                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                FontSize="12"
+                                                Glyph="&#xE70D;" />
+                                        </Button>
+
                                         <!-- 把手：这一行拖得动的那句话。图标是 Segoe 的「重新排序」，和框架自己
                                              的拖拽列表用的是同一个。 -->
                                         <FontIcon
-                                            Grid.Column="2"
+                                            Grid.Column="4"
                                             FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                             FontSize="14"
                                             Foreground="{ThemeResource EgTextFaintBrush}"

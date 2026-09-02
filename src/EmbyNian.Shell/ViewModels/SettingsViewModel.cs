@@ -524,7 +524,8 @@ public sealed partial class SettingsViewModel : PageViewModel
 
         HomeRows = new SettingHomeLayoutRow(
             "主页上排哪几排",
-            "按住一行往上下拖决定次序，取消勾选就不显示。媒体库那几排装的是那个库最近添加的内容。",
+            "按住一行往上下拖、或者按右边那两颗箭头决定次序，取消勾选就不显示。排在第一的那一排压在主页顶上那张大图"
+                + "上。媒体库那几排装的是那个库最近添加的内容。",
             plan.Select(row => new HomeRowChoice(row.Key, row.Title, row.Visible)),
             rows =>
             {
@@ -581,7 +582,7 @@ public sealed partial class SettingsViewModel : PageViewModel
             // 这两个和上面那几块色板一样：写进设置之后当场喊一声（ShellPrefs），主窗口和外壳各自跟上。设置页
             // 是另一个窗口，手上没有主窗口的 HWND 也没有那一页，所以只能这么喊。
             Toggle("锁定窗口比例大小",
-                $"拖窗口边沿时侧边栏右边那一片保持 {Emby.HomeCarousel.WindowAspectLabel}，主页首屏完整显示继续观看",
+                $"拖窗口边沿时侧边栏右边那一片保持 {Emby.HomeCarousel.WindowAspectLabel}，主页那张轮播图正好铺满第一屏、不被裁切",
                 () => ui.LockWindowShape,
                 value =>
                 {

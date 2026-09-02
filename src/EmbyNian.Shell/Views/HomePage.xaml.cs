@@ -124,19 +124,23 @@ public sealed partial class HomePage : Page, IShellContent
     }
 
     /// <summary>
-    /// 自检：主页第一屏完整放下继续观看，同时让下一排媒体库从视口外开始。大图占满整整一屏，继续观看那一排压在
-    /// 它的下半截上（没有板底，只有带子自己那层竖向暗罩）—— 所以这一条量的是「那一排真压在大图上」加上原来那
-    /// 两句边界。只有那两排都存在时才有得量；一个从未播放过任何内容的账号没有继续观看，那是正常数据，不该把
-    /// 版式自检判红。
+    /// 自检：主页第一屏完整放下最前面那一排，同时让第二排从视口外开始。大图占满整整一屏，最前面那一排压在它的
+    /// 下半截上（没有板底，只有带子自己那层竖向暗罩）—— 所以这一条量的是「那一排真压在大图上」加上原来那两句
+    /// 边界。
+    /// <para>
+    /// 按位置问，不按名字问 —— 「排第一的就是当前继续观看的那个位置」：设置里那张表拖过之后排第一的不一定是
+    /// 继续观看，而压着图、要完整落在第一屏里的永远是最前面那一排（见 <see cref="HomeViewModel"/> 里定
+    /// <c>OnScrim</c> 那一段）。原先这里写死了「继续观看」和「媒体库」两个名字，那样一拖过次序就整条跳过：屏上
+    /// 塌了报告也不出声。
+    /// </para>
+    /// <para>
+    /// 屏上不到两排时没得量，跳过而不是判红：一个从未播放过任何内容、又只勾了一排的账号就是那样，那是正常数据。
+    /// </para>
     /// </summary>
     internal (bool? Ok, string Detail) FoldRead()
     {
-        if (ViewModel.Shelves.Count < 2
-            || ViewModel.Shelves[0].Title != "继续观看"
-            || ViewModel.Shelves[1].Title != "媒体库")
-        {
-            return (null, "这次没有连续的继续观看、媒体库两排，跳过首屏边界读数");
-        }
+        if (ViewModel.Shelves.Count < 2)
+            return (null, "这次屏上不到两排，跳过首屏边界读数");
 
         if (XamlRoot is not { } root || root.Size.Height <= 0)
             return (false, "量不到窗口视口高度");
@@ -146,20 +150,20 @@ public sealed partial class HomePage : Page, IShellContent
         UpdateLayout();
         UpdateLayout();
 
-        if (first is not FrameworkElement continueShelf || second is not FrameworkElement libraryShelf)
+        if (first is not FrameworkElement front || second is not FrameworkElement next)
             return (false, "两排货架没有生成可测量的根元素");
 
         static double Top(FrameworkElement element) =>
             element.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
 
         var viewport = root.Size.Height;
-        var continueTop = Top(continueShelf);
-        var continueBottom = continueTop + continueShelf.ActualHeight;
-        var libraryTop = Top(libraryShelf);
-        var continueVisible = continueTop >= -0.5 && continueBottom <= viewport + 0.5;
-        var libraryHidden = libraryTop >= viewport - 0.5;
+        var frontTop = Top(front);
+        var frontBottom = frontTop + front.ActualHeight;
+        var nextTop = Top(next);
+        var frontVisible = frontTop >= -0.5 && frontBottom <= viewport + 0.5;
+        var nextHidden = nextTop >= viewport - 0.5;
         var cards = new List<PosterCard>();
-        Collect(continueShelf, cards);
+        Collect(front, cards);
         var drawnCards = cards
             .Where(card => card.Visibility == Visibility.Visible && card.ActualWidth > 0.5 && card.ActualHeight > 0.5)
             .ToArray();
@@ -168,7 +172,7 @@ public sealed partial class HomePage : Page, IShellContent
             var top = Top(card);
             return top >= -0.5 && top + card.ActualHeight <= viewport + 0.5;
         });
-        var shelfReady = continueShelf.ActualHeight >= ViewModel.Shelves[0].RowHeight
+        var shelfReady = front.ActualHeight >= ViewModel.Shelves[0].RowHeight
             && drawnCards.Length > 0
             && cardsVisible;
 
@@ -179,11 +183,12 @@ public sealed partial class HomePage : Page, IShellContent
         var filled = Banner.Visibility != Visibility.Visible || Math.Abs(heroBottom - viewport) <= 2;
         var stacked = overlayTop < heroBottom - 1;
 
-        return (continueVisible && libraryHidden && shelfReady && filled && stacked,
-            $"继续观看 {continueTop:0}–{continueBottom:0}，媒体库从 {libraryTop:0} 起，视口 0–{viewport:0}；"
-                + $"继续观看{(continueVisible ? "完整" : "被截断")}、实绘 {drawnCards.Length} 张"
+        return (frontVisible && nextHidden && shelfReady && filled && stacked,
+            $"{ViewModel.Shelves[0].Title} {frontTop:0}–{frontBottom:0}，"
+                + $"{ViewModel.Shelves[1].Title}从 {nextTop:0} 起，视口 0–{viewport:0}；"
+                + $"第一排{(frontVisible ? "完整" : "被截断")}、实绘 {drawnCards.Length} 张"
                 + (cardsVisible ? "（卡片完整在视口内）" : "（没有完整卡片在视口内）") + "，"
-                + $"媒体库{(libraryHidden ? "未露出" : "已经露出")}；"
+                + $"第二排{(nextHidden ? "未露出" : "已经露出")}；"
                 + $"大图下沿 {heroBottom:0}{(filled ? "，占满一屏" : "，没占满一屏")}、"
                 + $"货架上沿 {overlayTop:0}{(stacked ? "，压在大图上" : "，没压在大图上")}"
                 + $"，{(ViewModel.Shelves[0].OnScrim ? "第一排走压在图上那套浅墨" : "第一排还在用主题的墨（会消失在暗罩里）")}");

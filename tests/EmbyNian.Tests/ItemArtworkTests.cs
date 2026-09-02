@@ -16,7 +16,7 @@ internal static class ItemArtworkTests
     {
         RegisterPlate();
         RegisterCorner();
-        RegisterMark();
+        RegisterSplit();
         RegisterBanner();
         RegisterHero();
         RegisterHas();
@@ -110,7 +110,7 @@ internal static class ItemArtworkTests
 
             // The overlap is the thing worth asserting: a kind in both lists would be drawn twice on the
             // same band, once as the name plate and once behind it. 艺术图 是唯一有两处活的（头图第二档 +
-            // 右下角那张），而那两处不靠「不同的列表」分开，靠 ItemArtwork.Corner 那一句问 —— 见上面那几条。
+            // 右上角那张画），而那两处不靠「不同的列表」分开，靠 ItemArtwork.Corner 那一句问 —— 见上面那几条。
             Assert.False(ItemArtwork.PlateOrder.Intersect(ItemArtwork.HeroOrder).Any(),
                 "同一种图不能同时当名牌和背景");
 
@@ -131,7 +131,7 @@ internal static class ItemArtworkTests
     {
         Test("图片：角上那张是这个条目自己的艺术图", () =>
         {
-            // 「把艺术图添加到窗口右下」。这个条目有背景图，所以铺满整页的是背景图，艺术图这会儿没别的活。
+            // 「右上角显示艺术图」。这个条目有背景图，所以铺满整页的是背景图，艺术图这会儿没别的活。
             var item = Item("film20", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Art, "arttag"));
             item.BackdropImageTags.Add("bd");
 
@@ -145,7 +145,7 @@ internal static class ItemArtworkTests
 
         Test("图片：整页已经站在这张艺术图上，角上就空着", () =>
         {
-            // 同一张图在一页上出现两次 —— 铺满整页那么大一张，右下角再钉一张 260 宽的缩印本 —— 比只画一处更糟。
+            // 同一张图在一页上出现两次 —— 铺满整页那么大一张，右上角再钉一张 260 宽的缩印本 —— 比只画一处更糟。
             var only = Item("film21", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Art, "arttag"));
 
             Assert.Equal(EmbyImageStore.Art, ItemArtwork.Hero(only)[0].ImageType);
@@ -187,79 +187,183 @@ internal static class ItemArtworkTests
             Assert.True(ItemArtwork.Hero(episode).Count > 0);
             Assert.Null(ItemArtwork.Corner(episode));
         });
+
+        // 「在电影页面 剧页面 集页面的底部添加横幅」—— 页尾那张横幅图。和角上那张同一族：条目自己的图、不上溯、
+        // 已经在别处画过就不画。
+        Test("图片：页尾那张是这个条目自己的横幅图", () =>
+        {
+            // 有徽标，所以剧名上方那一枚是徽标，横幅图这会儿没别的活 —— 页尾归它。
+            var item = Item("film24", (EmbyImageStore.Primary, "p"),
+                (EmbyImageStore.Logo, "logotag"), (EmbyImageStore.Banner, "bannertag"));
+
+            var footer = ItemArtwork.Footer(item);
+
+            Assert.NotNull(footer);
+            Assert.Equal("film24", footer!.Value.ItemId);
+            Assert.Equal(EmbyImageStore.Banner, footer.Value.ImageType);
+            Assert.Equal("bannertag", footer.Value.Tag);
+        });
+
+        Test("图片：名牌已经用了这张横幅，页尾就空着", () =>
+        {
+            // 没有徽标的条目上名牌退到横幅图（见 PlateOrder），那时候这张图已经挂在剧名头上了 —— 页尾再来一张就是
+            // 同一张图在一页上出现两次。
+            var item = Item("film25", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Banner, "bannertag"));
+
+            Assert.Equal(EmbyImageStore.Banner, ItemArtwork.Plate(item)!.Value.ImageType);
+            Assert.Null(ItemArtwork.Footer(item));
+        });
+
+        Test("图片：没有横幅图就空着，不退别的种类、也不借上一层的", () =>
+        {
+            // 只认横幅图一种：这一处要的是「一条横的、带着片名的收尾」，而艺术图上没有字、缩略图和背景图是 16:9 的
+            // 画面（页尾摆一张 16:9 就是又一块头图）、海报是竖的。
+            Assert.Null(ItemArtwork.Footer(Item("film26", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Art, "a"))));
+            Assert.Null(ItemArtwork.Footer(null));
+
+            // 空标签当没有，同角上那张。
+            Assert.Null(ItemArtwork.Footer(Item("film27", (EmbyImageStore.Banner, ""))));
+
+            // 一集没有自己的横幅图，只交这一集的时候页尾就空着。
+            var noBanner = Episode("ep32", (EmbyImageStore.Primary, "still"));
+            noBanner.SeriesId = "series13";
+            noBanner.ParentLogoItemId = "series13";
+            noBanner.ParentLogoImageTag = "serieslogo";
+
+            Assert.NotNull(ItemArtwork.Plate(noBanner));
+            Assert.Null(ItemArtwork.Footer(noBanner));
+        });
+
+        Test("图片：集页借剧集那张横幅，跟头上那枚借来的徽标不撞", () =>
+        {
+            // 一集自己几乎不会有横幅图（服务器把它挂在剧集那一层，同徽标），而用户点的名里有集页面 —— 页面上永远
+            // 空着就等于那一句没做。所以调用方把剧集那个条目取来交进去，这一支就借它那张。
+            var episode = Episode("ep33", (EmbyImageStore.Primary, "still"));
+            episode.SeriesId = "series14";
+            episode.ParentLogoItemId = "series14";
+            episode.ParentLogoImageTag = "serieslogo";
+
+            var series = Item("series14", (EmbyImageStore.Logo, "serieslogo"), (EmbyImageStore.Banner, "seriesbanner"));
+            var footer = ItemArtwork.Footer(episode, series);
+
+            // 借的是剧集那个 id 和它那张标签 —— 按这一集自己的 id 去取会取回一个空答案。
+            Assert.Equal("series14", footer!.Value.ItemId);
+            Assert.Equal(EmbyImageStore.Banner, footer.Value.ImageType);
+            Assert.Equal("seriesbanner", footer.Value.Tag);
+
+            // 头上那一枚是借来的徽标，两者不是同一张：一枚 Logo、一张 Banner。
+            Assert.Equal(EmbyImageStore.Logo, ItemArtwork.Plate(episode)!.Value.ImageType);
+
+            // 剧集那一层也没有横幅图的时候照旧空着。
+            Assert.Null(ItemArtwork.Footer(episode, Item("series15", (EmbyImageStore.Logo, "l"))));
+
+            // 自己有横幅图的时候用自己那张，不借。
+            var own = Episode("ep34", (EmbyImageStore.Logo, "eplogo"), (EmbyImageStore.Banner, "epbanner"));
+            Assert.Equal("ep34", ItemArtwork.Footer(own, series)!.Value.ItemId);
+
+            // 而自己那张已经被名牌用掉的时候（这一集没有徽标）连借都不借：这一页上这张图已经出现过。
+            var plated = Episode("ep35", (EmbyImageStore.Banner, "epbanner"));
+            Assert.Equal(EmbyImageStore.Banner, ItemArtwork.Plate(plated)!.Value.ImageType);
+            Assert.Null(ItemArtwork.Footer(plated, series));
+        });
     }
 
     /// <summary>
-    /// 头图左上角那一张 —— 「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」。
-    /// 两档合成一个位置，所以值得单独钉：退档退错了，屏上是一个空角或者一张本该让位的图。
+    /// 两个位置各归一样图，两样之间不再互相退档 —— 「统一改为在剧名上方显示徽标，右上角显示艺术图」。
+    /// <para>
+    /// 从前这两种图是同一个角的两档（艺术图优先，没有就摆徽标），那时候要钉的是「退档退对了没有」。现在要钉的是
+    /// 反面：<em>不许退</em>。退了的下场是同一枚牌子在不同条目上出现在不同位置，而屏上每一张单独看都挺好 ——
+    /// 这一族的每一条因此都是「这一格该有的有了，另一格该空的空着」两句一起断言。
+    /// </para>
     /// </summary>
-    private static void RegisterMark()
+    private static void RegisterSplit()
     {
-        Test("图片：左上角有艺术图就用艺术图", () =>
+        Test("图片：只有艺术图的条目，剧名上方那一格空着", () =>
         {
-            // 这个条目有背景图，所以铺满整页的是背景图，艺术图这会儿没别的活 —— 它就是那个角上那一张。
-            var item = Item("film40", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Logo, "logotag"),
+            // 这个条目有背景图，所以铺满整页的是背景图，艺术图归右上角那一格。从前那一版会把它摆到「名牌」那个
+            // 位置去 —— 也就是同一张没有字的画既当画又当名字。
+            var item = Item("film40", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Art, "arttag"));
+            item.BackdropImageTags.Add("bd");
+
+            var corner = ItemArtwork.Corner(item);
+
+            Assert.NotNull(corner);
+            Assert.Equal(EmbyImageStore.Art, corner!.Value.ImageType);
+            Assert.Equal("arttag", corner.Value.Tag);
+            Assert.Null(ItemArtwork.Plate(item));
+        });
+
+        Test("图片：只有徽标的条目，右上角空着", () =>
+        {
+            // 反过来那一头，也是这次改动真正修掉的那一处：从前艺术图缺席时那个角摆的是徽标，于是「右上角是艺术图」
+            // 这句话在半个媒体库上不成立（这台服务器三十一个条目里十六个有艺术图）。
+            var logo = Item("film41", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Logo, "logotag"));
+
+            Assert.Equal(EmbyImageStore.Logo, ItemArtwork.Plate(logo)!.Value.ImageType);
+            Assert.Null(ItemArtwork.Corner(logo));
+
+            // 名牌那一支自己的优先序没变：徽标没有就用横幅图，而横幅图照样进不了右上角那一格。
+            var banner = Item("film42", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Banner, "bannertag"));
+
+            Assert.Equal(EmbyImageStore.Banner, ItemArtwork.Plate(banner)!.Value.ImageType);
+            Assert.Null(ItemArtwork.Corner(banner));
+        });
+
+        Test("图片：两样都有的条目，两格各摆一张", () =>
+        {
+            // 「谁让谁」这种规矩现在一条都不需要了：两个位置各问各的那一支。
+            var item = Item("film43", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Logo, "logotag"),
                 (EmbyImageStore.Art, "arttag"));
             item.BackdropImageTags.Add("bd");
 
-            var mark = ItemArtwork.Mark(item);
-
-            Assert.NotNull(mark);
-            Assert.Equal(EmbyImageStore.Art, mark!.Value.ImageType);
-            Assert.Equal("arttag", mark.Value.Tag);
-
-            // 徽标明明也在，可它是第二档 —— 「有艺术图优先显示艺术图」。
             Assert.Equal(EmbyImageStore.Logo, ItemArtwork.Plate(item)!.Value.ImageType);
+            Assert.Equal(EmbyImageStore.Art, ItemArtwork.Corner(item)!.Value.ImageType);
         });
 
-        Test("图片：没有艺术图就显示徽标，徽标也没有就用横幅图", () =>
+        Test("图片：整页站在这张艺术图上时右上角空着，徽标那一格照旧有", () =>
         {
-            var logo = Item("film41", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Logo, "logotag"));
-            Assert.Equal(EmbyImageStore.Logo, ItemArtwork.Mark(logo)!.Value.ImageType);
-
-            var banner = Item("film42", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Banner, "bannertag"));
-            Assert.Equal(EmbyImageStore.Banner, ItemArtwork.Mark(banner)!.Value.ImageType);
-
-            // 名牌那一支自己的优先序没变，这里只是接着用它。
-            Assert.Equal(ItemArtwork.Plate(logo), ItemArtwork.Mark(logo));
-            Assert.Equal(ItemArtwork.Plate(banner), ItemArtwork.Mark(banner));
-        });
-
-        Test("图片：整页已经站在这张艺术图上，那个角退回名牌而不是空着", () =>
-        {
-            // 没有背景图的条目上，铺满整页的就是这张艺术图（ItemArtwork.Hero 第二档）。角上再钉一张缩印本是同一张图
-            // 在一页上出现两次 —— 可这个角现在是这一页唯一的记号位，所以它该画名牌，不是空着（从前右下角那一档
-            // 空着是对的：那会儿右上角另有一枚名牌）。
-            var item = Item("film43", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Logo, "logotag"),
+            // 没有背景图的条目上，铺满整页的就是这张艺术图（ItemArtwork.Hero 第二档），角上再钉一张缩印本是同一张
+            // 图在一页上出现两次。而这一次空的只有右上角 —— 从前那一版会拿徽标去填那个角，现在徽标本来就在
+            // 它自己那一格里，两件事互不相干。
+            var item = Item("film44", (EmbyImageStore.Primary, "p"), (EmbyImageStore.Logo, "logotag"),
                 (EmbyImageStore.Art, "arttag"));
 
             Assert.Equal(EmbyImageStore.Art, ItemArtwork.Hero(item)[0].ImageType);
             Assert.Null(ItemArtwork.Corner(item));
-            Assert.Equal(EmbyImageStore.Logo, ItemArtwork.Mark(item)!.Value.ImageType);
+            Assert.Equal(EmbyImageStore.Logo, ItemArtwork.Plate(item)!.Value.ImageType);
         });
 
-        Test("图片：单集那一张退到剧集的徽标，取的是剧集那一头的 id", () =>
+        Test("图片：单集那一格摆剧集的徽标，右上角空着", () =>
         {
             // 服务器不往下发艺术图（有 ParentLogo、ParentBackdrop、ParentThumb，没有 ParentArt），所以一集几乎
-            // 永远走第二档；而借来的那个标签属于剧集那一头的 id。
+            // 永远是「徽标有、角上空」这一档；而借来的那个标签属于剧集那一头的 id。
             var episode = Episode("ep40", (EmbyImageStore.Primary, "still"));
             episode.ParentLogoItemId = "series40";
             episode.ParentLogoImageTag = "parentlogo";
 
-            var mark = ItemArtwork.Mark(episode);
+            var plate = ItemArtwork.Plate(episode);
 
-            Assert.NotNull(mark);
-            Assert.Equal("series40", mark!.Value.ItemId);
-            Assert.Equal(EmbyImageStore.Logo, mark.Value.ImageType);
+            Assert.NotNull(plate);
+            Assert.Equal("series40", plate!.Value.ItemId);
+            Assert.Equal(EmbyImageStore.Logo, plate.Value.ImageType);
+            Assert.Null(ItemArtwork.Corner(episode));
         });
 
-        Test("图片：两种都没有那个角就空着", () =>
+        Test("图片：两样都没有的条目，两格都空着", () =>
         {
-            Assert.Null(ItemArtwork.Mark(Item("film44", (EmbyImageStore.Primary, "p"))));
-            Assert.Null(ItemArtwork.Mark(null));
+            var bare = Item("film45", (EmbyImageStore.Primary, "p"));
+
+            Assert.Null(ItemArtwork.Plate(bare));
+            Assert.Null(ItemArtwork.Corner(bare));
+
+            Assert.Null(ItemArtwork.Plate(null));
+            Assert.Null(ItemArtwork.Corner(null));
 
             // 空标签当没有：拿它去取会取到服务器现在手上那一版。
-            Assert.Null(ItemArtwork.Mark(Item("film45", (EmbyImageStore.Art, ""), (EmbyImageStore.Logo, ""))));
+            var blank = Item("film46", (EmbyImageStore.Art, ""), (EmbyImageStore.Logo, ""));
+
+            Assert.Null(ItemArtwork.Plate(blank));
+            Assert.Null(ItemArtwork.Corner(blank));
         });
     }
 

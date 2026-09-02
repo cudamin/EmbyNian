@@ -102,8 +102,8 @@ public sealed partial class SettingsPage : Page, IShellContent
     }
 
     /// <summary>
-    /// 自检：主页版面那张可拖拽的表 —— 那一行自己答的（见 <see cref="SettingsViewModel.MeasureHomeRows"/>），
-    /// 加上屏上真的画出了几行。null 表示主页那张卡片还没建出来。
+    /// 自检：主页版面那张表 —— 那一行自己答的（见 <see cref="SettingsViewModel.MeasureHomeRows"/>），加上屏上
+    /// 真的画出了几行、那几行装不装得下。null 表示主页那张卡片还没建出来。
     /// <para>
     /// 屏上那半非得在树上数：模板选择器少一个 case，屏上就是一行标题底下空着一块，而这一页别的数字一个都不会动
     /// （同 <see cref="MeasureThemeSwatches"/>）。
@@ -117,7 +117,77 @@ public sealed partial class SettingsPage : Page, IShellContent
         CountHomeRows(this, ref drawn);
 
         var expected = ViewModel.HomeRows?.Rows.Count ?? 0;
-        return (probe.Ok && drawn == expected, $"{probe.Detail}；屏上 {drawn} 行");
+
+        // 那张表是给死了高度的（ListHeight），所以一行只要变高，末一排就落在框外面 —— 而它照样算「画出来了」，
+        // 上面那两个数一个都不会动。往一行里加控件（那两颗箭头就是）之后最容易踩这一脚。
+        var (fits, room) = HomeRowsFit();
+
+        return (probe.Ok && drawn == expected && fits, $"{probe.Detail}；屏上 {drawn} 行、{room}");
+    }
+
+    /// <summary>
+    /// 那张表装不装得下自己那几行：几行合起来多高，对上表自己多高。见 <see cref="MeasureHomeRows"/>。
+    /// </summary>
+    private (bool Fits, string Detail) HomeRowsFit()
+    {
+        if (FindHomeList(this) is not { } list) return (false, "找不到那张表");
+
+        var tallest = 0d;
+        var stack = 0d;
+
+        for (var index = 0; index < list.Items.Count; index++)
+        {
+            if (list.ContainerFromIndex(index) is not FrameworkElement item) continue;
+
+            tallest = Math.Max(tallest, item.ActualHeight);
+            stack += item.ActualHeight;
+        }
+
+        return (stack > 0 && stack <= list.ActualHeight + 0.5,
+            $"一行最高 {tallest:0}、合起来 {stack:0} 对表高 {list.ActualHeight:0}"
+                + (stack <= list.ActualHeight + 0.5 ? "" : "（末一排落在框外面）"));
+    }
+
+    /// <summary>
+    /// 自检：那张表真换得了次序 —— 「设置里新增拖拽排序」。
+    /// <para>
+    /// 拖那一下没法自动做一遍：这台机器上注不进鼠标事件（见 CLAUDE.md）。所以这一条问两件事。一是拖的那条路按
+    /// 官方那份配方接齐了没有 —— <c>CanReorderItems</c> ＋ <c>AllowDrop</c> 才是「鼠标拖得动」的那两位；
+    /// <c>CanDragItems</c> 管的是把一项当数据拖出去（以及收不收 <c>DragItemsStarting</c>），换位不经过它，每个
+    /// 容器上的 <c>CanDrag</c> 也只是它的回声，所以那一位只报数不判红。二是不使指针的那条路真换得动：那两颗箭头
+    /// 就地在一张三行的假表上按几下（<see cref="SettingHomeLayoutRow.Probe"/>），并且屏上这张表的两头真按
+    /// 「到顶了」置了灰。
+    /// </para>
+    /// <para>
+    /// 一张换不了次序的表在屏上和换得了的长得一模一样，行数、勾选、存档那几行读数也一个都不会差 —— 这一条是那件
+    /// 事唯一的证人。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureHomeDrag()
+    {
+        if (FindHomeList(this) is not { } list) return null;
+
+        var rows = list.Items.Count;
+        var draggable = 0;
+
+        for (var index = 0; index < rows; index++)
+            if (list.ContainerFromIndex(index) is ListViewItem { CanDrag: true }) draggable++;
+
+        // 屏上这张表的两头：头一行的「上移」和末一行的「下移」是灰的。
+        var table = ViewModel.HomeRows;
+        var ends = table is { Rows.Count: > 1 }
+            && !table.Rows[0].CanUp && table.Rows[0].CanDown
+            && table.Rows[^1].CanUp && !table.Rows[^1].CanDown;
+
+        var arrows = SettingHomeLayoutRow.Probe();
+
+        static string On(bool value) => value ? "开" : "关";
+
+        return (rows > 0 && list.CanReorderItems && list.AllowDrop && arrows.Ok && ends,
+            $"表里 {rows} 行，拖那条路 CanReorderItems {On(list.CanReorderItems)}、"
+                + $"AllowDrop {On(list.AllowDrop)}、ReorderMode {list.ReorderMode}"
+                + $"（另报：CanDragItems {On(list.CanDragItems)}、容器上 CanDrag {draggable} 行，换位用不到）；"
+                + $"箭头那条路 {arrows.Detail}；屏上两头{(ends ? "置了灰" : "没置灰")}");
     }
 
     /// <summary>
@@ -371,5 +441,20 @@ public sealed partial class SettingsPage : Page, IShellContent
         var children = VisualTreeHelper.GetChildrenCount(node);
         for (var index = 0; index < children; index++)
             CountHomeRows(VisualTreeHelper.GetChild(node, index), ref rows);
+    }
+
+    /// <summary>
+    /// 主页版面那张表本身，按「装的是版面项」认它 —— 这一页上再没有第二张这样的表。见
+    /// <see cref="MeasureHomeDrag"/>，那一条要问的是表和它的容器，不是模板里的那几件东西。
+    /// </summary>
+    private static ListView? FindHomeList(DependencyObject node)
+    {
+        if (node is ListView list && list.Items.Count > 0 && list.Items[0] is HomeRowChoice) return list;
+
+        var children = VisualTreeHelper.GetChildrenCount(node);
+        for (var index = 0; index < children; index++)
+            if (FindHomeList(VisualTreeHelper.GetChild(node, index)) is { } found) return found;
+
+        return null;
     }
 }

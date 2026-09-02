@@ -1155,6 +1155,12 @@ public sealed partial class PlayerViewModel : ObservableObject
         EpisodeControlsVisible = item.Type == EmbyItemType.Episode
             && (Episodes.Count > 1 || !string.IsNullOrEmpty(item.SeriesId));
 
+        // Before the player is shown rather than after: the window is reshaped for the picture while the
+        // picture is still being opened, so the first frame arrives into a client area that is already its
+        // own shape. Doing this after the poll — the only thing that did it until now — meant the film
+        // started with a black band down each side. mpv's own answer refines it in a moment.
+        AdoptServerAspect(item);
+
         PlaybackStarted?.Invoke();
 
         _ = PopulateTracksAsync(_generation);
@@ -1743,13 +1749,58 @@ public sealed partial class PlayerViewModel : ObservableObject
     // ---- 缩放窗口时按画面比例联动 --------------------------------------------------
 
     /// <summary>
-    /// Finds the picture's own shape and hands it to the page, which is what keeps the window in it —
-    /// 窗口化时视频有黑边 was this missing. mpv's <c>dwidth</c>/<c>dheight</c> are the displayed size — after
-    /// any aspect override, rotation and panscan — so a rotated file locks to its rotated shape rather than
-    /// to the stream's.
+    /// Hands a picture shape to the page, which is what reshapes the window and holds it there. Two
+    /// things know the shape — the server before the file is open and mpv once it is — and both come
+    /// through here; <paramref name="learnedFrom"/> is which one, for the log.
+    /// <para>
+    /// Only on a change, so switching episodes inside one series does not shuffle the window the viewer
+    /// has already placed, and so the server's answer is not re-applied when mpv confirms it.
+    /// </para>
+    /// </summary>
+    private void AdoptAspect(double aspect, string learnedFrom)
+    {
+        // Only the built-in backend draws into our window. An external mpv.exe has one of its own, and
+        // reshaping ours around a picture that is not in it would move the window for nothing.
+        if (!Embedded || aspect <= 0) return;
+        if (Math.Abs(aspect - _aspect) <= 0.001) return;
+
+        _aspect = aspect;
+        PictureAspectChanged?.Invoke(aspect);
+        Log.Debug(
+            Category,
+            $"画面比例 {aspect.ToString("0.000", CultureInfo.InvariantCulture)}（{learnedFrom}），缩放已联动");
+    }
+
+    /// <summary>
+    /// The shape the server already reported, adopted before the player is even shown — 进播放器时画面两边
+    /// 各有一条黑边. The poll below cannot answer in time: mpv has no <c>dwidth</c> until a frame is decoded,
+    /// so the picture's first half-second landed in whatever shape the window was browsing in — and while
+    /// 锁定窗口比例大小 is on that shape is the picture's plus the navigation rail
+    /// (<see cref="HomeCarousel.SideRail"/>), which mpv has no choice but to letterbox down the sides.
+    /// <para>
+    /// The stored size, so anamorphic and rotated files are a guess that <see cref="ApplyAspectAsync"/>
+    /// corrects a moment later. A guess that is right for every ordinary file beats half a second of bands
+    /// for all of them.
+    /// </para>
+    /// </summary>
+    private void AdoptServerAspect(EmbyItem item)
+    {
+        var video = item.DefaultMediaSource?.PrimaryVideoStream;
+
+        // Zeroes for mpv's pair: nothing is decoded yet, which is the case Ratio's fallback is for.
+        AdoptAspect(
+            AspectLock.Ratio(0, 0, streamWidth: video?.Width ?? 0, streamHeight: video?.Height ?? 0),
+            "服务器");
+    }
+
+    /// <summary>
+    /// Corrects the shape to the picture's own once mpv has one. Its <c>dwidth</c>/<c>dheight</c> are the
+    /// displayed size — after any aspect override, rotation and panscan — so a rotated or anamorphic file
+    /// ends up locked to the shape it is actually drawn at rather than to the stream's stored one.
     /// <para>
     /// Polled for the same reason the track list is: the properties do not exist until a frame has been
-    /// decoded, and there is no notification to wait for.
+    /// decoded, and there is no notification to wait for. Silent when it agrees with
+    /// <see cref="AdoptServerAspect"/>, which is the ordinary case.
     /// </para>
     /// </summary>
     private Task ApplyAspectAsync(int generation)
@@ -1765,15 +1816,7 @@ public sealed partial class PlayerViewModel : ObservableObject
             var aspect = AspectLock.Ratio(displayWidth ?? 0, displayHeight ?? 0, 0, 0);
             if (aspect <= 0) return false;
 
-            // Only on a change, so switching episodes inside one series does not shuffle the window the
-            // viewer has already placed.
-            if (Math.Abs(aspect - _aspect) > 0.001)
-            {
-                _aspect = aspect;
-                PictureAspectChanged?.Invoke(aspect);
-                Log.Debug(Category, $"画面比例 {aspect.ToString("0.000", CultureInfo.InvariantCulture)}，缩放已联动");
-            }
-
+            AdoptAspect(aspect, "mpv");
             return true;
         });
     }

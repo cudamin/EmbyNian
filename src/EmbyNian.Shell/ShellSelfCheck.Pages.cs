@@ -366,18 +366,16 @@ internal static partial class ShellSelfCheck
         // dropped field name would show — but a library whose metadata is thin is not a defect.
         report.AppendLine($"[信息] 详情元数据 — 「{detail.Facts}」");
 
-        // 需求 4，改成「片名归字、徽标归角上」之后（「把当前页面徽标所在地方替换为剧名，徽标移动到右上角」），
-        // 又改成「把艺术图的位置改到左上角，有艺术图优先显示艺术图，没艺术图就显示徽标」：这一条要的是三句话 ——
-        // 片名那一行永远在（没有名字的头图和「图没到」在截图里长得一模一样）、角上那一张落在该落的那个角里（电影
-        // 剧季是左上角，集页照旧右上角）、它和片名、和海报都不相交。服务器两种图都给不出的条目占大多数，那一次前
-        // 两句照样成立 —— 第二句是空的（没东西可放），第一句正是这次改动保住的东西。几何在 DetailPage.TitleShapes
-        // 里读，「该有哪一张」是 ItemArtwork.Mark 给的答案。
+        // 需求 4，一路改到「统一改为在剧名上方显示徽标，右上角显示艺术图」：这一条要的是三句话 —— 片名那一行永远
+        // 在（没有名字的头图和「图没到」在截图里长得一模一样）、徽标落在片名的正上方（左沿还得跟它对齐）、艺术图
+        // 落在带子的右上角，而两张都不许顶出带子、压到海报或者压到对方。服务器给不出某一张的条目占大多数，那一次
+        // 那一格空着成立 —— 两个位置各空各的，这正是「不再互相退档」的意思：从前那一版里艺术图缺席就由徽标顶上，
+        // 于是同一枚牌子在不同条目上出现在不同地方。几何在 DetailPage.PlateShape 和 CornerShape 里读，「该有哪一
+        // 张」是 ItemArtwork.Plate 和 ItemArtwork.Corner 给的答案。
         var artwork = detail.Artwork;
 
-        check("详情名牌", artwork.Text && artwork.Placed,
-            $"片名{(artwork.Text ? "在" : "没画")}、"
-                + $"角上那一张{(artwork.Mark ? $"画了（{artwork.Width:0}×{artwork.Height:0}）" : "没画")}"
-                + $" —— 规矩说这一页该有的是{artwork.Wanted}；{artwork.Where}");
+        check("详情徽标与艺术图", artwork.Text && artwork.Plate.Placed && artwork.Corner.Placed,
+            $"片名{(artwork.Text ? "在" : "没画")}；{Say("徽标", artwork.Plate)}；{Say("艺术图", artwork.Corner)}");
 
         // 「海报下方会被裁切，要能看到完整的海报」：那一格原来写死 210×300（0.7:1）、图按 UniformToFill 铺满它，
         // 而服务器上的海报是 2:3，于是上下各裁掉七八像素 —— 海报底下那一条往往正是片名和演员表。现在那一格按
@@ -412,10 +410,15 @@ internal static partial class ShellSelfCheck
         // 几十像素宽，屏上真的缺了一块。现在里面那一层是 WrapRow，装不下换行；这一条读换完之后没人出界，读数里
         // 那句「摆成几行」就是「这一次窄没窄」的证据。几何在 DetailPage.PickerFit 里读。
         //
-        // 这一份是这一页（剧集那一层）的读数，那上面这一行整个是收着的 —— 一部剧不是一个文件，没有源和轨道可挑，
-        // 所以这一条在剧页上钉的是「它没有冒出来」。三个都露面、也就是真会换行的那一页是文件页，它的读数在下面
-        // 「文件页文件选项」那一条上，见 _filePickers。
+        // 这一份是这一页（剧集那一层）的读数。剧页现在也摆这一行了（用户 09-02：「给剧页面加上音频字幕等等的
+        // 选择项」）—— 它说的是播放键指着的那一集，所以这一条在剧页上钉的是「有落点才画、而且没人被右沿切掉」。
+        // 文件页那一份读数在下面「文件页文件选项」那一条上，见 _filePickers。
         check("文件选项没出界", detail.PickerFitOk, detail.PickerFit);
+
+        // 页尾那张横幅 —— 「在电影页面 剧页面 集页面的底部添加横幅」。判的是落点和两个「该空」（季页不摆、名牌
+        // 已经用了这张横幅的条目不摆）：同一张图在一页上出现两次，屏上单看每一处都挺好，只有一起看才看出重了。
+        // 几何在 DetailPage.FooterRead 里读，也是滚到底之后读的 —— 那张图就在最底下。
+        check("页尾横幅", detail.FooterOk, detail.Footer);
 
         // 「往下拉之后标题颜色要渐变，变的和下方背景一样」：剧照和它顶上那层罩子钉在窗口上，而带子底下那道渐深的
         // 罩子跟着内容滚，于是滚到一半时视口上沿那一行就是一道横线 —— 线上面只有剧照，线下面多了那么浓的罩子，
@@ -432,19 +435,18 @@ internal static partial class ShellSelfCheck
         report.AppendLine($"[信息] 详情图片 — 头图{(detail.Hero ? "已解码" : "没有")}，剧照{(detail.Still ? "已解码" : "没有")}"
             + $"；{artwork.Hero}");
 
-        // 需求 4, informational: the five artworks this one item has on the server. What the hero band and the
-        // corner mark can possibly show is a subset of this line, so 「角上那一张 没画」 above reads differently
-        // depending on whether 艺术图 or 徽标 appears here.
+        // 需求 4, informational: the five artworks this one item has on the server. 头图、片名头上那一枚和右上角
+        // 那一张能画出来的东西都是这一行的子集，所以上面那两句「没画」得对着这一行读 —— 「这一条服务器上没有徽标」
+        // 和「徽标没画出来」在屏上长得一模一样，而只有后一种是这份代码的错。
         report.AppendLine($"[信息] 详情图片种类 — {artwork.Kinds}");
 
         // 需求 4, informational and the half of it code alone could not settle: on the page of an episode the
         // 徽标 is the show's, sent under a different item's id, and whether this server fills that pair at all
         // is a question only its own answer settles. 「剧集的徽标」 here is that answer.
         report.AppendLine(_fileArtwork is { } shown
-            ? $"[信息] 文件页名牌 — {shown.Type} 页，规矩说该有的是{shown.Artwork.Wanted}，"
-                + $"{(shown.Artwork.Mark ? "角上画着" : "角上空着")}；{shown.Artwork.Where}"
-                + $"；这一条有 {shown.Artwork.Kinds}"
-            : "[信息] 文件页名牌 — 这次没走到文件页");
+            ? $"[信息] 文件页徽标与艺术图 — {shown.Type} 页，{Say("徽标", shown.Artwork.Plate)}"
+                + $"；{Say("艺术图", shown.Artwork.Corner)}；这一条有 {shown.Artwork.Kinds}"
+            : "[信息] 文件页徽标与艺术图 — 这次没走到文件页");
 
         // 「集页面要用这个剧的背景图或缩略图」：单集自己那张图是海报，而单集的海报就是从视频里截的一帧 —— 铺到整页
         // 那么大，头上那张图就跟「更多单集」里它自己那张卡片是同一张。剧集那一层的背景图（发不发只有真账号答得出，
@@ -457,12 +459,13 @@ internal static partial class ShellSelfCheck
                 $"{band.Type} 页，{band.Artwork.Hero}；{(_fileHero ? "已解码" : "还没解出来")}");
         else report.AppendLine("[信息] 文件页头图 — 这次没走到文件页");
 
-        // 同一条规矩在文件页上的那一半：集页上那一枚照旧摆在右上角（左上角那点地方要从剧照头上让，而集页配的是
-        // 一张 16:9 剧照、那一格的高又按里面那一叠字键实测给），所以这一条在那一页上钉的是「它没跑到别处、也没压到
-        // 字或剧照」。
+        // 同一条规矩在文件页上的那一半。这一页值得单独钉一遍，因为四种页面里它的带子最矮（高按里面那一叠字键实测
+        // 给，见 DetailHero.EpisodeHeight），而两张图的高上限都是写死的 —— 「顶出了带子」真有机会发生的就是这一页。
         if (_fileArtwork is { } fileMark)
-            check("文件页名牌落点", fileMark.Artwork.Text && fileMark.Artwork.Placed,
-                $"{fileMark.Type} 页，规矩说该有的是{fileMark.Artwork.Wanted}；{fileMark.Artwork.Where}");
+            check("文件页徽标与艺术图落点",
+                fileMark.Artwork.Text && fileMark.Artwork.Plate.Placed && fileMark.Artwork.Corner.Placed,
+                $"{fileMark.Type} 页，{Say("徽标", fileMark.Artwork.Plate)}"
+                    + $"；{Say("艺术图", fileMark.Artwork.Corner)}");
 
         // 上面那一条的正主：只有文件页上「媒体源」才有得挑，所以只有这一页会把三个下拉一齐摆出来，也只有这一页
         // 会在窄窗口下真的排不下。读的那一拍是 ShowInfo —— 页面往下滚去看媒体信息表格之前的最后一拍，那之后这
