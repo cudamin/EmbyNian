@@ -1,98 +1,100 @@
-# EmbyNian — 给 Claude 的常驻规则
+# EmbyNian — Standing Rules for Claude
 
-动手之前读这份。**手上没做完的活看 [PROGRESS.md](PROGRESS.md)** —— 两份文件分工不同：这里是长期不变的规矩和命令，那里是这一阶段在干什么。
+Read this before you touch anything. **Work still in flight lives in [PROGRESS.md](PROGRESS.md)** — the two files split the job: this one holds the durable rules and commands, that one holds what the current phase is about.
 
-## 首要目标（用户定的，2026-09-02）
+This file is in English. **What you produce for the user stays Chinese**: reports, commit messages, UI strings.
 
-**在满足需求的前提下，代码要尽可能简单、清晰、可靠、可维护。**（原话：我想要让 claude 写的代码在满足需求的前提下，让代码尽可能简单、清晰、可靠、可维护，而不是被一些莫名其妙的规则束缚，因为我不是很懂代码，可能会瞎指挥。）
+## Prime Directive（首要目标）— the user's call, 2026-09-02
 
-**这一条排在本文件其余所有条款之上，包括下面那节分层规则。** 怎么用：
+**As long as it meets the requirement, the code should be as simple, clear, reliable and maintainable as possible** — not shackled by rules that make no sense. His own words included: "I don't really understand code, so I may give bad directions."
 
-- **技术规矩是手段，不是目的。** 分层、MVVM、DI、接口那几条是默认做法，因为多数时候它们确实让代码更清晰。**某一处照着做反而更绕、更长、更容易错的时候，走更简单的那条路，别硬套** —— 但要说出来：哪一处、为什么、改成了什么，并在 PROGRESS.md 里留一句。默默偏离和硬套一样坏。
-- **用户的技术指令也可以被反驳。** 他自己说了可能会瞎指挥。所以他点名某种实现方式而你判断那样会让代码更糟时，**先用一两句人话讲清代价，再让他定**；不要闷着头照做，也不要闷着头不做。他重申一遍就照办 —— 那时候它是他的决定，不是误会。
-- **「简单」的判据是这三样**：改一处功能要打开几个文件、一个文件还读不读得完、一个决定能不能被单测钉住。**不是行数少** —— 解释「为什么这么写」的注释占了全部源码的三成二，它们是留给下一个没有上下文的窗口的，删掉不叫简化，叫把维护成本转移给下一个人。
-- **他看得见的东西以他为准，看不见的以你为准。** 这个项目里每个真被抓到的毛病都来自他看屏幕：海报被裁掉一条、左上角空一块、集列表一圈黑边。那是他的强项。反过来，用哪个类、拆不拆文件、要不要接口，是你的活，别拿去问他。
-- **下面这几节不在本条的豁免范围内**：四道闸门（连 `-c Release` 和单节点构建）、验证时不要真实播放、凭据、Git、这台机器上的坑。它们约束的是流程和安全，不是代码形状，而且每一条都是拿一次真事故换来的 —— 绕过它们不会让代码更简单，只会让下一次回归没人看见。
+**This outranks every other clause in this file, the layering rules included.** How to use it:
 
-## 这是什么
+- **Technical rules are means, not ends.** Layering, MVVM, DI and interfaces are the defaults because they usually do make the code clearer. **Where following one makes a given spot longer, more convoluted or easier to get wrong, take the simpler path** — but say so: which spot, why, what you did instead, plus a line in PROGRESS.md. Deviating silently is as bad as complying blindly.
+- **His technical instructions can be argued with.** He said himself he may misdirect. So when he names an implementation and you judge it would make the code worse, **spend one or two plain sentences on the cost, then let him decide** — don't just comply, and don't quietly fail to. If he says it again, do it: at that point it's his decision, not a misunderstanding.
+- **"Simple" is judged by three things**: how many files you must open to change one behavior, whether a single file can still be read end to end, and whether a decision can be pinned down by a unit test. **Not line count** — the comments explaining *why* the code is the way it is are a large share of the source, written for the next window that arrives with no context. Deleting them isn't simplification, it's handing the maintenance cost to the next person.
+- **He rules on what he can see; you rule on what he can't.** Every defect actually caught in this project came from him looking at the screen: a strip cropped off a poster, an empty patch in the top-left corner, a black border around the episode list. That's his strength. Which class to use, whether to split a file, whether to add an interface — that's yours, don't take it to him.
+- **These sections are not exempt**: the four gates (`-c Release` and single-node build included), no real playback while verifying, credentials, Git, this machine's traps. They constrain process and safety, not the shape of the code, and each was bought with a real incident — routing around them won't make the code simpler, it will only make the next regression invisible.
 
-Emby 桌面客户端。WinUI 3 + Windows App SDK 2.4.0 + .NET 10 + C#，非打包、x64，播放内核是 libmpv（`libmpv-2.dll` 不要换版本）。三个工程：`src/EmbyNian.Core`（不引任何 NuGet 和 UI 包，因此是唯一能被单测直接覆盖的层）、`src/EmbyNian.Shell`（WinUI 外壳）、`tests/EmbyNian.Tests`（控制台测试运行器）。
+## What This Is（这是什么）
 
-## 分层规则（用户定的，2026-08-24）
+An Emby desktop client. WinUI 3 + Windows App SDK 2.4.0 + .NET 10 + C#, unpackaged, x64; the playback core is libmpv (**don't change `libmpv-2.dll`'s version**). Three projects: `src/EmbyNian.Core` (no NuGet, no UI packages, hence the only layer unit tests reach directly), `src/EmbyNian.Shell` (the WinUI shell), `tests/EmbyNian.Tests` (a console test runner).
 
-服从上面那节「首要目标」：下面两条是默认做法，不是不能碰的法律。
+## Layering（分层规则）— the user's call, 2026-08-24
 
-1. **纯 UI 行为可以留在 code-behind。**（原文：纯 UI 行为可以使用 Code-Behind。）指 `Visibility` 切换、`Frame` 导航与回退栈、手搭的 `NavigationViewItem`/`MenuFlyoutItem`、窗口按钮，以及任何需要知道「事件是在哪个元素上发生的」的地方。理由：`MenuFlyout` 只有 `Items` 没有 `ItemsSource`，`NavigationView` 改用 `MenuItemsSource` 会丢掉分隔符 —— 这类东西硬做数据绑定只会更糟。
-2. **业务能力一律走 Service。**（原文：项目整体采用 MVVM 架构；ViewModel 通过 Service 获取业务能力；Service 由 DI 容器管理；CommunityToolkit.Mvvm 用于实现 MVVM 的常规功能。仅在确有必要时引入额外抽象。）
+Subordinate to the prime directive above — the two rules below are defaults, not untouchable law.
 
-落地方式（下面这几条是照现在的代码写实的，2026-09-02 复核过一遍）：
+1. **Pure UI behavior may stay in code-behind.** That covers `Visibility` toggles, `Frame` navigation and the back stack, hand-built `NavigationViewItem`/`MenuFlyoutItem`, window buttons, and anything that needs to know *which element* the event happened on. Why: `MenuFlyout` has `Items` and no `ItemsSource`, and `NavigationView` loses its separators once you switch to `MenuItemsSource` — forcing data binding onto these only makes them worse.
+2. **Business capability always goes through a Service.** MVVM throughout; view models get capability from services; services live in the DI container; CommunityToolkit.Mvvm for the ordinary MVVM plumbing; extra abstractions only where genuinely needed.
 
-- **业务能力放 `src/EmbyNian.Core`，在 `src/EmbyNian.Shell/Composition/ShellServices.cs` 注册**（`ValidateOnBuild = true`），注入使用。**别按 `Core/Services/` 这个目录名去找**：真正的业务能力大半在 `Core/Emby`、`Core/Playback`、`Core/Configuration` 里（会话、Emby 客户端、图片缓存、播放、凭据、设置存档），`Services/` 只装着后来单独切出来的那几个。判据是「在哪个工程、有没有进容器」，不是目录名 —— 照目录名搬文件是白改。
-- **能算出答案的判断也搬进 Core，哪怕它算不上一个「服务」。** 主页上有哪几排、窗口该摆到哪块屏、两批图是不是同一批、海报那一格多大、缓存该删哪几张 —— 这类「给定输入就有唯一正确答案」的东西写成 Core 里的纯函数，在测试工程里钉住。**理由是覆盖**：单测只够得着 Core，判断留在视图模型里就等于没人看着它。`HomeLayout.Plan` 那个会永久丢掉用户排好次序和勾选的洞正是这么来的 —— 四道闸门一条都没红，靠截图撞见的。
-- **不要仅仅因为一个类要进 DI 就给它造接口**；没有第二种实现、也没有替换或隔离需求的，直接注册具体类。**例外是收窄**：`ISettingsService` / `IServerCapabilities` 各只有一个实现、测试里也没有替身，留着是为了让一个只想知道「每页多少条」的页面摸不到会话、图片缓存和播放器。**别把这两个「清理」成具体类** —— 那是把一片能随手摸到的东西重新摊开。
-- **视图模型由页面自己造，依赖靠一个 `Attach(...)` 后补上去。** WinUI 的页面必须有无参构造、而且由框架构造而非容器构造，所以给页面做构造注入走不通。除播放那个以外的视图模型都是这个样子，代价是服务字段可空、外加一圈「还没接上就早退」的守卫 —— 那不是图省事，照着写就对了。**只有 `PlayerViewModel` 进容器**：电影在库页背后接着播，它的状态得比任何一次导航活得久。
-- code-behind 不放业务逻辑、HTTP/Emby 调用、播放状态管理和持久化。**已知一处例外：`Views/ItemCommands.cs`**（卡片右键那套已看／收藏／编辑元数据）自己捏着 `EmbySession` 发请求，没进容器、也没有一条单测，其中「编辑元数据」还是读一份 JSON 改几个字段再整份写回。**那是旧账，不是样板，别照着抄。**
-- `View → ViewModel → Service → 外部系统` 是方向，不是每个文件都要凑齐的链条。模型、转换器、小控件、helper 没有业务依赖就让它们保持简单。
-- 动手前先看现有的 Service / ViewModel / Core 类型和 DI 注册，能复用就复用；别机械地抽 `Manager`/`Helper`/`Factory`/`IWhatever`。**这一条管不着上面「判断搬进 Core」那一条** —— 那些是有名有姓、有单测钉着的纯函数，不是给已有东西套一层壳。
+How that lands in practice (re-checked against the code on 2026-09-02):
 
-## 四道闸门（改了代码就全跑一遍）
+- **Capability lives in `src/EmbyNian.Core` and is registered in `src/EmbyNian.Shell/Composition/ShellServices.cs`** (`ValidateOnBuild = true`), then injected. Most of it sits in `Core/Emby`, `Core/Playback` and `Core/Configuration` (session, Emby client, image cache, playback, credentials, settings store); `Core/Services/` holds only the handful carved out later. **Judge by "which project, and is it in the container" — never by directory name.** Moving files to match a directory name changes nothing.
+- **Judgments with a computable answer belong in Core too, even when they aren't a "service".** Which rows the home page shows, which monitor the window lands on, whether two batches of images are the same batch, how large a poster cell is, which cached images to evict — anything with exactly one right answer for a given input becomes a pure function in Core, pinned by the test project. **The reason is coverage**: unit tests only reach Core, so a judgment left in a view model is one nobody is watching. The `HomeLayout.Plan` hole that permanently discarded the user's row order and checkboxes came from exactly that — not one gate went red, a screenshot caught it.
+- **Don't invent an interface just because a class goes into DI**; with no second implementation and nothing to substitute or isolate, register the concrete class. **The exception is narrowing**: `ISettingsService` and `IServerCapabilities` have one implementation each and no test doubles, and they exist so a page that only wants "items per page" can't reach the session, the image cache and the player. **Don't "clean" those two into concrete classes** — that spreads everything back within arm's reach.
+- **Pages construct their own view models; dependencies arrive afterwards through `Attach(...)`.** A WinUI page must have a parameterless constructor and is built by the framework rather than the container, so constructor injection into pages is a dead end. Every view model except the player's looks like this; the price is nullable service fields plus a ring of "not attached yet, return early" guards — that isn't a shortcut, write it that way. **Only `PlayerViewModel` is in the container**: a movie keeps playing behind the library page, so its state has to outlive any navigation.
+- Code-behind holds no business logic, no HTTP/Emby calls, no playback state, no persistence. **One known exception: `Views/ItemCommands.cs`** (the card context menu — watched, favorite, edit metadata) holds an `EmbySession` and issues requests itself, isn't in the container, and has no tests of its own. The field rules for editing have since moved into `Core/Emby/ItemMetadataEdit.cs` and are pinned there; the request plumbing is what's still owed. **Old debt, not a template — don't copy the shape.**
+- `View → ViewModel → Service → outside world` is a direction, not a chain every file has to complete. Models, converters, small controls and helpers with no business dependency stay simple.
+- Before you start, read the existing Service / ViewModel / Core types and the DI registrations, and reuse what's there; don't mechanically extract a `Manager`/`Helper`/`Factory`/`IWhatever`. **This does not govern the "judgments into Core" rule above** — those are named pure functions with tests holding them down, not a shell wrapped around something that already exists.
 
-`dotnet` 不能直接用：`PATH` 上那个是 8.0.403，本项目要 .NET 10，SDK 在 `%USERPROFILE%\.dotnet\dotnet.exe`，没有进 `PATH`。**必须单节点构建** —— 本机 Windows SDK 的多节点 workload resolver 会让并行构建偶发无输出失败。
+## The Four Gates（四道闸门）— run all four after any code change
 
-1. 构建
+The `dotnet` on `PATH` is unusable: it's 8.0.403 and this project needs .NET 10. The SDK is at `%USERPROFILE%\.dotnet\dotnet.exe` and is not on `PATH`. **Build single-node** — this machine's Windows SDK multi-node workload resolver makes parallel builds fail intermittently with no output at all.
+
+1. Build
 
    ```
    %USERPROFILE%\.dotnet\dotnet.exe build .\EmbyNian.sln -c Release --no-restore -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false -p:MSBuildNodeReuse=false
    ```
 
-2. 测试
+2. Test
 
    ```
    %USERPROFILE%\.dotnet\dotnet.exe run --project .\tests\EmbyNian.Tests\EmbyNian.Tests.csproj -c Release --no-build
    ```
 
-   **`-c Release` 不能省。** `dotnet run` 默认找 Debug 那份输出，配上 `--no-build` 就会跑 `bin\Debug` 里那个不知道多久以前的旧程序，还照样打「全部通过」外加一个 0 退出码 —— 2026-08-31 抓到时，那份 Debug 二进制已经是两天前的，比源码少一百六十项测试。省掉这个开关等于把这一关关掉。
+   **`-c Release` is not optional.** `dotnet run` looks for Debug output by default, so with `--no-build` it runs whatever stale binary sits in `bin\Debug` and still prints 「全部通过」 with exit code 0. When this was caught on 2026-08-31 that binary was two days old and 160 tests short of the source. Dropping the switch is the same as switching this gate off.
 
-3. 发布：`powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive`
-4. 自检：`artifacts/publish/win-x64/EmbyNian.exe --self-check --dump-ui`，然后读 `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt`，要退出码 0、末尾是「结果：全部通过」。
+3. Publish: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive`
+4. Self-check: `artifacts/publish/win-x64/EmbyNian.exe --self-check --dump-ui`, then read `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt` — it needs exit code 0 and 「结果：全部通过」 on the last line.
 
-关于闸门的几件事：
+A few things about the gates:
 
-- **自检默认开在副屏**，不会抢走正在用的屏幕；要盯着它跑就加 `--screen 1`，只有一块屏的机器上这个默认值自动失效。
-- 报告里有十来行本来每次都不一样的数字（时间戳、两个 hwnd、字体过滤耗时、光标句柄与线程 id、空闲计时的 2000/2015 ms、任务栏等待、亚克力背景取色、首页轮播各类图的服务器计数、诊断页与日志行数）。只有这些变不算回归，完整清单在 PROGRESS.md。
-- 通过项数会随开发一直增长，**别把某个具体数字写进文档或记忆里**，写了就等着它变旧。
-- **界面是能截图的**：`tools/shot.ps1`（`-Exe … -ExeArgs "--theme daylight --show-settings" -SettleMs N`，负责启动、拍照、关闭）和 `--dump-ui` 都在，自检自己也会留一张。
-- 改过颜色就按主题各拍一张：六套主题在 `src/EmbyNian.Core/Theming/UiThemes.cs`（`emby-dark` 默认、`oled-black`、`midnight`、`graphite`、`plum`、`daylight`），`daylight` 是唯一的浅色，外壳里写死的颜色和系统自绘的标题栏只在它身上露出来。
+- **The self-check opens on the secondary monitor by default** so it won't steal the screen in use; add `--screen 1` to watch it run, and that default lapses by itself on a single-monitor machine.
+- About a dozen lines of the report differ every run by design (timestamps, window and cursor handles, thread ids, timings, sampled colors, server-side counts, line counts). Only those changing is not a regression; the full list is in PROGRESS.md.
+- The passing-test count keeps growing as development goes on. **Never write a specific number into a document or a memory** — it will go stale.
+- **The UI can be photographed**: `tools/shot.ps1` (`-Exe … -ExeArgs "--theme daylight --show-settings" -SettleMs N`, which launches, shoots and closes) and `--dump-ui` are both there, and the self-check leaves a shot of its own.
+- Touched colors → one shot per theme. The six live in `src/EmbyNian.Core/Theming/UiThemes.cs` (`emby-dark` default, `oled-black`, `midnight`, `graphite`, `plum`, `daylight`); `daylight` is the only light one, and hard-coded shell colors plus the system-drawn title bar only show themselves there.
 
-## 验证时不要真实播放
+## No Real Playback While Verifying（验证时不要真实播放）
 
-线上 Emby 服务器（192.168.31.230:8896）是用户的真实媒体库，不是测试夹具 —— 真播一次就会写进播放记录和续播点。
+The live Emby server (192.168.31.230:8896) is the user's real library, not a fixture — one real playback writes into watch history and resume points.
 
-- **不要点卡片正中间**：那里是悬停时浮出来的播放按钮，点下去就是播放，`{ESC}` 停不下来，只能强杀进程。要进详情页就走 `--show-detail` / `--show-episode`，或者首页大图的「详情」按钮、面包屑、卡片底部的标题条 —— 别点画面本身。
-- 这台机器上**程序化移动鼠标是无效的**（`SendInput` 返回 1 但光标不动，`SetCursorPos` 同样），所以 `tools/poke.ps1` 会点在光标恰好停着的地方。导航一律用命令行开关，不要用鼠标。
-- `--play` 是唯一会真的开始播放的开关。
+- **Don't click the middle of a card**: that's the play button floating up on hover, clicking it starts playback, `{ESC}` will not stop it and only killing the process will. Reach a detail page with `--show-detail` / `--show-episode`, or via the home hero's 「详情」 button, the breadcrumb, or the title strip along the bottom of a card — never the artwork itself.
+- **Moving the mouse programmatically does nothing on this machine** (`SendInput` returns 1 and the cursor stays put; `SetCursorPos` likewise), so `tools/poke.ps1` clicks wherever the cursor happens to be sitting. Navigate with command-line switches, never the mouse.
+- `--play` is the only switch that really starts playback.
 
-## 凭据
+## Credentials（凭据）
 
-Emby 访问令牌以 DPAPI 包裹存放。**绝不打印、绝不写进日志、绝不写进自检报告**。要注入网页视图就走 `localStorage`，不要放在查询串里。自检报告里 token 的出现次数必须是 0。
+The Emby access token is stored DPAPI-wrapped. **Never print it, never log it, never let it into the self-check report.** To hand it to a web view use `localStorage`, not a query string. The token's occurrence count in the self-check report must be 0.
 
 ## Git
 
-- 远端 `origin` 是 `https://github.com/cudamin/EmbyNian.git`，**私有仓库**。凭据由这台机器的 Git Credential Manager 保管，不要把令牌写进命令、脚本或远端地址。
-- **只有一条长期分支 `master`**，HEAD 在它上面。它原名 `winui3-rewrite`（WinForms → WinUI 3 那次改造留下的名字），2026-09-02 用户拍板改名为 `master`；旧名字在同一天从远端删掉，历史记录里提到 `winui3-rewrite` 的地方讲的都是改名之前的事。
-- **不要再造第二条分支去跟随主干。** 从前有一条无条件跟随的镜像分支，白占每次提交后的一次快进和一次推送，已经删了。推送就一句 `git push origin master`，也不要再写 `git push . <分支>:<分支>` 那套改引用的挪法。
-- **不要 reset / checkout / 回退工作树里的迁移成果**（WinForms → WinUI 3 那一整次）。
-- 只在用户明确要求时提交。提交信息中文正文 + `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`。源码一律 LF。
-- 提交完顺手推到 `origin`，不用再问一遍（2026-09-01 用户定的）。没有定时任务，推送只跟在提交后面发生；未提交的工作区改动不入库、也不上传。
+- `origin` is `https://github.com/cudamin/EmbyNian.git`, a **private** repository. Credentials are held by this machine's Git Credential Manager; keep tokens out of commands, scripts and remote URLs.
+- **One long-lived branch, `master`**, with HEAD on it. It was `winui3-rewrite` (a leftover name from the WinForms → WinUI 3 rewrite) until the user renamed it on 2026-09-02 and the old name left the remote the same day, so anything in the history mentioning `winui3-rewrite` is talking about before the rename.
+- **Don't create a second branch that follows the trunk.** There used to be a mirror branch following it unconditionally; it's gone, since it bought nothing but an extra fast-forward and push after every commit. Push with `git push origin master` — no `git push . <branch>:<branch>` ref-shuffling either.
+- **Never reset, check out over, or roll back the migration work in the working tree** (the whole WinForms → WinUI 3 change).
+- Commit only when the user explicitly asks. Commit messages: **Chinese body** plus `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`. Source files are LF, always.
+- Push to `origin` right after committing, no need to ask again (his call, 2026-09-01). There is no scheduled job: a push only ever follows a commit, and uncommitted working-tree changes are neither committed nor uploaded.
 
-## 这台机器上的坑
+## Traps On This Machine（这台机器上的坑）
 
-- bash 每次调用工作目录都会重置 → 命令前面带 `cd "C:/Users/89400/EmbyNian" &&`。
-- 没有 `python`。
-- PowerShell 脚本必须存成 **UTF-8 带 BOM**，否则中文输出乱码。
-- shell 里有个自定义的 `cut()` 函数会盖掉 `/usr/bin/cut`；要截断就用 `awk '{print substr($0,1,N)}'`。
-- 命令行开关（全部）：`--dump-ui`、`--maximized`、`--play`、`--screen`、`--scroll-end`、`--scroll-half`、`--self-check`、`--show-detail`、`--show-episode`、`--show-library`、`--show-settings`（可跟一个分类名，如 `--show-settings 关于`，默认开在「界面」）、`--theme`。
+- bash resets the working directory on every call → prefix commands with `cd "C:/Users/89400/EmbyNian" &&`.
+- There is no `python`.
+- PowerShell scripts must be saved as **UTF-8 with BOM**, or Chinese output comes out as mojibake.
+- A custom `cut()` function in the shell shadows `/usr/bin/cut`; truncate with `awk '{print substr($0,1,N)}'` instead.
+- Command-line switches, all of them: `--dump-ui`, `--maximized`, `--play`, `--screen`, `--scroll-end`, `--scroll-half`, `--self-check`, `--show-detail`, `--show-episode`, `--show-library`, `--show-settings` (optionally followed by a category name, e.g. `--show-settings 关于`; defaults to 「界面」), `--theme`.
 
-## 怎么汇报
+## How To Report（怎么汇报）
 
-用户不读代码：实现细节自己定、自己验证，报告用中文讲人话、**不要贴代码**。该问的只有真正属于他的决定 —— 范围、优先级、用户能看见的行为、不可逆的操作，以及**某条规矩正在把这一处的代码弄糟**（见「首要目标」）。给他可挑选的列表，不要给技术选项菜单。
+The user doesn't read code: settle the implementation details yourself, verify them yourself, and **report in Chinese, in plain words, with no code pasted in**. The only things worth asking about are the ones genuinely his — scope, priority, user-visible behavior, irreversible operations, and **a rule that is currently making this piece of code worse** (see the prime directive). Give him a list he can pick from, not a menu of technical options.
