@@ -27,7 +27,7 @@ public sealed class EmbyImageStore
 
     private readonly EmbySession _session;
     private readonly string _directory;
-    private readonly long _maxBytes;
+    private long _maxBytes;
 
     /// <summary>
     /// One download per artwork, however many callers want it at once, and belonging to none of them.
@@ -36,11 +36,15 @@ public sealed class EmbyImageStore
     /// </summary>
     private readonly SharedWork<byte[]?> _downloads = new();
 
-    public EmbyImageStore(EmbySession session, string directory, long maxBytes = 400L * 1024 * 1024)
+    public EmbyImageStore(EmbySession session, string directory, long maxBytes = 0)
     {
         _session = session;
         _directory = directory;
-        _maxBytes = maxBytes;
+
+        // 0 表示「照装机那个数来」。上限是设置里的一行了（<c>UiSettings.ImageCacheMegabytes</c>），所以这里不再
+        // 写死一个 400 —— 写死两处，改了设置页那一处就会有人以为默认值也跟着变了。
+        _maxBytes = maxBytes > 0 ? maxBytes : ImageCachePolicy.BudgetBytes(ImageCachePolicy.DefaultMegabytes);
+
         Directory.CreateDirectory(directory);
     }
 
@@ -255,6 +259,26 @@ public sealed class EmbyImageStore
     /// 「1.1 GB」 on its own does not tell anyone whether the cache is misbehaving or working as asked.
     /// </summary>
     public long MaxBytes => _maxBytes;
+
+    /// <summary>
+    /// 换一个磁盘上限。返回「真的换了没有」—— 调用方据此决定要不要马上清一次。
+    /// <para>
+    /// 上限现在是设置里的一行（<c>UiSettings.ImageCacheMegabytes</c>），而设置页开在另一个窗口里，所以这个数会在
+    /// 程序跑着的时候变。**调小之后必须当场削一次**：不削，下一次清理要等再下载 200 张才轮到，而用户刚把 4 GB
+    /// 拖到 200 MB，看见的是「设置了但没用」。
+    /// </para>
+    /// <para>
+    /// 相等就返回 false 而不是照样清一遍：这一句会跟着每一次界面设置改动被喊到（<c>ShellPrefs</c> 带的是整份
+    /// <c>UiSettings</c>，换主题、收侧边栏都会喊），而一趟目录枚举加删文件不该由「用户点了别的开关」触发。
+    /// </para>
+    /// </summary>
+    public bool Retarget(long maxBytes)
+    {
+        if (maxBytes <= 0 || maxBytes == _maxBytes) return false;
+
+        _maxBytes = maxBytes;
+        return true;
+    }
 
     /// <summary>
     /// 距离上一次清理又下载了多少张就再清一次。**清理从前只在开机跑一次** —— 一次会话里连着刷两小时媒体库，缓存

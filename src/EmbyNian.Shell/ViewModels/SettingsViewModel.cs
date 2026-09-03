@@ -550,6 +550,48 @@ public sealed partial class SettingsViewModel : PageViewModel
     internal SettingHomeLayoutRow? HomeRows { get; private set; }
 
     /// <summary>
+    /// 自检用：「图片缓存上限（MB）」那一行。
+    /// <para>
+    /// 存着它是因为这件事真会坏的地方不在这一页上：设置页开在另一个窗口里，它只把数字写进设置文档然后喊一声
+    /// （<see cref="ShellPrefs"/>），是主窗口那一头把新预算交给图片仓库的。那根绳子断了的样子是「三处读数全对、
+    /// 缓存照旧按旧上限清」—— 屏上没有任何东西说得出现在生效的是哪个数。
+    /// </para>
+    /// </summary>
+    internal SettingNumberRow? ImageBudget { get; private set; }
+
+    /// <summary>
+    /// 自检：把这一行拨动一格，看图片仓库的预算跟不跟得上，再拨回去。
+    /// <para>
+    /// **只拨一格（±1 MB）**，不是拨到上限。两个理由：拨到上限对「上限本来就是上限」的人是一次空操作
+    /// （<c>SettingNumberRow.Value</c> 是 <c>[ObservableProperty]</c>，相等就直接返回，<c>after</c> 一次都不跑），
+    /// 这一关于是变成一句永远为真的空话；而万一还原那一步没走到，留在设置文件里的差别只有 1 MB，不是「上限没了」。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureImageBudget(Emby.EmbyImageStore images)
+    {
+        if (ImageBudget is not { } row) return null;
+
+        var before = Settings.Ui.ImageCacheMegabytes;
+        var probe = before < Emby.ImageCachePolicy.MaxMegabytes ? before + 1 : before - 1;
+
+        var agreedBefore = images.MaxBytes == Emby.ImageCachePolicy.BudgetBytes(before);
+
+        row.Value = probe;
+        var moved = Settings.Ui.ImageCacheMegabytes == probe;
+        var followed = images.MaxBytes == Emby.ImageCachePolicy.BudgetBytes(probe);
+
+        row.Value = before;
+        var restored = Settings.Ui.ImageCacheMegabytes == before
+            && images.MaxBytes == Emby.ImageCachePolicy.BudgetBytes(before);
+
+        return (agreedBefore && moved && followed && restored,
+            $"设置里 {before} MB、仓库 {images.MaxBytes / 1024 / 1024} MB（一致={agreedBefore}）"
+            + $"；拨到 {probe} MB → 设置{(moved ? "跟上" : "没跟上")}、仓库{(followed ? "跟上" : "没跟上")}"
+            + $"；拨回 {before} MB → {(restored ? "两头都还原了" : "没还原")}"
+            + $"；范围 {Emby.ImageCachePolicy.MinMegabytes}–{Emby.ImageCachePolicy.MaxMegabytes}");
+    }
+
+    /// <summary>
     /// 自检：那张表和设置文件里那一份对得上没有 —— 存着几排，表里就该有几排，钥匙和次序都一样。
     /// <para>
     /// 这一条盯的是设置窗口这一头拿不到服务器那份媒体库列表：媒体库那几排的名字只能从存档里记着的那句标题来
@@ -575,7 +617,21 @@ public sealed partial class SettingsViewModel : PageViewModel
     {
         var ui = Settings.Ui;
         Themes = ThemeSwatches(ui);
-        return new SettingSection("界面", "界面", "配色主题、窗口和侧边栏、媒体库分页和海报尺寸。",
+
+        // Held as well as placed, the same way the two shader thresholds are: the self-check drives this row to
+        // prove that a changed budget really reaches the image store, and the row is the only end of that rope
+        // it can reach from here.
+        ImageBudget = Number("图片缓存上限（MB）",
+            Emby.ImageCachePolicy.MinMegabytes,
+            Emby.ImageCachePolicy.MaxMegabytes,
+            () => ui.ImageCacheMegabytes,
+            value => ui.ImageCacheMegabytes = value,
+            $"海报和剧照在磁盘上最多占多少，装机是 {Emby.ImageCachePolicy.DefaultMegabytes} MB。这一行是填进去的，"
+                + "不是用箭头拨的；填小了当场就会把最久没看过的那些删到新上限以下。缓存删掉不影响任何设置，"
+                + "只是下次看到那些封面时要重新下载一遍。",
+            after: () => ShellPrefs.Apply(ui));
+
+        return new SettingSection("界面", "界面", "配色主题、窗口和侧边栏、媒体库分页、海报尺寸和图片缓存上限。",
         [
             Themes,
 
@@ -602,6 +658,21 @@ public sealed partial class SettingsViewModel : PageViewModel
             // touch, and a box wider than its setting lets a value be typed that the save then silently moves.
             Number("每页条目数", 20, 500, () => ui.PageSize, value => ui.PageSize = value),
             Number("海报宽度（像素）", 120, 340, () => ui.PosterWidth, value => ui.PosterWidth = value),
+
+            // 「新增可在设置中调整图片缓存大小的功能」. Built above so the self-check can drive it; see ImageBudget.
+            ImageBudget,
+
+            // 「加入显示评分改为豆瓣评分的功能，可在设置使用豆瓣、tmdb、烂番茄等平台的评分」. The catalogue is
+            // ItemScore's, so the four names exist in exactly one place — and what each option can actually do is in
+            // that class's remarks, which the note below says in the user's own words.
+            Choice("评分来源", Emby.ItemScore.Catalogue,
+                () => ui.ScoreSource,
+                value => ui.ScoreSource = value,
+                note: "详情页那个分显示哪一家的。「烂番茄」读的是服务器上的「影评指数」，是唯一真正独立的第二个分；"
+                    + "「豆瓣」和「TMDB」换的是分数旁边那个署名 —— 服务器上三家的大众分都写在同一个字段里，"
+                    + "客户端换不出来，只能在服务器认出这个条目属于哪一家时把那一家的名字写上去，认不出来就写"
+                    + "「公众评分」。豆瓣要服务器上装了豆瓣刮削插件才认得出来。"),
+
             Toggle("显示观看状态标记", "在海报角上显示已看和收藏状态", () => ui.ShowWatchedIndicators, value => ui.ShowWatchedIndicators = value)
         ]);
     }

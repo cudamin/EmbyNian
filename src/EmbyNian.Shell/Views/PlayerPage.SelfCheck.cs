@@ -1,5 +1,6 @@
 using EmbyNian.Playback;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 
 namespace EmbyNian.Shell.Views;
@@ -27,8 +28,10 @@ namespace EmbyNian.Shell.Views;
 /// 搬家 —— 一行代码没改，验收就是自检报告一字不差。
 /// </para>
 /// <para>
-/// 还有一关在这八个文件外面：<c>ProbePalette</c> 和它要验的那件事（<c>PaintPalette</c>）同住
-/// <c>PlayerPage.Palette.cs</c>。一支画刷有没有被填上，只有填它的那段代码旁边才看得清。
+/// 还有两关在这八个文件外面，都住在 <c>PlayerPage.Palette.cs</c>：<c>ProbePalette</c> 和它要验的那件事
+/// （<c>PaintPalette</c>）同住一处 —— 一支画刷有没有被填上，只有填它的那段代码旁边才看得清；<c>ProbeSeekTrack</c>
+/// 挨着它，因为它钉的是同一种静默失效 —— 画刷解析得出来、画出来的东西不对（框架的滑杆模板在指针状态下自己往
+/// 轨道上刷了一层白）。
 /// </para>
 /// </summary>
 public sealed partial class PlayerPage
@@ -69,4 +72,37 @@ public sealed partial class PlayerPage
     private static bool Encloses(Rect outer, Rect inner) =>
         inner.Left >= outer.Left - GeometrySlack && inner.Right <= outer.Right + GeometrySlack
         && inner.Top >= outer.Top - GeometrySlack && inner.Bottom <= outer.Bottom + GeometrySlack;
+
+    /// <summary>
+    /// One named part from inside a control's template, or null when the template has not been applied or the
+    /// framework has renamed it.
+    /// <para>
+    /// There is no other way to reach one: a <c>ControlTemplate</c> carries its own namescope, so the page's
+    /// <c>FindName</c> cannot see <c>VerticalTrackRect</c>, and <c>GetTemplateChild</c> is the control's own
+    /// protected member. Two probes need it — the volume rail's track, the seek slider's three rectangles —
+    /// and both are asking about geometry and colour the framework decides, which is exactly the class of
+    /// thing no unit test in this repository can reach.
+    /// </para>
+    /// <para>
+    /// Depth-first, first match wins. That the walk really does find template internals is not a
+    /// supposition: the <c>--dump-ui</c> tree is built the same way and prints
+    /// 「Rectangle x:Name=VerticalTrackRect」 among the volume rail's children.
+    /// </para>
+    /// </summary>
+    private static FrameworkElement? PartNamed(DependencyObject parent, string name)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(parent);
+
+        for (var index = 0; index < count; index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+
+            if (child is FrameworkElement element && string.Equals(element.Name, name, StringComparison.Ordinal))
+                return element;
+
+            if (PartNamed(child, name) is { } found) return found;
+        }
+
+        return null;
+    }
 }

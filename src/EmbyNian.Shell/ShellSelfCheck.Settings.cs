@@ -90,13 +90,25 @@ internal static partial class ShellSelfCheck
     /// hence the running total: by the last card every row on the page should be on the tree.
     /// </para>
     /// </summary>
-    private static void ReportSettings(ShellPage shell, StringBuilder report, Action<string, bool, string> check)
+    private static void ReportSettings(
+        ShellPage shell,
+        EmbyNian.Emby.EmbyImageStore images,
+        StringBuilder report,
+        Action<string, bool, string> check)
     {
         if (shell.SettingsRoot is not { } page)
         {
             report.AppendLine($"[信息] 设置页面 — 未打开（当前 {shell.CurrentTag ?? "无"}）");
             return;
         }
+
+        // 「新增可在设置中调整图片缓存大小的功能」. Asserted here rather than beside the servers page's own cache
+        // line, because what can go wrong is the rope between the two windows: the settings page writes the
+        // number into the document and shouts (ShellPrefs), and App hands it to the store. Break that and every
+        // reading stays green — the box shows the new number, the file holds it, and the cache goes on trimming
+        // to the old one. Nothing on screen says which budget is in force.
+        if (page.ViewModel.MeasureImageBudget(images) is { } budget)
+            check("图片缓存上限改完当场生效", budget.Ok, budget.Detail);
 
         var (sections, rows, category, _, status) = page.Summary;
 
@@ -304,7 +316,25 @@ internal static partial class ShellSelfCheck
         check("音量条淡入淡出", railFade.Ok, railFade.Detail);
 
         // The probe drove the rule; it must have put it back, or the bar it revealed is now over the grid.
-        check("显隐规则已复位", !player.ChromeShown, $"控件在屏={player.ChromeShown}");
+        // The cursor goes in the same gate: a probe that hid it and forgot to give it back leaves the whole
+        // application without a pointer, and that one is not something a user can work around.
+        check("显隐规则已复位",
+            !player.ChromeShown && player.CursorRestored,
+            $"控件在屏={player.ChromeShown}，指针形状={(player.CursorRestored ? "已交还框架" : "还压着透明光标")}");
+
+        // 「去掉鼠标移到进度条上时进度条出现的白色填充物」. Three layers are stacked along the seek bar and the
+        // top one is the framework's slider template: in PointerOver and Pressed it paints its track rectangle
+        // 54% white, exactly the buffered bar's own rectangle, so the unplayed half turned white under the
+        // pointer. The override lives in SeekSlider's own resources, and the template looks those keys up by
+        // walking outward from itself — a lookup that fails leaves the white in place. Which nothing else can
+        // see: the seek bar is only on screen mid-film, this machine cannot inject a mouse event, and playing
+        // something on the real library while verifying is not allowed. So the states are pushed by hand.
+        //
+        // Registered after the reveal group rather than before it, with the other probes that raise the chrome
+        // and put it back: the rule compares timestamps and only ever moves forward, and a probe that reset it
+        // before 显隐规则 asked its first question would be answering about a past it had already left.
+        var seek = player.ProbeSeekTrack();
+        check("进度条指针下不铺白", seek.Ok, seek.Detail);
 
         // The one step the rule above cannot vouch for: that 「hide the cursor」 leaves the process. Every
         // cursor expectation in the reveal probe reads the page's own field back, which is why
@@ -362,6 +392,15 @@ internal static partial class ShellSelfCheck
         var commands = player.ProbeWindowCommands();
         check("窗口命令按钮", commands.Ok, commands.Detail);
 
+        // 「置顶开启后不要改变按键颜色，绘制一个置顶开启图标来替换」. With the accent block gone the icon is the
+        // only thing on screen that says which way the switch is thrown, and three ways of getting that wrong
+        // are all invisible: a style that stopped applying puts the block back, a copy-paste can leave both
+        // states drawing the same pin, and 置顶 itself now lives on the window where nothing on screen reads it
+        // back. None of it can be caught by compiling, by a unit test (the test project reaches Core only) or
+        // by a screenshot, which shows one state at a time.
+        var pin = player.ProbePin();
+        check("置顶开关", pin.Ok, pin.Detail);
+
         var tap = player.ProbeTap();
         check("点击画面暂停", tap.Ok, tap.Detail);
 
@@ -370,6 +409,15 @@ internal static partial class ShellSelfCheck
         // find out that the badge no longer resolves would otherwise be the pause it was meant to confirm.
         var pulse = player.ProbePulse();
         check("暂停播放角标", pulse.Ok, pulse.Detail);
+
+        // 「双击画面全屏的时候会触发暂停和开始」. The net playback state was already right — the double tap put
+        // pause back where it found it — so what was wrong was the badge flashing twice and mpv really stopping
+        // and starting. Holding the tap back instead moves the risk: 「a single click no longer pauses」 now
+        // rests on one timer being hooked up, and 「the badge stays quiet afterwards」 on one guard. Registered
+        // after 暂停播放角标 on purpose — this probe leaves a silence behind, and that probe asks the badge to
+        // speak.
+        var taps = player.ProbeTapGesture();
+        check("双击不触发暂停", taps.Ok, taps.Detail);
 
         var toast = shell.ToastState;
         check("提示通道", toast.Exists, toast.Exists ? $"InfoBar，当前{(toast.Open ? "已显示" : "未显示")}" : "缺失");

@@ -516,6 +516,18 @@ internal static partial class Native
     public static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 
     /// <summary>
+    /// How long the OS itself allows between two clicks for them to count as a double click, in
+    /// milliseconds. The ceiling on how long 点击画面暂停 is held back before it is issued — see
+    /// <see cref="EmbyNian.Playback.PictureTap.HoldFor"/>, which caps it far below this on purpose.
+    /// <para>
+    /// Asked afresh per tap rather than cached: it is a Control Panel setting and can change while the app runs, and
+    /// one user32 call is cheaper than keeping a copy in step with it.
+    /// </para>
+    /// </summary>
+    [LibraryImport("user32.dll")]
+    public static partial uint GetDoubleClickTime();
+
+    /// <summary>
     /// The whole of what the OS will say about the desktop's cursor: the raw <c>CURSORINFO</c> flags, the shape
     /// handle, and where it believes the pointer is. Printed by the cursor probe as an outside witness and
     /// asserted on nowhere, for the reasons in <see cref="GetCursor"/>: 「藏起来了没有」 came back 「显示」 with
@@ -574,10 +586,12 @@ internal static partial class Native
     /// </summary>
     public static IntPtr CreateBlankCursor()
     {
-        var opaque = new byte[32 * 32 / 8];
-        Array.Fill(opaque, (byte)0xFF);
+        // 掩码在 Core 里（EmbyNian.Playback.CursorMask），由单测钉着 —— 从这一轮起 WinUI 的输入管线也会照着这
+        // 张掩码画光标，算错的下场不再是「藏不掉」而是「画面正中一块黑方块」。行距按 WORD 补齐那条尤其容易错。
+        var (and, xor) = EmbyNian.Playback.CursorMask.Transparent(32, 32);
+        if (and.Length == 0) return IntPtr.Zero;
 
-        return CreateCursor(IntPtr.Zero, 0, 0, 32, 32, opaque, new byte[32 * 32 / 8]);
+        return CreateCursor(IntPtr.Zero, 0, 0, 32, 32, and, xor);
     }
 
     [LibraryImport("user32.dll", SetLastError = true)]
@@ -673,6 +687,56 @@ internal static partial class Native
 
     private const uint InputMouse = 0;
     private const uint MouseEventMove = 0x0001;
+    private const uint MouseEventAbsolute = 0x8000;
+    private const uint MouseEventVirtualDesk = 0x4000;
+
+    private const int SmXVirtualScreen = 76;
+    private const int SmYVirtualScreen = 77;
+    private const int SmCxVirtualScreen = 78;
+    private const int SmCyVirtualScreen = 79;
+
+    /// <summary>
+    /// Puts the pointer at a desktop coordinate through the <em>real</em> input queue, rather than by
+    /// <c>SetCursorPos</c>.
+    /// <para>
+    /// The difference is the whole reason this exists. <c>SetCursorPos</c> moves the coordinate and produces no
+    /// input, so a XAML island under the pointer hears nothing at all — measurably: the live cursor probe
+    /// reports 「XAML 事件 0 次」 for a pointer it demonstrably moved. And a probe that never made the island
+    /// speak is a probe measuring the one situation in which the bug cannot happen. <c>SendInput</c> goes
+    /// through the queue, so the island receives a pointer move exactly as it does from a hand.
+    /// </para>
+    /// <para>
+    /// Absolute coordinates are normalised to a 0..65535 grid, and the grid is the <em>virtual</em> desktop's
+    /// only when <c>MOUSEEVENTF_VIRTUALDESK</c> is set — without it the grid is the primary monitor and every
+    /// point on a second screen lands somewhere else entirely. <c>tools/poke.ps1</c> carries the same note for
+    /// the same reason.
+    /// </para>
+    /// </summary>
+    public static bool MovePointerTo(int x, int y)
+    {
+        var width = GetSystemMetrics(SmCxVirtualScreen);
+        var height = GetSystemMetrics(SmCyVirtualScreen);
+        if (width <= 1 || height <= 1) return false;
+
+        var left = GetSystemMetrics(SmXVirtualScreen);
+        var top = GetSystemMetrics(SmYVirtualScreen);
+
+        var input = new Input
+        {
+            Type = InputMouse,
+            Mouse = new MouseInput
+            {
+                Dx = (int)Math.Round((double)(x - left) * 65535 / (width - 1)),
+                Dy = (int)Math.Round((double)(y - top) * 65535 / (height - 1)),
+                Flags = MouseEventMove | MouseEventAbsolute | MouseEventVirtualDesk
+            }
+        };
+
+        return SendInput(1, [input], Marshal.SizeOf<Input>()) == 1;
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial int GetSystemMetrics(int index);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     private static partial uint SendInput(uint count, [In] Input[] inputs, int size);

@@ -31,6 +31,7 @@ internal static class Program
         StartupArgsTests.Register();
         ThemeTests.Register();
         PlayerPaletteTests.Register();
+        PinIndicatorTests.Register();
         AboutTests.Register();
 
         return TestHarness.Run();

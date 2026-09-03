@@ -1,5 +1,7 @@
 using EmbyNian.Playback;
+using EmbyNian.Shell.Interop;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Foundation;
 
@@ -203,8 +205,9 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 暂停/播放 角标: that the one second of acknowledgement really runs — 「暂停后显示一秒暂停图标就行（开启播放
-    /// 也弄个一秒的动画）」 — and shows the right glyph for what just happened.
+    /// 暂停/播放 角标: that the fifth of a second of acknowledgement really runs — 「暂停后显示一秒暂停图标就行
+    /// （开启播放也弄个一秒的动画）」, shortened by 「把暂和开始的动画改为 0.2 秒」 — and draws the right shape
+    /// for what just happened.
     /// <para>
     /// The animation is begun for real, which is the whole point of the probe. A
     /// <c>Storyboard.TargetName</c> is resolved against a namescope at <c>Begin</c> and not before, so a
@@ -214,10 +217,15 @@ public sealed partial class PlayerPage
     /// reaches for only exist once the page has been loaded.
     /// </para>
     /// <para>
-    /// Both glyphs are asked for, in the order a pause and a resume produce them, because they are
+    /// Both shapes are asked for, in the order a pause and a resume produce them, because they are
     /// deliberately the opposite way round from the transport button's: a button says what pressing it will
     /// do, and this says what just happened. A crossed pair would tell every pause it had resumed, and would
     /// look entirely deliberate.
+    /// </para>
+    /// <para>
+    /// The two size readings are a debt this design owes: the shapes live in a <c>Canvas</c>, which does not
+    /// measure its children, so a Width or Height dropped from the markup measures the whole badge as 0×0 —
+    /// nothing on screen at all, with every other reading here still perfectly correct.
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbePulse()
@@ -225,13 +233,18 @@ public sealed partial class PlayerPage
         // Laid out for the duration and put back, as ProbeTap does: a collapsed page has no namescope
         // trouble to run into because nothing it names has been realised.
         var was = Visibility;
+        var wasMuted = _pulseMutedAt;
+
+        // A double tap in the last fraction of a second silences the badge on purpose, and this probe asks the
+        // badge to speak. Cleared rather than worked around, and put back on the way out.
+        _pulseMutedAt = null;
         Visibility = Visibility.Visible;
         UpdateLayout();
 
         var seen = new List<string>();
         var wrong = new List<string>();
 
-        void Beat(string what, bool paused, int codepoint)
+        void Beat(string what, bool paused, (Geometry Shape, Geometry Rim) want)
         {
             try
             {
@@ -245,38 +258,49 @@ public sealed partial class PlayerPage
                 return;
             }
 
+            UpdateLayout();
+
             var shown = PulseBadge.Visibility == Visibility.Visible;
             var running = _pulse.GetCurrentState() is ClockState.Active or ClockState.Filling;
-            var right = PulseGlyph.Glyph == Glyph(codepoint);
+            var right = ReferenceEquals(PulseShape.Data, want.Shape);
 
             // 「不要黑色的圆形边框，只要白色的三角形」: the plate is gone, so what is asserted now is that
-            // nothing draws one — no fill, no ring — and that the glyph is the size the user asked for
-            // rather than the 40 it was inside the circle, with the rim behind it carrying the same shape.
+            // nothing draws one — no fill, no ring — and that the shape is the size the user asked for
+            // rather than the 40 it was inside the circle, with the rim behind it carrying the same geometry.
             var bare = PulseBadge.Background is null
                        && PulseBadge.BorderBrush is null
                        && PulseBadge.BorderThickness.Left == 0
                        && PulseBadge.BorderThickness.Top == 0
                        && PulseBadge.BorderThickness.Right == 0
                        && PulseBadge.BorderThickness.Bottom == 0;
-            var big = PulseGlyph.FontSize >= 120 && PulseRim.FontSize > PulseGlyph.FontSize;
-            var rimmed = PulseRim.Glyph == PulseGlyph.Glyph;
+
+            var box = PulseShape.Data?.Bounds ?? default;
+            var big = box.Height >= 90
+                      && PulseRim.StrokeThickness > PulseShape.StrokeThickness
+                      && PulseBadge.ActualWidth >= 130
+                      && PulseBadge.ActualHeight >= 130;
+            var rimmed = ReferenceEquals(PulseRim.Data, want.Rim)
+                         && PulseRim.Data?.Bounds == PulseShape.Data?.Bounds;
 
             seen.Add($"{what}→{(shown ? "出角标" : "没出角标")}"
                      + $"，{(running ? "动画在跑" : "动画没跑")}"
-                     + $"，图标{(right ? "对" : "不对")}"
+                     + $"，形状{(right ? "对" : "不对")}"
                      + $"，{(bare ? "没有底板" : "还有底板")}"
-                     + $"，字号 {PulseGlyph.FontSize:0}/描边 {PulseRim.FontSize:0}{(rimmed ? "" : "（描边图标不一样）")}");
+                     + $"，外框 {box.Width:0}×{box.Height:0}"
+                     + $"／描边 {PulseShape.StrokeThickness:0} 与 {PulseRim.StrokeThickness:0}"
+                     + $"／徽标 {PulseBadge.ActualWidth:0}×{PulseBadge.ActualHeight:0}"
+                     + (rimmed ? "" : "（描边形状不一样）"));
 
             if (!shown || !running || !right || !bare || !big || !rimmed) wrong.Add(what);
         }
 
-        Beat("暂停", paused: true, PauseGlyphCode);
-        Beat("恢复", paused: false, PlayGlyphCode);
+        Beat("暂停", paused: true, _pauseArt);
+        Beat("恢复", paused: false, _playArt);
 
         // Back to how a player nobody has paused looks: no clock in flight, and nothing drawn over whatever
         // page the shell is really on.
-        _pulse.Stop();
-        PulseBadge.Visibility = Visibility.Collapsed;
+        HidePulse();
+        _pulseMutedAt = wasMuted;
         Visibility = was;
         UpdateLayout();
 
@@ -284,5 +308,101 @@ public sealed partial class PlayerPage
 
         return (ok, string.Join("；", seen)
                     + (wrong.Count == 0 ? "；结束后收起" : $"；不符：{string.Join('、', wrong)}"));
+    }
+
+    /// <summary>
+    /// 双击不触发暂停: 「双击画面全屏的时候会触发暂停和开始」, driven through the page's own three methods.
+    /// <para>
+    /// The net playback state has been right since August — the double tap put pause back where it found it —
+    /// so what was wrong was everything around it: the badge flashed 暂停 and then 播放 across the middle of
+    /// the picture, and mpv really did stop and start. The fix holds the tap back instead, and that turns one
+    /// invisible risk into two: 「a single click no longer pauses at all」 now rests on a timer being hooked up,
+    /// and 「the badge stays quiet afterwards」 on one guard at the top of <see cref="Pulse"/>. Neither the
+    /// build, nor a unit test, nor any other probe here can see either of them.
+    /// </para>
+    /// <para>
+    /// Nothing is faked. <c>TappedRoutedEventArgs</c> cannot be constructed, which is exactly why the handlers
+    /// were split into <see cref="TapPicture"/>, <see cref="OnTapHoldElapsed"/> and
+    /// <see cref="SecondTapOnPicture"/> — the last of which leaves fullscreen to its caller so this can walk
+    /// the gesture without moving the window. Nothing reaches mpv either: with no file open
+    /// <c>PlaybackService</c> drops a property write on the floor.
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ProbeTapGesture()
+    {
+        if (!Attached) return (false, "播放层未接线");
+
+        var was = Visibility;
+        var wasMuted = _pulseMutedAt;
+        var wasBadge = PulseBadge.Visibility;
+
+        Visibility = Visibility.Visible;
+        UpdateLayout();
+
+        var report = new List<string>();
+        var wrong = new List<string>();
+
+        void Want(string what, bool ok)
+        {
+            if (!ok) wrong.Add(what);
+        }
+
+        // ① 接线. A tap has to arm the timer and hold the pause — a timer that was never hooked up shows up
+        // as 「点画面不再暂停了」, which is the one regression this change could introduce.
+        _pulseMutedAt = null;
+        TapPicture();
+        Want("单击攥住了", _tapHold.IsEnabled && _tap.Pending && !_tap.Issued);
+        report.Add($"攥住 {_tapHold.Interval.TotalMilliseconds:0} 毫秒（系统双击 {Native.GetDoubleClickTime()}）");
+
+        // ② 到期. Called the way PlayerPage.SelfCheck.Cursor calls OnTick — the timer's own handler, by hand.
+        OnTapHoldElapsed(this, EventArgs.Empty);
+        Want("攥够了才下发", !_tapHold.IsEnabled && _tap.Issued);
+
+        // ③ 快的双击: the tap is still held, so there is nothing to undo and nothing was ever issued.
+        TapPicture();
+        SecondTapOnPicture();
+        Want("快双击一次暂停都不发", !_tapHold.IsEnabled && !_tap.Pending && !_tap.Issued);
+        report.Add("快双击→一次暂停都不发");
+
+        // ④ 徽标真的闭嘴. Four steps, because the guard is a span rather than a counter and a counter that
+        // never came down would eat the badge for every real pause afterwards.
+        _pulseMutedAt = null;
+        Pulse(true);
+        var spoke = PulseBadge.Visibility == Visibility.Visible;
+
+        SecondTapOnPicture();
+        var hushed = PulseBadge.Visibility == Visibility.Collapsed;
+
+        Pulse(true);
+        var stillHushed = PulseBadge.Visibility == Visibility.Collapsed;
+
+        _pulseMutedAt = null;
+        Pulse(true);
+        var speaksAgain = PulseBadge.Visibility == Visibility.Visible;
+
+        Want("徽标本来出得来", spoke);
+        Want("双击当场把徽标收起来", hushed);
+        Want("静音期内不再出徽标", stillHushed);
+        Want("静音期过了又出得来", speaksAgain);
+        report.Add($"慢双击→撤回并静音（{PictureTap.PulseMuteMilliseconds} 毫秒），徽标当场收起、期内不再出、期后又出得来");
+
+        // ⑤ 点在控件上那一下要作废，否则接着一次落在控制条上的双击会拿它去「撤回」，把正在放的片子停掉。
+        TapPicture();
+        DropTapHold();
+        Want("落在控件上的那一下作废", !_tapHold.IsEnabled && !_tap.Pending && !_tap.Issued);
+        report.Add("点在控件上→作废");
+
+        DropTapHold();
+        HidePulse();
+        _pulseMutedAt = wasMuted;
+        PulseBadge.Visibility = wasBadge;
+        Visibility = was;
+        UpdateLayout();
+
+        Want("跑完复位了", !_tapHold.IsEnabled && !_tap.Pending && !_tap.Issued
+            && PulseBadge.Visibility == wasBadge && Visibility == was);
+
+        return (wrong.Count == 0,
+            string.Join("；", report) + (wrong.Count == 0 ? "；复位正常" : $"；不符：{string.Join('、', wrong)}"));
     }
 }

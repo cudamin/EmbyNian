@@ -49,7 +49,8 @@ public sealed partial class ServersViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(DiscoveredVisibility))]
     public partial bool ShowDiscovered { get; set; }
 
-    /// <summary>The cache line: 「1.1 GB · 3,481 个文件 · 上限 400 MB」.</summary>
+    /// <summary>The cache line: 「1.1 GB · 3,481 个文件 · 上限 400 MB」 — the budget being whatever the
+    /// 界面 card's 图片缓存上限 row currently says, not a fixed 400.</summary>
     [ObservableProperty]
     public partial string? CacheSummary { get; set; }
 

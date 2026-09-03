@@ -187,6 +187,32 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(ScoreVisibility))]
     public partial string? Score { get; set; }
 
+    /// <summary>
+    /// 分数旁边那句「这是谁给的分」——「豆瓣」「TMDB」「烂番茄」或者「公众评分」。
+    /// <para>
+    /// 单独一格而不是拼进 <see cref="Score"/>：那四个字要走暗墨、跟着事实那一行的层次，而分数走强墨。而且它必须说
+    /// <b>实际取到的是哪一档</b>，不是设置里选的哪一档 —— 选了豆瓣而服务器认不出豆瓣，这里写的就是「公众评分」。
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    public partial string? ScoreLabel { get; set; }
+
+    /// <summary>
+    /// 自检用：规矩说这一格该画什么。屏上那两格由绑定填，而「该是什么」只有视图模型算得出来 —— 探针拿这一份和屏上
+    /// 比，两边一致才算这一条设置真的接上了。
+    /// </summary>
+    internal Emby.ScoreBadge ScoreBadge { get; private set; } = Emby.ScoreBadge.None;
+
+    /// <summary>自检用：设置里选的那一档叫什么。</summary>
+    internal string ScoreSourceName => Emby.ItemScore.Describe(Settings.Ui.ScoreSource);
+
+    /// <summary>
+    /// 自检用：服务器在这个条目上到底给了什么评分字段。**只报不判** —— 有没有豆瓣的痕迹是服务器上装了哪些插件的
+    /// 事，判它就是把一关的成败交给别人的配置。可它是这一关最值得读的一句：这台服务器有没有影评指数、有没有对上
+    /// 豆瓣，从此每次自检都自己答一遍。
+    /// </summary>
+    internal string ScoreFacts { get; private set; } = "还没读到条目";
+
     /// <summary>首播日期、时长、分级、季数, already joined. Empty is a row with nothing in it, not a gap.</summary>
     [ObservableProperty]
     public partial string? Facts { get; set; }
@@ -490,6 +516,10 @@ public sealed partial class DetailViewModel : PageViewModel
     private static double FontSize(string key) => (double)Application.Current.Resources[key];
 
     private static Brush Painted(string key) => (Brush)Application.Current.Resources[key];
+
+    /// <summary>自检用：一个可空的评分字段读出来怎么写。缺失和 0 要分得清 —— 两者屏上都是「没有分」。</summary>
+    private static string Describe(float? value) =>
+        value is { } number ? number.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) : "没给";
 
     public Visibility ScoreVisibility => Show(!string.IsNullOrWhiteSpace(Score));
 
@@ -1105,7 +1135,15 @@ public sealed partial class DetailViewModel : PageViewModel
         TitleLink = ItemDetail.TitleTarget(item);
         Subline = ItemDetail.Subline(item);
         SublineGenres = ItemDetail.SublineGenres(item);
-        Score = ItemDetail.Score(item);
+        // 「显示的评分」按设置里那一档来。规则在 Core（ItemScore）：哪个数、写谁的名字、这一档没有就回落到哪儿，
+        // 都是有唯一正确答案的判断，而错起来屏上只是一个看着挺正常的数。
+        var badge = ItemScore.Resolve(item, Settings.Ui.ScoreSource);
+        Score = badge.Text;
+        ScoreLabel = badge.Label;
+        ScoreBadge = badge;
+        ScoreFacts = $"CommunityRating={Describe(item.CommunityRating)}"
+            + $"，CriticRating={Describe(item.CriticRating)}"
+            + $"，ProviderIds={(item.ProviderIds.Count == 0 ? "空" : string.Join('/', item.ProviderIds.Keys))}";
         Facts = ItemDetail.Facts(item);
         Directors = ItemDetail.Directors(item);
         Overview = string.IsNullOrWhiteSpace(item.Overview) ? "暂无简介。" : item.Overview.Trim();

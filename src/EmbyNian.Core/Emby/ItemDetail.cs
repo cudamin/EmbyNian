@@ -181,13 +181,6 @@ public static class ItemDetail
     }
 
     /// <summary>
-    /// The score for the badge, or empty when the server has none. Formatted 「8.4」 / 「8」 rather than
-    /// 「8.40」, and invariantly, so a machine whose decimal separator is a comma still shows a dot.
-    /// </summary>
-    public static string Score(EmbyItem item) =>
-        item.CommunityRating is { } score and > 0 ? score.ToString("0.#", CultureInfo.InvariantCulture) : "";
-
-    /// <summary>
     /// The facts line's first segment: 「2016 – 2018」 for a show, 「2016/4/17」 for everything else.
     /// <para>
     /// A show is dated in years because that is the fact about a show — 「2016/4/17」 is the day one

@@ -127,6 +127,15 @@ internal sealed class HostWindow : IDisposable
     private IntPtr _blank;
 
     /// <summary>
+    /// The same cursor as the framework's own type, and whether the wrapping has been attempted. Two fields
+    /// because 「could not be wrapped」 has to be remembered too — <see cref="BlankInputCursor"/> is read ten
+    /// times a second while the cursor is hidden.
+    /// </summary>
+    private InputCursor? _blankInput;
+
+    private bool _blankInputTried;
+
+    /// <summary>
     /// One window per blanked class, against the cursor handle that class had before. Empty whenever the
     /// cursor is shown; a leftover entry here is a class cursor left blank, which is why the restore also
     /// runs on dispose.
@@ -238,6 +247,40 @@ internal sealed class HostWindow : IDisposable
 
     /// <summary>The transparent cursor's handle, for readings that have to tell it from a real shape.</summary>
     public IntPtr BlankCursor => Blank;
+
+    /// <summary>
+    /// The same transparent cursor, wrapped as the framework's own <c>InputCursor</c> so it can be handed to
+    /// <c>UIElement.ProtectedCursor</c>. Null when the wrapping could not be done, which leaves the cursor
+    /// behaving exactly as it did before this was added.
+    /// <para>
+    /// It is the lever the other four were missing. While the pointer is over XAML content the shape on screen
+    /// is the framework's to decide, and nothing done on this thread — <c>SetCursor</c>, <c>ShowCursor</c>, the
+    /// class cursors, the zero-displacement nudge — is on that path. A real film's log says so plainly: one
+    /// hide lasted two minutes and five seconds with this queue holding no shape the whole time, the show count
+    /// at −1, five window classes blanked, the nudge sent, and <c>GetCursorInfo</c> answering 「system arrow」
+    /// from beginning to end. See <see cref="InputCursors"/> for how the wrapping is done and why there is no
+    /// projected API for it.
+    /// </para>
+    /// <para>
+    /// Built once and remembered, failure included: this is read ten times a second for as long as the cursor
+    /// stays hidden, and a wrapping that cannot be done must not be retried on every tick.
+    /// </para>
+    /// </summary>
+    public InputCursor? BlankInputCursor
+    {
+        get
+        {
+            if (_blankInputTried) return _blankInput;
+
+            _blankInputTried = true;
+            _blankInput = InputCursors.From(Blank);
+
+            if (_blankInput is null)
+                Log.Warn(Category, "透明光标包不成框架的 InputCursor —— 指针压在画面上时藏不掉，其余几条路照旧");
+
+            return _blankInput;
+        }
+    }
 
     /// <summary>
     /// How many window classes are currently blanked, and how many were reached at all. Read by the
@@ -2109,7 +2152,12 @@ internal sealed class HostWindow : IDisposable
         if (_blank != IntPtr.Zero)
         {
             Native.SetCursor(Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor));
-            Native.DestroyCursor(_blank);
+
+            // Only when the framework never got hold of it. Once it has been wrapped as an InputCursor the
+            // framework is holding this very handle, and destroying it here would be a use-after-free bet for
+            // no gain — the process is on its way out, so one leaked cursor handle is free.
+            if (!_blankInputTried) Native.DestroyCursor(_blank);
+
             _blank = IntPtr.Zero;
         }
 

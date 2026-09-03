@@ -59,9 +59,14 @@ internal static class ShellServices
         services.AddSingleton(provider =>
             DeviceIdentity.Create(provider.GetRequiredService<AppSettings>().DeviceId, AppIdentity.Version));
         services.AddSingleton<EmbySession>();
+
+        // The disk budget comes from the settings document rather than from a literal here: it is a row on the
+        // 界面 card now, and it can change while the app runs — see EmbyImageStore.Retarget and the line in
+        // App.OnLaunched that hands a changed one over.
         services.AddSingleton(provider => new EmbyImageStore(
             provider.GetRequiredService<EmbySession>(),
-            paths.ImageCacheDirectory));
+            paths.ImageCacheDirectory,
+            ImageCachePolicy.BudgetBytes(provider.GetRequiredService<AppSettings>().Ui.ImageCacheMegabytes)));
 
         // ---- the player -------------------------------------------------------------------------------
         services.AddSingleton(provider =>

@@ -1,4 +1,5 @@
 using EmbyNian.Diagnostics;
+using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.ViewModels;
@@ -424,6 +425,43 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
+    /// 工具用（<c>--show-osd [pinned|paused|playing]</c>）：把播放浮层摆到屏上留着，好让 <c>tools/shot.ps1</c>
+    /// 拍一张。一个字节的视频都不播 —— <see cref="Render"/> 只读显隐规则，不问在放什么。
+    /// <para>
+    /// 不是探针，所以不住 <c>SelfCheck.*</c> 里。它存在的理由和 <c>--show-menu</c> 一模一样：这几层只有指针走到
+    /// 对应的位置才浮上来，而这台机器上注不进鼠标事件，于是浮层上任何看得见的改动本来都拍不到照 —— 而浮层正是
+    /// 用户最常盯着看的一片。
+    /// </para>
+    /// <para>
+    /// 用 <see cref="ChromeHold"/> 钉住而不是靠 <c>WakeFully</c>：后者只撑一个宽限期，一秒多之后浮层自己就收了，
+    /// 而拍照要等窗口稳下来。音量条走 <see cref="ChromeReveal.FlashRail"/> —— 那是滚轮调音量走的同一条路，一律
+    /// 给足强度。徽标停在满亮上而不是让它跑那 0.2 秒的动画：0.2 秒里拍不到任何一帧。
+    /// </para>
+    /// </summary>
+    internal void ShowChromeForShot(string? state)
+    {
+        Visibility = Visibility.Visible;
+        UpdateLayout();
+
+        if (string.Equals(state, "pinned", StringComparison.OrdinalIgnoreCase)) SetPinned(true);
+
+        if (state is "paused" or "playing")
+        {
+            var art = state == "paused" ? _pauseArt : _playArt;
+            PulseShape.Data = art.Shape;
+            PulseRim.Data = art.Rim;
+            PulseBadge.Visibility = Visibility.Visible;
+            PulseBadge.Opacity = 1;
+        }
+
+        Hold(true, ChromeHold.Shot);
+        _chrome.WakeFully(Now);
+        _chrome.FlashRail(Now);
+        Render();
+        UpdateLayout();
+    }
+
+    /// <summary>
     /// Hides or shows the mouse cursor. There is no WinUI way to do this —
     /// <c>UIElement.ProtectedCursor</c> can name a shape but has no way to say 「none」 — so it is the window's
     /// job: <see cref="HostWindow.CursorHidden"/> says <c>SetCursor(NULL)</c> now and keeps saying it while
@@ -442,6 +480,33 @@ public sealed partial class PlayerPage
         _cursorHidden = hidden;
 
         if (_window is not null) _window.CursorHidden = hidden;
+
+        // And the one that actually does it while the pointer is over the picture. The four levers around this
+        // line — SetCursor on this queue, ShowCursor's counter, the window classes, the zero-displacement nudge
+        // — are all Win32, and Win32 is not who draws the pointer over XAML content: the framework's own input
+        // pipeline is. A real film's log settles it. One hide lasted 2 minutes 5 seconds; across some twelve
+        // hundred ticks not one found a shape put back on this queue (_shapeBack stayed at 0), the show count
+        // was −1, five window classes were blank, the nudge had been sent — and GetCursorInfo answered
+        // 「system arrow, 0x10003」 the whole way through. Eighteen hides in that one film, all identical.
+        //
+        // ProtectedCursor is the framework's own lever and the only one it consults. Null hands the shape back
+        // to it, which is an ordinary arrow. The four Win32 levers stay: they cover the windows the island is
+        // not — the host window's non-client area, libmpv's child, XAML's own popup windows.
+        //
+        // NOT YET SHOWN TO REACH THE SCREEN, and that has to be written down rather than assumed. Measured
+        // 2026-09-03 with the pointer parked on this window by SetCursorPos from another process: everything
+        // this process can say about the cursor was set — this queue holding the blank shape, the show count at
+        // −1, five window classes blanked, the nudge going out ten times a second, and this line — and
+        // GetCursorInfo went on answering 「system arrow 0x10003」 for five seconds. The control experiment says
+        // more: replacing the blank with a plainly visible Wait cursor did not put an hourglass on screen
+        // either, so in this hosting model ProtectedCursor changed nothing observable at all.
+        //
+        // Kept, for three reasons. It is the framework's own documented lever and the only one left untried; it
+        // costs one assignment per hide and is fully guarded (null when the wrapping fails); and every
+        // measurement above used a pointer warped by SetCursorPos, which does not own the cursor the way a hand
+        // does — the only reading taken with a real hand on a real film is the log line this writes, so the
+        // next report will say which layer is still holding the arrow instead of guessing again.
+        Root.Cursor = hidden ? _window?.BlankInputCursor : null;
 
         // And the same thing said to libmpv about its own window, which no call of ours can reach: see
         // PlayerViewModel.ShowMpvCursor.
@@ -483,9 +548,48 @@ public sealed partial class PlayerPage
         // </para>
         Log.Debug(Category, hidden
             ? $"鼠标藏起来了：静止 {Now - _pointerMovedAt}ms，其间空事件 {_stillMoves} 次，线程形状"
-              + $"{(_window?.CursorShapeGone == true ? "无" : "还在")}，计数 {_cursorCount}，{PointerOwner()}"
+              + $"{(_window?.CursorShapeGone == true ? "无" : "还在")}，计数 {_cursorCount}"
+              + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
+              + $"，{PointerElements()}"
             : $"鼠标又显示了：轮询问出的移动共 {_polledMoves} 次、XAML 事件 {_pointerMoves} 次，计数 {_cursorCount}"
               + $"，藏着期间有 {_shapeBack} 拍发现形状又被放回来了");
+    }
+
+    /// <summary>
+    /// 框架此刻认为指针压在哪几个元素上，最上面那个写在最前。
+    /// <para>
+    /// 「透明光标设在 <c>Root</c> 上、屏上却还是箭头」的头一个嫌疑就是<b>框架命中的根本不是 <c>Root</c></b>：压在
+    /// 它上面还有一个可命中的元素（换集时那块不透明的遮挡、钉住的浮层、一颗按钮），那个元素的
+    /// <c>ProtectedCursor</c> 是空的，于是框架照旧画它自己的箭头。这一句就是为了让下一次报告能直接指出是哪一个，
+    /// 而不用再猜一轮。
+    /// </para>
+    /// <para>
+    /// 只写日志，不判任何东西：这一读数要一只真手压在真片子上才算数，而那种时刻自检到不了 —— 这台机器上注不进
+    /// 真实指针输入（自检报告里那句「真实输入注不进」）。
+    /// </para>
+    /// </summary>
+    private string PointerElements()
+    {
+        if (!CursorPoint(out var point)) return "问不出指针压在哪个元素上";
+
+        try
+        {
+            var hits = VisualTreeHelper.FindElementsInHostCoordinates(point, Root)
+                .OfType<FrameworkElement>()
+                .Take(4)
+                .Select(element => element.Name is { Length: > 0 } name
+                    ? $"{element.GetType().Name}#{name}"
+                    : element.GetType().Name)
+                .ToList();
+
+            return hits.Count == 0
+                ? "框架说指针不压在任何元素上"
+                : $"框架命中 {string.Join(" ← ", hits)}";
+        }
+        catch (Exception error)
+        {
+            return $"命中测试问不出（{Failure.Describe(error)}）";
+        }
     }
 
     /// <summary>
@@ -525,7 +629,13 @@ public sealed partial class PlayerPage
         Dialog = 4,
 
         /// <summary>需求 7's 字幕字体 box has the keyboard: a strip that hid itself while being typed into.</summary>
-        Search = 8
+        Search = 8,
+
+        /// <summary>
+        /// 工具用：<c>--show-osd</c> 把浮层钉在屏上好拍照。<see cref="ChromeReveal.WakeFully"/> 的宽限期只有一秒多，
+        /// 等不到窗口稳下来、更等不到截图脚本按下快门。
+        /// </summary>
+        Shot = 16
     }
 
     /// <summary>
@@ -612,6 +722,16 @@ public sealed partial class PlayerPage
         {
             if (_window?.CursorShapeGone == false) _shapeBack++;
             _window?.KeepCursorHidden();
+
+            // And ask the OS to work the shape out again, every tick rather than only at the moment of hiding.
+            // Everything this process says about the cursor — the framework's ProtectedCursor, this queue's
+            // shape, the show counter, the class cursors — is an *answer*, and the OS only collects answers when
+            // it has a reason to decide what the pointer is over. Hiding happens because nothing is moving, so
+            // there is no such reason; and a single ask at the moment of hiding is one ask that can be missed or
+            // arrive before the framework has pushed its own value down. A zero-displacement mouse event is the
+            // smallest possible reason, and both places that judge movement discard a zero displacement, so the
+            // stillness this is part of survives being nudged ten times a second.
+            if (Native.NudgeCursorState()) _cursorNudges++;
         }
 
         // The same guarantee for the chapter preview, and for the same reason: it hides on the pointer

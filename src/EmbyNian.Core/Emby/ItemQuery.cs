@@ -38,9 +38,21 @@ public static class EmbyFields
     /// end date at all, whatever the server actually holds — which is why they are spelled out here
     /// rather than assumed to ride along with the rest of the item.
     /// </para>
+    /// <para>
+    /// <c>CriticRating</c> and <c>ProviderIds</c> are the 评分来源 setting's two: the first is the only rating
+    /// on an Emby item that is independent of <c>CommunityRating</c>, and the second is the only thing that says
+    /// which scraper this item was matched against. Both are named here rather than assumed — and naming a field
+    /// the server's own <c>Options</c> list does not enumerate is safe, which this line already demonstrates:
+    /// eight of the names in it (ProductionYear, PremiereDate, EndDate, ChildCount, Tags, MediaSources,
+    /// OfficialRating, CommunityRating) are not on that list either, and this client has always worked.
+    /// </para>
+    /// <para>
+    /// Only this one, deliberately. <see cref="Browse"/> is the list request and nothing in a list shows a
+    /// rating; <see cref="Detail"/>'s callers fetch one item at a time.
+    /// </para>
     /// </summary>
     public const string Detail =
-        "PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,EndDate,ChildCount,DateCreated,Genres,Tags,Studios,MediaSources,Path,OfficialRating,CommunityRating,ParentId,Chapters";
+        "PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,EndDate,ChildCount,DateCreated,Genres,Tags,Studios,MediaSources,Path,OfficialRating,CommunityRating,CriticRating,ProviderIds,ParentId,Chapters";
 
     /// <summary>
     /// 只要「这个条目背后是哪个文件」—— 下载到设备和搜索字幕都只需要这一样。

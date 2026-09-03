@@ -482,6 +482,11 @@ internal static partial class ShellSelfCheck
 
         // 那一行类型点不点得动。搭空了屏上就是一行看着一模一样的字，点下去什么都不发生 —— 别的读数一个都不响。
         if (_detailGenres is { } genres) check("详情类型可点", genres.Ok, genres.Detail);
+
+        // 「加入显示评分改为豆瓣评分的功能，可在设置使用豆瓣、tmdb、烂番茄等平台的评分」。判的是本应用自己的规矩
+        // （规矩说该画什么、屏上就得画什么；服务器没给分就整块收起来）；服务器那一头给了什么字段只报不判 —— 有没有
+        // 豆瓣的痕迹是那台机器上装了哪些插件的事，而那一句正是这一关最值得读的：从此每次自检都自己答一遍。
+        if (_detailScore is { } score) check("详情评分来源", score.Ok, score.Detail);
         else report.AppendLine("[信息] 详情类型可点 — 这次没走到详情页");
 
         // 「点封面进详情页要空等一趟服务器往返」：第一屏是拿点进来那张卡片画的，而完整条目回来之后那四张图不许被

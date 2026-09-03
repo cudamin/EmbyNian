@@ -3,6 +3,8 @@ using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Windows.Foundation;
 using Windows.System;
@@ -103,8 +105,9 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 鼠标滚轮调整音量, anywhere over the picture — and the rail comes up to show the number, which is
-    /// the other half of the same request.
+    /// 鼠标滚轮调整音量, anywhere over the picture — and the rail comes up to show where the level now sits,
+    /// which is the other half of the same request. Where, not what: the figure above the rail is gone
+    /// (「音量条不需要边框和上方的数字」), so the thumb's position is the readout.
     /// </summary>
     private void OnPointerWheel(object sender, PointerRoutedEventArgs e)
     {
@@ -218,15 +221,13 @@ public sealed partial class PlayerPage
         if (dragged) Hold(false, ChromeHold.Drag);
     }
 
+    /// <summary>
+    /// 双击画面全屏. The pause half is <see cref="SecondTapOnPicture"/>, kept separate so the self-check can
+    /// drive it without taking the window fullscreen.
+    /// </summary>
     private void OnDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        // Undo the single tap this gesture's first click already performed, so a double click is a
-        // fullscreen toggle and nothing else. Restored to the value read then rather than by toggling
-        // again: mpv's own 「pause」 has not come back through the status poll yet, so a second toggle
-        // would read the same stale value and set the same thing twice.
-        if (_tapPause is { } before && Attached) ViewModel.SetPaused(before);
-
-        _tapPause = null;
+        SecondTapOnPicture();
         ToggleFullscreen();
     }
 
@@ -234,15 +235,73 @@ public sealed partial class PlayerPage
     /// 点击画面暂停. Only over the picture: the chrome is full of controls, and the strips they sit on are
     /// hit-testable in their own right, so a click on the bar's empty half would otherwise pause the film
     /// the user was reaching past it to see.
+    /// <para>
+    /// A tap that did not land on the picture still has to say so. Without that, a later double click on the
+    /// transport bar would find the pause value this tap recorded and 「undo」 it — stopping a film that was
+    /// playing perfectly well.
+    /// </para>
     /// </summary>
     private void OnTapped(object sender, TappedRoutedEventArgs e)
     {
-        _tapPause = null;
-        if (!Attached || !TapOnPicture(e.GetPosition(Root))) return;
+        if (!Attached || !TapOnPicture(e.GetPosition(Root)))
+        {
+            DropTapHold();
+            return;
+        }
 
-        _tapPause = ViewModel.Paused;
-        ViewModel.TogglePause();
+        TapPicture();
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// The tap itself: recorded and held rather than issued, because the first click of a double click raises
+    /// a <c>Tapped</c> too. <see cref="PictureTap.HoldFor"/> caps the wait far below the OS's own double-click
+    /// interval — half a second of nothing after clicking the picture would be a worse fault than the one this
+    /// fixes.
+    /// <para>
+    /// Its own method rather than only a handler body: <c>TappedRoutedEventArgs</c> cannot be constructed, so
+    /// this is the only shape the self-check can reach.
+    /// </para>
+    /// </summary>
+    private void TapPicture()
+    {
+        _tap.First(ViewModel.Paused);
+        _tapHold.Interval = TimeSpan.FromMilliseconds(PictureTap.HoldFor(Native.GetDoubleClickTime()));
+        _tapHold.Start();
+    }
+
+    /// <summary>The hold expired with no second click: now the tap means what it always meant.</summary>
+    private void OnTapHoldElapsed(object? sender, object e)
+    {
+        _tapHold.Stop();
+        if (_tap.Elapsed() && Attached) ViewModel.TogglePause();
+    }
+
+    /// <summary>
+    /// The second click of a double click, playback side only — fullscreen is the caller's, which is what lets
+    /// the self-check walk this path without moving the window.
+    /// <para>
+    /// Caught inside the hold there is nothing to undo, which is the whole point. Missed it — a double click
+    /// slower than the hold — and the pause is put back to the value read before it, exactly as it used to be;
+    /// what is new is that the badge is silenced either way, so the gesture no longer flashes 暂停 and then
+    /// 播放 across the middle of the picture.
+    /// </para>
+    /// </summary>
+    private void SecondTapOnPicture()
+    {
+        _tapHold.Stop();
+
+        if (_tap.Second() is { } before && Attached) ViewModel.SetPaused(before);
+
+        _pulseMutedAt = Now;
+        HidePulse();
+    }
+
+    /// <summary>This tap is off: it landed on a control, or the player is going away.</summary>
+    private void DropTapHold()
+    {
+        _tapHold.Stop();
+        _tap.Forget();
     }
 
     // ---- the keyboard -----------------------------------------------------------
@@ -312,8 +371,7 @@ public sealed partial class PlayerPage
                 break;
 
             case VirtualKey.T:
-                PinButton.IsChecked = !(PinButton.IsChecked ?? false);
-                _window.TopMost = PinButton.IsChecked ?? false;
+                SetPinned(!_window.TopMost);
                 break;
 
             // 章节前后跳. mpv's own `add chapter`, which lands on the mark rather than a second either
@@ -406,7 +464,34 @@ public sealed partial class PlayerPage
     private void OnTogglePin(object sender, RoutedEventArgs e)
     {
         if (_window is null) return;
-        _window.TopMost = PinButton.IsChecked ?? false;
+        SetPinned(!_window.TopMost);
+    }
+
+    /// <summary>
+    /// 置顶 on or off, in one place: the window, the two drawn pins, and the two sentences that tell somebody
+    /// without a pointer which way the switch is thrown.
+    /// <para>
+    /// There is one piece of state now — <see cref="HostWindow.TopMost"/> — and this is the only thing that
+    /// reads or writes it on this page. It used to live in two places at once, the window's flag and a
+    /// <c>ToggleButton.IsChecked</c>, kept in step by three separate pairs of assignments: the T key, the
+    /// button's own click, and the reset on the way out of the player. The fullscreen button next to it has
+    /// been the right shape all along — one real piece of state on the window, one glyph swapped on screen.
+    /// </para>
+    /// <para>
+    /// The window is checked for null separately because the page's constructor calls this before
+    /// <see cref="Attach"/> has run: the two pins and both sentences have to start out agreeing with each
+    /// other, and the alternative is a second copy of the starting state written into the markup.
+    /// </para>
+    /// </summary>
+    private void SetPinned(bool pinned)
+    {
+        if (_window is not null) _window.TopMost = pinned;
+
+        PinOnIcon.Visibility = pinned ? Visibility.Visible : Visibility.Collapsed;
+        PinOffIcon.Visibility = pinned ? Visibility.Collapsed : Visibility.Visible;
+
+        AutomationProperties.SetName(PinButton, PinIndicator.Name(pinned));
+        ToolTipService.SetToolTip(PinButton, PinIndicator.Tip(pinned));
     }
 
     // ---- 最小化 / 最大化 / 关闭 ---------------------------------------------------
@@ -439,7 +524,7 @@ public sealed partial class PlayerPage
 
     // ---- 音量 --------------------------------------------------------------------
     //
-    // The slider itself is a two-way binding onto the view model, so the number and mpv keep up with each
+    // The slider itself is a two-way binding onto the view model, so the thumb and mpv keep up with each
     // other without passing through here. What is left is the half that is not about volume at all: the
     // rail has to be on screen to be read, and a wheel turn or an arrow key arrives with no pointer over
     // it to reveal it the usual way.

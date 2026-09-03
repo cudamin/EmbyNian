@@ -397,9 +397,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     [ObservableProperty]
     public partial double Volume { get; set; }
 
-    [ObservableProperty]
-    public partial string? VolumeLabel { get; set; }
-
     /// <summary>The rail's speaker glyph, or the crossed-out one while muted.</summary>
     [ObservableProperty]
     public partial string? SoundGlyph { get; set; }
@@ -1199,9 +1196,8 @@ public sealed partial class PlayerViewModel : ObservableObject
             _pushing = false;
         }
 
-        VolumeLabel = status.Muted
-            ? "静音"
-            : ((int)Math.Round(status.Volume)).ToString(CultureInfo.InvariantCulture);
+        // 静音 has no figure on screen any more — the number above the rail is gone
+        // (「音量条不需要边框和上方的数字」), so the crossed-out speaker is the whole of it.
         SoundGlyph = Glyph(status.Muted ? MutedGlyphCode : VolumeGlyphCode);
 
         // The new file is decoding, so there is a real picture to show and the cover has done its job.
@@ -1234,15 +1230,15 @@ public sealed partial class PlayerViewModel : ObservableObject
 
     /// <summary>
     /// 音量 under the user's own hand — the rail, the wheel and the arrow keys all land here. Sent straight
-    /// through rather than coalesced: a volume change is a single value mpv applies instantly, and the
-    /// readout beside the rail has to keep up with the thumb rather than with the next status poll.
+    /// through rather than coalesced: a volume change is a single value mpv applies instantly, and the thumb
+    /// — which is now the whole readout, the figure above the rail having been taken off — has to keep up
+    /// with the hand rather than with the next status poll.
     /// </summary>
     partial void OnVolumeChanged(double value)
     {
         if (_pushing) return;
 
         var level = Math.Clamp(Math.Round(value), 0, 100);
-        VolumeLabel = ((int)level).ToString(CultureInfo.InvariantCulture);
         _ = _playback.SetPropertyAsync("volume", level);
 
         // Kept for the next file as well as sent to this one. Every playback launches a fresh mpv with its

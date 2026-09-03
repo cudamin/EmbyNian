@@ -82,6 +82,15 @@ public static class SettingsMigration
         settings.Ui.PageSize = Math.Clamp(settings.Ui.PageSize, 20, 500);
         settings.Ui.PosterWidth = Math.Clamp(settings.Ui.PosterWidth, 120, 340);
 
+        // 海报缓存的磁盘上限。范围和「MB 换字节」都在淘汰规则那一头（Emby.ImageCachePolicy），设置页那一行也读
+        // 同一对常量 —— 一个比设置窄的框会显示一个文件里没有的数并在下次触碰时写回去，一个比设置宽的框会让人填进
+        // 一个保存时被悄悄搬走的数。缺键（从旧版本升上来）读出来是 0，ClampMegabytes 把 0 当「按装机默认」。
+        settings.Ui.ImageCacheMegabytes = Emby.ImageCachePolicy.ClampMegabytes(settings.Ui.ImageCacheMegabytes);
+
+        // 评分来源。枚举存的是整数，所以手改过的文件、或者装回一个档数更少的旧版本，都能留下一个认不出来的数字；
+        // 留着它的下场是设置里那个下拉显示成「设置文件中的值」，而屏上按哪一档走谁也说不清。
+        if (!Enum.IsDefined(settings.Ui.ScoreSource)) settings.Ui.ScoreSource = Emby.ScoreSource.Community;
+
         // 主题 id 不在目录里就写回默认那套，而不是留着一个认不出来的字符串：留着的话每次启动都要再判一次，
         // 而且设置里那个下拉框会显示成空的。这里换掉，用户下次保存就落盘成一个真的 id。
         settings.Ui.Theme = Theming.UiThemes.Resolve(settings.Ui.Theme).Id;

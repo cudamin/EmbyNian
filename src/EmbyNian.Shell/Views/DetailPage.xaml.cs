@@ -1258,6 +1258,46 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 评分那一格：屏上画的是不是规矩说的那个数和那个署名。
+    /// <para>
+    /// 值得判红，而且两头都判。「有分的时候画对了」是这次新增那一档设置（评分来源）唯一的屏上出口，而它错起来是
+    /// 一个看着挺正常的数：烂番茄的 92 画成「92.0」、一个来路不明的分署上「豆瓣」、或者署名那一格空着。而
+    /// 「没分的时候整块收起来」是我们自己的规矩（<c>ScoreVisibility</c> 盯着 <c>Score</c> 是不是空串），漏了它的
+    /// 样子是上一个条目留下的「★ 8.4 豆瓣」挂在一个没有评分的条目上 —— 截图看不出来，没人会去比。
+    /// </para>
+    /// <para>
+    /// 服务器那一头有什么只报不判（那是服务器的事），可它是这一关最值得读的一句：这台服务器到底有没有豆瓣的痕迹、
+    /// 有没有影评指数，从此每次自检都会自己回答一遍。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ScoreRead()
+    {
+        var wanted = ViewModel.ScoreBadge;
+        var facts = ViewModel.ScoreFacts;
+
+        if (!wanted.Any)
+            return (ScoreStack.Visibility == Visibility.Collapsed && ScoreText.Text.Length == 0,
+                $"这一条目服务器上没有评分，那一格{(ScoreStack.Visibility == Visibility.Collapsed ? "整块收起来了" : "却还画着")}"
+                    + $"（{facts}）");
+
+        var drawn = ScoreStack.Visibility == Visibility.Visible;
+        var text = string.Equals(ScoreText.Text, wanted.Text, StringComparison.Ordinal);
+        var label = string.Equals(ScoreSourceText.Text, wanted.Label, StringComparison.Ordinal);
+
+        // 那一行事实是紧挨着它排的，星和署名一多就往右推 —— 而评分那一组的宽有上限（三位数加两到四个字），出界
+        // 只可能是版面错了。事实那一行本身长短由服务器给的字决定，出界只报不判。
+        var room = HeroStack.ActualWidth;
+        var score = ScoreStack.TransformToVisual(HeroStack).TransformPoint(new Point(ScoreStack.ActualWidth, 0)).X;
+
+        return (drawn && text && label && score <= room + 0.5,
+            $"设置里选的是「{ViewModel.ScoreSourceName}」，规矩说画「{wanted.Text}」＋「{wanted.Label}」"
+                + $"；屏上是「{ScoreText.Text}」＋「{ScoreSourceText.Text}」"
+                + $"，占到 {score:F0}／可用 {room:F0}"
+                + (drawn ? "" : "，可那一格没画出来")
+                + $"；服务器给的：{facts}");
+    }
+
+    /// <summary>
     /// 副标题那一行的类型，一个类型一个入口 —— 点一个就是一格「这个类型下的全部影片和剧集」。
     /// <para>
     /// 在代码里搭而不是绑出来：能点的内联元素只有 <see cref="Hyperlink"/>，而内联元素不是

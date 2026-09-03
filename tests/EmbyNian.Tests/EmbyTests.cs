@@ -1237,7 +1237,60 @@ internal static class EmbyTests
     /// </summary>
     private static void RegisterImageCachePolicy()
     {
+        RegisterScoreSource();
+
         var now = new DateTime(2026, 9, 2, 12, 0, 0, DateTimeKind.Utc);
+
+        Test("缓存上限：装机那个数还是从前写死的 400 MB", () =>
+        {
+            // 上限从写死在构造函数上变成了设置里的一行。默认值必须还是从前那个数，否则「从没动过这个设置的人」
+            // 会在升级之后发现缓存行为变了 —— 而他什么都没改。
+            Assert.Equal(400, ImageCachePolicy.DefaultMegabytes);
+            Assert.Equal(400L * 1024 * 1024, ImageCachePolicy.BudgetBytes(ImageCachePolicy.DefaultMegabytes));
+        });
+
+        Test("缓存上限：手改过的数拨回范围内，0 当「按装机默认」", () =>
+        {
+            // 0 是「设置文件里没有这一键」——从旧版本升上来就是这一档，必须读成默认值而不是「一张都不缓存」。
+            Assert.Equal(ImageCachePolicy.DefaultMegabytes, ImageCachePolicy.ClampMegabytes(0));
+            Assert.Equal(ImageCachePolicy.MinMegabytes, ImageCachePolicy.ClampMegabytes(1));
+            Assert.Equal(ImageCachePolicy.MinMegabytes, ImageCachePolicy.ClampMegabytes(-4000));
+            Assert.Equal(ImageCachePolicy.MaxMegabytes, ImageCachePolicy.ClampMegabytes(999999));
+            Assert.Equal(1500, ImageCachePolicy.ClampMegabytes(1500), "范围内的数一个字不动");
+        });
+
+        Test("缓存上限：范围两头说得通，而且换算过去不溢出", () =>
+        {
+            Assert.True(ImageCachePolicy.MinMegabytes < ImageCachePolicy.DefaultMegabytes);
+            Assert.True(ImageCachePolicy.DefaultMegabytes < ImageCachePolicy.MaxMegabytes);
+
+            // 一屏媒体库的海报本身就有十几兆，下限再低缓存就开始来回打转。
+            Assert.True(ImageCachePolicy.MinMegabytes >= 100);
+
+            Assert.Equal((long)ImageCachePolicy.MaxMegabytes * 1024 * 1024,
+                ImageCachePolicy.BudgetBytes(ImageCachePolicy.MaxMegabytes));
+            Assert.True(ImageCachePolicy.BudgetBytes(ImageCachePolicy.MaxMegabytes) > 0, "换成字节之后不许溢出");
+        });
+
+        Test("缓存上限：换个上限之后 Evict 按新的那个数删", () =>
+        {
+            // 这一条钉的是「调小当场生效」那半件事的算术那一头：同一批文件、同一次调用，只有预算变了。
+            (string, long, DateTime)[] files =
+            [
+                ("a.img", 100L * 1024 * 1024, now.AddDays(-4)),
+                ("b.img", 100L * 1024 * 1024, now.AddDays(-3)),
+                ("c.img", 100L * 1024 * 1024, now.AddDays(-2))
+            ];
+
+            var total = 300L * 1024 * 1024;
+
+            Assert.Equal(0, ImageCachePolicy.Evict(files, total, ImageCachePolicy.BudgetBytes(400)).Count,
+                "400 MB 的预算装得下 300 MB");
+
+            var trimmed = ImageCachePolicy.Evict(files, total, ImageCachePolicy.BudgetBytes(200));
+            Assert.Equal(2, trimmed.Count, "200 MB 要削到八成也就是 160 MB，三张里得走两张");
+            Assert.Equal("a.img", trimmed[0].Path, "最久没看过的先走");
+        });
 
         Test("缓存淘汰：没超预算一张都不删", () =>
         {
@@ -1416,5 +1469,109 @@ internal static class EmbyTests
         catch (IOException)
         {
         }
+    }
+
+    // ---- 评分来源 --------------------------------------------------------------
+    //
+    // 「加入显示评分改为豆瓣评分的功能，可在设置使用豆瓣、tmdb、烂番茄等平台的评分」。这一族钉的全是屏上看着挺
+    // 正常的坏法：0 分被当成有分、烂番茄的 92 被当成十分制、小数点跟着机器的文化走、以及标签说了一句服务器根本
+    // 没答应的话（把一个来路不明的分说成豆瓣的）。
+
+    private static void RegisterScoreSource()
+    {
+        Test("评分来源：公众评分照旧那样格式化，0 与缺失都当作没有", () =>
+        {
+            // 这四条是从 ItemDetail.Score 那一条原样搬过来的，行为一字不改。
+            Assert.Equal("8.4", ItemScore.Resolve(new EmbyItem { CommunityRating = 8.4f }, ScoreSource.Community).Text);
+            Assert.Equal("8", ItemScore.Resolve(new EmbyItem { CommunityRating = 8f }, ScoreSource.Community).Text);
+            Assert.Equal("8.4", ItemScore.Resolve(new EmbyItem { CommunityRating = 8.44f }, ScoreSource.Community).Text);
+            Assert.False(ItemScore.Resolve(new EmbyItem { CommunityRating = 0 }, ScoreSource.Community).Any);
+            Assert.False(ItemScore.Resolve(new EmbyItem(), ScoreSource.Community).Any);
+            Assert.Equal("公众评分", ItemScore.Resolve(new EmbyItem { CommunityRating = 8.4f }, ScoreSource.Community).Label);
+        });
+
+        Test("评分来源：烂番茄是百分数，取整远离零", () =>
+        {
+            var item = new EmbyItem { CommunityRating = 8.4f, CriticRating = 92.4f };
+            var badge = ItemScore.Resolve(item, ScoreSource.Critic);
+
+            Assert.Equal("92%", badge.Text, "0–100 和 0–10 是两种刻度，混了就是屏上一个「92.0 分」");
+            Assert.Equal("烂番茄", badge.Label);
+
+            Assert.Equal("93%", ItemScore.Resolve(new EmbyItem { CriticRating = 92.6f }, ScoreSource.Critic).Text);
+
+            // 默认的 Math.Round 是「取偶」，92.5 会答 92；这里要的是符合直觉的 93。
+            Assert.Equal("93%", ItemScore.Resolve(new EmbyItem { CriticRating = 92.5f }, ScoreSource.Critic).Text);
+        });
+
+        Test("评分来源：豆瓣和 TMDB 只在服务器认出那一家时才署它的名", () =>
+        {
+            var plain = new EmbyItem { CommunityRating = 8.4f };
+            Assert.Equal("公众评分", ItemScore.Resolve(plain, ScoreSource.Douban).Label,
+                "认不出豆瓣就老实写公众评分，不能把一个来路不明的分说成豆瓣的");
+
+            var douban = new EmbyItem { CommunityRating = 8.4f, ProviderIds = { ["Douban"] = "26816519" } };
+            Assert.Equal("豆瓣", ItemScore.Resolve(douban, ScoreSource.Douban).Label);
+            Assert.Equal("8.4", ItemScore.Resolve(douban, ScoreSource.Douban).Text, "数还是同一个 —— 换的只有名字");
+            Assert.Equal("公众评分", ItemScore.Resolve(douban, ScoreSource.Tmdb).Label, "有豆瓣不等于有 TMDB");
+
+            var tmdb = new EmbyItem { CommunityRating = 7.9f, ProviderIds = { ["Tmdb"] = "1396" } };
+            Assert.Equal("TMDB", ItemScore.Resolve(tmdb, ScoreSource.Tmdb).Label);
+        });
+
+        Test("评分来源：ProviderIds 的键大小写不敏感，而且不靠字典自带的比较器", () =>
+        {
+            // System.Text.Json 给带 setter 的集合属性新建一个默认比较器的字典，把属性初始化器里那个换掉 —— 所以
+            // 真正会坏的那一格是「服务器发来小写键、走反序列化」，而失配的样子是标签静静退回「公众评分」。
+            var json = """
+                {"Name":"活着","Id":"x","CommunityRating":9.3,"ProviderIds":{"douban":"1292365","imdb":"tt0110081"}}
+                """;
+
+            var item = System.Text.Json.JsonSerializer.Deserialize<EmbyItem>(json, EmbyHttp.Json)!;
+
+            Assert.True(ItemScore.Matched(item, ItemScore.DoubanProvider), "小写的 douban 也算认出来了");
+            Assert.Equal("豆瓣", ItemScore.Resolve(item, ScoreSource.Douban).Label);
+            Assert.False(ItemScore.Matched(item, ItemScore.TmdbProvider));
+        });
+
+        Test("评分来源：三级回落，只有两个数都没有才是空", () =>
+        {
+            // 缺的那一格屏上会莫名空掉：服务器明明有一个分，而用户看到的是「选了豆瓣评分就没分了」。
+            var criticOnly = new EmbyItem { CriticRating = 92f };
+            var badge = ItemScore.Resolve(criticOnly, ScoreSource.Douban);
+            Assert.Equal("92%", badge.Text);
+            Assert.Equal("烂番茄", badge.Label, "标签说的是实际取到的那一档");
+
+            var communityOnly = new EmbyItem { CommunityRating = 8.4f };
+            Assert.Equal("8.4", ItemScore.Resolve(communityOnly, ScoreSource.Critic).Text, "选了烂番茄但服务器没有");
+            Assert.Equal("公众评分", ItemScore.Resolve(communityOnly, ScoreSource.Critic).Label);
+
+            Assert.False(ItemScore.Resolve(new EmbyItem(), ScoreSource.Critic).Any);
+            Assert.False(ItemScore.Resolve(new EmbyItem { CommunityRating = 0, CriticRating = 0 }, ScoreSource.Douban).Any);
+        });
+
+        Test("评分来源：下拉盖住枚举的每一档，标签互不相同", () =>
+        {
+            // 存着的值不在选项里时，设置页那一手会额外造一条「设置文件中的值」塞进下拉 —— 少一档就是屏上多一行
+            // 看不懂的东西。Catalogue 由 Describe 生成，所以这一条是结构性事实，钉的是「别有人改回手写两份」。
+            Assert.Equal(Enum.GetValues<ScoreSource>().Length, ItemScore.Catalogue.Count);
+
+            foreach (var source in Enum.GetValues<ScoreSource>())
+            {
+                Assert.Equal(1, ItemScore.Catalogue.Count(row => row.Value == source), $"{source} 出现的次数");
+                Assert.True(ItemScore.Describe(source).Trim().Length > 0, $"{source} 没有名字");
+            }
+
+            Assert.Equal(ItemScore.Catalogue.Count,
+                ItemScore.Catalogue.Select(row => row.Label).Distinct(StringComparer.Ordinal).Count(),
+                "两档同名，用户就分不出选的是哪一个");
+        });
+
+        Test("评分来源：公众评分那一档必须是 0", () =>
+        {
+            // 设置文件里枚举存的是整数，缺键读出来是 0 —— 那必须落在装机时的行为上。往中间插一档会把用户存着的
+            // 选择悄悄换成另一档。
+            Assert.Equal(0, (int)ScoreSource.Community);
+        });
     }
 }

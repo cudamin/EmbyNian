@@ -835,6 +835,26 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
+    /// 工具用：把播放器的浮层摆到屏上留着，好给它拍一张（<c>--show-osd [pinned|paused|playing]</c>）。
+    /// <para>
+    /// 和 <see cref="ShowCardMenuAsync"/> 同一个理由：这几层只有指针走到对应的位置才浮上来，而这台机器注不进
+    /// 鼠标事件。故意不调 <c>ShowPlayer(true)</c> —— 不收起导航外壳，浮层就叠在当前那一页上，照片里有真内容
+    /// 当背景；收起来反倒是一层透明浮层背后什么都没有。
+    /// </para>
+    /// </summary>
+    internal void ShowPlayerChrome(string? state)
+    {
+        Player.ShowChromeForShot(state);
+        Log.Info(Category, $"--show-osd：浮层已摆上来（{state ?? "默认"}）");
+    }
+
+    /// <summary>
+    /// 工具用：把播放层摆上来、计时器照常跑，然后什么都不动（<c>--hide-cursor</c>）—— 两秒后指针就该消失。
+    /// 一个字节的视频都不播：一次真播放会写进用户的观看历史和续播位置。
+    /// </summary>
+    internal void HoldCursorForDemo() => Player.HoldCursorForDemo();
+
+    /// <summary>
     /// Tooling: opens the first library, clicks the first row in it that has a detail page, and stays
     /// wherever that click went. A click rather than a navigation of its own, because the point is what
     /// clicking a poster really opens — which for a series was once another grid, of season folders.

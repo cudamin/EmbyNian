@@ -159,9 +159,15 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」, checked as three separate
-    /// claims because they fail separately: the rail's measured size, the transition that draws it, and the
-    /// strength curve that decides how strongly.
+    /// 「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」 plus the two things
+    /// 「音量条的位置是歪的，还有音量条不需要边框和上方的数字」 asked for, checked as five separate claims
+    /// because they fail separately: the rail's measured size, the transition that draws it, the strength curve
+    /// that decides how strongly, the track sitting in the middle, and the absence of a ring around it.
+    /// <para>
+    /// The last two are here rather than in a unit test because they are measurements of a live visual tree
+    /// after the framework has applied its own template: the offset that made the rail look crooked is
+    /// WinUI's arithmetic over three hard-coded template columns, and the test project reaches Core only.
+    /// </para>
     /// <para>
     /// The gradient is Core's arithmetic and unit-tested there, but the two things it is arithmetic
     /// <em>about</em> are this page's: <see cref="RailNear"/> turns a real pointer position into the depth
@@ -208,6 +214,38 @@ public sealed partial class PlayerPage
         // markup still reading 240.
         report.Add($"音量条 {Rail.ActualWidth:F0}×{Rail.ActualHeight:F0}，滑杆高 {VolumeSlider.ActualHeight:F0}");
         Want("音量条尺寸", VolumeSlider.ActualHeight >= 200 && Rail.ActualWidth >= 56);
+
+        // 摆正: 「音量条的位置是歪的」. WinUI's vertical Slider template puts the track and the thumb in three
+        // columns of 14 + 4 + 14 = 32 and not one of them is a star, so a slider given a hard Width leaves the
+        // surplus empty on its right and the track sits left of centre — Width="44" was 6 pixels off, inside a
+        // pill whose mute button below it was centred, which is the whole of what looked crooked. Nothing but a
+        // measurement can say so: the offset is the framework's arithmetic, not this file's, and the number
+        // above the rail that used to sit beside it is gone.
+        var track = PartNamed(VolumeSlider, "VerticalTrackRect");
+        var rail = BoundsOf(Rail);
+        var box = track is null ? default : BoundsOf(track);
+        var offset = track is null ? double.NaN : box.Left + box.Width / 2 - (rail.Left + rail.Width / 2);
+
+        report.Add(track is null ? "找不到滑杆轨道" : $"轨道 {box.Width:F0} 宽，中心偏离音量条中心 {offset:0.0} 像素");
+
+        // A whole pixel rather than this file's usual half: this compares two centres, so it takes layout
+        // rounding twice over at 125% scaling. Structurally the answer is 0.
+        Want("滑杆轨道在音量条正中", track is not null && Math.Abs(offset) <= 1);
+
+        // 不要边框: 「音量条不需要边框」. Worth an assertion rather than a glance, because PlayerEdgeBrush is
+        // still on the palette (the chapter preview uses it) — put back here and every colour check stays
+        // green while the rail wears a ring nobody asked for.
+        var edge = Rail.BorderThickness;
+        report.Add($"描边 {edge.Left:0}/{edge.Top:0}/{edge.Right:0}/{edge.Bottom:0}");
+        Want("音量条不描边", edge is { Left: 0, Top: 0, Right: 0, Bottom: 0 });
+
+        // 不要上方的数字: 「音量条不需要…上方的数字」. Counted rather than looked for by type, and this is the one
+        // of the three claims that would otherwise have nothing at all watching it — the narration walk stops
+        // at controls, so a TextBlock put back here leaves every gate green and every report line unchanged.
+        // Counting is also the only safe test: 「no TextBlock under Rail」 would be red from the start, because
+        // the mute button's own FontIcon has one inside it.
+        report.Add($"条上 {RailStack.Children.Count} 样");
+        Want("音量条上只有滑杆和静音键", RailStack.Children.Count == 2);
 
         // 淡入淡出, and the standing visibility it needs: the rail is the one piece of chrome that is always
         // laid out and only ever changes strength, so a Visibility flip creeping back in here would take the

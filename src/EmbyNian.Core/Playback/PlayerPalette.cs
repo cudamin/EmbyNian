@@ -94,8 +94,9 @@ public static class PlayerPalette
         ("PlayerSkipBrush", Raised.WithAlpha(0xE6)),
         ("PlayerCoverBrush", Film.WithAlpha(0xFF)),
 
-        // 描边三档，全是白，越该被注意的越亮：统计面板只是块读数，音量条和预览是浮出来的，
-        // 「跳过」是唯一一颗等着被按的按钮。
+        // 描边三档，全是白，越该被注意的越亮：统计面板只是块读数，章节预览是浮出来的，
+        // 「跳过」是唯一一颗等着被按的按钮。（中间那一档从前音量条也在用，用户要求「音量条不需要边框」之后
+        // 只剩章节预览这一个用户；这支画刷留着，不是没人要了。）
         ("PlayerEdgeFaintBrush", White.WithAlpha(0x4D)),
         ("PlayerEdgeBrush", White.WithAlpha(0x59)),
         ("PlayerEdgeStrongBrush", White.WithAlpha(0x66)),

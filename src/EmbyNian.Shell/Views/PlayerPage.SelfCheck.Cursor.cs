@@ -129,6 +129,16 @@ public sealed partial class PlayerPage
         Want("藏了以后窗口知道", _window.CursorHidden);
         Want("藏了以后显示计数为负", _cursorCount < 0);
 
+        // The lever the other four were missing, and the one this round added. While the pointer is over XAML
+        // content the shape on screen is the framework's, and none of the Win32 levers is on that path — a real
+        // film's log has a two-minute hide with this queue blank the whole way and GetCursorInfo answering
+        // 「system arrow」 throughout. So: the transparent cursor has to be wrappable as the framework's own
+        // type, and the picture has to be holding it. Both are ours alone to get right, so both are judged.
+        Want("透明光标包成框架的了", _window.BlankInputCursor is not null);
+        Want("藏了以后框架的光标也换成透明的", ReferenceEquals(Root.Cursor, _window.BlankInputCursor));
+        report.Add($"框架光标：包得出={_window.BlankInputCursor is not null}"
+            + $"，藏着时画面上是{(Root.Cursor is null ? "默认" : "透明")}");
+
         // The assertion the whole fix stands on: the thread's cursor is 「none」, which is what a still pointer
         // over the picture is looking at. Everything else here is about keeping it that way.
         Want("藏了以后线程真的没有形状", NoShape());
@@ -179,6 +189,10 @@ public sealed partial class PlayerPage
         Want("还原以后显示计数归零", _cursorCount >= 0);
         Want("还原以后线程又有形状", !NoShape());
         Want("还原以后类光标一个不剩地放回去了", _window.ClassCursorsBlanked == 0);
+
+        // Handed back to the framework, and this one matters more than it looks: left holding the transparent
+        // cursor, the picture would have no pointer over it for the rest of the session.
+        Want("还原以后画面把光标交还给框架", Root.Cursor is null);
         report.Add($"还原：窗口={_window.CursorHidden}，计数={_cursorCount}，线程形状={Mine()}，系统 {Says()}"
             + $"，类光标剩 {_window.ClassCursorsBlanked} 个没还");
 
@@ -244,6 +258,10 @@ public sealed partial class PlayerPage
         || cursor.Shape == IntPtr.Zero
         || (_window is { } window && cursor.Shape == window.BlankCursor);
 
+    /// <summary>Whether the pointer is where it was just asked to go — an injection can be dropped silently.</summary>
+    private static bool Landed(NativePoint at) =>
+        Native.GetCursorPos(out var now) && Math.Abs(now.X - at.X) <= 1 && Math.Abs(now.Y - at.Y) <= 1;
+
     /// <summary>
     /// Whether this process can steer the pointer at all right now, proved rather than assumed: one pixel over
     /// and straight back, and the reading in between has to agree. When the input desktop is somebody else's —
@@ -264,12 +282,22 @@ public sealed partial class PlayerPage
     /// What the OS says is on screen, printed whole rather than as one bit: 「显示」 with the show count at −1
     /// is either a call that did not take or a flag that does not mean what it looks like, and only the shape
     /// handle beside it tells those two apart.
+    /// <para>
+    /// The handle is labelled, because the report was full of bare <c>0x10003</c> and the next person to read it
+    /// had to go and look that up: it is the shared handle <c>LoadCursor(NULL, IDC_ARROW)</c> returns, which is
+    /// to say 「the framework is drawing its own arrow」.
+    /// </para>
     /// </summary>
-    private static string Says()
+    private string Says()
     {
         if (Native.CursorSnapshot() is not { } cursor) return "问不出";
 
-        return $"[标志 0x{cursor.Flags:X2}，形状 0x{cursor.Shape:X}]";
+        var label = cursor.Shape == IntPtr.Zero ? "没有"
+            : _window is { } window && cursor.Shape == window.BlankCursor ? "我们的透明光标"
+            : cursor.Shape == Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor) ? "系统箭头"
+            : "别的形状";
+
+        return $"[标志 0x{cursor.Flags:X2}，形状 0x{cursor.Shape:X}（{label}）]";
     }
 
     /// <summary>
@@ -349,6 +377,12 @@ public sealed partial class PlayerPage
         // to a grab of its own, and it has to cover this one too or that guard is simply moved out of its way.
         var grabbed = false;
 
+        // Whether the island actually received pointer input during this leg. The gate on the system-level
+        // reading below, and the correction this round makes to the probe: every previous run reported
+        // 「XAML 事件 0 次」, because SetCursorPos moves a coordinate without producing input — so four rounds of
+        // 「fixed」 were measured in the one situation where the bug cannot occur.
+        var heard = false;
+
         Watch("窗口化", fullscreen: false);
         Watch("全屏", fullscreen: true);
 
@@ -379,6 +413,7 @@ public sealed partial class PlayerPage
             // Per leg, not per probe: by the second one the foreground taken for the first has long since
             // settled, and carrying the flag over would skip a reading that is perfectly good.
             grabbed = false;
+            heard = false;
 
             _window!.Fullscreen = fullscreen;
             Pump();
@@ -399,20 +434,28 @@ public sealed partial class PlayerPage
             // where the pointer already was leaves it holding the arrow it was showing before the hide, and the
             // system-level reading in <see cref="Screen"/> then measures a stale cache rather than this rule.
             // A hand arriving at the picture is a displacement too, which is what this probe is standing in for.
-            Native.SetCursorPos(centre.X + 40, centre.Y + 40);
+            //
+            // Through the real input queue rather than by SetCursorPos, and that is this round's correction to
+            // the probe itself: SetCursorPos moves the coordinate and produces no input, so the island hears
+            // nothing — 「XAML 事件 0 次」 in every previous report — and a pointer the island never heard about
+            // is precisely the situation in which this bug cannot occur. Four rounds of 「fixed」 were measured
+            // that way. SetCursorPos stays as the fallback, since an injection can be refused outright.
+            if (!Native.MovePointerTo(centre.X + 40, centre.Y + 40))
+                Native.SetCursorPos(centre.X + 40, centre.Y + 40);
+
             Pump();
 
             // The OS will not move the pointer for a process that is not in the foreground, so one grab at it
             // first — and if that does not take, a leg that says so and asserts nothing. On a machine someone
             // else is using, a chat window taking focus back is enough to deny the move, and that is nobody's
             // defect; it is the same tolerance as 「中途有人动了鼠标」 below, for the same reason.
-            if (!Native.SetCursorPos(centre.X, centre.Y))
+            if (!Native.MovePointerTo(centre.X, centre.Y) || !Landed(centre))
             {
                 Native.SetForegroundWindow(_window!.Handle);
                 Pump();
                 grabbed = true;
 
-                if (!Native.SetCursorPos(centre.X, centre.Y))
+                if (!Native.MovePointerTo(centre.X, centre.Y) && !Native.SetCursorPos(centre.X, centre.Y))
                 {
                     report.Add($"{where}：放不到画面中心，输入不在我们手上，这一轮只作参考");
                     return;
@@ -425,6 +468,15 @@ public sealed partial class PlayerPage
             var polls = _polledMoves;
             var ticks = _tickCount;
             var nudges = _cursorNudges;
+
+            // Whether the island really heard the placement above. One more nudge through the real queue, at the
+            // point the pointer already sits on, and then the question 「did a XAML pointer event arrive」. This is
+            // the premise the whole leg rests on: hidden with the island silent proves nothing about a film, and
+            // that is what every previous round measured.
+            Native.MovePointerTo(centre.X, centre.Y);
+            Pump();
+            heard = _pointerMoves > moves;
+            moves = _pointerMoves;
 
             // Nothing known about the pointer, exactly as at the start of a playback, so the first tick of the
             // loop below seeds it from the OS — through the same poll a film goes through. Deliberately not
@@ -462,6 +514,7 @@ public sealed partial class PlayerPage
 
             report.Add($"{where}：{(hiddenAt == 0 ? $"{span}ms 过去也没藏" : $"静止 {hiddenAt - began}ms 就藏了")}"
                 + $"，线程形状={Mine()}"
+                + $"，真实输入{(heard ? "到位" : "注不进")}"
                 + $"，轮询问出 {_polledMoves - polls} 次移动、XAML 事件 {_pointerMoves - moves} 次、空事件 {_stillMoves} 次"
                 + $"，我们推了 {pushed} 拍、计时器自己 {Math.Max(0, _tickCount - ticks - pushed)} 拍"
                 + $"，让系统重新问了 {_cursorNudges - nudges} 次"
@@ -476,6 +529,11 @@ public sealed partial class PlayerPage
             // The whole of the request, asked of real seconds: 「鼠标静止不动两秒之后要自动隐藏」.
             Want($"{where}静止两秒后鼠标真藏了", _cursorHidden);
             Want($"{where}藏着的时候线程没有形状", NoShape());
+
+            // And the lever that reaches the pixels the pointer is actually over: the picture's own shape. The
+            // Win32 levers above govern every window except the one the pointer is on.
+            if (_cursorHidden)
+                Want($"{where}藏着时画面上的光标是透明的", ReferenceEquals(Root.Cursor, _window!.BlankInputCursor));
 
             // And the half of hiding that only this count can vouch for: the OS works out what the pointer is
             // over when the pointer moves, and this hide happens because nothing is moving, so without the
@@ -576,12 +634,30 @@ public sealed partial class PlayerPage
                 lines.Add("没直接问它：那个窗口不在本线程上");
             }
 
-            // What the desktop says about it, printed and not asserted; see the note on Screen for why.
+            // What the desktop says about it. Judged now, but only behind three gates — see below.
             var settled = front && front == wasFront && !grabbed;
+            var steers = Steers(at);
+            var gone = ScreenHasNoCursor();
 
-            lines.Add($"能挪指针={Steers(at)}");
-            lines.Add($"系统说屏幕上没有光标={ScreenHasNoCursor()}"
-                + (settled ? string.Empty : "（前台是刚抢到的，这一读数还归上一个拿着光标的窗口）"));
+            lines.Add($"能挪指针={steers}");
+
+            // 「Is there a pointer on the screen」 is the user's own question, and it is finally asked as an
+            // assertion rather than printed as a curiosity. Three gates, because without them it is a coin toss
+            // rather than a check: the desktop's cursor belongs to whichever queue last drew one, so the reading
+            // is only about this application when the island really received pointer input during this leg
+            // (heard), when the foreground was already ours rather than snatched a moment ago (settled), and
+            // when this process can steer the pointer at all (steers). Any gate down and the reading is printed
+            // with the reason it was not judged — which is honest, and is also what four earlier rounds got
+            // wrong in the other direction: they read 「no cursor」 off a leg whose island never heard anything.
+            var judged = heard && settled && steers;
+
+            lines.Add($"系统说屏幕上没有光标={gone}"
+                + (judged ? string.Empty
+                    : !heard ? "（真实输入注不进，这一读数不判）"
+                    : !settled ? "（前台是刚抢到的，这一读数还归上一个拿着光标的窗口，不判）"
+                    : "（此刻挪不动指针，输入不在我们手上，不判）"));
+
+            if (judged) Want($"{where}系统说屏幕上没有光标", gone);
 
             report.Add($"{where}显示层：{string.Join("，", lines)}");
         }

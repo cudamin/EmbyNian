@@ -421,9 +421,14 @@
                             <!-- 评分和那行读数：★ 后面跟等宽的分数，不再是一颗红色圆角药丸 —— 药丸是「徽章」
                                  的写法，而这里要的是仪表上的一个读数，况且那颗药丸的红色和「危险」共用一支
                                  画刷，一个 8.4 分没有任何危险。星是整个头部除播放键之外唯一一处颜色，所以它
-                                 跟着主题走。 -->
+                                 跟着主题走。
+
+                                 分数后面那一小格写着这个数是谁给的（「豆瓣」「烂番茄」「公众评分」），因为
+                                 「可在设置使用豆瓣、tmdb、烂番茄等平台的评分」之后，一个光秃秃的 8.4 说不清是哪家
+                                 的分。它走暗墨、跟事实那一行同一档层次，而分数走强墨 —— 读的是分，署名是注脚。 -->
                             <StackPanel Orientation="Horizontal" Spacing="14">
                                 <StackPanel
+                                    x:Name="ScoreStack"
                                     VerticalAlignment="Center"
                                     Orientation="Horizontal"
                                     Spacing="5"
@@ -434,9 +439,15 @@
                                         Foreground="{ThemeResource EgAccentBrush}"
                                         Glyph="&#xE735;" />
                                     <TextBlock
+                                        x:Name="ScoreText"
                                         VerticalAlignment="Center"
                                         Style="{StaticResource EgOnScrimDataStrongStyle}"
                                         Text="{x:Bind ViewModel.Score, Mode=OneWay}" />
+                                    <TextBlock
+                                        x:Name="ScoreSourceText"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource EgOnScrimDataStyle}"
+                                        Text="{x:Bind ViewModel.ScoreLabel, Mode=OneWay}" />
                                 </StackPanel>
 
                                 <TextBlock

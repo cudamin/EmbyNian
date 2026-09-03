@@ -145,16 +145,8 @@ internal static class ItemDetailTests
                 new EmbyItem { Name = "第一季", Type = EmbyItemType.Season, SeriesName = "葬送的芙莉莲" }).Count);
         });
 
-        Test("详情：评分用不变文化格式化，0 与缺失都当作没有", () =>
-        {
-            Assert.Equal("8.4", ItemDetail.Score(new EmbyItem { CommunityRating = 8.4f }));
-
-            // 8 rather than 8.0, and a dot even where the machine's separator is a comma.
-            Assert.Equal("8", ItemDetail.Score(new EmbyItem { CommunityRating = 8f }));
-            Assert.Equal("8.4", ItemDetail.Score(new EmbyItem { CommunityRating = 8.44f }));
-            Assert.Equal("", ItemDetail.Score(new EmbyItem { CommunityRating = 0 }));
-            Assert.Equal("", ItemDetail.Score(new EmbyItem()));
-        });
+        // 评分那一条搬走了：显示哪个平台的分现在是设置里的一行，规则和它的单测都在 ItemScore / EmbyTests 那边
+        // （「评分来源：…」那一族）。这里从前那一条只问 CommunityRating 怎么格式化，行为一字不改地搬了过去。
     }
 
     private static void RegisterFacts()

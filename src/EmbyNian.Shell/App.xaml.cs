@@ -83,7 +83,22 @@ public partial class App : Application
 
             // The one piece of startup housekeeping, started and not awaited: pruning the image cache is a
             // walk of a directory tree, and nothing on screen is waiting for it.
-            services.GetRequiredService<EmbyImageStore>().PruneInBackground();
+            var images = services.GetRequiredService<EmbyImageStore>();
+            images.PruneInBackground();
+
+            // 「新增可在设置中调整图片缓存大小的功能」. The settings page lives in a second window and has no handle
+            // on the image store, so it writes the number, saves, and shouts — the same rope 锁定窗口比例 and
+            // 默认收起侧边栏 already use. Subscribed here rather than in a page because this is where the store is:
+            // App outlives every page, so there is nothing to unsubscribe.
+            //
+            // A prune only when the budget really changed. ShellPrefs carries the whole UiSettings, so this fires
+            // for a theme swatch and a sidebar toggle too, and a directory walk plus file deletes is not
+            // something 「the user pressed a different switch」 should cost.
+            ShellPrefs.Changed += changed =>
+            {
+                if (images.Retarget(ImageCachePolicy.BudgetBytes(changed.ImageCacheMegabytes)))
+                    images.PruneInBackground();
+            };
 
             var shell = services.GetRequiredService<ShellPage>();
             shell.Attach(services);
@@ -170,6 +185,15 @@ public partial class App : Application
         // Tooling: --play puts real video on screen. Last, because it does not come back until playback
         // has ended, and because it collapses everything --show-library was for.
         if (_options.PlayFirst) await shell.PlayFirstAsync().ConfigureAwait(true);
+
+        // Tooling: --show-osd 把播放浮层摆上来留着，一个字节的视频都不播。摆在最后一个不换页的位置 —— 它画在
+        // 当前页之上，而上面那几个开关都会换页或者抢走激活，一次导航就把它抹掉了；--play 之后就更没意义（那一句
+        // 不回来）。
+        if (_options.ShowOsd) shell.ShowPlayerChrome(_options.OsdState);
+
+        // Tooling: --hide-cursor 把播放层摆上来、计时器照常跑，然后什么都不动 —— 两秒后指针就该消失。摆在
+        // --show-osd 之后：那一个把浮层钉住不许收，两个一起用互相打架（注释里已经写了别一起用）。
+        if (_options.HideCursor) shell.HoldCursorForDemo();
     }
 
     /// <summary>

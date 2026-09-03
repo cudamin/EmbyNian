@@ -1,4 +1,6 @@
 using EmbyNian.Playback;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
 namespace EmbyNian.Shell.Views;
@@ -147,8 +149,148 @@ public sealed partial class PlayerPage
         return (wrong.Count == 0,
             $"{painted}/{PlayerPalette.Brushes.Count} 支画刷与 Core 那张表一致；{string.Join('、', stops)}"
             + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));
-
-        static string Hex(Windows.UI.Color colour) =>
-            $"{colour.A:X2}{colour.R:X2}{colour.G:X2}{colour.B:X2}";
     }
+
+    /// <summary>
+    /// 「去掉鼠标移到进度条上时进度条出现的白色填充物」, as an assertion rather than as a look at the screen.
+    /// <para>
+    /// The white was the framework's, not this page's: WinUI's Slider template binds
+    /// <c>HorizontalTrackRect.Fill</c> to the control's <c>Background</c> — which the markup sets to
+    /// transparent so the buffered bar behind shows through — and then overwrites that Fill in the
+    /// <c>PointerOver</c> and <c>Pressed</c> visual states with <c>SliderTrackFillPointerOver</c> /
+    /// <c>SliderTrackFillPressed</c>, both of which resolve to white at 54% in the dark dictionary. The fix is
+    /// two transparent brushes under those keys in the slider's own resources, and it fails silently: a key
+    /// the template cannot find leaves the white exactly where it was.
+    /// </para>
+    /// <para>
+    /// Nothing else can catch that. The seek bar is only on screen while a film is playing, this machine
+    /// cannot inject a mouse event at all, and playing something on the user's real library is not allowed
+    /// while verifying — so the states are pushed by hand here and the brushes read back off the template.
+    /// The two 「don't break these」 readings beside it are deliberate: widen the override by one key and the
+    /// played half of the bar or the thumb disappears, and no one would see that either.
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ProbeSeekTrack()
+    {
+        if (!Attached) return (false, "播放层未接线");
+
+        var was = Visibility;
+        Visibility = Visibility.Visible;
+        UpdateLayout();
+
+        // The bar is collapsed whenever the pointer has been still, and a collapsed control has no template
+        // applied — GoToState would return false and every reading below would say 「找不到」.
+        var clock = Now;
+        _chrome.WakeFully(clock);
+        Render();
+        UpdateLayout();
+
+        var report = new List<string>();
+        var wrong = new List<string>();
+        var reads = new List<(string State, string Track, string Played, string Thumb, string Panel)>();
+
+        foreach (var state in new[] { "Normal", "PointerOver", "Pressed" })
+        {
+            VisualStateManager.GoToState(SeekSlider, state, false);
+            reads.Add((state,
+                Fill("HorizontalTrackRect"),
+                Fill("HorizontalDecreaseRect"),
+                Ink("HorizontalThumb"),
+                Ink("SliderContainer")));
+        }
+
+        var tracks = reads.Select(read => read.Track).ToList();
+        var panels = reads.Select(read => read.Panel).ToList();
+
+        report.Add($"轨道：静止 {tracks[0]}、指针 {tracks[1]}、按下 {tracks[2]}");
+        report.Add($"整条底：{string.Join('/', panels)}");
+        report.Add($"已播放：{string.Join('/', reads.Select(read => read.Played))}");
+        report.Add($"拇指：{string.Join('/', reads.Select(read => read.Thumb))}");
+        report.Add($"滑杆底色 {Solid(SeekSlider.Background)}");
+
+        // Reported, not asserted: it is whatever the layout came to, and it is here because 「the white block
+        // is exactly the buffered bar's own rectangle」 is the sentence that identifies what the user saw.
+        var rect = PartNamed(SeekSlider, "HorizontalTrackRect");
+        if (rect is not null)
+            report.Add($"轨道矩形 {rect.ActualWidth:F0}×{rect.ActualHeight:F0}"
+                + $"，缓冲条 {CacheBar.ActualWidth:F0}×{CacheBar.ActualHeight:F0}");
+
+        Want("三个模板部件都找得到", tracks.All(value => value != Missing));
+
+        // Judged, not merely printed. The whole probe reads the same 「transparent」 out of every state when the
+        // bar was never really raised and the template measured nothing — so every assertion below would pass
+        // about a slider that was never in the PointerOver state at all. ProbeTap carries the same guard for
+        // the same reason, and its comment records the run where five controls came out green and false.
+        Want("滑杆真的立起来了", rect is { ActualWidth: > 0 } && SeekSlider.ActualWidth > 0);
+
+        Want("轨道三档同一支", tracks.Distinct(StringComparer.Ordinal).Count() == 1);
+        Want("轨道那一支什么都不画", Clear(tracks[0]));
+
+        // The other layer in this template that can paint a background, and eight times the area: SliderContainer
+        // spans the whole 938×32 hit box. Today all three of its states resolve to a transparent brush, so
+        // there is nothing to fix — but the entire reason this probe exists is that a framework version can
+        // change one of these keys quietly, and if it changed that one the white would come back bigger while
+        // 「轨道三档同一支」 went on passing.
+        Want("整条底三档都不画", panels.All(Clear));
+
+        Want("滑杆底色是透明的纯色", Clear(Solid(SeekSlider.Background)));
+        Want("已播放那一段没被一起刷成透明", reads.All(read => Visible(read.Played)));
+        Want("拇指没被一起刷成透明", reads.All(read => Visible(read.Thumb)));
+
+        // Put back the way the other probes do it, page first: a bar left up would be drawn over the library
+        // grid behind this page, and 「显隐规则已复位」 is the check that would report it.
+        VisualStateManager.GoToState(SeekSlider, "Normal", false);
+        Visibility = was;
+        _chrome.Reset(++clock);
+        _chrome.Tick(clock + SettleMilliseconds);
+        SetCursorHidden(false);
+        Render();
+        UpdateLayout();
+
+        return (wrong.Count == 0,
+            string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));
+
+        void Want(string what, bool ok)
+        {
+            if (!ok) wrong.Add(what);
+        }
+
+        string Fill(string name) =>
+            PartNamed(SeekSlider, name) is Microsoft.UI.Xaml.Shapes.Rectangle shape ? Solid(shape.Fill) : Missing;
+
+        // Two kinds of layer carry a Background in this template: the thumb is a Control, and SliderContainer
+        // is a plain Grid. Asked of both rather than of Control alone, or the eight-times-larger of the two
+        // would report 「找不到」 and the assertion on it would fail for the wrong reason.
+        string Ink(string name) => PartNamed(SeekSlider, name) switch
+        {
+            Control control => Solid(control.Background),
+            Panel panel => Solid(panel.Background),
+            Border border => Solid(border.Background),
+            _ => Missing
+        };
+
+        static string Solid(Brush? brush) => brush switch
+        {
+            null => "不画",
+            SolidColorBrush solid => Hex(solid.Color),
+            _ => "不是纯色"
+        };
+
+        static bool Clear(string value) => value.StartsWith("00", StringComparison.Ordinal);
+
+        // Anything that is not a fully transparent solid counts as 「still visible」: this pair of readings
+        // exists to catch the override being written one key too wide, and that failure always arrives as a
+        // solid colour with a zero alpha.
+        static bool Visible(string value) => value != Missing && value != "不画" && !Clear(value);
+    }
+
+    /// <summary>What a probe in this file prints when a template part is not where it used to be.</summary>
+    private const string Missing = "找不到";
+
+    /// <summary>
+    /// A colour as <c>AARRGGBB</c>. Shared by the two probes here rather than written twice, so the two report
+    /// lines cannot drift into different notations for the same thing.
+    /// </summary>
+    private static string Hex(Windows.UI.Color colour) =>
+        $"{colour.A:X2}{colour.R:X2}{colour.G:X2}{colour.B:X2}";
 }

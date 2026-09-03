@@ -466,6 +466,39 @@ public sealed class UiSettings
     public bool ShowWatchedIndicators { get; set; } = true;
 
     /// <summary>
+    /// 海报缓存在磁盘上最多占多少 MB。
+    /// <para>
+    /// 从前这个数写死在 <see cref="Emby.EmbyImageStore"/> 的构造函数上（400 MB），谁都改不了：库大的人一路撞
+    /// 上限、每次滚回去都要重下一遍海报，库小的人白占着几百兆。默认值就是从前那个 400，所以从没动过这一行的人
+    /// 行为一个像素都不变。
+    /// </para>
+    /// <para>
+    /// 上下限、装机默认值和「MB 换字节」都在 <see cref="Emby.ImageCachePolicy"/> 上，由单测钉着：设置页那一行的
+    /// 范围必须和 <c>SettingsMigration.Normalize</c> 夹的范围是同一对数（理由见 Normalize 里那一段），而两处各抄
+    /// 一遍字面值就是这一类 bug 的老窝。
+    /// </para>
+    /// <para>
+    /// 改完当场生效：设置页在另一个窗口里，所以那一行写完喊一声 <c>ShellPrefs</c>，主窗口那一头把新预算交给
+    /// 图片仓库并当场清一次 —— 拖小了不清，用户看见的是「设置了但没用」。
+    /// </para>
+    /// </summary>
+    public int ImageCacheMegabytes { get; set; } = Emby.ImageCachePolicy.DefaultMegabytes;
+
+    /// <summary>
+    /// 详情页上那个评分显示哪个平台的 —— 「可在设置使用豆瓣、tmdb、烂番茄等平台的评分」。
+    /// <para>
+    /// 这份 JSON 没有装 <c>JsonStringEnumConverter</c>，枚举存的是整数，所以
+    /// <see cref="Emby.ScoreSource.Community"/> 必须是 0：那是装机时的行为，也是缺键时读出来的值 —— 从旧版本升上来
+    /// 的人因此一个像素都不变。认不出来的整数由 <c>SettingsMigration.Normalize</c> 拨回默认档。
+    /// </para>
+    /// <para>
+    /// <b>这一档能做到什么，写在 <see cref="Emby.ItemScore"/> 的类注释里</b>：Emby 的条目上只有两个数字评分槽，
+    /// 豆瓣／TMDB／IMDb 三家的大众分都写进同一个，所以只有烂番茄那一档真的换了一个数，另两档换的是标签。
+    /// </para>
+    /// </summary>
+    public Emby.ScoreSource ScoreSource { get; set; } = Emby.ScoreSource.Community;
+
+    /// <summary>
     /// 锁定窗口比例大小: whether dragging a window edge keeps the browsing area at
     /// <see cref="Emby.HomeCarousel.WindowAspect"/> instead of taking whatever shape the pointer implies.
     /// <para>

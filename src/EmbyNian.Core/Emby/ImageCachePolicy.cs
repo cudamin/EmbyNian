@@ -15,6 +15,31 @@ namespace EmbyNian.Emby;
 public static class ImageCachePolicy
 {
     /// <summary>
+    /// 装机时的磁盘上限，单位 MB。400 是这个客户端一直在用的那个数（从前写在
+    /// <see cref="EmbyImageStore"/> 构造函数的默认参数上），所以「从没动过这个设置的人」行为一个像素都不变。
+    /// </summary>
+    public const int DefaultMegabytes = 400;
+
+    /// <summary>
+    /// 上限能调到多小。低于这个数缓存就开始来回打转 —— 一屏媒体库的海报本身就有十几兆，预算再小，刚下完的那一批
+    /// 立刻被下一屏挤掉，屏上是「每次滚回去都要重下一遍」，比不缓存还慢。
+    /// </summary>
+    public const int MinMegabytes = 200;
+
+    /// <summary>
+    /// 上限能调到多大。四个 G 已经远超这个库的全部海报（几千张，几百兆），再往上调只是让「上限」这件事失去意义，
+    /// 而一个不小心多打一个零的数字会把用户的磁盘吃掉。
+    /// </summary>
+    public const int MaxMegabytes = 4000;
+
+    /// <summary>手改过的设置文件里那个数拨回合理范围。设置页那一行的上下限必须和这里一致。</summary>
+    public static int ClampMegabytes(int megabytes) =>
+        Math.Clamp(megabytes == 0 ? DefaultMegabytes : megabytes, MinMegabytes, MaxMegabytes);
+
+    /// <summary>设置里那个 MB 换成字节。名字不叫 <c>Bytes</c>：那和 <see cref="ImageCacheUsage.Bytes"/> 撞脸。</summary>
+    public static long BudgetBytes(int megabytes) => (long)ClampMegabytes(megabytes) * 1024 * 1024;
+
+    /// <summary>
     /// 清理一次要降到预算的几成。留出余量是为了别一超就删 —— 正好削到预算上，下一张图落地又超了，于是每下载几张
     /// 就走一趟目录枚举。
     /// </summary>

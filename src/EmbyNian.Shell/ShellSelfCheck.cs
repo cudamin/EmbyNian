@@ -206,6 +206,12 @@ internal static partial class ShellSelfCheck
     private static (bool Ok, string Detail)? _detailGenres;
 
     /// <summary>
+    /// 评分那一格的读数 —— 「加入显示评分改为豆瓣评分的功能」那一档设置唯一的屏上出口。和
+    /// <see cref="_detailGenres"/> 一起在走到详情页那一拍攒下来，理由相同：页面接着就被换掉了。
+    /// </summary>
+    private static (bool Ok, string Detail)? _detailScore;
+
+    /// <summary>
     /// 「第一屏是先用卡片画的、图没白重取」那一条的读数。和 <see cref="_detailGenres"/> 一起在走到详情页的那一拍
     /// 攒下来 —— 走完之后页面会被换掉，视图模型跟着走，那两个计数就问不到了。
     /// </summary>
@@ -843,6 +849,7 @@ internal static partial class ShellSelfCheck
         _detailScrolled = true;
         _detailEpisodesDrawn = page.EpisodeShapes;
         _detailGenres = page.GenreRead();
+        _detailScore = page.ScoreRead();
         page.ScrollToEnd();
         return true;
     }

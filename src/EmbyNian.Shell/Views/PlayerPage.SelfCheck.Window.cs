@@ -1,4 +1,6 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace EmbyNian.Shell.Views;
@@ -94,6 +96,144 @@ public sealed partial class PlayerPage
             + $"；最大化={(MaximizeButton.Visibility == Visibility.Visible ? "在" : "隐藏")}"
             + $"，窗口{(_window.IsMaximized ? "已最大化" : "未最大化")}"
             + $"，{(_window.Fullscreen ? "全屏" : "窗口化")}");
+    }
+
+    /// <summary>
+    /// 置顶开关: 「置顶开启后不要改变按键颜色，绘制一个置顶开启图标来替换」, both halves of it.
+    /// <para>
+    /// Three things fail invisibly here. The colour: the button is no longer a <c>ToggleButton</c>, so the
+    /// framework's Checked storyboard has nothing to swap — but a style that stopped being applied, or a local
+    /// background written back in, brings the accent block straight back, and this button is only on screen
+    /// mid-film. The two pins: they are drawn geometry, so 「there are two of them and they are different」 is
+    /// a question about the visual tree rather than about a font, and a copy-paste that left both states on the
+    /// same path would look like a switch that does nothing. And the state: 置顶 lives on the window now,
+    /// which is exactly what nobody looking at the screen can read back.
+    /// </para>
+    /// <para>
+    /// The reset at the end is not housekeeping. A probe that left the main window in the topmost band would
+    /// make 「全屏几何」 further down the report pass for the wrong reason.
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ProbePin()
+    {
+        if (!Attached || _window is null) return (false, "播放层未接线");
+
+        var was = Visibility;
+        var wasTop = _window.TopMost;
+
+        Visibility = Visibility.Visible;
+        UpdateLayout();
+
+        var clock = Now;
+        _chrome.WakeFully(clock);
+        Render();
+        UpdateLayout();
+
+        var report = new List<string>();
+        var wrong = new List<string>();
+        var reads = new List<(bool Pinned, string Back, string Shown, string Name, bool Top)>();
+
+        foreach (var pinned in new[] { false, true })
+        {
+            SetPinned(pinned);
+            UpdateLayout();
+
+            var shown = (PinOnIcon.Visibility == Visibility.Visible, PinOffIcon.Visibility == Visibility.Visible) switch
+            {
+                (true, false) => "已置顶",
+                (false, true) => "未置顶",
+                (true, true) => "两颗都露着",
+                _ => "两颗都收着"
+            };
+
+            reads.Add((pinned, Fill(PinButton), shown, PeerName(PinButton), _window.TopMost));
+        }
+
+        // The one reading the requirement is actually about, and it is compared against the eleven buttons
+        // beside it rather than against a literal: 「the same as every other button in this strip」 is the claim,
+        // and 返回 is the nearest one that has never been anything else.
+        var reference = Fill(BackButton);
+
+        report.Add($"底色：未置顶 {reads[0].Back}、已置顶 {reads[1].Back}（返回那颗 {reference}）");
+        report.Add($"图标：{reads[0].Shown} / {reads[1].Shown}");
+        report.Add($"名字：「{reads[0].Name}」/「{reads[1].Name}」");
+        report.Add($"窗口置顶：{reads[0].Top} / {reads[1].Top}");
+
+        Want("两档底色一样", string.Equals(reads[0].Back, reads[1].Back, StringComparison.Ordinal));
+        Want("两档底色和别的按钮同一支", string.Equals(reads[0].Back, reference, StringComparison.Ordinal));
+        Want("两档都不画底色", reads[0].Back is "不画" || reads[0].Back.StartsWith("00", StringComparison.Ordinal));
+        Want("两档各露一颗图标", reads[0].Shown == "未置顶" && reads[1].Shown == "已置顶");
+        Want("两档名字都不空", reads.All(read => read.Name.Trim().Length > 0));
+        Want("两档名字不一样", !string.Equals(reads[0].Name, reads[1].Name, StringComparison.Ordinal));
+        Want("状态跟着到了窗口", reads[0].Top == false && reads[1].Top);
+
+        // 两颗真的是两个形状，而且都落在 16×16 的方框里、都居中 —— PathIcon 既不缩放几何也不居中（ShellPage
+        // 那五颗图标的注释就是为这个坑写的），所以这三句只有量活的几何答得上。
+        var offBox = PinOffIcon.Data?.Bounds ?? default;
+        var onBox = PinOnIcon.Data?.Bounds ?? default;
+
+        report.Add($"墨框：未置顶 {offBox.Width:0.0}×{offBox.Height:0.0} 中心 {offBox.X + offBox.Width / 2:0.0},{offBox.Y + offBox.Height / 2:0.0}"
+            + $"；已置顶 {onBox.Width:0.0}×{onBox.Height:0.0} 中心 {onBox.X + onBox.Width / 2:0.0},{onBox.Y + onBox.Height / 2:0.0}");
+
+        Want("两颗不是同一个形状", offBox != onBox && offBox.Width > 0 && onBox.Width > 0);
+        Want("两颗都在 16×16 的框里", Inside(offBox) && Inside(onBox));
+        Want("两颗都居中", Centred(offBox) && Centred(onBox));
+
+        // 只报不判：拍照裁图要按这个框定位，而它跟着字体、缩放和这一排别的控件走。
+        report.Add($"按钮 {BoundsOf(PinButton).Width:0}×{BoundsOf(PinButton).Height:0} @ {BoundsOf(PinButton).Left:0},{BoundsOf(PinButton).Top:0}");
+
+        SetPinned(wasTop);
+        _chrome.Reset(++clock);
+        _chrome.Tick(clock + SettleMilliseconds);
+        Render();
+        SetCursorHidden(false);
+        Visibility = was;
+        UpdateLayout();
+
+        Want("跑完复位了", _window.TopMost == wasTop);
+
+        return (wrong.Count == 0,
+            string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));
+
+        void Want(string what, bool ok)
+        {
+            if (!ok) wrong.Add(what);
+        }
+
+        // 半个像素的余量按主文件那一档；16 是标记里写死的方框边长，两颗几何都是按它算的。
+        static bool Inside(Windows.Foundation.Rect box) =>
+            box.Left >= -GeometrySlack && box.Top >= -GeometrySlack
+            && box.Right <= 16 + GeometrySlack && box.Bottom <= 16 + GeometrySlack;
+
+        static bool Centred(Windows.Foundation.Rect box) =>
+            Math.Abs(box.X + box.Width / 2 - 8) <= 1 && Math.Abs(box.Y + box.Height / 2 - 8) <= 1;
+
+        // 模板根上那一层的底色 —— Checked 那一族当年换的就是它。ContentPresenter 不是 Control（那一条第一趟
+        // 读回来是「找不到模板根」），所以四种带 Background 的类型都要认。
+        static string Fill(DependencyObject button)
+        {
+            if (VisualTreeHelper.GetChildrenCount(button) == 0) return "找不到模板根";
+
+            var brush = VisualTreeHelper.GetChild(button, 0) switch
+            {
+                ContentPresenter presenter => presenter.Background,
+                Control control => control.Background,
+                Panel panel => panel.Background,
+                Border border => border.Background,
+                _ => null
+            };
+
+            return brush switch
+            {
+                null => "不画",
+                SolidColorBrush solid => $"{solid.Color.A:X2}{solid.Color.R:X2}{solid.Color.G:X2}{solid.Color.B:X2}",
+                _ => "不是纯色"
+            };
+        }
+
+        static string PeerName(UIElement element) =>
+            Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer
+                .CreatePeerForElement(element)?.GetName() ?? "";
     }
 
     /// <summary>

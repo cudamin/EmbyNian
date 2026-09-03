@@ -49,6 +49,38 @@ public sealed record StartupOptions
     public bool ShowMenu { get; init; }
 
     /// <summary>
+    /// Tooling only: 把播放器的浮层摆到屏上留着，好给它拍一张 —— 控制条、标题条、音量条一起，一个字节的视频都
+    /// 不播。可以跟一个词：<c>pinned</c>（置顶那颗键按下的样子）、<c>paused</c> / <c>playing</c>（正中那颗
+    /// 暂停/播放徽标，停在满亮上不让它自己淡出）。
+    /// <para>
+    /// 和 <see cref="ShowMenu"/> 同一个理由：这几层只有指针走到对应的位置才浮上来，而这台机器注不进鼠标事件
+    /// （<c>SendInput</c> 返回 1、指针不动）。没有它，播放浮层上任何看得见的改动都拍不到照 —— 而浮层正是用户
+    /// 最常盯着看的一片。
+    /// </para>
+    /// <para>
+    /// 单独用，也别和 <c>--self-check</c> 一起用：浮层会立在自检接着要走的那几页前面。故意不收起导航外壳 ——
+    /// 不收，浮层就叠在当前那一页上，照片里有真内容当背景；收起来反倒是一层透明浮层背后什么都没有。
+    /// </para>
+    /// </summary>
+    public bool ShowOsd { get; init; }
+
+    /// <inheritdoc cref="ShowOsd"/>
+    public string? OsdState { get; init; }
+
+    /// <summary>
+    /// Tooling only: 把播放层摆上来然后什么都不动，好观察「鼠标静止两秒后自动隐藏」这件事。不放任何片子。
+    /// <para>
+    /// 和 <see cref="ShowOsd"/> 正好相反：那一个把浮层钉住不许它收（要拍浮层），这一个让十赫兹那颗计时器照常
+    /// 跑（要看它把指针藏掉）。两个别一起用。
+    /// </para>
+    /// <para>
+    /// 也别和 <c>--self-check</c> 一起用：自检跑完就退进程，而这一路要的是留在屏上。指针在哪块屏靠现成的
+    /// <c>--screen</c> / <c>--maximized</c> 凑 —— 让窗口去找指针，因为这台机器上指针挪不动。
+    /// </para>
+    /// </summary>
+    public bool HideCursor { get; init; }
+
+    /// <summary>
     /// Tooling only: press 设置 on the way up, on the 界面 card, so the settings window and its six theme
     /// swatches are on screen for a screenshot. Its own flag because 设置 is a second top-level window:
     /// waiting for the app to settle gets the main window and nothing else.
@@ -213,6 +245,9 @@ internal static class Program
                 ?? (selfCheck ? ScreenPlacement.NotThePrimary : ScreenPlacement.WhereverWindows),
             ShowLibrary = Has(args, "--show-library"),
             ShowMenu = Has(args, "--show-menu"),
+            ShowOsd = Has(args, "--show-osd"),
+            OsdState = Text(args, "--show-osd"),
+            HideCursor = Has(args, "--hide-cursor"),
             ShowSettings = Has(args, "--show-settings"),
             SettingsCategory = Text(args, "--show-settings"),
             ShowDetail = Has(args, "--show-detail"),

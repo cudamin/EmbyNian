@@ -405,6 +405,7 @@ internal static class SettingsTests
             settings.Playback.MarkWatchedPercent = 5;
             settings.Playback.ProgressReportIntervalSeconds = 0;
             settings.Shaders.HighResThresholdHeight = 99999;
+            settings.Ui.ImageCacheMegabytes = 999999;
 
             SettingsMigration.Normalize(settings);
 
@@ -413,6 +414,19 @@ internal static class SettingsTests
             Assert.Equal(50, settings.Playback.MarkWatchedPercent);
             Assert.Equal(1, settings.Playback.ProgressReportIntervalSeconds);
             Assert.Equal(4320, settings.Shaders.HighResThresholdHeight, "阈值再高也不能超过 8K 的高度");
+            Assert.Equal(EmbyNian.Emby.ImageCachePolicy.MaxMegabytes, settings.Ui.ImageCacheMegabytes,
+                "图片缓存上限的范围必须和设置页那一行是同一对数");
+        });
+
+        Test("规整：设置文件里没有图片缓存上限那一键时读成装机默认值", () =>
+        {
+            // 从旧版本升上来就是这一档：缺键反序列化出来是 0，而 0 不能读成「一张都不缓存」。
+            var settings = SettingsMigration.NewDefaults();
+            settings.Ui.ImageCacheMegabytes = 0;
+
+            SettingsMigration.Normalize(settings);
+
+            Assert.Equal(EmbyNian.Emby.ImageCachePolicy.DefaultMegabytes, settings.Ui.ImageCacheMegabytes);
         });
 
         Test("规整：认不出来的主题 id 被写回默认那套", () =>

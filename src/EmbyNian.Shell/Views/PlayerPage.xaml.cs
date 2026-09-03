@@ -7,6 +7,7 @@ using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Foundation;
 
@@ -48,15 +49,6 @@ public sealed partial class PlayerPage : UserControl
     private const int RestoreGlyphCode = 0xE923;
 
     /// <summary>
-    /// The two glyphs the 暂停/播放 badge shows. Deliberately the opposite way round from the transport
-    /// button's <see cref="PlayerViewModel.PlayPauseGlyph"/>: a button says what pressing it will do, and
-    /// this says what just happened.
-    /// </summary>
-    private const int PlayGlyphCode = 0xE768;
-
-    private const int PauseGlyphCode = 0xE769;
-
-    /// <summary>
     /// How wide the volume rail's approach strip along the right edge is, in logical pixels. It is both the
     /// distance at which the rail starts to appear and the distance over which it gets stronger —
     /// 「鼠标指针越接近右边的中心显示越明显」 — so widening it makes the rail both easier to summon and slower
@@ -86,11 +78,40 @@ public sealed partial class PlayerPage : UserControl
     private readonly SeekClockConverter _seekClock;
 
     /// <summary>
-    /// The 暂停/播放 badge's one second. Held rather than looked up per pulse because it is begun on every
-    /// pause and every resume, and a resource lookup on each is a dictionary walk for an object that
+    /// The 暂停/播放 badge's fifth of a second. Held rather than looked up per pulse because it is begun on
+    /// every pause and every resume, and a resource lookup on each is a dictionary walk for an object that
     /// cannot change.
     /// </summary>
     private readonly Storyboard _pulse;
+
+    /// <summary>
+    /// The four geometries the badge draws with: pause and play, each in two copies — one for the white shape
+    /// and one for the darker rim behind it. Read once for the same reason <see cref="_pulse"/> is.
+    /// <para>
+    /// Four rather than two, and not by choice: a WinUI <c>Geometry</c> cannot be attached to two <c>Path</c>
+    /// elements at once. Handing one object to both threw <c>ArgumentException: Value does not fall within the
+    /// expected range</c> on the second assignment — the framework's 「this object already has a parent」 —
+    /// which is why the numbers live in <see cref="PulseArt"/> and are built into four separate objects rather
+    /// than written out twice in the markup.
+    /// </para>
+    /// </summary>
+    private readonly (Geometry Shape, Geometry Rim) _pauseArt;
+
+    private readonly (Geometry Shape, Geometry Rim) _playArt;
+
+    /// <summary>
+    /// 点在画面上那一下的账，and the timer that holds it back. See <see cref="PictureTap"/>: a tap is not
+    /// issued the moment it arrives, because the first click of a double click raises one too.
+    /// </summary>
+    private readonly PictureTap _tap = new();
+
+    private readonly DispatcherTimer _tapHold = new();
+
+    /// <summary>
+    /// When a double tap last cancelled or undid a tap, or null. For the fraction of a second after that the
+    /// badge says nothing at all — the undo's own status edge is still on its way back from mpv.
+    /// </summary>
+    private long? _pulseMutedAt;
 
     /// <summary>
     /// Drives three things that expire rather than happen: the reveal rule's idle window, the 跳过
@@ -224,12 +245,6 @@ public sealed partial class PlayerPage : UserControl
     private bool? _paused;
 
     /// <summary>
-    /// What <c>pause</c> was just before a single tap toggled it, or null when the last tap did not
-    /// toggle anything. Read only by the double tap that may follow, which has to put it back.
-    /// </summary>
-    private bool? _tapPause;
-
-    /// <summary>
     /// The pointer captured for a title-bar drag, or null when no drag is running or the capture was
     /// refused. Held only to give it back: the drag's own state is <see cref="HostWindow.Dragging"/>.
     /// </summary>
@@ -262,10 +277,18 @@ public sealed partial class PlayerPage : UserControl
         // them from PlayerPalette. Unpainted they are transparent, not missing — see PlayerPage.Palette.cs.
         PaintPalette();
 
+        // Same reasoning one step further: the pin's two states — which of the two drawn pins is showing, the
+        // name a screen reader gets, the tooltip — are written by one method, so the markup carries no second
+        // copy of the starting state for them to drift out of step with. The window is not attached yet, which
+        // SetPinned allows for.
+        SetPinned(false);
+
         _seekClock = (SeekClockConverter)Resources["SeekClockConverter"];
         _seekClock.Scale = PlayerViewModel.SeekScale;
 
         _pulse = (Storyboard)Resources["PulseStoryboard"];
+        _pauseArt = (Build(PulseArt.Pause), Build(PulseArt.Pause));
+        _playArt = (Build(PulseArt.Play), Build(PulseArt.Play));
 
         // handledEventsToo, because the chrome is full of buttons and a pointer over one of them is
         // exactly the case the reveal rule must not miss: a control marks the event handled, and
@@ -285,15 +308,18 @@ public sealed partial class PlayerPage : UserControl
         SeekTrack.AddHandler(PointerMovedEvent, new PointerEventHandler(OnSeekTrackHover), handledEventsToo: true);
         SeekTrack.AddHandler(PointerExitedEvent, new PointerEventHandler(OnSeekTrackLeft), handledEventsToo: true);
 
-        // 点击画面暂停, and a double click still goes fullscreen. WinUI raises Tapped for the first click
-        // of a double one and DoubleTapped for the second, so the two gestures overlap by construction:
-        // the single tap toggles pause immediately — waiting out the double-click interval first is what
-        // makes a player feel unresponsive — and the double tap puts pause back where it found it before
-        // going fullscreen. Two toggles cancelling out is also what the web players do, and it is why
-        // 「点击画面无法暂停」 could not simply be fixed by adding a handler and leaving it at that.
+        // 点击画面暂停, and a double click still goes fullscreen. WinUI raises Tapped for the first click of
+        // a double one and DoubleTapped for the second, so the two gestures overlap by construction. The tap
+        // is therefore held back rather than issued — see PictureTap: caught inside the hold, a double click
+        // issues no pause at all, which is what 「双击画面全屏的时候会触发暂停和开始」 was about. It used to
+        // pause at once and let the double tap put it back, which left the net state correct and the badge
+        // flashing twice.
         Tapped += OnTapped;
         DoubleTapped += OnDoubleTapped;
         KeyDown += OnKeyDown;
+
+        // One-shot in effect: a DispatcherTimer keeps ticking, and the handler's first line stops it.
+        _tapHold.Tick += OnTapHoldElapsed;
 
         _ticker.Tick += OnTick;
 
@@ -320,6 +346,13 @@ public sealed partial class PlayerPage : UserControl
     internal bool PlayerVisible => Visibility == Visibility.Visible;
 
     internal bool ChromeUp => _chrome.State.Any;
+
+    /// <summary>
+    /// Whether the mouse pointer has been handed back to the framework. For the self-check's reset gate: a probe
+    /// that hid the cursor and forgot to give it back leaves the whole application without a pointer, which is
+    /// the one failure here a user cannot work around.
+    /// </summary>
+    internal bool CursorRestored => !_cursorHidden && Root.Cursor is null;
 
     /// <summary>
     /// Which pieces of chrome are actually on screen, which is not the same question as
@@ -377,6 +410,7 @@ public sealed partial class PlayerPage : UserControl
     internal void Shutdown()
     {
         _ticker.Stop();
+        DropTapHold();
         SetCursorHidden(false);
         ViewModel?.Shutdown();
     }
@@ -458,16 +492,17 @@ public sealed partial class PlayerPage : UserControl
         Hold(false, ChromeHold.Search);
 
         _window.Fullscreen = false;
-        _window.TopMost = false;
-        PinButton.IsChecked = false;
+        SetPinned(false);
         FullscreenGlyph.Glyph = Glyph(FullscreenEnterCode);
         SetCursorHidden(false);
         _window.VideoVisible = false;
 
         // Stopping playback stops it paused often enough, and a badge left mid-fade would be drawn over
-        // whatever page the shell comes back to.
-        _pulse.Stop();
-        PulseBadge.Visibility = Visibility.Collapsed;
+        // whatever page the shell comes back to. The tap's own timer goes with it: a tap 150 ms before Escape
+        // would otherwise fire its pause into the next film, or into nothing at all.
+        HidePulse();
+        DropTapHold();
+        _pulseMutedAt = null;
         _paused = null;
 
         Visibility = Visibility.Collapsed;
@@ -523,31 +558,75 @@ public sealed partial class PlayerPage : UserControl
     }
 
     /// <summary>
-    /// Shows the 暂停/播放 badge for its one second — 「暂停后显示一秒暂停图标就行（开启播放也弄个一秒的
-    /// 动画）」. The glyph is the state that was just entered, not the button's 「what pressing me does」.
+    /// Shows the 暂停/播放 badge for its fifth of a second — 「暂停后显示一秒暂停图标就行（开启播放也弄个一秒的
+    /// 动画）」, shortened by 「把暂和开始的动画改为 0.2 秒」. The shape is the state that was just entered, not
+    /// the transport button's 「what pressing me does」 — which is why the two are the opposite way round from
+    /// <see cref="PlayerViewModel.PlayPauseGlyph"/>.
     /// <para>
-    /// Two icons carry one glyph: the white one the user asked for, and the slightly larger black one behind
-    /// it that keeps it visible over a pale frame. They are set together because a rim of the wrong shape
-    /// would be worse than no rim at all.
+    /// Silent for a moment after a double tap. That gesture cancels or undoes a pause, and its own status edge
+    /// is still on its way back from mpv; the badge saying 「playing」 about an undo nobody asked for is exactly
+    /// the flashing 「双击画面全屏的时候会触发暂停和开始」 reported.
+    /// </para>
+    /// <para>
+    /// The rim carries its own copy of the same geometry — one object cannot be attached to two Paths — so
+    /// they are assigned together and from the same pair, which is what keeps a rim of the wrong shape (worse
+    /// than no rim at all) out of reach.
     /// </para>
     /// </summary>
     private void Pulse(bool paused)
     {
-        PulseGlyph.Glyph = Glyph(paused ? PauseGlyphCode : PlayGlyphCode);
-        PulseRim.Glyph = PulseGlyph.Glyph;
+        if (Muted) return;
+
+        var art = paused ? _pauseArt : _playArt;
+        PulseShape.Data = art.Shape;
+        PulseRim.Data = art.Rim;
         PulseBadge.Visibility = Visibility.Visible;
 
-        // Restarted rather than layered: a second toggle inside the first second — a double click on the
-        // picture toggles pause twice by design — is one new acknowledgement, not two overlapping ones.
+        // Restarted rather than layered: a second toggle inside the first fifth of a second is one new
+        // acknowledgement, not two overlapping ones.
         _pulse.Stop();
         _pulse.Begin();
     }
 
+    /// <summary>Takes the badge away now, animation and all. Shared by the way out and by the double tap.</summary>
+    private void HidePulse()
+    {
+        _pulse.Stop();
+        PulseBadge.Visibility = Visibility.Collapsed;
+    }
+
     /// <summary>
-    /// The badge's second is up. Collapsed rather than merely left at zero opacity: a transparent element
-    /// is still measured and arranged on every frame the player draws.
+    /// Whether a double tap has just been dealt with, and the badge is therefore saying nothing. Measured as a
+    /// span rather than counted as a number of status edges: the undo travels to mpv and back, so it may
+    /// arrive early, late, or be coalesced away entirely — and a counter that never came down would eat the
+    /// badge for every real pause after it.
+    /// </summary>
+    private bool Muted => _pulseMutedAt is { } at && Now - at < PictureTap.PulseMuteMilliseconds;
+
+    /// <summary>
+    /// The badge's fifth of a second is up. Collapsed rather than merely left at zero opacity: a transparent
+    /// element is still measured and arranged on every frame the player draws.
     /// </summary>
     private void OnPulseCompleted(object? sender, object e) => PulseBadge.Visibility = Visibility.Collapsed;
+
+    /// <summary>
+    /// 工具用（<c>--hide-cursor</c>）：把播放层摆上来、十赫兹那颗计时器照常跑，然后什么都不动 —— 两秒后指针就
+    /// 该消失。一个字节的视频都不播。
+    /// <para>
+    /// 走 <see cref="EnterPlayer"/> 而不是自己拼一遍：那一处已经把「摆上播放层、重置显隐规则、忘掉指针位置、起
+    /// 计时器、拿走焦点」一气做完，而这件事要的正是一次完整的进场。空的视频子窗口关掉 —— 没有片子，留着只是一块
+    /// 黑。日志那一行印指针此刻归谁，观察脚本读它。
+    /// </para>
+    /// </summary>
+    internal void HoldCursorForDemo()
+    {
+        if (!Attached) return;
+
+        EnterPlayer();
+        _window!.VideoVisible = false;
+
+        Log.Info(Category, $"--hide-cursor：播放层已摆上，指针在窗口里={PointerInside()}，{PointerOwner()}");
+    }
 
     /// <summary>
     /// 缩放窗口时按画面比例联动 / 窗口化时视频有黑边: the shape the window holds its client area in while an
@@ -582,4 +661,38 @@ public sealed partial class PlayerPage : UserControl
     }
 
     private static string Glyph(int codepoint) => char.ConvertFromUtf32(codepoint);
+
+    /// <summary>
+    /// One of <see cref="PulseArt"/>'s point lists as a <c>PathGeometry</c>: closed straight-line figures and
+    /// nothing else, because the rounded corners come from the stroke's round joins rather than from arcs.
+    /// <para>
+    /// Built here rather than declared in the markup for two reasons. A <c>Geometry</c> cannot be attached to
+    /// two <c>Path</c> elements at once, and this badge is two layers of one shape — so the same numbers would
+    /// have had to be written out four times. And the numbers themselves are worth a test: 「what does this come
+    /// to on screen once it is stroked」 is arithmetic, and the answer has to match the outer box of the glyph it
+    /// replaced or the badge quietly changes size.
+    /// </para>
+    /// </summary>
+    private static Geometry Build(IReadOnlyList<IReadOnlyList<(double X, double Y)>> figures)
+    {
+        var geometry = new PathGeometry();
+
+        foreach (var points in figures)
+        {
+            if (points.Count == 0) continue;
+
+            var figure = new PathFigure
+            {
+                StartPoint = new Point(points[0].X, points[0].Y),
+                IsClosed = true
+            };
+
+            for (var index = 1; index < points.Count; index++)
+                figure.Segments.Add(new LineSegment { Point = new Point(points[index].X, points[index].Y) });
+
+            geometry.Figures.Add(figure);
+        }
+
+        return geometry;
+    }
 }

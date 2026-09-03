@@ -30,6 +30,9 @@ internal static class PlaybackTests
         RegisterChapterTimeline();
         RegisterSkipCoordinator();
         RegisterChromeReveal();
+        RegisterPictureTap();
+        RegisterCursorMask();
+        RegisterPulseArt();
         RegisterPlaybackStats();
         RegisterAspectLock();
         RegisterPlayerMenu();
@@ -2723,6 +2726,202 @@ internal static class PlaybackTests
             return (Exception?)error;
         }
     });
+
+    // ---- 点画面那一下 ----------------------------------------------------------
+    //
+    // 「双击画面全屏的时候会触发暂停和开始」。从前是单击立刻暂停、双击再撤回 —— 净状态对，可屏上闪两次徽标，
+    // mpv 也真暂停了一下又恢复。现在先攥住那一下，攥得住就一次暂停都没发出去。这一族钉的正是那个次序。
+
+    private static void RegisterPictureTap()
+    {
+        Test("点画面：攥的时间不超过上限，也不超过系统那个数", () =>
+        {
+            // 这台机器上系统答 500 —— 照它攥就是每次点画面暂停都要等半秒。
+            Assert.Equal(PictureTap.HoldCapMilliseconds, PictureTap.HoldFor(500));
+            Assert.Equal(80, PictureTap.HoldFor(80), "系统那个数更小就听它的");
+            Assert.Equal(PictureTap.HoldCapMilliseconds, PictureTap.HoldFor(0), "问不出来就用上限");
+            Assert.Equal(PictureTap.HoldCapMilliseconds, PictureTap.HoldFor(-1));
+        });
+
+        Test("点画面：徽标静音期比攥的上限长", () =>
+        {
+            // 撤回那一下的状态沿要走 mpv 一趟回来，静音期短于攥的时间就会漏出那一次徽标。
+            Assert.True(PictureTap.PulseMuteMilliseconds > PictureTap.HoldCapMilliseconds);
+        });
+
+        Test("点画面：单击攥住，不当场下发", () =>
+        {
+            var tap = new PictureTap();
+            Assert.False(tap.Pending, "什么都没发生时不该攥着");
+            Assert.False(tap.Issued);
+
+            tap.First(paused: false);
+            Assert.True(tap.Pending, "攥着");
+            Assert.False(tap.Issued, "还没下发 —— 这就是这次修法的全部");
+        });
+
+        Test("点画面：攥够了才下发一次", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: false);
+
+            Assert.True(tap.Elapsed(), "到期这一下才是真的下发");
+            Assert.False(tap.Pending);
+            Assert.True(tap.Issued);
+
+            Assert.False(tap.Elapsed(), "定时器晚一拍再跳一次，不许凭空再切一下播放");
+        });
+
+        Test("点画面：快的双击 —— 一次暂停都没发出去，也没什么要还", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: false);
+
+            Assert.Null(tap.Second(), "null 就是「那一次暂停从来没发生过」");
+            Assert.False(tap.Pending, "攥着的那一下作废了");
+            Assert.False(tap.Issued);
+        });
+
+        Test("点画面：慢的双击 —— 把按下之前那个值还回去", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: true);
+            Assert.True(tap.Elapsed());
+
+            Assert.Equal(true, tap.Second(), "还的是按下之前那个值，不是再切一次");
+            Assert.False(tap.Issued, "还完就清干净");
+            Assert.Null(tap.Second(), "第二下不会来两次；来了也没有第二份账");
+        });
+
+        Test("点画面：作废之后到期不再下发", () =>
+        {
+            // 点在控制条上的那一下必须作废：不作废，接着一次落在控制条上的双击就会拿着上一次单击记下的
+            // pause 去「撤回」，把正在放的片子停掉。
+            var tap = new PictureTap();
+            tap.First(paused: false);
+            tap.Forget();
+
+            Assert.False(tap.Pending);
+            Assert.False(tap.Elapsed());
+            Assert.Null(tap.Second());
+        });
+
+        Test("点画面：新的一次单击把上一次的账清掉", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: false);
+            Assert.True(tap.Elapsed());
+
+            tap.First(paused: true);
+            Assert.True(tap.Pending);
+            Assert.False(tap.Issued, "上一次已经下发过的那一笔不能留着，否则这一次的双击会去还上一次的值");
+        });
+    }
+
+    // ---- 透明光标的掩码 --------------------------------------------------------
+    //
+    // 从这次起 WinUI 的输入管线会照着这张掩码画光标（见 PlayerPage.Chrome.cs 的 SetCursorHidden），所以算错
+    // 不再是「藏不掉」而是「画面正中多一块黑方块」。
+
+    private static void RegisterCursorMask()
+    {
+        Test("透明光标：32×32 那一档 AND 全 1、XOR 全 0", () =>
+        {
+            var (and, xor) = CursorMask.Transparent(32, 32);
+
+            // 32 宽 → 每行 4 字节 → 32 行 128 字节。AND=1、XOR=0 逐像素就是「透明」。
+            Assert.Equal(128, and.Length);
+            Assert.Equal(128, xor.Length);
+            Assert.True(and.All(value => value == 0xFF), "AND 掩码不是全 1，光标就不是整只透明");
+            Assert.True(xor.All(value => value == 0x00), "XOR 掩码不是全 0，透明处会被反色");
+        });
+
+        Test("透明光标：行距按 WORD 补齐，不是按字节", () =>
+        {
+            // 这一条最容易写错，而错了整张掩码逐行错位、画出来是一块斜纹。
+            Assert.Equal(2, CursorMask.Stride(1));
+            Assert.Equal(2, CursorMask.Stride(16));
+            Assert.Equal(4, CursorMask.Stride(17), "17 像素要两个 WORD");
+            Assert.Equal(4, CursorMask.Stride(24), "24 像素占 3 字节，但要补到 4");
+            Assert.Equal(4, CursorMask.Stride(32));
+            Assert.Equal(6, CursorMask.Stride(33));
+
+            var (and, _) = CursorMask.Transparent(24, 10);
+            Assert.Equal(40, and.Length, "24×10 是 4 字节一行乘 10 行");
+        });
+
+        Test("透明光标：宽或高不是正数时返回空数组，不抛", () =>
+        {
+            // 抛异常会把「藏不掉鼠标」升级成「播放器起不来」。
+            foreach (var (width, height) in new[] { (0, 32), (32, 0), (-1, 32), (32, -1), (0, 0) })
+            {
+                var (and, xor) = CursorMask.Transparent(width, height);
+                Assert.Equal(0, and.Length, $"{width}×{height}");
+                Assert.Equal(0, xor.Length, $"{width}×{height}");
+            }
+
+            Assert.Equal(0, CursorMask.Stride(0));
+            Assert.Equal(0, CursorMask.Stride(-8));
+        });
+    }
+
+    // ---- 暂停/播放徽标的几何 ----------------------------------------------------
+    //
+    // 「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」。形状是「核心多边形 ＋ 圆接头描边」
+    // 拼出来的，于是「屏上最后多大」是一道要算的题 —— 而它替掉的那两个图标字量出来是 122.5×122.5 和 113.3×123.3，
+    // 新形状必须落在同一档分量上，不然屏上就是「换了个图标顺手大了一圈」。
+
+    private static void RegisterPulseArt()
+    {
+        Test("暂停徽标：描边之后成品 122×122，和它替掉的那个字形同一档分量", () =>
+        {
+            var (width, height) = PulseArt.Stroked(PulseArt.Pause, PulseArt.Ink);
+            Assert.Equal(122.0, width);
+            Assert.Equal(122.0, height);
+
+            // 两条各 32 宽、间距 46；描边往外长 6，于是成品是两条 44 宽、间距 34。
+            var left = PulseArt.Bounds([PulseArt.Pause[0]]);
+            var right = PulseArt.Bounds([PulseArt.Pause[1]]);
+            Assert.Equal(32.0, left.Right - left.Left);
+            Assert.Equal(32.0, right.Right - right.Left);
+            Assert.Equal(46.0, right.Left - left.Right, "两条之间的空隙");
+        });
+
+        Test("播放徽标：等腰、尖角朝右，描边之后成品 112×122", () =>
+        {
+            var (width, height) = PulseArt.Stroked(PulseArt.Play, PulseArt.Ink);
+            Assert.Equal(112.0, width);
+            Assert.Equal(122.0, height);
+
+            var triangle = PulseArt.Play[0];
+            Assert.Equal(3, triangle.Count);
+            Assert.Equal(triangle[0].X, triangle[2].X, "底边两点必须同一个 x，否则不是等腰");
+            Assert.Equal((triangle[0].Y + triangle[2].Y) / 2, triangle[1].Y, "尖角要落在底边中点的高度上");
+            Assert.True(triangle[1].X > triangle[0].X, "尖角朝右");
+        });
+
+        Test("暂停/播放徽标：两个形状都落在方框正中，最粗那道描边也没顶出去", () =>
+        {
+            foreach (var (name, figures) in new[] { ("暂停", PulseArt.Pause), ("播放", PulseArt.Play) })
+            {
+                var (x, y) = PulseArt.Centre(figures);
+                Assert.Equal(PulseArt.Box / 2, x, $"{name}没有水平居中");
+                Assert.Equal(PulseArt.Box / 2, y, $"{name}没有垂直居中");
+
+                // 最粗的那一档（深色描边）往外长 11，顶出方框的下场是被 Canvas 裁掉一条边。
+                var (width, height) = PulseArt.Stroked(figures, PulseArt.Rim);
+                Assert.True(width <= PulseArt.Box, $"{name}的描边横向顶出了方框：{width} > {PulseArt.Box}");
+                Assert.True(height <= PulseArt.Box, $"{name}的描边纵向顶出了方框：{height} > {PulseArt.Box}");
+            }
+        });
+
+        Test("暂停/播放徽标：背后那道描边比白的那层粗，屏上才看得见一道边", () =>
+        {
+            // 白三角压在白墙上等于没画，这一圈就是为它存在的；粗细反过来的话它整个躲在白层底下。
+            Assert.True(PulseArt.Rim > PulseArt.Ink);
+            Assert.Equal(5.0, (PulseArt.Rim - PulseArt.Ink) / 2, "屏上看得见的那道边");
+        });
+    }
 
     // ---- 测试用数据 ------------------------------------------------------------
 

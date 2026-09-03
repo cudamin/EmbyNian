@@ -415,6 +415,32 @@ public sealed class EmbyItem
 
     public float? CommunityRating { get; set; }
 
+    /// <summary>
+    /// 影评人评分，0–100。Emby 里叫「影评指数」，装了 OMDb 那类插件时它就是烂番茄的新鲜度 —— 也是这个客户端能
+    /// 拿到的<b>唯一一个真正独立于 <see cref="CommunityRating"/> 的数</b>（见 <see cref="ItemScore"/>）。
+    /// <para>
+    /// 和 <see cref="CommunityRating"/> 一样是 Fields 点名才发的，所以 <see cref="EmbyFields.Detail"/> 里带着它。
+    /// 「编辑元数据」那条路读的是另一个接口（不带 Fields 的单条目接口，回的是完整报文），所以那一头一直读得到它，
+    /// 这里从前读不到 —— 两条路各走各的，不矛盾。
+    /// </para>
+    /// </summary>
+    public float? CriticRating { get; set; }
+
+    /// <summary>
+    /// 这个条目在服务器上对上了哪几家刮削源的 id —— <c>Tmdb</c> / <c>Imdb</c> / <c>Tvdb</c> / <c>Douban</c>。
+    /// <para>
+    /// <b>只有 id，没有分数。</b>它唯一的用处是「这个 CommunityRating 该署谁的名」（见 <see cref="ItemScore"/>）：
+    /// 服务器上豆瓣、TMDB、IMDb 三家的大众分都写进同一个 <see cref="CommunityRating"/>，客户端换不出来，能说的只有
+    /// 「这个条目属于哪一家」。
+    /// </para>
+    /// <para>
+    /// 形状照 <see cref="ImageTags"/> 来（服务器的 schema 说这个字典的值全是字符串）。**键的大小写不要指望这个字典
+    /// 自己**：<c>System.Text.Json</c> 会新建一个默认比较器的字典把这里整个换掉，所以比较由
+    /// <see cref="ItemScore.Matched"/> 显式做。
+    /// </para>
+    /// </summary>
+    public Dictionary<string, string> ProviderIds { get; set; } = [];
+
     public string? OfficialRating { get; set; }
 
     public double? PrimaryImageAspectRatio { get; set; }

@@ -83,8 +83,8 @@ internal static class PlayerPaletteTests
                 Assert.True(colour.A < 0xFF, $"{name}那档描边不透明，压在画面上就是一道实线");
             }
 
-            Assert.True(faint.A < plain.A, "统计面板那圈没有比音量条那圈淡");
-            Assert.True(plain.A < strong.A, "音量条那圈没有比「跳过」那颗按钮淡");
+            Assert.True(faint.A < plain.A, "统计面板那圈没有比章节预览那圈淡");
+            Assert.True(plain.A < strong.A, "章节预览那圈没有比「跳过」那颗按钮淡");
         });
 
         Test("播放器配色：进度条那一带，刻度最亮、空轨最淡", () =>

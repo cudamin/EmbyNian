@@ -277,7 +277,7 @@ internal static partial class ShellSelfCheck
             ReportSeasons(report, Check);
             ReportServers(shell, report, Check);
             ReportDiagnostics(shell, report, Check);
-            ReportSettings(shell, report, Check);
+            ReportSettings(shell, services.GetRequiredService<EmbyNian.Emby.EmbyImageStore>(), report, Check);
             ReportDashboard(report, Check);
 
             // 需求 1 的第二颗：「点击后弹出设置窗口」. The walk reached the settings by pressing that button, so

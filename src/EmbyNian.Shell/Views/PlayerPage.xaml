@@ -134,57 +134,88 @@
             <Setter Property="FontSize" Value="16" />
         </Style>
 
-        <!-- The 暂停/播放 badge's one second, and the only storyboard in the file — see PulseBadge for
+        <!-- ================= 暂停/播放 那两个形状 =================
+             「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」, and 「太丑」 was measurable
+             rather than a matter of taste: U+E769 and U+E768 in Segoe Fluent Icons are *outline* glyphs — the
+             pause one carries four contours, two outer boxes with two inner boxes cut out of them, wall
+             thickness 128 of 2048 units, which at the 140 the badge used comes to 8.75 pixels. Blown up to a
+             third of the picture's height that is a wireframe drawing, not an icon. The fallback font is the
+             same story. What the request asks for is the solid shapes underneath.
+
+             The geometry is not here. It is PulseArt's, in Core, and PlayerPage builds four PathGeometry
+             objects from it — see PaintPulseArt for the two reasons, one of which is not a preference: a
+             WinUI Geometry cannot be attached to two Paths at once, and this badge is two layers of one shape.
+
+             Drawn rather than stroked-and-filled by hand: each shape is a plain straight-line polygon and the
+             rounded corners come from the stroke's round joins, so there is not one arc to compute. That is
+             the trick the five title-bar icons in ShellPage.xaml could not use — a PathIcon has no Stroke,
+             which is why those needed an awk script to work out their corners. -->
+
+        <!-- The 暂停/播放 badge's fifth of a second, and the only storyboard in the file — see PulseBadge for
              why this one is not the fade the reveal rule refuses.
 
-             Held together rather than split in two because the pause pulse and the resume pulse are the
-             same gesture with a different glyph; the page sets the glyph and begins this. Opacity is up
-             within 90 ms so the acknowledgement is immediate, holds while it is read, and is gone by
-             1000 ms; the scale starts small and ends slightly over, so it grows on arrival and drifts
-             outward as it goes rather than shrinking back into nothing — a badge that retreated the way
-             it came would read as being cancelled rather than acknowledged.
+             It was a whole second: 「暂停后显示一秒暂停图标就行（开启播放也弄个一秒的动画）」 was the request
+             that put it there, and 「把暂和开始的动画改为 0.2 秒」 is the one that shortened it. Both are kept
+             above because the second only makes sense as an edit to the first.
 
-             Opacity and scale are both composition properties, so this runs off the UI thread and needs
-             no EnableDependentAnimation. Completed collapses the badge: left visible at zero opacity it
-             would still be a hit-test-free but laid-out element on every subsequent frame. -->
+             The three phases are re-cut rather than scaled by a fifth. Scaling would give 18 ms to arrive —
+             one frame at 60 Hz, which reads as a hard cut, not as an animation — and 76 ms to leave. So:
+             50 ms up, 60 ms at full, 90 ms out. The fade takes nearly half of the fifth of a second because
+             it is the whole of 「it left by itself」; under about 80 ms it stops reading as a fade at all.
+
+             The scale travels less far so that it travels at the same speed: 0.72 → 1 over 220 ms was 0.00127
+             per millisecond, and 0.86 → 1 over 110 ms is the same figure, so the growth feels exactly as it
+             did. The drift outward cannot keep that speed (0.18 over 780 ms would be 0.02 over 90 ms, which is
+             nothing), so 1.06 is a compromise — still drifting outward rather than retreating, which is the
+             thing that makes it read as an acknowledgement rather than as a cancellation.
+
+             Opacity and scale are both composition properties, so this runs off the UI thread and needs no
+             EnableDependentAnimation. Completed collapses the badge: left visible at zero opacity it would
+             still be a hit-test-free but laid-out element on every subsequent frame. -->
         <Storyboard x:Key="PulseStoryboard" Completed="OnPulseCompleted">
             <DoubleAnimationUsingKeyFrames
                 Storyboard.TargetName="PulseBadge"
                 Storyboard.TargetProperty="Opacity">
                 <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0" />
-                <LinearDoubleKeyFrame KeyTime="0:0:0.09" Value="1" />
-                <LinearDoubleKeyFrame KeyTime="0:0:0.62" Value="1" />
-                <LinearDoubleKeyFrame KeyTime="0:0:1" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.05" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.11" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.2" Value="0" />
             </DoubleAnimationUsingKeyFrames>
             <DoubleAnimationUsingKeyFrames
                 Storyboard.TargetName="PulseScale"
                 Storyboard.TargetProperty="ScaleX">
-                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.72" />
-                <SplineDoubleKeyFrame KeyTime="0:0:0.22" KeySpline="0.1,0.9 0.2,1" Value="1" />
-                <LinearDoubleKeyFrame KeyTime="0:0:1" Value="1.18" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.86" />
+                <SplineDoubleKeyFrame KeyTime="0:0:0.11" KeySpline="0.1,0.9 0.2,1" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.2" Value="1.06" />
             </DoubleAnimationUsingKeyFrames>
             <DoubleAnimationUsingKeyFrames
                 Storyboard.TargetName="PulseScale"
                 Storyboard.TargetProperty="ScaleY">
-                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.72" />
-                <SplineDoubleKeyFrame KeyTime="0:0:0.22" KeySpline="0.1,0.9 0.2,1" Value="1" />
-                <LinearDoubleKeyFrame KeyTime="0:0:1" Value="1.18" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.86" />
+                <SplineDoubleKeyFrame KeyTime="0:0:0.11" KeySpline="0.1,0.9 0.2,1" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.2" Value="1.06" />
             </DoubleAnimationUsingKeyFrames>
         </Storyboard>
     </UserControl.Resources>
 
     <!-- Transparent, not null: a null background is not hit-testable, and every pointer event the
-         reveal rule runs on lands on this grid. It is also what lets the video show through. -->
-    <Grid x:Name="Root" Background="Transparent" SizeChanged="OnRootResized">
+         reveal rule runs on lands on this grid. It is also what lets the video show through.
+
+         A PictureSurface rather than a Grid, and it is a Grid with one thing added — a way in to
+         UIElement.ProtectedCursor, which is protected and therefore only reachable from a derived type. That
+         is what actually hides the mouse pointer over the picture: while the pointer is over XAML content the
+         shape on screen is the framework's, and nothing this process does on the UI thread is on that path.
+         See PictureSurface and HostWindow.BlankInputCursor. -->
+    <local:PictureSurface x:Name="Root" Background="Transparent" SizeChanged="OnRootResized">
 
         <!-- ================= 右键画面菜单 =================
              The tree is PlayerMenuCatalog's, harvested from the bundled input.conf's own uosc menu, so
              「右键 → 画面 → 开/关 裁切填充」 is where someone who has used that configuration expects it.
              Built on first open rather than in XAML because it is a hundred-odd rows of data, and as a
              ContextFlyout rather than a RightTapped handler so the menu key and Shift+F10 reach it too. -->
-        <Grid.ContextFlyout>
+        <local:PictureSurface.ContextFlyout>
             <MenuFlyout x:Name="PictureMenu" Opening="OnPictureMenuOpening" />
-        </Grid.ContextFlyout>
+        </local:PictureSurface.ContextFlyout>
 
         <!-- ================= 顶部：标题与窗口操作 =================
              The three window commands are the last column rather than a separate overlay of the shell's,
@@ -305,7 +336,15 @@
 
                 <!-- 统计. A toggle, because the panel it opens stays up until it is closed again: it is
                      read while something is going wrong, and a readout that vanished when the chrome
-                     hid itself would be gone exactly when it was being watched. -->
+                     hid itself would be gone exactly when it was being watched.
+
+                     Foreground stated rather than inherited, and it is a fix rather than a flourish: a
+                     ToggleButton's default foreground is the framework's TextFillColorPrimaryBrush, which
+                     ThemeHost points at the *application* theme's text colour — and an application-level
+                     brush is not re-resolved by this page's RequestedTheme="Dark". Under 晴昼 that is
+                     #15181D, near-black, drawn over a near-black scrim. The eleven buttons that go through
+                     OsdButtonStyle never had the problem; this one and the pin beside it were the two that
+                     had slipped out of PlayerPalette's 「the overlay does not follow the theme」 rule. -->
                 <ToggleButton
                     x:Name="StatsButton"
                     Background="Transparent"
@@ -313,22 +352,61 @@
                     Content="统计"
                     CornerRadius="6"
                     FontFamily="{StaticResource EgUiFontFamily}"
+                    Foreground="{StaticResource PlayerInkBrush}"
                     IsChecked="{x:Bind ViewModel.StatsOpen, Mode=TwoWay}"
                     Padding="10,6"
                     ToolTipService.ToolTip="播放统计" />
 
-                <ToggleButton
+                <!-- 窗口置顶. 「置顶开启后不要改变按键颜色，绘制一个置顶开启图标来替换」.
+
+                     A plain Button rather than a ToggleButton, and that is the whole of 「不要改变按键颜色」:
+                     a ToggleButton's Checked/CheckedPointerOver/CheckedPressed states swap the content
+                     presenter's Background for ToggleButtonBackgroundChecked, which ThemeHost points at the
+                     theme's accent — a storyboard inside the framework's own template, so the Transparent
+                     written on the element only ever governed the resting state. Six resource keys could have
+                     been overridden instead (the framework does exactly that for ColorPicker's own toggle),
+                     but those key names travel with the Windows App SDK, and with no toggle there is nothing
+                     left to come back. What is lost with it is the Toggle automation pattern, so the state is
+                     said in the name instead — see PinIndicator, in Core.
+
+                     Two drawn pins rather than one glyph swapped between two codepoints: 「绘制一个置顶开启
+                     图标」, and a glyph is also the one thing about this button no report can check — whether
+                     a codepoint exists in this machine's font is a question only a photograph answers.
+                     The two states differ in two ways at once, tilt and fill, because at 16 pixels a
+                     difference of fill alone is not a difference anyone reads: 未置顶 is a hollow pin lying
+                     at 40°, 已置顶 is a solid one standing upright.
+
+                     Geometry: both drawn inside a 16×16 box, stroke 1.2, cap radius 0.6, head radius 3.2
+                     with a 2.0 hole in the hollow one; the tilted needle runs from radius 2.6 to 7.8 about
+                     the head's centre and each shape is then centred on (8,8). F1 is load-bearing — the
+                     needle overlaps the head's ring, and under the default even-odd rule that overlap would
+                     be punched out as a hole rather than filled.
+
+                     Width and Height must be stated: a PathIcon neither scales its geometry nor centres it
+                     (the same note is on the five title-bar icons in ShellPage.xaml).
+
+                     The name and the tooltip are not here — SetPinned writes both, because both have to say
+                     which way the switch is currently thrown. -->
+                <Button
                     x:Name="PinButton"
-                    Background="Transparent"
-                    BorderThickness="0"
                     Click="OnTogglePin"
-                    CornerRadius="6"
+                    Style="{StaticResource OsdButtonStyle}"
                     Padding="10,6"
-                    AutomationProperties.Name="窗口置顶"
-                    AutomationProperties.AcceleratorKey="T"
-                    ToolTipService.ToolTip="窗口置顶（T）">
-                    <FontIcon Glyph="&#xE718;" Style="{StaticResource OsdGlyphStyle}" />
-                </ToggleButton>
+                    AutomationProperties.AcceleratorKey="T">
+                    <Grid>
+                        <PathIcon
+                            x:Name="PinOffIcon"
+                            Width="16"
+                            Height="16"
+                            Data="F1 M 9.21,3.11 A 3.2,3.2 0 0 1 9.21,9.51 A 3.2,3.2 0 0 1 9.21,3.11 Z M 9.21,4.31 A 2,2 0 0 0 9.21,8.31 A 2,2 0 0 0 9.21,4.31 Z M 8,8.69 L 4.65,12.67 A 0.6,0.6 0 0 1 3.73,11.9 L 7.08,7.92 A 0.6,0.6 0 0 1 8,8.69 Z" />
+                        <PathIcon
+                            x:Name="PinOnIcon"
+                            Width="16"
+                            Height="16"
+                            Visibility="Collapsed"
+                            Data="F1 M 8,2.2 A 3.2,3.2 0 0 1 8,8.6 A 3.2,3.2 0 0 1 8,2.2 Z M 8.6,5.4 L 8.6,13.2 A 0.6,0.6 0 0 1 7.4,13.2 L 7.4,5.4 A 0.6,0.6 0 0 1 8.6,5.4 Z" />
+                    </Grid>
+                </Button>
             </StackPanel>
 
             <!-- 最小化 / 最大化 / 关闭. Real client-area buttons, because playback removes WS_CAPTION so the
@@ -440,7 +518,28 @@
              FadeRail assigns the strength the rule decided and the compositor spends 220 ms getting
              there, which keeps 「is the rail up」 readable as a property instead of as a frame of an
              animation. Starts at zero with hit testing off, because the shell builds this page long
-             before anything plays and an invisible rail must not answer clicks meant for the picture. -->
+             before anything plays and an invisible rail must not answer clicks meant for the picture.
+
+             「音量条的位置是歪的，还有音量条不需要边框和上方的数字」 — three separate things, and the first
+             one was the framework's:
+
+               * No Width on the slider, and this is load-bearing. WinUI's vertical Slider template lays the
+                 track and the thumb out in three columns of 14 + 4 + 14 = 32, none of which is a star, so a
+                 vertical slider given a wider Width does not spread the extra space — it leaves it empty on
+                 the right and the track sits 6 pixels left of the slider's own middle. A hard Width="44" was
+                 exactly that: a thin line off to one side of a pill whose number above it and mute button
+                 below it were both centred, which is what 「歪」 was. HorizontalAlignment="Center" has to stay
+                 for the same reason — without it the StackPanel stretches the slider back to its width and the
+                 offset comes back. To make the grab area wider than 32 the two margins would have to be
+                 widened symmetrically instead, by overriding SliderPreContentMargin and SliderPostContentMargin
+                 in this slider's own Resources — which nothing here does today. What the change costs is the
+                 grab band: 44 wide before, 32 now. The wheel still works anywhere over the picture.
+                 ProbeRailFade measures the offset now, so nobody can put a Width back unnoticed.
+               * No BorderBrush/BorderThickness. PlayerEdgeBrush itself stays — the chapter preview still uses it.
+               * No number above the slider. The thumb's position is the readout; the exact percentage is gone
+                 from the screen, and 「滚轮调音量时要显示音量条」 now means seeing the bar rather than a figure.
+                 Narrator still reads the value out, because a Slider carries one.
+        -->
         <Border
             x:Name="Rail"
             HorizontalAlignment="Right"
@@ -448,26 +547,20 @@
             Margin="0,0,22,0"
             Padding="10,18"
             Background="{StaticResource PlayerRailBrush}"
-            BorderBrush="{StaticResource PlayerEdgeBrush}"
-            BorderThickness="1"
             CornerRadius="28"
             Opacity="0"
             IsHitTestVisible="False">
             <Border.OpacityTransition>
                 <ScalarTransition Duration="0:0:0.22" />
             </Border.OpacityTransition>
-            <StackPanel Spacing="10" HorizontalAlignment="Center">
-                <TextBlock
-                    x:Name="VolumeText"
-                    FontSize="16"
-                    FontWeight="SemiBold"
-                    HorizontalAlignment="Center"
-                    Text="{x:Bind ViewModel.VolumeLabel, Mode=OneWay}" />
-
+            <!-- Named so the self-check can count what is on the rail: 「不需要…上方的数字」 is otherwise the one
+                 of the three with nothing watching it — a TextBlock put back here would leave every gate green
+                 and every report line unchanged, because the narration walk stops at controls and the seven
+                 decorative readouts it checks are a written-down list. -->
+            <StackPanel x:Name="RailStack" Spacing="10" HorizontalAlignment="Center">
                 <Slider
                     x:Name="VolumeSlider"
                     Height="240"
-                    Width="44"
                     HorizontalAlignment="Center"
                     AutomationProperties.Name="音量"
                     IsThumbToolTipEnabled="False"
@@ -606,7 +699,34 @@
                         Minimum="0"
                         StepFrequency="1"
                         ThumbToolTipValueConverter="{StaticResource SeekClockConverter}"
-                        Value="{x:Bind ViewModel.SeekValue, Mode=TwoWay}" />
+                        Value="{x:Bind ViewModel.SeekValue, Mode=TwoWay}">
+                        <!-- 「去掉鼠标移到进度条上时进度条出现的白色填充物」.
+                             Background="Transparent" above only settles the resting state: the framework's
+                             own Slider template binds HorizontalTrackRect.Fill to it, so at rest the track is
+                             empty and CacheBar shows through from behind. But the template's CommonStates
+                             overwrite that Fill for PointerOver and Pressed with two theme brushes, and in the
+                             dark dictionary both resolve to ControlStrongFillColorDefaultBrush — #8BFFFFFF,
+                             white at 54%. It is drawn 4 pixels tall across the whole track, which is exactly
+                             CacheBar's own height and width, so the buffered bar disappears under it and the
+                             seek bar's unplayed half turns white the moment the pointer arrives.
+
+                             Overridden on this one control rather than on the page or in Palette.xaml, and that
+                             is the whole point: the volume rail's slider and the two on the settings page want
+                             that white — it is their track, and there is nothing behind them to show through.
+                             A page-level or theme-level override would take their tracks away.
+
+                             Same mechanism LibraryPage.xaml uses for ItemContainerPointerOverBackground, and it
+                             fails the same silent way — a key the template cannot find leaves the white in place
+                             with nothing on screen to say so. Hence ProbeSeekTrack, which pushes the visual
+                             states by hand and reads the brushes back. If that probe ever reports #8BFFFFFF
+                             again, move these two keys onto SeekTrack's Grid instead: lookup walks outward from
+                             the element, that Grid holds only the cache bar, the ticks and this slider, and the
+                             volume rail is not inside it. -->
+                        <Slider.Resources>
+                            <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="SliderTrackFillPressed" Color="Transparent" />
+                        </Slider.Resources>
+                    </Slider>
                 </Grid>
 
                 <TextBlock
@@ -761,11 +881,19 @@
              Not hit-testable, and starts collapsed with zero opacity so a layout pass before the first
              pause cannot flash it.
 
-             「不要黑色的圆形边框，只要白色的三角形就可以，然后再放大一些」: the dark plate and its hairline
-             ring are gone, and what is left is the glyph itself at three and a half times the size it was
-             inside the circle. The only thing behind it is a second copy of the same glyph, black and a
-             little larger — a rim that hugs the shape rather than a plate the shape sits on, because a
-             white triangle over a white wall is otherwise not there at all. -->
+             「不要黑色的圆形边框，只要白色的三角形就可以，然后再放大一些」 took away the dark plate and its
+             hairline ring; 「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」 took away the
+             icon font as well. What is left is two drawn shapes — see PulsePauseGeometry above for the numbers
+             and for what was wrong with the glyphs. The one behind is the same geometry stroked more heavily,
+             which comes out as a 5-pixel rim hugging the shape rather than a plate the shape sits on, and it
+             is still here for the reason it was added: a white triangle over a white wall is otherwise not
+             there at all.
+
+             The Canvas must keep its Width and Height. A Canvas does not measure its children, so dropping
+             them measures the whole badge as 0×0 — nothing on screen, and every other reading still correct.
+             It is a Canvas rather than a Grid so that both paths draw from (0,0) and are therefore concentric
+             by construction: inside a Grid each would be centred on its own DesiredSize and the two would sit
+             five pixels apart. -->
         <Border
             x:Name="PulseBadge"
             HorizontalAlignment="Center"
@@ -778,20 +906,20 @@
             <Border.RenderTransform>
                 <ScaleTransform x:Name="PulseScale" ScaleX="1" ScaleY="1" />
             </Border.RenderTransform>
-            <Grid>
-                <FontIcon
+            <Canvas x:Name="PulseArtBox" Width="136" Height="136">
+                <Path
                     x:Name="PulseRim"
-                    FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
-                    FontSize="152"
-                    Foreground="{StaticResource PlayerPulseRimBrush}"
-                    Glyph="&#xE769;" />
-                <FontIcon
-                    x:Name="PulseGlyph"
-                    FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
-                    FontSize="140"
-                    Foreground="{StaticResource PlayerPulseBrush}"
-                    Glyph="&#xE769;" />
-            </Grid>
+                    Fill="{StaticResource PlayerPulseRimBrush}"
+                    Stroke="{StaticResource PlayerPulseRimBrush}"
+                    StrokeThickness="22"
+                    StrokeLineJoin="Round" />
+                <Path
+                    x:Name="PulseShape"
+                    Fill="{StaticResource PlayerPulseBrush}"
+                    Stroke="{StaticResource PlayerPulseBrush}"
+                    StrokeThickness="12"
+                    StrokeLineJoin="Round" />
+            </Canvas>
         </Border>
         <!-- ================= 章节缩略图 =================
              Emby's own chapter still for wherever the pointer is over the seek bar. The server drew
@@ -884,5 +1012,5 @@
                 <TextBlock x:Name="CoverText" HorizontalAlignment="Center" Foreground="{StaticResource PlayerInkDimBrush}" Text="{x:Bind ViewModel.CoverMessage, Mode=OneWay}" />
             </StackPanel>
         </Grid>
-    </Grid>
+    </local:PictureSurface>
 </UserControl>
