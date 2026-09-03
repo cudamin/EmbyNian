@@ -49,14 +49,14 @@ public sealed partial class SettingSection : ObservableObject
 
     /// <summary>
     /// Every card is built and kept; picking a category only changes which one is shown. The page has no
-    /// server data in it, so building all eight costs nothing measurable, and a card that stays alive keeps
-    /// any half-typed config file across a trip through the category list.
+    /// server data in it, so building all of them costs nothing measurable, and a card that stays alive
+    /// keeps any half-typed text across a trip through the category list.
     /// </summary>
     public Visibility SectionVisibility => IsVisible ? Visibility.Visible : Visibility.Collapsed;
 }
 
 /// <summary>
-/// The settings page, as data. Builds the eight cards and their rows out of <see cref="AppSettings"/> and
+/// The settings page, as data. Builds the cards and their rows out of <see cref="AppSettings"/> and
 /// the mpv option catalogues, and saves the settings document on every edit.
 /// <para>
 /// There is no 「loading」 flag here. Each row reads its starting value in its own constructor and only
@@ -104,16 +104,13 @@ public sealed partial class SettingsViewModel : PageViewModel
     private FontLibrary? _fonts;
     private AppPaths? _paths;
     private Platform.ISystemLauncher? _launcher;
-    private MpvConfigLocation? _location;
-    private SettingTextRow? _mpvConfigPath;
-    private SettingTextRow? _inputConfigPath;
     private SettingNumberRow? _highResThreshold;
     private SettingNumberRow? _lowResThreshold;
     private SettingFontRow? _subtitleFont;
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
     private static readonly string[] CardCategories =
-        ["播放器", "配置文件", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于"];
+        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -162,14 +159,11 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// </summary>
     internal static string FirstCardCategory => CardCategories[0];
 
-    /// <summary>The 配置文件 card's editor, kept here so the page can report on it without walking rows.</summary>
-    internal SettingConfigEditorRow? ConfigEditor { get; private set; }
-
     /// <summary>主题那一行的色板，同样是为了让自检不必去树上找它。</summary>
     internal SettingThemeRow? Themes { get; private set; }
 
     /// <summary>
-    /// How many row containers the eight cards would put on the visual tree between them; the self-check
+    /// How many row containers the cards would put on the visual tree between them; the self-check
     /// compares this to what really rendered.
     /// </summary>
     internal int RowCount => Sections.Sum(Containers);
@@ -177,7 +171,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// <summary>
     /// Each card in the order they appear, and the containers it holds. What the self-check walks: it steps
     /// through the categories and checks the tree against the running total, because a collapsed card never
-    /// builds its rows and a single look at this page would leave six of the eight untouched.
+    /// builds its rows and a single look at this page would leave every card but one untouched.
     /// </summary>
     internal IReadOnlyList<(string Category, int Rows)> Cards =>
         [.. Sections.Select(section => (section.Category, Containers(section)))];
@@ -233,17 +227,8 @@ public sealed partial class SettingsViewModel : PageViewModel
     {
         if (_settings is null) return Task.CompletedTask;
 
-        // Built before the cards because two of them share it: the 播放器 card's mpv.exe box changes where
-        // these point, and the 配置文件 card's boxes and editor are what they point at.
-        _location = new MpvConfigLocation(Settings.Mpv);
-
-        // The page's dialog, handed down: the editor asks before discarding unsaved text, and a row has no
-        // XamlRoot to raise one in. Null here is 「不问直接过」, which is what the tests and the self-check get.
-        ConfigEditor = new SettingConfigEditorRow(_location) { Confirm = Confirm };
-
         Sections.Clear();
         Sections.Add(PlayerCard());
-        Sections.Add(ConfigFileCard());
         Sections.Add(PlaybackCard());
         Sections.Add(SubtitleCard());
         Sections.Add(VideoCard());
@@ -298,49 +283,9 @@ public sealed partial class SettingsViewModel : PageViewModel
         new("播放器", "播放器", "选择内置播放器或外部 mpv。外部模式需要填写可执行文件路径。",
         [
             Choice("播放后端", Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value),
-            PathBox("mpv.exe 路径", "mpv.exe 路径", () => Settings.Mpv.ExecutablePath, value => Settings.Mpv.ExecutablePath = value,
-                after: () =>
-                {
-                    // Both config paths are inferred from this one when they are not set explicitly, so the
-                    // two boxes on the next card and the file open in the editor can all have just moved.
-                    ReseedConfigPaths();
-                    ConfigEditor?.Relocate();
-                }),
+            PathBox("mpv.exe 路径", "mpv.exe 路径", () => Settings.Mpv.ExecutablePath, value => Settings.Mpv.ExecutablePath = value),
             Toggle("启用 IPC 进度通道", "关闭后服务器无法获得精确播放位置", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value)
         ]);
-
-    private SettingSection ConfigFileCard()
-    {
-        _mpvConfigPath = ConfigPathRow(MpvConfigKind.Mpv, "mpv.conf 路径");
-        _inputConfigPath = ConfigPathRow(MpvConfigKind.Input, "input.conf 路径");
-
-        return new SettingSection("配置文件", "配置文件",
-            "查看和编辑外部 mpv 的配置文件。EmbyNian 播放时使用 --no-config（内置 libmpv 默认 config=no），这里的修改不会覆盖本页的客户端专用播放参数。",
-            [_mpvConfigPath, _inputConfigPath, ConfigEditor!]);
-    }
-
-    /// <summary>
-    /// A config path box. The commit hands back <see cref="MpvConfigLocation.Store"/>'s answer rather than
-    /// what was typed, because a blank entry and an entry equal to the inferred path are both stored as
-    /// 「infer it」 and have to come back on screen as the inferred path.
-    /// </summary>
-    private SettingTextRow ConfigPathRow(MpvConfigKind kind, string label)
-    {
-        var location = _location!;
-        var editor = ConfigEditor!;
-        return new SettingTextRow(label, "默认从 mpv.exe 同目录下的 portable_config 推断", "配置文件路径",
-            location.Resolve(kind),
-            typed => location.Store(kind, typed),
-            Save,
-            () => editor.PathChanged(kind));
-    }
-
-    private void ReseedConfigPaths()
-    {
-        if (_location is null) return;
-        if (Settings.Mpv.ConfigPath is null) _mpvConfigPath?.Reseed(_location.Resolve(MpvConfigKind.Mpv));
-        if (Settings.Mpv.InputConfigPath is null) _inputConfigPath?.Reseed(_location.Resolve(MpvConfigKind.Input));
-    }
 
     private SettingSection PlaybackCard()
     {
@@ -498,8 +443,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// Saving enforces 低清阈值 &lt; 高清阈值, and the value it moves is not always the one that was edited:
     /// lowering 高清阈值 past 低清阈值 drags 低清阈值 down under it. A row redisplays whatever its own setting
     /// says after the save, which covers the box being typed into — this is what stops the other box from
-    /// going on showing a number that is no longer in the file. Same idea as
-    /// <see cref="ReseedConfigPaths"/> for the two config paths.
+    /// going on showing a number that is no longer in the file.
     /// </para>
     /// </summary>
     private void ReseedThresholds()
@@ -808,13 +752,13 @@ public sealed partial class SettingsViewModel : PageViewModel
         return row;
     }
 
-    private SettingTextRow Text(string label, string placeholder, Func<string> read, Action<string> write, string? note = null, Action? after = null) =>
+    private SettingTextRow Text(string label, string placeholder, Func<string> read, Action<string> write, string? note = null) =>
         new(label, note, placeholder, read(), typed =>
         {
             var value = typed.Trim();
             write(value);
             return value;
-        }, Save, after);
+        }, Save);
 
     /// <summary>
     /// 一行读数，见 <see cref="SettingFactRow"/>。不接设置，所以不带 <see cref="Save"/> —— 它只是把一件事
@@ -827,15 +771,15 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// A text box holding a filesystem path. <see cref="Text"/> with one pair of surrounding double quotes
     /// taken off as well as the whitespace: Explorer's 「复制为路径」 puts them on the clipboard, pasting one in
     /// is the ordinary way to fill such a box, and a double quote cannot occur in a Windows path — so a value
-    /// wearing them is always a paste and never a filename. See <see cref="MpvConfigLocation.Clean"/>.
+    /// wearing them is always a paste and never a filename. See <see cref="TypedPath.Clean"/>.
     /// </summary>
-    private SettingTextRow PathBox(string label, string placeholder, Func<string> read, Action<string> write, string? note = null, Action? after = null) =>
-        new(label, note, placeholder, MpvConfigLocation.Clean(read()), typed =>
+    private SettingTextRow PathBox(string label, string placeholder, Func<string> read, Action<string> write, string? note = null) =>
+        new(label, note, placeholder, TypedPath.Clean(read()), typed =>
         {
-            var value = MpvConfigLocation.Clean(typed);
+            var value = TypedPath.Clean(typed);
             write(value);
             return value;
-        }, Save, after);
+        }, Save);
 
     /// <summary>
     /// A comma-separated list in a text box. The box is redisplayed from the parsed list, so what is on

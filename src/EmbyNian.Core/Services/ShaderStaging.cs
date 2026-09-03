@@ -5,7 +5,7 @@ using EmbyNian.Mpv;
 namespace EmbyNian.Services;
 
 /// <summary>
-/// The files mpv needs on disk before it is handed a shader path: the shader collection itself and
+/// The files mpv needs on disk before it is handed a shader path: the shader files the groups name, and
 /// libmpv's sibling DLLs. A service rather than a method on the composition root because it has state —
 /// it runs at most once per session — and because the thing that needs it, the backend factory, can now
 /// say so in its constructor instead of reaching back into the root that built it.
@@ -66,9 +66,11 @@ public sealed class ShaderStaging(AppSettings settings)
             }
 
             // The user's own shader collection lives under their mpv config directory, which is where
-            // these files came from in the first place.
+            // these files came from in the first place. Only the ones a group names are taken: that
+            // collection is 113 files and 32 MB, and copying the tree would put straight back what the
+            // publish step stopped shipping.
             var externalShaders = Path.Combine(externalMpvRoot, "portable_config", "shaders");
-            if (Directory.Exists(externalShaders)) CopyTreeOnce(externalShaders, ShaderDirectory);
+            if (Directory.Exists(externalShaders)) CopyCatalogShadersOnce(externalShaders);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -92,15 +94,22 @@ public sealed class ShaderStaging(AppSettings settings)
         Log.Info(Category, $"已内置 {Path.GetFileName(target)}");
     }
 
-    private static void CopyTreeOnce(string source, string target)
+    /// <summary>
+    /// Fills in the shader files the groups name and this folder does not have, each taken from the same
+    /// relative path under the user's own collection. Deliberately file by file rather than a tree copy:
+    /// only the catalogue's files ship, and a group whose file is missing is the only thing worth fixing
+    /// here — mpv would log a load failure per frame and render nothing extra.
+    /// </summary>
+    private static void CopyCatalogShadersOnce(string source)
     {
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        foreach (var wanted in ShaderGroupCatalog.MissingShaderFiles())
         {
-            var destination = Path.Combine(target, Path.GetRelativePath(source, file));
-            if (File.Exists(destination)) continue;
+            var candidate = Path.Combine(source, Path.GetRelativePath(ShaderGroupCatalog.ShaderRoot, wanted));
+            if (!File.Exists(candidate)) continue;
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(file, destination);
+            Directory.CreateDirectory(Path.GetDirectoryName(wanted)!);
+            File.Copy(candidate, wanted);
+            Log.Info(Category, $"已内置着色器 {Path.GetFileName(wanted)}");
         }
     }
 }

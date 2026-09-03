@@ -134,19 +134,6 @@ public sealed class MpvSettings
     /// </summary>
     public bool EnableIpc { get; set; } = true;
 
-    /// <summary>
-    /// Optional path shown by the configuration editor. The player deliberately starts with
-    /// <c>--no-config</c>/<c>config=no</c>, so this is a user-facing editing location rather than a
-    /// hidden input to playback. A null value means "infer <c>portable_config\mpv.conf</c> beside
-    /// mpv.exe" and keeps fresh settings files compact.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ConfigPath { get; set; }
-
-    /// <summary>Optional input.conf path; null uses the same portable-config inference as <see cref="ConfigPath"/>.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? InputConfigPath { get; set; }
-
     // 「libmpv-2.dll、附加参数貌似没什么用，删除」 — both are gone as of v5.
     //
     // LibMpvPath pointed at a libmpv build to load instead of the bundled one. The client ships its own
@@ -157,6 +144,13 @@ public sealed class MpvSettings
     // development has since become a real setting on this page, and being last it silently overrode
     // them; a typo in it was also fatal for mpv.exe, which exits on an unknown option before playing
     // anything. SettingsMigration drops both keys off an older settings.json.
+    //
+    // 「删掉这个功能」 — ConfigPath and InputConfigPath went the same way on 2026-09-03, with the
+    // 配置文件 card they existed for. They were the mpv.conf / input.conf the settings page let the user
+    // read and edit; since playback runs with --no-config / config=no, nothing in this client ever read
+    // either file, and a path box that only ever pointed a text editor at someone else's file is not a
+    // setting. A null meant 「infer portable_config beside mpv.exe」, so most files never held them; an
+    // older file that does gets them dropped the same way, the deserializer having nowhere to put them.
 }
 
 public enum MpvBackendKind

@@ -23,26 +23,25 @@ internal static class ConfirmDialog
     /// <summary>
     /// A <see cref="ConfirmRequest"/> that asks in front of <paramref name="owner"/>.
     /// <para>
-    /// <paramref name="whenNoRoot"/> is the answer when there is no window to ask in. A per-page choice
-    /// rather than a default, because the two pages that ask are asking about different things: 服务器页
-    /// confirms deletions and answers no, so a dialog that cannot be shown cannot delete a server; 设置页
-    /// confirms discarding unsaved typing and answers yes, which is what that button did before it asked at
-    /// all.
+    /// No window to ask in means no. That used to be a per-page choice, because the settings page's config
+    /// editor asked before discarding unsaved typing and going ahead was the kinder answer there; with that
+    /// editor gone, every question left in the app is about something irreversible on the server — deleting a
+    /// server, an account or an item, or letting a scrape overwrite metadata — and a dialog that cannot be
+    /// shown must not be read as consent to any of those.
     /// </para>
     /// </summary>
-    internal static ConfirmRequest For(FrameworkElement owner, bool whenNoRoot) =>
-        (title, message, primary) => AskAsync(owner, title, message, primary, whenNoRoot);
+    internal static ConfirmRequest For(FrameworkElement owner) =>
+        (title, message, primary) => AskAsync(owner, title, message, primary);
 
     private static async Task<bool> AskAsync(
         FrameworkElement owner,
         string title,
         string message,
-        string primary,
-        bool whenNoRoot)
+        string primary)
     {
         // Read when the question is asked, not when the delegate was made: a page hands this out in its
         // constructor, which is long before it is in a tree with a root to put a dialog in.
-        if (owner.XamlRoot is not { } root) return whenNoRoot;
+        if (owner.XamlRoot is not { } root) return false;
 
         var dialog = new ContentDialog
         {

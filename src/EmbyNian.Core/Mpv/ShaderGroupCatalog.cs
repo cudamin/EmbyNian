@@ -52,15 +52,18 @@ public sealed record ShaderGroup(
 /// <summary>
 /// The shader groups that ship with the client.
 /// <para>
-/// The first five target this machine — a Ryzen 5600G with Vega graphics driving a 1440p screen,
-/// playing 1080p and 4K sources. Everything is sized for that: a 1080p source needs a 1.33× upscale,
-/// which is cheap enough for a decent luma upscaler, while a 4K source is only ever downscaled, so no
-/// upscaling shader in the chain would ever fire. They are the ones the automatic rules choose from.
+/// All five target this machine — a Ryzen 5600G with Vega graphics driving a 1440p screen, playing
+/// 1080p and 4K sources. Everything is sized for that: a 1080p source needs a 1.33× upscale, which is
+/// cheap enough for a decent luma upscaler, while a 4K source is only ever downscaled, so no upscaling
+/// shader in the chain would ever fire. The automatic rules choose from these five, and the settings
+/// page and the player's own 着色器 menu offer the same five for picking by hand.
 /// </para>
 /// <para>
-/// The nine after them are the profiles carried over from the user's own <c>mpv.conf</c>, under their
-/// original names. Nothing picks them automatically; they are there to be chosen by hand, from the
-/// settings page or from the player's own 着色器 menu, when a particular file wants something else.
+/// Nine more used to follow them — the <c>[profile]</c> sections ported from the user's own
+/// <c>mpv.conf</c> under their original names (NNEDI3、NNEDI3+、ravu-zoom、FSRCNNX、AnimeJaNai、Ani4K、
+/// AniSD、Anime4K、SSIM). He asked for them to be deleted on 2026-09-03. A settings file that still
+/// names one of them is not broken by that: the group check in <c>SettingsMigration</c> maps a name this
+/// catalogue no longer has back to the built-in default.
 /// </para>
 /// </summary>
 public static class ShaderGroupCatalog
@@ -78,8 +81,9 @@ public static class ShaderGroupCatalog
     public const string LowResGroupName = "2K-iGPU-SD";
 
     /// <summary>
-    /// Where the <c>.glsl</c> files live: always next to the program. The publish step copies the
-    /// tree in, so both backends load the same files and neither reads the user's mpv installation.
+    /// Where the <c>.glsl</c> files live: always next to the program. The publish step copies in exactly
+    /// the files the groups below name — nothing else from the user's mpv collection — so both backends
+    /// load the same files and neither reads the user's mpv installation at play time.
     /// </summary>
     public static string ShaderRoot => Path.Combine(AppContext.BaseDirectory, "shaders");
 
@@ -94,27 +98,6 @@ public static class ShaderGroupCatalog
         new("dscale", "mitchell"),
         new("linear-downscaling", "no"),
         new("correct-downscaling", "yes")
-    ];
-
-    /// <summary>
-    /// The scalers the nine groups ported from <c>mpv_config-2026.08.12</c> ran under: that config's
-    /// global block, which is the same one 画质预设 = HQ carries. Only <c>dscale</c> differs, and it has
-    /// to — SSimDownscaler ends every one of those chains and requires <c>mitchell</c> rather than the
-    /// config's <c>lanczos</c>.
-    /// <para>
-    /// <c>scale</c> is a fallback for most of them, since the chain's own shader already produced the
-    /// target size; for the Anime4K group, whose chain only repairs the picture, it is what does the
-    /// upscaling.
-    /// </para>
-    /// </summary>
-    private static readonly KeyValuePair<string, string>[] PortedScalers =
-    [
-        new("scale", "ewa_lanczossharp"),
-        new("scale-antiring", "0.5"),
-        new("dscale-antiring", "0.5"),
-        new("linear-upscaling", "no"),
-        new("sigmoid-upscaling", "yes"),
-        .. SharedDownscale
     ];
 
     public static IReadOnlyList<ShaderGroup> All { get; } =
@@ -168,8 +151,9 @@ public static class ShaderGroupCatalog
                 .. SharedDownscale
             ]),
 
-        // Cleaner lines and screentones than Anime4K, and correspondingly more expensive. Usually
-        // fine at 24fps on an iGPU; a 60fps OP/ED may drop frames, in which case go back to Anime4K.
+        // Cleaner lines and screentones than the Anime4K chain above, and correspondingly more
+        // expensive. Usually fine at 24fps on an iGPU; a 60fps OP/ED may drop frames, in which case go
+        // back to 2K-iGPU-Anime.
         new("2K-iGPU-Anime+",
             "动画（ArtCNN，较吃性能）",
             ["Ani4K/Ani4Kv2_ArtCNN_C4F32_i2.glsl", "igv/SSimDownscaler.glsl"],
@@ -187,75 +171,7 @@ public static class ShaderGroupCatalog
                 new("scale", "ewa_lanczossharp"),
                 .. SharedDownscale,
                 new("sigmoid-upscaling", "yes")
-            ]),
-
-        // ── 从 C:\mpv_config-2026.08.12 移植的九组 ──────────────────────────────────────────────
-        //
-        // 「把 mpv_config 里的：NNEDI3、NNEDI3+、ravu-zoom、FSRCNNX、AnimeJaNai、Ani4K、AniSD、Anime4K、
-        // SSIM 这些着色器配置组复制一份添加到 EmbyNian 里」. The names are the user's own [profile]
-        // section names, kept verbatim so a group here means the same thing as it did there.
-        //
-        // In that config each of these was one `glsl-shaders=` line and nothing else: the scalers came
-        // from the file's global block, which is the same block 画质预设 = HQ now carries. Here every
-        // group has to stand on its own — it may be applied with 画质预设 = default, and it is chosen
-        // from the player's own menu mid-playback — so each carries PortedScalers, which is that global
-        // block minus the parts SSimDownscaler overrides anyway.
-        //
-        // None of them sets 去色带: that is a setting of its own now, and 「在动画中开启」 could not work
-        // if the animation groups turned it off again afterwards.
-
-        new("NNEDI3",
-            "神经网络放大（nns32，通用）",
-            ["nnedi3/nnedi3-nns32-win8x4.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers),
-
-        new("NNEDI3+",
-            "神经网络放大（nns64，更慢更锐）",
-            ["nnedi3/nnedi3-nns64-win8x4.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers),
-
-        new("ravu-zoom",
-            "RAVU 直接缩放（r3，通用）",
-            ["ravu/ravu-zoom-ar-r3.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers),
-
-        new("FSRCNNX",
-            "FSRCNNX ×2（适合 HD 片源）",
-            ["igv/FSRCNNX_x2_8-0-4-1.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers),
-
-        new("AnimeJaNai",
-            "动画（AnimeJaNai V3L1）",
-            ["AnimeJaNai/AnimeJaNaiV3L1_HD_x2.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers),
-
-        new("Ani4K",
-            "动画（ArtCNN C4F32）",
-            ["Ani4K/Ani4Kv2_ArtCNN_C4F32_i2.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers),
-
-        new("AniSD",
-            "动画（ArtCNN，适合 SD 片源）",
-            ["Ani4K/AniSD_ArtCNN_C4F32_i4.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers),
-
-        // The one chain here that upscales with `scale` rather than with a shader: KrigBilateral
-        // reconstructs chroma — taking `cscale` out of the picture for the chroma plane — the Soft CNN
-        // repairs the lines, and Clamp_Highlights keeps it from blowing them out.
-        new("Anime4K",
-            "动画（Anime4K Soft + 色度重建）",
-            [
-                "igv/KrigBilateral.glsl",
-                "Anime4K/glsl/Restore/Anime4K_Restore_CNN_Soft_M.glsl",
-                "Anime4K/glsl/Restore/Anime4K_Clamp_Highlights.glsl",
-                "igv/SSimDownscaler.glsl"
-            ],
-            PortedScalers),
-
-        new("SSIM",
-            "SSimSuperRes（4K 低性能）",
-            ["igv/SSimSuperRes.glsl", "igv/SSimDownscaler.glsl"],
-            PortedScalers)
+            ])
     ];
 
     /// <summary>Group names in catalogue order.</summary>
@@ -275,6 +191,12 @@ public static class ShaderGroupCatalog
     /// 「在动画中开启」 included — is the settings page's business, and resetting it here would undo
     /// the launch value every time the user picked a group from the player menu.
     /// </para>
+    /// <para>
+    /// The list holds nothing beyond what a group actually sets, and a test pins that both ways. An extra
+    /// name here is a name every group switch writes for no reason — <c>scale-antiring</c>,
+    /// <c>dscale-antiring</c> and <c>linear-upscaling</c> were in it for the nine ported groups and left
+    /// with them.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<KeyValuePair<string, string>> NeutralOptions { get; } =
     [
@@ -282,9 +204,6 @@ public static class ShaderGroupCatalog
         new("scale", "lanczos"),
         new("cscale", ""),
         new("dscale", "hermite"),
-        new("scale-antiring", "0"),
-        new("dscale-antiring", "0"),
-        new("linear-upscaling", "no"),
         new("linear-downscaling", "yes"),
         new("correct-downscaling", "yes"),
         new("sigmoid-upscaling", "yes")

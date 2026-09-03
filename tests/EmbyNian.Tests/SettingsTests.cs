@@ -393,6 +393,45 @@ internal static class SettingsTests
             Assert.DoesNotContain("mpv.conf", json, "客户端已经不读配置文件了，留着路径只会让人以为它还有用");
             Assert.DoesNotContain("input.conf", json);
         });
+
+        // 「删掉这个功能」（2026-09-03）：设置页那张「配置文件」卡片连它那两个路径框一起删掉了，于是 v2 之后
+        // 那两个键也跟 v1 的一样直接丢掉。这一条钉的是「丢掉」而不是「读得出来」—— 反序列化器碰到没处放的键
+        // 本来就不出声，写回去时它悄悄留在文件里才是问题。
+        Test("迁移：新版文件里 mpv.conf / input.conf 的路径也丢掉", () =>
+        {
+            const string v6 = """
+            {
+              "SchemaVersion": 6,
+              "Servers": [ { "Name": "果服", "Url": "http://h:8896" } ],
+              "Mpv": {
+                "ExecutablePath": "D:\\mpv\\mpv.exe",
+                "ConfigPath": "D:\\mpv\\portable_config\\mpv.conf",
+                "InputConfigPath": "D:\\mpv\\portable_config\\input.conf"
+              }
+            }
+            """;
+
+            var settings = SettingsMigration.FromJson(v6, Protector);
+            var json = JsonSerializer.Serialize(settings, SettingsSerializer.WriteOptions);
+
+            Assert.Equal(@"D:\mpv\mpv.exe", settings.Mpv.ExecutablePath, "mpv 本体的路径还是要留着");
+            Assert.DoesNotContain("ConfigPath", json);
+            Assert.DoesNotContain("mpv.conf", json);
+            Assert.DoesNotContain("input.conf", json);
+        });
+
+        // 设置页每个路径框都走 TypedPath.Clean。资源管理器的「复制为路径」给出的就是带引号的路径，而 Windows
+        // 路径里不可能出现双引号，所以带着引号的值只可能是这么来的；留着引号，后面每一次 GetFullPath 都会抛，
+        // 那个框就永远找不到它的文件了。之前的版本真这么存过。
+        Test("路径框：粘进来的带引号路径去掉引号，别的一个字不动", () =>
+        {
+            Assert.Equal(@"D:\mpv\mpv.exe", TypedPath.Clean("  \"D:\\mpv\\mpv.exe\"  "));
+            Assert.Equal(@"D:\mpv\mpv.exe", TypedPath.Clean(@"  D:\mpv\mpv.exe  "));
+            Assert.Equal("", TypedPath.Clean(null));
+            Assert.Equal("", TypedPath.Clean("   "));
+            Assert.Equal("\"", TypedPath.Clean("\""), "只有一个引号不成对，不能把它当成一对剥掉");
+            Assert.Equal(@"D:\一半""引号", TypedPath.Clean(@"D:\一半""引号"), "只有一头带引号的不动");
+        });
     }
 
     private static void RegisterNormalize()

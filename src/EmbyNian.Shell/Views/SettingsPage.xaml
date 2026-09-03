@@ -547,62 +547,6 @@
                     </Grid>
                 </DataTemplate>
             </local:SettingRowTemplates.Fact>
-
-            <local:SettingRowTemplates.ConfigEditor>
-                <DataTemplate x:DataType="vm:SettingConfigEditorRow">
-                    <StackPanel Spacing="10">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <ComboBox
-                                DisplayMemberPath="Label"
-                                HorizontalAlignment="Left"
-                                ItemsSource="{x:Bind Kinds}"
-                                MinWidth="220"
-                                SelectedItem="{x:Bind SelectedKind, Mode=TwoWay}" />
-                            <Button Command="{x:Bind ReloadCommand}" HorizontalAlignment="Left">
-                                <StackPanel Orientation="Horizontal" Spacing="7">
-                                    <SymbolIcon Symbol="Refresh" />
-                                    <TextBlock Text="重新载入" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
-                            <Button Command="{x:Bind StoreCommand}" HorizontalAlignment="Left">
-                                <StackPanel Orientation="Horizontal" Spacing="7">
-                                    <SymbolIcon Symbol="Save" />
-                                    <TextBlock Text="保存并备份" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
-                            <Button Command="{x:Bind RestoreCommand}" HorizontalAlignment="Left">
-                                <StackPanel Orientation="Horizontal" Spacing="7">
-                                    <SymbolIcon Symbol="Undo" />
-                                    <TextBlock Text="撤销未保存修改" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
-                        </StackPanel>
-
-                        <InfoBar
-                            IsClosable="False"
-                            IsOpen="True"
-                            Message="{x:Bind Status, Mode=OneWay}"
-                            Severity="{x:Bind StatusSeverity, Mode=OneWay}" />
-
-                        <!--
-                          PropertyChanged here, unlike the plain text rows: the status line under the toolbar
-                          says whether there are unsaved changes, and on lost focus it would only start
-                          saying so once the box was left.
-                        -->
-                        <TextBox
-                            AcceptsReturn="True"
-                            automation:AutomationProperties.Name="mpv 配置文件内容"
-                            FontFamily="Cascadia Mono,Consolas,Microsoft YaHei UI"
-                            HorizontalAlignment="Stretch"
-                            IsSpellCheckEnabled="False"
-                            MinHeight="420"
-                            ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                            ScrollViewer.VerticalScrollBarVisibility="Auto"
-                            Text="{x:Bind EditorText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                            TextWrapping="NoWrap" />
-                    </StackPanel>
-                </DataTemplate>
-            </local:SettingRowTemplates.ConfigEditor>
         </local:SettingRowTemplates>
     </Page.Resources>
 
@@ -640,8 +584,8 @@
             <Grid Grid.Column="1">
                 <!--
                   Every card is built and kept, and picking a category only changes which one is shown — the
-                  same as before. There is no server data on this page, so building all eight costs nothing
-                  measurable, and a card that stays alive keeps half-typed config text across a trip through the
+                  same as before. There is no server data on this page, so building all of them costs nothing
+                  measurable, and a card that stays alive keeps half-typed text across a trip through the
                   category list.
                 -->
                 <ScrollView

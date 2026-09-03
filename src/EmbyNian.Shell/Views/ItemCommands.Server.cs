@@ -410,7 +410,7 @@ internal static partial class ItemCommands
         {
             var item = card.Item;
 
-            var agreed = await ConfirmDialog.For(owner, whenNoRoot: false)(
+            var agreed = await ConfirmDialog.For(owner)(
                     "刮削元数据信息",
                     $"将重新从刮削源抓取「{item.Name}」的元数据，抓到的会覆盖现在的片名、简介和分级等信息"
                         + "（封面等图片不会被替换）。服务器在后台做这件事，可能要过一会儿才看得到结果。",
@@ -485,7 +485,7 @@ internal static partial class ItemCommands
             var item = card.Item;
             var what = item.DisplayTypeName is { Length: > 0 } kind ? kind : "条目";
 
-            var agreed = await ConfirmDialog.For(owner, whenNoRoot: false)(
+            var agreed = await ConfirmDialog.For(owner)(
                     $"删除这个{what}",
                     $"将从媒体库中删除「{item.Name}」，并把它在服务器磁盘上的文件一起删掉。此操作无法撤销。"
                         + (ItemMenu.IsEpisodeSet(item) ? "里面的所有单集都会被删除。" : ""),

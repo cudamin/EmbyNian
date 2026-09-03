@@ -79,7 +79,7 @@ internal static partial class ShellSelfCheck
     /// per-card counts come from the walk.
     /// <para>
     /// Bound and realised for the third time, and for the case that needed it most. This page is around sixty
-    /// rows of seven shapes picked at runtime by a <c>DataTemplateSelector</c>, and nothing about that is
+    /// rows of a handful of shapes picked at runtime by a <c>DataTemplateSelector</c>, and nothing about that is
     /// checked by a build: a row shape the selector has no case for, a resource key one of the templates asks
     /// for that does not resolve, or a literal of the wrong type in one of them all come out as a row that is
     /// simply not on screen. Counting containers off the tree is what turns any of those into a failure.
@@ -110,7 +110,7 @@ internal static partial class ShellSelfCheck
         if (page.ViewModel.MeasureImageBudget(images) is { } budget)
             check("图片缓存上限改完当场生效", budget.Ok, budget.Detail);
 
-        var (sections, rows, category, _, status) = page.Summary;
+        var (sections, rows, category, _) = page.Summary;
 
         // The left-hand list and the cards, against each other. Both are written out by hand and in different
         // places, so a category with no card is an entry that shows an empty pane and a card with no category
@@ -152,11 +152,6 @@ internal static partial class ShellSelfCheck
         foreach (var stop in _settings)
             report.AppendLine($"[信息] 设置卡片 — 「{stop.Category}」本卡 {stop.Rows} 行，累计已渲染 {stop.Drawn} / {stop.Expected}");
 
-        // The config editor opened a file rather than sitting on a blank box. Which file it found is not
-        // something the shell controls, so the check is only that the read came back at all: 「正在载入」
-        // still showing means it did not.
-        check("配置文件编辑器", !status.Contains("正在", StringComparison.Ordinal), status);
-
         // The 字幕 card's font picker: whether the machine's families really got into it, whether the search
         // box filters, and whether a search can lose the current value. The last one is the one worth a
         // check — the row's list is also where it shows what the setting is, so a filter that may hide the
@@ -188,21 +183,21 @@ internal static partial class ShellSelfCheck
 
         // The one path this page's cache guard exists for. Pressing 设置 again re-navigates the settings
         // window's frame to this same page type, and a page that rebuilt itself on the way in would throw
-        // away whatever is unsaved in the config editor. Checked by object identity and not by counts: a
-        // rebuilt page reports exactly the same numbers, so 「these are still the same objects」 is the only
-        // question that can tell the two apart.
-        var editor = page.ViewModel.ConfigEditor;
+        // away which card was open and whatever is half-typed in a box. Checked by object identity and not by
+        // counts: a rebuilt page reports exactly the same numbers, so 「these are still the same objects」 is
+        // the only question that can tell the two apart.
+        var viewModel = page.ViewModel;
         var firstCard = page.ViewModel.Sections.FirstOrDefault();
 
         shell.ShowSettings();
 
         var kept = shell.SettingsRoot is { } revisited
             && ReferenceEquals(revisited, page)
-            && ReferenceEquals(revisited.ViewModel.ConfigEditor, editor)
+            && ReferenceEquals(revisited.ViewModel, viewModel)
             && ReferenceEquals(revisited.ViewModel.Sections.FirstOrDefault(), firstCard);
 
         check("设置页重进不重建", kept,
-            kept ? "再按一次设置，编辑器和卡片还是原来那些" : "再按一次设置把页面重建了，未保存的编辑会丢");
+            kept ? "再按一次设置，页面和卡片还是原来那些" : "再按一次设置把页面重建了，没提交的输入会丢");
     }
 
     /// <summary>

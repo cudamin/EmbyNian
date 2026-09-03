@@ -27,8 +27,7 @@ internal sealed record SettingsRequest(IServiceProvider Services, string Categor
 /// <para>
 /// What each row is, what it reads and what it writes now lives in <see cref="SettingsViewModel"/>, and what
 /// each row looks like lives in the templates in this page's XAML. What is left here is what only a page can
-/// do: hand the view model a <see cref="ConfirmDialog"/> to ask in front of, read the navigation parameter,
-/// and answer the self-check.
+/// do: read the navigation parameter, host the pages that are not cards, and answer the self-check.
 /// </para>
 /// <para>
 /// The procedural version this replaces built all sixty-odd rows in C#, which put the labels and ranges, the
@@ -48,15 +47,9 @@ public sealed partial class SettingsPage : Page, IShellContent
     {
         InitializeComponent();
 
-        // Yes when there is no window to ask in — the opposite of 服务器页's answer, and named at the wiring
-        // rather than left to a default because that difference is the whole of it: the only question this
-        // page asks is whether to discard unsaved text in the config editor, and going ahead is what that
-        // button did before it asked anything at all.
-        ViewModel.UseConfirm(ConfirmDialog.For(this, whenNoRoot: true));
-
-        // Kept alive across navigations, which is what makes unsaved text in the config editor — and which
-        // card was open — survive a trip to another page and back. Signing out drops the frame's content
-        // entirely, so nothing outlives a session; within one, leaving this page no longer costs an edit.
+        // Kept alive across navigations, which is what makes half-typed text in a box — and which card was
+        // open — survive a trip to another page and back. Signing out drops the frame's content entirely, so
+        // nothing outlives a session; within one, leaving this page no longer costs an edit.
         NavigationCacheMode = NavigationCacheMode.Required;
 
         // The two hosted entries are selected the same way a card is, so the frame that holds them has to
@@ -191,22 +184,20 @@ public sealed partial class SettingsPage : Page, IShellContent
     }
 
     /// <summary>
-    /// What the self-check reports: the cards and rows that were built, the category on screen, and what
-    /// the config editor has to say about the file it opened.
+    /// What the self-check reports: the cards and rows that were built, and the category on screen.
     /// </summary>
-    internal (int Sections, int Rows, string SelectedCategory, int VisibleRows, string ConfigStatus) Summary => (
+    internal (int Sections, int Rows, string SelectedCategory, int VisibleRows) Summary => (
         ViewModel.Sections.Count,
         ViewModel.RowCount,
         SelectedCategory,
-        VisibleRows,
-        ViewModel.ConfigEditor?.Status ?? "没有配置编辑器");
+        VisibleRows);
 
     /// <summary>How many row containers the card currently on screen holds.</summary>
     internal int VisibleRows => ViewModel.Sections
         .Where(section => section.IsVisible)
         .Sum(SettingsViewModel.Containers);
 
-    /// <summary>The eight cards in order, and the containers each one holds. What the self-check walks.</summary>
+    /// <summary>The cards in order, and the containers each one holds. What the self-check walks.</summary>
     internal IReadOnlyList<(string Category, int Rows)> Cards => ViewModel.Cards;
 
     /// <summary>
@@ -269,11 +260,11 @@ public sealed partial class SettingsPage : Page, IShellContent
         Tag = "settings";
 
         // This page is cached, so coming back to it normally means everything is already built — including
-        // any unsaved text in the config editor, which is the point of caching it. Rebuilt only when the
-        // container is a different one, i.e. after signing out and back in, where every row's closure would
-        // otherwise still be reading the previous session's settings document. The container is what is
-        // compared and not the request: the shell builds a fresh request per navigation, so comparing those
-        // would rebuild the page — and throw the unsaved text away — on every visit.
+        // any half-typed text in a box, which is the point of caching it. Rebuilt only when the container is
+        // a different one, i.e. after signing out and back in, where every row's closure would otherwise
+        // still be reading the previous session's settings document. The container is what is compared and
+        // not the request: the shell builds a fresh request per navigation, so comparing those would rebuild
+        // the page — and throw the typing away — on every visit.
         var built = ReferenceEquals(_request?.Services, request.Services) && ViewModel.IsReady;
 
         _request = request;
@@ -393,10 +384,6 @@ public sealed partial class SettingsPage : Page, IShellContent
     /// It is here because <see cref="IShellContent"/> asks for it, and an empty body that says so is the
     /// point — the next person to add something to this page that needs releasing has the place to put it,
     /// and both the navigate-away path and the drop-the-frame path already run it.
-    /// </para>
-    /// <para>
-    /// Unsaved text in the config editor is discarded, as it was before. Saving a config file because the
-    /// user signed out would be a surprising thing to do with a file that mpv reads.
     /// </para>
     /// </summary>
     public void Release()

@@ -7,10 +7,9 @@ using Microsoft.UI.Xaml.Controls;
 namespace EmbyNian.Shell.ViewModels;
 
 /// <summary>
-/// How a view model asks the user to confirm something it cannot undo. False when the answer is no; what
-/// it means for there to be nobody to ask is the caller's to decide — <see cref="PageViewModel.ConfirmAsync"/>
-/// answers no, so a missing dialog cannot delete a server, and <see cref="SettingConfigEditorRow.Confirm"/>
-/// goes ahead, because the worst it can cost is unsaved typing.
+/// How a view model asks the user to confirm something it cannot undo. False when the answer is no, and
+/// false as well when there is nobody to ask — see <see cref="PageViewModel.ConfirmAsync"/> — so a missing
+/// dialog cannot delete a server.
 /// <para>
 /// A delegate rather than a service registered in the container. The dialog needs the page's
 /// <c>XamlRoot</c>, so the page is the only thing that can raise it; what the view model needs is a
@@ -129,22 +128,6 @@ public abstract partial class PageViewModel : ObservableObject, IDisposable
     /// <summary>Asks the hosting page to put the question to the user. False if there is no page to ask.</summary>
     protected Task<bool> ConfirmAsync(string title, string message, string primary) =>
         _confirm?.Invoke(title, message, primary) ?? Task.FromResult(false);
-
-    /// <summary>
-    /// The page's dialog itself, for handing down to a row that asks its own questions — the config editor
-    /// on the settings page is the one that does.
-    /// <para>
-    /// The raw delegate and not <see cref="ConfirmAsync"/>, so that null keeps meaning 「there is nobody to
-    /// ask」 one level further down. Wrapping it would hide that behind a method that always answers, and the
-    /// answer it would give is no, which for that row means a button that stops working outside a window.
-    /// </para>
-    /// <para>
-    /// <c>private protected</c> rather than <c>protected</c> because this class is public and
-    /// <see cref="ConfirmRequest"/> is not: derived view models are all in this assembly, and nothing outside
-    /// it has any business being handed the shell's dialog.
-    /// </para>
-    /// </summary>
-    private protected ConfirmRequest? Confirm => _confirm;
 
     protected static Visibility Show(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 

@@ -586,7 +586,7 @@ internal static partial class ShellSelfCheck
         // navigated to; this budget only has to cover the navigation itself.
         4 => 86,
 
-        // The settings page is settled just as fast, but its stage is a walk rather than a look: eight cards,
+        // The settings page is settled just as fast, but its stage is a walk rather than a look: every card,
         // one per tick, and then 需求 8's console — the one thing in this stage that waits on the network. That
         // page has a 15-second watchdog of its own, so this budget only has to be wide enough that it, and not
         // this, is what ends the wait: a deadline reached mid-console would report a console that had merely not
@@ -692,7 +692,7 @@ internal static partial class ShellSelfCheck
     /// out of places.
     /// <para>
     /// A stage of its own because one look at this page proves much less than one look at any other. It picks
-    /// between eight cards and seven row templates, and a collapsed card never builds its rows — so arriving
+    /// between its cards and a row template per shape, and a collapsed card never builds its rows — so arriving
     /// and reporting would exercise the first card's three rows and leave the slider and the switch group,
     /// which only later cards use, as untested as they were before the walk existed. Those templates are
     /// markup no build runs.

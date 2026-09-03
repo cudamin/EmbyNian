@@ -34,9 +34,8 @@ public sealed partial class ServersPage : Page, IShellContent
         InitializeComponent();
 
         // Wired here rather than on navigation because the dialog captures nothing but this page: the
-        // XamlRoot to host it in is read when a question is asked, which is long after it is null. No, so a
-        // question that cannot be put on screen does not delete a server.
-        ViewModel.UseConfirm(ConfirmDialog.For(this, whenNoRoot: false));
+        // XamlRoot to host it in is read when a question is asked, which is long after it is null.
+        ViewModel.UseConfirm(ConfirmDialog.For(this));
     }
 
     /// <inheritdoc cref="HomePage.ViewModel" />

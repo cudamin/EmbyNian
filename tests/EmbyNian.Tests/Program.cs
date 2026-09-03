@@ -11,8 +11,6 @@ internal static class Program
         PlaybackTests.Register();
         SettingsTests.Register();
         ServiceTests.Register();
-        MpvConfigTests.Register();
-        MpvWorkspaceTests.Register();
         FontTests.Register();
         EmbyTests.Register();
         SessionTests.Register();

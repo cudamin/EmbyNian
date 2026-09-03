@@ -255,27 +255,24 @@ public sealed partial class SettingSliderRow : SettingRow
 /// </para>
 /// <para>
 /// The commit hands back the text to display, which is not always the text that was typed: a list setting
-/// tidies its separators, and a config path that matches the inferred one is stored as 「infer it」 and
-/// comes back as the inferred path. Showing the typed text in those cases would claim something was saved
-/// that was not.
+/// tidies its separators, a language list is canonicalised by the catalogue, and a pasted path loses its
+/// quotes. Showing the typed text in those cases would claim something was saved that was not.
 /// </para>
 /// </summary>
 public sealed partial class SettingTextRow : SettingRow
 {
     private readonly Func<string, string> _commit;
     private readonly Action _save;
-    private readonly Action? _after;
     private readonly bool _seeded;
     private bool _committing;
 
-    internal SettingTextRow(string label, string? note, string placeholder, string value, Func<string, string> commit, Action save, Action? after = null)
+    internal SettingTextRow(string label, string? note, string placeholder, string value, Func<string, string> commit, Action save)
         : base(label, note)
     {
         Placeholder = placeholder;
         Text = value;
         _commit = commit;
         _save = save;
-        _after = after;
         _seeded = true;
     }
 
@@ -283,14 +280,6 @@ public sealed partial class SettingTextRow : SettingRow
 
     [ObservableProperty]
     public partial string Text { get; set; }
-
-    /// <summary>Re-reads the setting into the box without committing — for a value another row changed.</summary>
-    internal void Reseed(string value)
-    {
-        _committing = true;
-        try { Text = value; }
-        finally { _committing = false; }
-    }
 
     partial void OnTextChanged(string value)
     {
@@ -305,7 +294,6 @@ public sealed partial class SettingTextRow : SettingRow
         finally { _committing = false; }
 
         _save();
-        _after?.Invoke();
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using EmbyNian.Configuration;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
@@ -519,12 +520,22 @@ internal static class PlaybackTests
             Assert.Equal("hermite", neutral["dscale"]);
             Assert.Equal("", neutral["cscale"]);
 
+            var touched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var group in ShaderGroupCatalog.All)
             {
                 foreach (var (name, _) in group.ToMpvOptions(ShaderGroupCatalog.ShaderRoot))
                 {
+                    touched.Add(name);
                     Assert.True(neutral.ContainsKey(name), $"{group.Name} 改了 {name}，但关闭时没有还原它");
                 }
+            }
+
+            // 反过来也要对上：还原表里没人会设的名字，每次切组都白写一遍。移植的九组删掉时
+            // scale-antiring、dscale-antiring、linear-upscaling 就是这样留下来的。
+            foreach (var (name, _) in ShaderGroupCatalog.NeutralOptions)
+            {
+                Assert.True(touched.Contains(name), $"还原表里的 {name} 没有任何配置组会动，切一次组就白写一遍");
             }
         });
 
@@ -537,24 +548,14 @@ internal static class PlaybackTests
             }
         });
 
-        // 「把 mpv_config 里的：NNEDI3、NNEDI3+、ravu-zoom、FSRCNNX、AnimeJaNai、Ani4K、AniSD、Anime4K、
-        // SSIM 这些着色器配置组复制一份添加到 EmbyNian 里」。名字是用户自己的 [profile] 段名，原样保留。
-        Test("着色器组：从 mpv.conf 移植的九组都在，名字一字不改", () =>
+        // 内置的就这五组。从 mpv.conf 移植的那九组（NNEDI3、NNEDI3+、ravu-zoom、FSRCNNX、AnimeJaNai、
+        // Ani4K、AniSD、Anime4K、SSIM）2026-09-03 按用户一句「删除这些着色器配置组」整个删掉了，
+        // 这一条同时钉住「删掉的没回来」—— 设置页那个下拉和播放器的着色器菜单都是照这份目录生成的。
+        Test("着色器组：目录里就这五组，一个不多一个不少，组名不重复", () =>
         {
-            string[] ported = ["NNEDI3", "NNEDI3+", "ravu-zoom", "FSRCNNX", "AnimeJaNai", "Ani4K", "AniSD", "Anime4K", "SSIM"];
+            string[] expected = ["2K-iGPU", "2K-iGPU-Anime", "2K-iGPU-Light", "2K-iGPU-Anime+", "2K-iGPU-SD"];
 
-            foreach (var name in ported)
-            {
-                var group = ShaderGroupCatalog.Find(name);
-                Assert.NotNull(group, $"移植的配置组 {name} 不在内置目录里");
-
-                var options = Options(group!.ToMpvOptions(ShaderGroupCatalog.ShaderRoot));
-                Assert.Equal("ewa_lanczossharp", options["scale"], $"{name} 原来跑在 mpv.conf 的全局块下，放大器必须一致");
-                Assert.Equal("mitchell", options["dscale"], $"{name} 链尾是 SSimDownscaler，它要求 dscale=mitchell");
-                Assert.False(options.ContainsKey("deband"), $"{name} 不该动去色带，那是设置页的事");
-            }
-
-            Assert.Equal(14, ShaderGroupCatalog.All.Count, "内置五组加移植九组");
+            Assert.Equal(string.Join("、", expected), string.Join("、", ShaderGroupCatalog.Names), "内置配置组的名字和次序");
             Assert.Equal(ShaderGroupCatalog.All.Count, ShaderGroupCatalog.Names.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
                 "组名不能重复，否则 Find 只找得到第一个");
         });
@@ -585,6 +586,57 @@ internal static class PlaybackTests
                 .Resolve(Item("某部电影", genres: ["剧情"]), Source1080p());
             Assert.False(live.Animated);
         });
+
+        RegisterShippedShaderFiles();
+    }
+
+    /// <summary>
+    /// 发布件里只装配置组点名的那几个着色器文件（从前是把 mpv 配置目录下整棵树 —— 113 个文件 32 MB —— 全拷
+    /// 进去）。MSBuild 读不了这份 C# 目录，那份清单只能在 csproj 里重抄一遍，这一条就是防两边跑偏：漏一个，
+    /// 那一组发出去就是 mpv 每帧报一次加载失败、画面只「看起来差一点」，四道闸门一条都不会红。
+    /// </summary>
+    private static void RegisterShippedShaderFiles()
+    {
+        const string name = "着色器组：csproj 装箱的文件和目录点名的一字不差";
+
+        var repo = RepositoryRoot();
+        var project = repo is null ? null : Path.Combine(repo, "src", "EmbyNian.Shell", "EmbyNian.Shell.csproj");
+        if (project is null || !File.Exists(project))
+        {
+            Skip(name, "找不到仓库里的 EmbyNian.Shell.csproj");
+            return;
+        }
+
+        Test(name, () =>
+        {
+            var packed = Regex.Matches(File.ReadAllText(project), "<ShaderFile Include=\"([^\"]+)\"")
+                .Select(match => Normalize(match.Groups[1].Value))
+                .ToHashSet(StringComparer.Ordinal);
+            var named = ShaderGroupCatalog.All
+                .SelectMany(group => group.Shaders)
+                .Select(Normalize)
+                .ToHashSet(StringComparer.Ordinal);
+
+            // 两个方向分开报，报告里直接写出是哪个文件 —— 十条路径拼成一串比对不出来。
+            Assert.Equal("", Join(named.Except(packed)), "配置组点名了、csproj 却没装箱的着色器（发出去 mpv 会每帧报加载失败）");
+            Assert.Equal("", Join(packed.Except(named)), "csproj 装了、可没有一个配置组用得上的着色器");
+        });
+
+        static string Normalize(string path) => path.Replace('\\', '/').ToLowerInvariant();
+
+        static string Join(IEnumerable<string> paths) =>
+            string.Join("、", paths.OrderBy(path => path, StringComparer.Ordinal));
+    }
+
+    /// <summary>仓库根目录，从测试程序所在目录往上找 <c>EmbyNian.sln</c>；发布出去的程序旁边没有它。</summary>
+    private static string? RepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln"))) return directory.FullName;
+        }
+
+        return null;
     }
 
     // ---- IPC 分帧与解析 --------------------------------------------------------
