@@ -398,70 +398,72 @@ internal static class PlaybackTests
         });
     }
 
-    // ---- 着色器配置组 ----------------------------------------------------------
+    // ---- 着色器档位 ------------------------------------------------------------
 
     private static void RegisterShaders()
     {
-        Test("着色器：两个开关都关时不套用任何配置组", () =>
+        RegisterUpscaleTier();
+        RegisterOutputWatch();
+
+        Test("着色器：关掉开关就一条链都不上", () =>
         {
-            var settings = Shaders(all: false, anime: false);
-            Assert.Null(settings.Resolve(looksAnimated: true, sourceWidth: 1920, sourceHeight: 1080));
-            Assert.Null(settings.Resolve(looksAnimated: false, sourceWidth: 1920, sourceHeight: 1080));
+            var settings = Shaders(enabled: false);
+            Assert.Null(settings.Resolve(true, 1920, 1080, 2560, 1440).Group);
+            Assert.Null(settings.Resolve(false, 1920, 1080, 2560, 1440).Group);
         });
 
-        Test("着色器：对所有视频启用时套用默认组", () =>
+        Test("着色器：档位由放大倍数挑，不再由片源分辨率挑", () =>
         {
-            var settings = Shaders(all: true, anime: false);
-            Assert.Equal("2K-iGPU", settings.Resolve(looksAnimated: false, sourceWidth: 1920, sourceHeight: 1080));
-            Assert.Equal("2K-iGPU", settings.Resolve(looksAnimated: true, sourceWidth: 1920, sourceHeight: 1080), "动画开关没开就不该用动画组");
+            var settings = Shaders();
+
+            // 同一个 1080p 片源，屏幕不同就该落在不同的档 —— 这正是从前那套规则表达不了的事。
+            Assert.Equal("live-slight", settings.Resolve(false, 1920, 1080, 2560, 1440).Group?.Id, "1080p 上 1440p 是 1.33 倍");
+            Assert.Equal("live-sweet", settings.Resolve(false, 1920, 1080, 3840, 2160).Group?.Id, "同一个片源上 4K 是 2 倍");
+            Assert.Equal("live-shrink", settings.Resolve(false, 1920, 1080, 1920, 1080).Group?.Id, "原尺寸窗口里一个放大器都不该有");
+            Assert.Equal("live-shrink", settings.Resolve(false, 3840, 2160, 2560, 1440).Group?.Id, "4K 上 1440p 全程在缩小");
+            Assert.Equal("live-large", settings.Resolve(false, 720, 480, 2560, 1440).Group?.Id, "480p 上 1440p 是 3 倍");
         });
 
-        Test("着色器：动画开关单独打开时只对动画生效", () =>
+        Test("着色器：动画走另外半张表，开关关掉就照实拍处理", () =>
         {
-            var settings = Shaders(all: false, anime: true);
-            Assert.Equal("2K-iGPU-Anime", settings.Resolve(looksAnimated: true, sourceWidth: 1920, sourceHeight: 1080));
-            Assert.Null(settings.Resolve(looksAnimated: false, sourceWidth: 1920, sourceHeight: 1080), "非动画不套用配置组");
+            Assert.Equal("anime-slight", Shaders().Resolve(true, 1920, 1080, 2560, 1440).Group?.Id);
+            Assert.Equal("live-slight", Shaders(anime: false).Resolve(true, 1920, 1080, 2560, 1440).Group?.Id,
+                "自动识别动画关掉之后，动画片也走实拍那一半");
         });
 
-        Test("着色器：4K 片源在 2K 屏上改用省电组", () =>
+        Test("着色器：手动指定压过自动，而且换显卡档还在", () =>
         {
-            var settings = Shaders(all: true, anime: true);
-            Assert.Equal("2K-iGPU-Light", settings.Resolve(looksAnimated: false, sourceWidth: 3840, sourceHeight: 2160));
-            Assert.Equal("2K-iGPU-Light", settings.Resolve(looksAnimated: true, sourceWidth: 3840, sourceHeight: 2160), "4K 动画同样只会被缩小");
-            Assert.Equal("2K-iGPU-Anime", settings.Resolve(looksAnimated: true, sourceWidth: 1920, sourceHeight: 1080), "1080p 才需要放大链");
-            Assert.Equal("2K-iGPU", settings.Resolve(looksAnimated: false, sourceWidth: null, sourceHeight: null), "高度未知时按普通片源处理");
-        });
+            var low = Shaders(manual: "anime-large");
+            Assert.Equal("anime-large", low.Resolve(false, 1920, 1080, 2560, 1440).Group?.Id, "手动指定压过 1.33 倍算出来的那一档");
 
-        Test("着色器：DVD 之类的低清片源改用增强组", () =>
-        {
-            var settings = Shaders(all: true, anime: false);
-            Assert.Equal("2K-iGPU-SD", settings.Resolve(looksAnimated: false, sourceWidth: 720, sourceHeight: 576),
-                "576p 到 1440p 是 2.5 倍放大，重一点的链才划得来");
-            Assert.Equal("2K-iGPU", settings.Resolve(looksAnimated: false, sourceWidth: 1280, sourceHeight: 0),
-                "高度为 0 是服务器没给，不能当成 480p");
+            // 手动指定存的是「哪一行」，显卡档换的是「哪一列」—— 所以改显卡档不会把这个选择弄丢。
+            var high = Shaders(manual: "anime-large", gpu: GpuTier.High);
+            Assert.Equal("anime-large", high.Resolve(false, 1920, 1080, 2560, 1440).Group?.Id);
+            Assert.False(
+                string.Equals(
+                    low.Resolve(false, 1920, 1080, 2560, 1440).Group!.Description,
+                    high.Resolve(false, 1920, 1080, 2560, 1440).Group!.Description,
+                    StringComparison.Ordinal),
+                "同一个 id 在两个显卡档下挂的链应该不一样");
+
+            Assert.Equal("live-slight", Shaders(manual: "这个档位并不存在").Resolve(false, 1920, 1080, 2560, 1440).Group?.Id,
+                "认不出来的 id 退回自动，而不是退回「不上着色器」");
         });
 
         Test("着色器：8K 片源直接关掉着色器", () =>
         {
-            var settings = Shaders(all: true, anime: true);
-            Assert.Null(settings.Resolve(looksAnimated: false, sourceWidth: 7680, sourceHeight: 4320),
+            var settings = Shaders();
+            Assert.Null(settings.Resolve(false, 7680, 4320, 2560, 1440).Group,
                 "8K 解码本身就吃满核显，再叠着色器只会卡");
 
             settings.DisableForUltraHighRes = false;
-            Assert.Equal("2K-iGPU-Light", settings.Resolve(looksAnimated: false, sourceWidth: 7680, sourceHeight: 4320),
-                "关掉这条特例后仍按高分辨率规则走");
-        });
-
-        Test("着色器：清空高分辨率组即关闭该特例", () =>
-        {
-            var settings = Shaders(all: true, anime: true);
-            settings.HighResProfile = "";
-            Assert.Equal("2K-iGPU", settings.Resolve(looksAnimated: false, sourceWidth: 3840, sourceHeight: 2160));
+            Assert.Equal("live-shrink", settings.Resolve(false, 7680, 4320, 2560, 1440).Group?.Id,
+                "关掉这条特例后照常按倍数走，而 8K 上 1440p 是在缩小");
         });
 
         Test("着色器：动画判定只看类型/风格与标签", () =>
         {
-            var resolver = new ShaderGroupResolver(Shaders(all: false, anime: true));
+            var resolver = new ShaderGroupResolver(Shaders());
 
             Assert.True(resolver.LooksAnimated(ShaderGroupResolver.StyleHints(
                 Item("紫罗兰永恒花园", genres: ["动画", "剧情"]))), "Genres 命中");
@@ -475,27 +477,88 @@ internal static class PlaybackTests
 
         Test("着色器：单集借用剧集的类型/风格", () =>
         {
-            var resolver = new ShaderGroupResolver(Shaders(all: false, anime: true));
+            var resolver = new ShaderGroupResolver(Shaders());
             var episode = Item("第 1 集", type: EmbyItemType.Episode);
             var series = Item("葬送的芙莉莲", type: EmbyItemType.Series, genres: ["动画"]);
 
-            Assert.False(resolver.Resolve(episode, null).HasGroup, "单集自己通常没有风格");
-            Assert.Equal("2K-iGPU-Anime", resolver.Resolve(episode, null, series).Group, "有剧集兜底时应命中");
+            Assert.Equal("live-slight", resolver.Resolve(episode, Source1080p(), null, (2560, 1440)).Group?.Id,
+                "单集自己通常没有风格");
+            Assert.Equal("anime-slight", resolver.Resolve(episode, Source1080p(), series, (2560, 1440)).Group?.Id,
+                "有剧集兜底时应命中动画那一半");
         });
 
-        Test("着色器：决策原因会写进日志", () =>
+        Test("着色器：决策原因写成一行，任务书 3.7 那几样都在", () =>
         {
-            var resolver = new ShaderGroupResolver(Shaders(all: true, anime: true));
-            var decision = resolver.Resolve(Item("某部电影"), Source1080p());
-            Assert.True(decision.HasGroup, "开关已开");
-            Assert.Contains("已对所有视频启用", decision.Reason);
+            var resolver = new ShaderGroupResolver(Shaders());
 
-            var high = resolver.Resolve(Item("某部电影"), Source4K());
-            Assert.Contains("只会缩小", high.Reason);
+            var decision = resolver.Resolve(Item("某部电影"), Source1080p(), null, (2560, 1440));
+            Assert.NotNull(decision.Group);
+
+            // 例：1.33× · 微放大档 · 真人 · 低档 · 输出 2560×1440 · ravu-zoom-ar-r2 + CfL_Prediction_Lite
+            Assert.Contains("1.33×", decision.Reason);
+            Assert.Contains("微放大档", decision.Reason);
+            Assert.Contains("真人", decision.Reason);
+            Assert.Contains("低档", decision.Reason);
+            Assert.Contains("输出 2560×1440", decision.Reason);
+            Assert.Contains("ravu-zoom-ar-r2", decision.Reason, "链上的文件名要写出来，否则掉帧的反馈没法用");
+
+            var unknown = resolver.Resolve(Item("某部电影"), Source1080p(), null);
+            Assert.Contains("输出尺寸未知", unknown.Reason, "问不出屏幕尺寸也要说清楚，不能装作量过");
         });
 
-        Test("着色器组：每组都自带缩放器，路径是程序目录下的绝对路径", () =>
+        Test("着色器：1:1 播放时那一行写「原生」而不是「缩小档」", () =>
         {
+            // 撤掉第五档之后剩下的就是这个标签：SSimDownscaler 自带门控，1.00 倍时挂着不花钱，
+            // 别扭的只有 OSD 上「1.00× · 缩小档」这句话。
+            var decision = new ShaderGroupResolver(Shaders()).Resolve(Item("某部电影"), Source1080p(), null, (1920, 1080));
+
+            Assert.Equal("live-shrink", decision.Group?.Id);
+            Assert.Contains("1.00×", decision.Reason);
+            Assert.Contains("原生", decision.Reason);
+            Assert.DoesNotContain("缩小档", decision.Reason);
+        });
+
+        Test("着色器：老片源是另一根轴，可以单独关掉", () =>
+        {
+            // PAL 的 DVD 放到 1080p 是 1.88 倍，落甜点档 —— 而它照样要去带。这是把去带塞进大倍数档时
+            // 那个 bug 的回归测试：同一张碟的 NTSC 版（480 线、2.25 倍）落大倍数，PAL 版一条都没有。
+            var pal = Shaders().Resolve(false, 720, 576, 1920, 1080);
+            Assert.Equal("live-sweet", pal.Group?.Id);
+            Assert.True(pal.Group!.Vintage, "576 线是老片源");
+            Assert.Contains("hdeband", pal.Group.Description);
+            Assert.Contains("老片源修复", pal.Reason);
+
+            var ntsc = Shaders().Resolve(false, 720, 480, 1920, 1080);
+            Assert.Equal("live-large", ntsc.Group?.Id);
+            Assert.Contains("hdeband", ntsc.Group!.Description, "同一张碟的另一个区，处理必须一样");
+
+            var off = Shaders(vintage: false).Resolve(false, 720, 576, 1920, 1080);
+            Assert.False(off.Group!.Vintage);
+            Assert.DoesNotContain("hdeband", off.Group.Description);
+
+            var modern = Shaders().Resolve(false, 1280, 720, 1920, 1080);
+            Assert.False(modern.Group!.Vintage, "720p 不是老片源，哪怕它也在放大");
+        });
+
+        Test("着色器：动画判定与用了哪半张表无关", () =>
+        {
+            // 去色带 =「在动画中开启」读的是这个标记，所以它必须是「这部片是不是动画」，而不是
+            // 「这次用了动画那半张表吗」—— 否则关掉自动识别动画就会连带把去色带也关了。
+            var resolver = new ShaderGroupResolver(Shaders(anime: false));
+            var decision = resolver.Resolve(Item("紫罗兰永恒花园", genres: ["动画"]), Source1080p(), null, (2560, 1440));
+
+            Assert.True(decision.Animated, "自动识别动画关着，但这部片仍然是动画");
+            Assert.Equal("live-slight", decision.Group?.Id, "开关关着就不该换到动画那一半");
+
+            var live = new ShaderGroupResolver(Shaders())
+                .Resolve(Item("某部电影", genres: ["剧情"]), Source1080p(), null, (2560, 1440));
+            Assert.False(live.Animated);
+        });
+
+        Test("着色器档位：九十六格每一格都有链，路径是程序目录下的绝对路径", () =>
+        {
+            Assert.Equal(96, ShaderGroupCatalog.All.Count, "三个显卡档 × 八个档位 × 老片源与否 × 高帧率与否");
+
             foreach (var group in ShaderGroupCatalog.All)
             {
                 Assert.True(group.Shaders.Count > 0, $"{group.Name} 一个着色器都没有");
@@ -503,6 +566,7 @@ internal static class PlaybackTests
                 var options = Options(group.ToMpvOptions(ShaderGroupCatalog.ShaderRoot));
                 Assert.True(options.ContainsKey("glsl-shaders"), $"{group.Name} 没给出 glsl-shaders");
                 Assert.True(options.ContainsKey("scale"), $"{group.Name} 没给出 scale，会沿用上一部片子的设置");
+                Assert.True(options.ContainsKey("cscale"), $"{group.Name} 没给出 cscale");
 
                 foreach (var path in options["glsl-shaders"].Split(';', StringSplitOptions.RemoveEmptyEntries))
                 {
@@ -511,7 +575,34 @@ internal static class PlaybackTests
             }
         });
 
-        Test("着色器组：关闭配置组时把 mpv 自己的默认值还回去", () =>
+        Test("着色器档位：八个 id 稳定、不重复，而且换显卡档、换老片源、换高帧率都是同一批 id", () =>
+        {
+            string[] expected =
+            [
+                "live-shrink", "live-slight", "live-sweet", "live-large",
+                "anime-shrink", "anime-slight", "anime-sweet", "anime-large"
+            ];
+
+            Assert.Equal(string.Join("、", expected), string.Join("、", ShaderGroupCatalog.Ids), "档位 id 和次序");
+
+            foreach (var gpu in new[] { GpuTier.Low, GpuTier.Medium, GpuTier.High })
+            {
+                foreach (var vintage in new[] { false, true })
+                {
+                    foreach (var fast in new[] { false, true })
+                    {
+                        var column = ShaderGroupCatalog.For(gpu, vintage, fast);
+                        Assert.Equal(8, column.Count, $"{gpu}／老片源={vintage}／高帧率={fast} 这一列应该正好八格");
+                        Assert.Equal(
+                            string.Join("、", expected),
+                            string.Join("、", column.Select(group => group.Id)),
+                            "id 必须跨显卡档、老片源和高帧率一致，否则改一下设置或者换一部片子就会把用户手动指定的那一档弄丢");
+                    }
+                }
+            }
+        });
+
+        Test("着色器档位：关掉一条链时把每个它动过的选项都还回去", () =>
         {
             var neutral = Options(ShaderGroupCatalog.NeutralOptions);
 
@@ -531,95 +622,611 @@ internal static class PlaybackTests
                 }
             }
 
-            // 反过来也要对上：还原表里没人会设的名字，每次切组都白写一遍。移植的九组删掉时
+            // 反过来也要对上：还原表里没人会设的名字，每次切档都白写一遍。移植的九组删掉时
             // scale-antiring、dscale-antiring、linear-upscaling 就是这样留下来的。
             foreach (var (name, _) in ShaderGroupCatalog.NeutralOptions)
             {
-                Assert.True(touched.Contains(name), $"还原表里的 {name} 没有任何配置组会动，切一次组就白写一遍");
+                Assert.True(touched.Contains(name), $"还原表里的 {name} 没有任何档位会动，切一次档就白写一遍");
             }
         });
 
-        Test("着色器组：客户端内置的组名与设置里的默认值对得上", () =>
+        Test("着色器档位：A→B→A 和 B→A→B 都不留残渣", () =>
         {
-            var settings = new ShaderAutomationSettings();
-            foreach (var name in new[] { settings.DefaultProfile, settings.AnimeProfile, settings.HighResProfile, settings.LowResProfile })
+            // 走的是 PlaybackService.SetShaderGroupAsync 真正调的那个函数（ShaderSwitch.Options），不是照它
+            // 重写一遍 —— 重写一遍的测试会在真代码漂移之后照旧通过。少一个还原名字，B 设过的东西就会在切回 A
+            // 之后留一整个文件。
+            KeyValuePair<string, string>[] launch =
+            [
+                new("deband", "yes"),
+                new("scale", "spline36")
+            ];
+
+            var a = ShaderGroupCatalog.Resolve(false, UpscaleTier.Shrink, GpuTier.Low);
+            var onlyA = Live(launch, [a]);
+
+            foreach (var b in ShaderGroupCatalog.All)
             {
-                Assert.NotNull(ShaderGroupCatalog.Find(name), $"设置里默认选的 {name} 在内置目录里不存在");
+                Assert.Equal(Join(onlyA), Join(Live(launch, [a, b, a])), $"A→{b.Name}→A 之后和只上过 A 不一样");
+                Assert.Equal(Join(Live(launch, [b])), Join(Live(launch, [b, a, b])), $"{b.Name}→A→{b.Name} 之后不一样");
             }
+
+            // 关掉着色器也算一档：文件清空、去色带回到启动时那个 yes。
+            var off = Live(launch, [a, null]);
+            Assert.Equal("", off["glsl-shaders"], "关掉之后着色器不许还挂着");
+            Assert.Equal("yes", off["deband"], "回落的是本次启动的值，不是 mpv 出厂值");
+
+            static Dictionary<string, string> Live(
+                IReadOnlyList<KeyValuePair<string, string>> launch,
+                IReadOnlyList<ShaderGroup?> sequence)
+            {
+                var live = Options(launch);
+
+                foreach (var group in sequence)
+                {
+                    // 每次切换交给 mpv 的是「还原表里的每个名字 + 新链自己的」，而屏上那台 mpv 保留的是上一次
+                    // 之后的全部状态 —— 所以这里往 live 上叠，而不是每次从头来。
+                    foreach (var (name, value) in ShaderSwitch.Options(launch, 0, group, @"C:\shaders"))
+                        live[name] = value;
+                }
+
+                return live;
+            }
+
+            static string Join(Dictionary<string, string> live) =>
+                string.Join("\n", live.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
         });
 
-        // 内置的就这五组。从 mpv.conf 移植的那九组（NNEDI3、NNEDI3+、ravu-zoom、FSRCNNX、AnimeJaNai、
-        // Ani4K、AniSD、Anime4K、SSIM）2026-09-03 按用户一句「删除这些着色器配置组」整个删掉了，
-        // 这一条同时钉住「删掉的没回来」—— 设置页那个下拉和播放器的着色器菜单都是照这份目录生成的。
-        Test("着色器组：目录里就这五组，一个不多一个不少，组名不重复", () =>
+        Test("着色器档位：九十六格每一格都过得了那套规则", () =>
         {
-            string[] expected = ["2K-iGPU", "2K-iGPU-Anime", "2K-iGPU-Light", "2K-iGPU-Anime+", "2K-iGPU-SD"];
-
-            Assert.Equal(string.Join("、", expected), string.Join("、", ShaderGroupCatalog.Names), "内置配置组的名字和次序");
-            Assert.Equal(ShaderGroupCatalog.All.Count, ShaderGroupCatalog.Names.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
-                "组名不能重复，否则 Find 只找得到第一个");
+            // 三条互斥、缩小档不许有放大器、每格都要有色度重建、hdeband 与内置 deband 互斥、每个着色器的运行
+            // 前置条件都落在了选项里、链照 mpv 真正的执行次序写 —— 全在 ShaderChainRules 里，判的是 Descriptor
+            // 上的逻辑职责，不是数文件名。这一条红了，报告里直接写出是哪一格哪一条。
+            Assert.Equal("", string.Join("\n", ShaderChainRules.ProblemsInTable()));
         });
 
-        Test("着色器组：任何组都不再设置 deband，「在动画中开启」才不会被覆盖", () =>
+        Test("着色器档位：说自己是放大器就必须真的能改尺寸（FSRCNNX_x1 那一类错的机械闸门）", () =>
+        {
+            foreach (var shader in ShaderLibrary.All.Where(shader => shader.Role == ShaderRole.LumaUpscale))
+                Assert.True(shader.ChangesResolution, $"{shader.Name} 挂着亮度放大器的职责，却没有声明输出尺寸");
+
+            // 反过来验一次这条闸门真的咬得住：编一个「说是放大器、其实不改尺寸」的描述塞进一条链里，规则必须报。
+            var fake = new ShaderDescriptor(
+                "FSRCNNX_x1", "igv/FSRCNNX_x1.glsl", ShaderRole.LumaUpscale,
+                Hook: "LUMA", ChangesResolution: false, Passes: 1, Gate: "", ReadsLuma: false, ReadsChroma: false);
+
+            var broken = new ShaderGroup(false, UpscaleTier.Sweet, false, false, [fake, ShaderLibrary.ChromaLite], []);
+            Assert.Contains("放不大任何东西", string.Join("\n", ShaderChainRules.Problems(broken)));
+        });
+
+        Test("着色器档位：光域这一项跟着链里有没有人要求它走，如今哪一格都没人要求", () =>
         {
             foreach (var group in ShaderGroupCatalog.All)
             {
-                Assert.False(Options(group.ToMpvOptions(ShaderGroupCatalog.ShaderRoot)).ContainsKey("deband"),
-                    $"{group.Name} 设了 deband，会盖掉设置页的去色带选择");
+                var wantsOff = group.Shaders.Any(shader =>
+                    shader.Requires.Any(pair => pair.Key == "sigmoid-upscaling" && pair.Value == "no"));
+
+                Assert.Equal(wantsOff ? "no" : "yes", Options(group.Options)["sigmoid-upscaling"],
+                    $"{group.Name}：光域这一项只该跟着链里有没有人要求它走");
+
+                // Anime4K Mode A 那两个 CNN pass 是唯一要求关掉它的，2026-09-04 随「动画大倍数也换 ArtCNN」出箱。
+                // 所以现在每一格都该是 mpv 的出厂值；谁再往箱子里放一个要求关光域的着色器，这一条当场红，而那正
+                // 是需要有人想一想的时刻 —— 关光域会改变整条链的放大观感，不是一个文件自己的事。
+                Assert.False(wantsOff, $"{group.Name}：现在没有一个着色器要求关掉 sigmoid-upscaling");
+            }
+        });
+
+        Test("着色器档位：hdeband 只在老片源那一半，排最前面，nlmeans 只在中高档", () =>
+        {
+            // 走三重循环而不是拿 Contains 反查，是因为 96 格里同一条链会在两根「跟着文件走」的轴上各出现一次，
+            // 「不在低档那一列里」不再等于「不是低档」。
+            foreach (var gpu in new[] { GpuTier.Low, GpuTier.Medium, GpuTier.High })
+            {
+                foreach (var vintage in new[] { false, true })
+                {
+                    foreach (var fast in new[] { false, true })
+                    {
+                        foreach (var group in ShaderGroupCatalog.For(gpu, vintage, fast))
+                        {
+                            var deband = group.Shaders.Any(shader => shader.Role == ShaderRole.Deband);
+                            Assert.Equal(vintage, deband, $"{group.Name}：去带跟的是片源有多老，不是要放多大");
+
+                            if (!deband) continue;
+
+                            Assert.Equal("hdeband", group.Shaders[0].Name, $"{group.Name}：去带要在最前面");
+                            Assert.Equal(gpu != GpuTier.Low, group.Packages(ShaderRole.Denoise) > 0,
+                                $"{group.Name}（{gpu}）：低档只加去带，降噪要到中高档");
+                        }
+                    }
+                }
+            }
+        });
+
+        Test("着色器：高帧率片源把动画那三档换成便宜的链，档位名字不变", () =>
+        {
+            // 2026-09-04 实测：同一条 ArtCNN_C4F16 + CfL 的链，1080p 放到 2560×1440，在 vulkan 上 22 毫秒一帧
+            // （45 fps 上限），所以 24fps 的番占掉大约一半显卡，而 60fps 的片子要每秒 1.33 秒的显卡时间 —— 换不了。
+            // ravu-zoom 那条是 6.6 毫秒，什么帧率都够。
+            var settings = Shaders();
+
+            var normal = settings.Resolve(true, 1920, 1080, 2560, 1440, 23.976);
+            var fast = settings.Resolve(true, 1920, 1080, 2560, 1440, 59.94);
+
+            Assert.Equal("anime-slight", normal.Group?.Id);
+            Assert.Equal("anime-slight", fast.Group?.Id, "id 跟的是「这是动画、这是微放大」，不是「链换没换」");
+            Assert.True(fast.Group!.Animated, "片子还是动画，不能因为帧率高就说它是真人");
+            Assert.True(fast.Group.FastMotion);
+            Assert.False(normal.Group!.FastMotion);
+
+            Assert.Contains("ArtCNN", normal.Group.Description);
+            Assert.DoesNotContain("ArtCNN", fast.Group.Description, "60fps 上 CNN 放大器要退场");
+            Assert.Equal(
+                ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low).Description,
+                fast.Group.Description,
+                "退场之后走的就是真人那一格的链");
+
+            Assert.Contains("高帧率片源", fast.Reason, "屏上那一行要说清为什么链变了");
+            Assert.DoesNotContain("高帧率片源", normal.Reason);
+
+            // 三个档都要换，而缩小档两半本来就一样，所以那一格不该多出一句解释。
+            foreach (var tier in new[] { UpscaleTier.Slight, UpscaleTier.Sweet, UpscaleTier.Large })
+            {
+                Assert.Equal(
+                    ShaderGroupCatalog.Resolve(false, tier, GpuTier.Low).Description,
+                    ShaderGroupCatalog.Resolve(true, tier, GpuTier.Low, fastMotion: true).Description,
+                    $"{tier}：高帧率的动画走真人那条链");
             }
 
-            Assert.False(Options(ShaderGroupCatalog.NeutralOptions).ContainsKey("deband"),
-                "还原表里也不能有 deband：播放中切换配置组会把启动时的去色带值抹掉");
+            var shrink = settings.Resolve(true, 3840, 2160, 2560, 1440, 59.94);
+            Assert.Equal("anime-shrink", shrink.Group?.Id);
+            Assert.DoesNotContain("高帧率片源", shrink.Reason, "缩小档两半本来就是同一条链，没什么可解释的");
+
+            // 中高档也一样降级：那两列用的是 C4F32，算术量是 C4F16 的四倍，所以「卡快四倍」刚好抵平，60fps 还要
+            // 再多两倍半。这台机器上验不了那两列，但比例是算得出来的。
+            foreach (var gpu in new[] { GpuTier.Medium, GpuTier.High })
+            {
+                Assert.DoesNotContain("ArtCNN",
+                    ShaderGroupCatalog.Resolve(true, UpscaleTier.Sweet, gpu, fastMotion: true).Description,
+                    $"{gpu}：高帧率片源同样不上 CNN");
+            }
         });
 
-        Test("着色器：动画判定与是否用了动画组无关", () =>
+        Test("着色器：帧率这根轴的边界，29.97 要留在近侧", () =>
         {
-            // 去色带 =「在动画中开启」读的是这个标记，所以它必须是「这部片是不是动画」，而不是
-            // 「这次用了动画配置组吗」——否则关掉自动动画组就会连带把去色带也关了。
-            var resolver = new ShaderGroupResolver(Shaders(all: true, anime: false));
-            var decision = resolver.Resolve(Item("紫罗兰永恒花园", genres: ["动画"]), Source1080p());
+            Assert.False(ShaderTier.IsFastMotion(0), "问不出帧率不是放弃好链的理由");
+            Assert.False(ShaderTier.IsFastMotion(23.976));
+            Assert.False(ShaderTier.IsFastMotion(25), "PAL");
+            Assert.False(ShaderTier.IsFastMotion(29.97), "NTSC 必须留在近侧，否则半个美剧库都降级");
+            Assert.False(ShaderTier.IsFastMotion(30));
+            Assert.True(ShaderTier.IsFastMotion(50));
+            Assert.True(ShaderTier.IsFastMotion(59.94));
 
-            Assert.True(decision.Animated, "自动动画组关着，但这部片仍然是动画");
-            Assert.Equal("2K-iGPU", decision.Group, "开关关着就不该换成动画组");
+            // 帧率读的是片源的视频轨，走的是真实那条路（ShaderGroupResolver → MediaStream.FrameRate），
+            // 不是测试自己再算一遍。
+            var resolver = new ShaderGroupResolver(Shaders());
+            var series = Item("某部番", type: EmbyItemType.Series, genres: ["动画"]);
+            var episode = Item("第 1 集", type: EmbyItemType.Episode);
 
-            var live = new ShaderGroupResolver(Shaders(all: true, anime: true))
-                .Resolve(Item("某部电影", genres: ["剧情"]), Source1080p());
-            Assert.False(live.Animated);
+            var slow = resolver.Resolve(episode, Source1080p(frameRate: 23.976), series, (2560, 1440));
+            var quick = resolver.Resolve(episode, Source1080p(frameRate: 59.94), series, (2560, 1440));
+
+            Assert.Contains("ArtCNN", slow.Group!.Description);
+            Assert.DoesNotContain("ArtCNN", quick.Group!.Description);
         });
 
+        Test("着色器档位：设置里的装机默认值在表里找得到", () =>
+        {
+            var settings = new ShaderAutomationSettings();
+
+            Assert.Equal(GpuTier.Low, settings.Gpu, "装机默认是低档：这台机器的核显，也是缺键时读出来的那一档");
+            Assert.Equal("", settings.ManualGroup, "装机默认走自动");
+            Assert.True(settings.Enabled);
+            Assert.True(settings.RestoreVintageSources, "DVD 那一代的片源默认要去带");
+            Assert.Equal(8, ShaderGroupCatalog.For(settings.Gpu).Count);
+        });
+
+        RegisterOldVersusNew();
+        RegisterShaderDescriptions();
         RegisterShippedShaderFiles();
     }
 
     /// <summary>
-    /// 发布件里只装配置组点名的那几个着色器文件（从前是把 mpv 配置目录下整棵树 —— 113 个文件 32 MB —— 全拷
-    /// 进去）。MSBuild 读不了这份 C# 目录，那份清单只能在 csproj 里重抄一遍，这一条就是防两边跑偏：漏一个，
-    /// 那一组发出去就是 mpv 每帧报一次加载失败、画面只「看起来差一点」，四道闸门一条都不会红。
+    /// 放大倍数那个纯函数。这一族是整次重构的地基：从前的规则只看片源分辨率，「4K 片源」「480p 片源」离了屏幕
+    /// 尺寸根本不成句，而当时的代码从来没问过输出有多大 —— 于是这件事在屏幕上完全看不出来，也没有一条断言碰得到它。
+    /// </summary>
+    private static void RegisterUpscaleTier()
+    {
+        Test("放大倍数：任务书那张片源→输出组合表，一格一格对", () =>
+        {
+            // 片源宽高、输出宽高、应得的倍数、应落的档
+            (int SourceWidth, int SourceHeight, int OutWidth, int OutHeight, double Factor, UpscaleTier Tier)[] table =
+            [
+                (1920, 1080, 1920, 1080, 1.00, UpscaleTier.Shrink),
+                (1920, 1080, 2560, 1440, 1.33, UpscaleTier.Slight),
+                (1920, 1080, 3840, 2160, 2.00, UpscaleTier.Sweet),
+                (1280, 720, 1920, 1080, 1.50, UpscaleTier.Sweet),
+                (1280, 720, 2560, 1440, 2.00, UpscaleTier.Sweet),
+                (1280, 720, 3840, 2160, 3.00, UpscaleTier.Large),
+                (854, 480, 1920, 1080, 2.25, UpscaleTier.Large),
+                (854, 480, 2560, 1440, 3.00, UpscaleTier.Large),
+                (854, 480, 3840, 2160, 4.50, UpscaleTier.Large),
+
+                // 576p 的两格是 2.2 那条独立轴的回归测试：PAL 的 DVD 放到 1080p 落甜点档，去带不能跟着倍数走。
+                (720, 576, 1920, 1080, 1.88, UpscaleTier.Sweet),
+                (720, 576, 2560, 1440, 2.50, UpscaleTier.Large),
+
+                (3840, 2160, 2560, 1440, 0.67, UpscaleTier.Shrink)
+            ];
+
+            foreach (var row in table)
+            {
+                var measure = ShaderTier.Measure(row.SourceWidth, row.SourceHeight, row.OutWidth, row.OutHeight);
+
+                Assert.True(Math.Abs(measure.Factor - row.Factor) < 0.02,
+                    $"{row.SourceHeight}p 上 {row.OutHeight}p 应该是 {row.Factor} 倍，算出来是 {measure.Factor:0.00}");
+                Assert.Equal(row.Tier, measure.Tier, $"{row.Factor} 倍该落在哪一档");
+            }
+        });
+
+        Test("放大倍数：四档的分界正好落在那几个数上，1.00 倍的标签是「原生」", () =>
+        {
+            Assert.Equal(UpscaleTier.Shrink, ShaderTier.Classify(1.049999), "1.05 以下还是缩小档");
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.05), "1.05 本身算微放大");
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.449999));
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(1.45), "1.45 本身算甜点");
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(2.20), "2.20 本身还算甜点档");
+            Assert.Equal(UpscaleTier.Large, ShaderTier.Classify(2.200001));
+            Assert.Equal(UpscaleTier.Shrink, ShaderTier.Classify(0), "0 倍是退化输入，落在最省的那一档");
+
+            // 撤掉第五档换来的那个标签：档还是缩小档，屏上写的是「原生」。
+            Assert.Equal("原生", ShaderTier.Label(new UpscaleMeasure(1.00, UpscaleTier.Shrink)));
+            Assert.Equal("原生", ShaderTier.Label(new UpscaleMeasure(0.95, UpscaleTier.Shrink)));
+            Assert.Equal("缩小档", ShaderTier.Label(new UpscaleMeasure(0.94, UpscaleTier.Shrink)));
+            Assert.Equal("缩小档", ShaderTier.Label(new UpscaleMeasure(0.67, UpscaleTier.Shrink)));
+            Assert.Equal("微放大档", ShaderTier.Label(new UpscaleMeasure(1.33, UpscaleTier.Slight)));
+        });
+
+        Test("放大倍数：0.05 回差 —— 慢慢拖窗口经过分界时不来回换档", () =>
+        {
+            // 没有回差，1.45 附近拖一下窗口就是 ravu-zoom 和 ravu-lite 来回换，每次换都是一次锐度当场变化
+            // 加一次着色器重新加载。
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.46, UpscaleTier.Slight), "1.44→1.46 不换档");
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(1.52, UpscaleTier.Slight), "1.44→1.52 换档");
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.44, UpscaleTier.Slight));
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(1.44, UpscaleTier.Sweet), "已经在甜点档里就黏在甜点档");
+
+            // 在 1.44 和 1.46 之间来回时结果稳定：起点是哪一档，走完还是哪一档。
+            foreach (var start in new[] { UpscaleTier.Slight, UpscaleTier.Sweet })
+            {
+                var tier = start;
+                for (var round = 0; round < 8; round++) tier = ShaderTier.Classify(round % 2 == 0 ? 1.46 : 1.44, tier);
+                Assert.Equal(start, tier, "来回拖八次之后还该是起点那一档");
+            }
+
+            // 回差只放宽 0.05，不是「永远不换」。
+            Assert.Equal(UpscaleTier.Large, ShaderTier.Classify(2.26, UpscaleTier.Sweet));
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(2.24, UpscaleTier.Sweet));
+        });
+
+        Test("放大倍数：宽高取小的那个，2.39:1 的片子才不会被抬高一整档", () =>
+        {
+            // 1920×800 铺到 2560×1440，实际画出来是 2560×1067，也就是 1.33 倍；只看高度会读成 1.8 倍，
+            // 于是挂上一个 2 倍放大器，再被 mpv 缩回去 —— 算力全花在被丢掉的像素上。
+            var measure = ShaderTier.Measure(1920, 800, 2560, 1440);
+
+            Assert.True(Math.Abs(measure.Factor - 1.333) < 0.01, $"应该是 1.33 倍，算出来是 {measure.Factor:0.00}");
+            Assert.Equal(UpscaleTier.Slight, measure.Tier);
+            Assert.Contains("宽比", measure.Note, "宽高两个比差得多的时候要记一句，否则日志读不出这是加信封片源");
+
+            // 4:3 的 DVD 反过来是被高度限住的，那一边取小同样成立。
+            Assert.True(Math.Abs(ShaderTier.Measure(720, 480, 2560, 1440).Factor - 3.0) < 0.01);
+
+            // 等比片源不该有那句话。
+            Assert.Equal("", ShaderTier.Measure(1920, 1080, 2560, 1440).Note);
+        });
+
+        Test("放大倍数：问不出尺寸时落在微放大档，而且说清楚是问不出来", () =>
+        {
+            foreach (var (sourceWidth, sourceHeight, outWidth, outHeight, missing) in new[]
+            {
+                (0, 1080, 2560, 1440, "片源尺寸未知"),
+                (1920, 0, 2560, 1440, "片源尺寸未知"),
+                (1920, 1080, 0, 1440, "输出尺寸未知"),
+                (1920, 1080, 2560, 0, "输出尺寸未知")
+            })
+            {
+                var measure = ShaderTier.Measure(sourceWidth, sourceHeight, outWidth, outHeight);
+
+                Assert.Equal(UpscaleTier.Slight, measure.Tier,
+                    "微放大档的放大器（真人 ravu-zoom）能直接放到任意倍数，动画那一档自己带 1.3 倍门控，猜错也不会硬跑");
+                Assert.False(measure.Measured, "没量到就不能假装量到了");
+                Assert.Equal(missing, measure.Note);
+            }
+        });
+
+        Test("老片源：≤576 线是另一根轴，高度问不出来时不算老片源", () =>
+        {
+            Assert.True(ShaderTier.IsVintage(576), "PAL 的 DVD");
+            Assert.True(ShaderTier.IsVintage(480), "NTSC 的 DVD");
+            Assert.False(ShaderTier.IsVintage(577));
+            Assert.False(ShaderTier.IsVintage(720));
+            Assert.False(ShaderTier.IsVintage(0), "0 是「服务器没探过」，不是一张 DVD");
+            Assert.False(ShaderTier.IsVintage(-1));
+        });
+    }
+
+    /// <summary>
+    /// 窗口变化怎么影响链（任务书 2.3 和 2.4）。这一族是整个方案里唯一有状态的部分，也是唯一「做错了屏上看不出
+    /// 来」的部分：拖窗口时每帧重生成链的症状是掉帧，而掉帧看着像片源码率高。所以判定做成了一个不带计时器、
+    /// 不认识窗口的纯状态机，时间由调用方交进来。
+    /// </summary>
+    private static void RegisterOutputWatch()
+    {
+        static ShaderSurface Windowed(int width, int height) => new(width, height, 2560, 1440, false);
+        static ShaderSurface Full() => new(2560, 1440, 2560, 1440, true);
+
+        Test("输出尺寸：先问渲染目标，再用最近一次量到的，最后才退到显示器", () =>
+        {
+            (int Width, int Height) monitor = (2560, 1440);
+
+            var direct = ShaderSurface.Resolve((1600, 900), (1280, 720), monitor, false);
+            Assert.Equal(1600, direct.Width, "问得到就用当前渲染目标");
+            Assert.False(direct.Fallback);
+
+            var stale = ShaderSurface.Resolve(default, (1280, 720), monitor, false);
+            Assert.Equal(1280, stale.Width, "问不到就用最近一次成功量到的");
+            Assert.False(stale.Fallback, "一个旧的真尺寸不算兜底");
+
+            var guessed = ShaderSurface.Resolve(default, default, monitor, false);
+            Assert.Equal(2560, guessed.Width, "两样都没有才退到显示器");
+            Assert.True(guessed.Fallback, "退到显示器要说一声 —— 这是外部 mpv.exe 那个后端的答案");
+
+            // 不许假定 4K：兜底用的是这块屏，而不是一个写死的数。
+            Assert.Equal(1080, ShaderSurface.Resolve(default, default, (1920, 1080), false).Height);
+
+            // 全屏时铺满的是显示器，窗口矩形怎么说都不算。
+            var full = ShaderSurface.Resolve((1280, 720), default, monitor, true);
+            Assert.Equal(2560, full.Active.Width);
+            Assert.Equal(1440, full.Active.Height);
+        });
+
+        Test("窗口：连续 resize 期间一次都不重新生成链，停稳 400 毫秒才算一次", () =>
+        {
+            var watch = new OutputWatch(1920, 1080, Windowed(2560, 1440), UpscaleTier.Slight);
+            var start = DateTimeOffset.UnixEpoch;
+
+            for (var step = 1; step <= 20; step++)
+            {
+                var moment = start + TimeSpan.FromMilliseconds(step * 30);
+                var seen = watch.Observe(Windowed(2560 - step * 40, 1440 - step * 22), moment);
+
+                Assert.Equal(OutputChange.Waiting, seen.Change, $"第 {step} 次拖动就重新生成链了");
+                Assert.Equal(OutputChange.Waiting, watch.Tick(moment).Change, "拖动过程中每一跳都不许有结论");
+            }
+
+            var settled = start + TimeSpan.FromMilliseconds(20 * 30);
+            Assert.Equal(OutputChange.Waiting, watch.Tick(settled + TimeSpan.FromMilliseconds(399)).Change, "399 毫秒还不算停稳");
+
+            var verdict = watch.Tick(settled + TimeSpan.FromMilliseconds(401));
+            Assert.Equal(OutputChange.Rebuild, verdict.Change, "停稳之后才算一次");
+            Assert.False(verdict.Discrete, "这是停稳的 resize，不是离散事件");
+            Assert.Equal(1760, verdict.Width, "落定的是最后那个尺寸，中间十九个都只是被记下过");
+            Assert.False(watch.Settling);
+        });
+
+        Test("窗口：停稳后不跨档只更新尺寸，跨档才重新生成，大小两个方向都测", () =>
+        {
+            var watch = new OutputWatch(1920, 1080, Windowed(2560, 1440), UpscaleTier.Slight);
+            var clock = DateTimeOffset.UnixEpoch;
+
+            // 2560×1440 → 2400×1350 是 1.25 倍，还在微放大档里。
+            watch.Observe(Windowed(2400, 1350), clock);
+            var same = watch.Tick(clock + TimeSpan.FromMilliseconds(500));
+            Assert.Equal(OutputChange.SizeOnly, same.Change, "同一档里只该记下新尺寸");
+            Assert.Equal(2400, same.Width);
+            Assert.Equal(UpscaleTier.Slight, watch.Tier);
+            Assert.Equal(2400, watch.Output.Width, "ravu-zoom 按目标尺寸渲染，所以尺寸本身要更新");
+
+            // 缩到 1600×900 是 0.83 倍，跨到缩小档。
+            clock += TimeSpan.FromSeconds(1);
+            watch.Observe(Windowed(1600, 900), clock);
+            var smaller = watch.Tick(clock + TimeSpan.FromMilliseconds(500));
+            Assert.Equal(OutputChange.Rebuild, smaller.Change);
+            Assert.Equal(UpscaleTier.Shrink, watch.Tier);
+
+            // 反方向：拉到 3200×1800 是 1.67 倍，跨到甜点档。
+            clock += TimeSpan.FromSeconds(1);
+            watch.Observe(Windowed(3200, 1800), clock);
+            var bigger = watch.Tick(clock + TimeSpan.FromMilliseconds(500));
+            Assert.Equal(OutputChange.Rebuild, bigger.Change);
+            Assert.Equal(UpscaleTier.Sweet, watch.Tier);
+
+            // 回差在这里也管事：3200×1800 → 2800×1575 是 1.458 倍，还在甜点档（放宽后的下界是 1.40）。
+            clock += TimeSpan.FromSeconds(1);
+            watch.Observe(Windowed(2800, 1575), clock);
+            Assert.Equal(OutputChange.SizeOnly, watch.Tick(clock + TimeSpan.FromMilliseconds(500)).Change);
+            Assert.Equal(UpscaleTier.Sweet, watch.Tier);
+        });
+
+        Test("窗口：拖回原尺寸就把待定的那一个丢掉", () =>
+        {
+            var watch = new OutputWatch(1920, 1080, Windowed(2560, 1440), UpscaleTier.Slight);
+            var clock = DateTimeOffset.UnixEpoch;
+
+            watch.Observe(Windowed(1600, 900), clock);
+            Assert.True(watch.Settling);
+
+            var back = watch.Observe(Windowed(2560, 1440), clock + TimeSpan.FromMilliseconds(50));
+            Assert.Equal(OutputChange.None, back.Change);
+            Assert.False(watch.Settling, "拖回起点之后那一跳不能再去改链");
+            Assert.Equal(OutputChange.None, watch.Tick(clock + TimeSpan.FromSeconds(5)).Change);
+        });
+
+        Test("窗口：进退全屏立刻换预案，不等防抖", () =>
+        {
+            // 小窗 1600×900（0.83 倍，缩小档）里按下全屏，铺满 2560×1440 就是 1.33 倍的微放大档。
+            var watch = new OutputWatch(1920, 1080, Windowed(1600, 900), UpscaleTier.Shrink);
+            var clock = DateTimeOffset.UnixEpoch;
+
+            var entered = watch.Observe(Full(), clock);
+            Assert.Equal(OutputChange.Rebuild, entered.Change, "全屏当场生效");
+            Assert.True(entered.Discrete, "离散事件：调用方拿开播时预备好的那一套，不重新判定");
+            Assert.Equal(2560, entered.Width);
+            Assert.Equal(UpscaleTier.Slight, watch.Tier);
+            Assert.False(watch.Settling, "全屏不进防抖");
+
+            var left = watch.Observe(Windowed(1600, 900), clock);
+            Assert.Equal(OutputChange.Rebuild, left.Change, "退全屏同样当场生效");
+            Assert.True(left.Discrete);
+            Assert.Equal(UpscaleTier.Shrink, watch.Tier);
+
+            // 拖动中途按下全屏：待定的那个尺寸要跟着丢掉，否则接下来那一跳会去处理一次已经作废的变化。
+            watch.Observe(Windowed(2000, 1125), clock);
+            Assert.True(watch.Settling);
+            watch.Observe(Full(), clock + TimeSpan.FromMilliseconds(100));
+            Assert.False(watch.Settling);
+        });
+
+        Test("窗口：拖到另一台显示器是离散事件，尺寸没变也要报出来", () =>
+        {
+            // 同样大小的窗口挪到一块 4K 屏上：窗口尺寸一个像素没变，所以链不用变 —— 可全屏那一套预案是按
+            // 显示器算的，它刚刚过期了，调用方必须重算。这就是为什么这一档报的是「离散」而不是「没事」。
+            var watch = new OutputWatch(1920, 1080, Windowed(1600, 900), UpscaleTier.Shrink);
+
+            var moved = watch.Observe(new ShaderSurface(1600, 900, 3840, 2160, false), DateTimeOffset.UnixEpoch);
+
+            Assert.Equal(OutputChange.SizeOnly, moved.Change, "窗口尺寸没变，链也就不用变");
+            Assert.True(moved.Discrete, "但这是离散事件，两套方案都得重算");
+            Assert.False(watch.Settling, "换显示器不等防抖");
+        });
+    }
+
+    /// <summary>
+    /// 新旧并行对照（任务书 3.9）：拿新判定跑一遍旧五个组各自的触发条件，把差异打印出来。在不能真实播放的
+    /// 前提下这是唯一能看出行为变化的办法 —— 所以它主要是打印，只对**低档那一列**加一条断言：除了「多了色度
+    /// 重建」、「换掉那个根本不放大的 FSRCNNX_x1」、「老片源多了去带」，以及「在放大的链里去掉本来就不出手的
+    /// SSimDownscaler」之外，不许有别的变化。第一批验收就是这一句。
+    /// </summary>
+    private static void RegisterOldVersusNew()
+    {
+        Test("新旧并行对照：旧五个组的触发条件下，低档那一列只有说得出理由的变化", () =>
+        {
+            // 旧规则（v6）：高清阈值 1600 压过低清阈值 720，两者都压过「动画」那一支。
+            static string OldGroup(bool animated, int height) =>
+                height >= 1600 ? "2K-iGPU-Light"
+                : height is > 0 and <= 720 ? "2K-iGPU-SD"
+                : animated ? "2K-iGPU-Anime"
+                : "2K-iGPU";
+
+            static string[] OldChain(string group) => group switch
+            {
+                "2K-iGPU" => ["ravu-zoom-ar-r2", "SSimDownscaler"],
+                "2K-iGPU-Light" => ["SSimDownscaler"],
+                "2K-iGPU-Anime" =>
+                [
+                    "Anime4K_Clamp_Highlights", "Anime4K_Restore_CNN_M", "Anime4K_Upscale_CNN_x2_M",
+                    "Anime4K_AutoDownscalePre_x2", "Anime4K_AutoDownscalePre_x4", "Anime4K_Upscale_CNN_x2_S",
+                    "SSimDownscaler"
+                ],
+                _ => ["FSRCNNX_x1_16-0-4-1_distort", "SSimDownscaler"]
+            };
+
+            (string What, bool Animated, int Width, int Height)[] rows =
+            [
+                ("真人 1080p", false, 1920, 1080),
+                ("真人 720p", false, 1280, 720),
+                ("真人 576p（PAL DVD）", false, 720, 576),
+                ("真人 480p（NTSC DVD）", false, 854, 480),
+                ("真人 4K", false, 3840, 2160),
+                ("动画 1080p", true, 1920, 1080),
+                ("动画 720p", true, 1280, 720),
+                ("动画 4K", true, 3840, 2160)
+            ];
+
+            Console.WriteLine();
+            Console.WriteLine("  ── 新旧对照（低档、输出 2560×1440，也就是这台机器全屏）");
+
+            foreach (var row in rows)
+            {
+                var oldGroup = OldGroup(row.Animated, row.Height);
+                var old = OldChain(oldGroup);
+                var decision = Shaders().Resolve(row.Animated, row.Width, row.Height, 2560, 1440);
+                var chain = decision.Group!;
+                var now = chain.ShaderFileNames.ToArray();
+
+                var removed = old.Except(now, StringComparer.Ordinal).ToArray();
+                var added = now.Except(old, StringComparer.Ordinal).ToArray();
+
+                Console.WriteLine($"     {row.What}：{oldGroup} → {chain.Name}");
+                Console.WriteLine($"       旧：{string.Join(" + ", old)}");
+                Console.WriteLine($"       新：{string.Join(" + ", now)}");
+                if (removed.Length > 0) Console.WriteLine($"       去掉：{string.Join("、", removed)}");
+                if (added.Length > 0) Console.WriteLine($"       加上：{string.Join("、", added)}");
+
+                var swapped = removed.Any(name => name.Contains("FSRCNNX", StringComparison.Ordinal));
+
+                // 动画那三档从 Anime4K Mode A 换成 ArtCNN 是用户 2026-09-04 亲口说的「动画换 ArtCNN」（微放大和
+                // 甜点先换，大倍数当天第二句话跟着换），所以这里也是一条说得出理由的变化 —— 但只在动画那一半、
+                // 而且只换成 ArtCNN，别的都不算。
+                var toArtCnn = row.Animated && added.Any(name => name.StartsWith("ArtCNN", StringComparison.Ordinal));
+
+                foreach (var gone in removed)
+                {
+                    var excuse =
+                        gone.Contains("FSRCNNX", StringComparison.Ordinal)
+                        || (gone == "SSimDownscaler" && chain.Tier != UpscaleTier.Shrink)
+                        || (toArtCnn && gone.StartsWith("Anime4K", StringComparison.Ordinal));
+
+                    Assert.True(excuse, $"{row.What}：低档那一列去掉了 {gone}，而这一条没有理由");
+                }
+
+                foreach (var fresh in added)
+                {
+                    var excuse =
+                        fresh.StartsWith("CfL_Prediction", StringComparison.Ordinal)
+                        || fresh == "hdeband"
+                        || swapped
+                        || toArtCnn;
+
+                    Assert.True(excuse, $"{row.What}：低档那一列多了 {fresh}，而这一条没有理由");
+                }
+            }
+
+            Console.WriteLine("     2K-iGPU-Anime+（Ani4Kv2 转手的 ArtCNN）旧规则从来不会自动选中它，只能手选");
+        });
+    }
+
+    /// <para>
+    /// 从前这一条比的是 C# 目录和 csproj 里手抄的那份清单。现在着色器文件在仓库里、csproj 用通配符整棵拷，
+    /// 那份手抄的清单没了，能跑偏的地方也换了：表里点了一个磁盘上没有的文件（发出去就是 mpv 每帧报一次加载
+    /// 失败，画面只「看起来差一点」，四道闸门一条都不会红），或者仓库里躺着一个没有任何档位用得上的文件
+    /// （白装几百 KB，还得跟着上游更新）。两个方向分开报，报告里直接写出是哪个文件。
+    /// </para>
     /// </summary>
     private static void RegisterShippedShaderFiles()
     {
-        const string name = "着色器组：csproj 装箱的文件和目录点名的一字不差";
+        const string name = "着色器档位：装箱的文件和档位表点名的一字不差";
 
         var repo = RepositoryRoot();
-        var project = repo is null ? null : Path.Combine(repo, "src", "EmbyNian.Shell", "EmbyNian.Shell.csproj");
-        if (project is null || !File.Exists(project))
+        var root = repo is null ? null : Path.Combine(repo, "assets", "shaders");
+        if (root is null || !Directory.Exists(root))
         {
-            Skip(name, "找不到仓库里的 EmbyNian.Shell.csproj");
+            Skip(name, "找不到仓库里的 assets/shaders");
             return;
         }
 
         Test(name, () =>
         {
-            var packed = Regex.Matches(File.ReadAllText(project), "<ShaderFile Include=\"([^\"]+)\"")
-                .Select(match => Normalize(match.Groups[1].Value))
-                .ToHashSet(StringComparer.Ordinal);
-            var named = ShaderGroupCatalog.All
-                .SelectMany(group => group.Shaders)
-                .Select(Normalize)
+            var onDisk = Directory
+                .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                .Where(path => path.EndsWith(".glsl", StringComparison.OrdinalIgnoreCase)
+                    || path.EndsWith(".hook", StringComparison.OrdinalIgnoreCase))
+                .Select(path => Normalize(Path.GetRelativePath(root, path)))
                 .ToHashSet(StringComparer.Ordinal);
 
-            // 两个方向分开报，报告里直接写出是哪个文件 —— 十条路径拼成一串比对不出来。
-            Assert.Equal("", Join(named.Except(packed)), "配置组点名了、csproj 却没装箱的着色器（发出去 mpv 会每帧报加载失败）");
-            Assert.Equal("", Join(packed.Except(named)), "csproj 装了、可没有一个配置组用得上的着色器");
+            var named = ShaderGroupCatalog.ShaderFiles.Select(Normalize).ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal("", Join(named.Except(onDisk)), "档位表点名了、assets/shaders 里却没有的着色器");
+            Assert.Equal("", Join(onDisk.Except(named)), "assets/shaders 里装着、可没有一个档位用得上的着色器");
         });
 
         static string Normalize(string path) => path.Replace('\\', '/').ToLowerInvariant();
@@ -628,7 +1235,199 @@ internal static class PlaybackTests
             string.Join("、", paths.OrderBy(path => path, StringComparer.Ordinal));
     }
 
-    /// <summary>仓库根目录，从测试程序所在目录往上找 <c>EmbyNian.sln</c>；发布出去的程序旁边没有它。</summary>
+    /// <summary>
+    /// 渲染层契约（任务书 5.5）：Core 判出来的那条链，交到 mpv 手上时必须还是那一条。
+    /// <para>
+    /// 这一层是唯一抓得住「Core 判得对、渲染层跑成另一条链」的地方，而这个项目已经栽过一次同类问题 —— 当年那个 HQ
+    /// 预设写 <c>cscale=bilinear</c>、配置组随后写 <c>spline36</c>、组总赢，于是设置页显示「画质预设 = HQ」而生效的
+    /// 是别的东西，界面在骗人。所以这里读的是**最终那份选项表按 mpv 的 last-wins 规则解析之后**的值，不是中间
+    /// 某一层写了什么。
+    /// </para>
+    /// </summary>
+    private static void RegisterRendererContract()
+    {
+        Test("渲染层契约：最终生效的每一项都和链说的一样，多余的都不许有", () =>
+        {
+            foreach (var preset in MpvOutputOptions.QualityPresets.Select(choice => choice.Value))
+            {
+                var (planner, settings) = Planner();
+                settings.Video.QualityPreset = preset;
+
+                var request = planner.Plan(Ticket(), Connection());
+                var chain = ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low);
+
+                // last-wins，和 mpv 自己解析这串参数的规则一致。
+                var live = Options(request.PlayerOptions);
+
+                foreach (var (name, wanted) in chain.ToMpvOptions(ShaderGroupCatalog.ShaderRoot))
+                {
+                    Assert.True(live.TryGetValue(name, out var got) && got == wanted,
+                        $"画质预设 {preset} 之下，{name} 最终是 {got ?? "（没给）"}，而链要的是 {wanted}");
+                }
+
+                // 反方向，钉的是任务书 3.6 那一句「scale / cscale / dscale 只由档位链设置」，外加着色器列表本身：
+                // 这四个名字如果被链之外的东西写过，设置页就会显示一个与实际不符的值 —— 那正是「画质预设写
+                // bilinear、组随后写 spline36、组总赢、界面在骗人」那次事故。
+                //
+                // 还原表里其余几个名字是**共有的**，故意不在这里判：去色带是设置页的一行（链只在挂了 hdeband
+                // 时接管它），光域那两项是画质预设的（链只在挂了 SSimDownscaler 时接管）。它们「被链接管时以链
+                // 为准」已经由上面那一段正向断言钉住了。
+                string[] chainOnly = ["glsl-shaders", "scale", "cscale", "dscale"];
+
+                var chainNames = chain.ToMpvOptions(ShaderGroupCatalog.ShaderRoot)
+                    .Select(pair => pair.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var name in chainOnly.Where(name => !chainNames.Contains(name)))
+                {
+                    Assert.False(live.ContainsKey(name),
+                        $"画质预设 {preset} 之下，{name} 被写成了 {live.GetValueOrDefault(name)}，可这条链没点它 —— 那就是链之外的东西在动缩放");
+                }
+
+                Assert.Equal(chain.ToMpvOptions(ShaderGroupCatalog.ShaderRoot).Count, request.ShaderOptionCount,
+                    "交给 SetShaderGroupAsync 的那个「链贡献了几项」必须准，否则切档时回落的基准就错了");
+            }
+        });
+
+        Test("渲染层契约：链里的着色器文件一个不多一个不少，次序也一样", () =>
+        {
+            var (planner, _) = Planner();
+            var request = planner.Plan(Ticket(), Connection());
+            var chain = ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low);
+
+            var live = Options(request.PlayerOptions)["glsl-shaders"];
+            var loaded = live.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(Path.GetFileName).ToArray();
+
+            Assert.Equal(
+                string.Join(" + ", chain.Files.Select(file => file.Split('/')[^1])),
+                string.Join(" + ", loaded),
+                "渲染层加载的文件和链说的必须一字不差 —— 包括次序，色度重建那一条结论就靠它");
+        });
+
+        Test("渲染层契约：关掉着色器之后没有任何一条链的选项残留", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Shaders.Enabled = false;
+
+            var request = planner.Plan(Ticket(), Connection());
+            var live = Options(request.PlayerOptions);
+
+            Assert.Equal(0, request.ShaderOptionCount);
+            Assert.False(live.ContainsKey("glsl-shaders"), "没有链的时候不该给 glsl-shaders");
+            Assert.False(live.ContainsKey("dscale"), "SSimDownscaler 的前置条件只该跟着它自己走");
+        });
+
+        // 票上的刷新率必须真的走到 mpv 那一步。这一段是「接线」而不是「规则」—— 规则由 MpvOutputOptions 那几条单测
+        // 钉着，可忘了把 ticket.DisplayRefreshHz 传下去的话，规则永远拿到 0、永远不出手，而画面和日志都看不出来。
+        Test("渲染层契约：票上写的屏幕刷新率会走到 video-sync", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Video.Interpolation = true;
+
+            var slow = Options(planner.Plan(Ticket() with { DisplayRefreshHz = 60 }, Connection()).PlayerOptions);
+            Assert.Equal("display-resample", slow["video-sync"], "60Hz 上插值该照常生效");
+            Assert.Equal("yes", slow["interpolation"]);
+
+            var fast = Options(planner.Plan(Ticket() with { DisplayRefreshHz = 144 }, Connection()).PlayerOptions);
+            Assert.Equal("audio", fast["video-sync"], "144Hz 上显示同步只剩算力开销，票上的刷新率没接通就会看不出来");
+            Assert.Equal("no", fast["interpolation"]);
+
+            var unknown = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.Equal("display-resample", unknown["video-sync"], "读不到刷新率时不许替他做决定");
+        });
+
+        Test("运行条件：vo=gpu 配 d3d11 会被点出来，默认那一套不会", () =>
+        {
+            // mpv-prescalers 的 README 记的是一条具体故障，不是偏好：这个组合报 rgba16f 不可用，ravu 那几条链
+            // 根本加载不上 —— 配置齐全、日志正常、画面上什么都没多。
+            var broken = string.Join("\n", MpvRenderCheck.Problems("gpu", "d3d11", "auto-safe"));
+            Assert.Contains("rgba16f", broken);
+
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "vulkan", "auto-safe")),
+                "装机默认这一套不该有话说");
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "d3d11", "auto-safe")),
+                "没有链的时候 d3d11 也没什么可说的 —— 那道坎是 compute pass 的事，不是 d3d11 本身的事");
+
+            Assert.Contains("硬件解码是关的", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "vulkan", "")));
+            Assert.Contains("gpu-next", string.Join("\n", MpvRenderCheck.Problems("gpu", "vulkan", "auto-safe")));
+        });
+
+        Test("运行条件：带 compute pass 的链撞上 d3d11 要被点出来（2026-09-04 那五倍）", () =>
+        {
+            // 同一条链、同一张卡、同一段片子，只换图形接口：vulkan 45 fps、d3d11 8.7 fps，而 24fps 的片子要 24。
+            // 判据是链里有没有 compute pass，不是「d3d11 慢」—— 片元着色器那几条链在两个接口上差别在噪声里，
+            // 所以这一条不许写成对 d3d11 的一概而论，也不许在这里点 ArtCNN 的名字。
+            var artcnn = ShaderGroupCatalog.Resolve(animated: true, UpscaleTier.Slight, GpuTier.Low);
+            var ravu = ShaderGroupCatalog.Resolve(animated: false, UpscaleTier.Slight, GpuTier.Low);
+
+            Assert.True(artcnn.Shaders.Sum(shader => shader.ComputePasses) > 0, "动画微放大那一格该有 compute pass");
+            Assert.Equal(0, ravu.Shaders.Sum(shader => shader.ComputePasses), "ravu 那一格一个都没有");
+
+            Assert.Contains("compute pass", string.Join("\n",
+                MpvRenderCheck.Problems("gpu-next", "d3d11", "auto-safe", artcnn)));
+            Assert.Contains("compute pass", string.Join("\n",
+                MpvRenderCheck.Problems("gpu-next", "", "auto-safe", artcnn)),
+                "「自动挑选」在 Windows 上就是 d3d11，不能因为它没写字就放过去");
+
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "vulkan", "auto-safe", artcnn)),
+                "vulkan 上这条链是够快的");
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "d3d11", "auto-safe", ravu)),
+                "没有 compute pass 的链在 d3d11 上没问题，不该被连坐");
+        });
+    }
+
+    /// <para>
+    /// 这是任务书 5.1 要的那道机械闸门。判一个着色器「是不是放大器」不能靠文件名 —— <c>FSRCNNX_x1</c> 名字像
+    /// 放大器、通篇没有一条 <c>//!WIDTH</c>，那一格因此几个月里一倍都没放大过。有了这一条，描述和文件对不上就
+    /// 当场红，包括上游哪天换了门控数字。
+    /// </para>
+    /// </summary>
+    private static void RegisterShaderDescriptions()
+    {
+        const string name = "着色器描述：每一条都和文件里的 //! 指令一致";
+
+        var repo = RepositoryRoot();
+        var root = repo is null ? null : Path.Combine(repo, "assets", "shaders");
+        if (root is null || !Directory.Exists(root))
+        {
+            Skip(name, "找不到仓库里的 assets/shaders");
+            return;
+        }
+
+        Test(name, () =>
+        {
+            foreach (var shader in ShaderLibrary.All)
+            {
+                var path = Path.Combine(root, shader.File.Replace('/', Path.DirectorySeparatorChar));
+                Assert.True(File.Exists(path), $"{shader.Name} 点的文件不在：{shader.File}");
+
+                var directives = File.ReadAllLines(path)
+                    .Select(line => line.TrimEnd())
+                    .Where(line => line.StartsWith("//!", StringComparison.Ordinal))
+                    .ToArray();
+
+                var hooks = directives.Where(line => line.StartsWith("//!HOOK ", StringComparison.Ordinal)).ToArray();
+                Assert.True(hooks.Length > 0, $"{shader.Name} 一个 //!HOOK 都没有");
+                Assert.Equal(hooks[0]["//!HOOK ".Length..], shader.Hook, $"{shader.Name} 的第一个钩子阶段");
+                Assert.Equal(hooks.Length, shader.Passes, $"{shader.Name} 的 pass 数");
+
+                var sizes = directives.Any(line =>
+                    line.StartsWith("//!WIDTH", StringComparison.Ordinal) || line.StartsWith("//!HEIGHT", StringComparison.Ordinal));
+                Assert.Equal(sizes, shader.ChangesResolution, $"{shader.Name} 有没有声明自己的输出尺寸");
+
+                var when = directives.FirstOrDefault(line => line.StartsWith("//!WHEN ", StringComparison.Ordinal));
+                Assert.Equal(when is null ? "" : when["//!WHEN ".Length..], shader.Gate, $"{shader.Name} 的门控");
+
+                Assert.Equal(directives.Contains("//!BIND LUMA"), shader.ReadsLuma, $"{shader.Name} 读不读亮度");
+                Assert.Equal(directives.Contains("//!BIND CHROMA"), shader.ReadsChroma, $"{shader.Name} 读不读色度");
+
+                // compute pass 的数目：这是「同一条链 d3d11 8.7 fps、vulkan 45 fps」那道坎唯一的判据，上游哪天
+                // 把某个 pass 从 compute 改成片元（或者反过来），这一条当场红。
+                var compute = directives.Count(line => line.StartsWith("//!COMPUTE", StringComparison.Ordinal));
+                Assert.Equal(compute, shader.ComputePasses, $"{shader.Name} 的 compute pass 数");
+            }
+        });
+    }
+
     private static string? RepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
@@ -746,11 +1545,12 @@ internal static class PlaybackTests
 
     private static void RegisterPlanner()
     {
+        RegisterRendererContract();
+
         Test("计划：URL、请求头与令牌位置", () =>
         {
             var (planner, settings) = Planner();
-            settings.Shaders.ApplyToAllVideos = false;
-            settings.Shaders.AutoAnimeProfile = false;
+            settings.Shaders.Enabled = false;
 
             var request = planner.Plan(Ticket(), Connection());
 
@@ -799,36 +1599,40 @@ internal static class PlaybackTests
             Assert.Contains("--start=600", line, "位置由客户端给出：10 分钟 = 600 秒");
         });
 
-        Test("计划：着色器配置组连同它自己的缩放器一起变成 mpv 选项", () =>
+        Test("计划：着色器档位连同它自己的缩放器一起变成 mpv 选项", () =>
         {
             var (planner, settings) = Planner();
 
             var request = planner.Plan(Ticket(), Connection());
-            Assert.Equal("2K-iGPU", request.ShaderProfile);
+            var expected = ShaderGroupCatalog.Resolve(animated: false, UpscaleTier.Slight, GpuTier.Low);
+            Assert.Equal(expected.Name, request.ShaderProfile, "1080p 上 1440p 是 1.33 倍，落在微放大档");
 
             var options = Options(request.PlayerOptions);
             Assert.True(options.TryGetValue("glsl-shaders", out var shaders) && shaders.Length > 0,
-                "配置组必须落到 glsl-shaders 上");
-            Assert.Equal(Options(ShaderGroupCatalog.Find("2K-iGPU")!.Options)["scale"], options["scale"],
-                "配置组自带的缩放器要跟着一起给出，否则这组的调法就不成立了");
+                "档位必须落到 glsl-shaders 上");
+            Assert.Equal(Options(expected.Options)["scale"], options["scale"],
+                "档位自带的缩放器要跟着一起给出，否则这一档的调法就不成立了");
+            Assert.Equal(expected.Options.Count + 1, request.ShaderOptionCount,
+                "切档时要靠这个数认出「挂着色器之前」那一段，多一个少一个都会让还原读错值");
 
-            settings.Shaders.ApplyToAllVideos = false;
-            settings.Shaders.AutoAnimeProfile = false;
+            settings.Shaders.Enabled = false;
             var plain = planner.Plan(Ticket(), Connection());
             Assert.Null(plain.ShaderProfile);
+            Assert.Equal(0, plain.ShaderOptionCount);
             Assert.False(Options(plain.PlayerOptions).ContainsKey("glsl-shaders"),
-                "没有配置组时不必提 glsl-shaders，mpv 自己就是空的");
+                "没有档位时不必提 glsl-shaders，mpv 自己就是空的");
         });
 
-        Test("计划：配置组不存在时照旧播放，只是不上着色器", () =>
+        Test("计划：问不出屏幕尺寸时照旧播放，落在微放大档", () =>
         {
-            var (planner, settings) = Planner();
-            settings.Shaders.DefaultProfile = "并不存在的组";
+            var (planner, _) = Planner();
 
-            var request = planner.Plan(Ticket(), Connection());
-            Assert.Equal("并不存在的组", request.ShaderProfile, "决策照实记下来，日志里才看得出问题");
-            Assert.False(Options(request.PlayerOptions).ContainsKey("glsl-shaders"),
-                "找不到组就别乱传路径，mpv 会因为文件不存在直接退出");
+            // 输出尺寸问不出来（多显示器插拔的那一刻、命令行拉起来的那一次）不该让画面完全没有着色器。
+            var request = planner.Plan(Ticket() with { OutputWidth = 0, OutputHeight = 0 }, Connection());
+
+            Assert.Equal(ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low).Name, request.ShaderProfile);
+            Assert.Contains("输出尺寸未知", request.ShaderReason!);
+            Assert.True(Options(request.PlayerOptions).ContainsKey("glsl-shaders"));
         });
 
         Test("计划：客户端自己的基线选项排在设置之前", () =>
@@ -840,7 +1644,30 @@ internal static class PlaybackTests
             Assert.Equal("yes", options["hr-seek"]);
             Assert.Equal("no", options["sub-auto"], "服务器已经把外挂字幕列全了，再扫一遍目录只会多出重复轨");
             Assert.Equal("no", options["audio-file-auto"]);
-            Assert.Equal("no", options["icc-profile-auto"]);
+            Assert.Equal("no", options["icc-profile-auto"], "装机默认不做 ICC 校色，设置里那个开关才把它抬成 yes");
+        });
+
+        Test("计划：打开自动 ICC 校色之后，发给 mpv 的最后一个值是 yes", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Video.IccProfileAuto = true;
+
+            var pairs = planner.Plan(Ticket(), Connection()).PlayerOptions;
+
+            // 基线先发 no、视频输出压在上面，靠的就是「后发的说了算」。所以这里不只看最终值，还要确认这两条
+            // 真的都在列表里、顺序没被谁调过 —— 只断言最终值的话，哪天基线那条被挪到后面去，测试照样绿。
+            Assert.Equal("yes", Options(pairs)["icc-profile-auto"], "最后落到 mpv 手里的必须是 yes");
+
+            var floor = -1;
+            var lifted = -1;
+            for (var index = 0; index < pairs.Count; index++)
+            {
+                if (!string.Equals(pairs[index].Key, "icc-profile-auto", StringComparison.OrdinalIgnoreCase)) continue;
+                if (pairs[index].Value == "no") floor = index;
+                if (pairs[index].Value == "yes") lifted = index;
+            }
+
+            Assert.True(floor >= 0 && lifted > floor, $"设置那条必须排在基线那条后面（实际 {floor} / {lifted}）");
         });
 
         Test("计划：轨道建议按偏好语言给出默认值", () =>
@@ -1057,12 +1884,14 @@ internal static class PlaybackTests
             var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
 
             Assert.Equal("gpu-next", options["vo"]);
-            Assert.Equal("d3d11", options["gpu-api"]);
+            Assert.Equal("vulkan", options["gpu-api"],
+                "v8 起图形接口出厂是 vulkan：同一条带 compute pass 的链在 d3d11 上只有 8.7 fps、vulkan 上 45（2026-09-04 实测）");
             Assert.Equal("auto", options["dither-depth"]);
             Assert.Equal("fruit", options["dither"]);
             Assert.Equal("6", options["dither-size-fruit"]);
             Assert.Equal("full", options["video-output-levels"], "「色彩范围默认使用 PC(0-255)」");
-            Assert.False(options.ContainsKey("hwdec"), "硬解留空是「让 mpv 自己决定」，不能替用户挑一个");
+            Assert.Equal("auto-safe", options["hwdec"],
+                "v7 起硬解出厂就是「自动」：留空等于 mpv 的 no，也就是纯软件解码，那不是谁挑的，是装机时碰巧带着的");
             Assert.False(options.ContainsKey("profile"), "画质预设出厂是 default，什么都不该传");
         });
 
@@ -1073,6 +1902,7 @@ internal static class PlaybackTests
                 QualityPreset = "",
                 Renderer = "",
                 GpuApi = "",
+                HardwareDecoding = "",
                 OutputLevels = "",
                 Dither = "",
                 Deband = "",
@@ -1084,28 +1914,60 @@ internal static class PlaybackTests
             Assert.Equal(0, options.Count, "全部选「不指定」时就该一个选项都不传");
         });
 
-        // 「画质与着色器板块新增 mpv 画质预设配置 profile=high-quality、profile=default、profile=HQ」
-        Test("输出：画质预设 default 什么都不传，high-quality 走 mpv 内置 profile", () =>
+        // 「画质与着色器板块新增 mpv 画质预设配置 profile=high-quality、profile=default」，加上 2026-09-04 换掉的那一
+        // 项：HQ（用户 mpv.conf 里那个手抄的段）删掉、fast（mpv 自己内置的）补上。第 0 项当天试过改名叫「无」（空值），
+        // 用户一句「改回 default」送回来了 —— 两种写法都是什么都不传，所以那是他的用词，不是这一层的行为。
+        Test("输出：画质预设就这三项，全都是 mpv 自己内置的 profile", () =>
+        {
+            Assert.Equal(
+                "default、fast、high-quality",
+                string.Join("、", MpvOutputOptions.QualityPresets.Select(choice => choice.Value)),
+                "多一项少一项都要有人想一想：预设是逐字交给 mpv 的 profile 名，mpv 不认识就直接退出，什么都不播");
+
+            Assert.Equal("default", MpvOutputOptions.QualityPresets[0].Value,
+                "SettingsMigration 认不出来的值退回第 0 项，那一项必须是「不套用」");
+        });
+
+        Test("输出：画质预设 default 什么都不传，fast 和 high-quality 走 mpv 内置 profile", () =>
         {
             var none = MpvOutputOptions.Build(new VideoSettings { QualityPreset = "default", OutputLevels = "" }, new AudioSettings());
             Assert.False(Options(none).ContainsKey("profile"), "mpv 的 [default] 在 --no-config 下是空的，传了也是白传");
 
             var high = Options(MpvOutputOptions.Build(new VideoSettings { QualityPreset = "high-quality" }, new AudioSettings()));
             Assert.Equal("high-quality", high["profile"], "这个 profile 编在 mpv 里，不靠配置文件");
+
+            var fast = Options(MpvOutputOptions.Build(new VideoSettings { QualityPreset = "fast" }, new AudioSettings()));
+            Assert.Equal("fast", fast["profile"], "fast 同样编在 mpv 里（发布件那份 libmpv 和外部 mpv.exe 都有）");
         });
 
-        Test("输出：画质预设 HQ 展开成 mpv.conf 原来那十条", () =>
+        Test("输出：画质预设只交一个 profile 名，三个缩放器一个都不碰", () =>
         {
-            // HQ 是用户自己 mpv.conf 里的段名，mpv 里并没有这个 profile，传 profile=HQ 会让 mpv 直接报错退出。
-            var options = Options(MpvOutputOptions.Build(new VideoSettings { QualityPreset = "HQ" }, new AudioSettings()));
+            // 删掉的那个 HQ 是用户 mpv.conf 里手抄来的一段，会逐条展开成 scale-antiring / 光域那几项；而 2026-09-03
+            // 之所以先把三个缩放器从它身上拿掉，是因为档位链最后才发出去、谁都盖不住它，于是设置页写着「画质预设 =
+            // HQ」而生效的是链里的 cscale=spline36 —— 界面在骗人。现在三项预设全是 mpv 内置的 profile 名，客户端
+            // 这一侧一条选项都不再手写，那件事从根上没了地方发生。
+            foreach (var preset in MpvOutputOptions.QualityPresets.Select(choice => choice.Value))
+            {
+                var options = MpvOutputOptions.Build(
+                    new VideoSettings
+                    {
+                        QualityPreset = preset,
+                        Renderer = "",
+                        GpuApi = "",
+                        HardwareDecoding = "",
+                        OutputLevels = "",
+                        Dither = "",
+                        Deband = "",
+                        HdrMode = "",
+                        HighFrameRateAudioSync = false
+                    },
+                    new AudioSettings());
 
-            Assert.False(options.ContainsKey("profile"), "mpv 不认识 HQ，只能逐条展开");
-            Assert.Equal("ewa_lanczossharp", options["scale"]);
-            Assert.Equal("bilinear", options["cscale"]);
-            Assert.Equal("lanczos", options["dscale"]);
-            Assert.Equal("0.5", options["scale-antiring"]);
-            Assert.Equal("yes", options["sigmoid-upscaling"]);
-            Assert.Equal("no", options["linear-downscaling"]);
+                Assert.Equal(
+                    preset == "default" ? "" : "profile",
+                    string.Join("、", options.Select(pair => pair.Key)),
+                    $"画质预设 {preset} 除了一个 profile 名不该再传任何东西");
+            }
         });
 
         Test("输出：画质预设排在其他视频设置之前，谁在后面谁说了算", () =>
@@ -1321,6 +2183,16 @@ internal static class PlaybackTests
             Assert.Equal("no", passthrough["hdr-compute-peak"]);
         });
 
+        Test("输出：自动 ICC 校色关着一条都不发，打开了才发 yes", () =>
+        {
+            var off = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
+            Assert.False(off.ContainsKey("icc-profile-auto"),
+                "装机默认是关的，而基线那条 icc-profile-auto=no 已经把「关」说清楚了，这里再发一遍就是两层写同一个选项");
+
+            var on = Options(MpvOutputOptions.Build(new VideoSettings { IccProfileAuto = true }, new AudioSettings()));
+            Assert.Equal("yes", on["icc-profile-auto"]);
+        });
+
         Test("输出：高帧率片源回退到音频同步", () =>
         {
             var video = new VideoSettings { Interpolation = true };
@@ -1332,6 +2204,91 @@ internal static class PlaybackTests
             var normal = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, new SourceProfile(1920, 1080, 8, 23.976, false)));
             Assert.Equal("display-resample", normal["video-sync"]);
             Assert.Equal("yes", normal["interpolation"]);
+        });
+
+        // 2026-09-04 实测（interp-cost.ps1，1080p 全屏到 2560×1440、gpu-next + vulkan、不挂链）：显示同步会把 mpv
+        // 最后一趟渲染（混帧 + 色彩编码 + 抖动，约 1.1 毫秒）从每视频帧 24 次改成每次刷新 144 次，Windows 自己的
+        // 进程 GPU 计数器从 24.7% 涨到 50.1%；而 144 ÷ 24 = 6.000，没有节奏要补，vo-passes 几乎只报
+        // 「frame mixing (1 frame)」。用户自己那份 mpv.conf 里的 [fps-fix] 用的就是 display-fps > 120 这条规则。
+        Test("输出：高刷新率屏幕同样回退到音频同步，插值跟着不生效", () =>
+        {
+            var video = new VideoSettings { Interpolation = true };
+            var film = new SourceProfile(1920, 1080, 8, 23.976, false);
+
+            var fast = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, 144));
+            Assert.Equal("audio", fast["video-sync"], "144Hz 上显示同步只剩算力开销");
+            Assert.Equal("no", fast["interpolation"], "插值开着也要显式发 no —— 复用的 mpv 实例上「不发」等于沿用上一部片子的 yes");
+            Assert.False(fast.ContainsKey("tscale"), "插值没生效就不该留下 tscale");
+
+            // 一档一档地过边界：120 本身不算超过，60Hz 屏和「读不到刷新率」都照旧走显示同步。
+            foreach (var hz in new[] { 0.0, 60, 100, 120 })
+            {
+                var kept = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, hz));
+                Assert.Equal("display-resample", kept["video-sync"], $"{hz}Hz：这里显示同步是划算的");
+                Assert.Equal("yes", kept["interpolation"], $"{hz}Hz：插值应该生效");
+            }
+
+            Assert.Equal("display-resample",
+                Options(MpvOutputOptions.Build(
+                    new VideoSettings { Interpolation = true, HighFrameRateAudioSync = false },
+                    new AudioSettings(), null, film, false, 144))["video-sync"],
+                "关掉那个开关就该把显示同步还给任何屏幕");
+
+            // 两条规则各自都要能说出自己为什么出手 —— 日志和设置页读的是同一句话。
+            var (_, _, byRefresh) = MpvOutputOptions.ResolveSync(video, film, 144);
+            var (_, _, byFrameRate) = MpvOutputOptions.ResolveSync(video, new SourceProfile(1920, 1080, 8, 59.94, false), 60);
+            var (_, _, neither) = MpvOutputOptions.ResolveSync(video, film, 60);
+
+            Assert.Contains("144", byRefresh ?? "", "那句话要带上量到的刷新率");
+            Assert.Contains("59.94", byFrameRate ?? "", "那句话要带上片源帧率");
+            Assert.True(neither is null, "没回退就不该有话说");
+        });
+
+        Test("输出：设置页读到的「此刻生效」和真正发出去的 video-sync 是同一个答案", () =>
+        {
+            // 「界面在骗人」那一类的机械闸门。从前 video-sync 有两个写手：设置里存的那一项，和插值那条
+            // 「留空就改成 display-resample」，再加高帧率那条又写一遍 —— 设置页显示第一个，mpv 收到最后一个。
+            // 现在只有 ResolveSync 一个写手，这一条把它和 Build 真正发出去的东西对起来，两个方向都对。
+            // 刷新率那一轴 2026-09-04 加进来：它是第四个可能改写这两项的东西，也就是第四个能让两边分家的地方。
+            foreach (var stored in new[] { "", "audio", "display-resample", "display-vdrop" })
+            {
+                foreach (var interpolation in new[] { false, true })
+                {
+                    foreach (var fallback in new[] { false, true })
+                    {
+                        foreach (var fps in new[] { 0.0, 23.976, 59.94 })
+                        {
+                            foreach (var hz in new[] { 0.0, 60, 144 })
+                            {
+                                var video = new VideoSettings
+                                {
+                                    VideoSync = stored,
+                                    Interpolation = interpolation,
+                                    HighFrameRateAudioSync = fallback
+                                };
+                                SourceProfile? source = fps > 0 ? new SourceProfile(1920, 1080, 8, fps, false) : null;
+
+                                var (sync, live, _) = MpvOutputOptions.ResolveSync(video, source, hz);
+                                var sent = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, source, false, hz));
+                                var what = $"存「{(stored.Length == 0 ? "不指定" : stored)}」、插值 {interpolation}、"
+                                    + $"回退 {fallback}、片源 {(fps > 0 ? fps + "fps" : "帧率未知")}、"
+                                    + $"屏幕 {(hz > 0 ? hz + "Hz" : "刷新率未知")}";
+
+                                Assert.Equal(sync, sent.TryGetValue("video-sync", out var emitted) ? emitted : "",
+                                    $"{what}：video-sync");
+
+                                // 插值开着却被回退规则否掉时必须显式发 no —— 什么都不发在一个复用的 mpv 实例上
+                                // 等于沿用上一部片子的 yes。
+                                Assert.Equal(live ? "yes" : interpolation ? "no" : "",
+                                    sent.TryGetValue("interpolation", out var flag) ? flag : "",
+                                    $"{what}：interpolation");
+
+                                Assert.Equal(live, sent.ContainsKey("tscale"), $"{what}：tscale 只跟着真的开着的插值走");
+                            }
+                        }
+                    }
+                }
+            }
         });
     }
 
@@ -3020,11 +3977,17 @@ internal static class PlaybackTests
         "果服",
         DeviceIdentity.Create("device-1", "2.0.0"));
 
+    /// <summary>
+    /// 计划层用的票。输出尺寸给成 1440p 那块屏：<c>Source()</c> 是 1080p，于是这张票落在「实拍 · 微放大档」，
+    /// 也就是这台机器上最常见的那一格。
+    /// </summary>
     private static PlaybackTicket Ticket() => new()
     {
         Item = Item("某部电影", id: "42"),
         Source = Source(),
-        StartTicks = 0
+        StartTicks = 0,
+        OutputWidth = 2560,
+        OutputHeight = 1440
     };
 
     /// <summary>1080p 电影：日/中双音轨、一条内封 ASS、一条外挂 SRT、一条无法使用的外挂 PGS。</summary>
@@ -3035,7 +3998,7 @@ internal static class PlaybackTests
         RunTimeTicks = 72_000_000_000,
         MediaStreams =
         [
-            Stream(0, "Video", height: 1080),
+            Stream(0, "Video", width: 1920, height: 1080),
             Stream(1, "Audio", language: "jpn"),
             Stream(2, "Audio", language: "chi"),
             Stream(3, "Subtitle", codec: "ass", language: "chi"),
@@ -3044,14 +4007,24 @@ internal static class PlaybackTests
         ]
     };
 
-    private static MediaSource Source1080p() => SourceWith(Stream(0, "Video", height: 1080));
+    // 宽高都要给：放大倍数取的是宽比和高比里小的那个，只给高度就等于「片源尺寸未知」。
+    private static MediaSource Source1080p(double? frameRate = null) =>
+        SourceWith(Stream(0, "Video", width: 1920, height: 1080, frameRate: frameRate));
 
-    private static MediaSource Source4K() => SourceWith(Stream(0, "Video", height: 2160));
+    private static MediaSource Source4K() => SourceWith(Stream(0, "Video", width: 3840, height: 2160));
 
-    private static ShaderAutomationSettings Shaders(bool all, bool anime) => new()
+    private static ShaderAutomationSettings Shaders(
+        bool enabled = true,
+        bool anime = true,
+        bool vintage = true,
+        GpuTier gpu = GpuTier.Low,
+        string manual = "") => new()
     {
-        ApplyToAllVideos = all,
-        AutoAnimeProfile = anime
+        Enabled = enabled,
+        AutoAnimeProfile = anime,
+        RestoreVintageSources = vintage,
+        Gpu = gpu,
+        ManualGroup = manual
     };
 
     private static EmbyItem Item(
@@ -3086,7 +4059,9 @@ internal static class PlaybackTests
         string? displayLanguage = null,
         string? codec = null,
         string? title = null,
+        int? width = null,
         int? height = null,
+        double? frameRate = null,
         bool external = false,
         bool forced = false) =>
         new()
@@ -3097,7 +4072,9 @@ internal static class PlaybackTests
             DisplayLanguage = displayLanguage,
             Codec = codec,
             Title = title,
+            Width = width,
             Height = height,
+            AverageFrameRate = frameRate,
             IsExternal = external,
             IsForced = forced
         };

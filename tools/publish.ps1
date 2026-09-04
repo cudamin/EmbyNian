@@ -19,8 +19,6 @@ param(
     # not. Pass it on the machine that actually runs the app.
     [switch]$Shortcut,
 
-    [string]$MpvRoot = 'C:\mpv_config-2026.08.12',
-
     # Both of these default to 「work it out below」 rather than to an expression, because Windows
     # PowerShell evaluates a param block's defaults before it populates $PSScriptRoot when the script
     # carries [CmdletBinding()] — an $OutputRoot computed here came out empty and the script died on its
@@ -67,10 +65,16 @@ if (-not $dotnet) {
     throw "找不到能满足 global.json 的 dotnet SDK（试过：$($dotnetCandidates -join '、')）。请安装 .NET 10 SDK，或用 -DotnetPath 指定 dotnet.exe。"
 }
 
-$shaderSource = Join-Path $MpvRoot 'portable_config\shaders'
-if (-not (Test-Path -LiteralPath $shaderSource -PathType Container)) {
-    throw "找不到着色器目录：$shaderSource。请用 -MpvRoot 指向包含 portable_config\shaders 的 mpv 配置目录。"
+# 着色器文件（2026-09-03 起）和 libmpv 唯一那个非系统依赖 vulkan-1.dll（2026-09-04 起）都在仓库里，
+# 由 csproj 当普通内容文件拷进输出目录 —— 从前两样都是发布时从 `C:\mpv_config-2026.08.12` 现拷的，
+# 那等于「这个程序能不能正确发布，取决于另一个软件还装没装」。下面这两条只在检出不完整时会红。
+foreach ($asset in @('assets\shaders', 'assets\mpv-runtime\vulkan-1.dll')) {
+    $assetPath = Join-Path $repo $asset
+    if (-not (Test-Path -LiteralPath $assetPath)) {
+        throw "找不到 $assetPath。它是仓库的一部分，检出不完整时才会缺。"
+    }
 }
+
 $libMpv = Join-Path $repo 'libmpv-2.dll'
 if (-not (Test-Path -LiteralPath $libMpv -PathType Leaf)) {
     throw "找不到 $libMpv。请先把与当前 x64 构建匹配的 libmpv-2.dll 放到仓库根目录。"
@@ -110,7 +114,6 @@ $publishArgs = @(
     '-r', $Runtime,
     '--self-contained', ($selfContained.ToString().ToLowerInvariant()),
     '-p:Platform=x64',
-    ('-p:MpvConfigRoot=' + $MpvRoot),
     ('-p:WindowsAppSDKSelfContained=' + $selfContained.ToString().ToLowerInvariant()),
     '-p:PublishSingleFile=false',
     '-p:PublishReadyToRun=false',

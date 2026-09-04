@@ -5,37 +5,51 @@ using EmbyNian.Mpv;
 
 namespace EmbyNian.Playback;
 
-/// <summary>The shader group chosen for one item, and why — the reason is shown in the launch log.</summary>
+/// <summary>The shader chain chosen for one playback, and why — the reason is shown in the launch log.</summary>
 /// <param name="Animated">
-/// Whether the item's own metadata looked animated, which is not the same as 「用了动画配置组」: this stays
-/// true when 自动动画配置组 is switched off, and it is false for a 4K animated film that the
-/// high-resolution rule sent to the light group. 去色带 = 「在动画中开启」 reads it, so that one decision
-/// about what the item *is* serves every rule that cares — otherwise a video could be 动画 for the
-/// shader chain and live action for the deband setting.
+/// Whether the item's own metadata looked animated, which is not the same as 「用了动画那半张表」: this stays
+/// true when 自动识别动画 is switched off, and when a hand-picked 档位 named the 真人 half instead. 去色带 =
+/// 「在动画中开启」 reads it, so that one decision about what the item *is* serves every rule that cares —
+/// otherwise a video could be 动画 for the shader chain and live action for the deband setting.
 /// </param>
-public readonly record struct ShaderDecision(string? Group, string Reason, bool Animated = false)
+/// <param name="Measure">
+/// The factor and tier this decision was made at. Fed back in as the 「current tier」 when the window changes
+/// size, which is what makes the boundaries sticky; the tier here is the <b>measured</b> one, which a
+/// hand-picked override deliberately does not move.
+/// </param>
+/// <param name="OutputWidth">The output size the factor was measured against, for the log and the OSD.</param>
+public readonly record struct ShaderDecision(
+    ShaderGroup? Group,
+    string Reason,
+    bool Animated = false,
+    UpscaleMeasure Measure = default,
+    int OutputWidth = 0,
+    int OutputHeight = 0)
 {
     public static readonly ShaderDecision None = new(null, "未启用自动着色器");
 
-    public bool HasGroup => !string.IsNullOrEmpty(Group);
+    public bool HasGroup => Group is not null;
 
-    public override string ToString() => HasGroup ? $"{Group}（{Reason}）" : Reason;
+    /// <summary>The label the log, the 诊断 page and the player's 播放信息 panel show.</summary>
+    public string Label => Group?.DisplayName ?? "未启用";
+
+    public override string ToString() => Group is null ? Reason : $"{Group.Name}（{Reason}）";
 }
 
+
 /// <summary>
-/// Decides which 「着色器配置组」 to apply to an item.
+/// Decides which shader chain to apply to a playback.
 /// <para>
-/// Rules in priority order: an 8K source gets none at all, because nothing on an iGPU decodes 8K and
-/// runs a shader chain at the same time; an animated item gets the anime group; a source at least as
-/// tall as the high-resolution threshold gets the light group, since on a 1440p screen a 4K source is
-/// only ever downscaled and every upscaling shader in the chain would be dead weight; a source at or
-/// below the low-resolution threshold gets the heavier group, which is where a 2–3× upscale finally
-/// earns its cost; anything else gets the default group.
+/// Four inputs and no more: what the picture is (Emby's genres and tags say 动画 or not), how far it has to
+/// be enlarged (<see cref="ShaderTier.Measure"/> over the source's dimensions and the output's), whether
+/// the source is DVD-era (<see cref="ShaderTier.IsVintage"/>) and how fast its frames arrive
+/// (<see cref="ShaderTier.IsFastMotion"/>). The table itself is <see cref="ShaderGroupCatalog"/>, and the 8K
+/// exception, the 显卡档 column and the hand-picked override live on <see cref="ShaderAutomationSettings"/>.
 /// </para>
 /// <para>
-/// The groups themselves are shipped C# data (<see cref="ShaderGroupCatalog"/>) and are applied as
-/// ordinary mpv options. That is what makes them work identically on the external mpv.exe, which no
-/// longer reads any config file, and on the in-process libmpv, which has no profile support at all.
+/// The chains are applied as ordinary mpv options. That is what makes them work identically on the external
+/// mpv.exe, which no longer reads any config file, and on the in-process libmpv, which has no profile support
+/// at all.
 /// </para>
 /// </summary>
 public sealed class ShaderGroupResolver(ShaderAutomationSettings settings)
@@ -55,8 +69,8 @@ public sealed class ShaderGroupResolver(ShaderAutomationSettings settings)
 
     /// <summary>
     /// Only the metadata fields Emby shows as 类型/风格 and 标签. Deliberately not the title:
-    /// a documentary called 《动画简史》 would then get Anime4K, and over-sharpened live action
-    /// looks far worse than an animated film without its shader group.
+    /// a documentary called 《动画简史》 would then get the animated chain, and over-sharpened live action
+    /// looks far worse than an animated film without its own chain.
     /// </summary>
     private static IEnumerable<string> Hints(EmbyItem item)
     {
@@ -81,42 +95,40 @@ public sealed class ShaderGroupResolver(ShaderAutomationSettings settings)
         return false;
     }
 
-    public ShaderDecision Resolve(EmbyItem item, MediaSource? source, EmbyItem? parent = null)
+    /// <param name="output">
+    /// The size the picture will be drawn at, in physical pixels. <c>default</c> (0×0) means nobody could say,
+    /// which <see cref="ShaderTier.Measure"/> reads as 微放大档. Where it comes from and when it is re-read is
+    /// <see cref="OutputWatch"/>'s business.
+    /// </param>
+    /// <param name="current">
+    /// The tier already in force, when this is a re-measurement after the window changed size — see
+    /// <see cref="ShaderTier.Hysteresis"/>. Null for a fresh playback.
+    /// </param>
+    public ShaderDecision Resolve(
+        EmbyItem item,
+        MediaSource? source,
+        EmbyItem? parent = null,
+        (int Width, int Height) output = default,
+        UpscaleTier? current = null)
     {
         var video = source?.PrimaryVideoStream;
-        var width = video?.Width;
-        var height = video?.Height;
 
-        // The raw detection, with the 自动动画配置组 switch left out of it: that switch decides whether the
-        // anime *group* is used, and ShaderAutomationSettings.Resolve applies it itself. Everything else
-        // that asks 「这是动画吗」 — 去色带 = 「在动画中开启」 — wants the answer, not the switch.
+        // The raw detection, with the 自动识别动画 switch left out of it: that switch decides whether the
+        // animated *half of the table* is used, and ShaderAutomationSettings.Resolve applies it itself.
+        // Everything else that asks 「这是动画吗」 — 去色带 = 「在动画中开启」 — wants the answer, not the switch.
         var animated = LooksAnimated(StyleHints(item, parent));
-        var group = settings.Resolve(animated, width, height);
 
-        var decision = new ShaderDecision(group, Explain(animated && settings.AutoAnimeProfile, width, height, group), animated);
+        var (group, reason, measure) = settings.Resolve(
+            animated,
+            video?.Width ?? 0,
+            video?.Height ?? 0,
+            output.Width,
+            output.Height,
+            video?.FrameRate ?? 0,
+            current);
+
+        var decision = new ShaderDecision(group, reason, animated, measure, output.Width, output.Height);
         Log.Debug(Category, $"《{item.Name}》着色器决策：{decision}");
         return decision;
-    }
-
-    private string Explain(bool animated, int? width, int? height, string? group)
-    {
-        if (group is null)
-        {
-            if (settings.DisableForUltraHighRes &&
-                (width >= ShaderAutomationSettings.UltraHighResWidth || height >= 3000))
-                return "片源接近 8K，着色器只会拖慢解码，已全部关闭";
-
-            return settings is { ApplyToAllVideos: false, AutoAnimeProfile: false }
-                ? "两个开关都未启用"
-                : "未命中任何规则，本次不应用配置组";
-        }
-
-        if (height >= settings.HighResThresholdHeight && group == settings.HighResProfile.Trim())
-            return $"片源 {height}p 高于 {settings.HighResThresholdHeight}p，只会缩小，改用省电组";
-
-        if (height is > 0 && height <= settings.LowResThresholdHeight && group == settings.LowResProfile.Trim())
-            return $"片源 {height}p 不高于 {settings.LowResThresholdHeight}p，放大倍数够大，改用增强组";
-
-        return animated ? "元数据风格含动画关键词" : "已对所有视频启用";
     }
 }

@@ -504,6 +504,18 @@ internal sealed class HostWindow : IDisposable
     public event Action? Closed;
 
     /// <summary>
+    /// Raised whenever this window's size — or the monitor it is mostly on — may have moved: a resize in
+    /// progress, the end of a drag, full screen either way, and a DPI change. The 着色器档位 is the only
+    /// listener, and it debounces: see <see cref="Playback.OutputWatch"/>.
+    /// <para>
+    /// The end of a drag is in the list for the case that raises nothing else — a window moved onto another
+    /// monitor of the same size sends no <c>WM_SIZE</c> and, at matching scale, no <c>WM_DPICHANGED</c> either,
+    /// yet the full-screen plan prepared for the old screen has just gone stale.
+    /// </para>
+    /// </summary>
+    internal event Action? GeometryChanged;
+
+    /// <summary>
     /// 这个窗口现在有多大、在哪儿、是不是最大化着 —— 也就是下次开窗该照着的那一份。写盘的是
     /// <c>App.OnWindowClosed</c>（那一头本来就要存一次设置），这里只负责一直是对的。
     /// <para>
@@ -996,6 +1008,94 @@ internal sealed class HostWindow : IDisposable
         }
 
         return seats;
+    }
+
+    /// <summary>
+    /// The full pixel size of the monitor this window is on — the size the picture would fill at full screen,
+    /// taskbar included. What the 着色器档位 rule needs for the other half of its 放大倍数
+    /// (<see cref="PlaybackTicket.OutputWidth"/>), which is why it is the outer bounds rather than the work
+    /// area: full-screen playback covers the taskbar.
+    /// <para>
+    /// 0×0 when the OS will not say, which the rule reads as 「不知道」 rather than as a number.
+    /// </para>
+    /// </summary>
+    internal (int Width, int Height) MonitorSize()
+    {
+        if (Handle == IntPtr.Zero) return default;
+
+        try
+        {
+            var bounds = DisplayArea
+                .GetFromWindowId(Win32Interop.GetWindowIdFromWindow(Handle), DisplayAreaFallback.Nearest)
+                .OuterBounds;
+
+            return (bounds.Width, bounds.Height);
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "读取显示器尺寸失败，着色器档位按「输出尺寸未知」处理", error);
+            return default;
+        }
+    }
+
+    /// <summary>
+    /// How fast the monitor this window is on refreshes, in Hz — 0 when Windows will not say, which every rule
+    /// that reads it treats as 「不知道」 rather than as a number.
+    /// <para>
+    /// For <see cref="Mpv.MpvOutputOptions.ResolveSync"/>: 显示同步 re-runs mpv's whole final pass once per
+    /// refresh, so above about 120Hz it costs more than the judder it removes (measured — the numbers are on
+    /// <c>MpvOutputOptions.HighRefreshThreshold</c>). Two calls because there is no one-call answer: the monitor
+    /// handle gives a device name, the device name gives a mode.
+    /// </para>
+    /// <para>
+    /// Whole Hz is enough. Windows reports a 59.94 mode as 59 and a 143.98 panel as 144, and the threshold this
+    /// feeds sits nowhere near a rounding boundary.
+    /// </para>
+    /// </summary>
+    internal double RefreshHz()
+    {
+        if (Handle == IntPtr.Zero) return 0;
+
+        try
+        {
+            var monitor = Native.MonitorFromWindow(Handle, Native.MonitorDefaultToNearest);
+            var info = new MonitorInfoEx { Size = (uint)Marshal.SizeOf<MonitorInfoEx>() };
+            if (!Native.GetMonitorInfoEx(monitor, ref info))
+            {
+                Log.Debug(Category, "读不到显示器设备名，帧同步按「刷新率未知」处理");
+                return 0;
+            }
+
+            var device = DeviceName(ref info);
+            var mode = new DeviceMode { Size = (ushort)Marshal.SizeOf<DeviceMode>() };
+            if (!Native.EnumDisplaySettings(device, Native.EnumCurrentSettings, ref mode))
+            {
+                Log.Debug(Category, $"读不到 {device} 的当前显示模式，帧同步按「刷新率未知」处理");
+                return 0;
+            }
+
+            // 0 and 1 both mean 「the hardware's own default」 in this API, which is not a rate.
+            return mode.DisplayFrequency <= 1 ? 0 : mode.DisplayFrequency;
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "读取屏幕刷新率失败，帧同步按「刷新率未知」处理", error);
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// <c>MONITORINFOEX.szDevice</c> as a string. The buffer is a fixed 32 wide characters with the name
+    /// NUL-terminated inside it, so the tail is cut rather than trusted to be blank.
+    /// </summary>
+    private static unsafe string DeviceName(ref MonitorInfoEx info)
+    {
+        fixed (MonitorInfoEx* pinned = &info)
+        {
+            var name = new string(pinned->Device, 0, 32);
+            var end = name.IndexOf('\0');
+            return end >= 0 ? name[..end] : name;
+        }
     }
 
     /// <summary>Minimizes the host from the playback title bar.</summary>
@@ -1954,6 +2054,7 @@ internal sealed class HostWindow : IDisposable
                 // 最大化和还原也在这里落定 —— 那两下不是拖动，不发 WM_EXITSIZEMOVE。最大化那一档只抬那一位、
                 // 尺寸留着上一次量到的，见 RememberPlacement。
                 RememberPlacement();
+                GeometryChanged?.Invoke();
                 break;
 
             case Native.WmGetMinMaxInfo:
@@ -1965,6 +2066,7 @@ internal sealed class HostWindow : IDisposable
 
             case Native.WmExitSizeMove:
                 RememberPlacement();
+                GeometryChanged?.Invoke();
                 break;
 
             case Native.WmActivateApp:
@@ -1983,6 +2085,7 @@ internal sealed class HostWindow : IDisposable
                     window, Native.HwndTop,
                     suggested.Left, suggested.Top, suggested.Width, suggested.Height,
                     Native.SwpNoZOrder | Native.SwpNoActivate);
+                GeometryChanged?.Invoke();
                 return IntPtr.Zero;
 
             case Native.WmClose:

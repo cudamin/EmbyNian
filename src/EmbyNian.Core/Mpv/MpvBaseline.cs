@@ -36,7 +36,10 @@ public static class MpvBaseline
             new("audio-file-auto", "no"),
 
             // The client asks Emby which display profile a file has and decides tone mapping from
-            // that. An ICC profile picked up from the desktop would silently override it.
+            // that. An ICC profile picked up from the desktop would silently override it, and on
+            // Windows that profile is usually whatever the monitor's driver dropped there rather than
+            // a measurement. This is the floor, not a verdict: 设置 → 视频输出 → 自动 ICC 校色
+            // (VideoSettings.IccProfileAuto) is emitted after this list and lifts it to yes.
             new("icc-profile-auto", "no")
         };
 

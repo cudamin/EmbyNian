@@ -32,8 +32,9 @@ public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver sh
             .Select(stream => EmbyUrl.Subtitle(connection.ApiBase, item.Id, source.Id, stream.Index, stream.Codec))
             .ToList();
 
-        var decision = shaders.Resolve(item, source, ticket.Parent);
+        var decision = shaders.Resolve(item, source, ticket.Parent, (ticket.OutputWidth, ticket.OutputHeight));
         var tracks = ResolveTracks(ticket, source);
+        var chainOptions = decision.Group?.ToMpvOptions(ShaderGroupCatalog.ShaderRoot) ?? [];
 
         var request = new PlaybackRequest
         {
@@ -48,9 +49,10 @@ public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver sh
             SubtitleLanguage = TrackLanguagePriority.FromTokens(settings.Playback.SubtitleLanguages),
             AudioLanguage = TrackLanguagePriority.FromTokens(AudioLanguageTokens()),
             SubtitleFont = ResolveFont(settings.Playback.SubtitleFontFamily),
-            ShaderProfile = decision.Group,
+            ShaderProfile = decision.Group?.Name,
             ShaderReason = decision.Reason,
-            PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision),
+            ShaderOptionCount = chainOptions.Count,
+            PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision, chainOptions, ticket.DisplayRefreshHz),
             RunTimeTicks = source.RunTimeTicks ?? item.RunTimeTicks ?? 0,
             ItemId = item.Id,
             MediaSourceId = source.Id,
@@ -64,26 +66,48 @@ public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver sh
 
     /// <summary>
     /// Everything mpv is configured with, in the order the last-value-wins rule needs: the client's
-    /// own floor first, then the 画质预设 and the settings page, then the shader group. The group comes
-    /// last because its scalers are the point of choosing it — a group tuned around
-    /// <c>ewa_lanczossharp</c> would be doing something else entirely if 视频输出 could overwrite that
-    /// afterwards.
+    /// own floor first, then the 画质预设 and the settings page, then the shader chain. The chain comes
+    /// last because its scalers are the point of it — a chain tuned around <c>ewa_lanczossharp</c> would be
+    /// doing something else entirely if 视频输出 could overwrite that afterwards.
     /// <para>
     /// <see cref="ShaderDecision.Animated"/> is handed on rather than recomputed: 去色带 = 「在动画中开启」
     /// has to agree with what the shader rules decided the item was, or one video could be 动画 for the
     /// shader chain and live action for the deband setting.
     /// </para>
     /// </summary>
-    private IReadOnlyList<KeyValuePair<string, string>> BuildPlayerOptions(SourceProfile? source, ShaderDecision decision)
+    private IReadOnlyList<KeyValuePair<string, string>> BuildPlayerOptions(
+        SourceProfile? source,
+        ShaderDecision decision,
+        IReadOnlyList<KeyValuePair<string, string>> chainOptions,
+        double displayRefreshHz)
     {
         var options = new List<KeyValuePair<string, string>>(48);
         options.AddRange(MpvBaseline.Build(shaderCacheDirectory));
-        options.AddRange(MpvOutputOptions.Build(settings.Video, settings.Audio, settings.Playback, source, decision.Animated));
+        options.AddRange(MpvOutputOptions.Build(
+            settings.Video, settings.Audio, settings.Playback, source, decision.Animated, displayRefreshHz));
+        options.AddRange(chainOptions);
 
-        if (ShaderGroupCatalog.Find(decision.Group) is { } group)
-            options.AddRange(group.ToMpvOptions(ShaderGroupCatalog.ShaderRoot));
-        else if (decision.HasGroup)
-            Log.Warn(Category, $"着色器配置组「{decision.Group}」不存在，本次不应用着色器");
+        // 「设置里开着的东西这次没生效」 has to be visible somewhere other than the settings page, which is not open
+        // while a film plays. Same shape as the shader-tier line below: the rule is Core's, the sentence comes back
+        // with the decision (MpvOutputOptions.ResolveSync), and this only writes it down. Said only when the user
+        // actually asked for something — an override that changes nothing is not news.
+        var (_, _, standDown) = MpvOutputOptions.ResolveSync(settings.Video, source, displayRefreshHz);
+        var asked = settings.Video.Interpolation
+            || (settings.Video.VideoSync ?? "").StartsWith("display", StringComparison.OrdinalIgnoreCase);
+        if (standDown is not null && asked) Log.Info(Category, $"帧同步：{standDown}");
+
+        // 任务书 5.6: 视频渲染 / 图形接口 / 硬件解码 are part of the same scheme as the chains, and the way they
+        // are part of it is that a chain says what it needs and this says whether the settings meet it. Logged
+        // rather than enforced — those three are the user's to set, and a chain rewriting 视频渲染 behind their
+        // back is 「界面在骗人」 from the other end.
+        if (decision.HasGroup)
+        {
+            foreach (var problem in MpvRenderCheck.Problems(
+                settings.Video.Renderer, settings.Video.GpuApi, settings.Video.HardwareDecoding, decision.Group))
+            {
+                Log.Warn(Category, $"着色器档位的运行条件：{problem}");
+            }
+        }
 
         return options;
     }

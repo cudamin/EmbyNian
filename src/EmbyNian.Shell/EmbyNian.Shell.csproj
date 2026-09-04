@@ -48,8 +48,6 @@
     <!-- We write Main ourselves: the process has to migrate the data directory, take the
          single-instance mutex and start logging before any XAML exists. -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <!-- Override this for a release machine whose bundled mpv configuration lives elsewhere. -->
-    <MpvConfigRoot Condition="'$(MpvConfigRoot)' == ''">C:\mpv_config-2026.08.12</MpvConfigRoot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -112,37 +110,50 @@
   </ItemGroup>
 
   <!--
-    The shader files the 着色器配置组 name, plus libmpv's dependencies, ship beside the exe.
+    The shader files the 着色器档位表 names, from assets/shaders in this repository.
 
-    This used to be `shaders\**\*` — the whole collection out of the mpv configuration, 113 .glsl files
-    and 32 MB, of which the groups in EmbyNian.Core/Mpv/ShaderGroupCatalog.cs name ten (4 MB). The rest
-    was never loaded by anything: most of it belonged to the nine groups ported from the user's mpv.conf
-    and deleted on 2026-09-03, and the remainder had never been referenced at all. 「有用再下载」 — his
-    call, 2026-09-03: to bring a group back, add its file here alongside the group.
+    Two things changed here on 2026-09-03. They used to be copied out of the user's own portable mpv
+    installation, at a hard-coded C:\mpv_config-2026.08.12 — which meant this program could only be published
+    correctly on a machine where another program happened to be installed, and the ten files were listed a
+    second time here because MSBuild cannot read the C# catalogue. And they used to be copied only
+    AfterTargets="Publish", so an ordinary build produced an exe with no shaders next to it and the self-check
+    reported every file missing.
 
-    MSBuild cannot read the C# catalogue, so the list is written out once more here, and a unit test
-    (「着色器组：csproj 装箱的文件和目录点名的一字不差」) fails if the two drift. A path that does not
-    exist under MpvConfigRoot fails this Copy outright, which is the loud half of the same guard — the
-    old wildcard would have shipped one file short without a word.
+    Now they are in the repository and this is a plain None/CopyToOutputDirectory item, so a build and a
+    publish both get them, and the wildcard cannot drift from the catalogue the way a second hand-written
+    list could. What is still worth guarding is the other direction — a chain naming a file that is not in
+    assets/shaders, or a file in assets/shaders that no chain names — and that is one unit test
+    (「着色器档位：装箱的文件和档位表点名的一字不差」) reading the same directory.
+
+    .md is excluded: assets/shaders/README.md records where each file came from and is not for shipping.
   -->
-  <Target Name="ShipEmbeddedResources" AfterTargets="Publish">
-    <ItemGroup>
-      <ShaderFile Include="Ani4K\Ani4Kv2_ArtCNN_C4F32_i2.glsl" />
-      <ShaderFile Include="Anime4K\glsl\Restore\Anime4K_Clamp_Highlights.glsl" />
-      <ShaderFile Include="Anime4K\glsl\Restore\Anime4K_Restore_CNN_M.glsl" />
-      <ShaderFile Include="Anime4K\glsl\Upscale\Anime4K_AutoDownscalePre_x2.glsl" />
-      <ShaderFile Include="Anime4K\glsl\Upscale\Anime4K_AutoDownscalePre_x4.glsl" />
-      <ShaderFile Include="Anime4K\glsl\Upscale\Anime4K_Upscale_CNN_x2_M.glsl" />
-      <ShaderFile Include="Anime4K\glsl\Upscale\Anime4K_Upscale_CNN_x2_S.glsl" />
-      <ShaderFile Include="igv\FSRCNNX_x1_16-0-4-1_distort.glsl" />
-      <ShaderFile Include="igv\SSimDownscaler.glsl" />
-      <ShaderFile Include="ravu\ravu-zoom-ar-r2.glsl" />
-      <DependencyDlls Include="$(MpvConfigRoot)\*.dll" />
-      <LocalLibMpv Include="..\..\libmpv-2.dll" Condition="Exists('..\..\libmpv-2.dll')" />
-    </ItemGroup>
-    <Copy SourceFiles="@(ShaderFile->'$(MpvConfigRoot)\portable_config\shaders\%(Identity)')" DestinationFiles="@(ShaderFile->'$(PublishDir)shaders\%(Identity)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(DependencyDlls)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(LocalLibMpv)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
-  </Target>
+  <ItemGroup>
+    <None Include="..\..\assets\shaders\**\*.glsl;..\..\assets\shaders\**\*.hook">
+      <Link>shaders\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    libmpv's one non-system dependency, from assets/mpv-runtime in this repository.
+
+    It used to be copied out of the user's own portable mpv installation after a publish — every dll in
+    that folder's root, which was vulkan-1.dll and a lua51.dll libmpv never loads. Same objection as the
+    shaders above: whether this program could be published, and whether the published copy could open a
+    video at all, depended on another program still being installed at a hard-coded path.
+
+    Shipping it is not optional and not 「only when the user picks Vulkan」: vulkan-1.dll is a *static*
+    import of libmpv-2.dll (that dll has no delay-load table), so libmpv fails to load without it, and
+    gpu-api defaults to vulkan anyway. The system copy cannot be relied on — it arrives with a GPU driver.
+    assets/mpv-runtime/README.md records the provenance and how to re-check the import table after an
+    upgrade. .md is excluded for the same reason as the shaders.
+  -->
+  <ItemGroup>
+    <None Include="..\..\assets\mpv-runtime\*.dll">
+      <Link>%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 
 </Project>

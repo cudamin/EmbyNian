@@ -54,8 +54,9 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IntPtr> windowProvi
 
             // The dll is bound by absolute path rather than by name: a path from the settings is
             // otherwise validated here and then ignored by the loader, which only searches its
-            // own directories. Those directories still matter for libmpv's own dependencies
-            // (lua51.dll, vulkan-1.dll…), which it loads by name from wherever it sits.
+            // own directories. Those directories still matter for libmpv's one dependency that is not
+            // part of Windows — vulkan-1.dll, a static import, so libmpv does not load at all without
+            // it — which an ordinary build now puts beside the exe from assets/mpv-runtime.
             var dllFolder = Path.GetDirectoryName(dllPath) ?? "";
             LibMpvNative.UseLibrary(dllPath);
             LibMpvNative.EnsureDependencyDirectories(dllFolder, AppContext.BaseDirectory);

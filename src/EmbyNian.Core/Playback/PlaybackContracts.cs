@@ -26,6 +26,51 @@ public sealed record PlaybackTicket
 
     /// <summary>The series row for an episode, so genre-based rules can see the show's metadata.</summary>
     public EmbyItem? Parent { get; init; }
+
+    /// <summary>
+    /// How large the picture will be drawn, in physical pixels — the other half of the 放大倍数 that decides
+    /// the shader chain (<see cref="Mpv.ShaderTier.Measure"/>). 0 when nobody could say, which reads as
+    /// 微放大档.
+    /// <para>
+    /// <b>The render target as it stands when playback starts</b> — the client area while windowed, the
+    /// monitor while full screen. Where that number comes from when it cannot be read, and what happens to
+    /// it when the window changes afterwards, is <see cref="ShaderSurface"/> and
+    /// <see cref="OutputWatch"/>: a settled resize inside one tier only updates the recorded size, one that
+    /// crosses a tier rebuilds the chain, and full screen swaps to the plan prepared at launch.
+    /// </para>
+    /// <para>
+    /// The two readings that were tried and dropped: the monitor at full screen always (a film playing in a
+    /// quarter of the screen then gets a chain built for all of it, and wasted GPU on an iGPU drops frames
+    /// for the whole film) and re-measuring on every <c>WM_SIZE</c> (the chain recompiles dozens of times a
+    /// second while an edge is dragged). What is here is the first with a 400 ms debounce over it.
+    /// </para>
+    /// <para>
+    /// Getting it wrong is survivable in one direction: ravu, ArtCNN, SSimDownscaler and SSimSuperRes each
+    /// gate on <c>OUTPUT</c> versus their own input, so a chain filed under the wrong tier stands aside
+    /// rather than upscaling a picture that is being shrunk.
+    /// </para>
+    /// </summary>
+    public int OutputWidth { get; init; }
+
+    /// <inheritdoc cref="OutputWidth"/>
+    public int OutputHeight { get; init; }
+
+    /// <summary>
+    /// The refresh rate of the screen the picture will be drawn on, in Hz. 0 when nobody could say, which every
+    /// rule that reads it treats as 「不知道」 rather than as a number.
+    /// <para>
+    /// Only <see cref="Mpv.MpvOutputOptions.ResolveSync"/> wants it, and only to decide whether 显示同步 (and with
+    /// it 插值) is worth its cost on this screen — the measurement behind that is on
+    /// <c>MpvOutputOptions.HighRefreshThreshold</c>.
+    /// </para>
+    /// <para>
+    /// <b>Read once, at launch.</b> Dragging the window to a 60 Hz screen mid-film does not re-decide it, unlike
+    /// the output size, which <see cref="OutputWatch"/> follows. That is deliberate: <c>video-sync</c> can be set
+    /// at runtime, but switching it mid-playback re-clocks audio and video, and a second sync mode arriving from a
+    /// window drag is a worse surprise than a stale one. Starting the next episode picks up the new screen.
+    /// </para>
+    /// </summary>
+    public double DisplayRefreshHz { get; init; }
 }
 
 /// <summary>
@@ -93,11 +138,23 @@ public sealed record PlaybackRequest
     public string? SubtitleFont { get; init; }
 
     /// <summary>
-    /// The name of the 「着色器配置组」 applied, for the log and for the player's own group menu. The
-    /// options it consists of are already part of <see cref="PlayerOptions"/>; this is the label,
-    /// not the mechanism.
+    /// The 着色器档位 applied, for the log and for the player's own menu. The options it consists of are
+    /// already part of <see cref="PlayerOptions"/>; this is the label, not the mechanism.
     /// </summary>
     public string? ShaderProfile { get; init; }
+
+    /// <summary>
+    /// How many entries at the end of <see cref="PlayerOptions"/> came from the shader chain. What
+    /// <c>PlaybackService.SetShaderGroupAsync</c> needs to answer 「这个选项在挂上着色器之前是什么值」 when a
+    /// chain is switched mid-film: everything before this many entries is the baseline, the 画质预设 and the
+    /// settings page.
+    /// <para>
+    /// Carried rather than recomputed. It used to be worked out by looking the chain up again by its label,
+    /// which is not an identity — two cells of the table share a name across 显卡档 columns, and the count of
+    /// options differs between them.
+    /// </para>
+    /// </summary>
+    public int ShaderOptionCount { get; init; }
 
     /// <summary>
     /// Plain mpv <c>name=value</c> options: the client's own baseline, then the 画质预设 and the

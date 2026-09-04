@@ -396,6 +396,15 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.PictureAspectChanged += OnPictureAspectChanged;
         ViewModel.StatsUpdated += OnStatsUpdated;
 
+        // 着色器档位 needs to know how large the picture is being drawn, which only the window can say. Pulled
+        // for the launch decision, pushed afterwards — see OnGeometryChanged.
+        ViewModel.MeasureSurface = MeasureSurface;
+
+        // 帧同步 needs the other half of 「what screen is this」: how fast it refreshes. Pulled only, and only at
+        // launch — a window dragged to a slower screen mid-film keeps the sync mode it started with.
+        ViewModel.MeasureRefreshHz = () => _window?.RefreshHz() ?? 0;
+        window.GeometryChanged += OnGeometryChanged;
+
         ViewModel.Connect();
 
         // The x:Bind paths were all null-rooted while ViewModel was, including the OneTime Command=
@@ -412,7 +421,49 @@ public sealed partial class PlayerPage : UserControl
         _ticker.Stop();
         DropTapHold();
         SetCursorHidden(false);
+        if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
         ViewModel?.Shutdown();
+    }
+
+    // ---- 输出尺寸 -----------------------------------------------------------------
+
+    /// <summary>
+    /// The last render-target size that could actually be read, for 任务书 2.3's middle rung. Held here rather
+    /// than in the view model because it is a fact about this window, and deliberately never written from the
+    /// monitor fallback — one unreadable moment would otherwise pin every later measurement to the monitor's
+    /// native resolution, which is the thing 2.3 forbids.
+    /// </summary>
+    private (int Width, int Height) _lastTarget;
+
+    /// <summary>
+    /// How large the picture is being drawn, and how large it would be at full screen.
+    /// <para>
+    /// The render target is our client area, which is exactly what the video child window fills. The external
+    /// mpv.exe backend draws into a window of its own that is not ours to measure, so it reports nothing and
+    /// takes the monitor fallback — with a line in the log saying so, which is what 任务书 2.3 asks of a
+    /// backend that cannot answer.
+    /// </para>
+    /// </summary>
+    private ShaderSurface MeasureSurface()
+    {
+        if (_window is null) return default;
+
+        var target = ViewModel.Embedded ? _window.ClientSize : default;
+        var surface = ShaderSurface.Resolve(target, _lastTarget, _window.MonitorSize(), _window.Fullscreen);
+
+        if (!surface.Fallback) _lastTarget = (surface.Width, surface.Height);
+        return surface;
+    }
+
+    /// <summary>
+    /// The window resized, went full screen, or landed on another monitor. Handed straight over: what each
+    /// kind of change costs is <see cref="OutputWatch"/>'s to decide, and a resize in progress costs nothing.
+    /// The measurement goes over as a callback so it is skipped entirely while nothing is playing — this fires
+    /// for every <c>WM_SIZE</c> the shell sees, browsing included.
+    /// </summary>
+    private void OnGeometryChanged()
+    {
+        if (Attached) ViewModel.NoteSurface(MeasureSurface);
     }
 
     /// <summary>

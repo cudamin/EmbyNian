@@ -63,6 +63,29 @@ public static class SettingsMigration
             settings.Ui.WindowMaximized = false;
         }
 
+        // v7 replaces the four 着色器配置组 names and the two resolution thresholds with the 档位表: the chain
+        // is now computed from the scale factor, the picture's kind and 显卡档. Those six keys need no code —
+        // the properties are gone and the deserializer ignores a key it has nowhere to put — but the one
+        // switch that does have a successor is carried over by hand: 「所有视频默认启用」 became 「启用着色器」,
+        // and someone who had switched it off meant 「不要着色器」 both times.
+        if (version < 7 && root.TryGetProperty("Shaders", out var shaders)
+            && shaders.TryGetProperty("ApplyToAllVideos", out var applyToAll)
+            && applyToAll.ValueKind is JsonValueKind.False)
+        {
+            settings.Shaders.Enabled = false;
+        }
+
+        // v8 moves 图形接口 to Vulkan. 「自动挑选」 and d3d11 are the same thing on Windows — mpv picks d3d11 for
+        // auto — and on this machine that path runs ArtCNN's compute passes about five times slower: 2026-09-04,
+        // same card, same film, same chain at 1080p→1440p, 8.7 fps against 45, where the film needs 24. Both of
+        // those values are carried over rather than only the empty one, because nobody arrived at d3d11 by
+        // choosing it: it was the shipped default. opengl is left alone — that one was picked.
+        if (version < 8
+            && (string.IsNullOrWhiteSpace(settings.Video.GpuApi) || settings.Video.GpuApi == "d3d11"))
+        {
+            settings.Video.GpuApi = MpvRenderCheck.PreferredApi;
+        }
+
         settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
         return Normalize(settings);
     }
@@ -115,16 +138,11 @@ public static class SettingsMigration
         settings.Video.NetworkCacheMegabytes = Math.Clamp(settings.Video.NetworkCacheMegabytes, 0, 4096);
         settings.Audio.DelayMilliseconds = Math.Clamp(settings.Audio.DelayMilliseconds, -5000, 5000);
         settings.Audio.Volume = Math.Clamp(settings.Audio.Volume, 0, 100);
-        settings.Shaders.HighResThresholdHeight = Math.Clamp(settings.Shaders.HighResThresholdHeight, 720, 4320);
-        settings.Shaders.LowResThresholdHeight = Math.Clamp(settings.Shaders.LowResThresholdHeight, 240, 1080);
 
-        // The two ranges overlap on 720–1080, and ShaderAutomationSettings.Resolve tests 高清 first. So with
-        // 低清阈值 at or above 高清阈值, every height that should have been 低清 comes out 高清 instead and the
-        // 低清配置组 can never apply — a group that is set, reads as set, and silently never runs. 低清 is the
-        // one pushed rather than 高清 because its own range lies entirely below the other's, so one below
-        // 高清阈值 is always still a legal 低清阈值 (720−1 = 719, well inside 240–1080).
-        if (settings.Shaders.LowResThresholdHeight >= settings.Shaders.HighResThresholdHeight)
-            settings.Shaders.LowResThresholdHeight = settings.Shaders.HighResThresholdHeight - 1;
+        // 显卡档位 is stored as a plain integer, so a hand-edited file can hold anything. Low rather than a
+        // clamp to High: an unrecognised number means 「nobody chose」, and the cheap column is the safe
+        // reading of that on a machine whose graphics nobody has vouched for.
+        if (!Enum.IsDefined(settings.Shaders.Gpu)) settings.Shaders.Gpu = GpuTier.Low;
 
         if (!Enum.IsDefined(settings.Playback.SkipSections)) settings.Playback.SkipSections = SkipSectionMode.Ask;
         if (!Enum.IsDefined(settings.Playback.SubtitleMode)) settings.Playback.SubtitleMode = SubtitleMode.Always;
@@ -154,12 +172,10 @@ public static class SettingsMigration
         settings.Playback.SubtitleShadowOffset = Choice(MpvOutputOptions.SubtitleShadows, settings.Playback.SubtitleShadowOffset);
         settings.Playback.SubtitleBackColor = Choice(MpvOutputOptions.SubtitleBackColors, settings.Playback.SubtitleBackColor);
 
-        // A group name that no longer exists would silently mean 「no shaders at all」, which is a
-        // hard thing to notice; falling back to the shipped default keeps the picture working.
-        settings.Shaders.DefaultProfile = Group(settings.Shaders.DefaultProfile, ShaderGroupCatalog.DefaultGroupName);
-        settings.Shaders.AnimeProfile = Group(settings.Shaders.AnimeProfile, ShaderGroupCatalog.AnimeGroupName);
-        settings.Shaders.HighResProfile = Group(settings.Shaders.HighResProfile, ShaderGroupCatalog.HighResGroupName);
-        settings.Shaders.LowResProfile = Group(settings.Shaders.LowResProfile, ShaderGroupCatalog.LowResGroupName);
+        // A hand-picked 档位 that this table no longer has would silently mean 「按自动挑」 anyway, but going
+        // through here makes it so on the next save as well, and keeps the settings dropdown from showing a
+        // selection nothing matches.
+        settings.Shaders.ManualGroup = Chain(settings.Shaders.ManualGroup, settings.Shaders.Gpu);
 
         // 字幕字体 is a family name for mpv; a v3 file may still hold the path of a font file here.
         settings.Playback.SubtitleFontFamily = ResolveFontFamily(settings.Playback.SubtitleFontFamily);
@@ -297,15 +313,15 @@ public static class SettingsMigration
     }
 
     /// <summary>
-    /// A 着色器配置组 name that the shipped catalogue actually has. An empty value is kept as-is: for
-    /// 高清片源 / 低清片源 that means 「不特殊处理」, which is a real choice rather than a broken one.
+    /// A 着色器档位 id the shipped table actually has, or the empty string. Empty means 「自动按放大倍数挑」 —
+    /// a real choice, and the one every install starts on, so it is never replaced by a fallback.
     /// </summary>
-    private static string Group(string? value, string fallback)
+    private static string Chain(string? value, GpuTier gpu)
     {
         var trimmed = (value ?? "").Trim();
         if (trimmed.Length == 0) return "";
 
-        return ShaderGroupCatalog.Find(trimmed) is not null ? trimmed : fallback;
+        return ShaderGroupCatalog.Find(trimmed, gpu)?.Id ?? "";
     }
 
     /// <summary>

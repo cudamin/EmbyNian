@@ -104,8 +104,6 @@ public sealed partial class SettingsViewModel : PageViewModel
     private FontLibrary? _fonts;
     private AppPaths? _paths;
     private Platform.ISystemLauncher? _launcher;
-    private SettingNumberRow? _highResThreshold;
-    private SettingNumberRow? _lowResThreshold;
     private SettingFontRow? _subtitleFont;
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
@@ -344,39 +342,118 @@ public sealed partial class SettingsViewModel : PageViewModel
             Choice("显示模式", SubtitleModes, () => playback.SubtitleMode, value => playback.SubtitleMode = value),
             Toggle("没有匹配语言时使用默认字幕", "文件只有其他语言时仍显示默认字幕", () => playback.SubtitleFallbackToDefault, value => playback.SubtitleFallbackToDefault = value),
             Font("字体", "列出这台机器装的所有字体，可搜索；mpv 认的是字体族名，不是文件路径",
-                () => playback.SubtitleFontFamily, value => playback.SubtitleFontFamily = value),
+                () => playback.SubtitleFontFamily, value => playback.SubtitleFontFamily = value, "sub-font"),
             Number("字号", 0, 160, () => playback.SubtitleFontSize, value => playback.SubtitleFontSize = value,
-                "0 表示不指定，由 mpv 自己决定；要指定的话最小 16"),
-            Toggle("字幕加粗", "提高复杂画面上的可读性", () => playback.SubtitleBold, value => playback.SubtitleBold = value),
-            Mpv("文字颜色", MpvOutputOptions.SubtitleColors, () => playback.SubtitleColor, value => playback.SubtitleColor = value),
-            Mpv("描边大小", MpvOutputOptions.SubtitleBorders, () => playback.SubtitleBorderSize, value => playback.SubtitleBorderSize = value),
-            Mpv("描边颜色", MpvOutputOptions.SubtitleBorderColors, () => playback.SubtitleBorderColor, value => playback.SubtitleBorderColor = value),
-            Mpv("阴影", MpvOutputOptions.SubtitleShadows, () => playback.SubtitleShadowOffset, value => playback.SubtitleShadowOffset = value),
-            Mpv("背景颜色", MpvOutputOptions.SubtitleBackColors, () => playback.SubtitleBackColor, value => playback.SubtitleBackColor = value),
-            Slider("背景透明度（%）", 0, 100, 5, () => playback.SubtitleBackOpacity, value => playback.SubtitleBackOpacity = value, "拖动调整 mpv sub-back-color 的透明度"),
-            Mpv("字幕编码", MpvOutputOptions.SubtitleCodepages, () => playback.SubtitleCodepage, value => playback.SubtitleCodepage = value),
-            Toggle("拉伸图形字幕到画面", "宽屏 PGS/VOBSUB 字幕避免落到画面外", () => playback.StretchWideImageSubtitles, value => playback.StretchWideImageSubtitles = value)
+                "0 表示不指定，由 mpv 自己决定；要指定的话最小 16", null, "sub-font-size"),
+            Toggle("字幕加粗", "提高复杂画面上的可读性", () => playback.SubtitleBold, value => playback.SubtitleBold = value,
+                "sub-bold"),
+            Mpv("文字颜色", MpvOutputOptions.SubtitleColors, () => playback.SubtitleColor, value => playback.SubtitleColor = value,
+                "sub-color"),
+            Mpv("描边大小", MpvOutputOptions.SubtitleBorders, () => playback.SubtitleBorderSize, value => playback.SubtitleBorderSize = value,
+                "sub-border-size"),
+            Mpv("描边颜色", MpvOutputOptions.SubtitleBorderColors, () => playback.SubtitleBorderColor, value => playback.SubtitleBorderColor = value,
+                "sub-border-color"),
+            Mpv("阴影", MpvOutputOptions.SubtitleShadows, () => playback.SubtitleShadowOffset, value => playback.SubtitleShadowOffset = value,
+                "sub-shadow-offset"),
+            Mpv("背景颜色", MpvOutputOptions.SubtitleBackColors, () => playback.SubtitleBackColor, value => playback.SubtitleBackColor = value,
+                "sub-back-color"),
+            Slider("背景透明度（%）", 0, 100, 5, () => playback.SubtitleBackOpacity, value => playback.SubtitleBackOpacity = value,
+                "上面那一行颜色的透明度，同一个选项", "sub-back-color"),
+            Mpv("字幕编码", MpvOutputOptions.SubtitleCodepages, () => playback.SubtitleCodepage, value => playback.SubtitleCodepage = value,
+                "sub-codepage"),
+            Toggle("拉伸图形字幕到画面", "宽屏 PGS/VOBSUB 字幕避免落到画面外", () => playback.StretchWideImageSubtitles, value => playback.StretchWideImageSubtitles = value,
+                "stretch-image-subs-to-screen")
         ]);
     }
 
     private SettingSection VideoCard()
     {
         var video = Settings.Video;
+
+        // 视频同步 states the value in force, not the value stored, and 启用插值 is what changes it — so that
+        // row is held here and restated from the toggle below. The two rows are five lines apart on screen and
+        // used to contradict each other: this one said 「不指定（等同音频同步）」 while display-resample was
+        // what mpv got.
+        var sync = Mpv("视频同步", MpvOutputOptions.VideoSync, () => video.VideoSync, value => video.VideoSync = value,
+            "video-sync", SyncNote(video));
+
         return new SettingSection("视频输出", "视频输出", "渲染、硬件解码、同步和网络缓冲。",
         [
-            Mpv("视频渲染", MpvOutputOptions.Renderers, () => video.Renderer, value => video.Renderer = value),
-            Mpv("图形接口", MpvOutputOptions.GpuApis, () => video.GpuApi, value => video.GpuApi = value),
-            Mpv("硬件解码", MpvOutputOptions.HardwareDecoders, () => video.HardwareDecoding, value => video.HardwareDecoding = value),
-            Mpv("色彩范围", MpvOutputOptions.OutputLevels, () => video.OutputLevels, value => video.OutputLevels = value),
-            Mpv("视频同步", MpvOutputOptions.VideoSync, () => video.VideoSync, value => video.VideoSync = value),
-            Toggle("启用反交错", "仅对隔行片源有意义", () => video.Deinterlace, value => video.Deinterlace = value),
-            Toggle("启用插值", "补偿刷新率不匹配造成的抖动", () => video.Interpolation, value => video.Interpolation = value),
-            Toggle("高帧率片源使用音频同步", "超过约 47fps 时避免丢帧", () => video.HighFrameRateAudioSync, value => video.HighFrameRateAudioSync = value),
-            Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = value, "拖动调整 mpv demuxer-max-bytes；0 表示使用 mpv 默认值"),
-            Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value),
-            Mpv("去色带", MpvOutputOptions.DebandModes, () => video.Deband, value => video.Deband = value),
-            Mpv("HDR 处理", MpvOutputOptions.HdrModes, () => video.HdrMode, value => video.HdrMode = value)
+            Mpv("视频渲染", MpvOutputOptions.Renderers, () => video.Renderer, value => video.Renderer = value,
+                "vo", "着色器档位是照 GPU-Next 调的；GPU 那一档只当回退"),
+            Mpv("图形接口", MpvOutputOptions.GpuApis, () => video.GpuApi, value => video.GpuApi = value,
+                "gpu-api", "装机默认是 Vulkan：带 compute pass 的链（ArtCNN 那几档）在 Direct3D 11 上慢五倍左右"),
+            Mpv("硬件解码", MpvOutputOptions.HardwareDecoders, () => video.HardwareDecoding, value => video.HardwareDecoding = value,
+                "hwdec", "装机默认是「自动」；选「不指定」等同于纯软件解码"),
+            Mpv("色彩范围", MpvOutputOptions.OutputLevels, () => video.OutputLevels, value => video.OutputLevels = value,
+                "video-output-levels"),
+            sync,
+            Toggle("启用反交错", "仅对隔行片源有意义", () => video.Deinterlace, value => video.Deinterlace = value,
+                "deinterlace"),
+            Toggle("启用插值",
+                "补偿刷新率不匹配造成的抖动：沿时间轴混合相邻两帧，不是电视上那种运动补偿。它必须靠显示同步才生效，"
+                + "而开销出在显示同步那一头 —— 那时 mpv 最后一趟渲染改成按刷新率跑，这台机器上实测 24.7% 变 50.1% 显卡；"
+                + "高刷屏上它能补的抖动本来也很小，所以超过 120Hz 时下面那一项会把两者一起收回",
+                () => video.Interpolation,
+                value =>
+                {
+                    video.Interpolation = value;
+
+                    // 这一项一变，上面那一行「实际生效」就变了。页面没有整体刷新，也不该有 —— 只有因果关系
+                    // 明确的这一处自己去改那一行。
+                    sync.Restate(SyncNote(video));
+                },
+                "interpolation、tscale"),
+            Toggle("高帧率或高刷新率时使用音频同步",
+                "片源超过约 47fps，或播放窗口所在屏幕超过 120Hz，就回到音频同步、插值不生效：这两种情况下显示同步"
+                + "只剩算力开销。关掉它可以强行让显示同步在任何屏幕上生效",
+                () => video.HighFrameRateAudioSync, value => video.HighFrameRateAudioSync = value, "video-sync、interpolation"),
+            Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = value,
+                "0 表示使用 mpv 默认值", "demuxer-max-bytes"),
+            Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value,
+                "dither、dither-depth", "色深抖动，和上面的插值无关：落到显示器位深时撒一层噪声，免得渐变上出现色带"),
+            Mpv("去色带", MpvOutputOptions.DebandModes, () => video.Deband, value => video.Deband = value,
+                "deband", "大倍数档（放大 2.2 倍以上）改用链里的 hdeband，那时候这一项不生效"),
+            Mpv("HDR 处理", MpvOutputOptions.HdrModes, () => video.HdrMode, value => video.HdrMode = value,
+                "tone-mapping、target-colorspace-hint"),
+            Toggle("自动 ICC 校色", "按系统给这块屏设的 ICC 配置文件校色；屏幕没校准过开了会偏色，开着也会让上面的 HDR 直通失效",
+                () => video.IccProfileAuto, value => video.IccProfileAuto = value, "icc-profile-auto")
         ]);
+    }
+
+    /// <summary>
+    /// 视频同步 那一行的说明：此刻真正生效的值，加上会改变它的两条规则。
+    /// <para>
+    /// The value comes from <see cref="MpvOutputOptions.ResolveSync"/> — the same function that decides what mpv
+    /// is actually sent — so the page cannot say one thing while the player does another. That was the bug: the
+    /// drop-down read 「不指定（等同音频同步）」 with 插值 on, and <c>display-resample</c> was in force.
+    /// </para>
+    /// <para>
+    /// 高帧率 and 高刷新率 are both stated in words rather than resolved, for the same reason: neither is knowable
+    /// from this page. No film is playing while it is open, and this window is not the player's — it may not even
+    /// be on the monitor the film will land on. What they resolve to is written to the log at every launch
+    /// (<c>PlaybackPlanner</c>) and the 诊断 page lists the options mpv was actually given.
+    /// </para>
+    /// </summary>
+    private static string SyncNote(VideoSettings video)
+    {
+        var (value, _, _) = MpvOutputOptions.ResolveSync(video);
+
+        // An empty resolved value is 「没发这个选项」, and mpv's own default is audio sync. Naming that rather
+        // than echoing the catalogue's 「不指定」 label back: 「此刻生效：不指定」 answers nothing.
+        var live = value.Length == 0
+            ? "此刻生效：音频同步（mpv 不收到这个选项时的默认）"
+            : $"此刻生效：{MpvOutputOptions.Describe(MpvOutputOptions.VideoSync, value)}";
+
+        var because = video.Interpolation && (video.VideoSync ?? "").Trim().Length == 0
+            ? "因为「启用插值」开着"
+            : "";
+
+        var exception = video.HighFrameRateAudioSync
+            ? "片源超过约 47fps、或屏幕超过 120Hz 时一律回到音频同步"
+            : "";
+
+        return string.Join("；", new[] { live, because, exception }.Where(part => part.Length > 0));
     }
 
     private SettingSection AudioCard()
@@ -391,65 +468,69 @@ public sealed partial class SettingsViewModel : PageViewModel
                         audio.PassthroughCodecs.Add(codec.Value);
                     if (!value)
                         audio.PassthroughCodecs.RemoveAll(item => string.Equals(item, codec.Value, StringComparison.OrdinalIgnoreCase));
-                }))
+                },
+                "audio-spdif"))
             .ToList();
 
         return new SettingSection("音频输出", "音频输出", "声道布局、动态范围、独占模式和功放直通。",
         [
-            Mpv("扬声器布局", MpvOutputOptions.Channels, () => audio.Channels, value => audio.Channels = value),
-            Mpv("动态范围压缩", MpvOutputOptions.DynamicRange, () => audio.DynamicRange, value => audio.DynamicRange = value),
-            Toggle("音频独占模式", "播放时占用声卡，避免系统混音", () => audio.ExclusiveMode, value => audio.ExclusiveMode = value),
-            Number("全局音频延迟（毫秒）", -5000, 5000, () => audio.DelayMilliseconds, value => audio.DelayMilliseconds = value),
+            Mpv("扬声器布局", MpvOutputOptions.Channels, () => audio.Channels, value => audio.Channels = value,
+                "audio-channels"),
+            Mpv("动态范围压缩", MpvOutputOptions.DynamicRange, () => audio.DynamicRange, value => audio.DynamicRange = value,
+                "ad-lavc-ac3drc"),
+            Toggle("音频独占模式", "播放时占用声卡，避免系统混音", () => audio.ExclusiveMode, value => audio.ExclusiveMode = value,
+                "audio-exclusive"),
+            Number("全局音频延迟（毫秒）", -5000, 5000, () => audio.DelayMilliseconds, value => audio.DelayMilliseconds = value,
+                null, null, "audio-delay"),
             new SettingToggleGroupRow("直通格式", passthrough)
         ]);
     }
 
+    /// <summary>
+    /// 画质与着色器. Four dropdowns of group names and two resolution thresholds until 2026-09-03; now the
+    /// chain is computed (放大倍数 × 片源类型 × 显卡档) and what is left here is the three answers that are
+    /// genuinely the user's — how much GPU there is, whether to pin one chain by hand, and whether animated
+    /// content should use the animated half of the table at all.
+    /// </summary>
     private SettingSection ShaderCard()
     {
         var shaders = Settings.Shaders;
         var video = Settings.Video;
 
-        (string Label, string Value)[] profiles =
+        // Named in plain terms rather than by any measurement: this is the one thing on the page that only
+        // the person in front of the machine can answer, and 「核显」 is a word they know.
+        (string Label, GpuTier Value)[] gpuTiers =
         [
-            ("不使用着色器", ""),
-            .. _shaders!.Catalog.Select(item => (Label: item.DisplayName, Value: item.Name))
+            ("低档 — 核显或入门老卡（Vega、Iris Xe、GTX 1050）", GpuTier.Low),
+            ("中档 — 入门独显（GTX 1650、RX 6500 XT、Arc A380）", GpuTier.Medium),
+            ("高档 — RTX 3060 / RX 6700 及以上", GpuTier.High)
         ];
 
-        // Held so each can put the other back in step; see ReseedThresholds.
-        _highResThreshold = Number("高清阈值（高度）", 720, 4320, () => shaders.HighResThresholdHeight, value => shaders.HighResThresholdHeight = value,
-            "片源高度达到这个值就算高清", ReseedThresholds);
-        _lowResThreshold = Number("低清阈值（高度）", 240, 1080, () => shaders.LowResThresholdHeight, value => shaders.LowResThresholdHeight = value,
-            "片源高度不超过这个值就算低清；必须低于高清阈值，填高了会被自动压到它下面", ReseedThresholds);
-
-        return new SettingSection("着色器", "画质与着色器", "画质预设和按内容、分辨率自动切换着色器配置组。",
+        // The eight ids never change with 显卡档 — that setting swaps what each one loads, not which ones
+        // exist — so a pinned choice survives changing it and this list needs no reseeding.
+        (string Label, string Value)[] chains =
         [
-            Mpv("画质预设", MpvOutputOptions.QualityPresets, () => video.QualityPreset, value => video.QualityPreset = value),
-            Toggle("所有视频默认启用", "关闭后仅自动规则命中时使用", () => shaders.ApplyToAllVideos, value => shaders.ApplyToAllVideos = value),
-            Choice("默认配置组", profiles, () => shaders.DefaultProfile, value => shaders.DefaultProfile = value),
-            Toggle("动画自动切换", "按 Emby 类型和标签关键词匹配", () => shaders.AutoAnimeProfile, value => shaders.AutoAnimeProfile = value),
-            Choice("动画配置组", profiles, () => shaders.AnimeProfile, value => shaders.AnimeProfile = value),
-            List("动画关键词", "动画, 动漫, Anime", () => shaders.AnimeKeywords, value => shaders.AnimeKeywords = value),
-            Choice("高清配置组", profiles, () => shaders.HighResProfile, value => shaders.HighResProfile = value),
-            _highResThreshold,
-            Choice("低清配置组", profiles, () => shaders.LowResProfile, value => shaders.LowResProfile = value),
-            _lowResThreshold,
-            Toggle("8K 片源关闭着色器", "宽 ≥7000 或高 ≥3000 的片源不套用任何配置组，避免 GPU 过载", () => shaders.DisableForUltraHighRes, value => shaders.DisableForUltraHighRes = value)
-        ]);
-    }
+            ("自动（按放大倍数挑）", ""),
+            .. _shaders!.Catalog.Select(item => (Label: item.DisplayName, Value: item.Id))
+        ];
 
-    /// <summary>
-    /// Puts both threshold boxes back in step with the settings document.
-    /// <para>
-    /// Saving enforces 低清阈值 &lt; 高清阈值, and the value it moves is not always the one that was edited:
-    /// lowering 高清阈值 past 低清阈值 drags 低清阈值 down under it. A row redisplays whatever its own setting
-    /// says after the save, which covers the box being typed into — this is what stops the other box from
-    /// going on showing a number that is no longer in the file.
-    /// </para>
-    /// </summary>
-    private void ReseedThresholds()
-    {
-        _highResThreshold?.Reseed(Settings.Shaders.HighResThresholdHeight);
-        _lowResThreshold?.Reseed(Settings.Shaders.LowResThresholdHeight);
+        return new SettingSection("着色器", "画质与着色器", "按放大倍数、片源类型和显卡档自动挑一条着色器链。",
+        [
+            Toggle("启用着色器", "关掉之后缩放完全交给 mpv 自己", () => shaders.Enabled, value => shaders.Enabled = value,
+                "glsl-shaders"),
+            Choice("显卡档位", gpuTiers, () => shaders.Gpu, value => shaders.Gpu = value,
+                "决定每一档用多重的链，和片源无关。装机默认是低档"),
+            Choice("手动指定档位", chains, () => shaders.ManualGroup, value => shaders.ManualGroup = value,
+                "留在「自动」就按放大倍数挑；想前后对比时在这里钉住一条。每一档具体挂了哪几个着色器，在播放器的 更多 → 着色器 菜单里逐行写着"),
+            Mpv("画质预设", MpvOutputOptions.QualityPresets, () => video.QualityPreset, value => video.QualityPreset = value,
+                "profile", "fast 省算力、high-quality 更细腻。两个都是 mpv 自己内置的；开着着色器时缩放器归档位链，预设只剩它没碰的那几项"),
+            Toggle("自动识别动画", "按 Emby 类型和标签关键词匹配，命中就走动画那半张表", () => shaders.AutoAnimeProfile, value => shaders.AutoAnimeProfile = value),
+            List("动画关键词", "动画, 动漫, Anime", () => shaders.AnimeKeywords, value => shaders.AnimeKeywords = value),
+            Toggle("老片源修复", "片源高度不超过 576 线（DVD 那一代）时，链的最前面加去色带；中高档还加轻度降噪",
+                () => shaders.RestoreVintageSources, value => shaders.RestoreVintageSources = value),
+            Toggle("8K 片源关闭着色器", "宽 ≥7000 或高 ≥3000 的片源不套用任何链，避免 GPU 过载", () => shaders.DisableForUltraHighRes, value => shaders.DisableForUltraHighRes = value)
+
+        ]);
     }
 
     /// <summary>
@@ -720,18 +801,41 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// <summary>
     /// A drop-down over one of the mpv option catalogues. Matched case-insensitively, because these values
     /// go into a settings file a person may well have edited by hand, and mpv itself does not care.
+    /// <para>
+    /// <paramref name="mpvOption"/> is required rather than optional: every row built by this helper exists to
+    /// set one named mpv option, so the one that forgets to say which is a compile error rather than a row the
+    /// reader has to guess at. See <see cref="Annotate"/>.
+    /// </para>
     /// </summary>
-    private SettingChoiceRow Mpv(string label, IReadOnlyList<MpvChoice> options, Func<string> read, Action<string> write, string? note = null) =>
-        Pick(label, note, options.Select(option => (Label: option.Label, Value: option.Value)), read, write, StringComparer.OrdinalIgnoreCase);
+    private SettingChoiceRow Mpv(string label, IReadOnlyList<MpvChoice> options, Func<string> read, Action<string> write, string mpvOption, string? note = null) =>
+        Pick(label, Annotate(note, mpvOption), options.Select(option => (Label: option.Label, Value: option.Value)), read, write, StringComparer.OrdinalIgnoreCase);
 
-    private SettingToggleRow Toggle(string label, string note, Func<bool> read, Action<bool> write) =>
-        new(label, note, read(), write, Save);
+    private SettingToggleRow Toggle(string label, string note, Func<bool> read, Action<bool> write, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption) ?? "", read(), write, Save);
 
-    private SettingNumberRow Number(string label, double minimum, double maximum, Func<int> read, Action<int> write, string? note = null, Action? after = null) =>
-        new(label, note, minimum, maximum, read(), value => write((int)value), () => read(), Save, after);
+    private SettingNumberRow Number(string label, double minimum, double maximum, Func<int> read, Action<int> write, string? note = null, Action? after = null, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption), minimum, maximum, read(), value => write((int)value), () => read(), Save, after);
 
-    private SettingSliderRow Slider(string label, double minimum, double maximum, double step, Func<int> read, Action<int> write, string? note = null) =>
-        new(label, note, minimum, maximum, step, read(), value => write((int)value), Save);
+    private SettingSliderRow Slider(string label, double minimum, double maximum, double step, Func<int> read, Action<int> write, string? note = null, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption), minimum, maximum, step, read(), value => write((int)value), Save);
+
+    /// <summary>
+    /// A row's note with the mpv option it writes named at the end — 「补偿刷新率不匹配造成的抖动（mpv：
+    /// interpolation）」, or just 「mpv：gpu-api」 on a row that had no note of its own.
+    /// <para>
+    /// Composed here rather than typed into two dozen note strings, so the shape cannot drift row to row. It
+    /// exists because the page could not answer 「哪一行是 interpolation」 — the notes said what each row does
+    /// and never what mpv calls it, which is the name every piece of mpv documentation is indexed by. Rows whose
+    /// setting is this client's own behaviour rather than an mpv option pass nothing and read as before.
+    /// </para>
+    /// </summary>
+    private static string? Annotate(string? note, string mpvOption)
+    {
+        var option = mpvOption.Trim();
+        if (option.Length == 0) return note;
+
+        return string.IsNullOrWhiteSpace(note) ? $"mpv：{option}" : $"{note}（mpv：{option}）";
+    }
 
     /// <summary>
     /// A searchable list of the machine's font families. Kept in a field as well as returned: the scan
@@ -742,9 +846,9 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// row hold nothing but the stored value.
     /// </para>
     /// </summary>
-    private SettingFontRow Font(string label, string? note, Func<string> read, Action<string> write)
+    private SettingFontRow Font(string label, string? note, Func<string> read, Action<string> write, string mpvOption = "")
     {
-        var row = new SettingFontRow(label, note, read(), write, Save);
+        var row = new SettingFontRow(label, Annotate(note, mpvOption), read(), write, Save);
 
         if (_fonts is { Ready.Families.Count: > 0 } library) row.Fill(library.Ready);
 

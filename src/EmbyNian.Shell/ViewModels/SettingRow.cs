@@ -24,17 +24,42 @@ namespace EmbyNian.Shell.ViewModels;
 /// </summary>
 public abstract class SettingRow : ObservableObject
 {
+    private string _note;
+
     protected SettingRow(string label, string? note)
     {
         Label = label;
-        Note = note ?? "";
+        _note = note ?? "";
     }
 
     /// <summary>The text in the left-hand column.</summary>
     public string Label { get; }
 
-    /// <summary>The smaller line under the label, or empty when there is none.</summary>
-    public string Note { get; }
+    /// <summary>
+    /// The smaller line under the label, or empty when there is none.
+    /// <para>
+    /// Settable, and observable, for one row: 视频同步 states the value actually in force, and what is in force
+    /// changes when 启用插值 is switched two rows below it. Every other row's note is written once at
+    /// construction and never touched — see <see cref="Restate"/> for why this is not a general refresh
+    /// mechanism.
+    /// </para>
+    /// </summary>
+    public string Note
+    {
+        get => _note;
+        private set
+        {
+            if (SetProperty(ref _note, value)) OnPropertyChanged(nameof(NoteVisibility));
+        }
+    }
+
+    /// <summary>
+    /// Replace the note. <b>Only for a row whose note states another row's consequence</b>, and only from the
+    /// row that causes it — the page has no refresh pass and deliberately does not want one (see
+    /// <see cref="SettingsViewModel"/>: no 「loading」 flag exists because rows read once and write from then
+    /// on). A row that recomputed its own note on every edit would be that flag's problem back again.
+    /// </summary>
+    internal void Restate(string note) => Note = note ?? "";
 
     /// <summary>Collapses the note's <c>TextBlock</c> so an absent note takes no vertical space.</summary>
     public Visibility NoteVisibility => Note.Length == 0 ? Visibility.Collapsed : Visibility.Visible;

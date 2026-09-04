@@ -21,10 +21,14 @@ Require-File (Join-Path $root 'EmbyNian.exe') '主程序'
 Require-File (Join-Path $root 'EmbyNian.deps.json') '依赖清单'
 Require-File (Join-Path $root 'EmbyNian.runtimeconfig.json') '运行时配置'
 Require-File (Join-Path $root 'libmpv-2.dll') '内置 libmpv'
+# libmpv-2.dll 的静态导入里唯一一个不属于 Windows 的 dll（2026-09-04 起来自仓库的 assets\mpv-runtime，
+# 从前是从用户自己那套便携版 mpv 里现拷的）。缺了它 libmpv 连加载都失败，一帧都放不出来 —— 而四道闸门
+# 里没有一关会真的起播，所以这一行是它唯一的守卫。
+Require-File (Join-Path $root 'vulkan-1.dll') 'libmpv 依赖的 Vulkan loader'
 
 $shaderCount = @(Get-ChildItem -LiteralPath (Join-Path $root 'shaders') -Recurse -Filter '*.glsl' -File -ErrorAction SilentlyContinue).Count
 if ($shaderCount -eq 0) {
-    throw "发布验证失败：shaders 目录为空。请准备 mpv_config-2026.08.12 的着色器目录后重试。"
+    throw "发布验证失败：shaders 目录为空。着色器在仓库的 assets\shaders 里，由 Shell 项目的 csproj 拷进输出目录，先看这两处。"
 }
 
 if ($SelfContained) {

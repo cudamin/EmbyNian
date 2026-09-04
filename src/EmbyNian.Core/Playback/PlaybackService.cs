@@ -142,9 +142,7 @@ public sealed class PlaybackService(
             var request = planner.Plan(ticket, connection);
             var playSessionId = Guid.NewGuid().ToString("N");
             _launchOptions = request.PlayerOptions;
-            _launchGroupOptionCount = ShaderGroupCatalog.Find(request.ShaderProfile) is { } launched
-                ? launched.Options.Count + 1
-                : 0;
+            _launchGroupOptionCount = request.ShaderOptionCount;
             LaunchShaderProfile = request.ShaderProfile;
             LaunchShaderReason = request.ShaderReason;
             LaunchQualityPreset = settings.Video.QualityPreset;
@@ -321,53 +319,28 @@ public sealed class PlaybackService(
     }
 
     /// <summary>
-    /// Swaps the active 着色器配置组 mid-playback, scalers included. A group is only as good as the
-    /// scalers it was tuned around, so applying just its <c>glsl-shaders</c> would give a different
-    /// picture than choosing the same group before playing.
+    /// Swaps the active 着色器档位 mid-playback, scalers included. A chain is only as good as the scalers it was
+    /// tuned around, so applying just its <c>glsl-shaders</c> would give a different picture than choosing the
+    /// same chain before playing.
     /// <para>
-    /// Every switch starts from <see cref="ShaderGroupCatalog.NeutralOptions"/> so nothing the previous
-    /// group set can linger — but 「neutral」 means mpv's own default, which is not what this playback
-    /// started with when a 画质预设 chose the scalers. So each neutral name that the launch options
-    /// themselves set goes back to the launch value instead: switching a group off now lands on 画质预设,
-    /// the way it would if the file had been started with no group at all.
+    /// What to set is <see cref="ShaderSwitch.Options"/>'s to decide — including the part that makes a switch
+    /// land on 画质预设 rather than on mpv's factory defaults. All that is left here is sending it, which is the
+    /// half a unit test cannot reach.
     /// </para>
     /// </summary>
     public async Task SetShaderGroupAsync(ShaderGroup? group)
     {
         if (_current is null) return;
 
-        var options = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (name, value) in ShaderGroupCatalog.NeutralOptions)
-            options[name] = LaunchOption(name) ?? value;
-
-        options["glsl-shaders"] = group is null
-            ? ""
-            : MpvListValue.JoinFiles(group.ResolveShaderPaths(ShaderGroupCatalog.ShaderRoot));
-
-        foreach (var (name, value) in group?.Options ?? []) options[name] = value;
+        var options = ShaderSwitch.Options(
+            _launchOptions,
+            _launchGroupOptionCount,
+            group,
+            ShaderGroupCatalog.ShaderRoot);
 
         foreach (var (name, value) in options) await SetPropertyAsync(name, value).ConfigureAwait(false);
 
-        Log.Info(Category, group is null ? "已关闭着色器" : $"已切换着色器配置组：{group.Name}");
-    }
-
-    /// <summary>
-    /// What this playback was launched with for one mpv option, ignoring whatever the launch 着色器配置组
-    /// contributed. The baseline, the 画质预设 and the settings all come before the group in that list, so
-    /// the first entry for a name in the part ahead of the group is the pre-group value — which is
-    /// exactly what a group switch has to fall back to.
-    /// </summary>
-    private string? LaunchOption(string name)
-    {
-        var limit = Math.Max(0, _launchOptions.Count - _launchGroupOptionCount);
-
-        for (var index = 0; index < limit; index++)
-        {
-            if (string.Equals(_launchOptions[index].Key, name, StringComparison.Ordinal))
-                return _launchOptions[index].Value;
-        }
-
-        return null;
+        Log.Info(Category, group is null ? "已关闭着色器" : $"已切换着色器档位：{group.Name}");
     }
 
     private async Task<PlaybackExit> MonitorAsync(

@@ -90,7 +90,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     private readonly EmbySession _session;
     private readonly EmbyImageStore _images;
     private readonly ShaderGroupResolver _shaders;
-    private readonly ShaderStaging _shaderFiles;
 
     /// <summary>The machine's installed families, for the title strip's 字幕字体 box. Shared with the settings page.</summary>
     private readonly FontLibrary _fonts;
@@ -152,6 +151,32 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>The last aspect handed to the window, so an unchanged one is not written again.</summary>
     private double _aspect;
 
+    // ---- 着色器档位的本次播放状态 -------------------------------------------------
+    //
+    // 任务书 2.4：开播时算两套方案（当前窗口 / 所在显示器全屏），进退全屏直接换预备好的那一套，窗口尺寸变化
+    // 停稳 400 毫秒才判一次。判定本身在 Core 里（OutputWatch 加 ShaderTier），这里只有「这次播放是哪个文件」
+    // 和「用户有没有自己钉住一条链」。
+
+    /// <summary>What a re-measurement needs to resolve the chain again: the file, its source and its series.</summary>
+    private (EmbyItem Item, MediaSource Source, EmbyItem? Parent)? _shaderContext;
+
+    private OutputWatch? _outputWatch;
+    private ShaderSurface _surface;
+    private ShaderDecision _windowedPlan;
+    private ShaderDecision _fullscreenPlan;
+
+    /// <summary>The output size the launch decision was made against, so 播放信息 can say when it has moved.</summary>
+    private (int Width, int Height) _launchOutput;
+
+    /// <summary>
+    /// Set once the user picks a chain from the ⚙ menu. An A/B comparison that the window size silently undid
+    /// would not be one, so from that point on this playback keeps what was picked.
+    /// </summary>
+    private bool _shaderPinned;
+
+    /// <summary>Log category for everything above — the same one Core's own shader decisions use.</summary>
+    private const string ShaderLog = "shader";
+
     /// <summary>
     /// Emby's own chapter marks for what is playing, converted once. Two things need them: the 跳过 plan
     /// the file starts with, and the hover preview's still — which is indexed against this list and no
@@ -179,7 +204,6 @@ public sealed partial class PlayerViewModel : ObservableObject
         EmbySession session,
         EmbyImageStore images,
         ShaderGroupResolver shaders,
-        ShaderStaging shaderFiles,
         FontLibrary fonts,
         IUiDispatcher ui)
     {
@@ -188,7 +212,6 @@ public sealed partial class PlayerViewModel : ObservableObject
         _session = session;
         _images = images;
         _shaders = shaders;
-        _shaderFiles = shaderFiles;
         _fonts = fonts;
         _ui = ui;
 
@@ -510,10 +533,44 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>Where the chapter boundaries are, for the ticks the page draws under the slider.</summary>
     internal IReadOnlyList<SkipChapter> ChapterMarks { get; private set; } = [];
 
-    /// <summary>The 着色器 group in force, which the ⚙ menu opens on. Null is 「未启用」.</summary>
+    /// <summary>The 着色器档位 in force, which the ⚙ menu opens on. Null is 「未启用」.</summary>
     internal ShaderGroup? ActiveShader { get; private set; }
 
-    internal IReadOnlyList<ShaderGroup> ShaderCatalog => _shaderFiles.Catalog;
+    /// <summary>
+    /// The eight chains the ⚙ menu offers: this machine's 显卡档 column, for the kind of source that is
+    /// playing. The 老片源 and 高帧率 halves matter here and not in the settings page — the menu's dim right-hand
+    /// column lists the files a row would actually load, which for a DVD includes <c>hdeband</c> and for a 60fps
+    /// source is the ravu chain even on the 动画 rows.
+    /// </summary>
+    internal IReadOnlyList<ShaderGroup> ShaderCatalog =>
+        ShaderGroupCatalog.For(
+            Settings.Shaders.Gpu,
+            ActiveShader?.Vintage ?? false,
+            ActiveShader?.FastMotion ?? false);
+
+
+    /// <summary>
+    /// How large the picture can be drawn now, and how large it would be at full screen. Supplied by the page,
+    /// because neither the client area in physical pixels nor the monitor a window sits on is something a view
+    /// model can ask about. A zero answer means 「nobody could say」, which the 档位 rule reads as 微放大档.
+    /// <para>
+    /// Read at every playback start and again whenever the window's geometry changes — see
+    /// <see cref="NoteSurface"/> for what each kind of change costs.
+    /// </para>
+    /// </summary>
+    internal Func<ShaderSurface>? MeasureSurface { get; set; }
+
+    /// <summary>
+    /// How fast the screen the picture lands on refreshes, in Hz — supplied by the page for the same reason as
+    /// <see cref="MeasureSurface"/>, and 0 when nobody could say.
+    /// <para>
+    /// Read once per playback, for <see cref="PlaybackTicket.DisplayRefreshHz"/>: above about 120Hz 显示同步
+    /// (and with it 插值) costs more than it returns, and that decision belongs to the launch rather than to
+    /// every window move — see <see cref="MpvOutputOptions.ResolveSync"/>.
+    /// </para>
+    /// </summary>
+    internal Func<double>? MeasureRefreshHz { get; set; }
+
 
     internal double SubtitleDelay { get; private set; }
 
@@ -717,6 +774,9 @@ public sealed partial class PlayerViewModel : ObservableObject
             // nothing to offer — and not awaited, because the file does not wait on it.
             if (Episodes.Count == 0 && detail.Type == EmbyItemType.Episode) _ = FillSiblingsAsync(detail);
 
+            var parentItem = parent ?? await ResolveSeriesAsync(detail).ConfigureAwait(true);
+            var output = PrepareShaderPlans(detail, source, parentItem);
+
             var ticket = new PlaybackTicket
             {
                 Item = detail,
@@ -725,14 +785,15 @@ public sealed partial class PlayerViewModel : ObservableObject
                 SubtitleStreamIndex = choice?.SubtitleStreamIndex,
                 SubtitlesDisabled = choice?.SubtitlesDisabled ?? false,
                 StartTicks = choice?.StartTicks ?? resumeTicks,
-                Parent = parent ?? await ResolveSeriesAsync(detail).ConfigureAwait(true)
+                Parent = parentItem,
+                OutputWidth = output.Width,
+                OutputHeight = output.Height,
+                DisplayRefreshHz = MeasureRefreshHz?.Invoke() ?? 0
             };
 
-            // What the planner picked is the group the 着色器 submenu opens on, so it shows the startup
-            // decision rather than looking as though nothing had been applied.
-            ActiveShader = ShaderGroupCatalog.Find(_shaders.Resolve(detail, source, ticket.Parent).Group);
             SubtitleDelay = 0;
             AudioDelay = 0;
+
 
             var result = await _playback.PlayAsync(ticket, _lifetime.Token).ConfigureAwait(true);
 
@@ -1061,6 +1122,13 @@ public sealed partial class PlayerViewModel : ObservableObject
         ClearChapterPeek();
         StatsOpen = false;
         _aspect = 0;
+
+        // 着色器档位 is per playback: the two prepared plans describe a file that is no longer open, and a tick
+        // arriving after this must not act on a size change that belongs to the browsing window.
+        _outputWatch = null;
+        _shaderContext = null;
+        _shaderPinned = false;
+        ActiveShader = null;
 
         ApplyStatus(new PlayerStatus());
         PictureAspectChanged?.Invoke(0);
@@ -1545,15 +1613,163 @@ public sealed partial class PlayerViewModel : ObservableObject
     // ---- 着色器与画面菜单 ---------------------------------------------------------
 
     /// <summary>
-    /// Switches the 着色器 group, or turns shaders off. The staged files are the resolver's business; all
-    /// that is kept here is which group the ⚙ menu should open on.
+    /// Works out both plans 任务书 2.4 asks for — one for the window as it stands, one for this monitor at full
+    /// screen — and returns the output size the launch should be planned against. Called at every playback
+    /// start and again if the window lands on another monitor.
+    /// <para>
+    /// Both are computed even though only one is used, because the point of the pair is that pressing F later
+    /// costs no decision at all. They are cheap: two calls of one pure function over five integers.
+    /// </para>
+    /// </summary>
+    private (int Width, int Height) PrepareShaderPlans(EmbyItem item, MediaSource source, EmbyItem? parent)
+    {
+        _shaderContext = (item, source, parent);
+        _shaderPinned = false;
+        _surface = Surface();
+
+        _windowedPlan = _shaders.Resolve(item, source, parent, (_surface.Width, _surface.Height));
+        _fullscreenPlan = _shaders.Resolve(item, source, parent, _surface.Monitor);
+
+        // What the planner will pick is the 档位 the ⚙ menu opens on, so it shows the startup decision rather
+        // than looking as though nothing had been applied.
+        var plan = _surface.Fullscreen ? _fullscreenPlan : _windowedPlan;
+        ActiveShader = plan.Group;
+
+        var video = source.PrimaryVideoStream;
+        _outputWatch = new OutputWatch(
+            video?.Width ?? 0,
+            video?.Height ?? 0,
+            _surface,
+            plan.Measure.Tier);
+
+        _launchOutput = _surface.Active;
+        return _launchOutput;
+    }
+
+    /// <summary>
+    /// The picture's size now, by 任务书 2.3's order of preference. The monitor is the last resort and says so
+    /// in the log — and is deliberately not remembered as a known size, or one unreadable moment would pin
+    /// every later measurement to the monitor's native resolution.
+    /// </summary>
+    private ShaderSurface Surface()
+    {
+        var surface = MeasureSurface?.Invoke() ?? default;
+        if (surface.Fallback)
+        {
+            Log.Debug(
+                ShaderLog,
+                $"读不到渲染目标尺寸，本次按所在显示器 {surface.MonitorWidth}×{surface.MonitorHeight} 估算"
+                + $"（后端：{(Embedded ? "内置 libmpv" : "外部 mpv.exe，画面不在本窗口里")}）");
+        }
+
+        return surface;
+    }
+
+    /// <summary>
+    /// The window's geometry moved. Full screen and a monitor change take effect now; a plain resize is only
+    /// noted here and <see cref="Tick"/> acts on it once it has held still — see <see cref="OutputWatch"/>.
+    /// <para>
+    /// The size arrives as a callback rather than a value because this is raised for every <c>WM_SIZE</c> the
+    /// shell sees, including the ones while nobody is watching anything: with no film open there is nothing to
+    /// re-measure, and the read is two OS calls that may as well not happen.
+    /// </para>
+    /// </summary>
+    internal void NoteSurface(Func<ShaderSurface> measure)
+    {
+        if (_outputWatch is null || _shaderContext is not { } context) return;
+
+        var surface = measure();
+
+        // 换显示器：两套方案都重算. Done here rather than off the verdict because two monitors of the same size
+        // change nothing about the factor — the 判定 would report nothing at all, while the full-screen plan
+        // it prepared is now for the wrong screen.
+        if (surface.Monitor != _surface.Monitor)
+        {
+            _windowedPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, (surface.Width, surface.Height));
+            _fullscreenPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, surface.Monitor);
+        }
+
+        _surface = surface;
+        Judge(_outputWatch.Observe(surface, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>
+    /// Acts on one verdict. Three of the four outcomes touch mpv not at all, which is the whole point of
+    /// 任务书 2.4: the expensive thing is reloading the chain, and a window being dragged must not do it.
+    /// </summary>
+    private void Judge(OutputVerdict verdict)
+    {
+        if (verdict.Change is OutputChange.None or OutputChange.Waiting) return;
+
+        // 不跨档就只更新上下文里的输出尺寸. There is nothing to hand mpv: ravu-zoom renders to whatever OUTPUT
+        // is on the frame it is drawing, so the only things that were stale are the log line and the OSD.
+        if (verdict.Change == OutputChange.SizeOnly || _shaderPinned)
+        {
+            Restate(verdict);
+            return;
+        }
+
+        // 进 / 退全屏、换显示器：直接换成预备好的那一套，不重新判定、不等防抖.
+        if (verdict.Discrete)
+        {
+            Switch(_surface.Fullscreen ? _fullscreenPlan : _windowedPlan, "全屏切换");
+            return;
+        }
+
+        // A settled resize that crossed a boundary. This is the one case that has to work the chain out now:
+        // the size is new, so no prepared plan describes it.
+        if (_shaderContext is not { } context) return;
+
+        _windowedPlan = _shaders.Resolve(
+            context.Item,
+            context.Source,
+            context.Parent,
+            (verdict.Width, verdict.Height),
+            _outputWatch?.Tier);
+
+        Switch(_windowedPlan, "窗口尺寸变化");
+    }
+
+    /// <summary>Applies a prepared plan to the film that is playing, and says so in the log rather than on screen.</summary>
+    private void Switch(ShaderDecision plan, string because)
+    {
+        if (string.Equals(plan.Group?.Id ?? "", ActiveShader?.Id ?? "", StringComparison.Ordinal))
+        {
+            Log.Debug(ShaderLog, $"{because}，档位没变：{plan.Reason}");
+            return;
+        }
+
+        ActiveShader = plan.Group;
+        _ = _playback.SetShaderGroupAsync(plan.Group);
+        Log.Info(ShaderLog, $"{because}，着色器档位改为：{plan.Reason}");
+    }
+
+    /// <summary>
+    /// Records an output size that did not change the chain, so the log stops quoting the old one. No mpv call:
+    /// nothing in the chain is configured with the size, every one of them reads it per frame.
+    /// </summary>
+    private void Restate(OutputVerdict verdict) =>
+        Log.Debug(
+            ShaderLog,
+            $"输出尺寸改为 {verdict.Width}×{verdict.Height}，仍在"
+            + $"{ShaderTier.Describe(_outputWatch?.Tier ?? UpscaleTier.Slight)}，链不变");
+
+    /// <summary>
+    /// Switches the 着色器档位, or turns shaders off. Applies to the film that is playing and no further —
+    /// this is the seam an A/B comparison is made through, and a comparison that quietly rewrote the settings
+    /// file would not be one. 设置 → 画质与着色器 → 手动指定档位 is where a lasting override goes.
+    /// <para>
+    /// It also stops the automatic rules from moving off this choice for the rest of the film: pressing F
+    /// halfway through a comparison would otherwise put the other chain back.
+    /// </para>
     /// </summary>
     internal void ApplyShaderGroup(ShaderGroup? group)
     {
+        _shaderPinned = true;
         ActiveShader = group;
         _ = _playback.SetShaderGroupAsync(group);
         Noticed?.Invoke(
-            group is null ? "已关闭着色器" : $"已切换着色器：{group.Name}",
+            group is null ? "已关闭着色器" : $"已切换着色器：{group.DisplayName}",
             InfoBarSeverity.Informational);
     }
 
@@ -1840,6 +2056,11 @@ public sealed partial class PlayerViewModel : ObservableObject
         FlushVolume();
 
         ApplySkipOffer();
+
+        // The 400 ms a window size has to hold still before the 档位 is judged again. Here rather than on a
+        // timer of its own because this ticker already runs exactly while the player is up, and a resize that
+        // has settled is precisely a thing that expires rather than happens.
+        if (_outputWatch is { } watch) Judge(watch.Tick(DateTimeOffset.UtcNow));
     }
 
     // ---- 播放信息 ----------------------------------------------------------------
@@ -1862,8 +2083,13 @@ public sealed partial class PlayerViewModel : ObservableObject
 
         if (Status.HasDuration) lines.Add($"时长：{Status.DurationClock}");
         if (_playback.LaunchQualityPreset is { Length: > 0 } preset) lines.Add($"画质预设：{preset}");
-        lines.Add($"着色器配置组：{ActiveShader?.Name ?? "未启用"}");
+        lines.Add($"着色器档位：{ActiveShader?.DisplayName ?? "未启用"}");
+        if (ActiveShader is { } chain) lines.Add($"着色器链：{chain.Description}");
+
+        // 任务书 3.7's line, on screen: the launch decision, then the current one when the window has moved
+        // since. 「开播时是这一条，现在是这一条」 is exactly what a report about frame drops needs to say.
         if (_playback.LaunchShaderReason is { Length: > 0 } reason) lines.Add($"着色器判定：{reason}");
+        if (CurrentShaderLine() is { Length: > 0 } current) lines.Add($"当前判定：{current}");
         lines.Add($"后端：{(Embedded ? "内置 libmpv" : "外部 mpv.exe")}");
 
         var options = _playback.LaunchOptions.Count == 0
@@ -1871,6 +2097,21 @@ public sealed partial class PlayerViewModel : ObservableObject
             : string.Join("\n", _playback.LaunchOptions.Select(option => $"  {option.Key} = {option.Value}"));
 
         return string.Join("\n", lines) + "\n\nmpv 参数：\n" + options;
+    }
+
+    /// <summary>
+    /// The 任务书 3.7 line as it stands right now, or an empty string when nothing has moved since the launch.
+    /// Rebuilt rather than remembered, because the output size is the half of it that changes.
+    /// </summary>
+    private string CurrentShaderLine()
+    {
+        if (_outputWatch is not { } watch || _shaderContext is not { } context) return "";
+        if (watch.Output == _launchOutput) return "";
+
+        var video = context.Source.PrimaryVideoStream;
+        var (width, height) = watch.Output;
+        var measure = ShaderTier.Measure(video?.Width ?? 0, video?.Height ?? 0, width, height, watch.Tier);
+        return ShaderTier.Explain(measure, ActiveShader?.Animated ?? false, Settings.Shaders.Gpu, width, height, ActiveShader);
     }
 
     // ---- plumbing ---------------------------------------------------------------

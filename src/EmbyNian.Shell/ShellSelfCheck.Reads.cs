@@ -2,6 +2,7 @@ using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
+using EmbyNian.Mpv;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.Interop;
@@ -105,6 +106,41 @@ internal static partial class ShellSelfCheck
                 + (directed
                     ? $"这一次 --screen 点了名，没沿用存档={!adopted}"
                     : "这一次是普通启动，开窗时沿用了存档"));
+    }
+
+    /// <summary>
+    /// 自检：帧同步这一次会落在哪。两件屏上和单测都看不见的事：
+    /// <list type="number">
+    /// <item><b>这块屏的刷新率读得出来吗。</b> 三步 Win32（窗口 → 显示器句柄 → 设备名 → 当前显示模式）里任何一步
+    /// 失败，<see cref="MpvOutputOptions.ResolveSync"/> 收到的就是 0，「超过 120Hz 回到音频同步」那条规则于是永远
+    /// 不出手 —— 画面照旧、日志照旧、闸门照旧全绿，只有显卡占用悄悄高一倍（实测 24.7% → 50.1%）。这正是「只有真
+    /// 显示器答得出」的那一类，和上面那条摆窗口的一样。</item>
+    /// <item><b>按这块屏算出来的结论是什么。</b> 写进报告，因为它取决于自检窗口落在哪块屏上：默认带
+    /// <c>--screen 1</c> 的话读的是副屏，不是他平时看片的那块。</item>
+    /// </list>
+    /// <para>
+    /// 片源那半边留空（<c>source: null</c>）：自检不放片子，所以这里只能问「这块屏本身够不够格」。
+    /// </para>
+    /// </summary>
+    private static (bool Ok, string Detail) ReportDisplaySync(HostWindow window, AppSettings settings)
+    {
+        var hz = window.RefreshHz();
+        var (sync, interpolation, standDown) = MpvOutputOptions.ResolveSync(settings.Video, null, hz);
+
+        // 接着显示器就该读得出来，所以读不出来是坏了而不是「这台机器没有」。上限拦的是明显不像刷新率的数；
+        // 0 和 1 那两个「硬件默认」的回答 RefreshHz 已经折成 0。
+        var ok = hz is > 0 and < 1000;
+
+        var live = sync.Length == 0
+            ? "音频同步（不发这个选项）"
+            : MpvOutputOptions.Describe(MpvOutputOptions.VideoSync, sync);
+
+        return (ok,
+            (hz > 0 ? $"这块屏 {hz:0.###}Hz" : "读不出刷新率")
+                + $"；设置里插值={(settings.Video.Interpolation ? "开" : "关")}"
+                + $"、回退={(settings.Video.HighFrameRateAudioSync ? "开" : "关")}"
+                + $"；算出来 video-sync={live}、插值{(interpolation ? "生效" : "不生效")}"
+                + (standDown is null ? "" : $"；{standDown}"));
     }
 
     /// <summary>

@@ -74,6 +74,80 @@ internal struct MonitorInfo
     public uint Flags;
 }
 
+/// <summary>
+/// MONITORINFOEX — MONITORINFO plus the display device name (<c>\\.\DISPLAY1</c>), which is the only way to
+/// ask <c>EnumDisplaySettings</c> about <b>this</b> monitor rather than the primary one. Wanted for the refresh
+/// rate: 设置 → 视频输出 → 高帧率或高刷新率时使用音频同步 needs to know how fast the screen is.
+/// <para>
+/// The name is a <c>fixed char</c> buffer rather than a <c>ByValTStr</c> string because that keeps the struct
+/// blittable, which is what <c>[LibraryImport]</c> source generation requires — a string field there is a
+/// compile error, not a slow path.
+/// </para>
+/// </summary>
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal unsafe struct MonitorInfoEx
+{
+    public uint Size;
+    public NativeRect Monitor;
+    public NativeRect Work;
+    public uint Flags;
+
+    /// <summary>CCHDEVICENAME is 32 wide characters, fixed by the API.</summary>
+    public fixed char Device[32];
+}
+
+/// <summary>
+/// DEVMODEW. Only <see cref="DisplayFrequency"/> is read, but the struct is laid out by offset, so every field
+/// before it has to be declared — the printer/display union (16 bytes either way) is spelled as its display
+/// half, and the trailing driver fields are kept so <c>dmSize</c> can be the real 220 bytes.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal unsafe struct DeviceMode
+{
+    public fixed char DeviceName[32];
+
+    public ushort SpecVersion;
+    public ushort DriverVersion;
+    public ushort Size;
+    public ushort DriverExtra;
+    public uint Fields;
+
+    /// <summary>POINTL dmPosition + dmDisplayOrientation + dmDisplayFixedOutput.</summary>
+    public int PositionX;
+    public int PositionY;
+    public uint DisplayOrientation;
+    public uint DisplayFixedOutput;
+
+    public short Color;
+    public short Duplex;
+    public short YResolution;
+    public short TrueTypeOption;
+    public short Collate;
+
+    public fixed char FormName[32];
+
+    public ushort LogPixels;
+    public uint BitsPerPel;
+    public uint PelsWidth;
+    public uint PelsHeight;
+    public uint DisplayFlags;
+
+    /// <summary>
+    /// The number this whole struct is declared for: whole Hz, so 144 or 60 (and 59 for a 59.94 mode).
+    /// 0 or 1 both mean 「the hardware's default」 rather than a rate, per the API.
+    /// </summary>
+    public uint DisplayFrequency;
+
+    public uint IcmMethod;
+    public uint IcmIntent;
+    public uint MediaType;
+    public uint DitherType;
+    public uint Reserved1;
+    public uint Reserved2;
+    public uint PanningWidth;
+    public uint PanningHeight;
+}
+
 internal static partial class Native
 {
     // ---- window styles --------------------------------------------------------
@@ -358,6 +432,26 @@ internal static partial class Native
     [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+
+    /// <summary>
+    /// The same <c>GetMonitorInfoW</c> asked for the longer struct, i.e. for the display device name.
+    /// Declared separately rather than replacing the short one: everything else here only wants the bounds,
+    /// and the short struct is the one every existing caller passes.
+    /// </summary>
+    [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetMonitorInfoEx(IntPtr monitor, ref MonitorInfoEx info);
+
+    /// <summary>
+    /// The current display mode of one monitor, named by its <c>\\.\DISPLAYn</c> device name. Null asks about
+    /// the primary display, which is exactly the wrong answer on a two-monitor machine, so callers pass a name.
+    /// </summary>
+    [LibraryImport("user32.dll", EntryPoint = "EnumDisplaySettingsW", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool EnumDisplaySettings(string? deviceName, uint modeNumber, ref DeviceMode mode);
+
+    /// <summary>ENUM_CURRENT_SETTINGS — 「what the display is set to right now」 rather than a mode from its list.</summary>
+    public const uint EnumCurrentSettings = unchecked((uint)-1);
 
     /// <summary>MONITOR_DEFAULTTONEAREST — the right answer for a window straddling two displays.</summary>
     public const uint MonitorDefaultToNearest = 2;

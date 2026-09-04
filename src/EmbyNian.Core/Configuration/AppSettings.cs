@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 8;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -126,7 +126,19 @@ public sealed class MpvSettings
     /// <summary>Which player the client starts: the user's mpv.exe or in-process libmpv.</summary>
     public MpvBackendKind Backend { get; set; } = MpvBackendKind.BuiltInLibMpv;
 
-    public string ExecutablePath { get; set; } = @"C:\mpv_config-2026.08.12\mpv.exe";
+    /// <summary>
+    /// The user's own <c>mpv.exe</c>, and only the external backend needs it. Empty out of the box:
+    /// it used to be hard-coded to one portable mpv installation on this machine
+    /// (<c>C:\mpv_config-2026.08.12\mpv.exe</c>), which was the last thing in the client still naming
+    /// that folder — the built-in backend reads nothing from it any more, since the shaders and
+    /// libmpv's own <c>vulkan-1.dll</c> now ship with the program.
+    /// <para>
+    /// Empty is reported rather than guessed at: <c>MpvProcessBackend.Validate</c> refuses to start with
+    /// 「尚未设置 mpv.exe 的路径」, 诊断 prints 「未设置」, and 设置 → 播放器 is where it gets filled in. An
+    /// older settings.json that holds a path keeps it; nothing migrates.
+    /// </para>
+    /// </summary>
+    public string ExecutablePath { get; set; } = "";
 
     /// <summary>
     /// Enables the named-pipe control channel. Without it the app can only report
@@ -294,14 +306,43 @@ public sealed class VideoSettings
     /// </summary>
     public string QualityPreset { get; set; } = "default";
 
-    /// <summary>mpv's <c>vo</c>: 视频渲染.</summary>
+    /// <summary>
+    /// mpv's <c>vo</c>: 视频渲染. <c>gpu-next</c> is the default and the one this shader scheme is written
+    /// for — ArtCNN's and CfL's own documentation both ask for it, and mpv-prescalers records a concrete
+    /// failure for the alternative: <c>vo=gpu</c> with <c>gpu-api=d3d11</c> reports <c>rgba16f</c> as
+    /// unavailable and the ravu chain will not load. <c>gpu</c> is the fallback, not a peer.
+    /// </summary>
     public string Renderer { get; set; } = "gpu-next";
 
-    /// <summary>mpv's <c>gpu-api</c>: 图形接口.</summary>
-    public string GpuApi { get; set; } = "d3d11";
+    /// <summary>
+    /// mpv's <c>gpu-api</c>: 图形接口. <c>vulkan</c> since 2026-09-04, and this one is a measurement rather than
+    /// a preference: same card, same film, same chain (<c>ArtCNN_C4F16 + CfL_Prediction_Lite</c>, 1080p into
+    /// 2560×1440), only this option changed — <b>45 fps on vulkan, 8.7 on d3d11</b>, where 24 fps is what the
+    /// film needs. ArtCNN's eight passes are all <c>//!COMPUTE</c> and that is the whole of the difference; the
+    /// fragment-shader chains are within noise of each other on both. The comment that used to sit here said
+    /// d3d11 was 「worth one A/B on a real film before switching」 — that A/B is
+    /// <c>artifacts/shader-probe/gpu-findings.md</c>.
+    /// <para>
+    /// Left as a user-visible choice, not a constant: a machine whose driver has no vulkan support would get no
+    /// picture at all, and 图形接口 in 设置 → 视频输出 is how it gets one back. <see cref="Mpv.MpvRenderCheck"/>
+    /// says so in the log when a chain with compute passes runs on d3d11.
+    /// </para>
+    /// </summary>
+    public string GpuApi { get; set; } = "vulkan";
 
-    /// <summary>mpv's <c>hwdec</c>: 硬件加速.</summary>
-    public string HardwareDecoding { get; set; } = "";
+    /// <summary>
+    /// mpv's <c>hwdec</c>: 硬件加速. <c>auto-safe</c> from v7 on, where an empty string used to be the
+    /// shipped value — and an empty string means mpv's own default, which is <c>no</c>, that is pure software
+    /// decoding. Nobody chose that; it is what a fresh install happened to carry, and it is the one setting
+    /// that makes a 4K file plus a shader chain harder than it needs to be. <c>auto-safe</c> only picks a
+    /// decoder mpv considers safe with the current 视频渲染, and mpv falls back to software decoding by itself
+    /// when the hardware path fails.
+    /// <para>
+    /// Only the default moved. A settings.json that already holds a value keeps it — including the explicit
+    /// 「关闭（纯软件解码）」 this machine's own file holds, which stays software decoding.
+    /// </para>
+    /// </summary>
+    public string HardwareDecoding { get; set; } = "auto-safe";
 
     /// <summary>
     /// mpv's <c>video-output-levels</c>: 色彩范围. 「色彩范围默认使用 PC(0-255)」 — PC range is what a
@@ -328,6 +369,25 @@ public sealed class VideoSettings
 
     /// <summary>What to do with an HDR source; see <see cref="Mpv.MpvOutputOptions.HdrModes"/>.</summary>
     public string HdrMode { get; set; } = "tonemap";
+
+    /// <summary>
+    /// 自动 ICC 校色 (mpv's <c>icc-profile-auto</c>): hand mpv the ICC profile Windows currently has set for
+    /// the display and let it colour-manage against it.
+    /// <para>
+    /// <b>Off by default, and that is a decision rather than an oversight.</b> <see cref="Mpv.MpvBaseline"/>
+    /// states <c>icc-profile-auto=no</c> on every launch and this switch is what lifts it; the reasons for
+    /// the floor are that the client asks Emby what the source is and picks tone mapping from that
+    /// (<see cref="HdrMode"/>), which a desktop profile silently overrides, and that Windows' 「default
+    /// display profile」 is usually whatever the monitor's driver dropped there rather than a measurement —
+    /// so switching this on for everybody would shift colour on machines nobody ever calibrated.
+    /// </para>
+    /// <para>
+    /// It also costs HDR 直通 when both are on: with a profile loaded mpv maps into the profile's space, so
+    /// the display no longer receives the HDR signal to map itself. On a screen that really has been
+    /// profiled it is the right answer, which is why it is a switch and not a hard-coded <c>no</c>.
+    /// </para>
+    /// </summary>
+    public bool IccProfileAuto { get; set; }
 
     /// <summary>
     /// Falls back to <c>video-sync=audio</c> for a source above about 47fps, where display sync has no
@@ -370,45 +430,64 @@ public sealed class AudioSettings
 }
 
 /// <summary>
-/// Automatic 「着色器配置组」 selection. The groups themselves are shipped C# data —
-/// <see cref="Mpv.ShaderGroupCatalog"/> — so this only records which one to apply and when. The
-/// chosen group's shader chain and scalers are handed to mpv as ordinary options, which is why it
-/// works the same on the external mpv.exe and on the in-process libmpv that has no profiles at all.
+/// 着色器档位: how the chain for one playback is chosen. The chains themselves are shipped C# data —
+/// <see cref="Mpv.ShaderGroupCatalog"/> — so this holds only the things that are genuinely the user's to say:
+/// whether shaders run at all, how much GPU there is to spend, whether to override the automatic pick, and
+/// whether a DVD-era source gets cleaned up first.
+/// <para>
+/// Up to v6 this held four group names and two resolution thresholds, and the rule was 「按片源分辨率挑一个
+/// 具名组」. That rule could not work: 「4K 片源」 and 「480p 片源」 only mean something against a screen size,
+/// and nothing here ever looked at the output. The names and the thresholds are gone — the deserializer drops
+/// keys it has nowhere to put — and what replaced them is <see cref="Mpv.ShaderTier.Measure"/>.
+/// </para>
 /// </summary>
 public sealed class ShaderAutomationSettings
 {
-    /// <summary>Apply <see cref="DefaultProfile"/> to every video.</summary>
-    public bool ApplyToAllVideos { get; set; } = true;
+    /// <summary>
+    /// 启用着色器. Took over from v6's 「所有视频默认启用」: with a chain for every scale factor there is no
+    /// 「默认组」 left for that switch to apply, so the honest question is just on or off.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
 
-    public string DefaultProfile { get; set; } = ShaderGroupCatalog.DefaultGroupName;
+    /// <summary>
+    /// 显卡档位 — which column of the table is in play. Stated by the user rather than probed from the
+    /// adapter's name: that is a list nobody can finish maintaining, and there is one machine to answer for.
+    /// Defaults to <see cref="Mpv.GpuTier.Low"/>, which is both this machine's answer (a 5600G's Vega) and
+    /// what a missing key reads as.
+    /// </summary>
+    public Mpv.GpuTier Gpu { get; set; }
 
-    /// <summary>Apply <see cref="AnimeProfile"/> when the item's genres/tags look animated.</summary>
+    /// <summary>
+    /// A hand-picked chain that overrides the automatic one, as a <see cref="Mpv.ShaderGroup.Id"/>; empty
+    /// means 「按放大倍数自动挑」, which is the normal case. The id names the row of the table, not the cell,
+    /// so changing <see cref="Gpu"/> keeps the override and moves it to the other column.
+    /// <para>
+    /// This is what the player's 着色器 submenu writes when a chain is picked mid-film, which is how a
+    /// side-by-side comparison is made. An id this table no longer has falls back to 自动 in
+    /// <c>SettingsMigration.Normalize</c> rather than to 「no shaders」.
+    /// </para>
+    /// </summary>
+    public string ManualGroup { get; set; } = "";
+
+    /// <summary>Use the 动画 half of the table when the item's genres/tags look animated.</summary>
     public bool AutoAnimeProfile { get; set; } = true;
 
-    public string AnimeProfile { get; set; } = ShaderGroupCatalog.AnimeGroupName;
-
     /// <summary>
-    /// Used instead of the other two when the source is at least
-    /// <see cref="HighResThresholdHeight"/> tall. A 4K source on a 1440p screen only ever
-    /// downscales, so upscaling shaders never trigger and a lighter group saves power for
-    /// free. Empty disables the special case.
+    /// 老片源修复: whether a source of 576 lines or fewer gets <c>hdeband</c> — and, above the low column,
+    /// <c>nlmeans_light</c> — in front of its chain. On by default, because a DVD transfer has banding and
+    /// grain whatever it is being scaled to, and off is here because denoising is the one thing on this list
+    /// that can be said to remove detail rather than add it.
+    /// <para>
+    /// A separate axis from <see cref="Mpv.UpscaleTier"/> on purpose: an NTSC DVD (480 lines) blown up to
+    /// 1080p is 2.25× and a PAL DVD (576 lines) of the same film is 1.88×, so folding 去带 into 大倍数 would
+    /// treat the two regions of one disc completely differently.
+    /// </para>
     /// </summary>
-    public string HighResProfile { get; set; } = ShaderGroupCatalog.HighResGroupName;
-
-    public int HighResThresholdHeight { get; set; } = 1600;
+    public bool RestoreVintageSources { get; set; } = true;
 
     /// <summary>
-    /// Used instead of the other two when the source is no taller than
-    /// <see cref="LowResThresholdHeight"/>. A 2–3× upscale is where a heavier upscaler finally earns
-    /// its cost, which it does not at 1.33×. Empty disables the special case.
-    /// </summary>
-    public string LowResProfile { get; set; } = ShaderGroupCatalog.LowResGroupName;
-
-    public int LowResThresholdHeight { get; set; } = 720;
-
-    /// <summary>
-    /// Applies no group at all to an 8K source. Nothing on an iGPU decodes 8K and runs a shader chain
-    /// at the same time, and the picture is downscaled by a factor of three anyway.
+    /// Applies no chain at all to an 8K source. Nothing on an iGPU decodes 8K and runs a shader chain at the
+    /// same time, and the picture is being shrunk by a factor of three anyway.
     /// </summary>
     public bool DisableForUltraHighRes { get; set; } = true;
 
@@ -419,26 +498,59 @@ public sealed class ShaderAutomationSettings
     /// <summary>Width above which <see cref="DisableForUltraHighRes"/> applies.</summary>
     public const int UltraHighResWidth = 7000;
 
-    /// <summary>The group to apply, or null for none.</summary>
-    public string? Resolve(bool looksAnimated, int? sourceWidth, int? sourceHeight)
+    /// <summary>
+    /// The chain to apply and why, or null with a reason for none. The reason is the one line 任务书 3.7 asks
+    /// for — it reaches the launch log, the 诊断 page and the player's 播放信息 panel, so it is written to be
+    /// read rather than parsed.
+    /// </summary>
+    /// <param name="looksAnimated">What the metadata says, before <see cref="AutoAnimeProfile"/> is consulted.</param>
+    /// <param name="outputWidth">The picture's target size; 0 when nobody could say — see <see cref="Mpv.ShaderTier.Measure"/>.</param>
+    /// <param name="sourceFrameRate">
+    /// The source's frame rate, 0 when Emby never probed it. Above <see cref="Mpv.ShaderTier.FastMotionFps"/> the
+    /// 动画 rows give up their CNN upscaler — see <see cref="Mpv.ShaderGroup.FastMotion"/>.
+    /// </param>
+    /// <param name="current">
+    /// The tier already in force, when this is a re-measurement after the window changed size. Makes the
+    /// boundaries sticky by <see cref="Mpv.ShaderTier.Hysteresis"/>; null for a fresh playback.
+    /// </param>
+    public (Mpv.ShaderGroup? Group, string Reason, Mpv.UpscaleMeasure Measure) Resolve(
+        bool looksAnimated,
+        int sourceWidth,
+        int sourceHeight,
+        int outputWidth,
+        int outputHeight,
+        double sourceFrameRate = 0,
+        Mpv.UpscaleTier? current = null)
     {
-        if (DisableForUltraHighRes && (sourceWidth >= UltraHighResWidth || sourceHeight >= 3000)) return null;
+        if (!Enabled) return (null, "着色器已关闭", default);
 
-        var active = looksAnimated && AutoAnimeProfile ? Trimmed(AnimeProfile) : null;
-        active ??= ApplyToAllVideos ? Trimmed(DefaultProfile) : null;
-        if (active is null) return null;
+        if (DisableForUltraHighRes && (sourceWidth >= UltraHighResWidth || sourceHeight >= 3000))
+            return (null, "片源接近 8K，着色器只会拖慢解码，已全部关闭", default);
 
-        if (sourceHeight >= HighResThresholdHeight && Trimmed(HighResProfile) is { } lighter) return lighter;
 
-        // Height 0 means Emby did not report one; that is not a reason to treat the file as 480p.
-        if (sourceHeight is > 0 && sourceHeight <= LowResThresholdHeight && Trimmed(LowResProfile) is { } heavier)
-            return heavier;
+        var animated = looksAnimated && AutoAnimeProfile;
+        var vintage = RestoreVintageSources && Mpv.ShaderTier.IsVintage(sourceHeight);
+        var fastMotion = Mpv.ShaderTier.IsFastMotion(sourceFrameRate);
+        var measure = Mpv.ShaderTier.Measure(sourceWidth, sourceHeight, outputWidth, outputHeight, current);
 
-        return active;
+        // A hand-picked chain names the row itself, so the 动画 detection is not consulted for it — overriding
+        // the pick and then having the metadata override the override is not an override. 老片源 and 高帧率 still
+        // apply: both are about what the file is, which picking a row does not change.
+        var picked = Mpv.ShaderGroupCatalog.Find(ManualGroup, Gpu, vintage, fastMotion);
+        var group = picked ?? Mpv.ShaderGroupCatalog.Resolve(animated, measure.Tier, Gpu, vintage, fastMotion);
+
+        var line = Mpv.ShaderTier.Explain(measure, group.Animated, Gpu, outputWidth, outputHeight, group);
+        if (group.Vintage) line += " · 老片源修复";
+
+        // Only worth a word when it actually changed the chain. On the 真人 rows and in 缩小 the two halves of
+        // the table are the same chain, so 「已换便宜的链」 there would be a line about nothing.
+        if (group.FastMotion && group.Animated && group.Tier != Mpv.UpscaleTier.Shrink)
+            line += $" · 高帧率片源（超过 {Mpv.ShaderTier.FastMotionFps:0} fps），已换成便宜的链";
+
+        if (picked is not null) line = $"手动指定 · {line}";
+
+        return (group, line, measure);
     }
-
-    private static string? Trimmed(string value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 public sealed class UiSettings

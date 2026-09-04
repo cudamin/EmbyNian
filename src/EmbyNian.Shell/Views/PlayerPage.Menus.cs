@@ -197,12 +197,15 @@ public sealed partial class PlayerPage
         menu.Items.Add(off);
         menu.Items.Add(new MenuFlyoutSeparator());
 
+        // The eight cells this machine's 显卡档 offers, each row naming its own chain in the dim right-hand
+        // column — that column is the whole point of the menu, because comparing two chains on one paused
+        // frame is the only way anyone can tell them apart.
         foreach (var group in ViewModel.ShaderCatalog)
         {
             var row = new RadioMenuFlyoutItem
             {
-                Text = group.Name,
-                IsChecked = active is not null && string.Equals(active.Name, group.Name, StringComparison.Ordinal),
+                Text = group.DisplayName,
+                IsChecked = active is not null && string.Equals(active.Id, group.Id, StringComparison.Ordinal),
                 KeyboardAcceleratorTextOverride = group.Description,
                 Tag = group
             };

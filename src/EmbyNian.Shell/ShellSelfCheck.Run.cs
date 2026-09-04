@@ -86,6 +86,13 @@ internal static partial class ShellSelfCheck
         var remembered = ReportRememberedWindow(window, services.GetRequiredService<ISettingsService>().Settings, options);
         Check("窗口尺寸记得住", remembered.Ok, remembered.Detail);
 
+        // 帧同步那条规则的另一半输入：这块屏刷新率是多少。屏上看不见，单测也碰不到 —— 那两个 Win32 调用（显示器
+        // 句柄 → 设备名 → 当前显示模式）读不出来的话，MpvOutputOptions 收到的就是 0，于是「超过 120Hz 回退音频
+        // 同步」永远不出手，而画面照旧、日志照旧，只有显卡占用悄悄高一倍。所以这一关问的是「读到了没有」，顺带
+        // 把这块屏上算出来的结论写进报告。
+        var refresh = ReportDisplaySync(window, services.GetRequiredService<ISettingsService>().Settings);
+        Check("屏幕刷新率读得到", refresh.Ok, refresh.Detail);
+
         // Exercise the same title-bar transition playback uses, and measure what it does to the frame rather
         // than what it does to the style bits. Dropping WS_CAPTION for playback is exactly how
         // 「播放页面标题栏最上方有一行黑色」 happened: with the caption gone and the resize frame kept, the top

@@ -174,7 +174,7 @@
                             </Grid>
                             <TextBlock Foreground="{ThemeResource EgTextDimBrush}" Text="mpv.exe 路径" />
                             <TextBlock Text="{x:Bind ViewModel.MpvPath, Mode=OneWay}" TextWrapping="Wrap" />
-                            <TextBlock Foreground="{ThemeResource EgTextDimBrush}" Text="着色器配置组" />
+                            <TextBlock Foreground="{ThemeResource EgTextDimBrush}" Text="着色器档位" />
                             <TextBlock Text="{x:Bind ViewModel.Shader, Mode=OneWay}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>

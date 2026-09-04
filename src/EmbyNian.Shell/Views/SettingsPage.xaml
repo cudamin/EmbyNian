@@ -141,10 +141,15 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="2">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <!--
+                              OneWay 而不是默认的 OneTime：视频同步那一行的说明写的是「此刻真正生效的值」，
+                              而它会随两行之下的「启用插值」变。别的下拉行的说明构造完就再也不动，OneWay 对它们
+                              只是多一个不会触发的监听。
+                            -->
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
-                                Text="{x:Bind Note}"
-                                Visibility="{x:Bind NoteVisibility}" />
+                                Text="{x:Bind Note, Mode=OneWay}"
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <ComboBox
                             Grid.Column="1"

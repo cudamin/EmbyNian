@@ -111,8 +111,10 @@ internal static class SettingsTests
             var original = SettingsMigration.NewDefaults();
             original.Servers[0].Name = "果服";
             original.Servers[0].Url = "http://192.168.31.230:8896";
-            original.Shaders.ApplyToAllVideos = false;
-            original.Shaders.AnimeProfile = "2K-iGPU-Anime+";
+            original.Shaders.Enabled = false;
+            original.Shaders.Gpu = EmbyNian.Mpv.GpuTier.High;
+            original.Shaders.ManualGroup = "anime-sweet";
+            original.Shaders.RestoreVintageSources = false;
             original.Playback.AudioTrack = AudioTrackMode.Language;
             original.Playback.AudioLanguage = "日语";
             original.Playback.SubtitleLanguages = ["繁体中文", "中文"];
@@ -122,8 +124,10 @@ internal static class SettingsTests
             var loaded = SettingsMigration.FromJson(json, Protector);
 
             Assert.Equal("果服", loaded.Servers[0].Name);
-            Assert.False(loaded.Shaders.ApplyToAllVideos, "开关状态必须往返一致");
-            Assert.Equal("2K-iGPU-Anime+", loaded.Shaders.AnimeProfile);
+            Assert.False(loaded.Shaders.Enabled, "开关状态必须往返一致");
+            Assert.Equal(EmbyNian.Mpv.GpuTier.High, loaded.Shaders.Gpu);
+            Assert.Equal("anime-sweet", loaded.Shaders.ManualGroup);
+            Assert.False(loaded.Shaders.RestoreVintageSources, "老片源修复关掉了就得记住，不然每次开机又打开");
             Assert.Equal("日语", loaded.Playback.AudioLanguage);
             Assert.Equal("繁体中文,中文", string.Join(",", loaded.Playback.SubtitleLanguages), "字幕优先级的顺序不能被读写打乱");
             Assert.Equal(@"D:\mpv\mpv.exe", loaded.Mpv.ExecutablePath);
@@ -217,7 +221,8 @@ internal static class SettingsTests
 
             Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
             Assert.Equal("gpu-next", settings.Video.Renderer);
-            Assert.Equal("d3d11", settings.Video.GpuApi);
+            Assert.Equal("vulkan", settings.Video.GpuApi,
+                "v4 先补成 d3d11，v8 再把它挪到 vulkan —— 没人主动选过 d3d11，那只是当年装机带的值");
             Assert.Equal("fruit", settings.Video.Dither);
             Assert.Equal("auto", settings.Video.Deband);
             Assert.Equal("tonemap", settings.Video.HdrMode);
@@ -443,7 +448,6 @@ internal static class SettingsTests
             settings.Ui.PosterWidth = 5;
             settings.Playback.MarkWatchedPercent = 5;
             settings.Playback.ProgressReportIntervalSeconds = 0;
-            settings.Shaders.HighResThresholdHeight = 99999;
             settings.Ui.ImageCacheMegabytes = 999999;
 
             SettingsMigration.Normalize(settings);
@@ -452,7 +456,6 @@ internal static class SettingsTests
             Assert.Equal(120, settings.Ui.PosterWidth);
             Assert.Equal(50, settings.Playback.MarkWatchedPercent);
             Assert.Equal(1, settings.Playback.ProgressReportIntervalSeconds);
-            Assert.Equal(4320, settings.Shaders.HighResThresholdHeight, "阈值再高也不能超过 8K 的高度");
             Assert.Equal(EmbyNian.Emby.ImageCachePolicy.MaxMegabytes, settings.Ui.ImageCacheMegabytes,
                 "图片缓存上限的范围必须和设置页那一行是同一对数");
         });
@@ -542,18 +545,96 @@ internal static class SettingsTests
             Assert.Equal("", settings.Playback.SubtitleBackColor);
         });
 
-        Test("规整：不认识的着色器配置组名回退到出厂组", () =>
+        Test("规整：认不出来的着色器档位 id 退回「自动」，认不出来的显卡档退回低档", () =>
         {
             var settings = SettingsMigration.NewDefaults();
-            settings.Shaders.DefaultProfile = "我自己起的名字";
-            settings.Shaders.AnimeProfile = "2K-iGPU-Anime+";
-            settings.Shaders.HighResProfile = "";
+            settings.Shaders.ManualGroup = "我自己起的名字";
+            settings.Shaders.Gpu = (EmbyNian.Mpv.GpuTier)99;
 
             SettingsMigration.Normalize(settings);
 
-            Assert.Equal("2K-iGPU", settings.Shaders.DefaultProfile, "组名对不上就等于完全不上着色器，这种问题很难看出来");
-            Assert.Equal("2K-iGPU-Anime+", settings.Shaders.AnimeProfile, "目录里有的组名要原样留着");
-            Assert.Equal("", settings.Shaders.HighResProfile, "高清片源留空是「不特殊处理」，是个真实选择");
+            Assert.Equal("", settings.Shaders.ManualGroup, "退回「自动」而不是退回「不上着色器」——后者屏上很难看出来");
+            Assert.Equal(EmbyNian.Mpv.GpuTier.Low, settings.Shaders.Gpu, "认不出来的数字就是「没人选过」，那就用最省的那一列");
+
+            settings.Shaders.ManualGroup = "anime-large";
+            SettingsMigration.Normalize(settings);
+            Assert.Equal("anime-large", settings.Shaders.ManualGroup, "表里有的 id 要原样留着");
+        });
+
+        Test("迁移：v6 那四个配置组名和两个阈值不再写回文件，而「所有视频默认启用」跟着走", () =>
+        {
+            // 属性没了，反序列化器碰到没处放的键本来就不出声 —— 这一条钉的是「真的不出声」，
+            // 以及那一个有后继的开关（所有视频默认启用 → 启用着色器）在升级时不会被悄悄打开。
+            const string v6 = """
+            {
+              "SchemaVersion": 6,
+              "Shaders": {
+                "ApplyToAllVideos": false,
+                "DefaultProfile": "2K-iGPU",
+                "AnimeProfile": "2K-iGPU-Anime",
+                "HighResProfile": "2K-iGPU-Light",
+                "HighResThresholdHeight": 1600,
+                "LowResProfile": "2K-iGPU",
+                "LowResThresholdHeight": 720
+              }
+            }
+            """;
+
+            var loaded = SettingsMigration.FromJson(v6, Protector);
+            Assert.Equal(AppSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+            Assert.False(loaded.Shaders.Enabled, "他关掉过着色器，升级不能替他打开");
+            Assert.Equal("", loaded.Shaders.ManualGroup, "旧文件里没有手动指定这一项");
+            Assert.Equal(EmbyNian.Mpv.GpuTier.Low, loaded.Shaders.Gpu);
+
+            var written = JsonSerializer.Serialize(loaded, SettingsSerializer.WriteOptions);
+            foreach (var gone in new[]
+            {
+                "\"ApplyToAllVideos\"", "\"DefaultProfile\"", "\"AnimeProfile\"",
+                "\"HighResProfile\"", "\"LowResProfile\"", "ThresholdHeight"
+            })
+            {
+                Assert.DoesNotContain(gone, written, $"{gone} 已经没有属性了，不该再出现在写回去的文件里");
+            }
+        });
+
+        Test("迁移：v6 里没关过着色器的文件升上来照旧是开着的", () =>
+        {
+            var loaded = SettingsMigration.FromJson("""{ "SchemaVersion": 6, "Shaders": { "ApplyToAllVideos": true } }""", Protector);
+            Assert.True(loaded.Shaders.Enabled);
+        });
+
+        Test("迁移：文件里存着删掉的画质预设 HQ，读回来退成 default", () =>
+        {
+            // HQ 2026-09-04 删掉了（它是用户 mpv.conf 里手抄的段名，mpv 自己并不认识这个 profile）。存着它的文件
+            // 不能坏，也不能把这个名字留在文件里 —— 校验退不回出厂值的话，下一次启动就是 profile=HQ 交给 mpv，
+            // 而 mpv 碰到不认识的 profile 名会直接退出、一个字节都不播。
+            var loaded = SettingsMigration.FromJson("""{ "SchemaVersion": 7, "Video": { "QualityPreset": "HQ" } }""", Protector);
+
+            Assert.Equal("default", loaded.Video.QualityPreset, "认不出来的预设名要退回出厂那一项");
+            Assert.DoesNotContain("\"HQ\"", JsonSerializer.Serialize(loaded, SettingsSerializer.WriteOptions),
+                "退回去之后写回文件里也不该再留着这个名字");
+        });
+
+        Test("迁移：v7 之前的图形接口挪到 vulkan，opengl 那种自己选过的不动", () =>
+        {
+            // 2026-09-04 实测：同一条 ArtCNN_C4F16 + CfL 的链，1080p 放到 2560×1440，只换图形接口 —— vulkan
+            // 45 fps、d3d11 8.7 fps，而 24fps 的片子要 24。「自动挑选」在 Windows 上就是 d3d11，所以两个都要挪；
+            // 这两个值都不是有人特意选的，它们是当年装机带的。
+            Assert.Equal("vulkan",
+                SettingsMigration.FromJson("""{ "SchemaVersion": 7, "Video": { "GpuApi": "d3d11" } }""", Protector).Video.GpuApi);
+            Assert.Equal("vulkan",
+                SettingsMigration.FromJson("""{ "SchemaVersion": 7, "Video": { "GpuApi": "" } }""", Protector).Video.GpuApi,
+                "「自动挑选」在 Windows 上落的就是 d3d11");
+            Assert.Equal("vulkan",
+                SettingsMigration.FromJson("""{ "SchemaVersion": 7 }""", Protector).Video.GpuApi,
+                "整个 Video 段都没有的文件，读出来是装机默认，也该是 vulkan");
+
+            Assert.Equal("opengl",
+                SettingsMigration.FromJson("""{ "SchemaVersion": 7, "Video": { "GpuApi": "opengl" } }""", Protector).Video.GpuApi,
+                "没人会因为装机默认落到 opengl —— 写着它就是有人选的");
+
+            Assert.Equal("vulkan", new AppSettings().Video.GpuApi, "装机默认");
+            Assert.Equal("vulkan", Mpv.MpvRenderCheck.PreferredApi, "迁移和装机默认读的是同一个常量");
         });
 
         Test("规整：字幕外观的数值范围", () =>
@@ -605,37 +686,35 @@ internal static class SettingsTests
             Assert.Equal(0, negative.Audio.Volume);
         });
 
-        Test("规整：低清阈值必须低于高清阈值，不然低清配置组永远轮不到", () =>
+        Test("规整：档位表按放大倍数挑，装机默认不会把任何一档挑成摆设", () =>
         {
-            var settings = SettingsMigration.NewDefaults();
-            var shaders = settings.Shaders;
-            shaders.ApplyToAllVideos = true;
+            // 从前这一条钉的是「低清阈值必须低于高清阈值」：两个框的范围在 720–1080 上重叠、Resolve 先判高清，
+            // 于是低清阈值一顶到高清阈值上，低清配置组就成了摆设 —— 设了、看着像设了、永远不生效。两个阈值
+            // 2026-09-03 连同那四个组名一起删掉了，接替它们的是放大倍数，而这一条守的还是同一件事：八个档位
+            // 每一个都真的挑得到，没有一个是永远轮不到的摆设。
+            var shaders = SettingsMigration.Normalize(SettingsMigration.NewDefaults()).Shaders;
 
-            // 两个框的范围在 720–1080 上重叠，而 Resolve 先判高清。低清阈值一旦顶到高清阈值上，
-            // 这一段里的片源全被算成高清，低清配置组就成了摆设：设了、看着像设了、永远不生效。
-            shaders.HighResThresholdHeight = 720;
-            shaders.LowResThresholdHeight = 1080;
+            (int SourceWidth, int SourceHeight, int OutWidth, int OutHeight, bool Animated, string Id)[] reachable =
+            [
+                (3840, 2160, 2560, 1440, false, "live-shrink"),
+                (1920, 1080, 2560, 1440, false, "live-slight"),
+                (1280, 720, 2560, 1440, false, "live-sweet"),
+                (854, 480, 2560, 1440, false, "live-large"),
+                (3840, 2160, 2560, 1440, true, "anime-shrink"),
+                (1920, 1080, 2560, 1440, true, "anime-slight"),
+                (1280, 720, 2560, 1440, true, "anime-sweet"),
+                (854, 480, 2560, 1440, true, "anime-large")
+            ];
 
-            SettingsMigration.Normalize(settings);
+            foreach (var row in reachable)
+            {
+                Assert.Equal(
+                    row.Id,
+                    shaders.Resolve(row.Animated, row.SourceWidth, row.SourceHeight, row.OutWidth, row.OutHeight).Group?.Id,
+                    $"{row.SourceHeight}p 上 {row.OutHeight}p 该挑到 {row.Id}");
+            }
 
-            Assert.Equal(720, shaders.HighResThresholdHeight, "动的是低清那个，不该反过来改高清");
-            Assert.Equal(719, shaders.LowResThresholdHeight);
-            Assert.True(shaders.LowResThresholdHeight >= 240, "压下来之后仍要落在低清阈值自己的范围里");
-
-            // 真正要的结果：两个配置组各自都能被选中。
-            Assert.Equal(shaders.LowResProfile, shaders.Resolve(looksAnimated: false, 854, 480));
-            Assert.Equal(shaders.HighResProfile, shaders.Resolve(looksAnimated: false, 1280, 720));
-
-            // 相等也不行 —— 边界上同样是高清赢。
-            shaders.HighResThresholdHeight = 1000;
-            shaders.LowResThresholdHeight = 1000;
-            SettingsMigration.Normalize(settings);
-            Assert.Equal(999, shaders.LowResThresholdHeight);
-
-            // 出厂值本来就是分开的，规整一趟不能把它们挪动。
-            var defaults = SettingsMigration.Normalize(SettingsMigration.NewDefaults());
-            Assert.Equal(1600, defaults.Shaders.HighResThresholdHeight);
-            Assert.Equal(720, defaults.Shaders.LowResThresholdHeight);
+            Assert.Equal(8, reachable.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count(), "八个档位一个不落");
         });
 
         Test("语言列表：mpv 的「>」写法和全角分隔符都算分隔符", () =>

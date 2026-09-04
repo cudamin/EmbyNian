@@ -246,17 +246,28 @@ public sealed partial class PlayerPage
 
     /// <summary>
     /// Whether the OS itself says nothing a user could see is on screen: the showing flag down, down to no
-    /// shape at all, or down to the transparent shape this window hides with — a cursor made of nothing is
-    /// not a cursor, and <c>GetCursorInfo</c> reports it as showing like any other handle.
+    /// shape at all, or down to a shape that draws nothing — a cursor made of nothing is not a cursor, and
+    /// <c>GetCursorInfo</c> reports it as showing like any other handle.
     /// Every other reading in this file is the player's own bookkeeping, which was unanimous that the cursor
     /// was hidden through three rounds of 「鼠标指针还是不会自动隐藏」; this is the one that was disagreeing.
     /// A snapshot that cannot be taken is not evidence of a cursor, so it counts as gone.
+    /// <para>
+    /// The last clause is the one that took a while to earn. Hidden over the picture, WinUI does not push
+    /// <b>our</b> blank <c>HCURSOR</c> to the compositor — it pushes a copy of it: a handle we never created,
+    /// different on every run (0xF08BA, 0x244F0B19, 0x4D850313 have all been recorded), which draws nothing and
+    /// which <c>CURSORINFO</c> nevertheless reports as showing. So the question this can honestly answer is
+    /// 「is the thing on screen the system arrow」 rather than 「is there anything at all」, and it is asked only
+    /// while this thread's own queue holds no shape, which is what makes 「some other real cursor」 impossible.
+    /// The arrow is not a technicality here: an arrow standing over a paused film is exactly what was reported,
+    /// and it is what this still goes red for.
+    /// </para>
     /// </summary>
     private bool ScreenHasNoCursor() =>
         Native.CursorSnapshot() is not { } cursor
         || (cursor.Flags & 1) == 0
         || cursor.Shape == IntPtr.Zero
-        || (_window is { } window && cursor.Shape == window.BlankCursor);
+        || (_window is { } window && cursor.Shape == window.BlankCursor)
+        || (NoShape() && cursor.Shape != Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor));
 
     /// <summary>Whether the pointer is where it was just asked to go — an injection can be dropped silently.</summary>
     private static bool Landed(NativePoint at) =>
@@ -608,6 +619,14 @@ public sealed partial class PlayerPage
                 $"什么都没做时 系统 {Says()}"
             };
 
+            // The reading that gets judged, taken here — before any of the three pokes below. They exist to tell
+            // 「the OS has not recomputed yet」 apart from 「the screen really has an arrow on it」, and the last of
+            // them was measured to *cause* the answer it was supposed to reveal: a synthetic WM_SETCURSOR sent to
+            // WinUI's bridge is answered with the arrow, because the bridge only wants no cursor while it is
+            // handling pointer input. Judging after that is judging the probe's own poke. Undisturbed is also the
+            // stricter reading of the two — it is the state a hand that never moved would be looking at.
+            var gone = ScreenHasNoCursor();
+
             // Cheapest first: put the pointer where it already is. Costs nothing if it works, and both the
             // event filter and the poll ignore a zero displacement, so the stillness being measured survives.
             Native.SetCursorPos(at.X, at.Y);
@@ -637,7 +656,6 @@ public sealed partial class PlayerPage
             // What the desktop says about it. Judged now, but only behind three gates — see below.
             var settled = front && front == wasFront && !grabbed;
             var steers = Steers(at);
-            var gone = ScreenHasNoCursor();
 
             lines.Add($"能挪指针={steers}");
 
@@ -651,13 +669,13 @@ public sealed partial class PlayerPage
             // wrong in the other direction: they read 「no cursor」 off a leg whose island never heard anything.
             var judged = heard && settled && steers;
 
-            lines.Add($"系统说屏幕上没有光标={gone}"
+            lines.Add($"没碰它的时候屏幕上没有系统箭头={gone}"
                 + (judged ? string.Empty
                     : !heard ? "（真实输入注不进，这一读数不判）"
                     : !settled ? "（前台是刚抢到的，这一读数还归上一个拿着光标的窗口，不判）"
                     : "（此刻挪不动指针，输入不在我们手上，不判）"));
 
-            if (judged) Want($"{where}系统说屏幕上没有光标", gone);
+            if (judged) Want($"{where}没碰它的时候屏幕上没有系统箭头", gone);
 
             report.Add($"{where}显示层：{string.Join("，", lines)}");
         }

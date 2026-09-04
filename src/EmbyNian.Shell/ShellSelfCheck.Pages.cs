@@ -2,6 +2,7 @@ using System.Text;
 using EmbyNian.Configuration;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
+using EmbyNian.Mpv;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.Platform;
@@ -127,6 +128,44 @@ internal static partial class ShellSelfCheck
         // everything, which is what the container was for.
         var version = services.GetRequiredService<IServerCapabilities>().ServerVersion;
         report.AppendLine($"[信息] 服务读数 — 每页 {settings.PageSize} 条，服务器版本 {version?.ToString() ?? "未知"}");
+
+        // 着色器档位表点名的文件，在**发布出去的这个目录里**真的有没有。The unit test compares the table with
+        // assets/shaders in the repository, which is a different question: the copy step, the csproj glob and
+        // the publish layout all sit between the two. A file that is named and missing is mpv logging a load
+        // failure per frame while the picture merely 「looks a bit off」 — nothing else in the four gates sees it.
+        var missing = ShaderGroupCatalog.MissingShaderFiles();
+        var chains = ShaderGroupCatalog.For(services.GetRequiredService<AppSettings>().Shaders.Gpu);
+
+        check("着色器档位的文件都在", missing.Count == 0,
+            missing.Count > 0
+                ? $"缺 {missing.Count} 个：{string.Join("、", missing.Take(5).Select(Path.GetFileName))}"
+                : $"{ShaderGroupCatalog.ShaderFiles.Count} 个文件全在，{chains.Count} 个档位可选，"
+                    + $"目录 {ShaderGroupCatalog.ShaderRoot}");
+
+        // 三条互斥、色度重建、hdeband 与内置 deband、每个着色器的运行前置条件、链照 mpv 的执行次序写 —— 单测里
+        // 已经钉过一遍，这一关是拿**发布出去这份构建**再问一次：档位表是编译进去的静态数据，可它依赖的着色器文件
+        // 和这台机器的设置不是。
+        var broken = ShaderChainRules.ProblemsInTable();
+        check("着色器档位每一格都合规", broken.Count == 0,
+            broken.Count > 0
+                ? $"{broken.Count} 处不合规：{string.Join("；", broken.Take(3))}"
+                : $"{ShaderGroupCatalog.All.Count} 格全过：放大器/后置锐化/降噪各不超过一个，每格都有色度重建，"
+                    + "运行前置条件都落在了选项里，链的次序和 mpv 的执行次序一致");
+
+        // 任务书 5.6：vo / gpu-api / hwdec 归进同一套档位。只报不判 —— 那三项是用户自己设的，替他改成「能跑」
+        // 就是从另一头「界面在骗人」。默认那一套（gpu-next + vulkan + auto-safe）在这里应当一句话都没有。
+        // 拿这一列里带 compute pass 的那条链去问：ArtCNN 在 D3D11 上比 Vulkan 慢五倍（2026-09-04 实测 8.7 对
+        // 45 fps），而那条链是不是在这台机器上跑得动，恰恰要连着图形接口一起看才有答案。
+        var video = services.GetRequiredService<AppSettings>().Video;
+        var conditions = MpvRenderCheck.Problems(
+            video.Renderer,
+            video.GpuApi,
+            video.HardwareDecoding,
+            chains.FirstOrDefault(chain => chain.Shaders.Any(shader => shader.ComputePasses > 0)));
+
+        report.AppendLine($"[信息] 着色器的运行条件 — vo={video.Renderer}、gpu-api={video.GpuApi}、"
+            + $"hwdec={(string.IsNullOrWhiteSpace(video.HardwareDecoding) ? "（未设置）" : video.HardwareDecoding)}："
+            + (conditions.Count == 0 ? "没有需要提醒的" : string.Join("；", conditions)));
     }
 
     /// <summary>

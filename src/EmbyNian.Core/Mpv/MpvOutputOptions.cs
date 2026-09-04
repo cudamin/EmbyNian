@@ -103,7 +103,10 @@ public static class MpvOutputOptions
 
     public static readonly MpvChoice[] VideoSync =
     [
-        new(Inherit, "不指定（等同音频同步）"),
+        // 「跟随插值」 rather than the 「等同音频同步」 this used to say: with 启用插值 on it is not equivalent to
+        // audio sync, it resolves to display-resample. Which of the two is in force is on the row's own note,
+        // from ResolveSync — the label states that the choice defers, and the note states what it defers to.
+        new(Inherit, "不指定（跟随插值）"),
         new("audio", "音频同步"),
         new("display-resample", "显示同步（重采样音频）"),
         new("display-vdrop", "显示同步（丢帧）")
@@ -178,22 +181,55 @@ public static class MpvOutputOptions
     /// <summary>
     /// 画质预设: a whole scaler chain in one pick, the way an mpv.conf <c>profile=</c> line does it.
     /// <para>
-    /// <c>default</c> and <c>high-quality</c> are mpv's own built-in profiles, compiled into the binary
-    /// rather than read from a config file, so they still exist under <c>--no-config</c>. <c>HQ</c> is not
-    /// — it was a <c>[HQ]</c> section in the user's own mpv.conf, so it is spelled out option by option in
-    /// <see cref="QualityPresetOptions"/> instead of named.
+    /// <b>All three are mpv's own built-in profiles</b>, compiled into the binary rather than read from a
+    /// config file, so they still exist under <c>--no-config</c> and no option list has to be hand-copied
+    /// here. Read out of the shipped <c>libmpv-2.dll</c> (v0.41.0-923) and confirmed against the external
+    /// <c>mpv.exe</c> (v0.41.0-922) with <c>--show-profile</c>, so this is what they contain rather than what
+    /// their names suggest:
     /// </para>
     /// <para>
-    /// Presets go out first, before the per-option 视频输出 settings and before the shader group, so both
-    /// of those still win: a preset is a starting point, not a lock. In particular a 着色器配置组 brings its
-    /// own scalers and will replace the preset's.
+    /// <c>fast</c> — <c>scale=bilinear dscale=bilinear dither=no correct-downscaling=no
+    /// linear-downscaling=no sigmoid-upscaling=no hdr-compute-peak=no allow-delayed-peak-detect=yes</c>.
+    /// <c>high-quality</c> — <c>scale=ewa_lanczossharp scale-antiring=0.6 hdr-peak-percentile=99.995
+    /// hdr-contrast-recovery=0.30</c>. <c>default</c> is empty without a config file, so it is implemented by
+    /// sending nothing at all.
+    /// </para>
+    /// <para>
+    /// <b>「default」 is the first entry and stays spelled that way</b> — it was briefly relabelled 「无」 with an
+    /// empty value on 2026-09-04, and the user sent it straight back (「改回 default」). Both spellings send
+    /// nothing at all, so this is a naming question and his to settle: the row now reads like its two
+    /// neighbours, all three being names mpv itself uses. <b>Don't 「tidy」 it into the empty-string 「不设置」
+    /// the other lists here use.</b> The one consequence to know is that 播放信息 and the 诊断 page print the
+    /// value back, so a playback with no preset applied shows 「画质预设：default」 — which is the same word the
+    /// settings page shows, so the two agree.
+    /// </para>
+    /// <para>
+    /// <b>Both of the non-empty ones set scalers the 着色器档位 then overwrites</b>, because the chain goes out
+    /// last and nobody can edit someone else's built-in profile. So with a chain running, what is left of
+    /// 「fast」 is the dither, light-space and HDR-peak work — not the scaling, and not the shaders, which are
+    /// the expensive part. <b>「fast」 only means 「fast」 with 着色器 switched off</b> (or on an 8K source, where
+    /// the chain steps aside). That is not a bug to route around: it is the same overlap
+    /// <c>high-quality</c> has always had, and a C# branch second-guessing a built-in profile would be a
+    /// worse lie than the overlap.
+    /// </para>
+    /// <para>
+    /// <b>A preset must not name <c>scale</c>, <c>cscale</c> or <c>dscale</c> itself.</b> Those three belong
+    /// to the 着色器档位 — see <see cref="ShaderGroupCatalog"/>. The deleted 「HQ」 entry (a <c>[HQ]</c> section
+    /// hand-copied out of the user's own mpv.conf) did, and the settings page then read 「画质预设 = HQ」 while
+    /// the chain's <c>cscale=spline36</c> was what the picture actually came out of: the page was not
+    /// describing the picture.
+    /// </para>
+    /// <para>
+    /// Presets go out first, before the per-option 视频输出 settings and before the chain, so both of those
+    /// win. The list runs cheapest to most expensive; <c>default</c> stays first because
+    /// <c>SettingsMigration</c> falls back to entry 0 for a value it does not recognise.
     /// </para>
     /// </summary>
     public static readonly MpvChoice[] QualityPresets =
     [
         new(DefaultPreset, "default（mpv 出厂画质，不额外套用）"),
-        new("high-quality", "high-quality（mpv 内置高画质预设）"),
-        new(HqPreset, "HQ（ewa_lanczossharp 放大 + lanczos 缩小）")
+        new("fast", "fast（mpv 内置省算力预设）"),
+        new("high-quality", "high-quality（mpv 内置高画质预设）")
     ];
 
     /// <summary>
@@ -203,32 +239,6 @@ public static class MpvOutputOptions
     /// would (mpv exits before playing anything).
     /// </summary>
     private const string DefaultPreset = "default";
-
-    /// <summary>The user's own <c>[HQ]</c> profile, re-expressed in C#; see <see cref="QualityPresetOptions"/>.</summary>
-    private const string HqPreset = "HQ";
-
-    /// <summary>
-    /// 「HQ」 spelled out. Copied from the <c>[HQ]</c> section of <c>mpv_config-2026.08.12</c> so the
-    /// picture matches what that config produced: sharpened EWA Lanczos going up, plain Lanczos coming
-    /// down, light antiringing on both, and sigmoid rather than linear light for the upscale.
-    /// <para>
-    /// <c>deband=no</c> is part of the profile and is kept, but 去色带 is emitted after this and wins
-    /// whenever it is set to anything other than 「不设置」.
-    /// </para>
-    /// </summary>
-    private static readonly KeyValuePair<string, string>[] QualityPresetOptions =
-    [
-        new("scale", "ewa_lanczossharp"),
-        new("cscale", "bilinear"),
-        new("dscale", "lanczos"),
-        new("scale-antiring", "0.5"),
-        new("dscale-antiring", "0.5"),
-        new("linear-upscaling", Off),
-        new("sigmoid-upscaling", "yes"),
-        new("correct-downscaling", "yes"),
-        new("linear-downscaling", Off),
-        new("deband", Off)
-    ];
 
     /// <summary>字幕文字颜色. A short list of readable ones rather than a colour picker.</summary>
     public static readonly MpvChoice[] SubtitleColors =
@@ -300,6 +310,38 @@ public static class MpvOutputOptions
     /// <summary>Frame rate above which display sync is more trouble than it is worth.</summary>
     private const double HighFrameRateThreshold = 47;
 
+    /// <summary>
+    /// Refresh rate above which display sync costs more than it returns, in Hz.
+    /// <para>
+    /// <b>Measured on this machine 2026-09-04</b> (2560×1440, 24fps source, <c>gpu-next</c> + vulkan, no shader
+    /// chain, external mpv on a local file — <c>artifacts/shader-probe/interp-cost.ps1</c>): under display sync
+    /// mpv moves the final pass — frame mixing, colour encoding, dithering — out of the per-frame path and runs
+    /// it <b>once per refresh</b> instead, so at 144 Hz that ~1.1 ms of work goes from 24 to 144 times a second,
+    /// about 100–160 ms of extra GPU time per second. Windows' own per-process counter read 24.7% on audio sync
+    /// against 50.1% on display sync with everything else equal.
+    /// </para>
+    /// <para>
+    /// And it buys nothing here: 144 ÷ 24 = 6.000, so there is no cadence to smooth, and <c>vo-passes</c>
+    /// reports <c>frame mixing (1 frame)</c> — no blending — nearly every sample. What display sync fixes is the
+    /// uneven 2-3-2-3 cadence of a 60 Hz screen, where a whole refresh is 16.7 ms; at 144 Hz the worst case is
+    /// 6.9 ms and shrinking.
+    /// </para>
+    /// <para>
+    /// <b>120 is the user's own number.</b> His external mpv's config carries the same rule
+    /// (<c>[fps-fix] profile-cond = estimated-vf-fps &gt; 47 or display-fps &gt; 120 → video-sync=audio</c>,
+    /// described there as 「修复视频帧率和显示刷新率过高引起的异常耗能或掉帧」), which is why 「外置 mpv 开了插值也
+    /// 不费显卡」 — measured on his config, <c>display-sync-active</c> comes back False and the interpolation he
+    /// switched on never ran. This client implemented only the frame-rate half of that rule until now.
+    /// </para>
+    /// <para>
+    /// <b>Do not reach for <c>--interpolation-threshold</c> instead.</b> It is documented to treat a near-integer
+    /// refresh÷fps ratio as exact and skip blending, which is what 6.006 is — but on <c>gpu-next</c> it does
+    /// nothing measurable: setting it to -1 (logic off) produced an identical pass list and identical 2-frame
+    /// mixes. And it would not help anyway, because the bill is the per-refresh output pass, not the blend.
+    /// </para>
+    /// </summary>
+    private const double HighRefreshThreshold = 120;
+
     /// <summary>Every option pair these settings ask for, in the order they should reach mpv.</summary>
     /// <param name="source">
     /// The video about to play, for the rules that depend on it (去色带自动, HDR, 高帧率). Null skips all
@@ -310,12 +352,17 @@ public static class MpvOutputOptions
     /// <see cref="Playback.ShaderGroupResolver"/>, which already has to answer the same question for the
     /// 动画配置组 rule.
     /// </param>
+    /// <param name="displayRefreshHz">
+    /// The refresh rate of the screen the picture will be drawn on, for <see cref="HighRefreshThreshold"/>.
+    /// 0 means 「nobody could say」 and switches that rule off, which is what a test and the settings page get.
+    /// </param>
     public static IReadOnlyList<KeyValuePair<string, string>> Build(
         VideoSettings video,
         AudioSettings audio,
         PlaybackSettings? subtitles = null,
         SourceProfile? source = null,
-        bool animated = false)
+        bool animated = false,
+        double displayRefreshHz = 0)
     {
         var options = new List<KeyValuePair<string, string>>(32);
 
@@ -327,17 +374,23 @@ public static class MpvOutputOptions
         Add(options, "video-output-levels", video.OutputLevels);
         if (video.Deinterlace) Add(options, "deinterlace", "yes");
 
-        // interpolation without display sync is a no-op that only logs a warning, so the sync mode
-        // comes along with it unless the user asked for a specific one.
-        var sync = video.VideoSync;
-        if (video.Interpolation)
+        // 视频同步 and 插值 are decided together by ResolveSync — one writer, so 「设置页显示的值」 and
+        // 「真正发出去的值」 cannot drift apart.
+        var (sync, interpolation, _) = ResolveSync(video, source, displayRefreshHz);
+
+        if (interpolation)
         {
             Add(options, "interpolation", "yes");
 
             // oversample is the cheap end of mpv's temporal filters: it only blends the frames that
             // straddle a display refresh instead of running a real reconstruction filter.
             Add(options, "tscale", "oversample");
-            if (sync.Length == 0) sync = "display-resample";
+        }
+        else if (video.Interpolation)
+        {
+            // 插值开着，但这个片源或这块屏被上面那两条规则否掉了。必须显式发 no 而不是什么都不发：
+            // 「不发」在一个复用的 mpv 实例上等于沿用上一部片子的 yes。
+            Add(options, "interpolation", Off);
         }
 
         Add(options, "video-sync", sync);
@@ -345,7 +398,12 @@ public static class MpvOutputOptions
         AddDither(options, video.Dither);
         AddDeband(options, video.Deband, source, animated);
         AddHdr(options, video.HdrMode, source);
-        AddHighFrameRate(options, video, source);
+
+        // 自动 ICC 校色, written next to HDR because the two interact: with a display profile loaded mpv maps
+        // into that profile's space, so HDR 直通 stops being 直通. Only ever sent as 「on」 — MpvBaseline
+        // states icc-profile-auto=no on every launch, so 「off」 is already the floor and sending it again
+        // here would be two layers writing one option for no gain. Same shape as every other bool here.
+        if (video.IccProfileAuto) Add(options, "icc-profile-auto", "yes");
 
         if (video.NetworkCacheMegabytes > 0)
         {
@@ -391,20 +449,16 @@ public static class MpvOutputOptions
     }
 
     /// <summary>
-    /// 画质预设. <c>default</c> sends nothing (mpv's own <c>[default]</c> profile is empty without a
-    /// config file), <c>HQ</c> is expanded into the option block it stood for, and anything else is
-    /// handed to mpv as a <c>profile=</c> — which is how <c>high-quality</c> reaches it.
+    /// 画质预设. <c>default</c> sends nothing at all — mpv's own <c>[default]</c> profile is empty without a
+    /// config file, and naming it would be a no-op that could still fail on a build spelling it differently.
+    /// Everything else is handed to mpv as a <c>profile=</c>, which is how <c>fast</c> and
+    /// <c>high-quality</c> reach it; <c>SettingsMigration</c> guarantees the value is one of
+    /// <see cref="QualityPresets"/>, and an unknown profile name would stop mpv before it played anything.
     /// </summary>
     private static void AddQualityPreset(List<KeyValuePair<string, string>> options, string preset)
     {
         var value = preset.Trim();
         if (value.Length == 0 || value.Equals(DefaultPreset, StringComparison.OrdinalIgnoreCase)) return;
-
-        if (value.Equals(HqPreset, StringComparison.OrdinalIgnoreCase))
-        {
-            options.AddRange(QualityPresetOptions);
-            return;
-        }
 
         Add(options, "profile", value);
     }
@@ -500,21 +554,6 @@ public static class MpvOutputOptions
     }
 
     /// <summary>
-    /// 高帧率片源回退到音频同步. Display-sync resamples audio to the refresh rate, which works well for
-    /// 24fps material on a 60Hz+ screen; once the source is near or above the refresh rate there is no
-    /// spare cadence to resample into and it turns into dropped or repeated frames. Interpolation goes
-    /// with it, because a 60fps source has nothing left to interpolate.
-    /// </summary>
-    private static void AddHighFrameRate(List<KeyValuePair<string, string>> options, VideoSettings video, SourceProfile? source)
-    {
-        if (!video.HighFrameRateAudioSync) return;
-        if (source is not { FrameRate: > HighFrameRateThreshold }) return;
-
-        Add(options, "video-sync", "audio");
-        Add(options, "interpolation", Off);
-    }
-
-    /// <summary>
     /// 字幕外观. The colours go out in mpv's <c>r/g/b/a</c> float form rather than <c>#AARRGGBB</c>:
     /// both are accepted, and in the float form 1.0 unambiguously means opaque, which is what 背景不透明度
     /// has to control.
@@ -552,6 +591,88 @@ public static class MpvOutputOptions
         // the subtitle canvas to the window puts them back on screen.
         if (subtitles.StretchWideImageSubtitles && source is { AspectRatio: > 1.79 })
             Add(options, "stretch-image-subs-to-screen", "yes");
+    }
+
+    /// <summary>
+    /// 视频同步 and 插值 as they will actually be sent — the one place that decides either, so the settings page
+    /// can state the value in force instead of the value that was stored.
+    /// <para>
+    /// Four things decide them and this is the whole of the rule. <b>启用插值 raises 视频同步 by itself</b>:
+    /// mpv's interpolation without display sync is a no-op that only logs a warning, so the sync mode has to come
+    /// along with it unless the user named one. <b>高帧率片源 overrides both</b>: display sync resamples audio to
+    /// the refresh rate, which works for 24fps material on a 60Hz+ screen, but once the source approaches the
+    /// refresh rate there is no spare cadence to resample into and it turns into dropped or repeated frames —
+    /// and a 60fps source has nothing left to interpolate anyway. <b>高刷新率屏幕 overrides both the same way</b>,
+    /// for the cost measured on <see cref="HighRefreshThreshold"/>: the whole final pass runs once per refresh
+    /// under display sync, and on a screen that fast there is next to no judder left for it to remove.
+    /// </para>
+    /// <para>
+    /// Both overrides are one switch — 设置 → 视频输出 → 高帧率或高刷新率时使用音频同步 — because they are one
+    /// judgement: 「display sync is being charged for more than it returns here」. Turning it off gives display sync
+    /// back on any screen, which is the escape hatch for a 60Hz projector or a screen this rule reads wrongly.
+    /// </para>
+    /// <para>
+    /// It exists because 「视频同步 = 不指定（等同音频同步）」 was on screen while <c>display-resample</c> was in
+    /// force — the same 「界面在骗人」 shape as 画质预设 writing <c>scale</c> under a chain that overwrote it. The
+    /// cure there and here is the same: one writer, and the page reads what the writer decided. A unit test
+    /// compares this against what <see cref="Build"/> actually emits, in both directions.
+    /// </para>
+    /// </summary>
+    /// <param name="source">
+    /// The film about to play, when it is known. Null is the settings page's case — nobody is playing anything,
+    /// so the frame-rate override cannot apply and the page says so in words instead.
+    /// </param>
+    /// <param name="displayRefreshHz">
+    /// The screen the picture will be drawn on. 0 is 「not known」 — the settings page again, whose own window may
+    /// not even be on the monitor the film will play on, so that row states this rule in words too.
+    /// </param>
+    /// <returns>
+    /// The two values mpv will be given, plus why display sync stood down when it did — one sentence for the log
+    /// and for the settings page, null when nothing was overridden. Kept in the same return as the decision so a
+    /// second function cannot drift away from the rule it is explaining.
+    /// </returns>
+    public static (string Sync, bool Interpolation, string? StandDown) ResolveSync(
+        VideoSettings video,
+        SourceProfile? source = null,
+        double displayRefreshHz = 0)
+    {
+        var chosen = (video.VideoSync ?? "").Trim();
+
+        if (video.HighFrameRateAudioSync)
+        {
+            if (source is { FrameRate: > HighFrameRateThreshold } fast)
+            {
+                return ("audio", false,
+                    $"片源 {fast.FrameRate:0.###}fps 超过 {HighFrameRateThreshold:0}，显示同步已经没有多余的节拍可以重采样，"
+                    + "本次回到音频同步");
+            }
+
+            if (displayRefreshHz > HighRefreshThreshold)
+            {
+                return ("audio", false,
+                    $"屏幕 {displayRefreshHz:0.###}Hz 超过 {HighRefreshThreshold:0}，显示同步要按刷新率重跑最后一趟渲染、"
+                    + "而这个刷新率下几乎没有抖动可补，本次回到音频同步");
+            }
+        }
+
+        if (!video.Interpolation) return (chosen, false, null);
+
+        return (chosen.Length == 0 ? "display-resample" : chosen, true, null);
+    }
+
+    /// <summary>
+    /// What one of these catalogues calls a value — 「显示同步（重采样音频）」 for <c>display-resample</c>.
+    /// For the settings page, so a row can name a value it did not itself offer.
+    /// </summary>
+    public static string Describe(IReadOnlyList<MpvChoice> catalogue, string? value)
+    {
+        var trimmed = (value ?? "").Trim();
+        foreach (var choice in catalogue)
+        {
+            if (string.Equals(choice.Value, trimmed, StringComparison.OrdinalIgnoreCase)) return choice.Label;
+        }
+
+        return trimmed.Length == 0 ? "" : trimmed;
     }
 
     /// <summary><c>#RRGGBB</c> plus an opacity percentage as mpv's <c>r/g/b/a</c>; null when unset.</summary>
