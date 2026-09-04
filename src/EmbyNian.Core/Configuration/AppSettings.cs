@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 10;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -188,15 +188,24 @@ public sealed class PlaybackSettings
 
     public int ProgressReportIntervalSeconds { get; set; } = 5;
 
-    /// <summary>Whether the audio track follows the server's default or one chosen language.</summary>
-    public AudioTrackMode AudioTrack { get; set; } = AudioTrackMode.ServerDefault;
-
     /// <summary>
-    /// The one language the audio track is picked by when <see cref="AudioTrack"/> says so — a name
-    /// from <see cref="Playback.TrackLanguagePriority.Catalogue"/> such as 日语, or a raw mpv code.
-    /// A file with no track in it falls back to the default track.
+    /// Audio-track languages in priority order: the first one the file actually has wins, and an empty list
+    /// means 「whatever the server marks as default」.
+    /// <para>
+    /// <b>A list rather than the single language this held up to v9.</b> mpv's own <c>alang</c> has always taken
+    /// a list, the subtitle side next door has always been one, and 「日语 &gt; 粤语 &gt; 英语」 was simply not
+    /// expressible — a Cantonese dub was either the only thing you could ask for or nothing. Parsed by the same
+    /// <see cref="Playback.TrackLanguagePriority.ParseList"/> the subtitle row uses, so 「简体中文 &gt; 中文」 in
+    /// one box and in the other mean the same thing.
+    /// </para>
+    /// <para>
+    /// <b>There is no companion 「按语言挑 / 跟随默认」 mode any more.</b> An empty list already says 「跟随默认」,
+    /// and the old <c>AudioTrack</c> enum was a second way to say exactly that — which is how a stored language
+    /// could sit in the file being ignored. See <c>SettingsMigration</c>'s v10 step, which respects the old
+    /// mode when carrying the single value over.
+    /// </para>
     /// </summary>
-    public string AudioLanguage { get; set; } = "";
+    public List<string> AudioLanguages { get; set; } = [];
 
     /// <summary>
     /// Subtitle languages in priority order: the first one the file actually has wins. Stored as
@@ -338,8 +347,11 @@ public sealed class VideoSettings
     /// decoder mpv considers safe with the current 视频渲染, and mpv falls back to software decoding by itself
     /// when the hardware path fails.
     /// <para>
-    /// Only the default moved. A settings.json that already holds a value keeps it — including the explicit
-    /// 「关闭（纯软件解码）」 this machine's own file holds, which stays software decoding.
+    /// Only the default moved; a settings.json that already holds a value keeps it, and a stored empty string
+    /// therefore stays pure software decoding. That is worth knowing rather than worth migrating — unlike
+    /// 图形接口 (v8) and 高帧率回退 (v9), this one costs CPU rather than changing what anybody was promised, and
+    /// <see cref="Mpv.MpvRenderCheck"/> already says so in the log and the self-check report when it is off.
+    /// This machine's own file has since been set to <c>auto-safe</c> from the settings page.
     /// </para>
     /// </summary>
     public string HardwareDecoding { get; set; } = "auto-safe";
@@ -390,13 +402,43 @@ public sealed class VideoSettings
     public bool IccProfileAuto { get; set; }
 
     /// <summary>
-    /// Falls back to <c>video-sync=audio</c> for a source above about 47fps, where display sync has no
-    /// spare cadence to resample into and starts dropping frames instead of smoothing them.
+    /// Falls back to <c>video-sync=audio</c>, interpolation with it, in the two cases where display sync is
+    /// charged more than it returns: a source above about 47fps, which has no spare cadence left to resample
+    /// into, and a screen above about 120Hz, where the whole final render pass starts running once per refresh
+    /// for judder there is barely any of. Both halves are <see cref="Mpv.MpvOutputOptions.ResolveSync"/>'s.
+    /// <para>
+    /// <b>The refresh-rate half arrived on 2026-09-04, and v9 turns the switch back on for anyone who had it
+    /// off.</b> Up to then it only meant 「高帧率片源」, so a stored <c>false</c> was an answer to a question
+    /// about frame rates and says nothing about screens — and on this machine it was silently declining the
+    /// very rule that was measured to halve GPU load on a 144Hz panel (24.7% against 50.1%), with no line
+    /// anywhere saying so, because the log only speaks when the rule fires. Same reasoning as v8's 图形接口
+    /// move: a value nobody chose for the meaning it now has is not a preference. Switching it off after v9 is
+    /// a real choice — the settings row names both halves — and nothing touches it again.
+    /// </para>
     /// </summary>
     public bool HighFrameRateAudioSync { get; set; } = true;
 
     /// <summary>Demuxer cache in MiB; 0 leaves mpv's own default alone.</summary>
     public int NetworkCacheMegabytes { get; set; }
+
+    /// <summary>
+    /// 宽于 16:9 的片源默认裁切填充 — mpv's <c>panscan=1.0</c>, applied only to a source wider than
+    /// <see cref="Mpv.MpvOutputOptions.WideAspect"/>. Off by default, and it crops: a 2.35:1 film fills a 16:9
+    /// screen by losing the left and right edges of every frame.
+    /// <para>
+    /// <b>This is the one piece of 画面几何 worth remembering across files.</b> Aspect override, rotation, pan,
+    /// zoom and the colour controls are all on the player's right-click menu and none of them persist — every
+    /// playback is a fresh mpv under <c>--no-config</c>. Mainstream players remember all of them; here almost
+    /// none of it is missed, because 锁定窗口比例大小 already keeps the window the shape of the picture so there
+    /// is normally nothing to letterbox. The exception is exactly this: a 2.35:1 film always has bars, and
+    /// whether to trade the edges of the frame for them is a standing preference rather than a per-film one.
+    /// </para>
+    /// <para>
+    /// Deliberately <b>not</b> a general 「remember the geometry」 feature — 「别把六个 mpv 属性全搬进设置」. One
+    /// switch, one threshold, and the player menu keeps the per-film override it always had.
+    /// </para>
+    /// </summary>
+    public bool FillWideSources { get; set; }
 }
 
 /// <summary>Audio-output options handed to mpv per launch; same opt-in rule as <see cref="VideoSettings"/>.</summary>
@@ -417,16 +459,87 @@ public sealed class AudioSettings
     /// <summary>mpv's <c>audio-exclusive</c>: takes the device over for bit-perfect output.</summary>
     public bool ExclusiveMode { get; set; }
 
+    /// <summary>
+    /// mpv's <c>audio-device</c> — a name out of <see cref="Playback.AudioDeviceCatalogue"/>, empty for
+    /// 「跟随系统默认设备」 (which is mpv's own <c>auto</c>).
+    /// <para>
+    /// <b>What it fixes:</b> until this existed, <see cref="ExclusiveMode"/> could only ever take over
+    /// 「whatever Windows calls the default right now」. Plug in headphones and which endpoint got taken over
+    /// depended on that moment's default — invisible, and not choosable.
+    /// </para>
+    /// <para>
+    /// <b>A stored name that is gone must fall back to the default rather than to silence</b>, because this
+    /// list changes whenever a pair of headphones is plugged in or out. The settings row handles that the way
+    /// every other unrecognised value is handled (an entry of its own marked 「设置文件中的值」), and mpv itself
+    /// falls back to <c>auto</c> for a device it cannot open — so an unplugged device costs a line in the log,
+    /// not a silent film.
+    /// </para>
+    /// </summary>
+    public string Device { get; set; } = "";
+
     /// <summary>Global audio delay in milliseconds; positive means the audio comes later.</summary>
     public int DelayMilliseconds { get; set; }
 
     /// <summary>
-    /// 音量, 0–100, as the player was last left. Not a knob on the settings page but a remembered one:
-    /// every playback starts a fresh mpv with its own config blocked, so mpv's idea of the volume is
-    /// always 100 and nothing but this carries a level from one file to the next
+    /// 音量, 0–<see cref="MaxVolume"/>, as the player was last left. Not a knob on the settings page but a
+    /// remembered one: every playback starts a fresh mpv with its own config blocked, so mpv's idea of the
+    /// volume is always 100 and nothing but this carries a level from one file to the next
     /// (「换个媒体播放音量会变回 100」).
     /// </summary>
     public int Volume { get; set; } = 100;
+
+    /// <summary>
+    /// How far the volume rail goes. <b>130 is mpv's own <c>volume-max</c> default</b>, which is the whole
+    /// reason for that number: staying on it means the client never has to send <c>volume-max</c> at all, so
+    /// there is no second place where the ceiling is stated and no way for the two to disagree.
+    /// <para>
+    /// The rail was pinned at 100 by this client, not by mpv — six places said so independently, and one of
+    /// them (<see cref="Mpv.MpvOutputOptions"/>'s <c>volume</c> line) said it in a way that made a stored 130
+    /// unsendable, so the slider would have shown 130 while mpv sat at 100. Everything reads this constant now.
+    /// </para>
+    /// <para>
+    /// <b>Raising it further would mean sending <c>volume-max</c> too</b>, and above 130 the amplification is
+    /// pure clipping on anything already mastered near full scale — worth deciding deliberately rather than by
+    /// nudging this number.
+    /// </para>
+    /// </summary>
+    public const int MaxVolume = 130;
+
+    /// <summary>
+    /// 音量均衡 — one of <see cref="Mpv.MpvOutputOptions.VolumeNormalizers"/>, empty for 「不启用」. Reaches
+    /// mpv as an <c>af</c> filter chain; the filter strings live in that catalogue, which the player's
+    /// 「切换 下混滤镜」 row shares, so the two cannot drift apart.
+    /// <para>
+    /// This is the cross-codec answer to 「对白听不清」 that <see cref="DynamicRange"/> is not:
+    /// <c>ad-lavc-ac3drc</c> is an AC-3 decoder option and does nothing at all to a DTS, TrueHD, AAC or FLAC
+    /// track. It lives in the settings rather than only on the player menu because the output here is desktop
+    /// speakers or headphones, which makes it a standing preference rather than something to dial in per film
+    /// — and the menu does not persist (every playback is a fresh mpv under <c>--no-config</c>).
+    /// </para>
+    /// </summary>
+    public string VolumeNormalize { get; set; } = "";
+
+    /// <summary>
+    /// mpv's <c>audio-normalize-downmix</c>: whether a 5.1 track being folded to two channels is normalised
+    /// rather than summed. Off by default, which is also mpv's own default.
+    /// <para>
+    /// <b>Off on purpose, and it is a trade rather than a bug.</b> On, dialogue stops being buried under the
+    /// effects channel; the cost — upstream's own words — is that everything gets quieter, because the sum has
+    /// to be scaled to fit. That is a judgement about a particular film's mix, so it is a switch with the cost
+    /// written on it, not a default.
+    /// </para>
+    /// <para>
+    /// <b>It only bites when mpv is the one doing the downmix</b>, which on this build it is — measured
+    /// 2026-09-04 with the external mpv on a synthetic 5.1 AC-3 clip
+    /// (<c>artifacts/shader-probe/downmix.ps1</c>): the client never sets <c>ad-lavc-downmix</c>, so the
+    /// decoder hands out <c>5.1(side) 6ch</c> and mpv's own <c>[convert]</c> stage folds it to
+    /// <c>stereo 2ch</c>. The counter-case is in the same run: with <c>--ad-lavc-downmix=yes</c> the decoder
+    /// emits stereo itself and <c>[convert]</c> reports <c>(disabled)</c> — there, and only there, would this
+    /// switch do nothing. So there is nothing for the client to second-guess, and <c>ad-lavc-downmix</c> is
+    /// deliberately left alone rather than pinned to a value from C#.
+    /// </para>
+    /// </summary>
+    public bool NormalizeDownmix { get; set; }
 }
 
 /// <summary>
@@ -499,6 +612,24 @@ public sealed class ShaderAutomationSettings
     public const int UltraHighResWidth = 7000;
 
     /// <summary>
+    /// Which of the four kinds of file this is — the two axes that follow what is being played rather than
+    /// what anybody picked, and that pick a cached column of <see cref="Mpv.ShaderGroupCatalog"/>.
+    /// <para>
+    /// Named and public because two callers need the same answer and only one of them is choosing a chain:
+    /// <see cref="Resolve"/>, and the player's 着色器 menu, which lists what a row <b>would</b> load for the
+    /// file on screen. That menu used to read the axes back off the chain in force, which is null whenever
+    /// 启用着色器 is off or the source is 8K — and it then offered a 60fps animated file the ArtCNN row that
+    /// <see cref="Mpv.ShaderTier.IsFastMotion"/> exists to keep out of it, and a DVD a row with no
+    /// <c>hdeband</c>. The rule has to live in one place, and it is a property of the file, so it lives here.
+    /// </para>
+    /// </summary>
+    /// <param name="sourceHeight">The source's stored height, 0 when Emby never probed it.</param>
+    /// <param name="sourceFrameRate">The source's frame rate, 0 when Emby never probed it.</param>
+    public (bool Vintage, bool FastMotion) Kind(int sourceHeight, double sourceFrameRate) =>
+        (RestoreVintageSources && Mpv.ShaderTier.IsVintage(sourceHeight),
+            Mpv.ShaderTier.IsFastMotion(sourceFrameRate));
+
+    /// <summary>
     /// The chain to apply and why, or null with a reason for none. The reason is the one line 任务书 3.7 asks
     /// for — it reaches the launch log, the 诊断 page and the player's 播放信息 panel, so it is written to be
     /// read rather than parsed.
@@ -527,10 +658,8 @@ public sealed class ShaderAutomationSettings
         if (DisableForUltraHighRes && (sourceWidth >= UltraHighResWidth || sourceHeight >= 3000))
             return (null, "片源接近 8K，着色器只会拖慢解码，已全部关闭", default);
 
-
         var animated = looksAnimated && AutoAnimeProfile;
-        var vintage = RestoreVintageSources && Mpv.ShaderTier.IsVintage(sourceHeight);
-        var fastMotion = Mpv.ShaderTier.IsFastMotion(sourceFrameRate);
+        var (vintage, fastMotion) = Kind(sourceHeight, sourceFrameRate);
         var measure = Mpv.ShaderTier.Measure(sourceWidth, sourceHeight, outputWidth, outputHeight, current);
 
         // A hand-picked chain names the row itself, so the 动画 detection is not consulted for it — overriding

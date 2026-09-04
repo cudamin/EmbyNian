@@ -125,6 +125,16 @@ public abstract partial class PageViewModel : ObservableObject, IDisposable
     /// <summary>Called by the page that hosts this view model, once, when it is constructed.</summary>
     internal void UseConfirm(ConfirmRequest confirm) => _confirm = confirm;
 
+    /// <summary>
+    /// 自检用：这一页问得出问题没有。
+    /// <para>
+    /// 一根看不见的绳子：页面忘了调 <see cref="UseConfirm"/>，<see cref="ConfirmAsync"/> 就一律答「否」——
+    /// 于是那颗按钮按下去什么都不发生，屏上一个字都不说。设置页的「恢复默认设置」和服务器页那三处删除全靠它，
+    /// 而单测进不到外壳这个程序集。
+    /// </para>
+    /// </summary>
+    internal bool CanConfirm => _confirm is not null;
+
     /// <summary>Asks the hosting page to put the question to the user. False if there is no page to ask.</summary>
     protected Task<bool> ConfirmAsync(string title, string message, string primary) =>
         _confirm?.Invoke(title, message, primary) ?? Task.FromResult(false);

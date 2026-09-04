@@ -416,9 +416,30 @@ public sealed partial class PlayerViewModel : ObservableObject
     [ObservableProperty]
     public partial double SeekValue { get; set; }
 
-    /// <summary>音量, 0–100, two-way for the same reason the seek bar is.</summary>
+    /// <summary>音量, 0–<see cref="VolumeMaximum"/>, two-way for the same reason the seek bar is.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(VolumeLabel))]
     public partial double Volume { get; set; }
+
+    /// <summary>
+    /// The figure above the rail. 「给音量条上方加上数字」 (2026-09-04) — the same readout that
+    /// 「音量条不需要…上方的数字」 took off on 2026-09-03, so it is back deliberately rather than by accident:
+    /// with a ceiling of 130 the thumb's position no longer says whether the film is at 100 or above it, and
+    /// that is the one thing a viewer reaching for the wheel wants to know.
+    /// <para>
+    /// Rounded rather than truncated, and to a whole number: the wheel and the keys move in whole steps and
+    /// mpv is told a whole number, so a decimal here could only ever be an mpv echo the slider has not caught
+    /// up with.
+    /// </para>
+    /// </summary>
+    public string VolumeLabel => Math.Round(Volume).ToString("0", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// How far the rail goes, so the slider in the markup does not state a ceiling of its own. It used to say
+    /// <c>Maximum="100"</c>, one of six independent places that pinned the volume at 100 — and a rail whose top
+    /// disagrees with what gets stored is a rail that lies about how loud the film is going to be.
+    /// </summary>
+    public double VolumeMaximum => AudioSettings.MaxVolume;
 
     /// <summary>The rail's speaker glyph, or the crossed-out one while muted.</summary>
     [ObservableProperty]
@@ -541,12 +562,23 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// playing. The 老片源 and 高帧率 halves matter here and not in the settings page — the menu's dim right-hand
     /// column lists the files a row would actually load, which for a DVD includes <c>hdeband</c> and for a 60fps
     /// source is the ravu chain even on the 动画 rows.
+    /// <para>
+    /// Asked of the <b>file</b> (<see cref="ShaderAutomationSettings.Kind"/>) rather than read back off
+    /// <see cref="ActiveShader"/>: there is no chain in force whenever 启用着色器 is off or the source is 8K, and
+    /// the menu then fell back to the 不是老片源、不是高帧率 column. Picking 动画 · 微放大档 from it handed a 60fps
+    /// file ArtCNN — 22 ms a frame, the one chain the 高帧率 axis exists to keep out of that cell — and
+    /// <see cref="ApplyShaderGroup"/> pins it for the rest of the film.
+    /// </para>
     /// </summary>
-    internal IReadOnlyList<ShaderGroup> ShaderCatalog =>
-        ShaderGroupCatalog.For(
-            Settings.Shaders.Gpu,
-            ActiveShader?.Vintage ?? false,
-            ActiveShader?.FastMotion ?? false);
+    internal IReadOnlyList<ShaderGroup> ShaderCatalog
+    {
+        get
+        {
+            var video = _shaderContext?.Source.PrimaryVideoStream;
+            var (vintage, fastMotion) = Settings.Shaders.Kind(video?.Height ?? 0, video?.FrameRate ?? 0);
+            return ShaderGroupCatalog.For(Settings.Shaders.Gpu, vintage, fastMotion);
+        }
+    }
 
 
     /// <summary>
@@ -1231,7 +1263,34 @@ public sealed partial class PlayerViewModel : ObservableObject
         _ = PopulateTracksAsync(_generation);
         _ = RefineSkipSectionsAsync(_generation);
         _ = ApplyAspectAsync(_generation);
+        _ = NoteAudioDeviceAsync(_generation);
         ApplySkipOffer();
+    });
+
+    /// <summary>
+    /// Asks mpv which audio output it actually opened, and hands the answer to the service so 播放信息 and the
+    /// 诊断 page can both state it.
+    /// <para>
+    /// Polled like the other three, and for the same reason: the audio output is not open at the moment the
+    /// file is handed over, so a prompt answer is the wrong one rather than an early one. What is being
+    /// answered is 「音频独占模式 took over <em>which</em> device」 — a question the launch options cannot answer,
+    /// because 「跟随系统默认设备」 sends nothing at all.
+    /// </para>
+    /// </summary>
+    private Task NoteAudioDeviceAsync(int generation) => PollAsync(generation, true, async () =>
+    {
+        var device = await _playback.GetTextAsync("audio-device").ConfigureAwait(true);
+        if (string.IsNullOrWhiteSpace(device)) return false;
+
+        var driver = await _playback.GetTextAsync("current-ao").ConfigureAwait(true);
+        if (generation != _generation) return true;
+
+        // mpv answers 「auto」 for a device nobody named, which is true but useless on its own — the driver
+        // name is what says anything at all in that case.
+        var described = string.IsNullOrWhiteSpace(driver) ? device : $"{device}（{driver}）";
+        _playback.NoteAudioDevice(described);
+        Log.Info(Category, $"音频输出设备：{described}");
+        return true;
     });
 
     /// <summary>
@@ -1257,15 +1316,21 @@ public sealed partial class PlayerViewModel : ObservableObject
             // the thumb out from under the pointer.
             if (!Scrubbing) SeekValue = status.Fraction * SeekScale;
 
-            Volume = Math.Clamp(Math.Round(status.Volume), 0, 100);
+            // 音量 has the same problem and it was visible: 「滚轮调音量的时候不是很顺滑，音量条一顿一顿的」
+            // (2026-09-04). Every wheel notch writes mpv asynchronously, and this poll runs ten times a second
+            // — so a poll landing between the write and mpv applying it reports the *previous* level and drags
+            // the thumb back a step, which during a spin is the thumb going forwards and backwards. mpv's echo
+            // is only read once the level has settled (_volumePending cleared by FlushVolume), and nothing
+            // else moves mpv's volume in the meantime: its own input handling is switched off at launch.
+            if (_volumePending is null) Volume = Math.Clamp(Math.Round(status.Volume), 0, AudioSettings.MaxVolume);
         }
         finally
         {
             _pushing = false;
         }
 
-        // 静音 has no figure on screen any more — the number above the rail is gone
-        // (「音量条不需要边框和上方的数字」), so the crossed-out speaker is the whole of it.
+        // 静音's own glyph is still the whole of the mute readout — the figure above the rail says how loud,
+        // not whether (「给音量条上方加上数字」).
         SoundGlyph = Glyph(status.Muted ? MutedGlyphCode : VolumeGlyphCode);
 
         // The new file is decoding, so there is a real picture to show and the cover has done its job.
@@ -1298,15 +1363,15 @@ public sealed partial class PlayerViewModel : ObservableObject
 
     /// <summary>
     /// 音量 under the user's own hand — the rail, the wheel and the arrow keys all land here. Sent straight
-    /// through rather than coalesced: a volume change is a single value mpv applies instantly, and the thumb
-    /// — which is now the whole readout, the figure above the rail having been taken off — has to keep up
-    /// with the hand rather than with the next status poll.
+    /// through rather than coalesced: a volume change is a single value mpv applies instantly, and the thumb and
+    /// the figure above it have to keep up with the hand rather than with the next status poll — which, until
+    /// this level settles, is not allowed to write them at all (see <see cref="ApplyStatus"/>).
     /// </summary>
     partial void OnVolumeChanged(double value)
     {
         if (_pushing) return;
 
-        var level = Math.Clamp(Math.Round(value), 0, 100);
+        var level = Math.Clamp(Math.Round(value), 0, AudioSettings.MaxVolume);
         _ = _playback.SetPropertyAsync("volume", level);
 
         // Kept for the next file as well as sent to this one. Every playback launches a fresh mpv with its
@@ -1591,7 +1656,7 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// 音量 from the keyboard. Writes the bound property rather than mpv directly, so the slider, the
     /// number beside it and the mpv property all move together — the same path a drag takes.
     /// </summary>
-    internal void NudgeVolume(int delta) => Volume = Math.Clamp(Volume + delta, 0, 100);
+    internal void NudgeVolume(int delta) => Volume = Math.Clamp(Volume + delta, 0, AudioSettings.MaxVolume);
 
     /// <summary>静音切换. mpv owns the flag; the glyph follows from the next status it reports.</summary>
     internal void ToggleMute() => _ = _playback.SetPropertyAsync("mute", !Status.Muted);
@@ -1679,31 +1744,53 @@ public sealed partial class PlayerViewModel : ObservableObject
         if (_outputWatch is null || _shaderContext is not { } context) return;
 
         var surface = measure();
+        var moved = surface.Monitor != _surface.Monitor;
 
         // 换显示器：两套方案都重算. Done here rather than off the verdict because two monitors of the same size
         // change nothing about the factor — the 判定 would report nothing at all, while the full-screen plan
         // it prepared is now for the wrong screen.
-        if (surface.Monitor != _surface.Monitor)
+        if (moved)
         {
             _windowedPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, (surface.Width, surface.Height));
             _fullscreenPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, surface.Monitor);
         }
 
         _surface = surface;
-        Judge(_outputWatch.Observe(surface, DateTimeOffset.UtcNow));
+
+        // Which discrete event this was is only knowable here — OutputVerdict says 「离散」 and not which of the
+        // two. Handing the word down beats guessing it downstream, which is how a monitor drag came to be
+        // logged as 「全屏切换」.
+        Judge(_outputWatch.Observe(surface, DateTimeOffset.UtcNow), moved ? "换显示器" : "全屏切换");
     }
 
     /// <summary>
     /// Acts on one verdict. Three of the four outcomes touch mpv not at all, which is the whole point of
     /// 任务书 2.4: the expensive thing is reloading the chain, and a window being dragged must not do it.
     /// </summary>
-    private void Judge(OutputVerdict verdict)
+    /// <param name="because">
+    /// What moved, in the words the log should use. Supplied by the caller because only the caller knows:
+    /// <see cref="NoteSurface"/> can tell a monitor change from a full-screen toggle, and <see cref="Tick"/>
+    /// only ever reports a settled resize.
+    /// </param>
+    private void Judge(OutputVerdict verdict, string because)
     {
         if (verdict.Change is OutputChange.None or OutputChange.Waiting) return;
 
+        // 用户自己钉过一条链，就什么都不动 —— 但要照实说是钉住了，而不是说档位没变。判定那一头已经把当前档位
+        // 推进去了（OutputWatch.Apply），所以走 Restate 会写出「仍在<刚换到的那一档>」，两处都是错的。
+        if (_shaderPinned)
+        {
+            Log.Debug(
+                ShaderLog,
+                $"{because}，输出尺寸 {verdict.Width}×{verdict.Height}、"
+                + $"{ShaderTier.Describe(_outputWatch?.Tier ?? UpscaleTier.Slight)}，"
+                + $"但档位已手动钉在{ActiveShader?.DisplayName ?? "未启用"}，链不变");
+            return;
+        }
+
         // 不跨档就只更新上下文里的输出尺寸. There is nothing to hand mpv: ravu-zoom renders to whatever OUTPUT
         // is on the frame it is drawing, so the only things that were stale are the log line and the OSD.
-        if (verdict.Change == OutputChange.SizeOnly || _shaderPinned)
+        if (verdict.Change == OutputChange.SizeOnly)
         {
             Restate(verdict);
             return;
@@ -1712,7 +1799,7 @@ public sealed partial class PlayerViewModel : ObservableObject
         // 进 / 退全屏、换显示器：直接换成预备好的那一套，不重新判定、不等防抖.
         if (verdict.Discrete)
         {
-            Switch(_surface.Fullscreen ? _fullscreenPlan : _windowedPlan, "全屏切换");
+            Switch(_surface.Fullscreen ? _fullscreenPlan : _windowedPlan, because);
             return;
         }
 
@@ -1727,7 +1814,7 @@ public sealed partial class PlayerViewModel : ObservableObject
             (verdict.Width, verdict.Height),
             _outputWatch?.Tier);
 
-        Switch(_windowedPlan, "窗口尺寸变化");
+        Switch(_windowedPlan, because);
     }
 
     /// <summary>Applies a prepared plan to the film that is playing, and says so in the log rather than on screen.</summary>
@@ -2060,7 +2147,7 @@ public sealed partial class PlayerViewModel : ObservableObject
         // The 400 ms a window size has to hold still before the 档位 is judged again. Here rather than on a
         // timer of its own because this ticker already runs exactly while the player is up, and a resize that
         // has settled is precisely a thing that expires rather than happens.
-        if (_outputWatch is { } watch) Judge(watch.Tick(DateTimeOffset.UtcNow));
+        if (_outputWatch is { } watch) Judge(watch.Tick(DateTimeOffset.UtcNow), "窗口尺寸变化");
     }
 
     // ---- 播放信息 ----------------------------------------------------------------
@@ -2091,6 +2178,7 @@ public sealed partial class PlayerViewModel : ObservableObject
         if (_playback.LaunchShaderReason is { Length: > 0 } reason) lines.Add($"着色器判定：{reason}");
         if (CurrentShaderLine() is { Length: > 0 } current) lines.Add($"当前判定：{current}");
         lines.Add($"后端：{(Embedded ? "内置 libmpv" : "外部 mpv.exe")}");
+        if (_playback.AudioDeviceInUse is { Length: > 0 } device) lines.Add($"音频输出设备：{device}");
 
         var options = _playback.LaunchOptions.Count == 0
             ? "（没有额外参数）"

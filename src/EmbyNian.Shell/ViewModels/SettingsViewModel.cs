@@ -7,6 +7,7 @@ using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Theming;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 
 namespace EmbyNian.Shell.ViewModels;
 
@@ -88,27 +89,18 @@ public sealed partial class SettingsViewModel : PageViewModel
         ("从不显示", SubtitleMode.Off)
     ];
 
-    /// <summary>
-    /// The stored value is the catalogue's own label, not a language code — that is what
-    /// <see cref="PlaybackSettings.AudioLanguage"/> has always held, and the track matcher compares against
-    /// the same catalogue.
-    /// </summary>
-    private static readonly (string Label, string Value)[] AudioLanguages =
-    [
-        ("默认音轨（不按语言挑选）", ""),
-        .. TrackLanguagePriority.Catalogue.Select(item => (Label: item.Label, Value: item.Label))
-    ];
-
     private ISettingsService? _settings;
     private ShaderStaging? _shaders;
     private FontLibrary? _fonts;
     private AppPaths? _paths;
     private Platform.ISystemLauncher? _launcher;
     private SettingFontRow? _subtitleFont;
+    private AudioDeviceCatalogue? _audioDevices;
+    private SettingChoiceRow? _audioDevice;
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
     private static readonly string[] CardCategories =
-        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于"];
+        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于", "恢复默认"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -194,13 +186,15 @@ public sealed partial class SettingsViewModel : PageViewModel
         ShaderStaging shaders,
         FontLibrary fonts,
         AppPaths paths,
-        Platform.ISystemLauncher launcher)
+        Platform.ISystemLauncher launcher,
+        AudioDeviceCatalogue audioDevices)
     {
         _settings = settings;
         _shaders = shaders;
         _fonts = fonts;
         _paths = paths;
         _launcher = launcher;
+        _audioDevices = audioDevices;
     }
 
     /// <summary>
@@ -235,11 +229,58 @@ public sealed partial class SettingsViewModel : PageViewModel
         Sections.Add(HomeCard());
         Sections.Add(InterfaceCard());
         Sections.Add(AboutCard());
+        Sections.Add(ResetCard());
 
         ShowCategory(SelectedCategory);
         IsReady = true;
 
-        return FillFontsAsync();
+        return Task.WhenAll(FillFontsAsync(), FillAudioDevicesAsync());
+    }
+
+    /// <summary>
+    /// Hands the 音频输出设备 row the machine's real devices once they have been enumerated. Same shape and same
+    /// reason as <see cref="FillFontsAsync"/>: the list comes out of a throwaway libmpv context, which is tens
+    /// of milliseconds of native work, and the page is worth more than that one row being complete on the first
+    /// frame. Until it lands the row holds 「跟随系统默认设备」 plus whatever the settings file names.
+    /// </summary>
+    private async Task FillAudioDevicesAsync()
+    {
+        if (_audioDevices is null || _audioDevice is null) return;
+
+        var devices = await _audioDevices.LoadAsync().ConfigureAwait(true);
+        if (devices.Count == 0) return;
+
+        // The row may have been rebuilt while the read ran — a second visit to the page does that — so the
+        // current one is asked for rather than the one captured above.
+        var row = _audioDevice;
+        if (row is null) return;
+
+        var audio = Settings.Audio;
+        var (choices, selected) = DeviceChoices(audio, devices);
+        row.Fill(choices, selected);
+    }
+
+    /// <summary>
+    /// The 音频输出设备 drop-down: 「跟随系统默认设备」 first, then whatever mpv found. Passing an empty list is
+    /// the normal first-frame state and the permanent state on a machine where libmpv could not enumerate —
+    /// the row is still usable, it just offers the default and whatever the settings file names.
+    /// </summary>
+    private (List<SettingChoice> Choices, SettingChoice? Selected) DeviceChoices(
+        AudioSettings audio,
+        IReadOnlyList<AudioDevice> devices)
+    {
+        (string Label, string Value)[] options =
+        [
+            ("跟随系统默认设备", ""),
+            .. devices.Select(device => (Label: device.Label, Value: device.Name))
+        ];
+
+        return Options(
+            options,
+            () => audio.Device,
+            value => audio.Device = value,
+            StringComparer.OrdinalIgnoreCase,
+            stored => $"{stored}（设置文件中的值，这台机器上没找到）");
     }
 
     /// <summary>
@@ -301,36 +342,12 @@ public sealed partial class SettingsViewModel : PageViewModel
             Number("进度上报间隔（秒）", 1, 60, () => playback.ProgressReportIntervalSeconds, value => playback.ProgressReportIntervalSeconds = value),
             Choice("跳过片头片尾", SkipModes, () => playback.SkipSections, value => playback.SkipSections = value),
 
-            // Two settings behind one drop-down: the language, and whether language is consulted at all.
-            // 「默认音轨」 is the empty language, which is also what makes the mode ServerDefault.
-            Choice("音轨语言", AudioLanguages,
-                () => playback.AudioTrack == AudioTrackMode.Language ? playback.AudioLanguage : "",
-                value =>
-                {
-                    playback.AudioLanguage = value;
-                    playback.AudioTrack = string.IsNullOrWhiteSpace(value) ? AudioTrackMode.ServerDefault : AudioTrackMode.Language;
-                },
-                describe: StoredAudioLanguage)
+            // 音轨语言优先级, the same row shape and the same parser as the 字幕 card's. It was a single-pick
+            // drop-down up to v9, which could not express 「日语 > 粤语 > 英语」 at all — and mpv's own alang has
+            // always taken a list. An empty box is 「跟随服务器默认音轨」, which is what the old 「默认音轨」 entry
+            // and its companion mode both meant.
+            Languages("音轨语言优先级", "日语, 粤语, 英语", () => playback.AudioLanguages, value => playback.AudioLanguages = value)
         ]);
-    }
-
-    /// <summary>
-    /// What the 音轨语言 box shows for a value the catalogue does not offer. The stored value is a language
-    /// name, but a hand-edited file — or a settings file from a build with a shorter catalogue — can hold a
-    /// raw mpv code instead, and the document keeps it: an unrecognised code is exactly how a language this
-    /// client has no entry for gets named at all.
-    /// <para>
-    /// <see cref="TrackLanguagePriority.Describe"/> knows a good many more codes than the catalogue lists, so
-    /// <c>hu</c> reads as 匈牙利语 rather than as two letters. When even it cannot name the code it hands the
-    /// code straight back, and repeating it twice in one label would be noise.
-    /// </para>
-    /// </summary>
-    private static string StoredAudioLanguage(string code)
-    {
-        var name = TrackLanguagePriority.Describe(code);
-        return string.Equals(name, code, StringComparison.OrdinalIgnoreCase)
-            ? $"{code}（设置文件中的值）"
-            : $"{name}（设置文件中的 {code}）";
     }
 
     private SettingSection SubtitleCard()
@@ -370,12 +387,14 @@ public sealed partial class SettingsViewModel : PageViewModel
     {
         var video = Settings.Video;
 
-        // 视频同步 states the value in force, not the value stored, and 启用插值 is what changes it — so that
-        // row is held here and restated from the toggle below. The two rows are five lines apart on screen and
-        // used to contradict each other: this one said 「不指定（等同音频同步）」 while display-resample was
-        // what mpv got.
-        var sync = Mpv("视频同步", MpvOutputOptions.VideoSync, () => video.VideoSync, value => video.VideoSync = value,
-            "video-sync", SyncNote(video));
+        // 视频同步 states the value in force, not the value stored, so it has two writers to follow: 启用插值
+        // two rows below, and its own drop-down. Both restate it — the row is held in a local so each can.
+        // The two rows are five lines apart on screen and used to contradict each other: this one said
+        // 「不指定（等同音频同步）」 while display-resample was what mpv got. Missing the second writer put the
+        // same lie back the other way round: pick 显示同步 here and the line underneath still said 音频同步.
+        SettingChoiceRow? sync = null;
+        sync = Mpv("视频同步", MpvOutputOptions.VideoSync, () => video.VideoSync, value => video.VideoSync = value,
+            "video-sync", SyncNote(video), () => sync!.Restate(SyncNote(video)));
 
         return new SettingSection("视频输出", "视频输出", "渲染、硬件解码、同步和网络缓冲。",
         [
@@ -387,7 +406,12 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "hwdec", "装机默认是「自动」；选「不指定」等同于纯软件解码"),
             Mpv("色彩范围", MpvOutputOptions.OutputLevels, () => video.OutputLevels, value => video.OutputLevels = value,
                 "video-output-levels"),
-            sync,
+            sync!,
+            Toggle("宽于 16:9 的片源裁切填充",
+                "2.35:1 的电影铺满 16:9 的屏幕，代价是每一帧的左右两边被裁掉（贴边的字幕也会跟着没）。"
+                + "只对真的有黑边的片源出手；播放器右键菜单里可以对单部片子临时改",
+                () => video.FillWideSources, value => video.FillWideSources = value,
+                "panscan"),
             Toggle("启用反交错", "仅对隔行片源有意义", () => video.Deinterlace, value => video.Deinterlace = value,
                 "deinterlace"),
             Toggle("启用插值",
@@ -400,17 +424,25 @@ public sealed partial class SettingsViewModel : PageViewModel
                     video.Interpolation = value;
 
                     // 这一项一变，上面那一行「实际生效」就变了。页面没有整体刷新，也不该有 —— 只有因果关系
-                    // 明确的这一处自己去改那一行。
-                    sync.Restate(SyncNote(video));
+                    // 明确的这几处自己去改那一行。
+                    sync!.Restate(SyncNote(video));
                 },
                 "interpolation、tscale"),
             Toggle("高帧率或高刷新率时使用音频同步",
                 "片源超过约 47fps，或播放窗口所在屏幕超过 120Hz，就回到音频同步、插值不生效：这两种情况下显示同步"
                 + "只剩算力开销。关掉它可以强行让显示同步在任何屏幕上生效",
-                () => video.HighFrameRateAudioSync, value => video.HighFrameRateAudioSync = value, "video-sync、interpolation"),
+                () => video.HighFrameRateAudioSync,
+                value =>
+                {
+                    video.HighFrameRateAudioSync = value;
+
+                    // 第三个写手：它改不了「此刻生效」那半句（这一页上没有片子、也不知道是哪块屏），可它决定
+                    // 那一行末尾还讲不讲那两条例外。
+                    sync!.Restate(SyncNote(video));
+                },
+                "video-sync、interpolation"),
             Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = value,
-                "0 表示使用 mpv 默认值", "demuxer-max-bytes"),
-            Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value,
+                "0 表示使用 mpv 默认值", "demuxer-max-bytes"),            Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value,
                 "dither、dither-depth", "色深抖动，和上面的插值无关：落到显示器位深时撒一层噪声，免得渐变上出现色带"),
             Mpv("去色带", MpvOutputOptions.DebandModes, () => video.Deband, value => video.Deband = value,
                 "deband", "大倍数档（放大 2.2 倍以上）改用链里的 hdeband，那时候这一项不生效"),
@@ -472,18 +504,53 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "audio-spdif"))
             .ToList();
 
-        return new SettingSection("音频输出", "音频输出", "声道布局、动态范围、独占模式和功放直通。",
+        return new SettingSection("音频输出", "音频输出", "输出设备、声道布局、响度、独占模式和功放直通。",
         [
+            // 音频输出设备. Built from whatever has already been enumerated — nothing on the first frame — and
+            // refilled by FillAudioDevicesAsync a moment later. Held in a field for exactly that.
+            _audioDevice = DeviceRow(audio),
             Mpv("扬声器布局", MpvOutputOptions.Channels, () => audio.Channels, value => audio.Channels = value,
                 "audio-channels"),
+
+            // 「只对 AC-3 / E-AC-3 有效」 is the whole point of this note. The option itself is fine and stays —
+            // it really does work on an AC-3 track that carries DRC metadata — but the row used to read as the
+            // general 「让对白清楚一点」 control, and on a DTS or TrueHD track it does exactly nothing. That is
+            // the 「界面在骗人」 class of defect, so the row now names its own range and points at the next one.
             Mpv("动态范围压缩", MpvOutputOptions.DynamicRange, () => audio.DynamicRange, value => audio.DynamicRange = value,
-                "ad-lavc-ac3drc"),
+                "ad-lavc-ac3drc",
+                "只对 AC-3 / E-AC-3 音轨有效，而且要片源自带 DRC 信息；DTS、TrueHD、AAC、FLAC 一律没有反应，"
+                + "那些请用下面的「音量均衡」"),
+            Mpv("音量均衡", MpvOutputOptions.VolumeNormalizers, () => audio.VolumeNormalize, value => audio.VolumeNormalize = value,
+                "af", "对所有编码都有效，代价是动态范围被压窄；播放器右键菜单里可以当场试听这三档"),
+            Toggle("5.1 下混到两声道时归一化",
+                "两声道听 5.1 片时对白不再被爆炸声压过去，代价是整体变轻一档（这是上游自己写的代价）。"
+                + "只在下混由 mpv 完成时有效，这台机器上量过确实如此",
+                () => audio.NormalizeDownmix, value => audio.NormalizeDownmix = value,
+                "audio-normalize-downmix"),
             Toggle("音频独占模式", "播放时占用声卡，避免系统混音", () => audio.ExclusiveMode, value => audio.ExclusiveMode = value,
                 "audio-exclusive"),
             Number("全局音频延迟（毫秒）", -5000, 5000, () => audio.DelayMilliseconds, value => audio.DelayMilliseconds = value,
                 null, null, "audio-delay"),
             new SettingToggleGroupRow("直通格式", passthrough)
         ]);
+    }
+
+    /// <summary>
+    /// 音频输出设备. Its own factory rather than an inline <see cref="Pick"/> call because the note is the point
+    /// of the row: 独占模式 without this could only ever take over 「whatever Windows calls the default right
+    /// now」, and the whole reason to choose a device by hand is to say which one that is.
+    /// </summary>
+    private SettingChoiceRow DeviceRow(AudioSettings audio)
+    {
+        var (choices, selected) = DeviceChoices(audio, _audioDevices?.Known ?? []);
+
+        return new SettingChoiceRow(
+            "音频输出设备",
+            Annotate("插上耳机之后独占模式该占哪一个，由这一行说。设备列表是开设置时从 mpv 读的，"
+                + "拔掉的设备会退回系统默认而不是变成没声音", "audio-device"),
+            choices,
+            selected,
+            Save);
     }
 
     /// <summary>
@@ -707,10 +774,10 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// <para>
     /// 在这张卡之前，版本号只写进日志和自检报告 —— 界面上一次都没出现过，所以「你用的是哪一版」这句话答不上来；
     /// 而设置文件和缓存目录也没有一处能一键打开（诊断页那颗按钮只开日志）。三行读数由 Core 那边算
-    /// （<see cref="AboutFacts"/>，读不到就明说读不到），三行目录各带一颗按钮。
+    /// （<see cref="AboutFacts"/>，读不到就明说读不到），四行目录各带一颗按钮。
     /// </para>
     /// <para>
-    /// 没有 <see cref="AppPaths"/> 或者打不开资源管理器的时候（测试和自检的那一路）这张卡照旧建出来，只是那三颗
+    /// 没有 <see cref="AppPaths"/> 或者打不开资源管理器的时候（测试和自检的那一路）这张卡照旧建出来，只是那四颗
     /// 按钮不画：一张空卡比一张会抛的卡好，而「这一版是哪一版」不该因为拿不到路径就说不出来。
     /// </para>
     /// </summary>
@@ -732,9 +799,94 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "打开", () => _launcher?.OpenFolder(paths.LogDirectory)));
             rows.Add(Fact("缓存目录", "海报和着色器缓存，删掉不会丢设置", Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root,
                 "打开", () => _launcher?.OpenFolder(Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root)));
+
+            // 播放器右键菜单 → 截屏 的落点。这一行不是装饰：截图这个功能从前根本没做，理由正是
+            // 「--no-config 之下没有 screenshot-directory，文件会落到 exe 旁边而不告诉用户」——
+            // 所以「告诉用户落在哪儿」和截图本身是同一件事的两半。
+            rows.Add(Fact("截图目录", "播放器右键菜单 → 截屏 存到这儿，文件名是片名加时间码", paths.ScreenshotDirectory,
+                "打开", () => _launcher?.OpenFolder(paths.ScreenshotDirectory)));
         }
 
         return new SettingSection("关于", "关于", "版本、播放内核，和这个程序在磁盘上的几个位置。", rows);
+    }
+
+    /// <summary>
+    /// 恢复默认设置，一张卡一行。
+    /// <para>
+    /// <b>为一行开一张卡，理由是「够不着」。</b> 它本来是「关于」卡的第八行 —— 而那张卡在设置窗口里第七行就到底了，
+    /// 屏上根本看不见这一行（拍出来只剩「截图目录」露半行）。设置页是能滚的，所以功能不算缺；可整页最难找到的位置
+    /// 放着用户点名要的那一件事，跟没做差不多。**一张只有一行的卡永远不会掉到折线下面**，而左边那份名单里多一个
+    /// 「恢复默认」，正是找它的人会去看的地方。
+    /// </para>
+    /// <para>
+    /// 排在「关于」后面：这两张卡讲的都不是某一组设置，而是这份程序自己。左边名单本来也不以「关于」收尾 ——
+    /// 后面还跟着三个内嵌页面。
+    /// </para>
+    /// <para>
+    /// 说明里把两件事都写清 —— 哪些回默认、哪些不动 —— 而不是只写前一半：这是整页唯一一件不可逆的操作，而按下它的
+    /// 人最想知道的是「会不会把我的服务器和账号也弄掉」。按下之后还要再问一次（<see cref="RestoreDefaultsAsync"/>）。
+    /// </para>
+    /// <para>
+    /// 牌子、这一行的标签、按钮上那几个字刻意各说一句话，而不是三处都写「恢复默认设置」—— 那样一张卡上同一句话
+    /// 排三遍，读的人得挨个看完才知道它们是同一件事。牌子说这是哪儿，标签说要做什么，按钮上是那个动词。
+    /// </para>
+    /// </summary>
+    private SettingSection ResetCard() =>
+        new("恢复默认", "恢复默认设置", "只影响设置本身。服务器、账号和登录状态一律不动。",
+        [
+            new SettingActionRow(
+                "把所有设置还原为装机时的默认值",
+                "会改回装机时的样子：播放器、播放行为、字幕、视频输出、音频输出、画质与着色器、主页版面，"
+                    + "以及界面那一组（主题、每页条目数、海报宽度、图片缓存上限、评分来源、窗口比例锁、侧边栏）。\n"
+                    + "不会动：服务器和账号（不会退出登录，密码和令牌都还在）、窗口上次的位置和大小、"
+                    + "各媒体库各自的排序筛选和视图、播放器上次的音量。\n"
+                    + "按下之后会先问一次；确认之后这一步不能撤销。",
+                "恢复默认",
+                RestoreDefaultsAsync)
+        ]);
+
+    /// <summary>
+    /// 「恢复默认设置」按下之后。哪些回默认、哪些不动由 Core 那一头判（<see cref="SettingsReset.Restore"/>，
+    /// 单测钉着），这里剩下的是「问一次」和「改完让屏上跟上」。
+    /// <para>
+    /// <b>三件善后一件都不能少，而少了哪一件屏上都只是「设置了但没用」。</b> 主题要当场重刷，不然颜色要等到下次
+    /// 启动才回默认；<see cref="ShellPrefs"/> 要喊一声，那是窗口比例锁、侧边栏、图片缓存上限、主页版面这四件
+    /// 改完当场生效的唯一一根线（设置页开在另一个窗口里，手上没有主窗口的 HWND，也没有主页那一页）；整页要重建，
+    /// 因为每一行只在造出来的时候读一次设置、此后只写（见类注释），所以不重建的话文件已经是默认值而屏上六十行
+    /// 还是旧的。
+    /// </para>
+    /// <para>
+    /// 重建走的是 <see cref="ReloadAsync"/> 本身，不是另写一段：那是页面第一次打开走的同一段，自检每一轮都把它
+    /// 连着每张卡片走一遍，所以这里只剩一个调用点会错。字体和音频设备两份名单都是按进程缓存的，所以重建一次
+    /// 不会再去扫字体、也不会再开一个 libmpv 句柄。
+    /// </para>
+    /// </summary>
+    private async Task RestoreDefaultsAsync()
+    {
+        if (_settings is null) return;
+
+        var agreed = await ConfirmAsync(
+            "恢复默认设置",
+            "所有设置都会改回装机时的样子，这一步不能撤销。\n\n"
+                + "服务器和账号不会动（不会退出登录），窗口位置和大小、各媒体库的排序筛选视图、播放器音量也都保留。",
+            "恢复默认").ConfigureAwait(true);
+
+        if (!agreed) return;
+
+        SettingsReset.Restore(_settings.Settings);
+        _settings.Save();
+
+        var ui = Settings.Ui;
+        ThemeHost.Apply(ui.Theme);
+        ShellPrefs.Apply(ui);
+
+        await ReloadAsync().ConfigureAwait(true);
+
+        // 说一声。屏上多半看得出来（配色可能整套换了、六十行读数都动了），可本来就都在默认值上的人按一下会什么都
+        // 看不见 —— 一颗看起来没反应的按钮，下一步就是再按一遍。顺带把「没动的是哪些」再讲一遍，那是关于一次
+        // 恢复默认最该让人放心的一句。
+        Notify(null, "设置已改回装机时的样子。服务器、账号、窗口位置和各媒体库的排序筛选都没有动。",
+            InfoBarSeverity.Success);
     }
 
     /// <summary>
@@ -767,7 +919,24 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     // ── Row factories ────────────────────────────────────────────────────────────────────────────────
 
-    private SettingChoiceRow Pick<T>(string label, string? note, IEnumerable<(string Label, T Value)> options, Func<T> read, Action<T> write, IEqualityComparer<T> comparer, Func<T, string>? describe = null)
+    private SettingChoiceRow Pick<T>(string label, string? note, IEnumerable<(string Label, T Value)> options, Func<T> read, Action<T> write, IEqualityComparer<T> comparer, Func<T, string>? describe = null, Action? after = null)
+    {
+        var (choices, selected) = Options(options, read, write, comparer, describe);
+        return new SettingChoiceRow(label, note, choices, selected, Save, after);
+    }
+
+    /// <summary>
+    /// The entries of one drop-down and which of them is current. Split out of <see cref="Pick"/> for the one
+    /// row whose list arrives after the page does — 音频输出设备, whose devices have to be read out of a
+    /// throwaway libmpv context — so that refilling it goes through exactly the same arithmetic, the fallback
+    /// entry below included, rather than a second copy of it.
+    /// </summary>
+    private static (List<SettingChoice> Choices, SettingChoice? Selected) Options<T>(
+        IEnumerable<(string Label, T Value)> options,
+        Func<T> read,
+        Action<T> write,
+        IEqualityComparer<T> comparer,
+        Func<T, string>? describe)
     {
         var current = read();
         var choices = new List<SettingChoice>();
@@ -782,17 +951,18 @@ public sealed partial class SettingsViewModel : PageViewModel
         }
 
         // What is stored is none of the offered values — a language code this catalogue has no name for, a
-        // shader group removed since it was picked. Leaving the box empty hides the setting, and worse, arms
-        // it: an unselected ComboBox takes whatever the next click lands on, and the stored value is never
-        // written back, so opening the list to see what it says is enough to lose it. It gets an entry of its
-        // own instead, marked as having come from the file, and choosing it writes the same value again.
+        // shader group removed since it was picked, a pair of headphones that has been unplugged. Leaving the
+        // box empty hides the setting, and worse, arms it: an unselected ComboBox takes whatever the next click
+        // lands on, and the stored value is never written back, so opening the list to see what it says is
+        // enough to lose it. It gets an entry of its own instead, marked as having come from the file, and
+        // choosing it writes the same value again.
         if (selected is null && current?.ToString() is { Length: > 0 } stored)
         {
             selected = new SettingChoice(describe?.Invoke(current) ?? $"{stored}（设置文件中的值）", () => write(current));
             choices.Add(selected);
         }
 
-        return new SettingChoiceRow(label, note, choices, selected, Save);
+        return (choices, selected);
     }
 
     private SettingChoiceRow Choice<T>(string label, IEnumerable<(string Label, T Value)> options, Func<T> read, Action<T> write, string? note = null, Func<T, string>? describe = null) =>
@@ -807,8 +977,8 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// reader has to guess at. See <see cref="Annotate"/>.
     /// </para>
     /// </summary>
-    private SettingChoiceRow Mpv(string label, IReadOnlyList<MpvChoice> options, Func<string> read, Action<string> write, string mpvOption, string? note = null) =>
-        Pick(label, Annotate(note, mpvOption), options.Select(option => (Label: option.Label, Value: option.Value)), read, write, StringComparer.OrdinalIgnoreCase);
+    private SettingChoiceRow Mpv(string label, IReadOnlyList<MpvChoice> options, Func<string> read, Action<string> write, string mpvOption, string? note = null, Action? after = null) =>
+        Pick(label, Annotate(note, mpvOption), options.Select(option => (Label: option.Label, Value: option.Value)), read, write, StringComparer.OrdinalIgnoreCase, after: after);
 
     private SettingToggleRow Toggle(string label, string note, Func<bool> read, Action<bool> write, string mpvOption = "") =>
         new(label, Annotate(note, mpvOption) ?? "", read(), write, Save);

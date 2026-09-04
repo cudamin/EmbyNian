@@ -14,7 +14,7 @@ public static class AppIdentity
     public const string Title = "EmbyNian";
 
     public static string Version { get; } =
-        typeof(AppIdentity).Assembly.GetName().Version?.ToString(3) ?? "3.0.0";
+        typeof(AppIdentity).Assembly.GetName().Version?.ToString(3) ?? "0.0.1";
 
     public static string TitleWithVersion => $"{Title} {Version}";
 }

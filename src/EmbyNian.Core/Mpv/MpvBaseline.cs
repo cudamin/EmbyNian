@@ -17,13 +17,28 @@ namespace EmbyNian.Mpv;
 /// </summary>
 public static class MpvBaseline
 {
+    /// <summary>
+    /// What a screenshot is called when the film has no usable title. Not <c>mpv-shot%n</c>: the whole point
+    /// of naming the file is that a folder of them can be read months later.
+    /// </summary>
+    private const string UntitledScreenshot = "EmbyNian";
+
     /// <param name="shaderCacheDirectory">
     /// Where mpv may cache compiled shaders. Null skips the option, which is only right for a test:
     /// without it every playback recompiles the whole chain, which on an iGPU is seconds of black screen.
     /// </param>
-    public static IReadOnlyList<KeyValuePair<string, string>> Build(string? shaderCacheDirectory = null)
+    /// <param name="screenshotDirectory">
+    /// Where 截图 land. Null skips all three screenshot options, which is only right for a test — see
+    /// <see cref="ScreenshotTemplate"/> for why an unset directory is the reason this client had no
+    /// screenshot feature at all until now.
+    /// </param>
+    /// <param name="title">The film's title, for the screenshot file name. Empty is handled.</param>
+    public static IReadOnlyList<KeyValuePair<string, string>> Build(
+        string? shaderCacheDirectory = null,
+        string? screenshotDirectory = null,
+        string? title = null)
     {
-        var options = new List<KeyValuePair<string, string>>(6)
+        var options = new List<KeyValuePair<string, string>>(9)
         {
             // The client's seek bar hands mpv exact timestamps. Without this a click lands on the
             // preceding keyframe, up to several seconds from where the user aimed.
@@ -48,6 +63,43 @@ public static class MpvBaseline
             options.Add(new KeyValuePair<string, string>("gpu-shader-cache-dir", shaderCacheDirectory));
         }
 
+        if (!string.IsNullOrWhiteSpace(screenshotDirectory))
+        {
+            options.Add(new KeyValuePair<string, string>("screenshot-directory", screenshotDirectory));
+
+            // png rather than mpv's own jpg default: a screenshot of a film is looked at to judge the
+            // picture — banding, ringing, what a shader chain did to an edge — and a lossy re-encode is
+            // the one thing that must not be in the way of that answer.
+            options.Add(new KeyValuePair<string, string>("screenshot-format", "png"));
+            options.Add(new KeyValuePair<string, string>("screenshot-template", ScreenshotTemplate(title)));
+        }
+
         return options;
+    }
+
+    /// <summary>
+    /// What one screenshot is called: the film's own title and the timecode it was taken at.
+    /// <para>
+    /// <b>Composed here rather than left to mpv's <c>%F</c>.</b> mpv's own specifiers name the *file* being
+    /// played, and what this client plays is an Emby stream URL — <c>%F</c> would produce a GUID-shaped path
+    /// segment. The title is known at launch, so it is substituted in as literal text and mpv is only asked
+    /// for the part that changes while the film runs.
+    /// </para>
+    /// <para>
+    /// <b>Two things about the timecode.</b> It is <c>%wH.%wM.%wS</c> rather than mpv's ready-made <c>%p</c>,
+    /// because <c>%p</c> is <c>HH:MM:SS</c> and a colon cannot be in a Windows filename. And the title goes
+    /// through <see cref="Emby.DownloadPlan.Safe"/> — the same rules the 下载到设备 filenames use, so there is
+    /// one answer in this codebase to 「what may be in a filename」 — plus <c>%</c>, which that function has no
+    /// reason to care about and which mpv would read as a specifier of its own.
+    /// </para>
+    /// </summary>
+    public static string ScreenshotTemplate(string? title)
+    {
+        var name = Emby.DownloadPlan.Safe(title).Replace("%", "");
+
+        // Safe() strips trailing dots and spaces, so a title made only of those comes back empty.
+        if (string.IsNullOrWhiteSpace(name)) name = UntitledScreenshot;
+
+        return $"{name} %wH.%wM.%wS";
     }
 }

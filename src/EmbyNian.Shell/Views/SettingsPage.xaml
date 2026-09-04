@@ -155,7 +155,7 @@
                             Grid.Column="1"
                             DisplayMemberPath="Label"
                             HorizontalAlignment="Stretch"
-                            ItemsSource="{x:Bind Choices}"
+                            ItemsSource="{x:Bind Choices, Mode=OneWay}"
                             MinWidth="260"
                             SelectedItem="{x:Bind Selected, Mode=TwoWay}" />
                     </Grid>
@@ -552,11 +552,48 @@
                     </Grid>
                 </DataTemplate>
             </local:SettingRowTemplates.Fact>
+
+            <!--
+              一行动作：左边标签和说明，右边一颗按下去真会做事的按钮 —— 「关于」卡最下面那一行「恢复默认设置」。
+
+              和上面那一行读数长得像，差在按钮的角色：那一行的按钮是附赠的去处（打开一个文件夹），这一行的按钮
+              就是这一行本身。说明多半是长的一段（要写清哪些会回默认、哪些不动），所以按钮顶端对齐，跟着标签
+              那一列的第一行走，而不是掉到中间去。
+
+              样式走 AccentButtonStyle：整页六十行里只有这一颗按钮会改掉别的设置，而它旁边那几颗（打开文件夹）
+              是完全无害的。做重不做红 —— 红色留给「删除」，这一颗改的是设置，不删任何东西；真正挡一脚的是按下去
+              之后那次确认（SettingsViewModel.RestoreDefaultsAsync）。
+            -->
+            <local:SettingRowTemplates.Action>
+                <DataTemplate x:DataType="vm:SettingActionRow">
+                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <Button
+                            Grid.Column="1"
+                            Command="{x:Bind RunCommand}"
+                            Content="{x:Bind ActionLabel}"
+                            HorizontalAlignment="Left"
+                            Style="{StaticResource AccentButtonStyle}"
+                            VerticalAlignment="Top" />
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Action>
         </local:SettingRowTemplates>
     </Page.Resources>
 
     <Grid Margin="{StaticResource EgPageMargin}">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
@@ -566,7 +603,25 @@
             Note="改动即时保存"
             Title="设置" />
 
-        <Grid Grid.Row="1" Margin="0,12,0,0" ColumnSpacing="18">
+        <!--
+          这一页从前没有任何一处能对用户说话 —— 六十行都是「改一下就存」，本来也无话可说。「恢复默认设置」
+          是第一件需要回话的事：屏上多半看得出来（配色可能整套换了），可本来就都在默认值上的人按一下会什么都
+          看不见，而一颗看起来没反应的按钮，下一步就是再按一遍。
+
+          IsOpen 双向，同别处：关掉这一条要记下来，不然下一句话开不出来。Visibility 也绑上 —— InfoBar 关着的
+          时候只把里面的东西收起来，控件自己还是 Visible，那 12 的下边距会一直占着一行谁也看不见的空。
+        -->
+        <InfoBar
+            Grid.Row="1"
+            IsClosable="True"
+            IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+            Margin="0,12,0,0"
+            Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+            Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+            Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
+            Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
+
+        <Grid Grid.Row="2" Margin="0,12,0,0" ColumnSpacing="18">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="180" />
                 <ColumnDefinition Width="*" />

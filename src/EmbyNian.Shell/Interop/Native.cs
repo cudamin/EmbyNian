@@ -235,6 +235,18 @@ internal static partial class Native
     /// </summary>
     public const uint SwpFrameChanged = 0x0020;
 
+    /// <summary>
+    /// Posts the request to the owning thread instead of waiting for it. Required for the one window this
+    /// app resizes that belongs to somebody else's thread — mpv's own child inside
+    /// <see cref="Windowing.VideoWindow"/> — because the synchronous form of <c>SetWindowPos</c> sends
+    /// <c>WM_WINDOWPOSCHANGING</c> to that thread and blocks until it answers, and this call is made from
+    /// inside <c>WM_SIZE</c> on the UI thread.
+    /// </summary>
+    public const uint SwpAsyncWindowPos = 0x4000;
+
+    /// <summary>GW_CHILD: the first child of a window in z-order, or 0 when it has none.</summary>
+    public const uint GwChild = 5;
+
     public static readonly IntPtr HwndTop = IntPtr.Zero;
 
     /// <summary>
@@ -332,6 +344,9 @@ internal static partial class Native
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetClientRect(IntPtr window, out NativeRect rect);
+
+    [LibraryImport("user32.dll")]
+    public static partial IntPtr GetWindow(IntPtr window, uint command);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

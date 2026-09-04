@@ -35,7 +35,9 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IntPtr> windowProvi
     /// point at a *different* libmpv ABI, which breaks playback rather than fixing it.
     /// </para>
     /// </summary>
-    private IEnumerable<string> Probes()
+    private IEnumerable<string> Probes() => Probes(settings);
+
+    private static IEnumerable<string> Probes(MpvSettings settings)
     {
         yield return Path.Combine(AppContext.BaseDirectory, LibraryName);
 
@@ -43,7 +45,14 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IntPtr> windowProvi
             yield return Path.Combine(mpvFolder, LibraryName);
     }
 
-    private string? ResolveLibMpv() => Probes().FirstOrDefault(File.Exists);
+    private string? ResolveLibMpv() => Locate(settings);
+
+    /// <summary>
+    /// The same search, for a caller that has settings but no backend — <see cref="AudioDeviceCatalogue"/>,
+    /// which opens a throwaway context of its own to enumerate audio devices. Named and shared rather than
+    /// written out again there: two answers to 「where is libmpv」 is one too many.
+    /// </summary>
+    public static string? Locate(MpvSettings settings) => Probes(settings).FirstOrDefault(File.Exists);
 
     public Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken)
     {
@@ -130,11 +139,13 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IntPtr> windowProvi
         // hr-seek and the rest of the client's floor come in through PlayerOptions
         // (see MpvBaseline), which is shared with the external mpv.exe backend.
 
-        // Deliberately no panscan. Filling the window by cropping the picture was tried and it is
-        // the wrong trade: a mismatch between the window and the file costs the sides of the frame,
-        // and edge-anchored subtitles go with them. The shell locks the window to the video's own
-        // aspect instead (WM_SIZING), so dragging one edge moves the other and there is nothing left
-        // over to letterbox or crop.
+        // No panscan here, and that is a floor rather than a verdict. Filling the window by cropping the
+        // picture is the wrong default: a mismatch between the window and the file costs the sides of the
+        // frame, and edge-anchored subtitles go with them. The shell locks the window to the video's own
+        // aspect instead (WM_SIZING), so dragging one edge moves the other and there is normally nothing
+        // left over to letterbox or crop. The exception a viewer may want is 设置 → 视频输出 →
+        // 宽于 16:9 的片源默认裁切填充 (VideoSettings.FillWideSources), which comes in through PlayerOptions
+        // below and only fires on a source that really is letterboxed.
 
         // Belt and braces: libmpv already defaults to config=no, which blocks watch_later files along
         // with mpv.conf, so there is nothing here for mpv to resume from. The client owning the start
@@ -544,115 +555,44 @@ internal sealed class LibMpvHandle(IntPtr context) : IPlaybackHandle, IPlayerCon
         }
     }
 
-    private IReadOnlyList<MpvTrack>? ReadTrackList()
-    {
-        var buffer = Marshal.AllocHGlobal(Marshal.SizeOf<LibMpvNative.MpvNode>());
-        try
+    private IReadOnlyList<MpvTrack>? ReadTrackList() =>
+        LibMpvNodes.Read<IReadOnlyList<MpvTrack>?>(context, "track-list", root =>
         {
-            Marshal.StructureToPtr(new LibMpvNative.MpvNode(), buffer, fDeleteOld: false);
-
-            if (LibMpvNative.mpv_get_property(context, "track-list", LibMpvNative.FormatNode, buffer) < 0) return [];
-            var root = Marshal.PtrToStructure<LibMpvNative.MpvNode>(buffer);
             var tracks = new List<MpvTrack>();
 
-            foreach (var item in NodeChildren(root))
+            foreach (var item in LibMpvNodes.Children(root))
             {
-                var map = NodeMap(item);
-                var type = NodeString(map, "type");
+                var map = LibMpvNodes.Map(item);
+                var type = LibMpvNodes.String(map, "type");
                 if (type is not ("audio" or "sub" or "video")) continue;
 
-                var id = NodeInt(map, "id");
+                var id = LibMpvNodes.Int(map, "id");
                 if (id is null) continue;
 
                 tracks.Add(new MpvTrack(
                     id.Value,
                     type,
-                    NodeString(map, "lang"),
-                    NodeString(map, "title"),
-                    NodeFlag(map, "default"),
-                    NodeFlag(map, "selected"))
+                    LibMpvNodes.String(map, "lang"),
+                    LibMpvNodes.String(map, "title"),
+                    LibMpvNodes.Flag(map, "default"),
+                    LibMpvNodes.Flag(map, "selected"))
                 {
                     // All optional: a demuxer that cannot answer simply leaves the key out, and the
                     // picker then shows one fewer thing about the track rather than nothing at all.
-                    Codec = NodeString(map, "codec"),
-                    Channels = NodeString(map, "demux-channels"),
-                    ChannelCount = NodeInt(map, "demux-channel-count") ?? 0,
-                    SampleRate = NodeInt(map, "demux-samplerate") ?? 0,
-                    BitRate = NodeInt(map, "demux-bitrate") ?? 0,
-                    Forced = NodeFlag(map, "forced"),
-                    External = NodeFlag(map, "external"),
-                    Image = NodeFlag(map, "image"),
-                    HearingImpaired = NodeFlag(map, "hearing-impaired")
+                    Codec = LibMpvNodes.String(map, "codec"),
+                    Channels = LibMpvNodes.String(map, "demux-channels"),
+                    ChannelCount = LibMpvNodes.Int(map, "demux-channel-count") ?? 0,
+                    SampleRate = LibMpvNodes.Int(map, "demux-samplerate") ?? 0,
+                    BitRate = LibMpvNodes.Int(map, "demux-bitrate") ?? 0,
+                    Forced = LibMpvNodes.Flag(map, "forced"),
+                    External = LibMpvNodes.Flag(map, "external"),
+                    Image = LibMpvNodes.Flag(map, "image"),
+                    HearingImpaired = LibMpvNodes.Flag(map, "hearing-impaired")
                 });
             }
 
             return tracks;
-        }
-        finally
-        {
-            LibMpvNative.mpv_free_node_contents(buffer);
-            Marshal.FreeHGlobal(buffer);
-        }
-    }
-
-    private static IEnumerable<LibMpvNative.MpvNode> NodeChildren(LibMpvNative.MpvNode node)
-    {
-        if (node.Format is not (LibMpvNative.FormatNodeArray or LibMpvNative.FormatNodeMap)) return [];
-
-        var list = Marshal.PtrToStructure<LibMpvNative.MpvNodeList>(node.Union);
-        var values = new LibMpvNative.MpvNode[Math.Max(0, list.Num)];
-        for (var index = 0; index < values.Length; index++)
-            values[index] = Marshal.PtrToStructure<LibMpvNative.MpvNode>(list.Values + index * Marshal.SizeOf<LibMpvNative.MpvNode>());
-        return values;
-    }
-
-    private static IReadOnlyDictionary<string, LibMpvNative.MpvNode> NodeMap(LibMpvNative.MpvNode node)
-    {
-        if (node.Format != LibMpvNative.FormatNodeMap) return new Dictionary<string, LibMpvNative.MpvNode>();
-
-        var list = Marshal.PtrToStructure<LibMpvNative.MpvNodeList>(node.Union);
-        var map = new Dictionary<string, LibMpvNative.MpvNode>(Math.Max(0, list.Num), StringComparer.Ordinal);
-        for (var index = 0; index < list.Num; index++)
-        {
-            var key = Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(list.Keys, index * IntPtr.Size));
-            if (key is null) continue;
-            var value = Marshal.PtrToStructure<LibMpvNative.MpvNode>(list.Values + index * Marshal.SizeOf<LibMpvNative.MpvNode>());
-            if (value.Format is < 1 or > 8)
-            {
-                Log.Warn(Category, $"轨道字段异常：key={key} 格式={value.Format} 索引={index}/{list.Num}");
-                continue;
-            }
-            map[key] = value;
-        }
-
-        return map;
-    }
-
-    private static string? NodeString(IReadOnlyDictionary<string, LibMpvNative.MpvNode> map, string key) =>
-        map.TryGetValue(key, out var node) && node.Format == LibMpvNative.FormatString
-            ? Marshal.PtrToStringUTF8(node.Union)
-            : null;
-
-    private static int? NodeInt(IReadOnlyDictionary<string, LibMpvNative.MpvNode> map, string key)
-    {
-        if (!map.TryGetValue(key, out var node)) return null;
-
-        // The union holds the value itself for FORMAT_INT64/FORMAT_DOUBLE — not a pointer —
-        // so it is read as raw bits rather than dereferenced.
-        return node.Format switch
-        {
-            LibMpvNative.FormatInt64 => unchecked((int)node.Union.ToInt64()),
-            LibMpvNative.FormatDouble => (int)Math.Round(BitConverter.Int64BitsToDouble(node.Union.ToInt64())),
-            _ => null
-        };
-    }
-
-    private static bool NodeFlag(IReadOnlyDictionary<string, LibMpvNative.MpvNode> map, string key)
-    {
-        // mpv's C union declares the flag as a 4-byte int; the other half of the union is stale
-        // heap bytes, so only the low word may be looked at — ToInt32 would reject the garbage.
-        return map.TryGetValue(key, out var node) && node.Format == LibMpvNative.FormatFlag && (node.Union.ToInt64() & 1) != 0;
-    }
+        }, []);
 
     // ---- exit -------------------------------------------------------------------
 

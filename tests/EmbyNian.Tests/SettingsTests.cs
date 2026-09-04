@@ -1,7 +1,10 @@
+using System.Collections;
+using System.Reflection;
 using System.Text.Json;
 using EmbyNian.Configuration;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
+using EmbyNian.Mpv;
 using EmbyNian.Playback;
 using static EmbyNian.Tests.TestHarness;
 
@@ -20,6 +23,7 @@ internal static class SettingsTests
     {
         RegisterMigration();
         RegisterNormalize();
+        RegisterReset();
         RegisterVault();
         RegisterStore();
     }
@@ -115,8 +119,7 @@ internal static class SettingsTests
             original.Shaders.Gpu = EmbyNian.Mpv.GpuTier.High;
             original.Shaders.ManualGroup = "anime-sweet";
             original.Shaders.RestoreVintageSources = false;
-            original.Playback.AudioTrack = AudioTrackMode.Language;
-            original.Playback.AudioLanguage = "日语";
+            original.Playback.AudioLanguages = ["日语", "粤语"];
             original.Playback.SubtitleLanguages = ["繁体中文", "中文"];
             original.Mpv.ExecutablePath = @"D:\mpv\mpv.exe";
 
@@ -128,7 +131,7 @@ internal static class SettingsTests
             Assert.Equal(EmbyNian.Mpv.GpuTier.High, loaded.Shaders.Gpu);
             Assert.Equal("anime-sweet", loaded.Shaders.ManualGroup);
             Assert.False(loaded.Shaders.RestoreVintageSources, "老片源修复关掉了就得记住，不然每次开机又打开");
-            Assert.Equal("日语", loaded.Playback.AudioLanguage);
+            Assert.Equal("日语,粤语", string.Join(",", loaded.Playback.AudioLanguages), "音轨优先级的顺序同样不能被打乱");
             Assert.Equal("繁体中文,中文", string.Join(",", loaded.Playback.SubtitleLanguages), "字幕优先级的顺序不能被读写打乱");
             Assert.Equal(@"D:\mpv\mpv.exe", loaded.Mpv.ExecutablePath);
             Assert.Equal(original.DeviceId, loaded.DeviceId, "设备 ID 不能每次启动都变");
@@ -157,7 +160,7 @@ internal static class SettingsTests
             Assert.Equal("果服", settings.Servers[0].Name);
         });
 
-        Test("迁移：v2 的字幕/音轨优先级字符串升级成多选与单选", () =>
+        Test("迁移：v2 的字幕/音轨优先级字符串都升级成多选", () =>
         {
             const string json = """
             {
@@ -175,10 +178,39 @@ internal static class SettingsTests
 
             Assert.Equal("简体中文,中文,繁体中文", string.Join(",", settings.Playback.SubtitleLanguages),
                 "顺序就是优先级，而且要落到目录里的规范名字上");
-            Assert.Equal(AudioTrackMode.Language, settings.Playback.AudioTrack);
-            Assert.Equal("日语", settings.Playback.AudioLanguage, "音轨只留第一种语言，它已经没有优先级了");
+
+            // v3 到 v9 之间音轨只放得下一种语言，所以这里从前是「只留第一种」。v10 把它变回列表，v2 文件里那一整
+            // 串于是完整活下来了 —— 它本来的意思就是一串。
+            Assert.Equal("日语,英语", string.Join(",", settings.Playback.AudioLanguages));
             Assert.Equal(SubtitleMode.Always, settings.Playback.SubtitleMode);
             Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
+        });
+
+        Test("迁移：v9 的单个音轨语言变成一元列表，而被关掉的那一档不许复活", () =>
+        {
+            // AudioTrack 1 是「按语言挑」，0 是「跟随服务器默认」。一个文件完全可能存着 AudioTrack=0 加一个
+            // 用不上的 AudioLanguage —— 那个语言当时是被忽略的，在这儿把它捡起来就是悄悄换掉播哪条音轨。
+            const string used = """
+            {
+              "SchemaVersion": 9,
+              "Servers": [ { "Name": "果服", "Url": "http://h:8896" } ],
+              "Playback": { "AudioTrack": 1, "AudioLanguage": "粤语" }
+            }
+            """;
+
+            Assert.Equal("粤语", string.Join(",", SettingsMigration.FromJson(used, Protector).Playback.AudioLanguages),
+                "在用的那一个要变成一元列表");
+
+            const string ignored = """
+            {
+              "SchemaVersion": 9,
+              "Servers": [ { "Name": "果服", "Url": "http://h:8896" } ],
+              "Playback": { "AudioTrack": 0, "AudioLanguage": "粤语" }
+            }
+            """;
+
+            Assert.Equal(0, SettingsMigration.FromJson(ignored, Protector).Playback.AudioLanguages.Count,
+                "当时被忽略的语言不许在迁移里复活");
         });
 
         Test("迁移：v2 的「优先强制字幕」变成只显示强制字幕", () =>
@@ -637,6 +669,33 @@ internal static class SettingsTests
             Assert.Equal("vulkan", Mpv.MpvRenderCheck.PreferredApi, "迁移和装机默认读的是同一个常量");
         });
 
+        Test("迁移：v9 把「高帧率或高刷新率时使用音频同步」拨回开，v9 之后关掉的不动", () =>
+        {
+            // 这个开关到 v8 只管「高帧率片源」，2026-09-04 长出了第二半 ——「屏幕超过 120Hz」。所以 v9 以前存下来的
+            // 一个「关」，是拿一句关于帧率的回答当成了关于屏幕的回答。这台机器上它正好把唯一那条实测能把 144Hz
+            // 屏上显卡占用砍一半的规则（24.7% 对 50.1%）挡在门外，而且一个字都不会说 —— 日志只在规则真出手时才写。
+            // 和上面 v8 挪图形接口是同一个判断：一个值不是有人为它现在的含义选的，那就不是偏好。
+            Assert.True(
+                SettingsMigration.FromJson(
+                    """{ "SchemaVersion": 8, "Video": { "HighFrameRateAudioSync": false } }""", Protector)
+                    .Video.HighFrameRateAudioSync,
+                "v8 的文件里那个「关」是关于帧率的，不能当成关于屏幕的");
+
+            Assert.True(
+                SettingsMigration.FromJson("""{ "SchemaVersion": 6 }""", Protector).Video.HighFrameRateAudioSync,
+                "更老的文件同样，而且它本来就是开着的");
+
+            // 只搬一次。v9 起设置页那一行的名字和说明把两半都写出来了，所以从这里往后关掉它是真的选择。
+            Assert.False(
+                SettingsMigration.FromJson(
+                    $$"""{ "SchemaVersion": {{AppSettings.CurrentSchemaVersion}}, "Video": { "HighFrameRateAudioSync": false } }""",
+                    Protector)
+                    .Video.HighFrameRateAudioSync,
+                "v9 之后关掉的是他自己的决定，迁移不许再碰");
+
+            Assert.True(new AppSettings().Video.HighFrameRateAudioSync, "装机默认是开着的");
+        });
+
         Test("规整：字幕外观的数值范围", () =>
         {
             var settings = SettingsMigration.NewDefaults();
@@ -671,19 +730,40 @@ internal static class SettingsTests
             Assert.Equal(0, settings.Video.NetworkCacheMegabytes);
         });
 
-        Test("规整：音量默认 100，越界夹回 0–100", () =>
+        Test("规整：音量默认 100，越界夹回 0–130", () =>
         {
             Assert.Equal(100, SettingsMigration.NewDefaults().Audio.Volume, "没人调过音量就是满的");
 
+            // 天花板是 AudioSettings.MaxVolume（130，mpv 自己的 volume-max 默认值），不是这里写死的一个数 ——
+            // 这一条正是「六处必须一致」里的一处。
             var loud = SettingsMigration.NewDefaults();
             loud.Audio.Volume = 400;
             SettingsMigration.Normalize(loud);
-            Assert.Equal(100, loud.Audio.Volume);
+            Assert.Equal(AudioSettings.MaxVolume, loud.Audio.Volume);
+
+            var boosted = SettingsMigration.NewDefaults();
+            boosted.Audio.Volume = 130;
+            SettingsMigration.Normalize(boosted);
+            Assert.Equal(130, boosted.Audio.Volume, "130 在范围之内，不许被夹回 100");
 
             var negative = SettingsMigration.NewDefaults();
             negative.Audio.Volume = -20;
             SettingsMigration.Normalize(negative);
             Assert.Equal(0, negative.Audio.Volume);
+        });
+
+        Test("规整：音量均衡只收目录里那三档", () =>
+        {
+            // 这个值会原样变成一条 af 滤镜串交给 mpv，而 mpv 碰到认不出的滤镜会直接退出、一个字节都不播。
+            var typo = SettingsMigration.NewDefaults();
+            typo.Audio.VolumeNormalize = "lavfi=[definitely-not-a-filter]";
+            SettingsMigration.Normalize(typo);
+            Assert.Equal("", typo.Audio.VolumeNormalize, "认不出来的滤镜串要退回「不启用」");
+
+            var kept = SettingsMigration.NewDefaults();
+            kept.Audio.VolumeNormalize = MpvOutputOptions.LoudNorm;
+            SettingsMigration.Normalize(kept);
+            Assert.Equal(MpvOutputOptions.LoudNorm, kept.Audio.VolumeNormalize);
         });
 
         Test("规整：档位表按放大倍数挑，装机默认不会把任何一档挑成摆设", () =>
@@ -737,13 +817,165 @@ internal static class SettingsTests
             Assert.Equal(0, TrackLanguagePriority.ParseList("   ").Count);
             Assert.Equal(0, TrackLanguagePriority.ParseList(null).Count);
 
-            // 设置文件里存的是已经拆好的列表，规整时走的是同一套清理。
+            // 设置文件里存的是已经拆好的列表，规整时走的是同一套清理。**音轨那一份也走这一套** —— 它 v10 才变成
+            // 列表，而字幕那边正是在「简体中文 > 中文 被当成一个语言名」上栽过的，所以两边必须是同一段代码。
             var settings = SettingsMigration.NewDefaults();
             settings.Playback.SubtitleLanguages = ["  简体中文  ", "chs", "", "eng"];
+            settings.Playback.AudioLanguages = ["日语", "jpn", "  ", "粤语"];
             SettingsMigration.Normalize(settings);
             Assert.Equal("简体中文, 英语", string.Join(", ", settings.Playback.SubtitleLanguages));
+            Assert.Equal("日语, 粤语", string.Join(", ", settings.Playback.AudioLanguages),
+                "音轨列表同样去重、去空白、归到目录里的名字上");
+
+            Assert.Equal("日语, 粤语, 英语", Joined("日语 > 粤语 > 英语"),
+                "音轨那一行现在也吃这种写法，而它从前一整串会被当成一个语言名");
 
             static string Joined(string? typed) => string.Join(", ", TrackLanguagePriority.ParseList(typed));
+        });
+    }
+
+    /// <summary>
+    /// 恢复默认设置。四条钉的是同一件事的四个角：该回默认的一项不漏、不该动的一项不碰、身份那一摊一个字不动，
+    /// 以及子对象还是原来那几个。
+    /// <para>
+    /// 头一条用反射逐个属性扫，理由和 <see cref="SettingsReset"/> 里用反射同一个：以后往设置类上加一项，这一条
+    /// 自己就会把它算进来。手写一份「该回默认的属性名单」的话，漏掉新加那一项的测试和漏掉它的实现会一起漏。
+    /// </para>
+    /// </summary>
+    private static void RegisterReset()
+    {
+        Test("恢复默认：设置页管的每一项都回到装机值", () =>
+        {
+            var settings = SettingsMigration.NewDefaults();
+
+            // 每一组挨个属性改掉，再看恢复之后是不是一项不差地回到了一个全新对象的样子。
+            foreach (var group in new object[] { settings.Mpv, settings.Playback, settings.Video, settings.Shaders })
+            {
+                var before = Snapshot(group);
+                var changed = MutateAll(group);
+
+                Assert.True(changed > 0, $"{group.GetType().Name} 一项都没改动，这一条会变成空话");
+                Assert.True(Snapshot(group) != before, $"{group.GetType().Name} 改完和改前一模一样");
+            }
+
+            // 「界面」那一组混着两类，这里只改设置页上有的那几行；记下来的那几项由下一条管。
+            var ui = settings.Ui;
+            ui.Theme = "midnight";
+            ui.PageSize = 37;
+            ui.PosterWidth = 321;
+            ui.ShowWatchedIndicators = false;
+            ui.ImageCacheMegabytes = ImageCachePolicy.MaxMegabytes;
+            ui.ScoreSource = ScoreSource.Critic;
+            ui.LockWindowShape = false;
+            ui.CollapseSidebar = false;
+            ui.HomeRows = [new HomeRowSetting { Key = "library:1", Title = "改过", Visible = false }];
+
+            SettingsReset.Restore(settings);
+
+            AssertDefaults(settings.Mpv, new MpvSettings());
+            AssertDefaults(settings.Playback, new PlaybackSettings());
+            AssertDefaults(settings.Video, new VideoSettings());
+            AssertDefaults(settings.Shaders, new ShaderAutomationSettings());
+
+            var fresh = new UiSettings();
+            Assert.Equal(fresh.Theme, ui.Theme, "主题回默认那一套");
+            Assert.Equal(fresh.PageSize, ui.PageSize);
+            Assert.Equal(fresh.PosterWidth, ui.PosterWidth);
+            Assert.Equal(fresh.ShowWatchedIndicators, ui.ShowWatchedIndicators);
+            Assert.Equal(fresh.ImageCacheMegabytes, ui.ImageCacheMegabytes);
+            Assert.Equal(fresh.ScoreSource, ui.ScoreSource);
+            Assert.Equal(fresh.LockWindowShape, ui.LockWindowShape);
+            Assert.Equal(fresh.CollapseSidebar, ui.CollapseSidebar);
+            Assert.Equal(0, ui.HomeRows.Count, "主页版面回到空，也就是「照默认版面排」");
+        });
+
+        RegisterResetKeeps();
+    }
+
+    /// <summary>恢复默认不许动的那几摊：身份、记下来的位置、子对象本身。</summary>
+    private static void RegisterResetKeeps()
+    {
+        Test("恢复默认：服务器、账号和令牌一个字都不动", () =>
+        {
+            var settings = SettingsMigration.NewDefaults();
+            var vault = new CredentialVault(Protector);
+
+            var server = settings.Servers[0];
+            server.Name = "客厅那台";
+            server.Url = "http://192.168.31.230:8896";
+
+            var account = new AccountProfile { Username = "老王", UserId = "u-1" };
+            vault.SetPassword(account, "密码123", remember: true);
+            vault.SetAccessToken(account, "token-abc");
+            server.Accounts.Add(account);
+            settings.Remember(server, account);
+
+            var deviceId = settings.DeviceId;
+
+            SettingsReset.Restore(settings);
+
+            Assert.Equal(1, settings.Servers.Count, "服务器一台都不许少");
+            Assert.True(ReferenceEquals(server, settings.Servers[0]), "还是原来那一台，不是重建的");
+            Assert.Equal("客厅那台", server.Name);
+            Assert.Equal("http://192.168.31.230:8896", server.Url);
+            Assert.Equal(1, server.Accounts.Count);
+            Assert.Equal("老王", server.Accounts[0].Username);
+            Assert.Equal("密码123", vault.GetPassword(account), "密码还在，恢复默认不等于退出登录");
+            Assert.Equal("token-abc", vault.GetAccessToken(account), "令牌还在");
+            Assert.Equal(deviceId, settings.DeviceId, "设备 id 换掉就等于让 Emby 把这台机器当成新设备");
+            Assert.Equal(server.Id, settings.LastServerId);
+            Assert.Equal(account.Id, settings.LastAccountId);
+        });
+
+        Test("恢复默认：记下来的位置不算设置", () =>
+        {
+            var settings = SettingsMigration.NewDefaults();
+            var ui = settings.Ui;
+
+            ui.WindowLeft = 120;
+            ui.WindowTop = 60;
+            ui.WindowWidth = 1600;
+            ui.WindowHeight = 900;
+            ui.WindowMaximized = true;
+            ui.LastLibraryId = "lib-7";
+            ui.Sort["lib-7"] = new LibrarySort { By = "DateCreated", Descending = true };
+            ui.Filters["lib-7"] = new ItemFilters();
+            ui.Views["lib-7"] = LibraryView.List;
+            settings.Audio.Volume = 118;
+
+            SettingsReset.Restore(settings);
+
+            Assert.Equal(120, ui.WindowLeft, "窗口位置不是设置页上的一行");
+            Assert.Equal(60, ui.WindowTop);
+            Assert.Equal(1600, ui.WindowWidth, "清成 0 就等于替用户宣布他从没拉过这个窗口");
+            Assert.Equal(900, ui.WindowHeight);
+            Assert.True(ui.WindowMaximized);
+            Assert.Equal("lib-7", ui.LastLibraryId);
+            Assert.Equal("DateCreated", ui.Sort["lib-7"].By, "每个库各自的排序是 Emby 也按库记的东西");
+            Assert.True(ui.Filters.ContainsKey("lib-7"));
+            Assert.Equal(LibraryView.List, ui.Views["lib-7"]);
+            Assert.Equal(118, settings.Audio.Volume, "音量是播放器上次被留在哪儿，设置页上没有这一行");
+        });
+
+        Test("恢复默认：几个子对象还是原来那几个", () =>
+        {
+            // 这一条钉的是那个「三处读数全对、行为照旧」的坑：容器把 AppSettings.Shaders 直接交给了单例
+            // ShaderGroupResolver，AudioDeviceCatalogue 闭包着 AppSettings.Mpv，设置页每一行捕获的也是子对象
+            // 本身。换成新对象的话，屏上每一行都显示成默认值，而真去放片子时一个都没变。
+            var settings = SettingsMigration.NewDefaults();
+            var (mpv, playback, video, audio, shaders, ui) =
+                (settings.Mpv, settings.Playback, settings.Video, settings.Audio, settings.Shaders, settings.Ui);
+
+            settings.Video.Renderer = "gpu";
+            SettingsReset.Restore(settings);
+
+            Assert.True(ReferenceEquals(mpv, settings.Mpv), "Mpv 必须是就地改的");
+            Assert.True(ReferenceEquals(playback, settings.Playback), "Playback 必须是就地改的");
+            Assert.True(ReferenceEquals(video, settings.Video), "Video 必须是就地改的");
+            Assert.True(ReferenceEquals(audio, settings.Audio), "Audio 必须是就地改的");
+            Assert.True(ReferenceEquals(shaders, settings.Shaders), "Shaders 必须是就地改的");
+            Assert.True(ReferenceEquals(ui, settings.Ui), "Ui 必须是就地改的");
+            Assert.Equal(new VideoSettings().Renderer, video.Renderer, "而且那个原来的对象里真的换成了默认值");
         });
     }
 
@@ -936,4 +1168,107 @@ internal static class SettingsTests
 
         public string Unprotect(string cipherText) => throw new InvalidOperationException("模拟 DPAPI 失败");
     }
+
+    // ── 恢复默认那几条用的反射小工具 ────────────────────────────────────────────────────────────
+    //
+    // 为什么这几条测试也用反射：这样一来，以后往设置类上加一项，测试自己就会把它算进来。手写一份「该回默认的
+    // 属性名单」的话，漏掉新加那一项的实现和漏掉它的测试会一起漏 —— 那正是这一条要防的事。
+
+    /// <summary>一个对象上每一个可读可写的公开实例属性，和 <see cref="SettingsReset"/> 扫的是同一批。</summary>
+    private static IEnumerable<PropertyInfo> Fields(Type type) =>
+        type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property is { CanRead: true, CanWrite: true });
+
+    /// <summary>把一个对象的每一项值写成一串，好拿来比「改过没有」。</summary>
+    private static string Snapshot(object target) =>
+        string.Join('\n', Fields(target.GetType())
+            .Select(property => $"{property.Name}={Describe(property.GetValue(target))}"));
+
+    /// <summary>逐项比对：<paramref name="actual"/> 上每一项都该等于一个全新对象上的那一项。</summary>
+    private static void AssertDefaults(object actual, object fresh)
+    {
+        foreach (var property in Fields(actual.GetType()))
+        {
+            Assert.Equal(
+                Describe(property.GetValue(fresh)),
+                Describe(property.GetValue(actual)),
+                $"{actual.GetType().Name}.{property.Name} 没有回到装机值");
+        }
+    }
+
+    /// <summary>把每一项都改成和现在不一样的值，交回改动了几项。字典跳过（调用处自己按名字改）。</summary>
+    private static int MutateAll(object target)
+    {
+        var changed = 0;
+        foreach (var property in Fields(target.GetType()))
+        {
+            if (Mutate(target, property)) changed++;
+        }
+
+        return changed;
+    }
+
+    private static bool Mutate(object target, PropertyInfo property)
+    {
+        var current = property.GetValue(target);
+        var type = property.PropertyType;
+
+        if (type == typeof(bool))
+        {
+            property.SetValue(target, !(bool)current!);
+            return true;
+        }
+
+        if (type == typeof(int))
+        {
+            property.SetValue(target, (int)current! + 1);
+            return true;
+        }
+
+        if (type == typeof(string))
+        {
+            property.SetValue(target, (current as string ?? "") + "改过");
+            return true;
+        }
+
+        if (type.IsEnum)
+        {
+            foreach (var value in Enum.GetValues(type))
+            {
+                if (Equals(value, current)) continue;
+
+                property.SetValue(target, value);
+                return true;
+            }
+
+            return false;
+        }
+
+        if (type == typeof(List<string>))
+        {
+            property.SetValue(target, new List<string> { "改过" });
+            return true;
+        }
+
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
+        {
+            var list = (IList)Activator.CreateInstance(type)!;
+            list.Add(Activator.CreateInstance(type.GetGenericArguments()[0]));
+            property.SetValue(target, list);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>一项值写成一句话。列表和字典按内容展开 —— 不然两个不同的列表比出来永远「相等」。</summary>
+    private static string Describe(object? value) => value switch
+    {
+        null => "null",
+        string text => text,
+        IDictionary map => string.Join('|', map.Keys.Cast<object>()
+            .Select(key => $"{key}={Describe(map[key])}")),
+        IEnumerable items => string.Join('|', items.Cast<object?>().Select(Describe)),
+        _ => value.ToString() ?? "?"
+    };
 }

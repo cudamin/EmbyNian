@@ -166,6 +166,16 @@ internal static partial class ShellSelfCheck
         report.AppendLine($"[信息] 着色器的运行条件 — vo={video.Renderer}、gpu-api={video.GpuApi}、"
             + $"hwdec={(string.IsNullOrWhiteSpace(video.HardwareDecoding) ? "（未设置）" : video.HardwareDecoding)}："
             + (conditions.Count == 0 ? "没有需要提醒的" : string.Join("；", conditions)));
+
+        // 截图的落点。判的是容器里那个 PlaybackPlanner 真的拿到了这个目录 —— 忘了在 ShellServices 里传它，
+        // 编译过、播放正常、屏上一点异样都没有，只是截出来的图落到 exe 旁边，而这正是「截图」这个功能从前
+        // 完全不做的那个理由。目录本身也要在：mpv 建不出目录时只在日志里说一句，而没人在放片子的时候读日志。
+        var screenshots = services.GetRequiredService<PlaybackPlanner>().ScreenshotDirectory;
+        var wanted = services.GetRequiredService<AppPaths>().ScreenshotDirectory;
+        var exists = Directory.Exists(wanted);
+
+        check("截图有落点", string.Equals(screenshots, wanted, StringComparison.OrdinalIgnoreCase) && exists,
+            $"计划器拿到的是「{screenshots ?? "（没传）"}」，应当是「{wanted}」；目录{(exists ? "在" : "不在")}");
     }
 
     /// <summary>

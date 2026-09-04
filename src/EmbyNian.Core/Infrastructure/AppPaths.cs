@@ -34,6 +34,17 @@ public sealed class AppPaths
     public string LogDirectory => Path.Combine(Root, "logs");
 
     /// <summary>
+    /// Where 截图 land.
+    /// <para>
+    /// This directory is the whole reason the client has a screenshot feature at all. The commands always
+    /// worked; what was missing was somewhere to put the files — under <c>--no-config</c> mpv has no
+    /// <c>screenshot-directory</c>, so they landed beside the executable and nobody was told where. Named
+    /// here, next to the log and cache directories, and 设置 → 关于 shows the path with a button that opens it.
+    /// </para>
+    /// </summary>
+    public string ScreenshotDirectory => Path.Combine(Root, "screenshots");
+
+    /// <summary>
     /// Where the embedded Emby console's WebView2 keeps its profile. Named explicitly because a
     /// non-packaged app otherwise gets <c>&lt;exe&gt;.WebView2</c> beside the executable, which in the
     /// publish directory may not be writable — and because that profile holds Emby cookies and the web
@@ -51,6 +62,11 @@ public sealed class AppPaths
         Directory.CreateDirectory(ImageCacheDirectory);
         Directory.CreateDirectory(ShaderCacheDirectory);
         Directory.CreateDirectory(LogDirectory);
+
+        // Created up front rather than on the first screenshot: mpv creates it itself if it can, but a
+        // failure there is a warning in a log nobody is reading while a film plays — and the 关于 card's
+        // 「打开」 button has to have somewhere to open from the first launch.
+        Directory.CreateDirectory(ScreenshotDirectory);
     }
 
     /// <summary>

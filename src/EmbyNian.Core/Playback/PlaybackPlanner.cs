@@ -14,12 +14,30 @@ namespace EmbyNian.Playback;
 /// <param name="shaderCacheDirectory">
 /// Where mpv may cache compiled shaders; null omits the option, which is what a test wants.
 /// </param>
-public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver shaders, string? shaderCacheDirectory = null)
+/// <param name="screenshotDirectory">
+/// Where 截图 land; null omits all three screenshot options, which is what a test wants. Without it the
+/// files would go beside the executable without the user being told — which is why the screenshot rows were
+/// left out of the player menu for so long.
+/// </param>
+public sealed class PlaybackPlanner(
+    AppSettings settings,
+    ShaderGroupResolver shaders,
+    string? shaderCacheDirectory = null,
+    string? screenshotDirectory = null)
 {
     private const string Category = "playback";
 
     /// <summary>Default track choices for the picker, before the user overrides them.</summary>
     public AutoTracks SuggestTracks(MediaSource source) => TrackSelection.Resolve(settings.Playback, source);
+
+    /// <summary>
+    /// Where 截图 will land, or null when nobody said. Exposed for one reason: the self-check compares it
+    /// against <see cref="Infrastructure.AppPaths.ScreenshotDirectory"/> on the container-built planner.
+    /// Forgetting to wire it up in <c>ShellServices</c> compiles, plays, and shows nothing wrong — the
+    /// screenshots just go and sit next to the executable, which is the exact defect that kept this feature
+    /// out of the client for months.
+    /// </summary>
+    public string? ScreenshotDirectory => screenshotDirectory;
 
     public PlaybackRequest Plan(PlaybackTicket ticket, EmbyConnection connection)
     {
@@ -36,10 +54,14 @@ public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver sh
         var tracks = ResolveTracks(ticket, source);
         var chainOptions = decision.Group?.ToMpvOptions(ShaderGroupCatalog.ShaderRoot) ?? [];
 
+        // Hoisted out of the initializer below because two things need it: what mpv is told to call the film,
+        // and what a screenshot of it is called.
+        var title = item.ToPlaybackTitle();
+
         var request = new PlaybackRequest
         {
             MediaUrl = EmbyUrl.Stream(connection.ApiBase, item.Id, source.Id, source.Container),
-            Title = item.ToPlaybackTitle(),
+            Title = title,
             HttpHeaders = BuildHeaders(connection),
             StartSeconds = TimeFormat.ToSeconds(ResumeFrom(ticket.StartTicks)),
             AudioId = map.AudioId(tracks.AudioIndex),
@@ -47,12 +69,12 @@ public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver sh
             SubtitlesDisabled = tracks.SubtitlesDisabled,
             ExternalSubtitles = externalSubtitles,
             SubtitleLanguage = TrackLanguagePriority.FromTokens(settings.Playback.SubtitleLanguages),
-            AudioLanguage = TrackLanguagePriority.FromTokens(AudioLanguageTokens()),
+            AudioLanguage = TrackLanguagePriority.FromTokens(settings.Playback.AudioLanguages),
             SubtitleFont = ResolveFont(settings.Playback.SubtitleFontFamily),
             ShaderProfile = decision.Group?.Name,
             ShaderReason = decision.Reason,
             ShaderOptionCount = chainOptions.Count,
-            PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision, chainOptions, ticket.DisplayRefreshHz),
+            PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision, chainOptions, ticket.DisplayRefreshHz, title),
             RunTimeTicks = source.RunTimeTicks ?? item.RunTimeTicks ?? 0,
             ItemId = item.Id,
             MediaSourceId = source.Id,
@@ -79,10 +101,11 @@ public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver sh
         SourceProfile? source,
         ShaderDecision decision,
         IReadOnlyList<KeyValuePair<string, string>> chainOptions,
-        double displayRefreshHz)
+        double displayRefreshHz,
+        string title)
     {
         var options = new List<KeyValuePair<string, string>>(48);
-        options.AddRange(MpvBaseline.Build(shaderCacheDirectory));
+        options.AddRange(MpvBaseline.Build(shaderCacheDirectory, screenshotDirectory, title));
         options.AddRange(MpvOutputOptions.Build(
             settings.Video, settings.Audio, settings.Playback, source, decision.Animated, displayRefreshHz));
         options.AddRange(chainOptions);
@@ -161,13 +184,6 @@ public sealed class PlaybackPlanner(AppSettings settings, ShaderGroupResolver sh
             : subtitle.Stream?.ToDisplayLabel() ?? "由 mpv 决定";
 
         Log.Info(Category, $"自动选轨：音轨 {audio?.ToDisplayLabel() ?? "由 mpv 决定"}，字幕 {subtitleLabel}");
-    }
-
-    /// <summary>The single audio language, as a one-item list for the mpv <c>alang</c> fallback.</summary>
-    private IEnumerable<string> AudioLanguageTokens()
-    {
-        if (settings.Playback.AudioTrack != AudioTrackMode.Language) return [];
-        return string.IsNullOrWhiteSpace(settings.Playback.AudioLanguage) ? [] : [settings.Playback.AudioLanguage];
     }
 
     /// <summary>

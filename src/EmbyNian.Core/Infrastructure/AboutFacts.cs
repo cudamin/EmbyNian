@@ -21,12 +21,12 @@ public static class AboutFacts
     /// <summary>播放内核那个文件的名字。版本不要换（见项目规矩），所以这里也只报它自己的版本。</summary>
     public const string CoreLibrary = "libmpv-2.dll";
 
-    /// <summary>「EmbyNian 3.0.0」—— 版本号从程序集上来，见 <see cref="AppIdentity.Version"/>。</summary>
+    /// <summary>「EmbyNian 0.0.1」—— 版本号从程序集上来，见 <see cref="AppIdentity.Version"/>。</summary>
     public static string Client => AppIdentity.TitleWithVersion;
 
     /// <summary>
-    /// 这份 exe 是什么时候落到磁盘上的。用文件时间而不是编译进去的一个常量：这个项目没有发布流程，
-    /// 版本号一连几十次改动都是同一个 3.0.0，「哪一次构建」只有文件时间答得出。
+    /// 这份 exe 是什么时候落到磁盘上的。用文件时间而不是编译进去的一个常量：版本号只在发版那一下才动，
+    /// 中间几十次改动都是同一个 0.0.1，「哪一次构建」只有文件时间答得出。
     /// </summary>
     public static string BuiltAt(string? executablePath) =>
         Stamp(executablePath) is { } when ? when.ToLocalTime().ToString("yyyy-MM-dd HH:mm") : Unknown;

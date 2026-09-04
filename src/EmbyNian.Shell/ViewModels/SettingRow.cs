@@ -93,14 +93,27 @@ public sealed class SettingChoice
 public sealed partial class SettingChoiceRow : SettingRow
 {
     private readonly Action _save;
+    private readonly Action? _after;
     private readonly bool _seeded;
 
-    internal SettingChoiceRow(string label, string? note, IReadOnlyList<SettingChoice> choices, SettingChoice? selected, Action save)
+    private IReadOnlyList<SettingChoice> _choices;
+
+    /// <summary>True while <see cref="Fill"/> is swapping the list, so the reseed does not write to disk.</summary>
+    private bool _refilling;
+
+    internal SettingChoiceRow(
+        string label,
+        string? note,
+        IReadOnlyList<SettingChoice> choices,
+        SettingChoice? selected,
+        Action save,
+        Action? after = null)
         : base(label, note)
     {
-        Choices = choices;
+        _choices = choices;
         Selected = selected;
         _save = save;
+        _after = after;
 
         // Set last, so seeding the value above did not write it straight back to the settings file. A flag
         // per row rather than one 「loading」 flag over the whole page: the page-wide version also
@@ -108,16 +121,96 @@ public sealed partial class SettingChoiceRow : SettingRow
         _seeded = true;
     }
 
-    public IReadOnlyList<SettingChoice> Choices { get; }
+    /// <summary>
+    /// The drop-down's entries.
+    /// <para>
+    /// Observable for one row: 音频输出设备's list has to be read out of a throwaway libmpv context, which is
+    /// tens of milliseconds of native work, so the page is built with 「自动」 plus whatever the settings file
+    /// holds and <see cref="Fill"/> puts the real devices in a moment later. Same shape as the 字幕字体 picker.
+    /// Every other row's list is fixed at construction.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<SettingChoice> Choices
+    {
+        get => _choices;
+        private set => SetProperty(ref _choices, value);
+    }
 
     [ObservableProperty]
     public partial SettingChoice? Selected { get; set; }
 
+    /// <summary>
+    /// Swap in a list that had to be fetched, and re-point the selection at the equivalent entry.
+    /// <para>
+    /// The reseed must not look like an edit — by now <c>_seeded</c> is true, so a plain assignment would
+    /// write the value back to disk and fire <c>after</c>. That is not academic: the entry handed in here is a
+    /// different object from the one the page was built with, so <c>Selected</c> genuinely changes every time.
+    /// </para>
+    /// </summary>
+    internal void Fill(IReadOnlyList<SettingChoice> choices, SettingChoice? selected)
+    {
+        _refilling = true;
+        try
+        {
+            Choices = choices;
+            Selected = selected;
+        }
+        finally
+        {
+            _refilling = false;
+        }
+    }
+
     partial void OnSelectedChanged(SettingChoice? value)
     {
-        if (!_seeded || value is null) return;
+        if (!_seeded || _refilling || value is null) return;
         value.Apply();
         _save();
+
+        // Same shape as SettingNumberRow's: after the save, for the one row whose own note states what is
+        // actually in force. 视频同步 used to restate itself only when 启用插值 moved, so picking a value in
+        // its own drop-down left the line underneath contradicting the selection above it.
+        _after?.Invoke();
+    }
+
+    /// <summary>
+    /// 自检：选一项之后写盘一次，而且那一行自己的说明真的跟着重写了 —— 就地造一个假的下拉行按一下，不碰设置
+    /// 文件、也不碰屏上那一页（同 <see cref="SettingHomeLayoutRow.Probe"/> 的做法）。
+    /// <para>
+    /// 这一条非有不可，理由和箭头那一条一样：单元测试进不到外壳这个程序集，而这台机器上注不进鼠标事件，所以
+    /// 「点开下拉、选一项」这一下没法自动做一遍。而少了 <c>after</c> 这根线，屏上看不出任何区别 —— 说明还在，
+    /// 只是说的是上一次的事。视频同步那一行正是这么骗了一轮：它只在「启用插值」变的时候重算，自己被改的时候
+    /// 不重算，于是选完显示同步，底下还写着「此刻生效：音频同步」。
+    /// </para>
+    /// </summary>
+    internal static (bool Ok, string Detail) Probe()
+    {
+        var saves = 0;
+        var picked = "";
+        SettingChoiceRow? row = null;
+
+        var choices = new List<SettingChoice>
+        {
+            new("甲", () => picked = "甲"),
+            new("乙", () => picked = "乙")
+        };
+
+        row = new SettingChoiceRow(
+            "探针", "此刻生效：甲", choices, choices[0], () => saves++,
+            () => row!.Restate($"此刻生效：{picked}"));
+
+        // 装值那一下不算用户改的：既不写盘，也不重写说明。
+        var quiet = saves == 0 && row.Note == "此刻生效：甲" && picked.Length == 0;
+
+        row.Selected = choices[1];
+
+        var applied = picked == "乙" && saves == 1;
+        var restated = row.Note == "此刻生效：乙";
+
+        return (quiet && applied && restated,
+            $"假下拉行：装值时{(quiet ? "不写盘也不改说明" : "就写盘或者改了说明")}、"
+                + $"选一项后{(applied ? "写盘一次" : $"写盘 {saves} 次")}、"
+                + $"说明{(restated ? "跟着改成了" : "没跟上，还是")}「{row.Note}」");
     }
 }
 
@@ -353,6 +446,38 @@ public sealed partial class SettingFactRow : SettingRow
 
     [RelayCommand]
     private void Run() => _act?.Invoke();
+}
+
+/// <summary>
+/// 一行动作：左边标签和说明，右边一颗按下去真会做事的按钮 —— 目前只有一处，「关于」卡最下面那一行
+/// 「恢复默认设置」。
+/// <para>
+/// 和 <see cref="SettingFactRow"/> 差在哪儿：那一行是「把一件事说出来，顺带给一个去处」，按钮开的是资源管理器，
+/// 按错了什么都不会发生。这一行反过来 —— 按钮是这一行存在的理由，而它做的事不可逆，所以按下之后先问一次
+/// （问谁、怎么问在 <c>SettingsViewModel</c> 那一头，见 <c>PageViewModel.ConfirmAsync</c>；对话框要页面的
+/// <c>XamlRoot</c>，行里拿不到）。
+/// </para>
+/// <para>
+/// 命令是异步的，于是「问一次」这件事有地方等：<c>AsyncRelayCommand</c> 在跑的时候自己把按钮置灰，所以连按两下
+/// 不会叠出两个对话框 —— WinUI 同时只允许一个，第二个直接抛。
+/// </para>
+/// </summary>
+public sealed partial class SettingActionRow : SettingRow
+{
+    private readonly Func<Task> _run;
+
+    internal SettingActionRow(string label, string? note, string actionLabel, Func<Task> run)
+        : base(label, note)
+    {
+        ActionLabel = actionLabel;
+        _run = run;
+    }
+
+    /// <summary>按钮上那几个字。</summary>
+    public string ActionLabel { get; }
+
+    [RelayCommand]
+    private Task RunAsync() => _run();
 }
 
 /// <summary>

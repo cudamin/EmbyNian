@@ -17,21 +17,15 @@ namespace EmbyNian.Playback;
 /// size, which is what makes the boundaries sticky; the tier here is the <b>measured</b> one, which a
 /// hand-picked override deliberately does not move.
 /// </param>
-/// <param name="OutputWidth">The output size the factor was measured against, for the log and the OSD.</param>
 public readonly record struct ShaderDecision(
     ShaderGroup? Group,
     string Reason,
     bool Animated = false,
-    UpscaleMeasure Measure = default,
-    int OutputWidth = 0,
-    int OutputHeight = 0)
+    UpscaleMeasure Measure = default)
 {
     public static readonly ShaderDecision None = new(null, "未启用自动着色器");
 
     public bool HasGroup => Group is not null;
-
-    /// <summary>The label the log, the 诊断 page and the player's 播放信息 panel show.</summary>
-    public string Label => Group?.DisplayName ?? "未启用";
 
     public override string ToString() => Group is null ? Reason : $"{Group.Name}（{Reason}）";
 }
@@ -127,7 +121,7 @@ public sealed class ShaderGroupResolver(ShaderAutomationSettings settings)
             video?.FrameRate ?? 0,
             current);
 
-        var decision = new ShaderDecision(group, reason, animated, measure, output.Width, output.Height);
+        var decision = new ShaderDecision(group, reason, animated, measure);
         Log.Debug(Category, $"《{item.Name}》着色器决策：{decision}");
         return decision;
     }

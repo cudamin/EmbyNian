@@ -22,6 +22,12 @@ namespace EmbyNian.Shell.Views;
 /// </summary>
 public sealed partial class PlayerPage
 {
+    /// <summary>How far one wheel notch moves 音量. mpv's own step, and the reason is in <see cref="OnPointerWheel"/>.</summary>
+    private const int WheelStep = 2;
+
+    /// <summary>How far one press of ↑/↓ moves 音量 — coarser than the wheel on purpose.</summary>
+    private const int KeyStep = 5;
+
     // ---- the pointer ------------------------------------------------------------
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
@@ -106,15 +112,21 @@ public sealed partial class PlayerPage
 
     /// <summary>
     /// 鼠标滚轮调整音量, anywhere over the picture — and the rail comes up to show where the level now sits,
-    /// which is the other half of the same request. Where, not what: the figure above the rail is gone
-    /// (「音量条不需要边框和上方的数字」), so the thumb's position is the readout.
+    /// which is the other half of the same request.
+    /// <para>
+    /// Two per notch rather than five: 「滚轮调音量的时候不是很顺滑，音量条一顿一顿的」 (2026-09-04). On a rail
+    /// this tall a step of five moves the thumb about eleven pixels at a time, and a wheel is turned in a
+    /// continuous motion — so the readout arrives as a row of jumps. Two is also mpv's own wheel step, which
+    /// is the number a viewer's hand is already calibrated to from every other player. The arrow keys keep
+    /// five (see <see cref="KeyStep"/>): a keypress is a discrete act, and the complaint was about the wheel.
+    /// </para>
     /// </summary>
     private void OnPointerWheel(object sender, PointerRoutedEventArgs e)
     {
         var delta = e.GetCurrentPoint(Root).Properties.MouseWheelDelta;
         if (delta == 0) return;
 
-        NudgeVolume(delta > 0 ? 5 : -5);
+        NudgeVolume(delta > 0 ? WheelStep : -WheelStep);
         e.Handled = true;
     }
 
@@ -236,6 +248,10 @@ public sealed partial class PlayerPage
     /// hit-testable in their own right, so a click on the bar's empty half would otherwise pause the film
     /// the user was reaching past it to see.
     /// <para>
+    /// Both halves of 「where did this land」 are handed over — the point and the element the framework hit.
+    /// The second one is what keeps 「跳过片头后会自动暂停」 fixed: see <see cref="TapOnPicture"/>.
+    /// </para>
+    /// <para>
     /// A tap that did not land on the picture still has to say so. Without that, a later double click on the
     /// transport bar would find the pause value this tap recorded and 「undo」 it — stopping a film that was
     /// playing perfectly well.
@@ -243,7 +259,7 @@ public sealed partial class PlayerPage
     /// </summary>
     private void OnTapped(object sender, TappedRoutedEventArgs e)
     {
-        if (!Attached || !TapOnPicture(e.GetPosition(Root)))
+        if (!Attached || !TapOnPicture(e.GetPosition(Root), e.OriginalSource))
         {
             DropTapHold();
             return;
@@ -344,11 +360,11 @@ public sealed partial class PlayerPage
                 break;
 
             case VirtualKey.Up:
-                NudgeVolume(5);
+                NudgeVolume(KeyStep);
                 break;
 
             case VirtualKey.Down:
-                NudgeVolume(-5);
+                NudgeVolume(-KeyStep);
                 break;
 
             case VirtualKey.F:
@@ -530,8 +546,9 @@ public sealed partial class PlayerPage
     // it to reveal it the usual way.
 
     /// <summary>
-    /// Moves the volume and shows the rail. Both the wheel and the arrow keys land here, so the number
-    /// they move by and the readout they bring up are the same for either.
+    /// Moves the volume and shows the rail. Both the wheel and the arrow keys land here, so the readout they
+    /// bring up is the same for either; how far each one moves is the caller's (<see cref="WheelStep"/>
+    /// against <see cref="KeyStep"/>).
     /// </summary>
     private void NudgeVolume(int delta)
     {

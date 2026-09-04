@@ -540,6 +540,40 @@ internal static class PlaybackTests
             Assert.False(modern.Group!.Vintage, "720p 不是老片源，哪怕它也在放大");
         });
 
+        Test("着色器：「这是哪种片子」只有一个写手，菜单和自动挑用的是同一个答案", () =>
+        {
+            // 播放器 ⚙ 菜单要照这次播的文件列那八行 —— 一张 DVD 的行里带 hdeband，一部 60fps 的番在动画那三行上
+            // 也是 ravu。它从前是拿「当前生效的那条链」反推这两根轴的，可着色器关掉、8K 片源、开播前那一刻都没有
+            // 当前链，于是退回「不是老片源、不是高帧率」那一列：点一下动画微放大，60fps 的片子拿到 ArtCNN，正是
+            // 高帧率这根轴专门要挡住的那条（一帧 22 毫秒），而且一点就钉住一整部片子。
+            // 所以规则收在 Kind 一处，这一条钉的就是「Resolve 和菜单读的是同一句话」。
+            (int Height, double Fps, bool Vintage, bool FastMotion)[] rows =
+            [
+                (1080, 23.976, false, false),
+                (576, 23.976, true, false),
+                (1080, 59.94, false, true),
+                (480, 59.94, true, true),
+                (0, 0, false, false)
+            ];
+
+            foreach (var row in rows)
+            {
+                var settings = Shaders();
+                Assert.Equal((row.Vintage, row.FastMotion), settings.Kind(row.Height, row.Fps),
+                    $"{row.Height} 线 / {row.Fps}fps");
+
+                // 和真正挑链那条路对齐：同一个文件，Kind 说的两根轴必须就是链身上那两根。8K 和关掉着色器
+                // 那两种情况没有链可比，所以这里只走有链的组合。
+                var chain = settings.Resolve(true, 1920, row.Height, 2560, 1440, row.Fps).Group!;
+                Assert.Equal(row.Vintage, chain.Vintage, $"{row.Height} 线：老片源这根轴两边要一致");
+                Assert.Equal(row.FastMotion, chain.FastMotion, $"{row.Fps}fps：高帧率这根轴两边要一致");
+            }
+
+            // 老片源修复关掉之后，Kind 也得跟着说「不是老片源」—— 否则菜单会去列一张这次根本不会用的表。
+            Assert.Equal((false, false), Shaders(vintage: false).Kind(576, 23.976));
+            Assert.Equal((false, true), Shaders(vintage: false).Kind(576, 59.94), "高帧率那根轴不受它管");
+        });
+
         Test("着色器：动画判定与用了哪半张表无关", () =>
         {
             // 去色带 =「在动画中开启」读的是这个标记，所以它必须是「这部片是不是动画」，而不是
@@ -1670,11 +1704,99 @@ internal static class PlaybackTests
             Assert.True(floor >= 0 && lifted > floor, $"设置那条必须排在基线那条后面（实际 {floor} / {lifted}）");
         });
 
+        Test("输出：宽片裁切填充只对真的有黑边的片源出手", () =>
+        {
+            // 交给一个 16:9 的文件就是白裁一刀 —— 那时候本来就没有黑边可填。mpv 自己的 panscan 默认是 0，而每次
+            // 播放都是新起的 mpv，所以「关」一条都不必发。
+            var wide = new SourceProfile(1920, 800, 8, 24, false);
+            var flat = new SourceProfile(1920, 1080, 8, 24, false);
+
+            var on = Options(MpvOutputOptions.Build(
+                new VideoSettings { FillWideSources = true }, new AudioSettings(), source: wide));
+            Assert.Equal("1.0", on["panscan"]);
+
+            var sixteenNine = Options(MpvOutputOptions.Build(
+                new VideoSettings { FillWideSources = true }, new AudioSettings(), source: flat));
+            Assert.False(sixteenNine.ContainsKey("panscan"), "16:9 的片源没有黑边，裁它没有意义");
+
+            var off = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), source: wide));
+            Assert.False(off.ContainsKey("panscan"), "关着的时候一条都不发");
+
+            var unknown = Options(MpvOutputOptions.Build(
+                new VideoSettings { FillWideSources = true }, new AudioSettings()));
+            Assert.False(unknown.ContainsKey("panscan"), "问不出片源形状时不许猜");
+        });
+
+        Test("输出：音频输出设备只在挑过的时候下发", () =>
+        {
+            // 空串是「跟随系统默认设备」，也就是 mpv 自己的 auto —— 一条都不发。这一项存在的全部意义是
+            // 「独占模式该占哪一个」：不发的时候占的是 Windows 那一刻认的默认设备，而那是看不见也选不了的。
+            var auto = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
+            Assert.False(auto.ContainsKey("audio-device"));
+
+            var picked = Options(MpvOutputOptions.Build(
+                new VideoSettings(),
+                new AudioSettings { Device = "wasapi/{0.0.0.00000000}.{9c3d1b2e}", ExclusiveMode = true }));
+
+            Assert.Equal("wasapi/{0.0.0.00000000}.{9c3d1b2e}", picked["audio-device"]);
+            Assert.Equal("yes", picked["audio-exclusive"], "挑了设备之后独占模式照旧要发");
+        });
+
+        Test("音频设备：没有描述就拿设备名当标签", () =>
+        {
+            // 屏上那一行显示的是描述；描述是空的时候必须退到设备名，而不是一个空白的下拉项 —— 一个看不出是
+            // 什么的选项和没有这一项一样糟。
+            Assert.Equal("扬声器 (Realtek)", new AudioDevice("wasapi/abc", "扬声器 (Realtek)").Label);
+            Assert.Equal("wasapi/abc", new AudioDevice("wasapi/abc", "").Label);
+            Assert.Equal(AudioDeviceCatalogue.AutoDevice, new AudioDevice("auto", "  ").Label);
+        });
+
+        Test("计划：截图有落点、有格式、有片名加时间码的模板", () =>
+        {
+            // 截图这个功能从前一条都没有，理由是「--no-config 之下没有 screenshot-directory，文件会落到 exe
+            // 旁边而不告诉用户」。所以这三条一起下发才算把那个理由消掉了 —— 少了落点那一条，症状正是当年那个。
+            var (planner, _) = Planner(@"D:\shots");
+            var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+
+            Assert.Equal(@"D:\shots", options["screenshot-directory"]);
+            Assert.Equal("png", options["screenshot-format"], "看画质的图不能先过一遍有损压缩");
+            Assert.True(options["screenshot-template"].Contains("%wH"), "模板里要带时间码");
+
+            // 没有落点的时候一条都不发：那是测试和命令行那条路，不是屏上那条。
+            var (bare, _) = Planner();
+            var without = Options(bare.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.False(without.ContainsKey("screenshot-directory"));
+            Assert.False(without.ContainsKey("screenshot-format"));
+            Assert.False(without.ContainsKey("screenshot-template"));
+        });
+
+        Test("截图模板：片名进得去，非法文件名字符进不去", () =>
+        {
+            // 时间码用 %wH.%wM.%wS 而不是 mpv 现成的 %p：后者是 HH:MM:SS，而冒号在 Windows 文件名里非法。
+            Assert.Equal("攻壳机动队 %wH.%wM.%wS", MpvBaseline.ScreenshotTemplate("攻壳机动队"));
+
+            // 服务器上的剧名带 : / ? 是常事，而这三个都不许进文件名。走的是「下载到设备」那同一份规矩
+            // （DownloadPlan.Safe），所以这个仓库里只有一个答案说「文件名里能放什么」。
+            var messy = MpvBaseline.ScreenshotTemplate("攻壳/机动队: SAC?2045");
+            foreach (var illegal in new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' })
+            {
+                Assert.False(messy.Contains(illegal), $"模板里不许出现 {illegal}");
+            }
+
+            // 百分号得自己再挡一次：Safe() 没理由管它，可 mpv 会把它读成一个自己的格式符。
+            Assert.False(MpvBaseline.ScreenshotTemplate("100%纯度 %n").Contains("%n"),
+                "片名里的百分号不许变成 mpv 的格式符");
+            Assert.True(MpvBaseline.ScreenshotTemplate("100%纯度").StartsWith("100纯度"));
+
+            // 片名一个字都不剩的时候不能落成一个只有时间码的名字，也不能是 mpv 默认那个 mpv-shotNNNN。
+            Assert.Equal("EmbyNian %wH.%wM.%wS", MpvBaseline.ScreenshotTemplate("  ..  "));
+            Assert.Equal("EmbyNian %wH.%wM.%wS", MpvBaseline.ScreenshotTemplate(null));
+        });
+
         Test("计划：轨道建议按偏好语言给出默认值", () =>
         {
             var (planner, settings) = Planner();
-            settings.Playback.AudioTrack = AudioTrackMode.Language;
-            settings.Playback.AudioLanguage = "日语";
+            settings.Playback.AudioLanguages = ["日语"];
             settings.Playback.SubtitleLanguages = ["中文"];
 
             var auto = planner.SuggestTracks(Source());
@@ -1695,22 +1817,32 @@ internal static class PlaybackTests
         {
             var (planner, settings) = Planner();
             settings.Playback.SubtitleLanguages = ["简体中文", "中文", "繁体中文"];
-            settings.Playback.AudioTrack = AudioTrackMode.Language;
-            settings.Playback.AudioLanguage = "英语";
+            settings.Playback.AudioLanguages = ["英语"];
 
             var request = planner.Plan(Ticket(), Connection());
 
             Assert.Equal("zh-Hans,zh_hans,zh-CN,zh_CN,zhs,sc,chs,chi-Hans,zh,chi,zho,zh-Hant,zh_hant,zh-TW,zh_TW,zh-HK,zh_HK,zht,tc,chi-Hant",
                 request.SubtitleLanguage);
-            Assert.Equal("eng,en", request.AudioLanguage, "音轨只有一种语言，没有优先级列表");
+            Assert.Equal("eng,en", request.AudioLanguage);
+        });
+
+        Test("计划：音轨语言是列表，按顺序展开成 alang", () =>
+        {
+            // v9 之前这一项只放得下一种语言，「日语 > 粤语 > 英语」根本表达不出来 —— 而 mpv 的 alang 本来就吃列表。
+            var (planner, settings) = Planner();
+            settings.Playback.AudioLanguages = ["日语", "粤语", "英语"];
+
+            var request = planner.Plan(Ticket(), Connection());
+
+            Assert.Equal("jpn,ja,yue,zh-HK,eng,en", request.AudioLanguage,
+                "三种语言按填的顺序展开，每种的候选码也按它自己的顺序");
         });
 
         Test("计划：空的语言优先级不传 slang/alang", () =>
         {
             var (planner, settings) = Planner();
             settings.Playback.SubtitleLanguages = [];
-            settings.Playback.AudioTrack = AudioTrackMode.ServerDefault;
-            settings.Playback.AudioLanguage = "日语";
+            settings.Playback.AudioLanguages = [];
             var request = planner.Plan(Ticket(), Connection());
             Assert.Null(request.SubtitleLanguage);
             Assert.Null(request.AudioLanguage, "跟随默认音轨时不该把语言写进 --alang");
@@ -1865,12 +1997,16 @@ internal static class PlaybackTests
             var settings = Playback(subtitles: []);
             Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "跟随文件自己的默认轨");
 
-            settings.AudioTrack = AudioTrackMode.Language;
-            settings.AudioLanguage = "日语";
+            settings.AudioLanguages = ["日语"];
             Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index);
 
-            settings.AudioLanguage = "韩语";
+            settings.AudioLanguages = ["韩语"];
             Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "没有韩语音轨就回到默认轨，而不是没有声音");
+
+            // 列表按顺序问：韩语这个文件没有，粤语也没有（chi 不是 yue），落到日语。这一条是「音轨语言从
+            // 单选变成优先级列表」的核心 —— 单选表达不出「首选韩语，其次日语」。
+            settings.AudioLanguages = ["韩语", "日语"];
+            Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index, "第一种没有就问第二种，而不是直接回默认轨");
         });
     }
 
@@ -2056,8 +2192,66 @@ internal static class PlaybackTests
             var untouched = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
             Assert.False(untouched.ContainsKey("volume"), "100 本来就是新起的 mpv 的音量，不必多说一句");
 
+            // 天花板从 100 抬到 130 那一下的回归测试。从前这里写的是 `is >= 0 and < 100`，本意是「100 不必发」，
+            // 可天花板一抬，存着的 130 就一次都发不出去：mpv 每次从 100 开始，而屏上那根滑杆停在 130 —— 又一个
+            // 界面在骗人。这一条必须钉住上限那个值本身发得出去。
+            var boosted = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings { Volume = AudioSettings.MaxVolume }));
+            Assert.Equal("130", boosted["volume"], "存着 130 就要真的发出 volume=130");
+
             var silly = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings { Volume = 3000 }));
-            Assert.False(silly.ContainsKey("volume"), "手改过的设置文件不该把音量顶到天上去");
+            Assert.False(silly.ContainsKey("volume"),
+                "手改过的设置文件不该把音量顶到天上去 —— mpv.exe 碰到超出 volume-max 的值会直接退出");
+        });
+
+        Test("输出：音量均衡和下混归一化在 af 上共存", () =>
+        {
+            // af 是个列表选项，而这两件事都是「让对白听得清」。写成一条 af 里的两个滤镜就会互相覆盖，所以
+            // 音量均衡走 af、下混归一化走 audio-normalize-downmix，四种组合都要成立。
+            var neither = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
+            Assert.False(neither.ContainsKey("af"), "都不开就一条 af 都不发");
+            Assert.False(neither.ContainsKey("audio-normalize-downmix"), "都不开也不发下混归一化");
+
+            var normalizeOnly = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings { VolumeNormalize = MpvOutputOptions.DynAudNorm }));
+            Assert.Equal(MpvOutputOptions.DynAudNorm, normalizeOnly["af"]);
+            Assert.False(normalizeOnly.ContainsKey("audio-normalize-downmix"));
+
+            var downmixOnly = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings { NormalizeDownmix = true }));
+            Assert.False(downmixOnly.ContainsKey("af"));
+            Assert.Equal("yes", downmixOnly["audio-normalize-downmix"]);
+
+            var both = MpvOutputOptions.Build(new VideoSettings(), new AudioSettings
+            {
+                VolumeNormalize = MpvOutputOptions.LoudNorm,
+                NormalizeDownmix = true
+            });
+
+            var pairs = Options(both);
+            Assert.Equal(MpvOutputOptions.LoudNorm, pairs["af"], "两个都开时 af 还是那一条完整的滤镜串");
+            Assert.Equal("yes", pairs["audio-normalize-downmix"]);
+            Assert.Equal(1, both.Count(option => option.Key == "af"), "af 只许出现一次，否则后一条盖掉前一条");
+        });
+
+        Test("音量均衡：滤镜串只写一处，播放器菜单和设置页读的是同一份", () =>
+        {
+            // 这两处从前各写一遍同样的滤镜串。写两遍就会飘，而「菜单里的音量均衡和设置里的音量均衡不是一回事」
+            // 正是这个项目一直在还的那类债。
+            var row = PlayerMenuCatalog.Flatten(PlayerMenuCatalog.Root)
+                .FirstOrDefault(node => node.Label == "切换 音量均衡");
+
+            Assert.NotNull(row, "播放器菜单里得有「切换 音量均衡」这一行");
+
+            var arguments = row!.Commands[0];
+            Assert.True(arguments.Contains(MpvOutputOptions.DynAudNorm), "菜单里那一档必须是 MpvOutputOptions 的原串");
+            Assert.True(arguments.Contains(MpvOutputOptions.LoudNorm), "另一档同理");
+
+            // 目录里那三档：空值加上这两条，一个不多一个不少。
+            Assert.Equal(
+                $"|{MpvOutputOptions.DynAudNorm}|{MpvOutputOptions.LoudNorm}",
+                string.Join("|", MpvOutputOptions.VolumeNormalizers.Select(choice => choice.Value)),
+                "音量均衡就这三档，而且「不启用」必须是第 0 项（SettingsMigration 认不出的值退到那里）");
         });
 
         Test("输出：字幕外观带上颜色的不透明度", () =>
@@ -3963,10 +4157,10 @@ internal static class PlaybackTests
         Name = name
     };
 
-    private static (PlaybackPlanner Planner, AppSettings Settings) Planner()
+    private static (PlaybackPlanner Planner, AppSettings Settings) Planner(string? screenshots = null)
     {
         var settings = new AppSettings();
-        return (new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders)), settings);
+        return (new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders), null, screenshots), settings);
     }
 
     private static EmbyConnection Connection() => new(

@@ -27,6 +27,10 @@ internal sealed record DashboardRequest(IServiceProvider Services);
 /// this session's credentials exactly where the web client's own sign-in would have. The token therefore
 /// never appears in a URL, in a log line or in the self-check report — only inside that script string.
 /// </para>
+/// <para>
+/// 深浅跟着本应用当前的主题走，同样是文档开始脚本加一位浏览器设置 —— 见
+/// <see cref="EmbyWebConsole.ThemeScript"/> 和 <see cref="StartAsync"/> 里那一段。
+/// </para>
 /// </summary>
 public sealed partial class DashboardPage : Page, IShellContent
 {
@@ -143,6 +147,17 @@ public sealed partial class DashboardPage : Page, IShellContent
             if (_released || Web.CoreWebView2 is not { } core) return;
             _core = true;
 
+            // 控制台跟着当前主题的深浅走，两半都在这儿：这一位是浏览器的 prefers-color-scheme，另一半是
+            // 下面那段脚本把网页端的主题设成 auto（见 EmbyWebConsole.ThemeScript）。设在导航之前，因为
+            // 网页端是在启动时读一次深浅来挑主题的。
+            //
+            // 只在这里读一次 ThemeHost.Current，不订阅换主题的通知：主题方块在设置的「界面」那张卡上，
+            // 而这一页和那张卡在设置里是互斥的两个选项 —— 换主题必然先离开这一页（离开就 Release），
+            // 回来时 SettingsPage.ShowHosted 是重新导航一次，于是这一行本来就会重新跑。
+            core.Profile.PreferredColorScheme = ThemeHost.Current.IsDark
+                ? CoreWebView2PreferredColorScheme.Dark
+                : CoreWebView2PreferredColorScheme.Light;
+
             Web.NavigationCompleted += OnNavigationCompleted;
             core.NewWindowRequested += OnNewWindowRequested;
 
@@ -150,6 +165,10 @@ public sealed partial class DashboardPage : Page, IShellContent
                 connection.ApiBase, connection.UserId, connection.AccessToken, connection.ServerName));
             if (_released) return;
             _seeded = true;
+
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                EmbyWebConsole.ThemeScript(connection.ApiBase, connection.UserId));
+            if (_released) return;
 
             Say("正在载入控制台…");
             core.Navigate(_url);
@@ -199,9 +218,15 @@ public sealed partial class DashboardPage : Page, IShellContent
     }
 
     /// <summary>
-    /// One look at what the web client ended up doing with the seeded session: which route it settled on, and
-    /// whether it filled in the server id — which it only does once a connection has been validated, so that
-    /// is the readable proof that auto sign-in worked. Reads no credential and returns none.
+    /// One look at what the web client ended up doing with the seeded session: which route it settled on,
+    /// which theme it resolved to, and whether it filled in the server id — which it only does once a
+    /// connection has been validated, so that is the readable proof that auto sign-in worked. Reads no
+    /// credential and returns none.
+    /// <para>
+    /// 主题读的是 <c>&lt;html&gt;</c> 上那个 <c>theme-*</c> 类名（<c>skinmanager.js</c> 挑好主题后就加在
+    /// 那儿），所以它答的是「网页端最后真的用了哪套」，而不是「我们请求了哪套」—— 跟随主题这件事只有
+    /// 这一句话能证明成或不成。
+    /// </para>
     /// </summary>
     private async Task SampleAsync()
     {
@@ -217,8 +242,13 @@ public sealed partial class DashboardPage : Page, IShellContent
                     var servers = data && Array.isArray(data.Servers) ? data.Servers : [];
                     var id = "未填";
                     for (var i = 0; i < servers.length; i++) if (servers[i] && servers[i].Id) { id = "已填"; break; }
-                    return "路由 " + (location.hash || "(无)") + "  ·  标题 " + (document.title || "(无)") +
-                      "  ·  服务器 id " + id;
+
+                    var theme = "(无)";
+                    var names = (document.documentElement.className || "").split(" ");
+                    for (var j = 0; j < names.length; j++)
+                      if (names[j].indexOf("theme-") === 0) { theme = names[j].substring(6); break; }
+
+                    return "路由 " + (location.hash || "(无)") + "  ·  主题 " + theme + "  ·  服务器 id " + id;
                   } catch (e) { return "取样出错：" + e; }
                 })();
                 """);

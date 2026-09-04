@@ -1,5 +1,6 @@
 using EmbyNian.Infrastructure;
 using EmbyNian.Diagnostics;
+using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -51,6 +52,10 @@ public sealed partial class SettingsPage : Page, IShellContent
         // open — survive a trip to another page and back. Signing out drops the frame's content entirely, so
         // nothing outlives a session; within one, leaving this page no longer costs an edit.
         NavigationCacheMode = NavigationCacheMode.Required;
+
+        // 「恢复默认设置」按下之后要问一次，而对话框要这一页的 XamlRoot（见 ConfirmDialog）。同 ServersPage 的
+        // 那一句，也是同一个理由：视图模型手上只有问题和答案，摆得出对话框的只有页面。
+        ViewModel.UseConfirm(ConfirmDialog.For(this));
 
         // The two hosted entries are selected the same way a card is, so the frame that holds them has to
         // follow the selection rather than only the navigation parameter.
@@ -276,7 +281,8 @@ public sealed partial class SettingsPage : Page, IShellContent
                 request.Services.GetRequiredService<ShaderStaging>(),
                 request.Services.GetRequiredService<FontLibrary>(),
                 request.Services.GetRequiredService<AppPaths>(),
-                request.Services.GetRequiredService<Platform.ISystemLauncher>());
+                request.Services.GetRequiredService<Platform.ISystemLauncher>(),
+                request.Services.GetRequiredService<AudioDeviceCatalogue>());
             _ = ViewModel.ReloadAsync();
         }
 

@@ -93,6 +93,7 @@ internal static partial class ShellSelfCheck
     private static void ReportSettings(
         ShellPage shell,
         EmbyNian.Emby.EmbyImageStore images,
+        EmbyNian.Playback.AudioDeviceCatalogue audioDevices,
         StringBuilder report,
         Action<string, bool, string> check)
     {
@@ -180,6 +181,65 @@ internal static partial class ShellSelfCheck
         var homeDrag = page.MeasureHomeDrag();
         check("主页版面表换得了次序", homeDrag is { Ok: true },
             homeDrag is { } drag ? drag.Detail : "没有建出主页版面表");
+
+        // 视频同步那一行的说明写的是「此刻真正生效的值」，而改得动它的有三处：它自己、启用插值、高帧率回退。
+        // 少接一处，屏上一点区别都看不出来 —— 说明还在，只是说的是上一次的事，也就是这一行本来要治的那个
+        // 「界面在骗人」。所以这里问两件：那根线本身通不通（假下拉行按一下，SettingChoiceRow.Probe），以及屏上
+        // 这一行真的是「此刻生效」那种说明、而不是一句静态介绍。点不了真下拉：这台机器上注不进鼠标事件。
+        var restate = SettingChoiceRow.Probe();
+        var liveNote = page.ViewModel.Sections
+            .FirstOrDefault(section => section.Category == "视频输出")?.Rows
+            .FirstOrDefault(row => row.Label == "视频同步")?.Note ?? "";
+
+        check("视频同步那一行说的是此刻生效的值", restate.Ok && liveNote.Contains("此刻生效"),
+            $"{restate.Detail}；屏上那一行写着「{liveNote}」");
+
+        // 「动态范围压缩」下发的是 ad-lavc-ac3drc，那是 AC-3 解码器的选项 —— DTS / TrueHD / AAC / FLAC 轨一律
+        // 没有反应。而那一行读起来像是通用的「让对白清楚一点」，所以说明里必须写着适用范围，否则它就是在骗人。
+        // 单测进不到外壳这个程序集，而这句话最可能的坏法是哪天被人「整理」掉，所以由自检钉着。同一关顺带确认
+        // 「音量均衡」那一行真的在这张卡上 —— 它是那句话里指向的去处，指了个不存在的地方比不指更糟。
+        var audioRows = page.ViewModel.Sections
+            .FirstOrDefault(section => section.Category == "音频输出")?.Rows ?? [];
+        var drcNote = audioRows.FirstOrDefault(row => row.Label == "动态范围压缩")?.Note ?? "";
+        var hasNormalize = audioRows.Any(row => row.Label == "音量均衡");
+
+        check("动态范围压缩那一行写明只对 AC-3 有效", drcNote.Contains("AC-3") && hasNormalize,
+            $"说明里{(drcNote.Contains("AC-3") ? "有" : "没有")}「AC-3」字样、"
+                + $"{(hasNormalize ? "并且" : "但是没有")}「音量均衡」那一行；这张卡 {audioRows.Count} 行");
+
+        // 音频输出设备那一行必须始终可用。设备列表要从 mpv 读（临时开一个 libmpv 句柄只为枚举），而那一趟可能
+        // 答不上来 —— 找不到 libmpv、没装 WASAPI 输出、机器上没有声卡。那时候这一行必须还剩「跟随系统默认设备」
+        // 并且真的选中了一项：一个没选中的 ComboBox 会吃掉下一次点击，而存着的值一个字都不会写回去。
+        // 「拔掉的耳机」走的是同一条路 —— Options() 那个「设置文件中的值」单独成项的分支。
+        var deviceRow = audioRows.FirstOrDefault(row => row.Label == "音频输出设备") as SettingChoiceRow;
+        var devices = audioDevices.Known;
+
+        check("音频输出设备那一行始终选中一项",
+            deviceRow is { Choices.Count: > 0, Selected: not null },
+            deviceRow is null
+                ? "音频输出那张卡上没有这一行"
+                : $"下拉 {deviceRow.Choices.Count} 项、选中「{deviceRow.Selected?.Label ?? "（没选中）"}」；"
+                    + $"这台机器上 mpv 报了 {devices.Count} 个设备"
+                    + (devices.Count > 0 ? $"，第一个是「{devices[0].Label}」" : "（还没读到或者读不到）"));
+
+        // 「恢复默认设置」那一行。什么都不按 —— 按下去就是把用户这台机器上的设置全清一遍，而这一关要问的两件事
+        // 都不需要真按：那一行在不在「恢复默认」那张卡上，以及这一页问得出那次确认没有。
+        //
+        // 后半句是这一关存在的理由。对话框要页面的 XamlRoot，所以视图模型只能等页面把 ConfirmRequest 递过来；
+        // 页面漏了那一句，ConfirmAsync 一律答「否」—— 按钮按下去什么都不发生，屏上一个字都不说，行数、模板、
+        // 渲染读数一个都不会差。单测进不到外壳这个程序集，这台机器上也注不进鼠标事件，所以这是那件事唯一验得到
+        // 的形式。至于「哪些回默认、哪些不动」，那是 Core 那一头的事（SettingsReset.Restore，单测钉着）。
+        var resetRows = page.ViewModel.Sections
+            .FirstOrDefault(section => section.Category == "恢复默认")?.Rows ?? [];
+        var resetRow = resetRows.OfType<SettingActionRow>().FirstOrDefault();
+        var canAsk = page.ViewModel.CanConfirm;
+
+        check("恢复默认设置那一行问得出确认", resetRow is not null && canAsk,
+            resetRow is null
+                ? $"「恢复默认」卡 {resetRows.Count} 行里没有一颗动作按钮"
+                : $"「{resetRow.Label}」，按钮写着「{resetRow.ActionLabel}」，说明里"
+                    + $"{(resetRow.Note.Contains("不会退出登录", StringComparison.Ordinal) ? "写明了服务器和账号不动" : "没写服务器和账号会怎样")}；"
+                    + $"确认对话框{(canAsk ? "已接上页面" : "没接上，按下去会一律当成「取消」")}");
 
         // The one path this page's cache guard exists for. Pressing 设置 again re-navigates the settings
         // window's frame to this same page type, and a page that rebuilt itself on the way in would throw

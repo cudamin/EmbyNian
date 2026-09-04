@@ -1,5 +1,7 @@
+using EmbyNian.Configuration;
 using EmbyNian.Playback;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Windows.Foundation;
 
 namespace EmbyNian.Shell.Views;
@@ -211,16 +213,25 @@ public sealed partial class PlayerPage
 
         // 加大尺寸: measured rather than declared, because the numbers are in XAML and the layout is what
         // decides whether they survived — a rail crowded out by its own margin measures small with the
-        // markup still reading 240.
+        // markup still reading 300. 「把音量条再改大一点」 raised both floors: the slider is 300 tall and the
+        // grab band 44 wide (18 + 8 + 18), so the pill comes to 68 with its padding.
         report.Add($"音量条 {Rail.ActualWidth:F0}×{Rail.ActualHeight:F0}，滑杆高 {VolumeSlider.ActualHeight:F0}");
-        Want("音量条尺寸", VolumeSlider.ActualHeight >= 200 && Rail.ActualWidth >= 56);
+        Want("音量条尺寸", VolumeSlider.ActualHeight >= 280 && Rail.ActualWidth >= 64);
+
+        // 天花板：屏上这根滑杆的上限必须就是存得下的那个上限。这一条是「音量上不去 100% 以上」那件活里唯一一处
+        // 单测碰不到的：另外五处都在 Core 或者视图模型里，而这一处从前是 XAML 里写死的 Maximum="100"，现在绑到
+        // ViewModel.VolumeMaximum 上 —— 绑失效了屏上看不出任何异样（滑杆照样能拖，只是拖不到 130），而这正是
+        // 「界面在骗人」：滑杆的顶和真正存下去的值不是一回事。
+        report.Add($"滑杆上限 {VolumeSlider.Maximum:0}，设置里存得下 {AudioSettings.MaxVolume}");
+        Want("音量滑杆的上限和存得下的一致", Math.Abs(VolumeSlider.Maximum - AudioSettings.MaxVolume) < 0.5);
 
         // 摆正: 「音量条的位置是歪的」. WinUI's vertical Slider template puts the track and the thumb in three
-        // columns of 14 + 4 + 14 = 32 and not one of them is a star, so a slider given a hard Width leaves the
-        // surplus empty on its right and the track sits left of centre — Width="44" was 6 pixels off, inside a
-        // pill whose mute button below it was centred, which is the whole of what looked crooked. Nothing but a
-        // measurement can say so: the offset is the framework's arithmetic, not this file's, and the number
-        // above the rail that used to sit beside it is gone.
+        // columns — SliderPreContentMargin, the track, SliderPostContentMargin — and not one of them is a star,
+        // so a slider given a hard Width leaves the surplus empty on its right and the track sits left of
+        // centre: Width="44" was 6 pixels off, inside a pill whose figure and mute button were centred, which
+        // is the whole of what looked crooked. 「把音量条再改大一点」 widened the same band back to 44 by raising
+        // those two margins together, which is why this measurement matters more now rather than less — raising
+        // one of the two is the same fault with a different cause, and nothing but a measurement can say so.
         var track = PartNamed(VolumeSlider, "VerticalTrackRect");
         var rail = BoundsOf(Rail);
         var box = track is null ? default : BoundsOf(track);
@@ -232,6 +243,11 @@ public sealed partial class PlayerPage
         // rounding twice over at 125% scaling. Structurally the answer is 0.
         Want("滑杆轨道在音量条正中", track is not null && Math.Abs(offset) <= 1);
 
+        // 轨道也粗了一档：SliderTrackThemeHeight 从 4 抬到 8。这一条和上面那条是一对 —— 那五个 ThemeResource 覆盖
+        // 是在滑杆自己的 Resources 里写的，键名写错、或者哪天框架换了键名，模板照旧渲染、屏上照旧有一根滑杆，只是
+        // 又变细了，而没有任何一关会红。
+        Want("轨道加粗了", track is not null && box.Width >= 7);
+
         // 不要边框: 「音量条不需要边框」. Worth an assertion rather than a glance, because PlayerEdgeBrush is
         // still on the palette (the chapter preview uses it) — put back here and every colour check stays
         // green while the rail wears a ring nobody asked for.
@@ -239,13 +255,18 @@ public sealed partial class PlayerPage
         report.Add($"描边 {edge.Left:0}/{edge.Top:0}/{edge.Right:0}/{edge.Bottom:0}");
         Want("音量条不描边", edge is { Left: 0, Top: 0, Right: 0, Bottom: 0 });
 
-        // 不要上方的数字: 「音量条不需要…上方的数字」. Counted rather than looked for by type, and this is the one
-        // of the three claims that would otherwise have nothing at all watching it — the narration walk stops
-        // at controls, so a TextBlock put back here leaves every gate green and every report line unchanged.
-        // Counting is also the only safe test: 「no TextBlock under Rail」 would be red from the start, because
-        // the mute button's own FontIcon has one inside it.
-        report.Add($"条上 {RailStack.Children.Count} 样");
-        Want("音量条上只有滑杆和静音键", RailStack.Children.Count == 2);
+        // 上方的数字: 「给音量条上方加上数字」 (2026-09-04), which is the same readout 「不需要…上方的数字」 took
+        // off the day before — so what is checked is both that it is there and that it says the level the slider
+        // is at. A figure that has come loose from the thumb is worse than no figure: it is the rail lying about
+        // how loud the film is. Counted as well, because the narration walk stops at controls: a TextBlock added
+        // or removed here changes no other report line.
+        var figure = RailStack.Children.Count > 0 ? RailStack.Children[0] as TextBlock : null;
+        var says = figure?.Text ?? "";
+        var agrees = int.TryParse(says, out var shown) && Math.Abs(shown - Math.Round(VolumeSlider.Value)) < 0.5;
+
+        report.Add($"条上 {RailStack.Children.Count} 样，上方的数字「{says}」对滑杆的 {VolumeSlider.Value:0}");
+        Want("音量条上有数字、滑杆和静音键", RailStack.Children.Count == 3 && figure is not null);
+        Want("上方的数字和滑杆一致", agrees);
 
         // 淡入淡出, and the standing visibility it needs: the rail is the one piece of chrome that is always
         // laid out and only ever changes strength, so a Visibility flip creeping back in here would take the

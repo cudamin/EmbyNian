@@ -168,6 +168,47 @@ public static class MpvOutputOptions
         new("1", "完全压缩（对白最清楚）")
     ];
 
+    /// <summary>
+    /// 音量均衡 — the cross-codec 「对白听不清」 control, as an <c>af</c> chain.
+    /// <para>
+    /// It exists because <see cref="DynamicRange"/> is not that control and reads as though it were.
+    /// <c>ad-lavc-ac3drc</c> is an option <b>on the AC-3 decoder</b>, and it needs the source to carry DRC
+    /// metadata on top of that, so a DTS, TrueHD, AAC or FLAC track does not react to it at all. The row for it
+    /// now says so; this row is what actually works on every codec.
+    /// </para>
+    /// <para>
+    /// <b>The two filter strings are this file's, and the player's 「切换 下混滤镜」 row reads them from here</b>
+    /// — see <see cref="PlayerMenuCatalog"/>. Written out twice they would drift, and 「the menu and the settings
+    /// page disagree about what 音量均衡 means」 is exactly the class of defect this project keeps paying for.
+    /// The <c>@label:</c> prefix is mpv's own filter-label syntax: it is what lets the menu's
+    /// <c>cycle-values</c> compare one entry against another, and it also makes <c>${af}</c> readable on screen.
+    /// </para>
+    /// <para>
+    /// Three entries, not the four 任务书 2.2 lists: 「不启用」 and 「保留原样」 are the same thing here. Every
+    /// playback is a fresh mpv under <c>--no-config</c>, so there is no <c>af</c> residue for an explicit
+    /// 「off」 to clear that 「send nothing」 would leave behind — two labels for one behaviour is the 「无」 /
+    /// <c>default</c> mistake again, and this file already carries the note about that.
+    /// </para>
+    /// </summary>
+    public static readonly MpvChoice[] VolumeNormalizers =
+    [
+        new(Inherit, "不启用（保留原始响度）"),
+        new(DynAudNorm, "连续跟随（夜里看，安静处自动抬起来）"),
+        new(LoudNorm, "对齐到固定响度（一集接一集，各集之间不用再调）")
+    ];
+
+    /// <summary>
+    /// <c>dynaudnorm</c> rides the level continuously over a moving window — quiet dialogue comes up, a
+    /// sudden explosion comes down, and it never needs to know how long the file is.
+    /// </summary>
+    public const string DynAudNorm = "@dynaudnorm:lavfi=[dynaudnorm=f=500:g=31:p=0.5:m=5:r=0.9]";
+
+    /// <summary>
+    /// <c>loudnorm</c> aims at a fixed target (EBU R128, −16 LUFS) instead of following the picture, which is
+    /// what makes one episode start at the same loudness as the last.
+    /// </summary>
+    public const string LoudNorm = "@loudnorm:lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]";
+
     /// <summary>The codecs mpv can hand to the receiver untouched, as <c>audio-spdif</c> spells them.</summary>
     public static readonly MpvChoice[] PassthroughCodecs =
     [
@@ -307,6 +348,17 @@ public static class MpvOutputOptions
         new("#FFFFFF", "白色")
     ];
 
+    /// <summary>
+    /// Aspect ratio above which a source is 「wider than 16:9」, i.e. letterboxed on this screen. 1.79 rather
+    /// than 16÷9 = 1.777… so that a file whose stored dimensions round oddly (1920×1082, a 1440×1080 anamorphic
+    /// encode) is not called wide by a rounding error.
+    /// <para>
+    /// Two settings share it, and they are two halves of the same fact — the picture does not fill the frame:
+    /// 字幕拉伸到全屏 (a PGS track authored for the full frame including the bars) and 宽片裁切填充.
+    /// </para>
+    /// </summary>
+    public const double WideAspect = 1.79;
+
     /// <summary>Frame rate above which display sync is more trouble than it is worth.</summary>
     private const double HighFrameRateThreshold = 47;
 
@@ -399,6 +451,11 @@ public static class MpvOutputOptions
         AddDeband(options, video.Deband, source, animated);
         AddHdr(options, video.HdrMode, source);
 
+        // 宽于 16:9 的片源默认裁切填充. Only for a source that is actually letterboxed here — sent for a 16:9 file
+        // it would crop the picture for nothing. mpv's own default is 0, and every playback is a fresh mpv, so
+        // 「off」 needs nothing sent; the player menu's 开/关 裁切填充 row still overrides it per film.
+        if (video.FillWideSources && source is { AspectRatio: > WideAspect }) Add(options, "panscan", "1.0");
+
         // 自动 ICC 校色, written next to HDR because the two interact: with a display profile loaded mpv maps
         // into that profile's space, so HDR 直通 stops being 直通. Only ever sent as 「on」 — MpvBaseline
         // states icc-profile-auto=no on every launch, so 「off」 is already the floor and sending it again
@@ -427,12 +484,32 @@ public static class MpvOutputOptions
         if (passthrough.Count > 0) Add(options, "audio-spdif", string.Join(",", passthrough));
 
         Add(options, "ad-lavc-ac3drc", audio.DynamicRange);
+
+        // 音频输出设备 goes out before 独占模式 for readability only — mpv takes them in either order. Empty is
+        // 「跟随系统默认」, i.e. mpv's own auto, so nothing is sent.
+        Add(options, "audio-device", audio.Device);
         if (audio.ExclusiveMode) Add(options, "audio-exclusive", "yes");
+
+        // 音量均衡 and 5.1 下混归一化 are two separate options on purpose, and this is the one place worth
+        // saying so: af is a filter *list*, and folding the downmix switch into it as a second filter would
+        // mean one of the two silently replacing the other. audio-normalize-downmix is a flag on mpv's own
+        // conversion stage, so the two compose without either knowing about the other.
+        Add(options, "af", audio.VolumeNormalize);
+        if (audio.NormalizeDownmix) Add(options, "audio-normalize-downmix", "yes");
 
         // 音量 as the player was last left. mpv is started with its own config blocked, so 「the volume
         // nobody set」 is always 100 and this option is the only thing that carries a level from one file
         // to the next; 100 itself is left unsaid because that is already where a fresh mpv starts.
-        if (audio.Volume is >= 0 and < 100)
+        //
+        // 「not 100」 rather than 「< 100」, which is what this said while the ceiling was 100 and what made
+        // raising the ceiling a lie: a stored 130 matched neither branch, so nothing was sent, mpv started at
+        // 100 and the rail on screen sat at 130. A regression test covers 130 / 100 / 0.
+        //
+        // The upper bound stays, and it is not a duplicate of SettingsMigration's clamp: this is the seam mpv
+        // sees, and a value above volume-max is not a harmless one — mpv.exe exits on an out-of-range option
+        // value rather than playing the file. Above the ceiling nothing is sent, which leaves mpv at its own
+        // 100.
+        if (audio.Volume is >= 0 and <= AudioSettings.MaxVolume and not 100)
         {
             Add(options, "volume", audio.Volume.ToString(CultureInfo.InvariantCulture));
         }
@@ -589,7 +666,7 @@ public static class MpvOutputOptions
         // A PGS track from a 2.39:1 disc is authored for the full frame including the black bars, so on
         // a cropped or wider-than-16:9 encode its lines land off the bottom of the picture. Stretching
         // the subtitle canvas to the window puts them back on screen.
-        if (subtitles.StretchWideImageSubtitles && source is { AspectRatio: > 1.79 })
+        if (subtitles.StretchWideImageSubtitles && source is { AspectRatio: > WideAspect })
             Add(options, "stretch-image-subs-to-screen", "yes");
     }
 

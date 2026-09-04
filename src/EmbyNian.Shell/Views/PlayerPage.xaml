@@ -524,51 +524,76 @@
              one was the framework's:
 
                * No Width on the slider, and this is load-bearing. WinUI's vertical Slider template lays the
-                 track and the thumb out in three columns of 14 + 4 + 14 = 32, none of which is a star, so a
-                 vertical slider given a wider Width does not spread the extra space — it leaves it empty on
-                 the right and the track sits 6 pixels left of the slider's own middle. A hard Width="44" was
-                 exactly that: a thin line off to one side of a pill whose number above it and mute button
-                 below it were both centred, which is what 「歪」 was. HorizontalAlignment="Center" has to stay
-                 for the same reason — without it the StackPanel stretches the slider back to its width and the
-                 offset comes back. To make the grab area wider than 32 the two margins would have to be
-                 widened symmetrically instead, by overriding SliderPreContentMargin and SliderPostContentMargin
-                 in this slider's own Resources — which nothing here does today. What the change costs is the
-                 grab band: 44 wide before, 32 now. The wheel still works anywhere over the picture.
-                 ProbeRailFade measures the offset now, so nobody can put a Width back unnoticed.
+                 track and the thumb out in three columns — SliderPreContentMargin, the track's own
+                 SliderTrackThemeHeight, SliderPostContentMargin — and none of them is a star, so a vertical
+                 slider given a wider Width does not spread the extra space: it leaves it empty on the right
+                 and the track sits left of the slider's own middle. A hard Width="44" was exactly that: a thin
+                 line off to one side of a pill whose number above it and mute button below it were both
+                 centred, which is what 「歪」 was. HorizontalAlignment="Center" has to stay for the same
+                 reason — without it the StackPanel stretches the slider back to its width and the offset comes
+                 back. ProbeRailFade measures the offset now, so nobody can put a Width back unnoticed.
                * No BorderBrush/BorderThickness. PlayerEdgeBrush itself stays — the chapter preview still uses it.
-               * No number above the slider. The thumb's position is the readout; the exact percentage is gone
-                 from the screen, and 「滚轮调音量时要显示音量条」 now means seeing the bar rather than a figure.
-                 Narrator still reads the value out, because a Slider carries one.
+               * The number above the slider went away here and 「给音量条上方加上数字」 (2026-09-04) brought it
+                 back. It is not a reversal for its own sake: the ceiling moved from 100 to 130 in between, and
+                 the thumb's position cannot say which side of 100 the film is on.
+
+             「把音量条再改大一点」 (2026-09-04), and the three overrides below are how — not a Width, for the
+             reason above. Widening the two content margins symmetrically is the one way to make the grab band
+             wider than the template's 32 without moving the track off centre, and it is what the note here
+             used to say nothing did yet: 18 + 8 + 18 = 44, the same 44 the crooked hard Width once claimed,
+             this time with the track in the middle of it. The thumb's two keys really are the Horizontal ones
+             — the vertical template reads SliderHorizontalThumbWidth/Height for its own thumb, which is a
+             framework quirk and not a typo here.
         -->
         <Border
             x:Name="Rail"
             HorizontalAlignment="Right"
             VerticalAlignment="Center"
             Margin="0,0,22,0"
-            Padding="10,18"
+            Padding="12,20"
             Background="{StaticResource PlayerRailBrush}"
-            CornerRadius="28"
+            CornerRadius="32"
             Opacity="0"
             IsHitTestVisible="False">
             <Border.OpacityTransition>
                 <ScalarTransition Duration="0:0:0.22" />
             </Border.OpacityTransition>
-            <!-- Named so the self-check can count what is on the rail: 「不需要…上方的数字」 is otherwise the one
-                 of the three with nothing watching it — a TextBlock put back here would leave every gate green
+            <!-- Named so the self-check can count what is on the rail: the figure is otherwise the one of the
+                 three with nothing watching it — a TextBlock taken away from here would leave every gate green
                  and every report line unchanged, because the narration walk stops at controls and the seven
                  decorative readouts it checks are a written-down list. -->
             <StackPanel x:Name="RailStack" Spacing="10" HorizontalAlignment="Center">
+                <!-- 上方的数字. Raw to the narration: a Slider already announces its own value, and 「音量 55,
+                     55」 is not a better readout than 「音量 55」. Tabular figures so 9 → 10 → 100 does not
+                     shuffle the pill's width about while the wheel turns. -->
+                <TextBlock
+                    x:Name="VolumeText"
+                    Text="{x:Bind ViewModel.VolumeLabel, Mode=OneWay}"
+                    HorizontalAlignment="Center"
+                    FontFamily="Consolas,Cascadia Mono,Segoe UI"
+                    FontSize="{StaticResource EgBodyFontSize}"
+                    Foreground="{StaticResource PlayerInkBrush}"
+                    AutomationProperties.AccessibilityView="Raw" />
+
                 <Slider
                     x:Name="VolumeSlider"
-                    Height="240"
+                    Height="300"
                     HorizontalAlignment="Center"
                     AutomationProperties.Name="音量"
                     IsThumbToolTipEnabled="False"
-                    Maximum="100"
+                    Maximum="{x:Bind ViewModel.VolumeMaximum}"
                     Minimum="0"
                     Orientation="Vertical"
                     StepFrequency="1"
-                    Value="{x:Bind ViewModel.Volume, Mode=TwoWay}" />
+                    Value="{x:Bind ViewModel.Volume, Mode=TwoWay}">
+                    <Slider.Resources>
+                        <x:Double x:Key="SliderPreContentMargin">18</x:Double>
+                        <x:Double x:Key="SliderPostContentMargin">18</x:Double>
+                        <x:Double x:Key="SliderTrackThemeHeight">8</x:Double>
+                        <x:Double x:Key="SliderHorizontalThumbWidth">22</x:Double>
+                        <x:Double x:Key="SliderHorizontalThumbHeight">22</x:Double>
+                    </Slider.Resources>
+                </Slider>
 
                 <Button
                     x:Name="MuteButton"

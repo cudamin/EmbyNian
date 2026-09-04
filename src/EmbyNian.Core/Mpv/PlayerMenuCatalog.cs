@@ -69,13 +69,17 @@ public sealed record PlayerMenuNode(
 /// Emby season), 窗口缩放 and 置顶 (the window is the shell's, not mpv's).
 /// </description></item>
 /// <item><description>
-/// 截屏: the commands work, but with <c>--no-config</c> there is no <c>screenshot-directory</c>, so the
-/// files would land next to the executable without the user being told where.
-/// </description></item>
-/// <item><description>
 /// 次字幕 rows, and anything about the second subtitle track: nothing in the client loads one.
 /// </description></item>
 /// </list>
+/// <para>
+/// 截屏 <b>used to be on that list and is not any more.</b> The reason it was — 「with <c>--no-config</c> there
+/// is no <c>screenshot-directory</c>, so the files would land next to the executable without the user being
+/// told where」 — stopped being true once <see cref="Infrastructure.AppPaths.ScreenshotDirectory"/> existed and
+/// <see cref="MpvBaseline"/> started naming it on every launch, with the path and an 「打开」 button on the
+/// 关于 card. The three rows differ in what is in the picture, so each one says so rather than being called
+/// 「截屏 1/2/3」.
+/// </para>
 /// <para>
 /// Kept as data in Core rather than built as a <c>MenuFlyout</c> in the shell so that the tree is
 /// checkable without a window: what has to be right here is that every row runs something, that no
@@ -192,6 +196,16 @@ public static class PlayerMenuCatalog
             Item("开/关 填充 16:9 的黑边并居中", "视频滤镜:${vf}", "vf", "toggle", "pad=aspect=16/9:x=-1:y=-1"),
             Item("开/关 色温修正 6500", "视频滤镜:${vf}", "vf", "toggle", "colortemperature=temperature=6500")),
 
+        Group("截屏",
+            // The three differ in what ends up in the file, and that is the only thing worth putting on the
+            // labels: mpv's own words for them (subtitles / video / window) say nothing to somebody who has
+            // not read the manual. 「带着色器」 matters here more than in most players — this client's whole
+            // 画质档位 scheme is shaders, so 「what the chain did to this frame」 is a real question, and only
+            // the first row answers it.
+            Item("截图 — 屏上这一帧（带字幕和着色器）", "已保存到 ${screenshot-directory}", "screenshot"),
+            Item("截图 — 原始画面（不带字幕和着色器）", "已保存到 ${screenshot-directory}", "screenshot", "video"),
+            Item("截图 — 按窗口尺寸", "已保存到 ${screenshot-directory}", "screenshot", "window")),
+
         Group("音频",
             Group("音频通道输出方式",
                 Item("7.1 声道输出", "音频通道输出方式:${audio-channels}", "set", "audio-channels", "7.1"),
@@ -201,16 +215,22 @@ public static class PlayerMenuCatalog
                     "set", "audio-channels", "7.1,5.1,stereo"),
                 Item("循环切换", "音频通道输出方式:${audio-channels}",
                     "cycle-values", "audio-channels", "7.1,5.1,stereo", "7.1", "5.1", "stereo", "auto-safe", "auto")),
-            // 音量均衡: dynaudnorm rides the level continuously, loudnorm targets a fixed loudness, and the
-            // empty value is the way back off — a night-time volume control for films mixed for a cinema.
-            Item("切换 下混滤镜", "音量均衡:${af}",
+            // 音量均衡. The two filter strings are MpvOutputOptions', not this file's: 设置 → 音频输出 →
+            // 音量均衡 sends the same two at launch, and a menu row that meant something slightly different
+            // from the settings row of the same name is the 「界面在骗人」 shape all over again. This row is
+            // still worth having — it is the only way to hear the three side by side within one film — but it
+            // does not persist, because every playback is a fresh mpv under --no-config.
+            Item("切换 音量均衡", "音量均衡:${af}",
                 "cycle-values", "af",
-                "@dynaudnorm:lavfi=[dynaudnorm=f=500:g=31:p=0.5:m=5:r=0.9]",
-                "@loudnorm:lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]",
+                MpvOutputOptions.DynAudNorm,
+                MpvOutputOptions.LoudNorm,
                 ""),
             Item("清空 af 滤镜", "清空音频滤镜", "af", "clr", ""),
+            Item("开/关 下混归一化", "5.1 下混归一化:${audio-normalize-downmix}",
+                "cycle", "audio-normalize-downmix"),
             Rule,
             Item("切换 音频独占模式", "音频独占模式:${audio-exclusive}", "cycle", "audio-exclusive")),
+
 
         Group("字幕",
             Item("字幕上移", "字幕上移:${sub-pos}", "add", "sub-pos", "-1"),

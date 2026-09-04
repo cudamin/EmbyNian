@@ -182,17 +182,37 @@ public sealed partial class PlayerPage
         UpdateLayout();
         var uncovered = TapOnPicture(new Point(width / 2, height - 2));
 
+        // 「跳过片头后会自动暂停」: the same point, with the tap saying it landed inside the 跳过 button — which
+        // by then is collapsed, exactly as it is when its own Click has just taken the offer. Geometry answers
+        // 「picture」 here (the button is not on screen any more) and only the origin can refuse it.
+        //
+        // Shown and hidden again first, and that is not ceremony: a tap reports the innermost element it hit,
+        // so the walk has to start at the button's own child — and a button that has never been laid out has
+        // no realized content to walk up from. Which is also the real sequence: the offer was on screen, the
+        // click took it, the button went away, and the Tapped for that same release arrives afterwards.
+        SkipButton.Visibility = Visibility.Visible;
+        UpdateLayout();
+        SkipButton.Visibility = Visibility.Collapsed;
+        UpdateLayout();
+
+        var skipHidden = SkipButton.Visibility != Visibility.Visible && !Covers(SkipButton, new Point(width / 2, height - 2));
+        var afterSkip = TapOnPicture(new Point(width / 2, height - 2), SkipText);
+        var onPicture = TapOnPicture(new Point(width / 2, height - 2), Root);
+
         SetCursorHidden(false);
         Visibility = was;
         UpdateLayout();
 
         var ok = width > 0 && height > 0 && centre && missed.Count == 0 && uncovered
+                 && skipHidden && !afterSkip && onPicture
                  && !ChromeShown && Visibility == was
                  && walked >= 4 && skewed.Count == 0;
 
         return (ok, $"{width:0}×{height:0} 逻辑像素：画面中央→{(centre ? "暂停" : "不暂停")}"
                     + $"；浮层五处控件{(missed.Count == 0 ? "都不暂停" : $"有 {string.Join('、', missed)} 会误触")}"
                     + $"；浮层收起后底边→{(uncovered ? "暂停" : "不暂停")}"
+                    + $"；跳过键已收起={skipHidden}，落在它上面的那一下→{(afterSkip ? "暂停（错）" : "不暂停")}"
+                    + $"，落在画面上的那一下→{(onPicture ? "暂停" : "不暂停（错）")}"
                     + $"；{walked} 处控件的原点与 TransformToVisual "
                     + (skewed.Count == 0 ? $"一致（最大差 {offBy:0.###} 像素）" : $"不一致：{string.Join('、', skewed)}"));
     }

@@ -100,6 +100,21 @@ internal sealed class VideoWindow : IDisposable
     /// Resizes to the parent's client area. Called from <c>WM_SIZE</c>, once, next to the island's single
     /// <c>MoveAndResize</c>: two calls per resize against the WinForms shell's nine, which is most of why
     /// 「调整画面大小时窗口的变化」 is smoother here (requirement 1).
+    /// <para>
+    /// mpv's own child is resized with it, and that second call is 「暂停后进全屏，画面留在左上角、其余全黑」
+    /// (2026-09-04). Playing, mpv catches up by itself within a frame and nothing shows; paused, there is no
+    /// next frame, and if mpv has not heard that its parent grew it never redraws — the film stays the size
+    /// the window was, in the top-left corner, with this class's black brush around it. Sizing mpv's window
+    /// ourselves settles it either way: if mpv already did it this is a no-op, and if it did not, the
+    /// <c>WM_SIZE</c> it gets from here is exactly the event its own resize-and-redraw path waits for.
+    /// </para>
+    /// <para>
+    /// Measured before writing it: an embedded mpv (mpv.exe 0.41 into a window built and resized like this
+    /// one, gpu-next on vulkan, hwdec on, paused from the first frame) recreates its swapchain and redraws at
+    /// the new size — its own log says 「(Re)creating swapchain of size 1040x585」 while <c>pause</c> is still
+    /// true. So the redraw is not the missing half; hearing about the resize is. The four probes are in
+    /// <c>artifacts/shader-probe/embed-*.ps1</c>.
+    /// </para>
     /// </summary>
     public void Fill()
     {
@@ -109,6 +124,15 @@ internal sealed class VideoWindow : IDisposable
         Native.SetWindowPos(
             Handle, IntPtr.Zero, 0, 0, client.Width, client.Height,
             Native.SwpNoZOrder | Native.SwpNoActivate | Native.SwpNoCopyBits);
+
+        // mpv creates exactly one child in here, and it belongs to mpv's own thread — hence the asynchronous
+        // form, which posts instead of waiting for that thread to answer while we are inside WM_SIZE.
+        var picture = Native.GetWindow(Handle, Native.GwChild);
+        if (picture == IntPtr.Zero) return;
+
+        Native.SetWindowPos(
+            picture, IntPtr.Zero, 0, 0, client.Width, client.Height,
+            Native.SwpNoZOrder | Native.SwpNoActivate | Native.SwpNoCopyBits | Native.SwpAsyncWindowPos);
     }
 
     private static void EnsureClassRegistered(IntPtr instance)

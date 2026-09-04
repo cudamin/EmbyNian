@@ -270,9 +270,45 @@ public sealed partial class PlayerPage
     /// open by a button and the cover belongs to the handover — but a click on either is still not a
     /// click on the film.
     /// </para>
+    /// <para>
+    /// <paramref name="origin"/> is the element the tap actually landed on, and it is the half geometry
+    /// cannot answer: 「跳过片头后会自动暂停」 (2026-09-04). The 跳过 button takes itself off screen inside
+    /// its own <c>Click</c>, which runs before the <c>Tapped</c> that follows the same release — so by the
+    /// time this is asked, there is no button under the pointer any more, the hit test says 「picture」, and
+    /// the click that skipped the opening pauses the film 150 ms later. Any control that hides or moves
+    /// itself when pressed would do the same; what the tap hit does not change underneath us.
+    /// </para>
     /// </summary>
-    private bool TapOnPicture(Point point) =>
-        PartAt(point) == ChromePart.None && !Covers(StatsPanel, point) && !Covers(Cover, point);
+    private bool TapOnPicture(Point point, object? origin = null) =>
+        !FromChrome(origin) && PartAt(point) == ChromePart.None
+        && !Covers(StatsPanel, point) && !Covers(Cover, point);
+
+    /// <summary>
+    /// Whether the tap landed inside one of the overlays rather than on the film. Walks up from the element
+    /// the framework hit, and stops at <see cref="Root"/> — reaching the picture without meeting an overlay
+    /// is the answer 「no」. Collapsing an element does not take it out of the visual tree, which is exactly
+    /// why this survives the case <see cref="TapOnPicture"/> describes.
+    /// <para>
+    /// Subtractive on purpose: it can only ever refuse a tap that geometry would have accepted. Deciding
+    /// 「the picture」 from the origin instead — anything that is not <c>Root</c> is chrome — would hand the
+    /// 点击画面暂停 gesture to whatever element happens to be hit-testable over the film, and losing that
+    /// gesture is a worse fault than the one being fixed.
+    /// </para>
+    /// </summary>
+    private bool FromChrome(object? origin)
+    {
+        for (var node = origin as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (ReferenceEquals(node, Bar) || ReferenceEquals(node, TitleStrip) || ReferenceEquals(node, Rail)
+                || ReferenceEquals(node, SkipButton) || ReferenceEquals(node, StatsPanel)
+                || ReferenceEquals(node, Cover))
+                return true;
+
+            if (ReferenceEquals(node, Root)) return false;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Which piece of chrome a point is on. Asked separately from <see cref="RailNear"/> on purpose:

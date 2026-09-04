@@ -137,6 +137,30 @@ internal static class EmbyTests
             Assert.Throws<ArgumentException>(() => EmbyWebConsole.SignInScript(ApiBase, "", "t", "Emby"));
             Assert.Throws<ArgumentException>(() => EmbyWebConsole.SignInScript(ApiBase, "u", "", "Emby"));
         });
+
+        Test("控制台主题脚本：两个主题键都写成跟随浏览器深浅", () =>
+        {
+            var script = EmbyWebConsole.ThemeScript(ApiBase, "user-1");
+
+            // 键带用户 id 前缀（appsettings.js 的 getKey），值是 auto —— 只有 auto 那条分支不过注册检查，
+            // 深浅由 DashboardPage 设的 PreferredColorScheme 决定。
+            Assert.Contains("\"user-1-appTheme\"", script);
+            Assert.Contains("\"user-1-settingsTheme\"", script);
+            Assert.Contains("\"auto\"", script);
+            Assert.Equal("auto", EmbyWebConsole.FollowColorScheme);
+
+            // 存服务器的那个键一个都不许碰：改它就等于改用户其他设备上的 Emby。
+            Assert.False(script.Contains("accentColor", StringComparison.Ordinal));
+        });
+
+        Test("控制台主题脚本：只对自己这台服务器的页面动手，没有账号就拒绝", () =>
+        {
+            var script = EmbyWebConsole.ThemeScript(ApiBase, "user-1");
+            Assert.Contains("location.host", script);
+            Assert.Contains("\"192.168.31.230:8896\"", script);
+
+            Assert.Throws<ArgumentException>(() => EmbyWebConsole.ThemeScript(ApiBase, ""));
+        });
     }
 
     private static int Occurrences(string text, string value)

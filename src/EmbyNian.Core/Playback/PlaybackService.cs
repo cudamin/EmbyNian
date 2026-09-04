@@ -116,6 +116,24 @@ public sealed class PlaybackService(
     /// </summary>
     public string? LaunchQualityPreset { get; private set; }
 
+    /// <summary>
+    /// Which audio output device mpv actually opened, once it has said — 「wasapi（扬声器 (Realtek…)）」. Null
+    /// until then, and on a backend with no control channel.
+    /// <para>
+    /// Worth a property of its own rather than reading it out of <see cref="LaunchOptions"/>, because the two
+    /// answer different questions: the launch options say what the client <em>asked</em> for, and 「跟随系统默认
+    /// 设备」 asks for nothing at all. What 独占模式 actually took over is only knowable after mpv opened it.
+    /// </para>
+    /// <para>
+    /// Kept after playback ends, like <see cref="LastLaunch"/> and for the same reason: 诊断 is read after
+    /// something went wrong, which is exactly when the live state is gone.
+    /// </para>
+    /// </summary>
+    public string? AudioDeviceInUse { get; private set; }
+
+    /// <summary>Records what mpv answered about its audio output. Called by the player once per playback.</summary>
+    public void NoteAudioDevice(string? description) => AudioDeviceInUse = description;
+
     /// <summary>The backend is chosen per play from the settings, so switching mpv styles needs no restart.</summary>
     public string? Validate() => backendFactory().Validate();
 
@@ -146,6 +164,7 @@ public sealed class PlaybackService(
             LaunchShaderProfile = request.ShaderProfile;
             LaunchShaderReason = request.ShaderReason;
             LaunchQualityPreset = settings.Video.QualityPreset;
+            AudioDeviceInUse = null;
             LastLaunch = new LaunchRecord(
                 DateTimeOffset.Now,
                 request.Title,
@@ -450,18 +469,29 @@ public sealed class PlaybackService(
         return positionTicks >= request.RunTimeTicks * threshold;
     }
 
-    private static PlaybackReport Build(PlaybackRequest request, string playSessionId, long positionTicks, bool paused, string? eventName) =>
-        new()
+    private PlaybackReport Build(PlaybackRequest request, string playSessionId, long positionTicks, bool paused, string? eventName)
+    {
+        // 音量和静音跟着一起报，因为 Emby 的遥控界面会显示它们。Declared and never assigned until now: 「上报一个
+        // 永远是默认值的字段」比不上报更误导 —— 遥控那一头会显示 100 并且允许照那个数去调。
+        //
+        // 只在有控制通道的时候填：没有通道时 Status 返回的是一份全默认的快照（音量 100、没静音），那不是读数，
+        // 那是一个凑出来的数。null 的意思是「说不出来」，而 Emby 认得这个意思。
+        var live = _current as IPlayerControl;
+
+        return new PlaybackReport
         {
             ItemId = request.ItemId,
             MediaSourceId = request.MediaSourceId,
             PlaySessionId = playSessionId,
             PositionTicks = positionTicks,
             IsPaused = paused,
+            IsMuted = live?.Status.Muted ?? false,
+            VolumeLevel = live is null ? null : (int)Math.Round(Math.Clamp(live.Status.Volume, 0, AudioSettings.MaxVolume)),
             EventName = eventName,
             AudioStreamIndex = request.AudioStreamIndex,
             SubtitleStreamIndex = request.SubtitleStreamIndex
         };
+    }
 
     /// <summary>
     /// A failed report must never interrupt playback: the file is already on screen, and the

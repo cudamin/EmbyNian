@@ -4,16 +4,6 @@ using EmbyNian.Mpv;
 
 namespace EmbyNian.Playback;
 
-/// <summary>How the audio track is chosen when the user has not picked one for this item.</summary>
-public enum AudioTrackMode
-{
-    /// <summary>Whatever the server (or, failing that, the container) marks as default.</summary>
-    ServerDefault,
-
-    /// <summary>One specific language, falling back to the default when the file has no such track.</summary>
-    Language
-}
-
 /// <summary>When subtitles are turned on by themselves.</summary>
 public enum SubtitleMode
 {
@@ -64,17 +54,24 @@ public static class TrackSelection
     }
 
     /// <summary>
-    /// 「音轨不需要优先级，选默认或者单选特定语言就好」: one language, or whatever is marked default.
-    /// A file without the chosen language falls back to the default rather than to silence.
+    /// The first language in <see cref="PlaybackSettings.AudioLanguages"/> that the file actually has, or
+    /// whatever is marked default. A file with none of the listed languages falls back to the default rather
+    /// than to silence.
+    /// <para>
+    /// 「音轨不需要优先级，选默认或者单选特定语言就好」 was the earlier answer here, and it was one language for
+    /// that reason. It has since become a list for the same reason the subtitle side is one: 「日语 &gt; 粤语 &gt;
+    /// 英语」 is a real preference and a single slot cannot hold it. A one-language list is that list's
+    /// degenerate case, so nothing about the single-language behaviour changed.
+    /// </para>
     /// </summary>
     public static MediaStream? ChooseAudio(PlaybackSettings settings, MediaSource source)
     {
         var streams = source.AudioStreams.ToList();
         if (streams.Count == 0) return null;
 
-        if (settings.AudioTrack == AudioTrackMode.Language && !string.IsNullOrWhiteSpace(settings.AudioLanguage))
+        foreach (var language in settings.AudioLanguages)
         {
-            var matches = streams.Where(stream => TrackPreference.LanguageMatches(stream, settings.AudioLanguage)).ToList();
+            var matches = streams.Where(stream => TrackPreference.LanguageMatches(stream, language)).ToList();
             if (matches.Count > 0) return TrackPreference.Best(matches, source.DefaultAudioStreamIndex);
         }
 

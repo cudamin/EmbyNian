@@ -27,6 +27,33 @@ public static class EmbyWebConsole
     /// </summary>
     private const int ManualConnectionMode = 2;
 
+    /// <summary>
+    /// Emby 网页端存主题的两个键：一个管普通页面，一个管设置和控制台那类页面（网页端自己的设置里就是
+    /// 「主题」和「设置页面的主题」两行）。<c>usersettingsbuilder.js</c> 里 <c>theme()</c> 和
+    /// <c>settingsTheme()</c> 存的就是这两个名字，两个都是 <c>enableOnServer=false</c> —— 只落在浏览器
+    /// 自己的 <c>localStorage</c> 里，不会写到服务器的用户偏好上，所以动它们影响不到用户其他设备上的
+    /// Emby。前缀是用户 id，见 <c>appsettings.js</c> 的 <c>getKey</c>（<c>userId + "-" + name</c>）。
+    /// </summary>
+    private static readonly string[] ThemeKeys = ["appTheme", "settingsTheme"];
+
+    /// <summary>
+    /// 写进上面那两个键的值：跟着 <c>prefers-color-scheme</c> 走。
+    /// <para>
+    /// 这个值是这件事唯一走得通的写法，值得记下来为什么。直接写 <c>"light"</c> 是不行的：
+    /// <c>skinmanager.js</c> 的 <c>setTheme</c> 里，凡是和默认那套（浏览器上是 <c>dark</c>）不同的主题都要过
+    /// 一道注册检查，没有 Emby Premiere 就被拨回 <c>dark</c> —— 这台机器上那个缓存键
+    /// (<c>appthemesregistered</c>) 正是 <c>false</c>。而 <c>"auto"</c> 走的是另一条分支：它把主题交给
+    /// <c>apphost.js</c> 的 <c>getPreferredTheme()</c>（也就是 <c>matchMedia("(prefers-color-scheme: dark)")</c>），
+    /// 并且当场把 <c>requiresRegistration</c> 置为 false，于是浅色也放行。这不是绕过收费项，而是 Emby 自己
+    /// 给「跟随系统深浅」留的免费口子。
+    /// </para>
+    /// <para>
+    /// 深浅本身不由这段脚本决定，而是由内嵌浏览器的 <c>PreferredColorScheme</c> 决定（见
+    /// <c>DashboardPage</c>）—— 所以这段脚本和当前是哪一套主题无关，只说「跟着浏览器的深浅走」。
+    /// </para>
+    /// </summary>
+    public const string FollowColorScheme = "auto";
+
     /// <summary>The page 需求 8 names, hash route and all.</summary>
     public static string Url(Uri apiBase) => $"{Root(apiBase)}/web/index.html#!/dashboard";
 
@@ -79,7 +106,7 @@ public static class EmbyWebConsole
         });
 
         // host:port, which is what location.host is: no scheme, and no port when it is the scheme's own.
-        var host = JsonSerializer.Serialize(apiBase.Authority.ToLowerInvariant());
+        var host = HostLiteral(apiBase);
         var key = JsonSerializer.Serialize(StorageKey);
 
         return $$"""
@@ -127,4 +154,54 @@ public static class EmbyWebConsole
             })();
             """;
     }
+
+    /// <summary>
+    /// 另一段文档开始脚本：让内嵌控制台的深浅跟着本应用当前的主题走。
+    /// <para>
+    /// 做法是把网页端那两个主题设置（见 <see cref="ThemeKeys"/>）都写成
+    /// <see cref="FollowColorScheme"/>，也就是「跟着浏览器的 <c>prefers-color-scheme</c>」，而那一位由
+    /// <c>DashboardPage</c> 按 <c>ThemeHost.Current.IsDark</c> 设在内嵌浏览器上。为什么是这个值而不是直接写
+    /// <c>light</c>／<c>dark</c>，见 <see cref="FollowColorScheme"/> 上那段 —— 那是这件事的全部机关。
+    /// </para>
+    /// <para>
+    /// 每次载入都重写，不是「没有值时才写」：跟随主题是这一页的规矩，用户在控制台自己那个下拉框里改的
+    /// 主题只在本次载入里有效，下次进这一页又跟回来。写的这两个键都只落在浏览器本地，不碰服务器上的用户
+    /// 偏好，所以他在手机、网页上看到的 Emby 不受影响。强调色没有一起跟，正因为它是存服务器的
+    /// （<c>accentColor</c>，<c>enableOnServer=true</c>）—— 那会改到他其他设备。
+    /// </para>
+    /// <para>
+    /// 和 <see cref="SignInScript"/> 一样只对我们自己那台服务器的页面动手，理由同样是这段脚本会跑在这个
+    /// 控件载入的每一个文档里。
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentException">没有用户 id：这两个键都带用户前缀，写不出来。</exception>
+    public static string ThemeScript(Uri apiBase, string userId)
+    {
+        ArgumentNullException.ThrowIfNull(apiBase);
+        ArgumentException.ThrowIfNullOrEmpty(userId);
+
+        var host = HostLiteral(apiBase);
+        var keys = JsonSerializer.Serialize(ThemeKeys.Select(name => $"{userId}-{name}"));
+        var value = JsonSerializer.Serialize(FollowColorScheme);
+
+        return $$"""
+            (function () {
+              try {
+                if ((location.host || "").toLowerCase() !== {{host}}) return;
+
+                var keys = {{keys}};
+                for (var i = 0; i < keys.length; i++) localStorage.setItem(keys[i], {{value}});
+              } catch (e) {
+                // 写不进去就让网页端用它自己存着的那套主题，不值得为此把控制台变成白屏。
+              }
+            })();
+            """;
+    }
+
+    /// <summary>
+    /// <c>location.host</c> 那个串，做成 JSON 字面量。<see cref="Uri.Authority"/> 而不是 <c>Host</c>：前者是
+    /// host:port，且端口是该 scheme 自己的默认端口时不带端口 —— 正好是 <c>location.host</c> 的形状。
+    /// </summary>
+    private static string HostLiteral(Uri apiBase) =>
+        JsonSerializer.Serialize(apiBase.Authority.ToLowerInvariant());
 }

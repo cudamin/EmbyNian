@@ -86,8 +86,41 @@ public static class SettingsMigration
             settings.Video.GpuApi = MpvRenderCheck.PreferredApi;
         }
 
+        // v9 turns 高帧率或高刷新率时使用音频同步 back on for anyone who had switched it off. Up to v8 that switch
+        // only meant 「高帧率片源」, and on 2026-09-04 it grew a second half — 「屏幕超过 120Hz」 — so an off
+        // stored before v9 is an answer about frame rates being read as an answer about screens, which it never
+        // was. On this machine that silently declined the one rule measured to halve GPU load on the 144Hz panel
+        // (24.7% against 50.1%), and nothing said so: the log only speaks when the rule fires.
+        //
+        // Same call as v8's 图形接口 move immediately above, for the same reason — a value nobody chose for the
+        // meaning it now carries is not a preference. It runs exactly once: the settings row names both halves,
+        // so switching it off from here on is a real choice and nothing touches it again.
+        if (version < 9 && !settings.Video.HighFrameRateAudioSync) settings.Video.HighFrameRateAudioSync = true;
+
+        // v10 turns the single 音轨语言 into a priority list, the way the subtitle side has always been. The
+        // property it replaces is gone, so the stored value has to be read from the raw document — and the old
+        // 「按语言挑 / 跟随默认」 mode has to be respected while doing it: a file can perfectly well hold a
+        // leftover language alongside AudioTrack = ServerDefault, and that language was being ignored. Reviving
+        // it here would silently change which track plays.
+        if (version < 10) UpgradeAudioLanguage(settings, root);
+
         settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
         return Normalize(settings);
+    }
+
+    /// <summary>
+    /// v9's <c>Playback.AudioLanguage</c> (one name) as v10's <c>AudioLanguages</c> (a priority list), but only
+    /// when v9's <c>AudioTrack</c> said the language was in use at all — <c>1</c> was 「按语言挑」 and <c>0</c>
+    /// 「跟随服务器默认」.
+    /// </summary>
+    private static void UpgradeAudioLanguage(AppSettings settings, JsonElement root)
+    {
+        if (settings.Playback.AudioLanguages.Count > 0) return;
+        if (!root.TryGetProperty("Playback", out var playback) || playback.ValueKind != JsonValueKind.Object) return;
+        if ((ReadInt(playback, "AudioTrack") ?? 0) != 1) return;
+
+        if (ReadString(playback, "AudioLanguage") is { Length: > 0 } language)
+            settings.Playback.AudioLanguages = TrackLanguagePriority.CleanList([language]);
     }
 
     public static AppSettings NewDefaults()
@@ -137,7 +170,7 @@ public static class SettingsMigration
             settings.Playback.SubtitleFontSize = Math.Clamp(settings.Playback.SubtitleFontSize, 16, 160);
         settings.Video.NetworkCacheMegabytes = Math.Clamp(settings.Video.NetworkCacheMegabytes, 0, 4096);
         settings.Audio.DelayMilliseconds = Math.Clamp(settings.Audio.DelayMilliseconds, -5000, 5000);
-        settings.Audio.Volume = Math.Clamp(settings.Audio.Volume, 0, 100);
+        settings.Audio.Volume = Math.Clamp(settings.Audio.Volume, 0, AudioSettings.MaxVolume);
 
         // 显卡档位 is stored as a plain integer, so a hand-edited file can hold anything. Low rather than a
         // clamp to High: an unrecognised number means 「nobody chose」, and the cheap column is the safe
@@ -146,9 +179,8 @@ public static class SettingsMigration
 
         if (!Enum.IsDefined(settings.Playback.SkipSections)) settings.Playback.SkipSections = SkipSectionMode.Ask;
         if (!Enum.IsDefined(settings.Playback.SubtitleMode)) settings.Playback.SubtitleMode = SubtitleMode.Always;
-        if (!Enum.IsDefined(settings.Playback.AudioTrack)) settings.Playback.AudioTrack = AudioTrackMode.ServerDefault;
 
-        settings.Playback.AudioLanguage = TrackLanguagePriority.Canonical(settings.Playback.AudioLanguage);
+        settings.Playback.AudioLanguages = TrackLanguagePriority.CleanList(settings.Playback.AudioLanguages);
         settings.Playback.SubtitleLanguages = TrackLanguagePriority.CleanList(settings.Playback.SubtitleLanguages);
         settings.Audio.PassthroughCodecs = CleanCodecs(settings.Audio.PassthroughCodecs);
 
@@ -165,6 +197,7 @@ public static class SettingsMigration
         settings.Video.HdrMode = Choice(MpvOutputOptions.HdrModes, settings.Video.HdrMode);
         settings.Audio.Channels = Choice(MpvOutputOptions.Channels, settings.Audio.Channels);
         settings.Audio.DynamicRange = Choice(MpvOutputOptions.DynamicRange, settings.Audio.DynamicRange);
+        settings.Audio.VolumeNormalize = Choice(MpvOutputOptions.VolumeNormalizers, settings.Audio.VolumeNormalize);
         settings.Playback.SubtitleCodepage = Choice(MpvOutputOptions.SubtitleCodepages, settings.Playback.SubtitleCodepage);
         settings.Playback.SubtitleColor = Choice(MpvOutputOptions.SubtitleColors, settings.Playback.SubtitleColor);
         settings.Playback.SubtitleBorderSize = Choice(MpvOutputOptions.SubtitleBorders, settings.Playback.SubtitleBorderSize);
@@ -209,8 +242,13 @@ public static class SettingsMigration
 
     /// <summary>
     /// Carries the v2 track-language settings over: the <c>&gt;</c>-separated subtitle priority string
-    /// becomes the ordered list, the audio priority string keeps only its first language (the audio
-    /// track no longer has a priority list), and 「优先强制字幕」 becomes the forced-only mode.
+    /// becomes the ordered list, the audio priority string becomes the audio list, and 「优先强制字幕」 becomes
+    /// the forced-only mode.
+    /// <para>
+    /// The audio side used to keep only its first language, because v3 through v9 had a single slot for it.
+    /// v10 made it a list again, so a v2 file's whole priority string now survives — which is what it always
+    /// meant.
+    /// </para>
     /// </summary>
     private static void UpgradeTrackLanguages(AppSettings settings, JsonElement root)
     {
@@ -222,11 +260,7 @@ public static class SettingsMigration
 
         var audio = Tokens(ReadString(playback, "PreferredAudioLanguage"));
         if (audio.Count == 0) audio = Tokens(ReadString(playback, "AudioLanguagePriority"));
-        if (audio.Count > 0)
-        {
-            settings.Playback.AudioTrack = AudioTrackMode.Language;
-            settings.Playback.AudioLanguage = audio[0];
-        }
+        if (audio.Count > 0) settings.Playback.AudioLanguages = audio;
 
         if (ReadBool(playback, "PreferForcedSubtitles") == true) settings.Playback.SubtitleMode = SubtitleMode.ForcedOnly;
     }

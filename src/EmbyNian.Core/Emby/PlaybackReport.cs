@@ -27,6 +27,15 @@ public sealed class PlaybackReport
 
     public int? SubtitleStreamIndex { get; init; }
 
+    /// <summary>
+    /// 音量, 0–130, or null when this playback has no control channel to ask. Emby's remote-control view shows
+    /// it beside <see cref="IsMuted"/>.
+    /// <para>
+    /// Both of these were declared and never assigned for a long time, which is worse than not reporting them:
+    /// the remote showed 100 and let the viewer adjust from that number. Null is the honest answer for a
+    /// playback nobody can read the volume of — an external mpv with its IPC channel switched off.
+    /// </para>
+    /// </summary>
     public int? VolumeLevel { get; set; }
 
     /// <summary>"timeupdate", "pause" or "unpause" for progress reports.</summary>

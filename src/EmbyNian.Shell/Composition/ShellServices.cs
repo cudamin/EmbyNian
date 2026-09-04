@@ -74,9 +74,16 @@ internal static class ShellServices
         services.AddSingleton(provider => new PlaybackPlanner(
             provider.GetRequiredService<AppSettings>(),
             provider.GetRequiredService<ShaderGroupResolver>(),
-            paths.ShaderCacheDirectory));
+            paths.ShaderCacheDirectory,
+            paths.ScreenshotDirectory));
         services.AddSingleton<ShaderStaging>();
         services.AddSingleton<PlaybackBackendFactory>();
+
+        // 音频输出设备. The concrete class rather than an interface, per the rule about not inventing one for a
+        // single implementation — it has one public method and that is already the whole surface the settings
+        // page should see. It is handed 「where libmpv is」 as a closure so the search stays LibMpvBackend's.
+        services.AddSingleton(provider => new AudioDeviceCatalogue(
+            () => LibMpvBackend.Locate(provider.GetRequiredService<AppSettings>().Mpv)));
 
         // The factory is handed over as a method group, which is how PlaybackService gets a new backend per
         // playback without ever naming either of them — switching 播放后端 in the settings takes effect on
