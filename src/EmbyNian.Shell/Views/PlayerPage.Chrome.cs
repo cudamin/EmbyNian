@@ -518,12 +518,17 @@ public sealed partial class PlayerPage
         if (_window is not null) _window.CursorHidden = hidden;
 
         // And the one that actually does it while the pointer is over the picture. The four levers around this
-        // line — SetCursor on this queue, ShowCursor's counter, the window classes, the zero-displacement nudge
-        // — are all Win32, and Win32 is not who draws the pointer over XAML content: the framework's own input
-        // pipeline is. A real film's log settles it. One hide lasted 2 minutes 5 seconds; across some twelve
-        // hundred ticks not one found a shape put back on this queue (_shapeBack stayed at 0), the show count
-        // was −1, five window classes were blank, the nudge had been sent — and GetCursorInfo answered
-        // 「system arrow, 0x10003」 the whole way through. Eighteen hides in that one film, all identical.
+        // line — SetCursor on this queue, ShowCursor's counter, the window classes, the nudge that makes the OS
+        // work the shape out again — are all Win32, and Win32 is not who draws the pointer over XAML content:
+        // the framework's own input pipeline is. A real film's log settles it. One hide lasted 2 minutes 5
+        // seconds; across some twelve hundred ticks not one found a shape put back on this queue (_shapeBack
+        // stayed at 0), the show count was −1, five window classes were blank, the nudge had been sent — and
+        // GetCursorInfo answered 「system arrow, 0x10003」 the whole way through. Eighteen hides in that one
+        // film, all identical.
+        //
+        // One clause of that has to be read with 2026-09-05 in mind: 「the nudge had been sent」 was a call that
+        // produced no message whatever, so the four Win32 levers were never actually asked in that film. They
+        // are not exonerated by it and they are not convicted by it — see Native.NudgeCursorState.
         //
         // ProtectedCursor is the framework's own lever and the only one it consults. Null hands the shape back
         // to it, which is an ordinary arrow. The four Win32 levers stay: they cover the windows the island is
@@ -560,15 +565,17 @@ public sealed partial class PlayerPage
         // what the pointer is over, which is when the pointer moves. Hiding happens *because* nothing is
         // moving, so without this the last shape it worked out stays on the screen until the hand comes back,
         // which is exactly the report: 「静止超过两秒后鼠标指针还是不会自动隐藏」, from a player whose own
-        // readings all say hidden. A mouse event with a displacement of zero is the smallest possible reason:
-        // the pointer does not move, and both places that judge movement — the event filter in
-        // PlayerPage.Input and PollPointer above — discard a zero displacement, so the stillness this is part
-        // of survives being nudged.
+        // readings all say hidden. Putting the cursor back at the point it already occupies is the smallest
+        // possible reason: the pointer does not move, and both places that judge movement — the event filter
+        // in PlayerPage.Input and PollPointer above — discard an unchanged position, so the stillness this is
+        // part of survives being nudged. It was a zero-displacement SendInput until 2026-09-05, which was
+        // measured to produce no message at all — see Native.NudgeCursorState, and 「点了第二块屏上的应用之后
+        // 鼠标不再自动隐藏」, which is the report that turned that stone over.
         // Counted, because this is the load-bearing half and the OS's own answer about it cannot be trusted to
         // arrive: GetCursorInfo reports the desktop's cursor, and on a machine where the last real mouse
         // movement happened over another app's window it goes on reporting that window's arrow however many
-        // times we ask. The self-check therefore asserts that the ask was made — which is the thing this file
-        // is responsible for — and only prints what the desktop says about it.
+        // times we ask. The self-check therefore asserts that the ask was made and that it arrived — which is
+        // the thing this file is responsible for — and only prints what the desktop says about it.
         if (hidden && Native.NudgeCursorState()) _cursorNudges++;
 
         // Written to the log because this is the one thing in the player a probe can only ask about under
@@ -764,9 +771,10 @@ public sealed partial class PlayerPage
             // shape, the show counter, the class cursors — is an *answer*, and the OS only collects answers when
             // it has a reason to decide what the pointer is over. Hiding happens because nothing is moving, so
             // there is no such reason; and a single ask at the moment of hiding is one ask that can be missed or
-            // arrive before the framework has pushed its own value down. A zero-displacement mouse event is the
-            // smallest possible reason, and both places that judge movement discard a zero displacement, so the
-            // stillness this is part of survives being nudged ten times a second.
+            // arrive before the framework has pushed its own value down. Putting the cursor back where it
+            // already is costs one user32 call and is the smallest ask there is, and both places that judge
+            // movement discard an unchanged position, so the stillness this is part of survives being nudged
+            // ten times a second.
             if (Native.NudgeCursorState()) _cursorNudges++;
         }
 

@@ -64,7 +64,17 @@ public sealed class SettingsStore(AppPaths paths, ISecretProtector protector)
             settings = SettingsMigration.FromJson(File.ReadAllText(path), protector);
             return true;
         }
-        catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
+        // Deliberately every exception, not the three that used to be listed here (JSON, IO,
+        // permissions). This class promises Load never throws, and the promise is what keeps the app
+        // launchable: a file the migration cannot make sense of has to end up in the backup /
+        // quarantine / defaults path, not on the way out of Main. The three-exception version let a
+        // structurally odd document through — `{"Playback": null}` threw a NullReferenceException from
+        // inside Normalize — and the window then never appeared at all.
+        //
+        // 代价说清楚：这一手也会把迁移代码自己的 bug 当成「文件坏了」，于是用户的设置被改名收起来、程序回到
+        // 默认值。所以那一份**始终留在磁盘上**（Quarantine 只改名），异常整条写进日志。拿不准的时候，
+        // 「打得开但设置回到默认」比「打不开」值钱。
+        catch (Exception error)
         {
             Log.Warn(Category, $"读取 {path} 失败", error);
             settings = SettingsMigration.NewDefaults();

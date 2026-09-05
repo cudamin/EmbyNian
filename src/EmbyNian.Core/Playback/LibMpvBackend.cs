@@ -474,17 +474,13 @@ internal sealed class LibMpvHandle(IntPtr context) : IPlaybackHandle, IPlayerCon
         }), CancellationToken.None);
     }
 
-    public Task CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
-        if (arguments.Count == 0) return Task.CompletedTask;
+        if (arguments.Count == 0) return Task.FromResult(true);
         cancellationToken.ThrowIfCancellationRequested();
 
         var copy = arguments.ToArray();
-        return Task.Run(() => Guard(() =>
-        {
-            Command(copy);
-            return true;
-        }), CancellationToken.None);
+        return Task.Run(() => Guard(() => Command(copy)), CancellationToken.None);
     }
 
     public Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken)
@@ -698,7 +694,7 @@ internal sealed class LibMpvHandle(IntPtr context) : IPlaybackHandle, IPlayerCon
     }
 
     /// <summary>Sends a command as a null-terminated UTF-8 argument list.</summary>
-    private void Command(params string[] arguments)
+    private bool Command(params string[] arguments)
     {
         var array = new IntPtr[arguments.Length + 1];
         var allocations = new List<IntPtr>(arguments.Length);
@@ -715,6 +711,9 @@ internal sealed class LibMpvHandle(IntPtr context) : IPlaybackHandle, IPlayerCon
             array[^1] = IntPtr.Zero;
             var error = LibMpvNative.mpv_command(context, array);
             if (error < 0) Log.Warn(Category, $"mpv 命令 {arguments[0]} 失败：{LibMpvBackend.Describe(error)}");
+
+            // 返回值交出去，不只是写进日志：调用方要拿它决定「按了截图之后到底要不要说已保存」。
+            return error >= 0;
         }
         finally
         {

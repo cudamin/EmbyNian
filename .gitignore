@@ -23,3 +23,7 @@ pubout.txt
 shots/
 docs/shots/
 shell.png
+
+# `.claude/skills` 是入库的（技能跟着代码走，见 CLAUDE.md），但同一个目录下的临时工作树不是：
+# 那是会话自己开的检出，随时生随时灭。
+.claude/worktrees/

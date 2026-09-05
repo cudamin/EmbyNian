@@ -7,7 +7,7 @@ namespace EmbyNian.Shell.Interop;
 /// 把一只 Win32 的 <c>HCURSOR</c> 包成框架自己的 <see cref="InputCursor"/>。
 /// <para>
 /// <b>为什么非要这一层</b>：指针压在 XAML 内容上的时候，屏上那个光标由 WinUI 的输入管线说了算 —— 我们在界面
-/// 线程上做的 <c>SetCursor</c>、<c>ShowCursor</c>、换窗口类的光标、零位移注入，它一概不看。真片子的日志把这件
+/// 线程上做的 <c>SetCursor</c>、<c>ShowCursor</c>、换窗口类的光标，它一概不看。真片子的日志把这件
 /// 事写得很清楚：一次藏了两分零五秒，这条队列全程没有形状、显示计数 −1、五个窗口类都换成透明、催过一次，而
 /// <c>GetCursorInfo</c> 一路答系统箭头 0x10003。要动框架画的那只，只有 <c>UIElement.ProtectedCursor</c> 一条路。
 /// </para>

@@ -44,6 +44,13 @@ public sealed partial class DetailPage : Page, IShellContent
     private IShellActions? _actions;
     private EmbyImageStore? _images;
 
+    /// <summary>
+    /// 外壳在窗口建好后递进来的那一个（<see cref="AttachWindow"/>）：纸面上沿那条线跟着显示器走
+    /// （<see cref="DetailHero.PaperLineFor"/>），而「这台显示器多大」只有它知道。每次导航都是新实例，
+    /// 离开可视树时解绑（见 Unloaded）—— 不解绑就是把旧窗口拴到下辈子。
+    /// </summary>
+    private Windowing.HostWindow? _window;
+
     /// <summary>标题栏那一条现在跟着头图罩子压到多浓，见 <see cref="PaintWash"/>。-1 是「还没画过一次」。</summary>
     private double _wash = -1;
 
@@ -104,6 +111,11 @@ public sealed partial class DetailPage : Page, IShellContent
         Unloaded += (_, _) =>
         {
             ThemeHost.Changed -= OnThemeChanged;
+            if (_window is not null)
+            {
+                _window.GeometryChanged -= OnWindowGeometryChanged;
+                _window = null;
+            }
             ViewModel.Dispose();
         };
     }
@@ -666,9 +678,10 @@ public sealed partial class DetailPage : Page, IShellContent
     /// 少撑一分那道边就回到剧照上。屏上这两件事只在某些窗口尺寸下看得出来，而自检只跑一个尺寸，所以读的是数。
     /// </para>
     /// <para>
-    /// 「在第一屏外面」那一句在尾部封顶之后不问（<see cref="DetailHero.TailCap"/>）：那一档纸本来就该露在第一屏
-    /// 底下 —— 再撑下去只是在剧情说明底下留一段越来越长的空画面（「下面越改空位越大」）。封了顶之后撑到多少仍旧
-    /// 由上一句（尾部撑得对不对）咬着，所以这一档不是没人看，只是换了一句问法。
+    /// 「在第一屏外面」那一句在纸面上沿过了线之后不问（<see cref="DetailHero.PaperLineFor"/>）：那一档纸本来就该
+    /// 露在第一屏里 —— 窗口高过阈值，纸带着下一节的内容从那条线起往上长（「窗口大于1600*900后开始显示下方的
+    /// 黑边，小于1600*900时海报占满整个窗口」）。过了线之后撑到多少仍旧由上一句（尾部撑得对不对）咬着，所以
+    /// 这一档不是没人看，只是换了一句问法。
     /// </para>
     /// <para>
     /// 左右两条比的是这一页（<c>Body</c>）而不是窗口：页面左边是侧边栏，纸本来就不该盖过去。
@@ -711,10 +724,10 @@ public sealed partial class DetailPage : Page, IShellContent
         var snug = Math.Abs(HeroTail.ActualHeight - want) < 0.5;
 
         // 纸的上沿不许落进第一屏。读的是内容坐标（带高加尾部实高）而不是屏上位置：这一条问的是「滚到顶时它在
-        // 哪儿」，而自检读到这里时页面已经滚到底了。两档不问：没有剧照的那一档不撑尾部，以及尾部封了顶那一档
-        // ——「下面越改空位越大」，那时候富余的高度归纸，纸本来就该露一条。
+        // 哪儿」，而自检读到这里时页面已经滚到底了。两档不问：没有剧照的那一档不撑尾部，以及纸面上沿到了
+        // PaperLine 那条线之后的档 —— 那时候富余的高度归纸，纸本来就该露一条。
         var paperTop = PaperOffset();
-        var capped = Math.Abs(ViewModel.TailMinHeight - DetailHero.TailCap) < 0.5;
+        var capped = Math.Abs(ViewModel.TailMinHeight - (ViewModel.PaperLine - ViewModel.HeroHeight)) < 0.5;
         var beyond = paperTop >= Body.ActualHeight - 0.5;
         var folded = !ViewModel.HeroArt || capped || beyond;
         var joined = HeroTail.Background is SolidColorBrush { Color: var tailColor }
@@ -733,7 +746,7 @@ public sealed partial class DetailPage : Page, IShellContent
                 + (beyond ? $"，纸的上沿 {paperTop:0} 在第一屏 {Body.ActualHeight:0} 外面"
                     : capped
                         ? $"，纸的上沿 {paperTop:0} 露在第一屏 {Body.ActualHeight:0} 里"
-                            + $"（尾部封在 {DetailHero.TailCap:0} 上，富余的高度归纸）"
+                            + $"（纸面上沿钉在视口 {ViewModel.PaperLine:0}，富余的高度归纸）"
                         : $"，纸的上沿 {paperTop:0} 浮在第一屏 {Body.ActualHeight:0} 里")
                 + (joined ? "，尾部接住头图末色" : "，尾部和头图末色不同")
                 + (pickersBare ? "，音轨外圈已去掉" : "，音轨仍有外圈或底色")
@@ -1159,6 +1172,43 @@ public sealed partial class DetailPage : Page, IShellContent
         return cards;
     }
 
+    /// <summary>
+    /// 外壳把窗口递进来 —— <c>ShellPage</c> 挂在 <c>ContentFrame.Navigated</c> 上，每个详情页实例（后退键
+    /// 重建的那些也不例外）上树都能领到。领到的第一件事就是把纸面上沿那条线量一遍。
+    /// </summary>
+    internal void AttachWindow(Windowing.HostWindow window)
+    {
+        if (ReferenceEquals(_window, window)) return;
+
+        if (_window is not null) _window.GeometryChanged -= OnWindowGeometryChanged;
+        _window = window;
+        window.GeometryChanged += OnWindowGeometryChanged;
+        SyncPaperLine();
+    }
+
+    /// <summary>
+    /// 换了显示器、改了窗口大小、全屏来回（<see cref="Windowing.HostWindow.GeometryChanged"/> 的全部场合）：
+    /// 纸面上沿那条线跟着显示器走（<see cref="DetailHero.PaperLineFor"/>），这些时候都要重算一遍。
+    /// </summary>
+    private void OnWindowGeometryChanged() => SyncPaperLine();
+
+    /// <summary>
+    /// 把纸面上沿那条线送到视图模型：阈值窗口的高（<see cref="DetailHero.PaperLineFor"/>，跟着这台显示器走）
+    /// 减掉标题栏加面包屑那一截 —— 那一截只有布好的版面量得出（同 <see cref="LiftBackdrop"/> 的那个数）。
+    /// 窗口或显示器还没到手就什么都不做：那一档不撑尾部（<see cref="DetailHero.TailHeight"/> 的约定）。
+    /// </summary>
+    private void SyncPaperLine()
+    {
+        if (_window is not { } window) return;
+        if (XamlRoot?.Content is not UIElement root) return;
+
+        var (width, height) = window.MonitorSize();
+        if (height <= 0) return;
+
+        var lift = TransformToVisual(root).TransformPoint(new Point(0, 0)).Y;
+        ViewModel.PaperLine = DetailHero.PaperLineFor(width, height) - lift;
+    }
+
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
@@ -1466,6 +1516,11 @@ public sealed partial class DetailPage : Page, IShellContent
         if (XamlRoot?.Content is not UIElement root) return;
 
         var lift = TransformToVisual(root).TransformPoint(new Point(0, 0)).Y;
+
+        // 纸面上沿那条线用的是同一个数（阈值窗口高减这一截），所以赶在提前返回之前同步 —— 面包屑显隐、换主题
+        // 都会挪它，而那些时候边距未必变。见 SyncPaperLine。
+        SyncPaperLine();
+
         if (Math.Abs(Backdrop.Margin.Top + lift) < 0.5) return;
 
         Backdrop.Margin = new Thickness(0, -lift, 0, 0);

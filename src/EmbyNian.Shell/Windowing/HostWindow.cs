@@ -255,11 +255,13 @@ internal sealed class HostWindow : IDisposable
     /// <para>
     /// It is the lever the other four were missing. While the pointer is over XAML content the shape on screen
     /// is the framework's to decide, and nothing done on this thread — <c>SetCursor</c>, <c>ShowCursor</c>, the
-    /// class cursors, the zero-displacement nudge — is on that path. A real film's log says so plainly: one
+    /// class cursors — is on that path. A real film's log says so plainly: one
     /// hide lasted two minutes and five seconds with this queue holding no shape the whole time, the show count
     /// at −1, five window classes blanked, the nudge sent, and <c>GetCursorInfo</c> answering 「system arrow」
-    /// from beginning to end. See <see cref="InputCursors"/> for how the wrapping is done and why there is no
-    /// projected API for it.
+    /// from beginning to end. That last reading has one caveat as of 2026-09-05: the nudge of the day produced
+    /// no message at all, so nothing in that film ever asked the OS to collect any of those answers — see
+    /// <see cref="Native.NudgeCursorState"/>. See <see cref="InputCursors"/> for how the wrapping is done and
+    /// why there is no projected API for it.
     /// </para>
     /// <para>
     /// Built once and remembered, failure included: this is read ten times a second for as long as the cursor

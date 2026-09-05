@@ -210,6 +210,10 @@ internal static partial class ItemCommands
     /// 一趟就够，不带的话由 <see cref="SaveAsync"/> 在下每一个之前补问一次。在这里筛掉的下场是「找不到可下载的
     /// 文件」—— 明明二十四集都在。
     /// </para>
+    /// <para>
+    /// 「拿哪个 id 去问单集列表」是 <see cref="DownloadPlan.EpisodeQuery"/> 的事（剧用自己的、季用它所属剧的
+    /// 加一个季筛选），搬进 Core 才有单测钉得住。
+    /// </para>
     /// </summary>
     private static async Task<IReadOnlyList<EmbyItem>> FilesOfAsync(EmbySession session, EmbyItem item)
     {
@@ -222,13 +226,11 @@ internal static partial class ItemCommands
             return full.DefaultMediaSource is null ? [] : [full];
         }
 
-        // 剧用自己的 id，季用它所属剧的 id 加上自己这一季 —— 单集列表那个接口只认剧。
-        var seriesId = item.Type == EmbyItemType.Series ? item.Id : item.SeriesId;
-        if (seriesId is not { Length: > 0 } show) return [];
+        if (DownloadPlan.EpisodeQuery(item) is not ({ Length: > 0 } show, var seasonId)) return [];
 
         return await AskAsync(session, (client, token) => client.GetEpisodesAsync(
                 show,
-                item.Type == EmbyItemType.Season ? item.Id : null,
+                seasonId,
                 token,
                 EmbyFields.Files))
             .ConfigureAwait(true);
@@ -275,7 +277,7 @@ internal static partial class ItemCommands
 
             // Progress<T> 在界面线程上造出来，所以回调自己会回到界面线程 —— 下载那一头跑在线程池上。
             var progress = new Progress<(long Done, long? Total)>(state =>
-                shell.Notify($"正在下载 {head}{Portion(state)}"));
+                shell.Notify($"正在下载 {head}{DownloadPlan.Portion(state.Done, state.Total)}"));
 
             shell.Notify($"正在下载 {head}…");
 
@@ -286,20 +288,11 @@ internal static partial class ItemCommands
             last = path;
         }
 
-        // 最后那一句要说清落在哪儿：这是用户唯一一次看得到完整路径的机会。
-        shell.Notify(saved switch
-        {
-            0 => $"「{item.Name}」没有一个文件下得下来（服务器上都没有媒体源）",
-            1 when files.Count == 1 => $"已下载到 {last}",
-            _ => $"已下载 {saved} 个文件到 {folder}" + (skipped > 0 ? $"（{skipped} 个跳过：服务器上没有媒体源）" : "")
-        }, saved == 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Informational);
+        // 最后那一句要说清落在哪儿：这是用户唯一一次看得到完整路径的机会。判断在 Core（四个分支都是用户看得见
+        // 的文字，而在这儿它们一条测试都碰不到）。
+        var (text, warning) = DownloadPlan.Summary(item.Name, folder, last, files.Count, saved, skipped);
+        shell.Notify(text, warning ? InfoBarSeverity.Warning : InfoBarSeverity.Informational);
     }
-
-    /// <summary>「45%（1.2 GB / 2.7 GB）」，服务器没说总长度时只报已经下了多少。</summary>
-    private static string Portion((long Done, long? Total) state) =>
-        state.Total is { } total and > 0
-            ? $" {state.Done * 100 / total}%（{TimeFormat.FileSize(state.Done)} / {TimeFormat.FileSize(total)}）"
-            : $" 已下载 {TimeFormat.FileSize(state.Done)}";
 
     /// <summary>
     /// 修改媒体封面图：把各家刮削源上这个条目的封面列出来挑一张，挑中的交给服务器去取。
@@ -483,14 +476,12 @@ internal static partial class ItemCommands
         GuardAsync(shell, "删除失败", async () =>
         {
             var item = card.Item;
-            var what = item.DisplayTypeName is { Length: > 0 } kind ? kind : "条目";
 
-            var agreed = await ConfirmDialog.For(owner)(
-                    $"删除这个{what}",
-                    $"将从媒体库中删除「{item.Name}」，并把它在服务器磁盘上的文件一起删掉。此操作无法撤销。"
-                        + (ItemMenu.IsEpisodeSet(item) ? "里面的所有单集都会被删除。" : ""),
-                    "删除")
-                .ConfigureAwait(true);
+            // 问话本身在 Core（ItemMenu.DeletePrompt）：这是唯一一句「按下去就没得恢复」的话，而一叠单集要多
+            // 说一句「里面的所有单集都会被删除」—— 少了它，一次点击和用户以为的事情差着二十四个文件。
+            var (title, body) = ItemMenu.DeletePrompt(item);
+
+            var agreed = await ConfirmDialog.For(owner)(title, body, "删除").ConfigureAwait(true);
 
             if (!agreed) return;
 

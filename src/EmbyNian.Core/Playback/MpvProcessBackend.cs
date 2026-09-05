@@ -355,12 +355,16 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
 
     /// <summary>
     /// mpv's IPC takes the same command names as its command line, so an argument list from the
-    /// client's chrome goes over the pipe unchanged.
+    /// client's chrome goes over the pipe unchanged. True only when mpv answered that it accepted the
+    /// command — <see cref="MpvIpcClient.SendAsync"/> already waits for that reply, the answer was just
+    /// being dropped here.
     /// </summary>
-    public async Task CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public async Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
-        if (arguments.Count == 0 || _ipc is not { IsConnected: true }) return;
-        await _ipc.SendAsync(cancellationToken, [.. arguments]).ConfigureAwait(false);
+        if (arguments.Count == 0) return true;
+        if (_ipc is not { IsConnected: true }) return false;
+
+        return await _ipc.SendAsync(cancellationToken, [.. arguments]).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken)

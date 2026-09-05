@@ -45,10 +45,26 @@ public sealed class AudioDeviceCatalogue
     private const string Category = "mpv";
 
     /// <summary>
-    /// mpv's own first entry: let it pick. Kept as a constant because both the settings row's 「自动」 label
-    /// and the 「this stored name is gone」 fallback land on it.
+    /// mpv's own first entry: let it pick. <c>audio-device-list</c> always starts with it, and
+    /// <see cref="Selectable"/> drops it — 「跟随系统默认设备」 is already that answer, spelled in Chinese and
+    /// stored as the empty string, so keeping mpv's English 「Autoselect device」 alongside it would offer one
+    /// behaviour twice under two labels and two stored values.
     /// </summary>
     public const string AutoDevice = "auto";
+
+    /// <summary>
+    /// What the settings row may offer: everything mpv reported except its own <c>auto</c> entry.
+    /// <para>
+    /// <b>Here rather than in the settings row, and it is not tidying.</b> 「要不要留 mpv 那一项」 has exactly one
+    /// right answer for a given list, and this project keeps that kind of judgment in Core where a unit test can
+    /// reach it — the settings page lives in the shell assembly, which the tests cannot see, and the self-check
+    /// only prints how many entries the drop-down ended up with rather than asserting anything about them. Left
+    /// up there, deleting this filter would leave all four gates green and put 「跟随系统默认设备」 and
+    /// 「Autoselect device」 back on screen one under the other, with only a person's eye to notice.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<AudioDevice> Selectable(IEnumerable<AudioDevice> devices) =>
+        [.. devices.Where(device => !string.Equals(device.Name, AutoDevice, StringComparison.OrdinalIgnoreCase))];
 
     private readonly Func<string?> _libraryPath;
 
@@ -125,8 +141,9 @@ public sealed class AudioDeviceCatalogue
                 return list;
             }, new List<AudioDevice>());
 
-            Log.Info(Category, $"读到 {devices.Count} 个音频输出设备");
-            return devices;
+            var selectable = Selectable(devices);
+            Log.Info(Category, $"读到 {devices.Count} 个音频输出设备，可选 {selectable.Count} 个（去掉 mpv 自己那一项 auto）");
+            return selectable;
         }
         catch (Exception failure)
         {

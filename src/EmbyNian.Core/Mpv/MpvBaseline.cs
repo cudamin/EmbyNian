@@ -92,6 +92,15 @@ public static class MpvBaseline
     /// one answer in this codebase to 「what may be in a filename」 — plus <c>%</c>, which that function has no
     /// reason to care about and which mpv would read as a specifier of its own.
     /// </para>
+    /// <para>
+    /// <b>The trailing <c>%n</c> is not decoration.</b> mpv never overwrites a screenshot that already exists,
+    /// and it only goes looking for a free name when the template carries a sequence number — without one the
+    /// second shot is simply not written, and the menu's 「已保存到 …」 says otherwise, because the command's
+    /// failure never comes back. That is not a corner case here: the timecode is whole seconds and a paused
+    /// film's does not move at all, so 截图 — 屏上这一帧 followed by 截图 — 原始画面, which is the whole point of
+    /// having both rows, resolves to one name twice. Two digits rather than mpv's own four, because the number
+    /// is only here to break a tie.
+    /// </para>
     /// </summary>
     public static string ScreenshotTemplate(string? title)
     {
@@ -100,6 +109,6 @@ public static class MpvBaseline
         // Safe() strips trailing dots and spaces, so a title made only of those comes back empty.
         if (string.IsNullOrWhiteSpace(name)) name = UntitledScreenshot;
 
-        return $"{name} %wH.%wM.%wS";
+        return $"{name} %wH.%wM.%wS-%02n";
     }
 }

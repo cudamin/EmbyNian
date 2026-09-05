@@ -73,8 +73,22 @@ public sealed class PlaybackService(
     /// <summary>
     /// True when playback can actually be driven. False for an external mpv whose control
     /// channel is switched off: it plays, but the client's chrome would be a row of dead buttons.
+    /// <para>
+    /// 句柄取到局部变量里再问两个问题，这不是啰嗦。<c>_current is IPlayerControl &amp;&amp; _current.HasControlChannel</c>
+    /// 读两次字段，而播放结束那一下（<see cref="PlayAsync"/> 的 finally，一路 <c>ConfigureAwait(false)</c> 之后跑在
+    /// 线程池线程上）会把它置空 —— 正好插在两次之间，第二次就是 null。问这个属性的是播放器那个 10 Hz 计时器，跑在
+    /// 界面线程上，外面没有 try/catch，所以那是一次谁都接不住的空引用；而每部片子结束都要经过这个窗口，一秒采样
+    /// 十次。同 <see cref="Build"/> 的判据和同一个理由。
+    /// </para>
     /// </summary>
-    public bool CanControl => _current is IPlayerControl && _current.HasControlChannel;
+    public bool CanControl
+    {
+        get
+        {
+            var handle = _current;
+            return handle is IPlayerControl && handle.HasControlChannel;
+        }
+    }
 
     /// <summary>
     /// True when the backend in use answers several property reads at once, which is how the statistics
@@ -322,18 +336,24 @@ public sealed class PlaybackService(
     /// Runs one mpv command — <c>cycle pause</c>, <c>seek 10</c>, <c>frame-step</c>. This is how
     /// every button and key in the player chrome acts: mpv's own command vocabulary, so nothing
     /// in between has to grow a method per control.
+    /// <para>
+    /// False when mpv refused it, when there is no control channel to send it down, or when the call threw.
+    /// Most callers are buttons that have nothing to do with the answer and ignore it; the one that needs it is
+    /// the 画面 menu, which used to announce 「已保存到 …」 for a screenshot mpv had just declined to write.
+    /// </para>
     /// </summary>
-    public async Task CommandAsync(params string[] arguments)
+    public async Task<bool> CommandAsync(params string[] arguments)
     {
-        if (_current is not IPlayerControl control) return;
+        if (_current is not IPlayerControl control) return false;
 
         try
         {
-            await control.CommandAsync(arguments, CancellationToken.None).ConfigureAwait(false);
+            return await control.CommandAsync(arguments, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception error)
         {
             Log.Warn(Category, $"执行 mpv 命令 {string.Join(' ', arguments)} 失败", error);
+            return false;
         }
     }
 
@@ -475,8 +495,15 @@ public sealed class PlaybackService(
         // 永远是默认值的字段」比不上报更误导 —— 遥控那一头会显示 100 并且允许照那个数去调。
         //
         // 只在有控制通道的时候填：没有通道时 Status 返回的是一份全默认的快照（音量 100、没静音），那不是读数，
-        // 那是一个凑出来的数。null 的意思是「说不出来」，而 Emby 认得这个意思。
-        var live = _current as IPlayerControl;
+        // 那是一个凑出来的数。null 的意思是「说不出来」，而 Emby 认得这个意思 —— 音量那边它自己的字段就可以为空，
+        // 静音那边不行，所以那一项为空时干脆不写进 JSON（EmbyHttp.Json 的 WhenWritingNull），服务器保留原样，
+        // 而不是被告知「没静音」。两项一起，只改一项的话遥控上还是有一个允许点、点了没用的读数。
+        //
+        // 判据是 HasControlChannel，不是「这个句柄是不是控制类型」—— 外部 mpv.exe 那个句柄**永远**是控制类型，
+        // 通道到底有没有开另由这一位说（设置里把「启用 IPC」关掉时就没有）。只按类型问的话，那条路上报的恰好是
+        // 那份凑出来的快照，也就是这几行本来要消掉的东西。同 CanControl 的判据。
+        var handle = _current;
+        var live = handle is IPlayerControl control && handle.HasControlChannel ? control : null;
 
         return new PlaybackReport
         {
@@ -485,7 +512,7 @@ public sealed class PlaybackService(
             PlaySessionId = playSessionId,
             PositionTicks = positionTicks,
             IsPaused = paused,
-            IsMuted = live?.Status.Muted ?? false,
+            IsMuted = live?.Status.Muted,
             VolumeLevel = live is null ? null : (int)Math.Round(Math.Clamp(live.Status.Volume, 0, AudioSettings.MaxVolume)),
             EventName = eventName,
             AudioStreamIndex = request.AudioStreamIndex,

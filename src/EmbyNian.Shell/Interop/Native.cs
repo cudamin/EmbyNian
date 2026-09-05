@@ -782,17 +782,33 @@ internal static partial class Native
     public static partial uint GetCurrentThreadId();
 
     /// <summary>
-    /// A mouse event with nowhere to go: <c>MOUSEEVENTF_MOVE</c> with a relative displacement of zero. The
-    /// pointer does not move — which is the point, because the cursor hides precisely because nothing is
-    /// moving — while the OS still recomputes which shape belongs on screen and asks the window under the
-    /// pointer for it. Relative rather than absolute: an absolute injection is normalised through a
-    /// 0..65535 grid and lands a pixel off, and a pixel is a movement to everything else in the player.
+    /// Makes the OS work out again which shape belongs on screen — 「who is under the pointer, and what does
+    /// he want drawn」 — without the pointer going anywhere: the cursor is put back at the point it already
+    /// occupies.
+    /// <para>
+    /// This is the trigger the whole hide rests on. Hiding happens <em>because</em> nothing is moving, and
+    /// Windows only collects the answers about the cursor — this queue's shape, the window classes, the
+    /// framework's <c>ProtectedCursor</c>, what mpv says about its own child window — when something gives it
+    /// a reason to. Without this they are all answers nobody asked for, and the arrow the last real movement
+    /// worked out stays on the screen.
+    /// </para>
+    /// <para>
+    /// <b>It used to be a zero-displacement <c>SendInput</c>, and that produces nothing whatever.</b> Measured
+    /// 2026-09-05 by parking a message-counting window under the pointer: five zero-displacement
+    /// <c>SendInput</c> calls produced 0 <c>WM_MOUSEMOVE</c> and 0 <c>WM_SETCURSOR</c> — Windows drops a
+    /// relative move of (0,0) outright — while five same-point <c>SetCursorPos</c> calls produced five of
+    /// each, <b>and did so from a process that was not in the foreground</b>, which is the case the user is in
+    /// after clicking an application on the other monitor. <c>SendInput</c> returns 1 either way, so the old
+    /// call reported success and the report has been printing 「让系统重新问了 N 次」 about an ask that never
+    /// happened.
+    /// </para>
+    /// <para>
+    /// Zero displacement matters and is preserved: both places that judge movement — the event filter in
+    /// <c>PlayerPage.Moved</c> and <c>PlayerPage.PollPointer</c> — discard an unchanged position before they
+    /// count anything, so this cannot interrupt the stillness it is part of.
+    /// </para>
     /// </summary>
-    public static bool NudgeCursorState()
-    {
-        var input = new Input { Type = InputMouse, Mouse = new MouseInput { Flags = MouseEventMove } };
-        return SendInput(1, [input], Marshal.SizeOf<Input>()) == 1;
-    }
+    public static bool NudgeCursorState() => GetCursorPos(out var at) && SetCursorPos(at.X, at.Y);
 
     private const uint InputMouse = 0;
     private const uint MouseEventMove = 0x0001;
@@ -850,7 +866,7 @@ internal static partial class Native
     [LibraryImport("user32.dll", SetLastError = true)]
     private static partial uint SendInput(uint count, [In] Input[] inputs, int size);
 
-    /// <summary>MOUSEINPUT. The union's largest member, and the only one <see cref="NudgeCursorState"/> uses.</summary>
+    /// <summary>MOUSEINPUT. The union's largest member, and the only one <see cref="MovePointerTo"/> uses.</summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct MouseInput
     {

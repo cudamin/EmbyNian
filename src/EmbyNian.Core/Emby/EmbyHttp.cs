@@ -21,6 +21,12 @@ public sealed class EmbyHttp : IDisposable
     private const string Category = "http";
     private const int MaxLoggedBodyLength = 2000;
 
+    /// <summary>
+    /// 错误响应体最多读这么多字节。比 <see cref="MaxLoggedBodyLength"/> 宽出四倍，因为那一条数的是字符而
+    /// 这一条数的是字节 —— 一个汉字在 UTF-8 里是三个。见 <see cref="ReadBodySafelyAsync"/>。
+    /// </summary>
+    private const int MaxLoggedBodyBytes = MaxLoggedBodyLength * 4;
+
     private readonly HttpClient _http;
 
     /// <summary>
@@ -181,6 +187,13 @@ public sealed class EmbyHttp : IDisposable
                 }
             }
 
+            // 服务器说了有多少就必须收到这么多。少了还改名的话，磁盘上留下的是一个名字正确、大小不对的影片
+            // 文件 —— 播到一半没了，而谁也看不出这是下载断在半路。传输层多数情况下自己会为提前断开的连接抛
+            // 一个 IOException，这一句是把「多数情况」写成规矩：不完整就当失败，下面那个 catch 顺手把 .part
+            // 删掉。长度不知道（服务器没给 Content-Length）时无从比对，那时候 EOF 就是全部答案。
+            if (total is { } expected && done != expected)
+                throw new IOException($"下载不完整：收到 {done} 字节，服务器说有 {expected} 字节");
+
             File.Move(temporary, path, overwrite: true);
             progress?.Report((done, total ?? done));
             return done;
@@ -301,9 +314,22 @@ public sealed class EmbyHttp : IDisposable
     {
         try
         {
-            var text = (await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false)).Trim();
-            if (text.Length == 0) return null;
-            return text.Length <= MaxLoggedBodyLength ? text : text[..MaxLoggedBodyLength] + "…";
+            // 只读开头这几千字节，而不是 ReadAsStringAsync 之后再截断：这一句是给日志和错误提示用的一句话，
+            // 而响应体的大小是对面说了算的。反代或者门户网关在一个 502 上塞回来一整页 HTML 是常事，坏掉的
+            // 服务器能塞回来更多 —— 「先整份读进内存，再切掉不要的」就是先中招再截断。
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var buffer = new byte[MaxLoggedBodyBytes];
+
+            await using (stream.ConfigureAwait(false))
+            {
+                var read = await stream
+                    .ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, cancellationToken)
+                    .ConfigureAwait(false);
+
+                var text = Encoding.UTF8.GetString(buffer, 0, read).Trim();
+                if (text.Length == 0) return null;
+                return text.Length <= MaxLoggedBodyLength ? text : text[..MaxLoggedBodyLength] + "…";
+            }
         }
         catch
         {

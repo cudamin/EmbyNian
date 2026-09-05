@@ -99,6 +99,12 @@ public interface IPlayerControl
     /// Runs one mpv command (<c>seek</c>, <c>cycle</c>, <c>frame-step</c>, <c>sub-reload</c>…).
     /// One entry point rather than a method per action: mpv's command set is the vocabulary the
     /// player already speaks, and every command it grows becomes available without a new seam.
+    /// <para>
+    /// <b>True only when mpv accepted it.</b> Both backends know the answer and used to throw it away — the
+    /// in-process one from <c>mpv_command</c>'s return value, the external one from the reply on the pipe — so
+    /// the 画面 menu announced 「已保存到 …」 for a screenshot mpv had refused to write. False also covers
+    /// 「there was nobody to ask」: a context already torn down, or a pipe that is not connected.
+    /// </para>
     /// </summary>
-    Task CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
+    Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
 }

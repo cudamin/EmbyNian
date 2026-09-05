@@ -162,33 +162,33 @@ public sealed class ItemQuery
         _ => []
     };
 
-    public static ItemQuery Search(string term, int startIndex, int limit) => new()
-    {
-        SearchTerm = term,
-        Recursive = true,
-        StartIndex = startIndex,
-        Limit = limit,
-        IncludeItemTypes = [EmbyItemType.Movie, EmbyItemType.Series, EmbyItemType.Episode, EmbyItemType.Video, EmbyItemType.MusicVideo],
-        SortBy = EmbySortBy.Name
-    };
-
     /// <summary>
-    /// What a person's credits are allowed to be. The same list a search spans, for the same reason: both
-    /// sweep the whole server rather than one library, so neither can lean on a collection type to say
-    /// what it should be finding.
+    /// The types a whole-server sweep is allowed to come back with — 搜索 and 演职人员, which are the only
+    /// two queries that span every library at once. Neither has a <c>ParentId</c>, so neither can lean on a
+    /// collection type to say what it should be finding; both have to name the types outright, and there is
+    /// no reason for the two answers to differ.
     /// <para>
     /// <see cref="EmbyItemType.Episode"/> is included deliberately. A guest star is credited on the
     /// episodes they appear in and often not on the series at all, so dropping episodes would answer 「没有
     /// 内容」 for precisely the people whose credits are the most interesting to follow.
     /// </para>
+    /// <para>
+    /// <see cref="EmbyItemType.MusicVideo"/> is deliberately absent, and this is the half that was wrong
+    /// until 2026-09-05. <see cref="EmbyItemType.IsMusic"/> counts it as music, and the shell hides music
+    /// everywhere it can be reached — music libraries never enter the navigation pane, and the home rows
+    /// drop their music items. A sweep is the one query with no library to be filtered by, so asking for
+    /// the type here was the single path by which a card the shell is built to hide could still land on
+    /// screen: a person with a music-video credit got one in their grid. A test pins this list against
+    /// <see cref="EmbyItemType.IsMusic"/> rather than against a second copy of the four names — put a
+    /// hidden type back in and it goes red, which is the moment somebody should think about it.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<string> CreditedTypes { get; } =
+    public static IReadOnlyList<string> SweptTypes { get; } =
     [
         EmbyItemType.Movie,
         EmbyItemType.Series,
         EmbyItemType.Episode,
-        EmbyItemType.Video,
-        EmbyItemType.MusicVideo
+        EmbyItemType.Video
     ];
 
     public (string Key, string? Value)[] ToParameters()

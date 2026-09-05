@@ -290,8 +290,12 @@ public sealed partial class SettingsPage : Page, IShellContent
         // all, which is the whole of 「open 设置 on 诊断」 — the second time it was asked for, it opened on
         // whatever card was last read instead. ShowHosted is called either way, because a cached page whose
         // selection is already 诊断 has to put that page back in the frame after a session change dropped it.
-        Select(request.Category);
-        ShowHosted();
+        //
+        // 只有在选择没动的时候才自己喊一次：动了的话 SelectedCategory 的通知已经把 ShowHosted 喊过了（见构造
+        // 函数里那个订阅），紧接着再喊一遍就是把内嵌页面建两次 —— 头一个刚 OnNavigatedTo 就被第二次导航
+        // OnNavigatedFrom 掉。第一次打开「服务器」「诊断」「服务器控制台」正是选择会动的那一次，也就是说这三页
+        // 每一次头回打开都白建一个，控制台那一页还白起一次 WebView2。
+        if (!Select(request.Category)) ShowHosted();
     }
 
     /// <summary>
@@ -299,13 +303,22 @@ public sealed partial class SettingsPage : Page, IShellContent
     /// pressing 设置 again is a request to see it, not to go back to the first card. A name the list does not
     /// hold falls back to the first card rather than selecting nothing, which would show an empty column.
     /// </summary>
-    private void Select(string category)
+    /// <returns>
+    /// True when the selection really moved, which means <see cref="ShowHosted"/> has already run off the
+    /// property notification and must not be run again. See the call site.
+    /// </returns>
+    private bool Select(string category)
     {
-        if (string.IsNullOrEmpty(category)) return;
+        if (string.IsNullOrEmpty(category)) return false;
 
-        ViewModel.SelectedCategory = ViewModel.Categories.Contains(category, StringComparer.Ordinal)
+        var target = ViewModel.Categories.Contains(category, StringComparer.Ordinal)
             ? category
             : SettingsViewModel.FirstCardCategory;
+
+        if (target == ViewModel.SelectedCategory) return false;
+
+        ViewModel.SelectedCategory = target;
+        return true;
     }
 
     /// <summary>
@@ -384,17 +397,25 @@ public sealed partial class SettingsPage : Page, IShellContent
     internal void ReleaseHosted() => (HostedFrame.Content as IShellContent)?.Release();
 
     /// <summary>
-    /// Nothing to drop. This page has no request in flight and subscribes to nothing: every row holds a
-    /// closure over the settings document, which the container owns and outlives the page anyway.
+    /// Lets go of the hosted page. This page itself has nothing in flight and subscribes to nothing —
+    /// every row holds a closure over the settings document, which the container owns and outlives the page
+    /// anyway — but the frame on its right may be holding 服务器, 诊断 or 需求 8's console.
     /// <para>
-    /// It is here because <see cref="IShellContent"/> asks for it, and an empty body that says so is the
-    /// point — the next person to add something to this page that needs releasing has the place to put it,
-    /// and both the navigate-away path and the drop-the-frame path already run it.
+    /// <b>The hosted page is why this body is not empty.</b> A nested frame's content gets no
+    /// <c>OnNavigatedFrom</c> when the outer page is navigated away from or dropped, so without this line the
+    /// 控制台 kept a live WebView2 — a browser process the user cannot see — behind whatever page they went
+    /// to next, and its log tail and pending requests kept running with it. The settings *window* was never
+    /// affected: it calls <see cref="ReleaseHosted"/> itself on both of its hide paths. The path that was
+    /// leaking is the fallback one, where the window could not be created and this page opens in the shell's
+    /// own frame (see <c>ShellPage.ShowSettings</c>) — that frame both navigates away from it and, on
+    /// signing out, drops it through <c>ReleaseContent</c>.
+    /// </para>
+    /// <para>
+    /// The frame's content is left in place rather than cleared: <see cref="ShowHosted"/> navigates afresh on
+    /// every visit anyway, and keeping it means the selection and the page on screen still agree.
     /// </para>
     /// </summary>
-    public void Release()
-    {
-    }
+    public void Release() => ReleaseHosted();
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {

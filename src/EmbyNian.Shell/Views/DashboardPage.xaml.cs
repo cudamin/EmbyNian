@@ -53,6 +53,22 @@ public sealed partial class DashboardPage : Page, IShellContent
     private bool _settled;
     private bool _released;
 
+    /// <summary>
+    /// 这一页第几次去载入控制台：导航进来算一次，每按一下「重新载入」再算一次。两条带延时的后续
+    /// （<see cref="SampleAsync"/> 等 2.5 秒、<see cref="GiveUpAsync"/> 等 15 秒）醒来之后先对一下这个数，
+    /// 不是自己那一轮就闭嘴走开。
+    /// <para>
+    /// 少了它，上一轮那个 15 秒的看门狗会把刚开始的这一轮判成失败：刷新把 <c>_settled</c> 放回 false，而它
+    /// 只看这一个字段 —— 于是页头写上「15 秒内没有结果」，而新的一趟才刚发出去一秒。
+    /// </para>
+    /// <para>
+    /// 管不着的那一半照实写在这儿：<c>NavigationCompleted</c> 自己不带轮次（WebView2 那边只有 NavigationId，
+    /// 要接就得从 NavigationStarting 一路记下来），所以一次被顶掉的导航仍然会以「失败」的身份回来。那一下屏上
+    /// 是一句错话，下一轮真的完成时会盖回去。
+    /// </para>
+    /// </summary>
+    private int _generation;
+
     /// <summary>页头读数的两半：控制台地址，和它此刻的载入状态。见 <see cref="Say"/>。</summary>
     private string _address = "尚未确定地址";
     private string _state = "";
@@ -102,6 +118,7 @@ public sealed partial class DashboardPage : Page, IShellContent
 
         _request = request;
         Tag = "dashboard";
+        _generation++;
 
         var services = request.Services;
         _launcher = services.GetRequiredService<ISystemLauncher>();
@@ -172,7 +189,7 @@ public sealed partial class DashboardPage : Page, IShellContent
 
             Say("正在载入控制台…");
             core.Navigate(_url);
-            _ = GiveUpAsync();
+            _ = GiveUpAsync(_generation);
         }
         catch (Exception error)
         {
@@ -197,7 +214,7 @@ public sealed partial class DashboardPage : Page, IShellContent
         if (e.IsSuccess)
         {
             Say("已载入");
-            _ = SampleAsync();
+            _ = SampleAsync(_generation);
             return;
         }
 
@@ -228,10 +245,10 @@ public sealed partial class DashboardPage : Page, IShellContent
     /// 这一句话能证明成或不成。
     /// </para>
     /// </summary>
-    private async Task SampleAsync()
+    private async Task SampleAsync(int generation)
     {
         await Task.Delay(SampleDelay);
-        if (_released || Web.CoreWebView2 is null) return;
+        if (_released || generation != _generation || Web.CoreWebView2 is null) return;
 
         try
         {
@@ -252,7 +269,7 @@ public sealed partial class DashboardPage : Page, IShellContent
                   } catch (e) { return "取样出错：" + e; }
                 })();
                 """);
-            if (_released) return;
+            if (_released || generation != _generation) return;
 
             var text = JsonSerializer.Deserialize<string>(json);
             _client = string.IsNullOrWhiteSpace(text) ? "没有取到" : text!;
@@ -264,7 +281,8 @@ public sealed partial class DashboardPage : Page, IShellContent
         }
         finally
         {
-            _settled = true;
+            // 上一轮的取样不许替这一轮宣布「问完了」—— 自检的 Settled 那一关读的就是这个字段。
+            if (generation == _generation) _settled = true;
         }
     }
 
@@ -273,10 +291,10 @@ public sealed partial class DashboardPage : Page, IShellContent
     /// hanging for far longer than the walk's own budget, so past this point the page settles and says it did
     /// not finish rather than pretending it is still working.
     /// </summary>
-    private async Task GiveUpAsync()
+    private async Task GiveUpAsync(int generation)
     {
         await Task.Delay(LoadTimeout);
-        if (_released || _settled) return;
+        if (_released || _settled || generation != _generation) return;
 
         _settled = true;
         _client = $"{LoadTimeout.TotalSeconds:0} 秒内没有结果";
@@ -291,11 +309,12 @@ public sealed partial class DashboardPage : Page, IShellContent
         _navigated = null;
         _settled = false;
         _error = "";
+        _generation++;
         Notice.Visibility = Visibility.Collapsed;
         Web.Visibility = Visibility.Visible;
         Say("正在重新载入…");
         core.Navigate(_url);
-        _ = GiveUpAsync();
+        _ = GiveUpAsync(_generation);
     }
 
     private void OnOpenInBrowser(object sender, RoutedEventArgs e) => Open(_url);

@@ -1037,15 +1037,7 @@ public sealed partial class LibraryViewModel : PageViewModel
             {
                 SearchTerm = term,
                 Recursive = true,
-                // 音乐 is deliberately absent: this app has no music face, so MusicVideo rows would open
-                // onto a grid of things it cannot show.
-                IncludeItemTypes =
-                [
-                    EmbyItemType.Movie,
-                    EmbyItemType.Series,
-                    EmbyItemType.Episode,
-                    EmbyItemType.Video
-                ],
+                IncludeItemTypes = ItemQuery.SweptTypes,
                 SortBy = SortKey,
                 Descending = SortDescending,
                 StartIndex = start,
@@ -1063,7 +1055,7 @@ public sealed partial class LibraryViewModel : PageViewModel
             {
                 PersonId = personId,
                 Recursive = true,
-                IncludeItemTypes = ItemQuery.CreditedTypes,
+                IncludeItemTypes = ItemQuery.SweptTypes,
                 SortBy = SortKey,
                 Descending = SortDescending,
                 StartIndex = start,

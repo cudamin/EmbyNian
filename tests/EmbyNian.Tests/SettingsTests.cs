@@ -41,6 +41,63 @@ internal static class SettingsTests
             }
         });
 
+        Test("迁移：文件里某一节写成 null 也照样开得起来", () =>
+        {
+            // 每一节都有属性初始化器，可 `"Playback": null` 会把它盖掉 —— 反序列化听 JSON 的，不听初始化器。
+            // 从前这样一份文件会在 Normalize 的 settings.Playback.MarkWatchedPercent 上抛
+            // NullReferenceException，而那不在 SettingsStore 认的「文件坏了」名单里：备份、隔离、退回默认三条
+            // 路一条都没走，窗口根本没出来。
+            const string json = """
+            {
+              "SchemaVersion": 10,
+              "DeviceId": "d-1",
+              "Mpv": null, "Playback": null, "Video": null, "Audio": null, "Shaders": null, "Ui": null
+            }
+            """;
+
+            var settings = SettingsMigration.FromJson(json, Protector);
+
+            Assert.Equal(90, settings.Playback.MarkWatchedPercent, "缺的那一节回到装机值");
+            Assert.Equal("gpu-next", settings.Video.Renderer);
+            Assert.Equal(100, settings.Ui.PageSize);
+            Assert.Equal(100, settings.Audio.Volume);
+            Assert.True(settings.Shaders.Enabled);
+            Assert.Equal("d-1", settings.DeviceId, "文件里还好的东西要留着，不能整份丢掉");
+        });
+
+        Test("迁移：列表、字典和它们里头的 null 都要挡住", () =>
+        {
+            const string json = """
+            {
+              "SchemaVersion": 10,
+              "LastServerId": "s-1",
+              "Servers": [ null, { "Id": "s-1", "Name": "果服", "Url": "http://h:8096", "Accounts": [ null ] } ],
+              "Playback": { "AudioLanguages": null, "SubtitleLanguages": null },
+              "Audio": { "PassthroughCodecs": null },
+              "Shaders": { "AnimeKeywords": null },
+              "Ui": { "HomeRows": [ null ], "Sort": { "lib-1": null }, "Filters": { "lib-1": null } }
+            }
+            """;
+
+            var settings = SettingsMigration.FromJson(json, Protector);
+
+            Assert.Equal(1, settings.Servers.Count, "空洞那一项丢掉，真的那台留着");
+            Assert.Equal("果服", settings.Servers[0].Name);
+            Assert.Equal("s-1", settings.LastServerId);
+            Assert.Equal(0, settings.Servers[0].Accounts.Count, "账号列表里的空洞同样丢掉");
+
+            // 列表写成 null 读出来是空列表，而不是那一项的装机默认值：`null` 和 `[]` 在文件里分不出来，而
+            // 「一个都不选」本来就是这几行合法的答案（字幕语言留空就是交给 mpv 自己挑）。
+            Assert.Equal(0, settings.Playback.SubtitleLanguages.Count);
+            Assert.Equal(0, settings.Playback.AudioLanguages.Count);
+            Assert.Equal(0, settings.Audio.PassthroughCodecs.Count);
+            Assert.Equal(0, settings.Shaders.AnimeKeywords.Count);
+
+            Assert.Equal(0, settings.Ui.HomeRows.Count);
+            Assert.Equal(0, settings.Ui.Sort.Count, "指向 null 的库不算一条记档");
+            Assert.Equal(0, settings.Ui.Filters.Count);
+        });
+
         Test("迁移：v1 扁平结构升级为服务器/账户列表", () =>
         {
             const string v1 = """
@@ -766,6 +823,29 @@ internal static class SettingsTests
             Assert.Equal(MpvOutputOptions.LoudNorm, kept.Audio.VolumeNormalize);
         });
 
+        Test("规整：设置文件里存着的 auto 读成空串", () =>
+        {
+            // 0.0.1 那个版本的音频输出设备下拉里，中文的「跟随系统默认设备」下面还并排放着 mpv 自己那一项英文的
+            // 「Autoselect device」，点了它存下来的是 auto。那一项现在不在下拉里了，所以留着这个值的话，这一行会
+            // 走 Options 的「设置文件中的值」兜底分支，显示成「auto（设置文件中的值，这台机器上没找到）」——
+            // 一句不实的话：auto 恰恰是永远找得到的那一个。
+            var stored = SettingsMigration.NewDefaults();
+            stored.Audio.Device = "auto";
+            SettingsMigration.Normalize(stored);
+            Assert.Equal("", stored.Audio.Device, "auto 就是「跟随系统默认设备」，两者只留一个写法");
+
+            var upper = SettingsMigration.NewDefaults();
+            upper.Audio.Device = "AUTO";
+            SettingsMigration.Normalize(upper);
+            Assert.Equal("", upper.Audio.Device);
+
+            // 真设备名一个字都不许动 —— 它是从 mpv 那儿读来的、没人抄得对的一串东西。
+            var real = SettingsMigration.NewDefaults();
+            real.Audio.Device = "wasapi/{0.0.0.00000000}.{9c3d1b2e}";
+            SettingsMigration.Normalize(real);
+            Assert.Equal("wasapi/{0.0.0.00000000}.{9c3d1b2e}", real.Audio.Device);
+        });
+
         Test("规整：档位表按放大倍数挑，装机默认不会把任何一档挑成摆设", () =>
         {
             // 从前这一条钉的是「低清阈值必须低于高清阈值」：两个框的范围在 720–1080 上重叠、Resolve 先判高清，
@@ -848,8 +928,11 @@ internal static class SettingsTests
         {
             var settings = SettingsMigration.NewDefaults();
 
-            // 每一组挨个属性改掉，再看恢复之后是不是一项不差地回到了一个全新对象的样子。
-            foreach (var group in new object[] { settings.Mpv, settings.Playback, settings.Video, settings.Shaders })
+            // 每一组挨个属性改掉，再看恢复之后是不是一项不差地回到了一个全新对象的样子。「音频」也在里面 ——
+            // 它是唯一一组用「列出要留的」写法的，也就是以后新加的字段一律会被清掉，所以更要有人逐项看着；
+            // 它那一项例外（音量留着）由下面单独对付。
+            foreach (var group in new object[]
+                { settings.Mpv, settings.Playback, settings.Video, settings.Audio, settings.Shaders })
             {
                 var before = Snapshot(group);
                 var changed = MutateAll(group);
@@ -857,6 +940,10 @@ internal static class SettingsTests
                 Assert.True(changed > 0, $"{group.GetType().Name} 一项都没改动，这一条会变成空话");
                 Assert.True(Snapshot(group) != before, $"{group.GetType().Name} 改完和改前一模一样");
             }
+
+            // 音量是上面那一趟顺带改掉的，而它本来就该原样留着（播放器上次被留在哪儿，设置页上没有这一行），
+            // 所以「装机的样子」对这一组来说是「除音量之外全默认」。留不留由下一条单独钉，这里只是别错报。
+            var keptVolume = settings.Audio.Volume;
 
             // 「界面」那一组混着两类，这里只改设置页上有的那几行；记下来的那几项由下一条管。
             var ui = settings.Ui;
@@ -875,6 +962,7 @@ internal static class SettingsTests
             AssertDefaults(settings.Mpv, new MpvSettings());
             AssertDefaults(settings.Playback, new PlaybackSettings());
             AssertDefaults(settings.Video, new VideoSettings());
+            AssertDefaults(settings.Audio, new AudioSettings { Volume = keptVolume });
             AssertDefaults(settings.Shaders, new ShaderAutomationSettings());
 
             var fresh = new UiSettings();
@@ -1121,6 +1209,32 @@ internal static class SettingsTests
                 File.WriteAllText(paths.SettingsFile, "坏了");
 
                 Assert.Equal("果服", store.Load().Servers[0].Name, "备份里有好的内容就该用它");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+
+        Test("存储：结构对不上的设置文件也走「坏文件」那条路，不是拖着程序一起死", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                var paths = new AppPaths(root);
+                Directory.CreateDirectory(paths.Root);
+
+                // 一台服务器的 Url 写成 null。**整节缺席和整份列表缺席由迁移自己补齐**（见上面那两条），而一个
+                // 字段里的 null 刻意不补 —— 那要把每个设置类的每个字符串属性都列一遍，而那份名单必然跟不上以后
+                // 新加的字段。所以这一档由这里兜住：Normalize 会在 server.Url.Trim() 上抛，而 Load 必须照旧交回
+                // 一份能用的设置，把认不出来的那份改名留在磁盘上。
+                File.WriteAllText(paths.SettingsFile, """{"SchemaVersion":10,"Servers":[{"Url":null}]}""");
+
+                var loaded = new SettingsStore(paths, Protector).Load();
+
+                Assert.Equal(1, loaded.Servers.Count, "回到默认设置，而不是抛出去让窗口开不出来");
+                Assert.False(File.Exists(paths.SettingsFile), "认不出来的文件要改名保留");
+                Assert.True(Directory.GetFiles(paths.Root, "*.corrupt-*").Length > 0, "改名后的那份要还在，方便找回服务器地址");
             }
             finally
             {

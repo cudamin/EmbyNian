@@ -22,6 +22,29 @@ public sealed class EmbySession : IDisposable
     private EmbyClient? _client;
 
     /// <summary>
+    /// Bumped by every <see cref="EndSession"/>. What it is for: the re-authentication below awaits the
+    /// network, and the user can press 退出登录 while that is in flight — the UI thread is free during the
+    /// await. Without this, the sign-in that lands a moment later adopts a fresh client and brings back a
+    /// session the user has already left: the shell is on the login page while this object holds a live
+    /// token and every request keeps working.
+    /// <para>
+    /// The check runs under <see cref="_lifecycleGate"/> <em>before</em> the late sign-in is adopted, so
+    /// the re-authentication walks away without installing anything. A user who signed out and then signed
+    /// back in inside that window therefore keeps the session he just built, and the caller retries against
+    /// his client; a user who only signed out is left with nothing — no client, and no fresh token in the
+    /// vault that a restart could silently pull him back in with.
+    /// </para>
+    /// </summary>
+    private int _generation;
+
+    /// <summary>
+    /// 串开「会话换人」的几步：<see cref="EndSession"/> 和重新登录的落地（<see cref="CommitSignIn"/>）都在
+    /// 它里面做。没有它，「退出登录」可以正好落在重新登录那趟的轮次检查和落地之间 —— 一个几条指令宽的窗口，
+    /// 但落进去就是「已退出登录」喊过了、会话却又活了。锁里没有 await，最长的一次持有是一次落盘，几毫秒。
+    /// </summary>
+    private readonly object _lifecycleGate = new();
+
+    /// <summary>
     /// The library list <see cref="TryRestoreAsync"/> already has in hand, waiting to be collected by the
     /// shell that is about to ask for the same thing. See <see cref="TakeRestoredViews"/>.
     /// </summary>
@@ -79,9 +102,27 @@ public sealed class EmbySession : IDisposable
 
     public async Task SignInAsync(ServerProfile server, AccountProfile account, string password, string username, bool rememberPassword, CancellationToken cancellationToken)
     {
-        var apiBase = EmbyServerAddress.Normalize(server.Url);
-        var connection = await Gateway.AuthenticateAsync(apiBase, username, password, cancellationToken).ConfigureAwait(false);
+        var connection = await AuthenticateAsync(server, username, password, cancellationToken).ConfigureAwait(false);
+        CommitSignIn(server, account, connection, password, rememberPassword);
+    }
 
+    /// <summary>一趟登录的网络那一半：把用户名密码换成一条连接。</summary>
+    private async Task<EmbyConnection> AuthenticateAsync(ServerProfile server, string username, string password, CancellationToken cancellationToken)
+    {
+        var apiBase = EmbyServerAddress.Normalize(server.Url);
+        return await Gateway.AuthenticateAsync(apiBase, username, password, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 一趟登录的落地那一半：档案、vault、client、落盘。
+    /// <para>
+    /// 和网络那一半拆开只有一个理由：重新登录那一趟（<see cref="TryReauthenticateAsync"/>）要在两半之间
+    /// 插一道 <see cref="_lifecycleGate"/> 下的检查 —— 网络等着的正是用户能按「退出登录」的那段时间，
+    /// 落地之前必须重新确认他没按。
+    /// </para>
+    /// </summary>
+    private void CommitSignIn(ServerProfile server, AccountProfile account, EmbyConnection connection, string password, bool rememberPassword)
+    {
         account.Username = connection.UserName;
         account.UserId = connection.UserId;
         account.LastSignedIn = DateTimeOffset.Now;
@@ -203,9 +244,30 @@ public sealed class EmbySession : IDisposable
             var account = Account;
             if (server is null || account is null || !account.HasSavedPassword) return false;
 
+            var generation = _generation;
+
             Log.Info(Category, "令牌过期，正在使用保存的密码重新登录");
-            await SignInAsync(server, account, _vault.GetPassword(account), account.Username, account.RememberPassword, cancellationToken)
+            var connection = await AuthenticateAsync(server, account.Username, _vault.GetPassword(account), cancellationToken)
                 .ConfigureAwait(false);
+
+            // 网络等着的正是用户能按「退出登录」的那段时间（见 _generation）。落地之前在
+            // <see cref="_lifecycleGate"/> 下重新对一遍轮次 —— 对不上就什么都不做：不 Adopt、不写 vault、
+            // 不落盘。他会话已经不在了的话，装上一条新 client 就是把它复活，写一条新令牌就是让下次启动
+            // 悄悄把他拉回来；他退出之后又登录了的话，什么都不动正好保住他刚建立的会话。
+            lock (_lifecycleGate)
+            {
+                if (generation != _generation)
+                {
+                    Log.Info(Category, "重新登录成功时会话已经换了主人，这次登录作废");
+
+                    // 有人已经重新登录过的话，这不算「续不上」：调用方照成功办事，拿现在的 client 把原来
+                    // 那个请求重试一遍 —— 把人家刚建好的会话踢回登录页，比续不上更糟。
+                    return _client is not null;
+                }
+
+                CommitSignIn(server, account, connection, _vault.GetPassword(account), account.RememberPassword);
+            }
+
             return true;
         }
         catch (EmbyApiException error)
@@ -257,8 +319,21 @@ public sealed class EmbySession : IDisposable
 
     private void EndSession(string reason)
     {
-        if (_client is null) return;
-        _client = null;
+        lock (_lifecycleGate)
+        {
+            if (_client is null) return;
+            _client = null;
+            _generation++;
+
+            // 访问令牌跟着会话一起走：留着它，下次启动 TryRestoreAsync 会拿它把用户悄悄拉回来，
+            // 「退出登录」就跨不过一次重启了。记住的密码不动 —— 那是他在登录页上亲自勾的选项，
+            // 留着它，登录页才能让他一键回来。
+            if (Account is { } account) _vault.ClearAccessToken(account);
+        }
+
+        // 档案上的改动要落到盘上，否则文件里那份 DPAPI 包着的旧令牌在下次保存之前一直都在。
+        Persist();
+
         Log.Info(Category, reason);
         SignedOut?.Invoke(this, reason);
     }

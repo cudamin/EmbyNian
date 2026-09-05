@@ -231,7 +231,6 @@ public static class PlayerMenuCatalog
             Rule,
             Item("切换 音频独占模式", "音频独占模式:${audio-exclusive}", "cycle", "audio-exclusive")),
 
-
         Group("字幕",
             Item("字幕上移", "字幕上移:${sub-pos}", "add", "sub-pos", "-1"),
             Item("字幕下移", "字幕下移:${sub-pos}", "add", "sub-pos", "1"),

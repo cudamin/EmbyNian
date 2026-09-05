@@ -207,6 +207,21 @@ internal static partial class ShellSelfCheck
             $"说明里{(drcNote.Contains("AC-3") ? "有" : "没有")}「AC-3」字样、"
                 + $"{(hasNormalize ? "并且" : "但是没有")}「音量均衡」那一行；这张卡 {audioRows.Count} 行");
 
+        // 「mpv.exe 路径」那一行的说明必须写着「命令行」。外部 mpv.exe 那条路把 X-Emby-Token 写在
+        // --http-header-fields-append= 上，也就是写在另一个进程的命令行上；内置 libmpv 在进程里设那个头，
+        // 所以默认后端没有这件事。三条处置里（临时配置文件、IPC 注入、把话说出来）只有最后一条在这台机器上
+        // 验得住 —— 不许真实播放，本机也没装外部 mpv.exe。而一句「把话说出来」的处置全靠那句话真的在屏上，
+        // 所以它和「动态范围压缩只对 AC-3 有效」是同一类：最可能的坏法是哪天被人「整理」掉，而单测进不到外壳
+        // 这个程序集。顺带确认这张卡三行都在 —— 说明挂在一行不存在的行上等于没有说明。
+        var playerRows = page.ViewModel.Sections
+            .FirstOrDefault(section => section.Category == "播放器")?.Rows ?? [];
+        var pathNote = playerRows.FirstOrDefault(row => row.Label == "mpv.exe 路径")?.Note ?? "";
+        var saysCommandLine = pathNote.Contains("命令行", StringComparison.Ordinal);
+
+        check("mpv.exe 路径那一行写明令牌会上命令行", saysCommandLine && playerRows.Count == 3,
+            $"说明里{(saysCommandLine ? "有" : "没有")}「命令行」字样；这张卡 {playerRows.Count} 行"
+                + $"（应当 3 行：后端、路径、IPC）");
+
         // 音频输出设备那一行必须始终可用。设备列表要从 mpv 读（临时开一个 libmpv 句柄只为枚举），而那一趟可能
         // 答不上来 —— 找不到 libmpv、没装 WASAPI 输出、机器上没有声卡。那时候这一行必须还剩「跟随系统默认设备」
         // 并且真的选中了一项：一个没选中的 ComboBox 会吃掉下一次点击，而存着的值一个字都不会写回去。
@@ -219,7 +234,7 @@ internal static partial class ShellSelfCheck
             deviceRow is null
                 ? "音频输出那张卡上没有这一行"
                 : $"下拉 {deviceRow.Choices.Count} 项、选中「{deviceRow.Selected?.Label ?? "（没选中）"}」；"
-                    + $"这台机器上 mpv 报了 {devices.Count} 个设备"
+                    + $"这台机器上可选 {devices.Count} 个设备"
                     + (devices.Count > 0 ? $"，第一个是「{devices[0].Label}」" : "（还没读到或者读不到）"));
 
         // 「恢复默认设置」那一行。什么都不按 —— 按下去就是把用户这台机器上的设置全清一遍，而这一关要问的两件事

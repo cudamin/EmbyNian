@@ -134,7 +134,7 @@ public sealed partial class PlayerPage : UserControl
     private int _cursorCount;
 
     /// <summary>
-    /// How many times the hide has asked the OS to work out the cursor again — the zero-displacement nudge in
+    /// How many times the hide has asked the OS to work out the cursor again — the same-point nudge in
     /// <see cref="SetCursorHidden"/>, counted only when it left the process. It is the half of hiding that no
     /// reading of the OS's own can confirm after the fact, and the half whose absence was 「鼠标指针还是不会
     /// 自动隐藏」 with every other reading saying hidden, so the self-check asserts on this count.

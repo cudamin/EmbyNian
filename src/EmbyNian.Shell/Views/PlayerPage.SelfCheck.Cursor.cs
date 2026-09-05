@@ -151,6 +151,20 @@ public sealed partial class PlayerPage
         Want("藏了以后窗口树上的类光标也换成了透明的", _window.ClassCursorsBlanked > 0);
         report.Add($"类光标：藏着换掉 {_window.ClassCursorsBlanked} 个类（这一趟共扫到 {_window.ClassCursorsSwept} 个）");
 
+        // 藏鼠标真正的扳机，发一遍并把它落到哪儿写出来。指针不动的时候上面每一句「没有光标」都是没人问的答案，
+        // 系统只在有理由重算的时候才去收集它们 —— 这一下就是那个理由（<see cref="Native.NudgeCursorState"/>）。
+        // <para>
+        // 只印不断言，理由是这声 <c>WM_SETCURSOR</c> 未必落在我们手上：指针压在 XAML 内容上时它由框架自己那个
+        // 内层窗口答掉，既不冒到主窗口的 <c>Route</c>、也不冒到岛的过程上来 —— 同一份报告里那句「真移动问到
+        // 0→0」说的就是这件事（那一趟指针真的挪到了画面中心，两处一次都没被问到）。真放片子的时候指针压的是
+        // mpv 自己那块子窗口，那是一个普通的 Win32 窗口，这声就落在它身上。发得出去这一半由
+        // 「藏的时候让系统重新问了一次」在 <see cref="ProbeCursorAlive"/> 里断言。
+        // </para>
+        asked = _window.CursorAsksSeen;
+        var nudged = Native.NudgeCursorState();
+        Pump();
+        report.Add($"原地重设指针：发得出={nudged}，我们这两个过程问到 {asked}→{_window.CursorAsksSeen}");
+
         // The message a still pointer never sends, sent by hand — to the host window first, because that is
         // where a moving pointer's own WM_SETCURSOR actually arrives. This is the assertion the probe is built
         // around: while the player wants no cursor, the answer is none and the message is not passed on.
@@ -520,16 +534,37 @@ public sealed partial class PlayerPage
             if (hiddenAt == 0 && _cursorHidden) hiddenAt = Now;
 
             // Whether anybody touched the mouse. A hand on it restarts the two seconds for real, so a leg that
-            // ends with the pointer somewhere other than where it was put is printed and asserted about nothing.
-            var disturbed = !Native.GetCursorPos(out var ended) || ended.X != centre.X || ended.Y != centre.Y;
+            // was disturbed is printed and asserted about nothing. Two signals, and the second one is this
+            // round's correction — three reports of this leg going red were filed against 「someone touched the
+            // mouse, the report says so」 while quoting a number that says the opposite:
+            //
+            //  · The end position. Cheap and certain when it differs, but blind to a pointer that moved during
+            //    the window and was put back — and blind is what it was, because it is the only signal there was.
+            //  · The polled count, which is the one that actually answers the question. <c>_polledKnown</c> is
+            //    cleared just above, so the loop's first poll always counts one — it is the seeding, not a
+            //    movement, and a pointer that truly never moves is filtered out before the counter by the
+            //    <c>dx == 0 && dy == 0</c> return in PollPointer. So exactly 1 is what an undisturbed leg
+            //    reports and anything past 1 is a real displacement: past PointerNoise while the cursor shows,
+            //    and any pixel at all once it is hidden, where a mouse rattling on a desk is by design a hand
+            //    reaching for it. Either way the idle clock restarted, so there is nothing here to judge.
+            //
+            // A regression cannot hide behind this. Hiding that stops working reports 1 polled move and fails;
+            // a spurious un-hide from a pointer that never moved arrives as a XAML event (「空事件」) and never
+            // touches this counter, because it only advances when the OS's own coordinate changed.
+            var polled = _polledMoves - polls;
+            var moved = !Native.GetCursorPos(out var ended) || ended.X != centre.X || ended.Y != centre.Y;
+            var disturbed = moved || polled > 1;
 
             report.Add($"{where}：{(hiddenAt == 0 ? $"{span}ms 过去也没藏" : $"静止 {hiddenAt - began}ms 就藏了")}"
                 + $"，线程形状={Mine()}"
                 + $"，真实输入{(heard ? "到位" : "注不进")}"
-                + $"，轮询问出 {_polledMoves - polls} 次移动、XAML 事件 {_pointerMoves - moves} 次、空事件 {_stillMoves} 次"
+                + $"，轮询问出 {polled} 次移动{(polled <= 1 ? "（只有开头那次播种，也就是全程没人碰）" : $"（开头播种 1 次，真的动了 {polled - 1} 次）")}"
+                + $"、XAML 事件 {_pointerMoves - moves} 次、空事件 {_stillMoves} 次"
                 + $"，我们推了 {pushed} 拍、计时器自己 {Math.Max(0, _tickCount - ticks - pushed)} 拍"
                 + $"，让系统重新问了 {_cursorNudges - nudges} 次"
-                + (disturbed ? "，中途有人动了鼠标，这一轮只作参考" : string.Empty));
+                + (disturbed
+                    ? $"，中途有人动了鼠标（{(moved ? "指针没停在原处" : "轮询问出了真移动")}），这一轮只作参考"
+                    : string.Empty));
 
             if (disturbed) return;
 
@@ -582,7 +617,7 @@ public sealed partial class PlayerPage
         // <c>SetCursor</c> is per-queue, so the shape only reaches the screen if the window under the pointer
         // belongs to this thread — measured, not assumed, because WinUI created that window. The OS may also
         // simply not have recomputed yet: it asks for a shape when the pointer moves, and the pointer hiding
-        // is precisely the pointer not moving, so the same reading is taken again after each of three ways of
+        // is precisely the pointer not moving, so the same reading is taken again after each of two ways of
         // making it ask without moving anything, in order of how little they disturb.
         //
         // Printed, and asserted about nothing. <c>GetCursorInfo</c> answers for the desktop, and on this
@@ -627,17 +662,17 @@ public sealed partial class PlayerPage
             // stricter reading of the two — it is the state a hand that never moved would be looking at.
             var gone = ScreenHasNoCursor();
 
-            // Cheapest first: put the pointer where it already is. Costs nothing if it works, and both the
-            // event filter and the poll ignore a zero displacement, so the stillness being measured survives.
-            Native.SetCursorPos(at.X, at.Y);
-            Pump();
-            lines.Add($"同点重设后 系统 {Says()}，线程形状={Mine()}");
-
-            // A mouse event with a displacement of zero: the pointer stays put, the OS still goes through the
-            // whole 「who owns this point, what shape do they want」 round it does on a real move.
+            // The ask the whole hide rests on: the cursor put back at the point it already occupies, so the OS
+            // goes through the entire 「who owns this point, what shape do they want」 round it does on a real
+            // move while the pointer stays exactly where it is. Both the event filter and the poll ignore an
+            // unchanged position, so the stillness being measured survives it.
+            //
+            // This was two pokes until 2026-09-05 — a same-point SetCursorPos and a zero-displacement SendInput
+            // — and they are now one call, because the injection was measured to produce no message whatever:
+            // see Native.NudgeCursorState for the numbers.
             var sent = Native.NudgeCursorState();
             Pump();
-            lines.Add($"零位移注入{(sent ? string.Empty : "（发不出去）")}后 系统 {Says()}，线程形状={Mine()}");
+            lines.Add($"原地重设指针{(sent ? string.Empty : "（发不出去）")}后 系统 {Says()}，线程形状={Mine()}");
 
             // Straight to the source, and only when that window is ours: sent across threads this blocks
             // until the other one pumps, and a self-check that can hang is worse than one that skips a line.

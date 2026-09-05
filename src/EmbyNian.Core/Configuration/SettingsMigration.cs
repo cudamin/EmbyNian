@@ -26,7 +26,11 @@ public static class SettingsMigration
         if (root.ValueKind != JsonValueKind.Object) return NewDefaults();
 
         var version = ReadInt(root, "SchemaVersion") ?? 1;
-        var settings = version >= 2 ? ReadCurrent(json) : ReadLegacy(root, protector);
+
+        // Repair before anything reads the result: every step below — the version upgrades and
+        // Normalize — walks into settings.Playback, settings.Video and the lists, and a document
+        // holding a JSON null for one of them deserializes to a real null there.
+        var settings = Repair(version >= 2 ? ReadCurrent(json) : ReadLegacy(root, protector));
 
         // v2 stored the track languages as two typed-in priority strings. v3 keeps the subtitle
         // languages as an ordered multi-select and the audio language as a single choice, so the old
@@ -131,6 +135,82 @@ public static class SettingsMigration
         return Normalize(settings);
     }
 
+    /// <summary>
+    /// Puts back anything the document said was <c>null</c>. Every section and every list here has a
+    /// property initialiser, but <c>"Playback": null</c> in the file overwrites that initialiser with a
+    /// real null — the deserializer sets what the JSON says.
+    /// <para>
+    /// <b>Without this, such a file stops the app from launching at all.</b> <see cref="Normalize"/> reads
+    /// <c>settings.Playback.MarkWatchedPercent</c> two dozen lines in and throws a
+    /// <see cref="NullReferenceException"/>, which is not one of the exceptions <see cref="SettingsStore"/>
+    /// treats as a corrupt file — so the backup, the quarantine and the fall back to defaults were all
+    /// skipped and the window never appeared. A hand-edited settings.json is a case this file already takes
+    /// seriously (see <see cref="Normalize"/>'s summary); this is the same case one step earlier.
+    /// </para>
+    /// <para>
+    /// Repairing rather than rejecting, because the rest of the file is still the user's: a null
+    /// <c>Playback</c> section costs the playback defaults, not the server list and the saved token.
+    /// </para>
+    /// <para>
+    /// <b>Two boundaries, both deliberate.</b> A list that came back null becomes an empty list rather than
+    /// the shipped default: <c>null</c> and <c>[]</c> are indistinguishable once deserialized, and 「一个都
+    /// 不选」 is a legitimate answer for every list here. And a null <em>field</em> inside a section — a
+    /// server whose <c>Url</c> is null — is not repaired at all; that would mean listing every string
+    /// property of every settings class, a list nothing keeps in step with new fields. Those land in
+    /// <see cref="SettingsStore"/>'s corrupt-file path instead, which is why that catch is as wide as it is.
+    /// </para>
+    /// </summary>
+    private static AppSettings Repair(AppSettings settings)
+    {
+        if (settings.Mpv is null) settings.Mpv = new MpvSettings();
+        if (settings.Playback is null) settings.Playback = new PlaybackSettings();
+        if (settings.Video is null) settings.Video = new VideoSettings();
+        if (settings.Audio is null) settings.Audio = new AudioSettings();
+        if (settings.Shaders is null) settings.Shaders = new ShaderAutomationSettings();
+        if (settings.Ui is null) settings.Ui = new UiSettings();
+
+        if (settings.Playback.AudioLanguages is null) settings.Playback.AudioLanguages = [];
+        if (settings.Playback.SubtitleLanguages is null) settings.Playback.SubtitleLanguages = [];
+        if (settings.Audio.PassthroughCodecs is null) settings.Audio.PassthroughCodecs = [];
+        if (settings.Shaders.AnimeKeywords is null) settings.Shaders.AnimeKeywords = [];
+
+        // A list may also hold nulls — `"Servers": [null]` — and one of those is an entry nothing can be
+        // read off. Dropped rather than replaced with a blank: a profile with no URL and no account is not
+        // a server anybody can pick, and Normalize would go on to name it 「Emby 服务器」.
+        if (settings.Servers is null) settings.Servers = [];
+        settings.Servers.RemoveAll(server => server is null);
+
+        foreach (var server in settings.Servers)
+        {
+            if (server.Accounts is null) server.Accounts = [];
+            server.Accounts.RemoveAll(account => account is null);
+        }
+
+        if (settings.Ui.HomeRows is null) settings.Ui.HomeRows = [];
+        settings.Ui.HomeRows.RemoveAll(row => row is null);
+
+        if (settings.Ui.Sort is null) settings.Ui.Sort = new(StringComparer.Ordinal);
+        if (settings.Ui.Filters is null) settings.Ui.Filters = new(StringComparer.Ordinal);
+        if (settings.Ui.Views is null) settings.Ui.Views = new(StringComparer.Ordinal);
+
+        // Only these two: Views holds an enum, so a null value there is a JsonException on the way in —
+        // which SettingsStore already treats as a corrupt file.
+        DropNullValues(settings.Ui.Sort);
+        DropNullValues(settings.Ui.Filters);
+
+        return settings;
+    }
+
+    /// <summary>
+    /// Drops the keys whose value came back null. A library id pointing at nothing is not a remembered
+    /// choice, and the pages that read these dictionaries expect the object to be there.
+    /// </summary>
+    private static void DropNullValues<T>(Dictionary<string, T> map) where T : class
+    {
+        foreach (var key in map.Where(entry => entry.Value is null).Select(entry => entry.Key).ToList())
+            map.Remove(key);
+    }
+
     /// <summary>Clamps anything a hand-edited file could put out of range.</summary>
     public static AppSettings Normalize(AppSettings settings)
     {
@@ -198,6 +278,14 @@ public static class SettingsMigration
         settings.Audio.Channels = Choice(MpvOutputOptions.Channels, settings.Audio.Channels);
         settings.Audio.DynamicRange = Choice(MpvOutputOptions.DynamicRange, settings.Audio.DynamicRange);
         settings.Audio.VolumeNormalize = Choice(MpvOutputOptions.VolumeNormalizers, settings.Audio.VolumeNormalize);
+
+        // 音频输出设备没有目录可比（存的是一串 GUID），可 mpv 自己那一项 auto 要归到空串上。设置里那一行提供的是
+        // 「跟随系统默认设备」，存的就是空串，而 auto 已经不在下拉里了（AudioDeviceCatalogue.Selectable）——
+        // 留着它的话这一行会走 Options 的「设置文件中的值」兜底分支，显示成「auto（设置文件中的值，这台机器上没
+        // 找到）」，一句不实的话：auto 恰恰是永远找得到的那一个。0.0.1 那个版本的下拉里还并排放着英文的
+        // 「Autoselect device」，点过它的设置文件里就存着这个值，所以这不是假想的状态。
+        if (string.Equals(settings.Audio.Device, AudioDeviceCatalogue.AutoDevice, StringComparison.OrdinalIgnoreCase))
+            settings.Audio.Device = "";
         settings.Playback.SubtitleCodepage = Choice(MpvOutputOptions.SubtitleCodepages, settings.Playback.SubtitleCodepage);
         settings.Playback.SubtitleColor = Choice(MpvOutputOptions.SubtitleColors, settings.Playback.SubtitleColor);
         settings.Playback.SubtitleBorderSize = Choice(MpvOutputOptions.SubtitleBorders, settings.Playback.SubtitleBorderSize);

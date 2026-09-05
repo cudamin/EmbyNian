@@ -8,7 +8,7 @@ namespace EmbyNian.Shell.Views;
 /// <para>
 /// <c>UIElement.ProtectedCursor</c> 是 protected 的，只有派生类碰得到，所以要它就得有自己的类型。十几行代码换来
 /// 的是「鼠标停在画面上不自动隐藏」那件老账真正的修法：指针压在 XAML 内容上时，屏上那只光标由框架的输入管线画，
-/// 界面线程上的 <c>SetCursor</c>／<c>ShowCursor</c>／窗口类光标／零位移注入一概不在那条路上（<see
+/// 界面线程上的 <c>SetCursor</c>／<c>ShowCursor</c>／窗口类光标一概不在那条路上（<see
 /// cref="Windowing.HostWindow.BlankInputCursor"/> 记着真片子日志里的证据）。
 /// </para>
 /// <para>

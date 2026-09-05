@@ -275,6 +275,43 @@ internal static class ItemMenuTests
             Assert.Equal("某片", DownloadPlan.FileName(film, null));
         });
 
+        Test("下载：容器名认不出来就当没有后缀，跑不出下载目录", () =>
+        {
+            // 服务器答的容器名是它说什么就是什么，而后缀是直接拼在文件名后头的 —— 名字那一半有 Safe() 挡着
+            // 分隔符，容器这一半从前一个字都没检查过。一个 `..\..\x` 就能让影片写到下载目录外面去，而那一头
+            // 的 File.Move 是 overwrite: true。
+            var film = new EmbyItem { Id = "m1", Name = "某片", Type = EmbyItemType.Movie };
+            const string root = @"D:\视频\EmbyNian";
+
+            foreach (var hostile in (string[])[@"..\..\outside", "../../outside", "mkv/../x", "mkv:zone", "a b", "toolongextension", ""])
+            {
+                var name = DownloadPlan.FileName(film, new MediaSource { Container = hostile });
+
+                Assert.Equal("某片", name, $"认不出来的容器名「{hostile}」不该变成后缀");
+
+                var full = Path.GetFullPath(Path.Combine(root, name));
+                Assert.True(
+                    full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal),
+                    $"落点必须还在下载目录里，实际是 {full}");
+            }
+
+            // 正常的那几种照旧认：一串里取头一个，大小写归一。
+            Assert.Equal("某片.mkv", DownloadPlan.FileName(film, new MediaSource { Container = "MKV,mka" }));
+            Assert.Equal("某片.mp4", DownloadPlan.FileName(film, new MediaSource { Container = " mp4 " }));
+        });
+
+        Test("下载：路径里的后缀也走同一条规矩", () =>
+        {
+            var film = new EmbyItem { Id = "m1", Name = "某片", Type = EmbyItemType.Movie };
+
+            // 路径这一支本来就有「最多八个字母数字」这条，容器那一支现在和它共用一份。
+            Assert.Equal("某片.mkv", DownloadPlan.FileName(film, new MediaSource { Path = @"\\nas\tv\Show.mkv" }));
+            Assert.Equal(
+                "某片.mp4",
+                DownloadPlan.FileName(film, new MediaSource { Path = @"\\nas\tv\Show.verylongsuffix", Container = "mp4" }),
+                "路径上那个后缀不合规矩时退到容器，而不是原样拼上去");
+        });
+
         Test("下载：名字里 Windows 不认的字符换掉，连着的空白并成一个", () =>
         {
             var film = new EmbyItem { Id = "m1", Name = "谁?: 那个/人 <上>", Type = EmbyItemType.Movie };

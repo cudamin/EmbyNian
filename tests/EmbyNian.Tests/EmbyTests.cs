@@ -305,14 +305,43 @@ internal static class EmbyTests
             Assert.Contains("SortOrder=Descending", query);
         });
 
-        Test("查询：搜索只找可播放的类型", () =>
+        Test("查询：全服务器搜索只找可播放的类型", () =>
         {
-            var query = ItemQuery.Search("芙莉莲", 0, 40).ToQueryString();
+            var query = new ItemQuery
+            {
+                SearchTerm = "芙莉莲",
+                Recursive = true,
+                IncludeItemTypes = ItemQuery.SweptTypes,
+                StartIndex = 0,
+                Limit = 40
+            }.ToQueryString();
 
             Assert.Contains("Recursive=true", query);
-            Assert.Contains("IncludeItemTypes=Movie%2CSeries%2CEpisode", query);
+            Assert.Contains("IncludeItemTypes=Movie%2CSeries%2CEpisode%2CVideo", query);
             Assert.Contains("SearchTerm=", query);
             Assert.DoesNotContain("芙莉莲", query, "搜索词必须转义");
+        });
+
+        // 从前这是三份名单：ItemQuery.Search 那个工厂（五种，含音乐视频，全项目只有这条测试在用）、
+        // ItemQuery.CreditedTypes（五种，含音乐视频，演职人员那一格在用）、以及媒体库视图模型里搜索那一支手写
+        // 的四种（不含音乐视频，注释写着为什么）。工厂那份已经删掉，剩下两处并成 SweptTypes。这一条不去比第二
+        // 份四个名字的抄本 —— 那样只是把「两处说法不一致」换成「三处」；比的是这份名单和外壳「哪些类型要藏起来」
+        // 那句话，也就是当初真正错掉的那件事。
+        Test("查询：全服务器扫过的类型里不许有外壳要藏的", () =>
+        {
+            Assert.Equal(4, ItemQuery.SweptTypes.Count, "四种：电影、剧集、单集、未识别的视频");
+
+            foreach (var type in ItemQuery.SweptTypes)
+                Assert.False(EmbyItemType.IsMusic(type), $"{type} 是外壳要藏的类型，不该出现在全库扫描里");
+
+            Assert.True(EmbyItemType.IsMusic(EmbyItemType.MusicVideo),
+                "上面那一条的意义全靠这句话 —— 音乐视频确实算音乐，所以它被排除在外不是偶然");
+            Assert.False(ItemQuery.SweptTypes.Contains(EmbyItemType.MusicVideo),
+                "音乐视频是外壳要藏的类型，不该出现在全库扫描里");
+
+            foreach (var type in ItemQuery.SweptTypes)
+                Assert.True(EmbyItemType.IsPlayable(type) || type == EmbyItemType.Series,
+                    $"{type} 既不能播也不是剧集，全库扫描要它干什么");
         });
 
         Test("查询：已看/未看过滤器", () =>

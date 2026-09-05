@@ -213,6 +213,78 @@ internal static class SessionTests
             Assert.Equal(0, transport.Count("Users/AuthenticateByName"), "没密码就不该去试登录");
         });
 
+        Test("退出登录赶上悄悄重登：那一次登录作废，会话不许被复活", () =>
+        {
+            // 时间窗是「重登那一趟还没回来」，而那一刻界面线程是空着的 —— 用户按得到「退出登录」。少了这一条
+            // 判断，迟到的登录成功会 Adopt 一个新 client：外壳已经回到登录页，而这个对象手上还捏着一个能用的
+            // 令牌，之后每个请求都照旧通。
+            var transport = new StubTransport()
+                .Answer("Views", Views)
+                .Answer("System/Info/Public", PublicInfo)
+                .Answer("Users/AuthenticateByName", SignedIn)
+                .Sequence("Items", (HttpStatusCode.Unauthorized, ""), (HttpStatusCode.OK, OneItem));
+
+            var (session, server, account) = Signed(transport);
+            account.ProtectedPassword = PassthroughSecretProtector.Instance.Protect("pw");
+            account.RememberPassword = true;
+
+            Assert.True(Wait(session.TryRestoreAsync(server, account, CancellationToken.None)));
+
+            var announced = 0;
+            session.SignedOut += (_, _) => announced++;
+            transport.When("Users/AuthenticateByName", session.SignOut);
+
+            Assert.Throws<EmbyTokenExpiredException>(() => Wait(session.ExecuteAsync(
+                (client, token) => client.GetLatestAsync(null, 10, token), CancellationToken.None)));
+
+            Assert.False(session.IsSignedIn, "退出登录之后，迟到的登录成功不许把会话接回来");
+            Assert.Equal(1, announced, "「已退出登录」只该喊一次 —— 再喊一次外壳会把登录页重建一遍");
+            Assert.Equal(1, transport.Count("Items"), "这次登录作废，被 401 打断那一趟就不该重试");
+        });
+
+        Test("退出登录赶上重登、用户又已重新登录：迟到的重登作废，也不许把新会话踢下去", () =>
+        {
+            // 同一个时间窗再深一层：重登还在路上，用户退出登录，**紧接着又登录成功**，全赶在重登那一趟的
+            // 响应回来之前。这时迟到的重登两头都不能沾 —— 装上它自己的 client 是把用户新建的会话顶掉，
+            // 按老办法置空 client 顶掉的是用户那一个；照「续不上」扔异常则把人家刚建好的会话踢回登录页。
+            // 它只能什么都不装，让调用方拿用户现在的 client 把原来那个请求重试一遍。
+            var transport = new StubTransport()
+                .Answer("Views", Views)
+                .Answer("System/Info/Public", PublicInfo)
+                .Answer("Users/AuthenticateByName", SignedIn)
+                .Sequence("Items", (HttpStatusCode.Unauthorized, ""), (HttpStatusCode.OK, OneItem));
+
+            var (session, server, account) = Signed(transport);
+            account.ProtectedPassword = PassthroughSecretProtector.Instance.Protect("pw");
+            account.RememberPassword = true;
+
+            Assert.True(Wait(session.TryRestoreAsync(server, account, CancellationToken.None)));
+
+            var announced = 0;
+            session.SignedOut += (_, _) => announced++;
+
+            // When 钩子在重登的响应送达之前插手，里面同步跑完「退出登录 + 重新登录」；里面那一趟登录会
+            // 再进同一个钩子，靠这面旗跳过，不然就是自己套自己。
+            var once = 0;
+            transport.When("Users/AuthenticateByName", () =>
+            {
+                if (Interlocked.Exchange(ref once, 1) == 1) return;
+
+                session.SignOut();
+                session.SignInAsync(server, account, "pw", account.Username, true, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            });
+
+            var items = Wait(session.ExecuteAsync(
+                (client, token) => client.GetLatestAsync(null, 10, token), CancellationToken.None));
+
+            Assert.True(items is { Count: 1 }, "重试要落到用户新登录的那个 client 上，一次就成");
+            Assert.True(session.IsSignedIn, "用户刚建立的会话不许被迟到的重登踢掉");
+            Assert.True(account.HasSavedToken, "退出之后重新登录写下的令牌要还在 —— 作废的是重登那一趟，不是他");
+            Assert.Equal(1, announced, "退出登录那一声照旧只喊一次");
+            Assert.Equal(2, transport.Count("Items"), "401 那一趟，加上换到新 client 之后的重试");
+        });
+
         Test("令牌中途过期：重登也被拒，就不再原地打转", () =>
         {
             var transport = new StubTransport()
@@ -343,101 +415,5 @@ internal static class SessionTests
         }
 
         return task.GetAwaiter().GetResult();
-    }
-
-    /// <summary>
-    /// 一个按 URL 片段回话的假传输层，并且数着每个片段被问了几次 —— 「这一趟只问了一次」正是这一批要钉的。
-    /// 认不出来的 URL 一律 404，所以路径写错会当场现形，而不是悄悄走到某个兜底分支上。
-    /// </summary>
-    private sealed class StubTransport : HttpMessageHandler
-    {
-        private readonly Dictionary<string, (HttpStatusCode Status, string Body)> _answers = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, Queue<(HttpStatusCode Status, string Body)>> _sequences = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, Exception> _throws = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, int> _asked = new(StringComparer.Ordinal);
-        private readonly object _gate = new();
-
-        public int Total
-        {
-            get
-            {
-                lock (_gate) return _asked.Values.Sum();
-            }
-        }
-
-        public StubTransport Answer(string fragment, string body)
-        {
-            _answers[fragment] = (HttpStatusCode.OK, body);
-            return this;
-        }
-
-        public StubTransport Fail(string fragment, HttpStatusCode status)
-        {
-            _answers[fragment] = (status, "");
-            return this;
-        }
-
-        /// <summary>
-        /// 一串答案，一次消耗一个，最后一个之后就一直是它。「第一次 401、重登之后第二次成功」这种形状只有这样才编
-        /// 得出来，而那正是令牌中途过期的样子。
-        /// </summary>
-        public StubTransport Sequence(string fragment, params (HttpStatusCode Status, string Body)[] answers)
-        {
-            _sequences[fragment] = new Queue<(HttpStatusCode, string)>(answers);
-            _answers[fragment] = answers[^1];
-            return this;
-        }
-
-        /// <summary>
-        /// 这一路根本答不上来 —— 超时、DNS 查不到、拒接。这几种在传输层就抛，不是一个带状态码的回应，所以它们走的
-        /// 是 <c>EmbyHttp</c> 里另一条翻译路径。
-        /// </summary>
-        public StubTransport Throw(string fragment, Exception error)
-        {
-            _throws[fragment] = error;
-            return this;
-        }
-
-        public int Count(string fragment)
-        {
-            lock (_gate) return _asked.TryGetValue(fragment, out var count) ? count : 0;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri?.ToString() ?? "";
-
-            foreach (var (fragment, error) in _throws)
-            {
-                if (!url.Contains(fragment, StringComparison.Ordinal)) continue;
-
-                lock (_gate) _asked[fragment] = Count(fragment) + 1;
-
-                // 调用方自己取消的那一档要照实抛出去 —— EmbyHttp 靠 cancellationToken.IsCancellationRequested
-                // 分辨「超时」和「他取消了」，而这里正是那两种唯一的分岔口。
-                cancellationToken.ThrowIfCancellationRequested();
-                return Task.FromException<HttpResponseMessage>(error);
-            }
-
-            foreach (var (fragment, answer) in _answers)
-            {
-                if (!url.Contains(fragment, StringComparison.Ordinal)) continue;
-
-                lock (_gate) _asked[fragment] = Count(fragment) + 1;
-
-                var reply = answer;
-                if (_sequences.TryGetValue(fragment, out var queue) && queue.Count > 0) reply = queue.Dequeue();
-
-                return Task.FromResult(new HttpResponseMessage(reply.Status)
-                {
-                    Content = new StringContent(reply.Body, Encoding.UTF8, "application/json")
-                });
-            }
-
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
-            {
-                Content = new StringContent($"假传输层没有为 {url} 准备答案", Encoding.UTF8, "text/plain")
-            });
-        }
     }
 }

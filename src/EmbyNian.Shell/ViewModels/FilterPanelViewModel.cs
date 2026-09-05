@@ -79,7 +79,26 @@ public sealed partial class FilterPanelViewModel : ObservableObject
         _preset = preset;
         _serverVersion = serverVersion;
         _lookup = lookup;
-        _cancel ??= new CancellationTokenSource();
+
+        // 取消过的那个不能再用：Dismiss() 只取消、不换新的，而取消是一去不回的 —— 接着开的话每一次
+        // Lookup 拿到的都是一个已经取消的令牌，三张按需去问服务器的表（类型、标签、年份）会一直是空的，
+        // 日志里一句话都没有。**今天到不了这个状态**（面板和这个视图模型跟着 LibraryPage 一起生一起死，
+        // 而那一页没有开缓存），所以这几行是一颗地雷的拆除，不是修一个看得见的病：哪天有人给 LibraryPage
+        // 加上 NavigationCacheMode，那件事就会以「筛选面板打不开了」的样子回来。
+        if (_cancel is null || _cancel.IsCancellationRequested)
+        {
+            _cancel = new CancellationTokenSource();
+
+            // 缓存里要扔的只有被取消连坐、没跑完的那几份；已经拿到答案的照旧有效 —— 令牌只把关请求的
+            // 开始，管不着已经回来的结果，留着它们下一回开面板还能少跑几趟。
+            foreach (var key in _requests
+                .Where(entry => !entry.Value.IsCompletedSuccessfully)
+                .Select(entry => entry.Key)
+                .ToList())
+            {
+                _requests.Remove(key);
+            }
+        }
 
         Build();
     }

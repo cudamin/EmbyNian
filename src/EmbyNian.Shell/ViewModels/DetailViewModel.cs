@@ -409,13 +409,26 @@ public sealed partial class DetailViewModel : PageViewModel
     public double BodyMinHeight => DetailHero.BodyHeight(Viewport, HeroHeight);
 
     /// <summary>
-    /// 头图底下那段压暗的尾部的下限 —— 见 <see cref="DetailHero.TailHeight"/>：尾部先补满第一屏减掉带子那么多，
-    /// 于是正文那张纸从第一屏的下沿起，「拉大或拉小窗口」都不会把那道不透明的边提到剧照上。撑到
-    /// <see cref="DetailHero.TailCap"/> 就不再撑，富余的高度归纸 —— 不然剧情说明底下那段空画面会跟着窗口一起长
-    /// （「下面越改空位越大」）。过了那个顶之后纸就跟着窗口一像素一像素地露出来，中间没有台阶（「拉大窗口之后
-    /// 下面突然冒出一大截」）。
+    /// 纸面上沿的线，视口坐标 —— 阈值窗口的高（<see cref="DetailHero.PaperLineFor"/>，跟着显示器走：4K 屏
+    /// 1080、2K 屏 900、1080p 屏 768）减掉标题栏加面包屑那截，由页面量好送进来（<c>DetailPage.SyncPaperLine</c>）。
+    /// 0 是「还没送到」：那一档不撑尾部（<see cref="DetailHero.TailHeight"/> 的约定），纸面回到由内容定的位置。
+    /// <para>
+    /// 换显示器、换主题（面包屑那截的高跟着字号走）、窗口换尺寸都会让这个数变，所以由视图在那几处显式重写，
+    /// 而不是算出来的属性。
+    /// </para>
     /// </summary>
-    public double TailMinHeight => DetailHero.TailHeight(Viewport, HeroHeight, HeroArt);
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
+    public partial double PaperLine { get; set; }
+
+    /// <summary>
+    /// 头图底下那段压暗的尾部的下限 —— 见 <see cref="DetailHero.TailHeight"/>：尾部先补满第一屏减掉带子那么多，
+    /// 于是正文那张纸从第一屏的下沿起，「拉大或拉小窗口」都不会把那道不透明的边提到剧照上。撑到纸面那条线
+    /// （<see cref="PaperLine"/>，窗口高过阈值）就不再撑，富余的高度归纸 —— 不然剧情说明底下那段空画面会跟着
+    /// 窗口一起长（「下面越改空位越大」）。过了那条线之后纸就跟着窗口一像素一像素地露出来，中间没有台阶
+    /// （「拉大窗口之后下面突然冒出一大截」）。
+    /// </summary>
+    public double TailMinHeight => DetailHero.TailHeight(Viewport, HeroHeight, HeroArt, PaperLine);
 
     /// <summary>
     /// 正文那张纸自己的下限 —— 见 <see cref="DetailHero.PaperHeight"/>：滚到底的那一屏只能有纸。

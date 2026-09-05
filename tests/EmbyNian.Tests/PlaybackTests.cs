@@ -1751,6 +1751,30 @@ internal static class PlaybackTests
             Assert.Equal(AudioDeviceCatalogue.AutoDevice, new AudioDevice("auto", "  ").Label);
         });
 
+        Test("音频设备：mpv 自己那一项 auto 不进下拉", () =>
+        {
+            // audio-device-list 第一项永远是 mpv 自己的 auto（英文「Autoselect device」），而设置里那一行最前面
+            // 已经有中文的「跟随系统默认设备」（存的是空串）—— 留着它就是一个行为两行、一中一英挨着，而点了英文
+            // 那个存下来的是 auto 而不是空串，下次进来这一行就显示成「Autoselect device」。
+            //
+            // 这一条钉的是 Core 里这个判断本身。它从前在设置页的视图模型里，而单测进不到外壳那个程序集，自检也
+            // 只是把下拉项数打印出来 —— 那一句被谁删掉，四道闸门一关都不会红。
+            var selectable = AudioDeviceCatalogue.Selectable(
+            [
+                new AudioDevice("auto", "Autoselect device"),
+                new AudioDevice("wasapi/abc", "扬声器 (Realtek)"),
+                new AudioDevice("wasapi/def", "耳机")
+            ]);
+
+            Assert.Equal(2, selectable.Count, "只去掉 auto 那一项，别的一个都不许少");
+            Assert.Equal("wasapi/abc", selectable[0].Name, "剩下的保持 mpv 报的顺序");
+            Assert.Equal("wasapi/def", selectable[1].Name);
+
+            // 大小写不敢赌 mpv 永远小写；空列表是常态（找不到 libmpv、没装 WASAPI 输出、机器上没声卡）。
+            Assert.Equal(0, AudioDeviceCatalogue.Selectable([new AudioDevice("AUTO", "")]).Count);
+            Assert.Equal(0, AudioDeviceCatalogue.Selectable([]).Count);
+        });
+
         Test("计划：截图有落点、有格式、有片名加时间码的模板", () =>
         {
             // 截图这个功能从前一条都没有，理由是「--no-config 之下没有 screenshot-directory，文件会落到 exe
@@ -1773,7 +1797,9 @@ internal static class PlaybackTests
         Test("截图模板：片名进得去，非法文件名字符进不去", () =>
         {
             // 时间码用 %wH.%wM.%wS 而不是 mpv 现成的 %p：后者是 HH:MM:SS，而冒号在 Windows 文件名里非法。
-            Assert.Equal("攻壳机动队 %wH.%wM.%wS", MpvBaseline.ScreenshotTemplate("攻壳机动队"));
+            // 末尾那个序号非有不可：mpv 不覆盖已经存在的截图，而只有模板里带序号时它才会另找一个名字 —— 少了它，
+            // 同一帧（暂停时时间码一秒都不走）连截两张，第二张干脆不存，而屏上照旧写「已保存到…」。
+            Assert.Equal("攻壳机动队 %wH.%wM.%wS-%02n", MpvBaseline.ScreenshotTemplate("攻壳机动队"));
 
             // 服务器上的剧名带 : / ? 是常事，而这三个都不许进文件名。走的是「下载到设备」那同一份规矩
             // （DownloadPlan.Safe），所以这个仓库里只有一个答案说「文件名里能放什么」。
@@ -1783,14 +1809,15 @@ internal static class PlaybackTests
                 Assert.False(messy.Contains(illegal), $"模板里不许出现 {illegal}");
             }
 
-            // 百分号得自己再挡一次：Safe() 没理由管它，可 mpv 会把它读成一个自己的格式符。
-            Assert.False(MpvBaseline.ScreenshotTemplate("100%纯度 %n").Contains("%n"),
+            // 百分号得自己再挡一次：Safe() 没理由管它，可 mpv 会把它读成一个自己的格式符。片名里抄来的 %n 要变成
+            // 一个普通的 n，而模板末尾那个序号是我们自己加的 —— 两者不能混。
+            Assert.True(MpvBaseline.ScreenshotTemplate("100%纯度 %n").StartsWith("100纯度 n "),
                 "片名里的百分号不许变成 mpv 的格式符");
             Assert.True(MpvBaseline.ScreenshotTemplate("100%纯度").StartsWith("100纯度"));
 
             // 片名一个字都不剩的时候不能落成一个只有时间码的名字，也不能是 mpv 默认那个 mpv-shotNNNN。
-            Assert.Equal("EmbyNian %wH.%wM.%wS", MpvBaseline.ScreenshotTemplate("  ..  "));
-            Assert.Equal("EmbyNian %wH.%wM.%wS", MpvBaseline.ScreenshotTemplate(null));
+            Assert.Equal("EmbyNian %wH.%wM.%wS-%02n", MpvBaseline.ScreenshotTemplate("  ..  "));
+            Assert.Equal("EmbyNian %wH.%wM.%wS-%02n", MpvBaseline.ScreenshotTemplate(null));
         });
 
         Test("计划：轨道建议按偏好语言给出默认值", () =>

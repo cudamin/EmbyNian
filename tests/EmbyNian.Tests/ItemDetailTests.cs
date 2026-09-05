@@ -846,39 +846,43 @@ internal static class ItemDetailTests
             Assert.Equal(0d, DetailHero.BodyHeight(-40, DetailHero.ArtHeight));
         });
 
-        // 「下方的媒体信息等，要往下滑才能看到」加上「拉大或拉小窗口会导致背景图被遮挡」—— 同一处。富余的高度
+        // 「窗口大于1600*900后开始显示下方的黑边，小于1600*900时海报占满整个窗口」—— 同一处。富余的高度
         // 从纸挪给尾部：尾部里那一叠顶对齐，撑高它只是在剧情说明底下多出一段同色的画面；撑高纸是把那道不透明的
-        // 边往上提，也就是压在剧照上的那块板子。
-        Test("尾部：撑到封顶就停，纸露出来的量一像素一像素地长", () =>
+        // 边往上提，也就是压在剧照上的那块板子。线跟着显示器走（PaperLineFor），这里按 2K 那一档（视口 832）算。
+        Test("尾部：撑到纸面那条线为止，纸露出来的量一像素一像素地长", () =>
         {
-            // 矮窗口上尾部就是「补满第一屏」那个数：带子加尾部正好一屏，纸的上沿落在视口下沿上。写死的那一版
-            // （纸的上沿只由内容定）在这些窗口上碰巧看不见，拉高就露出三百像素的板子。
-            Assert.Equal(140d, DetailHero.TailHeight(600, DetailHero.ArtHeight, true));
+            const double line = 832d;
+
+            // 线以内的窗口上尾部就是「补满第一屏」那个数：带子加尾部正好一屏，纸的上沿落在视口下沿上。写死的那
+            // 一版（纸的上沿只由内容定）在这些窗口上碰巧看不见，拉高就露出三百像素的板子。
+            Assert.Equal(140d, DetailHero.TailHeight(600, DetailHero.ArtHeight, true, line));
 
             // 集页的带子按里面那一叠实测给，尾部跟着变宽：传进来的是那一次真正的带高，不是两档之一。
-            Assert.Equal(172d, DetailHero.TailHeight(600, 428, true));
+            Assert.Equal(172d, DetailHero.TailHeight(600, 428, true, line));
 
             // 半像素的那一下四舍五入到整像素，不留半像素的缝。
-            Assert.Equal(241d, DetailHero.TailHeight(700.6, DetailHero.ArtHeight, true));
+            Assert.Equal(241d, DetailHero.TailHeight(700.6, DetailHero.ArtHeight, true, line));
 
-            // 封顶之前带子加尾部都不短于一屏 —— 也就是纸的上沿不在第一屏里。460 的带子上这一档一直到 740。
-            foreach (var viewport in new double[] { 400, 600, 730, 740 })
+            // 到线之前带子加尾部都不短于一屏 —— 也就是纸的上沿不在第一屏里。460 的带子上这一档一直到 832。
+            foreach (var viewport in new double[] { 400, 600, 730, 740, 831, 832 })
             {
                 var band = DetailHero.ArtHeight;
-                Assert.Equal(Math.Max(viewport, band), band + DetailHero.TailHeight(viewport, band, true));
+                Assert.Equal(Math.Max(viewport, band), band + DetailHero.TailHeight(viewport, band, true, line));
             }
 
-            // 「下面越改空位越大」：撑起来的是剧情说明底下那一段压暗的空画面，所以封的是尾部自己 —— 撑到 TailCap
-            // 就不再撑，多出来的高度全归正文那张纸。于是那段空画面不管窗口多高都是同一个长度，而第一屏底下多出来
-            // 的是 媒体信息 那一叠内容。上一版封的是第一屏（860 → 900 → 1000 三档），那正是空地跟着窗口长的原因。
-            foreach (var viewport in new double[] { 741, 795, 856, 900, 1004, 1314, 1400 })
+            // 过线之后封在尾部身上：撑到「线减带子」为止，多出来的高度全归正文那张纸。于是那段透着画面的暗区
+            // 不管窗口多高都是同一个长度，而第一屏底下多出来的是 媒体信息 那一叠内容。上一版封的是第一屏
+            // （860 → 900 → 1000 三档），那正是空地跟着窗口长的原因。
+            foreach (var viewport in new double[] { 833, 900, 1004, 1314, 1400 })
             {
-                Assert.Equal(DetailHero.TailCap, DetailHero.TailHeight(viewport, DetailHero.ArtHeight, true));
+                Assert.Equal(line - DetailHero.ArtHeight,
+                    DetailHero.TailHeight(viewport, DetailHero.ArtHeight, true, line));
             }
 
-            // 封在尾部身上，带子矮的页面就早一点露出纸来 —— 这是认下的代价，不是漏算：集页的带子只有两百来，
-            // 要把同一个第一屏补满就得撑出更长的一段空画面，而那正是这一条要修的东西。
-            Assert.Equal(DetailHero.TailCap, DetailHero.TailHeight(795, 222, true));
+            // 带子矮的页面在同一条线上：过线之前一样铺满第一屏（哪怕要撑出比带子高得多的尾部），过线之后一起在
+            // 线上停 —— 纸的上沿在哪个页面上都从同一个视口高度开始，这正是「统一」要的答案。
+            Assert.Equal(573d, DetailHero.TailHeight(795, 222, true, line));
+            Assert.Equal(line - 222d, DetailHero.TailHeight(900, 222, true, line));
 
             // 「拉大窗口之后下面突然冒出一大截」：纸露出来的量只许跟着窗口一像素一像素地长，不许有台阶。上一版
             // 在这儿留了一道 120 的门槛（露不够那么多就当封顶不存在），于是视口过 860 的那一下纸整块跳上来 120。
@@ -887,24 +891,42 @@ internal static class ItemDetailTests
             for (var viewport = 500d; viewport <= 1400d; viewport++)
             {
                 var reveal = viewport - DetailHero.ArtHeight
-                    - DetailHero.TailHeight(viewport, DetailHero.ArtHeight, true);
+                    - DetailHero.TailHeight(viewport, DetailHero.ArtHeight, true, line);
 
                 Assert.True(reveal >= revealed - 0.001, $"视口 {viewport} 上纸反而缩回去了（{revealed} → {reveal}）");
                 Assert.True(reveal - revealed <= 1.001, $"视口 {viewport} 上纸一下多露了 {reveal - revealed}");
                 revealed = reveal;
             }
 
-            // 分界因此落在「补满第一屏正好等于封顶」上，而且两边接得上：740 那一下纸的上沿还在第一屏下沿，
-            // 741 起每高一像素多露一像素。
-            Assert.Equal(0d, 740 - DetailHero.ArtHeight - DetailHero.TailHeight(740, DetailHero.ArtHeight, true));
-            Assert.Equal(1d, 741 - DetailHero.ArtHeight - DetailHero.TailHeight(741, DetailHero.ArtHeight, true));
+            // 分界因此落在那条线上，而且两边接得上：832 那一下纸的上沿还在第一屏下沿，833 起每高一像素多露一像素。
+            Assert.Equal(0d, line - DetailHero.ArtHeight - DetailHero.TailHeight(line, DetailHero.ArtHeight, true, line));
+            Assert.Equal(1d, line + 1 - DetailHero.ArtHeight - DetailHero.TailHeight(line + 1, DetailHero.ArtHeight, true, line));
 
             // 没有剧照的条目上不撑：背后没有图可露，撑起来只是一段空黑，而 媒体信息 却要多滚一屏才看得到。
-            Assert.Equal(0d, DetailHero.TailHeight(887, DetailHero.PlainHeight, false));
+            Assert.Equal(0d, DetailHero.TailHeight(887, DetailHero.PlainHeight, false, line));
+
+            // 显示器还没读到（线是 0）也不撑：纸面回到由内容定的位置，等线到了再来。
+            Assert.Equal(0d, DetailHero.TailHeight(887, DetailHero.ArtHeight, true, 0));
 
             // 窗口矮到带子都放不下、以及还没量到视口的那一下，同 BodyHeight：给 0，该滚动。
-            Assert.Equal(0d, DetailHero.TailHeight(300, DetailHero.ArtHeight, true));
-            Assert.Equal(0d, DetailHero.TailHeight(0, DetailHero.ArtHeight, true));
+            Assert.Equal(0d, DetailHero.TailHeight(300, DetailHero.ArtHeight, true, line));
+            Assert.Equal(0d, DetailHero.TailHeight(0, DetailHero.ArtHeight, true, line));
+        });
+
+        // 「显示器分别为4k时设定为1920×1080 2k时1600×900 1080p时1366×768」—— 阈值窗口跟着显示器走。
+        // 判的是显示器这张屏有多大，给的是窗口多高开始露黑边；宽度不参与（黑边是竖着的事，带鱼屏按高算）。
+        Test("纸面那条线：跟着显示器分三档", () =>
+        {
+            Assert.Equal(1080d, DetailHero.PaperLineFor(3840, 2160));
+            Assert.Equal(1080d, DetailHero.PaperLineFor(4096, 2160));
+            Assert.Equal(900d, DetailHero.PaperLineFor(2560, 1440));
+            Assert.Equal(900d, DetailHero.PaperLineFor(3440, 1440));
+            Assert.Equal(768d, DetailHero.PaperLineFor(1920, 1080));
+            Assert.Equal(768d, DetailHero.PaperLineFor(1366, 768));
+            Assert.Equal(768d, DetailHero.PaperLineFor(1920, 1200));
+
+            // 显示器读不到就是 0：调用方那一线不撑，纸面回到由内容定的位置。
+            Assert.Equal(0d, DetailHero.PaperLineFor(0, 0));
         });
 
         Test("正文：纸自己至少一整屏", () =>

@@ -450,6 +450,13 @@ public sealed partial class ShellPage : UserControl, IShellActions
         _window = window;
         Player.Attach(_services.GetRequiredService<PlayerViewModel>(), this, window);
 
+        // 详情页要认显示器多大（纸面上沿那条线跟着显示器走，见 DetailHero.PaperLineFor），挂在这一个事件上
+        // 而不是 OpenDetail 里：后退/前进重建的详情页实例不走 OpenDetail，却一样要从外壳领窗口。
+        ContentFrame.Navigated += (_, _) =>
+        {
+            if (ContentFrame.Content is DetailPage detail) detail.AttachWindow(window);
+        };
+
         // The arrows may well have been measured already, before there was a window to tell.
         ReportTitleBarHole();
     }

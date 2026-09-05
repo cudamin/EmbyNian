@@ -198,6 +198,30 @@ public static class ItemMenu
         IsCatalogue(item) ? [new(ItemCommand.Delete, "删除")] : [];
 
     /// <summary>
+    /// 删除之前那一句问话：标题和正文。
+    /// <para>
+    /// <b>这是整个客户端上唯一一句「按下去就没得恢复」的话</b>（<c>DELETE /Items/{id}</c> 连服务器磁盘上的文件
+    /// 一起删），而它从前只活在外壳的代码后置里、一条测试都碰不到。2026-09-05 搬进 Core，钉的是三件事：话里
+    /// 说清了删的是什么（片名）、说清了删到哪一步（磁盘上的文件、不可撤销），以及**一叠单集要多一句**。
+    /// </para>
+    /// <para>
+    /// 那多出来的一句不是客套：在一部剧或者一季上按下删除，删掉的是里面每一集，而标题里的「剧」「季」两个字
+    /// 说不出这件事 —— 少了它，一次点击和用户以为的事情差着二十四个文件。
+    /// </para>
+    /// <para>
+    /// 类型名问不出来时退到「条目」而不是留空：标题会变成「删除这个」，读起来像句子断在半截上。
+    /// </para>
+    /// </summary>
+    public static (string Title, string Body) DeletePrompt(EmbyItem item)
+    {
+        var what = item.DisplayTypeName is { Length: > 0 } kind ? kind : "条目";
+
+        return ($"删除这个{what}",
+            $"将从媒体库中删除「{item.Name}」，并把它在服务器磁盘上的文件一起删掉。此操作无法撤销。"
+                + (IsEpisodeSet(item) ? "里面的所有单集都会被删除。" : ""));
+    }
+
+    /// <summary>
     /// 把几段拼成一张菜单，段与段之间摆一条分隔线。空的段整段跳过 —— 不然屏上就是两条挨着的线，或者一条
     /// 开头、结尾的线，而那正是「哪几条不出现」这件事唯一会留下的痕迹。
     /// </summary>

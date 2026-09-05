@@ -264,6 +264,13 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// The 音频输出设备 drop-down: 「跟随系统默认设备」 first, then whatever mpv found. Passing an empty list is
     /// the normal first-frame state and the permanent state on a machine where libmpv could not enumerate —
     /// the row is still usable, it just offers the default and whatever the settings file names.
+    /// <para>
+    /// mpv's own <c>auto</c> entry never reaches here: <see cref="AudioDeviceCatalogue.Selectable"/> drops it,
+    /// in Core, where a unit test can hold it down. Leaving it in put the same behaviour on the list twice —
+    /// 「跟随系统默认设备」 and, right underneath, mpv's English 「Autoselect device」. Two rows for one answer is
+    /// bad enough; picking the second one also stored <c>auto</c> instead of the empty string, so the row
+    /// afterwards read 「Autoselect device」 to somebody who believed he had chosen the system default.
+    /// </para>
     /// </summary>
     private (List<SettingChoice> Choices, SettingChoice? Selected) DeviceChoices(
         AudioSettings audio,
@@ -322,7 +329,22 @@ public sealed partial class SettingsViewModel : PageViewModel
         new("播放器", "播放器", "选择内置播放器或外部 mpv。外部模式需要填写可执行文件路径。",
         [
             Choice("播放后端", Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value),
-            PathBox("mpv.exe 路径", "mpv.exe 路径", () => Settings.Mpv.ExecutablePath, value => Settings.Mpv.ExecutablePath = value),
+
+            // 这句说明是这一行存在的第二个理由，而且它是安全性的一句实话，不是介绍。外部 mpv.exe 那条路把
+            // X-Emby-Token 写在 --http-header-fields-append= 上，也就是写在另一个进程的命令行上 —— 任务管理器、
+            // 任何进程工具、崩溃转储都读得到。内置 libmpv 不经过命令行（那个头是在进程里用 mpv_set_option_string
+            // 设的），所以默认后端没有这件事。
+            //
+            // 为什么是「把话说出来」而不是「把代码改掉」：两条真修法各有代价，而且这台机器上一条都验不了（验证
+            // 时不许真实播放，本机也没装外部 mpv.exe）。写一份临时 mpv 配置文件传 header 等于把令牌明文落到磁盘
+            // 上，正好抵掉「settings.json 泄了也不是一个可用凭据」这个 DPAPI 换来的性质；改成先连上 IPC 再注入
+            // （--idle=once 加 loadfile）安全上最干净，但会长出第二条起播路径、一种新的卡死方式（通道建不起来
+            // 就永远待机），而且「关掉 IPC」那一档就没法播了。三条路里只有这一条是验得住的，而它把决定交回给
+            // 真正要走这条路的人 —— 这个后端本来就要用户自己填路径才用得上。要真修，选 IPC 那条。
+            PathBox("mpv.exe 路径", "mpv.exe 路径", () => Settings.Mpv.ExecutablePath, value => Settings.Mpv.ExecutablePath = value,
+                "只有「外部 mpv.exe」这个后端要它。走这个后端时，访问令牌会出现在 mpv 的进程命令行上（任务管理器、"
+                    + "进程工具、崩溃转储都读得到）；内置播放器不经过命令行，没有这件事。"),
+
             Toggle("启用 IPC 进度通道", "关闭后服务器无法获得精确播放位置", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value)
         ]);
 
@@ -442,7 +464,8 @@ public sealed partial class SettingsViewModel : PageViewModel
                 },
                 "video-sync、interpolation"),
             Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = value,
-                "0 表示使用 mpv 默认值", "demuxer-max-bytes"),            Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value,
+                "0 表示使用 mpv 默认值", "demuxer-max-bytes"),
+            Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value,
                 "dither、dither-depth", "色深抖动，和上面的插值无关：落到显示器位深时撒一层噪声，免得渐变上出现色带"),
             Mpv("去色带", MpvOutputOptions.DebandModes, () => video.Deband, value => video.Deband = value,
                 "deband", "大倍数档（放大 2.2 倍以上）改用链里的 hdeband，那时候这一项不生效"),
