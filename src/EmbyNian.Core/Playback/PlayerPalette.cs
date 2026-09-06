@@ -15,10 +15,11 @@ namespace EmbyNian.Playback;
 /// <c>PlayerPage.PaintPalette</c> 照这张表生成，XAML 里只留空的画刷壳子。
 /// </para>
 /// <para>
-/// <b>这一整套故意不跟主题走。</b>浮层压的是画面，不是应用的那张面 —— 六套主题里那套浅色（晴昼）一换上来，
-/// 跟着主题走的墨色就变成深字压在近黑的罩子上，一个字都读不出来。所以 <c>PlayerPage.xaml</c> 上写着
+/// <b>这一整套故意不跟主题走。</b>浮层压的是画面，不是应用的那张面 —— 一套浅色主题（从前那套「晴昼」）一换
+/// 上来，跟着主题走的墨色就变成深字压在近黑的罩子上，一个字都读不出来。所以 <c>PlayerPage.xaml</c> 上写着
 /// <c>RequestedTheme="Dark"</c>，颜色也在这里写死，和 <c>Palette.xaml</c> 末尾那两支
-/// <c>EgOnScrim*</c> 是同一个道理。
+/// <c>EgOnScrim*</c> 是同一个道理。**「晴昼」2026-09-05 按用户的话删了，这条理由没跟着走** —— 删掉的是那套
+/// 数据，不是「浮层不该跟主题走」这句话（见 <c>UiThemes</c> 的类注释）。
 /// </para>
 /// </summary>
 public static class PlayerPalette
@@ -63,8 +64,6 @@ public static class PlayerPalette
 
     private static ThemeColor White { get; } = ThemeColor.Rgb(0xFF, 0xFF, 0xFF);
 
-    private static ThemeColor Black { get; } = ThemeColor.Rgb(0, 0, 0);
-
     /// <summary>
     /// 画刷键 → 颜色。<c>PlayerPage.PaintPalette</c> 逐条走这张表，把 XAML 里同名那支空画刷填上。
     /// <para>
@@ -108,10 +107,10 @@ public static class PlayerPalette
         ("PlayerTrackFillBrush", White.WithAlpha(0x59)),
         ("PlayerLineBrush", White.WithAlpha(0x26)),
 
-        // 暂停/播放 那一秒的角标：白图标加一圈同形的黑描边 —— 「不要黑色的圆形边框，只要白色的三角形」，
-        // 而白三角压在白墙上本来是看不见的。
-        ("PlayerPulseBrush", White),
-        ("PlayerPulseRimBrush", Black.WithAlpha(0x59))
+        // 暂停/播放 那一秒的角标：一层纯白，别的什么都没有 —— 「不要黑色的圆形边框，只要白色的三角形」去掉了
+        // 底板，「点击画面暂停和开始的图标要纯白色，去掉灰色」（2026-09-05）去掉了它背后那圈半透明黑描边。
+        // 代价写在 PulseArt 的类注释里：一帧几乎全白的画面上这颗徽标看不见。
+        ("PlayerPulseBrush", White)
     ];
 
     /// <summary>

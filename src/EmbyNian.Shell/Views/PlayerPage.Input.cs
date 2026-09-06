@@ -63,6 +63,11 @@ public sealed partial class PlayerPage
     /// within a frame or two.</item>
     /// <item>Once the cursor is hidden, any move at all brings it back. Asking for two pixels before
     /// answering a hand reaching for the mouse is the one failure here a user would notice.</item>
+    /// <item>Except this player's own ask. Hiding the cursor ends with one physical pixel out and straight
+    /// back through the real input queue, because that is the only thing the framework hears
+    /// (<see cref="Native.NudgeCursorState"/>) — and without this clause the leg out satisfies the rule above
+    /// and the player wakes itself the instant it goes to sleep. Recognised by distance <em>and</em> by the
+    /// window since the ask went out; see <see cref="NudgeEcho"/>.</item>
     /// </list>
     /// <para>
     /// The part under the pointer counts as movement of its own: a control appearing beneath a still hand is
@@ -76,8 +81,16 @@ public sealed partial class PlayerPage
         var dx = first ? double.PositiveInfinity : Math.Abs(point.X - _pointerAt.X);
         var dy = first ? double.PositiveInfinity : Math.Abs(point.Y - _pointerAt.Y);
 
+        // The echo of our own ask, which is a pixel out and a pixel back inside a couple of frames. The
+        // anchor is deliberately left where it was, so the stillness this ask is part of goes on being
+        // counted from the moment the hand actually stopped.
+        var echo = _cursorHidden
+                   && Now - _nudgedAt <= NudgeEcho
+                   && dx < PointerNoise
+                   && dy < PointerNoise;
+
         var real = part != _pointerOn
-                   || (dx > 0 || dy > 0) && (_cursorHidden || dx >= PointerNoise || dy >= PointerNoise);
+                   || (dx > 0 || dy > 0) && !echo && (_cursorHidden || dx >= PointerNoise || dy >= PointerNoise);
 
         if (!real)
         {

@@ -101,7 +101,6 @@
         <SolidColorBrush x:Key="PlayerTrackFillBrush" />
         <SolidColorBrush x:Key="PlayerLineBrush" />
         <SolidColorBrush x:Key="PlayerPulseBrush" />
-        <SolidColorBrush x:Key="PlayerPulseRimBrush" />
 
         <!-- Top to bottom in both cases, and the stops come from the table too: the transport's scrim
              deepens downward and the title strip's fades out, so a direction reversed by an edit here
@@ -142,9 +141,9 @@
              third of the picture's height that is a wireframe drawing, not an icon. The fallback font is the
              same story. What the request asks for is the solid shapes underneath.
 
-             The geometry is not here. It is PulseArt's, in Core, and PlayerPage builds four PathGeometry
-             objects from it — see PaintPulseArt for the two reasons, one of which is not a preference: a
-             WinUI Geometry cannot be attached to two Paths at once, and this badge is two layers of one shape.
+             The geometry is not here. It is PulseArt's, in Core, because 「what does this come to on screen once
+             it is stroked」 is arithmetic and the answer has to match the outer box of the glyph it replaced, or
+             the badge quietly changes size — see PaintPulseArt.
 
              Drawn rather than stroked-and-filled by hand: each shape is a plain straight-line polygon and the
              rounded corners come from the stroke's round joins, so there is not one arc to compute. That is
@@ -253,13 +252,12 @@
                  「返回左括号 Esc 右括号」 while still telling a keyboard user the shortcut exists. -->
             <Button
                 x:Name="BackButton"
+                x:Uid="PlayerPage_BackButton"
                 Command="{x:Bind ViewModel.StopCommand}"
                 Style="{StaticResource OsdButtonStyle}"
                 VerticalAlignment="Top"
                 Margin="0,10,0,0"
-                AutomationProperties.Name="返回"
-                AutomationProperties.AcceleratorKey="Esc"
-                ToolTipService.ToolTip="返回（Esc）">
+                AutomationProperties.AcceleratorKey="Esc">
                 <FontIcon Glyph="&#xE72B;" Style="{StaticResource OsdGlyphStyle}" />
             </Button>
 
@@ -297,20 +295,18 @@
                      and Space are all commands and all letters a font name is spelled with. -->
                 <AutoSuggestBox
                     x:Name="FontBox"
+                x:Uid="PlayerPage_FontBox"
                     Width="188"
                     Margin="0,0,6,0"
                     VerticalAlignment="Top"
-                    AutomationProperties.Name="字幕字体"
                     GotFocus="OnFontBoxFocus"
                     ItemsSource="{x:Bind ViewModel.SubtitleFont.Matches, Mode=OneWay}"
                     KeyDown="OnFontBoxKeyDown"
                     LostFocus="OnFontBoxBlur"
-                    PlaceholderText="字幕字体"
                     QuerySubmitted="OnFontQuerySubmitted"
                     SuggestionChosen="OnFontSuggestionChosen"
                     TextChanged="OnFontBoxTextChanged"
-                    TextMemberPath="Name"
-                    ToolTipService.ToolTip="字幕字体：输入任意一段名字搜索，回车或点一下就换，正在播的片子立刻生效">
+                    TextMemberPath="Name">
                     <AutoSuggestBox.QueryIcon>
                         <SymbolIcon Symbol="Find" />
                     </AutoSuggestBox.QueryIcon>
@@ -347,15 +343,14 @@
                      had slipped out of PlayerPalette's 「the overlay does not follow the theme」 rule. -->
                 <ToggleButton
                     x:Name="StatsButton"
+                x:Uid="PlayerPage_StatsButton"
                     Background="Transparent"
                     BorderThickness="0"
-                    Content="统计"
-                    CornerRadius="6"
+                    CornerRadius="{StaticResource EgCardCornerRadius}"
                     FontFamily="{StaticResource EgUiFontFamily}"
                     Foreground="{StaticResource PlayerInkBrush}"
                     IsChecked="{x:Bind ViewModel.StatsOpen, Mode=TwoWay}"
-                    Padding="10,6"
-                    ToolTipService.ToolTip="播放统计" />
+                    Padding="10,6" />
 
                 <!-- 窗口置顶. 「置顶开启后不要改变按键颜色，绘制一个置顶开启图标来替换」.
 
@@ -421,14 +416,13 @@
                 VerticalAlignment="Top">
                 <Button
                     x:Name="MinimizeButton"
+                x:Uid="PlayerPage_MinimizeButton"
                     Click="OnMinimizeWindow"
                     Background="Transparent"
                     BorderThickness="0"
                     Padding="0"
                     Width="46"
-                    Height="32"
-                    AutomationProperties.Name="最小化"
-                    ToolTipService.ToolTip="最小化">
+                    Height="32">
                     <FontIcon
                         FontSize="10"
                         Foreground="{StaticResource PlayerInkBrush}"
@@ -438,14 +432,13 @@
                 </Button>
                 <Button
                     x:Name="MaximizeButton"
+                x:Uid="PlayerPage_MaximizeButton"
                     Click="OnToggleMaximizeWindow"
                     Background="Transparent"
                     BorderThickness="0"
                     Padding="0"
                     Width="46"
-                    Height="32"
-                    AutomationProperties.Name="最大化或还原"
-                    ToolTipService.ToolTip="最大化或还原">
+                    Height="32">
                     <FontIcon
                         x:Name="MaximizeGlyph"
                         FontSize="10"
@@ -456,14 +449,13 @@
                 </Button>
                 <Button
                     x:Name="CloseButton"
+                x:Uid="PlayerPage_CloseButton"
                     Click="OnCloseWindow"
                     Background="Transparent"
                     BorderThickness="0"
                     Padding="0"
                     Width="46"
-                    Height="32"
-                    AutomationProperties.Name="关闭"
-                    ToolTipService.ToolTip="关闭">
+                    Height="32">
                     <FontIcon
                         FontSize="10"
                         Foreground="{StaticResource PlayerInkBrush}"
@@ -495,7 +487,7 @@
             Background="{StaticResource PlayerStatsBrush}"
             BorderBrush="{StaticResource PlayerEdgeFaintBrush}"
             BorderThickness="1"
-            CornerRadius="10"
+            CornerRadius="{StaticResource EgCardCornerRadius}"
             IsHitTestVisible="False"
             Visibility="{x:Bind ViewModel.StatsVisibility, Mode=OneWay}">
             <Grid x:Name="StatsRows" ColumnSpacing="16" RowSpacing="3">
@@ -577,11 +569,11 @@
 
                 <Slider
                     x:Name="VolumeSlider"
+                x:Uid="PlayerPage_VolumeSlider"
                     Height="300"
                     HorizontalAlignment="Center"
-                    AutomationProperties.Name="音量"
                     IsThumbToolTipEnabled="False"
-                    Maximum="{x:Bind ViewModel.VolumeMaximum}"
+                    Maximum="{x:Bind ViewModel.VolumeMaximum, Mode=OneWay}"
                     Minimum="0"
                     Orientation="Vertical"
                     StepFrequency="1"
@@ -597,13 +589,12 @@
 
                 <Button
                     x:Name="MuteButton"
+                x:Uid="PlayerPage_MuteButton"
                     Click="OnToggleMute"
                     Style="{StaticResource OsdButtonStyle}"
                     Padding="10"
                     MinWidth="44"
-                    AutomationProperties.Name="静音"
-                    AutomationProperties.AcceleratorKey="M"
-                    ToolTipService.ToolTip="静音（M）">
+                    AutomationProperties.AcceleratorKey="M">
                     <FontIcon x:Name="MuteGlyph" Glyph="{x:Bind ViewModel.SoundGlyph, Mode=OneWay}" Style="{StaticResource OsdGlyphStyle}" FontSize="18" />
                 </Button>
             </StackPanel>
@@ -717,9 +708,9 @@
 
                     <Slider
                         x:Name="SeekSlider"
+                x:Uid="PlayerPage_SeekSlider"
                         Margin="0,-1,0,0"
                         Background="Transparent"
-                        AutomationProperties.Name="播放进度"
                         Maximum="1000"
                         Minimum="0"
                         StepFrequency="1"
@@ -777,29 +768,26 @@
                 <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                     <Button
                         x:Name="PreviousButton"
+                x:Uid="PlayerPage_PreviousButton"
                         Command="{x:Bind ViewModel.PreviousEpisodeCommand}"
                         Style="{StaticResource OsdButtonStyle}"
-                        AutomationProperties.Name="上一集"
-                        ToolTipService.ToolTip="上一集"
                         Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
                         <FontIcon Glyph="&#xE892;" Style="{StaticResource OsdGlyphStyle}" />
                     </Button>
                     <Button
                         x:Name="PlayButton"
+                x:Uid="PlayerPage_PlayButton"
                         Command="{x:Bind ViewModel.TogglePauseCommand}"
                         Style="{StaticResource OsdButtonStyle}"
                         Padding="12,6"
-                        AutomationProperties.Name="播放或暂停"
-                        AutomationProperties.AcceleratorKey="Space"
-                        ToolTipService.ToolTip="播放/暂停（空格）">
+                        AutomationProperties.AcceleratorKey="Space">
                         <FontIcon x:Name="PlayGlyph" Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" Style="{StaticResource OsdGlyphStyle}" FontSize="20" />
                     </Button>
                     <Button
                         x:Name="NextButton"
+                x:Uid="PlayerPage_NextButton"
                         Command="{x:Bind ViewModel.NextEpisodeCommand}"
                         Style="{StaticResource OsdButtonStyle}"
-                        AutomationProperties.Name="下一集"
-                        ToolTipService.ToolTip="下一集"
                         Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
                         <FontIcon Glyph="&#xE893;" Style="{StaticResource OsdGlyphStyle}" />
                     </Button>
@@ -821,36 +809,39 @@
                 <StackPanel Grid.Column="2" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                     <Button
                         x:Name="EpisodeButton"
-                        Content="选集"
+                x:Uid="PlayerPage_EpisodeButton"
                         Style="{StaticResource OsdButtonStyle}"
-                        ToolTipService.ToolTip="本季剧集"
                         Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
                         <Button.Flyout>
                             <MenuFlyout x:Name="EpisodeMenu" Placement="Top" Opening="OnEpisodeMenuOpening" />
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="AudioButton" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="音轨" ToolTipService.ToolTip="音轨">
+                    <Button x:Name="AudioButton"
+                x:Uid="PlayerPage_AudioButton" Style="{StaticResource OsdButtonStyle}">
                         <FontIcon Glyph="&#xE8D6;" Style="{StaticResource OsdGlyphStyle}" />
                         <Button.Flyout>
                             <MenuFlyout x:Name="AudioMenu" Placement="Top" Opening="OnAudioMenuOpening" />
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="SubtitleButton" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="字幕" ToolTipService.ToolTip="字幕">
+                    <Button x:Name="SubtitleButton"
+                x:Uid="PlayerPage_SubtitleButton" Style="{StaticResource OsdButtonStyle}">
                         <FontIcon Glyph="&#xED1E;" Style="{StaticResource OsdGlyphStyle}" />
                         <Button.Flyout>
                             <MenuFlyout x:Name="SubtitleMenu" Placement="Top" Opening="OnSubtitleMenuOpening" />
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="播放速度" ToolTipService.ToolTip="播放速度">
+                    <Button x:Name="SpeedButton"
+                x:Uid="PlayerPage_SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource OsdButtonStyle}">
                         <Button.Flyout>
                             <MenuFlyout x:Name="SpeedMenu" Placement="Top" Opening="OnSpeedMenuOpening" />
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="MoreButton" Style="{StaticResource OsdButtonStyle}" AutomationProperties.Name="更多" ToolTipService.ToolTip="更多">
+                    <Button x:Name="MoreButton"
+                x:Uid="PlayerPage_MoreButton" Style="{StaticResource OsdButtonStyle}">
                         <FontIcon Glyph="&#xE713;" Style="{StaticResource OsdGlyphStyle}" />
                         <Button.Flyout>
                             <MenuFlyout x:Name="MoreMenu" Placement="Top" Opening="OnMoreMenuOpening" />
@@ -859,11 +850,10 @@
 
                     <Button
                         x:Name="FullscreenButton"
+                x:Uid="PlayerPage_FullscreenButton"
                         Click="OnToggleFullscreen"
                         Style="{StaticResource OsdButtonStyle}"
-                        AutomationProperties.Name="全屏或退出全屏"
-                        AutomationProperties.AcceleratorKey="F"
-                        ToolTipService.ToolTip="全屏（F）">
+                        AutomationProperties.AcceleratorKey="F">
                         <FontIcon x:Name="FullscreenGlyph" Glyph="&#xE740;" Style="{StaticResource OsdGlyphStyle}" />
                     </Button>
                 </StackPanel>
@@ -908,17 +898,17 @@
 
              「不要黑色的圆形边框，只要白色的三角形就可以，然后再放大一些」 took away the dark plate and its
              hairline ring; 「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」 took away the
-             icon font as well. What is left is two drawn shapes — see PulsePauseGeometry above for the numbers
-             and for what was wrong with the glyphs. The one behind is the same geometry stroked more heavily,
-             which comes out as a 5-pixel rim hugging the shape rather than a plate the shape sits on, and it
-             is still here for the reason it was added: a white triangle over a white wall is otherwise not
-             there at all.
+             icon font as well; and 「点击画面暂停和开始的图标要纯白色，去掉灰色」 (2026-09-05) took away the last
+             thing that was not white — the same geometry stroked more heavily behind it, which came out as a
+             5-pixel grey rim hugging the shape. What is left is one white shape, and the cost of that is
+             recorded rather than argued with: over a nearly white frame it is not visible at all. See
+             PulsePauseGeometry above for the numbers and for what was wrong with the glyphs.
 
              The Canvas must keep its Width and Height. A Canvas does not measure its children, so dropping
              them measures the whole badge as 0×0 — nothing on screen, and every other reading still correct.
-             It is a Canvas rather than a Grid so that both paths draw from (0,0) and are therefore concentric
-             by construction: inside a Grid each would be centred on its own DesiredSize and the two would sit
-             five pixels apart. -->
+             It is a Canvas rather than a Grid so the path draws from (0,0) and is therefore centred by
+             construction: inside a Grid it would be centred on its own DesiredSize instead, which is what the
+             box's own margin (PulseArt.Box) is there to leave room for. -->
         <Border
             x:Name="PulseBadge"
             HorizontalAlignment="Center"
@@ -932,12 +922,6 @@
                 <ScaleTransform x:Name="PulseScale" ScaleX="1" ScaleY="1" />
             </Border.RenderTransform>
             <Canvas x:Name="PulseArtBox" Width="136" Height="136">
-                <Path
-                    x:Name="PulseRim"
-                    Fill="{StaticResource PlayerPulseRimBrush}"
-                    Stroke="{StaticResource PlayerPulseRimBrush}"
-                    StrokeThickness="22"
-                    StrokeLineJoin="Round" />
                 <Path
                     x:Name="PulseShape"
                     Fill="{StaticResource PlayerPulseBrush}"

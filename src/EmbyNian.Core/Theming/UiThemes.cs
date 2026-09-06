@@ -3,9 +3,28 @@ namespace EmbyNian.Theming;
 /// <summary>
 /// 全部主题，和把五个色值推成一整张角色表的那段推导。
 /// <para>
-/// 「前端界面太丑了，重绘一个，然后生成几套主题」里的后半句就是这个文件。六套：四套换了色相的深色、一套
-/// 给 OLED 的纯黑、一套浅色。挑六套而不是两套，是因为浅色那一套会把深色主题里所有「反正压在黑底上」的
-/// 侥幸全部暴露出来 —— 一套主题跑不通的地方，通常是外壳写死了一个颜色。
+/// 「前端界面太丑了，重绘一个，然后生成几套主题」里的后半句就是这个文件。五套，全是深色：四套换了色相的，
+/// 加一套给 OLED 的纯黑。
+/// </para>
+/// <para>
+/// **原来还有第六套「晴昼」（<c>daylight</c>，唯一的浅色），2026-09-05 按用户一句「删掉晴昼主题」整个删了。**
+/// 跟着它走的三件事写在这儿，免得下一个窗口各自去猜：
+/// </para>
+/// <para>
+/// 一、**推导里那条浅色的路留着**（<c>Make</c> 的 <c>dark</c> 参数，和它带出来的那几个三目）。现在没人再传
+/// <see langword="false"/>，但它不是该顺手清掉的死代码：<c>UiTheme.IsDark</c> 在外壳里有十几处读者（元素树的
+/// <c>ElementTheme</c>、窗口边框的深浅、几个对话框、设置页那排色板），删掉那条路等于把「再加一套浅色」从改六行
+/// 数据变成改十几个文件。
+/// </para>
+/// <para>
+/// 二、树里还有二十来处注释拿「晴昼那套浅色下会读不出来」当理由，解释某个颜色为什么写死成压在图上那档浅墨
+/// （<c>EgOnScrim*</c>、<c>PlayerPalette</c>、几处 <c>OnScrim</c> 开关）。**那些理由照旧成立**，只是眼下没有一套
+/// 主题演示得出来了。**代价也在这儿**：浅色那一套曾经是「外壳里有没有漏下写死的深色」唯一的照妖镜（写死的 hex
+/// 在四套深色下都看着没事），删掉它之后这类毛病没有东西逮得住。要重新有，把下面那六行数据加回来即可。
+/// </para>
+/// <para>
+/// 三、设置文件里存着 <c>daylight</c> 的老用户不会卡住：<c>SettingsMigration.Normalize</c> 把认不出来的 id 写回
+/// <see cref="DefaultId"/>，那条路由 SettingsTests 钉着。
 /// </para>
 /// </summary>
 public static class UiThemes
@@ -14,7 +33,7 @@ public static class UiThemes
     public const string DefaultId = "emby-dark";
 
     /// <summary>
-    /// 顺序就是设置里下拉框的顺序：默认的在最前，浅色的在最后。
+    /// 顺序就是设置里那排色板的顺序：默认的在最前。
     /// </summary>
     public static IReadOnlyList<UiTheme> All { get; } =
     [
@@ -34,11 +53,12 @@ public static class UiThemes
             window: "#17181A", surface: "#1F2124", surfaceAlt: "#282B2F", text: "#F0F1F3", accent: "#E0A22B"),
 
         Make("plum", "紫夜", "偏紫的深色面配淡紫强调色。", dark: true,
-            window: "#15121C", surface: "#1D1926", surfaceAlt: "#262032", text: "#F1EDF8", accent: "#A97BF0"),
+            window: "#15121C", surface: "#1D1926", surfaceAlt: "#262032", text: "#F1EDF8", accent: "#A97BF0")
 
-        // 唯一的浅色。绿比深色那套暗一档：白字压在 #52B54B 上只有 2.6:1，压在这个上是 5.1:1。
-        Make("daylight", "晴昼", "浅色：白面、深字，强调色压暗一档好让白字读得出来。", dark: false,
-            window: "#F1F3F6", surface: "#FFFFFF", surfaceAlt: "#E8EBEF", text: "#15181D", accent: "#2E7D32")
+        // 这里原来还有第六套「晴昼」（daylight，唯一的浅色：#F1F3F6 底、#FFFFFF 面、#E8EBEF 次面、#15181D 字、
+        // #2E7D32 绿 —— 绿比深色那套暗一档，白字压在 #52B54B 上只有 2.6:1，压在那个上是 5.1:1），2026-09-05 按
+        // 用户一句「删掉晴昼主题」删掉了。要加回来就是照上面的样子再写一行 dark: false 的数据，别的都不用动；
+        // 为什么留着那条浅色的推导，见类注释。
     ];
 
     /// <summary>下拉框和自检都从这里取默认那套，不各自写一遍 id。</summary>
@@ -87,8 +107,9 @@ public static class UiThemes
             Text = ink,
             TextDim = ink.Mix(win, 0.36),
 
-            // 0.52 不是随手挑的：浅色那套退到 0.55 时，最淡的字压在窗口底上只有 2.88:1，掉到 3:1 以下。
-            // 这个数字由 ThemeTests 的对比度那条盯着，改大就会红。
+            // 0.52 不是随手挑的，是当年被浅色那套逼出来的：晴昼退到 0.55 时，最淡的字压在窗口底上只有 2.88:1，
+            // 掉到 3:1 以下，被 ThemeTests 的对比度那条逮住。**晴昼 2026-09-05 删掉了，所以这个数现在没有测试
+            // 守着**（剩下五套深色的这一档都宽裕得多，往上调一截也不会红）—— 要动它，先把那套浅色加回来。
             TextFaint = ink.Mix(win, 0.52),
             TextOnAccent = OnAccent(acc),
 

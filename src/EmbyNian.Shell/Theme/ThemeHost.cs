@@ -17,14 +17,21 @@ namespace EmbyNian.Shell;
 /// 两个字典都写：<c>Application.RequestedTheme</c> 在 App.xaml 里钉死在 Dark（它只能在内容加载前设，
 /// 之后改不了），而浅色主题靠的是把元素树的 <c>ElementTheme</c> 翻成 Light。翻过去之后那棵树按 Light
 /// 字典解析，而 <c>DiagnosticsViewModel.Resolve</c> 和 <c>PlayerPage.BrushFor</c> 两处故意按应用级
-/// 解析（也就是 Default 字典）。两边写成同一套颜色，这个分歧就不存在了。HighContrast 不碰 —— 那份接的是
+/// 解析（也就是 Dark 字典）。两边写成同一套颜色，这个分歧就不存在了。HighContrast 不碰 —— 那份接的是
 /// 系统自己的颜色，Windows 开了高对比度时盖掉它正是最不该做的事。
 /// </para>
 /// </summary>
 public static class ThemeHost
 {
-    /// <summary>Palette.xaml 里那两份跟着主题走的字典。第三份 HighContrast 故意不在内。</summary>
-    private static readonly string[] Painted = ["Default", "Light"];
+    /// <summary>
+    /// Palette.xaml 里那两份跟着主题走的字典。第三份 HighContrast 故意不在内。
+    /// <para>
+    /// 第一份从前叫 <c>Default</c>，2026-09-05 按 <c>winui-design</c> 那条「只写 Light / Dark /
+    /// HighContrast，不要 Default」改成 <c>Dark</c>。改的不只是名字：<c>Default</c> 是「没有哪份字典对得上
+    /// 当前主题」时的兜底，写错一个键名会悄悄落到它身上还看着正常。
+    /// </para>
+    /// </summary>
+    private static readonly string[] Painted = ["Dark", "Light"];
 
     private static readonly ThemeColor White = ThemeColor.Rgb(0xFF, 0xFF, 0xFF);
     private static readonly ThemeColor Black = ThemeColor.Rgb(0, 0, 0);
@@ -227,7 +234,7 @@ public static class ThemeHost
     {
         foreach (var merged in Application.Current.Resources.MergedDictionaries)
         {
-            // 按 Source 认自己那份：XamlControlsResources 就并在旁边，它也带 Default 和 Light。
+            // 按 Source 认自己那份：XamlControlsResources 就并在旁边，它也带 Dark 和 Light。
             if (merged.Source is null ||
                 !merged.Source.ToString().EndsWith("Palette.xaml", StringComparison.OrdinalIgnoreCase))
                 continue;

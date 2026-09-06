@@ -10,77 +10,49 @@ namespace EmbyNian.Shell.Views;
 public sealed partial class ShellPage
 {
     /// <summary>标题栏那一排按键的样子，逻辑像素，量的是整排。</summary>
-    /// <param name="Ok">五颗都摆对了，排成一行，整排也在标题栏里。</param>
+    /// <param name="Ok">四颗都摆对了，排成一行，整排也在标题栏里。</param>
     internal sealed record TitleActionProbe(bool Ok, string Detail, double X, double Y, double Width, double Height);
 
     /// <summary>
-    /// 自检：侧边栏收起和展开时各量一次主页首屏。两档必须都完整放下继续观看，并且都不露出下一排媒体库。
-    /// 顺带对一遍锁定比例扣掉的那一条和现场那条窄条是不是同一个数。
+    /// 自检：主页首屏那两栏。**2026-09-06 从「收起和展开各量一次」变成量一次** —— 侧边栏删掉之后页宽只有一档，
+    /// 而从前那两档存在的全部理由就是「不管收起还是展开，都要看到完整的继续观看」。跟着走的还有那两句跨层对账
+    /// （标记里的 <c>CompactPaneLength</c> 对 Core 那个 <c>SideRail</c> 常数）：两边现在都没有这个数了。
+    /// <para>
+    /// 剩下的判据一条没松：图铺满大图那一块、上下不留底色，右栏贴着它、一样高、至少露出一张整卡，横排接在它
+    /// 下沿之后（<see cref="HomePage.FoldRead"/>）。顺带报一句「页宽就是客户区宽」—— 这句话从前是假的（要减掉
+    /// 侧边栏那 49），现在是真的，而它变假就说明谁又在页面左边塞了一列。
+    /// </para>
     /// </summary>
     internal (bool? Ok, string Detail) ProbeHomeFold()
     {
         if (Pages.Content is not HomePage home) return (false, "当前不是主页");
-        if (_window is null) return (false, "量不到主窗口的比例锁定状态");
-        if (!_window.BrowseFoldActive)
-            return (null, "窗口比例锁定当前未接管浏览窗口，跳过首屏边界读数");
+        if (_window is null) return (false, "量不到主窗口的形状");
+        if (!_window.BrowseFoldMeasurable)
+            return (null, "窗口比 16:9 还扁（或正在放片子／全屏／最大化），首屏边界这一读只报不判");
 
-        var paneWasOpen = Navigation.IsPaneOpen;
+        // HomeBanner 的 SizeChanged 会在这一轮布局里改高度，再走一轮让货架拿到最终坐标。
+        UpdateLayout();
+        home.UpdateLayout();
+        UpdateLayout();
 
-        try
-        {
-            (bool? Ok, string Detail, double Width, bool Open) Read(bool open)
-            {
-                Navigation.IsPaneOpen = open;
-                SyncPane();
+        var fold = home.FoldRead();
+        var width = home.ActualWidth;
+        var client = XamlRoot?.Size.Width ?? 0;
+        var detail = $"页宽 {width:0}：{fold.Detail}";
 
-                // HomeBanner 的 SizeChanged 会在这一轮布局里改高度，再走一轮让货架拿到最终坐标。
-                Navigation.UpdateLayout();
-                UpdateLayout();
-                home.UpdateLayout();
-                UpdateLayout();
-                var fold = home.FoldRead();
-                return (fold.Ok, fold.Detail, home.ActualWidth, Navigation.IsPaneOpen);
-            }
+        if (fold.Ok is null) return (null, detail);
 
-            var folded = Read(false);
-            var spread = Read(true);
-            var detail = $"收起（页宽 {folded.Width:0}）：{folded.Detail}；"
-                + $"展开（页宽 {spread.Width:0}）：{spread.Detail}";
-            if (folded.Ok is null || spread.Ok is null) return (null, detail);
+        var fullWidth = client > 0 && Math.Abs(width - client) <= 2;
 
-            var stateOk = !folded.Open && spread.Open;
-            var expected = Navigation.OpenPaneLength - Navigation.CompactPaneLength;
-            var difference = folded.Width - spread.Width;
-            var widthOk = folded.Width > 0 && spread.Width > 0 && Math.Abs(difference - expected) <= 2;
-
-            // 「计算比例时要排除侧边栏」：锁定比例扣掉的那一条就是收起来的窄条加它右边那道竖线，两个数都写在
-            // 标记里，而比例那一头握着的是 Core 的一个常数。所以这里拿现场对一遍 —— 标记里把 CompactPaneLength
-            // 改了，锁定的形状就悄悄错开一档，而屏幕上只是窗口宽了几十像素，谁也看不出来。顺带量一句「收起那
-            // 一档的页宽就是被锁的那一片」：那才是这条锁真正想说的话。
-            var rail = Navigation.CompactPaneLength + 1;
-            var lockRail = EmbyNian.Emby.HomeCarousel.SideRail;
-            var railOk = Math.Abs(rail - lockRail) < 0.5;
-            var client = XamlRoot?.Size.Width ?? 0;
-            var browseOk = client > 0 && Math.Abs(folded.Width - (client - rail)) <= 2;
-
-            return (folded.Ok == true && spread.Ok == true && stateOk && widthOk && railOk && browseOk,
-                detail + $"；两档宽差 {difference:0}（应约 {expected:0}）"
-                    + $"；侧边栏那一条 {rail:0}，比例扣的是 {lockRail}{(railOk ? "" : "（两个数对不上）")}"
-                    + $"；客户区宽 {client:0} 减掉它 = {client - rail:0}"
-                    + (browseOk ? "，正是收起那一档的页宽" : "，和收起那一档的页宽对不上"));
-        }
-        finally
-        {
-            Navigation.IsPaneOpen = paneWasOpen;
-            SyncPane();
-            UpdateLayout();
-        }
+        return (fold.Ok == true && fullWidth,
+            detail + $"；客户区宽 {client:0}"
+                + (fullWidth ? "，页面占满整宽（左边没有第二列）" : "，和页宽对不上（左边多了一列？）"));
     }
 
     /// <summary>
-    /// 把这一排按键的几种状态各摆一遍，量出来对一遍：折叠侧边栏、设置、搜索三颗任何时候都按得动；两头都走不
-    /// 动时两支箭头都在、都是暗的；能退不能进时只有返回亮；两样都能走又有两层路径时，两支箭头加面包屑那一行。
-    /// 侧边栏收放两档也各摆一遍，量整排让开了没有；顺带问一句现场：进来的时候侧边栏本来就该是收着的。
+    /// 把这一排按键的几种状态各摆一遍，量出来对一遍：设置、搜索两颗任何时候都按得动；两头都走不动时两支箭头
+    /// 都在、都是暗的；能退不能进时只有返回亮；两样都能走又有两层路径时，两支箭头加面包屑那一行。顺带量一句
+    /// 标签栏那一行在不在、账号那颗按钮贴不贴着右端。
     /// <para>
     /// 之所以要一个探针而不是直接看现场：后两颗由 <c>Frame.CanGoBack</c>、<c>Frame.CanGoForward</c> 和路径深度
     /// 决定，而前两件是框架自己算的，自检没法让它说某句话。<see cref="ApplyChrome"/> 把三件事变成参数，于是每
@@ -88,30 +60,31 @@ public sealed partial class ShellPage
     /// </para>
     /// <para>
     /// 量回来的矩形还有第二个用处：<c>ShellSelfCheck</c> 拿它和窗口留的那个洞对一遍。洞开错了地方在屏幕上
-    /// 完全看不出来，直到有人去点按键，结果把窗口拖走。
+    /// 完全看不出来，直到有人去点按键，结果把窗口拖走。**第 1 行不需要洞**（窗口只把最上面 32 像素算成标题栏），
+    /// 所以这个探针只管第 0 行那一排；标签栏点不点得动由「顶部标签栏」那一关问。
     /// </para>
     /// </summary>
     internal TitleActionProbe ProbeTitleActions()
     {
         var saved = _trail.ToArray();
-        var paneWasOpen = Navigation.IsPaneOpen;
 
         try
         {
             Windows.Foundation.Point At(FrameworkElement element) =>
                 element.TransformToVisual(this).TransformPoint(new Windows.Foundation.Point(0, 0));
 
-            // 顺序就是屏幕上从左到右的顺序：折叠、设置、搜索、后退、前进（需求 1）。
-            Button[] keys = [PaneButton, SettingsButton, SearchButton, BackButton, ForwardButton];
+            // 顺序就是屏幕上从左到右的顺序：设置、搜索、后退、前进（需求 1，折叠那一颗随侧边栏一起删了）。
+            Button[] keys = [SettingsButton, SearchButton, BackButton, ForwardButton];
 
-            // 前三颗跟去过哪儿无关，所以三种状态下都得亮着 —— 一颗跟着导航变暗的设置按键，是按不出设置窗口。
-            bool AlwaysOn() => PaneButton.IsEnabled && SettingsButton.IsEnabled && SearchButton.IsEnabled;
+            // 前两颗跟去过哪儿无关，所以三种状态下都得亮着 —— 一颗跟着导航变暗的设置按键，是按不出设置窗口。
+            bool AlwaysOn() => SettingsButton.IsEnabled && SearchButton.IsEnabled;
 
-            // 哪儿也走不动：五颗照旧站着，只是后两颗按不动 —— 会消失的按键会挪动旁边那些，而这一排的位置就是
+            // 哪儿也走不动：四颗照旧站着，只是后两颗按不动 —— 会消失的按键会挪动旁边那些，而这一排的位置就是
             // 窗口那个洞的位置，挪一下洞就开歪了。面包屑那一行此时整行收起，不留一条空带子。
             ApplyChrome(false, false, 1);
             UpdateLayout();
-            var idle = AppTitleBar.Visibility == Visibility.Visible
+            var idle = Chrome.Visibility == Visibility.Visible
+                && AppTitleBar.Visibility == Visibility.Visible
                 && keys.All(key => key.Visibility == Visibility.Visible)
                 && AlwaysOn()
                 && !BackButton.IsEnabled
@@ -136,34 +109,6 @@ public sealed partial class ShellPage
                 && BackButton.IsEnabled
                 && ForwardButton.IsEnabled
                 && TrailBar.Visibility == Visibility.Visible;
-
-            // 侧边栏两档（「折叠状态下图标要向右移动一些，防止图标和侧边栏重合」）：收着的时候整排要整个落在
-            // 窄条和那道竖线的右边，张开的时候回到原来的缩进。压线在屏幕上只是第一颗托盘的半边颜色不一样 ——
-            // 一句量出来的话才红得起来。
-            // 摆完自己算一遍 SyncPane：PaneClosed/PaneOpened 是框架收放完才发的，等它到就量到旧位置了。
-            Navigation.IsPaneOpen = false;
-            SyncPane();
-            UpdateLayout();
-            var folded = At(TitleActions).X;
-
-            Navigation.IsPaneOpen = true;
-            SyncPane();
-            UpdateLayout();
-            var spread = At(TitleActions).X;
-
-            // 线在窄条的右沿上，占 1 像素，所以「让开了」是整排的左沿不小于 48+1。
-            var edge = Navigation.CompactPaneLength + 1;
-            var cleared = folded >= edge && spread < folded;
-
-            // 还要问一句现场：进这个探针的时候侧边栏本来就该是收着的（「侧边栏默认为折叠状态」）。这句问的是
-            // 起手那一档撑住了没有 —— 自检从开窗一路走到这儿谁也没碰过侧边栏，所以这里张着就只有一个原因：
-            // 框架把标记里那个 IsPaneOpen="False" 推回去了，构造函数里那个一次性 Loaded 没按住它。
-            var startedFolded = !paneWasOpen;
-
-            // 回到现场那一档再量位置：下面报出去的矩形要跟窗口那个洞对得上，而洞是照现场挖的。
-            Navigation.IsPaneOpen = paneWasOpen;
-            SyncPane();
-            UpdateLayout();
 
             // 位置：整排在标题栏那 32 像素里，左端留白在它左边，页面在它下面。
             var group = At(TitleActions);
@@ -190,17 +135,14 @@ public sealed partial class ShellPage
                 lined &= gap >= 0 && gap <= 8 && Math.Abs(places[index].Y - places[0].Y) < 1;
             }
 
-            var ok = idle && shallow && deep && sized && inBar && lined && cleared && startedFolded;
+            var ok = idle && shallow && deep && sized && inBar && lined;
 
             return new TitleActionProbe(ok,
-                $"五颗按键各 {PaneButton.ActualWidth:0}×{PaneButton.ActualHeight:0}，整排从 ({group.X:0},{group.Y:0}) 起"
+                $"四颗按键各 {SettingsButton.ActualWidth:0}×{SettingsButton.ActualHeight:0}，整排从 ({group.X:0},{group.Y:0}) 起"
                     + $"，占 {TitleActions.ActualWidth:0}×{TitleActions.ActualHeight:0}，最大间距 {widest:0}；"
                     + $"标题栏 {AppTitleBar.ActualWidth:0}×{AppTitleBar.Height:0}，{(inBar ? "整排在里面" : "整排没落在标题栏里")}；"
                     + $"{(lined ? "依次排成一行" : "没排成一行")}；"
-                    + $"{(startedFolded ? "起手侧边栏是收着的" : "起手侧边栏却是张开的")}，"
-                    + $"收着时整排从 {folded:0} 起、张开时从 {spread:0} 起（窄条右沿 {edge:0}）"
-                    + $"，{(cleared ? "收着时让开了侧边栏" : "收着时压在侧边栏上")}；"
-                    + $"哪儿都走不动时{(idle ? "五颗都在、前三颗亮、两支箭头暗、面包屑整行收起" : "不对")}、"
+                    + $"哪儿都走不动时{(idle ? "四颗都在、前两颗亮、两支箭头暗、面包屑整行收起" : "不对")}、"
                     + $"只能退时{(shallow ? "只有返回亮" : "不对")}、"
                     + $"两头都能走时{(deep ? "两支亮加面包屑" : "不对")}",
                 group.X, group.Y, TitleActions.ActualWidth, TitleActions.ActualHeight);
@@ -210,12 +152,65 @@ public sealed partial class ShellPage
             _trail.Clear();
             foreach (var crumb in saved) _trail.Add(crumb);
 
-            // 现场怎样就怎样：探针摆过的状态到这里全部作废。侧边栏那一档在上面已经放回去了，这里再放一次是
-            // 兜底 —— 中间抛出去的话，界面不能留在探针摆的那一档上。
-            Navigation.IsPaneOpen = paneWasOpen;
-            SyncPane();
+            // 现场怎样就怎样：探针摆过的状态到这里全部作废。
             SyncChrome();
             UpdateLayout();
         }
+    }
+
+    /// <summary>
+    /// 自检：顶部标签栏（2026-09-06 新增，「删掉侧边栏」那一批）。判五件事，每一件的坏法在截图里都看不出来：
+    /// <list type="number">
+    /// <item>第 1 行在屏上，而且整条外壳正好 80 高（<c>ChromeHeight</c>）—— 页面顶上让开的那一段就是这个数，
+    /// 少让就是页头被切半行，多让就是图上一条底色。</item>
+    /// <item>格数 = 1 + 媒体库个数，而且第一格是 主页、每一格都带着自己的 tag —— 少接一个 tag 的症状是「点了
+    /// 没反应」，而屏上那一格看着一切正常。</item>
+    /// <item>标签栏整条落在标题栏那 32 像素**以下**：那条线以上是窗口的拖动区，画在那儿的标签一按就是拖窗口
+    /// （这个项目的老账，见 <c>SetTitleBarHole</c>）。</item>
+    /// <item>账号那颗按钮贴着右上角，而且没盖住系统那三颗窗口按钮（它在下一行，所以只要量它的上沿）。</item>
+    /// <item>左边没有第二列：第一格的字和页面左边距对齐在 28 上下。</item>
+    /// </list>
+    /// </summary>
+    internal (bool Ok, string Detail) ProbeTabs()
+    {
+        var count = LibraryTabs.Items.Count;
+        var first = count > 0 ? LibraryTabs.Items[0] : null;
+        var tagged = LibraryTabs.Items.Count(item => item.Tag is string { Length: > 0 });
+
+        var shown = NavBar.Visibility == Visibility.Visible;
+        var expected = 1 + _libraries.Count;
+        var counted = count == expected && tagged == count && (first?.Tag as string) == "home";
+
+        var navAt = At(NavBar);
+        var barBottom = At(AppTitleBar).Y + AppTitleBar.Height;
+        var below = navAt.Y >= barBottom - 0.5;
+        var chrome = navAt.Y + NavBar.Height;
+        var stacked = Math.Abs(chrome - HomePage.ChromeHeight) <= 0.5;
+
+        var tabsAt = At(LibraryTabs);
+        var aligned = Math.Abs(tabsAt.X - 12) <= 1.5;
+
+        var accountAt = At(AccountButton);
+        var right = accountAt.X + AccountButton.ActualWidth;
+        var corner = AccountButton.ActualWidth > 0
+            && right <= ActualWidth + 0.5
+            && ActualWidth - right <= 32
+            && accountAt.Y >= barBottom - 0.5;
+
+        var ok = shown && counted && below && stacked && aligned && corner;
+
+        return (ok,
+            $"标签 {count} 格（主页 + {_libraries.Count} 个媒体库{(counted ? "" : "，和媒体库个数对不上")}），"
+                + $"{tagged} 格带 tag，第一格 tag「{first?.Tag ?? "无"}」；"
+                + $"{(shown ? "这一行在屏上" : "这一行收着了")}；"
+                + $"从 y={navAt.Y:0} 起、高 {NavBar.Height:0}，外壳共 {chrome:0} 高"
+                + $"（该 {HomePage.ChromeHeight:0}{(stacked ? "" : "，对不上")}）；"
+                + $"{(below ? $"整条在标题栏 {barBottom:0} 以下" : "压进了标题栏的拖动区")}；"
+                + $"第一格从 x={tabsAt.X:0} 起{(aligned ? "（和页面左边距对齐）" : "（没和页面左边距对齐）")}；"
+                + $"账号 {AccountButton.ActualWidth:0}×{AccountButton.ActualHeight:0} 右沿 {right:0}／窗口宽 {ActualWidth:0}"
+                + $"，{(corner ? "贴着右上角" : "不在右上角")}");
+
+        Windows.Foundation.Point At(FrameworkElement element) =>
+            element.TransformToVisual(this).TransformPoint(new Windows.Foundation.Point(0, 0));
     }
 }

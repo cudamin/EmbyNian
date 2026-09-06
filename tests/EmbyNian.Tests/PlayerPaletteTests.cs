@@ -135,6 +135,17 @@ internal static class PlayerPaletteTests
                 Assert.True(colour.A > 0, $"{key} 是全透明的");
             }
         });
+
+        Test("播放器配色：暂停/播放徽标只剩纯白一支", () =>
+        {
+            // 「点击画面暂停和开始的图标要纯白色，去掉灰色」（2026-09-05）。从前它背后还有一支
+            // PlayerPulseRimBrush（35% 的黑），屏上是贴着白形状的一道 5 像素灰边；那支跟着形状一起删了，
+            // 而「删干净了没有」正是这条要钉的东西 —— 留在表里的一支孤儿画刷 XAML 里没人用，谁也看不见。
+            Assert.Equal("#FFFFFFFF", Find("PlayerPulseBrush").ToHex(), "徽标不是纯白、不透明");
+
+            foreach (var (key, _) in PlayerPalette.Brushes)
+                Assert.False(key.Contains("PulseRim", StringComparison.Ordinal), $"{key} 还留在表里");
+        });
     }
 
     private static void RegisterScrims()
@@ -200,20 +211,17 @@ internal static class PlayerPaletteTests
             Ratio("最淡/牌子", PlayerPalette.InkFaint, panel, 4.5);
         });
 
-        Test("播放器配色：这一套不跟主题走，六套主题下都是同一张表", () =>
+        Test("播放器配色：这一套不跟主题走，每一套主题下都是同一张表", () =>
         {
-            // 这一条钉的是「不要把这张表接到主题上去」。浮层压的是一帧视频，不是应用那张面：跟着主题走的
-            // 墨在晴昼（唯一那套浅色）下会变成深字压在近黑的罩子上，一个字都读不出来。所以这里拿六套主题
-            // 的正文色逐个比一遍 —— 只要哪天有人把 Ink 接成 UiTheme.Text，浅色那一套就会在这儿撞上。
-            var daylight = UiThemes.All.FirstOrDefault(theme => !theme.IsDark);
-            Assert.NotNull(daylight, "找不到那套浅色主题");
-
+            // 这一条钉的是「不要把这张表接到主题上去」。浮层压的是一帧视频，不是应用那张面。
+            //
+            // 从前这里拿「晴昼」（唯一那套浅色）的正文色当靶子：谁把 Ink 接成 UiTheme.Text，那一套的深字就会在
+            // 这儿撞上。**晴昼 2026-09-05 按用户的话删了**（见 UiThemes 的类注释），而剩下五套的正文色本来就都是
+            // 浅墨 —— Ink 现在恰好和默认那套的 Text 同色，所以那句断言换成任何一套都变成了句假话，删掉了。剩下
+            // 这两句是这张表自己守得住的：墨是浅的，而且最淡那一档压在画面上仍够 4.5:1，不管挑的是哪套主题。
             Assert.True(PlayerPalette.Ink.Luminance > 0.5,
                 $"浮层正文那档墨（{PlayerPalette.Ink.ToHex()}）不是浅墨，压在近黑上读不出来");
-            Assert.True(PlayerPalette.Ink != daylight!.Colors.Text,
-                "浮层正文那档墨等于浅色主题的正文色，这张表已经跟着主题走了");
 
-            // 反过来也量一遍：不管挑的是哪套主题，浮层那四档墨压在自己的近黑上都不变。
             foreach (var theme in UiThemes.All)
                 Ratio($"最淡/画面（{theme.Id}）", PlayerPalette.InkFaint, PlayerPalette.Film, 4.5);
         });

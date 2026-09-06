@@ -49,6 +49,21 @@ public sealed record StartupOptions
     public bool ShowMenu { get; init; }
 
     /// <summary>
+    /// Tooling only: 把主页右栏那一列继续观看的两条翻页条摆出来留着，好给它们拍一张（「把继续观看改成点击翻页
+    /// 的」，2026-09-05）。
+    /// <para>
+    /// 和 <see cref="ShowMenu"/> 同一个理由 —— 悬停才浮出来的东西等不出来。**先试过挪真指针**：
+    /// <c>SetCursorPos</c> 把它挪到那一栏上是挪成了（两趟都成），可拍出来的照片上翻页条还是没有 —— 用户的手也在
+    /// 同一只鼠标上，指针在快门开之前就又走了。所以这一路要的不是更聪明的指针把戏，是一个不依赖指针在哪儿的开关。
+    /// </para>
+    /// <para>
+    /// 单独用。它摆的是「指针在这一栏上」这个状态本身，所以真指针后来进出那一栏一次就会把它收掉 —— 拍照的时候
+    /// 别去碰鼠标。
+    /// </para>
+    /// </summary>
+    public bool ShowRail { get; init; }
+
+    /// <summary>
     /// Tooling only: 把播放器的浮层摆到屏上留着，好给它拍一张 —— 控制条、标题条、音量条一起，一个字节的视频都
     /// 不播。可以跟一个词：<c>pinned</c>（置顶那颗键按下的样子）、<c>paused</c> / <c>playing</c>（正中那颗
     /// 暂停/播放徽标，停在满亮上不让它自己淡出）。
@@ -136,12 +151,16 @@ public sealed record StartupOptions
     public bool PlayFirst { get; init; }
 
     /// <summary>
-    /// Tooling only: 这一次运行用哪套主题（<c>--theme misty</c> 或 <c>--theme=misty</c>），认不出来的 id 由
+    /// Tooling only: 这一次运行用哪套主题（<c>--theme midnight</c> 或 <c>--theme=midnight</c>），认不出来的 id 由
     /// <c>UiThemes.Resolve</c> 拨回默认那套。
     /// <para>
-    /// 六套主题里换主题的唯一入口是设置页上点一块色板 —— 于是除了默认那套，另外五套一张截图都拍不到，
-    /// 而其中「晴昼」是唯一的浅色，「浅色主题下没登记过的画刷会是白底配白字」这类毛病只在它身上看得见。
+    /// 五套主题里换主题的唯一入口是设置页上点一块色板 —— 于是除了默认那套，另外四套一张截图都拍不到。
     /// **只改这一次运行看到的颜色，不写进设置文件**：一次截图不该把用户挑的那套换掉。
+    /// </para>
+    /// <para>
+    /// 这个开关从前还有一份更要紧的用处：<c>--theme daylight</c> 拍一张，「浅色主题下没登记过的画刷会是白底配白
+    /// 字」这类毛病只在那一套身上看得见。**「晴昼」2026-09-05 按用户的话删了**（见 <c>UiThemes</c> 的类注释），
+    /// 所以那类毛病现在没有东西逮得住了 —— 别再按旧文档去跑 <c>--theme daylight</c>，它只会回落到默认那套。
     /// </para>
     /// </summary>
     public string? Theme { get; init; }
@@ -187,9 +206,11 @@ internal static class Program
 
         var paths = AppPaths.Default;
 
-        // First real statement on purpose: everything below reads settings, and under the old name
-        // they live in a different folder. Never throws, so a failed migration cannot stop startup.
-        var migratedFrom = paths.MigrateFrom(AppPaths.LegacyDefaultRoot);
+        // First real statement on purpose: everything below reads settings, and under the old name — or,
+        // once this is installed as an MSIX, under the unpackaged build's own folder — they live
+        // somewhere else. Never throws, so a failed migration cannot stop startup. The candidate order
+        // and why the packaged case is first are in AppPaths.PriorRoots.
+        var migratedFrom = paths.MigrateFromAny(AppPaths.PriorRoots);
 
         var selfCheck = Has(args, "--self-check");
 
@@ -245,6 +266,7 @@ internal static class Program
                 ?? (selfCheck ? ScreenPlacement.NotThePrimary : ScreenPlacement.WhereverWindows),
             ShowLibrary = Has(args, "--show-library"),
             ShowMenu = Has(args, "--show-menu"),
+            ShowRail = Has(args, "--show-rail"),
             ShowOsd = Has(args, "--show-osd"),
             OsdState = Text(args, "--show-osd"),
             HideCursor = Has(args, "--hide-cursor"),

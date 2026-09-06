@@ -214,20 +214,17 @@ internal static partial class ShellSelfCheck
 
         report.AppendLine($"[信息] 当前筛选 — {library.Filters}");
 
-        // 设置 → 海报宽度 used to reach every page except this one: the cell, the card and the bitmap the
-        // card was decoded for were three literals in this grid's markup, so moving the slider resized the
-        // home page's rows and left the library — the page the setting is obviously about — untouched.
-        // The two cell numbers are read off the live layout, so a binding that never fired reads NaN here
-        // rather than whatever this line could have worked out for itself.
+        // 卡片宽度这一条从前钉的是「设置 → 海报宽度 到得了这一页」：cell、card 和解码宽从前是标记里的三个
+        // 字面量，那一根滑杆动得了别的页、动不了这一页。那一行设置 2026-09-05 删掉了，宽度回到
+        // <c>CardSize.PosterWidth</c>，这一条改钉「默认宽到得了这一页」—— 卡宽照旧从页面读，单元宽照旧从活的
+        // 版面上读，绑定没喊出声就读到 NaN，而不是这里替它算出来的数。
         //
         // The cell is only asked to equal the card in 海报: the other two shapes have cells of their own,
         // and those are the next check's business.
-        var expected = Math.Clamp(library.PosterSetting, 120, 340);
-
-        check("海报尺寸随设置", library.CardWidth == expected
+        check("海报尺寸", library.CardWidth == CardSize.PosterWidth
                 && (library.View != "Poster"
                     || (library.CellWidth == library.CardWidth && library.CellHeight > library.CardWidth)),
-            $"设置 {library.PosterSetting} → 卡片 {library.CardWidth}，网格单元 {library.CellWidth:0}×{library.CellHeight:0}（视图「{library.View}」）");
+            $"卡片 {library.CardWidth}，网格单元 {library.CellWidth:0}×{library.CellHeight:0}（视图「{library.View}」）");
 
         // Each of the three shapes put on the live grid in turn — see LibraryPage.WalkViews for why nothing
         // a launch reads can stand in for this. 海报 is a portrait cell of the set width, 缩略图 a
@@ -409,6 +406,12 @@ internal static partial class ShellSelfCheck
             report.AppendLine("[信息] 详情单集形状（文件页）— "
                 + (_fileEpisodesDrawn is { } empty ? $"{empty.Type} 页模型没有同季单集" : "这次没走到文件页"));
         }
+
+        // 从播放回来那一趟 —— 「点击开始播放后点击左上方的返回，集列表会跑到下方去」。走的是真的那三步（外壳收起、
+        // 照着当前页面重新导航、外壳回来），一个字节都不放，见 ShellSelfCheck.ReturnFromPlayer。两条都判：那一带集
+        // 还在规矩说的那一层上、页面没有自己滚下去。
+        if (_fileReturn is { } back) check("播放回来那一页", back.Ok, back.Detail);
+        else report.AppendLine("[信息] 播放回来那一页 — 这次没走到文件页");
 
         // Informational: what the server actually had to say about this item. 年份区间 and 制作方 are
         // Fields-gated (see EmbyFields.Detail), so an empty middle segment here is the first place a

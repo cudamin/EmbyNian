@@ -223,7 +223,7 @@ public sealed partial class PlayerPage
         if (all != total) trouble.Add($"空搜索只列出 {all} / {total} 个");
         if (found == 0) trouble.Add($"搜「{word}」什么都没有");
         if (byWord is null) trouble.Add($"搜「{word}」按回车会落空");
-        if (!string.Equals(byName?.Name, value, StringComparison.OrdinalIgnoreCase))
+        if (byName is null || !byName.AnswersTo(value))
             trouble.Add($"整名字「{value}」按回车选到了「{byName?.Name ?? "空"}」");
 
         // The one that matters most: the current family is in that list of one, and Enter must still refuse

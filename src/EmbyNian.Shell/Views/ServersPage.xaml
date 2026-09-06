@@ -37,18 +37,16 @@
                         Foreground="{ThemeResource EgTextDimBrush}"
                         Text="{x:Bind Status}" />
                 </StackPanel>
-                <Button
+                <Button x:Uid="ServersPage_ButtonA1"
                     Grid.Column="1"
                     Command="{x:Bind Owner.LoginAccountCommand}"
-                    CommandParameter="{x:Bind}"
-                    ToolTipService.ToolTip="登录或切换到此账号">
+                    CommandParameter="{x:Bind}">
                     <FontIcon Glyph="&#xE8A5;" />
                 </Button>
-                <Button
+                <Button x:Uid="ServersPage_ButtonA2"
                     Grid.Column="2"
                     Command="{x:Bind Owner.DeleteAccountCommand}"
-                    CommandParameter="{x:Bind}"
-                    ToolTipService.ToolTip="删除账号">
+                    CommandParameter="{x:Bind}">
                     <FontIcon Glyph="&#xE74D;" />
                 </Button>
             </Grid>
@@ -78,14 +76,13 @@
                                      count, and it has no way to show a word. -->
                                 <Border
                                     Background="{ThemeResource EgAccentBrush}"
-                                    CornerRadius="10"
+                                    CornerRadius="{StaticResource EgCardCornerRadius}"
                                     Padding="8,2"
                                     VerticalAlignment="Center"
                                     Visibility="{x:Bind CurrentVisibility}">
-                                    <TextBlock
+                                    <TextBlock x:Uid="ServersPage_TextBlock1"
                                         FontSize="{StaticResource EgCaptionFontSize}"
-                                        Foreground="White"
-                                        Text="当前" />
+                                        Foreground="White" />
                                 </Border>
                             </StackPanel>
                             <TextBlock
@@ -99,22 +96,19 @@
                             HorizontalAlignment="Right"
                             Orientation="Horizontal"
                             Spacing="8">
-                            <Button
+                            <Button x:Uid="ServersPage_ButtonA3"
                                 Command="{x:Bind Owner.TestCommand}"
-                                CommandParameter="{x:Bind}"
-                                ToolTipService.ToolTip="测试服务器连接">
+                                CommandParameter="{x:Bind}">
                                 <FontIcon Glyph="&#xE72C;" />
                             </Button>
-                            <Button
+                            <Button x:Uid="ServersPage_ButtonA4"
                                 Command="{x:Bind Owner.LoginServerCommand}"
-                                CommandParameter="{x:Bind}"
-                                ToolTipService.ToolTip="登录或切换到此服务器">
+                                CommandParameter="{x:Bind}">
                                 <FontIcon Glyph="&#xE8A5;" />
                             </Button>
-                            <Button
+                            <Button x:Uid="ServersPage_ButtonA5"
                                 Command="{x:Bind Owner.DeleteServerCommand}"
-                                CommandParameter="{x:Bind}"
-                                ToolTipService.ToolTip="删除服务器">
+                                CommandParameter="{x:Bind}">
                                 <FontIcon Glyph="&#xE74D;" />
                             </Button>
                         </StackPanel>
@@ -132,7 +126,7 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock FontWeight="SemiBold" Text="账号" />
+                                <TextBlock x:Uid="ServersPage_TextBlock2" FontWeight="SemiBold" />
                                 <TextBlock
                                     Grid.Column="1"
                                     Foreground="{ThemeResource EgTextDimBrush}"
@@ -142,9 +136,8 @@
 
                             <ItemsControl ItemTemplate="{StaticResource AccountTemplate}" ItemsSource="{x:Bind Accounts}" />
 
-                            <TextBlock
+                            <TextBlock x:Uid="ServersPage_TextBlock3"
                                 Foreground="{ThemeResource EgTextFaintBrush}"
-                                Text="该服务器还没有保存的账号。登录后会自动记住账号。"
                                 Visibility="{x:Bind EmptyAccountsVisibility}" />
                         </StackPanel>
                     </Border>
@@ -162,28 +155,27 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <local:PageSlate
+        <local:PageSlate x:Uid="ServersPage_localPageSlate4"
             Eyebrow="SERVERS"
-            Note="{x:Bind ViewModel.Subheading, Mode=OneWay}"
-            Title="服务器">
+            Note="{x:Bind ViewModel.Subheading, Mode=OneWay}">
             <local:PageSlate.Trailing>
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Command="{x:Bind ViewModel.AddServerCommand}">
+                    <Button AutomationProperties.AutomationId="ServersAddButton" Command="{x:Bind ViewModel.AddServerCommand}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon Glyph="&#xE710;" />
-                            <TextBlock Text="添加服务器" />
+                            <TextBlock x:Uid="ServersPage_TextBlock5" />
                         </StackPanel>
                     </Button>
-                    <Button Command="{x:Bind ViewModel.DiscoverCommand}">
+                    <Button AutomationProperties.AutomationId="ServersDiscoverButton" Command="{x:Bind ViewModel.DiscoverCommand}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon Glyph="&#xE968;" />
-                            <TextBlock Text="发现局域网服务器" />
+                            <TextBlock x:Uid="ServersPage_TextBlock6" />
                         </StackPanel>
                     </Button>
-                    <Button Command="{x:Bind ViewModel.RefreshCommand}">
+                    <Button AutomationProperties.AutomationId="ServersRefreshButton" Command="{x:Bind ViewModel.RefreshCommand}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon Glyph="&#xE72C;" />
-                            <TextBlock Text="刷新" />
+                            <TextBlock x:Uid="ServersPage_TextBlock7" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -206,10 +198,11 @@
             Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
 
         <ListView
+            AutomationProperties.AutomationId="ServersDiscoveredList"
             Grid.Row="2"
             IsItemClickEnabled="True"
             ItemClick="OnDiscoveredPicked"
-            ItemsSource="{x:Bind ViewModel.Discovered}"
+            ItemsSource="{x:Bind ViewModel.Discovered, Mode=OneWay}"
             Margin="0,32,0,0"
             MaxHeight="184"
             Visibility="{x:Bind ViewModel.DiscoveredVisibility, Mode=OneWay}">
@@ -240,14 +233,13 @@
 
         <ScrollView Grid.Row="3" VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                <TextBlock
+                <TextBlock x:Uid="ServersPage_TextBlock8"
                     Foreground="{ThemeResource EgTextFaintBrush}"
                     HorizontalAlignment="Center"
                     Margin="0,32,0,0"
-                    Text="还没有保存的服务器。点击“添加服务器”开始。"
                     Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
 
-                <ItemsControl ItemTemplate="{StaticResource ServerTemplate}" ItemsSource="{x:Bind ViewModel.Servers}" />
+                <ItemsControl ItemTemplate="{StaticResource ServerTemplate}" ItemsSource="{x:Bind ViewModel.Servers, Mode=OneWay}" />
             </StackPanel>
         </ScrollView>
 
@@ -272,19 +264,20 @@
                     Glyph="&#xEB9F;"
                     VerticalAlignment="Center" />
                 <StackPanel Grid.Column="1">
-                    <TextBlock FontWeight="SemiBold" Text="图片缓存" />
+                    <TextBlock x:Uid="ServersPage_TextBlock9" FontWeight="SemiBold" />
                     <TextBlock
                         FontSize="{StaticResource EgCaptionFontSize}"
                         Foreground="{ThemeResource EgTextDimBrush}"
                         Text="{x:Bind ViewModel.CacheSummary, Mode=OneWay}" />
                 </StackPanel>
                 <Button
+                    AutomationProperties.AutomationId="ServersClearCacheButton"
                     Grid.Column="2"
                     Command="{x:Bind ViewModel.ClearCacheCommand}"
                     VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE74D;" />
-                        <TextBlock Text="清除缓存" />
+                        <TextBlock x:Uid="ServersPage_TextBlock10" />
                     </StackPanel>
                 </Button>
             </Grid>

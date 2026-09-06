@@ -1,0 +1,720 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!--
+    界面文字的资源表。winui-code-review 的全球化清单要求界面字符串走 x:Uid + .resw 而不是写死在标记里，
+    「单一语言也一样」—— 理由不是翻译，是这些字从此有了一份能列出来、能被查的清单：从前一句话改错、少
+    一个字、两处说法不一致，除了逐个文件读没有别的办法发现。
+
+    这一份已经验过能用：不打包（WindowsPackageType=None）的情况下 x:Uid 照样解析得到，凭据是搜索框那
+    句灰字提示（LibrarySearchBox.PlaceholderText）在标记里已经没有字面值、屏上照旧写着它。
+    要让它成立还需要 csproj 里的 DefaultLanguage=zh-Hans —— 不设的话 PRI 的默认语言限定符是 en-US，
+    而这里只有 zh-Hans 一张表，于是每一次查找都问一个没有表的语言、拿回空字符串。理由写在那个属性旁边。
+
+    名字规则：<x:Uid>.<属性名>。属性名就是 XAML 里那个属性本身（Text / Content / Header / Title /
+    PlaceholderText / CloseButtonText / PrimaryButtonText / OffContent / OnContent）。x:Uid 的取法是
+    「文件名_元素的 x:Name」，元素没有名字时退回「文件名_类型序号」—— 后一种不好看，但它是机械生成的，
+    而机械生成的名字不会因为有人改了屏上的字就变旧。要改名的话连 XAML 里那个 x:Uid 一起改。
+
+    ⚠ ToolTipService.ToolTip 和 AutomationProperties.Name / HelpText 这 82 处**不在这份表里**。
+    附加属性在 .resw 里的键名是 <Uid>.[using:命名空间]类型.属性 这种形式，写错一个字不会报错、也不会
+    留下痕迹 —— 属性只是没被设上，于是读屏软件念不出那颗按钮的名字、悬停没有提示。那一档要自己的探针
+    （自检里「播放器控件报出名字」那二十条正好是它的判据），所以单独一批做，见 PROGRESS.md。
+  -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="CollectionDialog_ContentDialog1.CloseButtonText" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="CollectionDialog_ContentDialog1.PrimaryButtonText" xml:space="preserve">
+    <value>确定</value>
+  </data>
+  <data name="CollectionDialog_ContentDialog1.Title" xml:space="preserve">
+    <value>添加到合集</value>
+  </data>
+  <data name="CollectionDialog_Empty.Text" xml:space="preserve">
+    <value>服务器上还没有合集，在下面起一个名字就能新建一个。</value>
+  </data>
+  <data name="CollectionDialog_NewBox.Header" xml:space="preserve">
+    <value>或者新建一个合集</value>
+  </data>
+  <data name="CollectionDialog_NewBox.PlaceholderText" xml:space="preserve">
+    <value>合集名称</value>
+  </data>
+  <data name="CoverDialog_ContentDialog1.CloseButtonText" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="CoverDialog_ContentDialog1.PrimaryButtonText" xml:space="preserve">
+    <value>用这一张</value>
+  </data>
+  <data name="CoverDialog_ContentDialog1.Title" xml:space="preserve">
+    <value>修改媒体封面图</value>
+  </data>
+  <data name="DashboardPage_ButtonA1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>重新载入控制台</value>
+  </data>
+  <data name="DashboardPage_ButtonA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>在系统默认浏览器里打开同一个页面</value>
+  </data>
+  <data name="DashboardPage_Slate.Title" xml:space="preserve">
+    <value>服务器控制台</value>
+  </data>
+  <data name="DashboardPage_TextBlock1.Text" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="DashboardPage_TextBlock2.Text" xml:space="preserve">
+    <value>用浏览器打开</value>
+  </data>
+  <data name="DetailPage_ButtonA1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>标记已看 / 未看</value>
+  </data>
+  <data name="DetailPage_ButtonA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>收藏</value>
+  </data>
+  <data name="DetailPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>在网页端打开</value>
+  </data>
+  <data name="DetailPage_ComboBoxA4.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>切换季</value>
+  </data>
+  <data name="DetailPage_ComboBoxA4.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>切换季</value>
+  </data>
+  <data name="DetailPage_MoreButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>更多</value>
+  </data>
+  <data name="DetailPage_TextBlock1.Text" xml:space="preserve">
+    <value>从头开始</value>
+  </data>
+  <data name="DetailPage_TextBlock2.Text" xml:space="preserve">
+    <value>媒体源</value>
+  </data>
+  <data name="DetailPage_TextBlock3.Text" xml:space="preserve">
+    <value>音频</value>
+  </data>
+  <data name="DetailPage_TextBlock4.Text" xml:space="preserve">
+    <value>字幕</value>
+  </data>
+  <data name="DetailPage_TextBlock5.Text" xml:space="preserve">
+    <value>媒体信息</value>
+  </data>
+  <data name="DiagnosticsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>清除筛选</value>
+  </data>
+  <data name="DiagnosticsPage_ComboBoxA1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>只看某一类日志</value>
+  </data>
+  <data name="DiagnosticsPage_ComboBoxA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>按严重程度过滤</value>
+  </data>
+  <data name="DiagnosticsPage_localPageSlate1.Title" xml:space="preserve">
+    <value>诊断</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock10.Text" xml:space="preserve">
+    <value>播放器</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock11.Text" xml:space="preserve">
+    <value>状态</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock12.Text" xml:space="preserve">
+    <value>进度</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock13.Text" xml:space="preserve">
+    <value>mpv 配置</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock14.Text" xml:space="preserve">
+    <value>后端</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock15.Text" xml:space="preserve">
+    <value>mpv.exe 路径</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock16.Text" xml:space="preserve">
+    <value>着色器档位</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock17.Text" xml:space="preserve">
+    <value>日志</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock18.Text" xml:space="preserve">
+    <value>日志目录</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock19.Text" xml:space="preserve">
+    <value>最近日志</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock2.Text" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock21.Text" xml:space="preserve">
+    <value>没有符合条件的日志</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock3.Text" xml:space="preserve">
+    <value>复制日志</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock4.Text" xml:space="preserve">
+    <value>打开日志目录</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock5.Text" xml:space="preserve">
+    <value>会话</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock6.Text" xml:space="preserve">
+    <value>状态</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock7.Text" xml:space="preserve">
+    <value>账号</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock8.Text" xml:space="preserve">
+    <value>服务器</value>
+  </data>
+  <data name="DiagnosticsPage_TextBlock9.Text" xml:space="preserve">
+    <value>版本</value>
+  </data>
+  <data name="DiagnosticsPage_TextBox22.PlaceholderText" xml:space="preserve">
+    <value>播放启动参数会显示在这里</value>
+  </data>
+  <data name="DiagnosticsPage_ToggleSwitch20.OffContent" xml:space="preserve">
+    <value>已暂停</value>
+  </data>
+  <data name="DiagnosticsPage_ToggleSwitch20.OnContent" xml:space="preserve">
+    <value>实时跟随</value>
+  </data>
+  <data name="FilterPanel_HyperlinkButton1.Content" xml:space="preserve">
+    <value>清除</value>
+  </data>
+  <data name="HomeBanner_NextButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>下一张</value>
+  </data>
+  <data name="HomeBanner_OpenButton.Content" xml:space="preserve">
+    <value>详情</value>
+  </data>
+  <data name="HomeBanner_PrevButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>上一张</value>
+  </data>
+  <data name="HomeBanner_Root.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.HelpText" xml:space="preserve">
+    <value>按左右方向键切换幻灯片</value>
+  </data>
+  <data name="HomeBanner_Root.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>主页轮播</value>
+  </data>
+  <data name="HomePage_RailNext.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>下一页</value>
+  </data>
+  <data name="HomePage_RailNext.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>下一页</value>
+  </data>
+  <data name="HomePage_RailPrev.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>上一页</value>
+  </data>
+  <data name="HomePage_RailPrev.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>上一页</value>
+  </data>
+  <data name="HomePage_Slate.Title" xml:space="preserve">
+    <value>主页</value>
+  </data>
+  <data name="HomePage_TextBlock1.Text" xml:space="preserve">
+    <value>服务器上还没有可以显示的内容</value>
+  </data>
+  <data name="LibraryPage_FilterText.Text" xml:space="preserve">
+    <value>筛选</value>
+  </data>
+  <data name="LibraryPage_HyperlinkButton4.Content" xml:space="preserve">
+    <value>全部清除</value>
+  </data>
+  <data name="LibraryPage_PlayAllButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>播放全部</value>
+  </data>
+  <data name="LibraryPage_PlayRandomButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>随机播放</value>
+  </data>
+  <data name="LibraryPage_RadioMenuFlyoutItem1.Text" xml:space="preserve">
+    <value>海报</value>
+  </data>
+  <data name="LibraryPage_RadioMenuFlyoutItem2.Text" xml:space="preserve">
+    <value>缩略图</value>
+  </data>
+  <data name="LibraryPage_RadioMenuFlyoutItem3.Text" xml:space="preserve">
+    <value>列表</value>
+  </data>
+  <data name="LibraryPage_ViewButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>切换视图</value>
+  </data>
+  <data name="LibrarySearchBox.PlaceholderText" xml:space="preserve">
+    <value>搜索影片、剧集、演员</value>
+  </data>
+  <data name="MetadataDialog_CommunityRatingBox.Header" xml:space="preserve">
+    <value>公众评分</value>
+  </data>
+  <data name="MetadataDialog_ContentDialog1.CloseButtonText" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="MetadataDialog_ContentDialog1.PrimaryButtonText" xml:space="preserve">
+    <value>保存</value>
+  </data>
+  <data name="MetadataDialog_ContentDialog1.Title" xml:space="preserve">
+    <value>编辑元数据</value>
+  </data>
+  <data name="MetadataDialog_CriticRatingBox.Header" xml:space="preserve">
+    <value>影评指数</value>
+  </data>
+  <data name="MetadataDialog_GenresBox.Header" xml:space="preserve">
+    <value>类型</value>
+  </data>
+  <data name="MetadataDialog_GenresBox.PlaceholderText" xml:space="preserve">
+    <value>用、或逗号分开</value>
+  </data>
+  <data name="MetadataDialog_IndexBox.Header" xml:space="preserve">
+    <value>集号</value>
+  </data>
+  <data name="MetadataDialog_NameBox.Header" xml:space="preserve">
+    <value>名称</value>
+  </data>
+  <data name="MetadataDialog_OfficialRatingBox.Header" xml:space="preserve">
+    <value>家长分级</value>
+  </data>
+  <data name="MetadataDialog_OriginalTitleBox.Header" xml:space="preserve">
+    <value>原始标题</value>
+  </data>
+  <data name="MetadataDialog_OverviewBox.Header" xml:space="preserve">
+    <value>简介</value>
+  </data>
+  <data name="MetadataDialog_ParentIndexBox.Header" xml:space="preserve">
+    <value>季号</value>
+  </data>
+  <data name="MetadataDialog_PremiereDateBox.Header" xml:space="preserve">
+    <value>发行日期</value>
+  </data>
+  <data name="MetadataDialog_ProductionYearBox.Header" xml:space="preserve">
+    <value>发行年份</value>
+  </data>
+  <data name="MetadataDialog_SortNameBox.Header" xml:space="preserve">
+    <value>排序名称</value>
+  </data>
+  <data name="MetadataDialog_SortNameBox.PlaceholderText" xml:space="preserve">
+    <value>留空则由服务器自己算</value>
+  </data>
+  <data name="MetadataDialog_TagsBox.Header" xml:space="preserve">
+    <value>标签</value>
+  </data>
+  <data name="MetadataDialog_TagsBox.PlaceholderText" xml:space="preserve">
+    <value>用、或逗号分开</value>
+  </data>
+  <data name="PlayerPage_AudioButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>音轨</value>
+  </data>
+  <data name="PlayerPage_AudioButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>音轨</value>
+  </data>
+  <data name="PlayerPage_BackButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>返回</value>
+  </data>
+  <data name="PlayerPage_BackButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>返回（Esc）</value>
+  </data>
+  <data name="PlayerPage_CloseButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>关闭</value>
+  </data>
+  <data name="PlayerPage_CloseButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>关闭</value>
+  </data>
+  <data name="PlayerPage_EpisodeButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>本季剧集</value>
+  </data>
+  <data name="PlayerPage_EpisodeButton.Content" xml:space="preserve">
+    <value>选集</value>
+  </data>
+  <data name="PlayerPage_FontBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>字幕字体</value>
+  </data>
+  <data name="PlayerPage_FontBox.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>字幕字体：输入任意一段名字搜索，回车或点一下就换，正在播的片子立刻生效</value>
+  </data>
+  <data name="PlayerPage_FontBox.PlaceholderText" xml:space="preserve">
+    <value>字幕字体</value>
+  </data>
+  <data name="PlayerPage_FullscreenButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>全屏或退出全屏</value>
+  </data>
+  <data name="PlayerPage_FullscreenButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>全屏（F）</value>
+  </data>
+  <data name="PlayerPage_MaximizeButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>最大化或还原</value>
+  </data>
+  <data name="PlayerPage_MaximizeButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>最大化或还原</value>
+  </data>
+  <data name="PlayerPage_MinimizeButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>最小化</value>
+  </data>
+  <data name="PlayerPage_MinimizeButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>最小化</value>
+  </data>
+  <data name="PlayerPage_MoreButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>更多</value>
+  </data>
+  <data name="PlayerPage_MoreButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>更多</value>
+  </data>
+  <data name="PlayerPage_MuteButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>静音</value>
+  </data>
+  <data name="PlayerPage_MuteButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>静音（M）</value>
+  </data>
+  <data name="PlayerPage_NextButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>下一集</value>
+  </data>
+  <data name="PlayerPage_NextButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>下一集</value>
+  </data>
+  <data name="PlayerPage_PlayButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>播放或暂停</value>
+  </data>
+  <data name="PlayerPage_PlayButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>播放/暂停（空格）</value>
+  </data>
+  <data name="PlayerPage_PreviousButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>上一集</value>
+  </data>
+  <data name="PlayerPage_PreviousButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>上一集</value>
+  </data>
+  <data name="PlayerPage_SeekSlider.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>播放进度</value>
+  </data>
+  <data name="PlayerPage_SpeedButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>播放速度</value>
+  </data>
+  <data name="PlayerPage_SpeedButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>播放速度</value>
+  </data>
+  <data name="PlayerPage_StatsButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>播放统计</value>
+  </data>
+  <data name="PlayerPage_StatsButton.Content" xml:space="preserve">
+    <value>统计</value>
+  </data>
+  <data name="PlayerPage_SubtitleButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>字幕</value>
+  </data>
+  <data name="PlayerPage_SubtitleButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>字幕</value>
+  </data>
+  <data name="PlayerPage_VolumeSlider.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>音量</value>
+  </data>
+  <data name="PosterCard_MoreButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>更多</value>
+  </data>
+  <data name="ServersPage_ButtonA1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>登录或切换到此账号</value>
+  </data>
+  <data name="ServersPage_ButtonA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>删除账号</value>
+  </data>
+  <data name="ServersPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>测试服务器连接</value>
+  </data>
+  <data name="ServersPage_ButtonA4.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>登录或切换到此服务器</value>
+  </data>
+  <data name="ServersPage_ButtonA5.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>删除服务器</value>
+  </data>
+  <data name="ServersPage_localPageSlate4.Title" xml:space="preserve">
+    <value>服务器</value>
+  </data>
+  <data name="ServersPage_TextBlock1.Text" xml:space="preserve">
+    <value>当前</value>
+  </data>
+  <data name="ServersPage_TextBlock10.Text" xml:space="preserve">
+    <value>清除缓存</value>
+  </data>
+  <data name="ServersPage_TextBlock2.Text" xml:space="preserve">
+    <value>账号</value>
+  </data>
+  <data name="ServersPage_TextBlock3.Text" xml:space="preserve">
+    <value>该服务器还没有保存的账号。登录后会自动记住账号。</value>
+  </data>
+  <data name="ServersPage_TextBlock5.Text" xml:space="preserve">
+    <value>添加服务器</value>
+  </data>
+  <data name="ServersPage_TextBlock6.Text" xml:space="preserve">
+    <value>发现局域网服务器</value>
+  </data>
+  <data name="ServersPage_TextBlock7.Text" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="ServersPage_TextBlock8.Text" xml:space="preserve">
+    <value>还没有保存的服务器。点击“添加服务器”开始。</value>
+  </data>
+  <data name="ServersPage_TextBlock9.Text" xml:space="preserve">
+    <value>图片缓存</value>
+  </data>
+  <data name="SettingsPage_ButtonA2.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>上移</value>
+  </data>
+  <data name="SettingsPage_ButtonA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>往上挪一排</value>
+  </data>
+  <data name="SettingsPage_ButtonA3.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>下移</value>
+  </data>
+  <data name="SettingsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>往下挪一排</value>
+  </data>
+  <data name="SettingsPage_localPageSlate4.Title" xml:space="preserve">
+    <value>设置</value>
+  </data>
+  <data name="SettingsPage_ResetButton.Content" xml:space="preserve">
+    <value>恢复默认</value>
+  </data>
+  <data name="SettingsPage_ResetButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>把所有设置还原为装机时的默认值。只影响设置本身：服务器、账号和登录状态一律不动（不会退出登录）。按下后会先问一次。</value>
+  </data>
+  <data name="SettingsPage_SliderA1.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>mpv 参数滑块</value>
+  </data>
+  <data name="SettingsPage_TextBox3.PlaceholderText" xml:space="preserve">
+    <value>搜索字体：yahei、雅黑、mono…</value>
+  </data>
+  <data name="SettingsPage_SubtitlePreview.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>字幕外观预览：照当前设置画出的「字幕示例」</value>
+  </data>
+  <data name="SettingsPage_ToggleSwitch1.OffContent" xml:space="preserve">
+    <value>关</value>
+  </data>
+  <data name="SettingsPage_ToggleSwitch1.OnContent" xml:space="preserve">
+    <value>开</value>
+  </data>
+  <data name="SettingsPage_ToggleSwitch2.OffContent" xml:space="preserve">
+    <value>关</value>
+  </data>
+  <data name="SettingsPage_ToggleSwitch2.OnContent" xml:space="preserve">
+    <value>开</value>
+  </data>
+  <data name="ShelfStrip_Next.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>下一页</value>
+  </data>
+  <data name="ShelfStrip_Next.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>下一页</value>
+  </data>
+  <data name="ShelfStrip_Prev.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>上一页</value>
+  </data>
+  <data name="ShelfStrip_Prev.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>上一页</value>
+  </data>
+  <data name="ShelfStrip_Root.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.HelpText" xml:space="preserve">
+    <value>使用左右方向键浏览媒体，按 Enter 打开</value>
+  </data>
+  <data name="ShelfStrip_Root.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>媒体卡片列表</value>
+  </data>
+  <data name="ShellPage_AccountServer.Text" xml:space="preserve">
+    <value>未连接服务器</value>
+  </data>
+  <data name="ShellPage_AccountUser.Text" xml:space="preserve">
+    <value>未登录</value>
+  </data>
+  <data name="ShellPage_BackButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>返回</value>
+  </data>
+  <data name="ShellPage_BackButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>返回</value>
+  </data>
+  <data name="ShellPage_ForwardButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>前进</value>
+  </data>
+  <data name="ShellPage_ForwardButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>前进</value>
+  </data>
+  <data name="ShellPage_HomeTab.Text" xml:space="preserve">
+    <value>主页</value>
+  </data>
+  <data name="ShellPage_MenuFlyoutItem2.Text" xml:space="preserve">
+    <value>注销</value>
+  </data>
+  <data name="ShellPage_SearchButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>搜索</value>
+  </data>
+  <data name="ShellPage_SearchButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>搜索</value>
+  </data>
+  <data name="ShellPage_ServerMenu.Text" xml:space="preserve">
+    <value>切换服务器</value>
+  </data>
+  <data name="ShellPage_SettingsButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>设置</value>
+  </data>
+  <data name="ShellPage_SettingsButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>设置</value>
+  </data>
+  <data name="ShellPage_UserMenu.Text" xml:space="preserve">
+    <value>切换用户</value>
+  </data>
+  <data name="SignInPage_Button1.Content" xml:space="preserve">
+    <value>连接</value>
+  </data>
+  <data name="SignInPage_Button5.Content" xml:space="preserve">
+    <value>换个服务器</value>
+  </data>
+  <data name="SignInPage_ButtonA1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>搜索当前局域网内的 Emby 服务器</value>
+  </data>
+  <data name="SignInPage_CheckBox4.Content" xml:space="preserve">
+    <value>记住密码</value>
+  </data>
+  <data name="SignInPage_DropDownButton2.Content" xml:space="preserve">
+    <value>已保存的服务器</value>
+  </data>
+  <data name="SignInPage_PasswordInput.Header" xml:space="preserve">
+    <value>密码</value>
+  </data>
+  <data name="SignInPage_ServerBox.Header" xml:space="preserve">
+    <value>服务器地址</value>
+  </data>
+  <data name="SignInPage_TextBlock3.Text" xml:space="preserve">
+    <value>发现局域网服务器</value>
+  </data>
+  <data name="SignInPage_UserBox.Header" xml:space="preserve">
+    <value>用户名</value>
+  </data>
+  <data name="HtmlColorPicker_BLabel.Text" xml:space="preserve">
+    <value>B</value>
+  </data>
+  <data name="HtmlColorPicker_BlueBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>蓝（B）</value>
+  </data>
+  <data name="HtmlColorPicker_ClearButton.Content" xml:space="preserve">
+    <value>不设置</value>
+  </data>
+  <data name="HtmlColorPicker_GLabel.Text" xml:space="preserve">
+    <value>G</value>
+  </data>
+  <data name="HtmlColorPicker_GreenBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>绿（G）</value>
+  </data>
+  <data name="HtmlColorPicker_HLabel.Text" xml:space="preserve">
+    <value>H</value>
+  </data>
+  <data name="HtmlColorPicker_HashLabel.Text" xml:space="preserve">
+    <value>#</value>
+  </data>
+  <data name="HtmlColorPicker_HexBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>HTML 颜色代码</value>
+  </data>
+  <data name="HtmlColorPicker_HexBox.PlaceholderText" xml:space="preserve">
+    <value>RRGGBB</value>
+  </data>
+  <data name="HtmlColorPicker_HueBar.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>色相</value>
+  </data>
+  <data name="HtmlColorPicker_HueBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>色相（H）</value>
+  </data>
+  <data name="HtmlColorPicker_RLabel.Text" xml:space="preserve">
+    <value>R</value>
+  </data>
+  <data name="HtmlColorPicker_RedBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>红（R）</value>
+  </data>
+  <data name="HtmlColorPicker_SLabel.Text" xml:space="preserve">
+    <value>S</value>
+  </data>
+  <data name="HtmlColorPicker_SatValSquare.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>饱和度与明度</value>
+  </data>
+  <data name="HtmlColorPicker_SaturationBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>饱和度（S）</value>
+  </data>
+  <data name="HtmlColorPicker_VLabel.Text" xml:space="preserve">
+    <value>V</value>
+  </data>
+  <data name="HtmlColorPicker_ValueBox.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>明度（V）</value>
+  </data>
+  <data name="SettingsPage_ColorSwatch.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>颜色，点开 HTML 颜色选择器</value>
+  </data>
+  <data name="SettingsPage_ColorSwatch.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>点开 HTML 颜色选择器；「不设置」跟随 mpv 自己的默认</value>
+  </data>
+  <data name="SubtitleDialog_Button3.Content" xml:space="preserve">
+    <value>删除</value>
+  </data>
+  <data name="SubtitleDialog_Button4.Content" xml:space="preserve">
+    <value>下载</value>
+  </data>
+  <data name="SubtitleDialog_ContentDialog1.CloseButtonText" xml:space="preserve">
+    <value>关闭</value>
+  </data>
+  <data name="SubtitleDialog_ContentDialog1.Title" xml:space="preserve">
+    <value>搜索和修改字幕</value>
+  </data>
+  <data name="SubtitleDialog_LanguageBox.Header" xml:space="preserve">
+    <value>语言</value>
+  </data>
+  <data name="SubtitleDialog_NoTracks.Text" xml:space="preserve">
+    <value>这个文件上没有外挂字幕（内嵌在视频文件里的那些不能在这里删）。</value>
+  </data>
+  <data name="SubtitleDialog_SearchButton.Content" xml:space="preserve">
+    <value>搜索字幕</value>
+  </data>
+  <data name="SubtitleDialog_TextBlock2.Text" xml:space="preserve">
+    <value>现有的外挂字幕</value>
+  </data>
+</root>

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app's package identity — the one place it is written down.
+
+  Until 2026-09-05 this XML lived inside a PowerShell here-string in tools/publish.ps1, which meant the
+  identity, the display name and the tile colour existed only inside the script that packs the MSIX:
+  nothing could read them, `winapp cert generate` had no file to infer a Publisher from, and
+  winui-packaging's 「NEVER delete Package.appxmanifest」 had nothing to protect. publish.ps1 now reads
+  this file, patches Version, and writes it into the staging folder as AppxManifest.xml.
+
+  Two things about it are deliberate:
+
+  * **Version is a placeholder.** The real number lives in Directory.Build.props (<Version>) and reaches
+    the assembly, the 关于 card and the self-check header from there; publish.ps1 rewrites the attribute
+    below from that same property, so a release cannot ship an assembly and a package that disagree.
+    Editing the number here does nothing.
+  * **EntryPoint is Windows.FullTrustApplication, and <WindowsPackageType>None</WindowsPackageType>
+    stays in the csproj.** This is not the packaging model where the SDK builds an appx for you; it is
+    「take the loose desktop build and put a package around it」. The reason is libmpv: the player is a
+    native DLL loaded in-process into our own CreateWindowEx HWND with a child mpv window, i.e. exactly
+    the full-trust desktop shape. Keeping the loose build the primary artefact is also what keeps the
+    four gates runnable — gate 4 launches artifacts\publish\win-x64\EmbyNian.exe directly, and a build
+    that could only start from an installed package would need a trusted certificate on the machine
+    before any verification could run at all.
+
+  No <PackageDependency> on Microsoft.WindowsAppRuntime: with WindowsPackageType=None the generated
+  bootstrapper resolves the runtime at startup, and it does that inside a package as well as outside.
+  Adding the dependency would pin the framework version in two places instead of one.
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap rescap">
+
+  <!-- Publisher must match the signing certificate's subject. `winapp cert generate` reads it from
+       here (that is what its manifest flag is for), which is the whole point of the file being on disk.
+       XML forbids a double hyphen inside a comment, so command switches are named without their
+       leading dashes throughout this file. -->
+  <Identity
+      Name="EmbyNian"
+      Publisher="CN=EmbyNian"
+      Version="0.0.0.0"
+      ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>EmbyNian</DisplayName>
+    <PublisherDisplayName>EmbyNian</PublisherDisplayName>
+    <Description>Emby 的 Windows 播放客户端</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <!-- zh-CN only, to match Strings\zh-Hans\Resources.resw and the csproj's DefaultLanguage. A second
+       language listed here with no table behind it makes the package claim something it cannot do. -->
+  <Resources>
+    <Resource Language="zh-CN" />
+  </Resources>
+
+  <Dependencies>
+    <!-- 17763 is the csproj's TargetPlatformMinVersion; keeping the two equal means the package refuses
+         to install exactly where the binary would refuse to run, rather than one step earlier or later. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Capabilities>
+    <!-- Full trust, because the process loads libmpv in-process, creates its own top-level HWND, embeds
+         a child window for video, reads the user's font directory and writes screenshots to the Videos
+         folder. Every one of those is outside what a restricted capability set allows. This is also the
+         capability that a Store submission has to justify — noted here so the reason is findable then. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+  <Applications>
+    <Application Id="EmbyNian" Executable="EmbyNian.exe" EntryPoint="Windows.FullTrustApplication">
+      <!-- BackgroundColor matches the darkest theme's window colour rather than a brand green: this is
+           the plate the tile logo sits on, and the logo already carries the green. -->
+      <uap:VisualElements
+          DisplayName="EmbyNian"
+          Description="Emby 的 Windows 播放客户端"
+          BackgroundColor="#16181C"
+          Square44x44Logo="Assets\Square44x44Logo.png"
+          Square150x150Logo="Assets\Square150x150Logo.png" />
+    </Application>
+  </Applications>
+</Package>

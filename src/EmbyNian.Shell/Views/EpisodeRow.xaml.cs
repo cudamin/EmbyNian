@@ -98,7 +98,8 @@ public sealed partial class EpisodeRow : UserControl
         var row = (EpisodeRow)sender;
 
         // The card being replaced is still in its page's list and would otherwise keep its bitmap.
-        (args.OldValue as CardItem)?.ReleasePoster();
+        // keepWaiting: false —— 同 PosterCard.OnCardChanged：这一句才是权威的「它失去容器了」。
+        (args.OldValue as CardItem)?.ReleasePoster(keepWaiting: false);
 
         // Applied on every hand-over rather than bound: a recycled container keeps whichever style it was
         // last given, so the row that used to be 「you are here」 has to be told it no longer is.

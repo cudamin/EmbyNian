@@ -161,8 +161,8 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IntPtr> windowProvi
 
         if (!string.IsNullOrWhiteSpace(request.AudioLanguage)) Set(context, "alang", request.AudioLanguage);
         if (!string.IsNullOrWhiteSpace(request.SubtitleLanguage)) Set(context, "slang", request.SubtitleLanguage);
-        if (!string.IsNullOrWhiteSpace(request.SubtitleFont)) Set(context, "sub-font", request.SubtitleFont);
 
+        // 字幕字体 arrives with the rest of 字幕外观 through PlayerOptions below — one writer for sub-font.
         foreach (var subtitle in request.ExternalSubtitles) Set(context, "sub-files-append", subtitle.AbsoluteUri);
 
         // http-header-fields-append 是命令行专有写法，libmpv 的 mpv_set_option_string 认不出来

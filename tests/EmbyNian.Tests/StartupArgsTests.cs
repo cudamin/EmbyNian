@@ -74,7 +74,7 @@ internal static class StartupArgsTests
         {
             // 脚本拼命令行时容易叠出两个（tools\shot.ps1 的 -ExeArgs 后面再补一个），这时候取哪个都算合理，
             // 但必须定死一个，否则同一条命令在两台机器上拍出不同的图。
-            Assert.Equal("daylight", StartupArgs.Text(["--theme", "daylight", "--theme", "misty"], "--theme"));
+            Assert.Equal("midnight", StartupArgs.Text(["--theme", "midnight", "--theme", "misty"], "--theme"));
             Assert.Equal(1, StartupArgs.Number(["--screen=1", "--screen=2"], "--screen"));
         });
     }

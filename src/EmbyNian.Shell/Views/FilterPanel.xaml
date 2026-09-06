@@ -118,16 +118,16 @@
 
             <!-- Greyed out rather than pressable-and-inert when there is nothing to clear: the command
                  says whether it can run, so the link and the guard cannot disagree. -->
-            <HyperlinkButton
+            <HyperlinkButton x:Uid="FilterPanel_HyperlinkButton1"
+                AutomationProperties.AutomationId="FilterClearButton"
                 Command="{x:Bind ViewModel.ClearCommand}"
-                Content="清除"
                 Grid.Column="1"
                 Padding="6,2,6,2" />
         </Grid>
 
         <ItemsControl
             ItemTemplateSelector="{StaticResource EgFilterSections}"
-            ItemsSource="{x:Bind ViewModel.Sections}">
+            ItemsSource="{x:Bind ViewModel.Sections, Mode=OneWay}">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <StackPanel Spacing="12" />

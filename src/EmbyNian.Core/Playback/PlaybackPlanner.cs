@@ -19,11 +19,17 @@ namespace EmbyNian.Playback;
 /// files would go beside the executable without the user being told — which is why the screenshot rows were
 /// left out of the player menu for so long.
 /// </param>
+/// <param name="fontsDirectory">
+/// Where the bundled 字幕字体 live, handed to mpv as <c>sub-fonts-dir</c>; null omits it, which is what
+/// a test wants. This is the one piece of 「字体打包进程序里」 that reaches the player: without it a
+/// family the machine has not installed is a name mpv cannot resolve.
+/// </param>
 public sealed class PlaybackPlanner(
     AppSettings settings,
     ShaderGroupResolver shaders,
     string? shaderCacheDirectory = null,
-    string? screenshotDirectory = null)
+    string? screenshotDirectory = null,
+    string? fontsDirectory = null)
 {
     private const string Category = "playback";
 
@@ -70,7 +76,6 @@ public sealed class PlaybackPlanner(
             ExternalSubtitles = externalSubtitles,
             SubtitleLanguage = TrackLanguagePriority.FromTokens(settings.Playback.SubtitleLanguages),
             AudioLanguage = TrackLanguagePriority.FromTokens(settings.Playback.AudioLanguages),
-            SubtitleFont = ResolveFont(settings.Playback.SubtitleFontFamily),
             ShaderProfile = decision.Group?.Name,
             ShaderReason = decision.Reason,
             ShaderOptionCount = chainOptions.Count,
@@ -105,7 +110,7 @@ public sealed class PlaybackPlanner(
         string title)
     {
         var options = new List<KeyValuePair<string, string>>(48);
-        options.AddRange(MpvBaseline.Build(shaderCacheDirectory, screenshotDirectory, title));
+        options.AddRange(MpvBaseline.Build(shaderCacheDirectory, screenshotDirectory, title, fontsDirectory));
         options.AddRange(MpvOutputOptions.Build(
             settings.Video, settings.Audio, settings.Playback, source, decision.Animated, displayRefreshHz));
         options.AddRange(chainOptions);
@@ -205,38 +210,6 @@ public sealed class PlaybackPlanner(
         new("X-Emby-Token", connection.AccessToken),
         new("X-Emby-Authorization", connection.Device.ToAuthorizationHeader())
     ];
-
-    /// <summary>
-    /// The 字幕字体 to give mpv's <c>--sub-font</c>, which takes a font *family* name. An empty choice
-    /// falls back to 微软雅黑, the one CJK-capable family every Windows install has.
-    /// <para>
-    /// v3 stored the path of a file under C:\Windows\Fonts here and passed it straight through, which
-    /// mpv quietly ignored: it looked for a family literally called "C:\Windows\Fonts\msyh.ttc", found
-    /// none and fell back to sans-serif. Nobody noticed because the user's mpv.conf named a real family
-    /// of its own, and mpv.conf was read after these arguments. A leftover path is still recognised
-    /// here rather than sent as-is, because <see cref="Configuration.SettingsMigration"/> can only map
-    /// the files it knows the family names of.
-    /// </para>
-    /// </summary>
-    private static string? ResolveFont(string configured)
-    {
-        var value = configured.Trim();
-        if (value.Length == 0) return FontFamilies.Default;
-
-        // A path would be meaningless to mpv; the family behind it may not be, so it is looked up.
-        if (value.Contains('\\') || value.Contains('/') || value.EndsWith(".ttc", StringComparison.OrdinalIgnoreCase)
-            || value.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)
-            || value.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
-        {
-            var family = FontFamilies.FromFileName(value);
-            Log.Warn(Category, family is null
-                ? $"字幕字体填的是文件路径，mpv 只认字体族名，已改用 {FontFamilies.Default}：{value}"
-                : $"字幕字体填的是文件路径，已换成对应的字体族名「{family}」：{value}");
-            return family ?? FontFamilies.Default;
-        }
-
-        return value;
-    }
 
     private static void WarnAboutUnavailableTracks((int? AudioIndex, int? SubtitleIndex, bool SubtitlesDisabled) tracks, MpvTrackMap map)
     {

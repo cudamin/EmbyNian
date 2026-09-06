@@ -76,7 +76,7 @@ internal static partial class ShellSelfCheck
                     : $"{theme.Name}（{theme.Id}）是{(theme.IsDark ? "深" : "浅")}色，外壳那棵树却是 {shell.RequestedTheme} — 没登记到 ThemeHost");
 
         var painted = ThemeHost.BrushKeys.ToHashSet(StringComparer.Ordinal);
-        var darkKeys = PaletteKeys("Default");
+        var darkKeys = PaletteKeys("Dark");
         var lightKeys = PaletteKeys("Light");
 
         var absent = painted
@@ -96,7 +96,7 @@ internal static partial class ShellSelfCheck
                 ? $"ThemeHost 要涂 {absent.Length} 个调色板里没有的键：{string.Join("、", absent.Take(8))}{(absent.Length > 8 ? " 等" : "")}"
                 : unpainted.Length > 0
                     ? $"调色板有 {unpainted.Length} 个 ThemeHost 不涂的角色，它们会一直停在第一帧的字面值上：{string.Join("、", unpainted.Take(8))}{(unpainted.Length > 8 ? " 等" : "")}"
-                    : $"{painted.Count} 个键，Default 和 Light 两份都涂到了");
+                    : $"{painted.Count} 个键，Dark 和 Light 两份都涂到了");
 
         (string Key, ThemeColor Want)[] anchors =
         [
@@ -196,8 +196,13 @@ internal static partial class ShellSelfCheck
         return block.DesiredSize.Width;
     }
 
-    /// <summary>The two dictionaries <c>ThemeHost</c> writes; <c>HighContrast</c> is deliberately not one.</summary>
-    private static readonly string[] PaintedDictionaries = ["Default", "Light"];
+    /// <summary>
+    /// The two dictionaries <c>ThemeHost</c> writes; <c>HighContrast</c> is deliberately not one.
+    /// Keyed <c>Dark</c> rather than <c>Default</c> since 2026-09-05 — see the comment on that dictionary
+    /// in <c>Theme/Palette.xaml</c>. A stale <c>Default</c> here would read as 「that dictionary is
+    /// missing」 and fail 「调色板完整性」 rather than pass by accident, which is the failure worth having.
+    /// </summary>
+    private static readonly string[] PaintedDictionaries = ["Dark", "Light"];
 
     /// <summary>
     /// Every key <c>Theme/Styles.xaml</c> is supposed to publish, and the type it has to be. A missing one is
@@ -222,7 +227,14 @@ internal static partial class ShellSelfCheck
         ("EgPosterCornerRadius", typeof(CornerRadius)),
         ("EgBleedCornerRadius", typeof(CornerRadius)),
         ("EgHairline", typeof(Thickness)),
+        ("EgSpaceXS", typeof(double)),
+        ("EgSpaceS", typeof(double)),
+        ("EgSpaceM", typeof(double)),
+        ("EgSpaceL", typeof(double)),
+        ("EgSpaceXL", typeof(double)),
+        ("EgSpace2XL", typeof(double)),
         ("EgPageMargin", typeof(Thickness)),
+        ("EgPanelPadding", typeof(Thickness)),
         ("EgCornerBadgeSize", typeof(double)),
         ("EgProgressThickness", typeof(double)),
         ("EgActionHeight", typeof(double)),
@@ -258,7 +270,7 @@ internal static partial class ShellSelfCheck
 
         foreach (var merged in Application.Current.Resources.MergedDictionaries)
         {
-            // Ours, by Source. XamlControlsResources is merged right alongside it and brings a Default and
+            // Ours, by Source. XamlControlsResources is merged right alongside it and brings a Dark and
             // a Light of its own, and whether the framework's two agree is not this app's business.
             if (merged.Source is null ||
                 !merged.Source.ToString().EndsWith("Palette.xaml", StringComparison.OrdinalIgnoreCase))

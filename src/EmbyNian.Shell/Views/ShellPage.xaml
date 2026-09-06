@@ -1,20 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The shell: navigation pane, header, and the frame every page lives in.
+  The shell: the two chrome rows, the breadcrumb, and the frame every page lives in.
 
   This one file replaces four WinForms types — NavigationRail (188 hand-painted lines), the
   breadcrumb strip, the search box row and MainForm's manual page swapping — and fixes by
   construction the note left at MainForm.cs:422, that 搜索 and 服务器 had to be listed by hand
-  because neither had a rail entry. Here every destination is a NavigationViewItem, so the pane,
-  the keyboard order, the narrator names and the back stack all agree without being kept in sync.
+  because neither had a rail entry.
 
-  The sign-in card is a sibling of the NavigationView rather than a page inside the frame: one
+  **2026-09-06：左边那条 NavigationView 删掉了**（「删掉侧边栏」），换成第 1 行那条横向标签栏。所以「每个
+  目的地都是一个 NavigationViewItem」那句旧话不再成立 —— 现在是「主页 是标签栏里写死的第一格，其余每一格
+  由服务器的媒体库列表生成」，而键盘次序、读屏名字、返回栈仍然只有这一份来源。搜索没有标签：它是标题栏上
+  那颗按钮开的一页（「直接在当前窗口跳转」），侧边栏里那个常驻搜索框 09-05 之前就已经不在了。
+
+  The sign-in card is a sibling of the browse container rather than a page inside the frame: one
   window, one theme root, one XamlRoot, and signing out shows a control that is already built
   instead of rebuilding the tree.
 
   Deliberately no transitions anywhere (requirement 9: no fading, show on hover immediately).
-  NavigationView's own pane animation stays, because that is a user-initiated toggle rather than
-  something appearing under the pointer.
 
   RequestedTheme 不写在这里：一套浅色主题要靠把这棵树翻成 ElementTheme.Light 才能让框架自己那几百个
   没被 Palette.xaml 覆盖的刷子跟着走，所以深浅由 ThemeHost.Register 在构造时按当前主题设，换主题时再
@@ -32,45 +34,65 @@
     FontSize="{StaticResource EgBodyFontSize}">
 
     <!--
-      One row, not two. The title-bar strip used to be row 0 and everything else row 1; now the work area
-      runs from the window's very top edge and the strip floats over it, because 主页 的大图要铺满顶上
-      那一整块（「红框框出来的地方全填充上海报」）—— 一条 32 像素高的实心条压在大图上，等于在图的顶上留了
-      一道黑边，那正是那个要求要去掉的东西。
+      两行外壳，都浮在页面上面，一共 80 像素高（32 + 48，<c>ChromeHeight</c>）：
 
-      叠放次序写成 Canvas.ZIndex 而不是靠声明顺序：这四块的上下关系是「侧边栏和页面 → 标题栏 → 播放器 →
-      通知」，写成数字，读这个文件的人不用在心里数元素的先后。标题栏留在原地（第一块），因为它是这个窗口的
-      外壳，读起来该在最前面。
+        第 0 行  设置 · 搜索 · 后退 · 前进 ┄┄┄┄ 拖动区 ┄┄┄┄ 系统那三颗窗口按钮
+        第 1 行  主页  电视节目  电影  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 账号
+        ───────────────────────────────────────────────────────
+        页面（从窗口最左边开始，一条侧边栏都没有）
 
-      窗口顶上原来还有一条通栏发丝线（标题栏和工作区之间那道缝）。它没有了：大图现在铺到窗口顶边，一条横
-      穿窗口的线会从图上划过去。侧边栏和工作区之间那道竖线还在，而且现在从 y=0 通到底 —— 顶上这一块的边，
-      由它一根说完。
+      **左边那条 NavigationView 在 2026-09-06 整个删掉了**（「删掉侧边栏」）。他 09-05 从三张草图里挑的是顶部
+      标签栏，所以媒体库的入口是第 1 行那条 SelectorBar：`winui-design` 的控件表写着「2–3 个模式 → SelectorBar」，
+      而这里是 主页 加服务器上那两三个库。跟着一起走的有那颗折叠按钮（没有栏可折）、媒体库那行分组眉字（一条横
+      标签栏没有分组）、侧边栏和工作区之间那道竖发丝线（没有两块可分）、以及设置里「默认收起侧边栏」那一行。
+      账号那颗按钮从侧边栏最底下挪到了第 1 行右端 —— 左边那条栏没了之后窗口左下角就只是内容的一角，而右上角
+      是 Emby 网页版、Plex 放它的地方（他 09-06 从两个位置里挑的这一个）。
+
+      **两行都不上底色。** 页面自己那一块底色由 ContentHost 涂，主页上则是那张铺满的剧照本身 —— 一条实心条
+      压在大图上就是图顶上一道黑边，那正是「红框框出来的地方全填充上海报」要去掉的东西。压在图上那一档的墨走
+      不随主题走的浅墨（见 PaintTitleInk），底是轮播自己顶上那层 120 高的黑色渐变，80 装得进 120。
+
+      叠放次序写成 Canvas.ZIndex 而不是靠声明顺序：这几块的上下关系是「页面 → 外壳两行 → 登录卡 → 播放器 →
+      通知」，写成数字，读这个文件的人不用在心里数元素的先后。
     -->
-    <Grid>
-        <!-- App-drawn title bar, laid out the way the Claude app lays the same strip out: the app's mark at
-             the left end, then a flat row of icon buttons — 折叠侧边栏, 设置, 搜索, 后退, 前进 — with the two
-             arrows dimmed rather than removed when there is nowhere to go.
+    <Grid x:Name="Root">
+        <!-- 外壳那两行。整块一起收起（播放时），所以它们是一个 Grid 而不是两个兄弟：播放层要整个窗口，而
+             「标题栏那一条还在、标签栏没了」是没有意义的中间态。 -->
+        <Grid
+            x:Name="Chrome"
+            Canvas.ZIndex="10"
+            VerticalAlignment="Top"
+            Background="Transparent">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
 
-             需求 1 的第一句是「去掉窗口标题的 EmbyNian」, so the word is gone and only the mark is left. It
-             stays because the strip's left end has to remain something to drag the window by, and a hit-test
-             transparent icon is exactly that.
+        <!-- App-drawn title bar, laid out the way the Claude app lays the same strip out: a flat row of icon
+             buttons — 设置, 搜索, 后退, 前进 — with the two arrows dimmed rather than removed when there is
+             nowhere to go.
 
-             底色是 Transparent，不是 EgWindowBrush：这一条压在侧边栏和工作区的上面，两边各自把自己那半
-             画上来（侧边栏是它自己的底色，工作区是 ContentHost 的底色，主页上则是大图本身），所以这一条
-             只出按钮，不出底。
+             需求 1 的第一句是「去掉窗口标题的 EmbyNian」, so the word is gone; the green mark that used to sit
+             at the left end went with 「左上角这个绿标移除掉」. The indent stays, because the strip's left end
+             has to remain something to drag the window by.
+
+             底色是 Transparent：这一条压在页面上面，底由页面自己出（ContentHost 的底色，主页上则是大图本身），
+             所以这一条只出按钮，不出底。
 
              The right side is reserved for the OS caption buttons; everything else is declared draggable
              non-client area by HostWindow except this row, which it cuts a passthrough hole for. That hole
              is not decoration: a button drawn inside a caption region never receives a click at all, because
              the frame claims the point before XAML sees it and Windows turns the press into a window drag.
              ShellPage measures TitleActions and reports the rectangle, so the hole is always where the
-             buttons actually are rather than where this markup implies they are — which is also why all five
-             sit in one panel and not in two: one panel is one rectangle. -->
+             buttons actually are rather than where this markup implies they are — which is also why all four
+             sit in one panel and not in two: one panel is one rectangle.
+
+             **第 1 行不需要挖洞**：窗口只把最上面 32 像素（HostWindow.TitleBarHeight）算成标题栏，标签栏和账号
+             都站在那条线以下，本来就是客户区，点得着。 -->
         <Grid
             x:Name="AppTitleBar"
-            Canvas.ZIndex="10"
             Height="32"
             Padding="0,0,148,0"
-            VerticalAlignment="Top"
             Background="Transparent">
             <!-- On the strip rather than on each button: resources cascade, so all five take the same fills
                  and the same 34×26 plate. The framework's own button fills are opaque and would read as
@@ -91,10 +113,11 @@
                      PathIcon。那一步没退，因为它答的是另一句话（「图标要圆润一点」），Segoe 那套字形的直笔画
                      是平头切断的，多大都还是「硬」，字体里没有开关能改。 -->
 
-                <!-- Implicit, and scoped to this strip: five buttons repeating the same six properties is
-                     five chances for one of them to be 2 pixels out, and the hole cut in the drag region is
+                <!-- Implicit, and scoped to this strip: four buttons repeating the same six properties is
+                     four chances for one of them to be 2 pixels out, and the hole cut in the drag region is
                      measured off the row they make. BasedOn is not optional — a Button style without it
-                     replaces the template. -->
+                     replaces the template. **只管这一条**：账号那颗按钮在第 1 行，够不到这份资源，所以它
+                     不会被套上 34×26 的托盘。 -->
                 <Style BasedOn="{StaticResource DefaultButtonStyle}" TargetType="Button">
                     <Setter Property="Background" Value="Transparent" />
                     <Setter Property="BorderThickness" Value="0" />
@@ -104,9 +127,9 @@
                     <Setter Property="Padding" Value="0" />
                 </Style>
 
-                <!-- 20×20，写死：下面五颗形状都画在这个方框里、围着 (10,10) 对称，可 PathIcon 既不缩放几何、也
+                <!-- 20×20，写死：下面四颗形状都画在这个方框里、围着 (10,10) 对称，可 PathIcon 既不缩放几何、也
                      不替你把它挪到中间 —— 它照 Data 里的坐标画，自己的尺寸取几何外框的右下角，于是左上那点留白
-                     被算了两遍，一颗对称的图标会往左上偏半点。把方框还回来，五颗就都正对着托盘的中心。 -->
+                     被算了两遍，一颗对称的图标会往左上偏半点。把方框还回来，四颗就都正对着托盘的中心。 -->
                 <Style TargetType="PathIcon">
                     <Setter Property="Width" Value="20" />
                     <Setter Property="Height" Value="20" />
@@ -115,48 +138,32 @@
 
             <!-- 左边那一段是留白，不是给谁站的位置：标题栏左端得有一块拖得动的地方，而窗口挖的那个洞就是
                  下面这个面板的矩形，挖到窗口边上就没地方拖了。这里原先画着一颗绿色的应用商标（「左上角这个绿标
-                 移除掉」）—— 商标走了，缩进留着，那一排按键一颗都没动。
+                 移除掉」）—— 商标走了，缩进留着。
 
-                 留白宽多少跟着侧边栏走，**两个值**（「折叠状态下图标要向右移动一些，防止图标和侧边栏重合」）：
-                 侧边栏张开是 248 宽，这一排整个站在它自己的底色上，缩进 40；侧边栏收成 48 的窄条时 40 会让第一
-                 颗托盘正好压在窄条和工作区之间那道竖线上 —— 半边在窄条里、半边在片场里，那就是用户说的「重合」。
-                 收着的时候缩进换成 58，整排让到线的右边。这里写的是张开那个值，真正决定它的是
-                 ShellPage.xaml.cs 的 SyncPane（收放时改一次，开窗时也算一次）—— 数只写在一处，见那段说明。 -->
+                 **17 是算出来的，不是挑的**：托盘 34 宽装 20 的图标，两边各留 7，所以 17 + 7 = 24 —— 第一颗图标
+                 的左沿正好落在页面左边距（EgPageMargin 的 24）上，和底下标签栏的第一格、页面里第一排卡片对齐在
+                 同一条竖线上。侧边栏还在的时候这个数有两档（张开 40、收成窄条 58），由 SyncPane 每次收放算一遍；
+                 栏没了之后它是一个常数，所以这里写死、代码里那段跟着删了。
+
+                 四颗图标都是自己画的形状，不是字形（「改成这种风格」：细线，一笔 1.4 粗，两头圆）。那 1.4 是这
+                 一排的默认：箭头的杆量出来就是它（「线条粗细要和箭头一样」）；只有齿轮那一颗是 1.1，理由写在它
+                 自己那段里（「线条细一点」）。直笔画是一颗「胶囊」—— 一条直边配两头各半个圆，所以两端天生是圆头；
+                 闭合的轮廓（齿轮、镜片那个圈）是「外框顺着走一圈 ＋ 内框倒着走一圈」，倒着那一圈把中间掏空，剩下
+                 的就是一条同样粗的线。都画在同一个 20×20 的方框里、围着 (10,10) 对称，所以摆进 34×26 的托盘里
+                 不用再逐颗对位。几何是 tools/line-icons.awk 算出来的，不是手写的：齿轮那圈内框的每个拐角是两条边
+                 各往里平移一条线的粗细之后的交点，手算必错，而错一位在 20 像素上就是歪一格。 -->
             <StackPanel
                 x:Name="TitleActions"
-                Margin="40,0,0,0"
+                Margin="17,0,0,0"
                 Orientation="Horizontal"
                 Spacing="2"
                 VerticalAlignment="Center"
                 HorizontalAlignment="Left">
-                <!-- 需求 1 的第一颗：侧边栏收放。NavigationView's own toggle is off, because it sits inside the
-                     pane and this row is where the window's chrome now lives. -->
-                <Button
-                    x:Name="PaneButton"
-                    AutomationProperties.Name="折叠侧边栏"
-                    Click="OnPaneToggleClicked"
-                    ToolTipService.ToolTip="折叠/展开侧边栏">
-                    <!-- 五颗图标都是自己画的形状，不是字形（「改成这种风格」：细线，一笔 1.4 粗，两头圆）。
-                         那 1.4 是这一排的默认：箭头的杆、这块面板的边框，量出来都是它（「线条粗细要和箭头一样」）；
-                         只有齿轮那一颗是 1.1，理由写在它自己那段里（「线条细一点」）。
-                         直笔画是一颗「胶囊」—— 一条直边配两头各半个圆，所以两端天生是圆头；闭合的轮廓（面板、
-                         齿轮、镜片那个圈）是「外框顺着走一圈 ＋ 内框倒着走一圈」，倒着那一圈把中间掏空，剩下的
-                         就是一条同样粗的线。都画在同一个 20×20 的方框里、围着 (10,10) 对称，所以摆进 34×26 的
-                         托盘里不用再逐颗对位。
-                         几何是 tools/line-icons.awk 算出来的，不是手写的：齿轮那圈内框的每个拐角是两条边各往里
-                         平移一条线的粗细之后的交点，手算必错，而错一位在 20 像素上就是歪一格。
-                         这一颗画的是「侧边栏在不在」：一块面板，左边一竖分出一条窄栏（竖线在三分之一处，窄栏
-                         4.7 宽，就是真侧边栏收起时那条 48 像素窄条的意思）。上一版是三条横线，那是通用菜单，
-                         说不出它管的是侧边栏。竖线两端算到外框的边上，圆头整个埋进上下两条边的线里。 -->
-                    <PathIcon Data="M 5.3,4.2 L 14.7,4.2 A 2.4,2.4 0 0 1 17.1,6.6 L 17.1,13.4 A 2.4,2.4 0 0 1 14.7,15.8 L 5.3,15.8 A 2.4,2.4 0 0 1 2.9,13.4 L 2.9,6.6 A 2.4,2.4 0 0 1 5.3,4.2 Z M 5.3,5.6 A 1,1 0 0 0 4.3,6.6 L 4.3,13.4 A 1,1 0 0 0 5.3,14.4 L 14.7,14.4 A 1,1 0 0 0 15.7,13.4 L 15.7,6.6 A 1,1 0 0 0 14.7,5.6 Z M 8.33,4.9 L 8.33,15.1 A 0.7,0.7 0 0 1 6.93,15.1 L 6.93,4.9 A 0.7,0.7 0 0 1 8.33,4.9 Z" />
-                </Button>
-
                 <!-- 设置：a window of its own, not a page in the frame — 「点击后弹出设置窗口」. -->
                 <Button
                     x:Name="SettingsButton"
-                    AutomationProperties.Name="设置"
-                    Click="OnSettingsClicked"
-                    ToolTipService.ToolTip="设置">
+                x:Uid="ShellPage_SettingsButton"
+                    Click="OnSettingsClicked">
                     <!-- 齿轮：一圈齿形的轮廓线（齿顶 8.7、齿根 6.5，差出来的 1.1 就是那条线）＋ 中间一颗轴心的
                          圈（外 2.9、内 1.8，也是 1.1）。
                          六颗齿、线比这一排别的图标细一档（「把左上角的齿轮改回6个齿轮，线条细一点」）。两件事是
@@ -169,9 +176,8 @@
                 <!-- 搜索：the opposite — 「直接在当前窗口跳转」, so it is a page in this frame. -->
                 <Button
                     x:Name="SearchButton"
-                    AutomationProperties.Name="搜索"
-                    Click="OnSearchClicked"
-                    ToolTipService.ToolTip="搜索">
+                x:Uid="ShellPage_SearchButton"
+                    Click="OnSearchClicked">
                     <!-- 放大镜：一个圈（外 5.5、内 4.1，差出来的 1.4 就是那条线）＋ 一根圆头的柄。柄的内端停在
                          半径 4.82 上，够不到 4.1 那个洞 —— 差这 0.7 是故意的，柄伸进去一点镜片里就会多出一小截。 -->
                     <PathIcon Data="M 8.5,3 A 5.5,5.5 0 0 1 8.5,14 A 5.5,5.5 0 0 1 8.5,3 Z M 8.5,4.4 A 4.1,4.1 0 0 0 8.5,12.6 A 4.1,4.1 0 0 0 8.5,4.4 Z M 12.89,11.91 L 17.19,16.21 A 0.7,0.7 0 0 1 16.21,17.19 L 11.91,12.89 A 0.7,0.7 0 0 1 12.89,11.91 Z" />
@@ -179,10 +185,15 @@
 
                 <Button
                     x:Name="BackButton"
-                    AutomationProperties.Name="返回"
+                x:Uid="ShellPage_BackButton"
                     Click="OnBackClicked"
-                    IsEnabled="False"
-                    ToolTipService.ToolTip="返回">
+                    IsEnabled="False">
+                    <!-- Alt+Left used to arrive as NavigationView.BackRequested; the pane is gone, so the
+                         accelerator is stated here, beside the button it invokes. 鼠标上那颗后退键走
+                         ShellPage 的 OnRootPointerPressed —— 加速器管不着它。 -->
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Key="Left" Modifiers="Menu" />
+                    </Button.KeyboardAccelerators>
                     <!-- 箭头：一根横杆加两笔斜的，三笔的圆头都压在同一点 (3.7,10) 上，所以尖也是圆的 —— 平头
                          切出来的尖是那一排看着最「扎」的地方。前进那颗是这一颗左右翻过来的。 -->
                     <PathIcon Data="M 3.7,9.3 L 16.3,9.3 A 0.7,0.7 0 0 1 16.3,10.7 L 3.7,10.7 A 0.7,0.7 0 0 1 3.7,9.3 Z M 3.21,9.51 L 8.81,3.91 A 0.7,0.7 0 0 1 9.79,4.89 L 4.19,10.49 A 0.7,0.7 0 0 1 3.21,9.51 Z M 4.19,9.51 L 9.79,15.11 A 0.7,0.7 0 0 1 8.81,16.09 L 3.21,10.49 A 0.7,0.7 0 0 1 4.19,9.51 Z" />
@@ -190,12 +201,10 @@
 
                 <Button
                     x:Name="ForwardButton"
-                    AutomationProperties.Name="前进"
+                x:Uid="ShellPage_ForwardButton"
                     Click="OnForwardClicked"
-                    IsEnabled="False"
-                    ToolTipService.ToolTip="前进">
-                    <!-- Alt+Left is NavigationView's own, raised as BackRequested; nothing raises the
-                         other half, so the forward arrow states it. -->
+                    IsEnabled="False">
+                    <!-- 两支箭头各自带一个加速器，Alt+← / Alt+→，见上一颗那段说明。 -->
                     <Button.KeyboardAccelerators>
                         <KeyboardAccelerator Key="Right" Modifiers="Menu" />
                     </Button.KeyboardAccelerators>
@@ -204,274 +213,210 @@
             </StackPanel>
         </Grid>
 
-        <!-- ItemInvoked, not SelectionChanged (requirement 6: 「点击主页或者左侧的家园图标后，要直接回到主页
-             界面」). SelectionChanged only fires when the selection actually moves, and drilling into a series
-             or a season leaves the pane highlight sitting on 主页 while the frame shows something else — so
-             clicking 主页 selected nothing new and did nothing at all. ItemInvoked fires on every click,
-             including a click on the already-highlighted entry, which is exactly the gesture the requirement
-             is about. GoTo still guards on _current, and the drill-down paths now clear the highlight, so the
-             two agree either way round.
+        <!-- 第 1 行：媒体库标签在左，账号在右。
 
-             The pane's own toggle and its settings entry are both off: 折叠侧边栏 and 设置 are two of the five
-             buttons in the title bar now, and a second copy of either inside the pane would be one more
-             control to keep in sync for no gain.
+             SelectionChanged, not a per-item click（需求 6：「点击主页或者左侧的家园图标后，要直接回到主页
+             界面」）：SelectorBar 只在选中项真的换了的时候发这个事件，而钻进一部剧或者一季之后高亮会留在
+             主页 上、框里却是别的页面 —— 所以下钻那几条路（OpenDetail / OpenChild / AdoptContentTag）把
+             SelectedItem 清成 null，于是接下来点 主页 就是一次真的选中变化，事件照发。GoTo 自己还压着
+             _current 那道门，两头因此不会互相顶。**这也是不需要防重入旗子的原因**：Open() 先写 _current
+             再同步高亮，同步引出来的那一趟 GoTo 撞在那道门上就回去了。
 
-             IsPaneOpen 一开始就是 False（「侧边栏默认为折叠状态」）：起手是 48 像素的窄条，标题栏那颗折叠键
-             把它张开。收着这一档本来就一直在（账号那块、标题栏的墨、那一排按键的缩进都各自认它），改的只是
-             开窗时站在哪一档。PaneDisplayMode 写死 Left，所以这里不是「小窗口自动收起来」那套自适应 —— 收着
-             就是窄条，不是把侧边栏整个藏掉。
-             写在这儿的这个 False 只是起点，收不住：套上模板时 NavigationView 会照 PaneDisplayMode="Left" 把自己
-             判成「张开」那一档，顺手把 IsPaneOpen 推回 true。真正把它按住的是 ShellPage 构造函数里挂的那个
-             一次性 Loaded（FoldOnce）—— 模板套完再关一次。这里仍然留着 False，是为了让标记自己说清起手那一档
-             是什么。
-             状态一开始就对，事件却不一定响：PaneClosed/PaneOpened 只在「变了」的时候来，而这是初值。所以跟着
-             侧边栏走的那几样东西由 ShellPage 的构造函数直接算一遍（SyncPane），不等事件。 -->
-        <NavigationView
-            x:Name="Navigation"
-            AlwaysShowHeader="False"
-            IsBackButtonVisible="Collapsed"
-            IsBackEnabled="False"
-            IsPaneOpen="False"
-            IsPaneToggleButtonVisible="False"
-            IsSettingsVisible="False"
-            IsTitleBarAutoPaddingEnabled="False"
-            ItemInvoked="OnItemInvoked"
-            OpenPaneLength="248"
-            PaneDisplayMode="Left"
-            PaneClosed="OnPaneToggled"
-            PaneOpened="OnPaneToggled"
-            BackRequested="OnBackRequested"
-            Visibility="Collapsed">
+             这一格里唯一写死的数是 48：SelectorBarItem 的内边距是 12,10,12,7（框架的
+             SelectorBarItemPadding），加上 14 号字一行 20 高、选中那条 3 高的药丸，一格就是 40 上下 —— 48
+             让它上下各留一口气，也让整条外壳落在 80（32 + 48），正好装进轮播顶上那层 120 高的渐变里。
 
-            <!--
-              框架给「工作区」那一块自己画了一道边和一个圆角（左上角内缩 8、上边和左边各一像素）。原来那
-              一块顶上还压着一条标题栏，所以看不出来；现在那一块是一张铺满的剧照，那三样东西就是图的顶边
-              一道缝、左边一道缝、左上角一个豁口 —— 「红框框出来的地方全填充上海报」要去掉的正是这些。
-              自检里 主页大图贴边 那一行量的就是它：改之前起点是 (250,1)，而工作区的左边沿在 249、窗口顶
-              边在 0。三个键设在这个控件自己身上，同 ShelfStrip 里那几颗键的做法：模板里的 ThemeResource
-              从被套模板的那个元素往上找，所以这三行只管这一个 NavigationView。
-            -->
-            <NavigationView.Resources>
-                <Thickness x:Key="NavigationViewContentGridBorderThickness">0</Thickness>
-                <CornerRadius x:Key="NavigationViewContentGridCornerRadius">0</CornerRadius>
-                <Thickness x:Key="NavigationViewContentMargin">0</Thickness>
-            </NavigationView.Resources>
+             左边距 12 是算出来的：格子自己那 12 的内边距加上去正好 24，也就是页面左边距（EgPageMargin）—— 标签第一格
+             的字、标题栏第一颗图标、页面里第一排卡片，三样对齐在同一条竖线上。 -->
+        <Grid x:Name="NavBar" Grid.Row="1" Height="48" Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-            <!-- No PaneHeader and no AutoSuggestBox any more.
+            <!-- 横着滚而且不出滚动条：SelectorBar 自己不管溢出（NavigationView 顶部模式那套「…」溢出菜单它
+                 没有）。他这台服务器上是 主页 + 两个库，最窄的窗口（900）也放得开，所以这一层平时一点作用都
+                 没有；真有六七个库的时候它保证最后那一格不是「画不出来」而是「滚过去就有」，键盘走 Tab 或者
+                 左右键也会把它带进视野。**这不是 ScrollViewer 套 ListView 那种反模式** —— SelectorBar 不是
+                 会自己虚拟化滚动的集合控件。 -->
+            <ScrollView
+                HorizontalScrollBarVisibility="Hidden"
+                HorizontalScrollMode="Enabled"
+                VerticalScrollBarVisibility="Hidden"
+                VerticalScrollMode="Disabled"
+                VerticalAlignment="Center">
+                <SelectorBar
+                    x:Name="LibraryTabs"
+                    Margin="12,0,0,0"
+                    SelectionChanged="OnTabSelected">
+                    <!-- 主页 是固定的第一格；它后面每一格都是登录之后照服务器自己那份媒体库列表加的（见
+                         LoadLibrariesAsync），所以这条标签栏说的是这个账号真有什么，而不是上一次构建猜它会有
+                         什么。x:Name 就是这一格的自动化把手（本项目的规矩，见 CLAUDE.md）。 -->
+                    <SelectorBarItem x:Name="HomeTab" x:Uid="ShellPage_HomeTab" Tag="home">
+                        <SelectorBarItem.Icon>
+                            <FontIcon FontSize="16" Glyph="&#xE80F;" />
+                        </SelectorBarItem.Icon>
+                    </SelectorBarItem>
+                </SelectorBar>
+            </ScrollView>
 
-                 需求 2 是「用户和媒体服务器去掉头像，然后移动到窗口左下方」, so the account button that used
-                 to sit at the top of the pane is in NavigationView.PaneFooter below, which is the bottom of
-                 the pane and therefore the bottom-left of the window.
+            <!-- 账号：用户名、服务器名，加一张切换服务器／切换用户／注销的菜单。2026-09-06 从侧边栏最底下
+                 （窗口左下角，需求 2 的前半句）挪到这里 —— 那半句要的是「离开顶上那一排、去一个不抢眼的角」，
+                 而侧边栏一删，左下角就只是内容的一角了；右上角是 Emby 网页版和 Plex 放它的地方。系统那三颗
+                 窗口按钮在它上面一行，不打架。
+                 MaxWidth 240 加两行都截字：窗口拖到最窄时它不许把标签挤出去。 -->
+            <Button
+                x:Name="AccountButton"
+                Grid.Column="1"
+                Margin="12,0,20,0"
+                Padding="10,4"
+                MaxWidth="240"
+                VerticalAlignment="Center"
+                HorizontalContentAlignment="Left"
+                Background="Transparent"
+                BorderThickness="0"
+                CornerRadius="{StaticResource EgCardCornerRadius}">
+                <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                 The search box left with it: 需求 1 makes 搜索 a title-bar button that 「直接在当前窗口跳转」
-                 to a page whose own box is the first thing focused, so a second box permanently parked in
-                 the pane would be a duplicate that is narrower and further from the results. -->
+                    <!-- 「去掉头像」: the PersonPicture is gone, and this glyph is not a stand-in for
+                         it. 侧边栏还在的时候它是「栏收成 48 像素、两行字都放不下」那一档留下的唯一
+                         一样东西；栏没了之后这颗按钮在标题栏底下那一行，两行字永远放得下（放不下就
+                         截字），所以这个字形从此**一直收着**。留着它而不是删掉，是因为下一次窗口再
+                         窄一档时它就是现成的答案，代价是一个 Collapsed 的元素。 -->
+                    <FontIcon
+                        x:Name="AccountGlyph"
+                        FontSize="15"
+                        Foreground="{ThemeResource EgTextDimBrush}"
+                        Glyph="&#xE77B;"
+                        Visibility="Collapsed"
+                        VerticalAlignment="Center" />
 
-            <!-- The three entries below are the fixed part of the pane. Everything after the 媒体库
-                 header is added in code from the server's own library list, so the pane says what this
-                 account actually has instead of what the last build guessed it would have.
+                    <StackPanel x:Name="AccountDetails" Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock
+                            x:Name="AccountUser"
+                x:Uid="ShellPage_AccountUser"
+                            FontWeight="SemiBold"
+                            TextTrimming="CharacterEllipsis" />
+                        <!-- 服务器名走读数字（EgDataStyle）：和页头右上角那行、和卡片上的年份时长
+                             是同一种字。它是机器串，不是一句话。 -->
+                        <TextBlock
+                            x:Name="AccountServer"
+                x:Uid="ShellPage_AccountServer"
+                            Style="{StaticResource EgDataStyle}"
+                            TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
 
-                 第一项顶上让出 32：标题栏那一条现在浮在整个窗口的上面，包括侧边栏这一段（见最外层那段
-                 说明），不让开的话「主页」这一行就压在那五颗按钮底下。数写在第一项身上而不是 PaneHeader
-                 上，因为侧边栏收成 48 像素的窄条时这一项还在，PaneHeader 在不在则要看框架的心情。 -->
-            <NavigationView.MenuItems>
-                <NavigationViewItem Content="主页" Margin="0,32,0,0" Tag="home">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE80F;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItemSeparator />
-
-                <!-- 分组名走眉字：等宽、字距拉开、比正文淡一档 —— 和每一页页头最上面那行代号是同一种字。
-                     分割线说「换区了」，这行字说「换到哪一区」，两件事各归一样东西。
-                     四个属性设在 header 自己身上，而不是往 Content 里塞一个带样式的 TextBlock：那样试过，
-                     这控件的模板不是拿 ContentPresenter 摆内容的，塞进去的元素一个像素都不画。字体属性会从
-                     Control 继承到模板里那块文字上，所以设在外面才落得下去。 -->
-                <NavigationViewItemHeader
-                    x:Name="LibraryHeader"
-                    CharacterSpacing="{StaticResource EgEyebrowSpacing}"
-                    Content="媒体库"
-                    FontFamily="{StaticResource EgDataFontFamily}"
-                    FontSize="{StaticResource EgEyebrowFontSize}"
-                    Foreground="{ThemeResource EgTextFaintBrush}" />
-
-            </NavigationView.MenuItems>
-
-            <!-- 需求 2 的后半句：「诊断和服务器移动到设置里」. Both were footer entries in this pane; they are
-                 categories in the settings window now, which frees the pane's footer for the account button
-                 the first half of the same requirement asks to move down here.
-
-                 PaneFooter rather than one more FooterMenuItems entry: this is not a destination. It is a
-                 button with a flyout, and as an item NavigationView would draw it with a selection highlight
-                 and enter it into the selection model, so opening its flyout would look like navigating. -->
-            <NavigationView.PaneFooter>
-                <StackPanel>
-                    <!-- 列表和账号之间的那道缝，和窗口顶上那条、页头那条是同一根线。侧边栏因此分成两段：
-                         上面是「去哪」，下面是「你是谁」。 -->
-                    <Border Margin="12,0,12,0" Style="{StaticResource EgRuleStyle}" />
-
-                    <Button
-                        x:Name="AccountButton"
-                        Margin="4,8,4,8"
-                        Padding="8,6"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Left"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        CornerRadius="{StaticResource EgCardCornerRadius}">
-                        <Grid ColumnSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-
-                            <!-- 「去掉头像」: the PersonPicture is gone, and this glyph is not a stand-in for it.
-                                 It is only what the button has left to show once the pane is collapsed to 48
-                                 pixels and neither line of text fits. In the pane's normal open state it is
-                                 collapsed and the button is two lines of text with a chevron. -->
-                            <FontIcon
-                                x:Name="AccountGlyph"
-                                FontSize="15"
-                                Foreground="{ThemeResource EgTextDimBrush}"
-                                Glyph="&#xE77B;"
-                                Visibility="Collapsed"
-                                VerticalAlignment="Center" />
-
-                            <StackPanel x:Name="AccountDetails" Grid.Column="1" VerticalAlignment="Center">
-                                <TextBlock
-                                    x:Name="AccountUser"
-                                    FontWeight="SemiBold"
-                                    Text="未登录"
-                                    TextTrimming="CharacterEllipsis" />
-                                <!-- 服务器名走读数字（EgDataStyle）：和页头右上角那行、和卡片上的年份时长
-                                     是同一种字。它是机器串，不是一句话。 -->
-                                <TextBlock
-                                    x:Name="AccountServer"
-                                    Style="{StaticResource EgDataStyle}"
-                                    Text="未连接服务器"
-                                    TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-
-                            <!-- Points up, because the menu it opens now comes up out of the bottom of the
-                                 window rather than down out of the top of the pane. -->
-                            <FontIcon
-                                x:Name="AccountChevron"
-                                Grid.Column="2"
-                                FontSize="12"
-                                Foreground="{ThemeResource EgTextFaintBrush}"
-                                Glyph="&#xE70E;"
-                                VerticalAlignment="Center" />
-                        </Grid>
-                        <Button.Flyout>
-                            <MenuFlyout Placement="TopEdgeAlignedLeft">
-                                <MenuFlyoutSubItem x:Name="ServerMenu" Text="切换服务器">
-                                    <MenuFlyoutSubItem.Icon>
-                                        <FontIcon Glyph="&#xE968;" />
-                                    </MenuFlyoutSubItem.Icon>
-                                </MenuFlyoutSubItem>
-                                <MenuFlyoutSubItem x:Name="UserMenu" Text="切换用户">
-                                    <MenuFlyoutSubItem.Icon>
-                                        <FontIcon Glyph="&#xE77B;" />
-                                    </MenuFlyoutSubItem.Icon>
-                                </MenuFlyoutSubItem>
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Click="OnSignOut" Text="注销">
-                                    <MenuFlyoutItem.Icon>
-                                        <FontIcon Glyph="&#xE7E8;" />
-                                    </MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                            </MenuFlyout>
-                        </Button.Flyout>
-                    </Button>
-                </StackPanel>
-            </NavigationView.PaneFooter>
-
-            <!-- The breadcrumb row. The two arrows used to share it; they are up in the title bar now, where
-                 the Claude app keeps them, so all that is left here is the trail — and the row goes away
-                 with it. A row that is present but empty is the 「空荡荡」 band, and it would also push every
-                 page down by 38 pixels for nothing.
-
-                 NavigationView.Header is not used for this. Its own rule is
-                 「showHeader = AlwaysShowHeader || (top nav) || Minimal」, so with AlwaysShowHeader off and
-                 the pane Expanded on the left — this window's normal state — whatever is assigned to
-                 Header is never rendered at all. A row of this Grid always renders.
-
-                 Same brush as every page, so row and page composite identically over Mica and read as one
-                 surface. -->
-            <!-- 侧边栏和工作区之间那道竖缝。窗口顶上原来那道横的没有了（见最外层那段说明），所以现在整个
-                 窗口的结构就靠这一根线：它从 y=0 通到底，左边是面板，右边是片场。侧边栏和工作区的底色只差
-                 一档（EgWindowBrush 对 LayerFillColorDefaultBrush 透出的 Mica），差到看得出是两块、看不出
-                 边在哪里；补上这根发丝线，窗口才读成「面板 + 片场」两块，而不是一片深色里浮着几行字。
-                 画在自己这棵树上而不是找框架的键：NavigationView 的分隔线归它的模板管，而这条线的位置就是
-                 我们内容根的左边，自己画的才一定在该在的地方。
-
-                 ContentHost 顶上留出 32 并自己上底色：标题栏那一条压在这一列的上面，页面从第 32 行起画，
-                 那 32 像素由这里补上底色（页面自己的底色和它同一支，多涂一层看不出来）。整套里只有主页把
-                 这 32 顶开 —— 见 HomePage.xaml 里那块大图。 -->
-            <Border BorderBrush="{ThemeResource EgBorderBrush}" BorderThickness="1,0,0,0">
-                <Grid
-                    x:Name="ContentHost"
-                    Background="{ThemeResource LayerFillColorDefaultBrush}"
-                    Padding="0,32,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- 左右 28，和 EgPageMargin 的左右 28 一样：面包屑和它底下那块场记板因此左对齐在同一
-                         条竖线上。原来是 18，于是「媒体库 › 剧名」比页面标题往左出去 10 像素 —— 一整条别的
-                         都对齐了的界面里，这种 10 像素是最显眼的那种脏。
-
-                         底色和墨都由 PaintTitleInk 画，这里不写：详情页的剧照要「跟主页一样，占满标题栏」，
-                         也就是从窗口顶边一路铺到这一行的底下，那时这一行必须是透明的 —— 一条实心条压在图上
-                         就是那个要求要去掉的黑边。两种底两种墨，一处判断，写在代码里那一处。
-
-                         ZIndex 而不是挪声明顺序：ContentFrame 是后一个孩子，天生画在这一行的上面，而页面里
-                         那张固定的剧照正是往上顶过这一行的。数字提上来，字就在图上；顺序不动，读这个文件的人
-                         还是先看到面包屑、后看到页面。 -->
-                    <Grid
-                        x:Name="TrailBar"
-                        Canvas.ZIndex="1"
-                        Padding="28,8,28,8"
-                        Visibility="Collapsed">
-                        <Grid.Resources>
-                            <!-- 这一行的墨：字和字中间那个人字尖共用一支。
-                                 一支可改颜色的画刷、不是两个键各写一个色：改字典里的键对已经画出来的那几格
-                                 没有用（它们握着的是解析时那个对象），改这一个对象的 Color 才当场跟着变 ——
-                                 和 ThemeHost、和标题栏那两支墨同一个道理。
-                                 人字尖归框架的模板画，认的是 BreadcrumbBarNormalForegroundBrush 这个键，所以
-                                 构造时把同一支画刷也挂到那个键上（见 ShellPage.xaml.cs）。 -->
-                            <SolidColorBrush x:Key="EgTrailInkBrush" />
-                        </Grid.Resources>
-
-                        <!-- ItemsSource is assigned in code: the trail is a private field, and a breadcrumb
-                             of one entry only repeats the heading the page draws right below this row. -->
-                        <BreadcrumbBar
-                            x:Name="Trail"
-                            ItemClicked="OnBreadcrumbClicked"
-                            VerticalAlignment="Center">
-                            <!-- 走读数字：一条路径是「你在哪」的机器串，不是一句话，所以和页头右上角那行、
-                                 和账号下面那行服务器名同一种字。Binding 而不是 x:Bind —— 一格面包屑的数据
-                                 就是那个 Crumb 本身，靠它的 ToString 出字，没有属性可绑。
-                                 Foreground 写在这里而不是让 EgDataStyle 说：那支样式自己设了 Foreground，
-                                 而写在格子上的值压得过样式里的 setter。 -->
-                            <BreadcrumbBar.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock
-                                        Foreground="{StaticResource EgTrailInkBrush}"
-                                        Style="{StaticResource EgDataStyle}"
-                                        Text="{Binding}" />
-                                </DataTemplate>
-                            </BreadcrumbBar.ItemTemplate>
-                        </BreadcrumbBar>
-                    </Grid>
-
-                    <!-- Transitions cleared, not defaulted: requirement 9 rules out the page fade. -->
-                    <Frame x:Name="ContentFrame" Grid.Row="1" Transitions="{x:Null}" />
+                    <!-- 朝下：菜单现在从这颗按钮底下落出来（它在窗口顶上），不再从侧边栏底下升起来。 -->
+                    <FontIcon
+                        x:Name="AccountChevron"
+                        Grid.Column="2"
+                        FontSize="12"
+                        Foreground="{ThemeResource EgTextFaintBrush}"
+                        Glyph="&#xE70D;"
+                        VerticalAlignment="Center" />
                 </Grid>
-            </Border>
-        </NavigationView>
+                <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedRight">
+                        <MenuFlyoutSubItem x:Name="ServerMenu"
+                x:Uid="ShellPage_ServerMenu">
+                            <MenuFlyoutSubItem.Icon>
+                                <FontIcon Glyph="&#xE968;" />
+                            </MenuFlyoutSubItem.Icon>
+                        </MenuFlyoutSubItem>
+                        <MenuFlyoutSubItem x:Name="UserMenu"
+                x:Uid="ShellPage_UserMenu">
+                            <MenuFlyoutSubItem.Icon>
+                                <FontIcon Glyph="&#xE77B;" />
+                            </MenuFlyoutSubItem.Icon>
+                        </MenuFlyoutSubItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem x:Uid="ShellPage_MenuFlyoutItem2" AutomationProperties.AutomationId="AccountSignOutItem" Click="OnSignOut">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE7E8;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
+        </Grid>
+    </Grid>
+
+        <!-- 页面那一块，从窗口最左边开始 —— 侧边栏删掉之后这里再没有第二列，所以从前那道竖发丝线（面板和
+             片场之间那一根）跟着走了，框架给「工作区」画的那道边、那个圆角、那圈边距也一起没了（它们是
+             NavigationView 模板的东西）。
+
+             顶上留出 80（ChromeHeight = 标题栏 32 + 标签栏 48）并自己上底色：外壳那两行压在这一块的上面，
+             页面从第 80 行起画，那 80 像素由这里补上底色（页面自己的底色和它同一支，多涂一层看不出来）。
+             整套里只有主页把这 80 顶开 —— 见 HomePage.xaml 里那块大图。
+
+             这一块整个收起（登录页、播放时）就是「浏览态在不在」，所以 Visibility 写在它身上：从前那是
+             NavigationView 的活。 -->
+        <Grid
+            x:Name="ContentHost"
+            Background="{ThemeResource LayerFillColorDefaultBrush}"
+            Padding="0,80,0,0"
+            Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- 左右 24，和 EgPageMargin 的左右 24 一样：面包屑和它底下那块场记板因此左对齐在同一
+                 条竖线上。原来是 18，于是「媒体库 › 剧名」比页面标题往左出去 10 像素 —— 一整条别的
+                 都对齐了的界面里，这种 10 像素是最显眼的那种脏。
+
+                 底色和墨都由 PaintTitleInk 画，这里不写：详情页的剧照要「跟主页一样，占满标题栏」，
+                 也就是从窗口顶边一路铺到这一行的底下，那时这一行必须是透明的 —— 一条实心条压在图上
+                 就是那个要求要去掉的黑边。两种底两种墨，一处判断，写在代码里那一处。
+
+                 ZIndex 而不是挪声明顺序：ContentFrame 是后一个孩子，天生画在这一行的上面，而页面里
+                 那张固定的剧照正是往上顶过这一行的。数字提上来，字就在图上；顺序不动，读这个文件的人
+                 还是先看到面包屑、后看到页面。 -->
+            <Grid
+                x:Name="TrailBar"
+                Canvas.ZIndex="1"
+                Padding="24,8,24,8"
+                Visibility="Collapsed">
+                <Grid.Resources>
+                    <!-- 这一行的墨：字和字中间那个人字尖共用一支。
+                         一支可改颜色的画刷、不是两个键各写一个色：改字典里的键对已经画出来的那几格
+                         没有用（它们握着的是解析时那个对象），改这一个对象的 Color 才当场跟着变 ——
+                         和 ThemeHost、和标题栏那两支墨同一个道理。
+                         人字尖归框架的模板画，认的是 BreadcrumbBarNormalForegroundBrush 这个键，所以
+                         构造时把同一支画刷也挂到那个键上（见 ShellPage.xaml.cs）。 -->
+                    <SolidColorBrush x:Key="EgTrailInkBrush" />
+                </Grid.Resources>
+
+                <!-- ItemsSource is assigned in code: the trail is a private field, and a breadcrumb
+                     of one entry only repeats the heading the page draws right below this row. -->
+                <BreadcrumbBar
+                    x:Name="Trail"
+                    ItemClicked="OnBreadcrumbClicked"
+                    VerticalAlignment="Center">
+                    <!-- 走读数字：一条路径是「你在哪」的机器串，不是一句话，所以和页头右上角那行、
+                         和账号下面那行服务器名同一种字。Binding 而不是 x:Bind —— 一格面包屑的数据
+                         就是那个 Crumb 本身，靠它的 ToString 出字，没有属性可绑。
+                         Foreground 写在这里而不是让 EgDataStyle 说：那支样式自己设了 Foreground，
+                         而写在格子上的值压得过样式里的 setter。 -->
+                    <BreadcrumbBar.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock
+                                Foreground="{StaticResource EgTrailInkBrush}"
+                                Style="{StaticResource EgDataStyle}"
+                                Text="{Binding}" />
+                        </DataTemplate>
+                    </BreadcrumbBar.ItemTemplate>
+                </BreadcrumbBar>
+            </Grid>
+
+            <!-- Transitions cleared, not defaulted: requirement 9 rules out the page fade. -->
+            <Frame x:Name="ContentFrame" Grid.Row="1" Transitions="{x:Null}" />
+        </Grid>
 
         <local:SignInPage x:Name="SignIn" />
 

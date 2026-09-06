@@ -1,0 +1,137 @@
+# EmbyNian code style.
+#
+# winui-code-review's references/quality-rules.md says 「the project's .editorconfig is the source of
+# truth for code style」 and names three rules by hand: private fields use _camelCase, file-scoped
+# namespaces are required, `this.` qualification is not used. Until 2026-09-05 this file did not exist
+# and those three lived only in the code — 230 .cs files following them by habit, with nothing that
+# would notice the 231st breaking one.
+#
+# Everything below was measured against the tree before being written down, not aspired to: 230/230
+# file-scoped namespaces, 0 files using `this.`, 0 files indented with tabs, 230/230 LF. So the rules
+# that are set to `warning` are rules the code already passes, and gate 1 stays 「0 警告 0 错误」 with
+# them on. That is the whole point of choosing severities this way — a style rule the code already
+# violates, set to warning, only teaches the next reader to ignore warnings.
+#
+# EnforceCodeStyleInBuild stays false in Directory.Build.props, so the `warning` severities here reach
+# the IDE and `dotnet format`, not the build. Turning it on is a separate decision with its own
+# measurement to do first: the broad IDE0### family has never been run over this tree.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+trim_trailing_whitespace = true
+
+[*.{cs,csproj,props,targets,sln}]
+indent_size = 4
+
+[*.{xaml,xml,config,resw}]
+indent_size = 4
+
+[*.{json,js,yml,yaml}]
+indent_size = 2
+
+[*.md]
+# Markdown gives two trailing spaces a meaning, so the global trim would eat line breaks.
+trim_trailing_whitespace = false
+
+[*.cs]
+
+# ---- the three rules quality-rules.md names -------------------------------------------------------
+
+# File-scoped namespaces. 230/230 already.
+csharp_style_namespace_declarations = file_scoped:warning
+
+# No `this.` qualification. 0 files use it.
+dotnet_style_qualification_for_field = false:warning
+dotnet_style_qualification_for_property = false:warning
+dotnet_style_qualification_for_method = false:warning
+dotnet_style_qualification_for_event = false:warning
+
+# Private fields are _camelCase.
+dotnet_naming_rule.private_fields_underscore_camel.symbols = private_field
+dotnet_naming_rule.private_fields_underscore_camel.style = underscore_camel
+dotnet_naming_rule.private_fields_underscore_camel.severity = warning
+dotnet_naming_symbols.private_field.applicable_kinds = field
+dotnet_naming_symbols.private_field.applicable_accessibilities = private
+dotnet_naming_symbols.private_field.required_modifiers =
+dotnet_naming_style.underscore_camel.capitalization = camel_case
+dotnet_naming_style.underscore_camel.required_prefix = _
+
+# const and static readonly are PascalCase here, which is why the rule above excludes them by
+# requiring no modifiers: MaxRetryCount, not _maxRetryCount. See the naming table in quality-rules.md.
+dotnet_naming_rule.const_pascal.symbols = const_field
+dotnet_naming_rule.const_pascal.style = pascal
+dotnet_naming_rule.const_pascal.severity = warning
+dotnet_naming_symbols.const_field.applicable_kinds = field
+dotnet_naming_symbols.const_field.applicable_accessibilities = *
+dotnet_naming_symbols.const_field.required_modifiers = const
+dotnet_naming_style.pascal.capitalization = pascal_case
+
+dotnet_naming_rule.static_readonly_pascal.symbols = static_readonly_field
+dotnet_naming_rule.static_readonly_pascal.style = pascal
+dotnet_naming_rule.static_readonly_pascal.severity = warning
+dotnet_naming_symbols.static_readonly_field.applicable_kinds = field
+dotnet_naming_symbols.static_readonly_field.applicable_accessibilities = *
+dotnet_naming_symbols.static_readonly_field.required_modifiers = static, readonly
+
+# ---- what this codebase actually does, recorded so an IDE stops arguing with it ------------------
+
+# using directives outside the namespace: with file-scoped namespaces there is nowhere else for them.
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_first = true
+
+# Expression-bodied members are used heavily for one-line properties and predicates and not for
+# anything longer; 「when on a single line」 is that rule.
+csharp_style_expression_bodied_properties = when_on_single_line:suggestion
+csharp_style_expression_bodied_accessors = when_on_single_line:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_lambdas = true:suggestion
+
+# Collection expressions ([] instead of new List<T>()) are the house style since C# 12 — see the
+# ObservableCollection declarations in every view model.
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_prefer_collection_expression = true:suggestion
+
+# Pattern matching over null checks and casts: `is { Cards.Count: > 0 }` is used as a real idiom here.
+csharp_style_pattern_matching_over_is_with_cast_check = true:suggestion
+csharp_style_pattern_matching_over_as_with_null_check = true:suggestion
+csharp_style_prefer_pattern_matching = true:suggestion
+csharp_style_prefer_not_pattern = true:suggestion
+
+# var only where the type is on the right-hand side, which is what the tree does.
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+
+# Braces are omitted for single-line guard clauses throughout (`if (!Attached) return;`), so a rule
+# demanding them would fire on hundreds of deliberate lines.
+csharp_prefer_braces = when_multiline:suggestion
+
+csharp_new_line_before_open_brace = all
+csharp_prefer_simple_using_statement = true:suggestion
+csharp_style_prefer_primary_constructors = false:suggestion
+dotnet_style_prefer_conditional_expression_over_assignment = true:suggestion
+dotnet_style_prefer_conditional_expression_over_return = true:suggestion
+dotnet_style_readonly_field = true:suggestion
+
+# ---- analyzer severities ---------------------------------------------------------------------------
+
+# Unused usings/fields/variables are cleanup items quality-rules.md asks for after every edit. Kept at
+# suggestion rather than warning: gate 1 is read as 「0 警告」, and this family has not been measured
+# over the tree yet.
+dotnet_diagnostic.IDE0005.severity = suggestion
+dotnet_diagnostic.IDE0051.severity = suggestion
+dotnet_diagnostic.IDE0052.severity = suggestion
+
+# CA1416 (platform compatibility) is already in NoWarn in Directory.Build.props — the whole shell is
+# Windows-only by construction. Repeated here so the reason is findable from this file too.
+dotnet_diagnostic.CA1416.severity = none
+
+[tests/**/*.cs]
+# The test runner is one console project whose asserts read as prose; naming rules that fit production
+# types make its Chinese-named test registrations noisy for no gain.
+dotnet_diagnostic.IDE1006.severity = none

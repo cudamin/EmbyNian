@@ -287,7 +287,7 @@
                         </Grid.ColumnDefinitions>
 
                         <!-- 单集是 16:9 剧照，其余是 2:3 海报 —— 把海报裁成宽幅会切掉写着片名的那一半。
-                             这一张的尺寸不跟 设置 里的海报宽度走，是全应用唯一的例外，理由见
+                             这一张的尺寸不跟海报卡那一档（CardSize.PosterWidth）走，是全应用唯一的例外，理由见
                              DetailViewModel.PosterStillWidth。
                              宽高是绑上来的而不是写死的两个数：图到手之后这一格按它自己的形状收窄（见
                              DetailHero.StillBox），所以「海报下方会被裁切」那件事在这一格的尺寸上就没了。Uniform
@@ -343,11 +343,18 @@
                               —— 屏上真的多了一样东西，那是诚实的。
 
                               读屏跳过它（AccessibilityView=Raw）：名字就在底下那一行字里，念两遍不是无障碍。
+
+                              底下多让 6（连 Spacing 那 10 一共 16）：徽标是片方自己排的一张图，四边留白多少全看那张
+                              图，而好几部剧的那张图底边就贴着字 —— 屏上是徽标和片名粘成一团（2026-09-05 界面复查，
+                              「99.9 刑事专业律师」那部量出来只隔 10）。这 6 像素不改版面：三种页面的带高写死 460、
+                              让给内容 368，而这一叠加完还是 270 上下，海报那 300 照旧是高的那个；集页的带高是按这一叠
+                              实测给的（DetailHero.EpisodeHeight），所以它跟着长 6。
                             -->
                             <Image
                                 x:Name="TitlePlate"
                                 AutomationProperties.AccessibilityView="Raw"
                                 HorizontalAlignment="Left"
+                                Margin="0,0,0,6"
                                 MaxHeight="56"
                                 MaxWidth="280"
                                 Source="{x:Bind ViewModel.PlateImage, Mode=OneWay}"
@@ -473,6 +480,7 @@
                                 Orientation="Horizontal"
                                 Spacing="10">
                                 <Button
+                                    AutomationProperties.AutomationId="DetailPlayButton"
                                     Command="{x:Bind ViewModel.PlayCommand}"
                                     Style="{StaticResource EgPlayButtonStyle}"
                                     Visibility="{x:Bind ViewModel.PlayVisibility, Mode=OneWay}">
@@ -483,19 +491,20 @@
                                 </Button>
 
                                 <Button
+                                    AutomationProperties.AutomationId="DetailRestartButton"
                                     Command="{x:Bind ViewModel.RestartCommand}"
                                     Style="{StaticResource EgPillButtonStyle}"
                                     Visibility="{x:Bind ViewModel.RestartVisibility, Mode=OneWay}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon FontSize="14" Glyph="&#xE892;" />
-                                        <TextBlock Text="从头开始" />
+                                        <TextBlock x:Uid="DetailPage_TextBlock1" />
                                     </StackPanel>
                                 </Button>
 
-                                <Button
+                                <Button x:Uid="DetailPage_ButtonA1"
+                                    AutomationProperties.AutomationId="DetailWatchedButton"
                                     Command="{x:Bind ViewModel.ToggleWatchedCommand}"
-                                    Style="{StaticResource EgRoundButtonStyle}"
-                                    ToolTipService.ToolTip="标记已看 / 未看">
+                                    Style="{StaticResource EgRoundButtonStyle}">
                                     <Grid>
                                         <FontIcon
                                             FontSize="15"
@@ -509,10 +518,10 @@
                                     </Grid>
                                 </Button>
 
-                                <Button
+                                <Button x:Uid="DetailPage_ButtonA2"
+                                    AutomationProperties.AutomationId="DetailFavoriteButton"
                                     Command="{x:Bind ViewModel.ToggleFavoriteCommand}"
-                                    Style="{StaticResource EgRoundButtonStyle}"
-                                    ToolTipService.ToolTip="收藏">
+                                    Style="{StaticResource EgRoundButtonStyle}">
                                     <Grid>
                                         <FontIcon
                                             FontSize="15"
@@ -526,19 +535,19 @@
                                     </Grid>
                                 </Button>
 
-                                <Button
+                                <Button x:Uid="DetailPage_ButtonA3"
+                                    AutomationProperties.AutomationId="DetailOpenBrowserButton"
                                     Command="{x:Bind ViewModel.OpenBrowserCommand}"
-                                    Style="{StaticResource EgRoundButtonStyle}"
-                                    ToolTipService.ToolTip="在网页端打开">
+                                    Style="{StaticResource EgRoundButtonStyle}">
                                     <FontIcon FontSize="15" Glyph="&#xE8A7;" />
                                 </Button>
 
                                 <!-- 唯一还挂 Click 的键：弹出菜单要一个锚点元素，而锚点是视图才有的东西。 -->
                                 <Button
                                     x:Name="MoreButton"
+                x:Uid="DetailPage_MoreButton"
                                     Click="OnMoreClicked"
-                                    Style="{StaticResource EgRoundButtonStyle}"
-                                    ToolTipService.ToolTip="更多">
+                                    Style="{StaticResource EgRoundButtonStyle}">
                                     <FontIcon FontSize="15" Glyph="&#xE712;" />
                                 </Button>
                             </StackPanel>
@@ -659,34 +668,34 @@
                                 <ComboBox
                                     x:Name="SourcePicker"
                                     DisplayMemberPath="Text"
-                                    ItemsSource="{x:Bind ViewModel.Sources}"
+                                    ItemsSource="{x:Bind ViewModel.Sources, Mode=OneWay}"
                                     MinWidth="260"
                                     SelectedItem="{x:Bind ViewModel.SelectedSource, Mode=TwoWay}"
                                     Visibility="{x:Bind ViewModel.SourceVisibility, Mode=OneWay}">
                                     <ComboBox.Header>
-                                        <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="媒体源" />
+                                        <TextBlock x:Uid="DetailPage_TextBlock2" Foreground="{StaticResource EgOnScrimBrush}" />
                                     </ComboBox.Header>
                                 </ComboBox>
                                 <ComboBox
                                     x:Name="AudioPicker"
                                     DisplayMemberPath="Text"
-                                    ItemsSource="{x:Bind ViewModel.AudioTracks}"
+                                    ItemsSource="{x:Bind ViewModel.AudioTracks, Mode=OneWay}"
                                     MinWidth="200"
                                     SelectedItem="{x:Bind ViewModel.SelectedAudio, Mode=TwoWay}"
                                     Visibility="{x:Bind ViewModel.AudioVisibility, Mode=OneWay}">
                                     <ComboBox.Header>
-                                        <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="音频" />
+                                        <TextBlock x:Uid="DetailPage_TextBlock3" Foreground="{StaticResource EgOnScrimBrush}" />
                                     </ComboBox.Header>
                                 </ComboBox>
                                 <ComboBox
                                     x:Name="SubtitlePicker"
                                     DisplayMemberPath="Text"
-                                    ItemsSource="{x:Bind ViewModel.SubtitleTracks}"
+                                    ItemsSource="{x:Bind ViewModel.SubtitleTracks, Mode=OneWay}"
                                     MinWidth="200"
                                     SelectedItem="{x:Bind ViewModel.SelectedSubtitle, Mode=TwoWay}"
                                     Visibility="{x:Bind ViewModel.SubtitleVisibility, Mode=OneWay}">
                                     <ComboBox.Header>
-                                        <TextBlock Foreground="{StaticResource EgOnScrimBrush}" Text="字幕" />
+                                        <TextBlock x:Uid="DetailPage_TextBlock4" Foreground="{StaticResource EgOnScrimBrush}" />
                                     </ComboBox.Header>
                                 </ComboBox>
                             </local:WrapRow>
@@ -714,14 +723,17 @@
                                 x:Name="Overview"
                                 FontSize="{StaticResource EgBodyFontSize}"
                                 Foreground="{StaticResource EgOnScrimDimBrush}"
+                                HorizontalAlignment="Left"
                                 IsTextSelectionEnabled="True"
                                 IsTextTrimmedChanged="OnOverviewTrimmedChanged"
                                 LineHeight="24"
                                 MaxLines="{x:Bind ViewModel.OverviewMaxLines, Mode=OneWay}"
+                                MaxWidth="{StaticResource EgProseWidth}"
                                 Text="{x:Bind ViewModel.Overview, Mode=OneWay}"
                                 TextTrimming="{x:Bind ViewModel.OverviewTrimming, Mode=OneWay}"
                                 TextWrapping="Wrap" />
                             <HyperlinkButton
+                                AutomationProperties.AutomationId="DetailReadMoreButton"
                                 Command="{x:Bind ViewModel.ToggleOverviewCommand}"
                                 Content="{x:Bind ViewModel.ReadMoreText, Mode=OneWay}"
                                 Padding="0,4,0,4"
@@ -782,14 +794,13 @@
                                  不报读数 —— 季数集数已经写在标题里了（「更多来自：第一季 · 12 集，已看 3 集」）。 -->
                             <local:ShelfHead x:Name="EpisodeHead" Title="{x:Bind ViewModel.EpisodeShelf.Title, Mode=OneWay}">
                                 <local:ShelfHead.Trailing>
-                                    <ComboBox
-                                        AutomationProperties.Name="切换季"
+                                    <ComboBox x:Uid="DetailPage_ComboBoxA4"
+                                        AutomationProperties.AutomationId="DetailSeasonPicker"
                                         DisplayMemberPath="Name"
-                                        ItemsSource="{x:Bind ViewModel.Seasons}"
+                                        ItemsSource="{x:Bind ViewModel.Seasons, Mode=OneWay}"
                                         MaxWidth="280"
                                         MinWidth="180"
                                         SelectedItem="{x:Bind ViewModel.SelectedSeason, Mode=TwoWay}"
-                                        ToolTipService.ToolTip="切换季"
                                         Visibility="{x:Bind ViewModel.SeasonVisibility, Mode=OneWay}" />
                                 </local:ShelfHead.Trailing>
                             </local:ShelfHead>
@@ -846,12 +857,12 @@
                                 <StaticResource x:Key="ExpanderHeaderBorderBrush" ResourceKey="EgBorderBrush" />
                             </Expander.Resources>
                             <Expander.Header>
-                                <TextBlock Text="媒体信息" />
+                                <TextBlock x:Uid="DetailPage_TextBlock5" />
                             </Expander.Header>
                             <ItemsRepeater
                                 x:Name="InfoTable"
                                 ItemTemplate="{StaticResource InfoRowTemplate}"
-                                ItemsSource="{x:Bind ViewModel.InfoRows}">
+                                ItemsSource="{x:Bind ViewModel.InfoRows, Mode=OneWay}">
                                 <ItemsRepeater.Layout>
                                     <StackLayout Orientation="Vertical" />
                                 </ItemsRepeater.Layout>
@@ -939,7 +950,7 @@
              放在整棵树的最后一个孩子：Grid 里后面的孩子画在前面的上面，不必给 ZIndex。两条都收起来时这一层高是
              0，也就挡不着底下那张图上的任何一次点击。 -->
         <StackPanel
-            Margin="28,0,28,0"
+            Margin="24,0,24,0"
             Spacing="8"
             VerticalAlignment="Top">
             <ProgressBar

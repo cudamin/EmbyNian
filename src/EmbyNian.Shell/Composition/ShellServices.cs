@@ -75,7 +75,12 @@ internal static class ShellServices
             provider.GetRequiredService<AppSettings>(),
             provider.GetRequiredService<ShaderGroupResolver>(),
             paths.ShaderCacheDirectory,
-            paths.ScreenshotDirectory));
+            paths.ScreenshotDirectory,
+
+            // 字幕字体随程序走的那一个目录（assets/fonts，构建和发布都把它拷在 exe 旁边），交给 mpv 的
+            // sub-fonts-dir：自带的方正中等线简体靠它被 mpv 找到（v14 起装机默认是微软雅黑，自带款仍是
+            // 可选项），不依赖这台机器装没装。
+            Path.Combine(AppContext.BaseDirectory, "fonts")));
         services.AddSingleton<ShaderStaging>();
         services.AddSingleton<PlaybackBackendFactory>();
 

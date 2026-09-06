@@ -2,6 +2,8 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace EmbyNian.Shell.Views;
 
@@ -113,6 +115,17 @@ public sealed partial class PosterCard : UserControl
         new PropertyMetadata(false, OnScrimChanged));
 
     /// <summary>
+    /// 这张卡被框起来了 —— 主页右栏里和台上那张幻灯片对应的那一张（见 <see cref="CardItem.Framed"/>）。绑在卡片
+    /// 自己的那一位上（标记里 <c>Framed="{x:Bind Card.Framed, Mode=OneWay}"</c>），所以容器被回收去装另一张卡时
+    /// 这一圈自己跟着走 —— 换成页面挨个去设，回收那一下就会有一张不该框的卡带着框回来。
+    /// </summary>
+    public static readonly DependencyProperty FramedProperty = DependencyProperty.Register(
+        nameof(Framed),
+        typeof(bool),
+        typeof(PosterCard),
+        new PropertyMetadata(false, OnFramedChanged));
+
+    /// <summary>
     /// Tracked rather than read from <c>IsLoaded</c>: the two events below are the authority on when a
     /// recycled container is in the tree, and a field cannot disagree with them.
     /// </summary>
@@ -153,8 +166,52 @@ public sealed partial class PosterCard : UserControl
             Paint();
         });
 
+        // 海报换了没有：<c>Source</c> 是绑上来的（Card.Poster），所以这一声是唯一能赶上「这张图开始载入了」的地方。
+        // 注册在构造里、不解绑：这个回调只碰自己这张卡的元素，而容器被回收时它照旧要接着管下一张卡的图。
+        Poster.RegisterPropertyChangedCallback(Image.SourceProperty, (_, _) => SyncPoster());
+
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+    }
+
+    /// <summary>
+    /// 海报该不该先藏着。**已经解出来的位图直接给不透明** —— 缓存命中的那一档屏上本来就没有「跳」这件事，淡入只
+    /// 会让它慢半拍；还没解出来（或者根本没图）就先透明，等 <see cref="OnPosterOpened"/> 淡进来，在那之前透过来
+    /// 的是占位字形。
+    /// <para>
+    /// 判「解出来了没有」问的是位图自己的 <c>PixelWidth</c>，不是「有没有 Source」：一张刚交给元素、还没解码的
+    /// <c>BitmapImage</c> 两者都非空，而它此刻画不出任何东西。也不能光等 <c>ImageOpened</c> —— 一张早就解好的
+    /// 位图交给一个新元素时那一声不一定还会响，而漏一声的代价是这张卡永远停在透明上，屏上就是一张空卡。
+    /// </para>
+    /// </summary>
+    private void SyncPoster() =>
+        Poster.Opacity = Poster.Source is BitmapImage { PixelWidth: > 0 } ? 1 : 0;
+
+    /// <summary>
+    /// 海报解出来了：150 毫秒淡进来。没进树（自检里那些卡片）就直接落到终值 —— 同 <c>HomeBanner.Play</c>，那时
+    /// <c>Begin()</c> 既没人看也没有意义。
+    /// </summary>
+    private void OnPosterOpened(object sender, RoutedEventArgs e)
+    {
+        if (!_live || XamlRoot is null)
+        {
+            Poster.Opacity = 1;
+            return;
+        }
+
+        var fade = new DoubleAnimation
+        {
+            To = 1,
+            Duration = new Duration(TimeSpan.FromMilliseconds(150)),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+
+        Storyboard.SetTarget(fade, Poster);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+
+        var board = new Storyboard();
+        board.Children.Add(fade);
+        board.Begin();
     }
 
     /// <summary>
@@ -191,6 +248,16 @@ public sealed partial class PosterCard : UserControl
         set => SetValue(OnScrimProperty, value);
     }
 
+    /// <inheritdoc cref="FramedProperty"/>
+    public bool Framed
+    {
+        get => (bool)GetValue(FramedProperty);
+        set => SetValue(FramedProperty, value);
+    }
+
+    private static void OnFramedChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args) =>
+        ((PosterCard)sender).Paint();
+
     /// <summary>
     /// 底下那两行字换一套墨。换的是样式而不是画刷：压在图上那两支是写死的浅墨，可主题那两支是
     /// <c>ThemeResource</c>，抄一份画刷引用过来就再也不跟着换主题了。两个键都 <c>BasedOn</c> 主题那一套，
@@ -212,7 +279,9 @@ public sealed partial class PosterCard : UserControl
         var card = (PosterCard)sender;
 
         // The card being replaced is still in its page's list and would otherwise keep its bitmap.
-        (args.OldValue as CardItem)?.ReleasePoster();
+        // keepWaiting: false —— **这一句才是权威的「它失去容器了」**：这个容器改去装另一张卡了。离树那一声
+        // （OnUnloaded）不算，它会对一个仍然在屏上的元素喊出来，见 CardItem.ReleasePoster 上那段。
+        (args.OldValue as CardItem)?.ReleasePoster(keepWaiting: false);
 
         // A live container being handed a different item: ItemsRepeater reuses containers without
         // detaching them, so Loaded will not fire again and this is the only notice we get.
@@ -257,10 +326,15 @@ public sealed partial class PosterCard : UserControl
     }
 
     /// <summary>
-    /// 胶片格那圈线：静止是发丝灰，指针在上面或者焦点落上来就整圈换强调色。
+    /// 胶片格那圈线：静止是发丝灰，指针在上面、键盘焦点落上来、或者这张卡正被主页轮播框着
+    /// （<see cref="Framed"/>）就整圈换强调色。
     /// <para>
     /// 换的是整个 Style 而不是 BorderBrush 一个属性 —— 「亮起来的框」是什么样，词表里那两个 Style 说了算，
     /// 这里只负责挑哪一个。哪天亮的时候还要加粗一档，改词表就够了，这一行不动。
+    /// </para>
+    /// <para>
+    /// 三个来处共用同一根线，是有意的：屏上「这一张」只需要一种说法，而三者会同时成立（指针停在正被框着的那张卡
+    /// 上）。所以它们是三个旗子或、不是一个 bool —— 用一个的话，指针移开就会把轮播那一圈也熄掉。
     /// </para>
     /// <para>
     /// 两个 Style 都在应用级（Theme/Styles.xaml，App.xaml 里并进来的），所以 Application.Current.Resources
@@ -270,7 +344,7 @@ public sealed partial class PosterCard : UserControl
     /// </summary>
     private void Paint() =>
         Art.Style = (Style)Application.Current.Resources[
-            _hovered || _focused ? "EgFrameActiveStyle" : "EgFrameStyle"];
+            _hovered || _focused || Framed ? "EgFrameActiveStyle" : "EgFrameStyle"];
 
     /// <summary>
     /// Deliberately not awaited: a container coming into view must not block the layout pass on a
@@ -359,7 +433,9 @@ public sealed partial class PosterCard : UserControl
     /// 自检：胶片格那圈线的两种颜色，静止的和亮起来的，都是照实读回来的。
     /// <para>
     /// 自检既没有指针也没有焦点，所以两个旗子是摆出来的 —— 而且是先摆再读，包括静止那一次：真有指针停在
-    /// 这张卡上的时候（自检跑起来鼠标就在屏幕上某处），不摆的话读到的「静止」就是亮的。读完照原样放回去。
+    /// 这张卡上的时候（自检跑起来鼠标就在屏幕上某处），不摆的话读到的「静止」就是亮的。<see cref="Framed"/> 同
+    /// 理，而且它更容易撞上 —— 主页右栏里被轮播框着的那一张本来就亮着，而自检挑卡片是按类型挑的。读完三样照原样
+    /// 放回去。
     /// </para>
     /// </summary>
     /// <remarks>
@@ -367,9 +443,10 @@ public sealed partial class PosterCard : UserControl
     /// </remarks>
     private (Windows.UI.Color Still, Windows.UI.Color Active) ProbeFrame()
     {
-        var (hovered, focused) = (_hovered, _focused);
+        var (hovered, focused, framed) = (_hovered, _focused, Framed);
 
         (_hovered, _focused) = (false, false);
+        Framed = false;
         Paint();
         var rest = Colour(Art.BorderBrush);
 
@@ -378,6 +455,7 @@ public sealed partial class PosterCard : UserControl
         var active = Colour(Art.BorderBrush);
 
         (_hovered, _focused) = (hovered, focused);
+        Framed = framed;
         Paint();
 
         return (rest, active);

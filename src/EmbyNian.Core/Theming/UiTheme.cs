@@ -4,8 +4,8 @@ namespace EmbyNian.Theming;
 /// 一套主题里全部的颜色角色。控件从来不点名颜色，只点名角色 —— 这个类型就是角色表。
 /// <para>
 /// 二十个角色里只有五个是一套主题真正要自己定的（见 <see cref="UiThemes"/> 的 <c>Make</c>），其余全部
-/// 推出来。这不是为了少打字：手写二十个色值乘六套主题，等于一百二十个各自可以写错的数，而且没有任何东西
-/// 保证「悬停比静止亮一点」这类关系在六套里都成立。推导反过来，把关系写成一份代码，六套主题共用。
+/// 推出来。这不是为了少打字：手写二十个色值乘五套主题，等于一百个各自可以写错的数，而且没有任何东西
+/// 保证「悬停比静止亮一点」这类关系在每一套里都成立。推导反过来，把关系写成一份代码，几套主题共用。
 /// </para>
 /// </summary>
 public sealed record UiPalette
@@ -69,5 +69,9 @@ public sealed record UiPalette
 /// <param name="IsDark">
 /// 深色还是浅色。不只是给人看的：框架自己那几百个没被覆盖的刷子跟着元素树的
 /// <c>ElementTheme</c> 走，外壳就是按这个字段把树翻过去的。
+/// <para>
+/// 眼下每一套都是深色（唯一那套浅色「晴昼」2026-09-05 删了），但这个字段和它背后那条推导都留着 —— 理由写在
+/// <see cref="UiThemes"/> 的类注释里，别顺手清。
+/// </para>
 /// </param>
 public sealed record UiTheme(string Id, string Name, string Note, bool IsDark, UiPalette Colors);

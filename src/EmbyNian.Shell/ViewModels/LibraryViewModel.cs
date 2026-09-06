@@ -161,12 +161,15 @@ public sealed partial class LibraryViewModel : PageViewModel
     public partial string Subheading { get; set; }
 
     /// <summary>
-    /// 设置 → 海报宽度, which every card in this grid is built and drawn at.
+    /// 这一面网格上每张卡建出来、画出来的宽度，固定是 <see cref="CardSize.PosterWidth"/>（装机那一档 170）。
     /// <para>
     /// The grid used to be the one place the setting did not reach: the markup carried
-    /// <c>CardWidth="170" PosterHeight="255" MinItemWidth="170"</c> as literals, so moving the slider
+    /// <c>CardWidth="170" PosterHeight="255" MinItemWidth="170"</c> as literals, so moving 设置 → 海报宽度
     /// resized the home page's rows and left the library — the page the setting is obviously about —
-    /// exactly as it was. Now the same number sizes the cell, the card and the bitmap it is decoded for.
+    /// exactly as it was. The view model owned the number from then on; 2026-09-05 the setting itself was
+    /// deleted and the number settled back to the one constant every page shares. The property stays
+    /// because the pages and the self-check read the width here, and <see cref="RowHeight"/> and
+    /// <see cref="CellWidth"/> ride on its announcement.
     /// </para>
     /// </summary>
     [ObservableProperty]
@@ -250,15 +253,14 @@ public sealed partial class LibraryViewModel : PageViewModel
     internal bool ViewIsWide => View == LibraryView.Thumb;
 
     /// <summary>
-    /// The width a card is built at in the current view. The poster and thumb shapes follow 设置 →
-    /// 海报宽度; the list view's still is the same wide width the detail page's episode rows use, so
-    /// the two list styles in the app agree with each other.
+    /// The width a card is built at in the current view. The poster shape draws at
+    /// <see cref="CardSize.PosterWidth"/>; the thumb and list shapes draw the same wide width the detail
+    /// page's episode rows use, so the two list styles in the app agree with each other.
     /// </summary>
     internal int CardBuildWidth => View switch
     {
-        LibraryView.Thumb => CardSize.WideFor(CardWidth),
-        LibraryView.List => CardSize.WideWidth,
-        _ => CardWidth
+        LibraryView.Poster => CardSize.PosterWidth,
+        _ => CardSize.WideWidth
     };
 
     internal bool CardBuildWide => View != LibraryView.Poster;
@@ -381,10 +383,8 @@ public sealed partial class LibraryViewModel : PageViewModel
 
         var ui = settings.Settings.Ui;
 
-        // Clamped again rather than trusted, on the same terms as HomeViewModel.Attach: a hand-edited
-        // settings.json is a supported way to configure this app, and one poster the width of the
-        // screen is a decode nobody asked for.
-        CardWidth = Math.Clamp(ui.PosterWidth, 120, 340);
+        // 「海报宽度」那一行设置 2026-09-05 删掉了，宽度回到 CardSize 固定的默认档；角标照旧读设置。
+        CardWidth = CardSize.PosterWidth;
         _indicators = ui.ShowWatchedIndicators;
 
         Heading = request.Title;
@@ -443,7 +443,7 @@ public sealed partial class LibraryViewModel : PageViewModel
             // 「list everything under no parent」 and come back as the server's whole root.
             if (BuildQuery(start) is not { } query)
             {
-                foreach (var card in Cards) card.ReleasePoster();
+                foreach (var card in Cards) card.AbandonPoster();
                 Cards.Clear();
 
                 _total = 0;
@@ -466,7 +466,7 @@ public sealed partial class LibraryViewModel : PageViewModel
             {
                 // Released, not just dropped: a card still holds its decoded bitmap until it is told
                 // otherwise, and a reload that skipped this would leak one poster per card per refresh.
-                foreach (var card in Cards) card.ReleasePoster();
+                foreach (var card in Cards) card.AbandonPoster();
                 Cards.Clear();
             }
 
@@ -880,7 +880,7 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// <summary>
     /// The live settings object, read through the service every time rather than copied into a field: it is
     /// one instance for the process and the settings page edits it in place, so a copy taken at
-    /// <see cref="Attach"/> would go stale the moment 海报宽度 was moved.
+    /// <see cref="Attach"/> would go stale the next time the settings window touched anything.
     /// </summary>
     private AppSettings Settings => _settings!.Settings;
 

@@ -2,17 +2,19 @@
 <!--
   主页最上面那条大图轮播 —— 「参考"主页轮播大图版-misty-4.9.css"给主页轮播功能」。
 
-  一整条剧照铺满窗口顶上那一整块：上到窗口的顶边（标题栏和页眉都浮在图上）、左到侧边栏、右到窗口边沿。
-  剧照本身按 16:9 整张画出来、站在正中（「轮播的海报能保持16:9」＋「轮播图移到画面中间」），左右各剩一条带子
-  自己的底色，字块站在左边那条上。左边压一层横向的暗罩、右边一层薄的把图的边沿融掉、底下压一层纵向的、顶上
-  再压一条给标题栏和页眉垫底，标题、集号、简介和播放键站在左边的暗处，剧集的徽标贴着剧照的右下角。指针进到
-  带上时两侧浮出翻页箭头，底边一排小横条说共有几张、现在是第几张，没人碰的时候每八秒自己走一张。
+  一整条剧照铺满第一屏左边那一栏：上到窗口的顶边（标题栏和页眉都浮在图上）、左到侧边栏、右到继续观看那一栏
+  （见 HomePage.xaml 里的 Rail）。剧照本身按 16:9 整张画出来、横向居中、竖向贴顶（「轮播的海报能保持16:9」＋
+  「轮播图移到画面中间」＋「封面固定到最上方，上下不要有黑边」），而带高就是照带宽按 16:9 算出来的，所以图正好
+  铺满这一块、四边一条底色都不留。**四条边上各压一道黑色渐变，画面正中一点不压**（「给轮播页面边缘加上黑色的
+  渐变」，2026-09-05），四道各自的样子和来历见下面那一段。徽标、片名、集号、简介和两颗键叠成一整块字，**贴着左
+  下角**，徽标顶在片名头上（「移到左下角，然后把徽标移到剧名上面」，2026-09-05 —— 同详情页头图上那块 TitlePlate）。
+  指针进到带上时两侧浮出翻页箭头，底边一排小横条说共有几张、现在是第几张，没人碰的时候每八秒自己走一张。
 
-  幻灯片取「最近添加」的头几个条目，继续观看和接下来看在后面补位（见 HomeCarousel.Slides）。
+  幻灯片先用继续观看，不够再用最近添加（见 HomeCarousel.Slides）。
 
-  普通窗口里带高走 HomeCarousel.Height：首选 2.2:1、下限 240、上限是窗口高的一份额。锁定窗口比例且第一排
-  已经量出来后改走 HomeCarousel.FoldHeight：用视口剩余高度给轮播定高，让完整的「继续观看」落在首屏内，下一排
-  「媒体库」从首屏外开始。侧边栏收起或展开只改工作区宽，不再改变这条首屏边界。
+  带高走 HomeCarousel.Height：带宽 ÷ 16 × 9，上限是一屏（超宽屏上算出来会更高），下限 240。完整的「继续观看」由
+  右边那一栏兑现（HomeCarousel.RailWidth），第一排横着的货架接在这一块的下沿之后 —— 它会露进第一屏一截，那也是
+  「底下还有东西」唯一的招牌。侧边栏收起或展开会改带宽，所以也会改带高。
 
   渐变里的颜色全是写死的 ARGB，不是 ThemeResource 的颜色键 —— 高对比度那本词典里只有画刷没有颜色键，写键
   会在运行时抛（同 DetailPage 的头图）。带上的字压在剧照上，所以也不跟主题走。
@@ -32,10 +34,10 @@
         <SolidColorBrush x:Key="EgBannerDotBrush" Color="#59F3F5F8" />
         <SolidColorBrush x:Key="EgBannerDotOnBrush" Color="#FFF3F5F8" />
 
-        <!-- 带子自己的底：剧照整张画出来（Stretch="Uniform"，见下面 LayerA/LayerB），所以左边总会留出一条
-             不是图的地方 —— 字块正站在那儿。这一支写死不跟主题走，和带上那几层暗罩、带上的字是同一个决定：
-             晴昼那套浅色里主题底是近白的，那条留白就会变成「白底白字」。 -->
-        <SolidColorBrush x:Key="EgBannerBaseBrush" Color="#FF0C0E11" />
+        <!-- 带子自己的底在 Theme/Palette.xaml 里（EgBannerBaseBrush）：剧照整张画出来（Stretch="Uniform"，见
+             下面 LayerA/LayerB），所以四周总会留出一条不是图的地方 —— 字块正站在左边那一条上。那支画刷在
+             Palette 里而不在这儿，是因为第一屏右边那一栏继续观看（HomePage 的 Rail）要用同一支：两栏并排，差
+             一档就是中间一道竖着的接缝。 -->
 
         <!-- 播放键原来是一块写死的白底黑字，四支画刷四个态。改成跟主题走的强调色之后那四支全没用了 ——
              详情页头图上的播放键本来就是强调色，同一个产品两个最大的画面上，最主要的那颗键不该一个白
@@ -46,9 +48,9 @@
 
         <!-- 三个键的高度和圆角都取词表，跟详情页头图上那六颗一样：38 高、圆角 8。BasedOn 是必须的，见
              ShelfStrip 里同一处注释：隐式样式只在没设过 Style 时生效。
-             左右边距 8（原来 14）：这两颗贴着带的边沿走，「按钮旁边移动一些」—— 它们占的那一段（8 到 46）是
-             留给箭头的一条窄栏，字块从这条窄栏右边起（见下面 Info 的 Margin），两边不同列，所以字块沉下去
-             之后箭头落在片名那一行也压不到字。 -->
+             左右边距 8（原来 14）：这两颗贴着带的边沿走，「按钮旁边移动一些」—— 它们各占的那一段（8 到 46）是
+             留给箭头的两条窄栏，而字块贴在左下角、左边距比左边那条窄栏更宽（见下面 Info 的 Margin），两边不同
+             列，所以带子矮到字块爬上竖向正中那一档，左箭头也压不到字。 -->
         <Style x:Key="EgBannerPageButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
             <Setter Property="Width" Value="{StaticResource EgActionHeight}" />
             <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
@@ -87,11 +89,10 @@
     -->
     <Grid
         x:Name="Root"
+                x:Uid="HomeBanner_Root"
         Background="Transparent"
         IsTabStop="True"
         UseSystemFocusVisuals="True"
-        AutomationProperties.Name="主页轮播"
-        AutomationProperties.HelpText="按左右方向键切换幻灯片"
         PointerEntered="OnPointerEntered"
         PointerMoved="OnPointerEntered"
         PointerExited="OnPointerExited"
@@ -112,72 +113,51 @@
             <!--
               两层剧照轮着上：走下一张时新的那层淡入、旧的那层淡出，所以带上任何时候都有图，不会闪一下底色。
 
-              Uniform ＋ 居中（「轮播的海报能保持16:9」＋「轮播图移到画面中间」）：整张剧照按自己的比例画出来，
-              一个像素都不裁，高度吃满带子、宽度跟着算，然后站在带子正中。带比 16:9 扁，所以左右各剩一条底色 ——
-              左边那条是字块站的地方（横着那层暗罩在那儿最浓），右边那条只有一道缝，由下面那层薄的把它融掉。
-              以前是 UniformToFill：图裁到带的比例上，2.2:1 那一档要切掉三成半的画面高度。
+              Uniform ＋ 横向居中 ＋ 竖向贴顶（「轮播的海报能保持16:9」＋「轮播图移到画面中间」＋「封面固定到最
+              上方，上下不要有黑边」）：整张剧照按自己的比例画出来，一个像素都不裁。带高就是照这个宽度按 16:9 算
+              出来的（HomeCarousel.Height），所以正常情况下图正好铺满这一块、四边一条底色都不留 —— 贴顶那一句
+              管的是两种余量：算出来的高取过整那不到一像素，以及超宽屏上带高被一屏封住、图改成吃满带高时的左右
+              留白（那一档留白在左右，贴顶不影响它）。以前是 UniformToFill：图裁到带的比例上，2.2:1 那一档要切掉
+              三成半的画面高度。
             -->
-            <Image x:Name="LayerA" Stretch="Uniform" HorizontalAlignment="Center" Opacity="0" />
-            <Image x:Name="LayerB" Stretch="Uniform" HorizontalAlignment="Center" Opacity="0" />
+            <Image x:Name="LayerA" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top" Opacity="0" />
+            <Image x:Name="LayerB" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top" Opacity="0" />
 
-            <!-- 横着的暗罩：字站在左边，所以左边暗、右边把剧照放出来。后两个位置在 Resize 里跟着剧照的左边沿
-                 走（见 HomeBanner.ShadeEdge）—— 剧照居中，左右各留一条底色，而这一层要托住整块字，所以从带的
-                 左沿起就浓，过了字块才淡出。写在这里的三个数是量不到尺寸时的起手值。
+            <!--
+              **四条边上各一道黑色渐变，画面正中不压**（「给轮播页面边缘加上黑色的渐变」，2026-09-05）。
 
-                 这一层铺满整条带的高度，不在货架的上沿收边。收边那一下会在屏上留一道横线：线上面是这一层和底下
-                 那层玻璃两层叠着、线下面只剩玻璃一层，同一张剧照在一个像素里就亮回去一档，这一层最浓的左边跳得
-                 最凶（量出来亮度 20 跳到 36，越往右越小、到右边沿归零），而那道线正落在第一排牌子的上方 ——
-                 「最近添加上方有明显的颜色断层，我想避免这种情况」。收边换来的是货架底下能透出剧照，代价是这道
-                 线，用户选了不要线：那一片本来也被卡片盖着、只剩卡片之间几道缝，而左浓右淡是这一层从上到下一贯
-                 的样子，铺到底只是把它画完，收边才是那个突变。 -->
-            <Border x:Name="ShadeSide">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
-                        <GradientStop Offset="0" Color="#E60C0E11" />
-                        <GradientStop x:Name="ScrimMid" Offset="0.38" Color="#A60C0E11" />
-                        <GradientStop x:Name="ScrimFar" Offset="0.72" Color="#000C0E11" />
-                    </LinearGradientBrush>
-                </Border.Background>
-            </Border>
+              这件事来回过三趟，三趟都记在这儿，免得下一个窗口把某一趟当成漏做。原先有三层暗罩（横着那层左浓
+              右淡托着整块字、右边沿那层薄的、竖着那层把下沿压暗），2026-09-05 按他一句「轮播图上的黑色渐变去
+              掉」整个删了；删掉之后一张亮画面上那块字就读不出来（拍给他看过），于是同一天他给了第二句 ——
+              **要的不是把整张画面压回去，是只压边缘**；看过那一版之后是第三趟，「渐变弄淡一些，面积弄少一些」
+              （同一天），也就是下面那张表里现在这一档。所以下面三层边缘渐变的共同形状是：**贴边那一头最浓，
+              走到三分之一上下就已经全透明**（渐变都调过头，让 Offset 0 落在自己那条边上，三层一个样子好比对）。
+              谁把某一层透明的那一头挪过中线，就等于把删掉的那三层又请了回来 —— HomeBanner.Probe 守的是「半张
+              之前散尽」这条底线，它比现在这一档松：**它钉的是「只压边缘」这件事本身，不是他挑的那两个数**。
 
-            <!-- 右边那一层薄的：剧照居中之后右边也剩一条底色，图的右边沿在那儿会留一道硬边，这一层只把那道边
-                 融进底色里。浓度比左边那层低得多 —— 左边那层要托住整块字，这一层只管一条缝。位置同样跟着剧照
-                 的右边沿走，高度同样铺满整条带：图的右边沿在货架底下照样是一道硬边，收在那一沿上反而是把这道边
-                 露出来一截。渐变是反着的：StartPoint 在右边，所以 Offset 0 就是带的右沿。 -->
-            <Border x:Name="ShadeEdgeLayer">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="1,0.5" EndPoint="0,0.5">
-                        <GradientStop x:Name="EdgeNear" Offset="0.18" Color="#B30C0E11" />
-                        <GradientStop x:Name="EdgeFar" Offset="0.30" Color="#000C0E11" />
-                    </LinearGradientBrush>
-                </Border.Background>
-            </Border>
+              四层都摆在两层剧照之后、字块之前，所以它们压的只有剧照。颜色全是写死的 ARGB（#0C0E11，同
+              EgOnScrim* 那一族）：高对比度那本词典里只有画刷没有颜色键，写颜色键会在运行时抛。
 
-            <!-- 竖着的那层：把下沿压暗。它管两件事 —— 底边那排小横条站得住，以及压在图上那一排货架（继续观看）
-                 底下有一层足够暗的底，牌子和卡片下面那两行浅墨才读得出来。三个位置在 Resize 里跟着那一排的上沿
-                 走（见 HomeBanner.ShadeEdge）：上面那一段一点不压，整张剧照看得见；到那一排的上沿开始压，往下
-                 一路压到底。写在这里的三个数是量不到尺寸时的起手值。
+              浓度和伸进来的深度按各自要干的活分，第三趟之后是这一档（括号里是第二趟那一版，也就是他嫌浓、
+              嫌大的那个）：
 
-                 这一层的浓度就是「继续观看那块玻璃」的浓度 —— 「主页继续观看亚克力背景颜色弄深一点」：那一排的
-                 上沿从 55% 提到 65%，带的下沿从 75% 提到 87%。上面那一段仍然一点不压，所以剧照的上大半还是整张
-                 看得见，深的只有玻璃盖住的那一片。三段只能越往下越浓 —— 中间那一段比下面浓的话，屏上就是一道
-                 横着的亮痕，这一条由 Probe 钉着。 -->
-            <Border x:Name="ShadeFoot">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
-                        <GradientStop x:Name="FootNear" Offset="0.45" Color="#000C0E11" />
-                        <GradientStop x:Name="FootMid" Offset="0.62" Color="#A60C0E11" />
-                        <GradientStop x:Name="FootFar" Offset="1" Color="#DE0C0E11" />
-                    </LinearGradientBrush>
-                </Border.Background>
-            </Border>
+                左 55%，到 0.33 散尽（70% / 0.50）—— 字块整块站在这一边，也是徽标和片名唯一的靠山；
+                下 60%，到 0.35 散尽（76% / 0.50）—— 管的是简介、两颗键和底边那排小横条；
+                右 29%，到 0.19 散尽（35% / 0.28）—— 只把图的右沿收进右栏那道竖缝里。
+
+              **右边那 29% 离 Probe 的下限（Rims 那句「贴边那头 alpha > 0x40」，也就是 25%）只剩一档**：谁还要
+              更淡，得连那句断言一起改，否则自检当场红。顶上那层管的是别人家的东西，形状也和这三层不同、第三趟
+              一个数都没动，见下面它自己那一段。
+            -->
 
             <!--
               顶上那一条：给标题栏那五颗按钮、系统那三颗窗口按钮和页眉垫底。写死 120 像素而不是按比例
               取一段渐变 —— 带高会随窗口宽在 240 到 560 之间变，而要垫的那一条永远是 32 加页眉那两行。
-              摆在徽标和字块之前，所以它压的只有剧照。
               浓度按最亮的剧照定：一张顶上接近纯白的剧照（比如「卓别林」那张），页眉右边那行读数（「果服 ·
               29 项」）和三颗窗口按钮就都站在白上。0.5 那一档管的正好是那行读数所在的高度。
+              **「渐变弄淡一些、面积弄少一些」那一趟（2026-09-05 第三趟）一个数都没动它**：它不是画面上的装饰，
+              是系统自己画的那三颗窗口按钮唯一的底 —— 那三颗我们只换得了墨色、换不了形状，这一条淡到那行读数
+              在纯白剧照上读不出来，它就白垫了。他要连它一起淡，改的就是下面这三档。
             -->
             <Border Height="120" VerticalAlignment="Top">
                 <Border.Background>
@@ -189,92 +169,163 @@
                 </Border.Background>
             </Border>
 
-            <!-- 徽标在右下角，不在右上角：右上角现在是页眉那行读数（「果服 · 29 项」）和系统的三颗窗口按钮。
-                 底下这个角本来空着，只有中间那排小横条，徽标搁在这儿正好和左边那块字对平。
-                 右边距在 Resize 里改成「居中留出的那一条 + 34」（见 HomeBanner.ShadeEdge）：剧照居中之后带的
-                 右沿和图的右沿差了一条留白，徽标该贴着图。这里写的是量不到尺寸时的起手值。 -->
-            <Image
-                x:Name="LogoImage"
-                Stretch="Uniform"
-                Opacity="0"
-                MaxHeight="86"
-                MaxWidth="240"
-                Margin="0,0,34,30"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Bottom">
-                <Image.RenderTransform>
-                    <TranslateTransform x:Name="LogoShift" />
-                </Image.RenderTransform>
-            </Image>
+            <!--
+              下边那一条。铺满整条带、按比例取渐变，而不是像顶上那条写死高度：它要托的是那块字，而字块贴着下沿
+              站、带高又在 240 到一屏之间变。**到 0.35 处已经全透明**（第三趟从 0.5 收进来的，见上面那张表），所以
+              它管到的是简介、两颗键和底边那排小横条；字块上半截那两行（徽标和片名）由左边那一条管。
+            -->
+            <Border>
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0.5,1" EndPoint="0.5,0">
+                        <GradientStop Offset="0" Color="#990C0E11" />
+                        <GradientStop Offset="0.14" Color="#660C0E11" />
+                        <GradientStop Offset="0.25" Color="#330C0E11" />
+                        <GradientStop Offset="0.35" Color="#000C0E11" />
+                        <GradientStop Offset="1" Color="#000C0E11" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
 
             <!--
-              字块站在左边的暗处。四行各有自己的 TranslateTransform，因为换一张时它们是错着抬起来的（见
-              HomeBanner.Rise）；动画在代码里搭，Storyboard.TargetName 只在运行时解析，写在这里编译不出错、
-              跑起来才抛。
+              左边那一条：字块整块都站在这一边，所以三层里它最浓、也是徽标和片名唯一的靠山（下边那条到 0.35 就散
+              尽了，而这两行在字块的上半截）。0.33 处全透明，画面右边三分之二一点不受它影响。
+            -->
+            <Border>
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Offset="0" Color="#8C0C0E11" />
+                        <GradientStop Offset="0.15" Color="#4D0C0E11" />
+                        <GradientStop Offset="0.33" Color="#000C0E11" />
+                        <GradientStop Offset="1" Color="#000C0E11" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
 
-              整块还压着一个 InfoShift，把字从正中往下挪一点（「红框中的字体往下移动一些」）：正中读着像贴在
-              画面中线上的图注，主角的字该在下半张。挪的量由 HomeCarousel.InfoDrop 按带高算，Resize 里写进来。
-              这里用 transform 而不是上边距，是因为上边距对一个居中的孩子只生效一半（余下的空间上下均分），
-              而且它要占版面 —— 带子缩到 240 那个下限时，占掉的正是让播放键留在带子里的那点余量。
+            <!--
+              右边那一条：最薄的一层，只把图的右沿收进右栏那道竖缝里（两栏并排，图的右沿硬切在缝上会显出一条
+              亮边）。字不在这一边，所以浓度只有左边那层的一半上下，伸进来的深度也只有它的一半上下。**0x4A 离
+              Probe 那句「贴边那头 alpha > 0x40」只剩一档**，要再淡得连那句断言一起改。
+            -->
+            <Border>
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="1,0.5" EndPoint="0,0.5">
+                        <GradientStop Offset="0" Color="#4A0C0E11" />
+                        <GradientStop Offset="0.19" Color="#000C0E11" />
+                        <GradientStop Offset="1" Color="#000C0E11" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
 
-              左边距 60（原来 28，页面那条脊线的位置）：「翻页的按钮会挡住字体」—— 两颗箭头贴着带的边沿、在带的
-              竖向正中，占到 46 为止；字沉下去之后箭头正好落在片名那一行上，所以让开的只能是列，不是高度。空出来
-              的这一段就是箭头那条窄栏，余下 14 是它和字之间的一口气（「片名向右移动一些」）。字块因此不再和上面
-              那块牌子（「HOME / 主页」，28）左对齐 —— 那两样本来不是一层：牌子是页面的抬头，和底下第一排卡片同
-              一条脊线；这一块是压在剧照上的内容，边沿本就该留得比页面多，箭头也从这一段里出来。
+            <!--
+              字块站在左下角，徽标顶在片名头上（「移到左下角，然后把徽标移到剧名上面」，2026-09-05）。**徽标因此
+              是这一叠的第一行，不再是压在角上的一张独立的图** —— 它跟着字块一起排版、一起抬起来，同详情页头图
+              上那块 TitlePlate。这一步顺手把 PlaceLogo 整个删了：那个方法算的是「剧照居中之后带子和图之间那两条
+              留白」，好让徽标贴住图的角，而现在徽标站在字块里、由布局给位置，那两条留白（本来也只剩取整的一点点）
+              没人再需要。
+
+              每一行各有自己的 TranslateTransform，因为换一张时它们是错着抬起来的（见 HomeBanner.Rise）；动画在
+              代码里搭，Storyboard.TargetName 只在运行时解析，写在这里编译不出错、跑起来才抛。
+
+              **贴着下沿，不是「居中再往下沉一点」**：从前这一块竖向居中，外面套一个 InfoShift 把整块往下挪
+              （「红框中的字体往下移动一些」，挪多少由 HomeCarousel.InfoDrop 按带高算）。挪到角上之后那条规则整个
+              没有意义了 —— 贴着下沿本来就是「字在下半张」的极端，再沉就沉出带子 —— 所以 InfoShift 连 InfoDrop
+              那个纯函数一起删掉了，别再去 Core 里找它。
+
+              下边距 46（代码里的 InfoBaseline）让开底边那排小横条：那排的点击区 16 高、离下沿 18，34 以下是它的
+              地盘，字块底下这一档必须比它大 —— HomeBanner.Probe 拿这三个常数当场对一遍。
+
+              左边距 60（原来 28，页面那条脊线的位置）：「翻页的按钮会挡住字体」—— 两颗箭头贴着带的左右边沿、在带
+              的竖向正中，各占到 46 为止，所以字块让开的是**列**，不是高度（带子缩到 240 那个下限时字块的上半截正
+              好爬到带的竖向正中，也就是左箭头那一行）。空出来的这一段就是箭头那条窄栏，余下 14 是它和字之间的一口
+              气（「片名向右移动一些」）。字块因此不和上面那块牌子（「HOME / 主页」，28）左对齐 —— 那两样不是一层：
+              牌子是页面的抬头，和底下第一排卡片同一条脊线；这一块是压在剧照上的内容，边沿本就该留得比页面多。
             -->
             <StackPanel
                 x:Name="Info"
-                Margin="60,0,0,0"
+                Margin="60,0,0,46"
                 MaxWidth="620"
                 Spacing="10"
                 HorizontalAlignment="Left"
-                VerticalAlignment="Center">
-                <StackPanel.RenderTransform>
-                    <TranslateTransform x:Name="InfoShift" />
-                </StackPanel.RenderTransform>
+                VerticalAlignment="Bottom">
+
+                <!--
+                  下面这四行各自套一层 Grid（<c>…Row</c>），为的是那层跟着字形走的影子（见 TextInk）：影子挂在同
+                  一格里排在字前面的那个空元素上，而抬起来那一下的位移和淡入写在这一格上 —— 两样分开写的话，字抬
+                  起来了影子还留在原处。所以 **RenderTransform 和 Opacity 都在 Row 这一层，不在字上**。
+                  影子只在亮剧照上才看得出用处：量过的账在 TextInk 那段注释里（粉色那张动画剧照上简介 1.9:1）。
+                -->
+
+                <!-- 剧集自己的徽标，没有就整行收起（StackPanel 的 Spacing 不给收起来的孩子留位置）—— 「这个剧集
+                     没有徽标」和「徽标没画出来」在屏上长得一样，而只有后一种是这份代码的错。
+                     上限 280×56 抄的是详情页头图上那块 TitlePlate，也就是这个应用里另一处「徽标顶在片名头上」的
+                     地方；它在右下角那一版是 240×86，站进字块之后收一档 —— 五行东西叠起来，而带子最窄那一档只有
+                     321 高（900 宽的窗口减掉侧边栏和右栏，再按 16:9 算），一整块字得放得进去。 -->
+                <Grid x:Name="LogoRow">
+                    <Grid.RenderTransform>
+                        <TranslateTransform x:Name="LogoShift" />
+                    </Grid.RenderTransform>
+                    <Border x:Name="LogoInk" IsHitTestVisible="False" />
+                    <Image
+                        x:Name="LogoImage"
+                        Stretch="Uniform"
+                        MaxHeight="56"
+                        MaxWidth="280"
+                        HorizontalAlignment="Left"
+                        AutomationProperties.AccessibilityView="Raw" />
+                </Grid>
 
                 <!-- 字号字体字色全在 EgDisplayTitleStyle 里，和详情页头图上的片名是同一个键。原来这里写死
                      40/Bold 而没写字体，于是主页最大的一块字是「更大的正文字」；前景取的还是播放键那支画
                      刷 —— 一支键的画刷去画字，改主题时那两处必然各走各的。 -->
-                <TextBlock
-                    x:Name="TitleText"
-                    Style="{StaticResource EgDisplayTitleStyle}"
-                    MaxLines="1"
-                    TextTrimming="CharacterEllipsis">
-                    <TextBlock.RenderTransform>
+                <Grid x:Name="TitleRow">
+                    <Grid.RenderTransform>
                         <TranslateTransform x:Name="TitleShift" />
-                    </TextBlock.RenderTransform>
-                </TextBlock>
+                    </Grid.RenderTransform>
+                    <Border x:Name="TitleInk" IsHitTestVisible="False" />
+                    <TextBlock
+                        x:Name="TitleText"
+                        Style="{StaticResource EgDisplayTitleStyle}"
+                        MaxLines="1"
+                        TextTrimming="CharacterEllipsis" />
+                </Grid>
 
                 <!-- 集号和那串读数（「S03E09 · 2024 · 1080P · 2H14M」），所以走等宽的那一支 —— 和详情页头图
                      上同一行东西同一种字。 -->
-                <TextBlock
-                    x:Name="CaptionText"
-                    Style="{StaticResource EgOnScrimDataStrongStyle}"
-                    MaxLines="1"
-                    TextTrimming="CharacterEllipsis">
-                    <TextBlock.RenderTransform>
+                <Grid x:Name="CaptionRow">
+                    <Grid.RenderTransform>
                         <TranslateTransform x:Name="CaptionShift" />
-                    </TextBlock.RenderTransform>
-                </TextBlock>
+                    </Grid.RenderTransform>
+                    <Border x:Name="CaptionInk" IsHitTestVisible="False" />
+                    <TextBlock
+                        x:Name="CaptionText"
+                        Style="{StaticResource EgOnScrimDataStrongStyle}"
+                        MaxLines="1"
+                        TextTrimming="CharacterEllipsis" />
+                </Grid>
 
                 <!-- 两行就够：这条带是「看一眼决定看不看」，不是简介页。字比上面那行读数暗一档 —— 原来这里
                      是 Opacity 0.86 装出来的暗，而暗一档本来就是一支画刷的事。 -->
-                <TextBlock
-                    x:Name="SynopsisText"
-                    Style="{StaticResource EgOnScrimBodyStyle}"
-                    Foreground="{StaticResource EgOnScrimDimBrush}"
-                    LineHeight="22"
-                    MaxLines="2"
-                    TextWrapping="Wrap"
-                    TextTrimming="CharacterEllipsis">
-                    <TextBlock.RenderTransform>
+                <Grid x:Name="SynopsisRow">
+                    <Grid.RenderTransform>
                         <TranslateTransform x:Name="SynopsisShift" />
-                    </TextBlock.RenderTransform>
-                </TextBlock>
+                    </Grid.RenderTransform>
+                    <Border x:Name="SynopsisInk" IsHitTestVisible="False" />
+                    <TextBlock
+                        x:Name="SynopsisText"
+                        Style="{StaticResource EgOnScrimBodyStyle}"
+                        Foreground="{StaticResource EgOnScrimDimBrush}"
+                        LineHeight="22"
+                        MaxLines="2"
+                        TextWrapping="Wrap"
+                        TextTrimming="CharacterEllipsis" />
+                </Grid>
 
-                <StackPanel x:Name="Actions" Orientation="Horizontal" Spacing="10" Margin="0,6,0,0">
+                <StackPanel
+                    x:Name="Actions"
+                    Orientation="Horizontal"
+                    Spacing="10"
+                    Margin="0,6,0,0"
+                    HorizontalAlignment="Left">
                     <StackPanel.RenderTransform>
                         <TranslateTransform x:Name="ActionsShift" />
                     </StackPanel.RenderTransform>
@@ -293,7 +344,7 @@
 
                     <Button
                         x:Name="OpenButton"
-                        Content="详情"
+                x:Uid="HomeBanner_OpenButton"
                         Style="{StaticResource EgBannerGhostStyle}"
                         Click="OnOpenClicked">
                         <Button.Resources>
@@ -308,13 +359,13 @@
 
             <Button
                 x:Name="PrevButton"
+                x:Uid="HomeBanner_PrevButton"
                 Style="{StaticResource EgBannerPageButtonStyle}"
                 HorizontalAlignment="Left"
                 Content="&#xE76B;"
                 FontFamily="{ThemeResource SymbolThemeFontFamily}"
                 FontSize="14"
                 IsTabStop="False"
-                AutomationProperties.Name="上一张"
                 Click="OnPrevClicked">
                 <Button.Resources>
                     <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgBannerPageHoverBrush" />
@@ -326,13 +377,13 @@
 
             <Button
                 x:Name="NextButton"
+                x:Uid="HomeBanner_NextButton"
                 Style="{StaticResource EgBannerPageButtonStyle}"
                 HorizontalAlignment="Right"
                 Content="&#xE76C;"
                 FontFamily="{ThemeResource SymbolThemeFontFamily}"
                 FontSize="14"
                 IsTabStop="False"
-                AutomationProperties.Name="下一张"
                 Click="OnNextClicked">
                 <Button.Resources>
                     <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgBannerPageHoverBrush" />

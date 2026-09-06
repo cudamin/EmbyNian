@@ -31,14 +31,30 @@ public sealed record LanguageEntry(string[] Names, string[] Codes, string[] Hint
 public static class TrackLanguagePriority
 {
     /// <summary>
+    /// 「其他字幕」— the catch-all entry of the priority list, added 2026-09-06（「字幕优先级新增预设
+    /// 可选的其他字幕」）. Anything the list has not named above it matches this entry, so putting it
+    /// last is how 「先简体，再中文，实在没有就要一条别的语言的」 gets said in one place, where before
+    /// the same ask needed the separate 「没有匹配语言时使用默认字幕」 switch — and where that switch
+    /// only ever reached the file's own default track, a name in the list reaches the best of *all*
+    /// remaining tracks.
+    /// <para>
+    /// Never expanded into an mpv code (<see cref="Codes"/> answers an empty list for it): mpv's own
+    /// <c>slang</c> has no catch-all, and leaving the token out of the list it is sent is exactly how
+    /// mpv's fall-through already behaves. It matches audio tracks by the same rule, so the 音轨 side of
+    /// the list can use it identically.
+    /// </para>
+    /// </summary>
+    public const string Any = "其他字幕";
+
+    /// <summary>
     /// Every language the client can name, in the order the settings page lists them. The code lists
     /// are also the priority order handed to mpv, so <c>zh-Hans</c> is tried before <c>chs</c>.
     /// </summary>
     private static readonly LanguageEntry[] Table =
     [
-        new(["简体中文", "簡體中文", "简体", "簡體", "Simplified Chinese"],
+        new(["简体中文", "簡體中文", "简体", "簡體", "Simplified Chinese", "Chinese Simplified"],
             ["zh-Hans", "zh_hans", "zh-CN", "zh_CN", "zhs", "sc", "chs", "chi-Hans"],
-            ["简体", "簡體", "简中", "簡中", "chs", "hans", "gb2312"],
+            ["简体", "簡體", "简中", "簡中", "chs", "hans", "gb2312", "Simplified Chinese", "Chinese Simplified"],
             "zh", false),
 
         new(["中文", "Chinese"],
@@ -205,12 +221,13 @@ public static class TrackLanguagePriority
 
     /// <summary>
     /// The mpv codes <paramref name="token"/> stands for, in match order; a single-element list
-    /// holding the token itself when it is not a name this table knows.
+    /// holding the token itself when it is not a name this table knows. The catch-all <see cref="Any"/>
+    /// is the one name with no codes — mpv's own fall-through is what 「其他字幕」 means there.
     /// </summary>
     public static IReadOnlyList<string> Codes(string? token)
     {
         var trimmed = (token ?? "").Trim();
-        if (trimmed.Length == 0) return [];
+        if (trimmed.Length == 0 || trimmed == Any) return [];
         return ByName.TryGetValue(trimmed, out var entry) ? entry.Codes : [trimmed];
     }
 
@@ -287,13 +304,15 @@ public static class TrackLanguagePriority
     /// Codes are compared one-directionally — the track's code has to start with one of the
     /// language's — so 简体中文 matches <c>chs</c> and <c>zh-Hans</c> but not <c>cht</c> and not a bare
     /// <c>zh</c>, which is the whole point of an ordered priority list. 中文, being the generic entry
-    /// of its family, still matches every Chinese track whatever variant it claims.
+    /// of its family, still matches every Chinese track whatever variant it claims. <see cref="Any"/>
+    /// matches every track whatever it claims, which is the point of it.
     /// </para>
     /// </summary>
     public static bool Matches(string? token, string? language, string? displayLanguage, string? title)
     {
         var trimmed = (token ?? "").Trim();
         if (trimmed.Length == 0) return false;
+        if (trimmed == Any) return true;
 
         var entry = ByToken.GetValueOrDefault(trimmed);
         var codes = entry?.Codes ?? [trimmed];

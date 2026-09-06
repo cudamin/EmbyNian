@@ -40,4 +40,36 @@
     <None Remove="work\**" />
   </ItemGroup>
 
+  <!--
+    Microsoft.WindowsAppSDK.Analyzers, wired in by hand.
+
+    The analyzer ships inside the winui-dev-workflow skill and is normally injected by that skill's
+    BuildAndRun.ps1 wrapper, which drives `winapp run`. This project cannot use the wrapper: gate 1 has
+    to pass -m:1 (this machine's Windows SDK workload resolver makes parallel builds fail with no
+    output at all) and `winapp run` only forwards MSBuild *properties*, not switches. winui-code-review
+    names this exact situation and gives the way out — 「to enable it outside the wrapper, add the
+    <Analyzer Include> and <Import Project> entries to the project's own Directory.Build.props」 — so
+    that is what these two lines are.
+
+    The payload is copied into tools/analyzers rather than referenced where the skill keeps it: a
+    plugin update replaces that folder, and a build that depends on a file outside the repository is a
+    build that stops working on a clean checkout. Condition="Exists" for the same reason as
+    libmpv-2.dll in the Shell csproj — a checkout without it still builds, it just loses the extra
+    diagnostics. Refresh it by copying the two files again after a skill update.
+
+    Every rule ships at Warning severity, and gate 1 is read as 「0 警告 0 错误」, so a new WUI####
+    here is a real finding rather than noise to be silenced. Suppress with NoWarn only alongside a
+    comment saying which measurement made the rule wrong for this code.
+  -->
+  <PropertyGroup>
+    <EmbyNianAnalyzerDir>$(MSBuildThisFileDirectory)tools\analyzers\</EmbyNianAnalyzerDir>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.dll')">
+    <Analyzer Include="$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.dll" />
+  </ItemGroup>
+
+  <Import Project="$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets"
+          Condition="Exists('$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets')" />
+
 </Project>

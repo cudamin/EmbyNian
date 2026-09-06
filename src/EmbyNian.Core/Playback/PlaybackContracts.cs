@@ -132,12 +132,6 @@ public sealed record PlaybackRequest
     public string? AudioLanguage { get; init; }
 
     /// <summary>
-    /// Subtitle font *family* name passed as mpv <c>--sub-font</c>; null leaves mpv's own default.
-    /// A file path here would be silently ignored by mpv, which looks the value up as a family.
-    /// </summary>
-    public string? SubtitleFont { get; init; }
-
-    /// <summary>
     /// The 着色器档位 applied, for the log and for the player's own menu. The options it consists of are
     /// already part of <see cref="PlayerOptions"/>; this is the label, not the mechanism.
     /// </summary>

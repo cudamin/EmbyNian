@@ -33,10 +33,18 @@ public static class MpvBaseline
     /// screenshot feature at all until now.
     /// </param>
     /// <param name="title">The film's title, for the screenshot file name. Empty is handled.</param>
+    /// <param name="fontsDirectory">
+    /// Where this client's bundled 字幕字体 live (assets/fonts, copied next to the exe). mpv's
+    /// <c>sub-fonts-dir</c> — font files there are used for subtitles without being installed into
+    /// Windows, which is the whole mechanism behind 「这个字体打包进程序里」: the shipped
+    /// 方正中等线简体 reaches mpv by this one option, and any future font dropped into that folder is
+    /// pickable the same way. Null skips it, which is what a test wants.
+    /// </param>
     public static IReadOnlyList<KeyValuePair<string, string>> Build(
         string? shaderCacheDirectory = null,
         string? screenshotDirectory = null,
-        string? title = null)
+        string? title = null,
+        string? fontsDirectory = null)
     {
         var options = new List<KeyValuePair<string, string>>(9)
         {
@@ -61,6 +69,11 @@ public static class MpvBaseline
         if (!string.IsNullOrWhiteSpace(shaderCacheDirectory))
         {
             options.Add(new KeyValuePair<string, string>("gpu-shader-cache-dir", shaderCacheDirectory));
+        }
+
+        if (!string.IsNullOrWhiteSpace(fontsDirectory))
+        {
+            options.Add(new KeyValuePair<string, string>("sub-fonts-dir", fontsDirectory));
         }
 
         if (!string.IsNullOrWhiteSpace(screenshotDirectory))

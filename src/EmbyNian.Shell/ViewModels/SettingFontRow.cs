@@ -3,6 +3,8 @@ using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using EmbyNian.Infrastructure;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 
 namespace EmbyNian.Shell.ViewModels;
@@ -39,6 +41,9 @@ public sealed class FontOption
 
     internal bool Matches(IReadOnlyList<string> tokens) => _entry.Matches(tokens);
 
+    /// <summary>Whether this family is the one <paramref name="name"/> names, alias spellings included.</summary>
+    internal bool AnswersTo(string name) => _entry.AnswersTo(name);
+
     public override string ToString() => Name;
 }
 
@@ -50,6 +55,15 @@ public sealed class FontOption
 /// for the box to lose focus before writing, because writing per keystroke would hand mpv 「Microsoft Ya」
 /// on the way to 「Microsoft YaHei」; here the box is not the value at all — it only filters — so the
 /// keystroke problem cannot arise and the value is always a family that exists.
+/// </para>
+/// <para>
+/// The box has two things to say, on the same model as the player's strip (which is the other instance of
+/// this row type): at rest it reads as the family in use — 「输入栏要显示当前正在使用的字体」
+/// （2026-09-06）— and taking the keyboard empties it into a search box. <see cref="BoxText"/> is what the
+/// box shows and <see cref="Query"/> is what the filter runs on; they are two properties rather than one
+/// because the resting display is a family name, and filtering on it would open the row onto a list of
+/// one. The list under it starts folded away — 「默认收起来不要展开」 — and only ever opens when the box
+/// is clicked or typed into.
 /// </para>
 /// <para>
 /// The catalogue arrives late: scanning a few hundred font files is not something the page can do while
@@ -66,6 +80,15 @@ public sealed partial class SettingFontRow : SettingRow
     private IReadOnlyList<FontOption> _all = [];
     private bool _committing;
 
+    /// <summary>
+    /// True while the box's text is being placed programmatically — the resting display of the family in
+    /// use, or the emptying that begins a search. Neither is a person typing, so neither may run the
+    /// filter or open the list.
+    /// </summary>
+    private bool _placing;
+
+    private string _value = "";
+
     internal SettingFontRow(string label, string? note, string value, Action<string> write, Action save)
         : base(label, note)
     {
@@ -79,8 +102,13 @@ public sealed partial class SettingFontRow : SettingRow
     /// <summary>The families the search box currently allows through, in name order.</summary>
     public ObservableCollection<FontOption> Matches { get; } = [];
 
+    /// <summary>What the search filter runs on. Written by the row itself; the box's text is <see cref="BoxText"/>.</summary>
     [ObservableProperty]
     public partial string Query { get; set; } = string.Empty;
+
+    /// <summary>The text in the search box: the family in use while the row is at rest, empty while it is being searched.</summary>
+    [ObservableProperty]
+    public partial string BoxText { get; set; } = string.Empty;
 
     [ObservableProperty]
     public partial FontOption? Selected { get; set; }
@@ -89,8 +117,82 @@ public sealed partial class SettingFontRow : SettingRow
     [ObservableProperty]
     public partial string Status { get; set; } = string.Empty;
 
-    /// <summary>The family this row is set to. Read by the self-check, which must not change it.</summary>
-    internal string Value => Selected?.Name ?? string.Empty;
+    /// <summary>
+    /// Whether the family list under the search box is on screen. Folded away by default and after every
+    /// pick or search someone walked away from — the 252-pixel-tall list is only for someone actually
+    /// choosing — and opened by the box being clicked or typed into.
+    /// </summary>
+    [ObservableProperty]
+    public partial Visibility ListVisibility { get; set; } = Visibility.Collapsed;
+
+    /// <summary>
+    /// The search box was clicked or tabbed into: the list comes back for browsing, the box empties (so
+    /// the whole list is there to scroll, and so typing into the end of a family name cannot produce
+    /// 「Microsoft YaHeiconsolas」), and the filter resets to match.
+    /// </summary>
+    internal void OpenList()
+    {
+        ListVisibility = Visibility.Visible;
+
+        _placing = true;
+        try { BoxText = string.Empty; }
+        finally { _placing = false; }
+
+        Query = string.Empty;
+    }
+
+    /// <summary>
+    /// The box gave the keyboard back. A search nobody finished is not a value: the family in use goes
+    /// back into the box and the list folds away.
+    /// <para>
+    /// Called from the box's <c>LostFocus</c>, which also fires when a family in the list is clicked —
+    /// focus moves on the press and the pick lands on the release — so this asks where the focus went
+    /// first, and folding the list under a pending pick would make the row unuseable.
+    /// </para>
+    /// </summary>
+    internal void CloseList()
+    {
+        if (FocusIsInsideTheList()) return;
+
+        ListVisibility = Visibility.Collapsed;
+        Query = string.Empty;
+        PlaceCurrentFont();
+    }
+
+    /// <summary>
+    /// Whether the element that just took the keyboard sits inside the family list. Walks up from
+    /// <see cref="FocusManager.GetFocusedElement"/> rather than comparing types, because a click lands
+    /// focus somewhere inside the item container.
+    /// </summary>
+    private static bool FocusIsInsideTheList()
+    {
+        if (FocusManager.GetFocusedElement() is not DependencyObject element) return false;
+
+        while (element is not null)
+        {
+            if (element is ListView) return true;
+            element = VisualTreeHelper.GetParent(element);
+        }
+
+        return false;
+    }
+
+    /// <summary>Puts the family in use into the box, without running the filter.</summary>
+    private void PlaceCurrentFont()
+    {
+        _placing = true;
+        try { BoxText = _value; }
+        finally { _placing = false; }
+    }
+
+    /// <summary>
+    /// The family this row is set to, as the settings file spells it — which may be one of the
+    /// family's aliases rather than its primary name (方正中等线简体 next to a catalogue whose row for
+    /// the same file reads FZZhongDengXian-Z07S). Held separately from <see cref="Selected"/> for
+    /// exactly that: the selection points at the family, this is what was stored, and the two only
+    /// agree on the spelling a pick has actually written. Read by the self-check, which must not change it.
+    /// </summary>
+    internal string Value => _value;
 
     /// <summary>How many families are on offer, filtering aside.</summary>
     internal int Total => _all.Count;
@@ -128,10 +230,12 @@ public sealed partial class SettingFontRow : SettingRow
     /// player's, where there is no room for a list beside it and Enter has to mean something.
     /// <para>
     /// An exact name wins first: someone who typed the whole of 「Consolas」 means that family even on a
-    /// machine that also has 「Consolas Nerd Font」. Only then the first family the search itself matched,
-    /// which is deliberately not 「the first row of the list」 — the current family is pinned into
-    /// <see cref="Matches"/> whatever is typed (see <see cref="Refilter"/>), so on a machine where it
-    /// sorts first, 「consolas」 and Enter would otherwise have picked the font already in use.
+    /// machine that also has 「Consolas Nerd Font」. Exact means the family answers to the line by any of
+    /// its names, so typing 方正中等线简体 is exact for the row the catalogue calls FZZhongDengXian-Z07S.
+    /// Only then the first family the search itself matched, which is deliberately not 「the first row of
+    /// the list」 — the current family is pinned into <see cref="Matches"/> whatever is typed (see
+    /// <see cref="Refilter"/>), so on a machine where it sorts first, 「consolas」 and Enter would
+    /// otherwise have picked the font already in use.
     /// </para>
     /// </summary>
     internal FontOption? Resolve(string typed)
@@ -141,7 +245,7 @@ public sealed partial class SettingFontRow : SettingRow
 
         foreach (var option in Matches)
         {
-            if (string.Equals(option.Name, text, StringComparison.OrdinalIgnoreCase)) return option;
+            if (option.AnswersTo(text)) return option;
         }
 
         var tokens = FontCatalogue.Tokenize(text);
@@ -160,22 +264,29 @@ public sealed partial class SettingFontRow : SettingRow
     /// </summary>
     private void Load(string current)
     {
+        _value = current;
+
         _all = [.. _catalogue.Including(current).Families.Select(entry => new FontOption(entry))];
 
         _committing = true;
         try
         {
-            Selected = _all.FirstOrDefault(option => string.Equals(option.Name, current, StringComparison.OrdinalIgnoreCase));
+            // The stored value may be the family's alias rather than its primary name — 方正中等线简体
+            // next to a catalogue that names the same file FZZhongDengXian-Z07S. Either spelling selects
+            // the same row; what must never happen is a value this list plainly holds reading as unset.
+            Selected = _all.FirstOrDefault(option => option.AnswersTo(current));
         }
         finally
         {
             _committing = false;
         }
 
+        // The row starts, and restarts after every reseed, folded away with the family in use in the box.
+        ListVisibility = Visibility.Collapsed;
+        PlaceCurrentFont();
+        Query = string.Empty;
         Refilter();
     }
-
-    partial void OnQueryChanged(string value) => Refilter();
 
     partial void OnSelectedChanged(FontOption? value)
     {
@@ -185,7 +296,28 @@ public sealed partial class SettingFontRow : SettingRow
         if (_committing || value is null) return;
 
         _write(value.Name);
+        _value = value.Name;
         _save();
+
+        // The pick is done; the list it was picked from folds away and the box goes back to reading as
+        // the family now in use. The status line stays, so how many families the machine has and what
+        // the search does is still said on the row itself.
+        ListVisibility = Visibility.Collapsed;
+        PlaceCurrentFont();
+        Query = string.Empty;
+        Refilter();
+    }
+
+    partial void OnQueryChanged(string value) => Refilter();
+
+    partial void OnBoxTextChanged(string value)
+    {
+        if (_placing) return;
+
+        // A person is typing: this is browsing beginning again, so the list comes with it and the filter
+        // runs on what was typed.
+        Query = value;
+        ListVisibility = Visibility.Visible;
     }
 
     private void Refilter()
@@ -223,11 +355,56 @@ public sealed partial class SettingFontRow : SettingRow
     }
 
     /// <summary>What the self-check measured about the picker.</summary>
-    /// <param name="Ok">The list arrived, the search filters, and searching cannot lose the current value.</param>
+    /// <param name="Ok">The row rests folded with the family in use in the box, the search filters, and searching cannot lose the current value.</param>
     internal sealed record Probe(bool Ok, int Total, string Detail);
 
     /// <summary>
-    /// Types into the search box and reads back what it did, then puts the box back as it was.
+    /// 自检：点选一个字体之后列表收得起、点搜索框之后展得开，而且静止时输入栏里是当前在用的那个字体 ——
+    /// 「默认收起来不要展开」「输入栏要显示当前正在使用的字体」（2026-09-06）。就地造一个假行拨一遍，
+    /// 不碰设置文件、也不碰屏上那一页（同 <see cref="SettingChoiceRow.Probe"/> 的做法）。坏法在屏上看得见
+    /// 却没有读数：列表收不掉只是多占 252 像素，展不开则更像「这个框坏了」，输入栏不显示当前字体的话
+    /// 这一行的样子和一个没设过值的行没有分别。
+    /// </summary>
+    internal static (bool Ok, string Detail) CollapseProbe()
+    {
+        var saved = "";
+        var row = new SettingFontRow("探针", null, "Consolas", value => saved = value, () => { });
+
+        // 静止的样子：列表收着、输入栏里是当前字体、筛子是空的（整张名单都在）。
+        var atRest = row.ListVisibility == Visibility.Collapsed
+            && row.BoxText == "Consolas"
+            && row.Query.Length == 0
+            && row.Matches.Count > 0;
+
+        row.OpenList();
+        var opened = row.ListVisibility == Visibility.Visible && row.BoxText.Length == 0;
+
+        // Picking the row that is already selected is silently nothing — re-chosen sameness must not
+        // save the file twice — so the probe clears the selection first to stand in for「挑了一个别的」.
+        row.Selected = null;
+        row.Selected = row.Matches[0];
+        var closedOnPick = row.ListVisibility == Visibility.Collapsed && saved.Length > 0 && row.BoxText == saved;
+
+        row.OpenList();
+        var reopened = row.ListVisibility == Visibility.Visible;
+
+        row.BoxText = "字";
+        var stayedOpen = row.ListVisibility == Visibility.Visible;
+
+        // 走开没挑：输入栏放回当前字体，列表收回去。
+        row.CloseList();
+        var folded = row.ListVisibility == Visibility.Collapsed && row.BoxText == "Consolas" && row.Query.Length == 0;
+
+        return (atRest && opened && closedOnPick && reopened && stayedOpen && folded,
+            $"假行：静止时{(atRest ? "收起且显示「Consolas」" : "没收起或没显示当前字体")}、"
+                + $"点搜索框{(opened ? "展开并清空" : "没展开或没清空")}、"
+                + $"选中后{(closedOnPick ? $"收起、写了一次（{saved}）、输入栏跟着改" : "没收起、没写盘或输入栏没跟")}、"
+                + $"再点{(reopened ? "又展开" : "没展开")}、敲字后{(stayedOpen ? "保持展开" : "又收了")}、"
+                + $"走开{(folded ? "收回并放回当前字体" : "没收回或没放回")}");
+    }
+
+    /// <summary>
+    /// Types into the search box and reads back what it did, then puts the row back as it was.
     /// <para>
     /// Nothing here can reach the settings file: this row only ever writes when a family is picked, and the
     /// three queries below are chosen so the picked one is never the thing that changes. That is the point of
@@ -237,26 +414,29 @@ public sealed partial class SettingFontRow : SettingRow
     /// </summary>
     internal Probe Measure()
     {
-        var saved = Query;
-        var value = Value;
         var clock = Stopwatch.StartNew();
+        var value = Value;
 
         try
         {
-            Query = string.Empty;
-            var all = Matches.Count;
+            // 静止时输入栏里应当是当前字体 —— 「输入栏要显示当前正在使用的字体」的那一半。
+            var atRest = string.Equals(BoxText, value, StringComparison.Ordinal)
+                && ListVisibility == Visibility.Collapsed
+                && Query.Length == 0;
 
             // A word out of the current family's own name, rather than a font this machine may not have:
-            // 「YaHei」 for Microsoft YaHei. It must find at least the family it came from.
+            // 「YaHei」 for Microsoft YaHei. It must find at least the family it came from. Typed through
+            // BoxText, which is what a person types into — Query follows from it.
             var word = value.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? value;
-            Query = word;
+            BoxText = word;
             var found = Matches.Count;
             var kept = string.Equals(Value, value, StringComparison.Ordinal);
 
-            Query = "没有任何字体会叫这个名字";
+            BoxText = "没有任何字体会叫这个名字";
             var pinned = Matches.Count;
 
-            Query = string.Empty;
+            // 清掉搜索，整张名单回来 —— 「过滤完回不去」是这一行最不能有的坏法。
+            BoxText = string.Empty;
             var again = Matches.Count;
 
             // Four full passes over every family on the machine, with the list bound and live. The bound
@@ -265,23 +445,27 @@ public sealed partial class SettingFontRow : SettingRow
             var spent = clock.ElapsedMilliseconds;
 
             var ok = value.Length > 0
-                && all == Total
-                && all > 1
+                && atRest
+                && again == Total
+                && again > 1
                 && found > 0
                 && kept
                 && pinned == 1
-                && again == all
                 && spent < 2000
                 && !Status.Contains("正在", StringComparison.Ordinal);
 
             return new Probe(ok, Total,
-                $"当前「{value}」，共 {Total} 个字体族；搜「{word}」得 {found} 个，"
-                    + $"搜一个不存在的名字剩 {pinned} 个（应当只剩当前值），清空搜索回到 {again} 个，"
-                    + $"{(kept ? "过滤没有动过选中项" : "过滤把选中项弄丢了")}；四次过滤用了 {spent} 毫秒；{Status}");
+                $"静止时输入栏{(atRest ? $"显示着「{value}」" : "没显示当前字体")}，共 {Total} 个字体族；"
+                    + $"搜「{word}」得 {found} 个，搜一个不存在的名字剩 {pinned} 个（应当只剩当前值），"
+                    + $"清空搜索回到 {again} 个，{(kept ? "过滤没有动过选中项" : "过滤把选中项弄丢了")}；"
+                    + $"四次过滤用了 {spent} 毫秒；{Status}");
         }
         finally
         {
-            Query = saved;
+            ListVisibility = Visibility.Collapsed;
+            PlaceCurrentFont();
+            Query = string.Empty;
+            Refilter();
         }
     }
 }

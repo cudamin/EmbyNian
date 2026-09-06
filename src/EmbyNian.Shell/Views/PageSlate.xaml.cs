@@ -4,10 +4,10 @@ using Microsoft.UI.Xaml.Controls;
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
-/// 页头那块场记板：眉字、读数、标题，底下一条通栏发丝线。见 PageSlate.xaml 里那段说明。
+/// 页头那块牌子：标题、底下一行说明、再底下一条通栏发丝线。见 PageSlate.xaml 里那段说明。
 /// </summary>
 /// <remarks>
-/// 五个属性全是依赖属性，因为页面都用 <c>x:Bind</c> 把视图模型的标题和条目数接上来 —— 普通 CLR 属性
+/// 六个属性全是依赖属性，因为页面都用 <c>x:Bind</c> 把视图模型的标题和条目数接上来 —— 普通 CLR 属性
 /// 在 OneWay 绑定下只会被写一次。空字符串一律收起那一行而不是留一行空白：不是每一页都有读数，页头的
 /// 高度不该因为「有没有」而差出一行。
 /// </remarks>
@@ -51,7 +51,7 @@ public sealed partial class PageSlate : UserControl
 
     public PageSlate() => InitializeComponent();
 
-    /// <summary>这一区的代号，拉丁大写：HOME、LIBRARY、SETTINGS。</summary>
+    /// <summary>这一区的代号，拉丁大写：HOME、LIBRARY、SETTINGS。和 <see cref="Note"/> 合成说明那一行。</summary>
     public string Eyebrow
     {
         get => (string)GetValue(EyebrowProperty);
@@ -65,7 +65,7 @@ public sealed partial class PageSlate : UserControl
         set => SetValue(TitleProperty, value);
     }
 
-    /// <summary>右上角那个读数：条目数、服务器名。</summary>
+    /// <summary>那个读数：条目数、服务器名。和 <see cref="Eyebrow"/> 合成标题底下那一行说明。</summary>
     public string Note
     {
         get => (string)GetValue(NoteProperty);
@@ -99,11 +99,8 @@ public sealed partial class PageSlate : UserControl
         set => SetValue(OnScrimProperty, value);
     }
 
-    private static void OnEyebrowChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
-    {
-        var slate = (PageSlate)sender;
-        SetLine(slate.EyebrowText, args.NewValue);
-    }
+    private static void OnEyebrowChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args) =>
+        ((PageSlate)sender).SyncNote();
 
     private static void OnTitleChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
@@ -111,10 +108,21 @@ public sealed partial class PageSlate : UserControl
         SetLine(slate.TitleText, args.NewValue);
     }
 
-    private static void OnNoteChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
+    private static void OnNoteChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args) =>
+        ((PageSlate)sender).SyncNote();
+
+    /// <summary>
+    /// 说明那一行：代号和读数合成一句，中间一个「·」，两个都空就整行收起（页头的高度不该因为「有没有读数」
+    /// 而差出一行）。两个属性各自会变，所以两个回调都落到这里 —— 合成的规则只有一处。
+    /// <para>
+    /// 分隔符和这套界面别处那个「·」是同一个（详情页那行年份 · 时长 · 分辨率），所以两处读起来是同一种句子。
+    /// </para>
+    /// </summary>
+    private void SyncNote()
     {
-        var slate = (PageSlate)sender;
-        SetLine(slate.NoteText, args.NewValue);
+        var parts = new[] { Eyebrow, Note }.Where(part => !string.IsNullOrWhiteSpace(part));
+
+        SetLine(NoteText, string.Join(" · ", parts));
     }
 
     private static void OnTrailingChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
@@ -132,7 +140,8 @@ public sealed partial class PageSlate : UserControl
         var host = slate.TrailingHost;
 
         // 同一个 ContentPresenter 换格子，不是两份拷贝：工具条的键盘顺序和飞出菜单都只有一套。
-        Grid.SetRow(host, below ? 3 : 1);
+        // 标题现在是第 0 行（2026-09-06 按 Gallery 那套重排），所以「跟着标题」那一档是 0 而不是 1。
+        Grid.SetRow(host, below ? 3 : 0);
         Grid.SetColumn(host, below ? 0 : 1);
         Grid.SetColumnSpan(host, below ? 2 : 1);
         host.HorizontalAlignment = below ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
@@ -140,7 +149,7 @@ public sealed partial class PageSlate : UserControl
     }
 
     /// <summary>
-    /// 换的是三个 <c>Style</c>，不是三支 <c>Foreground</c>：字体字号一档不动，只有颜色跟着底走，所以图上
+    /// 换的是两个 <c>Style</c>，不是两支 <c>Foreground</c>：字体字号一档不动，只有颜色跟着底走，所以图上
     /// 那块牌子和页面里那块是同一块牌子。样式键是顶层键（不在 <c>ThemeDictionaries</c> 里），所以按键取得到。
     /// </summary>
     private static void OnScrimChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
@@ -148,8 +157,7 @@ public sealed partial class PageSlate : UserControl
         var slate = (PageSlate)sender;
         var scrim = (bool)args.NewValue;
 
-        Dress(slate.EyebrowText, scrim ? "EgOnScrimEyebrowStyle" : "EgEyebrowStyle");
-        Dress(slate.NoteText, scrim ? "EgOnScrimEyebrowStyle" : "EgEyebrowStyle");
+        Dress(slate.NoteText, scrim ? "EgOnScrimDataStyle" : "EgDataStyle");
         Dress(slate.TitleText, scrim ? "EgOnScrimPageTitleStyle" : "EgPageTitleStyle");
         slate.Rule.Visibility = scrim ? Visibility.Collapsed : Visibility.Visible;
     }

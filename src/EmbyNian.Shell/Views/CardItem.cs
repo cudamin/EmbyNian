@@ -59,7 +59,18 @@ public sealed class CardItem : INotifyPropertyChanged
 
     private CancellationTokenSource? _loading;
     private bool _missing;
+    private bool _framed;
     private BitmapImage? _poster;
+
+    /// <summary>
+    /// 屏上此刻要不要这张图。<see cref="EnsurePosterAsync"/> 把它抬起来、<see cref="ReleasePoster"/> 按下去，而
+    /// 在路上那一趟回来时照它决定「塞回这张卡」还是「只留进 <see cref="PosterCache"/>」。
+    /// <para>
+    /// 存在的理由是回收：容器搬家那一下先卸下、后进树，而卸下不再取消请求（见 <see cref="ReleasePoster"/> 上那段
+    /// 2026-09-05 的账），所以「这一趟还有没有人等着」得有个地方记着。
+    /// </para>
+    /// </summary>
+    private bool _wanted;
 
     /// <param name="width">
     /// The card's width in device-independent pixels. Used three times: to pick the size to ask the
@@ -70,8 +81,10 @@ public sealed class CardItem : INotifyPropertyChanged
     /// True for a 16:9 card (继续观看, 接下来看, 媒体库), which prefers the episode still over the poster.
     /// </param>
     /// <param name="subtitle">
-    /// Overrides the second line. Only the cast shelf uses it: a person's own <c>CardSubtitle</c> is the
-    /// word 演职人员, which is what the whole row is called, and the useful line is their role.
+    /// Overrides the second line. Two rows use it, both for the same reason — the item's own
+    /// <c>CardSubtitle</c> would repeat the row's own name: 演职人员 (a person's subtitle is the word
+    /// 演职人员, while the useful line is their role) and 主页 的 媒体库 那一排 (a library's subtitle is the
+    /// word 媒体库, and there is nothing else to say, so that row passes an empty string).
     /// </param>
     /// <param name="indicators">False to draw no corner badges; see <see cref="_indicators"/>.</param>
     /// <param name="current">
@@ -143,6 +156,28 @@ public sealed class CardItem : INotifyPropertyChanged
 
     /// <summary>The accent bar down the row's left edge, which is how <see cref="IsCurrentEpisode"/> reads.</summary>
     public Visibility CurrentVisibility => Show(IsCurrentEpisode);
+
+    /// <summary>
+    /// 这张卡被框起来了 —— 「轮播图滚动到对应媒体时右边要自动框出对应媒体」。主页第一屏右边那一栏（继续观看）
+    /// 里，和台上那张幻灯片对应的那一张就框着；对应关系由 <see cref="Emby.HomeCarousel.MatchIndex"/> 定，谁来翻
+    /// 这个开关由 <see cref="ViewModels.HomeViewModel.Frame"/> 说。
+    /// <para>
+    /// 和 <see cref="IsCurrentEpisode"/> 是两件事，所以是两个属性：那一个是「这张卡就是你正开着的那一页」，构造
+    /// 时就定死、画成行首那道竖条；这一个每八秒就会换一张卡，画的是整圈胶片格换成强调色（
+    /// <see cref="PosterCard"/> 的 <c>Paint</c>，和指针悬停、键盘焦点同一根线）。可写而且会发通知，正因为它会换 ——
+    /// 而卡片容器是回收复用的，绑定是唯一能让「换了一张卡」自己跟上的路。
+    /// </para>
+    /// </summary>
+    public bool Framed
+    {
+        get => _framed;
+        set
+        {
+            if (_framed == value) return;
+            _framed = value;
+            Raise();
+        }
+    }
 
     public string Subtitle => _subtitle ?? _item.CardSubtitle;
 
@@ -265,9 +300,15 @@ public sealed class CardItem : INotifyPropertyChanged
     /// <summary>
     /// Starts the artwork load if it has not been done. Idempotent, and safe to call again every time
     /// a recycled container is handed this card.
+    /// <para>
+    /// 第一句是「屏上要这张图」（<see cref="_wanted"/>）：容器回收时 <see cref="ReleasePoster"/> 把它按下去，而
+    /// 那一趟请求照旧在路上 —— 容器又回来的时候由这一句把它抬起来，那一趟的结果于是照旧塞得回来。
+    /// </para>
     /// </summary>
     public async Task EnsurePosterAsync()
     {
+        _wanted = true;
+
         if (_imageType is null || _missing || _poster is not null || _loading is not null) return;
 
         // Already decoded once this run: hand it straight over. Synchronous on purpose — a container
@@ -302,7 +343,9 @@ public sealed class CardItem : INotifyPropertyChanged
 
             if (bitmap is not null && PosterKey() is { } name) PosterCache.Remember(name, bitmap);
 
-            Poster = bitmap;
+            // 屏上还要不要它（见 ReleasePoster）：不要了就只留进上面那份缓存，不塞回这张卡 —— 塞回去就是一张
+            // 不在屏上的卡攥着一张解出来的画面，而那正是「放开」要防的事。
+            if (_wanted) Poster = bitmap;
         }
         catch (OperationCanceledException)
         {
@@ -322,15 +365,45 @@ public sealed class CardItem : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Drops the decoded bitmap and abandons any load in flight. Called when a container is recycled:
-    /// without it, a long scroll ends up holding every poster it has ever passed.
+    /// 放开手上那张解出来的画面。容器离树时走这里：不放开的话，一次长滚动结束时手上攥着一路经过的每一张海报。
     /// <para>
-    /// Dropped from the card, not from <see cref="PosterCache"/> — that one has its own ceiling, and it
-    /// is what makes scrolling back up instant instead of a second trip to the disk.
+    /// **不取消在路上那一趟，也默认继续等着它**（2026-09-05 修的那四张灰占位卡）。两件事各有原因：
+    /// </para>
+    /// <para>
+    /// ①不取消 —— 取消掉的那一趟没有人会再发起：重新发起只有两个入口（容器进树、容器换卡），而回收进来的这一张
+    /// 两个都不会再走一遍。触发它的是 WinUI 的回收池：<c>CardTemplate</c> 这一份 DataTemplate 同时挂在主页右栏和
+    /// 每一条横带的 <c>ItemsRepeater</c> 上，容器于是在两处之间搬家（日志里是五个「继续观看」的容器变成了
+    /// 「最近添加 · 电视节目」那一排的卡）。
+    /// </para>
+    /// <para>
+    /// ②继续等着 —— **<c>Unloaded</c> 会对一个仍然在屏上的元素喊一声**。那四张卡的实测时序是：容器换到这张卡
+    /// （45 毫秒后）进树、发出请求，59 毫秒后一声 <c>Unloaded</c>，而**此后再没有 <c>Loaded</c>**，卡却好好地画在
+    /// 屏上。所以「卸下了」不等于「不要了」，照它把结果扔掉就是永久的灰占位图。真正权威的那一句是
+    /// <paramref name="keepWaiting"/>=false：容器改去装另一张卡了，那张卡确确实实失去了容器。
+    /// </para>
+    /// <para>
+    /// 在路上那一趟照旧跑完、结果照旧进 <see cref="PosterCache"/>（那份缓存自己有上限）；不等了的那一档就只进
+    /// 缓存、不塞回这张卡（见 <see cref="EnsurePosterAsync"/> 末尾那句）。
     /// </para>
     /// </summary>
-    public void ReleasePoster()
+    /// <param name="keepWaiting">
+    /// 这张卡还是那个容器在装吗。默认是（只是暂时离树）；容器改去装别的卡时传 false —— 那时它的结果没人在等，
+    /// 而一张不在屏上的卡攥着一张解出来的画面正是这个方法要防的事。
+    /// </param>
+    public void ReleasePoster(bool keepWaiting = true)
     {
+        if (!keepWaiting) _wanted = false;
+
+        Poster = null;
+    }
+
+    /// <summary>
+    /// 这张卡不要了：连在路上那一趟一起取消。<see cref="CardShelf.Clear"/> 和媒体库换整页时走这里 —— 那时这些
+    /// <see cref="CardItem"/> 整批作废，没有任何容器会再要它们的图。
+    /// </summary>
+    public void AbandonPoster()
+    {
+        _wanted = false;
         _loading?.Cancel();
         _loading = null;
         Poster = null;

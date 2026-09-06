@@ -220,9 +220,10 @@ public sealed partial class PlayerViewModel
     /// <summary>
     /// The shape the server already reported, adopted before the player is even shown — 进播放器时画面两边
     /// 各有一条黑边. The poll below cannot answer in time: mpv has no <c>dwidth</c> until a frame is decoded,
-    /// so the picture's first half-second landed in whatever shape the window was browsing in — and while
-    /// 锁定窗口比例大小 is on that shape is the picture's plus the navigation rail
-    /// (<see cref="HomeCarousel.SideRail"/>), which mpv has no choice but to letterbox down the sides.
+    /// so the picture's first half-second landed in whatever shape the window was browsing in — and a window
+    /// the user has dragged to any shape at all is one mpv has no choice but to letterbox.
+    /// （侧边栏还在的时候连开窗那一档都是：窗口天生比 16:9 宽出一条栏。2026-09-06 那条栏删掉之后开窗那一档
+    /// 正好是 16:9，可拖过的窗口照旧不是，所以这一步照旧要做。）
     /// <para>
     /// The stored size, so anamorphic and rotated files are a guess that <see cref="ApplyAspectAsync"/>
     /// corrects a moment later. A guess that is right for every ordinary file beats half a second of bands

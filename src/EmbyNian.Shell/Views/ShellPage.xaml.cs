@@ -6,8 +6,10 @@ using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 
@@ -31,8 +33,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
 {
     private const string Category = "外壳";
 
-    /// <summary>主页, the separator and the 媒体库 header; everything after these is a real library.</summary>
-    private const int FixedPaneItems = 3;
+    /// <summary>
+    /// 主页 is the one tab written in the markup; everything after it is a real library.
+    /// <para>
+    /// 从前这个数是 3（主页、分割线、媒体库那行分组眉字）—— 侧边栏 2026-09-06 删掉之后，一条横标签栏既没有
+    /// 分割线也没有分组名，所以只剩固定的第一格。
+    /// </para>
+    /// </summary>
+    private const int FixedTabs = 1;
 
     private const int MovieGlyph = 0xE8B2;
     private const int SeriesGlyph = 0xE7F4;
@@ -132,18 +140,6 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// <summary>标题栏那一条底下是什么，见 <see cref="SetTitleStrip"/>。</summary>
     private TitleStrip _titleStrip;
 
-    /// <summary>
-    /// 侧边栏张开时那一排按键的左缩进。留白不是装饰：窗口在标题栏上挖的洞就是那一排的矩形，挖到窗口左边沿
-    /// 就没地方拖窗口了。窄条那一档是另一个数，见 <see cref="SyncPane"/>。
-    /// </summary>
-    private const double TitleActionsInset = 40;
-
-    /// <summary>
-    /// 侧边栏收成窄条时，那一排按键要让开的距离 —— 从窄条的右沿算起。1 是窄条和工作区之间那道竖线自己的粗细，
-    /// 剩下 9 让第一颗图标离线 16 像素，和这一排里相邻两颗图标之间的距离一样，见 <see cref="SyncPane"/>。
-    /// </summary>
-    private const double PaneClearance = 10;
-
     public ShellPage()
     {
         InitializeComponent();
@@ -153,48 +149,32 @@ public sealed partial class ShellPage : UserControl, IShellActions
         ThemeHost.Register(this);
 
         PaintTitleActions();
-        PaintNavigationPane();
+        PaintTabs();
 
         // 面包屑那一行的墨：字是我们那个格子自己画的（模板里绑的就是这一支画刷），中间那个人字尖归框架的
         // 模板画、认的是它自己那个键 —— 把同一支挂到那个键上，之后改一次颜色，字和尖一起跟着走。
         _trailInk = (SolidColorBrush)TrailBar.Resources["EgTrailInkBrush"];
         TrailBar.Resources["BreadcrumbBarNormalForegroundBrush"] = _trailInk;
 
-        // 侧边栏一开始就是收着的（「侧边栏默认为折叠状态」），而初值不会引出 PaneClosed —— 事件只在「变了」的
-        // 时候来。所以跟着侧边栏走的那三样（账号那块只留字形、那一排按键的缩进、标题栏的墨）在这里先算一遍；
-        // PaintTitleInk 也在它里面，不用再单独叫一次。
-        SyncPane();
+        // 标题栏那一排、标签栏、账号那一块的墨算一遍。**这一句从前叫 SyncPane**，那里面还带着侧边栏收放要
+        // 跟着走的三样东西（账号那块只留字形、那一排按键的缩进、墨）；栏删掉之后只剩墨这一件，而它和「初值
+        // 不发事件」那件事无关了 —— 缩进现在是标记里一个常数。
+        PaintTitleInk();
 
-        // 光在 XAML 里写 IsPaneOpen="False" 收不住，而且不止一次收不住：NavigationView 每回改大小都照
-        // PaneDisplayMode="Left" 把自己判成「张开」那一档，然后 —— 除非它记得「这是有人自己收起来的」——
-        // 顺手把侧边栏张开。标记里那个 False 是套模板之前的事，第一次重排就被推回去了（改之前自检量到的就是
-        // 张开那一档：整排从 40 起，而自检中途本来就会把窗口拉成 1100、500 几种宽度）。
-        // 它记住这件事的唯一时机是「张着的时候被关掉」，所以这里走一趟张开再关上：模板套完（Loaded 到的时候
-        // 已经套完）先把它按到张开，紧接着关掉，这一关就被当成用户的意思，往后重排不再擅自张开。两次赋值在
-        // 同一拍里，中间没有一帧渲染，屏幕上看不见它张开过。
-        // 只走这一趟，之后侧边栏是张是收由那颗折叠键说了算 —— 所以一进来先把自己从事件上摘掉。
-        void FoldOnce(object sender, RoutedEventArgs args)
-        {
-            Navigation.Loaded -= FoldOnce;
-
-            // 「默认收起侧边栏」关掉的时候就不收 —— Attach 比 Loaded 早，所以这里问得到那份设置；问不到
-            // （测试里单独立一页）当收起算，那是这个开关的默认值。
-            ApplyPaneDefault(_settings?.Settings.Ui.CollapseSidebar != false);
-        }
-
-        Navigation.Loaded += FoldOnce;
-
-        // 开关改完当场生效，见 ShellPrefs。这一页和主窗口活得一样久，所以和下面那句 ThemeHost 一样不退订。
-        ShellPrefs.Changed += ui => ApplyPaneDefault(ui.CollapseSidebar);
-
-        // 换主题时那两支墨要跟着改。这里跟 PaintTitleActions 不一样，没法靠共用对象自动跟着走 —— 那两支
+        // 换主题时那几支墨要跟着改。这里跟 PaintTitleActions 不一样，没法靠共用对象自动跟着走 —— 那几支
         // 是这一页自己的画刷，压在剧照上时故意不跟主题走，所以只能收到通知后再算一遍。
         ThemeHost.Changed += _ => PaintTitleInk();
 
         Trail.ItemsSource = _trail;
 
-        // The window has to be told which rectangle of its title bar the five buttons occupy, and the answer
-        // moves with the strip's layout: the theme's font, the scale factor, the pane button appearing at all.
+        // 鼠标上那两颗侧键。从前它们由 NavigationView 认（连 Alt+← 一起，走 BackRequested）；栏删掉之后
+        // Alt+← / Alt+→ 挂在两支箭头自己的加速器上，而鼠标侧键没有加速器可挂，只能自己听。
+        // handledEventsToo，因为卡片、列表、滚动视图都会把 PointerPressed 标成已处理 —— 不加这一句，只有
+        // 点在空白处才退得回去。
+        Root.AddHandler(PointerPressedEvent, new PointerEventHandler(OnRootPointerPressed), handledEventsToo: true);
+
+        // The window has to be told which rectangle of its title bar the four buttons occupy, and the answer
+        // moves with the strip's layout: the theme's font, the scale factor.
         // Measured whenever it changes rather than worked out once here.
         TitleActions.SizeChanged += (_, _) => ReportTitleBarHole();
 
@@ -203,6 +183,23 @@ public sealed partial class ShellPage : UserControl, IShellActions
             _toast.Stop();
             Toast.IsOpen = false;
         };
+    }
+
+    /// <summary>
+    /// 鼠标上那两颗侧键：后退、前进。<see cref="PointerUpdateKind"/> 而不是
+    /// <c>IsXButton1Pressed</c> —— 后者在按住不放的每一次移动上都是 true，那就是按一下退好几页。
+    /// </summary>
+    private void OnRootPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        switch (e.GetCurrentPoint(this).Properties.PointerUpdateKind)
+        {
+            case PointerUpdateKind.XButton1Pressed:
+                GoBack();
+                break;
+            case PointerUpdateKind.XButton2Pressed:
+                GoForward();
+                break;
+        }
     }
 
     /// <summary>
@@ -244,32 +241,31 @@ public sealed partial class ShellPage : UserControl, IShellActions
     internal Brush? TrailBase => TrailBar.Background;
 
     /// <summary>
-    /// 标题栏那一条上的墨 —— 两拨按钮，两种底，外加它底下那行面包屑。
+    /// 外壳那两行上的墨 —— 标题栏那一排按键、标签栏、账号那一块，外加它们底下那行面包屑。
     /// <para>
-    /// 系统那三颗（最小化、最大化、关闭）在窗口的右上角，也就是工作区那一列的顶上：主页那张大图铺过去
-    /// 之后它们永远站在剧照上。我们那五颗在左端，侧边栏张开时它们站在侧边栏自己的底色上，收成 48 像素的
-    /// 窄条时才压到图上 —— 所以这两拨的判断不是同一个。
+    /// 判断只有一条：<em>这一块底下是不是一张剧照</em>（<see cref="_titleStrip"/>）。从前那四拨各有各的门 ——
+    /// 我们那几颗按键要等侧边栏收成窄条才压到图上，系统那三颗一直在图上，面包屑不经侧边栏那道门 —— 而侧边栏
+    /// 2026-09-06 删掉之后，外壳两行整个浮在页面上，四拨于是走同一句判断。**这是删掉那条栏换来的净简化**，
+    /// 不是漏掉了一档。
     /// </para>
     /// <para>
-    /// 面包屑那一行是第三拨，跟的是没经侧边栏那道门的 <c>_titleStrip</c>：它整条都在工作区里，图铺过来
-    /// 它就在图上，跟侧边栏是张是收无关。它的底色也在这里换 —— 图上那一档不上底色，一条实心条压在剧照上
-    /// 就是「跟主页一样，占满标题栏」要去掉的那道横边；页面自己洗过那一条的那一档（<see cref="TitleStrip.PagePainted"/>）
-    /// 同样不上，那时候洗出来的就是正文那张纸的颜色，外壳再涂一层页面底色，这一条会比正文亮出四五级。
-    /// </para>
-    /// <para>
-    /// 压在图上的那一档用固定的浅墨（<c>EgOnScrim*</c>），不跟主题走：剧照顶上那层暗罩是黑的，而三套浅色
+    /// 压在图上的那一档用固定的浅墨（<c>EgOnScrim*</c>），不跟主题走：剧照顶上那层暗罩是黑的，而一套浅色
     /// 主题的墨是深色。停用的两支箭头另用淡的那一支 —— 「走不动的箭头是淡墨，不是一块灰底」，见标记那一段。
     /// 面包屑在图上时用的是亮的那一支而不是淡的：平底上它是二等的陪衬字（跟着 EgDataStyle 走暗墨），压到
-    /// 一张有明有暗的画面上就得自己站得住。洗过那一档的墨回到主题那支，因为那时它压的已经是正文的底色。
+    /// 一张有明有暗的画面上就得自己站得住。页面自己洗过那一条的那一档（<see cref="TitleStrip.PagePainted"/>）
+    /// 墨回到主题那支，因为那时它压的已经是正文的底色。
+    /// </para>
+    /// <para>
+    /// 标签栏和账号那一块跟着同一支：它们的键在 <see cref="PaintTabs"/> 里挂的就是这两个对象，所以这里改一次
+    /// 颜色，整条标签栏、药丸、账号那两行字一起跟着走。
     /// </para>
     /// </summary>
     private void PaintTitleInk()
     {
         var onScrim = _titleStrip == TitleStrip.OnScrim;
-        var onImage = onScrim && !Navigation.IsPaneOpen;
 
-        _titleInk.Color = Ink(onImage ? "EgOnScrimBrush" : "EgTextBrush");
-        _titleInkDim.Color = Ink(onImage ? "EgOnScrimDimBrush" : "EgTextDimBrush");
+        _titleInk.Color = Ink(onScrim ? "EgOnScrimBrush" : "EgTextBrush");
+        _titleInkDim.Color = Ink(onScrim ? "EgOnScrimDimBrush" : "EgTextDimBrush");
         _trailInk.Color = Ink(onScrim ? "EgOnScrimBrush" : "EgTextDimBrush");
 
         TrailBar.Background = _titleStrip == TitleStrip.Plain
@@ -282,8 +278,15 @@ public sealed partial class ShellPage : UserControl, IShellActions
         AppTitleBar.Resources["ButtonForegroundPressed"] = _titleInk;
         AppTitleBar.Resources["ButtonForegroundDisabled"] = _titleInkDim;
 
+        // 账号那三样直接写在元素上，不走键：那两行字一个走 FontWeight、一个走 EgDataStyle，而样式自己设了
+        // Foreground —— 写在元素上的值压得过样式里的 setter，写进字典里的键则压不过。
+        AccountUser.Foreground = _titleInk;
+        AccountServer.Foreground = _titleInkDim;
+        AccountChevron.Foreground = _titleInkDim;
+        AccountGlyph.Foreground = _titleInkDim;
+
         // 系统那三颗归窗口画：它们不在这棵树上，是 Win32 的非客户区。洗过那一档跟着「不在图上」走 ——
-        // 那时它们压的是页面洗出来的正文底色，白墨在晴昼那套上就没了。
+        // 那时它们压的是页面洗出来的正文底色，白墨在一套浅色主题上就没了。
         _window?.SetCaptionOnScrim(onScrim);
 
         static Windows.UI.Color Ink(string key) =>
@@ -293,41 +296,37 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
-    /// 侧边栏那些行的底和字，一行一行接到我们自己的画刷上。默认那套是中性灰的圆角药丸 + 一律全亮的字，
-    /// 于是「你在哪一页」只靠一小块灰色说，而没选中的行和选中的行一样亮。改成：没选中的行是暗字、悬停跟
-    /// 标题栏那五颗按钮同一层白、选中的行是一层薄强调色加亮字，左边那根指示条是强调色。
+    /// 标签栏和账号那颗按钮的底和字，一格一格接到我们自己的画刷上。默认那套是中性灰的字加一条系统强调色的
+    /// 药丸，于是「你在哪一页」的浓淡和这个应用其余部分对不上，而压在剧照上时那身灰字直接读不出来。
     /// <para>
-    /// 和 <see cref="PaintTitleActions"/> 同一个理由放在代码里：键下面必须是 <c>ThemeHost</c> 正在改的
-    /// <em>那一个</em> brush 对象。这里还多一条 —— 指示条默认是从 <c>SystemAccentColor</c> 派生的，而
-    /// Palette.xaml 覆盖的是那个 <em>Color</em>，框架的画刷在解析自己字典时就把它取走冻住了，换主题不会动。
-    /// 把共用对象塞到键上，指示条才跟着主题走。
+    /// 和 <see cref="PaintTitleActions"/> 同一个理由放在代码里：键下面必须是别处正在改颜色的<em>那一个</em>
+    /// brush 对象。这里有两类 —— 跟着「底下是不是剧照」走的那两支是这一页自己的（<see cref="_titleInk"/>、
+    /// <see cref="_titleInkDim"/>，由 <see cref="PaintTitleInk"/> 改）；药丸和悬停那三支是 <c>ThemeHost</c>
+    /// 管的应用级共用对象，换主题时它自己就跟着变了。
+    /// </para>
+    /// <para>
+    /// 药丸那一支特别值一句：框架默认是从 <c>SystemAccentColor</c> 派生的，而 Palette.xaml 覆盖的是那个
+    /// <em>Color</em>，框架的画刷在解析自己字典时就把它取走冻住了，换主题不会动 —— 和从前侧边栏那根指示条
+    /// 一模一样的坑。
     /// </para>
     /// </summary>
-    private void PaintNavigationPane()
+    private void PaintTabs()
     {
         var resources = Application.Current.Resources;
 
-        // 键名 → 我们的画刷名。成对写在一处，比十几行赋值好读，也好数。
-        (string Key, string Brush)[] roles =
-        [
-            ("NavigationViewItemForeground", "EgTextDimBrush"),
-            ("NavigationViewItemForegroundPointerOver", "EgTextBrush"),
-            ("NavigationViewItemForegroundPressed", "EgTextBrush"),
-            ("NavigationViewItemForegroundSelected", "EgTextBrush"),
-            ("NavigationViewItemForegroundSelectedPointerOver", "EgTextBrush"),
-            ("NavigationViewItemForegroundSelectedPressed", "EgTextBrush"),
+        NavBar.Resources["SelectorBarItemForeground"] = _titleInkDim;
+        NavBar.Resources["SelectorBarItemForegroundPointerOver"] = _titleInk;
+        NavBar.Resources["SelectorBarItemForegroundPressed"] = _titleInk;
+        NavBar.Resources["SelectorBarItemForegroundSelected"] = _titleInk;
 
-            ("NavigationViewItemBackgroundPointerOver", "EgOverlayHoverBrush"),
-            ("NavigationViewItemBackgroundPressed", "EgOverlayPressedBrush"),
-            ("NavigationViewItemBackgroundSelected", "EgAccentMutedBrush"),
-            ("NavigationViewItemBackgroundSelectedPointerOver", "EgAccentSoftBrush"),
-            ("NavigationViewItemBackgroundSelectedPressed", "EgAccentSoftBrush"),
+        NavBar.Resources["SelectorBarItemBackgroundPointerOver"] = resources["EgOverlayHoverBrush"];
+        NavBar.Resources["SelectorBarItemBackgroundPressed"] = resources["EgOverlayPressedBrush"];
+        NavBar.Resources["SelectorBarItemBackgroundSelected"] = resources["EgOverlayHoverBrush"];
+        NavBar.Resources["SelectorBarItemPillFill"] = resources["EgAccentBrush"];
 
-            ("NavigationViewSelectionIndicatorForeground", "EgAccentBrush"),
-            ("NavigationViewItemSeparatorForeground", "EgBorderBrush")
-        ];
-
-        foreach (var (key, brush) in roles) Navigation.Resources[key] = resources[brush];
+        // 账号那颗按钮的底：和标题栏那四颗同一层白，所以整条外壳的悬停手感是一致的。
+        NavBar.Resources["ButtonBackgroundPointerOver"] = resources["EgOverlayHoverBrush"];
+        NavBar.Resources["ButtonBackgroundPressed"] = resources["EgOverlayPressedBrush"];
     }
 
     /// <summary>
@@ -338,7 +337,19 @@ public sealed partial class ShellPage : UserControl, IShellActions
     private AppSettings Settings => _settings!.Settings;
 
     /// <summary>For the self-check, which has to inspect the live tree from outside.</summary>
-    internal NavigationView NavigationRoot => Navigation;
+    internal SelectorBar TabsRoot => LibraryTabs;
+
+    /// <summary>外壳那两行，自检要问它在不在（登录页和播放时整块收起）。</summary>
+    internal FrameworkElement ChromeRoot => Chrome;
+
+    /// <summary>标签栏那一行 —— 账号那颗按钮也在里面。登录页上它整行收着。</summary>
+    internal FrameworkElement NavBarRoot => NavBar;
+
+    /// <summary>账号那颗按钮，自检量它落在哪个角。</summary>
+    internal FrameworkElement AccountRoot => AccountButton;
+
+    /// <summary>浏览态那一块（面包屑 + 页面）。</summary>
+    internal FrameworkElement BrowseRoot => ContentHost;
 
     internal Frame Pages => ContentFrame;
 
@@ -497,22 +508,22 @@ public sealed partial class ShellPage : UserControl, IShellActions
         IReadOnlyList<EmbyItem>? episodes) => PlayAsync(item, parent, choice, episodes);
 
     /// <summary>
-    /// Gives the window to the player, or takes it back. The navigation shell is collapsed rather than
-    /// merely covered: the XAML island is a single surface, so NavigationView's own opaque background
+    /// Gives the window to the player, or takes it back. The browse container is collapsed rather than
+    /// merely covered: the XAML island is a single surface, so an opaque background behind the player
     /// would paint over exactly the region mpv's child window shows through.
     /// </summary>
     internal void ShowPlayer(bool playing)
     {
         if (playing)
         {
-            AppTitleBar.Visibility = Visibility.Collapsed;
+            Chrome.Visibility = Visibility.Collapsed;
             if (_window is not null) _window.PlaybackTitleBar = true;
-            Navigation.Visibility = Visibility.Collapsed;
+            ContentHost.Visibility = Visibility.Collapsed;
             SignIn.Visibility = Visibility.Collapsed;
             return;
         }
 
-        AppTitleBar.Visibility = Visibility.Visible;
+        Chrome.Visibility = Visibility.Visible;
         if (_window is not null) _window.PlaybackTitleBar = false;
 
         // The player leaves the page it was started from behind it, so both arrows are exactly as available
@@ -521,10 +532,17 @@ public sealed partial class ShellPage : UserControl, IShellActions
         SyncChrome();
 
         // Not unconditionally the shell: a token can expire while a film is playing, and coming back to
-        // a navigation pane belonging to an account that is no longer signed in would be worse than the
+        // a browsing shell belonging to an account that is no longer signed in would be worse than the
         // sign-in card the session already asked for.
-        if (_session is { IsSignedIn: true }) Navigation.Visibility = Visibility.Visible;
-        else SignIn.Visibility = Visibility.Visible;
+        if (_session is { IsSignedIn: true })
+        {
+            ContentHost.Visibility = Visibility.Visible;
+            NavBar.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            SignIn.Visibility = Visibility.Visible;
+        }
     }
 
     /// <summary>
@@ -606,7 +624,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
-    /// Shows the signed-in identity at the foot of the pane. Called by whoever owns the session; the
+    /// Shows the signed-in identity at the right end of the tab row. Called by whoever owns the session; the
     /// shell does not go looking for one. 需求 2 took the avatar away, so this is two lines of text and
     /// nothing else — there is no picture left to hand a display name to.
     /// </summary>
@@ -616,7 +634,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         AccountServer.Text = string.IsNullOrWhiteSpace(server) ? "未连接服务器" : server;
     }
 
-    /// <summary>Navigates to a tag, whether the request came from the pane or from a page.</summary>
+    /// <summary>Navigates to a tag, whether the request came from the tab row or from a page.</summary>
     public void GoTo(string tag)
     {
         if (_services is null) return;
@@ -736,18 +754,18 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         _trail.Add(new Crumb(request.Title, string.Empty));
 
-        // Requirement 6's other half. Nothing in the pane points at a detail page, so leaving the highlight
-        // on the entry the drill-down started from is a lie — and it used to be a lie with consequences:
-        // clicking 主页 while it was still highlighted moved no selection, so under SelectionChanged it
-        // navigated nowhere and the poster the user had opened stayed on screen.
+        // Requirement 6's other half. Nothing in the tab row points at a detail page, so leaving the
+        // highlight on the tab the drill-down started from is a lie — and it used to be a lie with
+        // consequences: clicking 主页 while it was still highlighted moved no selection, so nothing fired
+        // and the poster the user had opened stayed on screen.
         _current = null;
-        Navigation.SelectedItem = null;
+        LibraryTabs.SelectedItem = null;
         SyncChrome();
     }
 
     /// <summary>
     /// Opens a folder, series or season from inside a page: same page type, one level deeper, and the
-    /// trail grows instead of being replaced. This is the one navigation the pane knows nothing about.
+    /// trail grows instead of being replaced. This is the one navigation the tab row knows nothing about.
     /// </summary>
     internal void OpenChild(LibraryRequest request)
     {
@@ -755,10 +773,10 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         _trail.Add(new Crumb(request.Title, request.Tag));
 
-        // Nothing in the pane corresponds to a drill-down, so the next pane click must always navigate —
-        // including a click on the entry that is still highlighted, which is what requirement 6 is about.
+        // Nothing in the tab row corresponds to a drill-down, so the next tab click must always navigate —
+        // including a click on the tab that is still highlighted, which is what requirement 6 is about.
         _current = null;
-        Navigation.SelectedItem = null;
+        LibraryTabs.SelectedItem = null;
         SyncChrome();
     }
 
@@ -839,6 +857,31 @@ public sealed partial class ShellPage : UserControl, IShellActions
         }
 
         Log.Info(Category, $"--show-menu：已弹开「{title}」的更多菜单");
+    }
+
+    /// <summary>
+    /// Tooling: 把主页右栏那一列继续观看的两条翻页条摆出来留着，好给它们拍一张（<c>--show-rail</c>）。
+    /// <para>
+    /// 理由同 <see cref="ShowCardMenuAsync"/>，而且这一次是试过挪真指针之后才加的开关：<c>SetCursorPos</c> 确实把
+    /// 指针挪到了那一栏上，可照片上翻页条还是没有 —— 用户的手也在同一只鼠标上，快门开之前指针就又走了。自检读得出
+    /// 「悬停那一档摆出来是对的」，而它们长什么样只能看照片。
+    /// </para>
+    /// </summary>
+    internal async Task ShowRailPagerAsync()
+    {
+        // 等那一栏真的有卡：翻页条只在「还有得翻」的时候才浮出来，卡片没到就是两条都不该在。
+        for (var attempt = 0; attempt < 40 && ContentFrame.Content is not HomePage { IsReady: true }; attempt++)
+            await Task.Delay(250).ConfigureAwait(true);
+
+        await Task.Delay(400).ConfigureAwait(true);
+
+        if (ContentFrame.Content is not HomePage home)
+        {
+            Log.Warn(Category, "--show-rail：这一刻框里不是主页");
+            return;
+        }
+
+        Log.Info(Category, $"--show-rail：{home.RevealRailPager()}");
     }
 
     /// <summary>
@@ -959,7 +1002,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         await PlayAsync(item).ConfigureAwait(true);
     }
 
-    /// <summary>A top-level destination: one crumb, a synced pane highlight, no fade.</summary>
+    /// <summary>A top-level destination: one crumb, a synced tab highlight, no fade.</summary>
 
     private void Open(Type page, object parameter, string title, string tag)
     {
@@ -1004,9 +1047,6 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     private void ApplyChrome(bool canGoBack, bool canGoForward, int crumbs)
     {
-        // Still wired: this is what answers Alt+Left and the mouse's own back button.
-        Navigation.IsBackEnabled = canGoBack;
-
         BackButton.IsEnabled = canGoBack;
         ForwardButton.IsEnabled = canGoForward;
 
@@ -1016,9 +1056,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
-    /// Tells the window which rectangle of its title bar the five buttons occupy, in the island's logical
+    /// Tells the window which rectangle of its title bar the four buttons occupy, in the island's logical
     /// pixels, so the frame stops answering 「caption」 there and their clicks arrive. Measured rather than
-    /// assumed: the panel's position depends on the mark's own width and the current scale.
+    /// assumed: the panel's position depends on the current scale and on the icons' own metrics.
     /// </summary>
     private void ReportTitleBarHole()
     {
@@ -1032,121 +1072,52 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
-    /// Keeps the pane's highlight on the tag actually being shown. Needed because a page can
-    /// navigate without the pane being touched, and NavigationView will otherwise keep highlighting
-    /// wherever the user last clicked.
+    /// Keeps the tab row's highlight on the tag actually being shown. Needed because a page can navigate
+    /// without a tab being touched, and SelectorBar will otherwise keep highlighting wherever the user
+    /// last clicked.
+    /// <para>
+    /// 搜索 has no tab, so it correctly matches nothing and clears the highlight — same as a drill-down.
+    /// </para>
     /// </summary>
     private void SyncSelection(string tag)
     {
-        // MenuItems alone. The footer is a button rather than a list of destinations now (需求 2) and the
-        // pane's settings entry is off (需求 1), so 主页 and the libraries are the whole of what the pane can
-        // point at — and 搜索, which no entry points at, correctly matches nothing and clears the highlight.
-        var match = Navigation.MenuItems
-            .OfType<NavigationViewItem>()
-            .FirstOrDefault(item => (item.Tag as string) == tag);
-
-        Navigation.SelectedItem = match;
+        LibraryTabs.SelectedItem = LibraryTabs.Items.FirstOrDefault(item => (item.Tag as string) == tag);
     }
 
     /// <summary>
     /// 需求 6：「点击主页或者左侧的家园图标后，要直接回到主页界面」.
     /// <para>
-    /// ItemInvoked, not SelectionChanged. A click on the entry that is already highlighted moves no
-    /// selection, so SelectionChanged never fired for it and the click did nothing — which is exactly the
-    /// case the requirement describes, because drilling into a poster leaves 主页 highlighted while the
-    /// frame shows a detail page. <see cref="OpenDetail"/> now clears the highlight as well, so the two
-    /// halves agree whichever way the user gets back.
+    /// SelectorBar 只发「选中项换了」，没有「某一格被点了」这种事件（NavigationView 那边我们用的是
+    /// <c>ItemInvoked</c>）。够用的原因是下钻那几条路把 <c>SelectedItem</c> 清成 null（见
+    /// <see cref="OpenDetail"/>、<see cref="OpenChild"/>、<see cref="AdoptContentTag"/>）—— 所以「钻进一张海报
+    /// 之后点 主页」在这里是一次真的选中变化。真正「已经在这一页上又点一次」那一档本来就该什么都不做，而
+    /// <see cref="GoTo"/> 里 <c>_current == tag</c> 那道门也会拦住它。
+    /// </para>
+    /// <para>
+    /// 也是因为那道门，这里不需要防重入的旗子：<see cref="Open"/> 先写 <c>_current</c> 再同步高亮，同步引出来的
+    /// 这一趟撞在门上就回去了。
     /// </para>
     /// </summary>
-    private void OnItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs e)
+    private void OnTabSelected(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
     {
-        if (e.InvokedItemContainer is NavigationViewItem { Tag: string tag }) GoTo(tag);
+        if (sender.SelectedItem is { Tag: string tag }) GoTo(tag);
     }
 
-    /// <summary>需求 1 的第一颗按键。The pane's own toggle is off, so this is the only thing that folds it.</summary>
-    private void OnPaneToggleClicked(object sender, RoutedEventArgs e) =>
-        Navigation.IsPaneOpen = !Navigation.IsPaneOpen;
-
-    /// <summary>需求 1 的第二颗：「点击后弹出设置窗口」.</summary>
+    /// <summary>需求 1 的第一颗：「点击后弹出设置窗口」.</summary>
     private void OnSettingsClicked(object sender, RoutedEventArgs e) => ShowSettings();
 
-    /// <summary>需求 1 的第三颗：「点击后进入搜索页面，直接在当前窗口跳转」 — a page in this frame, not a window.</summary>
+    /// <summary>需求 1 的第二颗：「点击后进入搜索页面，直接在当前窗口跳转」 — a page in this frame, not a window.</summary>
     private void OnSearchClicked(object sender, RoutedEventArgs e) => OpenSearch();
 
-    /// <summary>
-    /// Keeps the pane's footer honest about the room it has, and keeps the title-bar row clear of the pane's
-    /// edge. Both pane events land here because it is the same question either way — and so does the
-    /// constructor, because the pane starts closed (「侧边栏默认为折叠状态」) and an initial value raises
-    /// neither event.
-    /// <para>
-    /// 页脚那半：收起来的时候侧边栏只有 48 像素宽，而「用户名 ＋ 服务器名」两行字是不会自己截断的 —— 它会直接
-    /// 画过侧边栏的边、横到页面上。所以窄条那一档只留一颗人形字形。
-    /// </para>
-    /// <para>
-    /// 缩进那半（「折叠状态下图标要向右移动一些，防止图标和侧边栏重合」）：那一排按键的左缩进是 40，侧边栏
-    /// 张开时它们整排站在侧边栏自己的底色上，好看；收成窄条之后 48 就成了窄条和工作区的分界，40 让第一颗托盘
-    /// 正好跨在那道竖线上 —— 半边在窄条里、半边在片场里。窄条那一档因此把整排让到线的右边：
-    /// <c>CompactPaneLength</c>（48）＋ 那道线自己的 1 ＋ 9，第一颗图标离线 16 像素，正好等于这一排里相邻两颗
-    /// 图标之间的距离（托盘 34 装 20 的图标，两边各 7，加上排距 2）—— 那道线于是读成这一排的又一个邻居。
-    /// </para>
-    /// <para>
-    /// 改缩进要自己再报一次窗口那个洞：<c>Margin</c> 变的是位置不是尺寸，<c>SizeChanged</c> 不响，而洞是照这
-    /// 一排的矩形挖的。少报这一次，屏上一切正常，但整排右边那 18 像素会变回「拖动区」—— 点前进键会把窗口拖走。
-    /// </para>
-    /// </summary>
-    private void SyncPane()
-    {
-        var open = Navigation.IsPaneOpen;
-
-        AccountDetails.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        AccountChevron.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        AccountGlyph.Visibility = open ? Visibility.Collapsed : Visibility.Visible;
-
-        var inset = open ? TitleActionsInset : Navigation.CompactPaneLength + PaneClearance;
-        if (Math.Abs(TitleActions.Margin.Left - inset) > 0.5)
-        {
-            TitleActions.Margin = new Thickness(inset, 0, 0, 0);
-
-            // 量之前先让布局跑一遍：TransformToVisual 读的是当前的排布，改完立刻量会量到旧位置。
-            TitleActions.UpdateLayout();
-            ReportTitleBarHole();
-        }
-
-        // 收成窄条时左端那五颗按钮就从侧边栏的底色上挪到了主页那张大图上，墨要跟着换（见 PaintTitleInk）。
-        PaintTitleInk();
-    }
-
-    /// <inheritdoc cref="SyncPane"/>
-    private void OnPaneToggled(NavigationView sender, object args) => SyncPane();
-
-    /// <summary>
-    /// 「默认收起侧边栏」这一句摆到屏幕上：<paramref name="collapsed"/> 是收起，反过来是张开。第一次是
-    /// <c>Navigation.Loaded</c> 叫的（那时才有模板可按），之后每次那个开关被改都再叫一遍
-    /// （<see cref="ShellPrefs"/>）——「改完要重启才算」的开关读起来就是个坏开关。
-    /// <para>
-    /// 收起那一档故意先张开再关上，理由写在构造器里那一段：NavigationView 只在「张着的时候被关掉」这一下才
-    /// 记住是人要关的，不记住的话它每次重排都会自己张开。张开那一档不需要这一下 —— 它本来就爱张开。
-    /// </para>
-    /// </summary>
-    private void ApplyPaneDefault(bool collapsed)
-    {
-        Navigation.IsPaneOpen = true;
-        if (collapsed) Navigation.IsPaneOpen = false;
-
-        SyncPane();
-    }
-
-    private void OnBackRequested(NavigationView sender, NavigationViewBackRequestedEventArgs e) => GoBack();
-
-    /// <summary>The row's own arrows. Same walk as the keyboard's, so neither can drift.</summary>
+    /// <summary>The row's own arrows. Same walk as the keyboard's and the mouse's, so none can drift.</summary>
     private void OnBackClicked(object sender, RoutedEventArgs e) => GoBack();
 
     private void OnForwardClicked(object sender, RoutedEventArgs e) => GoForward();
 
     /// <summary>
-    /// One step back: the frame, the trail and the pane highlight. Reached from the row's own button and
-    /// from <c>NavigationView.BackRequested</c>, which is still wired because that is what raises Alt+Left
-    /// and the mouse's own back button — the pane's arrow is gone, the gestures behind it are not.
+    /// One step back: the frame, the trail and the tab highlight. Reached from the row's own button, from
+    /// its Alt+← accelerator, and from the mouse's own back button (<see cref="OnRootPointerPressed"/>) —
+    /// 从前那三条路都由 <c>NavigationView.BackRequested</c> 一处收口，侧边栏删掉之后各自接线。
     /// </summary>
     private void GoBack()
     {
@@ -1228,9 +1199,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
     {
         var tag = (ContentFrame.Content as FrameworkElement)?.Tag as string;
 
-        // Empty is a drill-down: a real page, but not one the pane can point at.
+        // Empty is a drill-down: a real page, but not one a tab can point at.
         _current = tag is { Length: > 0 } ? tag : null;
-        if (_current is null) Navigation.SelectedItem = null;
+        if (_current is null) LibraryTabs.SelectedItem = null;
         else SyncSelection(_current);
     }
 
@@ -1243,9 +1214,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// no browsable id, so a person's other work is a search and not a folder.
     /// </para>
     /// <para>
-    /// A top-level destination with a tag of its own, so the trail, the pane highlight and 「already there」
+    /// A top-level destination with a tag of its own, so the trail, the tab highlight and 「already there」
     /// all behave the way they do for 主页 — which is what lets the button be pressed a second time without
-    /// throwing away what has been typed into the page.
+    /// throwing away what has been typed into the page. 标签栏里没有「搜索」这一格，所以高亮会被清空。
     /// </para>
     /// </summary>
     internal void OpenSearch(string term = "")
@@ -1286,7 +1257,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
-    /// Swaps the sign-in card for the browsing shell: reads this account's libraries, fills the pane
+    /// Swaps the sign-in card for the browsing shell: reads this account's libraries, fills the tab row
     /// and the two switch menus, and opens the home page.
     /// </summary>
     private async Task EnterShellAsync()
@@ -1295,7 +1266,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         SignIn.Detach();
         SignIn.Visibility = Visibility.Collapsed;
-        Navigation.Visibility = Visibility.Visible;
+        ContentHost.Visibility = Visibility.Visible;
+        NavBar.Visibility = Visibility.Visible;
 
         ShowAccount(_session.Account?.Username, _session.ServerDisplayName);
         FillSwitchMenus();
@@ -1314,8 +1286,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
     private async Task LoadLibrariesAsync()
     {
-        while (Navigation.MenuItems.Count > FixedPaneItems)
-            Navigation.MenuItems.RemoveAt(Navigation.MenuItems.Count - 1);
+        while (LibraryTabs.Items.Count > FixedTabs)
+            LibraryTabs.Items.RemoveAt(LibraryTabs.Items.Count - 1);
 
         _libraries.Clear();
         _libraryViews.Clear();
@@ -1332,20 +1304,18 @@ public sealed partial class ShellPage : UserControl, IShellActions
         }
         catch (Exception error)
         {
-            // The pane is left with its fixed entries; the home page will report the same failure in
-            // the place the user is actually looking.
+            // 标签栏于是只剩 主页 那一格；主页那一页会在用户真正在看的地方报同一件事。
             Log.Warn(Category, "读取媒体库列表失败", error);
-            LibraryHeader.Visibility = Visibility.Collapsed;
             return;
         }
 
         foreach (var view in views)
         {
             // 需求 3：「屏蔽媒体库里音乐的内容」. Filtered here rather than in each place a library can be
-            // reached, because this loop is the only source of all three: the pane's entries, the requests
-            // those entries open, and the 媒体库 row on the home page, which is this same list drawn as
-            // cards. A music library dropped here cannot be reached from anywhere, and 继续观看/接下来看/
-            // 最近添加 drop their own music rows in HomeViewModel because those three span every library.
+            // reached, because this loop is the only source of all three: the tabs, the requests those tabs
+            // open, and the 媒体库 row on the home page, which is this same list drawn as cards. A music
+            // library dropped here cannot be reached from anywhere, and 继续观看/接下来看/最近添加 drop their
+            // own music rows in HomeViewModel because those three span every library.
             if (EmbyItemType.IsMusicLibrary(view.CollectionType)) continue;
 
             var tag = $"library:{view.Id}";
@@ -1361,23 +1331,26 @@ public sealed partial class ShellPage : UserControl, IShellActions
                 CollectionType = view.CollectionType
             };
 
-            Navigation.MenuItems.Add(new NavigationViewItem
+            LibraryTabs.Items.Add(new SelectorBarItem
             {
-                Content = view.Name,
+                Text = view.Name,
                 Tag = tag,
-                Icon = new FontIcon { Glyph = char.ConvertFromUtf32(GlyphFor(view.CollectionType)) }
+                Icon = new FontIcon
+                {
+                    Glyph = char.ConvertFromUtf32(GlyphFor(view.CollectionType)),
+                    FontSize = SizeFor(view.CollectionType)
+                }
             });
         }
 
-        LibraryHeader.Visibility = _libraries.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         Log.Info(Category, views.Count == _libraries.Count
-            ? $"媒体库 {_libraries.Count} 个已进入导航栏"
-            : $"媒体库 {_libraries.Count} 个已进入导航栏（服务器共 {views.Count} 个，音乐库已屏蔽）");
+            ? $"媒体库 {_libraries.Count} 个已进入标签栏"
+            : $"媒体库 {_libraries.Count} 个已进入标签栏（服务器共 {views.Count} 个，音乐库已屏蔽）");
     }
 
     /// <summary>
     /// A library's icon. No music case: 需求 3 filters those libraries out before this is asked, so a glyph
-    /// for one would be a promise the pane never keeps.
+    /// for one would be a promise the tab row never keeps.
     /// </summary>
     private static int GlyphFor(string? collectionType) => collectionType switch
     {
@@ -1388,9 +1361,24 @@ public sealed partial class ShellPage : UserControl, IShellActions
     };
 
     /// <summary>
+    /// 那颗图标画多大。**同一个字号下这几个字形的墨不一样大**，而它们现在横着排成一条标签栏、每颗紧挨着自己
+    /// 那格的字，谁小一圈一眼就看得出来 —— 2026-09-05 在截图上量的墨（宽×高）：主页那颗手画的路径图标 15×16、
+    /// 电视那颗（<c>SeriesGlyph</c>）16×16，而电影那颗（<c>MovieGlyph</c>，一格带齿孔的胶片）只有 14×14。所以
+    /// 电影那一档单独抬一档：抬的是「墨看起来一样大」（16 × 16/14 ≈ 18），不是「字号一样」。
+    /// <para>
+    /// 基准从 20 降到 16，因为这几颗现在是 14 号字旁边的一颗小图标，不再是侧边栏里独占一行的那一颗。比例照旧。
+    /// </para>
+    /// <para>
+    /// 这几颗是系统图标字体里的字形，不是这个外壳自己那四颗手画的路径图标（<c>ShellPage.xaml</c> 里那一段），
+    /// 所以字形自己的松紧改不了，只能改字号。真要一律齐平就得把这四颗也画成路径 —— 那是另一件活。
+    /// </para>
+    /// </summary>
+    private static double SizeFor(string? collectionType) => collectionType == "movies" ? 18 : 16;
+
+    /// <summary>
     /// 切换服务器 / 切换用户: the saved servers and the accounts on the current one, both one click away from
-    /// the button at the foot of the pane. A switch that has a saved token or password does not ask for
-    /// anything; one that does not lands on the sign-in card with the address already filled in.
+    /// the button at the right end of the tab row. A switch that has a saved token or password does not ask
+    /// for anything; one that does not lands on the sign-in card with the address already filled in.
     /// </summary>
     private void FillSwitchMenus()
     {
@@ -1500,7 +1488,11 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// <summary>Puts the sign-in card back in front, pointed at a particular server when there is one.</summary>
     private void ShowSignIn(ServerProfile? server = null)
     {
-        Navigation.Visibility = Visibility.Collapsed;
+        ContentHost.Visibility = Visibility.Collapsed;
+
+        // 标签栏也收起来：没登录就没有媒体库，一条只剩「主页」的标签栏加一颗写着「未登录」的账号按钮，是在
+        // 登录卡上面画了一行没有意义的东西。标题栏那一排（设置、搜索、两支箭头）照旧留着 —— 它是窗口的外壳。
+        NavBar.Visibility = Visibility.Collapsed;
         SignIn.Visibility = Visibility.Visible;
 
         // The settings window belongs to the account being left: 服务器 lists this session's profiles and

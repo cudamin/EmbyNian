@@ -1,5 +1,6 @@
 using System.Globalization;
 using EmbyNian.Configuration;
+using EmbyNian.Infrastructure;
 
 namespace EmbyNian.Mpv;
 
@@ -47,9 +48,6 @@ public static class MpvOutputOptions
     /// </para>
     /// </summary>
     public const string Inherit = "";
-
-    /// <summary>字幕背景颜色 stand-in for 「无背景」, which is a real choice rather than 「不设置」.</summary>
-    public const string NoBackground = "none";
 
     /// <summary>
     /// 「自动」 in a list whose other entries are mpv values. It is the client's own sentinel — the
@@ -281,55 +279,52 @@ public static class MpvOutputOptions
     /// </summary>
     private const string DefaultPreset = "default";
 
-    /// <summary>字幕文字颜色. A short list of readable ones rather than a colour picker.</summary>
-    public static readonly MpvChoice[] SubtitleColors =
-    [
-        new(Inherit, "不设置（纯文本字幕为白色）"),
-        new("#FFFFFF", "白色"),
-        new("#F5F5DC", "米白"),
-        new("#FFF200", "亮黄"),
-        new("#FFD24A", "琥珀黄"),
-        new("#B4E1FF", "淡蓝"),
-        new("#000000", "黑色")
-    ];
+    /// <summary>
+    /// 描边大小、阴影这两行共用的输入范围，mpv 自己的上下限：mpv.exe 拿到范围外的选项值是不播放而不是
+    /// 夹住，所以上限不许松。
+    /// </summary>
+    public const double SubtitleUnitMinimum = 0;
+    public const double SubtitleUnitMaximum = 10;
 
-    /// <summary>字体描边 widths in mpv units; mpv's own default is 3.</summary>
-    public static readonly MpvChoice[] SubtitleBorders =
-    [
-        new(Inherit, "不设置（纯文本字幕为中等 3）"),
-        new("0", "无描边"),
-        new("0.5", "极细"),
-        new("1.5", "细"),
-        new("3", "中等"),
-        new("4.5", "粗")
-    ];
+    /// <summary>
+    /// 描边大小（<c>sub-border-size</c>）和阴影（<c>sub-shadow-offset</c>）这两行的自由数字输入共用的
+    /// 解析 —「这个不用弄成固定的选项，改成输入数字」（2026-09-06），取代原先各自一张的固定档位表。
+    /// <para>
+    /// 空串还是「不设置，mpv 自己说了算」（描边是 <b>1.65</b> —— 从自带的 libmpv 选项表上量的
+    /// v0.41.0-923、2026-09-05，不是抄文档，文档上的 3 早过时了；阴影默认没有）。数字照收，逗号当小数点，
+    /// 范围外的拉回 0–10 里 —— 字号那一行「填更小的会被抬上来」是同一条规矩；不是数的退「不设置」，和
+    /// 颜色那三行同一条。存发都还是 <c>sub-border-size</c> 这个旧名，mpv 把它留作 <c>sub-outline-size</c>
+    /// 的别名。
+    /// </para>
+    /// </summary>
+    public static string ClampSubtitleUnit(string? value)
+    {
+        var text = (value ?? "").Trim().Replace(',', '.');
+        if (text.Length == 0) return "";
 
-    /// <summary>描边颜色. Nearly always black — the point of the outline is to survive any picture behind it.</summary>
-    public static readonly MpvChoice[] SubtitleBorderColors =
-    [
-        new(Inherit, "不设置（纯文本字幕为黑色）"),
-        new("#000000", "黑色"),
-        new("#1E1E1E", "深灰"),
-        new("#FFFFFF", "白色")
-    ];
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
+            || !double.IsFinite(number))
+            return "";
 
-    /// <summary>字幕阴影 offset in mpv units; 0 is no shadow.</summary>
-    public static readonly MpvChoice[] SubtitleShadows =
-    [
-        new(Inherit, "不设置（无阴影）"),
-        new("0", "无阴影"),
-        new("0.5", "轻"),
-        new("1", "中等"),
-        new("2", "重")
-    ];
+        return Math.Clamp(number, SubtitleUnitMinimum, SubtitleUnitMaximum)
+            .ToString("0.###", CultureInfo.InvariantCulture);
+    }
 
     /// <summary>
     /// 字幕编码 for a text subtitle that is not valid UTF-8. mpv checks UTF-8 first whatever this says,
-    /// so naming a legacy codepage only affects the files that need it.
+    /// so a modern subtitle file is unaffected either way.
+    /// <para>
+    /// <b>Naming a codepage switches mpv's detection off</b>, which is why 「自动识别」 is the shipped
+    /// default and <c>gb18030</c> — what this client shipped until 2026-09-05 — no longer is. Rendered
+    /// both ways that day: a Big5 file read as GB18030 comes out as 「硂琁□∽代刚□辊」, and mpv's own
+    /// <c>auto</c> (uchardet, compiled into the bundled libmpv) reads it correctly. The same test on a
+    /// GBK 简体 file gave byte-identical frames either way, so detection costs nothing on the files the
+    /// old default was chosen for. The manual entries stay for the file detection gets wrong.
+    /// </para>
     /// </summary>
     public static readonly MpvChoice[] SubtitleCodepages =
     [
-        new(Inherit, "自动识别（优先按 UTF-8 读）"),
+        new(Inherit, "自动识别（先按 UTF-8，再交给 mpv 判断）"),
         new("gb18030", "简体中文（GB18030）"),
         new("big5", "繁体中文（Big5）"),
         new("shift-jis", "日文（Shift-JIS）"),
@@ -337,15 +332,46 @@ public static class MpvOutputOptions
         new("cp1252", "西欧（CP1252）")
     ];
 
-    /// <summary>字幕背景颜色, plus the explicit 「无」 that turns the box off.</summary>
-    public static readonly MpvChoice[] SubtitleBackColors =
+    /// <summary>
+    /// 字幕底板. <b>The option that decides whether 底板颜色 below paints a plate at all</b>, and the
+    /// reason those two rows used to do nothing: from mpv 0.39 on, <c>sub-back-color</c> and
+    /// <c>sub-shadow-color</c> are one value, and whether it is drawn as a drop shadow or as a plate
+    /// depends solely on <c>sub-border-style</c> — which this client never sent, so mpv's own
+    /// <c>outline-and-shadow</c> stood and every 背景颜色 the user picked went into the shadow.
+    /// <para>
+    /// Verified by rendering, 2026-09-05: same options, one frame with this unset and one with
+    /// <c>background-box</c>. Without it there is no plate on screen at any colour or opacity.
+    /// </para>
+    /// </summary>
+    public static readonly MpvChoice[] SubtitleBackStyles =
     [
-        new(Inherit, "不设置（沿用字幕自带样式）"),
-        new(NoBackground, "无背景"),
-        new("#000000", "黑色"),
-        new("#1E1E1E", "深灰"),
-        new("#2B3A55", "深蓝"),
-        new("#FFFFFF", "白色")
+        new(Inherit, "关闭（只有描边和阴影）"),
+        new("background-box", "贴着字的底板"),
+        new("opaque-box", "整行不透明方框")
+    ];
+
+    // 底板颜色 no longer has a preset list here: since 2026-09-06 it is a free-form #RRGGBB through the
+    // HTML 颜色选择器, validated by SettingsMigration.Rgb on the way in. It is also the 阴影 colour —
+    // mpv aliases the two — and 「无背景」, which used to be an entry of the old list, is said by 「关闭」
+    // on SubtitleBackStyles above.
+
+    /// <summary>
+    /// 外观应用范围, i.e. mpv's <c>sub-ass-override</c>. <b>Everything from 字体 down to 底板 is
+    /// ignored on an ASS/SSA subtitle unless this says otherwise</b>: mpv's default is <c>scale</c>,
+    /// which lets only <c>sub-scale</c> through and leaves the script's own font, size and colours in
+    /// charge. Fansubbed 番剧 and most 压制组 releases carry ASS, so that default quietly emptied nine
+    /// rows of this card; a Blu-ray's PGS track is a picture and takes none of them either way.
+    /// <para>
+    /// Two entries out of mpv's five. <c>no</c> and <c>yes</c> differ from 「跟随」 and 「强制」 only in
+    /// corners nobody would pick from a settings page, and <c>strip</c> tears the styling off signs and
+    /// karaoke as well — the player's 右键 → 字幕 → 兼容性 still cycles all five for the one film that
+    /// needs it.
+    /// </para>
+    /// </summary>
+    public static readonly MpvChoice[] SubtitleStyleScopes =
+    [
+        new(Inherit, "跟随字幕自带样式（ASS/SSA 用它自己的字体和颜色）"),
+        new("force", "强制用下面这些外观（ASS/SSA 也一样）")
     ];
 
     /// <summary>
@@ -631,21 +657,42 @@ public static class MpvOutputOptions
     }
 
     /// <summary>
-    /// 字幕外观. The colours go out in mpv's <c>r/g/b/a</c> float form rather than <c>#AARRGGBB</c>:
-    /// both are accepted, and in the float form 1.0 unambiguously means opaque, which is what 背景不透明度
-    /// has to control.
+    /// 字幕外观 as mpv options. The colours go out in mpv's <c>r/g/b/a</c> float form rather than
+    /// <c>#AARRGGBB</c>: both are accepted, and in the float form 1.0 unambiguously means opaque, which
+    /// is what 底板不透明度 has to control.
     /// <para>
     /// <c>sub-border-size</c> and <c>sub-border-color</c> are the pre-0.39 names of what mpv now calls
     /// <c>sub-outline-*</c> and are still accepted as aliases. The old names are the compatible ones:
     /// the new ones simply do not exist on an older mpv, and an unknown option stops playback dead.
     /// </para>
+    /// <para>
+    /// <b>Separate from the two file-level options next door</b> (<c>sub-codepage</c> and the image-sub
+    /// stretch), and that is the whole reason this is its own function: everything here can be pushed at
+    /// a film that is already playing, and neither of those two can — a codepage is used when the
+    /// subtitle is decoded, and the stretch depends on the film's shape rather than on this card. See
+    /// <see cref="SubtitleStyleOptions"/>.
+    /// </para>
     /// </summary>
-    private static void AddSubtitleStyle(List<KeyValuePair<string, string>> options, PlaybackSettings subtitles, SourceProfile? source)
+    public static IReadOnlyList<KeyValuePair<string, string>> SubtitleAppearance(PlaybackSettings subtitles)
     {
-        Add(options, "sub-codepage", subtitles.SubtitleCodepage);
+        var options = new List<KeyValuePair<string, string>>(12);
+
+        // 外观应用范围 goes first for readability: it decides whether any of what follows reaches an
+        // ASS/SSA subtitle at all.
+        Add(options, "sub-ass-override", subtitles.SubtitleAssOverride);
+
+        Add(options, "sub-font", FontFamilies.Resolve(subtitles.SubtitleFontFamily));
 
         if (subtitles.SubtitleFontSize > 0)
             Add(options, "sub-font-size", subtitles.SubtitleFontSize.ToString(CultureInfo.InvariantCulture));
+
+        // 字幕缩放 multiplies 字号 for a text subtitle, and is the only size control an ASS subtitle
+        // honours without 强制 above. 100 is mpv's own 1.0, so it is left unsaid.
+        if (subtitles.SubtitleScalePercent != 100)
+        {
+            Add(options, "sub-scale",
+                (subtitles.SubtitleScalePercent / 100.0).ToString("0.##", CultureInfo.InvariantCulture));
+        }
 
         Add(options, "sub-bold", subtitles.SubtitleBold ? "yes" : Off);
         Add(options, "sub-color", ToMpvColor(subtitles.SubtitleColor, 100));
@@ -653,15 +700,39 @@ public static class MpvOutputOptions
         Add(options, "sub-border-color", ToMpvColor(subtitles.SubtitleBorderColor, 100));
         Add(options, "sub-shadow-offset", subtitles.SubtitleShadowOffset);
 
-        var background = subtitles.SubtitleBackColor.Trim();
-        if (background.Length > 0)
-        {
-            // 无背景 is a transparent box rather than an unset option: the point of choosing it is to
-            // override the box a subtitle's own styling would otherwise draw.
-            Add(options, "sub-back-color", background.Equals(NoBackground, StringComparison.OrdinalIgnoreCase)
-                ? ToMpvColor("#000000", 0)
-                : ToMpvColor(background, subtitles.SubtitleBackOpacity));
-        }
+        // 字幕底板 and its colour. The style is what makes the colour a plate instead of a shadow, so
+        // it is sent whether or not a colour was picked: 底板 on with 颜色 不设置 is a plate in mpv's
+        // own black, which is a perfectly good answer and used to be unreachable.
+        Add(options, "sub-border-style", subtitles.SubtitleBackStyle);
+        Add(options, "sub-back-color", ToMpvColor(subtitles.SubtitleBackColor, subtitles.SubtitleBackOpacity));
+
+        return options;
+    }
+
+    /// <summary>
+    /// Every mpv option <see cref="SubtitleAppearance"/> can emit, whether or not it emits one today.
+    /// <para>
+    /// This list is what makes 「改一行，正在播的片子立刻跟上」 honest. An option the settings leave at
+    /// 「不设置」 is not sent at all, which is right at launch — mpv's own default stands — and wrong on
+    /// a running player, where 「not sent」 means 「keep the value I sent a moment ago」. So the live path
+    /// walks this list and asks mpv for the default of anything the settings no longer name. A test
+    /// compares the two directions, because a new appearance row that forgets to appear here would only
+    /// misbehave when it is switched back off.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> SubtitleStyleOptions { get; } =
+    [
+        "sub-ass-override", "sub-font", "sub-font-size", "sub-scale", "sub-bold", "sub-color",
+        "sub-border-size", "sub-border-color", "sub-shadow-offset", "sub-border-style", "sub-back-color"
+    ];
+
+    private static void AddSubtitleStyle(List<KeyValuePair<string, string>> options, PlaybackSettings subtitles, SourceProfile? source)
+    {
+        options.AddRange(SubtitleAppearance(subtitles));
+
+        // 字幕编码 is decided when the subtitle is decoded rather than when it is drawn, which is why it
+        // is here and not in the appearance list above.
+        Add(options, "sub-codepage", subtitles.SubtitleCodepage);
 
         // A PGS track from a 2.39:1 disc is authored for the full frame including the black bars, so on
         // a cropped or wider-than-16:9 encode its lines land off the bottom of the picture. Stretching

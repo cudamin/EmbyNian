@@ -70,6 +70,13 @@ public sealed partial class SettingsPage : Page, IShellContent
     internal bool IsReady => ViewModel.IsReady;
 
     /// <summary>
+    /// 页头右上角那颗「恢复默认」。自检从这儿认它 —— 它不在卡片那一叠里，行数、模板、渲染那几个读数一个
+    /// 都不会提到它，而它按下去做的事是整页最重的一件（见 ShellSelfCheck.Settings 的那一关）。字段是
+    /// XAML 为 x:Name 生成的 private，所以包一层；UIA 的 AutomationId 也是这个名字。
+    /// </summary>
+    internal Button ResetButton => SettingsResetButton;
+
+    /// <summary>
     /// Whether the 字幕 card's font picker holds the machine's families yet. Read by the self-check only:
     /// the scan lands a moment after the page does, and a report written in that moment would be a report
     /// about a list that had not arrived.
@@ -282,7 +289,12 @@ public sealed partial class SettingsPage : Page, IShellContent
                 request.Services.GetRequiredService<FontLibrary>(),
                 request.Services.GetRequiredService<AppPaths>(),
                 request.Services.GetRequiredService<Platform.ISystemLauncher>(),
-                request.Services.GetRequiredService<AudioDeviceCatalogue>());
+                request.Services.GetRequiredService<AudioDeviceCatalogue>(),
+
+                // 字幕外观改一行就推给正在播的那部片子。交出去的是一个方法而不是 PlaybackService 本身：
+                // 这一页要的是「重发一遍字幕外观」这一件事，不是播放器。同 ShellServices 里把后端工厂当方法组
+                // 递出去的写法。
+                request.Services.GetRequiredService<PlaybackService>().ApplySubtitleStyleAsync);
             _ = ViewModel.ReloadAsync();
         }
 

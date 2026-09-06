@@ -122,22 +122,27 @@ public sealed partial class LibraryPage : Page, IShellContent
         ViewModel.LoadedCount);
 
     /// <summary>
-    /// What size this grid draws at and where that size came from: 设置 → 海报宽度, the width the view
-    /// model clamped it to, and the cell the live layout is actually using.
+    /// What size this grid draws at: the width the view model builds its cards at, and the cell the live
+    /// layout is actually using.
     /// <para>
-    /// The last two are read off the layout the grid is holding rather than recomputed, which is the point
+    /// The latter is read off the layout the grid is holding rather than recomputed, which is the point
     /// of the probe — this grid's cell, card and decode width used to be three literals in the markup, so
-    /// the setting reached every page but this one. A binding that silently never fired would show up here
-    /// as <c>NaN</c>, not as a number this method worked out for itself. Zero means a live layout with no
-    /// cell to speak of, which is 列表: see <see cref="Shape"/>.
+    /// a binding that silently never fired would show up here as <c>NaN</c>, not as a number this method
+    /// worked out for itself. Zero means a live layout with no cell to speak of, which is 列表: see
+    /// <see cref="Shape"/>.
+    /// </para>
+    /// <para>
+    /// The probe used to report the setting it came from alongside the card (设置 → 海报宽度); that row
+    /// was deleted 2026-09-05 and the width is <c>CardSize.PosterWidth</c> now, so the card number left is
+    /// the view model's, and the cell is what is still worth reading off the live page.
     /// </para>
     /// </summary>
-    internal (int Setting, int Card, double CellWidth, double CellHeight) Sizing
+    internal (int Card, double CellWidth, double CellHeight) Sizing
     {
         get
         {
             var (_, _, cell, row) = Shape();
-            return (_settings?.Settings.Ui.PosterWidth ?? 0, ViewModel.CardWidth, cell, row);
+            return (ViewModel.CardWidth, cell, row);
         }
     }
 

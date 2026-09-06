@@ -26,19 +26,20 @@
 
         <!-- 地址和载入状态合成一行读数（见 Say）：两个都是机器串，等宽字里它们本来就是同一种东西，
              而页头不该为「正在载入…」这种一闪而过的字长出第三行来。 -->
-        <local:PageSlate x:Name="Slate" Eyebrow="DASHBOARD" Title="服务器控制台">
+        <local:PageSlate x:Name="Slate"
+                x:Uid="DashboardPage_Slate" Eyebrow="DASHBOARD">
             <local:PageSlate.Trailing>
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Click="OnRefresh" ToolTipService.ToolTip="重新载入控制台">
+                    <Button x:Uid="DashboardPage_ButtonA1" AutomationProperties.AutomationId="DashboardRefreshButton" Click="OnRefresh">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon Glyph="&#xE72C;" />
-                            <TextBlock Text="刷新" />
+                            <TextBlock x:Uid="DashboardPage_TextBlock1" />
                         </StackPanel>
                     </Button>
-                    <Button Click="OnOpenInBrowser" ToolTipService.ToolTip="在系统默认浏览器里打开同一个页面">
+                    <Button x:Uid="DashboardPage_ButtonA2" AutomationProperties.AutomationId="DashboardOpenInBrowserButton" Click="OnOpenInBrowser">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon Glyph="&#xE8A7;" />
-                            <TextBlock Text="用浏览器打开" />
+                            <TextBlock x:Uid="DashboardPage_TextBlock2" />
                         </StackPanel>
                     </Button>
                 </StackPanel>

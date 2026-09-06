@@ -74,6 +74,29 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     private const double PointerNoise = 2;
 
+    /// <summary>
+    /// How long after an ask (<see cref="Native.NudgeCursorState"/>) a tiny pointer move is taken to be that
+    /// ask's own echo rather than a hand.
+    /// <para>
+    /// The ask steps the pointer one physical pixel and puts it straight back, so it arrives here as up to two
+    /// XAML pointer events. The return leg lands on the anchor and is discarded as an unchanged position
+    /// already; the leg out is a pixel away, and while the cursor is hidden a pixel is deliberately enough to
+    /// bring it back — which would make the player wake itself the instant it went to sleep. Distance and time
+    /// together, because either alone would give something away: a window with no distance test would swallow
+    /// a real hand arriving in the same fifth of a second, and a distance test with no window would put the
+    /// two-pixel deadband back over a hidden cursor for the whole film.
+    /// </para>
+    /// </summary>
+    private const long NudgeEcho = 200;
+
+    /// <summary>
+    /// How many asks one hide is worth. Three, spread over three ticks: the first goes out with the hide
+    /// itself, and the two after it cover the case where the framework had not yet pushed its own value down
+    /// when the first arrived. Bounded because these are real injected moves now — see
+    /// <see cref="_nudgedAt"/>.
+    /// </summary>
+    private const int NudgesPerHide = 3;
+
     private readonly ChromeReveal _chrome = new();
     private readonly SeekClockConverter _seekClock;
 
@@ -85,19 +108,20 @@ public sealed partial class PlayerPage : UserControl
     private readonly Storyboard _pulse;
 
     /// <summary>
-    /// The four geometries the badge draws with: pause and play, each in two copies — one for the white shape
-    /// and one for the darker rim behind it. Read once for the same reason <see cref="_pulse"/> is.
+    /// The two geometries the badge draws with, pause and play. Read once for the same reason
+    /// <see cref="_pulse"/> is: the badge is drawn on every pause and every resume, and a resource lookup on
+    /// each is a dictionary walk for an object that cannot change.
     /// <para>
-    /// Four rather than two, and not by choice: a WinUI <c>Geometry</c> cannot be attached to two <c>Path</c>
-    /// elements at once. Handing one object to both threw <c>ArgumentException: Value does not fall within the
-    /// expected range</c> on the second assignment — the framework's 「this object already has a parent」 —
-    /// which is why the numbers live in <see cref="PulseArt"/> and are built into four separate objects rather
-    /// than written out twice in the markup.
+    /// Two rather than four since 2026-09-05, when the grey rim behind the white shape went: two layers of one
+    /// shape needed two copies of each geometry, because a WinUI <c>Geometry</c> cannot be attached to two
+    /// <c>Path</c> elements at once — handing one object to both threw <c>ArgumentException: Value does not
+    /// fall within the expected range</c> on the second assignment, the framework's 「this object already has a
+    /// parent」. One path, one copy each.
     /// </para>
     /// </summary>
-    private readonly (Geometry Shape, Geometry Rim) _pauseArt;
+    private readonly Geometry _pauseArt;
 
-    private readonly (Geometry Shape, Geometry Rim) _playArt;
+    private readonly Geometry _playArt;
 
     /// <summary>
     /// 点在画面上那一下的账，and the timer that holds it back. See <see cref="PictureTap"/>: a tap is not
@@ -134,12 +158,28 @@ public sealed partial class PlayerPage : UserControl
     private int _cursorCount;
 
     /// <summary>
-    /// How many times the hide has asked the OS to work out the cursor again — the same-point nudge in
-    /// <see cref="SetCursorHidden"/>, counted only when it left the process. It is the half of hiding that no
-    /// reading of the OS's own can confirm after the fact, and the half whose absence was 「鼠标指针还是不会
-    /// 自动隐藏」 with every other reading saying hidden, so the self-check asserts on this count.
+    /// How many times the hide has asked the OS to work out the cursor again — the one-pixel round trip in
+    /// <see cref="Native.NudgeCursorState"/>, counted only when both legs left the process. It is the half of
+    /// hiding that no reading of the OS's own can confirm after the fact, and the half whose absence was
+    /// 「鼠标指针还是不会自动隐藏」 with every other reading saying hidden, so the self-check asserts on this
+    /// count.
     /// </summary>
     private int _cursorNudges;
+
+    /// <summary>
+    /// When the last of those asks went out, and how many have gone out since this hide began.
+    /// <para>
+    /// Both exist because the ask is real input now rather than a call that produced none, and real input has
+    /// two consequences a no-op never had. It comes back as XAML pointer events, which
+    /// <see cref="Moved"/> has to recognise as this player's own echo rather than as the hand returning — that
+    /// is what the timestamp is for. And it is input the whole system can see, so it is <b>bounded</b>: enough
+    /// asks that the framework cannot miss the transparent cursor, and then silence, instead of ten injected
+    /// moves a second for the length of a film keeping the machine awake and every idle timer on it alive.
+    /// </para>
+    /// </summary>
+    private long _nudgedAt;
+
+    private int _nudgesThisHide;
 
     /// <summary>
     /// Where the pointer was the last time it was taken to have moved, and what was under it there.
@@ -287,8 +327,8 @@ public sealed partial class PlayerPage : UserControl
         _seekClock.Scale = PlayerViewModel.SeekScale;
 
         _pulse = (Storyboard)Resources["PulseStoryboard"];
-        _pauseArt = (Build(PulseArt.Pause), Build(PulseArt.Pause));
-        _playArt = (Build(PulseArt.Play), Build(PulseArt.Play));
+        _pauseArt = Build(PulseArt.Pause);
+        _playArt = Build(PulseArt.Play);
 
         // handledEventsToo, because the chrome is full of buttons and a pointer over one of them is
         // exactly the case the reveal rule must not miss: a control marks the event handled, and
@@ -619,18 +659,15 @@ public sealed partial class PlayerPage : UserControl
     /// the flashing 「双击画面全屏的时候会触发暂停和开始」 reported.
     /// </para>
     /// <para>
-    /// The rim carries its own copy of the same geometry — one object cannot be attached to two Paths — so
-    /// they are assigned together and from the same pair, which is what keeps a rim of the wrong shape (worse
-    /// than no rim at all) out of reach.
+    /// One white shape and nothing behind it — 「点击画面暂停和开始的图标要纯白色，去掉灰色」. What it cost is
+    /// written down at <see cref="PulseArt"/>: over a nearly white frame the badge is not visible.
     /// </para>
     /// </summary>
     private void Pulse(bool paused)
     {
         if (Muted) return;
 
-        var art = paused ? _pauseArt : _playArt;
-        PulseShape.Data = art.Shape;
-        PulseRim.Data = art.Rim;
+        PulseShape.Data = paused ? _pauseArt : _playArt;
         PulseBadge.Visibility = Visibility.Visible;
 
         // Restarted rather than layered: a second toggle inside the first fifth of a second is one new
@@ -682,8 +719,9 @@ public sealed partial class PlayerPage : UserControl
     /// <summary>
     /// 缩放窗口时按画面比例联动 / 窗口化时视频有黑边: the shape the window holds its client area in while an
     /// edge is dragged, and a one-off reshape so the first frame of a film is not letterboxed either.
-    /// Zero is 「the picture has released the window」. If the browsing ratio lock is enabled, hand the
-    /// window straight back to that shape so returning home immediately gets the strict first-screen layout.
+    /// Zero is 「the picture has released the window」 — from then on the window resizes however the pointer
+    /// says, and it keeps whatever shape the film left it in（「锁定窗口比例大小」曾经在这一刻把它拽回 16:9，
+    /// 那个开关 2026-09-05 删掉了）。
     /// </summary>
     private void OnPictureAspectChanged(double aspect)
     {
@@ -691,7 +729,6 @@ public sealed partial class PlayerPage : UserControl
 
         _window.PictureAspect = aspect;
         if (aspect > 0) _window.FitToPicture();
-        else _window.FitToShape();
     }
 
     /// <summary>
@@ -717,9 +754,7 @@ public sealed partial class PlayerPage : UserControl
     /// One of <see cref="PulseArt"/>'s point lists as a <c>PathGeometry</c>: closed straight-line figures and
     /// nothing else, because the rounded corners come from the stroke's round joins rather than from arcs.
     /// <para>
-    /// Built here rather than declared in the markup for two reasons. A <c>Geometry</c> cannot be attached to
-    /// two <c>Path</c> elements at once, and this badge is two layers of one shape — so the same numbers would
-    /// have had to be written out four times. And the numbers themselves are worth a test: 「what does this come
+    /// Built here rather than declared in the markup because the numbers are worth a test: 「what does this come
     /// to on screen once it is stroked」 is arithmetic, and the answer has to match the outer box of the glyph it
     /// replaced or the badge quietly changes size.
     /// </para>

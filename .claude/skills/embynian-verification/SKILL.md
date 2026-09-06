@@ -23,7 +23,7 @@ Four things worth knowing before the first command:
 - **Gate 2 without `-c Release` is gate 2 switched off.** `dotnet run` looks for Debug output, so with `--no-build` it runs whatever stale binary sits in `bin\Debug` and still prints 「全部通过」 with exit code 0. When this was caught on 2026-08-31 that binary was two days old and 160 tests short of the source.
 - Report the passing count as a number observed on this run. **Never write it into a document or a memory** — it grows as development goes on.
 - **Gate 3 takes `-NoArchive`** while iterating: it skips the zip nobody looks at.
-- **A run that names `--screen` neither reads nor writes the saved window placement.** That is what keeps the report's client-size and 16:9 readings on a stable baseline instead of following whatever size the user last dragged the window to.
+- **A run that names `--screen` neither reads nor writes the saved window placement.** That is what keeps the report's client-size and browse-shape readings on a stable baseline instead of following whatever size the user last dragged the window to.
 
 ## Comparing the report line by line
 
@@ -31,14 +31,31 @@ Ten lines differ every run **by design** — cross those off first, and anything
 
 **When 「鼠标真等两秒就藏」 goes red, read `不符：` — not the diagnostic numbers.** That leg carries a dozen counters and every one of them is printed to be read by a human, but only the `不符：` list at the end of the line names the assertion that actually failed. Three reds (09-02, 09-04, and one that went red twice before passing on the third run) were filed against 「someone touched the mouse — the report says so, 轮询问出 1 次移动」, and that number says the opposite: **1 is what a completely undisturbed leg reports** (the probe clears its own 「where is the pointer」 state before the window, so the first poll always counts one; a pointer that truly never moves is filtered out before the counter). 2026-09-05 the probe was corrected to judge disturbance on that count as well as on the end position, and to spell out in the line which of the two it was — so a genuinely disturbed leg now prints 「这一轮只作参考」 and asserts nothing instead of going red. **A red on this leg from here on is a real reading**: get the `不符：` list and the 「空事件」 count into the handover doc before re-running, since a spurious un-hide arrives as a XAML event and is what 08-31 already caught once.
 
+## Moving the pointer, and proving it moved
+
+`CLAUDE.md` states the rule (navigate with the app's own switches, never the mouse) and why it exists. This section holds what was measured behind it — re-measured 2026-09-05 with a message-counting window parked under the cursor, because the old blanket 「程序里挪鼠标一律没用」 was what made 「让系统重新问一次」 get written as an injection that never fired.
+
+| Attempt | What it produces | Does the pointer move |
+|---|---|---|
+| `SendInput` relative move of (0,0) | nothing at all — 0 `WM_MOUSEMOVE`, 0 `WM_SETCURSOR`, return value 1 either way | no |
+| `SetCursorPos` to the point it already occupies | one of each, **and from a process that is not in the foreground** | no |
+| `SendInput` with a real displacement | moved it in one run, not in another — don't lean on it | sometimes |
+| `SetCursorPos` with a real displacement | twice out of twice, from a terminal, onto a window on the other monitor | yes |
+
+Two consequences, and they are the same measurement from two sides:
+
+- **A move only reaches the XAML island if it goes through the input queue, and only if it is a real displacement.** `SetCursorPos` moves the coordinate without producing input, so the island hears nothing — 「XAML 事件 0 次」 for a pointer it demonstrably moved. A zero-displacement `SendInput` produces nothing at all, which the self-check printed for months as 「真实输入注不进」. **A one-pixel `SendInput` out and straight back is heard** (「真实输入到位」, same probe, same machine), and it is the only lever that makes WinUI re-read `ProtectedCursor` — i.e. that reaches the pixels a pointer sitting over XAML content is drawn from. So: to make the framework look again, inject a real displacement and undo it; to prove that it looked, read the island's own pointer-event count, **never `GetCursorInfo`**.
+- **Don't build a screenshot on a parked pointer.** `SetCursorPos` really can put it over a hover target, but the user's own hand is on the same mouse and the hover is gone by the time the shutter opens — this was tried on the home rail's paging bars and the photograph came back without them. Hover-only affordances get a `--show-*` switch instead.
+
 ## Screenshots — for what the gates cannot see
 
 Every defect actually caught in this project came from someone looking at the screen: a strip cropped off a poster, an empty patch in the top-left corner, a black border around the episode list. The gates went green on all three.
 
-- **`tools/shot.ps1`** launches, shoots and closes: `-Exe <path> -ExeArgs "--theme daylight --show-settings" -SettleMs N`. When shooting the settings window, pass `--screen 2` and `-WindowTitle 设置` — without the screen argument it raises the window onto the primary monitor, over whatever the user is doing, and this has already photographed the user's game once.
+- **`tools/shot.ps1`** launches, shoots and closes: `-Exe <path> -ExeArgs "--theme midnight --show-settings" -SettleMs N`. When shooting the settings window, pass `--screen 2` and `-WindowTitle 设置` — without the screen argument it raises the window onto the primary monitor, over whatever the user is doing, and this has already photographed the user's game once.
 - **`--dump-ui`** writes one screenshot (`selfcheck-shell.png`, the frame after the last page) plus a visual tree. Per-page photography is `shot.ps1`'s job, not the self-check's.
-- **Touched colours, spacing or type size → shoot the default theme and `daylight` at least.** `daylight` is the only light one of the six, and hard-coded shell colours plus the system-drawn title bar only show themselves there.
+- **Touched colours, spacing or type size → shoot the default theme, and one more if the change could read differently on another.** All five themes are dark since `daylight` was deleted (2026-09-05, the user's call), so there is no longer a light theme to shoot — which is also why a hard-coded shell colour now goes unnoticed; see `CLAUDE.md`'s theme clause.
 - **「有没有箭头」 needs `tools/cursor-watch.ps1`, never `shot.ps1`.** A GDI screenshot never contains the cursor. `cursor-watch.ps1` prints `GetCursorInfo` as a timeline and, when the flag says a cursor is showing, draws that cursor into the capture with `DrawIconEx` — so 「有箭头」 and 「没有箭头」 become visible in an image. It never touches z-order, the foreground or the cursor position, which is exactly why `shot.ps1` is the wrong tool here: it raises the window topmost and back, and that changes which queue owns the cursor.
+- **`winapp ui` can read a live window without touching it.** `inspect`, `search`, `get-value`, `get-property` and `wait-for` are pure UI-Automation reads — no pointer moves, no clicks — which makes them a safer way to assert what is actually on screen than `poke.ps1`, and `wait-for --value` picks the right pattern per control type by itself. Its interacting verbs are bound by `CLAUDE.md`. Full verb list and the batch-script template are in the `winui-ui-testing` skill.
 - Navigate with the app's own switches rather than the mouse, and never start real playback. Both lists, and why the mouse is not an option here, are in `CLAUDE.md`.
 
 ## Other scripts

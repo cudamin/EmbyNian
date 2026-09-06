@@ -12,6 +12,8 @@ internal static class Program
         SettingsTests.Register();
         ServiceTests.Register();
         FontTests.Register();
+        HtmlColorTests.Register();
+        SubtitlePreviewTests.Register();
         EmbyTests.Register();
         SessionTests.Register();
         FailurePathTests.Register();

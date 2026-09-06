@@ -210,12 +210,46 @@ internal static class FontTests
             Assert.True(
                 catalogue.Families.Any(entry => string.Equals(entry.Name, "Arial", StringComparison.Ordinal)),
                 "每台 Windows 都有 Arial");
-
-            // The default subtitle font, which the settings page has to be able to offer: it is what a
-            // fresh install writes into settings.json.
-            Assert.Equal(1, catalogue.Search(FontFamilies.Default).Count(entry =>
-                string.Equals(entry.Name, FontFamilies.Default, StringComparison.Ordinal)));
         });
+
+        // The bundled subtitle font ships with the program (assets/fonts, handed to mpv as
+        // sub-fonts-dir). It stopped being the settings default in v14 — Microsoft YaHei is — but it
+        // stays selectable, so the thing to assert is the shipped file itself: it has to parse to the
+        // family the catalogue offers under both of its names, or picking it from the settings page
+        // writes a font name nothing can find.
+        const string bundledFont = "方正中等线简体";
+        var bundled = FindRepositoryRoot() is { } repo
+            ? Path.Combine(repo, "assets", "fonts", bundledFont + ".ttf")
+            : null;
+        if (bundled is null || !File.Exists(bundled))
+        {
+            Skip("字体表：程序自带的字幕字体解析出的族名可以被选中", "找不到仓库里的 assets/fonts");
+            return;
+        }
+
+        Test("字体表：程序自带的字幕字体解析出的族名可以被选中", () =>
+        {
+            var catalogue = FontCatalogue.Scan([Path.GetDirectoryName(bundled)!]);
+
+            Assert.Equal(1, catalogue.Families.Count, "自带目录里就这一个字体文件");
+            Assert.True(catalogue.Families[0].AnswersTo(bundledFont),
+                $"自带文件的族名（{catalogue.Families[0].Name}，别名 {string.Join("、", catalogue.Families[0].AlsoCalled)}）"
+                    + "要认得它自己的中文名 —— 这款文件的两个名字一个英文一个中文，存哪一边都要挑得到");
+
+            // 存中文写法时列表里不能冒出一个没有文件撑着的重影行。
+            Assert.Equal(1, catalogue.Including(bundledFont).Families.Count,
+                "中文写法是这款字体的别名，不该被当成没装过的字体再补一条");
+        });
+    }
+
+    private static string? FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(System.IO.Path.Combine(directory.FullName, "EmbyNian.sln"))) return directory.FullName;
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<SfntFontNames> Read(byte[] bytes)

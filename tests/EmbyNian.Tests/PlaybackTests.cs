@@ -853,9 +853,13 @@ internal static class PlaybackTests
 
             Assert.Equal(GpuTier.Low, settings.Gpu, "装机默认是低档：这台机器的核显，也是缺键时读出来的那一档");
             Assert.Equal("", settings.ManualGroup, "装机默认走自动");
-            Assert.True(settings.Enabled);
+            Assert.False(settings.Enabled, "装机默认不开着色器 —— 用户 2026-09-05 定的，「恢复默认」交出来的也是这一档");
             Assert.True(settings.RestoreVintageSources, "DVD 那一代的片源默认要去带");
             Assert.Equal(8, ShaderGroupCatalog.For(settings.Gpu).Count);
+
+            // 关着的时候一条链都挑不出来，可其余几项照旧是它们的默认值 —— 开关一开就该按这几项走，
+            // 不需要再设置一遍。
+            Assert.Null(settings.Resolve(false, 1920, 1080, 2560, 1440).Group);
         });
 
         RegisterOldVersusNew();
@@ -1350,6 +1354,30 @@ internal static class PlaybackTests
             Assert.False(live.ContainsKey("dscale"), "SSimDownscaler 的前置条件只该跟着它自己走");
         });
 
+        // 「着色器开关不影响画质预设」—— 用户 2026-09-05 定的，设置页上画质预设因此排在着色器开关上面。
+        // 这两件事在代码里本来就是两条路（预设是一句 profile=，链是 glsl-shaders 加它自己那套缩放器），可谁哪天
+        // 顺手把预设塞进「有链才发」的那个分支里，屏上只会表现成「开了着色器画质预设就不算了」，没有别的证据。
+        Test("渲染层契约：画质预设跟着色器开关无关，两档都照样交给 mpv", () =>
+        {
+            foreach (var preset in MpvOutputOptions.QualityPresets.Select(choice => choice.Value))
+            {
+                foreach (var shaders in new[] { true, false })
+                {
+                    var (planner, settings) = Planner();
+                    settings.Shaders.Enabled = shaders;
+                    settings.Video.QualityPreset = preset;
+
+                    var live = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+                    var sent = live.TryGetValue("profile", out var value) ? value : "";
+
+                    // default 那一档是「一个字都不发」（mpv 自己的空 profile，见 MpvOutputOptions），
+                    // 所以它的答案是「没有 profile 这一项」，而这同样不许跟着开关变。
+                    Assert.Equal(preset == "default" ? "" : preset, sent,
+                        $"画质预设 {preset}、着色器{(shaders ? "开" : "关")}：交给 mpv 的 profile 是「{sent}」");
+                }
+            }
+        });
+
         // 票上的刷新率必须真的走到 mpv 那一步。这一段是「接线」而不是「规则」—— 规则由 MpvOutputOptions 那几条单测
         // 钉着，可忘了把 ticket.DisplayRefreshHz 传下去的话，规则永远拿到 0、永远不出手，而画面和日志都看不出来。
         Test("渲染层契约：票上写的屏幕刷新率会走到 video-sync", () =>
@@ -1794,6 +1822,21 @@ internal static class PlaybackTests
             Assert.False(without.ContainsKey("screenshot-template"));
         });
 
+        Test("计划：程序自带的字幕字体目录以 sub-fonts-dir 交给 mpv", () =>
+        {
+            // 「这个字体打包进程序里」（2026-09-06）：方正中等线简体随程序走（assets/fonts，构建和发布都
+            // 拷在 exe 旁边），mpv 靠这一个选项到那个目录里找字体，不依赖这台机器装没装。目录是壳那一头
+            // 传进来的，所以测试里给一个假路径只验「给就发、不给就不发」。
+            var (planner, _) = Planner(fonts: @"C:apponts");
+            var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+
+            Assert.Equal(@"C:apponts", options["sub-fonts-dir"]);
+
+            var (bare, _) = Planner();
+            var without = Options(bare.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.False(without.ContainsKey("sub-fonts-dir"), "测试和命令行那条路没有字体目录就不发");
+        });
+
         Test("截图模板：片名进得去，非法文件名字符进不去", () =>
         {
             // 时间码用 %wH.%wM.%wS 而不是 mpv 现成的 %p：后者是 HH:MM:SS，而冒号在 Windows 文件名里非法。
@@ -1879,20 +1922,25 @@ internal static class PlaybackTests
         {
             var (planner, settings) = Planner();
 
-            // --sub-font 只认字体族名。v3 存的是 C:\Windows\Fonts 下的文件路径，mpv 找不到这个「族」
+            // sub-font 只认字体族名。v3 存的是 C:\Windows\Fonts 下的文件路径，mpv 找不到这个「族」
             // 就悄悄退回 sans-serif；当时没人发现，是因为用户自己的 mpv.conf 里另写了一个真族名。
+            //
+            // 从 2026-09-05 起字体和其余十个字幕外观选项走同一条路（PlayerOptions），不再单独挂在
+            // PlaybackRequest 上 —— 一个选项一个写入方，而且设置页改一行能当场推给正在播的片子。
+            string Font() => Options(planner.Plan(Ticket(), Connection()).PlayerOptions)["sub-font"];
+
             settings.Playback.SubtitleFontFamily = @"C:\Windows\Fonts\msyh.ttc";
-            Assert.Equal("Microsoft YaHei", planner.Plan(Ticket(), Connection()).SubtitleFont, "认得的文件换成族名");
+            Assert.Equal("Microsoft YaHei", Font(), "认得的文件换成族名");
 
             settings.Playback.SubtitleFontFamily = @"D:\字体\我自己的字体.ttf";
-            Assert.Equal(FontFamilies.Default, planner.Plan(Ticket(), Connection()).SubtitleFont,
-                "认不出来的文件宁可退回微软雅黑，也不能把路径当族名传出去");
+            Assert.Equal(FontFamilies.Default, Font(),
+                "认不出来的文件宁可退回默认族（Microsoft YaHei），也不能把路径当族名传出去");
 
             settings.Playback.SubtitleFontFamily = "思源黑体 CN";
-            Assert.Equal("思源黑体 CN", planner.Plan(Ticket(), Connection()).SubtitleFont);
+            Assert.Equal("思源黑体 CN", Font());
 
             settings.Playback.SubtitleFontFamily = "  ";
-            Assert.Equal(FontFamilies.Default, planner.Plan(Ticket(), Connection()).SubtitleFont, "不填时用系统一定有的族");
+            Assert.Equal(FontFamilies.Default, Font(), "不填时用兜底族");
         });
 
         Test("语言优先级：中文名、英文名与原始 mpv 码混用", () =>
@@ -1900,6 +1948,9 @@ internal static class PlaybackTests
             Assert.Equal("zh,chi,zho", TrackLanguagePriority.ToMpvValue("中文"));
             Assert.Equal("eng,en", TrackLanguagePriority.ToMpvValue("English"));
             Assert.Equal("jpn,ja", TrackLanguagePriority.ToMpvValue("日語")); // 繁体写法也认
+            Assert.Equal("zh-Hans,zh_hans,zh-CN,zh_CN,zhs,sc,chs,chi-Hans", TrackLanguagePriority.ToMpvValue("Simplified Chinese"));
+            Assert.Equal("zh-Hans,zh_hans,zh-CN,zh_CN,zhs,sc,chs,chi-Hans", TrackLanguagePriority.ToMpvValue("Chinese Simplified"), "语序相反的英文写法也认");
+            Assert.Equal("zh,chi,zho", TrackLanguagePriority.ToMpvValue("Chinese"));
             Assert.Equal("yue,zh-HK", TrackLanguagePriority.ToMpvValue("粤语"));
             Assert.Equal("cmn,zh-CN,zh", TrackLanguagePriority.ToMpvValue("普通话"));
             Assert.Equal("jpn,ja,xyz", TrackLanguagePriority.ToMpvValue("日语 > xyz"), "未知名字原样透传");
@@ -1912,19 +1963,23 @@ internal static class PlaybackTests
             Assert.Null(TrackLanguagePriority.ToMpvValue("   "));
         });
 
-        Test("启动参数：语言优先级与字幕字体落到命令行", () =>
+        Test("启动参数：语言优先级落到命令行，字幕字体不在这儿", () =>
         {
             var request = Request() with
             {
                 SubtitleLanguage = "zh,chi",
                 AudioLanguage = "jpn",
-                SubtitleFont = @"C:\Windows\Fonts\msyh.ttc"
+                PlayerOptions = [new("sub-font", "Microsoft YaHei")]
             };
 
             var line = Line(MpvArgumentBuilder.Build(request));
             Assert.Contains("--slang=zh,chi", line);
             Assert.Contains("--alang=jpn", line);
-            Assert.Contains("--sub-font=C:\\Windows\\Fonts\\msyh.ttc", line);
+
+            // 字幕字体和其余字幕外观一样走 PlayerOptions，所以命令行上只应该有那一份。两份的坏法不是
+            // 「值不一样」而是「哪天规则改了只改了一处」。
+            Assert.Equal(1, line.Split("--sub-font=").Length - 1, "sub-font 只能出现一次");
+            Assert.Contains("--sub-font=Microsoft YaHei", line);
         });
     }
 
@@ -1960,6 +2015,19 @@ internal static class PlaybackTests
             Assert.Equal(2, auto.Subtitle.Stream!.Index);
         });
 
+        Test("选轨：标题写 Chinese Simplified 的轨道也算简体", () =>
+        {
+            // 语言字段只有 chi，简体与否全看标题；英文写法认不出来时它只能靠中文兜底，
+            // 简体和繁体同时在片子里就排不出先后。
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "Traditional Chinese"),
+                Stream(2, "Subtitle", language: "chi", title: "Chinese Simplified"));
+
+            var auto = TrackSelection.Resolve(Playback(subtitles: ["简体中文"]), source);
+            Assert.Equal(2, auto.Subtitle.Stream!.Index, "英文写的简体要认，英文写的繁体不能冒充");
+        });
+
         Test("选轨：一个语言都对不上时按开关决定回退还是关掉", () =>
         {
             var source = SourceWith(
@@ -1973,6 +2041,45 @@ internal static class PlaybackTests
             var off = TrackSelection.Resolve(settings, source).Subtitle;
             Assert.Null(off.Stream);
             Assert.True(off.Disabled, "关掉回退就该明确不显示字幕");
+        });
+
+        Test("选轨：「其他字幕」兜住优先级里没点名的所有语言", () =>
+        {
+            // 「字幕优先级新增预设可选的其他字幕」（2026-09-06）：填在最后就是「前面的都要不到时，有一条
+            // 别的语言的也行」。它跟「没有匹配语言时使用默认字幕」的差别在取谁 —— 开关只肯拿文件自带的
+            // 那一条，名字能从剩下的全部里挑最好的。
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "kor"),
+                Stream(2, "Subtitle", language: "eng"));
+
+            var settings = Playback(subtitles: ["简体中文", TrackLanguagePriority.Any]);
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index,
+                "韩语英语都不是点名的语言，「其他字幕」在剩下的里面挑了文件默认的那条");
+
+            // 排在前头就轮不到点名语言了 —— 它跟任何轨道都匹配，位置就是先后。
+            settings.SubtitleLanguages = [TrackLanguagePriority.Any, "英语"];
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index,
+                "「其他字幕」排第一时谁都拦不住它");
+        });
+
+        Test("选轨：「其他字幕」不进交给 mpv 的语言表", () =>
+        {
+            // mpv 的 slang 没有「任何语言」这一档，它的规矩本来就是列表都对不上时自己兜底 ——
+            // 把这个名字翻译成码发过去只会添一个永远匹配不上的词。
+            Assert.Null(TrackLanguagePriority.ToMpvValue(TrackLanguagePriority.Any));
+            Assert.Equal("zh,chi,zho",
+                TrackLanguagePriority.ToMpvValue("中文, " + TrackLanguagePriority.Any),
+                "别的语言照常翻译，「其他字幕」只从码表里缺席");
+
+            // 存档那头要认它、留它，不跟不认识的名字一样原样当代码发。
+            Assert.Equal(TrackLanguagePriority.Any,
+                string.Join(",", TrackLanguagePriority.CleanList(["其他字幕"])), "归一化把这个名字留在表里");
+
+            // 它跟任何轨道都匹配，音频那边也一样能用。
+            Assert.True(TrackLanguagePriority.Matches(TrackLanguagePriority.Any, "kor", "kor", "한국어"));
+            Assert.True(TrackLanguagePriority.Matches(TrackLanguagePriority.Any, "", "", ""), "什么都没标的轨道也算「其他」");
+            Assert.False(TrackLanguagePriority.Matches("其他字幕x", "kor", "", ""), "得是整个名字，不是前缀");
         });
 
         Test("选轨：字幕模式 强制/外语/关闭", () =>
@@ -2300,33 +2407,116 @@ internal static class PlaybackTests
             Assert.Equal("0.000/0.000/0.000/0.500", options["sub-back-color"]);
         });
 
-        Test("输出：选「无背景」时背景色是全透明而不是缺省", () =>
+        Test("输出：底板要发 sub-border-style 才画得出来", () =>
         {
-            var options = Options(MpvOutputOptions.Build(
-                new VideoSettings(),
-                new AudioSettings(),
+            // 这是 2026-09-05 那个洞：mpv 0.39 之后 sub-back-color 和阴影颜色是同一个值，画成阴影还是
+            // 画成底板全看 sub-border-style，而这个选项以前一次都没发过 —— 于是「背景颜色」那一行选什么
+            // 都只是给阴影上色，屏上永远没有底板。渲图对比过：不发这一项，任何颜色任何不透明度都没有板。
+            var off = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleBackColor = "#000000" }));
+            Assert.False(off.ContainsKey("sub-border-style"), "底板关着就不发，让 mpv 自己的描边+阴影站住");
+
+            var box = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
                 new PlaybackSettings
                 {
-                    SubtitleBackColor = MpvOutputOptions.NoBackground,
-                    SubtitleBackOpacity = 80,
-                    SubtitleFontSize = 0
+                    SubtitleBackStyle = "background-box",
+                    SubtitleBackColor = "#000000",
+                    SubtitleBackOpacity = 60
                 }));
+            Assert.Equal("background-box", box["sub-border-style"]);
+            Assert.Equal("0.000/0.000/0.000/0.600", box["sub-back-color"]);
 
-            Assert.Equal("0.000/0.000/0.000/0.000", options["sub-back-color"]);
-            Assert.False(options.ContainsKey("sub-font-size"), "字号填 0 表示用 mpv 自己的默认字号");
+            // 底板开着、颜色留「不设置」：只发样式，颜色交给 mpv 自己那个黑。这一档以前根本到不了
+            //（「不设置」要显式写出来 —— v13 起出厂颜色是黑色，不写就是带着颜色来的）。
+            var inherited = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleBackStyle = "opaque-box", SubtitleBackColor = "" }));
+            Assert.Equal("opaque-box", inherited["sub-border-style"]);
+            Assert.False(inherited.ContainsKey("sub-back-color"));
         });
 
-        Test("输出：字幕出厂样式是细描边配粗体", () =>
+        Test("输出：外观应用范围只在「强制」时发出去", () =>
         {
+            var follow = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
+            Assert.False(follow.ContainsKey("sub-ass-override"),
+                "默认跟随字幕自带样式，也就是 mpv 自己的 scale，什么都不用发");
+
+            var forced = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleAssOverride = "force" }));
+            Assert.Equal("force", forced["sub-ass-override"], "ASS/SSA 字幕要认这张卡的字体和颜色，只有这一条能让它认");
+        });
+
+        Test("输出：字幕缩放 100% 不发，别的换成 mpv 的小数", () =>
+        {
+            var plain = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
+            Assert.False(plain.ContainsKey("sub-scale"), "100 就是 mpv 自己的 1.0");
+
+            var bigger = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleScalePercent = 150 }));
+            Assert.Equal("1.5", bigger["sub-scale"]);
+
+            var smaller = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleScalePercent = 85 }));
+            Assert.Equal("0.85", smaller["sub-scale"], "小数点必须是不看区域设置的那个写法");
+        });
+
+        Test("输出：字号填 0 表示用 mpv 自己的默认字号", () =>
+        {
+            var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleFontSize = 0 }));
+
+            Assert.False(options.ContainsKey("sub-font-size"));
+        });
+
+        Test("输出：字幕实时应用的选项表覆盖得住外观能发的每一个", () =>
+        {
+            // 实时那条路是照 SubtitleStyleOptions 走的：设置里改回「不设置」的那几行，要问 mpv 要它自己的
+            // 默认值再发回去，不然「不发」在一个已经跑起来的播放器上等于「沿用上一个值」。所以漏一个名字
+            // 的后果不是编译错误，而是那一行只有开得起、关不掉 —— 这条测试就是拦这个的。
+            var everything = new PlaybackSettings
+            {
+                SubtitleAssOverride = "force",
+                SubtitleFontFamily = "SimHei",
+                SubtitleFontSize = 60,
+                SubtitleScalePercent = 120,
+                SubtitleBold = true,
+                SubtitleColor = "#FFFFFF",
+                SubtitleBorderSize = "3",
+                SubtitleBorderColor = "#000000",
+                SubtitleShadowOffset = "1",
+                SubtitleBackStyle = "background-box",
+                SubtitleBackColor = "#000000"
+            };
+
+            foreach (var (name, _) in MpvOutputOptions.SubtitleAppearance(everything))
+            {
+                Assert.True(MpvOutputOptions.SubtitleStyleOptions.Contains(name),
+                    $"外观发得出 {name}，SubtitleStyleOptions 里却没有它");
+            }
+
+            // 反过来也钉住：表里不该有起播专属的那两个，它们改了只能下次播放生效。
+            Assert.False(MpvOutputOptions.SubtitleStyleOptions.Contains("sub-codepage"),
+                "字幕编码是解码字幕那一刻用的，推给正在播的片子没有意义");
+            Assert.False(MpvOutputOptions.SubtitleStyleOptions.Contains("stretch-image-subs-to-screen"),
+                "图形字幕拉伸要看片源画幅，实时那条路上没有片源");
+        });
+
+        Test("输出：字幕出厂样式是用户 2026-09-06 定的那一套", () =>
+        {
+            // 「把默认字幕样式设置为…」：他给的八项里字号、颜色、描边、阴影当时就是出厂值，v13 换掉的是
+            // 加粗（关）和底板颜色（黑色）。底板样式仍然出厂关，所以那行颜色只给阴影上色。
             var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
 
             Assert.Equal("50", options["sub-font-size"]);
-            Assert.Equal("yes", options["sub-bold"]);
+            Assert.Equal("no", options["sub-bold"], "v13 起出厂不加粗：整套默认外观是他定的，粗体不在其中");
             Assert.Equal("0.5", options["sub-border-size"]);
             Assert.Equal("0.000/0.000/0.000/1.000", options["sub-border-color"]);
             Assert.Equal("0.5", options["sub-shadow-offset"]);
-            Assert.Equal("gb18030", options["sub-codepage"], "mpv 先按 UTF-8 试，这条只对不是 UTF-8 的老字幕生效");
-            Assert.False(options.ContainsKey("sub-back-color"), "默认不画背景框，字幕自己的样式说了算");
+            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Microsoft YaHei（v14 起的默认）");
+            Assert.False(options.ContainsKey("sub-codepage"),
+                "出厂是自动识别编码：写死 gb18030 会把 Big5 的繁体字幕读成乱码");
+            Assert.Equal("0.000/0.000/0.000/0.600", options["sub-back-color"],
+                "出厂黑色，随 底板不透明度 60% 一起发 —— 底板关着时它就是阴影的颜色");
+            Assert.False(options.ContainsKey("sub-border-style"), "出厂没有底板，跟以前看到的一样");
         });
 
         Test("输出：宽画面的图形字幕才拉伸到画面", () =>
@@ -3603,52 +3793,6 @@ internal static class PlaybackTests
             Assert.Equal(window, AspectLock.Fit(window, 16d / 9, 1400, 900), "边框比窗口还大");
         });
 
-        Test("浏览窗口：比例不算侧边栏那一条", () =>
-        {
-            // 「锁定比例大小改为 16:9，计算比例时要排除侧边栏」：锁的是侧边栏右边那一片，所以客户区比 16:9
-            // 宽出那一条（这里 49）。1487 宽的窗口减掉 16 的边框是 1471 的客户区，减掉 49 就是 1422 的页面，
-            // 1422 ÷ 16:9 = 800，窗口于是 839 高。
-            var dragged = AspectLock.Apply(
-                Rect(0, 0, 1487, 1000), ResizeEdge.Right, 16d / 9, 16, 39, 0, 0, 49);
-
-            Assert.Equal(1487, dragged.Width, "宽领头那一档宽度不动");
-            Assert.Equal(839, dragged.Height, "高度按页面那一片算");
-            Assert.Equal(800, dragged.Height - 39);
-            Assert.Equal(1422, dragged.Width - 16 - 49);
-
-            // 拖上下边沿那一档反过来：高度说话，宽度是页面加上那一条再加边框。
-            var vertical = AspectLock.Apply(
-                Rect(0, 0, 900, 839), ResizeEdge.Bottom, 16d / 9, 16, 39, 0, 0, 49);
-            Assert.Equal(1487, vertical.Width);
-
-            // 开窗那一下（Fit）走同一条算术，工作区也按同一条量。
-            var fitted = AspectLock.Fit(Rect(0, 0, 1487, 900), 16d / 9, 16, 39, default, 0, 0, 49);
-            Assert.Equal(839, fitted.Height);
-            Assert.Equal(1487, fitted.Width);
-
-            // 不给这个参数就是原来那条规矩：播放中的窗口整块都是画面，一个像素也不让出去。
-            Assert.Equal(
-                AspectLock.Apply(Rect(0, 0, 1487, 1000), ResizeEdge.Right, 16d / 9, 16, 39, 0, 0, 0),
-                AspectLock.Apply(Rect(0, 0, 1487, 1000), ResizeEdge.Right, 16d / 9, 16, 39));
-        });
-
-        Test("浏览窗口：最小尺寸说的还是整个客户区", () =>
-        {
-            // 扣掉侧边栏之后仍然不许把窗口挤到最小尺寸以下：900×560 是对客户区说的，不是对页面说的。
-            var bounds = AspectLock.Apply(
-                Rect(0, 0, 500, 500), ResizeEdge.Right, 16d / 9, 16, 39, 900, 560, 49);
-
-            Assert.Equal(560, bounds.Height - 39, "高度顶住了下限");
-            Assert.True(bounds.Width - 16 >= 900, $"客户区只剩 {bounds.Width - 16} 宽");
-            Assert.Equal(996, bounds.Width - 16 - 49, "页面按高度反算");
-
-            // 只差一点点的那一档：页面的下限是 900 减去那一条，而不是 900。
-            var floored = AspectLock.Fit(
-                Rect(0, 0, 400, 2000), 16d / 9, 16, 39, default, 900, 0, 49);
-            Assert.Equal(900, floored.Width - 16, "客户区正好卡在下限上");
-            Assert.Equal(851, floored.Width - 16 - 49);
-        });
-
         static WindowBounds Rect(int left, int top, int right, int bottom) => new(left, top, right, bottom);
     }
 
@@ -4130,7 +4274,7 @@ internal static class PlaybackTests
             Assert.True(triangle[1].X > triangle[0].X, "尖角朝右");
         });
 
-        Test("暂停/播放徽标：两个形状都落在方框正中，最粗那道描边也没顶出去", () =>
+        Test("暂停/播放徽标：两个形状都落在方框正中，描边也没顶出去", () =>
         {
             foreach (var (name, figures) in new[] { ("暂停", PulseArt.Pause), ("播放", PulseArt.Play) })
             {
@@ -4138,18 +4282,27 @@ internal static class PlaybackTests
                 Assert.Equal(PulseArt.Box / 2, x, $"{name}没有水平居中");
                 Assert.Equal(PulseArt.Box / 2, y, $"{name}没有垂直居中");
 
-                // 最粗的那一档（深色描边）往外长 11，顶出方框的下场是被 Canvas 裁掉一条边。
-                var (width, height) = PulseArt.Stroked(figures, PulseArt.Rim);
+                // 描边往外长 6，顶出方框的下场是被 Canvas 裁掉一条边。
+                var (width, height) = PulseArt.Stroked(figures, PulseArt.Ink);
                 Assert.True(width <= PulseArt.Box, $"{name}的描边横向顶出了方框：{width} > {PulseArt.Box}");
                 Assert.True(height <= PulseArt.Box, $"{name}的描边纵向顶出了方框：{height} > {PulseArt.Box}");
             }
         });
 
-        Test("暂停/播放徽标：背后那道描边比白的那层粗，屏上才看得见一道边", () =>
+        Test("暂停/播放徽标：只有一档描边，方框不跟着改", () =>
         {
-            // 白三角压在白墙上等于没画，这一圈就是为它存在的；粗细反过来的话它整个躲在白层底下。
-            Assert.True(PulseArt.Rim > PulseArt.Ink);
-            Assert.Equal(5.0, (PulseArt.Rim - PulseArt.Ink) / 2, "屏上看得见的那道边");
+            // 「点击画面暂停和开始的图标要纯白色，去掉灰色」（2026-09-05）：背后那圈半透明黑描边没了，于是
+            // 「粗细」只剩一个数。方框留着不动 —— 它就是屏上徽标占多大，而用户认下的是这一档。
+            Assert.Equal(12.0, PulseArt.Ink);
+            Assert.Equal(136.0, PulseArt.Box, "方框边长不该跟着那圈灰边一起改");
+
+            // 而这一层还剩多少余量：核心离方框 13，描边只往外长 6。
+            foreach (var (name, figures) in new[] { ("暂停", PulseArt.Pause), ("播放", PulseArt.Play) })
+            {
+                var (width, height) = PulseArt.Stroked(figures, PulseArt.Ink);
+                Assert.True(PulseArt.Box - width >= 12, $"{name}横向余量不够：{PulseArt.Box - width}");
+                Assert.True(PulseArt.Box - height >= 12, $"{name}纵向余量不够：{PulseArt.Box - height}");
+            }
         });
     }
 
@@ -4184,10 +4337,15 @@ internal static class PlaybackTests
         Name = name
     };
 
-    private static (PlaybackPlanner Planner, AppSettings Settings) Planner(string? screenshots = null)
+    private static (PlaybackPlanner Planner, AppSettings Settings) Planner(string? screenshots = null, string? fonts = null)
     {
         var settings = new AppSettings();
-        return (new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders), null, screenshots), settings);
+
+        // 装机默认是「不开着色器」（用户 2026-09-05 定的），而这一批契约问的正是「开着的时候链有没有真的生效」，
+        // 所以这里明写开着。要问关掉那一档的测试自己再关回去。
+        settings.Shaders.Enabled = true;
+
+        return (new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders), null, screenshots, fonts), settings);
     }
 
     private static EmbyConnection Connection() => new(

@@ -8,9 +8,11 @@
   of stopping at the first hundred items.
 
   There are no literal sizes left in here. The cell, the card and the bitmap the card was decoded for
-  all come from 设置 → 海报宽度 by way of LibraryViewModel, which is what the three numbers that used to
-  be written out below — CardWidth 170, PosterHeight 255, MinItemWidth 170 — quietly prevented: moving
-  that slider resized the home page and left this one, the page it is obviously about, untouched.
+  all come from LibraryViewModel, which is what the three numbers that used to be written out below —
+  CardWidth 170, PosterHeight 255, MinItemWidth 170 — quietly prevented: moving the old 海报宽度 slider
+  resized the home page and left this one, the page it is obviously about, untouched. That setting row
+  was deleted 2026-09-05 and the width settled on CardSize's one default; the sizes still come from the
+  view model rather than the markup, so there is exactly one place they live.
 
   Requirement 4's sort keys and requirement 5's filters are chosen in the two flyouts and decided in the
   view model; requirement 6 (已看/收藏/编辑) is the ContextRequested handler on the card template.
@@ -213,20 +215,20 @@
                              中自己就是灰的，与排序/筛选的即时行为一致。 -->
                         <Button
                             x:Name="PlayAllButton"
+                x:Uid="LibraryPage_PlayAllButton"
                             Command="{x:Bind ViewModel.PlayAllCommand}"
                             HorizontalContentAlignment="Center"
                             MinWidth="0"
-                            Padding="0"
-                            ToolTipService.ToolTip="播放全部">
+                            Padding="0">
                             <FontIcon FontSize="14" Glyph="&#xE768;" />
                         </Button>
                         <Button
                             x:Name="PlayRandomButton"
+                x:Uid="LibraryPage_PlayRandomButton"
                             Command="{x:Bind ViewModel.PlayRandomCommand}"
                             HorizontalContentAlignment="Center"
                             MinWidth="0"
-                            Padding="0"
-                            ToolTipService.ToolTip="随机播放">
+                            Padding="0">
                             <FontIcon FontSize="14" Glyph="&#xE8B1;" />
                         </Button>
 
@@ -234,18 +236,18 @@
                              字形跟着当前视图走，点开是三个单选项。 -->
                         <DropDownButton
                             x:Name="ViewButton"
+                x:Uid="LibraryPage_ViewButton"
                             HorizontalContentAlignment="Center"
-                            MinWidth="0"
-                            ToolTipService.ToolTip="切换视图">
+                            MinWidth="0">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon FontSize="14" Glyph="{x:Bind ViewModel.ViewGlyph, Mode=OneWay}" />
                                 <TextBlock x:Name="ViewText" Text="{x:Bind ViewModel.ViewLabel, Mode=OneWay}" />
                             </StackPanel>
                             <DropDownButton.Flyout>
                                 <MenuFlyout x:Name="ViewMenu" Placement="BottomEdgeAlignedRight">
-                                    <RadioMenuFlyoutItem Click="OnViewChosen" Tag="Poster" Text="海报" />
-                                    <RadioMenuFlyoutItem Click="OnViewChosen" Tag="Thumb" Text="缩略图" />
-                                    <RadioMenuFlyoutItem Click="OnViewChosen" Tag="List" Text="列表" />
+                                    <RadioMenuFlyoutItem x:Uid="LibraryPage_RadioMenuFlyoutItem1" Click="OnViewChosen" Tag="Poster" />
+                                    <RadioMenuFlyoutItem x:Uid="LibraryPage_RadioMenuFlyoutItem2" Click="OnViewChosen" Tag="Thumb" />
+                                    <RadioMenuFlyoutItem x:Uid="LibraryPage_RadioMenuFlyoutItem3" Click="OnViewChosen" Tag="List" />
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
@@ -257,7 +259,8 @@
                             ToolTipService.ToolTip="{x:Bind ViewModel.FilterTooltip, Mode=OneWay}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon FontSize="14" Glyph="&#xE71C;" />
-                                <TextBlock x:Name="FilterText" Text="筛选" />
+                                <TextBlock x:Name="FilterText"
+                x:Uid="LibraryPage_FilterText" />
                                 <!-- How many filters are on, without spending a row of the page saying so. -->
                                 <InfoBadge
                                     Value="{x:Bind ViewModel.FilterCount, Mode=OneWay}"
@@ -296,10 +299,10 @@
                  slate, and a box squeezed between the two would be narrower than the words it holds. -->
             <AutoSuggestBox
                 x:Name="SearchInput"
+                x:Uid="LibrarySearchBox"
                 Grid.Row="1"
                 HorizontalAlignment="Left"
                 Width="440"
-                PlaceholderText="搜索影片、剧集、演员"
                 QueryIcon="Find"
                 QuerySubmitted="OnSearchSubmitted"
                 Text="{x:Bind ViewModel.SearchText, Mode=OneWay}"
@@ -316,7 +319,7 @@
                 RowSpacing="8"
                 Spacing="8"
                 Visibility="{x:Bind ViewModel.FilterChipsVisibility, Mode=OneWay}">
-                <ItemsControl ItemsSource="{x:Bind ViewModel.FilterChips}">
+                <ItemsControl ItemsSource="{x:Bind ViewModel.FilterChips, Mode=OneWay}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <local:WrapRow RowSpacing="8" Spacing="8" />
@@ -344,9 +347,9 @@
                 </ItemsControl>
 
                 <!-- 末尾那颗：一次清空。做成链接样子而不是又一颗药丸 —— 它不是一条筛选，不该和它们一样重。 -->
-                <HyperlinkButton
+                <HyperlinkButton x:Uid="LibraryPage_HyperlinkButton4"
+                    AutomationProperties.AutomationId="LibraryClearFiltersButton"
                     Command="{x:Bind ViewModel.ClearFiltersCommand}"
-                    Content="全部清除"
                     Padding="4,2,4,2"
                     VerticalAlignment="Center" />
             </local:WrapRow>
@@ -378,15 +381,15 @@
                 ItemInvoked="OnItemInvoked"
                 ItemTemplate="{StaticResource PosterTemplate}"
                 ItemTransitionProvider="{x:Null}"
-                ItemsSource="{x:Bind ViewModel.Cards}"
+                ItemsSource="{x:Bind ViewModel.Cards, Mode=OneWay}"
                 SelectionMode="None">
                 <ItemsView.Layout>
                     <!-- ItemsStretch="Fill" is what makes the grid reflow instead of leaving a ragged
                          right margin, and it is the reason resizing looks settled (requirement 1).
 
-                         The cell size follows 设置 → 海报宽度 and the current view shape; the height is
-                         the picture plus the two lines of text under it, worked out in the view model
-                         rather than typed in here.
+                         The cell size follows CardSize's poster width and the current view shape; the
+                         height is the picture plus the two lines of text under it, worked out in the
+                         view model rather than typed in here.
 
                          行距比列距大：卡片底下那两行字是它自己的（离画面 8 像素），一行一行之间要是和一列
                          一列之间一样宽，那两行字就悬在两张画面中间，读起来像是下一排卡片的标题。24 对 16

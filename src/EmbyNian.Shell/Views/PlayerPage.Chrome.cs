@@ -161,6 +161,12 @@ public sealed partial class PlayerPage
 
         if (dx == 0 && dy == 0) return;
 
+        // Our own ask, caught mid-flight. Every ask while the cursor is hidden steps the pointer one physical
+        // pixel and puts it straight back (Native.NudgeCursorState), and a tick landing between the two legs
+        // reads that as the hand returning — which would end the hide the ask exists to make stick. The anchor
+        // is left alone, so the stillness goes on being counted from where the hand really stopped.
+        if (_polledKnown && _cursorHidden && Now - _nudgedAt <= NudgeEcho && dx <= 1 && dy <= 1) return;
+
         // Not advancing the anchor is the point: jitter around one spot never accumulates into activity,
         // while a hand that really is moving the mouse crosses two pixels within a tick or two.
         if (_polledKnown && !_cursorHidden && dx < PointerNoise && dy < PointerNoise) return;
@@ -483,9 +489,7 @@ public sealed partial class PlayerPage
 
         if (state is "paused" or "playing")
         {
-            var art = state == "paused" ? _pauseArt : _playArt;
-            PulseShape.Data = art.Shape;
-            PulseRim.Data = art.Rim;
+            PulseShape.Data = state == "paused" ? _pauseArt : _playArt;
             PulseBadge.Visibility = Visibility.Visible;
             PulseBadge.Opacity = 1;
         }
@@ -560,23 +564,22 @@ public sealed partial class PlayerPage
 
         if (hidden) _shapeBack = 0;
 
-        // And now make the OS ask. Every 「no cursor」 above is an answer — the queue's shape, the class
-        // cursors, mpv's own setting — and the OS only collects those answers when it has a reason to work out
-        // what the pointer is over, which is when the pointer moves. Hiding happens *because* nothing is
-        // moving, so without this the last shape it worked out stays on the screen until the hand comes back,
-        // which is exactly the report: 「静止超过两秒后鼠标指针还是不会自动隐藏」, from a player whose own
-        // readings all say hidden. Putting the cursor back at the point it already occupies is the smallest
-        // possible reason: the pointer does not move, and both places that judge movement — the event filter
-        // in PlayerPage.Input and PollPointer above — discard an unchanged position, so the stillness this is
-        // part of survives being nudged. It was a zero-displacement SendInput until 2026-09-05, which was
-        // measured to produce no message at all — see Native.NudgeCursorState, and 「点了第二块屏上的应用之后
-        // 鼠标不再自动隐藏」, which is the report that turned that stone over.
-        // Counted, because this is the load-bearing half and the OS's own answer about it cannot be trusted to
-        // arrive: GetCursorInfo reports the desktop's cursor, and on a machine where the last real mouse
-        // movement happened over another app's window it goes on reporting that window's arrow however many
-        // times we ask. The self-check therefore asserts that the ask was made and that it arrived — which is
-        // the thing this file is responsible for — and only prints what the desktop says about it.
-        if (hidden && Native.NudgeCursorState()) _cursorNudges++;
+        // And now make the framework look. Every 「no cursor」 above is an answer — this queue's shape, the class
+        // cursors, mpv's own setting, and above all the transparent ProtectedCursor on the line above, which is
+        // the only one of them that reaches the pixels a pointer over XAML content is on. WinUI reads that
+        // property while it is handling pointer input, so a value assigned during stillness is a value nobody
+        // has read: the arrow the last real movement worked out stays on the screen, which is 「静止超过两秒后
+        // 鼠标指针还是不会自动隐藏」 from a player whose own readings all say hidden.
+        //
+        // One physical pixel out and straight back, through the real input queue. What that replaced, and why
+        // both of its predecessors asked nothing at all, is written out at Native.NudgeCursorState — the short
+        // version is that a same-point SetCursorPos never reaches the island and a zero-displacement SendInput
+        // never reaches anything. Counted, and bounded to three per hide, because it is real input now.
+        if (hidden)
+        {
+            _nudgesThisHide = 0;
+            Nudge();
+        }
 
         // Written to the log because this is the one thing in the player a probe can only ask about under
         // conditions it made up, and 「没有变化」 three times over is what asking the wrong conditions costs.
@@ -595,7 +598,32 @@ public sealed partial class PlayerPage
               + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
               + $"，{PointerElements()}"
             : $"鼠标又显示了：轮询问出的移动共 {_polledMoves} 次、XAML 事件 {_pointerMoves} 次，计数 {_cursorCount}"
-              + $"，藏着期间有 {_shapeBack} 拍发现形状又被放回来了");
+              + $"，藏着期间催了框架 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了");
+    }
+
+    /// <summary>
+    /// One ask that the framework work the cursor out again, with the bookkeeping that makes it safe to make.
+    /// <para>
+    /// Three things happen here rather than at the call sites, because all three are properties of the ask
+    /// rather than of the moment: it is <b>bounded</b> to <see cref="NudgesPerHide"/> per hide (real injected
+    /// input, so it must stop), the attempt is stamped whether or not the injection took (the echo has to be
+    /// recognised either way — see <see cref="Moved"/>), and only the asks that really left the process are
+    /// counted, because that count is what the self-check asserts on.
+    /// </para>
+    /// <para>
+    /// Attempts are what the bound counts, not successes. A machine that refuses injected input outright would
+    /// otherwise be asked ten times a second for the length of the film, which is the cost this bound exists
+    /// to avoid, on exactly the machine where it buys nothing.
+    /// </para>
+    /// </summary>
+    private void Nudge()
+    {
+        if (_nudgesThisHide >= NudgesPerHide) return;
+
+        _nudgesThisHide++;
+        _nudgedAt = Now;
+
+        if (Native.NudgeCursorState()) _cursorNudges++;
     }
 
     /// <summary>
@@ -766,16 +794,12 @@ public sealed partial class PlayerPage
             if (_window?.CursorShapeGone == false) _shapeBack++;
             _window?.KeepCursorHidden();
 
-            // And ask the OS to work the shape out again, every tick rather than only at the moment of hiding.
-            // Everything this process says about the cursor — the framework's ProtectedCursor, this queue's
-            // shape, the show counter, the class cursors — is an *answer*, and the OS only collects answers when
-            // it has a reason to decide what the pointer is over. Hiding happens because nothing is moving, so
-            // there is no such reason; and a single ask at the moment of hiding is one ask that can be missed or
-            // arrive before the framework has pushed its own value down. Putting the cursor back where it
-            // already is costs one user32 call and is the smallest ask there is, and both places that judge
-            // movement discard an unchanged position, so the stillness this is part of survives being nudged
-            // ten times a second.
-            if (Native.NudgeCursorState()) _cursorNudges++;
+            // And ask the framework to work the shape out again, for the two ticks after the one that hid it as
+            // well as on the hide itself. Not because the pointer might have moved — it has not — but because
+            // the ask can arrive before WinUI has pushed its own value down, and there is no reading available
+            // from in here that would tell that case from a successful one. Three asks over three ticks, then
+            // silence: Nudge holds the bound, and it holds it against attempts rather than successes.
+            Nudge();
         }
 
         // The same guarantee for the chapter preview, and for the same reason: it hides on the pointer

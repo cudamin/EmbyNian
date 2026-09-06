@@ -1,20 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  RequestedTheme is pinned Dark here, and it stays pinned even though the app now has six themes and one
-  of them is light. The property can only be written before content loads, so it cannot be the switch;
-  what it is instead is a fixed answer to 「which ThemeDictionary does an application-scope lookup use」.
-  Two readers resolve at application scope on purpose — DiagnosticsViewModel.Resolve and
-  PlayerPage.BrushFor — and with this pinned they always read Palette.xaml's Default dictionary, whatever
-  the Windows app mode is. Unpinned they followed the app mode: on a light-mode machine anything resolved
-  outside the tree came back in light ink and got drawn on a near-black surface. That is not
-  hypothetical: ShellSelfCheck's palette check exited non-zero on a light-mode machine with nothing wrong
-  with it, and DiagnosticsViewModel's log levels came out light-on-dark for the same reason.
+  RequestedTheme is pinned Dark here, and the pin is what makes Palette.xaml's 「Dark」 dictionary the one
+  an application-scope lookup lands in. The property can only be written before content loads, so it
+  cannot be the switch; what it is instead is a fixed answer to 「which ThemeDictionary does an
+  application-scope lookup use」. Two readers resolve at application scope on purpose —
+  DiagnosticsViewModel.Resolve and PlayerPage.BrushFor — and with this pinned they always read the same
+  dictionary, whatever the Windows app mode is. Unpinned they followed the app mode: on a light-mode
+  machine anything resolved outside the tree came back in light ink and got drawn on a near-black
+  surface. That is not hypothetical: ShellSelfCheck's palette check exited non-zero on a light-mode
+  machine with nothing wrong with it, and DiagnosticsViewModel's log levels came out light-on-dark for
+  the same reason.
+
+  The pin got *more* load-bearing on 2026-09-05, when that dictionary's key changed from 「Default」 to
+  「Dark」 to satisfy winui-design's 「Light, Dark and HighContrast explicitly — never Default」. There is no
+  Default left to fall back to, so if this line ever stops taking effect the lookup no longer quietly
+  finds the dark palette anyway — it misses and gets the framework's own value. The self-check's 「应用主题」
+  line is the tripwire for that.
 
   What actually changes the theme is Theme/ThemeHost.cs. It writes the chosen theme's colours into the
-  SolidColorBrush objects of *both* ThemeDictionaries — Default and Light — and sets ElementTheme on the
-  registered roots to match, so the framework's own hundreds of unoverridden brushes flip with it.
+  SolidColorBrush objects of *both* painted ThemeDictionaries — Dark and Light — and sets ElementTheme on
+  the registered roots to match, so the framework's own hundreds of unoverridden brushes flip with it.
   Writing both is what keeps those two app-scope readers agreeing with the trees they draw into: whatever
-  dictionary a lookup lands in, it holds the same theme.
+  dictionary a lookup lands in, it holds the same theme. All five themes in UiThemes are dark today
+  (daylight was deleted 2026-09-05), so Light is currently painted and never selected — kept because
+  dropping it would take the light half of the derivation with it.
 
   Palette.xaml is merged after XamlControlsResources so its keys shadow the framework's. Styles.xaml comes
   after Palette.xaml, and that order is load-bearing: Palette.xaml holds only colour now, Styles.xaml holds

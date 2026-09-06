@@ -72,11 +72,14 @@ public static class SettingsMigration
         // the properties are gone and the deserializer ignores a key it has nowhere to put — but the one
         // switch that does have a successor is carried over by hand: 「所有视频默认启用」 became 「启用着色器」,
         // and someone who had switched it off meant 「不要着色器」 both times.
+        //
+        // 两个方向都抄，不只是「关」那一个：装机默认 2026-09-05 从「开」改成了「关」，所以一份 v6 文件里明明
+        // 开着的着色器要是不照抄过来，就会被那个新默认悄悄关掉 —— 而那个开关当年是他打开的。
         if (version < 7 && root.TryGetProperty("Shaders", out var shaders)
             && shaders.TryGetProperty("ApplyToAllVideos", out var applyToAll)
-            && applyToAll.ValueKind is JsonValueKind.False)
+            && applyToAll.ValueKind is JsonValueKind.True or JsonValueKind.False)
         {
-            settings.Shaders.Enabled = false;
+            settings.Shaders.Enabled = applyToAll.ValueKind is JsonValueKind.True;
         }
 
         // v8 moves 图形接口 to Vulkan. 「自动挑选」 and d3d11 are the same thing on Windows — mpv picks d3d11 for
@@ -107,6 +110,72 @@ public static class SettingsMigration
         // leftover language alongside AudioTrack = ServerDefault, and that language was being ignored. Reviving
         // it here would silently change which track plays.
         if (version < 10) UpgradeAudioLanguage(settings, root);
+
+        // v11 clears a stored 字幕编码 of gb18030. Naming any codepage switches mpv's own detection off,
+        // and rendered side by side on 2026-09-05 a Big5 繁体 subtitle read as GB18030 comes out as
+        // mojibake where mpv's auto reads it correctly — while a GBK 简体 file gave byte-identical frames
+        // either way. So the old value bought nothing and cost the 繁体 half of the library.
+        //
+        // Same call as v8's 图形接口 and v9's 音频同步 immediately above: gb18030 was the shipped default,
+        // never a choice, and this runs exactly once — the row still offers it for the file detection
+        // gets wrong, and a value picked from here on is left alone. v4's step deliberately no longer
+        // fills this field in, so this is the only place that decides it.
+        if (version < 11 && settings.Playback.SubtitleCodepage == "gb18030") settings.Playback.SubtitleCodepage = "";
+
+        // v12 moves 字幕字体 to the family the program now ships: 方正中等线简体 rides in assets/fonts and
+        // reaches mpv through sub-fonts-dir, so it renders whether or not this machine has it installed
+        // — and it is what 「字幕默认用方正中等线简体」 asked for. Two stored values are carried over to
+        // it and everything else is left alone. "Microsoft YaHei" was the shipped default up to v11, so
+        // a file holding it is a file where nobody ever picked a font. ".Heiti J" is the one other value
+        // found in the wild (this user's own file): no Windows font file carries that family name, so it
+        // has never rendered as itself — it got stored by the pre-picker builds' font handling and has
+        // been drawing whatever mpv's fallback chose ever since. A font somebody actually picked stays.
+        // (v14 below now carries this family on to Microsoft YaHei — this step stays so a pre-v12 file
+        // passes through the same chain rather than landing somewhere else for the same stored value.)
+        if (version < 12)
+        {
+            var storedFont = settings.Playback.SubtitleFontFamily.Trim();
+            if (storedFont.Length == 0
+                || storedFont.Equals("Microsoft YaHei", StringComparison.OrdinalIgnoreCase)
+                || storedFont.Equals(".Heiti J", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Playback.SubtitleFontFamily = "方正中等线简体";
+            }
+        }
+
+        // v13 carries the user's dictated 字幕外观 (2026-09-06, 「把默认字幕样式设置为…」) onto files that
+        // predate it. Of the eight values he named, six were already the shipped defaults; these two were
+        // not. 加粗 goes off, and 底板颜色 is pinned to black. Both old values are shipped defaults rather
+        // than choices: bold was on because the client shipped it on (v4 even carried it in from the
+        // mpv.conf era, and this dictation supersedes that too), and an empty colour is 「never picked
+        // one」 — the old 「无背景」 carry included, since that choice meant no plate and no plate is
+        // still what it gets: SubtitleBackStyle is a separate row and untouched. The colour test asks
+        // whether the stored value is a colour at all rather than whether it is empty, because 「none」
+        // only lands on empty inside Normalize, which runs after these steps. At v13 and above a stored
+        // value is a decision and stays.
+        if (version < 13)
+        {
+            if (settings.Playback.SubtitleBold) settings.Playback.SubtitleBold = false;
+            if (Rgb(settings.Playback.SubtitleBackColor).Length == 0)
+                settings.Playback.SubtitleBackColor = "#000000";
+        }
+
+        // v14 moves 字幕字体 back to Microsoft YaHei (2026-09-06, 「默认字体改为Microsoft YaHei」).
+        // The value it replaces is v12's own shipped default — that step wrote 方正中等线简体 onto every
+        // file that had never picked a font, so a file holding it under either of the family's two
+        // names is still a file where nobody chose, and it travels to the new default the same way v12
+        // once carried it there. Anything else was picked and stays, and from v14 on a stored
+        // 方正中等线简体 is a decision: the font remains bundled and selectable, it just no longer
+        // answers for 「never picked」.
+        if (version < 14)
+        {
+            var storedFont = settings.Playback.SubtitleFontFamily.Trim();
+            if (storedFont.Equals("方正中等线简体", StringComparison.Ordinal)
+                || storedFont.Equals("FZZhongDengXian-Z07S", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Playback.SubtitleFontFamily = "Microsoft YaHei";
+            }
+        }
 
         settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
         return Normalize(settings);
@@ -216,7 +285,6 @@ public static class SettingsMigration
     {
         settings.EnsureDeviceId();
         settings.Ui.PageSize = Math.Clamp(settings.Ui.PageSize, 20, 500);
-        settings.Ui.PosterWidth = Math.Clamp(settings.Ui.PosterWidth, 120, 340);
 
         // 海报缓存的磁盘上限。范围和「MB 换字节」都在淘汰规则那一头（Emby.ImageCachePolicy），设置页那一行也读
         // 同一对常量 —— 一个比设置窄的框会显示一个文件里没有的数并在下次触碰时写回去，一个比设置宽的框会让人填进
@@ -246,8 +314,11 @@ public static class SettingsMigration
         settings.Playback.SeekBackwardSeconds = Math.Clamp(settings.Playback.SeekBackwardSeconds, 1, 600);
         settings.Playback.ResumeRewindSeconds = Math.Clamp(settings.Playback.ResumeRewindSeconds, 0, 120);
         settings.Playback.SubtitleBackOpacity = Math.Clamp(settings.Playback.SubtitleBackOpacity, 0, 100);
-        if (settings.Playback.SubtitleFontSize != 0)
-            settings.Playback.SubtitleFontSize = Math.Clamp(settings.Playback.SubtitleFontSize, 16, 160);
+        settings.Playback.SubtitleScalePercent = Math.Clamp(settings.Playback.SubtitleScalePercent,
+            PlaybackSettings.MinimumSubtitleScale, PlaybackSettings.MaximumSubtitleScale);
+
+        // The same rule the settings row applies as it is typed — see PlaybackSettings.ClampFontSize.
+        settings.Playback.SubtitleFontSize = PlaybackSettings.ClampFontSize(settings.Playback.SubtitleFontSize);
         settings.Video.NetworkCacheMegabytes = Math.Clamp(settings.Video.NetworkCacheMegabytes, 0, 4096);
         settings.Audio.DelayMilliseconds = Math.Clamp(settings.Audio.DelayMilliseconds, -5000, 5000);
         settings.Audio.Volume = Math.Clamp(settings.Audio.Volume, 0, AudioSettings.MaxVolume);
@@ -287,11 +358,17 @@ public static class SettingsMigration
         if (string.Equals(settings.Audio.Device, AudioDeviceCatalogue.AutoDevice, StringComparison.OrdinalIgnoreCase))
             settings.Audio.Device = "";
         settings.Playback.SubtitleCodepage = Choice(MpvOutputOptions.SubtitleCodepages, settings.Playback.SubtitleCodepage);
-        settings.Playback.SubtitleColor = Choice(MpvOutputOptions.SubtitleColors, settings.Playback.SubtitleColor);
-        settings.Playback.SubtitleBorderSize = Choice(MpvOutputOptions.SubtitleBorders, settings.Playback.SubtitleBorderSize);
-        settings.Playback.SubtitleBorderColor = Choice(MpvOutputOptions.SubtitleBorderColors, settings.Playback.SubtitleBorderColor);
-        settings.Playback.SubtitleShadowOffset = Choice(MpvOutputOptions.SubtitleShadows, settings.Playback.SubtitleShadowOffset);
-        settings.Playback.SubtitleBackColor = Choice(MpvOutputOptions.SubtitleBackColors, settings.Playback.SubtitleBackColor);
+        settings.Playback.SubtitleAssOverride = Choice(MpvOutputOptions.SubtitleStyleScopes, settings.Playback.SubtitleAssOverride);
+
+        // The three 字幕颜色 rows take any #RRGGBB since the HTML 颜色选择器 replaced their short preset
+        // lists — the catalogue check below would have thrown away every colour that was not one of the
+        // six presets, including the shipped white. A value that does not parse falls back to 「不设置」.
+        settings.Playback.SubtitleColor = Rgb(settings.Playback.SubtitleColor);
+        settings.Playback.SubtitleBorderColor = Rgb(settings.Playback.SubtitleBorderColor);
+        settings.Playback.SubtitleBackColor = Rgb(settings.Playback.SubtitleBackColor);
+        settings.Playback.SubtitleBorderSize = MpvOutputOptions.ClampSubtitleUnit(settings.Playback.SubtitleBorderSize);
+        settings.Playback.SubtitleShadowOffset = MpvOutputOptions.ClampSubtitleUnit(settings.Playback.SubtitleShadowOffset);
+        settings.Playback.SubtitleBackStyle = Choice(MpvOutputOptions.SubtitleBackStyles, settings.Playback.SubtitleBackStyle);
 
         // A hand-picked 档位 that this table no longer has would silently mean 「按自动挑」 anyway, but going
         // through here makes it so on the next save as well, and keeps the settings dropdown from showing a
@@ -375,7 +452,10 @@ public static class SettingsMigration
         Fill(value => video.HdrMode = value, video.HdrMode, "tonemap");
 
         var playback = settings.Playback;
-        Fill(value => playback.SubtitleCodepage = value, playback.SubtitleCodepage, "gb18030");
+
+        // 字幕编码 is deliberately not filled in here, and it is the one field of this list that is not:
+        // mpv.conf did say gb18030, and v11 below is the step that says that value was wrong. Filling it
+        // in only to clear it two steps later would leave a reader tracing a dance with no net effect.
         Fill(value => playback.SubtitleColor = value, playback.SubtitleColor, "#FFFFFF");
         Fill(value => playback.SubtitleBorderSize = value, playback.SubtitleBorderSize, "0.5");
         Fill(value => playback.SubtitleBorderColor = value, playback.SubtitleBorderColor, "#000000");
@@ -422,6 +502,17 @@ public static class SettingsMigration
             ? trimmed
             : "";
     }
+
+    /// <summary>
+    /// A stored 字幕颜色 as the <c>#RRGGBB</c> the picker writes, or 「不设置」 when it is not one.
+    /// <para>
+    /// A file written before 2026-09-05 can hold 「无背景」 here (the string "none"), which the old preset
+    /// list carried and the picker does not: it fails this parse and lands on 「不设置」, and 底板 is off by
+    /// default, so what that choice was really asking for — no plate — is what it still gets.
+    /// </para>
+    /// </summary>
+    private static string Rgb(string? value) =>
+        HtmlColor.TryParse(value, out var rgb) ? HtmlColor.Format(rgb) : "";
 
     /// <summary>
     /// 画质预设. Unlike the option lists this one has no 「不设置」 entry — its own first entry, <c>default</c>,

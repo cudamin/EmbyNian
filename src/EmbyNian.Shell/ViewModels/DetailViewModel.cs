@@ -73,9 +73,9 @@ public sealed partial class DetailViewModel : PageViewModel
     private const int FooterDecodeWidth = 760;
 
     /// <summary>
-    /// The still beside the title. Fixed rather than scaled with 设置 → 海报宽度, unlike every other card in
-    /// the app. 头上那一格的高是按内容定死的（<see cref="DetailHero.ArtHeight"/> = 460），再让这一张的宽跟着
-    /// 滑杆走，那格带子就装不下它了 —— 滑杆拉到 340 时一张 2:3 海报要 510 高。
+    /// The still beside the title. Fixed rather than scaled with the grid's poster width, unlike every
+    /// other card in the app. 头上那一格的高是按内容定死的（<see cref="DetailHero.ArtHeight"/> = 460），
+    /// 再让这一张跟着海报一起宽，那格带子就装不下它了。
     /// </summary>
     private const int PosterStillWidth = 210;
 
@@ -152,7 +152,15 @@ public sealed partial class DetailViewModel : PageViewModel
         // Count — it hangs off a property's setter, and these collections are never re-assigned — so the
         // notification is hung off the collection itself, where it cannot be forgotten at a call site.
         Seasons.CollectionChanged += (_, _) => PickerChanged(nameof(SeasonVisibility));
-        Sources.CollectionChanged += (_, _) => PickerChanged(nameof(SourceVisibility));
+
+        // 媒体源那一行多喊一声「视频：…」那一行：头图上那一行在下拉出现时收起来（同一份读数不在一屏上说两遍，
+        // 见 VideoVisibility），所以这个集合一变，两处的显隐都可能翻。
+        Sources.CollectionChanged += (_, _) =>
+        {
+            PickerChanged(nameof(SourceVisibility));
+            OnPropertyChanged(nameof(VideoVisibility));
+        };
+
         AudioTracks.CollectionChanged += (_, _) => PickerChanged(nameof(AudioVisibility));
         SubtitleTracks.CollectionChanged += (_, _) => PickerChanged(nameof(SubtitleVisibility));
 
@@ -536,7 +544,17 @@ public sealed partial class DetailViewModel : PageViewModel
 
     public Visibility ScoreVisibility => Show(!string.IsNullOrWhiteSpace(Score));
 
-    public Visibility VideoVisibility => Show(!string.IsNullOrWhiteSpace(VideoLine));
+    /// <summary>
+    /// 头图上那行「视频：4K · HEVC · MP4 · 1.9 GB」画不画。有话说是第一句，第二句是**底下那个媒体源下拉没在屏上**
+    /// —— 那个下拉每一行都以同一份读数结尾（<see cref="ItemDetail.SourceLabel"/> 和
+    /// <see cref="ItemDetail.VideoLine"/> 问的是同一个 <c>ToQualityLabel()</c>），两样同时在屏上就是同一句话在
+    /// 相隔两百像素的地方说了两遍（2026-09-05 界面复查）。
+    /// <para>
+    /// 下拉只在有两个以上媒体源时才出现（<see cref="SourceVisibility"/>），而那才是这一行唯一多余的时候：一个文件
+    /// 的条目上没有下拉，这一行是那份读数唯一的出处，收掉它就等于把分辨率和大小从页面上抹了。
+    /// </para>
+    /// </summary>
+    public Visibility VideoVisibility => Show(!string.IsNullOrWhiteSpace(VideoLine) && Sources.Count <= 1);
 
     /// <summary>
     /// Whether there is a picture yet, rather than a flag set beside the assignment. The two used to be
@@ -914,19 +932,13 @@ public sealed partial class DetailViewModel : PageViewModel
 
         var ui = settings.Settings.Ui;
 
-        // Clamped rather than trusted, as on the home page: 设置 offers 120–300, the migration clamps to
-        // 120–340, and a hand-edited settings.json is a supported way to configure this app.
-        var poster = Math.Clamp(ui.PosterWidth, 120, 340);
-
-        // Both rows scale with 海报宽度. They were literals — 300 and 124 — so the 演职人员 row stayed
-        // 124 wide whatever the slider said, next to a grid of posters that did not.
-        var episodes = new CardShelf("更多单集", images, CardSize.WideFor(poster),
+        var episodes = new CardShelf("更多单集", images, CardSize.WideWidth,
             wide: true, ui.ShowWatchedIndicators);
-        var cast = new CardShelf("演职人员", images, CardSize.CastFor(poster),
+        var cast = new CardShelf("演职人员", images, CardSize.CastWidth,
             wide: false, indicators: false);
-        var seasons = new CardShelf("全部剧季", images, poster,
+        var seasons = new CardShelf("全部剧季", images, CardSize.PosterWidth,
             wide: false, ui.ShowWatchedIndicators);
-        var similar = new CardShelf("更多类似", images, poster,
+        var similar = new CardShelf("更多类似", images, CardSize.PosterWidth,
             wide: false, ui.ShowWatchedIndicators);
 
         if (EpisodeShelf is { } previous) previous.Cards.CollectionChanged -= OnEpisodeCardsChanged;
@@ -1051,7 +1063,7 @@ public sealed partial class DetailViewModel : PageViewModel
         TitleLink = ItemDetail.TitleTarget(seed);
         Subline = ItemDetail.Subline(seed);
         SublineGenres = ItemDetail.SublineGenres(seed);
-        Overview = string.IsNullOrWhiteSpace(seed.Overview) ? "暂无简介。" : seed.Overview.Trim();
+        Overview = ItemDetail.Prose(seed.Overview) is { Length: > 0 } prose ? prose : "暂无简介。";
 
         Watched = seed.IsWatched;
         Favorite = seed.UserData?.IsFavorite == true;
@@ -1159,7 +1171,7 @@ public sealed partial class DetailViewModel : PageViewModel
             + $"，ProviderIds={(item.ProviderIds.Count == 0 ? "空" : string.Join('/', item.ProviderIds.Keys))}";
         Facts = ItemDetail.Facts(item);
         Directors = ItemDetail.Directors(item);
-        Overview = string.IsNullOrWhiteSpace(item.Overview) ? "暂无简介。" : item.Overview.Trim();
+        Overview = ItemDetail.Prose(item.Overview) is { Length: > 0 } prose ? prose : "暂无简介。";
 
         Watched = item.IsWatched;
         Favorite = item.UserData?.IsFavorite == true;

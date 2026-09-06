@@ -11,7 +11,7 @@
   图片上的元素沿用 PosterCard 的语义：占位 glyph 垫在图后、右上已看角标、贴底进度条、悬浮时中央
   播放键。悬浮只出播放键：Emby 的列表行也只有这一个，已看/收藏/更多在右键菜单里。
 
-  尺寸跟卡片同一条规则：宽来自 CardItem.CardWidth（跟着 设置 → 海报宽度 换算），高等于宽的 9/16
+  尺寸跟卡片同一条规则：宽来自 CardItem.CardWidth（CardSize 固定的那一档），高等于宽的 9/16
   （CardSize.HeightFor），解码宽度和绘制宽度不会对不上。
 -->
 <UserControl

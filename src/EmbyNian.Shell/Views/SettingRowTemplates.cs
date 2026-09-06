@@ -34,13 +34,16 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
 
     public DataTemplate? Font { get; set; }
 
+    /// <summary>一个 HTML 颜色代码，色块点开是拾色器，见 <see cref="SettingColorRow"/>。</summary>
+    public DataTemplate? Color { get; set; }
+
+    /// <summary>字幕卡顶上那条「字幕示例」预览，只画不写，见 <see cref="SettingSubtitlePreviewRow"/>。</summary>
+    public DataTemplate? Preview { get; set; }
+
     public DataTemplate? Theme { get; set; }
 
     /// <summary>一行读数加一颗可有可无的按钮，见 <see cref="SettingFactRow"/>。</summary>
     public DataTemplate? Fact { get; set; }
-
-    /// <summary>一行说明加一颗按下去真会做事的按钮，见 <see cref="SettingActionRow"/>。</summary>
-    public DataTemplate? Action { get; set; }
 
     /// <summary>主页版面那张可拖拽、带勾选的表，见 <see cref="SettingHomeLayoutRow"/>。</summary>
     public DataTemplate? HomeLayout { get; set; }
@@ -52,13 +55,14 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
         SettingThemeRow => Theme,
         SettingHomeLayoutRow => HomeLayout,
         SettingFactRow => Fact,
-        SettingActionRow => Action,
         SettingChoiceRow => Choice,
         SettingToggleGroupRow => ToggleGroup,
         SettingToggleRow => Toggle,
         SettingSliderRow => Slider,
         SettingNumberRow => Number,
         SettingFontRow => Font,
+        SettingColorRow => Color,
+        SettingSubtitlePreviewRow => Preview,
         SettingTextRow => Text,
         _ => null
     };

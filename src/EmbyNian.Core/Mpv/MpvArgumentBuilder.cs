@@ -61,8 +61,8 @@ public static class MpvArgumentBuilder
         if (!string.IsNullOrWhiteSpace(request.AudioLanguage)) arguments.Add($"--alang={request.AudioLanguage}");
         if (!string.IsNullOrWhiteSpace(request.SubtitleLanguage)) arguments.Add($"--slang={request.SubtitleLanguage}");
 
-        if (!string.IsNullOrWhiteSpace(request.SubtitleFont)) arguments.Add($"--sub-font={request.SubtitleFont}");
-
+        // 字幕字体 is not here: it travels in PlayerOptions with the other ten 字幕外观 options, so that
+        // 「谁发 sub-font」 has one answer (MpvOutputOptions.SubtitleAppearance).
         foreach (var subtitle in request.ExternalSubtitles)
             arguments.Add($"--sub-file={subtitle.AbsoluteUri}");
 

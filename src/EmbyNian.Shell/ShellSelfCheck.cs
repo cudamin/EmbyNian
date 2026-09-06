@@ -4,6 +4,7 @@ using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Views;
 using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace EmbyNian.Shell;
@@ -85,6 +86,12 @@ internal static partial class ShellSelfCheck
     private static (bool Ok, string Detail)? _commands;
 
     /// <summary>
+    /// 右栏那一列继续观看是「点一下翻一屏」而不是「拖滚动条」，见 <see cref="HomePage.RailPageRead"/>。跟着
+    /// stage 0 一起快照，理由同上面几条：框里一次只有一页。这台账号继续观看空着时是「跳过」那一档。
+    /// </summary>
+    private static (bool? Ok, string Detail)? _railPage;
+
+    /// <summary>
     /// 按一张卡片会不会让整页先滑一段 —— 「点击主页继续观看、媒体库、最近添加的封面之后会先跳转到页面下方，
     /// 然后才会进入页面」。跟着 stage 0 一起快照，理由和上面几条一样：框里一次只有一页。空的主页上是 null。
     /// </summary>
@@ -125,7 +132,6 @@ internal static partial class ShellSelfCheck
         IReadOnlyList<string> FilterLabels,
         bool FilterTemplates,
         string Filters,
-        int PosterSetting,
         int CardWidth,
         double CellWidth,
         double CellHeight,
@@ -237,6 +243,19 @@ internal static partial class ShellSelfCheck
 
     /// <inheritdoc cref="_fileOpened"/>
     private static bool _infoScrolled;
+
+    /// <summary>
+    /// 「从播放回来那一趟已经走过了」。停止播放走的是三步（<c>PlayerViewModel</c> 先喊 <c>RefreshRequested</c>，
+    /// 外壳照着重新导航一遍，再落 <c>LeavePlayer</c> 把导航外壳放回来），所以那一次重新导航发生在外壳还收着的时候
+    /// —— 这一步就走那三步，一个字节都不放。见 <see cref="ReturnFromPlayer"/>。
+    /// </summary>
+    private static bool _returned;
+
+    /// <summary>
+    /// 那一趟回来之后这一页的样子（<c>DetailPage.ReturnRead</c>）：那一带集还在规矩说的那一层上、页面没有自己
+    /// 滚下去。和别的快照一样存成字段 —— 报告写出来的时候框里早就是另一页了。
+    /// </summary>
+    private static (string Type, bool Ok, string Detail)? _fileReturn;
 
     /// <summary>
     /// How many ticks have looked at 媒体信息 and found rows still missing. <see cref="ShowInfo"/>'s scroll is
@@ -579,19 +598,20 @@ internal static partial class ShellSelfCheck
         // The detail page has two round trips of its own — the item by id, then that season's episodes —
         // and this stage is four ticks long besides, one of them a second navigation with two more round
         // trips behind it: the show's page, then one episode's. Hence twice a library's budget.
-        2 => 60,
-        3 => 74,
+        // 又多一拍：从播放回来那一趟（ReturnFromPlayer）重新导航一次，后面还跟着同样的两趟往返。
+        2 => 72,
+        3 => 86,
 
         // The diagnostics page reads in-process state synchronously, so it is settled the moment it is
         // navigated to; this budget only has to cover the navigation itself.
-        4 => 86,
+        4 => 98,
 
         // The settings page is settled just as fast, but its stage is a walk rather than a look: every card,
         // one per tick, and then 需求 8's console — the one thing in this stage that waits on the network. That
         // page has a 15-second watchdog of its own, so this budget only has to be wide enough that it, and not
         // this, is what ends the wait: a deadline reached mid-console would report a console that had merely not
         // answered yet as a broken one.
-        _ => 140
+        _ => 152
     };
 
     /// <summary>
@@ -612,6 +632,7 @@ internal static partial class ShellSelfCheck
                 _home ??= ReadHome(shell);
                 _cards ??= ReadCards(shell);
                 _menu ??= (shell.Pages.Content as HomePage)?.MenuRead();
+                _railPage ??= (shell.Pages.Content as HomePage)?.RailPageRead();
                 _ink ??= ReadInk(shell, window);
 
                 // 多一拍：这一拍把焦点按到第一张卡上，下一拍才量这一页挪没挪。三个读数在按之前拿，所以焦点
@@ -662,6 +683,16 @@ internal static partial class ShellSelfCheck
                 if (ReloadDetail(shell)) return true;
 
                 _detailPreview ??= (shell.Pages.Content as DetailPage)?.PreviewRead();
+
+                // 再一步：从播放回来那一趟（见 ReturnFromPlayer）。排在最后 —— 它会把框里这一页整个换掉，上面
+                // 每一条读数都得先拿到手。
+                if (ReturnFromPlayer(shell)) return true;
+
+                if (_fileReturn is null && shell.Pages.Content is DetailPage back)
+                {
+                    var (returnOk, returnRead) = back.ReturnRead();
+                    _fileReturn = (back.ViewModel.ItemType, returnOk, returnRead);
+                }
             }
             else if (_stage == 3) _servers = ReadServers(shell);
             else if (_stage == 4) _diagnostics = ReadDiagnostics(shell);
@@ -927,6 +958,38 @@ internal static partial class ShellSelfCheck
         _fileTitleLink = (page.ViewModel.ItemType, linkOk, linkRead);
 
         page.ScrollToInfo();
+        return true;
+    }
+
+    /// <summary>
+    /// 走一遍「从播放回来」那一趟 —— 「点击开始播放后点击左上方的返回，集列表会跑到下方去」。
+    /// <para>
+    /// 停止播放之后外壳按顺序做三件事：收起导航外壳（播放开始那一下做的）、照着当前页面重新导航一遍
+    /// （<c>PlayerViewModel</c> 停下来先喊 <c>RefreshRequested</c>，因为服务器上的已看和断点都刚变过）、再把导航
+    /// 外壳放回来（<c>LeavePlayer</c>）。要紧的是次序：那一次重新导航是在外壳还收着的时候发生的，页面于是在一棵
+    /// 量不到尺寸的树上走完 <c>OnNavigatedTo</c> —— 这正是它和「点一张卡片进来」唯一的不同。
+    /// </para>
+    /// <para>
+    /// 不放片子：真放一次会往用户自己的服务器上写已看和断点（见 <c>CLAUDE.md</c>「验证时不要真实播放」），而这三步
+    /// 一个都不碰播放。播放层自己摆上来并接过焦点那两句照旧走 —— 那是 <c>EnterPlayer</c> 做的，而收起它的时候框架
+    /// 要把焦点挪给别人，挪到哪儿就把哪儿滚进视口，也就是用户看见的另一半（页面自己滚下去）。读数在下一拍取
+    /// （<see cref="_fileReturn"/>）：重新导航之后那一页要重新读一趟条目。
+    /// </para>
+    /// </summary>
+    private static bool ReturnFromPlayer(ShellPage shell)
+    {
+        if (_returned || shell.Pages.Content is not DetailPage) return false;
+
+        _returned = true;
+
+        shell.PlayerRoot.Visibility = Visibility.Visible;
+        shell.PlayerRoot.Focus(FocusState.Programmatic);
+        shell.ShowPlayer(true);
+
+        shell.RefreshActive();
+
+        shell.PlayerRoot.Visibility = Visibility.Collapsed;
+        shell.ShowPlayer(false);
         return true;
     }
 

@@ -279,6 +279,38 @@ public sealed class PlaybackService(
         }
     }
 
+    /// <summary>
+    /// 字幕外观改了，推给正在播的那一部片子。没在播就什么都不做。
+    /// <para>
+    /// <b>每一个选项都显式发一遍，包括那几行「不设置」的。</b> 起播那条路上「不设置」等于什么都不发，让
+    /// mpv 自己的默认值站住；而在一个已经跑起来的播放器上，「什么都不发」等于「沿用我刚才发过的那个值」——
+    /// 也就是把一行从「亮黄」改回「不设置」，屏上还是亮黄。所以这里把
+    /// <see cref="MpvOutputOptions.SubtitleStyleOptions"/> 走一遍，设置里不再指定的那几个就问 mpv 要它自己
+    /// 的默认值，再发回去。问 mpv 而不是在代码里抄一份默认值表：那张表这个项目已经抄错过一次
+    /// （字号写的 55，实际是 38）。
+    /// </para>
+    /// <para>
+    /// 字幕编码和图形字幕拉伸不在这条路上：编码是解码字幕那一刻用的，改了要重载字幕才算；拉伸要看片源的
+    /// 画幅，那是起播时才知道的事。这两行只能下次播放生效，设置页上就那么写。
+    /// </para>
+    /// </summary>
+    public async Task ApplySubtitleStyleAsync()
+    {
+        if (_current is null) return;
+
+        var wanted = MpvOutputOptions.SubtitleAppearance(settings.Playback)
+            .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
+
+        foreach (var name in MpvOutputOptions.SubtitleStyleOptions)
+        {
+            var value = wanted.TryGetValue(name, out var chosen)
+                ? chosen
+                : await GetTextAsync($"option-info/{name}/default-value").ConfigureAwait(false);
+
+            if (!string.IsNullOrEmpty(value)) await SetPropertyAsync(name, value).ConfigureAwait(false);
+        }
+    }
+
     public async Task<IReadOnlyList<MpvTrack>> GetTracksAsync()
     {
         var handle = _current;

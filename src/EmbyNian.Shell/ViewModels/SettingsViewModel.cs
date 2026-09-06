@@ -1,6 +1,8 @@
 using EmbyNian.Infrastructure;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Configuration;
 using EmbyNian.Mpv;
 using EmbyNian.Playback;
@@ -97,10 +99,12 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingFontRow? _subtitleFont;
     private AudioDeviceCatalogue? _audioDevices;
     private SettingChoiceRow? _audioDevice;
+    private SettingSubtitlePreviewRow? _subtitlePreview;
+    private Func<Task>? _pushSubtitleStyle;
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
     private static readonly string[] CardCategories =
-        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于", "恢复默认"];
+        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -181,13 +185,20 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// composition root — a page that edits settings has no business being able to reach the session or the
     /// player.
     /// </summary>
+    /// <param name="pushSubtitleStyle">
+    /// 「把 字幕外观 推给正在播的那部片子」, handed over as one method rather than as the player it belongs to —
+    /// which is how this page gains that one ability without gaining 播放 / 停止 / 跳转 along with it, and how
+    /// the sentence above stays true. <see cref="PlaybackService.ApplySubtitleStyleAsync"/> is what arrives
+    /// here; it does nothing when nothing is playing, so this page never has to ask.
+    /// </param>
     internal void Attach(
         ISettingsService settings,
         ShaderStaging shaders,
         FontLibrary fonts,
         AppPaths paths,
         Platform.ISystemLauncher launcher,
-        AudioDeviceCatalogue audioDevices)
+        AudioDeviceCatalogue audioDevices,
+        Func<Task> pushSubtitleStyle)
     {
         _settings = settings;
         _shaders = shaders;
@@ -195,6 +206,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         _paths = paths;
         _launcher = launcher;
         _audioDevices = audioDevices;
+        _pushSubtitleStyle = pushSubtitleStyle;
     }
 
     /// <summary>
@@ -229,7 +241,6 @@ public sealed partial class SettingsViewModel : PageViewModel
         Sections.Add(HomeCard());
         Sections.Add(InterfaceCard());
         Sections.Add(AboutCard());
-        Sections.Add(ResetCard());
 
         ShowCategory(SelectedCategory);
         IsReady = true;
@@ -326,7 +337,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     // ── Cards ────────────────────────────────────────────────────────────────────────────────────────
 
     private SettingSection PlayerCard() =>
-        new("播放器", "播放器", "选择内置播放器或外部 mpv。外部模式需要填写可执行文件路径。",
+        new("播放器", "播放器", "用程序里内置的播放器播，还是调起独立的 mpv.exe 来播。",
         [
             Choice("播放后端", Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value),
 
@@ -345,7 +356,7 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "只有「外部 mpv.exe」这个后端要它。走这个后端时，访问令牌会出现在 mpv 的进程命令行上（任务管理器、"
                     + "进程工具、崩溃转储都读得到）；内置播放器不经过命令行，没有这件事。"),
 
-            Toggle("启用 IPC 进度通道", "关闭后服务器无法获得精确播放位置", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value)
+            Toggle("启用 IPC 进度通道", "关掉之后服务器就拿不到精确的播放位置了", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value)
         ]);
 
     private SettingSection PlaybackCard()
@@ -353,11 +364,12 @@ public sealed partial class SettingsViewModel : PageViewModel
         var playback = Settings.Playback;
         return new SettingSection("播放行为", "播放行为", "断点续播、进度上报、片头片尾和音轨选择。",
         [
-            Toggle("向服务器汇报播放进度", "关闭后 Emby 不会记录进度", () => playback.ReportProgressToServer, value => playback.ReportProgressToServer = value),
-            Toggle("从服务器保存的位置继续", "关闭后每次从头开始", () => playback.ResumeFromSavedPosition, value => playback.ResumeFromSavedPosition = value),
-            Toggle("询问后再恢复播放", "关闭后直接跳到保存位置", () => playback.AskBeforeResuming, value => playback.AskBeforeResuming = value),
-            Toggle("自动播放下一集", "本集正常结束后播放下一集，支持跨季", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
-            Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value),
+            Toggle("向服务器汇报播放进度", "关掉后 Emby 就不记你看过的进度了", () => playback.ReportProgressToServer, value => playback.ReportProgressToServer = value),
+            Toggle("从服务器保存的位置继续", "关掉后每次都从片头放起", () => playback.ResumeFromSavedPosition, value => playback.ResumeFromSavedPosition = value),
+            Toggle("询问后再恢复播放", "关掉后不问，直接从上次停的地方接着放", () => playback.AskBeforeResuming, value => playback.AskBeforeResuming = value),
+            Toggle("自动播放下一集", "一集放完自动接下一集，跨季也接着放", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
+            Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
+                "放到这个百分比以上，这一条就算看过"),
             Number("快进跨度（秒）", 1, 600, () => playback.SeekForwardSeconds, value => playback.SeekForwardSeconds = value),
             Number("快退跨度（秒）", 1, 600, () => playback.SeekBackwardSeconds, value => playback.SeekBackwardSeconds = value),
             Number("续播自动快退（秒）", 0, 120, () => playback.ResumeRewindSeconds, value => playback.ResumeRewindSeconds = value),
@@ -375,35 +387,124 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingSection SubtitleCard()
     {
         var playback = Settings.Playback;
-        return new SettingSection("字幕", "字幕", "语言优先级和字幕外观。语言按逗号分隔，越靠前越优先。",
+
+        // 「参考图2新增字幕外观功能」（2026-09-06）：卡顶这条「字幕示例」，照下面外观各行的当前值实时画。
+        // 它是行列表的第一行，重画的线只有 Live<T> 那一条 —— 外观每一行写完设置都从那儿过，所以预览
+        // 不可能停在旧样子上。
+        var preview = new SettingSubtitlePreviewRow("字幕示例",
+            "照下面那些外观行此刻的值画出的大概样子：字体、字号、加粗、颜色、描边、阴影、底板。"
+                + "不是播放画面，大小是示意 —— 实际多大跟片源分辨率走。", playback);
+        _subtitlePreview = preview;
+
+        // 底板颜色 states which of its two jobs it is doing, so the row above it cannot be a lie: mpv
+        // shares one colour between the plate and the drop shadow, and 字幕底板 is what decides which of
+        // them gets painted. Same shape as 视频输出's 视频同步 row — one writer, and the row states the
+        // value in force — and for the same reason: this pair drew nothing at all for as long as nobody
+        // sent the style option, and 「界面在骗人」 is the bug that costs the most to find.
+        SettingColorRow? backColor = null;
+        backColor = ColorRow("底板颜色",
+            () => playback.SubtitleBackColor, Live<string>(value => playback.SubtitleBackColor = value),
+            "sub-back-color", BackColorNote(playback));
+
+        return new SettingSection("字幕", "字幕", "语言优先级和字幕外观。语言按逗号分隔，越靠前越优先，"
+            + "「其他字幕」代表任何别的语言的字幕、放在最后可兜底。"
+            + "外观这一组改完立刻作用到正在播的片子；语言、显示模式和字幕编码下次播放生效。",
         [
-            Languages("字幕语言优先级", "简体中文, 中文, 繁体中文", () => playback.SubtitleLanguages, value => playback.SubtitleLanguages = value),
+            preview,
+
+            Languages("字幕语言优先级", "简体中文, 中文", () => playback.SubtitleLanguages, value => playback.SubtitleLanguages = value,
+                "「其他字幕」是一个预设的名字，代表任何别的语言的字幕 —— 填在最后就是「前面都不匹配时，有一条别的语言的总比没有好」。"
+                    + "下次播放生效"),
             Choice("显示模式", SubtitleModes, () => playback.SubtitleMode, value => playback.SubtitleMode = value),
-            Toggle("没有匹配语言时使用默认字幕", "文件只有其他语言时仍显示默认字幕", () => playback.SubtitleFallbackToDefault, value => playback.SubtitleFallbackToDefault = value),
-            Font("字体", "列出这台机器装的所有字体，可搜索；mpv 认的是字体族名，不是文件路径",
-                () => playback.SubtitleFontFamily, value => playback.SubtitleFontFamily = value, "sub-font"),
-            Number("字号", 0, 160, () => playback.SubtitleFontSize, value => playback.SubtitleFontSize = value,
-                "0 表示不指定，由 mpv 自己决定；要指定的话最小 16", null, "sub-font-size"),
-            Toggle("字幕加粗", "提高复杂画面上的可读性", () => playback.SubtitleBold, value => playback.SubtitleBold = value,
+            Toggle("没有匹配语言时使用默认字幕", "按优先级挑不到一条字幕时，就用文件自带的默认那条", () => playback.SubtitleFallbackToDefault, value => playback.SubtitleFallbackToDefault = value),
+
+            // 这一行管着它下面那一整组。放在这儿而不是外观末尾：番剧和压制组的内封字幕大量是 ASS，
+            // 而 mpv 默认让 ASS 自己的样式说话 —— 也就是说下面九行对那些文件一个字都改不动。
+            Mpv("外观应用范围", MpvOutputOptions.SubtitleStyleScopes,
+                () => playback.SubtitleAssOverride, Live<string>(value => playback.SubtitleAssOverride = value),
+                "sub-ass-override",
+                "ASS/SSA 字幕自带字体和颜色，默认由它自己说了算，下面这些外观只对纯文本字幕（srt/vtt）生效。"
+                    + "蓝光原盘那种图形字幕（PGS/VOBSUB）是图片，两种选法都改不动它"),
+
+            Font("字体", "列出这台机器装的字体和程序自带的字体，可搜索；mpv 认的是字体族名，不是文件路径",
+                () => playback.SubtitleFontFamily, Live<string>(value => playback.SubtitleFontFamily = value), "sub-font"),
+
+            // 字号那一行原本能存 0（「不指定，mpv 自己是 38」），滑块没有「不指定」这个状态，所以装值时把 0
+            // 落到 38 上 —— 那是同一个大小换了个写法；拖一下就把 38 写实了（见 UnitSlider 那条注释，同一件事）。
+            Slider("字号", PlaybackSettings.MinimumSubtitleFontSize, PlaybackSettings.MaximumSubtitleFontSize, 1,
+                () => playback.SubtitleFontSize > 0 ? playback.SubtitleFontSize : SubtitlePreviewPlan.MpvDefaultFontSize,
+                Live<double>(value => playback.SubtitleFontSize = PlaybackSettings.ClampFontSize((int)value)),
+                "字幕文字的大小，出厂 50；mpv 自己是 38", "sub-font-size"),
+            Slider("字幕缩放（%）", PlaybackSettings.MinimumSubtitleScale, PlaybackSettings.MaximumSubtitleScale, 5,
+                () => playback.SubtitleScalePercent, Live<double>(value => playback.SubtitleScalePercent = (int)value),
+                "在字号之上再乘一次。ASS/SSA 字幕不用「强制」也认这一项，是唯一能把它们调大的旋钮。"
+                    + "出厂默认 100，就是「不缩放」；想回去就拖回 100", "sub-scale"),
+
+            // 粗细做不成滑块：libmpv 的选项表整个探过一遍（artifacts/sub-probe/weight-probe.ps1，2026-09-06），
+            // 字重类只有 sub-bold 一个 yes/no 开关，sub-font-weight 根本不存在 —— 滑块底下没有连续的东西可拉，
+            // 硬做成滑块就是一个只有两档的滑块，不如开关诚实。要改成滑块形状的话是一句话的事，等他点头。
+            Toggle("字幕加粗", "只有常规和加粗两档 —— mpv 没有更细的字重可调", () => playback.SubtitleBold, Live<bool>(value => playback.SubtitleBold = value),
                 "sub-bold"),
-            Mpv("文字颜色", MpvOutputOptions.SubtitleColors, () => playback.SubtitleColor, value => playback.SubtitleColor = value,
-                "sub-color"),
-            Mpv("描边大小", MpvOutputOptions.SubtitleBorders, () => playback.SubtitleBorderSize, value => playback.SubtitleBorderSize = value,
-                "sub-border-size"),
-            Mpv("描边颜色", MpvOutputOptions.SubtitleBorderColors, () => playback.SubtitleBorderColor, value => playback.SubtitleBorderColor = value,
-                "sub-border-color"),
-            Mpv("阴影", MpvOutputOptions.SubtitleShadows, () => playback.SubtitleShadowOffset, value => playback.SubtitleShadowOffset = value,
-                "sub-shadow-offset"),
-            Mpv("背景颜色", MpvOutputOptions.SubtitleBackColors, () => playback.SubtitleBackColor, value => playback.SubtitleBackColor = value,
-                "sub-back-color"),
-            Slider("背景透明度（%）", 0, 100, 5, () => playback.SubtitleBackOpacity, value => playback.SubtitleBackOpacity = value,
-                "上面那一行颜色的透明度，同一个选项", "sub-back-color"),
+            ColorRow("文字颜色", () => playback.SubtitleColor, Live<string>(value => playback.SubtitleColor = value), "sub-color",
+                "HTML 颜色代码（#RRGGBB），点色块从拾色器里挑，随便什么颜色都能给"),
+            UnitSlider("描边大小", SubtitlePreviewPlan.MpvDefaultBorderSize,
+                () => playback.SubtitleBorderSize, Live<string>(value => playback.SubtitleBorderSize = value),
+                "文字外那一圈边的宽度，拖到 0 就是没有描边。出厂 0.5，mpv 自己是 1.65", "sub-border-size"),
+            ColorRow("描边颜色", () => playback.SubtitleBorderColor, Live<string>(value => playback.SubtitleBorderColor = value), "sub-border-color"),
+            UnitSlider("阴影", 0,
+                () => playback.SubtitleShadowOffset, Live<string>(value => playback.SubtitleShadowOffset = value),
+                "文字右下那一道影子的偏移，拖到 0 就是没有阴影；出厂 0.5，mpv 默认不画。"
+                    + "影子的颜色跟着下面的「底板颜色」走 —— mpv 里这两个是同一个颜色", "sub-shadow-offset"),
+
+            Mpv("字幕底板", MpvOutputOptions.SubtitleBackStyles, () => playback.SubtitleBackStyle,
+                Live<string>(value =>
+                {
+                    playback.SubtitleBackStyle = value;
+
+                    // 这一项一变，下面那一行颜色画的是底板还是阴影就变了。页面没有整体刷新，只有因果关系
+                    // 明确的这一处自己去改那一行。annotate 一起带上，不然重述一次那一行末尾的
+                    // 「mpv：sub-back-color」就掉了。
+                    backColor!.Restate(Annotate(BackColorNote(playback), "sub-back-color")!);
+                }),
+                "sub-border-style", "亮画面上最管用的一项。关着的时候只有描边和阴影"),
+            backColor!,
+            Slider("底板不透明度（%）", 0, 100, 5, () => playback.SubtitleBackOpacity, Live<double>(value => playback.SubtitleBackOpacity = (int)value),
+                "上一行那个颜色的浓淡，拖到 100 就是完全不透明", "sub-back-color"),
+
             Mpv("字幕编码", MpvOutputOptions.SubtitleCodepages, () => playback.SubtitleCodepage, value => playback.SubtitleCodepage = value,
-                "sub-codepage"),
-            Toggle("拉伸图形字幕到画面", "宽屏 PGS/VOBSUB 字幕避免落到画面外", () => playback.StretchWideImageSubtitles, value => playback.StretchWideImageSubtitles = value,
+                "sub-codepage", "只对不是 UTF-8 的文本字幕有意义。选了具体编码就不再自动识别了，"
+                    + "所以简体那一档会把 Big5 的繁体字幕读成乱码。下次播放生效"),
+            Toggle("拉伸图形字幕到画面", "画面比 16:9 更宽的电影，把图形字幕（PGS/VOBSUB）拉伸到画面里，"
+                + "免得字幕落到画面外头去。下次播放生效", () => playback.StretchWideImageSubtitles, value => playback.StretchWideImageSubtitles = value,
                 "stretch-image-subs-to-screen")
         ]);
     }
+
+    /// <summary>
+    /// 底板颜色 那一行的说明，照 <see cref="PlaybackSettings.SubtitleBackStyle"/> 的当前值写：mpv 把底板和
+    /// 阴影用的是同一个颜色，所以这一行到底在给什么上色，只有上面那一行能回答。
+    /// </summary>
+    private static string BackColorNote(PlaybackSettings playback) =>
+        playback.SubtitleBackStyle.Length == 0
+            ? "现在给阴影上色 —— 上面那一行「字幕底板」关着，所以画不出底板"
+            : "现在给底板上色";
+
+    /// <summary>
+    /// 字幕外观那一组的写入口：写完设置，再推给正在播的那部片子，再喊卡顶那条「字幕示例」重画一遍。
+    /// <para>
+    /// 包一层而不是给十一行各挂一个 <c>after</c>：那几个行工厂里只有一半带 <c>after</c> 这个参数（Toggle、
+    /// Slider、Font 都没有），补齐参数是为一件小事改四个签名。这一层还顺手把「哪些行是外观」画在了一处 ——
+    /// 语言、显示模式、字幕编码和图形字幕拉伸没有从这儿过，因为它们本来就只能下次播放生效。预览也只从
+    /// 这儿跟：它照的是这张卡的外观，语言那些行动了它本来就不该动。
+    /// </para>
+    /// </summary>
+    private Action<T> Live<T>(Action<T> write) =>
+        value =>
+        {
+            write(value);
+            _subtitlePreview?.Refresh();
+            _ = _pushSubtitleStyle?.Invoke();
+        };
 
     private SettingSection VideoCard()
     {
@@ -434,7 +535,7 @@ public sealed partial class SettingsViewModel : PageViewModel
                 + "只对真的有黑边的片源出手；播放器右键菜单里可以对单部片子临时改",
                 () => video.FillWideSources, value => video.FillWideSources = value,
                 "panscan"),
-            Toggle("启用反交错", "仅对隔行片源有意义", () => video.Deinterlace, value => video.Deinterlace = value,
+            Toggle("启用反交错", "只对老电视那种隔行片源有意义，别的片源开了也没影响", () => video.Deinterlace, value => video.Deinterlace = value,
                 "deinterlace"),
             Toggle("启用插值",
                 "补偿刷新率不匹配造成的抖动：沿时间轴混合相邻两帧，不是电视上那种运动补偿。它必须靠显示同步才生效，"
@@ -463,8 +564,8 @@ public sealed partial class SettingsViewModel : PageViewModel
                     sync!.Restate(SyncNote(video));
                 },
                 "video-sync、interpolation"),
-            Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = value,
-                "0 表示使用 mpv 默认值", "demuxer-max-bytes"),
+            Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = (int)value,
+                "播网络片源时先往前攒多少数据，卡顿就调大；0 是 mpv 自己的默认", "demuxer-max-bytes"),
             Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value,
                 "dither、dither-depth", "色深抖动，和上面的插值无关：落到显示器位深时撒一层噪声，免得渐变上出现色带"),
             Mpv("去色带", MpvOutputOptions.DebandModes, () => video.Deband, value => video.Deband = value,
@@ -550,7 +651,8 @@ public sealed partial class SettingsViewModel : PageViewModel
                 + "只在下混由 mpv 完成时有效，这台机器上量过确实如此",
                 () => audio.NormalizeDownmix, value => audio.NormalizeDownmix = value,
                 "audio-normalize-downmix"),
-            Toggle("音频独占模式", "播放时占用声卡，避免系统混音", () => audio.ExclusiveMode, value => audio.ExclusiveMode = value,
+            Toggle("音频独占模式", "播放时把声卡占下来、绕过系统混音，声音更原样；代价是放片的时候别的程序出不了声",
+                () => audio.ExclusiveMode, value => audio.ExclusiveMode = value,
                 "audio-exclusive"),
             Number("全局音频延迟（毫秒）", -5000, 5000, () => audio.DelayMilliseconds, value => audio.DelayMilliseconds = value,
                 null, null, "audio-delay"),
@@ -581,6 +683,14 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// chain is computed (放大倍数 × 片源类型 × 显卡档) and what is left here is the three answers that are
     /// genuinely the user's — how much GPU there is, whether to pin one chain by hand, and whether animated
     /// content should use the animated half of the table at all.
+    /// <para>
+    /// <b>画质预设 stands first, above 启用着色器 — the user's call, 2026-09-05</b>（「把画质预设移到着色器开关
+    /// 上面，着色器开关不影响画质预设」）. The two are independent switches: the preset is handed to mpv as a
+    /// <c>profile=</c> on every launch whether or not a chain is running (<c>MpvOutputOptions.Build</c>), and
+    /// nothing in this card writes the other one's value. With 着色器 now off out of the box
+    /// (<c>ShaderAutomationSettings.Enabled</c>) the preset is also the only 画质 switch a fresh install has,
+    /// which is the other reason it goes first.
+    /// </para>
     /// </summary>
     private SettingSection ShaderCard()
     {
@@ -604,16 +714,19 @@ public sealed partial class SettingsViewModel : PageViewModel
             .. _shaders!.Catalog.Select(item => (Label: item.DisplayName, Value: item.Id))
         ];
 
-        return new SettingSection("着色器", "画质与着色器", "按放大倍数、片源类型和显卡档自动挑一条着色器链。",
+        return new SettingSection("着色器", "画质与着色器", "画质预设一直生效；着色器是另一件事，开着的时候按放大倍数、片源类型和显卡档自动挑一条链。",
         [
-            Toggle("启用着色器", "关掉之后缩放完全交给 mpv 自己", () => shaders.Enabled, value => shaders.Enabled = value,
+            Mpv("画质预设", MpvOutputOptions.QualityPresets, () => video.QualityPreset, value => video.QualityPreset = value,
+                "profile", "fast 省算力、high-quality 更细腻，两个都是 mpv 自己内置的。这一项和下面的着色器开关互不影响："
+                    + "开关开着关着，这一档都照样交给 mpv。唯一重叠的是缩放器那三项 —— 着色器链本身就是一套缩放器，"
+                    + "开着链的时候那三项归链，预设的其余部分照旧生效"),
+            Toggle("启用着色器", "装机默认关闭；关掉之后缩放完全交给 mpv 自己，也就是上面那一档画质预设",
+                () => shaders.Enabled, value => shaders.Enabled = value,
                 "glsl-shaders"),
             Choice("显卡档位", gpuTiers, () => shaders.Gpu, value => shaders.Gpu = value,
                 "决定每一档用多重的链，和片源无关。装机默认是低档"),
             Choice("手动指定档位", chains, () => shaders.ManualGroup, value => shaders.ManualGroup = value,
                 "留在「自动」就按放大倍数挑；想前后对比时在这里钉住一条。每一档具体挂了哪几个着色器，在播放器的 更多 → 着色器 菜单里逐行写着"),
-            Mpv("画质预设", MpvOutputOptions.QualityPresets, () => video.QualityPreset, value => video.QualityPreset = value,
-                "profile", "fast 省算力、high-quality 更细腻。两个都是 mpv 自己内置的；开着着色器时缩放器归档位链，预设只剩它没碰的那几项"),
             Toggle("自动识别动画", "按 Emby 类型和标签关键词匹配，命中就走动画那半张表", () => shaders.AutoAnimeProfile, value => shaders.AutoAnimeProfile = value),
             List("动画关键词", "动画, 动漫, Anime", () => shaders.AnimeKeywords, value => shaders.AnimeKeywords = value),
             Toggle("老片源修复", "片源高度不超过 576 线（DVD 那一代）时，链的最前面加去色带；中高档还加轻度降噪",
@@ -638,9 +751,10 @@ public sealed partial class SettingsViewModel : PageViewModel
         var plan = Emby.HomeLayout.Plan(ui.HomeRows, null);
 
         HomeRows = new SettingHomeLayoutRow(
-            "主页上排哪几排",
-            "按住一行往上下拖、或者按右边那两颗箭头决定次序，取消勾选就不显示。排在第一的那一排压在主页顶上那张大图"
-                + "上。媒体库那几排装的是那个库最近添加的内容。",
+            "主页上放哪几排",
+            "按住一行往上下拖、或者按右边那两颗箭头决定次序，取消勾选就不显示。继续观看不排在这几排里 —— 它是主页"
+                + "第一屏右边那一栏竖着的一列，勾掉它那一栏就没有、大图铺满整个第一屏，但拖它的位置不会有变化。"
+                + "媒体库那几排装的是那个库最近添加的内容。",
             plan.Select(row => new HomeRowChoice(row.Key, row.Title, row.Visible)),
             rows =>
             {
@@ -655,8 +769,24 @@ public sealed partial class SettingsViewModel : PageViewModel
                 ShellPrefs.Apply(ui);
             });
 
-        return new SettingSection("主页", "主页", "主页上那几排的次序和显示与否，包括每个媒体库自己那一排。",
+        return new SettingSection("主页", "主页", "顶上那张轮播大图，以及主页上那几排的次序和显示与否，包括每个"
+            + "媒体库自己那一排。",
         [
+            // 「在设置中新增关闭轮播图的功能」（用户的话，2026-09-05）。摆在拖拽表上面，因为它管的是整个第一屏：
+            // 关掉之后顶上那张大图和它右边那一栏继续观看一起没有，那张表里的每一排都变成横着的一排。
+            // 改完当场喊一声（ShellPrefs），主页那一头照新的重排 —— 和那张表走同一条路。
+            Toggle("显示主页轮播大图",
+                "主页最上面那张会自己走的大图。开着的时候第一屏是并排两栏：左边大图、右边一列继续观看；"
+                    + "关掉之后这两块一起没有，继续观看回到下面横着排的那一叠里、按下面那张表上的位置站着，"
+                    + "整页就是一叠普通的货架。大图上放哪几个条目不用选：有继续观看就用继续观看，不够时由最近"
+                    + "添加补齐。",
+                () => ui.ShowHomeBanner,
+                value =>
+                {
+                    ui.ShowHomeBanner = value;
+                    ShellPrefs.Apply(ui);
+                }),
+
             HomeRows
         ]);
     }
@@ -746,33 +876,24 @@ public sealed partial class SettingsViewModel : PageViewModel
                 + "只是下次看到那些封面时要重新下载一遍。",
             after: () => ShellPrefs.Apply(ui));
 
-        return new SettingSection("界面", "界面", "配色主题、窗口和侧边栏、媒体库分页、海报尺寸和图片缓存上限。",
+        return new SettingSection("界面", "界面", "配色主题、媒体库分页和图片缓存上限。",
         [
             Themes,
 
-            // 这两个和上面那几块色板一样：写进设置之后当场喊一声（ShellPrefs），主窗口和外壳各自跟上。设置页
-            // 是另一个窗口，手上没有主窗口的 HWND 也没有那一页，所以只能这么喊。
-            Toggle("锁定窗口比例大小",
-                $"拖窗口边沿时侧边栏右边那一片保持 {Emby.HomeCarousel.WindowAspectLabel}，主页那张轮播图正好铺满第一屏、不被裁切",
-                () => ui.LockWindowShape,
-                value =>
-                {
-                    ui.LockWindowShape = value;
-                    ShellPrefs.Apply(ui);
-                }),
-            Toggle("默认收起侧边栏", "启动时侧边栏只留一条窄图标栏",
-                () => ui.CollapseSidebar,
-                value =>
-                {
-                    ui.CollapseSidebar = value;
-                    ShellPrefs.Apply(ui);
-                }),
+            // 「锁定窗口比例大小」原来就在这里，2026-09-05 按用户的话整条删掉了（「删除设置中锁定比例的功能」）
+            // —— 浏览时的窗口从此随便拉，放片子时形状照旧跟着画面走。紧跟着那一行是「默认收起侧边栏」，
+            // 2026-09-06 跟着侧边栏本身一起删掉了（「删掉侧边栏」）：媒体库现在从窗口顶上那条标签栏进，没有栏
+            // 可收。那一行原来还负责「改完当场生效」这条线（ShellPrefs），而那条线还在 —— 图片缓存上限和主页
+            // 版面照旧走它。
 
             // Both ranges match what SettingsMigration.Normalize clamps these to. They have to: a box narrower
             // than its setting shows a clamped number the file does not contain and writes it back on the next
             // touch, and a box wider than its setting lets a value be typed that the save then silently moves.
-            Number("每页条目数", 20, 500, () => ui.PageSize, value => ui.PageSize = value),
-            Number("海报宽度（像素）", 120, 340, () => ui.PosterWidth, value => ui.PosterWidth = value),
+            Number("每页条目数", 20, 500, () => ui.PageSize, value => ui.PageSize = value,
+                "媒体库一页列多少个，翻页按这个数走"),
+
+            // 「海报宽度（像素）」原来在这一行下面，2026-09-05 按用户的话整行删掉了（「删掉设置中的海报宽度」）
+            // —— 卡片回到 CardSize 固定的默认尺寸，AppSettings.UiSettings 里那句注释记着这件事。
 
             // 「新增可在设置中调整图片缓存大小的功能」. Built above so the self-check can drive it; see ImageBudget.
             ImageBudget,
@@ -834,46 +955,30 @@ public sealed partial class SettingsViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 恢复默认设置，一张卡一行。
+    /// 页头右上角那颗「恢复默认」。按下去走 <see cref="RestoreDefaultsAsync"/>：先问一次，确认后把设置改回
+    /// 装机值。按钮上的字和指针停上去那句说明在 <c>Strings\zh-Hans\Resources.resw</c>
+    /// （SettingsPage_ResetButton）—— 卡删了之后，按下之前屏上把「服务器和账号不动」说清楚的地方就是
+    /// 那句说明，所以自检盯着它（见 ShellSelfCheck.Settings 的那一关）。
     /// <para>
-    /// <b>为一行开一张卡，理由是「够不着」。</b> 它本来是「关于」卡的第八行 —— 而那张卡在设置窗口里第七行就到底了，
-    /// 屏上根本看不见这一行（拍出来只剩「截图目录」露半行）。设置页是能滚的，所以功能不算缺；可整页最难找到的位置
-    /// 放着用户点名要的那一件事，跟没做差不多。**一张只有一行的卡永远不会掉到折线下面**，而左边那份名单里多一个
-    /// 「恢复默认」，正是找它的人会去看的地方。
+    /// <b>它原先自己占一张卡</b>：「恢复默认」分类下唯一一行，为一行开一张卡的理由是「够不着」—— 它最先是
+    /// 「关于」卡的第八行，那张卡在设置窗口里第七行就到底，屏上根本看不见。2026-09-06 按他一句
+    /// 「恢复默认按钮移到右上角，下方的恢复默认页面删除」搬进页头（PageSlate 的 Trailing 格），卡和左边名单
+    /// 里的分类一起删了 —— 页头是整页最靠上的位置，比任何一张卡都够得着。
     /// </para>
     /// <para>
-    /// 排在「关于」后面：这两张卡讲的都不是某一组设置，而是这份程序自己。左边名单本来也不以「关于」收尾 ——
-    /// 后面还跟着三个内嵌页面。
-    /// </para>
-    /// <para>
-    /// 说明里把两件事都写清 —— 哪些回默认、哪些不动 —— 而不是只写前一半：这是整页唯一一件不可逆的操作，而按下它的
-    /// 人最想知道的是「会不会把我的服务器和账号也弄掉」。按下之后还要再问一次（<see cref="RestoreDefaultsAsync"/>）。
-    /// </para>
-    /// <para>
-    /// 牌子、这一行的标签、按钮上那几个字刻意各说一句话，而不是三处都写「恢复默认设置」—— 那样一张卡上同一句话
-    /// 排三遍，读的人得挨个看完才知道它们是同一件事。牌子说这是哪儿，标签说要做什么，按钮上是那个动词。
+    /// 命令是异步的，于是「问一次」这件事有地方等：<c>AsyncRelayCommand</c> 在跑的时候自己把按钮置灰，
+    /// 所以连按两下不会叠出两个对话框 —— WinUI 同时只允许一个，第二个直接抛。
     /// </para>
     /// </summary>
-    private SettingSection ResetCard() =>
-        new("恢复默认", "恢复默认设置", "只影响设置本身。服务器、账号和登录状态一律不动。",
-        [
-            new SettingActionRow(
-                "把所有设置还原为装机时的默认值",
-                "会改回装机时的样子：播放器、播放行为、字幕、视频输出、音频输出、画质与着色器、主页版面，"
-                    + "以及界面那一组（主题、每页条目数、海报宽度、图片缓存上限、评分来源、窗口比例锁、侧边栏）。\n"
-                    + "不会动：服务器和账号（不会退出登录，密码和令牌都还在）、窗口上次的位置和大小、"
-                    + "各媒体库各自的排序筛选和视图、播放器上次的音量。\n"
-                    + "按下之后会先问一次；确认之后这一步不能撤销。",
-                "恢复默认",
-                RestoreDefaultsAsync)
-        ]);
+    [RelayCommand]
+    private Task ResetAsync() => RestoreDefaultsAsync();
 
     /// <summary>
     /// 「恢复默认设置」按下之后。哪些回默认、哪些不动由 Core 那一头判（<see cref="SettingsReset.Restore"/>，
     /// 单测钉着），这里剩下的是「问一次」和「改完让屏上跟上」。
     /// <para>
     /// <b>三件善后一件都不能少，而少了哪一件屏上都只是「设置了但没用」。</b> 主题要当场重刷，不然颜色要等到下次
-    /// 启动才回默认；<see cref="ShellPrefs"/> 要喊一声，那是窗口比例锁、侧边栏、图片缓存上限、主页版面这四件
+    /// 启动才回默认；<see cref="ShellPrefs"/> 要喊一声，那是侧边栏、图片缓存上限、主页版面这三件
     /// 改完当场生效的唯一一根线（设置页开在另一个窗口里，手上没有主窗口的 HWND，也没有主页那一页）；整页要重建，
     /// 因为每一行只在造出来的时候读一次设置、此后只写（见类注释），所以不重建的话文件已经是默认值而屏上六十行
     /// 还是旧的。
@@ -1003,14 +1108,41 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingChoiceRow Mpv(string label, IReadOnlyList<MpvChoice> options, Func<string> read, Action<string> write, string mpvOption, string? note = null, Action? after = null) =>
         Pick(label, Annotate(note, mpvOption), options.Select(option => (Label: option.Label, Value: option.Value)), read, write, StringComparer.OrdinalIgnoreCase, after: after);
 
+    /// <summary>
+    /// One of the three 字幕颜色 rows: <c>#RRGGBB</c> through the HTML 颜色选择器 the swatch opens, or the
+    /// empty string for 「不设置，跟随 mpv 自己的默认」. The picker is the row's own business through the
+    /// two-way binding on <see cref="SettingColorRow.Color"/> — this factory only builds the row.
+    /// </summary>
+    private SettingColorRow ColorRow(string label, Func<string> read, Action<string> write, string mpvOption, string? note = null) =>
+        new(label, Annotate(note, mpvOption), read(), write, Save);
+
     private SettingToggleRow Toggle(string label, string note, Func<bool> read, Action<bool> write, string mpvOption = "") =>
         new(label, Annotate(note, mpvOption) ?? "", read(), write, Save);
 
     private SettingNumberRow Number(string label, double minimum, double maximum, Func<int> read, Action<int> write, string? note = null, Action? after = null, string mpvOption = "") =>
         new(label, Annotate(note, mpvOption), minimum, maximum, read(), value => write((int)value), () => read(), Save, after);
 
-    private SettingSliderRow Slider(string label, double minimum, double maximum, double step, Func<int> read, Action<int> write, string? note = null, string mpvOption = "") =>
-        new(label, Annotate(note, mpvOption), minimum, maximum, step, read(), value => write((int)value), Save);
+    private SettingSliderRow Slider(string label, double minimum, double maximum, double step, Func<double> read, Action<double> write, string? note = null, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption), minimum, maximum, step, read(), write, Save);
+
+    /// <summary>
+    /// mpv 单位的滑块（描边大小、阴影共用，2026-09-06「把字号、描边大小，阴影也改成滑块」，取代上一批的
+    /// 自由数字输入行）。设置文件里存的是字符串、空串是「不设置，mpv 自己说了算」，而滑块没有「不填」这个
+    /// 状态，所以装值时把「不设置」落到 mpv 自己的默认上 —— 那是同一个样子换了个写法；拖一下就写实了。
+    /// 写回去的是规范数字（和 <see cref="MpvOutputOptions.ClampSubtitleUnit"/> 落盘的格式一致），范围仍是
+    /// mpv 自己的 0–10，手改设置文件越界的照样在每次读盘时被它拦回来。
+    /// </summary>
+    private SettingSliderRow UnitSlider(string label, double whenUnset, Func<string> read, Action<string> write, string? note = null, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption),
+            MpvOutputOptions.SubtitleUnitMinimum, MpvOutputOptions.SubtitleUnitMaximum, 0.05,
+            ParseUnit(read()) ?? whenUnset,
+            value => write(value.ToString("0.###", CultureInfo.InvariantCulture)),
+            Save);
+
+    private static double? ParseUnit(string? value) =>
+        double.TryParse((value ?? "").Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
 
     /// <summary>
     /// A row's note with the mpv option it writes named at the end — 「补偿刷新率不匹配造成的抖动（mpv：
@@ -1102,8 +1234,8 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// written and reaches mpv as a raw language code.
     /// </para>
     /// </summary>
-    private SettingTextRow Languages(string label, string placeholder, Func<List<string>> read, Action<List<string>> write) =>
-        new(label, null, placeholder, string.Join(", ", read()), typed =>
+    private SettingTextRow Languages(string label, string placeholder, Func<List<string>> read, Action<List<string>> write, string? note = null) =>
+        new(label, note, placeholder, string.Join(", ", read()), typed =>
         {
             var items = TrackLanguagePriority.ParseList(typed);
             write(items);

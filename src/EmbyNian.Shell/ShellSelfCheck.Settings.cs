@@ -2,6 +2,7 @@ using System.Text;
 using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Views;
 using EmbyNian.Shell.Windowing;
+using Microsoft.UI.Xaml.Controls;
 
 namespace EmbyNian.Shell;
 
@@ -162,6 +163,43 @@ internal static partial class ShellSelfCheck
         check("字幕字体列表", picker is { Ok: true },
             picker is null ? "没有建出字体行" : picker.Detail);
 
+        // 「点击选择字幕后要把下方的列表收起来」（2026-09-06）。收和展都是那行的两个状态翻来翻去，哪一边
+        // 卡住了屏上都只是那一列名单的形状不对，别的读数一个都不会动 —— 所以这一关就地拨一遍（见
+        // SettingFontRow.CollapseProbe），不点屏上那一行。
+        var collapse = SettingFontRow.CollapseProbe();
+        check("字体列表选完收得起", collapse.Ok, collapse.Detail);
+
+        // 三行字幕颜色（文字/描边/底板）现在装的是任意 HTML 颜色代码。这一关问三件事：三行都在、每一行
+        // 存的都是 #RRGGBB 或者「不设置」的空串、以及那一行选个颜色真的写一次盘（SettingColorRow.Probe
+        // 在假行上拨）。写盘那根线断了的样子是：拾色器里色块跟着变、设置文件停在旧值上，屏上什么都说。
+        var subtitleRows = page.ViewModel.Sections
+            .FirstOrDefault(section => section.Category == "字幕")?.Rows ?? [];
+        var colorRows = subtitleRows.OfType<SettingColorRow>().ToList();
+        var colorsValid = colorRows.Count == 3
+            && colorRows.All(row => row.Color.Length == 0
+                || EmbyNian.Infrastructure.HtmlColor.TryParse(row.Color, out _));
+        var colorProbe = SettingColorRow.Probe();
+
+        check("字幕颜色行装的是 HTML 颜色代码", colorsValid && colorProbe.Ok,
+            $"{colorRows.Count} 行颜色（应当 3 行），存值 "
+                + string.Join("、", colorRows.Select(row => $"<{row.Label}>={(row.Color.Length == 0 ? "不设置" : row.Color)}"))
+                + $"；{colorProbe.Detail}");
+
+        // 「参考图2新增字幕外观功能」（2026-09-06）：字幕卡顶上那条「字幕示例」。问两件事：屏上这一行
+        // 真在画（行在、模型读得出示例文字和层数），以及「改设置 → 重画」这根线通不通 —— 在假行上拨一遍
+        // （见 SettingSubtitlePreviewRow.Probe），因为这台机器注不进鼠标，而预览不跟着改的坏法恰恰是
+        // 什么读数都不动的：外观怎么调，那条示例永远一个样子。
+        var previewRow = subtitleRows.OfType<SettingSubtitlePreviewRow>().FirstOrDefault();
+        var previewProbe = SettingSubtitlePreviewRow.Probe();
+        var previewAlive = previewRow is not null
+            && previewRow.Model.Text == SettingSubtitlePreviewRow.Sample
+            && previewRow.Model.FontFamily.Length > 0;
+
+        check("字幕示例预览跟着外观走", previewAlive && previewProbe.Ok,
+            previewRow is null
+                ? "字幕卡上没有预览那一行"
+                : $"屏上那条画的是「{previewRow.Model.Text}」（{previewRow.Model.FontFamily}）；{previewProbe.Detail}");
+
         // 主题那一行的色板。什么都不点：这一行只在点中一块时写盘，而量它不需要真换一次主题 —— 角标落在存着
         // 的那一套上、几块颜色互不相同、屏上块数对得上，坏法就都在这三句里了（见 MeasureThemeSwatches）。
         var swatches = page.MeasureThemeSwatches();
@@ -237,23 +275,31 @@ internal static partial class ShellSelfCheck
                     + $"这台机器上可选 {devices.Count} 个设备"
                     + (devices.Count > 0 ? $"，第一个是「{devices[0].Label}」" : "（还没读到或者读不到）"));
 
-        // 「恢复默认设置」那一行。什么都不按 —— 按下去就是把用户这台机器上的设置全清一遍，而这一关要问的两件事
-        // 都不需要真按：那一行在不在「恢复默认」那张卡上，以及这一页问得出那次确认没有。
+        // 「恢复默认设置」那颗按钮，页头右上角。什么都不按 —— 按下去就是把用户这台机器上的设置全清一遍，
+        // 而这一关要问的三件事都不需要真按：那颗按钮在不在页头上，指针停上去那句说明写没写清服务器和账号
+        // 不动，以及这一页问得出那次确认没有。
         //
-        // 后半句是这一关存在的理由。对话框要页面的 XamlRoot，所以视图模型只能等页面把 ConfirmRequest 递过来；
-        // 页面漏了那一句，ConfirmAsync 一律答「否」—— 按钮按下去什么都不发生，屏上一个字都不说，行数、模板、
-        // 渲染读数一个都不会差。单测进不到外壳这个程序集，这台机器上也注不进鼠标事件，所以这是那件事唯一验得到
-        // 的形式。至于「哪些回默认、哪些不动」，那是 Core 那一头的事（SettingsReset.Restore，单测钉着）。
-        var resetRows = page.ViewModel.Sections
-            .FirstOrDefault(section => section.Category == "恢复默认")?.Rows ?? [];
-        var resetRow = resetRows.OfType<SettingActionRow>().FirstOrDefault();
+        // 说明是这一关盯的东西。按钮原先自己占一张卡，说明铺在卡上 —— 那也是按下之前屏上唯一一处把「哪些
+        // 回默认、哪些不动」写全的地方。2026-09-06 按他一句「恢复默认按钮移到右上角，下方的恢复默认页面删除」
+        // 卡整个删了、按钮搬进页头，说明缩成那句 ToolTip；按下之后还有对话框把同一件事再讲一遍，所以这句话
+        // 不能丢，丢了它按钮就成了「按下去才知道会发生什么」。x:Name 生成的那颗字段是页和自检同程序集里
+        // 最直接的读法；ToolTip 从词表来（SettingsPage_ResetButton），读回来看看那句话还在不在。
+        //
+        // 再往后那半句是这一关存在的理由。对话框要页面的 XamlRoot，所以视图模型只能等页面把 ConfirmRequest
+        // 递过来；页面漏了那一句，ConfirmAsync 一律答「否」—— 按钮按下去什么都不发生，屏上一个字都不说，
+        // 行数、模板、渲染读数一个都不会差。单测进不到外壳这个程序集，这台机器上也注不进鼠标事件，所以这是
+        // 那件事唯一验得到的形式。至于「哪些回默认、哪些不动」，那是 Core 那一头的事（SettingsReset.Restore，
+        // 单测钉着）。
+        var resetButton = page.ResetButton;
+        var resetNote = resetButton is null ? "" : ToolTipService.GetToolTip(resetButton) as string ?? "";
+        var saysAccountsStay = resetNote.Contains("不会退出登录", StringComparison.Ordinal);
         var canAsk = page.ViewModel.CanConfirm;
 
-        check("恢复默认设置那一行问得出确认", resetRow is not null && canAsk,
-            resetRow is null
-                ? $"「恢复默认」卡 {resetRows.Count} 行里没有一颗动作按钮"
-                : $"「{resetRow.Label}」，按钮写着「{resetRow.ActionLabel}」，说明里"
-                    + $"{(resetRow.Note.Contains("不会退出登录", StringComparison.Ordinal) ? "写明了服务器和账号不动" : "没写服务器和账号会怎样")}；"
+        check("恢复默认设置那颗按钮问得出确认", resetButton is not null && saysAccountsStay && canAsk,
+            resetButton is null
+                ? "页头右上角没有那颗按钮"
+                : $"「{(resetButton.Content as string ?? "")}」，说明里"
+                    + $"{(saysAccountsStay ? "写明了服务器和账号不动" : "没写服务器和账号会怎样")}；"
                     + $"确认对话框{(canAsk ? "已接上页面" : "没接上，按下去会一律当成「取消」")}");
 
         // The one path this page's cache guard exists for. Pressing 设置 again re-navigates the settings

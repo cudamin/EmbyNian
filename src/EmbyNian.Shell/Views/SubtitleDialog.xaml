@@ -6,13 +6,11 @@
   没有「确定」键，只有「关闭」：删和下都是按下那一行的按钮当场就做的，没有一个「保存」时刻。表关掉之后
   ItemCommands 才决定要不要让这一页重读（见 Touched）。
 -->
-<ContentDialog
+<ContentDialog x:Uid="SubtitleDialog_ContentDialog1"
     x:Class="EmbyNian.Shell.Views.SubtitleDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:views="using:EmbyNian.Shell.Views"
-    Title="搜索和修改字幕"
-    CloseButtonText="关闭">
+    xmlns:views="using:EmbyNian.Shell.Views">
 
     <ContentDialog.Resources>
         <x:Double x:Key="ContentDialogMaxWidth">760</x:Double>
@@ -21,12 +19,12 @@
     <!-- MinWidth 而不是 Width：这张表里两个列表本身没有宽度，光靠内容撑的话整张表会缩成三百来像素宽，
          而写死一个宽度在小窗口上会被裁掉右边那颗按钮。 -->
     <StackPanel MinWidth="560" Spacing="12">
-        <TextBlock Style="{StaticResource EgSectionTitleStyle}" Text="现有的外挂字幕" />
+        <TextBlock x:Uid="SubtitleDialog_TextBlock2" Style="{StaticResource EgSectionTitleStyle}" />
 
         <TextBlock
             x:Name="NoTracks"
+                x:Uid="SubtitleDialog_NoTracks"
             Style="{StaticResource EgDataStyle}"
-            Text="这个文件上没有外挂字幕（内嵌在视频文件里的那些不能在这里删）。"
             TextWrapping="Wrap"
             Visibility="Collapsed" />
 
@@ -46,9 +44,8 @@
                             TextTrimming="CharacterEllipsis"
                             VerticalAlignment="Center" />
 
-                        <Button
+                        <Button x:Uid="SubtitleDialog_Button3"
                             Click="OnDelete"
-                            Content="删除"
                             Grid.Column="1" />
                     </Grid>
                 </DataTemplate>
@@ -68,13 +65,13 @@
                  （CS0108）。 -->
             <ComboBox
                 x:Name="LanguageBox"
-                Header="语言"
+                x:Uid="SubtitleDialog_LanguageBox"
                 MinWidth="140" />
 
             <Button
                 x:Name="SearchButton"
+                x:Uid="SubtitleDialog_SearchButton"
                 Click="OnSearch"
-                Content="搜索字幕"
                 Grid.Column="1"
                 Style="{StaticResource AccentButtonStyle}"
                 VerticalAlignment="Bottom" />
@@ -118,9 +115,8 @@
                                 TextTrimming="CharacterEllipsis" />
                         </StackPanel>
 
-                        <Button
+                        <Button x:Uid="SubtitleDialog_Button4"
                             Click="OnDownload"
-                            Content="下载"
                             Grid.Column="1"
                             VerticalAlignment="Center" />
                     </Grid>

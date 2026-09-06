@@ -1,18 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  场记板：每一页最上面那一块。
+  页头那块牌子：每一页最上面那一块。
 
-  一页只有一种横向结构，就是这里最下面那条通栏发丝线 —— 线上面是「这是哪儿」，线下面是内容。原来七个
-  页面各自写一段 StackPanel（一个 34 号粗体标题加一行 12 号灰字），字号字体全靠 StaticResource 各写一遍，
-  于是它们看着像同一个框架的默认页，而不是同一台仪器上的七块牌子。现在那七段都换成这一个控件。
+  **2026-09-06 按 WinUI-Gallery 那套重排**（「参考这个重新设计 ui 界面」，他选的是「整套重画」那一档）。
+  Gallery 每一页的头是两行加一条线 —— 大标题，底下一行说明，然后一道分隔线；这里现在就是那个形状：
 
-  三行字各有各的职责，互不代劳：
+      电视节目                                      ［排序 视图 筛选］
+      LIBRARY · 312 项
+      ────────────────────────────────────────────────────────────
 
-    · 眉字（左上）  等宽、拉开字距、最淡的一档，写的是这一区的代号 —— HOME / LIBRARY / SETTINGS。
-                    只有拉丁字母：它的活是定位而不是被读，而等宽 + 大写 + 字距正是铭牌上那种刻法。
-    · 读数（右上）  和眉字同一行同一种字，右端对齐 —— 条目数、服务器名这类数字和标识。数字走等宽字，
-                    所以右端这一列在任何一页上都对得齐。
-    · 标题（第二行）窄体大字，写的是这一页具体是什么：「电视节目」、「设置」、剧名。
+  换掉的是从前那一版「眉字在左上、读数在右上、标题在第二行」：那一版把「这是哪一区」和「多少项」摆成同一行的
+  两端，于是页面最靠上的一行是两块小字，最大的那行字反倒在第二行 —— 而一页最该先被读到的就是它叫什么。
+  **`Eyebrow` 和 `Note` 两个属性一个都没删**，它们现在合成底下那一行说明（中间一个「·」），所以七个页面的标记
+  一个字都不用改，而 `LibraryRequest.Eyebrow` 那份「这是搜索还是剧季还是类型」的信息也照旧在屏上。
+
+  **标签栏上写着「主页」而这里又写一次，是有意的，不是重复没清掉**：Gallery 自己也这样（左边导航写 Button，
+  页面标题也写 Button）—— 一个是控件说「你选了哪一格」，一个是内容说「这一页是什么」，而页面滚下去之后只有
+  后者跟着走。
 
   Trailing 是标题右边那一格，给页面自己的工具条（LibraryPage 的排序/视图/筛选就在那儿）。窗口窄到放不下
   时把 TrailingBelow 打开，那一格整块挪到线下面去靠右排 —— 挪的是同一个 ContentPresenter，不是两份拷贝，
@@ -36,23 +40,7 @@
         </Grid.ColumnDefinitions>
 
         <TextBlock
-            x:Name="EyebrowText"
-            MaxLines="1"
-            Style="{StaticResource EgEyebrowStyle}"
-            TextTrimming="CharacterEllipsis" />
-
-        <!-- 读数借眉字的样式，不是另起一个：它们是同一行的左右两端，换了字或换了淡度就不像一行了。
-             靠下对齐，因为眉字用的是 Tight 行界，两边的基线要自己对上。 -->
-        <TextBlock
-            x:Name="NoteText"
-            Grid.Column="1"
-            Margin="12,0,0,0"
-            Style="{StaticResource EgEyebrowStyle}"
-            VerticalAlignment="Bottom" />
-
-        <TextBlock
             x:Name="TitleText"
-            Grid.Row="1"
             MaxLines="1"
             Style="{StaticResource EgPageTitleStyle}"
             TextTrimming="CharacterEllipsis" />
@@ -60,10 +48,21 @@
         <!-- 起始位置是标题右边这一格；TrailingBelow 会把它搬到第 3 行去。 -->
         <ContentPresenter
             x:Name="TrailingHost"
-            Grid.Row="1"
             Grid.Column="1"
             Margin="12,0,0,0"
             VerticalAlignment="Bottom" />
+
+        <!-- 说明那一行 —— Gallery 的页头里标题底下那一行灰字。这里装的是 Eyebrow ＋ Note 合起来的一句
+             （「LIBRARY · 312 项」），走读数字（等宽、12 号、暗一档）：它多半是数字，而这一套里数字一律等宽。
+             ColumnSpan 2，因为工具条在标题那一行的右边，这一行整条是它自己的。 -->
+        <TextBlock
+            x:Name="NoteText"
+            Grid.Row="1"
+            Grid.ColumnSpan="2"
+            Margin="0,2,0,0"
+            MaxLines="1"
+            Style="{StaticResource EgDataStyle}"
+            TextTrimming="CharacterEllipsis" />
 
         <!-- 通栏线。ColumnSpan 2 是它「通栏」的全部实现 —— 内容和线同宽，所以页头和下面的内容左右都对齐。
              压在剧照上时收起，见 PageSlate.OnScrim：那一条线是「线上是哪儿、线下是内容」的分界，而图上

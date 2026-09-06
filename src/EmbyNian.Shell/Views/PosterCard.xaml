@@ -83,8 +83,9 @@
         </Grid.RowDefinitions>
 
         <!-- 胶片格。发丝框、圆角、底色、线的颜色四个值一个都不写在这里 —— 全在 EgFrameStyle 上，局部值
-             会盖过样式里的 Setter，写了就等于把词表抄一遍。指针进来或者焦点落上来的时候整圈换强调色，
-             那是代码里把这一个 Style 换成 EgFrameActiveStyle 做的（见 PosterCard.xaml.cs 的 Paint）。
+             会盖过样式里的 Setter，写了就等于把词表抄一遍。指针进来、焦点落上来、或者这张卡正被主页轮播框着
+             （Framed）的时候整圈换强调色，那是代码里把这一个 Style 换成 EgFrameActiveStyle 做的（见
+             PosterCard.xaml.cs 的 Paint）。
              这一圈是 Border，所以它会按自己的圆角把里面全部剪一遍：剧照的四角、右上那颗方块、底边那条
              进度，都跟着圆（「把封面改成圆角的」）。 -->
         <Border
@@ -93,12 +94,20 @@
             Style="{StaticResource EgFrameStyle}">
 
             <Grid>
+                <!-- 占位字形：海报还没到、或者这个条目根本没有图的时候透过来的那一个。32 而不是 40 —— 它是「这里
+                     暂时没有图」，不该比图本身更抢眼（2026-09-05 界面复查：一排里有几张占位卡时，那几格灰底大
+                     图标比旁边真的海报更跳眼）。 -->
                 <FontIcon
-                    FontSize="40"
+                    FontSize="32"
                     Foreground="{ThemeResource EgTextFaintBrush}"
                     Glyph="{x:Bind Card.Glyph, Mode=OneWay}" />
 
+                <!-- 海报。淡入那一下在代码里（PosterCard.SyncPoster / OnPosterOpened）：解码是异步的，不淡入的话
+                     整屏卡片是一张接一张「啪」地跳出来的；而已经解好的位图（缓存命中那些）直接就是不透明的，
+                     那一档屏上本来没有「跳」这件事，淡入只会让它慢半拍。 -->
                 <Image
+                    x:Name="Poster"
+                    ImageOpened="OnPosterOpened"
                     Source="{x:Bind Card.Poster, Mode=OneWay}"
                     Stretch="UniformToFill" />
 
@@ -190,7 +199,7 @@
                         HorizontalAlignment="Right"
                         Margin="0,0,6,4"
                         Orientation="Horizontal"
-                        Spacing="2"
+                        Spacing="4"
                         VerticalAlignment="Bottom">
                         <StackPanel.Resources>
                             <!-- 按「轻量化样式」的办法把按钮模板在 PointerOver/Pressed 两态里自己写的那几个
@@ -247,9 +256,9 @@
                         </Button>
                         <Button
                             x:Name="MoreButton"
+                x:Uid="PosterCard_MoreButton"
                             Click="OnMoreClicked"
-                            Style="{StaticResource EgCardActionButtonStyle}"
-                            ToolTipService.ToolTip="更多">
+                            Style="{StaticResource EgCardActionButtonStyle}">
                             <FontIcon FontSize="20" Glyph="&#xE712;" />
                         </Button>
                     </StackPanel>

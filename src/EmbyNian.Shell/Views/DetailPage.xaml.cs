@@ -285,6 +285,56 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 那一带集这会儿坐在哪一块板上，两块之外就是 null（正在搬的那一瞬）。
+    /// <para>
+    /// 问那两块板自己而不是问 <c>EpisodePanel.Parent</c>：那个属性要等这一页 <c>Loaded</c> 之后才有值，理由和
+    /// 那一次真实的坏法都写在 <see cref="PlaceEpisodes"/> 上。
+    /// </para>
+    /// </summary>
+    private Panel? EpisodeHost => HeroTail.Children.Contains(EpisodePanel) ? HeroTail
+        : BodySheet.Children.Contains(EpisodePanel) ? BodySheet
+        : null;
+
+    /// <summary>
+    /// 自检：从播放回来那一趟走完之后，这一页还是刚打开的样子 —— 「点击开始播放后点击左上方的返回，集列表会跑到
+    /// 下方去」。
+    /// <para>
+    /// 停止播放走的是三步：视图模型先喊 <c>RefreshRequested</c>（外壳照着重新导航一遍，见
+    /// <c>ShellPage.RefreshActive</c>），再落 <c>LeavePlayer</c> 把导航外壳放回来。也就是说<em>那一次重新导航发生在
+    /// 外壳还收着的时候</em>，这一页于是在一棵量不到尺寸的树上走完了 <c>OnNavigatedTo</c> —— 而正常那一路
+    /// （点一张卡片进来）外壳一直是显着的。两条路上唯一不同的就是这个，所以这一条读的是那一趟走完之后的样子。
+    /// </para>
+    /// <para>
+    /// 两句话，各对一种屏上看得见、别的读数一条都不会响的坏法。那一带集摆在规矩说的那一层上
+    /// （<see cref="PlaceEpisodes"/>）：掉回纸上时它排在被撑满第一屏的尾部之后，屏上就是「集列表跑到下方去了」。
+    /// 页面没有自己滚下去：滚下去那一版头图那一叠字被切在视口上沿外面，而屏上看着像「这一页的头图怎么没了」。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ReturnRead()
+    {
+        var host = EpisodeHost;
+        var where = ReferenceEquals(host, HeroTail) ? "图上"
+            : ReferenceEquals(host, BodySheet) ? "纸上"
+            : "哪块板上都不在";
+        var wanted = ViewModel.EpisodesOnScrim ? "图上" : "纸上";
+        var offset = Body.VerticalOffset;
+        var placed = where == wanted;
+        var top = offset < 1;
+
+        var at = Body.Content is UIElement content
+            ? EpisodePanel.TransformToVisual(content).TransformPoint(new Point(0, 0)).Y
+            : double.NaN;
+
+        return (placed && top,
+            $"{EmbyItemType.ToChinese(ViewModel.ItemType)}页，那一带集在{where}（规矩说{wanted}）、"
+                + $"从内容 {at:0} 起；带高 {ViewModel.HeroHeight:0}、尾部 {HeroTail.ActualHeight:0}"
+                + $"（下限 {ViewModel.TailMinHeight:0}）、纸面上沿 {PaperOffset():0}、视口 {ViewModel.Viewport:0}、"
+                + $"页面滚在 {offset:0}"
+                + (placed ? "" : "，集带掉到另一层去了")
+                + (top ? "" : "，页面自己滚下去了"));
+    }
+
+    /// <summary>
     /// 自检：集页上那行剧名按下去落在哪儿 —— 「点击剧名之后应该进[入]剧页面而不是季页面，季页面只能通过[剧页面上
     /// 「全部剧季」那一格]进入」。
     /// <para>
@@ -1444,12 +1494,28 @@ public sealed partial class DetailPage : Page, IShellContent
     /// （「去掉集列表的黑边」），并把牌子和卡片那两行字换成压在图上那套墨 —— 主题自己的墨在晴昼下是近黑色，
     /// 压在那层黑罩子上就没了。回到纸上时用 <c>ClearValue</c> 把底和外圈还给样式，不是抄一份样式里的值。
     /// </para>
+    /// <para>
+    /// 「现在在哪一层」问那两块板自己（<see cref="EpisodeHost"/>），<em>不问</em> <c>EpisodePanel.Parent</c>：那个
+    /// 属性要等这一页 <c>Loaded</c> 之后才有值，而这个方法最要紧的那几次调用都可能早于它 —— 摆在哪一层跟着「这一页
+    /// 讲的是哪一类东西」走，而那句话是 <c>DetailViewModel.Preview</c> 和 <c>Apply</c> 喊出来的，两次都在
+    /// <c>OnNavigatedTo</c> 那一趟里。问 Parent 的那一版在那种时候<em>悄悄什么都不做</em>（<c>Parent is Panel</c>
+    /// 不成立），那一带集于是留在标记里写的那一层 —— 纸上。
+    /// </para>
+    /// <para>
+    /// 「点击开始播放后点击左上方的返回，集列表会跑到下方去」就是这么来的：停止播放时外壳先照着当前页面重新导航
+    /// 一遍（<c>ShellPage.RefreshActive</c>，服务器上的已看和断点刚变过），<em>之后</em>才把导航外壳放回来
+    /// （<c>ShowPlayer(false)</c>）—— 于是新那一页整个 <c>OnNavigatedTo</c> 加两次通知全在一棵收着的树上跑完，
+    /// <c>Loaded</c> 排在它们后面，一次都没赶上。而正常那一路（点一张卡片进来）看着没事只是因为完整条目那一趟
+    /// 往返通常慢过 <c>Loaded</c>，第二次通知刚好落在「已经有 Parent」那一侧：一场谁先到的赛跑，从这一带集会搬家
+    /// 那天起（`d34275d`，2026-09-01）一直赢着。屏上的样子是那一带集掉到被撑满第一屏的尾部之后（纸的第一块），
+    /// 也就是「跑到下方去」。自检里那一关是播放回来那一页，见 <see cref="ReturnRead"/>。
+    /// </para>
     /// </summary>
     private void PlaceEpisodes(bool onScrim)
     {
         var host = onScrim ? HeroTail : (Panel)BodySheet;
 
-        if (EpisodePanel.Parent is Panel current && !ReferenceEquals(current, host))
+        if (EpisodeHost is { } current && !ReferenceEquals(current, host))
         {
             current.Children.Remove(EpisodePanel);
 

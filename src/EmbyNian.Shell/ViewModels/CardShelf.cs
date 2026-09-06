@@ -97,7 +97,9 @@ public sealed partial class CardShelf : ObservableObject
     /// </summary>
     internal void Clear()
     {
-        foreach (var card in Cards) card.ReleasePoster();
+        // AbandonPoster 而不是 ReleasePoster：这一批卡整个作废，在路上那几趟的结果没有任何人在等
+        // （两者的分工见 CardItem.ReleasePoster 上那段）。
+        foreach (var card in Cards) card.AbandonPoster();
         Cards.Clear();
     }
 

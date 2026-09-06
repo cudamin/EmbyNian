@@ -782,33 +782,52 @@ internal static partial class Native
     public static partial uint GetCurrentThreadId();
 
     /// <summary>
-    /// Makes the OS work out again which shape belongs on screen — 「who is under the pointer, and what does
-    /// he want drawn」 — without the pointer going anywhere: the cursor is put back at the point it already
-    /// occupies.
+    /// Makes the OS — and, which is the half that matters, the XAML island's own input pipeline — work out
+    /// again which shape belongs on screen: one physical pixel aside through the real input queue, and
+    /// straight back.
     /// <para>
     /// This is the trigger the whole hide rests on. Hiding happens <em>because</em> nothing is moving, and
-    /// Windows only collects the answers about the cursor — this queue's shape, the window classes, the
-    /// framework's <c>ProtectedCursor</c>, what mpv says about its own child window — when something gives it
-    /// a reason to. Without this they are all answers nobody asked for, and the arrow the last real movement
-    /// worked out stays on the screen.
+    /// nothing about the cursor is <em>collected</em> until something gives the system a reason to: not this
+    /// queue's shape, not the window classes, and above all not the framework's <c>ProtectedCursor</c>, which
+    /// is the only lever that reaches the pixels a pointer over XAML content is on. WinUI reads that property
+    /// when it handles pointer input — the design note in the ElementCursor spec says as much: a subclass
+    /// assigns it 「during state changes」 such as <c>PointerEntered</c>, unlike WPF's frequently polled
+    /// <c>OnQueryCursor</c>. So a transparent cursor assigned while the hand is still is a value nobody has
+    /// read, and the arrow the last real movement worked out stays on the screen. That, and not the rule that
+    /// decides <em>when</em>, is what 「鼠标停在画面上又不会自动隐藏了」 has been all along.
     /// </para>
     /// <para>
-    /// <b>It used to be a zero-displacement <c>SendInput</c>, and that produces nothing whatever.</b> Measured
-    /// 2026-09-05 by parking a message-counting window under the pointer: five zero-displacement
-    /// <c>SendInput</c> calls produced 0 <c>WM_MOUSEMOVE</c> and 0 <c>WM_SETCURSOR</c> — Windows drops a
-    /// relative move of (0,0) outright — while five same-point <c>SetCursorPos</c> calls produced five of
-    /// each, <b>and did so from a process that was not in the foreground</b>, which is the case the user is in
-    /// after clicking an application on the other monitor. <c>SendInput</c> returns 1 either way, so the old
-    /// call reported success and the report has been printing 「让系统重新问了 N 次」 about an ask that never
-    /// happened.
+    /// <b>Two ways of asking were measured to ask nothing at all.</b> A zero-displacement <c>SendInput</c>
+    /// produces no message whatever — Windows drops a relative move of (0,0) outright — and the player's own
+    /// probe reports 「真实输入注不进」 for exactly that call. A same-point <c>SetCursorPos</c> does produce
+    /// <c>WM_MOUSEMOVE</c> and <c>WM_SETCURSOR</c> on a plain Win32 window, but it does not go through the
+    /// input queue, so <b>the island hears nothing</b>: 「XAML 事件 0 次」 in every report that used it, and
+    /// <see cref="MovePointerTo"/> carries the same finding for the same reason. Both therefore left the
+    /// framework's value unread, which is why 「让系统重新问了 N 次」 could be true of a screen that never
+    /// changed.
     /// </para>
     /// <para>
-    /// Zero displacement matters and is preserved: both places that judge movement — the event filter in
-    /// <c>PlayerPage.Moved</c> and <c>PlayerPage.PollPointer</c> — discard an unchanged position before they
-    /// count anything, so this cannot interrupt the stillness it is part of.
+    /// Hence a real displacement, and the smallest one there is. The return trip is what keeps it invisible:
+    /// the net position is unchanged, so <c>PlayerPage.PollPointer</c> — which reads the OS's coordinate ten
+    /// times a second — sees nothing, and the XAML events the two moves do raise are discarded by
+    /// <c>PlayerPage.Moved</c> as this player's own echo. One pixel is also below anything a hand does, so a
+    /// hand arriving still brings the cursor back on the same beat it always did.
     /// </para>
     /// </summary>
-    public static bool NudgeCursorState() => GetCursorPos(out var at) && SetCursorPos(at.X, at.Y);
+    public static bool NudgeCursorState()
+    {
+        if (!GetCursorPos(out var at)) return false;
+
+        // Which way to step. Against the virtual desktop's right edge a step of +1 is clamped back to where
+        // it started, and a clamped step is the zero displacement this call exists to avoid.
+        var right = GetSystemMetrics(SmXVirtualScreen) + GetSystemMetrics(SmCxVirtualScreen) - 1;
+        var aside = at.X < right ? at.X + 1 : at.X - 1;
+
+        // Both legs, always: a first leg that took and a second that did not would leave the pointer a pixel
+        // from where the hand left it, and the next poll would read that as the hand coming back. Non
+        // short-circuiting for that reason, and the answer is 「both legs went」.
+        return MovePointerTo(aside, at.Y) & MovePointerTo(at.X, at.Y);
+    }
 
     private const uint InputMouse = 0;
     private const uint MouseEventMove = 0x0001;

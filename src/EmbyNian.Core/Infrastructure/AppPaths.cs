@@ -107,6 +107,83 @@ public sealed class AppPaths
     }
 
     /// <summary>
+    /// Carries a previous release's data over, from the first candidate that has any.
+    /// <para>
+    /// Order matters and is the caller's: <see cref="PriorRoots"/> puts the unpackaged build's directory
+    /// first, because that is the one a user actually has data in today, and the two old product names
+    /// after it. The first candidate holding a <c>settings.json</c> wins; once anything has been copied
+    /// <see cref="MigrateFrom"/> refuses the rest by itself, since it is gated on this root not having
+    /// a settings file yet.
+    /// </para>
+    /// </summary>
+    /// <returns>The directory migrated from, or null when nothing was carried over.</returns>
+    public string? MigrateFromAny(IEnumerable<string> priorRoots)
+    {
+        foreach (var candidate in priorRoots)
+            if (MigrateFrom(candidate) is { } migrated) return migrated;
+
+        return null;
+    }
+
+    /// <summary>
+    /// Every directory this install might inherit data from, best first.
+    /// <para>
+    /// The interesting one is the first: packaging the app as MSIX can move
+    /// <see cref="Environment.SpecialFolder.LocalApplicationData"/> into the package's own
+    /// <c>LocalCache\Local</c>, and then a user who has been running the loose build starts the packaged
+    /// one on an empty folder — no servers, no saved password, a new device id registered with Emby.
+    /// <see cref="UnvirtualizeLocalAppData"/> works out where the loose build's data is and it is tried
+    /// first. When the app is not packaged, or the platform hands back the real path anyway, that
+    /// candidate is simply absent and the list is what it always was.
+    /// </para>
+    /// </summary>
+    public static IEnumerable<string> PriorRoots
+    {
+        get
+        {
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            if (UnvirtualizeLocalAppData(localAppData) is { } real)
+                yield return Path.Combine(real, "EmbyNian");
+
+            foreach (var name in (string[])["EmbyGearless", "EmbyMpvClient"])
+                yield return Path.Combine(localAppData, name);
+        }
+    }
+
+    /// <summary>
+    /// Turns a packaged app's redirected LocalAppData back into the machine's real one, or returns null
+    /// when the path was not redirected.
+    /// <para>
+    /// MSIX gives a package its own view at
+    /// <c>&lt;LocalAppData&gt;\Packages\&lt;PackageFamilyName&gt;\LocalCache\Local</c>. Recognising it by
+    /// that shape — the three fixed trailing segments and a <c>Packages</c> before the family name —
+    /// rather than by asking for package identity keeps this a pure function: Core takes no Windows App
+    /// SDK reference, and this is the one judgment in the migration that has a single right answer per
+    /// input, so it is the part worth a test rather than a comment.
+    /// </para>
+    /// </summary>
+    public static string? UnvirtualizeLocalAppData(string localAppData)
+    {
+        if (string.IsNullOrWhiteSpace(localAppData)) return null;
+
+        var parts = Path.GetFullPath(localAppData)
+            .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+
+        // …\Packages\<family>\LocalCache\Local — five segments from the tail, and the real root is
+        // whatever sat in front of them.
+        if (parts.Length < 5) return null;
+        if (!parts[^1].Equals("Local", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!parts[^2].Equals("LocalCache", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!parts[^4].Equals("Packages", StringComparison.OrdinalIgnoreCase)) return null;
+
+        var real = string.Join(Path.DirectorySeparatorChar, parts[..^4]);
+        // A rooted path lost its trailing separator to the split ("C:" is not "C:\").
+        if (real.Length == 2 && real[1] == ':') real += Path.DirectorySeparatorChar;
+        return real;
+    }
+
+    /// <summary>
     /// The data directory of the release this one was renamed from, used by <see cref="MigrateFrom"/>.
     /// v3 shipped as EmbyGearless between the EmbyMpvClient v2 name and this one, so its directory is
     /// tried first; the v2 name stays as the fallback for machines that never ran v3.

@@ -47,6 +47,16 @@ public sealed class FontEntry
 
         return true;
     }
+
+    /// <summary>
+    /// Whether this family is the one <paramref name="name"/> stands for — by its own name or by any
+    /// alias. The picker asks this with the settings file's stored value, which may be either spelling:
+    /// 方正中等线简体 and FZZhongDengXian-Z07S are one family, and a picker that showed the stored value
+    /// only when it matched the primary name would sit unselected on exactly the setting it holds.
+    /// </summary>
+    public bool AnswersTo(string name) =>
+        string.Equals(Name, name, StringComparison.OrdinalIgnoreCase)
+        || AlsoCalled.Any(alias => string.Equals(alias, name, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -83,6 +93,11 @@ public sealed class FontCatalogue
     /// Where Windows keeps fonts: the machine-wide store, and the per-user one that 「install for me
     /// only」 writes to. The per-user directory does not exist on a machine nobody has installed a
     /// font on, which the scan treats as an empty directory rather than as a problem.
+    /// <para>
+    /// Where the program's own bundled fonts live is the caller's to add — the one real caller
+    /// (<see cref="Services.FontLibrary"/>) appends the fonts folder next to the exe, which is the same
+    /// directory playback hands mpv as <c>sub-fonts-dir</c>.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<string> Directories
     {
@@ -96,9 +111,6 @@ public sealed class FontCatalogue
             ];
         }
     }
-
-    /// <summary>Everything installed. Minutes of nothing on a cold cache, so never on the UI thread.</summary>
-    public static FontCatalogue ScanInstalled() => Scan(Directories);
 
     /// <summary>Every font file directly in each directory. Missing directories contribute nothing.</summary>
     public static FontCatalogue Scan(IEnumerable<string> directories)
@@ -167,12 +179,17 @@ public sealed class FontCatalogue
     /// This catalogue plus one name if it is not already in it. The settings file's font has to be in
     /// the list even when it is not installed: a picker that cannot show the current value looks like
     /// it has no value, and picking anything else would then be the only way out of it.
+    /// <para>
+    /// A name one of the families answers to as an alias does not get its own entry — 方正中等线简体
+    /// stored in a settings file while the catalogue knows the same file as FZZhongDengXian-Z07S is one
+    /// family, and a second row for it would be a ghost with no file behind the preview.
+    /// </para>
     /// </summary>
     public FontCatalogue Including(string? name)
     {
         var wanted = (name ?? string.Empty).Trim();
         if (wanted.Length == 0) return this;
-        if (Families.Any(entry => string.Equals(entry.Name, wanted, StringComparison.OrdinalIgnoreCase))) return this;
+        if (Families.Any(entry => entry.AnswersTo(wanted))) return this;
 
         var families = Families
             .Append(new FontEntry(wanted, []))

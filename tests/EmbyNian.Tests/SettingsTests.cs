@@ -26,6 +26,89 @@ internal static class SettingsTests
         RegisterReset();
         RegisterVault();
         RegisterStore();
+        RegisterPaths();
+    }
+
+    /// <summary>
+    /// <see cref="AppPaths.UnvirtualizeLocalAppData"/>, the one judgment in the MSIX data migration with
+    /// a single right answer per input. Everything else about that migration needs a real installed
+    /// package to exercise; this part does not, so it is the part that gets pinned here.
+    /// </summary>
+    private static void RegisterPaths()
+    {
+        Test("数据目录：打包之后认得出被重定向的 LocalAppData", () =>
+        {
+            var real = AppPaths.UnvirtualizeLocalAppData(
+                @"C:\Users\someone\AppData\Local\Packages\EmbyNian_8wekyb3d8bbwe\LocalCache\Local");
+            Assert.Equal(@"C:\Users\someone\AppData\Local", real);
+        });
+
+        Test("数据目录：没被重定向的路径答「不是」，而不是硬切四段", () =>
+        {
+            foreach (var path in new[]
+            {
+                @"C:\Users\someone\AppData\Local",
+                @"C:\Users\someone\AppData\Local\Packages\EmbyNian_8wekyb3d8bbwe",
+                @"C:\Users\someone\AppData\Local\Packages\EmbyNian_8wekyb3d8bbwe\LocalState",
+                @"C:\a\b\LocalCache\Local",
+            })
+                Assert.True(AppPaths.UnvirtualizeLocalAppData(path) is null,
+                    $"「{path}」不是包内那条路径，不该被当成重定向过的");
+
+            Assert.True(AppPaths.UnvirtualizeLocalAppData("") is null, "空串答「不是」");
+        });
+
+        Test("数据目录：迁移候选里第一个是不打包那一份", () =>
+        {
+            var roots = AppPaths.PriorRoots.ToArray();
+            Assert.True(roots.Length >= 2, "至少要有两个旧名字可以试");
+            // Not packaged while the tests run, so the redirected candidate is absent by design and the
+            // list is exactly the two old product names — in that order.
+            Assert.True(roots[^2].EndsWith("EmbyGearless", StringComparison.Ordinal), "倒数第二个是 v3 那个名字");
+            Assert.True(roots[^1].EndsWith("EmbyMpvClient", StringComparison.Ordinal), "最后一个是 v2 那个名字");
+        });
+
+        Test("数据目录：本目录已有 settings.json 就一个候选都不抄", () =>
+        {
+            var root = Directory.CreateTempSubdirectory("embynian-paths").FullName;
+            try
+            {
+                var current = Path.Combine(root, "now");
+                var prior = Path.Combine(root, "before");
+                Directory.CreateDirectory(current);
+                Directory.CreateDirectory(prior);
+                File.WriteAllText(Path.Combine(current, "settings.json"), "{}");
+                File.WriteAllText(Path.Combine(prior, "settings.json"), "{\"old\":true}");
+
+                var migrated = new AppPaths(current).MigrateFromAny([prior]);
+
+                Assert.True(migrated is null, "已经有自己的设置时不该迁移");
+                Assert.Equal("{}", File.ReadAllText(Path.Combine(current, "settings.json")));
+            }
+            finally { Directory.Delete(root, recursive: true); }
+        });
+
+        Test("数据目录：按顺序抄第一个有设置的候选", () =>
+        {
+            var root = Directory.CreateTempSubdirectory("embynian-paths").FullName;
+            try
+            {
+                var current = Path.Combine(root, "now");
+                var empty = Path.Combine(root, "empty");
+                var wanted = Path.Combine(root, "wanted");
+                var later = Path.Combine(root, "later");
+                foreach (var directory in new[] { empty, wanted, later }) Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(wanted, "settings.json"), "\"要的是这一份\"");
+                File.WriteAllText(Path.Combine(later, "settings.json"), "\"不该是这一份\"");
+
+                var paths = new AppPaths(current);
+                var migrated = paths.MigrateFromAny([empty, wanted, later]);
+
+                Assert.Equal(wanted, migrated);
+                Assert.Equal("\"要的是这一份\"", File.ReadAllText(paths.SettingsFile));
+            }
+            finally { Directory.Delete(root, recursive: true); }
+        });
     }
 
     private static void RegisterMigration()
@@ -61,7 +144,7 @@ internal static class SettingsTests
             Assert.Equal("gpu-next", settings.Video.Renderer);
             Assert.Equal(100, settings.Ui.PageSize);
             Assert.Equal(100, settings.Audio.Volume);
-            Assert.True(settings.Shaders.Enabled);
+            Assert.False(settings.Shaders.Enabled, "缺的那一节回到装机值，而着色器的装机值是关");
             Assert.Equal("d-1", settings.DeviceId, "文件里还好的东西要留着，不能整份丢掉");
         });
 
@@ -318,13 +401,16 @@ internal static class SettingsTests
             Assert.Equal("full", settings.Video.OutputLevels, "v5 起色彩范围默认 PC(0-255)，留空不能再等于「跟随片源标记」");
             Assert.Equal("default", settings.Video.QualityPreset, "v4 的文件没有画质预设这一项，升级后必须落在 default 上");
 
-            Assert.Equal("gb18030", settings.Playback.SubtitleCodepage);
+            Assert.Equal("", settings.Playback.SubtitleCodepage,
+                "字幕编码是 v4 唯一不再补的一项：v11 判定 gb18030 那个值本身是错的，补了也要被清掉");
             Assert.Equal("#FFFFFF", settings.Playback.SubtitleColor);
             Assert.Equal("0.5", settings.Playback.SubtitleBorderSize);
             Assert.Equal("#000000", settings.Playback.SubtitleBorderColor);
             Assert.Equal("0.5", settings.Playback.SubtitleShadowOffset);
             Assert.Equal(50, settings.Playback.SubtitleFontSize);
-            Assert.True(settings.Playback.SubtitleBold, "旧配置里的字幕是粗体，升级后不能忽然变细");
+            Assert.False(settings.Playback.SubtitleBold,
+                "v4 按当年的 mpv.conf 把粗体补回来，v13 又按用户 2026-09-06 定的默认外观关掉 —— 新指令压过旧配置");
+            Assert.Equal("#000000", settings.Playback.SubtitleBackColor, "文件没存过底板颜色，v13 带上新的出厂黑");
             Assert.Equal("SimHei", settings.Playback.SubtitleFontFamily, "旧的字体文件路径要换成 mpv 认的字体族名");
         });
 
@@ -534,7 +620,6 @@ internal static class SettingsTests
         {
             var settings = SettingsMigration.NewDefaults();
             settings.Ui.PageSize = 100000;
-            settings.Ui.PosterWidth = 5;
             settings.Playback.MarkWatchedPercent = 5;
             settings.Playback.ProgressReportIntervalSeconds = 0;
             settings.Ui.ImageCacheMegabytes = 999999;
@@ -542,7 +627,6 @@ internal static class SettingsTests
             SettingsMigration.Normalize(settings);
 
             Assert.Equal(500, settings.Ui.PageSize);
-            Assert.Equal(120, settings.Ui.PosterWidth);
             Assert.Equal(50, settings.Playback.MarkWatchedPercent);
             Assert.Equal(1, settings.Playback.ProgressReportIntervalSeconds);
             Assert.Equal(EmbyNian.Emby.ImageCachePolicy.MaxMegabytes, settings.Ui.ImageCacheMegabytes,
@@ -569,10 +653,17 @@ internal static class SettingsTests
             SettingsMigration.Normalize(settings);
             Assert.Equal(EmbyNian.Theming.UiThemes.DefaultId, settings.Ui.Theme);
 
-            // 认得出来的就别动 —— 这条才是这段代码存在的风险所在。
+            // 真发生过的那一次：「晴昼」（daylight）2026-09-05 按用户一句「删掉晴昼主题」删了，而用过它的人设置
+            // 文件里还存着这个 id。他们下次开机该落到默认那套上，而不是卡在一个不存在的主题上 —— 这三句就是那
+            // 条升级路，也是「删一套主题」这件事在代码里唯一需要额外照顾的地方。
             settings.Ui.Theme = "daylight";
             SettingsMigration.Normalize(settings);
-            Assert.Equal("daylight", settings.Ui.Theme);
+            Assert.Equal(EmbyNian.Theming.UiThemes.DefaultId, settings.Ui.Theme);
+
+            // 认得出来的就别动 —— 这条才是这段代码存在的风险所在。
+            settings.Ui.Theme = "midnight";
+            SettingsMigration.Normalize(settings);
+            Assert.Equal("midnight", settings.Ui.Theme);
         });
 
         Test("规整：记住的账户与记住的服务器必须对得上", () =>
@@ -688,8 +779,14 @@ internal static class SettingsTests
 
         Test("迁移：v6 里没关过着色器的文件升上来照旧是开着的", () =>
         {
+            // 装机默认 2026-09-05 从「开」改成了「关」，所以这一条从「什么都不用做」变成了真有一手要做：
+            // v6 那个开关是开的就得照抄成开，不然升级会替他关掉一件他当年打开的东西。
             var loaded = SettingsMigration.FromJson("""{ "SchemaVersion": 6, "Shaders": { "ApplyToAllVideos": true } }""", Protector);
             Assert.True(loaded.Shaders.Enabled);
+
+            // 而 v6 之后的文件里这个键本来就存着，所以照文件说的算，不受新默认影响。
+            var stored = SettingsMigration.FromJson("""{ "SchemaVersion": 7, "Shaders": { "Enabled": true } }""", Protector);
+            Assert.True(stored.Shaders.Enabled, "存过「开」的人不该被新的装机默认关掉");
         });
 
         Test("迁移：文件里存着删掉的画质预设 HQ，读回来退成 default", () =>
@@ -758,15 +855,177 @@ internal static class SettingsTests
             var settings = SettingsMigration.NewDefaults();
             settings.Playback.SubtitleBackOpacity = 400;
             settings.Playback.SubtitleFontSize = 5;
+            settings.Playback.SubtitleScalePercent = 9000;
 
             SettingsMigration.Normalize(settings);
 
             Assert.Equal(100, settings.Playback.SubtitleBackOpacity);
             Assert.Equal(16, settings.Playback.SubtitleFontSize);
+            Assert.Equal(PlaybackSettings.MaximumSubtitleScale, settings.Playback.SubtitleScalePercent);
 
             settings.Playback.SubtitleFontSize = 0;
             SettingsMigration.Normalize(settings);
             Assert.Equal(0, settings.Playback.SubtitleFontSize, "0 是「用 mpv 自己的默认字号」，不能被夹成 16");
+
+            // 设置页那一行和这里必须是同一条规则：以前只有这儿夹，于是屏上填 5 这一次播放就是 5，
+            // 下次启动才变成 16 —— 用户看见的那个值既没留下也没被拒绝。
+            Assert.Equal(16, PlaybackSettings.ClampFontSize(5), "行里输的数走的是同一条规则");
+            Assert.Equal(0, PlaybackSettings.ClampFontSize(0));
+            Assert.Equal(0, PlaybackSettings.ClampFontSize(-8), "负数也当「不指定」");
+            Assert.Equal(PlaybackSettings.MaximumSubtitleFontSize, PlaybackSettings.ClampFontSize(9999));
+            Assert.Equal(72, PlaybackSettings.ClampFontSize(72));
+        });
+
+        Test("迁移：v11 把写死的 gb18030 字幕编码改回自动识别", () =>
+        {
+            // 那个值是装机默认，不是谁挑的，而它把 mpv 的自动识别关掉了：Big5 的繁体字幕会被按 GB18030
+            // 读成乱码（2026-09-05 渲图对比过，简体 GBK 那一半两种读法逐字节相同）。所以这一步跟 v8 的
+            // 图形接口、v9 的音频同步同一个道理 —— 没人选过的值不算偏好。
+            var upgraded = SettingsMigration.FromJson(
+                """{"SchemaVersion":10,"Playback":{"SubtitleCodepage":"gb18030"}}""", Protector);
+            Assert.Equal("", upgraded.Playback.SubtitleCodepage);
+
+            // 自己挑的编码不许动 —— 自动识别也会认错，那一档就是给这种情况留的。
+            var chosen = SettingsMigration.FromJson(
+                """{"SchemaVersion":10,"Playback":{"SubtitleCodepage":"big5"}}""", Protector);
+            Assert.Equal("big5", chosen.Playback.SubtitleCodepage);
+
+            // v11 之后再填回 gb18030 就是他的决定，迁移不许再碰。
+            var deliberate = SettingsMigration.FromJson(
+                "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
+                    + ",\"Playback\":{\"SubtitleCodepage\":\"gb18030\"}}",
+                Protector);
+            Assert.Equal("gb18030", deliberate.Playback.SubtitleCodepage);
+
+            Assert.Equal("", new PlaybackSettings().SubtitleCodepage, "装机默认是自动识别");
+        });
+
+        Test("迁移：旧文件里的「无背景」不再画出底板", () =>
+        {
+            // 「无背景」以前是一个全透明的黑色，靠把阴影也一起弄没来表达「没有底板」。它不是颜色，Rgb
+            // 不认，于是 v13 的「不是颜色就换出厂黑」把它一起接了过去；底板样式那一行照样关着 ——
+            // 屏上还是没有底板，变的只是阴影的颜色从此钉在黑色上（mpv 自己的阴影本来就是黑的）。
+            var carried = SettingsMigration.FromJson(
+                """{"SchemaVersion":10,"Playback":{"SubtitleBackColor":"none"}}""", Protector);
+
+            Assert.Equal("#000000", carried.Playback.SubtitleBackColor);
+            Assert.Equal("", carried.Playback.SubtitleBackStyle);
+        });
+
+        Test("迁移：v14 把字幕默认字体换回 Microsoft YaHei", () =>
+        {
+            // 「默认字体改为Microsoft YaHei」（2026-09-06）。v12 把装机默认挪到程序自带的方正中等线
+            // 简体时写过一批文件，v14 把它们一并跟到新默认 —— 存着旧默认就是没挑过字体，v12 怎么搬
+            // 方正中等线简体，v14 就怎么搬回来。自带字体的英文族名 FZZhongDengXian-Z07S 是同一个家族，
+            // 一样要跟；自己挑的字体（思源黑体）不动。
+            var v12default = SettingsMigration.FromJson(
+                """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"方正中等线简体"}}""", Protector);
+            Assert.Equal("Microsoft YaHei", v12default.Playback.SubtitleFontFamily);
+
+            var alias = SettingsMigration.FromJson(
+                """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"FZZhongDengXian-Z07S"}}""", Protector);
+            Assert.Equal("Microsoft YaHei", alias.Playback.SubtitleFontFamily, "英文族名是同一家族，一样跟到新默认");
+
+            // v11 的文件先过 v12 再过 v14：Microsoft YaHei → 方正中等线简体 → Microsoft YaHei，终点
+            // 还是新默认；.Heiti J 那个从来画不出来的名字也一样。
+            var v11 = SettingsMigration.FromJson(
+                """{"SchemaVersion":11,"Playback":{"SubtitleFontFamily":"Microsoft YaHei"}}""", Protector);
+            Assert.Equal("Microsoft YaHei", v11.Playback.SubtitleFontFamily);
+
+            var macish = SettingsMigration.FromJson(
+                """{"SchemaVersion":11,"Playback":{"SubtitleFontFamily":".Heiti J"}}""", Protector);
+            Assert.Equal("Microsoft YaHei", macish.Playback.SubtitleFontFamily);
+
+            var picked = SettingsMigration.FromJson(
+                """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"思源黑体 CN"}}""", Protector);
+            Assert.Equal("思源黑体 CN", picked.Playback.SubtitleFontFamily, "自己挑的字体不是装机默认，不许动");
+
+            var empty = SettingsMigration.FromJson(
+                """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":""}}""", Protector);
+            Assert.Equal("Microsoft YaHei", empty.Playback.SubtitleFontFamily, "空值走兜底族名，兜底族名就是新默认");
+
+            // v14 起再存方正中等线简体就是他的决定 —— 字体照样自带、照样可选，迁移不许再碰。
+            var deliberate = SettingsMigration.FromJson(
+                "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
+                    + ",\"Playback\":{\"SubtitleFontFamily\":\"方正中等线简体\"}}",
+                Protector);
+            Assert.Equal("方正中等线简体", deliberate.Playback.SubtitleFontFamily);
+
+            Assert.Equal("Microsoft YaHei", new PlaybackSettings().SubtitleFontFamily, "装机默认是每台 Windows 都有的雅黑");
+            Assert.Equal("Microsoft YaHei", FontFamilies.Default, "兜底族名也是它：Windows 上一定找得到");
+        });
+
+        Test("描边大小、阴影：从固定几档改成自由数字输入", () =>
+        {
+            // 「这个不用弄成固定的选项，改成输入数字」（2026-09-06）。不在旧档位里的数字现在是合法值；
+            // 逗号当小数点；范围外的拉回 0–10（mpv.exe 拿到范围外的选项值是拒启动，上限不能松，跟字号
+            // 那行「填更小的会被抬上来」一条规矩）；不是数的退回「不设置」，和颜色那三行同一条规矩。
+            // 这些走的是 Normalize，每次加载都过一遍，不用版本号。
+            var free = SettingsMigration.FromJson(
+                """{"SchemaVersion":14,"Playback":{"SubtitleBorderSize":"0.75","SubtitleShadowOffset":"2"}}""", Protector);
+            Assert.Equal("0.75", free.Playback.SubtitleBorderSize, "不在旧档位里的数字现在是合法值");
+            Assert.Equal("2", free.Playback.SubtitleShadowOffset);
+
+            var comma = SettingsMigration.FromJson(
+                """{"SchemaVersion":14,"Playback":{"SubtitleBorderSize":"1,5"}}""", Protector);
+            Assert.Equal("1.5", comma.Playback.SubtitleBorderSize, "逗号当小数点收下");
+
+            var clamped = SettingsMigration.FromJson(
+                """{"SchemaVersion":14,"Playback":{"SubtitleBorderSize":"-1","SubtitleShadowOffset":"11"}}""", Protector);
+            Assert.Equal("0", clamped.Playback.SubtitleBorderSize, "负的拉回下限，正好是「无描边」");
+            Assert.Equal("10", clamped.Playback.SubtitleShadowOffset, "超出上限的拉回 10 —— mpv.exe 拿到范围外的值是拒启动");
+
+            var junk = SettingsMigration.FromJson(
+                """{"SchemaVersion":14,"Playback":{"SubtitleBorderSize":"abc"}}""", Protector);
+            Assert.Equal("", junk.Playback.SubtitleBorderSize, "不是数的退回「不设置」，mpv 自己的 1.65 接手");
+        });
+
+        Test("迁移：v13 把出厂字幕外观换成用户定过的那套（不粗体、黑底板）", () =>
+        {
+            // 「把默认字幕样式设置为…」（2026-09-06）。他给的八项里六项当时就是出厂值，要带过旧文件的
+            // 是两处：加粗（旧出厂是开，存着它就是没挑过）和底板颜色（旧出厂是「不设置」，从来没人挑过
+            // 颜色）。自己挑过的一律不动 —— v13 之后再存回旧默认就是他的决定，迁移不许再碰。
+            var upgraded = SettingsMigration.FromJson(
+                """{"SchemaVersion":12,"Playback":{"SubtitleBold":true,"SubtitleBackColor":""}}""", Protector);
+            Assert.False(upgraded.Playback.SubtitleBold, "存着旧出厂的「开」就是没挑过，换成新出厂的「关」");
+            Assert.Equal("#000000", upgraded.Playback.SubtitleBackColor, "存着「不设置」就是没挑过颜色，带上新出厂的黑");
+
+            var untouched = SettingsMigration.FromJson(
+                """{"SchemaVersion":12,"Playback":{"SubtitleBold":false,"SubtitleBackColor":"#ff0000"}}""", Protector);
+            Assert.False(untouched.Playback.SubtitleBold, "自己关掉的不动");
+            Assert.Equal("#FF0000", untouched.Playback.SubtitleBackColor, "自己挑的颜色不动，只统一大小写");
+
+            var deliberate = SettingsMigration.FromJson(
+                "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
+                    + ",\"Playback\":{\"SubtitleBold\":true,\"SubtitleBackColor\":\"\"}}",
+                Protector);
+            Assert.True(deliberate.Playback.SubtitleBold, "v13 之后再开粗体是他的决定，迁移不许再碰");
+            Assert.Equal("", deliberate.Playback.SubtitleBackColor, "v13 之后清回「不设置」也是他的决定");
+
+            Assert.False(new PlaybackSettings().SubtitleBold, "装机默认不加粗");
+            Assert.Equal("#000000", new PlaybackSettings().SubtitleBackColor, "装机底板颜色是黑色");
+        });
+
+        Test("迁移：三行字幕颜色认一切合法的 HTML 颜色代码，不再限于旧色板", () =>
+        {
+            // 从前颜色是六个预设里选一个，迁移把不在色板上的值全数扔掉。拾色器进了门之后那一半就是
+            // 错的：用户挑的任何 #RRGGBB 都得原样过迁移，只有真的不是颜色的才退回「不设置」。
+            var carried = SettingsMigration.FromJson(
+                """
+                {"SchemaVersion":11,"Playback":{
+                  "SubtitleColor":"#ac5d5d",
+                  "SubtitleBorderColor":"#123ABC",
+                  "SubtitleBackColor":"#ffffff"}}
+                """, Protector);
+
+            Assert.Equal("#AC5D5D", carried.Playback.SubtitleColor, "写出去统一大写，文件里是哪一种写法无关紧要");
+            Assert.Equal("#123ABC", carried.Playback.SubtitleBorderColor);
+            Assert.Equal("#FFFFFF", carried.Playback.SubtitleBackColor);
+
+            var junk = SettingsMigration.FromJson(
+                """{"SchemaVersion":11,"Playback":{"SubtitleColor":"黄色","SubtitleBorderColor":"#12345"}}""", Protector);
+            Assert.Equal("", junk.Playback.SubtitleColor, "不是颜色的值退到「不设置」");
+            Assert.Equal("", junk.Playback.SubtitleBorderColor, "位数不够的也一样");
         });
 
         Test("规整：跨度与音频延迟被夹回范围", () =>
@@ -854,6 +1113,10 @@ internal static class SettingsTests
             // 每一个都真的挑得到，没有一个是永远轮不到的摆设。
             var shaders = SettingsMigration.Normalize(SettingsMigration.NewDefaults()).Shaders;
 
+            // 开关明写成开：装机默认 2026-09-05 改成了关（那一条由「着色器档位：设置里的装机默认值」钉着），
+            // 而这一条问的是「开着的时候八个档位是不是都挑得到」—— 别的几项照旧是装机值，那才是这一条的意思。
+            shaders.Enabled = true;
+
             (int SourceWidth, int SourceHeight, int OutWidth, int OutHeight, bool Animated, string Id)[] reachable =
             [
                 (3840, 2160, 2560, 1440, false, "live-shrink"),
@@ -893,6 +1156,13 @@ internal static class SettingsTests
 
             // 目录里没有的原样留着：它会作为原始 mpv 语言代码传下去，这是指定目录外语言的唯一办法。
             Assert.Equal("hu, pl", Joined("hu, pl"));
+
+            // 中英写法是同一门语言：出厂默认列出的四种写法归并成两个名字，别名不占优先级的位置。
+            Assert.Equal("简体中文, 中文", Joined("Chinese Simplified, 简体中文, Chinese, 中文"));
+
+            // 出厂默认（2026-09-05 定版）：简体中文在前，中文兜底。中文是 zh 家族的统称项，
+            // 繁体不用单独列 —— 没有简体时它就是中文会命中的那一条。
+            Assert.Equal("简体中文, 中文", string.Join(", ", SettingsMigration.NewDefaults().Playback.SubtitleLanguages));
 
             Assert.Equal(0, TrackLanguagePriority.ParseList("   ").Count);
             Assert.Equal(0, TrackLanguagePriority.ParseList(null).Count);
@@ -949,12 +1219,10 @@ internal static class SettingsTests
             var ui = settings.Ui;
             ui.Theme = "midnight";
             ui.PageSize = 37;
-            ui.PosterWidth = 321;
             ui.ShowWatchedIndicators = false;
+            ui.ShowHomeBanner = false;
             ui.ImageCacheMegabytes = ImageCachePolicy.MaxMegabytes;
             ui.ScoreSource = ScoreSource.Critic;
-            ui.LockWindowShape = false;
-            ui.CollapseSidebar = false;
             ui.HomeRows = [new HomeRowSetting { Key = "library:1", Title = "改过", Visible = false }];
 
             SettingsReset.Restore(settings);
@@ -964,16 +1232,15 @@ internal static class SettingsTests
             AssertDefaults(settings.Video, new VideoSettings());
             AssertDefaults(settings.Audio, new AudioSettings { Volume = keptVolume });
             AssertDefaults(settings.Shaders, new ShaderAutomationSettings());
+            Assert.False(settings.Shaders.Enabled, "「恢复默认」之后着色器要是关的 —— 用户 2026-09-05 定的");
 
             var fresh = new UiSettings();
             Assert.Equal(fresh.Theme, ui.Theme, "主题回默认那一套");
             Assert.Equal(fresh.PageSize, ui.PageSize);
-            Assert.Equal(fresh.PosterWidth, ui.PosterWidth);
             Assert.Equal(fresh.ShowWatchedIndicators, ui.ShowWatchedIndicators);
+            Assert.Equal(fresh.ShowHomeBanner, ui.ShowHomeBanner, "「恢复默认」之后主页轮播大图要是开的");
             Assert.Equal(fresh.ImageCacheMegabytes, ui.ImageCacheMegabytes);
             Assert.Equal(fresh.ScoreSource, ui.ScoreSource);
-            Assert.Equal(fresh.LockWindowShape, ui.LockWindowShape);
-            Assert.Equal(fresh.CollapseSidebar, ui.CollapseSidebar);
             Assert.Equal(0, ui.HomeRows.Count, "主页版面回到空，也就是「照默认版面排」");
         });
 

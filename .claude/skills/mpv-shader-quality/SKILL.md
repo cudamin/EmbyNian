@@ -62,6 +62,7 @@ Factor = actual render-target height ÷ source height. **Output means the render
 
 - **Option residue.** Every mpv option any chain sets must appear in the `NeutralOptions` restore table, with the round-trip test in both directions. Miss one and switching away from that chain leaves the option — possibly a whole shader file — still in effect.
 - **The UI lying.** Quality presets and chains both wrote `scale`/`cscale`/`dscale`; the chain is applied last, so the chain always won while the settings page kept displaying the preset. Whenever two layers can write the same mpv option, one of them must stop, and a test should assert what the renderer actually ends up with rather than what the decision layer intended.
+- **着色器 is off out of the box and 画质预设 is not its sub-option** (both the user's call, 2026-09-05). So 画质预设 is the first row of the 画质与着色器 card, above 启用着色器, and it goes out as a `profile=` on every launch whichever way that switch is set — a contract test pins exactly that. Don't make the preset conditional on a chain existing, and don't reorder the card back.
 
 ## Inspecting a chain without playing anything real
 
@@ -70,6 +71,7 @@ Never verify this against the live Emby server — `CLAUDE.md` says why. Use the
 - mpv's stats page lists every pass with its output size. That answers "is this shader running at all", "at what size" and "how expensive is it" directly. If you ever need a cost number, use measured pass times; don't invent cost tiers.
 - `screenshot window` captures the rendered result including shaders, so an A/B is two PNGs.
 - `--msg-level=vo/gpu=v` shows hook resolution and shader compile failures.
+- **Know what the fixture actually is before reading anything into a shot.** The `ffmpeg-probe` skill (user scope, `py <script>` — see `CLAUDE.md`) reads bit depth, chroma subsampling and HDR side data out of a file in one command, and `ffmpeg-hdr-color` covers PQ/HLG and tone mapping; a chroma-reconstruction or deband A/B against a source whose subsampling or transfer you guessed at proves nothing.
 
 Whether the picture actually looks better is the user's call, not yours — every real defect in this area was caught by him looking at the screen. Ship a switchable A/B plus an on-screen readout of which chain is live, then ask him.
 

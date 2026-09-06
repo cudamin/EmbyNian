@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using EmbyNian.Configuration;
 using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
@@ -237,6 +238,81 @@ public static class ItemDetail
 
     /// <summary>The same segments as one string; empty when the server knew none of them.</summary>
     public static string Facts(EmbyItem item) => string.Join("  ·  ", FactParts(item));
+
+    /// <summary>
+    /// 服务器给的那段简介，收拾成能排的样子：**一行里连着的空白并成一个、每行两头的空白去掉、连着的空行并成
+    /// 一个**，而段落之间的换行照原样留着。
+    /// <para>
+    /// 为什么要这一道：这段字是刮削器从网页上抄来的，里头带着排版用的空白 —— 中文简介爱用两个全角空格当段首
+    /// 缩进，而那两个字宽的空当挪到屏上就是「句号后面空出六个字」（「地球之夜」那条正是如此，2026-09-05 在主页
+    /// 轮播上拍到），看着像排错了而不像原文。**两个汉字之间的那一个空格连留都不留** —— 中文句子之间本来不空格，
+    /// 而缩进那两格的两侧正好都是汉字；西文那一侧照旧留一个空格，不然 <c>word word</c> 会粘成一个词。
+    /// </para>
+    /// <para>
+    /// 段落不并：详情页展开之后那是真的分段，并掉就成了一大团字。要整段压成一行的是轮播那两行
+    /// （<see cref="ProseLine"/>）。
+    /// </para>
+    /// </summary>
+    public static string Prose(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+
+        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var kept = new List<string>(lines.Length);
+
+        foreach (var line in lines)
+        {
+            var tidy = Squeeze(line);
+
+            // 连着的空行并成一个，开头的空行一概不要 —— 上一行也是空的就不再添第二行。
+            if (tidy.Length == 0 && (kept.Count == 0 || kept[^1].Length == 0)) continue;
+
+            kept.Add(tidy);
+        }
+
+        while (kept.Count > 0 && kept[^1].Length == 0) kept.RemoveAt(kept.Count - 1);
+
+        return string.Join('\n', kept);
+    }
+
+    /// <summary>
+    /// 同一段字压成一行。轮播那块字用它：那条带是「看一眼决定看不看」、只给两行，而一个段落换行在两行的格子里
+    /// 就是白占掉一行。
+    /// </summary>
+    public static string ProseLine(string? text) => Squeeze(Prose(text).Replace('\n', ' '));
+
+    /// <summary>
+    /// 一行里的空白收拾干净：连着的并成一个、两头的去掉，而两个宽字之间的那一个直接去掉（见
+    /// <see cref="Prose"/> 上那段）。全角空格（U+3000）和不换行空格都算空白 —— <c>char.IsWhiteSpace</c> 认它们。
+    /// </summary>
+    private static string Squeeze(string line)
+    {
+        var builder = new StringBuilder(line.Length);
+        var gap = false;
+
+        foreach (var ch in line)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                gap = builder.Length > 0;
+                continue;
+            }
+
+            if (gap && !(Wide(builder[^1]) && Wide(ch))) builder.Append(' ');
+
+            gap = false;
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// 这个字是不是「宽字」—— 汉字、假名、谚文，加上全角的标点和字母。判据就是一条码位下界（U+2E80，CJK 部首
+    /// 补充那一段的起点）：它上面全是要占一个字身的字，而它下面是拉丁字母、数字和半角标点。粗，但这条界线上没有
+    /// 会认错的字，而真正要答对的只有一个问题 ——「这个空格两边是不是中文」。
+    /// </summary>
+    private static bool Wide(char ch) => ch >= '⺀';
 
     /// <summary>
     /// 「视频：  1080p · HEVC · MKV · 8.4 GB」, or empty when the item carries no media source — which is

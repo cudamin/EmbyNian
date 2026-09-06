@@ -2,7 +2,12 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
+using EmbyNian.Configuration;
+using EmbyNian.Infrastructure;
+using EmbyNian.Playback;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
+using Windows.UI.Text;
 
 namespace EmbyNian.Shell.ViewModels;
 
@@ -326,7 +331,9 @@ public sealed partial class SettingNumberRow : SettingRow
 
 /// <summary>
 /// A slider bound to one numeric setting, for values where dragging beats typing. The step is explicit
-/// because these are all integers and WinUI otherwise reports fractions of one.
+/// because WinUI otherwise reports fractions of one; the value rides beside the track as
+/// <see cref="ValueLabel"/>, because a dragged thumb says nothing about the number it left — and on rows
+/// like 描边大小 a tenth of a unit is the difference the user is dragging for.
 /// </summary>
 public sealed partial class SettingSliderRow : SettingRow
 {
@@ -355,9 +362,16 @@ public sealed partial class SettingSliderRow : SettingRow
     [ObservableProperty]
     public partial double Value { get; set; }
 
+    /// <summary>
+    /// The number beside the track. Two decimals cover every slider built so far — the mpv-unit rows
+    /// (描边 0.5、mpv 自己的 1.65) and the percents — without trailing zeros on the integer ones.
+    /// </summary>
+    public string ValueLabel => Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
     partial void OnValueChanged(double value)
     {
         if (!_seeded) return;
+        OnPropertyChanged(nameof(ValueLabel));
         _write(value);
         _save();
     }
@@ -416,6 +430,89 @@ public sealed partial class SettingTextRow : SettingRow
 }
 
 /// <summary>
+/// A colour bound to one setting, as an HTML 颜色代码 — 「字幕颜色改为使用HTML颜色代码」（2026-09-06）.
+/// The stored value is <c>#RRGGBB</c>, or the empty string for 「不设置，跟随 mpv 自己的默认」; the
+/// picking itself is the <see cref="Views.HtmlColorPicker"/> the row's swatch opens, which writes this
+/// property through a two-way binding only on a real commit (a pointer release, a number box, a typed
+/// code) — a drag across the saturation square must not save the settings file forty times on the way.
+/// <para>
+/// The swatch and the code beside it are drawn from <see cref="Color"/> here rather than held by the
+/// picker, because they are the row's value and have to be right even while the picker is closed.
+/// </para>
+/// </summary>
+public sealed partial class SettingColorRow : SettingRow
+{
+    private readonly Action<string> _write;
+    private readonly Action _save;
+    private readonly bool _seeded;
+
+    internal SettingColorRow(string label, string? note, string value, Action<string> write, Action save)
+        : base(label, note)
+    {
+        Color = value;
+        _write = write;
+        _save = save;
+        _seeded = true;
+    }
+
+    /// <summary><c>#RRGGBB</c>, or the empty string for 「不设置」.</summary>
+    [ObservableProperty]
+    public partial string Color { get; set; }
+
+    /// <summary>The swatch: the colour itself, or null when 「不设置」 is what the row says.</summary>
+    public Brush? Swatch
+    {
+        get
+        {
+            if (!HtmlColor.TryParse(Color, out var rgb)) return null;
+            var (r, g, b) = HtmlColor.Rgb(rgb);
+            return new SolidColorBrush(Windows.UI.Color.FromArgb(255, r, g, b));
+        }
+    }
+
+    /// <summary>The code beside the swatch, or what 「不设置」 looks like when there is none.</summary>
+    public string HexLabel => HtmlColor.TryParse(Color, out _) ? Color.ToUpperInvariant() : "不设置";
+
+    partial void OnColorChanged(string value)
+    {
+        if (!_seeded) return;
+
+        OnPropertyChanged(nameof(Swatch));
+        OnPropertyChanged(nameof(HexLabel));
+
+        _write(value);
+        _save();
+    }
+
+    /// <summary>
+    /// 自检：选一个颜色写盘一次、清除也写盘一次，色块跟着走 —— 就地造一个假的颜色行拨两下，不碰设置
+    /// 文件、也不碰屏上那一页（同 <see cref="SettingChoiceRow.Probe"/> 的做法）。
+    /// <para>
+    /// 这一条非有不可，理由和下拉行那一条一样：单元测试进不到外壳这个程序集，而这台机器上注不进鼠标事件，
+    /// 所以「点开色块、拖一块颜色」这一下没法自动做一遍。坏法是看不见的那种：写盘的那根线没接上，屏上色块
+    /// 照样跟着拾色器变，只有设置文件还停在旧值上。
+    /// </para>
+    /// </summary>
+    internal static (bool Ok, string Detail) Probe()
+    {
+        var writes = 0;
+        var written = "";
+        var row = new SettingColorRow("探针", null, "#AC5D5D", value => { writes++; written = value; }, () => { });
+
+        var seeded = writes == 0 && row.Color == "#AC5D5D" && row.Swatch is not null;
+        row.Color = "#00FF00";
+        var picked = writes == 1 && written == "#00FF00" && row.HexLabel == "#00FF00";
+        row.Color = "";
+        var cleared = writes == 2 && written.Length == 0 && row.Swatch is null && row.HexLabel == "不设置";
+
+        return (seeded && picked && cleared,
+            $"假颜色行：装值{(seeded ? "不写盘、色块画得出来" : "就写盘或者画不出色块")}、"
+                + $"选一个颜色{(picked ? "写盘一次" : $"写盘 {writes} 次")}、"
+                + $"清掉{(cleared ? "也写盘、色块退成「不设置」" : "没写盘或者色块没跟上")}");
+    }
+}
+
+/// <summary>
 /// 一行读数，加一颗可有可无的按钮 —— 「关于」那张卡上的每一行都是这个形状：左边是标签，底下一行是值
 /// （版本号、一个目录），右边那颗按钮把那个目录在资源管理器里打开。
 /// <para>
@@ -425,8 +522,7 @@ public sealed partial class SettingTextRow : SettingRow
 /// </para>
 /// </summary>
 public sealed partial class SettingFactRow : SettingRow
-{
-    private readonly Action? _act;
+{    private readonly Action? _act;
     internal SettingFactRow(string label, string? note, string value, string? actionLabel = null, Action? act = null)
         : base(label, note)
     {
@@ -446,39 +542,6 @@ public sealed partial class SettingFactRow : SettingRow
 
     [RelayCommand]
     private void Run() => _act?.Invoke();
-}
-
-/// <summary>
-/// 一行动作：左边标签和说明，右边一颗按下去真会做事的按钮 —— 目前只有一处，「恢复默认」那张卡上唯一的一行
-/// 「恢复默认设置」（<c>SettingsViewModel.ResetCard</c>）。**别把它挪回「关于」卡**：那是头一版，拍出来才发现
-/// 那张卡在设置窗口里第七行就到底了，这一行整个在折线下面 —— 而行数、模板、渲染那几个读数一个都不会差。
-/// <para>
-/// 和 <see cref="SettingFactRow"/> 差在哪儿：那一行是「把一件事说出来，顺带给一个去处」，按钮开的是资源管理器，
-/// 按错了什么都不会发生。这一行反过来 —— 按钮是这一行存在的理由，而它做的事不可逆，所以按下之后先问一次
-/// （问谁、怎么问在 <c>SettingsViewModel</c> 那一头，见 <c>PageViewModel.ConfirmAsync</c>；对话框要页面的
-/// <c>XamlRoot</c>，行里拿不到）。
-/// </para>
-/// <para>
-/// 命令是异步的，于是「问一次」这件事有地方等：<c>AsyncRelayCommand</c> 在跑的时候自己把按钮置灰，所以连按两下
-/// 不会叠出两个对话框 —— WinUI 同时只允许一个，第二个直接抛。
-/// </para>
-/// </summary>
-public sealed partial class SettingActionRow : SettingRow
-{
-    private readonly Func<Task> _run;
-
-    internal SettingActionRow(string label, string? note, string actionLabel, Func<Task> run)
-        : base(label, note)
-    {
-        ActionLabel = actionLabel;
-        _run = run;
-    }
-
-    /// <summary>按钮上那几个字。</summary>
-    public string ActionLabel { get; }
-
-    [RelayCommand]
-    private Task RunAsync() => _run();
 }
 
 /// <summary>
@@ -695,4 +758,153 @@ public sealed partial class HomeRowChoice : ObservableObject
 
     /// <summary>读屏的人听到的那一句，也是拖动时那块浮起来的东西的名字。</summary>
     public override string ToString() => Title;
+}
+
+/// <summary>
+/// 字幕示例预览里的一层字：一份示例文字的拷贝，画在自己的偏移上。阴影、描边那八份、正文本身都是一层 ——
+/// 屏上没有「给文字描边」这一回事，预览的描边就是这几份拷贝叠出来的，所以它们对模板是同一种东西。
+/// </summary>
+public sealed record PreviewLayer(
+    double X,
+    double Y,
+    Brush Brush,
+    string Text,
+    FontFamily Family,
+    double Size,
+    FontWeight Weight);
+
+/// <summary>
+/// 字幕卡顶上那条「字幕示例」：照 字幕外观 各行的当前值画出的一条样字 —— 「参考图2新增字幕外观功能」
+/// （2026-09-06）。它不写任何设置，是这一页上唯一只画不写的行，存在的理由和别的行相反：别的行说的是
+/// 「这一项是什么」，它说的是「这十几项合在一起是什么样子」，而那件事在按下播放之前没有任何一处能看见。
+/// <para>
+/// 数字到像素的换算全是 <see cref="SubtitlePreviewPlan.Plan"/> 的事（Core，单测钉着）；这里只管三件事：
+/// 装着 <see cref="Settings.Playback"/> 这一份活的设置对象，<see cref="Refresh"/> 时重算一遍模型，再把
+/// 模型翻译成画刷和字体对象给模板绑。翻译在行上而不是在模型上，因为 Core 没有画刷这种东西；每次刷新
+/// 重建那几支画刷而不是复用，理由是改一行外观才刷一次，省不到哪里去，而「哪支画刷是旧的」这种账不用记。
+/// </para>
+/// <para>
+/// 刷新的线只有一条：<see cref="SettingsViewModel.Live{T}"/> —— 外观每一行的写入口都从它过，所以它喊
+/// 一声 <see cref="Refresh"/>，预览就不可能停在旧样子上。底下「外观应用范围」那半句（ASS/SSA 吃不到这些
+/// 外观，除非选了强制）是行自己的说明的事，预览永远画配置的样子：它要照的是这张卡，不是某一条字幕。
+/// </para>
+/// </summary>
+public sealed partial class SettingSubtitlePreviewRow : SettingRow
+{
+    private readonly PlaybackSettings _subtitles;
+    private FontFamily? _family;
+
+    /// <summary>
+    /// 预览的放大倍数：一个 mpv 单位画成几个像素。mpv 的字号跟着片源分辨率走，预览没有片源，所以这里
+    /// 定一个让出厂字号 50 在 91 高的条里像那张参考图一样站得满的数 —— 这是示意的比例，不是屏幕上的
+    /// 比例，行说明里写着这一句。
+    /// </summary>
+    internal const double Scale = 1.3;
+
+    /// <summary>预览画的字。放在行上而不是 Core，因为它是给屏幕看的词。逗号跟着站：示例连标点一起照，外观对逗号也是描边加阴影的一层。</summary>
+    public const string Sample = "字幕示例，";
+
+    internal SettingSubtitlePreviewRow(string label, string? note, PlaybackSettings subtitles)
+        : base(label, note)
+    {
+        _subtitles = subtitles;
+        Refresh();
+    }
+
+    /// <summary>换算好的样子。整体替换、不逐项改，重画一次就是一次换新。</summary>
+    [ObservableProperty]
+    public partial SubtitlePreviewPlan Model { get; set; }
+
+    /// <summary>重画。外观任一行写完设置后由 <see cref="SettingsViewModel.Live{T}"/> 喊。</summary>
+    internal void Refresh()
+    {
+        _family = null;
+        Model = SubtitlePreviewPlan.Plan(_subtitles, Scale, Sample);
+    }
+
+    partial void OnModelChanged(SubtitlePreviewPlan value)
+    {
+        OnPropertyChanged(nameof(StripHeight));
+        OnPropertyChanged(nameof(FontFamilyValue));
+        OnPropertyChanged(nameof(PlateBrush));
+        OnPropertyChanged(nameof(Layers));
+    }
+
+    /// <summary>那条的高：跟着字号走，字大条也大 —— 撑出一条 208 像素的预览比把 160 号的字削头去脚诚实。</summary>
+    public double StripHeight => Model.FontSize + 26;
+
+    public FontFamily FontFamilyValue => _family ??= new FontFamily(Model.FontFamily);
+
+    /// <summary>底板那块色，没有底板时是空 —— <c>Background</c> 对 null 的回答就是「不画」。</summary>
+    public Brush? PlateBrush => Model.Plate ? BrushFor(Model.PlateColor, Model.PlateOpacity) : null;
+
+    /// <summary>
+    /// 要叠的几层字，先画的在底下：阴影、描边那一圈，最后是正文本身 —— 所以模板只需要一个叠着画的
+    /// <c>ItemsControl</c>，谁在上谁在下就是这份清单的次序，没有第二处要知道这件事。
+    /// </summary>
+    public IReadOnlyList<PreviewLayer> Layers =>
+    [
+        .. Model.Layers.Select(layer => new PreviewLayer(
+            layer.X, layer.Y, BrushFor(layer.Color, layer.Opacity),
+            Model.Text, FontFamilyValue, Model.FontSize, Weight(Model.Bold))),
+        new(0, 0, BrushFor(Model.TextColor, 1), Model.Text, FontFamilyValue, Model.FontSize, Weight(Model.Bold))
+    ];
+
+    private static Brush BrushFor(string color, double opacity)
+    {
+        // 模型里的颜色要么来自设置文件（归一化过的 #RRGGBB），要么是写明的 mpv 兜底，走到解析不动这一步
+        // 说明上面有人改了规则 —— 画成透明而不是抛，预览坏的样子应该是「少一层」而不是「整页崩」。
+        if (!Infrastructure.HtmlColor.TryParse(color, out var rgb))
+            return new SolidColorBrush(Windows.UI.Color.FromArgb(0, 0, 0, 0));
+
+        var (r, g, b) = Infrastructure.HtmlColor.Rgb(rgb);
+        return new SolidColorBrush(Windows.UI.Color.FromArgb((byte)Math.Round(opacity * 255), r, g, b));
+    }
+
+    private static FontWeight Weight(bool bold) => new() { Weight = (ushort)(bold ? 700 : 400) };
+
+    /// <summary>
+    /// 自检：改设置 → 重画这根线通不通。就地造一个假行、拿着一份假设置拨三下（同
+    /// <see cref="SettingChoiceRow.Probe"/> 的做法），不碰设置文件、也不碰屏上那一页。坏法是看不见的那种：
+    /// 模型换好了而屏上没跟上，或者反过来 —— 无论哪种，怎么调外观那条示例都是一个样子。
+    /// </summary>
+    internal static (bool Ok, string Detail) Probe()
+    {
+        var subtitles = new PlaybackSettings
+        {
+            SubtitleBold = true,
+            SubtitleColor = "#AC5D5D",
+            SubtitleBorderSize = "3",
+            SubtitleBorderColor = "#000000",
+            SubtitleShadowOffset = "1",
+            SubtitleBackColor = "#123456",
+            SubtitleBackOpacity = 40
+        };
+
+        var row = new SettingSubtitlePreviewRow("探针", null, subtitles);
+        var drawn = row.Model;
+
+        // 出厂那张：描边 3 换成 3.9 像素的一圈八份，阴影 1 换成 1.3 像素的一份，底板关着 —— 共九层。
+        var initial = drawn.Bold && drawn.TextColor == "#AC5D5D" && !drawn.Plate
+            && drawn.Layers.Count == 9
+            && Math.Abs(drawn.Layers[0].X - 1.3) < 0.001 && drawn.Layers[0].Color == "#123456"
+            && drawn.Layers[0].Opacity > 0.39 && drawn.Layers[0].Opacity < 0.41
+            && Math.Abs(drawn.Layers[1].X - 3.9) < 0.001 && Math.Abs(drawn.Layers[1].Y) < 0.001
+            && drawn.Layers[1].Color == "#000000";
+
+        // 整行不透明方框：底板按 1 画，阴影收掉，剩一圈描边 —— 八层。
+        subtitles.SubtitleBackStyle = "opaque-box";
+        row.Refresh();
+        var opaque = row.Model.Plate && row.Model.PlateOpacity == 1 && row.Model.Layers.Count == 8;
+
+        // 描边关掉：什么都不剩，只剩底板那一块。
+        subtitles.SubtitleBorderSize = "0";
+        row.Refresh();
+        var bare = row.Model.Plate && row.Model.Layers.Count == 0;
+
+        return (initial && opaque && bare,
+            $"假行：出厂样式{(initial ? "画出阴影加一圈八份的描边" : "没按设置画（" + drawn.Layers.Count + " 层）")}、"
+                + $"整行方框{(opaque ? "按不透明画且阴影收掉" : "没跟上")}、"
+                + $"描边关掉后{(bare ? "只剩底板" : "还剩东西")}");
+    }
 }

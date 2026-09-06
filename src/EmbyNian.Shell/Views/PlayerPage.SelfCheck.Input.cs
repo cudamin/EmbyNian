@@ -264,7 +264,7 @@ public sealed partial class PlayerPage
         var seen = new List<string>();
         var wrong = new List<string>();
 
-        void Beat(string what, bool paused, (Geometry Shape, Geometry Rim) want)
+        void Beat(string what, bool paused, Geometry want)
         {
             try
             {
@@ -282,11 +282,11 @@ public sealed partial class PlayerPage
 
             var shown = PulseBadge.Visibility == Visibility.Visible;
             var running = _pulse.GetCurrentState() is ClockState.Active or ClockState.Filling;
-            var right = ReferenceEquals(PulseShape.Data, want.Shape);
+            var right = ReferenceEquals(PulseShape.Data, want);
 
             // 「不要黑色的圆形边框，只要白色的三角形」: the plate is gone, so what is asserted now is that
             // nothing draws one — no fill, no ring — and that the shape is the size the user asked for
-            // rather than the 40 it was inside the circle, with the rim behind it carrying the same geometry.
+            // rather than the 40 it was inside the circle.
             var bare = PulseBadge.Background is null
                        && PulseBadge.BorderBrush is null
                        && PulseBadge.BorderThickness.Left == 0
@@ -296,22 +296,26 @@ public sealed partial class PlayerPage
 
             var box = PulseShape.Data?.Bounds ?? default;
             var big = box.Height >= 90
-                      && PulseRim.StrokeThickness > PulseShape.StrokeThickness
                       && PulseBadge.ActualWidth >= 130
                       && PulseBadge.ActualHeight >= 130;
-            var rimmed = ReferenceEquals(PulseRim.Data, want.Rim)
-                         && PulseRim.Data?.Bounds == PulseShape.Data?.Bounds;
+
+            // 「要纯白色，去掉灰色」 (2026-09-05): one layer, and both of its brushes are the palette's own white.
+            // Asserted rather than eyeballed, because the rim that used to sit behind this was five pixels of
+            // 35% black hugging the shape — on a screenshot that reads as an outline somebody drew on purpose.
+            var white = PulseArtBox.Children.Count == 1
+                        && ReferenceEquals(PulseShape.Fill, Resources["PlayerPulseBrush"])
+                        && ReferenceEquals(PulseShape.Stroke, Resources["PlayerPulseBrush"]);
 
             seen.Add($"{what}→{(shown ? "出角标" : "没出角标")}"
                      + $"，{(running ? "动画在跑" : "动画没跑")}"
                      + $"，形状{(right ? "对" : "不对")}"
                      + $"，{(bare ? "没有底板" : "还有底板")}"
                      + $"，外框 {box.Width:0}×{box.Height:0}"
-                     + $"／描边 {PulseShape.StrokeThickness:0} 与 {PulseRim.StrokeThickness:0}"
+                     + $"／描边 {PulseShape.StrokeThickness:0}"
                      + $"／徽标 {PulseBadge.ActualWidth:0}×{PulseBadge.ActualHeight:0}"
-                     + (rimmed ? "" : "（描边形状不一样）"));
+                     + (white ? "，纯白一层" : $"，不是纯白一层（{PulseArtBox.Children.Count} 层）"));
 
-            if (!shown || !running || !right || !bare || !big || !rimmed) wrong.Add(what);
+            if (!shown || !running || !right || !bare || !big || !white) wrong.Add(what);
         }
 
         Beat("暂停", paused: true, _pauseArt);

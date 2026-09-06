@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 14;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -211,8 +211,13 @@ public sealed class PlaybackSettings
     /// Subtitle languages in priority order: the first one the file actually has wins. Stored as
     /// names (简体中文) rather than codes so one entry can cover the several codes and title
     /// spellings a 简体 track turns up with.
+    /// <para>
+    /// 简体中文 first, 中文 second and no 繁体中文 of its own: 中文 is the generic entry of the zh
+    /// family, so once no 简体 track exists its 繁体 one is what 中文 matches — the user's call,
+    /// 2026-09-05, that the default ask for simplified first and any Chinese after.
+    /// </para>
     /// </summary>
-    public List<string> SubtitleLanguages { get; set; } = ["简体中文", "中文", "繁体中文"];
+    public List<string> SubtitleLanguages { get; set; } = ["简体中文", "中文"];
 
     /// <summary>When subtitles come on by themselves.</summary>
     public SubtitleMode SubtitleMode { get; set; } = SubtitleMode.Always;
@@ -227,41 +232,112 @@ public sealed class PlaybackSettings
     /// 字幕字体, as a font *family* name — that is what mpv's <c>--sub-font</c> takes. v3 stored the
     /// path of a file under C:\Windows\Fonts here, which mpv quietly ignored: it went looking for a
     /// family literally called "C:\Windows\Fonts\msyh.ttc", found nothing, and fell back to sans-serif.
-    /// It only ever looked right because the user's mpv.conf named a real family of its own.
+    /// It only ever looked right because the user's mpv.conf named a real family of its own. See
+    /// <see cref="Infrastructure.FontFamilies.Resolve"/>.
+    /// <para>
+    /// <b>Microsoft YaHei since v14</b>（「默认字体改为Microsoft YaHei」, 2026-09-06）— the family every
+    /// Windows install carries, so the default renders without leaning on the bundled copy. It held the
+    /// default up to v11, lost it to 方正中等线简体 in v12 and took it back in v14; that font stays
+    /// shipped (assets/fonts, handed to mpv as <c>sub-fonts-dir</c>) and selectable — see
+    /// <see cref="Infrastructure.FontFamilies.Default"/> for the whole history. mpv wants the family
+    /// name, which for the bundled font is 「方正中等线简体」; 常规 is the style within that family, and
+    /// asking for 「方正中等线简体常规」 by name matches nothing.
+    /// </para>
     /// </summary>
     public string SubtitleFontFamily { get; set; } = "Microsoft YaHei";
 
     /// <summary>
-    /// 字幕编码 for a text subtitle that is not valid UTF-8 (mpv's <c>sub-codepage</c>). GB18030 by
-    /// default, which is what a Chinese-subtitled release from before UTF-8 was universal will be.
+    /// 外观应用范围, mpv's <c>sub-ass-override</c>. Empty is mpv's own <c>scale</c>, under which an
+    /// ASS/SSA subtitle keeps its own font, size and colours and every appearance field below this one
+    /// does nothing to it; <c>force</c> makes them apply. See
+    /// <see cref="Mpv.MpvOutputOptions.SubtitleStyleScopes"/> for what that cost before it was a row.
     /// </summary>
-    public string SubtitleCodepage { get; set; } = "gb18030";
+    public string SubtitleAssOverride { get; set; } = "";
 
-    /// <summary>字幕字号 in mpv's own units (its default is 55); 0 leaves mpv's default alone.</summary>
+    /// <summary>
+    /// 字幕编码 for a text subtitle that is not valid UTF-8 (mpv's <c>sub-codepage</c>). Empty is mpv's
+    /// own <c>auto</c>, i.e. detection.
+    /// <para>
+    /// <b>This was <c>gb18030</c> until 2026-09-05</b>, which turned detection off and read every
+    /// non-UTF-8 subtitle as 简体 — a Big5 繁体 file came out as mojibake where <c>auto</c> reads it
+    /// correctly. Measured both ways; see that catalogue's comment. <see cref="SettingsMigration"/>'s
+    /// v11 step clears a stored <c>gb18030</c> for the same reason it was wrong here: nobody chose it.
+    /// </para>
+    /// </summary>
+    public string SubtitleCodepage { get; set; } = "";
+
+    /// <summary>
+    /// 字幕字号 in mpv's own units (its default is 38, measured off the shipped libmpv 2026-09-05 —
+    /// it was 55 for years and this comment said so long after mpv had changed it); 0 leaves mpv's
+    /// default alone. Only ever applies to a text subtitle, and only to an ASS one when
+    /// <see cref="SubtitleAssOverride"/> says 强制.
+    /// </summary>
     public int SubtitleFontSize { get; set; } = 50;
 
-    /// <summary>字幕加粗. On by default: at a distance it is what makes 简体 subtitles readable over a bright frame.</summary>
-    public bool SubtitleBold { get; set; } = true;
+    /// <summary>
+    /// 字幕缩放 as a percentage of mpv's <c>sub-scale</c> (100 = 1.0, i.e. unsaid). Multiplies
+    /// <see cref="SubtitleFontSize"/> for a text subtitle, and — this is why the row exists —
+    /// <b>it is the one size control an ASS/SSA subtitle honours without 强制</b>, because mpv's
+    /// default <c>sub-ass-override=scale</c> lets exactly this option through.
+    /// </summary>
+    public int SubtitleScalePercent { get; set; } = 100;
+
+    /// <summary>
+    /// 字幕加粗, mpv's <c>sub-bold</c>. <b>Off since v13</b> — the shipped 字幕外观 is the set the user
+    /// dictated on 2026-09-06, and bold is not in it; the thin 描边 and black shadow that set ships are
+    /// what keep 简体 text readable over a bright frame instead. On up to then, which is why
+    /// <see cref="SettingsMigration"/>'s v13 step has to carry the change onto stored files.
+    /// </summary>
+    public bool SubtitleBold { get; set; } = false;
 
     /// <summary>文字颜色 as <c>#RRGGBB</c>; empty leaves mpv's default alone.</summary>
     public string SubtitleColor { get; set; } = "#FFFFFF";
 
-    /// <summary>字体描边 width in mpv units, as a string so 「不设置」 and 「无」 are both expressible.</summary>
+    /// <summary>
+    /// 字体描边 in mpv units, as a string so 「不设置」 (the empty string — mpv's own 1.65) stays
+    /// expressible. Free numeric input since 2026-09-06（「这个不用弄成固定的选项，改成输入数字」）:
+    /// 0–10, canonicalised by <see cref="Mpv.MpvOutputOptions.ClampSubtitleUnit"/> on the way in and on
+    /// every load, so a hand-edited file cannot hand mpv.exe a value it refuses to start on.
+    /// </summary>
     public string SubtitleBorderSize { get; set; } = "0.5";
 
     /// <summary>描边颜色 as <c>#RRGGBB</c>; empty leaves mpv's default alone.</summary>
     public string SubtitleBorderColor { get; set; } = "#000000";
 
-    /// <summary>字幕阴影 offset in mpv units, as a string so 「不设置」 and 「无」 are both expressible.</summary>
+    /// <summary>
+    /// 字幕阴影 offset in mpv units, as a string so 「不设置」 (the empty string — mpv's own default is
+    /// no shadow at all) stays expressible. Free numeric input like 字体描边 next door; see
+    /// <see cref="Mpv.MpvOutputOptions.ClampSubtitleUnit"/>. Drawn in <see cref="SubtitleBackColor"/> —
+    /// mpv aliases the shadow colour to the plate colour — so with <see cref="SubtitleBackStyle"/> off
+    /// this is the only thing that colour is used for.
+    /// </summary>
     public string SubtitleShadowOffset { get; set; } = "0.5";
 
     /// <summary>
-    /// 背景颜色 as <c>#RRGGBB</c>, or <see cref="Mpv.MpvOutputOptions.NoBackground"/> for no box at
-    /// all; empty leaves mpv's default alone. The opacity below is applied to it.
+    /// 字幕底板, mpv's <c>sub-border-style</c>: empty for none, or a box mode. Off by default, which is
+    /// the look this client has always had.
+    /// <para>
+    /// <b>Its absence is why 背景颜色 and 背景不透明度 drew nothing at all until 2026-09-05.</b> Since mpv
+    /// 0.39 that colour is shared with the drop shadow and this option alone decides which of the two it
+    /// paints; unset, mpv draws a shadow and no plate, whatever colour was chosen.
+    /// </para>
     /// </summary>
-    public string SubtitleBackColor { get; set; } = "";
+    public string SubtitleBackStyle { get; set; } = "";
 
-    /// <summary>背景不透明度 in percent, applied to <see cref="SubtitleBackColor"/>.</summary>
+    /// <summary>
+    /// 底板颜色 as <c>#RRGGBB</c>; empty leaves mpv's own (a black at about 69% opacity). Also the
+    /// 阴影 colour — see <see cref="SubtitleShadowOffset"/>.
+    /// <para>
+    /// Shipped as <c>#000000</c> since v13 — the user's dictated 字幕外观 names this colour outright.
+    /// With <see cref="SubtitleBackStyle"/> off it paints only the shadow, which mpv's own default
+    /// already was to within the opacity, so the picture does not move; what changes is that the row
+    /// reads a real colour out of the box instead of 「不设置」. The same reason is why the v13
+    /// migration flips stored empties rather than leaving them.
+    /// </para>
+    /// </summary>
+    public string SubtitleBackColor { get; set; } = "#000000";
+
+    /// <summary>底板不透明度 in percent, applied to <see cref="SubtitleBackColor"/>.</summary>
     public int SubtitleBackOpacity { get; set; } = 60;
 
     /// <summary>
@@ -295,6 +371,32 @@ public sealed class PlaybackSettings
     /// the server for the series order, so the last episode of one season can continue into the next.
     /// </summary>
     public bool AutoPlayNextEpisode { get; set; } = true;
+
+    /// <summary>The smallest 字幕字号 worth offering; below this the text is not readable at any distance.</summary>
+    public const int MinimumSubtitleFontSize = 16;
+
+    /// <summary>The largest one the settings row offers.</summary>
+    public const int MaximumSubtitleFontSize = 160;
+
+    /// <summary>
+    /// 字幕字号 as it is allowed to be stored: 0 (「不指定，由 mpv 自己决定」) or a readable size.
+    /// <para>
+    /// A named function rather than two clamps, because <b>two places have to agree</b>: the settings
+    /// row, where the number is typed, and <see cref="SettingsMigration"/>, which repairs a file. Only
+    /// the second existed until 2026-09-05, so a typed 5 was 5 for that whole session — the row's own
+    /// note said 「最小 16」 while mpv was being sent 5 — and became 16 at the next launch, which is the
+    /// worst of the two: the value the user saw was neither kept nor refused.
+    /// </para>
+    /// </summary>
+    public static int ClampFontSize(int value) =>
+        value <= 0 ? 0 : Math.Clamp(value, MinimumSubtitleFontSize, MaximumSubtitleFontSize);
+
+    /// <summary>字幕缩放 range, in percent. Wide on purpose — a 4K film on a small window and a 1080p
+    /// one across a projector want very different numbers out of the same 字号.</summary>
+    public const int MinimumSubtitleScale = 50;
+
+    /// <inheritdoc cref="MinimumSubtitleScale"/>
+    public const int MaximumSubtitleScale = 300;
 }
 
 /// <summary>
@@ -429,8 +531,9 @@ public sealed class VideoSettings
     /// <b>This is the one piece of 画面几何 worth remembering across files.</b> Aspect override, rotation, pan,
     /// zoom and the colour controls are all on the player's right-click menu and none of them persist — every
     /// playback is a fresh mpv under <c>--no-config</c>. Mainstream players remember all of them; here almost
-    /// none of it is missed, because 锁定窗口比例大小 already keeps the window the shape of the picture so there
-    /// is normally nothing to letterbox. The exception is exactly this: a 2.35:1 film always has bars, and
+    /// none of it is missed, because a window that is playing something is held to the shape of the picture
+    /// (<c>HostWindow.PictureAspect</c>), so there is normally nothing to letterbox. The exception is exactly
+    /// this: a 2.35:1 film always has bars, and
     /// whether to trade the edges of the frame for them is a standing preference rather than a per-film one.
     /// </para>
     /// <para>
@@ -559,8 +662,18 @@ public sealed class ShaderAutomationSettings
     /// <summary>
     /// 启用着色器. Took over from v6's 「所有视频默认启用」: with a chain for every scale factor there is no
     /// 「默认组」 left for that switch to apply, so the honest question is just on or off.
+    /// <para>
+    /// <b>装机默认是关 —— 用户 2026-09-05 定的（「恢复默认后着色器默认关闭」）。</b>所以「恢复默认」那颗按钮
+    /// 交出来的也是关（<see cref="SettingsReset"/> 抄的就是这个初始值），而画质那一头默认只剩
+    /// <see cref="VideoSettings.QualityPreset"/> 一个开关 —— 那一项开着色器与否都照样生效，两者互不改写。
+    /// </para>
+    /// <para>
+    /// 存过的文件不受影响：v7 起这个键就写进设置文件了，所以已经开着的人照旧开着。<c>SettingsMigration</c> 里
+    /// v7 那一段把 v6 的旧开关照抄过来（开是开、关是关），正是因为装机默认从「开」变成了「关」——
+    /// 少了那一手，一份 v6 文件里明明开着的着色器会在升级时被这个新默认悄悄关掉。
+    /// </para>
     /// </summary>
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; }
 
     /// <summary>
     /// 显卡档位 — which column of the table is in play. Stated by the user rather than probed from the
@@ -695,10 +808,23 @@ public sealed class UiSettings
     /// </summary>
     public string Theme { get; set; } = Theming.UiThemes.DefaultId;
 
-    /// <summary>Poster card width in device-independent pixels; the grid scales around it.</summary>
-    public int PosterWidth { get; set; } = 170;
+    // 「海报宽度（像素）」那一行 2026-09-05 按用户的话删掉了（「删掉设置中的海报宽度」）：卡片从此固定用
+    // CardSize 的默认尺寸（海报 170、剧照 300、演职人员人像 124）。这里不留一个存而不用的键 —— 反序列化碰到
+    // 没处放的键本来就不出声，所以旧设置文件里留下的那一行照旧读得起来，只是没人再听它的。
 
     public bool ShowWatchedIndicators { get; set; } = true;
+
+    /// <summary>
+    /// 主页顶上那张轮播大图显不显示 —— 「在设置中新增关闭轮播图的功能」。
+    /// <para>
+    /// 关掉之后主页第一屏就没有那一块了：大图和它右边那一栏继续观看一起收起，继续观看回到下面横着排的第一排
+    /// （见 <c>HomeViewModel.BuildShelves</c>），整页变成一叠普通的货架。
+    /// </para>
+    /// <para>
+    /// 装机默认是开，所以旧的设置文件里没有这个键时行为一个像素都不变，也不需要为它加一条迁移。
+    /// </para>
+    /// </summary>
+    public bool ShowHomeBanner { get; set; } = true;
 
     /// <summary>
     /// 海报缓存在磁盘上最多占多少 MB。
@@ -733,33 +859,10 @@ public sealed class UiSettings
     /// </summary>
     public Emby.ScoreSource ScoreSource { get; set; } = Emby.ScoreSource.Community;
 
-    /// <summary>
-    /// 锁定窗口比例大小: whether dragging a window edge keeps the browsing area at
-    /// <see cref="Emby.HomeCarousel.WindowAspect"/> instead of taking whatever shape the pointer implies.
-    /// <para>
-    /// The browsing area rather than the whole client area: 「计算比例时要排除侧边栏」, so the rail's width
-    /// (<see cref="Emby.HomeCarousel.SideRail"/>) is added on top of the shape rather than counted inside it,
-    /// and the page comes out 16:9 — the shape of the artwork it is built around.
-    /// </para>
-    /// <para>
-    /// On by default. At this shape the home page uses its strict first-screen layout: the complete 继续观看
-    /// shelf fits below the banner and the following 媒体库 shelf begins outside the viewport, whether the
-    /// navigation pane is open or collapsed. Other window shapes keep the ordinary width-based banner rule.
-    /// </para>
-    /// <para>
-    /// Only while browsing. A file that is playing has its own ratio and it wins — a locked window during
-    /// playback would be the letterboxing that 「缩放窗口时按画面比例联动」 was written to get rid of.
-    /// </para>
-    /// </summary>
-    public bool LockWindowShape { get; set; } = true;
-
-    /// <summary>
-    /// 默认收起侧边栏: whether the navigation pane starts as the 48-wide rail rather than open. True is what
-    /// the shell has always done (「侧边栏默认为折叠状态」); the setting is what makes the other answer possible
-    /// without editing the shell. Flipping it also opens or closes the pane there and then, because a switch
-    /// that only takes effect after a restart reads as a switch that does not work.
-    /// </summary>
-    public bool CollapseSidebar { get; set; } = true;
+    // 「锁定窗口比例大小」那一行 2026-09-05 按用户的话整条删掉了（「删除设置中锁定比例的功能」）：浏览时的窗口
+    // 从此随便拉，只有放片子的时候形状还跟着画面走（HostWindow.PictureAspect）。「默认收起侧边栏」那一行
+    // 2026-09-06 跟着侧边栏本身一起删掉了（「删掉侧边栏」）—— 没有栏可收，那个开关就只是一句没人兑现的话。
+    // 两处都不留一个存而不用的键 —— 反序列化碰到没处放的键本来就不出声，所以旧设置文件照旧读得起来。
 
     public string? LastLibraryId { get; set; }
 

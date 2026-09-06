@@ -188,7 +188,10 @@ internal static partial class ShellSelfCheck
         var centre = HitAt(window, probe.X + probe.Width / 2, probe.Y + probe.Height / 2);
 
         // 洞左边那块留白，和洞右边 40 像素处：一进一出，证明挖掉的只有这一排所占的那一块。
-        var edge = HitAt(window, 20, 16);
+        // 左边那一点**从量出来的位置算**（整排左沿的一半），不写死：那块留白 2026-09-06 从 40 收到 17
+        // （页边距从 28 改成 24，见 Theme/Styles.xaml），而从前这里写死的 20 于是掉进了洞里 —— 这一关当场红，
+        // 报的是「左端留白 客户区」。一个跟着现场走的数字不会再有第二次。
+        var edge = HitAt(window, Math.Max(2, probe.X / 2), 16);
         var beyond = HitAt(window, probe.X + probe.Width + 40, probe.Y + probe.Height / 2);
 
         var hole = window.TitleBarHole;

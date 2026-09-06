@@ -48,8 +48,7 @@
          某张卡片上时才出现。 -->
     <Grid
         x:Name="Root"
-        AutomationProperties.HelpText="使用左右方向键浏览媒体，按 Enter 打开"
-        AutomationProperties.Name="媒体卡片列表"
+                x:Uid="ShelfStrip_Root"
         Background="Transparent"
         GotFocus="OnGotFocus"
         IsTabStop="False"
@@ -88,13 +87,12 @@
              数是 8，跟所有「你会去按的东西」一个数（原来是 6，不在任何一档上）。 -->
         <Button
             x:Name="Prev"
-            AutomationProperties.Name="上一页"
+                x:Uid="ShelfStrip_Prev"
             Click="OnPrevClicked"
             CornerRadius="0,8,8,0"
             HorizontalAlignment="Left"
             IsTabStop="False"
-            Style="{StaticResource EgShelfPageButtonStyle}"
-            ToolTipService.ToolTip="上一页">
+            Style="{StaticResource EgShelfPageButtonStyle}">
             <Button.Resources>
                 <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgShelfPageHoverBrush" />
                 <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgShelfPagePressBrush" />
@@ -108,13 +106,12 @@
 
         <Button
             x:Name="Next"
-            AutomationProperties.Name="下一页"
+                x:Uid="ShelfStrip_Next"
             Click="OnNextClicked"
             CornerRadius="8,0,0,8"
             HorizontalAlignment="Right"
             IsTabStop="False"
-            Style="{StaticResource EgShelfPageButtonStyle}"
-            ToolTipService.ToolTip="下一页">
+            Style="{StaticResource EgShelfPageButtonStyle}">
             <Button.Resources>
                 <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgShelfPageHoverBrush" />
                 <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgShelfPagePressBrush" />

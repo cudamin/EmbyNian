@@ -87,8 +87,8 @@ public partial class App : Application
             images.PruneInBackground();
 
             // 「新增可在设置中调整图片缓存大小的功能」. The settings page lives in a second window and has no handle
-            // on the image store, so it writes the number, saves, and shouts — the same rope 锁定窗口比例 and
-            // 默认收起侧边栏 already use. Subscribed here rather than in a page because this is where the store is:
+            // on the image store, so it writes the number, saves, and shouts — the same rope 默认收起侧边栏
+            // already uses. Subscribed here rather than in a page because this is where the store is:
             // App outlives every page, so there is nothing to unsubscribe.
             //
             // A prune only when the budget really changed. ShellPrefs carries the whole UiSettings, so this fires
@@ -107,10 +107,6 @@ public partial class App : Application
             _window = new HostWindow { Content = shell };
             _window.Closed += OnWindowClosed;
 
-            // 锁定窗口比例大小, before the window is on screen: the first drag of an edge asks for this value,
-            // and a window that opened unlocked and got locked on its first WM_SIZING would jump.
-            _window.BrowseAspect = ui.LockWindowShape ? HomeCarousel.WindowAspect : 0;
-
             // 上次关掉时的尺寸、位置和最大化状态。`--maximized` 说了就最大化，没说就照上次那一档 —— 命令行是
             // 「这一次这么开」，记下来的那一份是「平时就这么开」，两者不冲突。摆得下摆不下由 HostWindow 问屏幕。
             _window.Show(
@@ -122,12 +118,6 @@ public partial class App : Application
                     ui.WindowLeft + ui.WindowWidth,
                     ui.WindowTop + ui.WindowHeight));
 
-
-            // And once it is: the default client area is already the locked shape exactly — a 16:9 browsing
-            // area plus the rail the ratio does not count — so this normally changes nothing. It is here for
-            // the monitor whose DPI rounding leaves the centred window a pixel off, for the screen too small
-            // to hold that window at all, and it bows out on its own when started --maximized.
-            _window.FitToShape();
 
             // The entire video contract, closed here: the host window hands out a child HWND and
             // LibMpvBackend gives it to mpv as `wid`. Set after Show, because there is no client area to
@@ -172,6 +162,11 @@ public partial class App : Application
         // Tooling: --show-menu 把主页第一张卡的「更多」菜单弹开 —— 同上，一张浮层等不出来，而这台机器上注不进
         // 鼠标事件。摆在换页的那几个开关之前：一次导航就把浮层散掉了。
         if (_options.ShowMenu) await shell.ShowCardMenuAsync().ConfigureAwait(true);
+
+        // Tooling: --show-rail 把主页右栏那两条翻页条摆出来留着 —— 同上，悬停才浮出来的东西等不出来（挪真指针试过，
+        // 指针挪到了而照片上还是没有：用户的手也在那只鼠标上）。也在换页那几个开关之前：换一页，那一栏连它的翻页条
+        // 一起没了。
+        if (_options.ShowRail) await shell.ShowRailPagerAsync().ConfigureAwait(true);
 
         // Tooling: --show-detail clicks a poster and stays on whatever that click opened, which is how a
         // screenshot can be compared against Emby Theater's own detail page. --show-episode clicks one

@@ -19,6 +19,18 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Required by [LibraryImport] source generation in Interop/Native.cs. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
+      The language the UI is written in, and the one MRT falls back to. Both halves matter.
+
+      Strings\zh-Hans\Resources.resw is the only resource table this app has, and PRI generation writes
+      a default Language qualifier into priconfig.xml — left alone it is en-US, which would make every
+      x:Uid lookup ask for a language that has no table and get nothing. DefaultLanguage is what puts
+      zh-Hans there instead, so a machine running Windows in English still resolves these strings rather
+      than drawing blank labels. NeutralLanguage in Directory.Build.props is the managed-assembly
+      counterpart and does not reach the PRI.
+    -->
+    <DefaultLanguage>zh-Hans</DefaultLanguage>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -48,6 +60,44 @@
     <!-- We write Main ourselves: the process has to migrate the data directory, take the
          single-instance mutex and start logging before any XAML exists. -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+  </PropertyGroup>
+
+  <!--
+    WUI2010 — 「Nested x:Bind path 'ViewModel.EpisodeShelf.Title' will crash if any segment is null at
+    startup」 — is the one Microsoft.WindowsAppSDK.Analyzers rule this project turns off, and it is off
+    here rather than solution-wide so Core and the test project keep the full set. The analyzer is wired
+    in by Directory.Build.props; see the comment there for why.
+
+    Twenty sites are flagged, all of them 「shelf leaf」 bindings (DetailPage's four 货架 plus HomePage's
+    right rail) and one on PlayerViewModel.SubtitleFont. What the rule cannot see:
+
+    * SubtitleFont is `internal SettingFontRow SubtitleFont { get; }`, assigned in the constructor and
+      never null. That one is a plain false positive.
+    * The five shelf properties are `CardShelf?` on purpose, and the class comment on
+      DetailViewModel.EpisodeShelf says why: a shelf needs the image store and the card width from 设置,
+      so it cannot exist before Attach, and the page binds to it from the moment it is constructed. They
+      are assigned exactly once, in Attach, and never set back to null.
+    * The generated x:Bind code null-checks every segment of a path before descending, so a null
+      intermediate leaves the target unset — it does not throw. 「will crash」 overstates it.
+
+    Both fixes the rule offers cost more than they buy here, which is why this is a suppression rather
+    than a change:
+
+    * A flat view-model property (`EpisodeTitle => EpisodeShelf?.Title ?? ""`) goes stale the moment the
+      shelf's own Title changes, because the outer object raises nothing for an inner change. Making it
+      correct means subscribing to each shelf's PropertyChanged and re-raising — fifteen properties plus
+      a subscription ring, to replace a binding the framework already keeps current.
+    * A non-null `CardShelf.Empty` placeholder would report a wrong RowHeight and a true
+      RailVisibility before the real shelf arrives, i.e. it converts 「not there yet」 into 「there but
+      wrong」. That is the 「界面骗人」 failure this codebase has paid for twice.
+
+    What would make this suppression wrong: any code path that sets one of those five properties back to
+    null after Attach, or a sixth nested x:Bind path added over a property that really can go null both
+    ways. Neither exists today — grep for the five names in ViewModels/DetailViewModel.cs and
+    ViewModels/HomeViewModel.cs before adding one.
+  -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);WUI2010</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -151,6 +201,23 @@
   <ItemGroup>
     <None Include="..\..\assets\mpv-runtime\*.dll">
       <Link>%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    The bundled 字幕字体, from assets/fonts in this repository — 「这个字体打包进程序里」（2026-09-06）.
+    The shipped 方正中等线简体 is the 装机默认 of 设置 → 字幕 → 字体, and mpv is pointed at this folder by
+    sub-fonts-dir at every launch (ShellServices → PlaybackPlanner → MpvBaseline), so it renders without
+    being installed into Windows. The folder is also part of what FontLibrary scans, so the picker offers
+    it with a real preview on a machine that does not have it.
+
+    Kept next to the shaders and vulkan-1.dll rather than as ms-appx resources: playback runs through
+    libmpv on a plain path, not through a package URI.
+  -->
+  <ItemGroup>
+    <None Include="..\..\assets\fonts\*.ttf;..\..\assets\fonts\*.otf;..\..\assets\fonts\*.ttc">
+      <Link>fonts\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

@@ -42,6 +42,46 @@
         </Style>
 
         <!--
+          **一行设置就是一张卡**（2026-09-06 按 WinUI-Gallery 那套重排，「整套重画」）。Gallery 的设置页是
+          「一个分组标题 ＋ 一叠各自带底色和细边的行」（那套里叫 SettingsCard），而这一页从前是「一张大卡
+          ＋ 里面一叠没有边界的行」：八十行只靠 10 像素的间距分家，长一点的说明折两行之后，上下两行的字就
+          连成了一片。
+
+          做成一个 `Grid` 的样式而不是给每个模板套一层 `Border`：WinUI 的 `Grid` 自己就有 Background /
+          BorderBrush / BorderThickness / CornerRadius / Padding 这五样，而八个行模板的根本来就是 Grid ——
+          所以这一步是把每个模板上那句 `Margin="0,3,0,3" ColumnSpacing="24"` 换成一句 `Style`，一处不用多包。
+
+          **底色和边用的是 Gallery 自己那两个键**（`CardBackgroundFillColorDefaultBrush` /
+          `CardStrokeColorDefaultBrush`）—— `Palette.xaml` 早就把它们映到了本项目的角色表上，只是一直没人引。
+          圆角 4 而不是 8：8 是「一块能放东西的板」那一档（卡片、对话框），一行只有 60 高，8 的圆角在它身上
+          看起来是个胶囊。
+        -->
+        <Style x:Key="EgSettingRowStyle" TargetType="Grid">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="16,10,16,10" />
+            <Setter Property="MinHeight" Value="60" />
+            <Setter Property="ColumnSpacing" Value="24" />
+        </Style>
+
+        <!--
+          高一档的那三行同一张卡：主题色板、开关组、主页版面那张表。它们不是「左边一句话右边一个控件」那种
+          形状（标题在上、内容在下一整块），所以根是 StackPanel 而不是 Grid —— 而 WinUI 的 StackPanel 同样
+          自带那五样，于是这两个样式除了 TargetType 和 Spacing 一个字不差。
+          没有 `MinHeight`：它们本来就比 60 高得多，写上去只是一句永远成立的话。
+        -->
+        <Style x:Key="EgSettingBlockStyle" TargetType="StackPanel">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="16,12,16,12" />
+            <Setter Property="Spacing" Value="8" />
+        </Style>
+
+        <!--
           色板那一块。整块的底色、强调条和字都是那一套主题自己的颜色（在 ThemeSwatch 里做成固定画刷），
           所以按钮自己在四个状态下都必须是透明的 —— 视觉状态里的画刷会盖过本地值，指针一压上去就把那套
           主题的底色刷成框架的悬停灰。状态改这一圈线：胶片格的规矩，指针或焦点上来整圈变强调色。
@@ -89,13 +129,11 @@
           </para>
         -->
         <DataTemplate x:Key="EgSettingToggle" x:DataType="vm:SettingToggleRow">
-            <ToggleSwitch
+            <ToggleSwitch x:Uid="SettingsPage_ToggleSwitch1"
                 Margin="0,3,0,3"
                 Header="{x:Bind Label}"
                 HorizontalAlignment="Left"
                 IsOn="{x:Bind IsOn, Mode=TwoWay}"
-                OffContent="关"
-                OnContent="开"
                 ToolTipService.ToolTip="{x:Bind Note}" />
         </DataTemplate>
 
@@ -108,7 +146,7 @@
           窄、该窄的地方宽是同一件事的两头。
         -->
         <DataTemplate x:Key="EgSettingToggleRow" x:DataType="vm:SettingToggleRow">
-            <Grid Margin="0,3,0,3" ColumnSpacing="24">
+            <Grid Style="{StaticResource EgSettingRowStyle}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
@@ -120,12 +158,10 @@
                         Text="{x:Bind Note}"
                         Visibility="{x:Bind NoteVisibility}" />
                 </StackPanel>
-                <ToggleSwitch
+                <ToggleSwitch x:Uid="SettingsPage_ToggleSwitch2"
                     Grid.Column="1"
                     HorizontalAlignment="Left"
                     IsOn="{x:Bind IsOn, Mode=TwoWay}"
-                    OffContent="关"
-                    OnContent="开"
                     VerticalAlignment="Center" />
             </Grid>
         </DataTemplate>
@@ -134,7 +170,7 @@
 
             <local:SettingRowTemplates.Choice>
                 <DataTemplate x:DataType="vm:SettingChoiceRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
@@ -169,7 +205,7 @@
             -->
             <local:SettingRowTemplates.ToggleGroup>
                 <DataTemplate x:DataType="vm:SettingToggleGroupRow">
-                    <StackPanel Spacing="10">
+                    <StackPanel Style="{StaticResource EgSettingBlockStyle}">
                         <!-- 词表里的小标题（Theme/Styles.xaml 的 EgSubheadStyle）：以前这里只写了 SemiBold，
                              没写字体也没写字号，一组开关的标题于是比同一张卡片上的别的字都大一点。 -->
                         <TextBlock Style="{StaticResource EgSubheadStyle}" Text="{x:Bind Label}" />
@@ -196,7 +232,7 @@
             -->
             <local:SettingRowTemplates.Theme>
                 <DataTemplate x:DataType="vm:SettingThemeRow">
-                    <StackPanel Spacing="10">
+                    <StackPanel Style="{StaticResource EgSettingBlockStyle}">
                         <TextBlock Style="{StaticResource EgSubheadStyle}" Text="{x:Bind Label}" />
                         <TextBlock
                             Style="{StaticResource EgSettingNote}"
@@ -277,7 +313,7 @@
 
             <local:SettingRowTemplates.Number>
                 <DataTemplate x:DataType="vm:SettingNumberRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
@@ -303,7 +339,7 @@
 
             <local:SettingRowTemplates.Slider>
                 <DataTemplate x:DataType="vm:SettingSliderRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
@@ -315,18 +351,33 @@
                                 Text="{x:Bind Note}"
                                 Visibility="{x:Bind NoteVisibility}" />
                         </StackPanel>
-                        <Slider
-                            Grid.Column="1"
-                            automation:AutomationProperties.Name="mpv 参数滑块"
-                            HorizontalAlignment="Stretch"
-                            Maximum="{x:Bind Maximum}"
-                            Minimum="{x:Bind Minimum}"
-                            MinWidth="260"
-                            SnapsTo="StepValues"
-                            StepFrequency="{x:Bind Step}"
-                            TickFrequency="{x:Bind Step}"
-                            TickPlacement="None"
-                            Value="{x:Bind Value, Mode=TwoWay}" />
+                        <!--
+                          数值读数跟着滑块走（SettingSliderRow.ValueLabel）。滑块自己不显示数字，而这一页的
+                          滑块里有描边大小这种 0.05 一格的细档 —— 拖完不知道落在哪个数上，等于没调。
+                        -->
+                        <Grid Grid.Column="1" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Slider
+                                x:Uid="SettingsPage_SliderA1"
+                                HorizontalAlignment="Stretch"
+                                Maximum="{x:Bind Maximum}"
+                                Minimum="{x:Bind Minimum}"
+                                MinWidth="240"
+                                SnapsTo="StepValues"
+                                StepFrequency="{x:Bind Step}"
+                                TickFrequency="{x:Bind Step}"
+                                TickPlacement="None"
+                                Value="{x:Bind Value, Mode=TwoWay}" />
+                            <TextBlock
+                                Grid.Column="1"
+                                MinWidth="48"
+                                Style="{StaticResource EgSettingLabel}"
+                                Text="{x:Bind ValueLabel, Mode=OneWay}"
+                                TextAlignment="Right" />
+                        </Grid>
                     </Grid>
                 </DataTemplate>
             </local:SettingRowTemplates.Slider>
@@ -338,7 +389,7 @@
             -->
             <local:SettingRowTemplates.Text>
                 <DataTemplate x:DataType="vm:SettingTextRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
@@ -366,10 +417,15 @@
               since the setting is written by picking a family out of the list, a half-typed name can never
               reach the settings file. Each line is drawn in the font it offers, which is why a font list
               beats a text box in the first place.
+
+              「默认收起来不要展开」「输入栏要显示当前正在使用的字体」（2026-09-06）：静止时列表收着、
+              输入栏里是当前字体；点进框里清空成搜索（整张名单都在），选中一个就收起并把新字体放回
+              输入栏，走开没挑也收回（LostFocus → CloseList，它自己会看焦点是不是落进了名单 ——
+              点名单那一行是先夺焦点后选中，收早了那一行就再也点不中了）。
             -->
             <local:SettingRowTemplates.Font>
                 <DataTemplate x:DataType="vm:SettingFontRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
@@ -383,14 +439,17 @@
                         </StackPanel>
                         <StackPanel Grid.Column="1" MinWidth="260" Spacing="6">
                             <TextBox
+                                x:Uid="SettingsPage_TextBox3"
+                                GotFocus="{x:Bind OpenList}"
                                 HorizontalAlignment="Stretch"
-                                PlaceholderText="搜索字体：yahei、雅黑、mono…"
-                                Text="{x:Bind Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                LostFocus="{x:Bind CloseList}"
+                                Text="{x:Bind BoxText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <ListView
                                 Height="252"
                                 ItemsSource="{x:Bind Matches}"
                                 SelectedItem="{x:Bind Selected, Mode=TwoWay}"
-                                SelectionMode="Single">
+                                SelectionMode="Single"
+                                Visibility="{x:Bind ListVisibility, Mode=OneWay}">
                                 <ListView.ItemTemplate>
                                     <DataTemplate x:DataType="vm:FontOption">
                                         <StackPanel Padding="0,2,0,2">
@@ -420,6 +479,124 @@
             </local:SettingRowTemplates.Font>
 
             <!--
+              A colour row: a swatch and its code on the right, and the HTML 颜色选择器 in a flyout behind
+              the swatch. The picker two-way-binds the row's own Color, so everything a pick means — write
+              the setting, save, live-push to a film that is playing — stays in the row; the template has no
+              code-behind and needs none.
+            -->
+            <local:SettingRowTemplates.Color>
+                <DataTemplate x:DataType="vm:SettingColorRow">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note, Mode=OneWay}"
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                        <StackPanel
+                            Grid.Column="1"
+                            HorizontalAlignment="Left"
+                            Orientation="Horizontal"
+                            Spacing="10"
+                            VerticalAlignment="Center">
+                            <Button
+                                x:Uid="SettingsPage_ColorSwatch"
+                                Background="{x:Bind Swatch, Mode=OneWay}"
+                                BorderBrush="{StaticResource EgBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Height="30"
+                                Padding="0"
+                                Width="56">
+                                <Button.Flyout>
+                                    <Flyout>
+                                        <!-- Flyout 站在内容上不留出滚动，拾色器整体比色块宽得多，给它的
+                                             呈现层把边距和滚动条去掉，不然四周一大圈白。 -->
+                                        <Flyout.FlyoutPresenterStyle>
+                                            <Style TargetType="FlyoutPresenter">
+                                                <Setter Property="Padding" Value="0" />
+                                                <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled" />
+                                                <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+                                            </Style>
+                                        </Flyout.FlyoutPresenterStyle>
+                                        <local:HtmlColorPicker
+                                            Margin="16"
+                                            Color="{x:Bind Color, Mode=TwoWay}" />
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
+                            <TextBlock
+                                IsTextSelectionEnabled="True"
+                                Style="{StaticResource EgDataStyle}"
+                                Text="{x:Bind HexLabel, Mode=OneWay}"
+                                VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Color>
+
+            <!--
+              「字幕示例」预览（「参考图2新增字幕外观功能」，2026-09-06）：卡顶一条按当前外观画出的样字。
+              这一行只画不写；改设置的行写完喊 SettingSubtitlePreviewRow.Refresh，这里所有绑定都是 OneWay
+              跟着新模型走。描边和阴影没有「画字加边」可用，就是 Layers 里那几份同样文字的拷贝叠出来的 ——
+              层次就是清单的次序（阴影在最下、正文在最上），所以整条只有一个 ItemsControl，底板是垫在
+              它下面的那块 Border。层的文字对读屏是 Raw（十份拷贝念十遍不是读屏该念的），整条的名字
+              从 x:Uid 来。
+            -->
+            <local:SettingRowTemplates.Preview>
+                <DataTemplate x:DataType="vm:SettingSubtitlePreviewRow">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
+                        <StackPanel Spacing="8">
+                            <Grid
+                                Height="{x:Bind StripHeight, Mode=OneWay}"
+                                x:Uid="SettingsPage_SubtitlePreview"
+                                HorizontalAlignment="Stretch">
+                                <Border
+                                    Background="{x:Bind PlateBrush, Mode=OneWay}"
+                                    HorizontalAlignment="Center"
+                                    Padding="22,2"
+                                    VerticalAlignment="Center">
+                                    <ItemsControl ItemsSource="{x:Bind Layers, Mode=OneWay}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <Grid />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:PreviewLayer">
+                                                <TextBlock
+                                                    AutomationProperties.AccessibilityView="Raw"
+                                                    FontFamily="{x:Bind Family}"
+                                                    FontSize="{x:Bind Size}"
+                                                    FontWeight="{x:Bind Weight}"
+                                                    Foreground="{x:Bind Brush}"
+                                                    HorizontalAlignment="Center"
+                                                    IsHitTestVisible="False"
+                                                    Text="{x:Bind Text}">
+                                                    <TextBlock.RenderTransform>
+                                                        <TranslateTransform X="{x:Bind X}" Y="{x:Bind Y}" />
+                                                    </TextBlock.RenderTransform>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
+                            </Grid>
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Preview>
+
+            <!--
               主页版面那张表：一行一排，勾选决定显不显示，按住往上下拖、或者按右边那两颗箭头决定次序（「新增页里
               拖拽决定这些列表的顺序，勾选显示或者不勾选取消显示」）。
 
@@ -438,7 +615,7 @@
             -->
             <local:SettingRowTemplates.HomeLayout>
                 <DataTemplate x:DataType="vm:SettingHomeLayoutRow">
-                    <StackPanel Margin="0,3,0,3" Spacing="8">
+                    <StackPanel Style="{StaticResource EgSettingBlockStyle}">
                         <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                         <TextBlock
                             Style="{StaticResource EgSettingNote}"
@@ -476,26 +653,22 @@
 
                                         <!-- 换次序那两颗。到顶的「上移」和到底的「下移」置灰（CanUp/CanDown）：
                                              按下去也不动的按钮亮着，第一次按的人只会以为这张表是坏的。 -->
-                                        <Button
+                                        <Button x:Uid="SettingsPage_ButtonA2"
                                             Grid.Column="2"
-                                            AutomationProperties.Name="上移"
                                             Command="{x:Bind UpCommand}"
                                             IsEnabled="{x:Bind CanUp, Mode=OneWay}"
-                                            Style="{StaticResource EgHomeShiftStyle}"
-                                            ToolTipService.ToolTip="往上挪一排">
+                                            Style="{StaticResource EgHomeShiftStyle}">
                                             <FontIcon
                                                 FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                                 FontSize="12"
                                                 Glyph="&#xE70E;" />
                                         </Button>
 
-                                        <Button
+                                        <Button x:Uid="SettingsPage_ButtonA3"
                                             Grid.Column="3"
-                                            AutomationProperties.Name="下移"
                                             Command="{x:Bind DownCommand}"
                                             IsEnabled="{x:Bind CanDown, Mode=OneWay}"
-                                            Style="{StaticResource EgHomeShiftStyle}"
-                                            ToolTipService.ToolTip="往下挪一排">
+                                            Style="{StaticResource EgHomeShiftStyle}">
                                             <FontIcon
                                                 FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                                 FontSize="12"
@@ -525,7 +698,7 @@
             -->
             <local:SettingRowTemplates.Fact>
                 <DataTemplate x:DataType="vm:SettingFactRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
@@ -552,43 +725,6 @@
                     </Grid>
                 </DataTemplate>
             </local:SettingRowTemplates.Fact>
-
-            <!--
-              一行动作：左边标签和说明，右边一颗按下去真会做事的按钮 —— 「恢复默认」那张卡上唯一的一行
-              「恢复默认设置」（不是「关于」卡，那是头一版，那张卡在窗口里第七行就到底了，这一行看不见）。
-
-              和上面那一行读数长得像，差在按钮的角色：那一行的按钮是附赠的去处（打开一个文件夹），这一行的按钮
-              就是这一行本身。说明多半是长的一段（要写清哪些会回默认、哪些不动），所以按钮顶端对齐，跟着标签
-              那一列的第一行走，而不是掉到中间去。
-
-              样式走 AccentButtonStyle：整页六十行里只有这一颗按钮会改掉别的设置，而它旁边那几颗（打开文件夹）
-              是完全无害的。做重不做红 —— 红色留给「删除」，这一颗改的是设置，不删任何东西；真正挡一脚的是按下去
-              之后那次确认（SettingsViewModel.RestoreDefaultsAsync）。
-            -->
-            <local:SettingRowTemplates.Action>
-                <DataTemplate x:DataType="vm:SettingActionRow">
-                    <Grid Margin="0,3,0,3" ColumnSpacing="24">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
-                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
-                            <TextBlock
-                                Style="{StaticResource EgSettingNote}"
-                                Text="{x:Bind Note}"
-                                Visibility="{x:Bind NoteVisibility}" />
-                        </StackPanel>
-                        <Button
-                            Grid.Column="1"
-                            Command="{x:Bind RunCommand}"
-                            Content="{x:Bind ActionLabel}"
-                            HorizontalAlignment="Left"
-                            Style="{StaticResource AccentButtonStyle}"
-                            VerticalAlignment="Top" />
-                    </Grid>
-                </DataTemplate>
-            </local:SettingRowTemplates.Action>
         </local:SettingRowTemplates>
     </Page.Resources>
 
@@ -599,10 +735,26 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <local:PageSlate
+        <local:PageSlate x:Uid="SettingsPage_localPageSlate4"
             Eyebrow="SETTINGS"
-            Note="改动即时保存"
-            Title="设置" />
+            Note="改动即时保存">
+            <local:PageSlate.Trailing>
+                <!--
+                  「恢复默认」。原先它自己占一张卡（左边名单里的一个分类），那张卡在设置窗口里第七行就到底，
+                  拍出来只剩半行 —— 2026-09-06 按他一句「恢复默认按钮移到右上角，下方的恢复默认页面删除」
+                  搬进页头这一格，卡和分类一起删了。页头是整页最靠上的位置，比任何一张卡都够得着。
+
+                  命令是视图模型的 ResetCommand（AsyncRelayCommand 在跑的时候自己把按钮置灰，连按两下不会
+                  叠出两个对话框）。字和指针停上去那句说明从词表来（SettingsPage_ResetButton）—— 卡删了之后，
+                  按下之前屏上把「服务器和账号不动」说清楚的地方就是那句说明，所以自检盯着它。
+                -->
+                <Button
+                    x:Name="SettingsResetButton"
+                    x:Uid="SettingsPage_ResetButton"
+                    Command="{x:Bind ViewModel.ResetCommand}"
+                    Style="{StaticResource AccentButtonStyle}" />
+            </local:PageSlate.Trailing>
+        </local:PageSlate>
 
         <!--
           这一页从前没有任何一处能对用户说话 —— 六十行都是「改一下就存」，本来也无话可说。「恢复默认设置」
@@ -629,8 +781,9 @@
             </Grid.ColumnDefinitions>
 
             <ListView
+                AutomationProperties.AutomationId="SettingsCategoryList"
                 IsItemClickEnabled="False"
-                ItemsSource="{x:Bind ViewModel.Categories}"
+                ItemsSource="{x:Bind ViewModel.Categories, Mode=OneWay}"
                 SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}" />
 
             <!--
@@ -652,43 +805,53 @@
                 <ScrollView
                     VerticalScrollBarVisibility="Auto"
                     Visibility="{x:Bind ViewModel.CardsVisibility, Mode=OneWay}">
-                    <ItemsControl ItemsSource="{x:Bind ViewModel.Sections}" MaxWidth="900">
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Sections, Mode=OneWay}" MaxWidth="900">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <StackPanel Spacing="14" />
+                                <!--
+                                  外层面板的间距必须是 0。分类切换把没选中的卡折进 Visibility.Collapsed，但
+                                  ItemsControl 给每项包的占位容器（ContentPresenter）不跟着折叠 —— 零高、可见，
+                                  StackPanel 的 Spacing 照样在它前面垫一次：36 × 隐藏卡张数的空白就是这么来的
+                                  （「关于」第九张 = 8 × 36 = 288px，2026-09-06 截图实量 y=416 对上）。分组之间
+                                  的 36 由模板根上的下外边距承担 —— 折叠时边距跟着内容一起归零，才是真不占位。
+                                -->
+                                <StackPanel Spacing="0" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:SettingSection">
-                                <Border
-                                    Padding="18"
-                                    Background="{ThemeResource EgSurfaceAltBrush}"
-                                    BorderBrush="{ThemeResource EgBorderBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="{StaticResource EgCardCornerRadius}"
-                                    Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
-                                    <StackPanel Spacing="10">
-                                        <!--
-                                          设置卡片的牌子和卡片带的牌子是同一块木头（local:ShelfHead）：分区标题、
-                                          右端一个等宽读数、底下一条通栏发丝线。这一页原先自己写了个标题 —— 只有
-                                          字号和 SemiBold、没写字体，于是每张卡片的名字比媒体库那些带子的名字大
-                                          一点，而且是另一种字；那条线也没有，八张卡片全靠间距分家。
-                                        -->
-                                        <local:ShelfHead Note="{x:Bind Count}" Title="{x:Bind Title}" />
-                                        <TextBlock
-                                            Style="{StaticResource EgSettingNote}"
-                                            Text="{x:Bind Description}" />
-                                        <ItemsControl
-                                            ItemTemplateSelector="{StaticResource EgSettingRows}"
-                                            ItemsSource="{x:Bind Rows}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel Spacing="10" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </Border>
+                                <!--
+                                  **这一层从「一张卡」变成了「一个分组」**（2026-09-06 按 WinUI-Gallery 那套
+                                  重排）。从前它是一张带底色、带细边、圆角 8 的大卡，里面一叠没有边界的行；
+                                  现在每一行自己是一张卡（EgSettingRowStyle），而这一层只剩牌子、说明和那一叠
+                                  行 —— 底色、边框、圆角、内边距全部撤掉。
+                                  **理由是卡不该套卡**：Gallery 的设置页没有外面这一层，而两层圆角套在一起，
+                                  外层那圈边就成了一条谁都解释不了的线；真做出来的样子是「一叠卡浮在一张卡上」。
+                                  外层撤掉之后，这一叠行左右直接对齐页边（EgPageMargin 的 24），和别的页面一样。
+                                -->
+                                <StackPanel Spacing="12" Margin="0,0,0,36" Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
+                                    <!--
+                                      设置分组的牌子和卡片带的牌子是同一块木头（local:ShelfHead）：分区标题、
+                                      右端一个等宽读数、底下一条通栏发丝线。这一页原先自己写了个标题 —— 只有
+                                      字号和 SemiBold、没写字体，于是每张卡片的名字比媒体库那些带子的名字大
+                                      一点，而且是另一种字；那条线也没有，八张卡片全靠间距分家。
+                                    -->
+                                    <local:ShelfHead Note="{x:Bind Count}" Title="{x:Bind Title}" />
+                                    <TextBlock
+                                        Style="{StaticResource EgSettingNote}"
+                                        Text="{x:Bind Description}" />
+                                    <ItemsControl
+                                        ItemTemplateSelector="{StaticResource EgSettingRows}"
+                                        ItemsSource="{x:Bind Rows}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <!-- 4，不是 10：行与行之间现在有两条细边和两块底色在分家，
+                                                     再留 10 就是一叠互不相干的砖头。Gallery 那套也是这个数。 -->
+                                                <StackPanel Spacing="4" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                    </ItemsControl>
+                                </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>

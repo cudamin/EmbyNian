@@ -29,6 +29,60 @@ internal static class ItemDetailTests
         RegisterMediaInfo();
         RegisterWebUrl();
         RegisterHero();
+        RegisterProse();
+    }
+
+    /// <summary>
+    /// 刮削来的那段简介收拾成什么样。屏上的病例是「地球之夜」那一条：句号后面空出六个字宽的空当，看着像排错了
+    /// （2026-09-05 在主页轮播上拍到）。
+    /// </summary>
+    private static void RegisterProse()
+    {
+        Test("简介：句子之间那几格排版空白收干净，两个汉字之间不留空格", () =>
+        {
+            // 中文简介里常见的两种排版空白：段首两个全角空格，和句号后面几个半角空格。
+            Assert.Equal(
+                "本片由五个小故事组成。洛杉矶的夜里，一个女孩开着车。",
+                ItemDetail.Prose("本片由五个小故事组成。　　洛杉矶的夜里，一个女孩开着车。"));
+
+            Assert.Equal(
+                "遭遇。洛杉矶",
+                ItemDetail.Prose("  遭遇。      洛杉矶  "));
+
+            // 西文那一侧照旧留一个空格 —— 并掉就把两个词粘成了一个。
+            Assert.Equal("Night on Earth", ItemDetail.Prose("Night   on \t Earth"));
+
+            // 一侧是汉字、一侧是拉丁字母时也留着：「S01E02 第一集」并起来读不出分界。
+            Assert.Equal("S01E02 第一集", ItemDetail.Prose("S01E02   第一集"));
+        });
+
+        Test("简介：段落照原样留着，空行最多留一个", () =>
+        {
+            Assert.Equal("第一段。\n第二段。", ItemDetail.Prose("第一段。\r\n第二段。"));
+            Assert.Equal("第一段。\n\n第二段。", ItemDetail.Prose("第一段。\n\n\n\n第二段。"));
+
+            // 整段前后的空行和空白一概不留。
+            Assert.Equal("只有一句。", ItemDetail.Prose("\n\n  只有一句。  \n\n"));
+            Assert.Equal("", ItemDetail.Prose(null));
+            Assert.Equal("", ItemDetail.Prose("   \n\t \n "));
+        });
+
+        Test("简介：轮播那一档把段落也并成一行", () =>
+        {
+            // 那条带只给两行，一个段落换行在两行的格子里就是白占掉一行。
+            Assert.Equal("第一段。第二段。", ItemDetail.ProseLine("第一段。\n\n第二段。"));
+            Assert.Equal("A line. Another line.", ItemDetail.ProseLine("A line.\nAnother line."));
+            Assert.Equal("", ItemDetail.ProseLine(null));
+
+            // 轮播那一句问的就是这个函数（HomeCarousel.Synopsis），所以这里连它一起钉住。
+            var item = new EmbyItem
+            {
+                Type = EmbyItemType.Movie,
+                Overview = "本片由五个小故事组成。　　洛杉矶。\n\n第二段。"
+            };
+
+            Assert.Equal("本片由五个小故事组成。洛杉矶。第二段。", HomeCarousel.Synopsis(item));
+        });
     }
 
     private static void RegisterHeadings()

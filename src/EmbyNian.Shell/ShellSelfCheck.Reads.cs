@@ -288,7 +288,7 @@ internal static partial class ShellSelfCheck
         // puts back the one it found, so everything read after it is the restored page.
         var (views, restored) = library.WalkViews();
 
-        var (setting, card, cellWidth, cellHeight) = library.Sizing;
+        var (card, cellWidth, cellHeight) = library.Sizing;
 
         return new LibraryState(
             library.IsReady,
@@ -303,7 +303,6 @@ internal static partial class ShellSelfCheck
             // ask about until the panel has been built.
             library.FilterTemplatesResolve,
             library.Filters.IsEmpty ? "无" : library.Filters.Describe(),
-            setting,
             card,
             cellWidth,
             cellHeight,

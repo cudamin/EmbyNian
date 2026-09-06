@@ -10,10 +10,14 @@
 
   Merged after XamlControlsResources in App.xaml, so these keys shadow the framework's own.
 
-  这里写下的每个色值现在只画第一帧。真正生效的是 EmbyNian.Core 的 UiThemes 那六套主题，由
+  这里写下的每个色值现在只画第一帧。真正生效的是 EmbyNian.Core 的 UiThemes 那五套主题，由
   Theme/ThemeHost.cs 在窗口出现之前把它们写进下面这些 SolidColorBrush 对象里 —— 改的是画刷自己的
-  Color，不是换字典条目，所以已经绑上去的那几百处会当场跟着变。字面值和默认那套（emby-dark 与
-  daylight）保持一致，只为了「万一 ThemeHost 没跑起来」时界面还是这个样子，而不是一片透明。
+  Color，不是换字典条目，所以已经绑上去的那几百处会当场跟着变。字面值和默认那套（emby-dark）保持一致，
+  只为了「万一 ThemeHost 没跑起来」时界面还是这个样子，而不是一片透明。Light 那一份现在没有哪套主题会
+  选到（唯一的浅色 daylight 2026-09-05 删了），但 ThemeHost 照旧往它里面写，理由见 App.xaml 顶上那段。
+
+  三份字典的键是 Dark / Light / HighContrast，没有 Default —— winui-design 那条规矩，见下面第一份自己
+  那段说明。
 -->
 <ResourceDictionary
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -22,8 +26,22 @@
     <ResourceDictionary.ThemeDictionaries>
 
         <!-- Dark is the app's real theme: this is a client whose job is to hand a video to mpv,
-             usually in a dim room, and poster art reads better against a dark surface. -->
-        <ResourceDictionary x:Key="Default">
+             usually in a dim room, and poster art reads better against a dark surface.
+
+             The key is 「Dark」 rather than 「Default」 — winui-design's theming rule is 「custom theme
+             dictionaries cover Light, Dark and HighContrast explicitly — never Default」, and this file
+             has had a full Light and a full HighContrast beside it all along, so the key name was the
+             last thing standing between this dictionary and that rule.
+
+             It is not only a name. 「Default」 is the fallback WinUI reaches for when no dictionary matches
+             the current theme, so a dark-keyed entry was being found by accident rather than by request;
+             a mistyped 「Dark」 elsewhere would have silently landed here and looked correct. Keyed 「Dark」
+             it is found because the theme *is* Dark — App.xaml pins Application.RequestedTheme to Dark for
+             exactly that reason, and with no Default left, a lookup that matches nothing now falls through
+             to the framework's own value instead of quietly borrowing this one. Two application-scope
+             readers (DiagnosticsViewModel.Resolve, PlayerPage.BrushFor), ThemeHost's Painted list, and
+             the self-check's PaintedDictionaries all name this key; they moved with it. -->
+        <ResourceDictionary x:Key="Dark">
 
             <!-- surfaces -->
             <Color x:Key="EgWindowColor">#FF16181C</Color>
@@ -289,11 +307,17 @@
         </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 
-    <!-- 与主题无关的颜色 —— 只有这两个。字号、字体、圆角那一整段搬到 Theme/Styles.xaml 去了：
+    <!-- 与主题无关的颜色 —— 只有这三个。字号、字体、圆角那一整段搬到 Theme/Styles.xaml 去了：
          判据是「换主题会不会动它」，颜色会，字号和圆角不会。 -->
 
     <!-- 详情页头图上的文字。头图永远是一张压了深色遮罩的剧照，所以这两个刷子故意不进
          ThemeDictionaries：跟着主题走的话，浅色主题下就是深色字压在深色遮罩上。 -->
     <SolidColorBrush x:Key="EgOnScrimBrush" Color="#FFF3F5F8" />
     <SolidColorBrush x:Key="EgOnScrimDimBrush" Color="#FFC9D0D9" />
+
+    <!-- 主页第一屏那一整块的底：左边轮播那条带（HomeBanner 的 Band，剧照整张画出来，所以四周总会露出这个底
+         色），右边继续观看那一栏（HomePage 的 Rail）。两处必须是同一支画刷 —— 它们是并排的两栏，差一档就是
+         中间一道竖着的接缝。和上面那两支同一个理由不跟主题走：那一整块上的字走的是 EgOnScrim 那套浅墨，底色
+         跟着主题变成近白的话就是白底白字（晴昼那套）。 -->
+    <SolidColorBrush x:Key="EgBannerBaseBrush" Color="#FF0C0E11" />
 </ResourceDictionary>

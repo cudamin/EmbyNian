@@ -52,11 +52,14 @@ internal sealed class HostWindow : IDisposable
     private const int MinimumHeight = 560;
 
     /// <summary>
-    /// 开窗就是锁定的那个形状：浏览区（客户区去掉侧边栏那一条）16:9，加回那一条的宽。算出来而不是写死，因为
-    /// 「锁着比例却开在别的形状上」的窗口会被 <see cref="FitToShape"/> 在第一帧之后拽一下，屏幕上就是一跳。
+    /// 开窗那一档的宽：页面 16:9（<see cref="HomeCarousel.WindowAspect"/>）—— 主页第一屏于是正好被一张不裁切的
+    /// 剧照铺满。算出来而不是写死，那个形状改了这里跟着走。
+    /// <para>
+    /// 2026-09-06 侧边栏删掉之后这里不再加回一条栏的宽（从前是 <c>+ HomeCarousel.SideRail</c>，49）。**页宽一个
+    /// 像素都没变**：从前是 1471 的窗口配 1422 的页面，现在是 1422 的窗口配 1422 的页面。
+    /// </para>
     /// </summary>
-    private static readonly int DefaultWidth =
-        (int)Math.Round(HomeCarousel.WindowAspect * DefaultHeight) + HomeCarousel.SideRail;
+    private static readonly int DefaultWidth = (int)Math.Round(HomeCarousel.WindowAspect * DefaultHeight);
 
     /// <summary>
     /// Held in a static field for the process lifetime: Windows keeps the raw thunk, so letting the
@@ -150,13 +153,6 @@ internal sealed class HostWindow : IDisposable
     /// 窗口永远挂在上面，所以委托存下来，<c>WM_DESTROY</c> 里减掉。
     /// </summary>
     private Action<EmbyNian.Theming.UiTheme>? _repaint;
-
-    /// <summary>
-    /// 「锁定窗口比例大小」改了的时候把新值接过来。和 <see cref="_repaint"/> 是同一件事、同一个理由：
-    /// <see cref="ShellPrefs.Changed"/> 也是静态事件，留在上面的就是一个 HWND 已经归零的窗口，而它接到通知之后
-    /// 干的正是给窗口设大小。同样在 <c>WM_DESTROY</c> 里减掉。
-    /// </summary>
-    private Action<EmbyNian.Configuration.UiSettings>? _reshape;
 
     /// <summary>
     /// The one rectangle of the browsing title bar that belongs to the page instead of the window frame —
@@ -664,38 +660,12 @@ internal sealed class HostWindow : IDisposable
     /// here rather than asked for during the drag because <c>WM_SIZING</c> arrives dozens of times a
     /// second and the answer would be a round trip to mpv's event loop each time.
     /// </para>
+    /// <para>
+    /// <b>这是现在唯一一条形状约束。</b>浏览时还有过第二条（「锁定窗口比例大小」，把浏览区按住在 16:9），
+    /// 2026-09-05 按用户的话删掉了 —— 没在放片子的窗口从此随便拉。
+    /// </para>
     /// </summary>
     public double PictureAspect { get; set; }
-
-    /// <summary>
-    /// 锁定窗口比例大小: the shape the browsing area is held in while nobody is watching anything — as
-    /// width ÷ height, or 0 for 「resize it however you like」.
-    /// <para>
-    /// The browsing area, not the client area: 「计算比例时要排除侧边栏」, so the ratio owns the client area
-    /// less <see cref="SideInset"/> and the window is that much wider than its own shape. Set from
-    /// <c>UiSettings.LockWindowShape</c> at startup and whenever that switch is flipped
-    /// (<see cref="ShellPrefs"/>), and the value is the home page's
-    /// (<see cref="HomeCarousel.WindowAspect"/>). That shape is also how the home page recognises
-    /// the mode in which its first screen is strict: the complete 继续观看 shelf fits below the banner and the
-    /// next 媒体库 shelf starts outside the viewport, independent of the navigation pane state.
-    /// </para>
-    /// <para>
-    /// Second to <see cref="PictureAspect"/> rather than beside it: a file that is playing has a shape of its
-    /// own and it wins, or 「缩放窗口时按画面比例联动」 would have been undone by this. So the window is held to
-    /// the picture while there is one and to this the rest of the time, and <see cref="LockedAspect"/> is that
-    /// sentence. A picture fills the client area edge to edge, which is why the inset goes with the ratio
-    /// (<see cref="LockedInset"/>) instead of being a property of the window.
-    /// </para>
-    /// </summary>
-    public double BrowseAspect { get; set; }
-
-    /// <summary>
-    /// 侧边栏那一条在这块屏上占多少物理像素 —— <see cref="BrowseAspect"/> 管的是它右边那一片。
-    /// <see cref="HomeCarousel.SideRail"/> 是逻辑像素，而窗口矩形一律是物理像素，所以要按这个窗口的 dpi 放大。
-    /// </summary>
-    internal int SideInset => SideInsetFor(WindowDpi);
-
-    private static int SideInsetFor(uint dpi) => (int)Math.Round(HomeCarousel.SideRail * dpi / 96.0);
 
     /// <summary>这个窗口所在那块屏的 dpi，问不到就按 96 算 —— 和下面几处 <c>GetDpiForWindow</c> 同一个兜底。</summary>
     private uint WindowDpi
@@ -709,7 +679,7 @@ internal sealed class HostWindow : IDisposable
 
     /// <summary>
     /// 自检用：这个窗口的客户区最小能到多大，物理像素。比例撞上它的时候形状要让位（<see cref="AspectLock"/> 里
-    /// 那条「最小尺寸压得住比例」），所以读锁定形状的那一关得知道这个数才不会把「让位」报成「锁坏了」。
+    /// 那条「最小尺寸压得住比例」），所以读形状的那一关得知道这个数才不会把「让位」报成「锁坏了」。
     /// </summary>
     internal (int Width, int Height) MinimumClientSize
     {
@@ -721,50 +691,32 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// Whether the browsing ratio lock owns the window geometry right now. Playback owns the shape while it
-    /// has a picture; fullscreen, maximized and Windows-snapped windows belong to the monitor instead. The
-    /// setting alone is not enough: after playback the restored window can still have the film's shape, so
-    /// the browsing area must also be within rounding distance of <see cref="BrowseAspect"/> — the client area
-    /// less the rail, which is what the ratio was applied to in the first place.
+    /// 自检用：首屏那一读在这个窗口上判不判。它量的是「第一屏那两栏立得住、下一排横排还在屏外」，而那句话是照
+    /// **开窗那一档**说的 —— 页面 16:9（<see cref="DefaultWidth"/>）。
+    /// <para>
+    /// 判据是「**不比 16:9 更扁**」而不是「正好 16:9」：那一叠货架要的是高度，所以比 16:9 更高的窗口只会让这句话
+    /// 更容易成立，那一档照样判。比它更扁的窗口（页面又宽又矮）可能连一排货架都放不下 —— 那是物理，不是回归，
+    /// 所以那一档只报不判。从前这里要求正好 16:9，因为「锁定窗口比例大小」把窗口一直按在那个形状上；那个开关
+    /// 2026-09-05 删掉了，而窗口从此什么形状都拉得出来。
+    /// </para>
+    /// <para>
+    /// 从前这里还要从客户区宽里减掉侧边栏那一条（一个叫 <c>SideInset</c> 的读数）—— 侧边栏 2026-09-06 删掉之后
+    /// 页面就是整个客户区，那一步跟着没了。
+    /// </para>
+    /// <para>
+    /// 放片子的时候形状归画面，全屏、最大化和被 Windows 贴边的窗口形状归显示器 —— 这四种都不判。
+    /// </para>
     /// </summary>
-    internal bool BrowseFoldActive
+    internal bool BrowseFoldMeasurable
     {
         get
         {
-            if (BrowseAspect <= 0 || PictureAspect > 0 || Fullscreen || IsMaximized) return false;
+            if (PictureAspect > 0 || Fullscreen || IsMaximized) return false;
 
             var (width, height) = ClientSize;
-            var browse = width - SideInset;
-            return browse > 0 && height > 0 && Math.Abs(browse - (BrowseAspect * height)) <= 2;
+            return width > 0 && height > 0 && width <= (HomeCarousel.WindowAspect * height) + 2;
         }
     }
-
-    /// <summary>
-    /// Which of the two ratios the window is actually held to right now: the picture's while something is
-    /// playing into this window, the browsing shape otherwise, 0 when neither is set.
-    /// </summary>
-    private double LockedAspect => PictureAspect > 0 ? PictureAspect : BrowseAspect;
-
-    /// <summary>
-    /// And which part of the client area that ratio describes: all of it for a picture, everything right of
-    /// the navigation rail while the browsing lock has the window.
-    /// </summary>
-    private int LockedInset(uint dpi) => PictureAspect > 0 ? 0 : SideInsetFor(dpi);
-
-    /// <summary>
-    /// 窗口化时视频有黑边: reshapes the window so its client area is exactly <see cref="PictureAspect"/>,
-    /// which is what leaves mpv nothing to letterbox. The other half of 「缩放窗口时按画面比例联动」 —
-    /// <c>WM_SIZING</c> only holds the shape while an edge is being dragged, so a window that was already
-    /// some other shape when a film started played it with bands top and bottom until the user happened to
-    /// drag an edge. Called once per file, from the same poll that learns the ratio.
-    /// <para>
-    /// Silently nothing in the three cases where the window's shape is not ours to choose: fullscreen and
-    /// maximized both mean the edges belong to the monitor, and a minimized window has no shape to correct.
-    /// The monitor's work area is the ceiling, so a 4K file cannot open a window taller than the screen it
-    /// is being watched on.
-    /// </para>
-    /// </summary>
-    public void FitToPicture() => FitToAspect(PictureAspect, 0, "按画面比例调整窗口");
 
     /// <summary>
     /// Writes down what <see cref="Placement"/> promises. Cheap enough to call on every drag that ends and
@@ -793,36 +745,22 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// 锁定窗口比例大小 just went on — or the app just started with it on: reshapes the window to
-    /// <see cref="BrowseAspect"/>, because <c>WM_SIZING</c> only holds a shape while an edge is being dragged
-    /// and the window it is switched on in is whatever shape it already was.
+    /// 窗口化时视频有黑边: reshapes the window so its client area is exactly <see cref="PictureAspect"/>,
+    /// which is what leaves mpv nothing to letterbox. The other half of 「缩放窗口时按画面比例联动」 —
+    /// <c>WM_SIZING</c> only holds the shape while an edge is being dragged, so a window that was already
+    /// some other shape when a film started played it with bands top and bottom until the user happened to
+    /// drag an edge. Called once per file, from the same poll that learns the ratio.
     /// <para>
-    /// Nothing while a file is playing: the window belongs to the picture then
-    /// (<see cref="LockedAspect"/>), and reshaping it to the browsing ratio mid-film is exactly the
-    /// letterboxing 「窗口化时视频有黑边」 asked to be rid of. The switch still takes effect — it is read again
-    /// on the next drag, and playback ending leaves the window where the film had it, which is the same thing
-    /// that has always happened.
+    /// Silently nothing in the three cases where the window's shape is not ours to choose: fullscreen and
+    /// maximized both mean the edges belong to the monitor, and a minimized window has no shape to correct.
+    /// The monitor's work area is the ceiling, so a 4K file cannot open a window taller than the screen it
+    /// is being watched on. The measured frame rather than the one the style bits imply — see
+    /// <see cref="FrameThickness"/>.
     /// </para>
     /// </summary>
-    public void FitToShape()
+    public void FitToPicture()
     {
-        if (PictureAspect > 0) return;
-
-        FitToAspect(BrowseAspect, SideInset, "按锁定比例调整窗口");
-    }
-
-    /// <summary>
-    /// The body both of the above share: reshape this window so the part of its client area the ratio owns —
-    /// all of it for a picture, everything right of the rail for the browsing lock
-    /// (<paramref name="inset"/>) — is exactly <paramref name="aspect"/> where its shape is ours to choose,
-    /// and say so in the log under <paramref name="reason"/>. Two callers with one arithmetic — the guards,
-    /// the measured frame and the work-area ceiling are the same questions whichever ratio is being applied,
-    /// and a second copy of them is a second place for the caption-height trap
-    /// (<see cref="FrameThickness"/>) to be got wrong.
-    /// </summary>
-    private void FitToAspect(double aspect, int inset, string reason)
-    {
-        if (Handle == IntPtr.Zero || aspect <= 0) return;
+        if (Handle == IntPtr.Zero || PictureAspect <= 0) return;
         if (Fullscreen || Native.IsZoomed(Handle) || Native.IsIconic(Handle)) return;
         if (!Native.GetWindowRect(Handle, out var bounds)) return;
 
@@ -833,13 +771,12 @@ internal sealed class HostWindow : IDisposable
 
         var fitted = AspectLock.Fit(
             new WindowBounds(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom),
-            aspect,
+            PictureAspect,
             frame.Width,
             frame.Height,
             WorkArea(),
             MinimumWidth * (int)dpi / 96,
-            MinimumHeight * (int)dpi / 96,
-            inset);
+            MinimumHeight * (int)dpi / 96);
 
         if (fitted.Left == bounds.Left && fitted.Top == bounds.Top
             && fitted.Width == bounds.Width && fitted.Height == bounds.Height)
@@ -852,7 +789,7 @@ internal sealed class HostWindow : IDisposable
             fitted.Left, fitted.Top, fitted.Width, fitted.Height,
             Native.SwpNoZOrder | Native.SwpNoActivate);
 
-        Log.Info(Category, $"{reason} {fitted.Width}x{fitted.Height}");
+        Log.Info(Category, $"按画面比例调整窗口 {fitted.Width}x{fitted.Height}");
     }
 
     /// <summary>
@@ -864,8 +801,10 @@ internal sealed class HostWindow : IDisposable
     /// 少接一处，屏幕上就是一个照旧随便拉的窗口，而所有的单元测试照旧全过。
     /// </para>
     /// <para>
-    /// 开关关掉的那一档反过来验：那时这个矩形必须一字不改地回来，否则就是「关掉了还在锁」。只看矩形不看返回值 ——
-    /// 那一档走的是 <c>DefWindowProc</c>，它对 <c>WM_SIZING</c> 回什么并没有写在文档里。
+    /// <b>自检里没有片子，所以这一读自己摆一个画面比例出来</b>（16:9，读完原样放回）：不摆的话
+    /// <see cref="PictureAspect"/> 是 0，这一关就只剩「没锁的时候别乱改矩形」那一半，而「锁住了」那一半 ——
+    /// 也就是它真正要盯的那一半 —— 一辈子跑不到。摆的是属性而不是真去放片子：<c>WM_SIZING</c> 只改一个矩形，
+    /// 窗口一个像素都不会动。两档都验：摆着比例要按 16:9 改写并且左边沿不动，放回 0 之后同一个矩形要原样送回。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbeShapeLock()
@@ -878,51 +817,69 @@ internal sealed class HostWindow : IDisposable
         if (dpi == 0) dpi = 96;
 
         var frame = FrameThickness(dpi);
-        var locked = LockedAspect;
-        var inset = LockedInset(dpi);
+        var was = PictureAspect;
 
-        // 右边沿往外 240：宽领头那一档，左边沿该原地不动。
-        var wanted = new NativeRect
-        {
-            Left = bounds.Left,
-            Top = bounds.Top,
-            Right = bounds.Right + 240,
-            Bottom = bounds.Bottom
-        };
-
-        var buffer = Marshal.AllocHGlobal(Marshal.SizeOf<NativeRect>());
-        NativeRect answered;
-        IntPtr claimed;
         try
         {
-            Marshal.StructureToPtr(wanted, buffer, false);
-            claimed = Native.SendMessage(Handle, Native.WmSizing, new IntPtr((int)ResizeEdge.Right), buffer);
-            answered = Marshal.PtrToStructure<NativeRect>(buffer);
+            PictureAspect = HomeCarousel.WindowAspect;
+            var locked = Send();
+
+            PictureAspect = 0;
+            var free = Send();
+
+            var shape = locked.Client.Height > 0 && locked.Client.Width > 0
+                ? (double)locked.Client.Width / locked.Client.Height
+                : 0;
+
+            var lockedOk = locked.Claimed && Math.Abs(shape - HomeCarousel.WindowAspect) < 0.01
+                && locked.Answered.Left == bounds.Left;
+            var freeOk = free.Untouched;
+
+            return (lockedOk && freeOk,
+                $"摆上 {HomeCarousel.WindowAspectLabel} 之后右边沿外拉 240 → 客户区 "
+                    + $"{locked.Client.Width}×{locked.Client.Height} = {shape:0.000}:1"
+                    + $"（要的是 {HomeCarousel.WindowAspect:0.000}），左边沿{(locked.Answered.Left == bounds.Left ? "没动" : "被挪了")}，"
+                    + $"窗口{(locked.Claimed ? "改写了这个矩形" : "没接手 —— 锁没生效")}"
+                    + $"；放回「没在放片子」之后同一个矩形 {free.Answered.Width}×{free.Answered.Height}，"
+                    + $"{(freeOk ? "原样送回" : "被改写了 —— 没在放片子还在锁")}");
         }
         finally
         {
-            Marshal.FreeHGlobal(buffer);
+            PictureAspect = was;
         }
 
-        var client = (Width: answered.Width - frame.Width, Height: answered.Height - frame.Height);
+        // 一趟 WM_SIZING：把「右边沿往外 240」那个矩形送进去（宽领头那一档，左边沿该原地不动），
+        // 交回窗口改写成什么样、客户区因此多大、以及它到底有没有接手。
+        (NativeRect Answered, (int Width, int Height) Client, bool Claimed, bool Untouched) Send()
+        {
+            var wanted = new NativeRect
+            {
+                Left = bounds.Left,
+                Top = bounds.Top,
+                Right = bounds.Right + 240,
+                Bottom = bounds.Bottom
+            };
 
-        // 比例管的是 inset 右边那一片：播放时那是整个客户区，浏览时是客户区去掉侧边栏那一条。
-        var owned = client.Width - inset;
-        var shape = client.Height > 0 && owned > 0 ? (double)owned / client.Height : 0;
-        var untouched = answered.Width == wanted.Width && answered.Height == wanted.Height;
+            var buffer = Marshal.AllocHGlobal(Marshal.SizeOf<NativeRect>());
+            NativeRect answered;
+            IntPtr claimed;
+            try
+            {
+                Marshal.StructureToPtr(wanted, buffer, false);
+                claimed = Native.SendMessage(Handle, Native.WmSizing, new IntPtr((int)ResizeEdge.Right), buffer);
+                answered = Marshal.PtrToStructure<NativeRect>(buffer);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
 
-        var ok = locked > 0
-            ? claimed != IntPtr.Zero && Math.Abs(shape - locked) < 0.01 && answered.Left == wanted.Left
-            : untouched;
-
-        return (ok,
-            locked > 0
-                ? $"右边沿外拉 240 → 客户区 {client.Width}×{client.Height}，"
-                    + (inset > 0 ? $"去掉侧边栏那 {inset} 后 {owned}×{client.Height} = {shape:0.000}:1" : $"{shape:0.000}:1")
-                    + $"（要的是 {locked:0.000}），左边沿{(answered.Left == wanted.Left ? "没动" : "被挪了")}，"
-                    + $"窗口{(claimed != IntPtr.Zero ? "改写了这个矩形" : "没接手 —— 锁没生效")}"
-                : $"未锁定：右边沿外拉 240 → {answered.Width}×{answered.Height}，"
-                    + $"{(untouched ? "原样送回" : "被改写了 —— 关掉了还在锁")}");
+            return (
+                answered,
+                (answered.Width - frame.Width, answered.Height - frame.Height),
+                claimed != IntPtr.Zero,
+                answered.Width == wanted.Width && answered.Height == wanted.Height);
+        }
     }
 
     /// <summary>
@@ -1491,15 +1448,6 @@ internal sealed class HostWindow : IDisposable
         // its final size gets no WM_SIZE out of ShowWindow, so without this call the only refresh the caption
         // strip would ever get is the user's first resize.
         UpdateTitleBarRegions();
-
-        // 设置页那个开关关掉的时候得把这里的锁一起松开，开的时候还要当场把窗口摆成那个形状 —— 光记下比例不
-        // 够，WM_SIZING 要等到用户下一次去拖边才问。委托存下来是为了退订，见 _reshape。
-        _reshape = ui =>
-        {
-            BrowseAspect = ui.LockWindowShape ? HomeCarousel.WindowAspect : 0;
-            FitToShape();
-        };
-        ShellPrefs.Changed += _reshape;
 
         // 基线。拖过一次边、最大化过一次之后这一份会被盖掉，可从开窗到那一刻之间关掉窗口也得记住些什么 ——
         // 而 --maximized 开起来的那一次这里只抬得起那一位，尺寸留空（0 就是「还没记过」），下次照默认尺寸开、
@@ -2092,7 +2040,7 @@ internal sealed class HostWindow : IDisposable
 
             case Native.WmClose:
                 // 最后一次，而且必须在 DestroyWindow 之前：Closed 事件由 WM_DESTROY 发出，那时候 Handle 已经
-                // 是 0，问不出这个窗口的任何几何了。程序化挪过的窗口（FitToShape、按画面比例联动）也只有这一
+                // 是 0，问不出这个窗口的任何几何了。程序化挪过的窗口（按画面比例联动那一下）也只有这一
                 // 处兜得住 —— 那几下不经过拖动，收不到 WM_EXITSIZEMOVE。
                 RememberPlacement();
                 Native.DestroyWindow(window);
@@ -2108,13 +2056,6 @@ internal sealed class HostWindow : IDisposable
                 {
                     ThemeHost.Changed -= _repaint;
                     _repaint = null;
-                }
-
-                // 同上。这一个留着的后果更直接：下一次改设置就是往一个 HWND 已经是 0 的窗口上设大小。
-                if (_reshape is not null)
-                {
-                    ShellPrefs.Changed -= _reshape;
-                    _reshape = null;
                 }
 
                 // Zeroed here rather than left dangling: the backend can outlive the window by the length
@@ -2135,12 +2076,11 @@ internal sealed class HostWindow : IDisposable
     /// implies; <see cref="AspectLock"/> decides what shape it should be and this writes the answer back,
     /// so the window never takes a size it then has to correct.
     /// <para>
-    /// The shape is <see cref="LockedAspect"/> — the picture's while a file is playing into our own window,
-    /// the browsing ratio while 「锁定窗口比例大小」 is on, and 0 when neither holds, which is the ordinary
-    /// window that resizes however the pointer says. Fullscreen and maximized are off regardless: those
-    /// edges are the monitor's and constraining them would fight the OS. Which part of the client area that
-    /// shape describes comes with it (<see cref="LockedInset"/>): a picture is the whole of it, the browsing
-    /// window is everything right of the rail.
+    /// The shape is <see cref="PictureAspect"/> — the picture's while a file is playing into our own window,
+    /// and 0 the rest of the time, which is the ordinary window that resizes however the pointer says.
+    /// Fullscreen and maximized are off regardless: those edges are the monitor's and constraining them would
+    /// fight the OS. A picture fills the client area edge to edge, so the whole of it is what the shape
+    /// describes.
     /// </para>
     /// <para>
     /// The frame thickness is measured from the window rather than derived from its styles — see
@@ -2150,7 +2090,7 @@ internal sealed class HostWindow : IDisposable
     /// </summary>
     private IntPtr LockAspectDuringResize(IntPtr window, IntPtr wParam, IntPtr lParam)
     {
-        var aspect = LockedAspect;
+        var aspect = PictureAspect;
         if (aspect <= 0 || Fullscreen || Native.IsZoomed(window))
             return Native.DefWindowProc(window, Native.WmSizing, wParam, lParam);
 
@@ -2174,8 +2114,7 @@ internal sealed class HostWindow : IDisposable
             frame.Width,
             frame.Height,
             MinimumWidth * (int)dpi / 96,
-            MinimumHeight * (int)dpi / 96,
-            LockedInset(dpi));
+            MinimumHeight * (int)dpi / 96);
 
         proposed.Left = locked.Left;
         proposed.Top = locked.Top;

@@ -152,18 +152,20 @@ public sealed partial class PlayerPage
         report.Add($"类光标：藏着换掉 {_window.ClassCursorsBlanked} 个类（这一趟共扫到 {_window.ClassCursorsSwept} 个）");
 
         // 藏鼠标真正的扳机，发一遍并把它落到哪儿写出来。指针不动的时候上面每一句「没有光标」都是没人问的答案，
-        // 系统只在有理由重算的时候才去收集它们 —— 这一下就是那个理由（<see cref="Native.NudgeCursorState"/>）。
+        // 而这一下就是那个理由 —— 一像素出去、一像素回来，走真实输入队列（<see cref="Native.NudgeCursorState"/>）。
         // <para>
         // 只印不断言，理由是这声 <c>WM_SETCURSOR</c> 未必落在我们手上：指针压在 XAML 内容上时它由框架自己那个
         // 内层窗口答掉，既不冒到主窗口的 <c>Route</c>、也不冒到岛的过程上来 —— 同一份报告里那句「真移动问到
         // 0→0」说的就是这件事（那一趟指针真的挪到了画面中心，两处一次都没被问到）。真放片子的时候指针压的是
-        // mpv 自己那块子窗口，那是一个普通的 Win32 窗口，这声就落在它身上。发得出去这一半由
-        // 「藏的时候让系统重新问了一次」在 <see cref="ProbeCursorAlive"/> 里断言。
+        // mpv 自己那块子窗口，那是一个普通的 Win32 窗口，这声就落在它身上。而这一下真正要够到的不是
+        // <c>WM_SETCURSOR</c>，是框架的输入管线：它只在处理指针输入的时候才去念 <c>ProtectedCursor</c>。发得出去
+        // 这一半由「藏的时候催了一次框架」在 <see cref="ProbeCursorAlive"/> 里断言，听得见没有由那儿的
+        // 「真实输入」一读答。
         // </para>
         asked = _window.CursorAsksSeen;
         var nudged = Native.NudgeCursorState();
         Pump();
-        report.Add($"原地重设指针：发得出={nudged}，我们这两个过程问到 {asked}→{_window.CursorAsksSeen}");
+        report.Add($"催一下框架：发得出={nudged}，我们这两个过程问到 {asked}→{_window.CursorAsksSeen}");
 
         // The message a still pointer never sends, sent by hand — to the host window first, because that is
         // where a moving pointer's own WM_SETCURSOR actually arrives. This is the assertion the probe is built
@@ -494,13 +496,21 @@ public sealed partial class PlayerPage
             var ticks = _tickCount;
             var nudges = _cursorNudges;
 
-            // Whether the island really heard the placement above. One more nudge through the real queue, at the
-            // point the pointer already sits on, and then the question 「did a XAML pointer event arrive」. This is
-            // the premise the whole leg rests on: hidden with the island silent proves nothing about a film, and
-            // that is what every previous round measured.
-            Native.MovePointerTo(centre.X, centre.Y);
+            // Whether the island really hears the ask the hide is built on. Not a stand-in for it either: this is
+            // the same <see cref="Native.NudgeCursorState"/> call, made at the point the pointer already sits on,
+            // followed by the question 「did a XAML pointer event arrive」. That question is the premise the whole
+            // leg rests on — hidden with the island silent proves nothing about a film, and that is what every
+            // previous round measured — and since 2026-09-05 it is also the premise the fix rests on: the ask has
+            // to reach WinUI's input pipeline or the transparent ProtectedCursor is a value nobody reads.
+            // Counted as either kind of event, because the ask is a pixel out and a pixel back: with the cursor
+            // still showing, a one-pixel hop is under PointerNoise and the return leg lands on the anchor, so
+            // both arrive as 「空事件」 rather than as movement. 「The island heard something」 is the question,
+            // not 「the island called it a movement」.
+            var quiet = _stillMoves;
+
+            Native.NudgeCursorState();
             Pump();
-            heard = _pointerMoves > moves;
+            heard = _pointerMoves > moves || _stillMoves > quiet;
             moves = _pointerMoves;
 
             // Nothing known about the pointer, exactly as at the start of a playback, so the first tick of the
@@ -561,7 +571,7 @@ public sealed partial class PlayerPage
                 + $"，轮询问出 {polled} 次移动{(polled <= 1 ? "（只有开头那次播种，也就是全程没人碰）" : $"（开头播种 1 次，真的动了 {polled - 1} 次）")}"
                 + $"、XAML 事件 {_pointerMoves - moves} 次、空事件 {_stillMoves} 次"
                 + $"，我们推了 {pushed} 拍、计时器自己 {Math.Max(0, _tickCount - ticks - pushed)} 拍"
-                + $"，让系统重新问了 {_cursorNudges - nudges} 次"
+                + $"，催了框架 {_cursorNudges - nudges} 次"
                 + (disturbed
                     ? $"，中途有人动了鼠标（{(moved ? "指针没停在原处" : "轮询问出了真移动")}），这一轮只作参考"
                     : string.Empty));
@@ -581,12 +591,13 @@ public sealed partial class PlayerPage
             if (_cursorHidden)
                 Want($"{where}藏着时画面上的光标是透明的", ReferenceEquals(Root.Cursor, _window!.BlankInputCursor));
 
-            // And the half of hiding that only this count can vouch for: the OS works out what the pointer is
-            // over when the pointer moves, and this hide happens because nothing is moving, so without the
-            // zero-displacement nudge at the end of it the last shape it worked out stays on the screen. That
-            // is what 「静止超过两秒后鼠标指针还是不会自动隐藏」 was, from a player whose own readings all said
-            // hidden. The desktop's own answer cannot stand in for this — see Screen.
-            Want($"{where}藏的时候让系统重新问了一次", _cursorNudges > nudges);
+            // And the half of hiding that only this count can vouch for. The framework reads ProtectedCursor
+            // while it handles pointer input, and this hide happens because nothing is moving — so without the
+            // one-pixel round trip at the end of it the transparent cursor is a value nobody ever reads and the
+            // last shape worked out stays on the screen. That is what 「静止超过两秒后鼠标指针还是不会自动隐藏」
+            // was, from a player whose own readings all said hidden. The desktop's own answer cannot stand in
+            // for this — see Screen.
+            Want($"{where}藏的时候催了一次框架", _cursorNudges > nudges);
 
             // And not before: the rule has one window for the chrome and a longer one for the cursor, and a
             // cursor that went at 650 ms would mean the two had been collapsed into one. Skipped when it never
@@ -626,7 +637,7 @@ public sealed partial class PlayerPage
         // happened over another application's window, and until one happens over ours that is whose cursor the
         // desktop is still describing. Measured both ways, including a real displacement and a fresh hide at
         // the point it landed on, which did not change the windowed answer either. So the assertion that
-        // stands for this is 「藏的时候让系统重新问了一次」 in <c>Watch</c>: the ask is what this process is
+        // stands for this is 「藏的时候催了一次框架」 in <c>Watch</c>: the ask is what this process is
         // responsible for and what was missing when the screen was wrong, and the desktop's own answer is a
         // diagnostic for whoever reads the report next.
         void Screen(string where)
@@ -662,17 +673,18 @@ public sealed partial class PlayerPage
             // stricter reading of the two — it is the state a hand that never moved would be looking at.
             var gone = ScreenHasNoCursor();
 
-            // The ask the whole hide rests on: the cursor put back at the point it already occupies, so the OS
-            // goes through the entire 「who owns this point, what shape do they want」 round it does on a real
-            // move while the pointer stays exactly where it is. Both the event filter and the poll ignore an
-            // unchanged position, so the stillness being measured survives it.
+            // The ask the whole hide rests on: one physical pixel out through the real input queue and straight
+            // back, so that WinUI's input pipeline goes through the entire 「who is the pointer over, what shape
+            // does he want」 round — which is the only moment it reads ProtectedCursor — while the pointer ends
+            // exactly where it started. The poll and the event filter both know this player's own echo, so the
+            // stillness being measured survives it.
             //
-            // This was two pokes until 2026-09-05 — a same-point SetCursorPos and a zero-displacement SendInput
-            // — and they are now one call, because the injection was measured to produce no message whatever:
-            // see Native.NudgeCursorState for the numbers.
+            // Two earlier spellings of this asked nothing at all: a same-point SetCursorPos, which never reaches
+            // the island, and a zero-displacement SendInput, which produces no message whatever. See
+            // Native.NudgeCursorState for the measurements.
             var sent = Native.NudgeCursorState();
             Pump();
-            lines.Add($"原地重设指针{(sent ? string.Empty : "（发不出去）")}后 系统 {Says()}，线程形状={Mine()}");
+            lines.Add($"催一下框架{(sent ? string.Empty : "（发不出去）")}后 系统 {Says()}，线程形状={Mine()}");
 
             // Straight to the source, and only when that window is ours: sent across threads this blocks
             // until the other one pumps, and a self-check that can hang is worse than one that skips a line.

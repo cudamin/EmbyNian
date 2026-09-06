@@ -51,35 +51,26 @@ internal static partial class ShellSelfCheck
 
         Check("客户区尺寸", width > 0 && height > 0, $"{width}x{height} 物理像素");
 
-        // 「锁定主页的窗口长宽避免调整窗口大小时轮播画面被裁切」：浏览区真是那个形状。锁的是客户区去掉侧边栏那一条
-        // 之后剩下的那一片（「计算比例时要排除侧边栏」），所以这里量的是那一片，而不是整个客户区。**这条锁买到的
-        // 是那张 16:9 剧照正好铺满第一屏、上下左右都不留底色** —— 图本身在任何形状下都不裁（`Stretch="Uniform"`，
-        // 由下面「主页大图不裁切」量）。「继续观看完整落在第一屏里」是另一回事，靠的是把那一排压在图上（ShelfLift），
-        // 跟这条锁开不开没有关系，由下面「主页首屏只露继续观看」在真实 XAML 树上另量。
-        // 开关关掉时（BrowseAspect 是 0）就只报形状不判：那时窗口本来就随便拉。
-        var sideInset = window.SideInset;
-        var browseWidth = width - sideInset;
-        var browseShape = height > 0 && browseWidth > 0 ? (double)browseWidth / height : 0;
-
-        // 窄屏上这条锁凑不出形状：宽被工作区卡住，只能压低高度，而高度到了最小尺寸就不能再降。那是
-        // AspectLock 自己写着的「最小尺寸压得住比例」，不是锁坏了 —— 所以顶到下限的那一档报出来，不判红。
+        // 页面现在是什么形状。**只报不判** —— 「锁定窗口比例大小」那个开关 2026-09-05 按用户的话删掉了，浏览时
+        // 的窗口随便拉，所以这里没有一个「应该是多少」可判。留着这一行是因为下面「主页首屏两栏」那一读在又宽又
+        // 矮的窗口上会跳过（HostWindow.BrowseFoldMeasurable），而它跳过的时候，这一行就是唯一说得出「差了多少」
+        // 的地方。开窗那一档正好是这个形状。
+        // 从前这一行还要减掉侧边栏那一条（window.SideInset，49）—— 那条栏 2026-09-06 删掉之后页面就是整个客户区，
+        // 所以这里量的就是客户区本身。
+        var browseShape = height > 0 && width > 0 ? (double)width / height : 0;
         var floor = window.MinimumClientSize;
-        var pinned = height <= floor.Height + 1;
-        Check("锁定窗口比例",
-            window.BrowseAspect <= 0 || pinned || Math.Abs(browseShape - window.BrowseAspect) < 0.01,
-            $"浏览区 {browseWidth}×{height} = {browseShape:0.000}:1"
-                + $"（客户区宽 {width}，侧边栏那一条 {sideInset} 不算）"
-                + (window.BrowseAspect > 0
-                    ? $"，锁在 {HomeCarousel.WindowAspectLabel} = {window.BrowseAspect:0.000}:1"
-                        + "（一张不裁切的 16:9 轮播图正好铺满第一屏）"
-                        + (pinned ? $"；已经顶到最小高度 {floor.Height}，这一档形状让位" : "")
-                    : "，未锁定"));
 
-        // 上面那一条量的是窗口现在的形状，这一条量的是「拖边沿的时候还保持这个形状」—— 两回事：形状对可以只是
-        // 启动时摆对了一次（FitToShape），而 WM_SIZING 没接上的话，第一次拖边就散了。真拖一次要注入指针，这台
-        // 机器上注入是被挡着的，所以这里直接把一条 WM_SIZING 送进窗口自己的消息处理里看它回什么。
+        report.AppendLine($"[信息] 页面形状 — {width}×{height} = {browseShape:0.000}:1"
+            + $"（最小客户区 {floor.Width}×{floor.Height}）："
+            + (Math.Abs(browseShape - HomeCarousel.WindowAspect) < 0.01
+                ? $"正好是 {HomeCarousel.WindowAspectLabel}，一张不裁切的轮播图铺满第一屏"
+                : $"不是 {HomeCarousel.WindowAspectLabel}（开窗那一档才是），轮播图完整但四周留底色"));
+
+        // 放片子的时候「拖边沿保持画面比例」这条真的接在 WM_SIZING 上没有。真拖一次要注入指针，这台机器上注入是
+        // 被挡着的，所以这里直接把一条 WM_SIZING 送进窗口自己的消息处理里看它回什么 —— 自检里没有片子，那个比例
+        // 由这一读自己摆上再放回（见 ProbeShapeLock），两档都验。
         var dragLock = window.ProbeShapeLock();
-        Check("拖边保持比例", dragLock.Ok, dragLock.Detail);
+        Check("拖边保持画面比例", dragLock.Ok, dragLock.Detail);
 
         // 「窗口关了就忘了自己多大、在哪块屏」那一条。屏上看不出来 —— 记漏了、或者摆回一个桌面外面的位置，都得
         // 等下一次开窗才现形，而那时候窗口已经拖不动了。所以这一关在这一次运行里就把三种存档过一遍真显示器。
@@ -100,7 +91,10 @@ internal static partial class ShellSelfCheck
         // Read before anything below touches the title bar: this is the browsing drag region as the window
         // came up. The check itself is about to run the playback transition twice, and 「the strip still
         // drags the window afterwards」 is only a claim worth making if it dragged it to begin with.
-        var captionAtStartup = HitAt(window, 20, 16);
+        // x=8 是标题栏左端那块留白里的一点：那一排图标从 17 起（ShellPage.xaml 里 TitleActions 的缩进，
+        // = 页边距 24 减掉托盘自己的 7），所以 8 一定在洞的左边。这里写死是因为这一读发生在探针之前、
+        // 手上还没有量出来的矩形；TitleBarKeys 那一处是按现场算的，见那段说明。
+        var captionAtStartup = HitAt(window, 8, 16);
         var metricsAtStartup = window.TitleBarMetrics;
 
         var wasPlaybackTitleBar = window.PlaybackTitleBar;
@@ -166,47 +160,24 @@ internal static partial class ShellSelfCheck
 
         ReportSignIn(report, Check, shell);
 
-        var navigation = shell.NavigationRoot;
-
         if (shell.SignInVisible)
         {
             Check("登录卡片已布局", shell.SignInRoot.ActualWidth > 0 && shell.SignInRoot.ActualHeight > 0,
                 $"{shell.SignInRoot.ActualWidth:0}x{shell.SignInRoot.ActualHeight:0}");
-            Check("导航栏已隐藏", navigation.Visibility == Visibility.Collapsed, navigation.Visibility.ToString());
+            Check("浏览区已隐藏",
+                shell.BrowseRoot.Visibility == Visibility.Collapsed
+                    && shell.NavBarRoot.Visibility == Visibility.Collapsed,
+                $"页面 {shell.BrowseRoot.Visibility}、标签栏 {shell.NavBarRoot.Visibility}");
             Check("尚未打开页面", shell.Pages.Content is null, shell.Pages.Content?.GetType().Name ?? "为空");
         }
         else
         {
-            var destinations = navigation.MenuItems.OfType<NavigationViewItem>().Count();
-            var footer = navigation.FooterMenuItems.OfType<NavigationViewItem>().Count();
-            var account = navigation.PaneFooter as FrameworkElement;
-
-            // 主页 plus one per library on the server; the libraries are added at sign-in. 需求 2 emptied the
-            // footer menu — 服务器 and 诊断 were its two entries and are settings categories now — and put the
-            // account button in the pane's footer slot instead, so 0 here is the requirement, not an absence.
-            Check("导航项", destinations >= 1 && footer == 0 && account is not null,
-                $"主菜单 {destinations} 项（含 {shell.LibraryCount} 个媒体库），页脚菜单 {footer} 项，"
-                + $"页脚控件 {account?.GetType().Name ?? "为空"}");
-
-            // 需求 2 的前半句：「用户和媒体服务器去掉头像，然后移动到窗口左下方」. Measured against the shell
-            // rather than trusted to the markup: the account button sitting in PaneFooter is what puts it at
-            // the bottom of the pane, and the pane is the left edge, so 「bottom-left of the window」 is a
-            // claim about where it landed once everything above it had been laid out.
-            if (account is { ActualWidth: > 0, ActualHeight: > 0 })
-            {
-                var at = account.TransformToVisual(shell).TransformPoint(new Windows.Foundation.Point(0, 0));
-                var corner = at.X < shell.ActualWidth / 2 && at.Y + account.ActualHeight >= shell.ActualHeight - 24;
-
-                Check("账号在左下角", corner,
-                    $"({at.X:0},{at.Y:0}) 起 {account.ActualWidth:0}×{account.ActualHeight:0}"
-                    + $"，外壳 {shell.ActualWidth:0}×{shell.ActualHeight:0}"
-                    + $"，{(corner ? "贴着左下角" : "不在左下角")}");
-            }
-            else
-            {
-                Check("账号在左下角", false, account is null ? "页脚里没有控件" : "页脚控件没有尺寸");
-            }
-
+            // 「删掉侧边栏」（2026-09-06）：媒体库的入口从左边那条 NavigationView 换成窗口顶上那条 SelectorBar，
+            // 账号那颗按钮跟着挪到它的右端。这一关把「格数、tag、落在哪一行、账号在哪个角」四件事一起量出来 ——
+            // 它们的坏法在截图里都不出声，而其中「标签压进标题栏的拖动区」那一种是这个项目的老账：画在窗口标题栏
+            // 区域里的控件收不到点击，一按就是拖窗口。
+            var tabs = shell.ProbeTabs();
+            Check("顶部标签栏", tabs.Ok, tabs.Detail);
             // Read from the snapshot when the check has since walked into a library: the frame holds one
             // page, so the home page's own state is gone by then.
             var home = _home ?? ReadHome(shell);
@@ -238,14 +209,26 @@ internal static partial class ShellSelfCheck
             // 图，没人指得出这是个错，所以这一条量的是画出来那张图和原图的形状对不对得上。
             Check("主页大图不裁切", home.PictureOk, home.Picture);
 
-            // 「红框框出来的地方全填充上海报」：那一块从窗口的顶边量起，一直到右边沿。图有没有解码是上面
-            // 那行读数的事，这一行只问那块地方铺满了没有 —— 顶上少让开的 32 像素在图上就是一道黑边。
+            // 「红框框出来的地方全填充上海报」：那一块从窗口的顶边量起，一直到右边沿 —— 第一屏是并排两栏，
+            // 所以右边沿现在是右栏那一列继续观看的右沿。图有没有解码是上面那行读数的事，这一行只问那块地方铺满
+            // 了没有 —— 顶上少让开的 32 像素在图上就是一道黑边。
             Check("主页大图贴边", home.BleedOk, home.Bleed);
 
-            // 锁定窗口比例时侧边栏收放会改内容宽度；首屏不能跟着变成一档截掉继续观看、另一档又露出媒体库。
-            // 这条在真实 XAML 树上把两档各摆一次，量的是两排货架相对窗口下沿的坐标。
-            if (home.FoldOk is { } foldOk) Check("主页首屏只露继续观看", foldOk, home.Fold);
-            else report.AppendLine($"[信息] 主页首屏只露继续观看 — {home.Fold}");
+            // 侧边栏 2026-09-06 删掉之后页宽只有一档，所以这一读从「收放各量一次」变成量一次：图铺满大图那一块、
+            // 上下不留底色，右栏贴着它、一样高、至少露出一张整卡，横排接在它下沿之后。
+            // 这条在真实 XAML 树上量。
+            if (home.FoldOk is { } foldOk) Check("主页首屏两栏", foldOk, home.Fold);
+            else report.AppendLine($"[信息] 主页首屏两栏 — {home.Fold}");
+
+            // 「把继续观看改成点击翻页的」：右栏那一列的滚动条藏起来了，上下两头浮出翻页条，一次翻一屏卡片。三种
+            // 坏法在截图里都只是「右栏看着没变」—— 滚动条被谁改回 Auto、标记里那个间隔和步长用的常数错开一档、
+            // 悬停那一下翻页条浮不出来。翻多远那几条算术是横带那一套（CardStrip），单测钉着，这里不重复。
+            if (_railPage is { } railPage)
+            {
+                if (railPage.Ok is { } railOk) Check("主页右栏翻页", railOk, railPage.Detail);
+                else report.AppendLine($"[信息] 主页右栏翻页 — {railPage.Detail}");
+            }
+            else report.AppendLine("[信息] 主页右栏翻页 — 当时框里不是主页");
 
             // 同一块地方的第二问：图铺到标题栏底下以后，那三颗窗口按钮站在剧照上，墨得跟着换（见 ReadInk）。
             // 少了这一行，浅色主题下主页右上角就是三颗看不见的按钮，而上面那行读数一个数都不会变。
@@ -325,15 +308,9 @@ internal static partial class ShellSelfCheck
                 : $"当前窗口里不是搜索页（{shell.Pages.Content?.GetType().Name ?? "空"}）");
         }
 
-        // 需求 1 把设置搬到了标题栏那一排，所以导航栏自己那个设置项必须是关掉的 —— 两个入口就是两处要同步的
-        // 地方，而其中一个还会把设置画成导航栏里的一个选中项。新的那颗由下面「标题栏按键」量。
-        //
-        // 问的是 IsSettingsVisible，不是 SettingsItem 在不在：那一项由控件模板建，关掉只是把它收起来，对象照旧
-        // 存在，拿它当证据会答出反话。
-        Check("设置入口", !navigation.IsSettingsVisible,
-            navigation.IsSettingsVisible
-                ? "导航栏里还留着一个设置项"
-                : "导航栏的设置项已关掉，设置在标题栏那一排里");
+        // 需求 1 把设置搬到了标题栏那一排。**这一关 2026-09-06 删掉了**：它问的是 NavigationView 自己那个内建
+        // 设置项关掉了没有，而那个控件已经不在这棵树上了 —— 一条横标签栏没有「内建设置项」这种东西，标签是我们
+        // 一格一格加的，多一格少一格由「顶部标签栏」那一关数。那颗真的设置按键由「标题栏按键」量。
 
         // 卡片带翻页. Data-independent on purpose, hence outside the branch above: a self-check has no
         // server, so the three strips on screen hold no cards at all. The arithmetic — how far one page is,
@@ -392,19 +369,22 @@ internal static partial class ShellSelfCheck
             ? $"AccentFillColorDefaultBrush = {systemAccent}"
             : $"AccentFillColorDefaultBrush = {systemAccent}，与 EgAccentBrush（{accent}）不一致，调色板没有盖住框架的强调色");
 
-        // Light is meant to be a full parallel of Default, not a patch on it: a key only Default defines
-        // still resolves in light mode — from Default — and Default's colours are picked to sit on a
-        // near-black surface. So the omission does not fail loudly anywhere, it just paints pale text on
-        // white, on a theme nobody developing this app is looking at. Comparing the two key sets is what
-        // turns that into a failure; it is how the whole TextFillColor* family was found missing.
-        var dark = PaletteKeys("Default");
+        // Light is meant to be a full parallel of Dark, not a patch on it. That used to be true in a
+        // stronger sense: while the dark dictionary was keyed 「Default」, a key only it defined still
+        // resolved in light mode — from Default, because Default is what WinUI falls back to when no
+        // dictionary matches the theme — and those colours are picked to sit on a near-black surface. The
+        // key is 「Dark」 since 2026-09-05 (winui-design: Light / Dark / HighContrast, never Default), so the
+        // silent fallback is gone and a key missing from Light now misses outright. Comparing the two key
+        // sets is still the check worth having, and it is how the whole TextFillColor* family was found
+        // missing; what changed is that the failure it prevents got louder rather than paler.
+        var dark = PaletteKeys("Dark");
         var light = PaletteKeys("Light");
         var missing = dark.Except(light).Order().ToArray();
         Check("调色板浅色主题完整性", dark.Count > 0 && missing.Length == 0,
             dark.Count == 0
-                ? "没找到调色板的 Default 主题字典"
+                ? "没找到调色板的 Dark 主题字典"
                 : missing.Length == 0
-                    ? $"Light 覆盖了 Default 的全部 {dark.Count} 个键"
+                    ? $"Light 覆盖了 Dark 的全部 {dark.Count} 个键"
                     : $"Light 缺 {missing.Length} 个键，这些会回退到深色的值：{string.Join("、", missing.Take(8))}{(missing.Length > 8 ? " 等" : "")}");
 
         ReportTheme(services, shell, options, report, Check);
