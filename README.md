@@ -43,3 +43,8 @@ Emby 4.9.x 的 Windows 桌面客户端，纯AI开发。
 打包的着色器和 `vulkan-1.dll` 各有上游许可，逐文件列在 `assets/shaders/README.md` 和 `assets/mpv-runtime/README.md`；播放内核是 mpv 的 libmpv。本仓库自身尚未声明许可。
 
 架构、构建、发布与 `--self-check` 自检见 [`docs/开发与验证.md`](docs/开发与验证.md)，规矩在 [`CLAUDE.md`](CLAUDE.md)，在途工作在 [`PROGRESS.md`](PROGRESS.md)。
+
+## 截图
+<img width="1458" height="972" alt="image" src="https://github.com/user-attachments/assets/f19eb4ed-549f-4d6a-985c-8419dcced9bf" />
+
+
