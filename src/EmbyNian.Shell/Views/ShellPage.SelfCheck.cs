@@ -14,11 +14,12 @@ public sealed partial class ShellPage
     internal sealed record TitleActionProbe(bool Ok, string Detail, double X, double Y, double Width, double Height);
 
     /// <summary>
-    /// 自检：主页首屏 —— 一整张铺满宽度的大图，横排接在它下沿之后（2026-09-08「移除轮播图右边的媒体库」之后，
-    /// 右边那一列没了，首屏就是这一块大图）。
+    /// 自检：主页首屏 —— 顶上一块框起来的轮播卡片（四边留间隔，2026-09-10「弄个框把轮播图框起来」），底下横排
+    /// 接在它下沿之后。
     /// <para>
-    /// 判据：图铺满大图那一块、上下不留底色，横排接在它下沿之后（<see cref="HomePage.FoldRead"/>）。顺带报一句
-    /// 「页宽就是客户区宽」—— 大图现在铺满整宽，这句话变假就说明谁又在页面左边塞了一列。
+    /// 判据：卡片高度就是 <see cref="HomeCarousel.Height"/> 按它自己的宽算出来的那个数（带宽比页宽窄 48），整块
+    /// 放得进第一屏，横排接在卡片下沿之后（<see cref="HomePage.FoldRead"/>）。顺带报一句「页宽就是客户区宽」——
+    /// 这句话变假就说明谁又在页面左边塞了一列。
     /// </para>
     /// </summary>
     internal (bool? Ok, string Detail) ProbeHomeFold()

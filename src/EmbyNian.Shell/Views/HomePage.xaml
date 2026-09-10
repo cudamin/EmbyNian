@@ -92,35 +92,37 @@
     <ScrollView x:Name="Scroller" VerticalScrollBarVisibility="Auto">
         <StackPanel>
             <!--
-              第一屏：一条铺满宽度的大图轮播（「移除轮播图右边的媒体库」）。大图从窗口的顶边就开始，页眉浮在
-              图上；底下横着排的那几排从大图的下沿之后开始 —— 带子 2026-09-09 弄扁之后占头上一截，第一排货架
-              一般就露在第一屏里。媒体库不再是右边那一列，跟别的内容一样是下面横着排的一排，点它的卡进库
-              （顶部标签栏删掉之后，这是进各媒体库的入口）。
+              页眉：普通页眉，站在页面自己的纸上（2026-09-10「弄个框把轮播图框起来」之后不再浮在图上 ——
+              轮播成了下面那块留边卡片，页眉挪回它上面，墨色跟着主题走）。顶上 12 = 标题栏那一行底下的一口气；
+              左右 24 和底下的卡片、和标题栏第一颗按钮同一条竖线，所以「HOME / 主页」、顶栏第一颗图标和第一排
+              卡片左对齐在同一条竖线上（见 ShellPage.xaml 那段）。
             -->
-            <Grid x:Name="Hero">
-                <!-- VerticalAlignment 必须是 Top，不是默认的 Stretch：带高由带子自己定（照带宽按 16:9 算），而
-                     Stretch 会把这个 UserControl 拉到整格那么高，于是它的 ActualHeight 报的是「格子多高」而不是
-                     「带子多高」。 -->
-                <local:HomeBanner
-                    x:Name="Banner"
-                    OpenRequested="OnBannerOpenRequested"
-                    PlayRequested="OnBannerPlayRequested"
-                    Slides="{x:Bind ViewModel.Slides, Mode=OneWay}"
-                    VerticalAlignment="Top" />
-
-                <!-- 顶上 44 = 外壳那一行 32（标题栏，见 HomePage.ChromeHeight）加一口气：眉字
-                     不该贴着窗口的上沿，也不该压在顶上那一排按钮上。
-                     左右 24 和底下的卡片、和标题栏第一颗按钮同一条竖线，所以「HOME / 主页」、顶栏第一颗图标和第一
-                     排卡片左对齐在同一条竖线上（见 ShellPage.xaml 那段）。 -->
-                <local:PageSlate
-                    x:Name="Slate"
+            <local:PageSlate
+                x:Name="Slate"
                 x:Uid="HomePage_Slate"
-                    Eyebrow="HOME"
-                    Margin="24,44,24,0"
-                    Note="{x:Bind ViewModel.Subheading, Mode=OneWay}"
-                    OnScrim="{x:Bind ViewModel.HeroFilled, Mode=OneWay}"
-                    VerticalAlignment="Top" />
-            </Grid>
+                Eyebrow="HOME"
+                Margin="24,12,24,0"
+                Note="{x:Bind ViewModel.Subheading, Mode=OneWay}"
+                VerticalAlignment="Top" />
+
+            <!--
+              轮播：框起来的一块卡片（「弄个框把轮播图框起来」的真正意思 —— 不占满上半页、和窗口之间留出间隔，
+              徽标、片名、简介、按键都在框里）。四边各让 24（XL 页面间距，和页眉、底下那几排同一条边距线），
+              圆角和那圈发丝线在 HomeBanner 自己身上（Frame）。从窗口顶边算起，它站在标题栏（32）＋ 12 ＋ 页眉
+              ＋ 16 之后，所以「红框框出来的地方全填充上海报」那一版的贴顶、顶回去 32、标题栏浮在图上，这一版
+              全都不再发生 —— SyncBleed 随这一改删除。
+
+              带高照带宽算（HomeCarousel.Height），带宽＝页宽 − 48，比贴边那一版窄 48、矮一截。
+
+              没有幻灯片时它自己收起来（HomeBanner.Apply），StackPanel 不给收起的孩子留位置，页眉和底下那几排
+              之间只剩 16 的 Padding —— 和关掉轮播那一档（设置 → 主页）一样自然。
+            -->
+            <local:HomeBanner
+                x:Name="Banner"
+                OpenRequested="OnBannerOpenRequested"
+                PlayRequested="OnBannerPlayRequested"
+                Slides="{x:Bind ViewModel.Slides, Mode=OneWay}"
+                Margin="24,16,24,0" />
 
             <!-- 横着的那几排，从大图的下沿之后开始 —— 第一屏整个归上面那张大图。这一层没有板底也没有负的上边距：
                  媒体库 2026-09-08 从右栏改回横排、再没有哪一排压在图上，所以「提起来一叠玻璃」那一套连

@@ -150,11 +150,12 @@ internal static partial class ShellSelfCheck
     /// home page」 test is one copy too many.
     /// </summary>
     private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool PictureOk,
-        string Picture, bool LayoutOk, string Layout, bool BleedOk, string Bleed, bool? FoldOk, string Fold) ReadHome(ShellPage shell)
+        string Picture, bool LayoutOk, string Layout, bool BleedOk, string Bleed, bool? FoldOk, string Fold,
+        string Slate) ReadHome(ShellPage shell)
     {
         if (shell.Pages.Content is not HomePage home)
             return (false, -1, "未读取", "未读取", false, "未读取", false, "未读取", false, "未读取", false, "未读取",
-                false, "未读取");
+                false, "未读取", "未读取");
 
         var (typeOk, type) = home.BannerType();
         var (pictureOk, picture) = home.BannerPicture();
@@ -162,30 +163,28 @@ internal static partial class ShellSelfCheck
         var (bleedOk, bleed) = home.BleedRead();
         var (foldOk, fold) = shell.ProbeHomeFold();
         return (shell.CurrentTag == "home", home.LoadedCount, home.ShelfSummary, home.BannerSummary, typeOk, type,
-            pictureOk, picture, layoutOk, layout, bleedOk, bleed, foldOk, fold);
+            pictureOk, picture, layoutOk, layout, bleedOk, bleed, foldOk, fold, home.SlateRead());
     }
 
     /// <summary>
-    /// 自检：标题栏那三颗系统按钮的墨，对不对得上顶上那一块的底。两头都要问 —— 图铺过去了就必须是那支固定
-    /// 的浅墨，没铺（这台账号一张宽图都没有，顶上那一块是页面自己的底色）就必须还是主题的墨。
+    /// 自检：标题栏那三颗系统按钮的墨。轮播 2026-09-10 框成卡片（四边留间隔、不再铺到窗口顶边）之后，标题栏
+    /// 底下永远是页面自己的底，那一支墨必须一直是主题那支 —— 谁把从前的联动（图铺上去换浅墨）请回来，这一条
+    /// 当场红。
     /// <para>
-    /// 只问这三颗，不问我们自己那五颗：那五颗在左端，站在什么上面跟着侧边栏走 —— 侧边栏收着（这是起手那一
-    /// 档，「侧边栏默认为折叠状态」）时它们落在页面那张大图上，张开时又回到侧边栏自己的底色上。这两档的墨由
-    /// <c>PaintTitleInk</c> 自己换，换的是 XAML 里的画刷，不是这里问的那份标题栏配色。系统这三颗在右端，侧边栏
-    /// 再宽也到不了那儿，所以只有它们的墨要跟顶上那一块的底对。
+    /// 只问这三颗，不问我们自己那五颗：那五颗在左端，底色由 <c>PaintTitleInk</c> 按侧边栏换，不归这一条管。
+    /// 系统这三颗在右端，只有它们的墨曾跟顶上那一块联动过。
     /// </para>
     /// </summary>
     private static (bool Ok, string Detail) ReadInk(ShellPage shell, HostWindow window)
     {
         if (window.TitleBarColours is not { Glyph: { } glyph }) return (false, "没有自定义标题栏可问颜色");
 
-        var filled = shell.Pages.Content is HomePage home && home.HeroFilled;
         var pale = glyph.R == 0xF3 && glyph.G == 0xF5 && glyph.B == 0xF8;
         var shown = $"#{glyph.A:X2}{glyph.R:X2}{glyph.G:X2}{glyph.B:X2}";
 
-        return (pale == filled, filled
-            ? $"顶上是一张剧照，按钮图标 {shown}{(pale ? "（图上那支浅墨）" : "，却还是主题那支")}"
-            : $"顶上是页面底色，按钮图标 {shown}{(pale ? "，却用了图上那支浅墨" : "（主题那支）")}");
+        return (!pale,
+            $"轮播已框成卡片，标题栏底下永远是页面底色，按钮图标 {shown}"
+                + (pale ? " —— 却还是从前图上那支浅墨（联动没删干净）" : "（主题那支）"));
     }
 
     /// <summary>

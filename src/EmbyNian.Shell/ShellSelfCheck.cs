@@ -64,7 +64,8 @@ internal static partial class ShellSelfCheck
     /// a time. Null when it never got that far.
     /// </summary>
     private static (bool Correct, int Cards, string Shelves, string Banner, bool TypeOk, string Type, bool PictureOk,
-        string Picture, bool LayoutOk, string Layout, bool BleedOk, string Bleed, bool? FoldOk, string Fold)? _home;
+        string Picture, bool LayoutOk, string Layout, bool BleedOk, string Bleed, bool? FoldOk, string Fold,
+        string Slate)? _home;
 
     /// <summary>
     /// 需求 6 的两处改动：what the home page's own cards offer under the pointer. Snapshotted with the

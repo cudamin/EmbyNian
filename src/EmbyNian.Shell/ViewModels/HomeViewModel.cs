@@ -92,24 +92,20 @@ public sealed partial class HomeViewModel : PageViewModel
     /// <summary>
     /// 需求 5 的那条大图轮播（<see cref="HomeCarousel"/>）: 继续观看的头几个条目，不够时由最近添加补上，each
     /// drawn as one full-width backdrop instead of a card. 设置里关掉轮播（<see cref="_banner"/>）时这里是空的，
-    /// 带子自己就收起来了。
+    /// 带子自己就收起来。
     /// <para>
     /// A whole new list per load rather than a collection edited in place. The band swaps its slides as
     /// one thing — old artwork released, index back to the first, dots rebuilt — and an
     /// <c>ObservableCollection</c> cleared and refilled would put it through that eight times in a row,
     /// once per <c>Add</c>, restarting the fade each time.
     /// </para>
+    /// <para>
+    /// 从前这里还挂着一个 <c>HeroFilled</c>（「顶上那块是不是一张图」，页眉和标题栏墨色的联动靠它）—— 2026-09-10
+    /// 「框成卡片」之后页眉和标题栏都不再压在图上，联动删了，它跟着删。
+    /// </para>
     /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HeroFilled))]
     public partial IReadOnlyList<BannerSlide> Slides { get; set; }
-
-    /// <summary>
-    /// 顶上那一整块到底是不是一张图。页眉压在图上时要换成 <c>EgOnScrim</c> 那套墨色（见
-    /// <see cref="Views.PageSlate.OnScrim"/>）；一张幻灯片也没有的时候那一块是页面自己的底色，跟主题走的
-    /// 墨色才读得清 —— 白字配浅色主题的浅底等于没有字。
-    /// </summary>
-    public bool HeroFilled => Slides.Count > 0;
 
     /// <summary>Which server, and how much of it is on the page.</summary>
     [ObservableProperty]

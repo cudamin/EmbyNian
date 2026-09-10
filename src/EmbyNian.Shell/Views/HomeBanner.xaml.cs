@@ -537,11 +537,13 @@ public sealed partial class HomeBanner : UserControl
     /// 移到剧名上面」挪回左边、贴着下沿，徽标从压在角上的一张独立的图变成了这一叠的第一行。两趟一起丢掉的是「往下
     /// 沉一点」那条规则（从前的 <c>InfoShift</c> 加 <c>HomeCarousel.InfoDrop</c>）和 <c>PlaceLogo</c> 那一段留白
     /// 计算：站在字块里的徽标由布局给位置。2026-09-10 第三趟按「把红框里的东西移动到左上角」从下沿挪到了顶上
-    /// （<see cref="InfoTop"/>，站在 PageSlate 底下）—— 仍然是布局给位置，只是换了一个角，别把那条下沉规则请回来。
+    /// （<see cref="InfoTop"/>；上半天 116 是给浮在图上的页眉让的，下半天「框成卡片」之后页眉出了框、收成 40）
+    /// —— 仍然是布局给位置，只是换了一个角，别把那条下沉规则请回来。
     /// </para>
     /// <para>
     /// 整条带都是自己的：继续观看从前「压在图的下半截上」，后来当过第一屏右边那一栏（那一栏 2026-09-08 随着
-    /// 「移除轮播图右边的媒体库」删掉了），所以字块和底边那排小横条不用让开谁，带宽就是整个页宽。
+    /// 「移除轮播图右边的媒体库」删掉了），所以字块和底边那排小横条不用让开谁。带宽从前是整个页宽，2026-09-10
+    /// 下半天「框成卡片」之后是页宽减四边各 24 的留白（HomePage 标记里 Margin 那一份）。
     /// </para>
     /// <para>
     /// 一屏是带高的上限（超宽屏上「带宽×六成 ÷ 16 × 9」算出来会比一屏还高），问的是 <c>XamlRoot.Size</c>，
@@ -591,12 +593,12 @@ public sealed partial class HomeBanner : UserControl
     private const double InfoInset = 60;
 
     /// <summary>
-    /// 字块离带子顶多远（「把轮播图左侧的徽标、片名、剧情说明等东西移到左上角」，2026-09-10）。116 不是窗口的
-    /// 绝对左上角：HomePage 的 PageSlate 从 44 开始、占着页面抬头那一块，这 116 让字块站在它下面并留一口气，
-    /// 而 PageSlate 自己不动。标记里 Info 那一份和 <see cref="Resize"/> 里这一份是同一个数，<see cref="Probe"/>
-    /// 两处都守，不能只改一头。
+    /// 字块离带子顶多远（「把红框里的东西移动到左上角」，2026-09-10）。这一天走了两趟：上半天 116 —— 那时页眉
+    /// 还浮在图上、字块要站在它下面；下半天「框成卡片」之后页眉挪出了框，框里顶上没有别的东西了，收成 40
+    /// （一叠字和框顶之间留一口气）。标记里 Info 那一份和 <see cref="Resize"/> 里这一份是同一个数，
+    /// <see cref="Probe"/> 两处都守，不能只改一头。
     /// </summary>
-    private const double InfoTop = 116;
+    private const double InfoTop = 40;
 
     /// <summary>底边那排小横条离带子下沿多远。它是这条带自己的控件，不是画面的一部分，所以不跟着谁走。</summary>
     private const double DotsBaseline = 18;
@@ -741,20 +743,19 @@ public sealed partial class HomeBanner : UserControl
     /// 一张幻灯片也没有，所以问的是不依赖数据的那几件事，加上这份标记自己能不能解析。
     /// <para>
     /// <c>new HomeBanner()</c> 就把标记走了一遍：里面每个资源键（<c>DefaultButtonStyle</c>、
-    /// <c>EgOnScrimBrush</c>、四组改掉的按钮状态键、四层渐变）解析不了就在这里抛。渐变里写颜色键会在高对比度
+    /// <c>EgOnScrimBrush</c>、四组改掉的按钮状态键、三层渐变）解析不了就在这里抛。渐变里写颜色键会在高对比度
     /// 下抛，也是这一句挡着的 —— 那本词典里只有画刷。
     /// </para>
     /// <para>
     /// 剩下那几件是屏上的行为里 Core 摸不到的部分：一张都没有时整条带收起来、底边那排横条造得出来且亮在对的那
     /// 根、带高按页宽落到布局上、**外面一圈圆角发丝框、两层剧照放大到带高÷0.9 且竖向居中 —— 上下各裁 5%**
     /// （「弄个框把轮播图框起来（圆角）」＋「轮播图上下各裁切百分之五」，2026-09-10）、**剧照靠带子的右沿站**
-    /// （「把主页的轮播图移动到右边」，2026-09-09）、**字块贴着
-    /// 左上角而徽标是它的第一行**（2026-09-05「移到左下角，然后把徽标移到剧名上面」、2026-09-10 从下沿挪到顶上）、
-    /// **带上四层黑渐变各是各的形状**：顶上给标题栏垫底那条，剧照左沿那道渐融（「给轮播图左边加上黑色渐变」，
-    /// 2026-09-09，判的是贴图的左沿、左头实心到底、往里走到全透明，见 <see cref="Melts"/>），加下、右两条只压
-    /// 边缘的（「给轮播页面边缘加上黑色的渐变」，2026-09-05，判的是每一层的形状而不是层数，见 <see cref="Rims"/>）、
-    /// 翻页箭头和字块不在同一列、两层剧照真的轮着上。字块那段错拍动画顺带跑一遍，故事板里哪个目标是空的就在
-    /// 这里抛，而不是等到主页第一次换幻灯片。
+    /// （「把主页的轮播图移动到右边」，2026-09-09）、**字块贴左上角而徽标是它的第一行**（2026-09-05「移到左下角，
+    /// 然后把徽标移到剧名上面」、2026-09-10 从下沿挪到顶上）、**带上三层黑渐变各是各的形状**：剧照左沿那道渐融
+    /// （「给轮播图左边加上黑色渐变」，2026-09-09，判的是贴图的左沿、左头实心到底、往里走到全透明，见
+    /// <see cref="Melts"/>），加下、右两条只压边缘的（「给轮播页面边缘加上黑色的渐变」，2026-09-05，判的是每一
+    /// 层的形状而不是层数，见 <see cref="Rims"/>）、翻页箭头和字块不在同一列、两层剧照真的轮着上。字块那段错拍
+    /// 动画顺带跑一遍，故事板里哪个目标是空的就在这里抛，而不是等到主页第一次换幻灯片。
     /// </para>
     /// </summary>
     internal static (bool Ok, string Detail) Probe()
@@ -832,21 +833,20 @@ public sealed partial class HomeBanner : UserControl
             && Math.Abs(banner.Info.Margin.Bottom) < 0.01
             && Math.Abs(banner.Dots.Margin.Bottom - DotsBaseline) < 0.01;
 
-        // 带上四层黑渐变，各判各的形状。顶上给标题栏垫底那条：写死高度、贴着上沿。剧照左沿那道渐融
+        // 带上三层黑渐变，各判各的形状。剧照左沿那道渐融
         // （「给轮播图左边加上黑色渐变」，2026-09-09）：**正好站在剧照的左沿上** —— Margin 和 Width 都是 Resize
         // 按带高摆的，这里拿「带宽 − 图宽」这笔账再对一遍 —— 而且左头实心到底（和底色同色，图的左沿就此消失）、
         // 往图里走到全透明（Melts）。它两头都不在带子的边上，所以不跟下、右两条走 Rims 那句「半张之前散尽」——
         // 那条管的是「只压边缘」，这一条管的正是「把边缘藏掉」。下、右两条还是「贴边最浓、半张之前散尽」的边缘
-        // 渐变（「给轮播页面边缘加上黑色的渐变」，2026-09-05，来回过两趟：原先三层 → 全删 → 只压边缘）。谁把某一
-        // 层的形状改回去，这一条当场红，而张数、带高、字块那几行读数一个都不会动。
+        // 渐变（「给轮播页面边缘加上黑色的渐变」，2026-09-05，来回过两趟：原先三层 → 全删 → 只压边缘）。
+        // （第四层 —— 顶上给标题栏垫底那条 120 高的 —— 2026-09-10 下半天随「框成卡片」删了：标题栏和页眉
+        // 不再压在图上，capped 那个分支和 Sinks 那句断言也一起没了。谁把一条「写死高度、贴上沿」的 Border
+        // 加回 Band，下一段 edges.Count == 2 的账就不平，这一条照样红。）
+        // 谁把某一层的形状改回去，这一条当场红，而张数、带高、字块那几行读数一个都不会动。
         var scrims = banner.Band.Children.OfType<Border>().ToList();
-        var capped = scrims.Where(one => !double.IsNaN(one.Height)).ToList();
         var sized = scrims.Where(one => double.IsNaN(one.Height) && !double.IsNaN(one.Width)).ToList();
         var edges = scrims.Where(one => double.IsNaN(one.Height) && double.IsNaN(one.Width)).ToList();
-        var bare = scrims.Count == 4
-            && capped is [{ } top]
-            && top.VerticalAlignment == VerticalAlignment.Top
-            && Sinks(top)
+        var bare = scrims.Count == 3
             && sized is [{ } fade]
             && fade.HorizontalAlignment == HorizontalAlignment.Left
             && Math.Abs(fade.Margin.Left - gutter) < 0.01
@@ -904,10 +904,10 @@ public sealed partial class HomeBanner : UserControl
                 + "；"
                 + $"画面上的暗罩 {scrims.Count} 层"
                 + (bare
-                    ? $"（顶上给标题栏垫底那条 {capped[0].Height:0} 高；剧照左沿一道渐融，从 {sized[0].Margin.Left:0} 起、"
+                    ? $"（剧照左沿一道渐融，从 {sized[0].Margin.Left:0} 起、"
                         + $"宽 {sized[0].Width:0}，左头实心到底、往图里散尽；下、右两条各压一条边、半张之前散尽："
                         + $"{string.Join('、', edges.Select(RimRead))}）"
-                    : "（该是四层：顶上写死高度那条、剧照左沿一道渐融、下和右两条只压边缘的 —— 形状或位置对不上）")
+                    : "（该是三层：剧照左沿一道渐融、下和右两条只压边缘的 —— 形状或位置对不上）")
                 + "；"
                 + $"箭头占到 {strip:0}、字块从 {banner.Info.Margin.Left:0} 起"
                 + $"{(apart ? "，两边不同列" : "，压到字了")}；"
@@ -923,13 +923,6 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private static bool Inked(Grid row, UIElement ink, UIElement text) =>
         row.Children.Count >= 2 && ReferenceEquals(row.Children[0], ink) && ReferenceEquals(row.Children[1], text);
-
-    /// <summary>
-    /// 顶上那一条的形状：贴着上沿那一头够浓，到另一头散尽。它靠写死的高度把自己关在边上，所以不需要
-    /// <see cref="Rims"/> 那句「半张之前就散尽」。
-    /// </summary>
-    private static bool Sinks(Border layer) =>
-        Ramp(layer) is [{ } first, .., { } last] && first.Color.A > 0x40 && last.Color.A == 0;
 
     /// <summary>
     /// 剧照左沿那道渐融的形状：**横向**（贴图那一头在左）、贴图那头实心到底（#FF0C0E11，和带子的底色同一个颜色

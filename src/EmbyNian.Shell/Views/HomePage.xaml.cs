@@ -72,9 +72,6 @@ public sealed partial class HomePage : Page, IShellContent
 
     internal bool IsReady => ViewModel.IsReady;
 
-    /// <summary>自检：顶上那一块现在是一张剧照，还是页面自己的底色。见 <see cref="HomeViewModel.HeroFilled"/>。</summary>
-    internal bool HeroFilled => ViewModel.HeroFilled;
-
     /// <summary>
     /// The rows the page actually drew, as 「继续观看 12、媒体库 3」. For the self-check, which otherwise
     /// has no way to tell an empty row from a row that failed to build: <see cref="LoadedCount"/> counts
@@ -110,45 +107,50 @@ public sealed partial class HomePage : Page, IShellContent
     /// <summary>自检：屏上那几排真按设置里那份版面来的，见 <see cref="HomeViewModel.LayoutRead"/>。</summary>
     internal (bool Ok, string Detail) LayoutRead() => ViewModel.LayoutRead();
 
+    /// <summary>自检：页眉的墨色（见 <see cref="SlateRead"/>）；轮播 2026-09-10 框成卡片后页眉不再压在图上。</summary>
+    internal string SlateRead() =>
+        $"页眉{(Slate.OnScrim ? "在用图上那套墨（不该 —— 轮播已是卡片，页眉站在纸上）" : "跟主题的墨走")}";
+
     /// <summary>
-    /// 自检：顶上那一整块到底铺没铺满 —— 「红框框出来的地方全填充上海报」。
+    /// 自检：轮播那一块真被框起来了 —— 和窗口四边都留出了间隔（「弄个框把轮播图框起来」的真正意思：不占满
+    /// 上半页、四边留空，徽标片名简介都在框里）。
     /// <para>
-    /// 量的是那一块自己在窗口里的位置：上沿要落在 y=0（页面把 <c>ContentHost</c> 留给外壳那一行的 32 像素顶
-    /// 回去了，见 <see cref="SyncBleed"/>），右沿要落在窗口的右边沿。这两件事在报告里都不出声 —— 少顶那 32
-    /// 就是图上一道黑边、右边差一截就是一条白缝，而张数、剧照、字体那几行读数一个都不会变。
+    /// 量 Banner 自己在窗口里的位置：左、右、上三边都该让出 PageInset（24）—— 左右对窗口两边沿，上对着
+    /// 外壳那一行（32，标题栏）底下那一口气（12）加页眉和 16 的间距，所以只要「让出 ≥ PageInset − 4」就算
+    /// 对，不钉死页眉自己的高度。收起来（没有幻灯片）时量的是收起之后的边距，那一档同样成立。
     /// </para>
     /// <para>
-    /// 大图 2026-09-08 改回铺满整宽（右边那一列媒体库删掉了），所以「右沿」就是窗口的右边沿。
-    /// </para>
-    /// <para>
-    /// 顶上那一块不是图的时候（设置里关掉了轮播，或者服务器上一个带宽图的条目都没有）判的正好相反：那 32 像素
-    /// 必须<em>留着</em>，这一页从第 32 行起画、和别的页面一样 —— 否则「HOME / 主页」那块牌子会塞进标题栏底下。
+    /// 2026-09-10 之前判的正好相反：「红框框出来的地方全填充上海报」，上沿落在 0、右沿吃满窗口宽。那一版的
+    /// SyncBleed（把 ContentHost 留给标题栏的 32 像素顶回去）随本改删除。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) BleedRead()
     {
-        var at = Hero.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
+        var at = Banner.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
         var window = XamlRoot?.Size.Width ?? 0;
-        var right = at.X + Hero.ActualWidth;
-        var filled = ViewModel.HeroFilled;
-        var top = filled ? at.Y <= 0.5 : Math.Abs(at.Y - ChromeHeight) <= 0.5;
-        var ok = Hero.ActualWidth > 0 && window > 0 && top && Math.Abs(right - window) <= 1.5;
+        var right = window - (at.X + Banner.ActualWidth);
+        var slack = PageInset - 4;
+        var ok = Banner.ActualWidth > 0
+            && window > 0
+            && at.X >= slack
+            && right >= slack
+            && at.Y >= ChromeHeight + 8;
 
-        return (ok, $"起点 ({at.X:0},{at.Y:0})、{Hero.ActualWidth:0}×{Hero.ActualHeight:0}"
-            + $"，右沿 {right:0} 对窗口宽 {window:0}"
-            + (filled
-                ? $"；顶上是一张图，所以上沿该落在 0{(top ? "" : "（没顶掉标题栏那一条）")}"
-                : $"；顶上不是图（轮播关着或者没有宽图），所以上沿该落在 {ChromeHeight:0}"
-                    + $"{(top ? "" : "（不该顶掉标题栏那一条）")}"));
+        return (ok,
+            $"起点 ({at.X:0},{at.Y:0})、{Banner.ActualWidth:0}×{Banner.ActualHeight:0}"
+                + $"，左让 {at.X:0}、右让 {right:0}、上让 {at.Y:0}（标题栏 {ChromeHeight:0} 之下）"
+                + (ok ? " —— 框起来了，四边留了间隔" : " —— 有哪条边还贴着窗口"));
     }
 
+    /// <summary>轮播卡片四边的留白，和页面其余内容同一条边距线（XL，24）。BleedRead 拿它当基准。</summary>
+    internal const double PageInset = 24;
+
     /// <summary>
-    /// 自检：第一屏顶上那一条就是一条不留上下底色、铺满整宽的大图，而横着的那几排接在它的下沿之后
-    /// （「移除轮播图右边的媒体库」＋「封面固定到最上方，上下不要有黑边」）。
+    /// 自检：轮播卡片的高度就是 <see cref="HomeCarousel.Height"/> 按它自己的宽算出来的那个数，而横着的那几排
+    /// 接在卡片下沿之后。
     /// <para>
-    /// 三件事：大图那一块的高度就是 <see cref="HomeCarousel.Height"/> 按它自己的宽算出来的那个数（剧照贴右沿
-    /// 整张画出来，上下不留底色）、整块放得进第一屏（带子 2026-09-09 弄扁之后一般只占头上一截；从前那一版
-    /// 在 16:9 的窗口上正好一屏）、横着的第一排接在大图下沿之后而不是压在它上面。
+    /// 带宽从「页宽」变成「页宽 − 48」（四边留 24 的卡片，2026-09-10），所以带高也矮一截；其余照旧：剧照贴右
+    /// 沿放大一成画、上下各裁 5%，第一排接在卡片下沿之后而不是压在它上面。
     /// </para>
     /// <para>
     /// 大图和横排都没有时没得量，跳过而不是判红：一个从未播放过任何内容、又只勾了一排的账号就是那样，那是正常
@@ -168,9 +170,9 @@ public sealed partial class HomePage : Page, IShellContent
 
         var viewport = root.Size.Height;
 
-        // 大图那一块的高度就是那条规则算出来的：剧照贴着带子的右沿整张画、吃满带的上下，所以上下一条底色都
-        // 不留。一张幻灯片都没有时整条带收起（服务器上一个带宽图的条目都没有），那一档不判。
-        var heroBottom = Top(Hero) + Hero.ActualHeight;
+        // 卡片那一块的高度就是那条规则算出来的：带宽是它自己量到的宽（比页宽窄 48），一张幻灯片都没有时整条带
+        // 收起，那一档不判。
+        var heroBottom = Top(Banner) + Banner.ActualHeight;
         var wanted = HomeCarousel.Height(viewport, Banner.ActualWidth);
         var shaped = Banner.Visibility != Visibility.Visible
             || (Math.Abs(Banner.ActualHeight - wanted) <= 1.5 && heroBottom <= viewport + 0.5);
@@ -214,29 +216,10 @@ public sealed partial class HomePage : Page, IShellContent
     }
 
     /// <summary>
-    /// 顶上那一块是不是真有一张图，决定这一页要不要把外壳那一行的 32 像素顶回去。见 HomePage.xaml 里 Scroller
-    /// 那一段：有图才顶（「红框框出来的地方全填充上海报」），没图那一块就是页面自己的底色，顶回去只会把
-    /// 「HOME / 主页」那块牌子塞进标题栏底下。
-    /// <para>
-    /// 「没图」有两种：设置里关掉了轮播，以及服务器上一个带宽图的条目都没有 —— 屏上是同一件事，所以这里问的就是
-    /// 屏上那一句（<see cref="HomeViewModel.HeroFilled"/>）。
-    /// </para>
-    /// </summary>
-    private void SyncBleed()
-    {
-        var top = ViewModel.HeroFilled ? -ChromeHeight : 0;
-
-        if (Math.Abs(Scroller.Margin.Top - top) > 0.5) Scroller.Margin = new Thickness(0, top, 0, 0);
-    }
-
-    /// <summary>
     /// <c>ShellPage.xaml</c> 里 <c>ContentHost</c> 给外壳留的那一段（<c>Padding="0,32,0,0"</c>）：标题栏那一行
-    /// 的高。这一页是整套里唯一会把它顶回去的，所以这个数在这儿有一份 —— 两处对不上的样子是图上留
-    /// 一条底色，或者「HOME / 主页」那块牌子被切掉半行。
-    /// <para>
-    /// internal 而不是 private：自检那一关（<c>ShellPage.ProbeChrome</c>）拿它和屏上量出来的外壳高度对一遍，
-    /// 而对账要的正是「两边引的是同一个数」。
-    /// </para>
+    /// 的高。轮播 2026-09-10 框成卡片之后这一页不再顶回那 32 像素（那一版的 <c>SyncBleed</c> 已删），但这个数
+    /// 还有两份用场：BleedRead 拿它判「卡片站在标题栏底下而不是塞进标题栏里」，自检那一关
+    /// （<c>ShellPage.ProbeChrome</c>）拿它和屏上量出来的外壳高度对一遍 —— 对账要的正是「两边引的是同一个数」。
     /// <para>
     /// 2026-09-09 起外壳只有标题栏这一行：第 1 行（标签栏删掉后剩下的那条空带）删掉了，这个数从 80 收到 32。
     /// </para>
@@ -450,33 +433,11 @@ public sealed partial class HomePage : Page, IShellContent
         ShellPrefs.Changed -= OnShellPrefsChanged;
         ShellPrefs.Changed += OnShellPrefsChanged;
 
-        SyncBleed();
-
-        // 标题栏那几颗按钮要知道自己站在哪种底上。现在说一遍（回到这一页时那些幻灯片可能已经在手上了），
-        // 之后每次那一块从「一张图」变成「页面的底色」或者反过来时再说一遍。
-        ViewModel.PropertyChanged += OnViewModelChanged;
-        _actions.SetTitleStrip(Strip());
-
         _ = ViewModel.ReloadAsync();
     }
 
-    private void OnViewModelChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
-    {
-        if (args.PropertyName == nameof(HomeViewModel.HeroFilled))
-        {
-            _actions?.SetTitleStrip(Strip());
-
-            // 顶上那一块从「一张图」变成「页面的底色」或者反过来：标题栏那 32 像素跟着顶开或者还回去。
-            SyncBleed();
-        }
-    }
-
-    /// <summary>这一页顶上那一块：那条大图铺到窗口顶边就是一张剧照，没有幻灯片时是页面自己的底色。</summary>
-    private TitleStrip Strip() => ViewModel.HeroFilled ? TitleStrip.OnScrim : TitleStrip.Plain;
-
     public void Release()
     {
-        ViewModel.PropertyChanged -= OnViewModelChanged;
         ShellPrefs.Changed -= OnShellPrefsChanged;
 
         ViewModel.Cancel();
@@ -490,9 +451,6 @@ public sealed partial class HomePage : Page, IShellContent
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
-        // 走出这一页，顶上那一块就是别的页面自己的底色了 —— 那几颗按钮得把墨还回来。
-        _actions?.SetTitleStrip(TitleStrip.Plain);
-
         Release();
         base.OnNavigatedFrom(e);
     }
