@@ -523,13 +523,14 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
-    /// 带多高、渐融站在哪儿、字块多宽。带高走 <see cref="HomeCarousel.Height"/>：剧照缩到带宽的六成靠右站
-    /// （「把主页的轮播图移动到右边」＋「把轮播图弄扁一些」，2026-09-09），带高就是那六成按 16:9 算出来的高，
-    /// 所以图正好铺满带的上下、左沿落在「带宽 − 图宽」那条竖线上。
+    /// 带多高、渐融站在哪儿、字块多宽、两层剧照画多大。带高走 <see cref="HomeCarousel.Height"/>：剧照缩到带宽的
+    /// 六成靠右站（「把主页的轮播图移动到右边」＋「把轮播图弄扁一些」，2026-09-09），带高就是那六成按 16:9 算
+    /// 出来的高；**两层再画到「带高 ÷ <see cref="KeptShare"/>」那么高**（「轮播图上下各裁切百分之五」，
+    /// 2026-09-10），上下多出来的两截由外面那圈圆角框剪掉。
     /// <para>
-    /// 渐融（<c>Fade</c>）正站在那条线上：贴住剧照的左沿、往图里走 <see cref="FadeShare"/> 那么宽
-    /// （「给轮播图左边加上黑色渐变」）。图宽从带高换（带高×16÷9），取 <c>min</c> 兜住带宽不到 427、图连六成
-    /// 宽都摆不下的那一档 —— 那时图吃满带宽，渐融贴的就是带子的左沿了。
+    /// 渐融（<c>Fade</c>）正站在图的左沿上：贴住剧照的左沿、往图里走 <see cref="FadeShare"/> 那么宽
+    /// （「给轮播图左边加上黑色渐变」）。图宽从「放大后的高」换（带高÷0.9×16÷9），取 <c>min</c> 兜住带宽
+    /// 摆不下放大后那一档 —— 那时图吃满带宽、裁不满 5%，渐融贴的就是带子的左沿了。
     /// </para>
     /// <para>
     /// 字块 2026-09-05 走过两趟：先按「把红框框出来的移到右下角」挪去了右下角，同一天又按「移到左下角，然后把徽标
@@ -556,9 +557,13 @@ public sealed partial class HomeBanner : UserControl
         // 还没量过时高度是 NaN，而 NaN 参与的比较全是假 —— 少了这一句，第一次布局就设不上高度。
         if (double.IsNaN(Root.Height) || Math.Abs(Root.Height - height) > 0.5) Root.Height = height;
 
-        // 图贴右沿、按 16:9 整张画：宽从带高换。渐融贴住图的左沿 —— 图宽用的是「画出来的那一个」，不是带子
-        // 想给它的那一个，免得窄窗口那一档渐融站到图外面去。
-        var picture = Math.Min(width, height * HomeCarousel.WindowAspect);
+        // 上下各裁 5%：两层画到「带高 ÷ 剩下的九成」那么高、竖向居中，上下多出来的两截由外面那圈圆角框剪掉。
+        // 写 Height 而不是让图自己吃满带高：图按自己的比例画，不给高就没有「放大一成」这一说。
+        LayerA.Height = LayerB.Height = height / KeptShare;
+
+        // 图贴右沿、按 16:9 整张画：宽从「放大后的高」换。渐融贴住图的左沿 —— 图宽用的是「画出来的那一个」，
+        // 不是带子想给它的那一个，免得窄窗口那一档渐融站到图外面去。
+        var picture = Math.Min(width, height * HomeCarousel.WindowAspect / KeptShare);
         Fade.Margin = new Thickness(Math.Max(0, width - picture), 0, 0, 0);
         Fade.Width = picture * FadeShare;
 
@@ -568,11 +573,19 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
-    /// 渐融伸进剧照多深，占图宽的比例。三成半：字块最宽的那一档（60 加 620）在开窗那一档 1422 宽的带上停在 680，
+    /// 剧照伸进图多深，占图宽的比例。三成五：字块最宽的那一档（60 加 620）在开窗那一档 1422 宽的带上停在 680，
     /// 渐融到 867 才散尽 —— 字块的尾巴一直走在渐融里；最小窗口 900 宽那一档算下来还剩三个像素（见
     /// <c>HomeCarousel.PictureShare</c> 那一段的另一半账）。再窄字块就站到散尽了的亮图上，再宽图就只剩一扇窗。
     /// </summary>
     private const double FadeShare = 0.35;
+
+    /// <summary>
+    /// 上下各裁掉带高的百分之五之后，剧照留在屏上的那一截（「轮播图上下各裁切百分之五」，2026-09-10）。
+    /// 两层画到「带高 ÷ 这么多」那么高、竖向居中（标记里 <c>VerticalAlignment="Center"</c>），上下多出来的
+    /// 两截由外面那圈圆角框（<c>Frame</c>）剪掉 —— 屏上看到的是原图中间的九成，构图因此比原图满一格。
+    /// 窄窗口那一档图吃满带宽、高到不了这个数，那一档裁不满 5% 也是裁：吃紧的换成宽了。
+    /// </summary>
+    private const double KeptShare = 0.9;
 
     /// <summary>字块离带子左沿多远。见标记里 Info 那一段：让开的是翻页箭头那条窄栏。</summary>
     private const double InfoInset = 60;
@@ -733,7 +746,9 @@ public sealed partial class HomeBanner : UserControl
     /// </para>
     /// <para>
     /// 剩下那几件是屏上的行为里 Core 摸不到的部分：一张都没有时整条带收起来、底边那排横条造得出来且亮在对的那
-    /// 根、带高按页宽落到布局上、**剧照靠带子的右沿站**（「把主页的轮播图移动到右边」，2026-09-09）、**字块贴着
+    /// 根、带高按页宽落到布局上、**外面一圈圆角发丝框、两层剧照放大到带高÷0.9 且竖向居中 —— 上下各裁 5%**
+    /// （「弄个框把轮播图框起来（圆角）」＋「轮播图上下各裁切百分之五」，2026-09-10）、**剧照靠带子的右沿站**
+    /// （「把主页的轮播图移动到右边」，2026-09-09）、**字块贴着
     /// 左上角而徽标是它的第一行**（2026-09-05「移到左下角，然后把徽标移到剧名上面」、2026-09-10 从下沿挪到顶上）、
     /// **带上四层黑渐变各是各的形状**：顶上给标题栏垫底那条，剧照左沿那道渐融（「给轮播图左边加上黑色渐变」，
     /// 2026-09-09，判的是贴图的左沿、左头实心到底、往里走到全透明，见 <see cref="Melts"/>），加下、右两条只压
@@ -760,14 +775,27 @@ public sealed partial class HomeBanner : UserControl
         var lonely = banner.Dots.Visibility == Visibility.Collapsed;
 
         // 带高落到布局上，而不只是算出来：带高是「剧照缩到带宽六成」按 16:9 算的（HomeCarousel.Height），1100 宽
-        // 的带就是 371 高 —— 图 660 宽靠右，左边那 440 是字块的底色。这份控件没有 XamlRoot，量不到一屏有多高，
-        // 所以那道「不超过一屏」的封顶这一趟不参与。
+        // 的带就是 371 高 —— 图放大到「带高÷0.9」之后 662 宽靠右（上下各裁 5%，见 framed 那一段），左边那一截是
+        // 字块的底色。这份控件没有 XamlRoot，量不到一屏有多高，所以那道「不超过一屏」的封顶这一趟不参与。
         banner.Resize(1100);
         var height = HomeCarousel.Height(0, 1100);
-        var picture = height * HomeCarousel.WindowAspect;
+        var picture = height * HomeCarousel.WindowAspect / KeptShare;
         var gutter = 1100 - picture;
         var wide = banner.Info.MaxWidth;
         var tall = Math.Abs(banner.Root.Height - height) < 0.01 && wide <= 620;
+
+        // 圆角框＋上下各裁 5%（「弄个框把轮播图框起来（圆角）」＋「轮播图上下各裁切百分之五」，2026-09-10）。
+        // 框是 Border：圆角只有 Border 剪得动，两层放大过的剧照跟着四角一起圆、上下多出来的两截也被它剪掉；
+        // 线从「只留下沿一根」换成整圈发丝线。两层的高是「带高 ÷ 九成」、竖向居中 —— 高度不写够就是没放大，
+        // 对齐不是居中就是只裁一头。
+        var corner = (CornerRadius)Application.Current.Resources["EgPosterCornerRadius"];
+        var hairline = (Thickness)Application.Current.Resources["EgHairline"];
+        var framed = banner.Frame.CornerRadius == corner
+            && banner.Frame.BorderThickness == hairline
+            && Math.Abs(banner.LayerA.Height - height / KeptShare) < 0.01
+            && Math.Abs(banner.LayerB.Height - height / KeptShare) < 0.01
+            && banner.LayerA.VerticalAlignment == VerticalAlignment.Center
+            && banner.LayerB.VerticalAlignment == VerticalAlignment.Center;
 
         // 剧照靠带子的右沿站（「把主页的轮播图移动到右边」，2026-09-09）：两层都得靠右 —— 左边让出来的那四成是
         // 字块的底色，谁把哪一层改回居中，屏上就是图压在字上。
@@ -853,13 +881,16 @@ public sealed partial class HomeBanner : UserControl
         banner.Rise();
         var risen = banner.TitleRow.Opacity == 1 && banner.TitleShift.Y == 0 && banner.ActionsShift.Y == 0;
 
-        var ok = quiet && dots && lonely && tall && docked && corners && inked && placed && bare && layered && risen && apart;
+        var ok = quiet && dots && lonely && tall && framed && docked && corners && inked && placed && bare && layered && risen && apart;
 
         return (ok,
             $"没有幻灯片时{(quiet ? "整条带收起、钟不走" : "带还在屏上或钟在走")}；"
                 + $"横条 3 根亮第 2 根{(dots ? "" : "（不对）")}、1 张时整排{(lonely ? "收起" : "还在")}；"
                 + $"带高＝带宽×{HomeCarousel.PictureShare:0%}÷16×9（上限一屏、下限 {HomeCarousel.MinHeight:0}）："
-                + $"带宽 1100→{height:0}、图 {picture:0} 宽靠右{(docked ? "" : "（有一层没靠右）")}、左边留 {gutter:0}；"
+                + $"带宽 1100→{height:0}、图放大到 {picture:0} 宽靠右{(docked ? "" : "（有一层没靠右）")}、左边留 {gutter:0}；"
+                + (framed
+                    ? $"圆角框在（圆角 {corner.TopLeft:0}、整圈发丝线），两层 {banner.LayerA.Height:0} 高＝带高÷{KeptShare:0.0}、竖向居中（上下各裁 5%）；"
+                    : "圆角框不对：角、线、两层的高度或竖向对齐有一样不在；")
                 + $"字块宽 页宽1100→{wide:0}；"
                 + (corners
                     ? "字块贴左上角、三行字靠左，徽标是它的第一行、顶在片名头上；"
@@ -1000,23 +1031,24 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
-    /// 自检：剧照真的整张画出来了没有 —— 「轮播的海报能保持16:9」。
+    /// 自检：剧照真按「上下各裁 5%」画出来了没有 —— 「轮播图上下各裁切百分之五」（2026-09-10）。
     /// <para>
     /// 量的是台上那一层元素自己的尺寸。这只有在 <c>Stretch="Uniform"</c> 加一个不是 <c>Stretch</c> 的横向对齐
     /// 下才说得上话：那时这个元素的大小就是画出来那张图的大小。填满整格的那种拉伸会让它等于整条带，怎么裁的
-    /// 都量不出来 —— 而「裁掉了三成半」在屏幕上只是一张构图不太对的图，没人能指着它说这是个错。
+    /// 都量不出来 —— 而「裁掉了三成五」在屏幕上只是一张构图不太对的图，没人能指着它说这是个错。
     /// </para>
     /// <para>
-    /// 判三件事：画出来的形状就是原图的形状（没裁也没拉）、**画到了这条带里能画的最大**、**贴着带子的右沿**
-    /// （「把主页的轮播图移动到右边」，2026-09-09 —— 从前那一档判的是「左右两条留白一样宽」，剧照居中；挪到
-    /// 右边之后留白全在左边，是字块站的那一片）。图还没解码回来时没有得量，那一档只报不判 —— 那是网络的事，
-    /// 不是版面的事。
+    /// 判三件事：画出来的形状就是原图的形状（没拉也没多裁 —— 裁掉的是上下各 5%，比例不该因此变）、**画到
+    /// 「带高 ÷ 0.9」那么高、上下对称地溢出带子**（溢出去的两截由圆角框剪掉，不对称就是只裁了一头）、**贴着
+    /// 带子的右沿**（「把主页的轮播图移动到右边」，2026-09-09 —— 左边让出来的那截是字块站的那一片底色）。
+    /// 图还没解码回来时没有得量，那一档只报不判 —— 那是网络的事，不是版面的事。
     /// </para>
     /// <para>
-    /// 「画到最大」判的是**贴住吃紧的那一边**，而不是一律要求吃满带高：带子弄扁之后正常那一档高度吃紧（底色留在
-    /// 左边），带宽不到 427、下限那一档宽度吃紧（底下留一条底色）。从前这里写死了「吃满带高」，因为「锁定窗口
-    /// 比例大小」把浏览区一直按在 16:9 上、两边同时吃紧；那个开关 2026-09-05 删掉之后窗口什么形状都拉得出来，
-    /// 写死那一句就变成了「窗口不是 16:9 就报错」。
+    /// 「画到多高」判的是吃紧的那一边，而不是一律要求吃满放大后的高：正常那一档高度吃紧（放大后的图正好铺满
+    /// 带的上下再各溢 5%）；带宽吃紧那一档（带子最窄、图连放大后的宽都摆不下）图吃满带宽，上下裁不满 5% ——
+    /// 那是带宽摆不下，不是版面错了，两档都认。从前这里写死了「吃满带高」，因为「锁定窗口比例大小」把浏览区
+    /// 一直按在 16:9 上、两边同时吃紧；那个开关 2026-09-05 删掉之后窗口什么形状都拉得出来，写死那一句就变成
+    /// 了「窗口不是 16:9 就报错」。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) PictureRead()
@@ -1037,24 +1069,30 @@ public sealed partial class HomeBanner : UserControl
         var at = layer.TransformToVisual(Band).TransformPoint(new Windows.Foundation.Point(0, 0));
         var left = at.X;
         var right = band.Width - (at.X + drawn.Width);
+        // 上下各溢出带子多少：带高 ÷ 0.9 画、竖向居中，两头各溢 drawn.Height − band.Height 的一半。带子量出来的
+        // 高比带矮两根发丝线（外面那圈框的），所以容差放宽到 3 —— 卡在 1.5 上会把那两像素当成「没放大」。
+        var spill = (drawn.Height - band.Height) / 2;
 
         var whole = sourceShape <= 0 || Math.Abs(shape - sourceShape) < 0.02;
-        var filledHeight = Math.Abs(drawn.Height - band.Height) <= 1.5;
+        var stretched = Math.Abs(drawn.Height - band.Height / KeptShare) <= 3;
+        var centered = Math.Abs(at.Y + spill) <= 2;
         var filledWidth = Math.Abs(drawn.Width - band.Width) <= 1.5;
-        var biggest = filledHeight || filledWidth;
+        var biggest = stretched || filledWidth;
         var docked = right <= 1.5;
 
-        return (whole && biggest && docked,
+        return (whole && biggest && docked && centered,
             $"剧照 {drawn.Width:0}×{drawn.Height:0} = {shape:0.000}:1"
                 + (sourceShape > 0
-                    ? $"（原图 {source!.PixelWidth}×{source.PixelHeight} = {sourceShape:0.000}:1"
-                        + (whole ? "，没裁也没拉）" : "，画出来的形状和原图不一样）")
+                    ? $"（原图 {source!.PixelWidth}×{source!.PixelHeight} = {sourceShape:0.000}:1"
+                        + (whole ? "，比例没变）" : "，画出来的形状和原图不一样）")
                     : "（问不到原图尺寸）")
                 + $"；带 {band.Width:0}×{band.Height:0}"
-                + (filledHeight && filledWidth ? "，正好铺满整条带"
-                    : filledHeight ? "，吃满带高（底色留在左边）"
-                    : filledWidth ? "，吃满带宽（下限那一档，底下留一条底色）"
-                    : "，两边都没吃满 —— 没画到能画的最大")
+                + (stretched
+                    ? $"，画到带高÷{KeptShare:0.0}＝{band.Height / KeptShare:0}、上下各溢 {spill:0}"
+                        + (centered ? "（对称，两头各裁 5%）" : "（不对称 —— 只裁了一头）")
+                    : filledWidth
+                        ? "，吃满带宽（最窄那一档，上下裁不满 5%）"
+                        : "，两边都没吃满 —— 没画到能画的最大")
                 + $"；左留 {left:0}、右留 {right:0}"
                 + (docked ? "，贴着带子的右沿" : "，没贴到带子的右沿")
                 + $"（左边那截是字块的底色，字块最宽 {Info.MaxWidth:0}）");
