@@ -47,7 +47,12 @@ if ($SkipPublish) {
     }
     Write-Output "跳过发布，拿 $publishRoot 里现成的那一份（它可能不是刚构建的，见 -SkipPublish 的说明）。"
 } else {
-    & (Join-Path $PSScriptRoot 'publish.ps1') -NoArchive $(if ($FrameworkDependent) { '-FrameworkDependent' })
+    # Splatting，不是「$(if ...) 传字符串」：开关没开时那个子表达式给出空串，Windows PowerShell 5.1 会把它当成
+    # 一个空参数传下去，撞上 publish.ps1 那边 -Configuration 的 ValidateSet 直接死（2026-09-10 打 0.0.3 时撞的
+    # 一次）。Splatting 在开关关着时根本不生成那个参数。
+    $publishFlags = @{ NoArchive = $true }
+    if ($FrameworkDependent) { $publishFlags.FrameworkDependent = $true }
+    & (Join-Path $PSScriptRoot 'publish.ps1') @publishFlags
     if ($LASTEXITCODE -ne 0) { throw 'publish.ps1 失败。' }
 }
 
