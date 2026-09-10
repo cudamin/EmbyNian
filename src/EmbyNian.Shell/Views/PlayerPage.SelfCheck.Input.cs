@@ -299,19 +299,20 @@ public sealed partial class PlayerPage
                       && PulseBadge.ActualWidth >= 130
                       && PulseBadge.ActualHeight >= 130;
 
-            // 「要纯白色，去掉灰色」 (2026-09-05): one layer, and both of its brushes are the palette's own white.
-            // Asserted rather than eyeballed, because the rim that used to sit behind this was five pixels of
-            // 35% black hugging the shape — on a screenshot that reads as an outline somebody drew on purpose.
+            // 「要纯白色，去掉灰色」 (2026-09-05): one layer, and its brush is the palette's own white. Since
+            // 2026-09-06 the shape is finished outline geometry — fill only — so 「one layer」 also asserts the
+            // stroke did not sneak back. Asserted rather than eyeballed, because the rim that used to sit behind
+            // this was five pixels of 35% black hugging the shape — on a screenshot that reads as an outline
+            // somebody drew on purpose.
             var white = PulseArtBox.Children.Count == 1
                         && ReferenceEquals(PulseShape.Fill, Resources["PlayerPulseBrush"])
-                        && ReferenceEquals(PulseShape.Stroke, Resources["PlayerPulseBrush"]);
+                        && PulseShape.Stroke is null;
 
             seen.Add($"{what}→{(shown ? "出角标" : "没出角标")}"
                      + $"，{(running ? "动画在跑" : "动画没跑")}"
                      + $"，形状{(right ? "对" : "不对")}"
                      + $"，{(bare ? "没有底板" : "还有底板")}"
                      + $"，外框 {box.Width:0}×{box.Height:0}"
-                     + $"／描边 {PulseShape.StrokeThickness:0}"
                      + $"／徽标 {PulseBadge.ActualWidth:0}×{PulseBadge.ActualHeight:0}"
                      + (white ? "，纯白一层" : $"，不是纯白一层（{PulseArtBox.Children.Count} 层）"));
 

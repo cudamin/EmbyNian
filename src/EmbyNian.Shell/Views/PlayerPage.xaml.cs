@@ -751,32 +751,47 @@ public sealed partial class PlayerPage : UserControl
     private static string Glyph(int codepoint) => char.ConvertFromUtf32(codepoint);
 
     /// <summary>
-    /// One of <see cref="PulseArt"/>'s point lists as a <c>PathGeometry</c>: closed straight-line figures and
-    /// nothing else, because the rounded corners come from the stroke's round joins rather than from arcs.
+    /// One of <see cref="PulseArt"/>'s outlines as a <c>PathGeometry</c>: a straight step becomes a
+    /// <c>LineSegment</c>, an arc step becomes the clockwise minor <c>ArcSegment</c> the data promises
+    /// (see <see cref="PulseStep"/> — clockwise is a contract with the point order, and this place only
+    /// translates it faithfully).
     /// <para>
-    /// Built here rather than declared in the markup because the numbers are worth a test: 「what does this come
-    /// to on screen once it is stroked」 is arithmetic, and the answer has to match the outer box of the glyph it
-    /// replaced or the badge quietly changes size.
+    /// Built here rather than declared in the markup because the numbers are worth a test: each figure carries
+    /// its corner polygon, so 「the weight class the badge sits in」 is exactly <see cref="PulseArt.Bounds"/>
+    /// (the rounded outline is cut inward from it and never exceeds it), and PlaybackTests pins that box —
+    /// centred — against the one the glyph two generations ago was measured into.
     /// </para>
     /// </summary>
-    private static Geometry Build(IReadOnlyList<IReadOnlyList<(double X, double Y)>> figures)
+    private static Geometry Build(IReadOnlyList<PulseFigure> figures)
     {
         var geometry = new PathGeometry();
 
-        foreach (var points in figures)
+        foreach (var figure in figures)
         {
-            if (points.Count == 0) continue;
-
-            var figure = new PathFigure
+            var path = new PathFigure
             {
-                StartPoint = new Point(points[0].X, points[0].Y),
+                StartPoint = new Point(figure.Start.X, figure.Start.Y),
                 IsClosed = true
             };
 
-            for (var index = 1; index < points.Count; index++)
-                figure.Segments.Add(new LineSegment { Point = new Point(points[index].X, points[index].Y) });
+            foreach (var step in figure.Steps)
+            {
+                var point = new Point(step.X, step.Y);
+                if (step.Arc)
+                    // WinUI 的 ArcSegment 只有无参构造，靠属性赋值；也没有 WPF 那个 IsStroked。
+                    path.Segments.Add(new ArcSegment
+                    {
+                        Point = point,
+                        Size = new Size(step.Radius, step.Radius),
+                        RotationAngle = 0,
+                        IsLargeArc = false,
+                        SweepDirection = SweepDirection.Clockwise
+                    });
+                else
+                    path.Segments.Add(new LineSegment { Point = point });
+            }
 
-            geometry.Figures.Add(figure);
+            geometry.Figures.Add(path);
         }
 
         return geometry;

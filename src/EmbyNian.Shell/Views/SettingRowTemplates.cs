@@ -45,6 +45,9 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
     /// <summary>一行读数加一颗可有可无的按钮，见 <see cref="SettingFactRow"/>。</summary>
     public DataTemplate? Fact { get; set; }
 
+    /// <summary>一行一个可重绑的播放器快捷键，见 <see cref="SettingShortcutRow"/>。</summary>
+    public DataTemplate? Shortcut { get; set; }
+
     /// <summary>主页版面那张可拖拽、带勾选的表，见 <see cref="SettingHomeLayoutRow"/>。</summary>
     public DataTemplate? HomeLayout { get; set; }
 
@@ -55,6 +58,7 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
         SettingThemeRow => Theme,
         SettingHomeLayoutRow => HomeLayout,
         SettingFactRow => Fact,
+        SettingShortcutRow => Shortcut,
         SettingChoiceRow => Choice,
         SettingToggleGroupRow => ToggleGroup,
         SettingToggleRow => Toggle,

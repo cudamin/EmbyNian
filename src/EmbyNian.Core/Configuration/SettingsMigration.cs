@@ -237,6 +237,7 @@ public static class SettingsMigration
         if (settings.Audio is null) settings.Audio = new AudioSettings();
         if (settings.Shaders is null) settings.Shaders = new ShaderAutomationSettings();
         if (settings.Ui is null) settings.Ui = new UiSettings();
+        if (settings.Shortcuts is null) settings.Shortcuts = new ShortcutSettings();
 
         if (settings.Playback.AudioLanguages is null) settings.Playback.AudioLanguages = [];
         if (settings.Playback.SubtitleLanguages is null) settings.Playback.SubtitleLanguages = [];
@@ -266,6 +267,11 @@ public static class SettingsMigration
         // which SettingsStore already treats as a corrupt file.
         DropNullValues(settings.Ui.Sort);
         DropNullValues(settings.Ui.Filters);
+
+        // 快捷键那张 Id→token 表：null 的那份先扔掉（string 值，和 Sort/Filters 同一条规矩）。认不出的动作 Id、
+        // 解析不了的写法、落到保留键上的，留给 Normalize 里的 ShortcutCatalog.Clean 收。
+        if (settings.Shortcuts.Bindings is null) settings.Shortcuts.Bindings = new(StringComparer.Ordinal);
+        DropNullValues(settings.Shortcuts.Bindings);
 
         return settings;
     }
@@ -343,6 +349,17 @@ public static class SettingsMigration
         settings.Video.HardwareDecoding = Choice(MpvOutputOptions.HardwareDecoders, settings.Video.HardwareDecoding);
         settings.Video.OutputLevels = Choice(MpvOutputOptions.OutputLevels, settings.Video.OutputLevels);
         settings.Video.VideoSync = Choice(MpvOutputOptions.VideoSync, settings.Video.VideoSync);
+
+        // 插值算法没有「不设置」那一档 —— 插值开着时 Build 每次都点名它，所以认不出的值落回第一档（装机那一
+        // 档），而不是空串：空串会让 mpv 留在自己的 mitchell 上，而设置页写着别的。
+        settings.Video.Tscale = Kernel(settings.Video.Tscale);
+
+        // 插值关闭阈值。0 是旧文件缺键（这个键 2026-09-10 才有），读成装机默认 120 —— 缺键升级的人行为一个数
+        // 都不许变；其余夹回范围，上下限和设置页那一行是同一对常量（同图片缓存上限那条规矩）。
+        settings.Video.HighRefreshRateLimitHz = settings.Video.HighRefreshRateLimitHz <= 0
+            ? VideoSettings.DefaultHighRefreshRateLimitHz
+            : Math.Clamp(settings.Video.HighRefreshRateLimitHz,
+                VideoSettings.MinimumHighRefreshRateLimitHz, VideoSettings.MaximumHighRefreshRateLimitHz);
         settings.Video.Dither = Choice(MpvOutputOptions.Dithers, settings.Video.Dither);
         settings.Video.Deband = Choice(MpvOutputOptions.DebandModes, settings.Video.Deband);
         settings.Video.HdrMode = Choice(MpvOutputOptions.HdrModes, settings.Video.HdrMode);
@@ -377,6 +394,10 @@ public static class SettingsMigration
 
         // 字幕字体 is a family name for mpv; a v3 file may still hold the path of a font file here.
         settings.Playback.SubtitleFontFamily = ResolveFontFamily(settings.Playback.SubtitleFontFamily);
+
+        // 快捷键：认不出的动作 Id、解析不了的写法、落到保留键（Esc/Y）上的，都清掉并把写法规范化 —— 和上面
+        // 每一项都被夹进合法范围是同一条规矩，手改的设置文件也拦得住。
+        settings.Shortcuts.Bindings = ShortcutCatalog.Clean(settings.Shortcuts.Bindings);
 
         foreach (var server in settings.Servers)
         {
@@ -523,6 +544,17 @@ public static class SettingsMigration
     {
         var chosen = Choice(MpvOutputOptions.QualityPresets, value);
         return chosen.Length > 0 ? chosen : MpvOutputOptions.QualityPresets[0].Value;
+    }
+
+    /// <summary>
+    /// 插值算法. No 「不设置」 entry — the client names the kernel on every interpolation launch — so an unknown
+    /// value lands on the first entry (the shipped one) rather than on an empty string that would leave mpv on
+    /// mitchell while the settings page promised something else. Same shape as <see cref="Preset"/>.
+    /// </summary>
+    private static string Kernel(string? value)
+    {
+        var chosen = Choice(MpvOutputOptions.InterpolationKernels, value);
+        return chosen.Length > 0 ? chosen : MpvOutputOptions.InterpolationKernels[0].Value;
     }
 
     /// <summary>

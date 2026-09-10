@@ -525,6 +525,8 @@ public sealed partial class PlayerViewModel
         _episodeLookupBusy = false;
         _episodeSwitchTargetId = null;
         _seekPending = null;
+        _seekSent = null;
+        _seekTouched = 0;
         _skips.Begin([], 0);
 
         // Everything the bar drew about this particular file. The stills especially: they are keyed by

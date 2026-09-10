@@ -109,6 +109,18 @@ internal sealed class VideoWindow : IDisposable
     /// <c>WM_SIZE</c> it gets from here is exactly the event its own resize-and-redraw path waits for.
     /// </para>
     /// <para>
+    /// The resize of mpv's child is <b>asked, not assumed</b>. It goes out as <c>SWP_ASYNCWINDOWPOS</c>
+    /// because the child belongs to mpv's own thread — hence posted rather than waited on while we are
+    /// inside <c>WM_SIZE</c> — and a posted window position is dropped the moment anyone makes a
+    /// <em>synchronous</em> <c>SetWindowPos</c> on the same window, mpv's own catch-up included. The
+    /// 2026-09-04 fix worked only while mpv stayed quiet; a paused mpv catching up mid-transition could
+    /// still eat our resize and leave the picture at its old size in the corner
+    /// (「窗口化然后再进入全屏画面会保持原尺寸固定在左上角」 — the 「有时候」 is exactly this window). So this
+    /// method reads the child's actual rect first and posts only when it disagrees with the parent's
+    /// client area, which makes it idempotent and lets <see cref="HostWindow"/>'s settle timer simply call
+    /// it again until it finds nothing to do.
+    /// </para>
+    /// <para>
     /// Measured before writing it: an embedded mpv (mpv.exe 0.41 into a window built and resized like this
     /// one, gpu-next on vulkan, hwdec on, paused from the first frame) recreates its swapchain and redraws at
     /// the new size — its own log says 「(Re)creating swapchain of size 1040x585」 while <c>pause</c> is still
@@ -129,6 +141,19 @@ internal sealed class VideoWindow : IDisposable
         // form, which posts instead of waiting for that thread to answer while we are inside WM_SIZE.
         var picture = Native.GetWindow(Handle, Native.GwChild);
         if (picture == IntPtr.Zero) return;
+
+        // The child's actual size is the whole question: an async post can be dropped by any synchronous
+        // SetWindowPos on the same window, so a wrong-size child still has to be asked again — and an
+        // already-right one must not be, because this runs on the settle timer too and re-posting a
+        // no-op resize to mpv's thread eight times per transition is exactly the churn the guard avoids.
+        if (Native.GetWindowRect(picture, out var child))
+        {
+            var corner = new NativePoint { X = child.Left, Y = child.Top };
+            if (Native.ScreenToClient(_parent, ref corner)
+                && corner.X == 0 && corner.Y == 0
+                && child.Width == client.Width && child.Height == client.Height)
+                return;
+        }
 
         Native.SetWindowPos(
             picture, IntPtr.Zero, 0, 0, client.Width, client.Height,

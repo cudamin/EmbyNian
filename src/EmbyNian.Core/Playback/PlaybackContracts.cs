@@ -60,8 +60,9 @@ public sealed record PlaybackTicket
     /// rule that reads it treats as 「不知道」 rather than as a number.
     /// <para>
     /// Only <see cref="Mpv.MpvOutputOptions.ResolveSync"/> wants it, and only to decide whether 显示同步 (and with
-    /// it 插值) is worth its cost on this screen — the measurement behind that is on
-    /// <c>MpvOutputOptions.HighRefreshThreshold</c>.
+    /// it 插值) is worth its cost on this screen — the threshold it is compared against is
+    /// <see cref="Configuration.VideoSettings.HighRefreshRateLimitHz"/>, and the measurement behind that is on
+    /// that field.
     /// </para>
     /// <para>
     /// <b>Read once, at launch.</b> Dragging the window to a 60 Hz screen mid-film does not re-decide it, unlike

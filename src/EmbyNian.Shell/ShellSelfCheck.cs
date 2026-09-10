@@ -86,12 +86,6 @@ internal static partial class ShellSelfCheck
     private static (bool Ok, string Detail)? _commands;
 
     /// <summary>
-    /// 右栏那一列继续观看是「点一下翻一屏」而不是「拖滚动条」，见 <see cref="HomePage.RailPageRead"/>。跟着
-    /// stage 0 一起快照，理由同上面几条：框里一次只有一页。这台账号继续观看空着时是「跳过」那一档。
-    /// </summary>
-    private static (bool? Ok, string Detail)? _railPage;
-
-    /// <summary>
     /// 按一张卡片会不会让整页先滑一段 —— 「点击主页继续观看、媒体库、最近添加的封面之后会先跳转到页面下方，
     /// 然后才会进入页面」。跟着 stage 0 一起快照，理由和上面几条一样：框里一次只有一页。空的主页上是 null。
     /// </summary>
@@ -632,7 +626,6 @@ internal static partial class ShellSelfCheck
                 _home ??= ReadHome(shell);
                 _cards ??= ReadCards(shell);
                 _menu ??= (shell.Pages.Content as HomePage)?.MenuRead();
-                _railPage ??= (shell.Pages.Content as HomePage)?.RailPageRead();
                 _ink ??= ReadInk(shell, window);
 
                 // 多一拍：这一拍把焦点按到第一张卡上，下一拍才量这一页挪没挪。三个读数在按之前拿，所以焦点

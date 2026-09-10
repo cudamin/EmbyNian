@@ -46,6 +46,12 @@ public sealed partial class PlayerViewModel
         // and the previous episode's opening is not this one's. The server's chapter marks are the
         // starting point; RefineSkipSectionsAsync replaces them with mpv's once the file is open.
         _generation++;
+
+        // The old file's scrub and in-flight seek mean nothing here: a seek left in flight would hold the
+        // new file's bar at a fraction from another film until the 5-second give-up, which is exactly the
+        // 「进度与进度条不一致」 shape pointed at a different cause.
+        _seekTouched = 0;
+        _seekSent = null;
         _nowPlaying = item;
         if (item is not null
             && string.Equals(_episodeSwitchTargetId, item.Id, StringComparison.Ordinal))
@@ -143,7 +149,6 @@ public sealed partial class PlayerViewModel
         Status = status;
 
         PlayPauseGlyph = Glyph(status.Paused ? PlayGlyphCode : PauseGlyphCode);
-        PositionClock = status.HasPosition ? status.PositionClock : "0:00";
         DurationClock = status.HasDuration ? status.DurationClock : "0:00";
         CacheFraction = status.CacheFraction;
         SpeedLabel = $"{status.Speed.ToString("0.0#", CultureInfo.InvariantCulture)}×";
@@ -154,8 +159,14 @@ public sealed partial class PlayerViewModel
         {
             // The user's own drag wins for as long as it is the more current answer: mpv reports the
             // position it is still seeking away from, and letting that write the slider back would drag
-            // the thumb out from under the pointer.
-            if (!Scrubbing) SeekValue = status.Fraction * SeekScale;
+            // the thumb out from under the pointer. A seek that has been sent but not landed gets the
+            // same protection — see SeekBarFollows for why 400 ms of grace was not enough — and the
+            // clock and the bar are gated together so the two never show different moments.
+            if (SeekBarFollows(status))
+            {
+                SeekValue = status.Fraction * SeekScale;
+                PositionClock = status.HasPosition ? status.PositionClock : "0:00";
+            }
 
             // 音量 has the same problem and it was visible: 「滚轮调音量的时候不是很顺滑，音量条一顿一顿的」
             // (2026-09-04). Every wheel notch writes mpv asynchronously, and this poll runs ten times a second
@@ -182,6 +193,31 @@ public sealed partial class PlayerViewModel
         StatusApplied?.Invoke(status);
 
         ApplySkipOffer();
+    }
+
+    /// <summary>
+    /// Whether this snapshot may write the seek bar and the clock beside it. Three answers:
+    /// a drag under the user's hand — the thumb is the user's, whatever mpv says; a seek already sent —
+    /// the bar keeps the value the hand left until mpv reports the target position, because a precise
+    /// seek (<c>hr-seek</c>, 「跳过片头」 and every release of a drag) takes longer to land than the old
+    /// 400 ms grace, and in that window mpv keeps reporting the position it is seeking <em>away from</em> —
+    /// writing that back is the thumb jumping backwards and then forwards again
+    /// (「播放进度会与进度条进度不一致」); the target reached, or the wait timed out — mpv is the answer again.
+    /// <para>
+    /// 拖动中的落定也认：那只是提前结束等待，拇指本身仍归手管（<see cref="Scrubbing"/> 那一档），下一次
+    /// 释放又会在 <c>Tick</c> 里记下新的目标。认这一下的意义在于离开的手一松开，进度条马上就能跟 mpv 走。
+    /// </para>
+    /// </summary>
+    private bool SeekBarFollows(PlayerStatus status)
+    {
+        if (_seekSent is not { } target) return !Scrubbing;
+
+        var landed = status.HasPosition && status.HasDuration
+            && Math.Abs(status.Position - target * status.Duration) <= SeekLandedSeconds;
+
+        if (landed || Now - _seekSentAt > SeekGiveUpMilliseconds) _seekSent = null;
+
+        return !Scrubbing && _seekSent is null;
     }
 
     /// <summary>
@@ -380,6 +416,16 @@ public sealed partial class PlayerViewModel
     private void AcceptSkip(SkipJump? decided)
     {
         if ((decided ?? _skips.Accept()) is not { } jump) return;
+
+        // Marked in flight like a released drag: the seek below is exact and takes as long to land, and
+        // the bar bouncing back to the pre-skip position before arriving at the target is the same bug.
+        // Only with a duration to divide by — without one there is no fraction to wait for, and the
+        // ordinary follow (「nothing in flight」) is the honest answer.
+        if (Status.HasDuration)
+        {
+            _seekSent = Math.Clamp(jump.Target / Status.Duration, 0, 1);
+            _seekSentAt = Now;
+        }
 
         _ = _playback.CommandAsync(
             "seek",

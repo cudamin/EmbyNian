@@ -37,6 +37,8 @@ public sealed class AppSettings
 
     public UiSettings Ui { get; set; } = new();
 
+    public ShortcutSettings Shortcuts { get; set; } = new();
+
     public ServerProfile? FindServer(string? id) =>
         id is null ? null : Servers.FirstOrDefault(server => server.Id == id);
 
@@ -60,6 +62,16 @@ public sealed class AppSettings
         if (string.IsNullOrWhiteSpace(DeviceId)) DeviceId = Guid.NewGuid().ToString("N");
         return this;
     }
+}
+
+/// <summary>
+/// 播放器键盘快捷键，只记用户动过的那几个 —— 见 <see cref="ShortcutCatalog"/> 的类注释（缺键=装机
+/// 默认、空串=显式解绑、否则是一个 token 串）。装机是空字典。这个类只是个哑数据袋，判断全在 <c>ShortcutCatalog</c>。
+/// </summary>
+public sealed class ShortcutSettings
+{
+    /// <summary>动作 Id → 组合键 token（<see cref="ShortcutCatalog.Serialize"/> 那份写法）。</summary>
+    public Dictionary<string, string> Bindings { get; set; } = new(StringComparer.Ordinal);
 }
 
 public sealed class ServerProfile
@@ -474,6 +486,21 @@ public sealed class VideoSettings
     /// <summary>mpv's <c>interpolation</c>: smooths judder, and needs display sync to do anything.</summary>
     public bool Interpolation { get; set; }
 
+    /// <summary>
+    /// 插值算法 (mpv's <c>tscale</c>), one of <see cref="Mpv.MpvOutputOptions.InterpolationKernels"/> —
+    /// 「为当前的插值功能设置更多的可选项」, 2026-09-10. <c>oversample</c> has always been what this client
+    /// sent (it only blends the frames a refresh boundary straddles: cheapest, and the one kernel that cannot
+    /// smear motion), so it is the shipped value and an install that never touches the row keeps exactly the
+    /// picture it had. The rest are true reconstruction filters — smoother motion, possible ringing around
+    /// sharp moving edges; the trade is on each entry's label.
+    /// <para>
+    /// Only reaches mpv with <see cref="Interpolation"/> on. No 「不设置」 entry, so
+    /// <c>SettingsMigration.Normalize</c> lands an unknown value on <c>oversample</c> rather than on an empty
+    /// string that would leave mpv on mitchell while the page promised something else.
+    /// </para>
+    /// </summary>
+    public string Tscale { get; set; } = "oversample";
+
     /// <summary>抖动算法 (mpv's <c>dither</c>); see <see cref="Mpv.MpvOutputOptions.Dithers"/>.</summary>
     public string Dither { get; set; } = "fruit";
 
@@ -506,8 +533,9 @@ public sealed class VideoSettings
     /// <summary>
     /// Falls back to <c>video-sync=audio</c>, interpolation with it, in the two cases where display sync is
     /// charged more than it returns: a source above about 47fps, which has no spare cadence left to resample
-    /// into, and a screen above about 120Hz, where the whole final render pass starts running once per refresh
-    /// for judder there is barely any of. Both halves are <see cref="Mpv.MpvOutputOptions.ResolveSync"/>'s.
+    /// into, and a screen above <see cref="HighRefreshRateLimitHz"/>, where the whole final render pass starts
+    /// running once per refresh for judder there is barely any of. Both halves are
+    /// <see cref="Mpv.MpvOutputOptions.ResolveSync"/>'s.
     /// <para>
     /// <b>The refresh-rate half arrived on 2026-09-04, and v9 turns the switch back on for anyone who had it
     /// off.</b> Up to then it only meant 「高帧率片源」, so a stored <c>false</c> was an answer to a question
@@ -519,6 +547,36 @@ public sealed class VideoSettings
     /// </para>
     /// </summary>
     public bool HighFrameRateAudioSync { get; set; } = true;
+
+    /// <summary>插值关闭阈值的下限（Hz）。24 是还像刷新率的最低一档 —— 填了它，任何一块现实的屏都算「超过」。</summary>
+    public const int MinimumHighRefreshRateLimitHz = 24;
+
+    /// <summary>插值关闭阈值的上限（Hz）。目前没有哪块屏超过它，再大的数只是把规则关掉的一种绕路写法。</summary>
+    public const int MaximumHighRefreshRateLimitHz = 1000;
+
+    /// <summary>插值关闭阈值的装机默认 —— 从前写死在 <see cref="Mpv.MpvOutputOptions"/> 里的那个数，量出来的那笔账见这一项。</summary>
+    public const int DefaultHighRefreshRateLimitHz = 120;
+
+    /// <summary>
+    /// 插值关闭阈值（Hz）：播放窗口所在屏幕的刷新率<b>大于</b>这个数，就把插值连同显示同步一起收回、回到音频同步
+    /// —— 「在设置中新增自定义输入框，显示器刷新率大于该数值时关闭插值」（2026-09-10）。
+    /// <para>
+    /// <b>120 是从前的写死值，也是装机默认。</b>它量出来过（2026-09-04，2560×1440、24fps 片源、gpu-next +
+    /// vulkan、不挂链，<c>artifacts/shader-probe/interp-cost.ps1</c>）：显示同步把 mpv 最后一趟渲染（混帧、色彩
+    /// 编码、抖动，约 1.1 毫秒）从「每个视频帧一次」改成「每次刷新一次」，144Hz 上 Windows 自己的进程 GPU 计数器
+    /// 实测 24.7% 对 50.1%；而 144 ÷ 24 = 6.000，没有节奏要补，<c>vo-passes</c> 几乎只报「frame mixing (1
+    /// frame)」。120 也是用户自己那份 mpv.conf 里 <c>[fps-fix]</c> 写的数 —— 「外置 mpv 开了插值也不费显卡」正是
+    /// 因为那头同一条规则先出手了。别拿 <c>--interpolation-threshold</c> 顶这一行：在 gpu-next 上量过没有可测的
+    /// 差别，而且账单在「按刷新率重跑的那趟渲染」，不在混帧本身。
+    /// </para>
+    /// <para>
+    /// 做成输入框之后这个数就是用户的了 —— 一块 60Hz 的屏想彻底关掉它，填 24 就行。只在
+    /// <see cref="HighFrameRateAudioSync"/> 开着时生效：那个开关是这一整条回退规则（含片源 47fps 那一半）的总闸，
+    /// 关掉它是「任何屏幕都把显示同步还给我」的逃生口。缺键（旧文件升级）读出来是 0，Normalize 把 0 读成装机
+    /// 默认 120 —— 缺键的人一个数都不许变。
+    /// </para>
+    /// </summary>
+    public int HighRefreshRateLimitHz { get; set; } = DefaultHighRefreshRateLimitHz;
 
     /// <summary>Demuxer cache in MiB; 0 leaves mpv's own default alone.</summary>
     public int NetworkCacheMegabytes { get; set; }

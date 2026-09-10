@@ -249,18 +249,6 @@
   <data name="HomeBanner_Root.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>主页轮播</value>
   </data>
-  <data name="HomePage_RailNext.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
-    <value>下一页</value>
-  </data>
-  <data name="HomePage_RailNext.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
-    <value>下一页</value>
-  </data>
-  <data name="HomePage_RailPrev.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
-    <value>上一页</value>
-  </data>
-  <data name="HomePage_RailPrev.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
-    <value>上一页</value>
-  </data>
   <data name="HomePage_Slate.Title" xml:space="preserve">
     <value>主页</value>
   </data>
@@ -582,7 +570,10 @@
   <data name="ShellPage_ForwardButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>前进</value>
   </data>
-  <data name="ShellPage_HomeTab.Text" xml:space="preserve">
+  <data name="ShellPage_HomeButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>主页</value>
+  </data>
+  <data name="ShellPage_HomeButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>主页</value>
   </data>
   <data name="ShellPage_MenuFlyoutItem2.Text" xml:space="preserve">
@@ -605,6 +596,12 @@
   </data>
   <data name="ShellPage_UserMenu.Text" xml:space="preserve">
     <value>切换用户</value>
+  </data>
+  <data name="ShortcutCaptureBox_Clear.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>清除快捷键</value>
+  </data>
+  <data name="ShortcutCaptureBox_Clear.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>清除这个快捷键</value>
   </data>
   <data name="SignInPage_Button1.Content" xml:space="preserve">
     <value>连接</value>

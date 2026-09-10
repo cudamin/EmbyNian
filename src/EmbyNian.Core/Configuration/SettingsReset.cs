@@ -37,11 +37,13 @@ public static class SettingsReset
     /// </summary>
     public static AppSettings Restore(AppSettings settings)
     {
-        // 这四组整组回默认：里面每一个字段都是设置页上的一行，没有例外要留。
+        // 这五组整组回默认：里面每一个字段都是设置页上的一行，没有例外要留。快捷键那一组回默认就是把用户
+        // 改过的绑定全清掉（Bindings 变回空字典），也就是设置页里那颗「恢复默认快捷键」做的事的全量版。
         Overwrite(settings.Mpv, new MpvSettings());
         Overwrite(settings.Playback, new PlaybackSettings());
         Overwrite(settings.Video, new VideoSettings());
         Overwrite(settings.Shaders, new ShaderAutomationSettings());
+        Overwrite(settings.Shortcuts, new ShortcutSettings());
 
         // 音量不是设置页上的一行，是播放器上次被留在哪儿（见 AudioSettings.Volume）。每次播放都是新起的 mpv，
         // 它自己那份音量永远是 100，所以清掉这个数就是把用户调好的音量抹掉，而设置页上没有任何一行提过它。

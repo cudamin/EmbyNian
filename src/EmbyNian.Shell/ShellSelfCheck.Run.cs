@@ -63,8 +63,8 @@ internal static partial class ShellSelfCheck
         report.AppendLine($"[信息] 页面形状 — {width}×{height} = {browseShape:0.000}:1"
             + $"（最小客户区 {floor.Width}×{floor.Height}）："
             + (Math.Abs(browseShape - HomeCarousel.WindowAspect) < 0.01
-                ? $"正好是 {HomeCarousel.WindowAspectLabel}，一张不裁切的轮播图铺满第一屏"
-                : $"不是 {HomeCarousel.WindowAspectLabel}（开窗那一档才是），轮播图完整但四周留底色"));
+                ? $"正好是 {HomeCarousel.WindowAspectLabel}，开窗那一档的形状"
+                : $"不是 {HomeCarousel.WindowAspectLabel}（开窗那一档才是），轮播剧照照旧不裁、底色留在边上"));
 
         // 放片子的时候「拖边沿保持画面比例」这条真的接在 WM_SIZING 上没有。真拖一次要注入指针，这台机器上注入是
         // 被挡着的，所以这里直接把一条 WM_SIZING 送进窗口自己的消息处理里看它回什么 —— 自检里没有片子，那个比例
@@ -166,18 +166,18 @@ internal static partial class ShellSelfCheck
                 $"{shell.SignInRoot.ActualWidth:0}x{shell.SignInRoot.ActualHeight:0}");
             Check("浏览区已隐藏",
                 shell.BrowseRoot.Visibility == Visibility.Collapsed
-                    && shell.NavBarRoot.Visibility == Visibility.Collapsed,
-                $"页面 {shell.BrowseRoot.Visibility}、标签栏 {shell.NavBarRoot.Visibility}");
+                    && shell.AccountRoot.Visibility == Visibility.Collapsed,
+                $"页面 {shell.BrowseRoot.Visibility}、账号按钮 {shell.AccountRoot.Visibility}");
             Check("尚未打开页面", shell.Pages.Content is null, shell.Pages.Content?.GetType().Name ?? "为空");
         }
         else
         {
-            // 「删掉侧边栏」（2026-09-06）：媒体库的入口从左边那条 NavigationView 换成窗口顶上那条 SelectorBar，
-            // 账号那颗按钮跟着挪到它的右端。这一关把「格数、tag、落在哪一行、账号在哪个角」四件事一起量出来 ——
-            // 它们的坏法在截图里都不出声，而其中「标签压进标题栏的拖动区」那一种是这个项目的老账：画在窗口标题栏
-            // 区域里的控件收不到点击，一按就是拖窗口。
-            var tabs = shell.ProbeTabs();
-            Check("顶部标签栏", tabs.Ok, tabs.Detail);
+            // 「移除…主页、电视节目、电影这一栏」（2026-09-08）删了标签栏，2026-09-09 又把它空出来的第 1 行连着
+            // 那条 48 像素空带删掉了 —— 这一条量「外壳就剩标题栏一行、正好 32 高、账号挪进右上角」三件事，它们的
+            // 坏法在截图里都不出声：多出来的那一行正是「删掉之后原处留空位」，而账号那颗挪进标题栏之后没挖洞
+            // 的话，一按就是拖窗口（这个项目的老账，见 <c>SetTitleBarHoles</c>）。
+            var chrome = shell.ProbeChrome();
+            Check("外壳顶栏", chrome.Ok, chrome.Detail);
             // Read from the snapshot when the check has since walked into a library: the frame holds one
             // page, so the home page's own state is gone by then.
             var home = _home ?? ReadHome(shell);
@@ -209,26 +209,15 @@ internal static partial class ShellSelfCheck
             // 图，没人指得出这是个错，所以这一条量的是画出来那张图和原图的形状对不对得上。
             Check("主页大图不裁切", home.PictureOk, home.Picture);
 
-            // 「红框框出来的地方全填充上海报」：那一块从窗口的顶边量起，一直到右边沿 —— 第一屏是并排两栏，
-            // 所以右边沿现在是右栏那一列继续观看的右沿。图有没有解码是上面那行读数的事，这一行只问那块地方铺满
-            // 了没有 —— 顶上少让开的 32 像素在图上就是一道黑边。
+            // 「红框框出来的地方全填充上海报」：那一块从窗口的顶边量起，一直到窗口的右边沿 —— 大图 2026-09-08
+            // 改回铺满整宽，右边沿就是窗口的右边沿。图有没有解码是上面那行读数的事，这一行只问那块地方铺满了
+            // 没有 —— 顶上少让开的 32 像素在图上就是一道黑边。
             Check("主页大图贴边", home.BleedOk, home.Bleed);
 
-            // 侧边栏 2026-09-06 删掉之后页宽只有一档，所以这一读从「收放各量一次」变成量一次：图铺满大图那一块、
-            // 上下不留底色，右栏贴着它、一样高、至少露出一张整卡，横排接在它下沿之后。
-            // 这条在真实 XAML 树上量。
-            if (home.FoldOk is { } foldOk) Check("主页首屏两栏", foldOk, home.Fold);
-            else report.AppendLine($"[信息] 主页首屏两栏 — {home.Fold}");
-
-            // 「把继续观看改成点击翻页的」：右栏那一列的滚动条藏起来了，上下两头浮出翻页条，一次翻一屏卡片。三种
-            // 坏法在截图里都只是「右栏看着没变」—— 滚动条被谁改回 Auto、标记里那个间隔和步长用的常数错开一档、
-            // 悬停那一下翻页条浮不出来。翻多远那几条算术是横带那一套（CardStrip），单测钉着，这里不重复。
-            if (_railPage is { } railPage)
-            {
-                if (railPage.Ok is { } railOk) Check("主页右栏翻页", railOk, railPage.Detail);
-                else report.AppendLine($"[信息] 主页右栏翻页 — {railPage.Detail}");
-            }
-            else report.AppendLine("[信息] 主页右栏翻页 — 当时框里不是主页");
+            // 大图 2026-09-08 改回铺满整宽（右边那一列媒体库删掉了），所以这一读量的是：图铺满大图那一块、上下
+            // 不留底色，页宽就是客户区宽，横排接在它下沿之后。这条在真实 XAML 树上量。
+            if (home.FoldOk is { } foldOk) Check("主页首屏", foldOk, home.Fold);
+            else report.AppendLine($"[信息] 主页首屏 — {home.Fold}");
 
             // 同一块地方的第二问：图铺到标题栏底下以后，那三颗窗口按钮站在剧照上，墨得跟着换（见 ReadInk）。
             // 少了这一行，浅色主题下主页右上角就是三颗看不见的按钮，而上面那行读数一个数都不会变。
@@ -309,8 +298,8 @@ internal static partial class ShellSelfCheck
         }
 
         // 需求 1 把设置搬到了标题栏那一排。**这一关 2026-09-06 删掉了**：它问的是 NavigationView 自己那个内建
-        // 设置项关掉了没有，而那个控件已经不在这棵树上了 —— 一条横标签栏没有「内建设置项」这种东西，标签是我们
-        // 一格一格加的，多一格少一格由「顶部标签栏」那一关数。那颗真的设置按键由「标题栏按键」量。
+        // 设置项关掉了没有，而那个控件已经不在这棵树上了 —— 外壳顶栏没有「内建设置项」这种东西。那颗真的设置
+        // 按键由「标题栏按键」量。
 
         // 卡片带翻页. Data-independent on purpose, hence outside the branch above: a self-check has no
         // server, so the three strips on screen hold no cards at all. The arithmetic — how far one page is,

@@ -7,10 +7,11 @@
   construction the note left at MainForm.cs:422, that 搜索 and 服务器 had to be listed by hand
   because neither had a rail entry.
 
-  **2026-09-06：左边那条 NavigationView 删掉了**（「删掉侧边栏」），换成第 1 行那条横向标签栏。所以「每个
-  目的地都是一个 NavigationViewItem」那句旧话不再成立 —— 现在是「主页 是标签栏里写死的第一格，其余每一格
-  由服务器的媒体库列表生成」，而键盘次序、读屏名字、返回栈仍然只有这一份来源。搜索没有标签：它是标题栏上
-  那颗按钮开的一页（「直接在当前窗口跳转」），侧边栏里那个常驻搜索框 09-05 之前就已经不在了。
+  **2026-09-06：左边那条 NavigationView 删掉了**（「删掉侧边栏」），换成第 1 行那条横向标签栏；**2026-09-08 那条
+  标签栏也删掉了**（「移除…主页、电视节目、电影这一栏」）。所以「每个目的地都是一个 NavigationViewItem」那句旧话
+  早已不成立 —— 现在媒体库的入口是主页那一排「媒体库」卡片，回主页是标题栏上那颗「主页」按钮，而键盘次序、
+  读屏名字、返回栈仍然只有这一份来源。搜索没有自己的按钮之外的位置：它是标题栏上那颗按钮开的一页
+  （「直接在当前窗口跳转」）。
 
   The sign-in card is a sibling of the browse container rather than a page inside the frame: one
   window, one theme root, one XamlRoot, and signing out shows a control that is already built
@@ -34,39 +35,34 @@
     FontSize="{StaticResource EgBodyFontSize}">
 
     <!--
-      两行外壳，都浮在页面上面，一共 80 像素高（32 + 48，<c>ChromeHeight</c>）：
+      外壳一行，浮在页面上面，32 像素高（<c>ChromeHeight</c>）：
 
-        第 0 行  设置 · 搜索 · 后退 · 前进 ┄┄┄┄ 拖动区 ┄┄┄┄ 系统那三颗窗口按钮
-        第 1 行  主页  电视节目  电影  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 账号
-        ───────────────────────────────────────────────────────
+        主页 · 设置 · 搜索 · 后退 · 前进 ┄┄ 拖动区 ┄┄ 账号 ┄┄ 系统那三颗窗口按钮
+        ────────────────────────────────────────────────────────────────────
         页面（从窗口最左边开始，一条侧边栏都没有）
 
-      **左边那条 NavigationView 在 2026-09-06 整个删掉了**（「删掉侧边栏」）。他 09-05 从三张草图里挑的是顶部
-      标签栏，所以媒体库的入口是第 1 行那条 SelectorBar：`winui-design` 的控件表写着「2–3 个模式 → SelectorBar」，
-      而这里是 主页 加服务器上那两三个库。跟着一起走的有那颗折叠按钮（没有栏可折）、媒体库那行分组眉字（一条横
-      标签栏没有分组）、侧边栏和工作区之间那道竖发丝线（没有两块可分）、以及设置里「默认收起侧边栏」那一行。
-      账号那颗按钮从侧边栏最底下挪到了第 1 行右端 —— 左边那条栏没了之后窗口左下角就只是内容的一角，而右上角
-      是 Emby 网页版、Plex 放它的地方（他 09-06 从两个位置里挑的这一个）。
+      **左边那条 NavigationView 在 2026-09-06 整个删掉了**（「删掉侧边栏」），换成了顶部标签栏；**那条标签栏又在
+      2026-09-08 按「移除…主页、电视节目、电影这一栏」删掉了**；**2026-09-09 起它空出来的第 1 行也删掉了** ——
+      标签删了、那一行还留着 48 像素，屏上就是一条谁也不用的空带，这正是「删掉之后原处留一个空位」的病根。
+      所以媒体库的入口回到主页那一排「媒体库」卡片（点卡进库），回主页走标题栏上那颗「主页」按钮，账号那颗
+      按钮收成一行挪进标题栏右端 —— 右上角是 Emby 网页版、Plex 放它的地方（它 09-06 从侧边栏最底下挪来，
+      右上角是当时从两个位置里挑的这一个）。
 
-      **两行都不上底色。** 页面自己那一块底色由 ContentHost 涂，主页上则是那张铺满的剧照本身 —— 一条实心条
+      **这一行不上底色。** 页面自己那一块底色由 ContentHost 涂，主页上则是那张铺满的剧照本身 —— 一条实心条
       压在大图上就是图顶上一道黑边，那正是「红框框出来的地方全填充上海报」要去掉的东西。压在图上那一档的墨走
-      不随主题走的浅墨（见 PaintTitleInk），底是轮播自己顶上那层 120 高的黑色渐变，80 装得进 120。
+      不随主题走的浅墨（见 PaintTitleInk），底是轮播自己顶上那层 120 高的黑色渐变，32 装得进 120。
 
-      叠放次序写成 Canvas.ZIndex 而不是靠声明顺序：这几块的上下关系是「页面 → 外壳两行 → 登录卡 → 播放器 →
+      叠放次序写成 Canvas.ZIndex 而不是靠声明顺序：这几块的上下关系是「页面 → 外壳 → 登录卡 → 播放器 →
       通知」，写成数字，读这个文件的人不用在心里数元素的先后。
     -->
     <Grid x:Name="Root">
-        <!-- 外壳那两行。整块一起收起（播放时），所以它们是一个 Grid 而不是两个兄弟：播放层要整个窗口，而
-             「标题栏那一条还在、标签栏没了」是没有意义的中间态。 -->
+        <!-- 外壳那一行。整块一起收起（播放时），所以是一个 Grid：播放层要整个窗口，而「外壳收一半」是
+             没有意义的中间态。 -->
         <Grid
             x:Name="Chrome"
             Canvas.ZIndex="10"
             VerticalAlignment="Top"
             Background="Transparent">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
 
         <!-- App-drawn title bar, laid out the way the Claude app lays the same strip out: a flat row of icon
              buttons — 设置, 搜索, 后退, 前进 — with the two arrows dimmed rather than removed when there is
@@ -87,8 +83,8 @@
              buttons actually are rather than where this markup implies they are — which is also why all four
              sit in one panel and not in two: one panel is one rectangle.
 
-             **第 1 行不需要挖洞**：窗口只把最上面 32 像素（HostWindow.TitleBarHeight）算成标题栏，标签栏和账号
-             都站在那条线以下，本来就是客户区，点得着。 -->
+             **账号那颗按钮也站在这一行里**（2026-09-09 从已删掉的第 1 行挪进来），所以窗口挖的是两个洞：
+             这一排一个、账号一个（见 ReportTitleBarHoles）—— 账号那块不挖洞的话，按下去同样是拖窗口。 -->
         <Grid
             x:Name="AppTitleBar"
             Height="32"
@@ -127,9 +123,9 @@
                     <Setter Property="Padding" Value="0" />
                 </Style>
 
-                <!-- 20×20，写死：下面四颗形状都画在这个方框里、围着 (10,10) 对称，可 PathIcon 既不缩放几何、也
+                <!-- 20×20，写死：这五颗形状都画在这个方框里、围着 (10,10) 对称，可 PathIcon 既不缩放几何、也
                      不替你把它挪到中间 —— 它照 Data 里的坐标画，自己的尺寸取几何外框的右下角，于是左上那点留白
-                     被算了两遍，一颗对称的图标会往左上偏半点。把方框还回来，四颗就都正对着托盘的中心。 -->
+                     被算了两遍，一颗对称的图标会往左上偏半点。把方框还回来，五颗就都正对着托盘的中心。 -->
                 <Style TargetType="PathIcon">
                     <Setter Property="Width" Value="20" />
                     <Setter Property="Height" Value="20" />
@@ -141,11 +137,11 @@
                  移除掉」）—— 商标走了，缩进留着。
 
                  **17 是算出来的，不是挑的**：托盘 34 宽装 20 的图标，两边各留 7，所以 17 + 7 = 24 —— 第一颗图标
-                 的左沿正好落在页面左边距（EgPageMargin 的 24）上，和底下标签栏的第一格、页面里第一排卡片对齐在
-                 同一条竖线上。侧边栏还在的时候这个数有两档（张开 40、收成窄条 58），由 SyncPane 每次收放算一遍；
-                 栏没了之后它是一个常数，所以这里写死、代码里那段跟着删了。
+                 的左沿正好落在页面左边距（EgPageMargin 的 24）上，和底下页面里第一排卡片对齐在同一条竖线上。
+                 侧边栏还在的时候这个数有两档（张开 40、收成窄条 58），由 SyncPane 每次收放算一遍；栏没了之后
+                 它是一个常数，所以这里写死、代码里那段跟着删了。
 
-                 四颗图标都是自己画的形状，不是字形（「改成这种风格」：细线，一笔 1.4 粗，两头圆）。那 1.4 是这
+                 五颗图标都是自己画的形状，不是字形（「改成这种风格」：细线，一笔 1.4 粗，两头圆）。那 1.4 是这
                  一排的默认：箭头的杆量出来就是它（「线条粗细要和箭头一样」）；只有齿轮那一颗是 1.1，理由写在它
                  自己那段里（「线条细一点」）。直笔画是一颗「胶囊」—— 一条直边配两头各半个圆，所以两端天生是圆头；
                  闭合的轮廓（齿轮、镜片那个圈）是「外框顺着走一圈 ＋ 内框倒着走一圈」，倒着那一圈把中间掏空，剩下
@@ -159,6 +155,17 @@
                 Spacing="2"
                 VerticalAlignment="Center"
                 HorizontalAlignment="Left">
+                <!-- 主页（家园）：回到主页那一屏（需求 6「点击…左侧的家园图标…直接回到主页」）。顶上那条标签栏
+                     2026-09-08 删掉之后，这是回主页唯一的一颗按钮 —— 在主页上它自己变暗（见 SyncChrome），同两支
+                     箭头「走不动就暗」的规矩。手画的房子线条，和这一排别的图标一个风格（20×20 方框、1.4 粗、圆头，
+                     tools/line-icons.awk 生成）。 -->
+                <Button
+                    x:Name="HomeButton"
+                x:Uid="ShellPage_HomeButton"
+                    Click="OnHomeClicked">
+                    <PathIcon Data="M 6.6,8.6 L 13.4,8.6 A 1.8,1.8 0 0 1 15.2,10.4 L 15.2,15 A 1.8,1.8 0 0 1 13.4,16.8 L 6.6,16.8 A 1.8,1.8 0 0 1 4.8,15 L 4.8,10.4 A 1.8,1.8 0 0 1 6.6,8.6 Z M 6.6,10 A 0.4,0.4 0 0 0 6.2,10.4 L 6.2,15 A 0.4,0.4 0 0 0 6.6,15.4 L 13.4,15.4 A 0.4,0.4 0 0 0 13.8,15 L 13.8,10.4 A 0.4,0.4 0 0 0 13.4,10 Z M 2.76,8.05 L 9.56,2.65 A 0.7,0.7 0 0 1 10.44,3.75 L 3.64,9.15 A 0.7,0.7 0 0 1 2.76,8.05 Z M 10.44,2.65 L 17.24,8.05 A 0.7,0.7 0 0 1 16.36,9.15 L 9.56,3.75 A 0.7,0.7 0 0 1 10.44,2.65 Z" />
+                </Button>
+
                 <!-- 设置：a window of its own, not a page in the frame — 「点击后弹出设置窗口」. -->
                 <Button
                     x:Name="SettingsButton"
@@ -213,153 +220,107 @@
             </StackPanel>
         </Grid>
 
-        <!-- 第 1 行：媒体库标签在左，账号在右。
+        <!-- 账号：用户名、服务器名，加一张切换服务器／切换用户／注销的菜单。2026-09-06 从侧边栏最底下挪到
+             顶上那一排的下一行右端；2026-09-09 第 1 行删掉之后挪进标题栏这一行 —— 右上角还是 Emby 网页版、
+             Plex 放它的地方，挪进来的代价是收成一行：用户名和服务器名排成一行，窗口拖窄了截字（MaxWidth 240）。
+             它站在窗口算成标题栏的那 32 像素里，所以得像左边那五颗一样挖洞（见 ReportTitleBarHoles）。
 
-             SelectionChanged, not a per-item click（需求 6：「点击主页或者左侧的家园图标后，要直接回到主页
-             界面」）：SelectorBar 只在选中项真的换了的时候发这个事件，而钻进一部剧或者一季之后高亮会留在
-             主页 上、框里却是别的页面 —— 所以下钻那几条路（OpenDetail / OpenChild / AdoptContentTag）把
-             SelectedItem 清成 null，于是接下来点 主页 就是一次真的选中变化，事件照发。GoTo 自己还压着
-             _current 那道门，两头因此不会互相顶。**这也是不需要防重入旗子的原因**：Open() 先写 _current
-             再同步高亮，同步引出来的那一趟 GoTo 撞在那道门上就回去了。
+             注意它不在 AppTitleBar 那个 Grid 里，是它的兄弟：AppTitleBar.Resources 里那份 34×26 的托盘样式
+             是只给那五颗图标的，账号这颗尺寸跟内容走。悬停那两支画刷因此挂在 Chrome 上（见
+             PaintTitleActions），两个孩子都够得着。 -->
+        <Button
+            x:Name="AccountButton"
+            Margin="0,0,160,0"
+            Padding="10,3"
+            MaxWidth="240"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Center"
+            HorizontalContentAlignment="Left"
+            Background="Transparent"
+            BorderThickness="0"
+            CornerRadius="{StaticResource EgCardCornerRadius}"
+            Visibility="Collapsed">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-             这一格里唯一写死的数是 48：SelectorBarItem 的内边距是 12,10,12,7（框架的
-             SelectorBarItemPadding），加上 14 号字一行 20 高、选中那条 3 高的药丸，一格就是 40 上下 —— 48
-             让它上下各留一口气，也让整条外壳落在 80（32 + 48），正好装进轮播顶上那层 120 高的渐变里。
-
-             左边距 12 是算出来的：格子自己那 12 的内边距加上去正好 24，也就是页面左边距（EgPageMargin）—— 标签第一格
-             的字、标题栏第一颗图标、页面里第一排卡片，三样对齐在同一条竖线上。 -->
-        <Grid x:Name="NavBar" Grid.Row="1" Height="48" Visibility="Collapsed">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-
-            <!-- 横着滚而且不出滚动条：SelectorBar 自己不管溢出（NavigationView 顶部模式那套「…」溢出菜单它
-                 没有）。他这台服务器上是 主页 + 两个库，最窄的窗口（900）也放得开，所以这一层平时一点作用都
-                 没有；真有六七个库的时候它保证最后那一格不是「画不出来」而是「滚过去就有」，键盘走 Tab 或者
-                 左右键也会把它带进视野。**这不是 ScrollViewer 套 ListView 那种反模式** —— SelectorBar 不是
-                 会自己虚拟化滚动的集合控件。 -->
-            <ScrollView
-                HorizontalScrollBarVisibility="Hidden"
-                HorizontalScrollMode="Enabled"
-                VerticalScrollBarVisibility="Hidden"
-                VerticalScrollMode="Disabled"
-                VerticalAlignment="Center">
-                <SelectorBar
-                    x:Name="LibraryTabs"
-                    Margin="12,0,0,0"
-                    SelectionChanged="OnTabSelected">
-                    <!-- 主页 是固定的第一格；它后面每一格都是登录之后照服务器自己那份媒体库列表加的（见
-                         LoadLibrariesAsync），所以这条标签栏说的是这个账号真有什么，而不是上一次构建猜它会有
-                         什么。x:Name 就是这一格的自动化把手（本项目的规矩，见 CLAUDE.md）。 -->
-                    <SelectorBarItem x:Name="HomeTab" x:Uid="ShellPage_HomeTab" Tag="home">
-                        <SelectorBarItem.Icon>
-                            <FontIcon FontSize="16" Glyph="&#xE80F;" />
-                        </SelectorBarItem.Icon>
-                    </SelectorBarItem>
-                </SelectorBar>
-            </ScrollView>
-
-            <!-- 账号：用户名、服务器名，加一张切换服务器／切换用户／注销的菜单。2026-09-06 从侧边栏最底下
-                 （窗口左下角，需求 2 的前半句）挪到这里 —— 那半句要的是「离开顶上那一排、去一个不抢眼的角」，
-                 而侧边栏一删，左下角就只是内容的一角了；右上角是 Emby 网页版和 Plex 放它的地方。系统那三颗
-                 窗口按钮在它上面一行，不打架。
-                 MaxWidth 240 加两行都截字：窗口拖到最窄时它不许把标签挤出去。 -->
-            <Button
-                x:Name="AccountButton"
-                Grid.Column="1"
-                Margin="12,0,20,0"
-                Padding="10,4"
-                MaxWidth="240"
-                VerticalAlignment="Center"
-                HorizontalContentAlignment="Left"
-                Background="Transparent"
-                BorderThickness="0"
-                CornerRadius="{StaticResource EgCardCornerRadius}">
-                <Grid ColumnSpacing="10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-
-                    <!-- 「去掉头像」: the PersonPicture is gone, and this glyph is not a stand-in for
-                         it. 侧边栏还在的时候它是「栏收成 48 像素、两行字都放不下」那一档留下的唯一
-                         一样东西；栏没了之后这颗按钮在标题栏底下那一行，两行字永远放得下（放不下就
-                         截字），所以这个字形从此**一直收着**。留着它而不是删掉，是因为下一次窗口再
-                         窄一档时它就是现成的答案，代价是一个 Collapsed 的元素。 -->
-                    <FontIcon
-                        x:Name="AccountGlyph"
-                        FontSize="15"
-                        Foreground="{ThemeResource EgTextDimBrush}"
-                        Glyph="&#xE77B;"
-                        Visibility="Collapsed"
-                        VerticalAlignment="Center" />
-
-                    <StackPanel x:Name="AccountDetails" Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock
-                            x:Name="AccountUser"
+                <TextBlock
+                    x:Name="AccountUser"
                 x:Uid="ShellPage_AccountUser"
-                            FontWeight="SemiBold"
-                            TextTrimming="CharacterEllipsis" />
-                        <!-- 服务器名走读数字（EgDataStyle）：和页头右上角那行、和卡片上的年份时长
-                             是同一种字。它是机器串，不是一句话。 -->
-                        <TextBlock
-                            x:Name="AccountServer"
-                x:Uid="ShellPage_AccountServer"
-                            Style="{StaticResource EgDataStyle}"
-                            TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
+                    FontSize="13"
+                    FontWeight="SemiBold"
+                    TextTrimming="CharacterEllipsis"
+                    VerticalAlignment="Center" />
 
-                    <!-- 朝下：菜单现在从这颗按钮底下落出来（它在窗口顶上），不再从侧边栏底下升起来。 -->
-                    <FontIcon
-                        x:Name="AccountChevron"
-                        Grid.Column="2"
-                        FontSize="12"
-                        Foreground="{ThemeResource EgTextFaintBrush}"
-                        Glyph="&#xE70D;"
-                        VerticalAlignment="Center" />
-                </Grid>
-                <Button.Flyout>
-                    <MenuFlyout Placement="BottomEdgeAlignedRight">
-                        <MenuFlyoutSubItem x:Name="ServerMenu"
+                <!-- 中间那个「·」：两行并成一行之后用它把名字和服务器隔开，墨跟着服务器那一行走（淡的一支）。 -->
+                <TextBlock
+                    x:Name="AccountDot"
+                    Grid.Column="1"
+                    FontSize="13"
+                    Text="·"
+                    VerticalAlignment="Center" />
+
+                <!-- 服务器名走读数字（EgDataStyle）：和页头右上角那行、和卡片上的年份时长
+                     是同一种字。它是机器串，不是一句话。 -->
+                <TextBlock
+                    x:Name="AccountServer"
+                x:Uid="ShellPage_AccountServer"
+                    Grid.Column="2"
+                    Style="{StaticResource EgDataStyle}"
+                    TextTrimming="CharacterEllipsis"
+                    VerticalAlignment="Center" />
+
+                <!-- 朝下：菜单从这颗按钮底下落出来（它在窗口顶上）。 -->
+                <FontIcon
+                    x:Name="AccountChevron"
+                    Grid.Column="3"
+                    FontSize="12"
+                    Glyph="&#xE70D;"
+                    VerticalAlignment="Center" />
+            </Grid>
+            <Button.Flyout>
+                <MenuFlyout Placement="BottomEdgeAlignedRight">
+                    <MenuFlyoutSubItem x:Name="ServerMenu"
                 x:Uid="ShellPage_ServerMenu">
-                            <MenuFlyoutSubItem.Icon>
-                                <FontIcon Glyph="&#xE968;" />
-                            </MenuFlyoutSubItem.Icon>
-                        </MenuFlyoutSubItem>
-                        <MenuFlyoutSubItem x:Name="UserMenu"
+                        <MenuFlyoutSubItem.Icon>
+                            <FontIcon Glyph="&#xE968;" />
+                        </MenuFlyoutSubItem.Icon>
+                    </MenuFlyoutSubItem>
+                    <MenuFlyoutSubItem x:Name="UserMenu"
                 x:Uid="ShellPage_UserMenu">
-                            <MenuFlyoutSubItem.Icon>
-                                <FontIcon Glyph="&#xE77B;" />
-                            </MenuFlyoutSubItem.Icon>
-                        </MenuFlyoutSubItem>
-                        <MenuFlyoutSeparator />
-                        <MenuFlyoutItem x:Uid="ShellPage_MenuFlyoutItem2" AutomationProperties.AutomationId="AccountSignOutItem" Click="OnSignOut">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE7E8;" />
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </Button.Flyout>
-            </Button>
-        </Grid>
+                        <MenuFlyoutSubItem.Icon>
+                            <FontIcon Glyph="&#xE77B;" />
+                        </MenuFlyoutSubItem.Icon>
+                    </MenuFlyoutSubItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem x:Uid="ShellPage_MenuFlyoutItem2" AutomationProperties.AutomationId="AccountSignOutItem" Click="OnSignOut">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE7E8;" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuFlyout>
+            </Button.Flyout>
+        </Button>
     </Grid>
 
         <!-- 页面那一块，从窗口最左边开始 —— 侧边栏删掉之后这里再没有第二列，所以从前那道竖发丝线（面板和
              片场之间那一根）跟着走了，框架给「工作区」画的那道边、那个圆角、那圈边距也一起没了（它们是
              NavigationView 模板的东西）。
 
-             顶上留出 80（ChromeHeight = 标题栏 32 + 标签栏 48）并自己上底色：外壳那两行压在这一块的上面，
-             页面从第 80 行起画，那 80 像素由这里补上底色（页面自己的底色和它同一支，多涂一层看不出来）。
-             整套里只有主页把这 80 顶开 —— 见 HomePage.xaml 里那块大图。
+             顶上留出 32（ChromeHeight，标题栏那一行）并自己上底色：外壳压在这一块的上面，页面从第 32 行
+             起画，那 32 像素由这里补上底色（页面自己的底色和它同一支，多涂一层看不出来）。整套里只有主页
+             把这 32 顶开 —— 见 HomePage.xaml 里那块大图。
 
              这一块整个收起（登录页、播放时）就是「浏览态在不在」，所以 Visibility 写在它身上：从前那是
              NavigationView 的活。 -->
         <Grid
             x:Name="ContentHost"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
-            Padding="0,80,0,0"
+            Padding="0,32,0,0"
             Visibility="Collapsed">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />

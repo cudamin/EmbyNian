@@ -10,6 +10,7 @@ internal static class Program
 
         PlaybackTests.Register();
         SettingsTests.Register();
+        ShortcutTests.Register();
         ServiceTests.Register();
         FontTests.Register();
         HtmlColorTests.Register();

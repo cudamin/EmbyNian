@@ -2293,6 +2293,24 @@ internal static class PlaybackTests
             Assert.Equal("display-vdrop", chosen["video-sync"], "用户自己选了就不覆盖");
         });
 
+        // 「为当前的插值功能设置更多的可选项」（2026-09-10）：插值算法从写死的 oversample 变成设置页上的一行。
+        // oversample 仍是装机默认 —— 没碰过这一行的人发出去的东西一个字都不变，这一条钉住它。
+        Test("输出：插值算法可选，装机默认还是 oversample", () =>
+        {
+            var stock = Options(MpvOutputOptions.Build(new VideoSettings { Interpolation = true }, new AudioSettings()));
+            Assert.Equal("oversample", stock["tscale"], "装机默认是从前写死的那个值，没动过这一行的人画面不变");
+
+            var sharper = Options(MpvOutputOptions.Build(
+                new VideoSettings { Interpolation = true, Tscale = "spline36" }, new AudioSettings()));
+            Assert.Equal("spline36", sharper["tscale"], "选了哪一档就发哪一档");
+
+            // 插值没开就不发 tscale —— 单发一个算法等于宣称一个不存在的设置。
+            var off = Options(MpvOutputOptions.Build(
+                new VideoSettings { Tscale = "lanczos" }, new AudioSettings()));
+            Assert.False(off.ContainsKey("tscale"));
+            Assert.False(off.ContainsKey("interpolation"));
+        });
+
         Test("输出：音频直通按目录顺序拼成 audio-spdif", () =>
         {
             var audio = new AudioSettings
@@ -2653,6 +2671,33 @@ internal static class PlaybackTests
             Assert.Contains("144", byRefresh ?? "", "那句话要带上量到的刷新率");
             Assert.Contains("59.94", byFrameRate ?? "", "那句话要带上片源帧率");
             Assert.True(neither is null, "没回退就不该有话说");
+        });
+
+        // 「在设置中新增自定义输入框，显示器刷新率大于该数值时关闭插值」（2026-09-10）：120 那个写死的数变成
+        // 设置页上一行。上一条钉的是装机默认那一档，这一条钉的是「真的读设置里那个数」。
+        Test("输出：刷新率阈值读设置里填的那个数", () =>
+        {
+            var video = new VideoSettings { Interpolation = true, HighRefreshRateLimitHz = 100 };
+            var film = new SourceProfile(1920, 1080, 8, 23.976, false);
+
+            // 「大于」才算：等于阈值的那一档照旧走显示同步。
+            var atEdge = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, 100));
+            Assert.Equal("display-resample", atEdge["video-sync"]);
+            Assert.Equal("yes", atEdge["interpolation"]);
+
+            var over = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, 120));
+            Assert.Equal("audio", over["video-sync"], "120Hz 超过填的 100，该收回插值");
+            Assert.Equal("no", over["interpolation"]);
+
+            // 填得比默认低照样由总闸说了算：回退关着，显示同步就还给任何屏幕。
+            Assert.Equal("display-resample",
+                Options(MpvOutputOptions.Build(
+                    new VideoSettings { Interpolation = true, HighRefreshRateLimitHz = 100, HighFrameRateAudioSync = false },
+                    new AudioSettings(), null, film, false, 240))["video-sync"],
+                "关掉那个回退开关就该把显示同步还给任何屏幕");
+
+            var (_, _, why) = MpvOutputOptions.ResolveSync(video, film, 120);
+            Assert.Contains("100", why ?? "", "那句话要带上设置里填的那个数，而不是写死的 120");
         });
 
         Test("输出：设置页读到的「此刻生效」和真正发出去的 video-sync 是同一个答案", () =>
@@ -4241,40 +4286,53 @@ internal static class PlaybackTests
 
     // ---- 暂停/播放徽标的几何 ----------------------------------------------------
     //
-    // 「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」。形状是「核心多边形 ＋ 圆接头描边」
-    // 拼出来的，于是「屏上最后多大」是一道要算的题 —— 而它替掉的那两个图标字量出来是 122.5×122.5 和 113.3×123.3，
-    // 新形状必须落在同一档分量上，不然屏上就是「换了个图标顺手大了一圈」。
+    // 「播放页面暂停和开始的图标太丑了，你换一个」（2026-09-06）。这一代把圆角画进轮廓里（不再靠描边的圆接头），
+    // 但外框分量一口价没动 —— 暂停 122×122、播放 112×122，还是当年替掉图标字时认下的那一档，不然屏上就是
+    // 「换了个图标顺手大了一圈」。外框现在从成品轮廓直接量（Bounds），不用再算描边往外长多少。
 
     private static void RegisterPulseArt()
     {
-        Test("暂停徽标：描边之后成品 122×122，和它替掉的那个字形同一档分量", () =>
+        // 轮廓外框的宽高，直接从 Bounds 量。
+        static (double Width, double Height) Size(IReadOnlyList<PulseFigure> figures)
         {
-            var (width, height) = PulseArt.Stroked(PulseArt.Pause, PulseArt.Ink);
+            var (left, top, right, bottom) = PulseArt.Bounds(figures);
+            return (right - left, bottom - top);
+        }
+
+        Test("暂停徽标：成品 122×122，两条 44 宽、间距 34，和它替掉的字形同一档分量", () =>
+        {
+            var (width, height) = Size(PulseArt.Pause);
             Assert.Equal(122.0, width);
             Assert.Equal(122.0, height);
 
-            // 两条各 32 宽、间距 46；描边往外长 6，于是成品是两条 44 宽、间距 34。
+            Assert.Equal(2, PulseArt.Pause.Count, "暂停是两条竖条");
             var left = PulseArt.Bounds([PulseArt.Pause[0]]);
             var right = PulseArt.Bounds([PulseArt.Pause[1]]);
-            Assert.Equal(32.0, left.Right - left.Left);
-            Assert.Equal(32.0, right.Right - right.Left);
-            Assert.Equal(46.0, right.Left - left.Right, "两条之间的空隙");
+            Assert.Equal(44.0, left.Right - left.Left, "左条 44 宽");
+            Assert.Equal(44.0, right.Right - right.Left, "右条 44 宽");
+            Assert.Equal(122.0, left.Bottom - left.Top, "左条 122 高");
+            Assert.Equal(34.0, right.Left - left.Right, "两条之间的间距");
         });
 
-        Test("播放徽标：等腰、尖角朝右，描边之后成品 112×122", () =>
+        Test("播放徽标：等腰、尖角朝右，外框 112×122，摆在方框正中", () =>
         {
-            var (width, height) = PulseArt.Stroked(PulseArt.Play, PulseArt.Ink);
+            var (width, height) = Size(PulseArt.Play);
             Assert.Equal(112.0, width);
             Assert.Equal(122.0, height);
 
-            var triangle = PulseArt.Play[0];
-            Assert.Equal(3, triangle.Count);
-            Assert.Equal(triangle[0].X, triangle[2].X, "底边两点必须同一个 x，否则不是等腰");
-            Assert.Equal((triangle[0].Y + triangle[2].Y) / 2, triangle[1].Y, "尖角要落在底边中点的高度上");
-            Assert.True(triangle[1].X > triangle[0].X, "尖角朝右");
+            Assert.Equal(1, PulseArt.Play.Count, "播放是一个三角");
+            var corners = PulseArt.Play[0].Corners;
+            Assert.Equal(3, corners.Count, "三角三个角");
+
+            // 尖角朝右、落在上下正中；底边两点同一个 x（等腰）。
+            var tip = corners.OrderByDescending(p => p.X).First();
+            var baseCorners = corners.OrderBy(p => p.X).Take(2).ToList();
+            Assert.Equal(baseCorners[0].X, baseCorners[1].X, "底边两点必须同一个 x，否则不是等腰");
+            Assert.Equal((baseCorners[0].Y + baseCorners[1].Y) / 2, tip.Y, "尖角要落在底边中点的高度上");
+            Assert.True(tip.X > baseCorners[0].X, "尖角朝右");
         });
 
-        Test("暂停/播放徽标：两个形状都落在方框正中，描边也没顶出去", () =>
+        Test("暂停/播放徽标：两个形状都落在方框正中，也没顶出方框", () =>
         {
             foreach (var (name, figures) in new[] { ("暂停", PulseArt.Pause), ("播放", PulseArt.Play) })
             {
@@ -4282,27 +4340,27 @@ internal static class PlaybackTests
                 Assert.Equal(PulseArt.Box / 2, x, $"{name}没有水平居中");
                 Assert.Equal(PulseArt.Box / 2, y, $"{name}没有垂直居中");
 
-                // 描边往外长 6，顶出方框的下场是被 Canvas 裁掉一条边。
-                var (width, height) = PulseArt.Stroked(figures, PulseArt.Ink);
-                Assert.True(width <= PulseArt.Box, $"{name}的描边横向顶出了方框：{width} > {PulseArt.Box}");
-                Assert.True(height <= PulseArt.Box, $"{name}的描边纵向顶出了方框：{height} > {PulseArt.Box}");
+                var (width, height) = Size(figures);
+                Assert.True(width <= PulseArt.Box, $"{name}横向顶出了方框：{width} > {PulseArt.Box}");
+                Assert.True(height <= PulseArt.Box, $"{name}纵向顶出了方框：{height} > {PulseArt.Box}");
             }
         });
 
-        Test("暂停/播放徽标：只有一档描边，方框不跟着改", () =>
+        Test("暂停/播放徽标：圆角画进了轮廓，顺时针小弧", () =>
         {
-            // 「点击画面暂停和开始的图标要纯白色，去掉灰色」（2026-09-05）：背后那圈半透明黑描边没了，于是
-            // 「粗细」只剩一个数。方框留着不动 —— 它就是屏上徽标占多大，而用户认下的是这一档。
-            Assert.Equal(12.0, PulseArt.Ink);
-            Assert.Equal(136.0, PulseArt.Box, "方框边长不该跟着那圈灰边一起改");
+            // 每个圆角在轮廓里都是一段 Arc 步；胶囊竖条四角都圆（半径 22＝条宽的一半），
+            // 三角尖角圆 22、底角圆 12。半径正确 + 弧数正确，就守住了「圆角在几何里」这件事。
+            var barArcs = PulseArt.Pause[0].Steps.Where(s => s.Arc).ToList();
+            Assert.Equal(4, barArcs.Count, "胶囊竖条四角都该是弧");
+            Assert.True(barArcs.All(s => Math.Abs(s.Radius - 22) < 1e-6), "胶囊圆角半径 22");
 
-            // 而这一层还剩多少余量：核心离方框 13，描边只往外长 6。
-            foreach (var (name, figures) in new[] { ("暂停", PulseArt.Pause), ("播放", PulseArt.Play) })
-            {
-                var (width, height) = PulseArt.Stroked(figures, PulseArt.Ink);
-                Assert.True(PulseArt.Box - width >= 12, $"{name}横向余量不够：{PulseArt.Box - width}");
-                Assert.True(PulseArt.Box - height >= 12, $"{name}纵向余量不够：{PulseArt.Box - height}");
-            }
+            var triArcs = PulseArt.Play[0].Steps.Where(s => s.Arc).ToList();
+            Assert.Equal(3, triArcs.Count, "三角三个角都该是弧");
+            Assert.True(triArcs.Any(s => Math.Abs(s.Radius - 22) < 1e-6), "尖角圆 22");
+            Assert.Equal(2, triArcs.Count(s => Math.Abs(s.Radius - 12) < 1e-6), "两个底角圆 12");
+
+            // 方框留着不动 —— 它就是屏上徽标占多大，而用户认下的是这一档。
+            Assert.Equal(136.0, PulseArt.Box, "方框边长不该跟着换形状一起改");
         });
     }
 

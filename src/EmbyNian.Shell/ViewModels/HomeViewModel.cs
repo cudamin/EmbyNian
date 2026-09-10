@@ -19,18 +19,17 @@ namespace EmbyNian.Shell.ViewModels;
 /// administrator-only — so one of them returning nothing must not cost the page the others.
 /// </para>
 /// <para>
-/// 媒体库 costs no request at all: the shell already read the account's view list once to fill the
-/// navigation pane, and this row is that same list drawn as cards. It is the one row that is always
-/// there, even for an account that has never played anything — which is why it stays on the page even
-/// though 继续观看 得了第一屏右边那一栏（<see cref="Rail"/>，「把图中的媒体库和继续观看位置调换」的下一步）:
-/// 上次停在哪儿是一个用过的账号打开主页最想看见的一句话，而媒体库那一排在侧边栏里另有一份。
+/// 媒体库 costs no request at all: the shell already read the account's view list once, and this row is
+/// that same list drawn as cards. It is the one row that is always there, even for an account that has
+/// never played anything — and since the top tab strip was removed (2026-09-08), clicking one of these
+/// cards is how a library is opened, so it earns its place on the page.
 /// </para>
 /// <para>
 /// 勾掉的那一排连请求一起省掉：媒体库那几排各是一次「这个库的最近添加」，不看的库不该每次开主页都问一遍。
 /// </para>
 /// <para>
-/// 设置 → 界面 → 「显示主页轮播大图」关掉之后这一页就是一叠普通的货架（<see cref="_banner"/>）：顶上那张大图和
-/// 它右边那一栏一起没有，继续观看回到横着排的那一叠里、按它在版面表上的位置站着。
+/// 设置 → 界面 → 「显示主页轮播大图」关掉之后这一页就是一叠普通的货架（<see cref="_banner"/>）：顶上那张大图
+/// 没有了，所有内容都横着排、按各自在版面表上的位置站着。
 /// </para>
 /// </summary>
 public sealed partial class HomeViewModel : PageViewModel
@@ -61,9 +60,8 @@ public sealed partial class HomeViewModel : PageViewModel
     private bool _badges;
 
     /// <summary>
-    /// 设置 → 界面 → 「显示主页轮播大图」（<c>UiSettings.ShowHomeBanner</c>）。关掉的时候第一屏那两栏一起没有：
-    /// 一张幻灯片都不造（<see cref="Slides"/> 空着，带子自己就收起来了），继续观看也不再当右栏、回到下面横着排的
-    /// 那一叠里按它在版面表上的位置站着。
+    /// 设置 → 界面 → 「显示主页轮播大图」（<c>UiSettings.ShowHomeBanner</c>）。关掉的时候顶上那张大图没有：
+    /// 一张幻灯片都不造（<see cref="Slides"/> 空着，带子自己就收起来了），页面就是一叠横着排的货架。
     /// <para>
     /// 每次 <see cref="BuildShelves"/> 重读，而不是 <see cref="Attach"/> 时取一次快照 —— 拖拽次序和勾选是
     /// 改完当场生效的（<c>ShellPrefs</c>），这一项和它们同一张表上的东西，「改完要重开这一页才算」读起来就是坏的。
@@ -88,36 +86,8 @@ public sealed partial class HomeViewModel : PageViewModel
     /// 横着排的那几排，只留装到了东西的。Only the non-empty ones, rather than all four with the
     /// empty ones collapsed: an <c>ItemsRepeater</c> still spends its <c>StackLayout</c> spacing on a
     /// collapsed item, so an account with no 接下来看 would get a blank gap where the row would be.
-    /// <para>
-    /// 媒体库不在这里 —— 它是 <see cref="Rail"/>，第一屏右边那一栏竖着排的那一列。
-    /// </para>
     /// </summary>
     public ObservableCollection<CardShelf> Shelves { get; } = [];
-
-    /// <summary>
-    /// 第一屏右边那一栏：媒体库，竖着排一列（「参考上图修改轮播页面」那张图上，第一屏是并排两栏 —— 左边轮播
-    /// 大图、右边那一列）。<see langword="null"/> 是「这一栏不出现」：媒体库空着、在 设置 → 主页 里被勾掉了、
-    /// 或者轮播整个被关掉了（<see cref="_banner"/>）—— 前两种时大图占满整个第一屏，最后一种时连大图一起没有、
-    /// 媒体库回到下面横着排的那一叠里。
-    /// <para>
-    /// **这一栏 2026-09-06 从继续观看换成了媒体库**（「把首页轮播图右边的继续观看更换为媒体库列表」）。同一句
-    /// 话里还有「侧边栏也改」，两件是一件：左边那条栏里的媒体库入口没了之后，这一栏就是它们在第一屏上的落点。
-    /// </para>
-    /// <para>
-    /// 按钥匙认（<see cref="HomeLayout.Libraries"/>）而不是按位置认，和 <see cref="Shelves"/> 里其余几排是两件事：
-    /// 那一栏里的卡是 16:9 的剧照卡、竖着排，而拖拽表里排第一的可能是海报那种排（最近添加），一列 2:3 的海报在
-    /// 一条卡宽的栏里只放得下两张。栏宽由 <see cref="HomeCarousel.RailWidth"/> 按卡宽算，见那一段。
-    /// </para>
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RailVisibility))]
-    public partial CardShelf? Rail { get; set; }
-
-    /// <inheritdoc cref="Rail"/>
-    public Visibility RailVisibility => Show(Rail is not null);
-
-    /// <summary>第一屏右边那一栏有多宽（<see cref="HomeCarousel.RailWidth"/>）；没有那一栏时是 0。</summary>
-    internal double RailWidth => Rail is null ? 0 : HomeCarousel.RailWidth(CardSize.WideWidth);
 
     /// <summary>
     /// 需求 5 的那条大图轮播（<see cref="HomeCarousel"/>）: 继续观看的头几个条目，不够时由最近添加补上，each
@@ -209,23 +179,15 @@ public sealed partial class HomeViewModel : PageViewModel
 
         // 继续观看、媒体库、接下来看走 16:9 的宽卡（那三排讲的是「你在看的那一格画面」）；最近添加和每个媒体库
         // 自己那一排走海报 —— 一整排新片的封面比一整排剧照读得快。媒体库那一排不上角标：一个库没有「已看」。
-        // 媒体库**在轮播开着的时候**另有两处不同：卡宽走 HomeCarousel.RailCard（封顶在装机那一档），而它的
-        // OnScrim 一直是开的 —— 那时它是第一屏右边那一栏（Rail），站在和大图同一支深底上
-        // （EgBannerBaseBrush），所以牌子和卡片底下那两行字要走压在图上那套不随主题走的浅墨。横着的那几排在第一
-        // 屏外面、站在页面自己的纸上，照旧走主题的墨；轮播关掉之后媒体库也变成那样的一排。
-        //
-        // **右栏从继续观看换成媒体库是 2026-09-06 他的话**（「把首页轮播图右边的继续观看更换为媒体库列表」），
-        // 和同一句里「侧边栏也改」是一件事：左边那条栏里的媒体库入口没了之后，这一栏就是它们在第一屏上的落点。
-        // 换过去在形状上是白拿的 —— 媒体库那一排本来就是宽卡（上面那个 wide 判断里就有它），所以栏宽、卡宽、
-        // 一栏放得下几张全都不用动。继续观看跟着变成横着的一排，站在它自己在版面表上的位置。
+        // 媒体库现在也是横着排的普通一排（2026-09-08「移除轮播图右边的媒体库」之后，右边那一列没了），站在页面
+        // 自己的纸上、走主题的墨（OnScrim 默认关）。点它的卡进库 —— 顶部标签栏删掉之后，这一排就是进各媒体库的入口。
         _all = [.. plan.Select(row =>
         {
-            var rail = _banner && row.Key == HomeLayout.Libraries;
             var wide = row.Key is HomeLayout.Resume or HomeLayout.Libraries or HomeLayout.NextUp;
-            var width = rail ? HomeCarousel.RailCard(CardSize.WideWidth) : wide ? CardSize.WideWidth : CardSize.PosterWidth;
+            var width = wide ? CardSize.WideWidth : CardSize.PosterWidth;
             var badges = row.Key != HomeLayout.Libraries && _badges;
 
-            return (row, new CardShelf(row.Title, images, width, wide, badges) { OnScrim = rail });
+            return (row, new CardShelf(row.Title, images, width, wide, badges));
         })];
     }
 
@@ -301,21 +263,16 @@ public sealed partial class HomeViewModel : PageViewModel
             shelf.Fill(Items(row.Key), row.Key == HomeLayout.Libraries ? _ => "" : null);
         }
 
-        // 媒体库挑出来当第一屏右边那一栏（Rail），其余装到了东西的横着排在它下面。按钥匙挑而不是按位置挑，
-        // 理由在 Rail 那一段：那一栏里的卡必须是 16:9 的剧照卡，而拖拽表里排第一的可能是海报那种排。
-        // 轮播关掉的时候一栏都不挑（_banner），媒体库就跟着别的几排横着排在自己那个位置上。
-        CardShelf? rail = null;
+        // 装到了东西的排一律横着排。媒体库也在其中 —— 2026-09-08「移除轮播图右边的媒体库」之后不再单挑出来当
+        // 右栏，就跟别的几排一样站在它自己在版面表上的位置上。
         Shelves.Clear();
 
         foreach (var (row, shelf) in _all)
         {
             if (!row.Visible || shelf.Cards.Count == 0) continue;
 
-            if (_banner && row.Key == HomeLayout.Libraries) rail = shelf;
-            else Shelves.Add(shelf);
+            Shelves.Add(shelf);
         }
-
-        Rail = rail;
 
         // 需求 5：轮播站在这几排的头几个条目上，不额外问服务器一次 —— 那些条目已经在手上了。**先用继续观看，
         // 不够再用最近添加**（「首页的轮播图有继续观看就用继续观看，没有或者继续观看不够就用最近添加」），哪几个
@@ -327,7 +284,7 @@ public sealed partial class HomeViewModel : PageViewModel
         // Only when there is nothing at all. An account whose libraries are listed but which has never
         // played anything is not an empty account, and telling it so under a row of its own libraries
         // would be plainly untrue.
-        ShowEmptyNotice = Shelves.Count == 0 && Rail is null;
+        ShowEmptyNotice = Shelves.Count == 0;
 
         Subheading = LoadedCount == 0
             ? _session.ServerDisplayName
@@ -337,47 +294,33 @@ public sealed partial class HomeViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 自检：这一次的版面 ——「轮播开；继续观看✓、媒体库✓（右栏）、最近添加 · 电影✗」。屏上那几排
+    /// 自检：这一次的版面 ——「轮播开；继续观看✓、媒体库✓、最近添加 · 电影✗」。屏上那几排
     /// （<see cref="Shelves"/>）只有装到了东西的才在，所以这一句是唯一能看出「勾掉的那一排真的没排」和「拖出来的
-    /// 次序真的生效了」的地方。轮播那个开关也报在这儿：它一关，媒体库就从右栏变成横着的一排，而下面那几行读数
-    /// 一个都不会说这件事。
+    /// 次序真的生效了」的地方。轮播那个开关也报在这儿：它只管顶上那张大图在不在，不再动媒体库的位置。
     /// </summary>
     internal string LayoutSummary => _all.Length == 0
         ? "未读取"
         : $"轮播{(_banner ? "开" : "关")}；" + string.Join("、", _all.Select(entry =>
             $"{entry.Row.Title}{(entry.Row.Visible ? "✓" : "✗")}"
-                + $"{(_banner && entry.Row.Key == HomeLayout.Libraries ? "（右栏）" : "")}"
                 + $"{(entry.Shelf.Cards.Count > 0 ? "" : "（空）")}"));
 
     /// <summary>
     /// 自检：屏上那几排真按版面来的 —— 次序一样、勾掉的那几排真没排。两边各算一次再比：版面那一份是设置文件说的
     /// （<see cref="HomeLayout.Plan"/>），屏上那一份是 <see cref="Shelves"/>，中间隔着「装到了东西才排」这一条。
-    /// <para>
-    /// 轮播开着的时候媒体库两边都不算：它是第一屏右边那一栏（<see cref="Rail"/>），不在那几排里。它到底出没出现
-    /// 单报一句 —— 少了那一句，「勾掉媒体库之后右边那一栏还在」就没人看得见。轮播关掉的时候它就是普通的一排，
-    /// 照常参加比对，而右栏必须不在。
-    /// </para>
+    /// 媒体库 2026-09-08 从右栏改回横排之后，它和别的排一样参加比对，没有单独一档。
     /// </summary>
     internal (bool Ok, string Detail) LayoutRead()
     {
         var wanted = _all
             .Where(entry => entry.Row.Visible && entry.Shelf.Cards.Count > 0)
-            .Where(entry => !_banner || entry.Row.Key != HomeLayout.Libraries)
             .Select(entry => entry.Row.Title)
             .ToList();
 
         var onScreen = Shelves.Select(shelf => shelf.Title).ToList();
 
-        // 那一栏在不在，和版面里媒体库那一行说的必须一致 —— 加上轮播那个开关：关着就一定没有右栏。
-        var railWanted = _banner && _all.Any(entry =>
-            entry.Row.Key == HomeLayout.Libraries && entry.Row.Visible && entry.Shelf.Cards.Count > 0);
-        var railOk = railWanted == Rail is not null;
+        var ok = _all.Length > 0 && wanted.SequenceEqual(onScreen, StringComparer.Ordinal);
 
-        var ok = _all.Length > 0 && railOk && wanted.SequenceEqual(onScreen, StringComparer.Ordinal);
-
-        return (ok, $"版面 {LayoutSummary}；横着排的 {(onScreen.Count == 0 ? "无" : string.Join('、', onScreen))}"
-            + $"；右栏 {(Rail is null ? "无" : $"{Rail.Title} {Rail.Cards.Count} 项，宽 {RailWidth:0}")}"
-            + (railOk ? "" : "（和版面说的对不上）"));
+        return (ok, $"版面 {LayoutSummary}；横着排的 {(onScreen.Count == 0 ? "无" : string.Join('、', onScreen))}");
     }
 
     /// <summary>
@@ -398,25 +341,6 @@ public sealed partial class HomeViewModel : PageViewModel
         _images is not { } images
             ? []
             : [.. HomeCarousel.Slides(resume, latest).Select(item => new BannerSlide(item, images))];
-
-    /// <summary>
-    /// 右栏里和台上那张幻灯片对应的那一张框起来，其余的取消 ——「轮播图滚动到对应媒体时右边要自动框出对应媒体」。
-    /// 交回它是第几张，右栏里没有对应的（或者根本没有右栏）就是 -1；页面拿这个数把它滚进视野。
-    /// <para>
-    /// 对应关系由 <see cref="HomeCarousel.MatchIndex"/> 定（单测钉着），这里只管把那一位翻到卡片上 —— 每次都整列
-    /// 走一遍，所以「上一张的框」不需要另有人去收：那一位是 <see cref="CardItem.Framed"/>，相等就不发通知。
-    /// </para>
-    /// </summary>
-    internal int Frame(EmbyItem? slide)
-    {
-        if (Rail?.Cards is not { } cards) return -1;
-
-        var index = slide is null ? -1 : HomeCarousel.MatchIndex(slide, [.. cards.Select(card => card.Item)]);
-
-        for (var at = 0; at < cards.Count; at++) cards[at].Framed = at == index;
-
-        return index;
-    }
 
     /// <summary>
     /// 播放 on the carousel. Straight to the shell with no parent and no sibling list, same as a card on

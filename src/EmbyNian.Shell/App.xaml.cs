@@ -163,11 +163,6 @@ public partial class App : Application
         // 鼠标事件。摆在换页的那几个开关之前：一次导航就把浮层散掉了。
         if (_options.ShowMenu) await shell.ShowCardMenuAsync().ConfigureAwait(true);
 
-        // Tooling: --show-rail 把主页右栏那两条翻页条摆出来留着 —— 同上，悬停才浮出来的东西等不出来（挪真指针试过，
-        // 指针挪到了而照片上还是没有：用户的手也在那只鼠标上）。也在换页那几个开关之前：换一页，那一栏连它的翻页条
-        // 一起没了。
-        if (_options.ShowRail) await shell.ShowRailPagerAsync().ConfigureAwait(true);
-
         // Tooling: --show-detail clicks a poster and stays on whatever that click opened, which is how a
         // screenshot can be compared against Emby Theater's own detail page. --show-episode clicks one
         // card further, onto the page of a file, which is the only page 媒体信息 appears on. --scroll-end

@@ -44,7 +44,7 @@ public abstract class SettingRow : ObservableObject
     /// The smaller line under the label, or empty when there is none.
     /// <para>
     /// Settable, and observable, for one row: 视频同步 states the value actually in force, and what is in force
-    /// changes when 启用插值 is switched two rows below it. Every other row's note is written once at
+    /// changes when 启用插值 is switched a few rows below it. Every other row's note is written once at
     /// construction and never touched — see <see cref="Restate"/> for why this is not a general refresh
     /// mechanism.
     /// </para>
@@ -509,6 +509,61 @@ public sealed partial class SettingColorRow : SettingRow
             $"假颜色行：装值{(seeded ? "不写盘、色块画得出来" : "就写盘或者画不出色块")}、"
                 + $"选一个颜色{(picked ? "写盘一次" : $"写盘 {writes} 次")}、"
                 + $"清掉{(cleared ? "也写盘、色块退成「不设置」" : "没写盘或者色块没跟上")}");
+    }
+}
+
+/// <summary>
+/// 一行一个可重绑的播放器快捷键：左边动作名，右边一个抓键的方框（<see cref="Views.ShortcutCaptureBox"/>）。
+/// <para>
+/// 这一行是个过路的：真正的判断（这个键归谁、冲不冲突、存文件长什么样）在 Core 的 <c>ShortcutCatalog</c>，
+/// 落盘和冲突提示在 <c>SettingsViewModel</c>。行只做两件事 —— 显示 VM 算好的 <see cref="ComboText"/>，把方框
+/// 抛来的「敲定了一个键」经 <see cref="OnCommitted"/> 转交回 VM（token 串，空串=按了 ×）。所以它不写盘、也没有
+/// 别的行那套 <c>_seeded</c> 护栏：<see cref="ComboText"/> 只是拿来显示的，改它不触发任何写入。
+/// </para>
+/// </summary>
+public sealed partial class SettingShortcutRow : SettingRow
+{
+    private readonly Action<string> _commit;
+
+    internal SettingShortcutRow(string label, string id, string combo, Action<string> commit)
+        : base(label, null)
+    {
+        Id = id;
+        ComboText = combo;
+        _commit = commit;
+    }
+
+    /// <summary>动作 Id（见 <c>ShortcutCatalog</c>）。VM 刷新和自检按它认这一行。</summary>
+    public string Id { get; }
+
+    /// <summary>屏上那串组合键，VM 用 <c>ShortcutCatalog.Format</c> 算好；绑定变了 VM 重设它。</summary>
+    [ObservableProperty]
+    public partial string ComboText { get; set; }
+
+    /// <summary>方框敲定了一个组合键或按了 × —— 转交回 VM（token 串，空串=清除）。x:Bind 事件绑到这里。</summary>
+    public void OnCommitted(object sender, string token) => _commit(token);
+
+    /// <summary>
+    /// 自检：装值不喊回调、抓到键喊一次、按 × 喊空串 —— 就地造一个假行拨两下（同别的行 Probe 的做法）。
+    /// 真正的判断在 Core 的 <c>ShortcutCatalog</c>（单测钉着）和 VM，这一条只钉住行本身那根转交的线没断。
+    /// </summary>
+    internal static (bool Ok, string Detail) Probe()
+    {
+        var commits = new List<string>();
+        var row = new SettingShortcutRow("探针", "toggle-pause", "空格", commits.Add);
+
+        var seeded = commits.Count == 0 && row.ComboText == "空格";
+
+        row.OnCommitted(row, "Ctrl+M");
+        var bound = commits.Count == 1 && commits[0] == "Ctrl+M";
+
+        row.OnCommitted(row, "");
+        var cleared = commits.Count == 2 && commits[1].Length == 0;
+
+        return (seeded && bound && cleared,
+            $"假快捷键行：装值{(seeded ? "不喊回调、显示得出「空格」" : "就喊了回调或没显示对")}、"
+            + $"抓到组合键{(bound ? "喊一次回调" : $"喊了 {commits.Count} 次")}、"
+            + $"按 × {(cleared ? "喊空串" : "没喊空串")}");
     }
 }
 

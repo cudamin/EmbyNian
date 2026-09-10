@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Runtime.InteropServices;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
@@ -52,8 +53,9 @@ internal sealed class HostWindow : IDisposable
     private const int MinimumHeight = 560;
 
     /// <summary>
-    /// 开窗那一档的宽：页面 16:9（<see cref="HomeCarousel.WindowAspect"/>）—— 主页第一屏于是正好被一张不裁切的
-    /// 剧照铺满。算出来而不是写死，那个形状改了这里跟着走。
+    /// 开窗那一档的宽：页面 16:9（<see cref="HomeCarousel.WindowAspect"/>），开窗的形状。主页那条带照
+    /// <see cref="HomeCarousel.Height"/> 从这个宽算，占头上一截（剧照缩到六成靠右）—— 从前带宽整个按 16:9 算，
+    /// 那一版第一屏正好被一张不裁切的剧照铺满。算出来而不是写死，那个形状改了这里跟着走。
     /// <para>
     /// 2026-09-06 侧边栏删掉之后这里不再加回一条栏的宽（从前是 <c>+ HomeCarousel.SideRail</c>，49）。**页宽一个
     /// 像素都没变**：从前是 1471 的窗口配 1422 的页面，现在是 1422 的窗口配 1422 的页面。
@@ -116,6 +118,28 @@ internal sealed class HostWindow : IDisposable
     private const uint BandTimerInterval = 250;
 
     /// <summary>
+    /// The <c>WM_TIMER</c> id behind the video settle pass, and how often it asks. It exists because the
+    /// async resize <see cref="VideoWindow.Fill"/> posts to mpv's child can be <em>dropped</em>: a
+    /// pending async window position operation is discarded the moment anyone — mpv's own thread
+    /// catching up, or any of its repositionings — makes a <em>synchronous</em> <c>SetWindowPos</c> on
+    /// that same window, and a paused mpv issues nothing at all to replace it. Either way the child
+    /// keeps its old size and the picture sits at that size in the top-left corner:
+    /// 「窗口化然后再进入全屏画面会保持原尺寸固定在左上角」 — 「有时候」, because the drop needs mpv to
+    /// make a synchronous call in exactly the window between our post and its processing. Re-armed by
+    /// every <c>WM_SIZE</c> and re-run for a second or so after the last one; a pass where the child
+    /// is already the right size reads three rects and posts nothing, so a healthy run costs nothing.
+    /// </summary>
+    private const nuint VideoSettleTimer = 2;
+
+    private const uint VideoSettleInterval = 150;
+
+    /// <summary>How many settle passes one geometry change buys — 1.2 s of self-healing at the interval above.</summary>
+    private const int VideoSettlePasses = 8;
+
+    /// <summary>Passes left on the settle timer. Reset by every size change, so a drag arms it once, for its end.</summary>
+    private int _videoSettlePasses;
+
+    /// <summary>
     /// Where a title-bar drag took hold, in screen pixels, and the window origin it took hold from. Held
     /// rather than recomputed per move so the grab point stays under the cursor for the whole drag instead
     /// of the window creeping by one rounding error per event.
@@ -155,10 +179,11 @@ internal sealed class HostWindow : IDisposable
     private Action<EmbyNian.Theming.UiTheme>? _repaint;
 
     /// <summary>
-    /// The one rectangle of the browsing title bar that belongs to the page instead of the window frame —
-    /// the shell's two navigation arrows — in logical pixels. Null until the shell has measured them.
+    /// The rectangles of the browsing title bar that belong to the page instead of the window frame —
+    /// the shell's row of five buttons on the left and its account button at the right end — in logical
+    /// pixels. Empty until the shell has measured them.
     /// </summary>
-    private (double X, double Y, double Width, double Height)? _hole;
+    private List<(double X, double Y, double Width, double Height)> _holes = [];
 
     private const int TitleBarHeight = 32;
     private const int CaptionButtonWidth = 46;
@@ -417,8 +442,9 @@ internal sealed class HostWindow : IDisposable
     /// Changes only the interactive partition of the custom title bar and the height the framework
     /// reserves for it. During playback the whole top strip is XAML input — the back button, the three
     /// window commands, and the blank space between them that the page drags the window by; while browsing
-    /// the same area is caption drag space with one rectangle cut out of it for the shell's two navigation
-    /// arrows (<see cref="SetTitleBarHole"/>), and the framework's own caption buttons at its end.
+    /// the same area is caption drag space with rectangles cut out of it for the shell's buttons — the row
+    /// of five and the account button (<see cref="SetTitleBarHoles"/>), and the framework's own caption
+    /// buttons at its end.
     /// <para>
     /// What it deliberately does <em>not</em> touch is the window's style bits. Playback used to drop
     /// <c>WS_CAPTION</c> so the picture could reach the top edge, and that achieved the opposite: with the
@@ -462,28 +488,32 @@ internal sealed class HostWindow : IDisposable
         _appWindow?.TitleBar is { } bar ? (bar.Height, bar.RightInset) : (0, 0);
 
     /// <summary>
-    /// The rectangle of the browsing title bar the shell has claimed for itself, in logical pixels, or null
-    /// while it has claimed none. Exposed for the self-check, which has to prove the hole the window is
-    /// keeping is the rectangle the buttons are actually drawn in — a hole in the wrong place is invisible
-    /// until someone tries to click an arrow and drags the window instead.
+    /// The rectangles of the browsing title bar the shell has claimed for itself, in logical pixels, or
+    /// null while it has claimed none. Exposed for the self-check, which has to prove the holes the window
+    /// is keeping are the rectangles the buttons are actually drawn in — a hole in the wrong place is
+    /// invisible until someone tries to click a button and drags the window instead.
     /// </summary>
-    internal (double X, double Y, double Width, double Height)? TitleBarHole => _hole;
+    internal IReadOnlyList<(double X, double Y, double Width, double Height)>? TitleBarHoles =>
+        _holes.Count > 0 ? _holes : null;
 
     /// <summary>
-    /// Says which rectangle of the title bar the page draws buttons in, in logical pixels of the island's
+    /// Says which rectangles of the title bar the page draws buttons in, in logical pixels of the island's
     /// coordinates, so the frame stops answering <c>HTCAPTION</c> there.
     /// <para>
     /// This is not decoration. A button drawn inside a caption region never receives a click at all: the
     /// frame claims the point before XAML sees it, and Windows turns the pointer press into a window drag.
-    /// The rectangle has to be cut out of the caption for the arrows to work, and the caption has to be
-    /// stated as the pieces around it rather than as one rect underneath, because a point declared twice
+    /// The rectangles have to be cut out of the caption for the buttons to work, and the caption has to be
+    /// stated as the pieces around them rather than as one rect underneath, because a point declared twice
     /// belongs to neither kind in particular.
     /// </para>
-    /// <para>Passing a zero-area rectangle gives the strip back to the frame, whole.</para>
+    /// <para>Passing no positive-area rectangle gives the strip back to the frame, whole.</para>
     /// </summary>
-    internal void SetTitleBarHole(double x, double y, double width, double height)
+    internal void SetTitleBarHoles(params (double X, double Y, double Width, double Height)?[] holes)
     {
-        _hole = width > 0 && height > 0 ? (x, y, width, height) : null;
+        _holes = holes
+            .Where(hole => hole is { Width: > 0, Height: > 0 })
+            .Select(hole => hole!.Value)
+            .ToList();
         UpdateTitleBarRegions();
     }
 
@@ -1728,19 +1758,21 @@ internal sealed class HostWindow : IDisposable
         // ExtendsContentIntoTitleBar is on, and a passthrough rect is how a window says it wants that space
         // back.
         //
-        // Browsing is the other way round: the strip is caption drag space apart from the one rectangle the
-        // shell draws its two navigation arrows in, which is passthrough for the same reason — without it the
-        // frame answers 标题栏 there and the arrows never see a click.
-        var hole = _playbackTitleBar ? Empty : HolePixels((int)dpi, dragRight, height);
+        // Browsing is the other way round: the strip is caption drag space apart from the rectangles the
+        // shell draws its buttons in — the five on the left, the account one at the right end (it moved
+        // into the strip 2026-09-09 when its own row below went away) — which are passthrough for the same
+        // reason: without them the frame answers 标题栏 there and the buttons never see a click.
+        var holes = _playbackTitleBar ? [] : HolePixels((int)dpi, dragRight, height);
 
         var strip = _playbackTitleBar && width > 0 && height > 0
             ? new RectInt32(0, 0, width, height)
             : Empty;
 
-        _nonClient.SetRegionRects(NonClientRegionKind.Passthrough, [_playbackTitleBar ? strip : hole]);
+        _nonClient.SetRegionRects(NonClientRegionKind.Passthrough,
+            _playbackTitleBar ? [strip] : holes);
         _nonClient.SetRegionRects(
             NonClientRegionKind.Caption,
-            _playbackTitleBar ? [Empty] : CaptionAround(hole, dragRight, height));
+            _playbackTitleBar ? [Empty] : CaptionAround(holes, dragRight, height));
 
         // 右上角的三颗系统按钮. The framework draws them — the colours in ConfigureTitleBar are theirs — but
         // it does not hit-test them for a window that declares regions of its own: what this source says
@@ -1777,47 +1809,65 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// The rectangle the shell claimed, in physical pixels, clipped to the draggable part of the strip.
-    /// Outward-rounded — floor the near edges, ceil the far ones — so no half pixel of a button is left
-    /// answering 标题栏, which at fractional scaling is the difference between an arrow that clicks and an
-    /// arrow whose top row drags the window.
+    /// The rectangles the shell claimed, in physical pixels, each clipped to the draggable part of the
+    /// strip. Outward-rounded — floor the near edges, ceil the far ones — so no half pixel of a button is
+    /// left answering 标题栏, which at fractional scaling is the difference between an arrow that clicks and
+    /// an arrow whose top row drags the window.
     /// </summary>
-    private RectInt32 HolePixels(int dpi, int dragRight, int height)
+    private RectInt32[] HolePixels(int dpi, int dragRight, int height)
     {
-        if (_hole is not { } hole || dragRight <= 0 || height <= 0) return Empty;
+        if (dragRight <= 0 || height <= 0 || _holes.Count == 0) return [];
 
         var scale = dpi / 96.0;
-        var left = Math.Clamp((int)Math.Floor(hole.X * scale), 0, dragRight);
-        var top = Math.Clamp((int)Math.Floor(hole.Y * scale), 0, height);
-        var right = Math.Clamp((int)Math.Ceiling((hole.X + hole.Width) * scale), left, dragRight);
-        var bottom = Math.Clamp((int)Math.Ceiling((hole.Y + hole.Height) * scale), top, height);
+        var clipped = new List<RectInt32>(_holes.Count);
 
-        return right > left && bottom > top ? new RectInt32(left, top, right - left, bottom - top) : Empty;
+        foreach (var hole in _holes)
+        {
+            var left = Math.Clamp((int)Math.Floor(hole.X * scale), 0, dragRight);
+            var top = Math.Clamp((int)Math.Floor(hole.Y * scale), 0, height);
+            var right = Math.Clamp((int)Math.Ceiling((hole.X + hole.Width) * scale), left, dragRight);
+            var bottom = Math.Clamp((int)Math.Ceiling((hole.Y + hole.Height) * scale), top, height);
+
+            if (right > left && bottom > top) clipped.Add(new RectInt32(left, top, right - left, bottom - top));
+        }
+
+        return [.. clipped];
     }
 
     /// <summary>
-    /// The caption stated as the pieces around the hole: left of it, right of it, and — because the buttons
-    /// are shorter than the strip — the bands above and below it. Never an empty array; see
+    /// The caption stated as the pieces around the holes, in physical pixels: one per gap between them,
+    /// plus the two full-width bands at the ends. Never an empty array; see
     /// <see cref="UpdateTitleBarRegions"/> for what withdrawing a declaration costs.
     /// </summary>
-    private static RectInt32[] CaptionAround(RectInt32 hole, int dragRight, int height)
+    private static RectInt32[] CaptionAround(RectInt32[] holes, int dragRight, int height)
     {
         if (dragRight <= 0 || height <= 0) return [Empty];
-        if (hole.Width <= 0 || hole.Height <= 0) return [new RectInt32(0, 0, dragRight, height)];
+        if (holes.Length == 0) return [new RectInt32(0, 0, dragRight, height)];
 
-        var pieces = new List<RectInt32>(4);
+        // 按左沿排好再切：外壳报上来的两个洞一个在最左、一个在最右，可顺序是「谁先量出来谁先到」，不排
+        // 一下的话切成的那几块有交叠的可能 —— 一点声明了两次，两种区域都不认。
+        var ordered = holes.OrderBy(hole => hole.X).ToArray();
 
-        if (hole.X > 0) pieces.Add(new RectInt32(0, 0, hole.X, height));
+        var pieces = new List<RectInt32>(holes.Length + 3);
+        var lastRight = 0;
 
-        var right = hole.X + hole.Width;
-        if (dragRight > right) pieces.Add(new RectInt32(right, 0, dragRight - right, height));
+        foreach (var hole in ordered)
+        {
+            // 洞之间的整条竖带（第一个洞前面那条从 0 起）。洞在带子里留下的上下两截比重新开几个矩形便宜
+            // 也干净：它们的左右沿就是带子的，不会跟旁边那条叠上。
+            var from = Math.Min(lastRight, hole.X);
+            if (hole.X > from) pieces.Add(new RectInt32(from, 0, hole.X - from, height));
+            if (hole.Y > 0) pieces.Add(new RectInt32(hole.X, 0, hole.Width, hole.Y));
 
-        if (hole.Y > 0) pieces.Add(new RectInt32(hole.X, 0, hole.Width, hole.Y));
+            var bottom = hole.Y + hole.Height;
+            if (height > bottom) pieces.Add(new RectInt32(hole.X, bottom, hole.Width, height - bottom));
 
-        var bottom = hole.Y + hole.Height;
-        if (height > bottom) pieces.Add(new RectInt32(hole.X, bottom, hole.Width, height - bottom));
+            lastRight = Math.Max(lastRight, hole.X + hole.Width);
+        }
 
-        return pieces.Count > 0 ? [.. pieces] : [Empty];
+        if (dragRight > lastRight) pieces.Add(new RectInt32(lastRight, 0, dragRight - lastRight, height));
+
+        return [.. pieces];
     }
 
     private void CreateIsland()
@@ -1947,6 +1997,17 @@ internal sealed class HostWindow : IDisposable
 
         // The second and last call. mpv resizes its own child inside this one.
         _video?.Fill();
+
+        // And the settle pass behind it: the async half of that call can be dropped (see
+        // VideoSettleTimer's remarks) and neither side will say another word until asked, so the
+        // asking repeats for a moment after the geometry stops moving. SetTimer with an already-live
+        // id just restarts its interval, which is what a resize storm wants: no passes mid-drag, and
+        // the whole budget after the last one.
+        if (_video is not null)
+        {
+            _videoSettlePasses = VideoSettlePasses;
+            Native.SetTimer(Handle, VideoSettleTimer, VideoSettleInterval, IntPtr.Zero);
+        }
     }
 
     private static IntPtr Dispatch(IntPtr window, uint message, IntPtr wParam, IntPtr lParam)
@@ -2027,6 +2088,19 @@ internal sealed class HostWindow : IDisposable
                 if (Fullscreen) JudgeBand();
                 return IntPtr.Zero;
 
+            case Native.WmTimer when (nuint)(nint)wParam == VideoSettleTimer:
+                if (_video is null)
+                {
+                    // Only reachable between the timer firing and the window's destruction — the
+                    // surface is kept for the process's whole lifetime once made. Nothing to settle.
+                    Native.KillTimer(Handle, VideoSettleTimer);
+                    return IntPtr.Zero;
+                }
+
+                _video.Fill();
+                if (--_videoSettlePasses <= 0) Native.KillTimer(Handle, VideoSettleTimer);
+                return IntPtr.Zero;
+
             case Native.WmDpiChanged:
                 // lParam is the window rect Windows suggests for the new scale. Taking it verbatim
                 // is what keeps a drag across monitors from jumping.
@@ -2063,6 +2137,7 @@ internal sealed class HostWindow : IDisposable
                 // freed HWND.
                 _video?.Dispose();
                 _video = null;
+                Native.KillTimer(window, VideoSettleTimer);
 
                 Closed?.Invoke();
                 return IntPtr.Zero;

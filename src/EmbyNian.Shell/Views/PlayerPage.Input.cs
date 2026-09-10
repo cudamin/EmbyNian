@@ -341,9 +341,11 @@ public sealed partial class PlayerPage
     /// event reaches here, and stealing it back would mean the button under the pointer could never be
     /// pressed with the keyboard.
     /// <para>
-    /// Each case is one line, and every one of those lines is either a window operation or a single call
-    /// on the view model. What 快退 means in seconds, what the speed clamps to, whether there is a next
-    /// episode — none of that is a question about the keyboard, and none of it is decided here.
+    /// 键位现在是可重绑的（「参考上图在设置中新增快捷键功能」，2026-09-08）：按下的键 ＋ 此刻的修饰键拼成一次
+    /// <see cref="KeyStroke"/>，<see cref="ShortcutCatalog.Lookup"/> 查它绑到哪个动作，再由 <see cref="ShortcutHandlers"/>
+    /// 那张 动作→处理器 表执行。这一头每个处理器仍是一句话 —— 一个窗口操作或一次视图模型调用；「键→动作」在
+    /// Core 那张表、单测钉着，两张表靠动作 Id 对上。Esc 和 Y 两个固定键不参与重绑，留在下面 <see cref="Dispatch"/>
+    /// 的开头原样处理。快退多少秒、倍速夹到哪、有没有下一集 —— 都不是键盘该回答的，这里一样不管。
     /// </para>
     /// </summary>
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
@@ -356,109 +358,7 @@ public sealed partial class PlayerPage
         // way out of the box and then out of fullscreen.
         if (_typing) return;
 
-        var handled = true;
-
-        switch (e.Key)
-        {
-            case VirtualKey.Space:
-                ViewModel.TogglePause();
-                break;
-
-            case VirtualKey.Left:
-                ViewModel.SeekBackward();
-                break;
-
-            case VirtualKey.Right:
-                ViewModel.SeekForward();
-                break;
-
-            case VirtualKey.Up:
-                NudgeVolume(KeyStep);
-                break;
-
-            case VirtualKey.Down:
-                NudgeVolume(-KeyStep);
-                break;
-
-            case VirtualKey.F:
-                ToggleFullscreen();
-                break;
-
-            case VirtualKey.M:
-                ToggleMute();
-                break;
-
-            // 上一集 / 下一集. `P` is the 上一集 key README documents; 置顶 moved to `T`, which is what the
-            // pin button's tooltip now says. The two used to be the same key, and the film-watching one
-            // wins.
-            case VirtualKey.P:
-                ViewModel.PreviousEpisode();
-                break;
-
-            case VirtualKey.N:
-                ViewModel.NextEpisode();
-                break;
-
-            case VirtualKey.T:
-                SetPinned(!_window.TopMost);
-                break;
-
-            // 章节前后跳. mpv's own `add chapter`, which lands on the mark rather than a second either
-            // side of it, and says nothing at all on a file with no chapters — hence the notice.
-            case VirtualKey.PageUp:
-                ViewModel.StepChapter(-1);
-                break;
-
-            case VirtualKey.PageDown:
-                ViewModel.StepChapter(1);
-                break;
-
-            // 倍速微调 and its reset. VirtualKey has no names for the bracket keys, so the OEM codes are
-            // spelled out: 219 is VK_OEM_4 「[」 and 221 is VK_OEM_6 「]」 on every layout that has them.
-            case (VirtualKey)219:
-                ViewModel.NudgeSpeed(-0.1);
-                break;
-
-            case (VirtualKey)221:
-                ViewModel.NudgeSpeed(0.1);
-                break;
-
-            case VirtualKey.Back:
-                ViewModel.SetSpeed(1.0);
-                break;
-
-            // 字幕/音频延迟. Shift is the other direction, and it is read from the OS because
-            // KeyRoutedEventArgs does not carry it — Z and Shift+Z are the same VirtualKey. Unshifted is
-            // negative, which is mpv's own direction for these keys and therefore the one a user of the
-            // bundled configuration already has in their fingers.
-            case VirtualKey.Z:
-                ViewModel.NudgeDelay(subtitle: true, Native.ShiftHeld ? 0.1 : -0.1);
-                break;
-
-            case VirtualKey.X:
-                ViewModel.NudgeDelay(subtitle: false, Native.ShiftHeld ? 0.1 : -0.1);
-                break;
-
-            // Only while there is something to take. Otherwise Y is not a player key at all.
-            case VirtualKey.Y when ViewModel.SkipOffered:
-                ViewModel.TakeSkip();
-                break;
-
-            // Fullscreen first: Escape from a fullscreen player means 「窗口化」, not 「停止」.
-            case VirtualKey.Escape when _window.Fullscreen:
-                ToggleFullscreen();
-                break;
-
-            case VirtualKey.Escape:
-                ViewModel.Stop();
-                break;
-
-            default:
-                handled = false;
-                break;
-        }
-
-        if (!handled) return;
+        if (!Dispatch(e.Key)) return;
 
         e.Handled = true;
 
@@ -467,6 +367,73 @@ public sealed partial class PlayerPage
         // playback state with nothing on screen to say so.
         if (_chrome.WakeFully(Now)) Render();
     }
+
+    /// <summary>
+    /// 这一下有没有当成播放器键位处理掉。两个固定键在前（原样，不查修饰键，和改造前一致）：Esc 全屏则退出全屏、
+    /// 否则停止播放（Esc 是全局「退出」、也是设置里重绑方框的取消键）；Y 只在出现跳过提示时确认跳过 —— 没提示时
+    /// 它落到下面那张表、查不到就返回 false，那一下照旧不被吃掉，和改造前「Y 不是播放器键」一致。其余键走可重绑
+    /// 那张表。<see cref="ShortcutCatalog"/> 把 Esc、Y 列为保留键，所以那张表永远不会绑上这两颗。
+    /// </summary>
+    private bool Dispatch(VirtualKey key)
+    {
+        switch (key)
+        {
+            case VirtualKey.Escape when _window!.Fullscreen:
+                ToggleFullscreen();
+                return true;
+
+            case VirtualKey.Escape:
+                ViewModel.Stop();
+                return true;
+
+            case VirtualKey.Y when ViewModel.SkipOffered:
+                ViewModel.TakeSkip();
+                return true;
+        }
+
+        // 修饰键 KeyRoutedEventArgs 不带，从 Native 读（同改造前 Z/X 那套）。认不出的键当没有快捷键。
+        if (KeyStrokeInterop.Token(key) is not { } token) return false;
+
+        var stroke = new KeyStroke(token, Native.CtrlHeld, Native.AltHeld, Native.ShiftHeld);
+        var action = ShortcutCatalog.Lookup(ViewModel.ShortcutBindings, stroke);
+        if (action is null || !ShortcutHandlers.TryGetValue(action, out var run)) return false;
+
+        run();
+        return true;
+    }
+
+    private Dictionary<string, Action>? _shortcutHandlers;
+
+    /// <summary>
+    /// 动作 Id → 这一下做什么，可重绑那 19 个动作的另一半。Core 那张表（<see cref="ShortcutCatalog"/>）定
+    /// 「键→动作」，这张表定「动作→干什么」，靠动作 Id 对上。这一头必须留在页面：音量增减和静音要顺带闪一下
+    /// 音量条（走会闪条的页面包装 <see cref="NudgeVolume"/> / <see cref="ToggleMute"/>，不是直接调视图模型），
+    /// 全屏和置顶是窗口的事、mpv 一无所知。<b>少一个动作没有处理器 = 那颗键按下去没反应</b>，自检
+    /// <c>ProbeShortcuts</c> 拿这张表的键和 <see cref="ShortcutCatalog.Actions"/> 逐一对比，正是防这种静默死键。
+    /// 懒建一次；只读键、不执行 —— 建这张表不会真去动 mpv，所以自检在没真播的时候读它也安全。
+    /// </summary>
+    private Dictionary<string, Action> ShortcutHandlers => _shortcutHandlers ??= new(StringComparer.Ordinal)
+    {
+        ["toggle-pause"] = () => ViewModel.TogglePause(),
+        ["seek-backward"] = () => ViewModel.SeekBackward(),
+        ["seek-forward"] = () => ViewModel.SeekForward(),
+        ["volume-up"] = () => NudgeVolume(KeyStep),
+        ["volume-down"] = () => NudgeVolume(-KeyStep),
+        ["toggle-fullscreen"] = ToggleFullscreen,
+        ["toggle-mute"] = ToggleMute,
+        ["previous-episode"] = () => ViewModel.PreviousEpisode(),
+        ["next-episode"] = () => ViewModel.NextEpisode(),
+        ["toggle-pin"] = () => SetPinned(!_window!.TopMost),
+        ["chapter-previous"] = () => ViewModel.StepChapter(-1),
+        ["chapter-next"] = () => ViewModel.StepChapter(1),
+        ["speed-down"] = () => ViewModel.NudgeSpeed(-0.1),
+        ["speed-up"] = () => ViewModel.NudgeSpeed(0.1),
+        ["speed-reset"] = () => ViewModel.SetSpeed(1.0),
+        ["subtitle-delay-decrease"] = () => ViewModel.NudgeDelay(subtitle: true, -0.1),
+        ["subtitle-delay-increase"] = () => ViewModel.NudgeDelay(subtitle: true, 0.1),
+        ["audio-delay-decrease"] = () => ViewModel.NudgeDelay(subtitle: false, -0.1),
+        ["audio-delay-increase"] = () => ViewModel.NudgeDelay(subtitle: false, 0.1)
+    };
 
     // ---- the window -------------------------------------------------------------
 

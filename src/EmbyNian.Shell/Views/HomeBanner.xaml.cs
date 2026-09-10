@@ -27,7 +27,7 @@ namespace EmbyNian.Shell.Views;
 /// <para>
 /// 两层 <c>Image</c> 轮着上而不是一层换 <c>Source</c>：换一张时新的淡入、旧的淡出，中间不会闪一下底色。带上
 /// 同时解码的只有台上这张和它左右各一张（<see cref="Prefetch"/>），其余的 <see cref="BannerSlide.Release"/>
-/// 掉 —— 一张整宽的剧照是兆字节量级的画面，八张一起留着就是几十兆。
+/// 掉 —— 一张解码出来的剧照是兆字节量级的画面，八张一起留着就是几十兆。
 /// </para>
 /// <para>
 /// 动画全在代码里搭：<c>Storyboard.TargetName</c> 只在运行时解析，写在标记里编译期一声不响、跑起来才抛，而
@@ -53,12 +53,16 @@ public sealed partial class HomeBanner : UserControl
 
     /// <summary>
     /// 一根横条的点击区有多高。真正上色的条只有 <see cref="DotHeight"/>，指头和鼠标都点不着，所以每根外面套一层
-    /// 透明的框。这个数连着 <see cref="DotsBaseline"/> 就是底边那排占掉的那一档，字块的下边距要让开它。
+    /// 透明的框。这个数连着 <see cref="DotsBaseline"/>，就是底边那排自己占掉的高度。
     /// </summary>
     private const double DotHit = 16;
 
-    /// <summary>换图的那一下。两层的淡入淡出同时走，所以这也是「上一张还看得见」的时长。</summary>
-    private static readonly TimeSpan Fade = TimeSpan.FromMilliseconds(420);
+    /// <summary>
+    /// 换图的那一下：两层交叉着淡入淡出。两下同时走，所以这也是「上一张还看得见」的时长。不叫 <c>Fade</c> 是
+    /// 2026-09-09 之后的事：剧照左沿那道渐融在标记里占了 <c>Fade</c> 这个名（<c>HomeBanner.xaml</c>），一个类里
+    /// 摆不下两个。
+    /// </summary>
+    private static readonly TimeSpan CrossFade = TimeSpan.FromMilliseconds(420);
 
     /// <summary>一行字抬起来用多久。</summary>
     private static readonly TimeSpan Lift = TimeSpan.FromMilliseconds(520);
@@ -90,9 +94,9 @@ public sealed partial class HomeBanner : UserControl
     private BannerSlide? _current;
 
     /// <summary>
-    /// 订着的那个 <c>XamlRoot</c>，也就是窗口的客户区。带高就是一屏（<see cref="HomeCarousel.Height"/>），而只拖
-    /// 下边沿的那一下这条带自己的宽度一点没变 —— <c>SizeChanged</c> 因此不响，一屏有多高却已经换了一个数。存下来
-    /// 是为了退订：进树时的 XamlRoot 和离树后能不能问到不是一回事。
+    /// 订着的那个 <c>XamlRoot</c>，也就是窗口的客户区。带高照带宽算、上限一屏（<see cref="HomeCarousel.Height"/>），
+    /// 而只拖下边沿的那一下这条带自己的宽度一点没变 —— <c>SizeChanged</c> 因此不响，一屏有多高却已经换了一个数。
+    /// 存下来是为了退订：进树时的 XamlRoot 和离树后能不能问到不是一回事。
     /// </summary>
     private XamlRoot? _viewport;
 
@@ -136,12 +140,14 @@ public sealed partial class HomeBanner : UserControl
     public event EventHandler<BannerSlide>? OpenRequested;
 
     /// <summary>
-    /// 台上换人了 —— 「轮播图滚动到对应媒体时右边要自动框出对应媒体」。<see langword="null"/> 是「台上没人」
-    /// （整批换成空的）。
+    /// 台上换人了。<see langword="null"/> 是「台上没人」（整批换成空的）。
     /// <para>
     /// 事件而不是让页面去轮询：换一张有五个来处（钟、两颗箭头、底边那排小横条、左右方向键、换一整批），而它们
-    /// 都汇到 <see cref="Show"/> 这一处。带自己不认识右栏 —— 谁跟谁对应是 <see cref="HomeCarousel.MatchIndex"/>
-    /// 的事，把哪一张框起来是 <c>HomePage</c> 的事。
+    /// 都汇到 <see cref="Show"/> 这一处。
+    /// </para>
+    /// <para>
+    /// 右边那一列继续观看 2026-09-08 删掉之后没人再订它，但留着：整批换掉、收起整条带，这类「这一刻台上是谁」
+    /// 的读数对下一个要看这条带的听者（比如一张选择条）是现成的，价钱是一个没人订的事件。
     /// </para>
     /// </summary>
     public event EventHandler<BannerSlide?>? SlideChanged;
@@ -231,7 +237,7 @@ public sealed partial class HomeBanner : UserControl
         PaintLogo(slide);
         Prefetch();
 
-        // 最后一句：上面那几件都是这条带自己的事，这一声是给外面的（右栏跟着框出对应的那一张）。
+        // 最后一句：上面那几件都是这条带自己的事，这一声是给外面的听者的。
         SlideChanged?.Invoke(this, slide);
     }
 
@@ -321,8 +327,8 @@ public sealed partial class HomeBanner : UserControl
         _second = !_second;
 
         var board = new Storyboard();
-        board.Children.Add(FadeTo(rising, 1, Fade, TimeSpan.Zero));
-        board.Children.Add(FadeTo(falling, 0, Fade, TimeSpan.Zero));
+        board.Children.Add(FadeTo(rising, 1, CrossFade, TimeSpan.Zero));
+        board.Children.Add(FadeTo(falling, 0, CrossFade, TimeSpan.Zero));
 
         Play(board, () =>
         {
@@ -517,23 +523,29 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
-    /// 带多高、字块多宽。带高就是「一张 16:9 剧照在这个带宽下的高度」
-    /// （<see cref="HomeCarousel.Height"/>）—— 「封面固定到最上方，上下不要有黑边」，所以图正好铺满这一块、贴着
-    /// 窗口的顶边。字块不超过带的一半多一点：右边要留出剧照本身。
+    /// 带多高、渐融站在哪儿、字块多宽。带高走 <see cref="HomeCarousel.Height"/>：剧照缩到带宽的六成靠右站
+    /// （「把主页的轮播图移动到右边」＋「把轮播图弄扁一些」，2026-09-09），带高就是那六成按 16:9 算出来的高，
+    /// 所以图正好铺满带的上下、左沿落在「带宽 − 图宽」那条竖线上。
+    /// <para>
+    /// 渐融（<c>Fade</c>）正站在那条线上：贴住剧照的左沿、往图里走 <see cref="FadeShare"/> 那么宽
+    /// （「给轮播图左边加上黑色渐变」）。图宽从带高换（带高×16÷9），取 <c>min</c> 兜住带宽不到 427、图连六成
+    /// 宽都摆不下的那一档 —— 那时图吃满带宽，渐融贴的就是带子的左沿了。
+    /// </para>
     /// <para>
     /// 字块 2026-09-05 走过两趟：先按「把红框框出来的移到右下角」挪去了右下角，同一天又按「移到左下角，然后把徽标
     /// 移到剧名上面」挪回左边、贴着下沿，徽标从压在角上的一张独立的图变成了这一叠的第一行。两趟一起丢掉的是「往下
     /// 沉一点」那条规则（从前的 <c>InfoShift</c> 加 <c>HomeCarousel.InfoDrop</c>）和 <c>PlaceLogo</c> 那一段留白
-    /// 计算：贴着下沿已经是「字在下半张」的极端，而站在字块里的徽标由布局给位置。
+    /// 计算：站在字块里的徽标由布局给位置。2026-09-10 第三趟按「把红框里的东西移动到左上角」从下沿挪到了顶上
+    /// （<see cref="InfoTop"/>，站在 PageSlate 底下）—— 仍然是布局给位置，只是换了一个角，别把那条下沉规则请回来。
     /// </para>
     /// <para>
-    /// 整条带都是自己的：继续观看那一排 2026-09-05 从「压在图的下半截上」挪去了第一屏右边那一栏（那一栏是
-    /// <c>HomePage</c> 的事，见 <see cref="HomeCarousel.RailWidth"/>），所以字块和底边那排小横条不用再让开谁。
-    /// 这条带自己少掉的只是宽度 —— 它现在住在第一屏左边那一栏里，而带高跟着这个宽度走。
+    /// 整条带都是自己的：继续观看从前「压在图的下半截上」，后来当过第一屏右边那一栏（那一栏 2026-09-08 随着
+    /// 「移除轮播图右边的媒体库」删掉了），所以字块和底边那排小横条不用让开谁，带宽就是整个页宽。
     /// </para>
     /// <para>
-    /// 一屏是带高的上限（超宽屏上算出来会比一屏还高），问的是 <c>XamlRoot.Size</c>，也就是整个客户区 —— 和自检里
-    /// <c>BleedRead</c> 问的同一个数；量不到（自检里这份控件没有 XamlRoot）就是 0，那时不封顶。
+    /// 一屏是带高的上限（超宽屏上「带宽×六成 ÷ 16 × 9」算出来会比一屏还高），问的是 <c>XamlRoot.Size</c>，
+    /// 也就是整个客户区 —— 和自检里 <c>BleedRead</c> 问的同一个数；量不到（自检里这份控件没有 XamlRoot）就是 0，
+    /// 那时不封顶。
     /// </para>
     /// </summary>
     internal void Resize(double width)
@@ -544,19 +556,34 @@ public sealed partial class HomeBanner : UserControl
         // 还没量过时高度是 NaN，而 NaN 参与的比较全是假 —— 少了这一句，第一次布局就设不上高度。
         if (double.IsNaN(Root.Height) || Math.Abs(Root.Height - height) > 0.5) Root.Height = height;
 
+        // 图贴右沿、按 16:9 整张画：宽从带高换。渐融贴住图的左沿 —— 图宽用的是「画出来的那一个」，不是带子
+        // 想给它的那一个，免得窄窗口那一档渐融站到图外面去。
+        var picture = Math.Min(width, height * HomeCarousel.WindowAspect);
+        Fade.Margin = new Thickness(Math.Max(0, width - picture), 0, 0, 0);
+        Fade.Width = picture * FadeShare;
+
         Info.MaxWidth = Math.Clamp(width * 0.54, 280, 620);
-        Info.Margin = new Thickness(InfoInset, 0, 0, InfoBaseline);
+        Info.Margin = new Thickness(InfoInset, InfoTop, 0, 0);
         Dots.Margin = new Thickness(0, 0, 0, DotsBaseline);
     }
+
+    /// <summary>
+    /// 渐融伸进剧照多深，占图宽的比例。三成半：字块最宽的那一档（60 加 620）在开窗那一档 1422 宽的带上停在 680，
+    /// 渐融到 867 才散尽 —— 字块的尾巴一直走在渐融里；最小窗口 900 宽那一档算下来还剩三个像素（见
+    /// <c>HomeCarousel.PictureShare</c> 那一段的另一半账）。再窄字块就站到散尽了的亮图上，再宽图就只剩一扇窗。
+    /// </summary>
+    private const double FadeShare = 0.35;
 
     /// <summary>字块离带子左沿多远。见标记里 Info 那一段：让开的是翻页箭头那条窄栏。</summary>
     private const double InfoInset = 60;
 
     /// <summary>
-    /// 字块离带子下沿多远。必须大于底边那排小横条占掉的那一档（<see cref="DotsBaseline"/> 加
-    /// <see cref="DotHit"/>），否则播放键压在横条上 —— <see cref="Probe"/> 拿这三个常数当场对一遍。
+    /// 字块离带子顶多远（「把轮播图左侧的徽标、片名、剧情说明等东西移到左上角」，2026-09-10）。116 不是窗口的
+    /// 绝对左上角：HomePage 的 PageSlate 从 44 开始、占着页面抬头那一块，这 116 让字块站在它下面并留一口气，
+    /// 而 PageSlate 自己不动。标记里 Info 那一份和 <see cref="Resize"/> 里这一份是同一个数，<see cref="Probe"/>
+    /// 两处都守，不能只改一头。
     /// </summary>
-    private const double InfoBaseline = 46;
+    private const double InfoTop = 116;
 
     /// <summary>底边那排小横条离带子下沿多远。它是这条带自己的控件，不是画面的一部分，所以不跟着谁走。</summary>
     private const double DotsBaseline = 18;
@@ -706,11 +733,13 @@ public sealed partial class HomeBanner : UserControl
     /// </para>
     /// <para>
     /// 剩下那几件是屏上的行为里 Core 摸不到的部分：一张都没有时整条带收起来、底边那排横条造得出来且亮在对的那
-    /// 根、带高按页宽落到布局上、**字块贴着左下角而徽标是它的第一行**（「移到左下角，然后把徽标移到剧名上面」，
-    /// 2026-09-05）、字块底下让开了那排横条、**四条边各一道黑色渐变而画面正中不压**（「给轮播页面边缘加上黑色的
-    /// 渐变」，2026-09-05 —— 判的是每一层的形状，不是层数，见 <see cref="Rims"/>）、翻页箭头和字块不在同一列、
-    /// 两层剧照真的轮着上。字块那段错拍动画顺带跑一遍，故事板里哪个目标是空的就在这里抛，而不是等到主页第一次
-    /// 换幻灯片。
+    /// 根、带高按页宽落到布局上、**剧照靠带子的右沿站**（「把主页的轮播图移动到右边」，2026-09-09）、**字块贴着
+    /// 左上角而徽标是它的第一行**（2026-09-05「移到左下角，然后把徽标移到剧名上面」、2026-09-10 从下沿挪到顶上）、
+    /// **带上四层黑渐变各是各的形状**：顶上给标题栏垫底那条，剧照左沿那道渐融（「给轮播图左边加上黑色渐变」，
+    /// 2026-09-09，判的是贴图的左沿、左头实心到底、往里走到全透明，见 <see cref="Melts"/>），加下、右两条只压
+    /// 边缘的（「给轮播页面边缘加上黑色的渐变」，2026-09-05，判的是每一层的形状而不是层数，见 <see cref="Rims"/>）、
+    /// 翻页箭头和字块不在同一列、两层剧照真的轮着上。字块那段错拍动画顺带跑一遍，故事板里哪个目标是空的就在
+    /// 这里抛，而不是等到主页第一次换幻灯片。
     /// </para>
     /// </summary>
     internal static (bool Ok, string Detail) Probe()
@@ -730,20 +759,28 @@ public sealed partial class HomeBanner : UserControl
         banner.BuildDots(1);
         var lonely = banner.Dots.Visibility == Visibility.Collapsed;
 
-        // 带高落到布局上，而不只是算出来：带高是照带宽按 16:9 算的（HomeCarousel.Height），1100 宽的带就是 619
-        // 高。这份控件没有 XamlRoot，量不到一屏有多高，所以那道「不超过一屏」的封顶这一趟不参与。
+        // 带高落到布局上，而不只是算出来：带高是「剧照缩到带宽六成」按 16:9 算的（HomeCarousel.Height），1100 宽
+        // 的带就是 371 高 —— 图 660 宽靠右，左边那 440 是字块的底色。这份控件没有 XamlRoot，量不到一屏有多高，
+        // 所以那道「不超过一屏」的封顶这一趟不参与。
         banner.Resize(1100);
         var height = HomeCarousel.Height(0, 1100);
+        var picture = height * HomeCarousel.WindowAspect;
+        var gutter = 1100 - picture;
         var wide = banner.Info.MaxWidth;
         var tall = Math.Abs(banner.Root.Height - height) < 0.01 && wide <= 620;
 
-        // 字块贴左下角，徽标是它的第一行（「移到左下角，然后把徽标移到剧名上面」，2026-09-05）。徽标那一条判的是
-        // **它在字块里、而且排在片名前面**，不是它的坐标 —— 它从前是压在角上的一张独立的图，谁把它挪回去，这一条
-        // 当场红。三行字的 TextAlignment 一起判：整块靠左，字也得靠左。全从标记里设死的对齐上读，量的不是坐标。
-        // 每一行外面套着一层 Grid（那层是影子的落脚处，见下面 inked），所以字块的头两个孩子是那两格、不是图和字
-        // 本身 —— 图和字在各自那一格里另判一次。
+        // 剧照靠带子的右沿站（「把主页的轮播图移动到右边」，2026-09-09）：两层都得靠右 —— 左边让出来的那四成是
+        // 字块的底色，谁把哪一层改回居中，屏上就是图压在字上。
+        var docked = banner.LayerA.HorizontalAlignment == HorizontalAlignment.Right
+            && banner.LayerB.HorizontalAlignment == HorizontalAlignment.Right;
+
+        // 字块贴左上角，徽标是它的第一行（2026-09-05「移到左下角，然后把徽标移到剧名上面」，2026-09-10 从下沿
+        // 挪到顶上）。徽标那一条判的是**它在字块里、而且排在片名前面**，不是它的坐标 —— 它从前是压在角上的一张
+        // 独立的图，谁把它挪回去，这一条当场红。三行字的 TextAlignment 一起判：整块靠左，字也得靠左。全从标记里
+        // 设死的对齐上读，量的不是坐标。每一行外面套着一层 Grid（那层是影子的落脚处，见下面 inked），所以字块的
+        // 头两个孩子是那两格、不是图和字本身 —— 图和字在各自那一格里另判一次。
         var corners = banner.Info.HorizontalAlignment == HorizontalAlignment.Left
-            && banner.Info.VerticalAlignment == VerticalAlignment.Bottom
+            && banner.Info.VerticalAlignment == VerticalAlignment.Top
             && banner.Info.Children.Count > 1
             && ReferenceEquals(banner.Info.Children[0], banner.LogoRow)
             && ReferenceEquals(banner.Info.Children[1], banner.TitleRow)
@@ -761,31 +798,37 @@ public sealed partial class HomeBanner : UserControl
             && Inked(banner.CaptionRow, banner.CaptionInk, banner.CaptionText)
             && Inked(banner.SynopsisRow, banner.SynopsisInk, banner.SynopsisText);
 
-        // 整条带都是自己的：字块和小横条不用让开谁，所以它们的下边距就是自己那个基准值 —— 而字块那一档必须比底边
-        // 那排横条占掉的（离下沿 18 加点击区 16）更大，否则播放键正压在横条上。继续观看那一排 2026-09-05 从「压在
-        // 图的下半截上」挪去了第一屏右边那一栏（HomePage 的 Rail），在那之前这里验的是「压住 300 的时候三样都
-        // 让开」。徽标从此不在这一条里：它站在字块里，边距由布局给。
-        var clear = Math.Abs(banner.Info.Margin.Bottom - InfoBaseline) < 0.01
-            && InfoBaseline > DotsBaseline + DotHit
+        // 字块 2026-09-10 挪到了顶上：Resize 写下去的顶距就是这个数 —— 标记和代码两份，这里两份都对。底边那排
+        // 小横条照旧自己贴着下沿；字块挪到上方之后它俩不再共用一条避让规则，各守各的边距。
+        var placed = Math.Abs(banner.Info.Margin.Top - InfoTop) < 0.01
+            && Math.Abs(banner.Info.Margin.Bottom) < 0.01
             && Math.Abs(banner.Dots.Margin.Bottom - DotsBaseline) < 0.01;
 
-        // **四条边各一道黑色渐变，画面正中不压**（「给轮播页面边缘加上黑色的渐变」，2026-09-05）。这一条来回过两趟
-        // （原先三层 → 全删 → 只压边缘），所以判的不是「有几层」而是**每一层的形状**：顶上那条给标题栏垫底的写死
-        // 高度、贴着上沿；另外三条铺满整条带，而且各自「贴边那一头最浓、走到半张之前就全透明」——渐变都调过头，让
-        // Offset 0 落在自己那条边上，三层因此是同一个形状。谁把某一层透明的那一头挪过中线，就是把删掉的那三层
-        // 又请了回来，这一条当场红，而张数、带高、字块那几行读数一个都不会动。
+        // 带上四层黑渐变，各判各的形状。顶上给标题栏垫底那条：写死高度、贴着上沿。剧照左沿那道渐融
+        // （「给轮播图左边加上黑色渐变」，2026-09-09）：**正好站在剧照的左沿上** —— Margin 和 Width 都是 Resize
+        // 按带高摆的，这里拿「带宽 − 图宽」这笔账再对一遍 —— 而且左头实心到底（和底色同色，图的左沿就此消失）、
+        // 往图里走到全透明（Melts）。它两头都不在带子的边上，所以不跟下、右两条走 Rims 那句「半张之前散尽」——
+        // 那条管的是「只压边缘」，这一条管的正是「把边缘藏掉」。下、右两条还是「贴边最浓、半张之前散尽」的边缘
+        // 渐变（「给轮播页面边缘加上黑色的渐变」，2026-09-05，来回过两趟：原先三层 → 全删 → 只压边缘）。谁把某一
+        // 层的形状改回去，这一条当场红，而张数、带高、字块那几行读数一个都不会动。
         var scrims = banner.Band.Children.OfType<Border>().ToList();
         var capped = scrims.Where(one => !double.IsNaN(one.Height)).ToList();
-        var edges = scrims.Where(one => double.IsNaN(one.Height)).ToList();
+        var sized = scrims.Where(one => double.IsNaN(one.Height) && !double.IsNaN(one.Width)).ToList();
+        var edges = scrims.Where(one => double.IsNaN(one.Height) && double.IsNaN(one.Width)).ToList();
         var bare = scrims.Count == 4
             && capped is [{ } top]
             && top.VerticalAlignment == VerticalAlignment.Top
             && Sinks(top)
-            && edges.Count == 3
+            && sized is [{ } fade]
+            && fade.HorizontalAlignment == HorizontalAlignment.Left
+            && Math.Abs(fade.Margin.Left - gutter) < 0.01
+            && Math.Abs(fade.Width - picture * FadeShare) < 0.01
+            && Melts(fade)
+            && edges.Count == 2
             && edges.TrueForAll(Rims);
 
-        // 翻页箭头和字块不同列（「翻页的按钮会挡住字体」）。箭头贴着带的左右边沿、在竖向正中；字块贴着左下角，带子
-        // 缩到下限那一档时它的上半截正好爬到竖向正中、也就是左箭头那一行 —— 所以这一条判的仍然是列，不是高度。
+        // 翻页箭头和字块不同列（「翻页的按钮会挡住字体」）。箭头贴着带的左右边沿、在竖向正中；字块贴着左上角，
+        // 左箭头贴边占的那条窄栏在另一列 —— 所以这一条判的仍然是列，不是高度。
         // 两边都从设死的边距和宽度上读，箭头默认是收起的、量不到位置，而这两个数收起来照样在。
         var strip = banner.PrevButton.Margin.Left + banner.PrevButton.Width;
         var apart = banner.Info.Margin.Left >= strip + 8;
@@ -810,34 +853,36 @@ public sealed partial class HomeBanner : UserControl
         banner.Rise();
         var risen = banner.TitleRow.Opacity == 1 && banner.TitleShift.Y == 0 && banner.ActionsShift.Y == 0;
 
-        var ok = quiet && dots && lonely && tall && corners && inked && clear && bare && layered && risen && apart;
+        var ok = quiet && dots && lonely && tall && docked && corners && inked && placed && bare && layered && risen && apart;
 
         return (ok,
             $"没有幻灯片时{(quiet ? "整条带收起、钟不走" : "带还在屏上或钟在走")}；"
                 + $"横条 3 根亮第 2 根{(dots ? "" : "（不对）")}、1 张时整排{(lonely ? "收起" : "还在")}；"
-                + $"带高＝带宽÷16×9（上限一屏、下限 {HomeCarousel.MinHeight:0}）：带宽 1100→{height:0}；"
-                + $"字块宽 页宽1100→{wide:0}、量不到→{banner.Info.MaxWidth:0}；"
+                + $"带高＝带宽×{HomeCarousel.PictureShare:0%}÷16×9（上限一屏、下限 {HomeCarousel.MinHeight:0}）："
+                + $"带宽 1100→{height:0}、图 {picture:0} 宽靠右{(docked ? "" : "（有一层没靠右）")}、左边留 {gutter:0}；"
+                + $"字块宽 页宽1100→{wide:0}；"
                 + (corners
-                    ? "字块贴左下角、三行字靠左，徽标是它的第一行、顶在片名头上；"
-                    : "字块不在左下角，或者徽标不是字块的第一行，或者有一行字没靠左；")
+                    ? "字块贴左上角、三行字靠左，徽标是它的第一行、顶在片名头上；"
+                    : "字块不在左上角，或者徽标不是字块的第一行，或者有一行字没靠左；")
                 + (inked
                     ? $"四行字底下各一层跟着字形走的影子（模糊 {TextInk.SmallBlur:0}，片名那行 {TextInk.TitleBlur:0}）；"
                     : "字底下那层影子的宿主不在字前面（影子会盖在字上）；")
-                + (clear
-                    ? $"字块离下沿 {InfoBaseline:0}（横条那排占掉 {DotsBaseline + DotHit:0}）、小横条离下沿 {DotsBaseline:0}"
-                    : "字块或小横条的下边距不对")
+                + (placed
+                    ? $"字块从顶上 {InfoTop:0} 起（标记和 Resize 两份对得上）、小横条离下沿 {DotsBaseline:0}"
+                    : "字块的顶距或小横条的下边距不对")
                 + "；"
                 + $"画面上的暗罩 {scrims.Count} 层"
                 + (bare
-                    ? $"（顶上给标题栏垫底那条 {capped[0].Height:0} 高，另外三条各压一条边、半张之前散尽，正中不压："
+                    ? $"（顶上给标题栏垫底那条 {capped[0].Height:0} 高；剧照左沿一道渐融，从 {sized[0].Margin.Left:0} 起、"
+                        + $"宽 {sized[0].Width:0}，左头实心到底、往图里散尽；下、右两条各压一条边、半张之前散尽："
                         + $"{string.Join('、', edges.Select(RimRead))}）"
-                    : "（该是四层：顶上写死高度那条，加左、右、下三条只压边缘的 —— 形状对不上）")
+                    : "（该是四层：顶上写死高度那条、剧照左沿一道渐融、下和右两条只压边缘的 —— 形状或位置对不上）")
                 + "；"
                 + $"箭头占到 {strip:0}、字块从 {banner.Info.Margin.Left:0} 起"
                 + $"{(apart ? "，两边不同列" : "，压到字了")}；"
                 + $"两层剧照{(layered ? "轮着上，同一张不重来" : "没换过位置")}；"
                 + $"四行错 {Stagger.TotalMilliseconds:0} 毫秒、{Lift.TotalMilliseconds:0} 毫秒抬起 {TextDrop:0} 像素"
-                + $"{(risen ? "后落定" : "但没落定")}，换图 {Fade.TotalMilliseconds:0} 毫秒；"
+                + $"{(risen ? "后落定" : "但没落定")}，换图 {CrossFade.TotalMilliseconds:0} 毫秒；"
                 + $"没人碰时每 {HomeCarousel.Dwell.TotalSeconds:0} 秒走一张，最多 {HomeCarousel.Slots} 张");
     }
 
@@ -854,6 +899,18 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private static bool Sinks(Border layer) =>
         Ramp(layer) is [{ } first, .., { } last] && first.Color.A > 0x40 && last.Color.A == 0;
+
+    /// <summary>
+    /// 剧照左沿那道渐融的形状：**横向**（贴图那一头在左）、贴图那头实心到底（#FF0C0E11，和带子的底色同一个颜色
+    /// —— 图的左沿在屏上就此消失），往图里走到全透明。它两头都不在带子的边上（左边是底色、右边在图里），所以
+    /// 不跟下、右两条走 <see cref="Rims"/> 那句「半张之前就散尽」—— 那条管的是「只压边缘」，这一条管的正是
+    /// 「把边缘藏掉」。
+    /// </summary>
+    private static bool Melts(Border layer) =>
+        layer.Background is LinearGradientBrush { StartPoint.X: 0, EndPoint.X: 1 }
+            && Ramp(layer) is [{ } first, .., { } last]
+            && first.Color.A >= 0xF0
+            && last.Color.A == 0;
 
     /// <summary>
     /// 一条边缘渐变的形状，三条一个样子：<c>Offset</c> 0 那一头（也就是它自己贴的那条边）够浓，**到半张处已经全
@@ -911,15 +968,14 @@ public sealed partial class HomeBanner : UserControl
     /// 带在 <c>ScrollView</c> 的竖排里真量到了宽度、那个宽度真变成了高度、台上那张的剧照真解码进了前面那层。
     /// 三样里少一样，屏上就是一条空带，而 <see cref="HomeViewModel.BannerSummary"/> 报的张数照旧好看。
     /// <para>
-    /// 字块的高和它头顶剩下的余量一起报：字块贴着下沿站（离下沿 <see cref="InfoBaseline"/>），而它自己有多高只有
-    /// 屏上量得出来 —— 「带高 − 下边距 − 字块高」就是它顶上还剩多少。这一位变成负数，就是片名被带的上沿剪掉了；
-    /// 那只可能发生在带子缩到下限（<see cref="HomeCarousel.MinHeight"/>）那一档上。
+    /// 字块的高和它底下剩下的余量一起报：字块从顶上 <see cref="InfoTop"/> 往下排，而它自己有多高只有屏上量得
+    /// 出来 —— 「带高 − 顶距 − 字块高」就是它底下还剩多少。这一位变成负数，就是简介和按键那一头伸出了带的
+    /// 下沿、压到底边那排小横条上（下限 240 那一档正是这样，所以它继续报）。
     /// </para>
     /// <para>
-    /// 带自己的形状也报作诊断：带宽是「页宽减掉第一屏右边那一栏继续观看」，而带高是照带宽按 16:9 算的
-    /// （<see cref="HomeCarousel.Height"/>），所以这一读该就是 1.78:1 —— 对不上就是那条规则没落到布局上，而
-    /// 屏上的样子是图的上下（或左右）多了一条底色。屏上是不是真这样，由 <see cref="HomePage.FoldRead"/> 在真实
-    /// 页面上量。
+    /// 带自己的形状也报作诊断：剧照贴右沿、按 16:9 整张画，图宽从带高换（带高×16÷9），带宽减它就是左边留给
+    /// 字块的那一截；渐融（<c>Fade</c>）的 Margin 和 Width 是代码摆的，把站的位置连着字块的余量一起说出来。
+    /// 屏上是不是真这样，由 <see cref="PictureRead"/> 在真实页面上量。
     /// </para>
     /// </summary>
     internal string State
@@ -930,9 +986,11 @@ public sealed partial class HomeBanner : UserControl
 
             var height = double.IsNaN(Root.Height) ? 0 : Root.Height;
             var viewport = _viewport?.Size.Height ?? 0;
+            var gutter = Fade.Margin.Left;
+            var fade = double.IsNaN(Fade.Width) ? 0 : Fade.Width;
 
-            return $"带高 {height:0}、字块宽 {Info.MaxWidth:0}、"
-                + $"字块高 {Info.ActualHeight:0} 离下沿 {InfoBaseline:0}（头顶余 {height - InfoBaseline - Info.ActualHeight:0}）、"
+            return $"带高 {height:0}、剧照靠右从 {gutter:0} 起（渐融 {fade:0} 宽）、字块宽 {Info.MaxWidth:0}、"
+                + $"字块高 {Info.ActualHeight:0} 从顶上 {InfoTop:0} 起（底下余 {height - InfoTop - Info.ActualHeight:0}）、"
                 + $"带 {(height > 0 ? Root.ActualWidth / height : 0):0.00}:1"
                 + $"（窗口高 {viewport:0}）、"
                 + $"{HomeCarousel.Position(_index, _slides.Count)}、"
@@ -949,14 +1007,16 @@ public sealed partial class HomeBanner : UserControl
     /// 都量不出来 —— 而「裁掉了三成半」在屏幕上只是一张构图不太对的图，没人能指着它说这是个错。
     /// </para>
     /// <para>
-    /// 判三件事：画出来的形状就是原图的形状（没裁也没拉）、**画到了这条带里能画的最大**、左右两条留白一样
-    /// 宽（「轮播图移到画面中间」）。留白多宽一起报出来，左边那条是字块站的地方。图还没解码回来时没有得量，那一
-    /// 档只报不判 —— 那是网络的事，不是版面的事。
+    /// 判三件事：画出来的形状就是原图的形状（没裁也没拉）、**画到了这条带里能画的最大**、**贴着带子的右沿**
+    /// （「把主页的轮播图移动到右边」，2026-09-09 —— 从前那一档判的是「左右两条留白一样宽」，剧照居中；挪到
+    /// 右边之后留白全在左边，是字块站的那一片）。图还没解码回来时没有得量，那一档只报不判 —— 那是网络的事，
+    /// 不是版面的事。
     /// </para>
     /// <para>
-    /// 「画到最大」判的是**贴住吃紧的那一边**，而不是一律要求吃满带高：带子比 16:9 更扁时高度吃紧（左右留底色），
-    /// 更高时宽度吃紧（上下留底色）。从前这里写死了「吃满带高」，因为「锁定窗口比例大小」把浏览区一直按在 16:9 上、
-    /// 两边同时吃紧；那个开关 2026-09-05 删掉之后窗口什么形状都拉得出来，写死那一句就变成了「窗口不是 16:9 就报错」。
+    /// 「画到最大」判的是**贴住吃紧的那一边**，而不是一律要求吃满带高：带子弄扁之后正常那一档高度吃紧（底色留在
+    /// 左边），带宽不到 427、下限那一档宽度吃紧（底下留一条底色）。从前这里写死了「吃满带高」，因为「锁定窗口
+    /// 比例大小」把浏览区一直按在 16:9 上、两边同时吃紧；那个开关 2026-09-05 删掉之后窗口什么形状都拉得出来，
+    /// 写死那一句就变成了「窗口不是 16:9 就报错」。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) PictureRead()
@@ -982,9 +1042,9 @@ public sealed partial class HomeBanner : UserControl
         var filledHeight = Math.Abs(drawn.Height - band.Height) <= 1.5;
         var filledWidth = Math.Abs(drawn.Width - band.Width) <= 1.5;
         var biggest = filledHeight || filledWidth;
-        var centred = Math.Abs(left - right) <= 1.5;
+        var docked = right <= 1.5;
 
-        return (whole && biggest && centred,
+        return (whole && biggest && docked,
             $"剧照 {drawn.Width:0}×{drawn.Height:0} = {shape:0.000}:1"
                 + (sourceShape > 0
                     ? $"（原图 {source!.PixelWidth}×{source.PixelHeight} = {sourceShape:0.000}:1"
@@ -992,12 +1052,12 @@ public sealed partial class HomeBanner : UserControl
                     : "（问不到原图尺寸）")
                 + $"；带 {band.Width:0}×{band.Height:0}"
                 + (filledHeight && filledWidth ? "，正好铺满整条带"
-                    : filledHeight ? "，吃满带高（带子比图扁，左右留底色）"
-                    : filledWidth ? "，吃满带宽（带子比图高，上下留底色）"
+                    : filledHeight ? "，吃满带高（底色留在左边）"
+                    : filledWidth ? "，吃满带宽（下限那一档，底下留一条底色）"
                     : "，两边都没吃满 —— 没画到能画的最大")
-                + $"；左右各留 {left:0} 和 {right:0}"
-                + (centred ? "，居中" : "，没居中")
-                + $"（字块最宽 {Info.MaxWidth:0}）");
+                + $"；左留 {left:0}、右留 {right:0}"
+                + (docked ? "，贴着带子的右沿" : "，没贴到带子的右沿")
+                + $"（左边那截是字块的底色，字块最宽 {Info.MaxWidth:0}）");
     }
 
     /// <summary>

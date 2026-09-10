@@ -15,6 +15,7 @@ BEGIN {
     print "SEARCH\t"  search()
     print "BACK\t"    back()
     print "FORWARD\t" forward()
+    print "HOUSE\t"   house()
 }
 
 function f(v) {
@@ -83,6 +84,16 @@ function back() {
 
 function forward() {
     return cap(16.3, 10, 3.7, 10, R) " " cap(16.3, 10, 10.7, 4.4, R) " " cap(16.3, 10, 10.7, 15.6, R)
+}
+
+# 主页（家园）：一栋房子的线条轮廓 —— 一圈圆角矩形的墙身（外框顺走 ＋ 内框倒走掏空，同 pane）加一个
+# 人字屋顶（两条胶囊，两头圆，同后退键那三笔，所以屋脊是圆的）。屋檐比墙略宽（3.2 / 16.8 对墙的 4.8 / 15.2），
+# 圆头正好盖住墙顶两个圆角的接缝。墙身顶边就是那条屋檐线。
+function house(    x1, y1, x2, y2, ro) {
+    x1 = 4.8; y1 = 8.6; x2 = 15.2; y2 = 16.8; ro = 1.8
+    return rrect(x1, y1, x2, y2, ro, 1) " " \
+        rrect(x1 + W, y1 + W, x2 - W, y2 - W, ro - W, 0) " " \
+        cap(3.2, 8.6, 10, 3.2, R) " " cap(10, 3.2, 16.8, 8.6, R)
 }
 
 # 极坐标取点，结果放在 PX/PY（awk 的函数只能返一个值）。

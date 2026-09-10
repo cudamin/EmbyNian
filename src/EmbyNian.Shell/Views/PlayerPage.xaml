@@ -141,14 +141,17 @@
              third of the picture's height that is a wireframe drawing, not an icon. The fallback font is the
              same story. What the request asks for is the solid shapes underneath.
 
-             The geometry is not here. It is PulseArt's, in Core, because 「what does this come to on screen once
-             it is stroked」 is arithmetic and the answer has to match the outer box of the glyph it replaced, or
-             the badge quietly changes size — see PaintPulseArt.
+             The geometry is not here. It is PulseArt's, in Core, because 「what weight class does this sit in」
+             is arithmetic and the answer has to stay in the one the user recognized two shapes ago — each
+             figure keeps its corner polygon, so Bounds reads the box off that (the rounded outline is cut
+             inward and never exceeds it), and PlaybackTests pins it, centred.
 
-             Drawn rather than stroked-and-filled by hand: each shape is a plain straight-line polygon and the
-             rounded corners come from the stroke's round joins, so there is not one arc to compute. That is
-             the trick the five title-bar icons in ShellPage.xaml could not use — a PathIcon has no Stroke,
-             which is why those needed an awk script to work out their corners. -->
+             The outlines carry their rounded corners in the geometry itself (tangent cut plus a tangent arc at
+             every corner), which the previous generation could not do: it drew a sharp polygon and let a
+             round-join stroke of fixed width fatten it, which caps every corner at half the stroke width — six
+             pixels of rounding on a 136 box, a wireframe's idea of soft. The arc trick is also what the five
+             title-bar icons in ShellPage.xaml could not have used — a PathIcon has no arcs — which is why those
+             needed an awk script to work out their corners. -->
 
         <!-- The 暂停/播放 badge's fifth of a second, and the only storyboard in the file — see PulseBadge for
              why this one is not the fade the reveal rule refuses.
@@ -901,8 +904,15 @@
              icon font as well; and 「点击画面暂停和开始的图标要纯白色，去掉灰色」 (2026-09-05) took away the last
              thing that was not white — the same geometry stroked more heavily behind it, which came out as a
              5-pixel grey rim hugging the shape. What is left is one white shape, and the cost of that is
-             recorded rather than argued with: over a nearly white frame it is not visible at all. See
-             PulsePauseGeometry above for the numbers and for what was wrong with the glyphs.
+             recorded rather than argued with: over a nearly white frame it is not visible at all.
+
+             「播放页面暂停和开始的图标太丑了，你换一个」 (2026-09-06) is the latest word, and this time what he
+             was looking at was the shape itself: sharp-corners-plus-stroke comes out hard-edged, every corner
+             rounded only six pixels and the play triangle ending in a point. PulseArt now draws the rounded
+             corners into the geometry — pause is two capsule bars (corner radius = half the bar width), play a
+             triangle whose base corners round 12 and whose tip rounds 22 — at the same outer sizes as before,
+             so the swap changes the softness and not the weight. Fill only: with the corners in the geometry
+             there is no stroke to fill, and the self-check holds that line.
 
              The Canvas must keep its Width and Height. A Canvas does not measure its children, so dropping
              them measures the whole badge as 0×0 — nothing on screen, and every other reading still correct.
@@ -924,10 +934,7 @@
             <Canvas x:Name="PulseArtBox" Width="136" Height="136">
                 <Path
                     x:Name="PulseShape"
-                    Fill="{StaticResource PlayerPulseBrush}"
-                    Stroke="{StaticResource PlayerPulseBrush}"
-                    StrokeThickness="12"
-                    StrokeLineJoin="Round" />
+                    Fill="{StaticResource PlayerPulseBrush}" />
             </Canvas>
         </Border>
         <!-- ================= 章节缩略图 =================

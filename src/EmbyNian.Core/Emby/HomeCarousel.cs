@@ -24,43 +24,48 @@ public static class HomeCarousel
     /// the title standing in front of it has nowhere to sit; a window that narrow gets a band that is too
     /// tall for it rather than a strip of nothing.
     /// <para>
-    /// 这个下限现在是**字块唯一的保险**。字块 2026-09-05 挪到了带子的右下角（「把红框框出来的移到右下角」），贴着
-    /// 下沿站，边距是 <c>HomeBanner</c> 里两个写死的数 —— 所以这里从前那条 <c>InfoDrop</c>（「字从正中往下沉多少」，
-    /// 按带高算的一条纯函数）连它的两条单测一起删掉了，别去别处找它。带子矮到装不下那一块字时，被剪掉的是片名那
-    /// 一头，而 <c>HomeBanner.State</c> 把「字块头顶还剩多少」报进自检，好让那件事看得见。
+    /// 这个下限现在是**字块唯一的保险**。字块从顶上往下排（2026-09-05 那一天先挪到右下角、又挪回左下角，2026-09-10
+    /// 再按「把红框里的东西移动到左上角」挪到顶上 —— PageSlate 底下，顶距是 <c>HomeBanner</c> 里写死的那一个数 ——
+    /// 所以这里从前那条 <c>InfoDrop</c>（「字从正中往下沉多少」，按带高算的一条纯函数）连它的两条单测一起删掉了，
+    /// 别去别处找它）。带子 2026-09-09 弄扁之后这个下限更容易碰到：带宽不到 711 就到了（从前要 427），而字块整个
+    /// 放得下得 900 宽往上 —— 装不下那一档伸出下沿的是简介和按键那一头，
+    /// <c>HomeBanner.State</c> 把「字块底下还剩多少」报进自检，好让那件事看得见。
     /// </para>
     /// </summary>
     public const double MinHeight = 240;
 
     /// <summary>
-    /// 量不到自己宽度的那一下这条带有多高（第一帧，还有自检里那份没上树的控件）。640 就是开窗那一档的带高
-    /// （浏览区 1422 减掉右栏 280，再按 <see cref="WindowAspect"/> 换成高），所以第一帧已经是第二帧的样子。
+    /// 量不到自己宽度的那一下这条带有多高（第一帧，还有自检里那份没上树的控件）。480 就是开窗那一档的带高
+    /// （浏览区 1422 全宽，剧照缩到六成按 16:9 换成高），所以第一帧已经是第二帧的样子。从前带宽整个按 16:9 算的
+    /// 时候这个数是 800 —— 一整屏。
     /// </summary>
-    public const double UnmeasuredHeight = 640;
+    public const double UnmeasuredHeight = 480;
 
     /// <summary>
-    /// 这一页的形状，宽 ÷ 高 —— 16:9，也就是服务器发来的宽剧照的形状。
+    /// 剧照占带子的几成宽：六成，靠右站（「把主页的轮播图移动到右边」＋「把轮播图弄扁一些」，2026-09-09）。带高
+    /// 就是「这个宽的一张 16:9 剧照」的高（<see cref="Height"/>），所以图正好铺满带的上下两条边；左边那四成是
+    /// 带子自己的底色，字块站在上面，图的左沿再压一道同色的渐融（<c>HomeBanner</c> 标记里 <c>Fade</c> 那一段）。
     /// <para>
-    /// **剧照本身在任何窗口形状下都不裁**（<see cref="Height"/> 那一块里按自己的比例整张画出来），而 2026-09-05
-    /// 之后带高就是照这个形状从带宽算出来的，所以**图正好铺满带子、上下一条底色都不留** —— 「封面固定到最上方，
-    /// 上下不要有黑边」。只有一种例外：算出来比一屏还高的时候（超宽屏），带高被一屏封住，那时底色留在左右。
+    /// 六成不是随手挑的：字块最宽 620 加左边距 60，在开窗那一档 1422 宽的带上停在 680，而渐融（图宽的三成半）到
+    /// 867 才散尽 —— 字块的尾巴一直走在渐融里；最小窗口 900 宽那一档算下来还剩三个像素。再窄成五成，字块就得
+    /// 站到散尽了的亮图上；再宽成七成，左边那片摆不下徽标加两行简介。
+    /// </para>
+    /// </summary>
+    public const double PictureShare = 0.6;
+
+    /// <summary>
+    /// 这一条的形状，宽 ÷ 高 —— 16:9，也就是服务器发来的宽剧照自己的形状。
+    /// <para>
+    /// **剧照本身在任何窗口形状下都不裁**（<see cref="Height"/> 那一块里按自己的比例整张画出来）。从前带高也按
+    /// 这个形状从带宽算，图因此铺满整条带、16:9 的窗口上正好一屏高；2026-09-09「把轮播图弄扁一些」之后带高改按
+    /// <see cref="PictureShare"/> 算，这个形状剩下的两件差事：开窗那一档的默认宽度（<c>HostWindow</c>），和把
+    /// 图宽从带高换出来（<c>HomeBanner.Resize</c>：图宽＝带高×16÷9）。
     /// </para>
     /// <para>
-    /// 从前有一个开关（「锁定窗口比例大小」）把浏览中的窗口一直按住在这个形状上，2026-09-05 按用户的话删掉了。
-    /// 所以现在这个数有两处用：带高按它从带宽算（<see cref="Height"/>）、开窗那一档的默认宽度就是这个形状
-    /// （<c>HostWindow</c>）。第三处从前是主页那个徽标按它算剧照的四周留白（<c>PlaceLogo</c>），2026-09-05 徽标
-    /// 挪进字块之后那个方法整个删了。
-    /// </para>
-    /// <para>
-    /// 「继续观看完整落在第一屏里」和这个形状没有关系，别把两者绑在一起 —— 那一排现在是第一屏右边那一栏
-    /// （<see cref="RailWidth"/>），本来就整个在第一屏里，窗口是什么形状都成立。中间有一版把那条锁改成「视口减掉
-    /// 第一排货架」来兑现那句话，代价是带子不再是整屏、也就不再有「不裁切」这个承诺；那一版已经删了。
-    /// </para>
-    /// <para>
-    /// **一个数都不用扣掉，横竖都不用。** 从前横向要扣掉侧边栏那一条（「计算比例时要排除侧边栏」，一个叫
-    /// <c>SideRail</c> 的常数，49 = 收起来的窄条 48 加它右边那道竖线）—— 侧边栏 2026-09-06 删掉之后页面就是整个
-    /// 客户区，那个常数连它在 <c>HostWindow</c> 的两处用法一起没了。竖向本来就不扣：外壳那两行是画在页面
-    /// <em>上面</em>而不是上方的，主页上图从窗口的顶边就开始 —— 整个客户区的高都是图的。
+    /// **带宽就是整个页宽，一个数都不用扣掉，横竖都不用。** 大图 2026-09-08 从「左边一栏、右边一列媒体库」改回
+    /// 铺满整宽（「移除轮播图右边的媒体库」），所以右栏那一段宽不再减；侧边栏 2026-09-06 就删了，页面本来也是整个
+    /// 客户区。竖向也不扣：外壳画在页面<em>上面</em>而不是上方，主页上图从窗口顶边就开始，整个客户区的高
+    /// 都是图的。
     /// </para>
     /// </summary>
     public const double WindowAspect = 16.0 / 9.0;
@@ -76,16 +81,17 @@ public static class HomeCarousel
     public static readonly TimeSpan Dwell = TimeSpan.FromSeconds(8);
 
     /// <summary>
-    /// 这条带有多高：**就是那张 16:9 剧照在这个带宽下的高度** —— 「封面固定到最上方，上下不要有黑边」。带子因此
-    /// 正好被一张不裁切的剧照铺满，图贴着窗口的顶边，上下一条底色都不留；第一屏剩下的那一截露出下面第一排横着的
-    /// 货架，那也是「底下还有东西」唯一的招牌。
+    /// 这条带有多高：**剧照缩到带宽的六成（<see cref="PictureShare"/>）之后，那张 16:9 剧照的高** —— 「把轮播图
+    /// 弄扁一些」，2026-09-09。图靠带子的右沿整张画出来，正好铺满带的上下两条边；左边那四成是带子自己的底色，
+    /// 字块站在上面。
     /// <para>
-    /// 2026-09-05 之前这一块占满整整一屏（「轮播页面占满窗口」），而右边那一栏继续观看占掉一段宽之后带子就比 16:9
-    /// 高了，于是图的上下各留一条底色（他那台窗口上约 145 像素）—— 这一版换掉的正是那两条。
+    /// 从前带宽整个按 16:9 算，16:9 的窗口上带高正好一屏、底下第一排货架滚一下才露出来；弄扁之后（1422 宽的开窗
+    /// 那一档是 480）第一排货架就露在第一屏里。
     /// </para>
     /// <para>
-    /// 一屏是上限而不是目标：超宽屏上「带宽 ÷ 16 × 9」会比一屏还高，那时带高被一屏封住，图改成吃满带高、底色留在
-    /// 左右（<c>HomeBanner.PictureRead</c> 两档都认）。下限 <see cref="MinHeight"/> 兜的是矮到不像话的窗口。
+    /// 一屏是上限而不是目标：超宽屏上「带宽×六成 ÷ 16 × 9」会比一屏还高，那时带高被一屏封住，图照旧吃满带高、
+    /// 贴右沿，底色留在左边（只是那一截更宽）。下限 <see cref="MinHeight"/> 兜的是矮到不像话的窗口；带宽不到
+    /// 427 的时候图连六成宽都摆不下、改吃满带宽，那一档底下留一条底色（<c>HomeBanner.PictureRead</c> 两档都认）。
     /// </para>
     /// <para>
     /// 量不到带宽的那一下（第一帧、还有自检里那份没上树的控件）用 <see cref="UnmeasuredHeight"/>，那就是开窗那一
@@ -93,62 +99,16 @@ public static class HomeCarousel
     /// </para>
     /// </summary>
     /// <param name="viewport">The window's client height, or 0 for 「not measured yet」.</param>
-    /// <param name="width">这条带自己有多宽（页宽减掉右栏），或者 0 表示还没量到。</param>
+    /// <param name="width">这条带自己有多宽（现在就是整个页宽），或者 0 表示还没量到。</param>
     public static double Height(double viewport, double width)
     {
         if (width <= 0) return UnmeasuredHeight;
 
-        var picture = Math.Round(width / WindowAspect);
+        var picture = Math.Round(width * PictureShare / WindowAspect);
         var ceiling = viewport > 0 ? Math.Max(MinHeight, Math.Round(viewport)) : double.MaxValue;
 
         return Math.Clamp(picture, MinHeight, ceiling);
     }
-
-    /// <summary>
-    /// 第一屏右边那一栏「继续观看」有多宽：一张卡（<see cref="RailCard"/>）加它两边的留白。第一屏是并排两栏 ——
-    /// 左边 <see cref="Height"/> 那条大图，右边这一栏竖着排的继续观看，所以这个数同时也是「大图少掉多少宽」。
-    /// <para>
-    /// 不按窗口宽收窄，也不会在窄窗口上让位：这一栏最宽 280（<see cref="RailCard"/> 的上限加两个
-    /// <see cref="RailInset"/>），而窗口最小 900 宽（<c>HostWindow.MinimumWidth</c>），减掉这一栏之后大图还剩
-    /// 六百多，字块最窄那一档（280 加右边距 60）站得下 —— 这一条由单测按四种海报宽各算一遍。所以
-    /// 这一栏缺席只有三种理由：继续观看那一排空着、它在设置里被勾掉了，或者轮播整个关掉了
-    /// （<c>UiSettings.ShowHomeBanner</c>，那一档连大图带右栏一起没有，继续观看回到下面横着排的那一叠里）。少了
-    /// 「窄窗口上也在」这句话，继续观看就得另有一套横排的版面，那是第二种第一屏，而两种第一屏就是两份要各自维护
-    /// 的版面。
-    /// </para>
-    /// <para>
-    /// 这一栏越窄，大图就越宽、跟着也越高（<see cref="Height"/> 按带宽算）—— 两个数是连着的，别只改一个。
-    /// </para>
-    /// </summary>
-    /// <param name="card">
-    /// 16:9 卡宽，装机那一档是 <c>CardSize.WideWidth</c>。0 或负数是「没有卡可放」，交回 0 表示没有这一栏。
-    /// </param>
-    public static double RailWidth(int card) => card > 0 ? RailCard(card) + (RailInset * 2) : 0;
-
-    /// <summary>
-    /// 这一栏里一张卡多宽：进来的 16:9 卡宽封在**最宽 240** —— 「把继续观看缩小一些」，从装机那一档
-    /// （<see cref="Infrastructure.CardSize.WideWidth"/>，300）收下来的。
-    /// <para>
-    /// 卡宽同时就是解码宽（见 <c>CardSize</c> 的类注释），所以这一栏里的卡和别处是同一个数。封顶这一头从前是
-    /// 活的：海报宽度那行设置还在时，滑杆拖到 340 那一头 16:9 卡是 600 宽，不封顶这一栏就要 640，在一台
-    /// 1600 宽的页面上占掉四成。那一行 2026-09-05 删掉了，输入固定是 300，封顶就成了这道契约上的一道保险。
-    /// </para>
-    /// <para>
-    /// 封的是一个常数而不是「页宽的几成」，是因为卡是按这个宽度建出来的（<c>CardItem</c> 一次定死宽和解码宽）：
-    /// 跟着页宽走就意味着每次拖窗口都要把这一列重建一遍。
-    /// </para>
-    /// </summary>
-    public static int RailCard(int card) => card > 0 ? Math.Min(card, RailCardCap) : 0;
-
-    /// <summary>
-    /// <see cref="RailCard"/> 的上限，也就是这一栏里最宽的一张卡。240×135 正好是 16:9。
-    /// </summary>
-    public const int RailCardCap = 240;
-
-    /// <summary>
-    /// 这一栏里的卡左右各留多少。两边一样，所以卡在这一栏里居中；<see cref="RailWidth"/> 就是卡宽加两个这个数。
-    /// </summary>
-    public const double RailInset = 20;
 
     /// <summary>
     /// Which items get to be slides —— **先用继续观看，不够再用最近添加**：「首页的轮播图有继续观看就用继续观看，
@@ -194,37 +154,6 @@ public static class HomeCarousel
             }
 
         return slides;
-    }
-
-    /// <summary>
-    /// 台上这张幻灯片对应右栏里的第几张卡 —— 「轮播图滚动到对应媒体时右边要自动框出对应媒体」（用户的话，
-    /// 2026-09-05）。对不上就是 -1，那时右栏一张也不框。
-    /// <para>
-    /// 先认同一个条目（id 一样），认不到再认同一个剧集（<see cref="Show"/>，也就是剧 id，没有剧的就是它自己）。
-    /// 两档都要：幻灯片取自继续观看时它<em>就是</em>右栏里的某一张，id 一比就中；而它取自最近添加时（继续观看不够
-    /// 那一档）同一部剧可能两边各有一集 —— 那时框出右栏里那一集才是「对应媒体」，框空反而像是没做。
-    /// </para>
-    /// <para>
-    /// 松的那一档要走完整个列表才交答案：id 相同的那一张可能排在剧相同的那一张后面，而严格的那一档永远该赢。
-    /// </para>
-    /// </summary>
-    /// <param name="slide">台上那张幻灯片背后的条目。</param>
-    /// <param name="cards">右栏里那一列，按屏上的次序。</param>
-    public static int MatchIndex(EmbyItem slide, IReadOnlyList<EmbyItem> cards)
-    {
-        if (slide.Id is not { Length: > 0 }) return -1;
-
-        var show = Show(slide);
-        var loose = -1;
-
-        for (var index = 0; index < cards.Count; index++)
-        {
-            if (string.Equals(cards[index].Id, slide.Id, StringComparison.Ordinal)) return index;
-
-            if (loose < 0 && string.Equals(Show(cards[index]), show, StringComparison.Ordinal)) loose = index;
-        }
-
-        return loose;
     }
 
     /// <summary>

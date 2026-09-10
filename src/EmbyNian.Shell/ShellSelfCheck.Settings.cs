@@ -1,4 +1,5 @@
 using System.Text;
+using EmbyNian.Playback;
 using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Views;
 using EmbyNian.Shell.Windowing;
@@ -200,6 +201,18 @@ internal static partial class ShellSelfCheck
                 ? "字幕卡上没有预览那一行"
                 : $"屏上那条画的是「{previewRow.Model.Text}」（{previewRow.Model.FontFamily}）；{previewProbe.Detail}");
 
+        // 快捷键那张卡（「参考上图在设置中新增快捷键功能」，2026-09-08）：问两件事 —— 卡上真有那 19 行可重绑的行
+        // （数得对），以及行本身那根「抓到键 → 交回 VM」的线通不通（假行拨两下，SettingShortcutRow.Probe）。真正的
+        // 判断（键归谁、冲不冲突）在 Core 的 ShortcutCatalog、单测钉着；派发那一头（每个动作都有处理器、默认键都拼
+        // 得回来）由播放页的 ProbeShortcuts 另外一关盯。
+        var shortcutRows = page.ViewModel.Sections
+            .FirstOrDefault(section => section.Category == "快捷键")?.Rows ?? [];
+        var shortcutCount = shortcutRows.OfType<SettingShortcutRow>().Count();
+        var shortcutProbe = SettingShortcutRow.Probe();
+
+        check("快捷键行", shortcutCount == ShortcutCatalog.Actions.Count && shortcutProbe.Ok,
+            $"{shortcutCount} 行可重绑（应当 {ShortcutCatalog.Actions.Count} 行）；{shortcutProbe.Detail}");
+
         // 主题那一行的色板。什么都不点：这一行只在点中一块时写盘，而量它不需要真换一次主题 —— 角标落在存着
         // 的那一套上、几块颜色互不相同、屏上块数对得上，坏法就都在这三句里了（见 MeasureThemeSwatches）。
         var swatches = page.MeasureThemeSwatches();
@@ -220,7 +233,8 @@ internal static partial class ShellSelfCheck
         check("主页版面表换得了次序", homeDrag is { Ok: true },
             homeDrag is { } drag ? drag.Detail : "没有建出主页版面表");
 
-        // 视频同步那一行的说明写的是「此刻真正生效的值」，而改得动它的有三处：它自己、启用插值、高帧率回退。
+        // 视频同步那一行的说明写的是「此刻真正生效的值」，而改得动它的有四处：它自己、启用插值、高帧率回退，
+        // 和插值关闭阈值（那一句例外里带着它填的那个数）。
         // 少接一处，屏上一点区别都看不出来 —— 说明还在，只是说的是上一次的事，也就是这一行本来要治的那个
         // 「界面在骗人」。所以这里问两件：那根线本身通不通（假下拉行按一下，SettingChoiceRow.Probe），以及屏上
         // 这一行真的是「此刻生效」那种说明、而不是一句静态介绍。点不了真下拉：这台机器上注不进鼠标事件。
@@ -534,6 +548,12 @@ internal static partial class ShellSelfCheck
         // speak.
         var taps = player.ProbeTapGesture();
         check("双击不触发暂停", taps.Ok, taps.Detail);
+
+        // 快捷键派发（「参考上图在设置中新增快捷键功能」，2026-09-08）：每个可重绑动作在页面那张 动作→处理器 表里
+        // 都有一条（少一条 = 那颗键按下去没反应），每个默认键都拼得回来（KeyStrokeInterop 认得出，方括号那两颗尤其），
+        // 默认键之间不撞。三样都是编译看不见、截图看不见、也没法在这台机器上用真键盘自动按一遍的，只有这一关盯着。
+        var shortcuts = player.ProbeShortcuts();
+        check("快捷键派发", shortcuts.Ok, shortcuts.Detail);
 
         var toast = shell.ToastState;
         check("提示通道", toast.Exists, toast.Exists ? $"InfoBar，当前{(toast.Open ? "已显示" : "未显示")}" : "缺失");

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  一个抓快捷键的方框，仿参考图里那个「组合键 ＋ 一颗清除」的样子。
+
+  自己就是可聚焦的那一个（IsTabStop），全部按键逻辑都在 code-behind —— 抓键是纯 UI 行为，分层规则允许它留在
+  code-behind（和字体行的焦点处理、拾色器的指针处理同一类）。不用 Button 当抓键的壳：Button 的空格/回车本身就是
+  「激活」，而空格恰好是要抓的键之一（播放/暂停），两者会打架；做成自己掌控 KeyDown 的可聚焦控件就没有这一层。
+
+  静止时中间显示当前组合键（VM 用 ShortcutCatalog.Format 算好的 display 串，经 Combo 绑进来）；点一下方框、或
+  聚焦后按空格/回车，进入「按快捷键…」；抓到一个键就把 token 经 Committed 抛出去，× 抛空串表示清除。Esc 取消
+  （Esc 本来就是保留键、绑不了，正好拿来当取消）；Tab 取消并放行让焦点照常走。Esc/Y 这类保留键抓到了不收，
+  在框里把话说破、等一个别的键。
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.ShortcutCaptureBox"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="True"
+    UseSystemFocusVisuals="True">
+
+    <Grid ColumnSpacing="6">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="CaptureStates">
+                <VisualState x:Name="Normal" />
+                <VisualState x:Name="Capturing">
+                    <VisualState.Setters>
+                        <!-- 抓键中整圈变强调色，和胶片格那套「上焦点整圈强调」一个规矩，颜色走角色表不写死。 -->
+                        <Setter Target="ComboBorder.BorderBrush" Value="{ThemeResource EgAccentBrush}" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Border
+            x:Name="ComboBorder"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource EgBorderBrush}"
+            BorderThickness="{StaticResource EgHairline}"
+            CornerRadius="4"
+            MinWidth="150"
+            Padding="12,7">
+            <TextBlock
+                x:Name="ComboLabel"
+                HorizontalAlignment="Center"
+                Style="{StaticResource EgBodyStyle}"
+                TextAlignment="Center"
+                TextTrimming="CharacterEllipsis" />
+        </Border>
+
+        <Button
+            x:Name="ClearButton"
+            x:Uid="ShortcutCaptureBox_Clear"
+            Grid.Column="1"
+            Padding="8"
+            VerticalAlignment="Stretch">
+            <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}" FontSize="12" Glyph="&#xE711;" />
+        </Button>
+    </Grid>
+</UserControl>

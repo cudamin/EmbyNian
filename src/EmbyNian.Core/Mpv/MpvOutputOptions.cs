@@ -111,6 +111,36 @@ public static class MpvOutputOptions
     ];
 
     /// <summary>
+    /// 插值算法 (mpv's <c>tscale</c>): how <c>interpolation</c> blends two neighbouring frames across one
+    /// display refresh. 「为当前的插值功能设置更多的可选项」(2026-09-10) — up to then this client always sent
+    /// <c>oversample</c>, so that value is the shipped default and an install that never touches the row keeps
+    /// exactly the picture it had.
+    /// <para>
+    /// <c>oversample</c> is the cheap end and the honest one: it only mixes on the refreshes a frame boundary
+    /// actually straddles, so each output frame is (at worst) a mix of two real frames and motion cannot smear.
+    /// Every other entry is a true reconstruction filter — mpv synthesises the in-between frame from the whole
+    /// neighbourhood, which smooths motion further at the cost of possible ringing around sharp moving edges.
+    /// mpv's own default is <c>mitchell</c>; it is offered here like any other, not shipped, because 「mpv's
+    /// default」 is not a reason on a machine where nobody sent <c>tscale</c> before.
+    /// </para>
+    /// <para>
+    /// No 「不设置」 entry: <see cref="Build"/> names the kernel on every interpolation launch, so an unknown
+    /// stored value falls back to the first entry (SettingsMigration) rather than to an empty string that would
+    /// leave mpv on mitchell while the page promised something else. Only sent with 启用插值 on — the option
+    /// does nothing without it.
+    /// </para>
+    /// </summary>
+    public static readonly MpvChoice[] InterpolationKernels =
+    [
+        new("oversample", "过采样（最省，运动最干净）"),
+        new("mitchell", "Mitchell（mpv 自己的默认，均衡）"),
+        new("catmull_rom", "Catmull-Rom（更锐一档）"),
+        new("bicubic", "双三次"),
+        new("spline36", "Spline36（更锐，轻微振铃）"),
+        new("lanczos", "Lanczos（最锐，振铃最明显）")
+    ];
+
+    /// <summary>
     /// 抖动. mpv only dithers when <c>dither-depth</c> names a depth, so the two options always travel
     /// together and the list is written in terms of what the user actually chooses: the algorithm.
     /// </summary>
@@ -388,38 +418,6 @@ public static class MpvOutputOptions
     /// <summary>Frame rate above which display sync is more trouble than it is worth.</summary>
     private const double HighFrameRateThreshold = 47;
 
-    /// <summary>
-    /// Refresh rate above which display sync costs more than it returns, in Hz.
-    /// <para>
-    /// <b>Measured on this machine 2026-09-04</b> (2560×1440, 24fps source, <c>gpu-next</c> + vulkan, no shader
-    /// chain, external mpv on a local file — <c>artifacts/shader-probe/interp-cost.ps1</c>): under display sync
-    /// mpv moves the final pass — frame mixing, colour encoding, dithering — out of the per-frame path and runs
-    /// it <b>once per refresh</b> instead, so at 144 Hz that ~1.1 ms of work goes from 24 to 144 times a second,
-    /// about 100–160 ms of extra GPU time per second. Windows' own per-process counter read 24.7% on audio sync
-    /// against 50.1% on display sync with everything else equal.
-    /// </para>
-    /// <para>
-    /// And it buys nothing here: 144 ÷ 24 = 6.000, so there is no cadence to smooth, and <c>vo-passes</c>
-    /// reports <c>frame mixing (1 frame)</c> — no blending — nearly every sample. What display sync fixes is the
-    /// uneven 2-3-2-3 cadence of a 60 Hz screen, where a whole refresh is 16.7 ms; at 144 Hz the worst case is
-    /// 6.9 ms and shrinking.
-    /// </para>
-    /// <para>
-    /// <b>120 is the user's own number.</b> His external mpv's config carries the same rule
-    /// (<c>[fps-fix] profile-cond = estimated-vf-fps &gt; 47 or display-fps &gt; 120 → video-sync=audio</c>,
-    /// described there as 「修复视频帧率和显示刷新率过高引起的异常耗能或掉帧」), which is why 「外置 mpv 开了插值也
-    /// 不费显卡」 — measured on his config, <c>display-sync-active</c> comes back False and the interpolation he
-    /// switched on never ran. This client implemented only the frame-rate half of that rule until now.
-    /// </para>
-    /// <para>
-    /// <b>Do not reach for <c>--interpolation-threshold</c> instead.</b> It is documented to treat a near-integer
-    /// refresh÷fps ratio as exact and skip blending, which is what 6.006 is — but on <c>gpu-next</c> it does
-    /// nothing measurable: setting it to -1 (logic off) produced an identical pass list and identical 2-frame
-    /// mixes. And it would not help anyway, because the bill is the per-refresh output pass, not the blend.
-    /// </para>
-    /// </summary>
-    private const double HighRefreshThreshold = 120;
-
     /// <summary>Every option pair these settings ask for, in the order they should reach mpv.</summary>
     /// <param name="source">
     /// The video about to play, for the rules that depend on it (去色带自动, HDR, 高帧率). Null skips all
@@ -431,7 +429,8 @@ public static class MpvOutputOptions
     /// 动画配置组 rule.
     /// </param>
     /// <param name="displayRefreshHz">
-    /// The refresh rate of the screen the picture will be drawn on, for <see cref="HighRefreshThreshold"/>.
+    /// The refresh rate of the screen the picture will be drawn on, for the refresh-rate half of the
+    /// 高帧率回退 rule (<see cref="Configuration.VideoSettings.HighRefreshRateLimitHz"/>).
     /// 0 means 「nobody could say」 and switches that rule off, which is what a test and the settings page get.
     /// </param>
     public static IReadOnlyList<KeyValuePair<string, string>> Build(
@@ -460,9 +459,12 @@ public static class MpvOutputOptions
         {
             Add(options, "interpolation", "yes");
 
-            // oversample is the cheap end of mpv's temporal filters: it only blends the frames that
-            // straddle a display refresh instead of running a real reconstruction filter.
-            Add(options, "tscale", "oversample");
+            // The kernel is the user's pick since 2026-09-10 (InterpolationKernels); oversample is what this
+            // always sent before and stays the shipped default. SettingsMigration guarantees a catalogue value,
+            // and a hand-built VideoSettings defaults to oversample — but a belt for "" costs one line and
+            // keeps the launch from silently falling back to mpv's mitchell.
+            var kernel = video.Tscale.Trim();
+            Add(options, "tscale", kernel.Length == 0 ? "oversample" : kernel);
         }
         else if (video.Interpolation)
         {
@@ -751,8 +753,9 @@ public static class MpvOutputOptions
     /// the refresh rate, which works for 24fps material on a 60Hz+ screen, but once the source approaches the
     /// refresh rate there is no spare cadence to resample into and it turns into dropped or repeated frames —
     /// and a 60fps source has nothing left to interpolate anyway. <b>高刷新率屏幕 overrides both the same way</b>,
-    /// for the cost measured on <see cref="HighRefreshThreshold"/>: the whole final pass runs once per refresh
-    /// under display sync, and on a screen that fast there is next to no judder left for it to remove.
+    /// for the cost measured on <see cref="Configuration.VideoSettings.HighRefreshRateLimitHz"/> — the user's own
+    /// number since 2026-09-10, 120 out of the box: the whole final pass runs once per refresh under display sync,
+    /// and on a screen that fast there is next to no judder left for it to remove.
     /// </para>
     /// <para>
     /// Both overrides are one switch — 设置 → 视频输出 → 高帧率或高刷新率时使用音频同步 — because they are one
@@ -795,10 +798,12 @@ public static class MpvOutputOptions
                     + "本次回到音频同步");
             }
 
-            if (displayRefreshHz > HighRefreshThreshold)
+            // The threshold is the user's own number since 2026-09-10 (VideoSettings.HighRefreshRateLimitHz);
+            // the measurement behind it is on that field. 120 is where it shipped, from the user's own mpv.conf.
+            if (displayRefreshHz > video.HighRefreshRateLimitHz)
             {
                 return ("audio", false,
-                    $"屏幕 {displayRefreshHz:0.###}Hz 超过 {HighRefreshThreshold:0}，显示同步要按刷新率重跑最后一趟渲染、"
+                    $"屏幕 {displayRefreshHz:0.###}Hz 超过 {video.HighRefreshRateLimitHz:0}，显示同步要按刷新率重跑最后一趟渲染、"
                     + "而这个刷新率下几乎没有抖动可补，本次回到音频同步");
             }
         }

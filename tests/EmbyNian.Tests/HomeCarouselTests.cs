@@ -16,10 +16,8 @@ internal static class HomeCarouselTests
     public static void Register()
     {
         RegisterSlides();
-        RegisterMatch();
         RegisterStep();
         RegisterHeight();
-        RegisterRail();
         RegisterText();
     }
 
@@ -110,46 +108,6 @@ internal static class HomeCarouselTests
             Assert.Equal(0, HomeCarousel.Slides([], []).Count));
     }
 
-    /// <summary>
-    /// 「轮播图滚动到对应媒体时右边要自动框出对应媒体」：台上那张对应右栏第几张。
-    /// </summary>
-    private static void RegisterMatch()
-    {
-        Test("轮播：右栏框出的就是台上那一个条目", () =>
-        {
-            var cards = new List<EmbyItem> { Wide("a"), Episode("e1", "s1"), Wide("b") };
-
-            Assert.Equal(1, HomeCarousel.MatchIndex(Episode("e1", "s1"), cards));
-            Assert.Equal(2, HomeCarousel.MatchIndex(Wide("b"), cards));
-        });
-
-        Test("轮播：条目对不上就退一步认同一个剧集", () =>
-        {
-            // 幻灯片来自最近添加（继续观看不够那一档）时，同一部剧两边各是一集 —— 那时框右栏里那一集。
-            var cards = new List<EmbyItem> { Wide("a"), Episode("e1", "s1") };
-
-            Assert.Equal(1, HomeCarousel.MatchIndex(Episode("e9", "s1"), cards));
-
-            // 剧也对不上就一张都不框，而不是退回第一张。
-            Assert.Equal(-1, HomeCarousel.MatchIndex(Episode("e9", "s9"), cards));
-            Assert.Equal(-1, HomeCarousel.MatchIndex(Wide("z"), cards));
-            Assert.Equal(-1, HomeCarousel.MatchIndex(Wide("a"), []));
-        });
-
-        Test("轮播：同一个条目永远赢过同一个剧集", () =>
-        {
-            // 松的那一档排在前面也不许抢答：走完整个列表才交答案。
-            var cards = new List<EmbyItem> { Episode("e1", "s1"), Episode("e2", "s1") };
-
-            Assert.Equal(1, HomeCarousel.MatchIndex(Episode("e2", "s1"), cards));
-        });
-
-        Test("轮播：没有 id 的条目不框任何一张", () =>
-            Assert.Equal(-1, HomeCarousel.MatchIndex(
-                new EmbyItem { Name = "无名" },
-                [new EmbyItem { Name = "也无名" }])));
-    }
-
     private static void RegisterStep()
     {
         Test("轮播：翻到头再翻回第一张", () =>
@@ -173,33 +131,38 @@ internal static class HomeCarouselTests
 
     private static void RegisterHeight()
     {
-        Test("轮播：带高就是那张 16:9 剧照在这个带宽下的高", () =>
+        Test("轮播：带高＝剧照缩到带宽六成后的 16:9 高（弄扁）", () =>
         {
-            // 「封面固定到最上方，上下不要有黑边」：带高照带宽按 16:9 算，图因此正好铺满这一块。
-            Assert.Equal(619d, HomeCarousel.Height(2000, 1100));
-            Assert.Equal(360d, HomeCarousel.Height(2000, 640));
-            Assert.Equal(1080d, HomeCarousel.Height(2000, 1920));
+            // 「把轮播图弄扁一些」＋「把主页的轮播图移动到右边」（2026-09-09）：剧照缩到带宽的六成靠右站，带高
+            // 就是那六成按 16:9 算出来的高。从前带宽整个按 16:9 算（16:9 的窗口上正好一屏高），那一版第一排
+            // 货架要滚一下才露出来。
+            Assert.Equal(371d, HomeCarousel.Height(2000, 1100));
+            Assert.Equal(648d, HomeCarousel.Height(2000, 1920));
+            Assert.Equal(0.6d, HomeCarousel.PictureShare);
 
-            // 量不到带宽的那一下（第一帧、自检里那份没上树的控件）用开窗那一档，所以第一帧就是第二帧的样子。
+            // 量不到带宽的那一下（第一帧、自检里那份没上树的控件）用开窗那一档：1422 的页宽×六成按 16:9 算
+            // 正好 480，所以第一帧就是第二帧的样子。这个数从前是 800 —— 一整屏。
             Assert.Equal(HomeCarousel.UnmeasuredHeight, HomeCarousel.Height(800, 0));
             Assert.Equal(HomeCarousel.UnmeasuredHeight, HomeCarousel.Height(800, -100));
-            Assert.Equal(640d, HomeCarousel.UnmeasuredHeight);
+            Assert.Equal(480d, HomeCarousel.UnmeasuredHeight);
 
-            // 下限兜的是窄到不像话的窗口：一条比这还矮的带子，字块和播放键就没地方站了。
+            // 下限兜的是矮到不像话的窗口：一条比这还矮的带子，字块和播放键就没地方站了。六成那一档在 711 宽
+            // 以下就碰到下限了（从前带宽整个按 16:9 算，要 427 以下才碰）。
             Assert.Equal(HomeCarousel.MinHeight, HomeCarousel.Height(2000, 300));
+            Assert.Equal(HomeCarousel.MinHeight, HomeCarousel.Height(2000, 640));
         });
 
-        Test("轮播：一屏是上限，超出去就改成留左右底色", () =>
+        Test("轮播：一屏是上限，超出去带子就不再长高", () =>
         {
-            // 超宽屏上「带宽 ÷ 16 × 9」会比一屏还高，那时带高被一屏封住 —— 图跟着改成吃满带高、底色留在左右
-            // （HomeBanner.PictureRead 两档都认）。不封的话第一屏里连播放键都看不见。
+            // 超宽屏上「带宽×六成 ÷ 16 × 9」会比一屏还高，那时带高被一屏封住 —— 图照旧吃满带高、贴右沿，
+            // 底色留在左边（那一截更宽就是了）。不封的话第一屏里连播放键都看不见。
             Assert.Equal(800d, HomeCarousel.Height(800, 3111));
-            Assert.Equal(619d, HomeCarousel.Height(700, 1100));
-            Assert.Equal(619d, HomeCarousel.Height(619, 1100));
-            Assert.Equal(600d, HomeCarousel.Height(600, 1100));
+            Assert.Equal(371d, HomeCarousel.Height(700, 1100));
+            Assert.Equal(371d, HomeCarousel.Height(371, 1100));
+            Assert.Equal(360d, HomeCarousel.Height(360, 1100));
 
             // 窗口高说不出来的时候不封顶（自检里那份控件就是这样），照带宽算。
-            Assert.Equal(619d, HomeCarousel.Height(0, 1100));
+            Assert.Equal(371d, HomeCarousel.Height(0, 1100));
 
             // 封顶也不许低过下限。
             Assert.Equal(HomeCarousel.MinHeight, HomeCarousel.Height(100, 1100));
@@ -207,85 +170,32 @@ internal static class HomeCarouselTests
 
         Test("轮播：每一种带宽上「上下不留底色」都成立", () =>
         {
-            // 这一条是「上下不要有黑边」的全称说法：带高不超过「带宽 ÷ 16 × 9」，所以图要么正好铺满，要么是被
-            // 一屏封住那一档 —— 那一档吃紧的是高、底色留在左右。反过来（带子比 16:9 高）就是上下留底色，一次
-            // 都不许出现。
+            // 这一条是「上下不要有黑边」的全称说法：带高不超过「带宽×六成 ÷ 16 × 9」，图吃满带高、贴着带的
+            // 上下两条边，底色只留在左边（字块站的那一截）。带宽不到 427 的那一档图连六成宽都摆不下、改吃满
+            // 带宽，那一条下限的逃逸句管的就是它。
             for (var width = 320d; width <= 3600; width += 20)
             {
                 var band = HomeCarousel.Height(2400, width);
 
                 Assert.True(
-                    band <= (width / HomeCarousel.WindowAspect) + 0.5 || band <= HomeCarousel.MinHeight,
-                    $"带宽 {width} 时带高 {band}，比 16:9 还高，图的上下会留底色");
+                    band <= (width * HomeCarousel.PictureShare / HomeCarousel.WindowAspect) + 0.5
+                        || band <= HomeCarousel.MinHeight,
+                    $"带宽 {width} 时带高 {band}，比剧照缩到六成还高，图的上下会留底色");
             }
         });
 
         Test("轮播：开窗那一档的页面正好是 16:9", () =>
         {
-            // 「锁定比例大小改为 16:9，计算比例时要排除侧边栏」。**这个形状不再等于「第一屏被一张剧照铺满」** ——
-            // 右边那一栏（RailWidth）占掉一段宽之后，大图那一块只占第一屏的上面一截。它现在管三件事：带高按它从
-            // 带宽算、开窗那一档的默认宽度、两道渐变按它算留白。
+            // 「锁定比例大小改为 16:9」。这个形状说的是**整个客户区**：侧边栏 2026-09-06 删掉之后页面就是整个客户
+            // 区，大图铺满整宽（右边那一列媒体库 2026-09-08 删掉了），所以「带宽」就是页宽，一个数都不扣。它管
+            // 的是开窗那一档的默认宽度；带高从前也按它从带宽算（图铺满整条带），弄扁之后改按 PictureShare 算。
             Assert.Equal(16d / 9, HomeCarousel.WindowAspect);
             Assert.Equal("16:9", HomeCarousel.WindowAspectLabel);
 
-            // 从前这里还钉着一个 SideRail = 49（收起来的侧边栏 48 加它右边那道 1 像素的竖线），因为这个形状说的
-            // 是「客户区减掉那一条」。侧边栏 2026-09-06 删掉之后页面就是整个客户区，那个常数也跟着删了 ——
-            // **而页宽一个像素都没变**：从前是 1471 的窗口配 1422 的页面，现在是 1422 配 1422。
-
-            // 开窗那一档写出来：800 高的客户区，页面 1422 宽；减掉右栏 280 之后大图那一块是 1142 宽、642 高。
+            // 开窗那一档写出来：800 高的客户区，页面 1422 宽；剧照缩到六成（853 宽）按 16:9 是 480 高 —— 带子
+            // 占头上一截，底下 320 是第一排货架的。
             Assert.Equal(1422d, Math.Round(HomeCarousel.WindowAspect * 800));
-            Assert.Equal(280d, HomeCarousel.RailWidth(CardSize.WideWidth));
-            Assert.Equal(642d, HomeCarousel.Height(800, 1422 - 280));
-        });
-    }
-
-    private static void RegisterRail()
-    {
-        Test("轮播：右边那一栏就是一张卡加两边的留白", () =>
-        {
-            // 第一屏是并排两栏：左边大图、右边竖着排的继续观看。这一栏宽多少完全由卡宽定 —— 卡最宽 240
-            // （RailCardCap，「把继续观看缩小一些」），所以这一栏最宽 280。
-            Assert.Equal(20d, HomeCarousel.RailInset);
-            Assert.Equal(280d, HomeCarousel.RailWidth(300));
-
-            // 卡宽是 CardSize 固定的默认档：16:9 卡 300 进来，栏宽照旧是 280。
-            Assert.Equal(280d, HomeCarousel.RailWidth(CardSize.WideWidth));
-        });
-
-        Test("轮播：右边那一栏的卡最宽 240", () =>
-        {
-            // 「把继续观看缩小一些」：上限从装机那一档（300）收到 240，一张 240×135 正好是 16:9。这一栏越窄，
-            // 左边大图就越宽、跟着也越高（Height 按带宽算），所以这个数是两栏一起的那个旋钮。
-            Assert.Equal(240, HomeCarousel.RailCardCap);
-            Assert.Equal(240, HomeCarousel.RailCard(CardSize.WideWidth));
-
-            // 上限拿更大的输入也成立（「海报宽度」那行设置删掉之后，调用点固定是 300，这一条钉的是契约本身）。
-            Assert.Equal(240, HomeCarousel.RailCard(600));
-            Assert.Equal(280d, HomeCarousel.RailWidth(600));
-        });
-
-        Test("轮播：没有卡可放就没有这一栏", () =>
-        {
-            // 继续观看空着、或者在设置里被勾掉了：交回 0，大图占满整个第一屏。
-            Assert.Equal(0d, HomeCarousel.RailWidth(0));
-            Assert.Equal(0d, HomeCarousel.RailWidth(-10));
-            Assert.Equal(0, HomeCarousel.RailCard(0));
-            Assert.Equal(0, HomeCarousel.RailCard(-10));
-        });
-
-        Test("轮播：最窄的窗口上大图仍然站得下字块", () =>
-        {
-            // 这一栏不按窗口宽让位，所以「最窄的窗口上还剩多少」是它唯一的下限论证：窗口最小 900 宽
-            // （HostWindow.MinimumWidth），减掉这一栏之后，剩给大图的宽必须放得下字块最窄那一档
-            // （HomeBanner 里 Info 的 MaxWidth 下限 280 加右边距 60 —— 字块 2026-09-05 挪到了右下角，那个边距
-            // 跟着换了边，宽度这笔账一个数没变）。这一条一红，就该给这一栏加一条让位的规矩。
-            // 2026-09-06 侧边栏删掉之后这一行不再减那 49，于是余量从 560 涨到 620 —— 这条只会更宽裕。
-            const double narrowest = 900;
-            const double text = 280 + 60;
-
-            var band = narrowest - HomeCarousel.RailWidth(CardSize.WideWidth);
-
-            Assert.True(band >= text, $"最窄的窗口上大图只剩 {band}，字块要 {text}");
+            Assert.Equal(480d, HomeCarousel.Height(800, 1422));
         });
     }
 

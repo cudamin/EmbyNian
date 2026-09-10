@@ -282,6 +282,12 @@ public sealed partial class PlayerViewModel
         if (_seekPending is { } fraction)
         {
             _seekPending = null;
+
+            // Remembered as in flight: until mpv reports the target position, the bar keeps the value the
+            // hand left rather than the pre-seek position mpv keeps reporting (see SeekBarFollows).
+            _seekSent = fraction;
+            _seekSentAt = Now;
+
             _ = _playback.SetPropertyAsync("percent-pos", fraction * 100);
         }
 

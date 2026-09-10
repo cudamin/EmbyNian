@@ -112,9 +112,9 @@ internal static partial class ShellSelfCheck
     /// 自检：帧同步这一次会落在哪。两件屏上和单测都看不见的事：
     /// <list type="number">
     /// <item><b>这块屏的刷新率读得出来吗。</b> 三步 Win32（窗口 → 显示器句柄 → 设备名 → 当前显示模式）里任何一步
-    /// 失败，<see cref="MpvOutputOptions.ResolveSync"/> 收到的就是 0，「超过 120Hz 回到音频同步」那条规则于是永远
-    /// 不出手 —— 画面照旧、日志照旧、闸门照旧全绿，只有显卡占用悄悄高一倍（实测 24.7% → 50.1%）。这正是「只有真
-    /// 显示器答得出」的那一类，和上面那条摆窗口的一样。</item>
+    /// 失败，<see cref="MpvOutputOptions.ResolveSync"/> 收到的就是 0，「刷新率超过设置里那个阈值就回到音频同步」
+    /// 那条规则于是永远不出手 —— 画面照旧、日志照旧、闸门照旧全绿，只有显卡占用悄悄高一倍（实测 24.7% → 50.1%）。
+    /// 这正是「只有真显示器答得出」的那一类，和上面那条摆窗口的一样。</item>
     /// <item><b>按这块屏算出来的结论是什么。</b> 写进报告，因为它取决于自检窗口落在哪块屏上：默认带
     /// <c>--screen 1</c> 的话读的是副屏，不是他平时看片的那块。</item>
     /// </list>
@@ -138,7 +138,7 @@ internal static partial class ShellSelfCheck
         return (ok,
             (hz > 0 ? $"这块屏 {hz:0.###}Hz" : "读不出刷新率")
                 + $"；设置里插值={(settings.Video.Interpolation ? "开" : "关")}"
-                + $"、回退={(settings.Video.HighFrameRateAudioSync ? "开" : "关")}"
+                + $"、回退={(settings.Video.HighFrameRateAudioSync ? "开" : "关")}、阈值 {settings.Video.HighRefreshRateLimitHz}Hz"
                 + $"；算出来 video-sync={live}、插值{(interpolation ? "生效" : "不生效")}"
                 + (standDown is null ? "" : $"；{standDown}"));
     }

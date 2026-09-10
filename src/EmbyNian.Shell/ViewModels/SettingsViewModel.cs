@@ -102,9 +102,12 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingSubtitlePreviewRow? _subtitlePreview;
     private Func<Task>? _pushSubtitleStyle;
 
+    /// <summary>快捷键卡里那 19 行可重绑的行，握着好在重绑/清空之后逐行刷新显示（同 <see cref="HomeRows"/> 那样握着一行的理由）。</summary>
+    private readonly List<SettingShortcutRow> _shortcutRows = [];
+
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
     private static readonly string[] CardCategories =
-        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "关于"];
+        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "快捷键", "关于"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -240,6 +243,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         Sections.Add(ShaderCard());
         Sections.Add(HomeCard());
         Sections.Add(InterfaceCard());
+        Sections.Add(ShortcutsCard());
         Sections.Add(AboutCard());
 
         ShowCategory(SelectedCategory);
@@ -510,11 +514,12 @@ public sealed partial class SettingsViewModel : PageViewModel
     {
         var video = Settings.Video;
 
-        // 视频同步 states the value in force, not the value stored, so it has two writers to follow: 启用插值
-        // two rows below, and its own drop-down. Both restate it — the row is held in a local so each can.
-        // The two rows are five lines apart on screen and used to contradict each other: this one said
-        // 「不指定（等同音频同步）」 while display-resample was what mpv got. Missing the second writer put the
-        // same lie back the other way round: pick 显示同步 here and the line underneath still said 音频同步.
+        // 视频同步 states the value in force, not the value stored, so it has writers to follow: its own
+        // drop-down, 启用插值 a few rows below, and 插值关闭阈值 (whose number appears in the note's sentence
+        // about the fallback rule). All of them restate it — the row is held in a local so each can.
+        // Those rows used to contradict each other: this one said 「不指定（等同音频同步）」 while
+        // display-resample was what mpv got. Missing a writer put the same lie back the other way round: pick
+        // 显示同步 here and the line underneath still said 音频同步.
         SettingChoiceRow? sync = null;
         sync = Mpv("视频同步", MpvOutputOptions.VideoSync, () => video.VideoSync, value => video.VideoSync = value,
             "video-sync", SyncNote(video), () => sync!.Restate(SyncNote(video)));
@@ -540,7 +545,7 @@ public sealed partial class SettingsViewModel : PageViewModel
             Toggle("启用插值",
                 "补偿刷新率不匹配造成的抖动：沿时间轴混合相邻两帧，不是电视上那种运动补偿。它必须靠显示同步才生效，"
                 + "而开销出在显示同步那一头 —— 那时 mpv 最后一趟渲染改成按刷新率跑，这台机器上实测 24.7% 变 50.1% 显卡；"
-                + "高刷屏上它能补的抖动本来也很小，所以超过 120Hz 时下面那一项会把两者一起收回",
+                + "高刷屏上它能补的抖动本来也很小，所以屏幕刷新率超过下面那行阈值时，回退那一项会把两者一起收回",
                 () => video.Interpolation,
                 value =>
                 {
@@ -551,18 +556,32 @@ public sealed partial class SettingsViewModel : PageViewModel
                     sync!.Restate(SyncNote(video));
                 },
                 "interpolation、tscale"),
+            Mpv("插值算法", MpvOutputOptions.InterpolationKernels, () => video.Tscale, value => video.Tscale = value,
+                "tscale", "只在「启用插值」开着时随它一起生效。过采样最省、运动最干净 —— 装机就是它；"
+                    + "往下几档是真正的重建滤波，运动更顺，代价是快速移动的锐利边缘周围可能出现轻微振铃"),
             Toggle("高帧率或高刷新率时使用音频同步",
-                "片源超过约 47fps，或播放窗口所在屏幕超过 120Hz，就回到音频同步、插值不生效：这两种情况下显示同步"
+                "片源超过约 47fps，或屏幕刷新率超过下一行填的数，就回到音频同步、插值不生效：这两种情况下显示同步"
                 + "只剩算力开销。关掉它可以强行让显示同步在任何屏幕上生效",
                 () => video.HighFrameRateAudioSync,
                 value =>
                 {
                     video.HighFrameRateAudioSync = value;
 
-                    // 第三个写手：它改不了「此刻生效」那半句（这一页上没有片子、也不知道是哪块屏），可它决定
+                    // 又一个写手：它改不了「此刻生效」那半句（这一页上没有片子、也不知道是哪块屏），可它决定
                     // 那一行末尾还讲不讲那两条例外。
                     sync!.Restate(SyncNote(video));
                 },
+                "video-sync、interpolation"),
+            Number("插值关闭阈值（Hz）",
+                VideoSettings.MinimumHighRefreshRateLimitHz,
+                VideoSettings.MaximumHighRefreshRateLimitHz,
+                () => video.HighRefreshRateLimitHz,
+                value => video.HighRefreshRateLimitHz = (int)value,
+                "播放窗口所在屏幕的刷新率大于这个数时，把插值连同显示同步一起收回（回到音频同步）—— 那个刷新率下"
+                    + "显示同步按刷新率重跑最后一趟渲染，实测 144Hz 上显卡占用翻倍、能补的抖动却几乎为零。"
+                    + $"装机 {VideoSettings.DefaultHighRefreshRateLimitHz}；只在上面那个回退开关开着时生效，"
+                    + "想彻底关掉它就填到最小",
+                () => sync!.Restate(SyncNote(video)),
                 "video-sync、interpolation"),
             Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = (int)value,
                 "播网络片源时先往前攒多少数据，卡顿就调大；0 是 mpv 自己的默认", "demuxer-max-bytes"),
@@ -606,7 +625,7 @@ public sealed partial class SettingsViewModel : PageViewModel
             : "";
 
         var exception = video.HighFrameRateAudioSync
-            ? "片源超过约 47fps、或屏幕超过 120Hz 时一律回到音频同步"
+            ? $"片源超过约 47fps、或屏幕刷新率超过 {video.HighRefreshRateLimitHz}Hz（「插值关闭阈值」那一行）时一律回到音频同步"
             : "";
 
         return string.Join("；", new[] { live, because, exception }.Where(part => part.Length > 0));
@@ -752,9 +771,8 @@ public sealed partial class SettingsViewModel : PageViewModel
 
         HomeRows = new SettingHomeLayoutRow(
             "主页上放哪几排",
-            "按住一行往上下拖、或者按右边那两颗箭头决定次序，取消勾选就不显示。继续观看不排在这几排里 —— 它是主页"
-                + "第一屏右边那一栏竖着的一列，勾掉它那一栏就没有、大图铺满整个第一屏，但拖它的位置不会有变化。"
-                + "媒体库那几排装的是那个库最近添加的内容。",
+            "按住一行往上下拖、或者按右边那两颗箭头决定次序，取消勾选就不显示。媒体库那一排是进各媒体库的入口"
+                + "（点上面的卡片打开那个库），那几排装的是每个库最近添加的内容。",
             plan.Select(row => new HomeRowChoice(row.Key, row.Title, row.Visible)),
             rows =>
             {
@@ -773,13 +791,12 @@ public sealed partial class SettingsViewModel : PageViewModel
             + "媒体库自己那一排。",
         [
             // 「在设置中新增关闭轮播图的功能」（用户的话，2026-09-05）。摆在拖拽表上面，因为它管的是整个第一屏：
-            // 关掉之后顶上那张大图和它右边那一栏继续观看一起没有，那张表里的每一排都变成横着的一排。
+            // 关掉之后顶上那张大图整个没有，那张表里的每一排照旧横着排在各自的位置上。
             // 改完当场喊一声（ShellPrefs），主页那一头照新的重排 —— 和那张表走同一条路。
             Toggle("显示主页轮播大图",
-                "主页最上面那张会自己走的大图。开着的时候第一屏是并排两栏：左边大图、右边一列继续观看；"
-                    + "关掉之后这两块一起没有，继续观看回到下面横着排的那一叠里、按下面那张表上的位置站着，"
-                    + "整页就是一叠普通的货架。大图上放哪几个条目不用选：有继续观看就用继续观看，不够时由最近"
-                    + "添加补齐。",
+                "主页最上面那张会自己走的大图。开着的时候它铺满第一屏（在 16:9 的窗口上正好一屏高，下面的几排"
+                    + "滚一下才露出来）；关掉之后这张图整个没有，整页就是一叠横着排的普通货架。大图上放哪几个"
+                    + "条目不用选：有继续观看就用继续观看，不够时由最近添加补齐。",
                 () => ui.ShowHomeBanner,
                 value =>
                 {
@@ -882,9 +899,9 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             // 「锁定窗口比例大小」原来就在这里，2026-09-05 按用户的话整条删掉了（「删除设置中锁定比例的功能」）
             // —— 浏览时的窗口从此随便拉，放片子时形状照旧跟着画面走。紧跟着那一行是「默认收起侧边栏」，
-            // 2026-09-06 跟着侧边栏本身一起删掉了（「删掉侧边栏」）：媒体库现在从窗口顶上那条标签栏进，没有栏
-            // 可收。那一行原来还负责「改完当场生效」这条线（ShellPrefs），而那条线还在 —— 图片缓存上限和主页
-            // 版面照旧走它。
+            // 2026-09-06 跟着侧边栏本身一起删掉了（「删掉侧边栏」）：媒体库后来从主页那一排卡片进，没有栏可收。
+            // 那一行原来还负责「改完当场生效」这条线（ShellPrefs），而那条线还在 —— 图片缓存上限和主页版面
+            // 照旧走它。
 
             // Both ranges match what SettingsMigration.Normalize clamps these to. They have to: a box narrower
             // than its setting shows a clamped number the file does not contain and writes it back on the next
@@ -911,6 +928,92 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             Toggle("显示观看状态标记", "在海报角上显示已看和收藏状态", () => ui.ShowWatchedIndicators, value => ui.ShowWatchedIndicators = value)
         ]);
+    }
+
+    /// <summary>
+    /// 快捷键：播放器那些键盘动作，做成参考图那样一行一个、右边一个可重绑的方框（「参考上图在设置中新增快捷键
+    /// 功能」，2026-09-08）。19 行可改的走 <see cref="SettingShortcutRow"/>；Esc、Y 两个固定键以只读行显示，让人
+    /// 看到全貌（为什么固定见 <see cref="ShortcutCatalog.ReservedKeys"/>）；末一行一颗「恢复默认快捷键」，只清
+    /// 快捷键、不动别的。判断全在 Core 的 <see cref="ShortcutCatalog"/>；这里只把动作翻成行、把方框敲定的键交回去。
+    /// </summary>
+    private SettingSection ShortcutsCard()
+    {
+        // 每次建卡都重来一份：ReloadAsync 会被再调（恢复默认那一趟就重建整页），握着的这份行要跟着换新。
+        _shortcutRows.Clear();
+
+        var effective = ShortcutCatalog.Resolve(Settings.Shortcuts.Bindings);
+        var rows = new List<SettingRow>();
+
+        foreach (var action in ShortcutCatalog.Actions)
+        {
+            var id = action.Id;
+            var row = new SettingShortcutRow(action.Label, id, ShortcutCatalog.Format(effective[id]),
+                token => ApplyShortcut(id, token));
+            _shortcutRows.Add(row);
+            rows.Add(row);
+        }
+
+        // 两个固定键，只读显示，让人看到全貌（为什么固定见 ShortcutCatalog.ReservedKeys）。
+        rows.Add(Fact("退出全屏 / 停止", "固定，不可更改", "Esc"));
+        rows.Add(Fact("确认跳过片头 / 片尾", "固定，不可更改；只在出现跳过提示时有效", "Y"));
+
+        // 只清快捷键、不动别的（页头那颗「恢复默认」清的是全部设置，作用域比这颗宽）。
+        rows.Add(Fact("恢复默认快捷键", "把上面这些快捷键改回装机时的默认，其他设置不受影响",
+            $"{ShortcutCatalog.Actions.Count} 个可改快捷键", "恢复默认", ClearAllShortcuts));
+
+        return new SettingSection("快捷键", "快捷键",
+            "播放时的键盘快捷键。点一下右边的方框，再按你想要的组合键（可带 Ctrl / Alt / Shift）就改绑了，× 清除。"
+            + "这些只在播放窗口里生效。", rows);
+    }
+
+    /// <summary>
+    /// 一次重绑（方框敲定了一个键 token，空串=按了 ×）。判断在 <see cref="ShortcutCatalog"/>：冲突就拦下、提示，
+    /// 一个绑定都不改（那一行方框还显示着原来的，因为 <c>ComboText</c> 没动）；否则写回、落盘、逐行刷新显示。
+    /// 写回一份新字典即可，播放器那头每次按键现读同一个单例设置，所以已经开着的播放器也当场跟上。
+    /// </summary>
+    private void ApplyShortcut(string id, string token)
+    {
+        var bindings = Settings.Shortcuts.Bindings;
+
+        if (token.Length == 0)
+        {
+            Settings.Shortcuts.Bindings = new Dictionary<string, string>(ShortcutCatalog.Clear(bindings, id), StringComparer.Ordinal);
+        }
+        else
+        {
+            if (!ShortcutCatalog.TryParse(token, out var stroke)) return;
+
+            var result = ShortcutCatalog.Rebind(bindings, id, stroke);
+            if (result.Conflict is { } occupant)
+            {
+                Notify("快捷键冲突",
+                    $"「{ShortcutCatalog.Format(stroke)}」已经是「{ShortcutCatalog.Label(occupant)}」的快捷键了。先把那边清掉，再绑到这里。",
+                    InfoBarSeverity.Warning);
+                return;
+            }
+
+            Settings.Shortcuts.Bindings = new Dictionary<string, string>(result.Bindings, StringComparer.Ordinal);
+        }
+
+        Save();
+        RefreshShortcutRows();
+    }
+
+    /// <summary>「恢复默认快捷键」：改动全清掉（Bindings 变回空＝全默认），落盘、刷新、说一声。</summary>
+    private void ClearAllShortcuts()
+    {
+        Settings.Shortcuts.Bindings = new Dictionary<string, string>(StringComparer.Ordinal);
+        Save();
+        RefreshShortcutRows();
+        Notify(null, "播放器快捷键已恢复默认。其他设置没有动。", InfoBarSeverity.Success);
+    }
+
+    /// <summary>照当前绑定把每一行的显示串重算一遍（重绑、清一个、清全部之后都走它）。</summary>
+    private void RefreshShortcutRows()
+    {
+        var effective = ShortcutCatalog.Resolve(Settings.Shortcuts.Bindings);
+        foreach (var row in _shortcutRows)
+            row.ComboText = ShortcutCatalog.Format(effective[row.Id]);
     }
 
     /// <summary>

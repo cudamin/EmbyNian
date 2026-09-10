@@ -1,17 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The home page: 第一屏是并排两栏 —— 左边一张大图轮播、右边一栏竖着排的继续观看，底下横着排 媒体库、接下来看、
-  最近添加，加上每个媒体库自己那一排。
+  The home page: 第一屏顶上是一条铺满宽度的大图轮播（比一屏矮），底下横着排 媒体库、接下来看、最近添加，加上每个媒体库自己那一排。
 
-  第一屏是这一页的第一句话。大图铺满左栏（上到窗口的顶边，标题栏和页眉都浮在图上；左到侧边栏；右到继续观看那一
-  栏），继续观看占右边一条（HomeCarousel.RailWidth，一张卡加两边留白），两栏一样高、合起来正好一屏。原来大图是
-  页面里的一格：四边留着 28 的页边距、上面还压着一块页眉，于是整页最大的一块画面被一圈黑边框着，看起来像贴在纸上
-  的一张照片，而不是这一页本身；继续观看则是压在图下半截上的一叠玻璃，2026-09-05 按「参考上图修改轮播页面」挪成
-  了右栏。
+  第一屏是这一页的第一句话。那条带铺满整个页宽（上到窗口的顶边，标题栏和页眉都浮在图上），带高照带宽算
+  （HomeCarousel.Height —— 剧照缩到带宽的六成靠右站，2026-09-09「把主页的轮播图移动到右边／弄扁一些」），
+  在 16:9 的窗口上占头上一截（开窗那一档 480），第一排货架就露在第一屏里 —— 从前带宽整个按 16:9 算、正好一
+  屏高，那一版要滚一下才露出来。再往前（2026-09-05 到 2026-09-08）大图是页面里的一格：四边留着页边距、上面
+  还压着一块页眉，看起来像贴在纸上的一张照片；再往前是左边大图、右边一列媒体库并排，2026-09-08 按「移除轮播
+  图右边的媒体库」把右边那一列删了、大图改回铺满整宽。
 
-  设置 → 主页 → 「显示主页轮播大图」关掉之后这第一屏整个没有：大图和右栏一起收起，继续观看回到下面横着排的那一
-  叠里、按版面表上的位置站着（HomeViewModel 的 _banner），整页就是一叠普通的货架。那一档顶上不再顶掉标题栏那 32
-  像素，见下面 Scroller 那一段。
+  设置 → 主页 → 「显示主页轮播大图」关掉之后大图整个没有（HomeViewModel 的 _banner），整页就是一叠横着排的普通
+  货架，媒体库也在其中。那一档顶上不再顶掉标题栏那 32 像素，见下面 Scroller 那一段。
 
   Rows that scroll sideways, which is the shape every Emby client uses and the one thing the WinForms
   shell never managed — its home page was the same square grid as a library, so a half-watched episode
@@ -31,44 +30,11 @@
     Background="{ThemeResource LayerFillColorDefaultBrush}">
 
     <Page.Resources>
-        <!--
-          右栏那一列继续观看的翻页条（「把继续观看改成点击翻页的」，2026-09-05）。三支画刷加一个样式，抄的是
-          ShelfStrip 里横带那一套，浓度一档不改 —— 屏上这两处是同一个动作，深浅不该差一档。
-
-          **这是这套翻页箭头的第三份局部副本**（ShelfStrip.xaml 一份、HomeBanner.xaml 一份浅一档的、这里一份），
-          有意为之：这几支画刷压在卡片的剧照上、跟主题无关，而 Palette.xaml 里加一个键要在三本词典里各加一遍
-          （自检那一关「调色板浅色主题完整性」盯着这件事）。要并成一份就得同时改这三处控件、连详情页那几条带
-          一起验，那是另一件活。
-
-          和横带唯一的形状差别：横带的箭头是「沿滚动方向 38 宽、横跨卡片图片的高」，这一列滚的是竖向，所以翻
-          过来 —— 38 高、横跨这一栏的宽。圆角只圆里侧那两个角（贴边那一侧留方），同横带。
-        -->
-        <SolidColorBrush x:Key="EgRailPageRestBrush" Color="#B00C0E11" />
-        <SolidColorBrush x:Key="EgRailPageHoverBrush" Color="#DE0C0E11" />
-        <SolidColorBrush x:Key="EgRailPagePressBrush" Color="#F20C0E11" />
-
-        <Style x:Key="EgRailPageButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
-            <Setter Property="Height" Value="{StaticResource EgActionHeight}" />
-            <Setter Property="MinWidth" Value="0" />
-            <Setter Property="HorizontalAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Background" Value="{StaticResource EgRailPageRestBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <!-- 默认收起：显不显示由指针位置和还能不能翻决定，见 HomePage.SyncRailArrows。 -->
-            <Setter Property="Visibility" Value="Collapsed" />
-        </Style>
-
         <!-- Declared before the shelf template that reaches for it: a StaticResource inside a
              DataTemplate is resolved as the dictionary is parsed, so a forward reference fails. -->
         <DataTemplate x:Key="CardTemplate" x:DataType="local:CardItem">
             <!-- A Button rather than a bare card: click, keyboard activation, focus visual and hover
-                 state for free, and its own chrome removed so only the card shows.
-                 Framed 绑的是卡片自己那一位（CardItem.Framed）：主页右栏里和台上那张幻灯片对应的那一张整圈换
-                 强调色（「轮播图滚动到对应媒体时右边要自动框出对应媒体」）。绑在模板上而不是由页面挨个去设，
-                 是因为容器会回收复用 —— 页面去设的话，回收那一下会有一张不该框的卡带着框回来。 -->
+                 state for free, and its own chrome removed so only the card shows. -->
             <Button
                 Background="Transparent"
                 BorderThickness="0"
@@ -79,7 +45,6 @@
                     ActionRequested="OnCardActionRequested"
                     Card="{x:Bind}"
                     CardWidth="{x:Bind CardWidth}"
-                    Framed="{x:Bind Framed, Mode=OneWay}"
                     PosterHeight="{x:Bind PosterHeight}" />
             </Button>
         </DataTemplate>
@@ -87,9 +52,9 @@
         <DataTemplate x:Key="ShelfTemplate" x:DataType="vm:CardShelf">
             <StackPanel Spacing="12">
                 <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。
-                     OnScrim 绑着这一排是不是站在一张剧照上：横着的这几排都在第一屏外面、站在页面自己的纸上，所以
-                     一律是关的（那一档由 CardShelf.OnScrim 定，见 HomeViewModel.BuildShelves）。开着的只有右栏
-                     那一列继续观看，它站在和大图同一支深底上。 -->
+                     OnScrim 绑着这一排是不是站在一张剧照上：这一页的几排都在第一屏外面、站在页面自己的纸上，
+                     所以一律是关的（那一档由 CardShelf.OnScrim 定，见 HomeViewModel.BuildShelves）。从前开着的
+                     只有右栏那一列媒体库 —— 2026-09-08 那一栏删掉之后就没有开着的了，绑定留着。 -->
                 <local:ShelfHead
                     Note="{x:Bind Note, Mode=OneWay}"
                     OnScrim="{x:Bind OnScrim, Mode=OneWay}"
@@ -114,10 +79,11 @@
       整页就是一个滚动条，第一块是那张铺满的大图。
 
       顶上那个负边距由代码给（HomePage.SyncBleed），标记里一个数都不写：**只有真有一张大图的时候**才把
-      ContentHost 留给外壳那两行的 80 像素顶回去（见 ShellPage.xaml）——「红框框出来的地方全填充上海报」，那块红框
-      是从窗口的顶边量起的，图上留一条 80 高的实心条就等于留了一道黑边。而设置里关掉轮播、或者服务器上一个带宽图的
-      条目都没有的时候顶上那一块不是图，是页面自己的底色，那时顶回去只会把「HOME / 主页」那块牌子塞进标题栏和标签栏
-      底下，所以那一档照别的页面来、从第 80 行起画。整套里只有这一页会顶这 80 像素。
+      ContentHost 留给外壳那一行的 32 像素顶回去（见 ShellPage.xaml）——「红框框出来的地方全填充上海报」，那块红框
+      是从窗口的顶边量起的，图上留一条 32 高的实心条就等于留了一道黑边。而设置里关掉轮播、或者服务器上一个带宽图的
+      条目都没有的时候顶上那一块不是图，是页面自己的底色，那时顶回去只会把「HOME / 主页」那块牌子塞进标题栏
+      底下，所以那一档照别的页面来、从第 32 行起画。整套里只有这一页会顶这 32 像素。（2026-09-09 起外壳只有
+      标题栏这一行 —— 第 1 行删掉之前这里顶的是 80。）
 
       进度条和提示条也在滚动条里面，跟着内容一起滚 —— 它们原来在滚动条外面，占着页面顶上的两行；页眉现在
       浮在图上，那两行没有别的地方可去。两条都自带 12 的下边距，而不是靠 StackPanel.Spacing：收起来的时候
@@ -126,184 +92,41 @@
     <ScrollView x:Name="Scroller" VerticalScrollBarVisibility="Auto">
         <StackPanel>
             <!--
-              第一屏：并排两栏 —— 左边那条大图轮播，右边一栏竖着排的继续观看（「参考上图修改轮播页面」那张图上
-              圈的就是这两块）。两栏一样高，合起来正好一屏（HomeCarousel.Height），底下横着的那几排从第一屏外面
-              开始。继续观看从此不再压在图上，所以这一页没有那块玻璃了，也没有那个负的上边距。
-
-              右栏的宽和高都由代码给（HomePage.SyncRail），不是写在这儿：宽是 HomeCarousel.RailWidth 按卡宽算的
-              （一张卡加两边留白），高跟着大图量出来的高走 —— 那一栏里是竖着一列卡片，不给高度这一格就会长到
-              十二张卡那么高，把整个第一屏顶出窗口去。
+              第一屏：一条铺满宽度的大图轮播（「移除轮播图右边的媒体库」）。大图从窗口的顶边就开始，页眉浮在
+              图上；底下横着排的那几排从大图的下沿之后开始 —— 带子 2026-09-09 弄扁之后占头上一截，第一排货架
+              一般就露在第一屏里。媒体库不再是右边那一列，跟别的内容一样是下面横着排的一排，点它的卡进库
+              （顶部标签栏删掉之后，这是进各媒体库的入口）。
             -->
             <Grid x:Name="Hero">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
                 <!-- VerticalAlignment 必须是 Top，不是默认的 Stretch：带高由带子自己定（照带宽按 16:9 算），而
                      Stretch 会把这个 UserControl 拉到整格那么高，于是它的 ActualHeight 报的是「格子多高」而不是
-                     「带子多高」—— 右栏又跟着这个数走（SyncRail），两边就在旧的那个高度上互相扶着不动了。
-                     这一脚踩过一次：屏上是 735×792 的一块，而那个宽度该配 413 高。 -->
+                     「带子多高」。 -->
                 <local:HomeBanner
                     x:Name="Banner"
                     OpenRequested="OnBannerOpenRequested"
                     PlayRequested="OnBannerPlayRequested"
-                    SizeChanged="OnBannerResized"
-                    SlideChanged="OnBannerSlideChanged"
                     Slides="{x:Bind ViewModel.Slides, Mode=OneWay}"
                     VerticalAlignment="Top" />
 
-                <!-- 顶上 92 = 外壳那两行 80（标题栏 32 + 标签栏 48，见 HomePage.ChromeHeight）加一口气：眉字
-                     不该贴着窗口的上沿，也不该压在那四颗按钮和标签栏上。
-                     左右 28 和底下的卡片带同一条竖线，所以「HOME / 主页」和第一排卡片左对齐 —— 而标签栏第一格
-                     的字也落在 28 上（见 ShellPage.xaml 那段），三样对齐在同一条竖线上。 -->
+                <!-- 顶上 44 = 外壳那一行 32（标题栏，见 HomePage.ChromeHeight）加一口气：眉字
+                     不该贴着窗口的上沿，也不该压在顶上那一排按钮上。
+                     左右 24 和底下的卡片、和标题栏第一颗按钮同一条竖线，所以「HOME / 主页」、顶栏第一颗图标和第一
+                     排卡片左对齐在同一条竖线上（见 ShellPage.xaml 那段）。 -->
                 <local:PageSlate
                     x:Name="Slate"
                 x:Uid="HomePage_Slate"
                     Eyebrow="HOME"
-                    Margin="24,92,24,0"
+                    Margin="24,44,24,0"
                     Note="{x:Bind ViewModel.Subheading, Mode=OneWay}"
                     OnScrim="{x:Bind ViewModel.HeroFilled, Mode=OneWay}"
                     VerticalAlignment="Top" />
-
-                <!--
-                  右栏：继续观看，一列 16:9 的剧照卡。底色和大图那条带是同一支画刷（EgBannerBaseBrush，在
-                  Theme/Palette.xaml 里）—— 两栏并排，差一档就是中间一道竖着的接缝；也正因为这一栏站在那支深底
-                  上，牌子和卡片底下那两行字要走压在图上那套不随主题走的浅墨（OnScrim），否则晴昼那套浅色主题的
-                  近黑字会消失在深底里。
-
-                  顶上让开 105，而左边那块牌子让开的是 92：两块牌子的**基线**对齐，不是两块的上沿对齐。牌子上那行
-                  页面标题是 34 号，这一块的标题是 20 号，两行字的上沿摆平了、基线就差 13 —— 屏上就是「继续观看」
-                  比「主页」高出一截、右端两个读数一高一低错开十来个像素（2026-09-05 界面复查量的：那时两个数是
-                  57 和 44）。所以这一栏比左边多让 13，让这两行字坐在同一条基线上，右端那个「2 项」也跟着落到那条
-                  线上。**代价**：这一栏能装卡片的高度少了 13，极窄的窗口上完整露出来的卡可能少一张，自检那一行会
-                  把这个数报出来。系统那三颗窗口按钮画在这一栏的右上角，外壳那 80 本来就是为它们和标签栏让的，
-                  多让 13 只是更宽裕。
-
-                  这一列会比第一屏高（继续观看一次要 12 项，而这里只放得下三张卡），所以它自己能滚。**滚动条
-                  藏起来、改成点击翻页**（「把继续观看改成点击翻页的」，2026-09-05）：指针进到这一栏时上下两头
-                  浮出一条翻页条，一次翻整整一屏卡片 —— 和横着那几排（ShelfStrip）同一个做法，翻多远、翻到哪、
-                  哪一头该露出来也是同一份算术（Core 的 CardStrip，单测钉着）。滚轮照旧滚得动这一列，那是
-                  ScrollView 自带的、没人拿掉；改掉的是「要看后面几张就得去拖那条几像素宽的滚动条」这件事。
-
-                  Background 不能是 null，指针事件才命中得到（翻页条是悬停才出现的）—— 这一栏本来就有底色，
-                  所以这件事已经成立，别把那支画刷挪走。
-                -->
-                <Grid
-                    x:Name="Rail"
-                    Grid.Column="1"
-                    Background="{StaticResource EgBannerBaseBrush}"
-                    Padding="20,105,20,0"
-                    PointerEntered="OnRailPointerEntered"
-                    PointerMoved="OnRailPointerEntered"
-                    PointerExited="OnRailPointerExited"
-                    Visibility="{x:Bind ViewModel.RailVisibility, Mode=OneWay}">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <local:ShelfHead
-                        x:Name="RailHead"
-                        Note="{x:Bind ViewModel.Rail.Note, Mode=OneWay}"
-                        OnScrim="True"
-                        Title="{x:Bind ViewModel.Rail.Title, Mode=OneWay}" />
-
-                    <ScrollView
-                        x:Name="RailScroller"
-                        Grid.Row="1"
-                        ContentOrientation="Vertical"
-                        Margin="0,12,0,0"
-                        SizeChanged="OnRailResized"
-                        VerticalScrollBarVisibility="Hidden"
-                        ViewChanged="OnRailViewChanged">
-                        <ItemsRepeater
-                            x:Name="RailRepeater"
-                            ElementPrepared="OnRailElementPrepared"
-                            ItemTemplate="{StaticResource CardTemplate}"
-                            ItemsSource="{x:Bind ViewModel.Rail.Cards, Mode=OneWay}"
-                            SizeChanged="OnRailResized">
-                            <ItemsRepeater.Layout>
-                                <StackLayout Orientation="Vertical" Spacing="16" />
-                            </ItemsRepeater.Layout>
-                        </ItemsRepeater>
-                    </ScrollView>
-
-                    <!-- 这一栏的下沿：一张卡被切在**字**上（下面那张的片名只剩半行 —— 2026-09-05 界面复查拍到的
-                         「已经不怕了哦」），而切在图上本来没事 —— 露出半张图正是「底下还有」的招牌，露出半行字
-                         只像坏了。所以下沿压一道 32 高的渐隐，从透明走到这一栏自己的底色（同 EgBannerBaseBrush
-                         的色值，写死 ARGB 的理由同轮播那四条边：高对比度那本词典里只有画刷没有颜色键，渐变的
-                         停点上写颜色键会在运行时抛）。
-                         只在真还能往下翻的时候画（见 HomePage.SyncRailArrows）：停在末尾时最后一张卡是完整的，
-                         那时再压一道就是白白把它第二行字压暗。摆在滚动视图之后、两条翻页条之前，所以它压得住卡片
-                         而压不到翻页条。不接指针 —— 底下那半张卡照旧点得开。 -->
-                    <Border
-                        x:Name="RailFade"
-                        Grid.Row="1"
-                        Height="32"
-                        IsHitTestVisible="False"
-                        VerticalAlignment="Bottom"
-                        Visibility="Collapsed">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
-                                <GradientStop Offset="0" Color="#000C0E11" />
-                                <GradientStop Offset="1" Color="#FF0C0E11" />
-                            </LinearGradientBrush>
-                        </Border.Background>
-                    </Border>
-
-                    <!-- 两条翻页条压在这一列的上下两头，和那个 ScrollView 同一格。IsTabStop=False 同横带：
-                         收起来的按钮接不了焦点，用键盘的人靠方向键在卡片之间走、滚动跟着焦点走。
-                         上面那一条让开 ScrollView 自己那 10 的上边距，下面那一条贴着这一栏的下沿（这一栏的
-                         Padding 底下是 0，也就是第一屏的下沿）。 -->
-                    <Button
-                        x:Name="RailPrev"
-                x:Uid="HomePage_RailPrev"
-                        Grid.Row="1"
-                        Click="OnRailPrevClicked"
-                        CornerRadius="0,0,8,8"
-                        IsTabStop="False"
-                        Margin="0,12,0,0"
-                        Style="{StaticResource EgRailPageButtonStyle}"
-                        VerticalAlignment="Top">
-                        <Button.Resources>
-                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgRailPageHoverBrush" />
-                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgRailPagePressBrush" />
-                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
-                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimDimBrush" />
-                            <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="EgRailPageHoverBrush" />
-                            <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="EgRailPagePressBrush" />
-                        </Button.Resources>
-                        <FontIcon FontSize="16" Glyph="&#xE70E;" />
-                    </Button>
-
-                    <Button
-                        x:Name="RailNext"
-                x:Uid="HomePage_RailNext"
-                        Grid.Row="1"
-                        Click="OnRailNextClicked"
-                        CornerRadius="8,8,0,0"
-                        IsTabStop="False"
-                        Style="{StaticResource EgRailPageButtonStyle}"
-                        VerticalAlignment="Bottom">
-                        <Button.Resources>
-                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="EgRailPageHoverBrush" />
-                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="EgRailPagePressBrush" />
-                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
-                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimDimBrush" />
-                            <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="EgRailPageHoverBrush" />
-                            <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="EgRailPagePressBrush" />
-                        </Button.Resources>
-                        <FontIcon FontSize="16" Glyph="&#xE70D;" />
-                    </Button>
-                </Grid>
             </Grid>
 
-            <!-- 横着的那几排，从第一屏外面开始 —— 第一屏整个归上面那两栏。这一层没有板底也没有负的上边距：
-                 继续观看 2026-09-05 挪去右栏之后，再没有哪一排压在图上，所以「提起来一叠玻璃」那一套连
+            <!-- 横着的那几排，从大图的下沿之后开始 —— 第一屏整个归上面那张大图。这一层没有板底也没有负的上边距：
+                 媒体库 2026-09-08 从右栏改回横排、再没有哪一排压在图上，所以「提起来一叠玻璃」那一套连
                  HomeCarousel.ShelfLift 一起删了。
 
-                 左右那 28 走 Padding：和大图上那块牌子对齐。 -->
+                 左右那 24 走 Padding：和大图上那块牌子对齐。 -->
             <Grid x:Name="Overlay" Background="Transparent" Padding="24,16,24,24">
                 <StackPanel>
                     <ProgressBar

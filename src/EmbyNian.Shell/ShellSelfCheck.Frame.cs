@@ -1,3 +1,4 @@
+using System.Linq;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Views;
 using EmbyNian.Shell.Windowing;
@@ -172,10 +173,14 @@ internal static partial class ShellSelfCheck
     }
 
     /// <summary>
-    /// 标题栏上那一排按键：外壳把它们摆成什么样，窗口在那块地方答什么。两件事一起问才算数 —— 那一排必须是
-    /// 客户区（不然指针压下去变成拖窗口，按钮永远收不到点击），而同一条带子上这一排以外的地方必须还是标题栏，
-    /// 否则挖洞挖成了把整条拖动区挖掉。窗口自己报的洞还要和量出来的那个矩形对得上：洞开歪了在屏幕上完全看不
-    /// 出来，直到有人去点按键。
+    /// 标题栏上那两块按键：外壳把它们摆成什么样，窗口在那两块地方答什么。两件事一起问才算数 —— 按键画的地方
+    /// 必须是客户区（不然指针压下去变成拖窗口，按钮永远收不到点击），而同一条带子上两块以外的地方必须还是
+    /// 标题栏，否则挖洞挖成了把整条拖动区挖掉。窗口自己报的洞还要和量出来的矩形对得上：洞开歪了在屏幕上完全
+    /// 看不出来，直到有人去点按键。
+    /// <para>
+    /// 两块：左边那一排五颗（主页／设置／搜索／后退／前进），和右端的账号按钮 —— 它 2026-09-09 从删掉的第 1 行
+    /// 挪进来，账号名一换宽度就变，所以它的洞跟着现场量，不写死。
+    /// </para>
     /// </summary>
     /// <param name="captionBefore">
     /// 播放/浏览标题栏来回切之前，标题栏左端答的是什么。带进来是因为这份自检自己就切过一轮：切回浏览以后那
@@ -194,23 +199,51 @@ internal static partial class ShellSelfCheck
         var edge = HitAt(window, Math.Max(2, probe.X / 2), 16);
         var beyond = HitAt(window, probe.X + probe.Width + 40, probe.Y + probe.Height / 2);
 
-        var hole = window.TitleBarHole;
-        var matched = hole is { } rect
-            && Math.Abs(rect.X - probe.X) <= 1
-            && Math.Abs(rect.Y - probe.Y) <= 1
-            && Math.Abs(rect.Width - probe.Width) <= 1
-            && Math.Abs(rect.Height - probe.Height) <= 1;
+        // 账号那一块：量得到就问三件事 —— 按钮中点得是客户区（不然一按就是拖窗口，这正是它挪进标题栏
+        // 要挖第二个洞的理由），窗口留的洞和量出来的矩形对得上，洞左边那一点还得是标题栏（洞开过头把
+        // 拖动区挖掉的坏法）。量不到（没登录）就只报不判。
+        var account = shell.ProbeAccountHole();
+        bool accountOk;
+        string accountNote;
+        if (account is null)
+        {
+            accountOk = true;
+            accountNote = "账号收着（未登录）";
+        }
+        else
+        {
+            var accountCentre = HitAt(window, account.Value.X + account.Value.Width / 2, account.Value.Y + account.Value.Height / 2);
+            var accountEdge = HitAt(window, account.Value.X - 12, account.Value.Y + account.Value.Height / 2);
+            accountOk = accountCentre == Native.HitClient && accountEdge == Native.HitCaption;
+            accountNote = $"账号 {account.Value.Width:0}×{account.Value.Height:0}，中点 {HitName(accountCentre)}、"
+                + $"洞左 12 像素处 {HitName(accountEdge)}";
+        }
+
+        var holes = window.TitleBarHoles;
+        var matched = holes is { } rects
+            && rects.Count >= 1
+            && Math.Abs(rects[0].X - probe.X) <= 1
+            && Math.Abs(rects[0].Y - probe.Y) <= 1
+            && Math.Abs(rects[0].Width - probe.Width) <= 1
+            && Math.Abs(rects[0].Height - probe.Height) <= 1
+            && (account is null
+                || (rects.Count >= 2
+                    && Math.Abs(rects[1].X - account.Value.X) <= 1
+                    && Math.Abs(rects[1].Y - account.Value.Y) <= 1
+                    && Math.Abs(rects[1].Width - account.Value.Width) <= 1
+                    && Math.Abs(rects[1].Height - account.Value.Height) <= 1));
 
         var ok = probe.Ok
             && centre == Native.HitClient
             && edge == Native.HitCaption
             && beyond == Native.HitCaption
             && captionBefore == Native.HitCaption
+            && accountOk
             && matched;
 
         return (ok, $"{probe.Detail}；整排中点 {HitName(centre)}、左端留白 {HitName(edge)}、"
-            + $"右侧 40 像素处 {HitName(beyond)}（切播放前 {HitName(captionBefore)}）；"
-            + $"窗口留的洞 {(hole is { } r ? $"({r.X:0},{r.Y:0}) {r.Width:0}×{r.Height:0}" : "没有")}"
+            + $"右侧 40 像素处 {HitName(beyond)}（切播放前 {HitName(captionBefore)}）；{accountNote}；"
+            + $"窗口留的洞 {(holes is { } r ? string.Join("、", r.Select(x => $"({x.X:0},{x.Y:0}) {x.Width:0}×{x.Height:0}")) : "没有")}"
             + $"，{(matched ? "和按键对得上" : "和按键对不上")}");
     }
 }

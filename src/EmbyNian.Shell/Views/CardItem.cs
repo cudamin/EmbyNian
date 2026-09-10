@@ -59,7 +59,6 @@ public sealed class CardItem : INotifyPropertyChanged
 
     private CancellationTokenSource? _loading;
     private bool _missing;
-    private bool _framed;
     private BitmapImage? _poster;
 
     /// <summary>
@@ -156,28 +155,6 @@ public sealed class CardItem : INotifyPropertyChanged
 
     /// <summary>The accent bar down the row's left edge, which is how <see cref="IsCurrentEpisode"/> reads.</summary>
     public Visibility CurrentVisibility => Show(IsCurrentEpisode);
-
-    /// <summary>
-    /// 这张卡被框起来了 —— 「轮播图滚动到对应媒体时右边要自动框出对应媒体」。主页第一屏右边那一栏（继续观看）
-    /// 里，和台上那张幻灯片对应的那一张就框着；对应关系由 <see cref="Emby.HomeCarousel.MatchIndex"/> 定，谁来翻
-    /// 这个开关由 <see cref="ViewModels.HomeViewModel.Frame"/> 说。
-    /// <para>
-    /// 和 <see cref="IsCurrentEpisode"/> 是两件事，所以是两个属性：那一个是「这张卡就是你正开着的那一页」，构造
-    /// 时就定死、画成行首那道竖条；这一个每八秒就会换一张卡，画的是整圈胶片格换成强调色（
-    /// <see cref="PosterCard"/> 的 <c>Paint</c>，和指针悬停、键盘焦点同一根线）。可写而且会发通知，正因为它会换 ——
-    /// 而卡片容器是回收复用的，绑定是唯一能让「换了一张卡」自己跟上的路。
-    /// </para>
-    /// </summary>
-    public bool Framed
-    {
-        get => _framed;
-        set
-        {
-            if (_framed == value) return;
-            _framed = value;
-            Raise();
-        }
-    }
 
     public string Subtitle => _subtitle ?? _item.CardSubtitle;
 
@@ -371,9 +348,9 @@ public sealed class CardItem : INotifyPropertyChanged
     /// </para>
     /// <para>
     /// ①不取消 —— 取消掉的那一趟没有人会再发起：重新发起只有两个入口（容器进树、容器换卡），而回收进来的这一张
-    /// 两个都不会再走一遍。触发它的是 WinUI 的回收池：<c>CardTemplate</c> 这一份 DataTemplate 同时挂在主页右栏和
-    /// 每一条横带的 <c>ItemsRepeater</c> 上，容器于是在两处之间搬家（日志里是五个「继续观看」的容器变成了
-    /// 「最近添加 · 电视节目」那一排的卡）。
+    /// 两个都不会再走一遍。触发它的是 WinUI 的回收池：<c>CardTemplate</c> 这一份 DataTemplate 同时挂在主页每一条
+    /// 横带的 <c>ItemsRepeater</c> 上，容器于是在几排之间搬家（日志里是「继续观看」的容器变成了「最近添加 · 电视
+    /// 节目」那一排的卡）。
     /// </para>
     /// <para>
     /// ②继续等着 —— **<c>Unloaded</c> 会对一个仍然在屏上的元素喊一声**。那四张卡的实测时序是：容器换到这张卡

@@ -725,6 +725,28 @@ internal static class SettingsTests
             Assert.Equal("", settings.Playback.SubtitleBackColor);
         });
 
+        // 「为当前的插值功能设置更多的可选项」＋「新增刷新率阈值输入框」（2026-09-10）两个新键的规矩：
+        // 算法只认目录里那几档（没有「不设置」，落回装机那一档）；阈值 0 是旧文件缺键，读成装机默认 120。
+        Test("规整：插值算法落回装机那档，刷新率阈值 0 读成装机默认", () =>
+        {
+            var settings = SettingsMigration.NewDefaults();
+            settings.Video.Tscale = "我随手写的";
+            settings.Video.HighRefreshRateLimitHz = 0;
+
+            SettingsMigration.Normalize(settings);
+
+            Assert.Equal("oversample", settings.Video.Tscale,
+                "插值开着时每次都点名算法，空串或认不出的值会让 mpv 和设置页各说各话，所以落回第一档");
+            Assert.Equal(120, settings.Video.HighRefreshRateLimitHz,
+                "0 是旧文件缺键 —— 这个键 2026-09-10 才有，缺键升级的人行为一个数都不许变，不能读成下限 24");
+
+            settings.Video.Tscale = "spline36";
+            settings.Video.HighRefreshRateLimitHz = 99999;
+            SettingsMigration.Normalize(settings);
+            Assert.Equal("spline36", settings.Video.Tscale, "目录里有的值原样留着");
+            Assert.Equal(1000, settings.Video.HighRefreshRateLimitHz, "越界夹回上限");
+        });
+
         Test("规整：认不出来的着色器档位 id 退回「自动」，认不出来的显卡档退回低档", () =>
         {
             var settings = SettingsMigration.NewDefaults();
@@ -1225,6 +1247,10 @@ internal static class SettingsTests
             ui.ScoreSource = ScoreSource.Critic;
             ui.HomeRows = [new HomeRowSetting { Key = "library:1", Title = "改过", Visible = false }];
 
+            // 快捷键那一组只有一张字典，MutateAll 跳过字典（见它的注释），所以上面那趟反射改不到它 ——
+            // 这里手动塞一条改动，好让下面「回默认＝清空」那一句不是空话（同 HomeRows 的手法）。
+            settings.Shortcuts.Bindings["toggle-pause"] = "F";
+
             SettingsReset.Restore(settings);
 
             AssertDefaults(settings.Mpv, new MpvSettings());
@@ -1242,6 +1268,7 @@ internal static class SettingsTests
             Assert.Equal(fresh.ImageCacheMegabytes, ui.ImageCacheMegabytes);
             Assert.Equal(fresh.ScoreSource, ui.ScoreSource);
             Assert.Equal(0, ui.HomeRows.Count, "主页版面回到空，也就是「照默认版面排」");
+            Assert.Equal(0, settings.Shortcuts.Bindings.Count, "快捷键改动清空，回到全默认");
         });
 
         RegisterResetKeeps();
@@ -1433,6 +1460,31 @@ internal static class SettingsTests
                 Assert.Equal(0, filters.Tags.Count, "没选过的分组读回来是空的，不是 null");
 
                 Assert.Equal(0, loaded.Ui.Filters.Count(entry => entry.Key == "lib-2"), "没存过的库不该凭空出现");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+
+        Test("存储：改过的快捷键绑定能读回来，显式解绑（空串）也不丢", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                var store = new SettingsStore(new AppPaths(root), Protector);
+                var settings = SettingsMigration.NewDefaults();
+
+                settings.Shortcuts.Bindings["toggle-mute"] = "Ctrl+M"; // 改过
+                settings.Shortcuts.Bindings["toggle-pin"] = "";        // 显式解绑
+
+                store.Save(settings);
+                var loaded = store.Load();
+
+                Assert.Equal("Ctrl+M", loaded.Shortcuts.Bindings["toggle-mute"]);
+                Assert.Equal("", loaded.Shortcuts.Bindings["toggle-pin"], "显式解绑要原样读回来，不能被当空丢掉");
+                Assert.Equal("toggle-mute",
+                    ShortcutCatalog.Lookup(loaded.Shortcuts.Bindings, new KeyStroke("M", true, false, false)));
             }
             finally
             {

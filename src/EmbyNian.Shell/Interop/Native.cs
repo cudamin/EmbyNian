@@ -926,6 +926,12 @@ internal static partial class Native
     /// <summary>VK_SHIFT, for the one thing a <c>KeyRoutedEventArgs</c> cannot answer.</summary>
     public const int VkShift = 0x10;
 
+    /// <summary>VK_CONTROL / VK_MENU（Alt），和 <see cref="VkShift"/> 一样是 <c>KeyRoutedEventArgs</c> 不带的东西 —— 重绑的组合键要认这两个修饰键。</summary>
+    public const int VkControl = 0x11;
+
+    /// <inheritdoc cref="VkControl"/>
+    public const int VkMenu = 0x12;
+
     [LibraryImport("user32.dll")]
     public static partial short GetKeyState(int virtualKey);
 
@@ -936,6 +942,12 @@ internal static partial class Native
     /// toggle state, which is meaningless for Shift.
     /// </summary>
     public static bool ShiftHeld => (GetKeyState(VkShift) & 0x8000) != 0;
+
+    /// <summary>Ctrl 此刻按着没有，同 <see cref="ShiftHeld"/> —— 快捷键重绑要拼出带 Ctrl 的组合键。</summary>
+    public static bool CtrlHeld => (GetKeyState(VkControl) & 0x8000) != 0;
+
+    /// <summary>Alt 此刻按着没有，同 <see cref="ShiftHeld"/>。</summary>
+    public static bool AltHeld => (GetKeyState(VkMenu) & 0x8000) != 0;
 
     [LibraryImport("user32.dll")]
     public static partial int FillRect(IntPtr deviceContext, ref NativeRect rect, IntPtr brush);

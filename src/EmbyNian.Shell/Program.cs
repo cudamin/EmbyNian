@@ -49,21 +49,6 @@ public sealed record StartupOptions
     public bool ShowMenu { get; init; }
 
     /// <summary>
-    /// Tooling only: 把主页右栏那一列继续观看的两条翻页条摆出来留着，好给它们拍一张（「把继续观看改成点击翻页
-    /// 的」，2026-09-05）。
-    /// <para>
-    /// 和 <see cref="ShowMenu"/> 同一个理由 —— 悬停才浮出来的东西等不出来。**先试过挪真指针**：
-    /// <c>SetCursorPos</c> 把它挪到那一栏上是挪成了（两趟都成），可拍出来的照片上翻页条还是没有 —— 用户的手也在
-    /// 同一只鼠标上，指针在快门开之前就又走了。所以这一路要的不是更聪明的指针把戏，是一个不依赖指针在哪儿的开关。
-    /// </para>
-    /// <para>
-    /// 单独用。它摆的是「指针在这一栏上」这个状态本身，所以真指针后来进出那一栏一次就会把它收掉 —— 拍照的时候
-    /// 别去碰鼠标。
-    /// </para>
-    /// </summary>
-    public bool ShowRail { get; init; }
-
-    /// <summary>
     /// Tooling only: 把播放器的浮层摆到屏上留着，好给它拍一张 —— 控制条、标题条、音量条一起，一个字节的视频都
     /// 不播。可以跟一个词：<c>pinned</c>（置顶那颗键按下的样子）、<c>paused</c> / <c>playing</c>（正中那颗
     /// 暂停/播放徽标，停在满亮上不让它自己淡出）。
@@ -266,7 +251,6 @@ internal static class Program
                 ?? (selfCheck ? ScreenPlacement.NotThePrimary : ScreenPlacement.WhereverWindows),
             ShowLibrary = Has(args, "--show-library"),
             ShowMenu = Has(args, "--show-menu"),
-            ShowRail = Has(args, "--show-rail"),
             ShowOsd = Has(args, "--show-osd"),
             OsdState = Text(args, "--show-osd"),
             HideCursor = Has(args, "--hide-cursor"),

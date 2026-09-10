@@ -315,9 +315,9 @@
     <SolidColorBrush x:Key="EgOnScrimBrush" Color="#FFF3F5F8" />
     <SolidColorBrush x:Key="EgOnScrimDimBrush" Color="#FFC9D0D9" />
 
-    <!-- 主页第一屏那一整块的底：左边轮播那条带（HomeBanner 的 Band，剧照整张画出来，所以四周总会露出这个底
-         色），右边继续观看那一栏（HomePage 的 Rail）。两处必须是同一支画刷 —— 它们是并排的两栏，差一档就是
-         中间一道竖着的接缝。和上面那两支同一个理由不跟主题走：那一整块上的字走的是 EgOnScrim 那套浅墨，底色
-         跟着主题变成近白的话就是白底白字（晴昼那套）。 -->
+    <!-- 主页第一屏那条大图的底（HomeBanner 的 Band）。剧照 2026-09-09 起缩到带的右边六成、按 16:9 整张画出来，
+         左边四成露的就是这个底色 —— 字块站在那一片上，剧照的左沿再压一道同色的渐融融进去（HomeBanner 标记里
+         Fade 那一段）；带宽不到 427 的那一档图改吃满带宽，底下也露一条。用它的只剩这一条带。和上面那两支同一个
+         理由不跟主题走：带上的字走的是 EgOnScrim 那套浅墨，底色跟着主题变成近白的话就是白底白字（晴昼那套）。 -->
     <SolidColorBrush x:Key="EgBannerBaseBrush" Color="#FF0C0E11" />
 </ResourceDictionary>

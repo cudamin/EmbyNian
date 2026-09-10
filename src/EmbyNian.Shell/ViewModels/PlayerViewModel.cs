@@ -51,6 +51,18 @@ public sealed partial class PlayerViewModel : ObservableObject
     private const long ScrubGraceMilliseconds = 400;
 
     /// <summary>
+    /// 一条已发给 mpv 的跳转等多久还到不了，就算「到不了那儿」：进度条放弃按住自己的值、重新跟着 mpv 走。
+    /// 5 秒盖得住 hr-seek 在最不利的文件上的耗时，也短到一条失败的跳转不至于把进度条钉死半天。
+    /// </summary>
+    private const long SeekGiveUpMilliseconds = 5000;
+
+    /// <summary>
+    /// mpv 报的位置离跳转目标多近（秒）就算「已经落定」。一帧的量级是几十毫秒，这一档宽到盖过
+    /// <c>DiffersFrom</c> 那 0.25 秒的合并粒度，窄到认不出任何一段真实的播放进度。
+    /// </summary>
+    private const double SeekLandedSeconds = 0.75;
+
+    /// <summary>
     /// How long the volume has to sit still before it is written to the settings file. The wheel raises a
     /// change per notch and the arrow keys one per press, and every save rewrites settings.json and its
     /// backup — so it is written once the hand comes off rather than on the way.
@@ -139,6 +151,15 @@ public sealed partial class PlayerViewModel : ObservableObject
 
     private long _seekTouched;
     private double? _seekPending;
+
+    /// <summary>
+    /// 上一条发给 mpv 的跳转落在哪个比例位置，null＝没有在途的跳转。mpv 在跳转落定之前会一直报
+    /// 「正在离开的那个位置」，把这个回声写回进度条就是拇指倒退那一下 —— 见 <c>SeekBarFollows</c>。
+    /// </summary>
+    private double? _seekSent;
+
+    /// <summary>那条跳转是什么时候发出去的。超时（<see cref="SeekGiveUpMilliseconds"/>）之后不再等它。</summary>
+    private long _seekSentAt;
 
     /// <summary>The volume the settings file has not been told about yet, and when it last moved.</summary>
     private int? _volumePending;
@@ -636,6 +657,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     private static long Now => Environment.TickCount64;
 
     private AppSettings Settings => _settings.Settings;
+
+    /// <summary>
+    /// 播放器快捷键的当前绑定（动作 Id → token），交给页面那头拼键派发（见 <c>ShortcutCatalog</c> /
+    /// <c>PlayerPage.OnKeyDown</c>）。现读同一个单例设置，所以设置页里改一下、正开着的播放器当场就认新的，
+    /// 不用任何通知管线。<see cref="Settings"/> 保持 private —— 页面只该够得着这一份，够不着别的设置。
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> ShortcutBindings => Settings.Shortcuts.Bindings;
 
     /// <summary>Whether mpv is drawing into our own window rather than one of its own.</summary>
     internal bool Embedded => Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv;

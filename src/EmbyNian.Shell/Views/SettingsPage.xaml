@@ -21,6 +21,9 @@
     Background="{ThemeResource LayerFillColorDefaultBrush}">
 
     <Page.Resources>
+        <!-- 左边分类那一列的图标：分类名 → 一个 Segoe 字形，见 SettingsCategoryGlyphConverter。 -->
+        <local:SettingsCategoryGlyphConverter x:Key="CategoryGlyph" />
+
         <!--
           控件那一列有多宽。一个数写在一处，六种行（开关、下拉、数字、滑块、输入、字体）共用：这几行的控件
           必须落在同一条竖线上，各写一遍的下场是它们各自跟着自己那点内容飘。
@@ -725,6 +728,31 @@
                     </Grid>
                 </DataTemplate>
             </local:SettingRowTemplates.Fact>
+
+            <!--
+              一行一个可重绑的播放器快捷键（「参考上图在设置中新增快捷键功能」，2026-09-08）：左边动作名，右边一个
+              抓键的方框加一颗 ×（local:ShortcutCaptureBox）。方框把「敲定了一个组合键」经 Committed 抛给行的
+              OnCommitted 转交回 VM，成不成（冲不冲突）由 VM 判；ComboText 是 VM 用 ShortcutCatalog.Format 算好的
+              显示串，OneWay 绑进方框。框在 DataTemplate 里，按规矩不给 AutomationId、但给一个读屏用的 Name。
+            -->
+            <local:SettingRowTemplates.Shortcut>
+                <DataTemplate x:DataType="vm:SettingShortcutRow">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                        <local:ShortcutCaptureBox
+                            Grid.Column="1"
+                            AutomationProperties.Name="{x:Bind Label}"
+                            Combo="{x:Bind ComboText, Mode=OneWay}"
+                            Committed="{x:Bind OnCommitted}"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Center" />
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Shortcut>
         </local:SettingRowTemplates>
     </Page.Resources>
 
@@ -784,7 +812,24 @@
                 AutomationProperties.AutomationId="SettingsCategoryList"
                 IsItemClickEnabled="False"
                 ItemsSource="{x:Bind ViewModel.Categories, Mode=OneWay}"
-                SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}" />
+                SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}">
+                <!--
+                  参考图那样每个分类左边一个图标。分类还是字符串（十来处共用那份），所以模板的 x:DataType 是
+                  x:String、{x:Bind} 就是分类名本身：字形走 CategoryGlyph 转换器，标题直接显示。图标和标题都不写
+                  Foreground，跟着 ListViewItem 选中态的前景走 —— 选中那一项连图标一起点亮。
+                -->
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <FontIcon
+                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                FontSize="16"
+                                Glyph="{x:Bind Converter={StaticResource CategoryGlyph}}" />
+                            <TextBlock Text="{x:Bind}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
 
             <!--
               需求 2 的后半句：「诊断和服务器移动到设置里」. The left-hand list now ends with two entries that are
