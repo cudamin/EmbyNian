@@ -559,15 +559,24 @@ public sealed partial class HomeBanner : UserControl
         // 还没量过时高度是 NaN，而 NaN 参与的比较全是假 —— 少了这一句，第一次布局就设不上高度。
         if (double.IsNaN(Root.Height) || Math.Abs(Root.Height - height) > 0.5) Root.Height = height;
 
-        // 上下各裁 5%：两层画到「带高 ÷ 剩下的九成」那么高、竖向居中，上下多出来的两截由外面那圈圆角框剪掉。
-        // 写 Height 而不是让图自己吃满带高：图按自己的比例画，不给高就没有「放大一成」这一说。
-        LayerA.Height = LayerB.Height = height / KeptShare;
+        // Frame（那圈发丝框）是 Root 的孩子、Band 是它的内容格：两层剧照和渐融都排在 Band 的内沿上，而进来
+        // 的 width/height 是整个控件自己的，四边各差一根线。渐融的站位从前拿控件宽去算 —— 通栏那一版 Band
+        // 只有下沿一根线、横向不差；框成卡片之后照旧拿控件宽，图的左沿和渐融的实心头之间就露出两像素原图，
+        // 亮剧照上是一条亮竖线（他报的「轮播中间有道封」，2026-09-10 实拍量到：缝 78、两边 14）。两个几何
+        // 参照系差一圈就是那道缝，所以这里全换到内沿上算。
+        var frame = Frame.BorderThickness;
+        var innerWidth = Math.Max(0, width - frame.Left - frame.Right);
+        var innerHeight = Math.Max(0, height - frame.Top - frame.Bottom);
 
-        // 图贴右沿、按 16:9 整张画：宽从「放大后的高」换。渐融贴住图的左沿 —— 图宽用的是「画出来的那一个」，
-        // 不是带子想给它的那一个，免得窄窗口那一档渐融站到图外面去。
-        var picture = Math.Min(width, height * HomeCarousel.WindowAspect / KeptShare);
-        Fade.Margin = new Thickness(Math.Max(0, width - picture), 0, 0, 0);
-        Fade.Width = picture * FadeShare;
+        // 上下各裁 5%：两层画到「格内高 ÷ 剩下的九成」那么高、竖向居中，上下多出来的两截由外面那圈圆角框剪掉。
+        // 写 Height 而不是让图自己吃满带高：图按自己的比例画，不给高就没有「放大一成」这一说。
+        LayerA.Height = LayerB.Height = innerHeight / KeptShare;
+
+        // 图贴右沿、按 16:9 整张画：宽从「放大后的高」换。渐融左头多压 SeamSlack 像素：那一头是实心的底色，
+        // 压在带子自己的底色上没人看得见；不压的话，两层和渐融各自取整差的那一两像素原图就露在实心头外面。
+        var picture = Math.Min(innerWidth, innerHeight * HomeCarousel.WindowAspect / KeptShare);
+        Fade.Margin = new Thickness(Math.Max(0, innerWidth - picture - SeamSlack), 0, 0, 0);
+        Fade.Width = picture * FadeShare + SeamSlack;
 
         Info.MaxWidth = Math.Clamp(width * 0.54, 280, 620);
         Info.Margin = new Thickness(InfoInset, InfoTop, 0, 0);
@@ -588,6 +597,14 @@ public sealed partial class HomeBanner : UserControl
     /// 窄窗口那一档图吃满带宽、高到不了这个数，那一档裁不满 5% 也是裁：吃紧的换成宽了。
     /// </summary>
     private const double KeptShare = 0.9;
+
+    /// <summary>
+    /// 渐融的实心头往左多压几像素。它压在带子自己的底色上 —— 同一个颜色，压多少都看不见；不压的话，两层剧照
+    /// 和渐融各自取整差的那一两像素原图就露在实心头外面，亮剧照上是一条亮竖缝（「轮播图中间有道封」，
+    /// 2026-09-10 实拍量到两像素）。内沿几何（见 <see cref="Resize"/>）已经把大头修掉了，这几像素兜的是取整
+    /// 那半档。
+    /// </summary>
+    private const double SeamSlack = 2;
 
     /// <summary>字块离带子左沿多远。见标记里 Info 那一段：让开的是翻页箭头那条窄栏。</summary>
     private const double InfoInset = 60;
@@ -776,25 +793,30 @@ public sealed partial class HomeBanner : UserControl
         var lonely = banner.Dots.Visibility == Visibility.Collapsed;
 
         // 带高落到布局上，而不只是算出来：带高是「剧照缩到带宽六成」按 16:9 算的（HomeCarousel.Height），1100 宽
-        // 的带就是 371 高 —— 图放大到「带高÷0.9」之后 662 宽靠右（上下各裁 5%，见 framed 那一段），左边那一截是
-        // 字块的底色。这份控件没有 XamlRoot，量不到一屏有多高，所以那道「不超过一屏」的封顶这一趟不参与。
+        // 的带就是 371 高 —— 图放大到「格内高÷0.9」之后 729 宽靠右（上下各裁 5%，见 framed 那一段），左边那一截是
+        // 字块的底色。**图、两层的高、渐融的站位全按 Band 的内沿算**（框那圈发丝线四边各占一根），不照内沿算的话
+        // 图的左沿上会露缝 —— 见 Resize 里那一段。这份控件没有 XamlRoot，量不到一屏有多高，所以那道「不超过
+        // 一屏」的封顶这一趟不参与。
         banner.Resize(1100);
         var height = HomeCarousel.Height(0, 1100);
-        var picture = height * HomeCarousel.WindowAspect / KeptShare;
-        var gutter = 1100 - picture;
+        var frame = banner.Frame.BorderThickness;
+        var innerWidth = 1100 - frame.Left - frame.Right;
+        var innerHeight = height - frame.Top - frame.Bottom;
+        var picture = innerHeight * HomeCarousel.WindowAspect / KeptShare;
+        var gutter = innerWidth - picture - SeamSlack;
         var wide = banner.Info.MaxWidth;
         var tall = Math.Abs(banner.Root.Height - height) < 0.01 && wide <= 620;
 
         // 圆角框＋上下各裁 5%（「弄个框把轮播图框起来（圆角）」＋「轮播图上下各裁切百分之五」，2026-09-10）。
         // 框是 Border：圆角只有 Border 剪得动，两层放大过的剧照跟着四角一起圆、上下多出来的两截也被它剪掉；
-        // 线从「只留下沿一根」换成整圈发丝线。两层的高是「带高 ÷ 九成」、竖向居中 —— 高度不写够就是没放大，
+        // 线从「只留下沿一根」换成整圈发丝线。两层的高是「格内高 ÷ 九成」、竖向居中 —— 高度不写够就是没放大，
         // 对齐不是居中就是只裁一头。
         var corner = (CornerRadius)Application.Current.Resources["EgPosterCornerRadius"];
         var hairline = (Thickness)Application.Current.Resources["EgHairline"];
         var framed = banner.Frame.CornerRadius == corner
             && banner.Frame.BorderThickness == hairline
-            && Math.Abs(banner.LayerA.Height - height / KeptShare) < 0.01
-            && Math.Abs(banner.LayerB.Height - height / KeptShare) < 0.01
+            && Math.Abs(banner.LayerA.Height - innerHeight / KeptShare) < 0.01
+            && Math.Abs(banner.LayerB.Height - innerHeight / KeptShare) < 0.01
             && banner.LayerA.VerticalAlignment == VerticalAlignment.Center
             && banner.LayerB.VerticalAlignment == VerticalAlignment.Center;
 
@@ -850,7 +872,7 @@ public sealed partial class HomeBanner : UserControl
             && sized is [{ } fade]
             && fade.HorizontalAlignment == HorizontalAlignment.Left
             && Math.Abs(fade.Margin.Left - gutter) < 0.01
-            && Math.Abs(fade.Width - picture * FadeShare) < 0.01
+            && Math.Abs(fade.Width - picture * FadeShare - SeamSlack) < 0.01
             && Melts(fade)
             && edges.Count == 2
             && edges.TrueForAll(Rims);
