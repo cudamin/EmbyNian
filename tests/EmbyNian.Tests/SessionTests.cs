@@ -42,6 +42,7 @@ internal static class SessionTests
     {
         RegisterRestore();
         RegisterReauthentication();
+        RegisterSessionReplacement();
         RegisterTransportFailures();
     }
 
@@ -307,6 +308,106 @@ internal static class SessionTests
             Assert.Equal(1, transport.Count("Users/AuthenticateByName"), "试一次就够，不许重试到超时");
             Assert.Equal(1, transport.Count("Items"), "重登没成，那一趟就不该再问一遍");
         });
+    }
+
+    private static void RegisterSessionReplacement()
+    {
+        foreach (var timesOut in new[] { false, true })
+        {
+            Test($"旧重登{(timesOut ? "超时" : "被拒")}：用户已手动重登同一账号时保留新会话", () =>
+            {
+                var transport = new StubTransport()
+                    .Answer("Views", Views)
+                    .Answer("System/Info/Public", PublicInfo)
+                    // When 内的手动登录先取走第一个答案，旧重登再拿第二个。
+                    .Sequence("Users/AuthenticateByName", (HttpStatusCode.OK, SignedIn), (HttpStatusCode.Unauthorized, ""))
+                    .Sequence("Items", (HttpStatusCode.Unauthorized, ""), (HttpStatusCode.OK, OneItem));
+                var (session, server, account) = Signed(transport);
+                using var lifetime = session;
+                account.ProtectedPassword = PassthroughSecretProtector.Instance.Protect("pw");
+                account.RememberPassword = true;
+                Assert.True(Wait(session.TryRestoreAsync(server, account, CancellationToken.None)));
+
+                var announced = 0;
+                session.SignedOut += (_, _) => announced++;
+                var once = false;
+                transport.When("Users/AuthenticateByName", () =>
+                {
+                    if (once) return;
+                    once = true;
+                    session.SignOut();
+                    session.SignInAsync(server, account, "pw", account.Username, true, CancellationToken.None)
+                        .GetAwaiter().GetResult();
+                    if (timesOut) throw new TaskCanceledException("旧重登超时");
+                });
+
+                Exception? failure = null;
+                List<EmbyItem>? items = null;
+                try
+                {
+                    items = Wait(session.ExecuteAsync(
+                        (client, token) => client.GetLatestAsync(null, 10, token), CancellationToken.None));
+                }
+                catch (Exception error)
+                {
+                    failure = error;
+                }
+
+                Assert.True(session.IsSignedIn, "旧重登的失败不能注销用户刚建立的新会话");
+                Assert.True(account.HasSavedToken, "新登录保存的令牌不能被旧失败清除");
+                Assert.Equal(1, announced, "只通知用户主动退出的那一次");
+                Assert.Null(failure, "相同服务器与账号的新连接可以接续原请求");
+                Assert.True(items is { Count: 1 });
+            });
+        }
+
+        foreach (var changeServer in new[] { false, true })
+        foreach (var duringReauthentication in new[] { false, true })
+        {
+            var identity = changeServer ? "服务器" : "账号";
+            var moment = duringReauthentication ? "自动重登中" : "旧请求返回 401 前";
+            Test($"切换{identity}发生在{moment}：旧写操作不重试到新身份", () =>
+            {
+                var userId = changeServer ? "u1" : "u2";
+                var replacementReply = "{\"AccessToken\":\"replacement-token\",\"User\":{\"Id\":\"" + userId + "\",\"Name\":\"replacement\"}}";
+                var transport = new StubTransport()
+                    .Answer("Views", Views)
+                    .Answer("System/Info/Public", PublicInfo)
+                    .Sequence("Users/AuthenticateByName", (HttpStatusCode.OK, replacementReply), (HttpStatusCode.OK, SignedIn))
+                    .Sequence("PlayedItems", (HttpStatusCode.Unauthorized, ""), (HttpStatusCode.OK, "{}"));
+                var (session, server, account) = Signed(transport);
+                using var lifetime = session;
+                account.ProtectedPassword = PassthroughSecretProtector.Instance.Protect("pw");
+                account.RememberPassword = true;
+                Assert.True(Wait(session.TryRestoreAsync(server, account, CancellationToken.None)));
+
+                var replacementServer = changeServer
+                    ? new ServerProfile { Name = "另一台假服务器", Url = "https://replacement.example.test" }
+                    : server;
+                var replacementAccount = new AccountProfile { Username = "replacement", UserId = userId };
+                replacementServer.Accounts.Add(replacementAccount);
+                var announced = 0;
+                session.SignedOut += (_, _) => announced++;
+                var once = false;
+                transport.When(duringReauthentication ? "Users/AuthenticateByName" : "PlayedItems", () =>
+                {
+                    if (once) return;
+                    once = true;
+                    session.SignOut();
+                    session.SignInAsync(replacementServer, replacementAccount, "pw", replacementAccount.Username, true, CancellationToken.None)
+                        .GetAwaiter().GetResult();
+                });
+
+                Assert.Throws<EmbyTokenExpiredException>(() => Wait(session.ExecuteAsync(
+                    (client, token) => client.MarkPlayedAsync("m1", token), CancellationToken.None)));
+
+                Assert.True(session.IsSignedIn, "旧请求作废不等于退出新会话");
+                Assert.True(ReferenceEquals(replacementAccount, session.Account));
+                Assert.True(replacementAccount.HasSavedToken);
+                Assert.Equal(1, announced);
+                Assert.Equal(1, transport.SentTo("PlayedItems").Count, "旧账号的标记观看不能发送给新账号或新服务器");
+            });
+        }
     }
 
     /// <summary>

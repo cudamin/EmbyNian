@@ -18,20 +18,20 @@
     xmlns:emby="using:EmbyNian.Emby"
     xmlns:local="using:EmbyNian.Shell.Views"
     xmlns:vm="using:EmbyNian.Shell.ViewModels"
-    Background="{ThemeResource LayerFillColorDefaultBrush}">
+    Background="{ThemeResource EgWindowBrush}">
 
     <Page.Resources>
         <!-- Declared before the server template that reaches for it: a StaticResource inside a
              DataTemplate is resolved as the dictionary is parsed, so a forward reference fails. -->
         <DataTemplate x:Key="AccountTemplate" x:DataType="vm:AccountRow">
-            <Grid ColumnSpacing="10" Margin="0,2">
+            <Grid ColumnSpacing="10" Margin="0,4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="{x:Bind Username}" />
+                    <TextBlock Text="{x:Bind Username}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                     <TextBlock
                         FontSize="{StaticResource EgCaptionFontSize}"
                         Foreground="{ThemeResource EgTextDimBrush}"
@@ -39,12 +39,14 @@
                 </StackPanel>
                 <Button x:Uid="ServersPage_ButtonA1"
                     Grid.Column="1"
+                    Style="{StaticResource EgIconButtonStyle}"
                     Command="{x:Bind Owner.LoginAccountCommand}"
                     CommandParameter="{x:Bind}">
                     <FontIcon Glyph="&#xE8A5;" />
                 </Button>
                 <Button x:Uid="ServersPage_ButtonA2"
                     Grid.Column="2"
+                    Style="{StaticResource EgIconButtonStyle}"
                     Command="{x:Bind Owner.DeleteAccountCommand}"
                     CommandParameter="{x:Bind}">
                     <FontIcon Glyph="&#xE74D;" />
@@ -54,37 +56,43 @@
 
         <DataTemplate x:Key="ServerTemplate" x:DataType="vm:ServerRow">
             <Border
-                Background="{ThemeResource EgSurfaceAltBrush}"
+                Background="{ThemeResource EgSurfaceBrush}"
                 BorderBrush="{ThemeResource EgBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="{StaticResource EgCardCornerRadius}"
-                Margin="0,0,0,12"
-                Padding="16">
-                <StackPanel Spacing="12">
+                Margin="0,0,0,16"
+                Padding="20">
+                <StackPanel Spacing="18">
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
                                 <TextBlock
-                                    FontSize="{StaticResource EgTitleFontSize}"
+                                    FontSize="20"
                                     FontWeight="SemiBold"
+                                    TextTrimming="CharacterEllipsis"
                                     Text="{x:Bind Name}" />
                                 <!-- A pill, not an InfoBadge: that control's Value is a number for a
                                      count, and it has no way to show a word. -->
                                 <Border
+                                    Grid.Column="1"
                                     Background="{ThemeResource EgAccentBrush}"
-                                    CornerRadius="{StaticResource EgCardCornerRadius}"
+                                    CornerRadius="10"
                                     Padding="8,2"
                                     VerticalAlignment="Center"
                                     Visibility="{x:Bind CurrentVisibility}">
                                     <TextBlock x:Uid="ServersPage_TextBlock1"
                                         FontSize="{StaticResource EgCaptionFontSize}"
-                                        Foreground="White" />
+                                        Foreground="{ThemeResource EgTextOnAccentBrush}" />
                                 </Border>
-                            </StackPanel>
+                            </Grid>
                             <TextBlock
                                 Foreground="{ThemeResource EgTextDimBrush}"
                                 Text="{x:Bind Url}"
@@ -97,16 +105,19 @@
                             Orientation="Horizontal"
                             Spacing="8">
                             <Button x:Uid="ServersPage_ButtonA3"
+                                Style="{StaticResource EgIconButtonStyle}"
                                 Command="{x:Bind Owner.TestCommand}"
                                 CommandParameter="{x:Bind}">
                                 <FontIcon Glyph="&#xE72C;" />
                             </Button>
                             <Button x:Uid="ServersPage_ButtonA4"
+                                Style="{StaticResource EgIconButtonStyle}"
                                 Command="{x:Bind Owner.LoginServerCommand}"
                                 CommandParameter="{x:Bind}">
                                 <FontIcon Glyph="&#xE8A5;" />
                             </Button>
                             <Button x:Uid="ServersPage_ButtonA5"
+                                Style="{StaticResource EgIconButtonStyle}"
                                 Command="{x:Bind Owner.DeleteServerCommand}"
                                 CommandParameter="{x:Bind}">
                                 <FontIcon Glyph="&#xE74D;" />
@@ -115,11 +126,11 @@
                     </Grid>
 
                     <Border
-                        Background="{ThemeResource EgSurfaceBrush}"
+                        Background="{ThemeResource EgSurfaceAltBrush}"
                         BorderBrush="{ThemeResource EgBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="{StaticResource EgCardCornerRadius}"
-                        Padding="12,10">
+                        Padding="16,14">
                         <StackPanel Spacing="8">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -138,7 +149,7 @@
 
                             <TextBlock x:Uid="ServersPage_TextBlock3"
                                 Foreground="{ThemeResource EgTextFaintBrush}"
-                                Visibility="{x:Bind EmptyAccountsVisibility}" />
+                                Visibility="{x:Bind EmptyAccountsVisibility}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -146,7 +157,7 @@
         </DataTemplate>
     </Page.Resources>
 
-    <Grid Margin="{StaticResource EgPageMargin}" RowSpacing="12">
+    <Grid x:Name="PageLayout" Margin="{StaticResource EgPageMargin}" RowSpacing="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -155,32 +166,34 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <local:PageSlate x:Uid="ServersPage_localPageSlate4"
-            Eyebrow="SERVERS"
-            Note="{x:Bind ViewModel.Subheading, Mode=OneWay}">
-            <local:PageSlate.Trailing>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button AutomationProperties.AutomationId="ServersAddButton" Command="{x:Bind ViewModel.AddServerCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE710;" />
-                            <TextBlock x:Uid="ServersPage_TextBlock5" />
-                        </StackPanel>
-                    </Button>
-                    <Button AutomationProperties.AutomationId="ServersDiscoverButton" Command="{x:Bind ViewModel.DiscoverCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE968;" />
-                            <TextBlock x:Uid="ServersPage_TextBlock6" />
-                        </StackPanel>
-                    </Button>
-                    <Button AutomationProperties.AutomationId="ServersRefreshButton" Command="{x:Bind ViewModel.RefreshCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE72C;" />
-                            <TextBlock x:Uid="ServersPage_TextBlock7" />
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
-            </local:PageSlate.Trailing>
-        </local:PageSlate>
+        <Grid ColumnSpacing="16" RowSpacing="14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Border Width="48" Height="48" CornerRadius="16" Background="{ThemeResource EgAccentSoftBrush}">
+                <FontIcon Glyph="&#xE968;" Foreground="{ThemeResource EgAccentBrush}" FontSize="24" />
+            </Border>
+            <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock x:Uid="ServersPage_Heading" FontSize="26" FontWeight="SemiBold" />
+                <TextBlock Text="{x:Bind ViewModel.Subheading, Mode=OneWay}" Foreground="{ThemeResource EgTextDimBrush}" TextWrapping="Wrap" />
+            </StackPanel>
+            <!-- CommandBar keeps every action reachable through its overflow on a narrow settings pane. -->
+            <CommandBar Grid.Row="1" Grid.ColumnSpan="2" HorizontalAlignment="Stretch"
+                DefaultLabelPosition="Right" Background="{ThemeResource EgSurfaceBrush}"
+                CornerRadius="12" IsOpen="False">
+                <AppBarButton x:Uid="ServersPage_AddAction" AutomationProperties.AutomationId="ServersAddButton"
+                    Icon="Add" Command="{x:Bind ViewModel.AddServerCommand}" />
+                <AppBarButton x:Uid="ServersPage_DiscoverAction" AutomationProperties.AutomationId="ServersDiscoverButton"
+                    Icon="Find" Command="{x:Bind ViewModel.DiscoverCommand}" />
+                <AppBarButton x:Uid="ServersPage_RefreshAction" AutomationProperties.AutomationId="ServersRefreshButton"
+                    Icon="Refresh" Command="{x:Bind ViewModel.RefreshCommand}" />
+            </CommandBar>
+        </Grid>
 
         <ProgressBar
             Grid.Row="1"
@@ -203,7 +216,7 @@
             IsItemClickEnabled="True"
             ItemClick="OnDiscoveredPicked"
             ItemsSource="{x:Bind ViewModel.Discovered, Mode=OneWay}"
-            Margin="0,32,0,0"
+            Margin="0,4,0,0"
             MaxHeight="184"
             Visibility="{x:Bind ViewModel.DiscoveredVisibility, Mode=OneWay}">
             <ListView.ItemTemplate>
@@ -233,11 +246,16 @@
 
         <ScrollView Grid.Row="3" VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                <TextBlock x:Uid="ServersPage_TextBlock8"
-                    Foreground="{ThemeResource EgTextFaintBrush}"
-                    HorizontalAlignment="Center"
-                    Margin="0,32,0,0"
-                    Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
+                <Border Background="{ThemeResource EgSurfaceBrush}" BorderBrush="{ThemeResource EgBorderBrush}"
+                    BorderThickness="1" CornerRadius="{StaticResource EgCardCornerRadius}" Padding="32"
+                    Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}">
+                    <StackPanel HorizontalAlignment="Center" Spacing="16" MaxWidth="400">
+                        <FontIcon Glyph="&#xE774;" FontSize="40" Foreground="{ThemeResource EgAccentBrush}" />
+                        <TextBlock x:Uid="ServersPage_EmptyHeading" FontSize="20" FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock x:Uid="ServersPage_TextBlock8" Foreground="{ThemeResource EgTextDimBrush}"
+                            TextWrapping="Wrap" TextAlignment="Center" />
+                    </StackPanel>
+                </Border>
 
                 <ItemsControl ItemTemplate="{StaticResource ServerTemplate}" ItemsSource="{x:Bind ViewModel.Servers, Mode=OneWay}" />
             </StackPanel>
@@ -247,22 +265,20 @@
              rather than about a server, and a long server list would scroll it out of reach. -->
         <Border
             Grid.Row="4"
-            Background="{ThemeResource EgSurfaceAltBrush}"
+            Background="{ThemeResource EgSurfaceBrush}"
             BorderBrush="{ThemeResource EgBorderBrush}"
             BorderThickness="1"
             CornerRadius="{StaticResource EgCardCornerRadius}"
-            Padding="16,12">
+            Padding="20,16">
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <FontIcon
-                    FontSize="18"
-                    Foreground="{ThemeResource EgAccentBrush}"
-                    Glyph="&#xEB9F;"
-                    VerticalAlignment="Center" />
+                <Border Width="42" Height="42" CornerRadius="14" Background="{ThemeResource EgAccentSoftBrush}">
+                    <FontIcon FontSize="20" Foreground="{ThemeResource EgAccentBrush}" Glyph="&#xEB9F;" />
+                </Border>
                 <StackPanel Grid.Column="1">
                     <TextBlock x:Uid="ServersPage_TextBlock9" FontWeight="SemiBold" />
                     <TextBlock
@@ -274,6 +290,7 @@
                     AutomationProperties.AutomationId="ServersClearCacheButton"
                     Grid.Column="2"
                     Command="{x:Bind ViewModel.ClearCacheCommand}"
+                    Style="{StaticResource EgSecondaryButtonStyle}"
                     VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE74D;" />

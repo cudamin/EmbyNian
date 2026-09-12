@@ -59,7 +59,7 @@ public sealed partial class DashboardPage : Page, IShellContent
     /// 不是自己那一轮就闭嘴走开。
     /// <para>
     /// 少了它，上一轮那个 15 秒的看门狗会把刚开始的这一轮判成失败：刷新把 <c>_settled</c> 放回 false，而它
-    /// 只看这一个字段 —— 于是页头写上「15 秒内没有结果」，而新的一趟才刚发出去一秒。
+    /// 只看这一个字段 —— 于是那一行读数写上「15 秒内没有结果」，而新的一趟才刚发出去一秒。
     /// </para>
     /// <para>
     /// 管不着的那一半照实写在这儿：<c>NavigationCompleted</c> 自己不带轮次（WebView2 那边只有 NavigationId，
@@ -69,11 +69,16 @@ public sealed partial class DashboardPage : Page, IShellContent
     /// </summary>
     private int _generation;
 
-    /// <summary>页头读数的两半：控制台地址，和它此刻的载入状态。见 <see cref="Say"/>。</summary>
+    /// <summary>页顶那一行读数的两半：控制台地址，和它此刻的载入状态。见 <see cref="Say"/>。</summary>
     private string _address = "尚未确定地址";
     private string _state = "";
 
-    public DashboardPage() => InitializeComponent();
+    public DashboardPage()
+    {
+        InitializeComponent();
+        Loaded += (_, _) => HomeMotion.Reveal(PageLayout);
+        Unloaded += (_, _) => HomeMotion.Stop(PageLayout);
+    }
 
     /// <summary>
     /// True once there is nothing more to wait for: the console is up and sampled, or it has failed and said
@@ -92,13 +97,13 @@ public sealed partial class DashboardPage : Page, IShellContent
     public object? NavigationRequest => _request;
 
     /// <summary>
-    /// 把地址和载入状态写到页头右上角那一行读数上。两个都是机器串，等宽字里它们是同一种东西，所以合成
-    /// 一行而不是各占一行 —— 页头不该为「正在载入…」这种一闪而过的字长出第三行来。
+    /// 把地址和载入状态写到页顶那一行读数上（左边那一头，见 xaml 里那段说明）。两个都是机器串，等宽字里
+    /// 它们是同一种东西，所以合成一行而不是各占一行。
     /// </summary>
     private void Say(string state)
     {
         _state = state;
-        Slate.Note = (_address, _state) switch
+        Readout.Text = (_address, _state) switch
         {
             ("", var only) => only,
             (var only, "") => only,
@@ -310,7 +315,7 @@ public sealed partial class DashboardPage : Page, IShellContent
         _settled = false;
         _error = "";
         _generation++;
-        Notice.Visibility = Visibility.Collapsed;
+        NoticePanel.Visibility = Visibility.Collapsed;
         Web.Visibility = Visibility.Visible;
         Say("正在重新载入…");
         core.Navigate(_url);
@@ -337,7 +342,7 @@ public sealed partial class DashboardPage : Page, IShellContent
     private void Show(string message)
     {
         Notice.Text = message;
-        Notice.Visibility = Visibility.Visible;
+        NoticePanel.Visibility = Visibility.Visible;
         Web.Visibility = Visibility.Collapsed;
         Say("");
     }

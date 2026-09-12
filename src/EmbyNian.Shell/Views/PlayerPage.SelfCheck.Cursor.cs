@@ -503,9 +503,9 @@ public sealed partial class PlayerPage
             // previous round measured — and since 2026-09-05 it is also the premise the fix rests on: the ask has
             // to reach WinUI's input pipeline or the transparent ProtectedCursor is a value nobody reads.
             // Counted as either kind of event, because the ask is a pixel out and a pixel back: with the cursor
-            // still showing, a one-pixel hop is under PointerNoise and the return leg lands on the anchor, so
-            // both arrive as 「空事件」 rather than as movement. 「The island heard something」 is the question,
-            // not 「the island called it a movement」.
+            // still showing, a one-pixel hop is under <see cref="ChromeReveal.MovePixels"/> and the return leg
+            // lands on the anchor, so both arrive as 「空事件」 rather than as movement. 「The island heard
+            // something」 is the question, not 「the island called it a movement」.
             var quiet = _stillMoves;
 
             Native.NudgeCursorState();
@@ -554,9 +554,10 @@ public sealed partial class PlayerPage
             //    cleared just above, so the loop's first poll always counts one — it is the seeding, not a
             //    movement, and a pointer that truly never moves is filtered out before the counter by the
             //    <c>dx == 0 && dy == 0</c> return in PollPointer. So exactly 1 is what an undisturbed leg
-            //    reports and anything past 1 is a real displacement: past PointerNoise while the cursor shows,
-            //    and any pixel at all once it is hidden, where a mouse rattling on a desk is by design a hand
-            //    reaching for it. Either way the idle clock restarted, so there is nothing here to judge.
+            //    reports and anything past 1 is a real displacement: one that crossed
+            //    <see cref="ChromeReveal.MovePixels"/>, in either cursor state — the same two pixels whether the
+            //    cursor is showing or hidden, since a single pixel is what this player's own ask is made of and
+            //    what a desk rattles. Either way the idle clock restarted, so there is nothing here to judge.
             //
             // A regression cannot hide behind this. Hiding that stops working reports 1 polled move and fails;
             // a spurious un-hide from a pointer that never moved arrives as a XAML event (「空事件」) and never
@@ -604,6 +605,35 @@ public sealed partial class PlayerPage
             // went, or one cause would be reported as two failures.
             if (hiddenAt != 0)
                 Want($"{where}不早于两秒", hiddenAt - began >= ChromeReveal.CursorIdleMilliseconds - 150);
+
+            // And the thing the user reported: 「鼠标隐藏了一会又会自动跑出来」. Two things are exactly one pixel
+            // wide — a mouse rattling on a desk, and the round trip a hide ends with
+            // (<see cref="Native.NudgeCursorState"/>, real input, the only lever that makes WinUI re-read the
+            // transparent ProtectedCursor) — and while a single pixel was enough to bring the cursor back, that
+            // round trip could wake the player out of its own hide. A hand's first event is tens of pixels, so
+            // the threshold is at two and the leg is this: 藏好之后真的挪一个像素过去，几拍踢过去必须还藏着。
+            //
+            // Moved by coordinate rather than by injection, because that is the reading this machine can always
+            // take: a real displacement through SetCursorPos moves the pointer whether or not the island hears
+            // injected input, and the poll — the path that had no threshold at all while the cursor was hidden —
+            // reads exactly this. When the injection does take, the event path is exercised by the same move.
+            if (_cursorHidden && Native.GetCursorPos(out var still))
+            {
+                if (!Native.MovePointerTo(still.X + 1, still.Y)) Native.SetCursorPos(still.X + 1, still.Y);
+                Pump();
+
+                for (var i = 0; i < 3; i++)
+                {
+                    Thread.Sleep(40);
+                    OnTick(this, EventArgs.Empty);
+                }
+
+                var felt = Native.GetCursorPos(out var after) && (after.X != still.X || after.Y != still.Y);
+                if (felt) Want($"{where}挪一个像素不叫醒它", _cursorHidden);
+
+                report.Add($"{where}藏好后挪一个像素：{(felt ? string.Empty : "指针没挪动，这一句只作参考")}"
+                    + $"过后{(_cursorHidden ? "还藏着" : "又显示了")}，挡回去 {_hiddenNoise} 次一像素级的抖动");
+            }
 
             if (_cursorHidden) Screen(where);
 

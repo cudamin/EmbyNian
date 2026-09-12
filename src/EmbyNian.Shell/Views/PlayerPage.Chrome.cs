@@ -147,9 +147,11 @@ public sealed partial class PlayerPage
     /// answered by saying nothing, which is what lets the idle clock run out.
     /// </para>
     /// <para>
-    /// The threshold is the same one the events are filtered by and applies for the same reason — a mouse
-    /// resting on a desk rattles a pixel — and it is dropped once the cursor is hidden, where any change at
-    /// all is a hand reaching for the mouse and wanting to see where it is.
+    /// The threshold is <see cref="ChromeReveal.MovePixels"/>, the same one the events are filtered by, and it
+    /// applies in both cursor states: a mouse resting on a desk rattles a pixel, and this player's own ask
+    /// (<see cref="Native.NudgeCursorState"/>) <em>is</em> one physical pixel out and back. Asking for two
+    /// before calling it a hand is what keeps the ask from being read as one — 「鼠标隐藏了一会又会自动跑出来」
+    /// — while a hand's first tick crosses two pixels many times over.
     /// </para>
     /// </summary>
     private void PollPointer()
@@ -161,26 +163,34 @@ public sealed partial class PlayerPage
 
         if (dx == 0 && dy == 0) return;
 
-        // Our own ask, caught mid-flight. Every ask while the cursor is hidden steps the pointer one physical
-        // pixel and puts it straight back (Native.NudgeCursorState), and a tick landing between the two legs
-        // reads that as the hand returning — which would end the hide the ask exists to make stick. The anchor
-        // is left alone, so the stillness goes on being counted from where the hand really stopped.
-        if (_polledKnown && _cursorHidden && Now - _nudgedAt <= NudgeEcho && dx <= 1 && dy <= 1) return;
-
-        // Not advancing the anchor is the point: jitter around one spot never accumulates into activity,
-        // while a hand that really is moving the mouse crosses two pixels within a tick or two.
-        if (_polledKnown && !_cursorHidden && dx < PointerNoise && dy < PointerNoise) return;
+        // Not advancing the anchor is the point: jitter around one spot never accumulates into activity, while
+        // a hand that really is moving the mouse crosses two pixels within a tick or two. Counted while the
+        // cursor is hidden, where the same step is also how this player's own ask and a rattling desk show up —
+        // the count goes out beside the wake reason, so the next report says which of the two it was.
+        if (_polledKnown && !ChromeReveal.Travelled(dx, dy))
+        {
+            if (_cursorHidden) _hiddenNoise++;
+            return;
+        }
 
         _polled = screen;
         _polledKnown = true;
         _polledMoves++;
         _pointerMovedAt = Now;
 
+        var wasHidden = _cursorHidden;
+
         // Told either way. The reseed is the better answer when it works — it carries where the pointer is,
         // not just that it moved — and when it cannot translate the position, the movement is still news:
         // both clocks have to start from the same instant or 「静止两秒」 is measured from a stamp the rule
         // never got.
         if (!ReseedPointer() && _chrome.Moved(Now)) Render();
+
+        // Recorded only once it has actually happened. A movement that arrives while the pointer is outside the
+        // window takes the reveal state down without the cursor ever coming back, and that movement printed
+        // against the next wake — a keypress, say — would be a reason that is not one, which is worse than the
+        // silence this line exists to replace.
+        if (wasHidden && !_cursorHidden) _woke = $"轮询问出了 {dx},{dy} 物理像素";
     }
 
     /// <summary>
@@ -578,6 +588,8 @@ public sealed partial class PlayerPage
         if (hidden)
         {
             _nudgesThisHide = 0;
+            _hiddenNoise = 0;
+            _woke = "没记到移动（按键、菜单或窗口变化）";
             Nudge();
         }
 
@@ -590,25 +602,28 @@ public sealed partial class PlayerPage
         // shape set here only reaches the screen while the pointer is over a window this thread owns, and
         // during playback the window under the pointer may be the island's or libmpv's rather than ours —
         // which is a fact about a real film, unavailable to any probe. The show line carries the count of
-        // ticks that found a shape back while we still wanted none, which is the other way this can fail.
+        // ticks that found a shape back while we still wanted none, which is the other way this can fail,
+        // and now also who moved the pointer: 「鼠标隐藏了一会又会自动跑出来」 was reported against a log that
+        // said the cursor was back and never said what had brought it, and one number — tens of pixels is a
+        // hand, one is a leak — is the whole difference.
         // </para>
         Log.Debug(Category, hidden
             ? $"鼠标藏起来了：静止 {Now - _pointerMovedAt}ms，其间空事件 {_stillMoves} 次，线程形状"
               + $"{(_window?.CursorShapeGone == true ? "无" : "还在")}，计数 {_cursorCount}"
               + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
               + $"，{PointerElements()}"
-            : $"鼠标又显示了：轮询问出的移动共 {_polledMoves} 次、XAML 事件 {_pointerMoves} 次，计数 {_cursorCount}"
-              + $"，藏着期间催了框架 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了");
+            : $"鼠标又显示了：{_woke}；轮询问出的移动共 {_polledMoves} 次、XAML 事件 {_pointerMoves} 次，计数 {_cursorCount}"
+              + $"，藏着期间催了框架 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了"
+              + $"，挡回去 {_hiddenNoise} 次一像素级的抖动");
     }
 
     /// <summary>
     /// One ask that the framework work the cursor out again, with the bookkeeping that makes it safe to make.
     /// <para>
-    /// Three things happen here rather than at the call sites, because all three are properties of the ask
-    /// rather than of the moment: it is <b>bounded</b> to <see cref="NudgesPerHide"/> per hide (real injected
-    /// input, so it must stop), the attempt is stamped whether or not the injection took (the echo has to be
-    /// recognised either way — see <see cref="Moved"/>), and only the asks that really left the process are
-    /// counted, because that count is what the self-check asserts on.
+    /// Two things happen here rather than at the call sites, because both are properties of the ask rather
+    /// than of the moment: it is <b>bounded</b> to <see cref="NudgesPerHide"/> per hide (real injected input,
+    /// so it must stop), and only the asks that really left the process are counted, because that count is
+    /// what the self-check asserts on.
     /// </para>
     /// <para>
     /// Attempts are what the bound counts, not successes. A machine that refuses injected input outright would
@@ -621,7 +636,6 @@ public sealed partial class PlayerPage
         if (_nudgesThisHide >= NudgesPerHide) return;
 
         _nudgesThisHide++;
-        _nudgedAt = Now;
 
         if (Native.NudgeCursorState()) _cursorNudges++;
     }

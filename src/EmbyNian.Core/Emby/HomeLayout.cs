@@ -6,8 +6,13 @@ namespace EmbyNian.Emby;
 /// 主页上排着哪几排、按什么顺序、哪几排显示 —— 「把媒体库的列表也添加到主页之中，新增页里拖拽决定这些列表的
 /// 顺序，勾选显示或者不勾选取消显示」。
 /// <para>
-/// 一排是一个 <see cref="HomeRowPlan"/>：一把钥匙、一句标题、显示与否。四排是固定的（继续观看、媒体库、接下来
-/// 看、最近添加），其余每个媒体库一排，装的是那个库自己的最近添加。
+/// 一排是一个 <see cref="HomeRowPlan"/>：一把钥匙、一句标题、显示与否。三排是固定的（继续观看、媒体库、接下来
+/// 看），其余每个媒体库一排，装的是那个库自己的最近添加。
+/// </para>
+/// <para>
+/// 整个服务器的「最近添加」那一排（旧的 <c>latest</c> 钥匙）2026-09-12 退役：「去掉最近添加，保留最近添加
+/// 电视节目、最近添加 电影」。它不在 <see cref="Fixed"/> 里、<see cref="FixedTitle"/> 也认不出它，所以存档里
+/// 还带着的那一行在 <see cref="Plan"/> 里整个落不下 —— 顺手被归一化写回设置文件，一处专门的话都不用说。
 /// </para>
 /// <para>
 /// 纯的、在 Core 里，理由和 <see cref="HomeCarousel"/> 一样：这里每一句都是「该排哪几排」的决定，而不是像素。
@@ -26,16 +31,13 @@ public static class HomeLayout
     /// <summary>接着往下看的下一集。</summary>
     public const string NextUp = "nextup";
 
-    /// <summary>整个服务器最近添加的。</summary>
-    public const string Latest = "latest";
-
     /// <summary>媒体库那几排的钥匙前缀，后面跟着那个库的 id。</summary>
     private const string LibraryPrefix = "library:";
 
     /// <summary>
-    /// 默认版面：四排固定的按这个次序，然后每个媒体库一排。第一次运行、以及设置文件里那份被删空时用的就是它。
+    /// 默认版面：三排固定的按这个次序，然后每个媒体库一排。第一次运行、以及设置文件里那份被删空时用的就是它。
     /// </summary>
-    private static readonly string[] Fixed = [Resume, Libraries, NextUp, Latest];
+    private static readonly string[] Fixed = [Resume, Libraries, NextUp];
 
     /// <summary>一个媒体库那一排的钥匙。</summary>
     public static string LibraryKey(string id) => LibraryPrefix + id;
@@ -46,13 +48,12 @@ public static class HomeLayout
             ? key[LibraryPrefix.Length..]
             : null;
 
-    /// <summary>四排固定的各叫什么；媒体库那几排的标题是 <see cref="LibraryTitle"/> 的事。</summary>
+    /// <summary>三排固定的各叫什么；媒体库那几排的标题是 <see cref="LibraryTitle"/> 的事。</summary>
     public static string? FixedTitle(string? key) => key switch
     {
         Resume => "继续观看",
         Libraries => "媒体库",
         NextUp => "接下来看",
-        Latest => "最近添加",
         _ => null
     };
 
@@ -123,7 +124,7 @@ public static class HomeLayout
             plan.Add(new HomeRowPlan(key, title, row.Visible));
         }
 
-        // 存档里没有的补在后面：四排固定的按默认次序，媒体库那几排按服务器给的次序。
+        // 存档里没有的补在后面：三排固定的按默认次序，媒体库那几排按服务器给的次序。
         foreach (var key in Fixed.Concat(order))
         {
             if (!taken.Add(key)) continue;

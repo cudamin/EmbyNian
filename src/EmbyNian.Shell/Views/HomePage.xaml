@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The home page: 第一屏顶上是一条铺满宽度的大图轮播（比一屏矮），底下横着排 媒体库、接下来看、最近添加，加上每个媒体库自己那一排。
+  The home page: 第一屏顶上是一条铺满宽度的大图轮播（比一屏矮），底下横着排 媒体库、接下来看，加上每个媒体库自己那一排（整服的「最近添加」那一排 2026-09-12 退役）。
 
   第一屏是这一页的第一句话。那条带铺满整个页宽（上到窗口的顶边，标题栏和页眉都浮在图上），带高照带宽算
   （HomeCarousel.Height —— 剧照缩到带宽的六成靠右站，2026-09-09「把主页的轮播图移动到右边／弄扁一些」），
@@ -27,7 +27,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:EmbyNian.Shell.Views"
     xmlns:vm="using:EmbyNian.Shell.ViewModels"
-    Background="{ThemeResource LayerFillColorDefaultBrush}">
+    Background="{ThemeResource EgWindowBrush}">
 
     <Page.Resources>
         <!-- Declared before the shelf template that reaches for it: a StaticResource inside a
@@ -50,7 +50,7 @@
         </DataTemplate>
 
         <DataTemplate x:Key="ShelfTemplate" x:DataType="vm:CardShelf">
-            <StackPanel Spacing="12">
+            <StackPanel Spacing="{StaticResource EgSpaceL}">
                 <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。
                      OnScrim 绑着这一排是不是站在一张剧照上：这一页的几排都在第一屏外面、站在页面自己的纸上，
                      所以一律是关的（那一档由 CardShelf.OnScrim 定，见 HomeViewModel.BuildShelves）。从前开着的
@@ -67,7 +67,7 @@
                      很好用」 — the row pages now, one screenful of cards per chevron. -->
                 <local:ShelfStrip
                     Height="{x:Bind RowHeight}"
-                    ItemSpacing="16"
+                    ItemSpacing="20"
                     ItemTemplate="{StaticResource CardTemplate}"
                     ItemsSource="{x:Bind Cards}"
                     OnScrim="{x:Bind OnScrim, Mode=OneWay}" />
@@ -78,58 +78,54 @@
     <!--
       整页就是一个滚动条，第一块是那张铺满的大图。
 
-      顶上那个负边距由代码给（HomePage.SyncBleed），标记里一个数都不写：**只有真有一张大图的时候**才把
-      ContentHost 留给外壳那一行的 32 像素顶回去（见 ShellPage.xaml）——「红框框出来的地方全填充上海报」，那块红框
-      是从窗口的顶边量起的，图上留一条 32 高的实心条就等于留了一道黑边。而设置里关掉轮播、或者服务器上一个带宽图的
-      条目都没有的时候顶上那一块不是图，是页面自己的底色，那时顶回去只会把「HOME / 主页」那块牌子塞进标题栏
-      底下，所以那一档照别的页面来、从第 32 行起画。整套里只有这一页会顶这 32 像素。（2026-09-09 起外壳只有
-      标题栏这一行 —— 第 1 行删掉之前这里顶的是 80。）
+      这一页从第 32 行起画，和别的页面一样 —— 「红框框出来的地方全填充上海报」那一版把 ContentHost 留给外壳的
+      32 像素顶回去过（HomePage.SyncBleed），2026-09-10「框成卡片」之后连同贴顶一起删了：轮播现在四边都留 24，
+      顶上不再碰标题栏。2026-09-09 起外壳只有标题栏这一行 —— 第 1 行删掉之前这里顶的是 80。
 
-      进度条和提示条也在滚动条里面，跟着内容一起滚 —— 它们原来在滚动条外面，占着页面顶上的两行；页眉现在
-      浮在图上，那两行没有别的地方可去。两条都自带 12 的下边距，而不是靠 StackPanel.Spacing：收起来的时候
-      它们该一个像素都不占。
+      进度条和提示条也在滚动条里面，跟着内容一起滚 —— 它们原来在滚动条外面，占着页面顶上的两行；那两行没有别的
+      地方可去。两条都自带 12 的下边距，而不是靠 StackPanel.Spacing：收起来的时候它们该一个像素都不占。
     -->
-    <ScrollView x:Name="Scroller" VerticalScrollBarVisibility="Auto">
+    <ScrollView x:Name="Scroller" Margin="0,-32,0,0" VerticalScrollBarVisibility="Auto">
         <StackPanel>
             <!--
-              页眉：普通页眉，站在页面自己的纸上（2026-09-10「弄个框把轮播图框起来」之后不再浮在图上 ——
-              轮播成了下面那块留边卡片，页眉挪回它上面，墨色跟着主题走）。顶上 12 = 标题栏那一行底下的一口气；
-              左右 24 和底下的卡片、和标题栏第一颗按钮同一条竖线，所以「HOME / 主页」、顶栏第一颗图标和第一排
-              卡片左对齐在同一条竖线上（见 ShellPage.xaml 那段）。
+              **页头那块牌子（PageSlate）2026-09-11 删掉了** —— 他一句「去掉左上角的这些，不要留空位」，
+              问定的是「六个有它的页面全去掉、页头里那几颗按钮收成顶上一行、内容整体上移」。原来这里站着
+              「主页」加底下一行「HOME · 服务器 · N 项」加一条通栏线，第一屏顶上占掉八十来像素，说的却是
+              标题栏那颗「主页」按钮和右上角账号那颗已经说过的话。
+
+              删掉之后轮播卡片直接顶到最上面：顶上那 12 就是标题栏那一行底下的一口气（从前它垫在牌子上面，
+              牌子和卡片之间还有 16）。**别用「少写几个字、留一条空带」那种改法** —— 那正是他要去掉的东西；
+              控件本身也一并删了，要挪回来得从 git 历史里取。
             -->
-            <local:PageSlate
-                x:Name="Slate"
-                x:Uid="HomePage_Slate"
-                Eyebrow="HOME"
-                Margin="24,12,24,0"
-                Note="{x:Bind ViewModel.Subheading, Mode=OneWay}"
-                VerticalAlignment="Top" />
 
             <!--
-              轮播：框起来的一块卡片（「弄个框把轮播图框起来」的真正意思 —— 不占满上半页、和窗口之间留出间隔，
-              徽标、片名、简介、按键都在框里）。四边各让 24（XL 页面间距，和页眉、底下那几排同一条边距线），
-              圆角和那圈发丝线在 HomeBanner 自己身上（Frame）。从窗口顶边算起，它站在标题栏（32）＋ 12 ＋ 页眉
-              ＋ 16 之后，所以「红框框出来的地方全填充上海报」那一版的贴顶、顶回去 32、标题栏浮在图上，这一版
-              全都不再发生 —— SyncBleed 随这一改删除。
+              轮播：通栏（「占满窗口的上半部分（包括窗口标题），下方使用渐变衔接」，2026-09-11）。上沿顶到窗口
+              顶边（即外壳 <c>ContentHost</c> 留给标题栏的那 32 像素也被它吃掉 —— 见 SyncBleed），左右吃满窗口宽；
+              标题栏（含系统那三颗窗口按钮）浮在剧照上，所以这一页要 SetTitleStrip(TitleStrip.OnScrim)，让那
+              一行走固定的浅墨。下沿就是带子自己的硬边（往下探 28 的那条 `Under` 渐变 09-12 按他一句
+              「轮播图的下方不用加黑色渐变」删了）。
 
-              带高照带宽算（HomeCarousel.Height），带宽＝页宽 − 48，比贴边那一版窄 48、矮一截。
+              **这一段 2026-09-10 到 09-11 之间写的是反的**：那时「弄个框把轮播图框起来」被落定成「四边各留 24
+              的卡片」，四条边都让开、标题栏底下永远是页面底色、SyncBleed 连同标题栏墨色联动一起删了。09-11
+              用户要「占满窗口的上半部分（包括窗口标题）」，那一版整个作废，顶回去的负边距和墨色联动都回来了。
 
-              没有幻灯片时它自己收起来（HomeBanner.Apply），StackPanel 不给收起的孩子留位置，页眉和底下那几排
-              之间只剩 16 的 Padding —— 和关掉轮播那一档（设置 → 主页）一样自然。
+              带高照带宽算（HomeCarousel.Height），带宽就是整幅页宽 —— 比卡片那一版宽 48、高约 3%。
+
+              没有幻灯片时它自己收起来（HomeBanner.Apply），StackPanel 不给收起的孩子留位置，标题栏底下就只剩
+              Overlay 那 16 的 Padding —— 和关掉轮播那一档（设置 → 主页）一样自然。
             -->
             <local:HomeBanner
                 x:Name="Banner"
                 OpenRequested="OnBannerOpenRequested"
                 PlayRequested="OnBannerPlayRequested"
-                Slides="{x:Bind ViewModel.Slides, Mode=OneWay}"
-                Margin="24,16,24,0" />
+                Slides="{x:Bind ViewModel.Slides, Mode=OneWay}" />
 
             <!-- 横着的那几排，从大图的下沿之后开始 —— 第一屏整个归上面那张大图。这一层没有板底也没有负的上边距：
                  媒体库 2026-09-08 从右栏改回横排、再没有哪一排压在图上，所以「提起来一叠玻璃」那一套连
                  HomeCarousel.ShelfLift 一起删了。
 
                  左右那 24 走 Padding：和大图上那块牌子对齐。 -->
-            <Grid x:Name="Overlay" Background="Transparent" Padding="24,16,24,24">
+            <Grid x:Name="Overlay" Background="Transparent" Padding="36,24,36,40">
                 <StackPanel>
                     <ProgressBar
                         IsIndeterminate="True"
@@ -155,7 +151,7 @@
                         ItemTemplate="{StaticResource ShelfTemplate}"
                         ItemsSource="{x:Bind ViewModel.Shelves, Mode=OneWay}">
                         <ItemsRepeater.Layout>
-                            <StackLayout Orientation="Vertical" Spacing="24" />
+                            <StackLayout Orientation="Vertical" Spacing="36" />
                         </ItemsRepeater.Layout>
                     </ItemsRepeater>
 

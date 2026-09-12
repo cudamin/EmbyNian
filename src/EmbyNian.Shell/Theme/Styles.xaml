@@ -49,8 +49,8 @@
     <x:Double x:Key="EgBodyFontSize">14</x:Double>
     <x:Double x:Key="EgSubheadFontSize">16</x:Double>
     <x:Double x:Key="EgTitleFontSize">20</x:Double>
-    <x:Double x:Key="EgHeaderFontSize">34</x:Double>
-    <x:Double x:Key="EgDisplayFontSize">44</x:Double>
+    <x:Double x:Key="EgHeaderFontSize">36</x:Double>
+    <x:Double x:Key="EgDisplayFontSize">52</x:Double>
 
     <!--
       眉字的字距，千分之一 em 为单位（CharacterSpacing 就是这个单位）。0.14 em 是「小号大写要读得开」
@@ -61,7 +61,15 @@
     <!-- ============================ 几何 ============================ -->
 
     <!-- 你会去点的面板：设置卡片、账号那一块、对话框、浮出菜单。留着圆角，手感上它还是个 Windows 应用。 -->
-    <CornerRadius x:Key="EgCardCornerRadius">8</CornerRadius>
+    <CornerRadius x:Key="EgCardCornerRadius">16</CornerRadius>
+
+    <!--
+      同一档圆角，给「一块板要分两截画」的那一处（集页整段上方那块大面板：上截贴在头图那一格里、下截贴在
+      尾部那一格，两截各自只有外侧两个角）。这两个键里的 16 必须和上面那个一样 —— XAML 里没有「取一个
+      CornerRadius 的前两个角」这种写法，所以是抄一份数而不是引用一份，改圆角要三处一起改。
+    -->
+    <CornerRadius x:Key="EgCardCornerRadiusTop">16,16,0,0</CornerRadius>
+    <CornerRadius x:Key="EgCardCornerRadiusBottom">0,0,16,16</CornerRadius>
 
     <!--
       封面的圆角（「把封面改成圆角的」）：海报、剧照、单集缩略图那一格，也就是 EgFrameStyle 和详情页头部
@@ -70,7 +78,7 @@
       圆角只有 Border 剪得动 —— Border 会按自己的 CornerRadius 裁掉孩子，Grid 和 Panel 只是把自己的底色
       和框线画圆，孩子照旧方着。所以凡是「里面那张图自己铺到四边」的块，用下面那个 0，见那条说明。
     -->
-    <CornerRadius x:Key="EgPosterCornerRadius">8</CornerRadius>
+    <CornerRadius x:Key="EgPosterCornerRadius">12</CornerRadius>
 
     <!--
       还是方的那几块：设置里那六块色板。它们的共同点不是「大」，是**里面的东西自己画到边而外面那层剪不动它**：
@@ -79,6 +87,15 @@
       （圆角）」之后它换成了自己的 EgFrame 圆角框（HomeBanner.xaml 里 Frame 那一段），不再用这个键。）
     -->
     <CornerRadius x:Key="EgBleedCornerRadius">0</CornerRadius>
+
+    <!--
+      详情页文件选项那六颗下拉的圆角（「字幕、音频、视频的选择框边角弄圆一些」，2026-09-12）。三个选择器
+      （视频／媒体源、音频、字幕）各有两颗 —— 集页宽版式一份站在片名栏里、其余页面和紧凑版式一份站在尾部，
+      六颗共用这一个键。Fluent 给 ComboBox 的出厂圆角是 4，站在这套 16 的卡片、12 的封面旁边读着太方；
+      取封面那一档 12 —— 下拉高 32，再往上（16）就整颗胶囊了。只圆闭合时那一圈框，点开的下拉列表还是
+      框架自己的圆角，跟设置页那些下拉一个样。
+    -->
+    <CornerRadius x:Key="EgPickerCornerRadius">12</CornerRadius>
 
     <!-- 发丝线的粗细。结构靠它，不靠色块 —— 所以只有一档，加粗只发生在框线变强调色的时候。 -->
     <Thickness x:Key="EgHairline">1</Thickness>
@@ -93,7 +110,7 @@
       按键的高度。整套界面只有这一个 —— 头图上的播放键、轮播的播放和详情、翻页箭头、圆图标键，以前是
       38/40/44 三档混着，差 2 像素的两颗键并排放着只会显得没对齐。方形图标键的边长也是它。
     -->
-    <x:Double x:Key="EgActionHeight">38</x:Double>
+    <x:Double x:Key="EgActionHeight">44</x:Double>
 
     <!-- ============================ 间距 ============================ -->
 
@@ -126,7 +143,7 @@
       主页那块牌子的左右、标题栏那一排图标的缩进（17 + 托盘留白 7 = 24）。三样东西一条竖线，见 ShellPage.xaml
       里那两段说明。（从前第四处是标签栏第一格的左边距，那条标签栏 2026-09-08 删掉了。）
     -->
-    <Thickness x:Key="EgPageMargin">24,24,24,24</Thickness>
+    <Thickness x:Key="EgPageMargin">32,28,32,28</Thickness>
 
     <!--
       一块板／一张卡里面留多宽。和页边同一个数（XL），所以页边、框线、内边距叠起来是 24 + 1 + 24 —— 板上的
@@ -173,12 +190,31 @@
     </Style>
 
     <!--
-      片名：详情页头图上那一个，主页轮播上那一个，共用这一个 —— 页面标题再大一档。两处都是整屏最大的
-      一块字，它们不该一个 40 一个 34，也不该都落回正文字。
+      片名：主页轮播上那一个。整屏最大的一块字。
+      （详情页头图上那一行 2026-09-12 分出去成了下面那个 EgHeroTitleStyle —— 那一行会折行，两行的账和
+      轮播上这一行不是一笔，理由写在那个键上。）
     -->
     <Style x:Key="EgDisplayTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource EgPageTitleStyle}">
         <Setter Property="FontSize" Value="{StaticResource EgDisplayFontSize}" />
         <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+    </Style>
+
+    <!--
+      详情页头图上的片名（电影、剧、季、集四种页面共用）。从 EgDisplayTitleStyle 分出来的两处改动
+      （2026-09-12，他一张截图两句话：「缩小到上下不会重叠就好」）：
+
+      1. 字号落到页面标题那一档（36）。「无职转生～到了异世界就拿出真本事～」这种长片名在 52 上折两行，
+         两行合起来一百三十多像素；而这一行上面顶着徽标、下面紧跟「S3:E2 - 集名」，整段字被它一个人撑高。
+         轮播上那一行不折行（单行铺满，字号大正是它的活），所以那一头照旧 52。
+      2. 行高写死 45（36 × 1.25）。这一支字体是 Bahnschrift SemiCondensed，汉字从雅黑掉下来 —— 行距按
+         Bahnschrift 算，而雅黑的字比那个行距高，于是折行时两行直接叠在一起：他那张截图上第二行的字咬进了
+         第一行。LineHeight 只是个下限（LineStackingStrategy 默认取「行高和内容高两者取大」），所以它在这里
+         =「还给汉字一个正常的行距」，不是把行压扁。
+         ⚠️ 字号要是改回 52，这个 45 就得跟着改（1.25 倍），否则行距又比字小。
+    -->
+    <Style x:Key="EgHeroTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource EgPageTitleStyle}">
+        <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+        <Setter Property="LineHeight" Value="45" />
     </Style>
 
     <!-- 分区标题：卡片带的名字、设置页每张卡片的名字。 -->
@@ -337,5 +373,30 @@
         <Setter Property="Foreground" Value="{ThemeResource EgTextOnAccentBrush}" />
         <Setter Property="HorizontalAlignment" Value="Center" />
         <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- 保留系统模板的焦点、键盘和高对比行为，只统一交互表面的尺寸。 -->
+    <Style x:Key="EgPrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+        <Setter Property="MinHeight" Value="44" />
+        <Setter Property="CornerRadius" Value="22" />
+        <Setter Property="Padding" Value="22,10" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style x:Key="EgSecondaryButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Padding" Value="18,8" />
+        <Setter Property="Background" Value="{ThemeResource EgSurfaceAltBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource EgBorderBrush}" />
+    </Style>
+
+    <Style x:Key="EgIconButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
     </Style>
 </ResourceDictionary>

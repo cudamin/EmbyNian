@@ -26,6 +26,7 @@ internal static class EmbyTests
         RegisterItemModel();
         RegisterMetadataEdit();
         RegisterImageCache();
+        HttpDeadlineTests.Register();
     }
 
     private static void RegisterAddress()
@@ -1432,6 +1433,107 @@ internal static class EmbyTests
             Assert.True(ImageCachePolicy.WorthTouching(now.AddYears(1), now));
         });
 
+        Test("图片重试：失败后隔 2 秒、再隔 4 秒，然后就交出去", () =>
+        {
+            // 「服务器没这张图」和「这次没取到」必须是两种答案：日志里那些挤在同一秒的 500 和偶尔的超时都是
+            // 短命的，隔两秒再问大多就拿到了；可表不能不走完 —— 一直转下去的服务器车轮战比灰格子更糟。
+            Assert.Equal(TimeSpan.FromSeconds(2), ImageCachePolicy.RetryDelay(0));
+            Assert.Equal(TimeSpan.FromSeconds(4), ImageCachePolicy.RetryDelay(1));
+            Assert.Null(ImageCachePolicy.RetryDelay(2));
+            Assert.Null(ImageCachePolicy.RetryDelay(7));
+        });
+
+        Test("图片重试：刚失败过的不急着重问，隔够冷却才再问", () =>
+        {
+            Assert.False(ImageCachePolicy.WorthRetrying(now.AddSeconds(-5), now), "五秒前刚失败过");
+            Assert.False(ImageCachePolicy.WorthRetrying(now.AddSeconds(-1), now));
+            Assert.True(ImageCachePolicy.WorthRetrying(now - ImageCachePolicy.FailedRetryCooldown, now), "正好到期");
+            Assert.True(ImageCachePolicy.WorthRetrying(now.AddDays(-1), now));
+        });
+
+        Test("图片重试：失败时间戳在未来的也要拉回来", () =>
+        {
+            // 道理同 WorthTouching 那一条：不许一张卡因为一个奇怪的时间戳永远卡在「刚失败过」里。
+            Assert.True(ImageCachePolicy.WorthRetrying(now.AddHours(3), now));
+        });
+
+        // 上面几条钉的是档位表，这三条钉的是表接到真下载上还成立：404 一趟就死心，5xx 隔两秒能救回来，
+        // 救不回来的把失败交出去 —— 最后这一条就是「封面永远灰着」那个毛病的解药，它值得一条自己的测试。
+        Test("图片重试：404 是终局答案，一趟问完就死心", () =>
+        {
+            var root = TempDirectory();
+            try
+            {
+                var transport = new StubTransport().Fail("Items/img404/Images/Primary", HttpStatusCode.NotFound);
+                var store = RetryStore(transport, root);
+
+                var bytes = store
+                    .GetAsync("img404", EmbyImageStore.Primary, "tag1", 400, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+
+                Assert.Null(bytes, "404 应该作为「没有」交回去");
+                Assert.Equal(1, transport.Count("Items/img404/Images/Primary"), "终局答案不重试");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+
+        Test("图片重试：第一趟 500，隔两秒的第二趟拿到了", () =>
+        {
+            var root = TempDirectory();
+            try
+            {
+                var transport = new StubTransport().Sequence(
+                    "Items/imgflaky/Images/Primary",
+                    (HttpStatusCode.InternalServerError, ""),
+                    (HttpStatusCode.OK, "fake-png-bytes"));
+                var store = RetryStore(transport, root);
+
+                var bytes = store
+                    .GetAsync("imgflaky", EmbyImageStore.Primary, "tag1", 400, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+
+                Assert.True(bytes is not null && Encoding.UTF8.GetString(bytes) == "fake-png-bytes",
+                    "重试应该把图拿回来");
+                Assert.Equal(2, transport.Count("Items/imgflaky/Images/Primary"), "首趟加一趟重试");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+
+        Test("图片重试：一直失败就把失败交出去，而不是吞成「没有」", () =>
+        {
+            var root = TempDirectory();
+            try
+            {
+                var transport = new StubTransport().Fail("Items/imgdown/Images/Primary", HttpStatusCode.InternalServerError);
+                var store = RetryStore(transport, root);
+
+                Exception? caught = null;
+                try
+                {
+                    store.GetAsync("imgdown", EmbyImageStore.Primary, "tag1", 400, CancellationToken.None)
+                        .GetAwaiter().GetResult();
+                }
+                catch (Exception error)
+                {
+                    caught = error;
+                }
+
+                Assert.True(caught is EmbyApiException,
+                    $"应当把失败交出来，实际抛的是 {caught?.GetType().Name ?? "什么都没有（null）"}");
+                Assert.Equal(3, transport.Count("Items/imgdown/Images/Primary"), "首趟加两趟重试，一共三趟");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+
         // 上面几条钉的是次序，这一条钉的是它接到真磁盘上还成立 —— glob、排序和删除三件事一起走通，而
         // 「清除缓存」那个按钮的教训就是：算得对不等于删对了东西。
         Test("图片缓存：清理真的按最久没看过删，并且只删 .img", () =>
@@ -1489,6 +1591,39 @@ internal static class EmbyTests
             Configuration.PassthroughSecretProtector.Instance),
         new Configuration.CredentialVault(Configuration.PassthroughSecretProtector.Instance),
         DeviceIdentity.Create("device-1", "3.0.0"));
+
+    /// <summary>
+    /// 挂在 <paramref name="transport"/> 上、已经登录的图片仓，给图片重试那几条测试用。路径同
+    /// <see cref="Session"/>：只在内存里走，不碰真服务器也不落盘。恢复登录要的两问（公共信息和媒体库列表）
+    /// 在这里补上，调用方只管配它关心的图片那一问。
+    /// </summary>
+    private static EmbyImageStore RetryStore(StubTransport transport, string directory)
+    {
+        transport
+            .Answer("System/Info/Public", """{ "ServerName": "离线测试", "Id": "stub" }""")
+            .Answer("Views", """{ "Items": [], "TotalRecordCount": 0 }""");
+
+        var session = new EmbySession(
+            new Configuration.AppSettings(),
+            new Configuration.SettingsStore(
+                new AppPaths(Path.Combine(Path.GetTempPath(), $"embynian-retry-{Guid.NewGuid():N}")),
+                Configuration.PassthroughSecretProtector.Instance),
+            new Configuration.CredentialVault(Configuration.PassthroughSecretProtector.Instance),
+            DeviceIdentity.Create("device-1", "3.0.0"),
+            transport);
+
+        Assert.True(session.TryRestoreAsync(
+            new Configuration.ServerProfile { Url = "http://images.invalid" },
+            new Configuration.AccountProfile
+            {
+                Username = "test-user",
+                UserId = "test-user",
+                ProtectedAccessToken = Configuration.PassthroughSecretProtector.Instance.Protect("offline-test-token")
+            },
+            CancellationToken.None).GetAwaiter().GetResult());
+
+        return new EmbyImageStore(session, directory);
+    }
 
     /// <summary>
     /// 等一件后台的事发生，最多五秒。清理是 fire-and-forget 的（开机时它不该拦住任何东西），所以这里只能等 ——

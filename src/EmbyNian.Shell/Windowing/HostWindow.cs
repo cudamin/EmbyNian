@@ -49,7 +49,14 @@ internal sealed class HostWindow : IDisposable
     private const uint BaseColorRef = 0x001C1816;
 
     private const int DefaultHeight = 800;
-    private const int MinimumWidth = 900;
+
+    /// <summary>
+    /// 客户区最窄能到多少。900 是多年来的旧数；详情页换了紧凑版式（<c>DetailHero.CompactFloor</c> = 1024，
+    /// 参考手机版式的那一档）之后，窗口得能拖进那条线底下它才看得见，所以放到 600 —— 比那条线低出一大截，
+    /// 紧凑版式在最窄的那一段（600 到 700）也是完整的单列版式，而不是一换过去就顶着最小宽。
+    /// </summary>
+    private const int MinimumWidth = 600;
+
     private const int MinimumHeight = 560;
 
     /// <summary>
@@ -116,28 +123,6 @@ internal sealed class HostWindow : IDisposable
     private const nuint BandTimer = 1;
 
     private const uint BandTimerInterval = 250;
-
-    /// <summary>
-    /// The <c>WM_TIMER</c> id behind the video settle pass, and how often it asks. It exists because the
-    /// async resize <see cref="VideoWindow.Fill"/> posts to mpv's child can be <em>dropped</em>: a
-    /// pending async window position operation is discarded the moment anyone — mpv's own thread
-    /// catching up, or any of its repositionings — makes a <em>synchronous</em> <c>SetWindowPos</c> on
-    /// that same window, and a paused mpv issues nothing at all to replace it. Either way the child
-    /// keeps its old size and the picture sits at that size in the top-left corner:
-    /// 「窗口化然后再进入全屏画面会保持原尺寸固定在左上角」 — 「有时候」, because the drop needs mpv to
-    /// make a synchronous call in exactly the window between our post and its processing. Re-armed by
-    /// every <c>WM_SIZE</c> and re-run for a second or so after the last one; a pass where the child
-    /// is already the right size reads three rects and posts nothing, so a healthy run costs nothing.
-    /// </summary>
-    private const nuint VideoSettleTimer = 2;
-
-    private const uint VideoSettleInterval = 150;
-
-    /// <summary>How many settle passes one geometry change buys — 1.2 s of self-healing at the interval above.</summary>
-    private const int VideoSettlePasses = 8;
-
-    /// <summary>Passes left on the settle timer. Reset by every size change, so a drag arms it once, for its end.</summary>
-    private int _videoSettlePasses;
 
     /// <summary>
     /// Where a title-bar drag took hold, in screen pixels, and the window origin it took hold from. Held
@@ -1182,6 +1167,9 @@ internal sealed class HostWindow : IDisposable
             screen.Left, screen.Top, screen.Width, screen.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
 
+        // 窗口已到全屏大小，Fill 只改视频窗口自己 —— mpv 的钩子收到这一拍会自己把子窗口跟上来。
+        _video?.Fill();
+
         // Politeness first, then the part that actually works. MarkFullscreenWindow is the documented way
         // to ask the shell to stand aside and costs nothing, but measured on this window it changes
         // nothing: the tray keeps its WS_EX_TOPMOST and its pixels. So the window joins the topmost band
@@ -1218,6 +1206,9 @@ internal sealed class HostWindow : IDisposable
             Handle, Native.HwndNoTopMost,
             saved.Bounds.Left, saved.Bounds.Top, saved.Bounds.Width, saved.Bounds.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
+
+        // 同 EnterFullscreen 那发：Fill 只改视频窗口自己，mpv 的子窗口由它自己的钩子跟上。
+        _video?.Fill();
 
         Log.Info(Category, "退出全屏");
     }
@@ -1995,19 +1986,7 @@ internal sealed class HostWindow : IDisposable
         _source.SiteBridge.MoveAndResize(new RectInt32(0, 0, client.Width, client.Height));
         UpdateTitleBarRegions();
 
-        // The second and last call. mpv resizes its own child inside this one.
         _video?.Fill();
-
-        // And the settle pass behind it: the async half of that call can be dropped (see
-        // VideoSettleTimer's remarks) and neither side will say another word until asked, so the
-        // asking repeats for a moment after the geometry stops moving. SetTimer with an already-live
-        // id just restarts its interval, which is what a resize storm wants: no passes mid-drag, and
-        // the whole budget after the last one.
-        if (_video is not null)
-        {
-            _videoSettlePasses = VideoSettlePasses;
-            Native.SetTimer(Handle, VideoSettleTimer, VideoSettleInterval, IntPtr.Zero);
-        }
     }
 
     private static IntPtr Dispatch(IntPtr window, uint message, IntPtr wParam, IntPtr lParam)
@@ -2088,19 +2067,6 @@ internal sealed class HostWindow : IDisposable
                 if (Fullscreen) JudgeBand();
                 return IntPtr.Zero;
 
-            case Native.WmTimer when (nuint)(nint)wParam == VideoSettleTimer:
-                if (_video is null)
-                {
-                    // Only reachable between the timer firing and the window's destruction — the
-                    // surface is kept for the process's whole lifetime once made. Nothing to settle.
-                    Native.KillTimer(Handle, VideoSettleTimer);
-                    return IntPtr.Zero;
-                }
-
-                _video.Fill();
-                if (--_videoSettlePasses <= 0) Native.KillTimer(Handle, VideoSettleTimer);
-                return IntPtr.Zero;
-
             case Native.WmDpiChanged:
                 // lParam is the window rect Windows suggests for the new scale. Taking it verbatim
                 // is what keeps a drag across monitors from jumping.
@@ -2137,7 +2103,6 @@ internal sealed class HostWindow : IDisposable
                 // freed HWND.
                 _video?.Dispose();
                 _video = null;
-                Native.KillTimer(window, VideoSettleTimer);
 
                 Closed?.Invoke();
                 return IntPtr.Zero;

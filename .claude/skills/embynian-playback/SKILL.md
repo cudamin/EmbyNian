@@ -81,6 +81,8 @@ Three things about those constraints that `CLAUDE.md` doesn't say:
 
 **`PlayerPage` is a sibling `UserControl` of the navigation shell, not a page inside the `Frame`**: it is a transparent XAML island with mpv's child window showing through from underneath. That is why the title bar, the window buttons and window dragging during playback are this page's own job rather than the shell's.
 
+**mpv's `dwidth`/`dheight` exist before the video is configured and fall back to the window's client size then** (libmpv 0.41, measured off the 2026-09-12 上下黑边 incident in PROGRESS.md — a slowly decoding mp4 answered the aspect poll with the window's own shape, and the window then locked to itself, letterboxing the real picture). `video-params/*` is the family that genuinely appears only once the video is known: gate any read of the display pair on `video-params/w` first. The same belief in another guise — 「the properties do not exist until a frame is decoded」 — sat in the aspect poll's own comment for months, so don't trust a property-existence claim that a 404'd or remuxed file never got to exercise.
+
 Two rules about the 10 Hz ticker:
 
 - **It must not stop.** It drives `ViewModel.Tick()` (coalesced `percent-pos` seeks, stats refresh, volume push, the 「跳过」 button floating up) *and* pointer polling — which is how the player notices the hand moved after the cursor was hidden. `ChromeReveal.Pending` going false only means the OSD finished collapsing, not that the timer may stop. To save cost, make the idle tick cheap; don't stop the clock.
@@ -92,4 +94,4 @@ Two rules about the 10 Hz ticker:
 
 When changing playback synchronisation, put these through the tests or the self-check: stop and close, episode switch, auto-next, resume position, progress reporting, server state write-back, and cancellation mid-flight.
 
-Then run the four gates — procedure in the `embynian-verification` skill.
+Then run the gates — build, test and publish always, the self-check when a version ships (or when the check itself changed). The when and the procedure are in the `embynian-verification` skill.

@@ -174,17 +174,17 @@ public sealed partial class PlayerViewModel : ObservableObject
 
     // ---- 着色器档位的本次播放状态 -------------------------------------------------
     //
-    // 任务书 2.4：开播时算两套方案（当前窗口 / 所在显示器全屏），进退全屏直接换预备好的那一套，窗口尺寸变化
-    // 停稳 400 毫秒才判一次。判定本身在 Core 里（OutputWatch 加 ShaderTier），这里只有「这次播放是哪个文件」
-    // 和「用户有没有自己钉住一条链」。
+    // 档位固定用全屏那套（他的拍板，2026-09-11）：开播时按所在显示器尺寸算一次方案，进退全屏和拖动都
+    // 不再换链 —— ArtCNN 这类放大器在核显上每个尺寸的冷编译要数秒，随全屏实时换链就是「画面停在旧
+    // 尺寸贴在左上角」（探针读数在 work/embedprobe/）。判定机制仍在 Core（OutputWatch 加 ShaderTier），
+    // 这里只剩「这次播放是哪个文件」和「用户有没有自己钉住一条链」。
 
     /// <summary>What a re-measurement needs to resolve the chain again: the file, its source and its series.</summary>
     private (EmbyItem Item, MediaSource Source, EmbyItem? Parent)? _shaderContext;
 
     private OutputWatch? _outputWatch;
     private ShaderSurface _surface;
-    private ShaderDecision _windowedPlan;
-    private ShaderDecision _fullscreenPlan;
+    private ShaderDecision _shaderPlan;
 
     /// <summary>The output size the launch decision was made against, so 播放信息 can say when it has moved.</summary>
     private (int Width, int Height) _launchOutput;

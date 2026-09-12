@@ -97,35 +97,19 @@ internal sealed class VideoWindow : IDisposable
     public IntPtr Handle { get; private set; }
 
     /// <summary>
-    /// Resizes to the parent's client area. Called from <c>WM_SIZE</c>, once, next to the island's single
-    /// <c>MoveAndResize</c>: two calls per resize against the WinForms shell's nine, which is most of why
-    /// 「调整画面大小时窗口的变化」 is smoother here (requirement 1).
+    /// 缩放到父窗口客户区大小。**只改自己，不碰 mpv 的子窗口** —— 那块子窗口归 mpv 管。
     /// <para>
-    /// mpv's own child is resized with it, and that second call is 「暂停后进全屏，画面留在左上角、其余全黑」
-    /// (2026-09-04). Playing, mpv catches up by itself within a frame and nothing shows; paused, there is no
-    /// next frame, and if mpv has not heard that its parent grew it never redraws — the film stays the size
-    /// the window was, in the top-left corner, with this class's black brush around it. Sizing mpv's window
-    /// ourselves settles it either way: if mpv already did it this is a no-op, and if it did not, the
-    /// <c>WM_SIZE</c> it gets from here is exactly the event its own resize-and-redraw path waits for.
+    /// mpv 在嵌入模式往<b>我们这条线程</b>上装了一个 <c>WH_CALLWNDPROC</c> 钩子（mpv 源码
+    /// w32_common.c 的 <c>resize_child_win</c>，mpv.net 同款机制）：我们对自己窗口的每一次
+    /// <c>SetWindowPos</c> 都会发出 <c>WM_WINDOWPOSCHANGED</c>，钩子当场读它和 mpv 子窗口两边
+    /// 的实际矩形，不一致就自己把差补上，暂停时也会重画。过渡期的每一拍它都记着，最后一拍
+    /// 必是最终尺寸，所以它自己就收敛 —— mpv.net 对这件事一件事都不做，多年没出过病。
     /// </para>
     /// <para>
-    /// The resize of mpv's child is <b>asked, not assumed</b>. It goes out as <c>SWP_ASYNCWINDOWPOS</c>
-    /// because the child belongs to mpv's own thread — hence posted rather than waited on while we are
-    /// inside <c>WM_SIZE</c> — and a posted window position is dropped the moment anyone makes a
-    /// <em>synchronous</em> <c>SetWindowPos</c> on the same window, mpv's own catch-up included. The
-    /// 2026-09-04 fix worked only while mpv stayed quiet; a paused mpv catching up mid-transition could
-    /// still eat our resize and leave the picture at its old size in the corner
-    /// (「窗口化然后再进入全屏画面会保持原尺寸固定在左上角」 — the 「有时候」 is exactly this window). So this
-    /// method reads the child's actual rect first and posts only when it disagrees with the parent's
-    /// client area, which makes it idempotent and lets <see cref="HostWindow"/>'s settle timer simply call
-    /// it again until it finds nothing to do.
-    /// </para>
-    /// <para>
-    /// Measured before writing it: an embedded mpv (mpv.exe 0.41 into a window built and resized like this
-    /// one, gpu-next on vulkan, hwdec on, paused from the first frame) recreates its swapchain and redraws at
-    /// the new size — its own log says 「(Re)creating swapchain of size 1040x585」 while <c>pause</c> is still
-    /// true. So the redraw is not the missing half; hearing about the resize is. The four probes are in
-    /// <c>artifacts/shader-probe/embed-*.ps1</c>.
+    /// 宿主反而不能亲手帮忙：我们同步改它的子窗口，会按 Win32 的规矩<b>丢弃 mpv 挂起的异步
+    /// 追赶</b>；过渡期中间态的尺寸（比如退全屏时边框回收那一拍）先落了地、正确的最终一拍被
+    /// 扔掉，mpv 就永远卡在中间尺寸 —— 「进全屏画面缩在左上角」「退全屏后画面卡着不放」
+    /// 2026-09-11 的日志里每一起都是它。谁的手都别伸，是最好的修法。
     /// </para>
     /// </summary>
     public void Fill()
@@ -137,27 +121,20 @@ internal sealed class VideoWindow : IDisposable
             Handle, IntPtr.Zero, 0, 0, client.Width, client.Height,
             Native.SwpNoZOrder | Native.SwpNoActivate | Native.SwpNoCopyBits);
 
-        // mpv creates exactly one child in here, and it belongs to mpv's own thread — hence the asynchronous
-        // form, which posts instead of waiting for that thread to answer while we are inside WM_SIZE.
-        var picture = Native.GetWindow(Handle, Native.GwChild);
-        if (picture == IntPtr.Zero) return;
-
-        // The child's actual size is the whole question: an async post can be dropped by any synchronous
-        // SetWindowPos on the same window, so a wrong-size child still has to be asked again — and an
-        // already-right one must not be, because this runs on the settle timer too and re-posting a
-        // no-op resize to mpv's thread eight times per transition is exactly the churn the guard avoids.
-        if (Native.GetWindowRect(picture, out var child))
+        // 诊断（2026-09-11 深夜）：干净探针里 mpv 自己的钩子全程跟上，应用里却没跟 —— 打出两边
+        // 的实际几何，让下一次复现直接告诉我们钩子到底 firing 没有。子窗口是 mpv 自己的，不碰。
+        var child = Native.GetWindow(Handle, Native.GwChild);
+        if (child != IntPtr.Zero && Native.GetWindowRect(child, out var r))
         {
-            var corner = new NativePoint { X = child.Left, Y = child.Top };
-            if (Native.ScreenToClient(_parent, ref corner)
-                && corner.X == 0 && corner.Y == 0
-                && child.Width == client.Width && child.Height == client.Height)
-                return;
+            var corner = new NativePoint { X = r.Left, Y = r.Top };
+            var origin = Native.ScreenToClient(_parent, ref corner) ? $"@({corner.X},{corner.Y})" : "?";
+            Log.Debug(Category,
+                $"Fill 后：客户区 {client.Width}×{client.Height}，mpv 子窗口 {r.Width}×{r.Height}{origin}");
         }
-
-        Native.SetWindowPos(
-            picture, IntPtr.Zero, 0, 0, client.Width, client.Height,
-            Native.SwpNoZOrder | Native.SwpNoActivate | Native.SwpNoCopyBits | Native.SwpAsyncWindowPos);
+        else
+        {
+            Log.Debug(Category, $"Fill 后：客户区 {client.Width}×{client.Height}，尚无 mpv 子窗口");
+        }
     }
 
     private static void EnsureClassRegistered(IntPtr instance)

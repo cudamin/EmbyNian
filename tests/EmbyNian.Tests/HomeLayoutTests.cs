@@ -20,13 +20,13 @@ internal static class HomeLayoutTests
         {
             var plan = HomeLayout.Plan(null, [Library("1", "电影"), Library("2", "电视节目")]);
 
-            Assert.Equal(6, plan.Count);
+            // 整个服务器的「最近添加」那一排 2026-09-12 退役：默认版面里不再有它。
+            Assert.Equal(5, plan.Count);
             Assert.Equal("继续观看", plan[0].Title);
             Assert.Equal("媒体库", plan[1].Title);
             Assert.Equal("接下来看", plan[2].Title);
-            Assert.Equal("最近添加", plan[3].Title);
-            Assert.Equal("最近添加 · 电影", plan[4].Title);
-            Assert.Equal("最近添加 · 电视节目", plan[5].Title);
+            Assert.Equal("最近添加 · 电影", plan[3].Title);
+            Assert.Equal("最近添加 · 电视节目", plan[4].Title);
 
             // 默认全部显示：新加的库不该悄悄地不出现。
             Assert.True(plan.All(row => row.Visible), "默认应当全部显示");
@@ -34,10 +34,9 @@ internal static class HomeLayoutTests
 
         Test("主页版面：存档里那份次序说了算", () =>
         {
-            // 用户把最近添加拖到最前面，把媒体库那一排勾掉了。
+            // 用户把媒体库那一排勾掉了。
             List<HomeRowSetting> saved =
             [
-                Row(HomeLayout.Latest, "最近添加"),
                 Row(HomeLayout.Libraries, "媒体库", visible: false),
                 Row(HomeLayout.Resume, "继续观看"),
                 Row(HomeLayout.NextUp, "接下来看")
@@ -45,16 +44,43 @@ internal static class HomeLayoutTests
 
             var plan = HomeLayout.Plan(saved, [Library("1", "电影")]);
 
-            Assert.Equal("最近添加", plan[0].Title);
-            Assert.Equal("媒体库", plan[1].Title);
-            Assert.False(plan[1].Visible, "勾掉的那一排要留着不显示，而不是消失");
-            Assert.Equal("继续观看", plan[2].Title);
-            Assert.Equal("接下来看", plan[3].Title);
+            Assert.Equal("媒体库", plan[0].Title);
+            Assert.False(plan[0].Visible, "勾掉的那一排要留着不显示，而不是消失");
+            Assert.Equal("继续观看", plan[1].Title);
+            Assert.Equal("接下来看", plan[2].Title);
 
             // 存档里没有的补在末尾。
-            Assert.Equal(5, plan.Count);
-            Assert.Equal("最近添加 · 电影", plan[4].Title);
-            Assert.True(plan[4].Visible);
+            Assert.Equal(4, plan.Count);
+            Assert.Equal("最近添加 · 电影", plan[3].Title);
+            Assert.True(plan[3].Visible);
+        });
+
+        Test("主页版面：退役的整服最近添加那一排，存档里还带着也扔掉", () =>
+        {
+            // 「去掉最近添加，保留最近添加 电视节目、最近添加 电影」（用户的话，2026-09-12）。
+            // 老设置文件里都有这一行（钥匙 latest）：认不出就落不进版面，归一化顺手把它写没。
+            List<HomeRowSetting> saved =
+            [
+                Row(HomeLayout.Resume, "继续观看"),
+                Row("latest", "最近添加"),
+                Row(HomeLayout.LibraryKey("7"), "最近添加 · 纪录片")
+            ];
+
+            var plan = HomeLayout.Plan(saved, [Library("7", "纪录片")]);
+
+            // 存档里没写的固定排照默认补上；退役的那一排两边都不再回来。
+            Assert.Equal(4, plan.Count);
+            Assert.True(plan.All(row => row.Key != "latest"), "退役的那一排还在版面里");
+            Assert.Equal("继续观看", plan[0].Title);
+            Assert.Equal("最近添加 · 纪录片", plan[1].Title);
+            Assert.Equal("媒体库", plan[2].Title);
+            Assert.Equal("接下来看", plan[3].Title);
+
+            // 库列表不在手上时也一样扔；库那一排按存档里记着的名字原地留着。
+            var blind = HomeLayout.Plan(saved, null);
+            Assert.Equal(4, blind.Count);
+            Assert.True(blind.All(row => row.Key != "latest"), "空手时退役的那一排回来了");
+            Assert.Equal("最近添加 · 纪录片", blind[1].Title);
         });
 
         Test("主页版面：服务器上新加的库排到末尾，删掉的那个扔掉", () =>
@@ -64,14 +90,13 @@ internal static class HomeLayoutTests
                 Row(HomeLayout.Resume, "继续观看"),
                 Row(HomeLayout.LibraryKey("gone"), "最近添加 · 纪录片", visible: false),
                 Row(HomeLayout.Libraries, "媒体库"),
-                Row(HomeLayout.NextUp, "接下来看"),
-                Row(HomeLayout.Latest, "最近添加")
+                Row(HomeLayout.NextUp, "接下来看")
             ];
 
             var plan = HomeLayout.Plan(saved, [Library("new", "电影")]);
 
             // 那个库已经不在服务器上了：这一排整个扔掉 —— 留着就是一排永远空的货架。
-            Assert.Equal(5, plan.Count);
+            Assert.Equal(4, plan.Count);
             Assert.True(plan.All(row => HomeLayout.LibraryId(row.Key) != "gone"), "删掉的库还在版面里");
 
             Assert.Equal("最近添加 · 电影", plan[^1].Title);
@@ -86,8 +111,7 @@ internal static class HomeLayoutTests
                 Row(HomeLayout.LibraryKey("4"), "最近添加 · 电视节目", visible: false),
                 Row(HomeLayout.Resume, "继续观看"),
                 Row(HomeLayout.Libraries, "媒体库"),
-                Row(HomeLayout.NextUp, "接下来看"),
-                Row(HomeLayout.Latest, "最近添加")
+                Row(HomeLayout.NextUp, "接下来看")
             ];
 
             // 「没有那份列表」和「那份列表是空的」都算空手。
@@ -97,7 +121,7 @@ internal static class HomeLayoutTests
             {
                 var plan = HomeLayout.Plan(saved, unknown);
 
-                Assert.Equal(5, plan.Count);
+                Assert.Equal(4, plan.Count);
                 Assert.Equal("最近添加 · 电视节目", plan[0].Title);
                 Assert.False(plan[0].Visible, "勾没了");
 
@@ -107,7 +131,7 @@ internal static class HomeLayoutTests
 
             // 存档里连名字都没记：这一排写不出标题，只能扔。
             var nameless = HomeLayout.Plan([Row(HomeLayout.LibraryKey("4"), "")], null);
-            Assert.Equal(4, nameless.Count);
+            Assert.Equal(3, nameless.Count);
             Assert.True(nameless.All(row => HomeLayout.LibraryId(row.Key) is null), "没有名字的库排进了版面");
         });
 
@@ -130,7 +154,7 @@ internal static class HomeLayoutTests
             var noId = new EmbyItem { Id = "", Name = "没有 id 的库" };
             var plan = HomeLayout.Plan(saved, [noId, Library("1", "电影")]);
 
-            Assert.Equal(5, plan.Count);
+            Assert.Equal(4, plan.Count);
             Assert.True(plan.All(row => row.Key != "nonsense" && row.Key.Length > 0), "认不出的钥匙进了版面");
             Assert.Equal(HomeLayout.LibraryKey("1"), plan[^1].Key);
         });
@@ -139,12 +163,16 @@ internal static class HomeLayoutTests
         {
             Assert.Equal("library:abc", HomeLayout.LibraryKey("abc"));
             Assert.Equal("abc", HomeLayout.LibraryId("library:abc"));
-            Assert.Equal(null, HomeLayout.LibraryId(HomeLayout.Latest));
+            Assert.Equal(null, HomeLayout.LibraryId("latest"));
             Assert.Equal(null, HomeLayout.LibraryId(null));
 
-            // 四排固定的各有一句话；媒体库那几排的标题不从这里来。
+            // 三排固定的各有一句话；媒体库那几排的标题不从这里来。
             Assert.Equal("继续观看", HomeLayout.FixedTitle(HomeLayout.Resume));
-            Assert.Equal("最近添加", HomeLayout.FixedTitle(HomeLayout.Latest));
+            Assert.Equal("媒体库", HomeLayout.FixedTitle(HomeLayout.Libraries));
+            Assert.Equal("接下来看", HomeLayout.FixedTitle(HomeLayout.NextUp));
+
+            // 旧版面那把 latest 钥匙现在认不出了 —— 认不出就排不进版面，见上面退役那一条。
+            Assert.Equal(null, HomeLayout.FixedTitle("latest"));
             Assert.Equal(null, HomeLayout.FixedTitle("library:1"));
         });
 

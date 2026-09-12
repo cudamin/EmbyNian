@@ -219,8 +219,9 @@ public sealed partial class PlayerViewModel
 
     /// <summary>
     /// The shape the server already reported, adopted before the player is even shown — 进播放器时画面两边
-    /// 各有一条黑边. The poll below cannot answer in time: mpv has no <c>dwidth</c> until a frame is decoded,
-    /// so the picture's first half-second landed in whatever shape the window was browsing in — and a window
+    /// 各有一条黑边. The poll below cannot answer in time for the first frames: it waits until the video is
+    /// configured before it reads anything at all (the gate at <see cref="ApplyAspectAsync"/>), so the
+    /// picture's first half-second lands in whatever shape the window was browsing in — and a window
     /// the user has dragged to any shape at all is one mpv has no choice but to letterbox.
     /// （侧边栏还在的时候连开窗那一档都是：窗口天生比 16:9 宽出一条栏。2026-09-06 那条栏删掉之后开窗那一档
     /// 正好是 16:9，可拖过的窗口照旧不是，所以这一步照旧要做。）
@@ -245,9 +246,20 @@ public sealed partial class PlayerViewModel
     /// displayed size — after any aspect override, rotation and panscan — so a rotated or anamorphic file
     /// ends up locked to the shape it is actually drawn at rather than to the stream's stored one.
     /// <para>
-    /// Polled for the same reason the track list is: the properties do not exist until a frame has been
-    /// decoded, and there is no notification to wait for. Silent when it agrees with
-    /// <see cref="AdoptServerAspect"/>, which is the ordinary case.
+    /// Polled for the same reason the track list is: there is no notification to wait for. Silent when it
+    /// agrees with <see cref="AdoptServerAspect"/>, which is the ordinary case.
+    /// </para>
+    /// <para>
+    /// The read is gated on <c>video-params/w</c>, and that gate is the 2026-09-12 黑边事故. This comment
+    /// used to say 「the properties do not exist until a frame has been decoded」 and read the display pair
+    /// straight away — true of <c>video-params</c>, not of <c>dwidth</c>/<c>dheight</c> on the shipped mpv
+    /// (0.41): before the video is configured the pair already exists and falls back to the window's client
+    /// size. S01E07 的 mp4 转封装解码慢了半秒，用户恰好在那半秒把窗口贴成了竖形，这一轮询便收下 0.889 ——
+    /// 正是当时 1230×1384 客户区自己的比例，而不是画面的。窗口随即被 FitToPicture 按它自己 reshape 一遍，
+    /// WM_SIZING 从此把每一把拖拽都锁回竖形，mpv 只能把真正的 16:9 上下加黑边放完剩下的一分半
+    /// （app-20260912.log 21:34:52，「画面比例 0.889（mpv）」）。
+    /// <c>video-params/w</c> 在视频配置出来之前不存在（<c>GetNumberAsync</c> 返回 null，本轮作罢、继续轮询）；
+    /// 它一出现，<c>dwidth</c>/<c>dheight</c> 才真的是画面自己的显示尺寸。
     /// </para>
     /// </summary>
     private Task ApplyAspectAsync(int generation)
@@ -256,6 +268,11 @@ public sealed partial class PlayerViewModel
 
         return PollAsync(generation, true, async () =>
         {
+            // The gate comes before the display pair, for the reason the comment above carries: without it
+            // a slowly decoding file answers this poll with the window's own shape as the picture's.
+            var decodedWidth = await _playback.GetNumberAsync("video-params/w").ConfigureAwait(true);
+            if (decodedWidth is null or 0) return false;
+
             var displayWidth = await _playback.GetNumberAsync("dwidth").ConfigureAwait(true);
             var displayHeight = await _playback.GetNumberAsync("dheight").ConfigureAwait(true);
             if (generation != _generation) return true;

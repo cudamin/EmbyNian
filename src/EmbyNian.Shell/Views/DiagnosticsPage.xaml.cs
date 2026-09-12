@@ -30,7 +30,26 @@ public sealed partial class DiagnosticsPage : Page, IShellContent
 
     private object? _request;
 
-    public DiagnosticsPage() => InitializeComponent();
+    public DiagnosticsPage()
+    {
+        InitializeComponent();
+        Loaded += (_, _) => HomeMotion.Reveal(PageLayout);
+        Unloaded += (_, _) => HomeMotion.Stop(PageLayout);
+    }
+
+    /// <summary>The settings pane can be much narrower than its window; respond to its actual width.</summary>
+    private void OnLayoutSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var wide = e.NewSize.Width >= 820;
+        DiagnosticsSideColumn.Width = new GridLength(wide ? 300 : 0);
+        Grid.SetColumnSpan(StatusCards, wide ? 1 : 2);
+        Grid.SetRowSpan(StatusCards, wide ? 2 : 1);
+        StatusCards.MaxHeight = wide ? double.PositiveInfinity : Math.Clamp(e.NewSize.Height * 0.3, 120, 240);
+        Grid.SetColumn(LogPanel, wide ? 1 : 0);
+        Grid.SetRow(LogPanel, wide ? 0 : 1);
+        Grid.SetColumnSpan(LogPanel, wide ? 1 : 2);
+        Grid.SetRowSpan(LogPanel, wide ? 2 : 1);
+    }
 
     internal DiagnosticsViewModel ViewModel { get; } = new();
 

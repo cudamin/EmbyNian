@@ -30,23 +30,21 @@ public sealed class EmbyHttp : IDisposable
     private readonly HttpClient _http;
 
     /// <summary>
-    /// 同一个连接池上的第二个客户端，只给「下载到设备」用，区别只有一样：<b>没有整体超时</b>。
-    /// <para>
-    /// <see cref="HttpClient.Timeout"/> 管的是整趟请求，连读响应体那一段一起算 —— 就算按
-    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/> 只等到响应头，那个计时器也不会停。于是一个
-    /// 十几个 G 的影片文件必然在 30 秒上被掐断，症状是「下载总是失败」。下载那一路的边界改成调用方自己的
-    /// 取消令牌加上连接超时（那一条在 <see cref="SocketsHttpHandler.ConnectTimeout"/> 上，仍然管用）。
-    /// </para>
-    /// <para>
-    /// 共用上面那个 handler，所以这不是第二个连接池 —— 两个客户端都不负责释放它，由本类
-    /// <see cref="Dispose"/> 统一放掉。
-    /// </para>
+    /// 同一个连接池上的第二个客户端，只给「下载到设备」用，不设整体截止时间。
+    /// 普通请求由 <see cref="SendAndReadAsync{T}"/> 限制请求头和正文的总耗时；影片下载可以持续更久，
+    /// 只受调用方取消和 handler 的连接超时约束。两个客户端共用的 handler 由 <see cref="Dispose"/> 统一释放。
     /// </summary>
     private readonly HttpClient _long;
 
     private readonly HttpMessageHandler _handler;
 
     public EmbyHttp(HttpMessageHandler? handler = null)
+        : this(handler, TimeSpan.FromSeconds(30))
+    {
+    }
+
+    /// <summary>测试可缩短等待上限，生产请求仍使用公开构造函数的 30 秒。</summary>
+    internal EmbyHttp(HttpMessageHandler? handler, TimeSpan requestTimeout)
     {
         handler ??= new SocketsHttpHandler
         {
@@ -57,7 +55,7 @@ public sealed class EmbyHttp : IDisposable
         };
 
         _handler = handler;
-        _http = new HttpClient(handler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(30) };
+        _http = new HttpClient(handler, disposeHandler: false) { Timeout = requestTimeout };
         _long = new HttpClient(handler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
@@ -68,24 +66,19 @@ public sealed class EmbyHttp : IDisposable
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    public async Task<T> GetJsonAsync<T>(Uri url, RequestContext context, CancellationToken cancellationToken)
-        where T : notnull
-    {
-        using var response = await SendAsync(HttpMethod.Get, url, null, context, cancellationToken).ConfigureAwait(false);
-        return await ReadJsonAsync<T>(response, url, cancellationToken).ConfigureAwait(false);
-    }
+    public Task<T> GetJsonAsync<T>(Uri url, RequestContext context, CancellationToken cancellationToken)
+        where T : notnull =>
+        SendAndReadAsync(HttpMethod.Get, url, null, context,
+            (response, token) => ReadJsonAsync<T>(response, url, token), cancellationToken);
 
-    public async Task<T> PostJsonAsync<T>(Uri url, object? body, RequestContext context, CancellationToken cancellationToken)
-        where T : notnull
-    {
-        using var response = await SendAsync(HttpMethod.Post, url, body, context, cancellationToken).ConfigureAwait(false);
-        return await ReadJsonAsync<T>(response, url, cancellationToken).ConfigureAwait(false);
-    }
+    public Task<T> PostJsonAsync<T>(Uri url, object? body, RequestContext context, CancellationToken cancellationToken)
+        where T : notnull =>
+        SendAndReadAsync(HttpMethod.Post, url, body, context,
+            (response, token) => ReadJsonAsync<T>(response, url, token), cancellationToken);
 
-    public async Task PostAsync(Uri url, object? body, RequestContext context, CancellationToken cancellationToken)
-    {
-        using var response = await SendAsync(HttpMethod.Post, url, body, context, cancellationToken).ConfigureAwait(false);
-    }
+    public Task PostAsync(Uri url, object? body, RequestContext context, CancellationToken cancellationToken) =>
+        SendAndReadAsync(HttpMethod.Post, url, body, context,
+            static (_, _) => Task.FromResult(true), cancellationToken);
 
     /// <summary>
     /// Posts, and takes the response body if there is one. Emby answers the user-state endpoints with the
@@ -101,21 +94,27 @@ public sealed class EmbyHttp : IDisposable
     public Task<T?> DeleteForJsonAsync<T>(Uri url, RequestContext context, CancellationToken cancellationToken)
         where T : class => SendForJsonAsync<T>(HttpMethod.Delete, url, null, context, cancellationToken);
 
-    public async Task DeleteAsync(Uri url, RequestContext context, CancellationToken cancellationToken)
-    {
-        using var response = await SendAsync(HttpMethod.Delete, url, null, context, cancellationToken).ConfigureAwait(false);
-    }
+    public Task DeleteAsync(Uri url, RequestContext context, CancellationToken cancellationToken) =>
+        SendAndReadAsync(HttpMethod.Delete, url, null, context,
+            static (_, _) => Task.FromResult(true), cancellationToken);
 
-    private async Task<T?> SendForJsonAsync<T>(
+    private Task<T?> SendForJsonAsync<T>(
         HttpMethod method,
         Uri url,
         object? body,
         RequestContext context,
         CancellationToken cancellationToken)
+        where T : class =>
+        SendAndReadAsync(method, url, body, context,
+            (response, token) => ReadOptionalJsonAsync<T>(response, method, url, token), cancellationToken);
+
+    private static async Task<T?> ReadOptionalJsonAsync<T>(
+        HttpResponseMessage response,
+        HttpMethod method,
+        Uri url,
+        CancellationToken cancellationToken)
         where T : class
     {
-        using var response = await SendAsync(method, url, body, context, cancellationToken).ConfigureAwait(false);
-
         try
         {
             return await response.Content.ReadFromJsonAsync<T>(Json, cancellationToken).ConfigureAwait(false);
@@ -127,10 +126,34 @@ public sealed class EmbyHttp : IDisposable
         }
     }
 
-    public async Task<byte[]> GetBytesAsync(Uri url, RequestContext context, CancellationToken cancellationToken)
+    public Task<byte[]> GetBytesAsync(Uri url, RequestContext context, CancellationToken cancellationToken) =>
+        SendAndReadAsync(HttpMethod.Get, url, null, context,
+            static (response, token) => response.Content.ReadAsByteArrayAsync(token), cancellationToken);
+
+    /// <summary>
+    /// 普通请求的截止时间覆盖整个读取过程。ResponseHeadersRead 让 HttpClient.Timeout 在响应头到达时结束，
+    /// 若正文只拿调用方令牌，传 None 的共享图片下载就可能永远占着连接和下载任务。
+    /// </summary>
+    private async Task<T> SendAndReadAsync<T>(
+        HttpMethod method,
+        Uri url,
+        object? body,
+        RequestContext context,
+        Func<HttpResponseMessage, CancellationToken, Task<T>> read,
+        CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(HttpMethod.Get, url, null, context, cancellationToken).ConfigureAwait(false);
-        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(_http.Timeout);
+
+        try
+        {
+            using var response = await SendAsync(method, url, body, context, deadline.Token).ConfigureAwait(false);
+            return await read(response, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new EmbyUnreachableException($"连接 {url.Host} 超时", error);
+        }
     }
 
     /// <summary>
@@ -330,6 +353,11 @@ public sealed class EmbyHttp : IDisposable
                 if (text.Length == 0) return null;
                 return text.Length <= MaxLoggedBodyLength ? text : text[..MaxLoggedBodyLength] + "…";
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // 错误正文只是诊断信息，但等待它的取消和截止时间仍须传回调用方。
+            throw;
         }
         catch
         {

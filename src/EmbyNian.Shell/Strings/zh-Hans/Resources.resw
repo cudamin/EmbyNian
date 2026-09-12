@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <root>
   <!--
     界面文字的资源表。winui-code-review 的全球化清单要求界面字符串走 x:Uid + .resw 而不是写死在标记里，
@@ -111,9 +111,6 @@
   <data name="DashboardPage_ButtonA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>在系统默认浏览器里打开同一个页面</value>
   </data>
-  <data name="DashboardPage_Slate.Title" xml:space="preserve">
-    <value>服务器控制台</value>
-  </data>
   <data name="DashboardPage_TextBlock1.Text" xml:space="preserve">
     <value>刷新</value>
   </data>
@@ -135,6 +132,9 @@
   <data name="DetailPage_ComboBoxA4.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>切换季</value>
   </data>
+  <data name="DetailPage_CoverButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>打开这部剧</value>
+  </data>
   <data name="DetailPage_MoreButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>更多</value>
   </data>
@@ -153,6 +153,22 @@
   <data name="DetailPage_TextBlock5.Text" xml:space="preserve">
     <value>媒体信息</value>
   </data>
+  <!-- 已看／未看是那一颗状态键上的字（三排键——宽版式两排、紧凑版式那一排——里的一颗药丸，
+       2026-09-12 起带字）：说的是这一集现在的样子，不是按下去会发生什么 —— 所以两个状态两个键，
+       各自跟着各自那一个 Visibility 上屏。 -->
+  <data name="DetailPage_WatchedOn.Text" xml:space="preserve">
+    <value>已看</value>
+  </data>
+  <data name="DetailPage_WatchedOff.Text" xml:space="preserve">
+    <value>未看</value>
+  </data>
+  <!-- 连播：三排键（宽版式两排、紧凑版式那一排）那颗开关的字。开的是设置里「自动播放下一集」那一档。 -->
+  <data name="DetailPage_ContinuePlay.Text" xml:space="preserve">
+    <value>连播</value>
+  </data>
+  <data name="DetailPage_ContinuePlay.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>一集放完自动接下一集（同设置里的「自动播放下一集」）</value>
+  </data>
   <data name="DiagnosticsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>清除筛选</value>
   </data>
@@ -161,9 +177,6 @@
   </data>
   <data name="DiagnosticsPage_ComboBoxA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>按严重程度过滤</value>
-  </data>
-  <data name="DiagnosticsPage_localPageSlate1.Title" xml:space="preserve">
-    <value>诊断</value>
   </data>
   <data name="DiagnosticsPage_TextBlock10.Text" xml:space="preserve">
     <value>播放器</value>
@@ -248,9 +261,6 @@
   </data>
   <data name="HomeBanner_Root.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>主页轮播</value>
-  </data>
-  <data name="HomePage_Slate.Title" xml:space="preserve">
-    <value>主页</value>
   </data>
   <data name="HomePage_TextBlock1.Text" xml:space="preserve">
     <value>服务器上还没有可以显示的内容</value>
@@ -462,9 +472,6 @@
   <data name="ServersPage_ButtonA5.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>删除服务器</value>
   </data>
-  <data name="ServersPage_localPageSlate4.Title" xml:space="preserve">
-    <value>服务器</value>
-  </data>
   <data name="ServersPage_TextBlock1.Text" xml:space="preserve">
     <value>当前</value>
   </data>
@@ -503,9 +510,6 @@
   </data>
   <data name="SettingsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>往下挪一排</value>
-  </data>
-  <data name="SettingsPage_localPageSlate4.Title" xml:space="preserve">
-    <value>设置</value>
   </data>
   <data name="SettingsPage_ResetButton.Content" xml:space="preserve">
     <value>恢复默认</value>
@@ -713,5 +717,71 @@
   </data>
   <data name="SubtitleDialog_TextBlock2.Text" xml:space="preserve">
     <value>现有的外挂字幕</value>
+  </data>
+  <data name="SettingsPage_Title.Text" xml:space="preserve">
+    <value>打造你的观影方式</value>
+  </data>
+  <data name="SettingsPage_Intro.Text" xml:space="preserve">
+    <value>从画面到声音，每一处都恰到好处。更改会自动保存。</value>
+  </data>
+  <data name="PosterCard_MoreButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>更多操作</value>
+  </data>
+  <data name="SignInPage_WelcomeTitle.Text" xml:space="preserve">
+    <value>把喜爱的故事，留给今晚。</value>
+  </data>
+  <data name="SignInPage_WelcomeDescription.Text" xml:space="preserve">
+    <value>连接你的 Emby 媒体库，在自己的影院里，继续每一段精彩。</value>
+  </data>
+  <data name="SignInPage_WelcomeNote.Text" xml:space="preserve">
+    <value>电影 · 剧集 · 音乐，你的收藏都在这里</value>
+  </data>
+  <data name="SignInPage_FormTitle.Text" xml:space="preserve">
+    <value>欢迎回来</value>
+  </data>
+  <data name="ServersPage_Heading.Text" xml:space="preserve">
+    <value>我的服务器</value>
+  </data>
+  <data name="ServersPage_EmptyHeading.Text" xml:space="preserve">
+    <value>连接你的第一座媒体库</value>
+  </data>
+  <data name="ServersPage_AddAction.Label" xml:space="preserve">
+    <value>添加服务器</value>
+  </data>
+  <data name="ServersPage_DiscoverAction.Label" xml:space="preserve">
+    <value>发现局域网服务器</value>
+  </data>
+  <data name="ServersPage_RefreshAction.Label" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="DiagnosticsPage_Heading.Text" xml:space="preserve">
+    <value>运行状态</value>
+  </data>
+  <data name="DiagnosticsPage_Description.Text" xml:space="preserve">
+    <value>会话、播放状态与实时日志，一目了然。</value>
+  </data>
+  <data name="DiagnosticsPage_RefreshAction.Label" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="DiagnosticsPage_CopyAction.Label" xml:space="preserve">
+    <value>复制日志</value>
+  </data>
+  <data name="DiagnosticsPage_OpenLogsAction.Label" xml:space="preserve">
+    <value>打开日志目录</value>
+  </data>
+  <data name="DashboardPage_Heading.Text" xml:space="preserve">
+    <value>服务器控制台</value>
+  </data>
+  <data name="DashboardPage_RefreshAction.Label" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="DashboardPage_OpenAction.Label" xml:space="preserve">
+    <value>用浏览器打开</value>
+  </data>
+  <data name="SettingsPage_CategoryPicker.Header" xml:space="preserve">
+    <value>设置分类</value>
+  </data>
+  <data name="LibraryPage_BrowseHint.Text" xml:space="preserve">
+    <value>浏览与筛选</value>
   </data>
 </root>

@@ -16,52 +16,57 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:EmbyNian.Shell.Views"
-    Background="{ThemeResource LayerFillColorDefaultBrush}">
+    Background="{ThemeResource EgWindowBrush}">
 
-    <Grid Margin="{StaticResource EgPageMargin}" RowSpacing="12">
+    <Grid x:Name="PageLayout" Margin="{StaticResource EgPageMargin}" RowSpacing="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 地址和载入状态合成一行读数（见 Say）：两个都是机器串，等宽字里它们本来就是同一种东西，
-             而页头不该为「正在载入…」这种一闪而过的字长出第三行来。 -->
-        <local:PageSlate x:Name="Slate"
-                x:Uid="DashboardPage_Slate" Eyebrow="DASHBOARD">
-            <local:PageSlate.Trailing>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button x:Uid="DashboardPage_ButtonA1" AutomationProperties.AutomationId="DashboardRefreshButton" Click="OnRefresh">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE72C;" />
-                            <TextBlock x:Uid="DashboardPage_TextBlock1" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Uid="DashboardPage_ButtonA2" AutomationProperties.AutomationId="DashboardOpenInBrowserButton" Click="OnOpenInBrowser">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE8A7;" />
-                            <TextBlock x:Uid="DashboardPage_TextBlock2" />
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
-            </local:PageSlate.Trailing>
-        </local:PageSlate>
+        <Grid ColumnSpacing="16" RowSpacing="14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Border Width="48" Height="48" CornerRadius="16" Background="{ThemeResource EgAccentSoftBrush}">
+                <FontIcon Glyph="&#xE774;" Foreground="{ThemeResource EgAccentBrush}" FontSize="24" />
+            </Border>
+            <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock x:Uid="DashboardPage_Heading" FontSize="26" FontWeight="SemiBold" />
+                <!-- Address and lifecycle remain selectable text, without exposing the session token. -->
+                <TextBlock x:Name="Readout" Foreground="{ThemeResource EgTextDimBrush}"
+                    FontSize="13" IsTextSelectionEnabled="True" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <CommandBar Grid.Row="1" Grid.ColumnSpan="2" HorizontalAlignment="Stretch"
+                DefaultLabelPosition="Right" Background="{ThemeResource EgSurfaceBrush}" CornerRadius="12" IsOpen="False">
+                <AppBarButton x:Uid="DashboardPage_RefreshAction" AutomationProperties.AutomationId="DashboardRefreshButton"
+                    Icon="Refresh" Click="OnRefresh" />
+                <AppBarButton x:Uid="DashboardPage_OpenAction" AutomationProperties.AutomationId="DashboardOpenInBrowserButton"
+                    Icon="Globe" Click="OnOpenInBrowser" />
+            </CommandBar>
+        </Grid>
 
         <Border
             Grid.Row="1"
+            Background="{ThemeResource EgSurfaceBrush}"
+            CornerRadius="{StaticResource EgCardCornerRadius}"
             BorderBrush="{ThemeResource EgBorderBrush}"
             BorderThickness="1">
             <Grid>
                 <WebView2 x:Name="Web" />
-                <TextBlock
-                    x:Name="Notice"
-                    Margin="32"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
-                    Foreground="{ThemeResource EgTextDimBrush}"
-                    Text=""
-                    TextAlignment="Center"
-                    TextWrapping="Wrap"
-                    Visibility="Collapsed" />
+                <StackPanel x:Name="NoticePanel" Margin="32" MaxWidth="520" HorizontalAlignment="Center"
+                    VerticalAlignment="Center" Spacing="20" Visibility="Collapsed">
+                    <Border Width="72" Height="72" CornerRadius="24" Background="{ThemeResource EgAccentSoftBrush}">
+                        <FontIcon Glyph="&#xE774;" FontSize="32" Foreground="{ThemeResource EgAccentBrush}" />
+                    </Border>
+                    <TextBlock x:Name="Notice" Foreground="{ThemeResource EgTextDimBrush}" FontSize="15"
+                        LineHeight="25" TextAlignment="Center" TextWrapping="Wrap" />
+                </StackPanel>
             </Grid>
         </Border>
     </Grid>

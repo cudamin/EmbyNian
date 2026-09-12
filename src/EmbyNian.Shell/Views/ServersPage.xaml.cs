@@ -32,6 +32,8 @@ public sealed partial class ServersPage : Page, IShellContent
     public ServersPage()
     {
         InitializeComponent();
+        Loaded += (_, _) => HomeMotion.Reveal(PageLayout);
+        Unloaded += (_, _) => HomeMotion.Stop(PageLayout);
 
         // Wired here rather than on navigation because the dialog captures nothing but this page: the
         // XamlRoot to host it in is read when a question is asked, which is long after it is null.

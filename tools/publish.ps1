@@ -73,7 +73,17 @@ $dotnetCandidates = @(
 $dotnet = $null
 foreach ($candidate in $dotnetCandidates) {
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-    $reported = & $candidate --version 2>$null
+    # 相对路径先按调用者所在目录解析，再进入仓库，让 --version 真正检查这里的 global.json。
+    $candidate = (Resolve-Path -LiteralPath $candidate).Path
+    Push-Location -LiteralPath $repo
+    try {
+        $reported = & $candidate --version 2>$null
+    } catch {
+        # Windows PowerShell 5.1 即使重定向了 stderr，Stop 仍会把 SDK 不匹配变成异常；继续试下一项。
+        continue
+    } finally {
+        Pop-Location
+    }
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($reported)) {
         $dotnet = $candidate
         Write-Output "使用 SDK $($reported.Trim())：$dotnet"

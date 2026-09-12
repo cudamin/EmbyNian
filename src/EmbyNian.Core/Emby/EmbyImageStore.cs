@@ -1,3 +1,4 @@
+using System.Net;
 using EmbyNian.Diagnostics;
 using EmbyNian.Infrastructure;
 
@@ -90,7 +91,11 @@ public sealed class EmbyImageStore
         _ => item.ImageTags.TryGetValue(imageType, out var value) ? value : null
     };
 
-    /// <summary>Returns null when the item simply has no such image; throws only on real errors.</summary>
+    /// <summary>
+    /// 服务器明说没有这一张（404）时返回 null；取不到（超时、连不上、5xx）时按
+    /// <see cref="ImageCachePolicy.RetryDelay"/> 重试几趟，表走完仍失败就把异常交给调用方 —— 「没有」和
+    /// 「没取到」必须是两种答案：前者才值得被卡片永久记住，后者过一会儿就该再问。
+    /// </summary>
     public Task<byte[]?> GetAsync(EmbyItem item, string imageType, int width, CancellationToken cancellationToken) =>
         TagFor(item, imageType) is { } tag
             ? GetAsync(item.Id, imageType, tag, width, cancellationToken)
@@ -152,48 +157,62 @@ public sealed class EmbyImageStore
         string description,
         string path)
     {
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            // CancellationToken.None on purpose: whoever asked first may be gone by now, and the bytes
-            // are still wanted — by the other cards waiting on this one download, and by the disk cache
-            // that makes the next visit instant. The request is bounded by the HTTP timeout instead.
-            var bytes = await _session.ExecuteAsync<byte[]>(download, CancellationToken.None).ConfigureAwait(false);
-
-            if (bytes.Length == 0) return null;
-
-            // A card-sized poster is tens of kilobytes. Anything this big came back unresized — an
-            // animated PNG is the usual reason, and only its first frame survives the decode here, so
-            // the card ends up showing something that looks nothing like it does in a browser.
-            if (bytes.Length > 512 * 1024)
-                Log.Debug(Category, $"图片未被服务器缩放（{description}，{bytes.Length / 1024} KB）");
-
             try
             {
-                AtomicFile.WriteAllBytes(path, bytes);
-            }
-            catch (Exception error)
-            {
-                Log.Warn(Category, "写入图片缓存失败", error);
-            }
+                // CancellationToken.None on purpose: whoever asked first may be gone by now, and the bytes
+                // are still wanted — by the other cards waiting on this one download, and by the disk cache
+                // that makes the next visit instant. The request is bounded by the HTTP timeout instead.
+                var bytes = await _session.ExecuteAsync<byte[]>(download, CancellationToken.None).ConfigureAwait(false);
 
-            // 又下了一张。攒够一批就再清一次 —— 从前只在开机清，一次长会话里缓存可以一路涨过预算。
-            if (Interlocked.Increment(ref _sincePrune) >= PruneEvery)
-            {
-                Interlocked.Exchange(ref _sincePrune, 0);
-                PruneInBackground();
-            }
+                if (bytes.Length == 0) return null;
 
-            return bytes;
-        }
-        catch (EmbyApiException error)
-        {
-            Log.Debug(Category, $"获取图片失败（{description}）：{error.Message}");
-            return null;
-        }
-        catch (OperationCanceledException)
-        {
-            // Only the HTTP timeout can land here now that no caller's token reaches the request.
-            return null;
+                // A card-sized poster is tens of kilobytes. Anything this big came back unresized — an
+                // animated PNG is the usual reason, and only its first frame survives the decode here, so
+                // the card ends up showing something that looks nothing like it does in a browser.
+                if (bytes.Length > 512 * 1024)
+                    Log.Debug(Category, $"图片未被服务器缩放（{description}，{bytes.Length / 1024} KB）");
+
+                try
+                {
+                    AtomicFile.WriteAllBytes(path, bytes);
+                }
+                catch (Exception error)
+                {
+                    Log.Warn(Category, "写入图片缓存失败", error);
+                }
+
+                // 又下了一张。攒够一批就再清一次 —— 从前只在开机清，一次长会话里缓存可以一路涨过预算。
+                if (Interlocked.Increment(ref _sincePrune) >= PruneEvery)
+                {
+                    Interlocked.Exchange(ref _sincePrune, 0);
+                    PruneInBackground();
+                }
+
+                return bytes;
+            }
+            catch (EmbyApiException error) when (error.StatusCode == HttpStatusCode.NotFound)
+            {
+                // 服务器明说没有这一张。这是终局答案，重试一万次也是 404 —— 交回去让卡片记住「没有」。
+                Log.Debug(Category, $"服务器没有这张图（{description}）");
+                return null;
+            }
+            catch (EmbyApiException error)
+            {
+                // 其余的失败（超时、连不上、5xx）都只算「这一趟没取到」：先按表重试，救不回来才把失败交出去。
+                // 不能像从前那样吞成 null —— 那会让等着的卡片把一次网络打嗝读成「服务器没有这张图」并永久记住，
+                // 封面就一直是灰的。请求带的是 None 令牌，走到这里的取消只剩截止时间那一档，而它早已在 EmbyHttp
+                // 里翻译成 EmbyUnreachableException 了。
+                if (ImageCachePolicy.RetryDelay(attempt) is not { } delay)
+                {
+                    Log.Debug(Category, $"获取图片失败（{description}，重试 {attempt} 趟后放弃）：{error.Message}");
+                    throw;
+                }
+
+                Log.Debug(Category, $"获取图片失败（{description}，第 {attempt + 1} 趟）：{error.Message}，隔 {delay.TotalSeconds:0} 秒再试");
+                await Task.Delay(delay).ConfigureAwait(false);
+            }
         }
     }
 

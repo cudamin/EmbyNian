@@ -338,6 +338,19 @@ public static class ItemDetail
     };
 
     /// <summary>
+    /// 紧凑版式里进度条旁边那一行「剩余 x 分钟」 —— 断点离片尾还有多久，取整到分钟、至少 1。没有断点（或片长
+    /// 不成话）就是 null，那一行跟着进度条一起不画。宽版式不摆它：断点已经写在播放键上了（见 <see
+    /// cref="PlayText"/>），只有单列的紧凑版式才把这条进度单独画出来。
+    /// </summary>
+    public static string? Remaining(EmbyItem? target)
+    {
+        if (target is not { HasResumePosition: true } || target.RunTimeTicks is not > 0) return null;
+
+        var minutes = (int)Math.Round((target.RunTimeTicks.Value - target.ResumeTicks) / (double)TimeSpan.TicksPerMinute);
+        return $"剩余 {Math.Max(1, minutes)} 分钟";
+    }
+
+    /// <summary>
     /// A media source as the picker lists it. The name is what Emby calls the file, which for a
     /// multi-version film is 「4K HDR」 or 「导演剪辑版」 and is the whole reason the picker exists; the
     /// filename is the fallback, because a source with no name is still a distinguishable file.

@@ -34,11 +34,16 @@ if ($shaderCount -eq 0) {
 # EmbyNian.pri 必须把框架那几份 .pri 并进来，否则程序在 App.xaml 那一步就崩：
 # 「Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'」。
 #
-# 2026-09-05 量到的因果：并进来这一步的输入是 obj 里的 pri.resfiles，而它是由「PRI 生成那一刻输出目录里
-# 已经有哪些 .pri」决定的。不打包 + 非自包含时，框架那三份（Microsoft.UI.Xaml.Controls.pri、Microsoft.UI.pri、
-# Microsoft.WindowsAppRuntime.pri）走的是 runtimes-framework 那套资产，**只在 publish 时才落进目录**，
-# 所以对着一个刚清空的 bin 构建就一定并不到：pri.resfiles 是 0 字节，EmbyNian.pri 只有 103 KB（并进来是
-# 2.2 MB），发布件因此小 2 MB，而程序一启动就死。**第二次发布就好了** —— 那时上一趟留下的三份还在目录里。
+# 2026-09-05 的第一版归因是错的（写成「第二次发布就好」），2026-09-11 挖到底：并进来这一步的输入是 obj 里的
+# pri.resfiles，它来自 @(_PriFilesFromPayload)，而那个变体读的是 **@(PriOutputs)** —— 由 GetPriOutputs 填，
+# 只含项目自己的 xbf/内容加 ProjectReference。框架那三份（Microsoft.UI.Xaml.Controls.pri 在 WinUI 包里、
+# Microsoft.UI.pri 在 InteractiveExperiences 包里、Microsoft.WindowsAppRuntime.pri 在 Foundation 包里）
+# 走的是 runtimes-framework 那套 NuGet 资产，**从来不进 PriOutputs**，所以 pri.resfiles 恒为 0 字节、
+# EmbyNian.pri 只有 103~135 KB（并进来是 2.2 MB），发布件少 2 MB，程序一启动就死。
+#
+# **跟「清没清过 bin」「跑第几次」无关**：2026-09-11 对着刚清过的 bin 连跑四次发布，四次都是 135 KB，
+# 没有一次「第二次就好」。修法在 Shell 项目的 csproj 里（AddWindowsAppSdkFrameworkPriToPayload 目标，
+# 把三份框架 .pri 手动塞进 PriOutputs），不是在这里重跑。
 #
 # 谁都不会去数 EmbyNian.pri 有多大，而这个坏法的唯一症状是「程序打不开」，所以这一关在这里守。
 # 判据是它索引里有没有 themeresources 这个名字，不是大小 —— 大小会随 XAML 增减浮动，那个名字不会。
@@ -51,8 +56,8 @@ $priText = [System.Text.Encoding]::GetEncoding(28591).GetString($priBytes)
 if ($priText -notmatch 'themeresources') {
     $kb = [math]::Round($priBytes.Length / 1KB)
     throw ("发布验证失败：EmbyNian.pri（$kb KB）里没有框架的 themeresources，程序启动时会在 App.xaml 崩掉。" +
-        "原因是 PRI 生成那一刻输出目录里还没有框架那三份 .pri —— 刚清过 bin 之后的第一次发布必然如此。" +
-        "**再跑一次这个发布脚本就好**（上一趟已经把那三份留在目录里了）。")
+        "原因是框架那三份 .pri 从来没被并进来（PriOutputs 里没有它们）。修法在 Shell 项目的 csproj 里：" +
+        "AddWindowsAppSdkFrameworkPriToPayload 目标。**重跑这个发布脚本没用** —— 2026-09-11 连跑四次都是这个大小。")
 }
 
 if ($SelfContained) {

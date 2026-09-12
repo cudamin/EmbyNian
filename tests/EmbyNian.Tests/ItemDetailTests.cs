@@ -366,6 +366,41 @@ internal static class ItemDetailTests
             Assert.Equal("播放", ItemDetail.PlayText(nearlyDone));
         });
 
+        Test("详情：剩余时间说给紧凑版式的进度条，取整到分钟", () =>
+        {
+            // 没有断点就没有进度条可配，null 让那一行跟着一起不画。
+            Assert.Null(ItemDetail.Remaining(null));
+            Assert.Null(ItemDetail.Remaining(new EmbyItem { Type = EmbyItemType.Movie }));
+            Assert.Null(ItemDetail.Remaining(new EmbyItem { Type = EmbyItemType.Movie, RunTimeTicks = 100 * Minute }));
+
+            // 还剩 23 分钟的一集 —— 参考图上「剩余10分钟」那一行的算法。
+            var episode = new EmbyItem
+            {
+                Type = EmbyItemType.Episode,
+                RunTimeTicks = 33 * Minute,
+                UserData = new EmbyUserData { PlaybackPositionTicks = 10 * Minute }
+            };
+            Assert.Equal("剩余 23 分钟", ItemDetail.Remaining(episode));
+
+            // 只剩半分钟多的也还有一句话：四舍五入到分钟。快过 99.5% 的那一段不算续播（上面那条测过），
+            // 所以「剩余 0 分钟」在真实的断点上到不了，给 1 的那道保险是给四舍五入的边拦着的。
+            var almostOver = new EmbyItem
+            {
+                Type = EmbyItemType.Movie,
+                RunTimeTicks = 100 * Minute,
+                UserData = new EmbyUserData { PlaybackPositionTicks = 99 * Minute + 24 * 10_000_000L }
+            };
+            Assert.Equal("剩余 1 分钟", ItemDetail.Remaining(almostOver));
+
+            // 没有片长（服务器没给）的这一档同样不画。
+            var noRuntime = new EmbyItem
+            {
+                Type = EmbyItemType.Movie,
+                UserData = new EmbyUserData { PlaybackPositionTicks = 10 * Minute }
+            };
+            Assert.Null(ItemDetail.Remaining(noRuntime));
+        });
+
         Test("详情：视频行在没有媒体源时是空的，剧集页因此不显示它", () =>
         {
             Assert.Equal("", ItemDetail.VideoLine(null));
@@ -871,20 +906,88 @@ internal static class ItemDetailTests
             Assert.Equal(DetailHero.ArtHeight, DetailHero.Height(true));
             Assert.Equal(DetailHero.PlainHeight, DetailHero.Height(false));
 
-            // 没有画面可看的那一档更矮 —— 多留的每一像素都是空白。
-            Assert.True(DetailHero.PlainHeight < DetailHero.ArtHeight);
+            // 两档并轨（2026-09-12「上方空位太多了」把有图那档压到 380，正好落在无图那档上）：高相同是
+            // 有意的，判据留着是因为背景层、尾部、纸面下限还按它分档。
+            Assert.Equal(DetailHero.PlainHeight, DetailHero.ArtHeight);
+        });
+
+        // 「缩小到一定程度后换成紧凑版式」—— 接替从前「窄过这条线整层收背景」那条线的班：背景图改成等比
+        // 缩放之后任何宽度都摆得下，同一个程度给的答案换成了「换版式」。
+        Test("紧凑：页面窄过线就换单列版式", () =>
+        {
+            Assert.True(DetailHero.IsCompact(DetailHero.CompactFloor - 1));
+            Assert.True(DetailHero.IsCompact(600));
+            Assert.False(DetailHero.IsCompact(DetailHero.CompactFloor));
+            Assert.False(DetailHero.IsCompact(1280));
+
+            // 还没量到页宽（第一次布局之前）照走桌面版式：先按宽的布一遍、量出来再换，就是「闪一下」那一类跳。
+            Assert.False(DetailHero.IsCompact(0));
+        });
+
+        Test("紧凑：带高是画面条和片名那一叠里高的那个", () =>
+        {
+            // 宽 600 的页面，一张 16:9 就是 337 高；片名那一叠实测 260 站得下，带子就是画面条本身。
+            Assert.Equal(337.5, DetailHero.CompactHeight(600, 9d / 16, 260, artwork: true));
+
+            // 比画面条还高的一叠（长片名折几行的条目）就地撑高带子 —— 挤的是画面，不是字。
+            Assert.Equal(410d, DetailHero.CompactHeight(600, 9d / 16, 410, artwork: true));
+
+            // 等于画面条的那一档：两者取大，不多让一像素。
+            Assert.Equal(337.5d, DetailHero.CompactHeight(600, 9d / 16, 337.5, artwork: true));
+        });
+
+        // 「窄窗口时候上方有大片空位」（2026-09-12，配图是 880 宽的窗口上的集页）：没有画面可铺的那一档从前
+        // 写死那一档底色版面（412），而集页在紧凑版式下永远没有画面可铺 —— 底对齐的那一叠头上空着一百多像素。
+        // 两条分别是：没有画面就按内容给、有画面照旧按画面条给（同一张表的两行，别互相串了）。
+        Test("紧凑：没有画面可铺时带高按内容给，一像素不多", () =>
+        {
+            // 那一叠连上下留白 236 → 带子就是 236，而不是 412 那一档；页宽和比例这两个数在这条路上不参与。
+            Assert.Equal(236d, DetailHero.CompactHeight(880, 9d / 16, 236, artwork: false));
+            Assert.Equal(236d, DetailHero.CompactHeight(880, 16d / 9, 236, artwork: false));
+
+            // 和宽版式那一档同一个答案：同一个内容高在两处给出同一个带高（EpisodeHeight 就是这一支）。
+            Assert.Equal(DetailHero.EpisodeHeight(236), DetailHero.CompactHeight(880, 9d / 16, 236, artwork: false));
+
+            // 下限仍然是那一档：什么都还没量到的时候不给一个没有带子的页面。
+            Assert.Equal(DetailHero.EpisodeFloor, DetailHero.CompactHeight(880, 9d / 16, 0, artwork: false));
+
+            // 有画面的那一档不受影响：画面条 495 比那一叠高，带子听画面条的。
+            Assert.Equal(495d, DetailHero.CompactHeight(880, 9d / 16, 236, artwork: true));
+        });
+
+        // 「窗口收窄时背景图要等比例缩放」—— 从前那支铺满整层的画刷在窄窗口上按高撑满、裁得越来越狠，
+        // 屏上是越窄越放大。现在盒高跟着页宽走：宽的窗口上被视口封顶照旧铺满，窄过交点之后整张图等比缩小。
+        Test("背景：宽窗铺满视口，窄窗整张等比缩", () =>
+        {
+            // 16:9 的图在宽 1760、视口 900 的窗口上：1760×9/16 = 990 ≥ 900，照旧铺满第一屏。
+            Assert.Equal(900d, DetailHero.PictureHeight(1760, 9d / 16, 900, 460));
+
+            // 同一张图收到宽 900：画面条 506，视口以下不再多画 —— 盒高精确等于「页宽 × 比例」，整张图无裁切。
+            Assert.Equal(506.25, DetailHero.PictureHeight(900, 9d / 16, 900, 359));
+
+            // 再窄到 600：337.5，跟着页宽一像素一像素地缩 —— 这就是「等比例缩放」本身。
+            Assert.Equal(337.5, DetailHero.PictureHeight(600, 9d / 16, 900, 337.5));
+
+            // 带子比画面条还高（紧凑版式里片名那一叠撑高了带子）的时候，至少垫住带子。
+            Assert.Equal(410d, DetailHero.PictureHeight(600, 9d / 16, 900, 410));
+
+            // 视口还没量到（第一次布局之前）不封顶，先按等比那条给，量到了再收。
+            Assert.Equal(506.25, DetailHero.PictureHeight(900, 9d / 16, 0, 359));
+
+            // 比例不成话（图还没解出来）按 16:9 兜底，不按 0 把盒子算没。
+            Assert.Equal(337.5, DetailHero.PictureHeight(600, 0, 900, 300));
         });
 
         Test("正文：补满头图下面看得见的那一段", () =>
         {
-            // 887 高的视口减去 460 的带子，剩下的 427 是整个 BodyRegion 的下限。没有剧照的那一档靠它补满：
+            // 887 高的视口减去 412 的带子，剩下的 475 是整个 BodyRegion 的下限。没有剧照的那一档靠它补满：
             // HeroTail 先占实际内容高，星号行再把余下高度交给 BodySheet，不给这个下限，短页面的下半屏就露底。
             // 有剧照的那一档富余高度改由尾部吃掉（见下面「尾部：撑到封顶就停」那一条），这一支同时就是那个数。
-            Assert.Equal(427d, DetailHero.BodyHeight(887, DetailHero.ArtHeight));
-            Assert.Equal(507d, DetailHero.BodyHeight(887, DetailHero.PlainHeight));
+            Assert.Equal(475d, DetailHero.BodyHeight(887, DetailHero.ArtHeight));
+            Assert.Equal(475d, DetailHero.BodyHeight(887, DetailHero.PlainHeight));
 
             // 视口是小数的那一下（缩放比不是整数时常有），四舍五入到整像素，不留半像素的缝。
-            Assert.Equal(427d, DetailHero.BodyHeight(886.6, DetailHero.ArtHeight));
+            Assert.Equal(475d, DetailHero.BodyHeight(886.6, DetailHero.ArtHeight));
 
             // 集页的带子按第一屏收窄，这张纸的下限跟着变宽 —— 传进来的是那一次真正的带高，不是两档之一。
             Assert.Equal(459d, DetailHero.BodyHeight(887, 428));
@@ -909,15 +1012,15 @@ internal static class ItemDetailTests
 
             // 线以内的窗口上尾部就是「补满第一屏」那个数：带子加尾部正好一屏，纸的上沿落在视口下沿上。写死的那
             // 一版（纸的上沿只由内容定）在这些窗口上碰巧看不见，拉高就露出三百像素的板子。
-            Assert.Equal(140d, DetailHero.TailHeight(600, DetailHero.ArtHeight, true, line));
+            Assert.Equal(188d, DetailHero.TailHeight(600, DetailHero.ArtHeight, true, line));
 
             // 集页的带子按里面那一叠实测给，尾部跟着变宽：传进来的是那一次真正的带高，不是两档之一。
             Assert.Equal(172d, DetailHero.TailHeight(600, 428, true, line));
 
             // 半像素的那一下四舍五入到整像素，不留半像素的缝。
-            Assert.Equal(241d, DetailHero.TailHeight(700.6, DetailHero.ArtHeight, true, line));
+            Assert.Equal(289d, DetailHero.TailHeight(700.6, DetailHero.ArtHeight, true, line));
 
-            // 到线之前带子加尾部都不短于一屏 —— 也就是纸的上沿不在第一屏里。460 的带子上这一档一直到 832。
+            // 到线之前带子加尾部都不短于一屏 —— 也就是纸的上沿不在第一屏里。412 的带子上这一档一直到 832。
             foreach (var viewport in new double[] { 400, 600, 730, 740, 831, 832 })
             {
                 var band = DetailHero.ArtHeight;
@@ -967,6 +1070,64 @@ internal static class ItemDetailTests
             Assert.Equal(0d, DetailHero.TailHeight(0, DetailHero.ArtHeight, true, line));
         });
 
+        // 「当窗口拉宽导致背景图下方被裁切的时候，触发背景图模糊，裁切越多越模糊」的自变量：铺满那一档
+        // （图按宽撑满、顶部对齐）裁掉的全在下方，占比 = 1 − 视口 ÷ 画面条高；画面条那一档整张图都看得见，给 0。
+        Test("裁切：铺满那一档才裁，裁掉的占比跟着宽长", () =>
+        {
+            // 视口 900：16:9 的图要宽到 1600 才撑满；900 宽时整张都看得见，正好撑满的那一下也没有裁切。
+            Assert.Equal(0d, DetailHero.PictureCrop(900, 9d / 16, 900));
+            Assert.Equal(0d, DetailHero.PictureCrop(1600, 9d / 16, 900));
+
+            // 拉到 1800：画面条 1012.5，视口占掉八成九，裁掉约一成一。两边同一套算式，比的是精确值。
+            Assert.Equal(1 - 900d / 1012.5d, DetailHero.PictureCrop(1800, 9d / 16, 900));
+
+            // 拉到 2880：画面条 1620，视口 900 只剩一半多一点，裁掉约五成半。
+            Assert.Equal(1 - 900d / 1620d, DetailHero.PictureCrop(2880, 9d / 16, 900));
+
+            // 比例不成话按 16:9 兜底，视口没量到不裁。
+            Assert.Equal(0d, DetailHero.PictureCrop(900, 0, 900));
+            Assert.Equal(0d, DetailHero.PictureCrop(2880, 9d / 16, 0));
+        });
+
+        // 「中间这么有空位，下方要自动填充」（2026-09-12，配图：背景等比缩放之后画面条底下还撑着一整段空黑，
+        // 纸面和货架被压到老下面去）。尾部是「压暗的画面」，画面条以下没有画面可压 —— 至多撑到画面的下沿，
+        // 底下的空当交给正文的内容自动补上。
+        Test("尾部：等比画面条以下不再撑，空当归内容", () =>
+        {
+            const double line = 832d;
+
+            // 视口 900、带子 412、画面条 598.5（一张 16:9 在 1064 宽上的高）：老规矩三道里最少是「线减带子」
+            // 的 420，画面下沿这道把尾部收到 186.5、取整到 186 —— 纸面正好从画面的下沿起，空位没有了。
+            Assert.Equal(186d, DetailHero.TailHeight(900, DetailHero.ArtHeight, true, line, 598.5));
+
+            // 画面铺满第一屏的那一档（下沿 = 视口）：这道上限不咬，老数字一个不变 —— 四参重载就是这个意思。
+            Assert.Equal(420d, DetailHero.TailHeight(900, DetailHero.ArtHeight, true, line, 900));
+            Assert.Equal(420d, DetailHero.TailHeight(900, DetailHero.ArtHeight, true, line));
+
+            // 紧凑版式：画面条就是带子（下沿 = 带高），这道上限把尾部收到 0 —— 撑不撑全看内容，
+            // 播放、操作、剧情说明底下紧跟纸面，正是单列版式要的连续。
+            Assert.Equal(0d, DetailHero.TailHeight(700, 337.5, true, line, 337.5));
+
+            // 画面条比带子还矮的不成话输入（不该发生）：收到 0，不出负数。
+            Assert.Equal(0d, DetailHero.TailHeight(900, 420, true, line, 400));
+
+            // 不跳：页宽不动（1064，画面条 598.5）的时候拉高窗口，纸露出来的量一像素一像素地长 —— 新上限
+            // 只会让尾部更短，不会带来新的台阶。页宽那条轴不在这条规矩里：等比画面随页宽长高、纸面跟着画面
+            // 下沿走，那正是「等比例缩放」本身。
+            var revealed = 0d;
+
+            for (var viewport = 500d; viewport <= 1400d; viewport++)
+            {
+                var bottom = Math.Min(viewport, 1064 * 0.5625);
+                var reveal = viewport - DetailHero.ArtHeight
+                    - DetailHero.TailHeight(viewport, DetailHero.ArtHeight, true, line, bottom);
+
+                Assert.True(reveal >= revealed - 0.001, $"视口 {viewport} 上纸反而缩回去了（{revealed} → {reveal}）");
+                Assert.True(reveal - revealed <= 1.001, $"视口 {viewport} 上纸一下多露了 {reveal - revealed}");
+                revealed = reveal;
+            }
+        });
+
         // 「显示器分别为4k时设定为1920×1080 2k时1600×900 1080p时1366×768」—— 阈值窗口跟着显示器走。
         // 判的是显示器这张屏有多大，给的是窗口多高开始露黑边；宽度不参与（黑边是竖着的事，带鱼屏按高算）。
         Test("纸面那条线：跟着显示器分三档", () =>
@@ -997,26 +1158,6 @@ internal static class ItemDetailTests
             // 还没量到视口的那一下给 0，同 BodyHeight。
             Assert.Equal(0d, DetailHero.PaperHeight(0, true));
             Assert.Equal(0d, DetailHero.PaperHeight(-40, true));
-        });
-
-        // 「窗口缩小到一定程度自动隐藏」—— 右上角那张艺术图。它占带子里的一整栏，栏宽由图自己给，所以它宽多少
-        // 片名那一栏就窄多少；图放大之后窄窗口上片名会先折成两三行。装饰让位给片名，不是反过来。
-        Test("角上那张画：页面窄到一定程度就不画", () =>
-        {
-            // 默认窗口（页宽 1422）、用户那个窗口（1537）都摆得下。
-            Assert.True(DetailHero.CornerFits(1422));
-            Assert.True(DetailHero.CornerFits(1537));
-
-            // 分界正好在 CornerFloor 上，往下就不画了 —— 自检那块副屏上的窗口（页宽 1015）就在线下面。
-            Assert.True(DetailHero.CornerFits(DetailHero.CornerFloor));
-            Assert.False(DetailHero.CornerFits(DetailHero.CornerFloor - 1));
-            Assert.False(DetailHero.CornerFits(1015));
-
-            // 还没量到页宽的那一下也不画：这一张是装饰，先不画再补上去，比先画错一格再收回去好。
-            Assert.False(DetailHero.CornerFits(0));
-
-            // 这条线要真能碰到才算数：窗口最窄 900，那时候页面比这条线窄得多。
-            Assert.True(DetailHero.CornerFloor > 900);
         });
 
         // 参考图上那两支往上的箭头 —— 集页那一格的高。别的页面照旧按内容分两档，这一支只管集页：从视口里减掉
@@ -1089,11 +1230,94 @@ internal static class ItemDetailTests
             Assert.Null(DetailHero.StillBox(667, 1000, 210, double.PositiveInfinity));
         });
 
+        // 「拉窄窗口的时候封面不要缩小，拉长窗口的时候封面要稍微放大」（2026-09-12）—— 参考宽以下不缩，
+        // 以上按 StillGrowPerPixel 缓增。
+        Test("头图封面：窄窗不缩，宽窗缓增", () =>
+        {
+            // 参考宽（1280）上就是基宽：那一张剧海报那一档（210×300 的上限盒）。
+            Assert.Equal(300d, DetailHero.StillWidth(1280, 300, 1280));
+
+            // 参考宽以下不再缩小：紧凑线（1024）上照旧基宽 —— 等比缩小那一半已经删了。
+            Assert.Equal(300d, DetailHero.StillWidth(1024, 300, 1280));
+            Assert.Equal(300d, DetailHero.StillWidth(700, 300, 1280));
+
+            // 参考宽以上每像素长 StillGrowPerPixel：2000 的窗口上 300 + 720 × 0.1 = 372。
+            Assert.Equal(300d + 720 * DetailHero.StillGrowPerPixel, DetailHero.StillWidth(2000, 300, 1280));
+
+            // 页面还没量到（0）、或者两个基数不成话：照旧基宽，别缩成一条线。
+            Assert.Equal(300d, DetailHero.StillWidth(0, 300, 1280));
+            Assert.Equal(210d, DetailHero.StillWidth(1554, 210, 0));
+            Assert.Equal(0d, DetailHero.StillWidth(1554, 0, 1280));
+        });
+
+        // 「剧页面和集页面窄窗口下不用显示封面」+「集页面的封面留着」+「电影页面窄窗口也要隐藏左上角的封面」
+        // （2026-09-12 同日三句）—— 紧凑版式里剧、电影两页不画封面，季、集照旧；宽版式四页全画。一天四句的
+        // 来龙去脉在 DetailHero.ShowsStill 的注释里：早上全救回来、中午点走剧、集两页、傍晚把集页还回，
+        // 最后把电影页也收了回去。
+        Test("头图封面：紧凑版式里剧、电影不画，季集照旧", () =>
+        {
+            // 紧凑档：剧页不要封面 —— 画面条铺的本来就是同一部剧的图，单列里它是纯占地方。
+            Assert.False(DetailHero.ShowsStill(compact: true, type: EmbyItemType.Series));
+
+            // 电影页是同日最后一句收回去的。
+            Assert.False(DetailHero.ShowsStill(compact: true, type: EmbyItemType.Movie));
+
+            // 「集页面的封面留着」：它把集列表往下压一截这件事他不要了，封面照画；季页同一个答案。
+            Assert.True(DetailHero.ShowsStill(compact: true, type: EmbyItemType.Episode));
+            Assert.True(DetailHero.ShowsStill(compact: true, type: EmbyItemType.Season));
+
+            // 类型还没到手（null，导航之前）当要画：这一拍页宽还是 0，紧凑根本没成立。
+            Assert.True(DetailHero.ShowsStill(compact: true, type: null));
+
+            // 宽版式（还没量到宽也算宽，IsCompact 对 0 就是 false）四页全画：紧凑线以上一张不少，
+            // 窗口从窄拉宽跨过 1024 的那一下封面就地回来。
+            Assert.True(DetailHero.ShowsStill(compact: false, type: EmbyItemType.Series));
+        });
+
+        // 角图的题栏保底（同日）—— 窗口窄下来它让位，题栏永远留得住参考宽上那一份。
+        Test("头图艺术图：窗口窄了角图让位，题栏保底 308", () =>
+        {
+            // 参考宽上这道钳制不咬合：1280 − 96 内边距 − 352 封面 − 44 两道栏距 − 308 题栏 ＝ 480，正好封顶。
+            Assert.Equal(DetailHero.CornerWidth, DetailHero.CornerBoxWidth(1280, 352));
+
+            // 更宽也是 480：题栏只宽不窄，角图不多占。
+            Assert.Equal(DetailHero.CornerWidth, DetailHero.CornerBoxWidth(2000, 469));
+
+            // 窄到 1064（自检那一档）：角图让到 323，题栏保住 308。
+            Assert.Equal(323d, DetailHero.CornerBoxWidth(1064, 293));
+
+            // 再窄就让到 0 为止，不会把题栏挤成负的：700 的页面扣掉内边距、256 的封面、44 的栏距和 308 的
+            // 保底之后正好是 0。
+            Assert.Equal(0d, DetailHero.CornerBoxWidth(700, 256));
+        });
+
+        // 「放大集页面右侧的艺术图」（2026-09-12，320×180 → 480×270）—— 那一格多大，以及它会不会长高过带子。
+        Test("头图艺术图：那一格是一整格 16:9，图按形状装进去", () =>
+        {
+            // 16:9 的艺术图一分不裁地填满它 —— 这两个数正是照 16:9 挑的，所以盒子的比例本身就是规矩。
+            Assert.Equal(DetailHero.CornerHeight * 16d / 9, DetailHero.CornerWidth);
+            Assert.Equal((480d, 270d),
+                DetailHero.StillBox(1280, 720, DetailHero.CornerWidth, DetailHero.CornerHeight));
+
+            // 别的形状按短边收，整张画得下：4:3 的横画收到 360 宽，竖画收到 270 高那一边。
+            Assert.Equal((360d, 270d),
+                DetailHero.StillBox(1024, 768, DetailHero.CornerWidth, DetailHero.CornerHeight));
+            Assert.Equal((152d, 270d),
+                DetailHero.StillBox(1080, 1920, DetailHero.CornerWidth, DetailHero.CornerHeight));
+
+            // 它比集页那一叠字键还高（那一叠两百六七）—— 带子的账必须算上它，不然就是一截画压在音频那一行上。
+            // 宽版式的集页上留给内容的只有带高减上下两道边（28 和 16），402 上下；这一张 270 占得住。
+            Assert.True(DetailHero.CornerHeight > 260);
+            Assert.True(DetailHero.CornerHeight < DetailHero.ArtHeight);
+        });
+
         // 带子收窄之后那道罩子得跟着收：罩子比带子还高就从带子的上沿溢出去，而标题条上那层洗按收完的那一块算。
         Test("头图罩子：跟着带子收，最高还是那一档", () =>
         {
-            // 内容那一档上一个字没变 —— 460 的带子上罩子照旧是 440，上面留 20。
-            Assert.Equal(DetailHero.ScrimHeight, DetailHero.ScrimSpan(DetailHero.ArtHeight));
+            // 412 的带子上罩子正好坐满：带高减上面那道 20（440 的上限在这档够不着，见 DetailHero.ArtHeight）。
+            Assert.Equal(DetailHero.ArtHeight - DetailHero.ScrimInset, DetailHero.ScrimSpan(DetailHero.ArtHeight));
+
+            // 更高的带子（集页片名折行那种）才轮到上限咬合：600 的带子上罩子停在 440，上面留 20。
             Assert.Equal(DetailHero.ScrimHeight, DetailHero.ScrimSpan(600));
 
             // 收窄的那一档：带高减去上面那道 20。
@@ -1134,12 +1358,13 @@ internal static class ItemDetailTests
             // 没有剧照就没有那道罩子，也就没有那道横缝要补。
             Assert.Equal(0d, DetailHero.TopWash(300, false));
 
-            // 那五个停点：#00@0、#40@0.14、#7A@0.34、#AA@0.62、#B8@1。罩子高 440，坐在 460 那格带子的下沿上，
-            // 所以页面坐标要让出 20。这里照旧写死这几个数：DetailHero.ScrimStops 现在是屏上那支画刷的唯一来源，
-            // 拿它自己去算就成了同一句话说两遍 —— 写死才拦得住「把表改了、曲线跟着变了，可谁都没发觉」。
-            Near(0x40 / 255d, DetailHero.TopWash(20 + (0.14 * 440), true));
-            Near(0x7A / 255d, DetailHero.TopWash(20 + (0.34 * 440), true));
-            Near(0xAA / 255d, DetailHero.TopWash(20 + (0.62 * 440), true));
+            // 那五个停点：#00@0、#40@0.14、#7A@0.34、#AA@0.62、#B8@1。罩子在 412 那格带子里收成 392 高
+            // （ScrimSpan：带高减上面那道 20，440 的上限在这档够不着），所以页面坐标要让出 20。这里照旧写死
+            // 这几个数：DetailHero.ScrimStops 现在是屏上那支画刷的唯一来源，拿它自己去算就成了同一句话说
+            // 两遍 —— 写死才拦得住「把表改了、曲线跟着变了，可谁都没发觉」。
+            Near(0x40 / 255d, DetailHero.TopWash(20 + (0.14 * 392), true));
+            Near(0x7A / 255d, DetailHero.TopWash(20 + (0.34 * 392), true));
+            Near(0xAA / 255d, DetailHero.TopWash(20 + (0.62 * 392), true));
 
             // 拉过一整格带子之后浓度停在最浓那一档，不是满黑 ——「太黑了都看不清背景」：那张固定的剧照在这之后
             // 仍然透着（见 DetailHero.ScrimCeiling），接下来经过的是同一个 alpha 的 HeroTail，纸面位置由
@@ -1199,10 +1424,10 @@ internal static class ItemDetailTests
                     $"第 {i} 个停点浅回去了：0x{stops[i - 1].Alpha:X2}→0x{stops[i].Alpha:X2}");
             }
 
-            // 罩子下沿正好落在带子下沿上：它是 VerticalAlignment=Bottom 加一个写死的高，所以上面让出的那段
-            // （自检拿 带子高 - 罩子高 读回来当 inset）必须就是 ScrimInset。这两个数任一动了而另一个没动，
-            // TopWash 算的那条曲线就和屏上的罩子错开一段。
-            Assert.Equal(DetailHero.ArtHeight, DetailHero.ScrimInset + DetailHero.ScrimHeight);
+            // 罩子下沿正好落在带子下沿上：它是 VerticalAlignment=Bottom 加一个写死的高，所以这一档带子上让出
+            // 的那段（自检拿 带子高 - 罩子高 读回来当 inset）必须就是 ScrimInset —— ScrimSpan 收进来的 360
+            // 加上头的 20 正好是 380。这两个数任一动了而另一个没动，TopWash 算的那条曲线就和屏上的罩子错开一段。
+            Assert.Equal(DetailHero.ArtHeight, DetailHero.ScrimInset + DetailHero.ScrimSpan(DetailHero.ArtHeight));
 
             // 那支墨的 RGB。生成停点时只取 R/G/B、alpha 由表给，所以这三个数就是罩子的颜色本身；
             // 尾部那一块也是拿它上色的，差一位就是尾部和罩子之间横着一道色差。

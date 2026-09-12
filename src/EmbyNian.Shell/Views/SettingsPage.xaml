@@ -63,9 +63,9 @@
             <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
             <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
             <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
-            <Setter Property="CornerRadius" Value="4" />
-            <Setter Property="Padding" Value="16,10,16,10" />
-            <Setter Property="MinHeight" Value="60" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="20,14,20,14" />
+            <Setter Property="MinHeight" Value="68" />
             <Setter Property="ColumnSpacing" Value="24" />
         </Style>
 
@@ -756,33 +756,73 @@
         </local:SettingRowTemplates>
     </Page.Resources>
 
-    <Grid Margin="{StaticResource EgPageMargin}">
+    <Grid x:Name="SettingsLayout" Margin="{StaticResource EgPageMargin}">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="SettingsWidthStates">
+                <VisualState x:Name="CompactSettings">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="SettingsLayout.Margin" Value="16,16,16,16" />
+                        <Setter Target="SettingsNavColumn.Width" Value="0" />
+                        <Setter Target="SettingsBody.ColumnSpacing" Value="0" />
+                        <Setter Target="SettingsBody.RowSpacing" Value="16" />
+                        <Setter Target="CategoryNavigation.Visibility" Value="Collapsed" />
+                        <Setter Target="CompactCategoryNavigation.Visibility" Value="Visible" />
+                        <Setter Target="SettingsContent.(Grid.Row)" Value="1" />
+                        <Setter Target="SettingsContent.(Grid.RowSpan)" Value="1" />
+                        <Setter Target="SettingsContent.(Grid.Column)" Value="0" />
+                        <Setter Target="SettingsContent.(Grid.ColumnSpan)" Value="2" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WideSettings">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="860" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <local:PageSlate x:Uid="SettingsPage_localPageSlate4"
-            Eyebrow="SETTINGS"
-            Note="改动即时保存">
-            <local:PageSlate.Trailing>
-                <!--
-                  「恢复默认」。原先它自己占一张卡（左边名单里的一个分类），那张卡在设置窗口里第七行就到底，
-                  拍出来只剩半行 —— 2026-09-06 按他一句「恢复默认按钮移到右上角，下方的恢复默认页面删除」
-                  搬进页头这一格，卡和分类一起删了。页头是整页最靠上的位置，比任何一张卡都够得着。
+        <!--
+          **页头那块场记板（PageSlate）2026-09-11 删掉了** —— 他一句「去掉左上角的这些，不要留空位」，问定的
+          是「六个有它的页面全去掉、页头里那几颗按钮收成顶上一行、内容整体上移」。这一页原来站着「设置」加
+          底下一行「SETTINGS · 改动即时保存」加一条通栏线，而这一页是整棵界面里唯一一个自己就是一个窗口的
+          页面，窗口标题栏上已经写着「设置」—— 那三行说的都是同一件事。删掉之后左边那一列分类直接顶到最上面。
+        -->
+        <Grid ColumnSpacing="24" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsPage_Title" Style="{StaticResource EgPageTitleStyle}" />
+                <TextBlock x:Uid="SettingsPage_Intro" Style="{StaticResource EgCaptionStyle}" />
+            </StackPanel>
+            <!--
+              「恢复默认」。原先它自己占一张卡（左边名单里的一个分类），那张卡在设置窗口里第七行就到底，
+              拍出来只剩半行 —— 2026-09-06 按他一句「恢复默认按钮移到右上角，下方的恢复默认页面删除」
+              搬进页头这一格，卡和分类一起删了。页头 2026-09-11 删掉之后它照旧站在页面右上角 —— 一整页
+              里最靠上的位置，比任何一张卡都够得着。
 
-                  命令是视图模型的 ResetCommand（AsyncRelayCommand 在跑的时候自己把按钮置灰，连按两下不会
-                  叠出两个对话框）。字和指针停上去那句说明从词表来（SettingsPage_ResetButton）—— 卡删了之后，
-                  按下之前屏上把「服务器和账号不动」说清楚的地方就是那句说明，所以自检盯着它。
-                -->
-                <Button
-                    x:Name="SettingsResetButton"
-                    x:Uid="SettingsPage_ResetButton"
-                    Command="{x:Bind ViewModel.ResetCommand}"
-                    Style="{StaticResource AccentButtonStyle}" />
-            </local:PageSlate.Trailing>
-        </local:PageSlate>
+              命令是视图模型的 ResetCommand（AsyncRelayCommand 在跑的时候自己把按钮置灰，连按两下不会
+              叠出两个对话框）。字和指针停上去那句说明从词表来（SettingsPage_ResetButton）—— 卡删了之后，
+              按下之前屏上把「服务器和账号不动」说清楚的地方就是那句说明，所以自检盯着它。
+            -->
+            <Button
+                x:Name="SettingsResetButton"
+                x:Uid="SettingsPage_ResetButton"
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Command="{x:Bind ViewModel.ResetCommand}"
+                Style="{StaticResource EgSecondaryButtonStyle}" />
+        </Grid>
 
         <!--
           这一页从前没有任何一处能对用户说话 —— 六十行都是「改一下就存」，本来也无话可说。「恢复默认设置」
@@ -802,14 +842,36 @@
             Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
             Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
 
-        <Grid Grid.Row="2" Margin="0,12,0,0" ColumnSpacing="18">
+        <Grid x:Name="SettingsBody" Grid.Row="2" Margin="0,12,0,0" ColumnSpacing="24">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="180" />
+                <ColumnDefinition x:Name="SettingsNavColumn" Width="180" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Both navigation controls share the same category selection. Compact windows reclaim the
+                 side rail's width while the standard ComboBox keeps every hosted page reachable. -->
+            <ComboBox
+                x:Name="CompactCategoryNavigation"
+                x:Uid="SettingsPage_CategoryPicker"
+                AutomationProperties.AutomationId="SettingsCategoryPicker"
+                Grid.ColumnSpan="2"
+                HorizontalAlignment="Stretch"
+                MinWidth="0"
+                ItemsSource="{x:Bind ViewModel.Categories, Mode=OneWay}"
+                SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}"
+                Visibility="Collapsed" />
 
             <ListView
+                x:Name="CategoryNavigation"
                 AutomationProperties.AutomationId="SettingsCategoryList"
+                Grid.RowSpan="2"
+                Background="{ThemeResource EgSurfaceBrush}"
+                CornerRadius="16"
+                Padding="8"
                 IsItemClickEnabled="False"
                 ItemsSource="{x:Bind ViewModel.Categories, Mode=OneWay}"
                 SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}">
@@ -840,7 +902,7 @@
               are navigated into. Which one is visible follows the selected category, decided in the view
               model rather than here so the page and the self-check read the same flag.
             -->
-            <Grid Grid.Column="1">
+            <Grid x:Name="SettingsContent" Grid.Column="1" Grid.RowSpan="2">
                 <!--
                   Every card is built and kept, and picking a category only changes which one is shown — the
                   same as before. There is no server data on this page, so building all of them costs nothing

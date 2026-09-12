@@ -418,16 +418,15 @@ internal static partial class ShellSelfCheck
         // dropped field name would show — but a library whose metadata is thin is not a defect.
         report.AppendLine($"[信息] 详情元数据 — 「{detail.Facts}」");
 
-        // 需求 4，一路改到「统一改为在剧名上方显示徽标，右上角显示艺术图」：这一条要的是三句话 —— 片名那一行永远
-        // 在（没有名字的头图和「图没到」在截图里长得一模一样）、徽标落在片名的正上方（左沿还得跟它对齐）、艺术图
-        // 落在带子的右上角，而两张都不许顶出带子、压到海报或者压到对方。服务器给不出某一张的条目占大多数，那一次
-        // 那一格空着成立 —— 两个位置各空各的，这正是「不再互相退档」的意思：从前那一版里艺术图缺席就由徽标顶上，
-        // 于是同一枚牌子在不同条目上出现在不同地方。几何在 DetailPage.PlateShape 和 CornerShape 里读，「该有哪一
-        // 张」是 ItemArtwork.Plate 和 ItemArtwork.Corner 给的答案。
+        // 需求 4，一路改到「统一改为在剧名上方显示徽标」：这一条要的是两句话 —— 片名那一行永远在（没有名字的
+        // 头图和「图没到」在截图里长得一模一样）、徽标落在片名的正上方（左沿还得跟它对齐），而且不许顶出带子、
+        // 压到海报。右上角那张艺术图 2026-09-12 整个退场（「去掉剧页面、电影页面右上角的艺术图」），这一条跟着
+        // 少一句。服务器给不出徽标的条目占大多数，那一次那一格空着成立。几何在 DetailPage.PlateShape 里读，
+        // 「该有哪一张」是 ItemArtwork.Plate 给的答案。
         var artwork = detail.Artwork;
 
-        check("详情徽标与艺术图", artwork.Text && artwork.Plate.Placed && artwork.Corner.Placed,
-            $"片名{(artwork.Text ? "在" : "没画")}；{Say("徽标", artwork.Plate)}；{Say("艺术图", artwork.Corner)}");
+        check("详情徽标与艺术图", artwork.Text && artwork.Plate.Placed,
+            $"片名{(artwork.Text ? "在" : "没画")}；{Say("徽标", artwork.Plate)}");
 
         // 「海报下方会被裁切，要能看到完整的海报」：那一格原来写死 210×300（0.7:1）、图按 UniformToFill 铺满它，
         // 而服务器上的海报是 2:3，于是上下各裁掉七八像素 —— 海报底下那一条往往正是片名和演员表。现在那一格按
@@ -497,7 +496,7 @@ internal static partial class ShellSelfCheck
         // is a question only its own answer settles. 「剧集的徽标」 here is that answer.
         report.AppendLine(_fileArtwork is { } shown
             ? $"[信息] 文件页徽标与艺术图 — {shown.Type} 页，{Say("徽标", shown.Artwork.Plate)}"
-                + $"；{Say("艺术图", shown.Artwork.Corner)}；这一条有 {shown.Artwork.Kinds}"
+                + $"；这一条有 {shown.Artwork.Kinds}"
             : "[信息] 文件页徽标与艺术图 — 这次没走到文件页");
 
         // 「集页面要用这个剧的背景图或缩略图」：单集自己那张图是海报，而单集的海报就是从视频里截的一帧 —— 铺到整页
@@ -512,12 +511,11 @@ internal static partial class ShellSelfCheck
         else report.AppendLine("[信息] 文件页头图 — 这次没走到文件页");
 
         // 同一条规矩在文件页上的那一半。这一页值得单独钉一遍，因为四种页面里它的带子最矮（高按里面那一叠字键实测
-        // 给，见 DetailHero.EpisodeHeight），而两张图的高上限都是写死的 —— 「顶出了带子」真有机会发生的就是这一页。
+        // 给，见 DetailHero.EpisodeHeight），而徽标的高上限是写死的 —— 「顶出了带子」真有机会发生的就是这一页。
         if (_fileArtwork is { } fileMark)
             check("文件页徽标与艺术图落点",
-                fileMark.Artwork.Text && fileMark.Artwork.Plate.Placed && fileMark.Artwork.Corner.Placed,
-                $"{fileMark.Type} 页，{Say("徽标", fileMark.Artwork.Plate)}"
-                    + $"；{Say("艺术图", fileMark.Artwork.Corner)}");
+                fileMark.Artwork.Text && fileMark.Artwork.Plate.Placed,
+                $"{fileMark.Type} 页，{Say("徽标", fileMark.Artwork.Plate)}");
 
         // 上面那一条的正主：只有文件页上「媒体源」才有得挑，所以只有这一页会把三个下拉一齐摆出来，也只有这一页
         // 会在窄窗口下真的排不下。读的那一拍是 ShowInfo —— 页面往下滚去看媒体信息表格之前的最后一拍，那之后这

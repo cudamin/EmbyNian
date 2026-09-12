@@ -102,7 +102,9 @@ How that lands in practice — one line each. **The reasoning, the incidents tha
 - Reuse the existing Service / ViewModel / Core types rather than extracting a `Manager`/`Helper`/`Factory`/`IWhatever` — which does not soften the "judgments into Core" rule above.
 - **Collection properties bound to `ItemsSource` stay `{ get; }` with an initializer** and are refilled with `Clear()` + re-add, never reassigned — `winui-code-review`'s own rule, and what makes the `Mode=OneWay` on those bindings a formality rather than a load-bearing subscription.
 
-## The Four Gates（四道闸门）— run all four after any code change
+## The Four Gates（四道闸门）— three after any code change, the fourth when a version ships
+
+**Gates 1–3 run after any code change. Gate 4, the self-check, runs when a new version is being published** — his call, 2026-09-12: 「现在只在发布新版本的时候跑自检」. It exists to catch what nothing else can see, and it is the slowest of the four (a full page-by-page walk of the app), so paying for it on every edit bought less than it cost; the door it guards is the release. **Two exceptions, both of which are the same idea:** a change that touches the self-check's own code has to run it, or the change to the checks is unverified, and a change to the cursor/hide behaviour or the reveal rule is worth one run anyway because those legs are the only local proof of a mechanism the gates are otherwise blind to.
 
 The `dotnet` on `PATH` is unusable: it's 8.0.403 and this project needs .NET 10. The SDK is at `%USERPROFILE%\.dotnet\dotnet.exe` and is not on `PATH`. **Build single-node** — this machine's Windows SDK multi-node workload resolver makes parallel builds fail intermittently with no output at all.
 
@@ -123,7 +125,7 @@ The `dotnet` on `PATH` is unusable: it's 8.0.403 and this project needs .NET 10.
    **`-c Release` is not optional.** `dotnet run` looks for Debug output by default, so with `--no-build` it runs whatever stale binary sits in `bin\Debug` and still prints 「全部通过」 with exit code 0 — when this was caught on 2026-08-31 that binary was 160 tests short of the source. Dropping the switch switches this gate off.
 
 3. Publish: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive`
-4. Self-check: `artifacts/publish/win-x64/EmbyNian.exe --self-check --dump-ui`, then read `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt` — it needs exit code 0 and 「结果：全部通过」 on the last line.
+4. Self-check — **when a version ships** (and after any change to the self-check itself): `artifacts/publish/win-x64/EmbyNian.exe --self-check --dump-ui`, then read `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt` — it needs exit code 0 and 「结果：全部通过」 on the last line.
 
 A few things about the gates:
 

@@ -20,54 +20,38 @@ public static class HomeCarousel
     public const int Slots = 8;
 
     /// <summary>
-    /// The shortest band there is, whatever the window does. Below this the picture is a letterbox slit and
-    /// the title standing in front of it has nowhere to sit; a window that narrow gets a band that is too
-    /// tall for it rather than a strip of nothing.
-    /// <para>
-    /// 这个下限现在是**字块唯一的保险**。字块从顶上往下排（2026-09-05 那一天先挪到右下角、又挪回左下角，2026-09-10
-    /// 再按「把红框里的东西移动到左上角」挪到顶上 —— PageSlate 底下，顶距是 <c>HomeBanner</c> 里写死的那一个数 ——
-    /// 所以这里从前那条 <c>InfoDrop</c>（「字从正中往下沉多少」，按带高算的一条纯函数）连它的两条单测一起删掉了，
-    /// 别去别处找它）。带子 2026-09-09 弄扁之后这个下限更容易碰到：带宽不到 711 就到了（从前要 427），而字块整个
-    /// 放得下得 900 宽往上 —— 装不下那一档伸出下沿的是简介和按键那一头，
-    /// <c>HomeBanner.State</c> 把「字块底下还剩多少」报进自检，好让那件事看得见。
-    /// </para>
+    /// 最矮的封面仍留出标题和操作键的空间。窄窗口由 HomeBanner 收起简介，
+    /// 保持封面中的必要操作可见。
     /// </summary>
-    public const double MinHeight = 240;
+    public const double MinHeight = 300;
 
     /// <summary>
-    /// 量不到自己宽度的那一下这条带有多高（第一帧，还有自检里那份没上树的控件）。480 就是开窗那一档的带高
-    /// （浏览区 1422 全宽，剧照缩到六成按 16:9 换成高），所以第一帧已经是第二帧的样子。从前带宽整个按 16:9 算的
-    /// 时候这个数是 800 —— 一整屏。
+    /// 第一帧尚未量到宽度时使用默认 1422 宽对应的高度，避免布局完成前后跳动。
     /// </summary>
-    public const double UnmeasuredHeight = 480;
+    public const double UnmeasuredHeight = 608;
 
     /// <summary>
-    /// 剧照占带子的几成宽：六成，靠右站（「把主页的轮播图移动到右边」＋「把轮播图弄扁一些」，2026-09-09）。带高
-    /// 就是「这个宽的一张 16:9 剧照」的高（<see cref="Height"/>），所以图正好铺满带的上下两条边；左边那四成是
-    /// 带子自己的底色，字块站在上面，图的左沿再压一道同色的渐融（<c>HomeBanner</c> 标记里 <c>Fade</c> 那一段）。
-    /// <para>
-    /// 六成不是随手挑的：字块最宽 620 加左边距 60，在开窗那一档 1422 宽的带上停在 680，而渐融（图宽的三成半）到
-    /// 867 才散尽 —— 字块的尾巴一直走在渐融里；最小窗口 900 宽那一档算下来还剩三个像素。再窄成五成，字块就得
-    /// 站到散尽了的亮图上；再宽成七成，左边那片摆不下徽标加两行简介。
-    /// </para>
+    /// 封面带高为整幅宽度按 16:9 换算高度的 76%，约 2.34:1。
+    /// 2026-09-11 用户移除“我的片库 / 快速进入”整排，并要求封面覆盖该区域。
+    /// 1064 宽时从 359 增至 455，图像按 UniformToFill 铺满，标题栏直接浮在图上。
     /// </summary>
-    public const double PictureShare = 0.6;
+    public const double BandHeightShare = 0.76;
 
     /// <summary>
-    /// 这一条的形状，宽 ÷ 高 —— 16:9，也就是服务器发来的宽剧照自己的形状。
+    /// 16:9 —— 服务器发来的宽剧照自己的形状。
     /// <para>
-    /// **剧照本身在任何窗口形状下都不裁**（<see cref="Height"/> 那一块里按自己的比例整张画出来）。从前带高也按
-    /// 这个形状从带宽算，图因此铺满整条带、16:9 的窗口上正好一屏高；2026-09-09「把轮播图弄扁一些」之后带高改按
-    /// <see cref="PictureShare"/> 算，这个形状剩下的两件差事：开窗那一档的默认宽度（<c>HostWindow</c>），和把
-    /// 图宽从带高换出来（<c>HomeBanner.Resize</c>：图宽＝带高×16÷9）。
+    /// 现在它有两条差事：开窗那一档的默认宽度（<c>HostWindow</c>），和把带高从带宽换出来（<see cref="Height"/>：
+    /// 带宽 × <see cref="BandHeightShare"/> ÷ 这个数）。**剧照自己画多大已经不用它了** —— 铺满那一版由
+    /// <c>Stretch="UniformToFill"</c> 按图自己的比例放大到盖住整条带、多出来的一截对半裁掉
+    /// （「去掉首页封面轮播图的黑边」，2026-09-11；在那之前是「缩到六成、整张画出来」，16:9 的图在 2.96:1 的
+    /// 带子里只裁上下各 5%）。现在的带子约 2.34:1，16:9 图片保留中间约 76% 的高度。
     /// </para>
     /// <para>
-    /// **带宽从前是整个页宽，一个数都不用扣掉，横竖都不用。** 大图 2026-09-08 从「左边一栏、右边一列媒体库」改回
+    /// **带宽是整个页宽，一个数都不用扣掉，横竖都不用。** 大图 2026-09-08 从「左边一栏、右边一列媒体库」改回
     /// 铺满整宽（「移除轮播图右边的媒体库」），右栏那一段宽不再减；侧边栏 2026-09-06 就删了，页面本来也是整个
-    /// 客户区。竖向也不扣：外壳画在页面<em>上面</em>而不是上方。**2026-09-10 下半天「弄个框把轮播图框起来」之后
-    /// 这条改了口**：带宽是页宽减四边各 24 的卡片留白（那一版带子不再铺满上半页、不再贴到窗口的边），带高跟着
-    /// 矮一截；本来的竖向也不扣，现在扣的是字块那头以外的三边。这个形状剩下的差事：把图宽从带高换出来
-    /// （<c>HomeBanner.Resize</c>：图宽＝带高×16÷9）。
+    /// 客户区。竖向也不扣：外壳画在页面<em>上面</em>而不是上方。2026-09-10 下半天到 09-11 之间「弄个框把轮播图
+    /// 框起来」那一版曾经把带宽收成「页宽减四边各 24」，2026-09-11 用户要「占满窗口的上半部分（包括窗口标题）」
+    /// 之后卡片版式整个作废，带宽回到整幅页宽。
     /// </para>
     /// </summary>
     public const double WindowAspect = 16.0 / 9.0;
@@ -83,18 +67,16 @@ public static class HomeCarousel
     public static readonly TimeSpan Dwell = TimeSpan.FromSeconds(8);
 
     /// <summary>
-    /// 这条带有多高：**剧照缩到带宽的六成（<see cref="PictureShare"/>）之后，那张 16:9 剧照的高** —— 「把轮播图
-    /// 弄扁一些」，2026-09-09。图靠带子的右沿按自己的比例画出来、再放大到「带高÷0.9」竖向居中 —— 上下各裁
-    /// 5%（2026-09-10「轮播图上下各裁切百分之五」）是 HomeBanner 在视图层剪的，不影响这里算出来的带高；左边
-    /// 那四成是带子自己的底色，字块站在上面。
+    /// 带高由 <see cref="BandHeightShare"/> 随整幅宽度换算，1422 宽的默认窗口对应 608。
+    /// 标题栏与被移除的快捷入口区域都属于同一张封面，不另外堆叠有底色的导航行。
     /// <para>
-    /// 从前带宽整个按 16:9 算，16:9 的窗口上带高正好一屏、底下第一排货架滚一下才露出来；弄扁之后（1422 宽的开窗
-    /// 那一档是 480）第一排货架就露在第一屏里。
+    /// 剧照铺满这条带（<c>HomeBanner</c> 的 <c>Stretch="UniformToFill"</c>），带子比 16:9 的图宽，所以图按宽
+    /// 放大、上下各裁掉约 12%。**裁多少是带子自己的形状说了算，不是另一个
+    /// 常数**：带子多高，图就裁多少 —— 带宽一拉，带高跟着变，裁的量跟着变，而图一个像素都不变形。
     /// </para>
     /// <para>
-    /// 一屏是上限而不是目标：超宽屏上「带宽×六成 ÷ 16 × 9」会比一屏还高，那时带高被一屏封住，图照旧吃满带高、
-    /// 贴右沿，底色留在左边（只是那一截更宽）。下限 <see cref="MinHeight"/> 兜的是矮到不像话的窗口；带宽不到
-    /// 427 的时候图连六成宽都摆不下、改吃满带宽，那一档底下留一条底色（<c>HomeBanner.PictureRead</c> 两档都认）。
+    /// 一屏是上限而不是目标：超宽屏上按比例换算的高度可能超过一屏，那时带高被一屏封住。下限
+    /// <see cref="MinHeight"/> 兜的是矮到不像话的窗口（那一档字块会伸出下沿，<c>HomeBanner.State</c> 报得出来）。
     /// </para>
     /// <para>
     /// 量不到带宽的那一下（第一帧、还有自检里那份没上树的控件）用 <see cref="UnmeasuredHeight"/>，那就是开窗那一
@@ -102,15 +84,15 @@ public static class HomeCarousel
     /// </para>
     /// </summary>
     /// <param name="viewport">The window's client height, or 0 for 「not measured yet」.</param>
-    /// <param name="width">这条带自己有多宽（现在就是整个页宽），或者 0 表示还没量到。</param>
+    /// <param name="width">这条带自己有多宽（就是整个页宽），或者 0 表示还没量到。</param>
     public static double Height(double viewport, double width)
     {
         if (width <= 0) return UnmeasuredHeight;
 
-        var picture = Math.Round(width * PictureShare / WindowAspect);
+        var band = Math.Round(width * BandHeightShare / WindowAspect);
         var ceiling = viewport > 0 ? Math.Max(MinHeight, Math.Round(viewport)) : double.MaxValue;
 
-        return Math.Clamp(picture, MinHeight, ceiling);
+        return Math.Clamp(band, MinHeight, ceiling);
     }
 
     /// <summary>

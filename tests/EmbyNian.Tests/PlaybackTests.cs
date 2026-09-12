@@ -39,6 +39,7 @@ internal static class PlaybackTests
         RegisterPlayerMenu();
         RegisterEpisodeNavigation();
         RegisterPlaybackGate();
+        RegisterPlaybackBatches();
     }
 
     // ---- 启动命令文本 ----------------------------------------------------------
@@ -3575,6 +3576,23 @@ internal static class PlaybackTests
             Assert.True(idle.CursorHidden);
             Assert.False(idle.Pending(start + ChromeReveal.CursorIdleMilliseconds), "藏完了才真的没事");
         });
+
+        Test("播放器控件：一个像素不算人动手，两个才算", () =>
+        {
+            // 「鼠标隐藏了一会又会自动跑出来」那件就死在这条线上。一像素有两样东西都是这个尺寸：藏完之后
+            // 那一下「让框架重新念一遍」的真实往返（Native.NudgeCursorState，一个物理像素出去再回来），
+            // 和一只搁在桌上的鼠标的抖动。原来藏起来之后「任何一个像素都算人动手」，于是程序能把自己叫醒。
+            Assert.False(ChromeReveal.Travelled(0, 0), "没动就是没动");
+            Assert.False(ChromeReveal.Travelled(1, 0), "一像素：我们催框架那一下就是这个尺寸");
+            Assert.False(ChromeReveal.Travelled(0, 1), "一像素，另一个轴也一样");
+            Assert.False(ChromeReveal.Travelled(1, 1), "两个轴各一像素也不够");
+            Assert.True(ChromeReveal.Travelled(2, 0), "两像素才算跨过阈值");
+            Assert.True(ChromeReveal.Travelled(0, 2));
+            Assert.True(ChromeReveal.Travelled(40, 3), "手真动了是几十像素，差一个量级");
+
+            // 阈值必须留在催框架那一下的尺寸之上：把它降到一，「藏好了」和「叫得醒」就成了同一件事。
+            Assert.True(ChromeReveal.MovePixels > 1, "一个物理像素的往返不能算动手");
+        });
     }
 
     /// <summary>A reveal rule at a fixed clock, still in its opening 「everything showing」 state.</summary>
@@ -4102,6 +4120,247 @@ internal static class PlaybackTests
                 Assert.True(play.Result is InvalidOperationException, $"第 {attempt} 次播放应该以未登录失败");
             }
         });
+
+        Test("播放闸门：结束通知失败不遮住起播错误，也不阻断后续通知和播放", () =>
+        {
+            var service = SignedOutService();
+            var notified = 0;
+            service.NowPlayingChanged += _ => throw new InvalidDataException("模拟通知失败");
+            service.NowPlayingChanged += _ => notified++;
+
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                var error = Attempt(service).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                Assert.True(error is InvalidOperationException, "通知失败不能覆盖原来的「尚未登录」错误");
+                Assert.Equal(attempt, notified, "一个监听器失败不能跳过后面的监听器");
+            }
+        });
+
+        Test("播放闸门：释放句柄失败仍清空状态并允许下一次播放", () =>
+        {
+            var first = new PlaybackStubHandle { FailOnDispose = true };
+            var second = new PlaybackStubHandle();
+            var (service, session) = PlayingService(first, second);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            var playing = service.PlayAsync(Ticket(), cancellation.Token);
+            first.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            Assert.True(service.LaunchOptions.Count > 0, "先确认这次确实记录了启动选项");
+            first.End();
+
+            // 清理不是播放结果；即使句柄的释放失败，界面状态和下一次播放也都必须收得回来。
+            playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            Assert.False(service.IsPlaying);
+            Assert.Equal(0, service.LaunchOptions.Count);
+            Assert.Null(service.LaunchQualityPreset);
+            Assert.Null(service.LaunchShaderProfile);
+            Assert.Null(service.LaunchShaderReason);
+            Assert.Equal(1, first.DisposeCount);
+
+            var next = service.PlayAsync(Ticket(), cancellation.Token);
+            second.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            second.End();
+            next.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            Assert.Equal(1, second.DisposeCount, "第二次必须真正走完，而不是只解除一次等待");
+        });
+    }
+
+    private static void RegisterPlaybackBatches()
+    {
+        Test("播放批次：着色器写入等待中切集，剩余设置不传给下一集", () =>
+            CheckBatchSwitchAsync(shaders: true, holdDefaultRead: false).GetAwaiter().GetResult());
+
+        Test("播放批次：字幕写入等待中切集，剩余设置不传给下一集", () =>
+            CheckBatchSwitchAsync(shaders: false, holdDefaultRead: false).GetAwaiter().GetResult());
+
+        Test("播放批次：字幕默认值返回前切集，旧读数不再写入任何播放", () =>
+            CheckBatchSwitchAsync(shaders: false, holdDefaultRead: true).GetAwaiter().GetResult());
+
+        Test("播放批次：未切集时字幕和着色器设置仍完整发送", () =>
+        {
+            foreach (var shaders in new[] { false, true })
+            {
+                var handle = new PlaybackStubHandle();
+                var (service, session) = PlayingService(handle);
+                using var sessionLifetime = session;
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var playing = service.PlayAsync(Ticket(), cancellation.Token);
+
+                try
+                {
+                    handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                    ApplyBatchAsync(service, shaders).WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                    var names = handle.Properties.Select(option => option.Key).ToList();
+                    var expected = shaders
+                        ? ShaderGroupCatalog.NeutralOptions.Select(option => option.Key).ToList()
+                        : MpvOutputOptions.SubtitleStyleOptions.ToList();
+                    Assert.Equal(expected.Count, names.Count, "不能靠停止全部发送来避免跨播放写入");
+                    Assert.True(expected.All(names.Contains), "每个外观/复位选项都必须送达");
+                    if (!shaders) Assert.True(handle.Reads.Count > 0, "未指定的字幕外观仍需读取播放器默认值");
+                }
+                finally
+                {
+                    handle.End();
+                    playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                }
+            }
+        });
+    }
+
+    private static async Task CheckBatchSwitchAsync(bool shaders, bool holdDefaultRead)
+    {
+        var first = new PlaybackStubHandle();
+        var second = new PlaybackStubHandle();
+        var (service, session) = PlayingService(first, second);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task HoldAsync()
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(cancellation.Token);
+        }
+
+        if (holdDefaultRead) first.BeforeRead = HoldAsync;
+        else first.BeforeSet = HoldAsync;
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        Task<PlaybackResult>? next = null;
+        try
+        {
+            await first.Started.Task.WaitAsync(cancellation.Token);
+            var batch = ApplyBatchAsync(service, shaders);
+            await entered.Task.WaitAsync(cancellation.Token);
+            var readsBeforeSwitch = first.Reads.Count;
+            var writesBeforeSwitch = first.Properties.Count;
+
+            // 不靠延时碰运气：把旧批次停在一次真实 await 上，完成切集后才让它回来。
+            first.End();
+            await playing.WaitAsync(cancellation.Token);
+            next = service.PlayAsync(Ticket() with { Item = Item("下一集", id: "43") }, cancellation.Token);
+            await second.Started.Task.WaitAsync(cancellation.Token);
+            release.TrySetResult();
+            await batch.WaitAsync(cancellation.Token);
+
+            Assert.Equal(0, second.Properties.Count, "旧播放的设置不能进入新句柄");
+            Assert.Equal(0, second.Reads.Count, "旧批次不能读取下一集的默认值");
+            Assert.Equal(writesBeforeSwitch, first.Properties.Count, "播放已结束，旧批次也必须停止继续写入");
+            Assert.Equal(readsBeforeSwitch, first.Reads.Count, "播放已结束，旧批次不能继续读取");
+        }
+        finally
+        {
+            release.TrySetResult();
+            first.End();
+            second.End();
+            await playing.WaitAsync(cancellation.Token);
+            if (next is not null) await next.WaitAsync(cancellation.Token);
+        }
+    }
+
+    private static Task ApplyBatchAsync(PlaybackService service, bool shaders) =>
+        shaders ? service.SetShaderGroupAsync(null) : service.ApplySubtitleStyleAsync();
+
+    /// <summary>假登录和假后端：只走内存中的传输，不访问服务器、不启动 mpv，也不写设置文件。</summary>
+    private static (PlaybackService Service, EmbySession Session) PlayingService(params PlaybackStubHandle[] handles)
+    {
+        var settings = new AppSettings();
+        settings.Playback.ReportProgressToServer = false;
+        settings.Playback.SubtitleAssOverride = "";
+        var transport = new StubTransport()
+            .Answer("Views", """{ "Items": [], "TotalRecordCount": 0 }""")
+            .Answer("System/Info/Public", """{ "ServerName": "离线测试", "Id": "stub" }""");
+        var session = new EmbySession(
+            settings,
+            new SettingsStore(
+                new AppPaths(Path.Combine(Path.GetTempPath(), $"embynian-playback-{Guid.NewGuid():N}")),
+                PassthroughSecretProtector.Instance),
+            new CredentialVault(PassthroughSecretProtector.Instance),
+            DeviceIdentity.Create("test-device", "1.0.0"),
+            transport);
+        var server = new ServerProfile { Url = "http://playback.invalid" };
+        var account = new AccountProfile
+        {
+            Username = "test-user",
+            UserId = "test-user",
+            ProtectedAccessToken = PassthroughSecretProtector.Instance.Protect("offline-test-token")
+        };
+        Assert.True(session.TryRestoreAsync(server, account, CancellationToken.None).GetAwaiter().GetResult());
+        var backend = new PlaybackStubBackend(handles);
+        return (new PlaybackService(
+            session,
+            settings,
+            () => backend,
+            new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders))), session);
+    }
+
+    private sealed class PlaybackStubBackend(params PlaybackStubHandle[] handles) : IPlaybackBackend
+    {
+        private readonly Queue<PlaybackStubHandle> _handles = new(handles);
+
+        public string DisplayName => "离线测试";
+
+        public string? Validate() => null;
+
+        public Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult<IPlaybackHandle>(_handles.Dequeue());
+    }
+
+    private sealed class PlaybackStubHandle : IPlaybackHandle
+    {
+        private readonly TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<KeyValuePair<string, object?>> Properties { get; } = [];
+        public List<string> Reads { get; } = [];
+        public Func<Task>? BeforeSet { get; set; }
+        public Func<Task>? BeforeRead { get; set; }
+        public bool FailOnDispose { get; init; }
+        public int DisposeCount { get; private set; }
+        public bool HasControlChannel => true;
+        public bool IsPaused => false;
+        public event Action<bool>? PauseChanged { add { } remove { } }
+
+        public void End() => _exit.TrySetResult(new PlaybackExit(PlaybackEndReason.Stopped, 0, 0, null));
+
+        public Task<PlaybackExit> WaitForExitAsync(CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            return _exit.Task.WaitAsync(cancellationToken);
+        }
+
+        public Task StopAsync()
+        {
+            End();
+            return Task.CompletedTask;
+        }
+
+        public async Task SetPropertyAsync(string name, object? value, CancellationToken cancellationToken)
+        {
+            Properties.Add(new(name, value));
+            if (BeforeSet is { } before) await before();
+        }
+
+        public async Task<string?> GetTextAsync(string name, CancellationToken cancellationToken)
+        {
+            Reads.Add(name);
+            if (BeforeRead is { } before) await before();
+            return "播放器默认值";
+        }
+
+        public Task<double?> GetPositionAsync(CancellationToken cancellationToken) => Task.FromResult<double?>(0);
+        public Task ShowMessageAsync(string text) => Task.CompletedTask;
+        public Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<MpvTrack>>([]);
+        public Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken) => Task.FromResult<double?>(null);
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            if (FailOnDispose) throw new InvalidDataException("模拟句柄释放失败");
+            return ValueTask.CompletedTask;
+        }
     }
 
     /// <summary>

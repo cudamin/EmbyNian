@@ -1528,6 +1528,54 @@ internal static class SettingsTests
                 File.WriteAllText(paths.SettingsFile, "坏了");
 
                 Assert.Equal("果服", store.Load().Servers[0].Name, "备份里有好的内容就该用它");
+                Assert.False(File.Exists(paths.SettingsFile), "坏主文件应已隔离");
+                Assert.Equal("果服", new SettingsStore(paths, Protector).Load().Servers[0].Name,
+                    "隔离后没有保存就再次启动，仍应恢复备份");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+
+        Test("存储：主文件缺失时仍恢复已有备份", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                var paths = new AppPaths(root);
+                var store = new SettingsStore(paths, Protector);
+                var settings = SettingsMigration.NewDefaults();
+                settings.Servers[0].Name = "备份里的服务器";
+                settings.Ui.PageSize = 160;
+                store.Save(settings);
+                File.Move(paths.SettingsFile, paths.SettingsBackupFile);
+
+                var loaded = store.Load();
+
+                Assert.Equal("备份里的服务器", loaded.Servers[0].Name);
+                Assert.Equal(160, loaded.Ui.PageSize);
+                Assert.True(File.Exists(paths.SettingsBackupFile), "恢复不能消耗仅存的备份");
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        });
+
+        Test("存储：只有损坏的备份时使用默认设置并保留原件", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                var paths = new AppPaths(root);
+                Directory.CreateDirectory(paths.Root);
+                File.WriteAllText(paths.SettingsBackupFile, "损坏的备份");
+
+                var loaded = new SettingsStore(paths, Protector).Load();
+
+                Assert.Equal(SettingsMigration.NewDefaults().Servers[0].Name, loaded.Servers[0].Name);
+                Assert.Equal("损坏的备份", File.ReadAllText(paths.SettingsBackupFile));
             }
             finally
             {

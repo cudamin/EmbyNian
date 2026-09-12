@@ -39,12 +39,12 @@ public static class UiThemes
     [
         // 现在这套。窗口、面、次面、字、绿五个值和 Theme/Palette.xaml 里手调的那份一致 —— 那份现在只
         // 负责第一帧，真正生效的是这里推出来的表。
-        Make("emby-dark", "墨绿", "默认：Emby 的绿，压在近黑的面上。", dark: true,
-            window: "#16181C", surface: "#1E2126", surfaceAlt: "#262A31", text: "#F2F4F7", accent: "#52B54B"),
+        Make("emby-dark", "薄荷影院", "深邃的蓝黑底色，配以柔和薄荷绿。", dark: true,
+            window: "#0C1116", surface: "#141B22", surfaceAlt: "#1C252E", text: "#F2F6FA", accent: "#6EE7C5"),
 
         // 真黑，给 OLED：这块屏上 #16181C 和 #000000 差着一整档功耗，暗场也差着一整档。
         Make("oled-black", "纯黑", "面全部压到黑，给 OLED 和全暗的房间。", dark: true,
-            window: "#000000", surface: "#0A0B0D", surfaceAlt: "#14161A", text: "#F2F4F7", accent: "#52B54B"),
+            window: "#000000", surface: "#0A0D10", surfaceAlt: "#13191F", text: "#F2F6FA", accent: "#6EE7C5"),
 
         Make("midnight", "午夜", "偏蓝的深色面配亮蓝强调色。", dark: true,
             window: "#0F1420", surface: "#161C2B", surfaceAlt: "#1E2637", text: "#E8EDF7", accent: "#4C8DF6"),

@@ -58,7 +58,18 @@ public sealed class CardItem : INotifyPropertyChanged
     private readonly string? _imageType;
 
     private CancellationTokenSource? _loading;
+
+    /// <summary>服务器明说没有这张图（404，或这个条目压根没有这一种图）。终局答案，不再问。</summary>
     private bool _missing;
+
+    /// <summary>
+    /// 上一次「没取到」（超时、连不上、5xx，重试也没救回来）落在几点，<see cref="DateTime.MinValue"/> 是从没
+    /// 失败过。跟 <see cref="_missing"/> 分开记，因为两者的下一步不一样：「没有」再问一万次还是 404；「没取到」
+    /// 隔一阵就值得再问（见 <see cref="ImageCachePolicy.WorthRetrying"/>）—— 从前两者混在一个 <c>_missing</c>
+    /// 里，一次网络打嗝就把封面永久钉成了灰格子。
+    /// </summary>
+    private DateTime _failedAt;
+
     private BitmapImage? _poster;
 
     /// <summary>
@@ -245,11 +256,15 @@ public sealed class CardItem : INotifyPropertyChanged
     public string FavoriteActionTip => IsFavorite ? "取消收藏" : "添加到收藏";
 
     /// <summary>
-    /// The play button in the middle of the artwork, which only exists on a card the server would
-    /// actually stream. A series, a folder and a person all open instead, and a button offering to play
-    /// one of them would be offering nothing.
+    /// The play button in the middle of the artwork. A movie or an episode streams directly; a series
+    /// and a season are a stack of files, and the badge on their posters means 「开始看这部」 — the
+    /// player resolves them down to the next unwatched episode (StartPlaybackAsync's Series/Season
+    /// branch, where the same click from the home shelves, the library, search and the menu lands), so
+    /// 「给电视媒体库的封面也加上播放按钮」（2026-09-12） is this line. A folder and a person still open
+    /// instead: a button offering to play one of them would be offering nothing.
     /// </summary>
-    public Visibility PlayVisibility => Show(_item.IsPlayable);
+    public Visibility PlayVisibility =>
+        Show(_item.IsPlayable || _item.Type is EmbyItemType.Series or EmbyItemType.Season);
 
     /// <summary>
     /// 已观看 and 收藏 on the hover strip, which the 媒体库 row on the home page and the 演职人员 shelf
@@ -288,6 +303,10 @@ public sealed class CardItem : INotifyPropertyChanged
 
         if (_imageType is null || _missing || _poster is not null || _loading is not null) return;
 
+        // 上一次「没取到」还没隔够冷却时间就不问了：滚动一路会把同一张卡反复递进来，不拦的话一次断网就是每一趟
+        // 滚动都朝服务器排一遍车轮战。隔够了才放行 —— 服务器多半已经喘过气来了。
+        if (_failedAt != default && !ImageCachePolicy.WorthRetrying(_failedAt, DateTime.UtcNow)) return;
+
         // Already decoded once this run: hand it straight over. Synchronous on purpose — a container
         // coming back to a poster it has shown before should not flicker through an empty frame first.
         if (PosterKey() is { } key && PosterCache.TryGet(key, out var kept))
@@ -308,10 +327,13 @@ public sealed class CardItem : INotifyPropertyChanged
 
             if (bytes is null || bytes.Length == 0)
             {
-                // Remembered, so scrolling past an artwork-less item repeatedly does not re-ask the
-                // server every time its container comes back. Only a genuine 「no such image」 reaches
-                // here: a load this card gave up on throws instead, and is caught below without a mark.
+                // 走到这里的一定是服务器明说的 404（取不到的那几档在 EmbyImageStore 里已经先重试过、救不回来才
+                // 抛出来），所以放心记死：滚动路过一个真没有图的条目时不必每一次都去问服务器。
                 _missing = true;
+
+                // 留一行。这一档和「加载失败」在屏上是同一种灰，而日志里从前一个字都没有 —— 「服务器没这张图」
+                // 和「有图没取到」分不开，就只能靠猜。
+                Log.Debug(Category, $"服务器没有这张图（{_item.Name}，{_imageType}）");
                 return;
             }
 
@@ -329,7 +351,11 @@ public sealed class CardItem : INotifyPropertyChanged
         }
         catch (Exception error)
         {
-            _missing = true;
+            // 「这次没取到」不是「服务器没有」：不记死，只记下时间。等冷却过了（见开头的 WorthRetrying）、容器
+            // 再把这张卡递进来的时候重新问。在屏上纹丝不动的卡不会自己触发重问，但 EmbyImageStore 那头已经先
+            // 重试过两轮，短命的网络打嗝根本走不到这里；走得到的是比较长的断连，那种本来就要等下一次滚动或
+            // 换页才谈得上恢复。
+            _failedAt = DateTime.UtcNow;
             Log.Debug(Category, $"加载图片失败（{_item.Name}）：{error.Message}");
         }
         finally

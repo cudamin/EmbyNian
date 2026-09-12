@@ -96,12 +96,12 @@ internal static class ThemeTests
             Assert.Equal(UiThemes.DefaultId, UiThemes.Resolve(UiThemes.DefaultId.ToUpperInvariant()).Id);
         });
 
-        Test("主题目录：默认那套是 Palette.xaml 第一帧用的那份绿", () =>
+        Test("主题目录：默认那套与 Palette.xaml 的影院底色和薄荷强调色一致", () =>
         {
             // 第一帧由 Theme/Palette.xaml 的字面值画，之后 ThemeHost 用这里的表盖上去。两份差得太远，
             // 启动就会闪一下颜色。窗口底色和强调色是最看得出来的两个，所以钉住它们。
-            Assert.Equal("#FF16181C", UiThemes.Default.Colors.Window.ToHex());
-            Assert.Equal("#FF52B54B", UiThemes.Default.Colors.Accent.ToHex());
+            Assert.Equal("#FF0C1116", UiThemes.Default.Colors.Window.ToHex());
+            Assert.Equal("#FF6EE7C5", UiThemes.Default.Colors.Accent.ToHex());
         });
     }
 

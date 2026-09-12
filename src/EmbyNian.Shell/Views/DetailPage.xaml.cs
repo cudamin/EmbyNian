@@ -156,7 +156,11 @@ public sealed partial class DetailPage : Page, IShellContent
 
         // 尾部接的是罩子的末档 —— 同一个 alpha 同一个色，否则两块之间横着一道明暗接缝（自检里「尾部接住头图
         // 末色」读的就是这个）。取表上最后那一档而不是 ScrimCeiling：表要是哪天不以最浓收尾，这里跟着走。
-        HeroTail.Background = new SolidColorBrush(HeroScrimBrush.GradientStops[^1].Color);
+        // 集页那块板上这一层不画（HeroCardShown）：那一段的底由 HeroCardBottom 给，再压一层近乎同色的黑白费，
+        // 而且它会把板涂回罩子的末色 —— 板上那几块小面板的底边就对不上了。
+        HeroTail.Background = ViewModel.HeroCardShown
+            ? null
+            : new SolidColorBrush(HeroScrimBrush.GradientStops[^1].Color);
     }
 
     internal DetailViewModel ViewModel { get; }
@@ -219,22 +223,34 @@ public sealed partial class DetailPage : Page, IShellContent
         var hero = Box(HeroBand);
         var page = Box(Body);
         var stack = Box(HeroStack);
-        var actions = Box(HeroActions);
+        // 那排键此刻在哪一份：集页的宽版式在片名那一栏的叠里（ColumnActions，跟文字一起流），其余页面在
+        // 带子的独立一行上（HeroActions）。两份只有一份在屏上 —— 读收着的那份只会量到 0，什么也钉不住。
+        var actionsEl = ViewModel.HeroCardShown ? (FrameworkElement)ColumnActions : HeroActions;
+        var actions = Box(actionsEl);
         var tail = Box(HeroTail);
-        var room = Math.Max(ViewModel.HeroRoom, DetailHero.EpisodeFloor);
+
+        // 「这一格该多高」的两个出处：宽版式按内容量出来的那一叠（集页那一格的高就是它）；紧凑版式分两档 ——
+        // 有画面可铺的时候带子就是背景那条等比画面（DetailHero.CompactHeight —— 页宽乘图的高宽比），它比字键
+        // 那一叠高出来的部分是画面，不是空白，拿宽版式那笔账来比就是每一张窄页都「带子比内容高」；<em>没有
+        // 画面可铺</em>的时候带子就是那一叠的高（DetailHero.EpisodeHeight），于是它同样要判「不多留空」
+        // —— 集页在紧凑版式下永远没有画面可铺，而「窄窗口时候上方有大片空位」（2026-09-12）说的就是那一档
+        // 从前写死 412 的样子。
+        var strip = ViewModel.IsCompact && ViewModel.HeroArt;
+        var room = ViewModel.IsCompact ? ViewModel.HeroRoom : Math.Max(ViewModel.HeroRoom, DetailHero.EpisodeFloor);
         var roomy = hero.Height + tail.Height <= page.Height + 0.5;
 
-        // 一头一条，合起来是「带子正好那一叠那么高」：那一叠字往上撑（它是底对齐的）、那排键在它最底下，所以
-        // 收窄过头两头都读得出来；而带子不许比那一叠还高 —— 高出来那一截全落在底对齐的那一叠头上，也就是
+        // 一头一条，合起来是「带子正好那一叠那么高」：那一叠从这一格的上沿往下排、那排键在它底下那一行里，
+        // 所以收窄过头两头都读得出来；而带子不许比那一叠还高 —— 高出来那一截全落在那一叠底下，也就是
         // 「左上角空空的」。两条都无条件判：带高跟窗口有多大没关系（见 DetailHero.EpisodeHeight）。
-        var fits = stack.Top >= hero.Top - 0.5 && actions.Bottom <= hero.Bottom + 0.5;
-        var snug = hero.Height <= room + 0.5;
+        // 紧凑版式里那排键整个不画（它的活交给 CompactBlock），第二条随之免读 —— 量一个收着的元素没有读数。
+        var fits = stack.Top >= hero.Top - 0.5 && (ViewModel.IsCompact || actions.Bottom <= hero.Bottom + 0.5);
+        var snug = strip || hero.Height <= room + 0.5;
         var read = new List<string>();
         var ok = fits && snug;
 
-        foreach (var (name, panel) in new[]
+        foreach (var (name, panel) in new (string, FrameworkElement)[]
         {
-            ("音轨", (FrameworkElement)PickerPanel),
+            ("音轨", PickerSet.Panel),
             ("剧情说明", OverviewPanel),
             ("集带", EpisodePanel)
         })
@@ -257,20 +273,21 @@ public sealed partial class DetailPage : Page, IShellContent
             read.Add($"{name} {box.Top:0}–{box.Bottom:0}{(inside ? "" : "（出屏）")}");
         }
 
-        // 顺序那一条：那一带在音轨底下、也在剧情说明底下。压在图上的那一档还要没有板底和外圈 ——
-        // 「去掉集列表的黑边」，同 BodySeal 里那两块读的 Bare。
-        if (EpisodePanel.Visibility == Visibility.Visible && ViewModel.EpisodesOnScrim)
+        // 集带那两句话：它排在音轨和剧情说明底下（纸的第一块），而且带着样式那一圈框 —— 那是「剧页面那种
+        // 样式」（他 2026-09-12 先要框，随后「集的框要和上面分开」把上面那两块内层的框撤掉、这一圈留下）。
+        // 同 BodySeal 里那两块读的 Rings。
+        if (EpisodePanel.Visibility == Visibility.Visible)
         {
-            var order = Box(EpisodePanel).Top >= Box(PickerPanel).Bottom - 0.5
-                || PickerPanel.Visibility != Visibility.Visible;
+            var picker = PickerSet.Panel;
+            var order = Box(EpisodePanel).Top >= Box(picker).Bottom - 0.5
+                || picker.Visibility != Visibility.Visible;
             var below = OverviewPanel.Visibility != Visibility.Visible
                 || Box(EpisodePanel).Top >= Box(OverviewPanel).Bottom - 0.5;
-            var bare = EpisodePanel.Background is null or SolidColorBrush { Color.A: 0 }
-                && EpisodePanel.BorderThickness is { Left: 0, Top: 0, Right: 0, Bottom: 0 };
+            var framed = Rings(EpisodePanel);
 
-            ok &= order && below && bare;
+            ok &= order && below && framed;
             read.Add(order && below ? "集带排在音轨和剧情说明底下" : "集带没排在音轨和剧情说明底下");
-            read.Add(bare ? "集带外圈已去掉" : "集带仍有外圈或底色");
+            read.Add(framed ? "集带带着框" : "集带外圈没了");
         }
 
         return (ok, $"带高 {hero.Height:0}（内容量出来 {room:0}、其中字键那一叠 {stack.Height:0}）、"
@@ -285,17 +302,6 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
-    /// 那一带集这会儿坐在哪一块板上，两块之外就是 null（正在搬的那一瞬）。
-    /// <para>
-    /// 问那两块板自己而不是问 <c>EpisodePanel.Parent</c>：那个属性要等这一页 <c>Loaded</c> 之后才有值，理由和
-    /// 那一次真实的坏法都写在 <see cref="PlaceEpisodes"/> 上。
-    /// </para>
-    /// </summary>
-    private Panel? EpisodeHost => HeroTail.Children.Contains(EpisodePanel) ? HeroTail
-        : BodySheet.Children.Contains(EpisodePanel) ? BodySheet
-        : null;
-
-    /// <summary>
     /// 自检：从播放回来那一趟走完之后，这一页还是刚打开的样子 —— 「点击开始播放后点击左上方的返回，集列表会跑到
     /// 下方去」。
     /// <para>
@@ -305,20 +311,18 @@ public sealed partial class DetailPage : Page, IShellContent
     /// （点一张卡片进来）外壳一直是显着的。两条路上唯一不同的就是这个，所以这一条读的是那一趟走完之后的样子。
     /// </para>
     /// <para>
-    /// 两句话，各对一种屏上看得见、别的读数一条都不会响的坏法。那一带集摆在规矩说的那一层上
-    /// （<see cref="PlaceEpisodes"/>）：掉回纸上时它排在被撑满第一屏的尾部之后，屏上就是「集列表跑到下方去了」。
-    /// 页面没有自己滚下去：滚下去那一版头图那一叠字被切在视口上沿外面，而屏上看着像「这一页的头图怎么没了」。
+    /// 两句话，各对一种屏上看得见、别的读数一条都不会响的坏法。那一带集得是正文那张纸的第一块
+    /// （<see cref="PlaceEpisodes"/>）：它掉到纸的最后、也就是被撑满第一屏的尾部之后时，屏上就是「集列表跑到下方
+    /// 去了」。页面没有自己滚下去：滚下去那一版头图那一叠字被切在视口上沿外面，而屏上看着像「这一页的头图怎么
+    /// 没了」。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ReturnRead()
     {
-        var host = EpisodeHost;
-        var where = ReferenceEquals(host, HeroTail) ? "图上"
-            : ReferenceEquals(host, BodySheet) ? "纸上"
-            : "哪块板上都不在";
-        var wanted = ViewModel.EpisodesOnScrim ? "图上" : "纸上";
+        var host = BodySheet.Children.IndexOf(EpisodePanel);
+        var where = host == 0 ? "纸上第一块" : host > 0 ? $"纸上第 {host + 1} 块" : "纸上没有它";
         var offset = Body.VerticalOffset;
-        var placed = where == wanted;
+        var placed = host == 0;
         var top = offset < 1;
 
         var at = Body.Content is UIElement content
@@ -326,11 +330,11 @@ public sealed partial class DetailPage : Page, IShellContent
             : double.NaN;
 
         return (placed && top,
-            $"{EmbyItemType.ToChinese(ViewModel.ItemType)}页，那一带集在{where}（规矩说{wanted}）、"
+            $"{EmbyItemType.ToChinese(ViewModel.ItemType)}页，那一带集在{where}、"
                 + $"从内容 {at:0} 起；带高 {ViewModel.HeroHeight:0}、尾部 {HeroTail.ActualHeight:0}"
                 + $"（下限 {ViewModel.TailMinHeight:0}）、纸面上沿 {PaperOffset():0}、视口 {ViewModel.Viewport:0}、"
                 + $"页面滚在 {offset:0}"
-                + (placed ? "" : "，集带掉到另一层去了")
+                + (placed ? "" : "，集带没排在纸的第一块")
                 + (top ? "" : "，页面自己滚下去了"));
     }
 
@@ -384,8 +388,8 @@ public sealed partial class DetailPage : Page, IShellContent
     /// 这几何得有人读。
     /// </para>
     /// <para>
-    /// 「没顶出带子」是这一版最要紧的那一句：这一枚站在那一叠字里，而电影、剧、季三页的带高写死 460 —— 那一叠撑过
-    /// 让给它的 368 就从带子的上沿溢出去，屏上是徽标压在面包屑那一行上。集页反过来是带子跟着那一叠长高（那一页的
+    /// 「没顶出带子」是这一版最要紧的那一句：这一枚站在那一栏字里，而电影、剧、季三页的带高写死 412 —— 那一栏撑过
+    /// 让给它的 360 就从带子的上沿溢出去，屏上是徽标压在面包屑那一行上。集页反过来是带子跟着那一栏长高（那一页的
     /// 高按实测给），所以那一头不会溢，会溢的正是写死高度的这三页。
     /// </para>
     /// </summary>
@@ -416,61 +420,6 @@ public sealed partial class DetailPage : Page, IShellContent
                     + (above ? "" : "，没在片名上方")
                     + (aligned ? "" : "，左沿没跟片名对齐")
                     + (inside ? "" : "，顶出了带子")
-                    + (clearOfStill ? "" : "，压到海报了"));
-        }
-    }
-
-    /// <summary>
-    /// 自检：右上角那张艺术图 —— 「右上角显示艺术图」。画了没有、画多大、真落在带子的右上角，以及它和字那一栏的
-    /// 两样（片名、徽标）、和海报都不相交。
-    /// <para>
-    /// 「没顶出带子」在这一条上是那 146 的上限唯一的看守：那个数是写死的，靠的是「最矮的一档带子减掉上下留白还剩
-    /// 156」（见 <see cref="DetailHero.EpisodeFloor"/>）。一张比让给它的地方还高的图会把带子顶开，而屏上看着只是
-    /// 「这一页的头图怎么变高了」—— 谁把那两个数往下调，红在这里。
-    /// </para>
-    /// <para>
-    /// 服务器上没有艺术图的条目占大多数（这台服务器三十一个条目里十六个有），那一次这句话是空的、成立 —— 它跟
-    /// <see cref="PlateShape"/> 各空各的，这正是「两个位置各归一样图，不再互相退档」的意思。
-    /// </para>
-    /// </summary>
-    internal (bool Drawn, double Width, double Height, bool Placed, string Where) CornerShape
-    {
-        get
-        {
-            if (CornerArt.Visibility != Visibility.Visible)
-            {
-                // 窄窗口上它是被规矩收起来的，不是「服务器没这张图」（见 DetailHero.CornerFits ——「窗口缩小到
-                // 一定程度自动隐藏」）。两种「没画」在报告里读起来一样，所以这一档把量到的页宽一起说出来，那也
-                // 正好是「页宽真的送到视图模型里了」的证据 —— 送不到的话这一张在任何窗口上都不画。
-                var narrow = !DetailHero.CornerFits(ViewModel.PageWidth);
-
-                return (false, CornerArt.ActualWidth, CornerArt.ActualHeight, true,
-                    narrow
-                        ? $"右上角没画（页面 {ViewModel.PageWidth:0} 窄过 {DetailHero.CornerFloor:0}，规矩说收起来）"
-                        : "右上角没画");
-            }
-
-            var art = BandBox(CornerArt);
-            var title = BandBox(TitleText);
-            var plate = BandBox(TitlePlate);
-            var still = BandBox(PosterStill);
-
-            var corner = art.Top < HeroBand.ActualHeight / 2 && art.Right > HeroBand.ActualWidth / 2;
-            var inside = art.Top >= -0.5 && art.Bottom <= HeroBand.ActualHeight + 0.5;
-
-            // 跟字那一栏里的两样都不相交：片名怎么折行都碰不上它（两者靠的是栏而不是行），徽标同理。海报也一样。
-            var clearOfTitle = Apart(art, title);
-            var clearOfPlate = TitlePlate.Visibility != Visibility.Visible || Apart(art, plate);
-            var clearOfStill = PosterStill.Visibility != Visibility.Visible || Apart(art, still);
-
-            return (true, CornerArt.ActualWidth, CornerArt.ActualHeight,
-                corner && inside && clearOfTitle && clearOfPlate && clearOfStill,
-                $"艺术图 {art.Left:0},{art.Top:0} 到 {art.Right:0},{art.Bottom:0}"
-                    + $"（带 {HeroBand.ActualWidth:0}×{HeroBand.ActualHeight:0}，该在右上角）"
-                    + (corner ? "" : "，不在右上角")
-                    + (inside ? "" : "，顶出了带子")
-                    + (clearOfTitle ? "" : "，压到片名了")
-                    + (clearOfPlate ? "" : "，压到徽标了")
                     + (clearOfStill ? "" : "，压到海报了"));
         }
     }
@@ -540,6 +489,12 @@ public sealed partial class DetailPage : Page, IShellContent
     /// —— 那件事由 字体已解析 那条管。
     /// </para>
     /// <para>
+    /// 片名那一档从 <c>EgDisplayFontSize</c>（52，轮播那一支）落到 <c>EgHeaderFontSize</c>（36，页面标题那
+    /// 一档）之后，这一条跟着改口；行高也顺带钉一句 —— 这一支字体是 Bahnschrift，汉字从雅黑掉下来，行距
+    /// 按前者算而字比它高，折行就会叠在一起（2026-09-12 他截图里那一处）。「行高不小于字号」是那一病根
+    /// 的反面，也正是屏上最难看出来的那件事。
+    /// </para>
+    /// <para>
     /// 原来这里还读第三行眉字（电影／剧集／单集）。那一行整个删了 —— 「喜剧之王上面的那个电影太突兀了，删掉
     /// 或者移动到别的地方」 —— 剩下这两行每一页都在，所以这一条在四种页面上答的是同一句话。
     /// </para>
@@ -548,16 +503,19 @@ public sealed partial class DetailPage : Page, IShellContent
     {
         var display = Face("EgDisplayFontFamily");
         var data = Face("EgDataFontFamily");
-        var size = (double)Application.Current.Resources["EgDisplayFontSize"];
+        var size = (double)Application.Current.Resources["EgHeaderFontSize"];
 
+        var spacing = TitleText.LineHeight >= TitleText.FontSize;
         var ok = TitleText.FontFamily.Source == display
             && Math.Abs(TitleText.FontSize - size) < 0.01
-            && HeroFacts.FontFamily.Source == data;
+            && HeroFacts.FontFamily.Source == data
+            && spacing;
 
         return (ok,
-            $"片名 {TitleText.FontFamily.Source} {TitleText.FontSize:0}、"
+            $"片名 {TitleText.FontFamily.Source} {TitleText.FontSize:0}（行高 {TitleText.LineHeight:0}）、"
                 + $"读数 {HeroFacts.FontFamily.Source} {HeroFacts.FontSize:0}"
-                + (ok ? "" : $" —— 要的是片名「{display}」{size:0}、读数「{data}」"));
+                + (ok ? "" : $" —— 要的是片名「{display}」{size:0}、读数「{data}」")
+                + (spacing ? "" : "，片名的行高比字号还小（折行会叠在一起）"));
 
         static string Face(string key) => ((FontFamily)Application.Current.Resources[key]).Source;
     }
@@ -588,12 +546,18 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
-    /// 自检：那张剧照是不是真铺满了这一页，而且真固定在背景里 —— 「让背景图填满页面，别只显示一个框」加上
-    /// 「固定在背景中，而不是往下翻页就消失了，而且要跟主页一样，占满标题栏」。
+    /// 自检：背景容器通栏且固定，那张图画在跟宽走的盒子里（<c>BackdropPicture</c>），按 UniformToFill、
+    /// 顶部对齐、水平居中 —— 「背景图上下不要有黑边」加上「窗口收窄时背景图要等比例缩放」。
     /// <para>
-    /// 值得读，是因为这几件事在截图里看得见、在别的任何读数里都看不出来，而它们各自都能悄悄失效：外边距归了
-    /// 零、头上那一格的高走了另一档、把背景那一层顶上去的那个负边距（<see cref="LiftBackdrop"/>）。往下滚以后
-    /// 看不见这张图是正文遮的，不是它走了 —— 那件事是另一条读数（<see cref="BodySeal"/>）。
+    /// 盒高由 <see cref="DetailViewModel.PictureHeight"/> 给：宽的窗口上它被视口封顶，照旧铺满第一屏；窄下来
+    /// 之后等于「页宽 × 图的高宽比」，整张图等比缩小。层本身照旧铺满整窗（底下那段露出的是层底，交给压暗的
+    /// 尾部），所以「层顶到窗口上沿、层底到窗口下沿」两句照旧读在层上。
+    /// </para>
+    /// <para>
+    /// 值得读，是因为这几件事在截图里看得见、在别的任何读数里都看不出来，而它们各自都能悄悄失效：盒高绑丢了
+    /// （Height 退回 NaN 就是一格空图）、外边距归了零、头上那一格的高走了另一档、把背景那一层顶上去的那个负
+    /// 边距（<see cref="LiftBackdrop"/>）。往下滚以后看不见这张图是正文遮的，不是它走了 —— 那件事是另一条
+    /// 读数（<see cref="BodySeal"/>）。
     /// </para>
     /// <para>
     /// 关键是这一条读在自检把页面滚到底之后（<c>ShellSelfCheck</c> 先 <see cref="ScrollToEnd"/>，再读详情）：
@@ -601,14 +565,14 @@ public sealed partial class DetailPage : Page, IShellContent
     /// 那一版在这里会报一个很负的数。
     /// </para>
     /// <para>
-    /// 判据取 <see cref="DetailViewModel.HeroArt"/>（服务器上有没有这张图）而不是解出来的位图：版面按前者分
-    /// 档，拿后者当判据会在一次解码失败上要求 380，而页面正按 460 往上布着。没有那张图的条目上背景层整个是收
+    /// 判据取 <see cref="DetailViewModel.BackdropShown"/>（服务器上有没有这张图）而不是解出来的位图：版面按前者分
+    /// 档，拿后者当判据会在一次解码失败上要求 412，而页面正按那一档往上布着。没有那张图的条目上背景层整个是收
     /// 起的，量它的上沿没有意义，所以那一档只比带子那一格。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) HeroFill()
     {
-        var art = ViewModel.HeroArt;
+        var art = ViewModel.BackdropShown;
 
         // 视图模型算出来的那个数，不是 DetailHero.Height 那两档：集页那一格按里面那一叠实测给、落在两档之下
         // （见 DetailViewModel.HeroHeight），拿两档当判据的话那一页每次都会报「高该是 460」。
@@ -626,21 +590,45 @@ public sealed partial class DetailPage : Page, IShellContent
                     + (tall ? "" : $"，高该是 {want:0}"));
         }
 
-        // 量的是 Backdrop 那一层而不是里面那张 Image：图还在路上时这一层照样站着（见 HeroArtVisibility），
-        // 而这一条问的是「那一层在窗口的哪儿」。左沿不比 —— 页面左边是侧边栏那道竖线，图本来就不该盖过去。
+        // 量的是 Backdrop 容器而不是 ImageBrush 画出的图：图还在路上时这一层照样站着（见 HeroArtVisibility），
+        // 而这一条问的是「那一层和里面那个盒子在窗口的哪儿」。左沿不比 —— 页面左边是侧边栏那道竖线，图本来
+        // 就不该盖过去。
         var box = Backdrop.TransformToVisual(root)
             .TransformBounds(new Rect(0, 0, Backdrop.ActualWidth, Backdrop.ActualHeight));
+        var picture = BackdropPicture.TransformToVisual(root)
+            .TransformBounds(new Rect(0, 0, BackdropPicture.ActualWidth, BackdropPicture.ActualHeight));
         var window = XamlRoot.Size;
         var top = Math.Abs(box.Top) < 1.5;
         var full = box.Bottom >= window.Height - 1.5;
 
-        return (wide && tall && top && full,
-            detail + $"、背景层 {box.Left:0},{box.Top:0} 到 {box.Right:0},{box.Bottom:0}"
-                + $"（窗口 {window.Width:0}×{window.Height:0}，已滚到底）"
+        // 容差 1.5 而不是半像素：绑定的数本身可以带小数（页宽 × 高宽比），而排出来的 ActualHeight 被布局取整到
+        // 物理整像素，非整数缩放下两边能差到大半个 DIP —— 这里的对手是「绑丢了」（差出半个视口那种），不是
+        // 半像素的取整零头。
+        var sized = Math.Abs(picture.Height - ViewModel.PictureHeight) < 1.5 && picture.Top < 1.5;
+        var strip = ViewModel.PictureHeight < window.Height - 1.5;
+
+        // 下沿那道黑色渐变（「背景图下方的衔接处要用黑色渐变」）跟着图走，两档都在：盒高被视口封顶，盒子却
+        // 站在窗口上沿（LiftBackdrop），铺满那一档的下沿也落在窗口下沿上方标题栏那一条里 —— 那一刀
+        // UniformToFill 的硬边没有渐变接就是「背景图下方不是黑色渐变而是一条黑边」（2026-09-12）。图还没解出来
+        // 时整个盒子（连渐变一起）收着，那一拍不判。
+        var fadeWanted = ViewModel.HeroVisibility == Visibility.Visible;
+        var fade = BackdropFade.Visibility == Visibility.Visible;
+        var topAligned = BackdropImageBrush.Stretch == Stretch.UniformToFill
+            && BackdropImageBrush.AlignmentX == AlignmentX.Center
+            && BackdropImageBrush.AlignmentY == AlignmentY.Top;
+
+        return (wide && tall && top && full && sized && fade == fadeWanted && topAligned,
+            detail + $"、背景层 {box.Left:0},{box.Top:0} 到 {box.Right:0},{box.Bottom:0}、"
+                + $"图盒 {picture.Width:0}×{picture.Height:0.##}（该 {ViewModel.PictureHeight:0.##}，上沿 {picture.Top:0.##}，"
+                + $"{(strip ? "等比画面条" : "铺满视口")}，下沿渐变{(fade ? "在" : "不在")}（{(fadeWanted ? "该在" : "该不在")}），"
+                + $"窗口 {window.Width:0}×{window.Height:0}，已滚到底）"
                 + (wide ? "" : "，没通到两边")
                 + (tall ? "" : $"，高该是 {want:0}")
                 + (top ? "" : "，背景层没顶到窗口上沿（跟着滚走了？）")
-                + (full ? "" : "，背景层没铺到窗口下沿"));
+                + (full ? "" : "，背景层没铺到窗口下沿")
+                + (sized ? "" : "，图盒的高度或上沿不是视图模型算的那个（绑丢了？）")
+                + (fade == fadeWanted ? "" : "，下沿渐变的显隐和背景图对不上")
+                + (topAligned ? "，背景图铺满裁切、顶部对齐、上下不留边" : "，背景图不是铺满裁切加顶部对齐（上下会留黑边）"));
     }
 
     /// <summary>
@@ -758,9 +746,6 @@ public sealed partial class DetailPage : Page, IShellContent
             ? tail.Bottom
             : last.TransformToVisual(root)
                 .TransformBounds(new Rect(0, 0, last.ActualWidth, last.ActualHeight)).Bottom;
-        var name = last is null ? "空的" : ReferenceEquals(last, EpisodePanel) ? "集带"
-            : ReferenceEquals(last, OverviewPanel) ? "剧情说明" : "音轨";
-
         var left = box.Left <= page.Left + 0.5;
         var right = box.Right >= page.Right - 0.5;
         var below = box.Bottom >= window.Height - 0.5;
@@ -775,44 +760,74 @@ public sealed partial class DetailPage : Page, IShellContent
 
         // 纸的上沿不许落进第一屏。读的是内容坐标（带高加尾部实高）而不是屏上位置：这一条问的是「滚到顶时它在
         // 哪儿」，而自检读到这里时页面已经滚到底了。两档不问：没有剧照的那一档不撑尾部，以及纸面上沿到了
-        // PaperLine 那条线之后的档 —— 那时候富余的高度归纸，纸本来就该露一条。
+        // PaperLine 那条线之后的档 —— 那时候富余的高度归纸，纸本来就该露一条。封顶有这两个出处：纸面那条线
+        // （窗口高过阈值），和背景画面的下沿（等比画面条底下没有画面，尾部撑过去就是空位，见
+        // DetailHero.TailHeight）—— 哪一个顶住的都算「该露」。
         var paperTop = PaperOffset();
-        var capped = Math.Abs(ViewModel.TailMinHeight - (ViewModel.PaperLine - ViewModel.HeroHeight)) < 0.5;
+        // 两边都先取整再比：TailMinHeight 是 Core 那一支取整过的（DetailHero.TailHeight），直接拿小数去比，
+        // 「正好在画面下沿封顶」的那一档会差出半个像素 —— 带高不缩小的今天（412 正好卡在 598.5 − 186.5 上）
+        // 每一张有剧照的页面都会踩中。
+        var byLine = Math.Abs(ViewModel.TailMinHeight - Math.Round(ViewModel.PaperLine - ViewModel.HeroHeight)) < 0.5;
+        var byPicture = Math.Abs(ViewModel.TailMinHeight - Math.Round(ViewModel.PictureHeight - ViewModel.HeroHeight)) < 0.5;
+        var capped = byLine || byPicture;
         var beyond = paperTop >= Body.ActualHeight - 0.5;
         var folded = !ViewModel.HeroArt || capped || beyond;
-        var joined = HeroTail.Background is SolidColorBrush { Color: var tailColor }
-            && tailColor == HeroScrimBrush.GradientStops[^1].Color;
-        var pickersBare = Bare(PickerPanel);
-        var overviewBare = Bare(OverviewPanel);
+        var joined = ViewModel.HeroCardShown
+            ? HeroTail.Background is null or SolidColorBrush { Color.A: 0 }
+            : HeroTail.Background is SolidColorBrush { Color: var tailColor }
+                && tailColor == HeroScrimBrush.GradientStops[^1].Color;
+        // 音轨那一行和剧情说明都不带框 ——「移除音频和剧情说明那两个栏的框」（2026-09-12）。它们站在那块大板上，
+        // 板本身就是一层，再给每一块描一圈发丝线就成了一层套一层；只剩集带那一圈（「剧页面那种样式」）。
+        var bare = !Rings(PickerSet.Panel) && !Rings(OverviewPanel);
 
-        return (left && right && below && opaque && moved && snug && folded && joined
-                && pickersBare && overviewBare,
+        return (left && right && below && opaque && moved && snug && folded && joined && bare,
             $"正文 {box.Left:0},{box.Top:0} 到 {box.Right:0},{box.Bottom:0}，"
                 + $"页面 {page.Left:0},{page.Right:0}、窗口高 {window.Height:0}（已滚到底）"
                 + (opaque ? "，底色不透明" : "，底色透光")
-                + (moved ? $"，分界紧接{name}那一段" : $"，分界没贴住尾部（尾部到底 {tail.Bottom:0}）")
+                + (moved ? "，分界紧接尾部那一段" : $"，分界没贴住尾部（尾部到底 {tail.Bottom:0}）")
                 + (snug ? $"，尾部撑到 {HeroTail.ActualHeight:0}（内容 {content:0}、第一屏要 {ViewModel.TailMinHeight:0}）"
                     : $"，尾部撑得不对（实测 {HeroTail.ActualHeight:0}、该是 {want:0}）")
                 + (beyond ? $"，纸的上沿 {paperTop:0} 在第一屏 {Body.ActualHeight:0} 外面"
                     : capped
                         ? $"，纸的上沿 {paperTop:0} 露在第一屏 {Body.ActualHeight:0} 里"
-                            + $"（纸面上沿钉在视口 {ViewModel.PaperLine:0}，富余的高度归纸）"
+                            + (byLine ? $"（纸面上沿钉在视口 {ViewModel.PaperLine:0}，富余的高度归纸）" : "")
+                            + (byPicture ? $"（尾部撑到背景画面下沿 {ViewModel.PictureHeight:0.##} 为止，底下归内容）" : "")
                         : $"，纸的上沿 {paperTop:0} 浮在第一屏 {Body.ActualHeight:0} 里")
-                + (joined ? "，尾部接住头图末色" : "，尾部和头图末色不同")
-                + (pickersBare ? "，音轨外圈已去掉" : "，音轨仍有外圈或底色")
-                + (overviewBare ? "，剧情说明外圈已去掉" : "，剧情说明仍有外圈或底色")
+                + (joined
+                    ? ViewModel.HeroCardShown ? "，尾部让给那块板（自己不画底）" : "，尾部接住头图末色"
+                    : "，尾部的底色不对")
+                + (bare ? "，音轨和剧情说明都没框" : "，音轨或剧情说明还带着框")
                 + (left ? "" : "，左边露出背景")
                 + (right ? "" : "，右边露出背景")
                 + (below ? "" : $"，底下露出背景 {window.Height - box.Bottom:0}"));
-
-        static bool Bare(StackPanel panel)
-        {
-            var border = panel.BorderThickness;
-            var noBorder = border.Left == 0 && border.Top == 0 && border.Right == 0 && border.Bottom == 0;
-            var noFill = panel.Background is null or SolidColorBrush { Color.A: 0 };
-            return noBorder && noFill;
-        }
     }
+
+    /// <summary>
+    /// 一块板这一刻带不带框：底色不是透明的、四边都有发丝线。自检读的是元素上真正的值 —— 集带那一圈要在这儿
+    /// 钉着，音轨和剧情说明那两圈要钉着没有（「移除音频和剧情说明那两个栏的框」）。
+    /// <para>
+    /// 收 <see cref="FrameworkElement"/> 而不是 <see cref="StackPanel"/>：同一行文件选项有两份，片名那一栏那一份
+    /// 是一层 <c>WrapRow</c>（本来就没有底和框），尾部那一份才带着样式那圈。不是 <see cref="StackPanel"/> 的
+    /// 那一份按「没有框」答，这正是它该有的样子。
+    /// </para>
+    /// </summary>
+    private static bool Rings(FrameworkElement element) => element is StackPanel panel
+        && panel.Background is SolidColorBrush { Color.A: > 0 }
+        && panel.BorderThickness is { Left: > 0, Top: > 0, Right: > 0, Bottom: > 0 };
+
+    /// <summary>
+    /// 这一页那一行文件选项此刻是哪一份 —— 集页的宽版式在片名那一栏里（<c>ColumnPickers</c>，标签在下拉左边，
+    /// 2026-09-12「按键布局参考上方截图」），其余页面和紧凑版式在尾部那一段（<c>PickerPanel</c>，标签在下拉
+    /// 头上）。两份只有一份在屏上，判据是 <see cref="DetailViewModel.ColumnPickersVisibility"/> 那两半。
+    /// <para>
+    /// 自检读它是因为读数不能写死读哪一份：写死尾部那一份的那一版在集页上会读到「这一条目没有音轨」，而那一行
+    /// 明明就在片名底下；反过来写死片名那一份的，在电影页和紧凑版式上读不到东西。
+    /// </para>
+    /// </summary>
+    private (FrameworkElement Panel, Thickness Padding, ComboBox Source, ComboBox Audio, ComboBox Subtitle) PickerSet =>
+        ViewModel.HeroCardShown
+            ? (ColumnPickers, default, ColumnSourcePicker, ColumnAudioPicker, ColumnSubtitlePicker)
+            : (PickerPanel, PickerPanel.Padding, SourcePicker, AudioPicker, SubtitlePicker);
 
     /// <summary>
     /// 自检：「媒体源／音频／字幕」那一行该不该有，以及有的那一次三个下拉有没有被窗口右沿切掉。
@@ -845,19 +860,28 @@ public sealed partial class DetailPage : Page, IShellContent
         // 这一行说的是播放键指着的那个文件 —— 电影和单集是自己，剧页和季页是解析出来的那一集（判据在
         // DetailViewModel.PickersVisibility）。所以判的不再是「这一页是不是文件」，而是「有没有那个落点」：
         // 落点是空的（人物页，或者一部剧的集还没回来）还把这一行画出来，挑的就是另一个条目留下的轨道。
+        // 屏上那一份由 PickerSet 给：集页的宽版式在片名那一栏里，别的页面和紧凑版式在尾部。
         var target = ViewModel.PlayTarget;
         var kind = EmbyItemType.ToChinese(ViewModel.ItemType);
+        var (panel0, padding, source, audio, subtitle) = PickerSet;
 
-        if (PickerPanel.Visibility != Visibility.Visible)
+        // 两份只该露一份 —— 都露是同一个问题在屏上问两遍（三个下拉 ×2），而 DetailViewModel 那两句判据是
+        // 同一句 Pickable 的两半，这里钉的就是那两半真的对上了（都收着是另一回事：那一条没有可挑的）。
+        var doubled = PickerPanel.Visibility == Visibility.Visible
+            && ColumnPickers.Visibility == Visibility.Visible;
+
+        if (panel0.Visibility != Visibility.Visible)
         {
+            if (doubled) return (false, $"{kind}页，两份文件选项都露着");
             return (true, target is null ? $"{kind}页没有播放落点，那一行收着" : $"{kind}页，没什么可挑的，那一行收着");
         }
 
+        if (doubled) return (false, $"{kind}页，两份文件选项都露着");
         if (target is null) return (false, $"{kind}页没有播放落点，可文件选项那一行画出来了");
 
-        var panel = PickerPanel.TransformToVisual(root)
-            .TransformBounds(new Rect(0, 0, PickerPanel.ActualWidth, PickerPanel.ActualHeight));
-        var edge = panel.Right - PickerPanel.Padding.Right;
+        var panel = panel0.TransformToVisual(root)
+            .TransformBounds(new Rect(0, 0, panel0.ActualWidth, panel0.ActualHeight));
+        var edge = panel.Right - padding.Right;
         var window = XamlRoot.Size;
 
         var read = new List<string>();
@@ -867,9 +891,9 @@ public sealed partial class DetailPage : Page, IShellContent
 
         foreach (var (name, picker) in new[]
         {
-            ("媒体源", SourcePicker),
-            ("音频", AudioPicker),
-            ("字幕", SubtitlePicker)
+            ("媒体源", source),
+            ("音频", audio),
+            ("字幕", subtitle)
         })
         {
             if (picker.Visibility != Visibility.Visible) continue;
@@ -890,12 +914,13 @@ public sealed partial class DetailPage : Page, IShellContent
         // 要是交回「我占了多宽」而不是「给我的这一格多宽」，框架就把差出来的那点空当对半分到两边（Stretch 算对齐
         // 偏移时和 Center 同一支），整排往右挪 —— 挪多少还跟着轨道名的长短变。屏上是它比上下两段都缩进一块，
         // 而三个下拉全在界内、换行也对，只看上面那三条读数一个都不会响。
-        var contentLeft = panel.Left + PickerPanel.Padding.Left;
+        var contentLeft = panel.Left + padding.Left;
         var drift = lefts.Min() - contentLeft;
         ok &= drift < 1.5;
 
         return (ok, $"{string.Join("、", read)}，可用 {contentLeft:0}–{edge:0}"
             + $"（窗口宽 {window.Width:0}），摆成 {rows.Count} 行"
+            + $"，在{(ViewModel.HeroCardShown ? "片名那一栏" : "尾部")}"
             + (drift < 1.5 ? "，整排贴着左边" : $"，整排右移了 {drift:0}"));
     }
 
@@ -1301,19 +1326,22 @@ public sealed partial class DetailPage : Page, IShellContent
         _washedInk = false;
         PaintWash(force: true);
 
-        // 那一带集摆在图上还是纸上，也是复用实例那一路要显式说一遍的事：上一个条目可能是另一种页面，而这一次
-        // 的种类要等 Apply 才知道 —— 那时会再来一次通知（见 OnViewModelChanged）。
-        PlaceEpisodes(ViewModel.EpisodesOnScrim);
+        // 集带永远在纸的第一块（标记里就那么摆的），所以这里只是「万一不在」补一下；尾部那一段的底色跟着
+        // 「这一页有没有那块板」走，而那一句要等 Apply 才知道种类（那时会再来一次通知，见 OnViewModelChanged）。
+        PaintScrim();
+        PlaceEpisodes();
 
         _ = ViewModel.ReloadAsync();
     }
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (args.PropertyName == nameof(DetailViewModel.HeroArt)) PaintWash(force: true);
-        if (args.PropertyName == nameof(DetailViewModel.EpisodesOnScrim))
-            PlaceEpisodes(ViewModel.EpisodesOnScrim);
+        if (args.PropertyName == nameof(DetailViewModel.BackdropShown)) PaintWash(force: true);
         if (args.PropertyName == nameof(DetailViewModel.SublineGenres)) PaintGenres();
+
+        // 集页那块板在不在：尾部那一段的底跟着它换。宽窄跨过 1024 那一条线时变的就是它 —— 那一趟 LayoutPage
+        // 也会走，可它管不到这一支。
+        if (args.PropertyName == nameof(DetailViewModel.HeroCardShown)) PaintScrim();
     }
 
     /// <summary>
@@ -1466,84 +1494,66 @@ public sealed partial class DetailPage : Page, IShellContent
     private void OnHeroTailSizeChanged(object sender, SizeChangedEventArgs e) => PaintWash(force: true);
 
     /// <summary>
-    /// 带子里那一叠字和键有多高 —— 片名折成两行、窗口换窄都会变。集页那一格的高由它给，见
-    /// <see cref="DetailViewModel.HeroRoom"/>。
+    /// 带子里那一栏（徽标、片名、副标题、读数、那行视频）有多高 —— 片名折成两行、窗口换窄都会变。集页那一格
+    /// 的高由它给，见 <see cref="DetailViewModel.HeroRoom"/>。
     /// <para>
-    /// 那一叠是底对齐的，所以它的 <c>ActualHeight</c> 就是它自己要的高，不是这一格给它的高 —— 拉伸的那种
-    /// 量出来永远等于带子，带高也就永远等于当前值，一个自己咬着自己的数。
+    /// 这一栏靠上站（<see cref="DetailViewModel.HeroContentAlignment"/>），而且不是拉伸的那种，所以它的
+    /// <c>ActualHeight</c> 就是它自己要的高，不是这一格给它的高 —— 拉伸的那种量出来永远等于带子，带高也就永远
+    /// 等于当前值，一个自己咬着自己的数。
     /// </para>
     /// <para>
-    /// 只报量出来的这一个数。「海报也算进去」和「加上这一格上下那两道留白」都搬去了视图模型
-    /// （<see cref="DetailViewModel.HeroRoom"/>）：海报按图自己的形状收窄之后它的高会变，而那一下这一叠字键
-    /// 一个像素没动、这个回调也就不会来 —— 算在这儿的那一版于是留着一格比内容高出一截的带子。
+    /// 只报量出来的这一个数。「海报也算进去」「那一行键也算进去」和「加上这一格上下那两道留白」都搬去了视图模型
+    /// （<see cref="DetailViewModel.HeroRoom"/>）：海报按图自己的形状收窄之后它的高会变，而那一下这一栏一个
+    /// 像素没动、这个回调也就不会来 —— 算在这儿的那一版于是留着一格比内容高出一截的带子。
+    /// </para>
+    /// <para>
+    /// 那排键 2026-09-12 从这一栏里搬出去、自己占一行，所以它的高由 <see cref="OnHeroActionsSizeChanged"/>
+    /// 另报一次；这一栏量到的是搬完之后的那个（少了四十来个像素），两处加起来才是从前那一笔账。
     /// </para>
     /// </summary>
     private void OnHeroStackSizeChanged(object sender, SizeChangedEventArgs e) =>
         ViewModel.StackRoom = HeroStack.ActualHeight;
 
     /// <summary>
-    /// 同季那一带集摆在哪儿 —— 集页压在头图底下那段画面里（剧情说明底下、也就是那一段的最后一块），别的页面摆在
-    /// 正文那张纸上。
+    /// 头图上那排键自己那一行有多高 —— 它 2026-09-12 从片名那一栏里搬出来、单独占一行（「继续播放 从头开始
+    /// 还有后面的那些图标单独一行」），所以它的高不再算在 <see cref="DetailViewModel.StackRoom"/> 里，得单独
+    /// 报上去（<see cref="DetailViewModel.ActionsRoom"/>，进带高的账）。报的是连头上那道 16 边距在内的
+    /// 排版高：Auto 行按 desired 摆它（含边距），带高的账和排出来的行不一致的话，差的那一截就从带子底下
+    /// 冒出去。
     /// <para>
-    /// 「把集页面的剧情说明和集列表位置调换」：这一带原来插在音轨那一行和剧情说明中间，现在排在剧情说明后面 ——
-    /// 于是进集页第一眼是「这一集讲什么」，那一带集往下一点。上一版的次序来自「音频字幕和集数的位置调换」，
-    /// 说的是音轨和集带这两块，剧情说明那会儿还在最后。
-    /// </para>
-    /// <para>
-    /// 搬同一份 markup 而不是再复制一份：复制的那一版正是被退回的那一版。压在图上那一档还要去掉板底和外圈
-    /// （「去掉集列表的黑边」），并把牌子和卡片那两行字换成压在图上那套墨 —— 主题自己的墨在晴昼下是近黑色，
-    /// 压在那层黑罩子上就没了。回到纸上时用 <c>ClearValue</c> 把底和外圈还给样式，不是抄一份样式里的值。
-    /// </para>
-    /// <para>
-    /// 「现在在哪一层」问那两块板自己（<see cref="EpisodeHost"/>），<em>不问</em> <c>EpisodePanel.Parent</c>：那个
-    /// 属性要等这一页 <c>Loaded</c> 之后才有值，而这个方法最要紧的那几次调用都可能早于它 —— 摆在哪一层跟着「这一页
-    /// 讲的是哪一类东西」走，而那句话是 <c>DetailViewModel.Preview</c> 和 <c>Apply</c> 喊出来的，两次都在
-    /// <c>OnNavigatedTo</c> 那一趟里。问 Parent 的那一版在那种时候<em>悄悄什么都不做</em>（<c>Parent is Panel</c>
-    /// 不成立），那一带集于是留在标记里写的那一层 —— 纸上。
-    /// </para>
-    /// <para>
-    /// 「点击开始播放后点击左上方的返回，集列表会跑到下方去」就是这么来的：停止播放时外壳先照着当前页面重新导航
-    /// 一遍（<c>ShellPage.RefreshActive</c>，服务器上的已看和断点刚变过），<em>之后</em>才把导航外壳放回来
-    /// （<c>ShowPlayer(false)</c>）—— 于是新那一页整个 <c>OnNavigatedTo</c> 加两次通知全在一棵收着的树上跑完，
-    /// <c>Loaded</c> 排在它们后面，一次都没赶上。而正常那一路（点一张卡片进来）看着没事只是因为完整条目那一趟
-    /// 往返通常慢过 <c>Loaded</c>，第二次通知刚好落在「已经有 Parent」那一侧：一场谁先到的赛跑，从这一带集会搬家
-    /// 那天起（`d34275d`，2026-09-01）一直赢着。屏上的样子是那一带集掉到被撑满第一屏的尾部之后（纸的第一块），
-    /// 也就是「跑到下方去」。自检里那一关是播放回来那一页，见 <see cref="ReturnRead"/>。
+    /// 紧凑版式里这一行整个收着（<c>WideActionsVisibility</c>），量出来就是 0 —— 「紧凑版式不多算这一行」
+    /// 不用另判一次版式，收着的东西量出来本来就是零；收着的那一拍这里只报 0，不把边距带上。
     /// </para>
     /// </summary>
-    private void PlaceEpisodes(bool onScrim)
+    private void OnHeroActionsSizeChanged(object sender, SizeChangedEventArgs e) =>
+        ViewModel.ActionsRoom = HeroActions.Visibility == Visibility.Visible
+            ? HeroActions.ActualHeight + HeroActions.Margin.Top
+            : 0;
+
+    /// <summary>
+    /// 同季那一带集永远是正文那张纸的第一块 —— 媒体信息紧跟在它后面（见 BodySheet 那段注释）。
+    /// <para>
+    /// <b>它从前会搬家，2026-09-12 起不搬了。</b>旧版：集页那一档压在头图底下那段画面里、排在剧情说明后面
+    /// （「把集页面的剧情说明和集列表位置调换」），别的页面上在纸上。集页整段上方合成一块大面板（<c>HeroCard</c>）
+    /// 之后，一带集再压在那一格里就成了「板里套板」，他一句「集的框要和上面分开」定了这一版 —— 那一带对所有页面
+    /// 都回到纸上，和剧页面那一带站在同一层、同一套墨、同一圈框（那也正是他要的「剧页面那种样式」）。
+    /// </para>
+    /// <para>
+    /// 旧账记在这儿，因为它买过两个 bug：搬家（`d34275d`，2026-09-01）留下过「点击开始播放后点左上角返回，
+    /// 集列表会跑到下方去」—— 停止播放时外壳先照着当前页面重新导航一遍、之后才把外壳放回来，那一趟
+    /// <c>OnNavigatedTo</c> 在一棵收着的树上跑完；而「现在在哪一层」从前只能读 <c>Parent</c>（要等 <c>Loaded</c>，
+    /// 那时候还没有值），于是搬家那一步悄悄什么都不做。现在不搬家，这一整类竞态不存在了。
+    /// </para>
+    /// <para>
+    /// 标记里就是那么摆的（<c>EpisodePanel</c> 写在 <c>BodySheet</c> 的第一个），所以这一句现在只是把
+    /// 「万一它不在那儿」补上 —— 页面实例会复用，搬过家的旧版本留下的位置不该跟着进下一页。
+    /// </para>
+    /// </summary>
+    private void PlaceEpisodes()
     {
-        var host = onScrim ? HeroTail : (Panel)BodySheet;
+        if (BodySheet.Children.Contains(EpisodePanel)) return;
 
-        if (EpisodeHost is { } current && !ReferenceEquals(current, host))
-        {
-            current.Children.Remove(EpisodePanel);
-
-            // 图上那一档接在剧情说明后面（也就是那一段的末尾），纸上那一档回到第一块（媒体信息紧跟在它后面，
-            // 见 BodySheet 那段注释）。
-            var at = onScrim ? HeroTail.Children.Count : 0;
-            host.Children.Insert(at, EpisodePanel);
-        }
-
-        if (onScrim)
-        {
-            EpisodePanel.Background = null;
-            EpisodePanel.BorderThickness = new Thickness(0);
-
-            // 上下那两道内边距在图上是纯粹的空气（没有板底可言），而第一屏就差这么二三十像素；左右留着，
-            // 这一带的字才和音轨、剧情说明落在同一条竖线上。
-            EpisodePanel.Padding = new Thickness(EpisodePanel.Padding.Left, 0, EpisodePanel.Padding.Right, 0);
-        }
-        else
-        {
-            // 板自己那几支，不是这一页（Control）继承来的同名依赖属性 —— 清错了那一带回到纸上就一直是光的。
-            EpisodePanel.ClearValue(Panel.BackgroundProperty);
-            EpisodePanel.ClearValue(StackPanel.BorderThicknessProperty);
-            EpisodePanel.ClearValue(StackPanel.PaddingProperty);
-        }
-
-        EpisodeHead.OnScrim = onScrim;
-        EpisodeStrip.OnScrim = onScrim;
+        BodySheet.Children.Insert(0, EpisodePanel);
     }
 
     /// <summary>
@@ -1556,9 +1566,13 @@ public sealed partial class DetailPage : Page, IShellContent
     {
         ViewModel.Viewport = Body.ActualHeight;
 
-        // 同一趟量的另一个数：这一页有多宽。右上角那张画窄了就不画（DetailHero.CornerFits ——「窗口缩小到一定
-        // 程度自动隐藏」），而「多宽」只有布好的版面知道。量页面不量窗口：侧边栏一展开页面就窄掉两百来像素。
+        // 同一趟量的另一个数：这一页有多宽。紧凑版式换不换（DetailHero.IsCompact）、背景那一张画多高
+        // （DetailViewModel.PictureHeight）都问它 —— 「多宽」只有布好的版面知道。
         ViewModel.PageWidth = Body.ActualWidth;
+
+        // 宽高都变了，裁切模糊的档位跟着重算（DetailViewModel.UpdateHeroBlur）：换档它自己会用缓存的像素
+        // 重糊，不换什么都不发生。
+        ViewModel.UpdateHeroBlur();
 
         // 同一件事的另一头：这个滚动视图变高变矮，正是因为它上面那行面包屑出现或收起，也就是背景那一层该往上
         // 顶多少变了的那一刻。见 LiftBackdrop。
@@ -1626,7 +1640,7 @@ public sealed partial class DetailPage : Page, IShellContent
     /// </summary>
     private void ApplyWash(double offset, bool force)
     {
-        var artwork = ViewModel.HeroArt;
+        var artwork = ViewModel.BackdropShown;
         var wash = DetailHero.TopWash(offset, artwork, BandHeight);
         var paperTop = PaperOffset();
         var paperCover = artwork
@@ -1737,7 +1751,7 @@ public sealed partial class DetailPage : Page, IShellContent
     {
         _washedInk = DetailHero.WashedOver(paperCover, _washedInk);
 
-        _actions?.SetTitleStrip(!ViewModel.HeroArt
+        _actions?.SetTitleStrip(!ViewModel.BackdropShown
             ? TitleStrip.Plain
             : _washedInk ? TitleStrip.PagePainted : TitleStrip.OnScrim);
     }
@@ -1746,10 +1760,16 @@ public sealed partial class DetailPage : Page, IShellContent
     /// The menu is a view concern: its anchor is a laid-out control and its entries are WinUI flyout
     /// elements. The view model only supplies the currently loaded domain item and the sibling episodes
     /// needed by the shared command builder.
+    /// <para>
+    /// 锚点是<em>按下来的那一颗</em>，不是写死的某一名字：宽版式和紧凑版式各有一颗更多键（<c>MoreButton</c>、
+    /// <c>CompactMoreButton</c>），菜单都要开在按下的那颗边上 —— 菜单挂错了锚，弹出来的位置就漂到另一套版式
+    /// 那一头去。
+    /// </para>
     /// </summary>
     private void OnMoreClicked(object sender, RoutedEventArgs e)
     {
-        if (_session is not { } session
+        if (sender is not Button anchor
+            || _session is not { } session
             || _actions is not { } actions
             || _images is not { } images
             || ViewModel.CurrentItem is not { } item)
@@ -1759,7 +1779,7 @@ public sealed partial class DetailPage : Page, IShellContent
         ItemCommands.Show(
             session,
             actions,
-            MoreButton,
+            anchor,
             card,
             position: null,
             siblings: ViewModel.Episodes,

@@ -117,18 +117,29 @@ public sealed class BannerSlide : INotifyPropertyChanged
         {
             // Sequential, and the picture first: it is the whole band, the logo is a stamp in one corner of
             // it, and the two together would otherwise race for the one connection the session holds.
-            Picture = await DecodeAsync(_picture, PictureWidth, cts.Token).ConfigureAwait(true);
+            var bytes = await FetchAsync(_picture, PictureWidth, cts.Token).ConfigureAwait(true);
+
+            if (bytes is { Length: > 0 } && !cts.IsCancellationRequested)
+            {
+                var picture = await BannerPictureLoader.DecodeAsync(bytes, PictureWidth, cts.Token).ConfigureAwait(true);
+                if (!ReferenceEquals(_loading, cts) || cts.IsCancellationRequested) return;
+                Picture = picture;
+            }
 
             if (cts.IsCancellationRequested) return;
 
-            Logo = await DecodeAsync(_logo, LogoWidth, cts.Token).ConfigureAwait(true);
+            var logo = await DecodeAsync(_logo, LogoWidth, cts.Token).ConfigureAwait(true);
+            if (!ReferenceEquals(_loading, cts) || cts.IsCancellationRequested) return;
+            Logo = logo;
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception error)
         {
-            Log.Debug(Category, $"加载轮播图片失败（{Item.Name}）：{error.Message}");
+            // 带 exception 而不只是 Message：这句文案（「没有检测到已安装的组件」）是 WinUI 的 0x800F1000
+            // 误报 —— CBS 错误码和 XAML 撞了号，消息本身说不清是哪一层的事，只有堆栈说得清（2026-09-12 记）。
+            Log.Warn(Category, $"加载轮播图片失败（{Item.Name}）：{error.Message}", error);
         }
         finally
         {
@@ -138,9 +149,9 @@ public sealed class BannerSlide : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Drops both decoded pictures and abandons anything in flight. Called on the slides the band has moved
-    /// away from: a backdrop is a megabyte-scale surface, and eight of them held at once is the whole reason
-    /// this is a method rather than a load that happens once and stays.
+    /// Drops the decoded picture and the logo, and abandons anything in flight. Called on the slides the band
+    /// has moved away from: a backdrop is a megabyte-scale surface, and eight of them held at once is the whole
+    /// reason this is a method rather than a load that happens once and stays.
     /// <para>
     /// <see cref="_asked"/> is cleared too, so a slide that comes back around asks again — the bytes are in
     /// the image store's disk cache by then, so the second ask is a read rather than a download.
@@ -153,6 +164,16 @@ public sealed class BannerSlide : INotifyPropertyChanged
         _asked = false;
         Picture = null;
         Logo = null;
+    }
+
+    /// <summary>取字节那一半（缓存命中的话是一次磁盘读），解码那一半在调用方。</summary>
+    private async Task<byte[]?> FetchAsync(ArtworkRef? artwork, int width, CancellationToken token)
+    {
+        if (artwork is not { } reference) return null;
+
+        return await _images
+            .GetAsync(reference.ItemId, reference.ImageType, reference.Tag, EmbyImageStore.RequestWidth(width), token)
+            .ConfigureAwait(true);
     }
 
     private async Task<BitmapImage?> DecodeAsync(ArtworkRef? artwork, int width, CancellationToken token)

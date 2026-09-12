@@ -47,6 +47,8 @@ public sealed partial class SettingsPage : Page, IShellContent
     public SettingsPage()
     {
         InitializeComponent();
+        Loaded += (_, _) => HomeMotion.Reveal(SettingsLayout);
+        Unloaded += (_, _) => HomeMotion.Stop(SettingsLayout);
 
         // Kept alive across navigations, which is what makes half-typed text in a box — and which card was
         // open — survive a trip to another page and back. Signing out drops the frame's content entirely, so
@@ -61,7 +63,11 @@ public sealed partial class SettingsPage : Page, IShellContent
         // follow the selection rather than only the navigation parameter.
         ViewModel.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(SettingsViewModel.SelectedCategory)) ShowHosted();
+            if (e.PropertyName == nameof(SettingsViewModel.SelectedCategory))
+            {
+                ShowHosted();
+                HomeMotion.Reveal(SettingsContent);
+            }
         };
     }
 

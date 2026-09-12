@@ -138,22 +138,34 @@ public sealed partial class PosterCard : UserControl
 
     private bool _focused;
 
+    private bool _pressed;
+    private Storyboard? _motion;
+    private Storyboard? _posterFade;
+
     public PosterCard()
     {
         InitializeComponent();
 
         _watch = new HoverWatch(Root, up =>
         {
-            Hover.Visibility = up ? Visibility.Visible : Visibility.Collapsed;
             _hovered = up;
+            if (!up) _pressed = false;
             Paint();
+            AnimateCard();
         });
 
         _focus = new FocusWatch(Root, on =>
         {
             _focused = on;
             Paint();
+            AnimateCard();
         });
+
+        // Button 会把按压标成 handled；仍然监听，才能让卡片表面与内部操作按钮有相同的按压反馈。
+        Root.AddHandler(PointerPressedEvent, new PointerEventHandler(OnPointerPressed), true);
+        Root.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnPointerReleased), true);
+        Root.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnPointerReleased), true);
+        Root.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnPointerReleased), true);
 
         // 海报换了没有：<c>Source</c> 是绑上来的（Card.Poster），所以这一声是唯一能赶上「这张图开始载入了」的地方。
         // 注册在构造里、不解绑：这个回调只碰自己这张卡的元素，而容器被回收时它照旧要接着管下一张卡的图。
@@ -173,16 +185,23 @@ public sealed partial class PosterCard : UserControl
     /// 位图交给一个新元素时那一声不一定还会响，而漏一声的代价是这张卡永远停在透明上，屏上就是一张空卡。
     /// </para>
     /// </summary>
-    private void SyncPoster() =>
+    private void SyncPoster()
+    {
+        _posterFade?.Stop();
+        _posterFade = null;
         Poster.Opacity = Poster.Source is BitmapImage { PixelWidth: > 0 } ? 1 : 0;
+    }
 
     /// <summary>
-    /// 海报解出来了：150 毫秒淡进来。没进树（自检里那些卡片）就直接落到终值 —— 同 <c>HomeBanner.Play</c>，那时
+    /// 海报解出来了：220 毫秒淡进来。没进树（自检里那些卡片）就直接落到终值 —— 同 <c>HomeBanner.Play</c>，那时
     /// <c>Begin()</c> 既没人看也没有意义。
     /// </summary>
     private void OnPosterOpened(object sender, RoutedEventArgs e)
     {
-        if (!_live || XamlRoot is null)
+        _posterFade?.Stop();
+        _posterFade = null;
+
+        if (!_live || XamlRoot is null || !HomeMotion.AnimationsEnabled)
         {
             Poster.Opacity = 1;
             return;
@@ -190,8 +209,9 @@ public sealed partial class PosterCard : UserControl
 
         var fade = new DoubleAnimation
         {
+            From = 0,
             To = 1,
-            Duration = new Duration(TimeSpan.FromMilliseconds(150)),
+            Duration = new Duration(TimeSpan.FromMilliseconds(220)),
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         };
 
@@ -200,6 +220,14 @@ public sealed partial class PosterCard : UserControl
 
         var board = new Storyboard();
         board.Children.Add(fade);
+        _posterFade = board;
+        board.Completed += (_, _) =>
+        {
+            if (!ReferenceEquals(_posterFade, board)) return;
+            Poster.Opacity = 1;
+            board.Stop();
+            _posterFade = null;
+        };
         board.Begin();
     }
 
@@ -262,9 +290,17 @@ public sealed partial class PosterCard : UserControl
         // （OnUnloaded）不算，它会对一个仍然在屏上的元素喊出来，见 CardItem.ReleasePoster 上那段。
         (args.OldValue as CardItem)?.ReleasePoster(keepWaiting: false);
 
-        // A live container being handed a different item: ItemsRepeater reuses containers without
-        // detaching them, so Loaded will not fire again and this is the only notice we get.
-        if (card._live) card.Begin();
+        // ItemsRepeater 也会在仍然加载着的容器里换内容；新条目不能继承上一张的悬停、按压或淡入。
+        card._watch.Leave();
+        card.ResetMotion();
+        card.SyncPoster();
+
+        // 无条件发起。**信不过 _live 这道门**：回收池会对看得到的容器喊一声 Unloaded 而此后 Loaded 再也不来
+        // （2026-09-05、2026-09-12 两回实测，日志里那几批「加载图片失败一个字没有、灰占位卡却在屏上」的封面
+        // 就是它），那之后 _live 永远是 false，绑到这个容器上的每一张卡都一次请求都不发。而 Card 会被赋值只有
+        // 一种原因：回收池把这个容器交给这一条目摆上屏。发错了的代价最多是一张进了 PosterCache 的位图，正是
+        // 不设这道门时也天天在发生的事；不发错的代价是那张卡永远灰着。
+        card.Begin();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -294,7 +330,15 @@ public sealed partial class PosterCard : UserControl
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        _live = false;
+        // **这一声信不过。** 回收池会对一个仍然画在屏上的容器喊 Unloaded，而 Loaded 从此不再来
+        // （2026-09-05 那四张灰卡是它的上半场：在途的那趟靠「继续等着」救回；2026-09-12 这一批是下半场：
+        // _live 从此永远 false，之后绑上来的每张卡都发不出请求，屏上是几张标题正常、封面永远灰着的卡）。
+        // 所以「真离树没有」不听它的，按 XamlRoot 现问一遍：还在树上就是幻影，这一声整个不理 —— 对着一张
+        // 看得到的卡放掉图、摘掉监听，它就永远停在灰占位上。真离了树（XamlRoot 没了）才走原来那一套；
+        // 「容器真的换卡了」另有权威的一句，在 OnCardChanged。
+        _live = XamlRoot is not null;
+        if (_live) return;
+
         Card?.ReleasePoster();
 
         // A recycled container must not come back with the buttons already up: the pointer that revealed
@@ -302,6 +346,114 @@ public sealed partial class PosterCard : UserControl
         _watch.Leave();
         _hovered = false;
         _focus.Detach();
+        ResetMotion();
+    }
+
+    /// <summary>
+    /// 卡片、图片和操作层共享同一段短动画。中途换向从当前值继续，离开时立即停止命中，避免透明按钮拦住点击。
+    /// 动画不写宽高和 Margin，虚拟化和横向滚动仍使用原来的卡片尺寸。
+    /// </summary>
+    private void AnimateCard()
+    {
+        var from = (CardMotion.ScaleX, CardMotion.TranslateY, PosterMotion.ScaleX,
+            Hover.Opacity, HoverShade.Opacity, PlayMotion.ScaleX);
+        _motion?.Stop();
+        _motion = null;
+
+        var enabled = HomeMotion.AnimationsEnabled;
+        var active = _hovered || _focused;
+        var scale = enabled ? (_pressed ? 0.985 : active ? 1.012 : 1) : 1;
+        var lift = enabled ? (_pressed ? 1 : active ? -3 : 0) : 0;
+        var zoom = enabled && active ? 1.045 : 1;
+        var opacity = _hovered ? 1 : 0;
+        var shade = _hovered ? 0.78 : 0;
+        var play = enabled && !_hovered ? 0.92 : 1;
+
+        Hover.IsHitTestVisible = _hovered;
+        if (_hovered) Hover.Visibility = Visibility.Visible;
+
+        void Settle()
+        {
+            CardMotion.ScaleX = CardMotion.ScaleY = scale;
+            CardMotion.TranslateY = lift;
+            PosterMotion.ScaleX = PosterMotion.ScaleY = zoom;
+            Hover.Opacity = opacity;
+            HoverShade.Opacity = shade;
+            PlayMotion.ScaleX = PlayMotion.ScaleY = play;
+            if (!_hovered) Hover.Visibility = Visibility.Collapsed;
+        }
+
+        if (!_live || XamlRoot is null || !enabled)
+        {
+            Settle();
+            return;
+        }
+
+        var board = new Storyboard();
+        var duration = _pressed ? 90 : _hovered ? 240 : 180;
+        Add(CardMotion, "ScaleX", from.Item1, scale);
+        Add(CardMotion, "ScaleY", from.Item1, scale);
+        Add(CardMotion, "TranslateY", from.Item2, lift);
+        Add(PosterMotion, "ScaleX", from.Item3, zoom);
+        Add(PosterMotion, "ScaleY", from.Item3, zoom);
+        Add(Hover, "Opacity", from.Item4, opacity);
+        Add(HoverShade, "Opacity", from.Item5, shade);
+        Add(PlayMotion, "ScaleX", from.Item6, play);
+        Add(PlayMotion, "ScaleY", from.Item6, play);
+        _motion = board;
+        board.Completed += (_, _) =>
+        {
+            if (!ReferenceEquals(_motion, board)) return;
+            Settle();
+            board.Stop();
+            _motion = null;
+        };
+        board.Begin();
+
+        void Add(DependencyObject target, string path, double start, double end)
+        {
+            var animation = new DoubleAnimation
+            {
+                From = start,
+                To = end,
+                Duration = new Duration(TimeSpan.FromMilliseconds(duration)),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(animation, target);
+            Storyboard.SetTargetProperty(animation, path);
+            board.Children.Add(animation);
+        }
+    }
+
+    private void ResetMotion()
+    {
+        _motion?.Stop();
+        _motion = null;
+        _posterFade?.Stop();
+        _posterFade = null;
+        _hovered = _pressed = false;
+        CardMotion.ScaleX = CardMotion.ScaleY = 1;
+        CardMotion.TranslateY = 0;
+        PosterMotion.ScaleX = PosterMotion.ScaleY = 1;
+        PlayMotion.ScaleX = PlayMotion.ScaleY = 0.92;
+        Hover.Opacity = HoverShade.Opacity = 0;
+        Hover.Visibility = Visibility.Collapsed;
+        Hover.IsHitTestVisible = false;
+        Paint();
+    }
+
+    private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(Root).Properties.IsLeftButtonPressed) return;
+        _pressed = true;
+        AnimateCard();
+    }
+
+    private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_pressed) return;
+        _pressed = false;
+        AnimateCard();
     }
 
     /// <summary>

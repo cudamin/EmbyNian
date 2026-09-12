@@ -28,6 +28,9 @@ public sealed partial class LibraryPage : Page, IShellContent
 {
     private const string Category = "媒体库";
 
+    public static Visibility BrowseHintVisibility(Visibility searchVisibility) =>
+        searchVisibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+
     private LibraryRequest? _request;
 
     /// <summary>

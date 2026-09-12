@@ -1,22 +1,22 @@
 ---
 name: "embynian-verification"
-description: "Verify a code change to the EmbyNian project (C:\\Users\\89400\\EmbyNian): the four gates — Release build, tests, publish, self-check — what passing looks like for each, which self-check report lines are allowed to differ, and screenshot checking per theme. Use after any EmbyNian code change, or when asked to 验证 / 跑一遍闸门."
+description: "Verify a code change to the EmbyNian project (C:\\Users\\89400\\EmbyNian): the gates — Release build, tests, publish after any change, plus the self-check when a version ships or when the self-check itself changed — what passing looks like for each, which self-check report lines are allowed to differ, and screenshot checking per theme. Use after any EmbyNian code change, or when asked to 验证 / 跑一遍闸门 / 发新版本."
 ---
 
 # EmbyNian — running the gates, and what the gates cannot see
 
-Run all four gates after **any** code change. **The commands themselves, the SDK path, the single-node build flags, the switch list and this machine's traps are all in `CLAUDE.md`** — which is loaded whenever this skill is, so read them there. `CLAUDE.md` is the source of truth and wins on any conflict with this file; this file holds the procedure and the traps around it, and deliberately keeps no second copy of anything already written there.
+**Build, test and publish after any code change. The self-check runs when a version ships** (his call, 2026-09-12: 「现在只在发布新版本的时候跑自检」) **and whenever the self-check's own code changed** — a change to the checks that nobody ran is an unverified change. **The commands themselves, the SDK path, the single-node build flags, the switch list, that rule and this machine's traps are all in `CLAUDE.md`** — which is loaded whenever this skill is, so read them there. `CLAUDE.md` is the source of truth and wins on any conflict with this file; this file holds the procedure and the traps around it, and deliberately keeps no second copy of anything already written there.
 
 Architecture rules are the `embynian-winui-shell` skill; playback is `embynian-playback`; shaders and 画质档位 are `mpv-shader-quality`.
 
-## The four gates, in order
+## The gates, in order
 
-| # | Gate | Passing looks like |
-|---|---|---|
-| 1 | build | 0 errors **and** 0 warnings |
-| 2 | test | 「全部通过」 with exit code 0 — **only trustworthy when the command carries `-c Release`** |
-| 3 | publish | the script completes; it refuses to run at all if `libmpv-2.dll` is missing from the repo root |
-| 4 | self-check | exit code 0, 「结果：全部通过」 on the last line of `selfcheck-shell.txt`, and the access token's occurrence count in that report is **0** |
+| # | Gate | When | Passing looks like |
+|---|---|---|---|
+| 1 | build | any change | 0 errors **and** 0 warnings |
+| 2 | test | any change | 「全部通过」 with exit code 0 — **only trustworthy when the command carries `-c Release`** |
+| 3 | publish | any change | the script completes; it refuses to run at all if `libmpv-2.dll` is missing from the repo root |
+| 4 | self-check | a version ships, or the self-check changed | exit code 0, 「结果：全部通过」 on the last line of `selfcheck-shell.txt`, and the access token's occurrence count in that report is **0** |
 
 Four things worth knowing before the first command:
 
@@ -30,6 +30,8 @@ Four things worth knowing before the first command:
 Ten lines differ every run **by design** — cross those off first, and anything else that moved is worth investigating. **The list lives in [`docs/开发与验证.md`](../../docs/开发与验证.md) under 「逐行比报告：每次都会变的行」, and that is its only live copy**; when a new check adds a volatile line, update it there.
 
 **When 「鼠标真等两秒就藏」 goes red, read `不符：` — not the diagnostic numbers.** That leg carries a dozen counters and every one of them is printed to be read by a human, but only the `不符：` list at the end of the line names the assertion that actually failed. Three reds (09-02, 09-04, and one that went red twice before passing on the third run) were filed against 「someone touched the mouse — the report says so, 轮询问出 1 次移动」, and that number says the opposite: **1 is what a completely undisturbed leg reports** (the probe clears its own 「where is the pointer」 state before the window, so the first poll always counts one; a pointer that truly never moves is filtered out before the counter). 2026-09-05 the probe was corrected to judge disturbance on that count as well as on the end position, and to spell out in the line which of the two it was — so a genuinely disturbed leg now prints 「这一轮只作参考」 and asserts nothing instead of going red. **A red on this leg from here on is a real reading**: get the `不符：` list and the 「空事件」 count into the handover doc before re-running, since a spurious un-hide arrives as a XAML event and is what 08-31 already caught once.
+
+**Two half-legs of the same check carry the cursor's two failure modes**, and both are judged rather than printed: 「藏好后挪一个像素：过后还藏着」 (a one-pixel displacement — desk rattle, sensor drift, or the player's own ask — must not wake it; added 2026-09-12 for 「鼠标隐藏了一会又会自动跑出来」, verified red by setting `ChromeReveal.MovePixels` to 1) and 「挪一下就回来」 (a real displacement must wake it at once). The first one prints 「指针没挪动，这一句只作参考」 when `MovePointerTo`/`SetCursorPos` could not move anything, which is the only tolerance it has — unlike the old legs it does not depend on the island hearing injected input.
 
 ## Moving the pointer, and proving it moved
 
@@ -52,6 +54,7 @@ Two consequences, and they are the same measurement from two sides:
 Every defect actually caught in this project came from someone looking at the screen: a strip cropped off a poster, an empty patch in the top-left corner, a black border around the episode list. The gates went green on all three.
 
 - **`tools/shot.ps1`** launches, shoots and closes: `-Exe <path> -ExeArgs "--theme midnight --show-settings" -SettleMs N`. When shooting the settings window, pass `--screen 2` and `-WindowTitle 设置` — without the screen argument it raises the window onto the primary monitor, over whatever the user is doing, and this has already photographed the user's game once.
+- **A shot at a chosen window size is `work/shot-resize.ps1`** — `tools/shot.ps1` plus `-ResizeWidth/-ResizeHeight` (a `SetWindowPos` between raising the window and settling; that is where the 866- and 1554-wide detail-page artifacts came from). Run it from the PowerShell tool, never by calling powershell out of bash — that call is blocked outright — and expect no stdout back: the proof is the PNG itself, not the script's last line.
 - **`--dump-ui`** writes one screenshot (`selfcheck-shell.png`, the frame after the last page) plus a visual tree. Per-page photography is `shot.ps1`'s job, not the self-check's.
 - **Touched colours, spacing or type size → shoot the default theme, and one more if the change could read differently on another.** All five themes are dark since `daylight` was deleted (2026-09-05, the user's call), so there is no longer a light theme to shoot — which is also why a hard-coded shell colour now goes unnoticed; see `CLAUDE.md`'s theme clause.
 - **「有没有箭头」 needs `tools/cursor-watch.ps1`, never `shot.ps1`.** A GDI screenshot never contains the cursor. `cursor-watch.ps1` prints `GetCursorInfo` as a timeline and, when the flag says a cursor is showing, draws that cursor into the capture with `DrawIconEx` — so 「有箭头」 and 「没有箭头」 become visible in an image. It never touches z-order, the foreground or the cursor position, which is exactly why `shot.ps1` is the wrong tool here: it raises the window topmost and back, and that changes which queue owns the cursor.

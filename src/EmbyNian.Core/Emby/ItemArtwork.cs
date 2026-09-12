@@ -14,25 +14,19 @@ public readonly record struct ArtworkRef(string ItemId, string ImageType, string
 /// <list type="bullet">
 /// <item>徽标 <c>Logo</c> and 横幅图 <c>Banner</c> are name plates — a picture of the title. 「统一改为在剧名
 /// 上方显示徽标」 puts one just above the text title on every detail page (<see cref="Plate"/>).</item>
-/// <item>艺术图 <c>Art</c> is wide artwork with no title on it, and it has two places: 「右上角显示艺术图」
-/// puts it in the band's top-right corner (<see cref="Corner"/>), and when the item has no 背景图 it is
-/// instead what the whole page stands on (<see cref="HeroOrder"/>).</item>
+/// <item>艺术图 <c>Art</c> is wide artwork with no title on it; it is the hero's second choice
+/// (<see cref="HeroOrder"/>). It stands in the episode page's top-right corner (<see cref="Corner"/>,
+/// 2026-09-12 「给集页面右上角添加艺术图」— the same corner on 剧 and 电影 pages was removed that same day,
+/// so the corner is the episode page's alone now).</item>
 /// <item>背景图 <c>Backdrop</c> is what the hero wants first; 缩略图 <c>Thumb</c> is what a 16:9 card wants
 /// first (<c>CardItem.PreferWide</c>) and the hero's third choice.</item>
 /// <item>The home page's carousel is the same three wide kinds and nothing else
 /// (<see cref="BannerOrder"/>): it is the full width of the window, which is no place for a poster.</item>
 /// </list>
 /// <para>
-/// 一个位置一样图，两样之间不再互相退档 —— 「统一改为在剧名上方显示徽标，右上角显示艺术图」。从前那一版把
-/// 两者合成一个角的两档（艺术图优先，没有就摆徽标），于是同一个位置在不同条目上说着不同的话；现在徽标只
-/// 认剧名上方那一格、艺术图只认右上角那一格，服务器没有的那一样就是那一格空着。<em>两个位置各空各的</em>：
-/// 一条只有徽标的条目右上角空着，只有艺术图的条目剧名上方空着，两种都没有的条目还是从前那副样子。
-/// </para>
-/// <para>
-/// One job each, with one exception and a rule that keeps it honest. 艺术图 is in two lists, so
-/// <see cref="Corner"/> asks the other one first: the corner is empty exactly when the band behind it is
-/// already standing on that same picture. Anything looser puts one picture on the page twice — a 260 wide
-/// copy of the wallpaper, pinned to the corner of the wallpaper — which is worse than either place alone.
+/// 一个位置一样图 —— 「统一改为在剧名上方显示徽标」定下的规矩。从前那一版把徽标和艺术图合成一个角的两档
+/// （艺术图优先，没有就摆徽标），于是同一个位置在不同条目上说着不同的话；现在徽标只认剧名上方那一格，服务器
+/// 没有就是那一格空着。（右上角那一格曾经是艺术图的，跟着那次「统一」落地、又随它整个退场。）
 /// </para>
 /// <para>
 /// 三处向上借一层：名牌、轮播底图和集页/季页的头图都会用剧集那一层的图（<see cref="Plate"/>、
@@ -54,9 +48,8 @@ public static class ItemArtwork
     /// Those two and no more, because those two are the ones that are a picture <em>of the title</em> — a
     /// 徽标 is the show's wordmark, and a 横幅图 carries the title across its own artwork. 海报 is the title
     /// page rather than the title, and would land beside the poster already in the band; 艺术图 is 16:9
-    /// artwork with no title on it, so at plate size it reads as a small picture where a name should be,
-    /// and it has its own corner to stand in (<see cref="Corner"/>) besides the use <see cref="HeroOrder"/>
-    /// has for it.
+    /// artwork with no title on it, so at plate size it reads as a small picture where a name should be —
+    /// its one use is <see cref="HeroOrder"/>'s.
     /// </para>
     /// </summary>
     public static readonly IReadOnlyList<string> PlateOrder = [EmbyImageStore.Logo, EmbyImageStore.Banner];
@@ -114,32 +107,32 @@ public static class ItemArtwork
     }
 
     /// <summary>
-    /// 头图右上角那张画，没有就是 null —— 「右上角显示艺术图」。取的是这个条目自己的艺术图，而背后那一整页
-    /// 已经站在同一张图上时它是空的。
+    /// 右上角那张艺术图，没有就是 null —— 「给集页面右上角添加艺术图」（2026-09-12）。这一角只在集页上摆：
+    /// 剧、电影页面的那一角是同一天他自己下令去掉的（「去掉剧页面、电影页面右上角的艺术图」），所以「哪几页摆」
+    /// 是调用方的事，这里只答「哪一张归这儿」。
     /// <para>
     /// 艺术图是横的、上面没有字，所以它当得起「角上摆一张画」这件事：徽标那一头是名牌、归剧名上方那一格
-    /// （<see cref="Plate"/>），海报是竖的，缩略图和背景图各有各的活。而它同时是 <see cref="HeroOrder"/> 的第二
-    /// 档 —— 一个条目没有背景图的时候，铺满整页的就是这张艺术图。两处都画就是同一张图在一页上出现两次：整页那么
-    /// 大一张，角上再钉一张缩印本。所以这里先问 <see cref="Hero"/> 头一档是谁，答案正好是这张就让这个角空着。
+    /// （<see cref="Plate"/>），海报是竖的，缩略图和背景图各有各的活。
     /// </para>
     /// <para>
-    /// <em>空着就是空着</em>，不再退回名牌：徽标现在自己有一格（剧名上方），拿它来填这个角就等于让同一枚牌子
-    /// 在不同条目上出现在不同位置 —— 而「统一」正是这次要的东西。
-    /// </para>
-    /// <para>
-    /// 「自己的」没有上溯：借来的那几种（<see cref="Inherited"/>）是给「铺满整页」和「名牌」用的，而角上这张是
-    /// 装饰 —— 一集没有自己的艺术图，那个角就空着，而不是把剧集那一层的图缩一张钉上去。服务器也不往下发艺术图：
-    /// ParentLogo、ParentBackdrop、ParentThumb 都有，ParentArt 没有。
+    /// 先问条目自己的，没有再借<paramref name="parent"/>（剧集那一层）的 —— 这一处和 <see cref="Footer"/> 同一个
+    /// 道理：一集自己几乎不会有艺术图，而服务器也不往下发 <c>ParentArt</c>（ParentLogo、ParentBackdrop、
+    /// ParentThumb 都有，独缺这一个），剧集那个条目要调用方自己去取。集页现在不铺背景图（同一天的另一句指令），
+    /// 所以从前「整页已经站在同一张艺术图上时这一角空着」的防重也不需要了 —— 这一页上没有第二处会画它。
     /// </para>
     /// </summary>
-    public static ArtworkRef? Corner(EmbyItem? item)
+    /// <param name="item">这一页的条目。</param>
+    /// <param name="parent">剧集那一层的条目，调用方取到了才交（集页）。null 就是「不借」。</param>
+    public static ArtworkRef? Corner(EmbyItem? item, EmbyItem? parent = null)
     {
         if (item is null) return null;
-        if (Tag(item, EmbyImageStore.Art) is not { Length: > 0 } tag) return null;
 
-        var corner = new ArtworkRef(item.Id, EmbyImageStore.Art, tag);
+        if (Tag(item, EmbyImageStore.Art) is { Length: > 0 } own)
+            return new ArtworkRef(item.Id, EmbyImageStore.Art, own);
 
-        return Hero(item) is [var behind, ..] && behind == corner ? null : corner;
+        return parent is not null && Tag(parent, EmbyImageStore.Art) is { Length: > 0 } borrowed
+            ? new ArtworkRef(parent.Id, EmbyImageStore.Art, borrowed)
+            : null;
     }
 
     /// <summary>
@@ -147,11 +140,11 @@ public static class ItemArtwork
     /// 横幅图（<c>Banner</c>，一张宽约 5:1、上面写着片名的图），而剧名上方那一枚名牌已经用掉这张图的时候它是空的。
     /// <para>
     /// 只认横幅图一种，不退档：这一处要的正是「一条横的、带着片名的收尾」，而别的几种都不是那个形状 —— 艺术图上
-    /// 没有字（它在右上角那个角里），缩略图和背景图是 16:9 的画面（页尾摆一张 16:9 就是又一块头图），海报是竖的。
+    /// 没有字，缩略图和背景图是 16:9 的画面（页尾摆一张 16:9 就是又一块头图），海报是竖的。
     /// 服务器上这一库 31 个条目里 29 个有横幅图，所以「没有就空着」在这儿不是常态。
     /// </para>
     /// <para>
-    /// 和 <see cref="Corner"/> 同一条防重：<see cref="Plate"/> 在没有徽标的条目上会退到横幅图，那时候这张图已经
+    /// 防重的一条：<see cref="Plate"/> 在没有徽标的条目上会退到横幅图，那时候这张图已经
     /// 挂在剧名头上了，页尾再来一张就是同一张图在一页上出现两次。判的是名牌这一次真的取了哪一种，不是「这个条目
     /// 有没有徽标」—— 两句话在借来的那一档（集页用剧集的徽标）上不是一回事。
     /// </para>
@@ -263,7 +256,7 @@ public static class ItemArtwork
 
     /// <summary>
     /// Whether these two versions of one item would draw the same pictures — the hero behind the page, the
-    /// 艺术图 in the top-right corner, the 徽标 above the title, and the poster or still in the band.
+    /// 徽标 above the title, and the poster or still in the band.
     /// <para>
     /// 存在的理由是详情页现在**先用点进来那张卡片画一屏**，完整条目回来再补上评分、工作室、演职人员和播放目标。
     /// 图是最慢的那一样，所以这一句决定的是：那一批图能不能就这么留着。答案是「能」的时候完整条目那一趟一张图都
@@ -280,7 +273,6 @@ public static class ItemArtwork
         if (!string.Equals(left.Id, right.Id, StringComparison.Ordinal)) return false;
         if (left.Type != right.Type) return false;
 
-        if (Corner(left) != Corner(right)) return false;
         if (Plate(left) != Plate(right)) return false;
         if (!Hero(left).SequenceEqual(Hero(right))) return false;
 

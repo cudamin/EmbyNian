@@ -10,9 +10,8 @@
   tells us its name and which users it is willing to advertise. Only then is there a user list to pick
   from — which is the whole reason for asking twice instead of showing five empty boxes at once.
 
-  Every piece of state here is bound to SignInViewModel. Five elements keep their names, and only those
-  five: the three input boxes and the flyout, because focus, Enter and a MenuFlyout's Items are the
-  things a binding cannot express.
+  Every piece of state here is bound to SignInViewModel. Named presentation elements only support the
+  responsive welcome layout and its entrance motion; the inputs and flyout retain their original roles.
 
   The three input bindings all carry UpdateSourceTrigger=PropertyChanged. Text and Password push to the
   source on LostFocus by default, and Enter arrives while the box still has focus — without it the view
@@ -48,42 +47,120 @@
         </DataTemplate>
     </UserControl.Resources>
 
-    <Grid Background="{ThemeResource EgWindowBrush}">
+    <Grid x:Name="SignInRoot" Background="{ThemeResource EgWindowBrush}">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup>
+                <VisualState x:Name="CompactWelcome">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+                <VisualState x:Name="WideWelcome">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1040" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="FormColumn.Width" Value="440" />
+                        <Setter Target="WelcomePanel.Margin" Value="0,32,64,32" />
+                        <Setter Target="WelcomePanel.VerticalAlignment" Value="Center" />
+                        <Setter Target="WelcomeTitle.FontSize" Value="44" />
+                        <Setter Target="WelcomeArt.Visibility" Value="Visible" />
+                        <Setter Target="SignInCard.(Grid.Row)" Value="0" />
+                        <Setter Target="SignInCard.(Grid.Column)" Value="1" />
+                        <Setter Target="SignInCard.VerticalAlignment" Value="Center" />
+                        <Setter Target="SignInLayout.Margin" Value="48,64" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
         <ScrollView VerticalScrollBarVisibility="Auto">
+            <Grid x:Name="SignInLayout" Margin="24,32" MaxWidth="1120" RowSpacing="28">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition x:Name="FormColumn" Width="0" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel x:Name="WelcomePanel" Spacing="20" MaxWidth="580">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Background="{ThemeResource EgAccentBrush}" CornerRadius="12" Width="44" Height="44">
+                            <FontIcon FontSize="22" Foreground="{ThemeResource EgTextOnAccentBrush}" Glyph="&#xE714;" />
+                        </Border>
+                        <TextBlock Text="EmbyNian" FontSize="23" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock x:Name="WelcomeTitle" x:Uid="SignInPage_WelcomeTitle"
+                        FontSize="32" FontWeight="SemiBold" LineHeight="58" TextWrapping="Wrap" />
+                    <TextBlock x:Uid="SignInPage_WelcomeDescription" MaxWidth="440"
+                        FontSize="16" LineHeight="27" TextWrapping="Wrap" Foreground="{ThemeResource EgTextDimBrush}" />
+
+                    <!-- A quiet cinema illustration made from theme-aware shapes, so no image download
+                         is needed before the user has connected their server. -->
+                    <Grid x:Name="WelcomeArt" Height="222" Margin="0,12,0,0" Visibility="Collapsed"
+                        IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                        <Border Width="214" Height="144" Background="{ThemeResource EgSurfaceAltBrush}"
+                            BorderBrush="{ThemeResource EgBorderBrush}" BorderThickness="1" CornerRadius="18"
+                            HorizontalAlignment="Left" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform><RotateTransform Angle="-9" /></Border.RenderTransform>
+                        </Border>
+                        <Border Width="214" Height="144" Background="{ThemeResource EgAccentSoftBrush}"
+                            BorderBrush="{ThemeResource EgAccentMutedBrush}" BorderThickness="1" CornerRadius="18"
+                            HorizontalAlignment="Right" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform><RotateTransform Angle="8" /></Border.RenderTransform>
+                        </Border>
+                        <Border Width="268" Height="174" Background="{ThemeResource EgSurfaceBrush}"
+                            BorderBrush="{ThemeResource EgBorderStrongBrush}" BorderThickness="1" CornerRadius="20"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" Padding="20">
+                            <Grid>
+                                <Border Width="58" Height="58" CornerRadius="29" Background="{ThemeResource EgAccentSoftBrush}">
+                                    <FontIcon Glyph="&#xE768;" FontSize="25" Foreground="{ThemeResource EgAccentBrush}" Margin="4,0,0,0" />
+                                </Border>
+                                <Grid VerticalAlignment="Bottom" Height="3">
+                                    <Border Background="{ThemeResource EgBorderBrush}" CornerRadius="2" />
+                                    <Border Background="{ThemeResource EgAccentBrush}" CornerRadius="2" Width="84" HorizontalAlignment="Left" />
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8B2;" FontSize="14" Foreground="{ThemeResource EgAccentBrush}" />
+                        <TextBlock x:Uid="SignInPage_WelcomeNote" FontSize="13" Foreground="{ThemeResource EgTextDimBrush}" />
+                    </StackPanel>
+                </StackPanel>
+
             <Border
-                Background="{ThemeResource EgSurfaceAltBrush}"
+                x:Name="SignInCard"
+                Grid.Row="1"
+                Background="{ThemeResource EgSurfaceBrush}"
                 BorderBrush="{ThemeResource EgBorderBrush}"
                 BorderThickness="1"
-                CornerRadius="{StaticResource EgCardCornerRadius}"
-                HorizontalAlignment="Center"
-                Margin="24,48,24,48"
-                MaxWidth="460"
+                CornerRadius="24"
+                HorizontalAlignment="Stretch"
+                MaxWidth="440"
                 Padding="28"
-                VerticalAlignment="Center">
+                VerticalAlignment="Top">
 
-                <StackPanel Spacing="16">
-                    <StackPanel Orientation="Horizontal" Spacing="12">
-                        <FontIcon
-                            FontSize="26"
-                            Foreground="{ThemeResource EgAccentBrush}"
-                            Glyph="&#xE8B2;"
-                            VerticalAlignment="Center" />
-                        <StackPanel>
+                <StackPanel Spacing="20">
+                        <StackPanel Spacing="8">
                             <TextBlock
-                                FontSize="{StaticResource EgTitleFontSize}"
-                                FontWeight="SemiBold"
-                                Text="EmbyNian" />
+                                x:Uid="SignInPage_FormTitle"
+                                FontSize="26"
+                                FontWeight="SemiBold" />
                             <TextBlock
-                                FontSize="{StaticResource EgCaptionFontSize}"
+                                FontSize="14"
                                 Foreground="{ThemeResource EgTextDimBrush}"
+                                TextWrapping="Wrap"
                                 Text="{x:Bind ViewModel.Caption, Mode=OneWay}" />
                         </StackPanel>
-                    </StackPanel>
 
                     <ProgressRing
                         HorizontalAlignment="Left"
                         Height="20"
                         IsActive="{x:Bind ViewModel.Busy, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}"
                         Width="20" />
 
                     <!-- TwoWay on IsOpen so dismissing the bar is recorded rather than forgotten. -->
@@ -95,22 +172,25 @@
                         Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
 
                     <!-- Step one. -->
-                    <StackPanel Spacing="12" Visibility="{x:Bind ViewModel.AddressVisibility, Mode=OneWay}">
+                    <StackPanel Spacing="16" Visibility="{x:Bind ViewModel.AddressVisibility, Mode=OneWay}">
                         <TextBox
                             x:Name="ServerBox"
-                x:Uid="SignInPage_ServerBox"
+                            x:Uid="SignInPage_ServerBox"
+                            MinHeight="42"
                             KeyDown="OnAddressKeyDown"
                             PlaceholderText="http://192.168.1.10:8096"
                             Text="{x:Bind ViewModel.Address, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                        <StackPanel Orientation="Horizontal" Spacing="8">
+                        <StackPanel Spacing="10">
                             <Button x:Uid="SignInPage_Button1"
                                 AutomationProperties.AutomationId="SignInConnectButton"
                                 Command="{x:Bind ViewModel.ConnectCommand}"
-                                Style="{StaticResource AccentButtonStyle}" />
+                                HorizontalAlignment="Stretch"
+                                Style="{StaticResource EgPrimaryButtonStyle}" />
 
                             <DropDownButton x:Uid="SignInPage_DropDownButton2"
                                 AutomationProperties.AutomationId="SignInSavedServersButton"
+                                HorizontalAlignment="Stretch" MinHeight="40"
                                 Visibility="{x:Bind ViewModel.SavedVisibility, Mode=OneWay}">
                                 <DropDownButton.Flyout>
                                     <!-- Filled in code: a MenuFlyout holds Items, not an ItemsSource. Each
@@ -123,7 +203,7 @@
                         <Button x:Uid="SignInPage_ButtonA1"
                             AutomationProperties.AutomationId="SignInDiscoverButton"
                             Command="{x:Bind ViewModel.DiscoverCommand}"
-                            HorizontalAlignment="Left">
+                            HorizontalAlignment="Stretch" Style="{StaticResource EgSecondaryButtonStyle}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon Glyph="&#xE968;" />
                                 <TextBlock x:Uid="SignInPage_TextBlock3" />
@@ -167,7 +247,7 @@
                     </StackPanel>
 
                     <!-- Step two. -->
-                    <StackPanel Spacing="12" Visibility="{x:Bind ViewModel.CredentialVisibility, Mode=OneWay}">
+                    <StackPanel Spacing="16" Visibility="{x:Bind ViewModel.CredentialVisibility, Mode=OneWay}">
                         <TextBlock
                             FontWeight="SemiBold"
                             Text="{x:Bind ViewModel.ServerLabel, Mode=OneWay}"
@@ -184,31 +264,37 @@
 
                         <TextBox
                             x:Name="UserBox"
-                x:Uid="SignInPage_UserBox"
+                            x:Uid="SignInPage_UserBox"
+                            MinHeight="42"
                             KeyDown="OnCredentialKeyDown"
                             Text="{x:Bind ViewModel.Username, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
                         <PasswordBox
                             x:Name="PasswordInput"
-                x:Uid="SignInPage_PasswordInput"
+                            x:Uid="SignInPage_PasswordInput"
+                            MinHeight="42"
                             KeyDown="OnCredentialKeyDown"
                             Password="{x:Bind ViewModel.Password, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
                         <CheckBox x:Uid="SignInPage_CheckBox4" AutomationProperties.AutomationId="SignInRememberBox" IsChecked="{x:Bind ViewModel.Remember, Mode=TwoWay}" />
 
-                        <StackPanel Orientation="Horizontal" Spacing="8">
+                        <StackPanel Spacing="10">
                             <Button
                                 AutomationProperties.AutomationId="SignInSubmitButton"
                                 Command="{x:Bind ViewModel.SignInCommand}"
                                 Content="{x:Bind ViewModel.SignInText, Mode=OneWay}"
-                                Style="{StaticResource AccentButtonStyle}" />
+                                HorizontalAlignment="Stretch"
+                                Style="{StaticResource EgPrimaryButtonStyle}" />
                             <!-- Not gated on Busy, unlike the other three: this is how a connect that is
                                  going nowhere gets abandoned. -->
-                            <Button x:Uid="SignInPage_Button5" AutomationProperties.AutomationId="SignInBackButton" Command="{x:Bind ViewModel.BackToAddressCommand}" />
+                            <Button x:Uid="SignInPage_Button5" AutomationProperties.AutomationId="SignInBackButton"
+                                HorizontalAlignment="Stretch" Style="{StaticResource EgSecondaryButtonStyle}"
+                                Command="{x:Bind ViewModel.BackToAddressCommand}" />
                         </StackPanel>
                     </StackPanel>
                 </StackPanel>
             </Border>
+            </Grid>
         </ScrollView>
     </Grid>
 </UserControl>

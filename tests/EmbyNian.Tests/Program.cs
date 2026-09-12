@@ -24,6 +24,7 @@ internal static class Program
         ItemMenuTests.Register();
         ItemActionTests.Register();
         HomeCarouselTests.Register();
+        BackdropBlurTests.Register();
         HomeLayoutTests.Register();
         DiagnosticsTests.Register();
         ScreenTests.Register();

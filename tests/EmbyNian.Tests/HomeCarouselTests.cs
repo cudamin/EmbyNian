@@ -19,6 +19,59 @@ internal static class HomeCarouselTests
         RegisterStep();
         RegisterHeight();
         RegisterText();
+        RegisterBackdrop();
+    }
+
+    private static void RegisterBackdrop()
+    {
+        Test("轮播：左侧延长原图宽度的 10%，原图和高度保持不变", () =>
+        {
+            const int width = 100;
+            const int height = 12;
+            var original = Enumerable.Range(0, width * height * 4).Select(index => (byte)(index % 251)).ToArray();
+            var (pixels, extendedWidth) = CarouselBackdrop.ExtendLeft(original, width, height);
+
+            Assert.Equal(110, extendedWidth);
+            Assert.Equal(extendedWidth * height * 4, pixels.Length);
+            for (var y = 0; y < height; y++)
+                Assert.True(original.AsSpan(y * width * 4, width * 4)
+                    .SequenceEqual(pixels.AsSpan((y * extendedWidth + 10) * 4, width * 4)), "原图像素不应被改写或拉伸");
+            Assert.Equal(128, CarouselBackdrop.ExtensionWidth(1280));
+        });
+
+        Test("轮播：延长区取左侧颜色，接缝逐行连续", () =>
+        {
+            const int width = 100;
+            const int height = 16;
+            var original = new byte[width * height * 4];
+            for (var y = 0; y < height; y++)
+                for (var x = 0; x < width; x++)
+                {
+                    var at = (y * width + x) * 4;
+                    original[at] = x < 2 ? (byte)(40 + y * 8) : (byte)255;
+                    original[at + 1] = x < 2 ? (byte)60 : (byte)255;
+                    original[at + 2] = x < 2 ? (byte)190 : (byte)255;
+                    original[at + 3] = 255;
+                }
+
+            var (pixels, extendedWidth) = CarouselBackdrop.ExtendLeft(original, width, height);
+            for (var y = 0; y < height; y++)
+            {
+                var row = y * extendedWidth * 4;
+                Assert.Equal((byte)60, pixels[row + 1]);
+                Assert.Equal((byte)190, pixels[row + 2]);
+                Assert.True(pixels.AsSpan(row + 9 * 4, 4).SequenceEqual(pixels.AsSpan(row + 10 * 4, 4)), "接缝不能出现色阶");
+            }
+        });
+
+        Test("轮播：单像素背景也能延长，没有空行或黑色填充", () =>
+        {
+            byte[] original = [12, 60, 220, 255];
+            var (pixels, width) = CarouselBackdrop.ExtendLeft(original, 1, 1);
+            Assert.Equal(2, width);
+            Assert.True(pixels.AsSpan(0, 4).SequenceEqual(original));
+            Assert.True(pixels.AsSpan(4, 4).SequenceEqual(original));
+        });
     }
 
     private static void RegisterSlides()
@@ -131,71 +184,47 @@ internal static class HomeCarouselTests
 
     private static void RegisterHeight()
     {
-        Test("轮播：带高＝剧照缩到带宽六成后的 16:9 高（弄扁）", () =>
+        Test("轮播：封面扩展到原快捷入口区域，仍按整幅宽度换算高度", () =>
         {
-            // 「把轮播图弄扁一些」＋「把主页的轮播图移动到右边」（2026-09-09）：剧照缩到带宽的六成靠右站，带高
-            // 就是那六成按 16:9 算出来的高。从前带宽整个按 16:9 算（16:9 的窗口上正好一屏高），那一版第一排
-            // 货架要滚一下才露出来。
-            Assert.Equal(371d, HomeCarousel.Height(2000, 1100));
-            Assert.Equal(648d, HomeCarousel.Height(2000, 1920));
-            Assert.Equal(0.6d, HomeCarousel.PictureShare);
-
-            // 量不到带宽的那一下（第一帧、自检里那份没上树的控件）用开窗那一档：1422 的页宽×六成按 16:9 算
-            // 正好 480，所以第一帧就是第二帧的样子。这个数从前是 800 —— 一整屏。
+            Assert.Equal(455d, HomeCarousel.Height(2000, 1064));
+            Assert.Equal(470d, HomeCarousel.Height(2000, 1100));
+            Assert.Equal(821d, HomeCarousel.Height(2000, 1920));
+            Assert.Equal(0.76d, HomeCarousel.BandHeightShare);
             Assert.Equal(HomeCarousel.UnmeasuredHeight, HomeCarousel.Height(800, 0));
             Assert.Equal(HomeCarousel.UnmeasuredHeight, HomeCarousel.Height(800, -100));
-            Assert.Equal(480d, HomeCarousel.UnmeasuredHeight);
-
-            // 下限兜的是矮到不像话的窗口：一条比这还矮的带子，字块和播放键就没地方站了。六成那一档在 711 宽
-            // 以下就碰到下限了（从前带宽整个按 16:9 算，要 427 以下才碰）。
+            Assert.Equal(608d, HomeCarousel.UnmeasuredHeight);
             Assert.Equal(HomeCarousel.MinHeight, HomeCarousel.Height(2000, 300));
             Assert.Equal(HomeCarousel.MinHeight, HomeCarousel.Height(2000, 640));
         });
 
         Test("轮播：一屏是上限，超出去带子就不再长高", () =>
         {
-            // 超宽屏上「带宽×六成 ÷ 16 × 9」会比一屏还高，那时带高被一屏封住 —— 图照旧吃满带高、贴右沿，
-            // 底色留在左边（那一截更宽就是了）。不封的话第一屏里连播放键都看不见。
             Assert.Equal(800d, HomeCarousel.Height(800, 3111));
-            Assert.Equal(371d, HomeCarousel.Height(700, 1100));
+            Assert.Equal(470d, HomeCarousel.Height(700, 1100));
             Assert.Equal(371d, HomeCarousel.Height(371, 1100));
             Assert.Equal(360d, HomeCarousel.Height(360, 1100));
-
-            // 窗口高说不出来的时候不封顶（自检里那份控件就是这样），照带宽算。
-            Assert.Equal(371d, HomeCarousel.Height(0, 1100));
-
-            // 封顶也不许低过下限。
+            Assert.Equal(470d, HomeCarousel.Height(0, 1100));
             Assert.Equal(HomeCarousel.MinHeight, HomeCarousel.Height(100, 1100));
         });
 
-        Test("轮播：每一种带宽上「上下不留底色」都成立", () =>
+        Test("轮播：改变宽度时封面保持同一形状，图片不变形", () =>
         {
-            // 这一条是「上下不要有黑边」的全称说法：带高不超过「带宽×六成 ÷ 16 × 9」，图吃满带高、贴着带的
-            // 上下两条边，底色只留在左边（字块站的那一截）。带宽不到 427 的那一档图连六成宽都摆不下、改吃满
-            // 带宽，那一条下限的逃逸句管的就是它。
-            for (var width = 320d; width <= 3600; width += 20)
+            var shape = HomeCarousel.WindowAspect / HomeCarousel.BandHeightShare;
+            for (var width = 760d; width <= 3600; width += 20)
             {
                 var band = HomeCarousel.Height(2400, width);
-
-                Assert.True(
-                    band <= (width * HomeCarousel.PictureShare / HomeCarousel.WindowAspect) + 0.5
-                        || band <= HomeCarousel.MinHeight,
-                    $"带宽 {width} 时带高 {band}，比剧照缩到六成还高，图的上下会留底色");
+                Assert.Equal(Math.Round(width * HomeCarousel.BandHeightShare / HomeCarousel.WindowAspect), band);
+                Assert.True(Math.Abs(width / band - shape) < 0.01,
+                    $"带宽 {width} 时带子的形状是 {width / band:0.000}:1，不是 {shape:0.000}:1");
             }
         });
 
         Test("轮播：开窗那一档的页面正好是 16:9", () =>
         {
-            // 「锁定比例大小改为 16:9」。这个形状说的是**整个客户区**：侧边栏 2026-09-06 删掉之后页面就是整个客户
-            // 区，大图铺满整宽（右边那一列媒体库 2026-09-08 删掉了），所以「带宽」就是页宽，一个数都不扣。它管
-            // 的是开窗那一档的默认宽度；带高从前也按它从带宽算（图铺满整条带），弄扁之后改按 PictureShare 算。
             Assert.Equal(16d / 9, HomeCarousel.WindowAspect);
             Assert.Equal("16:9", HomeCarousel.WindowAspectLabel);
-
-            // 开窗那一档写出来：800 高的客户区，页面 1422 宽；剧照缩到六成（853 宽）按 16:9 是 480 高 —— 带子
-            // 占头上一截，底下 320 是第一排货架的。
             Assert.Equal(1422d, Math.Round(HomeCarousel.WindowAspect * 800));
-            Assert.Equal(480d, HomeCarousel.Height(800, 1422));
+            Assert.Equal(608d, HomeCarousel.Height(800, 1422));
         });
     }
 

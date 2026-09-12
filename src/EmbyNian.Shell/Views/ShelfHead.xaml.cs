@@ -4,10 +4,10 @@ using Microsoft.UI.Xaml.Controls;
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
-/// 卡片带上面那块牌子：标题、读数、一个挂件位，底下一条通栏发丝线。见 ShelfHead.xaml 里那段说明。
+/// 卡片带的标题、数量胶囊和尾部操作，配合左侧短强调线建立清晰的阅读层级。
 /// </summary>
 /// <remarks>
-/// 三个属性都是依赖属性，理由和 <see cref="PageSlate"/> 一样：卡片带的标题和条目数是页面用 <c>x:Bind</c>
+/// 三个属性都是依赖属性：卡片带的标题和条目数是页面用 <c>x:Bind</c>
 /// 接上来的，普通 CLR 属性在 OneWay 绑定下只会被写一次。空字符串收起那一格而不是留出空白 —— 不是每一带
 /// 都报得出条目数（详情页的 单集 那一带把季数集数写在标题里了）。
 /// </remarks>
@@ -92,13 +92,15 @@ public sealed partial class ShelfHead : UserControl
         {
             head.Rule.Background = Resource<Microsoft.UI.Xaml.Media.Brush>("EgOnScrimDimBrush");
             head.Rule.Opacity = 0.35;
+            head.NoteCapsule.Background = Resource<Microsoft.UI.Xaml.Media.Brush>("EgScrimBrush");
             return;
         }
 
         // Border 自己那支，不是这个 UserControl 继承来的 Control.Background —— 两个是不同的依赖属性，
         // 清错一个的症状是那条线在回到纸面之后一直是浅墨。
         head.Rule.ClearValue(Border.BackgroundProperty);
-        head.Rule.ClearValue(OpacityProperty);
+        head.Rule.Opacity = 0.45;
+        head.NoteCapsule.ClearValue(Border.BackgroundProperty);
     }
 
     private static T Resource<T>(string key) => (T)Application.Current.Resources[key];
@@ -106,8 +108,12 @@ public sealed partial class ShelfHead : UserControl
     private static void OnTitleChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args) =>
         SetLine(((ShelfHead)sender).TitleText, args.NewValue);
 
-    private static void OnNoteChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args) =>
-        SetLine(((ShelfHead)sender).NoteText, args.NewValue);
+    private static void OnNoteChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
+    {
+        var head = (ShelfHead)sender;
+        SetLine(head.NoteText, args.NewValue);
+        head.NoteCapsule.Visibility = head.NoteText.Visibility;
+    }
 
     private static void OnTrailingChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
@@ -139,7 +145,7 @@ public sealed partial class ShelfHead : UserControl
         TrailingHost.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    /// <summary>有字就写上并显示，没字就收起 —— 同 <see cref="PageSlate"/>。</summary>
+    /// <summary>有字就写上并显示，没字就收起。</summary>
     private static void SetLine(TextBlock block, object? value)
     {
         var text = value as string ?? string.Empty;

@@ -58,6 +58,21 @@ public sealed partial class HomePage : Page, IShellContent
     {
         InitializeComponent();
         _stayProbe = (_, _) => _stayAsked++;
+
+        // 这一页的两件事都挂在轮播上：剧照一上来就把外壳那 32 像素顶回去（SyncBleed），以及标题栏那一行的墨
+        // 跟着带面走（PaintInk）。两者都只在带子可见时有意义 —— 没有幻灯片时 Apply 会把 Visibility 收起来，
+        // 两条都在那之后重新对一遍。
+        Banner.Loaded += (_, _) => SyncBleed();
+        Banner.SizeChanged += (_, _) => SyncBleed();
+        Banner.SlideChanged += (_, _) =>
+        {
+            SyncBleed();
+            PaintInk();
+        };
+
+        // 首页进场动画（「给轮播图和首页增加更多动画特效」，2026-09-11）：每一排货架逐排淡入上浮，卡片抬起。
+        // 挂在 Loaded 上是因为 XAML 里写不了 —— 见 HomeShelfMotion 那一段。
+        Loaded += (_, _) => HomeMotion.Enter(this, ShelfRepeater, ViewModel.Shelves.Count);
     }
 
     /// <summary>
@@ -101,27 +116,23 @@ public sealed partial class HomePage : Page, IShellContent
     /// <summary>自检：那条带上的字体和键高，见 <see cref="HomeBanner.TypeRead"/>。</summary>
     internal (bool Ok, string Detail) BannerType() => Banner.TypeRead();
 
-    /// <summary>自检：剧照整张画出来了没有，见 <see cref="HomeBanner.PictureRead"/>。</summary>
+    /// <summary>自检：剧照铺满整条带了没有（比例不变、只有一条轴被裁），见 <see cref="HomeBanner.PictureRead"/>。</summary>
     internal (bool Ok, string Detail) BannerPicture() => Banner.PictureRead();
 
     /// <summary>自检：屏上那几排真按设置里那份版面来的，见 <see cref="HomeViewModel.LayoutRead"/>。</summary>
     internal (bool Ok, string Detail) LayoutRead() => ViewModel.LayoutRead();
 
-    /// <summary>自检：页眉的墨色（见 <see cref="SlateRead"/>）；轮播 2026-09-10 框成卡片后页眉不再压在图上。</summary>
-    internal string SlateRead() =>
-        $"页眉{(Slate.OnScrim ? "在用图上那套墨（不该 —— 轮播已是卡片，页眉站在纸上）" : "跟主题的墨走")}";
-
     /// <summary>
-    /// 自检：轮播那一块真被框起来了 —— 和窗口四边都留出了间隔（「弄个框把轮播图框起来」的真正意思：不占满
-    /// 上半页、四边留空，徽标片名简介都在框里）。
+    /// 自检：轮播真铺满了窗口的上半部分 —— 左沿落在窗口左边（0）、右沿吃满窗口宽、上沿顶回到窗口顶边（也就是
+    /// 把外壳留给标题栏的那 32 像素也吃掉，标题栏浮在剧照上）。「占满窗口的上半部分（包括窗口标题）」，2026-09-11。
     /// <para>
-    /// 量 Banner 自己在窗口里的位置：左、右、上三边都该让出 PageInset（24）—— 左右对窗口两边沿，上对着
-    /// 外壳那一行（32，标题栏）底下那一口气（12）加页眉和 16 的间距，所以只要「让出 ≥ PageInset − 4」就算
-    /// 对，不钉死页眉自己的高度。收起来（没有幻灯片）时量的是收起之后的边距，那一档同样成立。
+    /// 量 Banner 自己在窗口里的位置：左、上两条都该贴到 0，右沿也该到 0。下沿与内容之间的界线不在这里量 ——
+    /// 那是画面上的渐变过渡，由 HomeBanner 的读数负责。
     /// </para>
     /// <para>
-    /// 2026-09-10 之前判的正好相反：「红框框出来的地方全填充上海报」，上沿落在 0、右沿吃满窗口宽。那一版的
-    /// SyncBleed（把 ContentHost 留给标题栏的 32 像素顶回去）随本改删除。
+    /// 2026-09-10 到 09-11 之间判的正好相反：「弄个框把轮播图框起来」被落定成四边各留 24 的卡片，那一版要求
+    /// 左、右、上三条都让出 PageInset。谁把 Banner 的负边距删掉（<c>Margin="0,-32,0,0"</c>）、或者给这一页
+    /// 补回左右留白，这一条当场红。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) BleedRead()
@@ -129,28 +140,47 @@ public sealed partial class HomePage : Page, IShellContent
         var at = Banner.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
         var window = XamlRoot?.Size.Width ?? 0;
         var right = window - (at.X + Banner.ActualWidth);
-        var slack = PageInset - 4;
+        var viewportTop = Scroller.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point()).Y;
         var ok = Banner.ActualWidth > 0
             && window > 0
-            && at.X >= slack
-            && right >= slack
-            && at.Y >= ChromeHeight + 8;
+            && at.X <= 0.5
+            && right <= 0.5
+            && at.Y <= 0.5
+            && viewportTop <= 0.5;
 
         return (ok,
             $"起点 ({at.X:0},{at.Y:0})、{Banner.ActualWidth:0}×{Banner.ActualHeight:0}"
-                + $"，左让 {at.X:0}、右让 {right:0}、上让 {at.Y:0}（标题栏 {ChromeHeight:0} 之下）"
-                + (ok ? " —— 框起来了，四边留了间隔" : " —— 有哪条边还贴着窗口"));
+                + $"，左让 {at.X:0}、右让 {right:0}、上让 {at.Y:0}，滚动视口从 {viewportTop:0} 起（含标题栏 {ChromeHeight:0}）"
+                + (ok ? " —— 通栏铺满，标题栏浮在图上" : " —— 有哪条边没顶到窗口的边"));
     }
 
-    /// <summary>轮播卡片四边的留白，和页面其余内容同一条边距线（XL，24）。BleedRead 拿它当基准。</summary>
-    internal const double PageInset = 24;
+    /// <summary>
+    /// 把外壳留给标题栏的那 32 像素顶回来，让剧照铺到窗口的顶边去。这一页是整套里唯一这么干的一页（别的页
+    /// 都把那 32 留白让给标题栏），所以它是这一页自己的事，不是外壳的开关。
+    /// <para>
+    /// 负边距必须落在 Scroller 本身：只把 Banner 往上移，布局坐标虽然到了 0，图片仍被滚动视口在 32 处裁掉。
+    /// 连视口一起上移后，图像才真正铺进标题栏。没有幻灯片时归零，普通货架继续让开标题栏。
+    /// </para>
+    /// <para>
+    /// 2026-09-10 到 09-11 之间这个方法不存在：那一版「框成卡片」之后大图不再贴窗口的边，没人要顶那 32。
+    /// 「占满窗口的上半部分（包括窗口标题）」之后它回来了。
+    /// </para>
+    /// </summary>
+    internal void SyncBleed()
+    {
+        var sheet = Scroller.Margin;
+        var wanted = Banner.Visibility == Visibility.Visible ? -ChromeHeight : 0;
+
+        if (Math.Abs(sheet.Top - wanted) > 0.5)
+            Scroller.Margin = new Thickness(sheet.Left, wanted, sheet.Right, sheet.Bottom);
+    }
 
     /// <summary>
-    /// 自检：轮播卡片的高度就是 <see cref="HomeCarousel.Height"/> 按它自己的宽算出来的那个数，而横着的那几排
-    /// 接在卡片下沿之后。
+    /// 自检：轮播这条带的高度就是 <see cref="HomeCarousel.Height"/> 按它自己的宽算出来的那个数，而横着的那几排
+    /// 接在带子下沿之后。
     /// <para>
-    /// 带宽从「页宽」变成「页宽 − 48」（四边留 24 的卡片，2026-09-10），所以带高也矮一截；其余照旧：剧照贴右
-    /// 沿放大一成画、上下各裁 5%，第一排接在卡片下沿之后而不是压在它上面。
+    /// 带宽就是整幅页宽（通栏，2026-09-11 从「页宽 − 48」回来）；其余照旧：剧照铺满整条带（2026-09-11），
+    /// 第一排接在带子下沿之后而不是压在它上面。
     /// </para>
     /// <para>
     /// 大图和横排都没有时没得量，跳过而不是判红：一个从未播放过任何内容、又只勾了一排的账号就是那样，那是正常
@@ -170,8 +200,8 @@ public sealed partial class HomePage : Page, IShellContent
 
         var viewport = root.Size.Height;
 
-        // 卡片那一块的高度就是那条规则算出来的：带宽是它自己量到的宽（比页宽窄 48），一张幻灯片都没有时整条带
-        // 收起，那一档不判。
+        // 这条带的高度就是那条规则算出来的：带宽是它自己量到的宽（通栏之后就是整幅页宽），一张幻灯片都没有时
+        // 整条带收起，那一档不判。
         var heroBottom = Top(Banner) + Banner.ActualHeight;
         var wanted = HomeCarousel.Height(viewport, Banner.ActualWidth);
         var shaped = Banner.Visibility != Visibility.Visible
@@ -211,14 +241,14 @@ public sealed partial class HomePage : Page, IShellContent
 
         return (shaped && nextOk,
             $"视口 0–{viewport:0}；大图 {Banner.ActualWidth:0}×{Banner.ActualHeight:0}"
-                + (shaped ? $"，正是这个宽度该有的高 {wanted:0}（剧照贴右沿整张画、上下不留底色）" : $"，该高 {wanted:0}")
-                + $"，这一块下沿 {heroBottom:0}；{nextNote}");
+                + (shaped ? $"，正是这个宽度该有的高 {wanted:0}（剧照铺满整条带、按带子的形状裁）" : $"，该高 {wanted:0}")
+                + $"，这条带下沿 {heroBottom:0}；{nextNote}");
     }
 
     /// <summary>
     /// <c>ShellPage.xaml</c> 里 <c>ContentHost</c> 给外壳留的那一段（<c>Padding="0,32,0,0"</c>）：标题栏那一行
-    /// 的高。轮播 2026-09-10 框成卡片之后这一页不再顶回那 32 像素（那一版的 <c>SyncBleed</c> 已删），但这个数
-    /// 还有两份用场：BleedRead 拿它判「卡片站在标题栏底下而不是塞进标题栏里」，自检那一关
+    /// 的高。轮播通栏之后这一页要把它顶回去（<see cref="SyncBleed"/>，Banner 挂一条 −32 的上边距），所以这个数
+    /// 有三份用场：SyncBleed 拿它当那口负边距的大小、BleedRead 拿它写读数、自检那一关
     /// （<c>ShellPage.ProbeChrome</c>）拿它和屏上量出来的外壳高度对一遍 —— 对账要的正是「两边引的是同一个数」。
     /// <para>
     /// 2026-09-09 起外壳只有标题栏这一行：第 1 行（标签栏删掉后剩下的那条空带）删掉了，这个数从 80 收到 32。
@@ -414,6 +444,10 @@ public sealed partial class HomePage : Page, IShellContent
         _window = request.Window;
         Tag = "home";
 
+        // 标题栏那一行浮在剧照上，所以那一行的墨走固定的浅墨（不跟主题走）—— 和详情页头图铺到顶边时一个规矩。
+        // 带子还没有幻灯片时下面判成 Plain，见 PaintInk。
+        _actions?.SetTitleStrip(TitleStrip.OnScrim);
+
         // The one place this page resolves anything. It is deliberately a single block: it is the line
         // that goes when the shell stops handing a container around, and spreading it would turn one
         // deletion into a hunt.
@@ -440,8 +474,23 @@ public sealed partial class HomePage : Page, IShellContent
     {
         ShellPrefs.Changed -= OnShellPrefsChanged;
 
+        // 这一页走了，把标题栏还回它自己的规矩（别的页都按主题那支墨）。不还的话下一次它就一直浅着。
+        _actions?.SetTitleStrip(TitleStrip.Plain);
+
         ViewModel.Cancel();
     }
+
+    /// <summary>
+    /// 标题栏那一行的墨：带子真在屏上（有幻灯片、并且这一块没被收起来）走 <see cref="TitleStrip.OnScrim"/>，
+    /// 剧照顶上那层暗罩托着它；一张幻灯片都没有、这一块自己收起来了的时候，标题栏底下又变回页面底色，那时得还
+    /// 回 <see cref="TitleStrip.Plain"/>，不然浅墨画在浅色页底上就是几颗看不见的按钮。
+    /// <para>
+    /// 这是 2026-09-10 删掉、2026-09-11 找回来的那条联动 —— 那时候「框成卡片」让剧照不再碰窗口的顶边，标题栏
+    /// 底下永远是页面底色，联动没有意义。参照详情页的 <c>DetailPage.SyncTitleInk</c>。
+    /// </para>
+    /// </summary>
+    private void PaintInk() =>
+        _actions?.SetTitleStrip(Banner.Visibility == Visibility.Visible ? TitleStrip.OnScrim : TitleStrip.Plain);
 
     /// <summary>
     /// 设置里那份主页版面改了（拖拽排序或者勾选），照新的重排一遍。卡片尺寸那几个数不在这一句里 —— 它们是
@@ -477,5 +526,12 @@ public sealed partial class HomePage : Page, IShellContent
 
     private void OnBannerOpenRequested(object? sender, BannerSlide slide) => ViewModel.Open(slide);
 
-    private void Reload() => _ = ViewModel.ReloadAsync();
+    private void Reload()
+    {
+        _ = ViewModel.ReloadAsync();
+
+        // 重载之后是另一批货架，进场动画再放一遍（HomeMotion 那一拍是给「这一页刚画出来」用的，重载时那些
+        // 排是新建的元素，也要从暗处上来，不然换一排就硬生生换掉）。
+        HomeMotion.Enter(this, ShelfRepeater, ViewModel.Shelves.Count);
+    }
 }

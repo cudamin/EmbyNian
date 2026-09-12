@@ -96,12 +96,12 @@ public static class ThemeHost
         ("TextFillColorSecondaryBrush", theme => theme.Colors.TextDim),
         ("TextFillColorTertiaryBrush", theme => theme.Colors.TextFaint),
 
-        // 深色那边留一点透明让 Mica 透上来 —— 侧边栏和页面底用的就是这几个键。浅色那边全不透明：
-        // 底下本来是亮的，透上来只会把字的对比度吃掉。
-        ("LayerFillColorDefaultBrush", theme => Veil(theme, theme.Colors.Surface, 0x8C)),
-        ("LayerFillColorAltBrush", theme => Veil(theme, theme.Colors.SurfaceAlt, 0xB4)),
-        ("CardBackgroundFillColorDefaultBrush", theme => theme.IsDark ? theme.Colors.SurfaceAlt.WithAlpha(0x8C) : theme.Colors.Surface),
-        ("CardBackgroundFillColorSecondaryBrush", theme => theme.IsDark ? theme.Colors.SurfaceHover.WithAlpha(0x66) : theme.Colors.Window),
+        // 影院画布使用稳定的实色层次，避免桌面壁纸透进内容区后冲淡海报和正文。
+        // 浮层仍由 EgFrostBrush 提供材质，底层画布与卡片各用自己的主题角色。
+        ("LayerFillColorDefaultBrush", theme => theme.Colors.Window),
+        ("LayerFillColorAltBrush", theme => theme.Colors.Surface),
+        ("CardBackgroundFillColorDefaultBrush", theme => theme.Colors.SurfaceAlt),
+        ("CardBackgroundFillColorSecondaryBrush", theme => theme.Colors.SurfaceElevated),
         ("CardStrokeColorDefaultBrush", theme => theme.Colors.Border),
         ("ControlStrokeColorDefaultBrush", theme => theme.Colors.Border),
         ("ControlStrokeColorSecondaryBrush", theme => theme.Colors.BorderStrong),
@@ -208,10 +208,6 @@ public static class ThemeHost
     }
 
     public static Color ToColor(ThemeColor color) => Color.FromArgb(color.A, color.R, color.G, color.B);
-
-    /// <summary>深色主题下透一点让 Mica 上来，浅色主题下不透。</summary>
-    private static ThemeColor Veil(UiTheme theme, ThemeColor color, byte alpha) =>
-        theme.IsDark ? color.WithAlpha(alpha) : color;
 
     /// <summary>自检用：这张表覆盖了哪些键。少覆盖一个，界面上就会留一块换不掉的颜色。</summary>
     public static IReadOnlyList<string> BrushKeys { get; } = Brushes.Select(entry => entry.Key).ToArray();

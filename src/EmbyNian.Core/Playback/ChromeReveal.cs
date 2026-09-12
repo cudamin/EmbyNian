@@ -109,6 +109,36 @@ public sealed class ChromeReveal
     /// </summary>
     public const long GraceMilliseconds = 1200;
 
+    /// <summary>
+    /// How far the pointer has to travel before what arrived counts as somebody moving the mouse: two, which
+    /// is under a millimetre and over anything a resting mouse — or the player's own ask — produces.
+    /// <para>
+    /// One pixel is the number to keep it above, and there are two of them. A mouse lying on a desk rattles a
+    /// pixel, and a hide ends with a real one-pixel round trip through the input queue
+    /// (<c>Native.NudgeCursorState</c>, the only lever that makes WinUI re-read the transparent
+    /// <c>ProtectedCursor</c>). While a single pixel was enough to bring the cursor back — 「once the cursor is
+    /// hidden, any move at all brings it back」, written when the worry was a hand being asked for a second
+    /// pixel — that round trip could wake the player out of its own hide, which is what 「鼠标隐藏了一会又会
+    /// 自动跑出来」 turned out to be. A hand that means it covers two pixels inside its first event.
+    /// </para>
+    /// <para>
+    /// The same two in both cursor states and on both paths — XAML pointer events, which report logical pixels,
+    /// and the OS poll, which reports physical ones. The caller keeps the anchor still under the threshold, so a
+    /// slow hand accumulates its way past it instead of having its movement thrown away one pixel at a time.
+    /// </para>
+    /// </summary>
+    public const double MovePixels = 2;
+
+    /// <summary>
+    /// Whether a reported position change of <paramref name="dx"/>,<paramref name="dy"/> is somebody moving the
+    /// mouse rather than noise — see <see cref="MovePixels"/> for what is at stake and why the threshold is
+    /// where it is. Extracted because two very different callers ask it: the page's pointer-event filter, in
+    /// logical pixels, and its ten-hertz poll of the OS, in physical ones. A rule that has to hold in both
+    /// places is a rule that can be pinned by a test instead of by two comments agreeing with each other.
+    /// </summary>
+    public static bool Travelled(double dx, double dy) =>
+        (dx > 0 || dy > 0) && (dx >= MovePixels || dy >= MovePixels);
+
     /// <summary>The fraction of the picture's height each edge band occupies.</summary>
     private const int Bands = 5;
 

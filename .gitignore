@@ -27,3 +27,7 @@ shell.png
 # `.claude/skills` 是入库的（技能跟着代码走，见 CLAUDE.md），但同一个目录下的临时工作树不是：
 # 那是会话自己开的检出，随时生随时灭。
 .claude/worktrees/
+
+# AI 助手的工作数据目录（记忆、会话状态），不是项目源码
+.workbuddy/
+.zcode/

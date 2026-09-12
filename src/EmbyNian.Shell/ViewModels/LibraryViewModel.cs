@@ -128,8 +128,6 @@ public sealed partial class LibraryViewModel : PageViewModel
     public LibraryViewModel()
     {
         Heading = "媒体库";
-        Eyebrow = "LIBRARY";
-        Subheading = "正在读取…";
         EmptyNotice = "这里没有内容";
         SearchText = "";
         SortKey = EmbySortBy.Name;
@@ -146,19 +144,13 @@ public sealed partial class LibraryViewModel : PageViewModel
 
     public ObservableCollection<CardItem> Cards { get; } = [];
 
-    [ObservableProperty]
-    public partial string Heading { get; set; }
-
     /// <summary>
-    /// 场记板上那行代号 —— LIBRARY / SEASONS / EPISODES / SEARCH / CREDITS。规则在
-    /// <see cref="LibraryRequest.Eyebrow"/>：这一页是五种网格合一的，标题只说得出「叫什么」。
+    /// 这一页的名字（库名、文件夹名、人名、搜索词）。**页头 2026-09-11 删掉之后它不再上屏** —— 留着是因为
+    /// 日志和自检拿它认人（<c>LibraryPage.HeadingText</c>：<c>--show-library</c> 那几行、自检的「媒体库页面
+    /// 「电影」N 张卡片」）。要删它得先给这两处另找一个说法。
     /// </summary>
     [ObservableProperty]
-    public partial string Eyebrow { get; set; }
-
-    /// <summary>How much of the library is on screen, or why none of it is.</summary>
-    [ObservableProperty]
-    public partial string Subheading { get; set; }
+    public partial string Heading { get; set; }
 
     /// <summary>
     /// 这一面网格上每张卡建出来、画出来的宽度，固定是 <see cref="CardSize.PosterWidth"/>（装机那一档 170）。
@@ -388,8 +380,6 @@ public sealed partial class LibraryViewModel : PageViewModel
         _indicators = ui.ShowWatchedIndicators;
 
         Heading = request.Title;
-        Eyebrow = request.Eyebrow;
-        Subheading = "正在读取…";
         SearchText = request.SearchTerm ?? "";
         EmptyNotice = request.IsSearch ? "输入关键字开始搜索" : "这里没有内容";
         OnPropertyChanged(nameof(SearchVisibility));
@@ -447,7 +437,6 @@ public sealed partial class LibraryViewModel : PageViewModel
                 Cards.Clear();
 
                 _total = 0;
-                Subheading = "输入关键字开始搜索";
                 EmptyNotice = "输入关键字开始搜索";
                 ShowEmptyNotice = true;
 
@@ -478,7 +467,6 @@ public sealed partial class LibraryViewModel : PageViewModel
             // A server that hands back nothing has nothing more to give, whatever its count said.
             if (result.Items.Count == 0) _total = Cards.Count;
 
-            Subheading = Describe();
             EmptyNotice = "这里没有内容";
             ShowEmptyNotice = Cards.Count == 0;
 
@@ -495,7 +483,6 @@ public sealed partial class LibraryViewModel : PageViewModel
             if (!IsCurrent(token)) return;
 
             Report($"读取「{_request.Title}」失败", error);
-            Subheading = "读取失败";
 
             // Ready, not stuck. IsReady means the first load has finished, whether it found anything or
             // not, and the two tooling paths that wait on it (--show-library, --play) used to sit

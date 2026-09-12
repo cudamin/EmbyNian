@@ -221,7 +221,7 @@ internal static partial class ShellSelfCheck
     /// <summary>
     /// 文件页上那张头图到底取回来解出来了没有。规则那一半由 <see cref="_fileArtwork"/> 判 —— 「集页面要用这个剧
     /// 的背景图或缩略图」挑的是剧集那一头的标签，而那种标签只能按剧集自己的 id 去取；按本条目的 id 去取会拿回一个
-    /// 空答案，而这一格照旧按有图那一档留着 460 的高，屏上就是一格空画面。这一句就是那件事的读数。
+    /// 空答案，而这一格照旧按有图那一档留着 380 的高，屏上就是一格空画面。这一句就是那件事的读数。
     /// <para>
     /// 不在走到这一页那一拍读：那时候图还在路上，读出来永远是「没有」。<see cref="ReadInfo"/> 每一眼写一次，报告
     /// 拿的是最后一眼看到的（同 <see cref="InfoLooks"/>）。
@@ -335,26 +335,23 @@ internal static partial class ShellSelfCheck
         string Footer);
 
     /// <summary>
-    /// 一张记号在页面上的样子：规矩说该有哪一张、屏上画了没有、画多大、落对了没有，和它是从哪一片几何读出来的。
+    /// 一枚记号在页面上的样子：规矩说该有哪一张、屏上画了没有、画多大、落对了没有，和它是从哪一片几何读出来的。
     /// <para>
-    /// 两枚各一份而不是一份带个「哪个角」—— 「统一改为在剧名上方显示徽标，右上角显示艺术图」之后它们是两个各自
-    /// 独立的位置，各空各的、各错各的，一份读数说不清是哪一样没落对。
+    /// （从前右上角那张艺术图也有一份 —— 2026-09-12 那一角整个退场，读数跟着少一份。）
     /// </para>
     /// </summary>
     /// <param name="Wanted">
-    /// 规矩说这一格该有哪一张，用词说 —— 「自己的艺术图」、「自己的徽标」、「剧集的徽标（取自条目 5687）」、「无」。
-    /// 由 <see cref="ItemArtwork"/> 自己那两支算出来（<see cref="ItemArtwork.Plate"/> 和
-    /// <see cref="ItemArtwork.Corner"/>），所以这是应用自己那条规则的答案，不是这个文件对它的猜测。id 一样要紧：
-    /// 集页和季页上徽标是剧集那一头发的，按这一页自己的 id 去取会取回一个空答案，而「徽标」两个字自己说不出走了
-    /// 哪一条路。
+    /// 规矩说这一格该有哪一张，用词说 —— 「自己的徽标」、「剧集的徽标（取自条目 5687）」、「无」。
+    /// 由 <see cref="ItemArtwork.Plate"/> 算出来，所以这是应用自己那条规则的答案，不是这个文件对它的猜测。
+    /// id 一样要紧：集页和季页上徽标是剧集那一头发的，按这一页自己的 id 去取会取回一个空答案，而「徽标」两个字
+    /// 自己说不出走了哪一条路。
     /// </param>
     /// <param name="Drawn">
     /// 屏上画了没有。服务器没有这一张的条目占大多数，那一次它是 false 而 <paramref name="Placed"/> 空着成立。
     /// </param>
     /// <param name="Placed">
-    /// 真落在该落的地方没有：徽标要在片名的上方、左沿跟它对齐，艺术图要在带子的右上角，两者都不许顶出带子、也
-    /// 不许压到海报。几何在 <paramref name="Where"/> 里，读的地方是 <see cref="DetailPage.PlateShape"/> 和
-    /// <see cref="DetailPage.CornerShape"/>。
+    /// 真落在该落的地方没有：徽标要在片名的上方、左沿跟它对齐，不许顶出带子、也不许压到海报。几何在
+    /// <paramref name="Where"/> 里，读的地方是 <see cref="DetailPage.PlateShape"/>。
     /// </param>
     private sealed record MarkRead(
         string Wanted,
@@ -376,9 +373,8 @@ internal static partial class ShellSelfCheck
     /// 需求 4 on the detail page: 「把媒体的徽标…融入对应媒体的 ui 界面」 as the page really came out.
     /// </summary>
     /// <param name="Plate">剧名上方那一枚徽标（徽标 or 横幅图）。</param>
-    /// <param name="Corner">右上角那一张艺术图。</param>
     /// <param name="Text">
-    /// Whether the text title is on screen. It is now unconditional and both pictures merely optional —
+    /// Whether the text title is on screen. It is now unconditional and the plate merely optional —
     /// see 详情徽标与艺术图 in <see cref="ReportDetail"/>.
     /// </param>
     /// <param name="Kinds">
@@ -396,7 +392,6 @@ internal static partial class ShellSelfCheck
     /// </param>
     private sealed record ArtworkRead(
         MarkRead Plate,
-        MarkRead Corner,
         bool Text,
         string Kinds,
         string Hero,

@@ -44,29 +44,29 @@
         <ResourceDictionary x:Key="Dark">
 
             <!-- surfaces -->
-            <Color x:Key="EgWindowColor">#FF16181C</Color>
-            <Color x:Key="EgSurfaceColor">#FF1E2126</Color>
-            <Color x:Key="EgSurfaceAltColor">#FF262A31</Color>
-            <Color x:Key="EgSurfaceElevatedColor">#FF292C31</Color>
-            <Color x:Key="EgSurfaceHoverColor">#FF35393F</Color>
-            <Color x:Key="EgBorderColor">#FF3A3D44</Color>
-            <Color x:Key="EgBorderStrongColor">#FF51555A</Color>
+            <Color x:Key="EgWindowColor">#FF0C1116</Color>
+            <Color x:Key="EgSurfaceColor">#FF141B22</Color>
+            <Color x:Key="EgSurfaceAltColor">#FF1C252E</Color>
+            <Color x:Key="EgSurfaceElevatedColor">#FF20262D</Color>
+            <Color x:Key="EgSurfaceHoverColor">#FF2C343D</Color>
+            <Color x:Key="EgBorderColor">#FF303941</Color>
+            <Color x:Key="EgBorderStrongColor">#FF49515A</Color>
 
             <!-- text -->
-            <Color x:Key="EgTextColor">#FFF2F4F7</Color>
-            <Color x:Key="EgTextDimColor">#FFA3A5A8</Color>
-            <Color x:Key="EgTextFaintColor">#FF808285</Color>
-            <Color x:Key="EgTextOnAccentColor">#FF081208</Color>
+            <Color x:Key="EgTextColor">#FFF2F6FA</Color>
+            <Color x:Key="EgTextDimColor">#FF9FA4A8</Color>
+            <Color x:Key="EgTextFaintColor">#FF7A7F83</Color>
+            <Color x:Key="EgTextOnAccentColor">#FF0B1714</Color>
 
             <!-- accents -->
             <!-- Emby's green, so the client looks like it belongs to the server it talks to. -->
-            <Color x:Key="EgAccentColor">#FF52B54B</Color>
-            <Color x:Key="EgAccentHoverColor">#FF6ABF64</Color>
-            <Color x:Key="EgAccentPressedColor">#FF479C40</Color>
-            <Color x:Key="EgAccentSoftColor">#FF203124</Color>
+            <Color x:Key="EgAccentColor">#FF6EE7C5</Color>
+            <Color x:Key="EgAccentHoverColor">#FF82EACD</Color>
+            <Color x:Key="EgAccentPressedColor">#FF5FC7A9</Color>
+            <Color x:Key="EgAccentSoftColor">#FF1C332F</Color>
 
             <!-- 半透明的强调色，给侧边栏选中那颗药丸：压在 Mica 上要透得过去。 -->
-            <Color x:Key="EgAccentMutedColor">#3352B54B</Color>
+            <Color x:Key="EgAccentMutedColor">#336EE7C5</Color>
 
             <Color x:Key="EgDangerColor">#FFE5534B</Color>
             <Color x:Key="EgWarningColor">#FFE3B341</Color>
@@ -128,23 +128,23 @@
                  alone is not enough: the framework resolves these with StaticResource while parsing
                  its own dictionary, long before ours is merged, so each derived brush has to be
                  replaced by key. -->
-            <Color x:Key="SystemAccentColor">#FF52B54B</Color>
-            <Color x:Key="SystemAccentColorLight1">#FF6ABF64</Color>
-            <Color x:Key="SystemAccentColorLight2">#FF82CA7D</Color>
-            <Color x:Key="SystemAccentColorLight3">#FF9BD497</Color>
-            <Color x:Key="SystemAccentColorDark1">#FF479C40</Color>
-            <Color x:Key="SystemAccentColorDark2">#FF3B8236</Color>
-            <Color x:Key="SystemAccentColorDark3">#FF30692C</Color>
+            <Color x:Key="SystemAccentColor">#FF6EE7C5</Color>
+            <Color x:Key="SystemAccentColorLight1">#FF82EACD</Color>
+            <Color x:Key="SystemAccentColorLight2">#FF97EED5</Color>
+            <Color x:Key="SystemAccentColorLight3">#FFABF1DD</Color>
+            <Color x:Key="SystemAccentColorDark1">#FF5FC7A9</Color>
+            <Color x:Key="SystemAccentColorDark2">#FF4FA68E</Color>
+            <Color x:Key="SystemAccentColorDark3">#FF408672</Color>
 
             <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{StaticResource EgAccentColor}" />
-            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#E852B54B" />
-            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#C452B54B" />
-            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#FF2D4A30" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#E86EE7C5" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#C46EE7C5" />
+            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#FF2D544F" />
             <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{StaticResource EgAccentHoverColor}" />
             <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource EgAccentHoverColor}" />
             <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{StaticResource EgAccentColor}" />
             <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="{StaticResource EgTextOnAccentColor}" />
-            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#B4081208" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#B40B1714" />
             <SolidColorBrush x:Key="TextOnAccentFillColorSelectedTextBrush" Color="{StaticResource EgTextOnAccentColor}" />
 
             <SolidColorBrush x:Key="TextFillColorPrimaryBrush" Color="{StaticResource EgTextColor}" />
@@ -153,10 +153,10 @@
 
             <!-- Mica shows through the layer brushes, which is the whole point of using them for the
                  nav pane and the page surface instead of a flat fill. -->
-            <SolidColorBrush x:Key="LayerFillColorDefaultBrush" Color="#8C1E2126" />
-            <SolidColorBrush x:Key="LayerFillColorAltBrush" Color="#B4262A31" />
-            <SolidColorBrush x:Key="CardBackgroundFillColorDefaultBrush" Color="#8C262A31" />
-            <SolidColorBrush x:Key="CardBackgroundFillColorSecondaryBrush" Color="#6635393F" />
+            <SolidColorBrush x:Key="LayerFillColorDefaultBrush" Color="#FF0C1116" />
+            <SolidColorBrush x:Key="LayerFillColorAltBrush" Color="#FF141B22" />
+            <SolidColorBrush x:Key="CardBackgroundFillColorDefaultBrush" Color="#FF1C252E" />
+            <SolidColorBrush x:Key="CardBackgroundFillColorSecondaryBrush" Color="#FF20262D" />
             <SolidColorBrush x:Key="CardStrokeColorDefaultBrush" Color="{StaticResource EgBorderColor}" />
             <SolidColorBrush x:Key="ControlStrokeColorDefaultBrush" Color="{StaticResource EgBorderColor}" />
             <SolidColorBrush x:Key="ControlStrokeColorSecondaryBrush" Color="{StaticResource EgBorderStrongColor}" />
@@ -247,7 +247,7 @@
 
             <!-- The same roles the Default dictionary maps, mapped again here rather than left to fall
                  back to it. A key this dictionary omits resolves from Default, and Default's greens are
-                 picked to sit on a near-black surface: as accent *text* on white, #FF52B54B lands around
+                 picked to sit on a near-black surface: as accent *text* on white, #FF6EE7C5 lands around
                  2.4:1, which is the unreadable text this dictionary exists to prevent. -->
             <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{StaticResource EgAccentHoverColor}" />
             <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource EgAccentHoverColor}" />
@@ -315,9 +315,10 @@
     <SolidColorBrush x:Key="EgOnScrimBrush" Color="#FFF3F5F8" />
     <SolidColorBrush x:Key="EgOnScrimDimBrush" Color="#FFC9D0D9" />
 
-    <!-- 主页第一屏那条大图的底（HomeBanner 的 Band）。剧照 2026-09-09 起缩到带的右边六成、按 16:9 整张画出来，
-         左边四成露的就是这个底色 —— 字块站在那一片上，剧照的左沿再压一道同色的渐融融进去（HomeBanner 标记里
-         Fade 那一段）；带宽不到 427 的那一档图改吃满带宽，底下也露一条。用它的只剩这一条带。和上面那两支同一个
-         理由不跟主题走：带上的字走的是 EgOnScrim 那套浅墨，底色跟着主题变成近白的话就是白底白字（晴昼那套）。 -->
+    <!-- 主页第一屏那条大图的底（HomeBanner 的 Band）。剧照 2026-09-11 起铺满整条带（「去掉首页封面轮播图的黑边」，
+         UniformToFill），所以这个底色只在图还没解码到的那一瞬、还有整条带收起来之前的那一帧看得见 —— 从前它还是
+         「剧照只占六成宽、左右那两片就是这个颜色」的那两片，也就是他要去掉的那两条黑边。用它的只剩这一条带。
+         和上面那两支同一个理由不跟主题走：带上的字走的是 EgOnScrim 那套浅墨，底色跟着主题变成近白的话就是白底
+         白字。 -->
     <SolidColorBrush x:Key="EgBannerBaseBrush" Color="#FF0C0E11" />
 </ResourceDictionary>

@@ -106,9 +106,9 @@ public sealed partial class EpisodeRow : UserControl
         row.RowTitle.Style = (Style)row.Resources[
             args.NewValue is CardItem { IsCurrentEpisode: true } ? CurrentTitleStyle : TitleStyle];
 
-        // A live container being handed a different item: ItemsRepeater reuses containers without
-        // detaching them, so Loaded will not fire again and this is the only notice we get.
-        if (row._live) row.Begin();
+        // 无条件发起，同 PosterCard.OnCardChanged：_live 这道门信不过 —— 回收池对看得到的容器喊了一声
+        // Unloaded 之后 Loaded 再也不来，门后就永远没人发请求，行就是一张灰占位。
+        row.Begin();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -120,7 +120,10 @@ public sealed partial class EpisodeRow : UserControl
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        _live = false;
+        // 同 PosterCard.OnUnloaded：这一声会对着还在树上的行喊出来，XamlRoot 现问一遍才算数。
+        _live = XamlRoot is not null;
+        if (_live) return;
+
         Card?.ReleasePoster();
 
         // A recycled container must not come back with the button already up: the pointer that revealed

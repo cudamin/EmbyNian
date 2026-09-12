@@ -1,38 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  One card. Every grid and every row in the app uses this control, so a change to what a card looks
-  like is one edit rather than one per page.
-
-  The placeholder sits *behind* the picture rather than being swapped for it: an Image whose Source is
-  null draws nothing, so the glyph shows through until the poster arrives and is covered when it does.
-  That removes the visibility juggling, and with it the flash of an empty box that the WinForms shell
-  had between the layout pass and the download.
-
-  卡片的状态全由外面那一圈胶片格和它四个角上的东西说，不靠药丸徽章、不靠阴影、不靠缩放 —— 六种状态
-  各自长什么样写在 Theme/Styles.xaml 的 EgFrameStyle 上，那是这一套的签名元素。这个文件里只有「哪个
-  状态绑在哪个属性上」。
--->
+<!-- 共用的影院海报卡：圆角封面、清晰的标题层级，以及轻上浮、图片推近和渐显操作层。 -->
 <UserControl
     x:Class="EmbyNian.Shell.Views.PosterCard"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <UserControl.Resources>
-        <!-- 需求 6 的按钮，「去掉黑色和灰色的边框，仅保留白色的图标按钮」之后什么都不画：没有底色、没有
-             描边，只剩一个白色字形和一块 32×32 的命中区。字形压在剧照上，按钮自己的填充比字形还显眼，
-             读起来像块面板而不是控件 —— 播放器的 OSD 按钮同理，见 PlayerPage 的 OsdButtonStyle。
-
-             白色用 EgOnScrim 那两个不随主题走的刷子，不是 EgTextBrush：封面永远是图片，浅色主题下
-             EgTextBrush 是近黑色，字形会整个消失在亮处。
-
-             BasedOn is load bearing, not habit. The framework gives Button its template through an
-             implicit style, and an implicit style applies only while Style is unset — setting this one
-             would otherwise leave the buttons with no template at all: no border, no hover state,
-             arguably nothing on screen. DefaultButtonStyle is the key that implicit style is itself
-             based on.
-
-             The template's visual states set Background themselves, so the fill below only decides what
-             a button looks like at rest; 那两个态由下面 Actions 上的几个键接手。 -->
+        <!-- 保留平台按钮模板与焦点反馈；右下操作仅画图标，遮罩负责照片上的对比度。 -->
         <Style x:Key="EgCardActionButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
             <Setter Property="Width" Value="32" />
             <Setter Property="Height" Value="32" />
@@ -40,18 +14,10 @@
             <Setter Property="Padding" Value="0" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{StaticResource EgOnScrimBrush}" />
+            <Setter Property="Foreground" Value="{ThemeResource EgOnScrimBrush}" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
-
-        <!-- 播放, in the middle of the artwork (「把播放按钮移动到媒体封面的中心」). Accent-filled rather
-             than another grey circle: it sits on top of a picture instead of on a scrim, and the accent
-             style is the one whose hover and pressed states stay the same colour family — a green button
-             that turns grey under the pointer looks broken.
-
-             Bigger than the strip's buttons because it is now the card's primary action and the centre of
-             a poster is the easiest place on it to hit. -->
         <Style x:Key="EgCardPlayButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
             <Setter Property="Width" Value="48" />
             <Setter Property="Height" Value="48" />
@@ -64,57 +30,48 @@
         </Style>
     </UserControl.Resources>
 
-    <!-- Fixed width, centred: the grid stretches its columns so the rows have no ragged right edge
-         (requirement 1), and giving the extra width back as gutter keeps the poster at its true
-         aspect ratio instead of cropping it.
-
-         Background is Transparent so the whole card is hit-testable: an unpainted Grid is not, and the
-         hover strip would then appear only over the poster and the two text lines. -->
+    <!-- 宽度和海报比例继续由页面的 CardSize 决定，动画只改变绘制，不改变测量。 -->
     <Grid
         x:Name="Root"
+        Width="{x:Bind CardWidth, Mode=OneWay}"
         Background="Transparent"
         HorizontalAlignment="Center"
         PointerEntered="OnPointerEntered"
         PointerExited="OnPointerExited"
-        Width="{x:Bind CardWidth, Mode=OneWay}">
+        RenderTransformOrigin="0.5,0.5">
+        <Grid.RenderTransform>
+            <CompositeTransform x:Name="CardMotion" />
+        </Grid.RenderTransform>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 胶片格。发丝框、圆角、底色、线的颜色四个值一个都不写在这里 —— 全在 EgFrameStyle 上，局部值
-             会盖过样式里的 Setter，写了就等于把词表抄一遍。指针进来、焦点落上来、或者这张卡正被主页轮播框着
-             （Framed）的时候整圈换强调色，那是代码里把这一个 Style 换成 EgFrameActiveStyle 做的（见
-             PosterCard.xaml.cs 的 Paint）。
-             这一圈是 Border，所以它会按自己的圆角把里面全部剪一遍：剧照的四角、右上那颗方块、底边那条
-             进度，都跟着圆（「把封面改成圆角的」）。 -->
         <Border
             x:Name="Art"
             Height="{x:Bind PosterHeight, Mode=OneWay}"
             Style="{StaticResource EgFrameStyle}">
-
             <Grid>
-                <!-- 占位字形：海报还没到、或者这个条目根本没有图的时候透过来的那一个。32 而不是 40 —— 它是「这里
-                     暂时没有图」，不该比图本身更抢眼（2026-09-05 界面复查：一排里有几张占位卡时，那几格灰底大
-                     图标比旁边真的海报更跳眼）。 -->
                 <FontIcon
                     FontSize="32"
                     Foreground="{ThemeResource EgTextFaintBrush}"
                     Glyph="{x:Bind Card.Glyph, Mode=OneWay}" />
-
-                <!-- 海报。淡入那一下在代码里（PosterCard.SyncPoster / OnPosterOpened）：解码是异步的，不淡入的话
-                     整屏卡片是一张接一张「啪」地跳出来的；而已经解好的位图（缓存命中那些）直接就是不透明的，
-                     那一档屏上本来没有「跳」这件事，淡入只会让它慢半拍。 -->
                 <Image
                     x:Name="Poster"
                     ImageOpened="OnPosterOpened"
+                    RenderTransformOrigin="0.5,0.5"
                     Source="{x:Bind Card.Poster, Mode=OneWay}"
-                    Stretch="UniformToFill" />
+                    Stretch="UniformToFill">
+                    <Image.RenderTransform>
+                        <ScaleTransform x:Name="PosterMotion" />
+                    </Image.RenderTransform>
+                </Image>
+                <Border
+                    x:Name="HoverShade"
+                    Background="{ThemeResource EgScrimBrush}"
+                    IsHitTestVisible="False"
+                    Opacity="0" />
 
-                <!-- 全看完：右上角一颗强调色方块，里面一个对勾。和下面「还剩几集」那颗是同一颗 ——
-                     说的是同一件事，对勾就是「零」。跟框线齐平、没有外边距：它是框的一部分，不是浮在
-                     图上的贴纸。
-                     角标只报状态，切换已看在悬浮层那三个按钮里：这么大的目标，滚动中的手会误触。 -->
                 <Border
                     Style="{StaticResource EgCornerBadgeStyle}"
                     Visibility="{x:Bind Card.WatchedBadgeVisibility, Mode=OneWay}">
@@ -123,8 +80,6 @@
                         Foreground="{ThemeResource EgTextOnAccentBrush}"
                         Glyph="&#xE73E;" />
                 </Border>
-
-                <!-- 还剩几集没看。同一颗方块，里面换成等宽的数字 —— 界面里凡是读数都走那支字。 -->
                 <Border
                     Style="{StaticResource EgCornerBadgeStyle}"
                     Visibility="{x:Bind Card.UnplayedVisibility, Mode=OneWay}">
@@ -132,24 +87,15 @@
                         Style="{StaticResource EgCornerBadgeTextStyle}"
                         Text="{x:Bind Card.UnplayedText, Mode=OneWay}" />
                 </Border>
-
-                <!-- 收藏：一颗红心，左上角。方块是「还剩多少」专用的，收藏不是读数，所以它只是个字形；
-                     离角 6 而不是齐平，光秃秃一个字形贴死在角上会像是被裁掉了半个。 -->
                 <FontIcon
+                    Margin="8"
                     FontSize="14"
                     Foreground="{ThemeResource EgDangerBrush}"
                     Glyph="&#xEB52;"
                     HorizontalAlignment="Left"
-                    Margin="6"
                     VerticalAlignment="Top"
                     Visibility="{x:Bind Card.FavoriteBadgeVisibility, Mode=OneWay}" />
 
-                <!-- 看到一半：压在下边框线上的一条 2px 强调色，长度就是进度。
-                     两列一个 Border，不是 ProgressBar。换掉它有三个理由：它的模板自带 MinHeight、圆头
-                     和一整套视觉状态，4 像素的方条是跟模板拗出来的；它没写 Foreground，于是拿的是框架
-                     那支从 SystemAccentColor 解析出来的画刷 —— 那支在字典解析时就冻住了，换主题它不跟着
-                     走（这是「共享画刷对象」那件事的又一例）；而这里要的东西本来就只是两段宽度，两列
-                     比一个控件还少几个元素。 -->
                 <Grid
                     Height="{StaticResource EgProgressThickness}"
                     VerticalAlignment="Bottom"
@@ -158,56 +104,35 @@
                         <ColumnDefinition Width="{x:Bind Card.ProgressDone, Mode=OneWay}" />
                         <ColumnDefinition Width="{x:Bind Card.ProgressLeft, Mode=OneWay}" />
                     </Grid.ColumnDefinitions>
+                    <Border Grid.ColumnSpan="2" Background="{ThemeResource EgOnScrimDimBrush}" Opacity="0.24" />
                     <Border Background="{ThemeResource EgAccentBrush}" />
                 </Grid>
 
-                <!-- 需求 6：what hover reveals — the play button in the middle of the picture and the
-                     已看/收藏/更多 icons in the bottom-right corner. One layer for the two of them, so there
-                     is a single answer to 「is the pointer on this card」 and a recycled container cannot
-                     come back with half a strip up.
-
-                     Shown and hidden outright rather than faded, per 「不要淡入淡出了」. 三个图标缩在角上而
-                     不是横过整条底边，底边那条续播进度条才整条都在。
-
-                     Pointer only, deliberately: the keyboard reaches all four through the card's own
-                     context menu (Shift+F10), and revealing on focus would mean hiding on focus lost,
-                     which collapses the very button the focus is moving to.
-
-                     An unpainted Grid is not hit-testable, so this layer sits over the poster without
-                     taking the pointer events the card's own hover tracking needs. -->
-                <Grid x:Name="Hover" Visibility="Collapsed">
-                    <!-- 播放. In the centre rather than in the corner because the card body opens the detail
-                         page, so without it starting a film would always cost two clicks — and the middle
-                         of the cover is where the eye already is. Hidden on anything unplayable: a series,
-                         a folder, a person. -->
+                <!-- 整层共同渐显，离开后立即停止命中，淡出完成再收起；键盘仍可从 Shift+F10 进入全部操作。 -->
+                <Grid x:Name="Hover" Opacity="0" Visibility="Collapsed">
                     <Button
                         x:Name="PlayButton"
+                        AutomationProperties.Name="{x:Bind Card.PlayActionTip, Mode=OneWay}"
                         Click="OnPlayClicked"
                         HorizontalAlignment="Center"
+                        RenderTransformOrigin="0.5,0.5"
                         Style="{StaticResource EgCardPlayButtonStyle}"
                         ToolTipService.ToolTip="{x:Bind Card.PlayActionTip, Mode=OneWay}"
                         VerticalAlignment="Center"
                         Visibility="{x:Bind Card.PlayVisibility, Mode=OneWay}">
-                        <FontIcon FontSize="20" Glyph="&#xE768;" />
+                        <Button.RenderTransform>
+                            <ScaleTransform x:Name="PlayMotion" ScaleX="0.92" ScaleY="0.92" />
+                        </Button.RenderTransform>
+                        <FontIcon Margin="2,0,0,0" FontSize="20" Glyph="&#xE768;" />
                     </Button>
-
-                    <!-- 已观看／收藏／更多，贴在封面右下角（「把已播放、收藏、更多移动到封面的右下角」）。
-                         原来是一颗居中的深色药丸，里面三个灰圆圈；参考图上这三个是光秃秃的白图标，压在
-                         剧照右下角，什么底都不画。贴角而不是居中，也把底边那条续播进度条整条让了出来。 -->
                     <StackPanel
                         x:Name="Actions"
-                        HorizontalAlignment="Right"
                         Margin="0,0,6,4"
+                        HorizontalAlignment="Right"
                         Orientation="Horizontal"
                         Spacing="4"
                         VerticalAlignment="Bottom">
                         <StackPanel.Resources>
-                            <!-- 按「轻量化样式」的办法把按钮模板在 PointerOver/Pressed 两态里自己写的那几个
-                                 值改掉 —— 样式里的 Setter 管不到状态。底色一律透明：框架那两个键是浅色半
-                                 透明叠加，压在剧照上正是要去掉的那圈灰片。前景只在按下时暗一档，悬停不变：
-                                 这三个按钮本来就是指针进了卡片才出现的，出现本身就是提示。
-                                 写在这一层而不是 UserControl.Resources 上，是为了不碰中间那颗播放键 —— 它
-                                 用的是 Accent 一族的键，但作用域越小越不必去想这件事。 -->
                             <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
                             <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
                             <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
@@ -215,48 +140,31 @@
                         </StackPanel.Resources>
                         <Button
                             x:Name="WatchedButton"
+                            AutomationProperties.Name="{x:Bind Card.WatchedActionTip, Mode=OneWay}"
                             Click="OnWatchedClicked"
                             Style="{StaticResource EgCardActionButtonStyle}"
                             ToolTipService.ToolTip="{x:Bind Card.WatchedActionTip, Mode=OneWay}"
                             Visibility="{x:Bind Card.UserStateVisibility, Mode=OneWay}">
-                            <!-- Two icons rather than one whose brush is swapped from code: which of
-                                 them shows is the card's own state, and a view model that hands out
-                                 brushes is a view model that has to know the theme.
-                                 同一个字形、只换颜色（参考图上这两个图标是实心白的）：白＝可以点，
-                                 绿＝已经是了。形状要是也跟着变，一眼看去像换了个按钮。 -->
                             <Grid>
-                                <FontIcon
-                                    FontSize="20"
-                                    Glyph="&#xEC61;"
-                                    Visibility="{x:Bind Card.NotWatchedVisibility, Mode=OneWay}" />
-                                <FontIcon
-                                    FontSize="20"
-                                    Foreground="{ThemeResource EgAccentBrush}"
-                                    Glyph="&#xEC61;"
-                                    Visibility="{x:Bind Card.WatchedVisibility, Mode=OneWay}" />
+                                <FontIcon FontSize="20" Glyph="&#xEC61;" Visibility="{x:Bind Card.NotWatchedVisibility, Mode=OneWay}" />
+                                <FontIcon FontSize="20" Foreground="{ThemeResource EgAccentBrush}" Glyph="&#xEC61;" Visibility="{x:Bind Card.WatchedVisibility, Mode=OneWay}" />
                             </Grid>
                         </Button>
                         <Button
                             x:Name="FavoriteButton"
+                            AutomationProperties.Name="{x:Bind Card.FavoriteActionTip, Mode=OneWay}"
                             Click="OnFavoriteClicked"
                             Style="{StaticResource EgCardActionButtonStyle}"
                             ToolTipService.ToolTip="{x:Bind Card.FavoriteActionTip, Mode=OneWay}"
                             Visibility="{x:Bind Card.UserStateVisibility, Mode=OneWay}">
                             <Grid>
-                                <FontIcon
-                                    FontSize="20"
-                                    Glyph="&#xEB52;"
-                                    Visibility="{x:Bind Card.NotFavoriteVisibility, Mode=OneWay}" />
-                                <FontIcon
-                                    FontSize="20"
-                                    Foreground="{ThemeResource EgDangerBrush}"
-                                    Glyph="&#xEB52;"
-                                    Visibility="{x:Bind Card.FavoriteVisibility, Mode=OneWay}" />
+                                <FontIcon FontSize="20" Glyph="&#xEB52;" Visibility="{x:Bind Card.NotFavoriteVisibility, Mode=OneWay}" />
+                                <FontIcon FontSize="20" Foreground="{ThemeResource EgDangerBrush}" Glyph="&#xEB52;" Visibility="{x:Bind Card.FavoriteVisibility, Mode=OneWay}" />
                             </Grid>
                         </Button>
                         <Button
                             x:Name="MoreButton"
-                x:Uid="PosterCard_MoreButton"
+                            x:Uid="PosterCard_MoreButton"
                             Click="OnMoreClicked"
                             Style="{StaticResource EgCardActionButtonStyle}">
                             <FontIcon FontSize="20" Glyph="&#xE712;" />
@@ -266,14 +174,10 @@
             </Grid>
         </Border>
 
-        <!-- 片名一行、读数一行。左边距归零，字的左沿因此正好压在上面那根框线上 —— 场记板的标题和卡片带
-             的标题都是这么对的，一页只有一条左沿。
-             第二行走等宽：它写的是「S02E09 · 剧名」「2024 · 3 季」这类读数，和详情页的信息行同一支字。
-             两行都有名字，因为 OnScrim 那一档要把样式换成压在图上的那一套（见 OnScrimProperty）：卡片站在
-             页面那张纸上时用主题墨，压在一张剧照上时用写死的浅墨。 -->
         <StackPanel Grid.Row="1" Margin="0,8,0,0">
             <TextBlock
                 x:Name="TitleLine"
+                FontWeight="SemiBold"
                 MaxLines="1"
                 Style="{StaticResource EgBodyStyle}"
                 Text="{x:Bind Card.Title, Mode=OneWay}"

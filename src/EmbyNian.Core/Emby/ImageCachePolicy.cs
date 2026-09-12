@@ -63,6 +63,37 @@ public static class ImageCachePolicy
         lastWrite > now || now - lastWrite >= TouchInterval;
 
     /// <summary>
+    /// 一次下载失败之后，隔多久再试一趟；表走完（返回 null）就把失败交给调用方。
+    /// <para>
+    /// 日志里见过的图片失败几乎全是短命的：十几个 500 挤在同一秒里（服务器被一屏卡片的突发打个正着），或者一两
+    /// 趟连接超时。隔两秒再问，那批里的大多数就拿到了；重试住在共享下载里，等着的卡片不必各自再排一遍，真正打到
+    /// 服务器上的次数反而比「每张卡自己重试」少。列成表而不是公式，为的是好读、也好钉。
+    /// </para>
+    /// </summary>
+    public static TimeSpan? RetryDelay(int attempt) => attempt switch
+    {
+        0 => TimeSpan.FromSeconds(2),
+        1 => TimeSpan.FromSeconds(4),
+        _ => null
+    };
+
+    /// <summary>
+    /// 重试也救不回来之后（<see cref="RetryDelay"/> 的表走完了），隔多久才值得为同一张图再问一次。
+    /// <para>
+    /// 跟 <see cref="TouchInterval"/> 同一个道理：滚动会把同一张卡片反复递进来，隔一段才试一次，服务器那头不会
+    /// 被一条暂时不通的路车轮战，屏上也感觉不到差别 —— 反正现在也是空的。
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan FailedRetryCooldown = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 这张卡上一次「没取到」之后，现在值不值得再问一次。<paramref name="lastFailureUtc"/> 在未来（手改过时钟）
+    /// 也算值得：把它拉回正常次序，别让一张卡永远卡在「刚失败过」里。
+    /// </summary>
+    public static bool WorthRetrying(DateTime lastFailureUtc, DateTime now) =>
+        lastFailureUtc > now || now - lastFailureUtc >= FailedRetryCooldown;
+
+    /// <summary>
     /// 该删哪几张，按「最久没看过的先走」的次序，删到 <paramref name="total"/> 降回
     /// <paramref name="maxBytes"/> 的 <see cref="TrimTo"/> 为止。没超预算就一个都不删。
     /// </summary>

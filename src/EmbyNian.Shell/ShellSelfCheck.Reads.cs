@@ -163,16 +163,37 @@ internal static partial class ShellSelfCheck
         var (bleedOk, bleed) = home.BleedRead();
         var (foldOk, fold) = shell.ProbeHomeFold();
         return (shell.CurrentTag == "home", home.LoadedCount, home.ShelfSummary, home.BannerSummary, typeOk, type,
-            pictureOk, picture, layoutOk, layout, bleedOk, bleed, foldOk, fold, home.SlateRead());
+            pictureOk, picture, layoutOk, layout, bleedOk, bleed, foldOk, fold, Slate(shell));
     }
 
     /// <summary>
-    /// 自检：标题栏那三颗系统按钮的墨。轮播 2026-09-10 框成卡片（四边留间隔、不再铺到窗口顶边）之后，标题栏
-    /// 底下永远是页面自己的底，那一支墨必须一直是主题那支 —— 谁把从前的联动（图铺上去换浅墨）请回来，这一条
-    /// 当场红。
+    /// 自检：页眉（面包屑那一行）的墨色此刻按哪一档在画。只报不判 —— 它是 <see cref="TitleStrip"/> 的读数，
+    /// 不是一条断言；真正会红的是 <see cref="ReadInk"/> 那一条（系统那三颗按钮的墨）。
+    /// <para>
+    /// 这一读从前问的是页头那块牌子（<c>PageSlate.OnScrim</c>），页头 2026-09-11 删掉之后改成问外壳：面包屑那
+    /// 一行自己上不上底色、走哪支墨，全由 <c>ShellPage.PaintTitleInk</c> 按同一档决定。**轮播通栏之后底下是
+    /// 剧照，所以主页该是 <see cref="TitleStrip.OnScrim"/>**；报出 <see cref="TitleStrip.Plain"/> 就说明
+    /// <c>HomePage.PaintInk</c> 那一句没接上（或者带子收起来之后没还回去）。
+    /// </para>
+    /// </summary>
+    private static string Slate(ShellPage shell) => shell.TitleStripNow switch
+    {
+        TitleStrip.OnScrim => "外壳那一行按「浮在图上」那档画（主页通栏后该是这样）",
+        TitleStrip.PagePainted => "外壳那一行按「图还在、页面自己洗成纸色」那档画",
+        _ => "外壳那一行按「页面自己的纸」那档画（主页轮播通栏之后不该是这样）",
+    };
+
+    /// <summary>
+    /// 自检：标题栏那三颗系统按钮的墨。轮播 2026-09-11 起通栏（剧照铺到窗口的顶边，标题栏浮在图上）之后，那一行
+    /// 底下是剧照，所以这一支墨必须是固定的浅墨 —— 谁把联动删了、或者换回主题那支深墨，这一条当场红（深墨画在
+    /// 一张亮剧照上，就是三颗看不见的按钮，其中一颗是关闭）。
     /// <para>
     /// 只问这三颗，不问我们自己那五颗：那五颗在左端，底色由 <c>PaintTitleInk</c> 按侧边栏换，不归这一条管。
-    /// 系统这三颗在右端，只有它们的墨曾跟顶上那一块联动过。
+    /// 系统这三颗在右端，只有它们的墨跟着顶上那一块走。
+    /// </para>
+    /// <para>
+    /// 2026-09-10 到 09-11 之间这条判的正好相反（那时轮播框成卡片、标题栏底下永远是页面底色，所以要求这一支
+    /// 是主题那支）。谁把这一读改回去，等于把已经删掉的卡片版式又请了回来。
     /// </para>
     /// </summary>
     private static (bool Ok, string Detail) ReadInk(ShellPage shell, HostWindow window)
@@ -182,9 +203,9 @@ internal static partial class ShellSelfCheck
         var pale = glyph.R == 0xF3 && glyph.G == 0xF5 && glyph.B == 0xF8;
         var shown = $"#{glyph.A:X2}{glyph.R:X2}{glyph.G:X2}{glyph.B:X2}";
 
-        return (!pale,
-            $"轮播已框成卡片，标题栏底下永远是页面底色，按钮图标 {shown}"
-                + (pale ? " —— 却还是从前图上那支浅墨（联动没删干净）" : "（主题那支）"));
+        return (pale,
+            $"轮播通栏、标题栏浮在剧照上，按钮图标 {shown}"
+                + (pale ? "（图上那支浅墨）" : " —— 却还是主题那支深墨（联动没接上）"));
     }
 
     /// <summary>
@@ -425,16 +446,15 @@ internal static partial class ShellSelfCheck
     }
 
     /// <summary>
-    /// 需求 4 as this page came out: which picture the rule says belongs above the title and which one in the
-    /// top-right corner, whether each of them or only the text title actually drew, where they landed, and
-    /// which of the five artworks the server holds for this item — plus whose picture the band behind them
-    /// stands on（「集页面要用这个剧的背景图或缩略图」）.
+    /// 需求 4 as this page came out: which picture the rule says belongs above the title, whether it or only
+    /// the text title actually drew, where it landed, and which of the five artworks the server holds for this
+    /// item — plus whose picture the band behind them stands on（「集页面要用这个剧的背景图或缩略图」）.
     /// <para>
     /// Read off the elements rather than off the view model, because what is worth testing is the markup: the
     /// text title has to be there on every page (the plate used to replace it, and 「no name on the hero band」
-    /// looks exactly like artwork that never arrived over the network), and each picture has to be in the place
-    /// it was moved to rather than back on the words or on the poster. See <see cref="DetailPage.PlateShape"/>
-    /// and <see cref="DetailPage.CornerShape"/>.
+    /// looks exactly like artwork that never arrived over the network), and the plate has to be in the place
+    /// it was moved to rather than back on the words or on the poster. See <see cref="DetailPage.PlateShape"/>.
+    /// （右上角那张艺术图 2026-09-12 整个退场，这一读数跟着少一格。）
     /// </para>
     /// </summary>
     private static ArtworkRead ReadArtwork(DetailPage page, DetailViewModel model)
@@ -444,7 +464,6 @@ internal static partial class ShellSelfCheck
 
         return new ArtworkRead(
             Mark(page.PlateShape, Wanted(item, ItemArtwork.Plate(item), "名牌")),
-            Mark(page.CornerShape, Wanted(item, ItemArtwork.Corner(item), "角上那张画")),
             page.TitleDrawn,
             item is null ? "没有条目" : ItemArtwork.Kinds(item),
             hero,
@@ -455,8 +474,7 @@ internal static partial class ShellSelfCheck
             (bool Drawn, double Width, double Height, bool Placed, string Where) shape, string wanted) =>
             new(wanted, shape.Drawn, shape.Width, shape.Height, shape.Placed, shape.Where);
 
-        // 「统一改为在剧名上方显示徽标，右上角显示艺术图」：这一句就是规矩给的答案，用词说。两个位置各问各的那一支
-        // （ItemArtwork.Plate 和 ItemArtwork.Corner），因为它们之间不再互相退档。id 和种类一样要紧：集页和季页上
+        // 「统一改为在剧名上方显示徽标」：这一句就是规矩给的答案，用词说。id 和种类一样要紧：集页和季页上
         // 徽标是剧集那一头发的，按这一页自己的 id 去取会取回一个空答案，而「徽标」两个字自己说不出走了哪一条路。
         static string Wanted(EmbyItem? item, ArtworkRef? pick, string what)
         {

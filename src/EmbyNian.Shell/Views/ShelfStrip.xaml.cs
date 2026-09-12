@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.System;
 
 namespace EmbyNian.Shell.Views;
@@ -67,6 +68,9 @@ public sealed partial class ShelfStrip : UserControl
 
     /// <summary>指针在带上。箭头是悬停才出现的，同卡片上那排按钮。</summary>
     private bool _hover;
+    private bool _live;
+    private Storyboard? _prevAnimation;
+    private Storyboard? _nextAnimation;
 
     /// <summary>
     /// 「鼠标移出窗口后不会自动恢复」：指针到底还在不在带上，按 OS 说的算，不光信 <c>PointerExited</c>。
@@ -224,7 +228,9 @@ public sealed partial class ShelfStrip : UserControl
 
         // 没有余量就不去请求。翻不动的时候箭头本来就是收起的，所以这条只在一种情况下管事：自检里这份控件
         // 还没进过树，视口和内容都是 0，而 ScrollTo 要的是模板里那个 ScrollPresenter。
-        if (scrollable > 0) Scroller.ScrollTo(target, Scroller.VerticalOffset);
+        if (scrollable > 0)
+            Scroller.ScrollTo(target, Scroller.VerticalOffset,
+                new ScrollingScrollOptions(HomeMotion.AnimationsEnabled ? ScrollingAnimationMode.Auto : ScrollingAnimationMode.Disabled));
 
         return target;
     }
@@ -294,17 +300,81 @@ public sealed partial class ShelfStrip : UserControl
     {
         var arrows = CardStrip.ArrowsFor(Scroller.HorizontalOffset, Scroller.ScrollableWidth, _hover);
 
-        Prev.Visibility = arrows.Prev ? Visibility.Visible : Visibility.Collapsed;
-        Next.Visibility = arrows.Next ? Visibility.Visible : Visibility.Collapsed;
+        AnimateArrow(Prev, PrevMotion, arrows.Prev);
+        AnimateArrow(Next, NextMotion, arrows.Next);
     }
 
-    /// <summary>箭头的高度：带的高度减掉卡片底下那两行字。</summary>
+    /// <summary>48px 圆形按钮始终放在封面中线，不覆盖标题和续播信息。</summary>
     private void SyncBand()
     {
-        var band = Math.Max(MinBandHeight, ActualHeight - CardSize.Chrome);
+        var band = Math.Max(MinBandHeight, ActualHeight - CardSize.Chrome - Scroller.Padding.Top);
+        var top = Scroller.Padding.Top + (band - MinBandHeight) / 2;
 
-        Prev.Height = band;
-        Next.Height = band;
+        Prev.Height = Next.Height = MinBandHeight;
+        Prev.Margin = new Thickness(8, top, 0, 0);
+        Next.Margin = new Thickness(0, top, 8, 0);
+    }
+
+    private void AnimateArrow(Button button, TranslateTransform shift, bool show)
+    {
+        // ViewChanged 一帧会来多次，相同目标不重复启动动画。
+        if (button.IsHitTestVisible == show) return;
+
+        var fromOpacity = button.Opacity;
+        var fromX = shift.X;
+        var hiddenX = ReferenceEquals(button, Prev) ? -8 : 8;
+        var wasHidden = button.Visibility == Visibility.Collapsed;
+        SetArrowAnimation(button, null);
+        button.IsHitTestVisible = show;
+
+        void Settle()
+        {
+            button.Opacity = show ? 1 : 0;
+            shift.X = show ? 0 : hiddenX;
+            button.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (!_live || XamlRoot is null || !HomeMotion.AnimationsEnabled)
+        {
+            Settle();
+            return;
+        }
+
+        button.Visibility = Visibility.Visible;
+        var board = new Storyboard();
+        Add(button, "Opacity", wasHidden ? 0 : fromOpacity, show ? 1 : 0);
+        Add(shift, "X", wasHidden ? hiddenX : fromX, show ? 0 : hiddenX);
+        SetArrowAnimation(button, board);
+        board.Completed += (_, _) =>
+        {
+            if (!ReferenceEquals(ArrowAnimation(button), board)) return;
+            Settle();
+            SetArrowAnimation(button, null);
+        };
+        board.Begin();
+
+        void Add(DependencyObject target, string path, double from, double to)
+        {
+            var animation = new DoubleAnimation
+            {
+                From = from,
+                To = to,
+                Duration = new Duration(TimeSpan.FromMilliseconds(180)),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(animation, target);
+            Storyboard.SetTargetProperty(animation, path);
+            board.Children.Add(animation);
+        }
+    }
+
+    private Storyboard? ArrowAnimation(Button button) => ReferenceEquals(button, Prev) ? _prevAnimation : _nextAnimation;
+
+    private void SetArrowAnimation(Button button, Storyboard? animation)
+    {
+        ArrowAnimation(button)?.Stop();
+        if (ReferenceEquals(button, Prev)) _prevAnimation = animation;
+        else _nextAnimation = animation;
     }
 
     // ---- 事件 -------------------------------------------------------------------
@@ -401,16 +471,23 @@ public sealed partial class ShelfStrip : UserControl
     /// <summary>页面被移除时清掉虚拟化容器引用，避免下一次挂回页面时把焦点送回旧数据。</summary>
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        _live = false;
         _focusedIndex = -1;
         _pendingFocusedIndex = -1;
         _focusRetryQueued = false;
 
         // 带自己离开了树，指针在不在它上面已经无所谓了 —— 留着的话十赫兹那一拍还会继续问一个量不到的矩形。
         _watch.Leave();
+        SetArrowAnimation(Prev, null);
+        SetArrowAnimation(Next, null);
+        Prev.Opacity = Next.Opacity = 0;
+        Prev.Visibility = Next.Visibility = Visibility.Collapsed;
+        Prev.IsHitTestVisible = Next.IsHitTestVisible = false;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        _live = true;
         // Loaded 可能发生在数据和首轮布局之后；若有排队请求，马上再试一次。
         ApplyPendingFocusedItem();
     }
@@ -437,7 +514,9 @@ public sealed partial class ShelfStrip : UserControl
         var target = CardStrip.RevealFor(
             index, Measure(), ItemSpacing, Scroller.HorizontalOffset, viewport, Scroller.ScrollableWidth);
 
-        if (target >= 0) Scroller.ScrollTo(target, Scroller.VerticalOffset);
+        if (target >= 0)
+            Scroller.ScrollTo(target, Scroller.VerticalOffset,
+                new ScrollingScrollOptions(HomeMotion.AnimationsEnabled ? ScrollingAnimationMode.Auto : ScrollingAnimationMode.Disabled));
     }
 
     /// <summary>

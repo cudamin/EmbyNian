@@ -10,9 +10,10 @@ using Microsoft.UI.Xaml;
 namespace EmbyNian.Shell.ViewModels;
 
 /// <summary>
-/// The home page: 继续观看, 媒体库, 接下来看, 最近添加, 加上每个媒体库自己那一排最近添加 —— each from its own
+/// The home page: 继续观看, 媒体库, 接下来看, 加上每个媒体库自己那一排最近添加 —— each from its own
 /// source. 排哪几排、什么次序、哪几排显示，由设置里那份版面说（<see cref="HomeLayout"/>，「新增页里拖拽决定这些
-/// 列表的顺序，勾选显示或者不勾选取消显示」）。
+/// 列表的顺序，勾选显示或者不勾选取消显示」）。整个服务器的「最近添加」那一排 2026-09-12 去掉了：
+/// 「去掉最近添加，保留最近添加 电视节目、最近添加 电影」。
 /// <para>
 /// The server rows go out together and are reported on separately. They fail independently on a
 /// real server — 接下来看 is empty for an account that only watches films, and some endpoints are
@@ -173,8 +174,8 @@ public sealed partial class HomeViewModel : PageViewModel
             _settings?.Save();
         }
 
-        // 继续观看、媒体库、接下来看走 16:9 的宽卡（那三排讲的是「你在看的那一格画面」）；最近添加和每个媒体库
-        // 自己那一排走海报 —— 一整排新片的封面比一整排剧照读得快。媒体库那一排不上角标：一个库没有「已看」。
+        // 继续观看、媒体库、接下来看走 16:9 的宽卡（那三排讲的是「你在看的那一格画面」）；每个媒体库自己那一排
+        // 走海报 —— 一整排新片的封面比一整排剧照读得快。媒体库那一排不上角标：一个库没有「已看」。
         // 媒体库现在也是横着排的普通一排（2026-09-08「移除轮播图右边的媒体库」之后，右边那一列没了），站在页面
         // 自己的纸上、走主题的墨（OnScrim 默认关）。点它的卡进库 —— 顶部标签栏删掉之后，这一排就是进各媒体库的入口。
         _all = [.. plan.Select(row =>
@@ -210,9 +211,9 @@ public sealed partial class HomeViewModel : PageViewModel
         // a page that takes a second per shelf, and none of them depends on another's answer.
         var resume = FetchAsync("继续观看", (client, ct) => client.GetResumeAsync(ShelfSize, ct), token);
         var nextUp = FetchAsync("接下来看", (client, ct) => client.GetNextUpAsync(ShelfSize, ct), token);
-        var latest = FetchAsync("最近添加", (client, ct) => client.GetLatestAsync(null, LatestSize, ct), token);
 
         // 媒体库那几排各问一次自己那个库的最近添加。只问勾着的那几排 —— 勾掉一排就是连这次请求一起省掉。
+        // 整个服务器的「最近添加」没有请求了：那一排 2026-09-12 退役，轮播的补位也从这几排里来（见 added）。
         var perLibrary = new Dictionary<string, Task<List<EmbyItem>>>(StringComparer.Ordinal);
         foreach (var (row, _) in _all)
         {
@@ -222,17 +223,16 @@ public sealed partial class HomeViewModel : PageViewModel
                 row.Title, (client, ct) => client.GetLatestAsync(id, LatestSize, ct), token);
         }
 
-        await Task.WhenAll(perLibrary.Values.Append(resume).Append(nextUp).Append(latest)).ConfigureAwait(true);
+        await Task.WhenAll(perLibrary.Values.Append(resume).Append(nextUp)).ConfigureAwait(true);
 
         if (!IsCurrent(token)) return;
 
-        // 最近添加 spans every library this account has, 继续观看 and 接下来看 every item it has touched —
-        // music included in all three. This app has no music face, so a track card would open onto
-        // nothing; the rows are filtered here rather than by asking the server, because Emby's own
-        // 「latest」 endpoint takes one parent id and these three take none.
+        // 继续观看 and 接下来看 span every item the account has touched — music included. This app has no
+        // music face, so a track card would open onto nothing; the rows are filtered here rather than by
+        // asking the server, because Emby's own endpoints for these two take no type filter. Each library
+        // row's own latest list is filtered the same way, at Items below.
         var resumed = WithoutMusic(resume.Result);
         var next = WithoutMusic(nextUp.Result);
-        var added = WithoutMusic(latest.Result);
 
         // 一排装什么由它那把钥匙说，不再是「数组第几个」—— 次序现在是用户拖出来的，位置说明不了任何事。
         // 轮播不走这个局部函数：它只认继续观看和最近添加两排，两个具名参数直接交过去（见下面 Slides 那一句）。
@@ -241,9 +241,16 @@ public sealed partial class HomeViewModel : PageViewModel
             HomeLayout.Resume => resumed,
             HomeLayout.Libraries => _libraryViews,
             HomeLayout.NextUp => next,
-            HomeLayout.Latest => added,
             _ => perLibrary.TryGetValue(key, out var library) ? WithoutMusic(library.Result) : []
         };
+
+        // 轮播的补位（<see cref="HomeCarousel"/>）打哪来：整服那一排没了，就用各媒体库自己那排最近添加按版面
+        // 次序连成的一串 ——「有继续观看就用继续观看，没有或者继续观看不够就用最近添加」（用户的话，2026-09-05）
+        // 说的还是它，只是按库切开。勾掉的那排不参加：它连请求都没发（见上面 perLibrary），这份补位照旧不多花
+        // 一次往返。
+        List<EmbyItem> added = [.. _all
+            .Where(entry => HomeLayout.LibraryId(entry.Row.Key) is not null)
+            .SelectMany(entry => Items(entry.Row.Key))];
 
         foreach (var (row, shelf) in _all)
         {

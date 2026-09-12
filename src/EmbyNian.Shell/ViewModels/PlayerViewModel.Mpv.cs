@@ -158,12 +158,12 @@ public sealed partial class PlayerViewModel
     // ---- 着色器与画面菜单 ---------------------------------------------------------
 
     /// <summary>
-    /// Works out both plans 任务书 2.4 asks for — one for the window as it stands, one for this monitor at full
-    /// screen — and returns the output size the launch should be planned against. Called at every playback
+    /// Works out the one shader plan this playback runs — always the full-screen tier, computed for this
+    /// monitor — and returns the output size the launch should be planned against. Called at every playback
     /// start and again if the window lands on another monitor.
     /// <para>
-    /// Both are computed even though only one is used, because the point of the pair is that pressing F later
-    /// costs no decision at all. They are cheap: two calls of one pure function over five integers.
+    /// 档位固定用全屏那套（他的拍板，2026-09-11）：ArtCNN 这类放大器在核显上每个尺寸的冷编译要数秒，
+    /// 随全屏实时换链，画面就停在旧尺寸贴在左上角。链从开播起不变，进退全屏只剩改尺寸本身。
     /// </para>
     /// </summary>
     private (int Width, int Height) PrepareShaderPlans(EmbyItem item, MediaSource source, EmbyItem? parent)
@@ -172,20 +172,18 @@ public sealed partial class PlayerViewModel
         _shaderPinned = false;
         _surface = Surface();
 
-        _windowedPlan = _shaders.Resolve(item, source, parent, (_surface.Width, _surface.Height));
-        _fullscreenPlan = _shaders.Resolve(item, source, parent, _surface.Monitor);
+        _shaderPlan = _shaders.Resolve(item, source, parent, _surface.Monitor);
 
-        // What the planner will pick is the 档位 the ⚙ menu opens on, so it shows the startup decision rather
+        // What the planner picked is the 档位 the ⚙ menu opens on, so it shows the startup decision rather
         // than looking as though nothing had been applied.
-        var plan = _surface.Fullscreen ? _fullscreenPlan : _windowedPlan;
-        ActiveShader = plan.Group;
+        ActiveShader = _shaderPlan.Group;
 
         var video = source.PrimaryVideoStream;
         _outputWatch = new OutputWatch(
             video?.Width ?? 0,
             video?.Height ?? 0,
             _surface,
-            plan.Measure.Tier);
+            _shaderPlan.Measure.Tier);
 
         _launchOutput = _surface.Active;
         return _launchOutput;
@@ -226,13 +224,11 @@ public sealed partial class PlayerViewModel
         var surface = measure();
         var moved = surface.Monitor != _surface.Monitor;
 
-        // 换显示器：两套方案都重算. Done here rather than off the verdict because two monitors of the same size
-        // change nothing about the factor — the 判定 would report nothing at all, while the full-screen plan
-        // it prepared is now for the wrong screen.
+        // 换显示器：方案按新显示器重算. Done here rather than off the verdict because the plan is keyed to
+        // the monitor, and only a monitor move changes it.
         if (moved)
         {
-            _windowedPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, (surface.Width, surface.Height));
-            _fullscreenPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, surface.Monitor);
+            _shaderPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, surface.Monitor);
         }
 
         _surface = surface;
@@ -276,25 +272,13 @@ public sealed partial class PlayerViewModel
             return;
         }
 
-        // 进 / 退全屏、换显示器：直接换成预备好的那一套，不重新判定、不等防抖.
+        // 进 / 退全屏、换显示器：换显示器那一路已经把方案重算过了，这里换上的永远是同一个
+        // 全屏档方案 —— Switch 自己发现档位没变会直接说「档位没变」，链一动不动。
         if (verdict.Discrete)
         {
-            Switch(_surface.Fullscreen ? _fullscreenPlan : _windowedPlan, because);
+            Switch(_shaderPlan, because);
             return;
         }
-
-        // A settled resize that crossed a boundary. This is the one case that has to work the chain out now:
-        // the size is new, so no prepared plan describes it.
-        if (_shaderContext is not { } context) return;
-
-        _windowedPlan = _shaders.Resolve(
-            context.Item,
-            context.Source,
-            context.Parent,
-            (verdict.Width, verdict.Height),
-            _outputWatch?.Tier);
-
-        Switch(_windowedPlan, because);
     }
 
     /// <summary>Applies a prepared plan to the film that is playing, and says so in the log rather than on screen.</summary>

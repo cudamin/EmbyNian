@@ -20,36 +20,62 @@ namespace EmbyNian.Emby;
 public static class DetailHero
 {
     /// <summary>
-    /// 没有剧照的条目上这一格有多高。这时候它是一格底色加一层罩子，只要垫住海报、片名和那排键就够，比有图
-    /// 的那一档再矮一点：没有画面可看，多留的每一像素都是空白。
+    /// 没有剧照的条目上这一格有多高：一格底色加一层罩子，垫住海报、片名和那排键。
+    /// <para>
+    /// 和 <see cref="ArtHeight"/> 同值（<see cref="Height"/> 上面那段说明为什么留着两个名字）。
+    /// </para>
     /// </summary>
-    public const double PlainHeight = 380;
+    public const double PlainHeight = 412;
 
     /// <summary>
-    /// 有剧照时这一格有多高。数是内容给的，不是窗口给的：海报 300 高、上下两道边 28 和 64，加上字块和那排
-    /// 键，440 上下才站得开，短一格就会把播放键挤出带子；460 在那之上留一线干净的画面。
+    /// 有剧照时这一格有多高。数是内容给的，不是窗口给的：海报 300 高、上下两道边 28 和 24、那排键在自己
+    /// 一行上另占 60（44 的键加头上 16），加起来 412 —— 内容正好把这一格填满，一像素富余也不留。
     /// <para>
     /// 写死而不是跟着视口走，就是「一大片空白」那句话的修法：跟着视口走的那一版在 1440 高的窗口上要留出
     /// 一屏的画面，而画面上只有角上一枚记号。
     /// </para>
     /// <para>
-    /// 「统一改为在剧名上方显示徽标」之后那一叠字里多了一枚徽标（最高 56，连间距 66），这个数没跟着改，因为
-    /// 不用改：这一格里让给内容的是 460 − 28 − 64 = 368，而海报那 300 仍然是两者里高的那个（那一叠连徽标
-    /// 算下来两百三上下，片名折两行也才两百六）。<em>集页不一样</em> —— 那一格的高本来就按那一叠实测给
-    /// （<see cref="EpisodeHeight"/>），所以它会跟着徽标长高六十几像素，这是诚实的：屏上真的多了一样东西。
+    /// 「统一改为在剧名上方显示徽标」之后那一叠字里多了一枚徽标（最高 56，连间距 66），这一格装得下：海报那
+    /// 300 仍是两者里高的那个（那一叠连徽标算下来两百三上下，片名折两行也才两百六，都比海报矮）。
+    /// <em>集页不一样</em> —— 那一格的高本来就按那一叠实测给（<see cref="EpisodeHeight"/>），屏上真的多了
+    /// 一样东西，它就真的长高，这是诚实的。
+    /// </para>
+    /// <para>
+    /// 2026-09-12 从 460 压到 380 —— 「剧页面和电影页面上方空位太多了，把下面的组件往上移动一些」：460 的
+    /// 年代海报头顶上留着 108 的空画面，红框圈的就是它。同一天那排键从片名那一栏里搬出来、自己占一行（他：
+    /// 「继续播放 从头开始还有后面的那些图标单独一行」），这一格跟着长回 412 —— 长的这 60 就是那排键那一行，
+    /// 海报那一栏的 300 一个像素没动。两档仍然同高，<see cref="Height"/> 的判据留着，是因为按「有没有图」
+    /// 分档的版面值不止带高一处（背景层、尾部、纸面下限都跟它走）。
+    /// </para>
+    /// <para>
+    /// 这一格里的内容靠下站（集页的宽版式除外，那一页靠上，见 <c>DetailViewModel.HeroContentAlignment</c>）：
+    /// 写死的带高比内容高一点，那点富余留在这三页的头顶上正是原来那个样子，海报和那一栏字的下沿对齐。
     /// </para>
     /// </summary>
-    public const double ArtHeight = 460;
+    public const double ArtHeight = 412;
 
     /// <summary>
-    /// 这一格的高：有剧照 <see cref="ArtHeight"/>，没有就退回 <see cref="PlainHeight"/>。
+    /// 宽版式那排键底下的断点进度那一行连行距占多高：条和「剩余 x 分钟」一行 16（12 号字的行高，条自己
+    /// 定死 4 高，行听字的），头上再隔 12 的行距 —— 共 28。
+    /// <para>
+    /// 只给「有断点」的条目加（<c>DetailViewModel.HeroLayoutHeight</c>）：412 那一档是按没有这一行的内容
+    /// 量的，进度行一露头带子就得长这么多，不然底对齐的那一叠从带子底下冒出去。没有断点时这一行整个
+    /// 收着，一个像素都不占。集页不在此列 —— 那一格格的高按内容实测给（<see cref="EpisodeHeight"/>），
+    /// 这一行的账已经走在实测里。
+    /// </para>
+    /// </summary>
+    public const double ProgressRoom = 28;
+
+    /// <summary>
+    /// 这一格的高：有剧照、没有剧照两档同值（见 <see cref="ArtHeight"/> 那段「并轨」）；判据继续传，分档
+    /// 落在带高之外的版面值上。
     /// </summary>
     /// <param name="artwork">
     /// 服务器上有没有这一张图 —— <see cref="ItemArtwork.Hero"/>，不是「位图解出来了没有」。
     /// <para>
-    /// 这两句话差着一次网络往返，而这一格的高按它分两档，所以拿后一句当判据就是「先按 380 布一遍，图到了再
-    /// 按 460 布第二遍」 —— 屏上看着就是「点击主页封面后窗口会闪一下，然后才会进入页面」。列表接口回来的条目
-    /// 已经带着 ImageTags，所以前一句在导航那一刻就答得出，第一帧的版面就是最后的版面。
+    /// 这两句话差着一次网络往返，而版面按它分档（背景层、尾部、纸面下限都跟着翻），所以拿后一句当判据就是
+    /// 「先按没有图布一遍，图到了再翻一遍」 —— 屏上看着就是「点击主页封面后窗口会闪一下，然后才会进入页面」。
+    /// 列表接口回来的条目已经带着 ImageTags，所以前一句在导航那一刻就答得出，第一帧的版面就是最后的版面。
     /// </para>
     /// </param>
     public static double Height(bool artwork) => artwork ? ArtHeight : PlainHeight;
@@ -59,24 +85,49 @@ public static class DetailHero
     /// 一张 16:9 剧照加上下那两道留白就是这个量级，所以第一帧按它布出来的版面和量完之后只差几个像素，屏上看不
     /// 出挪动 —— 反过来拿 <see cref="ArtHeight"/> 兜底的那一版每进一次集页都要从 460 缩到实测值，那是一次看得
     /// 见的跳。比这个数再矮也不是「紧凑」而是「什么都放不下」。
-    /// <para>
-    /// 它同时关着「右上角那张艺术图能画多高」—— 「右上角显示艺术图」。那张图顶对齐摆在这一格里，上限 320×180
-    /// （<c>DetailPage.xaml</c> 里的 <c>CornerArt</c>），而最矮的一档带子减掉上下那两道留白（28 和 16）只剩 156，
-    /// 比 180 矮 —— 所以在那一档上它按 <c>Uniform</c> 自己缩到 156 高（277 宽），<em>不会顶出带子</em>：带子的高
-    /// 只按海报和那一叠字键算（<c>DetailViewModel.HeroRoom</c>），从来不看这一张，而实测下来集页那一格是 240 上下，
-    /// 缩的只是碰到下限那种退化情形。上限从 146 抬到 180 是用户要的（「再把艺术图调大一些」）。
-    /// </para>
     /// </summary>
     public const double EpisodeFloor = 200;
 
     /// <summary>
-    /// 集页那一格的高：由它里面那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测给出。
+    /// 右上角那张艺术图最宽能画到多少 —— 「给集页面右上角添加艺术图」。
     /// <para>
-    /// 规矩和别的页面是同一条 —— 高由内容定、不跟窗口走（<see cref="ArtHeight"/> 上那一段），只是这一页量在
-    /// 运行时。为什么不能跟着用 460：单集配的是一张 16:9 剧照，比 2:3 的海报矮一大截，那一叠字也比电影页少
-    /// 两行，而这一叠是底对齐的 —— 给它 460 就等于在它头上留出两百来像素只有画面的地方，「集拉大窗口后会导致
-    /// 左上角空空的，画面不协调，电影那边处理的就很好」说的正是那一块。电影页之所以「处理的很好」，恰恰因为
-    /// 460 就是那一页量出来的内容高。
+    /// 320 → 480 是用户第二次要的「放大集页面右侧的艺术图」（第一次是 146 → 180，配的是「再把艺术图调大一些」）。
+    /// 两个数同时是这一格的解码宽度（<c>DetailViewModel.CornerDecodeWidth</c>）：画出来的宽和取图时用的宽一旦
+    /// 分岔，这张图要么糊要么白占内存。
+    /// </para>
+    /// <para>
+    /// 它和 <see cref="CornerHeight"/> 一起定死这一格的形状，所以这一格的<em>高</em>是可算的、不跟着版面走 ——
+    /// 这一栏的宽会挤到中间那一栏（片名折行的位置随之变），而一叠字的实测高又回头喂带高（<see
+    /// cref="EpisodeHeight"/>）；让这一格跟着实测走，两个数就互相追着改，屏上是这张画缓缓地缩（同
+    /// <c>DetailViewModel.HeroLayoutWidth</c> 上那段「不能读回缩放后的内容高度」）。
+    /// </para>
+    /// </summary>
+    public const double CornerWidth = 480;
+
+    /// <summary>
+    /// 右上角那张艺术图最高能画到多少 —— 同 <see cref="CornerWidth"/>，480×270 正好一格 16:9。
+    /// <para>
+    /// 这一格<b>算进集页的带高</b>（<c>DetailViewModel.HeroRoom</c>）：艺术图顶对齐摆在这一格里，带子矮过
+    /// 它就是一截画压在底下的音轨那一行上。从前 180 比那一叠字键的实测高（两百六七）矮，压不着；抬到 270
+    /// 之后就压得着了。
+    /// </para>
+    /// </summary>
+    public const double CornerHeight = 270;
+
+    /// <summary>
+    /// 没有画面可铺时那一格的高：由它里面那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测给出。
+    /// 两处走它 —— 集页的宽版式，和<em>没有背景图可铺</em>的紧凑版式。
+    /// <para>
+    /// 有了图中那种画面可铺的档案，这一支让位给 <see cref="CompactHeight"/>（画面条和这一叠取大）；没有的
+    /// 那一档从前写死 <see cref="PlainHeight"/>，而屏上就是「窄窗口时候上方有大片空位」（2026-09-12）：底对齐
+    /// 的那一叠头上空着一百多像素，什么都没有。现在两处同一个答案 —— 带子不多不少就是那一叠要的高。
+    /// </para>
+    /// <para>
+    /// 规矩和别的页面是同一条 —— 高由内容定、不跟窗口走（<see cref="ArtHeight"/> 上那一段），只是集页量在
+    /// 运行时。为什么不能跟着用电影页那一档：单集配的是一张 16:9 剧照，比 2:3 的海报矮一大截，那一叠字也比
+    /// 电影页少两行，而这一叠是底对齐的 —— 给它整档带高就等于在它头上留出上百像素只有画面的地方，「集拉大
+    /// 窗口后会导致左上角空空的，画面不协调，电影那边处理的就很好」说的正是那一块。电影页之所以「处理的很好」，
+    /// 恰恰因为 412 就是按那一页的内容量的（装下海报 300、那排键那一行 60 和两道边）。
     /// </para>
     /// <para>
     /// 上一版是「从视口里减掉底下那一段」：窗口越高带子越高，一直到 460 封顶，于是那块空白跟着窗口一起长 ——
@@ -91,6 +142,59 @@ public static class DetailHero
     /// 那一版会让那一叠从带子里溢出去，压在底下的音轨那一行上。0 是「还没量」，按 <see cref="EpisodeFloor"/> 给。
     /// </param>
     public static double EpisodeHeight(double heroRoom) => Math.Max(EpisodeFloor, Math.Round(heroRoom));
+
+    /// <summary>
+    /// 封面随窗口加宽的那一档斜率：参考宽以上每宽一像素，封面宽多少。旧规矩是等比
+    /// （<paramref name="baseWidth"/> ÷ 参考宽 ≈ 0.16），2026-09-12 他看完实拍改口「拉窄窗口的时候封面不要
+    /// 缩小，拉长窗口的时候封面要稍微放大」—— 缩小那一半整个去掉，放大这一半放缓到 0.1。真正的上限不在这
+    /// 个数上：FitStill 里那道「不超过旁边文字栏」的高上限（2:3 的封面高得比宽快）才是它在实际页面上的顶。
+    /// </summary>
+    public const double StillGrowPerPixel = 0.1;
+
+    /// <summary>
+    /// 集页左上角那张封面跟多宽的窗口走 —— 2026-09-12 他两句话定的形状：「集页面左上角的封面要跟随窗口的宽度
+    /// 放大和缩小」，同日看完实拍又改成「拉窄窗口的时候封面不要缩小，拉长窗口的时候封面要稍微放大，适配右边
+    /// 组件的大小」。
+    /// <para>
+    /// 于是分两段：参考宽（1280，<c>DetailViewModel.HeroReferenceWidth</c>）以下封面不缩，<paramref
+    /// name="baseWidth"/> 到底 —— 从前等比缩小的那一半（1024 上八成）整个去掉；参考宽以上每像素长
+    /// <see cref="StillGrowPerPixel"/>，比旧的等比斜率慢一截 —— 「稍微放大」。高由 <see cref="StillBox"/> 按位图
+    /// 自己的形状配，实际画多大还过 FitStill 那道「不超过旁边文字栏」的高上限。
+    /// </para>
+    /// <para>
+    /// 紧凑版式不在此列：那一档按参考图是贴着页宽的大封面，照旧用 <paramref name="baseWidth"/>。页面还没量到
+    /// 宽（0，第一次布局之前）也照旧用基宽，等量到了再来。
+    /// </para>
+    /// </summary>
+    /// <param name="pageWidth">这一页看得见的那一段有多宽。</param>
+    /// <param name="baseWidth">参考宽上这一格画多宽。</param>
+    /// <param name="referenceWidth">版式排内容的参考宽。</param>
+    public static double StillWidth(double pageWidth, double baseWidth, double referenceWidth)
+    {
+        if (baseWidth <= 0 || referenceWidth <= 0 || pageWidth <= 0) return baseWidth;
+        if (pageWidth <= referenceWidth) return baseWidth;
+
+        return baseWidth + (pageWidth - referenceWidth) * StillGrowPerPixel;
+    }
+
+    /// <summary>
+    /// 右上角那张艺术图这一次最宽能画多少 —— 题栏保底。
+    /// <para>
+    /// 角图占的是第三栏（Auto），中间题栏拿剩下的；窗口窄下来的时候它必须让位，不然题栏会被挤得放不下一行
+    /// 片名。保底的数是参考宽（1280）上题栏本来就有的那一份：1280 − 内边距 96（板沿 28 加板内 20，两道）−
+    /// 封面 352（那一档的 <see cref="StillWidth"/>）− 两道栏距 44 − 角图 <see cref="CornerWidth"/> ＝ 308。
+    /// 参考宽以上这道钳制不咬合（角图照旧 480 封顶、题栏只宽不窄），以下角图线性让位 —— 2026-09-12 他那句
+    /// 「徽标跟艺术图不要动」说的是位置和画法不动，不是让它在窄窗口上把片名挤没。
+    /// </para>
+    /// </summary>
+    /// <param name="pageWidth">这一页看得见的那一段有多宽。</param>
+    /// <param name="stillWidth">封面这一次画多宽（<see cref="StillWidth"/>）。</param>
+    public static double CornerBoxWidth(double pageWidth, double stillWidth)
+    {
+        const double insets = 96, spacings = 44, minTitle = 308;
+
+        return Math.Clamp(pageWidth - insets - stillWidth - spacings - minTitle, 0, CornerWidth);
+    }
 
     /// <summary>
     /// 片名左边那张海报（集页上是剧照）真正画多大 —— 「海报下方会被裁切，要能看到完整的海报」。
@@ -133,30 +237,124 @@ public static class DetailHero
     }
 
     /// <summary>
-    /// 右上角那张艺术图这一次有没有地方站 —— 「窗口缩小到一定程度自动隐藏」。
+    /// 头图左边那张封面（<see cref="StillBox"/> 画的那张）这一档版面要不要画 —— 2026-09-12 一天四句，
+    /// 最后落在「紧凑版式（<paramref name="compact"/>）下剧页和电影页不画」：早上他问「剧页面和电影页面的
+    /// 封面怎么没了？」，把「紧凑版式不画海报」的旧规矩整个作废；中午「剧页面和集页面窄窗口下不用显示封面」
+    /// 点走剧、集两页；傍晚一句「集页面的封面留着」又把集页还了回来；再一句「电影页面窄窗口也要隐藏左上角的
+    /// 封面」把电影页收了回去。最终收掉的是剧、电影两页那张 —— 剧页那张，画面条铺的本来就是同一部剧的图，
+    /// 单列里它是纯占地方；季、集两页照旧画。
     /// <para>
-    /// 那一张占带子里的一整栏（<c>DetailPage.CornerArt</c>），栏宽由图自己给，所以它宽多少片名那一栏就窄多少。
-    /// 图放大之后这件事咬人了：窄窗口上片名先折成两三行，再窄一点就是「攻壳」两个字一行 —— 而它只是一张装饰，
-    /// 片名不是。所以窄到一定程度就整个不画，那一栏退回 0 宽，片名把地方全占回来。
+    /// 页面按条目类型认（<paramref name="type"/>，Emby 服务器的 <c>Type</c> 原文）；类型还没到手
+    /// （<c>null</c>，这一拍连页宽都还是 0，紧凑根本没成立）当要画。图解出来没有不在这句话的范围里（那是
+    /// <c>DetailViewModel.StillVisibility</c> 的另一半），这里只回答「这一档版面要不要它」。取图那一头也不看它
+    /// （<c>StillDecodeWidth</c> 照旧取）：窗口从窄拉宽跨过 <see cref="CompactFloor"/> 的那一下答案从不要翻成要，
+    /// 图已经在手，封面就地回来，不用再等一趟往返。
     /// </para>
+    /// </summary>
+    public static bool ShowsStill(bool compact, string? type) =>
+        !(compact && type is EmbyItemType.Series or EmbyItemType.Movie);
+
+    /// <summary>
+    /// 这一页这次走哪套版式 —— 页面窄过 <see cref="CompactFloor"/> 就换成单列的紧凑版式（参考图上那种：等比的
+    /// 画面条占满页宽，片名压在画面下沿，文件选项、播放、进度和带字的那排操作排在画面底下的暗区里，一列到底，
+    /// 不再缩小整个桌面版式）。
     /// <para>
-    /// 判的是<em>这一页有多宽</em>而不是窗口有多宽：侧边栏展开的时候页面会窄掉两百来像素，而挤着片名的正是页面
-    /// 这一头。<see cref="CornerFloor"/> 那个数怎么来的写在它自己身上。
+    /// 「缩小到一定程度后 UI 参考手机版式切换」的那条线。桌面版式在 <see cref="CompactFloor"/> 以上照旧：
+    /// 组件不缩小，靠行装不下就换行把窄页面排开（2026-09-12「收窄窗口后组件要自动换行」—— 从前 1024 到 1280
+    /// 那一段整体等比缩小，缩到八成的组件又小又松，换行把它替了）。0 是「还没量」（第一次布局之前），那一档照走
+    /// 桌面版式 —— 先按宽的布一遍、量出来再换，就是「点击主页封面后窗口会闪一下」那一类跳。
     /// </para>
     /// </summary>
     /// <param name="pageWidth">这一页看得见的那一段有多宽，由页面量出来交进来（<c>DetailPage.OnBodySizeChanged</c>）。</param>
-    public static bool CornerFits(double pageWidth) => pageWidth >= CornerFloor;
+    public static bool IsCompact(double pageWidth) => pageWidth > 0 && pageWidth < CompactFloor;
 
     /// <summary>
-    /// <see cref="CornerFits"/> 那条线：页面窄过这个数就不画右上角那张画了。
+    /// <see cref="IsCompact"/> 那条线：页面窄过这个数就换紧凑版式。
     /// <para>
-    /// 这个数是从「片名还剩多宽」倒推的：带子左右各让 60，海报那一栏最宽 210，两道栏距 22，右边那张画最宽 320
-    /// （<c>DetailPage.CornerArt</c> 上那个上限），于是片名那一栏 = 页宽 − 434。要它至少剩 420（大号片名折两行
-    /// 还读得开）就得页宽 ≥ 854 + 320 ≈ 1120。窗口最窄能拖到 900（<c>HostWindow.MinimumWidth</c>），侧边栏一展开
-    /// 页面还要再窄两百来 —— 所以这条线是真能碰到的，不是写着好看。
+    /// 1024，不是更早那一版的 720 —— 「我是说窄窗口下组件不够紧凑」（2026-09-12，配图是 850 宽的窗口）：
+    /// 720 到 1024 那一段从前归「桌面版式整体缩小」，缩到六七成的组件又小又松，正是他说的那副样子。单列版式
+    /// 在这个宽度上摆得开（参考图本来就是手机版式，平板宽度只是它更宽的样子），所以线抬到 1024 —— 桌面缩小
+    /// 只留给 1024 到 1280 那一段缩到八成以上还撑得开的宽度，再往上就是原版。
     /// </para>
     /// </summary>
-    public const double CornerFloor = 1120;
+    public const double CompactFloor = 1024;
+
+    /// <summary>
+    /// 紧凑版式里头图那一格有多高，分两档 —— 判据是「有没有画面可铺」（<paramref name="artwork"/>）。
+    /// <list type="bullet">
+    /// <item>有：画面条按「页宽 × 高宽比」给（宽 600 的页面上一张 16:9 就是 337 高），但至少要站得下片名那一叠
+    /// （<paramref name="contentRoom"/>，实测进来的）：比画面条还高的那一叠在底对齐的摆法里会从带子里冒出去。
+    /// 画面条比那一叠矮的时候带子就地长高，背景那张图铺满带子（<see cref="PictureHeight"/> 的带子那一档），
+    /// 画面上下多裁一点 —— 挤的是画面，不是字。</item>
+    /// <item>没有：带子就是那一叠要的高（<see cref="EpisodeHeight"/>），一像素不多。集页在紧凑版式下永远到这一
+    /// 档（那一页不铺背景图，见 <c>DetailViewModel.SpreadsBackdrop</c>），从前它写死
+    /// <see cref="PlainHeight"/>，而屏上就是「窄窗口时候上方有大片空位」（2026-09-12）：底对齐的那一叠头上空着
+    /// 一百多像素。画面条和那一叠取大在有画面的时候是对的（高出来的是画面），没有画面的时候就是把空气算成了
+    /// 内容。</item>
+    /// </list>
+    /// </summary>
+    /// <param name="pageWidth">这一页有多宽。</param>
+    /// <param name="heightRatio">背景那张位图的高 ÷ 宽（16:9 是 0.5625），解出来后由视图模型送来。</param>
+    /// <param name="contentRoom">片名那一叠连海报、带子上下留白实测要占多高（<c>DetailViewModel.HeroRoom</c>）。</param>
+    /// <param name="artwork">
+    /// 这一页背后有没有那张图 —— 同 <see cref="BackdropShown"/> 那一头的判据（<c>DetailViewModel.HeroArt</c>），
+    /// 不是「位图解出来了没有」。
+    /// </param>
+    public static double CompactHeight(double pageWidth, double heightRatio, double contentRoom, bool artwork)
+    {
+        if (!artwork) return EpisodeHeight(contentRoom);
+
+        var strip = SaneRatio(heightRatio) ? Math.Max(pageWidth, 0) * heightRatio : 0;
+        return Math.Max(Math.Max(strip, contentRoom), 0);
+    }
+
+    /// <summary>
+    /// 背景那一张这一次画多高 —— 「窗口收窄时背景图要等比例缩放」。
+    /// <para>
+    /// 从前它是一支铺满整层的 <c>ImageBrush</c>（UniformToFill，钉在视口上）：窗口越窄，按高撑满的那张被裁得
+    /// 越狠，图「人不动、衣裳在缩」—— 屏上是越窄越放大。现在它画在一个跟宽走的高度的盒子里：宽的窗口上这个
+    /// 高被视口封顶，照旧铺满第一屏；窄到「页宽 × 图的高宽比」够不着视口之后，盒高就跟着页宽走 —— 整张图等比
+    /// 缩小、一像素不裁，盒子底下多出来的那一段交给压暗的尾部，参考图上正是这个样子。
+    /// </para>
+    /// <para>
+    /// 至少垫住带子（<paramref name="bandHeight"/>）：罩子画在带子里，画面条比带子矮的时候罩子的下半就站在
+    /// 空底上 —— 至少垫住它，挤的才是画面而不是字。视口还没量到（0，第一次布局之前）不封顶，先按等比那条给。
+    /// </para>
+    /// </summary>
+    /// <param name="pageWidth">这一页有多宽。</param>
+    /// <param name="heightRatio">背景那张位图的高 ÷ 宽；不成话（没解出来、或是 0）就按 16:9（0.5625）兜底。</param>
+    /// <param name="viewport">页面可视区的高；0 是「还没量」。</param>
+    /// <param name="bandHeight">头图那一格这一次的高 —— 画面条的下限。</param>
+    public static double PictureHeight(double pageWidth, double heightRatio, double viewport, double bandHeight)
+    {
+        var ratio = SaneRatio(heightRatio) ? heightRatio : 9d / 16;
+        var height = Math.Max(Math.Max(bandHeight, Math.Max(pageWidth, 0) * ratio), 0);
+        return viewport > 0 ? Math.Min(viewport, height) : height;
+    }
+
+    private static bool SaneRatio(double value) => double.IsFinite(value) && value > 0;
+
+    /// <summary>
+    /// 背景那一张这次被裁掉多少 —— 0..1，只在「铺满」那一档非零（<see cref="PictureHeight"/> 被视口封顶、
+    /// 图按宽撑满、底部被裁掉的那一档），画面条那一档整张图都看得见，给 0。
+    /// <para>
+    /// 「当窗口拉宽导致背景图下方被裁切的时候，触发背景图模糊，裁切越多越模糊」（2026-09-12）的自变量：
+    /// 拉宽让「页宽 × 高宽比」长过视口，图按宽撑满、顶部对齐，裁掉的全在下方；裁掉的占比就是 1 − 画面条高 ÷
+    /// 视口。它喂 <see cref="BackdropBlur.CropRadius"/>（基础半径 + 占比 × 加量，量化成档）。
+    /// </para>
+    /// </summary>
+    /// <param name="pageWidth">这一页有多宽。</param>
+    /// <param name="heightRatio">背景那张位图的高 ÷ 宽，同 <see cref="PictureHeight"/>。</param>
+    /// <param name="viewport">页面可视区的高；0 是「还没量」。</param>
+    public static double PictureCrop(double pageWidth, double heightRatio, double viewport)
+    {
+        if (viewport <= 0) return 0;
+
+        var ratio = SaneRatio(heightRatio) ? heightRatio : 9d / 16;
+        var natural = Math.Max(pageWidth, 0) * ratio;
+
+        return natural <= viewport ? 0 : Math.Clamp(1 - viewport / natural, 0, 1);
+    }
 
     /// <summary>
     /// 头图下面那整段至少要多高 —— 「滑到下面不用显示背景了，五颜六色的太丑了」。
@@ -180,8 +378,16 @@ public static class DetailHero
     public static double BodyHeight(double viewport, double heroHeight) =>
         viewport <= 0 ? 0 : Math.Max(0, Math.Round(viewport) - heroHeight);
 
+    /// <inheritdoc cref="TailHeight(double, double, bool, double, double)"/>
+    /// <remarks>
+    /// 画面铺满第一屏的那一档（<paramref name="pictureBottom"/> = <paramref name="viewport"/>）：老规矩原样，
+    /// 旧调用和老测试走的都是它。
+    /// </remarks>
+    public static double TailHeight(double viewport, double heroHeight, bool artwork, double paperLine) =>
+        TailHeight(viewport, heroHeight, artwork, paperLine, viewport);
+
     /// <summary>
-    /// 头图底下那段压暗的尾部至少要多高 —— 「下方的媒体信息等，要往下滑才能看到」加上「拉大或拉小窗口会导致
+    /// 头图底下那段压暗的尾部至多撑多高 —— 「下方的媒体信息等，要往下滑才能看到」加上「拉大或拉小窗口会导致
     /// 背景图被遮挡」。
     /// <para>
     /// 两句话是同一处：正文那张纸不透明，它的上沿一落进第一屏就是一块盖在剧照上的板子，而它从前落在哪儿只由
@@ -196,6 +402,12 @@ public static class DetailHero
     /// 所以第一屏下半截仍然透着剧照，不是一块黑。
     /// </para>
     /// <para>
+    /// 「透着剧照」以画面的下沿为界（<see cref="PictureHeight"/>）：背景改成等比缩放之后，画面条底下已经没有
+    /// 画面，尾部再往下撑就只是一段空黑 —— 中间一大块空位、纸面和货架被压到老下面去（2026-09-12 他指着的
+    /// 那张截图）。所以这一版多了第三道上限：尾部至多撑到画面的下沿，底下的空当交给正文的内容自动补上。画面
+    /// 铺满第一屏的那一档这道上限就是第一屏本身，版面一像素不动（无参那个重载就是它，老测试走的也是它）。
+    /// </para>
+    /// <para>
     /// 没有剧照的条目上给 0，那一档照旧走 <see cref="BodyHeight"/>：背后没有图可露，撑起来的只是一段空黑，而
     /// 媒体信息 却要多滚一屏才看得到。
     /// </para>
@@ -204,12 +416,12 @@ public static class DetailHero
     /// 显示下方的黑边，小于1600*900时海报占满整个窗口」，加上分界跟显示器走——「显示器分别为4k时设定为1920×1080
     /// 2k时1600×900 1080p时1366×768」。尾部一直撑到把第一屏补满为止，但纸面的上沿最深走到
     /// <paramref name="paperLine"/> 那条线为止（阈值窗口高换算成视口，见 <see cref="PaperLineFor"/>）—— 线以内
-    /// 四种页面都是「画面铺满第一屏」，过了线纸面带着 媒体信息/更多来自 那一叠内容一像素一像素地回来。带子矮的
+    /// 四种页面都是「画面铺满第一屏」，过了线纸面带着下一节的内容一像素一像素地回来。带子矮的
     /// 页面（集页）和带子高的页面（电影页）由此在同一个窗口上给出同一个答案：纸面的位置只看这条线，不看带子
     /// 多高、内容多长。
     /// </para>
     /// <para>
-    /// 另一句是「不许跳」—— 「拉大窗口之后下面突然冒出一大截」：所以这里只有一个 <c>Math.Min</c>，没有台阶。
+    /// 另一句是「不许跳」—— 「拉大窗口之后下面突然冒出一大截」：所以这里只有 <c>Math.Min</c>，没有台阶。
     /// 纸的上沿就是「带子加封了顶的尾部」，窗口每高一像素它就多露一像素，从 0 开始长。上一版在这儿留了一道
     /// 120 的门槛（露不够那么多就当封顶不存在、整屏归剧照），本意是别露出「一条几乎什么都没有的暗带」，可屏上
     /// 的样子是拖窗口拖到某一下，底下那一叠<em>整块冒出来</em>。宁可在某几个尺寸上先露出纸的上边那一条，也不要
@@ -218,14 +430,21 @@ public static class DetailHero
     /// </summary>
     /// <param name="viewport">同 <see cref="BodyHeight"/>。</param>
     /// <param name="heroHeight">同 <see cref="BodyHeight"/>。</param>
-    /// <param name="artwork">同 <see cref="Height"/>：服务器上有没有那张图。</param>
+    /// <param name="artwork">同 <see cref="TailHeight(double, double, bool, double)"/>：服务器上有没有那张图。</param>
     /// <param name="paperLine">
     /// 纸面上沿的线，视口坐标 —— 阈值窗口的高（<see cref="PaperLineFor"/>）减掉标题栏加面包屑那截，由页面量好
     /// 传进来。0 是「显示器还没读到」：不撑，纸面回到由内容定的位置，等线到了再来。
     /// </param>
-    public static double TailHeight(double viewport, double heroHeight, bool artwork, double paperLine) =>
+    /// <param name="pictureBottom">
+    /// 背景那一张的下沿，视口坐标 —— <see cref="PictureHeight"/> 算出来的那个数。尾部是「压暗的画面」，画面条
+    /// 以下没有画面可压，撑过去就是空位。
+    /// </param>
+    public static double TailHeight(
+        double viewport, double heroHeight, bool artwork, double paperLine, double pictureBottom) =>
         artwork && paperLine > 0
-            ? Math.Min(BodyHeight(viewport, heroHeight), Math.Max(0, paperLine - heroHeight))
+            ? Math.Max(0, Math.Round(Math.Min(
+                Math.Min(BodyHeight(viewport, heroHeight), Math.Max(0, paperLine - heroHeight)),
+                Math.Max(0, pictureBottom - heroHeight))))
             : 0;
 
     /// <summary>
@@ -287,11 +506,11 @@ public static class DetailHero
 
     /// <inheritdoc cref="ScrimInset"/>
     /// <remarks>
-    /// 上限，不是定值：要垫的是海报、片名和那排键那一叠东西，而那一叠多高跟窗口没关系，所以带子高过 460 时
-    /// 这道罩子就停在 440，上面剩的全是干净的画面。带子比它矮的时候（集页按那一叠实测给的那一档，见
-    /// <see cref="EpisodeHeight"/>）由 <see cref="ScrimSpan"/> 把它收到「带高减去上面那道 <see
-    /// cref="ScrimInset"/>」—— 罩子比带子还高就会从带子的上沿溢出去，屏上是顶边突然暗一档，而标题条那层洗
-    /// 照着另一套坐标算，两边就错开。
+    /// 上限，不是定值：要垫的是海报、片名和那排键那一叠东西，而那一叠多高跟窗口没关系。电影、剧、季那档
+    /// 带子 412（见 <see cref="ArtHeight"/>），罩子由 <see cref="ScrimSpan"/> 收成 392 正好坐满；上限 440
+    /// 只在更高的带子上咬合（集页按那一叠实测给的那一档，见 <see cref="EpisodeHeight"/>，片名折行时会高过
+    /// 440）—— 罩子比带子还高就会从带子的上沿溢出去，屏上是顶边突然暗一档，而标题条那层洗照着另一套
+    /// 坐标算，两边就错开。
     /// </remarks>
     public const double ScrimHeight = 440;
 

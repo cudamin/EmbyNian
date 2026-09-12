@@ -57,22 +57,23 @@ public sealed partial class PlayerPage
     /// <list type="bullet">
     /// <item>The same pixel as last time is never a movement. WinUI raises the event when what is under a
     /// stationary pointer changes, and the chrome collapsing at 650 ms is exactly that.</item>
-    /// <item>A shorter hop than <see cref="PointerNoise"/> is not a movement <em>while the cursor is
-    /// showing</em>, and the anchor is deliberately not advanced, so a mouse rattling one pixel on a desk
-    /// never accumulates into activity while a hand that really is dragging the thing crosses the threshold
-    /// within a frame or two.</item>
-    /// <item>Once the cursor is hidden, any move at all brings it back. Asking for two pixels before
-    /// answering a hand reaching for the mouse is the one failure here a user would notice.</item>
-    /// <item>Except this player's own ask. Hiding the cursor ends with one physical pixel out and straight
-    /// back through the real input queue, because that is the only thing the framework hears
-    /// (<see cref="Native.NudgeCursorState"/>) — and without this clause the leg out satisfies the rule above
-    /// and the player wakes itself the instant it goes to sleep. Recognised by distance <em>and</em> by the
-    /// window since the ask went out; see <see cref="NudgeEcho"/>.</item>
+    /// <item>A hop under <see cref="ChromeReveal.MovePixels"/> is not a movement, and the anchor is deliberately
+    /// not advanced, so a mouse rattling one pixel on a desk never accumulates into activity while a hand that
+    /// really is dragging the thing crosses the threshold within a frame or two.</item>
+    /// <item>A control arriving under a pointer that has not moved counts as movement of its own — 「停在进度条
+    /// 上」 and 「停在画面上」 are different states with the same position — but only while the cursor is showing.
+    /// Hidden, the chrome is down and there is nothing left to arrive; the one thing that can still flip the
+    /// answer there is this player's own one-pixel ask crossing a band boundary, which is a wake nobody
+    /// asked for.</item>
     /// </list>
     /// <para>
-    /// The part under the pointer counts as movement of its own: a control appearing beneath a still hand is
-    /// something the rule has to hear about even though the coordinates are unchanged, because 「停在进度条
-    /// 上」 and 「停在画面上」 are different states with the same position.
+    /// Two pixels in both states, which is the correction this rule has been through twice. It used to be two
+    /// while the cursor was showing and <b>one</b> once it was hidden — 「any move at all brings it back」, which
+    /// is exactly the pixel a hide's own ask is made of, and whose echo was only ever filtered by distance and a
+    /// stopwatch together. An echo that arrived after the stopwatch ran out was read as a hand, and
+    /// 「鼠标隐藏了一会又会自动跑出来」 was the result. A hand reaching for the mouse gets the same instant answer
+    /// it always did: its first event is tens of pixels, and a slow one accumulates against the anchor, which
+    /// only moves on a movement that counted.
     /// </para>
     /// </summary>
     private bool Moved(Point point, ChromePart part)
@@ -81,22 +82,22 @@ public sealed partial class PlayerPage
         var dx = first ? double.PositiveInfinity : Math.Abs(point.X - _pointerAt.X);
         var dy = first ? double.PositiveInfinity : Math.Abs(point.Y - _pointerAt.Y);
 
-        // The echo of our own ask, which is a pixel out and a pixel back inside a couple of frames. The
-        // anchor is deliberately left where it was, so the stillness this ask is part of goes on being
-        // counted from the moment the hand actually stopped.
-        var echo = _cursorHidden
-                   && Now - _nudgedAt <= NudgeEcho
-                   && dx < PointerNoise
-                   && dy < PointerNoise;
-
-        var real = part != _pointerOn
-                   || (dx > 0 || dy > 0) && !echo && (_cursorHidden || dx >= PointerNoise || dy >= PointerNoise);
+        var arrived = part != _pointerOn && !_cursorHidden;
+        var real = arrived || ChromeReveal.Travelled(dx, dy);
 
         if (!real)
         {
             _stillMoves++;
+
+            // The sub-threshold class, counted rather than logged: on an ordinary film this is a desk rattling,
+            // a sensor drifting or our own ask, and the count beside the wake reason is what tells those apart
+            // from a leak.
+            if (_cursorHidden && (dx > 0 || dy > 0)) _hiddenNoise++;
+
             return false;
         }
+
+        if (_cursorHidden) _woke = $"框架事件走了 {dx:0.#},{dy:0.#} 逻辑像素";
 
         _pointerAt = point;
         _pointerOn = part;

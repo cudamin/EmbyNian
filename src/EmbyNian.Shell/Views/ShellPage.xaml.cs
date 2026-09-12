@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Numerics;
 using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -101,7 +103,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     private SettingsWindow? _settingsWindow;
 
     /// <summary>
-    /// 标题栏那五颗按钮的墨，静止／悬停／按下三档共用一支，停用的两支箭头另用一支淡的。
+    /// 标题栏的静止前景。悬停采用强调色，停用采用淡墨，按钮的背景始终透明。
     /// <para>
     /// 自己立两支画刷而不是把 <c>EgTextBrush</c> 直接塞到键上：这里要换的不是颜色跟着主题走，而是同一颗
     /// 按钮在两种底上换两种墨（页面的底色 vs 剧照顶上那层暗罩）。而字典里的键换一支新画刷是不会重画的 ——
@@ -112,6 +114,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
     /// <inheritdoc cref="_titleInk"/>
     private readonly SolidColorBrush _titleInkDim = new();
+
+    /// <summary>无底板按钮的悬停与按下前景；高对比度下跟随系统文字色。</summary>
+    private readonly SolidColorBrush _titleInkHover = new();
 
     /// <summary>
     /// 面包屑那一行的墨。和 <see cref="_titleInk"/> 是同一件事 —— 同一格字在两种底上换两种墨 —— 判断不同：
@@ -135,6 +140,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         ThemeHost.Register(this);
 
         PaintTitleActions();
+        WireTitleFeedback();
 
         // 面包屑那一行的墨：字是我们那个格子自己画的（模板里绑的就是这一支画刷），中间那个人字尖归框架的
         // 模板画、认的是它自己那个键 —— 把同一支挂到那个键上，之后改一次颜色，字和尖一起跟着走。
@@ -148,6 +154,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // 换主题时那几支墨要跟着改。这里跟 PaintTitleActions 不一样，没法靠共用对象自动跟着走 —— 那几支
         // 是这一页自己的画刷，压在剧照上时故意不跟主题走，所以只能收到通知后再算一遍。
         ThemeHost.Changed += _ => PaintTitleInk();
+        ActualThemeChanged += (_, _) => PaintTitleInk();
 
         Trail.ItemsSource = _trail;
 
@@ -187,33 +194,108 @@ public sealed partial class ShellPage : UserControl, IShellActions
         }
     }
 
-    /// <summary>
-    /// Puts the shared overlay brushes under the framework's two hover keys for the title-bar buttons —
-    /// the five icon buttons and the account button.
-    /// <para>
-    /// Done here rather than in the markup because of what has to be under the key: the <em>same</em>
-    /// <c>SolidColorBrush</c> object <c>ThemeHost</c> mutates. A <c>&lt;SolidColorBrush Color="…"/&gt;</c>
-    /// written in <c>Grid.Resources</c> is a new object with a colour frozen at parse time, and a switch to a
-    /// light theme would leave these two translucent white on a white strip — invisible. Handing over the
-    /// object itself means one assignment to its <c>Color</c> repaints the hover of all the buttons.
-    /// </para>
-    /// <para>
-    /// Read from application scope, which is the <c>Default</c> dictionary whatever the theme is (App.xaml
-    /// pins <c>RequestedTheme</c>). That is correct precisely because <c>ThemeHost</c> writes the chosen
-    /// theme's colours into both dictionaries — the same reason <c>PlayerPage.BrushFor</c> may read from
-    /// there.
-    /// </para>
-    /// <para>
-    /// Scoped to <see cref="Chrome"/> rather than <c>AppTitleBar</c>: the account button is a sibling of
-    /// that grid (it must not pick up the 34×26 tray style its resources hand the five icon buttons), and
-    /// resource lookup walks ancestors — a sibling's resources are invisible to it.
-    /// </para>
-    /// </summary>
+    /// <summary>两侧标题按钮所有状态均透明，前景和图标缩放提供反馈；原生焦点框仍由 Button 保留。</summary>
     private void PaintTitleActions()
     {
-        var resources = Application.Current.Resources;
-        Chrome.Resources["ButtonBackgroundPointerOver"] = resources["EgOverlayHoverBrush"];
-        Chrome.Resources["ButtonBackgroundPressed"] = resources["EgOverlayPressedBrush"];
+        var transparent = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        foreach (var key in new[]
+        {
+            "ButtonBackground", "ButtonBackgroundPointerOver", "ButtonBackgroundPressed",
+            "ButtonBackgroundDisabled", "ButtonBorderBrushPointerOver", "ButtonBorderBrushPressed",
+            "ButtonBorderBrushDisabled"
+        })
+            Chrome.Resources[key] = transparent;
+    }
+
+    /// <summary>只缩放按钮内容，点击范围和非客户区穿透矩形始终保持布局尺寸。</summary>
+    private void WireTitleFeedback()
+    {
+        foreach (var button in new[] { HomeButton, SettingsButton, SearchButton, BackButton, ForwardButton, AccountButton })
+        {
+            button.PointerEntered += OnTitlePointerEntered;
+            button.PointerExited += OnTitlePointerExited;
+            button.AddHandler(PointerPressedEvent, new PointerEventHandler(OnTitlePointerPressed), true);
+            button.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnTitlePointerReleased), true);
+            button.PointerCaptureLost += OnTitlePointerReleased;
+            button.PointerCanceled += OnTitlePointerCanceled;
+            button.KeyDown += OnTitleKeyDown;
+            button.KeyUp += OnTitleKeyUp;
+            button.IsEnabledChanged += (_, _) =>
+            {
+                if (!button.IsEnabled) ScaleTitleButton(button, 1, animate: false);
+            };
+            button.Unloaded += (_, _) => ScaleTitleButton(button, 1, animate: false);
+        }
+    }
+
+    private void OnTitlePointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is Button { IsEnabled: true } button) ScaleTitleButton(button, 1.08f);
+    }
+
+    private void OnTitlePointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is Button button && !InsideTitleButton(button, e)) ScaleTitleButton(button, 1);
+    }
+
+    private void OnTitlePointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is Button { IsEnabled: true } button) ScaleTitleButton(button, 0.9f);
+    }
+
+    private void OnTitlePointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not Button button) return;
+        var hover = button.IsEnabled
+            && e.Pointer.PointerDeviceType == PointerDeviceType.Mouse
+            && InsideTitleButton(button, e);
+        ScaleTitleButton(button, hover ? 1.08f : 1);
+    }
+
+    private void OnTitlePointerCanceled(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is Button button) ScaleTitleButton(button, 1);
+    }
+
+    private void OnTitleKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (sender is Button { IsEnabled: true } button &&
+            e.Key is Windows.System.VirtualKey.Space or Windows.System.VirtualKey.Enter)
+            ScaleTitleButton(button, 0.9f);
+    }
+
+    private void OnTitleKeyUp(object sender, KeyRoutedEventArgs e)
+    {
+        if (sender is Button button &&
+            e.Key is Windows.System.VirtualKey.Space or Windows.System.VirtualKey.Enter)
+            ScaleTitleButton(button, 1);
+    }
+
+    private static bool InsideTitleButton(Button button, PointerRoutedEventArgs e)
+    {
+        var point = e.GetCurrentPoint(button).Position;
+        return point.X >= 0 && point.Y >= 0 && point.X <= button.ActualWidth && point.Y <= button.ActualHeight;
+    }
+
+    private void ScaleTitleButton(Button button, float scale, bool animate = true)
+    {
+        if (button.Content is not FrameworkElement content) return;
+        var visual = ElementCompositionPreview.GetElementVisual(content);
+        if (!animate || !HomeMotion.AnimationsEnabled || content.XamlRoot is null)
+        {
+            visual.StopAnimation("Scale");
+            visual.Scale = Vector3.One;
+            return;
+        }
+
+        // 账号是文字而不是图标，只需要幅度更小的反馈，避免靠近右侧窗口控件。
+        if (ReferenceEquals(button, AccountButton)) scale = 1 + (scale - 1) * 0.25f;
+        visual.CenterPoint = new Vector3((float)content.ActualWidth / 2, (float)content.ActualHeight / 2, 0);
+        using var ease = visual.Compositor.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0), new Vector2(0.2f, 1));
+        using var motion = visual.Compositor.CreateVector3KeyFrameAnimation();
+        motion.InsertKeyFrame(1, new Vector3(scale, scale, 1), ease);
+        motion.Duration = TimeSpan.FromMilliseconds(130);
+        visual.StartAnimation("Scale", motion);
     }
 
     /// <inheritdoc />
@@ -224,6 +306,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
         _titleStrip = strip;
         PaintTitleInk();
     }
+
+    /// <summary>标题栏那一条此刻按哪一档在画，给自检读（<c>ShellSelfCheck.Reads.ReadHome</c> 的页眉那一行）。</summary>
+    internal TitleStrip TitleStripNow => _titleStrip;
 
     /// <summary>
     /// 面包屑那一行此刻自己上没上底色，给自检读（<see cref="DetailPage.WashRead"/>）：详情页把标题栏那一条洗成
@@ -254,19 +339,21 @@ public sealed partial class ShellPage : UserControl, IShellActions
     private void PaintTitleInk()
     {
         var onScrim = _titleStrip == TitleStrip.OnScrim;
+        var highContrast = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast;
 
-        _titleInk.Color = Ink(onScrim ? "EgOnScrimBrush" : "EgTextBrush");
-        _titleInkDim.Color = Ink(onScrim ? "EgOnScrimDimBrush" : "EgTextDimBrush");
-        _trailInk.Color = Ink(onScrim ? "EgOnScrimBrush" : "EgTextDimBrush");
+        _titleInk.Color = Ink(highContrast ? "SystemColorWindowTextColor" : onScrim ? "EgOnScrimBrush" : "EgTextBrush");
+        _titleInkDim.Color = Ink(highContrast ? "SystemColorWindowTextColor" : onScrim ? "EgOnScrimDimBrush" : "EgTextDimBrush");
+        _titleInkHover.Color = Ink(highContrast ? "SystemColorWindowTextColor" : "EgAccentBrush");
+        _trailInk.Color = Ink(highContrast ? "SystemColorWindowTextColor" : onScrim ? "EgOnScrimBrush" : "EgTextDimBrush");
 
         TrailBar.Background = _titleStrip == TitleStrip.Plain
             ? Application.Current.Resources["LayerFillColorDefaultBrush"] as Brush
             : null;
 
-        // 四个键，两支画刷，只在第一遍时挂上去：换的是它们的颜色，键上的对象一直是这两个。
+        // 状态画刷对象保持不变，主题切换只修改颜色；悬停以图标前景反馈，不铺背景。
         AppTitleBar.Resources["ButtonForeground"] = _titleInk;
-        AppTitleBar.Resources["ButtonForegroundPointerOver"] = _titleInk;
-        AppTitleBar.Resources["ButtonForegroundPressed"] = _titleInk;
+        AppTitleBar.Resources["ButtonForegroundPointerOver"] = _titleInkHover;
+        AppTitleBar.Resources["ButtonForegroundPressed"] = _titleInkHover;
         AppTitleBar.Resources["ButtonForegroundDisabled"] = _titleInkDim;
 
         // 账号那几样直接写在元素上，不走键：那行字一个走 FontWeight、一个走 EgDataStyle，而样式自己设了
@@ -280,10 +367,12 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // 那时它们压的是页面洗出来的正文底色，白墨在一套浅色主题上就没了。
         _window?.SetCaptionOnScrim(onScrim);
 
-        static Windows.UI.Color Ink(string key) =>
-            Application.Current.Resources[key] is SolidColorBrush brush
-                ? brush.Color
-                : Microsoft.UI.Colors.White;
+        static Windows.UI.Color Ink(string key) => Application.Current.Resources[key] switch
+        {
+            SolidColorBrush brush => brush.Color,
+            Windows.UI.Color color => color,
+            _ => Microsoft.UI.Colors.White
+        };
     }
 
     /// <summary>
@@ -506,6 +595,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         Toast.Severity = severity;
         Toast.Message = message;
         Toast.IsOpen = true;
+        HomeMotion.Reveal(Toast);
 
         // Restarted rather than started: a second toast within the window replaces the first, and it
         // should get its own six seconds rather than inheriting what was left of them.
@@ -532,7 +622,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     {
         if (ContentFrame.Content is not IShellContent page) return;
 
-        ContentFrame.Navigate(page.GetType(), page.NavigationRequest, new SuppressNavigationTransitionInfo());
+        ContentFrame.Navigate(page.GetType(), page.NavigationRequest, BrowseTransition());
 
         if (ContentFrame.BackStack.Count > 0) ContentFrame.BackStack.RemoveAt(ContentFrame.BackStack.Count - 1);
         SyncChrome();
@@ -700,7 +790,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal void OpenDetail(DetailRequest request)
     {
-        ContentFrame.Navigate(typeof(DetailPage), request, new SuppressNavigationTransitionInfo());
+        ContentFrame.Navigate(typeof(DetailPage), request, BrowseTransition());
 
         _trail.Add(new Crumb(request.Title, string.Empty));
 
@@ -716,7 +806,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal void OpenChild(LibraryRequest request)
     {
-        ContentFrame.Navigate(typeof(LibraryPage), request, new SuppressNavigationTransitionInfo());
+        ContentFrame.Navigate(typeof(LibraryPage), request, BrowseTransition());
 
         _trail.Add(new Crumb(request.Title, request.Tag));
 
@@ -922,15 +1012,19 @@ public sealed partial class ShellPage : UserControl, IShellActions
         await PlayAsync(item).ConfigureAwait(true);
     }
 
-    /// <summary>A top-level destination: one crumb, a synced tab highlight, no fade.</summary>
+    /// <summary>系统关闭动画时，所有浏览导航直接落定。</summary>
+    private static NavigationTransitionInfo BrowseTransition() => HomeMotion.AnimationsEnabled
+        ? new EntranceNavigationTransitionInfo()
+        : new SuppressNavigationTransitionInfo();
+
+    /// <summary>A top-level destination: one crumb and a synced navigation state.</summary>
 
     private void Open(Type page, object parameter, string title, string tag)
     {
         _current = tag;
 
-        // SuppressNavigationTransitionInfo, not the default: requirement 9 rules out the fade, and
-        // on a page whose first paint is a grid of posters the fade is exactly where it shows.
-        ContentFrame.Navigate(page, parameter, new SuppressNavigationTransitionInfo());
+        // 整体重设计使用平台入场过渡，缩短页面切换时的突兀感。
+        ContentFrame.Navigate(page, parameter, BrowseTransition());
 
         _trail.Clear();
         _trail.Add(new Crumb(title, tag));
@@ -1048,7 +1142,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // back out of one, and stepping forward into it again needs no crumb.
         var leaving = _trail.Count > 1 ? _trail[^1] : null;
 
-        ContentFrame.GoBack(new SuppressNavigationTransitionInfo());
+        ContentFrame.GoBack(BrowseTransition());
 
         if (leaving is not null)
         {
@@ -1095,7 +1189,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         if (!ContentFrame.CanGoBack) return;
 
-        ContentFrame.GoBack(new SuppressNavigationTransitionInfo());
+        ContentFrame.GoBack(BrowseTransition());
 
         while (_trail.Count > e.Index + 1) _trail.RemoveAt(_trail.Count - 1);
 

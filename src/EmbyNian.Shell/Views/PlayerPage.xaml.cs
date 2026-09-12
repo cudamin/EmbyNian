@@ -68,32 +68,10 @@ public sealed partial class PlayerPage : UserControl
     private const double OverlayGap = 8;
 
     /// <summary>
-    /// How far the pointer has to travel, in logical pixels, before a showing cursor treats it as somebody
-    /// moving the mouse. Two, which is under a millimetre and over any jitter a resting mouse produces —
-    /// and it applies only while the cursor is visible, so nothing here delays bringing it back.
-    /// </summary>
-    private const double PointerNoise = 2;
-
-    /// <summary>
-    /// How long after an ask (<see cref="Native.NudgeCursorState"/>) a tiny pointer move is taken to be that
-    /// ask's own echo rather than a hand.
-    /// <para>
-    /// The ask steps the pointer one physical pixel and puts it straight back, so it arrives here as up to two
-    /// XAML pointer events. The return leg lands on the anchor and is discarded as an unchanged position
-    /// already; the leg out is a pixel away, and while the cursor is hidden a pixel is deliberately enough to
-    /// bring it back — which would make the player wake itself the instant it went to sleep. Distance and time
-    /// together, because either alone would give something away: a window with no distance test would swallow
-    /// a real hand arriving in the same fifth of a second, and a distance test with no window would put the
-    /// two-pixel deadband back over a hidden cursor for the whole film.
-    /// </para>
-    /// </summary>
-    private const long NudgeEcho = 200;
-
-    /// <summary>
     /// How many asks one hide is worth. Three, spread over three ticks: the first goes out with the hide
     /// itself, and the two after it cover the case where the framework had not yet pushed its own value down
-    /// when the first arrived. Bounded because these are real injected moves now — see
-    /// <see cref="_nudgedAt"/>.
+    /// when the first arrived. Bounded because these are real injected moves — see
+    /// <see cref="PlayerPage.Nudge"/>.
     /// </summary>
     private const int NudgesPerHide = 3;
 
@@ -167,19 +145,26 @@ public sealed partial class PlayerPage : UserControl
     private int _cursorNudges;
 
     /// <summary>
-    /// When the last of those asks went out, and how many have gone out since this hide began.
+    /// How many asks have gone out since this hide began, and whether this hide is still bounded. The ask is
+    /// real input the whole system can see, so it is <b>bounded</b>: enough asks that the framework cannot miss
+    /// the transparent cursor, and then silence, instead of ten injected moves a second for the length of a
+    /// film keeping the machine awake and every idle timer on it alive.
+    /// </summary>
+    private int _nudgesThisHide;
+
+    /// <summary>
+    /// Movements too small to be a hand, refused while the cursor was hidden, and what actually woke it.
     /// <para>
-    /// Both exist because the ask is real input now rather than a call that produced none, and real input has
-    /// two consequences a no-op never had. It comes back as XAML pointer events, which
-    /// <see cref="Moved"/> has to recognise as this player's own echo rather than as the hand returning — that
-    /// is what the timestamp is for. And it is input the whole system can see, so it is <b>bounded</b>: enough
-    /// asks that the framework cannot miss the transparent cursor, and then silence, instead of ten injected
-    /// moves a second for the length of a film keeping the machine awake and every idle timer on it alive.
+    /// Both are here because 「鼠标隐藏了一会又会自动跑出来」 had to be diagnosed from a log that only said the
+    /// cursor was back, never who had brought it. The counter is the reading that is *expected* to be non-zero
+    /// on an ordinary film — a desk rattling a pixel, a sensor drifting, and this player's own one-pixel ask
+    /// all land here now — and the string is the one that matters when it goes wrong: a real hand prints as
+    /// tens of pixels, a leak prints as one.
     /// </para>
     /// </summary>
-    private long _nudgedAt;
+    private int _hiddenNoise;
 
-    private int _nudgesThisHide;
+    private string _woke = "没记到移动（按键、菜单或窗口变化）";
 
     /// <summary>
     /// Where the pointer was the last time it was taken to have moved, and what was under it there.
@@ -468,31 +453,20 @@ public sealed partial class PlayerPage : UserControl
     // ---- 输出尺寸 -----------------------------------------------------------------
 
     /// <summary>
-    /// The last render-target size that could actually be read, for 任务书 2.3's middle rung. Held here rather
-    /// than in the view model because it is a fact about this window, and deliberately never written from the
-    /// monitor fallback — one unreadable moment would otherwise pin every later measurement to the monitor's
-    /// native resolution, which is the thing 2.3 forbids.
-    /// </summary>
-    private (int Width, int Height) _lastTarget;
-
-    /// <summary>
     /// How large the picture is being drawn, and how large it would be at full screen.
     /// <para>
-    /// The render target is our client area, which is exactly what the video child window fills. The external
-    /// mpv.exe backend draws into a window of its own that is not ours to measure, so it reports nothing and
-    /// takes the monitor fallback — with a line in the log saying so, which is what 任务书 2.3 asks of a
-    /// backend that cannot answer.
+    /// 档位固定用全屏那套（他的拍板，2026-09-11）：无论窗口什么形状，量出来的面永远是所在显示器，
+    /// Fullscreen 恒真 —— 着色器档位从开播起按显示器定死，进退全屏和拖动不再换链。ArtCNN 这类
+    /// 放大器在核显上每个尺寸的冷编译要数秒，随全屏实时换链就是「画面停在旧尺寸贴在左上角」；
+    /// 探针读数在 <c>work/embedprobe/</c>。外部 mpv.exe 后端同样按显示器算，无需再走降级链。
     /// </para>
     /// </summary>
     private ShaderSurface MeasureSurface()
     {
         if (_window is null) return default;
 
-        var target = ViewModel.Embedded ? _window.ClientSize : default;
-        var surface = ShaderSurface.Resolve(target, _lastTarget, _window.MonitorSize(), _window.Fullscreen);
-
-        if (!surface.Fallback) _lastTarget = (surface.Width, surface.Height);
-        return surface;
+        var monitor = _window.MonitorSize();
+        return new ShaderSurface(monitor.Width, monitor.Height, monitor.Width, monitor.Height, true);
     }
 
     /// <summary>

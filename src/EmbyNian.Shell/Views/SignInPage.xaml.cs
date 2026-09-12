@@ -46,7 +46,12 @@ public sealed partial class SignInPage : UserControl
         ViewModel.SavedServers.CollectionChanged += (_, _) => FillSavedMenu();
 
         // Prepare runs before the window is shown, where focus has nowhere to go yet.
-        Loaded += (_, _) => FocusOn(ViewModel.NextFocus());
+        Loaded += (_, _) =>
+        {
+            HomeMotion.Reveal(SignInLayout);
+            FocusOn(ViewModel.NextFocus());
+        };
+        Unloaded += (_, _) => HomeMotion.Stop(SignInLayout);
     }
 
     /// <summary>Raised once <see cref="EmbySession"/> holds a live client; the shell then shows the pages.</summary>

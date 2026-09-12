@@ -59,12 +59,11 @@ public sealed partial class DetailViewModel : PageViewModel
     private const int PlateDecodeWidth = 280;
 
     /// <summary>
-    /// 右上角那张艺术图（<see cref="ItemArtwork.Corner"/>）的解码宽度，同它画出来的那个盒子（320×180）。它是一幅
-    /// 画而不是一行字 —— 字缩糊了还认得出，画糊了就是一块脏，而高分屏上一个逻辑像素不止一个物理像素，所以这个数
-    /// 按盒子的宽给足，不再往下省。盒子从 260×146 放大到 320×180 是用户要的（「再把艺术图调大一些」），这个数
-    /// 跟着走。
+    /// 右上角那张艺术图（<see cref="ItemArtwork.Corner"/>）的解码宽度，同它画出来的那个盒子
+    /// （<see cref="DetailHero.CornerWidth"/>×<see cref="DetailHero.CornerHeight"/>）。它是一幅装饰画，不是读数，
+    /// 480 宽在它的上限盒子上已经够清晰 —— 2026-09-12 按他的「放大集页面右侧的艺术图」从 320 一起抬上来的。
     /// </summary>
-    private const int CornerDecodeWidth = 320;
+    private const int CornerDecodeWidth = (int)DetailHero.CornerWidth;
 
     /// <summary>
     /// 页尾那张横幅（<see cref="ItemArtwork.Footer"/>）的解码宽度，同它画出来的那个上限（760）。横幅图上写着片名，
@@ -74,17 +73,26 @@ public sealed partial class DetailViewModel : PageViewModel
 
     /// <summary>
     /// The still beside the title. Fixed rather than scaled with the grid's poster width, unlike every
-    /// other card in the app. 头上那一格的高是按内容定死的（<see cref="DetailHero.ArtHeight"/> = 460），
+    /// other card in the app. 头上那一格的高是按内容定死的（<see cref="DetailHero.ArtHeight"/> = 412，412 里
+    /// 装着海报 300、那排键那一行 60 加两道边，正好装满），
     /// 再让这一张跟着海报一起宽，那格带子就装不下它了。
     /// </summary>
     private const int PosterStillWidth = 210;
 
     private const int PosterStillHeight = 300;
 
-    /// <summary>An episode's still is 16:9, and the same size a 继续观看 card is drawn at by default.</summary>
-    private const int EpisodeStillWidth = CardSize.WideWidth;
-
-    private const int EpisodeStillHeight = CardSize.WideHeight;
+    /// <summary>
+    /// 封面这一次按多宽解码 —— 画出来多宽就取多宽（集页的宽版式随窗口走，
+    /// <see cref="DetailHero.StillWidth"/>；取图那一刻的宽说了算，窗口随后再变不重解码，同一张图缓存里只有
+    /// 那一份）。集页的封面是剧的那张 2:3 海报（「集页面的封面改用剧页面的封面」），基宽同一张：210。
+    /// 取整到像素。取图不看画不画（<see cref="DetailHero.ShowsStill"/>）：不画的档照取，窗口拉宽跨过
+    /// <see cref="DetailHero.CompactFloor"/> 的那一下封面就地回来，不用再等一趟往返。
+    /// </summary>
+    private int StillDecodeWidth => IsEpisodePage
+        ? (int)Math.Ceiling(IsCompact
+            ? (double)PosterStillWidth
+            : DetailHero.StillWidth(PageWidth, PosterStillWidth, HeroReferenceWidth))
+        : PosterStillWidth;
 
     /// <summary>How many lines of 简介 are shown before 阅读更多 appears.</summary>
     private const int CollapsedLines = 4;
@@ -236,6 +244,7 @@ public sealed partial class DetailViewModel : PageViewModel
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(VideoVisibility))]
+    [NotifyPropertyChangedFor(nameof(VideoLineVisibility))]
     public partial string? VideoLine { get; set; }
 
     [ObservableProperty]
@@ -244,6 +253,7 @@ public sealed partial class DetailViewModel : PageViewModel
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StillVisibility))]
+    [NotifyPropertyChangedFor(nameof(TailInset))]
     public partial ImageSource? StillImage { get; set; }
 
     /// <summary>
@@ -256,9 +266,9 @@ public sealed partial class DetailViewModel : PageViewModel
     public partial ImageSource? PlateImage { get; set; }
 
     /// <summary>
-    /// 头图右上角那张艺术图 —— 「右上角显示艺术图」。哪一张归这儿是 <see cref="ItemArtwork.Corner"/> 的事（这个
-    /// 条目自己的艺术图，而背后那一整页已经站在同一张上时空着）；这里只存解出来的那张。没有就是 null，那个角
-    /// 空着，<em>不再退回徽标</em> —— 徽标自己有一格（<see cref="PlateImage"/>）。
+    /// 右上角那张艺术图 —— 「给集页面右上角添加艺术图」（2026-09-12）。哪一张归这儿是
+    /// <see cref="ItemArtwork.Corner"/> 的事（这一集自己的，没有就借剧集那一层的）；这里只存解出来的那张。
+    /// 只在集页上画（见 <see cref="CornerVisibility"/>），服务器两头都没有的那一档这一格空着。
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CornerVisibility))]
@@ -282,20 +292,172 @@ public sealed partial class DetailViewModel : PageViewModel
 
     /// <summary>
     /// 这一页看得见的那一段有多宽，由视图在每次改尺寸时量给（<c>DetailPage.OnBodySizeChanged</c>）。它自己不上屏，
-    /// 是「右上角那张画摆不摆」的自变量（<see cref="DetailHero.CornerFits"/>）—— 「窗口缩小到一定程度自动隐藏」。
+    /// 是两件事的自变量：紧凑版式换不换（<see cref="IsCompact"/>）、以及背景那一张画多高（<see cref="PictureHeight"/>）。
     /// <para>
-    /// 量的是页面而不是窗口：侧边栏一展开页面会窄掉两百来像素，而挤着片名的正是页面这一头。
+    /// 量的是页面而不是窗口：将来哪一侧再长出占据宽度的东西，挤的也是页面这一头。
     /// </para>
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsCompact))]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutWidth))]
+    [NotifyPropertyChangedFor(nameof(BackdropShown))]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
+    [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
+    [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
+    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
+    [NotifyPropertyChangedFor(nameof(PaperMinHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureFadeMargin))]
+    [NotifyPropertyChangedFor(nameof(HeroArtVisibility))]
+    [NotifyPropertyChangedFor(nameof(HeroPlainVisibility))]
+    [NotifyPropertyChangedFor(nameof(HeroCardVisibility))]
+    [NotifyPropertyChangedFor(nameof(HeroCardShown))]
+    [NotifyPropertyChangedFor(nameof(ScrimVisibility))]
+    [NotifyPropertyChangedFor(nameof(StillVisibility))]
+    [NotifyPropertyChangedFor(nameof(CompactVisibility))]
+    [NotifyPropertyChangedFor(nameof(WideActionsVisibility))]
     [NotifyPropertyChangedFor(nameof(CornerVisibility))]
+    [NotifyPropertyChangedFor(nameof(HeroInset))]
+    [NotifyPropertyChangedFor(nameof(TailInset))]
+    [NotifyPropertyChangedFor(nameof(ActionsColumn))]
+    [NotifyPropertyChangedFor(nameof(ActionsColumnSpan))]
+    [NotifyPropertyChangedFor(nameof(ColumnPickersVisibility))]
+    [NotifyPropertyChangedFor(nameof(PickersVisibility))]
+    [NotifyPropertyChangedFor(nameof(VideoLineVisibility))]
+    [NotifyPropertyChangedFor(nameof(HeroContentAlignment))]
+    [NotifyPropertyChangedFor(nameof(ColumnActionsVisibility))]
+    [NotifyPropertyChangedFor(nameof(WideProgressVisibility))]
     public partial double PageWidth { get; set; }
 
+    // 版式排内容的参考宽：封面（DetailHero.StillWidth）和角图让位（DetailHero.CornerBoxWidth）的比值都以它算。
+    private const double HeroReferenceWidth = 1280;
+
+    /// <summary>
+    /// 这一页这次走哪套版式 —— 页面窄过 <see cref="DetailHero.CompactFloor"/> 就换成单列的紧凑版式：封面按
+    /// <see cref="DetailHero.ShowsStill"/> 让位（剧、电影两页不画，季、集照旧），播放和那排操作挪到画面底下
+    /// 的暗区里（<c>DetailPage</c> 标记里的紧凑块）。桌面版式不再缩小任何东西 ——
+    /// 「收窄窗口后组件要自动换行」（2026-09-12）：从前 1024 到 1280 那一段整体等比缩小（<c>HeroScale</c>，
+    /// 那个属性随之退役），缩到八成的组件又小又松；现在组件保持原大小，行装不下就换行，换行的落点跟着
+    /// <see cref="HeroLayoutWidth"/>（就是页面本身的宽）走。
+    /// </summary>
+    public bool IsCompact => DetailHero.IsCompact(PageWidth);
+
+    /// <summary>
+    /// 集页整段上方合成的那一块面板在不在 —— <see cref="HeroCardVisibility"/>、<see cref="HeroPlainVisibility"/>、
+    /// <see cref="ScrimVisibility"/>、<see cref="HeroInset"/> 和 <see cref="TailInset"/> 五处都问它，判据只写一份。
+    /// </summary>
+    private bool HeroCard => IsEpisodePage && !IsCompact;
+
+    /// <summary>
+    /// 头图和尾部的内容按多宽排 —— 页面本身的宽。从前是「至少 1280、窄了由 Viewbox 整体缩下去」：那一版换行的
+    /// 落点钉在 1280 上不动，窗口窄了只会整体变小（「组件又小又松」）。现在内容按真实页宽排，行装不下就地换行
+    /// （按键行、文件选项那几块 chips），封面和角图各自随宽走（<see cref="DetailHero.StillWidth"/>／
+    /// <see cref="DetailHero.CornerBoxWidth"/>）—— 0 是「还没量」（第一次布局之前）。
+    /// </summary>
+    public double HeroLayoutWidth => Math.Max(PageWidth, 0);
+
+    /// <summary>
+    /// 背景那张位图的高 ÷ 宽（16:9 是 0.5625），图解出来时跟着 <see cref="HeroImage"/> 一起换。它喂两个地方：
+    /// 紧凑版式的带高（<see cref="DetailHero.CompactHeight"/>）和背景那一张的盒高
+    /// （<see cref="DetailHero.PictureHeight"/>）—— 「窗口收窄时背景图要等比例缩放」要的就是图自己的形状。
+    /// <para>
+    /// 图还没解出来的时候按 16:9 兜底：背景那几张全是横图，第一帧按它布、真图到了再修正，跟别的版面数同一套
+    /// 「先按估值布一遍」的道理。
+    /// </para>
+    /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
+    [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureFadeMargin))]
+    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
+    public partial double HeroHeightRatio { get; set; } = 9d / 16;
+
+    // 裁切模糊的三个数：门槛（裁切不超过它不糊 —— 「提高拉长窗口后，背景被裁切触发背景图模糊的阈值」，
+    // 拉长窗口头几档的轻微裁切不值得整张图陪着糊）、裁到最狠再加多少（BackdropBlur.CropRadius 的 extra）、
+    // 按多大一档量化（step）。量化是给拖窗口的：占比一路变，档位不跟着一路变，重糊只发生在换档那一下。
+    private const double CropBlurStart = 0.25;
+    private const int CropBlurExtra = 32;
+    private const int CropBlurStep = 8;
+
+    /// <summary>解好的头图原图像素 —— 裁切模糊的原料。导航换条目、换图时整个作废。</summary>
+    private HeroPictureLoader.HeroPixels? _heroPixels;
+
+    /// <summary>
+    /// 解好的封面（集页剧照、其余海报）原图像素 —— 随窗口宽重排那一格的原料
+    /// （<see cref="FitStill"/>）。换条目、换图时作废。
+    /// </summary>
+    private (int Width, int Height)? _stillPixels;
+
+    /// <summary>解好的角图原图像素，同 <see cref="_stillPixels"/>（<see cref="FitCorner"/> 的原料）。</summary>
+    private (int Width, int Height)? _cornerPixels;
+
+    /// <summary>上一次渲染用的模糊档位；-1 是「还没出过图」。</summary>
+    private int _heroBlurRadius = -1;
+
+    /// <summary>重糊的生代号：谁后到谁算数，路上换了档就作废先回来那一张。</summary>
+    private int _heroBlurGeneration;
+
+    /// <summary>当前的模糊档位 —— 裁切占比（<see cref="DetailHero.PictureCrop"/>）换算的半径。电影和剧没有
+    /// 基础半径，裁多少加多少；集页没有背景图，这一手到不了它。</summary>
+    private int HeroBlurTarget => BackdropBlur.CropRadius(
+        DetailHero.PictureCrop(PageWidth, HeroHeightRatio, Viewport), CropBlurStart, 0, CropBlurExtra, CropBlurStep);
+
+    /// <summary>
+    /// 窗口形状变了（<c>DetailPage.OnBodySizeChanged</c> 量完宽高顺手喊一声）：按新的裁切占比算模糊档位，
+    /// 换档就用缓存的那批像素重糊一遍。生代号让「谁后到谁算数」—— 重糊还在路上又换了一档，先回来那一张
+    /// 作废。不做可等待：拖窗口不等一次几十毫秒的像素活，屏上短暂停在上一档是这条路的正常形态。
+    /// </summary>
+    public void UpdateHeroBlur()
+    {
+        if (_heroPixels is null) return;
+
+        var target = HeroBlurTarget;
+        if (target == _heroBlurRadius) return;
+
+        var generation = ++_heroBlurGeneration;
+        _heroBlurRadius = target;
+
+        _ = RenderBlurAsync(generation, _heroPixels, target);
+    }
+
+    private async Task RenderBlurAsync(int generation, HeroPictureLoader.HeroPixels pixels, int radius)
+    {
+        try
+        {
+            var picture = await HeroPictureLoader
+                .RenderAsync(pixels, radius, _art?.Token ?? default)
+                .ConfigureAwait(true);
+
+            if (generation == _heroBlurGeneration && picture is not null) HeroImage = picture;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            Log.Debug(Category, $"背景图按裁切重糊失败：{error.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 海报那一栏（<c>PosterStill</c>）这一次画多宽 —— 图到手时按它自己的形状收窄
+    /// （<see cref="DetailHero.StillBox"/>，见 <see cref="StillHeight"/>）。
+    /// <para>
+    /// 尾部那一段的内边距也跟着它走（<see cref="TailInset"/> → <see cref="StackLeft"/>）：集页的宽版式上剧情
+    /// 说明要和片名那一栏同一条左沿，而那条沿就是这一栏的宽加一格间距决定的 —— 图到得晚一点，那一段也就晚
+    /// 一点对齐，两个数读的是同一个来源。
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TailInset))]
     public partial double StillWidth { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HeroRoom))]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
     [NotifyPropertyChangedFor(nameof(HeroHeight))]
     [NotifyPropertyChangedFor(nameof(ScrimHeight))]
     [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
@@ -303,24 +465,83 @@ public sealed partial class DetailViewModel : PageViewModel
     public partial double StillHeight { get; set; }
 
     /// <summary>
-    /// 服务器上有没有这一页要铺在背后的那张图。<em>不是</em>「图解出来了没有」（那是
-    /// <see cref="HeroVisibility"/>），而是 <see cref="ItemArtwork.Hero"/> 问标签表的结果。
+    /// 右上角那张艺术图这一次画多高 —— 图到手时由 <see cref="ShowCorner"/> 按它的形状算进这个上限盒子里
+    /// （<see cref="DetailHero.StillBox"/>，480×270），带高就跟着它长。
     /// <para>
-    /// 分成两个值是为了「点击主页封面后窗口会闪一下，然后才会进入页面」。版面高按有没有这张图分两档
-    /// （<see cref="DetailHero.Height"/>）；拿解好的位图当判据，那一下就是先按 380 布一遍、图到了再按 460 布
-    /// 第二遍，屏上看着就是闪一下。列表接口回来的条目已经带着标签，所以这句话在 <see cref="Attach"/> 那一刻
-    /// 就答得出：第一帧的版面就是最后的版面，之后到的只是画面本身。
+    /// 180 → 270 这一档是「放大集页面右侧的艺术图」（2026-09-12）的直接后果：从前的上限 180 比那一叠字键的
+    /// 实测高（两百六七）矮，所以它从来不决定带子的高，也就没有这个数；抬到 270 之后它比那一叠还高，不把它算
+    /// 进去就是这张画压在底下的音轨那一行上。
+    /// </para>
+    /// <para>
+    /// 图还没到、或者这一条没有艺术图时是 0 —— 那一档带高仍由字键那一叠和剧照给。
     /// </para>
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeroRoom))]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
+    [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
+    [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
+    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
+    public partial double CornerHeight { get; set; }
+
+    /// <summary>
+    /// 头图上那排键自己那一行有多高，由视图量给（<c>DetailPage.OnHeroActionsSizeChanged</c>）。它们从
+    /// 片名那一栏里搬出来、单独占一行之后（「继续播放 从头开始还有后面的那些图标单独一行」，2026-09-12），
+    /// 这一行的高度不再算在 <see cref="StackRoom"/> 里，得单独加进 <see cref="HeroRoom"/>。
+    /// <para>
+    /// 量出来而不是写死一个数：那一行的高是键自己的高（<c>EgActionHeight</c>）加上面那道间距，两个都跟着主题
+    /// 词表走。紧凑版式里这一行整个收着，量出来就是 0 —— 那一档的带高因此一个像素都不多算，不用另判一次版式。
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeroRoom))]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
+    [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
+    [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
+    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
+    public partial double ActionsRoom { get; set; }
+
+    /// <summary>
+    /// 这一页要不要按「背后铺着一张图」那一档布 —— 服务器上有没有那张图（<see cref="ItemArtwork.Hero"/> 问标签
+    /// 表的结果），集页除外：那一页不铺背景图（2026-09-12「去掉集页面的背景图」），无论服务器有什么，这里都是
+    /// false，整页走「没有剧照」的那一档版面（见 <see cref="DetailHero.PlainHeight"/>）。
+    /// <para>
+    /// 分成两个值是为了「点击主页封面后窗口会闪一下，然后才会进入页面」。版面按有没有这张图分档
+    /// （背景层、尾部、纸面下限，<see cref="DetailHero.Height"/>）；拿解好的位图当判据，那一下就是先按
+    /// 没有图布一遍、图到了再翻一遍，屏上看着就是闪一下。列表接口回来的条目已经带着标签，所以这句话在
+    /// <see cref="Attach"/> 那一刻就答得出：第一帧的版面就是最后的版面，之后到的只是画面本身。
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BackdropShown))]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
     [NotifyPropertyChangedFor(nameof(HeroHeight))]
     [NotifyPropertyChangedFor(nameof(ScrimHeight))]
     [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
     [NotifyPropertyChangedFor(nameof(TailMinHeight))]
     [NotifyPropertyChangedFor(nameof(PaperMinHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureFadeMargin))]
     [NotifyPropertyChangedFor(nameof(HeroArtVisibility))]
     [NotifyPropertyChangedFor(nameof(HeroPlainVisibility))]
     public partial bool HeroArt { get; set; }
+
+    /// <summary>
+    /// 背景那一层这一次画不画 —— 只问一句：服务器上有这张图（<see cref="HeroArt"/>）。
+    /// <para>
+    /// 从前这里还有第二句「页面还宽到压得住它」（<c>DetailHero.BackdropFits</c>，窄过 720 整层收起来）。
+    /// 「窗口收窄时背景图要等比例缩放」把那个分岔去掉了：图改画在跟宽走的盒子里（<see
+    /// cref="DetailHero.PictureHeight"/>）之后，任何宽度都摆得下一张等比的画面，收起来那一档没了 —— 窄到
+    /// <see cref="DetailHero.CompactFloor"/> 以下换的是整套紧凑版式，背景那张图照画，只是缩成一条。
+    /// </para>
+    /// <para>
+    /// 所有按「有没有背景图」分档的版面问题照旧问它、不直接问 <see cref="HeroArt"/>：没有图的条目上头图退回
+    /// 那一档底色版面，尾部不撑、纸面不整屏、标题栏墨色当没有图处理 —— 那些迁就都还欠着。
+    /// </para>
+    /// </summary>
+    public bool BackdropShown => HeroArt;
 
     /// <summary>
     /// 这一页看得见的那一段有多高，由视图在每次改尺寸时量给（<c>DetailPage.OnBodySizeChanged</c>）。它自己
@@ -340,6 +561,8 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
     [NotifyPropertyChangedFor(nameof(TailMinHeight))]
     [NotifyPropertyChangedFor(nameof(PaperMinHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureFadeMargin))]
     public partial double Viewport { get; set; }
 
     /// <summary>
@@ -352,56 +575,320 @@ public sealed partial class DetailViewModel : PageViewModel
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HeroRoom))]
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
     [NotifyPropertyChangedFor(nameof(HeroHeight))]
     [NotifyPropertyChangedFor(nameof(ScrimHeight))]
     [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
     [NotifyPropertyChangedFor(nameof(TailMinHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureFadeMargin))]
     public partial double StackRoom { get; set; }
+
+    /// <summary>
+    /// 文字那一叠量出了新高 —— 封面的高上限（<see cref="FitStill"/>）跟着走。只在集页的宽版式上咬合
+    /// （其余页面 FitStill 不看这个数），而 FitStill 对没变的数不喊通知，拖窗口的负载不在这里。
+    /// </summary>
+    partial void OnStackRoomChanged(double value) => FitStill();
 
     /// <summary>
     /// 带子里那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测要占多高。集页那一格的高就是它，见
     /// <see cref="DetailHero.EpisodeHeight"/>；别的页面不用它。
     /// <para>
-    /// 算在这儿而不在视图里：视图量得到的只有那一叠字键有多高（<see cref="StackRoom"/>），而「剧照也算进去」
-    /// 和「加上这一格自己的上下留白」两句是规矩。海报按图自己的形状收窄之后（<see cref="DetailHero.StillBox"/>）
-    /// 剧照的高会变，写在视图那个尺寸回调里的那一版只在字键那一叠也跟着变的时候才会重算 —— 带子于是比内容高
-    /// 出那么一截，正是「左上角空空的」那种坏法。
+    /// 算在这儿而不在视图里：视图量得到的只有那一叠字键有多高（<see cref="StackRoom"/>）和那排键那一行有多高
+    /// （<see cref="ActionsRoom"/>），而「剧照也算进去」「右上角那张艺术图也算进去」「加上这一格自己的上下留白」
+    /// 三句是规矩。海报按图自己的形状收窄之后（<see cref="DetailHero.StillBox"/>）剧照的高会变，写在视图那个
+    /// 尺寸回调里的那一版只在字键那一叠也跟着变的时候才会重算 —— 带子于是比内容高出那么一截，正是「左上角
+    /// 空空的」那种坏法。
     /// </para>
-    /// </summary>
-    public double HeroRoom => Math.Max(StackRoom, StillHeight) + HeroInset.Top + HeroInset.Bottom;
-
-    /// <summary>
-    /// 头上那一格的高，三种页面同一条规矩：高由站在它里面那一叠东西定，跟窗口无关（「图一页面怎么改的一大片
-    /// 空白，改回去」）。电影、剧、季走 <see cref="DetailHero.Height"/> —— 那两档 460／380 是手量出来的内容高，
-    /// 判据 <see cref="HeroArt"/> 在导航那一刻就知道，所以第一帧的版面就是最后的版面。
     /// <para>
-    /// 集页量在运行时（<see cref="HeroRoom"/> → <see cref="DetailHero.EpisodeHeight"/>）：单集配的是一张 16:9
-    /// 剧照，比 2:3 海报矮一大截，那一叠字也少两行，跟着用 460 就等于在底对齐的那一叠头上留两百来像素只有画面
-    /// 的地方 —— 「集拉大窗口后会导致左上角空空的，画面不协调，电影那边处理的就很好」。
+    /// 那排键那一行和艺术图都是**取大**而不是相加：它们和字键那一叠站在同一行里（艺术图在右栏、那排键在
+    /// 底下那一行），谁高听谁的。从前那排键是字键那一叠的最后一个孩子，所以它那点高度在
+    /// <see cref="StackRoom"/> 里；搬出来之后只能在这儿加回去。
+    /// </para>
+    /// <para>
+    /// 艺术图只在集页的宽版式上有（<see cref="CornerVisibility"/>），所以 <see cref="CornerHeight"/> 在这里
+    /// 按 <see cref="HeroCard"/> 分一次档 —— 紧凑版式里那一角收着，它的高不该算进带子。
     /// </para>
     /// </summary>
-    public double HeroHeight => IsEpisodePage
-        ? DetailHero.EpisodeHeight(HeroRoom)
-        : DetailHero.Height(HeroArt);
+    public double HeroRoom =>
+        Math.Max(Math.Max(StackRoom, StillHeight), HeroCard ? CornerHeight : 0)
+        + ActionsRoom + HeroInset.Top + HeroInset.Bottom;
 
     /// <summary>
-    /// 同季那一带集摆在哪儿：集页压在头图底下那段画面里（音轨那一行底下、剧情说明上面），别的页面摆在正文
-    /// 那张纸上。<c>DetailPage.PlaceEpisodes</c> 照着它搬，两处的墨也照着它换。
+    /// 头上那一格的高。宽的一侧是老规矩：高由站在它里面那一叠东西定，跟窗口无关（「图一页面怎么改的一大片
+    /// 空白，改回去」）—— 电影、剧、季走 <see cref="DetailHero.Height"/>（那一档 412 是手量出来的内容高，
+    /// 判据 <see cref="HeroArt"/> 在导航那一刻就知道，所以第一帧的版面就是最后的版面），集页量在运行时
+    /// （<see cref="HeroRoom"/> → <see cref="DetailHero.EpisodeHeight"/>：单集配的是一张 16:9 剧照，比 2:3
+    /// 海报矮一大截，跟着用 412 就是在那一叠头上留上百像素只有画面的地方）。
+    /// <para>
+    /// 412 那一档之上唯一的一笔加项是宽版式的断点进度（<see cref="DetailHero.ProgressRoom"/>）：它跟着
+    /// <see cref="PlayTarget"/> 走（有断点才画），所以这一格的高头一回有了一个数据面上的自变量 ——
+    /// 数据到了带子长一格，没有断点的条目一个像素不动（「上方空位太多」是刚修完的病，不能为了进度条
+    /// 请回来）。
+    /// </para>
+    /// <para>
+    /// 紧凑版式（<see cref="IsCompact"/>）分两档，判据是有没有画面可铺 —— 都在
+    /// <see cref="DetailHero.CompactHeight"/> 里，连同「没有画面那一档按内容给」的理由。海报在紧凑版式里
+    /// 照画的是季、集两页（「剧页面和电影页面的封面怎么没了？」救回来，同日又两句把剧、电影两页收回去，
+    /// 见 <see cref="DetailHero.ShowsStill"/>），
+    /// <see cref="StillHeight"/> 随 <see cref="FitStill"/> 归零，<see cref="HeroRoom"/> 自然回落到文字那一叠。
+    /// </para>
     /// </summary>
-    public bool EpisodesOnScrim => IsEpisodePage;
+    public double HeroLayoutHeight => IsCompact
+        ? DetailHero.CompactHeight(PageWidth, HeroHeightRatio, HeroRoom, HeroArt)
+        : IsEpisodePage
+            ? DetailHero.EpisodeHeight(HeroRoom)
+            : DetailHero.Height(BackdropShown) + (WideProgressShown ? DetailHero.ProgressRoom : 0);
 
     /// <summary>
-    /// 带子里那一叠字和键四周的留白。集页把底下那道 64 收到 16 —— 「为什么中间要留空，导致下方的剧情说明
-    /// 看不到？」：那 64 是给「这一格铺到窗口下沿」写的（贴着窗口边读着像被截了一截），可集页底下紧跟着音轨
-    /// 那一行和那一带集，于是它就是纯粹的空气，而下面的剧情说明正差这一截。别的页面照旧。
+    /// 头部在视口中的高度。从前它等于排出来的高乘一个整体缩放（<c>HeroScale</c>，1024 到 1280 那一段最小缩到
+    /// 八成）—— 桌面版式不再整体缩小之后（「收窄窗口后组件要自动换行」）没有这一手了，两者同值。
     /// </summary>
-    public Thickness HeroInset => new(60, 28, 60, IsEpisodePage ? 16 : 64);
+    public double HeroHeight => HeroLayoutHeight;
 
     /// <summary>
-    /// 带子底下那一段的内边距。同 <see cref="HeroInset"/>：集页把上面那道 28 收到 12，那一叠键和「音频」
-    /// 之间因此只隔 28，和那一段里几块之间的 20 是同一个量级。
+    /// 窗口宽变了（<c>DetailPage.OnBodySizeChanged</c> 量完喊）—— 封面和角图跟着新宽各重排一遍。每一像素都喊，
+    /// 和带高、背景盒高那些绑定同一个节奏；两个 Fit 做的都是几次乘除加两次属性通知，拖窗口的负载不在这里。
     /// </summary>
-    public Thickness TailInset => new(28, IsEpisodePage ? 12 : 28, 28, 8);
+    partial void OnPageWidthChanged(double value) => RefitArtwork();
+
+    /// <summary>
+    /// 封面和角图按现在的窗口宽各排一遍 —— 「集页面左上角的封面要跟随窗口的宽度放大和缩小」加角图的题栏保底，
+    /// 规则都在 Core（<see cref="DetailHero.StillWidth"/>／<see cref="DetailHero.CornerBoxWidth"/>）。两个时机喊：
+    /// 图到手（<see cref="ShowStill"/>／<see cref="ShowCorner"/> 先把像素尺寸记下来），和窗口宽变了
+    /// （<see cref="OnPageWidthChanged"/>）。先封面后角图：角图让多少位（<see cref="CornerMaxWidth"/>）要看封面
+    /// 这一次多宽。
+    /// </summary>
+    private void RefitArtwork()
+    {
+        FitStill();
+        FitCorner();
+    }
+
+    /// <summary>
+    /// 封面那一格按现在的宽排：不画的档（<see cref="CoverShown"/>）先把宽高归零退出去；集页的宽版式随窗口走
+    /// （<see cref="DetailHero.StillWidth"/>，基宽是剧那张海报的 210 —— 「集页面的封面改用剧页面的封面」，
+    /// 形状也同它，2:3），紧凑版式和其余页面照旧用基宽（紧凑那一档按参考图是贴着页宽的大封面）。图到手了就
+    /// 按位图自己的形状收进盒子里（<see cref="DetailHero.StillBox"/>），还没到手就摆上限盒 —— 那一拍这一格
+    /// 整个收着（<see cref="StillVisibility"/>），摆的数没人看见。
+    /// <para>
+    /// 集页的宽版式还有一道高上限：<b>不超过旁边那一叠文字</b>（<see cref="StackRoom"/>，里面已经含按键和
+    /// 进度那几行）。封面是 2:3 的，随宽放大高得比文字快 —— 文字短的页面（片名一行、没有折行）上它会高出
+    /// 一大截，而按键排在按键行等的是整行的结束，屏上就是文字和按键之间空出海报高出来的那一截（他圈的
+    /// 那块空位，2026-09-12 死神 S2:E41 的截图）。盖住它，封面和文字栏同高，谁也不给谁留洞；文字多的页面
+    /// （片名折行）上限跟着长，封面照旧随宽放大。
+    /// </para>
+    /// </summary>
+    private void FitStill()
+    {
+        // 这一档不画封面（<see cref="CoverShown"/>，规则在 DetailHero.ShowsStill）：那一格整个收掉，宽高一并
+        // 归零 —— 带高（HeroRoom 读 StillHeight）和片名那一栏的左沿（StackLeft 读 StillWidth）跟着回落到
+        // 没有海报的那一档。摆一个看不见的宽高，带子就多垫一段「空海报」的高度。
+        if (!CoverShown)
+        {
+            StillWidth = 0;
+            StillHeight = 0;
+            return;
+        }
+
+        var maxW = IsEpisodePage && !IsCompact
+            ? DetailHero.StillWidth(PageWidth, PosterStillWidth, HeroReferenceWidth)
+            : (double)PosterStillWidth;
+        var maxH = maxW * PosterStillHeight / (double)PosterStillWidth;
+
+        if (IsEpisodePage && !IsCompact)
+            maxH = Math.Min(maxH, Math.Max(StackRoom, PosterStillHeight));
+
+        if (_stillPixels is { } pixels
+            && DetailHero.StillBox(pixels.Width, pixels.Height, maxW, maxH) is { } fit)
+        {
+            (StillWidth, StillHeight) = fit;
+        }
+        else
+        {
+            StillWidth = Math.Round(maxW);
+            StillHeight = Math.Round(maxH);
+        }
+    }
+
+    /// <summary>
+    /// 角图那一格按现在的宽排 —— 让多少位由 <see cref="CornerMaxWidth"/> 给（封面的宽进去，题栏的保底出来），
+    /// 高按位图自己的形状收进盒子里、喂带高（<see cref="CornerHeight"/> → <see cref="HeroRoom"/>）。
+    /// 没有图的时候高回 0，那一栏收着 —— 同换条目时的那两句清空。
+    /// </summary>
+    private void FitCorner()
+    {
+        OnPropertyChanged(nameof(CornerMaxWidth));
+
+        var maxW = CornerMaxWidth;
+
+        if (_cornerPixels is { } pixels
+            && DetailHero.StillBox(
+                pixels.Width, pixels.Height,
+                maxW, maxW * DetailHero.CornerHeight / DetailHero.CornerWidth) is { } fit)
+        {
+            CornerHeight = fit.Height;
+        }
+        else if (_cornerPixels is null)
+        {
+            CornerHeight = 0;
+        }
+    }
+
+    /// <summary>
+    /// 头图里那几样东西（封面、片名那一栏）靠上还是靠下站。判据就是 <see cref="HeroCard"/>：只有集页的宽版式靠上。
+    /// <para>
+    /// 集页靠上：那一格的高本来就是它里面那一叠量出来的（<see cref="HeroRoom"/>），靠上就是「内容从这一格的
+    /// 上沿起」—— 「把集页面的封面向上移」（2026-09-12）说的就是它：从前靠下站，于是封面头顶上凭空留着百来
+    /// 像素，而那正是他圈出来的那一块。右上角那张艺术图也能把这一格撑高（<see cref="CornerHeight"/> 比那一叠
+    /// 还高的时候），靠上站的话多出来的一截落在底下，封面和片名照旧贴在上沿。
+    /// </para>
+    /// <para>
+    /// 别的页面靠下，一个像素没动：电影、剧、季那三页的带高写死 <see cref="DetailHero.ArtHeight"/>，里面本来就
+    /// 留着一截富余（海报 300 之外那点），靠下站就是海报和那一栏字的下沿对齐 —— 他夸过的就是这一页的样子
+    /// （「电影那边处理的就很好」）。紧凑版式同理：那一档有画面可铺的时候带子就是那条等比的画面
+    /// （<see cref="DetailHero.CompactHeight"/>，比内容高出来的部分是画面），片名压在画面的下沿上，参考图上
+    /// 正是这个样子；没有画面可铺时带子等于内容的高，两个对齐摆出来一模一样。
+    /// </para>
+    /// </summary>
+    public VerticalAlignment HeroContentAlignment => HeroCard ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+
+    /// <summary>
+    /// 右上角那张艺术图这一次的上限盒宽，绑在标记里那个 max 上 —— 参考宽以上是 480 封顶
+    /// （<see cref="DetailHero.CornerWidth"/>，这个数只在那里写一遍），以下让位给题栏
+    /// （<see cref="DetailHero.CornerBoxWidth"/>：封面的宽进去，题栏的保底出来）。取图那一头
+    /// （<see cref="ShowCorner"/> → <see cref="FitCorner"/>）读的也是它，两处不会分叉。
+    /// 谁的手换了它的输入，谁负责喊它：<see cref="FitCorner"/>（页面宽和封面的宽都在它那儿汇齐）。
+    /// </summary>
+    public double CornerMaxWidth => DetailHero.CornerBoxWidth(PageWidth, StillWidth);
+
+    /// <inheritdoc cref="CornerMaxWidth"/>
+    public double CornerMaxHeight => DetailHero.CornerHeight;
+
+    /// <summary>
+    /// 背景那一张这次画多高 —— <see cref="DetailHero.PictureHeight"/>：宽窗铺满视口，窄窗整张等比缩，带子是
+    /// 它的下限。画在 <c>DetailPage</c> 标记里那个跟宽走的盒子（<c>BackdropPicture</c>）上，层本身照旧铺满
+    /// 整个视口 —— 盒子底下多出来的那段交给压暗的尾部。
+    /// </summary>
+    public double PictureHeight => DetailHero.PictureHeight(PageWidth, HeroHeightRatio, Viewport, HeroHeight);
+
+    /// <summary>
+    /// 背景盒子下沿那道黑色渐变摆多高 —— 盒子的下沿减去渐变自己的高（<see cref="PictureFadeHeight"/>），渐变的
+    /// 底边正好压在画面的下沿上。它必须画在背景盒子<em>外面</em>：盒子带着 0.9 的不透明度，垫在里面的话
+    /// 「满墨」其实只有九成，亮图上那半成透出来就是「还是能看到分界线」（2026-09-12 他指着的那条）—— 单独
+    /// 一层才是真的满墨。显隐在标记里跟着 <see cref="HeroVisibility"/> 走（缘由记在 DetailPage 那一层的注释
+    /// 里）：铺满那一档的下沿也在屏上，两档都靠这道渐变接缝。
+    /// </summary>
+    public Thickness PictureFadeMargin => new(0, Math.Max(0, PictureHeight - PictureFadeHeight), 0, 0);
+
+    /// <summary>下沿渐变自己的高。矮了压不住亮图的边，高了把画面吃掉一大截 —— 120 在两者之间。</summary>
+    private const double PictureFadeHeight = 120;
+
+    /// <summary>
+    /// 这一档版面要不要封面 —— 规则在 Core（<see cref="DetailHero.ShowsStill"/>）：紧凑版式下剧、电影两页
+    /// 不画（2026-09-12 一天四句的最后一落，来龙去脉记在那边）。图解出来没有不算在这里 —— 那是
+    /// <see cref="StillVisibility"/> 自己的另一半。
+    /// </summary>
+    private bool CoverShown => DetailHero.ShowsStill(IsCompact, _detail?.Type);
+
+    /// <summary>
+    /// 带子左边那张海报（集页上是剧照）显不显 —— 两句话合起来：「图解出来了没有」，和「这一档版面要不要它」
+    /// （<see cref="CoverShown"/>）。
+    /// <para>
+    /// 第二句的规矩 2026-09-12 当天翻了几回：早上紧凑版式不画海报，他一句「剧页面和电影页面的封面怎么没了？」
+    /// 整个救了回来（「单列归单列，封面是封面」）；看完实拍点走剧集两页，傍晚又把集页还回来，最后「电影页面
+    /// 窄窗口也要隐藏左上角的封面」把电影页也收了回去。最终紧凑档不画的是剧、电影两页，季、集照旧。规则本体
+    /// 在 <see cref="DetailHero.ShowsStill"/>，这里只照着问。
+    /// </para>
+    /// <para>
+    /// 不画的那一档 <see cref="FitStill"/> 把那一格的宽高一并归零：带高（<see cref="HeroRoom"/> 读
+    /// <see cref="StillHeight"/>）和片名那一栏的左沿（<see cref="StackLeft"/> 读 <see cref="StillWidth"/>）
+    /// 跟着回落到没有海报的那一档。
+    /// </para>
+    /// </summary>
+    public Visibility StillVisibility => Show(StillImage is not null && CoverShown);
+
+    /// <summary>
+    /// 带子里那一叠字和键四周的留白。集页把底下那道收到 16 —— 「为什么中间要留空，导致下方的剧情说明
+    /// 看不到？」：底下紧跟着音轨那一行和那一带集，多留就是纯粹的空气。
+    /// <para>
+    /// 其余页面那道底下的留白是同一笔旧账：它本来是给「这一格铺到窗口下沿」写的（贴着窗口边读着像被截了
+    /// 一截）。背景改成等比画面之后带子底下紧跟着尾部那几块，「组件不够紧凑」（2026-09-12）说的就是这一截 ——
+    /// 收到 24，和页边那 60、顶上那 28 一个量级。
+    /// </para>
+    /// <para>
+    /// 紧凑版式整档换成窄边：左右 20 是参考图上那种贴边一列的留法，60 的「压在剧照上的内容多让一点」是
+    /// 宽页面的讲究 —— 单列的窄页面上它就是把字挤到中间去的空气。
+    /// </para>
+    /// <para>
+    /// 集页那块板上（<see cref="HeroCard"/>）左右收到 48：板的外沿在 28，28 + 20 就是板上内容的左边 ——
+    /// 和底下 <see cref="TailInset"/> 那 48 同一竖线，海报、片名、播放键和音轨那一行因此全落在板的同一条
+    /// 边上。60 那一档的讲究是「压在剧照上的内容多让一点」，而板上没有剧照要躲。
+    /// </para>
+    /// </summary>
+    public Thickness HeroInset => IsCompact
+        ? new(20, 20, 20, 16)
+        : new(HeroCard ? 48 : 60, 28, HeroCard ? 48 : 60, IsEpisodePage ? 16 : 24);
+
+    /// <summary>
+    /// 带子底下那一段的内边距。同 <see cref="HeroInset"/>：集页把上面那道收到 12，那一叠键和「音频」
+    /// 之间因此只隔一小截，和那一段里几块之间的间距同一个量级；其余页面 14。底下 4 —— 和正文纸面之间
+    /// 本来就没有可看的缝，纸面自己那 20 会接着垫。
+    /// <para>
+    /// 左右 20 是「组件不够紧凑」之后从 28 收下来的：24 的板内边距加在这里，字落在 44 的竖线上，和底下
+    /// 纸面（20 + 24）正好同一条。
+    /// </para>
+    /// <para>
+    /// 紧凑版式左右只给 2：这一段里每块板（<c>EgBodyPanelStyle</c>）自带 24 的内边距，2 + 24 正好是头图上
+    /// 那一叠的 20（见 <see cref="HeroInset"/>）—— 片名、文件选项和播放键落在同一条竖线上，单列版式靠的
+    /// 就是这条线站直。
+    /// </para>
+    /// <para>
+    /// 集页那块板上（<see cref="HeroCard"/>）左右同样收到 48（28 的板沿加 20 的内边距，两处同一竖线），
+    /// 底下给到 20 —— 那 20 就是板和它里面最后那一块之间的缝。板底到正文纸面之间不再另留：纸面和页底色
+    /// 是同一支画刷，留一段也看不出来。
+    /// </para>
+    /// <para>
+    /// 集页的宽版式再往右挪一栏（<see cref="StackLeft"/>）：那一页这一段里只剩剧情说明（音频字幕搬进片名
+    /// 那一栏了，见 <see cref="ColumnPickersVisibility"/>），它得和片名、那一排键站在同一条左沿上 ——
+    /// 截图里那几行就是这么对齐的（「按键布局参考上方截图」，2026-09-12）。
+    /// </para>
+    /// </summary>
+    public Thickness TailInset => IsCompact
+        ? new(2, 12, 2, 8)
+        : HeroCard
+            ? new(StackLeft, 12, StackLeft, 20)
+            : new(20, IsEpisodePage ? 12 : 14, 20, 4);
+
+    /// <summary>
+    /// 片名那一栏里那两栏之间的一格间距（<c>HeroContent.ColumnSpacing</c>，标记里绑的是这一个数）。
+    /// <see cref="StackLeft"/> 要它，所以它不能只写在标记里。
+    /// </summary>
+    public double ColumnSpacing => 22;
+
+    /// <summary>
+    /// 片名那一栏（<c>HeroStack</c>）的左沿离本页左边有多远 —— <see cref="HeroInset"/> 那一道，加上海报那一栏
+    /// 自己的宽（<see cref="StillWidth"/>）和两栏之间那一格（<see cref="ColumnSpacing"/>）。
+    /// <para>
+    /// 海报没画出来的时候不加：那一栏是 Auto、收起来就是 0 宽（<see cref="StillVisibility"/>），片名那一栏
+    /// 直接站到板的内沿上 —— 这里照着同一句话算，屏上那一条沿才不会差一格。
+    /// </para>
+    /// <para>
+    /// 尾部那一段（<see cref="TailInset"/>）和那排键（<see cref="ActionsColumn"/>）都按它对齐：截图里片名、
+    /// 音频字幕、那排键和剧情说明是同一条左沿。
+    /// </para>
+    /// </summary>
+    private double StackLeft => HeroInset.Left
+        + (StillVisibility == Visibility.Visible ? StillWidth + ColumnSpacing : 0);
+
+    /// <summary>
+    /// 那排键站在头图那一格的第几栏 —— 集页的宽版式站在片名那一栏里（截图那种排法：按键左沿跟片名对齐），
+    /// 其余页面横着铺满三栏、贴着内容那一条左沿（那是他自己定的，见那排键上的注释）。
+    /// </summary>
+    public int ActionsColumn => HeroCard ? 1 : 0;
+
+    /// <inheritdoc cref="ActionsColumn"/>
+    public int ActionsColumnSpan => HeroCard ? 1 : 3;
 
     /// <summary>
     /// 带子下沿那道渐深罩子这一次有多高 —— <see cref="DetailHero.ScrimSpan"/>：带子收窄了它就跟着收，
@@ -435,8 +922,13 @@ public sealed partial class DetailViewModel : PageViewModel
     /// （<see cref="PaperLine"/>，窗口高过阈值）就不再撑，富余的高度归纸 —— 不然剧情说明底下那段空画面会跟着
     /// 窗口一起长（「下面越改空位越大」）。过了那条线之后纸就跟着窗口一像素一像素地露出来，中间没有台阶
     /// （「拉大窗口之后下面突然冒出一大截」）。
+    /// <para>
+    /// 还有第三道上限：背景那一张的下沿（<see cref="PictureHeight"/>）。尾部是「压暗的画面」，等比画面条底下
+    /// 已经没有画面，撑过去就是一段空位 —— 纸面和货架被压到老下面去，中间空着一大块（他 2026-09-12 指着的
+    /// 那张截图）。撑到画面下沿为止，底下的空当交给正文的内容自动补上。
+    /// </para>
     /// </summary>
-    public double TailMinHeight => DetailHero.TailHeight(Viewport, HeroHeight, HeroArt, PaperLine);
+    public double TailMinHeight => DetailHero.TailHeight(Viewport, HeroHeight, BackdropShown, PaperLine, PictureHeight);
 
     /// <summary>
     /// 正文那张纸自己的下限 —— 见 <see cref="DetailHero.PaperHeight"/>：滚到底的那一屏只能有纸。
@@ -446,7 +938,7 @@ public sealed partial class DetailViewModel : PageViewModel
     /// 页面的种类走。
     /// </para>
     /// </summary>
-    public double PaperMinHeight => DetailHero.PaperHeight(Viewport, HeroArt);
+    public double PaperMinHeight => DetailHero.PaperHeight(Viewport, BackdropShown);
 
     /// <summary>
     /// The file 播放 would start: the item itself for a film, the next unwatched episode for a show.
@@ -456,11 +948,50 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(PlayText))]
     [NotifyPropertyChangedFor(nameof(PlayVisibility))]
     [NotifyPropertyChangedFor(nameof(RestartVisibility))]
+    [NotifyPropertyChangedFor(nameof(ProgressValue))]
+    [NotifyPropertyChangedFor(nameof(ResumeRemain))]
+    [NotifyPropertyChangedFor(nameof(ResumeVisibility))]
     [NotifyPropertyChangedFor(nameof(InfoVisibility))]
     [NotifyPropertyChangedFor(nameof(PickersVisibility))]
+    [NotifyPropertyChangedFor(nameof(ColumnPickersVisibility))]
+    [NotifyPropertyChangedFor(nameof(WideProgressVisibility))]
+    // 有断点没断点翻了宽版式进度那一行（WideProgressShown），其余三页的带高跟着给它留房 ——
+    // 带高一变，站在带高上的这一串都得重喊一遍（同 PageWidth 的名单）。
+    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
+    [NotifyPropertyChangedFor(nameof(HeroHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureHeight))]
+    [NotifyPropertyChangedFor(nameof(PictureFadeMargin))]
+    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
+    [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
+    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
     [NotifyCanExecuteChangedFor(nameof(PlayCommand))]
     [NotifyCanExecuteChangedFor(nameof(RestartCommand))]
     public partial EmbyItem? PlayTarget { get; set; }
+
+    /// <summary>紧凑版式进度条的位置 —— 断点占全片的比例乘满量，没有断点就是 0（那一行整个不画）。</summary>
+    public double ProgressValue => (PlayTarget?.ProgressFraction ?? 0) * 100;
+
+    /// <summary>进度条旁边「剩余 x 分钟」那一行 —— <see cref="ItemDetail.Remaining"/>，null 就不画。</summary>
+    public string? ResumeRemain => ItemDetail.Remaining(PlayTarget);
+
+    /// <summary>断点进度那一行画不画：有断点才有进度可言。</summary>
+    public Visibility ResumeVisibility => Show(PlayTarget?.HasResumePosition == true);
+
+    /// <summary>
+    /// 宽版式那排键底下那一条断点进度（截图里的「剩余 5 分钟」）画不画 —— 两份宽版式绑的是同一个判据：
+    /// 集页片名那一栏里的那份（<c>WideProgress</c>），和其余三页（电影、剧、季）带子底下那一行里新添的
+    /// 那份（「宽窗口缺少播放进度条」，2026-09-12）。两份的容器各按各的页面收着，屏上永远只有一份在。
+    /// <para>
+    /// 从前只有集页画它：其余三页的带高写死 412，这一行没有地方给。现在带高那头按
+    /// <see cref="DetailHero.ProgressRoom"/> 给有断点的条目留房（见 <see cref="HeroLayoutHeight"/>）——
+    /// 没有断点这一行收着，带高一个像素不动。紧凑版式里这一对（条＋剩余时间）在画面底下那一块里，
+    /// 绑的是不带版式判据的 <see cref="ResumeVisibility"/>。
+    /// </para>
+    /// </summary>
+    public Visibility WideProgressVisibility => Show(WideProgressShown);
+
+    /// <summary><see cref="WideProgressVisibility"/> 的 bool 面 —— 带高那头也读它，版面不吃 Visibility。</summary>
+    private bool WideProgressShown => !IsCompact && PlayTarget?.HasResumePosition == true;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WatchedVisibility))]
@@ -471,6 +1002,29 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(FavoriteVisibility))]
     [NotifyPropertyChangedFor(nameof(NotFavoriteVisibility))]
     public partial bool Favorite { get; set; }
+
+    /// <summary>
+    /// 连播 —— 「集页面加一个连播按钮」（2026-09-12）。开的是设置里那一档「自动播放下一集」
+    /// （<see cref="PlaybackSettings.AutoPlayNextEpisode"/>：一集放完自动接下一集，跨季也接着放），
+    /// 不是这一页自己的状态 —— 播放器 ⚙ 菜单和设置页读写的都是同一份，谁改了屏上到处都认；写回即存，
+    /// 和播放器里那一颗的规矩一致（见 <c>PlayerViewModel.AutoPlayNextEpisode</c>）。
+    /// <para>
+    /// 没拿到设置（<see cref="Attached"/> 之前）读 false、写不进：页面还没接上服务，那一拍屏上那颗开关
+    /// 是个占位。
+    /// </para>
+    /// </summary>
+    public bool ContinuePlay
+    {
+        get => Attached && Settings.Playback.AutoPlayNextEpisode;
+        set
+        {
+            if (!Attached || Settings.Playback.AutoPlayNextEpisode == value) return;
+
+            Settings.Playback.AutoPlayNextEpisode = value;
+            _settings!.Save();
+            OnPropertyChanged(nameof(ContinuePlay));
+        }
+    }
 
     /// <summary>
     /// 副标题那一行画的是一行字还是一排点得动的类型：有类型就是后者（见 <see cref="SublineGenres"/>），
@@ -529,6 +1083,15 @@ public sealed partial class DetailViewModel : PageViewModel
     private bool IsEpisodePage => _detail?.Type == EmbyItemType.Episode;
 
     /// <summary>
+    /// 这一页要不要按「背后铺着一张图」那一档布（<see cref="HeroArt"/> 的判据）。集页不铺背景图
+    /// （2026-09-12「去掉集页面的背景图」），无论服务器有什么都是 false；其余页面照 <see cref="ItemArtwork.Hero"/>
+    /// 问标签表。三处赋值（<see cref="Attach"/>、<see cref="Preview"/>、<see cref="Apply"/>）共用这一句 ——
+    /// 答案分叉的后果是同一页里带高按两档各算各的。
+    /// </summary>
+    private static bool SpreadsBackdrop(EmbyItem item) =>
+        item.Type != EmbyItemType.Episode && ItemArtwork.Hero(item).Count > 0;
+
+    /// <summary>
     /// Whether 单集 belongs down the page as rows rather than across it as cards. The rule itself is
     /// <see cref="ItemDetail.EpisodesAsList"/>; what is here is only 「asked of this page's own item」.
     /// </summary>
@@ -545,16 +1108,29 @@ public sealed partial class DetailViewModel : PageViewModel
     public Visibility ScoreVisibility => Show(!string.IsNullOrWhiteSpace(Score));
 
     /// <summary>
-    /// 头图上那行「视频：4K · HEVC · MP4 · 1.9 GB」画不画。有话说是第一句，第二句是**底下那个媒体源下拉没在屏上**
+    /// 「视频：1080p · H264 · MP4 · 211 MB」这一行该不该有。两处用它：集页的宽版式里它是一枚 chips
+    /// （和音频、字幕那几格一起换行，「按键布局参考上方截图」），其余版式里它是片名那一栏的独立一行
+    /// （<see cref="VideoLineVisibility"/>）。
+    /// <para>
+    /// 有话说是第一句，第二句是**底下那个媒体源下拉没在屏上**
     /// —— 那个下拉每一行都以同一份读数结尾（<see cref="ItemDetail.SourceLabel"/> 和
     /// <see cref="ItemDetail.VideoLine"/> 问的是同一个 <c>ToQualityLabel()</c>），两样同时在屏上就是同一句话在
     /// 相隔两百像素的地方说了两遍（2026-09-05 界面复查）。
+    /// </para>
     /// <para>
     /// 下拉只在有两个以上媒体源时才出现（<see cref="SourceVisibility"/>），而那才是这一行唯一多余的时候：一个文件
     /// 的条目上没有下拉，这一行是那份读数唯一的出处，收掉它就等于把分辨率和大小从页面上抹了。
     /// </para>
     /// </summary>
-    public Visibility VideoVisibility => Show(!string.IsNullOrWhiteSpace(VideoLine) && Sources.Count <= 1);
+    private bool VideoShown => !string.IsNullOrWhiteSpace(VideoLine) && Sources.Count <= 1;
+
+    public Visibility VideoVisibility => Show(VideoShown);
+
+    /// <summary>
+    /// 片名那一栏里那行「视频：…」显不显 —— 集页的宽版式不画（那一页它下到文件选项那排 chips 里了，见
+    /// <see cref="VideoVisibility"/>），其余版式照旧。
+    /// </summary>
+    public Visibility VideoLineVisibility => Show(VideoShown && !HeroCard);
 
     /// <summary>
     /// Whether there is a picture yet, rather than a flag set beside the assignment. The two used to be
@@ -567,20 +1143,78 @@ public sealed partial class DetailViewModel : PageViewModel
     /// 固定在背景里那一层画不画 —— 「当前任务的背景要用亚克力遮罩，固定在背景中……占满标题栏」里那一层
     /// （<c>DetailPage.xaml</c> 的 <c>Backdrop</c>）。
     /// <para>
-    /// 问的是 <see cref="HeroArt"/>「服务器上有没有这张图」，不是 <see cref="HeroVisibility"/>「位图解出来了
-    /// 没有」：层先站好，压住标题栏那行字的罩子就先在了，图到了只是这一层里多一张画面。反过来就是「点击主页
-    /// 封面后窗口会闪一下」—— 先按没有图布一遍、图到了再布第二遍。
+    /// 判据是 <see cref="BackdropShown"/>（服务器上有这张图），不是 <see cref="HeroVisibility"/>「位图解出来
+    /// 了没有」：层先站好，压住标题栏那行字的罩子就先在了，图到了只是这一层里多一张画面。反过来就是「点击
+    /// 主页封面后窗口会闪一下」—— 先按没有图布一遍、图到了再布第二遍。
     /// </para>
     /// </summary>
-    public Visibility HeroArtVisibility => Show(HeroArt);
+    public Visibility HeroArtVisibility => Show(BackdropShown);
 
     /// <summary>
-    /// 上面那一层的反面：没有那张图的时候，头图那一格自己当底的那一层（一层底色加顶上一道罩子）。有图的时候
-    /// 这两样都在那张固定的图上，这一层就得让开，否则一块不透明的底色会把图盖掉。
+    /// 上面那一层的反面：背景不画的时候（这一条目没有图），头图那一格自己当底的那一层（一层底色加顶上一道
+    /// 罩子）。有图的时候这两样都在那张固定的图上，这一层就得让开，否则一块不透明的底色会把图盖掉。
+    /// <para>
+    /// 2026-09-12 起集页的宽版式不在这一档里：那一页那一段合成了一块面板（见 <see cref="HeroCard"/>），底色、
+    /// 圆角和外圈由面板自己画。两层都画的话面板的圆角先被糊掉，左右那两条 28 的留白也会被填成底色。
+    /// </para>
     /// </summary>
-    public Visibility HeroPlainVisibility => Show(!HeroArt);
+    public Visibility HeroPlainVisibility => Show(!BackdropShown && !HeroCard);
 
-    public Visibility StillVisibility => Show(StillImage is not null);
+    /// <summary>
+    /// 集页整段上方那一块面板显不显 —— 「把集页面上方框的组件框起来」（2026-09-12）。
+    /// <para>
+    /// 板是一整块、分两截画（见 <c>DetailPage.xaml</c> 的 <c>HeroCardTop</c> 和 <c>HeroCardBottom</c>）：上截贴在
+    /// 头图那一格里（海报、片名、六颗键、右上角那张艺术图都站在这块板上），下截是尾部那一格（音轨字幕和剧情
+    /// 说明）。两截的左右留白和下沿完全对上，四个角只有外侧那两个圆 —— 屏上是一条通栏的板。
+    /// </para>
+    /// <para>
+    /// 只有宽版式有它：紧凑版式是单列，整页就没有「上方那一段」可框，而那一档每一块本来就自带面板 —— 多套
+    /// 一层只是又一条边框。<see cref="HeroInset"/> 和 <see cref="TailInset"/> 都跟着它走（板边上要留出 20），
+    /// 所以这三个属性是一组：宽窄一变、页面种类一变，三个一起重算。
+    /// </para>
+    /// <para>
+    /// 判据不是「有没有剧照」：有剧照的那几页整段压在照片上，一块不透明的板会把照片盖掉；集页是唯一
+    /// 「没有剧照、又整段挤在第一屏里」的那一页。
+    /// </para>
+    /// <para>
+    /// 同日他还要去掉过一次（「去掉集页面最上面的框」），去完又要回来（「框加回去」）—— 同一个下午来回两趟，
+    /// 落地的是有板的这一版。要撤的话，去的不是这一句，是 <c>DetailPage.xaml</c> 里那两块 Border、这两句
+    /// 显隐和 <c>DetailPage.PaintScrim</c> 的分档，四样一起。
+    /// </para>
+    /// </summary>
+    public Visibility HeroCardVisibility => Show(HeroCard);
+
+    /// <summary>
+    /// <see cref="HeroCardVisibility"/> 的布尔那一份 —— 视图在代码里要问它两句：尾部那一块的底色（有板时透明、
+    /// 由板自己画，没板时接住头图末色），以及那四块内层小面板各自的框。判据只写在这儿一处。
+    /// </summary>
+    public bool HeroCardShown => HeroCard;
+
+    /// <summary>
+    /// 带子下沿那道渐深罩子画不画 —— 它压的是一张剧照，好让压在图上的白字读得出来。
+    /// <para>
+    /// 集页那块板上不画（<see cref="HeroCard"/>）：那一页不铺背景图（<see cref="SpreadsBackdrop"/>），没有照片
+    /// 可压；留着它只会把板的下半截压暗，板底和自己那几块小面板的底边对不上。板上的底由板自己给。
+    /// </para>
+    /// </summary>
+    public Visibility ScrimVisibility => Show(!HeroCard);
+
+    /// <summary>紧凑版式里才画的那一块（全宽播放键、断点进度、带字的一排操作）显不显 —— <see cref="IsCompact"/>。</summary>
+    public Visibility CompactVisibility => Show(IsCompact);
+
+    /// <summary>
+    /// 带子里独立一行的那排键显不显 —— 其余三个页面（电影、剧、季）的宽版式用它。集页的宽版式不画：那排键
+    /// 搬进了片名那一栏的叠里（<c>DetailPage</c> 标记里的 <c>ColumnActions</c>，2026-09-12）—— 封面换成剧
+    /// 海报之后比文字高出一大截，独立一行要等封面行结束，文字和按键之间就空出海报高出来的那一截（他圈的
+    /// 那块空位）。紧凑版式里它的活交给画面底下那一块（<see cref="CompactVisibility"/>）。
+    /// </summary>
+    public Visibility WideActionsVisibility => Show(!IsCompact && !HeroCard);
+
+    /// <summary>
+    /// 片名那一叠里那排键（集页的宽版式的那一份，<c>ColumnActions</c>）显不显 ——
+    /// <see cref="WideActionsVisibility"/> 的另一半，判据同 <see cref="HeroCardVisibility"/>。
+    /// </summary>
+    public Visibility ColumnActionsVisibility => Show(HeroCard);
 
     /// <summary>
     /// 剧名上方那一枚徽标画不画 —— 只问一句：图解出来了没有。
@@ -596,14 +1230,15 @@ public sealed partial class DetailViewModel : PageViewModel
     public Visibility PlateVisibility => Show(PlateImage is not null);
 
     /// <summary>
-    /// 右上角那张艺术图画不画。两句话：图解出来了没有，以及这一页还剩不剩地方（<see cref="DetailHero.CornerFits"/>
-    /// —— 「窗口缩小到一定程度自动隐藏」）。哪一张该摆在那儿是取图那一遍的事（<see cref="LoadArtworkAsync"/> 问
-    /// <see cref="ItemArtwork.Corner"/>）。
+    /// 右上角那张艺术图画不画。三句话：图解出来了没有；这一页是不是集页 —— 用户点的名是「集页面」，剧、电影
+    /// 页面的那一角是他同一天下令去掉的（「去掉剧页面、电影页面右上角的艺术图」），季页从来不在里头；以及版式
+    /// 还宽得摆得下 —— 紧凑版式是单列，一张 480 宽的画没有地方站，让位。
     /// <para>
-    /// 图照旧取、照旧解，只是窄窗口上不画：那一张已经在缓存里，窗口一拉宽它立刻就在，用不着再等一趟网络。
+    /// 「是不是集页」跟着页面的种类走，所以要在 <see cref="AnnounceShape"/> 里喊一声；「宽窄」跟着
+    /// <see cref="PageWidth"/> 走，那一头的通知挂在它的 setter 上。
     /// </para>
     /// </summary>
-    public Visibility CornerVisibility => Show(CornerImage is not null && DetailHero.CornerFits(PageWidth));
+    public Visibility CornerVisibility => Show(CornerImage is not null && IsEpisodePage && !IsCompact);
 
     /// <summary>
     /// 页面最底下那张横幅画不画。两句话：图解出来了没有，以及这一页是不是那三种页面之一 —— 用户点的名是「电影
@@ -695,10 +1330,31 @@ public sealed partial class DetailViewModel : PageViewModel
     /// 季选择器不在这一行里：它跟着那一带集走，摆在它替掉的那块内容边上。算进来的话，一部剧的选中集只有一个
     /// 媒体源、又没有可选轨道时，屏上会剩一行空的。
     /// </para>
+    /// <para>
+    /// 2026-09-12 起集页的宽版式不在这一档里：那一页把这三行搬到片名那一栏底下（「按键布局参考上方截图」，
+    /// 见 <see cref="ColumnPickersVisibility"/>），尾部那一份在这一页上收着 —— 两份只有一份在屏上，尾部那份
+    /// 归这里的判据管，栏里那份归 <see cref="ColumnPickersVisibility"/>。
+    /// </para>
     /// </summary>
-    public Visibility PickersVisibility => Show(
+    public Visibility PickersVisibility => Show(!HeroCard && Pickable);
+
+    /// <summary>
+    /// 片名那一栏里那一行文件选项（集页的宽版式）显不显 —— <see cref="PickersVisibility"/> 的另一半。
+    /// <para>
+    /// 「按键布局参考上方截图」（2026-09-12）：那一页的音频、字幕和那排键一路排在片名底下，所以那一份标记在
+    /// <c>HeroStack</c> 里、标签在下拉的左边（尾部那一份的标签在下拉头上，是另一种排法）。判据和尾部那一份
+    /// 同一句，只是各自要「是不是集页的宽版式」这一半。
+    /// </para>
+    /// </summary>
+    public Visibility ColumnPickersVisibility => Show(HeroCard && Pickable);
+
+    /// <summary>
+    /// 那一行文件选项真有的可选且播放键指着一个文件 —— 两份共用的那一半判据（见
+    /// <see cref="PickersVisibility"/> 上那几段）。
+    /// </summary>
+    private bool Pickable =>
         PlayTarget is not null
-        && (Sources.Count > 1 || AudioTracks.Count > AutoRows || SubtitleTracks.Count > AutoRows + 1));
+        && (Sources.Count > 1 || AudioTracks.Count > AutoRows || SubtitleTracks.Count > AutoRows + 1);
 
     /// <summary>The 自动 row every track picker carries whether the file has tracks or not.</summary>
     private const int AutoRows = 1;
@@ -928,7 +1584,7 @@ public sealed partial class DetailViewModel : PageViewModel
 
         // 版面高在这一句就定了下来，早于任何一次网络往返 —— 「点击主页封面后窗口会闪一下」说的就是这一句以前
         // 得等图。列表接口回来的条目已经带着 ImageTags，而这一页正是从那张列表上点进来的。
-        HeroArt = ItemArtwork.Hero(request.Item).Count > 0;
+        HeroArt = SpreadsBackdrop(request.Item);
 
         var ui = settings.Settings.Ui;
 
@@ -1068,11 +1724,12 @@ public sealed partial class DetailViewModel : PageViewModel
         Watched = seed.IsWatched;
         Favorite = seed.UserData?.IsFavorite == true;
 
-        var episode = seed.Type == EmbyItemType.Episode;
-        StillWidth = episode ? EpisodeStillWidth : PosterStillWidth;
-        StillHeight = episode ? EpisodeStillHeight : PosterStillHeight;
+        // 这一格先按上限盒摆（集页的宽版式随当前窗口宽走，见 FitStill）；图到手再按它自己的形状收窄。
+        _stillPixels = null;
+        _cornerPixels = null;
+        RefitArtwork();
 
-        HeroArt = ItemArtwork.Hero(seed).Count > 0;
+        HeroArt = SpreadsBackdrop(seed);
 
         // 四张图现在就开始取 —— 它们是最慢的一样，而卡片手上的标签和详情接口给的是同一批。
         _art?.Cancel();
@@ -1093,9 +1750,10 @@ public sealed partial class DetailViewModel : PageViewModel
     /// setter 一个都不会替它们通知。少喊一个的下场是屏上某一格停在上一档 —— 编译看不见，测试也进不来。
     /// </para>
     /// <para>
-    /// 剧名上方那枚徽标和右上角那张艺术图<em>不在</em>这一批里，从「统一改为在剧名上方显示徽标，右上角显示艺术图」
-    /// 那次起就不在了：它们的显隐只问一句「图解出来了没有」（见 <see cref="PlateVisibility"/>），而那一句跟着
-    /// <see cref="PlateImage"/> 自己的 setter 走。从前名牌摆哪个角是按页面的种类分的，那时候它确实要在这儿喊一声。
+    /// 剧名上方那枚徽标<em>不在</em>这一批里，从「统一改为在剧名上方显示徽标」那次起就不在了：它的显隐只问一句
+    /// 「图解出来了没有」（见 <see cref="PlateVisibility"/>），而那一句跟着 <see cref="PlateImage"/> 自己的
+    /// setter 走。从前名牌摆哪个角是按页面的种类分的，那时候它确实要在这儿喊一声。（右上角那张艺术图也是这一句
+    /// 的老主顾 —— 2026-09-12 整个退场，连着那一问一起走了。）
     /// </para>
     /// </summary>
     private void AnnounceShape()
@@ -1109,14 +1767,37 @@ public sealed partial class DetailViewModel : PageViewModel
         // 带子的高也跟着页面的种类走（集页按里面那一叠实测给，见 HeroHeight），那一带集摆在图上还是纸上同理。
         // 同样是「条目的事」而不是「谁的值变了」：从一部电影翻到一集时 HeroArt 和视口都可能一个字没改，
         // 那两处的通知一次都不会来。
+        OnPropertyChanged(nameof(HeroLayoutHeight));
         OnPropertyChanged(nameof(HeroHeight));
         OnPropertyChanged(nameof(ScrimHeight));
         OnPropertyChanged(nameof(BodyMinHeight));
         OnPropertyChanged(nameof(TailMinHeight));
-        OnPropertyChanged(nameof(EpisodesOnScrim));
+        OnPropertyChanged(nameof(PictureHeight));
+        OnPropertyChanged(nameof(PictureFadeMargin));
         OnPropertyChanged(nameof(HeroInset));
         OnPropertyChanged(nameof(TailInset));
         OnPropertyChanged(nameof(HeroRoom));
+
+        // 集页那块面板、以及它替掉的两层（头图的底色和带子下沿的罩子），三句判据里都有一句是「这一页是不是
+        // 集页」，所以和上面那五个同宗：从一集翻到一部电影时 HeroArt 和视口可能一个字没改。
+        OnPropertyChanged(nameof(HeroCardVisibility));
+        OnPropertyChanged(nameof(HeroCardShown));
+        OnPropertyChanged(nameof(HeroPlainVisibility));
+        OnPropertyChanged(nameof(ScrimVisibility));
+
+        // 片名那一叠靠上还是靠下（HeroContentAlignment）也是这句「是不是集页」的一句话，同一宗。
+        OnPropertyChanged(nameof(HeroContentAlignment));
+
+        // 同一句「是不是集页的宽版式」还管着那排键站在第几栏、那一份画不画（带子里那份只在其余三个页面上
+        // 站班，集页的那份在片名那一栏的叠里）、那一条断点进度画不画，「视频：…」那一行让不让位给片名那一栏
+        // 的 chips（VideoLineVisibility），以及文件选项那一行是搬在片名那一栏里还是在尾部（两份只有一份在屏上）。
+        OnPropertyChanged(nameof(ActionsColumn));
+        OnPropertyChanged(nameof(ActionsColumnSpan));
+        OnPropertyChanged(nameof(WideActionsVisibility));
+        OnPropertyChanged(nameof(ColumnActionsVisibility));
+        OnPropertyChanged(nameof(WideProgressVisibility));
+        OnPropertyChanged(nameof(ColumnPickersVisibility));
+        OnPropertyChanged(nameof(VideoLineVisibility));
 
         // 那一行文件选项跟着播放键的落点开合（见 PickersVisibility）：落点是空的（人物页、集还没回来）就收起来。
         // 轨道那几个集合是上一个条目留下的，从一部剧翻到一集时它们可能一个都没变，那边的通知一次不会来。
@@ -1125,6 +1806,9 @@ public sealed partial class DetailViewModel : PageViewModel
         // 页尾那张横幅只摆在三种页面上（电影、剧、集，见 FooterVisibility），也就是跟着页面的种类走。图本身可能
         // 还是上一个条目那张，那边的通知一次不会来。
         OnPropertyChanged(nameof(FooterVisibility));
+
+        // 右上角那张艺术图只摆在集页上（见 CornerVisibility），同一句话对它也成立。
+        OnPropertyChanged(nameof(CornerVisibility));
     }
 
     /// <summary>
@@ -1176,21 +1860,19 @@ public sealed partial class DetailViewModel : PageViewModel
         Watched = item.IsWatched;
         Favorite = item.UserData?.IsFavorite == true;
 
-        // A poster cropped to 16:9 loses the half with the title on it, so only an episode gets the wide
-        // shape; the rest keep 2:3. 这两个数是上限，不是定值 —— 图解出来之后按它自己的形状收窄，见 ShowStill。
-        var episode = item.Type == EmbyItemType.Episode;
-
-        // 图留着的那一档连这两个数一起留着：海报到手时 ShowStill 已经把它们按图自己的形状收窄过，写回上限就是把那
-        // 一格重新撑开一次，屏上是海报周围凭空多出一条边再收回去。
+        // 图留着的那一档连这些一起留着：海报到手时 FitStill 已经把它们按图和当前窗口宽收窄过，写回上限就是把那
+        // 一格重新撑开一次，屏上是海报周围凭空多出一条边再收回去。（集页宽版式那一档的上限随窗口走
+        // （DetailHero.StillWidth），所以这里不写死两个数，交给 FitStill 按当前宽算。）
         if (!keepArtwork)
         {
-            StillWidth = episode ? EpisodeStillWidth : PosterStillWidth;
-            StillHeight = episode ? EpisodeStillHeight : PosterStillHeight;
+            _stillPixels = null;
+            _cornerPixels = null;
+            RefitArtwork();
         }
 
         // 再问一遍，因为完整条目才是权威的那一份 —— 列表上的条目偶尔比它少几个标签。多数时候两次的答案一样，
         // 于是这一句什么也不改：生成的 setter 只在值真变了的时候才通知。
-        HeroArt = ItemArtwork.Hero(item).Count > 0;
+        HeroArt = SpreadsBackdrop(item);
 
         // 图一样就整批留着，连正在飞的那一趟一起（Fresh 比的是「要画的还是这批图」而不是「还是同一个对象」，
         // 所以卡片那一份起的解码回来照样贴得上）。不一样才清空重取 —— 换季、翻页、或者服务器上换过图。
@@ -1200,8 +1882,14 @@ public sealed partial class DetailViewModel : PageViewModel
             StillImage = null;
             PlateImage = null;
             CornerImage = null;
+            CornerHeight = 0;
             FooterImage = null;
             FooterPick = null;
+
+            // 裁切模糊的原料和档位跟着这一批图一起作废：在路上的重糊回来时生代号对不上，自己会扔。
+            _heroPixels = null;
+            _heroBlurRadius = -1;
+            _heroBlurGeneration++;
 
             _art?.Cancel();
             _art?.Dispose();
@@ -1405,33 +2093,52 @@ public sealed partial class DetailViewModel : PageViewModel
     {
         if (!Attached) return;
 
-        // An episode's own Primary is the still from the episode; a film's is its poster, and its
-        // Backdrop is the same picture already blurred behind the title, so it is not offered here.
+        // 左上角那一格封面（「集页面的封面改用剧页面的封面」，2026-09-12）：集页取剧集那一层的 Primary ——
+        // 就是剧页面上那张 2:3 海报，借的也是同一条路（show 在 WhenAll 外头就已经在路上了）；借不到（没有
+        // SeriesId、服务器没应答、或者剧自己连一张封面都没有）才退回本集自己的那几张 —— 有一张剧照总比
+        // 空着一格强。其余页面照旧取自己的 Primary / Thumb。
         var episode = item.Type == EmbyItemType.Episode;
-        var types = episode
-            ? new[] { EmbyImageStore.Primary, EmbyImageStore.Thumb, EmbyImageStore.Backdrop }
-            : [EmbyImageStore.Primary, EmbyImageStore.Thumb];
 
-        // 三样图三个位置，四种页面同一套 —— 「统一改为在剧名上方显示徽标，右上角显示艺术图」加上「在电影页面
-        // 剧页面 集页面的底部添加横幅」。不再按页面的种类分岔（从前集页问名牌、别的页面问「艺术图优先、没有就退
-        // 名牌」那一支），也因此不再有「哪一张让哪一张」：服务器没有的那一样就是那一格空着。
+        // 集页不铺背景图（见 <see cref="HeroArt"/>），所以头图那一串整页不画 —— 那就一张都不取，省下的不止一次
+        // 下载：从前那一档还要把图解到像素、过一遍模糊（<c>HeroPictureLoader</c>），全是没人看的功夫。
+        // 集页多问的倒是另一趟：剧集那一层的条目。右上角那张艺术图（<see cref="ItemArtwork.Corner"/>）、页尾那张
+        // 横幅（<see cref="ItemArtwork.Footer"/>）和左上角这张封面都可能要借它的 —— 服务器不下发 ParentArt /
+        // ParentBanner，剧集那个条目只有自己取到才借得成。一趟往返三处共用；电影和剧自己就是答案，不用问。
+        async Task<EmbyItem?> ShowAsync(CancellationToken token)
+        {
+            if (!episode || item.SeriesId is not { Length: > 0 } series) return null;
+
+            try
+            {
+                return await _session!
+                    .ExecuteAsync((client, ct) => client.GetItemAsync(series, ct), token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+            catch (Exception error)
+            {
+                Log.Debug(Category, $"取剧集那一层失败（{item.Name}）：{error.Message}");
+                return null;
+            }
+        }
+
+        var show = ShowAsync(art.Token);
+
         var plate = ItemArtwork.Plate(item);
-        var corner = ItemArtwork.Corner(item);
 
         try
         {
-            // 五张图分头去取。以前是一张接一张：名牌回来了才开始要头图，头图回来了才开始要剧照 —— 三次往返
+            // 四张图分头去取。以前是一张接一张：名牌回来了才开始要头图，头图回来了才开始要剧照 —— 三次往返
             // 排成一队，慢的那一张拖住后面两张。它们之间没有任何依赖，谁先回来谁先显示，版面不看先后。
             await Task.WhenAll(
                     Paint(DecodeFirstAsync(Refs(plate), PlateDecodeWidth, art.Token),
                         picture => PlateImage = picture),
-                    Paint(DecodeFirstAsync(ItemArtwork.Hero(item), HeroDecodeWidth, art.Token),
-                        picture => HeroImage = picture),
-                    Paint(DecodeFirstAsync(Refs(corner), CornerDecodeWidth, art.Token),
-                        picture => CornerImage = picture),
-                    Paint(FooterAsync(item, art.Token), picture => FooterImage = picture),
-                    Paint(DecodeFirstAsync(item, types, episode ? EpisodeStillWidth : PosterStillWidth, art.Token),
-                        picture => ShowStill(picture, episode)))
+                    HeroAsync(item, art.Token),
+                    Paint(CornerAsync(item, show, art.Token), ShowCorner),
+                    Paint(FooterAsync(item, show, art.Token), picture => FooterImage = picture),
+                    Paint(StillAsync(item, show, art.Token), ShowStill))
                 .ConfigureAwait(true);
         }
         catch (OperationCanceledException)
@@ -1451,33 +2158,99 @@ public sealed partial class DetailViewModel : PageViewModel
             if (Fresh(art, item) && picture is not null) assign(picture);
         }
 
-        // 页尾那张横幅比别的几张多一步：一集自己几乎不会有横幅图（服务器把它挂在剧集那一层，同徽标），所以那一档
-        // 要多问一趟剧集才借得到（<see cref="ItemArtwork.Footer"/> —— 服务器不下发 ParentBanner）。多这一趟的代价
-        // 认得清：只在集页、只在这一集自己没有横幅图的时候问，而它换来的是「集页面的底部」真的有东西。它误不了
-        // 任何一件正事 —— 那张图在整页最底下、滑到底才看得见，问失败就是那儿空着（catch 掉，不往上抛）。
-        async Task<BitmapImage?> FooterAsync(EmbyItem page, CancellationToken token)
+        // 电影和剧的头图：解到像素存起来（_heroPixels —— 裁切模糊的原料），按当前的模糊档位渲染上屏，自己
+        // 完成上屏（不经 Paint：它要多带一个生代号，重糊那一头比它新就不许盖上去）。「当窗口拉宽导致背景图
+        // 下方被裁切的时候，触发背景图模糊，裁切越多越模糊」：半径由 DetailHero.PictureCrop ×
+        // BackdropBlur.CropRadius 算（电影和剧没有基础半径，裁多少加多少；量化成档，拖窗口不为一个像素重糊），
+        // 档位换了由 UpdateHeroBlur 用同一批像素重糊。集页不铺背景图（连模糊一起不存在），这一路到不了它。
+        // 头图多带一个数上屏：这张图自己的高÷宽（ShowHero）——紧凑版式的带高和背景盒高都按它算
+        // （DetailHero.CompactHeight / PictureHeight）；量不成话（0 或负）就不动兜底的那 0.5625。
+        async Task HeroAsync(EmbyItem page, CancellationToken token)
         {
-            var pick = ItemArtwork.Footer(page);
-
-            if (pick is null && page.Type == EmbyItemType.Episode && page.SeriesId is { Length: > 0 } series)
+            foreach (var picture in ItemArtwork.Hero(page))
             {
-                try
-                {
-                    var show = await _session!
-                        .ExecuteAsync((client, ct) => client.GetItemAsync(series, ct), token)
-                        .ConfigureAwait(true);
-                    pick = ItemArtwork.Footer(page, show);
-                }
-                catch (OperationCanceledException)
-                {
-                    return null;
-                }
-                catch (Exception error)
-                {
-                    Log.Debug(Category, $"取剧集那张横幅失败（{page.Name}）：{error.Message}");
-                    return null;
-                }
+                var bytes = await _images!
+                    .GetAsync(picture.ItemId, picture.ImageType, picture.Tag,
+                        EmbyImageStore.RequestWidth(HeroDecodeWidth), token)
+                    .ConfigureAwait(true);
+                if (bytes is null || bytes.Length == 0) continue;
+
+                var source = await HeroPictureLoader
+                    .DecodePixelsAsync(bytes, HeroDecodeWidth, token)
+                    .ConfigureAwait(true);
+                if (source is null) continue;
+                if (!Fresh(art, page)) return;
+
+                _heroPixels = source;
+
+                var radius = HeroBlurTarget;
+                var generation = ++_heroBlurGeneration;
+                _heroBlurRadius = radius;
+
+                var rendered = await HeroPictureLoader.RenderAsync(source, radius, token).ConfigureAwait(true);
+                if (rendered is null || generation != _heroBlurGeneration) return;
+
+                ShowHero(rendered);
+                return;
             }
+        }
+
+        // 头图多带一个数上屏：这张图自己的高÷宽。紧凑版式的带高和背景那张的盒高都按它算
+        // （DetailHero.CompactHeight / PictureHeight —— 「窗口收窄时背景图要等比例缩放」），解出来的是
+        // 什么形状就照什么形状缩；量不成话（0 或负）就不动兜底的那 0.5625。集页不铺背景图，这一手到不了它。
+        void ShowHero(BitmapImage picture)
+        {
+            if (picture.PixelWidth > 0 && picture.PixelHeight > 0)
+                HeroHeightRatio = picture.PixelHeight / (double)picture.PixelWidth;
+            HeroImage = picture;
+        }
+
+        // 左上角那格封面：集页取剧集那一层的 Primary（「集页面的封面改用剧页面的封面」—— 剧页面上那张 2:3
+        // 海报），其余页面取自己的。借不到才退回本集自己的那几张 —— 有一张剧照总比空着一格强。
+        async Task<BitmapImage?> StillAsync(EmbyItem page, Task<EmbyItem?> show, CancellationToken token)
+        {
+            if (page.Type != EmbyItemType.Episode)
+            {
+                return await DecodeFirstAsync(
+                    page, [EmbyImageStore.Primary, EmbyImageStore.Thumb], StillDecodeWidth, token)
+                    .ConfigureAwait(true);
+            }
+
+            var series = await show.ConfigureAwait(true);
+
+            if (series is not null)
+            {
+                var poster = await DecodeFirstAsync(
+                    series, [EmbyImageStore.Primary, EmbyImageStore.Thumb], StillDecodeWidth, token)
+                    .ConfigureAwait(true);
+
+                if (poster is not null) return poster;
+            }
+
+            return await DecodeFirstAsync(
+                page,
+                [EmbyImageStore.Primary, EmbyImageStore.Thumb, EmbyImageStore.Backdrop],
+                StillDecodeWidth, token).ConfigureAwait(true);
+        }
+
+        // 右上角那张艺术图（「给集页面右上角添加艺术图」）：哪一张归这儿由 <see cref="ItemArtwork.Corner"/> 定 ——
+        // 这一集自己的，没有就借剧集那一层的（show 在 WhenAll 外头就已经在路上了，这里等它回来再问一次标签）。
+        // 只在集页上画，所以取图也只此一档：剧、电影页面的那一角是用户同一天去掉的，连问都不问。
+        async Task<BitmapImage?> CornerAsync(EmbyItem page, Task<EmbyItem?> show, CancellationToken token)
+        {
+            if (page.Type != EmbyItemType.Episode) return null;
+
+            var pick = ItemArtwork.Corner(page, await show.ConfigureAwait(true));
+
+            return await DecodeFirstAsync(Refs(pick), CornerDecodeWidth, token).ConfigureAwait(true);
+        }
+
+        // 页尾那张横幅：一集自己几乎不会有横幅图（服务器把它挂在剧集那一层，同徽标），借哪一张等 show 回来
+        // 一并问 <see cref="ItemArtwork.Footer"/>。它误不了任何一件正事 —— 那张图在整页最底下、滑到底才看得见，
+        // 问失败就是那儿空着（ShowAsync 自己把错吞了）。
+        async Task<BitmapImage?> FooterAsync(EmbyItem page, Task<EmbyItem?> show, CancellationToken token)
+        {
+            var pick = ItemArtwork.Footer(page, await show.ConfigureAwait(true));
 
             // 记下这一次取的是哪一张，给自检读（见 FooterPick）。图解不出来也照记：那时候「规矩说该有一张、屏上
             // 没画」是一句准确的读数，而记成 null 会把它说成「本来就没有」。
@@ -1492,10 +2265,12 @@ public sealed partial class DetailViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 海报（集页上是剧照）到了：连它该画多大一起换上 —— 「海报下方会被裁切，要能看到完整的海报」。
+    /// 封面到了：连它该画多大一起换上 —— 「海报下方会被裁切，要能看到完整的海报」。
     /// <para>
     /// 那一格原来是写死的 210×300、图按 <c>UniformToFill</c> 铺满它，而服务器上的海报是 2:3，于是上下各裁掉七八
     /// 个像素。现在那一格按这张图自己的形状收窄（<see cref="DetailHero.StillBox"/>），一个像素都不裁。
+    /// 集页上这一张是剧的那张海报（「集页面的封面改用剧页面的封面」），取图那头已经换过源头了（见
+    /// <c>StillAsync</c>），这里四种页面同一套：按图加当前窗口宽算盒子（<see cref="FitStill"/>）。
     /// </para>
     /// <para>
     /// 换尺寸和换图是同一拍里的两件事，顺序也就要紧：先尺寸再图。反过来的那一版会先按上一档尺寸画一帧、再收窄，
@@ -1503,19 +2278,30 @@ public sealed partial class DetailViewModel : PageViewModel
     /// 所以这一拍之前那个尺寸谁也没看见。
     /// </para>
     /// </summary>
-    private void ShowStill(BitmapImage picture, bool episode)
+    private void ShowStill(BitmapImage picture)
     {
-        var box = DetailHero.StillBox(picture.PixelWidth, picture.PixelHeight,
-            episode ? EpisodeStillWidth : PosterStillWidth,
-            episode ? EpisodeStillHeight : PosterStillHeight);
-
-        if (box is { } fit)
-        {
-            StillWidth = fit.Width;
-            StillHeight = fit.Height;
-        }
-
+        _stillPixels = (picture.PixelWidth, picture.PixelHeight);
+        RefitArtwork();
         StillImage = picture;
+    }
+
+    /// <summary>
+    /// 右上角那张艺术图到了：连它该画多大一起换上 —— 「放大集页面右侧的艺术图」（2026-09-12）。
+    /// <para>
+    /// 和剧照那一张同一套写法（<see cref="ShowStill"/>），只是量出来的高喂的是带子
+    /// （<see cref="CornerHeight"/> → <see cref="HeroRoom"/>）：这一格顶对齐摆在这一格里，带子矮过它就是这张画
+    /// 压在底下的音轨那一行上。180 那一档不用管这件事 —— 它比那一叠字键矮，压不着。
+    /// </para>
+    /// <para>
+    /// 位图的尺寸不成话（没解出来、或者报的是 0）时那个高留在 0：这一格照旧按 <c>Uniform</c> 缩在上限盒子里，
+    /// 带子不因此长高，而不是拿一个量错的数去撑开版面。
+    /// </para>
+    /// </summary>
+    private void ShowCorner(BitmapImage picture)
+    {
+        _cornerPixels = (picture.PixelWidth, picture.PixelHeight);
+        FitCorner();
+        CornerImage = picture;
     }
 
     /// <summary>
@@ -1648,10 +2434,19 @@ public sealed partial class DetailViewModel : PageViewModel
     private void OnSimilarCardsChanged(object? sender, NotifyCollectionChangedEventArgs args) =>
         OnPropertyChanged(nameof(SimilarVisibility));
 
+    /// <summary>
+    /// 三个下拉里有一个换了选择 —— 那一个属性的通知，加上「这一行画不画」。两份都要喊：尾部那一份和片名那一栏
+    /// 那一份是同一句判据的两半（见 <see cref="PickersVisibility"/>／<see cref="ColumnPickersVisibility"/>）。
+    /// </summary>
     private void PickerChanged(string which)
     {
         OnPropertyChanged(which);
         OnPropertyChanged(nameof(PickersVisibility));
+        OnPropertyChanged(nameof(ColumnPickersVisibility));
+
+        // 「视频：…」那一句跟媒体源的下拉互斥（见 VideoShown）：源多起来它让位给下拉，两边都得重问一遍。
+        OnPropertyChanged(nameof(VideoVisibility));
+        OnPropertyChanged(nameof(VideoLineVisibility));
     }
 
     // ---------------------------------------------------------------- 命令

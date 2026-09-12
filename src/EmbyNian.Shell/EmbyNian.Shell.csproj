@@ -118,9 +118,11 @@
       meta-package reference back and delete these six.
     -->
     <PackageReference Include="Microsoft.WindowsAppSDK.Base" Version="2.0.4" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.9" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.6" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.6" />
+    <!-- GeneratePathProperty on the three packages that carry a framework .pri: the injection target
+         below needs their on-disk roots to find the files. See that target for the whole story. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.9" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.6" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.6" GeneratePathProperty="true" />
     <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="2.1.0" />
     <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="[2.4.0]" />
     <!-- MVVM, source-generated. The pages bind to view models rather than reaching for named XAML
@@ -223,5 +225,66 @@
     </None>
   </ItemGroup>
 
+  <!--
+    ！不要删掉这个目标。删了程序还是能构建、能发布，只有一运行就死在 App.xaml：
+
+        Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'
+
+    2026-09-11 查清的全部因果，四道闸门里只有 tools/verify-publish.ps1 那一关会拦下它（它查
+    EmbyNian.pri 里有没有 themeresources 这个索引名）。
+
+    WinUI 的控件模板、画笔、主题字典都不在本仓库的 XAML 里，它们在框架那三份 .pri 里（2026-09-11
+    在盘上定位到的实际出处，注意第二份不在 WinUI 包里，在 InteractiveExperiences 里）：
+
+        Microsoft.WindowsAppSDK.WinUI                  runtimes-framework\win-x64\native\Microsoft.UI.Xaml.Controls.pri  （2.0 MB，themeresources 就在这一份里）
+        Microsoft.WindowsAppSDK.InteractiveExperiences runtimes-framework\win-x64\native\Microsoft.UI.pri
+        Microsoft.WindowsAppSDK.Foundation             runtimes-framework\win-x64\native\Microsoft.WindowsAppRuntime.pri
+
+    App 自己的 EmbyNian.pri 是要把这三份「并进来」的 —— 合并本身由 PriGen 的 PRI indexer 段完成，
+    而它读的输入是 obj 下的 pri.resfiles。问题就在这个文件一直是 0 字节：
+
+    * pri.resfiles 的内容来自 @(_PriFilesFromPayload)，而那个 item 是从 **@(PriOutputs)** 里挑出来的
+      「扩展名是 .pri 且 ProjectName 不是我自己的」。
+    * PriOutputs 由 GetPriOutputs 填 —— 它只把项目自己的 xbf/内容、以及 ProjectReference 过来的东西
+      放进去。**框架那三份 .pri 走的是 NuGet 的 runtimes-framework 资产通道，压根不进 PriOutputs**
+      （2026-09-11 用 /t:GenerateProjectPriFile -v:diag 实测：_PriFile=0、PriOutputs 里的 .pri=0、
+      PackagingOutputs 里的 .pri=0、SDKRedistOutputGroup=0）。
+    * 于是 pri.resfiles 空 → EmbyNian.pri 只索引到本仓库的东西（135 KB 而不是 2.3 MB）→
+      运行时找不到 themeresources → App.xaml 那一步 Stowed Exception 退出
+      （退出码 0xC000027B，日志里一行 XamlParseException）。
+
+    从前 verify-publish.ps1 把这一条归给「刚清过 bin 之后的第一次发布」，说第二次就好 —— 那是
+    1.6 时代 MrtCore 的时序（框架 pri 会先落进 bin，下一趟被 GetPackagePayload 看到）。换成 2.x
+    这一套分体包之后这个前提没了：**跑多少次都是 0 字节**，2026-09-11 实测连跑四次，发布件每次都
+    135 KB，每次启动都崩。所以修在这里，不是修在闸门里。
+
+    做法就是把它缺的那几件事自己补上：把这三份 .pri 手动加进 PriOutputs，ProjectName 写一个不等于
+    $(ProjectName) 的值 —— 那个不等式正是 _PriFilesFromPayloadRaw 区分「我的」和「别人的」用的。路径从
+    GeneratePathProperty 给出的包根算，不写死 ~/.nuget。
+
+    两个挂点都要说清。挂 _GetPriFilesFromPayload 是因为 _PriFile（pri.resfiles 的来源）在那个目标里
+    从 PriOutputs 挑出来，必须在它读之前塞进去。挂 _GenerateProjectPriConfigurationFiles 是防另一条
+    路 —— 那一个目标自己也直接读 @(PackagingOutputs)，少了它有时候能跳过前者。两个都写上，哪套依赖
+    顺序都不会漏。
+  -->
+  <Target Name="AddWindowsAppSdkFrameworkPriToPayload"
+          BeforeTargets="_GetPriFilesFromPayload;_GenerateProjectPriConfigurationFiles">
+    <ItemGroup>
+      <!-- 三个 $(Pkg…) 由 GeneratePathProperty 生成：包名里的点换成下划线。 -->
+      <_FrameworkPri Include="$(PkgMicrosoft_WindowsAppSDK_WinUI)\runtimes-framework\$(RuntimeIdentifier)\native\Microsoft.UI.Xaml.Controls.pri" />
+      <_FrameworkPri Include="$(PkgMicrosoft_WindowsAppSDK_InteractiveExperiences)\runtimes-framework\$(RuntimeIdentifier)\native\Microsoft.UI.pri" />
+      <_FrameworkPri Include="$(PkgMicrosoft_WindowsAppSDK_Foundation)\runtimes-framework\$(RuntimeIdentifier)\native\Microsoft.WindowsAppRuntime.pri" />
+      <!-- 只认真在盘上的，包结构换了就退化成「什么也没加」，而不是把发布卡死在一个不存在的路径上。 -->
+      <_FrameworkPri Remove="@(_FrameworkPri)" Condition="!Exists('%(_FrameworkPri.Identity)')" />
+      <_FrameworkPri>
+        <ProjectName>Microsoft.WindowsAppSDK.FrameworkPri</ProjectName>
+        <OutputGroup>PriFilesOutputGroup</OutputGroup>
+      </_FrameworkPri>
+      <PriOutputs Include="@(_FrameworkPri)" />
+    </ItemGroup>
+
+    <Warning Text="Windows App SDK 框架 .pri 一份都没找到（按 $(RuntimeIdentifier) 在 WinUI / InteractiveExperiences / Foundation 的 runtimes-framework\native 下找过）。发布件会缺 themeresources，一启动就死在 App.xaml —— 先看这三个包的版本是不是变了。"
+             Condition="'@(_FrameworkPri)' == ''" />
+  </Target>
 
 </Project>

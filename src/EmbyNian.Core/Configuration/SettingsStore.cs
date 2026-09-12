@@ -17,22 +17,23 @@ public sealed class SettingsStore(AppPaths paths, ISecretProtector protector)
 
     public AppSettings Load()
     {
-        if (!File.Exists(Paths.SettingsFile))
+        if (File.Exists(Paths.SettingsFile))
         {
-            Log.Info(Category, $"未找到 {Paths.SettingsFile}，使用默认设置");
-            return SettingsMigration.NewDefaults();
-        }
+            if (TryRead(Paths.SettingsFile, out var settings)) return settings;
 
-        if (TryRead(Paths.SettingsFile, out var settings)) return settings;
-
-        Log.Warn(Category, "主设置文件无法解析，尝试读取备份");
-        if (File.Exists(Paths.SettingsBackupFile) && TryRead(Paths.SettingsBackupFile, out var fromBackup))
-        {
+            Log.Warn(Category, "主设置文件无法解析，尝试读取备份");
             Quarantine(Paths.SettingsFile);
-            return fromBackup;
+        }
+        else
+        {
+            Log.Info(Category, $"未找到 {Paths.SettingsFile}，尝试读取备份");
         }
 
-        Quarantine(Paths.SettingsFile);
+        // 主文件缺失也走恢复路径：上次启动可能刚隔离坏文件，还没来得及重新保存就退出了。
+        if (File.Exists(Paths.SettingsBackupFile) && TryRead(Paths.SettingsBackupFile, out var fromBackup))
+            return fromBackup;
+
+        Log.Info(Category, "没有可用的设置文件，使用默认设置");
         return SettingsMigration.NewDefaults();
     }
 
