@@ -6,8 +6,6 @@ Emby 4.9.x 的 Windows 桌面客户端，纯AI开发。
 
 
 
-当前版本 0.0.1。
-
 ## 系统要求
 
 - Windows 10 1809 及以上，仅 x64（只在 Windows 11 上验证过）
@@ -40,13 +38,6 @@ Emby 4.9.x 的 Windows 桌面客户端，纯AI开发。
 浏览时 `Alt+←` / `Alt+→` 前进后退，卡片上 `Shift+F10` 出右键菜单。鼠标：滚轮调音量，单击暂停，双击全屏，拖浮层顶栏移动窗口。触摸：点一下暂停，双击全屏，长按出菜单。
 
 
-## 许可与开发
-
-打包的着色器和 `vulkan-1.dll` 各有上游许可，逐文件列在 `assets/shaders/README.md` 和 `assets/mpv-runtime/README.md`；播放内核是 mpv 的 libmpv。本仓库自身尚未声明许可。
-
-架构、构建、发布与 `--self-check` 自检见 [`docs/开发与验证.md`](docs/开发与验证.md)，规矩在 [`CLAUDE.md`](CLAUDE.md)，在途工作在 [`PROGRESS.md`](PROGRESS.md)。
-
 ## 截图
-<img width="1458" height="972" alt="image" src="https://github.com/user-attachments/assets/f19eb4ed-549f-4d6a-985c-8419dcced9bf" />
 
 
