@@ -285,10 +285,17 @@ public sealed partial class PosterCard : UserControl
     {
         var card = (PosterCard)sender;
 
+        // 接手新卡：从这一刻起，这张卡的图归这个容器管（见 CardItem.ClaimCard）。
+        (args.NewValue as CardItem)?.ClaimCard(card);
+
         // The card being replaced is still in its page's list and would otherwise keep its bitmap.
-        // keepWaiting: false —— **这一句才是权威的「它失去容器了」**：这个容器改去装另一张卡了。离树那一声
+        // keepWaiting: false —— 「它失去容器了」是这一句说的：这个容器改去装另一张卡了。离树那一声
         // （OnUnloaded）不算，它会对一个仍然在屏上的元素喊出来，见 CardItem.ReleasePoster 上那段。
-        (args.OldValue as CardItem)?.ReleasePoster(keepWaiting: false);
+        //
+        // **但「这个容器放手」不等于「它失去了容器」** —— 同一张卡会短暂地挂在两个容器上（回收池里那个还攥着它，
+        // 2026-09-13 实测：容器 A 拿到「超常技能」的同一毫秒里，容器 B 正把它换成别的卡，B 那一放手就把 A 屏上
+        // 那张卡的图清空了，成了三张「标题正常、封面永远灰着」的卡）。所以交给 ReleasePoster 判断，它只认持有者。
+        (args.OldValue as CardItem)?.ReleasePoster(card, keepWaiting: false);
 
         // ItemsRepeater 也会在仍然加载着的容器里换内容；新条目不能继承上一张的悬停、按压或淡入。
         card._watch.Leave();
@@ -339,7 +346,7 @@ public sealed partial class PosterCard : UserControl
         _live = XamlRoot is not null;
         if (_live) return;
 
-        Card?.ReleasePoster();
+        Card?.ReleasePoster(this);
 
         // A recycled container must not come back with the buttons already up: the pointer that revealed
         // them is nowhere near wherever this container is reused.

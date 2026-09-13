@@ -82,6 +82,17 @@ public sealed class CardItem : INotifyPropertyChanged
     /// </summary>
     private bool _wanted;
 
+    /// <summary>
+    /// 此刻把这张卡摆在屏上的那个容器，没有就是没有。**弱引用**：卡片活在页面的清单里（<c>CardShelf.Cards</c>），
+    /// 攥着一个已经回收掉的容器不放，一页卡片就会拖着几十个容器一起活着。
+    /// <para>
+    /// 存在的理由是回收的那一下会认错人：同一张卡会短暂地挂在两个容器上 —— 回收池里那个还攥着它，另一个容器已经
+    /// 接手了 —— 而旧容器换手时也要喊一声「我放手了」。照单全收的话，屏上那张卡的图会被这一声清掉，之后再没有人
+    /// 补回来：2026-09-13 那三张「标题正常、封面永远灰着」的卡就是这么来的。
+    /// </para>
+    /// </summary>
+    private WeakReference<object>? _holder;
+
     /// <param name="width">
     /// The card's width in device-independent pixels. Used three times: to pick the size to ask the
     /// server for, as the decode width, and as the width the card is drawn at — which is the point of
@@ -368,6 +379,12 @@ public sealed class CardItem : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 一个容器接手这张卡（<c>PosterCard.Card</c> 被赋值的那一刻）。见 <see cref="_holder"/>：回收的那一下会有两个
+    /// 容器同时说自己拿着它，认最后一个接手的。
+    /// </summary>
+    public void ClaimCard(object container) => _holder = new WeakReference<object>(container);
+
+    /// <summary>
     /// 放开手上那张解出来的画面。容器离树时走这里：不放开的话，一次长滚动结束时手上攥着一路经过的每一张海报。
     /// <para>
     /// **不取消在路上那一趟，也默认继续等着它**（2026-09-05 修的那四张灰占位卡）。两件事各有原因：
@@ -385,20 +402,36 @@ public sealed class CardItem : INotifyPropertyChanged
     /// <paramref name="keepWaiting"/>=false：容器改去装另一张卡了，那张卡确确实实失去了容器。
     /// </para>
     /// <para>
+    /// **③ 但「这个容器放手」也不等于「它失去了容器」** —— 还要问一句：放手的是不是此刻拿着它的那一个。同一张卡
+    /// 会短暂地挂在两个容器上（回收池里那个仍攥着它，另一个已经接手），旧容器换手时也会来喊这一声；照单全收就把
+    /// 屏上那张卡的图清掉了，而在此之后没有任何人会补回来 —— 2026-09-13 实测的那三张「标题正常、封面永远灰着」
+    /// 的卡（最近添加·电视节目 那一排的第 3、4、5 张）就是这一声的产物，日志里它们是：容器 B 拿到这张卡 → 容器 A
+    /// 把它换走、顺手放掉了这张共享的卡 → 屏上那张卡当场变空。
+    /// </para>
+    /// <para>
     /// 在路上那一趟照旧跑完、结果照旧进 <see cref="PosterCache"/>（那份缓存自己有上限）；不等了的那一档就只进
     /// 缓存、不塞回这张卡（见 <see cref="EnsurePosterAsync"/> 末尾那句）。
     /// </para>
     /// </summary>
+    /// <param name="container">要放手的那个容器 —— 只有它正是持有者时这一声才算数。</param>
     /// <param name="keepWaiting">
     /// 这张卡还是那个容器在装吗。默认是（只是暂时离树）；容器改去装别的卡时传 false —— 那时它的结果没人在等，
     /// 而一张不在屏上的卡攥着一张解出来的画面正是这个方法要防的事。
     /// </param>
-    public void ReleasePoster(bool keepWaiting = true)
+    public void ReleasePoster(object container, bool keepWaiting = true)
     {
+        // 不是持有者就没有资格放手：它手上那张卡只是回收池留下来的旧引用，屏上这张还有人看着。
+        if (!HeldBy(container)) return;
+
+        _holder = null;
         if (!keepWaiting) _wanted = false;
 
         Poster = null;
     }
+
+    /// <summary>这个容器是不是此刻拿着这张卡的那一个。</summary>
+    private bool HeldBy(object container) =>
+        _holder is { } weak && weak.TryGetTarget(out var target) && ReferenceEquals(target, container);
 
     /// <summary>
     /// 这张卡不要了：连在路上那一趟一起取消。<see cref="CardShelf.Clear"/> 和媒体库换整页时走这里 —— 那时这些
@@ -406,6 +439,7 @@ public sealed class CardItem : INotifyPropertyChanged
     /// </summary>
     public void AbandonPoster()
     {
+        _holder = null;
         _wanted = false;
         _loading?.Cancel();
         _loading = null;

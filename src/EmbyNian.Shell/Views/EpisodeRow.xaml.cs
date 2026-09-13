@@ -97,9 +97,13 @@ public sealed partial class EpisodeRow : UserControl
     {
         var row = (EpisodeRow)sender;
 
+        // 接手新卡，同 PosterCard.OnCardChanged（见 CardItem.ClaimCard）。
+        (args.NewValue as CardItem)?.ClaimCard(row);
+
         // The card being replaced is still in its page's list and would otherwise keep its bitmap.
-        // keepWaiting: false —— 同 PosterCard.OnCardChanged：这一句才是权威的「它失去容器了」。
-        (args.OldValue as CardItem)?.ReleasePoster(keepWaiting: false);
+        // keepWaiting: false —— 同 PosterCard.OnCardChanged：这一句是「它失去容器了」，但放手的是不是持有者，
+        // 由 ReleasePoster 自己认（同一张卡会短暂地挂在两个容器上）。
+        (args.OldValue as CardItem)?.ReleasePoster(row, keepWaiting: false);
 
         // Applied on every hand-over rather than bound: a recycled container keeps whichever style it was
         // last given, so the row that used to be 「you are here」 has to be told it no longer is.
@@ -124,7 +128,7 @@ public sealed partial class EpisodeRow : UserControl
         _live = XamlRoot is not null;
         if (_live) return;
 
-        Card?.ReleasePoster();
+        Card?.ReleasePoster(this);
 
         // A recycled container must not come back with the button already up: the pointer that revealed
         // it is nowhere near wherever this container is reused.
