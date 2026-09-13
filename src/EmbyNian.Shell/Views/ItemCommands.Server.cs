@@ -66,6 +66,23 @@ internal static partial class ItemCommands
         session.ExecuteAsync(work, CancellationToken.None);
 
     /// <summary>
+    /// 取一段字节，取不到就是空。
+    /// <para>
+    /// 单独一个而不是直接用 <see cref="AskAsync{T}"/>：<c>EmbyClient</c> 那几个取字节的接口返回的是
+    /// <c>Task&lt;byte[]&gt;</c>（非空），而面板那头要的是 <c>Task&lt;byte[]?&gt;</c>（「这一张没有」是常事）。
+    /// 在这里把类型搬一次，比在每一处调用点上写一个强制转换干净 —— 也免得 lambda 被推成非空的那个类型，
+    /// 然后在赋值处报一条「可空性与目标类型不匹配」。
+    /// </para>
+    /// </summary>
+    private static async Task<byte[]?> FetchAsync(EmbySession session, Func<EmbyClient, CancellationToken, Task<byte[]>> work) =>
+        await session.ExecuteAsync(work, CancellationToken.None).ConfigureAwait(false);
+
+    /// <summary>重新问一遍这个条目，问不到就是空。理由同 <see cref="FetchAsync"/>。</summary>
+    private static async Task<EmbyItem?> ReloadAsync(EmbySession session, string itemId) =>
+        await session.ExecuteAsync(
+            (client, token) => client.GetItemAsync(itemId, token), CancellationToken.None).ConfigureAwait(false);
+
+    /// <summary>
     /// 弹对话框要的那个根。取不到就什么都不做 —— 这一句只在窗口已经关掉的路上成立，那时候也没有人在等这张表。
     /// </summary>
     private static XamlRoot? Root(FrameworkElement owner) => owner.XamlRoot;
@@ -295,10 +312,16 @@ internal static partial class ItemCommands
     }
 
     /// <summary>
-    /// 修改媒体封面图：把各家刮削源上这个条目的封面列出来挑一张，挑中的交给服务器去取。
+    /// 修改媒体封面图：打开那张面板（2026-09-13 按参考图重做）。面板上每一种图各占一格，每一格能换、能删、
+    /// 能看大图，面板自己按需问服务器 —— 这里只把「怎么问」这件事的接线交进去。
     /// <para>
     /// 换完喊一声 <c>changed</c>：封面换了之后服务器上那个图片标签也变了，而缓存是按标签存的 —— 重读这一页
     /// 就会自己去取新的那张，不重读的话屏上还是旧封面，看着像没换成。
+    /// </para>
+    /// <para>
+    /// <b>上传那一趟要按文件名报内容类型。</b>图片的字节和它的 <c>Content-Type</c> 要分开交
+    /// （见 <c>EmbyClient.UploadImageAsync</c>），而服务器的图片处理那一头是按后者选解码器的 —— 所以文件名
+    /// 一路带到这儿来，见 <see cref="PickedArtwork"/>。
     /// </para>
     /// </summary>
     private static Task CoverAsync(
@@ -312,28 +335,29 @@ internal static partial class ItemCommands
             if (Root(owner) is not { } root) return;
 
             var item = card.Item;
-            var found = await AskAsync(session, (client, token) =>
-                    client.GetRemoteImagesAsync(item.Id, EmbyImageStore.Primary, token))
-                .ConfigureAwait(true);
 
             var dialog = new CoverDialog(
                 item,
-                found,
-                url => AskAsync(session, (client, token) => client.GetRemoteImageBytesAsync(url, token)))
+                (id, type) => AskAsync(session, (client, token) => client.GetRemoteImagesAsync(id, type, token)),
+                (id, type, tag, width) => FetchAsync(session, (client, token) =>
+                    client.GetImageBytesAsync(id, type, tag, width, token)),
+                (id, type, index, chosen) => TellAsync(session, (client, token) => client.ApplyRemoteImageAsync(
+                    id, type, chosen.Url, chosen.ProviderName, token)),
+                (id, type, index) => TellAsync(session, (client, token) =>
+                    client.DeleteImageAsync(id, type, index, token)),
+                (id, type, picked) => TellAsync(session, (client, token) => client.UploadImageAsync(
+                    id, type, picked.Bytes, ArtworkFile.ContentType(picked.FileName), token)),
+                id => ReloadAsync(session, id),
+                address => FetchAsync(session, (client, token) =>
+                    client.GetRemoteImageBytesAsync(address, token)))
             {
                 XamlRoot = root
             };
 
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-            if (dialog.Chosen is not { } chosen) return;
+            await dialog.ShowAsync();
 
-            await TellAsync(session, (client, token) => client.ApplyRemoteImageAsync(
-                    item.Id,
-                    EmbyImageStore.Primary,
-                    chosen.Url,
-                    chosen.ProviderName,
-                    token))
-                .ConfigureAwait(true);
+            // 面板里改过才要重读这一页 —— 打开看了一眼就关掉，那张卡片一个像素都不必动。
+            if (!dialog.Touched) return;
 
             shell.Notify($"已更新「{item.Name}」的封面图");
             changed?.Invoke();

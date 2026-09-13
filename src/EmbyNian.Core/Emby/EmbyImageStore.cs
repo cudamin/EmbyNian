@@ -65,6 +65,17 @@ public sealed class EmbyImageStore
     public const string Art = "Art";
 
     /// <summary>
+    /// 光盘封面 —— 印在实体碟片上的那一面，多数服务器上这个条目一种都没有。
+    /// <para>
+    /// 它和其他几种不一样：<b>这一版没有任何一处界面画它</b>。「修改媒体封面图」那张面板（2026-09-13）按服务器
+    /// 的五种图各给了一格，而它列在这里是因为面板要「这一种图有没有」问得出来 —— 一台装了刮削插件的服务器上
+    /// 是有的，而列不出来的话用户就只能看着参考图上那一格在自己机器上不存在。服务器那边叫 <c>Disc</c>，和
+    /// <c>Primary</c>、<c>Logo</c> 一样是它自己的字段名，不是我们起的。
+    /// </para>
+    /// </summary>
+    public const string Disc = "Disc";
+
+    /// <summary>
     /// The width to ask the server for a control <paramref name="controlWidth"/> pixels wide: twice
     /// over, so the picture survives a high-DPI screen and a little growth, rounded up to a step.
     /// <para>

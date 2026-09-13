@@ -6,6 +6,7 @@ using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -342,6 +343,22 @@ public sealed partial class PlayerPage : UserControl
         Tapped += OnTapped;
         DoubleTapped += OnDoubleTapped;
         KeyDown += OnKeyDown;
+
+        // 空格总归「播放/暂停」，连被控件标了已处理的那几下也要收得到 —— 页面这一层收不到那样的键，所以
+        // 挂在 Root 上带 handledEventsToo（见 OnSpaceShortcut）。点过的 chrome 按钮把焦点还给页面，别让
+        // 「点一下音量」偷走此后整场的空格（见 OnChromeClick）。
+        Root.AddHandler(KeyDownEvent, new KeyEventHandler(OnSpaceShortcut), handledEventsToo: true);
+        // Click 的路由事件标识符在这套投影里没暴露（ButtonBase、Button 上都没有），所以这些不带菜单的
+        // 按钮一颗颗订阅；带 Flyout 的六颗不订阅 —— 菜单要靠焦点接管上下键（见 OnChromeClick）。
+        // 统计那颗是 ToggleButton，所以数组的类型是 ButtonBase。
+        foreach (var button in new ButtonBase[] { BackButton, StatsButton, PinButton, MuteButton, SkipButton,
+                     PreviousButton, PlayButton, NextButton, FullscreenButton,
+                     MinimizeButton, MaximizeButton, CloseButton })
+        {
+            button.Click += OnChromeClick;
+        }
+        _spaceShortcutArmed = true;
+        _chromeBlurArmed = true;
 
         // One-shot in effect: a DispatcherTimer keeps ticking, and the handler's first line stops it.
         _tapHold.Tick += OnTapHoldElapsed;

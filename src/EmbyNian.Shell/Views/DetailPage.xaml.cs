@@ -1082,6 +1082,36 @@ public sealed partial class DetailPage : Page, IShellContent
     internal EmbyItem? OpenFirstEpisode() => ViewModel.OpenFirstEpisode();
 
     /// <summary>
+    /// 这一页现在是哪一个条目，还没读回来就是空。给 <c>--show-cover</c> 用 —— 那一关要拿这一页的条目去开
+    /// 封面图面板，而面板认的是 <see cref="EmbyItem"/>，不是这一页。
+    /// </summary>
+    internal EmbyItem? CurrentItem => ViewModel.CurrentItem;
+
+    /// <summary>
+    /// 把「修改媒体封面图」那一张面板弹开（<c>--show-cover</c>），弹得出来就说 true。
+    /// <para>
+    /// 走的和 <see cref="OnMoreClicked"/> 是同一条路 —— 同一个 <see cref="CardItem"/>、同一条
+    /// <see cref="ItemCommands.Show"/>，所以拍到的就是用户在屏上会看到的那一张面板。假的只是那个锚点
+    /// （这一条路根本不弹浮层）。
+    /// </para>
+    /// </summary>
+    internal bool OpenCoverPanel()
+    {
+        if (_session is not { } session
+            || _actions is not { } actions
+            || _images is not { } images
+            || ViewModel.CurrentItem is not { } item)
+            return false;
+
+        var card = new CardItem(item, images, CardSize.PosterWidth);
+
+        ItemCommands.Run(ItemCommand.ChangeCover, session, actions, this, card,
+            siblings: ViewModel.Episodes, changed: ViewModel.Reload);
+
+        return true;
+    }
+
+    /// <summary>
     /// Scrolls the page to the end, for the self-check. An <c>ItemsRepeater</c> realises what its
     /// effective viewport covers, and the cast row starts below the fold on any normal window — asking
     /// what it drew without this would be asking about a row that has never been in view.

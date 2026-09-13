@@ -1284,7 +1284,7 @@ internal sealed class HostWindow : IDisposable
             if (other != _judged)
             {
                 _judged = other;
-                Log.Info(Category, $"前台交给 0x{other:X}，它挡不到全屏画面，保持置顶");
+                Log.Info(Category, $"前台交给 {Describe(other)}，它挡不到全屏画面，保持置顶");
             }
 
             return;
@@ -1298,7 +1298,24 @@ internal sealed class HostWindow : IDisposable
             0, 0, 0, 0,
             Native.SwpNoMove | Native.SwpNoSize | Native.SwpNoActivate);
 
-        Log.Info(Category, $"前台交给 0x{other:X}，全屏画面会挡着它，让出置顶");
+        Log.Info(Category, $"前台交给 {Describe(other)}，全屏画面会挡着它，让出置顶");
+    }
+
+    /// <summary>
+    /// An hwnd made legible for the log: class name and caption. The bare address is what left 「0x5040C
+    /// 到底是谁」 unanswerable the last time the band was given away to a window nobody could name.
+    /// </summary>
+    private static string Describe(IntPtr window)
+    {
+        var classBuffer = new char[64];
+        var classLength = Native.GetClassName(window, classBuffer, classBuffer.Length);
+        var className = classLength > 0 ? new string(classBuffer, 0, classLength) : "?";
+
+        var titleBuffer = new char[64];
+        var titleLength = Native.GetWindowText(window, titleBuffer, titleBuffer.Length);
+        var title = titleLength > 0 ? new string(titleBuffer, 0, Math.Min(titleLength, titleBuffer.Length)) : "";
+
+        return title.Length > 0 ? $"0x{window:X}({className}「{title}」)" : $"0x{window:X}({className})";
     }
 
     /// <summary>
@@ -1314,15 +1331,25 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// Whether <paramref name="other"/> is somewhere our fullscreen frame could not be hiding it: on a
-    /// different monitor <em>and</em> not overlapping our rectangle. False whenever that cannot be
-    /// established — no window, our own, or geometry the OS will not give — because 「then yield」 is the
-    /// answer that can only cost the picture a taskbar, where the other way round costs the user the window
-    /// they just switched to.
+    /// Whether <paramref name="other"/> is somewhere our fullscreen frame could not be hiding it. Three
+    /// questions, in the order they can be got wrong:
+    /// <list type="number">
+    /// <item>它有没有像素在屏上。拿走前台的不都是看得见的窗口：最小化的窗口矩形住在 (−32000,−32000) 的影子
+    /// 世界里（点任务栏图标把它恢复的那一拍，前台已经交过去了、窗口还在那儿），隐藏的辅助窗（Telegram、
+    /// qBittorrent 这类应用都养着几扇）矩形又常常正停在主屏原点附近。按几何它们都「压着画面」，实际上一寸
+    /// 像素都不欠我们 —— 给它们让位，换来的唯一观众就是任务栏。「屏幕1全屏播放时点击屏幕2的telegram和
+    /// qbittorrent会唤出屏幕1的windows任务栏」（2026-09-13 晚）的日志里，反复让位的 0x5040C 与 0x103EA
+    /// 正是这类窗口，而同屏可见的那扇（0x1104C8）每次都正确地保持了置顶。</item>
+    /// <item>是否在另一块屏幕 <em>且</em> 与画面矩形不相交 —— 即全屏这层根本盖不着它。</item>
+    /// <item>量不出来就当挡着：没有窗口、是我们自己、或系统不肯给几何 —— 「让位」是只会赔上画面（给任务栏）
+    /// 的那种错，「不让」顶多让用户刚切过去的窗口被盖着。</item>
+    /// </list>
     /// </summary>
     private bool StandsClearOfPicture(IntPtr other)
     {
         if (other == IntPtr.Zero || other == Handle) return false;
+
+        if (PutsNoPixelsOnScreen(other)) return true;
 
         if (!Native.GetWindowRect(Handle, out var picture) || !Native.GetWindowRect(other, out var window))
             return false;
@@ -1333,6 +1360,15 @@ internal sealed class HostWindow : IDisposable
             window,
             Native.MonitorFromWindow(other, Native.MonitorDefaultToNearest));
     }
+
+    /// <summary>
+    /// Whether <paramref name="window"/>, though it may hold the foreground, has no pixels anywhere the user
+    /// could look: minimized, or hidden altogether. The question the geometry cannot answer — both of those
+    /// windows carry rectangles that say 「covering the picture」 — and the one the taskbar-yield rule was
+    /// missing. Internal static so the self-check can put real windows to it without a second monitor.
+    /// </summary>
+    internal static bool PutsNoPixelsOnScreen(IntPtr window) =>
+        window == IntPtr.Zero || Native.IsIconic(window) || !Native.IsWindowVisible(window);
 
     /// <summary>
     /// The rule of <see cref="StandsClearOfPicture"/> over geometry alone, so the self-check can put both

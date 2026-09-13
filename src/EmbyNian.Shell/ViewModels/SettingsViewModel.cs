@@ -128,8 +128,17 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// </summary>
     public const string DashboardCategory = "服务器控制台";
 
-    /// <summary>The left-hand list. Order is the order of the cards, then the hosted pages.</summary>
-    public IReadOnlyList<string> Categories { get; } = [.. CardCategories, .. HostedCategories];
+    /// <summary>
+    /// 左边名单最底下的「恢复默认」（用户的话，2026-09-13：「恢复默认的位置不对，应该在左边的列表中，且点击后
+    /// 要二次确认」）。它不是分类也不是页面：选中它的一刻弹回原来的分类、跟着把确认对话框问出来
+    /// （见 <see cref="OnSelectedCategoryChanged"/>），所以它进 <see cref="Categories"/> 让名单和紧凑下拉都
+    /// 造得出这一项，但不进 <see cref="HostedCategories"/> —— 那份管的是「选了要导航到哪个内嵌页」，而它
+    /// 没有页。摆在名单末尾是老规矩：破坏性的那一档，是从上读到下的人最后才遇到的东西。
+    /// </summary>
+    public const string ResetCategory = "恢复默认";
+
+    /// <summary>The left-hand list. Order is the order of the cards, then the hosted pages, then 恢复默认.</summary>
+    public IReadOnlyList<string> Categories { get; } = [.. CardCategories, .. HostedCategories, ResetCategory];
 
     public ObservableCollection<SettingSection> Sections { get; } = [];
 
@@ -326,7 +335,32 @@ public sealed partial class SettingsViewModel : PageViewModel
         FontsReady = true;
     }
 
-    partial void OnSelectedCategoryChanged(string value) => ShowCategory(value);
+    /// <summary>
+    /// 左边名单真正停着的那个分类 —— 「恢复默认」不算数：它在名单里存在只为被点中的一刻弹确认，从来没被
+    /// 「选中」过。初值和 <see cref="SelectedCategory"/> 的初值是同一个分类，两处要一起改。
+    /// </summary>
+    private string _activeCategory = FirstCardCategory;
+
+    /// <summary>「恢复默认」的确认对话框还没合上的一挡，挡掉第二次点击 —— ContentDialog 同时只许一个。</summary>
+    private bool _restoring;
+
+    /// <summary>
+    /// 选中的分类变了。大多数时候这就是「换一张卡」；唯一例外是 <see cref="ResetCategory"/>：它不是分类，
+    /// 没有卡片也没有内嵌页，选中它的那一刻马上弹回原来的分类（列表上的高亮跟着回去，内容一格都不闪 ——
+    /// 弹回发生在同一次属性通知里，界面来不及画出中间态），跟着把确认对话框问出来。问的那件事在
+    /// <see cref="AskRestoreAsync"/>，异步的部分它自己去等。
+    /// </summary>
+    partial void OnSelectedCategoryChanged(string value)
+    {
+        if (string.Equals(value, ResetCategory, StringComparison.Ordinal))
+        {
+            _ = AskRestoreAsync();
+            return;
+        }
+
+        _activeCategory = value;
+        ShowCategory(value);
+    }
 
     private void ShowCategory(string category)
     {
@@ -1126,28 +1160,53 @@ public sealed partial class SettingsViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 设置列表最下面那颗「恢复默认」。按下去走 <see cref="RestoreDefaultsAsync"/>：先问一次，确认后把设置改回
-    /// 装机值。按钮上的字和指针停上去那句说明在 <c>Strings\zh-Hans\Resources.resw</c>
-    /// （SettingsPage_ResetButton）—— 卡删了之后，按下之前屏上把「服务器和账号不动」说清楚的地方就是
-    /// 那句说明，所以自检盯着它（见 ShellSelfCheck.Settings 的那一关）。
+    /// 「恢复默认」的确认对话框那两句话。提出来是因为自检要盯「按下之前把『服务器和账号不动』讲清楚」的那句话
+    /// 还在不在 —— 从前那句话在按钮的 ToolTip 里（SettingsPage_ResetButton），左边名单里的一项没有 ToolTip，
+    /// 对话框成了按下之前唯一把这件事讲全的地方，所以自检改盯这两个常量（见 ShellSelfCheck.Settings）。
+    /// </summary>
+    internal const string ResetDialogTitle = "恢复默认设置";
+
+    /// <summary>同 <see cref="ResetDialogTitle"/>；「不会退出登录」四个字是自检认它的记号，别改掉。</summary>
+    internal const string ResetDialogMessage =
+        "所有设置都会改回装机时的样子，这一步不能撤销。\n\n"
+        + "服务器和账号不会动（不会退出登录），窗口位置和大小、各媒体库的排序筛选视图、播放器音量也都保留。";
+
+    /// <summary>
+    /// 左边名单最底下的「恢复默认」被点中之后的那一路。它先进 <see cref="OnSelectedCategoryChanged"/>：选中
+    /// 的一刻弹回原来的分类（<see cref="_activeCategory"/>），跟着走到这里问那一次确认 —— 用户的话，
+    /// 2026-09-13：「恢复默认的位置不对，应该在左边的列表中，且点击后要二次确认」。
     /// <para>
     /// <b>它原先自己占一张卡</b>：「恢复默认」分类下唯一一行，为一行开一张卡的理由是「够不着」—— 它最先是
     /// 「关于」卡的第八行，那张卡在设置窗口里第七行就到底，屏上根本看不见。2026-09-06 按他一句
     /// 「恢复默认按钮移到右上角，下方的恢复默认页面删除」搬进页头（PageSlate 的 Trailing 格），卡和左边名单
     /// 里的分类一起删了 —— 页头是整页最靠上的位置，比任何一张卡都够得着。2026-09-13 页头整个删掉
-    /// （「把设置页面左上角的标题栏的图标和设置字样去掉」），它落到设置列表的最下面：滚到头就是它，
-    /// 破坏性的那一档摆在清单末尾。
+    /// （「把设置页面左上角的标题栏的图标和设置字样去掉」），它落到卡片叠的最下面；同日他又说位置不对，
+    /// 这才进了左边名单、回到了它 2026-09-06 之前的样子 —— 点名单里的一项，而不是按一颗散着的按钮。
     /// </para>
     /// <para>
-    /// 命令是异步的，于是「问一次」这件事有地方等：<c>AsyncRelayCommand</c> 在跑的时候自己把按钮置灰，
-    /// 所以连按两下不会叠出两个对话框 —— WinUI 同时只允许一个，第二个直接抛。
+    /// 确认真的点下去之后走 <see cref="RestoreDefaultsAsync"/>。<see cref="_restoring"/> 挡的是同一帧里的
+    /// 第二次点击：对话框要一次 <c>ShowAsync</c> 的时间才摆出来，而名单可以点得比那更快。
     /// </para>
     /// </summary>
-    [RelayCommand]
-    private Task ResetAsync() => RestoreDefaultsAsync();
+    private async Task AskRestoreAsync()
+    {
+        if (_restoring) return;
+        _restoring = true;
+        try
+        {
+            // 先弹回，再问。在对话框里点了取消的时候，名单也该停在原来的分类上 —— 「恢复默认」
+            // 从来没有真的被选中过。
+            SelectedCategory = _activeCategory;
+            await RestoreDefaultsAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _restoring = false;
+        }
+    }
 
     /// <summary>
-    /// 「恢复默认设置」按下之后。哪些回默认、哪些不动由 Core 那一头判（<see cref="SettingsReset.Restore"/>，
+    /// 「恢复默认设置」在对话框里被确认之后。哪些回默认、哪些不动由 Core 那一头判（<see cref="SettingsReset.Restore"/>，
     /// 单测钉着），这里剩下的是「问一次」和「改完让屏上跟上」。
     /// <para>
     /// <b>三件善后一件都不能少，而少了哪一件屏上都只是「设置了但没用」。</b> 主题要当场重刷，不然颜色要等到下次
@@ -1159,18 +1218,15 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// <para>
     /// 重建走的是 <see cref="ReloadAsync"/> 本身，不是另写一段：那是页面第一次打开走的同一段，自检每一轮都把它
     /// 连着每张卡片走一遍，所以这里只剩一个调用点会错。字体和音频设备两份名单都是按进程缓存的，所以重建一次
-    /// 不会再去扫字体、也不会再开一个 libmpv 句柄。
+    /// 不会再去扫字体、也不会再开一个 libmpv 句柄。问话的入口在 <see cref="AskRestoreAsync"/> —— 从那里进来的
+    /// 时候名单已经弹回了原来的分类，确认之后重建出来的就是它。
     /// </para>
     /// </summary>
     private async Task RestoreDefaultsAsync()
     {
         if (_settings is null) return;
 
-        var agreed = await ConfirmAsync(
-            "恢复默认设置",
-            "所有设置都会改回装机时的样子，这一步不能撤销。\n\n"
-                + "服务器和账号不会动（不会退出登录），窗口位置和大小、各媒体库的排序筛选视图、播放器音量也都保留。",
-            "恢复默认").ConfigureAwait(true);
+        var agreed = await ConfirmAsync(ResetDialogTitle, ResetDialogMessage, "恢复默认").ConfigureAwait(true);
 
         if (!agreed) return;
 

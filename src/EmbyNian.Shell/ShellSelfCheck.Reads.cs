@@ -771,14 +771,7 @@ internal static partial class ShellSelfCheck
 
         Try("添加到合集", () => new CollectionDialog(item, [item]));
 
-        Try("修改媒体封面图", () => new CoverDialog(
-            item,
-            new RemoteImageResult
-            {
-                Images = [new RemoteImageInfo { Url = "https://selfcheck.invalid/a.jpg", ProviderName = "自检" }],
-                Providers = ["自检"]
-            },
-            _ => Task.FromResult<byte[]>([])));
+        Try("修改媒体封面图", () => new CoverDialog(item, Find, Fetch, Swap, Delete, Upload, Reload, Remote));
 
         Try("搜索和修改字幕", () => new SubtitleDialog(
             item,
@@ -790,6 +783,27 @@ internal static partial class ShellSelfCheck
         Try("编辑元数据", () => new MetadataDialog(item, new ItemMetadataEdit()));
 
         return (ok, string.Join("；", notes));
+
+        // 这张面板自己要的八个动作，在这儿全是空答复：这一关问的是「面板搭得起来吗」，一条网络都不该走
+        // （<see cref="ReadDialogs"/> 头上那段说明）。以前那一版只传两个，因为面板只做一件事；这一版每一格
+        // 都能换能删能看，所以这八个全都要给。
+        static Task<RemoteImageResult> Find(string itemId, string imageType) => Task.FromResult(new RemoteImageResult
+        {
+            Images = [new RemoteImageInfo { Url = "https://selfcheck.invalid/a.jpg", ProviderName = "自检" }],
+            Providers = ["自检"]
+        });
+
+        static Task<byte[]?> Fetch(string itemId, string imageType, string tag, int width) => Task.FromResult<byte[]?>(null);
+
+        static Task Swap(string itemId, string imageType, int index, RemoteImageInfo chosen) => Task.CompletedTask;
+
+        static Task Delete(string itemId, string imageType, int? index) => Task.CompletedTask;
+
+        static Task Upload(string itemId, string imageType, PickedArtwork picked) => Task.CompletedTask;
+
+        static Task<EmbyItem?> Reload(string itemId) => Task.FromResult<EmbyItem?>(null);
+
+        static Task<byte[]?> Remote(string address) => Task.FromResult<byte[]?>(null);
 
         void Try(string what, Func<Microsoft.UI.Xaml.Controls.ContentDialog> build)
         {

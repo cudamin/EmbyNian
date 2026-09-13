@@ -857,12 +857,11 @@
             </ListView>
 
             <!--
-              需求 2 的后半句：「诊断和服务器移动到设置里」. The left-hand list now ends with two entries that are
+              需求 2 的后半句：「诊断和服务器移动到设置里」. The left-hand list now ends with three entries that are
               not cards — 服务器 and 诊断 are whole pages, with a server list that talks to the network and a
-              log view that tails a file, and neither is expressible as a stack of setting rows.
-
-              So the right-hand column holds two things and shows one: the cards, and a frame the two pages
-              are navigated into. Which one is visible follows the selected category, decided in the view
+              log view that tails a file, and neither is expressible as a stack of setting rows; 恢复默认
+              （2026-09-13）is not a destination at all — picking it asks the confirmation and springs back.
+              Which of the first two is visible follows the selected category, decided in the view
               model rather than here so the page and the self-check read the same flag.
             -->
             <Grid x:Name="SettingsContent" Grid.Column="1" Grid.RowSpan="2">
@@ -928,24 +927,11 @@
                         </ItemsControl>
 
                         <!--
-                          「恢复默认」。原先它自己占一张卡（左边名单里的一个分类），2026-09-06 按他一句「恢复默认
-                          按钮移到右上角，下方的恢复默认页面删除」搬进页头；2026-09-13 页头整个删掉（「把设置
-                          页面左上角的标题栏的图标和设置字样去掉」），它落到设置列表的最下面 —— 滚到头就是它，
-                          和每一张卡同一条左沿线、同一个宽度上限。破坏性的那一档摆在清单末尾，是从上读到下的人
-                          最后才遇到的东西。
-
-                          命令是视图模型的 ResetCommand（AsyncRelayCommand 在跑的时候自己把按钮置灰，连按两下不会
-                          叠出两个对话框）。字和指针停上去那句说明从词表来（SettingsPage_ResetButton）—— 卡删了之后，
-                          按下之前屏上把「服务器和账号不动」说清楚的地方就是那句说明，所以自检盯着它。
+                          「恢复默认」不再住这一列。它原先自己占一张卡（左边名单里的一个分类），2026-09-06 搬进页头，
+                          页头删掉后又落到卡片叠的最下面；2026-09-13 按他一句「恢复默认的位置不对，应该在左边的
+                          列表中，且点击后要二次确认」进了左边名单 —— 和服务器、诊断一样是名单里的一项，点中它
+                          不换卡片，先问一次再说。走到哪儿去了，见 SettingsViewModel.ResetCategory。
                         -->
-                        <Grid MaxWidth="900" Margin="0,4,0,8">
-                            <Button
-                                x:Name="SettingsResetButton"
-                                x:Uid="SettingsPage_ResetButton"
-                                HorizontalAlignment="Left"
-                                Command="{x:Bind ViewModel.ResetCommand}"
-                                Style="{StaticResource EgSecondaryButtonStyle}" />
-                        </Grid>
                     </StackPanel>
                 </ScrollView>
 

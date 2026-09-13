@@ -81,6 +81,30 @@ public sealed class EmbyHttp : IDisposable
             static (_, _) => Task.FromResult(true), cancellationToken);
 
     /// <summary>
+    /// POSTs raw bytes with <paramref name="contentType"/> as the whole body — 「上传这张图」用。
+    /// <para>
+    /// 和上面那几个不一样：这条路的正文<b>不是 JSON</b>，是一张图片的原样字节，所以不能走
+    /// <see cref="SendAsync"/> 里那段「把对象序列化成 JSON 再发」的默认处理。直接给
+    /// <see cref="ByteArrayContent"/> 而不是流：一张封面撑死几兆，装进内存换一个准确的 Content-Length
+    /// 是对的（Emby 对 chunked 的分块传输本来就吃不消，见 <see cref="SendAsync"/> 里那一段）。
+    /// </para>
+    /// </summary>
+    public Task PostBytesAsync(
+        Uri url,
+        byte[] bytes,
+        string contentType,
+        RequestContext context,
+        CancellationToken cancellationToken) =>
+        SendAndReadAsync(HttpMethod.Post, url, new RawBody(bytes, contentType), context,
+            static (_, _) => Task.FromResult(true), cancellationToken);
+
+    /// <summary>
+    /// 原样的正文字节，连它的内容类型。<see cref="SendAsync"/> 认这一个类型 —— 别的对象都被当成「要序列化的
+    /// JSON 载荷」，只有它是「这就是正文」。
+    /// </summary>
+    private sealed record RawBody(byte[] Bytes, string ContentType);
+
+    /// <summary>
     /// Posts, and takes the response body if there is one. Emby answers the user-state endpoints with the
     /// item's fresh <c>UserItemDataDto</c>, which is worth having — it is where the server's own idea of
     /// the resume position and a series' remaining-episode count comes from, and the alternative is
@@ -256,7 +280,13 @@ public sealed class EmbyHttp : IDisposable
             request.Headers.TryAddWithoutValidation("X-Emby-Token", context.AccessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        if (body is not null)
+        if (body is RawBody raw)
+        {
+            // 上传一张图：正文就是这些字节，一个字都不动它。
+            request.Content = new ByteArrayContent(raw.Bytes);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue(raw.ContentType);
+        }
+        else if (body is not null)
         {
             // JsonContent sends the body with Transfer-Encoding: chunked, which Emby 4.9.5
             // cannot read — the JSON never binds and every request fails with

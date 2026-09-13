@@ -177,11 +177,11 @@ internal static partial class Native
     public const uint WmNcDestroy = 0x0082;
 
     /// <summary>
-    /// WM_SETICON, swap a window's big or small icon — or, wParam picking the size and lParam a null handle,
-    /// take one off. The settings window's caption is painted by the system (it has no mpv child under it,
-    /// unlike the main window), and the icon the AppWindow installs from the exe's resources is exactly the
-    /// kind of furniture that window is not supposed to show (用户 2026-09-13「把设置页面左上角的标题栏的
-    /// 图标和设置字样去掉」)。
+    /// WM_SETICON, swap a window's big or small icon — wParam picks the size (0 小档, 1 大档). 发空句柄
+    /// 并不是「摘掉图标」：系统画标题栏图标时的查找链是「WM_SETICON 给的 → 窗口类图标 → exe 资源里的
+    /// 第一颗」，从第一环退出之后后两环会把图标原样补回来 —— 设置窗口 2026-09-13 发过空句柄，截图上
+    /// 左上角照样有图标。那个位置真正要的是一颗全透明的图标（见 <c>SettingsWindow.CreateBlankIcon</c>），
+    /// 不是空。
     /// </summary>
     public const uint WmSetIcon = 0x0080;
     public const uint WmSize = 0x0005;
@@ -265,6 +265,12 @@ internal static partial class Native
     public static readonly IntPtr HwndTopMost = new(-1);
 
     public static readonly IntPtr HwndNoTopMost = new(-2);
+
+    /// <summary>
+    /// HWND_MESSAGE: 挂在这里的窗口不上屏、不被枚举，自检拿它造一个「看得见前台、没有一寸像素」的哑窗口
+    /// —— <see cref="HostWindow"/> 判断「要不要为前台窗口让出置顶」时最小化/隐藏那一分支的试验品。
+    /// </summary>
+    public static readonly IntPtr HwndMessage = new(-3);
 
     // ---- ShowWindow ----------------------------------------------------------
     public const int SwShow = 5;
@@ -378,6 +384,17 @@ internal static partial class Native
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsWindowVisible(IntPtr window);
+
+    /// <summary>
+    /// 一个（多半是别人的）窗口的标题，给要指名道姓的日志行用 —— 光一个地址说不出去年让出置顶的那个
+    /// 0x5040C 是谁。跨进程可用；没有标题的窗口得到零。
+    /// </summary>
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowTextW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    public static partial int GetWindowText(IntPtr window, [Out] char[] text, int capacity);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool IsZoomed(IntPtr window);
 
     [LibraryImport("user32.dll")]
@@ -386,6 +403,20 @@ internal static partial class Native
 
     [LibraryImport("user32.dll", EntryPoint = "SendMessageW")]
     public static partial IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>
+    /// 从一段 ICO 图像数据造一颗图标。设置窗口用它造「整幅全透明」的那颗占住标题栏 —— 见
+    /// <c>SettingsWindow.CreateBlankIcon</c>。必须是 32bpp：单色 1bpp 的透明掩码 DWM 不认，
+    /// 会画成一整块暗色（2026-09-13 截图放大实量）；32bpp 图标按 alpha 合成，alpha 全 0 才是真透明。
+    /// </summary>
+    [LibraryImport("user32.dll")]
+    public static partial IntPtr CreateIconFromResourceEx(
+        byte[] presBits, uint size, [MarshalAs(UnmanagedType.Bool)] bool isIcon, uint version,
+        int width, int height, uint flags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DestroyIcon(IntPtr icon);
 
     [LibraryImport("user32.dll")]
     public static partial IntPtr WindowFromPoint(NativePoint point);

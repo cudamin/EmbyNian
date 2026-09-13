@@ -5,6 +5,7 @@ using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Windows.Foundation;
 using Windows.System;
@@ -435,6 +436,73 @@ public sealed partial class PlayerPage
         ["audio-delay-decrease"] = () => ViewModel.NudgeDelay(subtitle: false, -0.1),
         ["audio-delay-increase"] = () => ViewModel.NudgeDelay(subtitle: false, 0.1)
     };
+
+    /// <summary>
+    /// 空格总归「播放/暂停」——包括落点不在页面上的那几下。挂在 <see cref="Root"/> 上、带着
+    /// <c>handledEventsToo</c>（构造函数里注册），因为键盘到不了 <see cref="OnKeyDown"/> 的情形有三种，
+    /// 页面那路一个都救不了：
+    /// <list type="bullet">
+    /// <item>焦点被 chrome 的滑条一类拿走：值被标了已处理，页面（特意不带 handledEventsToo）收不到。</item>
+    /// <item>焦点停在控件上、控件又没处理空格：能到，但这一路先把已处理的和没处理的一并收齐，行为才齐。</item>
+    /// <item>焦点被 <see cref="OnChromeClick"/> 送回页面之前的那一瞬。</item>
+    /// </list>
+    /// <para>
+    /// 两条让路。其一，重绑：空格若已不归 <c>toggle-pause</c>（设置里被让给了别的动作），这里直接返回、
+    /// 不标已处理，那一下照旧走 <see cref="OnKeyDown"/> 的表 —— 这边只认「空格＝播放/暂停」这一种世界。
+    /// 其二，焦点正停在 <see cref="ButtonBase"/> 上时不接：那是键盘 Tab 走到的按钮，空格按按钮的规矩按下
+    /// 它才是对的；缺了这条豁免，停在播放键上的空格会被这里暂停一次、又被按钮 KeyUp 的 Click 播放一次，
+    /// 按了个寂寞。点出来的焦点不成气候 —— <see cref="OnChromeClick"/> 当场把它还给页面。
+    /// </para>
+    /// <para>
+    /// 处理完标已处理，<see cref="OnKeyDown"/> 那路（在树上更靠外、这次冒泡到不了）和它自己都不会再来
+    /// 第二遍：焦点在页面上时空格从 <see cref="OnKeyDown"/> 走，根本不经过 Root；焦点在别处时只经过这里。
+    /// 一颗键永远只走一条路。
+    /// </para>
+    /// </summary>
+    private void OnSpaceShortcut(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Space || !Attached || _window is null || _typing) return;
+
+        var stroke = new KeyStroke("Space", false, false, false);
+        if (ShortcutCatalog.Lookup(ViewModel.ShortcutBindings, stroke) != "toggle-pause") return;
+        if (FocusManager.GetFocusedElement() is ButtonBase) return;
+
+        ViewModel.TogglePause();
+        e.Handled = true;
+
+        // A keyboard command has no pointer behind it, and this one may not even have had the page's usual
+        // OnKeyDown half to wake the chrome on its way: show it wherever the pointer is resting, exactly as
+        // OnKeyDown does for its own keys.
+        if (_chrome.WakeFully(Now)) Render();
+    }
+
+    /// <summary>
+    /// 点过的 chrome 按钮把焦点还给页面。WinUI 的规矩是点一颗按钮、焦点就停在它身上，而从那一下起空格是
+    /// 那颗按钮的、↑↓ 是它邻居的 —— 用户的手在控制条上点完，打算的却仍是「按空格暂停」。Click 冒泡到
+    /// <see cref="Root"/> 时按钮自己的事已经做完（命令执行、菜单张开），此刻把焦点收回页面，谁也不少什么。
+    /// <para>
+    /// 带 Flyout 的按钮不收：菜单条要靠焦点接管上下键，而且它们本来就不吃空格。真正用 Tab 走到按钮上的
+    /// 焦点不经过 Click，不受影响 —— 那一路空格按按钮的规矩来（<see cref="OnSpaceShortcut"/> 的豁免）。
+    /// </para>
+    /// </summary>
+    private void OnChromeClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ButtonBase || !Attached || Visibility != Visibility.Visible) return;
+
+        // 带 Flyout 的按钮例外（这套投影里 Flyout 挂在 Button 上）：菜单要靠焦点接管上下键。
+        if (sender is Button { Flyout: not null }) return;
+
+        Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>
+    /// 自检：上面两条 Root 接线（空格拦截、chrome 焦点归还）都真的挂上了。注册被拆掉是「按空格没反应」
+    /// 最静默的死法 —— 键盘到不了页面那一路，屏上什么都看不见，编译也看不出，只有这里能问。
+    /// </summary>
+    internal bool SpaceAndFocusWiringArmed => _spaceShortcutArmed && _chromeBlurArmed;
+
+    private bool _spaceShortcutArmed;
+    private bool _chromeBlurArmed;
 
     // ---- the window -------------------------------------------------------------
 

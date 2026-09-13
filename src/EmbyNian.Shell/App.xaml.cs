@@ -172,6 +172,11 @@ public partial class App : Application
             await shell.ShowDetailAsync(_options.ShowEpisode, _options.ScrollEnd, _options.ScrollHalf)
                 .ConfigureAwait(true);
 
+        // Tooling: --show-cover 在详情页之上把「修改媒体封面图」那一张面板弹开留着。对话框只在一条命令跑着
+        // 的时候存在，而这条路上什么都点不进去（这台机器注不进鼠标事件），所以它必须是自己的一个开关。摆在
+        // --show-detail 之后 —— 它自己就走一遍那一步，先弹面板再走就白走了。
+        if (_options.ShowCover) await shell.ShowCoverAsync().ConfigureAwait(true);
+
         // Tooling: --play puts real video on screen. Last, because it does not come back until playback
         // has ended, and because it collapses everything --show-library was for.
         if (_options.PlayFirst) await shell.PlayFirstAsync().ConfigureAwait(true);

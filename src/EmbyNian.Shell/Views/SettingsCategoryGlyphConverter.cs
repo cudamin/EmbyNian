@@ -33,7 +33,8 @@ public sealed class SettingsCategoryGlyphConverter : IValueConverter
         ["关于"] = 0xE946,         // Info
         ["服务器"] = 0xE753,       // Cloud（远端服务器）
         ["诊断"] = 0xE8A5,         // Document（日志）
-        ["服务器控制台"] = 0xE774  // Globe（内嵌网页控制台）
+        ["服务器控制台"] = 0xE774, // Globe（内嵌网页控制台）
+        ["恢复默认"] = 0xE72C      // Refresh（还原、重来一遍）
     };
 
     public object Convert(object value, Type targetType, object parameter, string language) =>

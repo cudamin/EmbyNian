@@ -57,8 +57,9 @@ internal static partial class ShellSelfCheck
     /// measurable, and it is the only part of this the user can see. And the rule that decides whether the
     /// picture keeps that band when another application comes forward, which is 「屏幕1全屏播放时点击屏幕2的
     /// 应用」 — the one arrangement this cannot stage on the machine it is running on, so it is put as
-    /// geometry, plus the question that comes before the geometry: whether the window in front is even
-    /// somebody else's.
+    /// geometry, plus the questions that come before the geometry: whether the window in front is even
+    /// somebody else's, and whether it has any pixels on screen at all (2026-09-13's telegram/qBittorrent
+    /// 隐窗让位).
     /// </para>
     /// </summary>
     private static void ReportFullscreen(HostWindow window, Action<string, bool, string> check)
@@ -81,15 +82,28 @@ internal static partial class ShellSelfCheck
         var sameScreen = HostWindow.StandsClear(picture, here, upon, here);
         var nameless = HostWindow.StandsClear(picture, here, beside, IntPtr.Zero);
 
-        // And the question asked before any of that geometry: whose window is in front. Our own popups are
+        // The question that comes before the geometry, since 2026-09-13's 「屏幕1全屏播放时点击屏幕2的
+        // telegram和qbittorrent会唤出任务栏」: whether the window in front has any pixels to cover at all.
+        // A minimized window's rectangle lives at (−32000,−32000) and a hidden helper's often sits right on
+        // the primary screen — geometry calls both 「covering the picture」, and yielding to them hands the
+        // screen to the taskbar. Staged on two real windows: a message-only dummy that owns no pixels by
+        // construction, and the taskbar itself, which very much does.
+        var ghost = Native.CreateWindowEx(0, "Static", null, 0, 0, 0, 0, 0,
+            Native.HwndMessage, IntPtr.Zero, Native.GetModuleHandle(null), IntPtr.Zero);
+        var bodiless = ghost != IntPtr.Zero && HostWindow.PutsNoPixelsOnScreen(ghost);
+        var embodied = !HostWindow.PutsNoPixelsOnScreen(Native.FindWindow("Shell_TrayWnd", null));
+        if (ghost != IntPtr.Zero) Native.DestroyWindow(ghost);
+
+        // And the question asked before even that: whose window is in front. Our own popups are
         // top-level windows sitting right over the picture, and a menu is not the user leaving.
         var mine = HostWindow.SameApp(window.Handle);
         var theirs = HostWindow.SameApp(Native.FindWindow("Shell_TrayWnd", null));
 
         check("全屏让位只看画面",
-            elsewhere && !straddling && !sameScreen && !nameless && mine && !theirs,
+            elsewhere && !straddling && !sameScreen && !nameless && bodiless && embodied && mine && !theirs,
             $"另一屏不重叠时保持置顶={elsewhere}，另一屏但压到画面={straddling}"
                 + $"，同一屏={sameScreen}，问不出显示器={nameless}"
+                + $"，没有像素的前台（隐藏/最小化）不算挡画面={bodiless}，任务栏算挡画面={embodied}"
                 + $"；自己的窗口算自家={mine}，任务栏算自家={theirs}");
 
         if (window.Handle == IntPtr.Zero || window.Fullscreen) return;

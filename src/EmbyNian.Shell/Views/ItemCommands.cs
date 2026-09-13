@@ -159,6 +159,24 @@ internal static partial class ItemCommands
     }
 
     /// <summary>
+    /// 按一条命令做事，但不弹那张菜单。给 <c>--show-cover</c> 用。
+    /// <para>
+    /// <see cref="Show"/> 只把菜单摆出来，按下去的动作在 <see cref="Invoke"/> 里 —— 那一头是私有的，
+    /// 因为「谁能按这条命令」该由菜单说了算。这一支是给工具的那扇门：走的是同一个 <see cref="Invoke"/>，
+    /// 所以拍到的和用户按下去的是同一件事，只是省掉了那颗指针。
+    /// </para>
+    /// </summary>
+    internal static void Run(
+        ItemCommand command,
+        EmbySession session,
+        IShellActions shell,
+        FrameworkElement owner,
+        CardItem card,
+        IReadOnlyList<EmbyItem>? siblings = null,
+        Action? changed = null) =>
+        Invoke(command, session, shell, owner, card, siblings, changed);
+
+    /// <summary>
     /// 按下一行之后做什么。一处 switch 而不是把动作塞进 <see cref="ItemMenu"/>：那一头是「有哪几条」，这一头
     /// 才有服务器、外壳和对话框。每一条命令在这里都必须有着落 —— 漏一条的下场是点下去什么都不发生。
     /// </summary>

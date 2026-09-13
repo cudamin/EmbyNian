@@ -1094,6 +1094,30 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
+    /// 工具用：走到详情页，然后把「修改媒体封面图」那一张面板弹开留在屏上（<c>--show-cover --show-detail</c>）。
+    /// <para>
+    /// 对话框是这个应用里唯一从外面点不进去的一层：它只在一条命令跑着的时候存在，而这台机器注不进鼠标事件 ——
+    /// 于是没有这个开关的话，那六格、背景图那一排和四颗按键既没有照片，也没有哪一道闸门看得见它们。
+    /// </para>
+    /// <para>
+    /// 走的是和用户同一条路（<see cref="ItemCommands"/> 的那条命令），不是另开一扇后门：这样拍到的就是用户在
+    /// 屏上会看到的那一张面板，而不是一个长得像它的东西。
+    /// </para>
+    /// </summary>
+    internal async Task ShowCoverAsync()
+    {
+        await ShowDetailAsync(episode: false).ConfigureAwait(true);
+
+        if (ContentFrame.Content is not DetailPage page)
+        {
+            Log.Warn(Category, "--show-cover：这一刻框里不是详情页");
+            return;
+        }
+
+        if (!page.OpenCoverPanel()) Log.Warn(Category, "--show-cover：详情页上的面板弹不出来");
+    }
+
+    /// <summary>
     /// Tooling: opens the first library and plays the first thing in it that can be played. The only way
     /// to get real video on screen without a person clicking, and therefore the only way any of the
     /// player's runtime behaviour — the embedded child HWND, the reveal rule over a live picture,

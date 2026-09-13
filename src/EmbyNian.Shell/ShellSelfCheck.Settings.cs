@@ -118,10 +118,13 @@ internal static partial class ShellSelfCheck
         // The left-hand list and the cards, against each other. Both are written out by hand and in different
         // places, so a category with no card is an entry that shows an empty pane and a card with no category
         // is a card no one can reach. 服务器 and 诊断 are the two entries that are deliberately not cards —
-        // they are pages hosted in the same column (需求 2) — so they join the cards on that side.
+        // they are pages hosted in the same column (需求 2) — so they join the cards on that side. 恢复默认
+        // （2026-09-13）is a third one: not a destination at all, an entry whose whole job is to be picked and
+        // then ask.
         var reachable = page.Cards
             .Select(card => card.Category)
             .Concat(SettingsViewModel.HostedCategories)
+            .Concat([SettingsViewModel.ResetCategory])
             .ToList();
 
         var unreachable = reachable
@@ -289,33 +292,33 @@ internal static partial class ShellSelfCheck
                     + $"这台机器上可选 {devices.Count} 个设备"
                     + (devices.Count > 0 ? $"，第一个是「{devices[0].Label}」" : "（还没读到或者读不到）"));
 
-        // 「恢复默认设置」那颗按钮，设置列表的最下面。什么都不按 —— 按下去就是把用户这台机器上的设置全清一遍，
-        // 而这一关要问的三件事都不需要真按：那颗按钮在不在列表末尾，指针停上去那句说明写没写清服务器和账号
-        // 不动，以及这一页问得出那次确认没有。
+        // 「恢复默认」，左边名单的最底下一项。2026-09-13 按他一句「恢复默认的位置不对，应该在左边的列表中，
+        // 且点击后要二次确认」从卡片叠的最下面搬进名单 —— 点中它不换卡片，先问一次确认再说。什么都不真按，
+        // 这一关问三件事：名单末尾是不是它（破坏性的那一档摆在清单末尾，是从上读到下的人最后才遇到的东西）、
+        // 问出来的对话框讲没讲清服务器和账号不动、以及这一页问得出那次确认没有。
         //
-        // 说明是这一关盯的东西。按钮原先自己占一张卡，说明铺在卡上 —— 那也是按下之前屏上唯一一处把「哪些
-        // 回默认、哪些不动」写全的地方。2026-09-06 按他一句「恢复默认按钮移到右上角，下方的恢复默认页面删除」
-        // 卡整个删了、按钮搬进页头；2026-09-13 页头整个删掉（「把设置页面左上角的标题栏的图标和设置字样去掉」），
-        // 按钮落到设置列表的最下面，说明缩在 ToolTip 里；按下之后还有对话框把同一件事再讲一遍，所以这句话
-        // 不能丢，丢了它按钮就成了「按下去才知道会发生什么」。x:Name 生成的那颗字段是页和自检同程序集里
-        // 最直接的读法；ToolTip 从词表来（SettingsPage_ResetButton），读回来看看那句话还在不在。
+        // 那句「服务器和账号不动」是这一关盯的东西。按钮的时代它铺在 ToolTip 里（SettingsPage_ResetButton，
+        // 那颗按钮 2026-09-13 连同它在卡片叠底下的位置一起删了），名单里的一项没有 ToolTip，于是这句话搬进了
+        // 确认对话框（SettingsViewModel.ResetDialogMessage）—— 按下之前唯一把「哪些回默认、哪些不动」讲全的
+        // 地方。代码里的字符串自检本来够不着，所以那两句话提成常量，读常量就是读屏上那句话。
         //
         // 再往后那半句是这一关存在的理由。对话框要页面的 XamlRoot，所以视图模型只能等页面把 ConfirmRequest
         // 递过来；页面漏了那一句，ConfirmAsync 一律答「否」—— 按钮按下去什么都不发生，屏上一个字都不说，
         // 行数、模板、渲染读数一个都不会差。单测进不到外壳这个程序集，这台机器上也注不进鼠标事件，所以这是
         // 那件事唯一验得到的形式。至于「哪些回默认、哪些不动」，那是 Core 那一头的事（SettingsReset.Restore，
         // 单测钉着）。
-        var resetButton = page.ResetButton;
-        var resetNote = resetButton is null ? "" : ToolTipService.GetToolTip(resetButton) as string ?? "";
-        var saysAccountsStay = resetNote.Contains("不会退出登录", StringComparison.Ordinal);
+        var categories = page.Categories;
+        var resetInList = categories.Count > 0
+            && string.Equals(categories[^1], SettingsViewModel.ResetCategory, StringComparison.Ordinal);
+        var saysAccountsStay = SettingsViewModel.ResetDialogMessage.Contains("不会退出登录", StringComparison.Ordinal);
         var canAsk = page.ViewModel.CanConfirm;
 
-        check("恢复默认设置那颗按钮问得出确认", resetButton is not null && saysAccountsStay && canAsk,
-            resetButton is null
-                ? "设置列表最下面没有那颗按钮"
-                : $"「{(resetButton.Content as string ?? "")}」，说明里"
+        check("恢复默认在名单末尾、问得出确认", resetInList && saysAccountsStay && canAsk,
+            !resetInList
+                ? $"左边名单末尾不是恢复默认（{(categories.Count > 0 ? $"末一项「{categories[^1]}」" : "名单是空的")}）"
+                : $"左边名单 {categories.Count} 项、末一项「{categories[^1]}」；对话框"
                     + $"{(saysAccountsStay ? "写明了服务器和账号不动" : "没写服务器和账号会怎样")}；"
-                    + $"确认对话框{(canAsk ? "已接上页面" : "没接上，按下去会一律当成「取消」")}");
+                    + $"确认对话框{(canAsk ? "已接上页面" : "没接上，点下去会一律当成「取消」")}");
 
         // The one path this page's cache guard exists for. Pressing 设置 again re-navigates the settings
         // window's frame to this same page type, and a page that rebuilt itself on the way in would throw

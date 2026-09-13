@@ -41,13 +41,18 @@ public sealed partial class PlayerPage
         var unreachable = actions.Where(action => !producible.Contains(action.Default.Key)).Select(action => action.Id).ToList();
         var unique = ShortcutCatalog.DefaultsAreUnique();
 
-        var ok = missing.Count == 0 && extra.Count == 0 && unreachable.Count == 0 && unique;
+        // 空格拦截和 chrome 焦点归还（2026-09-13「新增按空格暂停」）这两条 Root 接线：注册若被拆掉，
+        // 焦点被控件拿走之后空格就又哑了 —— 键盘到不了页面那一路，屏上最静默的一种死法。
+        var armed = SpaceAndFocusWiringArmed;
+
+        var ok = missing.Count == 0 && extra.Count == 0 && unreachable.Count == 0 && unique && armed;
 
         var detail = new StringBuilder($"{actions.Count} 个动作、处理器 {handlerIds.Count} 个");
         if (missing.Count > 0) detail.Append($"；缺处理器：{string.Join('、', missing)}");
         if (extra.Count > 0) detail.Append($"；多出处理器：{string.Join('、', extra)}");
         if (unreachable.Count > 0) detail.Append($"；默认键按不出：{string.Join('、', unreachable)}");
         detail.Append(unique ? "；默认键互不相同" : "；默认键有相撞");
+        detail.Append(armed ? "；空格接线在" : "；空格接线被拆");
 
         return (ok, detail.ToString());
     }

@@ -113,6 +113,19 @@ public sealed record StartupOptions
     public bool ShowEpisode { get; init; }
 
     /// <summary>
+    /// Tooling only: with <see cref="ShowDetail"/>, pop the 修改媒体封面图 panel open on that item and leave
+    /// it there. A dialog is the one layer nothing can click its way into from outside —— it only exists
+    /// while a command is running, and this machine cannot inject mouse input —— so without a switch the six
+    /// tiles, the backdrop row and the four buttons have no photograph and no gate that looks at them.
+    /// <para>
+    /// Meant to be used on its own (<c>--show-cover --show-detail</c>) rather than with the other
+    /// <c>--show-*</c> layers, for the reason given on <see cref="ShowSettings"/>: whichever one comes
+    /// second finds the screen already occupied.
+    /// </para>
+    /// </summary>
+    public bool ShowCover { get; init; }
+
+    /// <summary>
     /// Tooling only: with either detail flag, leave the page scrolled all the way down. At scroll 0 the
     /// hero fills the viewport by design, so a screenshot of a fresh detail page shows none of the body —
     /// and the body is what the glass panels and the strip of picture below them have to be looked at in.
@@ -258,6 +271,7 @@ internal static class Program
             SettingsCategory = Text(args, "--show-settings"),
             ShowDetail = Has(args, "--show-detail"),
             ShowEpisode = Has(args, "--show-episode"),
+            ShowCover = Has(args, "--show-cover"),
             ScrollEnd = Has(args, "--scroll-end"),
             ScrollHalf = Has(args, "--scroll-half"),
             PlayFirst = Has(args, "--play"),

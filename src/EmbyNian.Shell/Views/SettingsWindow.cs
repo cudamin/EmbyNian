@@ -51,13 +51,17 @@ internal sealed class SettingsWindow
 
     private bool _open;
 
+    /// <summary>全透明小图标（<see cref="CreateBlankIcon"/>），占住标题栏画的那一档；<see cref="Close"/> 里销毁。</summary>
+    private readonly IntPtr _blankIcon;
+
     private SettingsWindow(Window window, Frame frame)
     {
         _window = window;
         _frame = frame;
+        _blankIcon = CreateBlankIcon();
 
         // 标题栏那一条是 Win32 的非客户区，画刷改不到它，只能收到消息之后自己再设一遍。
-        _repaint = _ => PaintCaption(window);
+        _repaint = _ => PaintCaption();
         ThemeHost.Changed += _repaint;
 
         window.AppWindow.Closing += OnClosing;
@@ -110,16 +114,19 @@ internal sealed class SettingsWindow
                 font is FontFamily family)
                 frame.FontFamily = family;
 
-            // 标题不设（用户 2026-09-13「把设置页面左上角的标题栏的图标和设置字样去掉」）：这一页自己
-            // 就是一个窗口，从前的「设置」两个字写在系统标题栏上 —— 现在左上角只留一条配好色的空栏，
-            // 图标在 <see cref="PaintCaption"/> 里摘。任务栏上那一格照旧有字（进程名兜着），只有标题栏是空的。
-            var window = new Window { Content = frame };
+            // 标题必须显式设成空串（用户 2026-09-13「把设置页面左上角的标题栏的图标和设置字样去掉」）。
+            // 「不设」不等于空 —— Window.Title 的官方文档原话是「SetWindowText 的封装」，而不设时标题栏
+            // 兜底显示「WinUI Desktop」（当天截图为证）。写一个空串进去，左上角才是真的没有字。图标那
+            // 一半在 <see cref="PaintCaption"/>。任务栏上那一格照旧有字有图（进程名和应用图标兜着），
+            // 只有标题栏是空的。
+            var window = new Window { Content = frame, Title = string.Empty };
 
             Place(window, owner);
-            PaintCaption(window);
+            var created = new SettingsWindow(window, frame);
+            created.PaintCaption();
 
             Log.Info(Category, "设置窗口已创建");
-            return new SettingsWindow(window, frame);
+            return created;
         }
         catch (Exception error)
         {
@@ -180,6 +187,7 @@ internal sealed class SettingsWindow
         try
         {
             _window.Close();
+            if (_blankIcon != IntPtr.Zero) Native.DestroyIcon(_blankIcon);
         }
         catch (Exception error)
         {
@@ -252,12 +260,12 @@ internal sealed class SettingsWindow
     /// cosmetic loss, and falling back to the in-frame settings page over one would be a worse trade.
     /// </para>
     /// </summary>
-    private static void PaintCaption(Window window)
+    private void PaintCaption()
     {
         try
         {
             var theme = ThemeHost.Current;
-            var handle = Win32Interop.GetWindowFromWindowId(window.AppWindow.Id);
+            var handle = Win32Interop.GetWindowFromWindowId(_window.AppWindow.Id);
 
             var dark = theme.IsDark ? 1 : 0;
             Native.DwmSetWindowAttribute(handle, Native.DwmUseImmersiveDarkMode, ref dark, sizeof(int));
@@ -265,15 +273,14 @@ internal sealed class SettingsWindow
             var corners = Native.DwmCornerRound;
             Native.DwmSetWindowAttribute(handle, Native.DwmWindowCornerPreference, ref corners, sizeof(int));
 
-            // 左上角那颗应用图标不要（用户 2026-09-13「把设置页面左上角的标题栏的图标和设置字样去掉」）。
-            // AppWindow 从 exe 的资源里自己把图标装上，画刷和 TitleBar 的属性都够不到它 —— 只有 WM_SETICON
-            // 发一个空句柄能把它从标题栏上摘下来，大小两档都要（标题栏画的是小档，Alt-Tab 和任务栏读大档；
-            // 这里只管标题栏，任务栏那一格用窗口类自己的图标兜底，不受影响）。字样那一半在 TryCreate 里：
-            // 标题从一开始就没有设。
-            Native.SendMessage(handle, Native.WmSetIcon, (IntPtr)0, IntPtr.Zero);
-            Native.SendMessage(handle, Native.WmSetIcon, (IntPtr)1, IntPtr.Zero);
+            // 左上角那颗图标不要（用户 2026-09-13「把设置页面左上角的标题栏的图标和设置字样去掉」）。
+            // 发空句柄摘不掉它 —— 系统的查找链「WM_SETICON 给的 → 窗口类图标 → exe 资源里的第一颗」
+            // 会把图标原样补回来（当天发过空句柄，截图上照样有）。所以给标题栏画的那一档（小档）换成
+            // <see cref="CreateBlankIcon"/> 的全透明图标：链上每一环都在，只是画出来看不见。大档不动，
+            // 任务栏和 Alt-Tab 照旧拿应用图标。字样那一半在 <see cref="TryCreate"/>：Title 显式设空串。
+            Native.SendMessage(handle, Native.WmSetIcon, (IntPtr)0, _blankIcon);
 
-            var titleBar = window.AppWindow.TitleBar;
+            var titleBar = _window.AppWindow.TitleBar;
             if (titleBar is null) return;
 
             titleBar.BackgroundColor = ThemeHost.ToColor(theme.Colors.Window);
@@ -299,6 +306,46 @@ internal sealed class SettingsWindow
         {
             Log.Warn(Category, "设置窗口标题栏配色失败", error);
         }
+    }
+
+    /// <summary>
+    /// 一颗 16×16 的全透明小图标。系统画标题栏图标时的查找链（<see cref="Native.WmSetIcon"/> 那段）
+    /// 没有「什么都不画」这一档 —— 发空句柄只是退到下一环，图标照样在 —— 所以「摘掉图标」在这里只能
+    /// 做成「占住那一位、让画出来的每个像素都是透明的」。
+    /// <para>
+    /// 必须是 32bpp：头一版用的单色 1bpp（AND 屏全 1），DWM 不认那个透明掩码，标题栏上画出来的是一整块
+    /// 淡淡的暗色方块（2026-09-13 截图放大实量）；32bpp 的图标 DWM 按 alpha 通道合成，XOR 位数据全 0
+    /// 即每个像素 alpha 都是 0，才是真的看不见。造失败给回空句柄，标题栏退回老查找链画应用图标 ——
+    /// 和没摘一样，只是少化一层妆，不是错。
+    /// </para>
+    /// </summary>
+    private static IntPtr CreateBlankIcon()
+    {
+        // 32bpp 全透明图标的位数据：BITMAPINFOHEADER + XOR（BGRA 全 0，alpha 全 0）+ AND 屏（全 0）。
+        // 注意这必须是「单张图像」的那一段（ICO 目录里 ICONDIRENTRY 指向的数据），不带 ICONDIR/
+        // ICONDIRENTRY 容器 —— 头一版把整个 .ico 容器喂了进去，函数从第一个字节按 BITMAPINFOHEADER
+        // 解析不动，退回空句柄，标题栏就又画回了应用图标（2026-09-13 截图放大实量）。
+        // biHeight 写的是 XOR 和 AND 两块的总行数，16×2 = 32。
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(40);                          // biSize
+        writer.Write(16);                          // biWidth
+        writer.Write(32);                          // biHeight
+        writer.Write((short)1);                    // biPlanes
+        writer.Write((short)32);                   // biBitCount
+        writer.Write(0);                           // biCompression = BI_RGB
+        writer.Write(16 * 16 * 4 + 16 * 4);        // biSizeImage
+        writer.Write(0);                           // biXPelsPerMeter
+        writer.Write(0);                           // biYPelsPerMeter
+        writer.Write(0);                           // biClrUsed
+        writer.Write(0);                           // biClrImportant
+        writer.Write(new byte[16 * 16 * 4]);       // XOR：BGRA 全 0 —— 每个像素的 alpha 都是 0
+        writer.Write(new byte[16 * 4]);            // AND 屏：32bpp 的图标以 alpha 为准，全 0
+
+        var bits = stream.ToArray();
+        var icon = Native.CreateIconFromResourceEx(bits, (uint)bits.Length, true, 0x00030000, 0, 0, 0x1);
+        if (icon == IntPtr.Zero) Log.Warn(Category, "全透明小图标造不出来，标题栏会照旧画应用图标");
+        return icon;
     }
 
     /// <summary>

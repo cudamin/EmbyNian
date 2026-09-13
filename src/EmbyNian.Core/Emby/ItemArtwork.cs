@@ -8,6 +8,40 @@ namespace EmbyNian.Emby;
 public readonly record struct ArtworkRef(string ItemId, string ImageType, string Tag);
 
 /// <summary>
+/// One row of the 「修改媒体封面图」 panel: a kind of artwork the server holds, what to call it in Chinese,
+/// what shape it is, and whether an item may have several of it.
+/// <para>
+/// 形状不是装饰：面板上那一格的高度、以及缩略图按什么比例摆，都是照它来的（参考图上那六格的框高矮不一，正是
+/// 各图种形状不同）。一张海报挤进 5:1 的框里、一条横幅塞进 2:3 的框里，两样都认不出是什么 —— 这是这一行
+/// 字段存在的原因。
+/// </para>
+/// <para>
+/// <see cref="Many"/> 只有背景图是 true。Emby 的其余几种图一个条目各只有一张，而背景图是一列
+/// （<see cref="EmbyItem.BackdropImageTags"/>）—— 面板因此把它单独摆一排，一排里每一张都能单独删。
+/// </para>
+/// </summary>
+/// <param name="ImageType">
+/// 服务器那边的字段名（<c>Primary</c>、<c>Logo</c>……）。它同时是请求里那个 <c>Type</c> 参数，
+/// 所以不能翻译成中文。
+/// </param>
+/// <param name="Name">中文名，用用户自己的话：海报、徽标、缩略图、横幅图、光盘封面、艺术图、背景图。</param>
+/// <param name="Ratio">
+/// 宽 ÷ 高。海报 2:3 约 0.667，缩略图 16:9 约 1.778，横幅图约 5。面板拿它算那一格的框高。
+/// </param>
+/// <param name="Many">这个条目是不是可以有不止一张。</param>
+public readonly record struct ArtworkKind(string ImageType, string Name, double Ratio, bool Many = false)
+{
+    /// <summary>
+    /// 这个图种的一格摆多高，按面板上固定的框宽算出来。
+    /// <para>
+    /// 0.667 的比值乘出来是两百多像素高的海报，5 的比值乘出来只有三十 —— 后者矮得放不下那两个图标键，
+    /// 所以下限给到 96（一行字加一排键的高度），上限给到 320（面板那一栏不能比一屏还高）。
+    /// </para>
+    /// </summary>
+    public double FrameHeight(double width) => Math.Clamp(width / Math.Max(0.1, Ratio), 96, 320);
+}
+
+/// <summary>
 /// Which of an item's five artworks the UI reaches for, and for what. 「把媒体的徽标、缩略图、横幅图、艺术图、
 /// 背景图融入对应媒体的 ui 界面」 —— the five are the server's, and this is the one place that says what each
 /// one is for:
@@ -366,6 +400,60 @@ public static class ItemArtwork
         (EmbyImageStore.Art, "艺术图"),
         (EmbyImageStore.Backdrop, "背景图")
     ];
+
+    /// <summary>
+    /// 「修改媒体封面图」那张面板上的格子，按摆的顺序：参考图上那一排六格，再加底下一排背景图。
+    /// <para>
+    /// 六格的次序照参考图抄（封面海报图、徽标、缩略图、横幅图、光盘封面、艺术图），背景图排在最后一排 ——
+    /// 它是唯一可以有不止一张的，面板把它单独摆成横着的一排，不跟上面那六格挤在一个网格里。
+    /// </para>
+    /// <para>
+    /// 这张表和 <see cref="Names"/> 是两件事，不要合并：<see cref="Names"/> 是「自检那一行按什么次序报」，
+    /// 这一张是「面板上按什么次序摆」—— 参考图定的是后者，而它把光盘封面插在艺术图前面、又让背景图退到另一排。
+    /// 重合的部分（那几种图的中文名）由自检那一关盯着两边不打架。
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlyList<ArtworkKind> Panel =
+    [
+        new(EmbyImageStore.Primary, "封面海报图", 2.0 / 3.0),
+        new(EmbyImageStore.Logo, "徽标", 16.0 / 9.0),
+        new(EmbyImageStore.Thumb, "缩略图", 16.0 / 9.0),
+        new(EmbyImageStore.Banner, "横幅图", 5.0),
+        new(EmbyImageStore.Disc, "光盘封面", 1.0),
+        new(EmbyImageStore.Art, "艺术图", 16.0 / 9.0),
+        new(EmbyImageStore.Backdrop, "背景图", 16.0 / 9.0, Many: true)
+    ];
+
+    /// <summary>
+    /// 面板上那六格和「背景图」那一排的分界：上面这几格一个条目各一张，下面那一种可以有多张。
+    /// 一次算好，免得调用方每次自己筛。
+    /// </summary>
+    public static IReadOnlyList<ArtworkKind> SingleKinds { get; } =
+        [.. Panel.Where(kind => !kind.Many)];
+
+    /// <summary>可以有不止一张的那几种（现在只有背景图）。</summary>
+    public static IReadOnlyList<ArtworkKind> MultipleKinds { get; } =
+        [.. Panel.Where(kind => kind.Many)];
+
+    /// <summary>
+    /// 这个条目手上这一种图有几个，按 <see cref="TagOf"/> 那张单子数 —— 背景图是数组，其余是一种一个标签。
+    /// 面板拿它决定那一格画图还是画上传位。
+    /// </summary>
+    public static int Count(EmbyItem item, string imageType) => imageType == EmbyImageStore.Backdrop
+        ? item.BackdropImageTags.Count(tag => tag is { Length: > 0 })
+        : TagOf(item, imageType) is { Length: > 0 } ? 1 : 0;
+
+    /// <summary>
+    /// 这个条目这一种图的所有标签，按服务器的次序。<see cref="Count"/> 是它的个数，而面板要逐张画背景图，
+    /// 所以它得把标签本身交出来 —— 一张图是按「条目 + 图种 + 标签」取的，没有标签就取不到第二张。
+    /// </summary>
+    public static IReadOnlyList<string> TagsOf(EmbyItem item, string imageType)
+    {
+        if (imageType != EmbyImageStore.Backdrop)
+            return TagOf(item, imageType) is { Length: > 0 } one ? [one] : [];
+
+        return [.. item.BackdropImageTags.Where(tag => tag is { Length: > 0 })];
+    }
 
     private static string? Tag(EmbyItem item, string imageType) =>
         item.ImageTags.TryGetValue(imageType, out var tag) ? tag : null;

@@ -112,6 +112,23 @@
     -->
     <x:Double x:Key="EgActionHeight">44</x:Double>
 
+    <!--
+      「修改媒体封面图」面板上那六格的框宽（2026-09-13）。
+
+      三档是两个数：格宽和内缩后的图宽。图宽比格宽小 24，是给那一行三个图标键腾的地方 —— 键的边长 40，
+      三个并排是 120 + 两个 8 的间隔 = 136，所以 140 的帧宽放得下，而 164 的格宽（140 + 两侧各 12 的余量）
+      再乘 6 格加五道间隔，正好落在对话框 1000 的上限里。
+    -->
+    <x:Double x:Key="EgArtworkFrameWidth">140</x:Double>
+    <x:Double x:Key="EgArtworkCellWidth">164</x:Double>
+
+    <!--
+      背景图那一排的格宽。它比上面那六格宽一档（188 对 164），因为这一排一行只摆得来四五张 —— 背景图是
+      16:9 的横图，摆成六格那样窄一条的话，缩略图里什么都认不出。
+    -->
+    <x:Double x:Key="EgBackdropFrameWidth">188</x:Double>
+    <x:Double x:Key="EgBackdropCellWidth">212</x:Double>
+
     <!-- ============================ 间距 ============================ -->
 
     <!--
@@ -398,5 +415,35 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
+    </Style>
+
+    <!--
+      「修改媒体封面图」那一格里摆图的位置（2026-09-13）。
+
+      一个 Button 而不是 Border + 手势：这一格整块点下去就是「换这一种图」，用按钮才有焦点环、才有键盘能按到、
+      才不必自己接 PointerPressed。默认模板会把内容居中并给它一圈内边距和底色，所以这里把它拆平 —— 这一格要的
+      是「一个能点的画框」，不是一颗键。
+
+      虚线框是「这儿本来该有张图、现在没有」：实线发丝框说的是「这是一张图」，虚线的意思是「这儿少一张」。
+      ContentDialog 的描边比卡片上那根粗一档才看得出来，所以 DashStyle 用的是 3,2 而不是 1,1。
+    -->
+    <Style x:Key="EgArtworkTileStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="{ThemeResource EgSurfaceAltBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource EgBorderBrush}" />
+        <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
+        <Setter Property="CornerRadius" Value="{StaticResource EgPosterCornerRadius}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Stretch" />
+    </Style>
+
+    <!-- 空格子里那颗加号：比图小一圈、比读数淡一档 —— 它是「这儿少一张」而不是「按我」。 -->
+    <Style x:Key="EgArtworkEmptyGlyphStyle" TargetType="FontIcon">
+        <Setter Property="FontSize" Value="22" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{ThemeResource EgTextFaintBrush}" />
     </Style>
 </ResourceDictionary>

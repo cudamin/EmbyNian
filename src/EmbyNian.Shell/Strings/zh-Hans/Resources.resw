@@ -97,10 +97,10 @@
     <value>合集名称</value>
   </data>
   <data name="CoverDialog_ContentDialog1.CloseButtonText" xml:space="preserve">
-    <value>取消</value>
+    <value>关闭</value>
   </data>
   <data name="CoverDialog_ContentDialog1.PrimaryButtonText" xml:space="preserve">
-    <value>用这一张</value>
+    <value>完成</value>
   </data>
   <data name="CoverDialog_ContentDialog1.Title" xml:space="preserve">
     <value>修改媒体封面图</value>
@@ -510,12 +510,6 @@
   </data>
   <data name="SettingsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>往下挪一排</value>
-  </data>
-  <data name="SettingsPage_ResetButton.Content" xml:space="preserve">
-    <value>恢复默认</value>
-  </data>
-  <data name="SettingsPage_ResetButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
-    <value>把所有设置还原为装机时的默认值。只影响设置本身：服务器、账号和登录状态一律不动（不会退出登录）。按下后会先问一次。</value>
   </data>
   <data name="SettingsPage_SliderA1.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>mpv 参数滑块</value>

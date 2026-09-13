@@ -470,6 +470,62 @@ public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
             cancellationToken);
 
     /// <summary>
+    /// 把服务器上这个条目的一种图删掉。<b>不可撤销</b> —— 服务器不会替你留着备份，调用方必须先问过用户。
+    /// <para>
+    /// <paramref name="index"/> 只对背景图那种「一个条目一列」的图种有意义（Emby 的地址
+    /// <c>/Items/{id}/Images/{type}/{index}</c> 是它本来的形状）；其余几种一个条目各只有一张，index 传 null，
+    /// 地址就是不带序号的短形式。传错了不会出错 —— 服务器按序号取，越界答 404。
+    /// </para>
+    /// <para>
+    /// 删掉的可能正是界面上某一处正在用的图（剧名上方那枚徽标、页尾那条横幅、详情页背后那张背景图），所以
+    /// 调用方删完必须让那一页重读：<see cref="EmbyItem.ImageTags"/> 上那个标签跟着就没了，而重读才知道。
+    /// </para>
+    /// </summary>
+    public Task DeleteImageAsync(
+        string itemId,
+        string imageType,
+        int? index,
+        CancellationToken cancellationToken) =>
+        http.DeleteAsync(
+            EmbyUrl.Combine(ApiBase, ImagePath(itemId, imageType, index)),
+            Context,
+            cancellationToken);
+
+    /// <summary>
+    /// 从本机传一张图上去，设成这个条目的这一种图。
+    /// <para>
+    /// 正文就是图片的原样字节（<see cref="EmbyHttp.PostBytesAsync"/>），不套 JSON —— Emby 这个接口收的就是
+    /// 一张图本身。<paramref name="contentType"/> 交给服务器去认，所以调用方要按后缀名说清是
+    /// <c>image/jpeg</c> 还是 <c>image/png</c>：说成 <c>application/octet-stream</c> 也能成，但服务器的
+    /// 图片处理那一头是按它选解码器的。
+    /// </para>
+    /// <para>
+    /// 和 <see cref="ApplyRemoteImageAsync"/> 是两条路：那一条是「服务器，你去刮削源把这张取回来」，这一条是
+    /// 「这一张，从我手上收下」。管理员才能用。
+    /// </para>
+    /// </summary>
+    public Task UploadImageAsync(
+        string itemId,
+        string imageType,
+        byte[] bytes,
+        string contentType,
+        CancellationToken cancellationToken) =>
+        http.PostBytesAsync(
+            EmbyUrl.Combine(ApiBase, $"Items/{itemId}/Images/{imageType}"),
+            bytes,
+            contentType,
+            Context,
+            cancellationToken);
+
+    /// <summary>
+    /// 一种图在服务器上那个地址的尾部（<c>Items/{id}/Images/{type}</c>，背景图多一个序号）。
+    /// </summary>
+    internal static string ImagePath(string itemId, string imageType, int? index) =>
+        index is { } position
+            ? $"Items/{itemId}/Images/{imageType}/{position}"
+            : $"Items/{itemId}/Images/{imageType}";
+
+    /// <summary>
     /// 按语言搜一遍这个文件的字幕。<paramref name="language"/> 是三字母代码（<c>chi</c>、<c>eng</c>），
     /// 服务器把它交给装着的字幕插件。一个插件都没装的时候答的是空数组，不是错。
     /// </summary>
