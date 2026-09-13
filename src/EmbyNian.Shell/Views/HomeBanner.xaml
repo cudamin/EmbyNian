@@ -17,9 +17,8 @@
         <SolidColorBrush x:Key="EgBannerPageHoverBrush" Color="#D90C0E11" />
         <SolidColorBrush x:Key="EgBannerPagePressBrush" Color="#F20C0E11" />
 
-        <!-- 底边那排小横条。代码里按 Resources 取键，所以键少一个会在自检里就抛出来。 -->
+        <!-- 右下张数读数那条底条和「详情」键的边框用这一支；代码里按 Resources 取键，键少一个会在自检里就抛出来。 -->
         <SolidColorBrush x:Key="EgBannerDotBrush" Color="#59F3F5F8" />
-        <SolidColorBrush x:Key="EgBannerDotOnBrush" Color="#FFF3F5F8" />
 
         <!-- 带子自己的底在 Theme/Palette.xaml 里（EgBannerBaseBrush）：图还没解码到的那一瞬、整条带收起来之前的
               那一帧，看见的就是它（2026-09-11 剧照铺满整条带之后，它不再在带子的左右两边露面）。右边那一列媒体库
@@ -72,7 +71,8 @@
 
     <!--
       IsTabStop 在带本身上，左右方向键翻页：翻页箭头默认是收起的，收起的按键接不了焦点，所以不用键盘的人靠
-      箭头、用键盘的人靠这里，底边那排小横条则两边都能点。
+      箭头、用键盘的人靠这里 —— 底边那排分页小横条 2026-09-13 整个删了（「删除封面中心下方的那个组件」），
+      翻页剩下箭头、方向键和自动翻页。
     -->
     <Grid
         x:Name="Root"
@@ -171,8 +171,8 @@
                 </Border>
 
                 <!--
-                  下边那一条。铺满整条带、按比例取渐变，而不是写死高度：字块最宽的那一档尾巴挨着下沿，底边那排小
-                  横条又居中、站在图上 —— 这两样都得这一条托着，而带高在 240 到一屏之间变。**到 0.35 处已经全透明**
+                  下边那一条。铺满整条带、按比例取渐变，而不是写死高度：字块最宽的那一档尾巴挨着下沿，右下角的
+                  张数读数又站在图上 —— 这两样都得这一条托着，而带高在 240 到一屏之间变。**到 0.35 处已经全透明**
                   （第三趟从 0.5 收进来的），所以它压不到字块上半截那两行（徽标和片名）。
                 -->
                 <Border>
@@ -235,8 +235,9 @@
                   PlaceLogo 早删了：徽标由这一叠布局。
 
                   竖向这一轴它走过三站：左下（09-09 之前）→ 左上角（09-10「把红框里的东西移动到左上角」，顶距 116
-                  再收成 40）→ 现在的居中。底边那排小横条独立贴下沿，和字块不再共用一条避让规则 —— 居中这一版
-                  字块最宽那一档的尾巴也够不到下沿那一排（带子最矮 240，字块最高 210，两头还各有一口气）。
+                  再收成 40）→ 现在的居中。右下那块张数读数独立贴下沿，和字块不再共用一条避让规则（底边那排分页
+                  小横条从前也贴下沿，2026-09-13 整个删了）—— 居中这一版字块最宽那一档的尾巴也够不到下沿
+                  （带子最矮 240，字块最高 210，两头还各有一口气）。
 
                   每一行各有自己的 TranslateTransform，因为换一张时它们错着抬起来（见 HomeBanner.Rise）；动画在代码里
                   搭，Storyboard.TargetName 只在运行时解析，写在这里编译不出错、跑起来才抛。
@@ -400,15 +401,12 @@
                     </Button.Resources>
                 </Button>
 
-                <!-- 小横条在代码里按幻灯片数目造，见 HomeBanner.BuildDots。 -->
-                <StackPanel
-                    x:Name="Dots"
-                    Orientation="Horizontal"
-                    Spacing="7"
-                    Margin="0,0,0,18"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Bottom" />
-
+                <!-- 小横条那排分页指示 2026-09-13 上午整个删了（「删除封面中心下方的那个组件」），第几张看右下角
+                     这块读数。同一天下午按他一句「把轮播图左下角这个稍微放大一点这个，把下方那条线弄成进度条，
+                     跑满进度条就翻页」把这块从 12 号字／120×2 放大到 14 号／160×3，底下那条线也定死了身份：
+                     进度条 —— 从左往右填满一个 Dwell，填满的那一拍钟到点、翻下一张。悬停时钟停、条清零，移开
+                     重新起算。它不跟系统的动画开关走（这台机器开关是关的，跟着走就是一根永远不动的死线），
+                     见 SyncTimer 的说明。 -->
                 <StackPanel
                     x:Name="SlideStatus"
                     Spacing="8"
@@ -419,9 +417,10 @@
                     <TextBlock
                         x:Name="SlideCounter"
                         HorizontalAlignment="Right"
+                        FontSize="14"
                         Style="{StaticResource EgOnScrimDataStrongStyle}" />
-                    <Border Width="120" Height="2" Background="{StaticResource EgBannerDotBrush}" CornerRadius="1">
-                        <Border x:Name="CountdownBar" Background="{ThemeResource EgAccentBrush}" CornerRadius="1" RenderTransformOrigin="0,0.5">
+                    <Border Width="160" Height="3" Background="{StaticResource EgBannerDotBrush}" CornerRadius="1.5">
+                        <Border x:Name="CountdownBar" Background="{ThemeResource EgAccentBrush}" CornerRadius="1.5" RenderTransformOrigin="0,0.5">
                             <Border.RenderTransform>
                                 <ScaleTransform x:Name="CountdownScale" ScaleX="0" />
                             </Border.RenderTransform>

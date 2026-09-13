@@ -32,6 +32,13 @@ public static class CardSize
     public const int WideHeight = 169;
 
     /// <summary>
+    /// 主页 媒体库 那一排的宽卡（2026-09-13「参考上图缩小媒体库图标的大小」）：比 <see cref="WideWidth"/> 窄一档。
+    /// 参考图上媒体库的格子约是继续观看卡片的 0.79 倍宽（量的 210 对 267），落成 300 的八成。形状不变 —— 还是
+    /// 16:9 的 Thumb 图，<see cref="HeightFor"/> 在这个宽度上给 135；一排「进哪座库」的入口格子，不需要剧照那么大。
+    /// </summary>
+    public const int LibraryWidth = 240;
+
+    /// <summary>
     /// A portrait on 详情页's 演职人员 row. Narrower than a poster because a row of faces reads better
     /// small; 2:3 like a poster, so <see cref="HeightFor"/> gives 186 at this width.
     /// </summary>

@@ -50,15 +50,27 @@
         </DataTemplate>
 
         <DataTemplate x:Key="ShelfTemplate" x:DataType="vm:CardShelf">
-            <StackPanel Spacing="{StaticResource EgSpaceL}">
+            <StackPanel Spacing="{StaticResource EgSpaceM}">
                 <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。
                      OnScrim 绑着这一排是不是站在一张剧照上：这一页的几排都在第一屏外面、站在页面自己的纸上，
                      所以一律是关的（那一档由 CardShelf.OnScrim 定，见 HomeViewModel.BuildShelves）。从前开着的
-                     只有右栏那一列媒体库 —— 2026-09-08 那一栏删掉之后就没有开着的了，绑定留着。 -->
+                     只有右栏那一列媒体库 —— 2026-09-08 那一栏删掉之后就没有开着的了，绑定留着。
+
+                     Offer 就是「这一排能进去」：只有媒体库自己那几排是真的（钥匙里写着库 id），于是它们右端
+                     多一个大于号、整块牌子变成按钮，点了进那个库 —— 2026-09-13「在最近添加右边添加一个大于号，
+                     点击标题后可以进入对应媒体库」。2026-09-13 这一版的 StackPanel 间距从 EgSpaceL(16) 收到
+                     EgSpaceM(12)（「首页组件的上下间距弄紧凑一些」）。
+
+                     Visibility 绑着 CardShelf.ShowHead：矮窗档把媒体库那排压上轮播时牌子整个收起（「媒体库压在
+                     轮播图上的时候不用显示那个媒体库标题」，2026-09-13），压上去的只有那一排卡；StackPanel 的
+                     Spacing 不给收起来的孩子留位置，宿主的高度就是排卡自己的高。 -->
                 <local:ShelfHead
+                    Invoked="OnShelfHeadInvoked"
                     Note="{x:Bind Note, Mode=OneWay}"
+                    Offer="{x:Bind CanOpen, Mode=OneWay}"
                     OnScrim="{x:Bind OnScrim, Mode=OneWay}"
-                    Title="{x:Bind Title, Mode=OneWay}" />
+                    Title="{x:Bind Title, Mode=OneWay}"
+                    Visibility="{x:Bind HeadVisibility, Mode=OneWay}" />
                 <!-- Height bound rather than fixed: a horizontal strip inside a vertical stack has
                      no other way to know how tall a row of cards is, and the shelf works it out from
                      the card size instead of the markup carrying the answer.
@@ -114,18 +126,41 @@
               没有幻灯片时它自己收起来（HomeBanner.Apply），StackPanel 不给收起的孩子留位置，标题栏底下就只剩
               Overlay 那 16 的 Padding —— 和关掉轮播那一档（设置 → 主页）一样自然。
             -->
-            <local:HomeBanner
-                x:Name="Banner"
-                OpenRequested="OnBannerOpenRequested"
-                PlayRequested="OnBannerPlayRequested"
-                Slides="{x:Bind ViewModel.Slides, Mode=OneWay}" />
+            <Grid x:Name="BannerZone">
+                <local:HomeBanner
+                    x:Name="Banner"
+                    OpenRequested="OnBannerOpenRequested"
+                    PlayRequested="OnBannerPlayRequested"
+                    Slides="{x:Bind ViewModel.Slides, Mode=OneWay}" />
+
+                <!--
+                  矮窗档的宿主（「窗口拉矮到媒体库下方那一排被藏起来之后，把媒体库压到轮播图封面的左下角」，
+                  2026-09-13）：媒体库那一排从横排里摘出来，在这里照同一张 ShelfTemplate 再画一份，贴着封面
+                  的下沿（VerticalAlignment Bottom、压到左下角），左右 36 和下方货架同一条脊线。判定在
+                  HomePage 的代码后置（HomeFold），搬进搬出在 HomeViewModel —— 这里只是它站的那块地。
+                  压上的时候牌子整个收起（CardShelf.ShowHead，ShelfTemplate 里那句），压上去的只有那一排卡
+                  （「媒体库压在轮播图上的时候不用显示那个媒体库标题」，2026-09-13）；OnScrim 的浅墨跟着档一起
+                  拨，都是代码后置里的事。
+                -->
+                <Border
+                    x:Name="LibraryOverlay"
+                    Margin="36,0,36,0"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Bottom"
+                    Visibility="Collapsed">
+                    <ContentPresenter x:Name="LibraryHost" ContentTemplate="{StaticResource ShelfTemplate}" />
+                </Border>
+            </Grid>
 
             <!-- 横着的那几排，从大图的下沿之后开始 —— 第一屏整个归上面那张大图。这一层没有板底也没有负的上边距：
                  媒体库 2026-09-08 从右栏改回横排、再没有哪一排压在图上，所以「提起来一叠玻璃」那一套连
                  HomeCarousel.ShelfLift 一起删了。
 
-                 左右那 24 走 Padding：和大图上那块牌子对齐。 -->
-            <Grid x:Name="Overlay" Background="Transparent" Padding="36,24,36,40">
+                 左右那 36 走 Padding：和大图上那块牌子对齐。
+
+                 2026-09-13「首页组件的上下间距弄紧凑一些」：上沿从 24 收到 16（轮播下沿到第一排牌子之间那一口气），
+                 下沿从 40 收到 28（最后一排卡片带到底边）。左右不动 —— 那条脊线和大图上的牌子是一条。 -->
+            <Grid x:Name="Overlay" Background="Transparent" Padding="36,16,36,28">
                 <StackPanel>
                     <ProgressBar
                         IsIndeterminate="True"
@@ -151,13 +186,16 @@
                         ItemTemplate="{StaticResource ShelfTemplate}"
                         ItemsSource="{x:Bind ViewModel.Shelves, Mode=OneWay}">
                         <ItemsRepeater.Layout>
-                            <StackLayout Orientation="Vertical" Spacing="36" />
+                            <!-- 排与排之间：2026-09-13 从 36 收到 24（「首页组件的上下间距弄紧凑一些」）。
+                                 HomePage.xaml.cs 的矮窗档判定读的就是这一格的运行时值（UpdateLibraryOverlay 里的
+                                 gap），所以收窄这里不用另改常量 —— 换行的那条界线跟着一起走。 -->
+                            <StackLayout Orientation="Vertical" Spacing="24" />
                         </ItemsRepeater.Layout>
                     </ItemsRepeater>
 
                     <TextBlock x:Uid="HomePage_TextBlock1"
                         Foreground="{ThemeResource EgTextFaintBrush}"
-                        Margin="0,36,0,0"
+                        Margin="0,24,0,0"
                         Style="{StaticResource EgBodyStyle}"
                         Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}" />
                 </StackPanel>

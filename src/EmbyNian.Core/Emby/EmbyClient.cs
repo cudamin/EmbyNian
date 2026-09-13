@@ -102,15 +102,46 @@ public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
     }
 
     /// <summary>Note: this endpoint returns a bare array rather than an ItemsResult.</summary>
-    public Task<List<EmbyItem>> GetLatestAsync(string? parentId, int limit, CancellationToken cancellationToken)
+    /// <param name="includeItemTypes">
+    /// 逗号分隔的类型表（<see cref="HomeCarousel.LatestTypes"/> 的产物），null = 不加参数 —— 轮播「全部
+    /// 媒体」那一档（用户的话，2026-09-13「轮播图要使用什么媒体」）。
+    /// </param>
+    public Task<List<EmbyItem>> GetLatestAsync(
+        string? parentId,
+        int limit,
+        CancellationToken cancellationToken,
+        string? includeItemTypes = null)
     {
         var url = EmbyUrl.Combine(ApiBase, $"Users/{Connection.UserId}/Items/Latest",
             ("Limit", limit.ToString()),
             ("Fields", EmbyFields.Browse),
             ("ParentId", parentId),
             ("IsPlayed", "false"),
-            ("GroupItems", "true"));
+            ("GroupItems", "true"),
+            ("IncludeItemTypes", includeItemTypes));
         return http.GetJsonAsync<List<EmbyItem>>(url, Context, cancellationToken);
+    }
+
+    /// <summary>
+    /// 随机的一批条目 —— 轮播「随机挑选」来源那一趟（「要使用最近添加还是随机的」，用户的话，2026-09-13）。
+    /// <see cref="GetLatestAsync"/> 走的 /Items/Latest 没有随机这一档，走通用的 /Items、SortBy=Random ——
+    /// 和浏览页排序菜单里「随机」同一个值（<see cref="EmbySortBy.Random"/>）。
+    /// </summary>
+    public async Task<List<EmbyItem>> GetRandomAsync(
+        int limit,
+        IReadOnlyList<string> includeItemTypes,
+        CancellationToken cancellationToken)
+    {
+        var url = EmbyUrl.Combine(ApiBase, $"Users/{Connection.UserId}/Items", new ItemQuery
+        {
+            Recursive = true,
+            IncludeItemTypes = includeItemTypes,
+            SortBy = EmbySortBy.Random,
+            Limit = limit
+        }.ToParameters());
+
+        var result = await http.GetJsonAsync<ItemsResult>(url, Context, cancellationToken).ConfigureAwait(false);
+        return result.Items;
     }
 
     /// <summary>

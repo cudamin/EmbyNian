@@ -668,6 +668,31 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>Whether mpv is drawing into our own window rather than one of its own.</summary>
     internal bool Embedded => Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv;
 
+    /// <summary>
+    /// 「开始播放后自动全屏」/「用独立窗口播放」, as the page reads them at the moment a playback starts.
+    /// <para>
+    /// Read through here rather than handed the whole settings document, which is the same rope
+    /// <see cref="ShortcutBindings"/> and <see cref="AutoPlayNextEpisode"/> already hold: the page gets the one
+    /// answer it needs and nothing else. Read fresh on every playback on purpose — the settings window is a
+    /// second window, and a switch thrown in there has to be in force for the very next play without any
+    /// notification pipe.
+    /// </para>
+    /// </summary>
+    internal bool AutoFullscreenOnPlayback => Settings.Playback.AutoFullscreenOnPlayback;
+
+    /// <summary>
+    /// Whether playback should open in a window of its own. Only meaningful on the built-in backend: an
+    /// external mpv.exe already opens its own window, and this client does not place it.
+    /// </summary>
+    internal bool SeparateWindowPlayback => Settings.Playback.SeparateWindowPlayback && Embedded;
+
+    /// <summary>
+    /// Whether a file is loaded and being driven right now. The shell asks it in one place: when a
+    /// <see cref="Views.PlayerWindow"/> is closed the window <em>is</em> the playback, so the shell has to
+    /// know whether there is anything left to stop before it stops it.
+    /// </summary>
+    internal bool PlayingNow => _playback.IsPlaying;
+
     /// <summary>Whether the user has touched the seek bar recently enough for it to own its value.</summary>
     internal bool Scrubbing => Now - _seekTouched < ScrubGraceMilliseconds;
 

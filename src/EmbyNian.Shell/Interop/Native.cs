@@ -175,6 +175,15 @@ internal static partial class Native
     /// else's lets go of the state it kept for that window.
     /// </summary>
     public const uint WmNcDestroy = 0x0082;
+
+    /// <summary>
+    /// WM_SETICON, swap a window's big or small icon — or, wParam picking the size and lParam a null handle,
+    /// take one off. The settings window's caption is painted by the system (it has no mpv child under it,
+    /// unlike the main window), and the icon the AppWindow installs from the exe's resources is exactly the
+    /// kind of furniture that window is not supposed to show (用户 2026-09-13「把设置页面左上角的标题栏的
+    /// 图标和设置字样去掉」)。
+    /// </summary>
+    public const uint WmSetIcon = 0x0080;
     public const uint WmSize = 0x0005;
     public const uint WmClose = 0x0010;
     public const uint WmEraseBackground = 0x0014;

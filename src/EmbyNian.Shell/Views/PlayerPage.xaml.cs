@@ -450,6 +450,47 @@ public sealed partial class PlayerPage : UserControl
         ViewModel?.Shutdown();
     }
 
+    /// <summary>
+    /// Lets go of the view model without shutting it down, and puts this page back the way
+    /// <see cref="LeavePlayer"/> leaves it. For the one case where a second page takes the same view model
+    /// over: 「用独立窗口播放」 hands the playing to a <see cref="PlayerWindow"/>, which has its own
+    /// <see cref="PlayerPage"/> bound to the same <see cref="PlayerViewModel"/>.
+    /// <para>
+    /// The reason this has to exist at all is that <see cref="Attach"/> subscribes nine events and a set of
+    /// pull-delegates to a view model that is a singleton driving one real mpv session. Two pages wired to it
+    /// at once both run <see cref="EnterPlayer"/>, both reshape the window they happen to hold, and both answer
+    /// the same command — so exactly one of them is attached at any moment, and this is how the shell's own
+    /// player steps aside. <see cref="Shutdown"/> is the other end: the process is going away.
+    /// </para>
+    /// <para>
+    /// <see cref="PlayerViewModel.Connect"/>'s own subscriptions (<c>_playback.*</c>) are the view model's and
+    /// stay put — they belong to whichever page is attached, and the view model outlives both.
+    /// </para>
+    /// </summary>
+    internal void Detach()
+    {
+        if (!Attached) return;
+
+        LeavePlayer();
+
+        ViewModel.Noticed -= OnNoticed;
+        ViewModel.RefreshRequested -= OnRefreshRequested;
+        ViewModel.PlayerShown -= EnterPlayer;
+        ViewModel.PlayerHidden -= LeavePlayer;
+        ViewModel.PlaybackStarted -= OnPlaybackStarted;
+        ViewModel.ChaptersChanged -= OnChaptersChanged;
+        ViewModel.StatusApplied -= OnStatusApplied;
+        ViewModel.PictureAspectChanged -= OnPictureAspectChanged;
+        ViewModel.StatsUpdated -= OnStatsUpdated;
+
+        ViewModel.MeasureSurface = null;
+        ViewModel.MeasureRefreshHz = null;
+        if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
+
+        _shell = null;
+        _window = null;
+    }
+
     // ---- 输出尺寸 -----------------------------------------------------------------
 
     /// <summary>
@@ -582,6 +623,16 @@ public sealed partial class PlayerPage : UserControl
     {
         // Whatever the last file's pause state was, this one has not been paused by anybody yet.
         _paused = null;
+
+        // 「开始播放后自动全屏」—— 在这里而不是 EnterPlayer 里，因为这一头说的才是「一个新的播放真的开始了」：
+        // EnterPlayer 那一下还只是「要把窗口交给播放器」（网络往返之前就发生了，失败也会走），而这里开播已经
+        // 成立。用 SetFullscreen(true) 而不是按一次切换键：上一个片子退全屏之后窗口不是全屏，可上一个片子
+        // 里用户从没按过 F 的时候窗口正是全屏，那时「按一次切换」会把刚开的片子推出全屏。
+        //
+        // 连播的下一集走的是同一条路，但**不重复施法**：这里判的是「新的播放」，而连播换集在服务端是一个
+        // 新的播放，所以它也会进一次 —— 这正是「开始播放后自动全屏」的字面意思。用户中途按 F 退出全屏，
+        // 下一集开始时会再进一次；要的是「这部片子开始时是全屏」，不是「窗口永远不许退出全屏」。
+        if (ViewModel.AutoFullscreenOnPlayback) SetFullscreen(true);
 
         _chrome.Reset(Now);
         Render();

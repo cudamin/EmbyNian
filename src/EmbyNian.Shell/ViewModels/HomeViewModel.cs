@@ -77,6 +77,63 @@ public sealed partial class HomeViewModel : PageViewModel
     /// </summary>
     private (HomeRowPlan Row, CardShelf Shelf)[] _all = [];
 
+    /// <summary>
+    /// 矮窗档开没开：开了就是把 <see cref="LibraryShelf"/> 从 <see cref="Shelves"/> 里摘掉、让它压到轮播左下角，
+    /// 摘掉之后横排里它那个位置由下面那一排补上。判定（量窗口、量货架）在 <c>HomePage</c>，这一头只管执行和记状态
+    /// —— 重载重建 <see cref="Shelves"/> 之后由 <see cref="ApplyLibraryOverlay"/> 原样恢复，重载前后不跳档。
+    /// </summary>
+    private bool _libraryOnBanner;
+
+    /// <summary>矮窗档现在开没开。读数用（自检的版面比对、货号摘要要说清媒体库去了哪儿）。</summary>
+    internal bool LibraryOnBanner => _libraryOnBanner;
+
+    /// <summary>
+    /// 媒体库那一排（版面钥匙 <see cref="HomeLayout.Libraries"/>），装到了东西才记 —— 勾掉或者空的账号没有这一排，
+    /// 矮窗档整个不参与。它和 <see cref="LibraryFlowIndex"/> 都是每次 <see cref="LoadAsync"/> 重建横排时落定的。
+    /// </summary>
+    internal CardShelf? LibraryShelf { get; private set; }
+
+    /// <summary>
+    /// <see cref="LibraryShelf"/> 在横排里的位置（默认摆法，不是压上档的）。压上档要回默认时按它插回去，插错了
+    /// 次序就是「拖拽版面被窗口高度改写」。
+    /// </summary>
+    internal int LibraryFlowIndex { get; private set; } = -1;
+
+    /// <summary>
+    /// 视图（量完几何之后）对矮窗档下的判断。开、关都走 <see cref="ApplyLibraryOverlay"/> 搬那一排；没有媒体库
+    /// 那一排时开不了。
+    /// </summary>
+    internal void SetLibraryOverlay(bool on)
+    {
+        if (_libraryOnBanner == on) return;
+        if (on && LibraryShelf is null) return;
+
+        _libraryOnBanner = on;
+        ApplyLibraryOverlay();
+    }
+
+    /// <summary>
+    /// 按当前开关把媒体库那一排搬进搬出横排。重载（<see cref="LoadAsync"/> 重建 <see cref="Shelves"/>）之后也走
+    /// 这一句恢复原状 —— 开着的时候重建出来的那一排立刻再摘掉，屏上不出现「先回横排再压回去」的一跳。
+    /// </summary>
+    private void ApplyLibraryOverlay()
+    {
+        if (LibraryShelf is not { } shelf)
+        {
+            _libraryOnBanner = false;
+            return;
+        }
+
+        if (_libraryOnBanner)
+        {
+            if (Shelves.Contains(shelf)) Shelves.Remove(shelf);
+        }
+        else if (!Shelves.Contains(shelf) && LibraryFlowIndex >= 0)
+        {
+            Shelves.Insert(Math.Min(LibraryFlowIndex, Shelves.Count), shelf);
+        }
+    }
+
     public HomeViewModel()
     {
         LoadedCount = NotLoaded;
@@ -91,9 +148,10 @@ public sealed partial class HomeViewModel : PageViewModel
     public ObservableCollection<CardShelf> Shelves { get; } = [];
 
     /// <summary>
-    /// 需求 5 的那条大图轮播（<see cref="HomeCarousel"/>）: 继续观看的头几个条目，不够时由最近添加补上，each
-    /// drawn as one full-width backdrop instead of a card. 设置里关掉轮播（<see cref="_banner"/>）时这里是空的，
-    /// 带子自己就收起来。
+    /// 需求 5 的那条大图轮播（<see cref="HomeCarousel"/>）：设置里那个来源（最近添加或随机）、那一类媒体
+    /// （全部、电影或剧集）的头几张，each drawn as one full-width backdrop instead of a card.
+    /// 2026-09-13「轮播图改用前十个最近添加」之后继续观看不再参加，同日下午来源、媒体、张数三样进了设置。
+    /// 设置里关掉轮播（<see cref="_banner"/>）时这里是空的，带子自己就收起来。
     /// <para>
     /// A whole new list per load rather than a collection edited in place. The band swaps its slides as
     /// one thing — old artwork released, index back to the first, dots rebuilt — and an
@@ -178,13 +236,22 @@ public sealed partial class HomeViewModel : PageViewModel
         // 走海报 —— 一整排新片的封面比一整排剧照读得快。媒体库那一排不上角标：一个库没有「已看」。
         // 媒体库现在也是横着排的普通一排（2026-09-08「移除轮播图右边的媒体库」之后，右边那一列没了），站在页面
         // 自己的纸上、走主题的墨（OnScrim 默认关）。点它的卡进库 —— 顶部标签栏删掉之后，这一排就是进各媒体库的入口。
+        // 媒体库那一排比别的宽卡窄一档（2026-09-13「参考上图缩小媒体库图标的大小」，比例记在
+        // CardSize.LibraryWidth 上）：一排「进哪座库」的入口格子，不需要剧照那么大。形状和宽度从一个 switch
+        // 里出，两边分头写就会有一天各说各话。
         _all = [.. plan.Select(row =>
         {
-            var wide = row.Key is HomeLayout.Resume or HomeLayout.Libraries or HomeLayout.NextUp;
-            var width = wide ? CardSize.WideWidth : CardSize.PosterWidth;
+            var (wide, width) = row.Key switch
+            {
+                HomeLayout.Libraries => (true, CardSize.LibraryWidth),
+                HomeLayout.Resume or HomeLayout.NextUp => (true, CardSize.WideWidth),
+                _ => (false, CardSize.PosterWidth)
+            };
             var badges = row.Key != HomeLayout.Libraries && _badges;
 
-            return (row, new CardShelf(row.Title, images, width, wide, badges));
+            // 媒体库自己那一排知道自己认哪个库（钥匙里就写着），牌子右端于是能跟一个大于号。
+            return (row, new CardShelf(
+                row.Title, images, width, wide, badges, HomeLayout.LibraryId(row.Key)));
         })];
     }
 
@@ -212,8 +279,32 @@ public sealed partial class HomeViewModel : PageViewModel
         var resume = FetchAsync("继续观看", (client, ct) => client.GetResumeAsync(ShelfSize, ct), token);
         var nextUp = FetchAsync("接下来看", (client, ct) => client.GetNextUpAsync(ShelfSize, ct), token);
 
+        // 轮播自己的那一次请求（2026-09-13「轮播图改用前十个最近添加」；同日补上设置里的四行 ——
+        // 「新增在设置中设置轮播图要使用什么媒体，和要使用最近添加还是随机的还有数量的选项。还有封面的
+        // 轮换的秒数」）。来源和媒体类型照设置走：最近添加走 /Items/Latest（不带 parentId，和主页那几排
+        // 的勾选、次序互不相干），随机走 /Items SortBy=Random。请求条数跟着设置里的张数放大 —— 筛掉没有
+        // 宽图、并掉同一部剧之后还得凑得出那个数。
+        var carouselUi = _settings?.Settings.Ui;
+        var carouselCount = Emby.HomeCarousel.ClampSlots(
+            carouselUi?.CarouselCount ?? Emby.HomeCarousel.Slots);
+        var carouselMedia = carouselUi?.CarouselMedia ?? Emby.CarouselMediaType.All;
+        var latestSize = Math.Max(LatestSize, carouselCount * 3);
+
+        var latest = FetchAsync("轮播", (client, ct) =>
+            carouselUi is not null && carouselUi.CarouselSource == Emby.CarouselSource.Random
+                ? client.GetRandomAsync(latestSize, Emby.HomeCarousel.RandomTypes(carouselMedia), ct)
+                : client.GetLatestAsync(
+                    null,
+                    latestSize,
+                    ct,
+                    Emby.HomeCarousel.LatestTypes(carouselMedia) is { Count: > 0 } types
+                        ? string.Join(',', types)
+                        : null),
+            token);
+
         // 媒体库那几排各问一次自己那个库的最近添加。只问勾着的那几排 —— 勾掉一排就是连这次请求一起省掉。
-        // 整个服务器的「最近添加」没有请求了：那一排 2026-09-12 退役，轮播的补位也从这几排里来（见 added）。
+        // 整个服务器的「最近添加」那一排 2026-09-12 从版面上退役了，但它没有断请求 —— 轮播 2026-09-13 起
+        // 单独问一次（见上面 latest）。
         var perLibrary = new Dictionary<string, Task<List<EmbyItem>>>(StringComparer.Ordinal);
         foreach (var (row, _) in _all)
         {
@@ -223,7 +314,7 @@ public sealed partial class HomeViewModel : PageViewModel
                 row.Title, (client, ct) => client.GetLatestAsync(id, LatestSize, ct), token);
         }
 
-        await Task.WhenAll(perLibrary.Values.Append(resume).Append(nextUp)).ConfigureAwait(true);
+        await Task.WhenAll(perLibrary.Values.Append(resume).Append(nextUp).Append(latest)).ConfigureAwait(true);
 
         if (!IsCurrent(token)) return;
 
@@ -234,8 +325,12 @@ public sealed partial class HomeViewModel : PageViewModel
         var resumed = WithoutMusic(resume.Result);
         var next = WithoutMusic(nextUp.Result);
 
+        // 轮播那份（见上面 latest）同样滤掉音乐类：这条带只站电影和剧集。「全部媒体」那一档音乐从来
+        // 进不了最近添加的前排，这层滤网在；「随机」那一档请求侧就没有音乐，它白跑一遍。
+        var newest = WithoutMusic(latest.Result);
+
         // 一排装什么由它那把钥匙说，不再是「数组第几个」—— 次序现在是用户拖出来的，位置说明不了任何事。
-        // 轮播不走这个局部函数：它只认继续观看和最近添加两排，两个具名参数直接交过去（见下面 Slides 那一句）。
+        // 轮播不在这张表里：它认的是 latest 那一次请求，跟这几排谁勾谁不勾、拖成什么次序都没有关系。
         IReadOnlyList<EmbyItem> Items(string key) => key switch
         {
             HomeLayout.Resume => resumed,
@@ -244,10 +339,8 @@ public sealed partial class HomeViewModel : PageViewModel
             _ => perLibrary.TryGetValue(key, out var library) ? WithoutMusic(library.Result) : []
         };
 
-        // 轮播的补位（<see cref="HomeCarousel"/>）打哪来：整服那一排没了，就用各媒体库自己那排最近添加按版面
-        // 次序连成的一串 ——「有继续观看就用继续观看，没有或者继续观看不够就用最近添加」（用户的话，2026-09-05）
-        // 说的还是它，只是按库切开。勾掉的那排不参加：它连请求都没发（见上面 perLibrary），这份补位照旧不多花
-        // 一次往返。
+        // 各媒体库自己那排按版面次序连成的一串。从前轮播的补位从这儿来，2026-09-13 轮播改用整服最近添加
+        // （见上面 latest）之后，这一串只剩一个读者：LoadedCount 的那个数。
         List<EmbyItem> added = [.. _all
             .Where(entry => HomeLayout.LibraryId(entry.Row.Key) is not null)
             .SelectMany(entry => Items(entry.Row.Key))];
@@ -269,18 +362,31 @@ public sealed partial class HomeViewModel : PageViewModel
         // 装到了东西的排一律横着排。媒体库也在其中 —— 2026-09-08「移除轮播图右边的媒体库」之后不再单挑出来当
         // 右栏，就跟别的几排一样站在它自己在版面表上的位置上。
         Shelves.Clear();
+        LibraryShelf = null;
+        LibraryFlowIndex = -1;
 
         foreach (var (row, shelf) in _all)
         {
             if (!row.Visible || shelf.Cards.Count == 0) continue;
 
+            // 媒体库那一排记下自己和位置：矮窗档（<see cref="SetLibraryOverlay"/>）搬的就是它，回默认档时按
+            // 这个位置插回去。勾掉或者空的账号没有这一排，两个都空着，那一档整个不参与。
+            if (row.Key == HomeLayout.Libraries)
+            {
+                LibraryShelf = shelf;
+                LibraryFlowIndex = Shelves.Count;
+            }
+
             Shelves.Add(shelf);
         }
 
-        // 需求 5：轮播站在这几排的头几个条目上，不额外问服务器一次 —— 那些条目已经在手上了。**先用继续观看，
-        // 不够再用最近添加**（「首页的轮播图有继续观看就用继续观看，没有或者继续观看不够就用最近添加」），哪几个
-        // 上得了台是 HomeCarousel 的事（要有宽图、一个剧集只占一张）。关掉轮播就一张都不造，带子自己收起来。
-        Slides = _banner ? BuildSlides(resumed, added) : [];
+        // 矮窗档跨重载不跳：上一趟压在轮播上的，这一趟重建完立刻再摘掉（<see cref="ApplyLibraryOverlay"/>）。
+        ApplyLibraryOverlay();
+
+        // 需求 5 → 2026-09-13「轮播图改用前十个最近添加」，同日下午张数进了设置：轮播不再站在继续观看上，
+        // 只站设置里那个来源发回来的头若干张（筛掉没有宽图、并掉同一部剧，是 HomeCarousel 的事）。关掉轮播
+        // 就一张都不造，带子自己收起来。
+        Slides = _banner ? BuildSlides(newest, carouselCount) : [];
 
         LoadedCount = resumed.Count + next.Count + added.Count;
 
@@ -311,19 +417,27 @@ public sealed partial class HomeViewModel : PageViewModel
     /// 自检：屏上那几排真按版面来的 —— 次序一样、勾掉的那几排真没排。两边各算一次再比：版面那一份是设置文件说的
     /// （<see cref="HomeLayout.Plan"/>），屏上那一份是 <see cref="Shelves"/>，中间隔着「装到了东西才排」这一条。
     /// 媒体库 2026-09-08 从右栏改回横排之后，它和别的排一样参加比对，没有单独一档。
+    /// <para>
+    /// 矮窗档（<see cref="LibraryOnBanner"/>）是唯一的例外：媒体库那一排真在屏上，只是压在轮播左下角、不在横排
+    /// 里 —— 这是这一页对矮窗口的安排，不是版面丢了哪一排。比对时按**钥匙**把它从期望里摘掉（按标题摘，撞上一个
+    /// 恰好叫「媒体库」的媒体库名就比对不出真丢了排的那天），读数里单独交代它去了哪儿。
+    /// </para>
     /// </summary>
     internal (bool Ok, string Detail) LayoutRead()
     {
         var wanted = _all
             .Where(entry => entry.Row.Visible && entry.Shelf.Cards.Count > 0)
-            .Select(entry => entry.Row.Title)
+            .Select(entry => (entry.Row.Key, entry.Row.Title))
+            .Where(entry => !_libraryOnBanner || LibraryShelf is null || entry.Key != HomeLayout.Libraries)
+            .Select(entry => entry.Title)
             .ToList();
 
         var onScreen = Shelves.Select(shelf => shelf.Title).ToList();
 
         var ok = _all.Length > 0 && wanted.SequenceEqual(onScreen, StringComparer.Ordinal);
 
-        return (ok, $"版面 {LayoutSummary}；横着排的 {(onScreen.Count == 0 ? "无" : string.Join('、', onScreen))}");
+        return (ok, $"版面 {LayoutSummary}；横着排的 {(onScreen.Count == 0 ? "无" : string.Join('、', onScreen))}"
+            + (_libraryOnBanner ? "；媒体库那一排压在轮播左下角（矮窗档）" : ""));
     }
 
     /// <summary>
@@ -334,16 +448,14 @@ public sealed partial class HomeViewModel : PageViewModel
         items.Where(item => !EmbyItemType.IsMusic(item.Type)).ToList();
 
     /// <summary>
-    /// The carousel's slides, out of the two rows this page already has: 继续观看 first, 最近添加 filling in
-    /// behind it (<see cref="HomeCarousel.Slides"/>). Empty until the page has been attached: a slide holds
+    /// The carousel's slides, out of the batch the band asked for itself
+    /// (<see cref="HomeCarousel.Slides"/>). Empty until the page has been attached: a slide holds
     /// artwork, and there is nothing to fetch it with before then.
     /// </summary>
-    private IReadOnlyList<BannerSlide> BuildSlides(
-        IReadOnlyList<EmbyItem> resume,
-        IReadOnlyList<EmbyItem> latest) =>
+    private IReadOnlyList<BannerSlide> BuildSlides(IReadOnlyList<EmbyItem> latest, int slots) =>
         _images is not { } images
             ? []
-            : [.. HomeCarousel.Slides(resume, latest).Select(item => new BannerSlide(item, images))];
+            : [.. HomeCarousel.Slides(latest, slots).Select(item => new BannerSlide(item, images))];
 
     /// <summary>
     /// 播放 on the carousel. Straight to the shell with no parent and no sibling list, same as a card on
@@ -369,7 +481,7 @@ public sealed partial class HomeViewModel : PageViewModel
         : !_banner
             ? "设置里关掉了（继续观看回到横着排的那一叠里）"
             : Slides.Count == 0
-                ? "0 张（继续观看和最近添加里都没有带宽图的条目）"
+                ? "0 张（最近添加里没有带宽图的条目）"
                 : $"{Slides.Count} 张，{ItemArtwork.Census([.. Slides.Select(slide => slide.Item)])}";
 
     /// <summary>
@@ -391,6 +503,24 @@ public sealed partial class HomeViewModel : PageViewModel
         if (card.Item.Type is EmbyItemType.CollectionFolder && _actions.TryOpenLibrary(card.Item.Id)) return;
 
         _actions.OpenItem(card.Item);
+    }
+
+    /// <summary>
+    /// 点「最近添加 · XXX」那一排的牌子（标题或者它右边那个大于号）时去哪儿。
+    /// </summary>
+    /// <remarks>
+    /// 2026-09-13 用户原话「在最近添加右边添加一个大于号，点击标题后可以进入对应媒体库」。走的是和点这一排
+    /// 卡片完全同一个入口（<see cref="IShellActions.TryOpenLibrary"/>），所以磁盘栏的高亮和面包屑落点一致 ——
+    /// 从牌子进库和从卡片进库是同一件事，只是不用先挑一张卡。
+    /// <para>
+    /// 不是库的那些排（继续观看、接下来看）这里什么也不做，UI 那一头也不会给它们画出大于号。
+    /// </para>
+    /// </remarks>
+    internal void OpenShelf(CardShelf shelf)
+    {
+        if (_actions is null || shelf.LibraryId is not { Length: > 0 } id) return;
+
+        _actions.TryOpenLibrary(id);
     }
 
     /// <summary>

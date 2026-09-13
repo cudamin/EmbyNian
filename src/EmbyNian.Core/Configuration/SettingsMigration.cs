@@ -301,6 +301,15 @@ public static class SettingsMigration
         // 留着它的下场是设置里那个下拉显示成「设置文件中的值」，而屏上按哪一档走谁也说不清。
         if (!Enum.IsDefined(settings.Ui.ScoreSource)) settings.Ui.ScoreSource = Emby.ScoreSource.Community;
 
+        // 轮播的四项（2026-09-13「新增在设置中设置轮播图要使用什么媒体，和要使用最近添加还是随机的还有数量
+        // 的选项。还有封面的轮换的秒数」）。两个数夹进设置页那一行同样的范围 —— 常量都在 Emby.HomeCarousel
+        // 上，三处同源；两个枚举存整数，认不出来的值拨回装机默认，理由同上面的评分来源。
+        settings.Ui.CarouselCount = Emby.HomeCarousel.ClampSlots(settings.Ui.CarouselCount);
+        settings.Ui.CarouselSeconds = Math.Clamp(
+            settings.Ui.CarouselSeconds, Emby.HomeCarousel.MinDwellSeconds, Emby.HomeCarousel.MaxDwellSeconds);
+        if (!Enum.IsDefined(settings.Ui.CarouselSource)) settings.Ui.CarouselSource = Emby.CarouselSource.Recent;
+        if (!Enum.IsDefined(settings.Ui.CarouselMedia)) settings.Ui.CarouselMedia = Emby.CarouselMediaType.All;
+
         // 主题 id 不在目录里就写回默认那套，而不是留着一个认不出来的字符串：留着的话每次启动都要再判一次，
         // 而且设置里那个下拉框会显示成空的。这里换掉，用户下次保存就落盘成一个真的 id。
         settings.Ui.Theme = Theming.UiThemes.Resolve(settings.Ui.Theme).Id;

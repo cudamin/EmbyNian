@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using EmbyNian.Shell.Views;
+using Microsoft.UI.Xaml;
 
 namespace EmbyNian.Shell.ViewModels;
 
@@ -39,13 +40,20 @@ public sealed partial class CardShelf : ObservableObject
     /// True for a 16:9 row, which prefers the episode still over the poster — a 继续观看 card is about
     /// the scene you stopped at, not the cover art.
     /// </param>
-    internal CardShelf(string title, EmbyImageStore images, int width, bool wide, bool indicators)
+    /// <param name="libraryId">
+    /// 这一排代表哪个媒体库，「最近添加 · 电影」那一排才有值（主页媒体库那几排各自是
+    /// <c>HomeLayout.LibraryKey</c> 造出来的）。有了它，牌子右端那个大于号才知道该把
+    /// 读的人送到哪儿去 —— 2026-09-13 用户原话「在最近添加右边添加一个大于号，点击标题后可以进入对应媒体库」。
+    /// </param>
+    internal CardShelf(string title, EmbyImageStore images, int width, bool wide, bool indicators,
+        string? libraryId = null)
     {
         Title = title;
         _images = images;
         _width = width;
         _wide = wide;
         _indicators = indicators;
+        LibraryId = libraryId;
 
         RowHeight = CardSize.HeightFor(width, wide) + CardSize.Chrome;
 
@@ -53,6 +61,15 @@ public sealed partial class CardShelf : ObservableObject
         // 别人往 Cards 里加东西（详情页换季就是），漏喊一处的症状是牌子右端那个数字停在上一季。
         Cards.CollectionChanged += (_, _) => OnPropertyChanged(nameof(Note));
     }
+
+    /// <summary>
+    /// 这一排能不能点进去，以及点进去是哪个库。空字符串（继续观看、接下来看、详情页的每一排）就是不能 ——
+    /// 那些排没有「对应的库」这回事。只读：一排认哪个库从建出来那一刻就定了，不是会改的东西。
+    /// </summary>
+    public string? LibraryId { get; }
+
+    /// <summary>这一排是一扇通往媒体库的门。</summary>
+    public bool CanOpen => LibraryId is { Length: > 0 };
 
     /// <summary>
     /// The heading above the row. Settable, and observable, because one row's heading is a fact about
@@ -72,6 +89,18 @@ public sealed partial class CardShelf : ObservableObject
     /// </summary>
     [ObservableProperty]
     public partial bool OnScrim { get; set; }
+
+    /// <summary>
+    /// 这一排要不要那块牌子。横排里的每一排都要；矮窗档把媒体库那一排压到轮播左下角时不要 ——
+    /// 「媒体库压在轮播图上的时候不用显示那个媒体库标题」（2026-09-13），压上去的只有那一排卡。
+    /// 主页搬那一排进出时在 <c>HomePage.ApplyLibraryChrome</c> 里拨，别处不碰。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeadVisibility))]
+    public partial bool ShowHead { get; set; } = true;
+
+    /// <summary>牌子显不显（压上档收牌子，见 <see cref="ShowHead"/>）。绑在 ShelfTemplate 的牌子上。</summary>
+    public Visibility HeadVisibility => ShowHead ? Visibility.Visible : Visibility.Collapsed;
 
     public ObservableCollection<CardItem> Cards { get; } = [];
 

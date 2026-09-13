@@ -351,19 +351,30 @@ public static class ItemDetail
     }
 
     /// <summary>
-    /// A media source as the picker lists it. The name is what Emby calls the file, which for a
-    /// multi-version film is 「4K HDR」 or 「导演剪辑版」 and is the whole reason the picker exists; the
-    /// filename is the fallback, because a source with no name is still a distinguishable file.
+    /// A media source as the picker lists it: the name, and nothing after it. The name is what Emby
+    /// calls the file, which for a multi-version film is 「4K HDR」 or 「导演剪辑版」 and elsewhere is the
+    /// release name the file ships under — the whole reason the picker exists. The filename is the
+    /// fallback, because a source with no name is still a distinguishable file.
+    /// <para>
+    /// The quality tail the label used to carry (<c>「…  ·  1080p · H264 · MKV」</c>) is gone —
+    /// 「媒体源的选项太长了」，2026-09-13 — and the 媒体信息 table below already spells those facts out for
+    /// whichever source is picked. Only a source the server described by neither name nor path still
+    /// falls back to the quality label, so a container-only file reads as something rather than nothing.
+    /// </para>
     /// </summary>
     public static string SourceLabel(MediaSource source)
     {
-        var quality = source.ToQualityLabel();
         var name = string.IsNullOrWhiteSpace(source.Name)
             ? System.IO.Path.GetFileName(source.Path ?? "")
             : source.Name!;
 
-        if (string.IsNullOrWhiteSpace(name)) return quality.Length > 0 ? quality : "默认媒体源";
-        return quality.Length > 0 ? $"{name}  ·  {quality}" : name;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            var quality = source.ToQualityLabel();
+            return quality.Length > 0 ? quality : "默认媒体源";
+        }
+
+        return name;
     }
 
     /// <summary>The 媒体源 picker's rows, in the order the server returned the files.</summary>

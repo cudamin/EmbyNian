@@ -31,6 +31,12 @@ public static class DetailHero
     /// 有剧照时这一格有多高。数是内容给的，不是窗口给的：海报 300 高、上下两道边 28 和 24、那排键在自己
     /// 一行上另占 60（44 的键加头上 16），加起来 412 —— 内容正好把这一格填满，一像素富余也不留。
     /// <para>
+    /// <b>2026-09-13 起屏上不再是这个数</b>：那排键搬回片名那一栏的叠里（「排列在封面右边」），独立那一行
+    /// 退役，宽版式的带高改走 <see cref="WideHeight"/>（412 减掉 <see cref="ActionsRow"/>，再和那一叠实测
+    /// 取大）。这个 412 留着还有三个用处：WideHeight 里那笔减法的底数、罩子和标题条洗的锚点（
+    /// <see cref="ScrimSpan"/> 的上限按它算富余、<see cref="TopWash"/> 不传带高时兜底）、老测试的账本。
+    /// </para>
+    /// <para>
     /// 写死而不是跟着视口走，就是「一大片空白」那句话的修法：跟着视口走的那一版在 1440 高的窗口上要留出
     /// 一屏的画面，而画面上只有角上一枚记号。
     /// </para>
@@ -49,22 +55,19 @@ public static class DetailHero
     /// </para>
     /// <para>
     /// 这一格里的内容靠下站（集页的宽版式除外，那一页靠上，见 <c>DetailViewModel.HeroContentAlignment</c>）：
-    /// 写死的带高比内容高一点，那点富余留在这三页的头顶上正是原来那个样子，海报和那一栏字的下沿对齐。
+    /// 带高和内容一般高的时候（<see cref="WideHeight"/> 的常态）对齐不改变什么，封面比那一叠矮的条目上
+    /// 那点富余留在头顶上，海报和那一栏字的下沿照旧对齐。
     /// </para>
     /// </summary>
     public const double ArtHeight = 412;
 
     /// <summary>
-    /// 宽版式那排键底下的断点进度那一行连行距占多高：条和「剩余 x 分钟」一行 16（12 号字的行高，条自己
-    /// 定死 4 高，行听字的），头上再隔 12 的行距 —— 共 28。
-    /// <para>
-    /// 只给「有断点」的条目加（<c>DetailViewModel.HeroLayoutHeight</c>）：412 那一档是按没有这一行的内容
-    /// 量的，进度行一露头带子就得长这么多，不然底对齐的那一叠从带子底下冒出去。没有断点时这一行整个
-    /// 收着，一个像素都不占。集页不在此列 —— 那一格格的高按内容实测给（<see cref="EpisodeHeight"/>），
-    /// 这一行的账已经走在实测里。
-    /// </para>
+    /// 那排键 2026-09-12 到 2026-09-13 两天里在带子底下独立占的那一行的行情：44 的键加头上 16 的间距，
+    /// 共 60。键排回片名那一栏的叠里之后（「排列在封面右边」）这一行不存在了，宽版式的带高从
+    /// <see cref="Height"/> 的老档里把它减掉（<see cref="WideHeight"/>）—— 老档量的是「海报加键行加两道边」，
+    /// 减掉键行剩下的正好是「海报加两道边」。
     /// </summary>
-    public const double ProgressRoom = 28;
+    public const double ActionsRow = 60;
 
     /// <summary>
     /// 这一格的高：有剧照、没有剧照两档同值（见 <see cref="ArtHeight"/> 那段「并轨」）；判据继续传，分档
@@ -79,6 +82,23 @@ public static class DetailHero
     /// </para>
     /// </param>
     public static double Height(bool artwork) => artwork ? ArtHeight : PlainHeight;
+
+    /// <summary>
+    /// 电影、剧、季那三页宽版式的带高：老档（<see cref="Height"/>，412）减掉那排键独立一行占过的
+    /// <see cref="ActionsRow"/>，再和那一叠实测要的高取大。
+    /// <para>
+    /// 前一半是常态：352 正好是海报 300 加两道边（28、24），一像素富余不留 —— 键进了片名那一栏的叠里，
+    /// 「下方那一行」的地方整个收回来（「向右移动剧页面和电影页面的这样按钮，不要放在封面下方 然后向上
+    /// 移动，排列在封面右边，然后调整下方组件的位置」，2026-09-13）。后一半是诚实：那一叠连键带进度条
+    /// 长过海报的时候（片名折两行、有断点的条目），带子跟着实测长 —— 封死在 352 会让那一叠从带子底下
+    /// 冒出去，压在正文上。还没量到（<paramref name="heroRoom"/> 是 0，第一次布局之前）那一拍按 352 布，
+    /// 量完只会更长不会回缩，常态下不跳。
+    /// </para>
+    /// </summary>
+    /// <param name="heroRoom">那一叠连上下留白实测要占多高（<c>DetailViewModel.HeroRoom</c>）。</param>
+    /// <param name="artwork">同 <see cref="Height"/>：服务器上有没有那张图。</param>
+    public static double WideHeight(double heroRoom, bool artwork) =>
+        Math.Max(Height(artwork) - ActionsRow, EpisodeHeight(heroRoom));
 
     /// <summary>
     /// 集页那一格最矮能到多少，同时也是还没量到那一叠字和键有多高时用的那个数（见 <see cref="EpisodeHeight"/>）。
@@ -124,10 +144,10 @@ public static class DetailHero
     /// </para>
     /// <para>
     /// 规矩和别的页面是同一条 —— 高由内容定、不跟窗口走（<see cref="ArtHeight"/> 上那一段），只是集页量在
-    /// 运行时。为什么不能跟着用电影页那一档：单集配的是一张 16:9 剧照，比 2:3 的海报矮一大截，那一叠字也比
+    /// 运行时。为什么不能跟着用写死的档：单集配的是一张 16:9 剧照，比 2:3 的海报矮一大截，那一叠字也比
     /// 电影页少两行，而这一叠是底对齐的 —— 给它整档带高就等于在它头上留出上百像素只有画面的地方，「集拉大
-    /// 窗口后会导致左上角空空的，画面不协调，电影那边处理的就很好」说的正是那一块。电影页之所以「处理的很好」，
-    /// 恰恰因为 412 就是按那一页的内容量的（装下海报 300、那排键那一行 60 和两道边）。
+    /// 窗口后会导致左上角空空的，画面不协调，电影那边处理的就很好」说的正是那一块。（电影、剧、季 2026-09-13
+    /// 起也量在运行时了 —— <see cref="WideHeight"/>：常态 352 正好装下海报加两道边，那一叠长过海报时跟着长。）
     /// </para>
     /// <para>
     /// 上一版是「从视口里减掉底下那一段」：窗口越高带子越高，一直到 460 封顶，于是那块空白跟着窗口一起长 ——
@@ -381,7 +401,8 @@ public static class DetailHero
     /// <inheritdoc cref="TailHeight(double, double, bool, double, double)"/>
     /// <remarks>
     /// 画面铺满第一屏的那一档（<paramref name="pictureBottom"/> = <paramref name="viewport"/>）：老规矩原样，
-    /// 旧调用和老测试走的都是它。
+    /// 旧调用和老测试走的都是它。精确的下沿其实是视口减掉标题栏加面包屑那一截（画面盒顶在窗口上沿，见
+    /// 五参版本 <paramref name="pictureBottom"/> 的说明）—— 这一个重载只为老测试留着，屏上走的是五参那一个。
     /// </remarks>
     public static double TailHeight(double viewport, double heroHeight, bool artwork, double paperLine) =>
         TailHeight(viewport, heroHeight, artwork, paperLine, viewport);
@@ -436,8 +457,10 @@ public static class DetailHero
     /// 传进来。0 是「显示器还没读到」：不撑，纸面回到由内容定的位置，等线到了再来。
     /// </param>
     /// <param name="pictureBottom">
-    /// 背景那一张的下沿，视口坐标 —— <see cref="PictureHeight"/> 算出来的那个数。尾部是「压暗的画面」，画面条
-    /// 以下没有画面可压，撑过去就是空位。
+    /// 背景那一张的下沿，滚动内容的坐标 —— 画面盒顶在窗口的上沿（<c>DetailPage.LiftBackdrop</c>），折算要拿
+    /// <see cref="PictureHeight"/> 减掉标题栏加面包屑那一截；直接用盒高，尾部就永远多撑出一截标题栏高的空黑
+    /// （「黑色渐变下方不要留太大的空位」，2026-09-13）。尾部是「压暗的画面」，画面条以下没有画面可压，撑过去
+    /// 就是空位。
     /// </param>
     public static double TailHeight(
         double viewport, double heroHeight, bool artwork, double paperLine, double pictureBottom) =>
@@ -507,10 +530,10 @@ public static class DetailHero
     /// <inheritdoc cref="ScrimInset"/>
     /// <remarks>
     /// 上限，不是定值：要垫的是海报、片名和那排键那一叠东西，而那一叠多高跟窗口没关系。电影、剧、季那档
-    /// 带子 412（见 <see cref="ArtHeight"/>），罩子由 <see cref="ScrimSpan"/> 收成 392 正好坐满；上限 440
-    /// 只在更高的带子上咬合（集页按那一叠实测给的那一档，见 <see cref="EpisodeHeight"/>，片名折行时会高过
-    /// 440）—— 罩子比带子还高就会从带子的上沿溢出去，屏上是顶边突然暗一档，而标题条那层洗照着另一套
-    /// 坐标算，两边就错开。
+    /// 带子常态 352（<see cref="WideHeight"/>：412 减掉键行），罩子由 <see cref="ScrimSpan"/> 收成 332
+    /// 正好坐满；上限 440 只在更高的带子上咬合（那一叠长过海报的时候，和集页按那一叠实测给的那一档，见
+    /// <see cref="EpisodeHeight"/>，片名折行时会高过 440）—— 罩子比带子还高就会从带子的上沿溢出去，屏上是
+    /// 顶边突然暗一档，而标题条那层洗照着另一套坐标算，两边就错开。
     /// </remarks>
     public const double ScrimHeight = 440;
 
@@ -588,9 +611,9 @@ public static class DetailHero
     /// <param name="offset">同上。</param>
     /// <param name="artwork">同上。</param>
     /// <param name="bandHeight">
-    /// 头图那一格这一次的高。集页那一格按里面那一叠实测给（<see cref="EpisodeHeight"/>），罩子跟着收
-    /// （<see cref="ScrimSpan"/>），这条曲线也就得按收完的那一块算 —— 不传的那个重载按
-    /// <see cref="ArtHeight"/> 算，也就是别的页面上那一格。
+    /// 头图那一格这一次的高。集页那一格按里面那一叠实测给（<see cref="EpisodeHeight"/>），电影、剧、季
+    /// 走 <see cref="WideHeight"/>（常态 352），罩子跟着收（<see cref="ScrimSpan"/>），这条曲线也就得按
+    /// 收完的那一块算 —— 不传的那个重载按 <see cref="ArtHeight"/> 兜底，那是老调用和老测试走的。
     /// </param>
     public static double TopWash(double offset, bool artwork, double bandHeight)
     {

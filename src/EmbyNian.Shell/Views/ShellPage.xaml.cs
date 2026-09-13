@@ -6,6 +6,7 @@ using EmbyNian.Emby;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
+using EmbyNian.Shell.Windowing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
@@ -101,6 +102,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// fallback is the settings page in this frame, which is where it used to live anyway.
     /// </summary>
     private SettingsWindow? _settingsWindow;
+
+    /// <summary>
+    /// 独立播放窗口（<see cref="PlayerWindow"/>），built when 「用独立窗口播放」 sends a playback there and torn
+    /// down when it ends. Nullable because it exists only while such a film is being watched — with the setting
+    /// off it is never created at all, and even with it on there is one of these per playback rather than one
+    /// kept around: a window that outlived its film would be a window holding a video child nothing draws into.
+    /// </summary>
+    private PlayerWindow? _playerWindow;
 
     /// <summary>
     /// 标题栏的静止前景。悬停采用强调色，停用采用淡墨，按钮的背景始终透明。
@@ -522,6 +531,17 @@ public sealed partial class ShellPage : UserControl, IShellActions
     {
         Player.Shutdown();
 
+        // The film's window first, and really closed rather than hidden: the process is going away, and
+        // PlayerWindow.Close is the only path that does not come back through OnPlayerWindowClosed — which is
+        // right here, because that handler would put the view model back onto a player that is already shut
+        // down. Detached from the event before it, so nothing fires into a half-torn-down shell either way.
+        if (_playerWindow is not null)
+        {
+            _playerWindow.Closed -= OnPlayerWindowClosed;
+            _playerWindow.Close();
+            _playerWindow = null;
+        }
+
         _settingsWindow?.Close();
         _settingsWindow = null;
     }
@@ -539,7 +559,85 @@ public sealed partial class ShellPage : UserControl, IShellActions
         EmbyItem item,
         EmbyItem? parent = null,
         PlaybackChoice? choice = null,
-        IReadOnlyList<EmbyItem>? episodes = null) => Player.PlayAsync(item, parent, choice, episodes);
+        IReadOnlyList<EmbyItem>? episodes = null)
+    {
+        // 「用独立窗口播放」 takes the film to a window of its own and leaves this window on the page the user
+        // was looking at. Decided here, at the one funnel every play request comes through, and before the
+        // view model is told anything: the first thing a playback does on that side is take a window over
+        // (EnterPlayer), and which window that is has to be settled before it starts, not undone after.
+        SendPlaybackToOwnWindow(item);
+
+        return Player.PlayAsync(item, parent, choice, episodes);
+    }
+
+    /// <summary>
+    /// Gives the playback a <see cref="PlayerWindow"/> of its own, if that is what the settings ask for.
+    /// <para>
+    /// The three moving parts, in the order they have to happen:
+    /// </para>
+    /// <list type="number">
+    ///   <item>The shell's player steps aside (<see cref="PlayerPage.Detach"/>). One
+    ///   <see cref="PlayerViewModel"/> drives one mpv session, and two attached pages would both answer every
+    ///   command and both take a window over.</item>
+    ///   <item>mpv is pointed at the new window's video child.
+    ///   <c>PlaybackBackendFactory.EmbeddedWindow</c> is read afresh for every launch, so saying so here is the
+    ///   whole of it — no re-plumbing, and no second backend.</item>
+    ///   <item>The new window's player takes the view model, which is what makes the chrome, the keyboard and
+    ///   the picture land in there.</item>
+    /// </list>
+    /// <para>
+    /// A machine where the second window cannot be built plays the film in the main window instead:
+    /// <see cref="PlayerWindow.TryCreate"/> returns null having logged why, nothing below runs, and the shell's
+    /// own player does what it always did.
+    /// </para>
+    /// </summary>
+    private void SendPlaybackToOwnWindow(EmbyItem item)
+    {
+        if (_services is null || !Player.ViewModel.SeparateWindowPlayback) return;
+
+        // Only one at a time. A second play request while this is up is refused by the view model anyway
+        // (「已经有内容正在播放」), and opening a window for it first would leave that window standing empty.
+        if (_playerWindow is not null) return;
+
+        if (PlayerWindow.TryCreate(item.ToPlaybackTitle()) is not { } created) return;
+
+        var viewModel = Player.ViewModel;
+
+        Player.Detach();
+        created.Page.Attach(viewModel, this, created.Window);
+        _services.GetRequiredService<PlaybackBackendFactory>().EmbeddedWindow = () => created.Window.VideoHandle();
+
+        _playerWindow = created;
+        created.Closed += OnPlayerWindowClosed;
+
+        Log.Info(Category, "播放改用独立窗口");
+    }
+
+    /// <summary>
+    /// The film's window is gone, which is stopping playback — the arrangement the user chose (「关掉＝停止播放」).
+    /// <para>
+    /// mpv is pointed back at this window's video child and the shell's player takes the view model back, both
+    /// unconditionally: the view model outlives either page, so a detached one left holding its delegates is
+    /// the state to avoid, and the local setting is per launch so this is the whole of the repair.
+    /// </para>
+    /// </summary>
+    private void OnPlayerWindowClosed()
+    {
+        if (_playerWindow is null) return;
+
+        _playerWindow.Closed -= OnPlayerWindowClosed;
+        _playerWindow = null;
+
+        if (_window is not null)
+        {
+            _services?.GetRequiredService<PlaybackBackendFactory>().EmbeddedWindow = () => _window.VideoHandle();
+            Player.Attach(Player.ViewModel, this, _window);
+        }
+
+        if (Player.ViewModel.PlayingNow) _ = Player.ViewModel.StopAsync();
+
+        Log.Info(Category, "独立窗口已关闭，播放已停止");
+    }
 
     Task IShellActions.PlayAsync(
         EmbyItem item,
@@ -554,6 +652,11 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal void ShowPlayer(bool playing)
     {
+        // 「用独立窗口播放」: the film is not in this window at all, so neither half of this applies — collapsing the
+        // shell would hide the page the user is deliberately still browsing, and bringing it back would fight
+        // whatever they have navigated to since. The point of the mode is that this window never changes.
+        if (_playerWindow is not null) return;
+
         if (playing)
         {
             Chrome.Visibility = Visibility.Collapsed;

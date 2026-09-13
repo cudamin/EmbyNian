@@ -1,6 +1,39 @@
 namespace EmbyNian.Emby;
 
 /// <summary>
+/// 轮播条目从哪来 —— 「要使用最近添加还是随机的」（用户的话，2026-09-13）。装机默认是最近添加，
+/// 那是 2026-09-13 之前唯一的来路：缺键的旧设置文件读出来的整数 0 因此一个像素都不变。
+/// <para>
+/// JSON 没装 <c>JsonStringEnumConverter</c>，枚举存整数（同 <see cref="ScoreSource"/> 的规矩），认不出的
+/// 数字由 <c>SettingsMigration.Normalize</c> 拨回 Recent。
+/// </para>
+/// </summary>
+public enum CarouselSource
+{
+    /// <summary>整个服务器最近添加的，新到旧。</summary>
+    Recent = 0,
+
+    /// <summary>服务器随手给的一批，每次回到主页都可能不一样。</summary>
+    Random = 1
+}
+
+/// <summary>
+/// 这条带站哪一类媒体 —— 「要使用什么媒体」（用户的话，2026-09-13）。装机默认是全部：电影和剧集都上，
+/// 音乐从不出现在轮播里（<c>HomeViewModel</c> 那头滤，请求侧也不放进随机那一档）。
+/// </summary>
+public enum CarouselMediaType
+{
+    /// <summary>电影和剧集都上。</summary>
+    All = 0,
+
+    /// <summary>只看电影。</summary>
+    Movies = 1,
+
+    /// <summary>只看剧集。</summary>
+    Series = 2
+}
+
+/// <summary>
 /// 主页轮播 —— 「参考主页轮播大图版-misty-4.9.css 给主页轮播功能」: which of the home page's items become the
 /// big picture at the top of it, how far one press moves, how tall that band is, and what one slide says.
 /// <para>
@@ -13,11 +46,51 @@ namespace EmbyNian.Emby;
 public static class HomeCarousel
 {
     /// <summary>
-    /// How many slides at most. Eight, because the dots along the bottom edge are how a reader tells where
-    /// in the set they are and a row of twenty dots says nothing — and because a slide near the front holds
-    /// a decoded backdrop, so the slot count is a memory budget as much as a design one.
+    /// <see cref="CarouselMediaType"/> 在「最近添加」那一档要向服务器要的类型。剧集按 Series 和 Episode
+    /// 一起要：/Items/Latest 的 GroupItems 会把同一部剧并成一条，但并完那条可能以任意一头出现 —— 只要
+    /// Series 的话服务器在有的版本上干脆什么都不给。空表是「不加参数」，就是从前的行为。
     /// </summary>
-    public const int Slots = 8;
+    public static IReadOnlyList<string> LatestTypes(CarouselMediaType media) => media switch
+    {
+        CarouselMediaType.Movies => [EmbyItemType.Movie],
+        CarouselMediaType.Series => [EmbyItemType.Series, EmbyItemType.Episode],
+        _ => []
+    };
+
+    /// <summary>
+    /// <see cref="CarouselMediaType"/> 在「随机」那一档要向服务器要的类型。随机走通用 /Items（SortBy=Random，
+    /// 见 <see cref="EmbyClient.GetRandomAsync"/>），没有 GroupItems 来并剧 —— 所以剧集只按 Series 要，
+    /// 一部剧的五集在随机结果里站五张，读者只会以为这条带停住了。「全部」同样只 Movie 和 Series：宽图
+    /// 和字幕块都是为这两类画的，其他类型上了这条带也站不住。
+    /// </summary>
+    public static IReadOnlyList<string> RandomTypes(CarouselMediaType media) => media switch
+    {
+        CarouselMediaType.Movies => [EmbyItemType.Movie],
+        CarouselMediaType.Series => [EmbyItemType.Series],
+        _ => [EmbyItemType.Movie, EmbyItemType.Series]
+    };
+
+    /// <summary>
+    /// How many slides at most by default. Ten —— 「轮播图改用前十个最近添加」（用户的话，2026-09-13）把张数
+    /// 和来源一起点了名，从前那个「八」跟着旧来源一起退了。2026-09-13 下午起这只是装机默认：设置里多了一行
+    /// 张数（<see cref="ClampSlots"/> 夹住的那一档），这里供缺键的旧设置文件和「没动过设置的人」读。
+    /// the dots along the bottom edge are how a reader tells where in the
+    /// set they are, and a row of twenty dots says nothing — and because a slide near the front holds a
+    /// decoded backdrop, the slot count is a memory budget as much as a design one.
+    /// </summary>
+    public const int Slots = 10;
+
+    /// <summary>设置里那行张数的下限。少于三张的轮播读起来是一张停住的图，不设那一档。</summary>
+    public const int MinSlots = 3;
+
+    /// <summary>
+    /// 设置里那行张数的上限。每一张靠近前台的都扣着一张解码完的宽图（见 <see cref="Slots"/> 那段），张数
+    /// 说到底是内存预算；十五张是一排点数还读得清的极限，也是几十兆画面的极限。
+    /// </summary>
+    public const int MaxSlots = 15;
+
+    /// <summary>设置里那行张数落到这一档：手改文件越界的、行范围没对齐的，都在这里归位。</summary>
+    public static int ClampSlots(int slots) => Math.Clamp(slots, MinSlots, MaxSlots);
 
     /// <summary>
     /// 最矮的封面仍留出标题和操作键的空间。窄窗口由 HomeBanner 收起简介，
@@ -63,8 +136,25 @@ public static class HomeCarousel
     /// How long a slide stands before the carousel moves on, and how long it waits again after someone
     /// presses a chevron. Eight seconds is long enough to read the synopsis of the one slide you care about
     /// and short enough that the band does not look frozen.
+    /// <para>
+    /// 2026-09-13 起这只是装机默认：设置里多了一行「封面轮换秒数」（<see cref="DwellFor"/> 夹住的那一档），
+    /// 屏上真正走的是 <c>HomeBanner</c> 手里那一份，随设置即时变。
+    /// </para>
     /// </summary>
-    public static readonly TimeSpan Dwell = TimeSpan.FromSeconds(8);
+    public const int MinDwellSeconds = 3;
+
+    /// <summary>设置里那行秒数的上限。六十秒之后的轮播读起来就是一张静画，不设那一档。</summary>
+    public const int MaxDwellSeconds = 60;
+
+    /// <summary>装机默认的停留秒数，见 <see cref="Dwell"/>。</summary>
+    public const int DefaultDwellSeconds = 8;
+
+    /// <summary>设置里那行秒数落到这一档：手改文件越界的、行范围没对齐的，都在这里归位。</summary>
+    public static TimeSpan DwellFor(int seconds) =>
+        TimeSpan.FromSeconds(Math.Clamp(seconds, MinDwellSeconds, MaxDwellSeconds));
+
+    /// <summary>装机默认的停留时长：<see cref="DwellFor"/>(<see cref="DefaultDwellSeconds"/>)。</summary>
+    public static readonly TimeSpan Dwell = DwellFor(DefaultDwellSeconds);
 
     /// <summary>
     /// 带高由 <see cref="BandHeightShare"/> 随整幅宽度换算，1422 宽的默认窗口对应 608。
@@ -96,47 +186,44 @@ public static class HomeCarousel
     }
 
     /// <summary>
-    /// Which items get to be slides —— **先用继续观看，不够再用最近添加**：「首页的轮播图有继续观看就用继续观看，
-    /// 没有或者继续观看不够就用最近添加」（用户的话，2026-09-05）。最近添加是来补位的：继续观看空着、或者它里面
-    /// 上得了台的条目凑不满 <see cref="Slots"/> 张，顶上那一块也不该是空的或者只有两张。
+    /// 带子按设计形状的高：随宽度换算、<see cref="MinHeight"/> 兜底，**不被一屏封住**的那一份。矮窗档判
+    /// 「轮播上下裁切有没有超出默认形状」（<see cref="HomeFold.LibraryOnBanner"/>）用的就是它：一屏够不到
+    /// 这一份，带子就被压矮，剧照上下多裁出一截。
+    /// </summary>
+    public static double NaturalHeight(double width) => Height(0, width);
+
+    /// <summary>
+    /// Which items get to be slides. 来源是设置里那两行的事（最近添加还是随机、什么媒体 —— 2026-09-13「新增
+    /// 在设置中设置轮播图要使用什么媒体，和要使用最近添加还是随机的还有数量的选项」）：这一头拿到的已经是
+    /// 服务器按那个来源发回来的一份，这里只管把它筛成幻灯片。
     /// <para>
-    /// 两排都是具名参数，而不是「按版面次序交一串进来」。这一条推翻了同一天早些时候那一版（「轮播图优先使用排第
-    /// 一个的…没有继续观看就往下顺延」，那时次序由 设置 → 主页 那张表说）：**他这一句把两个来源直接点了名**，所以
-    /// 接下来看和每个媒体库自己那一排从此都不参加 —— 前者本来就是「继续观看的下一集」、和第一排讲的是同一件事，
-    /// 后者是最近添加按库切开的一份。轮播现在有自己的开关（<c>UiSettings.ShowHomeBanner</c>），所以它取哪两排也
-    /// 不再跟着那张表上的勾走。
+    /// 这一条推翻了 2026-09-05 那一版「有继续观看就用继续观看，没有或者继续观看不够就用最近添加」：从这一天起
+    /// 继续观看不再上轮播。
     /// </para>
     /// <para>
-    /// 两条规则做筛选。一个剧集只占一张：继续观看在真账号上常常是同一部剧的四集，四张幻灯片站在同一张剧集背景图上、
-    /// 挂着同一个名字，读起来就是一条停住了的轮播。以及没有宽图的一概不上
-    /// （<see cref="ItemArtwork.BannerOrder"/>）—— 图就是这条带的全部，一张没有图的幻灯片是一个深色矩形上的标题。
-    /// 「不够」因此是按**筛完之后**算的：继续观看里有六集但全是同一部剧，那就只有一张，剩下七张由最近添加补。
-    /// </para>
-    /// <para>
-    /// The lists are the shelves' own, already stripped of music by the page: this band costs no request of
-    /// its own, which is what lets it be built from whatever those rows came back with.
+    /// 两条规则照旧。一个剧集只占一张：服务器那头的 <c>GroupItems</c> 已经把同一部剧的最新单集并成了一条
+    /// （随机那一档没有 GroupItems，靠的就是这里），这里这条是保险 —— 一个剧集四张幻灯片站在同一张背景图上、
+    /// 挂着同一个名字，读起来就是一条停住了的轮播。以及没有宽图的一概不上（<see cref="ItemArtwork.BannerOrder"/>）
+    /// —— 图就是这条带的全部，一张没有图的幻灯片是一个深色矩形上的标题。「前若干张」因此是**筛完之后**的
+    /// 前若干张：来源里有一十二条但一半没有宽图，那就只有六张。
     /// </para>
     /// </summary>
-    /// <param name="resume">继续观看那一排，先上。</param>
-    /// <param name="latest">最近添加那一排，补位。</param>
-    /// <param name="slots">最多几张，见 <see cref="Slots"/>。</param>
+    /// <param name="latest">服务器发回来的候选，次序已经由来源定好（最近添加新到旧；随机是服务器随手给的）。</param>
+    /// <param name="slots">最多几张，设置里那行张数（<see cref="ClampSlots"/> 夹过的），缺省 <see cref="Slots"/>。</param>
     public static IReadOnlyList<EmbyItem> Slides(
-        IReadOnlyList<EmbyItem> resume,
         IReadOnlyList<EmbyItem> latest,
         int slots = Slots)
     {
         var slides = new List<EmbyItem>(Math.Max(0, slots));
         var shows = new HashSet<string>(StringComparer.Ordinal);
-        IReadOnlyList<EmbyItem>[] rows = [resume, latest];
 
-        foreach (var row in rows)
-            foreach (var item in row)
-            {
-                if (slides.Count >= slots) return slides;
-                if (ItemArtwork.Banner(item) is null || !shows.Add(Show(item))) continue;
+        foreach (var item in latest)
+        {
+            if (slides.Count >= slots) return slides;
+            if (ItemArtwork.Banner(item) is null || !shows.Add(Show(item))) continue;
 
-                slides.Add(item);
-            }
+            slides.Add(item);
+        }
 
         return slides;
     }
@@ -190,7 +277,7 @@ public static class HomeCarousel
 
     /// <summary>
     /// What one dot along the bottom edge is called, for a reader who is not looking at the picture:
-    /// 「第 3 张，共 8 张」. The dots are the only thing on this band that says how many slides there are.
+    /// 「第 3 张，共 10 张」. The dots are the only thing on this band that says how many slides there are.
     /// </summary>
     public static string Position(int index, int count) => $"第 {index + 1} 张，共 {count} 张";
 }

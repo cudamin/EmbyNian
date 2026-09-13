@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 货架标题：短强调线建立阅读起点，数量收在轻胶囊里，控件仍留在右端。 -->
+<!-- 货架标题：短强调线建立阅读起点，数量收在轻胶囊里，控件仍留在右端。
+     2026-09-13：标题本身也能当按钮用（用户原话「在最近添加右边添加一个大于号，点击标题后可以进入对应媒体库」）——
+     整块牌子被一个透明的 Button 铺满，标题后面跟一个大于号。见 Scope / OpenGlyph。 -->
 <UserControl
     x:Class="EmbyNian.Shell.Views.ShelfHead"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -9,6 +11,52 @@
             <Setter Property="Background" Value="{ThemeResource EgSurfaceAltBrush}" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Padding" Value="10,4" />
+        </Style>
+
+        <!-- 铺满整块牌子的透明点击面。留 0 边距、不要内边距，免得它在标题左边顶出一段空。
+             模板里那层 Grid 显式写 Transparent：不写的话命中测试穿不过去，只有文字那几笔能点。
+             点击面本身不要内容（空白 Button 的默认皮会撑出一块带底色的小方块），所以整个模板自己画。 -->
+        <Style x:Key="ShelfScopeStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="UseSystemFocusVisuals" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid x:Name="ScopeChrome" Background="Transparent" CornerRadius="4">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <DoubleAnimation
+                                                Storyboard.TargetName="ScopeChrome"
+                                                Storyboard.TargetProperty="Opacity"
+                                                To="0.62"
+                                                Duration="0:0:0.12" />
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <DoubleAnimation
+                                                Storyboard.TargetName="ScopeChrome"
+                                                Storyboard.TargetProperty="Opacity"
+                                                To="0.45"
+                                                Duration="0:0:0.06" />
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled" />
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </UserControl.Resources>
 
@@ -58,12 +106,36 @@
                 Margin="12,0,0,0"
                 VerticalAlignment="Center"
                 Visibility="Collapsed" />
+            <!-- 大于号：压在读数右边，和这块牌子是不是按钮无关（详情页也画，只是没接动作）。
+                 前景不走 EgDataStyle —— 那一支 TargetType 是 TextBlock，FontIcon 认不了；直接点 EgTextDimBrush，
+                 压在剧照上那一档由代码后置换成同一支浅墨（见 OnScrimChanged）。 -->
+            <FontIcon
+                x:Name="OpenGlyph"
+                Margin="8,0,0,0"
+                FontSize="12"
+                Foreground="{ThemeResource EgTextDimBrush}"
+                Glyph="&#xE76C;"
+                VerticalAlignment="Center"
+                Visibility="Collapsed" />
         </StackPanel>
+
+        <!-- 铺满整块牌子、压在文字底下的那层点击面。Content 留空 —— 它只要那块地方，不要内容：
+             见 OnOfferChanged 上那段（把 Root 塞进它会成环）。点击面排在内容**后面**，命中测试按
+             「后画先中」走，于是它盖在上面收点击，而标题、读数、大于号照常画在它底下。 -->
+        <Button
+            x:Name="Scope"
+            Grid.ColumnSpan="2"
+            Click="OnScopeClicked"
+            Margin="-8,0,-8,0"
+            Style="{StaticResource ShelfScopeStyle}"
+            Visibility="Collapsed" />
+        <!-- 标题与底下那条通栏线之间：2026-09-13 从 12 收到 8，配合「首页组件的上下间距弄紧凑一些」。
+             详情页和设置页用的是同一块牌子，一起跟着紧一点 —— 它们本来就该长得一样。 -->
         <Border
             x:Name="Rule"
             Grid.Row="1"
             Grid.ColumnSpan="2"
-            Margin="0,12,0,0"
+            Margin="0,8,0,0"
             Opacity="0.45"
             Style="{StaticResource EgRuleStyle}" />
     </Grid>

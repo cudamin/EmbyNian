@@ -197,8 +197,10 @@
 
             <!-- 盒子下沿那道黑色渐变 —— 「背景图下方的衔接处要用黑色渐变」，加一档「渐变不够浓，还是能看到
                  分界线」（同日）。它必须是盒子外面单独的一层：盒子带着 0.9 的不透明度，垫在里面的话「满墨」
-                 只有九成，亮图上那半成透出来，分界线还站在原处。上沿由 PictureFadeMargin 给（盒高减 120），
-                 底边正好压在画面的下沿上；三段停点让浓度先爬后收，最后一段压到满墨。
+                 只有九成，亮图上那半成透出来，分界线还站在原处。上沿由 PictureFadeMargin 给（盒高减 64，
+                 见 DetailViewModel.PictureFadeHeight），底边正好压在画面的下沿上；三段停点让浓度先爬后收，
+                 最后一段压到满墨。120 收到 64：「黑色渐变的高度太高了，降低一些，它的主要作用是隐藏背景图
+                 下方的分界线」（2026-09-13）—— 藏住那条硬边就够了，再高只是压在剧情说明背后的一段黑。
                  两档都在 —— 显隐跟着 HeroVisibility（图在渐变就在），不再分「画面条／铺满」：从前写「只在
                  画面条那一档出现」，依据是「铺满那一档图连到视口外，下沿根本不在屏上」，这笔账算错了 —— 盒高
                  被视口封顶，盒子却站在窗口的上沿（LiftBackdrop 往上顶的那截），两数相差的那一截正是标题栏加
@@ -208,7 +210,7 @@
                  它跟着那条边待在原地，正文那张纸盖过来把它收走，不存在「一道固定的黑跟着滚动条挡内容」的事。 -->
             <Border
                 x:Name="BackdropFade"
-                Height="120"
+                Height="64"
                 Margin="{x:Bind ViewModel.PictureFadeMargin, Mode=OneWay}"
                 IsHitTestVisible="False"
                 VerticalAlignment="Top"
@@ -370,18 +372,17 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <!-- 两行：上面一行三栏（封面、字那一栏、右上角那张艺术图），下面一行是那排键
-                             （「继续播放 从头开始还有后面的那些图标单独一行」，2026-09-12）。
-                             那一行的高是实测出来的（DetailViewModel.ActionsRoom），进带高的账。
-                             <b>两行都是 Auto，不许是 *。</b>这一格的高写死在 HeroLayout 上（集页按内容量出来、
-                             电影那三页写死 412），* 行会把「带高减掉另一行」当作可用高度分给这一叠 —— 而那一叠里
+                        <!-- 一行三栏：封面、字那一栏（那排键 2026-09-13 起是它的最后一个孩子，「排列在封面
+                             右边」—— 带子底下那一行退役，WideHeight 把它从带高的账里减掉了）、右上角那张
+                             艺术图。
+                             <b>这一行是 Auto，不许是 *。</b>这一格的高写在 HeroLayout 上（常态 352，那一叠
+                             长过海报时按实测长），* 行会把「带高减掉别的」当作可用高度分给这一叠 —— 而那一叠里
                              的下拉是全页唯一一个「给多高就认多高」的孩子（ComboBox 的模板按可用高度收自己的期望
                              高度），于是音频那个下拉被压成半截、量出来的 StackRoom 又是压小了的数，带高跟着
                              收紧，闭环钉死在挤压态（2026-09-12 实拍 1100 宽上音频下拉只剩半条）。Auto 行无约束
-                             测量，内容多高就是多高；带子里多出来的富余（电影那三页那一点）由 HeroContent 自己的
-                             对齐去站 —— 靠上（集页）还是靠下（其余页面，HeroContentAlignment）。 -->
+                             测量，内容多高就是多高；带子里的富余由 HeroContent 自己的对齐去站 ——
+                             靠上（集页）还是靠下（其余页面，HeroContentAlignment）。 -->
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
@@ -458,19 +459,20 @@
                               DetailViewModel.PlateDecodeWidth。左对齐，左沿和片名那行字对齐（TitleButton 那个 -8
                               的边距正好被它自己 8 的内边距抵掉）。
 
-                              这一枚站在那一叠字里，所以它撑高的是那一叠：电影、剧、季那三页的带高写死 412、让给内容
-                              的是 360（海报 300 加那排键那一行 60），海报那 300 仍然是两者里高的那个，版面一个像素
-                              不动（见 DetailHero.ArtHeight）；
-                              集页那一格的高按这一叠实测给（DetailHero.EpisodeHeight），所以那一页跟着长高六十几像素
-                              —— 屏上真的多了一样东西，那是诚实的。
+                              这一枚站在那一叠字里，所以它撑高的是那一叠：电影、剧、季那三页的带高常态 352、
+                              让给内容的是 300（海报那一栏；那排键 2026-09-13 搬进这一叠之后，这一叠连键算下来
+                              两百八上下，海报那 300 仍然是两者里高的那个，版面一个像素不动，见
+                              DetailHero.WideHeight）；这一叠真长过海报的时候（片名折两行、有断点），三页的
+                              带高都按实测长。集页那一格的高一直按这一叠实测给（DetailHero.EpisodeHeight），
+                              所以那一页跟着长高六十几像素 —— 屏上真的多了一样东西，那是诚实的。
 
                               读屏跳过它（AccessibilityView=Raw）：名字就在底下那一行字里，念两遍不是无障碍。
 
                               底下多让 6（连 Spacing 那 10 一共 16）：徽标是片方自己排的一张图，四边留白多少全看那张
                               图，而好几部剧的那张图底边就贴着字 —— 屏上是徽标和片名粘成一团（2026-09-05 界面复查，
-                              「99.9 刑事专业律师」那部量出来只隔 10）。这 6 像素不改版面：三种页面的带高写死 412、
-                              让给内容 360，而这一叠加完还是 270 上下，海报那 300 照旧是高的那个；集页的带高是按这一叠
-                              实测给的（DetailHero.EpisodeHeight），所以它跟着长 6。
+                              「99.9 刑事专业律师」那部量出来只隔 10）。这 6 像素不改版面：三种页面的带高常态 352、
+                              让给内容 300，而这一叠连键加完还是两百八上下，海报那 300 照旧是高的那个；集页的带高
+                              是按这一叠实测给的（DetailHero.EpisodeHeight），所以它跟着长 6。
                             -->
                             <Image
                                 x:Name="TitlePlate"
@@ -665,13 +667,15 @@
                                 </StackPanel>
                             </StackPanel>
 
-                            <!-- 那排键的第二份 —— 集页的宽版式摆在这里，跟在文件选项那一排的后面。他圈过的
-                                 那块空位（2026-09-12，死神 S2:E41 的截图）：封面换成剧海报之后比文字高出一大截，
-                                 按键排若是带子里独立的一行，就得等整个封面行结束 —— 文字和按键之间空出海报
-                                 高出来的那一截。进了这一叠，按键永远紧跟文字；封面自己另有一道「不超过文字栏」
-                                 的上限（DetailViewModel.FitStill），两边谁也不给谁留洞。
-                                 六颗键和带子里那份（其余页面用）是同一批命令；AutomationId 前缀 Column，
-                                 和紧凑版式那份（Compact*）同一个规矩 —— 一个 id 只说一颗键。 -->
+                            <!-- 那排键，宽版式的唯一一份（2026-09-13 起电影、剧、季也摆在这里，「向右移动
+                                 剧页面和电影页面的这样按钮…排列在封面右边」；带子底下独立那一行删了，四页
+                                 同一份）。集页先这么摆的（2026-09-12，他圈过的那块空位，死神 S2:E41 的截图）：
+                                 封面换成剧海报之后比文字高出一大截，按键排若是带子里独立的一行，就得等整个
+                                 封面行结束 —— 文字和按键之间空出海报高出来的那一截。进了这一叠，按键永远紧跟
+                                 文字；封面自己另有一道「不超过文字栏」的上限（DetailViewModel.FitStill），
+                                 两边谁也不给谁留洞。
+                                 七颗键同一批命令；AutomationId 前缀 Column，和紧凑版式那份（Compact*）
+                                 同一个规矩 —— 一个 id 只说一颗键。 -->
                             <StackPanel
                                 x:Name="ColumnActions"
                                 Spacing="12"
@@ -706,7 +710,8 @@
                                     <ToggleButton
                                         AutomationProperties.AutomationId="ColumnContinueButton"
                                         IsChecked="{x:Bind ViewModel.ContinuePlay, Mode=TwoWay}"
-                                        Style="{StaticResource EgPillToggleButtonStyle}">
+                                        Style="{StaticResource EgPillToggleButtonStyle}"
+                                        Visibility="{x:Bind ViewModel.ContinueVisibility, Mode=OneWay}">
                                         <ToggleButton.Resources>
                                             <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="EgAccentBrush" />
                                             <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="EgAccentHoverBrush" />
@@ -774,13 +779,14 @@
                                 </local:WrapRow>
 
                                 <!-- 截图里那排键底下那一条断点进度（右边写着「剩余 5 分钟」）。条和字和
-                                     紧凑版式、其余三页宽版式底下的那两份是同一套数（ProgressValue／ResumeRemain）、
-                                     同一个判据（WideProgressVisibility）—— 三份容器各按各的版式收着，屏上
-                                     永远只有一份在（其余三页那份 2026-09-12 添上：「宽窗口缺少播放进度条」）。
+                                     紧凑版式那份是同一套数（ProgressValue／ResumeRemain）、同一个判据
+                                     （WideProgressVisibility）—— 两份容器各按各的版式收着，屏上永远只有一份
+                                     在（宽版式只剩这一份：那排键 2026-09-13 搬进这一叠，其余三页从带子底下
+                                     那一行跟着搬了过来，「宽窗口缺少播放进度条」的账还在）。
                                      不跟窗口宽走到底（「进度条怎么是随窗口宽度无限延长的」，2026-09-12）：
                                      限在 EgProseWidth —— 剧情说明那行字的上限，页面上已有的一档量，靠左站，
-                                     和它上面那一列内容同一条左沿。条定死 4 高：这一行占多高（ProgressRoom）
-                                     是带高要认的账，数得是死的。 -->
+                                     和它上面那一列内容同一条左沿。条定死 4 高：这一行露头的时候带高跟着
+                                     实测长（StackRoom 量得到它），不带高多占一个像素。 -->
                                 <Grid
                                     x:Name="WideProgress"
                                     MaxWidth="{StaticResource EgProseWidth}"
@@ -837,156 +843,6 @@
                             Stretch="Uniform"
                             Visibility="{x:Bind ViewModel.CornerVisibility, Mode=OneWay}" />
 
-                        <!-- 七颗键都绑命令，不再挂 Click。载入中命令自己就是灰的 —— 以前
-                             「换季的同时按播放」会把上一季选中的那一集播出去。
-                             2026-09-12 从片名那一栏的最后一个孩子搬到这里、自己占一行 ——「继续播放 从头开始
-                             还有后面的那些图标单独一行」：从前它和片名、读数挤在同一栏里，底下又和封面齐着
-                             下沿，看着是封面那一栏的东西。
-                             它站在第几栏由 ActionsColumn 给，显不显由 WideActionsVisibility 给 —— 集页的宽
-                             版式这份整个收着（那排键搬进了片名那一栏的叠里，见 HeroStack 里的 ColumnActions：
-                             独立一行要等封面行结束，文字和按键之间会空出海报高出来的那一截），其余三个页面
-                             照旧横着铺满三栏、贴着内容那一条左沿，版面一个数没动。
-                             这一行的实测（DetailViewModel.ActionsRoom）进带子的账。
-                             这一排是宽版式的摆法；紧凑版式里它让位给画面底下那一块（CompactBlock），那边
-                             2026-09-12 起排的是同一副药丸键、同一个换行壳（他要窄窗口也用宽版式的样子，
-                             「图标在上、字在下」的格子行退了场），只是 AutomationId 换成 Compact 前缀。 -->
-                        <StackPanel
-                            x:Name="HeroActions"
-                            Grid.Column="{x:Bind ViewModel.ActionsColumn, Mode=OneWay}"
-                            Grid.ColumnSpan="{x:Bind ViewModel.ActionsColumnSpan, Mode=OneWay}"
-                            Grid.Row="1"
-                            HorizontalAlignment="Left"
-                            Margin="0,16,0,0"
-                            SizeChanged="OnHeroActionsSizeChanged"
-                            Spacing="12"
-                            Visibility="{x:Bind ViewModel.WideActionsVisibility, Mode=OneWay}">
-                            <!-- 那一排键装不下一行就换行（「收窄窗口后组件要自动换行」）：外壳是 WrapRow 不是
-                                 横排 StackPanel —— 横排那层会给它无限的宽，一颗键都不会掉下来。 -->
-                            <local:WrapRow RowSpacing="10" Spacing="10">
-                                    <Button
-                                        AutomationProperties.AutomationId="DetailPlayButton"
-                                        Command="{x:Bind ViewModel.PlayCommand}"
-                                        Style="{StaticResource EgPlayButtonStyle}"
-                                        Visibility="{x:Bind ViewModel.PlayVisibility, Mode=OneWay}">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <FontIcon FontSize="14" Glyph="&#xE768;" />
-                                            <TextBlock Text="{x:Bind ViewModel.PlayText, Mode=OneWay}" />
-                                        </StackPanel>
-                                    </Button>
-
-                                    <Button
-                                        AutomationProperties.AutomationId="DetailRestartButton"
-                                        Command="{x:Bind ViewModel.RestartCommand}"
-                                        Style="{StaticResource EgPillButtonStyle}"
-                                        Visibility="{x:Bind ViewModel.RestartVisibility, Mode=OneWay}">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <FontIcon FontSize="14" Glyph="&#xE892;" />
-                                            <TextBlock x:Uid="DetailPage_TextBlock1" />
-                                        </StackPanel>
-                                    </Button>
-
-                                    <!-- 连播，和片名那一栏那份（ColumnContinueButton）同一个开关同一句话；
-                                         那一排键在这一排的次序这里也照抄。 -->
-                                    <ToggleButton
-                                        AutomationProperties.AutomationId="DetailContinueButton"
-                                        IsChecked="{x:Bind ViewModel.ContinuePlay, Mode=TwoWay}"
-                                        Style="{StaticResource EgPillToggleButtonStyle}">
-                                        <ToggleButton.Resources>
-                                            <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="EgAccentBrush" />
-                                            <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="EgAccentHoverBrush" />
-                                            <StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="EgAccentPressedBrush" />
-                                            <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="EgTextOnAccentBrush" />
-                                            <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="EgTextOnAccentBrush" />
-                                            <StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="EgTextOnAccentBrush" />
-                                        </ToggleButton.Resources>
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <FontIcon FontSize="14" Glyph="&#xE8EE;" />
-                                            <TextBlock x:Uid="DetailPage_ContinuePlay" />
-                                        </StackPanel>
-                                    </ToggleButton>
-
-                                    <!-- 已看／未看是截图里唯一带字的状态键（那一颗写着「已播放」），所以它从一颗方形
-                                         图标键长成一颗药丸：字说的是这一集现在的样子，不是按下去会发生什么 ——
-                                         和上面那两颗（按下去才开始）分开，也和右边那三颗从来只有图标的动作键分开。 -->
-                                    <Button x:Uid="DetailPage_ButtonA1"
-                                        AutomationProperties.AutomationId="DetailWatchedButton"
-                                        Command="{x:Bind ViewModel.ToggleWatchedCommand}"
-                                        Style="{StaticResource EgPillButtonStyle}">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <FontIcon
-                                                FontSize="15"
-                                                Glyph="&#xE73E;"
-                                                Visibility="{x:Bind ViewModel.NotWatchedVisibility, Mode=OneWay}" />
-                                            <FontIcon
-                                                FontSize="15"
-                                                Foreground="{ThemeResource EgAccentBrush}"
-                                                Glyph="&#xE73E;"
-                                                Visibility="{x:Bind ViewModel.WatchedVisibility, Mode=OneWay}" />
-                                            <TextBlock x:Uid="DetailPage_WatchedOn" Visibility="{x:Bind ViewModel.WatchedVisibility, Mode=OneWay}" />
-                                            <TextBlock x:Uid="DetailPage_WatchedOff" Visibility="{x:Bind ViewModel.NotWatchedVisibility, Mode=OneWay}" />
-                                        </StackPanel>
-                                    </Button>
-
-                                    <Button x:Uid="DetailPage_ButtonA2"
-                                        AutomationProperties.AutomationId="DetailFavoriteButton"
-                                        Command="{x:Bind ViewModel.ToggleFavoriteCommand}"
-                                        Style="{StaticResource EgRoundButtonStyle}">
-                                        <Grid>
-                                            <FontIcon
-                                                FontSize="15"
-                                                Glyph="&#xEB51;"
-                                                Visibility="{x:Bind ViewModel.NotFavoriteVisibility, Mode=OneWay}" />
-                                            <FontIcon
-                                                FontSize="15"
-                                                Foreground="{ThemeResource EgDangerBrush}"
-                                                Glyph="&#xEB52;"
-                                                Visibility="{x:Bind ViewModel.FavoriteVisibility, Mode=OneWay}" />
-                                        </Grid>
-                                    </Button>
-
-                                    <Button x:Uid="DetailPage_ButtonA3"
-                                        AutomationProperties.AutomationId="DetailOpenBrowserButton"
-                                        Command="{x:Bind ViewModel.OpenBrowserCommand}"
-                                        Style="{StaticResource EgRoundButtonStyle}">
-                                        <FontIcon FontSize="15" Glyph="&#xE8A7;" />
-                                    </Button>
-
-                                    <Button
-                                        x:Name="MoreButton"
-                                        x:Uid="DetailPage_MoreButton"
-                                        Click="OnMoreClicked"
-                                        Style="{StaticResource EgRoundButtonStyle}">
-                                        <FontIcon FontSize="15" Glyph="&#xE712;" />
-                                    </Button>
-                            </local:WrapRow>
-
-                            <!-- 断点进度，和集页宽版式那份（片名那一栏里的 WideProgress）同一套数、同一道
-                                 限宽、同一个判据（WideProgressVisibility）—— 其余三个页面（电影、剧、季）的
-                                 宽版式从此也有它（「宽窗口缺少播放进度条」，2026-09-12）。两份宽版式的容器
-                                 各按各的页面收着，屏上永远只有一份在；带高那头按 DetailHero.ProgressRoom
-                                 给有断点的条目留了房，没有断点整行收着、带高一个像素不动。 -->
-                            <Grid
-                                MaxWidth="{StaticResource EgProseWidth}"
-                                ColumnSpacing="12"
-                                HorizontalAlignment="Left"
-                                Visibility="{x:Bind ViewModel.WideProgressVisibility, Mode=OneWay}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <ProgressBar
-                                    AutomationProperties.AutomationId="DetailResumeProgress"
-                                    Height="4"
-                                    Maximum="100"
-                                    Value="{x:Bind ViewModel.ProgressValue, Mode=OneWay}" />
-                                <TextBlock
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center"
-                                    FontSize="{StaticResource EgCaptionFontSize}"
-                                    Foreground="{StaticResource EgOnScrimDimBrush}"
-                                    Text="{x:Bind ViewModel.ResumeRemain, Mode=OneWay}" />
-                            </Grid>
-                        </StackPanel>
                     </Grid>
                     </Grid>
                 </Grid>
@@ -1185,7 +1041,8 @@
                                 <ToggleButton
                                     AutomationProperties.AutomationId="CompactContinueButton"
                                     IsChecked="{x:Bind ViewModel.ContinuePlay, Mode=TwoWay}"
-                                    Style="{StaticResource EgPillToggleButtonStyle}">
+                                    Style="{StaticResource EgPillToggleButtonStyle}"
+                                    Visibility="{x:Bind ViewModel.ContinueVisibility, Mode=OneWay}">
                                     <ToggleButton.Resources>
                                         <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="EgAccentBrush" />
                                         <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="EgAccentHoverBrush" />

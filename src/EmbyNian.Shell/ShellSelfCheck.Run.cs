@@ -315,6 +315,12 @@ internal static partial class ShellSelfCheck
         var strip = ShelfStrip.Probe();
         Check("卡片带翻页", strip.Ok, strip.Detail);
 
+        // 需求 2026-09-13「在最近添加右边添加一个大于号，点击标题后可以进入对应媒体库」：牌子那扇门开不开得
+        // 出来。同样和数据无关 —— 「点进去落到哪个库」由 CardShelf.LibraryId 一层层接起来，自检没有服务器，
+        // 一排都没有，量不到那一头。
+        var head = ShelfHead.Probe();
+        Check("货架牌子进库", head.Ok, head.Detail);
+
         // 需求 5 的那条大图轮播，同样和数据无关，同样在这个分支外面：自检没有服务器，带上一张幻灯片也没有，所以
         // 问的是「没有幻灯片时收不收起来」「底边那排横条造得出来吗」「带高落到布局上了吗」「两层剧照真的轮着上
         // 吗」，加上这份标记自己能不能解析 —— 那两条渐变里写死的颜色是高对比度下唯一活得下来的写法。

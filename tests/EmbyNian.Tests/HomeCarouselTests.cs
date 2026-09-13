@@ -8,8 +8,9 @@ namespace EmbyNian.Tests;
 /// 「参考主页轮播大图版-misty-4.9.css 给主页轮播功能」, asserted without a window. What
 /// <see cref="HomeCarousel"/> answers is 「which items get to be the big picture, and what does one of them
 /// say」 — the halves that a control cannot be asked about once it is drawn: a set of slides built from
-/// 继续观看 with 最近添加 filling in behind it, which card on the right the one on screen corresponds to,
-/// and a band height that has to leave the shelves below it reachable.
+/// 设置里那个来源发回来的候选（2026-09-13「轮播图改用前十个最近添加」，同日下午来源、媒体、张数、秒数四样
+/// 进了设置），which card on the right the one on
+/// screen corresponds to, and a band height that has to leave the shelves below it reachable.
 /// </summary>
 internal static class HomeCarouselTests
 {
@@ -20,6 +21,54 @@ internal static class HomeCarouselTests
         RegisterHeight();
         RegisterText();
         RegisterBackdrop();
+        RegisterPreferences();
+    }
+
+    /// <summary>
+    /// 设置里那四行（2026-09-13「新增在设置中设置轮播图要使用什么媒体，和要使用最近添加还是随机的还有数量
+    /// 的选项。还有封面的轮换的秒数」）在 Core 这一头的落点：张数和秒数夹进同一档（设置页的行范围和
+    /// SettingsMigration.Normalize 读的都是这对常量），媒体到请求参数的两张表，还有枚举从 0 数起 ——
+    /// 旧设置文件缺键读出来的整数就是装机默认，这条断言就是「升上来的老用户一个像素都不变」的凭据。
+    /// </summary>
+    private static void RegisterPreferences()
+    {
+        Test("轮播：设置里的张数和秒数夹进同一档", () =>
+        {
+            Assert.Equal(HomeCarousel.MinSlots, HomeCarousel.ClampSlots(0));
+            Assert.Equal(HomeCarousel.MinSlots, HomeCarousel.ClampSlots(1));
+            Assert.Equal(7, HomeCarousel.ClampSlots(7));
+            Assert.Equal(HomeCarousel.MaxSlots, HomeCarousel.ClampSlots(99));
+            Assert.Equal(HomeCarousel.Slots, HomeCarousel.ClampSlots(HomeCarousel.Slots));
+
+            Assert.Equal(TimeSpan.FromSeconds(HomeCarousel.MinDwellSeconds), HomeCarousel.DwellFor(0));
+            Assert.Equal(TimeSpan.FromSeconds(12), HomeCarousel.DwellFor(12));
+            Assert.Equal(TimeSpan.FromSeconds(HomeCarousel.MaxDwellSeconds), HomeCarousel.DwellFor(3600));
+            Assert.Equal(HomeCarousel.Dwell, HomeCarousel.DwellFor(HomeCarousel.DefaultDwellSeconds));
+        });
+
+        Test("轮播：媒体到请求参数的两张表 —— 最近添加的剧集要带单集，随机不带", () =>
+        {
+            // 最近添加走 /Items/Latest，GroupItems 并剧之后那条可能以任意一头出现，所以 Series 和 Episode
+            // 都要；随机走 /Items SortBy=Random，没有 GroupItems，单集上来就是一部剧一张 —— 只按 Series 要。
+            Assert.Equal(0, HomeCarousel.LatestTypes(CarouselMediaType.All).Count);
+            Assert.Equal("Movie", HomeCarousel.LatestTypes(CarouselMediaType.Movies)[0]);
+            Assert.Equal("Series", HomeCarousel.LatestTypes(CarouselMediaType.Series)[0]);
+            Assert.Equal("Episode", HomeCarousel.LatestTypes(CarouselMediaType.Series)[1]);
+
+            Assert.Equal("Movie", HomeCarousel.RandomTypes(CarouselMediaType.All)[0]);
+            Assert.Equal("Series", HomeCarousel.RandomTypes(CarouselMediaType.All)[1]);
+            Assert.Equal("Movie", HomeCarousel.RandomTypes(CarouselMediaType.Movies)[0]);
+            Assert.Equal("Series", HomeCarousel.RandomTypes(CarouselMediaType.Series)[0]);
+        });
+
+        Test("轮播：来源和媒体的枚举从 0 数起，缺键读出来就是装机默认", () =>
+        {
+            Assert.Equal(0, (int)CarouselSource.Recent);
+            Assert.Equal(1, (int)CarouselSource.Random);
+            Assert.Equal(0, (int)CarouselMediaType.All);
+            Assert.Equal(1, (int)CarouselMediaType.Movies);
+            Assert.Equal(2, (int)CarouselMediaType.Series);
+        });
     }
 
     private static void RegisterBackdrop()
@@ -76,48 +125,26 @@ internal static class HomeCarouselTests
 
     private static void RegisterSlides()
     {
-        Test("轮播：有继续观看就用继续观看", () =>
+        Test("轮播：按最近添加的次序，头十个上", () =>
         {
-            // 「首页的轮播图有继续观看就用继续观看，没有或者继续观看不够就用最近添加」：继续观看装得满的时候
-            // 最近添加一张都上不来。
-            var resume = Enumerable.Range(0, HomeCarousel.Slots).Select(index => Wide($"r{index}")).ToList();
-            var slides = HomeCarousel.Slides(resume, [Wide("l1")]);
+            // 「轮播图改用前十个最近添加」：来的次序就是上的次序，第十张之后的轮不上 —— 继续观看从
+            // 2026-09-13 起不再参加，这个函数也就只剩最近添加一个参数。
+            var latest = Enumerable.Range(0, 14).Select(index => Wide($"l{index}")).ToList();
+            var slides = HomeCarousel.Slides(latest);
 
             Assert.Equal(HomeCarousel.Slots, slides.Count);
-            Assert.Equal("r0", slides[0].Id);
-            Assert.False(slides.Any(item => item.Id == "l1"));
-        });
-
-        Test("轮播：继续观看不够就用最近添加补", () =>
-        {
-            // 补位而不是取代：继续观看那两张照旧在最前面，后面接最近添加，凑到 Slots 张为止。
-            var slides = HomeCarousel.Slides(
-                [Wide("r1"), Wide("r2")],
-                Enumerable.Range(0, 30).Select(index => Wide($"l{index}")).ToList());
-
-            Assert.Equal(HomeCarousel.Slots, slides.Count);
-            Assert.Equal("r1", slides[0].Id);
-            Assert.Equal("r2", slides[1].Id);
-            Assert.Equal("l0", slides[2].Id);
-        });
-
-        Test("轮播：没有继续观看就整条用最近添加", () =>
-        {
-            var slides = HomeCarousel.Slides([], [Wide("l1"), Wide("l2")]);
-
-            Assert.Equal(2, slides.Count);
-            Assert.Equal("l1", slides[0].Id);
+            Assert.Equal("l0", slides[0].Id);
+            Assert.Equal("l9", slides[^1].Id);
+            Assert.False(slides.Any(item => item.Id == "l10"));
         });
 
         Test("轮播：一个剧集只占一张幻灯片", () =>
         {
-            // 继续观看 on a real account is four episodes of the same show, and four slides standing on the
-            // same series backdrop under the same name read as a carousel that has stopped moving. 继续观看
-            // 先走，所以 s1 这个剧占的是它里面的 e1，最近添加里同一个剧的都进不来 —— 「不够」也因此是按筛完之后
-            // 算的。
+            // 服务器那头的 GroupItems 已经把同一部剧的最新单集并成了一条，这里这条是保险：一个剧集四张
+            // 幻灯片站在同一张背景图上、挂着同一个名字，读起来就是一条停住了的轮播。「前十个」因此是
+            // 筛完之后的前十个。
             var slides = HomeCarousel.Slides(
-                [Episode("e1", "s1"), Episode("e2", "s1"), Episode("e3", "s2")],
-                [Episode("e4", "s1"), Wide("s1"), Wide("m1")]);
+                [Episode("e1", "s1"), Episode("e2", "s1"), Episode("e3", "s2"), Wide("m1")]);
 
             Assert.Equal(3, slides.Count);
             Assert.Equal("e1", slides[0].Id);
@@ -130,7 +157,7 @@ internal static class HomeCarouselTests
             var poster = new EmbyItem { Id = "p1", Name = "只有海报", Type = EmbyItemType.Movie };
             poster.ImageTags["Primary"] = "p";
 
-            var slides = HomeCarousel.Slides([poster], [Wide("l2")]);
+            var slides = HomeCarousel.Slides([poster, Wide("l2")]);
 
             Assert.Equal(1, slides.Count);
             Assert.Equal("l2", slides[0].Id);
@@ -142,23 +169,23 @@ internal static class HomeCarouselTests
             episode.ParentBackdropItemId = "s3";
             episode.ParentBackdropImageTags.Add("parentbd");
 
-            Assert.Equal(1, HomeCarousel.Slides([episode], []).Count);
-            Assert.Equal(0, HomeCarousel.Slides([Episode("e6", "s4", backdrop: false)], []).Count);
+            Assert.Equal(1, HomeCarousel.Slides([episode]).Count);
+            Assert.Equal(0, HomeCarousel.Slides([Episode("e6", "s4", backdrop: false)]).Count);
         });
 
         Test("轮播：最多就那几张，多的不要", () =>
         {
             var many = Enumerable.Range(0, 30).Select(index => Wide($"m{index}")).ToList();
 
-            Assert.Equal(HomeCarousel.Slots, HomeCarousel.Slides(many, many).Count);
-            Assert.Equal(3, HomeCarousel.Slides(many, [], slots: 3).Count);
+            Assert.Equal(HomeCarousel.Slots, HomeCarousel.Slides(many).Count);
+            Assert.Equal(3, HomeCarousel.Slides(many, slots: 3).Count);
 
             // 0 张的余量就是不要轮播，而不是「有几张算几张」。
-            Assert.Equal(0, HomeCarousel.Slides(many, many, slots: 0).Count);
+            Assert.Equal(0, HomeCarousel.Slides(many, slots: 0).Count);
         });
 
-        Test("轮播：两排都空就没有轮播", () =>
-            Assert.Equal(0, HomeCarousel.Slides([], []).Count));
+        Test("轮播：最近添加空了就没有轮播", () =>
+            Assert.Equal(0, HomeCarousel.Slides([]).Count));
     }
 
     private static void RegisterStep()

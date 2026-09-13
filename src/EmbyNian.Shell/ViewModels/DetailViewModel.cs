@@ -73,8 +73,8 @@ public sealed partial class DetailViewModel : PageViewModel
 
     /// <summary>
     /// The still beside the title. Fixed rather than scaled with the grid's poster width, unlike every
-    /// other card in the app. 头上那一格的高是按内容定死的（<see cref="DetailHero.ArtHeight"/> = 412，412 里
-    /// 装着海报 300、那排键那一行 60 加两道边，正好装满），
+    /// other card in the app. 头上那一格的高是按内容定死的（宽版式常态 352：<see cref="DetailHero.WideHeight"/>
+    /// 把 412 减掉键行 60，正好装下海报 300 加两道边；那一叠连键长过海报时带子按实测跟着长），
     /// 再让这一张跟着海报一起宽，那格带子就装不下它了。
     /// </summary>
     private const int PosterStillWidth = 210;
@@ -316,12 +316,9 @@ public sealed partial class DetailViewModel : PageViewModel
     [NotifyPropertyChangedFor(nameof(ScrimVisibility))]
     [NotifyPropertyChangedFor(nameof(StillVisibility))]
     [NotifyPropertyChangedFor(nameof(CompactVisibility))]
-    [NotifyPropertyChangedFor(nameof(WideActionsVisibility))]
     [NotifyPropertyChangedFor(nameof(CornerVisibility))]
     [NotifyPropertyChangedFor(nameof(HeroInset))]
     [NotifyPropertyChangedFor(nameof(TailInset))]
-    [NotifyPropertyChangedFor(nameof(ActionsColumn))]
-    [NotifyPropertyChangedFor(nameof(ActionsColumnSpan))]
     [NotifyPropertyChangedFor(nameof(ColumnPickersVisibility))]
     [NotifyPropertyChangedFor(nameof(PickersVisibility))]
     [NotifyPropertyChangedFor(nameof(VideoLineVisibility))]
@@ -486,24 +483,6 @@ public sealed partial class DetailViewModel : PageViewModel
     public partial double CornerHeight { get; set; }
 
     /// <summary>
-    /// 头图上那排键自己那一行有多高，由视图量给（<c>DetailPage.OnHeroActionsSizeChanged</c>）。它们从
-    /// 片名那一栏里搬出来、单独占一行之后（「继续播放 从头开始还有后面的那些图标单独一行」，2026-09-12），
-    /// 这一行的高度不再算在 <see cref="StackRoom"/> 里，得单独加进 <see cref="HeroRoom"/>。
-    /// <para>
-    /// 量出来而不是写死一个数：那一行的高是键自己的高（<c>EgActionHeight</c>）加上面那道间距，两个都跟着主题
-    /// 词表走。紧凑版式里这一行整个收着，量出来就是 0 —— 那一档的带高因此一个像素都不多算，不用另判一次版式。
-    /// </para>
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HeroRoom))]
-    [NotifyPropertyChangedFor(nameof(HeroLayoutHeight))]
-    [NotifyPropertyChangedFor(nameof(HeroHeight))]
-    [NotifyPropertyChangedFor(nameof(ScrimHeight))]
-    [NotifyPropertyChangedFor(nameof(BodyMinHeight))]
-    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
-    public partial double ActionsRoom { get; set; }
-
-    /// <summary>
     /// 这一页要不要按「背后铺着一张图」那一档布 —— 服务器上有没有那张图（<see cref="ItemArtwork.Hero"/> 问标签
     /// 表的结果），集页除外：那一页不铺背景图（2026-09-12「去掉集页面的背景图」），无论服务器有什么，这里都是
     /// false，整页走「没有剧照」的那一档版面（见 <see cref="DetailHero.PlainHeight"/>）。
@@ -591,41 +570,33 @@ public sealed partial class DetailViewModel : PageViewModel
     partial void OnStackRoomChanged(double value) => FitStill();
 
     /// <summary>
-    /// 带子里那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测要占多高。集页那一格的高就是它，见
-    /// <see cref="DetailHero.EpisodeHeight"/>；别的页面不用它。
+    /// 带子里那一叠（剧照、片名、副标题、读数、那排键）连上下留白实测要占多高。集页那一格的高就是它
+    /// （<see cref="DetailHero.EpisodeHeight"/>）；电影、剧、季三页也用它 —— 和老档取大
+    /// （<see cref="DetailHero.WideHeight"/>），那一叠长过海报的时候带子跟着长。
     /// <para>
-    /// 算在这儿而不在视图里：视图量得到的只有那一叠字键有多高（<see cref="StackRoom"/>）和那排键那一行有多高
-    /// （<see cref="ActionsRoom"/>），而「剧照也算进去」「右上角那张艺术图也算进去」「加上这一格自己的上下留白」
-    /// 三句是规矩。海报按图自己的形状收窄之后（<see cref="DetailHero.StillBox"/>）剧照的高会变，写在视图那个
-    /// 尺寸回调里的那一版只在字键那一叠也跟着变的时候才会重算 —— 带子于是比内容高出那么一截，正是「左上角
-    /// 空空的」那种坏法。
+    /// 算在这儿而不在视图里：视图量得到的只有那一叠字键有多高（<see cref="StackRoom"/>，那排键 2026-09-13
+    /// 起就是它的最后一个孩子，它的高自然在里面），而「剧照也算进去」「右上角那张艺术图也算进去」「加上
+    /// 这一格自己的上下留白」三句是规矩。海报按图自己的形状收窄之后（<see cref="DetailHero.StillBox"/>）
+    /// 剧照的高会变，写在视图那个尺寸回调里的那一版只在字键那一叠也跟着变的时候才会重算 —— 带子于是比
+    /// 内容高出那么一截，正是「左上角空空的」那种坏法。
     /// </para>
     /// <para>
-    /// 那排键那一行和艺术图都是**取大**而不是相加：它们和字键那一叠站在同一行里（艺术图在右栏、那排键在
-    /// 底下那一行），谁高听谁的。从前那排键是字键那一叠的最后一个孩子，所以它那点高度在
-    /// <see cref="StackRoom"/> 里；搬出来之后只能在这儿加回去。
-    /// </para>
-    /// <para>
-    /// 艺术图只在集页的宽版式上有（<see cref="CornerVisibility"/>），所以 <see cref="CornerHeight"/> 在这里
-    /// 按 <see cref="HeroCard"/> 分一次档 —— 紧凑版式里那一角收着，它的高不该算进带子。
+    /// 艺术图和那一叠是**取大**而不是相加：它占的是右栏（只画在集页的宽版式上，<see cref="CornerVisibility"/>），
+    /// 谁高听谁的；<see cref="CornerHeight"/> 在这里按 <see cref="HeroCard"/> 分一次档 —— 紧凑版式里那一角
+    /// 收着，它的高不该算进带子。
     /// </para>
     /// </summary>
     public double HeroRoom =>
         Math.Max(Math.Max(StackRoom, StillHeight), HeroCard ? CornerHeight : 0)
-        + ActionsRoom + HeroInset.Top + HeroInset.Bottom;
+        + HeroInset.Top + HeroInset.Bottom;
 
     /// <summary>
     /// 头上那一格的高。宽的一侧是老规矩：高由站在它里面那一叠东西定，跟窗口无关（「图一页面怎么改的一大片
-    /// 空白，改回去」）—— 电影、剧、季走 <see cref="DetailHero.Height"/>（那一档 412 是手量出来的内容高，
-    /// 判据 <see cref="HeroArt"/> 在导航那一刻就知道，所以第一帧的版面就是最后的版面），集页量在运行时
-    /// （<see cref="HeroRoom"/> → <see cref="DetailHero.EpisodeHeight"/>：单集配的是一张 16:9 剧照，比 2:3
-    /// 海报矮一大截，跟着用 412 就是在那一叠头上留上百像素只有画面的地方）。
-    /// <para>
-    /// 412 那一档之上唯一的一笔加项是宽版式的断点进度（<see cref="DetailHero.ProgressRoom"/>）：它跟着
-    /// <see cref="PlayTarget"/> 走（有断点才画），所以这一格的高头一回有了一个数据面上的自变量 ——
-    /// 数据到了带子长一格，没有断点的条目一个像素不动（「上方空位太多」是刚修完的病，不能为了进度条
-    /// 请回来）。
-    /// </para>
+    /// 空白，改回去」）—— 四个页面都量在运行时：电影、剧、季走 <see cref="DetailHero.WideHeight"/>
+    /// （常态 352 = 老档 412 减掉那排键独立一行占过的 60，正好是海报加两道边；判据 <see cref="HeroArt"/>
+    /// 在导航那一刻就知道，常态下第一帧的版面就是最后的版面），集页走 <see cref="DetailHero.EpisodeHeight"/>
+    /// （单集配的是一张 16:9 剧照，比 2:3 海报矮一大截，跟着用写死的档就是在那一叠头上留上百像素只有画面
+    /// 的地方）。
     /// <para>
     /// 紧凑版式（<see cref="IsCompact"/>）分两档，判据是有没有画面可铺 —— 都在
     /// <see cref="DetailHero.CompactHeight"/> 里，连同「没有画面那一档按内容给」的理由。海报在紧凑版式里
@@ -638,7 +609,7 @@ public sealed partial class DetailViewModel : PageViewModel
         ? DetailHero.CompactHeight(PageWidth, HeroHeightRatio, HeroRoom, HeroArt)
         : IsEpisodePage
             ? DetailHero.EpisodeHeight(HeroRoom)
-            : DetailHero.Height(BackdropShown) + (WideProgressShown ? DetailHero.ProgressRoom : 0);
+            : DetailHero.WideHeight(HeroRoom, BackdropShown);
 
     /// <summary>
     /// 头部在视口中的高度。从前它等于排出来的高乘一个整体缩放（<c>HeroScale</c>，1024 到 1280 那一段最小缩到
@@ -744,11 +715,12 @@ public sealed partial class DetailViewModel : PageViewModel
     /// 还高的时候），靠上站的话多出来的一截落在底下，封面和片名照旧贴在上沿。
     /// </para>
     /// <para>
-    /// 别的页面靠下，一个像素没动：电影、剧、季那三页的带高写死 <see cref="DetailHero.ArtHeight"/>，里面本来就
-    /// 留着一截富余（海报 300 之外那点），靠下站就是海报和那一栏字的下沿对齐 —— 他夸过的就是这一页的样子
-    /// （「电影那边处理的就很好」）。紧凑版式同理：那一档有画面可铺的时候带子就是那条等比的画面
-    /// （<see cref="DetailHero.CompactHeight"/>，比内容高出来的部分是画面），片名压在画面的下沿上，参考图上
-    /// 正是这个样子；没有画面可铺时带子等于内容的高，两个对齐摆出来一模一样。
+    /// 别的页面靠下：电影、剧、季那三页的带高常态就是内容的高（<see cref="DetailHero.WideHeight"/>，352
+    /// 正好装下海报加两道边，富余只有在封面比那一叠矮的条目上才有一点），靠下站就是海报和那一栏字（连同
+    /// 尾上的那排键）的下沿对齐 —— 他夸过的就是这一页的样子（「电影那边处理的就很好」）。紧凑版式同理：
+    /// 那一档有画面可铺的时候带子就是那条等比的画面（<see cref="DetailHero.CompactHeight"/>，比内容高出来
+    /// 的部分是画面），片名压在画面的下沿上，参考图上正是这个样子；没有画面可铺时带子等于内容的高，两个
+    /// 对齐摆出来一模一样。
     /// </para>
     /// </summary>
     public VerticalAlignment HeroContentAlignment => HeroCard ? VerticalAlignment.Top : VerticalAlignment.Bottom;
@@ -781,8 +753,12 @@ public sealed partial class DetailViewModel : PageViewModel
     /// </summary>
     public Thickness PictureFadeMargin => new(0, Math.Max(0, PictureHeight - PictureFadeHeight), 0, 0);
 
-    /// <summary>下沿渐变自己的高。矮了压不住亮图的边，高了把画面吃掉一大截 —— 120 在两者之间。</summary>
-    private const double PictureFadeHeight = 120;
+    /// <summary>
+    /// 下沿渐变自己的高。矮了压不住亮图的边，高了把画面吃掉一大截 —— 120 从前在两者之间；2026-09-13 他一句
+    /// 「黑色渐变的高度太高了，降低一些，它的主要作用是隐藏背景图下方的分界线」收到 64：藏住那条硬边就够了，
+    /// 再往上多出来的只是压在剧情说明背后的一段黑。停点前载（四成二处已到六成五），矮盒子上的斜率照样平滑。
+    /// </summary>
+    private const double PictureFadeHeight = 64;
 
     /// <summary>
     /// 这一档版面要不要封面 —— 规则在 Core（<see cref="DetailHero.ShowsStill"/>）：紧凑版式下剧、电影两页
@@ -874,21 +850,12 @@ public sealed partial class DetailViewModel : PageViewModel
     /// 直接站到板的内沿上 —— 这里照着同一句话算，屏上那一条沿才不会差一格。
     /// </para>
     /// <para>
-    /// 尾部那一段（<see cref="TailInset"/>）和那排键（<see cref="ActionsColumn"/>）都按它对齐：截图里片名、
-    /// 音频字幕、那排键和剧情说明是同一条左沿。
+    /// 尾部那一段（<see cref="TailInset"/>）按它对齐；那排键 2026-09-13 起就站在片名那一栏的叠里，跟着
+    /// 同一条左沿，不用再另算 —— 截图里片名、音频字幕、那排键和剧情说明是同一条左沿。
     /// </para>
     /// </summary>
     private double StackLeft => HeroInset.Left
         + (StillVisibility == Visibility.Visible ? StillWidth + ColumnSpacing : 0);
-
-    /// <summary>
-    /// 那排键站在头图那一格的第几栏 —— 集页的宽版式站在片名那一栏里（截图那种排法：按键左沿跟片名对齐），
-    /// 其余页面横着铺满三栏、贴着内容那一条左沿（那是他自己定的，见那排键上的注释）。
-    /// </summary>
-    public int ActionsColumn => HeroCard ? 1 : 0;
-
-    /// <inheritdoc cref="ActionsColumn"/>
-    public int ActionsColumnSpan => HeroCard ? 1 : 3;
 
     /// <summary>
     /// 带子下沿那道渐深罩子这一次有多高 —— <see cref="DetailHero.ScrimSpan"/>：带子收窄了它就跟着收，
@@ -917,18 +884,30 @@ public sealed partial class DetailViewModel : PageViewModel
     public partial double PaperLine { get; set; }
 
     /// <summary>
+    /// 标题栏加面包屑让出来的那一截有多高，由页面量好送进来（<c>DetailPage.LiftBackdrop</c>，和
+    /// <see cref="PaperLine"/> 同一处量的同一个数）。0 是「还没量到」。它只喂一件事：背景画面盒站在窗口的
+    /// 上沿，它的下沿折进滚动内容的坐标要减掉这一截 —— 见 <see cref="TailMinHeight"/>。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TailMinHeight))]
+    public partial double HeaderLift { get; set; }
+
+    /// <summary>
     /// 头图底下那段压暗的尾部的下限 —— 见 <see cref="DetailHero.TailHeight"/>：尾部先补满第一屏减掉带子那么多，
     /// 于是正文那张纸从第一屏的下沿起，「拉大或拉小窗口」都不会把那道不透明的边提到剧照上。撑到纸面那条线
     /// （<see cref="PaperLine"/>，窗口高过阈值）就不再撑，富余的高度归纸 —— 不然剧情说明底下那段空画面会跟着
     /// 窗口一起长（「下面越改空位越大」）。过了那条线之后纸就跟着窗口一像素一像素地露出来，中间没有台阶
     /// （「拉大窗口之后下面突然冒出一大截」）。
     /// <para>
-    /// 还有第三道上限：背景那一张的下沿（<see cref="PictureHeight"/>）。尾部是「压暗的画面」，等比画面条底下
-    /// 已经没有画面，撑过去就是一段空位 —— 纸面和货架被压到老下面去，中间空着一大块（他 2026-09-12 指着的
-    /// 那张截图）。撑到画面下沿为止，底下的空当交给正文的内容自动补上。
+    /// 还有第三道上限：背景那一张的下沿。尾部是「压暗的画面」，等比画面条底下已经没有画面，撑过去就是一段
+    /// 空位 —— 纸面和货架被压到老下面去，中间空着一大块（他 2026-09-12 指着的那张截图）。撑到画面下沿为止，
+    /// 底下的空当交给正文的内容自动补上。坐标系要折一次：画面盒顶在窗口的上沿（<c>DetailPage.LiftBackdrop</c>），
+    /// 它的下沿折进滚动内容的坐标得减掉标题栏加面包屑那一截（<see cref="HeaderLift"/>）—— 从前直接拿
+    /// <see cref="PictureHeight"/> 当下沿，尾部永远多撑出一截标题栏高的空黑，那截空黑加纸面上的留白正是
+    /// 「黑色渐变下方不要留太大的空位」框住的那一块（2026-09-13）。
     /// </para>
     /// </summary>
-    public double TailMinHeight => DetailHero.TailHeight(Viewport, HeroHeight, BackdropShown, PaperLine, PictureHeight);
+    public double TailMinHeight => DetailHero.TailHeight(Viewport, HeroHeight, BackdropShown, PaperLine, PictureHeight - HeaderLift);
 
     /// <summary>
     /// 正文那张纸自己的下限 —— 见 <see cref="DetailHero.PaperHeight"/>：滚到底的那一屏只能有纸。
@@ -978,14 +957,13 @@ public sealed partial class DetailViewModel : PageViewModel
     public Visibility ResumeVisibility => Show(PlayTarget?.HasResumePosition == true);
 
     /// <summary>
-    /// 宽版式那排键底下那一条断点进度（截图里的「剩余 5 分钟」）画不画 —— 两份宽版式绑的是同一个判据：
-    /// 集页片名那一栏里的那份（<c>WideProgress</c>），和其余三页（电影、剧、季）带子底下那一行里新添的
-    /// 那份（「宽窗口缺少播放进度条」，2026-09-12）。两份的容器各按各的页面收着，屏上永远只有一份在。
+    /// 宽版式的断点进度（截图里的「剩余 5 分钟」）画不画 —— 就一份，站在片名那一栏的叠里那排键的底下
+    /// （<c>DetailPage</c> 标记里的 <c>WideProgress</c>）。其余三页 2026-09-12 起也有它（「宽窗口缺少播放
+    /// 进度条」），2026-09-13 那排键搬进这一叠之后屏上只剩这一份。
     /// <para>
-    /// 从前只有集页画它：其余三页的带高写死 412，这一行没有地方给。现在带高那头按
-    /// <see cref="DetailHero.ProgressRoom"/> 给有断点的条目留房（见 <see cref="HeroLayoutHeight"/>）——
-    /// 没有断点这一行收着，带高一个像素不动。紧凑版式里这一对（条＋剩余时间）在画面底下那一块里，
-    /// 绑的是不带版式判据的 <see cref="ResumeVisibility"/>。
+    /// 带高那头不再单独留房：这一行在那一叠里，<see cref="StackRoom"/> 量得到，带高跟着实测走
+    /// （见 <see cref="HeroLayoutHeight"/>）—— 没有断点这一行收着，带高一个像素不动。紧凑版式里这一对
+    /// （条＋剩余时间）在画面底下那一块里，绑的是不带版式判据的 <see cref="ResumeVisibility"/>。
     /// </para>
     /// </summary>
     public Visibility WideProgressVisibility => Show(WideProgressShown);
@@ -1025,6 +1003,17 @@ public sealed partial class DetailViewModel : PageViewModel
             OnPropertyChanged(nameof(ContinuePlay));
         }
     }
+
+    /// <summary>
+    /// 连播那颗显不显 —— 电影页面上不画（2026-09-13「去掉电影页面的轮播按钮」；他嘴里的「轮播」就是
+    /// 屏上这颗写着「连播」的开关）：一部电影没有「下一集」，自动接续对它没有意义。剧、季、单集三页照旧。
+    /// 三颗同款（宽版式带子里那份、集页片名那一栏那份、紧凑版式那份）绑的是同一个判据。
+    /// <para>
+    /// 条目没到手（<see cref="_detail"/> 还是 null）按「不是电影」答显 —— 和播放键那一拍的占位一个道理，
+    /// 屏上先有键、数据到了再各就各位。
+    /// </para>
+    /// </summary>
+    public Visibility ContinueVisibility => Show(_detail?.Type != EmbyItemType.Movie);
 
     /// <summary>
     /// 副标题那一行画的是一行字还是一排点得动的类型：有类型就是后者（见 <see cref="SublineGenres"/>），
@@ -1112,14 +1101,14 @@ public sealed partial class DetailViewModel : PageViewModel
     /// （和音频、字幕那几格一起换行，「按键布局参考上方截图」），其余版式里它是片名那一栏的独立一行
     /// （<see cref="VideoLineVisibility"/>）。
     /// <para>
-    /// 有话说是第一句，第二句是**底下那个媒体源下拉没在屏上**
-    /// —— 那个下拉每一行都以同一份读数结尾（<see cref="ItemDetail.SourceLabel"/> 和
-    /// <see cref="ItemDetail.VideoLine"/> 问的是同一个 <c>ToQualityLabel()</c>），两样同时在屏上就是同一句话在
-    /// 相隔两百像素的地方说了两遍（2026-09-05 界面复查）。
+    /// 有话说是第一句，第二句是**底下那个媒体源下拉没在屏上**。一个文件的条目上没有下拉，这一行是那份读数
+    /// 唯一的出处，收掉它就等于把分辨率和大小从页面上抹了。
     /// </para>
     /// <para>
-    /// 下拉只在有两个以上媒体源时才出现（<see cref="SourceVisibility"/>），而那才是这一行唯一多余的时候：一个文件
-    /// 的条目上没有下拉，这一行是那份读数唯一的出处，收掉它就等于把分辨率和大小从页面上抹了。
+    /// 下拉只在有两个以上媒体源时才出现（<see cref="SourceVisibility"/>）。它的行文曾经以同一份读数结尾
+    /// （<see cref="ItemDetail.SourceLabel"/> 问的也是 <c>ToQualityLabel()</c>），两样同屏就是同一句话说两遍
+    /// （2026-09-05 界面复查）；2026-09-13 起下拉只报文件名（「媒体源的选项太长了」），互斥保下来是因为多源
+    /// 条目上画质那些事实媒体信息表说得比这一行全 —— 挑中的是哪个文件，表就描述哪个文件。
     /// </para>
     /// </summary>
     private bool VideoShown => !string.IsNullOrWhiteSpace(VideoLine) && Sources.Count <= 1;
@@ -1203,18 +1192,12 @@ public sealed partial class DetailViewModel : PageViewModel
     public Visibility CompactVisibility => Show(IsCompact);
 
     /// <summary>
-    /// 带子里独立一行的那排键显不显 —— 其余三个页面（电影、剧、季）的宽版式用它。集页的宽版式不画：那排键
-    /// 搬进了片名那一栏的叠里（<c>DetailPage</c> 标记里的 <c>ColumnActions</c>，2026-09-12）—— 封面换成剧
-    /// 海报之后比文字高出一大截，独立一行要等封面行结束，文字和按键之间就空出海报高出来的那一截（他圈的
-    /// 那块空位）。紧凑版式里它的活交给画面底下那一块（<see cref="CompactVisibility"/>）。
+    /// 片名那一叠里那排键（<c>DetailPage</c> 标记里的 <c>ColumnActions</c>）显不显 —— 宽版式上它是唯一
+    /// 的一份：2026-09-12 集页先把键搬进这一叠（独立一行要等封面行结束，文字和按键之间空出海报高出来的
+    /// 那一截），2026-09-13 电影、剧、季也搬了进来（「排列在封面右边」），带子底下那一行退役。紧凑版式里
+    /// 它收着，活交给画面底下那一块（<see cref="CompactVisibility"/>）。
     /// </summary>
-    public Visibility WideActionsVisibility => Show(!IsCompact && !HeroCard);
-
-    /// <summary>
-    /// 片名那一叠里那排键（集页的宽版式的那一份，<c>ColumnActions</c>）显不显 ——
-    /// <see cref="WideActionsVisibility"/> 的另一半，判据同 <see cref="HeroCardVisibility"/>。
-    /// </summary>
-    public Visibility ColumnActionsVisibility => Show(HeroCard);
+    public Visibility ColumnActionsVisibility => Show(!IsCompact);
 
     /// <summary>
     /// 剧名上方那一枚徽标画不画 —— 只问一句：图解出来了没有。
@@ -1788,12 +1771,10 @@ public sealed partial class DetailViewModel : PageViewModel
         // 片名那一叠靠上还是靠下（HeroContentAlignment）也是这句「是不是集页」的一句话，同一宗。
         OnPropertyChanged(nameof(HeroContentAlignment));
 
-        // 同一句「是不是集页的宽版式」还管着那排键站在第几栏、那一份画不画（带子里那份只在其余三个页面上
-        // 站班，集页的那份在片名那一栏的叠里）、那一条断点进度画不画，「视频：…」那一行让不让位给片名那一栏
-        // 的 chips（VideoLineVisibility），以及文件选项那一行是搬在片名那一栏里还是在尾部（两份只有一份在屏上）。
-        OnPropertyChanged(nameof(ActionsColumn));
-        OnPropertyChanged(nameof(ActionsColumnSpan));
-        OnPropertyChanged(nameof(WideActionsVisibility));
+        // 片名那一栏里的那排键和那一条断点进度（ColumnActions/WideProgress）如今只按宽窄收放
+        // （PageWidth 那一头有通知），跟「是不是集页」不再相干；还相干的是「视频：…」那一行让不让位给
+        // 片名那一栏的 chips（VideoLineVisibility），以及文件选项那一行是搬在片名那一栏里还是在尾部
+        // （两份只有一份在屏上）。
         OnPropertyChanged(nameof(ColumnActionsVisibility));
         OnPropertyChanged(nameof(WideProgressVisibility));
         OnPropertyChanged(nameof(ColumnPickersVisibility));
@@ -1802,6 +1783,10 @@ public sealed partial class DetailViewModel : PageViewModel
         // 那一行文件选项跟着播放键的落点开合（见 PickersVisibility）：落点是空的（人物页、集还没回来）就收起来。
         // 轨道那几个集合是上一个条目留下的，从一部剧翻到一集时它们可能一个都没变，那边的通知一次不会来。
         OnPropertyChanged(nameof(PickersVisibility));
+
+        // 连播那颗跟着页面的种类收放（电影不画，见 ContinueVisibility）：从一部电影翻到一部剧时别的通知
+        // 一次都不会来，这里不喊它就停在上一颗的状态。
+        OnPropertyChanged(nameof(ContinueVisibility));
 
         // 页尾那张横幅只摆在三种页面上（电影、剧、集，见 FooterVisibility），也就是跟着页面的种类走。图本身可能
         // 还是上一个条目那张，那边的通知一次不会来。

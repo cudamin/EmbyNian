@@ -718,12 +718,8 @@
   <data name="SubtitleDialog_TextBlock2.Text" xml:space="preserve">
     <value>现有的外挂字幕</value>
   </data>
-  <data name="SettingsPage_Title.Text" xml:space="preserve">
-    <value>打造你的观影方式</value>
-  </data>
-  <data name="SettingsPage_Intro.Text" xml:space="preserve">
-    <value>从画面到声音，每一处都恰到好处。更改会自动保存。</value>
-  </data>
+  <!-- 「打造你的观影方式」和「从画面到声音……」那两条（SettingsPage_Title / SettingsPage_Intro）
+       2026-09-13 随设置页的页头一起删了（用户：「删除设置页面左上角的打造你的观影方式……这些字」）。 -->
   <data name="PosterCard_MoreButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>更多操作</value>
   </data>

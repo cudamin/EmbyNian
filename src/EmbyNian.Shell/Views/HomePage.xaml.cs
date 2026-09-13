@@ -54,6 +54,9 @@ public sealed partial class HomePage : Page, IShellContent
     /// </summary>
     private readonly TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs> _stayProbe;
 
+    /// <summary>矮窗档的重查已经排了一拍还没跑。防止 <see cref="Shelves"/> 一连串增删把重查排成一把。</summary>
+    private bool _foldScheduled;
+
     public HomePage()
     {
         InitializeComponent();
@@ -70,9 +73,26 @@ public sealed partial class HomePage : Page, IShellContent
             PaintInk();
         };
 
+        // 矮窗档（媒体库压上轮播左下角）跟着窗口的高矮走：窗口、带子、货架尺寸变了都要重新量一遍。
+        // 进度条和提示条一收一放也挪动货架的顶，一并重查。货架上下一拍才排得完（重载是清空再装回），
+        // 所以集合一变先排一拍再查，不在事件里当场动。
+        SizeChanged += (_, _) => UpdateLibraryOverlay();
+        Banner.SizeChanged += (_, _) => UpdateLibraryOverlay();
+        Banner.SlideChanged += (_, _) => UpdateLibraryOverlay();
+        ViewModel.Shelves.CollectionChanged += (_, _) => ScheduleFold();
+        ViewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(ViewModel.BusyVisibility) or nameof(ViewModel.NoticeVisibility))
+                ScheduleFold();
+        };
+
         // 首页进场动画（「给轮播图和首页增加更多动画特效」，2026-09-11）：每一排货架逐排淡入上浮，卡片抬起。
         // 挂在 Loaded 上是因为 XAML 里写不了 —— 见 HomeShelfMotion 那一段。
-        Loaded += (_, _) => HomeMotion.Enter(this, ShelfRepeater, ViewModel.Shelves.Count);
+        Loaded += (_, _) =>
+        {
+            HomeMotion.Enter(this, ShelfRepeater, ViewModel.Shelves.Count);
+            UpdateLibraryOverlay();
+        };
     }
 
     /// <summary>
@@ -98,6 +118,11 @@ public sealed partial class HomePage : Page, IShellContent
         get
         {
             var rows = ViewModel.Shelves.Select(shelf => $"{shelf.Title} {shelf.Cards.Count}").ToList();
+
+            // 矮窗档压上轮播的那一排不在 Shelves 里 —— 摘要在它原来的位置补一句，读的人不用猜少的那排去了哪儿。
+            if (ViewModel.LibraryOnBanner && ViewModel.LibraryShelf is { } library)
+                rows.Insert(Math.Min(ViewModel.LibraryFlowIndex < 0 ? rows.Count : ViewModel.LibraryFlowIndex, rows.Count),
+                    $"{library.Title} {library.Cards.Count}（压在轮播上）");
 
             return rows.Count == 0 ? "无" : string.Join("、", rows);
         }
@@ -174,6 +199,171 @@ public sealed partial class HomePage : Page, IShellContent
         if (Math.Abs(sheet.Top - wanted) > 0.5)
             Scroller.Margin = new Thickness(sheet.Left, wanted, sheet.Right, sheet.Bottom);
     }
+
+    /// <summary>
+    /// 矮窗档：窗口拉矮到「继续观看」牌子底下那条线被第一屏裁掉之后，把媒体库那一排压到轮播封面的左下角，下面那排
+    /// 向上补位；再矮到轮播被一屏压矮（裁切超出设计形状）就恢复默认（用户的话，2026-09-13，触发线同日从
+    /// 「下一排整个出屏」改成「窗口裁切超过继续观看下方的那条线」—— 线以下只剩一块有招牌没货的牌子，最难看）。
+    /// 界线本身是 <see cref="HomeFold"/> 的纯函数（Core 的单测盯着），这里出的是量几何和执行的那一半。
+    /// <para>
+    /// 量的全是「滚回顶上」的几何（<see cref="ScreenTopAtScrollZero"/> 添回滚动位移）：判定认的是窗口高矮，
+    /// 不认滚动位置 —— 拿现场坐标判，用户往下滚一下这一档就会自己翻面。那条线 ＝ 下一排的顶 ＋ 牌子的高；
+    /// 压上档里媒体库不在横排了，下一排补在它那个位置，顶就是「媒体库的顶」，而媒体库那一排的高要按默认摆法
+    /// 还原（牌子 ＋ 空当 ＋ 排卡）—— 牌子和空当从补位那排的模板上量（<see cref="HeadOf"/>），同一张模板
+    /// 同一个宽，两头一个数；排卡那一截量轮播上那份宿主（<c>LibraryOverlay</c>，压上档里牌子收起、宿主里
+    /// 只有排卡）。
+    /// </para>
+    /// <para>
+    /// 无声退出的几档：轮播收起来（没有幻灯片／设置里关掉）没有左下角可压；媒体库那一排不存在（勾掉或者空）；
+    /// 它下面没有别的排（压上去没有意义）。这几档一律回到默认叠法。
+    /// </para>
+    /// </summary>
+    private void UpdateLibraryOverlay()
+    {
+        if (XamlRoot is null) return;
+
+        // 判定吃的是排完的树：带高、货架顶都要此刻的坐标（同 FoldRead 的两拍）。
+        UpdateLayout();
+
+        var viewport = Scroller.ActualHeight;
+
+        if (viewport <= 0 || Banner.Visibility != Visibility.Visible)
+        {
+            ViewModel.SetLibraryOverlay(false);
+            ApplyLibraryChrome();
+            return;
+        }
+
+        var gap = ShelfRepeater.Layout is StackLayout stack ? stack.Spacing : 0;
+        double nextRowLine;
+        bool hasNext;
+
+        if (ViewModel.LibraryOnBanner)
+        {
+            // 压上档：横排里媒体库那个位置现在是补上来的下一排，它的顶就是「媒体库的顶」。补位的排没了
+            // （重载之后媒体库成了最后一排之类）这一档没有意义，回默认。
+            var index = ViewModel.LibraryFlowIndex;
+
+            if (index < 0 || index >= ViewModel.Shelves.Count)
+            {
+                ViewModel.SetLibraryOverlay(false);
+                ApplyLibraryChrome();
+                return;
+            }
+
+            if (ShelfRepeater.TryGetElement(index) is not FrameworkElement filler)
+            {
+                filler = (FrameworkElement)ShelfRepeater.GetOrCreateElement(index);
+                UpdateLayout();
+            }
+
+            // 那条线按默认摆法还原：补位那排的顶 ＋ 默认摆法里媒体库那一排的高（牌子 ＋ 空当 ＋ 排卡）＋ 排间
+            // 空当 ＋「继续观看」自己牌子的高。宿主还没排完的那一拍退回排卡自己的高（RowHeight，条带绑的就是
+            // 它），牌子量不到的那一拍退回排顶口径 —— 都有下一拍校正。
+            var head = HeadOf(filler);
+            var strip = LibraryOverlay.ActualHeight > 0
+                ? LibraryOverlay.ActualHeight
+                : ViewModel.LibraryShelf?.RowHeight ?? 0;
+
+            nextRowLine = ScreenTopAtScrollZero(filler)
+                + (head?.Height ?? 0) + (head?.Gap ?? 0) + strip
+                + gap
+                + (head?.Height ?? 0);
+            hasNext = true;
+        }
+        else
+        {
+            // 默认档：媒体库还在横排里，线 ＝ 它整排的下沿 ＋ 排间空当 ＋ 下一排牌子的高。牌子从媒体库自己
+            // 那块上量 —— 同一张模板，每排的牌子一样高。
+            if (ViewModel.LibraryShelf is not { } shelf || !ViewModel.Shelves.Contains(shelf)) return;
+
+            if (ShelfRepeater.TryGetElement(ViewModel.LibraryFlowIndex) is not FrameworkElement element)
+            {
+                element = (FrameworkElement)ShelfRepeater.GetOrCreateElement(ViewModel.LibraryFlowIndex);
+                UpdateLayout();
+            }
+
+            nextRowLine = ScreenTopAtScrollZero(element)
+                + element.ActualHeight
+                + gap
+                + (HeadOf(element)?.Height ?? 0);
+            hasNext = ViewModel.LibraryFlowIndex + 1 < ViewModel.Shelves.Count;
+        }
+
+        // 带子的设计形状有多高（不被一屏封住的那一份，<see cref="HomeCarousel.NaturalHeight"/>）：视口够不到
+        // 它，带子就被压矮、剧照上下裁切超出默认档 —— 那是回默认的线（2026-09-13「轮播图上下裁切过多时隐藏」）。
+        var bandNatural = HomeCarousel.NaturalHeight(Banner.ActualWidth);
+
+        ViewModel.SetLibraryOverlay(
+            hasNext && HomeFold.LibraryOnBanner(viewport, nextRowLine, bandNatural));
+        ApplyLibraryChrome();
+    }
+
+    /// <summary>
+    /// 货架集合变了（重载、矮窗档搬进搬出）之后排一拍重查：事件当场树上还是半成品，量不出数。
+    /// <see cref="_foldScheduled"/> 把排队的并成一拍。
+    /// </summary>
+    private void ScheduleFold()
+    {
+        if (_foldScheduled || DispatcherQueue is not { } queue) return;
+
+        _foldScheduled = true;
+        queue.TryEnqueue(() =>
+        {
+            _foldScheduled = false;
+            UpdateLibraryOverlay();
+        });
+    }
+
+    /// <summary>按视图模型此刻的矮窗档状态拨这一页的屏上开关：宿主、牌子收不收、浅墨、轮播那头的让位。</summary>
+    private void ApplyLibraryChrome()
+    {
+        var on = ViewModel.LibraryOnBanner && ViewModel.LibraryShelf is not null;
+        var shelf = ViewModel.LibraryShelf;
+
+        LibraryOverlay.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        LibraryHost.Content = on ? shelf : null;
+
+        if (shelf is not null)
+        {
+            shelf.OnScrim = on;
+
+            // 压上档不摆牌子：「媒体库压在轮播图上的时候不用显示那个媒体库标题」（2026-09-13）。
+            // 同一份 VM 在横排和宿主两头搬，牌子跟着档收放。
+            shelf.ShowHead = !on;
+        }
+
+        if (!on)
+        {
+            Banner.SetLibraryOverlay(false, 0);
+            return;
+        }
+
+        // 排高一拍再量：宿主刚装上内容，没排过之前 ActualHeight 是 0 —— 轮播那头（字块让位）要的是
+        // 排子的总高（牌子 ＋ 空当 ＋ 一排卡）。量不到的那一帧退回排卡自己的高，下一拍自会校正。
+        UpdateLayout();
+        Banner.SetLibraryOverlay(true, LibraryOverlay.ActualHeight > 0 ? LibraryOverlay.ActualHeight : shelf!.RowHeight);
+    }
+
+    /// <summary>
+    /// 元素顶边在「滚回顶上」之后的位置：现场坐标添回滚动位移。判定认窗口高矮不认滚动位置，见
+    /// <see cref="UpdateLibraryOverlay"/>。
+    /// </summary>
+    private double ScreenTopAtScrollZero(FrameworkElement element) =>
+        element.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0)).Y
+        + Scroller.VerticalOffset;
+
+    /// <summary>
+    /// 一排货架的牌子有多高、牌子到排卡之间让了多大的空当：从那一排的模板实例上量 —— 同一张模板、同一列宽，
+    /// 每排的牌子一个高，不写死。量不到（那排还没排完，或者那块不是货架的 StackPanel 模板）交回空，调用方
+    /// 各有退路。
+    /// </summary>
+    private static (double Height, double Gap)? HeadOf(FrameworkElement shelf) =>
+        shelf is StackPanel panel
+            && panel.Children.OfType<ShelfHead>().FirstOrDefault() is { } head
+            && head.ActualHeight > 0
+                ? (head.ActualHeight, panel.Spacing)
+                : null;
 
     /// <summary>
     /// 自检：轮播这条带的高度就是 <see cref="HomeCarousel.Height"/> 按它自己的宽算出来的那个数，而横着的那几排
@@ -463,6 +653,10 @@ public sealed partial class HomePage : Page, IShellContent
             _session,
             services.GetRequiredService<EmbyImageStore>());
 
+        // 轮播的停留秒数（设置 → 主页 → 「封面轮换秒数」，2026-09-13）页面一进来就同步一次 —— 带子自己
+        // 没有设置，它等的是这句话。
+        Banner.ApplyDwell(settings.Settings.Ui.CarouselSeconds);
+
         // 版面（拖拽出来的次序、勾掉的那几排）改完当场生效：设置页在另一个窗口里，它改完喊一声，这一页重排。
         ShellPrefs.Changed -= OnShellPrefsChanged;
         ShellPrefs.Changed += OnShellPrefsChanged;
@@ -493,10 +687,16 @@ public sealed partial class HomePage : Page, IShellContent
         _actions?.SetTitleStrip(Banner.Visibility == Visibility.Visible ? TitleStrip.OnScrim : TitleStrip.Plain);
 
     /// <summary>
-    /// 设置里那份主页版面改了（拖拽排序或者勾选），照新的重排一遍。卡片尺寸那几个数不在这一句里 —— 它们是
+    /// 设置里主页那一组改了（拖拽排序、勾选、轮播的来源媒体张数秒数），照新的重排一遍 —— 轮播那几行
+    /// 写完也喊的是这一声：来源和张数随 <see cref="HomeViewModel.ApplyLayoutAsync"/> 重新取，秒数走
+    /// <see cref="HomeBanner.ApplyDwell"/> 当场换钟。卡片尺寸那几个数不在这一句里 —— 它们是
     /// <see cref="HomeViewModel.Attach"/> 时的快照，下次开这一页才换（见那一段说明）。
     /// </summary>
-    private void OnShellPrefsChanged(Configuration.UiSettings ui) => _ = ViewModel.ApplyLayoutAsync();
+    private void OnShellPrefsChanged(Configuration.UiSettings ui)
+    {
+        Banner.ApplyDwell(ui.CarouselSeconds);
+        _ = ViewModel.ApplyLayoutAsync();
+    }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
@@ -507,6 +707,16 @@ public sealed partial class HomePage : Page, IShellContent
     private void OnCardClicked(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Content: PosterCard { Card: { } card } }) ViewModel.Open(card);
+    }
+
+    /// <summary>
+    /// 2026-09-13：点「最近添加 · XXX」那一排的牌子（标题，或者它右端那个大于号）进那个库。
+    /// 挂着这一排的是 <c>ShelfTemplate</c> 里那块 <c>ShelfHead</c>，它把 <c>DataContext</c> 留在了
+    /// 这一排的 <see cref="CardShelf"/> 上，所以从那儿取回去。不是库的排出不来大于号，也就走不到这儿。
+    /// </summary>
+    private void OnShelfHeadInvoked(object sender, EventArgs e)
+    {
+        if (sender is ShelfHead { DataContext: CardShelf shelf }) ViewModel.OpenShelf(shelf);
     }
 
     /// <summary>

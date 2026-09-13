@@ -384,6 +384,46 @@ public sealed class PlaybackSettings
     /// </summary>
     public bool AutoPlayNextEpisode { get; set; } = true;
 
+    /// <summary>
+    /// 「在设置中新增一个开始播放后自动全屏的功能」（用户的话，2026-09-13）。
+    /// <para>
+    /// 开播即全屏，作用在<b>正在播的那个窗口</b>上：普通模式是主窗口，独立窗口模式是这个开关旁边那个
+    /// （<see cref="SeparateWindowPlayback"/>）开出来的播放窗口。两个开关因此可以叠起来用 —— 「弹个独立
+    /// 窗口、开出来就是满屏」是一句话的事，而不是两条互斥的路。
+    /// </para>
+    /// <para>
+    /// 只在<b>真正开始一个新的播放</b>时进一次全屏，不是每换一集都进：连播的下一集接着上一集的样子走，
+    /// 用户在全屏里按 F 退出之后不该被下一集顶回去。<c>PlayerPage</c> 那一头是拿「一个新的播放」这个事件
+    /// 说的（<c>PlaybackStarted</c>），不是拿「窗口该是全屏」那个状态说的。
+    /// </para>
+    /// <para>
+    /// 装机默认关（false），所以旧的设置文件里没有这个键时行为一个像素都不变，也不需要为它加一条迁移 ——
+    /// 同 <see cref="UiSettings.ShowHomeBanner"/> 那条。
+    /// </para>
+    /// </summary>
+    public bool AutoFullscreenOnPlayback { get; set; }
+
+    /// <summary>
+    /// 「在设置中新增功能，打开后点击播放后弹出一个独立窗口来播放」（用户的话，2026-09-13）。
+    /// <para>
+    /// 开着的时候，点击播放不再把主窗口变成播放器：主窗口<b>留在原来那一页不动</b>（库、详情页都照旧），
+    /// 片子由一个新开的播放窗口放。关掉这个播放窗口就是<b>停止播放</b>，回到主窗口继续浏览。
+    /// </para>
+    /// <para>
+    /// 这个窗口不是随便一个 WinUI <c>Window</c>：mpv 以 <c>wid</c> 画进一个子 HWND，而真正的
+    /// <c>Window</c> 会把它盖掉（见 <c>HostWindow</c> 类注释里的第 2 条事实）。所以它跟主窗口一样是
+    /// 自己创建的一条裸 HWND 加一座 XAML 岛，视频子窗口垫在岛下面 —— 见 <c>PlayerWindow</c>。
+    /// </para>
+    /// <para>
+    /// 只对内置 libmpv 那条后端有意义：外部 mpv.exe 本来就自己开窗放（<see cref="MpvSettings.Backend"/>）。
+    /// 两者同时选着的时候这个开关不起作用，因为那时画面本来就不由本程序摆。
+    /// </para>
+    /// <para>
+    /// 装机默认关（false），所以旧的设置文件里没有这个键时行为一个像素都不变，也不需要为它加一条迁移。
+    /// </para>
+    /// </summary>
+    public bool SeparateWindowPlayback { get; set; }
+
     /// <summary>The smallest 字幕字号 worth offering; below this the text is not readable at any distance.</summary>
     public const int MinimumSubtitleFontSize = 16;
 
@@ -883,6 +923,39 @@ public sealed class UiSettings
     /// </para>
     /// </summary>
     public bool ShowHomeBanner { get; set; } = true;
+
+    /// <summary>
+    /// 轮播条目从哪来 —— 「要使用最近添加还是随机的」（用户的话，2026-09-13）。枚举存整数
+    /// （同 <see cref="Emby.ScoreSource"/> 那条规矩），Recent 必须是 0：缺键的旧设置文件读出来就是它，
+    /// 从旧版本升上来的人一个像素都不变。认不出来的数字由 <c>SettingsMigration.Normalize</c> 拨回。
+    /// <para>
+    /// 改完当场生效：设置页写完喊一声 <c>ShellPrefs</c>，主页那一头照新来源把条目重新要一遍。
+    /// </para>
+    /// </summary>
+    public Emby.CarouselSource CarouselSource { get; set; } = Emby.CarouselSource.Recent;
+
+    /// <summary>
+    /// 这条轮播带站哪一类媒体 —— 「要使用什么媒体」（用户的话，2026-09-13）。全部、只看电影或只看剧集；
+    /// 音乐类从不出现在轮播里，这一点不随这一档变。存整数，规矩同上。
+    /// </summary>
+    public Emby.CarouselMediaType CarouselMedia { get; set; } = Emby.CarouselMediaType.All;
+
+    /// <summary>
+    /// 这条带最多摆几张。装机默认就是 <see cref="Emby.HomeCarousel.Slots"/> 那「前十个」；上下限在
+    /// <see cref="Emby.HomeCarousel"/> 上（<c>ClampSlots</c>），设置页那一行和 <c>SettingsMigration.Normalize</c>
+    /// 读同一对常量 —— 一个比设置窄的框会显示一个文件里没有的数，这是同一类 bug 的老窝（见 ImageCacheMegabytes）。
+    /// </summary>
+    public int CarouselCount { get; set; } = Emby.HomeCarousel.Slots;
+
+    /// <summary>
+    /// 一张封面站多少秒再换下一张 —— 「封面的轮换的秒数」（用户的话，2026-09-13）。装机默认
+    /// <see cref="Emby.HomeCarousel.DefaultDwellSeconds"/>；夹取在 <see cref="Emby.HomeCarousel.DwellFor"/>。
+    /// <para>
+    /// 改完当场生效：主页那一头（<c>HomeBanner</c>）从 <c>ShellPrefs</c> 的话里拿到新秒数，自动翻页的钟
+    /// 和底下那道进度条当场按新的走，不等回到主页。
+    /// </para>
+    /// </summary>
+    public int CarouselSeconds { get; set; } = Emby.HomeCarousel.DefaultDwellSeconds;
 
     /// <summary>
     /// 海报缓存在磁盘上最多占多少 MB。

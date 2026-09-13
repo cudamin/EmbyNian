@@ -223,9 +223,9 @@ public sealed partial class DetailPage : Page, IShellContent
         var hero = Box(HeroBand);
         var page = Box(Body);
         var stack = Box(HeroStack);
-        // 那排键此刻在哪一份：集页的宽版式在片名那一栏的叠里（ColumnActions，跟文字一起流），其余页面在
-        // 带子的独立一行上（HeroActions）。两份只有一份在屏上 —— 读收着的那份只会量到 0，什么也钉不住。
-        var actionsEl = ViewModel.HeroCardShown ? (FrameworkElement)ColumnActions : HeroActions;
+        // 那排键只有一份：片名那一栏的叠里（ColumnActions，跟文字一起流）。紧凑版式上它收着 —— 收着的
+        // 量出来是 0，好在 fits 的第二条在紧凑版式上本来就免读，钉不住也不碍事。
+        var actionsEl = (FrameworkElement)ColumnActions;
         var actions = Box(actionsEl);
         var tail = Box(HeroTail);
 
@@ -765,10 +765,11 @@ public sealed partial class DetailPage : Page, IShellContent
         // DetailHero.TailHeight）—— 哪一个顶住的都算「该露」。
         var paperTop = PaperOffset();
         // 两边都先取整再比：TailMinHeight 是 Core 那一支取整过的（DetailHero.TailHeight），直接拿小数去比，
-        // 「正好在画面下沿封顶」的那一档会差出半个像素 —— 带高不缩小的今天（412 正好卡在 598.5 − 186.5 上）
-        // 每一张有剧照的页面都会踩中。
+        // 「正好在画面下沿封顶」的那一档会差出半个像素 —— 页宽 × 高宽比一路带着小数，每一张有剧照的页面都
+        // 可能踩中。画面的下沿在内容坐标里是盒高减标题栏那一截（DetailViewModel.TailMinHeight），别拿盒高原样去比。
+        var pictureBottom = ViewModel.PictureHeight - ViewModel.HeaderLift;
         var byLine = Math.Abs(ViewModel.TailMinHeight - Math.Round(ViewModel.PaperLine - ViewModel.HeroHeight)) < 0.5;
-        var byPicture = Math.Abs(ViewModel.TailMinHeight - Math.Round(ViewModel.PictureHeight - ViewModel.HeroHeight)) < 0.5;
+        var byPicture = Math.Abs(ViewModel.TailMinHeight - Math.Round(pictureBottom - ViewModel.HeroHeight)) < 0.5;
         var capped = byLine || byPicture;
         var beyond = paperTop >= Body.ActualHeight - 0.5;
         var folded = !ViewModel.HeroArt || capped || beyond;
@@ -791,7 +792,7 @@ public sealed partial class DetailPage : Page, IShellContent
                     : capped
                         ? $"，纸的上沿 {paperTop:0} 露在第一屏 {Body.ActualHeight:0} 里"
                             + (byLine ? $"（纸面上沿钉在视口 {ViewModel.PaperLine:0}，富余的高度归纸）" : "")
-                            + (byPicture ? $"（尾部撑到背景画面下沿 {ViewModel.PictureHeight:0.##} 为止，底下归内容）" : "")
+                            + (byPicture ? $"（尾部撑到背景画面下沿 {pictureBottom:0.##} 为止，底下归内容）" : "")
                         : $"，纸的上沿 {paperTop:0} 浮在第一屏 {Body.ActualHeight:0} 里")
                 + (joined
                     ? ViewModel.HeroCardShown ? "，尾部让给那块板（自己不画底）" : "，尾部接住头图末色"
@@ -1502,33 +1503,14 @@ public sealed partial class DetailPage : Page, IShellContent
     /// 等于当前值，一个自己咬着自己的数。
     /// </para>
     /// <para>
-    /// 只报量出来的这一个数。「海报也算进去」「那一行键也算进去」和「加上这一格上下那两道留白」都搬去了视图模型
+    /// 只报量出来的这一个数。「海报也算进去」「那一排键也算进去」和「加上这一格上下那两道留白」都搬去了视图模型
     /// （<see cref="DetailViewModel.HeroRoom"/>）：海报按图自己的形状收窄之后它的高会变，而那一下这一栏一个
-    /// 像素没动、这个回调也就不会来 —— 算在这儿的那一版于是留着一格比内容高出一截的带子。
-    /// </para>
-    /// <para>
-    /// 那排键 2026-09-12 从这一栏里搬出去、自己占一行，所以它的高由 <see cref="OnHeroActionsSizeChanged"/>
-    /// 另报一次；这一栏量到的是搬完之后的那个（少了四十来个像素），两处加起来才是从前那一笔账。
+    /// 像素没动、这个回调也就不会来 —— 算在这儿的那一版于是留着一格比内容高出一截的带子。那排键 2026-09-13
+    /// 搬回这一栏（尾上的最后一个孩子），它的高重新算在这一个数里。
     /// </para>
     /// </summary>
     private void OnHeroStackSizeChanged(object sender, SizeChangedEventArgs e) =>
         ViewModel.StackRoom = HeroStack.ActualHeight;
-
-    /// <summary>
-    /// 头图上那排键自己那一行有多高 —— 它 2026-09-12 从片名那一栏里搬出来、单独占一行（「继续播放 从头开始
-    /// 还有后面的那些图标单独一行」），所以它的高不再算在 <see cref="DetailViewModel.StackRoom"/> 里，得单独
-    /// 报上去（<see cref="DetailViewModel.ActionsRoom"/>，进带高的账）。报的是连头上那道 16 边距在内的
-    /// 排版高：Auto 行按 desired 摆它（含边距），带高的账和排出来的行不一致的话，差的那一截就从带子底下
-    /// 冒出去。
-    /// <para>
-    /// 紧凑版式里这一行整个收着（<c>WideActionsVisibility</c>），量出来就是 0 —— 「紧凑版式不多算这一行」
-    /// 不用另判一次版式，收着的东西量出来本来就是零；收着的那一拍这里只报 0，不把边距带上。
-    /// </para>
-    /// </summary>
-    private void OnHeroActionsSizeChanged(object sender, SizeChangedEventArgs e) =>
-        ViewModel.ActionsRoom = HeroActions.Visibility == Visibility.Visible
-            ? HeroActions.ActualHeight + HeroActions.Margin.Top
-            : 0;
 
     /// <summary>
     /// 同季那一带集永远是正文那张纸的第一块 —— 媒体信息紧跟在它后面（见 BodySheet 那段注释）。
@@ -1600,6 +1582,10 @@ public sealed partial class DetailPage : Page, IShellContent
         // 纸面上沿那条线用的是同一个数（阈值窗口高减这一截），所以赶在提前返回之前同步 —— 面包屑显隐、换主题
         // 都会挪它，而那些时候边距未必变。见 SyncPaperLine。
         SyncPaperLine();
+
+        // 尾部的第三道上限（背景画面的下沿）折进滚动内容的坐标用的也是这一截（DetailViewModel.TailMinHeight），
+        // 同样赶在提前返回之前写。
+        ViewModel.HeaderLift = Math.Max(0, lift);
 
         if (Math.Abs(Backdrop.Margin.Top + lift) < 0.5) return;
 
@@ -1761,7 +1747,7 @@ public sealed partial class DetailPage : Page, IShellContent
     /// elements. The view model only supplies the currently loaded domain item and the sibling episodes
     /// needed by the shared command builder.
     /// <para>
-    /// 锚点是<em>按下来的那一颗</em>，不是写死的某一名字：宽版式和紧凑版式各有一颗更多键（<c>MoreButton</c>、
+    /// 锚点是<em>按下来的那一颗</em>，不是写死的某一名字：宽版式和紧凑版式各有一颗更多键（<c>ColumnMoreButton</c>、
     /// <c>CompactMoreButton</c>），菜单都要开在按下的那颗边上 —— 菜单挂错了锚，弹出来的位置就漂到另一套版式
     /// 那一头去。
     /// </para>

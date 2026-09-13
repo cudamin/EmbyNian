@@ -49,15 +49,6 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private const double TextDrop = 22;
 
-    private const double DotWidth = 22;
-    private const double DotHeight = 4;
-
-    /// <summary>
-    /// 一根横条的点击区有多高。真正上色的条只有 <see cref="DotHeight"/>，指头和鼠标都点不着，所以每根外面套一层
-    /// 透明的框。这个数连着 <see cref="DotsBaseline"/>，就是底边那排自己占掉的高度。
-    /// </summary>
-    private const double DotHit = 24;
-
     /// <summary>
     /// 换图的那一下：两层交叉着淡入淡出。两下同时走，所以这也是「上一张还看得见」的时长。不叫 <c>Fade</c> 是
     /// 2026-09-09 之后的事：左边那道渐变幕在标记里占了 <c>Fade</c> 这个名（<c>HomeBanner.xaml</c>），一个类里
@@ -88,9 +79,6 @@ public sealed partial class HomeBanner : UserControl
     /// <summary>没人碰的时候自己走一张，每 <see cref="HomeCarousel.Dwell"/> 一步。</summary>
     private readonly DispatcherQueueTimer? _timer;
 
-    /// <summary>底边那排小横条里那几根真正上色的条，按幻灯片的顺序。</summary>
-    private readonly List<Border> _bars = [];
-
     // 每一种动画只有一个所有者：换片先收尾，卸载全部停止，避免上一张的 Completed 改到下一张。
     private readonly Dictionary<string, (Storyboard Board, Action Settle)> _motions = [];
     private readonly UISettings _uiSettings = new();
@@ -106,6 +94,17 @@ public sealed partial class HomeBanner : UserControl
     /// <summary>台上那层是 <c>LayerB</c>。两层轮着上，见 <see cref="Paint"/>。</summary>
     private bool _second;
 
+    /// <summary>
+    /// 矮窗档：媒体库那一排压在带的左下角（2026-09-13「窗口拉矮到媒体库下方那一排被藏起来之后，把媒体库压到
+    /// 轮播图封面的左下角」）。排子占的是带的下半截，所以字块要让出那一截（下边距＝排高，在自己剩下的地界里
+    /// 照旧竖向居中）。右下的张数读数照常显示（2026-09-13「媒体库上移时图二轮播图右下角的那个不用隐藏」：
+    /// 它在右下角，压上来的那一排在左下角，两边不打架）—— 从前它跟着底边那排分页横条一起收，横条那天整个删了。
+    /// </summary>
+    private bool _slim;
+
+    /// <summary>压上来的那一排总高（牌子 ＋ 空当 ＋ 一排卡）。页面量了递进来，字块的下边距就是它。</summary>
+    private double _slimShelfHeight;
+
     /// <summary>指针在带上：箭头浮出来，自动翻页停下。</summary>
     private bool _hover;
 
@@ -113,11 +112,76 @@ public sealed partial class HomeBanner : UserControl
     private BannerSlide? _current;
 
     /// <summary>
+    /// 矮窗档开、关（页面量完几何后拨，排高一起递进来）。三个开关各回各位：字块让位（<see cref="PlaceInfo"/>）、
+    /// 右下读数（<see cref="SyncSlideStatus"/>，矮窗档照常显示）、简介的高度线
+    /// （<see cref="SynopsisVisibility"/> 量的是字块实分到的高）。
+    /// </summary>
+    internal void SetLibraryOverlay(bool on, double shelfHeight)
+    {
+        var height = on ? Math.Max(0, shelfHeight) : 0;
+
+        if (_slim == on && Math.Abs(_slimShelfHeight - height) < 0.5) return;
+
+        _slim = on;
+        _slimShelfHeight = height;
+
+        PlaceInfo();
+        SyncSlideStatus();
+        SynopsisRow.Visibility = SynopsisVisibility(Current?.SynopsisVisibility ?? Visibility.Collapsed);
+    }
+
+    /// <summary>
+    /// 矮窗档开、关（页面量完几何后拨，排高一起递进来）。三个开关各回各位：字块让位（<see cref="PlaceInfo"/>）、
+    /// 右下读数（<see cref="SyncSlideStatus"/>）、简介的高度线（<see cref="SynopsisVisibility"/>）。
+    /// </summary>
+    private void PlaceInfo() =>
+        Info.Margin = new Thickness(InfoInset, 0, 0, _slim ? _slimShelfHeight : 0);
+
+    /// <summary>
+    /// 右下的张数读数：多张、带够宽。**矮窗档照常显示**（2026-09-13「媒体库压在轮播图上的时候不用隐藏图二
+    /// 轮播图右下角的那个」）—— 它在右下角，压上来的那一排在左下角，两边不打架；以前它跟着底边那排分页横条
+    /// 一起收起，那天他点了名要它留下来。（倒计时条跟着它一起，见标记里 SlideStatus 那一段。）
+    /// </summary>
+    private void SyncSlideStatus() =>
+        SlideStatus.Visibility = _slides.Count > 1 && ActualWidth >= 800
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    /// <summary>
+    /// 简介收不收的那条高度线。矮窗档里字块实分到的高是带高减去压上来的那一排 —— 还按带高整根量，
+    /// 带子矮的那几档简介会伸进排子里。
+    /// </summary>
+    private Visibility SynopsisVisibility(Visibility wanted)
+    {
+        var textHeight = Root.Height - (_slim ? _slimShelfHeight : 0);
+
+        return textHeight < 340 ? Visibility.Collapsed : wanted;
+    }
+
+    /// <summary>
     /// 订着的那个 <c>XamlRoot</c>，也就是窗口的客户区。带高照带宽算、上限一屏（<see cref="HomeCarousel.Height"/>），
     /// 而只拖下边沿的那一下这条带自己的宽度一点没变 —— <c>SizeChanged</c> 因此不响，一屏有多高却已经换了一个数。
     /// 存下来是为了退订：进树时的 XamlRoot 和离树后能不能问到不是一回事。
     /// </summary>
     private XamlRoot? _viewport;
+
+    /// <summary>
+    /// 一张站多久（设置 → 主页 → 「封面轮换秒数」，2026-09-13）。构造时先落在装机默认（<see cref="HomeCarousel.Dwell"/>），
+    /// 页面接上设置和设置页改动的那句话（<see cref="ApplyDwell"/>）都会把它更新成真值 —— 钟的间隔和底下那道
+    /// 进度条的时长都从这一份读，两处永远同一个数。
+    /// </summary>
+    private TimeSpan _dwell = HomeCarousel.Dwell;
+
+    /// <summary>
+    /// 设置里那行秒数改了（或者页面刚接上设置）：按新值重摆自动翻页的钟。没在走的那几档（一张、悬停、
+    /// 不在树上）<see cref="SyncTimer"/> 自己会继续停着，下一次走的时候就是新间隔。
+    /// </summary>
+    internal void ApplyDwell(int seconds)
+    {
+        _dwell = HomeCarousel.DwellFor(seconds);
+        if (_timer is not null) _timer.Interval = _dwell;
+        SyncTimer();
+    }
 
     public HomeBanner()
     {
@@ -143,7 +207,7 @@ public sealed partial class HomeBanner : UserControl
 
         if (_timer is not null)
         {
-            _timer.Interval = HomeCarousel.Dwell;
+            _timer.Interval = _dwell;
             _timer.Tick += OnTick;
         }
 
@@ -161,7 +225,7 @@ public sealed partial class HomeBanner : UserControl
     /// <summary>
     /// 台上换人了。<see langword="null"/> 是「台上没人」（整批换成空的）。
     /// <para>
-    /// 事件而不是让页面去轮询：换一张有五个来处（钟、两颗箭头、底边那排小横条、左右方向键、换一整批），而它们
+    /// 事件而不是让页面去轮询：换一张有四个来处（钟、两颗箭头、左右方向键、换一整批），而它们
     /// 都汇到 <see cref="Show"/> 这一处。
     /// </para>
     /// <para>
@@ -200,7 +264,6 @@ public sealed partial class HomeBanner : UserControl
         _slides = [.. slides];
         _index = 0;
 
-        BuildDots(_slides.Count);
         Visibility = _slides.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         if (_slides.Count == 0)
@@ -224,7 +287,7 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
-    /// 把第 <paramref name="index"/> 张请上台：字、徽标、剧照，加上底边那根横条。
+    /// 把第 <paramref name="index"/> 张请上台：字、徽标、剧照，右下角的张数读数一起换数。
     /// <para>
     /// 字是当场就换的，剧照要等解码 —— 所以订上这张幻灯片的 <c>PropertyChanged</c>，图到了再淡进来
     /// （<see cref="OnSlideChanged"/>）。台上换人时前一张的订阅要撤掉，否则上一张的图迟到时会盖掉现在这张。
@@ -244,7 +307,7 @@ public sealed partial class HomeBanner : UserControl
         SynopsisRow.Visibility = Root.Height < 340 ? Visibility.Collapsed : slide.SynopsisVisibility;
         PlayText.Text = slide.PlayText;
         SlideCounter.Text = $"{_index + 1:00}  /  {_slides.Count:00}";
-        SlideStatus.Visibility = _slides.Count > 1 && ActualWidth >= 800 ? Visibility.Visible : Visibility.Collapsed;
+        SyncSlideStatus();
 
         // 念给读屏的人听：这条带上的字全压在剧照上，光念标题听不出这是第几张。
         AutomationProperties.SetName(Root, $"主页轮播，{HomeCarousel.Position(_index, _slides.Count)}，{slide.Title}");
@@ -255,7 +318,6 @@ public sealed partial class HomeBanner : UserControl
         _current = slide;
         slide.PropertyChanged += OnSlideChanged;
 
-        Mark(_index);
         Rise();
         Paint(slide.Picture);
         PaintLogo(slide);
@@ -272,67 +334,6 @@ public sealed partial class HomeBanner : UserControl
 
         _current.PropertyChanged -= OnSlideChanged;
         _current = null;
-    }
-
-    /// <summary>
-    /// 底边那排小横条，按幻灯片的数目造。一张的时候不要 —— 「第 1 张，共 1 张」是句废话。
-    /// <para>
-    /// 真正上色的条只有四像素高，指头和鼠标都点不着，所以每根外面套一层透明的、十六像素高的框当点击区。颜色从
-    /// 这份控件自己的 <c>Resources</c> 里取，键少一个就在自检里抛，而不是等到主页第一次画出来。
-    /// </para>
-    /// </summary>
-    internal void BuildDots(int count)
-    {
-        Dots.Children.Clear();
-        _bars.Clear();
-        Dots.Visibility = count > 1 ? Visibility.Visible : Visibility.Collapsed;
-
-        var dim = (Brush)Resources["EgBannerDotBrush"];
-
-        for (var i = 0; i < count; i++)
-        {
-            var index = i;
-
-            var bar = new Border
-            {
-                Width = DotWidth,
-                Height = DotHeight,
-                CornerRadius = new CornerRadius(DotHeight / 2),
-                Background = dim,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            var hit = new Button
-            {
-                Height = DotHit,
-                MinHeight = 0,
-                MinWidth = 0,
-                Padding = new Thickness(0),
-                BorderThickness = new Thickness(0),
-                Background = new SolidColorBrush(Colors.Transparent),
-                Content = bar
-            };
-
-            AutomationProperties.SetName(hit, HomeCarousel.Position(index, count));
-            AutomationProperties.SetAutomationId(hit, $"BannerSlide{index + 1}");
-            hit.Click += (_, _) =>
-            {
-                Show(index);
-                SyncTimer();
-            };
-
-            _bars.Add(bar);
-            Dots.Children.Add(hit);
-        }
-    }
-
-    /// <summary>现在是第几张：那一根亮着，其余的暗着。</summary>
-    internal void Mark(int index)
-    {
-        var dim = (Brush)Resources["EgBannerDotBrush"];
-        var on = (Brush)Resources["EgBannerDotOnBrush"];
-
-        for (var i = 0; i < _bars.Count; i++) _bars[i].Background = i == index ? on : dim;
     }
 
     // ---- 屏上的样子 --------------------------------------------------------------
@@ -509,7 +510,8 @@ public sealed partial class HomeBanner : UserControl
     ];
 
     /// <summary>
-    /// 跑一段有明确所有者的动画。没进树或系统关闭动画时直接落定；完成后撤掉故事板，再写回终值。
+    /// 跑一段有明确所有者的动画。没进树、或系统关闭动画（只对 <paramref name="followAnimationSwitch"/> 那一路
+    /// 生效）时直接落定；完成后撤掉故事板，再写回终值。
     /// <para>
     /// 自检里这份控件没有 <c>XamlRoot</c>，那时 <c>Begin()</c> 既没人看也没有意义；而故事板照样是搭出来的，
     /// 所以 <c>SetTarget</c> 拿到一个空的变换（标记里漏了一个 <c>TranslateTransform</c>）在那里就抛。
@@ -521,9 +523,9 @@ public sealed partial class HomeBanner : UserControl
     /// 终值把这事兜死。
     /// </para>
     /// </summary>
-    private void Play(Storyboard board, Action settle, string channel)
+    private void Play(Storyboard board, Action settle, string channel, bool followAnimationSwitch = true)
     {
-        if (!_active || XamlRoot is null || !_uiSettings.AnimationsEnabled)
+        if (!_active || XamlRoot is null || (followAnimationSwitch && !_uiSettings.AnimationsEnabled))
         {
             settle();
             return;
@@ -620,7 +622,16 @@ public sealed partial class HomeBanner : UserControl
 
     /// <summary>
     /// 自动翻页的钟。指针在带上就停 —— 正在看这张的人不该被推走；只有一张、还没进树、或者一张都没有时也不走。
-    /// 每次调用都重新起算，所以人手翻一张之后是整整八秒。
+    /// 每次调用都重新起算，所以人手翻一张之后是整整一个设定好的停留时长（<see cref="_dwell"/>，设置 → 主页 →
+    /// 「封面轮换秒数」）；底下那道进度条跟着钟同起同停（悬停清零，移开重跑）。
+    /// <para>
+    /// **钟不是动画，不吃系统的动画开关**（2026-09-13「首页的轮播图貌似不会自己滚动了」：这台机器 Windows 的
+    /// 「动画效果」是关的，而 v0.0.6 起这道闸里还站着一条 <c>AnimationsEnabled</c>，关动画的机器上钟永远起不来，
+    /// 八张剧照站成一张静画）。底下那道进度条同罪同免：同一天下午他点名「把下方那条线弄成进度条，跑满进度条
+    /// 就翻页」，而这条线在动画开关关着的机器上从前永远停在 0，看着就是一根死线 —— 它和钟是同一类东西，报的
+    /// 是「还剩几秒翻页」这个内容事实，不是装饰（<see cref="Play"/> 给它留了旁路）。真正的装饰 —— 换片的
+    /// 交叉淡入、字块抬升 —— 照旧跟着开关走。
+    /// </para>
     /// </summary>
     private void SyncTimer()
     {
@@ -630,20 +641,21 @@ public sealed partial class HomeBanner : UserControl
 
         _timer.Stop();
 
-        if (_slides.Count <= 1 || _hover || _focusWithin || !_active || !_uiSettings.AnimationsEnabled) return;
+        if (_slides.Count <= 1 || _hover || _focusWithin || !_active) return;
 
         _timer.Start();
+
         var board = new Storyboard();
         var countdown = new DoubleAnimation
         {
             From = 0,
             To = 1,
-            Duration = new Duration(HomeCarousel.Dwell)
+            Duration = new Duration(_dwell)
         };
         Storyboard.SetTarget(countdown, CountdownScale);
         Storyboard.SetTargetProperty(countdown, "ScaleX");
         board.Children.Add(countdown);
-        Play(board, () => CountdownScale.ScaleX = 1, "countdown");
+        Play(board, () => CountdownScale.ScaleX = 1, "countdown", followAnimationSwitch: false);
     }
 
     /// <summary>
@@ -674,7 +686,8 @@ public sealed partial class HomeBanner : UserControl
     /// </para>
     /// <para>
     /// 整条带都是自己的：继续观看从前「压在图的下半截上」，后来当过第一屏右边那一栏（那一栏 2026-09-08 随着
-    /// 「移除轮播图右边的媒体库」删掉了），所以字块和底边那排小横条不用让开谁。带宽就是整个页宽（HomePage 标记
+    /// 「移除轮播图右边的媒体库」删掉了），所以字块不用让开谁 —— 底边那排分页横条从前也站在这条带上，
+    /// 2026-09-13「删除封面中心下方的那个组件」整个删了。带宽就是整个页宽（HomePage 标记
     /// 里那一条负的上边距把带子顶到窗口的顶边）—— 2026-09-10 到 09-11 之间它曾经是「页宽减四边各 24」，那一条
     /// 随「占满窗口的上半部分（包括窗口标题）」作废。
     /// </para>
@@ -705,14 +718,13 @@ public sealed partial class HomeBanner : UserControl
         Info.Spacing = height < 360 ? 8 : 12;
         LogoImage.MaxHeight = height < 360 ? 32 : 44;
         TitleText.MaxLines = height >= 440 ? 2 : 1;
-        SynopsisRow.Visibility = height < 340 ? Visibility.Collapsed : Current?.SynopsisVisibility ?? Visibility.Collapsed;
-        SlideStatus.Visibility = _slides.Count > 1 && width >= 800 ? Visibility.Visible : Visibility.Collapsed;
+        SynopsisRow.Visibility = SynopsisVisibility(Current?.SynopsisVisibility ?? Visibility.Collapsed);
+        SyncSlideStatus();
 
         Fade.Margin = new Thickness(0, 0, 0, 0);
         Fade.Width = Math.Min(width, InfoInset + Info.MaxWidth + ScrimBreath);
 
-        Info.Margin = new Thickness(InfoInset, 0, 0, 0);
-        Dots.Margin = new Thickness(0, 0, 0, DotsBaseline);
+        PlaceInfo();
     }
 
     /// <summary>
@@ -724,9 +736,6 @@ public sealed partial class HomeBanner : UserControl
 
     /// <summary>字块离带子左沿多远。见标记里 Info 那一段：让开的是翻页箭头那条窄栏。</summary>
     private const double InfoInset = 60;
-
-    /// <summary>底边那排小横条离带子下沿多远。它是这条带自己的控件，不是画面的一部分，所以不跟着谁走。</summary>
-    private const double DotsBaseline = 18;
 
     // ---- 事件 -------------------------------------------------------------------
 
@@ -930,8 +939,8 @@ public sealed partial class HomeBanner : UserControl
     /// 下抛，也是这一句挡着的 —— 那本词典里只有画刷。
     /// </para>
     /// <para>
-    /// 剩下那几件是屏上的行为里 Core 摸不到的部分：一张都没有时整条带收起来、底边那排横条造得出来且亮在对的那
-    /// 根、带高按页宽落到布局上、**外面一圈圆角发丝框**（「弄个框把轮播图框起来（圆角）」，2026-09-10）、
+    /// 剩下那几件是屏上的行为里 Core 摸不到的部分：一张都没有时整条带收起来、带高按页宽落到布局上、
+    /// **外面一圈圆角发丝框**（「弄个框把轮播图框起来（圆角）」，2026-09-10）、
     /// **两层剧照 <c>UniformToFill</c> 撑满整格**（「去掉首页封面轮播图的黑边」，2026-09-11 —— 判的是拉伸方式、
     /// 对齐和「尺寸正好是 Band 的内沿」三样，因为这三样少一样，屏上就回到「图比带子窄、一边露底色」那一版）、
     /// **字块竖向居左而徽标是它的第一行**（2026-09-05「移到左下角，然后把徽标移到剧名上面」、2026-09-10 居中）、
@@ -939,24 +948,16 @@ public sealed partial class HomeBanner : UserControl
     /// 透明，见 <see cref="Melts"/>），加下、右两条只压边缘的（「给轮播页面边缘加上黑色的渐变」，2026-09-05，判的
     /// 是每一层的形状而不是层数，见 <see cref="Rims"/>）、翻页箭头和字块不在同一列、两层剧照真的轮着上。字块那段
     /// 错拍动画顺带跑一遍，故事板里哪个目标是空的就在这里抛，而不是等到主页第一次换幻灯片。
+    /// 底边那排分页横条 2026-09-13 整个删了（「删除封面中心下方的那个组件」），它那几判随元件一起退役。
     /// </para>
     /// </summary>
     internal static (bool Ok, string Detail) Probe()
     {
         var banner = new HomeBanner();
 
-        // 一张都没有：整条带收起来（主页顶上不留一条空黑带），钟不走，横条一根也不造。
+        // 一张都没有：整条带收起来（主页顶上不留一条空黑带），钟不走。
         banner.Apply([]);
-        var quiet = banner.Visibility == Visibility.Collapsed && banner.Dots.Children.Count == 0 && !banner.Ticking;
-
-        // 三张造三根，第二根亮着。颜色是按键从 Resources 里取的，所以这一段也是那两个键的解析。
-        banner.BuildDots(3);
-        banner.Mark(1);
-        var dots = banner.Dots.Children.Count == 3 && banner.BarOn(1) && !banner.BarOn(0) && !banner.BarOn(2);
-
-        // 只有一张时整排不要：「第 1 张，共 1 张」是句废话。
-        banner.BuildDots(1);
-        var lonely = banner.Dots.Visibility == Visibility.Collapsed;
+        var quiet = banner.Visibility == Visibility.Collapsed && !banner.Ticking;
 
         // 带高落到布局上，而不只是算出来：扩展到原快捷区域后，1100 宽的封面为 470 高。
         // 这份控件没有 XamlRoot，量不到一屏有多高，所以那道「不超过一屏」的封顶这一趟不参与。
@@ -1012,11 +1013,10 @@ public sealed partial class HomeBanner : UserControl
             && Inked(banner.SynopsisRow, banner.SynopsisInk, banner.SynopsisText);
 
         // 字块 2026-09-10 竖向居中：顶距这一份没有了（对齐说了话），左右两份还在 —— 左边距让开箭头那条窄栏，
-        // 字块自己的上下 Margin 该是 0。底边那排小横条照旧自己贴着下沿，各守各的边距。
+        // 字块自己的上下 Margin 该是 0。
         var placed = Math.Abs(banner.Info.Margin.Left - InfoInset) < 0.01
             && Math.Abs(banner.Info.Margin.Top) < 0.01
-            && Math.Abs(banner.Info.Margin.Bottom) < 0.01
-            && Math.Abs(banner.Dots.Margin.Bottom - DotsBaseline) < 0.01;
+            && Math.Abs(banner.Info.Margin.Bottom) < 0.01;
 
         // 带上四层黑渐变，各判各的形状。左边那道渐变幕（2026-09-10）：从带子自己的左沿起（Margin.Left 是 0）、
         // 宽按「字块左沿 + 字块最宽 + ScrimBreath」算（Width 是 Resize 按这笔账写的，这里再对一遍）—— 而且左头
@@ -1073,12 +1073,11 @@ public sealed partial class HomeBanner : UserControl
         banner.Rise();
         var risen = banner.TitleRow.Opacity == 1 && banner.TitleShift.Y == 0 && banner.ActionsShift.Y == 0;
 
-        var ok = quiet && dots && lonely && tall && framed && filled && corners && inked
+        var ok = quiet && tall && framed && filled && corners && inked
             && placed && bare && layered && risen && apart;
 
         return (ok,
             $"没有幻灯片时{(quiet ? "整条带收起、钟不走" : "带还在屏上或钟在走")}；"
-                + $"横条 3 根亮第 2 根{(dots ? "" : "（不对）")}、1 张时整排{(lonely ? "收起" : "还在")}；"
                 + $"带高＝带宽×{HomeCarousel.BandHeightShare:0%}÷16×9（上限一屏、下限 {HomeCarousel.MinHeight:0}）："
                 + $"带宽 1100→{height:0}；"
                 + (framed
@@ -1095,8 +1094,8 @@ public sealed partial class HomeBanner : UserControl
                     ? $"四行字底下各一层跟着字形走的影子（模糊 {TextInk.SmallBlur:0}，片名那行 {TextInk.TitleBlur:0}）；"
                     : "字底下那层影子的宿主不在字前面（影子会盖在字上）；")
                 + (placed
-                    ? $"字块离左沿 {InfoInset:0}、上下零边距（竖向居中由对齐管），小横条离下沿 {DotsBaseline:0}"
-                    : "字块的左右边距或小横条的下边距不对")
+                    ? $"字块离左沿 {InfoInset:0}、上下零边距（竖向居中由对齐管）"
+                    : "字块的左右边距或上下边距不对")
                 + "；"
                 + $"画面上的暗罩 {scrims.Count} 层"
                 + (bare
@@ -1111,7 +1110,7 @@ public sealed partial class HomeBanner : UserControl
                 + $"两层剧照{(layered ? "轮着上，同一张不重来" : "没换过位置")}；"
                 + $"五行错 {Stagger.TotalMilliseconds:0} 毫秒、{Lift.TotalMilliseconds:0} 毫秒抬起 {TextDrop:0} 像素"
                 + $"{(risen ? "后落定" : "但没落定")}，换图 {CrossFade.TotalMilliseconds:0} 毫秒；"
-                + $"没人碰时每 {HomeCarousel.Dwell.TotalSeconds:0} 秒走一张，最多 {HomeCarousel.Slots} 张");
+                + $"没人碰时每 {banner._dwell.TotalSeconds:0} 秒走一张（设置 → 主页 → 封面轮换秒数），最多 {HomeCarousel.MaxSlots} 张");
     }
 
     /// <summary>
@@ -1202,11 +1201,10 @@ public sealed partial class HomeBanner : UserControl
     /// 自检用：这条带在真页面上的读数。<see cref="Probe"/> 拿假图证规则，这一句证的是规则之外的事 ——
     /// 带在 <c>ScrollView</c> 的竖排里真量到了宽度、那个宽度真变成了高度、台上那张的剧照真解码进了前面那层。
     /// 少一样，屏上就是一条空带，而 <see cref="HomeViewModel.BannerSummary"/> 报的张数照旧好看。
-    /// <para>
-    /// 字块竖向居中之后「它有没有超出带子」只有屏上量得出来：报字块的高和「带高 − 字块高」上下各摊的一半。
-    /// 这一位变成负数，就是简介和按键那一头伸出带的下沿、压到底边那排小横条上（下限 240 那一档正是这样，
-    /// 所以它继续报）。
-    /// </para>
+/// <para>
+/// 字块竖向居中之后「它有没有超出带子」只有屏上量得出来：报字块的高和「带高 − 字块高」上下各摊的一半。
+/// 这一位变成负数，就是简介和按键那一头伸出带的下沿（下限 240 那一档正是这样，所以它继续报）。
+/// </para>
     /// <para>
     /// 带自己的形状也报作诊断：剧照铺满整条带，图按自己的比例放大到盖住整格、多出来的一截对半裁掉 —— 这一句把
     /// 「原图的比例进这条带要裁掉多少」算出来（16:9 进 2.96:1 是上下各两成，屏上那一版就是他说的没有黑边了）。
@@ -1378,10 +1376,6 @@ public sealed partial class HomeBanner : UserControl
 
         static bool Same(double left, double right) => Math.Abs(left - right) < 0.01;
     }
-
-    /// <summary>自检用：第几根横条亮着 —— 这条规则在屏上唯一看得见的结果就是那两个画刷。</summary>
-    private bool BarOn(int index) =>
-        index >= 0 && index < _bars.Count && ReferenceEquals(_bars[index].Background, Resources["EgBannerDotOnBrush"]);
 
     /// <summary>自检用：一层剧照那支背景画刷的拉伸方式。标记里写死的，所以取不到就抛。</summary>
     private static Stretch BrushStretch(Panel layer) => Brush(layer).Stretch;

@@ -277,6 +277,40 @@ internal static class SettingsTests
             Assert.Equal(original.DeviceId, loaded.DeviceId, "设备 ID 不能每次启动都变");
         });
 
+        // 「在设置中新增一个开始播放后自动全屏的功能」／「在设置中新增功能，打开后点击播放后弹出一个独立窗口
+        // 来播放」（用户的话，2026-09-13）。两个开关都是「加在旧文件上」的那一类：装机默认关，所以一条迁移都
+        // 不需要 —— 缺键读出来就是关，行为一个像素都不变。这三条钉的正是那件事，加上「开了要记得住」。
+        Test("播放行为：两个新开关出厂是关的，而且旧的设置文件里没有它们", () =>
+        {
+            var fresh = SettingsMigration.NewDefaults();
+            Assert.False(fresh.Playback.AutoFullscreenOnPlayback, "开始播放后自动全屏默认关 —— 没动过这一行的人行为不该变");
+            Assert.False(fresh.Playback.SeparateWindowPlayback, "用独立窗口播放默认关 —— 同上");
+
+            // 一份没有这两个键的文件（也就是任何一份 v14 及以前的 settings.json）。缺键＝装机默认，这是
+            // 「不必加迁移」这句话的全部依据，所以它值得一条断言而不是一句注释。
+            var older = SettingsMigration.FromJson(
+                "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
+                    + ",\"Playback\":{\"AutoPlayNextEpisode\":true}}",
+                Protector);
+
+            Assert.False(older.Playback.AutoFullscreenOnPlayback);
+            Assert.False(older.Playback.SeparateWindowPlayback);
+        });
+
+        Test("播放行为：两个新开关开着能记住", () =>
+        {
+            var original = SettingsMigration.NewDefaults();
+            original.Playback.AutoFullscreenOnPlayback = true;
+            original.Playback.SeparateWindowPlayback = true;
+
+            var loaded = SettingsMigration.FromJson(
+                JsonSerializer.Serialize(original, SettingsSerializer.WriteOptions),
+                Protector);
+
+            Assert.True(loaded.Playback.AutoFullscreenOnPlayback, "开了就得记住，不然每次开机都要重开");
+            Assert.True(loaded.Playback.SeparateWindowPlayback, "同上");
+        });
+
         Test("迁移：中文写进文件时不该变成 \\uXXXX", () =>
         {
             var settings = SettingsMigration.NewDefaults();

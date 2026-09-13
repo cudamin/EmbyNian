@@ -447,10 +447,12 @@ internal static class ItemDetailTests
 
     private static void RegisterSources()
     {
-        Test("媒体源：名字优先，其次文件名，都没有才说默认", () =>
+        Test("媒体源：名字优先，其次文件名，都没有才说默认；名字后面不再拖画质", () =>
         {
+            // Container 留在夹具里：这一行曾经以「· MKV」结尾（「媒体源的选项太长了」，2026-09-13 摘掉），
+            // 有它在才能钉住「有名字就不追加画质」而不只是「碰巧没有画质可追加」。
             var named = new MediaSource { Name = "导演剪辑版", Container = "mkv" };
-            Assert.Equal("导演剪辑版  ·  MKV", ItemDetail.SourceLabel(named));
+            Assert.Equal("导演剪辑版", ItemDetail.SourceLabel(named));
 
             var byPath = new MediaSource { Path = @"\\nas\films\Arrival.2016.2160p.mkv" };
             Assert.Equal("Arrival.2016.2160p.mkv", ItemDetail.SourceLabel(byPath));

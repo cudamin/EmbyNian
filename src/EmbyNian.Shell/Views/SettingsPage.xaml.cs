@@ -76,7 +76,7 @@ public sealed partial class SettingsPage : Page, IShellContent
     internal bool IsReady => ViewModel.IsReady;
 
     /// <summary>
-    /// 页头右上角那颗「恢复默认」。自检从这儿认它 —— 它不在卡片那一叠里，行数、模板、渲染那几个读数一个
+    /// 设置列表最下面那颗「恢复默认」。自检从这儿认它 —— 它不在卡片那一叠里，行数、模板、渲染那几个读数一个
     /// 都不会提到它，而它按下去做的事是整页最重的一件（见 ShellSelfCheck.Settings 的那一关）。字段是
     /// XAML 为 x:Name 生成的 private，所以包一层；UIA 的 AutomationId 也是这个名字。
     /// </summary>

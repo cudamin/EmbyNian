@@ -786,63 +786,26 @@
 
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <!--
-          **页头那块场记板（PageSlate）2026-09-11 删掉了** —— 他一句「去掉左上角的这些，不要留空位」，问定的
-          是「六个有它的页面全去掉、页头里那几颗按钮收成顶上一行、内容整体上移」。这一页原来站着「设置」加
-          底下一行「SETTINGS · 改动即时保存」加一条通栏线，而这一页是整棵界面里唯一一个自己就是一个窗口的
-          页面，窗口标题栏上已经写着「设置」—— 那三行说的都是同一件事。删掉之后左边那一列分类直接顶到最上面。
-        -->
-        <Grid ColumnSpacing="24" Margin="0,0,0,12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Spacing="8">
-                <TextBlock x:Uid="SettingsPage_Title" Style="{StaticResource EgPageTitleStyle}" />
-                <TextBlock x:Uid="SettingsPage_Intro" Style="{StaticResource EgCaptionStyle}" />
-            </StackPanel>
-            <!--
-              「恢复默认」。原先它自己占一张卡（左边名单里的一个分类），那张卡在设置窗口里第七行就到底，
-              拍出来只剩半行 —— 2026-09-06 按他一句「恢复默认按钮移到右上角，下方的恢复默认页面删除」
-              搬进页头这一格，卡和分类一起删了。页头 2026-09-11 删掉之后它照旧站在页面右上角 —— 一整页
-              里最靠上的位置，比任何一张卡都够得着。
-
-              命令是视图模型的 ResetCommand（AsyncRelayCommand 在跑的时候自己把按钮置灰，连按两下不会
-              叠出两个对话框）。字和指针停上去那句说明从词表来（SettingsPage_ResetButton）—— 卡删了之后，
-              按下之前屏上把「服务器和账号不动」说清楚的地方就是那句说明，所以自检盯着它。
-            -->
-            <Button
-                x:Name="SettingsResetButton"
-                x:Uid="SettingsPage_ResetButton"
-                Grid.Column="1"
-                VerticalAlignment="Center"
-                Command="{x:Bind ViewModel.ResetCommand}"
-                Style="{StaticResource EgSecondaryButtonStyle}" />
-        </Grid>
-
-        <!--
-          这一页从前没有任何一处能对用户说话 —— 六十行都是「改一下就存」，本来也无话可说。「恢复默认设置」
-          是第一件需要回话的事：屏上多半看得出来（配色可能整套换了），可本来就都在默认值上的人按一下会什么都
-          看不见，而一颗看起来没反应的按钮，下一步就是再按一遍。
-
-          IsOpen 双向，同别处：关掉这一条要记下来，不然下一句话开不出来。Visibility 也绑上 —— InfoBar 关着的
-          时候只把里面的东西收起来，控件自己还是 Visible，那 12 的下边距会一直占着一行谁也看不见的空。
+          **页头整个没有了**（用户的话，2026-09-13：「把设置页面左上角的标题栏的图标和设置字样去掉」「删除
+          设置页面左上角的打造你的观影方式……这些字」）。那一格 2026-09-11 删过一次场面（PageSlate 场记板），
+          剩下「打造你的观影方式」加一行小字站在左上角；这一次连字带格子全删 —— 分类那一列和「恢复默认」
+          之外的什么都不剩，内容直接顶到最上面。窗口标题栏（SettingsWindow）同日也摘了图标和字样，左上角
+          从外到里都是空的。
         -->
         <InfoBar
-            Grid.Row="1"
+            Grid.Row="0"
             IsClosable="True"
             IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
-            Margin="0,12,0,0"
             Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
             Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
             Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
             Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
 
-        <Grid x:Name="SettingsBody" Grid.Row="2" Margin="0,12,0,0" ColumnSpacing="24">
+        <Grid x:Name="SettingsBody" Grid.Row="1" Margin="0,12,0,0" ColumnSpacing="24">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="SettingsNavColumn" Width="180" />
                 <ColumnDefinition Width="*" />
@@ -912,56 +875,78 @@
                 <ScrollView
                     VerticalScrollBarVisibility="Auto"
                     Visibility="{x:Bind ViewModel.CardsVisibility, Mode=OneWay}">
-                    <ItemsControl ItemsSource="{x:Bind ViewModel.Sections, Mode=OneWay}" MaxWidth="900">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <!--
-                                  外层面板的间距必须是 0。分类切换把没选中的卡折进 Visibility.Collapsed，但
-                                  ItemsControl 给每项包的占位容器（ContentPresenter）不跟着折叠 —— 零高、可见，
-                                  StackPanel 的 Spacing 照样在它前面垫一次：36 × 隐藏卡张数的空白就是这么来的
-                                  （「关于」第九张 = 8 × 36 = 288px，2026-09-06 截图实量 y=416 对上）。分组之间
-                                  的 36 由模板根上的下外边距承担 —— 折叠时边距跟着内容一起归零，才是真不占位。
-                                -->
-                                <StackPanel Spacing="0" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:SettingSection">
-                                <!--
-                                  **这一层从「一张卡」变成了「一个分组」**（2026-09-06 按 WinUI-Gallery 那套
-                                  重排）。从前它是一张带底色、带细边、圆角 8 的大卡，里面一叠没有边界的行；
-                                  现在每一行自己是一张卡（EgSettingRowStyle），而这一层只剩牌子、说明和那一叠
-                                  行 —— 底色、边框、圆角、内边距全部撤掉。
-                                  **理由是卡不该套卡**：Gallery 的设置页没有外面这一层，而两层圆角套在一起，
-                                  外层那圈边就成了一条谁都解释不了的线；真做出来的样子是「一叠卡浮在一张卡上」。
-                                  外层撤掉之后，这一叠行左右直接对齐页边（EgPageMargin 的 24），和别的页面一样。
-                                -->
-                                <StackPanel Spacing="12" Margin="0,0,0,36" Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
+                    <StackPanel>
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.Sections, Mode=OneWay}" MaxWidth="900">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
                                     <!--
-                                      设置分组的牌子和卡片带的牌子是同一块木头（local:ShelfHead）：分区标题、
-                                      右端一个等宽读数、底下一条通栏发丝线。这一页原先自己写了个标题 —— 只有
-                                      字号和 SemiBold、没写字体，于是每张卡片的名字比媒体库那些带子的名字大
-                                      一点，而且是另一种字；那条线也没有，八张卡片全靠间距分家。
+                                      外层面板的间距必须是 0。分类切换把没选中的卡折进 Visibility.Collapsed，但
+                                      ItemsControl 给每项包的占位容器（ContentPresenter）不跟着折叠 —— 零高、可见，
+                                      StackPanel 的 Spacing 照样在它前面垫一次：36 × 隐藏卡张数的空白就是这么来的
+                                      （「关于」第九张 = 8 × 36 = 288px，2026-09-06 截图实量 y=416 对上）。分组之间
+                                      的 36 由模板根上的下外边距承担 —— 折叠时边距跟着内容一起归零，才是真不占位。
                                     -->
-                                    <local:ShelfHead Note="{x:Bind Count}" Title="{x:Bind Title}" />
-                                    <TextBlock
-                                        Style="{StaticResource EgSettingNote}"
-                                        Text="{x:Bind Description}" />
-                                    <ItemsControl
-                                        ItemTemplateSelector="{StaticResource EgSettingRows}"
-                                        ItemsSource="{x:Bind Rows}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <!-- 4，不是 10：行与行之间现在有两条细边和两块底色在分家，
-                                                     再留 10 就是一叠互不相干的砖头。Gallery 那套也是这个数。 -->
-                                                <StackPanel Spacing="4" />
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                    </ItemsControl>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                                    <StackPanel Spacing="0" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SettingSection">
+                                    <!--
+                                      **这一层从「一张卡」变成了「一个分组」**（2026-09-06 按 WinUI-Gallery 那套
+                                      重排）。从前它是一张带底色、带细边、圆角 8 的大卡，里面一叠没有边界的行；
+                                      现在每一行自己是一张卡（EgSettingRowStyle），而这一层只剩牌子、说明和那一叠
+                                      行 —— 底色、边框、圆角、内边距全部撤掉。
+                                      **理由是卡不该套卡**：Gallery 的设置页没有外面这一层，而两层圆角套在一起，
+                                      外层那圈边就成了一条谁都解释不了的线；真做出来的样子是「一叠卡浮在一张卡上」。
+                                      外层撤掉之后，这一叠行左右直接对齐页边（EgPageMargin 的 24），和别的页面一样。
+                                    -->
+                                    <StackPanel Spacing="12" Margin="0,0,0,36" Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
+                                        <!--
+                                          设置分组的牌子和卡片带的牌子是同一块木头（local:ShelfHead）：分区标题、
+                                          右端一个等宽读数、底下一条通栏发丝线。这一页原先自己写了个标题 —— 只有
+                                          字号和 SemiBold、没写字体，于是每张卡片的名字比媒体库那些带子的名字大
+                                          一点，而且是另一种字；那条线也没有，八张卡片全靠间距分家。
+                                        -->
+                                        <local:ShelfHead Note="{x:Bind Count}" Title="{x:Bind Title}" />
+                                        <TextBlock
+                                            Style="{StaticResource EgSettingNote}"
+                                            Text="{x:Bind Description}" />
+                                        <ItemsControl
+                                            ItemTemplateSelector="{StaticResource EgSettingRows}"
+                                            ItemsSource="{x:Bind Rows}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <!-- 4，不是 10：行与行之间现在有两条细边和两块底色在分家，
+                                                         再留 10 就是一叠互不相干的砖头。Gallery 那套也是这个数。 -->
+                                                    <StackPanel Spacing="4" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!--
+                          「恢复默认」。原先它自己占一张卡（左边名单里的一个分类），2026-09-06 按他一句「恢复默认
+                          按钮移到右上角，下方的恢复默认页面删除」搬进页头；2026-09-13 页头整个删掉（「把设置
+                          页面左上角的标题栏的图标和设置字样去掉」），它落到设置列表的最下面 —— 滚到头就是它，
+                          和每一张卡同一条左沿线、同一个宽度上限。破坏性的那一档摆在清单末尾，是从上读到下的人
+                          最后才遇到的东西。
+
+                          命令是视图模型的 ResetCommand（AsyncRelayCommand 在跑的时候自己把按钮置灰，连按两下不会
+                          叠出两个对话框）。字和指针停上去那句说明从词表来（SettingsPage_ResetButton）—— 卡删了之后，
+                          按下之前屏上把「服务器和账号不动」说清楚的地方就是那句说明，所以自检盯着它。
+                        -->
+                        <Grid MaxWidth="900" Margin="0,4,0,8">
+                            <Button
+                                x:Name="SettingsResetButton"
+                                x:Uid="SettingsPage_ResetButton"
+                                HorizontalAlignment="Left"
+                                Command="{x:Bind ViewModel.ResetCommand}"
+                                Style="{StaticResource EgSecondaryButtonStyle}" />
+                        </Grid>
+                    </StackPanel>
                 </ScrollView>
 
                 <!-- Transitions cleared for the same reason the shell's frame clears them (requirement 9). -->

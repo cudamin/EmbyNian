@@ -110,7 +110,10 @@ internal sealed class SettingsWindow
                 font is FontFamily family)
                 frame.FontFamily = family;
 
-            var window = new Window { Title = "设置", Content = frame };
+            // 标题不设（用户 2026-09-13「把设置页面左上角的标题栏的图标和设置字样去掉」）：这一页自己
+            // 就是一个窗口，从前的「设置」两个字写在系统标题栏上 —— 现在左上角只留一条配好色的空栏，
+            // 图标在 <see cref="PaintCaption"/> 里摘。任务栏上那一格照旧有字（进程名兜着），只有标题栏是空的。
+            var window = new Window { Content = frame };
 
             Place(window, owner);
             PaintCaption(window);
@@ -261,6 +264,14 @@ internal sealed class SettingsWindow
 
             var corners = Native.DwmCornerRound;
             Native.DwmSetWindowAttribute(handle, Native.DwmWindowCornerPreference, ref corners, sizeof(int));
+
+            // 左上角那颗应用图标不要（用户 2026-09-13「把设置页面左上角的标题栏的图标和设置字样去掉」）。
+            // AppWindow 从 exe 的资源里自己把图标装上，画刷和 TitleBar 的属性都够不到它 —— 只有 WM_SETICON
+            // 发一个空句柄能把它从标题栏上摘下来，大小两档都要（标题栏画的是小档，Alt-Tab 和任务栏读大档；
+            // 这里只管标题栏，任务栏那一格用窗口类自己的图标兜底，不受影响）。字样那一半在 TryCreate 里：
+            // 标题从一开始就没有设。
+            Native.SendMessage(handle, Native.WmSetIcon, (IntPtr)0, IntPtr.Zero);
+            Native.SendMessage(handle, Native.WmSetIcon, (IntPtr)1, IntPtr.Zero);
 
             var titleBar = window.AppWindow.TitleBar;
             if (titleBar is null) return;

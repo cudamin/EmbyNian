@@ -372,6 +372,20 @@ public sealed partial class SettingsViewModel : PageViewModel
             Toggle("从服务器保存的位置继续", "关掉后每次都从片头放起", () => playback.ResumeFromSavedPosition, value => playback.ResumeFromSavedPosition = value),
             Toggle("询问后再恢复播放", "关掉后不问，直接从上次停的地方接着放", () => playback.AskBeforeResuming, value => playback.AskBeforeResuming = value),
             Toggle("自动播放下一集", "一集放完自动接下一集，跨季也接着放", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
+
+            // 「在设置中新增一个开始播放后自动全屏的功能」／「在设置中新增功能，打开后点击播放后弹出一个独立
+            // 窗口来播放」（用户的话，2026-09-13）。两行都只影响「下一个播放怎么开始」，改完当场生效 ——
+            // 设置页里改这一下，播放器那一头下一次起播就认新的了（两张都是现读同一个设置），所以没有
+            // ShellPrefs 那一句：那个东西是给「已经摆在屏上的东西要重排」用的（主页、图片预算），这两行
+            // 底下没有已经摆着的东西要动。
+            Toggle("开始播放后自动全屏", "每开始放一部片子就自动进全屏，不用再按 F。只在开始播放那一下进，"
+                + "连播的下一集不会把你从全屏里顶出来，按 F 退出后也不会被下一集顶回去",
+                () => playback.AutoFullscreenOnPlayback, value => playback.AutoFullscreenOnPlayback = value),
+
+            Toggle("用独立窗口播放", "开着的时候点击播放会新开一个窗口放片子，主窗口留在原来那一页不动"
+                + "（可以一边挂着片子一边继续翻库）。关掉那个窗口就是停止播放。只有内置播放器认这个开关，"
+                + "用外部 mpv.exe 时它本来自己开窗",
+                () => playback.SeparateWindowPlayback, value => playback.SeparateWindowPlayback = value),
             Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
                 "放到这个百分比以上，这一条就算看过"),
             Number("快进跨度（秒）", 1, 600, () => playback.SeekForwardSeconds, value => playback.SeekForwardSeconds = value),
@@ -787,22 +801,76 @@ public sealed partial class SettingsViewModel : PageViewModel
                 ShellPrefs.Apply(ui);
             });
 
+        // 「新增在设置中设置轮播图要使用什么媒体，和要使用最近添加还是随机的还有数量的选项。还有封面的
+        // 轮换的秒数」（用户的话，2026-09-13）。四行照他点的名落：站哪一类、从哪来、几张、一张站几秒。
+        // 全部当场生效（ShellPrefs）：来源、媒体和张数是主页重新取数的事，秒数是那条带换钟的事 ——
+        // 改完不用回主页，也不用重启。
+        (string Label, Emby.CarouselMediaType Value)[] carouselMedia =
+        [
+            ("全部媒体", Emby.CarouselMediaType.All),
+            ("只看电影", Emby.CarouselMediaType.Movies),
+            ("只看剧集", Emby.CarouselMediaType.Series)
+        ];
+
+        (string Label, Emby.CarouselSource Value)[] carouselSource =
+        [
+            ("最近添加", Emby.CarouselSource.Recent),
+            ("随机挑选", Emby.CarouselSource.Random)
+        ];
+
         return new SettingSection("主页", "主页", "顶上那张轮播大图，以及主页上那几排的次序和显示与否，包括每个"
             + "媒体库自己那一排。",
         [
-            // 「在设置中新增关闭轮播图的功能」（用户的话，2026-09-05）。摆在拖拽表上面，因为它管的是整个第一屏：
-            // 关掉之后顶上那张大图整个没有，那张表里的每一排照旧横着排在各自的位置上。
-            // 改完当场喊一声（ShellPrefs），主页那一头照新的重排 —— 和那张表走同一条路。
+            // 「在设置中新增关闭轮播图的功能」（用户的话，2026-09-05）。摆在四行轮播设置和拖拽表上面，
+            // 因为它管的是整个第一屏：关掉之后顶上那张大图整个没有，那张表里的每一排照旧横着排在各自的
+            // 位置上。改完当场喊一声（ShellPrefs），主页那一头照新的重排 —— 和下面几行走同一条路。
             Toggle("显示主页轮播大图",
                 "主页最上面那张会自己走的大图。开着的时候它是一块四边留白的大卡片，剧照铺满整张卡、下面那几排"
                     + "接在它下面（第一屏里就看得见）；关掉之后这张图整个没有，整页就是一叠横着排的普通货架。"
-                    + "大图上放哪几个条目不用选：有继续观看就用继续观看，不够时由最近添加补齐。",
+                    + "大图上放哪些条目，由下面四行轮播设置说了算。",
                 () => ui.ShowHomeBanner,
                 value =>
                 {
                     ui.ShowHomeBanner = value;
                     ShellPrefs.Apply(ui);
                 }),
+
+            Choice("轮播图用什么媒体", carouselMedia,
+                () => ui.CarouselMedia,
+                value =>
+                {
+                    ui.CarouselMedia = value;
+                    ShellPrefs.Apply(ui);
+                },
+                "顶上那张大图站哪一类。音乐类从不出现在轮播里"),
+
+            Choice("轮播图条目来源", carouselSource,
+                () => ui.CarouselSource,
+                value =>
+                {
+                    ui.CarouselSource = value;
+                    ShellPrefs.Apply(ui);
+                },
+                "最近添加按服务器记录的入库时间从新到旧；随机挑选拿到的是服务器随手给的一批，回到主页就可能换一批"),
+
+            Number("轮播图张数", Emby.HomeCarousel.MinSlots, Emby.HomeCarousel.MaxSlots,
+                () => ui.CarouselCount,
+                value =>
+                {
+                    ui.CarouselCount = value;
+                    ShellPrefs.Apply(ui);
+                },
+                $"这条带最多摆几张，{Emby.HomeCarousel.MinSlots}–{Emby.HomeCarousel.MaxSlots}。"
+                    + "筛掉没有宽图的条目之后可能不足这个数"),
+
+            Number("封面轮换秒数", Emby.HomeCarousel.MinDwellSeconds, Emby.HomeCarousel.MaxDwellSeconds,
+                () => ui.CarouselSeconds,
+                value =>
+                {
+                    ui.CarouselSeconds = value;
+                    ShellPrefs.Apply(ui);
+                },
+                "一张封面站多少秒再换下一张，指针停在带上的时候不计时"),
 
             HomeRows
         ]);
@@ -957,7 +1025,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         rows.Add(Fact("退出全屏 / 停止", "固定，不可更改", "Esc"));
         rows.Add(Fact("确认跳过片头 / 片尾", "固定，不可更改；只在出现跳过提示时有效", "Y"));
 
-        // 只清快捷键、不动别的（页头那颗「恢复默认」清的是全部设置，作用域比这颗宽）。
+        // 只清快捷键、不动别的（列表最下面那颗「恢复默认」清的是全部设置，作用域比这颗宽）。
         rows.Add(Fact("恢复默认快捷键", "把上面这些快捷键改回装机时的默认，其他设置不受影响",
             $"{ShortcutCatalog.Actions.Count} 个可改快捷键", "恢复默认", ClearAllShortcuts));
 
@@ -1058,7 +1126,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 页头右上角那颗「恢复默认」。按下去走 <see cref="RestoreDefaultsAsync"/>：先问一次，确认后把设置改回
+    /// 设置列表最下面那颗「恢复默认」。按下去走 <see cref="RestoreDefaultsAsync"/>：先问一次，确认后把设置改回
     /// 装机值。按钮上的字和指针停上去那句说明在 <c>Strings\zh-Hans\Resources.resw</c>
     /// （SettingsPage_ResetButton）—— 卡删了之后，按下之前屏上把「服务器和账号不动」说清楚的地方就是
     /// 那句说明，所以自检盯着它（见 ShellSelfCheck.Settings 的那一关）。
@@ -1066,7 +1134,9 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// <b>它原先自己占一张卡</b>：「恢复默认」分类下唯一一行，为一行开一张卡的理由是「够不着」—— 它最先是
     /// 「关于」卡的第八行，那张卡在设置窗口里第七行就到底，屏上根本看不见。2026-09-06 按他一句
     /// 「恢复默认按钮移到右上角，下方的恢复默认页面删除」搬进页头（PageSlate 的 Trailing 格），卡和左边名单
-    /// 里的分类一起删了 —— 页头是整页最靠上的位置，比任何一张卡都够得着。
+    /// 里的分类一起删了 —— 页头是整页最靠上的位置，比任何一张卡都够得着。2026-09-13 页头整个删掉
+    /// （「把设置页面左上角的标题栏的图标和设置字样去掉」），它落到设置列表的最下面：滚到头就是它，
+    /// 破坏性的那一档摆在清单末尾。
     /// </para>
     /// <para>
     /// 命令是异步的，于是「问一次」这件事有地方等：<c>AsyncRelayCommand</c> 在跑的时候自己把按钮置灰，

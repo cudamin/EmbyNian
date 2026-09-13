@@ -453,8 +453,25 @@ public sealed partial class PlayerPage
     {
         if (_window is null) return;
 
-        _window.Fullscreen = !_window.Fullscreen;
-        FullscreenGlyph.Glyph = Glyph(_window.Fullscreen ? FullscreenExitCode : FullscreenEnterCode);
+        SetFullscreen(!_window.Fullscreen);
+    }
+
+    /// <summary>
+    /// 进／退全屏, said as a state rather than a flip. Two callers want it this way: the button and the F key
+    /// want the flip (<see cref="ToggleFullscreen"/>), and 开始播放后自动全屏 wants a plain 「进全屏」 that a
+    /// second call cannot undo — 「开播那一下按一次 toggle」 would be right only while the window happened not
+    /// to be fullscreen already, which is exactly the case a user in fullscreen for the last film is in.
+    /// <para>
+    /// Setting it to what it already is is nothing at all: <see cref="HostWindow.Fullscreen"/> returns early
+    /// on an unchanged value, and the glyph is written the same either way.
+    /// </para>
+    /// </summary>
+    internal void SetFullscreen(bool on)
+    {
+        if (_window is null) return;
+
+        _window.Fullscreen = on;
+        FullscreenGlyph.Glyph = Glyph(on ? FullscreenExitCode : FullscreenEnterCode);
         Render();
     }
 
