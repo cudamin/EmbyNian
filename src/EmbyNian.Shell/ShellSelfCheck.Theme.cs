@@ -236,6 +236,7 @@ internal static partial class ShellSelfCheck
         ("EgPageMargin", typeof(Thickness)),
         ("EgPanelPadding", typeof(Thickness)),
         ("EgCornerBadgeSize", typeof(double)),
+        ("EgCornerBadgeCornerRadius", typeof(CornerRadius)),
         ("EgProgressThickness", typeof(double)),
         ("EgActionHeight", typeof(double)),
         ("EgEyebrowStyle", typeof(Style)),

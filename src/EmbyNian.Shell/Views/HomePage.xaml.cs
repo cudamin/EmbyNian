@@ -148,6 +148,58 @@ public sealed partial class HomePage : Page, IShellContent
     internal (bool Ok, string Detail) LayoutRead() => ViewModel.LayoutRead();
 
     /// <summary>
+    /// 自检：屏上第一块点得动的牌子，门真的开着、这一排真的挂在它身上。这是 2026-09-14「继续观看点了没反应」
+    /// 那次排查里没人看的一格 —— 主页版面量数据（该带 › 的排都带）、货架牌子进库量独立控件（Offer 一开门就
+    /// 开），而「真树上那一块牌子」两头都没量：模板当时把这一排挂在 DataContext 上，而 ItemsRepeater + x:Bind
+    /// 的模板实例上 DataContext 是空的 —— 数据全对、控件全对，点击无声。
+    /// <para>
+    /// 量三样：大于号露出、点击面铺开（<c>Offer</c> 的两个落点），和 <c>ReferenceEquals(head.Tag, shelf)</c>
+    /// —— 最后这条就是修复本身（ShelfTemplate 的 <c>Tag="{x:Bind}"</c>）。DataContext 的读数只报不判：它在这
+    /// 套模板里就是空的，报出来是让谁哪天要是把它设上了，读数里看得见。
+    /// </para>
+    /// </summary>
+    /// <returns>屏上一块能进的排都没有时是 <see langword="null"/>（没数据的账号，跳过不判）。</returns>
+    internal (bool Ok, string Detail)? HeadOnScreen()
+    {
+        CardShelf? shelf = null;
+        var index = -1;
+
+        for (var i = 0; i < ViewModel.Shelves.Count; i++)
+        {
+            if (ViewModel.Shelves[i].CanOpen)
+            {
+                index = i;
+                shelf = ViewModel.Shelves[i];
+                break;
+            }
+        }
+
+        if (shelf is null) return null;
+
+        var panel = ShelfRepeater.TryGetElement(index) as StackPanel;
+        if (panel is null)
+        {
+            panel = ShelfRepeater.GetOrCreateElement(index) as StackPanel;
+            UpdateLayout();
+        }
+
+        if (panel is null) return (false, $"第 {index} 排（{shelf.Title}）没有可量的货架模板");
+
+        if (panel.Children.OfType<ShelfHead>().FirstOrDefault() is not { } head)
+            return (false, $"「{shelf.Title}」的货架上没有牌子");
+
+        var (glyphState, scopeState) = head.DoorState;
+        var glyph = glyphState == Visibility.Visible;
+        var scope = scopeState == Visibility.Visible;
+        var tagOk = ReferenceEquals(head.Tag, shelf);
+
+        return (glyph && scope && tagOk,
+            $"「{shelf.Title}」：大于号{(glyph ? "露着" : "收着")}、点击面{(scope ? "铺开" : "收着")}、"
+                + (tagOk ? "这一排挂在牌子上" : $"这一排没挂上（Tag 是 {head.Tag?.GetType().FullName ?? "空"}）")
+                + $"；DataContext 是 {head.DataContext?.GetType().FullName ?? "空"}");
+    }
+
+    /// <summary>
     /// 自检：轮播真铺满了窗口的上半部分 —— 左沿落在窗口左边（0）、右沿吃满窗口宽、上沿顶回到窗口顶边（也就是
     /// 把外壳留给标题栏的那 32 像素也吃掉，标题栏浮在剧照上）。「占满窗口的上半部分（包括窗口标题）」，2026-09-11。
     /// <para>
@@ -711,12 +763,32 @@ public sealed partial class HomePage : Page, IShellContent
 
     /// <summary>
     /// 2026-09-13：点「最近添加 · XXX」那一排的牌子（标题，或者它右端那个大于号）进那个库。
-    /// 挂着这一排的是 <c>ShelfTemplate</c> 里那块 <c>ShelfHead</c>，它把 <c>DataContext</c> 留在了
-    /// 这一排的 <see cref="CardShelf"/> 上，所以从那儿取回去。不是库的排出不来大于号，也就走不到这儿。
+    /// 这一排从牌子自己身上取（<c>ShelfTemplate</c> 里 <c>Tag="{x:Bind}"</c> 挂上去的），**不走
+    /// <c>DataContext</c>** —— ItemsRepeater + x:Bind 的模板实例上没人设过 DataContext（页面自己也没有），
+    /// 它永远是空的，模式匹配必败、点击无声。2026-09-14 用户点「继续观看」没反应，排查一整轮才落在这里：
+    /// 卡片那边（<see cref="OnCardClicked"/>）一直是好的，靠的是 <c>PosterCard.Card</c> 这条编译期通道，
+    /// 牌子照卡片抄、抄了一半。
+    /// <para>
+    /// 三种情形各留一行账：这一排「点了没反应」排查过一回（用户点了「继续观看」，外壳零日志，断点在点击与
+    /// 外壳之间），这三行就是为了下次再有同样的话，日志自己能说出断在哪一环 —— 点击到了没有、这一排认没
+    /// 认出来、认出来的那一排目标是什么。
+    /// </para>
     /// </summary>
     private void OnShelfHeadInvoked(object sender, EventArgs e)
     {
-        if (sender is ShelfHead { DataContext: CardShelf shelf }) ViewModel.OpenShelf(shelf);
+        if (sender is ShelfHead { Tag: CardShelf shelf })
+        {
+            Log.Info(Category, $"牌子点击：{shelf.Title}（目标 {shelf.Target}，可进 {shelf.CanOpen}）");
+            ViewModel.OpenShelf(shelf);
+        }
+        else if (sender is ShelfHead head)
+        {
+            Log.Warn(Category, $"牌子点击但认不出这一排：{head.Title}，Tag 是 {head.Tag?.GetType().FullName ?? "空"}");
+        }
+        else
+        {
+            Log.Warn(Category, $"牌子点击但 sender 不是牌子：{sender?.GetType().FullName ?? "空"}");
+        }
     }
 
     /// <summary>

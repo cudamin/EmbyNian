@@ -93,6 +93,13 @@ internal static partial class ShellSelfCheck
     private static (bool Ok, string Detail)? _stay;
 
     /// <summary>
+    /// 屏上第一块点得动的牌子门开没开、这一排挂没挂上（<see cref="HomePage.HeadOnScreen"/>）。跟着 stage 0
+    /// 一起快照 —— 这条必须在主页还在框里的时候量，Run 尾部外壳早就走到别处去了。屏上一块能进的排都没有时
+    /// 是 null（没数据的账号，跳过不判）。
+    /// </summary>
+    private static (bool Ok, string Detail)? _headOnScreen;
+
+    /// <summary>
     /// 那一条已经把焦点按到卡片上了没有。它分两拍：这一拍按，下一拍量 —— <c>StartBringIntoView</c> 是异步的，
     /// 同一拍里坏的那一版和好的那一版读出来一模一样。见 <see cref="HomePage.StayFocus"/>。
     /// </summary>
@@ -623,6 +630,7 @@ internal static partial class ShellSelfCheck
                 _cards ??= ReadCards(shell);
                 _menu ??= (shell.Pages.Content as HomePage)?.MenuRead();
                 _ink ??= ReadInk(shell, window);
+                _headOnScreen ??= (shell.Pages.Content as HomePage)?.HeadOnScreen();
 
                 // 多一拍：这一拍把焦点按到第一张卡上，下一拍才量这一页挪没挪。三个读数在按之前拿，所以焦点
                 // 那一下动不到它们。

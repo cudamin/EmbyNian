@@ -105,6 +105,12 @@
   <data name="CoverDialog_ContentDialog1.Title" xml:space="preserve">
     <value>修改媒体封面图</value>
   </data>
+  <data name="CoverPickerDialog_ContentDialog1.CloseButtonText" xml:space="preserve">
+    <value>算了</value>
+  </data>
+  <data name="CoverPickerDialog_ContentDialog1.PrimaryButtonText" xml:space="preserve">
+    <value>就用这张</value>
+  </data>
   <data name="DashboardPage_ButtonA1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>重新载入控制台</value>
   </data>

@@ -192,9 +192,6 @@ public sealed class PlaybackSettings
 
     public bool ResumeFromSavedPosition { get; set; } = true;
 
-    /// <summary>Ask before resuming instead of silently jumping into the middle of a file.</summary>
-    public bool AskBeforeResuming { get; set; } = true;
-
     /// <summary>Watched once playback passes this share of the runtime.</summary>
     public int MarkWatchedPercent { get; set; } = 90;
 

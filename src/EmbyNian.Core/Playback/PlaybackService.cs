@@ -191,12 +191,45 @@ public sealed class PlaybackService(
             handle = await backend.StartAsync(request, cancellationToken).ConfigureAwait(false);
             _current = handle;
             Subscribe(handle);
-            NowPlayingChanged?.Invoke(ticket.Item);
+            RaiseNowPlaying(ticket.Item);
 
             await ReportAsync("开始", client => client.ReportPlaybackStartAsync(
                 Build(request, playSessionId, ticket.StartTicks, false, null), cancellationToken)).ConfigureAwait(false);
 
-            var exit = await MonitorAsync(handle, request, playSessionId, ticket, cancellationToken).ConfigureAwait(false);
+            PlaybackExit exit;
+            try
+            {
+                exit = await MonitorAsync(handle, request, playSessionId, ticket, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 关窗那条路把 MonitorAsync 的令牌取消了，取消一抛出来，下面那句 FinishAsync 就整个被跳过：
+                // 服务器收不到「停止」、条目一直挂成「正在播放」，外部 mpv.exe 更是人在客户端没了它还在放 ——
+                // 恰是这个类注释里写着 v1 因此要重写的那件事，从取消这头又漏回来了。所以收尾照样走：请 mpv
+                // 停下来（等不到就杀），拿最后的位置装成一次普通的「用户叫停」，FinishAsync 的三处上报用的
+                // 都是 CancellationToken.None，取消之后仍发得出去。
+                try
+                {
+                    await handle.StopAsync().ConfigureAwait(false);
+                }
+                catch (Exception stopError)
+                {
+                    Log.Warn(Category, "收尾停止播放失败", stopError);
+                }
+
+                double? position = null;
+                try
+                {
+                    position = await handle.GetPositionAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception positionError)
+                {
+                    Log.Warn(Category, "收尾读取播放位置失败", positionError);
+                }
+
+                exit = new PlaybackExit(PlaybackEndReason.Stopped, position, 0, null);
+            }
+
             return await FinishAsync(exit, request, playSessionId, ticket).ConfigureAwait(false);
         }
         finally
@@ -205,7 +238,18 @@ public sealed class PlaybackService(
             if (handle is not null)
             {
                 Unsubscribe(handle);
-                await handle.DisposeAsync().ConfigureAwait(false);
+
+                // 清理不是播放结果。句柄释放失败从前会从这个 finally 里抛出去，一下坏三件事：它顶掉 try
+                // 里真正的结果或错误、跳过下面那几行清空、而且跳过最后那一句 _gate.Release() —— 也就是
+                // 上面那段注释描述的闸门泄漏，只是从另一头进来的。所以它只记一条日志。
+                try
+                {
+                    await handle.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception error)
+                {
+                    Log.Warn(Category, "释放播放句柄失败", error);
+                }
             }
 
             _launchOptions = [];
@@ -213,8 +257,37 @@ public sealed class PlaybackService(
             LaunchShaderProfile = null;
             LaunchShaderReason = null;
             LaunchQualityPreset = null;
-            NowPlayingChanged?.Invoke(null);
+            RaiseNowPlaying(null);
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 发「现在播的是谁」这一声，一个监听器一个监听器地发，谁抛了都不连累别人。
+    /// <para>
+    /// 裸的多播调用在第一个抛异常的监听器那里就停了，后面的一个都收不到；而结束那一声正好发在
+    /// <see cref="PlayAsync"/> 的 finally 里，从那儿抛出去的异常会顶掉这次播放真正的结果或错误，还会跳过它
+    /// 后面的每一行 —— 包括 <c>_gate.Release()</c>，于是此后每一次播放都在等一个永远不会放开的闸门。
+    /// </para>
+    /// <para>
+    /// 只有这一个事件这么发。它一次播放响两声，而 <see cref="StatusChanged"/> 一秒响很多次，
+    /// 为它每次都取一遍委托名单（<c>GetInvocationList</c> 每次新建一个数组）不划算。
+    /// </para>
+    /// </summary>
+    private void RaiseNowPlaying(EmbyItem? item)
+    {
+        if (NowPlayingChanged is not { } listeners) return;
+
+        foreach (var listener in listeners.GetInvocationList())
+        {
+            try
+            {
+                ((Action<EmbyItem?>)listener)(item);
+            }
+            catch (Exception error)
+            {
+                Log.Warn(Category, "「正在播放」通知失败", error);
+            }
         }
     }
 
@@ -264,10 +337,24 @@ public sealed class PlaybackService(
     // is best-effort: playback may end between the null check and the call, and a handle that
     // is being torn down must not be touched. All failures just leave the UI as it was.
 
-    public async Task SetPropertyAsync(string name, object? value)
+    public Task SetPropertyAsync(string name, object? value)
     {
         var handle = _current;
-        if (handle is null) return;
+        return handle is null ? Task.CompletedTask : SetPropertyAsync(handle, name, value);
+    }
+
+    /// <summary>
+    /// 写给<b>点名的那个句柄</b>，而且只在它还是当前这一次播放的时候写。
+    /// <para>
+    /// 成批地写不是一次写：字幕外观十一行、着色器档位一整条链，每一行都是一次 await，中间用户完全来得及
+    /// 切下一集。每一步都重新问一次「现在在播什么」的话，切集之后剩下那几行就写到了下一集身上 —— 上一部
+    /// 片子的字幕外观落在新片子上，而设置页显示的是新片子的值，正是这个项目栽过的「一个选项两个写手」。
+    /// 所以一批设置进门时认下句柄，一路认到底；句柄换了，这一批剩下的就地作废。
+    /// </para>
+    /// </summary>
+    private async Task SetPropertyAsync(IPlaybackHandle handle, string name, object? value)
+    {
+        if (!ReferenceEquals(_current, handle)) return;
 
         try
         {
@@ -296,7 +383,8 @@ public sealed class PlaybackService(
     /// </summary>
     public async Task ApplySubtitleStyleAsync()
     {
-        if (_current is null) return;
+        // 整批认这一个句柄，见 SetPropertyAsync(handle, …)：这中间有十一次 await，用户切得了集。
+        if (_current is not { } handle) return;
 
         var wanted = MpvOutputOptions.SubtitleAppearance(settings.Playback)
             .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
@@ -305,9 +393,9 @@ public sealed class PlaybackService(
         {
             var value = wanted.TryGetValue(name, out var chosen)
                 ? chosen
-                : await GetTextAsync($"option-info/{name}/default-value").ConfigureAwait(false);
+                : await GetTextAsync(handle, $"option-info/{name}/default-value").ConfigureAwait(false);
 
-            if (!string.IsNullOrEmpty(value)) await SetPropertyAsync(name, value).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(value)) await SetPropertyAsync(handle, name, value).ConfigureAwait(false);
         }
     }
 
@@ -348,10 +436,20 @@ public sealed class PlaybackService(
     /// is open — so a property mpv does not have comes back null and is left out, without a log line
     /// per second complaining about it.
     /// </summary>
-    public async Task<string?> GetTextAsync(string name)
+    public Task<string?> GetTextAsync(string name)
     {
         var handle = _current;
-        if (handle is null) return null;
+        return handle is null ? Task.FromResult<string?>(null) : GetTextAsync(handle, name);
+    }
+
+    /// <summary>
+    /// 问<b>点名的那个句柄</b>，而且只在它还是当前这一次播放的时候问。同
+    /// <see cref="SetPropertyAsync(IPlaybackHandle, string, object?)"/> 的理由：一批设置里「读一个默认值、
+    /// 再把它写出去」是两次 await，中间切了集的话，读回来的是上一部片子的答案，写出去的却是下一部片子。
+    /// </summary>
+    private async Task<string?> GetTextAsync(IPlaybackHandle handle, string name)
+    {
+        if (!ReferenceEquals(_current, handle)) return null;
 
         try
         {
@@ -401,7 +499,8 @@ public sealed class PlaybackService(
     /// </summary>
     public async Task SetShaderGroupAsync(ShaderGroup? group)
     {
-        if (_current is null) return;
+        // 整批认这一个句柄，见 SetPropertyAsync(handle, …)：一条链十来个选项，中间切得了集。
+        if (_current is not { } handle) return;
 
         var options = ShaderSwitch.Options(
             _launchOptions,
@@ -409,7 +508,7 @@ public sealed class PlaybackService(
             group,
             ShaderGroupCatalog.ShaderRoot);
 
-        foreach (var (name, value) in options) await SetPropertyAsync(name, value).ConfigureAwait(false);
+        foreach (var (name, value) in options) await SetPropertyAsync(handle, name, value).ConfigureAwait(false);
 
         Log.Info(Category, group is null ? "已关闭着色器" : $"已切换着色器档位：{group.Name}");
     }

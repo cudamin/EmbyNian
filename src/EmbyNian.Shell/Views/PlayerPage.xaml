@@ -409,9 +409,9 @@
 
             <!-- 最小化 / 最大化 / 关闭. Real client-area buttons, because playback removes WS_CAPTION so the
                  picture can reach the top edge — Windows draws no caption buttons to inherit. Flush to the
-                 corner and 32 tall, which is where the hand already expects them. 最大化 goes away in
-                 fullscreen: the window's edges are the monitor's there, so the button could only do
-                 nothing. -->
+                 corner and 32 tall, which is where the hand already expects them. 三颗**全档都在**，全屏那一档
+                 也不例外：最右边那颗在全屏时换成「还原」的图标、点下去退出全屏。从前它在全屏时被收起
+                 （理由是全屏下最大化什么也做不了），可那个位置空着看上去就是少了东西 —— 2026-09-14。 -->
             <StackPanel
                 x:Name="WindowButtons"
                 Grid.Column="3"

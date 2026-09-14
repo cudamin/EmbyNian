@@ -2,7 +2,6 @@ using EmbyNian.Configuration;
 using EmbyNian.Emby;
 using EmbyNian.Playback;
 using Microsoft.UI.Xaml.Controls;
-
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
@@ -32,6 +31,21 @@ internal interface IShellActions
     /// </para>
     /// </summary>
     void OpenGenre(string genre);
+
+    /// <summary>
+    /// 主页某一排点进去的那一页：这一排装的是什么，就列什么。
+    /// <para>
+    /// 2026-09-14 用户原话「新增点击图中红框的标题可以进入对应的页面」，图里圈的是「继续观看」。它不属于任何
+    /// 媒体库，所以走不了 <see cref="TryOpenLibrary"/>（那要一个库 id）；给它一条自己的入口，外壳那一头照
+    /// <see cref="OpenGenre"/> 的样子造一个 <c>LibraryRequest</c> 交给同一个 <c>LibraryPage</c> —— 排序、
+    /// 筛选、视图形状、翻页、字母条全是现成的，另开一页就得把这些重写一遍。
+    /// </para>
+    /// <para>
+    /// 收的是版面自己的那一档（<c>HomeLayout.HomeRowTarget</c>）而不是一个字符串：哪些排有去处这件事只在
+    /// <c>HomeLayout</c> 里有一份说法（<c>TargetOf</c>），别处照抄一份就会有一天两边对不上。
+    /// </para>
+    /// </summary>
+    void OpenRow(HomeLayout.HomeRowTarget target);
 
     void OpenSignIn(ServerProfile? server = null);
 

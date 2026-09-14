@@ -540,6 +540,11 @@ public sealed partial class PlayerPage
 
         _window.Fullscreen = on;
         FullscreenGlyph.Glyph = Glyph(on ? FullscreenExitCode : FullscreenEnterCode);
+
+        // 右上角那一颗的图标也跟着走（全屏时它是「窗口化」）。Render 只在标题条露着的时候才更新它，
+        // 而按 F 或 Esc 进出全屏之后，人往往是**把鼠标移到右上角去看**的 —— 那时候才更新就已经晚了。
+        UpdateMaximizeGlyph();
+
         Render();
     }
 
@@ -587,21 +592,33 @@ public sealed partial class PlayerPage
 
     private void OnToggleMaximizeWindow(object sender, RoutedEventArgs e)
     {
-        _window?.ToggleMaximize();
+        // 全屏时这一颗是「窗口化」，不是「最大化」：退出全屏、窗口回到进全屏前的大小（那份几何
+        // HostWindow.Fullscreen 自己记着）。其余时候才是真正的最大化／还原 —— ToggleMaximize 在全屏下
+        // 会站着不动（窗口的边归显示器），所以这里必须分成两支，不能只把它转过去。
+        if (_window?.Fullscreen == true) SetFullscreen(false);
+        else _window?.ToggleMaximize();
+
         UpdateMaximizeGlyph();
     }
 
     private void OnCloseWindow(object sender, RoutedEventArgs e) => _window?.Close();
 
     /// <summary>
-    /// 最大化 or 还原, whichever the button would do next, and nothing at all in fullscreen — where the
-    /// window's edges are the monitor's and <see cref="HostWindow.ToggleMaximize"/> stands aside.
+    /// 最大化 or 还原, whichever the button would do next —— 全屏时它说的也是这件事，只是那一档的「还原」
+    /// 落成「退出全屏」（用户 2026-09-14 的拍板：「全屏时最大化的图标换成还原图标，点击后还原窗口大小」）。
+    /// <para>
+    /// 从前这一档是收起来不给看，理由是「全屏时窗口边就是显示器的边，最大化什么也做不了」—— 理由本身没错，
+    /// 错在**那个位置缺了一颗按钮看着就像少了东西**：一个人从全屏里想把窗口变回窗口，鼠标移上去找的正是
+    /// 这一颗的位置。所以它现在一直在，只是换了图标、也换了点下去做的事。
+    /// </para>
     /// </summary>
     private void UpdateMaximizeGlyph()
     {
-        var fullscreen = _window?.Fullscreen == true;
-        MaximizeButton.Visibility = fullscreen ? Visibility.Collapsed : Visibility.Visible;
-        MaximizeGlyph.Glyph = Glyph(_window?.IsMaximized == true ? RestoreGlyphCode : MaximizeGlyphCode);
+        MaximizeButton.Visibility = Visibility.Visible;
+
+        MaximizeGlyph.Glyph = Glyph(_window?.Fullscreen == true || _window?.IsMaximized == true
+            ? RestoreGlyphCode
+            : MaximizeGlyphCode);
     }
 
     // ---- 音量 --------------------------------------------------------------------

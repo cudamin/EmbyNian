@@ -239,19 +239,25 @@ public sealed partial class HomeViewModel : PageViewModel
         // 媒体库那一排比别的宽卡窄一档（2026-09-13「参考上图缩小媒体库图标的大小」，比例记在
         // CardSize.LibraryWidth 上）：一排「进哪座库」的入口格子，不需要剧照那么大。形状和宽度从一个 switch
         // 里出，两边分头写就会有一天各说各话。
+        // 继续观看 / 接下来看 那一档 2026-09-14 从 CardSize.WideWidth(300) 收到 CardSize.HomeWideWidth(256)
+        // （「缩小首页中的媒体库卡片和继续观看卡片，调整其尺寸使其更紧凑，同时保持布局对齐、间距协调以及各屏幕
+        // 尺寸下的响应式显示效果」）—— 主页单独一档，不动 WideWidth，详情页的 更多单集 和媒体库网格那两处照旧。
         _all = [.. plan.Select(row =>
         {
             var (wide, width) = row.Key switch
             {
                 HomeLayout.Libraries => (true, CardSize.LibraryWidth),
-                HomeLayout.Resume or HomeLayout.NextUp => (true, CardSize.WideWidth),
+                HomeLayout.Resume or HomeLayout.NextUp => (true, CardSize.HomeWideWidth),
                 _ => (false, CardSize.PosterWidth)
             };
             var badges = row.Key != HomeLayout.Libraries && _badges;
 
-            // 媒体库自己那一排知道自己认哪个库（钥匙里就写着），牌子右端于是能跟一个大于号。
+            // 这一排点进哪儿由版面说了算（HomeLayout.TargetOf）：库那几排认库，继续观看 / 接下来看各有
+            // 自己的一页，详情页造出来的那些排是 None —— 牌子右端跟不跟大于号就看它。2026-09-14 之前这里
+            // 只递一个库 id，于是那两排没有 id、牌子一直是死的。
             return (row, new CardShelf(
-                row.Title, images, width, wide, badges, HomeLayout.LibraryId(row.Key)));
+                row.Title, images, width, wide, badges,
+                HomeLayout.LibraryId(row.Key), HomeLayout.TargetOf(row.Key)));
         })];
     }
 
@@ -403,14 +409,20 @@ public sealed partial class HomeViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 自检：这一次的版面 ——「轮播开；继续观看✓、媒体库✓、最近添加 · 电影✗」。屏上那几排
+    /// 自检：这一次的版面 ——「轮播开；继续观看✓›、媒体库✓、最近添加 · 电影✗」。屏上那几排
     /// （<see cref="Shelves"/>）只有装到了东西的才在，所以这一句是唯一能看出「勾掉的那一排真的没排」和「拖出来的
     /// 次序真的生效了」的地方。轮播那个开关也报在这儿：它只管顶上那张大图在不在，不再动媒体库的位置。
+    /// <para>
+    /// 标题后面那个 › 是「这一排的牌子点得动」—— 2026-09-14「新增点击图中红框的标题可以进入对应的页面」之后
+    /// 「继续观看」也该带一个，所以它必须能从这一行读出来：从前这一句只报标题，那一排到底有没有去处，报告里
+    /// 一个字也看不出来。
+    /// </para>
     /// </summary>
     internal string LayoutSummary => _all.Length == 0
         ? "未读取"
         : $"轮播{(_banner ? "开" : "关")}；" + string.Join("、", _all.Select(entry =>
             $"{entry.Row.Title}{(entry.Row.Visible ? "✓" : "✗")}"
+                + $"{(entry.Shelf.CanOpen ? "›" : "")}"
                 + $"{(entry.Shelf.Cards.Count > 0 ? "" : "（空）")}"));
 
     /// <summary>
@@ -434,11 +446,31 @@ public sealed partial class HomeViewModel : PageViewModel
 
         var onScreen = Shelves.Select(shelf => shelf.Title).ToList();
 
-        var ok = _all.Length > 0 && wanted.SequenceEqual(onScreen, StringComparer.Ordinal);
+        // 牌子上那个大于号该有的排：库那几排各有各的库，加上 2026-09-14 起接通的「继续观看」/「接下来看」。
+        // 详情页那几排也会走到这儿（同一个 CardShelf），它们的目标是 None，约定上不在这一页上，所以按标题
+        // 对不上也无所谓 —— 这一句问的是「这一页该有牌子的排，牌子是不是真有」。
+        var opensWanted = _all
+            .Where(entry => HomeLayout.TargetOf(entry.Row.Key) != HomeLayout.HomeRowTarget.None)
+            .Select(entry => entry.Row.Title)
+            .ToList();
+        var opensMissing = opensWanted.Where(title => !CardOpen(title)).ToList();
+
+        var ok = _all.Length > 0
+            && wanted.SequenceEqual(onScreen, StringComparer.Ordinal)
+            && opensMissing.Count == 0;
 
         return (ok, $"版面 {LayoutSummary}；横着排的 {(onScreen.Count == 0 ? "无" : string.Join('、', onScreen))}"
+            + $"{(_all.Length == 0 ? "" : $"，该带大于号的 {opensWanted.Count} 排，没带的 {(opensMissing.Count == 0 ? "0" : string.Join('、', opensMissing))}")}"
             + (_libraryOnBanner ? "；媒体库那一排压在轮播左下角（矮窗档）" : ""));
     }
+
+    /// <summary>
+    /// 自检：这一页上标题叫 <paramref name="title"/> 的那一排，牌子报不报得可进。按标题找而不是按钥匙找，
+    /// 因为屏上那份（<see cref="Shelves"/>）只有标题；标题在这一页是唯一的 —— 版面就是这么造的。
+    /// </summary>
+    private bool CardOpen(string title) =>
+        _all.Any(entry => entry.Shelf.CanOpen
+            && string.Equals(entry.Row.Title, title, StringComparison.Ordinal));
 
     /// <summary>
     /// The same rows without the music ones; see <see cref="EmbyItemType.IsMusic"/> for why they are
@@ -506,21 +538,54 @@ public sealed partial class HomeViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 点「最近添加 · XXX」那一排的牌子（标题或者它右边那个大于号）时去哪儿。
+    /// 点一排的牌子（标题或者它右边那个大于号）时去哪儿。
     /// </summary>
     /// <remarks>
     /// 2026-09-13 用户原话「在最近添加右边添加一个大于号，点击标题后可以进入对应媒体库」。走的是和点这一排
     /// 卡片完全同一个入口（<see cref="IShellActions.TryOpenLibrary"/>），所以磁盘栏的高亮和面包屑落点一致 ——
     /// 从牌子进库和从卡片进库是同一件事，只是不用先挑一张卡。
     /// <para>
-    /// 不是库的那些排（继续观看、接下来看）这里什么也不做，UI 那一头也不会给它们画出大于号。
+    /// 库那几排之外，2026-09-14「新增点击图中红框的标题可以进入对应的页面」把「继续观看」也接上了：它不属于
+    /// 任何库，进的是自己那一张列着「没看完」的网格（<see cref="IShellActions.OpenRow"/>）。那一头照旧构造一个
+    /// <c>LibraryRequest</c> 交给同一个 <c>LibraryPage</c>，所以排序、筛选、翻页这些是现成的。
+    /// </para>
+    /// <para>
+    /// 没有去处的排（<see cref="HomeLayout.HomeRowTarget.None"/>，也就是详情页那几排）这里什么也不做，
+    /// UI 那一头也不会给它们画出大于号。
     /// </para>
     /// </remarks>
     internal void OpenShelf(CardShelf shelf)
     {
-        if (_actions is null || shelf.LibraryId is not { Length: > 0 } id) return;
+        if (_actions is null)
+        {
+            Log.Warn(Category, $"{shelf.Title} 的牌子点了，但外壳动作还没接上");
+            return;
+        }
 
-        _actions.TryOpenLibrary(id);
+        switch (shelf.Target)
+        {
+            case HomeLayout.HomeRowTarget.Library:
+                if (shelf.LibraryId is { Length: > 0 } id)
+                {
+                    Log.Info(Category, $"进库（牌子）：{id}");
+                    _actions.TryOpenLibrary(id);
+                }
+                else
+                {
+                    Log.Warn(Category, $"{shelf.Title} 的目标是库却没有库 id，牌子点了个寂寞");
+                }
+                break;
+
+            case HomeLayout.HomeRowTarget.Resume:
+            case HomeLayout.HomeRowTarget.NextUp:
+                Log.Info(Category, $"开一排的页面：{shelf.Target}");
+                _actions.OpenRow(shelf.Target);
+                break;
+
+            default:
+                Log.Warn(Category, $"{shelf.Title} 的牌子收到了点击，但目标是无处可去的 {shelf.Target}");
+                break;
+        }
     }
 
     /// <summary>

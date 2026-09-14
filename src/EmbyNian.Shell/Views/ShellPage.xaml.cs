@@ -565,9 +565,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // was looking at. Decided here, at the one funnel every play request comes through, and before the
         // view model is told anything: the first thing a playback does on that side is take a window over
         // (EnterPlayer), and which window that is has to be settled before it starts, not undone after.
-        SendPlaybackToOwnWindow(item);
+        //
+        // 谁接下这次播放是**读回来**的，不能想当然还是本窗口那个。独立窗口一开，本窗口的播放器已经 Detach
+        // 掉了（_shell/_window 清空，Attached 变 false），再把请求递给它只会撞上「没挂上就什么都不做」那句
+        // 守卫、静悄悄返回成品质任务 —— 窗口弹出来、里面一片黑，什么也没播。2026-09-14 用户报的「独立窗口
+        // 播放用不了」就是这一条：日志里窗口创建了、13 秒内零播放日志。
+        var player = SendPlaybackToOwnWindow(item) ?? Player;
 
-        return Player.PlayAsync(item, parent, choice, episodes);
+        return player.PlayAsync(item, parent, choice, episodes);
     }
 
     /// <summary>
@@ -591,15 +596,21 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// own player does what it always did.
     /// </para>
     /// </summary>
-    private void SendPlaybackToOwnWindow(EmbyItem item)
+    /// <returns>
+    /// The page that should take the play request — the new window's — or null when the request belongs where
+    /// it already is: the setting is off, a film is already in the other window, or this machine would not give
+    /// us a second one. The caller hands the request to whichever it gets, because by the time this returns the
+    /// shell's own player is no longer attached to the view model and cannot start anything.
+    /// </returns>
+    private PlayerPage? SendPlaybackToOwnWindow(EmbyItem item)
     {
-        if (_services is null || !Player.ViewModel.SeparateWindowPlayback) return;
+        if (_services is null || !Player.ViewModel.SeparateWindowPlayback) return null;
 
         // Only one at a time. A second play request while this is up is refused by the view model anyway
         // (「已经有内容正在播放」), and opening a window for it first would leave that window standing empty.
-        if (_playerWindow is not null) return;
+        if (_playerWindow is not null) return null;
 
-        if (PlayerWindow.TryCreate(item.ToPlaybackTitle()) is not { } created) return;
+        if (PlayerWindow.TryCreate(item.ToPlaybackTitle()) is not { } created) return null;
 
         var viewModel = Player.ViewModel;
 
@@ -610,7 +621,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
         _playerWindow = created;
         created.Closed += OnPlayerWindowClosed;
 
+        // 片子自己走完另一条路（按 Esc、停止、放完、文件打不开）时窗口也要跟着收。PlayerWindow 的注释早就
+        // 写了「shell 会在播放以别的方式结束时自己把窗口关掉」，但一直没人接这一头：播放没了窗口还杵在黑屏上，
+        // 得用户再点一次 X 才算完。
+        viewModel.PlayerHidden += OnOwnWindowPlaybackHidden;
+
         Log.Info(Category, "播放改用独立窗口");
+
+        return created.Page;
     }
 
     /// <summary>
@@ -626,17 +644,52 @@ public sealed partial class ShellPage : UserControl, IShellActions
         if (_playerWindow is null) return;
 
         _playerWindow.Closed -= OnPlayerWindowClosed;
+        Player.ViewModel.PlayerHidden -= OnOwnWindowPlaybackHidden;
         _playerWindow = null;
 
-        if (_window is not null)
-        {
-            _services?.GetRequiredService<PlaybackBackendFactory>().EmbeddedWindow = () => _window.VideoHandle();
-            Player.Attach(Player.ViewModel, this, _window);
-        }
+        RestorePlayerToShellWindow();
 
         if (Player.ViewModel.PlayingNow) _ = Player.ViewModel.StopAsync();
 
         Log.Info(Category, "独立窗口已关闭，播放已停止");
+    }
+
+    /// <summary>
+    /// 播放自己结束了，所以窗口跟着走 —— 「关掉＝停止播放」反过来读就是这一条：没有播放，就留不住那个窗口。
+    /// <para>
+    /// 与 <see cref="OnPlayerWindowClosed"/> 是同一件事的两头，收尾动作一样，差别只在谁来关窗：那一头是用户
+    /// 按了 X，这一头是片子走完了（Esc、停止、放完、文件打不开）。关之前先把两头的事件都摘干净，否则
+    /// <see cref="PlayerWindow.Close"/> 会被当成「用户关的窗」再进 <see cref="OnPlayerWindowClosed"/> 一次，
+    /// 去停一个刚刚自己停下的播放。
+    /// </para>
+    /// </summary>
+    private void OnOwnWindowPlaybackHidden()
+    {
+        if (_playerWindow is null) return;
+
+        _playerWindow.Closed -= OnPlayerWindowClosed;
+        Player.ViewModel.PlayerHidden -= OnOwnWindowPlaybackHidden;
+
+        var window = _playerWindow;
+        _playerWindow = null;
+
+        RestorePlayerToShellWindow();
+        window.Close();
+
+        Log.Info(Category, "播放结束，独立窗口已关闭");
+    }
+
+    /// <summary>
+    /// 再把播放器还给主窗口：mpv 指回本窗口的视频子窗口，本窗口的播放器重新挂上 view model。两头收尾共用的
+    /// 一步，所以单列一处。无条件做，因为 view model 比两个页面都活得久，留一个摘下来的页面攥着那些委托才是
+    /// 要避免的状态；本窗口的播放器此时要不要露面由它自己按播放是否还在继续决定。
+    /// </summary>
+    private void RestorePlayerToShellWindow()
+    {
+        if (_window is null) return;
+
+        _services?.GetRequiredService<PlaybackBackendFactory>().EmbeddedWindow = () => _window.VideoHandle();
+        Player.Attach(Player.ViewModel, this, _window);
     }
 
     Task IShellActions.PlayAsync(
@@ -923,6 +976,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
     bool IShellActions.TryOpenLibrary(string id) => TryOpenLibrary(id);
 
     void IShellActions.OpenGenre(string genre) => OpenGenre(genre);
+
+    void IShellActions.OpenRow(HomeLayout.HomeRowTarget target) => OpenRow(target);
 
     void IShellActions.OpenSignIn(ServerProfile? server) => OpenSignIn(server);
 
@@ -1395,6 +1450,24 @@ public sealed partial class ShellPage : UserControl, IShellActions
         Log.Info(Category, $"按类型浏览：{name}");
 
         Open(typeof(LibraryPage), LibraryRequest.ForGenre(_services, name), name, tag: "");
+    }
+
+    /// <summary>
+    /// 主页某一排点进去的那一页，见 <see cref="IShellActions.OpenRow"/>。和按类型浏览（<see cref="OpenGenre"/>）
+    /// 是同一个形状：构造一个请求、交给同一个 <c>LibraryPage</c>、不带 tag（下钻，侧边栏高亮不动）。
+    /// <para>
+    /// 2026-09-14 用户原话「新增点击图中红框的标题可以进入对应的页面」—— 图里圈的是「继续观看」那一排的牌子。
+    /// </para>
+    /// </summary>
+    public void OpenRow(HomeLayout.HomeRowTarget target)
+    {
+        if (_services is null) return;
+
+        var request = LibraryRequest.ForRow(_services, target);
+
+        Log.Info(Category, $"打开一排：{request.Title}");
+
+        Open(typeof(LibraryPage), request, request.Title, tag: "");
     }
 
     /// <summary>

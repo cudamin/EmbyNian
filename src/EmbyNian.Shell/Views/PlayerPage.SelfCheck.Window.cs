@@ -26,6 +26,11 @@ public sealed partial class PlayerPage
     /// by, or underneath the 置顶 toggle: both are a button that looks present and cannot be pressed.
     /// </para>
     /// <para>
+    /// 全屏那一档也一样三颗都在，只是最右边那颗换了图标、也换了点下去做的事（全屏时它是「窗口化」）。
+    /// 前一版正好相反 —— 全屏时把那一颗收起来，理由是「窗口边就是显示器的边，最大化什么也做不了」；
+    /// 理由没错，可**那个位置空着看上去就是少了东西**，2026-09-14 用户报的正是这一句。
+    /// </para>
+    /// <para>
     /// The two glyph checks are the other half. <see cref="UpdateMaximizeGlyph"/> and
     /// <see cref="ToggleFullscreen"/> each write one <c>FontIcon</c>, they are adjacent in the same strip,
     /// and a crossed pair would leave the window's own state being reported by the wrong button — which no
@@ -58,13 +63,9 @@ public sealed partial class PlayerPage
                      ("关闭", CloseButton)
                  })
         {
-            // 最大化 is the one that is meant to go away, and only in fullscreen — where the window's edges
-            // are the monitor's and the button could do nothing at all.
-            if (button.Visibility != Visibility.Visible)
-            {
-                if (button != MaximizeButton || !_window.Fullscreen) trouble.Add($"{name}不见了");
-                continue;
-            }
+            // 三颗**任何一档都在**，全屏也一样（2026-09-14 起）：右上角少一颗看上去就像少了东西，而全屏
+            // 那一档的「还原」正是用户要的「窗口化」——鼠标移过去要退全屏的人，找的就是这个位置。
+            if (button.Visibility != Visibility.Visible) trouble.Add($"{name}不见了");
 
             var box = BoundsOf(button);
             if (box.Width <= 0 || box.Height <= 0) trouble.Add($"{name}没有尺寸");
@@ -73,14 +74,40 @@ public sealed partial class PlayerPage
                 trouble.Add($"{name}压住了别的按钮");
         }
 
-        if (_window.Fullscreen && MaximizeButton.Visibility == Visibility.Visible) trouble.Add("全屏时最大化仍在");
-
         // The glyphs the two toggles write. Read after Render, which is what calls UpdateMaximizeGlyph.
-        if (MaximizeGlyph.Glyph != Glyph(_window.IsMaximized ? RestoreGlyphCode : MaximizeGlyphCode))
+        // 全屏和最大化答的是同一支「还原」：「还原」在这里是两件事共用的一个手势 —— 全屏时点下去退出全屏
+        // （窗口回到进全屏前的大小），最大化时点下去还原窗口。判据只有一处，两支各写各的图标就会在这里红。
+        var restore = _window.Fullscreen || _window.IsMaximized;
+
+        if (MaximizeGlyph.Glyph != Glyph(restore ? RestoreGlyphCode : MaximizeGlyphCode))
             trouble.Add("最大化图标与窗口不符");
 
         if (FullscreenGlyph.Glyph != Glyph(_window.Fullscreen ? FullscreenExitCode : FullscreenEnterCode))
             trouble.Add("全屏图标与窗口不符");
+
+        // 全屏那一档也要量：三颗仍旧都在，最右那颗是「窗口化」（还原图标）。这一档坏起来的样子是
+        // **少一颗** —— 从前的实现正是把它收起来，而那一档不进一次全屏根本看不见（2026-09-14 用户报的
+        // 就是「全屏的时候右上角的窗口化怎么没了」）。切进去、量完、切回原样，前后都排版一次。
+        var wasFullscreen = _window.Fullscreen;
+
+        SetFullscreen(true);
+        UpdateLayout();
+
+        foreach (var (name, button) in new (string Name, FrameworkElement Element)[]
+                 {
+                     ("最小化", MinimizeButton),
+                     ("最大化", MaximizeButton),
+                     ("关闭", CloseButton)
+                 })
+        {
+            if (button.Visibility != Visibility.Visible) trouble.Add($"全屏时{name}不见了");
+        }
+
+        // 全屏那一档的「还原」：图标必须是还原那支 —— 它同时是「点下去会退出全屏」这件事唯一的可见证据。
+        if (MaximizeGlyph.Glyph != Glyph(RestoreGlyphCode)) trouble.Add("全屏时窗口化图标不对");
+
+        SetFullscreen(wasFullscreen);
+        UpdateLayout();
 
         // Left the way a player that is not running should be, for the same reason ProbeReveal is.
         _chrome.Reset(++clock);
@@ -93,7 +120,7 @@ public sealed partial class PlayerPage
         return (trouble.Count == 0,
             $"标题栏 {strip.Width:0}×{strip.Height:0} 逻辑像素，三个窗口命令"
             + (trouble.Count == 0 ? "都在栏内且互不重叠" : string.Join('、', trouble))
-            + $"；最大化={(MaximizeButton.Visibility == Visibility.Visible ? "在" : "隐藏")}"
+            + $"；右上角那颗={(_window.Fullscreen ? "窗口化" : restore ? "还原" : "最大化")}"
             + $"，窗口{(_window.IsMaximized ? "已最大化" : "未最大化")}"
             + $"，{(_window.Fullscreen ? "全屏" : "窗口化")}");
     }

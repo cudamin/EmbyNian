@@ -1284,7 +1284,8 @@ internal sealed class HostWindow : IDisposable
             if (other != _judged)
             {
                 _judged = other;
-                Log.Info(Category, $"前台交给 {Describe(other)}，它挡不到全屏画面，保持置顶");
+                Log.Info(Category, $"前台交给 {Describe(other)}，它挡不到全屏画面，保持置顶"
+                    + $"（画面 {VisibleFrameOf(Handle)}，它 {VisibleFrameOf(other)}）");
             }
 
             return;
@@ -1298,8 +1299,22 @@ internal sealed class HostWindow : IDisposable
             0, 0, 0, 0,
             Native.SwpNoMove | Native.SwpNoSize | Native.SwpNoActivate);
 
-        Log.Info(Category, $"前台交给 {Describe(other)}，全屏画面会挡着它，让出置顶");
+        Log.Info(Category, $"前台交给 {Describe(other)}，全屏画面会挡着它，让出置顶"
+            + $"（画面 {VisibleFrameOf(Handle)}，它 {VisibleFrameOf(other)}）");
     }
+
+    /// <summary>
+    /// 一扇窗看得见的那块矩形，写成日志里的一句话；量不出来就写「量不到」。
+    /// <para>
+    /// 让位那两行都带上它是有缘故的：2026-09-13 那趟只有 hwnd 和类名，几何是事后靠探针补量的；2026-09-14 复发
+    /// 时还是得先补量一遍才知道是那 7 像素作祟。两个矩形从今往后就落在日志里 —— 下次再让位，谁挡着谁、
+    /// 差多少像素，一眼能答。
+    /// </para>
+    /// </summary>
+    private static string VisibleFrameOf(IntPtr window) =>
+        Native.GetVisibleFrame(window, out var rect)
+            ? $"({rect.Left},{rect.Top})-({rect.Right},{rect.Bottom})"
+            : "量不到";
 
     /// <summary>
     /// An hwnd made legible for the log: class name and caption. The bare address is what left 「0x5040C
@@ -1340,7 +1355,11 @@ internal sealed class HostWindow : IDisposable
     /// 像素都不欠我们 —— 给它们让位，换来的唯一观众就是任务栏。「屏幕1全屏播放时点击屏幕2的telegram和
     /// qbittorrent会唤出屏幕1的windows任务栏」（2026-09-13 晚）的日志里，反复让位的 0x5040C 与 0x103EA
     /// 正是这类窗口，而同屏可见的那扇（0x1104C8）每次都正确地保持了置顶。</item>
-    /// <item>是否在另一块屏幕 <em>且</em> 与画面矩形不相交 —— 即全屏这层根本盖不着它。</item>
+    /// <item>是否在另一块屏幕 <em>且</em> 与画面矩形不相交 —— 即全屏这层根本盖不着它。<b>矩形按看得见的
+    /// 边框量</b>（<see cref="Native.GetVisibleFrame"/>），不是 <c>GetWindowRect</c> 那圈外面多包的：2026-09-14
+    /// 第二次报上来的同一句话，病根就在这里 —— 那扇贴在屏幕二左沿的窗（0x305EE）可见的左边是 2560，
+    /// <c>GetWindowRect</c> 报的却是 2553，凭空多出 7px 伸进屏幕一的画面，规则于是判它会挡着、让出置顶，
+    /// 任务栏就爬回来了。</item>
     /// <item>量不出来就当挡着：没有窗口、是我们自己、或系统不肯给几何 —— 「让位」是只会赔上画面（给任务栏）
     /// 的那种错，「不让」顶多让用户刚切过去的窗口被盖着。</item>
     /// </list>
@@ -1351,8 +1370,11 @@ internal sealed class HostWindow : IDisposable
 
         if (PutsNoPixelsOnScreen(other)) return true;
 
-        if (!Native.GetWindowRect(Handle, out var picture) || !Native.GetWindowRect(other, out var window))
+        if (!Native.GetVisibleFrame(Handle, out var picture)
+            || !Native.GetVisibleFrame(other, out var window))
+        {
             return false;
+        }
 
         return StandsClear(
             picture,
@@ -1656,7 +1678,18 @@ internal sealed class HostWindow : IDisposable
             if (titleBar is not null)
             {
                 titleBar.ExtendsContentIntoTitleBar = true;
-                titleBar.PreferredHeightOption = TitleBarHeightOption.Standard;
+
+                // 跟着已经在身上的那个意图走，不写死 Standard。播放态可能在窗口建出来**之前**就定下了 ——
+                // 独立播放窗口就是这么建的（`new HostWindow { Content = page }` 之后立刻
+                // `PlaybackTitleBar = true`，而 CreateWindowEx 要到 Show 里才发生，那一句 setter 因此
+                // 撞上「还没有句柄」静默早退，只把它记进了 _playbackTitleBar 字段）。这里写死 Standard
+                // 就是把它抹掉：框架于是照旧保留标题栏那 32 像素、照旧在右上角画三颗系统按钮，而播放态的
+                // 区域声明说那三颗「哪儿都不在」（见 UpdateTitleBarRegions）—— 三颗画着、点上去什么也不
+                // 接住，就是 2026-09-14 的「窗口化时右上角的最小化 最大化 关闭点了没反应」。
+                titleBar.PreferredHeightOption = _playbackTitleBar
+                    ? TitleBarHeightOption.Collapsed
+                    : TitleBarHeightOption.Standard;
+
                 PaintCaption(titleBar);
 
                 // 换主题时再画一遍。标题栏那一条是 Win32 的非客户区，画刷改不到它 —— ThemeHost 把

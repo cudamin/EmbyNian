@@ -26,17 +26,38 @@ public static class CardSize
 
     public const int PosterHeight = 255;
 
-    /// <summary>A 16:9 still, as used by 继续观看 and 接下来看.</summary>
+    /// <summary>
+    /// A 16:9 still, as used by 详情页's 更多单集 row and by the library grid's 缩略图 / 列表 shapes.
+    /// <para>
+    /// 这一档 2026-09-14 起不再管主页：主页那两排（继续观看、接下来看）按用户的话缩小了一档，各自走
+    /// <see cref="HomeWideWidth"/>。三处用的是同一个宽度，所以「只缩主页」不能靠动这个常量 —— 动了它，详情页那一排
+    /// 和媒体库网格的两种列表样式会一起跟着缩，而那两处用户没说要改。
+    /// </para>
+    /// </summary>
     public const int WideWidth = 300;
 
     public const int WideHeight = 169;
 
     /// <summary>
-    /// 主页 媒体库 那一排的宽卡（2026-09-13「参考上图缩小媒体库图标的大小」）：比 <see cref="WideWidth"/> 窄一档。
-    /// 参考图上媒体库的格子约是继续观看卡片的 0.79 倍宽（量的 210 对 267），落成 300 的八成。形状不变 —— 还是
-    /// 16:9 的 Thumb 图，<see cref="HeightFor"/> 在这个宽度上给 135；一排「进哪座库」的入口格子，不需要剧照那么大。
+    /// 主页 继续观看 / 接下来看 那一排的 16:9 剧照（2026-09-14「缩小首页中的媒体库卡片和继续观看卡片，调整其尺寸
+    /// 使其更紧凑，同时保持布局对齐、间距协调以及各屏幕尺寸下的响应式显示效果」）。
+    /// <para>
+    /// 原来是 <see cref="WideWidth"/> 那一档的 300 —— 用户要那两排更紧凑，于是主页单独收一档到 256（宽减约
+    /// 15%，<see cref="HeightFor"/> 在这个宽度上是整 144，没有半像素要靠框架去糊）。**为什么另开一个常量而不是
+    /// 改 <see cref="WideWidth"/>**：那个数详情页的 更多单集 和媒体库网格的两种列表样式也在用，改它会连着缩到
+    /// 用户没提的两处去。
+    /// </para>
     /// </summary>
-    public const int LibraryWidth = 240;
+    public const int HomeWideWidth = 256;
+
+    /// <summary>
+    /// 主页 媒体库 那一排的宽卡（2026-09-13「参考上图缩小媒体库图标的大小」；2026-09-14 又跟着「缩小首页中的媒体库
+    /// 卡片和继续观看卡片」缩了一档）：比 <see cref="HomeWideWidth"/> 窄一档。
+    /// 参考图上媒体库的格子约是继续观看卡片的 0.79 倍宽（量的 210 对 267），一直按那个比例落 —— 240 对 300 是
+    /// 八成，208 对 256 也是 0.8125，比例没动、两个数一起小。形状不变，还是 16:9 的 Thumb 图，
+    /// <see cref="HeightFor"/> 在这个宽度上给 117；一排「进哪座库」的入口格子，不需要剧照那么大。
+    /// </summary>
+    public const int LibraryWidth = 208;
 
     /// <summary>
     /// A portrait on 详情页's 演职人员 row. Narrower than a poster because a row of faces reads better

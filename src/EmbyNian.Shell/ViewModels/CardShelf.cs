@@ -45,8 +45,14 @@ public sealed partial class CardShelf : ObservableObject
     /// <c>HomeLayout.LibraryKey</c> 造出来的）。有了它，牌子右端那个大于号才知道该把
     /// 读的人送到哪儿去 —— 2026-09-13 用户原话「在最近添加右边添加一个大于号，点击标题后可以进入对应媒体库」。
     /// </param>
+    /// <param name="target">
+    /// 这一排点进哪儿，见 <see cref="HomeLayout.HomeRowTarget"/>。2026-09-14 之前「能不能点」全靠
+    /// <paramref name="libraryId"/> 非空来表达，于是「继续观看」「接下来看」这两排 —— 它们不属于任何库 ——
+    /// 牌子一直是死的；而用户那句「新增点击图中红框的标题可以进入对应的页面」圈的正是「继续观看」。
+    /// 判据改成问版面要一个去处，库里那几排照旧，那两排也有了。
+    /// </param>
     internal CardShelf(string title, EmbyImageStore images, int width, bool wide, bool indicators,
-        string? libraryId = null)
+        string? libraryId = null, HomeLayout.HomeRowTarget target = HomeLayout.HomeRowTarget.None)
     {
         Title = title;
         _images = images;
@@ -54,6 +60,7 @@ public sealed partial class CardShelf : ObservableObject
         _wide = wide;
         _indicators = indicators;
         LibraryId = libraryId;
+        Target = target;
 
         RowHeight = CardSize.HeightFor(width, wide) + CardSize.Chrome;
 
@@ -63,13 +70,19 @@ public sealed partial class CardShelf : ObservableObject
     }
 
     /// <summary>
-    /// 这一排能不能点进去，以及点进去是哪个库。空字符串（继续观看、接下来看、详情页的每一排）就是不能 ——
-    /// 那些排没有「对应的库」这回事。只读：一排认哪个库从建出来那一刻就定了，不是会改的东西。
+    /// 这一排代表哪个媒体库，不是库排就是空。只读：一排认哪个库从建出来那一刻就定了，不是会改的东西。
     /// </summary>
     public string? LibraryId { get; }
 
-    /// <summary>这一排是一扇通往媒体库的门。</summary>
-    public bool CanOpen => LibraryId is { Length: > 0 };
+    /// <summary>
+    /// 这一排点进去是哪一页。<see cref="HomeLayout.HomeRowTarget.Library"/> 的走
+    /// <see cref="LibraryId"/>，「继续观看」「接下来看」各有自己的那一页，
+    /// <see cref="HomeLayout.HomeRowTarget.None"/>（详情页的每一排、演职人员、单集列表）点不动。
+    /// </summary>
+    public HomeLayout.HomeRowTarget Target { get; }
+
+    /// <summary>这一排是一扇门 —— 牌子右端那个大于号露不露、点击面收不收，全看它。</summary>
+    public bool CanOpen => Target != HomeLayout.HomeRowTarget.None;
 
     /// <summary>
     /// The heading above the row. Settable, and observable, because one row's heading is a fact about

@@ -404,7 +404,6 @@ public sealed partial class SettingsViewModel : PageViewModel
         [
             Toggle("向服务器汇报播放进度", "关掉后 Emby 就不记你看过的进度了", () => playback.ReportProgressToServer, value => playback.ReportProgressToServer = value),
             Toggle("从服务器保存的位置继续", "关掉后每次都从片头放起", () => playback.ResumeFromSavedPosition, value => playback.ResumeFromSavedPosition = value),
-            Toggle("询问后再恢复播放", "关掉后不问，直接从上次停的地方接着放", () => playback.AskBeforeResuming, value => playback.AskBeforeResuming = value),
             Toggle("自动播放下一集", "一集放完自动接下一集，跨季也接着放", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
 
             // 「在设置中新增一个开始播放后自动全屏的功能」／「在设置中新增功能，打开后点击播放后弹出一个独立
@@ -1135,9 +1134,15 @@ public sealed partial class SettingsViewModel : PageViewModel
         var home = AppContext.BaseDirectory;
         var rows = new List<SettingRow>
         {
-            Fact("客户端版本", "改动记在 PROGRESS.md 里，版本号不随每次改动走", AboutFacts.Client),
-            Fact("构建时间", "这份 exe 落到磁盘上的时间", AboutFacts.BuiltAt(Path.Combine(home, "EmbyNian.exe"))),
-            Fact("播放内核", "这个文件的版本不要换", AboutFacts.PlaybackCore(home))
+            // 三行读数不带说明行（他 2026-09-14：「不要显示这些字」）。原来那三句 ——「改动记在 PROGRESS.md 里，
+            // 版本号不随每次改动走」「这份 exe 落到磁盘上的时间」「这个文件的版本不要换」—— 是写给做这个程序的
+            // 人看的：它们讲的是版本号怎么走、构建时间取的是哪个时间、那个 dll 的版本为什么别动，不是读这张卡
+            // 的人关心的事。规矩没丢，它们本来就在别处（版本号在 Directory.Build.props 与 PROGRESS.md，
+            // 构建时间的取法在 AboutFacts.BuiltAt 的注释里）。
+            // 底下四行目录的说明留着：那几句说的是「点开这颗按钮会看到什么」，本来就是给用它的人读的。
+            Fact("客户端版本", null, AboutFacts.Client),
+            Fact("构建时间", null, AboutFacts.BuiltAt(Path.Combine(home, "EmbyNian.exe"))),
+            Fact("播放内核", null, AboutFacts.PlaybackCore(home))
         };
 
         if (_paths is { } paths)

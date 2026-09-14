@@ -58,6 +58,17 @@ internal sealed record LibraryRequest
     public string? PersonId { get; init; }
 
     /// <summary>
+    /// 主页某一排点进来的那一页，装的是那一排自己的清单（2026-09-14「新增点击图中红框的标题可以进入对应的
+    /// 页面」）。空的时候就是别的四种网格。
+    /// <para>
+    /// 它属于这一格的理由和 <see cref="Genre"/> 一样：不是文件夹、没有父目录，装的是一句查询的结果。放在这里
+    /// 而不是再开一个请求类型，是因为这一页要的东西（排序菜单、筛选面板、三种视图形状、翻页、字母条）别的网格
+    /// 全都要 —— 换一个类型就得把那些再写一遍。
+    /// </para>
+    /// </summary>
+    public HomeLayout.HomeRowTarget? Row { get; init; }
+
+    /// <summary>
     /// The item type whose children this grid lists, when it is a drill-down. Null for a library root
     /// and for a search. What tells the sort menu that these rows are seasons or episodes, which
     /// decides both the default order and which keys are worth offering.
@@ -80,6 +91,7 @@ internal sealed record LibraryRequest
     public string Eyebrow => IsSearch ? "SEARCH"
         : PersonId is not null ? "CREDITS"
         : Genre is not null ? "GENRE"
+        : Row is not null ? "CONTINUE"
         : CollectionType is not null ? "LIBRARY"
         : ParentType switch
         {
@@ -156,5 +168,24 @@ internal sealed record LibraryRequest
         Services = services,
         Title = genre.Trim(),
         Genre = genre.Trim()
+    };
+
+    /// <summary>
+    /// 主页某一排点进来的那一页 —— 见 <see cref="Row"/>。标题直接借版面那一句（「继续观看」），
+    /// 它是这一排唯一说得清自己叫什么的地方。
+    /// <para>
+    /// <see cref="Tag"/> 空着（下钻）：侧边栏没有哪一条指着它，这就是同一张网格又往下走了一层。
+    /// </para>
+    /// </summary>
+    public static LibraryRequest ForRow(IServiceProvider services, HomeLayout.HomeRowTarget target) => new()
+    {
+        Services = services,
+        Title = HomeLayout.FixedTitle(target switch
+        {
+            HomeLayout.HomeRowTarget.Resume => HomeLayout.Resume,
+            HomeLayout.HomeRowTarget.NextUp => HomeLayout.NextUp,
+            _ => null
+        }) ?? "继续观看",
+        Row = target
     };
 }

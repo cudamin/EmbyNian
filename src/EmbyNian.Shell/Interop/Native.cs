@@ -1015,6 +1015,43 @@ internal static partial class Native
     /// <summary>DWMSBT_MAINWINDOW, i.e. Mica.</summary>
     public const int DwmBackdropMica = 2;
 
+    /// <summary>
+    /// DWMWA_EXTENDED_FRAME_BOUNDS — the pixels a window actually occupies on screen.
+    /// <para>
+    /// 从 Windows 10 起 <c>GetWindowRect</c> 量的是外面那一圈：带缩放边框的窗口四边各被多包进约 7px
+    /// **看不见**的边框（拖窗口时手指够得着、屏幕上一寸像素都没有的那一圈）。它平时无害，唯独
+    /// 「贴着两块屏幕交界的窗口」会把这圈假像素伸进隔壁屏 —— 2026-09-14 第二次报上来的「屏幕一全屏播放
+    /// 时点击屏幕二的应用，屏幕一的任务栏爬回画面上」就是这么来的：那扇窗看得见的左边正贴在 2560（屏幕二
+    /// 的左沿），量出来却是 2553，于是全屏那层判它「会挡着」、让出置顶，任务栏立刻回来了。实测那扇窗：
+    /// 外框 (2553,0)-(3647,632)，可见边框 (2560,0)-(3640,625)。
+    /// </para>
+    /// </summary>
+    public const int DwmExtendedFrameBounds = 9;
+
+    [LibraryImport("dwmapi.dll")]
+    public static partial int DwmGetWindowAttribute(IntPtr window, int attribute, out NativeRect value, int size);
+
     [LibraryImport("dwmapi.dll")]
     public static partial int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+    /// <summary>
+    /// The rectangle a window really draws in: what DWM reports for
+    /// <see cref="DwmExtendedFrameBounds"/>, falling back to <see cref="GetWindowRect"/> only when DWM
+    /// will not answer — hidden helper windows have no composition surface, and the outer rectangle beats
+    /// no rectangle at all.
+    /// <para>
+    /// 凡是问「这两扇窗的矩形会不会互相盖住」的地方都用它，别用 <c>GetWindowRect</c>：那一圈假像素正是
+    /// <see cref="DwmExtendedFrameBounds"/> 上说的那个病根。谁在用它见 <c>HostWindow.StandsClearOfPicture</c>。
+    /// </para>
+    /// </summary>
+    public static bool GetVisibleFrame(IntPtr window, out NativeRect rect)
+    {
+        if (window != IntPtr.Zero
+            && DwmGetWindowAttribute(window, DwmExtendedFrameBounds, out rect, Marshal.SizeOf<NativeRect>()) == 0)
+        {
+            return true;
+        }
+
+        return GetWindowRect(window, out rect);
+    }
 }

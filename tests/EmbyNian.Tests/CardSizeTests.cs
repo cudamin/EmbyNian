@@ -7,10 +7,14 @@ namespace EmbyNian.Tests;
 /// 一张卡片画多大 —— 两种形状的高怎么算（外壳里 <c>CardItem.CardWidth</c> 和 <c>CardItem.PosterHeight</c>
 /// 绑的就是它）。
 /// <para>
-/// 全应用只有 <c>CardSize</c> 固定的那一档：170 的海报、300 的剧照、124 的演职人员人像、240 的媒体库入口格子。
-/// 从前 设置 → 海报宽度
+/// 全应用只有 <c>CardSize</c> 固定的那一档：170 的海报、300 的剧照、124 的演职人员人像、256 的主页宽卡、
+/// 208 的媒体库入口格子。从前 设置 → 海报宽度
 /// 那根滑杆能把这些数整体拖走，那一行 2026-09-05 按用户的话删掉了 —— 所以这里钉的是「那几个数没有被谁动过」，
 /// 加上高度算式的形状（2:3、16:9、整像素）。
+/// </para>
+/// <para>
+/// 2026-09-14：主页那两档按用户的话缩了一档（<c>HomeWideWidth</c> 256、<c>LibraryWidth</c> 208）。
+/// <c>WideWidth</c> 故意留在 300 —— 详情页的 更多单集 和媒体库网格的两种列表样式还在用它，主页要缩不能连累那两处。
 /// </para>
 /// </summary>
 internal static class CardSizeTests
@@ -24,12 +28,16 @@ internal static class CardSizeTests
             Assert.Equal(170, CardSize.PosterWidth);
             Assert.Equal(300, CardSize.WideWidth);
             Assert.Equal(124, CardSize.CastWidth, "演职人员那一格");
-            Assert.Equal(240, CardSize.LibraryWidth, "主页媒体库那一格（2026-09-13 缩小到剧照的八成）");
+            Assert.Equal(256, CardSize.HomeWideWidth,
+                "主页 继续观看 / 接下来看 那一格（2026-09-14 收到 256）");
+            Assert.Equal(208, CardSize.LibraryWidth,
+                "主页媒体库那一格（2026-09-13 缩到剧照的八成，2026-09-14 跟着再缩一档）");
 
             Assert.Equal(255d, CardSize.HeightFor(CardSize.PosterWidth, wide: false), "170 的海报高 255");
             Assert.Equal(169d, CardSize.HeightFor(CardSize.WideWidth, wide: true), "300 的剧照高 169");
             Assert.Equal(186d, CardSize.HeightFor(CardSize.CastWidth, wide: false), "124 的人像高 186");
-            Assert.Equal(135d, CardSize.HeightFor(CardSize.LibraryWidth, wide: true), "240 的媒体库格子高 135");
+            Assert.Equal(144d, CardSize.HeightFor(CardSize.HomeWideWidth, wide: true), "256 的主页剧照高 144");
+            Assert.Equal(117d, CardSize.HeightFor(CardSize.LibraryWidth, wide: true), "208 的媒体库格子高 117");
 
             Assert.Equal((double)CardSize.PosterHeight, CardSize.HeightFor(CardSize.PosterWidth, wide: false),
                 "常量和算出来的必须是同一个数");
@@ -41,12 +49,20 @@ internal static class CardSizeTests
                 "一排海报：255 + 59");
             Assert.Equal(228d, CardSize.HeightFor(CardSize.WideWidth, wide: true) + CardSize.Chrome,
                 "一排剧照：169 + 59");
+            Assert.Equal(203d, CardSize.HeightFor(CardSize.HomeWideWidth, wide: true) + CardSize.Chrome,
+                "主页一排剧照：144 + 59");
+            Assert.Equal(176d, CardSize.HeightFor(CardSize.LibraryWidth, wide: true) + CardSize.Chrome,
+                "主页一排媒体库格子：117 + 59");
         });
 
-        Test("卡片尺寸：三种宽度上高度都是整像素，形状也对", () =>
+        Test("卡片尺寸：每一种宽度上高度都是整像素，形状也对", () =>
         {
             // 半个像素的高度交给框架，屏上就是图片下沿糊掉一行，或者底下那两行字被挤掉一截。
-            foreach (var width in new[] { CardSize.PosterWidth, CardSize.WideWidth, CardSize.CastWidth, CardSize.LibraryWidth })
+            foreach (var width in new[]
+            {
+                CardSize.PosterWidth, CardSize.WideWidth, CardSize.CastWidth,
+                CardSize.HomeWideWidth, CardSize.LibraryWidth
+            })
             {
                 var poster = CardSize.HeightFor(width, wide: false);
                 var still = CardSize.HeightFor(width, wide: true);

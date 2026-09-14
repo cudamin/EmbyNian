@@ -47,8 +47,19 @@ public sealed class MpvProcessBackend(MpvSettings settings) : IPlaybackBackend
 
         var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动 mpv 进程");
         var handle = new MpvProcessHandle(process);
-        await handle.AttachAsync(pipeName, cancellationToken).ConfigureAwait(false);
-        return handle;
+        try
+        {
+            await handle.AttachAsync(pipeName, cancellationToken).ConfigureAwait(false);
+            return handle;
+        }
+        catch
+        {
+            // Attach 一失败，这个句柄就没人接了：进程不带自毁，客户端这边一场空，mpv 却在前台继续放。
+            // 交给句柄自己收拾 —— DisposeAsync 开头会送还活着的 mpv 走（见它那句注释），所以这里只管
+            // 放回去再重抛，让调用方看到真正的失败原因。
+            await handle.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 }
 
@@ -492,6 +503,18 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
 
     public async ValueTask DisposeAsync()
     {
+        // 句柄一放出去，这个进程就没人管了。正常收尾那一头 mpv 已经退了，这一下只花一次 HasExited 的钱；
+        // 句柄还活着就被 Dispose 的那些路（起播失败、上报那一句抛了别的错）却正是 mpv 被漏在外面继续放
+        // 的地方 —— 从前这里只拆观察用的管线，从不开口请 mpv 走，两个后端的 Dispose 语义也从此一致。
+        try
+        {
+            if (!process.HasExited) await StopAsync().ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "释放句柄时结束 mpv 进程失败", error);
+        }
+
         Cancel(_finished);
 
         if (_poller is not null)

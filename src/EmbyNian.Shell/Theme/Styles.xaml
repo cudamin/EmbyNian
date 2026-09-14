@@ -103,6 +103,14 @@
     <!-- 胶片格右上角那颗方块的边长：一个数字或一个对勾刚好放得下。 -->
     <x:Double x:Key="EgCornerBadgeSize">20</x:Double>
 
+    <!--
+      同一颗方块的圆角（「封面右上角的那个改成圆角」，2026-09-14）。取 6，不是封面那档 12 —— 这颗只有
+      20 见方，12 就是整颗圆掉了、读不出它是个角标；6 让四个角都磨圆一点，还看得出是块方牌。
+      右上角那一角同时在框的圆角里（EgFrameStyle 按 12 剪孩子，比 6 大），所以那一角实际看的是框的弧，
+      另外三个角看这里的 6。数字和对勾共用这一颗，圆角自然也共用。
+    -->
+    <CornerRadius x:Key="EgCornerBadgeCornerRadius">6</CornerRadius>
+
     <!-- 看到一半时压在下边框线上的那条进度，2px —— 比发丝线粗一档，才看得出它是「读数」不是「边」。 -->
     <x:Double x:Key="EgProgressThickness">2</x:Double>
 
@@ -333,7 +341,9 @@
 
       圆角一上来，里面那几件东西是被这一圈剪着的（Border 会按 CornerRadius 裁孩子）：右上角那颗方块
       跟着圆了一个角，底边那条进度两头各被切掉两三个像素。两处都是对的 —— 它们本来就说自己是「框的
-      一部分」，框圆了它们就该跟着圆。
+      一部分」，框圆了它们就该跟着圆。那颗方块自己另有一档 6 的圆角（EgCornerBadgeCornerRadius，
+      2026-09-14）：朝里的三个角是它自己的弧度，只有朝外那一角是这一圈剪出来的 —— 框的 12 比它的 6
+      大，所以那一角读的是框的弧。
     -->
     <Style x:Key="EgFrameStyle" TargetType="Border">
         <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
@@ -372,10 +382,12 @@
 
     <!--
       右上角那颗方块。数字和对勾用同一颗，因为它们说的是同一件事 ——「还剩多少」，对勾就是「零」。
-      跟框线齐平（没有外边距），它是框的一部分而不是浮在图上的贴纸。
+      跟框线齐平（没有外边距），它是框的一部分而不是浮在图上的贴纸；四角磨圆 6（见
+      EgCornerBadgeCornerRadius），圆了之后它仍是块贴角的牌，不是一颗浮起来的圆形徽章。
     -->
     <Style x:Key="EgCornerBadgeStyle" TargetType="Border">
         <Setter Property="Background" Value="{ThemeResource EgAccentBrush}" />
+        <Setter Property="CornerRadius" Value="{StaticResource EgCornerBadgeCornerRadius}" />
         <Setter Property="MinWidth" Value="{StaticResource EgCornerBadgeSize}" />
         <Setter Property="Height" Value="{StaticResource EgCornerBadgeSize}" />
         <Setter Property="HorizontalAlignment" Value="Right" />

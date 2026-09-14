@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 货架标题：短强调线建立阅读起点，数量收在轻胶囊里，控件仍留在右端。
+<!-- 货架标题：短强调线建立阅读起点，数量收在轻胶囊里、跟在标题右边（2026-09-14「这放到标题右边，
+     别放到窗口右边」—— 从前胶囊和大于号站在窗口右沿，跟标题隔着整条窗口的距离），控件（详情页的
+     季下拉框）仍留在右端。
      2026-09-13：标题本身也能当按钮用（用户原话「在最近添加右边添加一个大于号，点击标题后可以进入对应媒体库」）——
-     整块牌子被一个透明的 Button 铺满，标题后面跟一个大于号。见 Scope / OpenGlyph。 -->
+     整块牌子被一个透明的 Button 铺满，标题后面跟一个大于号。见 Scope / OpenGlyph。
+     2026-09-14：指针落在可进去的牌子上时，标题底下亮一条下划线（见 Underline 与代码里的 _hover）。 -->
 <UserControl
     x:Class="EmbyNian.Shell.Views.ShelfHead"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -70,48 +73,46 @@
             <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
 
-        <Grid ColumnSpacing="12" VerticalAlignment="Center">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <!-- 标题组：强调线、标题、读数胶囊、大于号排成一排，都贴着标题走。挂件（Trailing）不在这条队里 ——
+             那是个控件，不是这一带的读数，留在右端那一格。 -->
+        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
             <Border
                 Width="3"
                 Height="20"
                 Background="{ThemeResource EgAccentBrush}"
                 CornerRadius="2"
                 VerticalAlignment="Center" />
-            <TextBlock
-                x:Name="TitleText"
-                Grid.Column="1"
-                MaxLines="1"
-                Style="{StaticResource EgSectionTitleStyle}"
-                TextTrimming="CharacterEllipsis"
-                VerticalAlignment="Center" />
-        </Grid>
-
-        <StackPanel
-            Grid.Column="1"
-            Margin="16,0,0,0"
-            Orientation="Horizontal"
-            VerticalAlignment="Center">
-            <Border x:Name="NoteCapsule" Style="{StaticResource ShelfNoteStyle}" Visibility="Collapsed">
+            <!-- 标题和它自己的下划线。下划线用 Opacity 显隐而不是 Visibility —— Collapsed 会在悬停的一瞬间
+                 把整条牌子撑高又缩回去，通栏线跟着跳；Opacity 0 的元素照旧占位，出现了也不动布局。 -->
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock
+                    x:Name="TitleText"
+                    MaxLines="1"
+                    Style="{StaticResource EgSectionTitleStyle}"
+                    TextTrimming="CharacterEllipsis" />
+                <Border
+                    x:Name="Underline"
+                    Height="2"
+                    Margin="0,2,0,0"
+                    Opacity="0"
+                    Background="{ThemeResource EgAccentBrush}"
+                    CornerRadius="1" />
+            </StackPanel>
+            <Border
+                x:Name="NoteCapsule"
+                Style="{StaticResource ShelfNoteStyle}"
+                VerticalAlignment="Center"
+                Visibility="Collapsed">
                 <TextBlock
                     x:Name="NoteText"
                     Style="{StaticResource EgDataStyle}"
                     VerticalAlignment="Center" />
             </Border>
-            <ContentPresenter
-                x:Name="TrailingHost"
-                Margin="12,0,0,0"
-                VerticalAlignment="Center"
-                Visibility="Collapsed" />
-            <!-- 大于号：压在读数右边，和这块牌子是不是按钮无关（详情页也画，只是没接动作）。
+            <!-- 大于号：跟在读数右边，和这块牌子是不是按钮无关（详情页也画，只是没接动作）。
                  前景不走 EgDataStyle —— 那一支 TargetType 是 TextBlock，FontIcon 认不了；直接点 EgTextDimBrush，
                  压在剧照上那一档由代码后置换成同一支浅墨（见 OnScrimChanged）。 -->
             <FontIcon
                 x:Name="OpenGlyph"
-                Margin="8,0,0,0"
                 FontSize="12"
                 Foreground="{ThemeResource EgTextDimBrush}"
                 Glyph="&#xE76C;"
@@ -119,14 +120,27 @@
                 Visibility="Collapsed" />
         </StackPanel>
 
+        <!-- 挂件那一格：详情页 单集 那一带的季下拉框。留在窗口右端 —— 2026-09-14 挪进标题组的是读数和
+             大于号，控件有自己的位置。 -->
+        <ContentPresenter
+            x:Name="TrailingHost"
+            Grid.Column="1"
+            Margin="16,0,0,0"
+            VerticalAlignment="Center"
+            Visibility="Collapsed" />
+
         <!-- 铺满整块牌子、压在文字底下的那层点击面。Content 留空 —— 它只要那块地方，不要内容：
              见 OnOfferChanged 上那段（把 Root 塞进它会成环）。点击面排在内容**后面**，命中测试按
-             「后画先中」走，于是它盖在上面收点击，而标题、读数、大于号照常画在它底下。 -->
+             「后画先中」走，于是它盖在上面收点击，而标题、读数、大于号照常画在它底下。
+             指针事件也归它收：点击面可见 ⇔ 这块牌子可以进去 ⇔ 正是该有下划线的场合 —— 挂在标题上的话，
+             铺开的点击面会把那些事件整个收走，标题一个也见不着。 -->
         <Button
             x:Name="Scope"
             Grid.ColumnSpan="2"
             Click="OnScopeClicked"
             Margin="-8,0,-8,0"
+            PointerEntered="OnScopePointerEntered"
+            PointerExited="OnScopePointerExited"
             Style="{StaticResource ShelfScopeStyle}"
             Visibility="Collapsed" />
         <!-- 标题与底下那条通栏线之间：2026-09-13 从 12 收到 8，配合「首页组件的上下间距弄紧凑一些」。

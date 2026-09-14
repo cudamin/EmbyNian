@@ -176,6 +176,25 @@ internal static class HomeLayoutTests
             Assert.Equal(null, HomeLayout.FixedTitle("library:1"));
         });
 
+        Test("主页版面：每一排点进哪儿", () =>
+        {
+            // 2026-09-14「新增点击图中红框的标题可以进入对应的页面」。图里圈了三排，后两排（库那几排）本来
+            // 就能点，这一条钉的是「继续观看」那一排也有去处 —— 从前「能不能点」是拿 LibraryId 非空表达的，
+            // 而这一排不属于任何库，于是牌子一直是死的。
+            Assert.Equal(HomeLayout.HomeRowTarget.Resume, HomeLayout.TargetOf(HomeLayout.Resume));
+            Assert.Equal(HomeLayout.HomeRowTarget.NextUp, HomeLayout.TargetOf(HomeLayout.NextUp));
+
+            // 「媒体库」那一排和每个库自己那一排，进的都是库。
+            Assert.Equal(HomeLayout.HomeRowTarget.Library, HomeLayout.TargetOf(HomeLayout.Libraries));
+            Assert.Equal(HomeLayout.HomeRowTarget.Library, HomeLayout.TargetOf(HomeLayout.LibraryKey("1")));
+
+            // 认不出的钥匙点不动 —— 和它们排不出版面是同一件事。
+            Assert.Equal(HomeLayout.HomeRowTarget.None, HomeLayout.TargetOf("latest"));
+            Assert.Equal(HomeLayout.HomeRowTarget.None, HomeLayout.TargetOf("library:"));
+            Assert.Equal(HomeLayout.HomeRowTarget.None, HomeLayout.TargetOf(null));
+            Assert.Equal(HomeLayout.HomeRowTarget.None, HomeLayout.TargetOf(""));
+        });
+
         Test("主页版面：只有真变了才回写设置文件", () =>
         {
             var libraries = new[] { Library("1", "电影") };

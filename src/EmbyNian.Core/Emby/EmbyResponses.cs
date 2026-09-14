@@ -90,7 +90,23 @@ public sealed record EmbyConnection(
     string UserId,
     string UserName,
     string ServerName,
-    DeviceIdentity Device);
+    DeviceIdentity Device)
+{
+    /// <summary>
+    /// 这两条连接是不是「同一台服务器上的同一个人」。令牌不算：一次重新登录换的正是令牌，而换了令牌的还是他。
+    /// <para>
+    /// 这是 <c>EmbySession.ExecuteAsync</c> 判「令牌过期之后那一趟还能不能原样重发一遍」的判据。
+    /// 会话可能在这中间换了主人：同一个人重新登录了，那这一趟接着走；换成别的账号、或者换了一台服务器，
+    /// 那这一趟就属于一个已经不存在的身份，必须作废 —— 拿新身份把它重发一遍，是把上一个账号的「标记已观看」
+    /// 记到下一个账号头上，或者把一个条目 id 打到另一台根本没有这个 id 的服务器上。
+    /// </para>
+    /// <para>
+    /// 服务器和人要一起比，少一样都不够：同一台服务器上换个人、和同一个人换台服务器，都是换了身份。
+    /// </para>
+    /// </summary>
+    public bool IsSameIdentityAs(EmbyConnection other) =>
+        ApiBase == other.ApiBase && string.Equals(UserId, other.UserId, StringComparison.Ordinal);
+}
 
 /// <summary>新建合集之后服务器答的那一句：这个合集的 id 和名字。</summary>
 public sealed class CollectionCreationResult

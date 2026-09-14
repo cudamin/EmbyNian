@@ -43,6 +43,7 @@ internal static class SessionTests
         RegisterRestore();
         RegisterReauthentication();
         RegisterSessionReplacement();
+        RegisterConnectionIdentity();
         RegisterTransportFailures();
     }
 
@@ -408,6 +409,34 @@ internal static class SessionTests
                 Assert.Equal(1, transport.SentTo("PlayedItems").Count, "旧账号的标记观看不能发送给新账号或新服务器");
             });
         }
+    }
+
+    /// <summary>
+    /// 「这两条连接是不是同一个身份」那一条纯判断。上面那四条「切换账号/服务器」走的是整条重登路径，
+    /// 而判据本身在这里单独钉住 —— 它错一个字，那四条的症状是「上一个账号的写操作记到下一个账号头上」，
+    /// 从屏上根本看不出来。
+    /// </summary>
+    private static void RegisterConnectionIdentity()
+    {
+        var device = DeviceIdentity.Create("device-1", "3.0.0");
+        EmbyConnection Connection(string url, string userId) =>
+            new(new Uri(url), "token", userId, "名字", "服务器", device);
+
+        Test("连接身份：令牌换了还是同一个人 —— 重新登录换的正是令牌", () =>
+        {
+            var before = Connection("http://one.invalid/", "u1");
+            var after = before with { AccessToken = "token-fresh", UserName = "改过的显示名" };
+
+            Assert.True(after.IsSameIdentityAs(before));
+            Assert.True(before.IsSameIdentityAs(after), "这条判断两头对称");
+        });
+
+        Test("连接身份：同一台服务器换个人，不是同一个身份", () =>
+            Assert.False(Connection("http://one.invalid/", "u2").IsSameIdentityAs(Connection("http://one.invalid/", "u1"))));
+
+        Test("连接身份：同一个人换台服务器，也不是同一个身份", () =>
+            // 服务器和人要一起比，少一样都不够：条目 id 是一台服务器之内的说法，打到另一台上是另一个东西。
+            Assert.False(Connection("http://two.invalid/", "u1").IsSameIdentityAs(Connection("http://one.invalid/", "u1"))));
     }
 
     /// <summary>

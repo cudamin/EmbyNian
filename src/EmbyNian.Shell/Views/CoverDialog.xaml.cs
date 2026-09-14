@@ -314,7 +314,9 @@ public sealed partial class CoverDialog : ContentDialog
 
             var picker = new CoverPickerDialog(_item, kind, found, this) { XamlRoot = XamlRoot };
 
-            if (await picker.ShowAsync() != ContentDialogResult.Primary) return;
+            // 算完成的有两条路：挑了候选走主按钮；本机上传那张表自己 Hide() 收尾（ShowAsync 回 None），
+            // 认的凭据是 Uploaded 本身 —— 从前这里只认 Primary，上传那一路挑完就被扔掉了。
+            if (await picker.ShowAsync() != ContentDialogResult.Primary && picker.Uploaded is null) return;
 
             if (picker.Picked is { } chosen)
             {

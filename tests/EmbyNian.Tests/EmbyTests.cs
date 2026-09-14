@@ -352,6 +352,40 @@ internal static class EmbyTests
             Assert.DoesNotContain("Filters=", new ItemQuery().ToQueryString(), "不过滤时不该发这个参数");
         });
 
+        Test("查询：继续观看那一页要的是「有播放进度的」", () =>
+        {
+            // 2026-09-14「新增点击图中红框的标题可以进入对应的页面」，同日「里面东西那么多」改判据：主页
+            // 「继续观看」那一排点进去的那张网格，要的是主页那一排（服务器 Resume 接口）的整个清单 ——
+            // 判据是 Filters=IsResumable「有播放进度」，不是 IsUnplayed「没看完」：后者把一部都没开过头的
+            // 也装进来，点进去是一整面海报墙。
+            var query = ItemQuery.Resume(startIndex: 0, limit: 60, EmbySortBy.DateAdded, descending: true, filters: null);
+
+            Assert.Contains("Filters=IsResumable", query.ToQueryString(), "这一页装的是看到一半的");
+            Assert.DoesNotContain("IsUnplayed", query.ToQueryString(), "从没开过头的不是「看到一半」");
+            Assert.Contains("MediaTypes=Video", query.ToQueryString(), "不能把没听过的音乐也算进来");
+            Assert.Contains("Recursive=true", query.ToQueryString(), "这一排不属于任何库，只能全服务器扫");
+            Assert.Contains("IncludeItemTypes=", query.ToQueryString());
+            Assert.DoesNotContain("ParentId=", query.ToQueryString(), "这一排没有库，不该带上父目录");
+
+            // 排序跟着这一页的菜单走。
+            Assert.Contains("SortOrder=Descending", query.ToQueryString());
+            Assert.Contains("StartIndex=0", query.ToQueryString());
+            Assert.Contains("Limit=60", query.ToQueryString());
+        });
+
+        Test("查询：接下来看那一页还是「一集都没看过的剧集」", () =>
+        {
+            // 2026-09-14 从 Resume 工厂里拆出来的另一半：继续观看那一页的判据换成 IsResumable 时，这一页的
+            // 语义不该跟着变 —— 还是 IsUnplayed 加一份把单集排除掉的类型名单，一部看了一半的剧不能混进来。
+            var query = ItemQuery.NextUp(startIndex: 0, limit: 60, EmbySortBy.DateAdded, descending: true,
+                filters: null, [EmbyItemType.Series, EmbyItemType.Movie, EmbyItemType.Video]);
+
+            Assert.Contains("Filters=IsUnplayed", query.ToQueryString(), "这一页装的是没看完的");
+            Assert.DoesNotContain("IsResumable", query.ToQueryString(), "「没看完的剧集」不是「看到一半的」");
+            Assert.Contains("IncludeItemTypes=Series%2CMovie%2CVideo",
+                query.ToQueryString(), "单集留在名单里，两页就长成同一页（逗号在查询串里要转义）");
+        });
+
         Test("查询：媒体库根目录按自身类型递归展开", () =>
         {
             var movies = string.Join(',', ItemQuery.FlattenedTypes("movies"));

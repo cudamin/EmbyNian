@@ -381,7 +381,15 @@ public sealed partial class LibraryViewModel : PageViewModel
 
         Heading = request.Title;
         SearchText = request.SearchTerm ?? "";
-        EmptyNotice = request.IsSearch ? "输入关键字开始搜索" : "这里没有内容";
+
+        // 「这里没有内容」读起来像仓库空了，而这一页是「你还没看什么」—— 一部都没看完过的时候，那两句话说的
+        // 其实是两件事（2026-09-14「继续观看」那一排接通之后才有人走到这一页）。两排的空页文案也分开：继续观看
+        // 那一页装的是「看到一半的」（见 BuildQuery 的 Resume 分支），空了说的是「还没开头」；接下来看那一页
+        // 装的是「没看完的剧集」，空了说的是「都看完了」。
+        EmptyNotice = request.IsSearch ? "输入关键字开始搜索"
+            : request.Row == HomeLayout.HomeRowTarget.Resume ? "这里还没有看到一半的内容"
+            : request.Row is not null ? "这里还没有看过的内容"
+            : "这里没有内容";
         OnPropertyChanged(nameof(SearchVisibility));
 
         RestoreSort();
@@ -658,9 +666,10 @@ public sealed partial class LibraryViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 字母跳转：which row the letter bar should land on. The count before the letter, in the grid's
-    /// own sort, is the index — asked of the server with <c>Limit 0</c> rather than walked locally,
-    /// because not every row of the library is in memory. Null when the query cannot be answered.
+    /// 字母跳转：which row the letter bar should land on. The count of rows at or after the letter,
+    /// in the grid's own sort, tells the index — asked of the server with <c>Limit 0</c> rather than
+    /// walked locally, because not every row of the library is in memory. Null when the query cannot
+    /// be answered.
     /// </summary>
     /// <returns>The index of the first row at or after the letter, and the letter to light up.</returns>
     internal async Task<(int Index, string Letter)?> JumpToAsync(string letter)
@@ -681,8 +690,11 @@ public sealed partial class LibraryViewModel : PageViewModel
             var before = await CountAsync(letter).ConfigureAwait(true);
             if (before is null) return null;
 
-            var index = SortDescending ? (int)(total - before) : (int)before;
-            index = Math.Clamp(index, 0, Math.Max(0, (int)total - 1));
+            // CountAsync 数的是「排在这个字母及之后」的那一片（ItemQuery 把它发成
+            // NameStartsWithOrGreater，见它的注释），所以第一行落在总数减它 —— 从前写成 before 本身，
+            // 跳 C 会落在 Y 上。降序分支不写：字母栏只在升序出现（见 <see cref="AlphaVisibility"/>），
+            // 那条路没人走。
+            var index = Math.Clamp((int)(total - before), 0, Math.Max(0, (int)total - 1));
 
             return (index, CurrentLetterOf(index));
         }
@@ -697,7 +709,9 @@ public sealed partial class LibraryViewModel : PageViewModel
         }
     }
 
-    /// <summary>One count query with <c>Limit 0</c>, or null when it cannot be answered.</summary>
+    /// <summary>One count query with <c>Limit 0</c>, or null when it cannot be answered. With a
+    /// letter, the count is of rows <b>at or after</b> that letter — <c>ItemQuery</c> sends it as
+    /// <c>NameStartsWithOrGreater</c>, not a plain prefix count.</summary>
     private async Task<long?> CountAsync(string? letter)
     {
         if (_request is null) return null;
@@ -914,8 +928,20 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// The view shape this grid opens in, on the same terms as the sort: remembered per library root,
     /// the catalogue's default elsewhere.
     /// </summary>
+    /// <remarks>
+    /// 主页某一排点进来的两页（继续观看、接下来看）不问记忆，直接开在缩略图视图 —— 2026-09-14
+    /// 「图片要用背景图」：这两页装的是看了一半的条目，卡片该是 16:9 的剧照（<c>CardItem</c> 宽卡先要 Thumb、
+    /// 再要 Backdrop），和主页那两排长得一样，而不是一面 2:3 的海报墙。这两页没有 <see cref="MemoryKey"/>
+    /// （不是哪个库的根），视图选择记不住也不该记：每次进来都先给背景图，页内想换海报再换。
+    /// </remarks>
     private void RestoreView()
     {
+        if (_request?.Row is not null)
+        {
+            View = LibraryView.Thumb;
+            return;
+        }
+
         if (MemoryKey() is { } memoryKey
             && Settings.Ui.Views.TryGetValue(memoryKey, out var saved))
         {
@@ -1030,6 +1056,31 @@ public sealed partial class LibraryViewModel : PageViewModel
                 StartIndex = start,
                 Limit = limit,
                 Filters = _filters
+            };
+        }
+
+        // 主页某一排点进来的那一页（2026-09-14「新增点击图中红框的标题可以进入对应的页面」）。和演职人员、
+        // 类型那两支并排：它同样不是文件夹、没有父级，落到下面那一支就成了「服务器的媒体库列表」。
+        // 排在它们之前是因为这一页的身份最强 —— Row 一填上，别的字段本就该都是空的。
+        if (request.Row is { } row)
+        {
+            return row switch
+            {
+                // 继续观看：有播放进度的可播放项 —— 判据和 Emby 自己那条 Resume 接口一致（见 ItemQuery.Resume）。
+                // 2026-09-14「里面东西那么多」：从前是 IsUnplayed，把一部都没开过头的也装进来；现在换
+                // Filters=IsResumable，主页那排六项，这一页就是这六项。
+                HomeLayout.HomeRowTarget.Resume =>
+                    ItemQuery.Resume(start, limit, SortKey, SortDescending, _filters),
+
+                // 接下来看：Emby 的 NextUp 是「这部剧的下一集还没看」，落到通用查询上是「一集都还没看过的
+                // 剧集」。所以走自己的工厂（2026-09-14 从 Resume 拆出来的另一半），多给一个把单集排除掉的
+                // 类型名单 —— 一集继承整部剧的已看状态，单集留在里面，一部看了一半的剧也会满足「没看完」，
+                // 两页就长成同一页了。这一页的判据不跟继续观看那一页走：两页问的是两个问题。
+                HomeLayout.HomeRowTarget.NextUp =>
+                    ItemQuery.NextUp(start, limit, SortKey, SortDescending, _filters,
+                        [EmbyItemType.Series, EmbyItemType.Movie, EmbyItemType.Video]),
+
+                _ => null
             };
         }
 

@@ -213,13 +213,20 @@ public sealed class EmbySession : IDisposable
         }
         catch (EmbyTokenExpiredException)
         {
-            if (!await TryReauthenticateAsync(client, cancellationToken).ConfigureAwait(false))
+            switch (await TryReauthenticateAsync(client, cancellationToken).ConfigureAwait(false))
             {
-                EndSession("登录状态已过期，请重新登录");
-                throw;
-            }
+                case Recovery.Retry:
+                    return await operation(Client, cancellationToken).ConfigureAwait(false);
 
-            return await operation(Client, cancellationToken).ConfigureAwait(false);
+                // 会话在这中间换了身份。这一趟属于一个已经不存在的身份，原样交回调用方 —— 但一根汗毛都不
+                // 碰用户刚建立的新会话：它是无辜的，把它踢回登录页比这一趟失败糟得多。
+                case Recovery.Void:
+                    throw;
+
+                default:
+                    EndSession("登录状态已过期，请重新登录");
+                    throw;
+            }
         }
     }
 
@@ -232,23 +239,66 @@ public sealed class EmbySession : IDisposable
 
     public void SignOut() => EndSession("已退出登录");
 
-    private async Task<bool> TryReauthenticateAsync(EmbyClient stale, CancellationToken cancellationToken)
+    /// <summary>一趟自动重新登录的下场，也就是「被 401 打断的那一趟还能不能接着走」的三种答案。</summary>
+    private enum Recovery
+    {
+        /// <summary>续上了：拿现在手上这条连接把原来那个请求重试一遍。</summary>
+        Retry,
+
+        /// <summary>会话换了身份（换了账号或者换了服务器）：这一趟作废，而新会话不受牵连。</summary>
+        Void,
+
+        /// <summary>续不上，也没人接班：会话到此为止。</summary>
+        Failed
+    }
+
+    /// <summary>
+    /// 重登这一趟等网络的时候，会话被别人换掉了 —— 那原来那个请求归谁，看现在这条连接是不是同一个身份。
+    /// <para>
+    /// 三个出口（等闸门时就发现换了人、重登成功但轮次对不上、重登失败）问的是同一个问题，所以答案只写这
+    /// 一处。从前三处各写各的，而且问的都是「手上还有没有 client」—— 于是换了账号照样算「续上了」，上一个
+    /// 账号的写操作被拿新身份重发了一遍。
+    /// </para>
+    /// </summary>
+    private Recovery AfterHandover(EmbyClient stale) => _client is { } live
+        ? live.Connection.IsSameIdentityAs(stale.Connection) ? Recovery.Retry : Recovery.Void
+        : Recovery.Failed;
+
+    private async Task<Recovery> TryReauthenticateAsync(EmbyClient stale, CancellationToken cancellationToken)
     {
         await _reauthenticationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             // Another caller may already have refreshed while we waited on the gate.
-            if (!ReferenceEquals(_client, stale)) return _client is not null;
+            if (!ReferenceEquals(_client, stale)) return AfterHandover(stale);
 
             var server = Server;
             var account = Account;
-            if (server is null || account is null || !account.HasSavedPassword) return false;
+            if (server is null || account is null || !account.HasSavedPassword) return Recovery.Failed;
 
             var generation = _generation;
 
             Log.Info(Category, "令牌过期，正在使用保存的密码重新登录");
-            var connection = await AuthenticateAsync(server, account.Username, _vault.GetPassword(account), cancellationToken)
-                .ConfigureAwait(false);
+
+            EmbyConnection connection;
+            try
+            {
+                connection = await AuthenticateAsync(server, account.Username, _vault.GetPassword(account), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception error) when (_generation != generation)
+            {
+                // 这一趟失败了，但失败也可能已经无关：它等网络的时候用户自己退了又登了。那时候「续不上」
+                // 是对上一个身份说的，不该连累现在这一位 —— 从前这里只有一句 return false，于是紧接着的
+                // EndSession 把用户刚建立的会话注销掉了。
+                Log.Warn(Category, "重新登录失败时会话已经换了主人，这次失败作废", error);
+                return AfterHandover(stale);
+            }
+            catch (EmbyApiException error)
+            {
+                Log.Warn(Category, "自动重新登录失败", error);
+                return Recovery.Failed;
+            }
 
             // 网络等着的正是用户能按「退出登录」的那段时间（见 _generation）。落地之前在
             // <see cref="_lifecycleGate"/> 下重新对一遍轮次 —— 对不上就什么都不做：不 Adopt、不写 vault、
@@ -259,21 +309,13 @@ public sealed class EmbySession : IDisposable
                 if (generation != _generation)
                 {
                     Log.Info(Category, "重新登录成功时会话已经换了主人，这次登录作废");
-
-                    // 有人已经重新登录过的话，这不算「续不上」：调用方照成功办事，拿现在的 client 把原来
-                    // 那个请求重试一遍 —— 把人家刚建好的会话踢回登录页，比续不上更糟。
-                    return _client is not null;
+                    return AfterHandover(stale);
                 }
 
                 CommitSignIn(server, account, connection, _vault.GetPassword(account), account.RememberPassword);
             }
 
-            return true;
-        }
-        catch (EmbyApiException error)
-        {
-            Log.Warn(Category, "自动重新登录失败", error);
-            return false;
+            return Recovery.Retry;
         }
         finally
         {

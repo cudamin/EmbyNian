@@ -58,6 +58,49 @@ public static class HomeLayout
     };
 
     /// <summary>
+    /// 这一排点进哪儿 —— 2026-09-14「新增点击图中红框的标题可以进入对应的页面」。
+    /// <para>
+    /// 这句需求的图里圈了三排：继续观看、最近添加 · 电视节目、最近添加 · 电影。后两排 2026-09-13 就能点了，
+    /// 只有「继续观看」还不行 —— 那时候「能不能点」是拿 <c>CardShelf.LibraryId</c> 非空来表达的，而这一排
+    /// 不是任何媒体库的，id 是空的，于是牌子照旧是死的。
+    /// </para>
+    /// <para>
+    /// 判据挪到这里：一把钥匙对应哪个页面，是版面自己的事，和「这一排装什么」住在一起；外壳和卡片都只问
+    /// <see cref="TargetOf"/> 要一个答案，不再各自去猜那个 id 字段的非空。
+    /// </para>
+    /// </summary>
+    public enum HomeRowTarget
+    {
+        /// <summary>点不动 —— 详情页里那几排、以及存档里认不出的钥匙。</summary>
+        None,
+
+        /// <summary>那个媒体库自己：一张卡片、下钻进它的网格。</summary>
+        Library,
+
+        /// <summary>全服务器「看了一半」的东西，Emby 的 Resume。</summary>
+        Resume,
+
+        /// <summary>「接着往下看的下一集」，Emby 的 NextUp。</summary>
+        NextUp
+    }
+
+    /// <summary>
+    /// 这把钥匙的那一排点进去是哪一页。<see cref="HomeRowTarget.None"/> 就是点不动。
+    /// <para>
+    /// 媒体库那几排一个都不落（<see cref="LibraryId"/> 认得出前缀的就算数），三排固定的里「媒体库」那一排
+    /// 也是 <see cref="HomeRowTarget.Library"/> —— 它装的是这个账号那几个库的卡片，点它进的就是库列表那一条
+    /// 导航。剩下两排各归各的。
+    /// </para>
+    /// </summary>
+    public static HomeRowTarget TargetOf(string? key) => key switch
+    {
+        Resume => HomeRowTarget.Resume,
+        NextUp => HomeRowTarget.NextUp,
+        Libraries => HomeRowTarget.Library,
+        _ => LibraryId(key) is { Length: > 0 } ? HomeRowTarget.Library : HomeRowTarget.None
+    };
+
+    /// <summary>
     /// 一个媒体库那一排叫什么：「最近添加 · 电影」。带上「最近添加」这四个字是必须的 —— 一排光叫「电影」的卡片
     /// 说不清是「这个库的全部」还是「这个库最近加的」，而这一排装的是后者。
     /// </summary>

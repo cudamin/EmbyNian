@@ -1,4 +1,5 @@
 using EmbyNian.Diagnostics;
+using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Views;
 
 namespace EmbyNian.Shell.Windowing;
@@ -91,7 +92,19 @@ internal sealed class PlayerWindow
 
             window.Show(maximized: false);
 
-            Log.Info(Category, $"独立播放窗口已创建 hwnd=0x{window.Handle:X}「{title}」");
+            // 开窗即记一行「这个窗口的标题栏现在是什么样」。这条路上坏掉的方式是「看得见、按不动」——
+            // 2026-09-14 那次就是：框架的标题栏没被收掉（PreferredHeightOption 还是 Standard），
+            // 右上角于是站着三颗系统按钮，而播放态的区域声明又说那三颗「哪儿都不在」，点下去什么都不接。
+            // 一行读数（框架报的标题栏高／右侧留白 + 右上角答什么）就能把这件事钉死在每份日志里。
+            var (barHeight, barInset) = window.TitleBarMetrics;
+            var client = window.ClientSize;
+
+            Log.Info(
+                Category,
+                $"独立播放窗口已创建 hwnd=0x{window.Handle:X}「{title}」（播放标题栏={window.PlaybackTitleBar}，"
+                + $"框架标题栏 {barHeight:0}×{barInset:0}，客户区 {client.Width}×{client.Height}，"
+                + $"右上角答{CornerAnswer(window)}）");
+
             return new PlayerWindow(window, page);
         }
         catch (Exception error)
@@ -99,6 +112,45 @@ internal sealed class PlayerWindow
             Log.Warn(Category, "创建独立播放窗口失败，改用主窗口播放", error);
             return null;
         }
+    }
+
+    /// <summary>
+    /// 关闭那颗按钮自己的中点，窗口答什么。播放态的三颗是页面自己画的（标题条最右一列，46×32 贴着右上角），
+    /// 所以那里必须答「客户区」，指针落下去才交给 XAML；答成关闭／最大化／最小化按钮，或者答成标题栏，那一颗
+    /// 就只剩下一张图。
+    /// <para>
+    /// 逻辑像素进、命中码出，缩放和客户区原点都在里面算掉 —— <c>WM_NCHITTEST</c> 收的是屏幕坐标。
+    /// </para>
+    /// </summary>
+    private static string CornerAnswer(HostWindow window)
+    {
+        if (window.Handle == IntPtr.Zero) return "无窗口";
+
+        var dpi = Native.GetDpiForWindow(window.Handle);
+        if (dpi == 0) dpi = 96;
+        var scale = dpi / 96.0;
+
+        Native.GetClientRect(window.Handle, out var client);
+
+        var origin = new NativePoint { X = 0, Y = 0 };
+        Native.ClientToScreen(window.Handle, ref origin);
+
+        var x = origin.X + client.Width - (int)(23 * scale);
+        var y = origin.Y + (int)(16 * scale);
+
+        var answer = (int)(long)Native.SendMessage(
+            window.Handle, Native.WmNcHitTest, IntPtr.Zero, new IntPtr(((y & 0xFFFF) << 16) | (x & 0xFFFF)));
+
+        return answer switch
+        {
+            Native.HitClient => "客户区",
+            Native.HitCaption => "标题栏",
+            Native.HitMinButton => "最小化按钮",
+            Native.HitMaxButton => "最大化按钮",
+            Native.HitClose => "关闭按钮",
+            Native.HitTop => "上边框",
+            _ => $"码 {answer}"
+        };
     }
 
     /// <summary>

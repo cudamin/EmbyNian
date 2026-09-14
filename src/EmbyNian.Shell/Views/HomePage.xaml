@@ -56,30 +56,41 @@
                      所以一律是关的（那一档由 CardShelf.OnScrim 定，见 HomeViewModel.BuildShelves）。从前开着的
                      只有右栏那一列媒体库 —— 2026-09-08 那一栏删掉之后就没有开着的了，绑定留着。
 
-                     Offer 就是「这一排能进去」：只有媒体库自己那几排是真的（钥匙里写着库 id），于是它们右端
+                     Offer 就是「这一排能进去」：库那几排是（钥匙里写着库 id），2026-09-14 起「继续观看」也是
+                     —— 它进的是自己那张列着没看完东西的网格，不是哪个库。判据在 CardShelf.Target，别处不另说。
                      多一个大于号、整块牌子变成按钮，点了进那个库 —— 2026-09-13「在最近添加右边添加一个大于号，
                      点击标题后可以进入对应媒体库」。2026-09-13 这一版的 StackPanel 间距从 EgSpaceL(16) 收到
                      EgSpaceM(12)（「首页组件的上下间距弄紧凑一些」）。
-
                      Visibility 绑着 CardShelf.ShowHead：矮窗档把媒体库那排压上轮播时牌子整个收起（「媒体库压在
                      轮播图上的时候不用显示那个媒体库标题」，2026-09-13），压上去的只有那一排卡；StackPanel 的
-                     Spacing 不给收起来的孩子留位置，宿主的高度就是排卡自己的高。 -->
+                     Spacing 不给收起来的孩子留位置，宿主的高度就是排卡自己的高。
+
+                     Tag 挂的就是这一排自己（{x:Bind}）—— 点牌子时从这儿取回去。**别去问 DataContext**：
+                     ItemsRepeater + x:Bind 的模板实例上没人设过 DataContext（页面自己也没有），它永远是空的，
+                     模式匹配必败、点击无声 —— 2026-09-14「继续观看点了没反应」排查一整轮就是漏在这一格。卡片
+                     那边一直是好的，靠的是 PosterCard.Card 这条编译期通道，牌子照卡片抄、抄了一半。 -->
                 <local:ShelfHead
                     Invoked="OnShelfHeadInvoked"
                     Note="{x:Bind Note, Mode=OneWay}"
                     Offer="{x:Bind CanOpen, Mode=OneWay}"
                     OnScrim="{x:Bind OnScrim, Mode=OneWay}"
+                    Tag="{x:Bind}"
                     Title="{x:Bind Title, Mode=OneWay}"
                     Visibility="{x:Bind HeadVisibility, Mode=OneWay}" />
                 <!-- Height bound rather than fixed: a horizontal strip inside a vertical stack has
                      no other way to know how tall a row of cards is, and the shelf works it out from
                      the card size instead of the markup carrying the answer.
 
+                     ItemSpacing 2026-09-14 从 20 收到 18：卡片本身缩了一档（继续观看 300→256、
+                     媒体库 240→208，见 CardSize），卡与卡的间隔跟着收一格，一行里的疏密比例才不变
+                     —— 卡片窄了、间隔不动，读起来是「间距变大了」而不是「更紧凑」。这是翻页步长读的那个
+                     数（ShelfStrip.Measure），收它不用另改常量。
+
                      ShelfStrip rather than a ScrollView with a scrollbar under it: 「下方拖动的这种不是
                      很好用」 — the row pages now, one screenful of cards per chevron. -->
                 <local:ShelfStrip
                     Height="{x:Bind RowHeight}"
-                    ItemSpacing="20"
+                    ItemSpacing="18"
                     ItemTemplate="{StaticResource CardTemplate}"
                     ItemsSource="{x:Bind Cards}"
                     OnScrim="{x:Bind OnScrim, Mode=OneWay}" />
@@ -159,7 +170,11 @@
                  左右那 36 走 Padding：和大图上那块牌子对齐。
 
                  2026-09-13「首页组件的上下间距弄紧凑一些」：上沿从 24 收到 16（轮播下沿到第一排牌子之间那一口气），
-                 下沿从 40 收到 28（最后一排卡片带到底边）。左右不动 —— 那条脊线和大图上的牌子是一条。 -->
+                 下沿从 40 收到 28（最后一排卡片带到底边）。左右不动 —— 那条脊线和大图上的牌子是一条。
+
+                 2026-09-14 主页那两排卡片缩了一档（继续观看 300→256、媒体库 240→208，见 CardSize），这四个数
+                 一个没动：上沿贴的是轮播的下沿、下沿贴的是窗口底，都跟卡片高矮无关，跟着缩反而会让内容贴到边
+                 上。行与行的间隔见下面 StackLayout 那一句。 -->
             <Grid x:Name="Overlay" Background="Transparent" Padding="36,16,36,28">
                 <StackPanel>
                     <ProgressBar
@@ -186,10 +201,19 @@
                         ItemTemplate="{StaticResource ShelfTemplate}"
                         ItemsSource="{x:Bind ViewModel.Shelves, Mode=OneWay}">
                         <ItemsRepeater.Layout>
-                            <!-- 排与排之间：2026-09-13 从 36 收到 24（「首页组件的上下间距弄紧凑一些」）。
+                            <!-- 排与排之间：2026-09-13 从 36 收到 24（「首页组件的上下间距弄紧凑一些」）；
+                                 2026-09-14 再从 24 收到 22 —— 卡片那一档缩过之后（继续观看 300→256、媒体库
+                                 240→208，见 CardSize），排高矮了 18~25，这一格按老样子留着，两排之间的空当
+                                 读起来就比卡片本身还宽。收两像素是让「空当比卡片矮」这层关系跟着回来。
+                                 同日他截图圈出「媒体库那排的卡底」到「继续观看那块牌子」之间那块空白、
+                                 说「红框处的间距太大了，缩小一点点」，于是收到 20；看过屏上效果后他又定到
+                                 18 —— 和同一排卡片的 ItemSpacing（也是 18）拉平，整页的纵横节奏统一。
+                                 **为什么只收这一个数**：那一整段里只有这一格是纯间距 —— 卡底那 59 是卡片
+                                 自带的文字带（CardSize.Chrome，封面下沿到卡底的两行字）、牌子不带外来边距
+                                 （ShelfHead 的根 Grid 没有 Margin），收那两处都不是「缩间距」。
                                  HomePage.xaml.cs 的矮窗档判定读的就是这一格的运行时值（UpdateLibraryOverlay 里的
                                  gap），所以收窄这里不用另改常量 —— 换行的那条界线跟着一起走。 -->
-                            <StackLayout Orientation="Vertical" Spacing="24" />
+                            <StackLayout Orientation="Vertical" Spacing="18" />
                         </ItemsRepeater.Layout>
                     </ItemsRepeater>
 

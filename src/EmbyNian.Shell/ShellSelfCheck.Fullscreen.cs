@@ -116,6 +116,47 @@ internal static partial class ShellSelfCheck
             return;
         }
 
+        // 2026-09-14 第二次报上来：屏幕一全屏、点屏幕二的应用，屏幕一的任务栏又爬回画面上。这次日志点了名
+        // （0x305EE，AyuGram 那扇 Qt 窗），量下去才看清 —— GetWindowRect 量的是外面那一圈，从 Win10 起还多
+        // 包着约 7px 看不见的缩放边框，于是贴着两屏交界摆的窗口凭空「伸进」画面 7 像素，规则判它会挡着、
+        // 让出置顶，任务栏就回来了。现在两边都按 DWM 报的可见边框量（`Native.GetVisibleFrame`）。
+        //
+        // 这一关把那 7 像素钉住，顺便钉住「不能改回外框量」：先拿这扇窗自己量出那圈边框有多厚，再照这个厚度
+        // 把「屏幕二上齐着交界的窗口」搭出来 —— 按外框量必须判「会挡着」（旧行为，就是病根），按可见边框量
+        // 必须判「不挡」（保持置顶）。没有第二台显示器也能把这件事量出来，靠的正是这条纯粹几何的规则。
+        var outer = new NativeRect();
+        var visible = new NativeRect();
+        var framed = Native.GetWindowRect(window.Handle, out outer)
+            && Native.GetVisibleFrame(window.Handle, out visible);
+
+        // 外框比看得见的边框**更外**，所以那圈边框的厚度是「可见的左边减外框的左边」，是正数：本机实测这扇窗
+        // 外框 1080×800、看得见的边框 1066×793，也就是左右各 7px、下边 7px。
+        var border = framed ? visible.Left - outer.Left : 0;
+
+        var flushVisible = new NativeRect
+        {
+            Left = info.Monitor.Right,
+            Top = info.Monitor.Top,
+            Right = info.Monitor.Right + 1080,
+            Bottom = info.Monitor.Top + 640,
+        };
+        var flushOuter = new NativeRect
+        {
+            Left = flushVisible.Left - border,
+            Top = flushVisible.Top,
+            Right = flushVisible.Right,
+            Bottom = flushVisible.Bottom,
+        };
+
+        var outerWouldYield = !HostWindow.StandsClear(info.Monitor, monitor, flushOuter, there);
+        var visibleKeepsBand = HostWindow.StandsClear(info.Monitor, monitor, flushVisible, there);
+
+        check("全屏让位量的是看得见的边框",
+            framed && (border == 0 || (outerWouldYield && visibleKeepsBand)),
+            $"本窗口外框 {outer.Width}×{outer.Height} / 看得见的边框 {visible.Width}×{visible.Height}"
+                + $"（左边那圈看不见的边框 {border}px）={framed}；屏幕二上齐着两屏交界的窗口："
+                + $"按外框量会让位={outerWouldYield}，按看得见的边框量保持置顶={visibleKeepsBand}");
+
         Native.GetWindowRect(window.Handle, out var before);
         var beforeStyle = (long)Native.GetWindowLongPtr(window.Handle, Native.GwlStyle);
         var beforeEx = (long)Native.GetWindowLongPtr(window.Handle, Native.GwlExStyle);
