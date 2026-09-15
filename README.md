@@ -8,7 +8,7 @@ telegram 发布频道：https://t.me/EmbyNian
 
 ## 主要功能
 
-**播放器** — 内置 libmpv，随程序打包，不用另外装 mpv。进度、音量、字幕、音轨、章节、倍速、全屏、窗口置顶都在播放器里直接调。自动跳过片头片尾，自动连播下一集（跨季也接），断点续播。
+**播放器** — 内置 libmpv。内置播放控件支持进度、音量、字幕、音轨、章节、倍速、全屏、窗口置顶。支持自动跳过片头片尾。
 
 ![播放器](docs/screenshots/player.jpg)
 
@@ -46,7 +46,6 @@ telegram 发布频道：https://t.me/EmbyNian
 
 ![快捷键](docs/screenshots/shortcuts.jpg)
 
-## 如何使用
 
 ### 系统要求
 
