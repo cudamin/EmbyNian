@@ -3854,6 +3854,33 @@ internal static class PlaybackTests
                 "新的一次藏匿里，第一个位移仍然要先挂起");
         });
 
+        Test("播放器控件：藏匿期报「动了」就能独自结束藏匿——所以事件那一路不许报动", () =>
+        {
+            // 第十一报续（2026-09-15）的判据源头。用户第三次报「还是一样的毛病」，日志那次现场是
+            // 移动=17、挡掉跳变=0、显示行挂着默认串。缺的不是裁决而是**入口纪律**：Pointer(moved:true)
+            // 里那行 `if (moved || !CursorHidden) _lastActivity = now` 会重盖时钟，Settle 的 hide 随即
+            // 变回 false、CursorHidden 翻成显 —— 一次藏匿就被一声「动了」独自结束，既不经过 WarpOrHand
+            // 的跳变/手裁决，也不落任何名字。
+            //
+            // 所以这条路只能由**已经裁决过**的调用者走：轮询在 WarpOrHand 认成手之后（WakeFromPoll 挂
+            // 了名），按键、点击、离窗、回窗、窗口缩放（各自挂名）。XAML 的 PointerMoved 不行 ——
+            // WinUI 会为没动过的指针抬它，外屏 AyuGram 的动静就会让它抬一次。这条测试把「一声没来由的
+            // 动了就足以叫醒」钉在这儿，好让 Shell 那侧「事件只报位置」成为一条有据可查的纪律，
+            // 而不是一句注释。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            // 什么位置都没换、离藏匿点也就几个像素：只要它自称是「动」，规则就得认。
+            Assert.True(
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1,
+                    now + ChromeReveal.CursorIdleMilliseconds + 100, moved: true),
+                "自称是动的报告会让规则翻转，这正是它必须来自裁决过的那一路的原因");
+            Assert.False(chrome.CursorHidden, "一声没来由的「动了」就足以结束藏匿");
+        });
+
         Test("播放器控件：新片子开场，跳变那笔账归零", () =>
         {
             // Reset 是新文件的入口。上一次藏匿挡掉几次跳变的读数留着不化，下一次报告会读成「修了之后

@@ -769,18 +769,38 @@ public sealed partial class PlayerPage
             if (_cursorHidden) Screen(where);
 
             var back = _polledMoves;
+
+            // 两次位移，不是一次。这一句问的是「手落在鼠标上会不会把光标叫回来」，而**一次** 60 像素的
+            // SetCursorPos 恰恰是第十一报要挡掉的那个形状：注入（外屏 AyuGram 把光标整块搬走）与一次
+            // 程序化搬运都表现为「搬完就冻住」，WarpOrHand 因此要求看下一拍 —— 位置又变了才算手。
+            // 探针以前只搬一次、只推一拍，于是它测的其实是「注入会不会叫醒光标」，答案是不该叫醒，
+            // 判据却在要它醒。手在鼠标上是一个**过程**：这里就走两步，第二拍位置再变，轮询就会认成手
+            // 并唤醒——和真手连着走两拍是同一条路（那条判据在 ProbeCursorWarp 里）。
             Native.SetCursorPos(centre.X + 60, centre.Y);
+            Pump();
+            OnTick(this, EventArgs.Empty);
+            Native.SetCursorPos(centre.X + 120, centre.Y);
             Pump();
             OnTick(this, EventArgs.Empty);
 
             // Only asked if the pointer actually went — same reason as the reading above. When the input desktop
             // is not ours the move quietly does not happen, and 「一动鼠标就回来」 would be blaming the player for
             // a mouse that never moved.
-            var went = Native.GetCursorPos(out var now) && now.X != centre.X;
+            //
+            // 而且「went」要看**轮询**有没有看见，不能只看坐标读回来变了没有。窗口化那一趟里两者会分开：
+            // GetCursorPos 说指针挪到了 3160，轮询却是「轮询问出 0 次」——探针的程序化搬运落进了坐标，
+            // 却没有进到输入队列那条被测的路里。拿坐标当真去判，这一条就是在问一记从未发生过的移动，
+            // 而它必然红（光标本来就不该为一次没到达的移动醒来）。轮询才是这句话的传感器；它没看见，
+            // 这一句就只作参考。
+            var cursorWent = Native.GetCursorPos(out var now) && now.X != centre.X;
+            var pollSawIt = _polledMoves > back;
+            var went = cursorWent && pollSawIt;
             if (went) Want($"{where}一动鼠标就回来", !_cursorHidden && !NoShape());
 
             report.Add($"{where}挪一下就回来：轮询问出 {_polledMoves - back} 次，线程形状={Mine()}"
-                + (went ? string.Empty : "，指针没挪动，输入不在我们手上，这一句只作参考"));
+                + (went ? string.Empty
+                    : cursorWent ? "，指针挪了但轮询没看见（搬运没进输入队列），这一句只作参考"
+                    : "，指针没挪动，输入不在我们手上，这一句只作参考"));
         }
 
         // Everything between our call and the pixels, because the log once showed the two halves disagreeing:

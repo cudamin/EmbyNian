@@ -51,6 +51,27 @@ public sealed partial class PlayerPage : IWin32KeySink
         // 不是「有没有动」的问题，事件带的位置正合适。
         if (!Moved(point, part)) return;
 
+        // 第十一报续（2026-09-15，重构后的最后一个洞）：藏匿期这条路**不算移动**。
+        //
+        // 单传感器重构把「该不该藏」整个交给了 PollPointer 对 GetCursorPos 的读数，但这一条留了下来，
+        // 它照样调 _chrome.Pointer(moved: true) —— 而那一下会重盖 _lastActivity（ChromeReveal:500），
+        // 于是 Settle 的 hide 变回 false、CursorHidden 翻成显、Render 打出显示行。也就是说：这条路
+        // 仍然能**独自**结束一次藏匿。这正是第八报定罪过的东西——WinUI 会为**没动过的指针**抬这个
+        // 事件（树在它底下变一次就抬一次），而外屏 AyuGram 的活动恰恰会让我们的树/焦点变一下。
+        //
+        // 更糟的是它不挂名（用户第三次报「还是一样的毛病」那次的显示行就是「未标注的显示路径」＋
+        // 移动=17＋挡掉跳变=0），也不经过 WarpOrHand 的跳变/手裁决——绕过了第十一报的整条防线。
+        //
+        // 修法是位置与移动照旧分开：藏匿期仍把位置交给规则（chrome 的命中判定要它），但不是以
+        // 「移动」的名义——「位置是位置、动是动」。要真唤醒就走 PollPointer 那条路，那里有裁决、有
+        // 名字。第十一报的判据「藏匿期被搬一次不醒」与「真手连着走两拍要能叫醒」都仍然成立：前者由
+        // 轮询挂起挡住，后者由轮询在下一拍认成手并挂牌唤醒。
+        if (_cursorHidden)
+        {
+            ReseedPointer(moved: false);
+            return;
+        }
+
         if (_chrome.Pointer(point.Y, Root.ActualHeight, part, RailNear(point), Now)) Render();
     }
 
