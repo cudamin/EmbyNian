@@ -128,6 +128,15 @@ internal static class LibMpvNative
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int mpv_observe_property(IntPtr context, ulong replyUserData, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int format);
 
+    /// <summary>
+    /// Enables or disables one event type for this context. mpv delivers every event type by
+    /// default whether or not the client reads it, and an unhandled event still costs a queue
+    /// entry, a thread wakeup and a marshalled struct. A refusal (mpv keeps a few event types for
+    /// itself — "some events can't be disabled") is an error return and nothing more.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int mpv_request_event(IntPtr context, int eventId, int enable);
+
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int mpv_request_log_messages(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string minLevel);
 
@@ -193,6 +202,20 @@ internal static class LibMpvNative
     internal const int EventPlaybackRestart = 21;
 
     internal const int EventPropertyChange = 22;
+
+    /// <summary>
+    /// The remaining ids of mpv's <c>mpv_event_id</c> enum this client does not consume, kept so
+    /// they can be named when switching them off (values as of mpv 0.41, the same table mpv.net
+    /// ships). The client makes no asynchronous calls, so the three reply types are never fired
+    /// anyway; the rest are delivered only to be picked up and discarded by the event loop.
+    /// </summary>
+    internal const int EventGetPropertyReply = 3;
+    internal const int EventSetPropertyReply = 4;
+    internal const int EventCommandReply = 5;
+    internal const int EventClientMessage = 16;
+    internal const int EventAudioReconfig = 18;
+    internal const int EventQueueOverflow = 24;
+    internal const int EventHook = 25;
 
     /// <summary>MPV_END_FILE_REASON_EOF / STOP / QUIT / ERROR / REDIRECT.</summary>
     internal const int EndFileEof = 0;

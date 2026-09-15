@@ -4,6 +4,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Configuration;
+using EmbyNian.MoviePilot;
 using EmbyNian.Mpv;
 using EmbyNian.Playback;
 using EmbyNian.Services;
@@ -96,6 +97,9 @@ public sealed partial class SettingsViewModel : PageViewModel
     private FontLibrary? _fonts;
     private AppPaths? _paths;
     private Platform.ISystemLauncher? _launcher;
+    private MoviePilotProbe? _moviePilot;
+    private MoviePilotCredentials? _moviePilotCredentials;
+    private SettingMoviePilotRow? _moviePilotRow;
     private SettingFontRow? _subtitleFont;
     private AudioDeviceCatalogue? _audioDevices;
     private SettingChoiceRow? _audioDevice;
@@ -106,8 +110,13 @@ public sealed partial class SettingsViewModel : PageViewModel
     private readonly List<SettingShortcutRow> _shortcutRows = [];
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
+    /// <remarks>
+    /// MoviePilot sits between 界面 and 快捷键 — near the end, because it is an optional second service rather
+    /// than part of the app's own behaviour, and not last, because 快捷键 and 关于 are the two entries people
+    /// scroll to the bottom for.
+    /// </remarks>
     private static readonly string[] CardCategories =
-        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "快捷键", "关于"];
+        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "MoviePilot", "快捷键", "关于"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -210,7 +219,9 @@ public sealed partial class SettingsViewModel : PageViewModel
         AppPaths paths,
         Platform.ISystemLauncher launcher,
         AudioDeviceCatalogue audioDevices,
-        Func<Task> pushSubtitleStyle)
+        Func<Task> pushSubtitleStyle,
+        MoviePilotProbe moviePilot,
+        MoviePilotCredentials moviePilotCredentials)
     {
         _settings = settings;
         _shaders = shaders;
@@ -219,6 +230,8 @@ public sealed partial class SettingsViewModel : PageViewModel
         _launcher = launcher;
         _audioDevices = audioDevices;
         _pushSubtitleStyle = pushSubtitleStyle;
+        _moviePilot = moviePilot;
+        _moviePilotCredentials = moviePilotCredentials;
     }
 
     /// <summary>
@@ -252,6 +265,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         Sections.Add(ShaderCard());
         Sections.Add(HomeCard());
         Sections.Add(InterfaceCard());
+        Sections.Add(MoviePilotCard());
         Sections.Add(ShortcutsCard());
         Sections.Add(AboutCard());
 
@@ -1115,6 +1129,117 @@ public sealed partial class SettingsViewModel : PageViewModel
         var effective = ShortcutCatalog.Resolve(Settings.Shortcuts.Bindings);
         foreach (var row in _shortcutRows)
             row.ComboText = ShortcutCatalog.Format(effective[row.Id]);
+    }
+
+    /// <summary>
+    /// MoviePilot 接入卡（用户的话，2026-09-14：「放设置页」）。一个开关、服务地址、用户名、密码、一颗测试按钮。
+    /// <para>
+    /// <b>为什么先做这张卡</b>：它是后面所有 MoviePilot 功能的地基，而且它自己是能独立验完的一步 —— 填上地址按下
+    /// 测试，通没通当场看得见。缺集提醒、搜索订阅那几件都要先有「这台 MoviePilot 说什么话、连的是哪个 Emby」这些
+    /// 事实，而那些事实正是这张卡测出来的。
+    /// </para>
+    /// <para>
+    /// <b>密码为什么存得下来</b>：MoviePilot 的 API_TOKEN 那条路在这台服务器上是断的 —— 认证能过，但每个接口都
+    /// 回「SUPERUSER 对应用户不存在、未启用或非超级管理员」（实测 2026-09-14）。账号密码换 JWT 那条路是通的，
+    /// 所以这张卡收用户名密码，用 DPAPI 包起来存（<see cref="MoviePilotCredentials"/>），和 Emby 的密码同一套。
+    /// 代价是它比一个长期 token 危险一点，这也是为什么它默认关着、密码框永远不回填。
+    /// </para>
+    /// <para>
+    /// 每个输入框改了就地写盘，和这一页别的行一样；测试按钮是唯一会碰网络的东西，而且只在按下去的那一刻碰。
+    /// </para>
+    /// </summary>
+    private SettingSection MoviePilotCard()
+    {
+        var moviePilot = Settings.MoviePilot;
+
+        // 行本身只拿读写对，不碰设置对象（同这一页每一条的规矩）。密码那一对是个例外里的例外：写进去的是明文、
+        // 存下来的是密文，所以包一层 —— 行永远只见到明文，包和拆都在 MoviePilotCredentials 里。
+        _moviePilotRow = new SettingMoviePilotRow(
+            "MoviePilot",
+            "接上你自己的 MoviePilot，之后就能在库里查缺集、直接订阅还搜得到资源的那一部。"
+                + "地址填 MoviePilot 的 API 端口（默认 3001），不是网页界面那个端口。",
+            moviePilot.Enabled,
+            moviePilot.Url,
+            moviePilot.Username,
+            moviePilot.HasSavedPassword,
+            value => moviePilot.Enabled = value,
+            value => moviePilot.Url = value,
+            value => moviePilot.Username = value,
+            value =>
+            {
+                // 空串＝把已存的清掉，不是「留空不动」—— 「留空则用已保存的那个」承诺在按钮那一边（测试时用
+                // 存下来的），而一个用户主动清空的框该真的清掉。
+                _moviePilotCredentials?.SetPassword(moviePilot, value);
+                _moviePilotRow?.MarkPasswordSaved(moviePilot.HasSavedPassword);
+            },
+            Save,
+            TestMoviePilotAsync);
+
+        return new SettingSection("MoviePilot", "MoviePilot",
+            "这是一个可选的服务：接上之后，这个程序能替你去 MoviePilot 那边找片、订阅、查缺集。不接也能正常用。",
+            [_moviePilotRow]);
+    }
+
+    /// <summary>
+    /// 按下「测试连接」之后的那一路：把地址理一遍 → 拿框里的密码（框里空着就用存下来的）→ 登录 + 问三个接口 →
+    /// 把结果拼成一句话交给行去显示。
+    /// <para>
+    /// 丢出来的异常原样交给行显示，因为这一路上的每一句话都是写给用户看的（客户端那几个异常的 <c>Message</c>
+    /// 已经是「用户名或密码不正确」「无法连接到 x.x.x.x」这种）。这里只加一句「还没填地址」—— 那是唯一一件
+    /// 按钮自己就能判断、不必去网络上白跑一趟的事。
+    /// </para>
+    /// <para>
+    /// 用的是框里的密码优先、存下来的兜底，这样「换了密码想试一下」和「每次点都省得重打」两件事都成立，
+    /// 也正好和密码框上那句提示对上。
+    /// </para>
+    /// </summary>
+    private async Task<string> TestMoviePilotAsync(CancellationToken cancellationToken)
+    {
+        if (_moviePilot is null || _moviePilotCredentials is null) return "设置页还没准备好，稍后再试";
+
+        var row = _moviePilotRow;
+        var moviePilot = Settings.MoviePilot;
+
+        if (!MoviePilotAddress.TryNormalize(row?.Url ?? moviePilot.Url, out var address, out var error))
+            return error;
+
+        if (address is null) return "先填上 MoviePilot 的服务地址";
+
+        var username = (row?.Username ?? moviePilot.Username).Trim();
+        var password = row?.Password is { Length: > 0 } typed
+            ? typed
+            : _moviePilotCredentials.GetPassword(moviePilot);
+
+        if (username.Length == 0) return "先填上用户名";
+        if (password.Length == 0) return "先填上密码（或者是密码没存下来，重新输一次）";
+
+        var status = await _moviePilot
+            .RunAsync(address, username, password, cancellationToken)
+            .ConfigureAwait(true);
+
+        // 通了才把这些写回去 —— 地址归一化过、用户名是这次真的登进去的那个、时间戳记下「什么时候通的」。
+        // 没通就一个字都不改，否则一个打错的地址会把对的那个覆盖掉。
+        moviePilot.Url = MoviePilotAddress.ToDisplayString(address);
+        moviePilot.Username = username;
+        moviePilot.LastUserName = username;
+        moviePilot.LastConnected = DateTimeOffset.Now;
+
+        // 这回真的用上了，顺手把开关打开 —— 按了「测试连接」就是想让它在用的意思。
+        if (!moviePilot.Enabled)
+        {
+            moviePilot.Enabled = true;
+            if (row is not null) row.Enabled = true;
+        }
+
+        Save();
+
+        var servers = status.MediaServers.Count > 0 ? string.Join("、", status.MediaServers) : "无";
+        var downloaders = status.Downloaders.Count > 0 ? string.Join("、", status.Downloaders) : "无";
+
+        return $"连接成功：MoviePilot {status.Version}"
+            + (status.OperatingSystem.Length > 0 ? $"（{status.OperatingSystem}）" : "")
+            + $"\n已连的媒体服务器：{servers}"
+            + $"\n已连的下载器：{downloaders}";
     }
 
     /// <summary>

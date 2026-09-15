@@ -1,3 +1,5 @@
+using EmbyNian.Shell.Interop;
+using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -382,7 +384,8 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 画面比例: that the ratio the view model resolved actually reaches the window, and that zero releases it.
+    /// 画面比例: that the ratio the view model resolved actually reaches the window, that zero releases it, and
+    /// that letting go puts the window back the size the user had.
     /// <para>
     /// <c>AspectLock</c> works out the rectangle and is unit-tested doing it; what has no other test is the
     /// one hop in between — the view model's event, this page's handler, and the window's property. A
@@ -393,12 +396,32 @@ public sealed partial class PlayerPage
     /// Zero is the half worth insisting on. It means 「stop keeping」, and a window still locked to the
     /// shape of a film that finished half an hour ago cannot be dragged into any other shape at all.
     /// </para>
+    /// <para>
+    /// 第三半是 2026-09-14 用户报的那一条：「进入播放页面然后再退出页面会保留播放页面的窗口大小比例」。
+    /// 解锁只说明「能拉了」，说明不了「已经回去了」—— 从前窗口会一直留着片子整出来的那个形状（日志里一次
+    /// 2.413:1 的宽银幕把窗口留成 1463×608）。这一段把整条路量出来：按画面比例整过之后让窗口回到播放前那一份
+    /// （<see cref="HostWindow.RestoreBrowseGeometry"/>，页面在退出播放时调的就是它），窗口必须与整形前逐像素一致。
+    /// </para>
+    /// <para>
+    /// 第四半是同一场事故的另一个入口：「窗口模式下调整窗口大小上下会出现黑边」。修的是「退全屏之后没按当前
+    /// 画面比例再整形一次」—— 自动全屏开播后 40 毫秒就进去，mpv 半秒后才给出真比例，那句修正落在全屏里被丢掉，
+    /// 退出全屏又把按猜错比例整好的矩形放了回来。这里把那趟走一遍（进全屏 → 退全屏），要求退出来之后客户区
+    /// <b>真的是那个比例</b> —— 判据落在比例上而不是落在「有没有调 FitToPicture」上，因为要的正是屏幕上的结果。
+    /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbeAspect()
     {
         if (!Attached || _window is null) return (false, "播放层未接线");
 
         var restore = _window.PictureAspect;
+
+        // 整形之前那个矩形。第三半要比的就是它。
+        if (_window.Handle == IntPtr.Zero) return (false, "窗口还没建");
+
+        var haveOriginal = Native.GetWindowRect(_window.Handle, out var was);
+        if (!haveOriginal) return (false, "读不到窗口矩形");
+
+        var wasFullscreen = _window.Fullscreen;
 
         // Through the page's own handler rather than by writing the property: the wiring is the subject.
         OnPictureAspectChanged(16d / 9d);
@@ -428,12 +451,59 @@ public sealed partial class PlayerPage
                 + (shaped ? string.Empty : $"，应为 {size.Width}×{wanted}");
         }
 
+        // 第四半。先故意把窗口摆成一个**和画面不一致**的形状（16:9 的窗口放 4:3 的画面），再走一趟全屏往返 ——
+        // 进全屏时窗口被迫变成显示器的形状，出来时若没人按画面比例补一次，就会留下全屏前那个 16:9。
+        //
+        // 摆的是「窗口比画面宽」，所以退全屏之后若没整形，客户区会明显不是 4:3，这一关当场红。
+        _window.PictureAspect = 4d / 3d;
+
+        SetFullscreen(true);
+        UpdateLayout();
+        SetFullscreen(false);
+        UpdateLayout();
+
+        var afterSize = _window.ClientSize;
+        var afterRatio = afterSize.Height > 0 ? (double)afterSize.Width / afterSize.Height : 0;
+        var refitted = !_window.Fullscreen
+            && Math.Abs(afterSize.Width - Math.Round(afterSize.Height * 4d / 3d)) <= 1;
+
+        // 第三半要比的那一份，得先摆回探针进来时那个矩形再记 —— 上面那一趟全屏往返把窗口挪走了，而下面
+        // RestoreBrowseGeometry 要还原到的正是**播放前**那一份。这里把窗口摆回去、再让窗口自己重记一次，
+        // 于是「整形前 <-> 还原后」这两头量的是同一个矩形，这一段才是它声称在量的东西。
+        if (haveOriginal)
+        {
+            Native.SetWindowPos(
+                _window.Handle, Native.HwndTop,
+                was.Left, was.Top, was.Width, was.Height,
+                Native.SwpNoZOrder | Native.SwpNoActivate);
+        }
+
         OnPictureAspectChanged(0);
         var cleared = _window.PictureAspect == 0;
+        _window.CaptureBrowseGeometry();
+
+        // 退出播放那一趟。窗口自己记着整形之前那份几何（<c>HostWindow.PictureAspect</c> 的 setter 里在写下一个
+        // 非零比例时记的），这里只把还原走一遍。自检不真播片子，所以驱动的是页面在 <c>LeavePlayer</c> 里用的同一
+        // 条路 —— 少了这一步，「解锁」会全绿，而屏幕上窗口的形状还一直是片子的。
+        _window.RestoreBrowseGeometry();
+
+        var haveNow = Native.GetWindowRect(_window.Handle, out var now);
+        var back = haveNow
+            && now.Left == was.Left && now.Top == was.Top
+            && now.Width == was.Width && now.Height == was.Height;
+
+        var put = haveNow ? $"{now.Width}×{now.Height} @ {now.Left},{now.Top}" : "读不到";
+
+        if (_window.Fullscreen != wasFullscreen) SetFullscreen(wasFullscreen);
 
         _window.PictureAspect = restore;
 
-        return (took && shaped && cleared,
-            $"16:9 {(took ? "已交给窗口" : "没有传到窗口")}；{fitted}；归零{(cleared ? "已解除" : "未解除")}");
+        return (took && shaped && refitted && cleared && back,
+            $"16:9 {(took ? "已交给窗口" : "没有传到窗口")}；{fitted}；"
+            + $"全屏往返后（画面 4:3）客户区 {afterSize.Width}×{afterSize.Height} = {afterRatio:0.000}"
+            + (refitted ? "，已按画面比例补整" : "，不是 4:3 —— 退全屏后没按当前画面比例再整形一次") + "；"
+            + $"归零{(cleared ? "已解除" : "未解除")}；"
+            + $"退出播放后窗口 {put}"
+            + (back ? "，与整形前一致" : $"，整形前是 {was.Width}×{was.Height} @ {was.Left},{was.Top} —— 没还原"));
     }
 }

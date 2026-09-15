@@ -1,5 +1,7 @@
 using EmbyNian.Infrastructure;
+using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
+using EmbyNian.MoviePilot;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
@@ -293,7 +295,9 @@ public sealed partial class SettingsPage : Page, IShellContent
                 // 字幕外观改一行就推给正在播的那部片子。交出去的是一个方法而不是 PlaybackService 本身：
                 // 这一页要的是「重发一遍字幕外观」这一件事，不是播放器。同 ShellServices 里把后端工厂当方法组
                 // 递出去的写法。
-                request.Services.GetRequiredService<PlaybackService>().ApplySubtitleStyleAsync);
+                request.Services.GetRequiredService<PlaybackService>().ApplySubtitleStyleAsync,
+                request.Services.GetRequiredService<MoviePilotProbe>(),
+                request.Services.GetRequiredService<MoviePilotCredentials>());
             _ = ViewModel.ReloadAsync();
         }
 

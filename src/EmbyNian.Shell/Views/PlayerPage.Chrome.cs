@@ -110,7 +110,15 @@ public sealed partial class PlayerPage
     /// into a point on the picture — no size yet, no reading — and the rule still believes whatever it did
     /// before, which matters to <see cref="PollPointer"/> and to nobody else.
     /// </returns>
-    private bool ReseedPointer()
+    private bool ReseedPointer() => ReseedPointer(moved: false);
+
+    /// <summary>
+    /// The same, for the two callers that mean different things by it. A resize genuinely moves every control
+    /// out from under a pointer that never moved, so 「the pointer is not still」 is true and
+    /// <paramref name="moved"/> is true; the ten-hertz poll has already asked the question properly, against
+    /// the point the cursor was hidden at, and by the time it gets here it is only reporting a position.
+    /// </summary>
+    private bool ReseedPointer(bool moved)
     {
         // Nothing better to say than what is already recorded: a failed read is not a departure.
         if (!CursorPoint(out var point)) return false;
@@ -130,7 +138,7 @@ public sealed partial class PlayerPage
         _pointerAt = point;
         _pointerOn = part;
 
-        if (_chrome.Pointer(point.Y, Root.ActualHeight, part, RailNear(point), Now)) Render();
+        if (_chrome.Pointer(point.Y, Root.ActualHeight, part, RailNear(point), Now, moved)) Render();
         return true;
     }
 
@@ -148,10 +156,10 @@ public sealed partial class PlayerPage
     /// </para>
     /// <para>
     /// The threshold is <see cref="ChromeReveal.MovePixels"/>, the same one the events are filtered by, and it
-    /// applies in both cursor states: a mouse resting on a desk rattles a pixel, and this player's own ask
-    /// (<see cref="Native.NudgeCursorState"/>) <em>is</em> one physical pixel out and back. Asking for two
-    /// before calling it a hand is what keeps the ask from being read as one — 「鼠标隐藏了一会又会自动跑出来」
-    /// — while a hand's first tick crosses two pixels many times over.
+    /// applies in both cursor states: a mouse resting on a desk rattles a pixel, up to two on this machine's
+    /// own log. It used to have to clear a second, higher bar as well — this player's own hide-time ask was a
+    /// real injected one-pixel round trip and had to be told from a hand — and no longer does, because that ask
+    /// is gone. See <c>Nudge</c>.
     /// </para>
     /// </summary>
     private void PollPointer()
@@ -161,17 +169,53 @@ public sealed partial class PlayerPage
         var dx = _polledKnown ? Math.Abs(screen.X - _polled.X) : int.MaxValue;
         var dy = _polledKnown ? Math.Abs(screen.Y - _polled.Y) : int.MaxValue;
 
-        if (dx == 0 && dy == 0) return;
-
-        // Not advancing the anchor is the point: jitter around one spot never accumulates into activity, while
-        // a hand that really is moving the mouse crosses two pixels within a tick or two. Counted while the
-        // cursor is hidden, where the same step is also how this player's own ask and a rattling desk show up —
-        // the count goes out beside the wake reason, so the next report says which of the two it was.
-        if (_polledKnown && !ChromeReveal.Travelled(dx, dy))
+        // 第八报（2026-09-15）：这是合成声明的裁决席之一。两个读数之间一个像素没动 = 指针物理没动，
+        // 任何挂着的 XAML 移动声明（_xamlClaim）都是框架重推坐标基准送来的谎言——丢弃、计数。08:22:44
+        // 的现场就是这一拍的形状：藏了 29.7 秒、声明声称走了 5 个逻辑像素、这里两个读数纹丝不动。
+        if (dx == 0 && dy == 0)
         {
-            if (_cursorHidden) _hiddenNoise++;
+            DiscardSyntheticClaim();
             return;
         }
+
+        // <b>A hidden cursor asks a different question, and asks it of the rule.</b> While the cursor is showing
+        // the question is 「where is the pointer」 and this poll's own last reading is the right thing to measure
+        // from — a step of five pixels is a hand. Hidden, the question is 「has anybody touched the mouse」, and
+        // this reading is the wrong thing to measure from: it is advanced on every accepted step, so a desk
+        // nudging the pointer one pixel at a time walks it along and the step never reaches five. The reference
+        // that does not move is the point the cursor was hidden at, and the rule holds it — so a pointer within
+        // a pixel of there is the desk however many reports arrive, and one anywhere else is a hand. See
+        // ChromeReveal.HiddenTolerance.
+        if (_cursorHidden)
+        {
+            if (!_chrome.WanderedFromHiding(screen.X, screen.Y))
+            {
+                // Read as still, so the countdown keeps running and this is not a movement. The reading is
+                // deliberately not advanced: it stays at the hiding point for as long as the hide lasts, which
+                // is what makes the comparison above about distance from the hide rather than distance from the
+                // previous report.
+                _hiddenNoise++;
+
+                // 第八报（2026-09-15）：裁决席之二。指针离藏匿点不超过 HiddenTolerance = 没人碰过鼠标，
+                // 挂着的 XAML 移动声明（可能正好在读数之间的小抖动里溜过了上面的零位移裁决）也是谎言，
+                // 同样丢弃。真手在两拍之间走出的位移会落在这里之外，走不到这里。
+                DiscardSyntheticClaim();
+                return;
+            }
+        }
+        else if (_polledKnown && !ChromeReveal.Travelled(dx, dy))
+        {
+            // Counted while the cursor is hidden, where the same step is also how a rattling desk shows up —
+            // the count goes out beside the wake reason, so the next report says which it was.
+            //
+            // The threshold used to have a second job as well, and does not any more: this player's own one-pixel
+            // ask used to land here and had to be told from a hand. That ask is gone — see Nudge.
+            return;
+        }
+
+        // 第八报（2026-09-15）：走到这里 = OS 认可了移动（真手）。挂着的 XAML 声明无需再裁——它说的
+        // 和轮询刚证实的同一件事，就地吸收；唤醒理由由下面的轮询句子写，事件自己的不再赘述。
+        _xamlClaim = null;
 
         _polled = screen;
         _polledKnown = true;
@@ -180,17 +224,50 @@ public sealed partial class PlayerPage
 
         var wasHidden = _cursorHidden;
 
-        // Told either way. The reseed is the better answer when it works — it carries where the pointer is,
-        // not just that it moved — and when it cannot translate the position, the movement is still news:
-        // both clocks have to start from the same instant or 「静止两秒」 is measured from a stamp the rule
-        // never got.
-        if (!ReseedPointer() && _chrome.Moved(Now)) Render();
+        // Said BEFORE the reseed, not after. The show line is written inside SetCursorHidden, which the reseed
+        // reaches through Render — so anything assigned after it is assigned too late and the log prints the
+        // previous wake's reason or the default. That is exactly what the sixth report cost: a hide ended by
+        // this poll's reading printed as 「没记到移动（按键、菜单或窗口变化）」, and three rounds of looking
+        // everywhere but here because the log swore no pointer path had spoken. The reason exists before the
+        // consequence; write it in that order.
+        if (wasHidden)
+        {
+            // 第九报（2026-09-15）：唤醒行的取证三件套。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到
+            // 消息会唤起屏幕一静止隐藏的鼠标指针」，三天日志里同一签名（一拍整 60px、纵向恒 0）分不清是
+            // 物理注入还是桌面重排搬了坐标——从此唤醒那拍连同读数绝对坐标、虚拟屏矩形、指针下的窗口
+            // 一起出门：虚拟屏矩形没变＝读数变化是真的（有进程在注入位移，去抓注入者）；矩形变了＝
+            // 指针根本没动，是桌面重排把坐标搬走，唤醒是误报。
+            var vs = Native.VirtualScreen();
+            _woke = $"轮询问出了 {dx},{dy} 物理像素，读数 {screen.X},{screen.Y}"
+                  + $"，虚拟屏 ({vs.X},{vs.Y}) {vs.Width}×{vs.Height}，{PointerOwner()}";
+        }
 
-        // Recorded only once it has actually happened. A movement that arrives while the pointer is outside the
-        // window takes the reveal state down without the cursor ever coming back, and that movement printed
-        // against the next wake — a keypress, say — would be a reason that is not one, which is worse than the
-        // silence this line exists to replace.
-        if (wasHidden && !_cursorHidden) _woke = $"轮询问出了 {dx},{dy} 物理像素";
+        // Told either way, and told as a movement: this point has already cleared whichever question applies
+        // — a step of five pixels while the cursor is showing, or any distance past the hidden anchor while it
+        // is not — so it is the last thing a hand did as far as this rule is concerned, and the countdown
+        // restarts here. The reseed is the better answer when it works, because it carries where the pointer is
+        // and not just that it moved; when it cannot translate the position the movement is still news: both
+        // clocks have to start from the same instant or 「静止两秒」 is measured from a stamp the rule never got.
+        if (!ReseedPointer(moved: true) && _chrome.Moved(Now)) Render();
+    }
+
+    /// <summary>
+    /// Throws away a parked XAML movement claim, having convicted it: the poll has just established, from the
+    /// OS's own coordinates, that the pointer is exactly where it was — so the event that claimed a step was
+    /// synthetic, raised because the tree under a stationary pointer changed rather than because anything
+    /// moved.
+    /// <para>
+    /// 第八报（2026-09-15）的收口动作。计数进 <see cref="_syntheticMoves"/> 并随显示行出门，因为用户问的
+    /// 「AyuGram 来消息鼠标就冒出来，其他播放器都不会」只有数字能关卷：外来事件还会来（它们不归这个进程
+    /// 管），要证明的是它们每一次都被这里认出来、按在原地。藏匿开始时清账，与 <see cref="_hiddenNoise"/>
+    /// 同簿。
+    /// </para>
+    /// </summary>
+    private void DiscardSyntheticClaim()
+    {
+        if (_xamlClaim is null) return;
+        _xamlClaim = null;
+        _syntheticMoves++;
     }
 
     /// <summary>
@@ -201,7 +278,13 @@ public sealed partial class PlayerPage
     /// </summary>
     private void OnRootResized(object sender, SizeChangedEventArgs e)
     {
-        if (Attached) ReseedPointer();
+        // A movement, deliberately: every control has just been put somewhere else under a pointer that never
+        // moved, so 「the pointer has not been still」 is the true answer and the idle clock has to start again.
+        if (!Attached) return;
+
+        // A resize that ends a hide is its own kind of wake — say so before the reseed renders.
+        if (_cursorHidden) _woke = "窗口改变了大小";
+        ReseedPointer(moved: true);
     }
 
     // ---- 两处竖直间距 -------------------------------------------------------------
@@ -542,7 +625,9 @@ public sealed partial class PlayerPage
         //
         // One clause of that has to be read with 2026-09-05 in mind: 「the nudge had been sent」 was a call that
         // produced no message whatever, so the four Win32 levers were never actually asked in that film. They
-        // are not exonerated by it and they are not convicted by it — see Native.NudgeCursorState.
+        // are not exonerated by it and they are not convicted by it — see Native.NudgeCursorState. And that
+        // nudge itself was retired on 2026-09-14: it was real input, it woke the player out of its own hide,
+        // and nothing injects it any more.
         //
         // ProtectedCursor is the framework's own lever and the only one it consults. Null hands the shape back
         // to it, which is an ordinary arrow. The four Win32 levers stay: they cover the windows the island is
@@ -570,27 +655,75 @@ public sealed partial class PlayerPage
         // Kept because it is the OS's own answer about the one thing here that leaves the process: the new
         // display count, which has to be below zero for a hidden cursor and back at zero for a shown one.
         // Read by the self-check, which otherwise could only ask this file what it believes.
-        _cursorCount = Native.ShowCursor(!hidden);
+        // 第九报（2026-09-15）：show 侧从「拉一格」改成「拉到非负」（用户原话「你直接抄这些开源项目吧」，
+        // HC-Player 的 while (ShowCursor(TRUE) < 0) {}）——藏匿期间计数可能被压得很深（每拍重锁 + 历史残留），
+        // 单次 ShowCursor(TRUE) 只抬一格，残负会把下一次显示整个吞掉。hide 侧维持一次即可：HostWindow 每拍
+        // 的重锁（SuppressCursorDisplay）会兜住任何抬回。
+        if (hidden)
+        {
+            _cursorCount = Native.ShowCursor(false);
+        }
+        else
+        {
+            while ((_cursorCount = Native.ShowCursor(true)) < 0) { }
+        }
 
         if (hidden) _shapeBack = 0;
 
-        // And now make the framework look. Every 「no cursor」 above is an answer — this queue's shape, the class
-        // cursors, mpv's own setting, and above all the transparent ProtectedCursor on the line above, which is
-        // the only one of them that reaches the pixels a pointer over XAML content is on. WinUI reads that
-        // property while it is handling pointer input, so a value assigned during stillness is a value nobody
-        // has read: the arrow the last real movement worked out stays on the screen, which is 「静止超过两秒后
-        // 鼠标指针还是不会自动隐藏」 from a player whose own readings all say hidden.
+        // And say the policy again, without asking the OS for anything. Every 「no cursor」 above is an answer —
+        // this queue's shape, the class cursors, mpv's own setting, and above all the transparent
+        // ProtectedCursor on the line above, which is the only one of them that reaches the pixels a pointer
+        // over XAML content is on. WinUI reads that property while it is handling pointer input, so a value
+        // assigned during stillness is a value nobody has read: the arrow the last real movement worked out
+        // stays on the screen, which is 「静止超过两秒后鼠标指针还是不会自动隐藏」 from a player whose own
+        // readings all say hidden.
         //
-        // One physical pixel out and straight back, through the real input queue. What that replaced, and why
-        // both of its predecessors asked nothing at all, is written out at Native.NudgeCursorState — the short
-        // version is that a same-point SetCursorPos never reaches the island and a zero-displacement SendInput
-        // never reaches anything. Counted, and bounded to three per hide, because it is real input now.
+        // This used to be a one-pixel injection through the real input queue, and it is not any more — see
+        // Nudge for what that cost and what replaced it. Restated for the first three ticks of a hide, because
+        // the first assignment can land before the framework pushes its own value down and no reading here can
+        // tell that case from a successful one.
+        // 第九报（2026-09-15）：藏点的屏幕绝对坐标。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到
+        // 消息会唤起屏幕一静止隐藏的鼠标指针」，三天日志里那批唤醒都是同一签名：一拍之内横跳整整 60px、
+        // 纵向恒 0，物理注入不会三天都恰好 60px。藏匿行从此带上藏点绝对坐标，与唤醒行的读数、虚拟屏
+        // 度量三方对账——唤醒那一刻藏点没变而虚拟屏矩形变了＝桌面重排把坐标搬走了（唤醒是误报）；
+        // 矩形没变＝真有进程在注入位移，顺着指针下的窗口与独立监视器去抓注入者。
+        string hideAnchor = "？";
+
         if (hidden)
         {
             _nudgesThisHide = 0;
             _hiddenNoise = 0;
-            _woke = "没记到移动（按键、菜单或窗口变化）";
+            _syntheticMoves = 0;
+            _xamlClaim = null;
+            _woke = "未标注的显示路径（见到此串即有路漏标）";
+
+            // 第九报（2026-09-15）：外部画回的基线。HostWindow 的 GlobalShapeChanges/ExternalShapeRestores
+            // 是跨藏匿期的累计值，本页只关心「这一次藏匿里发生了几次」——藏匿开始时钉下基线，独立日志
+            // 与显示行都拿当前值减它。
+            _globalBase = _window?.GlobalShapeChanges ?? 0;
+            _externalBase = _window?.ExternalShapeRestores ?? 0;
+
+            // Where the pointer was at the moment of hiding, which is the point every report during the hide is
+            // judged against — MPC-HC's PointEqualsImprecise, and the reason a desk's one-pixel rattle can no
+            // longer walk the reference along with it. Both anchors are pinned here: the rule's, which the poll
+            // asks about, and this page's own, which the XAML filter measures steps against.
+            if (CursorScreen(out var hiding))
+            {
+                _chrome.AnchorHidden(hiding.X, hiding.Y, Now);
+                _polled = hiding;
+                _polledKnown = true;
+                hideAnchor = $"{hiding.X},{hiding.Y}";
+            }
+
+            if (CursorPoint(out var onPicture)) _pointerAt = onPicture;
+
             Nudge();
+        }
+        else
+        {
+            // Shown again: the pointer is back to being followed rather than held to a point, so the anchor
+            // stops meaning anything and the poll's own reading becomes the reference once more.
+            _chrome.ReleaseHiddenAnchor();
         }
 
         // Written to the log because this is the one thing in the player a probe can only ask about under
@@ -610,34 +743,38 @@ public sealed partial class PlayerPage
         Log.Debug(Category, hidden
             ? $"鼠标藏起来了：静止 {Now - _pointerMovedAt}ms，其间空事件 {_stillMoves} 次，线程形状"
               + $"{(_window?.CursorShapeGone == true ? "无" : "还在")}，计数 {_cursorCount}"
+              + $"，藏点屏幕 {hideAnchor}"
               + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
               + $"，{PointerElements()}"
             : $"鼠标又显示了：{_woke}；轮询问出的移动共 {_polledMoves} 次、XAML 事件 {_pointerMoves} 次，计数 {_cursorCount}"
-              + $"，藏着期间催了框架 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了"
-              + $"，挡回去 {_hiddenNoise} 次一像素级的抖动");
+              + $"，藏着期间重申了 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了"
+              + $"，挡回去 {_hiddenNoise} 次（阈值以下的抖动）"
+              + $"，判掉合成事件 {_syntheticMoves} 次（指针没动而 XAML 声称动了）"
+              + $"，桌面光标失同步刷新共 {_window?.CursorDisplayRefreshes ?? 0} 次"
+              // 第九报（2026-09-15）：本藏匿期全局快照的变化次数与判定为外部画回的次数——「出现≠移动」
+              // 盲区的对账读数。两者都只取证（Nudge 压回成环已撤）。
+              + $"，全局形状变化 {(_window?.GlobalShapeChanges ?? 0) - _globalBase} 次"
+              + $"，其中判外部画回 {(_window?.ExternalShapeRestores ?? 0) - _externalBase} 次"
+              // 第九报（2026-09-15）：负计数锁被抬回又被压回的次数（HC-Player 式第五杠杆）。>0 ＝藏匿期里
+              // 有谁把队列计数抬回过非负——画回还能亮起来的「灯是谁开的」就有数了。
+              + $"，负计数锁被抬回又压回 {_window?.CursorSuppressRestates ?? 0} 次");
     }
 
-    /// <summary>
-    /// One ask that the framework work the cursor out again, with the bookkeeping that makes it safe to make.
-    /// <para>
-    /// Two things happen here rather than at the call sites, because both are properties of the ask rather
-    /// than of the moment: it is <b>bounded</b> to <see cref="NudgesPerHide"/> per hide (real injected input,
-    /// so it must stop), and only the asks that really left the process are counted, because that count is
-    /// what the self-check asserts on.
-    /// </para>
-    /// <para>
-    /// Attempts are what the bound counts, not successes. A machine that refuses injected input outright would
-    /// otherwise be asked ten times a second for the length of the film, which is the cost this bound exists
-    /// to avoid, on exactly the machine where it buys nothing.
-    /// </para>
-    /// </summary>
+    /// <summary>Maintains the page cursor and repairs a stale desktop arrow through the host.</summary>
     private void Nudge()
     {
-        if (_nudgesThisHide >= NudgesPerHide) return;
-
         _nudgesThisHide++;
+        _cursorNudges++;
 
-        if (Native.NudgeCursorState()) _cursorNudges++;
+        _window?.KeepCursorHidden();
+
+        // And the framework's own lever, said again with the rest of them. This is the assignment that
+        // actually covers a pointer over XAML content, and it is the one WinUI is free to overwrite the next
+        // time it runs its 「who is the pointer over, what shape does he want」 round — so it is the one that
+        // most needs repeating. Guarded on identity: assigning the same value is already a no-op in the
+        // framework's own setter, but the comparison keeps the tick free of a property write it does not need.
+        var blank = _window?.BlankInputCursor;
+        if (!ReferenceEquals(Root.Cursor, blank)) Root.Cursor = blank;
     }
 
     /// <summary>
@@ -785,13 +922,42 @@ public sealed partial class PlayerPage
         // pointer's last known position is still parked on a control, and 「parked」 is precisely the
         // state the idle countdown does not apply to, so the chrome would stay up until the pointer came
         // back. Ten hertz makes the stuck state impossible rather than merely unlikely.
-        if (!PointerInside() && _chrome.PointerLeft(Now)) Render();
+        if (!PointerInside())
+        {
+            // The departure the events can miss gets a name too: 「指针走了」 is a different wake from
+            // 「按键」 or 「点击」, and the show line is where that difference has to survive.
+            if (_cursorHidden) _woke = "指针离开了画面";
+            if (_chrome.PointerLeft(Now)) Render();
+        }
+        else if (_chrome.PointerGone)
+        {
+            // The homecoming the events and the poll both miss. A hand that comes back and stops within
+            // five pixels of where it left raises no pointer event at all, and the poll's two early
+            // returns (a zero step; one under the threshold against its last accepted reading) both fire
+            // before a position ever reaches the rule — so the departure above would stand forever, and
+            // 「有时候要点一下暂停再播放鼠标才会自动隐藏」 was the click doing this reseed's job by hand.
+            // Not a movement: the pointer is where it is, 位置是位置、动是动, and the settle clock keeps
+            // running on its own terms (a report with the cursor showing restamps it anyway, which is the
+            // same patience a parked pointer always bought).
+            //
+            // 第八报（2026-09-15）补的名牌：这条 reseed 展开控件栏时就是一次显示（chrome 出、光标随它
+            // 出），22:56:59 两条「未标注的显示路径」正是它和下一行在进退全屏的同一毫秒里留下的。
+            if (_cursorHidden) _woke = "指针回到了画面";
+            ReseedPointer(moved: false);
+        }
 
         // A held mouse button with chrome on screen is a drag on one of the two sliders — or at least may
         // be — and a drag reports nothing at all while the hand holds still. The reveal rule's patience for
         // a still pointer is finite now, and a slider collapsing under a held thumb would lose the pointer
         // capture with it, so the button's own state stands in for the events that are not coming.
-        if (Native.MouseButtonDown() && _chrome.State.Any) ReseedPointer();
+        //
+        // 第八报（2026-09-15）补的名牌：这条 reseed 也会展开控件栏（chrome 出、光标随它出），是 22:56:59
+        // 「未标注」的另一半。只在光标已藏时挂名——常态（chrome 在屏、光标本就显示）不给 _woke 塞旧账。
+        if (Native.MouseButtonDown() && _chrome.State.Any)
+        {
+            if (_cursorHidden) _woke = "按住鼠标（滑块拖动）";
+            ReseedPointer(moved: true);
+        }
 
         if (_chrome.Tick(Now)) Render();
 
@@ -806,14 +972,37 @@ public sealed partial class PlayerPage
         if (_cursorHidden)
         {
             if (_window?.CursorShapeGone == false) _shapeBack++;
-            _window?.KeepCursorHidden();
 
-            // And ask the framework to work the shape out again, for the two ticks after the one that hid it as
-            // well as on the hide itself. Not because the pointer might have moved — it has not — but because
-            // the ask can arrive before WinUI has pushed its own value down, and there is no reading available
-            // from in here that would tell that case from a successful one. Three asks over three ticks, then
-            // silence: Nudge holds the bound, and it holds it against attempts rather than successes.
+            // And say the policy again — every tick, for as long as the hide lasts. That is not belt and
+            // braces: the framework re-reads ProtectedCursor every time it handles pointer input, and a film
+            // produces pointer input continuously, so a policy announced once is a policy that is overwritten
+            // at some arbitrary later moment. Three announces and then silence was tried for a few hours on
+            // 2026-09-14 and produced 「隐藏后过两三秒又会自动冒出来」 with hides that lasted fifteen seconds,
+            // four seconds and one hundred and eighty milliseconds in the same film. See Nudge.
             Nudge();
+
+            // 第九报（2026-09-15）：全局快照的独立日志。用户拔掉鼠标后仍确认「没错哦17-18 秒鼠标出现在了
+            // 画面之上」，独立监视器同刻量到指针没动——「出现≠移动」的盲区：外部画出的指针只要静止就
+            // 不产生位移事件，线程局部读数（_shapeBack）与轮询同时失明。HostWindow 每拍看全局快照并
+            // 与上一拍差分：状态变了记「全局光标状态变了」（纯取证），判定为外部形状压在本窗口记
+            // 「指针被外部画出来了」。两层都只取证、不回击——Nudge 压回实测把形状请出来成环（14:03，
+            // 用户报「每过一会鼠标就会闪一下，然后消失」，每 ~1.15s 一轮），已撤。都放在 Nudge 之后读，
+            // 读到的是本拍最新值；独立成行让取证事件直接对上用户看见的时刻。
+            if (_window is { } window)
+            {
+                if (window.GlobalShapeChanges != _globalSeen)
+                {
+                    _globalSeen = window.GlobalShapeChanges;
+                    Log.Debug(Category, $"全局光标状态变了：{window.LastGlobalChange}"
+                        + $"（本藏匿期第 {window.GlobalShapeChanges - _globalBase} 次）");
+                }
+                if (window.ExternalShapeRestores != _externalSeen)
+                {
+                    _externalSeen = window.ExternalShapeRestores;
+                    Log.Debug(Category, $"指针被外部画出来了：{window.LastExternalShape}"
+                        + $"（本藏匿期第 {window.ExternalShapeRestores - _externalBase} 次；只取证）");
+                }
+            }
         }
 
         // The same guarantee for the chapter preview, and for the same reason: it hides on the pointer

@@ -1,6 +1,7 @@
 using EmbyNian.Configuration;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
+using EmbyNian.MoviePilot;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.Platform;
@@ -98,6 +99,16 @@ internal static class ShellServices
             provider.GetRequiredService<AppSettings>(),
             provider.GetRequiredService<PlaybackBackendFactory>().Create,
             provider.GetRequiredService<PlaybackPlanner>()));
+
+        // ---- the optional second service ---------------------------------------------------------------
+        // MoviePilot, when the user has one. Registered unconditionally rather than behind a check on the
+        // setting, because the settings card has to be able to reach it in order to turn the setting on in
+        // the first place — and because constructing it costs nothing, since the client holds no connection
+        // until the first call. Its credentials get their own small helper rather than CredentialVault,
+        // which is typed to an Emby AccountProfile that MoviePilot does not have.
+        services.AddSingleton<MoviePilotClient>();
+        services.AddSingleton<MoviePilotProbe>();
+        services.AddSingleton<MoviePilotCredentials>();
 
         // ---- what the view models depend on ----------------------------------------------------------
         services.AddSingleton<ISettingsService, SettingsService>();

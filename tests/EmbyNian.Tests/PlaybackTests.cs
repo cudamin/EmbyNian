@@ -3101,7 +3101,7 @@ internal static class PlaybackTests
     // 搬进 Core 之后时间是参数，于是可以把每一条要求钉成一个用例。
     private static void RegisterChromeReveal()
     {
-        Test("播放器控件：指针进底部五分之一只出进度条", () =>
+        Test("播放器控件：指针进底部 12% 只出进度条", () =>
         {
             var chrome = Chrome(out var now);
 
@@ -3112,9 +3112,13 @@ internal static class PlaybackTests
             chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 1100);
 
             // 「显示进度条的时候不需要同步显示音量条」——推翻了原先的「进度条出来时音量条也要出来」：
-            // 指针进底部五分之一是在要进度条，跟音量一点关系都没有。
+            // 指针进底部边缘带是在要进度条，跟音量一点关系都没有。
             Assert.Equal(new ChromeState(true, false, false), chrome.State);
             Assert.Equal(0d, chrome.RailStrength, "没出来的音量条强度是零");
+
+            // 阈值是 12%（2026-09-15 由五分之一改小）：贴着但没过线的地方不许出来。
+            chrome.Pointer(y: 850, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "y=0.85 还在带外");
         });
 
         Test("播放器控件：进度条和音量条是两个互不相干的请求", () =>
@@ -3148,7 +3152,7 @@ internal static class PlaybackTests
             }
         });
 
-        Test("播放器控件：指针进顶部五分之一只出标题栏", () =>
+        Test("播放器控件：指针进顶部 12% 只出标题栏", () =>
         {
             var chrome = Chrome(out var now);
             chrome.Tick(now + 1000);
@@ -3471,6 +3475,28 @@ internal static class PlaybackTests
             Assert.False(chrome.CursorHidden);
         });
 
+        Test("播放器控件：回来停住的手也得让光标重新能藏", () =>
+        {
+            // 「我有时候需要点击暂停视频然后再开始才会自动隐藏鼠标指针」。手滑出窗口（去第二屏）触发了
+            // 离窗显示；回来那一下停在离出窗点五像素以内、之后一动不动——框架没有移动可报，轮询两处
+            // 都提前返回（位移为 0；或低于阈值），「离窗」的记录永远没人收走。Settle 要等指针回到画面
+            // 里才肯藏，于是光标一直亮着，直到用户点一下暂停（点击把指针的记录亲手带回来）才恢复。
+            var chrome = Chrome(out var now);
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.PointerLeft(now + 100);
+            Assert.True(chrome.PointerGone, "离窗的记录在");
+            Assert.False(chrome.CursorHidden, "离窗就该显示光标");
+
+            // 回窗：只还位置，不算动（moved:false 是「这是一份位置报告」的诚实说法）。
+            // 光标亮着的时候，停着的指针本身就是活动——跟停在控件上买到的耐心是同一条。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 200, moved: false);
+            Assert.False(chrome.PointerGone, "回窗之后离窗的记录必须收走，不然藏匿永远等不到指针回家");
+            Assert.False(chrome.CursorHidden, "刚回来就藏，等于在手的必经之路上把指针弄丢");
+
+            Assert.True(chrome.Tick(now + 200 + ChromeReveal.CursorIdleMilliseconds), "回来停住之后，两秒照旧要藏");
+            Assert.True(chrome.CursorHidden);
+        });
+
         Test("播放器控件：动了但说不出动到哪，也得当活动算", () =>
         {
             // 日志里的「静止 156ms」就出在这儿：拿系统位置判静止的那一头记下了动的时刻，
@@ -3511,7 +3537,7 @@ internal static class PlaybackTests
             // 当成一次活动——空闲时钟一秒被重置四回，谁都熬不到期。
             var chrome = Chrome(out var now);
 
-            // 指针最后落在底部五分之一，之后一动不动：这就是看片时把手放下的样子。
+            // 指针最后落在底部边缘带（12%），之后一动不动：这就是看片时把手放下的样子。
             chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now);
             Assert.True(chrome.State.Bar);
 
@@ -3577,21 +3603,162 @@ internal static class PlaybackTests
             Assert.False(idle.Pending(start + ChromeReveal.CursorIdleMilliseconds), "藏完了才真的没事");
         });
 
-        Test("播放器控件：一个像素不算人动手，两个才算", () =>
+        Test("播放器控件：藏鼠标的参照点是藏下去那一刻，不是上一次读数", () =>
         {
-            // 「鼠标隐藏了一会又会自动跑出来」那件就死在这条线上。一像素有两样东西都是这个尺寸：藏完之后
-            // 那一下「让框架重新念一遍」的真实往返（Native.NudgeCursorState，一个物理像素出去再回来），
-            // 和一只搁在桌上的鼠标的抖动。原来藏起来之后「任何一个像素都算人动手」，于是程序能把自己叫醒。
+            // 第四报「没修好」之后从真片子日志里读出来的：阈值从 2 提到 5 并没有解决问题，因为叫醒它的
+            // 步长本来就是 5,0 / 5,2 / 6,2 —— 都在新阈值之上，而旁边的计数是几十（轮询问出的移动 +19、
+            // XAML 事件 +390）。那不是一个放得太松的阈值放进来的抖动，那是一只手真的在鼠标上。
+            //
+            // 所以问题不在数字，在它跟谁比。以前比的是「上一次被接受的读数」，而被接受的读数自己会被桌面
+            // 的抖动一点点推着走：鼠标每被桌子推 1 个像素，参照点就跟 1 个像素，步长永远凑不满 5，于是攒不
+            // 出一次「人动手」，也永远不该醒 —— 反过来，参照点一旦落后，攒出来的那次就会在一个没人碰鼠标
+            // 的时刻到期。成熟播放器比的是**藏下去那个点**（MPC-HC 的 PointEqualsImprecise），它整个藏匿
+            // 期间一动不动。
+            //
+            // 第六报补上的另一半：容差不能照抄 MPC-HC 的 1。它比的是**事件流**，静止的鼠标根本不产生事件；
+            // 我们是 10Hz 轮询 GetCursorPos，读的是传感器的真实位置 —— 这台机器的桌面抖动实测到 2px
+            // （第四报日志里的 2,0 / 0,2 / 1,2），第六报的片子正是被一次 2px 的漂移从 12 秒的藏匿里叫醒的。
+            // 容差 4 在本机所有抖动记录之上、远在手的第一个事件（几十像素）之下。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            // 藏下去那一刻的指针位置成了参照点。
+            chrome.AnchorHidden(1000, 500, now + ChromeReveal.CursorIdleMilliseconds);
+
+            // 桌面在这 4 个像素以内怎么抖都不算人动手 —— 真机日志里桌面的全部词汇是 1~2 像素。
+            Assert.False(chrome.WanderedFromHiding(1001, 500), "偏 1 个像素还在容差里");
+            Assert.False(chrome.WanderedFromHiding(1000, 501), "纵轴一样");
+            Assert.False(chrome.WanderedFromHiding(1001, 501), "斜着 1,1 也还是容差里的事");
+            Assert.False(chrome.WanderedFromHiding(1002, 500), "偏 2 个像素：真机日志里桌面的原样步长");
+            Assert.False(chrome.WanderedFromHiding(1000, 502));
+            Assert.False(chrome.WanderedFromHiding(1004, 500), "容差本身（4）也在里面");
+            Assert.False(chrome.WanderedFromHiding(1004, 504), "斜着 4,4 也一样 —— 判的是单轴");
+
+            // 出了容差就是人动手 —— 而且判的是**离藏匿点**有多远，不是离上一次报告有多远。
+            Assert.True(chrome.WanderedFromHiding(1005, 500), "偏 5 个像素已经出了容差");
+            Assert.True(chrome.WanderedFromHiding(1000, 505));
+            Assert.True(chrome.WanderedFromHiding(1600, 500), "手一动就是几百个像素");
+
+            // 关键的一条：参照点不会被一再报来的同一个位置推走。位置报一百遍，答案还是同一个。
+            for (var i = 0; i < 100; i++) Assert.False(chrome.WanderedFromHiding(1002, 500));
+            Assert.True(chrome.WanderedFromHiding(1005, 500), "报一百遍也不改变参照点在哪");
+
+            // 没有参照点时（还没藏过、或者藏匿已经结束）不叫醒任何人：一条迟到的报告不该把刚藏下去的叫回来。
+            var fresh = Chrome(out _);
+            Assert.False(fresh.WanderedFromHiding(9999, 9999), "没有任何参照点就绝不叫醒");
+
+            chrome.ReleaseHiddenAnchor();
+            Assert.False(chrome.WanderedFromHiding(1600, 500), "光标回来了，参照点就不作数了");
+        });
+
+        Test("播放器控件：只管位置不当动的报告不许重置静止时钟", () =>
+        {
+            // 这条是「鼠标隐藏了一会然后又会自动冒出来」的另一半。Pointer() 里那行无条件
+            // `_lastActivity = now` 曾经把**每一个**报进来的位置都当成活动，于是十赫兹的轮询和每一次
+            // Resize 报来的位置都会把两秒重新拨回起点 —— 一只被桌签轻轻碰着的鼠标永远等不到两秒到期，
+            // 而日志那边看到的却是「指针根本没动过」。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            // 藏好之后：一串「只是位置，不是动」的报告进来，时钟一秒都不该被重置。
+            for (var t = now + 2100; t <= now + 2500; t += 100)
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, t, moved: false);
+
+            Assert.True(chrome.CursorHidden, "只是报位置不许把它叫回来");
+
+            // 反过来：说是「动了」的报告立刻叫醒它，这才是手真的动了一下。
+            Assert.True(chrome.Pointer(
+                y: 500, height: 1000, ChromePart.None, railNear: -1,
+                now + ChromeReveal.CursorIdleMilliseconds + 600, moved: true));
+            Assert.False(chrome.CursorHidden, "真动了就得回来");
+
+            // 光标露着的时候两者没有分别：一个静止的指针本来就不产生事件，所以那一半不需要这个区分。
+            var shown = Chrome(out var start);
+            shown.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start, moved: false);
+            shown.Tick(start + ChromeReveal.IdleMilliseconds);
+            Assert.False(shown.State.Any);
+            Assert.False(shown.CursorHidden, "控件收了鼠标还得在");
+            shown.Tick(start + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(shown.CursorHidden, "露着的时候照样按两秒走");
+        });
+
+        Test("播放器控件：锚定藏匿点不是活动，不许把静止时钟拨回起点", () =>
+        {
+            // 「鼠标一闪一闪的」（第五报）就是这条。锚定是**藏下去之后**发生的，藏在它前面那两秒静止
+            // 正是 hide 的判据本身；如果锚定顺手把 `_lastActivity` 盖成「现在」，等于在规则刚刚断言
+            // 「指针两秒没动」的同一刻说「它刚动过」。于是成一个环：t 藏 → 锚定盖章 t → t+100ms 那拍
+            // 算出「才静止 0.1 秒」→ 显示 → 指针本来就沒动，两秒后 → t+2 又藏 → 又盖章 → 又显示。
+            // 真片子日志里就是这个样子：每两秒一对「藏起来了 / 又显示了」，藏的那一下只活 122ms，
+            // 而两个指针计数（轮询问出的移动 1 次、XAML 事件 0 次）从电影开始到结束一动没动。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            var hidAt = now + ChromeReveal.CursorIdleMilliseconds;
+            chrome.Tick(hidAt);
+            Assert.True(chrome.CursorHidden, "静止两秒就该藏");
+
+            // 页面此刻锚定藏匿点 —— 这是藏下去那一下的正常动作。
+            chrome.AnchorHidden(1000, 500, hidAt);
+
+            // 紧接着的一拍（一百毫秒后，正是十赫兹的下一拍）：必须还藏着。
+            // 旧写法在这里会被拨回起点而把光标放出来，正是用户看到的「一闪」。
+            chrome.Tick(hidAt + 100);
+            Assert.True(chrome.CursorHidden, "锚定过之后紧接着的一拍不许把光标放出来");
+
+            // 再往后每一拍都得稳：指针没动，光标就该一直藏着。
+            for (var t = hidAt + 200; t <= hidAt + 3000; t += 100) chrome.Tick(t);
+            Assert.True(chrome.CursorHidden, "指针没动，藏下去就该一直藏着，不是每两秒闪一下");
+        });
+
+        Test("播放器控件：桌面抖一两像素不算人动手，手一动就是几十", () =>
+        {
+            // 「鼠标隐藏了一会又会自动跑出来」那件就死在这条线上，而且分了两次才看清。起初的判据是「任何
+            // 一个像素都算人动手」，于是程序能把自己叫醒；改成两像素之后还不行 —— 一台真片子的日志里，没人碰
+            // 的鼠标报上来的步长是 2,0、0,2 和 1,2 逻辑像素，正好卡在阈值上，每一次都把藏下去的光标叫了回来。
+            //
+            // 五这个数出自成熟播放器：mpv 只忽略坐标严格相等的事件（input.c:914），MPC-HC 拿隐藏点做 ±1 像素
+            // 比对（PointEqualsImprecise），mpv.net 的阈值是 5 * dpi/96 —— 96 DPI 下正是五。它安全，是因为
+            // 两拨数据不重叠：桌面抖一两个像素，而手的第一个事件是几十个，中间没有读数可判错。
             Assert.False(ChromeReveal.Travelled(0, 0), "没动就是没动");
-            Assert.False(ChromeReveal.Travelled(1, 0), "一像素：我们催框架那一下就是这个尺寸");
+            Assert.False(ChromeReveal.Travelled(1, 0), "一像素");
             Assert.False(ChromeReveal.Travelled(0, 1), "一像素，另一个轴也一样");
             Assert.False(ChromeReveal.Travelled(1, 1), "两个轴各一像素也不够");
-            Assert.True(ChromeReveal.Travelled(2, 0), "两像素才算跨过阈值");
-            Assert.True(ChromeReveal.Travelled(0, 2));
+            Assert.False(ChromeReveal.Travelled(2, 0), "日志里实测过的桌面抖动：2,0 曾经被当成手");
+            Assert.False(ChromeReveal.Travelled(0, 2), "0,2 也一样");
+            Assert.False(ChromeReveal.Travelled(1, 2), "1,2 也一样 —— 这三个都是真日志里的原样");
+            Assert.False(ChromeReveal.Travelled(4, 0), "四像素仍在桌面抖动的量级里");
+            Assert.True(ChromeReveal.Travelled(5, 0), "五像素才算跨过阈值");
+            Assert.True(ChromeReveal.Travelled(0, 5));
             Assert.True(ChromeReveal.Travelled(40, 3), "手真动了是几十像素，差一个量级");
 
-            // 阈值必须留在催框架那一下的尺寸之上：把它降到一，「藏好了」和「叫得醒」就成了同一件事。
-            Assert.True(ChromeReveal.MovePixels > 1, "一个物理像素的往返不能算动手");
+            // 阈值必须留在桌面抖动的尺寸之上：降到零，「没动」和「动了」就成了同一件事，藏下去的光标会被一排
+            // 零位移的事件反复叫醒。二这个旧值也被真机日志证明太低，所以下限是一条断言而不是一句话。
+            Assert.True(ChromeReveal.MovePixels > 2, "桌面上实测到的抖动到了两像素，阈值不能停在二");
+        });
+
+        Test("播放器控件：藏下去靠每拍重申，不靠往输入队列里塞东西", () =>
+        {
+            // 2026-09-14 的第二轮报修（「没修好」）追出来的根因：那条「让框架重新念一遍」的路本身就是一次
+            // 真实输入 —— 岛为它抬一次 PointerMoved，DPI 缩放把它的一个物理像素读成两个逻辑像素，正好等于
+            // 当时的阈值，于是静止时钟被重新盖章，藏下去的光标一拍之后自己冒出来。
+            //
+            // 成熟播放器没有一家这么干：mpv 有自己的消息循环、直接答 WM_SETCURSOR 并用单调计数器去重，
+            // VLC 与 MPC-HC 直接 SetCursor，IINA 用系统的 NSCursor.setHiddenUntilMouseMoves。本项目里对应的
+            // 正规设施已经都在 —— HostWindow 在 WM_SETCURSOR 里 SetCursor(Blank) 并 return 1、进程级类光标
+            // 扫描、十赫兹的 KeepCursorHidden 重申。
+            //
+            // 而「重申」必须是每拍一次、不能限额 —— 这条是第三次报修「隐藏后过两三秒又会自动冒出来」订正出来
+            // 的：三拍的配额在头三百毫秒里就用光了，之后藏下去的那几秒里没有一个字是被说过的，框架随时可以把
+            // 自己的箭头推回来。所以这里钉的是「重申不受次数限制」这件事本身。
+            Assert.Equal(5d, ChromeReveal.MovePixels, "阈值挡的是桌面抖动，不是自己发出的位移");
+            Assert.False(ChromeReveal.Travelled(2, 0), "重申不产生位移，但桌面抖动的量级也不该叫醒");
+            Assert.True(ChromeReveal.Travelled(5, 0), "有人动手仍然要认出来");
         });
     }
 

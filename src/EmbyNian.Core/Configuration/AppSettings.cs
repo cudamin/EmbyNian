@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 14;
+    public const int CurrentSchemaVersion = 15;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -38,6 +38,12 @@ public sealed class AppSettings
     public UiSettings Ui { get; set; } = new();
 
     public ShortcutSettings Shortcuts { get; set; } = new();
+
+    /// <summary>
+    /// The MoviePilot service, if the user has one. Sits last because it is the newest and least central
+    /// thing here — the whole app works without it, and it is off by default.
+    /// </summary>
+    public MoviePilotSettings MoviePilot { get; set; } = new();
 
     public ServerProfile? FindServer(string? id) =>
         id is null ? null : Servers.FirstOrDefault(server => server.Id == id);
@@ -420,6 +426,21 @@ public sealed class PlaybackSettings
     /// </para>
     /// </summary>
     public bool SeparateWindowPlayback { get; set; }
+
+    /// <summary>
+    /// 播放页置顶开关的持久化偏好：「对播放页面"是否置顶"的设置进行持久化保存，程序重启后仍保留上次
+    /// 选择」（用户的话，2026-09-15）。
+    /// <para>
+    /// 记的是用户<b>拨过开关之后</b>的那一档：下一次播放接管窗口时按它把置顶立回去（真正动手的仍是
+    /// <c>HostWindow.TopMost</c>，这里只是记账）。退出播放把窗口的置顶放下（照旧），但不动这份偏好 ——
+    /// 放下是「还给浏览窗口」，不是「替用户改主意」。用户没拨过开关时它是默认的 false，行为与从前一致。
+    /// </para>
+    /// <para>
+    /// 全屏进出让位那套规则（前台被挡时 HWND_NOTOPMOST）对<b>手动置顶</b>本来就不生效，持久化的偏好
+    /// 落在窗口上就是手动置顶，两套规则互不干扰。
+    /// </para>
+    /// </summary>
+    public bool PinWindowTopmost { get; set; }
 
     /// <summary>The smallest 字幕字号 worth offering; below this the text is not readable at any distance.</summary>
     public const int MinimumSubtitleFontSize = 16;
@@ -888,6 +909,57 @@ public sealed class ShaderAutomationSettings
 
         return (group, line, measure);
     }
+}
+
+/// <summary>
+/// A MoviePilot service this app may talk to — 「接入 MoviePilot」, the user's call 2026-09-14.
+/// <para>
+/// Deliberately not a member of <see cref="ServerProfile"/>: MoviePilot is not an Emby server and is not
+/// per-account. It is one service on the LAN that the one person using this app has one login for, and the
+/// media-server connection it holds internally is its own business. Hanging it off a server profile would
+/// mean asking which Emby server a MoviePilot belongs to, and there is no good answer to that.
+/// </para>
+/// <para>
+/// Credentials are stored DPAPI-wrapped through the same <see cref="ISecretProtector"/> the Emby ones use —
+/// see <see cref="MoviePilotCredentials"/>, which is the only place that unwraps them.
+/// </para>
+/// </summary>
+public sealed class MoviePilotSettings
+{
+    /// <summary>
+    /// Whether the settings page may talk to MoviePilot at all. Off by default: a fresh install has no
+    /// MoviePilot, and a client that probes an address nobody configured on every visit to the settings
+    /// page would be spending a network timeout on a service that was never there.
+    /// </summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>
+    /// The API address as typed, e.g. <c>192.168.31.230:3001</c>. Normalised through
+    /// <see cref="MoviePilot.MoviePilotAddress"/> on the way in and out; stored as the user's own text so a
+    /// half-typed address survives a restart.
+    /// </summary>
+    public string Url { get; set; } = "";
+
+    /// <summary>The MoviePilot account this app signs in as.</summary>
+    public string Username { get; set; } = "";
+
+    /// <summary>DPAPI-wrapped password. Empty when the user has not saved one.</summary>
+    public string ProtectedPassword { get; set; } = "";
+
+    /// <summary>
+    /// The signed-in user's display name from the last successful test, for the card to report. Not a
+    /// credential — nothing authenticates with it.
+    /// </summary>
+    public string LastUserName { get; set; } = "";
+
+    /// <summary>
+    /// When the connection last succeeded, or null for never. Shown on the card so a stale 「上次测试通过」
+    /// cannot be mistaken for the present state of the network.
+    /// </summary>
+    public DateTimeOffset? LastConnected { get; set; }
+
+    [JsonIgnore]
+    public bool HasSavedPassword => ProtectedPassword.Length > 0;
 }
 
 public sealed class UiSettings

@@ -51,6 +51,31 @@ internal struct NativePoint
     public int Y;
 }
 
+/// <summary>
+/// 键盘钩子过程的形状（WH_KEYBOARD）：nCode 是钩子码，wParam 直接就是虚键码，lParam 和键盘消息共用
+/// 同一副位标（第 30 位自动重复、31 抬起、29 Alt）。像 <see cref="WindowProcedure"/> 一样活在命名空间
+/// 层；持有它的字段必须一直拉着 —— Windows 握着原始 thunk，委托被 GC 之后第一次按键就是进程崩溃。
+/// </summary>
+internal delegate IntPtr KeyboardHookProcedure(int code, IntPtr wParam, IntPtr lParam);
+
+/// <summary>
+/// GUITHREADINFO，键盘兜底只问它一件事：这一键按下时焦点 HWND 在哪。cbSize 必须先填上结构体自己的
+/// 大小，系统才肯回话。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct GuiThreadInfo
+{
+    public int Size;
+    public uint Flags;
+    public IntPtr ActiveWindow;
+    public IntPtr FocusWindow;
+    public IntPtr CaptureWindow;
+    public IntPtr MenuOwnerWindow;
+    public IntPtr MoveSizeWindow;
+    public IntPtr CaretWindow;
+    public NativeRect CaretRect;
+}
+
 [StructLayout(LayoutKind.Sequential)]
 internal struct MinMaxInfo
 {
@@ -822,51 +847,55 @@ internal static partial class Native
     public static partial uint GetCurrentThreadId();
 
     /// <summary>
-    /// Makes the OS — and, which is the half that matters, the XAML island's own input pipeline — work out
-    /// again which shape belongs on screen: one physical pixel aside through the real input queue, and
-    /// straight back.
-    /// <para>
-    /// This is the trigger the whole hide rests on. Hiding happens <em>because</em> nothing is moving, and
-    /// nothing about the cursor is <em>collected</em> until something gives the system a reason to: not this
-    /// queue's shape, not the window classes, and above all not the framework's <c>ProtectedCursor</c>, which
-    /// is the only lever that reaches the pixels a pointer over XAML content is on. WinUI reads that property
-    /// when it handles pointer input — the design note in the ElementCursor spec says as much: a subclass
-    /// assigns it 「during state changes」 such as <c>PointerEntered</c>, unlike WPF's frequently polled
-    /// <c>OnQueryCursor</c>. So a transparent cursor assigned while the hand is still is a value nobody has
-    /// read, and the arrow the last real movement worked out stays on the screen. That, and not the rule that
-    /// decides <em>when</em>, is what 「鼠标停在画面上又不会自动隐藏了」 has been all along.
-    /// </para>
-    /// <para>
-    /// <b>Two ways of asking were measured to ask nothing at all.</b> A zero-displacement <c>SendInput</c>
-    /// produces no message whatever — Windows drops a relative move of (0,0) outright — and the player's own
-    /// probe reports 「真实输入注不进」 for exactly that call. A same-point <c>SetCursorPos</c> does produce
-    /// <c>WM_MOUSEMOVE</c> and <c>WM_SETCURSOR</c> on a plain Win32 window, but it does not go through the
-    /// input queue, so <b>the island hears nothing</b>: 「XAML 事件 0 次」 in every report that used it, and
-    /// <see cref="MovePointerTo"/> carries the same finding for the same reason. Both therefore left the
-    /// framework's value unread, which is why 「让系统重新问了 N 次」 could be true of a screen that never
-    /// changed.
-    /// </para>
-    /// <para>
-    /// Hence a real displacement, and the smallest one there is. The return trip is what keeps it invisible:
-    /// the net position is unchanged, so <c>PlayerPage.PollPointer</c> — which reads the OS's coordinate ten
-    /// times a second — sees nothing, and the XAML events the two moves do raise are discarded by
-    /// <c>PlayerPage.Moved</c> as this player's own echo. One pixel is also below anything a hand does, so a
-    /// hand arriving still brings the cursor back on the same beat it always did.
-    /// </para>
+    /// 线程级键盘钩子（WH_KEYBOARD，<see cref="WhKeyboard"/>）。hMod 必须是 NULL：钩子过程就在本进程、
+    /// dwThreadId 指本进程线程，没有注入这回事 —— 钩子只在键盘消息被送进本线程队列时被叫到（焦点在
+    /// 别的进程时一次都不会响），所以它天生不抢别家应用的键，只兜「键到了我们家、XAML 却收不到」的底。
+    /// 委托须由调用方一直拉着（见 <see cref="KeyboardHookProcedure"/>）。
+    /// </summary>
+    [LibraryImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
+    public static partial IntPtr SetWindowsHookEx(int hook, KeyboardHookProcedure procedure, IntPtr module, uint threadId);
+
+    /// <summary>摘钩子。窗口销毁时必调：线程活着而钩子悬着，每颗键都要多过一遍死委托。</summary>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnhookWindowsHookEx(IntPtr hook);
+
+    /// <summary>钩子链的下一棒。放行时必须喊，否则线程上后来装的钩子从此听不见键盘。</summary>
+    [LibraryImport("user32.dll")]
+    public static partial IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>
+    /// child 是否落在 parent 的窗口树里。键盘兜底拿它做两道闸：焦点不在宿主窗口树里 → 键不是发给
+    /// 我们的，不接；焦点在岛里 → XAML 自己收得到，也不接。
+    /// </summary>
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsChild(IntPtr parent, IntPtr child);
+
+    /// <summary>
+    /// 本线程的 GUI 状态快照。键盘兜底只读 <see cref="GuiThreadInfo.FocusWindow"/>：线程级钩子自己
+    /// 分不出「焦点在岛里」还是「焦点掉在宿主/视频子窗口上」，这一问才是判据。threadId 必须是自己的
+    /// 线程号 —— 传 0 问到的是前台线程，而前台可能是别家。
+    /// </summary>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
+
+    /// <summary>WH_KEYBOARD：线程级键盘钩子的 idHook 值。</summary>
+    public const int WhKeyboard = 2;
+
+    /// <summary>
+    /// Refreshes the input queue with a one-pixel relative round trip. Both packets are submitted together,
+    /// avoiding absolute-coordinate rounding and returning the pointer to its original position.
     /// </summary>
     public static bool NudgeCursorState()
     {
         if (!GetCursorPos(out var at)) return false;
-
-        // Which way to step. Against the virtual desktop's right edge a step of +1 is clamped back to where
-        // it started, and a clamped step is the zero displacement this call exists to avoid.
         var right = GetSystemMetrics(SmXVirtualScreen) + GetSystemMetrics(SmCxVirtualScreen) - 1;
-        var aside = at.X < right ? at.X + 1 : at.X - 1;
-
-        // Both legs, always: a first leg that took and a second that did not would leave the pointer a pixel
-        // from where the hand left it, and the next poll would read that as the hand coming back. Non
-        // short-circuiting for that reason, and the answer is 「both legs went」.
-        return MovePointerTo(aside, at.Y) & MovePointerTo(at.X, at.Y);
+        var step = at.X < right ? 1 : -1;
+        var outward = new Input { Type = InputMouse, Mouse = new MouseInput { Dx = step, Flags = MouseEventMove } };
+        var homeward = new Input { Type = InputMouse, Mouse = new MouseInput { Dx = -step, Flags = MouseEventMove } };
+        return SendInput(2, [outward, homeward], Marshal.SizeOf<Input>()) == 2;
     }
 
     private const uint InputMouse = 0;
@@ -878,6 +907,23 @@ internal static partial class Native
     private const int SmYVirtualScreen = 77;
     private const int SmCxVirtualScreen = 78;
     private const int SmCyVirtualScreen = 79;
+
+    /// <summary>
+    /// 虚拟桌面矩形，唤醒取证用（第九报，2026-09-15）。用户报「屏幕一全屏播放时，屏幕二的 AyuGram
+    /// 收到消息会唤起屏幕一静止隐藏的鼠标指针」，而日志里那批唤醒三天来都是同一个签名：轮询一拍之内
+    /// 读数横跳整整 60px、纵向恒 0、指针随后原地静止两秒重新藏起来。物理注入不会三天都恰好 60px；
+    /// 坐标重排（显示器拓扑/DPI 变化把虚拟桌面原点搬动）则恰恰会整屏平移一个固定量。藏匿与唤醒两行
+    /// 从此带上当时的虚拟桌面矩形：唤醒那一刻矩形没变＝读数变化是真的（有进程在注入指针位移，去查
+    /// 注入者）；矩形变了＝指针根本没动，是桌面重排把坐标搬走了，唤醒是误报。
+    /// </summary>
+    public static (int X, int Y, int Width, int Height) VirtualScreen() =>
+        (GetSystemMetrics(SmXVirtualScreen), GetSystemMetrics(SmYVirtualScreen),
+         GetSystemMetrics(SmCxVirtualScreen), GetSystemMetrics(SmCyVirtualScreen));
+
+    /// <summary>CURSORINFO.Flags 的可见位：<see cref="CursorSnapshot"/> 返回的 Flags 里「形状正在屏幕上」
+    /// 就是它。CurSuppressed（0x2）是平板模式的系统抑制，不算可见。</summary>
+    public const int CurShowing = 0x0001;
+    public const int CurSuppressed = 0x0002;
 
     /// <summary>
     /// Puts the pointer at a desktop coordinate through the <em>real</em> input queue, rather than by

@@ -513,6 +513,9 @@ public sealed partial class PlayerViewModel
         _playerUp = false;
         HideCover();
 
+        // 遮罩垫底的背景图也是这一场播放的：退场就放下，下一场自己取自己的（2026-09-15）。
+        CoverBackdrop = null;
+
         // The other way out, and the usual one: the file ran to its end. Ticks stop with the player, so an
         // unsaved level would be lost here rather than a second late.
         FlushVolume(settled: false);

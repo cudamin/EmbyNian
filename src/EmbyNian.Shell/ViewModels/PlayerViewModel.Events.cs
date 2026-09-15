@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Configuration;
@@ -111,8 +114,69 @@ public sealed partial class PlayerViewModel
         _ = RefineSkipSectionsAsync(_generation);
         _ = ApplyAspectAsync(_generation);
         _ = NoteAudioDeviceAsync(_generation);
+
+        // 遮罩垫底的背景图也跟着换：开播/换集这一刻开始取，遮罩揭掉之前它就位；取不到退回纯色
+        // （2026-09-15「视频刚开播还在加载缓存没有正片画面时背景要用背景图」）。
+        _ = LoadCoverBackdropAsync(item);
         ApplySkipOffer();
     });
+
+    /// <summary>
+    /// 遮罩垫底的背景图（2026-09-15「视频刚开播还在加载缓存没有正片画面时背景要用背景图」）。按
+    /// 本集背景图 → 父级（季/剧）背景图 → 缩略图 的顺序取一张 —— 单集大多没有自己的 Backdrop，
+    /// 继承链正是详情页用的那一套；1280 那一档全屏铺满够用，又落在磁盘缓存最常命中的宽度上。
+    /// <para>
+    /// 代际号在两处 await 之后各对一次：换集很快连按的时候，晚到的上一场下载不许盖到这一场上。
+    /// 取不到（服务器没图、404）或取挂了就保持 null —— 垫底退回纯色遮罩，图是添头不是承重墙。
+    /// </para>
+    /// </summary>
+    private async Task LoadCoverBackdropAsync(EmbyItem? item)
+    {
+        var generation = _generation;
+
+        if (item is null)
+        {
+            CoverBackdrop = null;
+            return;
+        }
+
+        try
+        {
+            var bytes = await PickCoverBackdropBytesAsync(item, EmbyImageStore.RequestWidth(1280)).ConfigureAwait(true);
+            if (bytes is null || generation != _generation) return;
+
+            var image = new BitmapImage();
+            using var stream = new MemoryStream(bytes);
+            await image.SetSourceAsync(stream.AsRandomAccessStream());
+            if (generation != _generation) return;
+
+            CoverBackdrop = image;
+        }
+        catch (Exception ex)
+        {
+            Log.Info(Category, $"遮罩背景图取用失败（{ex.Message}），垫底退回纯色");
+        }
+    }
+
+    private async Task<byte[]?> PickCoverBackdropBytesAsync(EmbyItem item, int width)
+    {
+        if (item.BackdropImageTags.Count > 0)
+        {
+            var own = await _images.GetAsync(item.Id, EmbyImageStore.Backdrop, item.BackdropImageTags[0], width, CancellationToken.None).ConfigureAwait(true);
+            if (own is not null) return own;
+        }
+
+        if (item is { ParentBackdropItemId: { Length: > 0 } parent, ParentBackdropImageTags.Count: > 0 })
+        {
+            var inherited = await _images.GetAsync(parent, EmbyImageStore.Backdrop, item.ParentBackdropImageTags[0], width, CancellationToken.None).ConfigureAwait(true);
+            if (inherited is not null) return inherited;
+        }
+
+        if (item.ThumbImageTag is { Length: > 0 } thumb)
+            return await _images.GetAsync(item.Id, EmbyImageStore.Thumb, thumb, width, CancellationToken.None).ConfigureAwait(true);
+
+        return null;
+    }
 
     /// <summary>
     /// Asks mpv which audio output it actually opened, and hands the answer to the service so 播放信息 and the
@@ -187,7 +251,9 @@ public sealed partial class PlayerViewModel
 
         // The new file is decoding, so there is a real picture to show and the cover has done its job.
         // Anything earlier than Loaded would uncover the seam it was put up for.
-        if (status.Loaded) HideCover();
+        // 但「loaded 而仍在缓冲」（paused-for-cache）还不算真画面：刚开播还在加载缓存的那段继续垫着
+        // 背景图（2026-09-15「视频刚开播还在加载缓存没有正片画面时背景要用背景图」），缓冲退了才揭。
+        if (status.Loaded && !status.Buffering) HideCover();
 
         // The tooltip's run time, the tick layout the duration decides, and 「stay up while paused」.
         StatusApplied?.Invoke(status);
@@ -335,19 +401,17 @@ public sealed partial class PlayerViewModel
         if (count is null) return false;
         if (count < 2) return true;
 
-        var chapters = new List<SkipChapter>((int)count.Value);
-        for (var index = 0; index < (int)count.Value; index++)
-        {
-            if (generation != _generation) return true;
-
-            var start = await _playback.GetNumberAsync($"chapter-list/{index}/time").ConfigureAwait(true);
-            if (start is null) return true;
-
-            var title = await _playback.GetTextAsync($"chapter-list/{index}/title").ConfigureAwait(true);
-            chapters.Add(new SkipChapter(start.Value, title));
-        }
+        // The whole list in one call, rather than two reads per chapter: on the external backend
+        // that walk was a JSON round trip a question — twenty chapters made forty-two — and the
+        // poll interval wrapped around it could lapse mid-list.
+        var chapters = await _playback.GetChaptersAsync().ConfigureAwait(true);
 
         if (generation != _generation) return true;
+
+        // A shortfall (a dropped pipe, a backend without the batched read) is 「not ready」, not
+        // 「nothing there」 — the count above just said otherwise, so keep asking until the
+        // attempts run out, which is the same corner a stuck backend lands in.
+        if (chapters.Count < count.Value) return false;
 
         var duration = await _playback.GetNumberAsync("duration").ConfigureAwait(true)
                        ?? _playback.Status.Duration;

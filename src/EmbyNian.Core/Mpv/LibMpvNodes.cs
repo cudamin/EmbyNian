@@ -99,6 +99,24 @@ internal static class LibMpvNodes
         };
     }
 
+    /// <summary>
+    /// A fractional property value — chapter times, unlike track fields, are seconds with a
+    /// fraction, and rounding them into <see cref="Int"/> would spend half the skip planner's
+    /// tolerance on arithmetic. Same union rule as <see cref="Int"/>; int64 answers (an older
+    /// build, a whole-second chapter) convert losslessly.
+    /// </summary>
+    internal static double? Double(IReadOnlyDictionary<string, LibMpvNative.MpvNode> map, string key)
+    {
+        if (!map.TryGetValue(key, out var node)) return null;
+
+        return node.Format switch
+        {
+            LibMpvNative.FormatInt64 => node.Union.ToInt64(),
+            LibMpvNative.FormatDouble => BitConverter.Int64BitsToDouble(node.Union.ToInt64()),
+            _ => null
+        };
+    }
+
     internal static bool Flag(IReadOnlyDictionary<string, LibMpvNative.MpvNode> map, string key)
     {
         // mpv's C union declares the flag as a 4-byte int; the other half of the union is stale

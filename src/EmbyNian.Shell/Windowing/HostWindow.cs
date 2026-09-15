@@ -18,6 +18,24 @@ using Windows.UI;
 namespace EmbyNian.Shell.Windowing;
 
 /// <summary>
+/// 键盘兜底的接键人（2026-09-15「新增esc退出全屏 按空格开始播放」）。播放页实现它，窗口的线程级
+/// WH_KEYBOARD 钩子在「键已进本线程队列、Win32 焦点却不在 XAML 岛里」时把空格和 Esc 送过来 ——
+/// 那是 XAML 两条键路（页面 KeyDown、Root 上的空格拦截）都听不见的死角。
+/// <para>
+/// <see cref="WantsKey"/> 是「这一下你接不接」：菜单开着、正在打字时页面让路；<see cref="Handle"/>
+/// 是「接」，页面上仍走它自己的 Dispatch，兜底路和岛内路永远做同一件事。
+/// </para>
+/// </summary>
+internal interface IWin32KeySink
+{
+    /// <summary>这一下接不接。真＝钩子把它吃掉；假＝钩子放行。</summary>
+    bool WantsKey(int virtualKey);
+
+    /// <summary>接。等价于那颗键在岛内被按下时页面会做的事。</summary>
+    void Handle(int virtualKey);
+}
+
+/// <summary>
 /// The application window. It is our own <c>CreateWindowEx</c> HWND rather than a
 /// <see cref="Microsoft.UI.Xaml.Window"/>, and all of the UI lives in a WinUI 3 XAML island
 /// (<see cref="DesktopWindowXamlSource"/>) filling its client area.
@@ -146,6 +164,18 @@ internal sealed class HostWindow : IDisposable
     private InputCursor? _blankInput;
 
     private bool _blankInputTried;
+    private InputPointerSource? _pointerSource;
+    private InputCursor? _savedInputCursor;
+    private bool _inputCursorOverridden;
+
+    /// <summary>
+    /// 键盘兜底（2026-09-15「新增esc退出全屏 按空格开始播放」）的三件：线程钩子句柄、钩子过程自己的
+    /// 委托、和播放页挂上来的接键人（<see cref="IWin32KeySink"/>）。委托必须存字段 —— Windows 握着
+    /// 原始 thunk，委托被 GC 之后第一次按键就是进程崩溃（<see cref="Procedure"/> 同一条铁律）。
+    /// </summary>
+    private IntPtr _keyboardHook;
+    private KeyboardHookProcedure? _keyboardProcedure;
+    private IWin32KeySink? _win32Keys;
 
     /// <summary>
     /// One window per blanked class, against the cursor handle that class had before. Empty whenever the
@@ -188,6 +218,21 @@ internal sealed class HostWindow : IDisposable
     /// </summary>
     public IntPtr IslandHandle { get; private set; }
 
+    /// <summary>键盘兜底是否整装：线程钩子装着（<see cref="KeyboardFallbackInstalled"/>）、页面也挂了接键人。</summary>
+    internal bool Win32KeyFallbackArmed => KeyboardFallbackInstalled && _win32Keys is not null;
+
+    /// <summary>
+    /// 线程键盘钩子还装着。装不上（理论上只有系统拒绝）时为假 —— 那样焦点掉出岛之后 Esc/空格就哑，
+    /// 自检「快捷键派发」一格里的「键盘兜底」会替这里喊出来。
+    /// </summary>
+    internal bool KeyboardFallbackInstalled => _keyboardHook != IntPtr.Zero;
+
+    /// <summary>
+    /// 播放页把接键人挂上来（<c>Attach</c>）/摘下去（<c>Detach</c>）。挂上之后，焦点不在岛里的空格和
+    /// Esc 才有人接；摘下之后（换独立窗口接管、页面退场）钩子一概放行，两边不打架。
+    /// </summary>
+    internal void SetWin32Keys(IWin32KeySink? sink) => _win32Keys = sink;
+
     /// <summary>
     /// Whether the mouse cursor is to stay off the picture — 「全屏播放且鼠标在画面上时，鼠标静止不动两秒之后
     /// 要自动隐藏」. Set by the player, whose reveal rule decides <em>when</em>; this is the whole of
@@ -224,14 +269,28 @@ internal sealed class HostWindow : IDisposable
             if (_cursorHidden == value) return;
 
             _cursorHidden = value;
+            _cursorHidePublished = false;
 
             // Said now rather than waited for. Hiding happens *because* nothing is moving, so the next
             // WM_SETCURSOR may be seconds away — and it is the pointer coming back to life, by which time
             // the cursor is wanted again. The shape set here is what the user sees until then.
             Native.SetCursor(value ? Blank : Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor));
 
-            if (value) BlankClassCursors();
-            else RestoreClassCursors();
+            if (value)
+            {
+                BlankClassCursors();
+                KeepInputCursorHidden();
+                // 第九报（2026-09-15）：第五条杠杆上车——负计数锁（HC-Player 式）。压到底而非压一次：
+                // Chrome 那侧还会再压一格，历史遗留的深负计数也一并兜住。每个藏匿期重新计取证数。
+                CursorSuppressRestates = 0;
+                SuppressCursorDisplay();
+            }
+            else
+            {
+                RestoreClassCursors();
+                RestoreInputCursor();
+                RestoreCursorDisplay();
+            }
         }
     }
 
@@ -415,9 +474,185 @@ internal sealed class HostWindow : IDisposable
     /// it costs one user32 call, and it stops of its own accord the moment the pointer moves — moving the
     /// pointer is how the cursor is asked back, so <see cref="CursorHidden"/> is false by then.
     /// </summary>
+    private bool _cursorHidePublished;
+    public int CursorDisplayRefreshes { get; private set; }
+
+    /// <summary>
+    /// How many ticks the <em>global</em> cursor snapshot changed while the hide was published — flags or shape
+    /// moved from the tick before. 第九报（2026-09-15）补的读数：用户在拔掉鼠标后仍确认「没错哦17-18 秒鼠标
+    /// 出现在了画面之上」，而独立监视器同刻量到指针没动——「出现≠移动」。外部画回来的静止指针不产生任何
+    /// 位移事件，线程局部的 <see cref="CursorShapeGone"/> 对它天生失明（_shapeBack 因此恒 0，藏着期间的
+    /// 形状对账一直平静得可疑）。
+    /// <para>
+    /// 差分而不是绝对值，是 13:37 现场（app log 行 2151-2152）定的：藏匿行的全局快照读「形状 0x10003」
+    /// ——标准箭头，指针藏匿期间全局 hCursor 本来就不是我们的 blank 而是藏匿前遗留的箭头，谁也没把它
+    /// 清掉。拿绝对值判「形状非空＝外部画回」会每拍误报、Nudge 成灾；只有「这一拍相对上一拍变了」才是
+    /// 外部在动全局光标的信号。
+    /// </para>
+    /// </summary>
+    public int GlobalShapeChanges { get; private set; }
+
+    /// <summary>The latest global-snapshot change, evidence first: flags, shape, position, whose window.</summary>
+    public string LastGlobalChange { get; private set; } = "？";
+
+    /// <summary>
+    /// How many of the changes above qualified as an external shape sitting over this window — visible, not
+    /// ours, over us. 纯取证计数：<b>不再</b>对它做任何回应。
+    /// <para>
+    /// 压回（Nudge）是这一版自己试出来又被自己撤掉的。用户 2026-09-15 14:06 报「现在每过一会鼠标就会闪
+    /// 一下，然后消失」，app log 14:03:09-27 的循环把过程拍得干干净净：形状 0x45810247 在恒定位置
+    /// 1190,723 闪现 → 判「外部画回」→ Nudge → 265ms 后全局变 (0x0,0x0)（压制生效）→ ~917ms 后又闪——
+    /// 每 ~1.15 秒一轮。v3 独立监视器同刻每轮只记到 INJ 对（extra=0x0、dev=NULLDEV，即本进程 SendInput），
+    /// 没有任何硬件报文，位置纹丝不动——环的燃料就是我们自己的 Nudge：对静止指针注入 ±1px，OS 重算光标
+    /// 向指针压着的窗口重发 WM_SETCURSOR，该窗口把它的类光标设回去（0x45810247，非 mpv——mpv 已被
+    /// cursor-autohide=always 钉死），下一拍快照一看「有形状压在本窗口」又判外部、又 Nudge。Nudge 在这里
+    /// 不是压回，是「请出来」。压制职守交回既有的每拍压制链（SetCursor(0)、Root.Cursor、类光标 blank、
+    /// WM_SETCURSOR 拦截——它们不产生输入，也就不产生 WM_SETCURSOR 重问），这里退回纯取证。
+    /// </para>
+    /// </summary>
+    public int ExternalShapeRestores { get; private set; }
+
+    /// <summary>The last external restore, as 「标志 …,形状 … @…,压在本窗口」.</summary>
+    public string LastExternalShape { get; private set; } = "？";
+
+    /// <summary>
+    /// 第九报（2026-09-15）：本线程队列的显示计数被抬回、随即又被锁回负区的累计调用数。用户原话「你直接抄
+    /// 这些开源项目吧」（HC-Player 的 <c>SetApplicationCursorHidden</c>：藏即 <c>while (ShowCursor(FALSE) &gt;= 0)
+    /// {{}}</c>，显即 <c>while (ShowCursor(TRUE) &lt; 0) {{}}</c>）。抄它的理由是本机对决实验（work\
+    /// cursor-suppress-test3.py，2026-09-15）：monitor 窗口压住指针后，挂进队列的跨进程 <c>SetCursor(cross)</c>
+    /// 在未压计数时把全局光标点亮成十字（0x988ms 处 flags=1、形状 0x10009）——这就是 14:26 那个每 ~1.1s 画
+    /// 「一道红线」的第三方画回者的机制复刻；而把计数压到 −2 之后，同一支画回笔又戳了九次，全局快照纹丝不动
+    /// （flags=0、形状 0x0），win32k 重绘光标时查的就是拥有队列的这个计数，任何后来者的 <c>SetCursor</c>
+    /// 都点亮不了负区里的光标。现有四条杠杆（SetCursor、类光标、ProtectedCursor、WM_SETCURSOR 拦截）全部
+    /// 只对本进程说话，这是第五条、也是唯一一条对挂队列的外部画回者结构免疫的。计数是队列私有的，只有本
+    /// 进程的 <c>ShowCursor</c> 能改它；>0 的读数＝有人在藏匿期把计数抬回过（框架或别的什么），锁回负区的
+    /// 动作本身就是取证。每个藏匿期清零。
+    /// </summary>
+    public long CursorSuppressRestates { get; private set; }
+
+    /// <summary>
+    /// 第九报（2026-09-15）：把本线程队列的显示计数压回负区。幂等——计数已在负区时一次调用都不发生，
+    /// 所以每拍重说毫无开销；一旦被谁抬回非负，下一个 100ms 拍就把锁重新上好。见
+    /// <see cref="CursorSuppressRestates"/> 的对决实验。
+    /// </summary>
+    private void SuppressCursorDisplay()
+    {
+        while (Native.ShowCursor(false) >= 0) CursorSuppressRestates++;
+    }
+
+    /// <summary>
+    /// 第九报（2026-09-15）：把显示计数拉回非负。同样抄 HC-Player：藏匿期间计数可能被压得很深，单次
+    /// <c>ShowCursor(TRUE)</c> 只抬一格，「显示之后光标不见了」就是负计数残留吞掉的——拉到非负为止。
+    /// </summary>
+    private void RestoreCursorDisplay()
+    {
+        while (Native.ShowCursor(true) < 0) { }
+    }
+
+    private int _lastGlobalFlags = -1;
+    private IntPtr _lastGlobalShape = IntPtr.Zero;
+
     public void KeepCursorHidden()
     {
-        if (_cursorHidden) Native.SetCursor(Blank);
+        if (!_cursorHidden)
+        {
+            _cursorHidePublished = false;
+            _lastGlobalFlags = -1;
+            _lastGlobalShape = IntPtr.Zero;
+            return;
+        }
+        Native.SetCursor(IntPtr.Zero);
+        KeepInputCursorHidden();
+
+        // 第九报（2026-09-15）：每拍把负计数锁重上一遍（幂等，计数已在负区时零调用）。重压的理由与
+        // 上面那句 SetCursor 每拍重说同构——负计数锁是队列私有的，本进程里谁（框架的光标管理、未来
+        // 的自己人）调一次 ShowCursor(TRUE) 就能把它抬回非负，画回者的下一笔就又亮得起来了。锁被抬回
+        // 的次数记进 CursorSuppressRestates，随 show 行出日志。
+        SuppressCursorDisplay();
+
+        // 第九报（2026-09-15）：全局快照检测，每拍一次，放在 published 短路之外——首拍之后的每一拍
+        // 这里过去什么都不做（SetCursor 说过了、Nudge 发过了），而用户拔掉鼠标后指针仍被画回画面
+        // （「开始播放后我拔掉了鼠标 然后它在13点6分17-18秒又复现了一次」）：压制不能只在发布时说一次，
+        // 形状被外部重新放回来时得有人看见并把它按下去。见 WatchGlobalShape。
+        WatchGlobalShape();
+
+        if (_cursorHidePublished || Native.MouseButtonDown()) return;
+        if (!Native.GetCursorPos(out var at)
+            || Native.GetAncestor(Native.WindowFromPoint(at), Native.GaRoot) != Handle) return;
+
+        // Publish the initial hide once. Replaying pointer input after every external cursor change can flicker.
+        _cursorHidePublished = true;
+        if (Native.NudgeCursorState()) CursorDisplayRefreshes++;
+    }
+
+    /// <summary>
+    /// One global snapshot per tick, judged against the tick before. First tick of a hide builds the baseline
+    /// and acts not at all; every tick after that, a change in flags or shape is counted and named — and
+    /// nothing else. 见 <see cref="ExternalShapeRestores"/>：这里的职责是看见并记录「有人动了全局光标」，
+    /// 不是回击——回击（Nudge）实测会把形状请出来成环（14:03，用户报「每过一会鼠标就会闪一下」）。
+    /// <para>
+    /// The reading itself is <see cref="Native.CursorSnapshot"/>, the probe's outside witness, not
+    /// <see cref="CursorShapeGone"/>: the latter looks at this thread's queue, which is exactly the eye that
+    /// cannot see a shape somebody else put back — the user's phone photo of 13:37 (2026-09-15) shows the
+    /// arrow sitting on the picture with every thread-local reading saying 「no shape」.
+    /// </para>
+    /// </summary>
+    private void WatchGlobalShape()
+    {
+        if (Native.CursorSnapshot() is not { } shot) return;
+        var (flags, shape, at) = shot;
+
+        if (_lastGlobalFlags < 0)
+        {
+            _lastGlobalFlags = flags;
+            _lastGlobalShape = shape;
+            return;
+        }
+
+        var changed = flags != _lastGlobalFlags || shape != _lastGlobalShape;
+        _lastGlobalFlags = flags;
+        _lastGlobalShape = shape;
+        if (!changed) return;
+
+        GlobalShapeChanges++;
+        var overUs = Native.GetAncestor(Native.WindowFromPoint(at), Native.GaRoot) == Handle;
+        LastGlobalChange = $"标志 0x{flags:X}，形状 0x{shape:X} @{at.X},{at.Y}"
+            + (overUs ? "，压在本窗口" : "，不在本窗口");
+
+        var external = (flags & Native.CurShowing) != 0 && shape != IntPtr.Zero && shape != Blank && overUs;
+        if (!external) return;
+
+        ExternalShapeRestores++;
+        LastExternalShape = LastGlobalChange;
+    }
+
+    private void KeepInputCursorHidden()
+    {
+        if (BlankInputCursor is not { } blank) return;
+        if (_pointerSource is null && _content?.XamlRoot?.ContentIsland is { } island)
+            _pointerSource = InputPointerSource.GetForIsland(island);
+        if (_pointerSource is null) return;
+
+        if (!_inputCursorOverridden)
+        {
+            _savedInputCursor = _pointerSource.Cursor;
+            _inputCursorOverridden = true;
+        }
+
+        // A null input-source cursor suppresses the pointer rather than displaying a transparent image.
+        if (_pointerSource.Cursor is not null) _pointerSource.Cursor = null;
+    }
+
+    private void RestoreInputCursor()
+    {
+        if (!_inputCursorOverridden) return;
+
+        // Do not replace a new cursor already selected by XAML for the control under the pointer.
+        if (_pointerSource is not null && _pointerSource.Cursor is null)
+            _pointerSource.Cursor = _savedInputCursor;
+
+        _savedInputCursor = null;
+        _inputCursorOverridden = false;
     }
 
     /// <summary>Whether content is currently extended into a custom non-client title bar.</summary>
@@ -461,6 +696,21 @@ internal sealed class HostWindow : IDisposable
             UpdateTitleBarRegions();
         }
     }
+
+    /// <summary>
+    /// 播放时不设最小尺寸：「取消播放页面窗口缩小的最小尺寸限制，允许窗口继续自由缩小」（用户的话，
+    /// 2026-09-15）。开着的时候三处下限全部让位 —— <see cref="ClampMinimumSize"/> 不再写
+    /// <c>MinTrackSize</c>（系统默认的最小追踪尺寸只剩一百来像素，等于随便缩）、比例锁与
+    /// <see cref="FitToPicture"/> 把最小值按 0 递给 <see cref="AspectLock"/>；<see cref="MinimumClientSize"/>
+    /// 那个读数是自检量浏览窗口下限用的，不跟着变。
+    /// <para>
+    /// 谁来开关：<see cref="PlayerWindow.TryCreate"/> 开窗即开（独立播放窗口天生只为播放存在），
+    /// <c>PlayerPage.EnterPlayer</c> 把接管的主窗口打开、<c>LeavePlayer</c> 关回去 —— 退出播放时
+    /// <see cref="RestoreBrowseGeometry"/> 本来就要把播放前的几何还回来，浏览窗口因此不会停在播放时缩出来的
+    /// 那个小尺寸上。默认 false，浏览窗口的 600×560 下限原样保留。
+    /// </para>
+    /// </summary>
+    public bool FreeSizing { get; set; }
 
     /// <summary>
     /// What the framework says its own title bar comes to, in physical pixels: the height it reserves and
@@ -543,6 +793,23 @@ internal sealed class HostWindow : IDisposable
     /// </para>
     /// </summary>
     public (WindowBounds Bounds, bool Maximized) Placement { get; private set; }
+
+    /// <summary>
+    /// 用户自己挑的那一份几何 —— 播放前的窗口大小和位置，退出播放时窗口要回到这里。带上「当时是不是最大化」
+    /// 那一位，所以从最大化浏览进片子、出来之后仍旧是最大化的浏览窗口。
+    /// <para>
+    /// <b>它和 <see cref="Placement"/> 是两件事，虽然平时装着同样的数。</b><see cref="Placement"/> 是「下次开窗
+    /// 照着这一份」，每一拍落定的几何都会盖掉它；这一份是「播放不许碰的那一份」，只在没在放片子的时候更新。
+    /// 从前只有 <see cref="Placement"/> 一个，于是 <see cref="FitToPicture"/> 那一下按画面比例整出来的又宽又扁
+    /// 的窗口把浏览的形状盖掉了 —— 退出播放之后窗口留着片子的形状，下次开窗也照着它开。用户 2026-09-14 报的
+    /// 「进入播放页面然后再退出页面会保留播放页面的窗口大小比例」就是这两件事混成一件的样子。
+    /// </para>
+    /// <para>
+    /// 最大化那一档尺寸留着上一次量到的（和 <see cref="Placement"/> 同一套规矩），所以「最大化着浏览 → 进片子
+    /// → 出来」回到的是取消最大化时该有的那个大小，而不是整块屏幕。
+    /// </para>
+    /// </summary>
+    private (WindowBounds Bounds, bool Maximized) _browse;
 
     /// <summary>
     /// The XAML tree filling the client area. Assigning before <see cref="Show"/> avoids a frame of
@@ -679,8 +946,25 @@ internal sealed class HostWindow : IDisposable
     /// <b>这是现在唯一一条形状约束。</b>浏览时还有过第二条（「锁定窗口比例大小」，把浏览区按住在 16:9），
     /// 2026-09-05 按用户的话删掉了 —— 没在放片子的窗口从此随便拉。
     /// </para>
+    /// <para>
+    /// <b>写进一个非零比例会先把当前几何记成「浏览的那一份」</b>（<see cref="CaptureBrowseGeometry"/>）—— 这是
+    /// 一次播放里画面第一次碰窗口的那一刻，也是唯一还量得到播放前那个矩形的时刻；<see cref="FitToPicture"/> 一
+    /// 动手就晚了。归零（播放结束）不记，那一头要的正是「回到记着的那一份」，让还原自己判有没有必要动。
+    /// </para>
     /// </summary>
-    public double PictureAspect { get; set; }
+    public double PictureAspect
+    {
+        get => _pictureAspect;
+        set
+        {
+            if (Math.Abs(_pictureAspect - value) <= 0.001) return;
+
+            if (value > 0 && _pictureAspect <= 0) CaptureBrowseGeometry();
+            _pictureAspect = value;
+        }
+    }
+
+    private double _pictureAspect;
 
     /// <summary>这个窗口所在那块屏的 dpi，问不到就按 96 算 —— 和下面几处 <c>GetDpiForWindow</c> 同一个兜底。</summary>
     private uint WindowDpi
@@ -747,16 +1031,107 @@ internal sealed class HostWindow : IDisposable
     {
         if (Handle == IntPtr.Zero || Fullscreen || Native.IsIconic(Handle)) return;
 
+        // 片子摆着的形状不是用户挑的，所以它既不进 <see cref="Placement"/>（下次开窗照着它开就成了片子的
+        // 形状），也不进 <see cref="HasBrowseGeometry"/> 那一份（退出播放要回到这里）。
+        if (PictureAspect > 0) return;
+
         if (Native.IsZoomed(Handle))
         {
             Placement = (Placement.Bounds, true);
+            _browse = (Placement.Bounds, true);
             return;
         }
 
         if (!Native.GetWindowRect(Handle, out var rect)) return;
         if (rect.Width <= 0 || rect.Height <= 0) return;
 
-        Placement = (new WindowBounds(rect.Left, rect.Top, rect.Right, rect.Bottom), false);
+        var bounds = new WindowBounds(rect.Left, rect.Top, rect.Right, rect.Bottom);
+        Placement = (bounds, false);
+        _browse = (bounds, false);
+    }
+
+    /// <summary>
+    /// 自检用：这一份播放前的几何记下来没有。退出播放要还原，而没记过的时候「还原」是没地方去的。
+    /// </summary>
+    internal bool HasBrowseGeometry => _browse.Bounds.Width > 0 && _browse.Bounds.Height > 0;
+
+    /// <summary>
+    /// 自检用：播放前记住的那份几何，读给探针比对。
+    /// </summary>
+    internal WindowBounds BrowseBounds => _browse.Bounds;
+
+    /// <summary>
+    /// 现在这一份几何如果属于浏览，就把它记进 <see cref="_browse"/>。由 <see cref="PictureAspect"/> 的写入方
+    /// 在写下比例的那一刻调一次 —— 那一刻的矩形一定是画面还没碰过的那一个，比等 <c>WM_SIZE</c> 回头再记可靠：
+    /// 消息是异步的，而 <see cref="FitToPicture"/> 一下就能把窗口挪走，等消息回来时量到的可能已经是新形状。
+    /// </summary>
+    /// <returns>记下了没有。全屏、最小化、没窗口，或者已经记着一份浏览几何时不重复记。</returns>
+    public bool CaptureBrowseGeometry()
+    {
+        if (Handle == IntPtr.Zero || Fullscreen || Native.IsIconic(Handle)) return false;
+
+        if (Native.IsZoomed(Handle))
+        {
+            _browse = (_browse.Bounds, true);
+            return HasBrowseGeometry;
+        }
+
+        if (!Native.GetWindowRect(Handle, out var rect)) return false;
+        if (rect.Width <= 0 || rect.Height <= 0) return false;
+
+        _browse = (new WindowBounds(rect.Left, rect.Top, rect.Right, rect.Bottom), false);
+        return true;
+    }
+
+    /// <summary>
+    /// 把窗口放回它开始放片子之前的那个大小和位置。播放结束时调一次，是「进入播放页面然后再退出页面会保留
+    /// 播放页面的窗口大小比例」的修法：<see cref="FitToPicture"/> 按画面比例整过的那个形状是给这部片子用的，
+    /// 片子看完了那形状就没道理留着 —— 一部 2.413:1 的宽银幕会把浏览窗口留成一条又宽又扁的横条。
+    /// <para>
+    /// 没记过（这次播放没有走过整形，比如一直全屏看的）就什么都不做。全屏归 <see cref="LeaveFullscreen"/>
+    /// 管，它自己记着进全屏前的矩形；这里只处理「窗口形状被画面改过」那一头，所以全屏时不插一脚。
+    /// </para>
+    /// <para>
+    /// <b>不按「用户有没有自己拖过」分档</b>（2026-09-14 用户的拍板：照样还原）。放片期间窗口是锁着画面比例的，
+    /// 拖出来的形状也不属于浏览用的那一份，所以退出播放一律回到播放前 —— 行为最好预测。
+    /// </para>
+    /// </summary>
+    public void RestoreBrowseGeometry()
+    {
+        if (Handle == IntPtr.Zero || Fullscreen || Native.IsIconic(Handle)) return;
+        if (!HasBrowseGeometry) return;
+
+        var was = _browse;
+
+        // 最大化着浏览的那一次：回到取消最大化时该有的那个大小，再把最大化重新摆上 —— 而不是把窗口摆成
+        // 整块屏幕那么大（那会是「还原成一个像最大化的普通窗口」，Windows 并不认为它最大化着）。
+        if (was.Maximized)
+        {
+            Native.SetWindowPos(
+                Handle, Native.HwndTop,
+                was.Bounds.Left, was.Bounds.Top, was.Bounds.Width, was.Bounds.Height,
+                Native.SwpNoZOrder | Native.SwpNoActivate);
+            Native.ShowWindow(Handle, Native.SwMaximize);
+            Log.Info(Category, $"退出播放，窗口还原并最大化 {was.Bounds.Width}x{was.Bounds.Height}");
+            return;
+        }
+
+        if (!Native.GetWindowRect(Handle, out var rect)) return;
+
+        if (rect.Left == was.Bounds.Left && rect.Top == was.Bounds.Top
+            && rect.Width == was.Bounds.Width && rect.Height == was.Bounds.Height)
+        {
+            return;
+        }
+
+        Native.SetWindowPos(
+            Handle, Native.HwndTop,
+            was.Bounds.Left, was.Bounds.Top, was.Bounds.Width, was.Bounds.Height,
+            Native.SwpNoZOrder | Native.SwpNoActivate);
+
+        Log.Info(Category,
+            $"退出播放，窗口还原到播放前的 {was.Bounds.Width}x{was.Bounds.Height}"
+            + $" @ {was.Bounds.Left},{was.Bounds.Top}（原来被画面整形到 {rect.Width}x{rect.Height}）");
     }
 
     /// <summary>
@@ -790,8 +1165,8 @@ internal sealed class HostWindow : IDisposable
             frame.Width,
             frame.Height,
             WorkArea(),
-            MinimumWidth * (int)dpi / 96,
-            MinimumHeight * (int)dpi / 96);
+            FreeSizing ? 0 : MinimumWidth * (int)dpi / 96,
+            FreeSizing ? 0 : MinimumHeight * (int)dpi / 96);
 
         if (fitted.Left == bounds.Left && fitted.Top == bounds.Top
             && fitted.Width == bounds.Width && fitted.Height == bounds.Height)
@@ -1188,6 +1563,32 @@ internal sealed class HostWindow : IDisposable
         Log.Info(Category, $"进入全屏 {screen.Width}x{screen.Height}，窗口置顶以盖住任务栏");
     }
 
+    /// <summary>
+    /// 退出全屏：把进全屏那一刻的样式和矩形原样放回来，然后<b>按当前画面比例再整形一次</b>。
+    /// <para>
+    /// 那第二半是 2026-09-14 用户报的「窗口模式下调整窗口大小上下会出现黑边」，而它是两件事凑成的：
+    /// </para>
+    /// <list type="number">
+    ///   <item><b>进全屏太快了。</b>自动全屏在开播后 40 毫秒就动手（日志：`按画面比例调整窗口 1463x608`
+    ///   之后 42 毫秒 `进入全屏`），而 mpv 要等多半秒才说得出真正的比例（`画面比例 1.778（mpv）`）。
+    ///   那一句来的时候窗口正在全屏，<see cref="FitToPicture"/> 按设计整不了（边归显示器），
+    ///   <b>于是这句修正被整个丢掉</b>。</item>
+    ///   <item><b>退出全屏把这份丢掉的账翻了出来。</b>回来的矩形是进全屏前那个 —— 也就是按服务器那个
+    ///   猜错的 2.413 整出来的 1463×608。窗口从此是 2.413:1 的形状放着 1.778:1 的画面，mpv 只能上下加黑边；
+    ///   而 <c>WM_SIZING</c> 还会把之后每一把拖拽都锁回这个错的形状，所以「调整窗口大小上下会出现黑边」
+    ///   不是拖出来的、是拖也拖不掉。</item>
+    /// </list>
+    /// <para>
+    /// <b>为什么要在这里补，而不是让 <see cref="FitToPicture"/> 在全屏时也照做</b>：全屏时窗口的边是显示器的，
+    /// 整形会被显示器尺寸立刻覆盖，白挪一下还可能让画面闪。要的只是「回到窗口化之后补上这一课」，而退出全屏
+    /// 正是那一刻。顺序也必须在这之后 —— 样式先还回去，<see cref="FrameThickness"/> 量到的边框才是窗口化那一套。
+    /// </para>
+    /// <para>
+    /// 净效果也顺带修好了另一条路：用户在窗口化下自己把窗口拖成别的形状、中途进一次全屏再出来，出来时形状会
+    /// 回到画面那一份，而不是他拖的那个错的。这与 <see cref="RestoreBrowseGeometry"/> 不冲突 —— 那一头管的是
+    /// 「播放结束」，这一头管的是「全屏结束」，而两个时刻的 <see cref="PictureAspect"/> 一个非零、一个已归零。
+    /// </para>
+    /// </summary>
     private void LeaveFullscreen()
     {
         if (_restore is not { } saved) return;
@@ -1209,6 +1610,11 @@ internal sealed class HostWindow : IDisposable
 
         // 同 EnterFullscreen 那发：Fill 只改视频窗口自己，mpv 的子窗口由它自己的钩子跟上。
         _video?.Fill();
+
+        // 窗口化时视频有黑边: the rect just put back is the one the window had when it went fullscreen, and
+        // that is not necessarily the picture's shape any more — see the class remark on this method for the
+        // two ways the two come apart. Re-fitting here is the whole repair: 退出全屏之后按当前画面比例再整形一次.
+        FitToPicture();
 
         Log.Info(Category, "退出全屏");
     }
@@ -1518,6 +1924,7 @@ internal sealed class HostWindow : IDisposable
 
         ApplyWindowsChrome();
         CreateIsland();
+        InstallKeyboardFallback();
 
         Native.ShowWindow(Handle, maximized ? Native.SwMaximize : Native.SwShow);
         Native.SetForegroundWindow(Handle);
@@ -1930,6 +2337,86 @@ internal sealed class HostWindow : IDisposable
         return [.. pieces];
     }
 
+    // ---- 键盘兜底 -------------------------------------------------------------------
+    //
+    // 「新增esc退出全屏 按空格开始播放」（2026-09-15）。XAML 的键路只在 Win32 键盘焦点落进岛里时才
+    // 响；全屏播放时前台被别的应用抢走再回来、或焦点落在宿主窗口与视频子窗口上，键就被 DefWindowProc
+    // 吞掉 —— 用户日志里十三天「按键/空格」唤醒为零，全是这条。WH_KEYBOARD 是线程钩子：键只有在被
+    // 送进本线程队列时它才响（焦点在别家时一次都不响），所以它天生不抢别人的键，只兜「键到了我们家、
+    // XAML 却收不到」的底。
+
+    /// <summary>
+    /// 装线程钩子。Show 里岛建好之后调一次；失败只记一行 —— 兜底缺了是「焦点掉出岛后按键失灵」，
+    /// 不是「按键全灭」，XAML 主路还活着，自检「快捷键派发」一格会替这里喊。
+    /// </summary>
+    private void InstallKeyboardFallback()
+    {
+        if (_keyboardHook != IntPtr.Zero || _keyboardProcedure is not null) return;
+
+        _keyboardProcedure = KeyboardHookProc;
+        _keyboardHook = Native.SetWindowsHookEx(Native.WhKeyboard, _keyboardProcedure, IntPtr.Zero, Native.GetCurrentThreadId());
+        if (_keyboardHook == IntPtr.Zero)
+            Log.Warn(Category, $"装键盘兜底钩子失败，错误码 {Marshal.GetLastWin32Error()}（焦点掉出 XAML 岛后 Esc/空格将失灵）");
+    }
+
+    private void UninstallKeyboardFallback()
+    {
+        if (_keyboardHook == IntPtr.Zero) return;
+
+        Native.UnhookWindowsHookEx(_keyboardHook);
+        _keyboardHook = IntPtr.Zero;
+        _keyboardProcedure = null;
+    }
+
+    /// <summary>
+    /// 钩子过程。只认「全新的按下」（抬起、自动重复、Alt 组合一概放行），只问空格和 Esc 两颗：
+    /// 焦点必须在本窗口的树里、又不在岛里（岛里 XAML 自己收，两条路永远只有一条出键），页面也点头
+    /// （菜单开着、正在打字时它让路），这一下才被兜住并吃掉 —— 返回 1 掐断钩子链和这颗键，
+    /// DefWindowProc 再没有机会把它吞进肚里。
+    /// </summary>
+    private IntPtr KeyboardHookProc(int code, IntPtr wParam, IntPtr lParam)
+    {
+        const long KfUp = 0x80000000;
+        const long KfRepeat = 0x40000000;
+        const long KfAltDown = 0x20000000;
+        const int VkSpace = 0x20;
+        const int VkEscape = 0x1B;
+
+        if (code >= 0)
+        {
+            var bits = lParam.ToInt64();
+            var vk = unchecked((int)(long)wParam);
+            if ((bits & KfUp) == 0 && (bits & KfRepeat) == 0 && (bits & KfAltDown) == 0
+                && vk is VkSpace or VkEscape
+                && KeyFellThroughTheIsland(vk)
+                && _win32Keys?.WantsKey(vk) == true)
+            {
+                _win32Keys!.Handle(vk);
+                return 1;
+            }
+        }
+
+        return Native.CallNextHookEx(_keyboardHook, code, wParam, lParam);
+    }
+
+    /// <summary>
+    /// 这一键是不是「发给了我们、XAML 却收不到」：焦点 HWND 得在本窗口的树里（焦点在别家窗口上时
+    /// 这个线程钩子根本不会被叫到，这道闸只是多一层保险），且不在岛里 —— 焦点在岛里时 XAML 那两条
+    /// 键路活着，兜底路一步都不越。问自己的线程号，不是 0：0 问到的是前台线程，而前台可能是别家。
+    /// </summary>
+    private bool KeyFellThroughTheIsland(int vk)
+    {
+        var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+        if (!Native.GetGUIThreadInfo(Native.GetCurrentThreadId(), ref info)) return false;
+
+        var focus = info.FocusWindow;
+        if (focus == IntPtr.Zero) return false;
+        if (focus != Handle && !Native.IsChild(Handle, focus)) return false;
+        if (IslandHandle != IntPtr.Zero && (focus == IslandHandle || Native.IsChild(IslandHandle, focus))) return false;
+
+        return true;
+    }
+
     private void CreateIsland()
     {
         Native.GetClientRect(Handle, out var client);
@@ -2156,6 +2643,8 @@ internal sealed class HostWindow : IDisposable
                 return IntPtr.Zero;
 
             case Native.WmDestroy:
+                // 钩子赶在消息循环还在的时候摘掉：线程活着而钩子悬着，每颗键都要多过一遍死委托。
+                UninstallKeyboardFallback();
                 Windows.Remove(window);
                 Handle = IntPtr.Zero;
 
@@ -2194,7 +2683,8 @@ internal sealed class HostWindow : IDisposable
     /// <para>
     /// The frame thickness is measured from the window rather than derived from its styles — see
     /// <see cref="FrameThickness"/> — and the minimum client size is computed at this window's scale, not
-    /// at 96 dpi.
+    /// at 96 dpi. The minimum itself is the browsing floor unless <see cref="FreeSizing"/> has lifted it
+    /// for a playback, in which case the shape is held all the way down to however small the hand drags.
     /// </para>
     /// </summary>
     private IntPtr LockAspectDuringResize(IntPtr window, IntPtr wParam, IntPtr lParam)
@@ -2222,8 +2712,8 @@ internal sealed class HostWindow : IDisposable
             aspect,
             frame.Width,
             frame.Height,
-            MinimumWidth * (int)dpi / 96,
-            MinimumHeight * (int)dpi / 96);
+            FreeSizing ? 0 : MinimumWidth * (int)dpi / 96,
+            FreeSizing ? 0 : MinimumHeight * (int)dpi / 96);
 
         proposed.Left = locked.Left;
         proposed.Top = locked.Top;
@@ -2248,6 +2738,10 @@ internal sealed class HostWindow : IDisposable
     /// </summary>
     private void ClampMinimumSize(IntPtr window, IntPtr lParam)
     {
+        // 播放时不设下限（FreeSizing）：MINMAXINFO 是系统按默认值预填好的，一个字节不写就是把
+        // 最小追踪尺寸还给系统默认 —— 那只剩一百来像素，窗口于是随便缩。
+        if (FreeSizing) return;
+
         var dpi = Native.GetDpiForWindow(window);
         if (dpi == 0) dpi = 96;
 
@@ -2294,6 +2788,9 @@ internal sealed class HostWindow : IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        // 兜底那一摘：正常销毁走 WM_DESTROY 已经摘过（幂等，句柄归零即无事可做）。
+        UninstallKeyboardFallback();
+
         // Unmark before the window goes, so a shutdown from fullscreen cannot leave the shell holding a
         // dead hwnd as the reason the taskbar is standing aside.
         if (Handle != IntPtr.Zero && Fullscreen) Native.MarkFullscreen(Handle, false);
@@ -2317,6 +2814,8 @@ internal sealed class HostWindow : IDisposable
         _video?.Dispose();
         _video = null;
 
+        RestoreInputCursor();
+        _pointerSource = null;
         _source?.Dispose();
         _source = null;
 

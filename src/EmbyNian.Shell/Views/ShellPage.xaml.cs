@@ -692,6 +692,23 @@ public sealed partial class ShellPage : UserControl, IShellActions
         Player.Attach(Player.ViewModel, this, _window);
     }
 
+    /// <summary>
+    /// 播放页右上角那颗「关闭」的去向（2026-09-15）：停止播放、外壳回主页，而不是关窗口。此前这颗按钮
+    /// 直接 <c>Close()</c>，主窗口播放模式下等于把整个程序退掉 —— 「在播放视频时点击右上角关闭按钮，
+    /// 不直接退出程序，而是返回主页」。
+    /// <para>
+    /// 先停后走：主窗口模式由 <c>PlayerHidden</c> 把窗口还原成浏览的样子；独立窗口模式同一条事件顺带把
+    /// 播放窗口收掉（「关掉＝停止播放」的两头都挂在那儿），随后主页这一导航落在本窗口的框里。已在主页时
+    /// <see cref="GoTo"/> 自己短路，重复点也不产生历史记录。
+    /// </para>
+    /// </summary>
+    internal void ClosePlayerToHome()
+    {
+        if (Player.ViewModel.PlayingNow) _ = Player.ViewModel.StopAsync();
+
+        GoTo("home");
+    }
+
     Task IShellActions.PlayAsync(
         EmbyItem item,
         EmbyItem? parent,

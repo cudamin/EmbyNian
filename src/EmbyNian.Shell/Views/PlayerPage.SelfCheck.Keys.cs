@@ -43,9 +43,12 @@ public sealed partial class PlayerPage
 
         // 空格拦截和 chrome 焦点归还（2026-09-13「新增按空格暂停」）这两条 Root 接线：注册若被拆掉，
         // 焦点被控件拿走之后空格就又哑了 —— 键盘到不了页面那一路，屏上最静默的一种死法。
+        // 2026-09-15 加键盘兜底那半：窗口的 WH_KEYBOARD 钩子没装上，焦点掉出岛（被别的应用抢过前台
+        // 再回来、焦点落在宿主/视频子窗口上）之后 Esc/空格照样哑，同样只有这里能喊出来。
         var armed = SpaceAndFocusWiringArmed;
+        var fallback = _window?.KeyboardFallbackInstalled ?? true;
 
-        var ok = missing.Count == 0 && extra.Count == 0 && unreachable.Count == 0 && unique && armed;
+        var ok = missing.Count == 0 && extra.Count == 0 && unreachable.Count == 0 && unique && armed && fallback;
 
         var detail = new StringBuilder($"{actions.Count} 个动作、处理器 {handlerIds.Count} 个");
         if (missing.Count > 0) detail.Append($"；缺处理器：{string.Join('、', missing)}");
@@ -53,6 +56,7 @@ public sealed partial class PlayerPage
         if (unreachable.Count > 0) detail.Append($"；默认键按不出：{string.Join('、', unreachable)}");
         detail.Append(unique ? "；默认键互不相同" : "；默认键有相撞");
         detail.Append(armed ? "；空格接线在" : "；空格接线被拆");
+        detail.Append(fallback ? "；键盘兜底在" : "；键盘兜底缺");
 
         return (ok, detail.ToString());
     }

@@ -37,6 +37,7 @@ internal static class Program
         PlayerPaletteTests.Register();
         PinIndicatorTests.Register();
         AboutTests.Register();
+        MoviePilotTests.Register();
 
         return TestHarness.Run();
     }

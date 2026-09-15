@@ -21,7 +21,7 @@ namespace EmbyNian.Shell.Views;
 /// this file knows what is playing: a gesture is a gesture until the view model gives it a meaning.
 /// </para>
 /// </summary>
-public sealed partial class PlayerPage
+public sealed partial class PlayerPage : IWin32KeySink
 {
     /// <summary>How far one wheel notch moves 音量. mpv's own step, and the reason is in <see cref="OnPointerWheel"/>.</summary>
     private const int WheelStep = 2;
@@ -68,13 +68,35 @@ public sealed partial class PlayerPage
     /// asked for.</item>
     /// </list>
     /// <para>
-    /// Two pixels in both states, which is the correction this rule has been through twice. It used to be two
-    /// while the cursor was showing and <b>one</b> once it was hidden — 「any move at all brings it back」, which
-    /// is exactly the pixel a hide's own ask is made of, and whose echo was only ever filtered by distance and a
-    /// stopwatch together. An echo that arrived after the stopwatch ran out was read as a hand, and
-    /// 「鼠标隐藏了一会又会自动跑出来」 was the result. A hand reaching for the mouse gets the same instant answer
-    /// it always did: its first event is tens of pixels, and a slow one accumulates against the anchor, which
-    /// only moves on a movement that counted.
+    /// Five pixels, the same number <see cref="ChromeReveal.Travelled"/> uses and the same correction this rule
+    /// has been through twice. It used to be two while the cursor was showing and <b>one</b> once it was hidden —
+    /// 「any move at all brings it back」, which is exactly the pixel a hide's own ask is made of, and whose echo
+    /// was only ever filtered by distance and a stopwatch together. An echo that arrived after the stopwatch ran
+    /// out was read as a hand, and 「鼠标隐藏了一会又会自动跑出来」 was the result. A hand reaching for the mouse
+    /// gets the same instant answer it always did: its first event is tens of pixels, and a slow one accumulates
+    /// against the anchor, which only moves on a movement that counted.
+    /// </para>
+    /// <para>
+    /// This path only ever sees a report the event filter has already accepted, so what arrives here is a
+    /// movement by construction and it reaches <see cref="ChromeReveal.Pointer"/> as one. The hidden half of
+    /// the rule no longer trusts this anchor at all: it compares against the point the cursor was hidden at
+    /// (<see cref="ChromeReveal.HiddenTolerance"/>), because this anchor is the one a desk's rattle can walk
+    /// along.
+    /// </para>
+    /// <para>
+    /// <b>The eighth report retired 「by construction」.</b> The film of 08:22:44 caught a cursor hidden for
+    /// 29.7 seconds woken by one event claiming 「5,0 逻辑像素」 while the ten-hertz poll — the sensor that
+    /// reads the OS — swore the pointer had not moved a pixel: a synthetic move, raised because the tree under
+    /// a stationary pointer changed (AyuGram's toast and its focus changes were the user's repeatable trigger,
+    /// and 「我用其他播放器还有网页看视频的时候都不会出现这种问题」 is what pins the defect to this player's
+    /// own event path rather than to anything foreign on the desktop). So 「accepted by the filter」 is no
+    /// longer the end of the question, in two states. Hidden, a claimed step is parked in <see cref="_xamlClaim"/>
+    /// and judged by the next poll — the poll's <c>GetCursorPos</c> is the sensor that cannot be lied to about
+    /// where the pointer is. Showing, the event's coordinates are checked against the OS's live position and
+    /// anything beyond <see cref="ChromeReveal.SyntheticSlackPixels"/> of disagreement is dropped. The old
+    /// 「框架事件走了 …」 wake string is gone with the trust that produced it: a hidden cursor's wake is now
+    /// always the poll's own sentence, 「轮询问出了 … 物理像素」, which is also why the show line cannot be
+    /// subpoenaed out of this method any more.
     /// </para>
     /// </summary>
     private bool Moved(Point point, ChromePart part)
@@ -83,7 +105,16 @@ public sealed partial class PlayerPage
         var dx = first ? double.PositiveInfinity : Math.Abs(point.X - _pointerAt.X);
         var dy = first ? double.PositiveInfinity : Math.Abs(point.Y - _pointerAt.Y);
 
-        var arrived = part != _pointerOn && !_cursorHidden;
+        // This used to open with a filter for this player's own ask: a hide ended with an injected one-pixel
+        // round trip, and the island raised a real <c>PointerMoved</c> for it that had to be recognised or it
+        // would restamp the idle clock and undo the hide. That ask is gone — see <c>Nudge</c> for why, and for
+        // the log line 「框架事件走了 2,0 逻辑像素」 that retired it — so the threshold is the whole of the
+        // filter again, which is what it was always meant to be.
+        // 第八报（2026-09-15）：arrived 只认「控件来了」，不认「控件走了」。chrome 收起时控件从指针下
+        // 走掉，part 变成 None —— 位置一个像素没动，却被读成一次到达、重置空闲时钟。指针停在中段时这场
+        // 重置什么也看不见，只对光标可见：chrome 650ms 收一次、合成事件再送一次，「点开始播放后不会自动
+        // 隐藏、要点一下暂停再播放才藏」就是这条链。控件离开不是到达；None→控件的真到达照旧放行。
+        var arrived = part != _pointerOn && !_cursorHidden && part != ChromePart.None;
         var real = arrived || ChromeReveal.Travelled(dx, dy);
 
         if (!real)
@@ -98,7 +129,28 @@ public sealed partial class PlayerPage
             return false;
         }
 
-        if (_cursorHidden) _woke = $"框架事件走了 {dx:0.#},{dy:0.#} 逻辑像素";
+        // 第八报（2026-09-15）：藏匿期的 XAML 移动声明不再立即唤醒。证据在 08:22:44 的现场：藏了 29.7 秒、
+        // 轮询计数一次没动，一个 XAML 事件却声称「5,0 逻辑像素」——指针物理没动，动的是框架重推的坐标基准
+        // （AyuGram 的 toast、焦点变化送来的合成移动）。所以藏匿期只把声明挂进 _xamlClaim，下一拍轮询拿
+        // GetCursorPos 裁决：OS 说指针真挪了（离藏匿点超过 HiddenTolerance）就照常醒，轮询写唤醒理由，
+        // 这条声明被顺手吸收；OS 说没动，声明就是谎言，丢弃、计入 _syntheticMoves。真手无感：第一个事件
+        // 就是几十像素，轮询百分之一秒后读到的也是同一个位移。
+        if (_cursorHidden)
+        {
+            _xamlClaim = point;
+            return false;
+        }
+
+        // 第八报（2026-09-15）：显示期与 OS 对质。事件坐标与 OS 实时位置差超过 SyntheticSlackPixels 的
+        // 「移动」是合成的——树在静止指针底下变了，框架重推了一遍基准。丢掉它，不更新锚、不重置时钟：
+        // 显示期误杀无害，手既然报得出事件就停不下来，而轮询一拍之内会把锚重新种好。
+        if (CursorPoint(out var osNow)
+            && (Math.Abs(point.X - osNow.X) > ChromeReveal.SyntheticSlackPixels
+                || Math.Abs(point.Y - osNow.Y) > ChromeReveal.SyntheticSlackPixels))
+        {
+            _syntheticMoves++;
+            return false;
+        }
 
         _pointerAt = point;
         _pointerOn = part;
@@ -122,6 +174,9 @@ public sealed partial class PlayerPage
         // rail pinned up after 「鼠标移到窗口右边显示音量条之后，再移出窗口」.
         if (PointerInside()) return;
 
+        // A departure that ends a hide gets a name like every other wake: the show line prints whatever
+        // _woke holds, and 「指针走了」 is a different fact from a press or a key.
+        if (_cursorHidden) _woke = "指针离开了画面";
         if (_chrome.PointerLeft(Now)) Render();
     }
 
@@ -154,6 +209,9 @@ public sealed partial class PlayerPage
             return;
         }
 
+        // A press is a hand even when it moves nothing, and the show line should say so: label it before
+        // Render writes the line, exactly as the poll labels its own wake before the reseed.
+        if (_cursorHidden) _woke = "点击（画面上按下）";
         if (_chrome.WakeFully(Now)) Render();
     }
 
@@ -367,6 +425,7 @@ public sealed partial class PlayerPage
         // A keyboard command has no pointer behind it, so the chrome is shown wherever the pointer
         // happens to be resting — otherwise pressing Space over the middle of the picture changes the
         // playback state with nothing on screen to say so.
+        if (_cursorHidden) _woke = $"按键 {e.Key}";
         if (_chrome.WakeFully(Now)) Render();
     }
 
@@ -425,7 +484,7 @@ public sealed partial class PlayerPage
         ["toggle-mute"] = ToggleMute,
         ["previous-episode"] = () => ViewModel.PreviousEpisode(),
         ["next-episode"] = () => ViewModel.NextEpisode(),
-        ["toggle-pin"] = () => SetPinned(!_window!.TopMost),
+        ["toggle-pin"] = TogglePinByHand,
         ["chapter-previous"] = () => ViewModel.StepChapter(-1),
         ["chapter-next"] = () => ViewModel.StepChapter(1),
         ["speed-down"] = () => ViewModel.NudgeSpeed(-0.1),
@@ -473,6 +532,7 @@ public sealed partial class PlayerPage
         // A keyboard command has no pointer behind it, and this one may not even have had the page's usual
         // OnKeyDown half to wake the chrome on its way: show it wherever the pointer is resting, exactly as
         // OnKeyDown does for its own keys.
+        if (_cursorHidden) _woke = "空格（播放/暂停）";
         if (_chrome.WakeFully(Now)) Render();
     }
 
@@ -493,6 +553,41 @@ public sealed partial class PlayerPage
         if (sender is Button { Flyout: not null }) return;
 
         Focus(FocusState.Programmatic);
+    }
+
+    // ---- Win32 键盘兜底 ----------------------------------------------------------
+    //
+    // 「新增esc退出全屏 按空格开始播放」（2026-09-15）。OnKeyDown 和 OnSpaceShortcut 都只在 Win32
+    // 键盘焦点落进 XAML 岛里时才响；全屏播放期间前台被 Edge、AyuGram 这类抢走过再回来，或焦点落在
+    // 宿主窗口和视频子窗口上时，键被 DefWindowProc 吞掉 —— 用户日志里十三天「按键/空格」唤醒一次都
+    // 没有，全是这条。窗口的线程级 WH_KEYBOARD 钩子在焦点不在岛里时把空格和 Esc 送到这里；焦点在
+    // 岛里时它一概放行，两条路永远只有一条出键。
+
+    /// <summary>接不接这一下。菜单/弹层开着让路，正在打字让路，其余只认空格和 Esc 两颗。</summary>
+    bool IWin32KeySink.WantsKey(int virtualKey)
+    {
+        if (!Attached || _typing) return false;
+
+        // 焦点在弹层上时 Win32 焦点本来就在岛里、走不到这里；这道闸留给「弹层开着而焦点又掉出岛」
+        // 这种状态机打架的时刻 —— Esc 该归 XAML 去关弹层，兜底路不越权。
+        if (_holds.HasFlag(ChromeHold.Menu)) return false;
+
+        return virtualKey is (int)VirtualKey.Space or (int)VirtualKey.Escape;
+    }
+
+    /// <summary>
+    /// 接。与岛内两条键路同一句话（<see cref="Dispatch"/>）：Esc 全屏则退全屏、非全屏则停止播放；
+    /// 空格走可重绑表 —— 表里默认绑在 toggle-pause 上，重绑走了兜底路跟着走，岛内岛外永远做同一件事。
+    /// </summary>
+    void IWin32KeySink.Handle(int virtualKey)
+    {
+        var key = (VirtualKey)virtualKey;
+        if (!Attached || !Dispatch(key)) return;
+
+        // 姓名牌：兜底路自己的名字，和 XAML 那两路（「按键 X」「空格（播放/暂停）」）分得开 ——
+        // 以后日志里见到「（Win32 兜底）」就是焦点掉出岛的那一阵。
+        if (_cursorHidden) _woke = key == VirtualKey.Space ? "空格（播放/暂停，Win32 兜底）" : $"按键 {key}（Win32 兜底）";
+        if (_chrome.WakeFully(Now)) Render();
     }
 
     /// <summary>
@@ -548,10 +643,20 @@ public sealed partial class PlayerPage
         Render();
     }
 
-    private void OnTogglePin(object sender, RoutedEventArgs e)
+    private void OnTogglePin(object sender, RoutedEventArgs e) => TogglePinByHand();
+
+    /// <summary>
+    /// 用户亲手拨置顶开关的那一下 —— 按钮和 T 键（toggle-pin）都从这儿走。除了立起/放下窗口的置顶，
+    /// 还要把选择记进设置（「对播放页面"是否置顶"的设置进行持久化保存，程序重启后仍保留上次选择」，
+    /// 2026-09-15）：恢复进场那一档是 <c>EnterPlayer</c> 的事，探针与退出播放的放下不记账，只有用户
+    /// 亲手拨的这一下才算数。
+    /// </summary>
+    private void TogglePinByHand()
     {
         if (_window is null) return;
+
         SetPinned(!_window.TopMost);
+        ViewModel.SavePinTopmost(_window.TopMost);
     }
 
     /// <summary>
@@ -601,7 +706,22 @@ public sealed partial class PlayerPage
         UpdateMaximizeGlyph();
     }
 
-    private void OnCloseWindow(object sender, RoutedEventArgs e) => _window?.Close();
+    /// <summary>
+    /// 右上角那颗「关闭」（2026-09-15 的拍板）：播放中点它不再把窗口关掉 —— 主窗口播放时那一下等于退出
+    /// 整个程序 —— 而是停止播放、外壳回主页。独立窗口模式同一句话也成立：停止播放会把那个窗口顺带收掉
+    /// （PlayerHidden 上接着两头），主窗口则回到主页。没有外壳（页面还没挂上）时退回原样关窗口，那条路
+    /// 只有程序自身收尾才会走到。
+    /// </summary>
+    private void OnCloseWindow(object sender, RoutedEventArgs e)
+    {
+        if (_shell is null)
+        {
+            _window?.Close();
+            return;
+        }
+
+        _shell.ClosePlayerToHome();
+    }
 
     /// <summary>
     /// 最大化 or 还原, whichever the button would do next —— 全屏时它说的也是这件事，只是那一档的「还原」

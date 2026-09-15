@@ -51,12 +51,16 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
     /// <summary>主页版面那张可拖拽、带勾选的表，见 <see cref="SettingHomeLayoutRow"/>。</summary>
     public DataTemplate? HomeLayout { get; set; }
 
+    /// <summary>MoviePilot 接入卡：一个开关、两个输入框、一颗测试按钮，见 <see cref="SettingMoviePilotRow"/>。</summary>
+    public DataTemplate? MoviePilot { get; set; }
+
     protected override DataTemplate? SelectTemplateCore(object item) => item switch
     {
         // Before the two numeric rows, because a slider row is not a number row but reads like one; and
         // before the plain toggle, because a group of toggles is not one toggle.
         SettingThemeRow => Theme,
         SettingHomeLayoutRow => HomeLayout,
+        SettingMoviePilotRow => MoviePilot,
         SettingFactRow => Fact,
         SettingShortcutRow => Shortcut,
         SettingChoiceRow => Choice,

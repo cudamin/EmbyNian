@@ -1013,6 +1013,16 @@
              Opaque, and above everything else in the grid, so it cannot lose the race the WinForms
              cover kept losing. -->
         <Grid x:Name="Cover" Background="{StaticResource PlayerCoverBrush}" Visibility="{x:Bind ViewModel.CoverVisibility, Mode=OneWay}">
+            <!-- 「视频刚开播还在加载缓存没有正片画面时背景要用背景图，全屏播放时背景图要占满全屏，别只在
+                 左上角显示」（2026-09-15）。遮罩网格本身铺满整个窗口（全屏时就是整个屏幕），垫底图用
+                 UniformToFill 跟着占满、不留边也不变形；压到半透明，进度环和文字才读得清，取不到图时
+                 Source 为空，垫底照旧退回纯色。装饰图，不参与命中与朗读。 -->
+            <Image
+                Source="{x:Bind ViewModel.CoverBackdrop, Mode=OneWay}"
+                Stretch="UniformToFill"
+                Opacity="0.5"
+                IsHitTestVisible="False"
+                AutomationProperties.AccessibilityView="Raw" />
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
                 <!-- IsActive follows the cover rather than sitting on True. A ProgressRing animates through
                      the compositor, which does not stop because an ancestor is collapsed — and this page is

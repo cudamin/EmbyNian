@@ -415,6 +415,88 @@
             </local:SettingRowTemplates.Text>
 
             <!--
+              MoviePilot 接入卡（用户的话，2026-09-14：「放设置页」）：一个开关、地址、用户名、密码，加一颗测试按钮，
+              底下是上一次测试的结论。和别的行不同，它是整幅宽的一张卡而不是「左边标签 + 右边控件」—— 这一件事有四个
+              输入和一个动作，塞进 320 宽的控件列会挤成一条。行为什么是一个而不是四个，见 SettingMoviePilotRow 的类注释。
+            -->
+            <local:SettingRowTemplates.MoviePilot>
+                <DataTemplate x:DataType="vm:SettingMoviePilotRow">
+                    <!--
+                      外面这一层必须是 Grid 而不是 StackPanel：EgSettingRowStyle 的 TargetType 是 Grid，而 XAML
+                      的 Style 不允许跨类型套用 —— 套错的后果不是构建报错，是模板实例化那一刻抛 COMException
+                      （2026-09-14 自检在「界面 → MoviePilot」这一步就是这么倒的）。所以卡片外观由 Grid 承载，
+                      竖排交给里面那个 StackPanel。MinHeight 的 68 是给一行的下限，这张卡比它高得多，不冲突。
+                    -->
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
+                        <StackPanel Spacing="10">
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                                <TextBlock
+                                    Style="{StaticResource EgSettingNote}"
+                                    Text="{x:Bind Note}"
+                                    TextWrapping="Wrap"
+                                    Visibility="{x:Bind NoteVisibility}" />
+                            </StackPanel>
+
+                            <ToggleSwitch
+                                AutomationProperties.Name="{x:Bind Label}"
+                                Header="启用"
+                                IsOn="{x:Bind Enabled, Mode=TwoWay}"
+                                OffContent="关闭"
+                                OnContent="开启" />
+
+                            <TextBox
+                                AutomationProperties.Name="MoviePilot 地址"
+                                Header="服务地址"
+                                PlaceholderText="192.168.31.230:3001"
+                                Text="{x:Bind Url, Mode=TwoWay}" />
+
+                            <TextBox
+                                AutomationProperties.Name="MoviePilot 用户名"
+                                Header="用户名"
+                                PlaceholderText="MoviePilot 的登录名"
+                                Text="{x:Bind Username, Mode=TwoWay}" />
+
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <PasswordBox
+                                    AutomationProperties.Name="MoviePilot 密码"
+                                    Header="密码"
+                                    Password="{x:Bind Password, Mode=TwoWay}"
+                                    PlaceholderText="留空则用已保存的那个" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    VerticalAlignment="Bottom"
+                                    Margin="0,0,0,6"
+                                    Style="{StaticResource EgSettingNote}"
+                                    Text="已保存一个密码"
+                                    Visibility="{x:Bind SavedPasswordVisibility, Mode=OneWay}" />
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <Button
+                                    AutomationProperties.Name="测试 MoviePilot 连接"
+                                    Command="{x:Bind TestCommand}"
+                                    Content="{x:Bind TestLabel, Mode=OneWay}"
+                                    IsEnabled="{x:Bind CanTest, Mode=OneWay}" />
+                            </StackPanel>
+
+                            <TextBlock
+                                IsTextSelectionEnabled="True"
+                                Style="{StaticResource EgSettingNote}"
+                                Foreground="{x:Bind ResultBrush, Mode=OneWay}"
+                                Text="{x:Bind Result, Mode=OneWay}"
+                                TextWrapping="Wrap"
+                                Visibility="{x:Bind ResultVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.MoviePilot>
+
+            <!--
               The font picker. The box above the list searches; it is not the value, so unlike every other
               text row here it does commit per keystroke — filtering per keystroke is the whole point, and
               since the setting is written by picking a family out of the list, a half-typed name can never

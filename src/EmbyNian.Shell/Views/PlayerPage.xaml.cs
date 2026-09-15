@@ -68,14 +68,6 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     private const double OverlayGap = 8;
 
-    /// <summary>
-    /// How many asks one hide is worth. Three, spread over three ticks: the first goes out with the hide
-    /// itself, and the two after it cover the case where the framework had not yet pushed its own value down
-    /// when the first arrived. Bounded because these are real injected moves — see
-    /// <see cref="PlayerPage.Nudge"/>.
-    /// </summary>
-    private const int NudgesPerHide = 3;
-
     private readonly ChromeReveal _chrome = new();
     private readonly SeekClockConverter _seekClock;
 
@@ -137,35 +129,60 @@ public sealed partial class PlayerPage : UserControl
     private int _cursorCount;
 
     /// <summary>
-    /// How many times the hide has asked the OS to work out the cursor again — the one-pixel round trip in
-    /// <see cref="Native.NudgeCursorState"/>, counted only when both legs left the process. It is the half of
-    /// hiding that no reading of the OS's own can confirm after the fact, and the half whose absence was
-    /// 「鼠标指针还是不会自动隐藏」 with every other reading saying hidden, so the self-check asserts on this
-    /// count.
+    /// How many times the hide has restated its policy, over the life of the page. It used to count injected
+    /// one-pixel round trips — real input, and therefore bounded to three per hide so it could not become ten a
+    /// second. Since 2026-09-14 it counts the restatements that replaced them. See <see cref="Nudge"/>.
     /// </summary>
     private int _cursorNudges;
 
     /// <summary>
-    /// How many asks have gone out since this hide began, and whether this hide is still bounded. The ask is
-    /// real input the whole system can see, so it is <b>bounded</b>: enough asks that the framework cannot miss
-    /// the transparent cursor, and then silence, instead of ten injected moves a second for the length of a
-    /// film keeping the machine awake and every idle timer on it alive.
+    /// How many restatements have gone out since this hide began.
+    /// <para>
+    /// Unbounded since 2026-09-14, and that is the fix rather than an oversight: it was capped at three, a
+    /// figure inherited from the injected round trip and meaningless without it, and three asks are spent
+    /// inside the first three hundred milliseconds of a hide that then falls silent for minutes — which is
+    /// exactly 「隐藏后过两三秒又会自动冒出来」. See <see cref="Nudge"/>.
+    /// </para>
     /// </summary>
     private int _nudgesThisHide;
+
 
     /// <summary>
     /// Movements too small to be a hand, refused while the cursor was hidden, and what actually woke it.
     /// <para>
     /// Both are here because 「鼠标隐藏了一会又会自动跑出来」 had to be diagnosed from a log that only said the
     /// cursor was back, never who had brought it. The counter is the reading that is *expected* to be non-zero
-    /// on an ordinary film — a desk rattling a pixel, a sensor drifting, and this player's own one-pixel ask
-    /// all land here now — and the string is the one that matters when it goes wrong: a real hand prints as
-    /// tens of pixels, a leak prints as one.
+    /// on an ordinary film — a desk rattling a pixel, a sensor drifting — and the string is the one that matters
+    /// when it goes wrong: a real hand prints as tens of pixels, a leak prints as one.
     /// </para>
     /// </summary>
     private int _hiddenNoise;
 
-    private string _woke = "没记到移动（按键、菜单或窗口变化）";
+    /// <summary>
+    /// A XAML <c>PointerMoved</c> that claimed a real step while the cursor was hidden, held over one tick
+    /// for the poll to judge.
+    /// <para>
+    /// The eighth report's film settled what the wake at 08:22:44 was: one XAML event claiming 「5,0 逻辑像素」
+    /// against a poll that had watched the pointer sit still for 29.7 seconds — a synthetic move, raised
+    /// because the tree under a stationary pointer changed. So a hidden cursor no longer takes an event's
+    /// word for a movement: the claim is parked here and the next poll judges it against the OS — the cursor
+    /// really somewhere else wakes the cursor as it always did (the claim is simply absorbed), the cursor
+    /// still within <see cref="ChromeReveal.HiddenTolerance"/> of where it was hidden makes the claim a lie,
+    /// and the lie is dropped and counted in <see cref="_syntheticMoves"/>. A hand never notices: its first
+    /// event is tens of pixels, and the poll reads the same displacement a hundredth of a second later.
+    /// </para>
+    /// </summary>
+    private Point? _xamlClaim;
+
+    /// <summary>
+    /// Synthetic <c>PointerMoved</c>s the two sensors have agreed to throw away — events whose coordinates
+    /// moved while the OS swore the pointer had not. Printed beside the noise count on the show line, because
+    /// the eighth report's question 「AyuGram 来消息鼠标就冒出来」 can only be closed by a number that says how
+    /// often the foreign event arrived and was refused. Cleared with the rest of the hide's books.
+    /// </summary>
+    private int _syntheticMoves;
+
+    private string _woke = "未标注的显示路径（见到此串即有路漏标）";
 
     /// <summary>
     /// Where the pointer was the last time it was taken to have moved, and what was under it there.
@@ -177,6 +194,14 @@ public sealed partial class PlayerPage : UserControl
     /// and that clock is what the cursor's two seconds are counted from, so any of them repeating inside
     /// two seconds meant 「鼠标指针还是不会自动隐藏」 with the chrome hiding perfectly well: a move in the
     /// middle of the picture reveals nothing, so a restamp there is invisible except to the cursor.
+    /// </para>
+    /// <para>
+    /// It is the anchor for the <em>showing</em> half only. It is not a reference a hidden cursor's
+    /// reports are judged against, and deliberately so: this point moves on every accepted step, so a
+    /// desk nudging one pixel at a time walks it along and no step ever reaches the threshold. The hidden
+    /// half compares against the point the cursor was hidden at instead — <see cref="ChromeReveal.AnchorHidden"/>
+    /// and <see cref="ChromeReveal.HiddenTolerance"/>. That distinction is what the fourth report of
+    /// 「鼠标隐藏了一会然后又会自动冒出来」 turned out to be.
     /// </para>
     /// </summary>
     private Point _pointerAt = new(double.NaN, double.NaN);
@@ -247,6 +272,21 @@ public sealed partial class PlayerPage : UserControl
     /// cursor — the one explanation for 「藏了但屏幕上还有箭头」 that no probe can stage.
     /// </summary>
     private int _shapeBack;
+
+    /// <summary>
+    /// 第九报（2026-09-15）：外部画回的对账脚手架。用户拔掉鼠标后仍确认「没错哦17-18 秒鼠标出现在了
+    /// 画面之上」而指针没动——外部画出的静止指针线程局部读数看不见（_shapeBack 恒 0），只有
+    /// HostWindow 的全局快照看得见。<see cref="_globalBase"/> 与 <see cref="_externalBase"/> 是藏匿开始
+    /// 那一刻的累计读数（hide 时钉下，日志算「本藏匿期几次」用），<see cref="_globalSeen"/> 与
+    /// <see cref="_externalSeen"/> 是本页上次打日志时的读数（差值非零即本拍又有事发生，独立成行打日志）。
+    /// </summary>
+    private int _globalBase;
+
+    private int _globalSeen;
+
+    private int _externalBase;
+
+    private int _externalSeen;
 
     /// <summary>
     /// The duration the ticks were laid out against. The marks arrive before mpv has a duration to place
@@ -447,6 +487,12 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.MeasureRefreshHz = () => _window?.RefreshHz() ?? 0;
         window.GeometryChanged += OnGeometryChanged;
 
+        // 键盘兜底（2026-09-15「新增esc退出全屏 按空格开始播放」）：Win32 键盘焦点不在岛里时（全屏播放
+        // 期间被别的应用抢过前台再回来、焦点落在宿主/视频子窗口上），OnKeyDown 和 OnSpaceShortcut 都收
+        // 不到键 —— 窗口的 WH_KEYBOARD 钩子把空格和 Esc 转到本页（<see cref="IWin32KeySink"/>）。
+        // Detach 时收回，独立窗口接管播放后两边不打架。
+        window.SetWin32Keys(this);
+
         ViewModel.Connect();
 
         // The x:Bind paths were all null-rooted while ViewModel was, including the OneTime Command=
@@ -503,6 +549,9 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.MeasureSurface = null;
         ViewModel.MeasureRefreshHz = null;
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
+
+        // 键盘兜底同步摘下：接键人跟着这一次 Attach 走，别让下一任（独立窗口那边的页）的老号码还留在线上。
+        if (_window is not null) _window.SetWin32Keys(null);
 
         _shell = null;
         _window = null;
@@ -567,8 +616,18 @@ public sealed partial class PlayerPage : UserControl
 
         if (ViewModel.Embedded) _window.VideoVisible = true;
 
+        // 播放接管窗口的这段时间不设最小尺寸（HostWindow.FreeSizing）：「取消播放页面窗口缩小的最小尺寸
+        // 限制，允许窗口继续自由缩小」。退出播放由 LeavePlayer 关回去，浏览下限 600×560 原样恢复。
+        _window.FreeSizing = true;
+
         Visibility = Visibility.Visible;
         _shell.ShowPlayer(true);
+
+        // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一
+        // 静止隐藏的鼠标指针」排查期间，日志里出现成串「未标注的显示路径」三连（藏→显示→藏，1ms 内）——
+        // 溯源到这里：光标还藏着时本页就位会 Reset（把 CursorHidden 放回 false）+ Render，无声把光标放回，
+        // 显示行只打默认串。名字按姓名牌制度挂上：见到「播放页就位」即此路，不再是无名路。
+        if (_cursorHidden) _woke = "播放页就位";
 
         _chrome.Reset(Now);
         Render();
@@ -581,6 +640,11 @@ public sealed partial class PlayerPage : UserControl
         // 需求 7's box reads as the family in use whenever nobody is searching with it, and a film may have
         // been started after the settings window changed that family.
         ShowCurrentFont();
+
+        // 置顶的持久化偏好（2026-09-15）：播放接管窗口的这一刻按上次的选择把开关立回去。LeavePlayer 里那句
+        // SetPinned(false) 是「还给浏览窗口」，不是「替用户改主意」，所以每次进场都要重新立一次；用户拨开关
+        // 时再由 TogglePinByHand 记账。
+        SetPinned(ViewModel.SavedPinTopmost);
 
         // Nothing known about the pointer yet, so the first tick's poll seeds it rather than measuring a
         // movement against wherever the cursor happened to be during the last film. Reset covers the other
@@ -620,6 +684,17 @@ public sealed partial class PlayerPage : UserControl
         SetCursorHidden(false);
         _window.VideoVisible = false;
 
+        // 播放对窗口的接管到此为止，浏览窗口的最小尺寸限制（600×560）跟着回来。窗口此刻缩得再小也不要紧：
+        // 下面的 RestoreBrowseGeometry 本来就要把播放前的那份几何还回来。
+        _window.FreeSizing = false;
+
+        // 「进入播放页面然后再退出页面会保留播放页面的窗口大小比例」：窗口是照着这部片子的形状整过的
+        // （见 OnPictureAspectChanged），片子看完了那个形状就没道理留着 —— 一部 2.413:1 的宽银幕会把浏览窗口
+        // 留成一条又宽又扁的横条。窗口自己记着播放前那一份几何，这里只负责说一声「回你自己那儿去」。
+        //
+        // 顺序在 VideoVisible 之后：还原是一次真实的 SetWindowPos，此刻画面已经不再往这个窗口里画了。
+        _window.RestoreBrowseGeometry();
+
         // Stopping playback stops it paused often enough, and a badge left mid-fade would be drawn over
         // whatever page the shell comes back to. The tap's own timer goes with it: a tap 150 ms before Escape
         // would otherwise fire its pause into the next film, or into nothing at all.
@@ -651,6 +726,12 @@ public sealed partial class PlayerPage : UserControl
         // 下一集开始时会再进一次；要的是「这部片子开始时是全屏」，不是「窗口永远不许退出全屏」。
         if (ViewModel.AutoFullscreenOnPlayback) SetFullscreen(true);
 
+        // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一
+        // 静止隐藏的鼠标指针」排查期间，日志里成串「未标注的显示路径」三连的另一半元凶：连播换集时上一集
+        // 的光标还藏着，这里 Reset+Render 无声把它放回，显示行只打默认串。挂名「新的播放开始了」——
+        // 全屏内换集后光标先冒一下再藏，日志从此说得出是这条路，而不是无名路。
+        if (_cursorHidden) _woke = "新的播放开始了";
+
         _chrome.Reset(Now);
         Render();
     }
@@ -679,7 +760,22 @@ public sealed partial class PlayerPage : UserControl
         // that a frozen frame has nothing to watch — but 「别什么进度条标题音量条都持久显示在画面上」, and a
         // paused frame is usually exactly the thing someone stopped to look at. Pause says so with the
         // badge below instead, and then gets out of the way.
-        if (_chrome.SetKeep(!status.Loaded, Now)) Render();
+        if (_chrome.SetKeep(!status.Loaded, Now))
+        {
+            // A loading hold that pulls the cursor back out of a hide says so by name, not by the default.
+            if (!status.Loaded && _cursorHidden) _woke = "画面加载中";
+
+            // 第九报（2026-09-15，用户原话「你直接抄这些开源项目吧」这一轮）：加载完成的撤销也要挂名。
+            // 15:42:52.924 自检现场：探针藏起光标 1.25 秒后，被探针自己的 Pump 派发的 VM 快照在这里
+            // 翻掉 KeepChrome——SetKeep(false) 重盖活跃时钟 → Settle 翻转 → Render → 光标同步路
+            // （SetCursorHidden(_chrome.CursorHidden)）把页面领跑的藏匿掀了，显示行打了「未标注的
+            // 显示路径」，13 条下游判据连带全红（负计数锁的判据其实全绿）。常态播放里这条路和藏匿
+            // 永不同现（加载中 chrome 挂着、光标本就显示），但姓名牌制度的意义正是让「未标注」
+            // 可追查——见了就得修，修的第一步是让它自报家门。
+            else if (_cursorHidden) _woke = "画面加载完成";
+
+            Render();
+        }
 
         // The badge follows the edge rather than the state: status says the same thing some twenty times a
         // second, and the first edge of a playback is the file opening rather than anyone pressing anything.
@@ -764,6 +860,10 @@ public sealed partial class PlayerPage : UserControl
     /// Zero is 「the picture has released the window」 — from then on the window resizes however the pointer
     /// says, and it keeps whatever shape the film left it in（「锁定窗口比例大小」曾经在这一刻把它拽回 16:9，
     /// 那个开关 2026-09-05 删掉了）。
+    /// <para>
+    /// 非零这一支是画面第一次碰窗口的地方，而写比例那一下本身就是「先把播放前那份几何记下来」的时刻
+    /// （<see cref="HostWindow.PictureAspect"/> 的 setter 里做），所以这里只管整形。
+    /// </para>
     /// </summary>
     private void OnPictureAspectChanged(double aspect)
     {

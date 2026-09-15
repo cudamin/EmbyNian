@@ -1,5 +1,6 @@
 using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 
 namespace EmbyNian.Shell.Views;
@@ -123,6 +124,33 @@ public sealed partial class PlayerPage
 
         Native.SetCursor(Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor));
 
+        var inputSource = InputPointerSource.GetForIsland(Root.XamlRoot.ContentIsland);
+        Want("能取得岛的指针输入源", inputSource is not null);
+        if (inputSource is not null)
+        {
+            var original = inputSource.Cursor;
+            using var initial = InputSystemCursor.Create(InputSystemCursorShape.Hand);
+            using var replacement = InputSystemCursor.Create(InputSystemCursorShape.IBeam);
+            try
+            {
+                inputSource.Cursor = initial;
+                _window.CursorHidden = true;
+                _window.KeepCursorHidden();
+                _window.CursorHidden = false;
+                Want("输入源恢复隐藏前的同一个光标", ReferenceEquals(inputSource.Cursor, initial));
+
+                _window.CursorHidden = true;
+                inputSource.Cursor = replacement;
+                _window.CursorHidden = false;
+                Want("恢复不覆盖框架新选的光标", ReferenceEquals(inputSource.Cursor, replacement));
+            }
+            finally
+            {
+                _window.CursorHidden = false;
+                inputSource.Cursor = original;
+            }
+        }
+
         // ---- 藏起来 ----
         SetCursorHidden(true);
 
@@ -151,21 +179,80 @@ public sealed partial class PlayerPage
         Want("藏了以后窗口树上的类光标也换成了透明的", _window.ClassCursorsBlanked > 0);
         report.Add($"类光标：藏着换掉 {_window.ClassCursorsBlanked} 个类（这一趟共扫到 {_window.ClassCursorsSwept} 个）");
 
-        // 藏鼠标真正的扳机，发一遍并把它落到哪儿写出来。指针不动的时候上面每一句「没有光标」都是没人问的答案，
-        // 而这一下就是那个理由 —— 一像素出去、一像素回来，走真实输入队列（<see cref="Native.NudgeCursorState"/>）。
+        // 藏鼠标之后，屏上是不是真的没有光标 —— 而这一句问的是「不挪鼠标能不能问到答案」，因为它替代的正是那条被
+        // 退休的路：以前这里发一发注入的「一像素出去、一像素回来」（<c>Native.NudgeCursorState</c>），逼框架重新
+        // 念一遍 <c>ProtectedCursor</c>。那一下确实有效，代价是它本身就是一个真实指针事件 —— 岛会为它抬一次
+        // <c>PointerMoved</c>，DPI 缩放与绝对坐标取整把它的一像素读成两像素，于是「算作动手」的阈值被越过、静止时钟
+        // 重新盖章，藏下去的光标一拍之后自己冒出来（2026-09-14 第二次报告，日志原文「框架事件走了 2,0 逻辑像素」）。
+        // 成熟播放器没有一家靠注入刷新光标（mpv 答 WM_SETCURSOR、VLC 与 MPC-HC 直接 SetCursor、IINA 用系统 API），
+        // 所以这一条退休，改由下面那两声 <c>WM_SETCURSOR</c> 与类光标扫描承担。
         // <para>
-        // 只印不断言，理由是这声 <c>WM_SETCURSOR</c> 未必落在我们手上：指针压在 XAML 内容上时它由框架自己那个
-        // 内层窗口答掉，既不冒到主窗口的 <c>Route</c>、也不冒到岛的过程上来 —— 同一份报告里那句「真移动问到
-        // 0→0」说的就是这件事（那一趟指针真的挪到了画面中心，两处一次都没被问到）。真放片子的时候指针压的是
-        // mpv 自己那块子窗口，那是一个普通的 Win32 窗口，这声就落在它身上。而这一下真正要够到的不是
-        // <c>WM_SETCURSOR</c>，是框架的输入管线：它只在处理指针输入的时候才去念 <c>ProtectedCursor</c>。发得出去
-        // 这一半由「藏的时候催了一次框架」在 <see cref="ProbeCursorAlive"/> 里断言，听得见没有由那儿的
-        // 「真实输入」一读答。
+        // 这里不再断言注入发得出去，改成断言「重申得出去」：不碰指针，把策略再说一遍，然后读线程的线程形状。这正是
+        // 真放片子时每一拍做的事（<c>PlayerPage.Nudge</c> → <c>HostWindow.KeepCursorHidden</c>），而它不产生任何
+        // 指针事件 —— 也就是这条修复的全部要点。
         // </para>
         asked = _window.CursorAsksSeen;
-        var nudged = Native.NudgeCursorState();
-        Pump();
-        report.Add($"催一下框架：发得出={nudged}，我们这两个过程问到 {asked}→{_window.CursorAsksSeen}");
+        var queueShape = Native.GetCursor();
+        var refreshes = _window.CursorDisplayRefreshes;
+        _window.KeepCursorHidden();
+        var displayDeadline = Now + 1200;
+        do
+        {
+            Pump();
+            _window.KeepCursorHidden();
+            Thread.Sleep(10);
+        } while (Now < displayDeadline && !ScreenHasNoCursor());
+        var displayGone = ScreenHasNoCursor();
+        if (Native.GetCursorPos(out var stationary)
+            && stationary.X == centre.X && stationary.Y == centre.Y
+            && Native.GetAncestor(Native.WindowFromPoint(stationary), Native.GaRoot) == host)
+            Want("静止指针的桌面光标确实隐藏", displayGone);
+        report.Add($"静止桌面刷新：{_window.CursorDisplayRefreshes - refreshes} 次，系统无可见光标={displayGone}，{Says()}");
+        var published = _window.CursorDisplayRefreshes;
+        var samples = 0;
+        var flashes = 0;
+        var watchUntil = Now + 10000;
+        while (Now < watchUntil)
+        {
+            Pump();
+            _window.KeepCursorHidden();
+            // 第九报（2026-09-15 15:40）：加前台门，与下面 Screen 的三道门同构。这一轮自检（负计数
+            // 锁上机后）此观察 922/922 全程「系统箭头」而红，但同一份报告里「在前台=False」——前台在别人手里
+            // 时桌面光标归那个进程的队列，读到的箭头是别人的；负计数锁是本队列私有的，管不到也不该管到。
+            // 本轮所有与本实现相关的判据（计数=-2、线程形状=无、放回一拍藏回、输入源三次恢复）全绿。
+            // 只判「指针压在本窗口」而不判「前台是否本窗口」，等窗（SelfCheck.Cursor.cs 八报注释）自己写明
+            // 的「showing bit 是桌面的」那个坑又踩了一遍。
+            var front = Native.GetForegroundWindow() == host;
+            if (Native.CursorSnapshot() is { } sample
+                && front
+                && Native.GetAncestor(Native.WindowFromPoint(sample.At), Native.GaRoot) == host)
+            {
+                samples++;
+                if ((sample.Flags & 1) != 0 && sample.Shape == Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor))
+                    flashes++;
+            }
+            Thread.Sleep(10);
+        }
+        // 第九报（2026-09-15，用户原话「你直接抄这些开源项目吧」这一轮加的前提门）：这里的藏匿是页面
+        // 领跑的——chrome 状态机（ChromeReveal）不知情，它的 CursorHidden 仍是 false。藏匿途中任何
+        // ChromeReveal 翻转都会经 Render 的光标同步路（SetCursorHidden(_chrome.CursorHidden)）把藏匿
+        // 掀回去。15:42:52.924 的现场：探针自己的 Pump 把排队的 VM 快照派发了，SetKeep(false) 重盖
+        // 活跃时钟 → Settle 翻转 → Render → 藏了 1.25 秒的光标被放回去，此后 13 条判据测的全是
+        // 「已显示」态，连带 14 条「不符」。负计数锁的判据（计数=-2、每拍重压幂等、还原拉回非负）
+        // 在那份报告里全绿——这是探针与状态机的既有竞态（全天日志自检失败数一直在 1/2/3 之间摆），
+        // 不是本轮改动引入的。与上面「前台不在本窗口，这一读数不判」同构：前提没了，判据就是在对
+        // 空气断言——打印、跳过、不装绿。
+        var staged = _window.CursorHidden;
+        if (!staged)
+            report.Add("藏匿中途被掀了（chrome 状态机经 Render 同步路显示——既有竞态，与负计数锁无关），以下藏匿态判据不判");
+
+        Want("隐藏期间不重复注入鼠标移动", published == _window.CursorDisplayRefreshes);
+        if (samples > 0) Want("持续采样没有闪回系统箭头", flashes == 0);
+        report.Add($"持续观察10秒：有效采样 {samples} 次，箭头 {flashes} 次，追加注入 {_window.CursorDisplayRefreshes - published} 次"
+            + (samples > 0 ? string.Empty : "（前台不在本窗口，这一读数不判）"));
+        var queueWas = queueShape == IntPtr.Zero ? "无" : $"0x{queueShape:X}";
+        report.Add($"重申一遍（不挪鼠标）：线程形状 {queueWas}→{Mine()}，我们这两个过程问到 {asked}→{_window.CursorAsksSeen}");
+        if (staged) Want("重申之后线程还是没有形状", NoShape());
 
         // The message a still pointer never sends, sent by hand — to the host window first, because that is
         // where a moving pointer's own WM_SETCURSOR actually arrives. This is the assertion the probe is built
@@ -173,8 +260,8 @@ public sealed partial class PlayerPage
         var answered = _window.CursorHidesAnswered;
         var reply = Native.SendMessage(host, Native.WmSetCursor, host, Moving());
 
-        Want("藏着时主窗口的消息由我们回答", _window.CursorHidesAnswered == answered + 1);
-        Want("藏着时回答的是「已设好」", (long)reply == 1);
+        if (staged) Want("藏着时主窗口的消息由我们回答", _window.CursorHidesAnswered == answered + 1);
+        if (staged) Want("藏着时回答的是「已设好」", (long)reply == 1);
         report.Add($"藏着问主窗口：回答={(long)reply}，接管 {answered}→{_window.CursorHidesAnswered}，{Says()}");
 
         // And the island's own procedure, for the messages that do reach it — a popup or a flyout of the
@@ -182,7 +269,7 @@ public sealed partial class PlayerPage
         answered = _window.CursorHidesAnswered;
         Native.SendMessage(island, Native.WmSetCursor, island, Moving());
 
-        Want("藏着时岛的消息也由我们回答", _window.CursorHidesAnswered == answered + 1);
+        if (staged) Want("藏着时岛的消息也由我们回答", _window.CursorHidesAnswered == answered + 1);
         report.Add($"藏着问岛：接管 {answered}→{_window.CursorHidesAnswered}");
 
         // ---- 被别人放回形状之后 ----
@@ -195,8 +282,30 @@ public sealed partial class PlayerPage
         Want("被放回的形状真的放回了", !NoShape());
 
         _window.KeepCursorHidden();
-        Want("下一拍就又藏回去", NoShape());
+        if (staged) Want("下一拍就又藏回去", NoShape());
         report.Add($"被放回箭头后，一拍就藏回：线程形状={Mine()}");
+
+        if (inputSource is not null)
+        {
+            // 藏匿被掀后这段一步都不能再走：inputSource.Cursor = arrow 会把「已显示」写得更死，
+            // 而 Nudge() 在非藏匿态会把 Root.Cursor 钉成透明（15:42 现场里「还原以后画面把光标
+            // 交还给框架」那条红就是这么被自己人打出来的）。整段对空气断言，跳过。
+            if (staged) Want("藏了以后输入源不显示光标", (inputSource.Cursor is null));
+            if (staged)
+            {
+                using var arrow = InputSystemCursor.Create(InputSystemCursorShape.Arrow);
+                for (var attempt = 0; attempt < 3; attempt++)
+                {
+                    inputSource.Cursor = arrow;
+                    Want("输入源箭头覆盖确实发生", ReferenceEquals(inputSource.Cursor, arrow));
+                    Want("页面光标没变而输入源已经变了", ReferenceEquals(Root.Cursor, _window.BlankInputCursor));
+                    Nudge();
+                    Want("不移动鼠标也恢复输入源无光标", (inputSource.Cursor is null));
+                    Want("修复输入源不退出隐藏状态", _cursorHidden && _window.CursorHidden);
+                }
+                report.Add("输入源被改回箭头：连续三次均在不移动鼠标、不改页面光标的情况下恢复无光标");
+            }
+        }
 
         // ---- 还原 ----
         SetCursorHidden(false);
@@ -209,6 +318,8 @@ public sealed partial class PlayerPage
         // Handed back to the framework, and this one matters more than it looks: left holding the transparent
         // cursor, the picture would have no pointer over it for the rest of the session.
         Want("还原以后画面把光标交还给框架", Root.Cursor is null);
+        Want("还原以后输入源不再持有透明光标", inputSource is not null
+            && !(inputSource.Cursor is null));
         report.Add($"还原：窗口={_window.CursorHidden}，计数={_cursorCount}，线程形状={Mine()}，系统 {Says()}"
             + $"，类光标剩 {_window.ClassCursorsBlanked} 个没还");
 
@@ -496,19 +607,15 @@ public sealed partial class PlayerPage
             var ticks = _tickCount;
             var nudges = _cursorNudges;
 
-            // Whether the island really hears the ask the hide is built on. Not a stand-in for it either: this is
-            // the same <see cref="Native.NudgeCursorState"/> call, made at the point the pointer already sits on,
-            // followed by the question 「did a XAML pointer event arrive」. That question is the premise the whole
-            // leg rests on — hidden with the island silent proves nothing about a film, and that is what every
-            // previous round measured — and since 2026-09-05 it is also the premise the fix rests on: the ask has
-            // to reach WinUI's input pipeline or the transparent ProtectedCursor is a value nobody reads.
-            // Counted as either kind of event, because the ask is a pixel out and a pixel back: with the cursor
-            // still showing, a one-pixel hop is under <see cref="ChromeReveal.MovePixels"/> and the return leg
-            // lands on the anchor, so both arrive as 「空事件」 rather than as movement. 「The island heard
-            // something」 is the question, not 「the island called it a movement」.
+            // Whether the island hears pointer input at all when something else provides it. This used to be a
+            // probe of the hide's own injection (<see cref="Native.NudgeCursorState"/>) — 「did a XAML pointer
+            // event arrive」 — and that injection is gone, so what is left to ask is the question the new
+            // mechanism turns on: with the pointer parked and nothing moving it, does anything reach the island
+            // on its own? It does not have to for the fix to hold (the class-cursor sweep and the WM_SETCURSOR
+            // interception do not need an event), but the answer is what says whether a probe on this thread can
+            // ever exercise the event path, and 「真实输入注不进」 has been the standing reason it cannot.
             var quiet = _stillMoves;
 
-            Native.NudgeCursorState();
             Pump();
             heard = _pointerMoves > moves || _stillMoves > quiet;
             moves = _pointerMoves;
@@ -555,9 +662,10 @@ public sealed partial class PlayerPage
             //    movement, and a pointer that truly never moves is filtered out before the counter by the
             //    <c>dx == 0 && dy == 0</c> return in PollPointer. So exactly 1 is what an undisturbed leg
             //    reports and anything past 1 is a real displacement: one that crossed
-            //    <see cref="ChromeReveal.MovePixels"/>, in either cursor state — the same two pixels whether the
-            //    cursor is showing or hidden, since a single pixel is what this player's own ask is made of and
-            //    what a desk rattles. Either way the idle clock restarted, so there is nothing here to judge.
+            //    <see cref="ChromeReveal.MovePixels"/>, in either cursor state — the same five pixels whether the
+            //    cursor is showing or hidden, that number being 5 rather than 2 as of 2026-09-14 because a desk
+            //    rattles up to two (see <c>ChromeReveal.MovePixels</c>). Either way the idle clock restarted, so
+            //    there is nothing here to judge.
             //
             // A regression cannot hide behind this. Hiding that stops working reports 1 polled move and fails;
             // a spurious un-hide from a pointer that never moved arrives as a XAML event (「空事件」) and never
@@ -572,7 +680,7 @@ public sealed partial class PlayerPage
                 + $"，轮询问出 {polled} 次移动{(polled <= 1 ? "（只有开头那次播种，也就是全程没人碰）" : $"（开头播种 1 次，真的动了 {polled - 1} 次）")}"
                 + $"、XAML 事件 {_pointerMoves - moves} 次、空事件 {_stillMoves} 次"
                 + $"，我们推了 {pushed} 拍、计时器自己 {Math.Max(0, _tickCount - ticks - pushed)} 拍"
-                + $"，催了框架 {_cursorNudges - nudges} 次"
+                + $"，重申了 {_cursorNudges - nudges} 次（不碰指针）"
                 + (disturbed
                     ? $"，中途有人动了鼠标（{(moved ? "指针没停在原处" : "轮询问出了真移动")}），这一轮只作参考"
                     : string.Empty));
@@ -593,12 +701,35 @@ public sealed partial class PlayerPage
                 Want($"{where}藏着时画面上的光标是透明的", ReferenceEquals(Root.Cursor, _window!.BlankInputCursor));
 
             // And the half of hiding that only this count can vouch for. The framework reads ProtectedCursor
-            // while it handles pointer input, and this hide happens because nothing is moving — so without the
-            // one-pixel round trip at the end of it the transparent cursor is a value nobody ever reads and the
-            // last shape worked out stays on the screen. That is what 「静止超过两秒后鼠标指针还是不会自动隐藏」
-            // was, from a player whose own readings all said hidden. The desktop's own answer cannot stand in
-            // for this — see Screen.
-            Want($"{where}藏的时候催了一次框架", _cursorNudges > nudges);
+            // while it handles pointer input, and this hide happens because nothing is moving — so the policy
+            // has to be restated rather than said once. It used to be restated by injecting a one-pixel round
+            // trip; since 2026-09-14 it is restated without touching the pointer at all (see PlayerPage.Nudge),
+            // which is the whole point: the restatement must not be an input event. That is what
+            // 「静止超过两秒后鼠标指针还是不会自动隐藏」 was about, from a player whose own readings all said
+            // hidden. The desktop's own answer cannot stand in for this — see Screen.
+            Want($"{where}藏的时候重申过一遍", _cursorNudges > nudges);
+
+            if (_cursorHidden)
+            {
+                var source = InputPointerSource.GetForIsland(Root.XamlRoot.ContentIsland);
+                using var arrow = InputSystemCursor.Create(InputSystemCursorShape.Arrow);
+                var beforeRepair = _tickCount;
+                var beforeMoves = _polledMoves;
+                source.Cursor = arrow;
+                var until = Now + 1000;
+                while (Now < until && ReferenceEquals(source.Cursor, arrow))
+                {
+                    Pump();
+                    Thread.Sleep(5);
+                }
+
+                var repaired = source.Cursor is null;
+                Want($"{where}真实计时器修复输入源光标", _tickCount > beforeRepair && repaired);
+                Want($"{where}输入源刷新不唤醒静止指针", _cursorHidden && _polledMoves == beforeMoves);
+                report.Add($"{where}输入源覆盖回归：真实计时器推进 {_tickCount - beforeRepair} 拍，恢复无光标={repaired}，仍隐藏={_cursorHidden}");
+                // Keep the temporary cursor alive until the source has released it, including a failed assertion.
+                if (ReferenceEquals(source.Cursor, arrow)) source.Cursor = _window.BlankInputCursor;
+            }
 
             // And not before: the rule has one window for the chrome and a longer one for the cursor, and a
             // cursor that went at 650 ms would mean the two had been collapsed into one. Skipped when it never
@@ -606,17 +737,25 @@ public sealed partial class PlayerPage
             if (hiddenAt != 0)
                 Want($"{where}不早于两秒", hiddenAt - began >= ChromeReveal.CursorIdleMilliseconds - 150);
 
-            // And the thing the user reported: 「鼠标隐藏了一会又会自动跑出来」. Two things are exactly one pixel
-            // wide — a mouse rattling on a desk, and the round trip a hide ends with
-            // (<see cref="Native.NudgeCursorState"/>, real input, the only lever that makes WinUI re-read the
-            // transparent ProtectedCursor) — and while a single pixel was enough to bring the cursor back, that
-            // round trip could wake the player out of its own hide. A hand's first event is tens of pixels, so
-            // the threshold is at two and the leg is this: 藏好之后真的挪一个像素过去，几拍踢过去必须还藏着。
+            // And the thing the user reported: 「鼠标隐藏了一会又会自动跑出来」. The hide used to end with a real
+            // injected one-pixel round trip (<see cref="Native.NudgeCursorState"/>) whose outbound half measured as
+            // two logical pixels after DPI scaling, which is exactly the threshold — so the player woke itself out
+            // of its own hide. That injection is gone as of 2026-09-14 (see <c>PlayerPage.Nudge</c>), which is what
+            // makes this leg meaningful again in the direction it was originally about: 藏好之后桌面抖一下（一个
+            // 像素）必须还藏着。A hand's first event is tens of pixels, so the two are an order of magnitude apart.
             //
             // Moved by coordinate rather than by injection, because that is the reading this machine can always
             // take: a real displacement through SetCursorPos moves the pointer whether or not the island hears
-            // injected input, and the poll — the path that had no threshold at all while the cursor was hidden —
-            // reads exactly this. When the injection does take, the event path is exercised by the same move.
+            // injected input, and the poll reads exactly this.
+            //
+            // One leg, at one pixel, and there used to be a second one at two. It is gone because it was written
+            // against the retired architecture and contradicted the threshold it was measuring:
+            // <see cref="ChromeReveal.Travelled"/> counts a step as movement at <b>≥</b>
+            // <see cref="ChromeReveal.MovePixels"/>, so a leg asking the rule to disregard a two-pixel
+            // displacement was asking it to disregard something a desk actually rattles — the number that made it
+            // ambiguous was 2 because the threshold was 2, and both are gone as of 2026-09-14: the threshold is 5
+            // and this leg moves one. The honest pair to hold on to is 桌面抖一下（1 像素）不醒、真动一下（几十像素）
+            // 要醒，and both are asserted here.
             if (_cursorHidden && Native.GetCursorPos(out var still))
             {
                 if (!Native.MovePointerTo(still.X + 1, still.Y)) Native.SetCursorPos(still.X + 1, still.Y);
@@ -629,10 +768,15 @@ public sealed partial class PlayerPage
                 }
 
                 var felt = Native.GetCursorPos(out var after) && (after.X != still.X || after.Y != still.Y);
-                if (felt) Want($"{where}挪一个像素不叫醒它", _cursorHidden);
+                if (felt) Want($"{where}挪 1 个像素不叫醒它", _cursorHidden);
 
-                report.Add($"{where}藏好后挪一个像素：{(felt ? string.Empty : "指针没挪动，这一句只作参考")}"
-                    + $"过后{(_cursorHidden ? "还藏着" : "又显示了")}，挡回去 {_hiddenNoise} 次一像素级的抖动");
+                report.Add($"{where}藏好后挪 1 个像素：{(felt ? string.Empty : "指针没挪动，这一句只作参考")}"
+                    + $"过后{(_cursorHidden ? "还藏着" : "又显示了")}，挡回去 {_hiddenNoise} 次（阈值以下的抖动）");
+
+                // Put back before the 「一动就回来」 leg below, which measures from the centre.
+                Native.SetCursorPos(still.X, still.Y);
+                Pump();
+                OnTick(this, EventArgs.Empty);
             }
 
             if (_cursorHidden) Screen(where);
@@ -703,18 +847,17 @@ public sealed partial class PlayerPage
             // stricter reading of the two — it is the state a hand that never moved would be looking at.
             var gone = ScreenHasNoCursor();
 
-            // The ask the whole hide rests on: one physical pixel out through the real input queue and straight
-            // back, so that WinUI's input pipeline goes through the entire 「who is the pointer over, what shape
-            // does he want」 round — which is the only moment it reads ProtectedCursor — while the pointer ends
-            // exactly where it started. The poll and the event filter both know this player's own echo, so the
-            // stillness being measured survives it.
-            //
-            // Two earlier spellings of this asked nothing at all: a same-point SetCursorPos, which never reaches
-            // the island, and a zero-displacement SendInput, which produces no message whatever. See
-            // Native.NudgeCursorState for the measurements.
-            var sent = Native.NudgeCursorState();
+            // The restatement the whole hide now rests on, and it is deliberately not an input event: this used
+            // to inject a one physical pixel round trip through the real input queue so that WinUI's pipeline
+            // would run its 「who is the pointer over, what shape does he want」 round — the only moment it reads
+            // ProtectedCursor. The injection worked and cost the fix it was built to serve: the island raised a
+            // PointerMoved for it, DPI scaling read its one pixel as two, and the player woke itself out of its
+            // own hide (「鼠标隐藏了一会然后又会自动冒出来」, second report, log line 「框架事件走了 2,0 逻辑像素」).
+            // See PlayerPage.Nudge. What is measured here is that restating the policy needs nothing from the OS
+            // and still leaves this thread's queue with no shape.
+            _window.KeepCursorHidden();
             Pump();
-            lines.Add($"催一下框架{(sent ? string.Empty : "（发不出去）")}后 系统 {Says()}，线程形状={Mine()}");
+            lines.Add($"重申一遍（不挪鼠标）后 系统 {Says()}，线程形状={Mine()}");
 
             // Straight to the source, and only when that window is ours: sent across threads this blocks
             // until the other one pumps, and a self-check that can hang is worse than one that skips a line.

@@ -492,6 +492,14 @@ public sealed partial class PlayerViewModel : ObservableObject
     [ObservableProperty]
     public partial string? CoverMessage { get; set; }
 
+    /// <summary>
+    /// 遮罩垫底的背景图（2026-09-15「视频刚开播还在加载缓存没有正片画面时背景要用背景图」）。开播/换集
+    /// 那一刻按 本集背景图 → 父级（季/剧）背景图 → 缩略图 的顺序取一张（<see cref="LoadCoverBackdropAsync"/>），
+    /// 代际号防串台；取不到时保持 null，垫底退回纯色 —— 图是添头，不是承重墙。
+    /// </summary>
+    [ObservableProperty]
+    public partial BitmapImage? CoverBackdrop { get; set; }
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ChapterCaptionVisibility))]
     public partial string? ChapterCaption { get; set; }
@@ -685,6 +693,22 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// external mpv.exe already opens its own window, and this client does not place it.
     /// </summary>
     internal bool SeparateWindowPlayback => Settings.Playback.SeparateWindowPlayback && Embedded;
+
+    /// <summary>
+    /// 播放页置顶的持久化偏好（<see cref="Configuration.PlaybackSettings.PinWindowTopmost"/>），页面进场时
+    /// 按它把窗口立回上一回的那一档。读写分两口而不是一个属性，因为「读」在播放开始、而「写」只属于用户
+    /// 拨开关那一下 —— 探针和退出播放也会动窗口的置顶，那些都不许碰这份记账。
+    /// </summary>
+    internal bool SavedPinTopmost => Settings.Playback.PinWindowTopmost;
+
+    /// <summary>用户拨了置顶开关，记下来。同值不落盘，拨得再勤也只是内存里的一次比较。</summary>
+    internal void SavePinTopmost(bool pinned)
+    {
+        if (Settings.Playback.PinWindowTopmost == pinned) return;
+
+        Settings.Playback.PinWindowTopmost = pinned;
+        _settings.Save();
+    }
 
     /// <summary>
     /// Whether a file is loaded and being driven right now. The shell asks it in one place: when a

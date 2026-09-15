@@ -133,6 +133,30 @@
          what CardItem does — 40 lines of Raise() calls that a reviewer has to check by eye — and
          doing that eight more times, once per page, is how the notifications start being wrong. -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- 用户原话「加包」2026-09-15：为首页轮播 full-bleed 重构与动效增强引入 CommunityToolkit.WinUI
+         8.2.251219 稳定线（三个包同批版本，避免传递依赖混版本）。分工：
+         - Animations：AnimationBuilder / 隐式动画扩展，轮播切换与首页入场动效用；
+         - Controls.Segmented：轮播页指示器备选控件；
+         - Controls.Primitives：SwitchPresenter 等布局原语（包名与控件同名猜错——它不叫
+           .Controls.SwitchPresenter，实测该 ID 在 nuget.org 不存在）。
+         三个包只被 Shell 消费，Core 与测试工程维持零包引用不变。 -->
+    <PackageReference Include="CommunityToolkit.WinUI.Animations" Version="8.2.251219" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Segmented" Version="8.2.251219" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Primitives" Version="8.2.251219" />
+    <!-- 用户原话「加吧」2026-09-15：SettingsControls（SettingsCard/SettingsExpander）。设置页现为
+         自制 EgSettingRowStyle，此包是将来迁移的候选，同为 8.2.251219 批次。它的 nuspec 同样
+         依赖 meta WinAppSDK >= 1.6，已被下方那条钉版吸收，无需新增。 -->
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.251219" />
+    <!-- 用户原话「加包」2026-09-15：上面三个 Toolkit 包的 nuspec 都硬依赖 meta 整包
+         Microsoft.WindowsAppSDK >= 1.6.250108002，而本项目早已把 WinAppSDK 拆成六个 2.x 子包
+         （见上）。不加这条时，1.6 meta 的 buildTransitive props/targets 被传递导入，与
+         WinAppSDK.WinUI 2.3.6 的 markup compiler targets 重复导入（MSB4011×5），并触发
+         Microsoft.Windows.SDK.BuildTools.MSIX 1.7 的 CustomBeforeMicrosoftCommonTargets 自检
+         报错（构建必死）。此处把同一版本显式钉进依赖图——满足 Toolkit 的 nuspec 约束、不产生
+         版本降级——同时 ExcludeAssets="all" 让它的 lib/build/pri 全部不落地：2.x 子包照常提供
+         全部编译与运行资产，1.6 meta 只当依赖图占位。Toolkit 升级时核对其 nuspec 是否放宽
+         最低 WinAppSDK 版本，届时可删这条。 -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250108002" ExcludeAssets="all" PrivateAssets="all" />
     <!-- The container the services are registered in. It replaces a composition root that built the
          same objects by hand, and the reason to prefer it is ValidateOnBuild: an object that cannot be
          constructed is now a startup failure naming the missing dependency, where the hand-written

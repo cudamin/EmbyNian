@@ -415,6 +415,28 @@ public sealed class PlaybackService(
         }
     }
 
+    /// <summary>
+    /// mpv's own chapter marks in one read — the call that replaced the skip-section refinement's
+    /// two reads per chapter, see <see cref="IPlaybackHandle.GetChaptersAsync"/>. Empty when
+    /// nothing is playing, the list is not up yet, or the backend could not answer; the caller
+    /// treats empty as 「not ready」 and keeps polling either way.
+    /// </summary>
+    public async Task<IReadOnlyList<SkipChapter>> GetChaptersAsync()
+    {
+        var handle = _current;
+        if (handle is null) return [];
+
+        try
+        {
+            return await handle.GetChaptersAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "读取 mpv 章节列表失败", error);
+            return [];
+        }
+    }
+
     public async Task<double?> GetNumberAsync(string name)
     {
         var handle = _current;

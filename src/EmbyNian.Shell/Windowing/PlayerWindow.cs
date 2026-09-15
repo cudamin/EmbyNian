@@ -90,6 +90,10 @@ internal sealed class PlayerWindow
             // playing. Nothing else claims a title bar here — there is no shell in this window to draw one.
             window.PlaybackTitleBar = true;
 
+            // 这个窗口天生只为播放存在，最小尺寸限制也只为浏览窗口而设（见 HostWindow.FreeSizing）：
+            // 开窗即解开，想缩多小缩多小。
+            window.FreeSizing = true;
+
             window.Show(maximized: false);
 
             // 开窗即记一行「这个窗口的标题栏现在是什么样」。这条路上坏掉的方式是「看得见、按不动」——

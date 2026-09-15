@@ -50,6 +50,20 @@ public interface IPlaybackHandle : IAsyncDisposable
     Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// mpv's own <c>chapter-list</c> — the marks written into the file — read in one call. Empty
+    /// when the file has none or the backend cannot answer; the caller (skip-section refinement)
+    /// keeps polling on empty and falls back to Emby's own marks when its attempts run out.
+    /// <para>
+    /// One call rather than the <c>chapter-list/count</c> then <c>chapter-list/{i}/time</c> walk:
+    /// two round trips instead of two per chapter, and one atomic snapshot instead of a list
+    /// assembled an index at a time — on the external backend that walk was a JSON round trip a
+    /// question, so twenty chapters made forty-two, all inside a one-second poll interval.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<SkipChapter>> GetChaptersAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<SkipChapter>>([]);
+
+    /// <summary>
     /// Whether several property reads may be in flight at once, which decides how the statistics panel
     /// asks for its twenty-one properties: together, or one after another.
     /// <para>

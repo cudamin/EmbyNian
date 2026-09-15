@@ -426,6 +426,46 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         }
     }
 
+    /// <summary>
+    /// mpv's chapter marks in one read. The count probe stays the caller's readiness gate; this
+    /// is the one round trip that replaces walking the list two questions per chapter — over the
+    /// pipe, twenty chapters used to be forty-two of them.
+    /// </summary>
+    public async Task<IReadOnlyList<SkipChapter>> GetChaptersAsync(CancellationToken cancellationToken)
+    {
+        if (_ipc is not { IsConnected: true }) return [];
+
+        var raw = await _ipc.GetPropertyRawAsync("chapter-list", cancellationToken).ConfigureAwait(false);
+        if (raw is null) return [];
+
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return [];
+
+            var chapters = new List<SkipChapter>();
+            foreach (var element in document.RootElement.EnumerateArray())
+            {
+                if (!element.TryGetProperty("time", out var time) || time.ValueKind != JsonValueKind.Number) continue;
+
+                string? title = element.TryGetProperty("title", out var titleElement)
+                                && titleElement.ValueKind == JsonValueKind.String
+                    ? titleElement.GetString()
+                    : null;
+
+                // The time keeps its fraction: rounding it into an int would spend half the skip
+                // planner's ±0.5 s tolerance on arithmetic before any real drift.
+                chapters.Add(new SkipChapter(time.GetDouble(), title));
+            }
+
+            return chapters;
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
     private static bool TryText(JsonElement element, string name, out string value)
     {
         if (element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String)

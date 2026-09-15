@@ -73,6 +73,8 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IntPtr> windowProvi
             context = LibMpvNative.mpv_create();
             if (context == IntPtr.Zero) throw new InvalidOperationException("mpv_create 返回了空句柄");
 
+            PruneEvents(context);
+
             ApplyOptions(context, request);
 
             var error = LibMpvNative.mpv_initialize(context);
@@ -182,6 +184,47 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IntPtr> windowProvi
 
     private static string FormatSeconds(double value) =>
         Math.Max(0, value).ToString("0.###", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Switches off every event type this client never reads — mpv.net's own opening move (its
+    /// <c>MainPlayer.Init</c> disables the whole enum and keeps only what it consumes). An event
+    /// the loop discards still costs a queue entry, a thread wakeup and a marshalled struct, and
+    /// the loop reads exactly six: shutdown, log-message, end-file, file-loaded, property-change
+    /// and queue-overflow. What remains — the three reply types (every call here is synchronous,
+    /// so they were never fired anyway), start-file, client-message, the two reconfigs, seek,
+    /// playback-restart and hook — was delivered only to be picked up and thrown away, so a seek
+    /// burst or a resize storm queued nothing at all.
+    /// <para>
+    /// Deliberately before <c>mpv_initialize</c>, so nothing mpv does during startup queues either.
+    /// mpv keeps a few event types for itself ("some events can't be disabled"), but a refusal is
+    /// an error return and nothing more: the loop already ignores whatever still arrives, so every
+    /// entry here degrades to no-op at worst. The deprecated ids (idle, tick) are not named — the
+    /// bundled 0.41 build does not send them, and an older dll in the user's own care is exactly
+    /// the case where today's arrive-and-be-ignored behaviour was already the answer.
+    /// </para>
+    /// </summary>
+    private static void PruneEvents(IntPtr context)
+    {
+        Span<int> unused =
+        [
+            LibMpvNative.EventGetPropertyReply,
+            LibMpvNative.EventSetPropertyReply,
+            LibMpvNative.EventCommandReply,
+            LibMpvNative.EventStartFile,
+            LibMpvNative.EventClientMessage,
+            LibMpvNative.EventVideoReconfig,
+            LibMpvNative.EventAudioReconfig,
+            LibMpvNative.EventSeek,
+            LibMpvNative.EventPlaybackRestart,
+            LibMpvNative.EventHook
+        ];
+
+        foreach (var eventId in unused)
+        {
+            var error = LibMpvNative.mpv_request_event(context, eventId, 0);
+            if (error < 0) Log.Debug(Category, $"停订 mpv 事件 {eventId} 未被接受：{Describe(error)}");
+        }
+    }
 
     /// <summary>Option errors are logged, not fatal — a bad shader path must not stop the film.</summary>
     private static void Set(IntPtr context, string name, string? value)
@@ -320,6 +363,14 @@ internal sealed class LibMpvHandle(IntPtr context) : IPlaybackHandle, IPlayerCon
 
                 case LibMpvNative.EventPropertyChange:
                     OnPropertyChange(mpvEvent);
+                    break;
+
+                case LibMpvNative.EventQueueOverflow:
+                    // mpv drops events when the client falls too far behind and says so with this
+                    // one. Observers re-notify on their next change, but a stall otherwise leaves
+                    // no trace — without it a dropped file-loaded would read as mpv going quiet
+                    // for no reason.
+                    Log.Warn(Category, "mpv 事件队列溢出，溢出期间的通知已丢失");
                     break;
 
                 case LibMpvNative.EventLogMessage:
@@ -488,6 +539,35 @@ internal sealed class LibMpvHandle(IntPtr context) : IPlaybackHandle, IPlayerCon
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(Guard(ReadTrackList) ?? []);
     }
+
+    /// <summary>
+    /// mpv's own chapter marks in one node read — the same shape <see cref="ReadTrackList"/> takes.
+    /// The count probe stays the caller's readiness gate; this is the call that replaces walking
+    /// the list two questions per chapter.
+    /// </summary>
+    public Task<IReadOnlyList<SkipChapter>> GetChaptersAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Guard(ReadChapterList) ?? []);
+    }
+
+    private IReadOnlyList<SkipChapter>? ReadChapterList() =>
+        LibMpvNodes.Read<IReadOnlyList<SkipChapter>?>(context, "chapter-list", root =>
+        {
+            var chapters = new List<SkipChapter>();
+
+            foreach (var item in LibMpvNodes.Children(root))
+            {
+                var map = LibMpvNodes.Map(item);
+
+                // A chapter without a time cannot be placed anywhere and is skipped whole; the
+                // title is optional, and most chapters of a typical file have none.
+                if (LibMpvNodes.Double(map, "time") is not { } start) continue;
+                chapters.Add(new SkipChapter(start, LibMpvNodes.String(map, "title")));
+            }
+
+            return chapters;
+        }, null);
 
     public Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken)
     {

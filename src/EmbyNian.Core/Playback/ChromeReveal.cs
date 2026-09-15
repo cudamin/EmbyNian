@@ -31,8 +31,8 @@ public readonly record struct ChromeState(bool Bar, bool Title, bool Rail)
 /// The reveal rule for the player chrome, as a state machine with no UI in it.
 /// <para>
 /// The rule is about where the pointer <em>is</em>, not merely that it moved: the transport bar is on
-/// screen while the pointer is in the bottom fifth of the picture, the top strip while it is in the top
-/// fifth, and a moment of stillness takes both away. The middle three fifths are therefore a dead zone
+/// screen while the pointer is in the bottom edge band of the picture, the top strip while it is in the
+/// top one, and a moment of stillness takes both away. The rest of the height is therefore a dead zone
 /// where neither is on screen, which is the point — that is where the subtitles are. Neither of those two
 /// fades: 「不要淡入淡出了，鼠标移动到对应位置直接显示」, so each arrives at once and at full strength. A
 /// control that is half there is slower to reach and harder to read than one that simply arrives.
@@ -110,24 +110,90 @@ public sealed class ChromeReveal
     public const long GraceMilliseconds = 1200;
 
     /// <summary>
-    /// How far the pointer has to travel before what arrived counts as somebody moving the mouse: two, which
-    /// is under a millimetre and over anything a resting mouse — or the player's own ask — produces.
+    /// How far the pointer has to travel before what arrived counts as somebody moving the mouse.
     /// <para>
-    /// One pixel is the number to keep it above, and there are two of them. A mouse lying on a desk rattles a
-    /// pixel, and a hide ends with a real one-pixel round trip through the input queue
-    /// (<c>Native.NudgeCursorState</c>, the only lever that makes WinUI re-read the transparent
-    /// <c>ProtectedCursor</c>). While a single pixel was enough to bring the cursor back — 「once the cursor is
-    /// hidden, any move at all brings it back」, written when the worry was a hand being asked for a second
-    /// pixel — that round trip could wake the player out of its own hide, which is what 「鼠标隐藏了一会又会
-    /// 自动跑出来」 turned out to be. A hand that means it covers two pixels inside its first event.
+    /// <b>Five, raised from two on 2026-09-14 after a real film's log was read.</b> Two was chosen as 「under a
+    /// millimetre and over anything a resting mouse produces」, and the second half of that turned out to be
+    /// wrong on this machine: a mouse lying untouched on a desk reported steps of <c>2,0</c>, <c>0,2</c> and
+    /// <c>1,2</c> logical pixels — logged, repeatedly, during hides that nobody was touching — and each of
+    /// those is at or over two, so each one was read as a hand and ended the hide.
     /// </para>
     /// <para>
-    /// The same two in both cursor states and on both paths — XAML pointer events, which report logical pixels,
-    /// and the OS poll, which reports physical ones. The caller keeps the anchor still under the threshold, so a
-    /// slow hand accumulates its way past it instead of having its movement thrown away one pixel at a time.
+    /// The mature players are all stricter than two here, and none of them tries to catch a hand at this
+    /// distance: mpv ignores an event whose coordinates are <em>exactly</em> equal (<c>input/input.c:914</c>)
+    /// and its <c>w32_common.c</c> has a whole comment about Windows sending spurious mouse events;
+    /// MPC-HC compares against the point it hid at with <c>PointEqualsImprecise</c>, a ±1 pixel tolerance;
+    /// mpv.net scales its threshold by DPI at <c>5 * dpi/96</c>, which is exactly five at 96 DPI. Five is that
+    /// number.
+    /// </para>
+    /// <para>
+    /// <b>What the second film's log changed.</b> Raising the threshold from two to five did not end the
+    /// symptom, and the readings say why in one table: the wakes were <c>5,0</c>, <c>5,2</c>, <c>6,2</c> — at or
+    /// <em>above</em> five — while the counts beside them grew by tens (<c>轮询问出的移动 +19</c>,
+    /// <c>XAML 事件 +390</c>). Those were not noise being let through a threshold set too low; they were a hand
+    /// really on the mouse. So the number itself was never the whole of it. What the threshold compares
+    /// <em>against</em> was: this is a distance from the last position the caller accepted, and the caller
+    /// accepts the position first and measures afterwards, so a mouse the desk nudges one pixel at a time
+    /// walks the anchor along with it and never trips anything until the step is five in one go. MPC-HC's rule
+    /// is the other way round — it compares against the point it <em>hid at</em>, which is fixed for the length
+    /// of the hide — and that is what <see cref="HiddenTolerance"/> now supplies for the hidden half.
     /// </para>
     /// </summary>
-    public const double MovePixels = 2;
+    public const double MovePixels = 5;
+
+    /// <summary>
+    /// How far a hidden cursor's pointer may drift before the drift is read as a hand rather than as a desk.
+    /// <para>
+    /// It exists because the two states want opposite things from the same reading. While the cursor is showing
+    /// the question is 「where is the pointer」, and any answer is better than a stale one — so the anchor
+    /// follows the pointer and the threshold is a step size. While the cursor is <em>hidden</em> the question is
+    /// 「has anybody touched the mouse」, and the only trustworthy reference is the place it was hidden at:
+    /// a pointer that is still within a pixel of there is a pointer nobody has moved, however many reports
+    /// arrive saying it is at <c>x+1</c>, and a pointer that is somewhere else has been moved by definition.
+    /// </para>
+    /// <para>
+    /// <b>Four, not one — and the gap to MPC-HC is about the stream, not the strictness.</b> MPC-HC's
+    /// <c>PointEqualsImprecise</c> compares <em>events</em>: Windows raises nothing while the mouse is genuinely
+    /// still, so the only readings that arrive are a sensor that has physically deflected. This player's hidden
+    /// half is asked by a <em>poll</em> instead — ten times a second it reads <c>GetCursorPos</c>, which reports
+    /// the pointer's true position including every pixel of sensor drift and desk vibration the events would
+    /// never bother to announce. This machine's own log puts that drift at two pixels
+    /// (<c>2,0</c>, <c>0,2</c>, <c>1,2</c> in the fourth report's film), and the sixth report's film caught the
+    /// consequence: a twelve-second hide ended by exactly one two-pixel drift, with two one-pixel readings
+    /// correctly held back beside it. So the tolerance has to clear the desk's whole vocabulary, not its single
+    /// step: four is above every rattle ever logged here and far below a hand, whose first event is tens of
+    /// pixels. The safe direction matters more than the number: a desk pixel that slips through costs the bug
+    /// being reported again; a hand pixel that is swallowed costs a wiggle of the wrist to fix.
+    /// </para>
+    /// </summary>
+    public const double HiddenTolerance = 4;
+
+    /// <summary>
+    /// How far a <c>PointerMoved</c>'s own position may sit from where the OS says the cursor is right now
+    /// before the event is read as a synthetic one rather than a hand.
+    /// <para>
+    /// <b>Why the page needs this at all.</b> WinUI raises <c>PointerMoved</c> for a pointer that never moved —
+    /// once per change to the tree under it, and the eighth report's film caught the consequence: a cursor
+    /// hidden for 29.7 seconds (重申 228 次、轮询计数一次没动) was woken by exactly one XAML event claiming
+    /// 「5,0 逻辑像素」 while the poll swore the pointer's physical position had not changed by a pixel. The
+    /// event's coordinates come from a base the framework re-derives when the tree or the window under the
+    /// pointer changes, so a message arriving from another process (AyuGram 的 toast、焦点变化) can tip that
+    /// base by one to five pixels — and five is exactly <see cref="MovePixels"/>, the threshold a real hand
+    /// clears with tens. The user's control experiment closed the case: 「我用其他播放器还有网页看视频的时候
+    /// 都不会出现这种问题」 — a foreign toast would plague every player on the machine; only this one woke, so
+    /// the trigger was the event this player alone lets through.
+    /// </para>
+    /// <para>
+    /// <b>Seven, not five.</b> The drift itself is one to five (the same re-derived base the eighth report's
+    /// three samples put at 2,0 / 1,5 / 5,0), and this machine's desktop adds up to two of sensor rattle on
+    /// top — the same two that set <see cref="HiddenTolerance"/>. Five plus two, with one pixel of margin.
+    /// A real hand fails this test only while its events lag the cursor they report — a fast flick whose
+    /// last event lands tens of pixels behind the stopped cursor — and losing such an event costs nothing:
+    /// the hand has already stopped, the idle clock is already running, and the poll re-seeds the anchor
+    /// within a tick.
+    /// </para>
+    /// </summary>
+    public const double SyntheticSlackPixels = 7;
 
     /// <summary>
     /// Whether a reported position change of <paramref name="dx"/>,<paramref name="dy"/> is somebody moving the
@@ -139,8 +205,30 @@ public sealed class ChromeReveal
     public static bool Travelled(double dx, double dy) =>
         (dx > 0 || dy > 0) && (dx >= MovePixels || dy >= MovePixels);
 
-    /// <summary>The fraction of the picture's height each edge band occupies.</summary>
-    private const int Bands = 5;
+    /// <summary>
+    /// Whether a pointer that has gone <paramref name="dx"/>,<paramref name="dy"/> from where the cursor was
+    /// hidden has been moved by a hand — the hidden half of the same question <see cref="Travelled"/> answers
+    /// for a visible one, and a different question with a different answer. See
+    /// <see cref="HiddenTolerance"/> for why the reference point matters more than the step size here.
+    /// <para>
+    /// Coordinates are compared one axis at a time with the same tolerance, which is what
+    /// <c>PointEqualsImprecise</c> does: a pointer two pixels away on the diagonal is two pixels away, and
+    /// there is no diagonal inflation to argue about.
+    /// </para>
+    /// </summary>
+    public static bool Wandered(double dx, double dy) =>
+        dx > HiddenTolerance || dy > HiddenTolerance;
+
+    /// <summary>
+    /// 上下两条边缘带各占画面高度的比例 —— 也就是「显示上方控件与下方进度条的触发阈值」。
+    /// <para>
+    /// <b>0.12，2026-09-15 由五分之一（0.20）改小</b>（用户的话：「将播放页面显示上方控件与下方进度条的
+    /// 触发阈值调整为12%」）：带子窄了，唤出控件的手势要更明确地走到边上，压在画面中间的余地也更大 ——
+    /// 死区从五分之三涨到 76%，字幕那一带更清净。命中到控件（<see cref="ChromePart.Bar"/>、
+    /// <see cref="ChromePart.Title"/>）照旧无条件成立，跟带子多宽无关。
+    /// </para>
+    /// </summary>
+    private const double EdgeBandFraction = 0.12;
 
     /// <summary>
     /// How strong the volume rail is at its dimmest, as a fraction of full. The floor exists because
@@ -174,6 +262,17 @@ public sealed class ChromeReveal
     private bool _keepChrome;
 
     /// <summary>
+    /// Where the pointer was when the cursor was hidden, in the caller's own coordinates — the point every
+    /// report arriving during the hide is judged against. Kept here rather than by the caller because it is
+    /// the hidden half of «is this a hand» and that question is this class's. See
+    /// <see cref="AnchorHidden"/> and <see cref="HiddenTolerance"/>.
+    /// </summary>
+    private (double X, double Y) _hiddenAt;
+
+    /// <summary>Whether <see cref="_hiddenAt"/> means anything yet.</summary>
+    private bool _hiddenAnchored;
+
+    /// <summary>
     /// Starts fully revealed: playback has just begun, the pointer may be anywhere, and the first thing
     /// the user needs is to see that there are controls at all. Every field agrees so a layout pass that
     /// runs before the first pointer event cannot read a state where the bar is up with no volume beside it.
@@ -199,6 +298,18 @@ public sealed class ChromeReveal
     /// pointer is then over a popup of its own, and the user is mid-choice.
     /// </summary>
     public bool HoldChrome => _holdChrome;
+
+    /// <summary>
+    /// The rule's own record still says the pointer is outside the picture — <see cref="PointerLeft"/> ran
+    /// and nothing has said "back" since. Read by the shell's tick to close the one loop both the events and
+    /// the poll leave open: a hand that returns and stops within five pixels of where it left raises no
+    /// pointer event (nothing moved), and the poll returns early both on a zero step and on one under the
+    /// threshold, so nobody tells the rule the pointer came home — <see cref="_pointerY"/> stays at -1, and
+    /// the settle rule, which hides the cursor only while the pointer is <em>in</em> the picture, never
+    /// hides again. 「有时候需要点一下暂停再播放，鼠标才会开始自动隐藏」 was exactly this: the click brought
+    /// the pointer's record home by hand, everything else had to wait for it.
+    /// </summary>
+    public bool PointerGone => _pointerY < 0;
 
     /// <summary>
     /// Pins the chrome open because there is no picture yet — a file that is still loading has nothing to
@@ -236,7 +347,7 @@ public sealed class ChromeReveal
     /// A latch, and it has to be one: this is called from every status snapshot mpv publishes — four or
     /// more times a second for the length of the film — and 「the hold is off, so that counts as activity」
     /// applied to each of them restamps the idle clock four times a second forever. Nothing can then ever
-    /// go idle. Not the chrome: a pointer resting in the bottom fifth keeps the transport bar over the
+    /// go idle. Not the chrome: a pointer resting in the bottom band keeps the transport bar over the
     /// picture for the whole film, which is 「别什么进度条标题音量条都持久显示在画面上」. And not the cursor,
     /// which needs two uninterrupted seconds it was never allowed to accumulate —
     /// 「鼠标指针还是不会自动隐藏」. Only a real change of the hold is news; the countdown that follows one is
@@ -257,8 +368,8 @@ public sealed class ChromeReveal
     /// there is nothing on screen to point at.
     /// <para>
     /// It waits for the pointer to actually stop — for <see cref="CursorIdleMilliseconds"/>, its own window,
-    /// not the chrome's — rather than merely for the chrome to be down. The middle three fifths of the
-    /// picture reveal nothing, so the chrome goes as soon as the pointer crosses into them, and a cursor
+    /// not the chrome's — rather than merely for the chrome to be down. The dead zone between the two edge
+    /// bands reveals nothing, so the chrome goes as soon as the pointer crosses into it, and a cursor
     /// that vanished there would disappear in the middle of a movement with nothing on screen to explain
     /// where it had gone.
     /// </para>
@@ -295,14 +406,36 @@ public sealed class ChromeReveal
     /// True when <see cref="State"/>, <see cref="RailStrength"/> or <see cref="CursorHidden"/> changed.
     /// </returns>
     public bool Pointer(double y, double height, ChromePart part, double railNear, long now)
+        => Pointer(y, height, part, railNear, now, moved: true);
+
+    /// <summary>
+    /// The same reading with the caller's answer to the one question this class cannot work out for itself:
+    /// is this a pointer that just moved, or the same pointer reported again?
+    /// <para>
+    /// Both arrive here as a position, and they want opposite things from the idle clock. A movement is
+    /// activity by definition, so it restamps the clock and the countdown starts again from here — which is
+    /// how 「鼠标静止不动两秒之后要自动隐藏」 is measured from the last thing a hand did. A position reported
+    /// again is the opposite: it is what the ten-hertz poll and every resize hand over, they say nothing about
+    /// a hand, and restamping for them is what 「鼠标隐藏了一会然后又会自动冒出来」 was made of — a cursor
+    /// whose two seconds never get to expire, from a player whose own log says the pointer never moved.
+    /// </para>
+    /// <para>
+    /// <paramref name="moved"/> false is therefore the honest answer for a report that is only a position.
+    /// While the cursor is showing the distinction does no work — a still pointer produces no events, and the
+    /// difference between the two readings is invisible until there is a hide to keep. It is the hidden half
+    /// that needs it.
+    /// </para>
+    /// </summary>
+    public bool Pointer(double y, double height, ChromePart part, double railNear, long now, bool moved)
     {
         _pointerY = height > 0 ? Math.Clamp(y / height, 0, 1) : 0;
         _part = part;
         _railNear = railNear < 0 ? -1 : Math.Clamp(railNear, 0, 1);
 
         // Anything the pointer is resting on counts as activity even without movement, which is what
-        // keeps a short idle window from pulling a control out from under a hand aiming at it.
-        _lastActivity = now;
+        // keeps a short idle window from pulling a control out from under a hand aiming at it — and a report
+        // the caller called a movement is activity whether or not it landed anywhere useful.
+        if (moved || !CursorHidden) _lastActivity = now;
 
         // A deliberate move cancels a keyboard grace window: the pointer's own position is a better
         // answer than a countdown started before it arrived.
@@ -310,6 +443,55 @@ public sealed class ChromeReveal
 
         return Settle(now);
     }
+
+    /// <summary>
+    /// The cursor has just gone: remember where the pointer was, because that is the point every later
+    /// report is judged against for as long as the hide lasts. See <see cref="HiddenTolerance"/>.
+    /// <para>
+    /// <b>It deliberately does not restamp <see cref="_lastActivity"/>, and that is the fix for
+    /// 「鼠标一闪一闪的」.</b> This is called from the hide itself, after the rule has already decided the
+    /// pointer has been still for two seconds — so the clock it must not touch is the very clock that
+    /// decision was measured against. Stamping it here says 「the pointer just did something」 at the exact
+    /// moment the rule concluded it had not, and the sequence is then a ring: hide at t, this call restamps
+    /// to t, the next tick a hundred milliseconds later reads 「still for 0.1 s」 and shows the cursor again,
+    /// the pointer (which never moved) lets two seconds run out, hide at t+2, restamp, show. The log is
+    /// 「藏起来了」 and 「又显示了」 every two seconds with hides a hundred and twenty milliseconds long, and
+    /// with both pointer counters frozen at the values they had when the film started — because nothing is
+    /// moving at all. Anchoring is bookkeeping about where, not activity.
+    /// </para>
+    /// </summary>
+    public void AnchorHidden(double x, double y, long now)
+    {
+        // The tick is taken and deliberately not used: see the paragraph above. Kept in the signature so the
+        // call site still reads as 「this happened at this moment」, which is what it is — it is the one thing
+        // that does *not* get to count as activity.
+        _ = now;
+
+        _hiddenAt = (x, y);
+        _hiddenAnchored = true;
+    }
+
+    /// <summary>
+    /// The cursor is back, so the point it was hidden at stops being a reference: the pointer is followed again
+    /// rather than held to anything. Paired with <see cref="AnchorHidden"/>.
+    /// </summary>
+    public void ReleaseHiddenAnchor() => _hiddenAnchored = false;
+
+    /// <summary>
+    /// Whether the pointer has left the place it was hidden at by more than <see cref="HiddenTolerance"/> —
+    /// the question the hidden half of the rule is actually asking.
+    /// <para>
+    /// False when nothing has anchored, and that is the safe direction rather than a technicality. An anchor
+    /// only exists between a hide and the show that ends it, so a report arriving outside that window has no
+    /// business waking anything: the state before the first hide, a report that lost a race with
+    /// <see cref="ReleaseHiddenAnchor"/>, a caller that forgot to anchor. Answering 「wake」 for those would be
+    /// the same bug in a new place, and the cost of the other mistake is one report that is judged on its own
+    /// merits later.
+    /// </para>
+    /// </summary>
+    public bool WanderedFromHiding(double x, double y) =>
+        _hiddenAnchored
+        && (Math.Abs(x - _hiddenAt.X) > HiddenTolerance || Math.Abs(y - _hiddenAt.Y) > HiddenTolerance);
 
     /// <summary>
     /// The mouse moved and the caller cannot say where to. Nothing about what the pointer is over changes —
@@ -449,7 +631,7 @@ public sealed class ChromeReveal
         if (_part == ChromePart.Title) title = true;
 
         // 「显示进度条的时候不需要同步显示音量条」: the bar used to be one of the rail's reasons, and it was
-        // the wrong kind of reason — the pointer being in the bottom fifth is a request for the transport
+        // the wrong kind of reason — the pointer being in the bottom band is a request for the transport
         // bar and says nothing at all about the volume.
         return new ChromeState(bar, title, _railNear >= 0 || _part == ChromePart.Volume || now < _railUntil);
     }
@@ -487,7 +669,6 @@ public sealed class ChromeReveal
     {
         if (_pointerY < 0) return (false, false);
 
-        var band = 1d / Bands;
-        return (_pointerY >= 1 - band, _pointerY <= band);
+        return (_pointerY >= 1 - EdgeBandFraction, _pointerY <= EdgeBandFraction);
     }
 }
