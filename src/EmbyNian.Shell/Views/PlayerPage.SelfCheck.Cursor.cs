@@ -18,6 +18,12 @@ namespace EmbyNian.Shell.Views;
 public sealed partial class PlayerPage
 {
     /// <summary>
+    /// 第十一报里那个注入位移的签名宽度 —— 四天日志里 AyuGram 每一次都恰好把指针横搬 60 像素
+    /// （<c>dx=60, dy=0</c>）。探针照原样复刻一次，好让这一关测的是用户那个场景而不是一个随便的位移。
+    /// </summary>
+    private const int WARP_SIGNATURE = 60;
+
+    /// <summary>
     /// That hiding the cursor actually reaches the OS — which over a WinUI 3 island is not the same thing as
     /// calling the OS. Everything above this is arithmetic and one field of ours; this is the step in between
     /// that nothing else in the app can see.
@@ -884,6 +890,153 @@ public sealed partial class PlayerPage
         void Want(string what, bool ok)
         {
             if (!ok) wrong.Add(what);
+        }
+    }
+
+    /// <summary>
+    /// 第十一报（2026-09-15）新增的一关：<b>藏匿期别人把指针整块搬走一次，光标不该跟着出来。</b>
+    /// <para>
+    /// 病是屏幕二上的 AyuGram：每收到一条静音的群聊消息（没有弹窗、没有焦点变化）就把指针横向搬整整
+    /// 60 像素，一秒不到就把藏了不到两秒的光标叫回来 —— 四天日志里同一个 <c>dx=60,dy=0</c> 数到 78 次，
+    /// 藏点 <c>3100,932</c>、唤醒读数 <c>3160,932</c>。第九报那套负计数锁挡不住它，因为锁管的是箭头
+    /// 画不画，而这条唤醒走的是位置：<c>GetCursorPos</c> 如实报了位移，单传感器如实判「动了」。
+    /// </para>
+    /// <para>
+    /// 这一关就在这台机器上原样造一次那个场景：藏好之后，用 <see cref="Native.SetCursorPos"/> 把指针
+    /// <b>搬一次</b> 60 像素就不动（这正是一次注入的形状：一个事件，不是一个过程），推几拍，光标必须
+    /// 还藏着。它是自检里少有的「能真的把用户那个场景跑一遍」的关卡 —— 因为触发它的不是真实输入，
+    /// 而这台机器注不进真实输入恰好不妨碍它。
+    /// </para>
+    /// <para>
+    /// 反过来的那一半也判，不然「挡掉跳变」可以退化成一概不醒：同一次藏匿里再让指针<b>连着走两拍</b>
+    /// （手在走的样子），光标必须回来。两个方向合起来才是这条规矩的完整判据。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ProbeCursorWarp()
+    {
+        if (!Attached || _window is null) return (false, "播放层未接线");
+        if (!Native.GetCursorPos(out var origin)) return (false, "问不出指针位置");
+
+        var was = Visibility;
+        var wasFull = _window.Fullscreen;
+
+        Visibility = Visibility.Visible;
+        UpdateLayout();
+
+        var report = new List<string>();
+        var wrong = new List<string>();
+
+        SetCursorHidden(false);
+        _chrome.Reset(Now);
+        Render();
+
+        if (!PictureCentre(out var centre))
+        {
+            Visibility = was;
+            return (false, "问不出画面中心");
+        }
+
+        // 把指针放到画面中心并让它稳定下来，再藏。藏匿必须先成立，不然下面判的是空气。
+        if (!Native.SetCursorPos(centre.X, centre.Y)) Native.MovePointerTo(centre.X, centre.Y);
+        Pump();
+        OnTick(this, EventArgs.Empty);
+        Pump();
+        OnTick(this, EventArgs.Empty);
+
+        SetCursorHidden(true);
+        _polledKnown = true;
+        Native.GetCursorPos(out _polled);
+
+        var hiddenAt = Now;
+        while (Now - hiddenAt < 2600) { Pump(); Thread.Sleep(20); }
+        OnTick(this, EventArgs.Empty);
+        Pump();
+
+        if (!_cursorHidden)
+        {
+            report.Add("这一次没能先藏下去（多半是有人真在动鼠标），这一关只作参考");
+            SetCursorHidden(false);
+            _chrome.Reset(Now);
+            _chrome.Tick(Now + SettleMilliseconds);
+            Render();
+            Visibility = was;
+            UpdateLayout();
+            Native.SetCursorPos(origin.X, origin.Y);
+            return (wrong.Count == 0, string.Join("；", report));
+        }
+
+        // —— 一次跳变：搬 60 像素就不动，光标必须还藏着 ——
+        var before = _warpsIgnored;
+        Native.GetCursorPos(out var at);
+
+        // 60 是日志里那个签名本身；靠屏幕右沿太近就退一步，别撞到虚拟屏边界让 SetCursorPos 被裁。
+        var jump = at.X + WARP_SIGNATURE;
+        if (jump > VirtualRight()) jump = at.X - WARP_SIGNATURE;
+
+        Native.SetCursorPos(jump, at.Y);
+
+        for (var i = 0; i < 5; i++)
+        {
+            Pump();
+            OnTick(this, EventArgs.Empty);
+            Thread.Sleep(60);
+        }
+
+        Pump();
+        OnTick(this, EventArgs.Empty);
+
+        var stillHidden = _cursorHidden;
+        var counted = _warpsIgnored > before;
+
+        Want("藏匿期被搬一次不叫醒光标", stillHidden);
+        Want("那一次搬动被记进了账", counted);
+        report.Add($"搬 60 像素一次（{at.X}→{jump}）后：光标{(_cursorHidden ? "还藏着" : "又显示了")}"
+            + $"，挡掉跳变 {before}→{_warpsIgnored} 次");
+
+        // —— 对面那一半：手在走（连着两拍都动），光标必须回来 ——
+        if (_cursorHidden)
+        {
+            var from = _cursorHidden;
+            Native.GetCursorPos(out var now1);
+
+            for (var i = 0; i < 2; i++)
+            {
+                Native.SetCursorPos(now1.X + 40 * (i + 1), now1.Y + 10 * (i + 1));
+                Pump();
+                OnTick(this, EventArgs.Empty);
+                Thread.Sleep(120);
+            }
+
+            Want("真手连着走两拍要能叫醒光标", from && !_cursorHidden);
+            report.Add($"连着走两拍（每次 +40）后：光标{(_cursorHidden ? "还藏着" : "回来了")}");
+        }
+        else
+        {
+            report.Add("跳变那一步就把光标叫醒了，后一半不判（同一个病，报一条就够）");
+        }
+
+        // —— 还原 ——
+        SetCursorHidden(false);
+        _chrome.Reset(Now);
+        _chrome.Tick(Now + SettleMilliseconds);
+        Render();
+        Visibility = was;
+        UpdateLayout();
+        Native.SetCursorPos(origin.X, origin.Y);
+        Pump();
+
+        return (wrong.Count == 0,
+            string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));
+
+        void Want(string what, bool ok)
+        {
+            if (!ok) wrong.Add(what);
+        }
+
+        static int VirtualRight()
+        {
+            var (x, _, width, _) = Native.VirtualScreen();
+            return x + width - 1;
         }
     }
 

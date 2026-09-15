@@ -483,6 +483,12 @@ internal static partial class ShellSelfCheck
         var alive = player.ProbeCursorAlive();
         check("鼠标真等两秒就藏", alive.Ok, alive.Detail);
 
+        // 第十一报（2026-09-15）：藏匿期别的进程把指针整块搬走一次，光标不该跟着出来。这一关是自检里
+        // 少有的能真的把用户那个场景跑一遍的 —— 触发它的不是真实输入，而这台机器注不进真实输入恰好
+        // 不妨碍它（SetCursorPos 只是一个位置，不是一次事件）。两个方向都判：搬一次不醒、连着走两拍要醒。
+        var warp = player.ProbeCursorWarp();
+        check("藏匿期被搬一次不醒", warp.Ok, warp.Detail);
+
         // 全屏时最下方会有进度条: the thin bottom line is the one piece of chrome the reveal rule cannot state
         // on its own, because its rule is the inverse — up when the bar is down — and because half of it is
         // the window's shape rather than the pointer's position. Driven through the real window, in and out

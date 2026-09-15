@@ -3743,6 +3743,112 @@ internal static class PlaybackTests
             Assert.True(ChromeReveal.MovePixels > 2, "桌面上实测到的抖动到了两像素，阈值不能停在二");
         });
 
+        Test("播放器控件：藏匿期那记 60 像素是别人搬的，不是手", () =>
+        {
+            // 第十一报（2026-09-15）：屏幕二上的 AyuGram 每收到一条静音的群聊消息（没有弹窗）就把指针
+            // 横向搬整整 60 像素，一秒不到就把藏了不到两秒的光标叫回来。四天日志数出来的签名一样：
+            // dx=60,dy=0 在 09-15 出现 64 次、09-14 出现 8 次、09-12 出现 6 次，其余全是手的一次性事件。
+            //
+            // 分不清的根子在传感器：GetCursorPos 只看位置，注入位移让位置真的变了，Travelled 如实判
+            // 「动了」。第九报那套负计数锁管的是「箭头画不画」，锁在位置前面，够不着它。
+            //
+            // 判据改成「手是个过程、注入是个事件」之后，一次够阈值的位移先挂起一拍：
+            //   · 下一拍位置一字未动 → 注入，继续藏（这条用例的主要断言）
+            //   · 下一拍位置又变了   → 手，照旧唤醒
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden, "先得藏下去，才有东西可被叫醒");
+
+            // 第一记跳变：够阈值，但只挂起，视野里什么都不该变 —— 光标还藏着、时钟没被拨。
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+            Assert.False(chrome.WarpOrHand(3160, 932, at), "第一个够阈值的位移先挂起，不认成手");
+            Assert.True(chrome.WarpPendingAt.HasValue, "挂起点要记下来，下一拍才好比对");
+            Assert.True(chrome.CursorHidden, "挂起这一拍光标必须先保持藏着");
+            Assert.Equal(0, chrome.WarpsIgnored);
+
+            // 下一拍还在同一处：一次纯跳变，继续藏，并把它记进账。
+            Assert.False(chrome.WarpOrHand(
+                3160, 932, at + ChromeReveal.WarpConfirmMilliseconds), "冻在原地就是别人搬的");
+            Assert.True(chrome.CursorHidden, "别人搬走的位置不叫醒光标");
+            Assert.False(chrome.WarpPendingAt.HasValue, "确认完就得把挂起收走");
+            Assert.Equal(1, chrome.WarpsIgnored);
+        });
+
+        Test("播放器控件：藏匿期真手连走两拍还是能叫醒光标", () =>
+        {
+            // 上一条的对照组。挂起一拍必须是「等一下再看」，不能变成「以后都不认了」—— 否则用户真的
+            // 去动鼠标就再也叫不回来。手在鼠标上是个过程：挂起之后下一拍位置又变了，就该认成手。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+            Assert.False(chrome.WarpOrHand(3160, 932, at), "第一拍照例先挂起");
+
+            // 下一拍又走了几十像素：手。这一句返回真，调用方据此走正常的唤醒路。
+            Assert.True(chrome.WarpOrHand(
+                3200, 940, at + ChromeReveal.WarpConfirmMilliseconds), "手在走，下一拍就该放行");
+            Assert.False(chrome.WarpPendingAt.HasValue, "认成手之后挂起要清掉");
+            Assert.Equal(0, chrome.WarpsIgnored, "叫醒不是「挡掉一次」");
+
+            // 认成手之后挂起就清了，调用方那一拍直接走唤醒路（不等返回）。所以这里再喂一个新坐标，
+            // 走的是「又一次第一步」，照例挂起 —— 挂起是每段位移的入门手续，不是一次性的通行证。
+            // 这条断言就是防「一次确认把后面都免检」的回归。
+            Assert.False(chrome.WarpOrHand(3260, 950, at + 200), "新的一段位移，还得重新挂起");
+            Assert.True(chrome.WarpPendingAt.HasValue, "挂起状态要重新立起来");
+            // 下一拍又动，还是放行 —— 循环不咬死。
+            Assert.True(chrome.WarpOrHand(
+                3300, 960, at + 200 + ChromeReveal.WarpConfirmMilliseconds), "手还在走，照样放行");
+        });
+
+        Test("播放器控件：光标一显示，藏匿期那笔跳变挂起就作废", () =>
+        {
+            // 藏匿期的账只在藏匿期里算。挂起没清干净，下一次藏匿的第一个位移会被当成「下一拍」而
+            // 直接确认为注入 —— 一次真手的第一步就白丢了。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+            chrome.WarpOrHand(3160, 932, at);
+            Assert.True(chrome.WarpPendingAt.HasValue);
+
+            // 显示一下（轮询问出真移动）：挂起必须随之作废。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, at + 100, moved: true);
+            Assert.False(chrome.CursorHidden);
+            Assert.False(chrome.WarpPendingAt.HasValue, "显示之后不该还挂着上一次藏匿的账");
+
+            // 再藏一次，第一个位移必须重新走「挂起」而不是被上一笔带过。
+            chrome.Tick(at + 100 + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+            Assert.False(chrome.WarpOrHand(3300, 900, at + 100 + ChromeReveal.CursorIdleMilliseconds + 100),
+                "新的一次藏匿里，第一个位移仍然要先挂起");
+        });
+
+        Test("播放器控件：新片子开场，跳变那笔账归零", () =>
+        {
+            // Reset 是新文件的入口。上一次藏匿挡掉几次跳变的读数留着不化，下一次报告会读成「修了之后
+            // 还在犯」—— 账要跟着藏匿走。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+            chrome.WarpOrHand(3160, 932, at);
+            chrome.WarpOrHand(3160, 932, at + ChromeReveal.WarpConfirmMilliseconds);
+            Assert.Equal(1, chrome.WarpsIgnored);
+
+            chrome.Reset(at + 5000);
+            Assert.Equal(0, chrome.WarpsIgnored, "新片子开场，上一次藏匿的账要清掉");
+            Assert.False(chrome.WarpPendingAt.HasValue);
+        });
+
         Test("播放器控件：藏下去靠每拍重申，不靠往输入队列里塞东西", () =>
         {
             // 2026-09-14 的第二轮报修（「没修好」）追出来的根因：那条「让框架重新念一遍」的路本身就是一次

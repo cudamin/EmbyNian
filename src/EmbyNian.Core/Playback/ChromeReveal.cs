@@ -149,6 +149,121 @@ public sealed class ChromeReveal
         (dx > 0 || dy > 0) && (dx >= MovePixels || dy >= MovePixels);
 
     /// <summary>
+    /// 藏匿期「一次性跳变」的挂起窗 —— 一次够到阈值、随后就冻住不动的位移，不是手。
+    /// <para>
+    /// <b>这条规矩解决的是第十一报：外屏进程把光标整块搬走。一台机器上装了 AyuGram（Telegram 的 Qt 分支）
+    /// 在第二块屏上，每次收到静音的群聊消息（没有弹窗、没有焦点变化）都会把指针横向搬整整 60 像素，
+    /// 一秒不到就把藏了不到两秒的光标叫回来。</b>判据不是推断出来的，是从四天日志里数出来的：同样的
+    /// <c>dx=60, dy=0</c> 在 09-15 出现 64 次、09-14 出现 8 次、09-12 出现 6 次，其余签名全是个位数的一次性
+    /// 事件（那些才是手）。藏点 <c>3100,932</c>、唤醒读数 <c>3160,932</c>——永远同一个 60。
+    /// </para>
+    /// <para>
+    /// <b>为什么第九报的负计数锁挡不住它。</b>那道锁管的是<b>箭头画不画出来</b>（队列私有的显示计数），
+    /// 而这条唤醒走的是另一个门：单传感器读的是 <c>GetCursorPos</c> 的<b>位置</b>，注入位移让位置真的
+    /// 变了，<see cref="Travelled"/> 如实判「动了」——锁在它前面，够不着它。所以这不是把哪条杠杆再加一格
+    /// 的问题，是传感器本身要能分清「手在走」和「别人把指针搬了一下」。
+    /// </para>
+    /// <para>
+    /// <b>怎么分。</b>手在鼠标上是一个<b>过程</b>——指针连续地走，两拍之间总有新的位移；而注入是一次
+    /// <b>事件</b>——搬完就没了，下一拍读到的位置与搬完那一刻<b>严格相等</b>。所以藏匿期的第一个够阈值
+    /// 的位移先挂起一拍：这一拍不动静止时钟、不显示光标；下一拍若又变了（<see cref="Travelled"/> 又成立，
+    /// 或只是位置与挂起值不同），那是手，照旧唤醒；若读数与挂起点一字不差，就是一次纯跳变，把它当成
+    /// 新的藏点接着藏。代价是一个 100 毫秒的拍子——手真的在动的时候下一拍立刻确认，肉眼看不见。
+    /// </para>
+    /// <para>
+    /// <b>为什么这个代价可以接受、而反过来不行。</b>把一次真手的一步误判成跳变的后果，是光标多藏
+    /// 一百毫秒（而且若手真的只动一步就停，那本来就该继续藏——静止两秒才藏正是本来的规矩）；把一次
+    /// 注入误判成手的后果，是光标在用户看片子时自己冒出来，也就是这一报本身。两个方向的代价不对称，
+    /// 所以往「先怀疑」那边偏。
+    /// </para>
+    /// </summary>
+    public const long WarpConfirmMilliseconds = 100;
+
+    /// <summary>
+    /// 藏匿期被挂起、等下一拍裁决的那次位移的落点。空（<see cref="_warpPending"/> 假）表示没有待裁决的
+    /// 跳变。见 <see cref="WarpConfirmMilliseconds"/> 的类注释：这是我们自己记的第二个位置，不是第二个
+    /// 传感器——它只是「同一个传感器上一拍说了什么」。
+    /// </summary>
+    private NativePointLike _warpAt;
+
+    private bool _warpPending;
+
+    private long _warpSeenAt;
+
+    /// <summary>
+    /// 藏匿期被认出来、并据以继续藏下去的一次性跳变，累计多少次。给日志和自检读：这个数不涨，
+    /// 就说明外屏那条路要么没在动、要么这次修法根本没生效。
+    /// </summary>
+    public int WarpsIgnored { get; private set; }
+
+    /// <summary>
+    /// 一个只有两个整数的最小位置类型，免得 Core 依赖 Shell 的 <c>NativePoint</c>。Core 里不该知道 Win32。
+    /// </summary>
+    public readonly record struct NativePointLike(int X, int Y);
+
+    /// <summary>
+    /// 藏匿期收到一个够到 <see cref="MovePixels"/> 的位移时该怎么做——把「手」和「别人的一次注入」
+    /// 分开的那一步。返回真表示「这是手，按移动处理」；返回假表示「先挂起」或「确认是注入，别理它」。
+    /// <para>
+    /// 调用方（<c>PlayerPage.PollPointer</c>）在光标<b>没有藏</b>时不该问这个：显示期任何位移都是手，
+    /// 没有要保住的东西，多一拍怀疑只是让控件迟钝。所以这个方法只在藏匿期有意义，这一点写在名字上。
+    /// </para>
+    /// <para>
+    /// 三个出口，一次只走一个：<b>第一次够阈值的位移</b>挂起（返回假、<see cref="_warpPending"/> 立起）；
+    /// <b>下一拍位置又变了</b>确认是手（返回真、挂起清掉）；<b>下一拍位置一字未动</b>确认是注入
+    /// （返回假、<see cref="WarpsIgnored"/> 加一、挂起清掉，调用方应把参照点推进到挂起点）。
+    /// </para>
+    /// </summary>
+    /// <param name="x">本拍读到的屏幕绝对坐标。</param>
+    /// <param name="y">同上。</param>
+    /// <param name="now">这一拍的时钟，与规则其它地方同一个。</param>
+    public bool WarpOrHand(int x, int y, long now)
+    {
+        // 已经挂着一次待裁决的位移：看这一拍与挂起点的关系。
+        if (_warpPending)
+        {
+            // 位置又变了 —— 手在走。挂起清掉，交回给调用方当移动处理。
+            if (x != _warpAt.X || y != _warpAt.Y)
+            {
+                _warpPending = false;
+                return true;
+            }
+
+            // 与挂起点一字不差，而且已经过了一拍：一次纯跳变。继续藏。
+            if (now - _warpSeenAt >= WarpConfirmMilliseconds)
+            {
+                _warpPending = false;
+                WarpsIgnored++;
+                return false;
+            }
+
+            // 同一拍内又被问了一次（或还没到确认时间）：保持挂起，别提前放行。
+            return false;
+        }
+
+        // 第一次够阈值的位移：挂起，等下一拍。
+        _warpAt = new NativePointLike(x, y);
+        _warpPending = true;
+        _warpSeenAt = now;
+        return false;
+    }
+
+    /// <summary>
+    /// 藏匿期被挂起、等下一拍确认的跳变落点，或 null。给调用方在「这一拍位置与上一拍相同」时要问的那
+    /// 一句：如果相同的位置<b>正是</b>挂起点，那这拍不是「同位置」而是「跳变确认完」。
+    /// </summary>
+    public NativePointLike? WarpPendingAt => _warpPending ? _warpAt : null;
+
+    /// <summary>
+    /// 光标从「藏」变回「显」时把挂起清掉：藏匿期结束，没有待裁决的东西了。<see cref="Reset"/> 也调它。
+    /// </summary>
+    private void ClearWarp()
+    {
+        _warpPending = false;
+        _warpSeenAt = 0;
+    }
+
+    /// <summary>
     /// 上下两条边缘带各占画面高度的比例 —— 也就是「显示上方控件与下方进度条的触发阈值」。
     /// <para>
     /// <b>0.12，2026-09-15 由五分之一（0.20）改小</b>（用户的话：「将播放页面显示上方控件与下方进度条的
@@ -443,6 +558,11 @@ public sealed class ChromeReveal
         State = new ChromeState(true, true, true);
         RailStrength = 1;
         CursorHidden = false;
+
+        // 新片子开场，上一个文件藏匿期里挂着的跳变与它数到的次数都归零：那两个数是「这一段藏匿」的账，
+        // 跨文件延续会把日志读成「这一报修了以后还在犯」。
+        ClearWarp();
+        WarpsIgnored = 0;
     }
 
     /// <summary>Applies the rule to the recorded pointer state and reports whether anything moved.</summary>
@@ -468,6 +588,11 @@ public sealed class ChromeReveal
         State = next;
         RailStrength = strength;
         CursorHidden = hide;
+
+        // 光标一旦回到「显」，藏匿期那一套挂起就没有意义了。留一口气不清会让下一次藏匿的第一个位移
+        // 直接被当成「下一拍」而误判 —— 藏匿期的账只在藏匿期里算。
+        if (!hide) ClearWarp();
+
         return true;
     }
 

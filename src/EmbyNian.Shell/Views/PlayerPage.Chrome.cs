@@ -170,6 +170,38 @@ public sealed partial class PlayerPage
         var dx = _polledKnown ? Math.Abs(screen.X - _polled.X) : int.MaxValue;
         var dy = _polledKnown ? Math.Abs(screen.Y - _polled.Y) : int.MaxValue;
 
+        // 第十一报（2026-09-15，外屏 AyuGram 把光标整块搬走）——先于「同位置」那一条问，因为藏匿期的
+        // 一次跳变确认恰恰表现为「位置没变」。挂起点就是上一拍那个够阈值的落点，这一拍如果还在那儿，
+        // 那不是静止而是确认：见 ChromeReveal.WarpOrHand。
+        if (_cursorHidden && _polledKnown && _chrome.WarpPendingAt is { } pending)
+        {
+            // 位置从挂起点又走开了：这就是手。确认之后**直接把这一拍当移动报上去**，不能落回下面
+            // 那条「藏匿期第一个够阈值的位移」—— 那条会再挂起一次，于是每一拍都在挂起、永远轮不到
+            // 唤醒（自检里「真手连着走两拍」就是这么红的）。挂起是每段位移的入门手续，确认过就是过了。
+            if (screen.X != pending.X || screen.Y != pending.Y)
+            {
+                _chrome.WarpOrHand(screen.X, screen.Y, Now);
+                WakeFromPoll(screen, dx, dy);
+                return;
+            }
+            // 还挂在原地：裁决交给 Core（够了一拍＝注入，同一拍内再问＝继续等）。
+            else if (!_chrome.WarpOrHand(screen.X, screen.Y, Now))
+            {
+                // 纯跳变：接着藏，把参照点推进到落点，免得下一拍又拿同一个 60 当新位移。
+                if (!_chrome.WarpPendingAt.HasValue)
+                {
+                    _polled = screen;
+                    _warpsIgnored++;
+                    return;
+                }
+
+                // 还在等确认（同一拍内又被问了一次）：什么都不做，让静止时钟继续走。
+                return;
+            }
+
+            // 走到这里＝Core 判成手，落回下面的正常移动路，让它替这次唤醒挂牌。
+        }
+
         // Exactly where it was: stillness, and nothing to tell the rule. Returning without advancing the
         // reference is what keeps the idle clock running.
         if (dx == 0 && dy == 0) return;
@@ -177,6 +209,32 @@ public sealed partial class PlayerPage
         // A step under the threshold is the desk, not a hand. Counted, not logged, and the reference stays put.
         if (_polledKnown && !ChromeReveal.Travelled(dx, dy)) return;
 
+        // 藏匿期第一个够阈值的位移：先挂起一拍，别急着认成手。第十一报的全部胜负都在这一句上 ——
+        // 位置确实是 OS 给的、确实够 60 像素，但它既可能是一只手、也可能是一个注入。到下一拍才知道。
+        if (_cursorHidden && _polledKnown)
+        {
+            _chrome.WarpOrHand(screen.X, screen.Y, Now);
+            _polled = screen;
+            _polledKnown = true;
+            return;
+        }
+
+        WakeFromPoll(screen, dx, dy);
+    }
+
+    /// <summary>
+    /// 一只真手把光标挪到了 <paramref name="screen"/>：记账、挂牌、重置两个时钟。
+    /// <para>
+    /// 从 <see cref="PollPointer"/> 里拆出来是因为第十一报之后它有<b>两个入口</b>：常规那条路（显示态
+    /// 下的位移、或者藏匿期第一个位移但当时不在挂起状态），以及挂起确认成手之后的补报 —— 后者必须
+    /// <b>绕过</b>「藏匿期第一个够阈值的位移先挂起」那一条，否则每拍都在挂起，唤醒永远轮不到。
+    /// </para>
+    /// </summary>
+    /// <param name="screen">这一拍读到的真实位置。</param>
+    /// <param name="dx">离参照点的横向位移，只用于日志。</param>
+    /// <param name="dy">离参照点的纵向位移，只用于日志。</param>
+    private void WakeFromPoll(NativePoint screen, int dx, int dy)
+    {
         _polled = screen;
         _polledKnown = true;
         _polledMoves++;
@@ -619,6 +677,7 @@ public sealed partial class PlayerPage
         if (hidden)
         {
             _nudgesThisHide = 0;
+            _warpsIgnored = 0;
             _woke = "未标注的显示路径（见到此串即有路漏标）";
 
             // The poll's reference is pinned here so that the first tick after the hide measures movement from
@@ -657,9 +716,11 @@ public sealed partial class PlayerPage
               + $"，藏点屏幕 {hideAnchor}"
               + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
               + $"，{PointerElements()}"
+              + $"，本次藏匿已挡掉一次性跳变 {_warpsIgnored} 次"
             : $"鼠标又显示了：{_woke}；轮询问出的移动共 {_polledMoves} 次，计数 {_cursorCount}"
               + $"，藏着期间重申了 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了"
-              + $"，负计数锁被抬回又压回 {_window?.CursorSuppressRestates ?? 0} 次");
+              + $"，负计数锁被抬回又压回 {_window?.CursorSuppressRestates ?? 0} 次"
+              + $"，挡掉一次性跳变 {_warpsIgnored} 次");
     }
 
     /// <summary>

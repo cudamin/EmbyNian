@@ -208,6 +208,13 @@ public sealed partial class PlayerPage : UserControl
     private int _polledMoves;
 
     /// <summary>
+    /// 第十一报（2026-09-15）：藏匿期被判成「外部把光标整块搬走的一次性跳变」、因而没有叫醒光标的
+    /// 次数。与 <see cref="ChromeReveal.WarpsIgnored"/> 是同一件事在两个层的账，这里这一份随藏匿行出
+    /// 日志，好让用户下一次报「AyuGram 又把它弄出来了」时能一眼看出到底是「没认出来」还是「没发生」。
+    /// </summary>
+    private int _warpsIgnored;
+
+    /// <summary>
     /// The one cursor position a tick works from, whether the OS gave it up, and whether a tick is currently
     /// in progress and therefore sharing it. See <see cref="CursorScreen"/> for what the sharing is for: four
     /// separate readings inside one tick can disagree with each other, and the tick then acts on two
