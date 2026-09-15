@@ -293,6 +293,42 @@ public sealed partial class PlayerPage
         ReseedPointer(moved: true);
     }
 
+    /// <summary>
+    /// 藏匿期的取证取样（2026-09-15，第十四报）：每秒一次，把「外面此刻是什么样」写进日志。
+    /// <para>
+    /// 用户报「屏幕二的 AyuGram 收到静音群消息，屏幕一已隐藏的光标就冒出来」，而两轮日志里那批唤醒的
+    /// 共同点是<b>没有任何一条路认领</b>——现在路都挂名了，剩下的可能是「没人叫它，它自己出来的」，
+    /// 也就是外部的另一个进程/线程在画。要判这一条，需要的不是我们这边的计数，而是<b>别人那边的状态</b>：
+    /// 指针压在哪个窗口上、那个窗口的队列属谁、OS 说屏幕上是什么形状、我们这个窗口的矩形有没有被搬动。
+    /// </para>
+    /// <para>
+    /// <b>只写日志，不判任何东西、不改任何行为。</b>取样本身用 <c>GetCursorPos</c>/<c>GetCursorInfo</c>，
+    /// 两个都是纯读；不 SetCursor、不 ShowCursor、不 Nudge —— 任何写都会把「取证」变成「扰动」，
+    /// 而 fourteenth 报的第十四次教训正在这里：对静止指针的任何写都会被它自己读成一次事件。
+    /// </para>
+    /// <para>
+    /// 一秒一次的频率是算出来的而不是拍的：藏匿期最短两秒，一次复现（AyuGram 收消息）总在几秒内，
+    /// 所以最快也要留下两三条；而十赫兹全记会在一次两小时的片子里写出一百多万行。
+    /// </para>
+    /// </summary>
+    private void SampleHiddenState()
+    {
+        if (Now - _hiddenSampleAt < 1000) return;
+        _hiddenSampleAt = Now;
+
+        var spot = Native.GetCursorPos(out var at) ? $"{at.X},{at.Y}" : "问不出";
+        var rect = _window is not null && Native.GetWindowRect(_window.Handle, out var r)
+            ? $"{r.Right - r.Left}x{r.Bottom - r.Top}@{r.Left},{r.Top}"
+            : "问不出";
+        var desk = Native.VirtualScreen();
+
+        // 「本线程队列的形状」与「系统此刻的形状」是两个量，取样必须分开写：判「谁在画」看的正是这两个
+        // 之间的差 —— 队列是空的（0）而系统是个箭头形状，说明画的人不是我们这一队列。
+        Log.Debug(Category, $"藏匿取样：指针 {spot}，本队列形状 0x{Native.GetCursor():X}，{PointerOwner()}"
+            + $"，我们窗口 {rect}，虚拟屏 {desk.Width}x{desk.Height}@{desk.X},{desk.Y}"
+            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次");
+    }
+
     // ---- 两处竖直间距 -------------------------------------------------------------
 
     /// <summary>
@@ -698,6 +734,11 @@ public sealed partial class PlayerPage
             _warpsIgnored = 0;
             _woke = "未标注的显示路径（见到此串即有路漏标）";
 
+            // 第十四报：取样的第一条从藏匿那一刻算起，不是从上一段藏匿的最后一拍算起。置成 Now-1000
+            // 而不是 Now —— 那表示「已经到期」，藏匿后的第一拍就写下第一条读数。用户报的唤醒恰恰总在
+            // 藏起来之后的头几秒，等满一秒才落笔就会把最关键的那一段漏掉。
+            _hiddenSampleAt = Now - 1000;
+
             // The poll's reference is pinned here so that the first tick after the hide measures movement from
             // the moment it went, not from wherever the last tick happened to leave it. Not an anchor the hide
             // is held to — see PollPointer: the reference is the previous reading either way, and hiding does
@@ -971,6 +1012,9 @@ public sealed partial class PlayerPage
         if (_cursorHidden)
         {
             if (_window?.CursorShapeGone == false) _shapeBack++;
+
+            // 第十四报（2026-09-15）：藏匿期每秒记一条「外面此刻什么样」。只读、不改，理由见 SampleHiddenState。
+            SampleHiddenState();
 
             // And say the policy again — every tick, for as long as the hide lasts. That is not belt and
             // braces: the framework re-reads ProtectedCursor every time it handles pointer input, and a film

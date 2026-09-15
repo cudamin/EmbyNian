@@ -240,6 +240,14 @@ public sealed partial class PlayerPage : UserControl
     private int _shapeBack;
 
     /// <summary>
+    /// 上一次「藏匿取样」的时刻（第十四报，2026-09-15）。藏匿期每秒记一条「外面此刻什么样」，
+    /// 用来判用户报的那件事实：屏幕二的 AyuGram 收消息时，屏幕一已隐藏的光标为什么冒出来 ——
+    /// 而那批唤醒两轮日志里都没有路认领，所以要看的不是我们的计数，是别人那边（指针压着谁的窗、
+    /// 队列形状与系统形状差在哪、窗口与虚拟屏矩形被谁搬过）。
+    /// </summary>
+    private long _hiddenSampleAt;
+
+    /// <summary>
     /// The duration the ticks were laid out against. The marks arrive before mpv has a duration to place
     /// them on, so the drawing has to be retried once it does — and exactly once, not on every status
     /// update for the rest of the film.
