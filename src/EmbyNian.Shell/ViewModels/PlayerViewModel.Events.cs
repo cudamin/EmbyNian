@@ -126,34 +126,50 @@ public sealed partial class PlayerViewModel
     /// 本集背景图 → 父级（季/剧）背景图 → 缩略图 的顺序取一张 —— 单集大多没有自己的 Backdrop，
     /// 继承链正是详情页用的那一套；1280 那一档全屏铺满够用，又落在磁盘缓存最常命中的宽度上。
     /// <para>
-    /// 代际号在两处 await 之后各对一次：换集很快连按的时候，晚到的上一场下载不许盖到这一场上。
-    /// 取不到（服务器没图、404）或取挂了就保持 null —— 垫底退回纯色遮罩，图是添头不是承重墙。
+    /// 调用时机有两处：StartPlaybackAsync 遮罩亮起的同一刻（拿用户点的卡片，媒体信息还在路上），
+    /// 和 OnNowPlayingChanged（详情就绪、字段更全）。按条目 Id 去重：同一个 Id 只取一遍，第二处
+    /// 调用对已在路上的那次是空操作。取空（服务器没图、404）或取挂了就忘掉这个 Id —— 详情阶段的
+    /// 重试还带着更全的图片字段；取到图才记住。代际号在两处 await 之后各对一次：换集很快连按的
+    /// 时候，晚到的上一场下载不许盖到这一场上。垫底退回纯色遮罩，图是添头不是承重墙。
     /// </para>
     /// </summary>
     private async Task LoadCoverBackdropAsync(EmbyItem? item)
     {
-        var generation = _generation;
-
         if (item is null)
         {
+            _coverBackdropItemId = null;
             CoverBackdrop = null;
             return;
         }
 
+        // 这一部已经在取（或已就位）：同一 Id 的第二遍是重复下载，图也一样。
+        if (string.Equals(_coverBackdropItemId, item.Id, StringComparison.Ordinal)) return;
+
+        _coverBackdropItemId = item.Id;
+        var generation = ++_coverGeneration;
+
         try
         {
             var bytes = await PickCoverBackdropBytesAsync(item, EmbyImageStore.RequestWidth(1280)).ConfigureAwait(true);
-            if (bytes is null || generation != _generation) return;
+            if (bytes is null)
+            {
+                // 这张卡上没有可用的图片字段（浏览级元数据常常没有父级继承链）——忘掉，好让详情
+                // 就绪后 OnNowPlayingChanged 那一遍用更全的字段再试一次。
+                if (generation == _coverGeneration) _coverBackdropItemId = null;
+                return;
+            }
+            if (generation != _coverGeneration) return;
 
             var image = new BitmapImage();
             using var stream = new MemoryStream(bytes);
             await image.SetSourceAsync(stream.AsRandomAccessStream());
-            if (generation != _generation) return;
+            if (generation != _coverGeneration) return;
 
             CoverBackdrop = image;
         }
         catch (Exception ex)
         {
+            if (generation == _coverGeneration) _coverBackdropItemId = null;
             Log.Info(Category, $"遮罩背景图取用失败（{ex.Message}），垫底退回纯色");
         }
     }

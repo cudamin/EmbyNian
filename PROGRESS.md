@@ -2,6 +2,61 @@
 
 最后更新：2026-09-15
 
+## 重构：鼠标隐藏逻辑改为「成熟播放器那套」（2026-09-15，四道闸门全过。未提交）
+
+**用户原话：「重构本项目播放视频时隐藏鼠标的逻辑，改为跟其他成熟项目一样的方案」。** 前置选择了三个方向：①架构＝**单传感器，只信轮询**（XAML `PointerMoved` 降级为「只用于 chrome 显隐判定」，不再参与光标藏匿决策）；②杠杆＝**HC-Player 三件套**（`SetCursor(blank)` + `ShowCursor` 负计数锁 + `ProtectedCursor`/`Root.Cursor`，加 `WM_SETCURSOR` 拦截）；③范围＝**改代码 + 四闸门全过**，不提交。
+
+### 砍掉的东西（八报累积的补丁式复杂度）
+
+| 退休项 | 位置 | 理由 |
+|---|---|---|
+| `HiddenTolerance=4` | `ChromeReveal` | 只在「多传感器 + 参照点会被推走」前提下才需要 |
+| `SyntheticSlackPixels=7` | `ChromeReveal` | 显示期交叉验证整块随合成判别退役 |
+| `AnchorHidden` / `ReleaseHiddenAnchor` / `WanderedFromHiding` / `_hiddenAt` / `_hiddenAnchored` | `ChromeReveal` | 藏匿点锚：单传感器后没有「参照点被谁推走」这件事 |
+| `_xamlClaim` 挂起声明 / `DiscardSyntheticClaim()` / `_syntheticMoves` / `_hiddenNoise` | `PlayerPage` | 两个传感器打架才需要裁决席；现在只有一个传感器 |
+| 全局快照差分（`GlobalShapeChanges` / `LastGlobalChange` / `ExternalShapeRestores` / `LastExternalShape` / `WatchGlobalShape` / `_lastGlobal*`） | `HostWindow` | 纯取证脚手架，且它的 Nudge 回击实测成环（14:03「每过一会闪一下」） |
+| `_cursorHidePublished` / `CursorDisplayRefreshes` / `NudgeCursorState` 发布 | `HostWindow` | 发布会注入真实位移 → 等于「请光标出来」；注入只留自检 |
+| `KeepInputCursorHidden()` / `RestoreInputCursor()` / `_pointerSource` / `_savedInputCursor` / `_inputCursorOverridden` | `HostWindow` | 与页面每拍 `Root.Cursor` 是同一杠杆上的两个写者，互相打架 |
+
+### 留下的（HC-Player 的实际形状）
+
+- `ChromeReveal`：唯一传感器（10Hz `GetCursorPos` 轮询）→ 唯一阈值（`Travelled` / `MovePixels=5`）→ 唯一时钟。
+- `HostWindow.KeepCursorHidden()`：每拍 `SetCursor(Blank)` + `SuppressCursorDisplay()`（负计数锁，幂等）+ `BlankClassCursors()`。
+- `PlayerPage.Nudge()`：每拍 `KeepCursorHidden()` + `Root.Cursor = BlankInputCursor`（按引用判等免重复写）。
+- 类光标那一格**一度被砍，被自检当场抓了回来**（见下）。
+
+### 自检抓回来的真回归：类光标是唯一够得着「别人的窗口」的杠杆
+
+砍掉全树类光标扫描后，自检 `藏鼠标真的到了系统` 连红两趟：指针压在画面的 XAML 岛桥窗口
+（`Microsoft.UI.Content.DesktopChildSiteBridge`，**属框架线程**）上时，桌面光标记录变回系统箭头，
+10 秒观察 **933/933 采样全部命中**；而同一份报告里指针压在自己窗口上藏匿时读数是 `[标志 0x00，形状 0x0]`
+——没有形状。差别只在这个窗口属于谁的队列。
+
+本进程的 `SetCursor` 与 `ShowCursor` 都只说给拥有队列的窗口；那个窗口的队列是框架的。它是一个 Win32 窗口，
+却按经典 `WM_SETCURSOR` 语义决定自己画什么，于是**类光标（`GCLP_HCURSOR`）成了唯一一条
+跨线程的杠杆**。HC-Player 自己就是这么干的（`SetClassLongPtr(hwnd, GCLP_HCURSOR, ...)`），成熟播放器里这不是
+补丁是标配。
+
+→ 加回**定向版**（不是原来的无限深全树）：`Tree()` 从本窗口起三层、上限 32 个，覆盖岛桥 / 输入站 / libmpv
+子窗口；每拍重说（`previous == blank` 直接跳过，`_classCursors` 不增长）；显示与 `Dispose` 都按记录逐个还原。
+
+### 闸门（本次）
+
+- **构建**：0 警 0 错（`build.cmd build`）。
+- **单测**：**880 全过**（基线 879 + 这次「替换 2 条锚相关测试为 3 条单传感器测试」的净 +1）。原来那两条
+  （「藏鼠标的参照点是藏下去那一刻」「锚定藏匿点不是活动」）换成「藏匿时判的是位移，不是离藏匿点有多远」
+  「藏匿期只有轮询一个传感器，事件不参与」「藏下去之后每一拍都稳，不是每两秒闪一下」。
+- **发布**：482 文件 / 301.5 MB / 11 GLSL ＝ 基线一致（safe-delete 假警报 2 次，按记忆重跑推进）。
+- **自检**：188 非空行 ＝ 基线；**唯一红是既有的《伪恋》跨季**。光标两格全绿，`类光标：藏着换掉 5 个类`、
+  `还原…类光标剩 0 个没还`、`静止桌面重申：系统无可见光标=True`。
+
+### 未验收
+
+- 真实 AyuGram 场景仍未端到端复现（第二屏收消息让第一屏隐藏光标显形）。自检在**指针确实压在本窗口**时
+  读到 `[标志 0x00，形状 0x0]`（真无形状），但那是探针摆出来的静止姿态，不等于用户的实播路径。
+- 本轮自检里「持续采样没有闪回系统箭头」有几次因**前台不在本窗口**而按规矩跳过（读数不判），
+  这是判据设计（showing bit 是桌面的），不是这次改动引入的。
+
 ## 闪烁修复：去掉反复注入，改用「无光标」抑制（2026-09-15，未提交）
 
 - 用户报告 10:00 版「鼠标偶尔闪一下」。日志里 10:02–10:16 一场播放「桌面光标失同步刷新」累计 66 次——上一版每拍补救式注入鼠标移动，本身就成了闪烁源，且仍是「箭头出现后再藏回去」。

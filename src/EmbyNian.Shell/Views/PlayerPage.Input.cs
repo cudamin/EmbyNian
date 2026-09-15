@@ -44,59 +44,41 @@ public sealed partial class PlayerPage : IWin32KeySink
         var point = e.GetCurrentPoint(Root).Position;
         var part = PartAt(point);
 
-        // An event is not a movement. See Moved: the rule's idle clock is what the cursor's two seconds are
-        // counted from, and restamping it for a pointer that never went anywhere is what 「鼠标指针还是不会
-        // 自动隐藏」 turned out to be.
+        // 单传感器（2026-09-15 重构）：这个事件不再参与「光标该不该藏」的判断——那条判断整个交给了
+        // PollPointer 对 GetCursorPos 的读数。原因是 WinUI 会为**没动过的指针**抬这个事件（树在它底下变
+        // 一次抬一次，chrome 650ms 收起就是一次），而事件的坐标来自框架重推的基准，真手与合成事件在坐标上
+        // 无法可靠区分。它在这里只剩一件事：控件浮层的显隐（鼠标进了上/下边缘带就该亮出来），那是位置问题，
+        // 不是「有没有动」的问题，事件带的位置正合适。
         if (!Moved(point, part)) return;
 
         if (_chrome.Pointer(point.Y, Root.ActualHeight, part, RailNear(point), Now)) Render();
     }
 
     /// <summary>
-    /// Whether a <c>PointerMoved</c> is a pointer moving. Three answers rather than one, because the cost of
-    /// each mistake is different:
+    /// Whether a <c>PointerMoved</c> is a pointer that actually went somewhere, for the purpose of the
+    /// <em>chrome's</em> reveal rule. Two answers, because the cost of each mistake is different:
     /// <list type="bullet">
-    /// <item>The same pixel as last time is never a movement. WinUI raises the event when what is under a
+    /// <item>The same pixel as last time is not a movement. WinUI raises the event when what is under a
     /// stationary pointer changes, and the chrome collapsing at 650 ms is exactly that.</item>
     /// <item>A hop under <see cref="ChromeReveal.MovePixels"/> is not a movement, and the anchor is deliberately
-    /// not advanced, so a mouse rattling one pixel on a desk never accumulates into activity while a hand that
-    /// really is dragging the thing crosses the threshold within a frame or two.</item>
+    /// not advanced, so a mouse rattling one pixel on a desk never accumulates into a movement while a hand that
+    /// really is moving crosses the threshold within a frame or two.</item>
     /// <item>A control arriving under a pointer that has not moved counts as movement of its own — 「停在进度条
-    /// 上」 and 「停在画面上」 are different states with the same position — but only while the cursor is showing.
-    /// Hidden, the chrome is down and there is nothing left to arrive; the one thing that can still flip the
-    /// answer there is this player's own one-pixel ask crossing a band boundary, which is a wake nobody
-    /// asked for.</item>
+    /// 上」 and 「停在画面上」 are different states with the same position — but only while the cursor is showing,
+    /// which is the only time the chrome is up to be revealed in the first place.</item>
     /// </list>
     /// <para>
-    /// Five pixels, the same number <see cref="ChromeReveal.Travelled"/> uses and the same correction this rule
-    /// has been through twice. It used to be two while the cursor was showing and <b>one</b> once it was hidden —
-    /// 「any move at all brings it back」, which is exactly the pixel a hide's own ask is made of, and whose echo
-    /// was only ever filtered by distance and a stopwatch together. An echo that arrived after the stopwatch ran
-    /// out was read as a hand, and 「鼠标隐藏了一会又会自动跑出来」 was the result. A hand reaching for the mouse
-    /// gets the same instant answer it always did: its first event is tens of pixels, and a slow one accumulates
-    /// against the anchor, which only moves on a movement that counted.
+    /// <b>What this method is not, as of the 2026-09-15 refactor.</b> It used to be the hide's second sensor and
+    /// carried the whole defence against synthetic events: a claimed step was parked while the cursor was hidden
+    /// and judged by the next poll, and a showing cursor's event was checked against the OS's live position. All
+    /// of that is gone with the second sensor — see <c>PollPointer</c> for why one source is enough and why the
+    /// XAML channel was the wrong one to trust. What is left is a position filter for a reveal rule that only
+    /// asks 「is the pointer over the picture, and is it moving enough to be a hand」, and a false positive here
+    /// costs a chrome panel that stays up for another second rather than a cursor that appears over the film.
     /// </para>
     /// <para>
-    /// This path only ever sees a report the event filter has already accepted, so what arrives here is a
-    /// movement by construction and it reaches <see cref="ChromeReveal.Pointer"/> as one. The hidden half of
-    /// the rule no longer trusts this anchor at all: it compares against the point the cursor was hidden at
-    /// (<see cref="ChromeReveal.HiddenTolerance"/>), because this anchor is the one a desk's rattle can walk
-    /// along.
-    /// </para>
-    /// <para>
-    /// <b>The eighth report retired 「by construction」.</b> The film of 08:22:44 caught a cursor hidden for
-    /// 29.7 seconds woken by one event claiming 「5,0 逻辑像素」 while the ten-hertz poll — the sensor that
-    /// reads the OS — swore the pointer had not moved a pixel: a synthetic move, raised because the tree under
-    /// a stationary pointer changed (AyuGram's toast and its focus changes were the user's repeatable trigger,
-    /// and 「我用其他播放器还有网页看视频的时候都不会出现这种问题」 is what pins the defect to this player's
-    /// own event path rather than to anything foreign on the desktop). So 「accepted by the filter」 is no
-    /// longer the end of the question, in two states. Hidden, a claimed step is parked in <see cref="_xamlClaim"/>
-    /// and judged by the next poll — the poll's <c>GetCursorPos</c> is the sensor that cannot be lied to about
-    /// where the pointer is. Showing, the event's coordinates are checked against the OS's live position and
-    /// anything beyond <see cref="ChromeReveal.SyntheticSlackPixels"/> of disagreement is dropped. The old
-    /// 「框架事件走了 …」 wake string is gone with the trust that produced it: a hidden cursor's wake is now
-    /// always the poll's own sentence, 「轮询问出了 … 物理像素」, which is also why the show line cannot be
-    /// subpoenaed out of this method any more.
+    /// This path only ever sees a report this filter has accepted, so what arrives at <see cref="ChromeReveal.Pointer"/>
+    /// is a movement by construction and it reaches the rule as one.
     /// </para>
     /// </summary>
     private bool Moved(Point point, ChromePart part)
@@ -105,50 +87,14 @@ public sealed partial class PlayerPage : IWin32KeySink
         var dx = first ? double.PositiveInfinity : Math.Abs(point.X - _pointerAt.X);
         var dy = first ? double.PositiveInfinity : Math.Abs(point.Y - _pointerAt.Y);
 
-        // This used to open with a filter for this player's own ask: a hide ended with an injected one-pixel
-        // round trip, and the island raised a real <c>PointerMoved</c> for it that had to be recognised or it
-        // would restamp the idle clock and undo the hide. That ask is gone — see <c>Nudge</c> for why, and for
-        // the log line 「框架事件走了 2,0 逻辑像素」 that retired it — so the threshold is the whole of the
-        // filter again, which is what it was always meant to be.
-        // 第八报（2026-09-15）：arrived 只认「控件来了」，不认「控件走了」。chrome 收起时控件从指针下
-        // 走掉，part 变成 None —— 位置一个像素没动，却被读成一次到达、重置空闲时钟。指针停在中段时这场
-        // 重置什么也看不见，只对光标可见：chrome 650ms 收一次、合成事件再送一次，「点开始播放后不会自动
-        // 隐藏、要点一下暂停再播放才藏」就是这条链。控件离开不是到达；None→控件的真到达照旧放行。
+        // 控件到达算一次移动，控件离开不算：chrome 收起时控件从指针下走掉，part 变成 None——位置一个像素
+        // 没动，旧代码却把「控件走了」读成「控件到了」。None→控件的真到达照旧放行。
         var arrived = part != _pointerOn && !_cursorHidden && part != ChromePart.None;
         var real = arrived || ChromeReveal.Travelled(dx, dy);
 
         if (!real)
         {
             _stillMoves++;
-
-            // The sub-threshold class, counted rather than logged: on an ordinary film this is a desk rattling,
-            // a sensor drifting or our own ask, and the count beside the wake reason is what tells those apart
-            // from a leak.
-            if (_cursorHidden && (dx > 0 || dy > 0)) _hiddenNoise++;
-
-            return false;
-        }
-
-        // 第八报（2026-09-15）：藏匿期的 XAML 移动声明不再立即唤醒。证据在 08:22:44 的现场：藏了 29.7 秒、
-        // 轮询计数一次没动，一个 XAML 事件却声称「5,0 逻辑像素」——指针物理没动，动的是框架重推的坐标基准
-        // （AyuGram 的 toast、焦点变化送来的合成移动）。所以藏匿期只把声明挂进 _xamlClaim，下一拍轮询拿
-        // GetCursorPos 裁决：OS 说指针真挪了（离藏匿点超过 HiddenTolerance）就照常醒，轮询写唤醒理由，
-        // 这条声明被顺手吸收；OS 说没动，声明就是谎言，丢弃、计入 _syntheticMoves。真手无感：第一个事件
-        // 就是几十像素，轮询百分之一秒后读到的也是同一个位移。
-        if (_cursorHidden)
-        {
-            _xamlClaim = point;
-            return false;
-        }
-
-        // 第八报（2026-09-15）：显示期与 OS 对质。事件坐标与 OS 实时位置差超过 SyntheticSlackPixels 的
-        // 「移动」是合成的——树在静止指针底下变了，框架重推了一遍基准。丢掉它，不更新锚、不重置时钟：
-        // 显示期误杀无害，手既然报得出事件就停不下来，而轮询一拍之内会把锚重新种好。
-        if (CursorPoint(out var osNow)
-            && (Math.Abs(point.X - osNow.X) > ChromeReveal.SyntheticSlackPixels
-                || Math.Abs(point.Y - osNow.Y) > ChromeReveal.SyntheticSlackPixels))
-        {
-            _syntheticMoves++;
             return false;
         }
 

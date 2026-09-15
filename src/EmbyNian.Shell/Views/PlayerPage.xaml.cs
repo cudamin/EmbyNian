@@ -136,72 +136,27 @@ public sealed partial class PlayerPage : UserControl
     private int _cursorNudges;
 
     /// <summary>
-    /// How many restatements have gone out since this hide began.
-    /// <para>
-    /// Unbounded since 2026-09-14, and that is the fix rather than an oversight: it was capped at three, a
-    /// figure inherited from the injected round trip and meaningless without it, and three asks are spent
-    /// inside the first three hundred milliseconds of a hide that then falls silent for minutes — which is
-    /// exactly 「隐藏后过两三秒又会自动冒出来」. See <see cref="Nudge"/>.
-    /// </para>
+    /// How many restatements have gone out since this hide began. Reported because 「静止期间那一遍一遍的重申
+    /// 活着吗」 is a fact only a count can state; unbounded, because three asks are spent inside the first three
+    /// hundred milliseconds and a hide lasts minutes.
     /// </summary>
     private int _nudgesThisHide;
 
-
     /// <summary>
-    /// Movements too small to be a hand, refused while the cursor was hidden, and what actually woke it.
-    /// <para>
-    /// Both are here because 「鼠标隐藏了一会又会自动跑出来」 had to be diagnosed from a log that only said the
-    /// cursor was back, never who had brought it. The counter is the reading that is *expected* to be non-zero
-    /// on an ordinary film — a desk rattling a pixel, a sensor drifting — and the string is the one that matters
-    /// when it goes wrong: a real hand prints as tens of pixels, a leak prints as one.
-    /// </para>
+    /// Why the cursor came back. Printed on the show line, because 「鼠标隐藏了一会又会自动跑出来」 had to be
+    /// diagnosed from a log that only said the cursor was back. Every path that shows it is expected to have
+    /// written a name here first, and the default string is a bug report in itself: 见到此串即有路漏标.
     /// </summary>
-    private int _hiddenNoise;
-
-    /// <summary>
-    /// A XAML <c>PointerMoved</c> that claimed a real step while the cursor was hidden, held over one tick
-    /// for the poll to judge.
-    /// <para>
-    /// The eighth report's film settled what the wake at 08:22:44 was: one XAML event claiming 「5,0 逻辑像素」
-    /// against a poll that had watched the pointer sit still for 29.7 seconds — a synthetic move, raised
-    /// because the tree under a stationary pointer changed. So a hidden cursor no longer takes an event's
-    /// word for a movement: the claim is parked here and the next poll judges it against the OS — the cursor
-    /// really somewhere else wakes the cursor as it always did (the claim is simply absorbed), the cursor
-    /// still within <see cref="ChromeReveal.HiddenTolerance"/> of where it was hidden makes the claim a lie,
-    /// and the lie is dropped and counted in <see cref="_syntheticMoves"/>. A hand never notices: its first
-    /// event is tens of pixels, and the poll reads the same displacement a hundredth of a second later.
-    /// </para>
-    /// </summary>
-    private Point? _xamlClaim;
-
-    /// <summary>
-    /// Synthetic <c>PointerMoved</c>s the two sensors have agreed to throw away — events whose coordinates
-    /// moved while the OS swore the pointer had not. Printed beside the noise count on the show line, because
-    /// the eighth report's question 「AyuGram 来消息鼠标就冒出来」 can only be closed by a number that says how
-    /// often the foreign event arrived and was refused. Cleared with the rest of the hide's books.
-    /// </summary>
-    private int _syntheticMoves;
-
     private string _woke = "未标注的显示路径（见到此串即有路漏标）";
 
     /// <summary>
     /// Where the pointer was the last time it was taken to have moved, and what was under it there.
     /// <para>
-    /// Held because 「静止不动」 is a claim about the pointer and WinUI's <c>PointerMoved</c> is not one. It is
-    /// also raised when the tree under a hand that never twitched changes — which the chrome collapsing at
-    /// 650 ms does, under a pointer resting in the middle of the picture — and a mouse sitting on a desk
-    /// can rattle a physical pixel with nobody touching it. Each of those used to restamp the idle clock,
-    /// and that clock is what the cursor's two seconds are counted from, so any of them repeating inside
-    /// two seconds meant 「鼠标指针还是不会自动隐藏」 with the chrome hiding perfectly well: a move in the
-    /// middle of the picture reveals nothing, so a restamp there is invisible except to the cursor.
-    /// </para>
-    /// <para>
-    /// It is the anchor for the <em>showing</em> half only. It is not a reference a hidden cursor's
-    /// reports are judged against, and deliberately so: this point moves on every accepted step, so a
-    /// desk nudging one pixel at a time walks it along and no step ever reaches the threshold. The hidden
-    /// half compares against the point the cursor was hidden at instead — <see cref="ChromeReveal.AnchorHidden"/>
-    /// and <see cref="ChromeReveal.HiddenTolerance"/>. That distinction is what the fourth report of
-    /// 「鼠标隐藏了一会然后又会自动冒出来」 turned out to be.
+    /// The reveal rule's 「静止」 is a claim about the pointer, so it has to be measured from a real position
+    /// rather than from the arrival of an event. This is that position on the XAML side, kept in the same
+    /// logical coordinates the pointer events and the hit tests use so that 「did it move」 and 「what is it
+    /// over」 stay one question. It does <em>not</em> drive the hide: the idle clock belongs to the rule and is
+    /// stamped only by <see cref="ChromeReveal.Moved"/> and by a report the caller calls a movement.
     /// </para>
     /// </summary>
     private Point _pointerAt = new(double.NaN, double.NaN);
@@ -227,24 +182,28 @@ public sealed partial class PlayerPage : UserControl
     private int _tickCount;
 
     /// <summary>
-    /// Where the OS said the cursor was on the last tick that took it to have moved, and whether there has
-    /// been such a tick yet since the player came up.
+    /// The one sensor the hide is driven by: where the OS says the cursor is, in physical screen pixels.
     /// <para>
-    /// The reveal rule's 「静止」 used to be entirely a claim about WinUI events, and the events are the one
-    /// layer here that nothing can check: a probe running on the UI thread cannot make WinUI deliver pointer
-    /// input to it, because input dispatch will not re-enter a dispatch already in progress — measurably so,
-    /// which is why the live probe reports 真移动 0 次 for a pointer it demonstrably moved. Polling the OS ten
-    /// times a second moves the load-bearing half of the question onto a path that both a probe and a film
-    /// take: a changed position is movement, an unchanged one is stillness, and neither answer depends on
-    /// whether an event was raised for it.
+    /// <b>This is the whole of 「has the mouse moved」.</b> The XAML <c>PointerMoved</c> channel is not asked
+    /// any more, and that is the refactor of 2026-09-15: WinUI raises that event for a pointer that never
+    /// moved — once per change to the tree under it — and a real film's log caught the consequence (a cursor
+    /// hidden for 29.7 seconds woken by an event claiming 「5,0 逻辑像素」 while this reading had not changed by
+    /// a pixel). <c>GetCursorPos</c> reports the sensor's true position; it cannot be told a story about a
+    /// coordinate base, so an unchanged reading is stillness and a changed one is a hand, and no third sensor
+    /// is needed to arbitrate between them. Same shape as HC-Player's <c>RegisterCursorActivity</c> and mpv's
+    /// mouse-event counter: one source, one clock, one answer.
+    /// </para>
+    /// <para>
+    /// <see cref="_polledKnown"/> is whether there has been a reading yet since the player came up. The first
+    /// one seeds the reference and is not itself a movement — there is nothing to compare it with.
     /// </para>
     /// </summary>
     private NativePoint _polled;
 
     private bool _polledKnown;
 
-    /// <summary>How many ticks found the cursor somewhere new. Printed beside the event count, because which
-    /// of the two paths noticed a movement is the whole difference between the last two rounds of this bug.
+    /// <summary>How many ticks found the cursor somewhere new. Printed on the show line, because it is the
+    /// number the whole hide rests on and a hide that stops working shows up here first.
     /// </summary>
     private int _polledMoves;
 
@@ -272,21 +231,6 @@ public sealed partial class PlayerPage : UserControl
     /// cursor — the one explanation for 「藏了但屏幕上还有箭头」 that no probe can stage.
     /// </summary>
     private int _shapeBack;
-
-    /// <summary>
-    /// 第九报（2026-09-15）：外部画回的对账脚手架。用户拔掉鼠标后仍确认「没错哦17-18 秒鼠标出现在了
-    /// 画面之上」而指针没动——外部画出的静止指针线程局部读数看不见（_shapeBack 恒 0），只有
-    /// HostWindow 的全局快照看得见。<see cref="_globalBase"/> 与 <see cref="_externalBase"/> 是藏匿开始
-    /// 那一刻的累计读数（hide 时钉下，日志算「本藏匿期几次」用），<see cref="_globalSeen"/> 与
-    /// <see cref="_externalSeen"/> 是本页上次打日志时的读数（差值非零即本拍又有事发生，独立成行打日志）。
-    /// </summary>
-    private int _globalBase;
-
-    private int _globalSeen;
-
-    private int _externalBase;
-
-    private int _externalSeen;
 
     /// <summary>
     /// The duration the ticks were laid out against. The marks arrive before mpv has a duration to place

@@ -128,6 +128,12 @@ public sealed partial class PlayerViewModel
             EnterPlayer();
             ShowCover(replaceExisting ? "正在切换…" : "正在获取媒体信息…");
 
+            // 背景图垫底从这一刻就开始取，不等媒体信息：用户点的卡片已经在手（海报用的就是它的图片
+            // 字段），等 OnNowPlayingChanged 才动手，加载态里遮罩就只剩纯色了（2026-09-15 用户截图
+            // 「第二点貌似没有生效」正是这个窗口）。详情就绪后 OnNowPlayingChanged 那一遍按 Id 去重、
+            // 取空会重试，这里不用等它。剧集卡先取剧集自己的背景图 —— 播的正是它。
+            _ = LoadCoverBackdropAsync(item);
+
             // A card fetched for browsing carries no MediaSources, and those are what hold the tracks,
             // the container and the runtime.
             var detail = item.MediaSources.Count > 0
@@ -514,7 +520,9 @@ public sealed partial class PlayerViewModel
         HideCover();
 
         // 遮罩垫底的背景图也是这一场播放的：退场就放下，下一场自己取自己的（2026-09-15）。
+        // 记录一并忘掉 —— 不然下一场点同一部片，Id 去重会把它当成「图还在」直接跳过。
         CoverBackdrop = null;
+        _coverBackdropItemId = null;
 
         // The other way out, and the usual one: the file ran to its end. Ticks stop with the player, so an
         // unsaved level would be lost here rather than a second late.

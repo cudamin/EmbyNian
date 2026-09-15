@@ -493,12 +493,21 @@ public sealed partial class PlayerViewModel : ObservableObject
     public partial string? CoverMessage { get; set; }
 
     /// <summary>
-    /// 遮罩垫底的背景图（2026-09-15「视频刚开播还在加载缓存没有正片画面时背景要用背景图」）。开播/换集
-    /// 那一刻按 本集背景图 → 父级（季/剧）背景图 → 缩略图 的顺序取一张（<see cref="LoadCoverBackdropAsync"/>），
-    /// 代际号防串台；取不到时保持 null，垫底退回纯色 —— 图是添头，不是承重墙。
+    /// 遮罩垫底的背景图（2026-09-15「视频刚开播还在加载缓存没有正片画面时背景要用背景图」）。取图的
+    /// 时机有两处：<see cref="PlayerViewModel.Transport.StartPlaybackAsync"/> 在遮罩亮起的同一刻就用
+    /// 用户点的卡片开始取（媒体信息还在路上，等 <see cref="PlayerViewModel.Events.OnNowPlayingChanged"/>
+    /// 才动手就晚了 —— 用户看到的加载态里图一张都还没有），详情就绪后的 OnNowPlayingChanged 再补一次
+    /// 更准的。顺序 本集背景图 → 父级（季/剧）背景图 → 缩略图（<see cref="LoadCoverBackdropAsync"/>），
+    /// 按条目 Id 去重、独立代际防串台；取不到时保持 null，垫底退回纯色 —— 图是添头，不是承重墙。
     /// </summary>
     [ObservableProperty]
     public partial BitmapImage? CoverBackdrop { get; set; }
+
+    /// <summary>背景图正在取/已就位的条目 Id：同一部片不重复下载；真正拿到图才算数，取空就忘掉以便重试。</summary>
+    private string? _coverBackdropItemId;
+
+    /// <summary>背景图自己的代际号。与 <c>_generation</c> 分开：提前取图时播放代际还没递增，跟着它会白取。</summary>
+    private int _coverGeneration;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ChapterCaptionVisibility))]

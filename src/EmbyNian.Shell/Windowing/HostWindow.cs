@@ -164,9 +164,6 @@ internal sealed class HostWindow : IDisposable
     private InputCursor? _blankInput;
 
     private bool _blankInputTried;
-    private InputPointerSource? _pointerSource;
-    private InputCursor? _savedInputCursor;
-    private bool _inputCursorOverridden;
 
     /// <summary>
     /// 键盘兜底（2026-09-15「新增esc退出全屏 按空格开始播放」）的三件：线程钩子句柄、钩子过程自己的
@@ -183,6 +180,13 @@ internal sealed class HostWindow : IDisposable
     /// runs on dispose.
     /// </summary>
     private readonly Dictionary<IntPtr, IntPtr> _classCursors = [];
+
+    /// <summary>How many class cursors are blank right now, for the self-check to read.</summary>
+    public int ClassCursorsBlanked => _classCursors.Count;
+
+    /// <summary>The most classes ever blanked in one hide, so a sweep that stopped finding windows reads as
+    /// a number that did not grow rather than as a silent zero.</summary>
+    public int ClassCursorsSwept { get; private set; }
 
     /// <summary>The island procedure ours was put in front of, and the one every other message goes to.</summary>
     private IntPtr _islandProcedure;
@@ -239,26 +243,37 @@ internal sealed class HostWindow : IDisposable
     /// <em>how</em>, and it lives here because it is a window-level Win32 arrangement rather than anything
     /// about the visual tree.
     /// <para>
-    /// It is not <c>ShowCursor</c>. That call keeps a per-thread display counter, it is what every guide
-    /// recommends, it reaches user32 (the counter comes back −1), and over a WinUI 3 XAML island it does
-    /// nothing at all — which is what 「鼠标指针还是不会自动隐藏」 was, twice. What does work is
-    /// <c>SetCursor(NULL)</c>: measured on this window, the thread's own cursor goes to 「none」 the moment it
-    /// is called and comes back on the call that restores a shape. The reason that took two attempts to
-    /// establish is that <c>GetCursorInfo</c> cannot see it — it reports the desktop's cursor, which is
-    /// recomputed when the pointer moves, and the pointer holding still is the entire circumstance here; it
-    /// went on reporting the arrow through a deliberate <c>SetCursor(IDC_WAIT)</c> that <c>GetCursor</c>
-    /// reported immediately. The counter is still set alongside, for the Win32 surfaces it does govern.
+    /// <b>It is deliberately four levers and not six.</b> The refactor of 2026-09-15 collapsed a set of
+    /// defences built up over eight bug reports — a hand-rolled <c>InputPointerSource.Cursor</c> round trip, a
+    /// global cursor-shape snapshot taken ten times a second, a synthetic-event adjudicator, a hiding-point
+    /// anchor — down to the arrangement the mature players actually use. HC-Player's
+    /// <c>SetApplicationCursorHidden</c> is the model: an idempotent short circuit, the display counter pinned
+    /// below zero, and a shape of 「nothing」 set on the queue. What the count and the shape cannot reach — a
+    /// window whose queue belongs to another thread, i.e. the island's own bridge the pointer sits on — is
+    /// covered by the class cursor (<see cref="BlankClassCursors"/>), the same <c>SetClassLongPtr</c> HC-Player
+    /// uses. And what none of those reach — a pointer over XAML content, whose shape the framework decides — is
+    /// covered by <see cref="BlankInputCursor"/> on the picture itself, and by answering <c>WM_SETCURSOR</c>.
     /// </para>
     /// <para>
-    /// One call is not the whole of it, because <c>SetCursor</c> lasts only until something sets a shape
-    /// again, and XAML's input site does exactly that from its own pointer handling without asking any window
-    /// procedure. So there are three sayings of the same thing: here, at the moment of hiding; in
-    /// <see cref="KeepCursorHidden"/>, re-said on the player's ten-hertz tick for as long as it holds; and in
-    /// answer to <c>WM_SETCURSOR</c>, in this window's own <c>Route</c> and in <see cref="IslandDispatch"/>
-    /// ahead of the island's procedure. The last of those is the classic mechanism and the least load-bearing
-    /// one of the three: the island's bridge window is measured by the self-check to take classic mouse
-    /// messages by the dozen and <c>WM_SETCURSOR</c> never, its pointer input arriving through the InputSite
-    /// APIs instead. Every other message goes through untouched.
+    /// <b>Why not <c>ShowCursor</c> alone.</b> That call keeps a per-thread display counter, it is what every
+    /// guide recommends, and over a WinUI 3 XAML island it does nothing at all — 「鼠标指针还是不会自动隐藏」,
+    /// twice. What works on the Win32 surfaces is <c>SetCursor(NULL)</c>: measured on this window, the thread's
+    /// own cursor goes to 「none」 the moment it is called and comes back on the call that restores a shape.
+    /// <c>GetCursorInfo</c> cannot see it — it reports the desktop's cursor, which is recomputed when the
+    /// pointer moves, and the pointer holding still is the entire circumstance here.
+    /// </para>
+    /// <para>
+    /// <b>Why the counter is pinned rather than toggled once.</b> A cross-process <c>SetCursor</c> injected
+    /// into this queue by another application (the ninth report's finding: a second-screen chat client waking
+    /// a hidden pointer) draws its shape only while the queue's display count is non-negative. The count is
+    /// private to the queue and only this process's <c>ShowCursor</c> can move it, so
+    /// <see cref="SuppressCursorDisplay"/> pins it below zero and holds it there — structurally immune to a
+    /// foreign shape, where every other lever here only speaks for this process. See
+    /// <see cref="CursorSuppressRestates"/> for the duel that established it.
+    /// </para>
+    /// <para>
+    /// <b>Idempotent, like HC-Player's.</b> Being told again what it already believes returns immediately; the
+    /// tick's re-assertion goes through <see cref="KeepCursorHidden"/>, which is where the per-tick work lives.
     /// </para>
     /// </summary>
     public bool CursorHidden
@@ -269,7 +284,6 @@ internal sealed class HostWindow : IDisposable
             if (_cursorHidden == value) return;
 
             _cursorHidden = value;
-            _cursorHidePublished = false;
 
             // Said now rather than waited for. Hiding happens *because* nothing is moving, so the next
             // WM_SETCURSOR may be seconds away — and it is the pointer coming back to life, by which time
@@ -278,17 +292,18 @@ internal sealed class HostWindow : IDisposable
 
             if (value)
             {
+                // 第九报（2026-09-15，自检抓回来的回归）：类光标是唯一够得着「别的线程拥有的窗口」的杠杆
+                // ——岛桥那个窗口的队列是框架的，SetCursor 与负计数锁都不在它的路上。见 BlankClassCursors。
                 BlankClassCursors();
-                KeepInputCursorHidden();
-                // 第九报（2026-09-15）：第五条杠杆上车——负计数锁（HC-Player 式）。压到底而非压一次：
-                // Chrome 那侧还会再压一格，历史遗留的深负计数也一并兜住。每个藏匿期重新计取证数。
+
+                // 第九报（2026-09-15）：负计数锁（HC-Player 式）。压到底而非压一次：历史遗留的深负计数也
+                // 一并兜住。每个藏匿期重新计取证数。
                 CursorSuppressRestates = 0;
                 SuppressCursorDisplay();
             }
             else
             {
                 RestoreClassCursors();
-                RestoreInputCursor();
                 RestoreCursorDisplay();
             }
         }
@@ -318,15 +333,14 @@ internal sealed class HostWindow : IDisposable
     /// <c>UIElement.ProtectedCursor</c>. Null when the wrapping could not be done, which leaves the cursor
     /// behaving exactly as it did before this was added.
     /// <para>
-    /// It is the lever the other four were missing. While the pointer is over XAML content the shape on screen
-    /// is the framework's to decide, and nothing done on this thread — <c>SetCursor</c>, <c>ShowCursor</c>, the
-    /// class cursors — is on that path. A real film's log says so plainly: one
-    /// hide lasted two minutes and five seconds with this queue holding no shape the whole time, the show count
-    /// at −1, five window classes blanked, the nudge sent, and <c>GetCursorInfo</c> answering 「system arrow」
-    /// from beginning to end. That last reading has one caveat as of 2026-09-05: the nudge of the day produced
-    /// no message at all, so nothing in that film ever asked the OS to collect any of those answers — see
-    /// <see cref="Native.NudgeCursorState"/>. See <see cref="InputCursors"/> for how the wrapping is done and
-    /// why there is no projected API for it.
+    /// It is the lever the queue-level ones cannot be: while the pointer is over XAML content the shape on
+    /// screen is the framework's to decide, and nothing done on this thread — <c>SetCursor</c>,
+    /// <c>ShowCursor</c> — is on that path. A real film's log says so plainly: one hide lasted two minutes and
+    /// five seconds with this queue holding no shape the whole time, the show count at −1, and
+    /// <c>GetCursorInfo</c> answering 「system arrow」 from beginning to end. The page hands this to
+    /// <c>Root.Cursor</c> for as long as the hide lasts (<c>PlayerPage.Chrome.cs</c>），which is the whole of
+    /// this lever's wiring — one assignment per tick, nothing to restore. See <see cref="InputCursors"/> for
+    /// how the wrapping is done and why there is no projected API for it.
     /// </para>
     /// <para>
     /// Built once and remembered, failure included: this is read ten times a second for as long as the cursor
@@ -350,30 +364,89 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// How many window classes are currently blanked, and how many were reached at all. Read by the
-    /// self-check: 「the sweep found the island's windows」 and 「it put every one of them back」 are the two
-    /// things that can go wrong with a lever this wide, and neither is visible from inside this file.
+    /// Whether the island's procedure is ours to answer through. False on a window whose island was never
+    /// created, or if the swap were ever refused — in which case the cursor simply stays visible, which is
+    /// the reason this is a fact the self-check can read rather than an assumption.
     /// </summary>
-    public int ClassCursorsBlanked => _classCursors.Count;
-
-    /// <summary>The high-water mark of <see cref="ClassCursorsBlanked"/>, which survives the restore.</summary>
-    public int ClassCursorsSwept { get; private set; }
+    public bool CursorHookInstalled => _islandProcedure != IntPtr.Zero;
 
     /// <summary>
-    /// Gives every window class in this window's tree a blank cursor, remembering what each had.
+    /// How many times <see cref="IslandDispatch"/> has answered <c>WM_SETCURSOR</c> with 「no cursor」. The
+    /// only evidence that does not depend on whose window the pointer happens to be over when a probe runs:
+    /// the OS's own 「is the cursor showing」 flag is about the desktop, and a self-check that starts behind
+    /// somebody else's full-screen player cannot ask it.
+    /// </summary>
+    public int CursorHidesAnswered { get; private set; }
+
+    /// <summary>
+    /// How many <c>WM_SETCURSOR</c> the interception has seen at all, answered or passed on. The count above
+    /// says our branch ran when asked; this one says the asking happens — a subclass installed on the wrong
+    /// one of the island's several windows would answer nothing and read exactly like one that was never
+    /// asked. A real pointer move over the picture has to move this, and that is the whole causal chain:
+    /// the messages arrive, and while the player wants no cursor they are answered with none.
+    /// </summary>
+    public int CursorAsksSeen { get; private set; }
+
+    /// <summary>
+    /// How many messages of any kind have reached <see cref="IslandDispatch"/>. The other two counts are about
+    /// one message; this one is about the subclass being alive at all, and it is what tells 「the island never
+    /// asks about the cursor」 apart from 「the swap did not take」 — two answers that look identical from a
+    /// <c>WM_SETCURSOR</c> count of zero.
+    /// </summary>
+    public int IslandMessagesSeen { get; private set; }
+
+    /// <summary>
+    /// 第九报（2026-09-15）：本线程队列的显示计数被抬回、随即又被锁回负区的累计调用数。用户原话「你直接抄
+    /// 这些开源项目吧」（HC-Player 的 <c>SetApplicationCursorHidden</c>：藏即 <c>while (ShowCursor(FALSE) &gt;= 0)
+    /// {{}}</c>，显即 <c>while (ShowCursor(TRUE) &lt; 0) {{}}</c>）。抄它的理由是本机对决实验（work\
+    /// cursor-suppress-test3.py，2026-09-15）：monitor 窗口压住指针后，挂进队列的跨进程 <c>SetCursor(cross)</c>
+    /// 在未压计数时把全局光标点亮成十字（0x988ms 处 flags=1、形状 0x10009）——这就是 14:26 那个每 ~1.1s 画
+    /// 「一道红线」的第三方画回者的机制复刻；而把计数压到 −2 之后，同一支画回笔又戳了九次，全局快照纹丝不动
+    /// （flags=0、形状 0x0），win32k 重绘光标时查的就是拥有队列的这个计数，任何后来者的 <c>SetCursor</c>
+    /// 都点亮不了负区里的光标。现有四条杠杆（SetCursor、ProtectedCursor、WM_SETCURSOR 拦截、Root.Cursor）
+    /// 全部只对本进程说话，这是第五条、也是唯一一条对挂队列的外部画回者结构免疫的。计数是队列私有的，只有
+    /// 本进程的 <c>ShowCursor</c> 能改它；>0 的读数＝有人在藏匿期把计数抬回过（框架或别的什么），锁回负区
+    /// 的动作本身就是取证。每个藏匿期清零。
+    /// </summary>
+    public long CursorSuppressRestates { get; private set; }
+
+    /// <summary>
+    /// 第九报（2026-09-15）：把本线程队列的显示计数压回负区。幂等——计数已在负区时一次调用都不发生，
+    /// 所以每拍重说毫无开销；一旦被谁抬回非负，下一个 100ms 拍就把锁重新上好。见
+    /// <see cref="CursorSuppressRestates"/> 的对决实验。
+    /// </summary>
+    private void SuppressCursorDisplay()
+    {
+        while (Native.ShowCursor(false) >= 0) CursorSuppressRestates++;
+    }
+
+    /// <summary>
+    /// 第九报（2026-09-15）：把显示计数拉回非负。同样抄 HC-Player：藏匿期间计数可能被压得很深，单次
+    /// <c>ShowCursor(TRUE)</c> 只抬一格，「显示之后光标不见了」就是负计数残留吞掉的——拉到非负为止。
+    /// </summary>
+    private void RestoreCursorDisplay()
+    {
+        while (Native.ShowCursor(true) < 0) { }
+    }
+
+    /// <summary>
+    /// The class cursor of every window a pointer over the picture can be on, set to the transparent shape.
     /// <para>
-    /// The other three sayings of 「no cursor」 are all <c>SetCursor</c>, and <c>SetCursor</c> is per message
-    /// queue: it reaches the screen only while the pointer is over a window this thread owns. Two of the
-    /// windows under the pointer during playback are not made by this thread — libmpv builds its own child
-    /// window on its own thread, and the island's windows are the framework's — and no amount of saying it
-    /// here reaches those. A class cursor does: it is process-wide, it can be set from any thread for a
-    /// window created by any other, and it is what the default <c>WM_SETCURSOR</c> handling answers with.
+    /// <b>为什么这一条不能跟别的杠杆一起砍。</b> 2026-09-15 的那次重构先砍了它（连同全树扫描），自检当场
+    /// 把它抓了回来：指针压在画面的 XAML 岛桥窗口（<c>Microsoft.UI.Content.DesktopChildSiteBridge</c>，
+    /// 属于框架线程）上时，桌面光标记录变回系统箭头，10 秒观察 933 次采样全红；而同一份报告里指针压在
+    /// 自己窗口上藏匿时，读数是 <c>[标志 0x00，形状 0x0]</c>——没有形状。差别就在这个窗口属于谁。
     /// </para>
     /// <para>
-    /// One entry per class rather than per window, which is what the handle comparison is for: the second
-    /// window of an already-blanked class would otherwise record 「blank」 as the shape to put back and leave
-    /// the class blank for good. Capped, and shallow, because a runaway sweep here means an invisible cursor
-    /// over the whole process.
+    /// 本进程的 <c>SetCursor</c> 与 <c>ShowCursor</c> 都只对拥有该队列的窗口说话，而这个窗口的队列是
+    /// 框架的；它是一个 Win32 窗口，却拿经典 <c>WM_SETCURSOR</c> 的语义决定自己画什么，于是类光标
+    /// （<c>GCLP_HCURSOR</c>）成了唯一一条跨线程也跨进程边界的杠杆。HC-Player 自己就是这么干的
+    /// （<c>SetClassLongPtr(hwnd, GCLP_HCURSOR, ...)</c>），成熟播放器里这不是补丁，是标配。
+    /// </para>
+    /// <para>
+    /// <b>和有界性。</b> 遍历从本窗口起、三层、最多 32 个（<see cref="Tree"/>），也就是岛桥、输入站、
+    /// video 窗口里 libmpv 的子窗口——一个压在画面上的指针能落在的全部地方。不做无限深的全树扫描：扫到的
+    /// 类越多，还原时越可能把别人在这期间新设的形状抹掉。每藏一次只记「原本是什么」，还原按记录逐个放回。
     /// </para>
     /// </summary>
     private void BlankClassCursors()
@@ -435,134 +508,31 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// Whether the island's procedure is ours to answer through. False on a window whose island was never
-    /// created, or if the swap were ever refused — in which case the cursor simply stays visible, which is
-    /// the reason this is a fact the self-check can read rather than an assumption.
-    /// </summary>
-    public bool CursorHookInstalled => _islandProcedure != IntPtr.Zero;
-
-    /// <summary>
-    /// How many times <see cref="IslandDispatch"/> has answered <c>WM_SETCURSOR</c> with 「no cursor」. The
-    /// only evidence that does not depend on whose window the pointer happens to be over when a probe runs:
-    /// the OS's own 「is the cursor showing」 flag is about the desktop, and a self-check that starts behind
-    /// somebody else's full-screen player cannot ask it.
-    /// </summary>
-    public int CursorHidesAnswered { get; private set; }
-
-    /// <summary>
-    /// How many <c>WM_SETCURSOR</c> the interception has seen at all, answered or passed on. The count above
-    /// says our branch ran when asked; this one says the asking happens — a subclass installed on the wrong
-    /// one of the island's several windows would answer nothing and read exactly like one that was never
-    /// asked. A real pointer move over the picture has to move this, and that is the whole causal chain:
-    /// the messages arrive, and while the player wants no cursor they are answered with none.
-    /// </summary>
-    public int CursorAsksSeen { get; private set; }
-
-    /// <summary>
-    /// How many messages of any kind have reached <see cref="IslandDispatch"/>. The other two counts are about
-    /// one message; this one is about the subclass being alive at all, and it is what tells 「the island never
-    /// asks about the cursor」 apart from 「the swap did not take」 — two answers that look identical from a
-    /// <c>WM_SETCURSOR</c> count of zero.
-    /// </summary>
-    public int IslandMessagesSeen { get; private set; }
-
-    /// <summary>
-    /// Says 「no cursor」 again, for a caller that can afford to keep saying it. One call at the moment of
-    /// hiding is enough only if nothing puts a shape back afterwards, and the island is several windows deep
-    /// with input handling of its own: a <c>WM_SETCURSOR</c> answered on an inner window this subclass never
-    /// sees would restore the arrow with no message here to notice it. Re-said on the player's ten-hertz tick
-    /// it costs one user32 call, and it stops of its own accord the moment the pointer moves — moving the
-    /// pointer is how the cursor is asked back, so <see cref="CursorHidden"/> is false by then.
-    /// </summary>
-    private bool _cursorHidePublished;
-    public int CursorDisplayRefreshes { get; private set; }
-
-    /// <summary>
-    /// How many ticks the <em>global</em> cursor snapshot changed while the hide was published — flags or shape
-    /// moved from the tick before. 第九报（2026-09-15）补的读数：用户在拔掉鼠标后仍确认「没错哦17-18 秒鼠标
-    /// 出现在了画面之上」，而独立监视器同刻量到指针没动——「出现≠移动」。外部画回来的静止指针不产生任何
-    /// 位移事件，线程局部的 <see cref="CursorShapeGone"/> 对它天生失明（_shapeBack 因此恒 0，藏着期间的
-    /// 形状对账一直平静得可疑）。
+    /// The per-tick half of <see cref="CursorHidden"/>: says it again, for a caller that can afford to keep
+    /// saying it. 单传感器（2026-09-15 重构）之后这里只剩三句话，而三句话都是「再说一遍」——没有发布门、
+    /// 没有注入、没有全局快照。
     /// <para>
-    /// 差分而不是绝对值，是 13:37 现场（app log 行 2151-2152）定的：藏匿行的全局快照读「形状 0x10003」
-    /// ——标准箭头，指针藏匿期间全局 hCursor 本来就不是我们的 blank 而是藏匿前遗留的箭头，谁也没把它
-    /// 清掉。拿绝对值判「形状非空＝外部画回」会每拍误报、Nudge 成灾；只有「这一拍相对上一拍变了」才是
-    /// 外部在动全局光标的信号。
+    /// <b>为什么每拍都说。</b> One call at the moment of hiding is enough only if nothing puts a shape back
+    /// afterwards, and there are several places that can: the island is several windows deep with input
+    /// handling of its own, and the framework recomputes the cursor over XAML content. Re-said on the player's
+    /// ten-hertz tick each costs one user32 call, and they stop of their own accord the moment the pointer
+    /// moves — moving the pointer is how the cursor is asked back, so <see cref="CursorHidden"/> is false by
+    /// then and this returns at the first line。
+    /// </para>
+    /// <para>
+    /// <b>为什么不再有「发布」这一步。</b> 曾经这里记一个 <c>_cursorHidePublished</c>，首拍发一次
+    /// <c>NudgeCursorState</c>（注入 ±1px 逼框架重算光标）。第九报的 14:03 反馈环把它定了罪：对静止指针
+    /// 注入位移，OS 重算光标并向指针压着的窗口重发 <c>WM_SETCURSOR</c>，该窗口把形状设回去，下一拍又看见
+    /// 「有形状」——每 ~1.15 秒一轮闪烁（用户「现在每过一会鼠标就会闪一下」）。注入本身是真实输入，
+    /// 只该留在自检里当探针。压制职守交给不产生输入的那几条：这里每拍 <c>SetCursor</c> + 负计数锁 +
+    /// 类光标，显示路径每拍 <c>Root.Cursor</c>，加上 <c>WM_SETCURSOR</c> 拦截。
     /// </para>
     /// </summary>
-    public int GlobalShapeChanges { get; private set; }
-
-    /// <summary>The latest global-snapshot change, evidence first: flags, shape, position, whose window.</summary>
-    public string LastGlobalChange { get; private set; } = "？";
-
-    /// <summary>
-    /// How many of the changes above qualified as an external shape sitting over this window — visible, not
-    /// ours, over us. 纯取证计数：<b>不再</b>对它做任何回应。
-    /// <para>
-    /// 压回（Nudge）是这一版自己试出来又被自己撤掉的。用户 2026-09-15 14:06 报「现在每过一会鼠标就会闪
-    /// 一下，然后消失」，app log 14:03:09-27 的循环把过程拍得干干净净：形状 0x45810247 在恒定位置
-    /// 1190,723 闪现 → 判「外部画回」→ Nudge → 265ms 后全局变 (0x0,0x0)（压制生效）→ ~917ms 后又闪——
-    /// 每 ~1.15 秒一轮。v3 独立监视器同刻每轮只记到 INJ 对（extra=0x0、dev=NULLDEV，即本进程 SendInput），
-    /// 没有任何硬件报文，位置纹丝不动——环的燃料就是我们自己的 Nudge：对静止指针注入 ±1px，OS 重算光标
-    /// 向指针压着的窗口重发 WM_SETCURSOR，该窗口把它的类光标设回去（0x45810247，非 mpv——mpv 已被
-    /// cursor-autohide=always 钉死），下一拍快照一看「有形状压在本窗口」又判外部、又 Nudge。Nudge 在这里
-    /// 不是压回，是「请出来」。压制职守交回既有的每拍压制链（SetCursor(0)、Root.Cursor、类光标 blank、
-    /// WM_SETCURSOR 拦截——它们不产生输入，也就不产生 WM_SETCURSOR 重问），这里退回纯取证。
-    /// </para>
-    /// </summary>
-    public int ExternalShapeRestores { get; private set; }
-
-    /// <summary>The last external restore, as 「标志 …,形状 … @…,压在本窗口」.</summary>
-    public string LastExternalShape { get; private set; } = "？";
-
-    /// <summary>
-    /// 第九报（2026-09-15）：本线程队列的显示计数被抬回、随即又被锁回负区的累计调用数。用户原话「你直接抄
-    /// 这些开源项目吧」（HC-Player 的 <c>SetApplicationCursorHidden</c>：藏即 <c>while (ShowCursor(FALSE) &gt;= 0)
-    /// {{}}</c>，显即 <c>while (ShowCursor(TRUE) &lt; 0) {{}}</c>）。抄它的理由是本机对决实验（work\
-    /// cursor-suppress-test3.py，2026-09-15）：monitor 窗口压住指针后，挂进队列的跨进程 <c>SetCursor(cross)</c>
-    /// 在未压计数时把全局光标点亮成十字（0x988ms 处 flags=1、形状 0x10009）——这就是 14:26 那个每 ~1.1s 画
-    /// 「一道红线」的第三方画回者的机制复刻；而把计数压到 −2 之后，同一支画回笔又戳了九次，全局快照纹丝不动
-    /// （flags=0、形状 0x0），win32k 重绘光标时查的就是拥有队列的这个计数，任何后来者的 <c>SetCursor</c>
-    /// 都点亮不了负区里的光标。现有四条杠杆（SetCursor、类光标、ProtectedCursor、WM_SETCURSOR 拦截）全部
-    /// 只对本进程说话，这是第五条、也是唯一一条对挂队列的外部画回者结构免疫的。计数是队列私有的，只有本
-    /// 进程的 <c>ShowCursor</c> 能改它；>0 的读数＝有人在藏匿期把计数抬回过（框架或别的什么），锁回负区的
-    /// 动作本身就是取证。每个藏匿期清零。
-    /// </summary>
-    public long CursorSuppressRestates { get; private set; }
-
-    /// <summary>
-    /// 第九报（2026-09-15）：把本线程队列的显示计数压回负区。幂等——计数已在负区时一次调用都不发生，
-    /// 所以每拍重说毫无开销；一旦被谁抬回非负，下一个 100ms 拍就把锁重新上好。见
-    /// <see cref="CursorSuppressRestates"/> 的对决实验。
-    /// </summary>
-    private void SuppressCursorDisplay()
-    {
-        while (Native.ShowCursor(false) >= 0) CursorSuppressRestates++;
-    }
-
-    /// <summary>
-    /// 第九报（2026-09-15）：把显示计数拉回非负。同样抄 HC-Player：藏匿期间计数可能被压得很深，单次
-    /// <c>ShowCursor(TRUE)</c> 只抬一格，「显示之后光标不见了」就是负计数残留吞掉的——拉到非负为止。
-    /// </summary>
-    private void RestoreCursorDisplay()
-    {
-        while (Native.ShowCursor(true) < 0) { }
-    }
-
-    private int _lastGlobalFlags = -1;
-    private IntPtr _lastGlobalShape = IntPtr.Zero;
-
     public void KeepCursorHidden()
     {
-        if (!_cursorHidden)
-        {
-            _cursorHidePublished = false;
-            _lastGlobalFlags = -1;
-            _lastGlobalShape = IntPtr.Zero;
-            return;
-        }
-        Native.SetCursor(IntPtr.Zero);
-        KeepInputCursorHidden();
+        if (!_cursorHidden) return;
+
+        Native.SetCursor(Blank);
 
         // 第九报（2026-09-15）：每拍把负计数锁重上一遍（幂等，计数已在负区时零调用）。重压的理由与
         // 上面那句 SetCursor 每拍重说同构——负计数锁是队列私有的，本进程里谁（框架的光标管理、未来
@@ -570,89 +540,10 @@ internal sealed class HostWindow : IDisposable
         // 的次数记进 CursorSuppressRestates，随 show 行出日志。
         SuppressCursorDisplay();
 
-        // 第九报（2026-09-15）：全局快照检测，每拍一次，放在 published 短路之外——首拍之后的每一拍
-        // 这里过去什么都不做（SetCursor 说过了、Nudge 发过了），而用户拔掉鼠标后指针仍被画回画面
-        // （「开始播放后我拔掉了鼠标 然后它在13点6分17-18秒又复现了一次」）：压制不能只在发布时说一次，
-        // 形状被外部重新放回来时得有人看见并把它按下去。见 WatchGlobalShape。
-        WatchGlobalShape();
-
-        if (_cursorHidePublished || Native.MouseButtonDown()) return;
-        if (!Native.GetCursorPos(out var at)
-            || Native.GetAncestor(Native.WindowFromPoint(at), Native.GaRoot) != Handle) return;
-
-        // Publish the initial hide once. Replaying pointer input after every external cursor change can flicker.
-        _cursorHidePublished = true;
-        if (Native.NudgeCursorState()) CursorDisplayRefreshes++;
-    }
-
-    /// <summary>
-    /// One global snapshot per tick, judged against the tick before. First tick of a hide builds the baseline
-    /// and acts not at all; every tick after that, a change in flags or shape is counted and named — and
-    /// nothing else. 见 <see cref="ExternalShapeRestores"/>：这里的职责是看见并记录「有人动了全局光标」，
-    /// 不是回击——回击（Nudge）实测会把形状请出来成环（14:03，用户报「每过一会鼠标就会闪一下」）。
-    /// <para>
-    /// The reading itself is <see cref="Native.CursorSnapshot"/>, the probe's outside witness, not
-    /// <see cref="CursorShapeGone"/>: the latter looks at this thread's queue, which is exactly the eye that
-    /// cannot see a shape somebody else put back — the user's phone photo of 13:37 (2026-09-15) shows the
-    /// arrow sitting on the picture with every thread-local reading saying 「no shape」.
-    /// </para>
-    /// </summary>
-    private void WatchGlobalShape()
-    {
-        if (Native.CursorSnapshot() is not { } shot) return;
-        var (flags, shape, at) = shot;
-
-        if (_lastGlobalFlags < 0)
-        {
-            _lastGlobalFlags = flags;
-            _lastGlobalShape = shape;
-            return;
-        }
-
-        var changed = flags != _lastGlobalFlags || shape != _lastGlobalShape;
-        _lastGlobalFlags = flags;
-        _lastGlobalShape = shape;
-        if (!changed) return;
-
-        GlobalShapeChanges++;
-        var overUs = Native.GetAncestor(Native.WindowFromPoint(at), Native.GaRoot) == Handle;
-        LastGlobalChange = $"标志 0x{flags:X}，形状 0x{shape:X} @{at.X},{at.Y}"
-            + (overUs ? "，压在本窗口" : "，不在本窗口");
-
-        var external = (flags & Native.CurShowing) != 0 && shape != IntPtr.Zero && shape != Blank && overUs;
-        if (!external) return;
-
-        ExternalShapeRestores++;
-        LastExternalShape = LastGlobalChange;
-    }
-
-    private void KeepInputCursorHidden()
-    {
-        if (BlankInputCursor is not { } blank) return;
-        if (_pointerSource is null && _content?.XamlRoot?.ContentIsland is { } island)
-            _pointerSource = InputPointerSource.GetForIsland(island);
-        if (_pointerSource is null) return;
-
-        if (!_inputCursorOverridden)
-        {
-            _savedInputCursor = _pointerSource.Cursor;
-            _inputCursorOverridden = true;
-        }
-
-        // A null input-source cursor suppresses the pointer rather than displaying a transparent image.
-        if (_pointerSource.Cursor is not null) _pointerSource.Cursor = null;
-    }
-
-    private void RestoreInputCursor()
-    {
-        if (!_inputCursorOverridden) return;
-
-        // Do not replace a new cursor already selected by XAML for the control under the pointer.
-        if (_pointerSource is not null && _pointerSource.Cursor is null)
-            _pointerSource.Cursor = _savedInputCursor;
-
-        _savedInputCursor = null;
-        _inputCursorOverridden = false;
+        // 第九报（2026-09-15，自检抓回来的回归）：类光标每拍重说。框架在藏匿期会把自己的箭头类光标
+        // 设回去（它管着岛桥那个窗口），而那个窗口不在本进程的队列上——SetCursor 与负计数锁都够不着它。
+        // 幂等：已经在透明上的那些窗口，previous == blank 直接跳过，_classCursors 不增长。
+        BlankClassCursors();
     }
 
     /// <summary>Whether content is currently extended into a custom non-client title bar.</summary>
@@ -2795,9 +2686,10 @@ internal sealed class HostWindow : IDisposable
         // dead hwnd as the reason the taskbar is standing aside.
         if (Handle != IntPtr.Zero && Fullscreen) Native.MarkFullscreen(Handle, false);
 
-        // Class cursors outlive windows: a class blanked while the film was paused and never put back would
-        // leave the next window of that class — in this process, for as long as it runs — with no cursor.
+        // 第九报（2026-09-15）：躲过了窗口生命周期的两条要还。类光标活过窗口本身（同一个类此后新建的
+        // 窗口共用它），负计数锁活过窗口本身（同一个 UI 线程上后继的窗口共用那个队列）。
         RestoreClassCursors();
+        RestoreCursorDisplay();
 
         if (_blank != IntPtr.Zero)
         {
@@ -2814,8 +2706,6 @@ internal sealed class HostWindow : IDisposable
         _video?.Dispose();
         _video = null;
 
-        RestoreInputCursor();
-        _pointerSource = null;
         _source?.Dispose();
         _source = null;
 

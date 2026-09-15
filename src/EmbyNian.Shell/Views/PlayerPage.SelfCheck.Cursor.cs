@@ -40,6 +40,14 @@ public sealed partial class PlayerPage
     /// than resting on any one message.
     /// </para>
     /// <para>
+    /// 单传感器（2026-09-15 重构）之后这一段也少了几条旧断言，随「六条杠杆砍到三条」一起退休：手工
+    /// <c>InputPointerSource.Cursor</c> 往返（那一对如今由每拍 <c>Root.Cursor = BlankInputCursor</c> 承担，
+    /// 见 <c>PlayerPage.Chrome.cs</c>，自检另有专条判它）、以及 <c>NudgeCursorState</c> 发布。类光标那一格
+    /// 一度也被砍过，被自检当场抓了回来（见「藏了以后窗口树上的类光标也换成了透明的」那一行），理由写在
+    /// <c>HostWindow.BlankClassCursors</c>：它是唯一够得着别的线程拥有的窗口的杠杆。退休的理由都是同一个：
+    /// 每多一条杠杆就多一个自伤源，但每一条真的在扛事的都不能砍。
+    /// </para>
+    /// <para>
     /// The reading the assertions are actually made of is <c>GetCursor</c>: the shape this thread's queue has,
     /// which is 「none」 while hidden and a real handle otherwise, and which the OS updates when
     /// <c>SetCursor</c> is called rather than when the pointer next moves. The OS's <c>CURSORINFO</c> is printed
@@ -124,32 +132,14 @@ public sealed partial class PlayerPage
 
         Native.SetCursor(Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor));
 
+        // The pointer input source, asked only whether it can be reached — the hand-rolled
+        // <c>InputPointerSource.Cursor</c> round trip this used to stage (save, hide, restore, and a new shape
+        // surviving the restore) is retired as of 2026-09-15 along with <c>HostWindow.KeepInputCursorHidden</c>:
+        // it was a second writer to the same lever, competing with the page's own per-tick
+        // <c>Root.Cursor = BlankInputCursor</c>. What remains here is the reachability question, because the
+        // probe's other input-source readings below still need the object.
         var inputSource = InputPointerSource.GetForIsland(Root.XamlRoot.ContentIsland);
         Want("能取得岛的指针输入源", inputSource is not null);
-        if (inputSource is not null)
-        {
-            var original = inputSource.Cursor;
-            using var initial = InputSystemCursor.Create(InputSystemCursorShape.Hand);
-            using var replacement = InputSystemCursor.Create(InputSystemCursorShape.IBeam);
-            try
-            {
-                inputSource.Cursor = initial;
-                _window.CursorHidden = true;
-                _window.KeepCursorHidden();
-                _window.CursorHidden = false;
-                Want("输入源恢复隐藏前的同一个光标", ReferenceEquals(inputSource.Cursor, initial));
-
-                _window.CursorHidden = true;
-                inputSource.Cursor = replacement;
-                _window.CursorHidden = false;
-                Want("恢复不覆盖框架新选的光标", ReferenceEquals(inputSource.Cursor, replacement));
-            }
-            finally
-            {
-                _window.CursorHidden = false;
-                inputSource.Cursor = original;
-            }
-        }
 
         // ---- 藏起来 ----
         SetCursorHidden(true);
@@ -172,10 +162,11 @@ public sealed partial class PlayerPage
         Want("藏了以后线程真的没有形状", NoShape());
         report.Add($"藏：窗口={_window.CursorHidden}，计数={_cursorCount}，线程形状={Mine()}，系统 {Says()}");
 
-        // The one lever here that is not tied to this thread's queue, and the reason it exists: two of the
-        // windows a pointer over a playing film sits on are made by somebody else's thread — the island's are
-        // the framework's, libmpv's is libmpv's — and a class cursor is the only 「no cursor」 that crosses that
-        // line. Asserted in both directions, because a class left blank outlives the window that blanked it.
+        // 第九报（2026-09-15，自检抓回来的回归）：类光标是唯一一条够得着「别的线程拥有的窗口」的杠杆。
+        // 那次重构一度把它跟全树扫描一起砍了，这一格当场判红：指针压在画面的岛桥窗口
+        // （Microsoft.UI.Content.DesktopChildSiteBridge，属框架线程）上时，桌面光标记录变回系统箭头，
+        // 10 秒观察 933 次采样全部命中；而指针压在自己窗口上藏匿时读数是 [标志 0x00，形状 0x0]。
+        // 本进程的 SetCursor/ShowCursor 只说给拥有队列的窗口，那个窗口的队列不是我们的——只剩类光标。
         Want("藏了以后窗口树上的类光标也换成了透明的", _window.ClassCursorsBlanked > 0);
         report.Add($"类光标：藏着换掉 {_window.ClassCursorsBlanked} 个类（这一趟共扫到 {_window.ClassCursorsSwept} 个）");
 
@@ -185,15 +176,14 @@ public sealed partial class PlayerPage
         // <c>PointerMoved</c>，DPI 缩放与绝对坐标取整把它的一像素读成两像素，于是「算作动手」的阈值被越过、静止时钟
         // 重新盖章，藏下去的光标一拍之后自己冒出来（2026-09-14 第二次报告，日志原文「框架事件走了 2,0 逻辑像素」）。
         // 成熟播放器没有一家靠注入刷新光标（mpv 答 WM_SETCURSOR、VLC 与 MPC-HC 直接 SetCursor、IINA 用系统 API），
-        // 所以这一条退休，改由下面那两声 <c>WM_SETCURSOR</c> 与类光标扫描承担。
+        // 所以这一条退休，改由下面那两声 <c>WM_SETCURSOR</c> 承担。
         // <para>
-        // 这里不再断言注入发得出去，改成断言「重申得出去」：不碰指针，把策略再说一遍，然后读线程的线程形状。这正是
+        // 这里不再断言注入发得出去，改成断言「重申得出去」：不碰指针，把策略再说一遍，然后读线程的形状。这正是
         // 真放片子时每一拍做的事（<c>PlayerPage.Nudge</c> → <c>HostWindow.KeepCursorHidden</c>），而它不产生任何
         // 指针事件 —— 也就是这条修复的全部要点。
         // </para>
         asked = _window.CursorAsksSeen;
         var queueShape = Native.GetCursor();
-        var refreshes = _window.CursorDisplayRefreshes;
         _window.KeepCursorHidden();
         var displayDeadline = Now + 1200;
         do
@@ -207,8 +197,7 @@ public sealed partial class PlayerPage
             && stationary.X == centre.X && stationary.Y == centre.Y
             && Native.GetAncestor(Native.WindowFromPoint(stationary), Native.GaRoot) == host)
             Want("静止指针的桌面光标确实隐藏", displayGone);
-        report.Add($"静止桌面刷新：{_window.CursorDisplayRefreshes - refreshes} 次，系统无可见光标={displayGone}，{Says()}");
-        var published = _window.CursorDisplayRefreshes;
+        report.Add($"静止桌面重申：系统无可见光标={displayGone}，{Says()}");
         var samples = 0;
         var flashes = 0;
         var watchUntil = Now + 10000;
@@ -246,9 +235,8 @@ public sealed partial class PlayerPage
         if (!staged)
             report.Add("藏匿中途被掀了（chrome 状态机经 Render 同步路显示——既有竞态，与负计数锁无关），以下藏匿态判据不判");
 
-        Want("隐藏期间不重复注入鼠标移动", published == _window.CursorDisplayRefreshes);
         if (samples > 0) Want("持续采样没有闪回系统箭头", flashes == 0);
-        report.Add($"持续观察10秒：有效采样 {samples} 次，箭头 {flashes} 次，追加注入 {_window.CursorDisplayRefreshes - published} 次"
+        report.Add($"持续观察10秒：有效采样 {samples} 次，箭头 {flashes} 次"
             + (samples > 0 ? string.Empty : "（前台不在本窗口，这一读数不判）"));
         var queueWas = queueShape == IntPtr.Zero ? "无" : $"0x{queueShape:X}";
         report.Add($"重申一遍（不挪鼠标）：线程形状 {queueWas}→{Mine()}，我们这两个过程问到 {asked}→{_window.CursorAsksSeen}");
@@ -285,27 +273,12 @@ public sealed partial class PlayerPage
         if (staged) Want("下一拍就又藏回去", NoShape());
         report.Add($"被放回箭头后，一拍就藏回：线程形状={Mine()}");
 
-        if (inputSource is not null)
-        {
-            // 藏匿被掀后这段一步都不能再走：inputSource.Cursor = arrow 会把「已显示」写得更死，
-            // 而 Nudge() 在非藏匿态会把 Root.Cursor 钉成透明（15:42 现场里「还原以后画面把光标
-            // 交还给框架」那条红就是这么被自己人打出来的）。整段对空气断言，跳过。
-            if (staged) Want("藏了以后输入源不显示光标", (inputSource.Cursor is null));
-            if (staged)
-            {
-                using var arrow = InputSystemCursor.Create(InputSystemCursorShape.Arrow);
-                for (var attempt = 0; attempt < 3; attempt++)
-                {
-                    inputSource.Cursor = arrow;
-                    Want("输入源箭头覆盖确实发生", ReferenceEquals(inputSource.Cursor, arrow));
-                    Want("页面光标没变而输入源已经变了", ReferenceEquals(Root.Cursor, _window.BlankInputCursor));
-                    Nudge();
-                    Want("不移动鼠标也恢复输入源无光标", (inputSource.Cursor is null));
-                    Want("修复输入源不退出隐藏状态", _cursorHidden && _window.CursorHidden);
-                }
-                report.Add("输入源被改回箭头：连续三次均在不移动鼠标、不改页面光标的情况下恢复无光标");
-            }
-        }
+        // 第九报（2026-09-15）退休的那一段在更早的版本里站在这儿：把 <c>inputSource.Cursor</c> 连续三次改成
+        // 真箭头，再断言「不移动鼠标也能恢复无光标」。它测的是 <c>HostWindow.KeepInputCursorHidden</c> 那条
+        // 手工往返，而那条往返随三件套上车一起退休了 —— 现在藏匿期唯一写输入源的人是页面自己（<c>Render</c>
+        // 里每拍 <c>Root.Cursor = BlankInputCursor</c>），覆盖与恢复都是同一个赋值，没有「恢复」这一步可测。
+        // 页面那一侧仍有专条（<c>PlayerPage.SelfCheck.Cursor.cs</c> 的「藏着时画面上的光标是透明的」与
+        // <c>ProbeCursorAlive</c> 里同样的判据），留在这里的是它退休的理由，不是一条对空气的断言。
 
         // ---- 还原 ----
         SetCursorHidden(false);
@@ -711,24 +684,32 @@ public sealed partial class PlayerPage
 
             if (_cursorHidden)
             {
-                var source = InputPointerSource.GetForIsland(Root.XamlRoot.ContentIsland);
-                using var arrow = InputSystemCursor.Create(InputSystemCursorShape.Arrow);
+                // 2026-09-15 单传感器重构：这一段原来测的是 <c>HostWindow.KeepInputCursorHidden</c> —— 把
+                // <c>InputPointerSource.Cursor</c> 覆盖成真箭头，再断言隐藏期每拍把它压回 null。那条往返
+                // 已经退休（它和页面自己的 <c>Root.Cursor</c> 是同一个杠杆上的两个写者，会互相打架），现在
+                // 藏匿期写光标的人是页面自己：<c>Render</c> 里那句 <c>Root.Cursor = _window.BlankInputCursor</c>，
+                // 由真实计时器每拍重说。所以这里改成测那一句 —— 覆盖 <c>Root.Cursor</c>（框架给控件选形状
+                // 时走的就是这个属性），再让真实计时器推几拍，必须被重新压回透明。
+                //
+                // 这也正是用户报的那个场景：鼠标压在画面（XAML 内容）上时形状归框架决定，Win32 那几条杠杆
+                // 一条都不在它的路上，唯一的把手就是这个属性。
                 var beforeRepair = _tickCount;
                 var beforeMoves = _polledMoves;
-                source.Cursor = arrow;
+                using var arrow = InputSystemCursor.Create(InputSystemCursorShape.Arrow);
+                Root.Cursor = arrow;
                 var until = Now + 1000;
-                while (Now < until && ReferenceEquals(source.Cursor, arrow))
+                while (Now < until && ReferenceEquals(Root.Cursor, arrow))
                 {
                     Pump();
                     Thread.Sleep(5);
                 }
 
-                var repaired = source.Cursor is null;
-                Want($"{where}真实计时器修复输入源光标", _tickCount > beforeRepair && repaired);
-                Want($"{where}输入源刷新不唤醒静止指针", _cursorHidden && _polledMoves == beforeMoves);
-                report.Add($"{where}输入源覆盖回归：真实计时器推进 {_tickCount - beforeRepair} 拍，恢复无光标={repaired}，仍隐藏={_cursorHidden}");
-                // Keep the temporary cursor alive until the source has released it, including a failed assertion.
-                if (ReferenceEquals(source.Cursor, arrow)) source.Cursor = _window.BlankInputCursor;
+                var repaired = !ReferenceEquals(Root.Cursor, arrow);
+                Want($"{where}真实计时器修复页面光标", _tickCount > beforeRepair && repaired);
+                Want($"{where}页面光标刷新不唤醒静止指针", _cursorHidden && _polledMoves == beforeMoves);
+                report.Add($"{where}页面光标覆盖回归：真实计时器推进 {_tickCount - beforeRepair} 拍，"
+                    + $"压回透明={repaired}，仍隐藏={_cursorHidden}");
+                if (ReferenceEquals(Root.Cursor, arrow)) Root.Cursor = _window.BlankInputCursor;
             }
 
             // And not before: the rule has one window for the chrome and a longer one for the cursor, and a
@@ -771,7 +752,7 @@ public sealed partial class PlayerPage
                 if (felt) Want($"{where}挪 1 个像素不叫醒它", _cursorHidden);
 
                 report.Add($"{where}藏好后挪 1 个像素：{(felt ? string.Empty : "指针没挪动，这一句只作参考")}"
-                    + $"过后{(_cursorHidden ? "还藏着" : "又显示了")}，挡回去 {_hiddenNoise} 次（阈值以下的抖动）");
+                    + $"过后{(_cursorHidden ? "还藏着" : "又显示了")}（阈值 {ChromeReveal.MovePixels} 像素以下的抖动不算动手）");
 
                 // Put back before the 「一动就回来」 leg below, which measures from the centre.
                 Native.SetCursorPos(still.X, still.Y);
