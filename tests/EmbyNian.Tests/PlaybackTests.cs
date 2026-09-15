@@ -3794,15 +3794,38 @@ internal static class PlaybackTests
                 3200, 940, at + ChromeReveal.WarpConfirmMilliseconds), "手在走，下一拍就该放行");
             Assert.False(chrome.WarpPendingAt.HasValue, "认成手之后挂起要清掉");
             Assert.Equal(0, chrome.WarpsIgnored, "叫醒不是「挡掉一次」");
+        });
 
-            // 认成手之后挂起就清了，调用方那一拍直接走唤醒路（不等返回）。所以这里再喂一个新坐标，
-            // 走的是「又一次第一步」，照例挂起 —— 挂起是每段位移的入门手续，不是一次性的通行证。
-            // 这条断言就是防「一次确认把后面都免检」的回归。
-            Assert.False(chrome.WarpOrHand(3260, 950, at + 200), "新的一段位移，还得重新挂起");
-            Assert.True(chrome.WarpPendingAt.HasValue, "挂起状态要重新立起来");
-            // 下一拍又动，还是放行 —— 循环不咬死。
+        Test("播放器控件：跳变判掉之后手再走一步，不用重新挂起", () =>
+        {
+            // 自检里「真手连着走两拍」第一次红就红在这儿：跳变被裁决掉之后，手的第一步又落进
+            // 「藏匿期第一个够阈值的位移」那条，于是每一拍都在挂起、永远轮不到唤醒。
+            // 注入的形状是「搬完就冻住」，它不会在下一拍再搬一次 —— 所以刚判过一跳之后紧接着来的
+            // 那一记位移只能是手，直接放行。挂起是「每段安静之后的第一记」的入门手续，不是每拍重来。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+
+            // 一次纯跳变：挂起 → 下一拍冻在原地 → 判掉、记进账。
+            Assert.False(chrome.WarpOrHand(3160, 932, at));
+            Assert.False(chrome.WarpOrHand(3160, 932, at + ChromeReveal.WarpConfirmMilliseconds));
+            Assert.Equal(1, chrome.WarpsIgnored);
+            Assert.False(chrome.WarpPendingAt.HasValue);
+
+            // 紧接着手走一步（同一段藏匿里）：必须直接放行，不许再挂起。
             Assert.True(chrome.WarpOrHand(
-                3300, 960, at + 200 + ChromeReveal.WarpConfirmMilliseconds), "手还在走，照样放行");
+                3200, 940, at + ChromeReveal.WarpConfirmMilliseconds + 100),
+                "刚判掉一跳之后的那记位移是手，直接放行");
+            Assert.Equal(1, chrome.WarpsIgnored, "放行不是又挡掉一次");
+            Assert.False(chrome.WarpPendingAt.HasValue, "放行之后不该留下挂起");
+
+            // 放行过一次之后又恢复「先挂起」的常态：手停一会儿再来，第一步照例要过手续。
+            Assert.False(chrome.WarpOrHand(3400, 960, at + 5000), "放行的免检只给紧接的那一记");
+            Assert.True(chrome.WarpPendingAt.HasValue, "常态下第一步还是要先挂起");
         });
 
         Test("播放器控件：光标一显示，藏匿期那笔跳变挂起就作废", () =>

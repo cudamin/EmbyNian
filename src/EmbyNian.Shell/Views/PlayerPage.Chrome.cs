@@ -211,11 +211,23 @@ public sealed partial class PlayerPage
 
         // 藏匿期第一个够阈值的位移：先挂起一拍，别急着认成手。第十一报的全部胜负都在这一句上 ——
         // 位置确实是 OS 给的、确实够 60 像素，但它既可能是一只手、也可能是一个注入。到下一拍才知道。
+        // 例外是刚刚判过一次纯跳变（WarpOrHand 里那个标记）：注入的形状是「搬完就冻住」，不会下一拍
+        // 再搬一次，所以这一记只能是手在走 —— 直接放行，不再二次挂起，否则手走两拍永远叫不醒。
         if (_cursorHidden && _polledKnown)
         {
-            _chrome.WarpOrHand(screen.X, screen.Y, Now);
-            _polled = screen;
-            _polledKnown = true;
+            if (!_chrome.WarpOrHand(screen.X, screen.Y, Now))
+            {
+                // 挂起立起来了：把参照点推进到挂起点，免得下一拍又拿同一个 60 当新位移。
+                if (_chrome.WarpPendingAt.HasValue)
+                {
+                    _polled = screen;
+                    _polledKnown = true;
+                }
+
+                return;
+            }
+
+            WakeFromPoll(screen, dx, dy);
             return;
         }
 
@@ -250,12 +262,18 @@ public sealed partial class PlayerPage
         // consequence; write it in that order.
         if (wasHidden) _woke = $"轮询问出了 {dx},{dy} 物理像素，读数 {screen.X},{screen.Y}，{PointerOwner()}";
 
-        // Told either way, and told as a movement: this point is the last thing a hand did as far as this rule
-        // is concerned, and the countdown restarts here. The reseed is the better answer when it works, because
-        // it carries where the pointer is and not just that it moved; when it cannot translate the position the
-        // movement is still news: both clocks have to start from the same instant or 「静止两秒」 is measured
-        // from a stamp the rule never got.
-        if (!ReseedPointer(moved: true) && _chrome.Moved(Now)) Render();
+        // Render() outside the condition, and that is a fix rather than a shrug. Both calls inside report 「did
+        // the rule change its mind」, and 「no」 is a legitimate answer — the pointer moved through a stretch
+        // where the chrome was already up and the rule stays up. But _cursorHidden is this side's copy of that
+        // answer and Render is the only place the two are reconciled, so skipping it on 「no」 lets the copy
+        // drift from the rule. Drifting is not cosmetic: the next poll tests _cursorHidden to decide whether a
+        // movement is a wake or something to suspend, and a copy stuck on 「hidden」 makes a real hand's second
+        // step look like the first step of a warp — the cursor stays down while the hand keeps moving. Found by
+        // the self-check's 「真手连着走两拍」, which is the only place that reads this side's copy right after a
+        // wake. The reseed renders for itself when it has something to say, so this extra call is only paid on
+        // 「the rule was already awake」 — once per wake, which is nothing.
+        if (!ReseedPointer(moved: true)) _chrome.Moved(Now);
+        Render();
     }
 
     /// <summary>

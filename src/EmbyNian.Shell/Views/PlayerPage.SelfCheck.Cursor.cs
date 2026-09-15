@@ -947,14 +947,37 @@ public sealed partial class PlayerPage
         _polledKnown = true;
         Native.GetCursorPos(out _polled);
 
-        var hiddenAt = Now;
-        while (Now - hiddenAt < 2600) { Pump(); Thread.Sleep(20); }
-        OnTick(this, EventArgs.Empty);
-        Pump();
-
-        if (!_cursorHidden)
+        // 藏匿先得成立，判据才有东西可判。而这一关最容易被环境噪声掐掉的是开头这一步：鼠标真在动、
+        // 或光标正在被别的窗口按着，2600 毫秒的等待窗就不够它静下来。跳过是「前提没了不装绿」的正解，
+        // 但这一关恰是第十一报的修复本身，静默跳过等于这一报根本没被验证过 —— 所以先再试一轮。
+        var settled = false;
+        for (var attempt = 0; attempt < 2 && !settled; attempt++)
         {
-            report.Add("这一次没能先藏下去（多半是有人真在动鼠标），这一关只作参考");
+            if (attempt > 0)
+            {
+                report.Add("第一次没能先藏下去，等一拍再来一次");
+                SetCursorHidden(false);
+                _chrome.Reset(Now);
+                Render();
+                Thread.Sleep(800);
+                if (!Native.SetCursorPos(centre.X, centre.Y)) Native.MovePointerTo(centre.X, centre.Y);
+                Pump();
+                OnTick(this, EventArgs.Empty);
+                SetCursorHidden(true);
+                _polledKnown = true;
+                Native.GetCursorPos(out _polled);
+            }
+
+            var retryAt = Now;
+            while (Now - retryAt < 2600) { Pump(); Thread.Sleep(20); }
+            OnTick(this, EventArgs.Empty);
+            Pump();
+            settled = _cursorHidden;
+        }
+
+        if (!settled)
+        {
+            report.Add("两次都没能先藏下去（多半是有人真在动鼠标），这一关只作参考");
             SetCursorHidden(false);
             _chrome.Reset(Now);
             _chrome.Tick(Now + SettleMilliseconds);
@@ -1004,6 +1027,10 @@ public sealed partial class PlayerPage
                 Native.SetCursorPos(now1.X + 40 * (i + 1), now1.Y + 10 * (i + 1));
                 Pump();
                 OnTick(this, EventArgs.Empty);
+                Native.GetCursorPos(out var probe);
+                report.Add($"  第 {i + 1} 拍搬到 {probe.X},{probe.Y} 后：光标{(_cursorHidden ? "还藏着" : "回来了")}"
+                    + $"，规则{(_chrome.CursorHidden ? "藏" : "显")}"
+                    + $"，挂起{(_chrome.WarpPendingAt is { } wp ? $"{wp.X},{wp.Y}" : "无")}");
                 Thread.Sleep(120);
             }
 

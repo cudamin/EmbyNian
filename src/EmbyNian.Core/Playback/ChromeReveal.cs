@@ -191,6 +191,17 @@ public sealed class ChromeReveal
     private long _warpSeenAt;
 
     /// <summary>
+    /// 上一拍刚裁决完一次纯跳变。手在鼠标上是一个<b>过程</b>：跳变之后再来的那一次位移不可能是又一次
+    /// 同步注入（注入的形状就是「搬完就冻住」），所以它只能是手，直接放行，不再二次挂起。
+    /// <para>
+    /// 没有这个标记的时候，每次够阈值的位移都要重新挂起一拍，于是「手连着走两拍」被读成「跳变 + 又一次
+    /// 跳变」，光标永远轮不到唤醒——自检里那条「真手连着走两拍要能叫醒光标」正是这么红的。挂起是<b>每段
+    /// 安静之后的第一记</b>位移的入门手续，不是每一拍都要重来的仪式。
+    /// </para>
+    /// </summary>
+    private bool _warpJustCleared;
+
+    /// <summary>
     /// 藏匿期被认出来、并据以继续藏下去的一次性跳变，累计多少次。给日志和自检读：这个数不涨，
     /// 就说明外屏那条路要么没在动、要么这次修法根本没生效。
     /// </summary>
@@ -219,6 +230,15 @@ public sealed class ChromeReveal
     /// <param name="now">这一拍的时钟，与规则其它地方同一个。</param>
     public bool WarpOrHand(int x, int y, long now)
     {
+        // 上一拍刚判掉一次纯跳变：紧接着又来一次位移。同步注入的形状是「搬完就冻住」，它不会在下一拍
+        // 再搬一次；所以这一记只能是手在走。直接认，不二次挂起——否则手走两拍会被读成两次跳变，永远
+        // 叫不醒光标。
+        if (_warpJustCleared)
+        {
+            _warpJustCleared = false;
+            return true;
+        }
+
         // 已经挂着一次待裁决的位移：看这一拍与挂起点的关系。
         if (_warpPending)
         {
@@ -229,10 +249,11 @@ public sealed class ChromeReveal
                 return true;
             }
 
-            // 与挂起点一字不差，而且已经过了一拍：一次纯跳变。继续藏。
+            // 与挂起点一字不差，而且已经过了一拍：一次纯跳变。继续藏，并记住「刚判过一跳」。
             if (now - _warpSeenAt >= WarpConfirmMilliseconds)
             {
                 _warpPending = false;
+                _warpJustCleared = true;
                 WarpsIgnored++;
                 return false;
             }
@@ -261,6 +282,7 @@ public sealed class ChromeReveal
     {
         _warpPending = false;
         _warpSeenAt = 0;
+        _warpJustCleared = false;
     }
 
     /// <summary>
