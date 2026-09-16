@@ -2,6 +2,48 @@
 
 最后更新：2026-09-16
 
+## 第十六报：见证定手——注入位移和真手用「有没有原始输入」分开判；顺手拔掉主页启动崩溃的雷（2026-09-16，四道闸门全绿，已提交 a374f98 并推 origin）
+
+**用户原话：「没修好，还是一样的毛病。」** 十五报给免检闩加了期限、挂起判据改成「离落点走了才叫手」，
+自检两条腿全绿，真机 AyuGram 静音消息照样把光标叫醒。结论：位置轮询这条路**结构上分不出注入和手**——
+`SetCursorPos` 把位置真的搬了，单传感器只看得见「位置变了」，后面「像不像手」的裁决全是猜。
+
+### 修法：装第二只耳朵——原始输入见证（`RealInputWitness`，新文件）
+
+- 探针证底（`work/hook-probe.py`、`work/rawinput-phase.py`）：真手每步都带 **`WM_INPUT` 且 `hDevice≠0`**；
+  `SetCursorPos` 一记 `WM_INPUT` 都不产生；`SendInput` 产生的 `WM_INPUT` 全部 **`hDevice=NULL`**。三类判然分开。
+- Witness 在 XAML 岛 HWND 上注册 `WM_INPUT`（`RIDEV_INPUTSINK`：不消费、不抢焦点、后台也收），只记一件事：
+  **最近一次真实输入是何时**。位移、按键、滚轮都算。
+- `ChromeReveal.HideMoveVerdict` 的第一问从「像不像手」改成「**300ms 内见过真输入吗**」（`WarpWitnessMilliseconds=300`，
+  与十五报的 `WarpHandMilliseconds=200` 并存：闩的期限照旧，闩内放行也要求见证）。刚见过 → 判手放行；
+  没见过 → 注入，藏回去记账。**AyuGram 那种纯 `SetCursorPos` 位移从此没有免检通道。**
+- 名牌同步补字段：显示行带「见证 真 x/注 y/伪 z、末次真输入 Nms 前」，藏匿取样行同样带。
+- 自检新增腿：隔免检期再搬一次 60 仍藏（第二条消息腿）、三步动画注入不醒（挡 2→5 次）、每步补见证走两拍判手唤醒。
+
+### 顺手拔掉的雷：主页启动崩溃（占用冲突）
+
+写完见证第一轮自检只剩 **7 行**——走到「主页」就死：`UnauthorizedAccessException: Calling Scale API is not
+allowed … GetElementVisual property in use`。这雷埋了几周、当天早上才炸：**系统动画
+（`SPI_GETCLIENTAREAANIMATION`）一直关着，`HomeMotion.Reveal` 走 `AnimationsEnabled` 短路从不真跑；那早
+系统动画开了，第一枪走实**。
+
+- 机制：`Reveal` 用组合动画（`SetIsTranslationEnabled`＋`GetElementVisual`＋StartAnimation）**占用**了元素的
+  Visual；WinUI 3 渲染趟要往同一个 Visual 写 Scale → 被拒 → 未处理异常。
+- 三轮二分（每轮全构建＋发布＋自检）定罪占用者：① TargetOf 改取直接子元素＋ShelfTemplate 包 Grid → 崩；
+  ② 再关 TextInk 影子 → 崩；③ 再短路 Reveal → **189 行干净跑完**。占用者就是 Reveal 的目标，实验说话。
+- 修法＝弃组合、回 XAML：`Reveal` 改 Storyboard（Opacity＋TranslateTransform.Y，同 HomeBanner Rise/Push 的路）；
+  `DriftFor` 不偷外来变换；`Stop` 幂等可空。`ShelfTemplate` 外面包一层 Grid——**ItemsRepeater 的数据模板不包
+  ContentPresenter，模板根就是 Repeater 的直接子元素**，直接子元素绝不能成为动画目标（此前两次「解包
+  ContentPresenter」的修法都是无效功：Content 是数据对象不是元素）。探针「屏上的牌子」按新层级解包。
+- TextInk 四层影子恢复无条件挂上（二分证明与崩溃无关）；`FirstChanceException` 诊断钩子拆掉——异常在
+  原生→托管边界构造，CLR 从未 throw，钩子永远看不见；这几场崩全只进应用日志，事件日志 `.NET Runtime` 一条没有。
+
+### 闸门
+
+构建 0 警 0 错；测试 **892/892**（基线 889 → +3，witness 判定单测）；发布 **482 文件 / 301.6 MB / 11 GLSL**；
+自检 **189 行、2 项失败均为既有红**（《伪恋》跨季＝服务端数据；「藏鼠标真的到了系统」＝沙箱注不进真输入的
+环境噪声）。「屏上的牌子」回绿。提交 a374f98 已推 origin（`refs/remotes/origin/master` 又丢了，照旧例补写后推走）。
+
 ## 第十五报：AyuGram 消息唤醒光标——「只挡得住第一条」（2026-09-15 深夜写码并发布，2026-09-16 晨补验闸门，已提交 9bcb2f2 并推 origin）
 
 **用户原话：「播放时鼠标静止隐藏之后，AyuGram 每次收到静音的群聊消息（没有弹窗）都会让鼠标显示，请修复这个问题。」**
