@@ -7,13 +7,19 @@ namespace EmbyNian.Shell.Windowing;
 /// <summary>
 /// 独立播放窗口 —— 「在设置中新增功能，打开后点击播放后弹出一个独立窗口来播放」（用户的话，2026-09-13）.
 /// <para>
-/// A second top-level window that plays the film, so the main window can stay on the page the user was
-/// looking at. It is <b>not</b> a <see cref="Microsoft.UI.Xaml.Window"/>: mpv draws into a child HWND handed to
-/// it as <c>wid</c>, and a real framework window hides child HWNDs (fact 2 in <see cref="HostWindow"/>'s
-/// remarks), so a film would be invisible in one. It is therefore built exactly the way the main window is —
-/// a second <see cref="HostWindow"/> instance, which is a bare <c>CreateWindowEx</c> HWND with a XAML island
-/// over a video child — and it gets fullscreen, the caption, the DPI handling and the picture-aspect lock
-/// from that class for free.
+/// A second top-level window that plays the film, the main window's <em>sibling</em> rather than its
+/// child: no visual stacking between them, a focus of its own, and the main window free to move,
+/// resize, minimise or hide while the film keeps running — which is the point, on a second monitor.
+/// It is <b>not</b> a <see cref="Microsoft.UI.Xaml.Window"/>: it is built exactly the way the main
+/// window is — a second <see cref="HostWindow"/> instance, a bare <c>CreateWindowEx</c> HWND with a
+/// XAML island filling it — and it gets fullscreen, the caption, the DPI handling and the
+/// picture-aspect lock from that class for free.
+/// </para>
+/// <para>
+/// The film itself runs the same rendering pipeline everywhere: this window's page owns its own
+/// <c>SwapChainPanel</c>, and mpv composites into it through its D3D11 composition swapchain. What
+/// 「独占」 buys is the window arrangement — the panel is the whole client area of a window that
+/// belongs to the film — not a second mpv output mode.
 /// </para>
 /// <para>
 /// Two <see cref="HostWindow"/>s in one process are supported by construction: the class registers itself
@@ -21,7 +27,7 @@ namespace EmbyNian.Shell.Windowing;
 /// of genuinely shared state is the <see cref="ViewModels.PlayerViewModel"/>, which is a singleton because the
 /// film has to keep playing while the user browses. Two pages wired to it would both answer every command and
 /// both drive the same real mpv session, so exactly one is attached at a time: the shell's own
-/// <see cref="PlayerPage"/> hands the view model over with <c>Detach</c> when this window opens, and takes it
+/// <see cref="Views.PlayerPage"/> hands the view model over with <c>Detach</c> when this window opens, and takes it
 /// back when the window closes. See <c>PlayerPage.Detach</c> for that half.
 /// </para>
 /// <para>
@@ -54,8 +60,8 @@ internal sealed class PlayerWindow
     /// back」 on, since both the X and an in-film stop land here.</summary>
     internal event Action? Closed;
 
-    /// <summary>The window itself, for the shell and for the self-check — the geometry, the video child and
-    /// the fullscreen state all live on this.</summary>
+    /// <summary>The window itself, for the shell and for the self-check — the geometry, the fullscreen state
+    /// and the video surface all live on this.</summary>
     internal HostWindow Window => _window;
 
     /// <summary>The player inside this window. The shell attaches the view model to it.</summary>

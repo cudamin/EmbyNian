@@ -584,8 +584,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
     ///   <item>The shell's player steps aside (<see cref="PlayerPage.Detach"/>). One
     ///   <see cref="PlayerViewModel"/> drives one mpv session, and two attached pages would both answer every
     ///   command and both take a window over.</item>
-    ///   <item>mpv is pointed at the new window's video child.
-    ///   <c>PlaybackBackendFactory.EmbeddedWindow</c> is read afresh for every launch, so saying so here is the
+    ///   <item>mpv is pointed at the new window's player page panel.
+    ///   <c>PlaybackBackendFactory.CompositionTarget</c> is read afresh for every launch, so saying so here is the
     ///   whole of it — no re-plumbing, and no second backend.</item>
     ///   <item>The new window's player takes the view model, which is what makes the chrome, the keyboard and
     ///   the picture land in there.</item>
@@ -616,7 +616,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         Player.Detach();
         created.Page.Attach(viewModel, this, created.Window);
-        _services.GetRequiredService<PlaybackBackendFactory>().EmbeddedWindow = () => created.Window.VideoHandle();
+        _services.GetRequiredService<PlaybackBackendFactory>().VideoSurface = () => created.Page.VideoSurface;
 
         _playerWindow = created;
         created.Closed += OnPlayerWindowClosed;
@@ -688,7 +688,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     {
         if (_window is null) return;
 
-        _services?.GetRequiredService<PlaybackBackendFactory>().EmbeddedWindow = () => _window.VideoHandle();
+        _services?.GetRequiredService<PlaybackBackendFactory>().VideoSurface = () => Player.VideoSurface;
         Player.Attach(Player.ViewModel, this, _window);
     }
 
@@ -888,8 +888,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// 设置 (需求 1：「点击后弹出设置窗口」), and with it 服务器 and 诊断 (需求 2：「诊断和服务器移动到设置里」).
     /// <para>
     /// A second window rather than a page in the frame, and a plain <c>Microsoft.UI.Xaml.Window</c> rather
-    /// than another <see cref="Windowing.HostWindow"/>: the host window is built around one video child HWND,
-    /// a cursor hook and a fullscreen z-order rule, and it keeps its instances in static maps. None of that
+    /// than another <see cref="Windowing.HostWindow"/>: the host window carries a cursor hook, a keyboard
+    /// fallback and a fullscreen z-order rule, and it keeps its instances in static maps. None of that
     /// belongs to a settings dialog.
     /// </para>
     /// <para>

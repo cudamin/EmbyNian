@@ -119,11 +119,14 @@ public partial class App : Application
                     ui.WindowTop + ui.WindowHeight));
 
 
-            // The entire video contract, closed here: the host window hands out a child HWND and
-            // LibMpvBackend gives it to mpv as `wid`. Set after Show, because there is no client area to
-            // put a surface in until the window exists — and the backend only ever calls it from inside a
-            // playback, which cannot happen before the user has navigated somewhere.
-            services.GetRequiredService<PlaybackBackendFactory>().EmbeddedWindow = _window.VideoHandle;
+            // The entire video contract, closed here: the integrated player answers with the
+            // shell player page's panel. The 独立播放窗口 — a second top-level window of the same
+            // kind, playing through its own page's panel — repoints this when it opens and back
+            // when it closes. The delegate is read afresh for every launch, so each line only ever
+            // names the default. The backend only ever calls it from inside a playback, which
+            // cannot happen before the user has navigated somewhere.
+            services.GetRequiredService<PlaybackBackendFactory>().VideoSurface =
+                () => _shell.PlayerRoot.VideoSurface;
             shell.AttachWindow(_window);
 
             _activation = ActivationListener.Start(

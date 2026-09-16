@@ -168,31 +168,20 @@ public sealed partial class PlayerPage
     /// two on this machine's own log, and a hand's first movement is tens.
     /// </para>
     /// <para>
-    /// <b>第二十一报（2026-09-16）改了参照点的推进规矩：每一拍都推进，不够阈值的拍子也推进。</b>
-    /// 此前不够阈值时故意<b>不</b>推进，理由写的是「免得桌面一像素一像素把参照点走远」——那条理由
-    /// 是反的。参照点冻着，读到的就不是「这一拍走了多少」而是「从冻住那一刻起一共走了多少」：一段
-    /// 每拍一两像素的慢漂会一直攒，攒到跨过五像素就报「手在走」。现在每拍都推进：一拍读到的就是
-    /// 这一拍的速度，桌面抖动照旧过不了五像素这道坎，而慢漂再也走不到终点。真正该攒的东西
-    /// （一段手势的<b>净位移</b>）攒在 <see cref="ChromeReveal.HideMoveVerdict"/> 里，只攒<b>连着在走</b>
-    /// 的那一段。
+    /// <b>参照点有两种推进规矩（2026-09-16 照搬 mpv.net 之后），各管一侧。</b>显示态每拍都推进，
+    /// 不够阈值的拍子也算「读过一次」——量到的是这一拍的速度，桌面抖动过不了阈值，也攒不起来，
+    /// 空闲钟不被抖动重盖，「静止到点就藏」因此成立。藏匿期<b>冻着</b>：这是 mpv.net 的
+    /// <c>IsCursorPosDifferent</c> 拿当前光标对「上次记录点」量的问法，慢移对着同一个点累计，
+    /// 六拍之内必然过线——「慢手也能叫回来」就是这一半。两种语义共用 <see cref="ChromeReveal.MovePixels"/>
+    /// 这一个数，判据分别是 <see cref="ChromeReveal.Travelled"/>（显示态）与
+    /// <see cref="ChromeReveal.HandStep"/>（藏匿期），别混用。
     /// </para>
     /// <para>
-    /// <b>同日的第二轮对抗复核又改了藏匿期这一段的形状：每一拍都要送进 Core，零位移的拍子也送。</b>
-    /// 第一版只在够阈值的拍子上送，理由是「不够阈值的拍子在 Core 那边什么也不做」。那条理由漏掉了
-    /// 这一版判据的骨架：账记的是净位移、条件是「连着三拍每拍都够」，两件事都靠<b>看见中间那些拍子</b>
-    /// 才成立 —— 漏掉整拍没动的那些，Core 就会把幽灵两步之间那段冻结读成「手还在走」，而那正是幽灵
-    /// 唯一的结构性破绽。所以藏匿期这一段排在所有早退之前，<c>known</c> 为假时也只播种不唤醒（第一次
-    /// 读数不是位移，那两格里的 int.MaxValue 不是速度）。
-    /// </para>
-    /// <para>
-    /// <b>这一条不要再写成「成熟播放器都这么做」。</b>第二十一报对着上游源码核了一遍，结论是反的：
-    /// mpv.net（真正有人在用的那个 C# 壳）同样是轮询全局 <c>GetCursorPos</c>、同样用 5×dpi/96 的
-    /// 切比雪夫阈值、参照点在不够阈值时<b>同样冻着</b> —— 与本项目改之前是同一个形状。VLC、MPC-HC、
-    /// Chromium 确实是事件驱动，但它们的阈值是一到四像素、而且一家都没有真实输入见证，对同一段幽灵流
-    /// 只会比这里<b>更</b>敏感。所以「其他播放器和网页播放就不会出现这个bug」的差别多半不在传感器，
-    /// 而在<b>后果的大小</b>：MPC-HC 冒出来的是一支光秃秃的箭头、两秒后自己再藏回去，本项目冒出来的
-    /// 是整套控件。每拍推进参照点这条是靠本项目自己的日志立住的（慢漂攒过五像素那一段），
-    /// 不靠别人家的写法背书。
+    /// <b>第二十一报的整套藏匿期判据在这一天随「完全照搬 mpv.net」的拍板退役：</b>见证否决票、
+    /// 净位移账本、连着拍数、幽灵回笼，全都不在唤醒的路上了。一台机器上它们挡过二十一次幽灵唤醒，
+    /// 代价是每拍不足五像素的慢手永远叫不回光标；mpv.net 用最简单的那一问活在所有这些机器上，
+    /// 冒出来的不过是一支一两秒后自己藏回去的箭头。现在这里是 mpv.net 的行为，包括它的代价
+    /// （幽灵唤醒回归，更轻的形式）——历史与证据链在 PROGRESS.md 与 daily log，见证仍在取证记账。
     /// </para>
     /// </summary>
     private void PollPointer()
@@ -205,26 +194,16 @@ public sealed partial class PlayerPage
         var dx = known ? Math.Abs(screen.X - _polled.X) : int.MaxValue;
         var dy = known ? Math.Abs(screen.Y - _polled.Y) : int.MaxValue;
 
-        // 二十报：显示态的每一拍都先问一句回笼监视（武装中才有事可做；动没动由落点半径自己判，
-        // 手在走的拍子在这里当场被落点检查放行）。
-        if (!_cursorHidden && _ghostArm) ConsiderGhostRetract(screen);
-
-        // ---- 藏匿期：交给 Core 那唯一的关，而且**每一拍都送进去** ----
+        // ---- 藏匿期：mpv.net 的那一问（2026-09-16 照搬，用户拍板）----
         //
-        // 第二十一报第一版只在「够阈值」的拍子上送进去，第二轮对抗复核说那是错的（判 serious）：
-        // 账记的是净位移、看的是「连着几拍在走」，两件事都要求看见中间那些没动的拍子 —— 漏一拍，
-        // Core 就以为手还在走，而幽灵两步之间那一整拍冻结恰好落在漏掉的位置上。所以这一段排在下面
-        // 那些早退**之前**，而且零位移的拍子也送（Core 拿它把手势账归零，见 HideMoveVerdict）。
-        //
-        // 次序：一、见证缺席与否（真实输入见证，WM_INPUT 的 hDevice：SetCursorPos 不产生 WM_INPUT、
-        // SendInput 产生的没有 hDevice、真手的有；缺席＝注册失败＝没有否决票）；二、Core 那三问 ——
-        // 这一拍够不够格、净位移多少、连着几拍。十九报的日志把见证的极限钉死过：AyuGram 那段位移
-        // 带着真设备句柄（VID_1532&PID_007C），输入层面与真手一字不差，所以见证只剩否决权。
+        // 位置离「上次记录点」的切比雪夫距离超过阈值就是手（ChromeReveal.HandStep），过线即醒、
+        // 不过线接着藏。参照点（_polled）在不够阈值的拍子上**冻着**——慢移会对着它累计，这正是
+        // 「慢手也能叫回来」的那一半；快过线的一记（包括幽灵的 60 像素签名）也醒，那是接受的代价
+        // 的另一半。第二十一报的见证否决、净位移账本、连着拍数、回笼窗口全部退役，历史在
+        // PROGRESS.md 与 daily log。真实输入见证仍在（取证记账），但不再有裁决权。
         if (_cursorHidden)
         {
-            // 参照点还没立起来：这一记是「第一次读到」，不是位移（dx/dy 是 int.MaxValue）。第一版让它
-            // 直接落到下面的 WakeFromPoll，等于一条零路程、无见证、无累加的显示路 —— 它今天没被踩到，
-            // 靠的是两个调用点的时序巧合，而不是任何一道判据。现在只播种：首次读数晚一拍知道位置。
+            // 参照点还没立起来：这一拍只播种（第一次读数不是位移，dx/dy 的 int.MaxValue 不是速度）。
             if (!known)
             {
                 _polled = screen;
@@ -232,51 +211,11 @@ public sealed partial class PlayerPage
                 return;
             }
 
-            var witness = _window?.Witness;
-            var witnessed = witness?.Ready != true
-                || witness.RecentRealInput(ChromeReveal.WitnessWindowMilliseconds);
+            // dx/dy 是 |screen - _polled|，而 _polled 在藏匿期冻着 —— 这正是 mpv.net 的
+            // IsCursorPosDifferent 拿「当前光标」对「上次记录点」量出来的那个问法。
+            if (!ChromeReveal.HandStep(dx, dy)) return;
 
-            // 位移带符号进去：Core 的账记的是「矢量起点到现在的净位移」，不是步子之和。
-            var hand = _chrome.HideMoveVerdict(witnessed, screen.X - _polled.X, screen.Y - _polled.Y, Now);
-            var moved = dx != 0 || dy != 0;
-            _polled = screen;
-            _polledKnown = true;
-
-            if (!hand)
-            {
-                // 整拍没动：Core 拿它把手势账归零了，这一拍不是「挡下一记位移」，日志不必每拍写一行。
-                if (!moved) return;
-
-                // 挡下了：接着藏。Core 那本账记 Core 的，这里这本是日志和探针读的。
-                _movesHeld++;
-
-                // 判决写进日志：判定痕迹全靠这几行 —— 「挡掉 N 次」只有显示行汇总，真要复盘「谁在
-                // 哪一刻被谁判掉的」，得有这一行的时间与读数。十八报补的末真设备也留着：幽灵输入
-                // 的定罪证据就在这一格。二十一报补上「这段手势攒到哪儿了」——离唤醒还差多少，
-                // 下一份报告里是个数而不是一句猜；同日第二轮再补上连着几拍。
-                Log.Debug(Category, $"藏匿期挡下一记：位移 {dx},{dy}"
-                    + $"，手势净位移 {_chrome.WakeTravel:0}/{ChromeReveal.WakeTravelPixels:0} 像素"
-                    + $"，连着 {_chrome.WakeSteps}/{ChromeReveal.WakeStepsNeeded} 拍"
-                    + $"，见证{(witnessed ? "有" : "无")}"
-                    + (witness is null
-                        ? string.Empty
-                        : $"（最近真输入{witness.LastRealMoveAgo}，设备 {witness.LastRealDevice}"
-                          + $"，末位移 {witness.LastRealDx},{witness.LastRealDy}"
-                          + $"{(witness.LastRealAbsolute ? " 绝对" : string.Empty)}"
-                          + $"，真 {witness.RealMoves}/注 {witness.InjectedMoves}）")
-                    + $"，本段已挡 {_movesHeld} 次");
-                return;
-            }
-
-            // 判成手：净位移与连着几拍都够了。挂牌要点名作证的设备与走过的路程 —— 十九报那场就是
-            // 「有」作证、光标照醒，而那几记「真输入」来自哪块硬件、一共走了多远，当时都无据可查。
-            WakeFromPoll(screen, dx, dy, $"手势净位移 {_chrome.WakeTravel:0} 像素、连着 {_chrome.WakeSteps} 拍"
-                + (witness is null
-                    ? string.Empty
-                    : $"（末真设备 {witness.LastRealDevice}"
-                      + $"，末位移 {witness.LastRealDx},{witness.LastRealDy}"
-                      + $"{(witness.LastRealAbsolute ? " 绝对" : string.Empty)}"
-                      + $"，见证{(witness.Ready ? "在场" : "缺席")}）"));
+            WakeFromPoll(screen, dx, dy, "位置离上次记录点超过阈值（mpv.net 规则）");
             return;
         }
 
@@ -285,8 +224,8 @@ public sealed partial class PlayerPage
         // running.
         if (dx == 0 && dy == 0) return;
 
-        // 参照点每拍都推进（第二十一报，理由见上）。这一句必须在下面那道阈值关**之前**：不够阈值
-        // 的拍子也算「读过一次」，不推进就是在攒慢漂。
+        // 参照点在显示态每拍都推进（藏匿期才冻着，见上）。这一句必须在下面那道阈值关**之前**：
+        // 不够阈值的拍子也算「读过一次」，不推进就是在攒慢漂。
         var steppedNow = !known || ChromeReveal.Travelled(dx, dy);
         _polled = screen;
         _polledKnown = true;
@@ -344,64 +283,41 @@ public sealed partial class PlayerPage
         // 「the rule was already awake」 — once per wake, which is nothing.
         if (!ReseedPointer(moved: true)) _chrome.Moved(Now);
         Render();
-
-        // 二十报：判成手的唤醒（或手的后续一拍）是回笼监视的锚点。isHidden 的那一拍武装监视，
-        // 已在显示态的后续一拍只刷新时刻与落点——窗口永远从「手的最后一拍」重算。
-        _ghostWakeAt = Now;
-        _ghostLanding = screen;
-        if (_window?.Witness is { } ghostWitness) _ghostRealAtArm = ghostWitness.RealMoves;
-        if (wasHidden) _ghostArm = true;
     }
 
     /// <summary>
-    /// 二十报的回笼判定：判成手的唤醒之后，<see cref="ChromeReveal.GhostQuiesceMilliseconds"/> 内
-    /// 没有任何后续输入，就把那次唤醒改判成幽灵流，落点上的光标交回给规则收走。
+    /// 光标没藏的时候，把「卡在哪一条」写出来 —— 2026-09-16 晚加，起因是用户报「现在的问题是鼠标
+    /// 已经不会自动隐藏了」，而日志里同时有反例（18:53:37 进播放、18:53:40 就藏了）。
     /// <para>
-    /// 五问，缺一不可：<b>窗口满了吗</b>——从最后一拍起算，手的后续一拍会把窗口刷新；<b>还在落点上吗</b>——
-    /// 半径 <see cref="GhostSettlePixels"/>，桌面抖一两像素不冤枉（第十五报的教训），手在走当场出圈；
-    /// <b>落点在控件上吗</b>——停靠的指针买的是两千毫秒的耐心，回笼拨时钟等于替真手把耐心一次花光，
-    /// 控件会在犹豫的半途塌掉，所以停靠的落点不回笼（既有的停靠规则两秒后自己处理）；<b>见证真账涨了吗</b>——
-    /// 连一像素有出处的输入都是手在场的证据，销账；<b>规则肯藏吗</b>——
-    /// <see cref="ChromeReveal.ExpireIdle"/> 只是拨时钟，指针在画面上、chrome 已收、hold/keep 全无
-    /// 才藏得下去，藏不下去就不记账（那种情形空闲/停靠隐藏自己会来）。
+    /// 藏不藏由 <c>ChromeReveal.Settle</c> 那一句决定，四个条件：<b>chrome 已经收干净</b>
+    /// （<c>!State.Any</c>）、<b>指针在画面内</b>（<c>_pointerY &gt;= 0</c>）、<b>没有 hold/keep</b>、
+    /// <b>空闲钟走满 <see cref="ChromeReveal.CursorIdleMilliseconds"/></b>。前三个在 Core 上各有一个
+    /// 现成的只读读数，第四个看 <see cref="ChromeReveal.IdleAgo"/> —— 它小得不正常就意味着有人每拍
+    /// 重盖时钟（鼠标键按着、XAML 的事件、窗口变化都会），那才是「永远不藏」的真实样子。
+    /// </para>
+    /// <para>
+    /// 每秒至多一行，只在播放页（<see cref="Attached"/>）且外壳这本账认为光标还亮着的时候写。日志级
+    /// DEBUG，改状态一个字都没有。
     /// </para>
     /// </summary>
-    private void ConsiderGhostRetract(NativePoint screen)
+    private void ExplainNoHide()
     {
-        if (Now - _ghostWakeAt < ChromeReveal.GhostQuiesceMilliseconds) return;
+        if (!Attached || _cursorHidden) return;
+        if (Now - _noHideLoggedAt < 1000) return;
+        _noHideLoggedAt = Now;
 
-        if (Math.Abs(screen.X - _ghostLanding.X) > GhostSettlePixels
-            || Math.Abs(screen.Y - _ghostLanding.Y) > GhostSettlePixels) return;
-
-        // 只认「落点在真控件上」，不认「落点在右边缘那条看不见的带子里」（2026-09-16 第二轮复核）：
-        // PointerParked 是纯几何（_part != None || _railNear >= 0），不要求音量条可见、也不要求它可
-        // 命中。而 AyuGram 就在右边那块屏上，幽灵往右搬，落点正好落进最右 160 逻辑像素那条带子 ——
-        // 于是回笼在这段藏匿里一次都不会发生，光标在屏上停满停靠的 2000ms 而不是 1200ms。停靠规则
-        // 本身（IdleWindow 的 2000ms 耐心）一个字不动，只是回笼不再被一条隐形带子挡住。
-        if (_chrome.PointerOnControl) return;
-
-        if (_window?.Witness is { } witness && _ghostRealAtArm >= 0 && witness.RealMoves != _ghostRealAtArm)
-        {
-            // 有出处的新输入：真手在场。监视销账，光标随它去。
-            _ghostArm = false;
-            return;
-        }
-
-        _ghostArm = false;
-
-        if (!_chrome.ExpireIdle(Now)) return;
-
-        _ghostRetracts++;
-        Log.Debug(Category, $"幽灵流回笼：判成手的唤醒后 {ChromeReveal.GhostQuiesceMilliseconds}ms"
-            + $"内没有任何后续输入（落点 {_ghostLanding.X},{_ghostLanding.Y}，真账 {_ghostRealAtArm} 未变）"
-            + $"，按幽灵流收回落点上的光标，第 {_ghostRetracts} 次");
-
-        // 规则在这条路上翻转了，而它是从 PollPointer 的「指针没动」早退分支调进来的 —— 那条路
-        // 没有自己的 Render。十二报的教训在这里再刻一遍：_cursorHidden（外壳副本）与四杠杆只有
-        // Render→SetCursorHidden 一个对账点；漏了这一拍，Core 已判藏、系统光标却真的还挂在屏上，
-        // 回笼就只是账面上的一次记账。PointerLeft 的惯例同此：mutator 翻了，当拍就 render。
-        Render();
+        Log.Debug(Category, $"光标没藏：chrome{(_chrome.State.Any ? "还在" : "已收")}"
+            + $"，指针{(_chrome.PointerGone ? "不在画面内" : "在画面内")}"
+            + $"，hold={_chrome.HoldChrome}/keep={_chrome.KeepChrome}"
+            + $"，空闲 {_chrome.IdleAgo(Now)}/{ChromeReveal.CursorIdleMilliseconds}ms"
+            + $"，指针上的部件={_pointerOn}"
+            + $"，指针={(_cursorAtKnown ? $"{_cursorAt.X},{_cursorAt.Y}" : "读不到")}"
+            + $"，按住鼠标={Native.MouseButtonDown()}"
+            + $"，见证={(_window?.Witness.Ready == true ? "就绪" : "缺席")}");
     }
+
+    /// <summary>上面那行诊断的节流（每秒至多一行）。</summary>
+    private long _noHideLoggedAt;
 
     /// <summary>
     /// The picture changed size — 全屏, 最大化, a dragged window edge — and the pointer said nothing about
@@ -426,30 +342,6 @@ public sealed partial class PlayerPage
 
     /// <summary>取证行已报到多少条真输入（十八报）：只在涨的时候写一行，幽灵输入连发时每秒至多一条。</summary>
     private int _forensicsSeen;
-
-    // ---- 二十报（2026-09-16）：幽灵回笼 ------------------------------------------
-    //
-    // 13:29 那场钉死了事实：带雷蛇句柄（VID_1532）的输入流在输入层面与真手不可区分，判成手的
-    // 唤醒是按设计发生的，显示之前没有任何判据能拦它。分水岭在显示之后——手必有下一步，幽灵流
-    // 停在落点上再也不动。这一半就是那条分水岭：判成手的唤醒武装监视，回笼窗口内任何后续输入
-    // （轮询再见到位移、见证真账上涨、点击/按键/滚轮）都销账；窗口平静走完，把时钟拨回去让
-    // Core 自己的规则把落点上的光标收走，并记一次账。
-
-    /// <summary>回笼判定里「没有再动」的容忍半径：桌面抖动一两像素是常事（第十五报的教训）。</summary>
-    private const int GhostSettlePixels = 2;
-
-    /// <summary>最近一次判成手的唤醒（或后续一拍）发生的时刻与落点。窗口从最后一拍重算。</summary>
-    private long _ghostWakeAt;
-    private NativePoint _ghostLanding;
-
-    /// <summary>武装时刻见证真账的快照；判成手之后真账再涨一字，就是有出处的输入，监视销账。</summary>
-    private int _ghostRealAtArm = -1;
-
-    /// <summary>回笼监视是否武装中。藏下去的那一刻解除（<see cref="SetCursorHidden"/>），下一次判成手的唤醒重新武装。</summary>
-    private bool _ghostArm;
-
-    /// <summary>回笼成立过多少次：探针断言与下一轮现场复盘都读它。</summary>
-    private int _ghostRetracts;
 
     /// <summary>
     /// 藏匿期的取证取样（2026-09-15，第十四报）：每秒一次，把「外面此刻是什么样」写进日志。
@@ -485,7 +377,8 @@ public sealed partial class PlayerPage
         //
         // 第十六报补的第四组数：见证的账。真/注两个计数一秒一次往外报 —— 注入计数涨起来而真计数
         // 不动，就是「有程序在注入输入」的直接证据；真计数涨起来，说明这台机器的真手被见证看见了。
-        // 十六报之后裁决改问见证，这两个数就是裁决的底账，缺席时（见「缺席/就绪」）判的是形状启发式。
+        // 照搬 mpv.net 之后见证不再参与裁决，这两个数只剩取证的价值：下一次幽灵报告的「真/注」
+        // 对账靠它们。
         //
         // 十八报补的两笔：末真设备（VID/PID 点名）与藏匿期逐条短账 —— 「真计数在涨」之后下一个
         // 必然要问的就是「哪块硬件」，独立成行是因为它只在涨的时候写。
@@ -501,8 +394,7 @@ public sealed partial class PlayerPage
         Log.Debug(Category, $"藏匿取样：指针 {spot}，本队列形状 0x{Native.GetCursor():X}，{PointerOwner()}"
             + $"，我们窗口 {rect}，虚拟屏 {desk.Width}x{desk.Height}@{desk.X},{desk.Y}"
             + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
-            + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}，末真设备 {witness.LastRealDevice}）" : "缺席（没有否决票，只剩路程那一关）")}"
-            + $"，本段已挡 {_movesHeld} 记、手势累计 {_chrome.WakeTravel:0}/{ChromeReveal.WakeTravelPixels:0} 像素");
+            + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}，末真设备 {witness.LastRealDevice}）" : "缺席（只作取证）")}");
     }
 
     // ---- 两处竖直间距 -------------------------------------------------------------
@@ -830,9 +722,6 @@ public sealed partial class PlayerPage
 
         _cursorHidden = hidden;
 
-        // 二十报：藏下去就解除回笼监视——回笼本身也是从这里走过去的，下一次判成手的唤醒重新武装。
-        if (hidden) _ghostArm = false;
-
         if (_window is not null) _window.CursorHidden = hidden;
 
         // 十八报（2026-09-16）：藏匿期给见证的取证口开闸。手不在的这一段本该一条真输入都没有 ——
@@ -936,7 +825,6 @@ public sealed partial class PlayerPage
         if (hidden)
         {
             _nudgesThisHide = 0;
-            _movesHeld = 0;
             _woke = "未标注的显示路径（见到此串即有路漏标）";
 
             // 第十四报：取样的第一条从藏匿那一刻算起，不是从上一段藏匿的最后一拍算起。置成 Now-1000
@@ -980,13 +868,11 @@ public sealed partial class PlayerPage
               + $"，藏点屏幕 {hideAnchor}"
               + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
               + $"，{PointerElements()}"
-              + $"，本次藏匿已挡下 {_movesHeld} 记"
-              + $"，见证{(_window?.Witness.Ready == true ? "就绪" : "缺席（只剩路程那一关）")}"
+              + $"，见证{(_window?.Witness.Ready == true ? "就绪" : "缺席（只作取证）")}"
             : $"鼠标又显示了：{_woke}；轮询问出的移动共 {_polledMoves} 次，计数 {_cursorCount}"
               + $"，藏着期间重申了 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了"
               + $"，负计数锁被抬回又压回 {_window?.CursorSuppressRestates ?? 0} 次"
-              + $"，挡下 {_movesHeld} 记"
-              + $"，见证{(_window?.Witness.Ready == true ? $"真 {_window.Witness.RealMoves}/注 {_window.Witness.InjectedMoves}" : "缺席（只剩路程那一关）")}");
+              + $"，见证{(_window?.Witness.Ready == true ? $"真 {_window.Witness.RealMoves}/注 {_window.Witness.InjectedMoves}" : "缺席（只作取证）")}");
     }
 
     /// <summary>
@@ -1132,6 +1018,32 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
+    /// 窗口焦点位的那一拍 —— mpv.net 的 <c>ActiveForm == this</c> 与 <c>OnLostFocus → ShowCursor</c>
+    /// 两问合在这里回答（2026-09-16 照搬）。
+    /// <para>
+    /// 焦点位本身喂给 <see cref="ChromeReveal.WindowFocused"/>：假着的时候 <c>Settle</c> 永远不藏，
+    /// 「未激活不藏」就是这一句。从真翻假的那一拍，本来藏着的 hide 条件当场失效——推一拍
+    /// <c>Tick</c>，<c>Render</c> 把藏着的光标掀开，「失焦显示」就是这一条路，没有第二份抄写的
+    /// 藏匿判据。翻回真不必掀什么：前台回来了，空闲钟离到期还远，下一拍自己结算。
+    /// </para>
+    /// <para>
+    /// 页未接线时只记位不推拍——位是页的状态，推拍是页的动作，接线后自会生效。
+    /// </para>
+    /// </summary>
+    private void OnWindowFocusChanged(bool focused)
+    {
+        if (_chrome.WindowFocused == focused) return;
+
+        _chrome.WindowFocused = focused;
+
+        if (!Attached) return;
+
+        // 失焦那一拍挂名：显示行要能说出是谁掀的。
+        if (!focused && _cursorHidden) _woke = "窗口失去焦点";
+        if (_chrome.Tick(Now)) Render();
+    }
+
+    /// <summary>
     /// Ten hertz, and the three things that expire rather than happen. Two of them are here because a
     /// pointer can leave without saying so; the third is the view model's, and is simply handed the tick.
     /// <para>
@@ -1218,6 +1130,9 @@ public sealed partial class PlayerPage
         }
 
         if (_chrome.Tick(Now)) Render();
+
+        // 诊断：光标该藏不藏的时候，把「卡在哪一条」写进日志（每秒至多一行）。
+        ExplainNoHide();
 
         // Said again while it holds, because saying it once is only enough if nothing puts a shape back: see
         // HostWindow.KeepCursorHidden. Guarded on our own flag so a shown cursor costs nothing.

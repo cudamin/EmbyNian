@@ -90,17 +90,20 @@ public sealed class ChromeReveal
     public const long ParkedIdleMilliseconds = 2000;
 
     /// <summary>
-    /// How long the pointer has to hold still before the mouse cursor itself goes —
-    /// 「全屏播放且鼠标在画面上时，鼠标静止不动两秒之后要自动隐藏」.
+    /// How long the pointer has to hold still before the mouse cursor itself goes.
     /// <para>
-    /// Longer than <see cref="IdleMilliseconds"/> and asked separately from it because the two hide for
-    /// different reasons. The chrome is a request: it belongs to the band the pointer is in, so leaving that
-    /// band is reason enough to take it away, and 650 ms of stillness in the dead zone is a clear 「not now」.
-    /// The cursor is the pointer, and taking it away in the middle of aiming leaves nothing on screen to
-    /// explain where it went — so it waits for a stillness long enough to mean the mouse has been put down.
+    /// <b>1000，mpv.net 的默认（2026-09-16 用户拍板「完全照搬 mpv.net」）。</b>mpv 的
+    /// <c>cursor-autohide</c> 不另设时就是这个数，mpv.net 的 <c>_cursorAutohide = 1000</c> 原样照搬。
+    /// 之前是 2000（「全屏播放且鼠标在画面上时，鼠标静止不动两秒之后要自动隐藏」），那句话被今天
+    /// 这条更晚的指令接替；停靠在控件上的指针不受影响——它等的是 chrome 收起，而 chrome 的停靠
+    /// 耐心（<see cref="ParkedIdleMilliseconds"/>，2000）没动，光标随 chrome 在两秒那拍一起走。
+    /// </para>
+    /// <para>
+    /// 与 chrome 的窗口分开问、分开等的结构照旧：chrome 是请求（650ms 的死区静止就是「不要了」），
+    /// 光标是指针本身（拿走它要等一个「鼠标已经放下」的静止），两个数只是都变小了。
     /// </para>
     /// </summary>
-    public const long CursorIdleMilliseconds = 2000;
+    public const long CursorIdleMilliseconds = 1000;
 
     /// <summary>
     /// How long a readout with no pointer behind it stays up — the volume rail after a wheel or key
@@ -144,270 +147,53 @@ public sealed class ChromeReveal
     /// mouse rather than noise — see <see cref="MovePixels"/> for what is at stake and why the threshold is
     /// where it is. It is extracted rather than inlined because a test can then pin the one number the whole
     /// hide rests on, instead of two comments having to agree with each other.
+    /// <para>
+    /// <b>2026-09-16 之后它只管「显示态」那一侧</b>：参数是相邻两拍读数的绝对差（参照点每拍都推进），
+    /// 答案喂的是 chrome 的空闲钟。藏匿期的同一问换成了 <see cref="HandStep"/> —— 参照点冻着的
+    /// mpv.net 判据，两把尺同一个数、两种参照语义，别混用。
+    /// </para>
     /// </summary>
     public static bool Travelled(double dx, double dy) =>
         (dx > 0 || dy > 0) && (dx >= MovePixels || dy >= MovePixels);
 
     /// <summary>
-    /// 藏匿期把光标叫回来，一只手要走够的<b>路程</b>：一段手势的总长，不是一记位移
-    /// （第二十一报，2026-09-16）。这是藏匿期唯一的关，<see cref="HideMoveVerdict"/> 就是它的裁决。
+    /// 藏匿期的一记位移算不算「有人动了鼠标」—— <b>mpv.net 的原样判据</b>（2026-09-16 用户拍板
+    /// 「完全照搬 mpv.net」）：位置离<b>上次记录点</b>的切比雪夫距离超过 <see cref="MovePixels"/> 就是。
+    /// 对应 mpv.net <c>MainForm.IsCursorPosDifferent</c> 的那一问（阈值 5×dpi/96 的切比雪夫；
+    /// 本项目轮询读的是物理像素，常数 5 就按它 96 DPI 下的值用）。
     /// <para>
-    /// <b>这条规矩解决的是从第十一报数到第二十报、同一个毛病报了二十一次的那件事。</b>第二块屏上的
-    /// AyuGram（Telegram 的 Qt 分支）每收到一条静音的群聊消息（没有弹窗、没有焦点变化，而且用户把
-    /// 鼠标<b>拔了</b>）就把指针挪一小段，藏了不到两秒的光标随即冒出来。十一到十五报按<b>形状</b>去
-    /// 分辨（「注入搬完就冻住，手是个过程」），十六到十九报按<b>出处</b>去分辨（WM_INPUT 的
-    /// <c>hDevice</c>）。两条路都到了尽头：十九报的日志里那段位移带着一个<b>真设备句柄</b>
-    /// （<c>VID_1532&amp;PID_007C</c>），在输入层面与真手一字不差；而它的形状是一段平滑动画，
-    /// 每一步都像手走了一拍。
+    /// <b>参照点是冻着的，这就是「慢手也能叫回来」的那一半。</b>调用方（<c>PlayerPage.PollPointer</c>）
+    /// 在不够阈值的拍子上不推进参照点，于是一段每拍一两像素的慢移会对着同一个点累计，六拍之内必然
+    /// 过线——mpv.net 的 <c>_lastCursorPosition</c> 就是这个推进规矩。第二十一报曾经把参照点改成
+    /// 每拍都推（为了让慢漂攒不起来），随这一拍板一并退回 mpv.net 的写法：慢漂会醒，这是接受的代价
+    /// 的一半，另一半在下面。
     /// </para>
     /// <para>
-    /// <b>它们剩下的唯一破绽是「走得不够远」。</b>日志里所有能归到这个幽灵头上的唤醒，位移全在
-    /// 六十几像素以内就停住了：<c>60,0</c>、<c>40,10</c>、<c>42,15</c>、<c>37,33</c>、<c>30,7</c>、
-    /// <c>28,20</c>、<c>10,2</c>；同一份日志里唯一一次确凿是手的唤醒是 <c>291,82</c>。一只想把光标
-    /// 叫回来的手不会走五十像素就僵在那儿——它要去够暂停键、够进度条，一拍（100 毫秒）就是上百像素。
-    /// 一百像素这个数正落在两者中间：比见过的每一段幽灵都宽出一半，而任何一次正常的手腕动作一两拍
-    /// 之内就走完。
-    /// </para>
-    /// <para>
-    /// <b>为什么这一条能成、而二十报的「回笼」不能。</b>二十报是<b>先显示、再改判</b>：显示之后
-    /// 一秒二没有后续输入就把光标收回去。它判得对，可用户看见的正是那一秒二——「让鼠标显示」这句
-    /// 抱怨，回笼修不掉。这一条是<b>先攒路程、够了才显示</b>：幽灵走的那五六十像素被攒进账里，
-    /// 从头到尾没跨过一百，<b>光标一次都没出现过</b>。代价落在手上最多是一拍（100 毫秒），肉眼
-    /// 看不见。回笼留着当后手，管那些真攒够了一百像素才停的东西。
-    /// </para>
-    /// <para>
-    /// <b>「其他播放器和网页播放就不会出现这个bug」不是因为它们的传感器更严——第二十一报核过上游
-    /// 源码，恰好相反。</b>mpv 的坎是 1 像素、MPC-HC 从藏匿点起算 2 像素、VLC 3 像素、Chromium 干脆
-    /// 任何一条 <c>pointermove</c> 都算，而且一家都没有真实输入见证；同一段幽灵流多半也会把它们的
-    /// 光标叫出来。差别在<b>后果的大小</b>：它们冒出来的是一支光秃秃的箭头、两秒后自己藏回去，
-    /// 本项目冒出来的是整套控件，所以只有这边被当成 bug 报上来。连「轮询还是事件」这条也不是分界线
-    /// ——mpv.net（真正有人在用的那个 C# 壳）同样轮询全局 <c>GetCursorPos</c>、同样用 5×dpi/96 的
-    /// 切比雪夫阈值、参照点同样在不够阈值时冻着，与本项目改之前一模一样。
-    /// </para>
-    /// <para>
-    /// 所以一百像素这道坎是<b>本项目自己量出来的</b>，不是照别人家抄的：上面那串幽灵签名最远走到 65，
-    /// 唯一确凿的真手是 291,82。参照点那一侧的毛病（不够阈值时冻着，慢漂会一直攒）在第二十一报单独
-    /// 改掉了——<c>PollPointer</c> 现在每拍都推进参照点，一拍读到的就是这一拍的速度；<b>攒</b>的活
-    /// 全部收到这里来，而且只攒<b>连着在走</b>的那一段。
-    /// </para>
-    /// <para>
-    /// <b>同一天的第二轮对抗复核把「怎么攒」也钉死了三条，写在 <see cref="HideMoveVerdict"/> 里。</b>
-    /// 复核用的就是本项目自己的样本：十六报那段动画五步的切比雪夫步长是 14+42+10+20 = 86，<b>步与步
-    /// 只隔一两百毫秒</b>，而原来那个 250 毫秒的断点比步距还宽，于是整段动画被当成<b>一段连续手势</b>
-    /// 串起来，八十六对一百只剩一成四的裕度；两条消息前后脚到（用户的原话是「每次收到静音的群消息」
-    /// ——群聊是连着来的）还能相加成一百七十二。三条修补是：账记<b>净位移</b>不是步长之和（+40 接
-    /// −40 是一动没动，不是走了八十）；一记不够格的拍子（含整拍没动的那一拍）<b>当场把账归零</b>
-    /// ——幽灵与真手之间唯一不随消息长短变化的结构差别就在这里，真手每一拍都在走，幽灵在两步之间
-    /// 整拍冻住；再加一道 <see cref="WakeStepsNeeded"/> 的连续拍数下限，任何单拍跳变都出局。
+    /// <b>接受的代价写明白：</b>参数带符号进来，往回走一记 60 像素也过线——十九报日志里那些带真设备
+    /// 句柄的幽灵位移（最远 65 像素）从这里开始全部叫得醒光标。mpv、MPC-HC、VLC、Chromium、mpv.net
+    /// 在同一段幽灵流面前全是这个行为，它们冒出来的只是一支一两秒后自己藏回去的箭头；本项目冒出来
+    /// 的是整套控件，二十一次报上来的那个毛病因此以更轻的形式回归——这是用户在这两条路的岔口上
+    /// 自己选的一边。真实输入见证（<c>RealInputWitness</c>）不再有裁决权，只留取证记账。
     /// </para>
     /// </summary>
-    public const double WakeTravelPixels = 100;
+    public static bool HandStep(double dx, double dy) =>
+        Math.Abs(dx) > MovePixels || Math.Abs(dy) > MovePixels;
 
     /// <summary>
-    /// 判成手，除了净位移够 <see cref="WakeTravelPixels"/>，还要<b>连着这么多拍每拍都够</b>
-    /// <see cref="MovePixels"/>（2026-09-16 第二轮对抗复核加的下限）。
+    /// 窗口此刻是不是前台 —— mpv.net 的 <c>ActiveForm == this</c> 那一问（2026-09-16 照搬）。
     /// <para>
-    /// 只有总路程一道关时，一记 <b>一格跳到底</b> 的注入可以一击穿关：日志里 AyuGram 的签名就是
-    /// 「一拍之内横跳整整 60 像素、纵向恒 0」，幅度翻一倍就是一百二十，单拍过线。真手不可能只走一拍
-    /// 就停——手落在鼠标上是个<b>过程</b>，十赫兹的轮询下一划就是连着好几拍。三拍（三百毫秒）是
-    /// 手和「一格跳变」之间最短的那道分界，代价是手要多走半拍，肉眼看不见。
+    /// 假的时候 <see cref="Settle"/> 永远不藏：mpv.net 的 <c>CursorTimer_Tick</c> 把
+    /// <c>ActiveForm == this</c> 列在藏匿条件里，窗口在别人手里时轮询照跑、藏匿不发生。外壳从
+    /// <c>Window.Activated</c> 事件喂进来（<c>WindowActivationState.Deactivated</c> 为假，其余为真），
+    /// 默认真——单测和「从未失焦」的窗口都按前台算。
+    /// </para>
+    /// <para>
+    /// 失焦<b>还兼着显示</b>：mpv.net 的 <c>OnLostFocus → ShowCursor</c>。从真翻假的那一拍，
+    /// <see cref="Settle"/> 的 hide 从真变假，下一次 Render 就把藏着的光标掀开——外壳的激活处理
+    /// 里喂完这个位就推一拍，正是那条路的全部接线。
     /// </para>
     /// </summary>
-    public const int WakeStepsNeeded = 3;
-
-    /// <summary>
-    /// 一段手势的断点：两记够阈值的位移之间隔过这么久，就算上一段已经结束，路程账从零重记。
-    /// <para>
-    /// 二百五十毫秒＝两拍半。轮询十赫兹，手连续走动时相邻两记相隔约一百毫秒，留两拍半是给调度抖动
-    /// 的余量；再长就开始把「隔了半秒的第二条消息」跟前一条攒到一起，那正是要挡的东西。
-    /// <para>
-    /// <b>它不是唯一的断点，而且现在已经不是主力。</b>第一轮写的是「断点靠时间而不是靠调用方来报
-    /// 『这一拍没动』」，那句话在第二轮复核里被推翻了：调用方（<c>PollPointer</c>）现在每一拍都来，
-    /// 整拍没动的那一拍也来，<see cref="HideMoveVerdict"/> 看见它就把账归零——这才是幽灵真正的破绽
-    /// （它两步之间整拍冻住），因为幽灵的步距（一百到两百毫秒）本来就落在二百五十以内，拿时间当断点
-    /// 等于明文宣布「每隔两百五十毫秒动一下的东西算一只手」。这一条留着管另一种情形：轮询自己漏了拍
-    /// （拖窗时整个跳过一次 <c>PollPointer</c>、或者 GetCursorPos 那一拍读失败），账不该跨过那段空白
-    /// 继续攒。
-    /// </para>
-    /// </summary>
-    public const long WakeGapMilliseconds = 250;
-
-    /// <summary>
-    /// 藏匿期的一记够阈值位移出现时，向真实输入见证问「最近有没有真手的移动」的窗口
-    /// （第十六报，2026-09-16）。见证（<c>RealInputWitness</c>，在 Shell）说「没有」就是注入。
-    /// <para>
-    /// 300 的账：轮询一拍 100ms，手停下到十赫兹的轮询看见最后那记位移，最多隔两拍（200ms 出头），
-    /// 窗口必须盖住它，不然手停下后的收尾一记会被冤成注入、光标该醒不醒；往宽了也不能太宽，不然
-    /// 注入落地的一瞬恰好还记着一记久远的真移动，注入会被冤放。300 在两边都站得住 —— 手移动的
-    /// 时候 WM_INPUT 一秒上百条，窗口里全是见证；注入（SetCursorPos）根本不产生见证，注入
-    /// （SendInput）产生的没有 hDevice。
-    /// </para>
-    /// <para>
-    /// <b>第二十一报把它从「充分」降成了「必要」。</b>十六报里见证说「有」就直接唤醒，于是十九报
-    /// 那段带着真设备句柄的幽灵流一句话就把光标叫了出来。现在见证只剩一票<b>否决权</b>：说「没有」
-    /// 当场判注入；说「有」也只是获准去攒路程，够不够一百像素另说。见证缺席（注册失败）时没有这张
-    /// 否决票，路程那一关照常。
-    /// </para>
-    /// </summary>
-    public const long WitnessWindowMilliseconds = 300;
-
-    /// <summary>
-    /// 二十报（2026-09-16）的回笼窗口：判成手的唤醒之后，多久没有后续输入就把那次唤醒改判成幽灵流。
-    /// <para>
-    /// 13:29 那场的结论是「带设备句柄的输入流在输入层面与真手不可区分」——见证答真、裁决判手，
-    /// 显示是按设计发生的， 显示之前没有任何判据能拦它。分水岭在显示<b>之后</b>：手必有下一步
-    /// （继续动、点击、按键、滚轮），幽灵流停在落点上再也不动。1200 的账：比轮询两拍的收尾间隙
-    /// （200ms 出头）宽得多，不会冤枉还在移动的手；比本来的空闲隐藏（2000ms）短 800ms，幽灵流
-    /// 停住后光标在屏上多待的时间从「两秒」压到「一秒二」。真手真停住的情形只是把既有行为提前
-    /// 了半拍 —— 而且指针停在控件上时 <see cref="ExpireIdle"/> 藏不下去，控件上的手不受影响。
-    /// </para>
-    /// </summary>
-    public const long GhostQuiesceMilliseconds = 1200;
-
-    /// <summary>
-    /// 藏匿期被挡下、没有让光标显示的位移，累计多少记。给日志和自检读：这个数不涨，就说明外屏那条路
-    /// 要么没在动、要么这次修法根本没生效。
-    /// <para>
-    /// 名字在第二十一报从 <c>WarpsIgnored</c> 改过来：「跳变」这个词属于十一到十五报那套形状判据，
-    /// 而形状判据已经整个拆掉了。现在它数的是「过了关但路程不够」和「见证否决」两种挡法的总和。
-    /// </para>
-    /// </summary>
-    public int MovesHeld { get; private set; }
-
-    /// <summary>当前这段手势的净位移（矢量和的切比雪夫长度）—— 攒到 <see cref="WakeTravelPixels"/>
-    /// 就够路程那一关。给日志读，让「挡下了但差多少」在下一份报告里是个数而不是一句猜。</summary>
-    public double WakeTravel => _wakeTravel;
-
-    /// <summary>当前这段手势连着走了几拍（每拍都够 <see cref="MovePixels"/>）。给日志读，
-    /// 让「离唤醒还差半拍」也是个数。</summary>
-    public int WakeSteps => _wakeSteps;
-
-    private double _wakeTravel;
-
-    private int _wakeSteps;
-
-    /// <summary>这一段手势的矢量起点：从 <see cref="ClearHideGesture"/> 起累加的位移（有符号）。</summary>
-    private double _wakeX, _wakeY;
-
-    private long _wakeTravelAt;
-
-    /// <summary>
-    /// 手势账清零：账本（净位移、连着几拍、矢量起点、时刻）一起归零。四种情形调它 —— 见证投了否决票、
-    /// 这一拍不够格（含整拍没动）、隔了 <see cref="WakeGapMilliseconds"/> 没有新位移、以及光标从
-    /// 「藏」变回「显」（<see cref="Settle"/> 里那句）。
-    /// <para>
-    /// 攒到一半的账留着跨越一次显示是没有意义的：显示之后的下一段藏匿是新的一段。同理，一段手势中途
-    /// 断过就不能再接起来——「手划半程、一串注入、手再划半程」要是能接上，一百像素那道坎就等于没有。
-    /// </para>
-    /// </summary>
-    private void ClearHideGesture()
-    {
-        _wakeTravel = 0;
-        _wakeSteps = 0;
-        _wakeX = 0;
-        _wakeY = 0;
-        _wakeTravelAt = 0;
-    }
-
-    /// <summary>
-    /// 藏匿期的一记位移该不该把光标叫回来 —— <b>藏匿期唯一的关</b>（第二十一报，2026-09-16；同日第二轮
-    /// 对抗复核改过形状）。
-    /// <para>
-    /// 三问，按顺序：<b>见证的否决权</b>（<paramref name="realInputSeen"/>，见
-    /// <see cref="WitnessWindowMilliseconds"/>）—— 说「没有真手的移动」当场判注入，不进账；
-    /// <b>这一拍够不够格</b>（<see cref="MovePixels"/>）—— 不够格就说明手势断了，账归零重记；
-    /// <b>路程</b>（<see cref="WakeTravelPixels"/> 与 <see cref="WakeStepsNeeded"/>）—— 净位移
-    /// 够一百、而且连着三拍都在走，才算手。
-    /// </para>
-    /// <para>
-    /// <b>账记净位移，不记步长之和。</b>参数是这一拍的位移，累加进这一段手势的矢量起点
-    /// （<c>_wakeX/_wakeY</c>），账上的数是矢量和的切比雪夫长度。差别在带缓动或过冲的注入上：
-    /// 「+40 接 −40」在步长之和的写法里是走了八十，在净位移里是<b>一动没动</b>；十六报那段五步动画
-    /// 也因此在八十六处封顶，不论它下一步往哪儿走。
-    /// </para>
-    /// <para>
-    /// <b>不够格的一拍 —— 包括整拍没动的那一拍 —— 当场把账归零。</b>这是这一版真正的分水岭，也是
-    /// 幽灵与真手之间唯一不随消息长短变化的结构差别：真手连续走动时每一个十赫兹的轮询拍都有位移，
-    /// 幽灵在步与步之间整拍整拍地冻住（十六报记着「步与步隔着一两百毫秒」，而轮询一拍一百毫秒）。
-    /// 调用方（<c>PollPointer</c>）因此在藏匿期<b>每一拍都来</b>，没动的拍子也来，不许漏。
-    /// </para>
-    /// <para>
-    /// <b>位移双向上限都过。</b>取绝对值再判阈值：<see cref="Travelled"/> 的形状是「至少一个轴为正
-    /// 且够阈值」，直接喂负数是过不去的。
-    /// </para>
-    /// <para>
-    /// 位移按 <c>max(|Σx|, |Σy|)</c> 量而不按欧氏距离：轮询读的是整数像素，切比雪夫距离与
-    /// <see cref="Travelled"/> 判阈值用的是同一把尺，两处一致比多算一次平方根值钱；斜着走的手最多被
-    /// 低估到 0.71 倍，一百像素的坎照样几拍就过。
-    /// </para>
-    /// <para>
-    /// <b>判成手时故意不清账</b>：清账的活交给 <see cref="Settle"/> 里那句「没在藏就清」。这样日志行
-    /// 打印 <see cref="WakeTravel"/> 时读到的是「走够了多少才醒的」，而不是一个已经被抹掉的零 ——
-    /// 下一份报告里这个数就是判据本身的自证。
-    /// </para>
-    /// <para>
-    /// 调用方（<c>PlayerPage.PollPointer</c>）在光标<b>没有藏</b>时不该问这个：显示期任何位移都是手，
-    /// 没有要保住的东西，多一道关只是让控件迟钝。所以这个方法只在藏匿期有意义，这一点写在名字上。
-    /// </para>
-    /// <para>
-    /// <b>代价说在明处：每拍不足五像素的手走不到终点。</b>手慢到每秒不到五十物理像素（这台机器
-    /// 150% 缩放，约合每秒三十几个逻辑像素）时，每一拍都过不了 <see cref="MovePixels"/>，手势永远
-    /// 起不来，光标会一直藏着。二十报之前不是这样 —— 那时参照点冻着，桌面抖一抖也攒得过五像素，
-    /// 那正是这个毛病二十一次报上来的原因。所以这个代价是判据的一部分而不是意外：正常挪一下鼠标
-    /// 是每秒几百像素，而点击、按键、滚轮三条路照旧无条件立刻显示，手不会被困住。
-    /// </para>
-    /// </summary>
-    /// <param name="realInputSeen">见证说这记位移出现前后有没有真手的移动。见证缺席时调用方传真
-    /// （没有否决票），路程那一关照常。</param>
-    /// <param name="dx">这一拍的横向位移，像素，<b>带符号</b>（往左为负）。</param>
-    /// <param name="dy">同上，纵向。</param>
-    /// <param name="now">这一拍的时钟，与规则其它地方同一个。</param>
-    /// <returns>真＝手，按移动处理；假＝接着藏。</returns>
-    public bool HideMoveVerdict(bool realInputSeen, double dx, double dy, long now)
-    {
-        // 见证的否决票。没有真手的移动就是注入 —— 连攒都不许攒，不然一串纯注入会把账推到一百像素。
-        if (!realInputSeen)
-        {
-            MovesHeld++;
-            ClearHideGesture();
-            return false;
-        }
-
-        // 这一拍整拍没动：这一段手势到此为止。幽灵就死在这一句上 —— 它两步之间会整拍冻住，而真手
-        // 连着走的时候每一拍都有位移。不计一笔：没动的拍子是「没有位移」，不是「被挡下一记位移」。
-        if (dx == 0 && dy == 0)
-        {
-            ClearHideGesture();
-            return false;
-        }
-
-        // 上一记隔得太久（轮询自己漏了拍）：那一段手势已经结束，这一记是新一段的开头。
-        if (_wakeTravelAt != 0 && now - _wakeTravelAt > WakeGapMilliseconds) ClearHideGesture();
-        _wakeTravelAt = now;
-
-        // 这一拍不够格：桌面抖动的量级，不是手。手势从这一拍断掉 —— 留着前半程等后半程来接，
-        // 一百像素这道坎就等于没有（「手划半程、一串注入、手再划半程」）。
-        if (!Travelled(Math.Abs(dx), Math.Abs(dy)))
-        {
-            MovesHeld++;
-            ClearHideGesture();
-            return false;
-        }
-
-        // 够格的一拍：进这一段手势的账。净位移是矢量起点到现在的切比雪夫长度，不是步子加起来。
-        _wakeX += dx;
-        _wakeY += dy;
-        _wakeSteps++;
-        _wakeTravel = Math.Max(Math.Abs(_wakeX), Math.Abs(_wakeY));
-
-        if (_wakeSteps < WakeStepsNeeded || _wakeTravel < WakeTravelPixels)
-        {
-            MovesHeld++;
-            return false;
-        }
-
-        return true;
-    }
+    public bool WindowFocused { get; set; } = true;
 
     /// <summary>
     /// 上下两条边缘带各占画面高度的比例 —— 也就是「显示上方控件与下方进度条的触发阈值」。
@@ -563,12 +349,11 @@ public sealed class ChromeReveal
     public bool CursorHidden { get; private set; }
 
     /// <summary>
-    /// 指针的最后读数是否停在控件上（或音量条的接近带里）。二十报的回笼闸要用它：停靠的指针
-    /// 买的是 <see cref="ParkedIdleMilliseconds"/> 的耐心而不是豁免，回笼若在这种指针上拨时钟，
-    /// 等于替真手把那份耐心一次性花光 —— 控件会在真手犹豫的半途塌掉。所以停靠的落点不回笼，
-    /// 交给既有的停靠规则自己到期。
+    /// 空闲钟走到了哪儿（毫秒）—— <b>只给外壳的诊断行读</b>：光标/控件该收不收的时候，这一格说清
+    /// 是不是被谁不停重盖着（2026-09-16 晚加的，用户报「鼠标已经不会自动隐藏了」时手边唯一的读数）。
+    /// 只读，不改任何状态。
     /// </summary>
-    public bool PointerParked => Parked;
+    public long IdleAgo(long now) => now - _lastActivity;
 
     /// <summary>
     /// True while something is still due to expire, so the caller knows to keep ticking. A pointer that is
@@ -693,22 +478,6 @@ public sealed class ChromeReveal
     public bool PointerOnControl => _part != ChromePart.None;
 
     /// <summary>
-    /// 二十报的回笼动作：把空闲时钟直接拨到「早已闲置满 <see cref="CursorIdleMilliseconds"/>」的位置，
-    /// 让 <see cref="Settle"/> 用它自己的全部条件去裁决藏不藏。
-    /// <para>
-    /// 之所以是「拨时钟」而不是「命令藏」：判成手的唤醒之后指针可能落在任何地方——停在画面正中
-    /// （幽灵流的落点），也停在控件上、chrome 还在屏上、或某个 hold 正立着。这三种里只有第一种
-    /// 该藏，而这个类自己就是那套条件的唯一权威；外壳不该有第二份抄写的藏匿判据（第十三报之前
-    /// 每一份抄写都各漏各的）。返回值仍然是「有没有翻动」，外壳拿它决定要不要记账。
-    /// </para>
-    /// </summary>
-    public bool ExpireIdle(long now)
-    {
-        _lastActivity = now - CursorIdleMilliseconds;
-        return Settle(now);
-    }
-
-    /// <summary>
     /// Activity with nothing to point at: shows all of the chrome for the length of the grace window
     /// wherever the pointer happens to be. Used for keyboard-driven playback commands, which otherwise
     /// get no feedback at all if the pointer is resting in the middle of the picture.
@@ -750,11 +519,6 @@ public sealed class ChromeReveal
         State = new ChromeState(true, true, true);
         RailStrength = 1;
         CursorHidden = false;
-
-        // 新片子开场，上一个文件藏匿期攒的手势路程与挡下的次数都归零：那两个数是「这一段藏匿」的账，
-        // 跨文件延续会把日志读成「这一报修了以后还在犯」。
-        ClearHideGesture();
-        MovesHeld = 0;
     }
 
     /// <summary>Applies the rule to the recorded pointer state and reports whether anything moved.</summary>
@@ -766,22 +530,20 @@ public sealed class ChromeReveal
         // The cursor is a process-wide resource, so it only ever hides while the pointer is genuinely
         // over this picture with nothing on screen to aim at — and on its own, longer window, so that
         // crossing the dead zone takes the chrome away without the cursor going with it.
+        //
+        // WindowFocused 是 mpv.net 的 ActiveForm == this（2026-09-16 照搬）：窗口不在前台就不藏；
+        // 这一位从真翻假的那一拍，本来藏着的 hide 也跟着变假 —— OnLostFocus → ShowCursor 那条路
+        // 就是从这里走通的，外壳喂完这一位推一拍即可。
         var hide = !next.Any
             && _pointerY >= 0
             && !HoldChrome
             && !KeepChrome
+            && WindowFocused
             && now - _lastActivity >= CursorIdleMilliseconds;
 
         // The strength is quantised at the source rather than compared with a tolerance here, so that
         // 「did anything change」 stays an equality — a pointer sliding along the right edge moves it in
         // hundredths, and every hundredth is a repaint the page has asked to hear about.
-        //
-        // 清账这一句放在早退<b>之前</b>（2026-09-16 第二轮复核）：藏匿期那条路清账只是顺手，真正需要
-        // 它的是「没有翻动」的那些拍 —— 光标以别的方式回到「显」（关机、离页、自检里那十几处直接调用）
-        // 时 hide 是假而状态没变，早退一走，攒到一半的账就活到了一段新的藏匿里，等于给它的第一记位移
-        // 白送几十像素。放在这里，这条不变式才是真的，而不是靠「每次藏之前都恰好有一秒二的静止」凑的。
-        if (!hide) ClearHideGesture();
-
         if (next == State && strength == RailStrength && hide == CursorHidden) return false;
 
         State = next;

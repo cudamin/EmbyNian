@@ -49,19 +49,20 @@ namespace EmbyNian.Shell.Windowing;
 /// 真机的「从未见过」状态才现形。
 /// </para>
 /// <para>
-/// <b>二十一报（2026-09-16）把这张证词从「充分」降成了「必要」。</b>十九报的真机日志钉死了见证自己
-/// 的极限：AyuGram 那段位移带着一个<b>真设备句柄</b>（<c>VID_1532&amp;PID_007C</c>，55 条一像素微步），
-/// 在输入层面与真手一字不差 —— 上面那条「有 hDevice 就是手」的判据对它不成立，而用户当时把鼠标
-/// <b>拔了</b>。所以见证现在只剩一票<b>否决权</b>：说「没有」当场判注入（这一票仍然值钱，纯
-/// <c>SetCursorPos</c> 注入全靠它挡），说「有」只是获准去攒路程，够不够
-/// <see cref="EmbyNian.Core.Playback.ChromeReveal.WakeTravelPixels"/> 另说。
+/// <b>二十一报把这张证词降成「必要」，2026-09-16 晚「完全照搬 mpv.net」后连否决权也交了回去。</b>
+/// 十九报的真机日志钉死了见证自己的极限：AyuGram 那段位移带着一个<b>真设备句柄</b>
+/// （<c>VID_1532&amp;PID_007C</c>，55 条一像素微步），在输入层面与真手一字不差 —— 而用户当时把鼠标
+/// <b>拔了</b>。唤醒裁决最终整个交给了 <see cref="EmbyNian.Core.Playback.ChromeReveal.HandStep"/>
+/// （位置差过阈值即手，mpv.net 同款），见证从此<b>只记账、不裁决</b>：真/注两本账进日志，
+/// 下一次幽灵报告的定罪证据还从这里出。上面「有 hDevice 就是手」的故事是它曾经的角色，
+/// 留着当这段历史的判词。
 /// </para>
 /// </summary>
 internal sealed class RealInputWitness
 {
-    /// <summary>原始输入注册成了没有。失败时调用方就没有这张否决票（藏匿期只剩路程那一关），这一个
-    /// 字段就是那条退路的开关；它也进日志 —— 「见证缺席」必须能在日志里一眼看出来，不然下次报告又要猜。
-    /// 注册在 <c>HookIslandCursor</c> 里做（子类化成功的同一处），结果写回这里。</summary>
+    /// <summary>原始输入注册成了没有。裁决不再问它，但「见证缺席」仍然必须能在日志里一眼看出来
+    /// —— 取证账的空白得有个解释，不然下次报告又要猜。注册在 <c>HookIslandCursor</c> 里做
+    /// （子类化成功的同一处），结果写回这里。</summary>
     public bool Ready { get; internal set; }
 
     private long _lastRealMoveAt = long.MinValue;
@@ -140,10 +141,10 @@ internal sealed class RealInputWitness
     }
 
     /// <summary>
-    /// 距最后一次被见证的真移动，还在 <paramref name="withinMilliseconds"/> 之内没有。窗口给多少由
-    /// 调用方定（<see cref="EmbyNian.Core.Playback.ChromeReveal.WitnessWindowMilliseconds"/>）：太窄，
-    /// 手停下后轮询才到的最后一记会被冤成注入；太宽，注入落地瞬间恰好有一记久远的真移动会冤放它。
-    /// 轮询一拍 100ms、手停下到轮询看见最多两拍，300 在两边都站得住。
+    /// 距最后一次被见证的真移动，还在 <paramref name="withinMilliseconds"/> 之内没有。裁决改用
+    /// <see cref="EmbyNian.Core.Playback.ChromeReveal.HandStep"/> 之后（2026-09-16 照搬 mpv.net），
+    /// 唤醒的路上不再有人问这一句；它留着给取证与回归测试用——「最近有没有真输入」仍是读懂
+    /// 真/注两本账最顺的一把尺。
     /// <para>
     /// 时钟与 <c>PlayerPage.Now</c> 同一个（<see cref="Environment.TickCount64"/>），这一问没有跨时钟
     /// 换算 —— 两边本来就是一个钟。
@@ -160,8 +161,9 @@ internal sealed class RealInputWitness
 
     /// <summary>
     /// 自检专用：凭空记一条「刚刚有真输入」。SetCursorPos 不产生 WM_INPUT（这正是它能当注入替身的
-    /// 理由），所以自检里那些模拟真手的腿必须自己把见证补上 —— 不补，新判据会把它们全判成注入，
-    /// 探针红得毫无信息量。补上，探针测的才是「判据认不认得出补过的见证」，也就是它该测的东西。
+    /// 理由）。判据换成 mpv.net 的 HandStep 之后（2026-09-16），唤醒路上不再有否决票可绕，
+    /// 这一条暂时没有调用方 —— 留着：下一次要测「带出处的输入」语义的探针仍然用得上，
+    /// 伪造走 <see cref="Forged"/> 而不混进 <see cref="RealMoves"/>。
     /// </summary>
     public void Forge()
     {

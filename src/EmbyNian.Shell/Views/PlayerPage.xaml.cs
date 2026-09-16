@@ -119,6 +119,21 @@ public sealed partial class PlayerPage : UserControl
     private ShellPage? _shell;
     private HostWindow? _window;
 
+    /// <summary>
+    /// The video surface's bridge to the in-process player. One per page, because the 独立播放窗口
+    /// runs its own PlayerPage over its own panel; the backend asks whichever page took the play
+    /// request. Built here rather than lazily — the panel exists from InitializeComponent, and a
+    /// session that only browses pays nothing for it.
+    /// </summary>
+    private readonly SwapChainVideoTarget _videoTarget;
+
+    /// <summary>
+    /// The video contract the factory reads for this page's panel — the 混排 pipeline's surface.
+    /// The 独立播放窗口 answers with its video child instead, which is how the two pipelines are
+    /// chosen: by which page or window took the play request.
+    /// </summary>
+    internal IVideoSurface? VideoSurface => _videoTarget;
+
     private bool _cursorHidden;
 
     /// <summary>
@@ -208,14 +223,6 @@ public sealed partial class PlayerPage : UserControl
     private int _polledMoves;
 
     /// <summary>
-    /// 藏匿期被挡下、没有叫醒光标的位移记数（第二十一报改名自 <c>_warpsIgnored</c>，形状判据整个拆掉
-    /// 之后「跳变」这个词已经名不副实）。与 <see cref="ChromeReveal.MovesHeld"/> 是同一件事在两个层的
-    /// 账，这里这一份随藏匿行出日志，好让用户下一次报「AyuGram 又把它弄出来了」时能一眼看出到底是
-    /// 「没挡住」还是「没发生」。
-    /// </summary>
-    private int _movesHeld;
-
-    /// <summary>
     /// The one cursor position a tick works from, whether the OS gave it up, and whether a tick is currently
     /// in progress and therefore sharing it. See <see cref="CursorScreen"/> for what the sharing is for: four
     /// separate readings inside one tick can disagree with each other, and the tick then acts on two
@@ -298,6 +305,10 @@ public sealed partial class PlayerPage : UserControl
     public PlayerPage()
     {
         InitializeComponent();
+
+        // The video surface's native bridge is wired before anything else touches the panel: it
+        // wants the panel's first SizeChanged, which can fire as soon as layout runs.
+        _videoTarget = new SwapChainVideoTarget(VideoPanel);
 
         // Before anything else that draws: the XAML declares the overlay's brushes empty and this fills
         // them from PlayerPalette. Unpainted they are transparent, not missing — see PlayerPage.Palette.cs.
@@ -447,6 +458,11 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.MeasureRefreshHz = () => _window?.RefreshHz() ?? 0;
         window.GeometryChanged += OnGeometryChanged;
 
+        // mpv.net 的失焦显示与「未激活不藏」（2026-09-16 照搬）：WM_ACTIVATE 来的焦点位喂给规则，
+        // 藏匿条件里那一问由它回答；失焦的那一拍顺手把藏着的光标掀开（OnLostFocus → ShowCursor
+        // 同款）。见 OnWindowFocusChanged 与 ChromeReveal.WindowFocused。
+        window.FocusChanged += OnWindowFocusChanged;
+
         // 键盘兜底（2026-09-15「新增esc退出全屏 按空格开始播放」）：Win32 键盘焦点不在岛里时（全屏播放
         // 期间被别的应用抢过前台再回来、焦点落在宿主/视频子窗口上），OnKeyDown 和 OnSpaceShortcut 都收
         // 不到键 —— 窗口的 WH_KEYBOARD 钩子把空格和 Esc 转到本页（<see cref="IWin32KeySink"/>）。
@@ -473,6 +489,7 @@ public sealed partial class PlayerPage : UserControl
         if (_cursorHidden) _woke = "播放层关停";
         SetCursorHidden(false);
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
+        if (_window is not null) _window.FocusChanged -= OnWindowFocusChanged;
         ViewModel?.Shutdown();
     }
 
@@ -512,6 +529,7 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.MeasureSurface = null;
         ViewModel.MeasureRefreshHz = null;
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
+        if (_window is not null) _window.FocusChanged -= OnWindowFocusChanged;
 
         // 键盘兜底同步摘下：接键人跟着这一次 Attach 走，别让下一任（独立窗口那边的页）的老号码还留在线上。
         if (_window is not null) _window.SetWin32Keys(null);

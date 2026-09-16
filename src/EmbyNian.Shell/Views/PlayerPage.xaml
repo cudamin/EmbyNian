@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The player's on-screen controls, as a sibling of the navigation shell rather than a page in its
-  frame: the pane and the header must not stay on screen behind a film.
+  The player's on-screen controls, drawn over the video surface in this same visual tree: the
+  picture is the grid's first child (a SwapChainPanel carrying mpv's D3D11 composition swapchain),
+  and every overlay after it sits above it by tree order. The pane and the header must not stay on
+  screen behind a film, so this is a sibling of the navigation shell rather than a page in its
+  frame. It replaces five WinForms classes that between them ran to some three and a half thousand
+  lines — PlayerBar 1291, PlayerFlyout 813, VolumeRail 283, SkipSectionButton 205, Chrome 696 — and
+  four things the rewrite bought are worth naming:
 
-  Everything here is drawn over a transparent island with mpv's child HWND showing through it. That
-  is what fact 1 in HostWindow's remarks bought, and it is why this file replaces the WinForms
-  shell's five hand-painted layered top-level windows (PlayerBar 1291 lines, PlayerFlyout 813,
-  VolumeRail 283, SkipSectionButton 205, Chrome 696) with declarative XAML in one visual tree. The
-  four consequences worth naming:
-
-    * Requirement 1, resizing. Nine SetWindowPos calls per WM_SIZE became one MoveAndResize for the
-      island plus one for the video child. The chrome resizes because it is laid out, not moved.
-    * Requirement 12, the mess when switching episodes. The island is above the video by
-      construction, so nothing has to be brought to the front and the handover cover cannot lose a
-      z-order race it used to lose.
+    * Requirement 1, resizing. Nine SetWindowPos calls per WM_SIZE became layout: the chrome resizes
+      because it is laid out, not moved, and the picture now resizes the same way — a size option
+      for mpv, no window geometry at all.
+    * Requirement 12, the mess when switching episodes. The video and the chrome are one tree, so
+      nothing has to be brought to the front and the handover cover cannot lose a z-order race it
+      used to lose.
     * Requirements 9/10/11, the reveal rule. Real pointer events arrive here, so ChromeReveal is
       driven one event at a time instead of off a 40 ms Cursor.Position poll.
     * The pickers. MenuFlyout gets a genuine DesktopAcrylicBackdrop from the framework's own
@@ -218,6 +218,23 @@
         <local:PictureSurface.ContextFlyout>
             <MenuFlyout x:Name="PictureMenu" Opening="OnPictureMenuOpening" />
         </local:PictureSurface.ContextFlyout>
+
+        <!-- ================= 视频面 =================
+             The picture itself, back inside the visual tree. libmpv runs in D3D11 composition mode
+             (d3d11-output-mode=composition): it renders into a swapchain of its own and hands the
+             pointer over through the display-swapchain property, and SwapChainVideoTarget attaches
+             it here — so the video is this grid's first child, below every overlay, instead of a
+             sibling HWND behind the island. No wid, no z-order sandwich, and the resize accounting
+             that went with them.
+
+             First child on purpose: everything after this draws over the picture, in tree order,
+             and the handover cover at the bottom of the file therefore still wins every race.
+
+             IsHitTestVisible=False keeps the pointer's world exactly as it was when the video was a
+             window: every event lands on Root and the chrome above it, so the reveal rule, the
+             right-click menu and the cursor-hiding arrangements read the same input they always
+             did. -->
+        <SwapChainPanel x:Name="VideoPanel" IsHitTestVisible="False" />
 
         <!-- ================= 顶部：标题与窗口操作 =================
              The three window commands are the last column rather than a separate overlay of the shell's,

@@ -4,10 +4,11 @@
     The WinUI 3 shell. It is the only desktop application in the solution.
 
     The window model here was settled by measurement rather than argument (see Shell/HostWindow.cs):
-    the top-level window is our own CreateWindowEx HWND, mpv stays a child HWND embedded with its
-    "wid" option, and every pixel of chrome lives in a DesktopWindowXamlSource island above the
-    video. A real Microsoft.UI.Xaml.Window was tried and rejected: it composites its backdrop into
-    the island surface, which makes the island permanently opaque and hides the video child entirely.
+    the top-level window is our own CreateWindowEx HWND, and every pixel of chrome — the video
+    included — lives in a DesktopWindowXamlSource island filling its client area; mpv composites
+    into a SwapChainPanel through its D3D11 composition swapchain. A real Microsoft.UI.Xaml.Window
+    was tried and rejected: it composites its backdrop into the island surface, which makes the
+    island permanently opaque and takes the transparent-over-window-colour browsing backdrop with it.
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>

@@ -3461,7 +3461,7 @@ internal static class PlaybackTests
             Assert.False(chrome.State.Any);
             Assert.False(chrome.CursorHidden, "控件收了鼠标还得在");
 
-            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds), "「鼠标静止不动两秒之后要自动隐藏」");
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds), "「静止一秒就藏（mpv.net 的 cursor-autohide）」");
             Assert.True(chrome.CursorHidden);
 
             var moved = now + ChromeReveal.CursorIdleMilliseconds + 50;
@@ -3473,48 +3473,6 @@ internal static class PlaybackTests
             chrome.Tick(moved + 100 + ChromeReveal.CursorIdleMilliseconds);
             Assert.False(chrome.State.Any);
             Assert.False(chrome.CursorHidden);
-        });
-
-        Test("播放器控件：回笼拨时钟把幽灵流的落点光标交回给规则", () =>
-        {
-            // 二十报：13:29 那场（带设备句柄的输入流）在输入层面与真手不可区分，判成手的唤醒按设计
-            // 把光标带了回来；分水岭在显示之后——窗口内没有任何后续输入，就把那次唤醒改判成幽灵流。
-            // ExpireIdle 只拨时钟：落点在画面中部、什么都没在屏上，规则自己把光标收走。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds));
-            Assert.True(chrome.CursorHidden);
-
-            var wokeAt = now + ChromeReveal.CursorIdleMilliseconds + 100;
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, wokeAt);
-            Assert.False(chrome.CursorHidden, "判成手的唤醒按设计把光标带回来");
-
-            Assert.True(chrome.ExpireIdle(wokeAt + ChromeReveal.GhostQuiesceMilliseconds),
-                "回笼窗平静走完，落点在画面中部，规则该把光标收走");
-            Assert.True(chrome.CursorHidden);
-        });
-
-        Test("播放器控件：回笼的时钟不能拨在停靠的指针上", () =>
-        {
-            // 幽灵流的落点可能恰好在控件上。ExpireIdle 拨的是 chrome 收起与光标藏匿共用的那本钟，
-            // 停靠的耐心（两千毫秒）也在其中：回笼若在这种落点上拨钟，等于替真手把停靠耐心一次
-            // 花光，控件会在犹豫的半途塌掉。所以外壳回笼前必须问 PointerParked——停靠的落点不
-            // 回笼，交给既有的停靠规则自己到期。这条把那道闸的原理钉进契约里。
-            var chrome = Chrome(out var now);
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds), "两秒静止要先把光标藏下去");
-            Assert.True(chrome.CursorHidden, "藏匿是回笼的前置");
-
-            var wokeAt = now + ChromeReveal.CursorIdleMilliseconds + 100;
-            chrome.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, wokeAt);
-            Assert.False(chrome.CursorHidden);
-            Assert.True(chrome.PointerParked, "指针停在控件上，回笼闸必须认得出来");
-
-            Assert.True(chrome.ExpireIdle(wokeAt + ChromeReveal.GhostQuiesceMilliseconds),
-                "拨钟等于宣告停靠耐心已满：控件连着光标一起收");
-            Assert.False(chrome.State.Bar, "停靠耐心被拨满，控件塌了——外壳闸住这种情况才算数");
-            Assert.True(chrome.CursorHidden);
         });
 
         Test("播放器控件：回来停住的手也得让光标重新能藏", () =>
@@ -3556,15 +3514,15 @@ internal static class PlaybackTests
                 Assert.False(chrome.CursorHidden, $"第 {t - now} 毫秒：手还在动，指针不能藏");
             }
 
-            // 停下之后照旧藏，而且是从停下那一刻开始数的两秒。
+            // 停下之后照旧藏，而且是从停下那一刻开始数的一秒（mpv.net 的 cursor-autohide）。
             var stopped = now + 5000;
             for (var t = stopped; t < stopped + ChromeReveal.CursorIdleMilliseconds; t += 100)
             {
                 chrome.Tick(t);
-                Assert.False(chrome.CursorHidden, $"停了 {t - stopped} 毫秒，还不到两秒，不许藏");
+                Assert.False(chrome.CursorHidden, $"停了 {t - stopped} 毫秒，还不到一秒，不许藏");
             }
 
-            Assert.True(chrome.Tick(stopped + ChromeReveal.CursorIdleMilliseconds), "停了两秒还是要藏");
+            Assert.True(chrome.Tick(stopped + ChromeReveal.CursorIdleMilliseconds), "停满一秒还是要藏");
             Assert.True(chrome.CursorHidden);
 
             // 藏着的时候动一下，同样只说得出「动了」——也得立刻回来。
@@ -3587,7 +3545,7 @@ internal static class PlaybackTests
             for (var t = now; t <= now + 4000; t += 250) chrome.SetKeep(false, t);
 
             Assert.False(chrome.State.Any, "推得再密也不是指针动了，控件该在 650 毫秒就收");
-            Assert.True(chrome.CursorHidden, "「鼠标静止不动两秒之后要自动隐藏」");
+            Assert.True(chrome.CursorHidden, "「静止一秒就藏（mpv.net 的 cursor-autohide）」");
 
             // 真从「加载中」翻过来的那一下仍然要重新起算：那一秒里控件是唯一的出路，刚交回来就收
             // 等于把出路从手底下抽走。
@@ -3729,7 +3687,7 @@ internal static class PlaybackTests
             Assert.False(shown.State.Any);
             Assert.False(shown.CursorHidden, "控件收了鼠标还得在");
             shown.Tick(start + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(shown.CursorHidden, "露着的时候照样按两秒走");
+            Assert.True(shown.CursorHidden, "露着的时候照样按空闲钟走");
         });
 
         Test("播放器控件：藏下去之后每一拍都稳，不是每两秒闪一下", () =>
@@ -3748,7 +3706,7 @@ internal static class PlaybackTests
             chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
             var hidAt = now + ChromeReveal.CursorIdleMilliseconds;
             chrome.Tick(hidAt);
-            Assert.True(chrome.CursorHidden, "静止两秒就该藏");
+            Assert.True(chrome.CursorHidden, "静止到点就该藏");
 
             // 紧接着的一拍（一百毫秒后，正是十赫兹的下一拍）：必须还藏着。旧写法在这一拍就会把它放出来。
             chrome.Tick(hidAt + 100);
@@ -3785,304 +3743,42 @@ internal static class PlaybackTests
             Assert.True(ChromeReveal.MovePixels > 2, "桌面上实测到的抖动到了两像素，阈值不能停在二");
         });
 
-        Test("播放器控件：藏匿期那记 60 像素走不到一百，光标不出来", () =>
+        Test("播放器控件：mpv.net 的判动——离上次记录点差超五像素就是手", () =>
         {
-            // 第十一报（2026-09-15）以来一直在追的现场：屏幕二上的 AyuGram 每收到一条静音的群聊消息
-            // （没有弹窗、鼠标还拔着）就把指针横向搬整整 60 像素，一秒不到就把藏了不到两秒的光标叫回来。
-            // 四天日志数出来的签名一样：dx=60,dy=0 在 09-15 出现 64 次、09-14 出现 8 次、09-12 出现 6 次。
+            // 2026-09-16 用户拍板「完全照搬 mpv.net」：藏匿期唤醒只剩 <see cref="ChromeReveal.HandStep"/>
+            // 一行纯函数（mpv.net 的 IsCursorPosDifferent 同款问法，mpv 系阈值 5×dpi/96 的切比雪夫、
+            // 严格大于）。见证否决、净位移账本、连着拍数、回笼窗口全部退役 —— 它们挡过二十一次幽灵
+            // 唤醒，代价是慢手永远叫不回光标；这一行就是新的全部。
             //
-            // 十一到十五报拿「形状」判（搬完冻不冻住），十六到二十报拿「见证」判（有没有真设备句柄），
-            // 两条都被后来的日志推翻了：注入可以是一段动画，也可以带着真设备句柄。第二十一报换的判据是
-            // **这一段手势总共走了多远** —— 日志里每一个幽灵签名都是走几十像素就停（60,0 / 40,10 /
-            // 42,15 / 37,33 / 30,7 / 28,20 / 8,2 / 10,2 / 60,13），唯一一次确凿的真手是 291,82。
-            // 一百像素这道坎把两边分得干干净净。
-            //
-            // 这条钉的是最常见的那一记：见证说「有」（十九报证明幽灵流也能带真设备句柄，所以这里
-            // 故意传真），但路程只有 60 —— 光标必须接着藏。
-            var chrome = Chrome(out var now);
+            // 60 像素那记「幽灵签名」从这一刻起就是一次普通的鼠标移动：判红判绿反过来，几何没变。
+            Assert.False(ChromeReveal.HandStep(0, 0), "没动就是没动");
+            Assert.False(ChromeReveal.HandStep(2, 0), "桌面实测过的抖动：2,0");
+            Assert.False(ChromeReveal.HandStep(0, 2), "0,2 也一样");
+            Assert.False(ChromeReveal.HandStep(5, 0), "五像素不越线 —— mpv.net 的问法是严格大于");
+            Assert.False(ChromeReveal.HandStep(0, 5), "另一个轴一样");
+            Assert.True(ChromeReveal.HandStep(6, 0), "六像素过线");
+            Assert.True(ChromeReveal.HandStep(0, 6));
+            Assert.True(ChromeReveal.HandStep(60, 0), "60 像素的幽灵签名如今就是一次鼠标移动");
+            Assert.True(ChromeReveal.HandStep(-60, 0), "参数带符号：反向走也过线，参照点语义没有方向");
+            Assert.True(ChromeReveal.HandStep(60, 15), "斜着走取切比雪夫");
 
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden, "先得藏下去，才有东西可被叫醒");
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at), "走了 60 像素，不到一百");
-            Assert.True(chrome.CursorHidden, "挡下的位移不叫醒光标");
-            Assert.Equal(1, chrome.MovesHeld);
-            Assert.Equal(60d, chrome.WakeTravel, "挡下了，但差多少得是个数 —— 日志和自检都读它");
-        });
-
-        Test("播放器控件：一条条隔着来的消息攒不成一段手势", () =>
-        {
-            // 路程是攒的，那就必须有断点，不然十条隔了几秒的消息迟早把账推过一百 —— 那正是第十五报
-            // 「只挡得住第一条」的新版写法。断点是 WakeGapMilliseconds：两记之间隔过二百五十毫秒，
-            // 上一段就算结束，从零重记。用户的原话是「每次收到静音的群聊消息都会让鼠标显示」，
-            // 那是一条条来的，每条之间隔着好几秒。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-
-            // 五条消息，每条 60 像素，彼此隔着两秒：一条都不许叫醒光标，账也不许攒起来。
-            for (var i = 0; i < 5; i++)
-            {
-                Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at + 2000 * i),
-                    $"第 {i + 1} 条消息还是走不到一百");
-                Assert.Equal(60d, chrome.WakeTravel, "隔了两秒的一记是新一段的开头，不是上一段的续");
-            }
-
-            Assert.True(chrome.CursorHidden, "五条消息一条都不该让光标出来");
-            Assert.Equal(5, chrome.MovesHeld, "五条都要记进账，好让日志读得出这次修法在干活");
-        });
-
-        Test("播放器控件：真手连着走够三拍就叫醒光标", () =>
-        {
-            // 上一条的对照组，也是这次修法的成败线：挡得住幽灵却叫不醒手，等于把光标焊死了。
-            // 手在鼠标上是个**过程** —— 十赫兹的轮询下，手随便划一下就是每拍几十像素、连着好几拍。
-            // 第二十一报第一版是两拍 60 过线；同日第二轮复核加了「连着三拍」的下限（见
-            // WakeStepsNeeded：不加的话一记幅度翻倍的横跳单拍就能穿关），于是手要连着走三拍 ——
-            // 代价是三百毫秒，肉眼看不见。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 15, at), "第一拍还差得远");
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 15, at + 100),
-                "两拍净位移过了一百，但连着才两拍");
-            Assert.True(chrome.HideMoveVerdict(realInputSeen: true, 60, 15, at + 200), "第三拍接上，是手");
-            Assert.Equal(2, chrome.MovesHeld, "叫醒不是「又挡掉一次」");
-            Assert.Equal(180d, chrome.WakeTravel, "判成手时故意不清账，日志才读得到「走够了多少才醒」");
-        });
-
-        Test("播放器控件：幽灵两步之间那一整拍冻住，账就断了", () =>
-        {
-            // 这一版判据真正的分水岭（2026-09-16 第二轮对抗复核）：幽灵与真手之间唯一不随消息长短
-            // 变化的差别，是十六报自己量下来的那句「步与步隔着一两百毫秒」—— 而轮询一拍一百毫秒，
-            // 所以幽灵在两步之间必然留下整拍没动的记录，真手连着走时每一拍都有位移。第一版拿
-            // 二百五十毫秒当断点（比幽灵的步距还宽）等于宣布「每两百五十毫秒动一下的东西算一只手」，
-            // 这条用例钉的就是那个漏洞：中间那一拍零位移一进账，前面攒的必须归零。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at), "第一步：60");
-            Assert.Equal(60d, chrome.WakeTravel);
-
-            // 整拍没动（轮询照样报，Core 拿它把手势归零），然后第二步 60。
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 0, 0, at + 100), "这一拍没动");
-            Assert.Equal(0d, chrome.WakeTravel, "零位移的一拍要把手势账归零");
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at + 200), "第二步也只有 60");
-
-            Assert.True(chrome.CursorHidden, "走走停停的幽灵永远凑不出连着三拍");
-            Assert.Equal(2, chrome.MovesHeld, "没动的拍子不算「挡下一记位移」，不进这本账");
-        });
-
-        Test("播放器控件：净位移不是步子之和——走出去再走回来是一动没动", () =>
-        {
-            // 账记的是矢量起点到现在的净位移（第二十一报第二轮）。按「步子加起来」算的话，一段带缓动
-            // 或过冲的注入自己就能给自己凑账：+40 接 −40 读成走了八十，而指针其实一动没动。
-            // 这条钉住方向：反向的一步是往回退，不是继续攒。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at));
-            Assert.Equal(60d, chrome.WakeTravel);
-
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, -60, 0, at + 100), "往回走一步");
-            Assert.Equal(0d, chrome.WakeTravel, "回起点＝净位移零，不是一百二十");
-            Assert.True(chrome.CursorHidden);
-        });
-
-        Test("播放器控件：一拍横跳两百像素也不够——连着几拍是独立的一道下限", () =>
-        {
-            // 只有「尽路程」一道关时，一记跳到底的注入能一击穿关：日志里 AyuGram 的签名是「一拍之内
-            // 横跳整整 60px、纵向恒 0」（PlayerPage.Chrome.cs 的注释原文），幅度翻倍、或者连发两条
-            // 凑成一百二十，单靠一百像素那道坎是拦不住的。真手不可能只走一拍就停，所以连着几拍是
-            // 独立的一条线，两个条件缺一不可。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-
-            // 单拍 200：净位移早就过线了，但只有一拍。
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 200, 0, at), "一拍跳到底，不是手");
-            Assert.Equal(200d, chrome.WakeTravel, "路程够了，拦它的是连着几拍那一条");
-            Assert.True(chrome.CursorHidden, "光标没出来");
-
-            // 两条消息背靠背（100 毫秒内，中间没有整拍没动）：两拍、净位移三百二，仍然不算手。
-            // 这是这一版判据明码标价的代价 —— 手腕甩一下就停的那两拍不认，得再走半拍。
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 120, 0, at + 100), "第二拍仍然不够拍数");
-            Assert.True(chrome.CursorHidden);
-        });
-
-        Test("播放器控件：慢而不停的手也算数——攒的是连着在走的那一段", () =>
-        {
-            // 判据攒的是**路程**而不是**速度**：手慢慢划过去，每拍只走六七像素，那也是手。二十拍
-            // 连着走、每拍都在断点之内，累计过百就该醒 —— 这条钉的是「一百像素不等于一拍要走一百」。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-            var woke = false;
-            var steps = 0;
-
-            for (var i = 0; i < 40 && !woke; i++)
-            {
-                steps++;
-                woke = chrome.HideMoveVerdict(realInputSeen: true, 7, 2, at + 100 * i);
-            }
-
-            Assert.True(woke, "连着慢走的手最终要能叫醒光标");
-            Assert.Equal(15, steps, "七像素一拍，攒满一百是第十五拍 —— 一秒半，符合「手在划」的手感");
-        });
-
-        Test("播放器控件：见证说没有就是注入——当场否决，还要把攒到一半的账清掉", () =>
-        {
-            // 第十六报（2026-09-16）请来的真实输入见证：SetCursorPos 不产生 WM_INPUT，SendInput 产生的
-            // 没有 hDevice，真手的有。第二十一报把它从「充分」降成「必要」—— 说「有」只是获准去攒路程，
-            // 说「没有」当场判注入。
-            //
-            // 清账那一句是这条用例的要害：注入要是只「不进账」而把前面攒的留着，那么「手划半程 →
-            // 一串注入 → 手再划半程」就能接起来凑满一百。见证否决时把账归零，接起来这条路就断了。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-
-            // 先攒起半程：见证说有、走了 60。
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at));
-            Assert.Equal(60d, chrome.WakeTravel);
-
-            // 见证说没有：当场判注入，账归零。
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: false, 60, 0, at + 100), "没有见证就是注入");
-            Assert.Equal(0d, chrome.WakeTravel, "注入要把攒到一半的账清掉，不然它能替手凑数");
-            Assert.Equal(2, chrome.MovesHeld);
-
-            // 再来一记带见证的 60：从零重攒，仍然不到一百。
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at + 200), "清过账就得从零重攒");
-            Assert.True(chrome.CursorHidden, "全程光标一次都不该出来");
-        });
-
-        Test("播放器控件：一段没有见证的动画注入，攒多少拍都叫不醒光标", () =>
-        {
-            // 第十六报的日志现场：AyuGram 的注入是一段动画（972,378 → 986,379 → 1028,383 → 1038,385
-            // → 1058,380，四秒五步、每步十几到几十像素），每一步单独看都与「手走了一拍」无法区分。
-            // 见证否决 + 每次否决都清账，合起来的效果是这段动画走多少步都推不动路程账。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-
-            for (var i = 0; i < 20; i++)
-            {
-                Assert.False(chrome.HideMoveVerdict(realInputSeen: false, 40, 4, at + 100 * i),
-                    $"动画第 {i + 1} 步没有见证，还是注入");
-                Assert.Equal(0d, chrome.WakeTravel, "没有见证的位移一像素都不许进账");
-            }
-
-            Assert.True(chrome.CursorHidden, "二十步注入，光标一次都不该出来");
-            Assert.Equal(20, chrome.MovesHeld, "二十步，二十笔账");
-        });
-
-        Test("播放器控件：见证说有也只是获准攒路程，不是通行证", () =>
-        {
-            // 第十九报（2026-09-16）推翻十六报的那份取证：那段幽灵流**带着真的设备句柄**
-            // （VID_1532&PID_007C，55 记一像素的微步），而鼠标当时是拔掉的。见证在输入层面根本分不出
-            // 它和真手 —— 十六报把见证当成「说有就是手」，于是它一句话就把光标叫了出来。
-            //
-            // 第二十一报把见证降成一票否决：说「有」只是拿到攒路程的资格。这条用例演的就是十九、二十报
-            // 的那个签名 —— 见证句句说有，但一段走 60 就停，于是一次都醒不了。这是这次修法唯一新增的
-            // 拦截面，前二十报没有一条判据能挡住它。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-
-            // 三段，每段三记 20 像素（总共 60）、段与段之间隔一秒：全程见证都说有。
-            for (var seg = 0; seg < 3; seg++)
-            {
-                for (var step = 0; step < 3; step++)
-                {
-                    Assert.False(
-                        chrome.HideMoveVerdict(realInputSeen: true, 20, 3, at + 1000 * seg + 120 * step),
-                        $"第 {seg + 1} 段第 {step + 1} 步：有见证，但这一段总共才走 60");
-                }
-            }
-
-            Assert.True(chrome.CursorHidden, "带设备句柄的幽灵流也不该把光标叫出来");
-            Assert.Equal(9, chrome.MovesHeld);
-        });
-
-        Test("播放器控件：光标一显示，藏匿期攒的那段路程就作废", () =>
-        {
-            // 藏匿期的账只在藏匿期里算。攒到一半的路程留着跨过一次显示，下一段藏匿的第一记位移就会
-            // 少走几十像素便够数 —— 幽灵流刚好能借上一段的余额把光标顶出来。Settle 里那句「没在藏
-            // 就清」是这条的实现，这里从外面把它钉住。
-            var chrome = Chrome(out var now);
-
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-            Assert.False(chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at));
-            Assert.Equal(60d, chrome.WakeTravel);
-
-            // 显示一下（轮询问出真移动）：账必须随之作废。
-            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, at + 100, moved: true);
-            Assert.False(chrome.CursorHidden);
-            Assert.Equal(0d, chrome.WakeTravel, "显示之后不该还留着上一次藏匿攒的路程");
-
-            // 再藏一次，一记 60 仍然叫不醒光标 —— 它没有上一段的余额可借。
-            chrome.Tick(at + 100 + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(chrome.CursorHidden);
-            Assert.False(
-                chrome.HideMoveVerdict(realInputSeen: true, 60, 0,
-                    at + 100 + ChromeReveal.CursorIdleMilliseconds + 100),
-                "新的一段藏匿，路程从零重攒");
+            // 阈值必须留在桌面抖动的尺寸之上（真机日志：没人碰的鼠标报 2,0 / 0,2 / 1,2）。
+            Assert.True(ChromeReveal.MovePixels > 2, "阈值不能停在二");
         });
 
         Test("播放器控件：藏匿期报「动了」就能独自结束藏匿——所以事件那一路不许报动", () =>
         {
             // 第十一报续（2026-09-15）的判据源头。用户第三次报「还是一样的毛病」，日志那次现场是
-            // 移动=17、挡掉跳变=0、显示行挂着默认串。缺的不是裁决而是**入口纪律**：Pointer(moved:true)
+            // 移动=17、挡掉跳变=0、显示行挂着默认串。缺的不是判据而是**入口纪律**：Pointer(moved:true)
             // 里那行 `if (moved || !CursorHidden) _lastActivity = now` 会重盖时钟，Settle 的 hide 随即
-            // 变回 false、CursorHidden 翻成显 —— 一次藏匿就被一声「动了」独自结束，既不经过
-            // HideMoveVerdict 的见证/路程裁决，也不落任何名字。
+            // 变回 false、CursorHidden 翻成显 —— 一次藏匿就被一声「动了」独自结束，不经过轮询那道
+            // 阈值关，也不落任何名字。
             //
-            // 所以这条路只能由**已经裁决过**的调用者走：轮询在 HideMoveVerdict 认成手之后（WakeFromPoll 挂
-            // 了名），按键、点击、离窗、回窗、窗口缩放（各自挂名）。XAML 的 PointerMoved 不行 ——
-            // WinUI 会为没动过的指针抬它，外屏 AyuGram 的动静就会让它抬一次。这条测试把「一声没来由的
-            // 动了就足以叫醒」钉在这儿，好让 Shell 那侧「事件只报位置」成为一条有据可查的纪律，
-            // 而不是一句注释。
+            // 所以这条路只能由**轮询**走（过线即醒、有名字可挂），按键、点击、离窗、回窗、窗口缩放
+            // （各自挂名）。XAML 的 PointerMoved 不行 —— WinUI 会为没动过的指针抬它，外屏 AyuGram 的
+            // 动静就会让它抬一次（这条纪律在判据换成 mpv.net 的 HandStep 之后原样成立：轮询一拍之内
+            // 就能看见真位移，事件那一路没有任何非它不可的活）。这条测试把「一声没来由的动了就足以
+            // 叫醒」钉在这儿，好让 Shell 那侧「事件只报位置」成为一条有据可查的纪律，而不是一句注释。
             var chrome = Chrome(out var now);
 
             chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
@@ -4097,51 +3793,63 @@ internal static class PlaybackTests
             Assert.False(chrome.CursorHidden, "一声没来由的「动了」就足以结束藏匿");
         });
 
-        Test("播放器控件：新片子开场，藏匿期的账归零", () =>
+        Test("播放器控件：静止一秒就藏——mpv.net 的 cursor-autohide，停靠的指针仍买两秒", () =>
         {
-            // Reset 是新文件的入口。上一次藏匿挡掉几次、攒了多少路程，留着不化的话下一份报告会读成
-            // 「修了之后还在犯」，而攒到一半的路程还会让新片子开场的第一记位移少走几十像素就够数。
+            // 2026-09-16 照搬 mpv.net：CursorIdle 2000 → 1000（mpv 的 cursor-autohide 默认值）。
+            // 死区里 chrome 650ms 先收，光标等到 1000ms；停靠在控件上的指针等的是 chrome 的停靠
+            // 耐心（ParkedIdle 2000 没动），光标随 chrome 在两秒那拍一起走 —— 「停在哪都两秒」
+            // 的旧约在停靠这一侧原样保留。
+            Assert.Equal(1000L, ChromeReveal.CursorIdleMilliseconds, "mpv.net 的默认就是 1000");
+
+            var chrome = Chrome(out var now);
+
+            // 死区：chrome 650ms 收，光标 1000ms 藏。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.IdleMilliseconds);
+            Assert.False(chrome.State.Any, "死区里控件 650 毫秒就收");
+            Assert.False(chrome.CursorHidden, "控件收了鼠标还得在");
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden, "静止一秒，光标该藏了");
+
+            // 停靠：指针压在进度条上，1000ms 时控件还在（停靠耐心 2000），光标不许先走；
+            // 2000ms 控件收，光标跟它一起走。
+            var parked = Chrome(out var start);
+            parked.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, start);
+            parked.Tick(start + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(parked.State.Bar, "停靠耐心还没走完，控件必须在");
+            Assert.False(parked.CursorHidden, "控件在屏上，光标没有要保住的东西可藏");
+            parked.Tick(start + ChromeReveal.ParkedIdleMilliseconds);
+            Assert.False(parked.State.Bar, "停靠耐心走完，控件收");
+            Assert.True(parked.CursorHidden, "光标随控件一起藏");
+        });
+
+        Test("播放器控件：窗口不在前台就不藏，失焦把藏着的光标掀开", () =>
+        {
+            // mpv.net 的两问（2026-09-16 照搬）：CursorTimer_Tick 的 ActiveForm == this（未激活不藏）
+            // 与 OnLostFocus → ShowCursor（失焦显示）。合在 ChromeReveal.WindowFocused 一个位上：
+            // 外壳从 Window.Activated 喂进来，Settle 用它裁决。
             var chrome = Chrome(out var now);
 
             chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
             chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
-            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
-            chrome.HideMoveVerdict(realInputSeen: true, 60, 0, at);
-            Assert.Equal(1, chrome.MovesHeld);
-            Assert.Equal(60d, chrome.WakeTravel);
+            Assert.True(chrome.CursorHidden, "先得藏下去");
 
-            chrome.Reset(at + 5000);
-            Assert.Equal(0, chrome.MovesHeld, "新片子开场，上一次藏匿挡下的次数要清掉");
-            Assert.Equal(0d, chrome.WakeTravel, "攒了一半的路程也要清掉");
-        });
+            // 失焦：藏着的光标当场回来（OnLostFocus → ShowCursor）。
+            chrome.WindowFocused = false;
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds + 100),
+                "失焦那一拍规则要翻动");
+            Assert.False(chrome.CursorHidden, "失焦显示");
 
-        Test("播放器控件：唤醒净位移一百像素、连着三拍、断点二百五十毫秒——这三个数本身", () =>
-        {
-            // 这三个数是第二十一报（含同日第二轮复核）的全部判据，改动它们就是改判据，所以钉在这儿
-            // 而不是只写在注释里。
-            //
-            // 一百像素：日志里每一个幽灵签名的一段路程都是几十像素（最大 65），唯一确凿的真手是 291。
-            // 一百落在中间、离两边都有一倍余量。降到 60 会把 60,13 那条放过去，升到 200 会让手划一下
-            // 要划两倍远才亮控件。第二轮之后它是<b>净位移</b>，不是步子之和。
-            //
-            // 三拍：一记跳到底的注入（60 像素的签名翻个倍）单拍就能过一百，所以「连着几拍」是独立的
-            // 一道线。三拍是手（一划连着好几拍）与「一格跳变」之间最短的分界；降到两拍就放过了
-            // 背靠背的两条消息，升到四拍手要多走一拍。
-            //
-            // 二百五十毫秒：轮询十赫兹，手连续走动时相邻两记相隔约一百毫秒，两拍半是给调度抖动的余量。
-            // 它<b>不是</b>主力断点 —— 主力是「零位移的一拍把账归零」；这一条管的是轮询自己漏了拍
-            // （拖窗、GetCursorPos 读失败）时账不该跨过那段空白继续攒。
-            Assert.Equal(100d, ChromeReveal.WakeTravelPixels, "唤醒净位移门槛");
-            Assert.Equal(3, ChromeReveal.WakeStepsNeeded, "连着几拍的下限");
-            Assert.Equal(250L, ChromeReveal.WakeGapMilliseconds, "手势断点");
+            // 未激活期间永不藏：闲置再久也不行（ActiveForm == this）。
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds + 60_000);
+            Assert.False(chrome.CursorHidden, "窗口不在前台，藏匿不发生");
 
-            // 门槛必须显著高于单拍的动了没有那道坎，否则「攒路程」等于没攒。
-            Assert.True(ChromeReveal.WakeTravelPixels > ChromeReveal.MovePixels * 10,
-                "路程门槛要比单拍阈值高一个数量级，不然一拍就够数了");
-
-            // 断点必须宽于轮询的一拍，否则手连着走都会被判成一段一段的。
-            Assert.True(ChromeReveal.WakeGapMilliseconds > 100,
-                "断点要宽于轮询周期，不然真手每一拍都在重新开始攒");
+            // 回到前台：空闲钟从失焦前一路走着（没人替静止的指针重盖），位置也没变 ——
+            // mpv.net 的计时器在这个状态下同样一拍之内把光标收回去。要让它留下，动一下鼠标就行。
+            chrome.WindowFocused = true;
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds + 60_100),
+                "回前台那一拍，早已到期的空闲钟照常把光标藏起来");
+            Assert.True(chrome.CursorHidden);
         });
 
         Test("播放器控件：藏下去靠每拍重申，不靠往输入队列里塞东西", () =>

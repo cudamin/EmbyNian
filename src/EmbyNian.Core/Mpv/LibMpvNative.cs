@@ -89,13 +89,6 @@ internal static class LibMpvNative
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int mpv_set_option_string(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string data);
 
-    /// <summary>
-    /// Sets an option with a typed value, for the few options (like <c>wid</c>) that must not
-    /// go through string parsing.
-    /// </summary>
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int mpv_set_option(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int format, ref long data);
-
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int mpv_set_property_string(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string data);
 
@@ -121,6 +114,14 @@ internal static class LibMpvNative
     /// <summary><c>mpv_get_property</c> with MPV_FORMAT_FLAG, whose C type is a 4-byte int.</summary>
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl, EntryPoint = "mpv_get_property")]
     internal static extern int mpv_get_property_flag(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int format, out int data);
+
+    /// <summary>
+    /// <c>mpv_get_property</c> with MPV_FORMAT_INT64. The one typed read the D3D11 composition
+    /// output needs: <c>display-swapchain</c> hands back the swapchain pointer as an integer, and
+    /// that value has no text form to ask for instead.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, EntryPoint = "mpv_get_property")]
+    internal static extern int mpv_get_property_int64(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int format, out long data);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void mpv_free_node_contents(IntPtr node);

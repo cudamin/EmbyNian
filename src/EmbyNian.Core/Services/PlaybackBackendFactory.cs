@@ -14,15 +14,17 @@ namespace EmbyNian.Services;
 public sealed class PlaybackBackendFactory(AppSettings settings, ShaderStaging shaders)
 {
     /// <summary>
-    /// Where the embedded player draws. Set once, by the app, as soon as the host window exists; the
-    /// window creates the surface on the first call and hands out the same HWND forever after.
+    /// The playing surface for this launch — the shell's answer to 「which pipeline carries the
+    /// picture」. The integrated player hands over its page's SwapChainPanel (composition, mixed
+    /// into the visual tree); the 独立播放窗口 hands over its video child HWND (mpv presents its
+    /// own swapchain, straight to the DWM). Read afresh for every launch and re-pointed when the
+    /// separate window opens or closes, which is the whole of the switch.
     /// <para>
-    /// This one delegate is the whole of the shell's side of the video contract, which is why porting the
-    /// player was a matter of presentation rather than of engine work: everything below it already lived
-    /// in Core with no reference to any UI framework.
+    /// This one delegate is the shell's side of the video contract. Core still names no XAML type
+    /// and no window class: <see cref="IVideoSurface"/> lives here, both implementations stay there.
     /// </para>
     /// </summary>
-    public Func<IntPtr>? EmbeddedWindow { get; set; }
+    public Func<IVideoSurface?>? VideoSurface { get; set; }
 
     /// <summary>
     /// Builds the player the settings ask for. Called once per playback, so switching between embedded
@@ -35,7 +37,7 @@ public sealed class PlaybackBackendFactory(AppSettings settings, ShaderStaging s
         return settings.Mpv.Backend switch
         {
             MpvBackendKind.ExternalMpv => new MpvProcessBackend(settings.Mpv),
-            _ => new LibMpvBackend(settings.Mpv, () => EmbeddedWindow?.Invoke() ?? IntPtr.Zero)
+            _ => new LibMpvBackend(settings.Mpv, () => VideoSurface?.Invoke())
         };
     }
 }

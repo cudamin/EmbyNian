@@ -242,6 +242,15 @@ internal static partial class Native
     public const uint WmActivateApp = 0x001C;
 
     /// <summary>
+    /// WM_ACTIVATE, sent to the window itself whenever its activation state changes — including
+    /// between two windows of this process, which <see cref="WmActivateApp"/> never reports.
+    /// LOWORD(wParam) is WA_INACTIVE (0) / WA_ACTIVE (1) / WA_CLICKACTIVE (2); HIWORD is the
+    /// minimized state and says nothing about focus. The cursor rule reads this one
+    /// （「未激活不藏、失焦显示」，2026-09-16 照搬 mpv.net 的 ActiveForm == this）.
+    /// </summary>
+    public const uint WmActivate = 0x0006;
+
+    /// <summary>
     /// WM_TIMER. <see cref="WmActivateApp"/> only speaks when activation crosses <em>this</em>
     /// application's boundary, so a fullscreen window that let another app have the foreground never hears
     /// which window comes forward next; a slow tick asks for it.
@@ -270,11 +279,10 @@ internal static partial class Native
     public const uint SwpFrameChanged = 0x0020;
 
     /// <summary>
-    /// Posts the request to the owning thread instead of waiting for it. Required for the one window this
-    /// app resizes that belongs to somebody else's thread — mpv's own child inside
-    /// <see cref="Windowing.VideoWindow"/> — because the synchronous form of <c>SetWindowPos</c> sends
-    /// <c>WM_WINDOWPOSCHANGING</c> to that thread and blocks until it answers, and this call is made from
-    /// inside <c>WM_SIZE</c> on the UI thread.
+    /// Posts the request to the owning thread instead of waiting for it. For resizing a window that
+    /// belongs to somebody else's thread, where the synchronous form of <c>SetWindowPos</c> would send
+    /// <c>WM_WINDOWPOSCHANGING</c> to that thread and block until it answers — a form this app has
+    /// needed whenever it touched mpv's own windows from inside <c>WM_SIZE</c> on the UI thread.
     /// </summary>
     public const uint SwpAsyncWindowPos = 0x4000;
 

@@ -45,8 +45,9 @@ internal interface IWin32KeySink
 /// <list type="number">
 ///   <item>An island over a sibling child HWND composites correctly on 1.8: opaque XAML paints over
 ///   the child, unpainted XAML reveals it, and a semi-transparent brush alpha-blends against it
-///   exactly. The old airspace limitation is gone, so mpv can stay a child HWND under <c>--wid</c>
-///   with no render API, no ANGLE and no SwapChainPanel.</item>
+///   exactly. The island's transparency is what a browsing page's opaque background rides on, and
+///   the video itself has moved into the tree — a SwapChainPanel fed by mpv's D3D11 composition
+///   swapchain, no render API and no ANGLE.</item>
 ///   <item>A real <see cref="Microsoft.UI.Xaml.Window"/> hides child HWNDs. Its backdrop is
 ///   composited <em>into</em> the island surface, so that island can never be transparent and the
 ///   video never appears. This is why the window has to be ours.</item>
@@ -112,7 +113,6 @@ internal sealed class HostWindow : IDisposable
     private DesktopWindowXamlSource? _source;
     private AppWindow? _appWindow;
     private InputNonClientPointerSource? _nonClient;
-    private VideoWindow? _video;
     private UIElement? _content;
     private bool _useBackdrop = true;
     private bool _disposed;
@@ -192,17 +192,14 @@ internal sealed class HostWindow : IDisposable
     private IntPtr _islandProcedure;
 
     /// <summary>
-    /// 藏匿期判「手还是注入」的真实输入见证（第十六报）。收条线：<c>HookIslandCursor</c> 把 XAML 岛
-    /// 的窗口子类化的同一次呼吸里向系统注册原始输入（INPUTSINK，无焦点也收），<c>IslandDispatch</c>
-    /// 收到 <c>WM_INPUT</c> 就喂进来；问的人是 <c>PlayerPage.PollPointer</c> —— 藏匿期一记够阈值的
-    /// 位移出现时，先问见证再谈形状。类的头注释（<see cref="RealInputWitness"/>）写着整件事的证据
-    /// 链与边界，这里不重复。
+    /// 藏匿期真实输入的取证观察者（第十六报立，2026-09-16 照搬 mpv.net 后降为只记账不裁决）。
+    /// 收条线：<c>HookIslandCursor</c> 把 XAML 岛的窗口子类化的同一次呼吸里向系统注册原始输入
+    /// （INPUTSINK，无焦点也收），<c>IslandDispatch</c> 收到 <c>WM_INPUT</c> 就喂进来。见证不再
+    /// 回答「手还是注入」——唤醒裁决只剩 <c>ChromeReveal.HandStep</c> 那一问——它的真/注两本账
+    /// 只进日志（藏匿取样、藏匿行、显示行），下一次幽灵报告的定罪证据还从这里出。类的头注释
+    /// （<see cref="RealInputWitness"/>）写着整件事的证据链与边界，这里不重复。
     /// </summary>
     public RealInputWitness Witness { get; } = new();
-
-    /// <summary>自检用：凭空记一条「刚有真输入」。SetCursorPos 不产生 WM_INPUT，探针里那些模拟真手
-    /// 的腿必须自己把见证补上，否则新判据会把它们全判成注入。</summary>
-    internal void ForgeWitness() => Witness.Forge();
 
     /// <summary>
     /// 换主题时重画标题栏那一条。<see cref="ThemeHost.Changed"/> 是个静态事件，不退订就等于把一个已经销毁的
@@ -683,6 +680,19 @@ internal sealed class HostWindow : IDisposable
     internal event Action? GeometryChanged;
 
     /// <summary>
+    /// Raised on <c>WM_ACTIVATE</c> with the answer to 「is this window the foreground one right now」 —
+    /// <c>false</c> the moment something else took it, <c>true</c> the moment it came back. Between two
+    /// windows of this process, too, which <see cref="Native.WmActivateApp"/> never speaks about.
+    /// <para>
+    /// The cursor rule reads it（「未激活不藏、失焦显示」，2026-09-16 照搬 mpv.net 的
+    /// <c>ActiveForm == this</c> 与 <c>OnLostFocus → ShowCursor</c>）：播放页把这一位喂给
+    /// <see cref="EmbyNian.Core.Playback.ChromeReveal.WindowFocused"/>。本进程的两个窗口互抢前台
+    /// （独立播放窗、设置窗）也算数 —— 那正是「别把光标藏到别人正要点的窗口上」的情形。
+    /// </para>
+    /// </summary>
+    internal event Action<bool>? FocusChanged;
+
+    /// <summary>
     /// 这个窗口现在有多大、在哪儿、是不是最大化着 —— 也就是下次开窗该照着的那一份。写盘的是
     /// <c>App.OnWindowClosed</c>（那一头本来就要存一次设置），这里只负责一直是对的。
     /// <para>
@@ -747,30 +757,14 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// Hands out the video surface's HWND, creating it the first time it is asked for, and reports zero
-    /// once the window is gone. This is the whole of the shell's side of the video contract: it is what
-    /// <c>LibMpvBackend</c>'s <c>Func&lt;IntPtr&gt;</c> returns, and mpv does the rest through <c>wid</c>.
-    /// <para>
-    /// Created lazily, because a session that only ever browses should not pay for a DWM redirection
-    /// surface — and then kept, because destroying and recreating it between episodes is exactly the
-    /// churn requirement 12 is about.
-    /// </para>
-    /// </summary>
-    public IntPtr VideoHandle()
-    {
-        if (Handle == IntPtr.Zero) return IntPtr.Zero;
-
-        _video ??= new VideoWindow(Handle, IslandHandle);
-        return _video.Handle;
-    }
-
-    /// <summary>
     /// Whether video is on screen. Setting it turns Mica off (fact 3: a backdrop is composited into the
-    /// island surface, and an opaque island hides the child HWND behind it) and back on again afterwards.
+    /// island surface, and running the backdrop sampler under a full-bleed picture is spend with no
+    /// audience) and back on again afterwards.
     /// <para>
-    /// It does not show or hide the surface. The surface can stay put because it only ever <em>appears</em>
-    /// when the page above it is transparent, and every browsing page paints an opaque background of its
-    /// own. One less piece of state to get out of step, and nothing to sequence against a file change.
+    /// The picture lives in the player page's visual tree — a SwapChainPanel mpv's D3D11 composition
+    /// swapchain composites onto — so nothing here shows or hides a surface. Every browsing page
+    /// paints an opaque background of its own and the video page covers the island; the switch is
+    /// about the backdrop's cost, not about revealing anything.
     /// </para>
     /// </summary>
     public bool VideoVisible
@@ -1446,9 +1440,6 @@ internal sealed class HostWindow : IDisposable
             screen.Left, screen.Top, screen.Width, screen.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
 
-        // 窗口已到全屏大小，Fill 只改视频窗口自己 —— mpv 的钩子收到这一拍会自己把子窗口跟上来。
-        _video?.Fill();
-
         // Politeness first, then the part that actually works. MarkFullscreenWindow is the documented way
         // to ask the shell to stand aside and costs nothing, but measured on this window it changes
         // nothing: the tray keeps its WS_EX_TOPMOST and its pixels. So the window joins the topmost band
@@ -1511,9 +1502,6 @@ internal sealed class HostWindow : IDisposable
             Handle, Native.HwndNoTopMost,
             saved.Bounds.Left, saved.Bounds.Top, saved.Bounds.Width, saved.Bounds.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
-
-        // 同 EnterFullscreen 那发：Fill 只改视频窗口自己，mpv 的子窗口由它自己的钩子跟上。
-        _video?.Fill();
 
         // 窗口化时视频有黑边: the rect just put back is the one the window had when it went fullscreen, and
         // that is not necessarily the picture's shape any more — see the class remark on this method for the
@@ -2473,8 +2461,6 @@ internal sealed class HostWindow : IDisposable
         // is the single biggest reason the rewrite makes resizing smoother rather than worse.
         _source.SiteBridge.MoveAndResize(new RectInt32(0, 0, client.Width, client.Height));
         UpdateTitleBarRegions();
-
-        _video?.Fill();
     }
 
     private static IntPtr Dispatch(IntPtr window, uint message, IntPtr wParam, IntPtr lParam)
@@ -2547,6 +2533,12 @@ internal sealed class HostWindow : IDisposable
                 GeometryChanged?.Invoke();
                 break;
 
+            case Native.WmActivate:
+                // LOWORD(wParam)：WA_INACTIVE=0、WA_ACTIVE=1、WA_CLICKACTIVE=2。HIWORD 是最小化位，
+                // 与焦点无关，掩掉。
+                FocusChanged?.Invoke((wParam.ToInt64() & 0xFFFF) != 0);
+                break;
+
             case Native.WmActivateApp:
                 ApplyFullscreenZOrder(wParam != IntPtr.Zero);
                 break;
@@ -2587,12 +2579,6 @@ internal sealed class HostWindow : IDisposable
                     ThemeHost.Changed -= _repaint;
                     _repaint = null;
                 }
-
-                // Zeroed here rather than left dangling: the backend can outlive the window by the length
-                // of one mpv shutdown, and it must be told there is nowhere to draw rather than handed a
-                // freed HWND.
-                _video?.Dispose();
-                _video = null;
 
                 Closed?.Invoke();
                 return IntPtr.Zero;
@@ -2743,9 +2729,6 @@ internal sealed class HostWindow : IDisposable
 
             _blank = IntPtr.Zero;
         }
-
-        _video?.Dispose();
-        _video = null;
 
         _source?.Dispose();
         _source = null;
