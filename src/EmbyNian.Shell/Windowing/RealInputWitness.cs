@@ -6,7 +6,7 @@ namespace EmbyNian.Shell.Windowing;
 /// <summary>
 /// 藏匿期判「这一记位移是手还是别人注入」的<b>真实输入见证</b>（第十六报，2026-09-16）。
 /// <para>
-/// 第十一报以来那个裁决者（<see cref="EmbyNian.Core.Playback.ChromeReveal.WarpOrHand"/>）从头到尾
+/// 第十一报以来那个裁决者（十一到十五报的 <c>WarpOrHand</c>，形状判据）从头到尾
 /// 只看一个东西：<b>位置形状</b>。第十五报把它推到了形状能推的尽头（「搬完就冻住」的注入判得掉），
 /// 而十六报的日志把形状的极限也钉死了 —— AyuGram 的注入不是一次冻结的跳变，是一段<b>动画</b>：
 /// 09:22:33 起的四秒里 972,378 → 986,379 → 1028,383 → 1038,385 → 1058,380，每步十几到几十像素、
@@ -48,11 +48,19 @@ namespace EmbyNian.Shell.Windowing;
 /// 自检的 Forge 腿测不出这两条 —— Forge 把时间戳变成真的，而沙箱又注不进真实输入，聋与溢出都只有
 /// 真机的「从未见过」状态才现形。
 /// </para>
+/// <para>
+/// <b>二十一报（2026-09-16）把这张证词从「充分」降成了「必要」。</b>十九报的真机日志钉死了见证自己
+/// 的极限：AyuGram 那段位移带着一个<b>真设备句柄</b>（<c>VID_1532&amp;PID_007C</c>，55 条一像素微步），
+/// 在输入层面与真手一字不差 —— 上面那条「有 hDevice 就是手」的判据对它不成立，而用户当时把鼠标
+/// <b>拔了</b>。所以见证现在只剩一票<b>否决权</b>：说「没有」当场判注入（这一票仍然值钱，纯
+/// <c>SetCursorPos</c> 注入全靠它挡），说「有」只是获准去攒路程，够不够
+/// <see cref="EmbyNian.Core.Playback.ChromeReveal.WakeTravelPixels"/> 另说。
+/// </para>
 /// </summary>
 internal sealed class RealInputWitness
 {
-    /// <summary>原始输入注册成了没有。失败时调用方退回形状启发式（WarpOrHand），这一个字段就是那
-    /// 条退路的开关；它也进日志 —— 「见证缺席」必须能在日志里一眼看出来，不然下次报告又要猜。
+    /// <summary>原始输入注册成了没有。失败时调用方就没有这张否决票（藏匿期只剩路程那一关），这一个
+    /// 字段就是那条退路的开关；它也进日志 —— 「见证缺席」必须能在日志里一眼看出来，不然下次报告又要猜。
     /// 注册在 <c>HookIslandCursor</c> 里做（子类化成功的同一处），结果写回这里。</summary>
     public bool Ready { get; internal set; }
 
@@ -133,7 +141,7 @@ internal sealed class RealInputWitness
 
     /// <summary>
     /// 距最后一次被见证的真移动，还在 <paramref name="withinMilliseconds"/> 之内没有。窗口给多少由
-    /// 调用方定（<see cref="EmbyNian.Core.Playback.ChromeReveal.WarpWitnessMilliseconds"/>）：太窄，
+    /// 调用方定（<see cref="EmbyNian.Core.Playback.ChromeReveal.WitnessWindowMilliseconds"/>）：太窄，
     /// 手停下后轮询才到的最后一记会被冤成注入；太宽，注入落地瞬间恰好有一记久远的真移动会冤放它。
     /// 轮询一拍 100ms、手停下到轮询看见最多两拍，300 在两边都站得住。
     /// <para>
