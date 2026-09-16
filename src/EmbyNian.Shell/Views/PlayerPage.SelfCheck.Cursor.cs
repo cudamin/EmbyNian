@@ -1168,6 +1168,109 @@ public sealed partial class PlayerPage
             report.Add("跳变那一步就把光标叫醒了，后一半不判（同一个病，报一条就够）");
         }
 
+        // —— 二十报：判成手的唤醒若再无后续输入，必须被「幽灵回笼」收回去 ——
+        //
+        // 13:29 那场（0.9 秒 56 条带雷蛇句柄的输入流）钉死了事实：这一类唤醒在输入层面与真手不可
+        // 区分，显示是按设计发生的。分水岭在显示之后：手必有下一步，幽灵流停在落点上再也不动。
+        // 上一腿「真手连着走两拍」醒来的光标此刻正武装着回笼监视——平静地把窗口走完，落点上的
+        // 光标必须被收回，账要记上。
+        if (!_cursorHidden && _ghostArm)
+        {
+            var retractsBefore = _ghostRetracts;
+
+            // 平静等待：只泵拍子，不碰指针、不喂见证——模拟「幽灵流停住之后什么都没发生」。
+            // 窗口 1200 比空闲隐藏的 2000 先到，回笼必须抢在常规隐藏前面发生。
+            while (Now - _ghostWakeAt < ChromeReveal.GhostQuiesceMilliseconds + 400)
+            {
+                Pump();
+                OnTick(this, EventArgs.Empty);
+                Thread.Sleep(60);
+            }
+
+            Pump();
+            OnTick(this, EventArgs.Empty);
+
+            Want("判成手的唤醒后无后续输入，光标要被回笼收走", _cursorHidden);
+            Want("回笼要记进账", _ghostRetracts > retractsBefore);
+            report.Add($"回笼窗平静走完（{ChromeReveal.GhostQuiesceMilliseconds}+400ms）后："
+                + $"光标{(_cursorHidden ? "已回笼" : "还在屏上")}，回笼账 {retractsBefore}→{_ghostRetracts} 次");
+        }
+        else
+        {
+            report.Add("上一腿醒来后回笼监视不在武装状态，回笼腿不判");
+        }
+
+        // —— 回笼的另一半：窗口内有了手的后续一拍，窗口从那一拍重算，光标留在屏上 ——
+        //
+        // 从隐藏里重新武装一遍（搬 40、补见证、判成手），窗口走到一半再补一拍：从第一拍算窗口早已
+        // 到期，但光标必须还在——这正是「手还在动就收光标」的反面教材；然后等刷新后的窗口走完，
+        // 回笼照常发生。
+        if (_cursorHidden)
+        {
+            var retractsBefore2 = _ghostRetracts;
+            Native.GetCursorPos(out var g1);
+            var dir1 = g1.X + 40 <= VirtualRight() ? 1 : -1;
+            Native.SetCursorPos(g1.X + dir1 * 40, g1.Y);
+            _window!.ForgeWitness();
+            Pump();
+            OnTick(this, EventArgs.Empty);
+
+            if (!_cursorHidden && _ghostArm)
+            {
+                // 窗口走到一半（600ms < 1200ms）：再来一拍，窗口刷新。
+                var halfAt = Now;
+                while (Now - halfAt < ChromeReveal.GhostQuiesceMilliseconds / 2)
+                {
+                    Pump();
+                    Thread.Sleep(40);
+                }
+
+                Native.GetCursorPos(out var g2);
+                var dir2 = g2.X + 40 <= VirtualRight() ? 1 : -1;
+                Native.SetCursorPos(g2.X + dir2 * 40, g2.Y);
+                _window!.ForgeWitness();
+                Pump();
+                OnTick(this, EventArgs.Empty);
+
+                // 从第一拍算早已到期；从刷新拍算才过了一半——光标必须还在屏上。
+                var firstBeatAt = halfAt;
+                while (Now - firstBeatAt < ChromeReveal.GhostQuiesceMilliseconds + 100)
+                {
+                    Pump();
+                    OnTick(this, EventArgs.Empty);
+                    Thread.Sleep(40);
+                }
+
+                Want("窗口内的后续一拍刷新回笼窗，光标留在屏上", !_cursorHidden);
+                report.Add($"窗口走一半补了一拍之后：光标{(_cursorHidden ? "被提前收走（错）" : "还在屏上")}");
+
+                // 刷新后的窗口也必须走完：从最后一拍再等一个窗口长。
+                var lastBeatAt = _ghostWakeAt;
+                while (Now - lastBeatAt < ChromeReveal.GhostQuiesceMilliseconds + 400)
+                {
+                    Pump();
+                    OnTick(this, EventArgs.Empty);
+                    Thread.Sleep(40);
+                }
+
+                Pump();
+                OnTick(this, EventArgs.Empty);
+
+                Want("刷新后的窗口走完，回笼照常发生", _cursorHidden);
+                Want("刷新后的回笼也记进账", _ghostRetracts > retractsBefore2);
+                report.Add($"刷新后的回笼窗走完后：光标{(_cursorHidden ? "已回笼" : "还在屏上")}"
+                    + $"，回笼账 {retractsBefore2}→{_ghostRetracts} 次");
+            }
+            else
+            {
+                report.Add("重新武装那一拍没把光标叫醒（或监视没武装），刷新腿不判");
+            }
+        }
+        else
+        {
+            report.Add("回笼腿之后光标不在藏匿态，刷新腿不判");
+        }
+
         // —— 还原 ——
         SetCursorHidden(false);
         _chrome.Reset(Now);

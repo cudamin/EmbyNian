@@ -163,6 +163,11 @@ public sealed partial class PlayerPage : IWin32KeySink
         var delta = e.GetCurrentPoint(Root).Properties.MouseWheelDelta;
         if (delta == 0) return;
 
+        // 二十报：滚轮也销回笼的账；顺带补牌——FlashRail 会重盖空闲时钟把藏匿翻成显示，而这一路
+        // 过去不挂牌（「未标注的显示路径」的最后一个漏网生产路径）。
+        if (_cursorHidden) _woke = "滚轮调音量";
+        _ghostArm = false;
+
         NudgeVolume(delta > 0 ? WheelStep : -WheelStep);
         e.Handled = true;
     }
@@ -179,6 +184,7 @@ public sealed partial class PlayerPage : IWin32KeySink
         // A press is a hand even when it moves nothing, and the show line should say so: label it before
         // Render writes the line, exactly as the poll labels its own wake before the reseed.
         if (_cursorHidden) _woke = "点击（画面上按下）";
+        _ghostArm = false; // 二十报：点击是手的铁证，回笼监视就地销账
         if (_chrome.WakeFully(Now)) Render();
     }
 
@@ -393,6 +399,7 @@ public sealed partial class PlayerPage : IWin32KeySink
         // happens to be resting — otherwise pressing Space over the middle of the picture changes the
         // playback state with nothing on screen to say so.
         if (_cursorHidden) _woke = $"按键 {e.Key}";
+        _ghostArm = false; // 二十报：按键销回笼的账
         if (_chrome.WakeFully(Now)) Render();
     }
 
@@ -500,6 +507,7 @@ public sealed partial class PlayerPage : IWin32KeySink
         // OnKeyDown half to wake the chrome on its way: show it wherever the pointer is resting, exactly as
         // OnKeyDown does for its own keys.
         if (_cursorHidden) _woke = "空格（播放/暂停）";
+        _ghostArm = false;
         if (_chrome.WakeFully(Now)) Render();
     }
 
@@ -554,6 +562,7 @@ public sealed partial class PlayerPage : IWin32KeySink
         // 姓名牌：兜底路自己的名字，和 XAML 那两路（「按键 X」「空格（播放/暂停）」）分得开 ——
         // 以后日志里见到「（Win32 兜底）」就是焦点掉出岛的那一阵。
         if (_cursorHidden) _woke = key == VirtualKey.Space ? "空格（播放/暂停，Win32 兜底）" : $"按键 {key}（Win32 兜底）";
+        _ghostArm = false;
         if (_chrome.WakeFully(Now)) Render();
     }
 

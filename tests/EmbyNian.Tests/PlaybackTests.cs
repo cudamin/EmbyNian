@@ -3475,6 +3475,48 @@ internal static class PlaybackTests
             Assert.False(chrome.CursorHidden);
         });
 
+        Test("播放器控件：回笼拨时钟把幽灵流的落点光标交回给规则", () =>
+        {
+            // 二十报：13:29 那场（带设备句柄的输入流）在输入层面与真手不可区分，判成手的唤醒按设计
+            // 把光标带了回来；分水岭在显示之后——窗口内没有任何后续输入，就把那次唤醒改判成幽灵流。
+            // ExpireIdle 只拨时钟：落点在画面中部、什么都没在屏上，规则自己把光标收走。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds));
+            Assert.True(chrome.CursorHidden);
+
+            var wokeAt = now + ChromeReveal.CursorIdleMilliseconds + 100;
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, wokeAt);
+            Assert.False(chrome.CursorHidden, "判成手的唤醒按设计把光标带回来");
+
+            Assert.True(chrome.ExpireIdle(wokeAt + ChromeReveal.GhostQuiesceMilliseconds),
+                "回笼窗平静走完，落点在画面中部，规则该把光标收走");
+            Assert.True(chrome.CursorHidden);
+        });
+
+        Test("播放器控件：回笼的时钟不能拨在停靠的指针上", () =>
+        {
+            // 幽灵流的落点可能恰好在控件上。ExpireIdle 拨的是 chrome 收起与光标藏匿共用的那本钟，
+            // 停靠的耐心（两千毫秒）也在其中：回笼若在这种落点上拨钟，等于替真手把停靠耐心一次
+            // 花光，控件会在犹豫的半途塌掉。所以外壳回笼前必须问 PointerParked——停靠的落点不
+            // 回笼，交给既有的停靠规则自己到期。这条把那道闸的原理钉进契约里。
+            var chrome = Chrome(out var now);
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds), "两秒静止要先把光标藏下去");
+            Assert.True(chrome.CursorHidden, "藏匿是回笼的前置");
+
+            var wokeAt = now + ChromeReveal.CursorIdleMilliseconds + 100;
+            chrome.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, wokeAt);
+            Assert.False(chrome.CursorHidden);
+            Assert.True(chrome.PointerParked, "指针停在控件上，回笼闸必须认得出来");
+
+            Assert.True(chrome.ExpireIdle(wokeAt + ChromeReveal.GhostQuiesceMilliseconds),
+                "拨钟等于宣告停靠耐心已满：控件连着光标一起收");
+            Assert.False(chrome.State.Bar, "停靠耐心被拨满，控件塌了——外壳闸住这种情况才算数");
+            Assert.True(chrome.CursorHidden);
+        });
+
         Test("播放器控件：回来停住的手也得让光标重新能藏", () =>
         {
             // 「我有时候需要点击暂停视频然后再开始才会自动隐藏鼠标指针」。手滑出窗口（去第二屏）触发了

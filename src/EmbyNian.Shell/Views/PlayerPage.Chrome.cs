@@ -127,6 +127,11 @@ public sealed partial class PlayerPage
 
         if (point.X < 0 || point.Y < 0 || point.X >= Root.ActualWidth || point.Y >= Root.ActualHeight)
         {
+            // 二十报补的名牌：这里的 PointerLeft 同样能把藏匿翻成显示（_pointerY 置回 -1，Settle 的
+            // hide 条件当场失效），而直接调这里的几个入口大多自己挂了名——唯独「藏匿期只报位置」
+            // 那条路（OnPointerMoved 的 13 报分支）没有。见到这行牌即是：OS 的读数落到了画面外。
+            if (_cursorHidden && _woke.StartsWith("未标注", StringComparison.Ordinal))
+                _woke = "指针读数落到画面外（PointerLeft 出界显示）";
             if (_chrome.PointerLeft(Now)) Render();
             return true;
         }
@@ -193,6 +198,10 @@ public sealed partial class PlayerPage
             WakeFromPoll(screen, dx, dy, "挂起后走开，判成手");
             return;
         }
+
+        // 二十报：显示态的每一拍都先问一句回笼监视（武装中才有事可做；动没动由落点半径自己判，
+        // 手在走的拍子在这里当场被落点检查放行）。
+        if (!_cursorHidden && _ghostArm) ConsiderGhostRetract(screen);
 
         // Exactly where it was: stillness, and nothing to tell the rule. Returning without advancing the
         // reference is what keeps the idle clock running.
@@ -321,6 +330,58 @@ public sealed partial class PlayerPage
         // 「the rule was already awake」 — once per wake, which is nothing.
         if (!ReseedPointer(moved: true)) _chrome.Moved(Now);
         Render();
+
+        // 二十报：判成手的唤醒（或手的后续一拍）是回笼监视的锚点。isHidden 的那一拍武装监视，
+        // 已在显示态的后续一拍只刷新时刻与落点——窗口永远从「手的最后一拍」重算。
+        _ghostWakeAt = Now;
+        _ghostLanding = screen;
+        if (_window?.Witness is { } ghostWitness) _ghostRealAtArm = ghostWitness.RealMoves;
+        if (wasHidden) _ghostArm = true;
+    }
+
+    /// <summary>
+    /// 二十报的回笼判定：判成手的唤醒之后，<see cref="ChromeReveal.GhostQuiesceMilliseconds"/> 内
+    /// 没有任何后续输入，就把那次唤醒改判成幽灵流，落点上的光标交回给规则收走。
+    /// <para>
+    /// 五问，缺一不可：<b>窗口满了吗</b>——从最后一拍起算，手的后续一拍会把窗口刷新；<b>还在落点上吗</b>——
+    /// 半径 <see cref="GhostSettlePixels"/>，桌面抖一两像素不冤枉（第十五报的教训），手在走当场出圈；
+    /// <b>落点在控件上吗</b>——停靠的指针买的是两千毫秒的耐心，回笼拨时钟等于替真手把耐心一次花光，
+    /// 控件会在犹豫的半途塌掉，所以停靠的落点不回笼（既有的停靠规则两秒后自己处理）；<b>见证真账涨了吗</b>——
+    /// 连一像素有出处的输入都是手在场的证据，销账；<b>规则肯藏吗</b>——
+    /// <see cref="ChromeReveal.ExpireIdle"/> 只是拨时钟，指针在画面上、chrome 已收、hold/keep 全无
+    /// 才藏得下去，藏不下去就不记账（那种情形空闲/停靠隐藏自己会来）。
+    /// </para>
+    /// </summary>
+    private void ConsiderGhostRetract(NativePoint screen)
+    {
+        if (Now - _ghostWakeAt < ChromeReveal.GhostQuiesceMilliseconds) return;
+
+        if (Math.Abs(screen.X - _ghostLanding.X) > GhostSettlePixels
+            || Math.Abs(screen.Y - _ghostLanding.Y) > GhostSettlePixels) return;
+
+        if (_chrome.PointerParked) return;
+
+        if (_window?.Witness is { } witness && _ghostRealAtArm >= 0 && witness.RealMoves != _ghostRealAtArm)
+        {
+            // 有出处的新输入：真手在场。监视销账，光标随它去。
+            _ghostArm = false;
+            return;
+        }
+
+        _ghostArm = false;
+
+        if (!_chrome.ExpireIdle(Now)) return;
+
+        _ghostRetracts++;
+        Log.Debug(Category, $"幽灵流回笼：判成手的唤醒后 {ChromeReveal.GhostQuiesceMilliseconds}ms"
+            + $"内没有任何后续输入（落点 {_ghostLanding.X},{_ghostLanding.Y}，真账 {_ghostRealAtArm} 未变）"
+            + $"，按幽灵流收回落点上的光标，第 {_ghostRetracts} 次");
+
+        // 规则在这条路上翻转了，而它是从 PollPointer 的「指针没动」早退分支调进来的 —— 那条路
+        // 没有自己的 Render。十二报的教训在这里再刻一遍：_cursorHidden（外壳副本）与四杠杆只有
+        // Render→SetCursorHidden 一个对账点；漏了这一拍，Core 已判藏、系统光标却真的还挂在屏上，
+        // 回笼就只是账面上的一次记账。PointerLeft 的惯例同此：mutator 翻了，当拍就 render。
+        Render();
     }
 
     /// <summary>
@@ -342,6 +403,30 @@ public sealed partial class PlayerPage
 
     /// <summary>取证行已报到多少条真输入（十八报）：只在涨的时候写一行，幽灵输入连发时每秒至多一条。</summary>
     private int _forensicsSeen;
+
+    // ---- 二十报（2026-09-16）：幽灵回笼 ------------------------------------------
+    //
+    // 13:29 那场钉死了事实：带雷蛇句柄（VID_1532）的输入流在输入层面与真手不可区分，判成手的
+    // 唤醒是按设计发生的，显示之前没有任何判据能拦它。分水岭在显示之后——手必有下一步，幽灵流
+    // 停在落点上再也不动。这一半就是那条分水岭：判成手的唤醒武装监视，回笼窗口内任何后续输入
+    // （轮询再见到位移、见证真账上涨、点击/按键/滚轮）都销账；窗口平静走完，把时钟拨回去让
+    // Core 自己的规则把落点上的光标收走，并记一次账。
+
+    /// <summary>回笼判定里「没有再动」的容忍半径：桌面抖动一两像素是常事（第十五报的教训）。</summary>
+    private const int GhostSettlePixels = 2;
+
+    /// <summary>最近一次判成手的唤醒（或后续一拍）发生的时刻与落点。窗口从最后一拍重算。</summary>
+    private long _ghostWakeAt;
+    private NativePoint _ghostLanding;
+
+    /// <summary>武装时刻见证真账的快照；判成手之后真账再涨一字，就是有出处的输入，监视销账。</summary>
+    private int _ghostRealAtArm = -1;
+
+    /// <summary>回笼监视是否武装中。藏下去的那一刻解除（<see cref="SetCursorHidden"/>），下一次判成手的唤醒重新武装。</summary>
+    private bool _ghostArm;
+
+    /// <summary>回笼成立过多少次：探针断言与下一轮现场复盘都读它。</summary>
+    private int _ghostRetracts;
 
     /// <summary>
     /// 藏匿期的取证取样（2026-09-15，第十四报）：每秒一次，把「外面此刻是什么样」写进日志。
@@ -721,6 +806,9 @@ public sealed partial class PlayerPage
         if (_cursorHidden == hidden) return;
 
         _cursorHidden = hidden;
+
+        // 二十报：藏下去就解除回笼监视——回笼本身也是从这里走过去的，下一次判成手的唤醒重新武装。
+        if (hidden) _ghostArm = false;
 
         if (_window is not null) _window.CursorHidden = hidden;
 

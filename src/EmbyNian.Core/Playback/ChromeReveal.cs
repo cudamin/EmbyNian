@@ -239,6 +239,19 @@ public sealed class ChromeReveal
     public const long WarpWitnessMilliseconds = 300;
 
     /// <summary>
+    /// 二十报（2026-09-16）的回笼窗口：判成手的唤醒之后，多久没有后续输入就把那次唤醒改判成幽灵流。
+    /// <para>
+    /// 13:29 那场的结论是「带设备句柄的输入流在输入层面与真手不可区分」——见证答真、裁决判手，
+    /// 显示是按设计发生的， 显示之前没有任何判据能拦它。分水岭在显示<b>之后</b>：手必有下一步
+    /// （继续动、点击、按键、滚轮），幽灵流停在落点上再也不动。1200 的账：比轮询两拍的收尾间隙
+    /// （200ms 出头）宽得多，不会冤枉还在移动的手；比本来的空闲隐藏（2000ms）短 800ms，幽灵流
+    /// 停住后光标在屏上多待的时间从「两秒」压到「一秒二」。真手真停住的情形只是把既有行为提前
+    /// 了半拍 —— 而且指针停在控件上时 <see cref="ExpireIdle"/> 藏不下去，控件上的手不受影响。
+    /// </para>
+    /// </summary>
+    public const long GhostQuiesceMilliseconds = 1200;
+
+    /// <summary>
     /// 免检还作不作数：立起来过，而且还在 <see cref="WarpHandMilliseconds"/> 之内。过期就地作废——只判一次，
     /// 因为下一次够阈值的位移该重新过手续（那可能是下一条消息的注入）。
     /// </summary>
@@ -547,6 +560,14 @@ public sealed class ChromeReveal
     public bool CursorHidden { get; private set; }
 
     /// <summary>
+    /// 指针的最后读数是否停在控件上（或音量条的接近带里）。二十报的回笼闸要用它：停靠的指针
+    /// 买的是 <see cref="ParkedIdleMilliseconds"/> 的耐心而不是豁免，回笼若在这种指针上拨时钟，
+    /// 等于替真手把那份耐心一次性花光 —— 控件会在真手犹豫的半途塌掉。所以停靠的落点不回笼，
+    /// 交给既有的停靠规则自己到期。
+    /// </summary>
+    public bool PointerParked => Parked;
+
+    /// <summary>
     /// True while something is still due to expire, so the caller knows to keep ticking. A pointer that is
     /// over the picture with the cursor still showing counts: its hide is due even when every piece of
     /// chrome is already down.
@@ -643,6 +664,22 @@ public sealed class ChromeReveal
         _pointerY = -1;
         _part = ChromePart.None;
         _railNear = -1;
+        return Settle(now);
+    }
+
+    /// <summary>
+    /// 二十报的回笼动作：把空闲时钟直接拨到「早已闲置满 <see cref="CursorIdleMilliseconds"/>」的位置，
+    /// 让 <see cref="Settle"/> 用它自己的全部条件去裁决藏不藏。
+    /// <para>
+    /// 之所以是「拨时钟」而不是「命令藏」：判成手的唤醒之后指针可能落在任何地方——停在画面正中
+    /// （幽灵流的落点），也停在控件上、chrome 还在屏上、或某个 hold 正立着。这三种里只有第一种
+    /// 该藏，而这个类自己就是那套条件的唯一权威；外壳不该有第二份抄写的藏匿判据（第十三报之前
+    /// 每一份抄写都各漏各的）。返回值仍然是「有没有翻动」，外壳拿它决定要不要记账。
+    /// </para>
+    /// </summary>
+    public bool ExpireIdle(long now)
+    {
+        _lastActivity = now - CursorIdleMilliseconds;
         return Settle(now);
     }
 
