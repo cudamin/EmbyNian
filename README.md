@@ -27,8 +27,6 @@ telegram 发布频道：https://t.me/EmbyNian
 
 ![详情页](docs/screenshots/detail.jpg)
 
-![媒体库](docs/screenshots/library.jpg)
-
 **界面** — 五套深色配色（墨绿、纯黑、午夜、石墨、紫夜），点一下立即生效。窗口拉窄时版式自己换成紧凑布局。支持键盘、鼠标、触摸。
 
 ![设置](docs/screenshots/settings.jpg)
