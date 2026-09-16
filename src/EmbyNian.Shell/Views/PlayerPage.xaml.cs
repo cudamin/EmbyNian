@@ -128,31 +128,14 @@ public sealed partial class PlayerPage : UserControl
     private readonly SwapChainVideoTarget _videoTarget;
 
     /// <summary>
-    /// The video contract the factory reads for this play. 哪条管线答数由引擎设置决定（小幻影视同款
-    /// 两档，2026-09-16）：集成模式交出本页的面板目标；独立播放交出宿主窗口岛下的视频子窗口——mpv
-    /// 拿它当 wid、独占交换链。每次播放现读一遍（工厂在每次 StartAsync 调一次委托），设置改完，
-    /// 下一次播放生效。
-    /// <para>
-    /// 独立播放那一条要求子窗口在这之前就已经存在：起播可能落在线程池线程上
-    /// （<c>PlaybackService.PlayAsync</c> 在后端跑起来之前一路 ConfigureAwait(false)），而窗口只能
-    /// 在界面线程上建。<see cref="PrepareVideoPipeline"/> 在播放漏斗里就是这一步。
-    /// </para>
+    /// The video contract the factory reads for this play — always this page's panel target. It is
+    /// an <b>集成模式</b> member only (2026-09-16 第二形态): the 独立播放 pipeline is mpv's own
+    /// top-level window and asks for no surface at all — the backend branches on the pipeline
+    /// setting and never calls the factory's delegate when it is in force. This property keeps its
+    /// shape because the factory delegate still needs something to answer, and the answer is the
+    /// same regardless of the setting.
     /// </summary>
-    internal IVideoSurface? VideoSurface =>
-        ViewModel.VideoPipeline == VideoPipelineKind.Standalone
-            ? _window?.EnsureVideoUnderlay()
-            : _videoTarget;
-
-    /// <summary>
-    /// 播放漏斗的预备步（界面线程）：独立播放引擎先把视频子窗口建好。创建走
-    /// <c>HostWindow.EnsureVideoUnderlay</c> 的界面线程断言——漏斗是唯一保证站在界面线程上的地方。
-    /// 集成模式什么都不做：面板早就在树上，没有要预备的东西。
-    /// </summary>
-    internal void PrepareVideoPipeline()
-    {
-        if (ViewModel.VideoPipeline == VideoPipelineKind.Standalone && _window is not null)
-            _window.EnsureVideoUnderlay();
-    }
+    internal IVideoSurface? VideoSurface => _videoTarget;
 
     private bool _cursorHidden;
 
@@ -730,7 +713,12 @@ public sealed partial class PlayerPage : UserControl
         // 连播的下一集走的是同一条路，但**不重复施法**：这里判的是「新的播放」，而连播换集在服务端是一个
         // 新的播放，所以它也会进一次 —— 这正是「开始播放后自动全屏」的字面意思。用户中途按 F 退出全屏，
         // 下一集开始时会再进一次；要的是「这部片子开始时是全屏」，不是「窗口永远不许退出全屏」。
-        if (ViewModel.AutoFullscreenOnPlayback) SetFullscreen(true);
+        //
+        // 独立播放（mpv 默认 window 模式）例外：画面在 mpv 自建的顶层窗口里，那扇窗不在我们手边。
+        // 把自己的窗口全屏置顶，等于拿一块 topmost 面板盖住它 —— 用户看得见播放器，看不见片子。
+        // 适用性判据在 ViewModel（AutoFullscreenApplicable）。
+        if (ViewModel.AutoFullscreenOnPlayback && ViewModel.AutoFullscreenApplicable)
+            SetFullscreen(true);
 
         // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一
         // 静止隐藏的鼠标指针」排查期间，日志里成串「未标注的显示路径」三连的另一半元凶：连播换集时上一集

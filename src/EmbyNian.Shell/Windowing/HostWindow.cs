@@ -46,11 +46,11 @@ internal interface IWin32KeySink
 /// <list type="number">
 ///   <item>An island over a sibling child HWND composites correctly on 1.8: opaque XAML paints over
 ///   the child, unpainted XAML reveals it, and a semi-transparent brush alpha-blends against it
-///   exactly. The island's transparency is what a browsing page's opaque background rides on, and
-///   the video rides one of two pipelines (2026-09-16, 小幻影视同款的两档): 集成模式 composites it
-///   into the tree — a SwapChainPanel fed by mpv's D3D11 composition swapchain, no render API and
-///   no ANGLE — while 独立播放 hands a child HWND to mpv as <c>wid</c> and lets it own the
-///   swapchain. The second one lives on exactly this fact.</item>
+///   exactly. The island's transparency is what a browsing page's opaque background rides on. The
+///   video rides the 集成模式 pipeline (2026-09-16): a SwapChainPanel in the tree fed by mpv's D3D11
+///   composition swapchain — no render API and no ANGLE. The 独立播放 pipeline (mpv's own top-level
+///   window) does not live in this window at all; the wid child-HWND shape it briefly had did, and
+///   that is what this fact once carried.</item>
 ///   <item>A real <see cref="Microsoft.UI.Xaml.Window"/> hides child HWNDs. Its backdrop is
 ///   composited <em>into</em> the island surface, so that island can never be transparent and the
 ///   video never appears. This is why the window has to be ours.</item>
@@ -193,17 +193,6 @@ internal sealed class HostWindow : IDisposable
 
     /// <summary>The island procedure ours was put in front of, and the one every other message goes to.</summary>
     private IntPtr _islandProcedure;
-
-    /// <summary>
-    /// 独立播放管线的视频子窗口（<see cref="VideoWindow"/>），岛下垫底，懒建：第一次有播放要它才创建，
-    /// 之后整个窗口生命周期复用、随窗口销毁。集成播放永远不碰它——岛下什么都没有，浏览态的透明处照旧
-    /// 透出窗口底色，Mica（<see cref="UseBackdrop"/>）那笔账也不受它影响。
-    /// </summary>
-    private VideoWindow? _video;
-
-    /// <summary>创建这个窗口那条线程的调度队列，只用于视频子窗口的线程断言——懒建必须发生在界面线程上，
-    /// 否则 mpv 的 resize 钩子就装错了线程（<see cref="EnsureVideoUnderlay"/> 的注释）。</summary>
-    private readonly DispatcherQueue? _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
     /// <summary>
     /// 藏匿期真实输入的取证观察者（第十六报立，2026-09-16 照搬 mpv.net 后降为只记账不裁决）。
@@ -775,10 +764,10 @@ internal sealed class HostWindow : IDisposable
     /// island surface, and running the backdrop sampler under a full-bleed picture is spend with no
     /// audience) and back on again afterwards.
     /// <para>
-    /// 两条管线在这里共用一个开关，但道理各半。集成模式：画面在播放页的视觉树里——SwapChainPanel
-    /// 合成 mpv 的 D3D11 交换链——这里什么也不显不藏，只是省掉垫在下面的背景采样。独立播放：画面是
-    /// 岛下那个原生子窗口（<see cref="VideoWindow"/>），Mica 不关，岛面就被垫料填满、透不到视频——
-    /// 这一关是真开路。
+    /// 两条管线在这里共用一个开关。集成模式：画面在播放页的视觉树里——SwapChainPanel 合成 mpv 的
+    /// D3D11 交换链——这里什么也不显不藏，只是省掉垫在下面的背景采样。独立播放：画面在 mpv 自己的
+    /// 顶层窗口里，这个开关对它 nothing to say——但播放态把岛面垫黑仍是该有的样子（岛面上只剩播放器
+    /// 的 chrome），所以照旧共用。
     /// </para>
     /// </summary>
     public bool VideoVisible
@@ -793,8 +782,8 @@ internal sealed class HostWindow : IDisposable
     /// style bits and frame rect it took away.
     /// <para>
     /// The window is never recreated, which is the whole reason to do it by hand rather than through
-    /// <c>AppWindow.SetPresenter</c>: recreating it would destroy the XAML island and the video child with
-    /// it, and mpv would have to be handed a new <c>wid</c> mid-file. As it is, going fullscreen is one
+    /// <c>AppWindow.SetPresenter</c>: recreating it would destroy the XAML island and the SwapChainPanel
+    /// with it, forcing the playback off the panel mid-file. As it is, going fullscreen is one
     /// style change and one <c>SetWindowPos</c>, and the picture never even blinks.
     /// </para>
     /// <para>
@@ -1516,9 +1505,6 @@ internal sealed class HostWindow : IDisposable
             Handle, Native.HwndNoTopMost,
             saved.Bounds.Left, saved.Bounds.Top, saved.Bounds.Width, saved.Bounds.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
-
-        // 与 EnterFullscreen 那发同款：Fill 只改视频子窗口自己，mpv 的钩子自己跟上。
-        _video?.Fill();
 
         // 窗口化时视频有黑边: the rect just put back is the one the window had when it went fullscreen, and
         // that is not necessarily the picture's shape any more — see the class remark on this method for the
@@ -2468,28 +2454,10 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// 独立播放管线的去处，懒建：第一次有播放要它才创建，之后整个窗口生命周期复用、随窗口销毁。
-    /// 必须从界面线程调——CreateWindowEx 的消息队列跟着创建线程走，mpv 的 resize 钩子
-    /// （<c>resize_child_win</c>）也装在那条线程上，窗口跨了线程，对账就散了。
-    /// <para>
-    /// 播放漏斗在界面上为独立播放引擎预备它（<c>PlayerPage.PrepareVideoPipeline</c>），真正读它的
-    /// <c>PlayerPage.VideoSurface</c> 可能在线程池上被调（<c>PlaybackService.PlayAsync</c> 前两个
-    /// await 都ConfigureAwait(false)），所以预备必须走在前头；这条路上若真撞见别的线程，宁可喊停
-    /// 也不悄悄装错。
-    /// </para>
+    /// 集成播放的画面去处是播放页自己的 SwapChainPanel（<c>SwapChainVideoTarget</c>）， HostWindow 对它
+    /// 无所事事。独立播放同样不经过这里（2026-09-16 第二形态）：那是 mpv 自己的顶层窗口，自建自管，
+    /// 岛下不再垫任何子窗口。
     /// </summary>
-    internal VideoWindow EnsureVideoUnderlay()
-    {
-        if (_video is not null) return _video;
-
-        if (_dispatcherQueue is { } dispatcher && !dispatcher.HasThreadAccess)
-            throw new InvalidOperationException("视频子窗口必须从界面线程创建（播放漏斗的预备步负责这件事）");
-
-        _video = new VideoWindow(Handle, IslandHandle);
-        _video.Fill();
-        return _video;
-    }
-
     private void OnSize()
     {
         if (_source is null) return;
@@ -2501,10 +2469,6 @@ internal sealed class HostWindow : IDisposable
         // is the single biggest reason the rewrite makes resizing smoother rather than worse.
         _source.SiteBridge.MoveAndResize(new RectInt32(0, 0, client.Width, client.Height));
         UpdateTitleBarRegions();
-
-        // 独立播放管线的垫底窗口跟着走。Fill 只改它自己——mpv 的钩子收到这一拍会自己把它的子窗口
-        // 跟上（VideoWindow 的类注释写了为什么宿主不能帮）。集成播放时它是 null，这一拍是空操作。
-        _video?.Fill();
     }
 
     private static IntPtr Dispatch(IntPtr window, uint message, IntPtr wParam, IntPtr lParam)
@@ -2773,10 +2737,6 @@ internal sealed class HostWindow : IDisposable
 
             _blank = IntPtr.Zero;
         }
-
-        // 视频子窗口的兜底那一条：正常销毁走 WM_DESTROY 已经清过（Dispose 是幂等清零，再走一遍无事）。
-        _video?.Dispose();
-        _video = null;
 
         _source?.Dispose();
         _source = null;

@@ -698,17 +698,21 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal bool AutoFullscreenOnPlayback => Settings.Playback.AutoFullscreenOnPlayback;
 
     /// <summary>
+    /// 「开播自动全屏」在本管线档位下是否还有意义：独立播放的画面在 mpv 自建的顶层窗口里，
+    /// 全屏置顶<b>本程序的</b>窗口只会把它盖住，所以那一档不施法。集成模式的画面在本程序窗口里，
+    /// 照常全屏。
+    /// </summary>
+    internal bool AutoFullscreenApplicable => Settings.Mpv.Pipeline != VideoPipelineKind.Standalone;
+
+    /// <summary>
     /// Whether playback should open in a window of its own. Only meaningful on the built-in backend: an
     /// external mpv.exe already opens its own window, and this client does not place it.
     /// </summary>
     internal bool SeparateWindowPlayback => Settings.Playback.SeparateWindowPlayback && Embedded;
 
-    /// <summary>
-    /// 内置播放器的渲染管线（<see cref="Configuration.VideoPipelineKind"/>，小幻影视同款两档）。与
-    /// <see cref="SeparateWindowPlayback"/> 同一条读法：每次起播现读，设置窗口里拨了开关，下一次
-    /// 播放就认新的。页面拿它分流 <c>VideoSurface</c>；外部 mpv.exe 那条后端根本不会来问。
-    /// </summary>
-    internal VideoPipelineKind VideoPipeline => Settings.Mpv.Pipeline;
+    // 渲染管线不再经过这里：它只被 PlayerPage.VideoSurface 的分流读过，而那条分流随 wid 路退休了
+    // （2026-09-16 第二形态）——管线现在只在 LibMpvBackend 内部按 settings.Pipeline 分流，页面与
+    // 视图模型对它 nothing to say。
 
     /// <summary>
     /// 播放页置顶的持久化偏好（<see cref="Configuration.PlaybackSettings.PinWindowTopmost"/>），页面进场时

@@ -7,12 +7,12 @@ using EmbyNian.Mpv;
 namespace EmbyNian.Playback;
 
 /// <summary>
-/// The in-process player: loads <c>libmpv-2.dll</c> and renders the video onto the surface behind
-/// <paramref name="surfaceProvider"/> — the integrated pipeline's <c>SwapChainPanel</c>, or the
-/// 独立播放 pipeline's underlay window, per launch. It is self-contained: the dll is loaded from an
-/// explicit absolute path, and libmpv is <c>config=no</c> by default, so no mpv.conf, input.conf or
-/// script from any mpv installation is ever read. Everything the player does comes from the settings
-/// page by way of <see cref="PlaybackRequest.PlayerOptions"/>.
+/// The in-process player: loads <c>libmpv-2.dll</c> and renders per the settings' pipeline — the
+/// integrated composition output onto the shell's panel, or mpv's own top-level window for the
+/// 独立播放 pipeline. It is self-contained: the dll is loaded from an explicit absolute path, and
+/// libmpv is <c>config=no</c> by default, so no mpv.conf, input.conf or script from any mpv
+/// installation is ever read. Everything the player does comes from the settings page by way of
+/// <see cref="PlaybackRequest.PlayerOptions"/>.
 /// </summary>
 public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> surfaceProvider) : IPlaybackBackend
 {
@@ -102,47 +102,49 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 
     /// <summary>
     /// Applies everything up to <c>mpv_initialize</c> and hands back the surface the playback will
-    /// render into — the same one <see cref="LibMpvHandle"/> keeps serving for its whole life.
+    /// render into — null for the 独立播放 pipeline, which has no client-side surface at all. The
+    /// same one <see cref="LibMpvHandle"/> keeps serving for its whole life.
     /// <para>
-    /// Two pipelines, branched on <see cref="IVideoSurface.WindowHandle"/>. 集成模式: the D3D11
+    /// Two pipelines, branched on the settings' <see cref="VideoPipelineKind"/>. 集成模式: the D3D11
     /// composition output — mpv creates no window of its own, renders into a composition swapchain
     /// the client attaches to its XAML panel, and the video becomes visual-tree content — same tree
-    /// as the chrome, no airspace, nothing behind the island. 独立播放: the surface <em>is</em> a
-    /// window — mpv takes it over as <c>wid</c> and keeps the swapchain to itself (auto resolves to
-    /// window presentation): it creates it, sizes it and presents it, the client never sees a
-    /// pointer, and no composition size is ever written because mpv measures the window itself.
+    /// as the chrome, no airspace, nothing behind the island. 独立播放: mpv's default window mode —
+    /// no <c>wid</c>, no surface, nothing said about the output mode (auto resolves to window
+    /// presentation the moment a window exists): mpv creates and manages its own top-level window,
+    /// measures it, presents it, and the client never touches its geometry. The first shape of this
+    /// pipeline — a child HWND under the island taken over as <c>wid</c> — was retired 2026-09-16:
+    /// a player of its own is an <em>independent</em> window, not a hole behind the browser.
     /// </para>
     /// <para>
     /// gpu-api is pinned to d3d11 either way — both output modes exist only on that backend. A user
     /// pick from 视频输出 lands later through PlayerOptions and overrides it, which is theirs to do.
     /// </para>
     /// </summary>
-    private IVideoSurface ApplyOptions(IntPtr context, PlaybackRequest request)
+    private IVideoSurface? ApplyOptions(IntPtr context, PlaybackRequest request)
     {
-        var surface = surfaceProvider();
-        if (surface is null) throw new InvalidOperationException("播放面板尚未就绪");
-
         // Nothing is said about config here: libmpv already defaults to config=no, so no mpv.conf,
         // input.conf or ~~/ path from any mpv installation is in play. Everything below, plus the
         // settings page's own options, is the whole of what this player is configured with.
 
         Set(context, "gpu-api", "d3d11");
 
-        if (surface.WindowHandle != IntPtr.Zero)
+        IVideoSurface? surface;
+        if (settings.Pipeline == VideoPipelineKind.Standalone)
         {
-            // 独立播放：wid 用 typed 形式设——整数选项没有任何字符串解析的歧义。不显式 pin 输出档：
-            // 这份 fork 的选项面是 auto|window|composition（上游同选项的第二档叫 flipping），档名
-            // 在两边不一致，pin 错名字等于自找致命错；而 auto 在有 wid 时就是 window 档，缺省已经
-            // 是独占呈现的那一个。交换链、尺寸、DPI 全归 mpv 自己量——客户端没有一条几何路径要喂。
-            var handle = surface.WindowHandle.ToInt64();
-            var widError = LibMpvNative.mpv_set_option(context, "wid", LibMpvNative.FormatInt64, ref handle);
-            if (widError < 0)
-                throw new InvalidOperationException($"内置播放器无法接管视频窗口（wid：{Describe(widError)}）");
-
-            Log.Info(Category, $"独立播放：mpv 独占窗口 0x{handle:X}，自建自呈现交换链");
+            // 独立播放：一条渲染语句都没有。不设 wid（那是嵌入，本管线已退休）、不设
+            // d3d11-output-mode——这份 fork 的选项面是 auto|window|composition（上游同选项的第二档
+            // 叫 flipping），档名在两边不一致，pin 错名字等于自找致命错；而 auto 在窗口出现时就是
+            // window 档，缺省已经是独占呈现的那一个——也不喂任何尺寸。mpv 自己建自己的顶层窗口，
+            // 自己量、自己 present，客户端没有一条几何路径要喂。force-window=immediate（下面统一
+            // 设）让窗口在 initialize 时就立起来，而不是等第一帧。
+            Log.Info(Category, "独立播放：mpv 自建顶层窗口（默认 window 模式），客户端不介入几何");
+            surface = null;
         }
         else
         {
+            surface = surfaceProvider();
+            if (surface is null) throw new InvalidOperationException("播放面板尚未就绪");
+
             // 集成模式：D3D11 composition 输出。mpv creates no window of its own; it renders into a
             // composition swapchain the client attaches to its XAML panel, and the video becomes
             // visual-tree content — same tree as the chrome, no airspace, nothing behind the island.
@@ -167,6 +169,13 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
             if (width <= 0 || height <= 0) Set(context, "d3d11-composition-size", "1x1");
             else Set(context, "d3d11-composition-size", $"{width}x{height}");
         }
+
+        // youtube-dl 钩子整个停掉。这里的媒体 URL 只有两种形状——Emby 的直连流和本机文件——ytdl 对
+        // 它们没有任何用处，只有代价：每次起播先让 [generic] 提取器去抓一遍网页（两秒的延迟），而且
+        // 那一趟不带 --http-header-fields（mpv 不把客户端的请求头传给 ytdl），服务器吃一个 401，
+        // 「播放失败」的提示就被这条假错误顶掉——2026-09-16 用户报的 401 就是它：真死因是服务器上
+        // 文件没了（404），提示却是 ytdl 的 Unauthorized。关掉之后，失败信息回到 mpv 自己那条诚实的。
+        Set(context, "ytdl", "no");
 
         // The client draws its own player chrome over the video; mpv's on-screen controller
         // would duplicate it, and its keyboard bindings would act on top of the client's own —
@@ -308,8 +317,9 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 /// <para>
 /// The panel is served the same way: the <c>display-swapchain</c> property is observed without a
 /// format, so a new swapchain announces itself on this thread, and the panel's geometry changes
-/// arrive as an event of their own. Both converge on <see cref="RefreshComposition"/>. 独立播放
-/// 走的是另一条路——mpv 独占窗口与交换链，这条事件线程只管状态，不管画面。
+/// arrive as an event of their own. Both converge on <see cref="RefreshComposition"/>. The surface
+/// is an integrated-pipeline member only: 独立播放 has no panel to serve — mpv draws into its own
+/// top-level window — so it arrives here with a null surface and none of this machinery arms.
 /// </para>
 /// </summary>
 internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPlaybackHandle, IPlayerControl
@@ -385,9 +395,8 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
         Observe(ObserveTrackList, "track-list", LibMpvNative.FormatNone);
 
         // Same shape: the change arrives here, the pointer is read where it arrives. 集成管线专属：
-        // 独立播放里没有 display-swapchain 可观察，也没有几何要喂——mpv 自己量窗口，自己的 resize
-        // 钩子把子窗口跟上宿主的每一次 SetWindowPos。
-        if (surface is not null && surface.WindowHandle == IntPtr.Zero)
+        // 独立播放根本没有 surface（mpv 画在自己的顶层窗口里），这里什么都不订阅，也没有几何要喂。
+        if (surface is not null)
         {
             Observe(ObserveSwapchain, "display-swapchain", LibMpvNative.FormatNone);
 
@@ -858,12 +867,11 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
         // Before the context is destroyed: the surface must not keep compositing a swapchain whose
         // owner is about to go away. The hop to the UI thread is asynchronous, and doing it here —
         // while mpv is still alive and the property can no longer produce a new chain — is the
-        // latest point where the order is guaranteed. 独立播放的窗口没有挂过任何交换链，摘除那一步
-        // 不适用于它（真挂错了 AttachSwapChain 自己会喊）。
+        // latest point where the order is guaranteed. 独立播放没有 surface，这一步整个不适用。
         if (surface is not null)
         {
             surface.GeometryChanged -= OnGeometryChanged;
-            if (surface.WindowHandle == IntPtr.Zero) surface.AttachSwapChain(IntPtr.Zero);
+            surface.AttachSwapChain(IntPtr.Zero);
         }
 
         _leaveLoop = true;

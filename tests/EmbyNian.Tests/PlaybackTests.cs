@@ -4908,46 +4908,47 @@ internal static class PlaybackTests
     // 窗口实现答自己的 HWND（独立）。判别式答错了，后端就会拿集成的方式去伺候独占的窗口，或者反过来。
 
     /// <summary>只实现合成三件套的最小面板——Shell 的 SwapChainVideoTarget 就是这个形状（多一层 UI 缓存）。</summary>
-    private sealed class PanelSurface : IVideoSurface
-    {
-        public (int Width, int Height) Size => (0, 0);
-
-        // 夹具没人订阅也没人举它；空访问器既是实话，也免掉「从不使用的事件」那声警告。
-        public event Action? GeometryChanged { add { } remove { } }
-
-        public void AttachSwapChain(IntPtr swapChain) { }
-    }
-
-    /// <summary>窗口那一形：只多答一个 WindowHandle，别的一样不缺。</summary>
-    private sealed class WindowSurface(IntPtr handle) : IVideoSurface
-    {
-        public (int Width, int Height) Size => (0, 0);
-
-        public event Action? GeometryChanged { add { } remove { } }
-
-        public void AttachSwapChain(IntPtr swapChain) { }
-
-        public IntPtr WindowHandle => handle;
-    }
-
     private static void RegisterPipelineDiscriminator()
     {
-        Test("双管线：面板实现的 WindowHandle 缺省是零——集成是默认那一档", () =>
-        {
-            // 判别式长在接口上（缺省实现），经接口读才看得见——后端正是这么读它的。
-            IVideoSurface surface = new PanelSurface();
-            Assert.Equal(IntPtr.Zero, surface.WindowHandle);
-        });
-
-        Test("双管线：窗口实现答自己的句柄，非零即是「mpv 独占」", () =>
-        {
-            IVideoSurface surface = new WindowSurface(new IntPtr(0x1234));
-            Assert.Equal(new IntPtr(0x1234), surface.WindowHandle);
-        });
-
         Test("双管线：渲染管线的装机默认是集成模式", () =>
         {
             Assert.Equal(VideoPipelineKind.Integrated, new MpvSettings().Pipeline);
+        });
+
+        Test("双管线：候选版本顺序——票里那版在前，其余版本按库序跟后", () =>
+        {
+            // 服务器库里的旧条目可能挂着文件已经不在的那一版（2026-09-16 的 401/404 报告），
+            // 回退按这张顺序表换版重试。票里的排最前（用户选的），其余按条目里的库序去重补齐。
+            var mkv = new MediaSource { Id = "mediasource_9990", Container = "mkv" };
+            var mp4 = new MediaSource { Id = "mediasource_9994", Container = "mp4" };
+            var item = Watchable(EmbyItemType.Episode);
+            item.MediaSources = [mkv, mp4];
+
+            var candidates = PlaybackService.CandidateSources(new PlaybackTicket
+            {
+                Item = item,
+                Source = mkv
+            });
+
+            Assert.Equal(2, candidates.Count);
+            Assert.Equal("mediasource_9990", candidates[0].Id, "票里那一版排最前");
+            Assert.Equal("mediasource_9994", candidates[1].Id, "其余版本按库序跟后");
+        });
+
+        Test("双管线：候选版本顺序——单版条目不重复，票外无候选", () =>
+        {
+            var only = new MediaSource { Id = "mediasource_7316", Container = "mkv" };
+            var item = Watchable(EmbyItemType.Episode);
+            item.MediaSources = [only];
+
+            var candidates = PlaybackService.CandidateSources(new PlaybackTicket
+            {
+                Item = item,
+                Source = only
+            });
+
+            Assert.Equal(1, candidates.Count, "唯一的版本就是全部候选，不因 Id 相同排两遍");
+            Assert.Equal("mediasource_7316", candidates[0].Id);
         });
     }
 

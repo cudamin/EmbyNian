@@ -570,12 +570,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // 掉了（_shell/_window 清空，Attached 变 false），再把请求递给它只会撞上「没挂上就什么都不做」那句
         // 守卫、静悄悄返回成品质任务 —— 窗口弹出来、里面一片黑，什么也没播。2026-09-14 用户报的「独立窗口
         // 播放用不了」就是这一条：日志里窗口创建了、13 秒内零播放日志。
-        //
-        // 漏斗还欠一次预备（2026-09-16 双管线）：独立播放引擎要先在界面线程上把岛下的视频子窗口建出来——
-        // 起播链往深处走会落在线程池上（PlaybackService 前两个 await 都 ConfigureAwait(false)），那时再建
-        // 就晚了。集成模式这一步是空操作。漏斗是唯一保证站在界面线程上的入口，所以预备住在这里。
         var player = SendPlaybackToOwnWindow(item) ?? Player;
-        player.PrepareVideoPipeline();
 
         return player.PlayAsync(item, parent, choice, episodes);
     }

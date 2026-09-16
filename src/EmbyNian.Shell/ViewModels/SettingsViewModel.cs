@@ -80,7 +80,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     private static readonly (string Label, VideoPipelineKind Value)[] Pipelines =
     [
         ("集成模式（与界面混排）", VideoPipelineKind.Integrated),
-        ("独立播放（mpv 独占交换链）", VideoPipelineKind.Standalone)
+        ("独立播放（mpv 自建窗口）", VideoPipelineKind.Standalone)
     ];
 
     private static readonly (string Label, SkipSectionMode Value)[] SkipModes =
@@ -399,12 +399,13 @@ public sealed partial class SettingsViewModel : PageViewModel
         [
             Choice("播放后端", Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value),
 
-            // 双渲染管线（2026-09-16，小幻影视同款两档）。集成模式把画面合成进 XAML 视觉树、与控件混排，
-            // 全屏小窗、哪个宿主都一样；独立播放让 mpv 拿 wid 接管岛下的原生子窗口、独占自己的交换链——
-            // 少一层合成、少一路跨线程几何往返，为高分辨率高帧率而设。两档都只对内置 libmpv 有意义（外部
-            // mpv.exe 本来就在自己的窗口里呈现）；读的是起播那一刻的值，改完下一次播放生效。
+            // 双渲染管线（2026-09-16，小幻影视同款两档；独立播放同日改为 mpv 默认 window 模式）。
+            // 集成模式把画面合成进 XAML 视觉树、与控件混排，全屏小窗、哪个宿主都一样；独立播放不设
+            // wid、不喂几何，mpv 自建并自管一个独立的顶层窗口（默认 window 模式），自己量、自己
+            // present。两档都只对内置 libmpv 有意义（外部 mpv.exe 本来就在自己的窗口里呈现）；读的是
+            // 起播那一刻的值，改完下一次播放生效。
             Choice("渲染管线", Pipelines, () => Settings.Mpv.Pipeline, value => Settings.Mpv.Pipeline = value,
-                "集成模式与控件混排，适合一般观看与小窗；独立播放由 mpv 独占交换链直接呈现，适合高分辨率"
+                "集成模式与控件混排，适合一般观看与小窗；独立播放由 mpv 自建独立窗口呈现，适合高分辨率"
                     + "高帧率。只对内置 libmpv 有效，下一次播放生效。"),
 
             // 这句说明是这一行存在的第二个理由，而且它是安全性的一句实话，不是介绍。外部 mpv.exe 那条路把

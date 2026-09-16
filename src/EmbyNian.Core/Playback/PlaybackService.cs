@@ -154,8 +154,65 @@ public sealed class PlaybackService(
     /// <summary>
     /// Starts playback, replacing anything already running. Returns once mpv has exited, so the
     /// caller can await the whole playback and act on the result.
+    /// <para>
+    /// 一个条目常有几版文件，而服务器库里可能挂着文件已经不在的那一版（MoviePilot 换版重命名后旧
+    /// 条目没刷新——2026-09-16 报的那次「播放失败 401」就是它：直连流吃 404，ytdl 兜底又报了个误导
+    /// 的 401）。所以这里按 <see cref="CandidateSources"/> 排一份候选顺序：票里那版先上，mpv 报
+    /// Error 就换下一版再试，直到有一版放起来或者候选用尽。换版重试时显式的轨道选择作废——那些
+    /// Emby 流索引是对着原先那版挑的，新版的流布局未必对得上，让 alang/slang 重新决定；续播位置
+    /// 保留，「看到哪儿」与版本无关。
+    /// </para>
     /// </summary>
     public async Task<PlaybackResult> PlayAsync(PlaybackTicket ticket, CancellationToken cancellationToken)
+    {
+        var candidates = CandidateSources(ticket);
+
+        for (var index = 0; index < candidates.Count; index++)
+        {
+            var source = candidates[index];
+            var attempt = index == 0
+                ? ticket
+                : ticket with
+                {
+                    Source = source,
+                    AudioStreamIndex = null,
+                    SubtitleStreamIndex = null,
+                    SubtitlesDisabled = false
+                };
+
+            var result = await PlayOneAsync(attempt, cancellationToken).ConfigureAwait(false);
+
+            if (!result.Exit.IsFailure || index == candidates.Count - 1) return result;
+
+            Log.Info(Category,
+                $"《{attempt.Item.ToPlaybackTitle()}》这一版打不开（{result.Exit.Message}），"
+                + $"改试另一版（{index + 2}/{candidates.Count}）");
+        }
+
+        // 走不到这里：循环要么在非失败处返回，要么在最后一个候选处返回。
+        throw new InvalidOperationException("unreachable");
+    }
+
+    /// <summary>
+    /// 播放的候选版本顺序：票里那一版（用户选的，或默认的第一个）在前，条目的其余版本按库序跟在
+    /// 后面，按 Id 去重。internal static：候选顺序是契约，测试看得见。
+    /// </summary>
+    internal static IReadOnlyList<MediaSource> CandidateSources(PlaybackTicket ticket)
+    {
+        var sources = new List<MediaSource> { ticket.Source };
+        foreach (var source in ticket.Item.MediaSources)
+        {
+            if (source.Id != ticket.Source.Id) sources.Add(source);
+        }
+
+        return sources;
+    }
+
+    /// <summary>
+    /// 一次候选版本上的完整播放：从停掉旧的到收尾上报。原 <see cref="PlayAsync"/> 的主体，包进候选
+    /// 循环里跑，一次循环一趟。
+    /// </summary>
+    private async Task<PlaybackResult> PlayOneAsync(PlaybackTicket ticket, CancellationToken cancellationToken)
     {
         await StopAsync().ConfigureAwait(false);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);

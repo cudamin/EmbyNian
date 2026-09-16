@@ -146,9 +146,9 @@ public sealed class MpvSettings
 
     /// <summary>
     /// 内置播放器的渲染管线（小幻影视同款的两档，2026-09-16）：<see cref="VideoPipelineKind.Integrated"/>
-    /// 把画面合成进 XAML 视觉树、与控件混排；<see cref="VideoPipelineKind.Standalone"/> 让 mpv 通过
-    /// <c>wid</c> 独占自己的 swapchain 直接呈现。只对内置 libmpv 那条后端有意义——外部 mpv.exe 本来就
-    /// 在自己的窗口里呈现（<see cref="Backend"/>）。读的是播放开始那一刻的值：设置页改完，下一次播放生效。
+    /// 把画面合成进 XAML 视觉树、与控件混排；<see cref="VideoPipelineKind.Standalone"/> 是 mpv 默认的
+    /// window 模式——mpv 自建并自管一个独立的顶层窗口。只对内置 libmpv 那条后端有意义——外部 mpv.exe
+    /// 本来就在自己的窗口里呈现（<see cref="Backend"/>）。读的是播放开始那一刻的值：设置页改完，下一次播放生效。
     /// </summary>
     public VideoPipelineKind Pipeline { get; set; } = VideoPipelineKind.Integrated;
 
@@ -201,13 +201,14 @@ public enum MpvBackendKind
 }
 
 /// <summary>
-/// 内置播放器的两条渲染管线（参考小幻影视的「集成模式 / 独立播放」，2026-09-16）：
+/// 内置播放器的两条渲染管线（参考小幻影视的「集成模式 / 独立播放」，2026-09-16；独立播放同日改成
+/// mpv 默认 window 模式，wid 嵌入的第一形态当天就退了役）：
 /// <list type="bullet">
 ///   <item><b>集成模式</b>：mpv 走 D3D11 composition 输出，交换链经 <c>display-swapchain</c> 挂到
 ///   SwapChainPanel 上——画面是 XAML 视觉树里的一层，与控件混排，全屏、小窗、哪个宿主都一样。</item>
-///   <item><b>独立播放</b>：mpv 拿 <c>wid</c> 接管 XAML 岛之下的一个原生子窗口，自建自呈现自己的
-///   swapchain（auto → window 档），尺寸与 DPI 由它自己量——少一层合成、少一路跨线程几何往返，
-///   为高分辨率高帧率而设。</item>
+///   <item><b>独立播放</b>：mpv 默认的 window 模式——不设 <c>wid</c>、不设输出档、不喂尺寸，mpv
+///   自建并自管一个独立的顶层窗口，自己量、自己 present。客户端没有一条几何路径要喂，mpv 画在
+///   哪里、开多大，都是它自己的事。</item>
 /// </list>
 /// </summary>
 public enum VideoPipelineKind
@@ -215,7 +216,7 @@ public enum VideoPipelineKind
     /// <summary>集成模式：画面合成进 XAML 视觉树，与控件混排。</summary>
     Integrated,
 
-    /// <summary>独立播放：mpv 独占 swapchain，在岛下的原生子窗口里直接呈现。</summary>
+    /// <summary>独立播放：mpv 自建顶层窗口（默认 window 模式），客户端不介入几何。</summary>
     Standalone
 }
 
@@ -440,9 +441,9 @@ public sealed class PlaybackSettings
     /// 片子由一个新开的播放窗口放。关掉这个播放窗口就是<b>停止播放</b>，回到主窗口继续浏览。
     /// </para>
     /// <para>
-    /// 这个窗口不是随便一个 WinUI <c>Window</c>：mpv 以 <c>wid</c> 画进一个子 HWND，而真正的
-    /// <c>Window</c> 会把它盖掉（见 <c>HostWindow</c> 类注释里的第 2 条事实）。所以它跟主窗口一样是
-    /// 自己创建的一条裸 HWND 加一座 XAML 岛，视频子窗口垫在岛下面 —— 见 <c>PlayerWindow</c>。
+    /// 这个窗口不是随便一个 WinUI <c>Window</c>：真正的 <c>Window</c> 会把播放页要合成的那层画面
+    /// 盖掉（见 <c>HostWindow</c> 类注释里的第 2 条事实）。所以它跟主窗口一样是自己创建的一条裸
+    /// HWND 加一座 XAML 岛 —— 见 <c>PlayerWindow</c>。
     /// </para>
     /// <para>
     /// 只对内置 libmpv 那条后端有意义：外部 mpv.exe 本来就自己开窗放（<see cref="MpvSettings.Backend"/>）。

@@ -17,10 +17,10 @@ namespace EmbyNian.Shell.Windowing;
 /// </para>
 /// <para>
 /// The film runs whichever pipeline the engine setting picked (2026-09-16 双管线)：集成模式 composites
-/// into this window's page panel exactly as in the main window; 独立播放 gives mpv a video child HWND
-/// under this window's island (<see cref="VideoWindow"/>, handed over as <c>wid</c>) and lets it own
-/// the swapchain. What 「独立播放」 buys is unchanged either way — a whole window that belongs to the
-/// film, the main window's sibling rather than its child.
+/// into this window's page panel exactly as in the main window; 独立播放 is mpv's own top-level
+/// window — no surface, no geometry from the client — appearing beside this one while this window's
+/// page keeps the chrome. What 「独立播放」 buys is unchanged either way — a whole window that belongs to
+/// the film, the main window's sibling rather than its child.
 /// </para>
 /// <para>
 /// Two <see cref="HostWindow"/>s in one process are supported by construction: the class registers itself

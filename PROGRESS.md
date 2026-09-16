@@ -2,6 +2,50 @@
 
 最后更新：2026-09-16
 
+## 第二十四报：独立播放改走 mpv 默认 window 模式；401 破案（ytdl 假错误＋多版本回退）；双管线实机自测（2026-09-16 深夜）
+
+> 用户原话三连：「1.独立播放模式应该走的是 mpv 默认的 window 模式（即 mpv 自行创建并管理一个独立的顶层窗口和交换链），而非 wid 子窗口嵌入。window 模式同样能让 mpv 自主 present，并且天然支持独立顶层窗口的窗口模型。 2.播放失败:ERROR: [generic] stream: … 401 … 3.改好后自己找个视频播放，自己排查bug 要求验收时两个模式都能正常播放。」
+
+### 定案一：独立播放 = mpv 默认 window 模式，wid 全链路退休
+
+二十三报复活的 wid/`VideoWindow` 整条路再度退场（这次是按用户的窗口模型改判：mpv 自建顶层窗口，客户端连子窗口都不提供）：
+
+- `LibMpvBackend.ApplyOptions` 按 `VideoPipelineKind` 分流：Standalone 分支**零渲染语句**（无 wid、无输出档、无尺寸——auto 在窗口出现时即 window 档），mpv 经 force-window 在 initialize 时自建顶层窗口，自己量尺寸/DPI、自己 present。
+- 退休清单：`VideoWindow.cs`（移 `EmbyNian-stale`）、`HostWindow.EnsureVideoUnderlay`/`_video`/`_dispatcherQueue`、`PlayerPage.PrepareVideoPipeline`（漏斗里那句一并删——surfaceProvider 不再有跨线程建窗问题）、typed `mpv_set_option` DllImport、`IVideoSurface.WindowHandle` 判别式（接口改回「集成模式专用契约」，文档言明独立播放不经过它）。
+- `LibMpvHandle` 订阅条件改 `surface is not null`（摘链守卫删除）；`ApplyOptions` 签名改返回 `IVideoSurface?`。
+- **新钉的坑（自测抓到）**：独立模式下「开播自动全屏」会把本程序窗口全屏**置顶**，mpv 的窗口在普通档被盖死——看得见播放器、看不见片子。修法：`PlayerViewModel.AutoFullscreenApplicable`（Standalone 不施法，判据住在 VM，PlayerPage 只问布尔），画面在 mpv 窗里的档位，全屏是帮倒忙。
+
+### 定案二：401 是 ytdl 的假口供，真死因是服务器文件没了
+
+排查链：全天日志同 URL 模式其他条目正常 → 排除通用鉴权 → DPAPI 解密令牌（熵 `EmbyMpvClient.Profile.v1`）实测服务器（`work/diag-9990.py`）→ 实锤：
+
+1. 条目 9990 的 mkv 版在服务器磁盘上**已被 MoviePilot 换成 mp4 版**，库条目未刷新——stream URL 真实应答 **404**（响应体明说「找不到文件 /Downloads_link/…」），该条目另有可播的 `mediasource_9994`（mp4）。
+2. mpv 对 http 流默认跑 `[generic]` ytdl 兜底，而 ytdl 子进程**拿不到我们的鉴权头**（mpv 不传 `--http-header-fields` 给它）→ 401 假错误把 404 真错误盖住，还白吃 ~2 秒起播延迟。
+
+修法双管齐下：`LibMpvBackend` 加 `ytdl=no`（本客户端只喂 Emby 直连流，提取器没有任何用武之地）；`PlaybackService.PlayAsync` 改**多版本候选回退**——`CandidateSources`＝票内 Source 在前＋`Item.MediaSources` 其余按库序去重，换版时 `ticket with { Source = next, 轨选择清空（alang/slang 重选）, StartTicks 保留 }`，失败日志《…》这一版打不开（{message}），改试另一版（{n}/{count}）。9990 下次播放会自动落到 mp4 版。
+
+### 定案三：实机自测——两档都播放成立；「无声死亡」是用户强杀不是崩溃
+
+新发布 exe ＋ `--play`（第一库第一项＝12062「超常技能…」，**AV1**、机器无 AV1 硬解）：
+
+- **集成**：交换链挂上（0x13837740730，1499×843 DIP）、自动全屏、光标稳态隐藏、**100+ 秒持续播放零错误**；mpv 的 d3d11va 对 AV1 探测失败后按设计回退软解（CPU ~28%，正常）。
+- **独立**：`「独立播放：mpv 自建顶层窗口」`标记在、无交换链挂接、无错误，两场分别 64/36 秒持续播放；修复后「进入全屏」不再出现（ bury bug 验证通过）。
+- **插曲**：三场测试窗口被外部**零痕迹终止**（无 WER、无事件日志、托管三路异常钩子无一响、无优雅退出行——正常崩溃必留 WER，今晨 0.0.8 的 AppCrash 报告就是 combase.dll 0x80070005 的 COM fail-fast）。死亡时点均在用户真键鼠活动（雷蛇设备见证）之后、用户 Chrome 正占前台——定性：用户在机器前用任务管理器强杀测试弹窗，非应用缺陷。
+- **记账未动刀**：独立模式下本程序窗口内光标不自动隐藏（空闲 35s 超阈值仍未藏）——画面不在本窗口，小瑕疵待用户反馈定优先级。
+
+### 闸门读数
+
+构建 **0 警告 0 错误**；测试 **887/887**（判别式测试 2 删 1 留，新增 `CandidateSources` 2 条，总数持平）；发布 **482 / 301.6 MB / 11 GLSL** ×2 轮。**自检未跑**：自检腿会接管鼠标，用户深夜正在用机——待机器空闲补跑（基线 189 行、2 已知红）。
+
+### 坑（本轮新撞的两个）
+
+1. **PowerShell 改设置文件毁中文**：`Get-Content -Raw`（PS5.1 默认 ANSI）读无 BOM UTF-8 的 settings.json 再写回，中文全变 mojibake、ConvertFrom-Json 静默失败。改用 python 字节级读写（`utf-8-sig` 解、`ensure_ascii=False` 编）＋先备份。**碰用户数据文件一律 python，不碰 PowerShell 文本管线。**
+2. **改私有成员访问的连锁 XAML 编译器 NRE**：PlayerPage 直取 `ViewModel.Settings`（private）→ CS0122 → XAML 编译器 WMC9999 空引用假死。正道：语义化内部属性放 VM（`AutoFullscreenApplicable`），页面层只问布尔。
+
+### 未验收
+
+双模式人眼验收（画面/画质/resize/全屏/DPI；HDR 直通；AyuGram 回归）；9990 多版本回退的真机触发；独立模式光标不藏的小瑕疵；自检补跑。设置已复原 `Pipeline: 0`（集成默认档）。
+
 ## 第二十三报：双渲染管线——集成模式（合成混排）＋独立播放（mpv 独占 swapchain）（2026-09-16 深夜，四道闸门收齐）
 
 > 用户原话：「改为集成模式（与 WinUI 控件混排）+ 独立播放（mpv 独占 swapchain）两种渲染管线，参考小幻影视的实现模式进行修改。」

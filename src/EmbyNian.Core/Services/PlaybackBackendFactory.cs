@@ -14,15 +14,14 @@ namespace EmbyNian.Services;
 public sealed class PlaybackBackendFactory(AppSettings settings, ShaderStaging shaders)
 {
     /// <summary>
-    /// The playing surface for this launch — the shell's answer to 「which pipeline carries the
-    /// picture」. Since the two-pipeline split (2026-09-16, 小幻影视同款) the choice itself lives in
-    /// the page the delegate lands on: <c>PlayerPage.VideoSurface</c> reads the engine setting and
-    /// answers with the page's panel (集成模式：composition, mixed into the visual tree) or with the
-    /// host window's video child HWND (独立播放：mpv presents its own swapchain, straight to the
-    /// DWM). Read afresh for every launch, so a switch in 设置 lands on the next play.
+    /// The playing surface for this launch — the shell's answer to 「which panel carries the
+    /// picture」. An <b>集成模式</b> member: the choice between the pipelines lives in the backend
+    /// now (branched on the settings' <see cref="VideoPipelineKind"/>, 2026-09-16 第二形态), and the
+    /// 独立播放 pipeline — mpv's own top-level window — never asks this delegate at all. What comes
+    /// back is the attached page's <c>SwapChainVideoTarget</c>, read afresh for every launch.
     /// <para>
     /// This one delegate is the shell's side of the video contract. Core still names no XAML type
-    /// and no window class: <see cref="IVideoSurface"/> lives there, both implementations in the
+    /// and no window class: <see cref="IVideoSurface"/> lives there, the implementation in the
     /// shell's windowing layer.
     /// </para>
     /// </summary>
