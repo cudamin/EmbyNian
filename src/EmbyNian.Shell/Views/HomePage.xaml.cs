@@ -176,12 +176,20 @@ public sealed partial class HomePage : Page, IShellContent
 
         if (shelf is null) return null;
 
-        var panel = ShelfRepeater.TryGetElement(index) as StackPanel;
-        if (panel is null)
+        var direct = ShelfRepeater.TryGetElement(index) as FrameworkElement;
+        if (direct is null)
         {
-            panel = ShelfRepeater.GetOrCreateElement(index) as StackPanel;
+            direct = ShelfRepeater.GetOrCreateElement(index) as FrameworkElement;
             UpdateLayout();
         }
+
+        // 2026-09-16 起模板根外面包了一层 Grid（见 ShelfTemplate 与 HomeMotion.TargetOf）：Repeater 的
+        // 直接子是框架 arrange 要操纵的对象，进场动画的目标和这里的量法都落在直接子里面的模板根上。
+        var panel = direct is null
+            ? null
+            : VisualTreeHelper.GetChildrenCount(direct) > 0
+                ? VisualTreeHelper.GetChild(direct, 0) as StackPanel
+                : direct as StackPanel;
 
         if (panel is null) return (false, $"第 {index} 排（{shelf.Title}）没有可量的货架模板");
 

@@ -192,6 +192,19 @@ internal sealed class HostWindow : IDisposable
     private IntPtr _islandProcedure;
 
     /// <summary>
+    /// 藏匿期判「手还是注入」的真实输入见证（第十六报）。收条线：<c>HookIslandCursor</c> 把 XAML 岛
+    /// 的窗口子类化的同一次呼吸里向系统注册原始输入（INPUTSINK，无焦点也收），<c>IslandDispatch</c>
+    /// 收到 <c>WM_INPUT</c> 就喂进来；问的人是 <c>PlayerPage.PollPointer</c> —— 藏匿期一记够阈值的
+    /// 位移出现时，先问见证再谈形状。类的头注释（<see cref="RealInputWitness"/>）写着整件事的证据
+    /// 链与边界，这里不重复。
+    /// </summary>
+    public RealInputWitness Witness { get; } = new();
+
+    /// <summary>自检用：凭空记一条「刚有真输入」。SetCursorPos 不产生 WM_INPUT，探针里那些模拟真手
+    /// 的腿必须自己把见证补上，否则新判据会把它们全判成注入。</summary>
+    internal void ForgeWitness() => Witness.Forge();
+
+    /// <summary>
     /// 换主题时重画标题栏那一条。<see cref="ThemeHost.Changed"/> 是个静态事件，不退订就等于把一个已经销毁的
     /// 窗口永远挂在上面，所以委托存下来，<c>WM_DESTROY</c> 里减掉。
     /// </summary>
@@ -2355,7 +2368,28 @@ internal sealed class HostWindow : IDisposable
             // draws the whole UI, and a procedure that answered for it would be a black window.
             Islands.Remove(island);
             Log.Warn(Category, "接管 XAML 岛的光标消息失败，鼠标将不会自动隐藏");
+            return;
         }
+
+        // 第十六报：见证的收音。子类化成功才注册 —— WM_INPUT 的入口是 IslandDispatch，没有它，
+        // 注册了也没人接。INPUTSINK 是要害：全屏播放的窗口没有焦点，按默认注册（只送前台）见证
+        // 会在最有用的时刻恰好缺席。失败不重试：Witness.Ready 是假，PollPointer 退回形状启发式，
+        // 日志在这里说清楚是哪一种缺席。
+        var devices = new[]
+        {
+            new Native.RawInputDevice
+            {
+                UsagePage = Native.UsagePageGenericDesktop,
+                Usage = Native.UsageMouse,
+                Flags = Native.RidevInputsink,
+                Target = island
+            }
+        };
+
+        Witness.Ready = Native.RegisterRawInputDevices(devices, (uint)devices.Length, Marshal.SizeOf<Native.RawInputDevice>());
+        Log.Info(Category, Witness.Ready
+            ? $"真实输入见证已收音（岛 0x{island:X}，INPUTSINK）"
+            : $"原始输入注册失败（Win32 错误 {Marshal.GetLastWin32Error()}），藏匿期退回形状启发式");
     }
 
     /// <summary>
@@ -2392,6 +2426,13 @@ internal sealed class HostWindow : IDisposable
                 }
 
                 if (message == Native.WmNcDestroy) Islands.Remove(window);
+
+                // 第十六报：见证的口粮。每条 WM_INPUT 到这里判一次「有出处（hDevice ≠ 0，真手）还是
+                // 没有（SendInput 一类）」，记时间戳与计数 —— 裁决不在这一拍做：判「位移是手还是注入」
+                // 的时刻在 PollPointer 读到够阈值位移的那一拍，那里问 RecentRealInput。这条消息流比
+                // 任何东西都密（鼠标一动每秒上百条），Parse 必须便宜：一次固定缓冲、几次整数读，见
+                // RealInputWitness.Parse。
+                else if (message == Native.WmInput) host.Witness.Parse(lParam);
             }
         }
         catch (Exception error)

@@ -201,13 +201,49 @@ public sealed partial class PlayerPage
         // A step under the threshold is the desk, not a hand. Counted, not logged, and the reference stays put.
         if (_polledKnown && !ChromeReveal.Travelled(dx, dy)) return;
 
-        // 藏匿期第一个够阈值的位移：先挂起一拍，别急着认成手。第十一报的全部胜负都在这一句上 ——
-        // 位置确实是 OS 给的、确实够 60 像素，但它既可能是一只手、也可能是一个注入。到下一拍才知道。
-        // 例外是刚判过一次纯跳变、且还在免检期内（WarpHandMilliseconds）：注入的形状是「搬完就冻住」，
-        // 不会下一拍再搬一次，所以那记只能是手在继续走 —— 直接放行。免检是有期限的（第十五报）：没有
-        // 期限时它会在整段藏匿里一直立着，挡得住第一条消息、挡不住第二第三条。
+        // 藏匿期第一个够阈值的位移：先别急着认成手。第十一报的全部胜负都在这一句上 ——
+        // 位置确实是 OS 给的、确实够 60 像素，但它既可能是一只手、也可能是一个注入。
+        //
+        // 第十六报（2026-09-16）把裁决分成了两条互斥的路：
+        //
+        // 见证就绪 —— 先问真实输入（RealInputWitness，WM_INPUT 的 hDevice）。十五报的日志证明了形状
+        // 的极限：AyuGram 的注入是一段动画（四秒五步、每步十几到几十像素），每一步单独看都与「手走了
+        // 一拍」无法区分，「搬完就冻住」的形状假设对它不成立，第十五报的期限与「离落点走开」在它面前
+        // 全都失守。形状上没有答案，答案在形状之外：SetCursorPos 不产生 WM_INPUT，SendInput 产生的
+        // 没有 hDevice，真手的 WM_INPUT 有 —— 有见证是手，没有是注入，与形状无关。
+        //
+        // 见证缺席（注册失败）—— 退回 WarpOrHand 的形状启发式。两条路永远不混用：一次裁决两个证人
+        // 会互相污染。
         if (_cursorHidden && _polledKnown)
         {
+            if (_window?.Witness.Ready == true)
+            {
+                var witnessed = _window.Witness.RecentRealInput(ChromeReveal.WarpWitnessMilliseconds);
+
+                if (!_chrome.HideMoveVerdict(witnessed, Now))
+                {
+                    // 注入：接着藏。与 WarpOrHand 冻结确认同样的交接 —— 参照推进到落点，免得下一拍
+                    // 又拿同一段位移当新的位移。Core 那本账记 Core 的，这里这本是日志和探针读的。
+                    _polled = screen;
+                    _polledKnown = true;
+                    _warpsIgnored++;
+
+                    // 判决写进日志：十六报的判定痕迹全靠这几行 —— 「挡掉 N 次」只有显示行汇总，
+                    // 真要复盘「谁在哪一刻被谁判掉的」，得有这一行的时间与读数。
+                    Log.Debug(Category, $"见证判掉一次注入：位移 {dx},{dy}，最近真输入"
+                        + $"{_window.Witness.LastRealMoveAgo}，本段已挡 {_warpsIgnored} 次"
+                        + $"（真 {_window.Witness.RealMoves}/注 {_window.Witness.InjectedMoves}）");
+                    return;
+                }
+
+                WakeFromPoll(screen, dx, dy, "真实输入见证：有");
+                return;
+            }
+
+            // 形状启发式（见证缺席的退路）：先挂起一拍，别急着认成手。例外是刚判过一次纯跳变、
+            // 且还在免检期内（WarpHandMilliseconds）：注入的形状是「搬完就冻住」，不会下一拍再搬一次，
+            // 所以那记只能是手在继续走 —— 直接放行。免检是有期限的（第十五报）：没有期限时它会在
+            // 整段藏匿里一直立着，挡得住第一条消息、挡不住第二第三条。
             if (!_chrome.WarpOrHand(screen.X, screen.Y, Now))
             {
                 // 挂起立起来了：把参照点推进到挂起点，免得下一拍又拿同一个 60 当新位移。
@@ -326,9 +362,16 @@ public sealed partial class PlayerPage
 
         // 「本线程队列的形状」与「系统此刻的形状」是两个量，取样必须分开写：判「谁在画」看的正是这两个
         // 之间的差 —— 队列是空的（0）而系统是个箭头形状，说明画的人不是我们这一队列。
+        //
+        // 第十六报补的第四组数：见证的账。真/注两个计数一秒一次往外报 —— 注入计数涨起来而真计数
+        // 不动，就是「有程序在注入输入」的直接证据；真计数涨起来，说明这台机器的真手被见证看见了。
+        // 十六报之后裁决改问见证，这两个数就是裁决的底账，缺席时（见「缺席/就绪」）判的是形状启发式。
+        var witness = _window?.Witness;
         Log.Debug(Category, $"藏匿取样：指针 {spot}，本队列形状 0x{Native.GetCursor():X}，{PointerOwner()}"
             + $"，我们窗口 {rect}，虚拟屏 {desk.Width}x{desk.Height}@{desk.X},{desk.Y}"
-            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次");
+            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
+            + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}）" : "缺席（退回形状启发式）")}"
+            + $"，本段已挡注入 {_warpsIgnored} 次");
     }
 
     // ---- 两处竖直间距 -------------------------------------------------------------
@@ -778,10 +821,12 @@ public sealed partial class PlayerPage
               + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
               + $"，{PointerElements()}"
               + $"，本次藏匿已挡掉一次性跳变 {_warpsIgnored} 次"
+              + $"，见证{(_window?.Witness.Ready == true ? "就绪" : "缺席（走形状启发式）")}"
             : $"鼠标又显示了：{_woke}；轮询问出的移动共 {_polledMoves} 次，计数 {_cursorCount}"
               + $"，藏着期间重申了 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了"
               + $"，负计数锁被抬回又压回 {_window?.CursorSuppressRestates ?? 0} 次"
-              + $"，挡掉一次性跳变 {_warpsIgnored} 次");
+              + $"，挡掉一次性跳变 {_warpsIgnored} 次"
+              + $"，见证{(_window?.Witness.Ready == true ? $"真 {_window.Witness.RealMoves}/注 {_window.Witness.InjectedMoves}" : "缺席（走形状启发式）")}");
     }
 
     /// <summary>

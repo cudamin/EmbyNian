@@ -190,6 +190,7 @@ public sealed partial class HomeBanner : UserControl
         // 字底下那层跟着字形走的影子（见 TextInk）。四行各一层，宿主是同一格里排在字前面那个空 Border。
         // 装在构造里而不是 Loaded 里：这四层是这块字的一部分，不是「进树之后才有的装饰」，而自检里那份
         // 控件（Probe 里 new 出来的那一个）也该把这条路走一遍 —— 走不通就该在闸门上红，不是在屏上少一层。
+        // （2026-09-16 十六报二分实验证明这四层影子与主页启动崩溃无关，恢复无条件挂上。）
         TextInk.Attach(LogoInk, LogoImage);
         TextInk.Attach(TitleInk, TitleText, TextInk.TitleBlur);
         TextInk.Attach(CaptionInk, CaptionText);

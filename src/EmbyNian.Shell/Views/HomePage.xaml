@@ -50,6 +50,10 @@
         </DataTemplate>
 
         <DataTemplate x:Key="ShelfTemplate" x:DataType="vm:CardShelf">
+            <!-- 外层这层 Grid 是给进场动画的（见 HomeMotion.TargetOf）：ItemsRepeater 的直接子是
+                 框架 arrange/viewport 自己要操纵（调 Scale）的对象，不能被 GetElementVisual 占用；
+                 动画一律落在直接子里面的模板根上。直接子与模板根之间必须隔一层，删不得。 -->
+            <Grid>
             <StackPanel Spacing="{StaticResource EgSpaceM}">
                 <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。
                      OnScrim 绑着这一排是不是站在一张剧照上：这一页的几排都在第一屏外面、站在页面自己的纸上，
@@ -94,7 +98,8 @@
                     ItemTemplate="{StaticResource CardTemplate}"
                     ItemsSource="{x:Bind Cards}"
                     OnScrim="{x:Bind OnScrim, Mode=OneWay}" />
-            </StackPanel>
+                </StackPanel>
+            </Grid>
         </DataTemplate>
     </Page.Resources>
 

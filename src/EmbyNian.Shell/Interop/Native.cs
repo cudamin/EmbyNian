@@ -1100,4 +1100,59 @@ internal static partial class Native
 
         return GetWindowRect(window, out rect);
     }
+
+    // ---- 原始输入（第十六报：藏匿期判「手还是注入」的真实输入见证）------------------------------
+    // 这一区的存在理由写在 RealInputWitness 的头注释里，这里只放 Win32 的原文。要点有两条：
+    // 一是结构偏移全部手工读而不用 Marshal.PtrToStructure —— RAWINPUT 内部是 union，托管结构
+    // marshal 在它上面踩过坑，而这一题真正要读的只有 header 里的 hDevice 和 RAWMOUSE 里三个数，
+    // 手工偏移既稳又短。二是 RAWMOUSE 在 x64 上是 24 字节（lLastX/lLastY 是 LONG 不是 SHORT），
+    // header 是 24 字节 —— 两个 24 都验证过（work/rawinput-phase.py 的探测输出），别「优化」。
+    public const uint WmInput = 0x00FF;
+
+    /// <summary>HID usage page 「Generic Desktop」，鼠标在它下面。</summary>
+    public const ushort UsagePageGenericDesktop = 0x01;
+
+    /// <summary>HID usage 「Mouse」。</summary>
+    public const ushort UsageMouse = 0x02;
+
+    /// <summary>RIDEV_INPUTSINK：即使窗口没有焦点也把 <see cref="WmInput"/> 送来。收见证的窗口是全屏
+    /// 播放的窗口，焦点从来不在它身上时也要收 —— 否则见证在最有用的时刻恰好缺席。</summary>
+    public const uint RidevInputsink = 0x00000100;
+
+    /// <summary>GetRawInputData 的 uiCommand：要整条 RAWINPUT（header + 设备数据）。</summary>
+    public const uint RidInput = 0x10000003;
+
+    /// <summary>RAWINPUTHEADER.dwType 的鼠标值。键盘、HID 其它设备不进见证 —— 它们不搬光标。</summary>
+    public const uint RimTypeMouse = 0;
+
+    /// <summary>RAWINPUTHEADER 的大小（x64）。</summary>
+    public const int RawInputHeaderSize = 24;
+
+    /// <summary>RAWMOUSE 的大小（x64）。</summary>
+    public const int RawMouseSize = 24;
+
+    /// <summary>RAWINPUTHEADER.dwSize 之后的 RAWMOUSE 里三个字段在 RAWINPUT 缓冲里的偏移（x64）。</summary>
+    public const int RawMouseFlagsOffset = 24;
+    public const int RawMouseXOffset = 36;
+    public const int RawMouseYOffset = 40;
+
+    /// <summary>RAWMOUSE.usFlags 的 MOUSE_MOVE_ABSOLUTE。真手不会走这一路（相对移动），它出现时按
+    /// 位移本身算 —— 见证只问「动了没有」，不问「相对还是绝对」。</summary>
+    public const ushort MouseMoveAbsolute = 0x0001;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RawInputDevice
+    {
+        public ushort UsagePage;
+        public ushort Usage;
+        public uint Flags;
+        public IntPtr Target;
+    }
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RegisterRawInputDevices(RawInputDevice[] devices, uint count, int size);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial int GetRawInputData(IntPtr rawInput, uint command, byte[] buffer, ref uint size, int headerSize);
 }

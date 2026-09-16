@@ -225,6 +225,20 @@ public sealed class ChromeReveal
     public const long WarpHandMilliseconds = 200;
 
     /// <summary>
+    /// 藏匿期的一记够阈值位移出现时，向真实输入见证问「最近有没有真手的移动」的窗口
+    /// （第十六报，2026-09-16）。见证（<c>RealInputWitness</c>，在 Shell）说「有」就是手，说「没有」
+    /// 就是注入 —— 与形状无关。
+    /// <para>
+    /// 300 的账：轮询一拍 100ms，手停下到十赫兹的轮询看见最后那记位移，最多隔两拍（200ms 出头），
+    /// 窗口必须盖住它，不然手停下后的收尾一记会被冤成注入、光标该醒不醒；往宽了也不能太宽，不然
+    /// 注入落地的一瞬恰好还记着一记久远的真移动，注入会被冤放。300 在两边都站得住 —— 手移动的
+    /// 时候 WM_INPUT 一秒上百条，窗口里全是见证；注入（SetCursorPos）根本不产生见证，注入
+    /// （SendInput）产生的没有 hDevice。
+    /// </para>
+    /// </summary>
+    public const long WarpWitnessMilliseconds = 300;
+
+    /// <summary>
     /// 免检还作不作数：立起来过，而且还在 <see cref="WarpHandMilliseconds"/> 之内。过期就地作废——只判一次，
     /// 因为下一次够阈值的位移该重新过手续（那可能是下一条消息的注入）。
     /// </summary>
@@ -340,6 +354,43 @@ public sealed class ChromeReveal
         _warpSeenAt = 0;
         _warpJustCleared = false;
         _warpClearedAt = 0;
+    }
+
+    /// <summary>
+    /// 藏匿期一记够阈值的位移，由<b>真实输入见证</b>裁决（第十六报，2026-09-16）。
+    /// <para>
+    /// <see cref="WarpOrHand"/> 是形状的裁决者：它拿到的唯一事实是坐标，而十六报的日志证明了形状
+    /// 的极限 —— AyuGram 的注入是一段动画（四秒五步、每步十几到几十像素），每一步单独看都与「手
+    /// 走了一拍」无法区分，第十五报的期限与「离落点走开」在它面前全都失守。这一条是形状之外的
+    /// 裁决：Shell 的 <c>RealInputWitness</c> 从 WM_INPUT 里看见了什么，原样递进来 —— 有 hDevice
+    /// 的移动是手，没有是注入。判据一句话，裁决就一句话。
+    /// </para>
+    /// <para>
+    /// 两个出口。真（<paramref name="realInputSeen"/>）：交回给调用方当移动处理 —— 挂起与免检闩都
+    /// 清掉，见证模式下它们不该再立起来。假：确认是注入，<see cref="WarpsIgnored"/> 记账、挂起清掉，
+    /// 调用方把参照点推进到落点 —— 与 <see cref="WarpOrHand"/> 冻结确认那一支同样的交接，只是判定
+    /// 换了证人。<b>注入不立免检闩</b>：动画注入一步一判，每一步都是独立的「没有见证」，上一步的
+    /// 判决不能让下一步免检 —— 那正是十五报挡不住第二条消息的老路。
+    /// </para>
+    /// <para>
+    /// 见证缺席（注册失败、解析不出来）时不走这一条：调用方（<c>PollPointer</c>）看到 <c>Ready</c>
+    /// 是假就退回 <see cref="WarpOrHand"/>。这一条与那条永远不混用 —— 一次裁决两个证人会互相污染。
+    /// </para>
+    /// </summary>
+    /// <param name="realInputSeen">见证说这记位移出现前后有没有真手的移动。</param>
+    /// <param name="now">这一拍的时钟，与规则其它地方同一个。留着签名上的对称：裁决都收时钟。</param>
+    /// <returns>真＝手，按移动处理；假＝注入，接着藏。</returns>
+    public bool HideMoveVerdict(bool realInputSeen, long now)
+    {
+        if (!realInputSeen)
+        {
+            WarpsIgnored++;
+            ClearWarp();
+            return false;
+        }
+
+        ClearWarp();
+        return true;
     }
 
     /// <summary>

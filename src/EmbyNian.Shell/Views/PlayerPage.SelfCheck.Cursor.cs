@@ -776,10 +776,17 @@ public sealed partial class PlayerPage
             // 探针以前只搬一次、只推一拍，于是它测的其实是「注入会不会叫醒光标」，答案是不该叫醒，
             // 判据却在要它醒。手在鼠标上是一个**过程**：这里就走两步，第二拍位置再变，轮询就会认成手
             // 并唤醒——和真手连着走两拍是同一条路（那条判据在 ProbeCursorWarp 里）。
+            //
+            // 第十六报再补一件这台机器上只能这样补的事：SetCursorPos 不产生 WM_INPUT（这正是它能当
+            // 注入替身的理由），所以新判据会把这两步认成注入、光标不醒 —— 判据没错，是搬运没有出处。
+            // 真手每一步都伴着 hDevice ≠ 0 的原始输入，这里每步补一条 ForgeWitness 模拟它，探针测的
+            // 才是「有出处的两步移动会不会醒」。
             Native.SetCursorPos(centre.X + 60, centre.Y);
+            _window!.ForgeWitness();
             Pump();
             OnTick(this, EventArgs.Empty);
             Native.SetCursorPos(centre.X + 120, centre.Y);
+            _window.ForgeWitness();
             Pump();
             OnTick(this, EventArgs.Empty);
 
@@ -946,6 +953,10 @@ public sealed partial class PlayerPage
         var report = new List<string>();
         var wrong = new List<string>();
 
+        // 第十六报：本轮判定走哪条路，开门见山写进报告 —— 见证缺席时动画注入那一腿的跳过才有依据。
+        report.Add($"见证：{(_window!.Witness.Ready ? "就绪" : "缺席（本轮退回形状启发式）")}"
+            + $"，账 真{_window.Witness.RealMoves}/注{_window.Witness.InjectedMoves}/伪{_window.Witness.Forged}");
+
         SetCursorHidden(false);
         _chrome.Reset(Now);
         Render();
@@ -1078,6 +1089,45 @@ public sealed partial class PlayerPage
             report.Add("第一记跳变就把光标叫醒了，第二条消息那一腿不判（同一个病，报一条就够）");
         }
 
+        // —— 第十六报的现场：注入不是一记，是一段动画。三步游走，光标必须全程藏着 ——
+        //
+        // 十六报日志里那段：972,378 → 986,379 → 1028,383 → 1038,385 → 1058,380，四秒五步，每步十几到
+        // 几十像素、步与步隔一两百毫秒。形状启发式对每一步都会问「下一拍动没动」，而动画的下一步真的
+        // 动了 —— 每一步都轮到「手在走」的位置上，这正是第十五报修完还犯的那一拍。见证判据不看形状：
+        // SetCursorPos 没有出处，每一步都判注入。这条腿只在见证就绪时判 —— 启发式对动画注入没有答案，
+        // 拿它去判等于测空气；缺席时写明跳过，不装绿也不装红。
+        if (_cursorHidden && _window!.Witness.Ready)
+        {
+            var afterSecond = _warpsIgnored;
+            Native.GetCursorPos(out var at3);
+
+            // 三步各 30 像素（AyuGram 的实测步长十几到几十），靠右沿就向左走，别撞虚拟屏边界。
+            var dir = at3.X + 90 <= VirtualRight() ? 1 : -1;
+            var whole = true;
+
+            for (var i = 0; i < 3; i++)
+            {
+                var stepX = at3.X + dir * 30 * (i + 1);
+                Native.SetCursorPos(stepX, at3.Y);
+                Pump();
+                OnTick(this, EventArgs.Empty);
+                if (!_cursorHidden) whole = false;
+                report.Add($"  动画第 {i + 1} 步搬到 {stepX},{at3.Y} 后：光标{(_cursorHidden ? "还藏着" : "又显示了")}"
+                    + $"，规则{(_chrome.CursorHidden ? "藏" : "显")}，已挡 {_warpsIgnored} 次");
+                Thread.Sleep(150);
+            }
+
+            Want("动画注入（三步游走）不叫醒光标", whole);
+            Want("动画注入每一步都记进了账", _warpsIgnored >= afterSecond + 3);
+            report.Add($"动画注入（三步各 30、隔 150ms）后：光标{(_cursorHidden ? "还藏着" : "又显示了")}"
+                + $"，挡掉跳变 {afterSecond}→{_warpsIgnored} 次"
+                + $"，见证账 真{_window.Witness.RealMoves}/注{_window.Witness.InjectedMoves}/伪{_window.Witness.Forged}");
+        }
+        else if (_cursorHidden)
+        {
+            report.Add("见证缺席，动画注入那一腿不判（形状启发式对动画没有答案，判了也是空气）");
+        }
+
         // —— 对面那一半：手在走（连着两拍都动），光标必须回来 ——
         if (_cursorHidden)
         {
@@ -1087,6 +1137,11 @@ public sealed partial class PlayerPage
             for (var i = 0; i < 2; i++)
             {
                 Native.SetCursorPos(now1.X + 40 * (i + 1), now1.Y + 10 * (i + 1));
+
+                // 第十六报：SetCursorPos 不产生 WM_INPUT，真手的每一步都伴着有出处的原始输入 ——
+                // 这里每步补一条 ForgeWitness 模拟它。不补的话新判据把这两步认成注入，光标不醒，
+                // 探针红得毫无信息量；补上，测的才是「判据认不认得出有出处的手」。
+                _window!.ForgeWitness();
                 Pump();
                 OnTick(this, EventArgs.Empty);
                 Native.GetCursorPos(out var probe);
@@ -1097,7 +1152,7 @@ public sealed partial class PlayerPage
             }
 
             Want("真手连着走两拍要能叫醒光标", from && !_cursorHidden);
-            report.Add($"连着走两拍（每次 +40）后：光标{(_cursorHidden ? "还藏着" : "回来了")}");
+            report.Add($"连着走两拍（每次 +40，每步补见证）后：光标{(_cursorHidden ? "还藏着" : "回来了")}");
         }
         else
         {

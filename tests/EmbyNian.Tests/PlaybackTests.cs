@@ -3985,6 +3985,81 @@ internal static class PlaybackTests
             Assert.False(chrome.WarpPendingAt.HasValue);
         });
 
+        Test("播放器控件：见证说没有就是注入——与形状无关", () =>
+        {
+            // 第十六报（2026-09-16）。十五报修完还犯，日志证明了形状的极限：AyuGram 的注入是一段
+            // 动画（972,378 → 986,379 → 1028,383 → 1038,385 → 1058,380，四秒五步、每步十几到几十
+            // 像素），每一步单独看都与「手走了一拍」无法区分，「搬完就冻住」的形状假设对它不成立。
+            // 真实输入见证在形状之外给答案：SetCursorPos 不产生 WM_INPUT，SendInput 产生的没有
+            // hDevice，真手的有 —— 有见证是手，没有是注入。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+
+            // 第一记：没有见证。判注入、记账、不挂起 —— 见证模式下不存在「挂起等下一拍」这一说。
+            Assert.False(chrome.HideMoveVerdict(realInputSeen: false, at), "没有见证就是注入");
+            Assert.Equal(1, chrome.WarpsIgnored);
+            Assert.False(chrome.WarpPendingAt.HasValue, "见证模式不需要挂起这一拍");
+            Assert.True(chrome.CursorHidden, "注入不叫醒光标");
+
+            // 动画注入的三步：每一步都独立判、每一步都记进账。旧启发式在这里会把第二步认成手
+            // （判掉一跳之后的免检），新判据对每一步都只说「没有见证」。
+            for (var i = 1; i <= 3; i++)
+            {
+                Assert.False(chrome.HideMoveVerdict(realInputSeen: false, at + 150 * i),
+                    $"动画第 {i} 步没有见证，还是注入");
+            }
+
+            Assert.Equal(4, chrome.WarpsIgnored, "四步注入，四笔账");
+        });
+
+        Test("播放器控件：见证说有就是手——哪怕形状裁决正挂着", () =>
+        {
+            // 见证直接推翻形状裁决的挂起。这条钉的是两件事：见证优先于形状；判成手之后挂起收干净，
+            // 调用方照正常唤醒路走。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+
+            // 形状裁决先挂起（那是见证缺席时的路），下一拍见证说「有」：直接判手。
+            chrome.WarpOrHand(3160, 932, at);
+            Assert.True(chrome.WarpPendingAt.HasValue, "前提：形状裁决的挂起立着");
+
+            Assert.True(chrome.HideMoveVerdict(realInputSeen: true, at + ChromeReveal.WarpConfirmMilliseconds),
+                "有见证就是手，挂起不作数");
+            Assert.False(chrome.WarpPendingAt.HasValue, "判成手之后挂起要收干净");
+            Assert.Equal(0, chrome.WarpsIgnored, "手不是「挡掉一次」");
+        });
+
+        Test("播放器控件：见证判掉注入不立免检闩，下一记照旧过手续", () =>
+        {
+            // 免检闩是形状启发式的机制（判掉一跳之后紧接的那一记当手）。见证模式每一步独立判，判掉
+            // 一记注入之后**不许**立起免检闩 —— 不然动画注入的第二步又轮到免检，正是十五报挡不住
+            // 第二条消息的那条老路。闩在外面看不见，观察口就是问一记形状裁决：闩立着它会直接放行，
+            // 闩没立它得先挂起。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+
+            Assert.False(chrome.HideMoveVerdict(realInputSeen: false, at), "先判掉一记注入");
+
+            // 紧接着的一记走形状裁决：必须挂起，绝不能被免检带过去。
+            Assert.False(chrome.WarpOrHand(3200, 940, at + 100), "见证判掉的注入不立免检闩");
+            Assert.True(chrome.WarpPendingAt.HasValue, "下一记照旧先挂起");
+        });
+
         Test("播放器控件：藏下去靠每拍重申，不靠往输入队列里塞东西", () =>
         {
             // 2026-09-14 的第二轮报修（「没修好」）追出来的根因：那条「让框架重新念一遍」的路本身就是一次
