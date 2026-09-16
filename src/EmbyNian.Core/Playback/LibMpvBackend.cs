@@ -156,11 +156,16 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
                     $"内置 {LibraryName} 不支持 d3d11 合成输出（{Describe(modeError)}）。"
                     + "需要 2025-07 之后的构建；换一份新的 libmpv-2.dll 放回程序目录即可。");
 
-            // Sized by the client rather than by a window — composition mode has no window for mpv to
-            // measure. The panel's size goes in here and again on every geometry change (the handle's
-            // RefreshComposition), so a resize between launch and first frame cannot strand a stale one.
+            // Sized by the client in DIPs, and never skipped. 两头都有实证（work/probe-composition2.txt，
+            // 2026-09-16 深夜）：缺省这个选项时 composition vo 起不来，mpv 沿 vo 链回退到 direct3d
+            // （D3D9）——偶发的「初始化失败：invalid parameter」和全黑都从这来；而面板没量到（Collapsed
+            // 下首播、布局还没跑）时 Size 是 (0,0)，所以拿参考实现的下限 1x1 顶着，GeometryChanged 会
+            // 在布局后把真尺寸补上（mpv 接受 init 之后的尺寸变更，链不重建）。尺寸按 DIP 而不是物理
+            // 像素，是因为这份 dll 的 display-swapchain 包装对象不支持 SetMatrixTransform——DIP 在两种
+            // 合成映射模型下都几何正确（实现类的 DPI 段写着全过程）。
             var (width, height) = surface.Size;
-            if (width > 0 && height > 0) Set(context, "d3d11-composition-size", $"{width}x{height}");
+            if (width <= 0 || height <= 0) Set(context, "d3d11-composition-size", "1x1");
+            else Set(context, "d3d11-composition-size", $"{width}x{height}");
         }
 
         // The client draws its own player chrome over the video; mpv's on-screen controller

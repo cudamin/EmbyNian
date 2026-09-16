@@ -35,9 +35,11 @@ public interface IVideoSurface
     /// </summary>
     virtual IntPtr WindowHandle => IntPtr.Zero;
     /// <summary>
-    /// The panel's current rendering size in physical pixels (layout size × composition scale).
-    /// <c>(0, 0)</c> means the panel has not been laid out yet — the backend skips the size option
-    /// for that pass and waits for the next <see cref="GeometryChanged"/>.
+    /// The panel's current rendering size in DIPs (layout size; 缩放不参与——合成尺寸以 DIP 计，
+    /// 见实现类的 DPI 段）。<c>(0, 0)</c> means the panel has not been laid out yet — the backend
+    /// answers with a provisional size rather than skipping, because a missing
+    /// <c>d3d11-composition-size</c> makes this mpv build fall back off the composition vo
+    /// entirely (probed 2026-09-16).
     /// <para>
     /// Safe to read from any thread: the implementation keeps the last value the UI thread
     /// measured, rather than walking live XAML properties on the caller's thread.
@@ -49,7 +51,7 @@ public interface IVideoSurface
     /// The geometry moved — a resize or a composition-scale change, debounced so a drag does not
     /// queue one call per pixel. Raised on the UI thread. The backend answers by writing
     /// <see cref="Size"/> back into <c>d3d11-composition-size</c> and re-attaching the current
-    /// swapchain, which is also what refreshes the DPI matrix transform: one path, one answer.
+    /// swapchain: one path, one answer.
     /// </summary>
     event Action? GeometryChanged;
 
