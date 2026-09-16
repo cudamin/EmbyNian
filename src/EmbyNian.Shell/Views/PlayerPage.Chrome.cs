@@ -229,14 +229,23 @@ public sealed partial class PlayerPage
                     _warpsIgnored++;
 
                     // 判决写进日志：十六报的判定痕迹全靠这几行 —— 「挡掉 N 次」只有显示行汇总，
-                    // 真要复盘「谁在哪一刻被谁判掉的」，得有这一行的时间与读数。
+                    // 真要复盘「谁在哪一刻被谁判掉的」，得有这一行的时间与读数。十八报补末真设备：
+                    // 「最近真输入」是谁作的证，设备名一点便知（幽灵输入的定罪证据就在这一格）。
                     Log.Debug(Category, $"见证判掉一次注入：位移 {dx},{dy}，最近真输入"
-                        + $"{_window.Witness.LastRealMoveAgo}，本段已挡 {_warpsIgnored} 次"
+                        + $"{_window.Witness.LastRealMoveAgo}（设备 {_window.Witness.LastRealDevice}"
+                        + $"，末位移 {_window.Witness.LastRealDx},{_window.Witness.LastRealDy}"
+                        + $"{(_window.Witness.LastRealAbsolute ? " 绝对" : string.Empty)}）"
+                        + $"，本段已挡 {_warpsIgnored} 次"
                         + $"（真 {_window.Witness.RealMoves}/注 {_window.Witness.InjectedMoves}）");
                     return;
                 }
 
-                WakeFromPoll(screen, dx, dy, "真实输入见证：有");
+                // 十八报：判成手的这一行同样要点名作证的设备 —— 12:43 那场就是「有」作证、光标照醒，
+                // 而那 7 记「真输入」来自哪块硬件当时无据可查。名字从此跟着裁决走。
+                var witnessDevice = _window.Witness;
+                WakeFromPoll(screen, dx, dy, $"真实输入见证：有（末真设备 {witnessDevice.LastRealDevice}"
+                    + $"，末位移 {witnessDevice.LastRealDx},{witnessDevice.LastRealDy}"
+                    + $"{(witnessDevice.LastRealAbsolute ? " 绝对" : string.Empty)}）");
                 return;
             }
 
@@ -331,6 +340,9 @@ public sealed partial class PlayerPage
         ReseedPointer(moved: true);
     }
 
+    /// <summary>取证行已报到多少条真输入（十八报）：只在涨的时候写一行，幽灵输入连发时每秒至多一条。</summary>
+    private int _forensicsSeen;
+
     /// <summary>
     /// 藏匿期的取证取样（2026-09-15，第十四报）：每秒一次，把「外面此刻是什么样」写进日志。
     /// <para>
@@ -366,11 +378,22 @@ public sealed partial class PlayerPage
         // 第十六报补的第四组数：见证的账。真/注两个计数一秒一次往外报 —— 注入计数涨起来而真计数
         // 不动，就是「有程序在注入输入」的直接证据；真计数涨起来，说明这台机器的真手被见证看见了。
         // 十六报之后裁决改问见证，这两个数就是裁决的底账，缺席时（见「缺席/就绪」）判的是形状启发式。
+        //
+        // 十八报补的两笔：末真设备（VID/PID 点名）与藏匿期逐条短账 —— 「真计数在涨」之后下一个
+        // 必然要问的就是「哪块硬件」，独立成行是因为它只在涨的时候写。
         var witness = _window?.Witness;
+        if (witness is { Ready: true } && witness.CapturedRealTotal > _forensicsSeen)
+        {
+            _forensicsSeen = witness.CapturedRealTotal;
+            var head = string.Join("；", witness.CapturedReal.Take(4));
+            Log.Debug(Category, $"藏匿期真输入取证：本段 {witness.CapturedRealTotal} 记（{head}"
+                + (witness.CapturedRealTotal > 4 ? " …" : string.Empty) + "）");
+        }
+
         Log.Debug(Category, $"藏匿取样：指针 {spot}，本队列形状 0x{Native.GetCursor():X}，{PointerOwner()}"
             + $"，我们窗口 {rect}，虚拟屏 {desk.Width}x{desk.Height}@{desk.X},{desk.Y}"
             + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
-            + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}）" : "缺席（退回形状启发式）")}"
+            + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}，末真设备 {witness.LastRealDevice}）" : "缺席（退回形状启发式）")}"
             + $"，本段已挡注入 {_warpsIgnored} 次");
     }
 
@@ -700,6 +723,16 @@ public sealed partial class PlayerPage
         _cursorHidden = hidden;
 
         if (_window is not null) _window.CursorHidden = hidden;
+
+        // 十八报（2026-09-16）：藏匿期给见证的取证口开闸。手不在的这一段本该一条真输入都没有 ——
+        // 有账就点名（VID/PID），12:43 那场「真 +7、位移 8,2」的幽灵输入，下一次直接写出是谁。
+        // 取证自身只读不写：BeginCapture/EndCapture 碰的只是本类自己的字段。
+        if (_window?.Witness is { } witnessForCapture)
+        {
+            _forensicsSeen = 0;
+            if (hidden) witnessForCapture.BeginCapture();
+            else witnessForCapture.EndCapture();
+        }
 
         // And the one that actually does it while the pointer is over the picture. The four levers around this
         // line — SetCursor on this queue, ShowCursor's counter, the window classes, the nudge that makes the OS

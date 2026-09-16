@@ -1155,4 +1155,12 @@ internal static partial class Native
 
     [LibraryImport("user32.dll", SetLastError = true)]
     public static partial int GetRawInputData(IntPtr rawInput, uint command, byte[] buffer, ref uint size, int headerSize);
+
+    /// <summary>GetRawInputDeviceInfo 的 uiCommand：要设备接口名（\?\HID#VID_…&amp;PID_…）。
+    /// 第十八报加的：藏匿期冒出来的「真输入」到底来自哪块硬件 —— 鼠标、触摸屏还是数位板 ——
+    /// 路径里的 VID/PID 点得出来，光看 hDevice 句柄分不清。</summary>
+    public const uint RidiDevicename = 0x20000007;
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial uint GetRawInputDeviceInfo(IntPtr device, uint command, byte[] buffer, ref uint size);
 }

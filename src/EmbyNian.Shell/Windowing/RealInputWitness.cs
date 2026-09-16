@@ -113,6 +113,7 @@ internal sealed class RealInputWitness
         var device = (IntPtr)BitConverter.ToInt64(record, 8);
 
         // RAWMOUSE@24：usFlags@24、lLastX@36、lLastY@40（x64；lLastX/lLastY 是 LONG）。
+        var flags = BitConverter.ToUInt16(record, Native.RawMouseFlagsOffset);
         var x = BitConverter.ToInt32(record, Native.RawMouseXOffset);
         var y = BitConverter.ToInt32(record, Native.RawMouseYOffset);
 
@@ -122,6 +123,7 @@ internal sealed class RealInputWitness
         {
             RealMoves++;
             _lastRealMoveAt = Environment.TickCount64;
+            RecordRealDevice(device, flags, x, y);
         }
         else
         {
@@ -169,6 +171,95 @@ internal sealed class RealInputWitness
             var ago = Environment.TickCount64 - _lastRealMoveAt;
             return ago >= 100_000 ? "许久" : $"{ago}ms 前";
         }
+    }
+
+    // ---- 十八报：设备取证 ------------------------------------------------------------------
+    // 12:43 的真机唤醒把新的一课写出来了：账从 真719 涨到 真726（7 记带句柄的「真输入」、位移净
+    // 8,2），见证按规矩答了「有」、光标按规矩醒了 —— 计数分不清这是手、还是某个设备在发幽灵输入
+    // （触摸屏幽灵触、数位板悬停、传感器抖动都长这个样）。治法不是再加裁决，是把「是谁」写进日志：
+    // 设备接口名里的 VID/PID 点得名到具体硬件。
+    //
+    // 取证分两层。常驻层：每条真输入记下设备短名与位移（每句柄只问一次系统，结果进字典，移动热路径
+    // 上只多一次字典查询）；捕获层：Chrome 在藏匿开始时 BeginCapture、结束时 EndCapture，期间的真
+    // 输入逐条留短账（上限 12 条）—— 藏匿期本该一条真输入都没有，有账就是铁证。
+
+    /// <summary>末次真输入来自哪块硬件（VID/PID 短名，拿不到名退回句柄十六进制）。从未见过时是「?」。</summary>
+    public string LastRealDevice { get; private set; } = "?";
+
+    /// <summary>末次真输入的原始读数（绝对设备时是坐标，配合 <see cref="LastRealAbsolute"/> 读）。</summary>
+    public int LastRealDx { get; private set; }
+
+    /// <summary>同上，纵向。</summary>
+    public int LastRealDy { get; private set; }
+
+    /// <summary>末次真输入走的是不是 MOUSE_MOVE_ABSOLUTE（触摸/数位板/远端桌面常走绝对路线；真手
+    /// 的鼠标走相对）。它出现时读数不是位移而是坐标 —— 日志上必须分开写，不能混进「位移」里。</summary>
+    public bool LastRealAbsolute { get; private set; }
+
+    private bool _capturing;
+    private int _capturedTotal;
+    private readonly List<string> _captured = new();
+    private readonly Dictionary<IntPtr, string> _deviceNames = new();
+
+    /// <summary>藏匿期开始：清账、开始逐条记录真输入。由 <c>SetCursorHidden(true)</c> 调。</summary>
+    public void BeginCapture()
+    {
+        _capturing = true;
+        _capturedTotal = 0;
+        _captured.Clear();
+    }
+
+    /// <summary>藏匿期结束：停笔不撕账 —— 取样行在显示之后还要读最后一次。</summary>
+    public void EndCapture() => _capturing = false;
+
+    /// <summary>藏匿期记到的真输入短账（最新在末尾，超过 12 条丢最旧的）。空＝藏匿期没有真输入＝正常。</summary>
+    public IReadOnlyList<string> CapturedReal => _captured;
+
+    /// <summary>本段藏匿记到的真输入总条数（账被截到 12 条时它仍然说真话）。</summary>
+    public int CapturedRealTotal => _capturedTotal;
+
+    private void RecordRealDevice(IntPtr device, ushort flags, int x, int y)
+    {
+        if (!_deviceNames.TryGetValue(device, out var label))
+        {
+            label = ResolveDeviceName(device);
+            _deviceNames[device] = label;
+        }
+
+        LastRealDevice = label;
+        LastRealDx = x;
+        LastRealDy = y;
+        LastRealAbsolute = (flags & Native.MouseMoveAbsolute) != 0;
+
+        if (!_capturing) return;
+
+        _capturedTotal++;
+        _captured.Add($"#{_capturedTotal} {(LastRealAbsolute ? "绝对" : string.Empty)}{x},{y} @{label}");
+        if (_captured.Count > 12) _captured.RemoveAt(0);
+    }
+
+    /// <summary>问系统要设备的接口名，截出 VID/PID 段（形如 <c>VID_046D&amp;PID_C52B</c>，跟驱动包
+    /// 对得上号）。问不出（合成句柄、设备已拔）就退回句柄十六进制 —— 取证路径绝不许把输入路径炸了。</summary>
+    private static string ResolveDeviceName(IntPtr device)
+    {
+        try
+        {
+            var buffer = new byte[520];
+            var size = (uint)buffer.Length;
+            if (Native.GetRawInputDeviceInfo(device, Native.RidiDevicename, buffer, ref size) > 0)
+            {
+                var name = System.Text.Encoding.Unicode.GetString(buffer).Split('\0')[0];
+                var at = name.IndexOf("VID_", StringComparison.OrdinalIgnoreCase);
+                if (at >= 0) return name.Substring(at, Math.Min(name.Length - at, 24));
+                if (name.Length > 0) return name;
+            }
+        }
+        catch
+        {
+            // 拿不到就退回句柄，别让取证拖垮记账。
+        }
+
+        return $"句柄 0x{device:X}";
     }
 
     /// <summary>Parse 的固定缓冲。挂在类上而不是每次调用分配：这条路径鼠标一动就来上百次。</summary>

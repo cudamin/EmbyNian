@@ -467,6 +467,9 @@ public sealed partial class PlayerPage : UserControl
     {
         _ticker.Stop();
         DropTapHold();
+
+        // 十八报：与 LeavePlayer 同理 —— 藏着的时候关停也是一条显示路径，挂上名再放。
+        if (_cursorHidden) _woke = "播放层关停";
         SetCursorHidden(false);
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
         ViewModel?.Shutdown();
@@ -640,6 +643,11 @@ public sealed partial class PlayerPage : UserControl
         _window.Fullscreen = false;
         SetPinned(false);
         FullscreenGlyph.Glyph = Glyph(FullscreenEnterCode);
+
+        // 十八报：这也是一条显示路径 —— 片子自己看完（EOF）或用户退出播放时，光标从这里放回。
+        // 第九报给 OnPlaybackStarted 挂了名，这个孪生的退出路漏了：12:41 复现场的 EOF 显示行打的就是
+        // 「未标注的显示路径」。显示本身是对的（回到浏览界面本来就要光标），缺的是名字。
+        if (_cursorHidden) _woke = "播放退出";
         SetCursorHidden(false);
         _window.VideoVisible = false;
 
