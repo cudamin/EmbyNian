@@ -6,6 +6,13 @@ telegram 发布频道：https://t.me/EmbyNian
 
 ![主页](docs/screenshots/home.jpg)
 
+## 设计参考
+
+- UI 界面参考 **Emby 小秘** 设计。
+- 播放器架构参考 **小幻影视** 设计。
+- 着色器与 mpv 相关配置参考 **mpv-config**：<https://github.com/dyphire/mpv-config>
+- 内置 **mpv-winbuild**：<https://github.com/dyphire/mpv-winbuild/releases/tag/mpv_own-2026-08-31>
+
 ## 主要功能
 
 **播放器** — 内置 libmpv。内置播放控件支持进度、音量、字幕、音轨、章节、倍速、全屏、窗口置顶。支持自动跳过片头片尾。
