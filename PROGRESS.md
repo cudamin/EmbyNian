@@ -38,9 +38,18 @@
 2. **构建与编辑赛跑**：后台构建跑着时又改测试源码，构建捡到半截文件报 CS0103——闸门跑动期间冻结编辑，改完再跑。
 3. **沙箱拦 WebView2 缓存写**：自检第二轮 `Code Cache\js\…` 被拒，报告 0 字节假死（比 bash 重定向顶掉报告更隐蔽的一种）。处置：非沙箱裸跑（第一参数性 sandbox 失败之后的正当升级），报告按时间戳＋行数确认是本轮。
 
+### 回归修复（同日深夜，commit `aec4701`）：集成模式全黑＋偶发起播失败
+
+用户报「集成模式无法播放视频」。日志＋ctypes 探针（`work/probe-composition2.py`→`txt`）钉死两条独立病，**composition 管线自二十二报以来从未在真机出过画面**：
+
+1. **挂链必败**：这份 libmpv 的 `display-swapchain` 交出的不是真 DXGI 链，是手写包装对象——QI 电池显示它只答 IUnknown / IDXGISwapChain1 / IDXGISwapChain2 三个 IID，连基接口 IDXGISwapChain 都不答，vtable 非标准、盲调 SetMatrixTransform 访问违例。二十二报把基接口 IID（310D36A0）当 SwapChain2 用（**真 IID = A8BE2AC4-199F-4946-B331-79599FB98DE7**，dxgi1_3.h 原文），QI 必然失败。
+2. **composition-size 缺省 → composition vo 起不来 → vo 回退 direct3d（D3D9）**；面板 Collapsed 下首播、布局未跑时 Size=(0,0)，旧代码整段跳过 size 选项——偶发「初始化失败：invalid parameter」由此来。
+
+修法（照 ikas-mc/mpv-winui-player 的守卫式挂链）：SetMatrixTransform 整段移除、composition-size 改按 **DIP** 喂且永不跳过（未量到给 1x1，GeometryChanged 后补真尺寸）、重复挂同链短路。DIP 在「1 链像素＝1 DIP」与「拉伸铺满」两种合成映射模型下都几何正确；缩放屏上由 DWM 放大、画质略软——几何先对，锐度等换到交出真链的 dll。闸门全绿（887/482/301.6/11、自检 189 行与基线同）。
+
 ### 未验收（下一场播放）
 
-独立播放档的真机端到端：画面出得来、无黑闪；resize/全屏/DPI 切换（mpv 钩子自己追）；独立播放窗口模式（PlayerWindow 的岛下垫底）；HDR 片源（独占 swapchain 的色彩空间路径未验证）；AyuGram 场景回归（光标机制理论上零波及——岛照旧收全部指针，视频窗口连一次鼠标消息都收不到）。
+集成模式画面（`aec4701` 后）＋缩放屏画质、resize/全屏/DPI；独立播放档端到端（画面/resize/全屏/DPI/独立窗口）；HDR 片源（composition swapchain 色彩空间路径未验证）；AyuGram 场景回归（光标机制理论上零波及——岛照旧收全部指针，视频窗口连一次鼠标消息都收不到）。
 
 ## 第二十一报：持续手势路程关，判据改成「净位移＋连着三拍」（2026-09-16 晚，四道闸门全绿，版本 0.0.10）
 
