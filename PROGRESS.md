@@ -2,6 +2,46 @@
 
 最后更新：2026-09-16
 
+## 第二十三报：双渲染管线——集成模式（合成混排）＋独立播放（mpv 独占 swapchain）（2026-09-16 深夜，四道闸门收齐）
+
+> 用户原话：「改为集成模式（与 WinUI 控件混排）+ 独立播放（mpv 独占 swapchain）两种渲染管线，参考小幻影视的实现模式进行修改。」
+> 小幻影视（Richasy/Rodel Player，WinUI3＋libmpv）README 原文即这两行档位：集成模式适合一般使用与小窗，独立播放适合高分辨率高帧率。它闭源，参考的是模式不是代码。
+
+### 定案：两条管线并存，谁也不替换谁
+
+二十二报立的是「一条管线（composition）两个宿主」，并把 wid 老路整体删除。本报把 wid 老路**原样复活**为第二档，与 composition 并存，由新设置 `MpvSettings.Pipeline`（枚举 `VideoPipelineKind { Integrated, Standalone }`，默认 Integrated）分流：
+
+- **集成模式**：`d3d11-output-mode=composition`，交换链经 `display-swapchain` 挂上 SwapChainPanel，画面在 XAML 视觉树里与控件混排——二十二报的现状，原封不动。
+- **独立播放**：mpv 拿 `wid`（**typed `mpv_set_option`，整数无解析歧义**）接管 HostWindow 客户区里、XAML 岛**正下方**的原生子窗口（复活的 `VideoWindow`），自建自呈现自己的交换链（这份 fork 的选项面是 `auto|window|composition`，auto 在有 wid 时就是 window 档；**不显式 pin**——档名 fork 与上游不一致，pin 错名字是自找致命错，而缺省已经是独占呈现的那一个）。交换链、尺寸、DPI 全归 mpv 自己量；客户端没有一条几何路径要喂，`display-swapchain` 观察与 `d3d11-composition-size` 整段不订阅。
+
+判别式是**一个 DIM 成员**：`IVideoSurface.WindowHandle`（面板实现答 `IntPtr.Zero`，窗口实现答句柄）。`LibMpvBackend.ApplyOptions` 以「有没有窗口」分流；供应方签名 `Func<IVideoSurface?>` 与三处接线点（App/ShellPage×2）**一字未动**。
+
+### 分层的分工（谁在哪一层做什么）
+
+- **Core**：`IVideoSurface` 加 `WindowHandle` 缺省成员＋文档改双管线；`LibMpvBackend` 分流（wid 分支 fatal 于接管失败；合成分支维持 2025-07 老 dll 致命检查）；`LibMpvHandle` 的 display-swapchain 观察、`RefreshComposition`、`DisposeAsync` 摘链只在集成路径走。
+- **Shell（窗口层）**：`VideoWindow` 复活（黑底类刷、`WS_CLIPCHILDREN`、DefWindowProc 直通；ctor 一次 `SetWindowPos(岛)` 是全类唯一的 z 序发言）；`HostWindow.EnsureVideoUnderlay()` 懒建（**界面线程断言**——CreateWindowEx 的消息队列跟着创建线程走，mpv 的 `resize_child_win` 钩子也装在那条线程上）；`OnSize`/进出全屏各补一发 `_video?.Fill()`（**只改自己，不碰 mpv 的子窗口**——老路栽过两次的铁律原样保留）；`WM_DESTROY`/`Dispose` 清 `_video` 防野句柄。
+- **Shell（页面层）**：`PlayerPage.VideoSurface` 按引擎现读分流；**播放漏斗（`ShellPage.PlayAsync`）新增 `PrepareVideoPipeline()`**——起播链深处 `PlaybackService.PlayAsync` 前两个 await 全是 `ConfigureAwait(false)`，`surfaceProvider()` 会落在线程池上，而窗口只能在界面线程建，所以预备必须住在唯一保证站在界面线程上的漏斗里。`HostWindow.VideoVisible`（Mica 开关）两条管线共用：集成是省采样，独占是真开路（Mica 不关岛面就被垫料填满）。
+- **设置**：播放器卡新增「渲染管线」Choice 行（集成模式/独立播放），说明写明只对内置 libmpv 有效、下一次播放生效；与「用独立窗口播放」（窗口安排）正交，互不依赖。
+
+### 新钉的测试与自检判据
+
+- 单测 3 条（基线 884 → **887**）：面板实现 `WindowHandle` 缺省为零、窗口实现答句柄、装机默认集成。**DIM 成员经类类型不可见，必须经接口读**——那正是后端读它的形状。测试夹具的事件用空访问器，免 CS0067。
+- 自检「mpv.exe 路径」判据改齐：播放器卡 3 行 → **4 行**（后端、渲染管线、路径、IPC），并钉「渲染管线」行存在——**加行不改判据，自检就红着骂人**（第一轮真红抓到）。
+
+### 闸门读数（四道全跑）
+
+构建 **0 警告 0 错误**；测试 **887/887**；发布 **482 文件 / 301.6 MB / 11 GLSL**（脚本判据与磁盘直验一致，跑了两轮）；自检 **189 非空行、2 失败**——《伪恋》跨季既有红；「藏鼠标」腿读数「在前台=False」（用户在场抢了前台，同一代码第一轮前台=True 时该腿绿），定性环境噪声待真机复验；「渲染管线」新判据**回绿**。
+
+### 排障坑（本轮新撞的三个）
+
+1. **同文件并行多 Edit last-write-wins 又中招**（19 报同款）：HostWindow 的字段编辑被同消息另一编辑吃掉，CS0103 抓回。**同文件多处改动必须逐条串行发**。
+2. **构建与编辑赛跑**：后台构建跑着时又改测试源码，构建捡到半截文件报 CS0103——闸门跑动期间冻结编辑，改完再跑。
+3. **沙箱拦 WebView2 缓存写**：自检第二轮 `Code Cache\js\…` 被拒，报告 0 字节假死（比 bash 重定向顶掉报告更隐蔽的一种）。处置：非沙箱裸跑（第一参数性 sandbox 失败之后的正当升级），报告按时间戳＋行数确认是本轮。
+
+### 未验收（下一场播放）
+
+独立播放档的真机端到端：画面出得来、无黑闪；resize/全屏/DPI 切换（mpv 钩子自己追）；独立播放窗口模式（PlayerWindow 的岛下垫底）；HDR 片源（独占 swapchain 的色彩空间路径未验证）；AyuGram 场景回归（光标机制理论上零波及——岛照旧收全部指针，视频窗口连一次鼠标消息都收不到）。
+
 ## 第二十一报：持续手势路程关，判据改成「净位移＋连着三拍」（2026-09-16 晚，四道闸门全绿，版本 0.0.10）
 
 > **接手前必读：下面「写到一半」那段警告已经过期，留着当时间线看。** 工作树现在**编译得过、单元测试全绿**

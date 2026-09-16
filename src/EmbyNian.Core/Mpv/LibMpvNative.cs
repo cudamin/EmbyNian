@@ -89,6 +89,13 @@ internal static class LibMpvNative
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int mpv_set_option_string(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string data);
 
+    /// <summary>
+    /// <c>mpv_set_option</c>，typed 那一个。独立播放管线用它设 <c>wid</c>：wid 是整数选项，typed
+    /// 形式没有任何字符串解析的歧义（旧 wid 时代同样的理由）。仅用于 initialize 之前的选项窗口。
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int mpv_set_option(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int format, ref long data);
+
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int mpv_set_property_string(IntPtr context, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string data);
 

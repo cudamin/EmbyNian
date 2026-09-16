@@ -16,10 +16,11 @@ namespace EmbyNian.Shell.Windowing;
 /// picture-aspect lock from that class for free.
 /// </para>
 /// <para>
-/// The film itself runs the same rendering pipeline everywhere: this window's page owns its own
-/// <c>SwapChainPanel</c>, and mpv composites into it through its D3D11 composition swapchain. What
-/// 「独占」 buys is the window arrangement — the panel is the whole client area of a window that
-/// belongs to the film — not a second mpv output mode.
+/// The film runs whichever pipeline the engine setting picked (2026-09-16 双管线)：集成模式 composites
+/// into this window's page panel exactly as in the main window; 独立播放 gives mpv a video child HWND
+/// under this window's island (<see cref="VideoWindow"/>, handed over as <c>wid</c>) and lets it own
+/// the swapchain. What 「独立播放」 buys is unchanged either way — a whole window that belongs to the
+/// film, the main window's sibling rather than its child.
 /// </para>
 /// <para>
 /// Two <see cref="HostWindow"/>s in one process are supported by construction: the class registers itself

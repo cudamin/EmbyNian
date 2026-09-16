@@ -15,13 +15,15 @@ public sealed class PlaybackBackendFactory(AppSettings settings, ShaderStaging s
 {
     /// <summary>
     /// The playing surface for this launch — the shell's answer to 「which pipeline carries the
-    /// picture」. The integrated player hands over its page's SwapChainPanel (composition, mixed
-    /// into the visual tree); the 独立播放窗口 hands over its video child HWND (mpv presents its
-    /// own swapchain, straight to the DWM). Read afresh for every launch and re-pointed when the
-    /// separate window opens or closes, which is the whole of the switch.
+    /// picture」. Since the two-pipeline split (2026-09-16, 小幻影视同款) the choice itself lives in
+    /// the page the delegate lands on: <c>PlayerPage.VideoSurface</c> reads the engine setting and
+    /// answers with the page's panel (集成模式：composition, mixed into the visual tree) or with the
+    /// host window's video child HWND (独立播放：mpv presents its own swapchain, straight to the
+    /// DWM). Read afresh for every launch, so a switch in 设置 lands on the next play.
     /// <para>
     /// This one delegate is the shell's side of the video contract. Core still names no XAML type
-    /// and no window class: <see cref="IVideoSurface"/> lives here, both implementations stay there.
+    /// and no window class: <see cref="IVideoSurface"/> lives there, both implementations in the
+    /// shell's windowing layer.
     /// </para>
     /// </summary>
     public Func<IVideoSurface?>? VideoSurface { get; set; }

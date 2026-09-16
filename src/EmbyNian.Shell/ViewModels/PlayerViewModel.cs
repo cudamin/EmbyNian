@@ -704,6 +704,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal bool SeparateWindowPlayback => Settings.Playback.SeparateWindowPlayback && Embedded;
 
     /// <summary>
+    /// 内置播放器的渲染管线（<see cref="Configuration.VideoPipelineKind"/>，小幻影视同款两档）。与
+    /// <see cref="SeparateWindowPlayback"/> 同一条读法：每次起播现读，设置窗口里拨了开关，下一次
+    /// 播放就认新的。页面拿它分流 <c>VideoSurface</c>；外部 mpv.exe 那条后端根本不会来问。
+    /// </summary>
+    internal VideoPipelineKind VideoPipeline => Settings.Mpv.Pipeline;
+
+    /// <summary>
     /// 播放页置顶的持久化偏好（<see cref="Configuration.PlaybackSettings.PinWindowTopmost"/>），页面进场时
     /// 按它把窗口立回上一回的那一档。读写分两口而不是一个属性，因为「读」在播放开始、而「写」只属于用户
     /// 拨开关那一下 —— 探针和退出播放也会动窗口的置顶，那些都不许碰这份记账。

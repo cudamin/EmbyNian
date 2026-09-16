@@ -77,6 +77,12 @@ public sealed partial class SettingsViewModel : PageViewModel
         ("外部 mpv.exe（独立窗口）", MpvBackendKind.ExternalMpv)
     ];
 
+    private static readonly (string Label, VideoPipelineKind Value)[] Pipelines =
+    [
+        ("集成模式（与界面混排）", VideoPipelineKind.Integrated),
+        ("独立播放（mpv 独占交换链）", VideoPipelineKind.Standalone)
+    ];
+
     private static readonly (string Label, SkipSectionMode Value)[] SkipModes =
     [
         ("询问（显示跳过按钮）", SkipSectionMode.Ask),
@@ -392,6 +398,14 @@ public sealed partial class SettingsViewModel : PageViewModel
         new("播放器", "播放器", "用程序里内置的播放器播，还是调起独立的 mpv.exe 来播。",
         [
             Choice("播放后端", Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value),
+
+            // 双渲染管线（2026-09-16，小幻影视同款两档）。集成模式把画面合成进 XAML 视觉树、与控件混排，
+            // 全屏小窗、哪个宿主都一样；独立播放让 mpv 拿 wid 接管岛下的原生子窗口、独占自己的交换链——
+            // 少一层合成、少一路跨线程几何往返，为高分辨率高帧率而设。两档都只对内置 libmpv 有意义（外部
+            // mpv.exe 本来就在自己的窗口里呈现）；读的是起播那一刻的值，改完下一次播放生效。
+            Choice("渲染管线", Pipelines, () => Settings.Mpv.Pipeline, value => Settings.Mpv.Pipeline = value,
+                "集成模式与控件混排，适合一般观看与小窗；独立播放由 mpv 独占交换链直接呈现，适合高分辨率"
+                    + "高帧率。只对内置 libmpv 有效，下一次播放生效。"),
 
             // 这句说明是这一行存在的第二个理由，而且它是安全性的一句实话，不是介绍。外部 mpv.exe 那条路把
             // X-Emby-Token 写在 --http-header-fields-append= 上，也就是写在另一个进程的命令行上 —— 任务管理器、

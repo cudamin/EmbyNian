@@ -34,6 +34,7 @@ internal static class PlaybackTests
         RegisterPictureTap();
         RegisterCursorMask();
         RegisterPulseArt();
+        RegisterPipelineDiscriminator();
         RegisterPlaybackStats();
         RegisterAspectLock();
         RegisterPlayerMenu();
@@ -4897,6 +4898,56 @@ internal static class PlaybackTests
 
             // 方框留着不动 —— 它就是屏上徽标占多大，而用户认下的是这一档。
             Assert.Equal(136.0, PulseArt.Box, "方框边长不该跟着换形状一起改");
+        });
+    }
+
+    // ---- 双管线的判别式 ----------------------------------------------------------
+    //
+    // 「改为集成模式（与 WinUI 控件混排）＋独立播放（mpv 独占 swapchain）两种渲染管线」（2026-09-16，
+    // 小幻影视同款两档）。后端分流只看 IVideoSurface.WindowHandle 这一个判别式：面板实现答零（集成），
+    // 窗口实现答自己的 HWND（独立）。判别式答错了，后端就会拿集成的方式去伺候独占的窗口，或者反过来。
+
+    /// <summary>只实现合成三件套的最小面板——Shell 的 SwapChainVideoTarget 就是这个形状（多一层 UI 缓存）。</summary>
+    private sealed class PanelSurface : IVideoSurface
+    {
+        public (int Width, int Height) Size => (0, 0);
+
+        // 夹具没人订阅也没人举它；空访问器既是实话，也免掉「从不使用的事件」那声警告。
+        public event Action? GeometryChanged { add { } remove { } }
+
+        public void AttachSwapChain(IntPtr swapChain) { }
+    }
+
+    /// <summary>窗口那一形：只多答一个 WindowHandle，别的一样不缺。</summary>
+    private sealed class WindowSurface(IntPtr handle) : IVideoSurface
+    {
+        public (int Width, int Height) Size => (0, 0);
+
+        public event Action? GeometryChanged { add { } remove { } }
+
+        public void AttachSwapChain(IntPtr swapChain) { }
+
+        public IntPtr WindowHandle => handle;
+    }
+
+    private static void RegisterPipelineDiscriminator()
+    {
+        Test("双管线：面板实现的 WindowHandle 缺省是零——集成是默认那一档", () =>
+        {
+            // 判别式长在接口上（缺省实现），经接口读才看得见——后端正是这么读它的。
+            IVideoSurface surface = new PanelSurface();
+            Assert.Equal(IntPtr.Zero, surface.WindowHandle);
+        });
+
+        Test("双管线：窗口实现答自己的句柄，非零即是「mpv 独占」", () =>
+        {
+            IVideoSurface surface = new WindowSurface(new IntPtr(0x1234));
+            Assert.Equal(new IntPtr(0x1234), surface.WindowHandle);
+        });
+
+        Test("双管线：渲染管线的装机默认是集成模式", () =>
+        {
+            Assert.Equal(VideoPipelineKind.Integrated, new MpvSettings().Pipeline);
         });
     }
 

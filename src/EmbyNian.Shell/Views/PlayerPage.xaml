@@ -220,12 +220,16 @@
         </local:PictureSurface.ContextFlyout>
 
         <!-- ================= 视频面 =================
-             The picture itself, back inside the visual tree. libmpv runs in D3D11 composition mode
-             (d3d11-output-mode=composition): it renders into a swapchain of its own and hands the
-             pointer over through the display-swapchain property, and SwapChainVideoTarget attaches
-             it here — so the video is this grid's first child, below every overlay, instead of a
-             sibling HWND behind the island. No wid, no z-order sandwich, and the resize accounting
-             that went with them.
+             The picture itself, back inside the visual tree — on the 集成模式 pipeline (2026-09-16 双管线,
+             小幻影视同款两档). libmpv runs in D3D11 composition mode (d3d11-output-mode=composition):
+             it renders into a swapchain of its own and hands the pointer over through the
+             display-swapchain property, and SwapChainVideoTarget attaches it here — so the video is
+             this grid's first child, below every overlay, instead of a sibling HWND behind the island.
+             No wid, no z-order sandwich, and the resize accounting that went with them.
+
+             独立播放（引擎设置的另一档）不走这里：mpv 拿 wid 接管岛下的原生子窗口（VideoWindow）、
+             独占自己的交换链，这块面板便始终空着——空面板不合成任何东西，透明处正好让岛下的画面
+             透出来。两条管线共用同一棵 chrome 树，一个 XAML 字都不用改。
 
              First child on purpose: everything after this draws over the picture, in tree order,
              and the handover cover at the bottom of the file therefore still wins every race.

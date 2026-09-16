@@ -1,3 +1,4 @@
+using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Playback;
@@ -120,19 +121,38 @@ public sealed partial class PlayerPage : UserControl
     private HostWindow? _window;
 
     /// <summary>
-    /// The video surface's bridge to the in-process player. One per page, because the 独立播放窗口
-    /// runs its own PlayerPage over its own panel; the backend asks whichever page took the play
-    /// request. Built here rather than lazily — the panel exists from InitializeComponent, and a
-    /// session that only browses pays nothing for it.
+    /// 集成管线的桥：接进程内播放器的这一页一块面板，一页一块——独立播放窗口跑的是它自己的
+    /// PlayerPage、它自己的面板。建在构造里而非懒建——面板从 InitializeComponent 就存在，
+    /// 只浏览不播放的会话一分钱不花。
     /// </summary>
     private readonly SwapChainVideoTarget _videoTarget;
 
     /// <summary>
-    /// The video contract the factory reads for this page's panel — the 混排 pipeline's surface.
-    /// The 独立播放窗口 answers with its video child instead, which is how the two pipelines are
-    /// chosen: by which page or window took the play request.
+    /// The video contract the factory reads for this play. 哪条管线答数由引擎设置决定（小幻影视同款
+    /// 两档，2026-09-16）：集成模式交出本页的面板目标；独立播放交出宿主窗口岛下的视频子窗口——mpv
+    /// 拿它当 wid、独占交换链。每次播放现读一遍（工厂在每次 StartAsync 调一次委托），设置改完，
+    /// 下一次播放生效。
+    /// <para>
+    /// 独立播放那一条要求子窗口在这之前就已经存在：起播可能落在线程池线程上
+    /// （<c>PlaybackService.PlayAsync</c> 在后端跑起来之前一路 ConfigureAwait(false)），而窗口只能
+    /// 在界面线程上建。<see cref="PrepareVideoPipeline"/> 在播放漏斗里就是这一步。
+    /// </para>
     /// </summary>
-    internal IVideoSurface? VideoSurface => _videoTarget;
+    internal IVideoSurface? VideoSurface =>
+        ViewModel.VideoPipeline == VideoPipelineKind.Standalone
+            ? _window?.EnsureVideoUnderlay()
+            : _videoTarget;
+
+    /// <summary>
+    /// 播放漏斗的预备步（界面线程）：独立播放引擎先把视频子窗口建好。创建走
+    /// <c>HostWindow.EnsureVideoUnderlay</c> 的界面线程断言——漏斗是唯一保证站在界面线程上的地方。
+    /// 集成模式什么都不做：面板早就在树上，没有要预备的东西。
+    /// </summary>
+    internal void PrepareVideoPipeline()
+    {
+        if (ViewModel.VideoPipeline == VideoPipelineKind.Standalone && _window is not null)
+            _window.EnsureVideoUnderlay();
+    }
 
     private bool _cursorHidden;
 

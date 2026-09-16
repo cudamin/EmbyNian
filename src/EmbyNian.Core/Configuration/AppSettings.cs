@@ -145,6 +145,14 @@ public sealed class MpvSettings
     public MpvBackendKind Backend { get; set; } = MpvBackendKind.BuiltInLibMpv;
 
     /// <summary>
+    /// 内置播放器的渲染管线（小幻影视同款的两档，2026-09-16）：<see cref="VideoPipelineKind.Integrated"/>
+    /// 把画面合成进 XAML 视觉树、与控件混排；<see cref="VideoPipelineKind.Standalone"/> 让 mpv 通过
+    /// <c>wid</c> 独占自己的 swapchain 直接呈现。只对内置 libmpv 那条后端有意义——外部 mpv.exe 本来就
+    /// 在自己的窗口里呈现（<see cref="Backend"/>）。读的是播放开始那一刻的值：设置页改完，下一次播放生效。
+    /// </summary>
+    public VideoPipelineKind Pipeline { get; set; } = VideoPipelineKind.Integrated;
+
+    /// <summary>
     /// The user's own <c>mpv.exe</c>, and only the external backend needs it. Empty out of the box:
     /// it used to be hard-coded to one portable mpv installation on this machine
     /// (<c>C:\mpv_config-2026.08.12\mpv.exe</c>), which was the last thing in the client still naming
@@ -190,6 +198,25 @@ public enum MpvBackendKind
 
     /// <summary>The user's own mpv.exe in its own window, controlled over a named pipe.</summary>
     ExternalMpv
+}
+
+/// <summary>
+/// 内置播放器的两条渲染管线（参考小幻影视的「集成模式 / 独立播放」，2026-09-16）：
+/// <list type="bullet">
+///   <item><b>集成模式</b>：mpv 走 D3D11 composition 输出，交换链经 <c>display-swapchain</c> 挂到
+///   SwapChainPanel 上——画面是 XAML 视觉树里的一层，与控件混排，全屏、小窗、哪个宿主都一样。</item>
+///   <item><b>独立播放</b>：mpv 拿 <c>wid</c> 接管 XAML 岛之下的一个原生子窗口，自建自呈现自己的
+///   swapchain（auto → window 档），尺寸与 DPI 由它自己量——少一层合成、少一路跨线程几何往返，
+///   为高分辨率高帧率而设。</item>
+/// </list>
+/// </summary>
+public enum VideoPipelineKind
+{
+    /// <summary>集成模式：画面合成进 XAML 视觉树，与控件混排。</summary>
+    Integrated,
+
+    /// <summary>独立播放：mpv 独占 swapchain，在岛下的原生子窗口里直接呈现。</summary>
+    Standalone
 }
 
 public sealed class PlaybackSettings
