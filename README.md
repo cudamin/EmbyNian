@@ -17,8 +17,6 @@ telegram 发布频道：https://t.me/EmbyNian
 
 **播放器** — 内置 libmpv。内置播放控件支持进度、音量、字幕、音轨、章节、倍速、全屏、窗口置顶。支持自动跳过片头片尾。
 
-![播放器](docs/screenshots/player.jpg)
-
 **画质** — 着色器随程序打包（ArtCNN、ravu、CfL、SSimDownscaler 等），按放大倍数分四档 × 真人/动画 × 显卡档，每一档都做色度重建。自动按 Emby 的类型和标签识别动画片；DVD 那一代的老片源自动加去色带和降噪；超过 30 fps 自动让出 CNN 放大器保帧率。
 
 ![画质与着色器](docs/screenshots/shaders.jpg)
