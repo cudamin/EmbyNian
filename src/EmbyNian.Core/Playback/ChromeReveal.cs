@@ -198,8 +198,51 @@ public sealed class ChromeReveal
     /// 跳变」，光标永远轮不到唤醒——自检里那条「真手连着走两拍要能叫醒光标」正是这么红的。挂起是<b>每段
     /// 安静之后的第一记</b>位移的入门手续，不是每一拍都要重来的仪式。
     /// </para>
+    /// <para>
+    /// <b>它只在 <see cref="WarpHandMilliseconds"/> 之内作数，这是第十五报补上的一条</b>。此前它是个没有
+    /// 期限的闩：一次注入被裁决掉之后，闩就一直立着，而藏匿期里没有任何东西会去动它（<see cref="ClearWarp"/>
+    /// 只在光标显示时和换片时跑），于是<b>同一次藏匿里第二条及以后的注入全部免检放行</b>——第一条消息的
+    /// 60 像素被挡住，第二条就把光标叫了回来。用户的原话是「每次收到静音的群聊消息都会让鼠标显示」，那正是
+    /// 「只挡得住第一条」的听感。免检的语义是「这只手还在刚才那一记上继续走」，而手继续走是紧接着的下一拍
+    /// （十赫兹下约一百毫秒），不是若干秒之后。
+    /// </para>
     /// </summary>
     private bool _warpJustCleared;
+
+    /// <summary>上一拍那次免检是什么时候立起来的，给它一个期限用。见 <see cref="WarpJustClearedFor"/>。</summary>
+    private long _warpClearedAt;
+
+    /// <summary>
+    /// 免检的期限：从判掉一次跳变算起，多长时间之内再来的位移才可能是「同一只手还在走」。
+    /// <para>
+    /// <b>两百毫秒，也就是两个拍子。</b>轮询是十赫兹，手在鼠标上连续走动时相邻两个够阈值的读数相隔约
+    /// 一百毫秒；留两拍是给调度抖动和自检那条一百二十毫秒间隔的「连走两拍」留余量。再长就开始放进真正的
+    /// 第二次注入了——AyuGram 两条消息之间是秒级，不是百毫秒级。判错的方向仍然偏向藏：一只真手若是慢到
+    /// 超过两拍才走第二记，那一记照旧走「先挂起」的手续，下一拍就认成手（见 <see cref="WarpOrHand"/>），
+    /// 代价只是多藏一百毫秒。
+    /// </para>
+    /// </summary>
+    public const long WarpHandMilliseconds = 200;
+
+    /// <summary>
+    /// 免检还作不作数：立起来过，而且还在 <see cref="WarpHandMilliseconds"/> 之内。过期就地作废——只判一次，
+    /// 因为下一次够阈值的位移该重新过手续（那可能是下一条消息的注入）。
+    /// </summary>
+    private bool WarpJustClearedFor(long now)
+    {
+        if (!_warpJustCleared) return false;
+
+        if (now - _warpClearedAt <= WarpHandMilliseconds)
+        {
+            _warpJustCleared = false;
+            return true;
+        }
+
+        // 过期：闩自己收走，这一记（以及之后每一记）都按常态先挂起。不清的话，第一次判掉跳变之后的
+        // 任意一记位移都会被它放行——那正是这一报要修的东西。
+        _warpJustCleared = false;
+        return false;
+    }
 
     /// <summary>
     /// 藏匿期被认出来、并据以继续藏下去的一次性跳变，累计多少次。给日志和自检读：这个数不涨，
@@ -221,8 +264,14 @@ public sealed class ChromeReveal
     /// </para>
     /// <para>
     /// 三个出口，一次只走一个：<b>第一次够阈值的位移</b>挂起（返回假、<see cref="_warpPending"/> 立起）；
-    /// <b>下一拍位置又变了</b>确认是手（返回真、挂起清掉）；<b>下一拍位置一字未动</b>确认是注入
-    /// （返回假、<see cref="WarpsIgnored"/> 加一、挂起清掉，调用方应把参照点推进到挂起点）。
+    /// <b>下一拍离落点又走够了 <see cref="MovePixels"/></b>确认是手（返回真、挂起清掉）；<b>下一拍仍在落点
+    /// 附近</b>（一两像素的桌面抖动也算「原地」）确认是注入（返回假、<see cref="WarpsIgnored"/> 加一、挂起清掉，
+    /// 调用方应把参照点推进到挂起点）。
+    /// </para>
+    /// <para>
+    /// <b>第十五报的两处修正都在这三个出口里。</b>其一，「走开」判的是够不够 <see cref="MovePixels"/> 而不是
+    /// 「坐标一个字节不差」——桌面抖动会让严格不等号把注入误读成手。其二，判掉一跳之后立起的免检闩有期限
+    /// （<see cref="WarpHandMilliseconds"/>），好让它挡得住第二条、第三条消息，而不是只挡得住第一条。
     /// </para>
     /// </summary>
     /// <param name="x">本拍读到的屏幕绝对坐标。</param>
@@ -230,30 +279,37 @@ public sealed class ChromeReveal
     /// <param name="now">这一拍的时钟，与规则其它地方同一个。</param>
     public bool WarpOrHand(int x, int y, long now)
     {
-        // 上一拍刚判掉一次纯跳变：紧接着又来一次位移。同步注入的形状是「搬完就冻住」，它不会在下一拍
-        // 再搬一次；所以这一记只能是手在走。直接认，不二次挂起——否则手走两拍会被读成两次跳变，永远
-        // 叫不醒光标。
-        if (_warpJustCleared)
-        {
-            _warpJustCleared = false;
-            return true;
-        }
+        // 上一拍刚判掉一次纯跳变，而且还在免检期内：紧接着又来一次位移。同步注入的形状是「搬完就冻住」，
+        // 它不会在下一拍再搬一次；所以这一记只能是手在走。直接认，不二次挂起——否则手走两拍会被读成两次
+        // 跳变，永远叫不醒光标。
+        //
+        // 免检有期限（第十五报）：立起它的那条注入被挡下之后，闩不能一直立着，否则同一次藏匿里第二条
+        // 消息的注入照样免检通过——那就是「每次收到消息光标都冒出来」。
+        if (WarpJustClearedFor(now)) return true;
 
         // 已经挂着一次待裁决的位移：看这一拍与挂起点的关系。
         if (_warpPending)
         {
-            // 位置又变了 —— 手在走。挂起清掉，交回给调用方当移动处理。
-            if (x != _warpAt.X || y != _warpAt.Y)
+            // 位置又走开了 —— 手在走。挂起清掉，交回给调用方当移动处理。
+            //
+            // 「走开」够的是同一个 <see cref="MovePixels"/>，不是「一个像素都不一样」（第十五报）：挂起点是
+            // 别人搬到的落点，而我们脚下这台机器的桌面抖动实测能到两像素，一次注入落地之后紧接着的一两像素
+            // 抖动，用严格不等号读就是「手在走」，于是第二条消息还没到、光标已经被抖醒了。手的第一记是几十
+            // 像素，五这个数在两边都站得住。
+            if (ChromeReveal.Travelled(Math.Abs(x - _warpAt.X), Math.Abs(y - _warpAt.Y)))
             {
                 _warpPending = false;
                 return true;
             }
 
-            // 与挂起点一字不差，而且已经过了一拍：一次纯跳变。继续藏，并记住「刚判过一跳」。
+            // 还在落点附近（含一两像素的抖动）、而且已经过了一拍：一次纯跳变。继续藏，并记住「刚判过一跳」。
+            // 注意判的是「离落点」而不是「离上一拍」：抖动不推进落点，所以它既不会攒成一记假的手，也不会
+            // 把一次真手拆散丢掉。
             if (now - _warpSeenAt >= WarpConfirmMilliseconds)
             {
                 _warpPending = false;
                 _warpJustCleared = true;
+                _warpClearedAt = now;
                 WarpsIgnored++;
                 return false;
             }
@@ -283,6 +339,7 @@ public sealed class ChromeReveal
         _warpPending = false;
         _warpSeenAt = 0;
         _warpJustCleared = false;
+        _warpClearedAt = 0;
     }
 
     /// <summary>

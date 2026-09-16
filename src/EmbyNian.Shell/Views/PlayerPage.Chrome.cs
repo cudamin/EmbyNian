@@ -173,33 +173,25 @@ public sealed partial class PlayerPage
         // 第十一报（2026-09-15，外屏 AyuGram 把光标整块搬走）——先于「同位置」那一条问，因为藏匿期的
         // 一次跳变确认恰恰表现为「位置没变」。挂起点就是上一拍那个够阈值的落点，这一拍如果还在那儿，
         // 那不是静止而是确认：见 ChromeReveal.WarpOrHand。
-        if (_cursorHidden && _polledKnown && _chrome.WarpPendingAt is { } pending)
+        if (_cursorHidden && _polledKnown && _chrome.WarpPendingAt.HasValue)
         {
-            // 位置从挂起点又走开了：这就是手。确认之后**直接把这一拍当移动报上去**，不能落回下面
-            // 那条「藏匿期第一个够阈值的位移」—— 那条会再挂起一次，于是每一拍都在挂起、永远轮不到
-            // 唤醒（自检里「真手连着走两拍」就是这么红的）。挂起是每段位移的入门手续，确认过就是过了。
-            if (screen.X != pending.X || screen.Y != pending.Y)
+            // 裁决整个交给 Core（第十五报）。这里不再自己拿「坐标一个字节不一样」当手：落点是别人搬到的
+            // 地方，桌面抖动一两像素是常事，严格不等号会把「注入落地后的抖动」读成「手在走」，于是第二条
+            // 静音消息还没到、光标已经被抖醒了。Core 判的是「离落点走够了 MovePixels 没有」。
+            if (!_chrome.WarpOrHand(screen.X, screen.Y, Now))
             {
-                _chrome.WarpOrHand(screen.X, screen.Y, Now);
-                WakeFromPoll(screen, dx, dy);
-                return;
-            }
-            // 还挂在原地：裁决交给 Core（够了一拍＝注入，同一拍内再问＝继续等）。
-            else if (!_chrome.WarpOrHand(screen.X, screen.Y, Now))
-            {
-                // 纯跳变：接着藏，把参照点推进到落点，免得下一拍又拿同一个 60 当新位移。
-                if (!_chrome.WarpPendingAt.HasValue)
-                {
-                    _polled = screen;
-                    _warpsIgnored++;
-                    return;
-                }
-
                 // 还在等确认（同一拍内又被问了一次）：什么都不做，让静止时钟继续走。
+                if (_chrome.WarpPendingAt.HasValue) return;
+
+                // 确认是注入：接着藏，把参照点推进到落点，免得下一拍又拿同一个 60 当新位移。
+                _polled = screen;
+                _warpsIgnored++;
                 return;
             }
 
-            // 走到这里＝Core 判成手，落回下面的正常移动路，让它替这次唤醒挂牌。
+            // 判成手：挂起之后这一记是手在继续走。挂牌说明它是**过了裁决**的手，不是一个没来由的移动。
+            WakeFromPoll(screen, dx, dy, "挂起后走开，判成手");
+            return;
         }
 
         // Exactly where it was: stillness, and nothing to tell the rule. Returning without advancing the
@@ -211,8 +203,9 @@ public sealed partial class PlayerPage
 
         // 藏匿期第一个够阈值的位移：先挂起一拍，别急着认成手。第十一报的全部胜负都在这一句上 ——
         // 位置确实是 OS 给的、确实够 60 像素，但它既可能是一只手、也可能是一个注入。到下一拍才知道。
-        // 例外是刚刚判过一次纯跳变（WarpOrHand 里那个标记）：注入的形状是「搬完就冻住」，不会下一拍
-        // 再搬一次，所以这一记只能是手在走 —— 直接放行，不再二次挂起，否则手走两拍永远叫不醒。
+        // 例外是刚判过一次纯跳变、且还在免检期内（WarpHandMilliseconds）：注入的形状是「搬完就冻住」，
+        // 不会下一拍再搬一次，所以那记只能是手在继续走 —— 直接放行。免检是有期限的（第十五报）：没有
+        // 期限时它会在整段藏匿里一直立着，挡得住第一条消息、挡不住第二第三条。
         if (_cursorHidden && _polledKnown)
         {
             if (!_chrome.WarpOrHand(screen.X, screen.Y, Now))
@@ -227,7 +220,9 @@ public sealed partial class PlayerPage
                 return;
             }
 
-            WakeFromPoll(screen, dx, dy);
+            // 走到这里＝Core 判成手。此路唯一能返回真的一支就是免检（不在挂起、又没有免检时它必挂起），
+            // 所以这一记的名字写得具体些。
+            WakeFromPoll(screen, dx, dy, "跳变后免检的一记");
             return;
         }
 
@@ -245,7 +240,10 @@ public sealed partial class PlayerPage
     /// <param name="screen">这一拍读到的真实位置。</param>
     /// <param name="dx">离参照点的横向位移，只用于日志。</param>
     /// <param name="dy">离参照点的纵向位移，只用于日志。</param>
-    private void WakeFromPoll(NativePoint screen, int dx, int dy)
+    /// <param name="verdict">这一记是**过了藏匿期裁决**才判成手的，写清楚是哪一支：免检的一记，还是挂起之后
+    /// 走开的那一记。空表示藏匿期之外（或没藏）的普通移动。第十五报加的：显示行要把「哪条路叫醒的」说到
+    /// 具体分支，下一次报告才不用再猜。</param>
+    private void WakeFromPoll(NativePoint screen, int dx, int dy, string? verdict = null)
     {
         _polled = screen;
         _polledKnown = true;
@@ -260,7 +258,11 @@ public sealed partial class PlayerPage
         // this poll's reading printed as 「没记到移动（按键、菜单或窗口变化）」, and three rounds of looking
         // everywhere but here because the log swore no pointer path had spoken. The reason exists before the
         // consequence; write it in that order.
-        if (wasHidden) _woke = $"轮询问出了 {dx},{dy} 物理像素，读数 {screen.X},{screen.Y}，{PointerOwner()}";
+        if (wasHidden)
+        {
+            _woke = $"轮询问出了 {dx},{dy} 物理像素{(verdict is null ? string.Empty : $"（{verdict}）")}"
+                + $"，读数 {screen.X},{screen.Y}，{PointerOwner()}";
+        }
 
         // Render() outside the condition, and that is a fix rather than a shrug. Both calls inside report 「did
         // the rule change its mind」, and 「no」 is a legitimate answer — the pointer moved through a stretch

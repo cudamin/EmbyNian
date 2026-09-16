@@ -1036,6 +1036,48 @@ public sealed partial class PlayerPage
         report.Add($"搬 60 像素一次（{at.X}→{jump}）后：光标{(_cursorHidden ? "还藏着" : "又显示了")}"
             + $"，挡掉跳变 {before}→{_warpsIgnored} 次");
 
+        // —— 第二条消息：同一次藏匿里再来一记同款跳变，仍然不许叫醒 ——
+        //
+        // 第十五报的现场。用户的原话是「**每次**收到静音的群聊消息都会让鼠标显示」——不是第一次，是每
+        // 一次。旧版的免检闩（判掉一跳之后的那一记当手放行）没有期限，而藏匿期里没有东西会去清它，
+        // 于是第一条消息被挡住、第二条开始全部免检通过。这一腿就是第二条消息：等过了免检期，再搬一记
+        // 同样的 60，它必须重新过「先挂起 → 下一拍冻在原地 → 判掉」的手续，并且记进账。
+        //
+        // 等待是这一腿的要害，不是拖延：免检只管紧跟着的那一记（WarpHandMilliseconds），而两条消息之间
+        // 是秒级。睡得比那个窗长，模拟的才是「第二条消息」而不是「手还在走」。
+        if (_cursorHidden)
+        {
+            var afterFirst = _warpsIgnored;
+            var quietUntil = Now + ChromeReveal.WarpHandMilliseconds + 250;
+            while (Now < quietUntil) { Pump(); Thread.Sleep(20); }
+
+            var second = Native.GetCursorPos(out var at2) ? at2 : at;
+            var jump2 = second.X + WARP_SIGNATURE;
+            if (jump2 > VirtualRight()) jump2 = second.X - WARP_SIGNATURE;
+
+            Native.SetCursorPos(jump2, second.Y);
+
+            for (var i = 0; i < 5; i++)
+            {
+                Pump();
+                OnTick(this, EventArgs.Empty);
+                Thread.Sleep(60);
+            }
+
+            Pump();
+            OnTick(this, EventArgs.Empty);
+
+            Want("第二条消息也不叫醒光标", _cursorHidden);
+            Want("第二条消息也记进了账", _warpsIgnored > afterFirst);
+            report.Add($"隔了 {ChromeReveal.WarpHandMilliseconds + 250}ms 再搬一次 60"
+                + $"（{second.X}→{jump2}）后：光标{(_cursorHidden ? "还藏着" : "又显示了")}"
+                + $"，挡掉跳变 {afterFirst}→{_warpsIgnored} 次");
+        }
+        else
+        {
+            report.Add("第一记跳变就把光标叫醒了，第二条消息那一腿不判（同一个病，报一条就够）");
+        }
+
         // —— 对面那一半：手在走（连着两拍都动），光标必须回来 ——
         if (_cursorHidden)
         {

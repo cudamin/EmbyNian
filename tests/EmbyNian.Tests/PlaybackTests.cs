@@ -3828,6 +3828,92 @@ internal static class PlaybackTests
             Assert.True(chrome.WarpPendingAt.HasValue, "常态下第一步还是要先挂起");
         });
 
+        Test("播放器控件：注入落点上一两像素的桌面抖动不算手", () =>
+        {
+            // 第十五报。挂起点是**别人搬到的落点**，而桌面抖动在这台机器上实测能到两像素；旧判据是
+            // 「坐标一个字节不一样就是手在走」，于是注入落地之后紧接着的抖动就把光标抖醒了 —— 第二条
+            // 静音消息还没到，光标已经出来了。判据改成「离落点走够了 MovePixels 没有」：手的第一记是
+            // 几十像素，五这个数在两边都站得住。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden, "先得藏下去");
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+            Assert.False(chrome.WarpOrHand(3160, 932, at), "第一个够阈值的位移先挂起");
+
+            // 同一拍之内抖了两个像素：还没到确认时间，接着等，不许当成手。
+            Assert.False(chrome.WarpOrHand(3162, 930, at + 40), "两像素的抖动不是手在走");
+            Assert.True(chrome.WarpPendingAt.HasValue, "抖动不推进落点，挂起继续挂着");
+            Assert.Equal(0, chrome.WarpsIgnored);
+
+            // 再过一拍仍在这片抖动范围内：确认为注入，接着藏。
+            Assert.False(chrome.WarpOrHand(3161, 933, at + ChromeReveal.WarpConfirmMilliseconds),
+                "离落点还在阈值之内＝原地");
+            Assert.True(chrome.CursorHidden, "抖动不该叫醒光标");
+            Assert.False(chrome.WarpPendingAt.HasValue, "确认完就把挂起收走");
+            Assert.Equal(1, chrome.WarpsIgnored);
+        });
+
+        Test("播放器控件：免检闩有期限，隔了几秒的下一记不许免检", () =>
+        {
+            // 第十五报的现场。免检闩（刚判掉一跳之后的那一记是手）此前**没有期限**，而同一次藏匿里没有
+            // 任何东西会去清它（ClearWarp 只在光标显示和换片时跑）——于是第一条消息的 60 像素被挡住，
+            // 第二条、第三条就被免检放行。用户的原话是「每次收到静音的群聊消息都会让鼠标显示」，那正是
+            // 「只挡得住第一条」的听感。免检现在限时 WarpHandMilliseconds。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden, "先得藏下去");
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+
+            // 第一条消息：挂起 → 冻在原地 → 判掉，闩立起来。
+            Assert.False(chrome.WarpOrHand(3160, 932, at));
+            Assert.False(chrome.WarpOrHand(3160, 932, at + ChromeReveal.WarpConfirmMilliseconds));
+            Assert.Equal(1, chrome.WarpsIgnored);
+
+            // 中间什么都没发生 —— 藏匿期里也确实没有东西会清这个闩，这正是旧版放行的原因。隔了几秒
+            // 再来一记 60：必须重新过「先挂起」的手续，绝不能被那条早就过期的免检带过去。
+            Assert.False(chrome.WarpOrHand(3220, 932, at + 5000), "隔了几秒的一记必须重新过手续");
+            Assert.True(chrome.WarpPendingAt.HasValue, "它该挂起来等下一拍");
+            Assert.Equal(1, chrome.WarpsIgnored, "还没到确认那一拍");
+
+            Assert.False(chrome.WarpOrHand(
+                3220, 932, at + 5000 + ChromeReveal.WarpConfirmMilliseconds), "冻在原地＝又一次注入");
+            Assert.Equal(2, chrome.WarpsIgnored, "第二条消息也要记进账，不能溜过去");
+            Assert.True(chrome.CursorHidden, "两条消息都不该叫醒光标");
+        });
+
+        Test("播放器控件：免检只覆盖紧跟的那一记，之后照旧先挂起", () =>
+        {
+            // 上一条的另一半：期限不能短到把「手真的接着走」也误伤。判掉一跳之后紧接着（免检期内）的
+            // 那一记是手，必须放行；再往后（出了免检期）的一记又恢复常态。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            var at = now + ChromeReveal.CursorIdleMilliseconds + 300;
+            Assert.False(chrome.WarpOrHand(3160, 932, at));
+            Assert.False(chrome.WarpOrHand(3160, 932, at + ChromeReveal.WarpConfirmMilliseconds));
+            Assert.Equal(1, chrome.WarpsIgnored);
+
+            // 免检期内、且够 MovePixels：手在接着走。
+            Assert.True(chrome.WarpOrHand(
+                3200, 940, at + ChromeReveal.WarpConfirmMilliseconds + ChromeReveal.WarpHandMilliseconds),
+                "免检期边界之内仍是手");
+
+            // 出了免检期：第一步照例要过手续，不该被上一条的免检一直罩着。
+            Assert.False(chrome.WarpOrHand(
+                3260, 948, at + ChromeReveal.WarpConfirmMilliseconds + ChromeReveal.WarpHandMilliseconds + 1000),
+                "免检不覆盖隔了许久的那一记");
+            Assert.True(chrome.WarpPendingAt.HasValue, "常态下第一步还是要先挂起");
+        });
+
         Test("播放器控件：光标一显示，藏匿期那笔跳变挂起就作废", () =>
         {
             // 藏匿期的账只在藏匿期里算。挂起没清干净，下一次藏匿的第一个位移会被当成「下一拍」而
