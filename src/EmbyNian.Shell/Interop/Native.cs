@@ -1161,6 +1161,35 @@ internal static partial class Native
     /// 路径里的 VID/PID 点得出来，光看 hDevice 句柄分不清。</summary>
     public const uint RidiDevicename = 0x20000007;
 
-    [LibraryImport("user32.dll", SetLastError = true)]
+    // 十九报（2026-09-16）的事故记录，写给下一位：GetRawInputDeviceInfo 是 Raw Input 全家
+    // 里唯一分 A/W 导出的函数，user32 里没有无后缀导出。LibraryImport 对不带 string 参数的
+    // 签名不会按 StringMarshalling 自动补后缀 —— 按字面名找 GetRawInputDeviceInfo 找不到，
+    // 第一次调用即 EntryPointNotFoundException，ResolveDeviceName 的 catch 把它吞成
+    // 「句柄 0x…」fallback，于是十八报上线后所有设备（连物理雷蛇鼠标在内）一律点名失败。
+    // work/devname-onestep.py 的对照实验钉死了语义：W 版 pcbSize 单位是字符（不是字节）；
+    // NULL 探测成功时返回 0 而不是所需数，只有失败才是 0xFFFFFFFF —— 两步都要按这个判。
+    [LibraryImport("user32.dll", EntryPoint = "GetRawInputDeviceInfoW", SetLastError = true)]
+    private static partial uint GetRawInputDeviceInfo_Size(IntPtr device, uint command, IntPtr buffer, ref uint size);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetRawInputDeviceInfoW", SetLastError = true)]
     public static partial uint GetRawInputDeviceInfo(IntPtr device, uint command, byte[] buffer, ref uint size);
+
+    /// <summary>RIDI_DEVICENAME 的两步取名：NULL 探出字符数，再按同数字符给缓冲。返回是否拿到名字，
+    /// 名字经 <paramref name="name"/> 交回（UTF-16 解码、未截 VID 段的完整接口名）。</summary>
+    public static bool TryGetRawInputDeviceName(IntPtr device, out string name)
+    {
+        name = string.Empty;
+
+        var chars = 0u;
+        var probe = GetRawInputDeviceInfo_Size(device, RidiDevicename, IntPtr.Zero, ref chars);
+        if (probe == 0xFFFFFFFF || chars == 0 || chars > 520) return false;
+
+        var buffer = new byte[chars * 2];
+        var capacity = chars;
+        var written = GetRawInputDeviceInfo(device, RidiDevicename, buffer, ref capacity);
+        if (written == 0xFFFFFFFF) return false;
+
+        name = System.Text.Encoding.Unicode.GetString(buffer).Split('\0')[0];
+        return name.Length > 0;
+    }
 }

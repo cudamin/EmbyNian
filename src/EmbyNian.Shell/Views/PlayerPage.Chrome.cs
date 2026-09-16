@@ -730,8 +730,24 @@ public sealed partial class PlayerPage
         if (_window?.Witness is { } witnessForCapture)
         {
             _forensicsSeen = 0;
-            if (hidden) witnessForCapture.BeginCapture();
-            else witnessForCapture.EndCapture();
+            if (hidden)
+            {
+                witnessForCapture.BeginCapture();
+            }
+            else
+            {
+                witnessForCapture.EndCapture();
+
+                // 十九报（2026-09-16）：逐条账在显示时刻结转。13:29 那场 56 条真输入全落在最后
+                // 0.9 秒，SampleHiddenState 的每秒取证行还没轮到打就被唤醒打断 —— 账在手里、
+                // 日志上一条没有。显示必经此路，结转放在这，无论哪条显示路径都把账带出来。
+                if (witnessForCapture.CapturedRealTotal > 0)
+                {
+                    Log.Debug(Category,
+                        $"藏匿期真输入账（显示时结转）：共 {witnessForCapture.CapturedRealTotal} 条" +
+                        $"（{string.Join("；", witnessForCapture.CapturedReal)}）");
+                }
+            }
         }
 
         // And the one that actually does it while the pointer is over the picture. The four levers around this

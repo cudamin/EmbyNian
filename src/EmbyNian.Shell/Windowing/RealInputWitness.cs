@@ -198,6 +198,7 @@ internal sealed class RealInputWitness
 
     private bool _capturing;
     private int _capturedTotal;
+    private long _captureStartTick;
     private readonly List<string> _captured = new();
     private readonly Dictionary<IntPtr, string> _deviceNames = new();
 
@@ -207,6 +208,7 @@ internal sealed class RealInputWitness
         _capturing = true;
         _capturedTotal = 0;
         _captured.Clear();
+        _captureStartTick = Environment.TickCount64;
     }
 
     /// <summary>藏匿期结束：停笔不撕账 —— 取样行在显示之后还要读最后一次。</summary>
@@ -239,27 +241,29 @@ internal sealed class RealInputWitness
     }
 
     /// <summary>问系统要设备的接口名，截出 VID/PID 段（形如 <c>VID_046D&amp;PID_C52B</c>，跟驱动包
-    /// 对得上号）。问不出（合成句柄、设备已拔）就退回句柄十六进制 —— 取证路径绝不许把输入路径炸了。</summary>
+    /// 对得上号）。问不出（合成句柄、设备已拔）就退回句柄十六进制，失败码一并写上 —— 十九报的
+    /// 事故就是「问不出」却看不出为什么：LibraryImport 按字面名找 <c>GetRawInputDeviceInfo</c>
+    /// 找不到（Raw Input 里只有它分 A/W 且无无后缀导出），EntryPointNotFoundException 被 catch
+    /// 吞掉，十八报上线后所有设备一律 fallback。取名逻辑已挪进
+    /// <see cref="EmbyNian.Shell.Interop.Native.TryGetRawInputDeviceName"/>，这里只管截段与兜底。</summary>
     private static string ResolveDeviceName(IntPtr device)
     {
         try
         {
-            var buffer = new byte[520];
-            var size = (uint)buffer.Length;
-            if (Native.GetRawInputDeviceInfo(device, Native.RidiDevicename, buffer, ref size) > 0)
+            if (Native.TryGetRawInputDeviceName(device, out var name))
             {
-                var name = System.Text.Encoding.Unicode.GetString(buffer).Split('\0')[0];
                 var at = name.IndexOf("VID_", StringComparison.OrdinalIgnoreCase);
                 if (at >= 0) return name.Substring(at, Math.Min(name.Length - at, 24));
                 if (name.Length > 0) return name;
             }
+
+            return $"句柄 0x{device:X}(err {Marshal.GetLastWin32Error()})";
         }
         catch
         {
             // 拿不到就退回句柄，别让取证拖垮记账。
+            return $"句柄 0x{device:X}";
         }
-
-        return $"句柄 0x{device:X}";
     }
 
     /// <summary>Parse 的固定缓冲。挂在类上而不是每次调用分配：这条路径鼠标一动就来上百次。</summary>
