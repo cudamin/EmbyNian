@@ -9,7 +9,7 @@ telegram 发布频道：https://t.me/EmbyNian
 ## 设计参考
 
 - UI 界面参考 **Emby 小秘** 设计。
-- 播放器架构参考**mpv-winui-player**：<[https://github.com/dyphire/mpv-config](https://github.com/ikas-mc/mpv-winui-player)>和 **小幻影视** 设计。
+- 播放器架构参考**mpv-winui-player**：<https://github.com/ikas-mc/mpv-winui-player>和 **小幻影视** 设计。
 - 播放器控件、着色器与 mpv 相关设置参考 **mpv-config**：<https://github.com/dyphire/mpv-config>
 - 内置 **mpv-winbuild**：<https://github.com/dyphire/mpv-winbuild/releases/tag/mpv_own-2026-08-31>
 
