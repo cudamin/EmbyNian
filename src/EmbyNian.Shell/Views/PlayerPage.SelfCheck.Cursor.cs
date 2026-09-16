@@ -1,5 +1,6 @@
 using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
+using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 
@@ -957,6 +958,14 @@ public sealed partial class PlayerPage
         report.Add($"见证：{(_window!.Witness.Ready ? "就绪" : "缺席（本轮退回形状启发式）")}"
             + $"，账 真{_window.Witness.RealMoves}/注{_window.Witness.InjectedMoves}/伪{_window.Witness.Forged}");
 
+        // 第十七报：字段顺序与哨兵溢出的两条回归，用合成记录钉住。Forge 测不出这两条 —— 它把
+        // 时间戳变成真的，而沙箱注不进真实输入，聋与溢出都只有真机的「从未见过」状态才现形。
+        // 合成记录直接铺 winuser.h 的字节布局：RAWINPUTHEADER{dwType@0, dwSize@4, hDevice@8}
+        // + RAWMOUSE{…lLastX@36, lLastY@40}，与 Observe 的读法同一张图。
+        var witnessRegression = ProbeWitnessRegression();
+        report.Add(witnessRegression.Item2);
+        if (!witnessRegression.Item1) wrong.Add("见证合成记录回归（十七报）");
+
         SetCursorHidden(false);
         _chrome.Reset(Now);
         Render();
@@ -1182,6 +1191,54 @@ public sealed partial class PlayerPage
             var (x, _, width, _) = Native.VirtualScreen();
             return x + width - 1;
         }
+    }
+
+    /// <summary>
+    /// 十七报两条见证回归的合成记录腿：不碰窗口、不碰指针，直接把三张账本摊开判。Forge 测不出
+    /// 这两条 —— 它把时间戳变成真的，而沙箱注不进真实输入，聋与溢出都只有「从未见过」状态才现形。
+    /// <para>
+    /// ① 「从没见过」的一票必须答「没有」—— 哨兵 MinValue 相减溢出曾让它恒答「有」；② 一条
+    /// hDevice ≠ 0 的合成真记录必须被记账并开窗 —— dwType 读错位（读了 dwSize=48）曾让每条记录
+    /// 都在第一问被扔掉，见证全聋；③ 一条 hDevice == 0 的合成注入记录只能进注账，不许顶替真账。
+    /// </para>
+    /// </summary>
+    private static (bool Ok, string Detail) ProbeWitnessRegression()
+    {
+        var wrong = new List<string>();
+
+        // ① 出生的见证：什么都没见过，任何窗口宽度的「最近有真输入吗」都必须答没有。
+        var witness = new RealInputWitness();
+        if (witness.RecentRealInput(2000)) wrong.Add("从未见过真输入却答「有」（哨兵溢出）");
+
+        // ② 合成真手记录：RAWINPUTHEADER{dwType@0=0（鼠标）、dwSize@4=48、hDevice@8 非零}
+        // + RAWMOUSE{…lLastX@36=5、lLastY@40=7}，与 Observe 的读法同一张图。
+        var real = new byte[64];
+        BitConverter.GetBytes(0).CopyTo(real, 0);
+        BitConverter.GetBytes(48).CopyTo(real, 4);
+        BitConverter.GetBytes((long)0x1234).CopyTo(real, 8);
+        BitConverter.GetBytes(5).CopyTo(real, 36);
+        BitConverter.GetBytes(7).CopyTo(real, 40);
+        witness.Observe(real);
+
+        if (witness.RealMoves != 1) wrong.Add("真手记录没进真账（dwType 错位全扔）");
+        if (!witness.RecentRealInput(2000)) wrong.Add("真手记录记了账却答「没有」");
+
+        // ③ 同一布局的注入记录：hDevice 清零、位移 9,3 —— SendInput 一类只进注账。
+        var injected = new byte[64];
+        BitConverter.GetBytes(0).CopyTo(injected, 0);
+        BitConverter.GetBytes(48).CopyTo(injected, 4);
+        BitConverter.GetBytes(9).CopyTo(injected, 36);
+        BitConverter.GetBytes(3).CopyTo(injected, 40);
+        witness.Observe(injected);
+
+        if (witness.InjectedMoves != 1) wrong.Add("无出处记录没进注账");
+        if (witness.RealMoves != 1) wrong.Add("注入顶替了真账");
+
+        var detail = wrong.Count == 0
+            ? "见证合成回归全绿（从未见过→没有；真记进真账开窗；注入只进注账）"
+            : $"见证合成回归不符：{string.Join('、', wrong)}";
+
+        return (wrong.Count == 0, detail);
     }
 
     /// <summary>The middle of our client area in screen pixels, which is a point on the picture.</summary>

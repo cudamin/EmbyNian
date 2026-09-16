@@ -38,6 +38,16 @@ namespace EmbyNian.Shell.Windowing;
 /// 转发成注入 —— 那样的手在见证眼里没有 hDevice，会被误判成注入、光标不醒。到那一步之前，判定
 /// 每一票都带着计数进了日志（<see cref="RealMoves"/> / <see cref="InjectedMoves"/>），下次报告不用猜。
 /// </para>
+/// <para>
+/// 十七报（2026-09-16 午后）的真机日志把两个<b>实现错误</b>钉在同一行里：显示名牌写「真实输入见证：有」，
+/// 同一行的账却是「真 0/注 0」。其一是本类把 <c>RAWINPUTHEADER</c> 的字段顺序读反了 —— dwType 在 @0
+/// 不在 @4，dwSize=48 ≠ 0，每条鼠标记录都在第一问被扔掉，见证全聋（真 0/注 0，连用户自己的手都看不见）；
+/// 其二是「没见过」的哨兵 <c>long.MinValue</c> 在 <see cref="RecentRealInput"/> 里相减溢出成大负数，
+/// 聋上加聋之后这一问永远答「有」—— <b>每一记注入都被判成手，AyuGram 的毛病一分未改</b>。两条一起
+/// 才是症状，两条一起修：字段顺序照 winuser.h 原文（回归钉在自检的合成记录里），哨兵先判再减。
+/// 自检的 Forge 腿测不出这两条 —— Forge 把时间戳变成真的，而沙箱又注不进真实输入，聋与溢出都只有
+/// 真机的「从未见过」状态才现形。
+/// </para>
 /// </summary>
 internal sealed class RealInputWitness
 {
@@ -79,16 +89,32 @@ internal sealed class RealInputWitness
         var written = Native.GetRawInputData(rawInput, Native.RidInput, buffer, ref available, Native.RawInputHeaderSize);
         if (written < Native.RawInputHeaderSize + Native.RawMouseSize) return;
 
-        // RAWINPUTHEADER：dwSize@0、dwType@4、hDevice@8。不是鼠标（键盘、其它 HID）不判 —— 它们不搬光标。
-        // 读法用 BitConverter 而不是 Marshal.ReadInt32：数组重载那个 signature 走 object，CS0618 已过时。
-        // hDevice 是 IntPtr（x64 上 8 字节），按 Int64 读回来再收窄 —— 发布只有 win-x64 一个 flavor。
-        if ((uint)BitConverter.ToInt32(buffer, 4) != Native.RimTypeMouse) return;
+        Observe(buffer);
+    }
 
-        var device = (IntPtr)BitConverter.ToInt64(buffer, 8);
+    /// <summary>
+    /// 对一条已铺平的 RAWINPUT（header 24 + RAWMOUSE 24）做「手还是注入」的记账。从 Parse 拆出来
+    /// 是为了让自检能把合成记录直接灌进来 —— 沙箱注不进真实输入，字段顺序的回归只能这样钉住。
+    /// <para>
+    /// 十七报事故在这里：winuser.h 原文 <c>typedef struct tagRAWINPUTHEADER { DWORD dwType; // @0;
+    /// DWORD dwSize; // @4; HANDLE hDevice; // @8; WPARAM wParam; }</c> —— dwType 在 @0。此前读的
+    /// @4 是 dwSize=48 ≠ RimTypeMouse(0)，每条鼠标记录都在第一问被扔掉，见证全聋。dwType 0~3 恰好
+    /// 都不是 48，dwSize 恰好是 48：这个颠倒不是「读到别的类型」而是「全扔」，日志上一条痕迹都没有。
+    /// </para>
+    /// </summary>
+    internal void Observe(byte[] record)
+    {
+        // RAWINPUTHEADER：dwType@0、dwSize@4、hDevice@8（winuser.h 原文顺序）。不是鼠标（键盘、
+        // 其它 HID）不判 —— 它们不搬光标。读法用 BitConverter 而不是 Marshal.ReadInt32：数组重载
+        // 那个 signature 走 object，CS0618 已过时。
+        if ((uint)BitConverter.ToInt32(record, 0) != Native.RimTypeMouse) return;
+
+        // hDevice 是 IntPtr（x64 上 8 字节），按 Int64 读回来再收窄 —— 发布只有 win-x64 一个 flavor。
+        var device = (IntPtr)BitConverter.ToInt64(record, 8);
 
         // RAWMOUSE@24：usFlags@24、lLastX@36、lLastY@40（x64；lLastX/lLastY 是 LONG）。
-        var x = BitConverter.ToInt32(buffer, Native.RawMouseXOffset);
-        var y = BitConverter.ToInt32(buffer, Native.RawMouseYOffset);
+        var x = BitConverter.ToInt32(record, Native.RawMouseXOffset);
+        var y = BitConverter.ToInt32(record, Native.RawMouseYOffset);
 
         if (x == 0 && y == 0) return;
 
@@ -112,9 +138,15 @@ internal sealed class RealInputWitness
     /// 时钟与 <c>PlayerPage.Now</c> 同一个（<see cref="Environment.TickCount64"/>），这一问没有跨时钟
     /// 换算 —— 两边本来就是一个钟。
     /// </para>
+    /// <para>
+    /// 哨兵 <see cref="long.MinValue"/> 必须先判再减：直接减的话 TickCount64 − MinValue 数学上是
+    /// 「开机时长 + 2⁶³」，unchecked 下回卷成一个大负数，恒 ≤ 窗口 —— 「从没见过」永远答「有」。
+    /// 十七报的第二条事故就是它（第一条在 <see cref="Observe"/> 的注释里）。
+    /// </para>
     /// </summary>
     public bool RecentRealInput(long withinMilliseconds) =>
-        Environment.TickCount64 - _lastRealMoveAt <= withinMilliseconds;
+        _lastRealMoveAt != long.MinValue
+        && Environment.TickCount64 - _lastRealMoveAt <= withinMilliseconds;
 
     /// <summary>
     /// 自检专用：凭空记一条「刚刚有真输入」。SetCursorPos 不产生 WM_INPUT（这正是它能当注入替身的
