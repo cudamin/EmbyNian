@@ -60,6 +60,13 @@ public partial class App : Application
     {
         Instance = this;
 
+        if (_options.ProbeComposition)
+        {
+            // No DI, settings, login, activation listener or PlaybackService in this process.
+            _ = CompositionPlaybackProbe.RunAsync(_options);
+            return;
+        }
+
         try
         {
             var services = ShellServices.Build(_options.Paths);

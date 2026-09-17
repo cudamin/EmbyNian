@@ -199,6 +199,7 @@ internal sealed class PlayerWindow
     private void OnWindowClosed()
     {
         _window.Closed -= OnWindowClosed;
+        _page.ReleaseVideoSurface();
         _window.Dispose();
 
         // Not fired when this class did the closing: the shell asked, so it already knows, and letting it

@@ -26,6 +26,12 @@ public interface IPlaybackHandle : IAsyncDisposable
     /// <summary>False when no control channel came up: position and pause state are unknown.</summary>
     bool HasControlChannel { get; }
 
+    /// <summary>
+    /// The actual session's picture destination, independent of mutable settings. Null when the
+    /// backend does not report it; false means the video lives outside the client's host window.
+    /// </summary>
+    bool? PictureInHostWindow => null;
+
     bool IsPaused { get; }
 
     /// <summary>Position in seconds, or null when it cannot be known.</summary>

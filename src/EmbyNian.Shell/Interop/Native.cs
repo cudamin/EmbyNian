@@ -181,6 +181,10 @@ internal static partial class Native
     public const int WsChild = 0x40000000;
     public const int WsVisible = 0x10000000;
 
+    /// <summary>WS_POPUP：不带边框与所有权的顶层窗口。重算光标的探针用它——不进宿主的子链，
+    /// 销毁时也不会拖累任何人的 Z 序（第二十七报）。</summary>
+    public const int WsPopup = unchecked((int)0x80000000);
+
     /// <summary>
     /// What is left of the window style in fullscreen: no caption, no border, no resize grip. Only the
     /// bits are dropped — the window is never recreated, so the XAML island and the video child both
@@ -619,6 +623,35 @@ internal static partial class Native
 
     public const int GwlExStyle = -20;
     public const int WsExTopMost = 0x00000008;
+
+    /// <summary>WS_EX_LAYERED：整窗 alpha 可调。探针取 alpha=1——非零才有 hit-test（alpha=0 的分层
+    /// 区域对鼠标是穿透的），但 1/255 的不透明度加上 4×4 的尺寸与「显出来当拍就收走」的时序，
+    /// 人眼与帧率都不可能看见它（第二十七报）。</summary>
+    public const int WsExLayered = 0x00080000;
+
+    /// <summary>WS_EX_TOOLWINDOW：不进任务栏与 Alt-Tab。探针每秒至多显隐一轮，谁也不该在切换列表里看到它。</summary>
+    public const int WsExToolWindow = 0x00000080;
+
+    /// <summary>WS_EX_NOACTIVATE：显出来也不夺前台。藏匿期的播放窗口多半没有焦点（全屏置顶），
+    /// 探针绝不能改这件事。</summary>
+    public const int WsExNoActivate = 0x08000000;
+
+    /// <summary>SW_HIDE，<see cref="ShowWindow"/> 的收走命令。0 是它的值，显式起见给个名字。</summary>
+    public const int SwHide = 0;
+
+    /// <summary>SW_SHOWNA：显示但不激活。与 WS_EX_NOACTIVATE 双保险。</summary>
+    public const int SwShowNoActivate = 8;
+
+    /// <summary>SetLayeredWindowAttributes 的 LWA_ALPHA：按 alpha 调整整窗不透明度。</summary>
+    public const uint LwaAlpha = 2;
+
+    /// <summary>
+    /// Sets the whole-window alpha of a layered window. Only the cursor-recompute probe uses it,
+    /// pinned at 1/255 — present to the hit test, absent to the eye; see <see cref="WsExLayered"/>.
+    /// </summary>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetLayeredWindowAttributes(IntPtr window, uint colorKey, byte alpha, uint flags);
 
     /// <summary>
     /// The taskbar itself. Only the self-check uses it, to report whether the shell really did stand

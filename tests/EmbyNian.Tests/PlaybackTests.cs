@@ -35,6 +35,10 @@ internal static class PlaybackTests
         RegisterCursorMask();
         RegisterPulseArt();
         RegisterPipelineDiscriminator();
+        RegisterLibMpvPipeline();
+        RegisterNativeFullscreen();
+        RegisterVideoSurfaceSize();
+        RegisterLibMpvLifetime();
         RegisterPlaybackStats();
         RegisterAspectLock();
         RegisterPlayerMenu();
@@ -4597,6 +4601,9 @@ internal static class PlaybackTests
         public Func<Task>? BeforeRead { get; set; }
         public bool FailOnDispose { get; init; }
         public int DisposeCount { get; private set; }
+        public int StopCount { get; private set; }
+        public bool? PictureInHostWindow { get; init; }
+        public string? Fullscreen { get; init; }
         public bool HasControlChannel => true;
         public bool IsPaused => false;
         public event Action<bool>? PauseChanged { add { } remove { } }
@@ -4611,6 +4618,7 @@ internal static class PlaybackTests
 
         public Task StopAsync()
         {
+            StopCount++;
             End();
             return Task.CompletedTask;
         }
@@ -4625,7 +4633,7 @@ internal static class PlaybackTests
         {
             Reads.Add(name);
             if (BeforeRead is { } before) await before();
-            return "播放器默认值";
+            return name == "fullscreen" ? Fullscreen : "播放器默认值";
         }
 
         public Task<double?> GetPositionAsync(CancellationToken cancellationToken) => Task.FromResult<double?>(0);
@@ -4902,12 +4910,7 @@ internal static class PlaybackTests
     }
 
     // ---- 双管线的判别式 ----------------------------------------------------------
-    //
-    // 「改为集成模式（与 WinUI 控件混排）＋独立播放（mpv 独占 swapchain）两种渲染管线」（2026-09-16，
-    // 小幻影视同款两档）。后端分流只看 IVideoSurface.WindowHandle 这一个判别式：面板实现答零（集成），
-    // 窗口实现答自己的 HWND（独立）。判别式答错了，后端就会拿集成的方式去伺候独占的窗口，或者反过来。
-
-    /// <summary>只实现合成三件套的最小面板——Shell 的 SwapChainVideoTarget 就是这个形状（多一层 UI 缓存）。</summary>
+    // 两条管线按 VideoPipelineKind 分流；独立播放自建顶层窗口，不向 IVideoSurface 要几何或交换链。
     private static void RegisterPipelineDiscriminator()
     {
         Test("双管线：渲染管线的装机默认是集成模式", () =>
@@ -4949,6 +4952,353 @@ internal static class PlaybackTests
 
             Assert.Equal(1, candidates.Count, "唯一的版本就是全部候选，不因 Id 相同排两遍");
             Assert.Equal("mediasource_7316", candidates[0].Id);
+        });
+    }
+
+    private static void RegisterNativeFullscreen()
+    {
+        Test("原生全屏：无会话不读状态，集成或未知归属不处理", () =>
+        {
+            SignedOutService().ExitNativeFullscreenOrStopAsync().GetAwaiter().GetResult();
+            foreach (bool? destination in new bool?[] { true, null })
+                CheckNativeFullscreenAsync(destination, "yes", expectedReads: 0, expectedStops: 0, expectedWrites: 0).GetAwaiter().GetResult();
+        });
+
+        Test("原生全屏：全屏中只退出全屏，不停止视频", () =>
+            CheckNativeFullscreenAsync(false, "yes", 1, 0, 1).GetAwaiter().GetResult());
+        Test("原生全屏：窗口状态退出才停止当前视频", () =>
+            CheckNativeFullscreenAsync(false, "no", 1, 1, 0).GetAwaiter().GetResult());
+        Test("原生全屏：状态未知不能误停止视频", () =>
+            CheckNativeFullscreenAsync(false, null, 1, 0, 0).GetAwaiter().GetResult());
+
+        Test("原生全屏：旧状态读回前已切集，不退出或停止新旧会话", () =>
+        {
+            foreach (var fullscreen in new[] { "yes", "no" })
+                CheckNativeFullscreenSwitchAsync(fullscreen).GetAwaiter().GetResult();
+        });
+    }
+
+    private static async Task CheckNativeFullscreenAsync(
+        bool? destination, string? fullscreen, int expectedReads, int expectedStops, int expectedWrites)
+    {
+        var handle = new PlaybackStubHandle { PictureInHostWindow = destination, Fullscreen = fullscreen };
+        var (service, session) = PlayingService(handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        Assert.Null(service.PictureInHostWindow);
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        try
+        {
+            await handle.Started.Task.WaitAsync(cancellation.Token);
+            Assert.Equal(destination, service.PictureInHostWindow);
+            await service.ExitNativeFullscreenOrStopAsync().WaitAsync(cancellation.Token);
+            Assert.Equal(expectedReads, handle.Reads.Count);
+            Assert.Equal(expectedStops, handle.StopCount);
+            Assert.Equal(expectedWrites, handle.Properties.Count);
+            if (expectedWrites > 0)
+            {
+                Assert.Equal("fullscreen", handle.Properties[0].Key);
+                Assert.Equal<object?>(false, handle.Properties[0].Value);
+            }
+        }
+        finally
+        {
+            handle.End();
+            await playing.WaitAsync(cancellation.Token);
+        }
+        Assert.Null(service.PictureInHostWindow, "结束后不保留旧会话归属");
+    }
+
+    private static async Task CheckNativeFullscreenSwitchAsync(string fullscreen)
+    {
+        var first = new PlaybackStubHandle { PictureInHostWindow = false, Fullscreen = fullscreen };
+        var second = new PlaybackStubHandle { PictureInHostWindow = false, Fullscreen = "yes" };
+        var (service, session) = PlayingService(first, second);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        first.BeforeRead = async () =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(cancellation.Token);
+        };
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        Task<PlaybackResult>? next = null;
+        try
+        {
+            await first.Started.Task.WaitAsync(cancellation.Token);
+            var exit = service.ExitNativeFullscreenOrStopAsync();
+            await entered.Task.WaitAsync(cancellation.Token);
+            first.End();
+            await playing.WaitAsync(cancellation.Token);
+            next = service.PlayAsync(Ticket() with { Item = Item("下一集", id: "43") }, cancellation.Token);
+            await second.Started.Task.WaitAsync(cancellation.Token);
+            release.TrySetResult();
+            await exit.WaitAsync(cancellation.Token);
+            Assert.Equal(0, first.Properties.Count);
+            Assert.Equal(0, first.StopCount);
+            Assert.Equal(0, second.Properties.Count);
+            Assert.Equal(0, second.Reads.Count);
+            Assert.Equal(0, second.StopCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            first.End();
+            second.End();
+            await playing.WaitAsync(cancellation.Token);
+            if (next is not null) await next.WaitAsync(cancellation.Token);
+        }
+    }
+
+    private static void RegisterLibMpvPipeline()
+    {
+        Test("mpv 管线：真实规划器的默认 Vulkan 在两条内置管线都不能覆盖 D3D11", () =>
+        {
+            var (planner, _) = Planner();
+            var request = planner.Plan(Ticket(), Connection());
+            Assert.Equal("vulkan", Options(request.PlayerOptions)["gpu-api"]);
+            foreach (var pipeline in new[] { VideoPipelineKind.Standalone, VideoPipelineKind.Integrated })
+            {
+                var plan = LibMpvPipelinePolicy.Build(pipeline, request.PlayerOptions, (1920, 1080));
+                Assert.Equal("d3d11", plan.Single(option => option.Name == "gpu-api").Value);
+                Assert.Equal("d3d11", plan.Single(option => option.Name == "gpu-context").Value);
+                Assert.Equal("gpu-next", plan.Single(option => option.Name == "vo").Value);
+                Assert.Equal("vulkan", Options(request.PlayerOptions)["gpu-api"], "不得修改外部 mpv 共用的请求");
+            }
+        });
+
+        Test("mpv 管线：预设、普通重复值、着色器先执行，关键选项最后且全部 fatal", () =>
+        {
+            KeyValuePair<string, string>[] input =
+            [
+                new("scale", "bilinear"), new("profile", "high-quality"),
+                new("gpu-api", "vulkan"), new("scale", "spline36"), new("gpu-context", "winvk"),
+                new("vo", "gpu-next,direct3d"), new("glsl-shaders-append", "local.glsl"),
+                new("scale", "ewa_lanczossharp"), new("d3d11-output-mode", "composition"),
+                new("d3d11-exclusive-fs", "no"), new("force-window", "no"),
+                new("input-default-bindings", "no"), new("input-vo-keyboard", "no"),
+                new("input-media-keys", "yes")
+            ];
+            var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, input);
+            Assert.Equal("scale=bilinear,profile=high-quality,scale=spline36,glsl-shaders-append=local.glsl,scale=ewa_lanczossharp",
+                string.Join(",", plan.Where(option => !option.Required).Select(option => $"{option.Name}={option.Value}")));
+            Assert.Equal("vo=gpu-next,gpu-api=d3d11,gpu-context=d3d11,d3d11-output-mode=window,d3d11-exclusive-fs=yes,force-window=immediate,input-default-bindings=yes,input-vo-keyboard=yes,input-media-keys=no",
+                string.Join(",", plan.Where(option => option.Required).Select(option => $"{option.Name}={option.Value}")));
+            var firstRequired = plan.ToList().FindIndex(option => option.Required);
+            Assert.True(plan.Skip(firstRequired).All(option => option.Required), "后面不能再有普通选项覆盖管线");
+            foreach (var option in plan)
+            {
+                option.EnsureAccepted(0);
+                if (option.Required)
+                {
+                    var error = Assert.Catch<InvalidOperationException>(() => option.EnsureAccepted(-7));
+                    Assert.Contains(option.Name, error.Message);
+                }
+                else option.EnsureAccepted(-7); // Ordinary shader failures remain warnings.
+            }
+        });
+
+        Test("mpv 管线：wid、尺寸、上下文别名及 VO 列表操作在发送前过滤", () =>
+        {
+            KeyValuePair<string, string>[] conflicts =
+            [
+                new("wid", "12345"), new("--WID", "67890"), new("vo-append", "direct3d"),
+                new("vo-clr", ""), new("--gpu-context", "winvk"), new("no-force-window", ""),
+                new("d3d11-composition-size", "800x600"), new("no-input-media-keys", "no")
+            ];
+            var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, conflicts, (4096, 2160));
+            Assert.True(plan.All(option => option.Required), "冲突输入不应有一条送入 DLL");
+            Assert.False(plan.Any(option => option.Name == "wid" || option.Name == "d3d11-composition-size"));
+            Assert.False(plan.Any(option => option.Name == "fullscreen"), "请求独占不等于强制进入全屏");
+        });
+
+        Test("mpv 管线：集成隔离独占及原生键盘，尺寸仍来自宿主", () =>
+        {
+            var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Integrated,
+                [new("d3d11-exclusive-fs", "yes"), new("d3d11-output-mode", "window"), new("wid", "123")], (1600, 900));
+            Assert.Equal("composition", plan.Single(option => option.Name == "d3d11-output-mode").Value);
+            Assert.Equal("no", plan.Single(option => option.Name == "d3d11-exclusive-fs").Value);
+            Assert.Equal("1600x900", plan.Single(option => option.Name == "d3d11-composition-size").Value);
+            Assert.True(plan.Where(option => option.Name.StartsWith("input-", StringComparison.Ordinal)).All(option => option.Value == "no"));
+            Assert.False(plan.Any(option => option.Name == "wid"));
+            foreach (var size in new[] { (0, 0), (1280, 0), (-1, 720) })
+                Assert.Equal("1x1", LibMpvPipelinePolicy.Build(VideoPipelineKind.Integrated, [], size)
+                    .Single(option => option.Name == "d3d11-composition-size").Value);
+        });
+
+        Test("mpv 管线：独立从不调用 surface provider，集成必须取得一次有效 surface", () =>
+        {
+            Assert.False(LibMpvPipelinePolicy.RequiresSurface(VideoPipelineKind.Standalone));
+            Assert.Null(LibMpvBackend.SelectSurface(VideoPipelineKind.Standalone,
+                () => throw new AssertionException("独立管线不能调用 provider")));
+            var calls = 0;
+            var surface = new PipelineTestSurface();
+            Assert.True(ReferenceEquals(surface, LibMpvBackend.SelectSurface(VideoPipelineKind.Integrated, () => { calls++; return surface; })));
+            Assert.Equal(1, calls);
+            Assert.Throws<InvalidOperationException>(() => LibMpvBackend.SelectSurface(VideoPipelineKind.Integrated, () => null));
+            Assert.Throws<ArgumentOutOfRangeException>(() => LibMpvPipelinePolicy.Build((VideoPipelineKind)99, []));
+        });
+
+        Test("mpv 管线：会话画面归属来自实际 surface，不调用 DLL", () =>
+        {
+            // Do not start or dispose these synthetic handles: only inspect the immutable destination.
+            IPlaybackHandle native = new LibMpvHandle(IntPtr.Zero, null);
+            IPlaybackHandle integrated = new LibMpvHandle(IntPtr.Zero, new PipelineTestSurface());
+            Assert.Equal<bool?>(false, native.PictureInHostWindow);
+            Assert.Equal<bool?>(true, integrated.PictureInHostWindow);
+        });
+    }
+
+    private sealed class PipelineTestSurface : IVideoSurface
+    {
+        public (int Width, int Height) Size => (1600, 900);
+        public event Action? GeometryChanged { add { } remove { } }
+        public void AttachSwapChain(IntPtr swapChain) => throw new AssertionException("纯策略测试不应挂链");
+    }
+
+    private static void RegisterVideoSurfaceSize()
+    {
+        Test("合成尺寸：布局 DIP 按当前缩放转换成物理像素", () =>
+        {
+            Assert.Equal((1280, 720), VideoSurfaceSize.FromDips(1280, 720, 1));
+            Assert.Equal((1600, 900), VideoSurfaceSize.FromDips(1280, 720, 1.25));
+            Assert.Equal((1920, 1080), VideoSurfaceSize.FromDips(1280, 720, 1.5));
+            Assert.Equal((2560, 1440), VideoSurfaceSize.FromDips(1280, 720, 2));
+            Assert.Equal((960, 540), VideoSurfaceSize.FromDips(1280, 720, 0.75));
+        });
+
+        Test("合成尺寸：小数向上取整，正尺寸至少占一个像素", () =>
+        {
+            Assert.Equal((126, 64), VideoSurfaceSize.FromDips(100.1, 50.5, 1.25));
+            Assert.Equal((1, 1), VideoSurfaceSize.FromDips(0.1, 0.01, 1));
+            Assert.Equal((1, 1), VideoSurfaceSize.FromDips(double.Epsilon, double.Epsilon, 0.5));
+        });
+
+        Test("合成尺寸：未布局或非法尺寸单轴归零", () =>
+        {
+            foreach (var invalid in new[] { 0d, -1, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+            {
+                Assert.Equal((0, 150), VideoSurfaceSize.FromDips(invalid, 100, 1.5));
+                Assert.Equal((150, 0), VideoSurfaceSize.FromDips(100, invalid, 1.5));
+            }
+            Assert.Equal((0, 0), VideoSurfaceSize.FromDips(0, 0, 1.5));
+        });
+
+        Test("合成尺寸：非法缩放返回未知，不猜测为百分之百", () =>
+        {
+            foreach (var invalid in new[] { 0d, -1, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+                Assert.Equal((0, 0), VideoSurfaceSize.FromDips(1280, 720, invalid));
+        });
+
+        Test("合成尺寸：超大有限输入及乘积溢出不会变负数", () =>
+        {
+            Assert.Equal((int.MaxValue, int.MaxValue), VideoSurfaceSize.FromDips(int.MaxValue, int.MaxValue, 1));
+            Assert.Equal((int.MaxValue, 2), VideoSurfaceSize.FromDips(double.MaxValue, 1, 2));
+            Assert.Equal((int.MaxValue, int.MaxValue), VideoSurfaceSize.FromDips(double.MaxValue, 2, double.MaxValue));
+        });
+    }
+
+    private static void RegisterLibMpvLifetime()
+    {
+        Test("mpv 生命周期：停止后只拦合成，控制读数仍可用于最终上报", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            var calls = 0;
+            var detaches = 0;
+            Assert.True(gate.Run(() => { calls++; return true; }, composition: true));
+            gate.StopComposition(() => detaches++);
+            gate.StopComposition(() => detaches++);
+            Assert.False(gate.Run(() => { calls++; return true; }, composition: true));
+            Assert.Equal(1, calls);
+            Assert.Equal(1, detaches, "重复 Stop/Finish/Dispose 不应再次摘掉下一场的画面");
+            Assert.Equal(42, gate.Run(() => 42));
+        });
+
+        Test("mpv 生命周期：排队中的几何刷新在停止边界之后不执行", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = 0;
+            var queued = Task.Run(async () =>
+            {
+                await release.Task.ConfigureAwait(false);
+                return gate.Run(() => { calls++; return true; }, composition: true);
+            });
+            gate.StopComposition(() => { });
+            release.SetResult();
+            Assert.False(queued.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
+            Assert.Equal(0, calls);
+        });
+
+        Test("mpv 生命周期：正在挂链与停止摘链串行，摘链始终在后", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var stopping = new ManualResetEventSlim();
+            var order = new List<string>();
+            var detached = 0;
+            var refresh = Task.Run(() => gate.Run(() =>
+            {
+                entered.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)), "挂链未获放行");
+                order.Add("attach");
+                return true;
+            }, composition: true));
+            Task stop = Task.CompletedTask;
+            try
+            {
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "刷新未进入临界区");
+                stop = Task.Run(() =>
+                {
+                    stopping.Set();
+                    gate.StopComposition(() =>
+                    {
+                        order.Add("detach");
+                        Interlocked.Increment(ref detached);
+                    });
+                });
+                Assert.True(stopping.Wait(TimeSpan.FromSeconds(5)), "停止任务未启动");
+                Assert.Equal(0, Volatile.Read(ref detached), "刷新仍持锁时不能摘链");
+            }
+            finally
+            {
+                release.Set();
+                Task.WhenAll(refresh, stop).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            }
+            Assert.Equal("attach,detach", string.Join(",", order));
+            Assert.False(gate.Run(() => true, composition: true));
+        });
+
+        Test("mpv 生命周期：销毁仅一次，迟到的控制和几何任务安全跳过", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            var destroyed = 0;
+            gate.StopComposition(() => { });
+            gate.Destroy(() => destroyed++);
+            gate.Destroy(() => destroyed++);
+            var late = Task.Run(() =>
+            {
+                Assert.Null(gate.Run<string>(() => throw new InvalidOperationException("不能访问已销毁的 mpv")));
+                Assert.False(gate.Run(() => true, composition: true));
+                gate.StopComposition(() => throw new InvalidOperationException("不能迟到摘链"));
+            });
+            late.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            Assert.Equal(1, destroyed);
+        });
+
+        Test("mpv 生命周期：回调异常仍释放锁，停止状态不会复活", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            Assert.Throws<InvalidOperationException>(() => gate.Run<bool>(() => throw new InvalidOperationException()));
+            Assert.True(Task.Run(() => gate.Run(() => true)).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
+            Assert.Throws<InvalidOperationException>(() => gate.StopComposition(() => throw new InvalidOperationException()));
+            Assert.False(gate.Run(() => true, composition: true));
+            var destroyed = 0;
+            gate.Destroy(() => destroyed++);
+            Assert.Equal(1, destroyed);
         });
     }
 

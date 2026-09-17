@@ -145,10 +145,8 @@ public sealed class MpvSettings
     public MpvBackendKind Backend { get; set; } = MpvBackendKind.BuiltInLibMpv;
 
     /// <summary>
-    /// 内置播放器的渲染管线（小幻影视同款的两档，2026-09-16）：<see cref="VideoPipelineKind.Integrated"/>
-    /// 把画面合成进 XAML 视觉树、与控件混排；<see cref="VideoPipelineKind.Standalone"/> 是 mpv 默认的
-    /// window 模式——mpv 自建并自管一个独立的顶层窗口。只对内置 libmpv 那条后端有意义——外部 mpv.exe
-    /// 本来就在自己的窗口里呈现（<see cref="Backend"/>）。读的是播放开始那一刻的值：设置页改完，下一次播放生效。
+    /// 内置播放器的渲染管线：集成模式将画面合成进 XAML 视觉树；独占模式由 mpv 自建原生窗口，
+    /// 自管 D3D11 交换链，全屏时请求 DXGI 独占。只对内置 libmpv 有效，下一次播放生效。
     /// </summary>
     public VideoPipelineKind Pipeline { get; set; } = VideoPipelineKind.Integrated;
 
@@ -193,30 +191,20 @@ public sealed class MpvSettings
 
 public enum MpvBackendKind
 {
-    /// <summary>In-process libmpv-2.dll; the video renders inside the client window.</summary>
+    /// <summary>In-process libmpv-2.dll; presentation is selected by the video pipeline.</summary>
     BuiltInLibMpv,
 
     /// <summary>The user's own mpv.exe in its own window, controlled over a named pipe.</summary>
     ExternalMpv
 }
 
-/// <summary>
-/// 内置播放器的两条渲染管线（参考小幻影视的「集成模式 / 独立播放」，2026-09-16；独立播放同日改成
-/// mpv 默认 window 模式，wid 嵌入的第一形态当天就退了役）：
-/// <list type="bullet">
-///   <item><b>集成模式</b>：mpv 走 D3D11 composition 输出，交换链经 <c>display-swapchain</c> 挂到
-///   SwapChainPanel 上——画面是 XAML 视觉树里的一层，与控件混排，全屏、小窗、哪个宿主都一样。</item>
-///   <item><b>独立播放</b>：mpv 默认的 window 模式——不设 <c>wid</c>、不设输出档、不喂尺寸，mpv
-///   自建并自管一个独立的顶层窗口，自己量、自己 present。客户端没有一条几何路径要喂，mpv 画在
-///   哪里、开多大，都是它自己的事。</item>
-/// </list>
-/// </summary>
+/// <summary>内置播放器的视频呈现方式。枚举值保持兼容已有设置。</summary>
 public enum VideoPipelineKind
 {
     /// <summary>集成模式：画面合成进 XAML 视觉树，与控件混排。</summary>
     Integrated,
 
-    /// <summary>独立播放：mpv 自建顶层窗口（默认 window 模式），客户端不介入几何。</summary>
+    /// <summary>独占模式：mpv 自管 D3D11 原生窗口交换链，全屏时请求 DXGI 独占。</summary>
     Standalone
 }
 

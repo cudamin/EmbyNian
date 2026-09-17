@@ -412,6 +412,7 @@ public sealed partial class PlayerPage
     internal (bool Ok, string Detail) ProbeAspect()
     {
         if (!Attached || _window is null) return (false, "播放层未接线");
+        if (ViewModel.PlayingNow) return (false, "比例探针不能在真实播放期间运行");
 
         var restore = _window.PictureAspect;
 
@@ -422,6 +423,21 @@ public sealed partial class PlayerPage
         if (!haveOriginal) return (false, "读不到窗口矩形");
 
         var wasFullscreen = _window.Fullscreen;
+
+        if (!ViewModel.PictureInHostWindow)
+        {
+            OnPictureAspectChanged(16d / 9d);
+            OnPictureAspectChanged(0);
+            SetFullscreen(true);
+            SetFullscreen(false);
+            var haveNativeNow = Native.GetWindowRect(_window.Handle, out var nativeNow);
+            var unchanged = haveNativeNow
+                && nativeNow.Left == was.Left && nativeNow.Top == was.Top
+                && nativeNow.Width == was.Width && nativeNow.Height == was.Height
+                && _window.PictureAspect == restore && _window.Fullscreen == wasFullscreen;
+            return (unchanged, "原生管线：比例与全屏请求不改变 WinUI 控制窗口；"
+                + (unchanged ? "几何和状态保持不变" : "控制窗口被误改"));
+        }
 
         // Through the page's own handler rather than by writing the property: the wiring is the subject.
         OnPictureAspectChanged(16d / 9d);

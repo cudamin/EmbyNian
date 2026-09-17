@@ -1,6 +1,30 @@
 # 开发进度
 
-最后更新：2026-09-16
+最后更新：2026-09-17
+
+## 独占模式重构：mpv 原生交换链绕过 WinUI（2026-09-17）
+
+- 保留 `Standalone=1` 的设置兼容性，界面改称「独占模式（mpv 自管交换链）」。mpv 自建顶层窗口、管理尺寸与交换链，视频不进入 WinUI Composition；WinUI 控件仍在独立控制窗口，不声称可覆盖真正独占全屏。
+- 新增 `LibMpvPipelinePolicy`：普通选项后锁定 `vo=gpu-next`、`gpu-api=d3d11`、`gpu-context=d3d11`、`d3d11-output-mode=window`、`d3d11-exclusive-fs=yes`。过滤 `wid`、composition 尺寸与输出冲突，关键选项失败终止启动；解决默认 Vulkan 覆盖 D3D11。集成路径固定 composition、exclusive-fs=no，保留已有 SpriteVisual 实现。
+- 全屏按钮/F 与自动全屏交给实际播放句柄所属窗口；控制窗口不再自动全屏/置顶遮住视频。原生窗口启用 mpv 默认键盘（F 全屏、空格暂停、Q 停止），全局媒体键仍由 Shell 管理，WinUI 光标状态不再写入原生窗口。控制窗口 Esc 读取 mpv 全屏状态，退出全屏或停止，读失败不误停、切集不误操作下一句柄；外部后端保留原 Esc 行为。
+- 新增管线策略及全屏退出回归测试；比例自检对原生路径检查 WinUI 几何保持不变，并拒绝真实播放期间运行。最终 Release 构建零警告零错误、全部单测通过、发布验证通过，正式 `artifacts/publish/win-x64` 已刷新；未换 DLL、未修改用户设置、未提交/推送。
+- 本地隔离原生探针两轮通过：D3D11/window/exclusive-fs 属性读回、position 推进、暂停恢复、640×360→960×540 缩放、2560×1440 全屏往返、停止/释放，surface provider 调用始终为零。记录：`work/standalone-backend-probe/20260917-094914/results.txt`，同目录保存两轮 mpv 日志。
+- 集成回归探针两轮自动断言通过：真实 PlayerPage/CompositionVideoTarget 挂树、缩放尺寸读回、暂停恢复、停止摘树；`work/exclusive-composition-regression.txt`。本次未做像素/完整交互验收，不能将自动断言当作 HDR、画质或 OSD 全部通过。
+- **独占证据边界**：当前固定 DLL 接受 `window` 与 `d3d11-exclusive-fs=yes`，日志出现启用/禁用独占请求；window 模式 `display-swapchain` 读取返回 -10，没有可安全读取 `GetFullscreenState` 的指针。已证明绕过 WinUI 并请求 DXGI 独占，尚未证明驱动实际授予独占，也不保证绕过 DWM。窗口化不等于 DXGI 独占。`LaunchOptions` 仍是规划器请求列表（用于着色器恢复），实际 GPU/管线以 mpv 属性读回及后端日志为准。
+- 最终外壳自检退出码 1，**两项失败**：跨季《伪恋》选集 20 vs 服务端 23；系统光标隐藏腿持续读到箭头。未改这些既有机制或放宽断言。记录 `work/exclusive-selfcheck-final.txt`；构建/单测/发布记录 `work/exclusive-*-final.log`。全程未播放真实 Emby 媒体。
+
+## 集成模式重构：Composition SpriteVisual（2026-09-17）
+
+- 用户指定路线：`d3d11-output-mode=composition`，视频属于 WinUI 3 合成视觉树中的 `SpriteVisual`。已替换 `SwapChainPanel`：空 `VideoHost` → `CompositionVideoTarget` → WinUI 3 `ICompositorSwapChainInterop.CreateCompositionSurfaceForSwapChain` → `ICompositionSurface` → `CompositionSurfaceBrush` → `SpriteVisual`。视频宿主仍是 OSD 前的第一个子元素、不参与命中测试，未新增视频 HWND 或输入转发。
+- 使用当前固定 SDK 自带 `Microsoft.UI.Composition.Interop.h` 核对 ABI：IID `FC084699-67D8-40E1-ADE7-08901D84FFDA`，继承 `ICompositorInterop`，交换链方法在 vtable slot 5；不是 UWP 的同名接口。
+- 布局继续使用 DIP；mpv 输出尺寸改为 `ActualSize × XamlRoot.RasterizationScale` 的物理像素。Visual 自动跟随宿主尺寸，交换链 resize 防抖 100ms，跨 DPI 时重新计算渲染分辨率，无 `SetMatrixTransform` 补偿。
+- 生命周期：借用链指针在跨线程前 AddRef，队列只保留最新请求；摘链、窗口关闭和页面释放清理 brush/visual/COM 引用与 XamlRoot 订阅。后端将刷新、停止和销毁串行，阻止停止后迟到挂链及销毁后访问同步对象。
+- **纠正旧诊断**：`work/probe-composition2.py` 的基础 IDXGISwapChain IID 和 SetMatrixTransform 槽位有误，不能据此认定当前 DLL 是“假交换链”或无法高 DPI 渲染；旧历史报告保留，但不再作为实现依据。DLL 和独立播放分支均未更换。
+- 最终 Release 构建零警告零错误，单测全部通过，发布验证通过（正式 `artifacts/publish/win-x64` 已刷新）。新增尺寸边界和并发生命周期测试。DLL 未改，未提交/推送。
+- 本地视频验证入口 `--probe-composition <绝对本地文件>` 在迁移/登录/DI 前隔离，直接播放 `artifacts/shader-probe/probe1080.mp4`，不走 Emby。两轮起播、改变窗口大小、物理尺寸读回、暂停恢复、停止摘链全部通过；`work/composition-frame-2.5.png`、`composition-frame-5.png`、`composition-frame-9.png` 确认动态图案与时间码更新、视频真实可见、XAML 浮层叠在上面。探针最初被未接 VM 的默认加载遮罩盖住，已在探针中显式收起，不改正式播放状态。
+- 最新探针报告：`C:/Users/89400/AppData/Local/EmbyNian/logs/composition-probe-20260917-012745106-16188/logs/composition-probe.txt`。`work/composition-build-final.log` / `composition-tests-final.log` / `composition-publish.log` 保存门禁输出。
+- 完整外壳自检已运行，**退出码 1，2 项失败**：跨季《伪恋》选集 20 vs 服务端 23（历史同类失败）；画面比例探针无条件按集成模式断言，而当前用户 `Mpv.Pipeline=1`（独立播放），`OnPictureAspectChanged` 正确跳过主窗口整形，导致“16:9 没传到窗口、归零未解除”。这两个不在本次重构范围，没有为了过闸改用户设置或放宽断言。完整记录在 `work/composition-selfcheck.txt`。
+- 验收边界：未测跨不同 DPI 显示器实时拖动、HDR、完整播放器交互及独立管线真实视频；不把物理尺寸单测、挂树或 position 当作这些场景已验证。真实 Emby 播放未用于本次验证。
 
 ## 第二十四报：独立播放改走 mpv 默认 window 模式；401 破案（ytdl 假错误＋多版本回退）；双管线实机自测（2026-09-16 深夜）
 

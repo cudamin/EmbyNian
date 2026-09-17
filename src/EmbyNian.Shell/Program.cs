@@ -18,6 +18,11 @@ public sealed record StartupOptions
 
     public bool DumpUi { get; init; }
 
+    /// <summary>Isolated local-only diagnostic; never creates the shell services or signs in.</summary>
+    public bool ProbeComposition { get; init; }
+
+    public string? ProbeCompositionFile { get; init; }
+
     /// <summary>
     /// 跑测试的时候在第二屏幕跑: which monitor the window opens on. 1-based in the order Windows enumerates
     /// them (<c>--screen 2</c>), <see cref="ScreenPlacement.NotThePrimary"/> for 「any screen but the main
@@ -204,6 +209,15 @@ internal static class Program
 
         var paths = AppPaths.Default;
 
+        // This must precede migration AND the normal instance signal: a malformed probe must
+        // never fall through to the real client, nor activate an already-running Emby session.
+        if (CompositionPlaybackProbe.IsRequested(args))
+        {
+            paths = new AppPaths(Path.Combine(paths.LogDirectory,
+                $"composition-probe-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Environment.ProcessId}"));
+            return Run(args, paths, migratedFrom: null, selfCheck: false);
+        }
+
         // First real statement on purpose: everything below reads settings, and under the old name — or,
         // once this is installed as an MSIX, under the unpackaged build's own folder — they live
         // somewhere else. Never throws, so a failed migration cannot stop startup. The candidate order
@@ -260,6 +274,8 @@ internal static class Program
             StartMaximized = Has(args, "--maximized"),
             SelfCheck = selfCheck,
             DumpUi = Has(args, "--dump-ui"),
+            ProbeComposition = CompositionPlaybackProbe.IsRequested(args),
+            ProbeCompositionFile = Text(args, "--probe-composition"),
             Screen = Number(args, "--screen")
                 ?? (selfCheck ? ScreenPlacement.NotThePrimary : ScreenPlacement.WhereverWindows),
             ShowLibrary = Has(args, "--show-library"),
@@ -300,7 +316,7 @@ internal static class Program
             });
 
             Log.Info(Category, "正常退出");
-            return ShellSelfCheck.ExitCode;
+            return options.ProbeComposition ? CompositionPlaybackProbe.ExitCode : ShellSelfCheck.ExitCode;
         }
         catch (Exception error)
         {

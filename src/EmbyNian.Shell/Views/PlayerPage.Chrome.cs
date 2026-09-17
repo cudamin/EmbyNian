@@ -393,7 +393,7 @@ public sealed partial class PlayerPage
 
         Log.Debug(Category, $"藏匿取样：指针 {spot}，本队列形状 0x{Native.GetCursor():X}，{PointerOwner()}"
             + $"，我们窗口 {rect}，虚拟屏 {desk.Width}x{desk.Height}@{desk.X},{desk.Y}"
-            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
+            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、屏上异形 {_foreignShapes} 拍（连续 {_foreignStreak}、重发布 {_republished}、重问 {_recomputeNudges}）、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
             + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}，末真设备 {witness.LastRealDevice}）" : "缺席（只作取证）")}");
     }
 
@@ -782,7 +782,8 @@ public sealed partial class PlayerPage
         // measurement above used a pointer warped by SetCursorPos, which does not own the cursor the way a hand
         // does — the only reading taken with a real hand on a real film is the log line this writes, so the
         // next report will say which layer is still holding the arrow instead of guessing again.
-        Root.Cursor = hidden ? _window?.BlankInputCursor : null;
+        if (hidden) Root.BeginCursorHide(_window?.BlankInputCursor);
+        else Root.EndCursorHide();
 
         // And the same thing said to libmpv about its own window, which no call of ours can reach: see
         // PlayerViewModel.ShowMpvCursor.
@@ -804,7 +805,16 @@ public sealed partial class PlayerPage
             while ((_cursorCount = Native.ShowCursor(true)) < 0) { }
         }
 
-        if (hidden) _shapeBack = 0;
+        if (hidden)
+        {
+            _shapeBack = 0;
+
+            // 第二十七报的账随每段藏匿重开：这些说的都是「这段藏匿里发生了什么」。
+            _foreignShapes = 0;
+            _foreignStreak = 0;
+            _republished = 0;
+            _recomputeNudges = 0;
+        }
 
         // And say the policy again, without asking the OS for anything. Every 「no cursor」 above is an answer —
         // this queue's shape, the class cursors, mpv's own setting, and above all the transparent
@@ -901,13 +911,58 @@ public sealed partial class PlayerPage
 
         _window?.KeepCursorHidden();
 
-        // And the framework's own lever, said again with the rest of them. This is the assignment that
-        // actually covers a pointer over XAML content, and it is the one WinUI is free to overwrite the next
-        // time it runs its 「who is the pointer over, what shape does he want」 round — so it is the one that
-        // most needs repeating. Guarded on identity: assigning the same value is already a no-op in the
-        // framework's own setter, but the comparison keeps the tick free of a property write it does not need.
-        var blank = _window?.BlankInputCursor;
-        if (!ReferenceEquals(Root.Cursor, blank)) Root.Cursor = blank;
+        Root.KeepCursorHidden(_window?.BlankInputCursor);
+    }
+
+    /// <summary>
+    /// 藏匿期每拍问一次「屏上此刻干净吗」，不干净就一层层把光标夺回来（第二十七报，2026-09-17）。
+    /// <para>
+    /// 两天日志定案的慢性箭头（屏二 AyuGram 收静音群消息，屏一已藏的光标冒头：坐标不动、无真实输入、
+    /// 我们这边全部读数照旧说「藏着」）坏在框架一侧：InputSite 把箭头发布到全局光标后，本线程队列
+    /// 每拍的 <see cref="Nudge"/>（<c>SetCursor</c> + 负计数锁 + 类光标 + <c>Root.KeepCursorHidden</c>）
+    /// 双双失灵——形状不显示在本队列上，且站点不再读我们立的值。这一拍每拍读一次
+    /// <see cref="Native.CursorSnapshot"/>（<c>GetCursorInfo</c>，纯读），把「屏上是谁的形状」对出来。
+    /// </para>
+    /// <para>
+    /// 判「外来」三条全过才算：可见位（<see cref="Native.CurShowing"/>）立着、形状非零、形状不是
+    /// 我们的透明句柄。健康段（系统答 0x00/0x0，或挂着我们自己的 0x2055F）一个数都不动。
+    /// </para>
+    /// <para>
+    /// 夺回分两层：<b>重发布</b>（<see cref="PictureSurface.RepublishCursor"/>，XAML 杠杆整条断开重接
+    /// 加重取源）每拍异形都做，便宜；连续 <see cref="ForeignStreakForRecompute"/> 拍（约 300ms）还
+    /// 收不回来，说明重说的通道本身失灵了，升级<b>重算探针</b>
+    /// （<see cref="HostWindow.NudgeCursorRecompute"/>）——指针处起一扇 4×4、alpha=1/255 的小窗再当拍
+    /// 收走，指针下的窗口变了，win32k 重新走 <c>WM_SETCURSOR</c>，我们的拦截替它答透明。全程无输入
+    /// （不 SendInput、不 SetCursorPos），阈值一个没动。
+    /// </para>
+    /// </summary>
+    private void ChaseForeignCursor()
+    {
+        // 指针不在画面上时，屏上是什么形状都不归我们管：压着别人的窗口，本就该是别人的形状。
+        // 这一问走的是这一拍开头共享的那份读数，不多花一次 GetCursorPos。
+        if (!PointerInside()) return;
+
+        if (Native.CursorSnapshot() is not { } snap) return;
+
+        if ((snap.Flags & Native.CurShowing) == 0) return;
+        if (snap.Shape == IntPtr.Zero || snap.Shape == _window?.BlankCursor) return;
+
+        _foreignShapes++;
+        _foreignStreak++;
+        _republished++;
+
+        Root.RepublishCursor(_window?.BlankInputCursor);
+
+        if (_foreignStreak < ForeignStreakForRecompute || Now - _lastRecomputeAt < RecomputeCooldown) return;
+
+        var shape = snap.Shape;
+
+        if (_window?.NudgeCursorRecompute() == true)
+        {
+            _lastRecomputeAt = Now;
+            _recomputeNudges++;
+            Log.Debug(Category, $"屏上异形 0x{shape:X} 连 {_foreignStreak} 拍、重发布没救回来，指针处起窗重问 WM_SETCURSOR");
+        }
     }
 
     /// <summary>
@@ -1145,6 +1200,10 @@ public sealed partial class PlayerPage
         if (_cursorHidden)
         {
             if (_window?.CursorShapeGone == false) _shapeBack++;
+
+            // 第二十七报（2026-09-17）：屏上挂着外来箭头吗？挂着就一层层夺回来。检测纯读、
+            // 夺回无输入，详见 ChaseForeignCursor。
+            ChaseForeignCursor();
 
             // 第十四报（2026-09-15）：藏匿期每秒记一条「外面此刻什么样」。只读、不改，理由见 SampleHiddenState。
             SampleHiddenState();

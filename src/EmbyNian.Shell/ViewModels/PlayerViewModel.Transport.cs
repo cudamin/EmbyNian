@@ -125,6 +125,7 @@ public sealed partial class PlayerViewModel
             // The player takes over the window immediately rather than after the metadata round trip.
             // There is nothing to look at on the page behind it — the user has already committed — and
             // the cover is a better place to say what is being waited for than a toast over a grid.
+            _pictureInHostWindow = Settings.Mpv.Pipeline != VideoPipelineKind.Standalone;
             EnterPlayer();
             ShowCover(replaceExisting ? "正在切换…" : "正在获取媒体信息…");
 
@@ -517,6 +518,7 @@ public sealed partial class PlayerViewModel
     private void LeavePlayer()
     {
         _playerUp = false;
+        _pictureInHostWindow = null;
         HideCover();
 
         // 遮罩垫底的背景图也是这一场播放的：退场就放下，下一场自己取自己的（2026-09-15）。

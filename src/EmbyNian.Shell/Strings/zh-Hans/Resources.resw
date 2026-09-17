@@ -388,6 +388,11 @@
   <data name="PlayerPage_FontBox.PlaceholderText" xml:space="preserve">
     <value>字幕字体</value>
   </data>
+  <data name="PlayerPage_StandaloneHint.Text" xml:space="preserve">
+    <value>画面由 mpv 独立窗口呈现，不经过 WinUI 合成器。
+全屏按钮控制视频窗口；视频窗口内按 F 切换全屏、空格暂停、Q 停止。
+关闭视频窗口或退出本页即停止播放。</value>
+  </data>
   <data name="PlayerPage_FullscreenButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>全屏或退出全屏</value>
   </data>

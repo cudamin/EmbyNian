@@ -34,19 +34,18 @@ public sealed partial class PlayerViewModel
     /// <summary>播放/暂停, from the transport button, the space bar and a tap on the picture.</summary>
     internal void SetPaused(bool paused) => _ = _playback.SetPropertyAsync("pause", paused);
 
-    /// <summary>
-    /// Whether libmpv should show a cursor over its own window, kept in step with the page's own hiding.
-    /// <para>
-    /// It is here because hiding a cursor is per message queue and one of the windows under a playing film is
-    /// not ours: libmpv builds its own child window on its own thread, and a <c>SetCursor</c> made on the UI
-    /// thread never reaches the screen while the pointer is over that one. mpv has the same setting for its
-    /// own reasons — <c>always</c> is 「never show a cursor」 and <c>no</c> is 「never hide it」 — so the fix is
-    /// to tell the owner rather than to shout louder from here. Costs one property write per transition, two
-    /// a film, and does nothing at all when the standalone <c>mpv.exe</c> backend is playing in its own window.
-    /// </para>
-    /// </summary>
-    internal void ShowMpvCursor(bool visible) =>
+    internal void ToggleNativeFullscreen() => _ = _playback.CommandAsync("cycle", "fullscreen");
+
+    internal void SetNativeFullscreen(bool on) => _ = _playback.SetPropertyAsync("fullscreen", on);
+
+    internal void ExitNativeFullscreenOrStop() => _ = _playback.ExitNativeFullscreenOrStopAsync();
+
+    // Native playback owns its cursor independently of the WinUI control window.
+    internal void ShowMpvCursor(bool visible)
+    {
+        if (!PictureInHostWindow) return;
         _ = _playback.SetPropertyAsync("cursor-autohide", visible ? "no" : "always");
+    }
 
     /// <summary>
     /// 快进/快退 by the 跨度 from settings. Both arrow keys go through here, so the number the settings page

@@ -18,7 +18,8 @@ public sealed class PlaybackBackendFactory(AppSettings settings, ShaderStaging s
     /// picture」. An <b>集成模式</b> member: the choice between the pipelines lives in the backend
     /// now (branched on the settings' <see cref="VideoPipelineKind"/>, 2026-09-16 第二形态), and the
     /// 独立播放 pipeline — mpv's own top-level window — never asks this delegate at all. What comes
-    /// back is the attached page's <c>SwapChainVideoTarget</c>, read afresh for every launch.
+    /// back is the attached page's <c>CompositionVideoTarget</c> (an <c>ICompositionSurface</c>
+    /// drawn by a <c>SpriteVisual</c>), read afresh for every launch.
     /// <para>
     /// This one delegate is the shell's side of the video contract. Core still names no XAML type
     /// and no window class: <see cref="IVideoSurface"/> lives there, the implementation in the

@@ -121,11 +121,9 @@ public sealed partial class PlayerPage : UserControl
     private HostWindow? _window;
 
     /// <summary>
-    /// 集成管线的桥：接进程内播放器的这一页一块面板，一页一块——独立播放窗口跑的是它自己的
-    /// PlayerPage、它自己的面板。建在构造里而非懒建——面板从 InitializeComponent 就存在，
-    /// 只浏览不播放的会话一分钱不花。
+    /// 集成管线的视频 Visual，一页一个；第二播放窗口使用自己的 XAML 合成树。
     /// </summary>
-    private readonly SwapChainVideoTarget _videoTarget;
+    private readonly CompositionVideoTarget _videoTarget;
 
     /// <summary>
     /// The video contract the factory reads for this play — always this page's panel target. It is
@@ -258,6 +256,34 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     private long _hiddenSampleAt;
 
+    // ---- 第二十七报（2026-09-17）的四个数与一个钟 ----
+    // 慢性箭头的修复账：每拍问一次 OS「屏上此刻是什么形状」（GetCursorInfo，纯读），凡是「可见、
+    // 非零、也不是我们的透明句柄」都记为外来形状。计数随显示行与每秒取样行出日志，下一次再有
+    // 「藏了但屏上有箭头」的报告，第一眼就能看到我们是否看见了它、试过哪几层、各试了多少次。
+
+    /// <summary>本段（这次藏匿）发现外来形状的拍数，累计。</summary>
+    private int _foreignShapes;
+
+    /// <summary>连续发现外来形状的拍数。清零条件只有「某一拍屏上干净了」或藏匿结束。连续满
+    /// <see cref="ForeignStreakForRecompute"/> 拍升级重算探针。</summary>
+    private int _foreignStreak;
+
+    /// <summary>本段重发布（<see cref="PictureSurface.RepublishCursor"/>）的次数。</summary>
+    private int _republished;
+
+    /// <summary>本段重算探针（<see cref="HostWindow.NudgeCursorRecompute"/>）的次数。</summary>
+    private int _recomputeNudges;
+
+    /// <summary>上次重算探针的时刻，限频约每秒一次——探针是确定性的窗口变化，但也不该十赫兹地摇。</summary>
+    private long _lastRecomputeAt;
+
+    /// <summary>连续异形几拍后升级重算探针。300ms（三拍）是给重发布留的窗口：日志里健康的
+    /// 重申一两拍内就能看到形状被换回透明，救不回来说明的正是「重申的通道失灵」。</summary>
+    private const int ForeignStreakForRecompute = 3;
+
+    /// <summary>重算探针的最小间隔（毫秒）。失败也照限——失败那一拍多半连着失败，摇十次不如隔一秒摇一次。</summary>
+    private const int RecomputeCooldown = 1000;
+
     /// <summary>
     /// The duration the ticks were laid out against. The marks arrive before mpv has a duration to place
     /// them on, so the drawing has to be retried once it does — and exactly once, not on every status
@@ -309,9 +335,7 @@ public sealed partial class PlayerPage : UserControl
     {
         InitializeComponent();
 
-        // The video surface's native bridge is wired before anything else touches the panel: it
-        // wants the panel's first SizeChanged, which can fire as soon as layout runs.
-        _videoTarget = new SwapChainVideoTarget(VideoPanel);
+        _videoTarget = new CompositionVideoTarget(VideoHost);
 
         // Before anything else that draws: the XAML declares the overlay's brushes empty and this fills
         // them from PlayerPalette. Unpainted they are transparent, not missing — see PlayerPage.Palette.cs.
@@ -494,7 +518,10 @@ public sealed partial class PlayerPage : UserControl
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
         if (_window is not null) _window.FocusChanged -= OnWindowFocusChanged;
         ViewModel?.Shutdown();
+        ReleaseVideoSurface();
     }
+
+    internal void ReleaseVideoSurface() => _videoTarget.Dispose();
 
     /// <summary>
     /// Lets go of the view model without shutting it down, and puts this page back the way
@@ -634,7 +661,7 @@ public sealed partial class PlayerPage : UserControl
         // 置顶的持久化偏好（2026-09-15）：播放接管窗口的这一刻按上次的选择把开关立回去。LeavePlayer 里那句
         // SetPinned(false) 是「还给浏览窗口」，不是「替用户改主意」，所以每次进场都要重新立一次；用户拨开关
         // 时再由 TogglePinByHand 记账。
-        SetPinned(ViewModel.SavedPinTopmost);
+        SetPinned(ViewModel.PictureInHostWindow && ViewModel.SavedPinTopmost);
 
         // Nothing known about the pointer yet, so the first tick's poll seeds it rather than measuring a
         // movement against wherever the cursor happened to be during the last film. Reset covers the other
@@ -720,11 +747,16 @@ public sealed partial class PlayerPage : UserControl
         // 新的播放，所以它也会进一次 —— 这正是「开始播放后自动全屏」的字面意思。用户中途按 F 退出全屏，
         // 下一集开始时会再进一次；要的是「这部片子开始时是全屏」，不是「窗口永远不许退出全屏」。
         //
-        // 独立播放（mpv 默认 window 模式）例外：画面在 mpv 自建的顶层窗口里，那扇窗不在我们手边。
-        // 把自己的窗口全屏置顶，等于拿一块 topmost 面板盖住它 —— 用户看得见播放器，看不见片子。
-        // 适用性判据在 ViewModel（PictureInHostWindow）——独立播放例外：画面在 mpv 自建的
-        // 顶层窗口里，把自己的窗口全屏置顶等于拿一块 topmost 面板盖住它。
-        if (ViewModel.AutoFullscreenOnPlayback && ViewModel.PictureInHostWindow)
+        // 原生管线把全屏请求交给 mpv；控制窗口不能跟着铺满、置顶盖住视频。
+        if (!ViewModel.PictureInHostWindow)
+        {
+            _window!.Fullscreen = false;
+            SetPinned(false);
+        }
+        StandaloneHint.Visibility = ViewModel.PictureInHostWindow
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        if (ViewModel.AutoFullscreenOnPlayback)
             SetFullscreen(true);
 
         // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一

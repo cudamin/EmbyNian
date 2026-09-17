@@ -410,6 +410,10 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         switch (key)
         {
+            case VirtualKey.Escape when ViewModel.NativeWindowPlayback:
+                ViewModel.ExitNativeFullscreenOrStop();
+                return true;
+
             case VirtualKey.Escape when _window!.Fullscreen:
                 ToggleFullscreen();
                 return true;
@@ -574,17 +578,14 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     private void OnToggleFullscreen(object sender, RoutedEventArgs e) => ToggleFullscreen();
 
-    /// <summary>
-    /// 全屏切换. The window's business and no one else's: the glyph is the button's own state, and mpv is
-    /// told nothing at all — the video child fills whatever client area it is given.
-    /// <para>
-    /// Redrawn afterwards rather than left to the resize, because one piece of the chrome now reads the
-    /// window's shape: the thin bottom line is windowed-only, and the reveal rule it otherwise rides on has
-    /// nothing to report when the pointer never moved.
-    /// </para>
-    /// </summary>
+    /// <summary>Fullscreen belongs to the video owner, never to an empty control window.</summary>
     private void ToggleFullscreen()
     {
+        if (!ViewModel.PictureInHostWindow)
+        {
+            ViewModel.ToggleNativeFullscreen();
+            return;
+        }
         if (_window is null) return;
 
         SetFullscreen(!_window.Fullscreen);
@@ -602,6 +603,11 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     internal void SetFullscreen(bool on)
     {
+        if (!ViewModel.PictureInHostWindow)
+        {
+            ViewModel.SetNativeFullscreen(on);
+            return;
+        }
         if (_window is null) return;
 
         _window.Fullscreen = on;

@@ -67,6 +67,8 @@ public sealed class PlaybackService(
 
     public bool IsPlaying => _current is not null;
 
+    public bool? PictureInHostWindow => _current?.PictureInHostWindow;
+
     /// <summary>The last known player state; all defaults when nothing is playing.</summary>
     public PlayerStatus Status => (_current as IPlayerControl)?.Status ?? new PlayerStatus();
 
@@ -393,6 +395,31 @@ public sealed class PlaybackService(
     // The calls below are the live control channel the now-playing bar uses. Every one of them
     // is best-effort: playback may end between the null check and the call, and a handle that
     // is being torn down must not be touched. All failures just leave the UI as it was.
+
+    public async Task ExitNativeFullscreenOrStopAsync()
+    {
+        var handle = _current;
+        if (handle?.PictureInHostWindow != false) return;
+
+        var fullscreen = await GetTextAsync(handle, "fullscreen").ConfigureAwait(false);
+        if (!ReferenceEquals(_current, handle)) return;
+        if (fullscreen == "yes")
+        {
+            await SetPropertyAsync(handle, "fullscreen", false).ConfigureAwait(false);
+            return;
+        }
+
+        // A failed state read must not turn an exit-fullscreen request into a stop.
+        if (fullscreen != "no") return;
+        try
+        {
+            await handle.StopAsync().ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "退出原生播放窗口失败", error);
+        }
+    }
 
     public Task SetPropertyAsync(string name, object? value)
     {

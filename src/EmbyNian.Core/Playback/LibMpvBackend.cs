@@ -8,7 +8,7 @@ namespace EmbyNian.Playback;
 
 /// <summary>
 /// The in-process player: loads <c>libmpv-2.dll</c> and renders per the settings' pipeline — the
-/// integrated composition output onto the shell's panel, or mpv's own top-level window for the
+/// integrated composition output onto the shell's SpriteVisual, or mpv's own top-level window for the
 /// 独立播放 pipeline. It is self-contained: the dll is loaded from an explicit absolute path, and
 /// libmpv is <c>config=no</c> by default, so no mpv.conf, input.conf or script from any mpv
 /// installation is ever read. Everything the player does comes from the settings page by way of
@@ -101,24 +101,11 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
     }
 
     /// <summary>
-    /// Applies everything up to <c>mpv_initialize</c> and hands back the surface the playback will
-    /// render into — null for the 独立播放 pipeline, which has no client-side surface at all. The
-    /// same one <see cref="LibMpvHandle"/> keeps serving for its whole life.
-    /// <para>
-    /// Two pipelines, branched on the settings' <see cref="VideoPipelineKind"/>. 集成模式: the D3D11
-    /// composition output — mpv creates no window of its own, renders into a composition swapchain
-    /// the client attaches to its XAML panel, and the video becomes visual-tree content — same tree
-    /// as the chrome, no airspace, nothing behind the island. 独立播放: mpv's default window mode —
-    /// no <c>wid</c>, no surface, nothing said about the output mode (auto resolves to window
-    /// presentation the moment a window exists): mpv creates and manages its own top-level window,
-    /// measures it, presents it, and the client never touches its geometry. The first shape of this
-    /// pipeline — a child HWND under the island taken over as <c>wid</c> — was retired 2026-09-16:
-    /// a player of its own is an <em>independent</em> window, not a hole behind the browser.
-    /// </para>
-    /// <para>
-    /// gpu-api is pinned to d3d11 either way — both output modes exist only on that backend. A user
-    /// pick from 视频输出 lands later through PlayerOptions and overrides it, which is theirs to do.
-    /// </para>
+    /// Applies the request followed by the pipeline's non-overridable rendering contract.
+    /// Integrated output serves the shell's composition surface; standalone output owns a
+    /// native D3D11 window, with exclusive fullscreen requested when that window goes fullscreen.
+    /// A window by itself is not evidence of exclusive presentation. The selected surface (or
+    /// null) stays with this session even if settings change during playback.
     /// </summary>
     private IVideoSurface? ApplyOptions(IntPtr context, PlaybackRequest request)
     {
@@ -126,49 +113,10 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         // input.conf or ~~/ path from any mpv installation is in play. Everything below, plus the
         // settings page's own options, is the whole of what this player is configured with.
 
-        Set(context, "gpu-api", "d3d11");
-
-        IVideoSurface? surface;
-        if (settings.Pipeline == VideoPipelineKind.Standalone)
-        {
-            // 独立播放：一条渲染语句都没有。不设 wid（那是嵌入，本管线已退休）、不设
-            // d3d11-output-mode——这份 fork 的选项面是 auto|window|composition（上游同选项的第二档
-            // 叫 flipping），档名在两边不一致，pin 错名字等于自找致命错；而 auto 在窗口出现时就是
-            // window 档，缺省已经是独占呈现的那一个——也不喂任何尺寸。mpv 自己建自己的顶层窗口，
-            // 自己量、自己 present，客户端没有一条几何路径要喂。force-window=immediate（下面统一
-            // 设）让窗口在 initialize 时就立起来，而不是等第一帧。
-            Log.Info(Category, "独立播放：mpv 自建顶层窗口（默认 window 模式），客户端不介入几何");
-            surface = null;
-        }
-        else
-        {
-            surface = surfaceProvider();
-            if (surface is null) throw new InvalidOperationException("播放面板尚未就绪");
-
-            // 集成模式：D3D11 composition 输出。mpv creates no window of its own; it renders into a
-            // composition swapchain the client attaches to its XAML panel, and the video becomes
-            // visual-tree content — same tree as the chrome, no airspace, nothing behind the island.
-
-            // Fatal rather than a warning: without it mpv falls back to window mode and opens a window
-            // of its own — a silently different player. The bundled dll has had the option since the
-            // 2025-07 upstream commit; an older one swapped in by hand is exactly what this catches.
-            var modeError = LibMpvNative.mpv_set_option_string(context, "d3d11-output-mode", "composition");
-            if (modeError < 0)
-                throw new InvalidOperationException(
-                    $"内置 {LibraryName} 不支持 d3d11 合成输出（{Describe(modeError)}）。"
-                    + "需要 2025-07 之后的构建；换一份新的 libmpv-2.dll 放回程序目录即可。");
-
-            // Sized by the client in DIPs, and never skipped. 两头都有实证（work/probe-composition2.txt，
-            // 2026-09-16 深夜）：缺省这个选项时 composition vo 起不来，mpv 沿 vo 链回退到 direct3d
-            // （D3D9）——偶发的「初始化失败：invalid parameter」和全黑都从这来；而面板没量到（Collapsed
-            // 下首播、布局还没跑）时 Size 是 (0,0)，所以拿参考实现的下限 1x1 顶着，GeometryChanged 会
-            // 在布局后把真尺寸补上（mpv 接受 init 之后的尺寸变更，链不重建）。尺寸按 DIP 而不是物理
-            // 像素，是因为这份 dll 的 display-swapchain 包装对象不支持 SetMatrixTransform——DIP 在两种
-            // 合成映射模型下都几何正确（实现类的 DPI 段写着全过程）。
-            var (width, height) = surface.Size;
-            if (width <= 0 || height <= 0) Set(context, "d3d11-composition-size", "1x1");
-            else Set(context, "d3d11-composition-size", $"{width}x{height}");
-        }
+        // Snapshot once: settings may change while a session starts. Standalone must never
+        // call the provider, not even to discover that the shell has no usable surface.
+        var pipeline = settings.Pipeline;
+        var surface = SelectSurface(pipeline, surfaceProvider);
 
         // youtube-dl 钩子整个停掉。这里的媒体 URL 只有两种形状——Emby 的直连流和本机文件——ytdl 对
         // 它们没有任何用处，只有代价：每次起播先让 [generic] 提取器去抓一遍网页（两秒的延迟），而且
@@ -177,23 +125,9 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         // 文件没了（404），提示却是 ytdl 的 Unauthorized。关掉之后，失败信息回到 mpv 自己那条诚实的。
         Set(context, "ytdl", "no");
 
-        // The client draws its own player chrome over the video; mpv's on-screen controller
-        // would duplicate it, and its keyboard bindings would act on top of the client's own —
-        // one keypress seeking twice. Input belongs to exactly one of the two, and the client
-        // is the one that can also drive the seek bar, so mpv's input is switched off whole.
-        //
-        // Nothing is said about osc here. The bundled libmpv-2.dll is built without Lua, so the
-        // option does not exist in it at all and setting it only produced a warning on every start;
-        // there is no on-screen controller to switch off, because there is no interpreter to run it.
-        Set(context, "input-default-bindings", "no");
-        Set(context, "input-vo-keyboard", "no");
-        Set(context, "input-media-keys", "no");
-
-        // The vo exists from initialize() rather than from the first decoded frame, whichever
-        // pipeline carries it: a wid embeds from init, and composition has its swapchain ready —
-        // so the client can attach the surface before any frame is due and the panel never flashes
-        // empty on a slow network.
-        Set(context, "force-window", "immediate");
+        // Input ownership and force-window are part of the final pipeline contract below:
+        // native window keys belong to mpv, integrated keys and global media keys to the shell.
+        // No osc option: this DLL has no Lua interpreter and does not expose it.
 
         // Playback ending must not take the player down with it: the client decides when the
         // context goes away, which is what lets it report a final position and, one day, load
@@ -241,11 +175,26 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 
         if (!string.IsNullOrWhiteSpace(request.Title)) Set(context, "force-media-title", request.Title);
 
-        // 视频输出 / 音频输出 settings, and the 着色器配置组 after them.
-        foreach (var (name, value) in request.PlayerOptions) Set(context, name, value);
+        // Ordinary options keep their order; pipeline-critical options are filtered and pinned
+        // AFTER them, so even the default gpu-api=vulkan cannot replace D3D11. Required failures
+        // abort before initialize/loadfile instead of falling back to a different presentation path.
+        foreach (var option in LibMpvPipelinePolicy.Build(pipeline, request.PlayerOptions, surface?.Size ?? default))
+        {
+            var error = LibMpvNative.mpv_set_option_string(context, option.Name, option.Value);
+            option.EnsureAccepted(error);
+            if (error < 0) Log.Warn(Category, $"设置 mpv 选项 {option.Name} 失败：{Describe(error)}");
+        }
 
+        Log.Info(Category, surface is null
+            ? "独立播放：mpv D3D11 原生 window，已请求 d3d11-exclusive-fs=yes（进入全屏时生效，非独占状态证明）；客户端不介入几何"
+            : "集成播放：D3D11 composition，独占全屏关闭，画面由宿主合成");
         return surface;
     }
+
+    internal static IVideoSurface? SelectSurface(VideoPipelineKind pipeline, Func<IVideoSurface?> provider) =>
+        LibMpvPipelinePolicy.RequiresSurface(pipeline)
+            ? provider() ?? throw new InvalidOperationException("播放面板尚未就绪")
+            : null;
 
     private static string FormatSeconds(double value) =>
         Math.Max(0, value).ToString("0.###", CultureInfo.InvariantCulture);
@@ -351,22 +300,23 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     private readonly TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
-    /// Serialises every native call against destruction: <c>mpv_terminate_destroy</c> must never
-    /// run while another thread is inside the same handle, so it happens under this gate and a
-    /// later call sees the destroyed flag and walks away instead of touching freed memory.
+    /// Serialises control/property calls and composition handoff against destruction. The event
+    /// reader is joined separately before destruction; queued callers then see the destroyed
+    /// flag and walk away instead of touching freed memory.
     /// </summary>
-    private readonly SemaphoreSlim _apiGate = new(1, 1);
+    private readonly LibMpvLifetimeGate _apiGate = new();
 
     private Thread? _eventThread;
     private long _lastPositionMs = -1;
     private volatile bool _stopRequested;
     private volatile bool _leaveLoop;
-    private volatile int _destroyed;
 
     /// <summary>Only ever touched by the event thread, then published through <see cref="Status"/>.</summary>
     private PlayerStatus _status = new();
 
     public bool HasControlChannel => true;
+
+    public bool? PictureInHostWindow => surface is not null;
 
     public bool IsPaused => _status.Paused;
 
@@ -592,7 +542,7 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     {
         if (surface is null) return;
 
-        Guard(() =>
+        _apiGate.Run(() =>
         {
             var (width, height) = surface.Size;
             if (width > 0 && height > 0)
@@ -608,8 +558,15 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
             // as "composite nothing", which is the honest answer in both cases.
             surface.AttachSwapChain(error >= 0 && chain != 0 ? new IntPtr(chain) : IntPtr.Zero);
             return true;
-        });
+        }, composition: true);
     }
+
+    private void StopComposition() => _apiGate.StopComposition(() =>
+    {
+        if (surface is null) return;
+        surface.GeometryChanged -= OnGeometryChanged;
+        surface.AttachSwapChain(IntPtr.Zero);
+    });
 
     private void OnGeometryChanged() => _ = Task.Run(RefreshComposition);
 
@@ -755,21 +712,10 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     };
 
     /// <summary>
-    /// Runs one native call under the API gate. Returns null when the handle is already
-    /// destroyed, so callers never touch a freed mpv context.
+    /// Runs one native call under the API gate. Returns the default value when the handle is
+    /// already destroyed, so callers never touch a freed mpv context.
     /// </summary>
-    private T? Guard<T>(Func<T> work)
-    {
-        _apiGate.Wait();
-        try
-        {
-            return _destroyed != 0 ? default : work();
-        }
-        finally
-        {
-            _apiGate.Release();
-        }
-    }
+    private T? Guard<T>(Func<T> work) => _apiGate.Run(work);
 
     private IReadOnlyList<MpvTrack>? ReadTrackList() =>
         LibMpvNodes.Read<IReadOnlyList<MpvTrack>?>(context, "track-list", root =>
@@ -814,6 +760,7 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
 
     private void Finish(PlaybackEndReason reason, int error)
     {
+        StopComposition();
         var message = reason == PlaybackEndReason.Error ? DescribeFailure(error) : null;
         _exit.TrySetResult(new PlaybackExit(reason, LastPosition, error, message));
     }
@@ -835,6 +782,7 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     public async Task StopAsync()
     {
         _stopRequested = true;
+        StopComposition();
         Guard(() =>
         {
             Command("quit");
@@ -858,21 +806,15 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     /// </summary>
     public async ValueTask DisposeAsync()
     {
+        // Serialize detachment with the entire refresh (including its borrowed-pointer handoff).
+        // Already queued geometry work cannot attach again after this boundary. The shell owns
+        // AddRef and stale-dispatch rejection for work it sends to the UI thread.
+        StopComposition();
         Guard(() =>
         {
             if (!_exit.Task.IsCompleted) Command("quit");
             return true;
         });
-
-        // Before the context is destroyed: the surface must not keep compositing a swapchain whose
-        // owner is about to go away. The hop to the UI thread is asynchronous, and doing it here —
-        // while mpv is still alive and the property can no longer produce a new chain — is the
-        // latest point where the order is guaranteed. 独立播放没有 surface，这一步整个不适用。
-        if (surface is not null)
-        {
-            surface.GeometryChanged -= OnGeometryChanged;
-            surface.AttachSwapChain(IntPtr.Zero);
-        }
 
         _leaveLoop = true;
         JoinWorker(TimeSpan.FromSeconds(3));
@@ -881,24 +823,11 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
         // alone on purpose: leaking it is survivable, freeing it under a live reader is not).
         if (_eventThread is not { IsAlive: true }) Destroy();
 
-        _apiGate.Dispose();
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
-    /// <summary>mpv_terminate_destroy is only safe to call once; whoever wins the swap owns it.</summary>
-    private void Destroy()
-    {
-        _apiGate.Wait();
-        try
-        {
-            if (Interlocked.Exchange(ref _destroyed, 1) != 0) return;
-            LibMpvNative.mpv_terminate_destroy(context);
-        }
-        finally
-        {
-            _apiGate.Release();
-        }
-    }
+    /// <summary>mpv_terminate_destroy is only safe to call once, after the event thread exits.</summary>
+    private void Destroy() => _apiGate.Destroy(() => LibMpvNative.mpv_terminate_destroy(context));
 
     private void JoinWorker(TimeSpan timeout)
     {
@@ -948,6 +877,47 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
         finally
         {
             foreach (var pointer in allocations) Marshal.FreeCoTaskMem(pointer);
+        }
+    }
+}
+
+/// <summary>
+/// Synchronous lifetime boundary shared by native calls, composition handoff and teardown.
+/// No disposable semaphore: queued workers may arrive after teardown and must safely do nothing.
+/// Kept separate from native calls so these ordering rules can be tested without loading mpv.
+/// </summary>
+internal sealed class LibMpvLifetimeGate
+{
+    private readonly Lock _sync = new();
+    private bool _compositionStopped;
+    private bool _destroyed;
+
+    internal T? Run<T>(Func<T> work, bool composition = false)
+    {
+        lock (_sync)
+        {
+            return _destroyed || (composition && _compositionStopped) ? default : work();
+        }
+    }
+
+    internal void StopComposition(Action detach)
+    {
+        lock (_sync)
+        {
+            if (_compositionStopped || _destroyed) return;
+            _compositionStopped = true;
+            detach();
+        }
+    }
+
+    internal void Destroy(Action destroy)
+    {
+        lock (_sync)
+        {
+            if (_destroyed) return;
+            _destroyed = true;
+            _compositionStopped = true;
+            destroy();
         }
     }
 }

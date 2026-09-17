@@ -47,7 +47,7 @@ internal interface IWin32KeySink
 ///   <item>An island over a sibling child HWND composites correctly on 1.8: opaque XAML paints over
 ///   the child, unpainted XAML reveals it, and a semi-transparent brush alpha-blends against it
 ///   exactly. The island's transparency is what a browsing page's opaque background rides on. The
-///   video rides the 集成模式 pipeline (2026-09-16): a SwapChainPanel in the tree fed by mpv's D3D11
+///   video rides the 集成模式 pipeline (2026-09-16): a SpriteVisual in the tree fed by mpv's D3D11
 ///   composition swapchain — no render API and no ANGLE. The 独立播放 pipeline (mpv's own top-level
 ///   window) does not live in this window at all; the wid child-HWND shape it briefly had did, and
 ///   that is what this fact once carried.</item>
@@ -167,6 +167,12 @@ internal sealed class HostWindow : IDisposable
     private InputCursor? _blankInput;
 
     private bool _blankInputTried;
+
+    /// <summary>
+    /// 重算光标的探针窗（第二十七报，2026-09-17），藏匿期检测到外来箭头且重发布救不回来时才建。
+    /// 懒创建：大多数片子从头到尾用不上它，一个窗口句柄也不该为它们存在。见 <see cref="CursorRecomputeNudge"/>。
+    /// </summary>
+    private CursorRecomputeNudge? _recomputeNudge;
 
     /// <summary>
     /// 键盘兜底（2026-09-15「新增esc退出全屏 按空格开始播放」）的三件：线程钩子句柄、钩子过程自己的
@@ -559,6 +565,26 @@ internal sealed class HostWindow : IDisposable
         BlankClassCursors();
     }
 
+    /// <summary>
+    /// 无输入地重问一次「指针下该是什么形状」（第二十七报，2026-09-17）。调用方（播放页的检测，
+    /// <c>ChaseForeignCursor</c>）已经确认屏上挂着外来箭头、XAML 杠杆的重发布连续几拍都没能收回来；
+    /// 这里把 <see cref="CursorRecomputeNudge"/> 那扇小窗在指针处显出来再收走，迫使 win32k 重新走
+    /// 一遍 <c>WM_SETCURSOR</c>——应答里的 <c>SetCursor</c> 是唯一被信任的无输入改形路径。
+    /// <para>
+    /// 频率不在这里限：调用方带着「连续几拍」与「至少一秒」两道闸。这里只守一个前提——只在藏匿期
+    /// 动手，探针不该在任何光标本该显示的时刻出现。
+    /// </para>
+    /// </summary>
+    internal bool NudgeCursorRecompute()
+    {
+        if (!_cursorHidden) return false;
+
+        _recomputeNudge ??= new CursorRecomputeNudge(this);
+
+        // 探针起在指针此刻的位置：重算要问的就是「指针下」。
+        return Native.GetCursorPos(out var at) && _recomputeNudge.Poke(at);
+    }
+
     /// <summary>Whether content is currently extended into a custom non-client title bar.</summary>
     public bool UsesCustomTitleBar => _nonClient is not null;
 
@@ -764,7 +790,7 @@ internal sealed class HostWindow : IDisposable
     /// island surface, and running the backdrop sampler under a full-bleed picture is spend with no
     /// audience) and back on again afterwards.
     /// <para>
-    /// 两条管线在这里共用一个开关。集成模式：画面在播放页的视觉树里——SwapChainPanel 合成 mpv 的
+    /// 两条管线在这里共用一个开关。集成模式：画面在播放页的视觉树里——SpriteVisual 合成 mpv 的
     /// D3D11 交换链——这里什么也不显不藏，只是省掉垫在下面的背景采样。独立播放：画面在 mpv 自己的
     /// 顶层窗口里，这个开关对它 nothing to say——但播放态把岛面垫黑仍是该有的样子（岛面上只剩播放器
     /// 的 chrome），所以照旧共用。
@@ -782,7 +808,7 @@ internal sealed class HostWindow : IDisposable
     /// style bits and frame rect it took away.
     /// <para>
     /// The window is never recreated, which is the whole reason to do it by hand rather than through
-    /// <c>AppWindow.SetPresenter</c>: recreating it would destroy the XAML island and the SwapChainPanel
+    /// <c>AppWindow.SetPresenter</c>: recreating it would destroy the XAML island and the SpriteVisual
     /// with it, forcing the playback off the panel mid-file. As it is, going fullscreen is one
     /// style change and one <c>SetWindowPos</c>, and the picture never even blinks.
     /// </para>
@@ -2454,7 +2480,7 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// 集成播放的画面去处是播放页自己的 SwapChainPanel（<c>SwapChainVideoTarget</c>）， HostWindow 对它
+    /// 集成播放的画面去处是播放页自己的 SpriteVisual（<c>CompositionVideoTarget</c>）， HostWindow 对它
     /// 无所事事。独立播放同样不经过这里（2026-09-16 第二形态）：那是 mpv 自己的顶层窗口，自建自管，
     /// 岛下不再垫任何子窗口。
     /// </summary>
@@ -2716,6 +2742,10 @@ internal sealed class HostWindow : IDisposable
 
         // 兜底那一摘：正常销毁走 WM_DESTROY 已经摘过（幂等，句柄归零即无事可做）。
         UninstallKeyboardFallback();
+
+        // 第二十七报：重算探针若已建起，一并收走（窗口、字典、句柄）。
+        _recomputeNudge?.Dispose();
+        _recomputeNudge = null;
 
         // Unmark before the window goes, so a shutdown from fullscreen cannot leave the shell holding a
         // dead hwnd as the reason the taskbar is standing aside.

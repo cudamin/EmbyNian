@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   The player's on-screen controls, drawn over the video surface in this same visual tree: the
-  picture is the grid's first child (a SwapChainPanel carrying mpv's D3D11 composition swapchain),
+  picture is the grid's first child (a SpriteVisual carrying mpv's D3D11 composition swapchain),
   and every overlay after it sits above it by tree order. The pane and the header must not stay on
   screen behind a film, so this is a sibling of the navigation shell rather than a page in its
   frame. It replaces five WinForms classes that between them ran to some three and a half thousand
@@ -219,38 +219,23 @@
             <MenuFlyout x:Name="PictureMenu" Opening="OnPictureMenuOpening" />
         </local:PictureSurface.ContextFlyout>
 
-        <!-- ================= 视频面 =================
-             The picture itself, back inside the visual tree — on the 集成模式 pipeline (2026-09-16 双管线,
-             小幻影视同款两档). libmpv runs in D3D11 composition mode (d3d11-output-mode=composition):
-             it renders into a swapchain of its own and hands the pointer over through the
-             display-swapchain property, and SwapChainVideoTarget attaches it here — so the video is
-             this grid's first child, below every overlay, instead of a sibling HWND behind the island.
-             No wid, no z-order sandwich, and the resize accounting that went with them.
-
-             独立播放（引擎设置的另一档，2026-09-17 按用户窗口模型改判）不走这里：mpv 默认 window 模式，
-             自建顶层窗口自己 present，客户端零渲染语句——这块面板便始终空着。空面板不合成任何东西，
-             透明处露出的是黑舞台；下面那块 StandaloneHint 说明牌就是给这一档的（黑着不说话会被当成
-             坏了）。两条管线共用同一棵 chrome 树。
-
-             First child on purpose: everything after this draws over the picture, in tree order,
-             and the handover cover at the bottom of the file therefore still wins every race.
-
-             IsHitTestVisible=False keeps the pointer's world exactly as it was when the video was a
-             window: every event lands on Root and the chrome above it, so the reveal rule, the
-             right-click menu and the cursor-hiding arrangements read the same input they always
-             did. -->
-        <SwapChainPanel x:Name="VideoPanel" IsHitTestVisible="False" />
+        <!-- 视频宿主必须是第一个空子元素：其 SpriteVisual 画在宿主内容之上、后续 XAML OSD 之下。
+             composition 交换链经 ICompositionSurface / CompositionSurfaceBrush 进入同一合成树。
+             不创建视频 HWND，不接管焦点；输入仍由 Root 和上层控件处理。
+             独立管线由 mpv 自建窗口，这个宿主保持为空。 -->
+        <Grid x:Name="VideoHost" IsHitTestVisible="False" />
 
         <!-- ================= 独立播放说明牌 =================
              画面不在这一页时替黑舞台说一句话。同样 IsHitTestVisible=False：光标战争读「指针上的部件」，
              说明牌必须当不存在。默认收起，EnterPlayer 按管线档位放行。 -->
         <TextBlock x:Name="StandaloneHint"
+                   x:Uid="PlayerPage_StandaloneHint"
                    IsHitTestVisible="False"
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   FontSize="16"
-                   Visibility="Collapsed"
-                   Text="画面正在 mpv 独立窗口播放；退出本页即停止" />
+                   Style="{StaticResource BodyTextBlockStyle}"
+                   Margin="24" TextWrapping="Wrap" TextAlignment="Center"
+                   Visibility="Collapsed" />
 
         <!-- ================= 顶部：标题与窗口操作 =================
              The three window commands are the last column rather than a separate overlay of the shell's,
