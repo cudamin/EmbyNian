@@ -6,11 +6,16 @@ telegram 发布频道：https://t.me/EmbyNian
 
 ![主页](docs/screenshots/home.jpg)
 
+## 设计参考
+
+- UI 界面参考 **Emby 小秘** 设计。
+- 播放器架构参考 [**mpv-winui-player**](https://github.com/ikas-mc/mpv-winui-player) 和 **小幻影视** 设计。
+- 播放器控件、着色器与 mpv 相关设置参考 [**mpv-config**](https://github.com/dyphire/mpv-config)
+- 内置 [**mpv-winbuild**](https://github.com/dyphire/mpv-winbuild/releases/tag/mpv_own-2026-08-31)
+
 ## 主要功能
 
 **播放器** — 内置 libmpv。内置播放控件支持进度、音量、字幕、音轨、章节、倍速、全屏、窗口置顶。支持自动跳过片头片尾。
-
-![播放器](docs/screenshots/player.jpg)
 
 **画质** — 着色器随程序打包（ArtCNN、ravu、CfL、SSimDownscaler 等），按放大倍数分四档 × 真人/动画 × 显卡档，每一档都做色度重建。自动按 Emby 的类型和标签识别动画片；DVD 那一代的老片源自动加去色带和降噪；超过 30 fps 自动让出 CNN 放大器保帧率。
 
@@ -21,8 +26,6 @@ telegram 发布频道：https://t.me/EmbyNian
 **浏览** — 主页顶部是轮播大图，下面几排可以拖动排序、取消勾选就不显示，每排的标题能点进对应的媒体库。媒体库支持排序和筛选。详情页带简介、演员和媒体信息。收藏、已看、改元数据、换封面、下载到设备都能在客户端里做。
 
 ![详情页](docs/screenshots/detail.jpg)
-
-![媒体库](docs/screenshots/library.jpg)
 
 **界面** — 五套深色配色（墨绿、纯黑、午夜、石墨、紫夜），点一下立即生效。窗口拉窄时版式自己换成紧凑布局。支持键盘、鼠标、触摸。
 
