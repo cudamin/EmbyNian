@@ -707,8 +707,15 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>
     /// Whether playback should open in a window of its own. Only meaningful on the built-in backend: an
     /// external mpv.exe already opens its own window, and this client does not place it.
+    /// <para>
+    /// 独立播放管线<b>天然就是这一路</b>（2026-09-17 用户：「播放行为跟这个功能融合」）：画面在 mpv 自建的
+    /// 顶层窗口里，主窗口留在原页不动，控制跟到独立窗口去——那份 libmpv 没编 Lua，mpv 的窗口里不可能有
+    /// 自己的屏幕控件，控制面只能是我们的播放页，而它不该叠在主窗口上挡浏览。关 mpv 的窗口＝停止
+    /// （quit → shutdown → UserQuit），关独立窗口也是停止，两头都收在 <c>ShellPage</c> 的既有对账里。
+    /// </para>
     /// </summary>
-    internal bool SeparateWindowPlayback => Settings.Playback.SeparateWindowPlayback && Embedded;
+    internal bool SeparateWindowPlayback =>
+        (Settings.Playback.SeparateWindowPlayback || !PictureInHostWindow) && Embedded;
 
     // 渲染管线不再经过这里：它只被 PlayerPage.VideoSurface 的分流读过，而那条分流随 wid 路退休了
     // （2026-09-16 第二形态）——管线现在只在 LibMpvBackend 内部按 settings.Pipeline 分流，页面与

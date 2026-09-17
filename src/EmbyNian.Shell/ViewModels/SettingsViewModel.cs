@@ -406,8 +406,9 @@ public sealed partial class SettingsViewModel : PageViewModel
             // 起播那一刻的值，改完下一次播放生效。
             Choice("渲染管线", Pipelines, () => Settings.Mpv.Pipeline, value => Settings.Mpv.Pipeline = value,
                 "集成模式与控件混排，适合一般观看与小窗；独立播放由 mpv 自建独立窗口呈现，适合高分辨率"
-                    + "高帧率——画面在 mpv 的窗口里，播放页只留控制与说明，开播自动全屏和窗口比例整形也"
-                    + "随之停用。只对内置 libmpv 有效，下一次播放生效。"),
+                    + "高帧率——画面弹出到 mpv 的窗口，主窗口留在原页，控制跟独立播放窗口走（同「用独立窗口"
+                    + "播放」：关掉那个窗口或 mpv 的窗口都是停止）。本窗口的开播自动全屏与比例整形随之停用。"
+                    + "只对内置 libmpv 有效，下一次播放生效。"),
 
             // 这句说明是这一行存在的第二个理由，而且它是安全性的一句实话，不是介绍。外部 mpv.exe 那条路把
             // X-Emby-Token 写在 --http-header-fields-append= 上，也就是写在另一个进程的命令行上 —— 任务管理器、
@@ -447,7 +448,7 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             Toggle("用独立窗口播放", "开着的时候点击播放会新开一个窗口放片子，主窗口留在原来那一页不动"
                 + "（可以一边挂着片子一边继续翻库）。关掉那个窗口就是停止播放。只有内置播放器认这个开关，"
-                + "用外部 mpv.exe 时它本来自己开窗",
+                + "用外部 mpv.exe 时它本来自己开窗；「渲染管线」选独立播放时天然就是这一路，不用拨这个开关",
                 () => playback.SeparateWindowPlayback, value => playback.SeparateWindowPlayback = value),
             Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
                 "放到这个百分比以上，这一条就算看过"),
