@@ -406,7 +406,8 @@ public sealed partial class SettingsViewModel : PageViewModel
             // 起播那一刻的值，改完下一次播放生效。
             Choice("渲染管线", Pipelines, () => Settings.Mpv.Pipeline, value => Settings.Mpv.Pipeline = value,
                 "集成模式与控件混排，适合一般观看与小窗；独立播放由 mpv 自建独立窗口呈现，适合高分辨率"
-                    + "高帧率。只对内置 libmpv 有效，下一次播放生效。"),
+                    + "高帧率——画面在 mpv 的窗口里，播放页只留控制与说明，开播自动全屏和窗口比例整形也"
+                    + "随之停用。只对内置 libmpv 有效，下一次播放生效。"),
 
             // 这句说明是这一行存在的第二个理由，而且它是安全性的一句实话，不是介绍。外部 mpv.exe 那条路把
             // X-Emby-Token 写在 --http-header-fields-append= 上，也就是写在另一个进程的命令行上 —— 任务管理器、

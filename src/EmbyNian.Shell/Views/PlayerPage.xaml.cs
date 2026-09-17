@@ -600,6 +600,12 @@ public sealed partial class PlayerPage : UserControl
 
         if (ViewModel.Embedded) _window.VideoVisible = true;
 
+        // 独立播放的画面在 mpv 自建的顶层窗口里，这一页的黑舞台需要一句说明（管线档位下一次播放才
+        // 生效，进场时读一次就够）。
+        StandaloneHint.Visibility = ViewModel.PictureInHostWindow
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
         // 播放接管窗口的这段时间不设最小尺寸（HostWindow.FreeSizing）：「取消播放页面窗口缩小的最小尺寸
         // 限制，允许窗口继续自由缩小」。退出播放由 LeavePlayer 关回去，浏览下限 600×560 原样恢复。
         _window.FreeSizing = true;
@@ -716,8 +722,9 @@ public sealed partial class PlayerPage : UserControl
         //
         // 独立播放（mpv 默认 window 模式）例外：画面在 mpv 自建的顶层窗口里，那扇窗不在我们手边。
         // 把自己的窗口全屏置顶，等于拿一块 topmost 面板盖住它 —— 用户看得见播放器，看不见片子。
-        // 适用性判据在 ViewModel（AutoFullscreenApplicable）。
-        if (ViewModel.AutoFullscreenOnPlayback && ViewModel.AutoFullscreenApplicable)
+        // 适用性判据在 ViewModel（PictureInHostWindow）——独立播放例外：画面在 mpv 自建的
+        // 顶层窗口里，把自己的窗口全屏置顶等于拿一块 topmost 面板盖住它。
+        if (ViewModel.AutoFullscreenOnPlayback && ViewModel.PictureInHostWindow)
             SetFullscreen(true);
 
         // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一
@@ -862,6 +869,11 @@ public sealed partial class PlayerPage : UserControl
     private void OnPictureAspectChanged(double aspect)
     {
         if (_window is null) return;
+
+        // 独立播放：画面在 mpv 自建的顶层窗口里，本窗口的形状跟它没有关系 —— 比例锁与一次性整形
+        // 都只在「画面在本窗口」时有意义，否则就是把一块没有画面的窗口掰成片子的宽高比
+        // （实机实录 2026-09-17：1515x851 被掰成 1515x629，用户对着黑窗问「这是什么情况」）。
+        if (!ViewModel.PictureInHostWindow) return;
 
         _window.PictureAspect = aspect;
         if (aspect > 0) _window.FitToPicture();
