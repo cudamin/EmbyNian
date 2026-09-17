@@ -682,7 +682,14 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// </summary>
     internal IReadOnlyDictionary<string, string> ShortcutBindings => Settings.Shortcuts.Bindings;
 
-    /// <summary>Whether mpv is drawing into our own window rather than one of its own.</summary>
+    /// <summary>
+    /// 内置 libmpv 会话（进程内、可逐项钉选项），与外部 mpv.exe（named pipe 遥控）相对。
+    /// <para>
+    /// 这是<b>后端维度</b>的判据，只回答「这次播放是谁在跑」，不回答「画面画在哪」——后者归
+    /// <see cref="PictureInHostWindow"/>。内置后端可以走集成管线（画面在本窗口）也可以走独立
+    /// 管线（画面在 mpv 自建窗口），拿这一位当画面位置用，两头都会答错。
+    /// </para>
+    /// </summary>
     internal bool Embedded => Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv;
 
     /// <summary>
@@ -697,14 +704,26 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// </summary>
     internal bool AutoFullscreenOnPlayback => Settings.Playback.AutoFullscreenOnPlayback;
 
+    /// <summary>
+    /// 播放中、后端已明确表态「画面在宿主窗口外」的那一刻才为真 —— 全屏键交给 mpv（Esc 先退
+    /// mpv 的全屏）的唯一判据。未开播或后端不表态时它是 false：还没有画面，谈不上「画面在外面」。
+    /// </summary>
     internal bool NativeWindowPlayback => _playback.PictureInHostWindow == false;
 
-    private bool? _pictureInHostWindow;
-
-    /// <summary>The active handle owns presentation; settings only describe the next playback.</summary>
+    /// <summary>
+    /// 画面画在哪 —— 两条管线的唯一事实源。真＝画面合成进本窗口的视觉树（集成管线）；假＝画面在
+    /// mpv 自建的顶层窗口里（独立管线，或外部 mpv.exe 后端）。
+    /// <para>
+    /// 活着的会话说了算（<see cref="IPlaybackBackend.PictureInHostWindow"/>，后端各自表态）；还没有
+    /// 会话时按设置推算本次的归属：内置后端才吃管线档位（集成→本窗口、独立→mpv 窗口），外部后端
+    /// 的画面永远在它自己的窗口里，与档位无关 —— <see cref="Playback.MpvProcessBackend.PictureInHostWindow"/>
+    /// 也是这么表态的，两头说的是同一句话。曾经还有一个手工缓存在开播前写、退出时清，是这条公式
+    /// 的手抄副本：两处写法已经在「外部后端该答什么」上分了歧，2026-09-17 删掉，只留这一条。
+    /// </para>
+    /// </summary>
     internal bool PictureInHostWindow => _playback.PictureInHostWindow
-        ?? _pictureInHostWindow
-        ?? Settings.Mpv.Pipeline != VideoPipelineKind.Standalone;
+        ?? (Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv
+            && Settings.Mpv.Pipeline != VideoPipelineKind.Standalone);
 
     /// <summary>
     /// Whether playback should open in a window of its own. Only meaningful on the built-in backend: an

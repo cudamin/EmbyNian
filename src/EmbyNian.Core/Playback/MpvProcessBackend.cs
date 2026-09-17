@@ -92,6 +92,13 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
 
     public bool HasControlChannel => _ipc is not null;
 
+    /// <summary>
+    /// 外部 mpv.exe 的画面永远在它自己的顶层窗口里（<see cref="Mpv.MpvArgumentBuilder"/> 从不传
+    /// wid，也没有任何嵌入参数），与渲染管线档位无关 —— 这里直接表态，不再让上层回退到
+    /// 「管线设置」去猜：管线档位描述的是内置 libmpv 怎么出画面，对外部后端什么也没说。
+    /// </summary>
+    public bool? PictureInHostWindow => false;
+
     public bool IsPaused => _status.Paused;
 
     public PlayerStatus Status => _status;

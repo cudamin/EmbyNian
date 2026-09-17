@@ -125,7 +125,9 @@ public sealed partial class PlayerViewModel
             // The player takes over the window immediately rather than after the metadata round trip.
             // There is nothing to look at on the page behind it — the user has already committed — and
             // the cover is a better place to say what is being waited for than a toast over a grid.
-            _pictureInHostWindow = Settings.Mpv.Pipeline != VideoPipelineKind.Standalone;
+            // 画面位置（说明牌、置顶这些进场预设读的那一位）不再在这里预写缓存：<see cref="PictureInHostWindow"/>
+            // 没有会话时按设置推算，公式本身就是「本次播放的意图」——这里曾有的手工缓存是它的手抄副本，
+            // 且在「外部 mpv.exe 后端」上与后端的表态相互矛盾（2026-09-17 判据归一时删）。
             EnterPlayer();
             ShowCover(replaceExisting ? "正在切换…" : "正在获取媒体信息…");
 
@@ -518,7 +520,6 @@ public sealed partial class PlayerViewModel
     private void LeavePlayer()
     {
         _playerUp = false;
-        _pictureInHostWindow = null;
         HideCover();
 
         // 遮罩垫底的背景图也是这一场播放的：退场就放下，下一场自己取自己的（2026-09-15）。

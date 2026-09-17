@@ -310,6 +310,8 @@ public sealed partial class PlayerPage
             + $"，指针{(_chrome.PointerGone ? "不在画面内" : "在画面内")}"
             + $"，hold={_chrome.HoldChrome}/keep={_chrome.KeepChrome}"
             + $"，空闲 {_chrome.IdleAgo(Now)}/{ChromeReveal.CursorIdleMilliseconds}ms"
+            + $"，前台={(_window is null ? "无窗口" : Native.GetForegroundWindow() == _window.Handle ? "是" : "否")}"
+            + $"，焦点位={_chrome.WindowFocused}"
             + $"，指针上的部件={_pointerOn}"
             + $"，指针={(_cursorAtKnown ? $"{_cursorAt.X},{_cursorAt.Y}" : "读不到")}"
             + $"，按住鼠标={Native.MouseButtonDown()}"
@@ -393,7 +395,7 @@ public sealed partial class PlayerPage
 
         Log.Debug(Category, $"藏匿取样：指针 {spot}，本队列形状 0x{Native.GetCursor():X}，{PointerOwner()}"
             + $"，我们窗口 {rect}，虚拟屏 {desk.Width}x{desk.Height}@{desk.X},{desk.Y}"
-            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、屏上异形 {_foreignShapes} 拍（连续 {_foreignStreak}、重发布 {_republished}、重问 {_recomputeNudges}）、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
+            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、屏上异形 {_foreignShapes} 拍（连续 {_foreignStreak}、重发布 {_republished}、1px 往返 {_foreignPokes}）、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
             + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}，末真设备 {witness.LastRealDevice}）" : "缺席（只作取证）")}");
     }
 
@@ -813,7 +815,7 @@ public sealed partial class PlayerPage
             _foreignShapes = 0;
             _foreignStreak = 0;
             _republished = 0;
-            _recomputeNudges = 0;
+            _foreignPokes = 0;
         }
 
         // And say the policy again, without asking the OS for anything. Every 「no cursor」 above is an answer —
@@ -929,11 +931,12 @@ public sealed partial class PlayerPage
     /// </para>
     /// <para>
     /// 夺回分两层：<b>重发布</b>（<see cref="PictureSurface.RepublishCursor"/>，XAML 杠杆整条断开重接
-    /// 加重取源）每拍异形都做，便宜；连续 <see cref="ForeignStreakForRecompute"/> 拍（约 300ms）还
-    /// 收不回来，说明重说的通道本身失灵了，升级<b>重算探针</b>
-    /// （<see cref="HostWindow.NudgeCursorRecompute"/>）——指针处起一扇 4×4、alpha=1/255 的小窗再当拍
-    /// 收走，指针下的窗口变了，win32k 重新走 <c>WM_SETCURSOR</c>，我们的拦截替它答透明。全程无输入
-    /// （不 SendInput、不 SetCursorPos），阈值一个没动。
+    /// 加重取源）每拍异形都做，便宜；连续 <see cref="ForeignStreakForPoke"/> 拍（约 300ms）还
+    /// 收不回来，说明重说的通道本身失灵了，升级<b>指针处 1px 往返</b>（<see cref="PokeForeignCursor"/>）
+    /// ——一记净位移为零的真实指针输入，win32k 重走 WM_SETCURSOR、框架站点重发布 ProtectedCursor，
+    /// 两条链同时被点亮。全程限频 1s。计数字段 _foreignShapes/_foreignStreak/_republished/_foreignPokes
+    /// 随显行与取样行出日志。二十七报曾在这升级一扇重算小窗（无输入造「指针下窗口变了」），真机连九十一
+    /// 拍没救回来——窗口变化触发的重算不走 WM_SETCURSOR 询问链，退役（第二十九报）。
     /// </para>
     /// </summary>
     private void ChaseForeignCursor()
@@ -953,16 +956,46 @@ public sealed partial class PlayerPage
 
         Root.RepublishCursor(_window?.BlankInputCursor);
 
-        if (_foreignStreak < ForeignStreakForRecompute || Now - _lastRecomputeAt < RecomputeCooldown) return;
+        if (_foreignStreak < ForeignStreakForPoke || Now - _lastPokeAt < PokeCooldown) return;
 
         var shape = snap.Shape;
 
-        if (_window?.NudgeCursorRecompute() == true)
+        if (PokeForeignCursor(snap.At))
         {
-            _lastRecomputeAt = Now;
-            _recomputeNudges++;
-            Log.Debug(Category, $"屏上异形 0x{shape:X} 连 {_foreignStreak} 拍、重发布没救回来，指针处起窗重问 WM_SETCURSOR");
+            _lastPokeAt = Now;
+            _foreignPokes++;
+            Log.Debug(Category, $"屏上异形 0x{shape:X} 连 {_foreignStreak} 拍、重发布没救回来，指针处 1px 往返逼重发布");
         }
+    }
+
+    /// <summary>
+    /// 指针处一记 1px 往返（第二十九报，2026-09-17）：<see cref="Native.SetCursorPos"/> 出去一像素、当拍
+    /// 收回——净位移为零的一记真实指针输入。
+    /// <para>
+    /// 二十七报的两层无输入夺回（XAML 重发布、重算探针小窗）在真机上连九十一拍全败，而那段日志同时把
+    /// 机理说清了：队列上挂着我们的透明句柄、屏上却是系统箭头 0x10003——全局光标由框架输入站点绕过本线程
+    /// 队列直接持有，本线程的一切改形杠杆（SetCursor、负计数锁、类光标、ProtectedCursor）都够不着它；
+    /// 站点只在指针事件时重发布。能让它重发布的按钮只有一个：<b>真实指针输入</b>。一记一像素的往返就是
+    /// 那个按钮——win32k 重新走 WM_SETCURSOR（我们的拦截答透明），站点收到指针事件重新发布
+    /// ProtectedCursor（读到的也是透明），两条链同时被点亮。用户那一下点击之所以总能救回来，走的就是
+    /// 同一条路。
+    /// </para>
+    /// <para>
+    /// 与第九报定罪的「注入 ±1px」不同处有二。其一，那里是十赫兹每拍注入、且当时 ProtectedCursor 还没
+    /// 立住，重发布会把箭头合法化——每 1.15 秒闪一轮；这里只在异形连续几拍、重发布确认失灵后一秒一次，
+    /// 而透明句柄稳稳立着（12:29 那段日志的「框架光标＝透明」），重发布读到的就是它。其二，往返净位移为
+    /// 零：藏匿期两条唤醒路都够不着这一记——轮询那路的 <see cref="ChromeReveal.HandStep"/> 要切比雪夫
+    /// 超过 5px，事件那路在藏匿期只报位置、不算移动（OnPointerMoved 的藏匿期分支）。SetCursorPos 不产生
+    /// WM_INPUT（十六报实证），取证账本不动。
+    /// </para>
+    /// </summary>
+    private bool PokeForeignCursor(NativePoint at)
+    {
+        // 靠屏幕边的那一侧挪出去会被系统钳住（位置没动、重算就不发生）：离哪边远就往哪边挪。
+        var desk = Native.VirtualScreen();
+        var dx = at.X - desk.X >= desk.X + desk.Width - at.X ? -1 : 1;
+
+        return Native.SetCursorPos(at.X + dx, at.Y) && Native.SetCursorPos(at.X, at.Y);
     }
 
     /// <summary>
@@ -1073,32 +1106,6 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 窗口焦点位的那一拍 —— mpv.net 的 <c>ActiveForm == this</c> 与 <c>OnLostFocus → ShowCursor</c>
-    /// 两问合在这里回答（2026-09-16 照搬）。
-    /// <para>
-    /// 焦点位本身喂给 <see cref="ChromeReveal.WindowFocused"/>：假着的时候 <c>Settle</c> 永远不藏，
-    /// 「未激活不藏」就是这一句。从真翻假的那一拍，本来藏着的 hide 条件当场失效——推一拍
-    /// <c>Tick</c>，<c>Render</c> 把藏着的光标掀开，「失焦显示」就是这一条路，没有第二份抄写的
-    /// 藏匿判据。翻回真不必掀什么：前台回来了，空闲钟离到期还远，下一拍自己结算。
-    /// </para>
-    /// <para>
-    /// 页未接线时只记位不推拍——位是页的状态，推拍是页的动作，接线后自会生效。
-    /// </para>
-    /// </summary>
-    private void OnWindowFocusChanged(bool focused)
-    {
-        if (_chrome.WindowFocused == focused) return;
-
-        _chrome.WindowFocused = focused;
-
-        if (!Attached) return;
-
-        // 失焦那一拍挂名：显示行要能说出是谁掀的。
-        if (!focused && _cursorHidden) _woke = "窗口失去焦点";
-        if (_chrome.Tick(Now)) Render();
-    }
-
-    /// <summary>
     /// Ten hertz, and the three things that expire rather than happen. Two of them are here because a
     /// pointer can leave without saying so; the third is the view model's, and is simply handed the tick.
     /// <para>
@@ -1182,6 +1189,27 @@ public sealed partial class PlayerPage
         {
             if (_cursorHidden) _woke = "按住鼠标（滑块拖动）";
             ReseedPointer(moved: true);
+        }
+
+        // 焦点位每拍重问（第二十九报，2026-09-17 接替 Activated 事件路）：mpv.net 的 ActiveForm == this
+        // 仍在这条位上（假着时 Settle 永远不藏），但「归不归我们管」的判据换成指针压在谁家画面上——
+        // 窗口失焦而指针仍停在我们的画面上（用户把鼠标从别的窗口移回来、还没点击激活），下一拍照样藏；
+        // 窗口被盖住而指针压在别人家的窗口上（二十一报实测的 TrayNotifyWnd 那类），前台与指针两问都答
+        // 不上，照旧不藏。被动失焦也不再掀光标：指针还停在我们画面上时那一拍 focused 仍真，「窗口失去
+        // 焦点」的显示路只对「指针同时也不在我们画面上」的失焦成立——二十七报挂观察的那条无输入显示
+        // 路由此退役。
+        var handle = _window?.Handle ?? IntPtr.Zero;
+        var focused = handle == IntPtr.Zero
+            || Native.GetForegroundWindow() == handle
+            || (CursorScreen(out var focusAt)
+                && Native.WindowFromPoint(focusAt) is var under
+                && under != IntPtr.Zero
+                && Native.GetWindowThreadProcessId(under, out _) == Native.GetCurrentThreadId());
+
+        if (_chrome.WindowFocused != focused)
+        {
+            if (!focused && _cursorHidden) _woke = "窗口失去焦点";
+            _chrome.WindowFocused = focused;
         }
 
         if (_chrome.Tick(Now)) Render();

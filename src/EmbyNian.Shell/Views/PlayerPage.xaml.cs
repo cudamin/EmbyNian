@@ -261,28 +261,28 @@ public sealed partial class PlayerPage : UserControl
     // 非零、也不是我们的透明句柄」都记为外来形状。计数随显示行与每秒取样行出日志，下一次再有
     // 「藏了但屏上有箭头」的报告，第一眼就能看到我们是否看见了它、试过哪几层、各试了多少次。
 
-    /// <summary>本段（这次藏匿）发现外来形状的拍数，累计。</summary>
+    /// <summary>本段发现外来形状的拍数，累计。</summary>
     private int _foreignShapes;
 
     /// <summary>连续发现外来形状的拍数。清零条件只有「某一拍屏上干净了」或藏匿结束。连续满
-    /// <see cref="ForeignStreakForRecompute"/> 拍升级重算探针。</summary>
+    /// <see cref="ForeignStreakForPoke"/> 拍升级指针处 1px 往返。</summary>
     private int _foreignStreak;
 
     /// <summary>本段重发布（<see cref="PictureSurface.RepublishCursor"/>）的次数。</summary>
     private int _republished;
 
-    /// <summary>本段重算探针（<see cref="HostWindow.NudgeCursorRecompute"/>）的次数。</summary>
-    private int _recomputeNudges;
+    /// <summary>本段指针处 1px 往返（<c>PlayerPage.PokeForeignCursor</c>）的次数。</summary>
+    private int _foreignPokes;
 
-    /// <summary>上次重算探针的时刻，限频约每秒一次——探针是确定性的窗口变化，但也不该十赫兹地摇。</summary>
-    private long _lastRecomputeAt;
+    /// <summary>上次 1px 往返的时刻，限频约每秒一次——这是真实输入，更不该十赫兹地摇。</summary>
+    private long _lastPokeAt;
 
-    /// <summary>连续异形几拍后升级重算探针。300ms（三拍）是给重发布留的窗口：日志里健康的
+    /// <summary>连续异形几拍后升级 1px 往返。300ms（三拍）是给重发布留的窗口：日志里健康的
     /// 重申一两拍内就能看到形状被换回透明，救不回来说明的正是「重申的通道失灵」。</summary>
-    private const int ForeignStreakForRecompute = 3;
+    private const int ForeignStreakForPoke = 3;
 
-    /// <summary>重算探针的最小间隔（毫秒）。失败也照限——失败那一拍多半连着失败，摇十次不如隔一秒摇一次。</summary>
-    private const int RecomputeCooldown = 1000;
+    /// <summary>1px 往返的最小间隔（毫秒）。失败也照限——失败那一拍多半连着失败，摇十次不如隔一秒摇一次。</summary>
+    private const int PokeCooldown = 1000;
 
     /// <summary>
     /// The duration the ticks were laid out against. The marks arrive before mpv has a duration to place
@@ -485,10 +485,10 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.MeasureRefreshHz = () => _window?.RefreshHz() ?? 0;
         window.GeometryChanged += OnGeometryChanged;
 
-        // mpv.net 的失焦显示与「未激活不藏」（2026-09-16 照搬）：WM_ACTIVATE 来的焦点位喂给规则，
-        // 藏匿条件里那一问由它回答；失焦的那一拍顺手把藏着的光标掀开（OnLostFocus → ShowCursor
-        // 同款）。见 OnWindowFocusChanged 与 ChromeReveal.WindowFocused。
-        window.FocusChanged += OnWindowFocusChanged;
+        // mpv.net 的「未激活不藏」（2026-09-16 照搬）：焦点位喂给规则，藏匿条件里那一问由它回答。
+        // 第二十九报（2026-09-17）起这一位不再走 WM_ACTIVATE 事件、改由 OnTick 每拍重问——判据从
+        // 「窗口在前台」放宽为「前台，或指针仍停在本线程的窗口上」，失焦后把鼠标移回画面（还没点击
+        // 激活）的那几秒也照藏；被动失焦不再掀光标。见 OnTick 与 ChromeReveal.WindowFocused。
 
         // 键盘兜底（2026-09-15「新增esc退出全屏 按空格开始播放」）：Win32 键盘焦点不在岛里时（全屏播放
         // 期间被别的应用抢过前台再回来、焦点落在宿主/视频子窗口上），OnKeyDown 和 OnSpaceShortcut 都收
@@ -516,7 +516,6 @@ public sealed partial class PlayerPage : UserControl
         if (_cursorHidden) _woke = "播放层关停";
         SetCursorHidden(false);
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
-        if (_window is not null) _window.FocusChanged -= OnWindowFocusChanged;
         ViewModel?.Shutdown();
         ReleaseVideoSurface();
     }
@@ -559,7 +558,6 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.MeasureSurface = null;
         ViewModel.MeasureRefreshHz = null;
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
-        if (_window is not null) _window.FocusChanged -= OnWindowFocusChanged;
 
         // 键盘兜底同步摘下：接键人跟着这一次 Attach 走，别让下一任（独立窗口那边的页）的老号码还留在线上。
         if (_window is not null) _window.SetWin32Keys(null);
@@ -616,6 +614,17 @@ public sealed partial class PlayerPage : UserControl
     private void OnRefreshRequested() => _shell?.RefreshActive();
 
     /// <summary>
+    /// 独立播放说明牌的唯一写手：画面不在本窗口（独立管线/外部 mpv.exe 后端）时替黑舞台说一句话，
+    /// 否则收起。进场（<see cref="EnterPlayer"/>，此时多半还没有会话、按设置推算）与开播
+    /// （<see cref="OnPlaybackStarted"/>，会话已就位、按后端表态）各问一次，两处曾各抄一遍同一段
+    /// 三元表达式，2026-09-17 收敛到这里。
+    /// </summary>
+    private void UpdateStandaloneHint() =>
+        StandaloneHint.Visibility = ViewModel.PictureInHostWindow
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+    /// <summary>
     /// Gives the window over to the player: the backdrop off so the video child shows through the
     /// transparent chrome, the navigation shell collapsed so its own opaque background is not painting
     /// over the same region, and the focus here so the keyboard reaches the keys below rather than the
@@ -625,13 +634,14 @@ public sealed partial class PlayerPage : UserControl
     {
         if (_shell is null || _window is null || Visibility == Visibility.Visible) return;
 
-        if (ViewModel.Embedded) _window.VideoVisible = true;
+        // 播放态一律把岛面垫黑（<see cref="HostWindow.VideoVisible"/> 注释的「两条管线共用一个开关」）：
+        // 集成管线垫黑是给画面让路，独立管线/外部 mpv.exe 的画面虽在别的窗口，本窗口此刻只是一块
+        // 控制面板，垫黑同样是对的 —— 从前按后端分流的写法让外部后端的播放浮在浏览页的毛玻璃上，
+        // 和另外两档并排放着谁也不像话。
+        _window.VideoVisible = true;
 
-        // 独立播放的画面在 mpv 自建的顶层窗口里，这一页的黑舞台需要一句说明（管线档位下一次播放才
-        // 生效，进场时读一次就够）。
-        StandaloneHint.Visibility = ViewModel.PictureInHostWindow
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        // 独立播放的画面在 mpv 自建的顶层窗口里，这一页的黑舞台需要一句说明。
+        UpdateStandaloneHint();
 
         // 播放接管窗口的这段时间不设最小尺寸（HostWindow.FreeSizing）：「取消播放页面窗口缩小的最小尺寸
         // 限制，允许窗口继续自由缩小」。退出播放由 LeavePlayer 关回去，浏览下限 600×560 原样恢复。
@@ -753,9 +763,7 @@ public sealed partial class PlayerPage : UserControl
             _window!.Fullscreen = false;
             SetPinned(false);
         }
-        StandaloneHint.Visibility = ViewModel.PictureInHostWindow
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        UpdateStandaloneHint();
         if (ViewModel.AutoFullscreenOnPlayback)
             SetFullscreen(true);
 

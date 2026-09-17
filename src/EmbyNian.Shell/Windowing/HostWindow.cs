@@ -169,12 +169,6 @@ internal sealed class HostWindow : IDisposable
     private bool _blankInputTried;
 
     /// <summary>
-    /// 重算光标的探针窗（第二十七报，2026-09-17），藏匿期检测到外来箭头且重发布救不回来时才建。
-    /// 懒创建：大多数片子从头到尾用不上它，一个窗口句柄也不该为它们存在。见 <see cref="CursorRecomputeNudge"/>。
-    /// </summary>
-    private CursorRecomputeNudge? _recomputeNudge;
-
-    /// <summary>
     /// 键盘兜底（2026-09-15「新增esc退出全屏 按空格开始播放」）的三件：线程钩子句柄、钩子过程自己的
     /// 委托、和播放页挂上来的接键人（<see cref="IWin32KeySink"/>）。委托必须存字段 —— Windows 握着
     /// 原始 thunk，委托被 GC 之后第一次按键就是进程崩溃（<see cref="Procedure"/> 同一条铁律）。
@@ -565,26 +559,6 @@ internal sealed class HostWindow : IDisposable
         BlankClassCursors();
     }
 
-    /// <summary>
-    /// 无输入地重问一次「指针下该是什么形状」（第二十七报，2026-09-17）。调用方（播放页的检测，
-    /// <c>ChaseForeignCursor</c>）已经确认屏上挂着外来箭头、XAML 杠杆的重发布连续几拍都没能收回来；
-    /// 这里把 <see cref="CursorRecomputeNudge"/> 那扇小窗在指针处显出来再收走，迫使 win32k 重新走
-    /// 一遍 <c>WM_SETCURSOR</c>——应答里的 <c>SetCursor</c> 是唯一被信任的无输入改形路径。
-    /// <para>
-    /// 频率不在这里限：调用方带着「连续几拍」与「至少一秒」两道闸。这里只守一个前提——只在藏匿期
-    /// 动手，探针不该在任何光标本该显示的时刻出现。
-    /// </para>
-    /// </summary>
-    internal bool NudgeCursorRecompute()
-    {
-        if (!_cursorHidden) return false;
-
-        _recomputeNudge ??= new CursorRecomputeNudge(this);
-
-        // 探针起在指针此刻的位置：重算要问的就是「指针下」。
-        return Native.GetCursorPos(out var at) && _recomputeNudge.Poke(at);
-    }
-
     /// <summary>Whether content is currently extended into a custom non-client title bar.</summary>
     public bool UsesCustomTitleBar => _nonClient is not null;
 
@@ -713,10 +687,9 @@ internal sealed class HostWindow : IDisposable
     /// <c>false</c> the moment something else took it, <c>true</c> the moment it came back. Between two
     /// windows of this process, too, which <see cref="Native.WmActivateApp"/> never speaks about.
     /// <para>
-    /// The cursor rule reads it（「未激活不藏、失焦显示」，2026-09-16 照搬 mpv.net 的
-    /// <c>ActiveForm == this</c> 与 <c>OnLostFocus → ShowCursor</c>）：播放页把这一位喂给
-    /// <see cref="EmbyNian.Core.Playback.ChromeReveal.WindowFocused"/>。本进程的两个窗口互抢前台
-    /// （独立播放窗、设置窗）也算数 —— 那正是「别把光标藏到别人正要点的窗口上」的情形。
+    /// 播放页曾是这里的消费者（「未激活不藏、失焦显示」，2026-09-16 照搬 mpv.net）；第二十九报
+    /// （2026-09-17）起焦点位由 OnTick 每拍重问（前台，或指针仍停在本线程窗口上），这一事件暂无
+    /// 消费者，保留：它是这条信息在这扇窗口上最便宜的产生点。
     /// </para>
     /// </summary>
     internal event Action<bool>? FocusChanged;
@@ -2742,10 +2715,6 @@ internal sealed class HostWindow : IDisposable
 
         // 兜底那一摘：正常销毁走 WM_DESTROY 已经摘过（幂等，句柄归零即无事可做）。
         UninstallKeyboardFallback();
-
-        // 第二十七报：重算探针若已建起，一并收走（窗口、字典、句柄）。
-        _recomputeNudge?.Dispose();
-        _recomputeNudge = null;
 
         // Unmark before the window goes, so a shutdown from fullscreen cannot leave the shell holding a
         // dead hwnd as the reason the taskbar is standing aside.

@@ -205,9 +205,10 @@ public sealed partial class PlayerViewModel
     /// </summary>
     private void AdoptAspect(double aspect, string learnedFrom)
     {
-        // Only the built-in backend draws into our window. An external mpv.exe has one of its own, and
-        // reshaping ours around a picture that is not in it would move the window for nothing.
-        if (!Embedded || aspect <= 0) return;
+        // 画面不在本窗口就不整形：独立管线（内置后端）的画面在 mpv 自建窗口里，外部 mpv.exe 更是
+        // 如此 —— 拿一部看不到的片子整形本窗口，窗口只会白挪。判的是画面位置（<see cref="PictureInHostWindow"/>），
+        // 不是后端 —— 内置后端走独立管线时同样不画进本窗口，从前的「内置才整形」在那一档是错的。
+        if (!PictureInHostWindow || aspect <= 0) return;
         if (Math.Abs(aspect - _aspect) <= 0.001) return;
 
         _aspect = aspect;
@@ -264,7 +265,9 @@ public sealed partial class PlayerViewModel
     /// </summary>
     private Task ApplyAspectAsync(int generation)
     {
-        if (!Embedded) return Task.CompletedTask;
+        // 画面不在本窗口（独立管线/外部后端）就整趟不轮询：video-params/dwidth/dheight 是给
+        // 「按画面整形本窗口」用的，没有画面进来，这三问每一秒都是白问。
+        if (!PictureInHostWindow) return Task.CompletedTask;
 
         return PollAsync(generation, true, async () =>
         {

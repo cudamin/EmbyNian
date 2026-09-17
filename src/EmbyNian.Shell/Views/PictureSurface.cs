@@ -58,8 +58,8 @@ internal sealed partial class PictureSurface : Grid
     /// </para>
     /// <para>
     /// 两次赋值之间没有指针事件，本方法自己不会触发站点发布；但下一次任何人触发的发布读到的
-    /// 都是我们刚立的值。是否真收回来由调用方的检测下一拍自己看，救不回来就升级
-    /// <see cref="Windowing.CursorRecomputeNudge"/>。
+    /// 都是我们刚立的值。是否真收回来由调用方的检测下一拍自己看，救不回来就升级指针处 1px
+    /// 往返（第二十九报；二十七报那扇无输入重算小窗因真机连九十一拍无效而退役）。
     /// </para>
     /// </summary>
     internal void RepublishCursor(InputCursor? blank)
