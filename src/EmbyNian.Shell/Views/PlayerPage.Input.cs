@@ -171,14 +171,29 @@ public sealed partial class PlayerPage : IWin32KeySink
         e.Handled = true;
     }
 
-    /// <summary>Any press is activity, including one that lands on a control and stops there.</summary>
+    /// <summary>
+    /// Any press is activity, including one that lands on a control and stops there — except a press on
+    /// the picture itself, whose chrome wake waits for the tap hold to prove it a single click.
+    /// <para>
+    /// 「双击触发全屏或还原时不得呼出任何控件」（用户令 2026-09-18）：双击的第一个按下和单击的第一个
+    /// 按下此刻无法区分，宽限一旦当场给出，双击就注定要闪一次控件。所以点在画面上的那一下不再立刻
+    /// <see cref="ChromeReveal.WakeFully"/>，交给 <see cref="OnTapHoldElapsed"/>（单击证实，与暂停徽标
+    /// 同一拍）或 <see cref="OnDoubleTapped"/>（双击，<see cref="ChromeReveal.Silence"/> 收干净）决定。
+    /// 点在控件、统计面板、切换遮罩上的按下照旧立刻算活动 —— 那些不是画面纯净要管的东西。
+    /// </para>
+    /// </summary>
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        if (BeginWindowDrag(e.GetCurrentPoint(Root).Position, e.Pointer))
+        var point = e.GetCurrentPoint(Root).Position;
+
+        if (BeginWindowDrag(point, e.Pointer))
         {
             e.Handled = true;
             return;
         }
+
+        // 点在画面上的那一下：宽限押后。单击在攥够那一刻给（OnTapHoldElapsed），双击根本不给。
+        if (TapOnPicture(point, e.OriginalSource)) return;
 
         // A press is a hand even when it moves nothing, and the show line should say so: label it before
         // Render writes the line, exactly as the poll labels its own wake before the reseed.
@@ -284,6 +299,13 @@ public sealed partial class PlayerPage : IWin32KeySink
     private void OnDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
         SecondTapOnPicture();
+
+        // 「双击触发全屏或还原操作时，不得呼出或显示任何 UI 控件」（用户令 2026-09-18）：把点画面
+        // 那一路给的宽限当场收掉 —— 控件全部离屏、位置不再是显示理由，直到真手再动（轮询 HandStep
+        // 过线才解锁，resize 的重报不解）。全屏切换自己的 Render 会把这一拍画上去；原生全屏那条路
+        // 不经过 Render，这里得自己来一遍。
+        if (_chrome.Silence(Now)) Render();
+
         ToggleFullscreen();
     }
 
@@ -330,11 +352,25 @@ public sealed partial class PlayerPage : IWin32KeySink
         _tapHold.Start();
     }
 
-    /// <summary>The hold expired with no second click: now the tap means what it always meant.</summary>
+    /// <summary>
+    /// The hold expired with no second click: now the tap means what it always meant. The chrome wake that
+    /// <see cref="OnPointerPressed"/> used to give on the spot arrives here instead — a single click
+    /// confirmed, at the same beat as the pause badge it accompanies. A double click never reaches this:
+    /// its hold is consumed by <see cref="SecondTapOnPicture"/>.
+    /// </summary>
     private void OnTapHoldElapsed(object? sender, object e)
     {
         _tapHold.Stop();
-        if (_tap.Elapsed() && Attached) ViewModel.TogglePause();
+
+        if (_tap.Elapsed() && Attached)
+        {
+            ViewModel.TogglePause();
+
+            // 单击证实了才给控件宽限（2026-09-18 随「双击不呼出控件」从按压挪到这里）：快双击从头到尾
+            // 没有控件可闪；慢双击的闪只剩攥不住的那一小段，且在切换全屏的当拍由 Silence 收回。
+            if (_cursorHidden) _woke = "点击（画面上按下）";
+            if (_chrome.WakeFully(Now)) Render();
+        }
     }
 
     /// <summary>

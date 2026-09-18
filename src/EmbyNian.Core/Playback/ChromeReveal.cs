@@ -148,25 +148,26 @@ public sealed class ChromeReveal
     /// where it is. It is extracted rather than inlined because a test can then pin the one number the whole
     /// hide rests on, instead of two comments having to agree with each other.
     /// <para>
-    /// <b>2026-09-16 之后它只管「显示态」那一侧</b>：参数是相邻两拍读数的绝对差（参照点每拍都推进），
-    /// 答案喂的是 chrome 的空闲钟。藏匿期的同一问换成了 <see cref="HandStep"/> —— 参照点冻着的
-    /// mpv.net 判据，两把尺同一个数、两种参照语义，别混用。
+    /// <b>2026-09-17 起它只剩 XAML 事件路（<c>PlayerPage.Input.Moved</c>）这一个客户</b>：参数是这次
+    /// 事件位置离上次<b>接受</b>的位置的绝对差（锚点只在接受时推进），事件信道拿它过滤 WinUI 为没动过
+    /// 的指针抬的空事件。轮询那一侧（<c>PlayerPage.PollPointer</c>）的两个状态都改问
+    /// <see cref="HandStep"/> 了——「显示态量每拍速度」的旧分工随参照点统一一并退役。
     /// </para>
     /// </summary>
     public static bool Travelled(double dx, double dy) =>
         (dx > 0 || dy > 0) && (dx >= MovePixels || dy >= MovePixels);
 
     /// <summary>
-    /// 藏匿期的一记位移算不算「有人动了鼠标」—— <b>mpv.net 的原样判据</b>（2026-09-16 用户拍板
+    /// 一记位移算不算「有人动了鼠标」—— <b>mpv.net 的原样判据</b>（2026-09-16 用户拍板
     /// 「完全照搬 mpv.net」）：位置离<b>上次记录点</b>的切比雪夫距离超过 <see cref="MovePixels"/> 就是。
     /// 对应 mpv.net <c>MainForm.IsCursorPosDifferent</c> 的那一问（阈值 5×dpi/96 的切比雪夫；
     /// 本项目轮询读的是物理像素，常数 5 就按它 96 DPI 下的值用）。
     /// <para>
-    /// <b>参照点是冻着的，这就是「慢手也能叫回来」的那一半。</b>调用方（<c>PlayerPage.PollPointer</c>）
-    /// 在不够阈值的拍子上不推进参照点，于是一段每拍一两像素的慢移会对着同一个点累计，六拍之内必然
-    /// 过线——mpv.net 的 <c>_lastCursorPosition</c> 就是这个推进规矩。第二十一报曾经把参照点改成
-    /// 每拍都推（为了让慢漂攒不起来），随这一拍板一并退回 mpv.net 的写法：慢漂会醒，这是接受的代价
-    /// 的一半，另一半在下面。
+    /// <b>2026-09-17 起它是轮询两个状态的唯一一问</b>（参考 dyphire/mpv-config 的播放光标语义统一：
+    /// mpv 的 <c>cursor-autohide</c> 里「坐标变了的输入就是活动」，移动着的手不丢光标）。参照点是
+    /// 冻着的，只在过线那一刻推进，于是一段每拍一两像素的慢移会对着同一个点累计，六拍之内必然
+    /// 过线——显示态的慢手从此叫得回空闲钟，不再半路丢光标；藏匿期的「慢手也能叫回来」照旧。
+    /// 桌面抖动两个状态都过不了线：它绕着停点打转，离开不上次过线点五像素。
     /// </para>
     /// <para>
     /// <b>接受的代价写明白：</b>参数带符号进来，往回走一记 60 像素也过线——十九报日志里那些带真设备
@@ -437,8 +438,14 @@ public sealed class ChromeReveal
     /// </para>
     /// </summary>
     /// <returns>True when <see cref="State"/> or <see cref="CursorHidden"/> changed.</returns>
+    /// <remarks>
+    /// 真手这一记同时是双击纯净闸的解锁键（2026-09-18）：轮询的 HandStep 过线是唯一一条
+    /// 「与位置无关的手」证据，所以只有它有权解开 <see cref="Silence"/>；位置重报
+    /// （<see cref="Pointer"/> 的 moved 与否、resize 的 <c>OnRootResized</c>）都无权。
+    /// </remarks>
     public bool Moved(long now)
     {
+        _silenced = false;
         _lastActivity = now;
         return Settle(now);
     }
@@ -478,12 +485,43 @@ public sealed class ChromeReveal
     public bool PointerOnControl => _part != ChromePart.None;
 
     /// <summary>
+    /// 双击全屏／还原的「画面纯净」闸（2026-09-18，用户令「双击时不得呼出或显示任何 UI 控件」）。
+    /// <para>
+    /// <see cref="Silence"/> 把点画面那一路给的宽限（<see cref="WakeFully"/>）连同指针所在位置的显示理由
+    /// 一并收掉 —— 控件全部离屏，指针哪怕停在边缘带里也不构成显示，直到「真手再动」才解锁。解锁只认四条路：
+    /// 轮询 HandStep 过线走的 <see cref="Moved"/>（唯一的位置无关真相源）、刻意的 <see cref="WakeFully"/> /
+    /// <see cref="FlashRail"/>、以及新一播放的 <see cref="Reset"/>。<b>窗口 resize 的 moved 重报不解闸</b> ——
+    /// 进退全屏自己那一下就是一次 resize（<c>OnRootResized</c> → <c>Pointer(moved: true)</c>），解了闸控件
+    /// 会在切换的同一拍被位置规则摆回来，正是这个闸要挡的事。
+    /// </para>
+    /// </summary>
+    private bool _silenced;
+
+    /// <summary>纯净闸此刻是否压着规则。诊断与页面探测用；规则内部只看 <see cref="_silenced"/>。</summary>
+    public bool Silenced => _silenced;
+
+    /// <summary>
+    /// 收掉一切：宽限、音量条读数、位置的显示理由，控件全部离屏。双击全屏／还原在切换当拍调用它，
+    /// <c>true</c> 表示屏上确实有东西被收走了（调用方要画一遍）。
+    /// </summary>
+    public bool Silence(long now)
+    {
+        _silenced = true;
+        _forceUntil = 0;
+        _railUntil = 0;
+        _lastActivity = now;
+        return Settle(now);
+    }
+
+    /// <summary>
     /// Activity with nothing to point at: shows all of the chrome for the length of the grace window
     /// wherever the pointer happens to be. Used for keyboard-driven playback commands, which otherwise
-    /// get no feedback at all if the pointer is resting in the middle of the picture.
+    /// get no feedback at all if the pointer is resting in the middle of the picture. A deliberate show,
+    /// so it also unlocks the double-click silence latch.
     /// </summary>
     public bool WakeFully(long now)
     {
+        _silenced = false;
         _lastActivity = now;
         _forceUntil = now + GraceMilliseconds;
         return Settle(now);
@@ -492,10 +530,12 @@ public sealed class ChromeReveal
     /// <summary>
     /// Shows the volume rail for the length of the grace window without touching the other two. This is
     /// how the wheel and the volume keys get a readout: neither has a pointer on the rail, and the wheel
-    /// works anywhere over the picture.
+    /// works anywhere over the picture. A deliberate show, so it also unlocks the double-click silence
+    /// latch.
     /// </summary>
     public bool FlashRail(long now)
     {
+        _silenced = false;
         _lastActivity = now;
         _railUntil = now + GraceMilliseconds;
         return Settle(now);
@@ -506,10 +546,12 @@ public sealed class ChromeReveal
 
     /// <summary>
     /// Puts the chrome back the way it looks at the start of a playback. Called on each new file, because
-    /// the pointer may be anywhere and the state left behind belongs to the file that just ended.
+    /// the pointer may be anywhere and the state left behind belongs to the file that just ended. A new
+    /// playback is its own world, so the double-click silence latch does not survive it.
     /// </summary>
     public void Reset(long now)
     {
+        _silenced = false;
         _lastActivity = now;
         _forceUntil = now + GraceMilliseconds;
         _railUntil = 0;
@@ -574,6 +616,10 @@ public sealed class ChromeReveal
         // A flyout is open, a drag is in progress, or the file is still loading: the controls are the way
         // out of that state, so nothing about the pointer may take them away.
         if (HoldChrome || KeepChrome || now < _forceUntil) return new ChromeState(true, true, true);
+
+        // 双击全屏／还原的纯净闸（2026-09-18）：在真手再动（Moved/WakeFully/FlashRail/Reset 解锁）之前，
+        // 点画面那一下给的宽限与指针所在的位置都不构成显示理由 —— 画面保持只有片子。
+        if (_silenced) return new ChromeState(false, false, false);
 
         if (now - _lastActivity >= IdleWindow)
         {

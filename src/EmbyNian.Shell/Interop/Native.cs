@@ -820,6 +820,9 @@ internal static partial class Native
     /// <summary>GCLP_HCURSOR, the class-wide cursor <see cref="SetClassCursor"/> reads and writes.</summary>
     public const int ClassCursorIndex = -12;
 
+    /// <summary>GCLP_HBRBACKGROUND, the class-wide brush <see cref="SetClassBackground"/> writes.</summary>
+    public const int ClassBackgroundIndex = -10;
+
     /// <summary>
     /// The cursor a whole window class wants, and the only lever here that is not tied to a message queue:
     /// it can be set from this thread for a window created by another one, which is the case that matters —
@@ -829,6 +832,19 @@ internal static partial class Native
     /// <returns>The previous handle, which is what makes this reversible.</returns>
     [LibraryImport("user32.dll", EntryPoint = "SetClassLongPtrW", SetLastError = true)]
     public static partial IntPtr SetClassCursor(IntPtr window, int index, IntPtr value);
+
+    /// <summary>
+    /// A whole window class's background brush. Same <c>SetClassLongPtr</c> as the cursor above, different
+    /// index: the XAML island windows are made by the framework and come with the class's default white
+    /// background, so whatever the island's content does not paint — the moment a page is being swapped, the
+    /// ring where the content is smaller than the island — shows up as white. 2026-09-17: three of the user's
+    /// screenshots are exactly that (a 828×647 rectangle, an 875×645 one with the page's own gradient over
+    /// it, and 8~10px bands along the picture's edges). Pointing the class at the app's base colour is the fix;
+    /// the brush has to outlive the class, which is why it is the same static one the window erases with.
+    /// </summary>
+    /// <returns>The previous handle, which is what makes this reversible.</returns>
+    [LibraryImport("user32.dll", EntryPoint = "SetClassLongPtrW", SetLastError = true)]
+    public static partial IntPtr SetClassBackground(IntPtr window, int index, IntPtr value);
 
     /// <summary>
     /// The next immediate child of <paramref name="parent"/> after <paramref name="after"/>, or

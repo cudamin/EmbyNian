@@ -39,39 +39,18 @@ internal sealed partial class PictureSurface : Grid
         if (blank is null || _hiddenSource is null) return;
         if (!ReferenceEquals(Cursor, blank)) Cursor = blank;
 
-        // ProtectedCursor is cached XAML policy, not the cursor currently published by InputSite.
-        // Re-publish through the island without moving the pointer. Both states are invisible;
-        // the intermediate null defeats the input source's same-object setter fast path.
-        _hiddenSource.Cursor = null;
-        _hiddenSource.Cursor = blank;
+        // XAML keeps a transparent policy; the input source can suppress the displayed cursor outright.
+        if (_hiddenSource.Cursor is not null) _hiddenSource.Cursor = null;
     }
 
-    /// <summary>
-    /// 把「这块画面要透明」整条重说一遍（第二十七报，2026-09-17）：藏匿期屏上挂了外来箭头、
-    /// <see cref="KeepCursorHidden"/> 那套「同对象短路的防」每拍重申却收不回来时用的那一下。
-    /// <para>
-    /// 与每拍重申差在两处，各对着一种「说了不算」。<c>Cursor = null; Cursor = blank;</c> 是给
-    /// <c>ProtectedCursor</c> 的：同对象同值的赋值走框架的快路径，什么也不会重新推导，断开一次
-    /// 才逼它把这块画面的形状从头算。<c>InputPointerSource.GetForIsland</c> 重取再 null→blank 是给
-    /// 源头的：两天日志里我们的透明句柄在全局再未出现，而旧源上的翻来覆去毫无效果——源的那头
-    /// （InputSite 的发布点）很可能已经换了对象或换了值，重取一个才是对着现在这家说话。
-    /// </para>
-    /// <para>
-    /// 两次赋值之间没有指针事件，本方法自己不会触发站点发布；但下一次任何人触发的发布读到的
-    /// 都是我们刚立的值。是否真收回来由调用方的检测下一拍自己看，救不回来就升级指针处 1px
-    /// 往返（第二十九报；二十七报那扇无输入重算小窗因真机连九十一拍无效而退役）。
-    /// </para>
-    /// </summary>
+    /// <summary>Re-publishes the input source without briefly clearing XAML's transparent policy.</summary>
     internal void RepublishCursor(InputCursor? blank)
     {
-        if (blank is null || XamlRoot?.ContentIsland is not { } island) return;
+        if (blank is null || _hiddenSource is null) return;
 
-        Cursor = null;
-        Cursor = blank;
-
-        var source = InputPointerSource.GetForIsland(island);
-        source.Cursor = null;
-        source.Cursor = blank;
+        if (!ReferenceEquals(Cursor, blank)) Cursor = blank;
+        _hiddenSource.Cursor = blank;
+        _hiddenSource.Cursor = null;
     }
 
     internal void EndCursorHide()

@@ -263,6 +263,9 @@ public sealed partial class PlayerPage : UserControl
 
     /// <summary>本段发现外来形状的拍数，累计。</summary>
     private int _foreignShapes;
+    private IntPtr _screenCursorShape;
+    private bool _screenCursorTransparent;
+    private CursorVisibilityEvents? _cursorVisibilityEvents;
 
     /// <summary>连续发现外来形状的拍数。清零条件只有「某一拍屏上干净了」或藏匿结束。连续满
     /// <see cref="ForeignStreakForPoke"/> 拍升级指针处 1px 往返。</summary>
@@ -465,6 +468,10 @@ public sealed partial class PlayerPage : UserControl
         ViewModel = viewModel;
         _shell = shell;
         _window = window;
+        _cursorVisibilityEvents?.Dispose();
+        _cursorVisibilityEvents = null;
+        if (ViewModel.PictureInHostWindow)
+            _cursorVisibilityEvents = new CursorVisibilityEvents(window.Handle, OnSystemCursorChanged);
 
         ViewModel.Noticed += OnNoticed;
         ViewModel.RefreshRequested += OnRefreshRequested;
@@ -515,6 +522,8 @@ public sealed partial class PlayerPage : UserControl
         // 十八报：与 LeavePlayer 同理 —— 藏着的时候关停也是一条显示路径，挂上名再放。
         if (_cursorHidden) _woke = "播放层关停";
         SetCursorHidden(false);
+        _cursorVisibilityEvents?.Dispose();
+        _cursorVisibilityEvents = null;
         if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
         ViewModel?.Shutdown();
         ReleaseVideoSurface();
@@ -562,6 +571,8 @@ public sealed partial class PlayerPage : UserControl
         // 键盘兜底同步摘下：接键人跟着这一次 Attach 走，别让下一任（独立窗口那边的页）的老号码还留在线上。
         if (_window is not null) _window.SetWin32Keys(null);
 
+        _cursorVisibilityEvents?.Dispose();
+        _cursorVisibilityEvents = null;
         _shell = null;
         _window = null;
     }
@@ -642,6 +653,13 @@ public sealed partial class PlayerPage : UserControl
 
         // 独立播放的画面在 mpv 自建的顶层窗口里，这一页的黑舞台需要一句说明。
         UpdateStandaloneHint();
+        if (ViewModel.PictureInHostWindow)
+            _cursorVisibilityEvents ??= new CursorVisibilityEvents(_window.Handle, OnSystemCursorChanged);
+        else
+        {
+            _cursorVisibilityEvents?.Dispose();
+            _cursorVisibilityEvents = null;
+        }
 
         // 播放接管窗口的这段时间不设最小尺寸（HostWindow.FreeSizing）：「取消播放页面窗口缩小的最小尺寸
         // 限制，允许窗口继续自由缩小」。退出播放由 LeavePlayer 关回去，浏览下限 600×560 原样恢复。

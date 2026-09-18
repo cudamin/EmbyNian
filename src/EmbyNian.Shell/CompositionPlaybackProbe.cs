@@ -107,6 +107,88 @@ internal static class CompositionPlaybackProbe
                     await AdvanceAsync("Resize 后", 1);
                 }
 
+                // 全屏往返（2026-09-17 用户报「全屏和退出的时候会卡一下」）。上面那两次窗口化 Resize 只证明
+                // 了「拖着改尺寸能传到 mpv」；全屏走的是另一条路 —— 换样式位 + SetWindowPos 覆盖整块屏 ——
+                // 而画面缩在左上角一小块，读出来只可能是其中之一：宿主没跟着窗口长大，或者合成器画的还是旧
+                // 尺寸，或者 mpv 还没重建交换链。三样都量（客户区、宿主、视觉），外加 mpv 那一侧报的合成尺寸，
+                // 谁没跟上就写在报告里。
+                var windowed = surface.Size;
+                var watch = Stopwatch.StartNew();
+                var trace = new List<string>();
+
+                window.Fullscreen = true;
+                await UntilAsync(() => surface.Size != windowed, "全屏后宿主尺寸改变");
+
+                // 尺寸传对了不等于看见的那一帧是对的：窗口长大和 mpv 重建交换链之间隔着几百毫秒，中间那几帧
+                // 屏幕上是什么样，只有屏幕自己说得清。逐拍取三点 —— 右下八分之七（画面铺满时它有内容，画面
+                // 缩在左上角一小块时它还是页面底色）、正中间（两种情形都在画面里，做对照）、左上八分之一。
+                // 只把「读数变了」的那几拍写进报告，过渡有多长一眼能读出来。
+                for (var tick = 0; tick <= 30; tick++)
+                {
+                    var line = SampleFrame(window, watch.ElapsedMilliseconds, surface.Size);
+                    if (trace.Count == 0 || trace[^1][(trace[^1].IndexOf(' ') + 1)..] != line[(line.IndexOf(' ') + 1)..])
+                        trace.Add($"进全屏 {line}");
+                    await Task.Delay(50, token);
+                }
+
+                Write(string.Join(" | ", trace));
+
+                var full = surface.Size;
+                Native.GetClientRect(window.Handle, out var fullClient);
+                Check(full.Width == fullClient.Width && full.Height == fullClient.Height,
+                    $"全屏后宿主跟上客户区：客户区 {fullClient.Width}×{fullClient.Height}，宿主 {full.Width}×{full.Height}"
+                        + $"（{watch.ElapsedMilliseconds}ms 后量到），视觉 {surface.VisualSize.Width:0}×{surface.VisualSize.Height:0} DIP");
+                var fullMpv = await handle.GetTextAsync("d3d11-composition-size", token);
+                Check(fullMpv == $"{full.Width}x{full.Height}",
+                    $"全屏尺寸传到 mpv：surface={full}，mpv={fullMpv}");
+
+                // 交换链能不能被合成器缩放 —— 2026-09-17「全屏卡一下」该往哪边修就看这一条。把缓冲故意缩到
+                // 窗口的一半：屏幕右下方还有画面内容，说明合成器把交换链缩放铺满了（那只要让 SpriteVisual
+                // 一直是宿主尺寸，过渡期就是「旧帧被拉大」而不是「缩在左上角一小块」），只剩页面底色，说明
+                // 交换链只会被一比一贴上去，唯一的出路就是让尺寸别再变来变去。实验做完把尺寸放回去。
+                //
+                // 同一次实验顺带量出「mpv 接受新尺寸到画面上生效」的时间：窗口不动、防抖不参与，逐 30ms 看
+                // 右下角什么时候从画面内容变成页面底色 —— 那一段是这条路的下限，省不掉。
+                var small = Stopwatch.StartNew();
+                await handle.SetPropertyAsync("d3d11-composition-size", "1280x720", token);
+                var shrinkAt = -1L;
+                for (var tick = 0; tick <= 30; tick++)
+                {
+                    var line = SampleFrame(window, small.ElapsedMilliseconds, surface.Size);
+                    if (shrinkAt < 0 && line.Contains("#16181C/#16181C", StringComparison.Ordinal)) shrinkAt = small.ElapsedMilliseconds;
+                    if (tick % 5 == 0) Write($"半尺寸实验 {line}（窗口客户区 {full.Width}×{full.Height}，缓冲 1280×720）");
+                    await Task.Delay(30, token);
+                }
+
+                Write($"半尺寸实验：缓冲缩到 1280×720 后，画面从右下角退出去用了 {shrinkAt}ms（窗口没动、防抖没参与）");
+                await handle.SetPropertyAsync("d3d11-composition-size", $"{full.Width}x{full.Height}", token);
+                await Task.Delay(500, token);
+                Write($"尺寸放回 {SampleFrame(window, 0, surface.Size)}");
+
+                await AdvanceAsync("全屏后", 1);
+
+                watch.Restart();
+                trace.Clear();
+                window.Fullscreen = false;
+                await UntilAsync(() => surface.Size != full, "退出全屏后宿主尺寸改变");
+
+                for (var tick = 0; tick <= 30; tick++)
+                {
+                    var line = SampleFrame(window, watch.ElapsedMilliseconds, surface.Size);
+                    if (trace.Count == 0 || trace[^1][(trace[^1].IndexOf(' ') + 1)..] != line[(line.IndexOf(' ') + 1)..])
+                        trace.Add($"退全屏 {line}");
+                    await Task.Delay(50, token);
+                }
+
+                Write(string.Join(" | ", trace));
+
+                var restored = surface.Size;
+                Native.GetClientRect(window.Handle, out var backClient);
+                Check(restored == windowed && restored.Width == backClient.Width && restored.Height == backClient.Height,
+                    $"退出全屏后宿主回到窗口化尺寸：客户区 {backClient.Width}×{backClient.Height}，宿主 {restored.Width}×{restored.Height}"
+                        + $"（{watch.ElapsedMilliseconds}ms 后量到），视觉 {surface.VisualSize.Width:0}×{surface.VisualSize.Height:0} DIP");
+                await AdvanceAsync("退出全屏后", 1);
+
                 await handle.SetPropertyAsync("pause", true, token);
                 await UntilAsync(() => control.Status.Paused, "暂停状态已生效");
                 await Task.Delay(250, token);
@@ -205,7 +287,54 @@ internal static class CompositionPlaybackProbe
         }
     }
 
-    private static Uri LocalFile(string? path)
+    /// <summary>
+    /// One frame of the screen as three readings — the colours at 1/8, 1/2 and 7/8 of the window's client
+    /// area, with the client and host sizes beside them.
+    /// <para>
+    /// The far corner is the one that tells the story: with the picture filling the window it holds picture
+    /// content, and while the picture is still a block in the top-left it holds the page's own background.
+    /// The middle is the control — it is inside the picture either way — and the top-left corner holds content
+    /// either way too. Screen pixels rather than a screenshot because a composition SpriteVisual is not part
+    /// of the tree a <c>RenderTargetBitmap</c> draws.
+    /// </para>
+    /// </summary>
+    private static string SampleFrame(HostWindow window, long milliseconds, (int Width, int Height) host)
+    {
+        if (!Native.GetClientRect(window.Handle, out var client)) return $"{milliseconds}ms 量不到客户区";
+
+        var device = Native.GetDC(IntPtr.Zero);
+        if (device == IntPtr.Zero) return $"{milliseconds}ms 取不到屏幕 DC";
+
+        try
+        {
+            var spots = new (int X, int Y)[]
+            {
+                (client.Width / 8, client.Height / 8),
+                (client.Width / 2, client.Height / 2),
+                (client.Width * 7 / 8, client.Height * 7 / 8),
+            };
+
+            var colors = new List<string>();
+            foreach (var (x, y) in spots)
+            {
+                var point = new NativePoint { X = x, Y = y };
+                Native.ClientToScreen(window.Handle, ref point);
+                var color = Native.GetPixel(device, point.X, point.Y);
+                colors.Add(color == 0xFFFFFFFF
+                    ? "?"
+                    : $"#{(color & 0xFF):X2}{((color >> 8) & 0xFF):X2}{((color >> 16) & 0xFF):X2}");
+            }
+
+            return $"{milliseconds}ms 客户区{client.Width}x{client.Height} 宿主{host.Width}x{host.Height} "
+                + string.Join("/", colors);
+        }
+        finally
+        {
+            Native.ReleaseDC(IntPtr.Zero, device);
+        }
+    }
+
+    internal static Uri LocalFile(string? path)
     {
         // Accept ordinary absolute drive paths only, not URI/UNC/device/drive-relative forms.
         if (string.IsNullOrWhiteSpace(path) || path.Length < 3 || !char.IsAsciiLetter(path[0])

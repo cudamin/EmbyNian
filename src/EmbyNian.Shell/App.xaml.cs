@@ -67,6 +67,12 @@ public partial class App : Application
             return;
         }
 
+        if (_options.ProbeCursor)
+        {
+            _ = CursorVisibilityProbe.RunAsync(_options);
+            return;
+        }
+
         try
         {
             var services = ShellServices.Build(_options.Paths);

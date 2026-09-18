@@ -3875,6 +3875,66 @@ internal static class PlaybackTests
             Assert.False(ChromeReveal.Travelled(2, 0), "重申不产生位移，但桌面抖动的量级也不该叫醒");
             Assert.True(ChromeReveal.Travelled(5, 0), "有人动手仍然要认出来");
         });
+
+        // ---- 双击全屏的纯净闸（2026-09-18） ----
+        //
+        // 「用户双击触发全屏或还原操作时，不得呼出或显示任何 UI 控件」。Silence 把点画面那一路给的
+        // 宽限连同指针位置的显示理由一并收掉；解锁只认真手（轮询 HandStep 过线走的 Moved）、刻意唤醒
+        // （WakeFully/FlashRail）与新一播放（Reset）—— resize 的 moved:true 重报不解闸，否则进全屏
+        // 自己那一下就会把控件又摆回来。
+
+        Test("播放器控件：Silence 当场收干净，位置不再是显示理由", () =>
+        {
+            var chrome = Chrome(out var now);
+
+            // 双击前的世界：按下给了宽限，整套控件都在。
+            chrome.WakeFully(now + 10);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State);
+
+            Assert.True(chrome.Silence(now + 20));
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+            Assert.Equal(0d, chrome.RailStrength);
+
+            // 指针就停在底部边缘带里也不出来 —— 纯净闸压过位置规则。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 30, moved: false);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "位置在带内也不再是理由");
+        });
+
+        Test("播放器控件：真手再动才解锁，位置规则随之恢复", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            // 第一步 Pointer 已把画面中间的整套控件收掉，Silence 在这里是合法的空操作 —— 闸照样压上。
+            chrome.Silence(now + 10);
+
+            // 轮询那一路（HandStep 过线 → Moved）解开闸，之后位置规则照常说话。
+            chrome.Moved(now + 20);
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 30, moved: true);
+            Assert.True(chrome.State.Bar, "解锁之后位置规则照常");
+        });
+
+        Test("播放器控件：resize 的 moved 重报不解闸", () =>
+        {
+            var chrome = Chrome(out var now);
+            Assert.True(chrome.Silence(now));
+
+            // OnRootResized / 全屏切换自己那一下走的路：位置重报（moved:true），但不是手。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 10, moved: true);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "进全屏的 resize 不许把控件摆回来");
+        });
+
+        Test("播放器控件：刻意的唤醒与新一播放解开纯净闸", () =>
+        {
+            var chrome = Chrome(out var now);
+            Assert.True(chrome.Silence(now));
+
+            chrome.WakeFully(now + 10);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "键盘命令该亮还是要亮");
+
+            Assert.True(chrome.Silence(now + 20));
+            chrome.Reset(now + 30);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "新的一场从全显示开场");
+        });
     }
 
     /// <summary>A reveal rule at a fixed clock, still in its opening 「everything showing」 state.</summary>
@@ -4357,6 +4417,50 @@ internal static class PlaybackTests
             Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.Step(episodes, "s1e1", 0));
             Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.Step(episodes, "s1e1", 2));
         });
+
+        // ---- 自动连播的季内那一步（2026-09-18） ----
+        //
+        // 「当最后一季的最后一集播放结束后，直接退出播放界面或返回，不得自动续播该最后一季的第一集」。
+        // 旧版在季末退而求其次去拿全剧列表，把下一季的第一集接上来 —— 实机日志里的
+        // 《Re：从零开始的异世界生活 S01E83 播放完毕 → 自动播放下一集：S04E12》就是这条路的产物。
+        // StepInSeason 把决策钉死在本季之内：输入哪怕装着全剧列表，季末也只可能是 null。
+
+        Test("剧集导航：自动连播在本季内接下一集", () =>
+        {
+            var destination = EpisodeNavigation.StepInSeason(episodes, "s1e1", 1);
+
+            Assert.Equal("s1e2", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+            Assert.Equal("s1e1", destination?.Siblings[0].Id);
+        });
+
+        Test("剧集导航：自动连播在季末返回 null，不跨季", () =>
+        {
+            // 第 1 季的最后一集：本季到此为止，播放界面退出，第 2 季的第一集不许自动接上来。
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s1e2", 1));
+
+            // 最后一季的最后一集同理 —— 哪怕它同时是全剧的最后一集。
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s2e2", 1));
+        });
+
+        Test("剧集导航：自动连播的列表装着全剧时也只认本季", () =>
+        {
+            // FillSiblings 在单集记录缺 SeasonId 时会把一整部剧装进 Episodes；决策点必须自己缩回本季，
+            // 而不是指望每个调用方先把列表筛对。
+            Assert.Equal("s1e2", EpisodeNavigation.StepInSeason(episodes, "s1e1", 1)?.Episode.Id);
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s1e2", 1));
+
+            // 上一方向照旧在季内走：往回与往前都只在本季之内，季首再往回不越进上一季。
+            Assert.Equal("s2e1", EpisodeNavigation.StepInSeason(episodes, "s2e2", -1)?.Episode.Id);
+            Assert.Equal("s2e2", EpisodeNavigation.StepInSeason(episodes, "s2e1", 1)?.Episode.Id);
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s2e1", -1));
+        });
+
+        Test("剧集导航：自动连播只接受相邻一步", () =>
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.StepInSeason(episodes, "s1e1", 0));
+            Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.StepInSeason(episodes, "s1e1", 2));
+        });
     }
 
     // ---- 播放闸门 --------------------------------------------------------------
@@ -4826,6 +4930,38 @@ internal static class PlaybackTests
 
             Assert.Equal(0, CursorMask.Stride(0));
             Assert.Equal(0, CursorMask.Stride(-8));
+        });
+
+        Test("透明光标检测：认出副本，拒绝黑白像素和反色", () =>
+        {
+            var (and, xor) = CursorMask.Transparent(32, 32);
+            var mask = and.Concat(xor).ToArray();
+            Assert.True(CursorMask.IsTransparent(mask, 32, 32, 4));
+            mask[5] = 0xFE;
+            Assert.False(CursorMask.IsTransparent(mask, 32, 32, 4), "黑点不能当透明");
+            mask[5] = 0xFF;
+            mask[and.Length + 5] = 1;
+            Assert.False(CursorMask.IsTransparent(mask, 32, 32, 4), "反色点不能当透明");
+            mask[5] = 0xFE;
+            Assert.False(CursorMask.IsTransparent(mask, 32, 32, 4), "白点不能当透明");
+        });
+
+        Test("透明光标检测：忽略行尾填充，只判真实像素", () =>
+        {
+            byte[] mask = [0xFF, 0x80, 0x12, 0x34, 0, 0x7F, 0xAB, 0xCD];
+            Assert.True(CursorMask.IsTransparent(mask, 9, 1, 4));
+            mask[5] = 0x80;
+            Assert.False(CursorMask.IsTransparent(mask, 9, 1, 4));
+        });
+
+        Test("透明光标检测：无效或缺失位图不判隐藏", () =>
+        {
+            Assert.False(CursorMask.IsTransparent([], 32, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[255], 32, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[256], 33, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[256], 0, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[256], 32, 0, 4));
+            Assert.False(CursorMask.IsTransparent([], int.MaxValue, int.MaxValue, int.MaxValue));
         });
     }
 

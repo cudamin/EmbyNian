@@ -199,6 +199,7 @@ internal sealed class PlayerWindow
     private void OnWindowClosed()
     {
         _window.Closed -= OnWindowClosed;
+        _page.Detach();
         _page.ReleaseVideoSurface();
         _window.Dispose();
 

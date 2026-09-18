@@ -398,8 +398,9 @@ public sealed class PlaybackSettings
     public SkipSectionMode SkipSections { get; set; } = SkipSectionMode.Ask;
 
     /// <summary>
-    /// Start the next episode by itself once one plays to the end. At a season boundary the player asks
-    /// the server for the series order, so the last episode of one season can continue into the next.
+    /// Start the next episode by itself once one plays to the end — within the season only. At a season
+    /// boundary the player goes back where it came from: 「最后一季的最后一集播放结束后，直接退出播放界面
+    /// 或返回，不得自动续播该最后一季的第一集」（用户令 2026-09-18，跨季自动接播随令取消）.
     /// </summary>
     public bool AutoPlayNextEpisode { get; set; } = true;
 

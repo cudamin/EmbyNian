@@ -168,19 +168,22 @@ public sealed partial class PlayerPage
     /// two on this machine's own log, and a hand's first movement is tens.
     /// </para>
     /// <para>
-    /// <b>参照点有两种推进规矩（2026-09-16 照搬 mpv.net 之后），各管一侧。</b>显示态每拍都推进，
-    /// 不够阈值的拍子也算「读过一次」——量到的是这一拍的速度，桌面抖动过不了阈值，也攒不起来，
-    /// 空闲钟不被抖动重盖，「静止到点就藏」因此成立。藏匿期<b>冻着</b>：这是 mpv.net 的
-    /// <c>IsCursorPosDifferent</c> 拿当前光标对「上次记录点」量的问法，慢移对着同一个点累计，
-    /// 六拍之内必然过线——「慢手也能叫回来」就是这一半。两种语义共用 <see cref="ChromeReveal.MovePixels"/>
-    /// 这一个数，判据分别是 <see cref="ChromeReveal.Travelled"/>（显示态）与
-    /// <see cref="ChromeReveal.HandStep"/>（藏匿期），别混用。
+    /// <b>参照点只剩一种推进规矩（2026-09-17，参考 dyphire/mpv-config 的播放光标语义统一）。</b>
+    /// 显示态与藏匿态同用 mpv.net 的那一问（<see cref="ChromeReveal.HandStep"/>：位置离「上次记录点」
+    /// 的切比雪夫距离过线即是手），参照点只在过线那一刻推进（<see cref="WakeFromPoll"/>）。这是 mpv
+    /// 「坐标变了的输入就是活动」（<c>cursor-autohide</c> 的根基，uosc 的 <c>lib/cursor.lua</c> 同理：
+    /// 任何一次 <c>mouse-pos</c> 变化都重置自动隐藏的定时器）在十赫兹轮询传感器上的等价物：慢移对着
+    /// 同一个点累计，六拍之内必然过线，空闲钟跟着重盖——移动着的手永远不会半路丢光标，这正是 mpv
+    /// 的样子；「每拍不足五像素的慢手走不到终点」那条 2026-09-16 记录在案的代价就此了结。桌面抖动
+    /// 照旧过不了线：它绕着停点打转，离开不上次过线点五像素——藏匿期用同一问活了这么久，就是这一
+    /// 性质的实机记录。2026-09-16 那版「显示态每拍推进参照」（<see cref="ChromeReveal.Travelled"/>
+    /// 量的每拍速度）随这条统一退役：它把慢手读成了静止，光标死在半路。
     /// </para>
     /// <para>
     /// <b>第二十一报的整套藏匿期判据在这一天随「完全照搬 mpv.net」的拍板退役：</b>见证否决票、
     /// 净位移账本、连着拍数、幽灵回笼，全都不在唤醒的路上了。一台机器上它们挡过二十一次幽灵唤醒，
     /// 代价是每拍不足五像素的慢手永远叫不回光标；mpv.net 用最简单的那一问活在所有这些机器上，
-    /// 冒出来的不过是一支一两秒后自己藏回去的箭头。现在这里是 mpv.net 的行为，包括它的代价
+    /// 冒出来的不过是一支一两秒后自己藏回去的箭头。现在两个状态都是 mpv.net 的行为，包括它的代价
     /// （幽灵唤醒回归，更轻的形式）——历史与证据链在 PROGRESS.md 与 daily log，见证仍在取证记账。
     /// </para>
     /// </summary>
@@ -188,52 +191,28 @@ public sealed partial class PlayerPage
     {
         if (!CursorScreen(out var screen)) return;
 
-        // 参照点认不认得（这一拍进来时的状态）。下面就要把它置真，而藏匿期那道关只对「有参照可比」
-        // 的位移有意义 —— 没有参照时 dx/dy 是 int.MaxValue，那不是位移而是「第一次读到」。
-        var known = _polledKnown;
-        var dx = known ? Math.Abs(screen.X - _polled.X) : int.MaxValue;
-        var dy = known ? Math.Abs(screen.Y - _polled.Y) : int.MaxValue;
-
-        // ---- 藏匿期：mpv.net 的那一问（2026-09-16 照搬，用户拍板）----
-        //
-        // 位置离「上次记录点」的切比雪夫距离超过阈值就是手（ChromeReveal.HandStep），过线即醒、
-        // 不过线接着藏。参照点（_polled）在不够阈值的拍子上**冻着**——慢移会对着它累计，这正是
-        // 「慢手也能叫回来」的那一半；快过线的一记（包括幽灵的 60 像素签名）也醒，那是接受的代价
-        // 的另一半。第二十一报的见证否决、净位移账本、连着拍数、回笼窗口全部退役，历史在
-        // PROGRESS.md 与 daily log。真实输入见证仍在（取证记账），但不再有裁决权。
-        if (_cursorHidden)
+        // 参照点还没立起来：这一拍只播种。第一次读数不是位移（没有「上次」可比），mpv 里第一帧
+        // mouse-pos 同样不算活动。播种不计数也不唤醒——指针在哪，由 OnTick 的回家路（PointerGone
+        // → ReseedPointer）在同一拍里告诉规则，那是位置，不是移动（位置是位置、动是动）。
+        if (!_polledKnown)
         {
-            // 参照点还没立起来：这一拍只播种（第一次读数不是位移，dx/dy 的 int.MaxValue 不是速度）。
-            if (!known)
-            {
-                _polled = screen;
-                _polledKnown = true;
-                return;
-            }
-
-            // dx/dy 是 |screen - _polled|，而 _polled 在藏匿期冻着 —— 这正是 mpv.net 的
-            // IsCursorPosDifferent 拿「当前光标」对「上次记录点」量出来的那个问法。
-            if (!ChromeReveal.HandStep(dx, dy)) return;
-
-            WakeFromPoll(screen, dx, dy, "位置离上次记录点超过阈值（mpv.net 规则）");
+            _polled = screen;
+            _polledKnown = true;
             return;
         }
 
-        // ---- 显示态：老规矩 ----
-        // Exactly where it was: stillness, and nothing to tell the rule. This is what keeps the idle clock
-        // running.
-        if (dx == 0 && dy == 0) return;
+        var dx = Math.Abs(screen.X - _polled.X);
+        var dy = Math.Abs(screen.Y - _polled.Y);
 
-        // 参照点在显示态每拍都推进（藏匿期才冻着，见上）。这一句必须在下面那道阈值关**之前**：
-        // 不够阈值的拍子也算「读过一次」，不推进就是在攒慢漂。
-        var steppedNow = !known || ChromeReveal.Travelled(dx, dy);
-        _polled = screen;
-        _polledKnown = true;
+        // ---- 两个状态同一问（2026-09-17 统一）----
+        //
+        // 位置离「上次记录点」的切比雪夫距离超过阈值就是手（ChromeReveal.HandStep），过线即醒、
+        // 不过线就是没动——静止的读数什么都不说，空闲钟照走，这正是「静止到点就藏」的全部依托。
+        // 参照点（_polled）冻在这里，过了线才在 WakeFromPoll 里推进；慢移对着同一个点累计，
+        // 六拍之内必然过线。快过线的一记（包括幽灵的 60 像素签名）在哪个状态都醒，那是接受的代价。
+        if (!ChromeReveal.HandStep(dx, dy)) return;
 
-        // A step under the threshold is the desk, not a hand.
-        if (!steppedNow) return;
-
-        WakeFromPoll(screen, dx, dy);
+        WakeFromPoll(screen, dx, dy, _cursorHidden ? "位置离上次记录点超过阈值（mpv.net 规则）" : null);
     }
 
     /// <summary>
@@ -281,7 +260,12 @@ public sealed partial class PlayerPage
         // the self-check's 「真手连着走两拍」, which is the only place that reads this side's copy right after a
         // wake. The reseed renders for itself when it has something to say, so this extra call is only paid on
         // 「the rule was already awake」 — once per wake, which is nothing.
-        if (!ReseedPointer(moved: true)) _chrome.Moved(Now);
+        // 真手这一记先落账（ChromeReveal.Moved）：重盖空闲钟，并解开双击全屏的纯净闸 —— 轮询的
+        // HandStep 是唯一有权解开它的路。ReseedPointer 的 moved:true 只是「重报位置」，不解闸：
+        // 进退全屏、最大化自己那一下的 resize 也走那条路（见 OnRootResized），解了闸控件就会在
+        // 切换的同一拍被位置规则摆回来。
+        _chrome.Moved(Now);
+        ReseedPointer(moved: true);
         Render();
     }
 
@@ -724,6 +708,10 @@ public sealed partial class PlayerPage
 
         _cursorHidden = hidden;
 
+        if (_window is { } cursorWindow && hidden && !ViewModel.PlayingNow)
+            _cursorVisibilityEvents ??= new CursorVisibilityEvents(cursorWindow.Handle, OnSystemCursorChanged);
+        _cursorVisibilityEvents?.SetHidden(hidden && (ViewModel.PictureInHostWindow || !ViewModel.PlayingNow));
+
         if (_window is not null) _window.CursorHidden = hidden;
 
         // 十八报（2026-09-16）：藏匿期给见证的取证口开闸。手不在的这一段本该一条真输入都没有 ——
@@ -816,6 +804,8 @@ public sealed partial class PlayerPage
             _foreignStreak = 0;
             _republished = 0;
             _foreignPokes = 0;
+            _screenCursorShape = IntPtr.Zero;
+            _screenCursorTransparent = false;
         }
 
         // And say the policy again, without asking the OS for anything. Every 「no cursor」 above is an answer —
@@ -911,91 +901,85 @@ public sealed partial class PlayerPage
         _nudgesThisHide++;
         _cursorNudges++;
 
+        _cursorVisibilityEvents?.Refresh();
         _window?.KeepCursorHidden();
 
         Root.KeepCursorHidden(_window?.BlankInputCursor);
     }
 
     /// <summary>
-    /// 藏匿期每拍问一次「屏上此刻干净吗」，不干净就一层层把光标夺回来（第二十七报，2026-09-17）。
-    /// <para>
-    /// 两天日志定案的慢性箭头（屏二 AyuGram 收静音群消息，屏一已藏的光标冒头：坐标不动、无真实输入、
-    /// 我们这边全部读数照旧说「藏着」）坏在框架一侧：InputSite 把箭头发布到全局光标后，本线程队列
-    /// 每拍的 <see cref="Nudge"/>（<c>SetCursor</c> + 负计数锁 + 类光标 + <c>Root.KeepCursorHidden</c>）
-    /// 双双失灵——形状不显示在本队列上，且站点不再读我们立的值。这一拍每拍读一次
-    /// <see cref="Native.CursorSnapshot"/>（<c>GetCursorInfo</c>，纯读），把「屏上是谁的形状」对出来。
-    /// </para>
-    /// <para>
-    /// 判「外来」三条全过才算：可见位（<see cref="Native.CurShowing"/>）立着、形状非零、形状不是
-    /// 我们的透明句柄。健康段（系统答 0x00/0x0，或挂着我们自己的 0x2055F）一个数都不动。
-    /// </para>
-    /// <para>
-    /// 夺回分两层：<b>重发布</b>（<see cref="PictureSurface.RepublishCursor"/>，XAML 杠杆整条断开重接
-    /// 加重取源）每拍异形都做，便宜；连续 <see cref="ForeignStreakForPoke"/> 拍（约 300ms）还
-    /// 收不回来，说明重说的通道本身失灵了，升级<b>指针处 1px 往返</b>（<see cref="PokeForeignCursor"/>）
-    /// ——一记净位移为零的真实指针输入，win32k 重走 WM_SETCURSOR、框架站点重发布 ProtectedCursor，
-    /// 两条链同时被点亮。全程限频 1s。计数字段 _foreignShapes/_foreignStreak/_republished/_foreignPokes
-    /// 随显行与取样行出日志。二十七报曾在这升级一扇重算小窗（无输入造「指针下窗口变了」），真机连九十一
-    /// 拍没救回来——窗口变化触发的重算不走 WM_SETCURSOR 询问链，退役（第二十九报）。
-    /// </para>
+    /// Repairs a visible cursor only while the pointer still belongs to this player's window.
+    /// WinUI may publish a transparent copy with a different handle, so bitmap transparency is authoritative.
     /// </summary>
+    private void OnSystemCursorChanged()
+    {
+        if (!Attached || !_cursorHidden) return;
+        _window?.KeepCursorHidden();
+        Root.KeepCursorHidden(_window?.BlankInputCursor);
+    }
+
     private void ChaseForeignCursor()
     {
-        // 指针不在画面上时，屏上是什么形状都不归我们管：压着别人的窗口，本就该是别人的形状。
-        // 这一问走的是这一拍开头共享的那份读数，不多花一次 GetCursorPos。
-        if (!PointerInside()) return;
+        if (!_cursorHidden || _window is not { } window
+            || (ViewModel.PlayingNow && !ViewModel.PictureInHostWindow)
+            || !PointerInside() || Native.MouseButtonDown())
+        {
+            _foreignStreak = 0;
+            return;
+        }
 
-        if (Native.CursorSnapshot() is not { } snap) return;
+        if (Native.CursorSnapshot() is not { } snap
+            || Native.GetAncestor(Native.WindowFromPoint(snap.At), Native.GaRoot) != window.Handle)
+        {
+            _foreignStreak = 0;
+            return;
+        }
 
-        if ((snap.Flags & Native.CurShowing) == 0) return;
-        if (snap.Shape == IntPtr.Zero || snap.Shape == _window?.BlankCursor) return;
+        if (ScreenCursorGone(snap.Flags, snap.Shape))
+        {
+            _foreignStreak = 0;
+            return;
+        }
 
         _foreignShapes++;
         _foreignStreak++;
         _republished++;
-
-        Root.RepublishCursor(_window?.BlankInputCursor);
+        Root.RepublishCursor(window.BlankInputCursor);
 
         if (_foreignStreak < ForeignStreakForPoke || Now - _lastPokeAt < PokeCooldown) return;
 
-        var shape = snap.Shape;
-
+        _lastPokeAt = Now;
         if (PokeForeignCursor(snap.At))
         {
-            _lastPokeAt = Now;
             _foreignPokes++;
-            Log.Debug(Category, $"屏上异形 0x{shape:X} 连 {_foreignStreak} 拍、重发布没救回来，指针处 1px 往返逼重发布");
+            Log.Debug(Category, $"屏上可见光标 0x{snap.Shape:X} 持续 {_foreignStreak} 拍，已通过输入队列刷新");
         }
     }
 
+    private bool ScreenCursorGone(int flags, IntPtr shape)
+    {
+        if ((flags & Native.CurShowing) == 0 || shape == IntPtr.Zero || shape == _window?.BlankCursor)
+            return true;
+
+        if (_screenCursorShape != shape)
+        {
+            _screenCursorShape = shape;
+            _screenCursorTransparent = Native.CursorIsTransparent(shape);
+        }
+        return _screenCursorTransparent;
+    }
+
     /// <summary>
-    /// 指针处一记 1px 往返（第二十九报，2026-09-17）：<see cref="Native.SetCursorPos"/> 出去一像素、当拍
-    /// 收回——净位移为零的一记真实指针输入。
-    /// <para>
-    /// 二十七报的两层无输入夺回（XAML 重发布、重算探针小窗）在真机上连九十一拍全败，而那段日志同时把
-    /// 机理说清了：队列上挂着我们的透明句柄、屏上却是系统箭头 0x10003——全局光标由框架输入站点绕过本线程
-    /// 队列直接持有，本线程的一切改形杠杆（SetCursor、负计数锁、类光标、ProtectedCursor）都够不着它；
-    /// 站点只在指针事件时重发布。能让它重发布的按钮只有一个：<b>真实指针输入</b>。一记一像素的往返就是
-    /// 那个按钮——win32k 重新走 WM_SETCURSOR（我们的拦截答透明），站点收到指针事件重新发布
-    /// ProtectedCursor（读到的也是透明），两条链同时被点亮。用户那一下点击之所以总能救回来，走的就是
-    /// 同一条路。
-    /// </para>
-    /// <para>
-    /// 与第九报定罪的「注入 ±1px」不同处有二。其一，那里是十赫兹每拍注入、且当时 ProtectedCursor 还没
-    /// 立住，重发布会把箭头合法化——每 1.15 秒闪一轮；这里只在异形连续几拍、重发布确认失灵后一秒一次，
-    /// 而透明句柄稳稳立着（12:29 那段日志的「框架光标＝透明」），重发布读到的就是它。其二，往返净位移为
-    /// 零：藏匿期两条唤醒路都够不着这一记——轮询那路的 <see cref="ChromeReveal.HandStep"/> 要切比雪夫
-    /// 超过 5px，事件那路在藏匿期只报位置、不算移动（OnPointerMoved 的藏匿期分支）。SetCursorPos 不产生
-    /// WM_INPUT（十六报实证），取证账本不动。
-    /// </para>
+    /// SetCursorPos changes coordinates without delivering pointer input to the island. A paired
+    /// SendInput move does reach it; its net zero displacement cannot pass the wake threshold.
     /// </summary>
     private bool PokeForeignCursor(NativePoint at)
     {
-        // 靠屏幕边的那一侧挪出去会被系统钳住（位置没动、重算就不发生）：离哪边远就往哪边挪。
-        var desk = Native.VirtualScreen();
-        var dx = at.X - desk.X >= desk.X + desk.Width - at.X ? -1 : 1;
+        if (_window is not { } window || Native.MouseButtonDown()
+            || !Native.GetCursorPos(out var current) || current.X != at.X || current.Y != at.Y
+            || Native.GetAncestor(Native.WindowFromPoint(current), Native.GaRoot) != window.Handle) return false;
 
-        return Native.SetCursorPos(at.X + dx, at.Y) && Native.SetCursorPos(at.X, at.Y);
+        return Native.NudgeCursorState();
     }
 
     /// <summary>

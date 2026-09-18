@@ -983,7 +983,7 @@ public sealed partial class DetailViewModel : PageViewModel
 
     /// <summary>
     /// 连播 —— 「集页面加一个连播按钮」（2026-09-12）。开的是设置里那一档「自动播放下一集」
-    /// （<see cref="PlaybackSettings.AutoPlayNextEpisode"/>：一集放完自动接下一集，跨季也接着放），
+    /// （<see cref="PlaybackSettings.AutoPlayNextEpisode"/>：一集放完自动接下一集，本季放完退出播放），
     /// 不是这一页自己的状态 —— 播放器 ⚙ 菜单和设置页读写的都是同一份，谁改了屏上到处都认；写回即存，
     /// 和播放器里那一颗的规矩一致（见 <c>PlayerViewModel.AutoPlayNextEpisode</c>）。
     /// <para>

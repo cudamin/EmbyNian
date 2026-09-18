@@ -39,4 +39,27 @@ public static class CursorMask
 
         return (and, new byte[bytes]);
     }
+
+    /// <summary>Checks a top-down monochrome bitmap containing the AND plane above the XOR plane.</summary>
+    public static bool IsTransparent(ReadOnlySpan<byte> mask, int width, int height, int stride)
+    {
+        if (width <= 0 || height <= 0 || stride <= 0
+            || width > (long)stride * 8 || (long)stride * height * 2 > mask.Length) return false;
+
+        var wholeBytes = width / 8;
+        var tailBits = width % 8;
+        var tailMask = (byte)(0xFF << (8 - tailBits));
+        var planeBytes = stride * height;
+        for (var y = 0; y < height; y++)
+        {
+            var row = y * stride;
+            for (var x = 0; x < wholeBytes; x++)
+            {
+                if (mask[row + x] != 0xFF || mask[planeBytes + row + x] != 0) return false;
+            }
+            if (tailBits != 0 && ((mask[row + wholeBytes] & tailMask) != tailMask
+                || (mask[planeBytes + row + wholeBytes] & tailMask) != 0)) return false;
+        }
+        return true;
+    }
 }

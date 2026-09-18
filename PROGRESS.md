@@ -1,6 +1,58 @@
 # 开发进度
 
-最后更新：2026-09-17
+最后更新：2026-09-18
+
+## 双击纯净闸＋自动连播季内化：两项交互契约落地（2026-09-18）
+
+> 用户令：「双击触发全屏或还原时，不得呼出任何 UI 控件」「最后一季的最后一集播放结束后直接退出播放界面，不得自动续播该最后一季的第一集」。
+
+### 双击全屏/还原保持画面纯净
+
+- 根因：`OnPointerPressed` 对每次按下当场 `WakeFully`，整套控件亮 1.2 秒——单击/双击在按下那一拍无法区分，宽限当场给＝双击必闪控件。
+- 修法：点在画面上的按下不再当场给宽限；**单击被证实**（tap-hold 到期，与暂停徽标同一拍）才在 `OnTapHoldElapsed` 给；双击在 `OnDoubleTapped` 当拍调 `ChromeReveal.Silence`（新）收干净再切全屏。Silence 压过位置规则（指针停在边缘带也不出控件）；解锁只认真手（轮询 HandStep 过线走的 `Moved`）、刻意唤醒（WakeFully/FlashRail）与新一播放（Reset）。**resize 的 moved:true 重报不解闸**——进全屏自己那一下就是 resize，解了闸控件会被位置规则当场摆回来（`WakeFromPoll` 相应改为先 `Moved` 再 ReseedPointer）。
+
+### 自动连播只在本季内
+
+- 实机取证（日志＋直查服务器）：《Re：从零开始的异世界生活》S01E83（第 1 季唯一一集）播完后自动接播 S04E12——旧版 `NextEpisodeToAutoPlayAsync` 在季末退而求其次拿**全剧列表**，把下一季第一个可播集接了上来。
+- 修法：Core 新增 `EpisodeNavigation.StepInSeason`（先缩进当前单集所在季再走一步，列表装着全剧也只认本季）；季末返回 null → 播放界面退出。跨季仍归上一集/下一集按钮。设置说明改「本季放完退出播放」（Settings/AppSettings/DetailViewModel 三处同步）。
+
+### 闸门与发版（v0.0.13）
+
+构建 **0 警告 0 错误**；单测 **919/919**（基线 908 → 净增 11：StepInSeason 4＋ChromeReveal 纯净闸 4＋点画面边界 3）；发布 **482 文件 / 301.6 MB / 11 GLSL** 与基线一字不差（zip：`EmbyNian-0.0.13-win-x64.zip`）；自检 **189 非空行**与基线一致，唯一失败为**既有红《伪恋》跨季服务端数据**（与三十报同一条）。踩坑：`build.cmd test` 是 `--no-build`，改测试源码必须先 build；沙箱内 `& exe` 启动自检被静默吞（零日志零报告），`Start-Process -Wait` 越沙箱才跑成。
+
+## 集成模式光标慢性箭头：根治在 WinUI 自己的光标线程上（2026-09-18）
+
+> 用户原话：「播放时鼠标不会动隐藏」「集成模式下才有这个bug，独占模式下是正常的」「你每次测试的时候AyuGram收到信息后会触发鼠标露出」。
+
+### 定案：上一版判据没判错，错的是「对谁说话」
+
+第二十七/二十九报那套（每拍重申 + 重发布 + 指针处 1px 往返）作用的对象是**界面线程的队列**，而 WinUI 3 的岛把光标发布在**另一条进程内的输入线程**上——`WinEvent` 的 `EVENT_OBJECT_SHOW/NAMECHANGE`（idObject=-9）回调里，producer 线程 != 窗口所在的界面线程（本轮实测：界面 21576 / 输入 6488；另一次运行 20052 / 3748）。界面线程上的一切（`SetCursor`、`ShowCursor` 负计数锁、类光标、`ProtectedCursor`）都够不着那条队列，所以日志里「藏着」与屏上箭头可以长期共存；AyuGram 收消息（Qt 用 `SetCursorPos` 搬坐标、不产生输入）之后框架重发形状就冒出来。
+
+修法：藏匿期把**界面线程接进那条发布线程的输入队列**（`AttachThreadInput`），本进程的隐藏计数才对发布者生效；显示/退出时立即解除。配套三处：
+
+- **`CursorVisibilityEvents`**（新，`src/EmbyNian.Shell/Interop/`）：进程内 `SetWinEventHook`（只收本进程，`0x8002..0x800C`）+ 识别 producer 线程（`OpenThread` + `GetProcessIdOfThread` 二次校验是本进程）→ 藏匿期 attach / 显示期 detach。attach/detach 前后用 `Get/SetKeyboardState` 保存恢复键盘状态（微软文档明写 `AttachThreadInput` 会重置 key state，而播放页的快捷键真的读 Ctrl/Alt/Shift）。
+- **`PictureSurface`**：`KeepCursorHidden` 不再每拍 `Cursor = null; Cursor = blank;`（那两下会把静息帧打回框架默认箭头），健康时只把 `InputPointerSource.Cursor` 压成 null——站点不再发布任何形状。
+- **`PlayerPage.ChaseForeignCursor`**：判「屏上是否干净」改用 `Native.CursorIsTransparent`（`GetIconInfo` + `GetDIBits` 读 AND/XOR 掩码，判据 `CursorMask.IsTransparent` 在 Core 且被单测钉住），因为 WinUI 发布的是**我们自己透明光标的副本**（句柄不同、每次运行都不同），旧的「相等才认」会把每一次健康发布都当外来箭头，从而每秒发一记真实的 1px 往返。
+
+### 实机证据（本轮全用本地视频，未碰 Emby 媒体库）
+
+新的隔离入口 `--probe-cursor [<本地文件>]`（普通启动前分流、独立空数据目录、不登录、不播 Emby），用正式 `PlayerPage` + `HostWindow` + 10Hz 计时器，只认系统 `GetCursorInfo`：
+
+- 主屏/副屏、窗口化/全屏各一轮，本地 `probe1080.mp4` 循环播放：隐藏后**持续 10 秒 395/394 次采样，可见 0 次**；两轮外来 `wait` 覆盖（模拟 AyuGram 那种外部形状）后 71 次采样可见 0 次；全程 **0 次** 1px 往返兜底。
+- 真实移动 60 像素 → 光标回来且播放器认得；再静止 → 又藏；显示态解除队列连接、退出后监听与连接都回收，系统光标恢复。
+- 「连接/解除输入线程时保留 Ctrl、Alt、Shift」写成了自检腿（`ProbeCursorModifierPreservation`）。
+
+### 闸门
+
+构建 **0 警告 0 错误**；单测 **911/911**（新增 `CursorMask.IsTransparent` 三条）；发布走 `tools/publish.ps1 -NoArchive`，**正式 `artifacts/publish/win-x64` 已刷新**；自检主屏/副屏各跑一遍，**只剩既有的《伪恋》跨季服务端数据一条**（选集 20 vs 23）。
+
+顺带修掉自检自己的一处误报：「屏幕像素」五个定点在 1406 宽的搜索页上全落在空底色里（最近的一点离工具栏 36 物理像素），于是把「这五点同色」误读成「岛没合成」——同帧的 `--dump-ui` 截图里卡片、标题、空态提示都在。现在补一层 32 像素网格取样（只数本窗口拥有的点），五点全空但网里有第二种颜色时按「岛在合成」通过。
+
+### 未验收 / 边界
+
+- AyuGram 真机复现（用户那个「每次收到静音群消息」的场景）没有在本轮复跑：本轮用本地视频 + 外部形状覆盖代替，机理与修法都对着同一条发布线程。
+- 独立播放（独占/外部 mpv.exe）**不安装监听、不接输入队列**：那条路的画面在 mpv 自己的窗口里，`SetCursorHidden` 走 `ViewModel.PictureInHostWindow` 判断，未播放的自检态（`!PlayingNow`）照旧受管。
+- 第二窗口（`PlayerWindow`）关闭路径补上了 `_page.Detach()`；此前旧页会挂在新挂接的页后面，监听与线程句柄要留到下次 GC 才走。
 
 ## 独占模式重构：mpv 原生交换链绕过 WinUI（2026-09-17）
 

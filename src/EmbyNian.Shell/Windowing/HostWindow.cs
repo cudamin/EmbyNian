@@ -423,13 +423,17 @@ internal sealed class HostWindow : IDisposable
     /// </summary>
     public long CursorSuppressRestates { get; private set; }
 
-    /// <summary>
-    /// 第九报（2026-09-15）：把本线程队列的显示计数压回负区。幂等——计数已在负区时一次调用都不发生，
-    /// 所以每拍重说毫无开销；一旦被谁抬回非负，下一个 100ms 拍就把锁重新上好。见
-    /// <see cref="CursorSuppressRestates"/> 的对决实验。
-    /// </summary>
+    /// <summary>Leaves the count negative without accumulating another decrement on each tick.</summary>
     private void SuppressCursorDisplay()
     {
+        var count = Native.ShowCursor(false);
+        if (count < -1)
+        {
+            Native.ShowCursor(true);
+            return;
+        }
+        if (count < 0) return;
+        CursorSuppressRestates++;
         while (Native.ShowCursor(false) >= 0) CursorSuppressRestates++;
     }
 
@@ -2335,6 +2339,11 @@ internal sealed class HostWindow : IDisposable
 
         HookIslandCursor(island);
 
+        // 岛自己的类底色（2026-09-17 三十二报）：框架给这个类配的底色是白的，XAML 内容没画到的地方露出来
+        // 就是白的 —— 用户三张截图（828×647 的直角白块、875×645 带页面渐变的那块、画面边缘 8~10px 白带）
+        // 都是它。换成程序的基色刷，露出来的地方就跟着深色走。刷子必须活得比类长，所以用的是窗口擦除那一个。
+        Native.SetClassBackground(island, Native.ClassBackgroundIndex, BaseBrush);
+
         Log.Info(Category, $"XAML 岛已创建 hwnd=0x{island:X} 客户区 {client.Width}x{client.Height}");
     }
 
@@ -2467,7 +2476,47 @@ internal sealed class HostWindow : IDisposable
         // calls per resize because every piece of chrome was its own layered top-level window; this
         // is the single biggest reason the rewrite makes resizing smoother rather than worse.
         _source.SiteBridge.MoveAndResize(new RectInt32(0, 0, client.Width, client.Height));
+
+        // 岛刚换了矩形，把「它不再盖着的那一圈」补上底色 —— 见 FillExposedClient。
+        FillExposedClient(client);
+
         UpdateTitleBarRegions();
+    }
+
+    /// <summary>
+    /// 把客户端里此刻没被 XAML 岛盖住的地方补上底色（<see cref="BaseBrush"/>）。
+    /// <para>
+    /// <b>为什么非补不可。</b>这个程序的深色底有两层来源，两层都是「事件来了才画」：页面自己的背景刷，
+    /// 以及窗口的 <c>WM_ERASEBKGND</c> 填充。于是有一类时刻两边都没轮到 —— 岛换矩形时露出来的那一圈、
+    /// 以及窗口几何被程序改掉（进／退全屏那几个 <c>SetWindowPos</c> 都带 <c>SWP_NOCOPYBITS</c>）时新露出的
+    /// 区域 —— 那里既没被页面画过，也没等到一次擦除，露出来的就是窗口类的默认底色，<b>白的</b>。
+    /// </para>
+    /// <para>
+    /// <b>证据（2026-09-17 用户两张截图）。</b>Pillow 逐像素量：一张是客户端左上角一块 828×647 的直角白块
+    /// （单像素过渡、无圆角无阴影，页面底色 #16181C 围着它）；另一张是播放页加载遮罩右／下边缘各 8~10px 的
+    /// 白带，正好在客户区边缘与可见边框之间。两处都是「岛没盖住 ⇒ 没画过 ⇒ 白」。
+    /// </para>
+    /// <para>
+    /// 用窗口自己的 DC 填：GDI 会把绘制剪到子窗口没盖住的地方，所以这一笔正好只画露出来的那一圈，画完岛
+    /// 照旧在上面。顺序必须是先 <c>MoveAndResize</c> 再填 —— 填的是岛的新矩形之外。
+    /// </para>
+    /// </summary>
+    private void FillExposedClient(NativeRect client)
+    {
+        if (Handle == IntPtr.Zero || client.Width <= 0 || client.Height <= 0) return;
+
+        var device = Native.GetDC(Handle);
+        if (device == IntPtr.Zero) return;
+
+        try
+        {
+            var whole = new NativeRect { Left = 0, Top = 0, Right = client.Width, Bottom = client.Height };
+            Native.FillRect(device, ref whole, BaseBrush);
+        }
+        finally
+        {
+            Native.ReleaseDC(Handle, device);
+        }
     }
 
     private static IntPtr Dispatch(IntPtr window, uint message, IntPtr wParam, IntPtr lParam)

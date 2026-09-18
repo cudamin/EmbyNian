@@ -163,6 +163,9 @@ public sealed partial class PlayerPage
         Want("藏了以后框架的光标也换成透明的", ReferenceEquals(Root.Cursor, _window.BlankInputCursor));
         report.Add($"框架光标：包得出={_window.BlankInputCursor is not null}"
             + $"，藏着时画面上是{(Root.Cursor is null ? "默认" : "透明")}");
+        Want("透明位图可识别", Native.CursorIsTransparent(_window.BlankCursor));
+        Want("等待光标不能误判透明", !Native.CursorIsTransparent(wait));
+        Want("系统箭头不能误判透明", !Native.CursorIsTransparent(Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor)));
 
         // The assertion the whole fix stands on: the thread's cursor is 「none」, which is what a still pointer
         // over the picture is looking at. Everything else here is about keeping it that way.
@@ -196,7 +199,8 @@ public sealed partial class PlayerPage
         do
         {
             Pump();
-            _window.KeepCursorHidden();
+            Nudge();
+            ChaseForeignCursor();
             Thread.Sleep(10);
         } while (Now < displayDeadline && !ScreenHasNoCursor());
         var displayGone = ScreenHasNoCursor();
@@ -211,7 +215,8 @@ public sealed partial class PlayerPage
         while (Now < watchUntil)
         {
             Pump();
-            _window.KeepCursorHidden();
+            Nudge();
+            ChaseForeignCursor();
             // 第九报（2026-09-15 15:40）：加前台门，与下面 Screen 的三道门同构。这一轮自检（负计数
             // 锁上机后）此观察 922/922 全程「系统箭头」而红，但同一份报告里「在前台=False」——前台在别人手里
             // 时桌面光标归那个进程的队列，读到的箭头是别人的；负计数锁是本队列私有的，管不到也不该管到。
@@ -351,30 +356,9 @@ public sealed partial class PlayerPage
         return length > 0 ? new string(buffer, 0, length) : "问不出";
     }
 
-    /// <summary>
-    /// Whether the OS itself says nothing a user could see is on screen: the showing flag down, down to no
-    /// shape at all, or down to a shape that draws nothing — a cursor made of nothing is not a cursor, and
-    /// <c>GetCursorInfo</c> reports it as showing like any other handle.
-    /// Every other reading in this file is the player's own bookkeeping, which was unanimous that the cursor
-    /// was hidden through three rounds of 「鼠标指针还是不会自动隐藏」; this is the one that was disagreeing.
-    /// A snapshot that cannot be taken is not evidence of a cursor, so it counts as gone.
-    /// <para>
-    /// The last clause is the one that took a while to earn. Hidden over the picture, WinUI does not push
-    /// <b>our</b> blank <c>HCURSOR</c> to the compositor — it pushes a copy of it: a handle we never created,
-    /// different on every run (0xF08BA, 0x244F0B19, 0x4D850313 have all been recorded), which draws nothing and
-    /// which <c>CURSORINFO</c> nevertheless reports as showing. So the question this can honestly answer is
-    /// 「is the thing on screen the system arrow」 rather than 「is there anything at all」, and it is asked only
-    /// while this thread's own queue holds no shape, which is what makes 「some other real cursor」 impossible.
-    /// The arrow is not a technicality here: an arrow standing over a paused film is exactly what was reported,
-    /// and it is what this still goes red for.
-    /// </para>
-    /// </summary>
+    /// <summary>Only a successful system snapshot with no visible pixels proves the cursor is hidden.</summary>
     private bool ScreenHasNoCursor() =>
-        Native.CursorSnapshot() is not { } cursor
-        || (cursor.Flags & 1) == 0
-        || cursor.Shape == IntPtr.Zero
-        || (_window is { } window && cursor.Shape == window.BlankCursor)
-        || (NoShape() && cursor.Shape != Native.LoadCursor(IntPtr.Zero, Native.ArrowCursor));
+        Native.CursorSnapshot() is { } cursor && ScreenCursorGone(cursor.Flags, cursor.Shape);
 
     /// <summary>Whether the pointer is where it was just asked to go — an injection can be dropped silently.</summary>
     private static bool Landed(NativePoint at) =>
@@ -638,26 +622,23 @@ public sealed partial class PlayerPage
             //  · The end position. Cheap and certain when it differs, but blind to a pointer that moved during
             //    the window and was put back — and blind is what it was, because it is the only signal there was.
             //  · The polled count, which is the one that actually answers the question. <c>_polledKnown</c> is
-            //    cleared just above, so the loop's first poll always counts one — it is the seeding, not a
-            //    movement, and a pointer that truly never moves is filtered out before the counter by the
-            //    <c>dx == 0 && dy == 0</c> return in PollPointer. So exactly 1 is what an undisturbed leg
-            //    reports and anything past 1 is a real displacement: one that crossed
-            //    <see cref="ChromeReveal.MovePixels"/>, in either cursor state — the same five pixels whether the
-            //    cursor is showing or hidden, that number being 5 rather than 2 as of 2026-09-14 because a desk
-            //    rattles up to two (see <c>ChromeReveal.MovePixels</c>). Either way the idle clock restarted, so
-            //    there is nothing here to judge.
+            //    cleared just above, so the loop's first poll seeds the reference and says nothing else —
+            //    2026-09-17 起播种不计数也不唤醒（第一次读数不是位移，两个状态同一问 HandStep）。所以
+            //    undisturbed 的腿报 0，而任何一个被计数的移动都是真位移：离冻参照过了
+            //    <see cref="ChromeReveal.MovePixels"/> 的那种，桌面抖动绕着停点打转够不着它。无论哪种，
+            //    空闲钟都重启了，这一轮没什么可判的。
             //
-            // A regression cannot hide behind this. Hiding that stops working reports 1 polled move and fails;
+            // A regression cannot hide behind this. Hiding that stops working reports 0 polled moves and fails;
             // a spurious un-hide from a pointer that never moved arrives as a XAML event (「空事件」) and never
             // touches this counter, because it only advances when the OS's own coordinate changed.
             var polled = _polledMoves - polls;
             var moved = !Native.GetCursorPos(out var ended) || ended.X != centre.X || ended.Y != centre.Y;
-            var disturbed = moved || polled > 1;
+            var disturbed = moved || polled > 0;
 
             report.Add($"{where}：{(hiddenAt == 0 ? $"{span}ms 过去也没藏" : $"静止 {hiddenAt - began}ms 就藏了")}"
                 + $"，线程形状={Mine()}"
                 + $"，真实输入{(heard ? "到位" : "注不进")}"
-                + $"，轮询问出 {polled} 次移动{(polled <= 1 ? "（只有开头那次播种，也就是全程没人碰）" : $"（开头播种 1 次，真的动了 {polled - 1} 次）")}"
+                + $"，轮询问出 {polled} 次移动{(polled == 0 ? "（开头那次播种不计数，也就是全程没人碰）" : $"（真的动了 {polled} 次）")}"
                 + $"、XAML 事件 {_pointerMoves - moves} 次、空事件 {_stillMoves} 次"
                 + $"，我们推了 {pushed} 拍、计时器自己 {Math.Max(0, _tickCount - ticks - pushed)} 拍"
                 + $"，重申了 {_cursorNudges - nudges} 次（不碰指针）"
@@ -667,9 +648,11 @@ public sealed partial class PlayerPage
 
             if (disturbed) return;
 
-            // The seeding must have come from somewhere, or 「藏了」 below would be true of a rule that never
-            // knew where the pointer was — and a rule that believes the pointer is nowhere hides nothing.
-            Want($"{where}轮询问出了指针", _polledMoves > polls);
+            // The seeding must have happened inside the loop, or 「藏了」 below would be true of a rule that
+            // never knew where the pointer was — and a rule that believes the pointer is nowhere hides nothing.
+            // The seed has been silent since 2026-09-17 (it is not a movement, so it counts nothing), which
+            // makes the reference itself the observable.
+            Want($"{where}轮询把指针的参照立起来了", _polledKnown);
 
             // The whole of the request, asked of real seconds: mpv.net 的 cursor-autohide，静止 1000ms
             // 就藏（2026-09-16 照搬，原先的「两秒」随用户拍板一起改）。
@@ -926,6 +909,47 @@ public sealed partial class PlayerPage
     /// 账本的读法坏了，下一次幽灵报告的证据链就断了。
     /// </para>
     /// </summary>
+    internal (bool Hidden, long Moves, int Refreshes, bool Watching, bool AttachedQueue) CursorProbeState =>
+        (_cursorHidden, _polledMoves, _foreignPokes, _cursorVisibilityEvents?.Installed == true,
+            _cursorVisibilityEvents?.IsAttached == true);
+
+    /// <summary>Uses the production idle timer with no network playback session.</summary>
+    internal void BeginCursorProbe()
+    {
+        HoldCursorForDemo();
+        Cover.Visibility = Visibility.Collapsed;
+        CoverRing.IsActive = false;
+        _window!.VideoVisible = true;
+    }
+
+    internal unsafe bool ProbeCursorModifierPreservation()
+    {
+        if (_cursorVisibilityEvents is not { IsAttached: true } observer) return false;
+        byte* original = stackalloc byte[256];
+        byte* seeded = stackalloc byte[256];
+        byte* after = stackalloc byte[256];
+        if (!CursorVisibilityEvents.GetKeyboardState((IntPtr)original)) return false;
+        new ReadOnlySpan<byte>(original, 256).CopyTo(new Span<byte>(seeded, 256));
+        seeded[0x10] |= 0x80;
+        seeded[0x11] |= 0x80;
+        seeded[0x12] |= 0x80;
+        try
+        {
+            if (!CursorVisibilityEvents.SetKeyboardState((IntPtr)seeded)) return false;
+            observer.SetHidden(false);
+            if (!CursorVisibilityEvents.GetKeyboardState((IntPtr)after)
+                || (after[0x10] & after[0x11] & after[0x12] & 0x80) == 0) return false;
+            observer.SetHidden(true);
+            return observer.IsAttached && CursorVisibilityEvents.GetKeyboardState((IntPtr)after)
+                && (after[0x10] & after[0x11] & after[0x12] & 0x80) != 0;
+        }
+        finally
+        {
+            CursorVisibilityEvents.SetKeyboardState((IntPtr)original);
+            observer.SetHidden(_cursorHidden);
+        }
+    }
+
     internal (bool Ok, string Detail) ProbeCursorWarp()
     {
         if (!Attached || _window is null) return (false, "播放层未接线");
@@ -1079,6 +1103,45 @@ public sealed partial class PlayerPage
         else
         {
             report.Add("腿一之后光标不在藏匿态，慢移腿不判（同一个前提没了不装绿）");
+        }
+
+        // —— 腿三：显示态慢手 —— 参照点冻结在显示态的证明 ——
+        //
+        // mpv 的 cursor-autohide 里「动了就不藏」（2026-09-17 参考 dyphire/mpv-config 统一后的语义）：
+        // 只要手还在动，空闲钟就一直被过线重盖，光标不会死在半路。轮询传感器上这一语义就是显示态
+        // 与藏匿态同用一张冻参照（ChromeReveal.HandStep）：每拍 2 像素的手每三拍过一次线（累计
+        // 6 > 5），空闲钟永远走不满 CursorIdleMilliseconds。旧判据（显示态参照每拍推进）下这段慢移
+        // 攒不起任何重盖，一秒后光标消失在移动中途——「每拍不足五像素的慢手走不到终点」说的就是它。
+        if (!_cursorHidden)
+        {
+            Native.GetCursorPos(out var drift);
+
+            // 每拍 +2、同方向，走 16 拍（32 像素，五次于过线）；靠屏幕右沿太近就往左走，别撞虚拟屏边界。
+            var dirDrift = drift.X + 40 <= VirtualRight() ? 1 : -1;
+            var lost = false;
+
+            for (var i = 1; i <= 16; i++)
+            {
+                Native.SetCursorPos(drift.X + dirDrift * 2 * i, drift.Y);
+                Pump();
+                OnTick(this, EventArgs.Empty);
+
+                if (_cursorHidden)
+                {
+                    lost = true;
+                    report.Add($"  显示态慢移第 {i} 拍（累计 {2 * i} 像素）后：光标丢了");
+                    break;
+                }
+
+                Thread.Sleep(60);
+            }
+
+            Want("显示态慢手一路走光标不丢（显示态同用冻参照）", !lost);
+            report.Add($"显示态慢移 2 像素×16 拍（共 32 > {ChromeReveal.MovePixels:0}）后：光标{(lost ? "半路丢了（参照每拍推进的旧判据）" : "一直在")}");
+        }
+        else
+        {
+            report.Add("腿二之后光标不在显示态，显示态慢手腿不判（同一个前提没了不装绿）");
         }
 
         // —— 还原 ——

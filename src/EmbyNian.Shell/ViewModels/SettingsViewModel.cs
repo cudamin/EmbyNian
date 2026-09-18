@@ -430,7 +430,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         [
             Toggle("向服务器汇报播放进度", "关掉后 Emby 就不记你看过的进度了", () => playback.ReportProgressToServer, value => playback.ReportProgressToServer = value),
             Toggle("从服务器保存的位置继续", "关掉后每次都从片头放起", () => playback.ResumeFromSavedPosition, value => playback.ResumeFromSavedPosition = value),
-            Toggle("自动播放下一集", "一集放完自动接下一集，跨季也接着放", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
+            Toggle("自动播放下一集", "一集放完自动接下一集，本季放完退出播放", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
 
             // 「在设置中新增一个开始播放后自动全屏的功能」／「在设置中新增功能，打开后点击播放后弹出一个独立
             // 窗口来播放」（用户的话，2026-09-13）。两行都只影响「下一个播放怎么开始」，改完当场生效 ——

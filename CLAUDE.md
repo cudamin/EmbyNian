@@ -1,181 +1,134 @@
-# EmbyNian — Standing Rules for Claude
+# EmbyNian — Claude 常设规则
 
-Read this before you touch anything. **Work still in flight lives in [PROGRESS.md](PROGRESS.md)** — this file holds the durable rules and commands, that one holds what the current phase is about.
+本文件保存的是长期有效的规则和命令；仍在进行中的工作记录在 [PROGRESS.md](PROGRESS.md)，那份文件保存的是当前阶段在干什么。**有需要的时候才读取**——不必每次动手前都先读。
 
-This file is in English. **What you produce for the user stays Chinese**: reports, commit messages, UI strings.
 
-## Prime Directive（首要目标）— the user's call, 2026-09-02
+## 首要目标（Prime Directive）— 用户裁定，2026-09-02
 
-**As long as it meets the requirement, the code should be as simple, clear, reliable and maintainable as possible** — not shackled by rules that make no sense. His own words: "I don't really understand code, so I may give bad directions."
 
-**This outranks every other clause in this file, the layering rules included.** How to use it:
+**本条款高于本文件中其他所有条款，包括分层规则。** 用法：
 
-- **Technical rules are means, not ends.** Layering, MVVM, DI and interfaces are defaults because they usually do make the code clearer. **Where following one makes a given spot longer, more convoluted or easier to get wrong, take the simpler path** — but say so: which spot, why, what you did instead, plus a line in PROGRESS.md. Deviating silently is as bad as complying blindly.
-- **His technical instructions can be argued with.** He said himself he may misdirect, so when he names an implementation you judge would make the code worse, **spend one or two plain sentences on the cost and let him decide**. If he says it again, do it: that is his decision, not a misunderstanding.
-- **"Simple" is judged by three things**: how many files you must open to change one behavior, whether a single file can still be read end to end, and whether a decision can be pinned down by a unit test. **Not line count** — the comments explaining *why* the code is the way it is are written for the next window, which arrives with no context; deleting them hands it the maintenance cost.
-- **He rules on what he can see; you rule on what he can't.** Every defect actually caught in this project came from him looking at the screen — that is his strength. Which class to use, whether to split a file, whether to add an interface is yours.
-- **These sections are not exempt**: the four gates (`-c Release` and single-node build included), no real playback while verifying, credentials, Git, this machine's traps. They constrain process and safety, not the shape of the code, and each was bought with a real incident — routing around them only makes the next regression invisible.
+- **技术规则是手段，不是目的。** 分层、MVVM、DI 和接口之所以是默认选择，是因为它们通常确实能让代码更清晰。**当在某处遵循其中一条会让代码更长、更绕、更容易出错时，选更简单的路径**——但要说明：哪个位置、为什么、改成了什么，并在 PROGRESS.md 里记一行。悄悄偏离和盲目服从一样糟糕。
+- **他的技术指示可以争论。** 他自己说过可能会指错方向，所以当他点名的实现方式在你看来会让代码变差时，**用一两句平实的话讲清代价，让他来决定**。如果他再说一遍，就照做：那是他的决定，不是误解。
+- **"简单"用三件事衡量**：改一个行为需要打开多少个文件、单个文件能否从头到尾读完、一个决定能否用单元测试钉死。**不是行数**——解释代码为何如此的是写给下一个毫无上下文的会话窗口的注释，删掉它们就是把维护成本转交给它。
+- **他裁决他看得见的；你裁决他看不见的。** 本项目抓到的每一个真实缺陷都来自他盯着屏幕——那是他的强项。用哪个类、要不要拆文件、要不要加接口，是你的事。
+- **以下章节不豁免**：四道闸门（包括 `-c Release` 和单节点构建）、验证时不真实播放、凭据、Git、这台机器上的坑。它们约束的是流程和安全，不是代码形态，而且每一条都是用真实事故换来的——绕开它们只会让下一次回归变得不可见。
 
-## What This Is（这是什么）
+## 这是什么（What This Is）
 
-An Emby desktop client. WinUI 3 + Windows App SDK 2.4.0 + .NET 10 + C#, unpackaged, x64; the playback core is libmpv (**don't change `libmpv-2.dll`'s version**). Three projects: `src/EmbyNian.Core` (no NuGet, no UI packages, hence the only layer unit tests reach directly), `src/EmbyNian.Shell` (the WinUI shell), `tests/EmbyNian.Tests` (a console test runner).
+一个 Emby 桌面客户端。WinUI 3 + Windows App SDK 2.4.0 + .NET 10 + C#，非打包，x64；播放内核是 libmpv。三个项目：`src/EmbyNian.Core`（无 NuGet、无 UI 包，因此是唯一能被单元测试直接触及的层）、`src/EmbyNian.Shell`（WinUI 外壳）、`tests/EmbyNian.Tests`（控制台测试运行器）。
 
-Style is recorded in [`.editorconfig`](.editorconfig) — file-scoped namespaces, no `this.`, `_camelCase` private fields, `PascalCase` const and static readonly, LF, 4 spaces. It was written on 2026-09-05 from a measurement of the tree rather than from a preference, so its `warning` severities are rules all 230 `.cs` files already pass.
+**播放架构是双管线并存**（「独占模式」＝项目里的独立模式/Standalone）：集成模式（默认）将 mpv 的 Composition 交换链嵌入 WinUI 视觉树实现控件混排；独占模式让 mpv 自建顶层窗口、独占交换链直接呈现——以窗口模型分离换取极致性能。播放细节见 `embynian-playback` 技能。
 
-## Skills（技能）— the `winui` set is the standard
+代码风格记录在 [`.editorconfig`](.editorconfig)——文件范围命名空间、不用 `this.`、私有字段 `_camelCase`、const 与 static readonly 用 `PascalCase`、LF、4 空格。它写于 2026-09-05，依据是对代码树的实测而非个人偏好，所以它的 `warning` 级别规则是全部 230 个 `.cs` 文件已经全部通过的。
 
-**Priority order, highest first.** Established 2026-09-05 after he said it three times, the last as 「新技能不要改，以后统一按照新的 winui 技能来」:
+### 没有任何技能能知道的四个事实
 
-1. **The `winui-*` third-party skills, on WinUI 3 practice** — where one of them disagrees with something here, the skill is right and this file is what gets corrected.
-2. **This file**, on everything else: the user's own calls, this machine, his server, process and safety.
-3. **The four skills in `.claude/skills/`**, on their own subjects.
+这些**不是**上述优先序的例外——它们是这台机器和这位用户服务器的事实。
 
-**「除非你有更好写法」— his call, 2026-09-06**, which replaces the earlier 「no exception list」: 「我要求以后按照 winui 技能执行，除非你有更好写法」. Clause 1 is now a strong default rather than an absolute — the same shape the prime directive already gives the layering rules, pointed at a skill. Follow the skill. Deviate only where you can show the alternative is better on the prime directive's own three tests, and then **say so**: which spot, why, what you did instead, a line in PROGRESS.md, and an entry under 「Where this project writes its own rule」 below if it is durable. Two things this is not:
+- **SDK 在 `%USERPROFILE%\.dotnet\dotnet.exe`**，`PATH` 上的 8.0.403 构建不了 `net10.0` 项目。`winui-setup` 会从它读出「8.0.100+ 已存在」然后宣布工具链健康——检查正确、输入错误，所以别在这里运行它去「修复」任何东西。
+- **单节点构建。** 本机的 workload 解析器，实测如此。`winapp run` 接受 `-p Name=Value` 传 MSBuild *属性*，所以闸门 1 的三个 `-p:` 标志本可以走它，但 `-m:1` 不行；这就是闸门是 `dotnet build`、分析器是手工接线的原因（见闸门 1）。
+- **验证时永远不要开始真实播放，永远不要点卡片中央**——那是悬停浮出的播放按钮，它背后的服务器是他的真实媒体库。这与他的观看历史有关而非 WinUI，所以它同样约束 `winapp ui` 的 `click` / `invoke` / `hover` / `drag` 和 `winui-ui-testing` 的「一次遍历每个元素」模板，正如它约束 `tools/poke.ps1`。只读动词（`inspect`、`search`、`get-value`、`wait-for`）和截图清单照写的方式欢迎使用。
+- **包版本保持钉死**，对应「永远不要给 `dotnet add package` 传 `--version`」：WindowsAppSDK 拆成子包，`Runtime` 钉在 `[2.4.0]`，为了不带入约 39 MB 的 onnxruntime；`libmpv-2.dll` 不动。这条属于代码形态，所以由我裁定而非常设例外——要改请先说明。
 
-- **Not licence to skip a rule because following it is work.** 「更好写法」 means a writing you can defend, not an unwritten one.
-- **A skill rule nobody has got to yet is not a deviation** — it is owed work, and it belongs in PROGRESS.md under that name. Recording it as a deviation is how an undone job stops looking undone.
+### 本项目自立规则之处（更好写法）
 
-### The third-party skills
+三条，每条都经过实测。不在此清单上的一切遵循技能。
 
-Five plugins at user scope, in two batches. **The WinUI and media batch, 2026-09-05** — `winui@win-dev-skills` 0.3.0 (microsoft/win-dev-skills, eight skills) and `watch@claude-video` 0.2.0 — plus three folders copied out of `damionrashford/media-os` (`ffmpeg-hdr-color`, `ffmpeg-probe`, `hdr-dovi-tool`). The seven `winui-*` skills are also reachable from `%USERPROFILE%\.claude\skills` as symlinks into `%USERPROFILE%\.cc-switch\skills`, and `%USERPROFILE%\.zcode\skills` holds the same eleven as plain folders for ZCode. **Both plugins show as `disabled`** and that is not a fault: their skills arrive through the symlinked folder instead, so enabling them would load each one twice.
+**`WUI2010` 关闭，仅在 `src/EmbyNian.Shell/EmbyNian.Shell.csproj`** ——分析器说二十条嵌套 `x:Bind` 路径会崩溃，实测说不会：生成代码对每段做判空，十九个中间量仅在构造与 `Attach` 之间为 null 且此后不再为 null，第二十个是非可空 get-only 属性。该规则提供的两个修法买到的都比付出的少。**推理过程，以及什么会让这条压制失效，就写在 csproj 里 `NoWarn` 旁边——添加第二十一条之前先读那里。** 这是唯一被关闭的分析器规则；其余每个 `WUI####` 都是真实发现。
 
-**The .NET batch, 2026-09-06 — three plugins, 12 skills, ~1,600 tokens on every session.** `dotnet-advanced` 0.2.2 and `dotnet-diag` 0.1.1 out of `dotnet/skills` (whose marketplace name is `dotnet-agent-skills`), plus `skill-authoring` 1.4.0 out of `fvadicamo/dev-agent-skills`. The one actually wanted is **`dotnet-pinvoke`** inside `dotnet-advanced` — callback rooting, `SafeHandle`, struct-size asserts, i.e. exactly the libmpv interop surface; the rest is the performance/diagnostics and skill-writing side. **A plugin's skills are named `plugin:skill`** (`dotnet-advanced:dotnet-pinvoke`), and they load into a running session without a restart — looking for the bare name is how 「技能没有增加」 got reported on a session that already had all of them. `dotnet-diag`'s agent (`optimizing-dotnet-performance`) **does load** despite `claude plugin details` printing 「Agents (0)」; that count is the command's own display bug, not a failure.
+**`x:Name` 是本项目已有之处的自动化句柄。** `winui-code-review` 要求每个交互控件都有 `AutomationProperties.AutomationId`；WinUI 在没有显式设置时把 `x:Name` 报为 UIA AutomationId，所以带 `x:Name` 的 67 个控件已经可寻址，再加第二个属性就是会漂移的重复。**2026-09-06 实测，不是假设**——`winapp ui inspect` 对运行中的应用直接报出 `automationId=PaneButton`、`SettingsButton`、`PlayButton` 等，皆来自其 `x:Name`。所以这里的规则是：交互控件需要一个**句柄**，`x:Name` 算数。控件两者都没有时——`x:Uid` 不是句柄，它只喂资源加载器——就加显式 `AutomationProperties.AutomationId`；2026-09-06 加了 36 个，把「完全没有句柄」的计数清零。**两类控件故意什么都不加**：`DataTemplate` 里的一切（28 个），以及标记中只写一次但屏幕上出现多次的 UserControl 内容（`PosterCard`、`EpisodeRow`）——一个 id 跨 N 行共享让 UIA 歧义而非可寻址，比没有更糟。`tools/scan-automation-ids.js` 打印完整清单，是添加交互控件后要运行的东西——分析器自己的 `WUI2020` 覆盖此规则，但在这棵树上保持沉默的原因没人查明，所以它不能当绊线。
 
-**What was left out on purpose, so it doesn't get installed again.** Two of them turn on one fact: **`dnx` is not on `PATH` here.** It exists and runs — `%USERPROFILE%\.dotnet\dnx.cmd`, off the 10.0.400 SDK, measured 2026-09-06 — but `PATH` carries `%USERPROFILE%\.dotnet\tools` and not `%USERPROFILE%\.dotnet`, so a bare `dnx` resolves to nothing. **Putting that directory on `PATH` is the fix nobody is to take**: it would make a bare `dotnet` resolve to 10.0.400 and quietly undo the full-path discipline the four gates depend on. So the marketplace's main `dotnet` plugin stays out, because its C# language server launches through `dnx`; and **`dotnet-skills` 0.14.2 out of `richlander/dotnet-skills` was installed and removed the same day**, because both of its skills are bootstrappers that shell out to `dnx dotnet-inspect` — a shell with the knowledge in a tool it cannot reach. Its marketplace entry went with it. `guardrails` is a `PreToolUse` hook and `privacy-guard` wants Python, both from `dev-agent-skills`. **`github-workflow` was also installed and removed the same day**: its `git-commit` enforces Conventional Commits with a mandatory kebab-case scope, against the Chinese-body rule in the Git section below, and its three PR skills have no workflow to attach to on a one-branch private repo. That last removal is the precedent for where this batch sits in the order above — **clause 3, not clause 1: where one of them collides with this file, this file wins**, because none of them is a WinUI-practice skill.
+**字号来自本项目自己的七级刻度，而非六个内建文本样式。** `winui-code-review` 说不许裸写 `FontSize`；媒体客户端需要 11/12/14/16/20/34/44，`TitleTextBlockStyle` 及其五个兄弟不提供。刻度与命名的 `Eg*Style` 文本样式在 `src/EmbyNian.Shell/Theme/Styles.xaml`，34 处引用了它们。**未被辩护的是另外 55 处**，它们仍内联写数字（其中 18 处是在给 `FontIcon` 字形定尺寸，那是图标度量而非排版）——那一半是欠活，不是偏离，实测拆分在 PROGRESS.md。
 
-**None of them is ever to be edited** — a plugin update overwrites the edit, so anything that has to hold gets written here instead. `winui-wpf-migration` is the one in the plugin we do not use: this app came from WinForms and that move is finished. All three media-os folders **do run** under the `py` launcher (see the `python` trap below); only `hdr-dovi-tool` is still missing its external `dovi_tool`.
+## 分层规则（Layering）— 用户裁定，2026-08-24
 
-### Our four
+从属于上面的首要目标——下面两条规则是默认值，不是不可触碰的法律。
 
-`embynian-winui-shell` (architecture and shell terrain), `embynian-playback`, `embynian-verification` (the gate procedure and screenshot checking), `mpv-shader-quality`. They live in **`.claude/skills/`** in this repo, versioned with the code so no app update can replace them. **Don't add a fifth home**: one skill per subject, in this folder.
+1. **纯 UI 行为可以留在 code-behind。** 涵盖 `Visibility` 切换、`Frame` 导航与返回栈、手工构建的 `NavigationViewItem`/`MenuFlyoutItem`、窗口按钮，以及任何需要知道事件发生在*哪个元素*上的东西。原因：`MenuFlyout` 有 `Items` 而无 `ItemsSource`，`NavigationView` 一旦换成 `MenuItemsSource` 就丢失分隔线——把数据绑定硬套上去只会更糟。
+2. **业务能力永远经 Service。** 全面 MVVM；视图模型从服务取能力；服务住 DI 容器；CommunityToolkit.Mvvm 做普通 MVVM 管道；只在真正需要处加抽象。
 
-**A skill must not restate this file** (his call, 2026-09-05: 「给记忆和技能瘦身」). This file is already loaded whenever a skill fires, so a second copy of a rule buys nothing and goes stale on its own — which is exactly how a skill ends up disagreeing with the clause it was copied from. The gate commands, the SDK path, the switch list, credentials, git and how to report live **here only**; a skill carries what is specific to its subject and points back here for the rest.
+落到实践——各一行。**推理、换回每条规则的事故、背后的地形（哪些类型、哪些接口、活例子）都在 `embynian-winui-shell` 技能里，本仓库任何 C# 或 XAML 编辑都会触发它；动手前先读它。**
 
-### Four facts no skill can know
+- 能力住 `src/EmbyNian.Core`，注册于 `src/EmbyNian.Shell/Composition/ShellServices.cs`，然后注入。**判据是「哪个项目、在不在容器里」——永远不是目录名。**
+- **对给定输入只有一个正确答案的判断，成为 Core 里的命名纯函数，用测试钉死**——即使它不是「服务」。单元测试只触及 Core，留在视图模型里的判断是没人看守的判断。
+- **不因为类进了 DI 就加接口。** 例外是收窄：`ISettingsService` 与 `IServerCapabilities` 是有意为之的接口——别把它们「清理」成具体类。
+- **页面自建视图模型，经 `Attach(...)` 接收依赖**，围一圈「未附加则提前返回」的守卫；那不是走捷径，就这么写。**只有 `PlayerViewModel` 在容器里**，因为电影在媒体库页面背后继续播。
+- code-behind 不放业务逻辑、不放 HTTP/Emby 调用、不放播放状态、不放持久化。`Views/ItemCommands.cs` 是唯一例外，而且它是旧债而非模板。
+- `View → ViewModel → Service → 外部世界` 是一个方向，不是每个文件都要走完的链；模型、转换器、小控件和无业务依赖的帮手保持简单。
+- 复用现有 Service / ViewModel / Core 类型，而不是抽出 `Manager`/`Helper`/`Factory`/`IWhatever`——这不软化上面「判断进 Core」的规则。
+- **绑定到 `ItemsSource` 的集合属性保持 `{ get; }` 加初始化器**，用 `Clear()` + 重填，永不重新赋值——这是 `winui-code-review` 自己的规则，也是让那些绑定上的 `Mode=OneWay` 成为形式而非承重订阅的原因。
 
-These are **not** exceptions to the priority order above — they are facts about this machine and this user's server.
+## 四道闸门（The Four Gates）— 发布新版本时全部四道
 
-- **The SDK is `%USERPROFILE%\.dotnet\dotnet.exe`**, and the 8.0.403 on `PATH` cannot build a `net10.0` project. `winui-setup` will read 「8.0.100+ is present」 off it and pronounce the toolchain healthy — a correct check with a wrong input, so don't run it to 「repair」 anything here.
-- **Build single-node.** This machine's workload resolver, measured. `winapp run` takes `-p Name=Value` for MSBuild *properties*, so gate 1's three `-p:` flags could go through it but `-m:1` cannot; that is why the gate is a `dotnet build`, and why the analyzer is wired in by hand (see gate 1).
-- **Never start real playback while verifying, and never click the middle of a card** — that is the play button, and the server behind it is his real library. This is about his watch history rather than about WinUI, so it binds `winapp ui`'s `click` / `invoke` / `hover` / `drag` and `winui-ui-testing`'s 「exercise every element in one pass」 template exactly as it binds `tools/poke.ps1`. The read-only verbs (`inspect`, `search`, `get-value`, `wait-for`) and the screenshot checklist are welcome as written.
-- **Package versions stay pinned**, against 「never pass `--version` to `dotnet add package`」: WindowsAppSDK is split into sub-packages with `Runtime` at `[2.4.0]` to keep ~39 MB of onnxruntime out, and `libmpv-2.dll` doesn't move. This one is code shape and so it is mine to call rather than a standing exception — say so to have it revisited.
+**四道闸门只在发布新版本时全跑，自检在内；日常代码改动不跑闸门。** 他的裁定，2026-09-18，推翻 2026-09-12 的「任何代码改动后全跑」。自检的存在是为了抓其他东西看不见的——光标/隐藏腿与浮现规则是另外三道闸门对其失明的机制——而且它是四道中最慢的（对应用逐页完整走一遍），所以它跟另外三道一起留给发版。
 
-### Where this project writes its own rule（更好写法）
+`PATH` 上的 `dotnet` 不可用：它是 8.0.403，本项目要 .NET 10。SDK 在 `%USERPROFILE%\.dotnet\dotnet.exe`，不在 `PATH`。**单节点构建**——本机 Windows SDK 的多节点 workload 解析器让并行构建间歇性无输出失败。
 
-Three of them, each measured. Anything not on this list follows the skill.
-
-**`WUI2010` is off, in `src/EmbyNian.Shell/EmbyNian.Shell.csproj` only** — twenty nested `x:Bind` paths the analyzer says will crash, which measurement says cannot: the generated code null-checks every segment, nineteen intermediates are null only between construction and `Attach` and never again, and the twentieth is a non-nullable get-only property. Both fixes the rule offers cost more than they buy. **The reasoning, and what would make the suppression wrong, is in that csproj beside the `NoWarn` — read it there before adding a twenty-first.** This is the only analyzer rule turned off; every other `WUI####` is a real finding.
-
-**`x:Name` is this project's automation handle wherever one already exists.** `winui-code-review` asks for `AutomationProperties.AutomationId` on every interactive control; WinUI reports `x:Name` as the UIA AutomationId when no explicit one is set, so the 67 controls that carry an `x:Name` are already addressable and a second attribute on them would be duplication that can drift. **Measured 2026-09-06, not assumed** — `winapp ui inspect` against the running app reported `automationId=PaneButton`, `SettingsButton`, `PlayButton` and the rest straight off their `x:Name`. So the rule here is: an interactive control needs a **handle**, and `x:Name` counts. Where a control has neither — `x:Uid` is not a handle, it only feeds the resource loader — it gets an explicit `AutomationProperties.AutomationId`; 36 of those were added 2026-09-06, which took the 「no handle at all」 count to zero. **Two kinds of control get nothing on purpose**: anything inside a `DataTemplate` (28 of them), and anything in a UserControl that exists once in markup but many times on screen (`PosterCard`, `EpisodeRow`) — one id shared across N rows makes UIA ambiguous rather than addressable, which is worse than none. `tools/scan-automation-ids.js` prints the whole inventory and is the thing to run after adding an interactive control — the analyzer's own `WUI2020` covers this rule and stays silent on this tree for a reason nobody has pinned down, so it cannot be the tripwire.
-
-**Type sizes come from this project's own seven-step scale, not the six built-in text styles.** `winui-code-review` says no raw `FontSize`; a media client needs 11/12/14/16/20/34/44, which `TitleTextBlockStyle` and its five siblings do not offer. The scale and the named `Eg*Style` text styles are in `src/EmbyNian.Shell/Theme/Styles.xaml` and 34 sites reference them. **What is not defended is the other 55**, which still write a number inline (18 of them sizing a `FontIcon` glyph, which is icon metrics rather than typography) — that half is owed work, not a deviation, and its measured split is in PROGRESS.md.
-
-### Owed work（欠的活）
-
-Four things the skills won outright, **decided by him on 2026-09-05 after being told what each costs**: keying `Palette.xaml`'s dark dictionary `Dark` (done), moving UI strings to `x:Uid` + `.resw` (done — 193 of 194, and `DefaultLanguage=zh-Hans` in the Shell csproj is what makes them resolve at all), packaging as MSIX (**the package is built and signed; installing it is his step**), and dropping the `NavigationView` shell for `winui-design`'s media-app silhouette (the one still to build). Status, scope and each one's fallout live in [PROGRESS.md](PROGRESS.md) — that is work in flight, and a second copy here is how the two disagree. The remaining user-visible unknown is settled: he picked **a top tab strip** for reaching a library once the left pane goes (2026-09-05, from three sketches), recorded in PROGRESS.md, so don't ask again.
-
-**MSIX: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive -Msix -Sign`** — from the repo root, and add `-SkipPublish` when the app is open (its own DLLs cannot be deleted, and the cleanup dies half-way through, taking `shaders` with it). The identity lives in `src/EmbyNian.Shell/Package.appxmanifest` (**don't delete it** — `winui-packaging`'s rule, and `publish.ps1` throws without it); the version is patched into it from `Directory.Build.props`. Packaging goes through `winapp package`, not `makeappx` — there is no Windows SDK on this machine. `--skip-pri` is load-bearing: regenerating the PRI would drop the framework merge and produce a package that dies at `App.xaml` (see the `bin\x64\Release` trap below). **`<WindowsPackageType>None</WindowsPackageType>` stays**, so the loose build remains the primary artefact and gates 3 and 4 keep running against `artifacts\publish\win-x64\EmbyNian.exe`; that is why `winui-dev-workflow`'s 「never run the .exe directly」 does not bind here.
-
-**Measured 2026-09-06, once it was actually installed:** the package installs (`EmbyNian_0.0.1.0_x64__mre2em1sb0g7g`), its self-check passes under package identity, and **`%LOCALAPPDATA%` is not redirected** — a full-trust desktop package reads the same `%LOCALAPPDATA%\EmbyNian` as the loose build, so there is nothing to migrate. `AppPaths.PriorRoots` keeps the migration anyway, as the thing that would catch it if that ever stops being true; don't delete it for being unused. The signing certificate lands in `LocalMachine\TrustedPeople` and expires 2027-09-06. `artifacts/` is gitignored, so the PFX cannot be committed — keep it that way, and reuse it with `-CertPath` rather than letting a second one be generated, or the trust he granted is wasted.
-
-**And then it was uninstalled the same day, on his instruction — the package is not to be left installed while iterating.** An installed package is a frozen snapshot: rebuilding and re-publishing never touch it, so its Start-menu tile keeps launching whatever build was packaged, and nothing on screen says so. On 2026-09-06 that tile was clicked while checking a new feature and answered 「你看的是哪一版」 with a build 20 minutes older than the loose one. So `EmbyNian_0.0.1.0_x64__mre2em1sb0g7g` was removed; the signed `.msix` and the PFX stay in `artifacts/`, and the certificate stays trusted, so putting it back is one `Add-AppxPackage`. **The measurement above still stands** — this is about which copy is on screen while verifying, not about whether packaging works. The line that tells the two copies apart is 设置 → 关于 → 构建时间, which reports the running exe's own file time (`AboutFacts.BuiltAt`); read it before believing anything seen in the app, and **verify against the desktop shortcut, which `tools/shortcut.ps1` points at the publish output gate 3 refreshes**.
-
-**Until MSIX lands, three of `winui-dev-workflow`'s four Critical Rules are broken here on purpose, and that is owed work rather than a deviation.** The app is unpackaged (`<WindowsPackageType>None</WindowsPackageType>`), there is no `Package.appxmanifest`, and gates 3 and 4 plus `tools/shot.ps1` all launch `artifacts\publish\win-x64\EmbyNian.exe` directly — against 「NEVER run the .exe directly, always `winapp run`」. Nothing is wrong with the gates as written today; what is wrong is that the packaging job has not been done. **The day it is, that rule starts binding and gate 4 has to launch through the packaged identity instead** — which is why the switch is recorded here and not only in PROGRESS.md, where the rest of that job's fallout lives. The fourth rule (never `AnyCPU`) this project already keeps.
-
-**New UI text goes into `Strings\zh-Hans\Resources.resw` with an `x:Uid`, not into the markup.** That is `winui-code-review`'s globalization rule and this tree now satisfies it, so a literal added back is a regression against a clean file rather than one more of many. Attached properties (`ToolTipService.ToolTip`, `AutomationProperties.*`) take the `<Uid>.[using:Namespace]Type.Property` key form — verified working here by the self-check's 「20 个控件报出了名字」 line, which is also the tripwire if the form is ever mistyped. **`AutomationProperties.AutomationId` is the one that does *not* belong in `.resw`**: it is a test handle rather than text, and a localized handle is a broken handle.
-
-## Layering（分层规则）— the user's call, 2026-08-24
-
-Subordinate to the prime directive above — the two rules below are defaults, not untouchable law.
-
-1. **Pure UI behavior may stay in code-behind.** That covers `Visibility` toggles, `Frame` navigation and the back stack, hand-built `NavigationViewItem`/`MenuFlyoutItem`, window buttons, and anything that needs to know *which element* the event happened on. Why: `MenuFlyout` has `Items` and no `ItemsSource`, and `NavigationView` loses its separators once you switch to `MenuItemsSource` — forcing data binding onto these only makes them worse.
-2. **Business capability always goes through a Service.** MVVM throughout; view models get capability from services; services live in the DI container; CommunityToolkit.Mvvm for the ordinary MVVM plumbing; extra abstractions only where genuinely needed.
-
-How that lands in practice — one line each. **The reasoning, the incidents that bought each rule and the terrain behind them (which types, which interfaces, the live examples) are in the `embynian-winui-shell` skill, which fires on any C# or XAML edit here; read it before touching either.**
-
-- Capability lives in `src/EmbyNian.Core`, is registered in `src/EmbyNian.Shell/Composition/ShellServices.cs`, then injected. **Judge by "which project, and is it in the container" — never by directory name.**
-- **A judgment with one right answer for a given input becomes a named pure function in Core, pinned by a test** — even when it isn't a "service". Unit tests only reach Core, so a judgment left in a view model is one nobody is watching.
-- **No interface just because a class goes into DI.** The exception is narrowing: `ISettingsService` and `IServerCapabilities` are interfaces on purpose — don't "clean" them into concrete classes.
-- **Pages build their own view models and receive dependencies through `Attach(...)`**, with a ring of "not attached yet, return early" guards; that isn't a shortcut, write it that way. **Only `PlayerViewModel` is in the container**, because a movie keeps playing behind the library page.
-- Code-behind holds no business logic, no HTTP/Emby calls, no playback state, no persistence. `Views/ItemCommands.cs` is the one exception, and it is old debt rather than a template.
-- `View → ViewModel → Service → outside world` is a direction, not a chain every file completes; models, converters, small controls and helpers with no business dependency stay simple.
-- Reuse the existing Service / ViewModel / Core types rather than extracting a `Manager`/`Helper`/`Factory`/`IWhatever` — which does not soften the "judgments into Core" rule above.
-- **Collection properties bound to `ItemsSource` stay `{ get; }` with an initializer** and are refilled with `Clear()` + re-add, never reassigned — `winui-code-review`'s own rule, and what makes the `Mode=OneWay` on those bindings a formality rather than a load-bearing subscription.
-
-## The Four Gates（四道闸门）— all four after any code change
-
-**All four gates run after any code change, the self-check included.** His call, 2026-09-12, canceling the same-day 「现在只在发布新版本的时候跑自检」: the self-check exists to catch what nothing else can see — the cursor/hide legs and the reveal rule are mechanisms the other three gates are blind to — and it is the slowest of the four (a full page-by-page walk of the app), which is a cost, not a reason.
-
-The `dotnet` on `PATH` is unusable: it's 8.0.403 and this project needs .NET 10. The SDK is at `%USERPROFILE%\.dotnet\dotnet.exe` and is not on `PATH`. **Build single-node** — this machine's Windows SDK multi-node workload resolver makes parallel builds fail intermittently with no output at all.
-
-1. Build
+1. 构建
 
    ```
    %USERPROFILE%\.dotnet\dotnet.exe build .\EmbyNian.sln -c Release --no-restore -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false -p:MSBuildNodeReuse=false
    ```
 
-   **This gate carries `Microsoft.WindowsAppSDK.Analyzers`.** `winui-code-review` says plain `dotnet build` does not load it and names the way out — the `<Analyzer>` and `<Import>` entries in the project's own `Directory.Build.props` — so that is where they are, pointing at a copy in `tools/analyzers/` rather than at the skill folder a plugin update would replace. Every rule ships at `Warning`, and **this gate is read as 「0 警告 0 错误」**, so a new `WUI####` is a finding to fix rather than noise to silence. Refresh the payload by copying the two files out of the skill again.
+   **这道闸门承载 `Microsoft.WindowsAppSDK.Analyzers`。** `winui-code-review` 说普通 `dotnet build` 不会加载它并指了出路——项目自己的 `Directory.Build.props` 里的 `<Analyzer>` 与 `<Import>` 条目——所以它们就在那里，指向 `tools/analyzers/` 的副本而非插件更新会替换的技能目录。每条规则出厂即 `Warning`，**这道闸门读作「0 警告 0 错误」**，所以新的 `WUI####` 是要修的发现，不是要消音的噪声。刷新载荷：把技能里的两个文件再拷一遍。
 
-2. Test
+2. 测试
 
    ```
    %USERPROFILE%\.dotnet\dotnet.exe run --project .\tests\EmbyNian.Tests\EmbyNian.Tests.csproj -c Release --no-build
    ```
 
-   **`-c Release` is not optional.** `dotnet run` looks for Debug output by default, so with `--no-build` it runs whatever stale binary sits in `bin\Debug` and still prints 「全部通过」 with exit code 0 — when this was caught on 2026-08-31 that binary was 160 tests short of the source. Dropping the switch switches this gate off.
+   **`-c Release` 不可省。** `dotnet run` 默认找 Debug 输出，所以带 `--no-build` 时它跑的是 `bin\Debug` 里的过期二进制，照样打印「全部通过」且退出码 0——2026-08-31 抓到时那个二进制比源码少 160 个测试。去掉开关＝关掉这道闸门。
 
-3. Publish: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive`
+3. 发布：`powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive`
 
-   **What it writes has to land in `artifacts\publish\win-x64` — that is the directory `tools/shortcut.ps1` points the desktop shortcut at, so it is the only copy the user ever launches.** A run sent elsewhere with `-OutputRoot` (or skipped with `-SkipPublish`) still verifies the publish, but it leaves his shortcut on the previous build, and nothing on screen says so. Measured 2026-09-14: the publish went to a scratch root because the app was open, and his next report was 「貌似没有生效」 — the copy he was looking at was nine minutes older than the change. Either have him close the app first, or say in the hand-over that the published copy has not been refreshed yet.
-4. Self-check: `artifacts/publish/win-x64/EmbyNian.exe --self-check --dump-ui`, then read `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt` — it needs exit code 0 and 「结果：全部通过」 on the last line.
+   **它写出的东西必须落在 `artifacts\publish\win-x64`——那是 `tools/shortcut.ps1` 把桌面快捷方式指向的目录，是用户唯一会启动的拷贝。** 用 `-OutputRoot` 发到别处（或 `-SkipPublish` 跳过）仍然验证了发布本身，但他的快捷方式留在旧构建上，屏幕上没有任何东西提示这一点。2026-09-14 实测：因应用开着发布进了临时根，他下一句报告是「貌似没有生效」——他看的拷贝比改动旧九分钟。要么先让他关应用，要么在交接里说明发布拷贝尚未刷新。
+4. 自检：`artifacts/publish/win-x64/EmbyNian.exe --self-check --dump-ui`，然后读 `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt`——需要退出码 0 且最后一行是「结果：全部通过」。
 
-A few things about the gates:
+关于闸门的几件事：
 
-- **The self-check opens on the secondary monitor by default** so it won't steal the screen in use; add `--screen 1` to watch it run, and that default lapses by itself on a single-monitor machine.
-- Ten lines of the report differ every run by design; only those changing is not a regression. The list is in [docs/开发与验证.md](docs/开发与验证.md) under 「逐行比报告：每次都会变的行」 and that is its only live copy.
-- **Three lines go red on a maximized window and none of them is a regression**: 「窗口尺寸记得住」 and 「播放帧顶边贴齐」 compare a stored size against a maximized client area (which is born 8 physical pixels inset), and 「屏幕像素」 reports whatever window is actually in front. Set `WindowMaximized` to false in `%LOCALAPPDATA%\EmbyNian\settings.json`, rerun, **put it back**.
-- The passing-test count keeps growing as development goes on. **Never write a specific number into a document or a memory** — it will go stale.
-- **The UI can be photographed**: `tools/shot.ps1` launches, shoots and closes, `--dump-ui` leaves a shot plus a visual tree, and the self-check leaves one of its own. The procedure, and which themes to shoot, are in the `embynian-verification` skill. **`--dump-ui`'s own PNG does not composite Mica**, so it comes out washed-out grey and cannot be used to judge colour — `tools/shot.ps1` can, and the report's 「屏幕像素」 line reads the real screen. **`tools/shot.ps1` starts with `Add-Type`, so where that is refused (the WorkBuddy sandbox, measured 2026-09-14) the whole script dies with no output at all and the PNG is simply never written** — the working route there is Python + `ctypes` GDI: `work/about-shot.py` and `work/badge-shot.py` launch the exe, pick the largest visible top-level window belonging to that PID (the class is `EmbyNianHost`, not `WinUIDesktopWin32WindowClass`), raise it topmost and `BitBlt` into a DIB; `work/pngzoom.py` then enlarges any corner of the result, which is how a 20-pixel badge gets read.
-- Touched colors → one shot per theme. The five live in `src/EmbyNian.Core/Theming/UiThemes.cs` (`emby-dark` default, `oled-black`, `midnight`, `graphite`, `plum`), and **all five are dark** — the sixth, `daylight`, was deleted 2026-09-05 on the user's instruction, and it was the only thing that ever caught a hard-coded shell colour or a system-drawn title bar painting itself dark-on-dark. **Nothing checks for those now.** Why the light half of the derivation deliberately stays behind is in that file's class comment.
+- **自检默认开在副显示器**，免得抢走正在用的屏幕；加 `--screen 1` 可以看着它跑；单显示器机器上该默认自动失效。
+- 报告里有十行每次运行都不同，是设计如此；只有那些行变化不是回归。清单在 [docs/开发与验证.md](docs/开发与验证.md) 的「逐行比报告：每次都会变的行」，那是唯一有效副本。
+- **窗口最大化时三行变红，没有一行是回归**：「窗口尺寸记得住」和「播放帧顶边贴齐」拿存储尺寸比最大化的客户区（出生即内缩 8 物理像素），「屏幕像素」报告的只是当前在最前面的窗口。把 `%LOCALAPPDATA%\EmbyNian\settings.json` 里 `WindowMaximized` 设为 false，重跑，**再设回去**。
+- 通过的测试数随开发持续增长。**永远不要把具体数字写进文档或记忆**——它会过期。
+- **UI 可以拍照**：`tools/shot.ps1` 启动、拍摄、关闭，`--dump-ui` 留一张截图加一棵可视树，自检也会留下自己的一张。流程与要拍哪些主题在 `embynian-verification` 技能。**`--dump-ui` 自己的 PNG 不合成 Mica**，出来是发灰的，不能用来判断颜色——`tools/shot.ps1` 可以，报告的「屏幕像素」行读真实屏幕。**`tools/shot.ps1` 以 `Add-Type` 开头，所以在拒绝它的地方（WorkBuddy 沙箱，2026-09-14 实测）整个脚本无输出死亡，PNG 干脆不写**——那里的可行路是 Python + `ctypes` GDI：`work/about-shot.py` 与 `work/badge-shot.py` 启动 exe，挑该 PID 拥有的最大可见顶层窗口（类名是 `EmbyNianHost`，不是 `WinUIDesktopWin32WindowClass`），置顶并 `BitBlt` 进 DIB；`work/pngzoom.py` 随后放大结果的任意角，20 像素徽章就是这样读出来的。
+- 动了颜色 → 每主题一张截图。五个存活于 `src/EmbyNian.Core/Theming/UiThemes.cs`（`emby-dark` 默认、`oled-black`、`midnight`、`graphite`、`plum`），**五个全是深色**——第六个 `daylight` 于 2026-09-05 按用户指示删除，而它曾是唯一能抓到硬编码外壳颜色或系统标题栏黑底画黑的机制。**现在没有任何东西检查这些了。** 推导的浅色半边为何故意留在后面，见该文件的类注释。
 
-## No Real Playback While Verifying（验证时不要真实播放）
+## 验证时不要真实播放（No Real Playback While Verifying）
 
-The live Emby server (192.168.31.230:8896) is the user's real library, not a fixture — one real playback writes into watch history and resume points.
+在线 Emby 服务器（192.168.31.230:8896）是用户的真实媒体库，不是测试夹具——一次真实播放就会写进观看历史与续播点。
 
-- **Don't click the middle of a card**: that's the play button floating up on hover, `{ESC}` will not stop what it starts and only killing the process will. Reach a detail page with `--show-detail` / `--show-episode`, or via the home hero's 「详情」 button, the breadcrumb, or a card's bottom title strip — never the artwork itself.
-- **Navigate with the app's own command-line switches, never the mouse.** `tools/poke.ps1` clicks wherever the cursor happens to be sitting, and the user's hand is on that same mouse. What programmatic pointer movement does and does not do on this machine was measured four ways on 2026-09-05; **the table is in the `embynian-verification` skill** under 「Moving the pointer, and proving it moved」, together with the one injection that reaches the XAML island and how to prove it did. Read it before writing anything that moves the cursor — the old blanket 「it does nothing」 is what put a no-op in the mouse auto-hide path for a week.
-- **A hover-only affordance gets a `--show-*` switch**, not a parked pointer: the pointer can be moved there, but it is gone before the shutter opens.
-- `--play` is the only switch that really starts playback.
+- **不要点卡片中央**：那是悬停浮出的播放按钮，`{ESC}` 关不掉它启动的东西，只有杀进程才能。用 `--show-detail` / `--show-episode` 到详情页，或经首页 hero 的「详情」按钮、面包屑、卡片底部标题条——永远不碰海报本体。
+- **用应用自己的命令行开关导航，不用鼠标。** `tools/poke.ps1` 点在光标恰好停着的地方，而用户的手就在那只鼠标上。程序化指针移动在本机做什么、不做什么，2026-09-05 用四种方式测过；**表在 `embynian-verification` 技能**的「Moving the pointer, and proving it moved」之下，连同能到达 XAML 岛的那一种注入以及如何证明它到达了。写任何移动光标的东西之前先读它——旧的笼统「它什么都不做」就是让一个 no-op 在鼠标自动隐藏路径里待了一周的原因。
+- **只有悬停才出现的浮层给一个 `--show-*` 开关**，不要停住的指针：指针可以移过去，但快门打开前它已经不在了。
+- `--play` 是唯一真正开始播放的开关。
 
-## Credentials（凭据）
+## 凭据（Credentials）
 
-The Emby access token is stored DPAPI-wrapped. **Never print it, never log it, never let it into the self-check report.** To hand it to a web view use `localStorage`, not a query string. The token's occurrence count in the self-check report must be 0.
+Emby 访问令牌以 DPAPI 加密存储。**永远不打印、不写日志、不让它进自检报告。** 要交给 web 视图用 `localStorage`，不用查询字符串。令牌在自检报告中的出现次数必须为 0。
 
 ## Git
 
-- `origin` is `https://github.com/cudamin/EmbyNian.git`, a **private** repository. Credentials are held by this machine's Git Credential Manager; keep tokens out of commands, scripts and remote URLs.
-- **One long-lived branch, `master`**, with HEAD on it (it was `winui3-rewrite` until 2026-09-02, so anything in the history under that name predates the rename). **Don't create a second branch that follows the trunk** — there used to be one and it bought nothing but an extra push. Push with `git push origin master`, no `git push . <branch>:<branch>` ref-shuffling.
-- **Never reset, check out over, or roll back the migration work in the working tree** (the whole WinForms → WinUI 3 change).
-- Commit only when the user explicitly asks. Commit messages: **Chinese body** plus `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`. Source files are LF, always.
-- Push to `origin` right after committing, no need to ask again (his call, 2026-09-01). A push only ever follows a commit — uncommitted working-tree changes are neither committed nor uploaded.
+- `origin` 是 `https://github.com/cudamin/EmbyNian.git`，仓库。凭据由本机 Git Credential Manager 持有；令牌不进命令、脚本与远程 URL。
+- **一条长活分支 `master`**，HEAD 在其上（2026-09-02 之前是 `winui3-rewrite`，所以该名字下的历史都早于改名）。**不要再造一条跟着主干走的第二分支**——以前有过一条，只多买到一次推送。用 `git push origin master` 推，不搞 `git push . <branch>:<branch>` 的 ref 搬运。
+- **永远不要 reset、check out 覆盖或回滚工作树里的迁移工作**（整个 WinForms → WinUI 3 变更）。
+- 只有用户明确要求才提交。提交信息：**中文正文**加 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`。源文件一律 LF。
+- 提交后立即推 `origin`，不必再问（他的裁定，2026-09-01）。推送只跟在提交之后——未提交的工作树改动既不提交也不上传。
 
-## Traps On This Machine（这台机器上的坑）
+## 这台机器上的坑（Traps On This Machine）
 
-- bash resets the working directory on every call → prefix commands with `cd "C:/Users/89400/EmbyNian" &&`.
-- **`python` and `python3` on `PATH` are Microsoft Store stubs**, not interpreters: they print nothing, exit 0, and that silent success is how 「there is no python」 came to be written here. **A real one is installed** — 3.13.2 under `%LOCALAPPDATA%\Programs\Python\Python313` (and a 3.10 beside it), both on the user `PATH` but shadowed by `WindowsApps`, which comes first. **Reach it with the `py` launcher**, which resolves to 3.13.2. Measured 2026-09-05; it is what makes the media-os skills and `watch` usable.
-- PowerShell scripts must be saved as **UTF-8 with BOM**, or Chinese output comes out as mojibake.
-- A custom `cut()` function in the shell shadows `/usr/bin/cut`; truncate with `awk '{print substr($0,1,N)}'` instead.
-- **`grep -n` and `sed -n` disagree with the file's real line numbers here** — they came out six lines short on a 982-line source file on 2026-09-05, which is how a compiler error at line 575 got read as a line that holds a comment. When a line number matters (an error to chase, an edit to place), get it from the file-reading tool or `node -e` and not from those two.
-- **Backslashes do not survive `node -e '...'` from this shell.** A `"\\s"` inside single quotes arrives as `\s`, which JavaScript then reads as a bare `s`, so a regex built by string concatenation silently matches the wrong thing and reports zero hits rather than failing. Use `String.raw`, a regex literal, or write the script to a file first (2026-09-05, after a 19-site edit script quietly did nothing).
-- **The WinUI markup compiler fails on a stale cache and succeeds on a retry.** `WMC9999 Xaml Internal Error` — 「未将对象引用设置到对象的实例」 or 「指定的参数已超出有效值的范围」 — is not a fault in the XAML; it hit both the build and the publish gate on 2026-09-05 with no .xaml file touched all session, and both passed on the next run with no code change. The same run can also compile a **stale snapshot of a .cs file** and report an error for code that is no longer there. Rerun the gate once before believing either.
-- **Deleting `bin\x64\Release` makes the next publish produce an app that cannot start**, and gate 3 used to say 「验证通过」 anyway. `EmbyNian.pri` has to have the three framework `.pri` files merged into it, and the merge input is 「which `.pri` files are already in the output directory when PRI generation runs」 — unpackaged and non-self-contained, those arrive from `runtimes-framework`, i.e. **only on publish**. So the first publish after a clean produces a 103 KB `EmbyNian.pri` instead of 2.2 MB, the publish is 2 MB light, and the exe dies at `App.xaml` with `Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'`. **Just run the publish a second time** — the first one left the three files behind. Measured 2026-09-05; `tools/verify-publish.ps1` now fails gate 3 on it instead of letting it through.
-- **The mouse cursor cannot be photographed** — not by a GDI screenshot, and not by `winapp ui screenshot` either, `--capture-screen` included (measured 2026-09-05 with the pointer parked inside the window and the crop checked at its own coordinates). `tools/cursor-watch.ps1` is the only way round it and `tools/shot.ps1` cannot be used for it; the how and why are in the `embynian-verification` skill.
-- Command-line switches, all of them: `--dump-ui`, `--hide-cursor` (parks the player on screen with its 10 Hz ticker running and nothing else, so the pointer's two-second auto-hide can be watched — plays nothing), `--maximized`, `--play`, `--screen`, `--scroll-end`, `--scroll-half`, `--self-check`, `--show-detail`, `--show-episode`, `--show-library`, `--show-menu` (pops the first home card's 更多 menu open), `--show-osd` (parks the player's overlay on screen without playing a byte; optionally `pinned`, `paused` or `playing`), `--show-settings` (optionally a category, e.g. `--show-settings 关于`; defaults to 「界面」), `--theme`. **`--hide-cursor`, `--show-menu` and `--show-osd` are each used on their own, never with `--self-check` and never with each other.** (`--show-rail` was for the home page's right rail, which was removed 2026-09-08; the switch went with it.)
+- bash 每次调用都重置工作目录 → 命令前加 `cd "C:/Users/89400/EmbyNian" &&`。
+- **`PATH` 上的 `python` 和 `python3` 是 Microsoft Store 存根**，不是解释器：它们什么都不打印、退出码 0，正是这种静默成功让「这里没有 python」被写了进来。**真的装了一个**——3.13.2 在 `%LOCALAPPDATA%\Programs\Python\Python313`（旁边还有一个 3.10），都在用户 `PATH` 上，但被排在最前面的 `WindowsApps` 遮蔽。**用 `py` 启动器到达它**，它解析到 3.13.2。2026-09-05 实测；正是这一点让 media-os 技能与 `watch` 可用。
+- PowerShell 脚本必须保存为 **UTF-8 带 BOM**，否则中文输出变乱码。
+- shell 里的自定义 `cut()` 函数遮蔽 `/usr/bin/cut`；截断改用 `awk '{print substr($0,1,N)}'`。
+- **`grep -n` 和 `sed -n` 在这里与文件真实行号不一致**——2026-09-05 在一个 982 行的源文件上它们少报了六行，575 行的编译错误就这样被读成一行注释。行号要紧时（追错误、定位编辑），从文件读取工具或 `node -e` 拿，不从这两个拿。
+- **反斜杠经不过本 shell 的 `node -e '...'`。** 单引号里的 `"\\s"` 到达时是 `\s`，JavaScript 随后读成裸 `s`，于是字符串拼接出来的正则静默匹配错误的东西并报零命中而非失败。用 `String.raw`、正则字面量，或先把脚本写到文件里（2026-09-05，一次 19 处的编辑脚本静默什么都没干之后）。
+- **WinUI 标记编译器在过期缓存上失败、重试即成功。** `WMC9999 Xaml Internal Error`——「未将对象引用设置到对象的实例」或「指定的参数已超出有效值的范围」——不是 XAML 的错；2026-09-05 它同时打在构建与发布闸门上，整个会话没碰过任何 .xaml 文件，两次都在下一次运行、零代码改动下通过。同一次运行还可能编译 **.cs 文件的过期快照**，为已经不存在的代码报错。重跑闸门一次再下结论。
+- **删掉 `bin\x64\Release` 会让下一次发布产出无法启动的应用**，而且闸门 3 曾照样报「验证通过」。`EmbyNian.pri` 必须把三个框架 `.pri` 合并进去，而合并输入是「PRI 生成运行时输出目录里已有哪些 `.pri` 文件」——非打包、非自包含，它们来自 `runtimes-framework`，即**只在发布时**到达。所以清空后的第一次发布产出 103 KB 的 `EmbyNian.pri` 而非 2.2 MB，发布轻 2 MB，exe 死在 `App.xaml`，报 `Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'`。**把发布再跑一遍就行**——第一次会把那三个文件留在原地。2026-09-05 实测；`tools/verify-publish.ps1` 现在会就此判闸门 3 失败而不是放行。
+- **鼠标光标拍不下来**——GDI 截图拍不到，`winapp ui screenshot` 也拍不到，`--capture-screen` 也不行（2026-09-05 实测：指针停在窗口内、裁剪图按其自身坐标检查过）。`tools/cursor-watch.ps1` 是唯一的绕法，`tools/shot.ps1` 干不了这事；怎么做、为什么在 `embynian-verification` 技能。
+- 命令行开关，全部：`--dump-ui`、`--hide-cursor`（把播放页停在屏幕上，只跑它的 10 Hz 心跳，其他什么都不做，以便观察指针的两秒自动隐藏——不播放任何东西）、`--maximized`、`--play`、`--screen`、`--scroll-end`、`--scroll-half`、`--self-check`、`--show-detail`、`--show-episode`、`--show-library`、`--show-menu`（弹出首页第一张卡片的「更多」菜单）、`--show-osd`（把播放页覆盖层停在屏幕上，不播放一个字节；可选 `pinned`、`paused` 或 `playing`）、`--show-settings`（可选分类，如 `--show-settings 关于`；默认「界面」）、`--theme`。**`--hide-cursor`、`--show-menu` 与 `--show-osd` 各自单独使用，绝不与 `--self-check` 同用，也绝不同用。**（`--show-rail` 是给首页右侧栏的，那一栏 2026-09-08 移除；开关随之而去。）
 
-## How To Report（怎么汇报）
+## 怎么汇报（How To Report）
 
-The user doesn't read code: settle the implementation details yourself, verify them yourself, and **report in Chinese, in plain words, with no code pasted in**. The only things worth asking about are the ones genuinely his — scope, priority, user-visible behavior, irreversible operations, and **a rule that is currently making this piece of code worse** (see the prime directive). Give him a list he can pick from, not a menu of technical options.
-
-
-
-
+用户不读代码：实现细节自己定、自己验证，**用中文、大白话汇报，不贴代码**。值得问的只有真正属于他的事：范围、优先级、用户可见行为、不可逆操作，以及**一条正在让这块代码变差的规则**（见首要目标）。给他一张可以挑选的清单，不是一张技术选项菜单。

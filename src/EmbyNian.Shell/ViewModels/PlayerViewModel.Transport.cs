@@ -222,7 +222,7 @@ public sealed partial class PlayerViewModel
             // 「播放已停止」 belongs to the end of a viewing, not to the seam between two episodes: the
             // switch already says what it is doing, and two toasts stacked over a half-built player were
             // part of what 「画面错乱」 looked like.
-            var following = await NextEpisodeToAutoPlayAsync(result, detail).ConfigureAwait(true);
+            var following = NextEpisodeToAutoPlay(result, detail);
             if (following is null)
             {
                 Noticed?.Invoke(
@@ -257,10 +257,17 @@ public sealed partial class PlayerViewModel
     }
 
     /// <summary>
-    /// 自动播放下一集: the episode after the one that just finished, or null when nothing should follow it.
-    /// The current season is enough for the usual case; only its last episode needs the series-wide list.
+    /// 自动播放下一集: the next episode <b>within this season</b>, or null when the season is over and the
+    /// player should simply go away.
+    /// <para>
+    /// 「当最后一季的最后一集播放结束后，直接退出播放界面或返回，不得自动续播该最后一季的第一集」
+    /// （用户令，2026-09-18）：旧版在季末会退而求其次去问全剧列表，把下一季的第一集接上来 ——
+    /// Re:Zero 的 S1E83（本季唯一一集）播完自动跳 S04E12 就是这条路的产物。跨季的自动接播就此取消，
+    /// <see cref="EpisodeNavigation.StepInSeason"/> 把决策钉死在本季之内；跨季仍归上一集/下一集按钮
+    /// （<see cref="StepEpisodeAsync"/> → <see cref="ResolveAdjacentEpisodeAsync"/>）。
+    /// </para>
     /// </summary>
-    private async Task<EpisodeDestination?> NextEpisodeToAutoPlayAsync(PlaybackResult result, EmbyItem played)
+    private EpisodeDestination? NextEpisodeToAutoPlay(PlaybackResult result, EmbyItem played)
     {
         if (!Settings.Playback.AutoPlayNextEpisode) return null;
 
@@ -269,21 +276,9 @@ public sealed partial class PlayerViewModel
         if (result.Exit.Reason != PlaybackEndReason.EndOfFile) return null;
         if (_lifetime.IsCancellationRequested) return null;
 
-        if (EpisodeNavigation.Step(Episodes, played.Id, 1) is { } local) return local;
-
-        try
-        {
-            return await ResolveAdjacentEpisodeAsync(played, 1).ConfigureAwait(true);
-        }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "自动查找跨季下一集失败", error);
-            return null;
-        }
+        // 季内还有下一集就连；本季到此为止（列表到头、当前集不在列表里、兄弟列表没到手）都返回 null，
+        // 走「退出播放界面」那条路 —— 见 <see cref="StartPlaybackAsync"/> 的 finally。
+        return EpisodeNavigation.StepInSeason(Episodes, played.Id, 1);
     }
 
     /// <summary>

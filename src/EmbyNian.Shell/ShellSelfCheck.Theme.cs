@@ -352,6 +352,14 @@ internal static partial class ShellSelfCheck
         if (deviceContext == IntPtr.Zero) return new ScreenReading(false, "取样失败 —— 取不到屏幕 DC");
 
         var colors = new List<string>();
+        // The five spots alone can all miss every painted thing, and that is not a dropped island.
+        // Measured 2026-09-18 on the primary screen: on a 1406-wide search page the nearest spot passed
+        // 36 physical pixels short of the tool card, so the five colours agreed while the same frame's
+        // --dump-ui render plainly holds the card, the page title and the empty-state notice. A coarse
+        // net, counted only where this window owns the point, tells 「nothing anywhere」 apart from
+        // 「nothing at these five places」 — and a cover laid over us still cannot fake a second colour,
+        // because its points are not ours. Taken inside the same DC, which is why it lives in this try.
+        var net = new List<string>(2);
         string? owner = null;
         var ours = false;
 
@@ -372,6 +380,23 @@ internal static partial class ShellSelfCheck
                 var b = (colorRef >> 16) & 0xFF;
                 colors.Add($"#{r:X2}{g:X2}{b:X2}");
             }
+
+            const int NetStep = 32;
+            for (var y = NetStep; y < height && net.Count < 2; y += NetStep)
+            {
+                for (var x = NetStep; x < width && net.Count < 2; x += NetStep)
+                {
+                    var point = new NativePoint { X = x, Y = y };
+                    if (!Native.ClientToScreen(window.Handle, ref point)) continue;
+                    if (!OwnerAt(window, point).Ours) continue;
+
+                    var colorRef = Native.GetPixel(deviceContext, point.X, point.Y);
+                    if (colorRef == 0xFFFFFFFF) continue;
+
+                    var hex = $"#{(colorRef & 0xFF):X2}{((colorRef >> 8) & 0xFF):X2}{((colorRef >> 16) & 0xFF):X2}";
+                    if (!net.Contains(hex)) net.Add(hex);
+                }
+            }
         }
         finally
         {
@@ -385,8 +410,12 @@ internal static partial class ShellSelfCheck
         if (!ours)
             return new ScreenReading(false, $"{shown}，但屏幕上是{owner} —— 被遮挡，与本进程画了什么无关");
 
-        return colors.Distinct().Count() > 1
-            ? new ScreenReading(true, $"{shown}（{owner}）")
+        if (colors.Distinct().Count() > 1)
+            return new ScreenReading(true, $"{shown}（{owner}）");
+
+        // 五个定点一致，但网上出现了第二个颜色 —— 岛在合成，只是没有一样东西落在那五点里。
+        return net.Count > 1
+            ? new ScreenReading(true, $"{shown}；五个定点都在空底色上，但 32 像素的网上另有 {string.Join("、", net)} —— 岛在合成")
             : new ScreenReading(false, $"整片 {shown} —— {Explain(colors[0])}，XAML 岛没有合成任何东西");
     }
 

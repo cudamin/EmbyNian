@@ -673,6 +673,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         var window = _playerWindow;
         _playerWindow = null;
 
+        window.Page.Detach();
         RestorePlayerToShellWindow();
         window.Close();
 
