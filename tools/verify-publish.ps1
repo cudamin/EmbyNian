@@ -31,6 +31,15 @@ if ($shaderCount -eq 0) {
     throw "发布验证失败：shaders 目录为空。着色器在仓库的 assets\shaders 里，由 Shell 项目的 csproj 拷进输出目录，先看这两处。"
 }
 
+# 独占模式视频窗的 Lua UI（uosc 嵌入版，assets\mpv-ui）。缺入口脚本时 LibMpvBackend 只会降级成
+# 「没有屏幕控件的独占播放」，而四道闸门里没有一关会真的起播，所以装箱完整性只能在这里守。
+Require-File (Join-Path $root 'mpv-ui\scripts\uosc\main.lua') '独占模式 Lua UI 入口脚本'
+Require-File (Join-Path $root 'mpv-ui\scripts\uosc\lib\utils.lua') 'uosc 工具库'
+Require-File (Join-Path $root 'mpv-ui\scripts\uosc\elements\Timeline.lua') 'uosc 时间轴控件'
+Require-File (Join-Path $root 'mpv-ui\fonts\uosc_textures.ttf') 'uosc 贴图字体'
+Require-File (Join-Path $root 'mpv-ui\fonts\MaterialIconsRound-Regular.otf') 'uosc 图标字体'
+Require-File (Join-Path $root 'mpv-ui\LICENSE.LGPL') 'uosc 许可证文本'
+
 # EmbyNian.pri 必须把框架那几份 .pri 并进来，否则程序在 App.xaml 那一步就崩：
 # 「Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'」。
 #

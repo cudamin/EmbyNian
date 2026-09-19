@@ -213,6 +213,11 @@ internal static class LibMpvNative
     internal const int EventGetPropertyReply = 3;
     internal const int EventSetPropertyReply = 4;
     internal const int EventCommandReply = 5;
+
+    /// <summary>
+    /// Lua 脚本（<c>mp.commandv('script-message', …)</c>）与宿主之间的唯一通道。默认整段关闭，
+    /// 只有独占模式装载了 uosc 的那一次播放才保留 —— 见 <see cref="Playback.LibMpvBackend.PruneEvents"/>。
+    /// </summary>
     internal const int EventClientMessage = 16;
     internal const int EventAudioReconfig = 18;
     internal const int EventQueueOverflow = 24;
@@ -261,6 +266,19 @@ internal static class LibMpvNative
         internal IntPtr Level;
         internal IntPtr Text;
         internal int LogLevel;
+    }
+
+    /// <summary>
+    /// MPV_EVENT_CLIENT_MESSAGE 的载荷：<c>mpv_event_client_message</c> —— 一个以空指针结尾的
+    /// UTF-8 参数数组。Args 是 <c>const char**</c>，逐个经 <see cref="Marshal.ReadIntPtr"/> 取出；
+    /// 字符串必须在本事件处理完、下一次 <c>mpv_wait_event</c> 之前复制成托管值，
+    /// mpv 在那之后随时回收它们。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MpvEventClientMessage
+    {
+        internal int Count;
+        internal IntPtr Args;
     }
 
     /// <summary>

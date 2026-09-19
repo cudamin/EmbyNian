@@ -28,8 +28,12 @@ internal static class HomeMotion
     /// 碰不得（见 <see cref="Reveal"/> 里的占用冲突）。模板还没应用（直接子没有视觉孩子）时返回
     /// null，调用方放弃这一次动画：宁可少一段入场，不可碰直接子。Reveal/Stop 一律经由这里拿目标，
     /// 别处不许再摸 Repeater 的直接子。
+    /// <para>
+    /// 矮窗档那一段行程（<see cref="HomeFoldMotion"/>）量的、动的也是这个元素 —— 同一处定义，免得
+    /// 「量的是甲、动的是乙」。
+    /// </para>
     /// </summary>
-    private static FrameworkElement? TargetOf(FrameworkElement repeaterChild)
+    internal static FrameworkElement? TargetOf(FrameworkElement repeaterChild)
     {
         return VisualTreeHelper.GetChildrenCount(repeaterChild) > 0
             ? VisualTreeHelper.GetChild(repeaterChild, 0) as FrameworkElement

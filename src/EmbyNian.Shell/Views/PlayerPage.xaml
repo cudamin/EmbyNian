@@ -57,7 +57,12 @@
     FontSize="{StaticResource EgBodyFontSize}"
     IsTabStop="True"
     UseSystemFocusVisuals="False"
+    RenderTransformOrigin="0.5,0.5"
     Visibility="Collapsed">
+
+    <UserControl.RenderTransform>
+        <CompositeTransform x:Name="PageTransform" />
+    </UserControl.RenderTransform>
 
     <UserControl.Resources>
         <!-- Turns the slider's own 0..1000 into a clock, which is what makes hovering the seek bar
@@ -93,6 +98,7 @@
         <SolidColorBrush x:Key="PlayerPeekBrush" />
         <SolidColorBrush x:Key="PlayerSkipBrush" />
         <SolidColorBrush x:Key="PlayerCoverBrush" />
+        <SolidColorBrush x:Key="PlayerStageBrush" />
         <SolidColorBrush x:Key="PlayerEdgeFaintBrush" />
         <SolidColorBrush x:Key="PlayerEdgeBrush" />
         <SolidColorBrush x:Key="PlayerEdgeStrongBrush" />
@@ -102,11 +108,10 @@
         <SolidColorBrush x:Key="PlayerLineBrush" />
         <SolidColorBrush x:Key="PlayerPulseBrush" />
 
-        <!-- Top to bottom in both cases, and the stops come from the table too: the transport's scrim
-             deepens downward and the title strip's fades out, so a direction reversed by an edit here
-             would be a hard band across the middle of the picture rather than an obvious mistake. -->
+        <!-- 只剩控制条这一道了：从上往下渐深，停点来自表。标题条那道反向的罩子删于 2026-09-18
+             （「播放页面的标题不要黑色渐变」）—— TitleStrip 的 Background 一并去掉，方向被谁改反了
+             在底部这一道上仍旧会是一条横穿画面的硬带，而不是一个看不出来错误。 -->
         <LinearGradientBrush x:Key="PlayerBottomScrim" StartPoint="0,0" EndPoint="0,1" />
-        <LinearGradientBrush x:Key="PlayerTopScrim" StartPoint="0,0" EndPoint="0,1" />
 
         <!-- Flat, borderless and see-through until pointed at: over a picture, a button's own filled
              background is more visible than its glyph and reads as a panel rather than a control.
@@ -219,9 +224,27 @@
             <MenuFlyout x:Name="PictureMenu" Opening="OnPictureMenuOpening" />
         </local:PictureSurface.ContextFlyout>
 
-        <!-- 视频宿主必须是第一个空子元素：其 SpriteVisual 画在宿主内容之上、后续 XAML OSD 之下。
-             composition 交换链经 ICompositionSurface / CompositionSurfaceBrush 进入同一合成树。
-             不创建视频 HWND，不接管焦点；输入仍由 Root 和上层控件处理。
+        <!-- ================= 进出播放页的舞台 =================
+             这一页在屏上的那一块底。Root 自己是 Transparent（理由写在上面），垫在它下面的是窗口与岛自己的
+             底色 —— 于是「淡入这一页」原本没有任何东西可淡。这块不透明的底把这一页变成一张「面」，进出的
+             转场（见 PlayerPage.Transition.cs）才有可溶解的两半。
+
+             它只在真的进出播放时立起来：命令行那条 show-osd 的路子（ShowChromeForShot）是直接把这一页摆到当前
+             那一页上面拍照，浮层背后要的正是浏览页的真内容，舞台必须当不存在。所以它是 Collapsed 起步、由转场
+             驱动开关。
+
+             排在最前：画面用的 SpriteVisual 挂在 VideoHost 上，树序即 z 序，所以舞台在画面和所有控件之下。
+             IsHitTestVisible=False 与 VideoHost、StandaloneHint 同理 —— 光标那一套按「指针上压着谁」判，
+             这一块必须当它不在。 -->
+        <Grid
+            x:Name="Stage"
+            Background="{StaticResource PlayerStageBrush}"
+            IsHitTestVisible="False"
+            Visibility="Collapsed" />
+
+        <!-- 视频宿主紧随舞台：其 SpriteVisual 画在宿主内容之上、后续 XAML OSD 之下，而舞台排在它前面，
+             所以画面压着舞台。composition 交换链经 ICompositionSurface / CompositionSurfaceBrush 进入同一
+             合成树。不创建视频 HWND，不接管焦点；输入仍由 Root 和上层控件处理。
              独立管线由 mpv 自建窗口，这个宿主保持为空。 -->
         <Grid x:Name="VideoHost" IsHitTestVisible="False" />
 
@@ -250,7 +273,6 @@
             x:Name="TitleStrip"
             Height="96"
             VerticalAlignment="Top"
-            Background="{StaticResource PlayerTopScrim}"
             Padding="16,0,0,0"
             ColumnSpacing="8"
             Visibility="Collapsed">
@@ -1030,17 +1052,19 @@
 
              Opaque, and above everything else in the grid, so it cannot lose the race the WinForms
              cover kept losing. -->
-        <Grid x:Name="Cover" Background="{StaticResource PlayerCoverBrush}" Visibility="{x:Bind ViewModel.CoverVisibility, Mode=OneWay}">
+        <!-- 换集时立即盖住旧帧；首帧与输出尺寸就绪之后再淡出，见 PlayerPage.Cover.cs。 -->
+        <Grid x:Name="Cover" Background="{StaticResource PlayerCoverBrush}" Visibility="Collapsed">
             <!-- 「视频刚开播还在加载缓存没有正片画面时背景要用背景图，全屏播放时背景图要占满全屏，别只在
                  左上角显示」（2026-09-15）。遮罩网格本身铺满整个窗口（全屏时就是整个屏幕），垫底图用
                  UniformToFill 跟着占满、不留边也不变形；压到半透明，进度环和文字才读得清，取不到图时
                  Source 为空，垫底照旧退回纯色。装饰图，不参与命中与朗读。 -->
-            <Image
-                Source="{x:Bind ViewModel.CoverBackdrop, Mode=OneWay}"
-                Stretch="UniformToFill"
-                Opacity="0.5"
-                IsHitTestVisible="False"
-                AutomationProperties.AccessibilityView="Raw" />
+            <Grid x:Name="CoverArtwork" Opacity="0.5" IsHitTestVisible="False"
+                  AutomationProperties.AccessibilityView="Raw">
+                <Grid.Background>
+                    <ImageBrush ImageSource="{x:Bind ViewModel.CoverBackdrop, Mode=OneWay}"
+                                Stretch="UniformToFill" AlignmentX="Center" AlignmentY="Center" />
+                </Grid.Background>
+            </Grid>
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
                 <!-- IsActive follows the cover rather than sitting on True. A ProgressRing animates through
                      the compositor, which does not stop because an ancestor is collapsed — and this page is

@@ -49,12 +49,53 @@
             </Button>
         </DataTemplate>
 
+        <!-- 一排卡：那条横向带子。单独一份模板是因为它有第二个用处 —— 矮窗档把媒体库那一排压上轮播时，站在轮播
+             左下角的那一份只有这一排卡、没有牌子（「媒体库压在轮播图上的时候不用显示那个媒体库标题」，2026-09-13）。
+
+             从前那件事靠一个 CardShelf.ShowHead 开关拨，而那一支是**同一份数据两头共用**的：开关一拨，横排里那
+             一份也跟着把牌子收起来。翻档的动画要在那一两百毫秒里同时看见「横排里带牌子的那一排」和「轮播上不带
+             牌子的那一份」，共用的开关摆不平（2026-09-18）。分成两份模板之后，「牌子有没有」由「用哪一份模板」
+             决定，搬进搬出不再改这一排自己的样子。
+
+             Height bound rather than fixed: a horizontal strip inside a vertical stack has no other way to
+             know how tall a row of cards is, and the shelf works it out from the card size instead of the
+             markup carrying the answer.
+
+             ItemSpacing 2026-09-14 从 20 收到 18：卡片本身缩了一档（继续观看 300→256、媒体库 240→208，
+             见 CardSize），卡与卡的间隔跟着收一格，一行里的疏密比例才不变 —— 卡片窄了、间隔不动，读起来是
+             「间距变大了」而不是「更紧凑」。这是翻页步长读的那个数（ShelfStrip.Measure），收它不用另改常量。
+
+             ShelfStrip rather than a ScrollView with a scrollbar under it: 「下方拖动的这种不是很好用」
+             — the row pages now, one screenful of cards per chevron. -->
+        <DataTemplate x:Key="ShelfCardsTemplate" x:DataType="vm:CardShelf">
+            <local:ShelfStrip
+                Height="{x:Bind RowHeight}"
+                ItemSpacing="18"
+                ItemTemplate="{StaticResource CardTemplate}"
+                ItemsSource="{x:Bind Cards}"
+                OnScrim="{x:Bind OnScrim, Mode=OneWay}" />
+        </DataTemplate>
+
         <DataTemplate x:Key="ShelfTemplate" x:DataType="vm:CardShelf">
             <!-- 外层这层 Grid 是给进场动画的（见 HomeMotion.TargetOf）：ItemsRepeater 的直接子是
                  框架 arrange/viewport 自己要操纵（调 Scale）的对象，不能被 GetElementVisual 占用；
                  动画一律落在直接子里面的模板根上。直接子与模板根之间必须隔一层，删不得。 -->
             <Grid>
+                <!--
+                  **这两支位移（根上一支、里面 StackPanel 上一支）都必须写在标记里**：WinUI 3 的 RenderTransform
+                  出厂就是一支单位 MatrixTransform 而不是空，「代码里见空就装一支」的那条路
+                  （HomeMotion.DriftFor / HomeFoldMotion.DriftOf）永远走不进去。写两份是因为动画落笔的那一层
+                  （HomeMotion.TargetOf）取的是「直接子里第一个视觉孩子」，而直接子外头框架有时包一道
+                  ContentPresenter、有时不包 —— 取到的是根还是里子说不死，两层各备一支才都有得写。
+                  每份模板实例各得各的，互不共享。
+                -->
+                <Grid.RenderTransform>
+                    <TranslateTransform />
+                </Grid.RenderTransform>
             <StackPanel Spacing="{StaticResource EgSpaceM}">
+                <StackPanel.RenderTransform>
+                    <TranslateTransform />
+                </StackPanel.RenderTransform>
                 <!-- 场记板往下一级的那块牌子：标题、右端读数、底下一条通栏线。见 ShelfHead.xaml。
                      OnScrim 绑着这一排是不是站在一张剧照上：这一页的几排都在第一屏外面、站在页面自己的纸上，
                      所以一律是关的（那一档由 CardShelf.OnScrim 定，见 HomeViewModel.BuildShelves）。从前开着的
@@ -65,9 +106,8 @@
                      多一个大于号、整块牌子变成按钮，点了进那个库 —— 2026-09-13「在最近添加右边添加一个大于号，
                      点击标题后可以进入对应媒体库」。2026-09-13 这一版的 StackPanel 间距从 EgSpaceL(16) 收到
                      EgSpaceM(12)（「首页组件的上下间距弄紧凑一些」）。
-                     Visibility 绑着 CardShelf.ShowHead：矮窗档把媒体库那排压上轮播时牌子整个收起（「媒体库压在
-                     轮播图上的时候不用显示那个媒体库标题」，2026-09-13），压上去的只有那一排卡；StackPanel 的
-                     Spacing 不给收起来的孩子留位置，宿主的高度就是排卡自己的高。
+                     这一块牌子一直是显着的：矮窗档压上轮播的那一份走的是下面那张 ShelfCardsTemplate，它里面压根
+                     没有牌子，所以这里不需要一个开关（见那张模板上面那段）。
 
                      Tag 挂的就是这一排自己（{x:Bind}）—— 点牌子时从这儿取回去。**别去问 DataContext**：
                      ItemsRepeater + x:Bind 的模板实例上没人设过 DataContext（页面自己也没有），它永远是空的，
@@ -79,25 +119,12 @@
                     Offer="{x:Bind CanOpen, Mode=OneWay}"
                     OnScrim="{x:Bind OnScrim, Mode=OneWay}"
                     Tag="{x:Bind}"
-                    Title="{x:Bind Title, Mode=OneWay}"
-                    Visibility="{x:Bind HeadVisibility, Mode=OneWay}" />
-                <!-- Height bound rather than fixed: a horizontal strip inside a vertical stack has
-                     no other way to know how tall a row of cards is, and the shelf works it out from
-                     the card size instead of the markup carrying the answer.
-
-                     ItemSpacing 2026-09-14 从 20 收到 18：卡片本身缩了一档（继续观看 300→256、
-                     媒体库 240→208，见 CardSize），卡与卡的间隔跟着收一格，一行里的疏密比例才不变
-                     —— 卡片窄了、间隔不动，读起来是「间距变大了」而不是「更紧凑」。这是翻页步长读的那个
-                     数（ShelfStrip.Measure），收它不用另改常量。
-
-                     ShelfStrip rather than a ScrollView with a scrollbar under it: 「下方拖动的这种不是
-                     很好用」 — the row pages now, one screenful of cards per chevron. -->
-                <local:ShelfStrip
-                    Height="{x:Bind RowHeight}"
-                    ItemSpacing="18"
-                    ItemTemplate="{StaticResource CardTemplate}"
-                    ItemsSource="{x:Bind Cards}"
-                    OnScrim="{x:Bind OnScrim, Mode=OneWay}" />
+                    Title="{x:Bind Title, Mode=OneWay}" />
+                <!-- 卡片那一截（ShelfCardsTemplate）。牌子之外的部分只有这一份定义：把那一张模板也交给压上轮播
+                     的那一份用，两处的排卡因此永远一模一样（宽度、间距、卡上的角标都跟着走）。 -->
+                <ContentPresenter
+                    Content="{x:Bind}"
+                    ContentTemplate="{StaticResource ShelfCardsTemplate}" />
                 </StackPanel>
             </Grid>
         </DataTemplate>
@@ -151,12 +178,17 @@
 
                 <!--
                   矮窗档的宿主（「窗口拉矮到媒体库下方那一排被藏起来之后，把媒体库压到轮播图封面的左下角」，
-                  2026-09-13）：媒体库那一排从横排里摘出来，在这里照同一张 ShelfTemplate 再画一份，贴着封面
-                  的下沿（VerticalAlignment Bottom、压到左下角），左右 36 和下方货架同一条脊线。判定在
-                  HomePage 的代码后置（HomeFold），搬进搬出在 HomeViewModel —— 这里只是它站的那块地。
-                  压上的时候牌子整个收起（CardShelf.ShowHead，ShelfTemplate 里那句），压上去的只有那一排卡
-                  （「媒体库压在轮播图上的时候不用显示那个媒体库标题」，2026-09-13）；OnScrim 的浅墨跟着档一起
-                  拨，都是代码后置里的事。
+                  2026-09-13）：媒体库那一排从横排里摘出来，在这里再画一份，贴着封面的下沿（VerticalAlignment
+                  Bottom、压到左下角），左右 36 和下方货架同一条脊线。判定在 HomePage 的代码后置（HomeFold），
+                  搬进搬出在 HomeViewModel —— 这里只是它站的那块地。
+
+                  画的是 ShelfCardsTemplate（没有牌子的那一份）：压上去的只有那一排卡（「媒体库压在轮播图上的时候
+                  不用显示那个媒体库标题」，2026-09-13）。这一份模板的选择是 2026-09-18 定的 —— 翻档的动画要在
+                  同一两百毫秒里同时看见「横排里带牌子的那一排」和「这里不带牌子的一份」，见那张模板上面那段。
+
+                  这一个 Border 也是那一趟行程的载体（见 HomeFoldMotion）：压上那一趟它从横排在排卡原来的位置上升
+                  到这里，回默认那一趟从这里落回横排，两层模板在落点上换手。它的位移与不透明度都只在翻档时被写，
+                  摆同一档（拉窗口时每一下 SizeChanged）不碰它。
                 -->
                 <Border
                     x:Name="LibraryOverlay"
@@ -164,7 +196,12 @@
                     HorizontalAlignment="Left"
                     VerticalAlignment="Bottom"
                     Visibility="Collapsed">
-                    <ContentPresenter x:Name="LibraryHost" ContentTemplate="{StaticResource ShelfTemplate}" />
+                    <!-- 位移同样必须写在标记里（理由见 ShelfTemplate 里那一段）：翻档那一趟它要先站在横排里
+                         那一排排卡的位置上、再滑到轮播左下角（或反过来），落笔处就是这支变换。 -->
+                    <Border.RenderTransform>
+                        <TranslateTransform />
+                    </Border.RenderTransform>
+                    <ContentPresenter x:Name="LibraryHost" ContentTemplate="{StaticResource ShelfCardsTemplate}" />
                 </Border>
             </Grid>
 

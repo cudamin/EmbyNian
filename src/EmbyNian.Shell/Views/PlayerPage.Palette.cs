@@ -42,7 +42,6 @@ public sealed partial class PlayerPage
             ((SolidColorBrush)Resources[key]).Color = ThemeHost.ToColor(colour);
 
         Wash("PlayerBottomScrim", PlayerPalette.BottomScrimStops);
-        Wash("PlayerTopScrim", PlayerPalette.TopScrimStops);
     }
 
     /// <summary>
@@ -114,8 +113,7 @@ public sealed partial class PlayerPage
 
         foreach (var (key, table) in new (string Key, IReadOnlyList<(double Along, byte Alpha)> Table)[]
                  {
-                     ("PlayerBottomScrim", PlayerPalette.BottomScrimStops),
-                     ("PlayerTopScrim", PlayerPalette.TopScrimStops)
+                     ("PlayerBottomScrim", PlayerPalette.BottomScrimStops)
                  })
         {
             if (!Resources.TryGetValue(key, out var found) || found is not LinearGradientBrush brush)

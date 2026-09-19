@@ -120,8 +120,12 @@ internal sealed class HostWindow : IDisposable
     private bool _useBackdrop = true;
     private bool _disposed;
 
-    /// <summary>The frame rect and style to restore, held only while fullscreen.</summary>
-    private (NativeRect Bounds, IntPtr Style)? _restore;
+    /// <summary>The frame, style and maximize state to restore, held only while fullscreen.</summary>
+    private (NativeRect Bounds, IntPtr Style, bool Maximized)? _restore;
+    private int _clientTransitionDepth;
+    private NativeRect _lastClientRect;
+    private bool _lastMaximized;
+    private bool _restoringBrowse;
 
     /// <summary>
     /// The foreground window <see cref="JudgeBand"/> has already spoken about, so the tick behind it says the
@@ -612,8 +616,7 @@ internal sealed class HostWindow : IDisposable
     /// <see cref="FitToPicture"/> 把最小值按 0 递给 <see cref="AspectLock"/>；<see cref="MinimumClientSize"/>
     /// 那个读数是自检量浏览窗口下限用的，不跟着变。
     /// <para>
-    /// 谁来开关：<see cref="PlayerWindow.TryCreate"/> 开窗即开（独立播放窗口天生只为播放存在），
-    /// <c>PlayerPage.EnterPlayer</c> 把接管的主窗口打开、<c>LeavePlayer</c> 关回去 —— 退出播放时
+    /// 谁来开关：<c>PlayerPage.EnterPlayer</c> 把接管的窗口打开、<c>LeavePlayer</c> 关回去 —— 退出播放时
     /// <see cref="RestoreBrowseGeometry"/> 本来就要把播放前的几何还回来，浏览窗口因此不会停在播放时缩出来的
     /// 那个小尺寸上。默认 false，浏览窗口的 600×560 下限原样保留。
     /// </para>
@@ -697,6 +700,70 @@ internal sealed class HostWindow : IDisposable
     /// </para>
     /// </summary>
     internal event Action<bool>? FocusChanged;
+
+    /// <summary>一次离散窗口切换的客户区起止矩形；全屏、最大化和还原共用，合并中间的 WM_SIZE。</summary>
+    internal event Action<NativeRect, NativeRect>? ClientRectTransition;
+
+    private void ChangeClientRect(Action change, bool suppressIntermediateFrames = false)
+    {
+        var before = ClientRectOnScreen();
+        var suppress = suppressIntermediateFrames && _clientTransitionDepth == 0;
+        if (suppress) SetFrameTransitions(false);
+        _clientTransitionDepth++;
+        try { change(); }
+        finally
+        {
+            _clientTransitionDepth--;
+            if (_clientTransitionDepth == 0) PublishClientRect(before);
+            if (suppress) SetFrameTransitions(true);
+        }
+    }
+
+    private void SetFrameTransitions(bool enabled)
+    {
+        const int transitionsForceDisabled = 3;
+        var disabled = enabled ? 0 : 1;
+        Native.DwmSetWindowAttribute(Handle, transitionsForceDisabled, ref disabled, sizeof(int));
+    }
+
+    private void PublishClientRect(NativeRect before)
+    {
+        SynchronizeContentLayout();
+        var after = ClientRectOnScreen();
+        _lastClientRect = after;
+        _lastMaximized = IsMaximized;
+        if (before.Width > 0 && before.Height > 0 && after.Width > 0 && after.Height > 0
+            && (before.Left != after.Left || before.Top != after.Top
+                || before.Width != after.Width || before.Height != after.Height))
+            ClientRectTransition?.Invoke(before, after);
+    }
+
+    /// <summary>岛的尺寸通知晚于 SetWindowPos；离散切换先用真实客户区排好树，避免一帧旧布局露在新窗口里。</summary>
+    internal void SynchronizeContentLayout()
+    {
+        if (_content is not FrameworkElement root || Handle == IntPtr.Zero) return;
+        var (width, height) = ClientSize;
+        if (width <= 0 || height <= 0) return;
+        var raster = WindowDpi / 96d;
+        root.Measure(new Windows.Foundation.Size(width / raster, height / raster));
+        root.Arrange(new Windows.Foundation.Rect(0, 0, width / raster, height / raster));
+        root.UpdateLayout();
+    }
+
+    /// <summary>客户区矩形，屏幕坐标（客户区原点换算到屏幕、尺寸原样）。</summary>
+    private NativeRect ClientRectOnScreen()
+    {
+        Native.GetClientRect(Handle, out var client);
+        var origin = new NativePoint();
+        Native.ClientToScreen(Handle, ref origin);
+        return new NativeRect
+        {
+            Left = origin.X,
+            Top = origin.Y,
+            Right = origin.X + client.Width,
+            Bottom = origin.Y + client.Height
+        };
+    }
 
     /// <summary>
     /// 这个窗口现在有多大、在哪儿、是不是最大化着 —— 也就是下次开窗该照着的那一份。写盘的是
@@ -810,8 +877,7 @@ internal sealed class HostWindow : IDisposable
         {
             if (Handle == IntPtr.Zero || Fullscreen == value) return;
 
-            if (value) EnterFullscreen();
-            else LeaveFullscreen();
+            ChangeClientRect(value ? EnterFullscreen : LeaveFullscreen, suppressIntermediateFrames: true);
         }
     }
 
@@ -925,10 +991,11 @@ internal sealed class HostWindow : IDisposable
     /// Writes down what <see cref="Placement"/> promises. Cheap enough to call on every drag that ends and
     /// every maximize that lands — two <c>user32</c> reads and a struct assignment, no allocation.
     /// <para>
-    /// Silent in the three states whose geometry is not the user's choice: fullscreen (the edges are the
+    /// Silent in the four states whose geometry is not the user's choice: fullscreen (the edges are the
     /// monitor's, and the rectangle from just before entering it is already recorded), minimized (there is
-    /// no shape to record), and before the window exists. Maximized keeps the recorded size and only raises
-    /// the flag, which is what makes 「取消最大化」 come back to the size the user actually dragged.
+    /// no shape to record), player-occupied (<see cref="FreeSizing"/> — see below), and before the window
+    /// exists. Maximized keeps the recorded size and only raises the flag, which is what makes 「取消最大化」
+    /// come back to the size the user actually dragged.
     /// </para>
     /// </summary>
     private void RememberPlacement()
@@ -938,6 +1005,16 @@ internal sealed class HostWindow : IDisposable
         // 片子摆着的形状不是用户挑的，所以它既不进 <see cref="Placement"/>（下次开窗照着它开就成了片子的
         // 形状），也不进 <see cref="HasBrowseGeometry"/> 那一份（退出播放要回到这里）。
         if (PictureAspect > 0) return;
+
+        // 播放占着窗口的整段（<see cref="FreeSizing"/> 开着的这段）同样不记。上面那条比例守卫罩得住放片
+        // 期间，却罩不住退出路上的一拍：播放停止时比例先归零（视图模型离开播放界面那一拍），退出播放才
+        // 退出全屏，而 <see cref="LeaveFullscreen"/> 先放掉 <c>_restore</c> 再 <c>SetWindowPos</c> 还矩形
+        // —— 那一下的 WM_SIZE 同步到来时「全屏已了、比例已零」，两条旧守卫全放行，退出全屏回到的播放形状
+        // 就被当成浏览几何记了进来。紧跟着的 <see cref="RestoreBrowseGeometry"/> 看见矩形没变，静默收工
+        // —— 自动全屏的那场播放把窗口留在片子的形状上，还原日志一行都没有（2026-09-18 14:56 实录：
+        // 0.0.14，《莫扎特传》2.413:1 开播即自动全屏，退出后停在 1511×626；12:35 两场不带全屏的都正常还原，
+        // 差别只在全屏这一趟）。FreeSizing 这一段里窗口的任何形状都是播放的，一概不记。
+        if (FreeSizing) return;
 
         if (Native.IsZoomed(Handle))
         {
@@ -1000,16 +1077,34 @@ internal sealed class HostWindow : IDisposable
     /// 拖出来的形状也不属于浏览用的那一份，所以退出播放一律回到播放前 —— 行为最好预测。
     /// </para>
     /// </summary>
+    /// <summary>退出播放直接还给浏览几何，不经过全屏前的播放矩形再跳一次。</summary>
+    internal void RestorePlayerToBrowse()
+    {
+        if (Handle == IntPtr.Zero) return;
+        ChangeClientRect(() =>
+        {
+            _restoringBrowse = true;
+            try
+            {
+                if (Fullscreen) LeaveFullscreen();
+                RestoreBrowseGeometry();
+            }
+            finally { _restoringBrowse = false; }
+        }, suppressIntermediateFrames: true);
+    }
+
     public void RestoreBrowseGeometry()
     {
         if (Handle == IntPtr.Zero || Fullscreen || Native.IsIconic(Handle)) return;
         if (!HasBrowseGeometry) return;
 
         var was = _browse;
+        var restoreMaximized = was.Maximized;
+        if (IsMaximized) Native.ShowWindow(Handle, Native.SwRestore);
 
-        // 最大化着浏览的那一次：回到取消最大化时该有的那个大小，再把最大化重新摆上 —— 而不是把窗口摆成
-        // 整块屏幕那么大（那会是「还原成一个像最大化的普通窗口」，Windows 并不认为它最大化着）。
-        if (was.Maximized)
+        // 即使最终仍需最大化，也先把普通窗口的还原矩形写回。Windows 的最大化窗口仍保留这份
+        // 普通位置；播放期间的 FitToPicture 不得污染用户下一次点击「还原」的落点。
+        if (restoreMaximized)
         {
             Native.SetWindowPos(
                 Handle, Native.HwndTop,
@@ -1020,6 +1115,7 @@ internal sealed class HostWindow : IDisposable
             return;
         }
 
+        // 最大化播放期间若窗口被程序还原，先回到普通态再应用浏览矩形。
         if (!Native.GetWindowRect(Handle, out var rect)) return;
 
         if (rect.Left == was.Bounds.Left && rect.Top == was.Bounds.Top
@@ -1361,7 +1457,11 @@ internal sealed class HostWindow : IDisposable
     public void ToggleMaximize()
     {
         if (Handle == IntPtr.Zero || Fullscreen) return;
-        Native.ShowWindow(Handle, IsMaximized ? Native.SwRestore : Native.SwMaximize);
+        ChangeClientRect(() =>
+        {
+            Native.ShowWindow(Handle, IsMaximized ? Native.SwRestore : Native.SwMaximize);
+            FitToPicture();
+        });
     }
 
     /// <summary>
@@ -1422,23 +1522,27 @@ internal sealed class HostWindow : IDisposable
 
     private void EnterFullscreen()
     {
-        if (Native.IsZoomed(Handle)) Native.ShowWindow(Handle, Native.SwRestore);
-
-        var style = Native.GetWindowLongPtr(Handle, Native.GwlStyle);
-        Native.GetWindowRect(Handle, out var bounds);
-        _restore = (bounds, style);
-
         var monitor = Native.MonitorFromWindow(Handle, Native.MonitorDefaultToNearest);
         var info = new MonitorInfo { Size = (uint)Marshal.SizeOf<MonitorInfo>() };
         if (!Native.GetMonitorInfo(monitor, ref info))
         {
-            _restore = null;
             Log.Warn(Category, "读取显示器边界失败，全屏取消");
             return;
         }
 
-        var stripped = (long)style & ~(long)(Native.WsCaption | Native.WsThickFrame);
-        Native.SetWindowLongPtr(Handle, Native.GwlStyle, new IntPtr(stripped));
+        var maximized = IsMaximized;
+        var freeSizing = FreeSizing;
+        FreeSizing = true;
+        try
+        {
+            if (maximized) Native.ShowWindow(Handle, Native.SwRestore);
+            var style = Native.GetWindowLongPtr(Handle, Native.GwlStyle);
+            Native.GetWindowRect(Handle, out var bounds);
+            _restore = (bounds, style, maximized);
+            var stripped = (long)style & ~(long)(Native.WsCaption | Native.WsThickFrame);
+            Native.SetWindowLongPtr(Handle, Native.GwlStyle, new IntPtr(stripped));
+        }
+        finally { FreeSizing = freeSizing; }
 
         var screen = info.Monitor;
         Native.SetWindowPos(
@@ -1504,15 +1608,20 @@ internal sealed class HostWindow : IDisposable
         Native.MarkFullscreen(Handle, false);
 
         Native.SetWindowLongPtr(Handle, Native.GwlStyle, saved.Style);
+        var bounds = _restoringBrowse && HasBrowseGeometry
+            ? new NativeRect { Left = _browse.Bounds.Left, Top = _browse.Bounds.Top,
+                Right = _browse.Bounds.Right, Bottom = _browse.Bounds.Bottom }
+            : saved.Bounds;
         Native.SetWindowPos(
-            Handle, Native.HwndNoTopMost,
-            saved.Bounds.Left, saved.Bounds.Top, saved.Bounds.Width, saved.Bounds.Height,
+            Handle, _topMost ? Native.HwndTopMost : Native.HwndNoTopMost,
+            bounds.Left, bounds.Top, bounds.Width, bounds.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
 
-        // 窗口化时视频有黑边: the rect just put back is the one the window had when it went fullscreen, and
-        // that is not necessarily the picture's shape any more — see the class remark on this method for the
-        // two ways the two come apart. Re-fitting here is the whole repair: 退出全屏之后按当前画面比例再整形一次.
-        FitToPicture();
+        if (!_restoringBrowse)
+        {
+            if (saved.Maximized) Native.ShowWindow(Handle, Native.SwMaximize);
+            else FitToPicture();
+        }
 
         Log.Info(Category, "退出全屏");
     }
@@ -2569,7 +2678,13 @@ internal sealed class HostWindow : IDisposable
                 return new IntPtr(1);
 
             case Native.WmSize:
+                var beforeSize = _lastClientRect;
+                var changedMaximize = _lastMaximized != IsMaximized;
                 OnSize();
+                _lastClientRect = ClientRectOnScreen();
+                _lastMaximized = IsMaximized;
+                if (_clientTransitionDepth == 0 && changedMaximize && !Native.IsIconic(window))
+                    PublishClientRect(beforeSize);
 
                 // 最大化和还原也在这里落定 —— 那两下不是拖动，不发 WM_EXITSIZEMOVE。最大化那一档只抬那一位、
                 // 尺寸留着上一次量到的，见 RememberPlacement。

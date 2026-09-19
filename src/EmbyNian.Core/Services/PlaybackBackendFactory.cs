@@ -39,7 +39,10 @@ public sealed class PlaybackBackendFactory(AppSettings settings, ShaderStaging s
         return settings.Mpv.Backend switch
         {
             MpvBackendKind.ExternalMpv => new MpvProcessBackend(settings.Mpv),
-            _ => new LibMpvBackend(settings.Mpv, () => VideoSurface?.Invoke())
+            _ => new LibMpvBackend(
+                settings.Mpv,
+                () => VideoSurface?.Invoke(),
+                () => settings.Playback.AutoFullscreenOnPlayback)
         };
     }
 }

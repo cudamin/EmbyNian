@@ -408,6 +408,14 @@ public sealed partial class PlayerPage
     /// 退出全屏又把按猜错比例整好的矩形放了回来。这里把那趟走一遍（进全屏 → 退全屏），要求退出来之后客户区
     /// <b>真的是那个比例</b> —— 判据落在比例上而不是落在「有没有调 FitToPicture」上，因为要的正是屏幕上的结果。
     /// </para>
+    /// <para>
+    /// 第五半是 2026-09-18 用户报的那一条的自动全屏变体：播放停止时比例先归零，退出播放才退出全屏，退出全屏
+    /// 那一下的 WM_SIZE 到来时「全屏已了、比例已零」，窗口若没有「播放占着窗口不记几何」的守卫（
+    /// <see cref="HostWindow.RememberPlacement"/> 的 FreeSizing 一条），就会把退出全屏回到的播放形状记成浏览
+    /// 几何 —— 紧跟着的还原看见矩形没变就静默收工，窗口从此留在片子的形状上（实录：0.0.14 的 14:56 场，
+    /// 停在 1511×626，还原日志一行都没有）。这里把那趟原样重演：占窗 → 记账 → 按画面比例整形 → 全屏 → 归零
+    /// → 退全屏 → 还窗，终点必须回到记账时那一份。
+    /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbeAspect()
     {
@@ -510,16 +518,45 @@ public sealed partial class PlayerPage
 
         var put = haveNow ? $"{now.Width}×{now.Height} @ {now.Left},{now.Top}" : "读不到";
 
+        // 第五半。此刻窗口在 was、比例已归零、FreeSizing 是 false —— 正好是自动全屏那场退出路的起点。
+        // FreeSizing 先立起来（播放占窗），按画面比例整出播放形状（比例写入方顺手把 was 记成浏览几何），
+        // 走一趟全屏；归零放在退全屏**之前**（播放停止先于退出播放，次序是这次事故的钥匙），退全屏那一下
+        // 的 WM_SIZE 若没有 FreeSizing 守卫就会把播放形状写进浏览几何 —— 还原看见矩形没变，静默收工。
+        var freeWas = _window.FreeSizing;
+        _window.FreeSizing = true;
+
+        OnPictureAspectChanged(2.413);
+        var haveShaped = Native.GetWindowRect(_window.Handle, out var shapedRect);
+
+        SetFullscreen(true);
+        OnPictureAspectChanged(0);
+        SetFullscreen(false);
+
+        _window.FreeSizing = false;
+        _window.RestoreBrowseGeometry();
+
+        var haveAfter = Native.GetWindowRect(_window.Handle, out var afterReplay);
+        var replay = haveShaped && haveAfter
+            && afterReplay.Left == was.Left && afterReplay.Top == was.Top
+            && afterReplay.Width == was.Width && afterReplay.Height == was.Height;
+
+        _window.FreeSizing = freeWas;
+
         if (_window.Fullscreen != wasFullscreen) SetFullscreen(wasFullscreen);
 
         _window.PictureAspect = restore;
 
-        return (took && shaped && refitted && cleared && back,
+        return (took && shaped && refitted && cleared && back && replay,
             $"16:9 {(took ? "已交给窗口" : "没有传到窗口")}；{fitted}；"
             + $"全屏往返后（画面 4:3）客户区 {afterSize.Width}×{afterSize.Height} = {afterRatio:0.000}"
             + (refitted ? "，已按画面比例补整" : "，不是 4:3 —— 退全屏后没按当前画面比例再整形一次") + "；"
             + $"归零{(cleared ? "已解除" : "未解除")}；"
             + $"退出播放后窗口 {put}"
-            + (back ? "，与整形前一致" : $"，整形前是 {was.Width}×{was.Height} @ {was.Left},{was.Top} —— 没还原"));
+            + (back ? "，与整形前一致" : $"，整形前是 {was.Width}×{was.Height} @ {was.Left},{was.Top} —— 没还原") + "；"
+            + $"自动全屏场重演（整形→全屏→归零→退全屏→还原）"
+            + (replay ? "回到记账时的矩形"
+                : $"停在 {(haveAfter ? $"{afterReplay.Width}×{afterReplay.Height} @ {afterReplay.Left},{afterReplay.Top}" : "读不到")}"
+                  + $"（播放形状 {shapedRect.Width}×{shapedRect.Height}），应回到 {was.Width}×{was.Height} @ {was.Left},{was.Top}"
+                  + " —— 播放形状被记成了浏览几何"));
     }
 }

@@ -81,6 +81,37 @@ public sealed partial class PlayerViewModel
         }
     }
 
+    /// <summary>
+    /// 换片：把正在播的换成新点的一部，屏幕上的窗口一个都不变（2026-09-19 用户令「使用独占模式时可以
+    /// 一边挂着片子一边继续翻媒体库」的另一半 —— 翻库翻到了想看的，点下去就该是它，而不是一句「请先停止」）。
+    /// <para>
+    /// 与 <see cref="PlayAsync"/> 只差 <c>replaceExisting</c> 那一位（连播下一集走的同一条换血管线），
+    /// 外壳也一样：取消静默吞、异常上报、生命周期没人接就收播放层。调用方（<c>ShellPage</c>）只该在
+    /// 无页面播放在途时走这里 —— 独占模式下播放器页已摘下让位，请求必须直递本视图模型，画面与控制
+    /// 都在 mpv 的视频窗里，本端只管把新片子换上。
+    /// </para>
+    /// </summary>
+    internal async Task PlayReplacingAsync(
+        EmbyItem item,
+        EmbyItem? parent = null,
+        PlaybackChoice? choice = null,
+        IReadOnlyList<EmbyItem>? episodes = null)
+    {
+        try
+        {
+            await StartPlaybackAsync(item, parent, choice, episodes, replaceExisting: true).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            Log.Error(Category, "播放失败", error);
+            Noticed?.Invoke($"播放失败：{error.Message}", InfoBarSeverity.Error);
+            if (_playerHold == 0) LeavePlayer();
+        }
+    }
+
     /// <summary>停止播放. Asks mpv to quit rather than cancelling, so the final position is still reported.</summary>
     internal async Task StopAsync()
     {

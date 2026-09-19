@@ -93,6 +93,11 @@ public static class PlayerPalette
         ("PlayerSkipBrush", Raised.WithAlpha(0xE6)),
         ("PlayerCoverBrush", Film.WithAlpha(0xFF)),
 
+        // 播放页自己那块舞台底（2026-09-18，进出页面的转场要用它）：和换集那层遮挡同色、同样必须全不透明，
+        // 但**故意是独立一支** —— 一个盖的是上一集的最后一帧，一个是这一页在屏上的底，会各自被调；
+        // 共用一个的代价就是上面那段注释说的那种牵连。
+        ("PlayerStageBrush", Film.WithAlpha(0xFF)),
+
         // 描边三档，全是白，越该被注意的越亮：统计面板只是块读数，章节预览是浮出来的，
         // 「跳过」是唯一一颗等着被按的按钮。（中间那一档从前音量条也在用，用户要求「音量条不需要边框」之后
         // 只剩章节预览这一个用户；这支画刷留着，不是没人要了。）
@@ -123,10 +128,7 @@ public static class PlayerPalette
     public static IReadOnlyList<(double Along, byte Alpha)> BottomScrimStops { get; } =
         [(0, 0x00), (0.35, 0x8C), (1, 0xF0)];
 
-    /// <summary>
-    /// 标题条背后那道，方向相反 —— 上沿最浓，到下沿散尽。两个停点就够：这一条底下只压着两行字和几颗按键，
-    /// 不像控制条那边还有一条进度轨要托住。
-    /// </summary>
-    public static IReadOnlyList<(double Along, byte Alpha)> TopScrimStops { get; } =
-        [(0, 0xE6), (1, 0x00)];
+    // 标题条那道反向的罩子（TopScrimStops）删于 2026-09-18：「播放页面的标题不要黑色渐变」。
+    // TitleStrip 的 Background 一并去掉，XAML 里的 PlayerTopScrim 资源、PaintPalette 的 Wash、
+    // ProbePalette 的表项和上面那条单测跟着一起退了 —— 删干净，别留一支没人用的渐变。
 }

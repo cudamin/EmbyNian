@@ -23,6 +23,9 @@
     <Page.Resources>
         <!-- 左边分类那一列的图标：分类名 → 一个 Segoe 字形，见 SettingsCategoryGlyphConverter。 -->
         <local:SettingsCategoryGlyphConverter x:Key="CategoryGlyph" />
+        <!-- MoviePilot 那一行换官方图标的白色重绘版：这个转换器回答「这一行是不是 MoviePilot」——
+             直接给 Visible/Collapsed，传 ConverterParameter=hide 时反过来（给字形用）。 -->
+        <local:SettingsCategoryMarkConverter x:Key="MoviePilotMark" />
 
         <!--
           控件那一列有多宽。一个数写在一处，六种行（开关、下拉、数字、滑块、输入、字体）共用：这几行的控件
@@ -928,10 +931,36 @@
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="x:String">
                         <StackPanel Orientation="Horizontal" Spacing="12">
-                            <FontIcon
-                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                                FontSize="16"
-                                Glyph="{x:Bind Converter={StaticResource CategoryGlyph}}" />
+                            <!--
+                              图标槽二选一：MoviePilot 这一行走官方图标的白色重绘版（2026-09-18 从 v3 仓库根的
+                              app.ico 描摹，等距立方体两截轨 + 播放三角；单色版不描折角阴影），其余分类照旧走
+                              Segoe 字形。白是用户点的名（2026-09-18：「把图标弄成白色的替换侧边栏的这个齿轮」），
+                              齿轮本是认不出分类时的兜底（MoviePilot 没进字形表）。
+                            -->
+                            <Grid>
+                                <FontIcon
+                                    FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                    FontSize="16"
+                                    Glyph="{x:Bind Converter={StaticResource CategoryGlyph}}"
+                                    Visibility="{x:Bind Converter={StaticResource MoviePilotMark}, ConverterParameter=hide}" />
+                                <Viewbox
+                                    Width="16"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind Converter={StaticResource MoviePilotMark}}">
+                                    <Canvas Width="256" Height="256">
+                                        <Path
+                                            Data="M48,191 L32,181 L32,86 L34,80 L43,72 L120,24 L126,22 L135,24 L159,39 L159,54 L149,69 L129,56 L126,56 L63,96 L63,191 Z"
+                                            Fill="{ThemeResource TextFillColorPrimaryBrush}" />
+                                        <Path
+                                            Data="M96,221 L96,200 L101,190 L103,190 L128,201 L192,173 L192,58 L197,58 L223,72 L223,186 L220,193 L217,196 L209,200 L202,202 L197,205 L195,205 L190,208 L188,208 L183,211 L181,211 L176,214 L174,214 L169,217 L162,219 L130,233 L125,233 L119,231 Z"
+                                            Fill="{ThemeResource TextFillColorPrimaryBrush}" />
+                                        <Path
+                                            Data="M107,165 L102,162 L102,92 L106,89 L115,93 L149,113 L165,121 L170,125 L170,129 L167,132 L158,136 L124,156 Z"
+                                            Fill="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    </Canvas>
+                                </Viewbox>
+                            </Grid>
                             <TextBlock Text="{x:Bind}" VerticalAlignment="Center" />
                         </StackPanel>
                     </DataTemplate>

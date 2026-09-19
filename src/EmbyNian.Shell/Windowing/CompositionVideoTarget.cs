@@ -1,32 +1,44 @@
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using EmbyNian.Diagnostics;
 using EmbyNian.Playback;
+using EmbyNian.Shell.Interop;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media;
 using WinRT;
 
 namespace EmbyNian.Shell.Windowing;
 
 /// <summary>
-/// Hosts mpv's composition swapchain as a SpriteVisual in the XAML compositor. The empty host
-/// must precede the OSD siblings; attaching to the page root would draw above its XAML content.
-/// Rendering uses physical pixels, while the visual inherits XAML's DIP layout and transforms.
+/// mpv 的交换链留在独立 SpriteVisual 上，画笔把缓冲拉伸进 Visual 的尺寸，所以「按哪个矩形呈现」
+/// 全部由 Offset/Scale 表达。客户区跳变时旧缓冲按旧客户区矩形起手、240ms 长到新矩形（mpv 的
+/// 新缓冲中途落地就按当前进度重锚），等待期用 16ms 单计时器兼管：重读实际缓冲（QI
+/// IDXGISwapChain1::GetDesc1，ResizeBuffers 可以原地复用同一个 COM 指针，不能只等换链事件）、
+/// 推进跑动、缓冲与宿主一致就停表。
 /// </summary>
 internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
 {
     private const string Category = "视频合成层";
-
-    // Microsoft.UI.Composition.Interop.h: IUnknown, CreateGraphicsDevice, ForHandle, ForSwapChain.
-    // The Windows.UI (UWP) interface has a different IID and method order.
     private static readonly Guid SwapChainInteropIid = new("FC084699-67D8-40E1-ADE7-08901D84FFDA");
+    private static readonly Guid SwapChain1Iid = new("790A45F7-0D42-4876-983A-0A55CFE6F4AA");
     private const int CreateSurfaceSlot = 5;
+    private const int GetDescriptionSlot = 18;
+
+    /// <summary>呈现跑动一趟的时长。与 mpv 重建缓冲的实测窗口（110~150ms）错开半程。</summary>
+    private const double MorphMilliseconds = 240;
+
+    private const int TickMilliseconds = 16;
+    private const int WatchCeilingMilliseconds = 1500;
 
     private readonly FrameworkElement _host;
     private readonly DispatcherQueue _dispatcher;
     private readonly DispatcherQueueTimer _debounce;
+    private readonly DispatcherQueueTimer _presentationTimer;
+    private readonly Stopwatch _presentationClock = Stopwatch.StartNew();
     private readonly object _gate = new();
     private XamlRoot? _root;
     private SpriteVisual? _visual;
@@ -36,10 +48,21 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     private bool _hasPending;
     private bool _queued;
     private bool _disposed;
+    private bool _retainLastFrame;
+    private bool _retained;
+    private long _watchStarted;
     private (int Width, int Height) _size;
-
-    /// <summary>上一个落定的宿主尺寸，只用来判这一趟是「跳变」还是「拖动」—— 见 <see cref="Schedule"/>。</summary>
     private (int Width, int Height) _previous;
+    private (int Width, int Height) _attachedContent;
+    private PresentationRun? _run;
+
+    /// <summary>一趟呈现跑动：旧矩形摆放 → 新矩形摆放，按同一支缓动插值。</summary>
+    private sealed class PresentationRun
+    {
+        public VideoPresentation.Placement From;
+        public VideoPresentation.Placement To;
+        public double StartedAtMs;
+    }
 
     public CompositionVideoTarget(FrameworkElement host)
     {
@@ -49,35 +72,37 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         _debounce.Interval = TimeSpan.FromMilliseconds(100);
         _debounce.IsRepeating = false;
         _debounce.Tick += OnDebounce;
+        _presentationTimer = _dispatcher.CreateTimer();
+        _presentationTimer.Interval = TimeSpan.FromMilliseconds(TickMilliseconds);
+        _presentationTimer.Tick += OnPresentationTick;
         _host.Loaded += OnLoaded;
         _host.Unloaded += OnUnloaded;
         _host.SizeChanged += OnSizeChanged;
         Measure();
     }
 
-    internal bool HasAttachedVisual => _attached != IntPtr.Zero
-        && _brush?.Surface is not null
-        && _visual is not null
+    internal bool HasAttachedVisual => !_retained && _attached != IntPtr.Zero
+        && _brush?.Surface is not null && _visual is not null
         && ReferenceEquals(ElementCompositionPreview.GetElementChildVisual(_host), _visual);
 
-    /// <summary>
-    /// The size the compositor is actually drawing the picture at, in DIPs, against the host's own
-    /// <see cref="Size"/> in physical pixels. The two parting company is what 「画面缩在左上角一小块」
-    /// reads as: a sprite smaller than its host draws the surface at its natural size from the host's
-    /// top-left corner, and the window around it stays empty. Read on the UI thread only — the visual
-    /// lives in that apartment. Zero when nothing is attached.
-    /// </summary>
-    internal (float Width, float Height) VisualSize
+    internal (float Width, float Height) VisualSize => _visual is { } visual
+        ? (visual.Size.X, visual.Size.Y) : default;
+
+    internal (int Width, int Height) AttachedContentSize => _attachedContent;
+    internal (double Width, double Height) HostSize => (_host.ActualWidth, _host.ActualHeight);
+    internal bool IsContentReady => HasAttachedVisual && VideoPresentation.Matches(
+        _attachedContent.Width, _attachedContent.Height, _size.Width, _size.Height);
+
+    /// <summary>退场的最后一帧可以比 mpv 会话多活一小段；收起页面时必须放掉引用。</summary>
+    internal bool RetainLastFrame
     {
-        get
+        get => _retainLastFrame;
+        set
         {
-            var visual = _visual;
-            return visual is null ? default : (visual.Size.X, visual.Size.Y);
+            _retainLastFrame = value;
+            if (!value && _retained) ClearSurface();
         }
     }
-
-    /// <summary>The host element's layout size in DIPs — what <see cref="Size"/> is converted from.</summary>
-    internal (double Width, double Height) HostSize => (_host.ActualWidth, _host.ActualHeight);
 
     public event Action? GeometryChanged;
 
@@ -91,7 +116,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         lock (_gate)
         {
             if (_disposed) return;
-            // mpv lends the pointer only for this call; own it before crossing the dispatcher.
+            // mpv 只在这个调用内借出指针，跨 dispatcher 之前先拥有它。
             if (swapChain != IntPtr.Zero) Marshal.AddRef(swapChain);
             if (_pending != IntPtr.Zero) Marshal.Release(_pending);
             _pending = swapChain;
@@ -100,8 +125,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
             _queued = true;
         }
 
-        if (_dispatcher.HasThreadAccess)
-            DrainPending();
+        if (_dispatcher.HasThreadAccess) DrainPending();
         else if (!_dispatcher.TryEnqueue(DrainPending))
         {
             lock (_gate)
@@ -122,15 +146,8 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
             var chain = _pending;
             _pending = IntPtr.Zero;
             _hasPending = false;
-            try
-            {
-                // Keep taking the request and applying it atomic against a concurrent stop.
-                Attach(chain);
-            }
-            catch (Exception error)
-            {
-                Log.Warn(Category, "挂接 Composition 视频交换链失败", error);
-            }
+            try { Attach(chain); }
+            catch (Exception error) { Log.Warn(Category, "挂接 Composition 视频交换链失败", error); }
             finally
             {
                 if (chain != IntPtr.Zero) Marshal.Release(chain);
@@ -140,44 +157,172 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
 
     private void Attach(IntPtr chain)
     {
-        if (chain == _attached && (chain == IntPtr.Zero || _brush is not null)) return;
         if (chain == IntPtr.Zero)
         {
-            ReleaseVisual();
-            ReleaseAttached();
-            Log.Debug(Category, "视频交换链已摘下");
+            _presentationTimer.Stop();
+            if (_retainLastFrame && _visual is not null && _attached != IntPtr.Zero)
+            {
+                _retained = true;
+                return;
+            }
+            ClearSurface();
             return;
         }
 
-        EnsureVisual();
-        var surface = CreateSurface(_visual!.Compositor, chain);
-        _brush!.Surface = surface;
-        Marshal.AddRef(chain);
-        ReleaseAttached();
-        _attached = chain;
-        var size = Size;
-        Log.Info(Category, $"视频交换链已挂上 SpriteVisual（宿主 {size.Width}×{size.Height} px，{Describe()}）");
+        _retained = false;
+        if (chain != _attached || _visual is null)
+        {
+            EnsureVisual();
+            var surface = CreateSurface(_visual!.Compositor, chain);
+            _brush!.Surface = surface;
+            Marshal.AddRef(chain);
+            ReleaseAttached();
+            _attached = chain;
+            Log.Debug(Category, "视频交换链已挂上 SpriteVisual");
+        }
+        RefreshPresentation();
+        WatchPresentation();
     }
 
     private void EnsureVisual()
     {
         if (_visual is not null) return;
-        var compositor = ElementCompositionPreview.GetElementVisual(_host).Compositor;
+        var compositor = CompositionTarget.GetCompositorForCurrentThread();
         _brush = compositor.CreateSurfaceBrush();
-        // mpv already fits/letterboxes into the full output buffer. Map that buffer to the host,
-        // rather than applying a second aspect-ratio policy in the compositor.
-        //
-        // 2026-09-17 补一句实测：这一条在这个交换链上其实做不到 —— 探针里把缓冲缩到窗口的一半
-        //（1280×720 放进 2560×1440），屏幕只有左上角有画面，中间和右下角是页面底色。交换链既不被
-        // 画笔缩放，也不被 SpriteVisual 的尺寸缩放（显式写尺寸试过，一样），它只会一比一贴在宿主的
-        // 左上角。所以画面铺满窗口靠的<b>只有</b>「交换链尺寸 = 宿主尺寸」这一件事，见 LibMpvBackend
-        // 的合成尺寸派发；而尺寸落后于窗口的那几百毫秒，屏幕上就是「画面缩在左上角一小块」。
         _brush.Stretch = CompositionStretch.Fill;
         _visual = compositor.CreateSpriteVisual();
         _visual.Brush = _brush;
-        _visual.RelativeSizeAdjustment = Vector2.One;
         ElementCompositionPreview.SetElementChildVisual(_host, _visual);
     }
+
+    /// <summary>
+    /// 起一趟呈现跑动：旧缓冲按跳变前的客户区矩形呈现，240ms 长到新矩形。半路再触发从当前呈现
+    /// 矩形接着走；缓冲不存在（还没开播、收摊之后）就没有可跑的画面，这一跳交给加载遮罩或页面本身。
+    /// </summary>
+    internal void BeginPresentationMorph(NativeRect fromScreen, NativeRect toScreen)
+    {
+        if (_disposed || _attached == IntPtr.Zero || _attachedContent.Width <= 0) return;
+        if (fromScreen.Width <= 0 || fromScreen.Height <= 0 || toScreen.Width <= 0 || toScreen.Height <= 0) return;
+
+        var raster = RasterScale();
+        var now = _presentationClock.Elapsed.TotalMilliseconds;
+
+        var from = VideoPresentation.ForRect(_attachedContent.Width, _attachedContent.Height,
+            fromScreen.Left, fromScreen.Top, fromScreen.Width, fromScreen.Height,
+            toScreen.Left, toScreen.Top, raster);
+        var to = VideoPresentation.ForRect(_attachedContent.Width, _attachedContent.Height,
+            toScreen.Left, toScreen.Top, toScreen.Width, toScreen.Height,
+            toScreen.Left, toScreen.Top, raster);
+
+        if (_run is { } active)
+        {
+            var e = Ease(Math.Clamp((now - active.StartedAtMs) / MorphMilliseconds, 0, 1));
+            from = VideoPresentation.Between(active.From, active.To, e);
+        }
+
+        _run = new PresentationRun { From = from, To = to, StartedAtMs = now };
+        RefreshPresentation();
+        WatchPresentation();
+        Log.Debug(Category, $"画面跑动：{(int)fromScreen.Width}×{(int)fromScreen.Height} → "
+            + $"{(int)toScreen.Width}×{(int)toScreen.Height}（{MorphMilliseconds:0}ms）");
+    }
+
+    internal void RefreshPresentation()
+    {
+        if (_disposed || _visual is null || _attached == IntPtr.Zero) return;
+
+        var raster = RasterScale();
+        var observed = _retained ? default : ReadContentSize(_attached);
+        if (observed is { Width: > 0, Height: > 0 } && observed != _attachedContent)
+        {
+            ReanchorRun(raster, observed);
+            _attachedContent = observed;
+            Log.Debug(Category, $"实际视频缓冲 {observed.Width}x{observed.Height}，宿主 {_size.Width}x{_size.Height}");
+        }
+        if (_attachedContent is not { Width: > 0, Height: > 0 }) return;
+
+        VideoPresentation.Placement placement;
+        if (_run is { } run)
+        {
+            var progress = (_presentationClock.Elapsed.TotalMilliseconds - run.StartedAtMs) / MorphMilliseconds;
+            if (progress >= 1)
+            {
+                _run = null;
+                placement = run.To;
+            }
+            else placement = VideoPresentation.Between(run.From, run.To, Ease(progress));
+        }
+        else if (IsContentReady) placement = VideoPresentation.Placement.Identity;
+        else placement = VideoPresentation.Contain(_attachedContent.Width, _attachedContent.Height,
+            _host.ActualWidth, _host.ActualHeight, raster);
+
+        ApplyPlacement(_attachedContent, placement, raster);
+    }
+
+    /// <summary>
+    /// 跑动途中缓冲换新（mpv 按新尺寸重建）：呈现矩形这条路径与缓冲无关，把「当前矩形」按新缓冲
+    /// 重新表达成起点、终点改回单位摆放，跑动接着走——眼睛看到的只有变清晰，不是二次跳变。
+    /// </summary>
+    private void ReanchorRun(double raster, (int Width, int Height) observed)
+    {
+        if (_run is not { } run) return;
+        var e = Ease(Math.Clamp((_presentationClock.Elapsed.TotalMilliseconds - run.StartedAtMs) / MorphMilliseconds, 0, 1));
+        var current = VideoPresentation.Between(run.From, run.To, e);
+        var rectWidth = _attachedContent.Width / raster * current.ScaleX;
+        var rectHeight = _attachedContent.Height / raster * current.ScaleY;
+        _run = new PresentationRun
+        {
+            From = new VideoPresentation.Placement(
+                rectWidth / (observed.Width / raster), rectHeight / (observed.Height / raster),
+                current.Left, current.Top),
+            To = VideoPresentation.Placement.Identity,
+            StartedAtMs = _presentationClock.Elapsed.TotalMilliseconds,
+        };
+    }
+
+    private void ApplyPlacement((int Width, int Height) content, VideoPresentation.Placement placement, double raster)
+    {
+        var visual = _visual;
+        if (visual is null) return;
+        visual.Size = new Vector2((float)(content.Width / raster), (float)(content.Height / raster));
+        visual.Offset = new Vector3((float)placement.Left, (float)placement.Top, 0);
+        visual.Scale = new Vector3((float)placement.ScaleX, (float)placement.ScaleY, 1);
+    }
+
+    /// <summary>离散的窗口状态变化立即派发，不把拖动防抖的 100ms 加到最大化与全屏上。</summary>
+    internal void SynchronizeGeometry()
+    {
+        if (_disposed) return;
+        Measure();
+        _debounce.Stop();
+        RefreshPresentation();
+        Dispatch();
+        WatchPresentation();
+    }
+
+    private void WatchPresentation()
+    {
+        if (_disposed || _retained || _attached == IntPtr.Zero) return;
+        _watchStarted = _presentationClock.ElapsedMilliseconds;
+        _presentationTimer.Start();
+    }
+
+    private void OnPresentationTick(DispatcherQueueTimer sender, object args)
+    {
+        RefreshPresentation();
+        if (_disposed || _retained || _attached == IntPtr.Zero
+            || (_run is null && IsContentReady)
+            || _presentationClock.ElapsedMilliseconds - _watchStarted > WatchCeilingMilliseconds)
+            _presentationTimer.Stop();
+    }
+
+    private double RasterScale()
+    {
+        var raster = _host.XamlRoot?.RasterizationScale ?? 1;
+        return raster > 0 ? raster : 1;
+    }
+
+    private static double Ease(double progress) => 1 - Math.Pow(1 - Math.Clamp(progress, 0, 1), 3);
 
     private void OnLoaded(object sender, RoutedEventArgs args)
     {
@@ -192,6 +337,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
         _debounce.Stop();
+        _presentationTimer.Stop();
         SubscribeRoot(null);
         ReleaseVisual();
     }
@@ -234,69 +380,30 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         _debounce.Start();
     }
 
-    /// <summary>
-    /// 宿主尺寸变了一次：等一拍再说，还是立刻说。
-    /// <para>
-    /// 拖动窗口的边时尺寸每帧都在变（十几毫秒一次），等那一百毫秒是为了不让 mpv 每帧重建一次交换链
-    /// —— 那才是真正的卡。而进／退全屏、最大化／还原、换屏、DPI 变化都是一次性跳变：窗口那一跳是瞬时的，
-    /// 等这一拍只是让画面多停在旧尺寸里一百毫秒，而 2026-09-17 量过这一等的代价 —— 探针里逐 50ms 取样，
-    /// 屏幕上「画面缩在左上角、其余是页面底色」从 190ms 一直持续到 340ms，而 mpv 自己从收到新尺寸到
-    /// 画面上生效只要 110~150ms（半尺寸实验：窗口不动、防抖不参与）。也就是说那一百毫秒是纯加的。
-    /// </para>
-    /// <para>
-    /// 判据用面积比（涨到 1.5 倍以上、或掉到 2/3 以下）：一次性跳变远在其外（全屏进出是 4 倍／1/4），
-    /// 连续拖动的相邻两帧几乎不可能越过它 —— 一帧之内把手里的窗口拉大一倍，指针得跳半屏。
-    /// </para>
-    /// </summary>
     private void Schedule()
     {
-        if (IsJump(_previous, _size))
+        RefreshPresentation();
+        WatchPresentation();
+        var before = (double)_previous.Width * _previous.Height;
+        var after = (double)_size.Width * _size.Height;
+        if (before > 0 && after > 0 && (after >= before * 1.5 || after * 1.5 <= before))
         {
             _debounce.Stop();
             Dispatch();
-            return;
         }
-
-        RestartDebounce();
+        else RestartDebounce();
     }
 
-    /// <summary>一次性跳变还是连续拖动：面积比 1.5 倍为界。尺寸没量出来（0）时不跳变，按拖动等一拍。</summary>
-    private static bool IsJump((int Width, int Height) was, (int Width, int Height) now)
-    {
-        if (was.Width <= 0 || was.Height <= 0 || now.Width <= 0 || now.Height <= 0) return false;
-
-        var before = (double)was.Width * was.Height;
-        var after = (double)now.Width * now.Height;
-        return after >= before * 1.5 || after * 1.5 <= before;
-    }
-
-    /// <summary>防抖到点：一次连续变化（拖动）停了，派发。</summary>
     private void OnDebounce(DispatcherQueueTimer sender, object args) => Dispatch();
+    private void Dispatch() => GeometryChanged?.Invoke();
 
-    /// <summary>把此刻的尺寸交给后端（它转手写进 mpv 的 <c>d3d11-composition-size</c>），并记一行读数。</summary>
-    private void Dispatch()
+    private void ClearSurface()
     {
-        Log.Debug(Category, $"几何落定：{Describe()}，派发合成尺寸");
-        GeometryChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// 这一层此刻信的是什么尺寸，写成一行。四个数是四件事：宿主元素自己量到的（DIP）、XAML 给这个元素的
-    /// 视觉树的尺寸、SpriteVisual 自己的尺寸与它相对父级的比例、画笔怎么把交换链贴上去。2026-09-17
-    /// 「全屏时画面缩在左上角」量下来是「宿主已经长大、画面上却只有一枚旧尺寸的块」—— 那只可能是这四者
-    /// 里有一个还停在旧值，而它们各自都不会说话，所以这一行把它们摆在一起（探针报告里能逐拍对读）。
-    /// </summary>
-    private string Describe()
-    {
-        var hostDip = $"{_host.ActualWidth:0}×{_host.ActualHeight:0}";
-        var element = ElementCompositionPreview.GetElementVisual(_host).Size;
-        var visual = _visual;
-        var sprite = visual is null
-            ? "未挂"
-            : $"{visual.Size.X:0}×{visual.Size.Y:0}（相对 {visual.RelativeSizeAdjustment.X:0.##}）";
-        var stretch = _brush is null ? "无画笔" : _brush.Stretch.ToString();
-        return $"宿主 {hostDip} DIP，元素视觉 {element.X:0}×{element.Y:0}，Sprite {sprite}，画笔 {stretch}，"
-            + $"宿主缓存 {_size.Width}×{_size.Height} px";
+        ReleaseVisual();
+        ReleaseAttached();
+        _attachedContent = default;
+        _retained = false;
+        _run = null;
     }
 
     private void ReleaseVisual()
@@ -317,7 +424,6 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         _attached = IntPtr.Zero;
     }
 
-    // The page/window owner calls this on the UI thread before disposing its XAML island.
     public void Dispose()
     {
         lock (_gate)
@@ -335,9 +441,24 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         SubscribeRoot(null);
         _debounce.Stop();
         _debounce.Tick -= OnDebounce;
+        _presentationTimer.Stop();
+        _presentationTimer.Tick -= OnPresentationTick;
         GeometryChanged = null;
-        ReleaseVisual();
-        ReleaseAttached();
+        ClearSurface();
+    }
+
+    private static (int Width, int Height) ReadContentSize(IntPtr chain)
+    {
+        if (Marshal.QueryInterface(chain, in SwapChain1Iid, out var swapChain1) < 0) return default;
+        try
+        {
+            var method = Marshal.GetDelegateForFunctionPointer<GetDescriptionDelegate>(
+                Marshal.ReadIntPtr(Marshal.ReadIntPtr(swapChain1), GetDescriptionSlot * IntPtr.Size));
+            return method(swapChain1, out var description) >= 0
+                && description.Width <= int.MaxValue && description.Height <= int.MaxValue
+                ? ((int)description.Width, (int)description.Height) : default;
+        }
+        finally { Marshal.Release(swapChain1); }
     }
 
     private static ICompositionSurface CreateSurface(Compositor compositor, IntPtr chain)
@@ -347,9 +468,8 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         IntPtr surface = IntPtr.Zero;
         try
         {
-            var vtable = Marshal.ReadIntPtr(interop);
             var method = Marshal.GetDelegateForFunctionPointer<CreateSurfaceDelegate>(
-                Marshal.ReadIntPtr(vtable, CreateSurfaceSlot * IntPtr.Size));
+                Marshal.ReadIntPtr(Marshal.ReadIntPtr(interop), CreateSurfaceSlot * IntPtr.Size));
             Marshal.ThrowExceptionForHR(method(interop, chain, out surface));
             return MarshalInterface<ICompositionSurface>.FromAbi(surface);
         }
@@ -360,6 +480,16 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
             GC.KeepAlive(compositor);
         }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SwapChainDescription
+    {
+        public uint Width, Height, Format, Stereo, SampleCount, SampleQuality;
+        public uint BufferUsage, BufferCount, Scaling, SwapEffect, AlphaMode, Flags;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int GetDescriptionDelegate(IntPtr self, out SwapChainDescription description);
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int CreateSurfaceDelegate(IntPtr self, IntPtr chain, out IntPtr surface);

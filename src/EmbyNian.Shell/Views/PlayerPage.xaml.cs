@@ -483,6 +483,9 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.PictureAspectChanged += OnPictureAspectChanged;
         ViewModel.StatsUpdated += OnStatsUpdated;
 
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+        if (ViewModel.CoverUp) ShowCoverPlate();
+
         // 着色器档位 needs to know how large the picture is being drawn, which only the window can say. Pulled
         // for the launch decision, pushed afterwards — see OnGeometryChanged.
         ViewModel.MeasureSurface = MeasureSurface;
@@ -491,6 +494,8 @@ public sealed partial class PlayerPage : UserControl
         // launch — a window dragged to a slower screen mid-film keeps the sync mode it started with.
         ViewModel.MeasureRefreshHz = () => _window?.RefreshHz() ?? 0;
         window.GeometryChanged += OnGeometryChanged;
+
+        window.ClientRectTransition += OnClientRectTransition;
 
         // mpv.net 的「未激活不藏」（2026-09-16 照搬）：焦点位喂给规则，藏匿条件里那一问由它回答。
         // 第二十九报（2026-09-17）起这一位不再走 WM_ACTIVATE 事件、改由 OnTick 每拍重问——判据从
@@ -524,7 +529,13 @@ public sealed partial class PlayerPage : UserControl
         SetCursorHidden(false);
         _cursorVisibilityEvents?.Dispose();
         _cursorVisibilityEvents = null;
-        if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
+        if (_window is not null)
+        {
+            _window.GeometryChanged -= OnGeometryChanged;
+            _window.ClientRectTransition -= OnClientRectTransition;
+        }
+        _onStage = false;
+        StopPlayerMotion();
         ViewModel?.Shutdown();
         ReleaseVideoSurface();
     }
@@ -533,9 +544,10 @@ public sealed partial class PlayerPage : UserControl
 
     /// <summary>
     /// Lets go of the view model without shutting it down, and puts this page back the way
-    /// <see cref="LeavePlayer"/> leaves it. For the one case where a second page takes the same view model
-    /// over: 「用独立窗口播放」 hands the playing to a <see cref="PlayerWindow"/>, which has its own
-    /// <see cref="PlayerPage"/> bound to the same <see cref="PlayerViewModel"/>.
+    /// <see cref="LeavePlayer"/> leaves it. For the one case where a page must not answer a playing view
+    /// model: 独占模式 runs the film with no page of ours at all — picture and uosc controls live in mpv's
+    /// own window and the main window stays on whatever page the user is browsing, so this page steps aside
+    /// for the whole playback and the shell hangs it back when the film is gone.
     /// <para>
     /// The reason this has to exist at all is that <see cref="Attach"/> subscribes nine events and a set of
     /// pull-delegates to a view model that is a singleton driving one real mpv session. Two pages wired to it
@@ -553,6 +565,8 @@ public sealed partial class PlayerPage : UserControl
         if (!Attached) return;
 
         LeavePlayer();
+        StopPlayerMotion();
+        CompletePlayerExit();
 
         ViewModel.Noticed -= OnNoticed;
         ViewModel.RefreshRequested -= OnRefreshRequested;
@@ -563,12 +577,17 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.StatusApplied -= OnStatusApplied;
         ViewModel.PictureAspectChanged -= OnPictureAspectChanged;
         ViewModel.StatsUpdated -= OnStatsUpdated;
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
 
         ViewModel.MeasureSurface = null;
         ViewModel.MeasureRefreshHz = null;
-        if (_window is not null) _window.GeometryChanged -= OnGeometryChanged;
+        if (_window is not null)
+        {
+            _window.GeometryChanged -= OnGeometryChanged;
+            _window.ClientRectTransition -= OnClientRectTransition;
+        }
 
-        // 键盘兜底同步摘下：接键人跟着这一次 Attach 走，别让下一任（独立窗口那边的页）的老号码还留在线上。
+        // 键盘兜底同步摘下：接键人跟着这一次 Attach 走，别让下一任（下一次 Attach 的页）的老号码还留在线上。
         if (_window is not null) _window.SetWin32Keys(null);
 
         _cursorVisibilityEvents?.Dispose();
@@ -635,23 +654,16 @@ public sealed partial class PlayerPage : UserControl
             ? Visibility.Collapsed
             : Visibility.Visible;
 
-    /// <summary>
-    /// Gives the window over to the player: the backdrop off so the video child shows through the
-    /// transparent chrome, the navigation shell collapsed so its own opaque background is not painting
-    /// over the same region, and the focus here so the keyboard reaches the keys below rather than the
-    /// pane behind.
-    /// </summary>
+    /// <summary>浏览与播放交叠一小段，窗口接管与自动全屏在同一轮转完成。</summary>
     private void EnterPlayer()
     {
-        if (_shell is null || _window is null || Visibility == Visibility.Visible) return;
+        if (_shell is null || _window is null || _onStage) return;
 
-        // 播放态一律把岛面垫黑（<see cref="HostWindow.VideoVisible"/> 注释的「两条管线共用一个开关」）：
-        // 集成管线垫黑是给画面让路，独立管线/外部 mpv.exe 的画面虽在别的窗口，本窗口此刻只是一块
-        // 控制面板，垫黑同样是对的 —— 从前按后端分流的写法让外部后端的播放浮在浏览页的毛玻璃上，
-        // 和另外两档并排放着谁也不像话。
-        _window.VideoVisible = true;
-
-        // 独立播放的画面在 mpv 自建的顶层窗口里，这一页的黑舞台需要一句说明。
+        _window.CaptureBrowseGeometry();
+        _onStage = true;
+        _inputSuspended = false;
+        _videoTarget.RetainLastFrame = true;
+        _window.FreeSizing = true;
         UpdateStandaloneHint();
         if (ViewModel.PictureInHostWindow)
             _cursorVisibilityEvents ??= new CursorVisibilityEvents(_window.Handle, OnSystemCursorChanged);
@@ -661,103 +673,68 @@ public sealed partial class PlayerPage : UserControl
             _cursorVisibilityEvents = null;
         }
 
-        // 播放接管窗口的这段时间不设最小尺寸（HostWindow.FreeSizing）：「取消播放页面窗口缩小的最小尺寸
-        // 限制，允许窗口继续自由缩小」。退出播放由 LeavePlayer 关回去，浏览下限 600×560 原样恢复。
-        _window.FreeSizing = true;
-
         Visibility = Visibility.Visible;
-        _shell.ShowPlayer(true);
-
-        // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一
-        // 静止隐藏的鼠标指针」排查期间，日志里出现成串「未标注的显示路径」三连（藏→显示→藏，1ms 内）——
-        // 溯源到这里：光标还藏着时本页就位会 Reset（把 CursorHidden 放回 false）+ Render，无声把光标放回，
-        // 显示行只打默认串。名字按姓名牌制度挂上：见到「播放页就位」即此路，不再是无名路。
+        Stage.Visibility = Visibility.Visible;
         if (_cursorHidden) _woke = "播放页就位";
-
         _chrome.Reset(Now);
         Render();
-
-        // Both overlays that have to clear another one are placed from what they clear, and this is the one
-        // moment before a film where the measurement can be taken: the bar has just been made visible by the
-        // line above but nothing has been laid out yet, so it still measures nothing of its own.
         PlaceOverlays();
-
-        // 需求 7's box reads as the family in use whenever nobody is searching with it, and a film may have
-        // been started after the settings window changed that family.
         ShowCurrentFont();
-
-        // 置顶的持久化偏好（2026-09-15）：播放接管窗口的这一刻按上次的选择把开关立回去。LeavePlayer 里那句
-        // SetPinned(false) 是「还给浏览窗口」，不是「替用户改主意」，所以每次进场都要重新立一次；用户拨开关
-        // 时再由 TogglePinByHand 记账。
         SetPinned(ViewModel.PictureInHostWindow && ViewModel.SavedPinTopmost);
-
-        // Nothing known about the pointer yet, so the first tick's poll seeds it rather than measuring a
-        // movement against wherever the cursor happened to be during the last film. Reset covers the other
-        // half — the rule starts out believing the pointer is nowhere, and 「nowhere」 is a state the cursor
-        // never hides in, which for a playback begun from a click means the hide waits for the first poll.
         _polledKnown = false;
-
         _ticker.Start();
+
+        // 先开进场轨道：溶解发生在没动过的窗口里。收浏览层与跳全屏都挂在淡入完成那一拍 —— 页面不透明了、
+        // 底下是近黑的遮罩，这时换窗口，岛面换新尺寸前那几帧旧画面残影只是一块深色；排在第 0 拍则把亮着的
+        // 浏览页缩在放大后的窗口左上角闪出来（2026-09-18 用户截图）。理由全文在 TransitionPage。
+        // 这一带刻意不做强制布局：进场时客户区跟浏览时一模一样，全树 Measure/Arrange 纯属白算，却要吃掉
+        // 约九十毫秒（重主页实机诊断 2026-09-19），把淡入的呈现窗口挤没了——跳变那一拍的同步在
+        // PublishClientRect 里，那里才是尺寸真变了的时刻。
+        TransitionPage(entering: true,
+            landed: () => { },
+            faded: () =>
+            {
+                if (!_onStage) return;
+                _shell?.ShowPlayer(true);
+                if (_window is not null) _window.VideoVisible = true;
+                EnterAutoFullscreen();
+            });
+        _window.PlaybackTitleBar = true;
+        _videoTarget.SynchronizeGeometry();
         Focus(FocusState.Programmatic);
     }
 
-    /// <summary>
-    /// Puts the window back the way it was: fullscreen left, 置顶 dropped, cursor visible, Mica back on,
-    /// the navigation shell returned. The view model has already dropped what this playback knew, which
-    /// is why the ticks below redraw as none.
-    /// </summary>
+    /// <summary>还原浏览几何只有一个落点，旧视频帧留到退场结束再释放。</summary>
     private void LeavePlayer()
     {
-        if (_shell is null || _window is null) return;
+        if (_shell is null || _window is null || !_onStage) return;
 
+        _onStage = false;
+        _inputSuspended = true;
         _ticker.Stop();
-
-        // A drag can outlive the film it started over — Escape stops playback with the button still held —
-        // and the hold it took on the chrome is not something ChromeReveal.Reset gives back, so the next
-        // film would play with its controls pinned open.
+        ResetCover();
         EndWindowDrag();
-
-        // Same for the 字幕字体 box: a film can end while it still has the keyboard — it ends by itself at the
-        // credits — and its hold and its claim on the player's keys are both ours to give back.
         _typing = false;
         FontBox.IsSuggestionListOpen = false;
         Hold(false, ChromeHold.Search);
-
-        _window.Fullscreen = false;
         SetPinned(false);
-        FullscreenGlyph.Glyph = Glyph(FullscreenEnterCode);
-
-        // 十八报：这也是一条显示路径 —— 片子自己看完（EOF）或用户退出播放时，光标从这里放回。
-        // 第九报给 OnPlaybackStarted 挂了名，这个孪生的退出路漏了：12:41 复现场的 EOF 显示行打的就是
-        // 「未标注的显示路径」。显示本身是对的（回到浏览界面本来就要光标），缺的是名字。
         if (_cursorHidden) _woke = "播放退出";
         SetCursorHidden(false);
-        _window.VideoVisible = false;
-
-        // 播放对窗口的接管到此为止，浏览窗口的最小尺寸限制（600×560）跟着回来。窗口此刻缩得再小也不要紧：
-        // 下面的 RestoreBrowseGeometry 本来就要把播放前的那份几何还回来。
-        _window.FreeSizing = false;
-
-        // 「进入播放页面然后再退出页面会保留播放页面的窗口大小比例」：窗口是照着这部片子的形状整过的
-        // （见 OnPictureAspectChanged），片子看完了那个形状就没道理留着 —— 一部 2.413:1 的宽银幕会把浏览窗口
-        // 留成一条又宽又扁的横条。窗口自己记着播放前那一份几何，这里只负责说一声「回你自己那儿去」。
-        //
-        // 顺序在 VideoVisible 之后：还原是一次真实的 SetWindowPos，此刻画面已经不再往这个窗口里画了。
-        _window.RestoreBrowseGeometry();
-
-        // Stopping playback stops it paused often enough, and a badge left mid-fade would be drawn over
-        // whatever page the shell comes back to. The tap's own timer goes with it: a tap 150 ms before Escape
-        // would otherwise fire its pause into the next film, or into nothing at all.
         HidePulse();
         DropTapHold();
         _pulseMutedAt = null;
         _paused = null;
-
-        Visibility = Visibility.Collapsed;
-        _shell.ShowPlayer(false);
-
         HideChapterPeek();
         RenderChapterTicks();
+
+        // FreeSizing 在整个还原事务里保持 true，避免中间的 WM_SIZE 覆盖播放前的浏览位置。
+        // RestorePlayerToBrowse 在同一拍触发 ClientRectTransition：岛布局同步与画面跑动都在那里。
+        _window.RestorePlayerToBrowse();
+        _window.VideoVisible = false;
+        _shell.ShowPlayer(false);
+        _window.FreeSizing = false;
+        FullscreenGlyph.Glyph = Glyph(FullscreenEnterCode);
+        TransitionPage(entering: false, CompletePlayerExit);
     }
 
     /// <summary>A new file is on screen, so the chrome starts its countdown from now.</summary>
@@ -766,23 +743,17 @@ public sealed partial class PlayerPage : UserControl
         // Whatever the last file's pause state was, this one has not been paused by anybody yet.
         _paused = null;
 
-        // 「开始播放后自动全屏」—— 在这里而不是 EnterPlayer 里，因为这一头说的才是「一个新的播放真的开始了」：
-        // EnterPlayer 那一下还只是「要把窗口交给播放器」（网络往返之前就发生了，失败也会走），而这里开播已经
-        // 成立。用 SetFullscreen(true) 而不是按一次切换键：上一个片子退全屏之后窗口不是全屏，可上一个片子
-        // 里用户从没按过 F 的时候窗口正是全屏，那时「按一次切换」会把刚开的片子推出全屏。
-        //
-        // 连播的下一集走的是同一条路，但**不重复施法**：这里判的是「新的播放」，而连播换集在服务端是一个
-        // 新的播放，所以它也会进一次 —— 这正是「开始播放后自动全屏」的字面意思。用户中途按 F 退出全屏，
-        // 下一集开始时会再进一次；要的是「这部片子开始时是全屏」，不是「窗口永远不许退出全屏」。
-        //
-        // 原生管线把全屏请求交给 mpv；控制窗口不能跟着铺满、置顶盖住视频。
+        // 初次进场已处理自动全屏；这里仍覆盖换集与后端改变画面归属的情况。
         if (!ViewModel.PictureInHostWindow)
         {
             _window!.Fullscreen = false;
             SetPinned(false);
         }
         UpdateStandaloneHint();
-        if (ViewModel.AutoFullscreenOnPlayback)
+        // 进场轨道还在飞时不在这里跳窗：快启动的片子（本地小文件）这条事件来得比换手早，抢在淡入
+        // 呈现之前跳窗就是把「旧尺寸内容钉在放大后的窗口左上角」放出来。交给淡入换手上那条
+        // EnterAutoFullscreen；换集时没有进场轨道（_enterAnimating 假），照旧当拍落位。
+        if (ViewModel.AutoFullscreenOnPlayback && !_enterAnimating)
             SetFullscreen(true);
 
         // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一
@@ -934,7 +905,11 @@ public sealed partial class PlayerPage : UserControl
         if (!ViewModel.PictureInHostWindow) return;
 
         _window.PictureAspect = aspect;
-        if (aspect > 0) _window.FitToPicture();
+        if (aspect <= 0) return;
+
+        if (_onStage && ViewModel.CoverUp && ViewModel.AutoFullscreenOnPlayback) return;
+
+        _window.FitToPicture();
     }
 
     /// <summary>

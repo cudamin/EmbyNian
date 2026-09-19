@@ -27,6 +27,10 @@ public sealed record StartupOptions
 
     public string? ProbeCursorFile { get; init; }
 
+    public bool ProbePlayerMotion { get; init; }
+
+    public string? ProbePlayerMotionFile { get; init; }
+
     /// <summary>
     /// 跑测试的时候在第二屏幕跑: which monitor the window opens on. 1-based in the order Windows enumerates
     /// them (<c>--screen 2</c>), <see cref="ScreenPlacement.NotThePrimary"/> for 「any screen but the main
@@ -229,6 +233,13 @@ internal static class Program
             return Run(args, paths, migratedFrom: null, selfCheck: false);
         }
 
+        if (PlayerMotionProbe.IsRequested(args))
+        {
+            paths = new AppPaths(Path.Combine(paths.LogDirectory,
+                $"player-motion-probe-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Environment.ProcessId}"));
+            return Run(args, paths, migratedFrom: null, selfCheck: false);
+        }
+
         // First real statement on purpose: everything below reads settings, and under the old name — or,
         // once this is installed as an MSIX, under the unpackaged build's own folder — they live
         // somewhere else. Never throws, so a failed migration cannot stop startup. The candidate order
@@ -289,6 +300,8 @@ internal static class Program
             ProbeCompositionFile = Text(args, "--probe-composition"),
             ProbeCursor = CursorVisibilityProbe.IsRequested(args),
             ProbeCursorFile = Text(args, "--probe-cursor"),
+            ProbePlayerMotion = PlayerMotionProbe.IsRequested(args),
+            ProbePlayerMotionFile = Text(args, "--probe-player-motion"),
             Screen = Number(args, "--screen")
                 ?? (selfCheck ? ScreenPlacement.NotThePrimary : ScreenPlacement.WhereverWindows),
             ShowLibrary = Has(args, "--show-library"),
@@ -330,7 +343,8 @@ internal static class Program
 
             Log.Info(Category, "正常退出");
             return options.ProbeComposition ? CompositionPlaybackProbe.ExitCode
-                : options.ProbeCursor ? CursorVisibilityProbe.ExitCode : ShellSelfCheck.ExitCode;
+                : options.ProbeCursor ? CursorVisibilityProbe.ExitCode
+                : options.ProbePlayerMotion ? PlayerMotionProbe.ExitCode : ShellSelfCheck.ExitCode;
         }
         catch (Exception error)
         {

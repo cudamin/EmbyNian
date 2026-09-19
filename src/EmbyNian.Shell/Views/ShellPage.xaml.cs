@@ -104,14 +104,6 @@ public sealed partial class ShellPage : UserControl, IShellActions
     private SettingsWindow? _settingsWindow;
 
     /// <summary>
-    /// 独立播放窗口（<see cref="PlayerWindow"/>），built when 「用独立窗口播放」 sends a playback there and torn
-    /// down when it ends. Nullable because it exists only while such a film is being watched — with the setting
-    /// off it is never created at all, and even with it on there is one of these per playback rather than one
-    /// kept around: a window that outlived its film would be a window holding a video child nothing draws into.
-    /// </summary>
-    private PlayerWindow? _playerWindow;
-
-    /// <summary>
     /// 标题栏的静止前景。悬停采用强调色，停用采用淡墨，按钮的背景始终透明。
     /// <para>
     /// 自己立两支画刷而不是把 <c>EgTextBrush</c> 直接塞到键上：这里要换的不是颜色跟着主题走，而是同一颗
@@ -510,6 +502,15 @@ public sealed partial class ShellPage : UserControl, IShellActions
         _window = window;
         Player.Attach(_services.GetRequiredService<PlayerViewModel>(), this, window);
 
+        // 独占模式无页面播放的两条对账（2026-09-19 用户令删掉独立控制窗）：开播那一拍页面不在场，
+        // 「开始播放后自动全屏」由这里直达 mpv 的视频窗；收场那一拍（放完、停止、mpv 窗被关、起播失败）
+        // 把主窗口的播放页挂回来。页面挂着的播放（集成／外部后端）这两件事归播放页自己，两个处理器
+        // 都拿 <see cref="PlayerPage.Attached"/> 挡掉。订阅只能放在这次初始 Attach 之后 —— 构造器里
+        // <see cref="PlayerPage.ViewModel"/> 还是 null（13:20 两连崩的教训，见 PROGRESS 同日条目）；
+        // Detach/Attach 动的是页面，事件挂在 view model 上，这里挂一次就管全程。
+        Player.ViewModel.PlaybackStarted += OnHeadlessPlaybackStarted;
+        Player.ViewModel.PlayerHidden += OnHeadlessPlaybackHidden;
+
         // 详情页要认显示器多大（纸面上沿那条线跟着显示器走，见 DetailHero.PaperLineFor），挂在这一个事件上
         // 而不是 OpenDetail 里：后退/前进重建的详情页实例不走 OpenDetail，却一样要从外壳领窗口。
         ContentFrame.Navigated += (_, _) =>
@@ -529,18 +530,11 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal void Shutdown()
     {
-        Player.Shutdown();
+        // 先摘无页面播放的两条对账再拆播放器：收场事件不许往一个正在拆的壳上挂页面。
+        Player.ViewModel.PlaybackStarted -= OnHeadlessPlaybackStarted;
+        Player.ViewModel.PlayerHidden -= OnHeadlessPlaybackHidden;
 
-        // The film's window first, and really closed rather than hidden: the process is going away, and
-        // PlayerWindow.Close is the only path that does not come back through OnPlayerWindowClosed — which is
-        // right here, because that handler would put the view model back onto a player that is already shut
-        // down. Detached from the event before it, so nothing fires into a half-torn-down shell either way.
-        if (_playerWindow is not null)
-        {
-            _playerWindow.Closed -= OnPlayerWindowClosed;
-            _playerWindow.Close();
-            _playerWindow = null;
-        }
+        Player.Shutdown();
 
         _settingsWindow?.Close();
         _settingsWindow = null;
@@ -561,129 +555,61 @@ public sealed partial class ShellPage : UserControl, IShellActions
         PlaybackChoice? choice = null,
         IReadOnlyList<EmbyItem>? episodes = null)
     {
-        // 「用独立窗口播放」 takes the film to a window of its own and leaves this window on the page the user
-        // was looking at. Decided here, at the one funnel every play request comes through, and before the
-        // view model is told anything: the first thing a playback does on that side is take a window over
-        // (EnterPlayer), and which window that is has to be settled before it starts, not undone after.
-        //
-        // 谁接下这次播放是**读回来**的，不能想当然还是本窗口那个。独立窗口一开，本窗口的播放器已经 Detach
-        // 掉了（_shell/_window 清空，Attached 变 false），再把请求递给它只会撞上「没挂上就什么都不做」那句
-        // 守卫、静悄悄返回成品质任务 —— 窗口弹出来、里面一片黑，什么也没播。2026-09-14 用户报的「独立窗口
-        // 播放用不了」就是这一条：日志里窗口创建了、13 秒内零播放日志。
-        var player = SendPlaybackToOwnWindow(item) ?? Player;
+        // 独占模式挂着片子（主窗口的播放页已摘下让位，<see cref="PlayerPage.Attached"/> 为假）：点中的
+        // 新片子直接换上去 —— 与连播下一集同一条换血管线（<see cref="PlayerViewModel.PlayReplacingAsync"/>）。
+        // 「一边挂着片子一边继续翻媒体库」（2026-09-19 用户令）翻到了想看的，点下去就该是它。
+        // 播放器页不在场，请求必须直递 view model：递给页面只会撞上「没挂上就什么都不做」那句守卫、
+        // 静悄悄返回成品质任务（2026-09-14「独立窗口播放用不了」就是这个坑）。
+        if (!Player.Attached && _services is not null)
+            return Player.ViewModel.PlayReplacingAsync(item, parent, choice, episodes);
 
-        return player.PlayAsync(item, parent, choice, episodes);
+        // 独占模式的第一播：主窗口的播放页摘下来让位 —— PlayerShown 从此无话可说，浏览页纹丝不动，
+        // 片子整个交给 mpv 自建的视频窗（控件是窗里装箱的 uosc）。这件事决定在漏斗里（每一单播放都从
+        // 这儿过），而且赶在 view model 听说之前：那一头进场第一件事就是接管一扇窗（EnterPlayer），
+        // 接管哪扇必须在开播前定死，不能播起来再改。起播失败（校验不过、找不到单集）由 PlayerHidden
+        // 的对账把页面挂回来，浏览页自始至终没有动过。
+        if (Player.ViewModel.HeadlessPlayback)
+        {
+            Player.Detach();
+            return Player.ViewModel.PlayAsync(item, parent, choice, episodes);
+        }
+
+        return Player.PlayAsync(item, parent, choice, episodes);
     }
 
     /// <summary>
-    /// Gives the playback a <see cref="PlayerWindow"/> of its own, if that is what the settings ask for.
-    /// <para>
-    /// The three moving parts, in the order they have to happen:
-    /// </para>
-    /// <list type="number">
-    ///   <item>The shell's player steps aside (<see cref="PlayerPage.Detach"/>). One
-    ///   <see cref="PlayerViewModel"/> drives one mpv session, and two attached pages would both answer every
-    ///   command and both take a window over.</item>
-    ///   <item>mpv is pointed at the new window's player page panel.
-    ///   <c>PlaybackBackendFactory.CompositionTarget</c> is read afresh for every launch, so saying so here is the
-    ///   whole of it — no re-plumbing, and no second backend.</item>
-    ///   <item>The new window's player takes the view model, which is what makes the chrome, the keyboard and
-    ///   the picture land in there.</item>
-    /// </list>
-    /// <para>
-    /// A machine where the second window cannot be built plays the film in the main window instead:
-    /// <see cref="PlayerWindow.TryCreate"/> returns null having logged why, nothing below runs, and the shell's
-    /// own player does what it always did.
-    /// </para>
+    /// 独占模式的开播自动全屏：页面不在场，没人替「开始播放后自动全屏」动手，这里把全屏指令直达 mpv 的
+    /// 视频窗（<see cref="PlayerViewModel.SetNativeFullscreen"/>，与页面全屏按钮走的是同一条属性通道）。
+    /// 页面挂着的播放（集成／外部后端）照旧由 <see cref="PlayerPage"/> 自己的开播应答管，这里不重复。
     /// </summary>
-    /// <returns>
-    /// The page that should take the play request — the new window's — or null when the request belongs where
-    /// it already is: the setting is off, a film is already in the other window, or this machine would not give
-    /// us a second one. The caller hands the request to whichever it gets, because by the time this returns the
-    /// shell's own player is no longer attached to the view model and cannot start anything.
-    /// </returns>
-    private PlayerPage? SendPlaybackToOwnWindow(EmbyItem item)
+    private void OnHeadlessPlaybackStarted()
     {
-        if (_services is null || !Player.ViewModel.SeparateWindowPlayback) return null;
-
-        // Only one at a time. A second play request while this is up is refused by the view model anyway
-        // (「已经有内容正在播放」), and opening a window for it first would leave that window standing empty.
-        if (_playerWindow is not null) return null;
-
-        if (PlayerWindow.TryCreate(item.ToPlaybackTitle()) is not { } created) return null;
-
-        var viewModel = Player.ViewModel;
-
-        Player.Detach();
-        created.Page.Attach(viewModel, this, created.Window);
-        _services.GetRequiredService<PlaybackBackendFactory>().VideoSurface = () => created.Page.VideoSurface;
-
-        _playerWindow = created;
-        created.Closed += OnPlayerWindowClosed;
-
-        // 片子自己走完另一条路（按 Esc、停止、放完、文件打不开）时窗口也要跟着收。PlayerWindow 的注释早就
-        // 写了「shell 会在播放以别的方式结束时自己把窗口关掉」，但一直没人接这一头：播放没了窗口还杵在黑屏上，
-        // 得用户再点一次 X 才算完。
-        viewModel.PlayerHidden += OnOwnWindowPlaybackHidden;
-
-        Log.Info(Category, "播放改用独立窗口");
-
-        return created.Page;
+        if (Player.Attached) return;
+        if (Player.ViewModel.AutoFullscreenOnPlayback) Player.ViewModel.SetNativeFullscreen(true);
     }
 
     /// <summary>
-    /// The film's window is gone, which is stopping playback — the arrangement the user chose (「关掉＝停止播放」).
+    /// 独占模式的收场对账：播放没了（放完、停止、mpv 视频窗被关、起播失败），把主窗口的播放页挂回去 ——
+    /// 「关掉 mpv 的视频窗＝停止播放」的反向半句：没有播放，就没有需要让位的页面。
     /// <para>
-    /// mpv is pointed back at this window's video child and the shell's player takes the view model back, both
-    /// unconditionally: the view model outlives either page, so a detached one left holding its delegates is
-    /// the state to avoid, and the local setting is per launch so this is the whole of the repair.
+    /// 页面挂着的收场（集成／外部后端）归播放页自己的 <c>LeavePlayer</c>，这里不插手 —— 判据就是
+    /// <see cref="PlayerPage.Attached"/>。起播失败也在同一拍走到这儿：摘下去的页面立刻挂回，浏览页
+    /// 自始至终没有动过。
     /// </para>
     /// </summary>
-    private void OnPlayerWindowClosed()
+    private void OnHeadlessPlaybackHidden()
     {
-        if (_playerWindow is null) return;
-
-        _playerWindow.Closed -= OnPlayerWindowClosed;
-        Player.ViewModel.PlayerHidden -= OnOwnWindowPlaybackHidden;
-        _playerWindow = null;
+        if (Player.Attached) return;
 
         RestorePlayerToShellWindow();
-
-        if (Player.ViewModel.PlayingNow) _ = Player.ViewModel.StopAsync();
-
-        Log.Info(Category, "独立窗口已关闭，播放已停止");
+        Log.Info(Category, "独占播放收场，播放页已回挂主窗口");
     }
 
     /// <summary>
-    /// 播放自己结束了，所以窗口跟着走 —— 「关掉＝停止播放」反过来读就是这一条：没有播放，就留不住那个窗口。
-    /// <para>
-    /// 与 <see cref="OnPlayerWindowClosed"/> 是同一件事的两头，收尾动作一样，差别只在谁来关窗：那一头是用户
-    /// 按了 X，这一头是片子走完了（Esc、停止、放完、文件打不开）。关之前先把两头的事件都摘干净，否则
-    /// <see cref="PlayerWindow.Close"/> 会被当成「用户关的窗」再进 <see cref="OnPlayerWindowClosed"/> 一次，
-    /// 去停一个刚刚自己停下的播放。
-    /// </para>
-    /// </summary>
-    private void OnOwnWindowPlaybackHidden()
-    {
-        if (_playerWindow is null) return;
-
-        _playerWindow.Closed -= OnPlayerWindowClosed;
-        Player.ViewModel.PlayerHidden -= OnOwnWindowPlaybackHidden;
-
-        var window = _playerWindow;
-        _playerWindow = null;
-
-        window.Page.Detach();
-        RestorePlayerToShellWindow();
-        window.Close();
-
-        Log.Info(Category, "播放结束，独立窗口已关闭");
-    }
-
-    /// <summary>
-    /// 再把播放器还给主窗口：mpv 指回本窗口的视频子窗口，本窗口的播放器重新挂上 view model。两头收尾共用的
-    /// 一步，所以单列一处。无条件做，因为 view model 比两个页面都活得久，留一个摘下来的页面攥着那些委托才是
-    /// 要避免的状态；本窗口的播放器此时要不要露面由它自己按播放是否还在继续决定。
+    /// 再把播放器还给主窗口：mpv 指回本窗口的视频子窗口，本窗口的播放器重新挂上 view model。无页面播放
+    /// （独占模式）收场的唯一一步，<c>OnHeadlessPlaybackHidden</c> 专用。无条件做，因为 view model 比页面
+    /// 活得久，留一个摘下来的页面攥着那些委托才是要避免的状态；本窗口的播放器此时要不要露面由它自己按
+    /// 播放是否还在继续决定。
     /// </summary>
     private void RestorePlayerToShellWindow()
     {
@@ -698,9 +624,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// 直接 <c>Close()</c>，主窗口播放模式下等于把整个程序退掉 —— 「在播放视频时点击右上角关闭按钮，
     /// 不直接退出程序，而是返回主页」。
     /// <para>
-    /// 先停后走：主窗口模式由 <c>PlayerHidden</c> 把窗口还原成浏览的样子；独立窗口模式同一条事件顺带把
-    /// 播放窗口收掉（「关掉＝停止播放」的两头都挂在那儿），随后主页这一导航落在本窗口的框里。已在主页时
-    /// <see cref="GoTo"/> 自己短路，重复点也不产生历史记录。
+    /// 先停后走：主窗口模式由 <c>PlayerHidden</c> 把窗口还原成浏览的样子；独占模式的收场则由同一条
+    /// 事件把播放页挂回主窗口（见 <c>OnHeadlessPlaybackHidden</c>），随后主页这一导航落在本窗口的框里。
+    /// 已在主页时 <see cref="GoTo"/> 自己短路，重复点也不产生历史记录。
     /// </para>
     /// </summary>
     internal void ClosePlayerToHome()
@@ -723,11 +649,6 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal void ShowPlayer(bool playing)
     {
-        // 「用独立窗口播放」: the film is not in this window at all, so neither half of this applies — collapsing the
-        // shell would hide the page the user is deliberately still browsing, and bringing it back would fight
-        // whatever they have navigated to since. The point of the mode is that this window never changes.
-        if (_playerWindow is not null) return;
-
         if (playing)
         {
             Chrome.Visibility = Visibility.Collapsed;

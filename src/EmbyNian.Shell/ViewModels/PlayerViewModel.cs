@@ -133,6 +133,16 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>See the class remarks: the reason the player survives the seam between two episodes.</summary>
     private int _playerHold;
 
+    /// <summary>从点下播放到收场；进场淡入完成那一拍的换手（收浏览层＋自动全屏）只认它 —— 工具预览不持它，不跳窗。</summary>
+    internal bool PlaybackLifecycleActive => _playerHold > 0;
+
+    /// <summary>
+    /// 隔离探针专用（<c>--probe-player-motion</c>）：不启动真实播放也要让「播放生命周期在途」成立，
+    /// 页面进场那条自动全屏支路（<see cref="Views.PlayerPage"/> 的 <c>EnterAutoFullscreen</c>）才肯走。
+    /// 探针进程随即整体拆除，不设对应的释放。
+    /// </summary>
+    internal void ProbeHoldPlayback() => _playerHold++;
+
     /// <summary>
     /// Which playback an answer belongs to. Every poll checks it on both sides of every await, so an
     /// episode switch mid-poll cannot land the old file's chapter list or track list on the new one.
@@ -340,6 +350,7 @@ public sealed partial class PlayerViewModel : ObservableObject
         _playback.StatusChanged += OnStatusChanged;
         _playback.TracksChanged += OnTracksChanged;
         _playback.NowPlayingChanged += OnNowPlayingChanged;
+        _playback.VideoWindowMessage += OnVideoWindowMessage;
     }
 
     /// <summary>
@@ -352,6 +363,7 @@ public sealed partial class PlayerViewModel : ObservableObject
         _playback.StatusChanged -= OnStatusChanged;
         _playback.TracksChanged -= OnTracksChanged;
         _playback.NowPlayingChanged -= OnNowPlayingChanged;
+        _playback.VideoWindowMessage -= OnVideoWindowMessage;
 
         try
         {
@@ -693,7 +705,7 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal bool Embedded => Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv;
 
     /// <summary>
-    /// 「开始播放后自动全屏」/「用独立窗口播放」, as the page reads them at the moment a playback starts.
+    /// 「开始播放后自动全屏」, as the page reads it at the moment a playback starts.
     /// <para>
     /// Read through here rather than handed the whole settings document, which is the same rope
     /// <see cref="ShortcutBindings"/> and <see cref="AutoPlayNextEpisode"/> already hold: the page gets the one
@@ -726,17 +738,26 @@ public sealed partial class PlayerViewModel : ObservableObject
             && Settings.Mpv.Pipeline != VideoPipelineKind.Standalone);
 
     /// <summary>
-    /// Whether playback should open in a window of its own. Only meaningful on the built-in backend: an
-    /// external mpv.exe already opens its own window, and this client does not place it.
+    /// Whether a playback runs with <b>no page of ours attached at all</b> — exactly <b>独占模式 on the
+    /// built-in backend</b>: picture and on-screen controls (装箱的 uosc，<see cref="Mpv.MpvUi"/>) both live
+    /// in mpv's own top-level window, and the main window stays on whatever page the user is browsing.
     /// <para>
-    /// 独立播放管线<b>天然就是这一路</b>（2026-09-17 用户：「播放行为跟这个功能融合」）：画面在 mpv 自建的
-    /// 顶层窗口里，主窗口留在原页不动，控制跟到独立窗口去——那份 libmpv 没编 Lua，mpv 的窗口里不可能有
-    /// 自己的屏幕控件，控制面只能是我们的播放页，而它不该叠在主窗口上挡浏览。关 mpv 的窗口＝停止
-    /// （quit → shutdown → UserQuit），关独立窗口也是停止，两头都收在 <c>ShellPage</c> 的既有对账里。
+    /// 「无页面」是这条公式要回答的全部：真的时候 <c>ShellPage</c> 把自己的播放页摘下去
+    /// （<see cref="Views.PlayerPage.Detach"/>），<see cref="PlayerShown"/> 与 <see cref="PlayerHidden"/>
+    /// 对页面无话可说，浏览页纹丝不动；开播自动全屏由外壳直达 mpv（<c>ShellPage.OnHeadlessPlaybackStarted</c>），
+    /// 收场回挂由外壳对账（<c>ShellPage.OnHeadlessPlaybackHidden</c>）。关 mpv 的视频窗就是停止
+    /// （quit → shutdown → UserQuit）。挂着片子时再点一部，走 <see cref="PlayReplacingAsync"/> 换片；
+    /// 换集经 <c>embynian-episode</c> 消息回到本视图模型的 Emby 导航，播放进度与观看上报仍归
+    /// <c>PlaybackService</c>。
+    /// </para>
+    /// <para>
+    /// 沿革：曾是「用独立窗口播放」开关（2026-09-13），09-17 并进独占管线，09-19 用户令删掉开关、
+    /// 随后删掉独立控制窗（选集列表、跳过按钮、统计随窗退场，独占模式以 uosc 为唯一控制面）——
+    /// 行为只剩这一条推导。集成模式画面在本窗口，永远 false；外部 mpv.exe 也 false —— 主窗口的
+    /// 播放页照旧挂着出说明牌和控制条。
     /// </para>
     /// </summary>
-    internal bool SeparateWindowPlayback =>
-        (Settings.Playback.SeparateWindowPlayback || !PictureInHostWindow) && Embedded;
+    internal bool HeadlessPlayback => !PictureInHostWindow && Embedded;
 
     /// <summary>
     /// 播放页置顶的持久化偏好（<see cref="Configuration.PlaybackSettings.PinWindowTopmost"/>），页面进场时
@@ -755,9 +776,8 @@ public sealed partial class PlayerViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Whether a file is loaded and being driven right now. The shell asks it in one place: when a
-    /// <see cref="Views.PlayerWindow"/> is closed the window <em>is</em> the playback, so the shell has to
-    /// know whether there is anything left to stop before it stops it.
+    /// Whether a file is loaded and being driven right now. The shell asks it from the player page's
+    /// 「关闭」 (ClosePlayerToHome)：先停后走，而不是揣着一场在播的片子离开播放页。
     /// </summary>
     internal bool PlayingNow => _playback.IsPlaying;
 

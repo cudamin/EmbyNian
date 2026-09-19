@@ -401,9 +401,10 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             Choice("渲染管线", Pipelines, () => Settings.Mpv.Pipeline, value => Settings.Mpv.Pipeline = value,
                 "集成模式把视频与 WinUI 控件混排；独占模式固定使用 D3D11，由 mpv 自建窗口、自管交换链，"
-                    + "视频不经过 WinUI 合成器。全屏按钮和开播自动全屏控制 mpv，并请求 DXGI 独占全屏"
-                    + "（是否获准由系统与驱动决定，窗口模式不等于独占全屏）。WinUI 控件保留在单独的控制窗口；"
-                    + "视频窗口使用 mpv 默认快捷键：F 切换全屏、空格暂停、Q 停止。只对内置 libmpv 有效，下一次播放生效。"),
+                    + "视频不经过 WinUI 合成器，屏幕控件由窗里装箱的 uosc 提供（进度条、暂停、音量、倍速、"
+                    + "音轨字幕菜单、上下集；F 全屏、空格暂停、Q 停止）。独占模式播放时主窗口留在原页不动，"
+                    + "可以一边挂着片子一边继续翻媒体库，再点别的片子直接换成新点的这部；关掉视频窗就是"
+                    + "停止播放。只对内置 libmpv 有效，下一次播放生效。"),
 
             // 这句说明是这一行存在的第二个理由，而且它是安全性的一句实话，不是介绍。外部 mpv.exe 那条路把
             // X-Emby-Token 写在 --http-header-fields-append= 上，也就是写在另一个进程的命令行上 —— 任务管理器、
@@ -432,19 +433,17 @@ public sealed partial class SettingsViewModel : PageViewModel
             Toggle("从服务器保存的位置继续", "关掉后每次都从片头放起", () => playback.ResumeFromSavedPosition, value => playback.ResumeFromSavedPosition = value),
             Toggle("自动播放下一集", "一集放完自动接下一集，本季放完退出播放", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
 
-            // 「在设置中新增一个开始播放后自动全屏的功能」／「在设置中新增功能，打开后点击播放后弹出一个独立
-            // 窗口来播放」（用户的话，2026-09-13）。两行都只影响「下一个播放怎么开始」，改完当场生效 ——
-            // 设置页里改这一下，播放器那一头下一次起播就认新的了（两张都是现读同一个设置），所以没有
-            // ShellPrefs 那一句：那个东西是给「已经摆在屏上的东西要重排」用的（主页、图片预算），这两行
-            // 底下没有已经摆着的东西要动。
+            // 「在设置中新增一个开始播放后自动全屏的功能」（用户的话，2026-09-13）。这一行只影响「下一个
+            // 播放怎么开始」，改完当场生效 —— 设置页里改这一下，播放器那一头下一次起播就认新的了（现读
+            // 同一个设置），所以没有 ShellPrefs 那一句：那个东西是给「已经摆在屏上的东西要重排」用的
+            // （主页、图片预算），这一行底下没有已经摆着的东西要动。
+            // 「用独立窗口播放」那一行曾在这附近（2026-09-13～2026-09-19）：行为并入独占模式后开关随令
+            // 删除；同日独立控制窗也随令退场，独占模式以视频窗里的 uosc 为唯一控制面 ——
+            // 见 PlayerViewModel.HeadlessPlayback。
             Toggle("开始播放后自动全屏", "每开始放一部片子就自动进全屏，不用再按 F。只在开始播放那一下进，"
                 + "连播的下一集不会把你从全屏里顶出来，按 F 退出后也不会被下一集顶回去",
                 () => playback.AutoFullscreenOnPlayback, value => playback.AutoFullscreenOnPlayback = value),
 
-            Toggle("用独立窗口播放", "开着的时候点击播放会新开一个窗口放片子，主窗口留在原来那一页不动"
-                + "（可以一边挂着片子一边继续翻库）。关掉那个窗口就是停止播放。只有内置播放器认这个开关，"
-                + "用外部 mpv.exe 时它本来自己开窗；「渲染管线」选独占模式时天然就是这一路，不用拨这个开关",
-                () => playback.SeparateWindowPlayback, value => playback.SeparateWindowPlayback = value),
             Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
                 "放到这个百分比以上，这一条就算看过"),
             Number("快进跨度（秒）", 1, 600, () => playback.SeekForwardSeconds, value => playback.SeekForwardSeconds = value),

@@ -60,6 +60,8 @@ public partial class App : Application
     {
         Instance = this;
 
+        // 与 Program.cs 的探针分派同一套次序（Composition → Cursor → Motion）：两个开关同时出现时，
+        // 这里执行的那一个必须就是 Program 选定目录与退出码的那一个。
         if (_options.ProbeComposition)
         {
             // No DI, settings, login, activation listener or PlaybackService in this process.
@@ -70,6 +72,12 @@ public partial class App : Application
         if (_options.ProbeCursor)
         {
             _ = CursorVisibilityProbe.RunAsync(_options);
+            return;
+        }
+
+        if (_options.ProbePlayerMotion)
+        {
+            _ = PlayerMotionProbe.RunAsync(_options);
             return;
         }
 
@@ -133,11 +141,11 @@ public partial class App : Application
 
 
             // The entire video contract, closed here: the integrated player answers with the
-            // shell player page's panel. The 独立播放窗口 — a second top-level window of the same
-            // kind, playing through its own page's panel — repoints this when it opens and back
-            // when it closes. The delegate is read afresh for every launch, so each line only ever
-            // names the default. The backend only ever calls it from inside a playback, which
-            // cannot happen before the user has navigated somewhere.
+            // shell player page's panel. 独占模式 never asks it at all — the picture lives in
+            // mpv's own top-level window and no page of ours hosts a surface for that playback.
+            // The delegate is read afresh for every launch, so this line only ever names the
+            // default. The backend only ever calls it from inside a playback, which cannot
+            // happen before the user has navigated somewhere.
             services.GetRequiredService<PlaybackBackendFactory>().VideoSurface =
                 () => _shell.PlayerRoot.VideoSurface;
             shell.AttachWindow(_window);

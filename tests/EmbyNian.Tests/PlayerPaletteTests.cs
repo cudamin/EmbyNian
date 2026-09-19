@@ -115,6 +115,17 @@ internal static class PlayerPaletteTests
             Assert.Equal((byte)0xFF, cover.A, "遮挡层是半透明的，换集时会透出上一集最后一帧");
             Assert.Equal(PlayerPalette.Film with { A = 0xFF }, cover, "遮挡层不是画面上那个近黑");
         });
+
+        Test("播放器配色：进出转场那块舞台必须是全不透明的近黑", () =>
+        {
+            var stage = Find("PlayerStageBrush");
+
+            // 舞台是这一页在屏上的底，而它压的不是一帧画面 —— 是「播放页有没有自己的面」这件事本身
+            // （进出转场的那两百毫秒就溶解在这块面上，见 PlayerPage.Transition.cs）。半透明的话，整部片子里
+            // 背后那一页都会透过来。
+            Assert.Equal((byte)0xFF, stage.A, "舞台是半透明的，播放时背后的浏览页会透出来");
+            Assert.Equal(PlayerPalette.Film with { A = 0xFF }, stage, "舞台不是画面上那个近黑");
+        });
     }
 
     private static void RegisterTable()
@@ -167,22 +178,8 @@ internal static class PlayerPaletteTests
                     $"控制条那道罩子第 {index + 1} 档没有比上一档浓");
         });
 
-        Test("播放器配色：标题条那道方向相反，到下沿散尽", () =>
-        {
-            var stops = PlayerPalette.TopScrimStops;
-
-            Assert.True(stops.Count >= 2, "一道渐变至少要两个停点");
-            Assert.Equal(0d, stops[0].Along);
-            Assert.Equal(1d, stops[^1].Along);
-
-            // 散尽而不是留一层薄的：这道罩子底下就是画面，留一层就等于整部片子顶上蒙了一块。
-            Assert.Equal((byte)0x00, stops[^1].Alpha, "标题条那道罩子没有散尽，画面顶上会一直蒙着一层");
-
-            Rising(stops, "标题条那道罩子");
-            for (var index = 1; index < stops.Count; index++)
-                Assert.True(stops[index].Alpha < stops[index - 1].Alpha,
-                    $"标题条那道罩子第 {index + 1} 档没有比上一档淡");
-        });
+        // 标题条那道反向罩子的测试随 TopScrimStops 一起删了（2026-09-18，「播放页面的标题不要黑色渐变」）：
+        // TitleStrip 不再画罩子，表里也没有这道渐变可钉了。
     }
 
     private static void RegisterContrast()

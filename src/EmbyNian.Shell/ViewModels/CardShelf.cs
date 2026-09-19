@@ -3,7 +3,6 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using EmbyNian.Shell.Views;
-using Microsoft.UI.Xaml;
 
 namespace EmbyNian.Shell.ViewModels;
 
@@ -102,18 +101,6 @@ public sealed partial class CardShelf : ObservableObject
     /// </summary>
     [ObservableProperty]
     public partial bool OnScrim { get; set; }
-
-    /// <summary>
-    /// 这一排要不要那块牌子。横排里的每一排都要；矮窗档把媒体库那一排压到轮播左下角时不要 ——
-    /// 「媒体库压在轮播图上的时候不用显示那个媒体库标题」（2026-09-13），压上去的只有那一排卡。
-    /// 主页搬那一排进出时在 <c>HomePage.ApplyLibraryChrome</c> 里拨，别处不碰。
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HeadVisibility))]
-    public partial bool ShowHead { get; set; } = true;
-
-    /// <summary>牌子显不显（压上档收牌子，见 <see cref="ShowHead"/>）。绑在 ShelfTemplate 的牌子上。</summary>
-    public Visibility HeadVisibility => ShowHead ? Visibility.Visible : Visibility.Collapsed;
 
     public ObservableCollection<CardItem> Cards { get; } = [];
 

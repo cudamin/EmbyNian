@@ -14,7 +14,7 @@ namespace EmbyNian.Playback;
 /// installation is ever read. Everything the player does comes from the settings page by way of
 /// <see cref="PlaybackRequest.PlayerOptions"/>.
 /// </summary>
-public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> surfaceProvider) : IPlaybackBackend
+public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> surfaceProvider, Func<bool>? autoFullscreen = null) : IPlaybackBackend
 {
     private const string Category = "mpv";
     private const string LibraryName = "libmpv-2.dll";
@@ -74,9 +74,19 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
             context = LibMpvNative.mpv_create();
             if (context == IntPtr.Zero) throw new InvalidOperationException("mpv_create 返回了空句柄");
 
-            PruneEvents(context);
+            // 独占模式才装配视频窗的 Lua UI（uosc 嵌入版）：mpv 在这一档自建顶层窗口，屏幕控件
+            // 只能画在它自己的 OSD 层里。集成模式的画面合成进 XAML 树，控件是 shell 的事，一概不装。
+            // 装箱缺失降级为「没有屏幕控件的独占播放」，只记日志不拦起播。
+            var uiOptions = settings.Pipeline == VideoPipelineKind.Standalone
+                ? MpvUi.Bootstrap(AppContext.BaseDirectory)
+                : null;
+            if (uiOptions is null && settings.Pipeline == VideoPipelineKind.Standalone)
+                Log.Warn(Category, $"独占模式未找到 Lua UI 装箱（{MpvUi.ScriptRelativePath}），本次播放没有屏幕控件");
 
-            var surface = ApplyOptions(context, request);
+            // ClientMessage 只在 Lua UI 在场时才值得收 —— 它是脚本与宿主的唯一通道。
+            PruneEvents(context, keepClientMessage: uiOptions is not null);
+
+            var surface = ApplyOptions(context, request, uiOptions);
 
             var error = LibMpvNative.mpv_initialize(context);
             if (error < 0) throw new InvalidOperationException($"mpv 初始化失败：{Describe(error)}");
@@ -84,10 +94,16 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 
             LibMpvNative.mpv_request_log_messages(context, "warn");
 
+            // 脚本在 loadfile 之前装载：uosc 先把属性观察架起来，文件一开控件就有数据，
+            // 而不是先画一条空进度条再等下一轮属性广播。
+            if (uiOptions is not null) LoadScript(context, MpvUi.ScriptPath(AppContext.BaseDirectory));
+
             var handle = new LibMpvHandle(context, surface);
             handle.Start(request);
             context = IntPtr.Zero; // ownership moved to the handle
-            Log.Info(Category, $"内置播放器已就绪（{dllPath}）");
+            Log.Info(Category, uiOptions is null
+                ? $"内置播放器已就绪（{dllPath}）"
+                : $"内置播放器已就绪，视频窗 Lua UI 已装载（{dllPath}）");
             return Task.FromResult<IPlaybackHandle>(handle);
         }
         catch (Exception error) when (error is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
@@ -107,7 +123,8 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
     /// A window by itself is not evidence of exclusive presentation. The selected surface (or
     /// null) stays with this session even if settings change during playback.
     /// </summary>
-    private IVideoSurface? ApplyOptions(IntPtr context, PlaybackRequest request)
+    private IVideoSurface? ApplyOptions(IntPtr context, PlaybackRequest request,
+        IReadOnlyList<KeyValuePair<string, string>>? uiOptions)
     {
         // Nothing is said about config here: libmpv already defaults to config=no, so no mpv.conf,
         // input.conf or ~~/ path from any mpv installation is in play. Everything below, plus the
@@ -127,7 +144,8 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 
         // Input ownership and force-window are part of the final pipeline contract below:
         // native window keys belong to mpv, integrated keys and global media keys to the shell.
-        // No osc option: this DLL has no Lua interpreter and does not expose it.
+        // mpv 的 osc 在独占模式由装箱的 uosc 嵌入版顶替（见 MpvUi.Bootstrap 的选项），此处不设 ——
+        // Lua UI 不在场（集成模式/装箱缺失）时 libmpv 的 osc 本来就默认关闭。
 
         // Playback ending must not take the player down with it: the client decides when the
         // context goes away, which is what lets it report a final position and, one day, load
@@ -175,6 +193,16 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 
         if (!string.IsNullOrWhiteSpace(request.Title)) Set(context, "force-media-title", request.Title);
 
+        // 独占模式的 Lua UI 装配选项（osc=no、mpv 自带 OSD 条关闭、无边框、字体目录、脚本路径）。
+        // 放在管线契约之前：契约是必需项，永远后写后赢。
+        foreach (var option in uiOptions ?? []) Set(context, option.Key, option.Value);
+
+        // 「开始播放后自动全屏」在独占模式的落地：起播即全屏，不先冒一个小窗再跳
+        // （mpv 自建窗口没有宿主动画可借，直接以全屏出生就是最接近集成模式的形态）。
+        // 边框永远去掉——标题与窗口按钮归 uosc 顶栏，这一位不跟随设置。
+        if (pipeline == VideoPipelineKind.Standalone && (autoFullscreen?.Invoke() ?? false))
+            Set(context, "fullscreen", "yes");
+
         // Ordinary options keep their order; pipeline-critical options are filtered and pinned
         // AFTER them, so even the default gpu-api=vulkan cannot replace D3D11. Required failures
         // abort before initialize/loadfile instead of falling back to a different presentation path.
@@ -205,9 +233,13 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
     /// the loop discards still costs a queue entry, a thread wakeup and a marshalled struct, and
     /// the loop reads exactly six: shutdown, log-message, end-file, file-loaded, property-change
     /// and queue-overflow. What remains — the three reply types (every call here is synchronous,
-    /// so they were never fired anyway), start-file, client-message, the two reconfigs, seek,
+    /// so they were never fired anyway), start-file, the two reconfigs, seek,
     /// playback-restart and hook — was delivered only to be picked up and thrown away, so a seek
     /// burst or a resize storm queued nothing at all.
+    /// <para>
+    /// ClientMessage（Lua 脚本的 script-message）是这条规则的唯一条件豁免：独占模式装载 uosc 时，
+    /// 它是脚本向宿主报「已就绪」和送换集请求的唯一通道，必须保留；其余播放照旧停订。
+    /// </para>
     /// <para>
     /// Deliberately before <c>mpv_initialize</c>, so nothing mpv does during startup queues either.
     /// mpv keeps a few event types for itself ("some events can't be disabled"), but a refusal is
@@ -217,7 +249,7 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
     /// the case where today's arrive-and-be-ignored behaviour was already the answer.
     /// </para>
     /// </summary>
-    private static void PruneEvents(IntPtr context)
+    private static void PruneEvents(IntPtr context, bool keepClientMessage)
     {
         Span<int> unused =
         [
@@ -225,7 +257,6 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
             LibMpvNative.EventSetPropertyReply,
             LibMpvNative.EventCommandReply,
             LibMpvNative.EventStartFile,
-            LibMpvNative.EventClientMessage,
             LibMpvNative.EventVideoReconfig,
             LibMpvNative.EventAudioReconfig,
             LibMpvNative.EventSeek,
@@ -237,6 +268,33 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         {
             var error = LibMpvNative.mpv_request_event(context, eventId, 0);
             if (error < 0) Log.Debug(Category, $"停订 mpv 事件 {eventId} 未被接受：{Describe(error)}");
+        }
+
+        if (!keepClientMessage)
+        {
+            var error = LibMpvNative.mpv_request_event(context, LibMpvNative.EventClientMessage, 0);
+            if (error < 0) Log.Debug(Category, $"停订 mpv 事件 {LibMpvNative.EventClientMessage} 未被接受：{Describe(error)}");
+        }
+    }
+
+    /// <summary>
+    /// 在初始化之后、loadfile 之前把视频窗的 Lua UI 装进来（<c>load-script</c> 命令）。失败只记日志：
+    /// UI 是添头，加载不出来就退回没有屏幕控件的独占播放，不能因此拦下起播。
+    /// </summary>
+    private static void LoadScript(IntPtr context, string scriptPath)
+    {
+        var array = new IntPtr[3];
+        try
+        {
+            array[0] = Marshal.StringToCoTaskMemUTF8("load-script");
+            array[1] = Marshal.StringToCoTaskMemUTF8(scriptPath);
+            var error = LibMpvNative.mpv_command(context, array);
+            if (error < 0) Log.Warn(Category, $"装载视频窗 Lua UI 失败：{Describe(error)}");
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(array[0]);
+            Marshal.FreeCoTaskMem(array[1]);
         }
     }
 
@@ -271,10 +329,11 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 /// top-level window — so it arrives here with a null surface and none of this machinery arms.
 /// </para>
 /// </summary>
-internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPlaybackHandle, IPlayerControl
+internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPlaybackHandle, IPlayerControl, IPlayerHostMessages
 {
     private const string Category = "mpv";
     private const int LogTailLines = 40;
+    private const int ClientMessageMaxArgs = 32;
 
     // Observed properties are identified by reply id rather than by name: the event carries the
     // id back, so dispatching costs an integer switch instead of marshalling a string out of
@@ -327,6 +386,15 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     public event Action<PlayerStatus>? StatusChanged;
 
     public event Action<IReadOnlyList<MpvTrack>>? TracksChanged;
+
+    /// <summary>视频窗 Lua UI 发来的 <c>embynian-*</c> 消息；只在事件线程上发，订阅方负责调度。</summary>
+    public event Action<string, string>? HostMessageReceived;
+
+    /// <summary>
+    /// uosc 的握手是否已到（<c>embynian-ready</c>）。脚本先于宿主订阅启动，这一位把迟到错过的
+    /// 握手留成可读的状态，而不是让「没收到」永远无法与「没订阅」区分。
+    /// </summary>
+    public bool VideoWindowUiReady { get; private set; }
 
     /// <summary>Starts the event thread, subscribes to the state the chrome needs, then loads the file.</summary>
     internal void Start(PlaybackRequest request)
@@ -406,6 +474,10 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
 
                 case LibMpvNative.EventPropertyChange:
                     OnPropertyChange(mpvEvent);
+                    break;
+
+                case LibMpvNative.EventClientMessage:
+                    OnClientMessage(mpvEvent.Data);
                     break;
 
                 case LibMpvNative.EventQueueOverflow:
@@ -498,6 +570,36 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
 
     private static bool ReadFlag(LibMpvNative.MpvEventProperty property) =>
         property.Format == LibMpvNative.FormatFlag && Marshal.ReadInt32(property.Data) != 0;
+
+    /// <summary>
+    /// Lua 脚本的一条 <c>script-message</c>。参数指针在下一次 <c>mpv_wait_event</c> 前失效，
+    /// 所以先把全部字符串复制成托管值，再谈解析与分发；解析按 <see cref="VideoWindowContract"/>
+    /// 收窄 —— 不是宿主的消息在这里就丢掉，不上传不打扰。
+    /// </summary>
+    private void OnClientMessage(IntPtr data)
+    {
+        var message = Marshal.PtrToStructure<LibMpvNative.MpvEventClientMessage>(data);
+        if (message.Count is < 1 or > ClientMessageMaxArgs) return;
+
+        var arguments = new List<string>(message.Count);
+        for (var index = 0; index < message.Count; index++)
+        {
+            var pointer = Marshal.ReadIntPtr(message.Args, index * Marshal.SizeOf<IntPtr>());
+            if (pointer == IntPtr.Zero) return;
+            arguments.Add(Marshal.PtrToStringUTF8(pointer) ?? "");
+        }
+
+        if (VideoWindowContract.Parse(arguments) is not { } parsed) return;
+
+        if (parsed.Key == VideoWindowContract.Ready) VideoWindowUiReady = true;
+
+        if (parsed.Key == VideoWindowContract.Ready)
+            Log.Info(Category, $"视频窗 Lua UI 已就绪（uosc {parsed.Value}）");
+        else
+            Log.Debug(Category, $"视频窗消息：{parsed.Key} {parsed.Value}");
+
+        HostMessageReceived?.Invoke(parsed.Key, parsed.Value);
+    }
 
     /// <summary>
     /// Publishes a snapshot, but only when it differs in something the chrome draws. mpv notifies

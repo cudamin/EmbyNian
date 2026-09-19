@@ -252,6 +252,13 @@
                     Spacing="10"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center">
+                    <!-- 这支位移给矮窗档翻档用（见 HomeFoldMotion）：字块让位那一下（PlaceInfo 换底边距）是硬切，
+                         而压上来的那一排是滑上来的，页面在这支变换上补一趟让它们同时走。必须写在标记里 ——
+                         WinUI 3 的 RenderTransform 出厂就是一支单位 MatrixTransform，代码里「见空就装」永远走不进去
+                         （理由写在 ShelfTemplate 里那一段）。 -->
+                    <StackPanel.RenderTransform>
+                        <TranslateTransform />
+                    </StackPanel.RenderTransform>
 
                     <!--
                       下面这四行各自套一层 Grid（<c>…Row</c>），为的是那层跟着字形走的影子（见 TextInk）：影子挂在同

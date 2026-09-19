@@ -54,8 +54,50 @@ public sealed partial class HomePage : Page, IShellContent
     /// </summary>
     private readonly TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs> _stayProbe;
 
-    /// <summary>矮窗档的重查已经排了一拍还没跑。防止 <see cref="Shelves"/> 一连串增删把重查排成一把。</summary>
+    /// <summary>矮窗档的重查已经排了一拍还没跑。防止 <see cref="ViewModel"/> 那一头一连串增删把重查排成一把。</summary>
     private bool _foldScheduled;
+
+    /// <summary>
+    /// 矮窗档那一段行程（见 <see cref="HomeFoldMotion"/>）：正在走的那一趟，没有就是 null。它同时是「这会儿屏上
+    /// 正有东西在走」的记号 —— 在走的这一段里不要再摆档，见 <see cref="ApplyLibraryChrome"/>。
+    /// </summary>
+    private HomeFoldMotion? _fold;
+
+    /// <summary>
+    /// 补位／让位那半趟（迟一拍走的，见 <see cref="ApplyLibraryChrome"/>）。单独记一笔是因为它比宿主那一趟
+    /// 晚起步：翻档翻得快的时候，宿主那一趟收了它还得活着。
+    /// </summary>
+    private HomeFoldMotion? _foldLate;
+
+    /// <summary>上一次摆到屏上的是哪一档（true ＝ 媒体库那一排压在轮播上）。</summary>
+    private bool _foldOn;
+
+    /// <summary>
+    /// 上一次那一档是不是**真在屏上摆过**的。页面刚起来那几拍轮播还没有幻灯片、视口还是零，那时摆下的是个假档
+    /// （数据回来时还要再翻一次）—— 拿假档当动画的起点会凭空飞一趟，而自检正是在那几拍上读坐标的
+    /// （「主页首屏」那一行量的是继续观看从哪儿起、大图下沿在哪儿），飞在半路的位移会把读数带偏。
+    /// </summary>
+    private bool _foldReal;
+
+    /// <summary>翻档前量下的旧落点，交给紧接着那一次 <see cref="ApplyLibraryChrome"/> 消费，用完就清。</summary>
+    private FoldSites? _before;
+
+    /// <summary>
+    /// 翻档前的现场，全在**搬之前**量 —— <see cref="HomeViewModel.SetLibraryOverlay"/> 一喊就把那一排搬进搬出，
+    /// 搬完再量到的是新落点。三样东西各是动画里的一段位移的起点：
+    /// <list type="bullet">
+    /// <item><paramref name="Rows"/>：横排里每一排此刻的顶。**按排本身（<see cref="CardShelf"/>）记，不按元素、
+    /// 不按序号** —— 搬走一排之后序号全错位，Repeater 还会把手里的元素换给别的排用（不认唯一 id 时它按序号重绑），
+    /// 两样都对不上号；要的只是「这一排原来站在哪儿」，按排记才是那个答案。</item>
+    /// <item><paramref name="Strip"/>：媒体库那一排**排卡**的上沿（压上那一趟的起飞点 ＝ 回默认那一趟的落点；
+    /// 两个方向它都是「那排卡此刻/将来站在哪条线上」，见 <see cref="MeasureBeforeFold"/>）。</item>
+    /// <item><paramref name="Info"/>：轮播里那块字的顶（它要让位给压上来的那一排）。</item>
+    /// </list>
+    /// </summary>
+    private sealed record FoldSites(
+        IReadOnlyDictionary<CardShelf, double> Rows,
+        double? Strip,
+        double? Info);
 
     public HomePage()
     {
@@ -261,6 +303,56 @@ public sealed partial class HomePage : Page, IShellContent
     }
 
     /// <summary>
+    /// 换上矮窗档的另一档：翻之前先把旧落点量下来，量完再搬 —— <see cref="HomeViewModel.SetLibraryOverlay"/> 当场
+    /// 就把那一排搬进搬出，搬完再量就是新落点了。同一档上重复调用什么都不量（拉窗口时每一下 SizeChanged 都走到这儿）。
+    /// </summary>
+    private void Fold(bool decided)
+    {
+        if (ViewModel.LibraryOnBanner != decided) MeasureBeforeFold();
+        ViewModel.SetLibraryOverlay(decided);
+    }
+
+    /// <summary>
+    /// 把翻档前那一刻的现场量下来（见 <see cref="FoldSites"/>）。量不到的（轮播收着、那一排还没实到屏上）留空 ——
+    /// 动画那一头每一处都有退路。
+    /// </summary>
+    private void MeasureBeforeFold()
+    {
+        var rows = new Dictionary<CardShelf, double>();
+        for (var index = 0; index < ViewModel.Shelves.Count; index++)
+        {
+            if (RowAt(index) is { } row) rows[ViewModel.Shelves[index]] = TopIn(row, ShelfRepeater);
+        }
+
+        // 排卡那条线两个方向都要：压上那一趟它是起飞点（媒体库那一排还在横排里），回默认那一趟它是落点
+        // （那个位置此刻站着补上来的下一排，插回去之后排卡就落回同一条线 —— 插入不改这一格的 y）。
+        var library = RowAt(ViewModel.LibraryFlowIndex);
+
+        _before = new FoldSites(
+            rows,
+            library is null ? null : HomeFoldMotion.StripTop(library, BannerZone),
+            Banner.Visibility == Visibility.Visible ? TopIn(Banner.InfoBlock, Banner) : null);
+
+        Log.Info(Category, $"矮窗档旧账：在册 {rows.Count}/{ViewModel.Shelves.Count} 排"
+            + $"，排卡线={_before.Strip?.ToString("0") ?? "量不到"}"
+            + $"，字块={_before.Info?.ToString("0") ?? "量不到"}");
+    }
+
+    /// <summary>
+    /// 横排里第 <paramref name="index"/> 排此刻能被动画碰的那个元素。Repeater 的直接子是框架 arrange/viewport
+    /// 自己要操纵的对象（见 <see cref="HomeMotion.TargetOf"/>），进场动画落在它里面的模板根上，这里量、动的也是
+    /// 同一处 —— 免得「量的是甲、动的是乙」。那一排还没实到屏上（视口外、或者刚搬走）时交回空。
+    /// </summary>
+    private FrameworkElement? RowAt(int index) =>
+        index >= 0 && ShelfRepeater.TryGetElement(index) is FrameworkElement row
+            ? HomeMotion.TargetOf(row) ?? row
+            : null;
+
+    /// <summary>一个元素在 <paramref name="space"/> 里的上沿。</summary>
+    private static double TopIn(FrameworkElement element, UIElement space) =>
+        element.TransformToVisual(space).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+
+    /// <summary>
     /// 矮窗档：窗口拉矮到「继续观看」牌子底下那条线被第一屏裁掉之后，把媒体库那一排压到轮播封面的左下角，下面那排
     /// 向上补位；再矮到轮播被一屏压矮（裁切超出设计形状）就恢复默认（用户的话，2026-09-13，触发线同日从
     /// 「下一排整个出屏」改成「窗口裁切超过继续观看下方的那条线」—— 线以下只剩一块有招牌没货的牌子，最难看）。
@@ -289,7 +381,7 @@ public sealed partial class HomePage : Page, IShellContent
 
         if (viewport <= 0 || Banner.Visibility != Visibility.Visible)
         {
-            ViewModel.SetLibraryOverlay(false);
+            Fold(false);
             ApplyLibraryChrome();
             return;
         }
@@ -306,7 +398,7 @@ public sealed partial class HomePage : Page, IShellContent
 
             if (index < 0 || index >= ViewModel.Shelves.Count)
             {
-                ViewModel.SetLibraryOverlay(false);
+                Fold(false);
                 ApplyLibraryChrome();
                 return;
             }
@@ -354,8 +446,7 @@ public sealed partial class HomePage : Page, IShellContent
         // 它，带子就被压矮、剧照上下裁切超出默认档 —— 那是回默认的线（2026-09-13「轮播图上下裁切过多时隐藏」）。
         var bandNatural = HomeCarousel.NaturalHeight(Banner.ActualWidth);
 
-        ViewModel.SetLibraryOverlay(
-            hasNext && HomeFold.LibraryOnBanner(viewport, nextRowLine, bandNatural));
+        Fold(hasNext && HomeFold.LibraryOnBanner(viewport, nextRowLine, bandNatural));
         ApplyLibraryChrome();
     }
 
@@ -375,34 +466,171 @@ public sealed partial class HomePage : Page, IShellContent
         });
     }
 
-    /// <summary>按视图模型此刻的矮窗档状态拨这一页的屏上开关：宿主、牌子收不收、浅墨、轮播那头的让位。</summary>
+    /// <summary>
+    /// 按视图模型此刻的矮窗档状态拨这一页的屏上开关：宿主、浅墨、轮播那头的让位；翻档的那一趟还要把三样东西的
+    /// 位移补一趟（见 <see cref="HomeFoldMotion"/>）。
+    /// <para>
+    /// 摆法本身和从前一样，差别只在「摆完把位移补回旧落点」：旧落点是翻档之前量下的（<see cref="FoldSites"/>，
+    /// 量在搬之前），新落点是这里摆完才量得到的，中间那一段交给动画。
+    /// </para>
+    /// </summary>
     private void ApplyLibraryChrome()
     {
         var on = ViewModel.LibraryOnBanner && ViewModel.LibraryShelf is not null;
         var shelf = ViewModel.LibraryShelf;
 
-        LibraryOverlay.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        LibraryHost.Content = on ? shelf : null;
+        // 「真在屏上摆过」的档才配当动画的起点：页面刚起来那几拍轮播还没有幻灯片、视口还是零，那时 `Fold` 摆下的
+        // 是个假档（数据回来时还要再翻一次）—— 拿假档当起点会凭空飞一趟，而自检正是在那几拍上读坐标的。
+        var real = Banner.Visibility == Visibility.Visible && ViewModel.Slides.Count > 0 && Scroller.ActualHeight > 0;
+        var flight = _foldReal && real && on != _foldOn && _before is not null
+            && HomeFoldMotion.Enabled && XamlRoot is not null;
 
-        if (shelf is not null)
+        _foldOn = on;
+        _foldReal = real;
+
+        if (_fold is not null && !flight)
         {
-            shelf.OnScrim = on;
-
-            // 压上档不摆牌子：「媒体库压在轮播图上的时候不用显示那个媒体库标题」（2026-09-13）。
-            // 同一份 VM 在横排和宿主两头搬，牌子跟着档收放。
-            shelf.ShowHead = !on;
-        }
-
-        if (!on)
-        {
-            Banner.SetLibraryOverlay(false, 0);
+            // 上一趟还在走，而这一档没翻：什么都不摆。回默认那一趟里宿主自己就是动画的载体，把它收起来等于把托着的
+            // 那一排卡从屏上撤掉 —— 让它走完，下一次翻档（或者它自己落地）自然会对上。
             return;
         }
 
-        // 排高一拍再量：宿主刚装上内容，没排过之前 ActualHeight 是 0 —— 轮播那头（字块让位）要的是
-        // 排子的总高（牌子 ＋ 空当 ＋ 一排卡）。量不到的那一帧退回排卡自己的高，下一拍自会校正。
+        if (flight)
+        {
+            _fold?.Stop();
+            _foldLate?.Stop();
+            _foldLate = null;
+            _fold = new HomeFoldMotion();
+        }
+
+        var before = _before;
+        _before = null;
+
+        // 翻档那一趟宿主是动画的载体：回默认时它还得站在原地托着那一排卡滑下去（走完由 <see cref="HandBack"/>
+        // 收掉），所以这一拍不能先把内容清掉 —— 清了就是「载体先没了，然后什么都没有发生」。
+        LibraryOverlay.Visibility = on || flight ? Visibility.Visible : Visibility.Collapsed;
+        LibraryHost.Content = on || flight ? shelf : null;
+        if (shelf is not null) shelf.OnScrim = on;
         UpdateLayout();
-        Banner.SetLibraryOverlay(true, LibraryOverlay.ActualHeight > 0 ? LibraryOverlay.ActualHeight : shelf!.RowHeight);
+
+        // 刚插回横排的那一排会自己走一遍进场（HomeMotion 挂在 ElementPrepared 上）——那 20 像素的上浮是渲染
+        // 位移，会把这一拍的几何量读歪、还喂给滚动视口的锚定；回默认这一趟它的模样归矮窗档的动画管，当场按掉。
+        if (!on && RowAt(ViewModel.LibraryFlowIndex) is { } returned) HomeMotion.Stop(returned);
+
+        // 排高一拍再量：宿主刚装上内容，没排过之前 ActualHeight 是 0 —— 轮播那头（字块让位）要的是排卡的总高。
+        // 量不到的那一帧退回排卡自己的高，下一拍自会校正。
+        if (on && shelf is not null)
+        {
+            Banner.SetLibraryOverlay(true, LibraryOverlay.ActualHeight > 0 ? LibraryOverlay.ActualHeight : shelf.RowHeight);
+        }
+        else
+        {
+            Banner.SetLibraryOverlay(false, 0);
+        }
+
+        UpdateLayout();
+
+        if (_fold is null) return;
+
+        if (shelf is null || before is null)
+        {
+            Log.Warn(Category, $"矮窗档这一趟没走成：排在={shelf is not null} 旧账在={before is not null}");
+            return;
+        }
+
+        // 媒体库那一排要走的那一段，两头的「排卡上沿」都是**翻档前**量下的旧账（<see cref="FoldSites.Strip"/>）：
+        // 压上那一趟它是起飞点（那一排还在横排里），回默认那一趟它是落点（补位的那一排此刻正站在那个位置上，
+        // 插回去之后排卡就落回同一条线 —— 插入不改这一格的 y）。现场只量宿主此刻在哪，行程就是两头之差。
+        // **不能等摆完再量落点**：Repeater 的重排跟着滚动视口慢一拍，当场量到的是没换过位置的旧数。
+        var overlay = TopIn(LibraryOverlay, BannerZone);
+        var hostDrift = HomeFoldMotion.DriftOf(LibraryOverlay);
+
+        if (hostDrift is null || before.Strip is not { } strip)
+        {
+            // 宿主这一趟规划不成（宿主身上挂着别人的变换，或者旧账里没量到那条线）：整趟放弃，按老样子直接落定
+            // —— 宁可一刀硬切，不要半截动画。走到这一行多半是谁又动了宿主的 RenderTransform。
+            Log.Warn(Category, $"矮窗档这一趟规划不成：位移={(hostDrift is null ? "拿不到" : "有")}"
+                + $"（宿主变换={LibraryOverlay.RenderTransform?.GetType().Name ?? "空"}）"
+                + $" 排卡线={(before.Strip.HasValue ? before.Strip.Value.ToString("0") : "量不到")} 压上={on}");
+            if (!on) HandBack();
+            _fold = null;
+            return;
+        }
+
+        var distance = strip - overlay;
+        _fold.Slide(hostDrift, on ? distance : 0, on ? 0 : distance);
+
+        // 回默认那一趟：宿主的淡出压在最后一百来毫秒里 —— 它要一路托着那一排卡滑到横排，落点上那一份
+        // （迟一拍才实到）从暗里浮出来，两头在落点上换手。
+        if (!on) _fold.FadeLate(LibraryOverlay);
+
+        // 轮播里那块字：矮窗档要它让出底下一段（HomeBanner.PlaceInfo 整段换掉底边距），那一下同样是硬切，
+        // 同样补一趟「先待在旧位置、再滑到新位置」。它的布局不归 Repeater 管，当场量当场动。
+        if (before.Info is { } info && HomeFoldMotion.DriftOf(Banner.InfoBlock) is { } infoDrift)
+        {
+            var delta = info - TopIn(Banner.InfoBlock, Banner);
+            if (Math.Abs(delta) > 0.5) _fold.Slide(infoDrift, delta, 0);
+        }
+
+        if (on) _fold.Play();
+        else _fold.Play(HandBack);
+
+        Log.Info(Category,
+            $"矮窗档{(on ? "：媒体库那一排升上轮播" : "：媒体库那一排落回横排")}"
+            + $"（行程 {Math.Abs(distance):0} 像素，{HomeFoldMotion.DurationMilliseconds} ms，字块"
+            + $"{(before.Info is { } ? "跟着让位" : "没参与")}）；补位／让位迟一拍另记");
+
+        // 补位／让位要**迟一拍**：Repeater 的重排跟着滚动视口走，同一拍里 UpdateLayout 两遍量到的还是没换过
+        // 位置的旧数（差是零，什么都补不上）。推一拍，等它真排完了量差，再让那几排从旧位置滑过来；
+        // 回默认那一趟里刚实到的媒体库那一份也在这儿收编（压掉它自己的进场）并从暗里浮出，接住落下的宿主。
+        var book = before.Rows;
+        var flowIndex = ViewModel.LibraryFlowIndex;
+        var flyingIn = on;
+
+        if (DispatcherQueue is not { } queue) return;
+
+        queue.TryEnqueue(() =>
+        {
+            var late = new HomeFoldMotion();
+            var moved = 0;
+
+            for (var index = 0; index < ViewModel.Shelves.Count; index++)
+            {
+                if (!book.TryGetValue(ViewModel.Shelves[index], out var was)) continue;
+                if (RowAt(index) is not { } row) continue;
+
+                var delta = was - TopIn(row, ShelfRepeater);
+                if (Math.Abs(delta) < 0.5) continue;
+                if (HomeFoldMotion.DriftOf(row) is not { } rowDrift) continue;
+
+                // 这一排的进场（HomeMotion 挂在 Repeater 的 ElementPrepared 上）如果是被这次换位顺带放上的，
+                // 两支动画会抢同一支位移 —— 这一段里这一排归这一趟管。
+                HomeMotion.Stop(row);
+                late.Slide(rowDrift, delta, 0);
+                moved++;
+            }
+
+            if (!flyingIn && RowAt(flowIndex) is { } landing)
+            {
+                HomeMotion.Stop(landing);
+                late.FadeIn(landing);
+            }
+
+            _foldLate = late;
+            late.Play();
+            Log.Info(Category, $"矮窗档补位（迟一拍）：{moved} 排");
+        });
+    }
+
+    /// <summary>
+    /// 回默认那一趟走到头：把宿主收起来。它这一路上托着那一排卡（回默认那一趟的载体），此刻横排里那一份已经落在
+    /// 同一个位置上，收掉看不出来 —— 但必须收：宿主是 <c>BannerZone</c> 的子元素、压在货架那一叠上面，留在那儿就
+    /// 开始替横排那一份接指针（悬停浮出的按钮、点击都落在另一份上）。
+    /// </summary>
+    private void HandBack()
+    {
+        LibraryOverlay.Visibility = Visibility.Collapsed;
+        LibraryHost.Content = null;
     }
 
     /// <summary>
@@ -414,16 +642,18 @@ public sealed partial class HomePage : Page, IShellContent
         + Scroller.VerticalOffset;
 
     /// <summary>
-    /// 一排货架的牌子有多高、牌子到排卡之间让了多大的空当：从那一排的模板实例上量 —— 同一张模板、同一列宽，
-    /// 每排的牌子一个高，不写死。量不到（那排还没排完，或者那块不是货架的 StackPanel 模板）交回空，调用方
-    /// 各有退路。
+    /// 一排货架的牌子有多高、牌子到排卡之间让了多大的空当：从那一排的子树里把牌子翻出来量，空当取挂牌子那层
+    /// StackPanel 的间距 —— **不写死、也不假设模板根的形状**（09-16 模板根外面包了一层 Grid 之后，Repeater 的
+    /// 直接子就不再是 StackPanel，老写法「直接子是不是 StackPanel」从那天起一直在交空，两条界线因此各差一个
+    /// 牌子的高 —— 窗口高矮落进那条缝里，矮窗档就来回翻（2026-09-18「上移的时候程序会卡住」的根因））。
+    /// 量不到（那排还没排完）交回空，调用方各有退路。
     /// </summary>
-    private static (double Height, double Gap)? HeadOf(FrameworkElement shelf) =>
-        shelf is StackPanel panel
-            && panel.Children.OfType<ShelfHead>().FirstOrDefault() is { } head
-            && head.ActualHeight > 0
-                ? (head.ActualHeight, panel.Spacing)
-                : null;
+    private static (double Height, double Gap)? HeadOf(FrameworkElement shelf)
+    {
+        if (HomeFoldMotion.Find<ShelfHead>(shelf) is not { } head || head.ActualHeight <= 0) return null;
+        var gap = VisualTreeHelper.GetParent(head) is StackPanel panel ? panel.Spacing : 0;
+        return (head.ActualHeight, gap);
+    }
 
     /// <summary>
     /// 自检：轮播这条带的高度就是 <see cref="HomeCarousel.Height"/> 按它自己的宽算出来的那个数，而横着的那几排
@@ -730,6 +960,13 @@ public sealed partial class HomePage : Page, IShellContent
 
         // 这一页走了，把标题栏还回它自己的规矩（别的页都按主题那支墨）。不还的话下一次它就一直浅着。
         _actions?.SetTitleStrip(TitleStrip.Plain);
+
+        // 走到一半的那一趟也收掉：Storyboard 还握着这一页的元素，留着就是一间关了灯还在跑的屋子。
+        _fold?.Stop();
+        _fold = null;
+        _foldLate?.Stop();
+        _foldLate = null;
+        _before = null;
 
         ViewModel.Cancel();
     }

@@ -1110,6 +1110,20 @@ public sealed partial class PlayerPage
         _cursorAtKnown = Native.GetCursorPos(out _cursorAt);
         _cursorShared = true;
 
+        // 拖动对账（2026-09-18，用户报「双击标题之后控件不会自动隐藏」）：Drag hold 挂着而鼠标键已经
+        // 松开，就是一笔悬账 —— Decide 的第一行被 HoldChrome 压着，控件从此永远全显。实机日志里
+        // 这笔账挂过 9~18 秒（hold=True、按住鼠标=False），直到下一次完整的按下再松开才被冲掉。
+        // 悬账的来源不止一条（release 事件没到、DragTo 在全屏那一拍把起点丢了而 Hold 没人放），所以
+        // 不逐路去堵，每拍对一次账：键已松 = 拖动已了，Hold 就该放。Hold 自带锁存，重复放是空操作。
+        if (_holds.HasFlag(ChromeHold.Drag) && !Native.MouseButtonDown())
+        {
+            EndWindowDrag();
+
+            // EndWindowDrag 只在它真的结束了一场拖动时放 Hold（dragged 才放）；若起点早已被
+            // DragTo 丢掉（Dragging 为假），上面那趟是空手而归 —— 这里补一刀，把账平掉。
+            if (_holds.HasFlag(ChromeHold.Drag)) Hold(false, ChromeHold.Drag);
+        }
+
         // A drag in progress, ten times a second, whatever the pointer events are doing. They are the fast
         // path and this is the guarantee: the window is moving with the cursor, so the cursor is not moving
         // relative to the window, and there is no promise that a pointer event arrives for a move that

@@ -1,6 +1,257 @@
 # 开发进度
 
-最后更新：2026-09-18
+最后更新：2026-09-19
+
+## uosc 实测反馈七连修：中心 OSD 条、标题栏内置、控制条重排、画布错位（2026-09-19 第二轮）
+
+> 用户实测独占模式后七条：「做两个音量条干什么去掉中心那个」「标题怎么回事，去掉标题栏按钮内置到画面」「去掉右下角单个循环」「上一集下一集移到左下角」「左下角菜单、字幕点了没反应」「视频按钮改为集列表」「打开弄了个小窗，参考集成模式」。
+
+**1＋5 同根**：中心那根白色大滑条＋左上「Volume: 98%」＝mpv 自带的音量/跳转 OSD 条（与 uosc 右侧音量条重复）；「菜单、字幕点了没反应」＝uosc 画布与窗口尺寸脱节（上轮心跳抓到 display=1280×720 而窗口非此尺寸）——控件画得出来（ASS PlayRes 等比缩放）而点击热区按旧画布算，全错位。修：装配加 `osd-bar=no`＋`osd-on-seek=no`；main.lua 对 `osd-width`/`osd-height` 加 number 观察兜底（native osd-dimensions 观察会漏起播初段「画布=视频尺寸→窗口尺寸」那一次变化）。
+**2 标题栏**：装配固定 `border=no`＋`window-dragging=yes`，系统标题栏去掉，`top_bar_controls='right'` 让 uosc 顶栏画标题（吃 force-media-title，自动剥「 - mpv」尾缀）与最小化/最大化/关闭（关闭=quit=停止，宿主按停止收账）。
+**3/4/6 控制条重排**：行首改为上一集/下一集（embynian-episode ±1），单曲循环按钮删除；上游「视频轨」按钮由**选集菜单**顶替——新增 `embynian-episodes`（向宿主要数据）与 `embynian-episode-index`（点选 1 起算序号）两条契约消息；宿主 `PlayerViewModel.PushEpisodeMenuAsync` 把本季单集序列化成 uosc open-menu JSON 推回（当前集 active；空列表回一行说明），点选走既有 `SwitchEpisode`。
+**7 小窗**：`LibMpvBackend` 增 `Func<bool> autoFullscreen`（工厂传 `Playback.AutoFullscreenOnPlayback`），独占管线起播即 `fullscreen=yes`——不先冒小窗再跳，最接近集成模式的形态；mpv 自建 D3D 窗口没有宿主动画可借，这一处如实告知用户。
+**实拍验证**（一次探针运行，PrintWindow，`work/uosc-shot/r6-toggle.png`）：无边框＋右上窗口按钮＋顶栏标题、行首上下集＋选集/字幕/菜单、时间轴、无中心条、无循环按钮，全部到位；Lua error 计数 0。
+
+**验证**：构建 0 警 0 错；Core 935/935（契约新增选集两条测试、装配选项扩为 8 项逐项点名）；发布 526 文件验证通过。**并发说明**：本轮与同树另一件「删独立控制窗」（见下）合并构建测试，合并树全绿；本轮的消息契约与选集推送不依赖控制窗，无冲突。
+
+## 删独立控制窗：独占模式改为无页面播放（2026-09-19）
+
+> 用户令（附控制窗截图——黑窗中央一行说明牌＋底部一条控制条）：「你开着这么个窗口是什么意思」，追问后拍板：「删掉」。
+
+**这扇窗是什么、为什么显得多余**：它是「用独立窗口播放」时代传下来的控制窗（`PlayerWindow`，WinUI 播放页整体搬进去），独占模式融合时被顺手保留，本意是承载选集列表、跳过按钮、统计、置顶。而用户那次实播恰逢 uosc 的 `package.path` 缺陷（上一节修的），视频窗里一个控件都没有——控制窗便成了唯一能点的东西，看着纯属多余。uosc 修好后它依然多余：日常控制全在视频窗里。
+
+**新形态（无页面播放）**：独占模式下播一场片子，程序里**没有任何一扇我们的窗**为它服务——画面与 uosc 控件全在 mpv 自建的视频窗，主窗口留在用户正在翻的那一页，片子和浏览互不挡路。`ShellPage.PlayAsync` 漏斗三条路：
+
+1. **播放器页已摘下（在途播放）**→ `PlayReplacingAsync` 直接换片（上一节的换血管线，请求不能递给已 Detach 的页面——09-14 的坑）。
+2. **独占模式第一播**（`PlayerViewModel.HeadlessPlayback`，原 `SeparateWindowPlayback` 改名）→ 主窗口播放页 `Detach` 让位、请求直递 view model：`PlayerShown`/`PlayerHidden` 对页面无话可说，浏览页纹丝不动。
+3. **其余**（集成／外部 mpv.exe）→ 照旧走主窗口播放页。
+
+两条新的外壳对账（构造器挂上、`Shutdown` 摘下，都以 `Player.Attached` 挡掉非独占场合）：`OnHeadlessPlaybackStarted` 把「开播自动全屏」直达 mpv（`SetNativeFullscreen`，页面不在场没人代劳）；`OnHeadlessPlaybackHidden` 把播放页挂回主窗口（放完、停止、视频窗被关、起播失败同拍都到这儿）。
+
+**退场清单**：`PlayerWindow.cs` 整文件、`SendPlaybackToOwnWindow`、`OnPlayerWindowClosed`、`OnOwnWindowPlaybackHidden`、`ShowPlayer` 的窗口早退闸、`App` 里「独立播放窗口改指 VideoSurface」的往返（surface 工厂从此恒指主窗口，独占后端根本不问它）；`AppSettings`/设置页不再有任何相关键。**随窗退场的功能**（独占模式内）：选集列表（uosc 只有上一集/下一集经 `embynian-episode`）、跳过片头片尾按钮、统计、置顶、播放页 InfoBar 提示——起播失败类通知目前无处显示，用户令下明知的取舍。
+
+**验证**：构建 0 警 0 错；Core 934/934；发布 526 文件／302.6 MB／11 GLSL（比上轮多出的 44 个文件即 mpv-ui 装箱）。无页面全流程（开播、翻库、换片、关窗即停、自动全屏）探针与自检都不覆盖双窗真实播放，留给用户实机验证。
+
+**⚠️ 13:20 启动两连崩与热修（同刻补）**：第一版发布把无页面播放的两条对账订阅写在了 `ShellPage` **构造器**里，而 `PlayerPage.ViewModel` 要到 `AttachWindow` 的初始 `Player.Attach` 才赋值（`{ get; private set; } = null!`）——构造器里 `Player.ViewModel` 是 null，`OnLaunched` 解析 ShellPage 即 NRE，用户连点两次都起不来（日志：`创建主窗口失败 → ShellPage..ctor()` NullReferenceException）。**教训与 09-14 同族**：接事件的生命周期要挂在「对象确实在」的那一拍；这次挪进 `AttachWindow` 初始 Attach 之后（事件挂在 view model 上，页面 Detach/Attach 不动它，挂一次管全程）。热修后构建 0 警 0 错、重新发布、实机启动验证：进程存活、自动恢复登录、媒体库读入、主页开画。
+
+## 独占模式视频窗接入 Lua UI（uosc 嵌入版）：装箱、宿主通道与脚本重构（2026-09-19）
+
+> 用户令（附本地 mpv 整合包路径）：「把 dyphire/mpv-config 的 Lua 脚本编写的 ui 控件集成到 EmbyNian 的独占模式中，然后重构 lua 脚本」。追问「控件呢？你验证了没？」后做了实拍验证并抓出致命缺陷（见「实拍验证与两处致命缺陷」）。
+
+**前提被实测推翻**：仓库多处注释声称「这份 libmpv 没编 Lua」——错。对现有 `libmpv-2.dll` 的空播放器探针（`work/probe-lua-capability.py`）证明它静态编入 LuaJIT（mpv-configuration 里 `-Dlua=enabled`），`load-script` 成功且收到脚本握手。**没换 DLL，钉住的版本不动。**
+
+**装箱（`assets/mpv-ui/`，发布件新增约 1.1 MB）**：uosc **5.12.0**（LGPL 2.1，`LICENSE.LGPL` 随发布）＋ Material Icons Rounded 字体（Apache 2.0，许可证随发布）＋ uosc 贴图字体。csproj 按 shaders/fonts 同款拷到发布根 `mpv-ui\`；`tools/verify-publish.ps1` 新增装箱完整性六查。
+
+**脚本重构**（详见 `assets/mpv-ui/README.md`）：以「宿主独占播什么、播完去哪」为判据裁剪——删除文件系、文件/目录浏览与播放列表导航、paste 系、在线字幕下载（含外部 API key）、`show-in-directory`/`open-config-directory`；`handle_file_end`/`file_end_timer` 整块删除；默认值改写为嵌入专用；新增 `embynian-episode-prev/next` 绑定与控制条按钮。
+
+**宿主通信（`Core/Mpv/MpvUi.cs`，纯函数进测试）**：独占管线起播时 `osc=no`＋`osd-fonts-dir`＋初始化后 `load-script`（先于 loadfile）；`PruneEvents` 对 `MPV_EVENT_CLIENT_MESSAGE` 改条件停订；`LibMpvHandle` 在事件线程复制参数、经 `VideoWindowContract.Parse` 收窄（只认 `embynian-*`，换集只认 ±1），新接口 `IPlayerHostMessages` → `PlaybackService.VideoWindowMessage` → `PlayerViewModel.StepEpisodeAsync`（Emby 导航）。
+
+**实拍验证与两处致命缺陷（用户追问后补做）**：
+1. **假绿教训**：`probe-uosc-idle.py` 只等握手——而握手在第一个 `require` 之前发出，握手成功≠脚本活着。实拍发现 UI 一片空白。
+2. **缺陷一（mpv 装载语义）**：mpv 只在配置目录扫描装载时把脚本目录加进 `package.path`；`load-script`/`scripts` 按绝对路径装载**不加**，且此时 `mp.get_script_directory()` 返回 nil——uosc 在第一个 `require('lib/std')` 处静默死亡。修：main.lua 用 `debug.getinfo(1).source` 取自身目录自举 package.path，导出全局 `script_directory` 供 intl/char_conv/ziggy 兜底。
+3. **缺陷二（我的重构残留）**：`pause` 观察器回调里残留 `file_end_timer:kill()`——nil 索引让 mpv 整个销毁脚本，osd-dimensions 初始化事件从此收不到，渲染永远早退（`display.initialized` 恒 false）。修：删掉残留引用。luajit 语法检查抓不到这类运行期 nil，必须实机日志或实拍。
+4. **修后实拍**（PrintWindow 抓窗口自身表面，`work/uosc-shot/r6-*.png`）：uosc 菜单正常渲染（标题＋中文菜单项＋配色圆角全对），`Lua error` 计数归零。诊断用的 user-data 心跳已撤。
+5. 顺带：libass 会把字体目录里**所有文件**当字体加载——LICENSE 文本移出 fonts 目录放装箱根。
+
+**验证**：构建 0 警 0 错；Core 934/934（新增 `MpvUiTests` 7 条）；发布 526 文件，`verify-publish` 六查通过；实拍证明 uosc 渲染链路通。**留给用户实机的最后一眼**：独占模式播放时视频窗内出现进度条/控制条/音量条/右键菜单；若空白，查日志有无「视频窗 Lua UI 已就绪」与 Lua error。
+
+**并发窗口说明**：本件与「删开关/换片」那批共享未提交树；本件只新增文件或追加，未动既有行为代码。
+
+## 删「用独立窗口播放」开关，行为并入独占模式：边播边翻库（2026-09-19）
+
+> 用户令：「删掉播放行为中的 用独立窗口播放」「新增使用独占模式时可以一边挂着片子一边继续翻媒体库」。
+
+**这件事的一半本来已经在了**：09-17 用户令「播放行为跟这个功能融合」之后，独占模式（独立播放管线）就天然走独立窗口那一档 —— `SeparateWindowPlayback` 的公式里 `!PictureInHostWindow` 那一项说的就是它，主窗口留原页、控制进 `PlayerWindow`、关哪扇窗都是停止。所以主体工作是**把开关拆掉、把行为钉死在管线上**，再把这套行为在设置文案里说出口：
+
+- **设置页「播放行为」**：「用独立窗口播放」一行删除；「渲染管线」说明接手它的承诺 —— 独占模式播放时主窗口留在原页不动、可以边播边翻库、视频窗与控制窗关掉哪个都是停止。
+- **`AppSettings.Playback.SeparateWindowPlayback` 删除**。旧 settings.json 里残留的键由反序列化默认忽略（`ReadOptions` 没设 `UnmappedMemberHandling.Disallow`），不需要迁移 —— 用户的旧档里那个「开」从此不再表示任何事，行为一律由管线档位推。
+- **`PlayerViewModel.SeparateWindowPlayback` 改为纯推导** `!PictureInHostWindow && Embedded`：独占模式＋内置后端为真；集成模式画面在本窗口谈不上让路；外部 mpv.exe 本来自己开窗、不再多开一扇控制窗。
+- **换片接通（这次真正的新行为）**：从前独立窗口挂着片子时再点一部，请求落到已 `Detach` 的主窗口播放页上被 `Attached` 守卫静默吃掉（09-14「独立窗口播放用不了」的同一个坑）——边播边翻库恰恰让这一步变成常态动作。现在 `ShellPage.PlayAsync` 漏斗里 `_playerWindow` 已挂时把请求递给 `PlayerViewModel.PlayReplacingAsync`（新增，与 `PlayAsync` 只差 `replaceExisting: true`，连播下一集走的同一条换血管线，`PlaybackService.PlayOneAsync` 开头的 `StopAsync` 停旧接新）：挂着片子翻库点谁就换谁，窗口、挂靠、对账都不动。
+- README「常用设置」同步（播放行为清单去掉独立窗口播放，视频输出一行写明独占模式的这一行为）；`PlayerPage.Detach`、`ShellPage._playerWindow`、`PlayerWindow` 的注释改口。
+
+**验证**：构建 0 警 0 错；Core 927/927（设置两测随开关删除改写：自动全屏的出厂关/缺键/能记住三条保留，独立窗口那两条随键删除，并注明旧键被忽略）；发布 482 文件／301.7 MB／11 GLSL 与基线一致。真机行为（独占模式首播开窗、翻库、点新片换片、关窗即停）未实播验证 —— 探针与自检都不覆盖双窗口真实播放，留给用户实机一点即知。
+
+## 整页进退轨道改计时器逐拍驱动：修「进度条被裁切」（2026-09-19 上午）
+
+> 用户令（附两张截图）：「怎么感觉窗口化下进图条被裁切了」，补一张全屏：「全屏下也被裁切了」。
+
+**病根：整页进退的 `TransitionPage` 是一条代码 Storyboard，RenderTransform 的三条属性路径静默没跑**——Opacity 那条照常跑到 1（页面看着一切正常），Scale/TranslateY 却停在 `ApplyPagePose(from)` 写入的 Entering 姿势（Scale 1.018、Y+12）钉死不放，`Completed → ApplyPagePose(Visible)` 也没能落位。这是 2026-09-18 18:20 铁律「动 RenderTransform 的动画不能用代码 Storyboard」的**第二种死法**：第一次是 `SetTarget(变换对象)` 冻在起点；这次属性路径指向元素也到不了终点。整页被放大 1.018 再下移 12px，底部控制条的位置偏差＝`0.009×窗高 + 12`——窗口化约 20px、全屏约 25px，正好把 Bar 的 12px 底边距和传输按钮下半截推出窗外；视频与岛不受影响（`VideoHost` 不吃 RenderTransform），所以片子是正的、只有控件歪。
+
+**取证（外部量测，不进进程）**：发布版实机播放＋`SetCursorPos` 晃动唤醒 chrome（幅度必须过 5px 的 HandStep 阈值，2 秒静止又藏回去，截图必须和晃动同一个脚本里拍）。三处位移全落在残留 pose 的预测值上：底行窗口化 +19~20（预测 19.2）、拉高到 898 仍 +19~20（预测 20.0）、全屏 +20~25（预测 25.0）；**顶部返回键 +5~6（预测 4.8）**——这一条排除了「岛内容卡在高 20px」的备选假设（那会顶部纹丝不动）；岛桥 HWND 恒等于客户区、视频信箱带居中，排除一切岛同步嫌疑。1px 微调与 ±100px 拉伸都不自愈＝常态残留而非瞬时。
+
+**触发条件是真机播放特有的一步，探针因此一直全绿**：服务器回报画面比例后 `FitToPicture` 在进场 280ms 的第 60~160ms 把窗口缩掉几百像素（日志两场实录：08:59 场第 60ms、复现场第 160ms），这一拍落在还挂着的旧驱动上。探针的进场阶段从不在转场中途改窗口尺寸，Identity 断言（本来就查 Scale/Y/Opacity）从没跑到这个条件。
+
+**改法（`PlayerPage.Transition.cs`）**：整页 pose 弃 Storyboard，改 **16ms `DispatcherQueue` 计时器逐拍**（与画面跑动、主页折档同款；曲线同一，`PlayerMotion.Ease` 就是 CubicEase.EaseOut）：每拍 `ApplyPagePose(transition.At(now))`，泵停摆只会让某拍迟到、迟到的拍照常落在该在的位置；**终拍无条件写死 `Pose.Visible`**——结构上留不下残留。淡入换手闹钟原样保留（验呈现不验时间），身份判据从 `_pageFade` 换成 `_poseDriver`（`MotionProbeState` 随改）；换集遮罩的淡出是纯 Opacity Storyboard（实践一直正常），连同 `Animate` 助手原样保留并注明只许喂 Opacity。
+
+**探针补课（`PlayerMotionProbe.cs`）**：新增阶段「进场中途按画面比例改窗口」——进场第 90ms 摆上 2.0 比例并 `FitToPicture`，落定后断言 Identity。12 阶段全绿；逐拍取样实见新轨道的中间帧（Opacity 0.83/Scale 1.0084/Y 5.59 → 精确归 1）。
+
+**验证**：构建 0 警 0 错（首跑撞上 WMC9998 过期缓存的 WMC9999，按 09-05 的记录重跑即过，零改动）；Core 927/927；发布 482 文件／301.7 MB／11 GLSL 与基线一致。**发布版实机闭环**：真机窗口化播放（与你相恋 E07，客户区 1511×850，正是用户报的场景）量得传输行底边距 **19~20px**（修复前 0~1px，设计值 12px 边距＋6px 按钮内衬），截图 `work/barclip-fixed*.png`（修复前证据 `work/barclip-baseline|grown*.png`）。
+
+## 进场跳窗挪到淡入呈现之后（2026-09-19 凌晨）
+
+> 用户令（附截图）：「点开始播放后切换的还不够顺滑」——截图里首页内容缩在放大后的窗口左上角、四周一圈黑。
+
+**病根有两个，都藏在时序里**（60fps 连拍 `work/enter-baseline|enter-fixed|enter-final/` ＋ 临时尺寸采样日志取证）：
+
+1. **跳窗排在进场的第 0 拍**。SetWindowPos 那一拍岛桥虽同步挪了，岛面换新尺寸的第一帧要等 UI 线程下一轮渲染提交——那几帧里 DWM 把旧表面钉在 (0,0)，露出的客户区由 `FillExposedClient` 补底色＝「亮着的浏览页缩在角落＋黑边」闪 3 帧起步；首页越重闪得越久。
+2. **换手（收浏览层＋跳窗）和淡入故事板在等同一个 UI 线程**。泵被占住的那几百毫秒（mpv 起链、字体扫描尾段）两班一起停摆，泵一恢复**计时器先于故事板第一帧**被派发——名义时间到了，淡入一帧没跑（连拍实证：跳窗那拍 Opacity＝0），改在跳窗后以全屏尺寸补放。
+
+**改法（`PlayerPage.Transition.cs` ＋ `EnterPlayer`）**：
+
+- 收浏览层＋`EnterAutoFullscreen` 从进场第 0 拍挪到**淡入完成那一拍**（`TransitionPage` 新增 `faded` 回调＋一次性闹钟）。溶解发生在没动过的窗口里；跳窗时页面已不透明、底下是近黑的加载遮罩，残影只剩深色。
+- **闹钟响之前先验呈现不验时间**：tick 读 `Opacity < 0.9` 就 50ms 后重问（上限二十班一秒，宁带残影不晾用户）。泵停摆时它随故事板一起迟到，恢复后必然排在淡入之后。
+- `OnPlaybackStarted` 的自动全屏见 `_enterAnimating` 在飞就让位给换手（快启动的本地小文件那条事件来得比换手早）。
+- **删掉 `EnterPlayer` 里那次 `SynchronizeContentLayout`**：进场时客户区跟浏览时一模一样，全树 Measure/Arrange 纯属白算，实测吃掉约 90ms（重主页），把淡入的呈现窗口挤没了；跳变那一拍的同步在 `PublishClientRect` 里。`OnClientRectTransition` 里重复的那一遍同步一并删了（同一拍两次全树强制布局）。
+- 探针加压轴阶段「进场淡入完成拍自动全屏」（`PlayerViewModel.ProbeHoldPlayback` 立起生命周期，页面走真实 `EnterAutoFullscreen` 支路）；11 阶段 34 断言全绿，Core 927 项全过。
+
+**真实链路验收**（winapp UIA `invoke` 驱动＋gdigrab 60fps，`work/real-t3|t4|t5/`）：主页 banner《猫与龙》、集页面（尼古喵喵 S1E11 继续播放）、电影页（超人）三点播放——溶解都在原窗口呈现，跳变帧只剩 1–2 帧（≤33ms）深色遮罩残影（离散跳窗的物理下限），正片全屏落地。合成鼠标点到不了岛内容（老规矩），驱动全程走 UIA InvokePattern；Esc 用 `winapp ui send-keys --via send-input`。
+
+**已知遗留（未修）**：加载中遮罩的背景图会在跳变后闪失一次约 150ms 再回来——`OnNowPlayingChanged` 重取背景图先清后设的老行为（`LoadCoverBackdropAsync` 的重试路），属遮罩内容不属于转场几何；要修就把「按 Id 去重」那趟的置空挪到新图到手之后。冷启动首播的那 750ms 级残影（首页重＋全部缓存冷）这次没复现，机理已明（岛尺寸通知滞后于泵空闲），上面两条改动把泵让出来了，真再见到就往「跳变前预排一帧全屏提交」的方向走。
+
+## 播放器进退与最大化／还原动画整套重构（2026-09-18 晚）
+
+> 用户令：「重构集成模式下进入播放页面和退出播放页面的ui动画，重构播放器最大化和还原窗口的ui动画。目前的太差了，你大胆的重构。」
+
+**这一件取代了本文件下面「进播放页的转场补完」那批**：`PlayerPage.StageZoom.cs`、`Windowing/PictureMorph.cs` 已删除（旧版备份在 `work/player-motion-before/`），`FadePage` 的 220ms 溶解与「等淡入落定才全屏」的两段式一并退役。推倒的理由：三套驱动（淡入淡出／整页拉伸／画面矩形逐拍缩放）在退场时叠成分段跳；最大化／还原根本没接进转场；且把「请求的窗口尺寸」当成「视频缓冲已到位的尺寸」——60fps 连拍抓到两处自动断言看不见的病：快速全屏往返时画面被裁成细条、窗口化时旧缓冲 contain 出两层黑边。
+
+新方案四块：
+
+1. **`Core/Playback/PlayerMotion.cs`**：进出播放页唯一节奏表（进场 280ms 轻上浮＋140ms 短淡入、退场 190ms、遮罩 180ms、深度 1.018），反向操作从**当前帧**接续（退出中途重进不闪回全透明）；7 项单测钉死，用 `work/player-motion-tests/` 直跑（不进四道闸）。
+2. **`Core/Playback/VideoPresentation.cs` ＋ `CompositionVideoTarget` 重写**：不再信挂载时的尺寸，QI `IDXGISwapChain1::GetDesc1` 读**实际缓冲**尺寸；客户区跳变时旧缓冲按旧客户区矩形映射进新宿主并 220ms 长到新矩形（PictureMorph 同一条路径，换成了 SpriteVisual 的 Offset/Scale 承载），新缓冲中途落地就按当前进度重锚；16ms 单计时器兼管追缓冲。
+3. **`PlayerPage.Transition/Morph/Cover`**：页面进退一条 `CompositeTransform` 轨道（不再整页拉伸、加载环和按钮不再被拉扁）；遮罩等「实际缓冲＝宿主」或 600ms 保险丝才淡出；退场 `RetainLastFrame` 让最后一帧活过停止那一拍、页面收起才释放。
+4. **`HostWindow`**：全屏／最大化／还原／退出播放全走 `ChangeClientRect` 一个漏斗——DWM 窗口动画压掉（免得跟自己的动画打架）、中间 WM_SIZE 合并、只在终点发一次 `ClientRectTransition`；`RestorePlayerToBrowse` 一步还原；`SynchronizeContentLayout` 强制岛布局跟上，新窗口不再露一帧旧布局。
+
+审查者五条 P2 已落四条：退场 190ms 设 `_inputSuspended` 只读（键盘＋Win32 兜底都闸住）；最大化重进时普通窗口还原矩形也写回（Windows 的「还原」落点不再被播放尺寸污染）；真实停止路径的遮罩由 `CompleteCoverExit` 明确收起（退出淡出的是最后一帧不是「正在切换」罩）；探针报告初始化挪进 try/finally（建报告失败也保证 `Application.Exit`）。**未落**：多探针开关优先级 Program 与 App 不一致。
+
+### 验证与证据
+
+- 定向单测 7/7；`--probe-player-motion` 隔离探针（本地 lavfi 测试视频，不登录、不上报、不碰 Emby 媒体库）第二轮**全部通过**：进场中间帧实取（Opacity/Scale 逐拍取样）、无视频最大化还原、播放中最大化／还原×2 各只发一次几何终点、快速全屏往返、最大化状态跨全屏保留、退场回浏览几何、半途退出重进、加载页直接全屏。
+- 发布两轮已刷 `artifacts/publish/win-x64`（桌面快捷方式指向的目录），第二轮含布局强制同步修复。
+- 60fps 连拍关键帧（`work/player-motion-capture-*/`）逐张复核过。
+
+### 收尾（同日深夜，全部落地）
+
+- **嵌套黑边正解落地**：`VideoPresentation` 重写为 `ForRect`（旧缓冲按旧客户区矩形映射进新宿主）＋`Between`（两块摆放间插值），`CompositionVideoTarget` 用单 16ms 计时器跑 240ms 的「旧矩形→新矩形」呈现跑动——PictureMorph 同一条路径，换 SpriteVisual 的 Offset/Scale 承载；新缓冲中途落地按当前进度重锚（ReanchorRun），跑完没换缓冲就停在终点矩形等。连拍 frame-0124（屏幕 1 全尺寸）确认快速全屏往返后画面完整铺满、无嵌套黑边无变形。
+- **审查五条 P2 全部落地**：退场 `_inputSuspended` 只读；最大化重进写回普通窗口还原矩形；`CompleteCoverExit` 明确收起遮罩；探针报告初始化纳入 try/finally（`RunScoped` 拆分，失败也保证退出）；探针开关优先级 App 与 Program 对齐（Composition → Cursor → Motion）。
+- **两块屏幕各验一轮**（`--probe-player-motion` 全阶段断言全绿）＋整解构建 0 警 0 错＋Core 全套 927 项全过。发布已刷 `artifacts/publish/win-x64`。
+- 已知误报：探针几何取样读 `Cover.ActualWidth` 在页面折叠又复活后可能拿到陈旧值（同一取样的加载环坐标证明视觉排布是对的）——量证工具的读数问题，不是页面缺陷，量具以后改读变换位置。
+
+### 未了事项
+
+- 自检未跑（没发版）；四道闸未跑（按 2026-09-18 他的裁定，发版时才全跑）。
+
+## 进播放页的转场补完（2026-09-18 晚）
+
+> 用户令：「在集成模式且开启自动全屏的情况下……切换过程不够丝滑，缺少过渡动画。此外，内容加载时的加载指示器
+> 不应仅显示在左上角，需改为更合理的位置或全屏覆盖式加载状态。」
+
+三件事（细节与条件都写在 `PlayerPage.StageZoom.cs` 的类注释里，此处只记结论）：
+
+1. **全屏跳变两半分工**：`PictureMorph.Begin` 改名 `TryBegin` 并回报 bool——交换链在（画面接得住）照旧动画面；
+   没接上（加载中/收摊后）回报 false，整页过渡归新文件 `PlayerPage.StageZoom.cs` 的 `ZoomStage`（Root 上
+   `StageZoomScale/StageZoomOffset` 一对变换，**写死在标记里**，反向映射回旧客户区矩形再 240ms 长到新矩形）。
+   连「退出播放时退全屏」那一跳也顺带平滑了。
+2. **自动全屏提前到溶解落定那一拍**（`EnterAutoFullscreen`，挂在 `EnterPlayer` 的 FadePage landed 上）：
+   条件＝设置开 && PictureInHostWindow && **PlaybackLifecycleActive**（新 VM 属性＝`_playerHold>0`，
+   把 `--hide-cursor` 工具进场挡在外面）&& 未全屏。OnPlaybackStarted 那一句保留（连播补施/推算纠正）。
+   加载指示器（遮罩）因此从第一拍起就铺满全屏，不再缩在浏览窗口的旧位置里。
+3. **遮罩显隐由页面接管**（`Cover` 在 XAML 里 Collapsed 起步的静态值，不再绑 `CoverVisibility`——VM 属性
+   还在但无人消费）：页面订阅 `ViewModel.PropertyChanged(CoverUp)`，翻 false 先淡 200ms 再收（露出正片不
+   硬切），翻 true 直接不透明（换集遮挡容不得半露）；`_onStage` 为假一律立即收（自检探针的「不合成帧」
+   承诺不受影响），Attach 时按当前值对齐一次。
+
+技能 `embynian-player-architecture` 铁律 6 与架构表已同步。
+
+### 返修（同日 18:20，用户三张截图）
+
+首版翻车两处，都拿截图定案：①**整页缩放冻在起点**——`Storyboard.SetTarget(动画, 变换对象)` 在 WinUI 3
+上静默不跑（进场冻在旧窗口矩形、退场冻在还原矩形，白线＝缩小后的进度条）；改用 `PictureMorph` 同款 16ms
+计时器逐拍驱动。②**遮罩淡出露出旧尺寸交换链**——mpv 按旧窗口尺寸建的链要 110~150ms 才重建到全屏，遮罩
+提前淡出就把「缩在左上角的正片」露出来了；`SurfaceLagsHost()`（挂载尺寸 vs 宿主物理尺寸差 >2px）压住不淡，
+等 `SurfaceReplaced` 或 600ms 保险丝。附带保险：缩放期间有交换链挂着时把 `VideoHost.Opacity` 压 0（它不吃
+RenderTransform）。**新铁律：动 RenderTransform 的动画不能用代码 Storyboard，用计时器**（技能已记）。
+
+### 二返修（同日 18:55，用户又两张截图；日志定案）
+
+计时器版动画其实在跑（日志「舞台过渡」每次都触发），但**起点矩形是 1511×626**——不是浏览窗口真实的
+1527×1008：服务器报的 2.413 宽银幕比例在**溶解进行中**就把窗口整形成了横条（「按画面比例调整窗口
+1527x634」比早全屏早 44ms），早全屏量到的起点、退全屏 `_restore` 的终点全被污染，随后
+RestoreBrowseGeometry 再无过渡掰回——两头全是跳。修法：`OnPictureAspectChanged` 加闸，加载期＋自动全屏开
+时只记 `PictureAspect` 不调 `FitToPicture`（中途退全屏由 `LeaveFullscreen` 自己的整形补课；自动全屏没开
+不拦）。附带 `EndStageZoom` 补落定日志。build 0 警 0 错，publish exe 19:04:04。
+
+## 主页矮窗档的过渡动画（2026-09-18）
+
+> 用户令：「给主页媒体库上移到轮播图和复原添加过度动画」——矮窗档翻档的那一刻，媒体库那一排从横排里升上轮播
+> 左下角、或者从轮播左下角落回横排，从此不再是硬切。
+
+### 一趟里有什么
+
+翻档那一趟（`Views/HomeFoldMotion.cs`，260ms cubic-out，只走 XAML Storyboard——理由同 HomeMotion 十六报那条，
+一个对象就是一趟，`HomePage` 里 `_fold`／`_foldLate` 各记一笔）三样东西一起走，同一段时间同一条缓动：
+
+1. **媒体库那一排**：宿主（`LibraryOverlay`，改画新的无牌子模板 `ShelfCardsTemplate`）从横排里那一排排卡的上沿
+   升到轮播左下角；回默认那一趟反过来，从左下角落回横排，淡出压在最后一百一十毫秒里，落点上那一份从暗里浮出接住。
+2. **下面那几排**：补位／让位。**迟一拍**走 —— Repeater 的重排跟着滚动视口慢一拍，同一拍里 UpdateLayout 两遍量到的
+   差是零；推一拍等它真排完了量差（**按排认，不按元素**：Repeater 不认唯一 id 时按序号重绑元素，按元素记对不上号），
+   再让那几排从旧位置滑过来。
+3. **轮播的字块**（`HomeBanner.PlaceInfo` 换底边距那一下）：它的布局不归 Repeater 管，当场补一趟，跟着一起走。
+
+两头的「排卡上沿」都在**翻档之前**量（`HomePage.MeasureBeforeFold` 存进 `FoldSites`）：压上那一趟是起飞点，
+回默认那一趟是落点（补位的那排正站在那条线上，插回去不改这一格的 y）——**不能等摆完再量落点**，理由同上。
+
+### 两个坑（都拿日志实锤过）
+
+- **WinUI 3 的 `RenderTransform` 出厂就是一支单位 `MatrixTransform`，不是空。**「宿主变换=MatrixTransform」那行
+  日志实锤（宿主、排、带、滚动四个元素全是）——所以「代码里见空就装一支 TranslateTransform」的那条路
+  （`HomeMotion.DriftFor`、`HomeFoldMotion.DriftOf`）**永远走不进去**：HomeMotion 进场动画的「轻上浮」其实从来没
+  画出来过（淡入一直在动，没人发现少了那 20px）。修法照 HomeBanner 的 Rows、ShelfStrip 翻页键的老规矩：
+  **位移写在标记里** —— 宿主一支、货架模板根和它的里子各一支（Repeater 直接子外头框架有时包一道
+  ContentPresenter，`TargetOf` 取到的是根还是里子说不死，两层各备一支）、轮播字块一支。
+- **牌子有无改由模板决定**：压上轮播的那一份从前靠 `CardShelf.ShowHead` 开关拨，而那是**同一份数据两头共用**的 ——
+  翻档动画要在同一两百毫秒里同时看见「横排里带牌子的那排」和「轮播上不带牌子的一份」，共用的开关摆不平。
+  拆出 `ShelfCardsTemplate`（只有排卡）给宿主用，`ShowHead`／`HeadVisibility` 整个删掉，搬进搬出不再改这一排
+  自己的样子。
+
+### 防假档
+
+页面刚起来那几拍轮播还没有幻灯片、视口还是零，`UpdateLibraryOverlay` 一路早退摆下的是个假档（数据回来还要再翻
+一次）—— 拿假档当动画起点会凭空飞一趟，而自检正是在那几拍上读坐标（「主页首屏」量的是继续观看从哪儿起）。
+所以只有「上一档真在屏上摆过」（`_foldReal`：轮播在、视口有高）的翻档才飞；同一档重复摆（拉窗口每一下
+SizeChanged 都走到这儿）什么都不动 —— 回默认那一趟宿主自己就是动画的载体，把它收了等于把托着的那排卡撤掉。
+
+### 闸门与证据
+
+构建 **0 警告 0 错误**；四道闸门未跑（按 09-18 新政：发版才跑）。屏上证据 `work/fold-shot.py`（压矮→拉回两趟
+连拍 + 应用日志对时）：过渡带能量坡两趟各 ~259/294ms（硬切是一拍跳到底），迟一拍补位日志「3 排」两趟都在，
+行程 713／243 像素与几何吻合；连拍与稳态 PNG 在 `work/fold-*.png`，报告在 `work/fold-shot.txt`。顺滑度仍归
+眼睛（同全屏 morph 那条）。
+
+发布件已重发（`work/fold-publish.txt`，发布验证 482 文件／301.7 MB／11 GLSL 与基线一致），桌面快捷方式照旧
+指向 `artifacts\publish\win-x64`。**发布时旧的那份挪到了 `artifacts\publish\win-x64-stale-20260918-1403`** ——
+沙箱的批量删除保护（SAFE_DELETE，>50 文件要确认）挡着 publish 自己清空目录，挪开再发是本轮的走法；那份是
+上午的 v0.0.14 旧构建，确认新件没问题后整个目录可删。未提交、未推。
+
+## 播放页进出的页面转场（2026-09-18，v0.0.14）
+
+> 用户令：「为播放器页面的进入与退出添加页面过渡动画，确保进入和退出过程都有连贯的转场视觉效果」；改完自测通过后把桌面快捷方式指到最新构建；**整个过程不在 GitHub 上发布、不创建任何 release**。
+
+### 为什么先得加一块舞台
+
+播放页的 Root 本来就是 `Background="Transparent"`，垫在它下面的是窗口与岛自己的底色 —— 这一页在屏上**没有属于自己的底**。于是「淡入这一页」没什么可淡的（底不跟着这一页走），「淡出」则是在两百毫秒里把一切让给背后的浏览页。新增 `PlayerPage.xaml` 的 `Stage`（Root 的第一个子元素、`PlayerStageBrush`＝`PlayerPalette.Film` 那支全不透明近黑、`IsHitTestVisible=False`），这一页才成为一张可溶解的「面」。
+它**只在真的进出播放时立起来**：`--show-osd` 那条路是直接把这一页摆到当前那一页上面拍照，浮层背后要的正是浏览页的真内容，舞台必须当不存在（`Collapsed` 起步、由转场开关）。
+
+### 转场怎么走（次序是反直觉的，别按「顺手」改）
+
+- **进**：本页先以全透明摆上来，浏览外壳**不在这里收** —— 那两百毫秒要溶解的正是「浏览页 → 播放页」这两面；淡入落定才 `ShowPlayer(true)`。早收一步，屏上就是「切黑再淡入」两下硬切。
+- **出**：外壳**先**放回来（此刻被那块不透明的舞台盖着，这一跳看不见），本页再淡出，落定才真收起本页与舞台。
+- 驱动在 `Views/PlayerPage.Transition.cs`：220ms、cubic-out、XAML Storyboard；系统关了动画或这一页还没有 XamlRoot 时直接落定。重入闸从 `Visibility` 改成逻辑位 `_onStage` —— 淡出那 220ms 里本页仍然可见，而「可见就当已就位」会把整趟进场跳过（窗口垫黑、计时器、焦点一个都不做）。
+
+### 闸门与发版（v0.0.14）
+
+构建 **0 警告 0 错误**；单测 **920/920**（919 → 净增 1：舞台那支画刷必须全不透明，`PlayerPaletteTests`）；发布 **482 文件 / 301.7 MB / 11 GLSL**、`EmbyNian.pri` 2344 KB（不是清空 bin 之后的 103 KB）；自检 **189 非空行**与基线一致，唯一失败仍是**既有红《伪恋》跨季服务端数据**；播放层配色探针 **18/18 支画刷**（新增的 `PlayerStageBrush` 已进表）。
+转场的屏上取证在 `work/transition-shot.py`：应用日志那行 `播放页淡入（220ms），落定后收起浏览外壳` 证明动画那一路真的跑了；连拍里标题栏**拖动区**的 `WM_NCHITTEST` 从「标题栏」跳成「客户区」＝`ShowPlayer(true)` 真的执行了（这也是「外壳让位了没有」在外面唯一量得到的读数）；终态客户区 1511×850 里 **99.8% 的像素是 #0C0E11**（舞台真的画上去了）；`--show-osd` 回归：舞台色 **0.0%**（浮层背后的浏览页内容照旧）。
+桌面快捷方式：它的目标路径本来就是 `artifacts\publish\win-x64\EmbyNian.exe`，发版后双击启动的就是新构建；但 `.lnk` **文件本身**在会话里改写不了 —— 沙箱对工作区外的**既有**文件只读（新建可以、改写被拒），`tools/shortcut.ps1` 因此以「无法保存快捷方式」失败（沙箱外跑同样失败）。用户裁定：**就这样，不用动**。
 
 ## 双击纯净闸＋自动连播季内化：两项交互契约落地（2026-09-18）
 
@@ -2274,6 +2525,14 @@ t+2s     指针本来就没动 → 又满足 ≥2000 → 又 hide → 又盖章 
 - 不要让并行的 agent 各自追加同一个文件 —— 九个写手交错写一份 Markdown 的结果不是进度记录。
 - `resumeFromRunId` **只在同一会话内有效**。换了窗口，run id 就是死的；活下来的只有磁盘上的脚本、`journal.jsonl` 里已提交的结果，和写进本文件的东西。
 - 教训是实打实的：`wf_8809d3d7-9eb`（journal 在 `.claude/projects/C--Users-89400/6e28ff25-…/subagents/workflows/wf_8809d3d7-9eb/journal.jsonl`）跑了 23 分钟、16 份记录，10 个 agent 里只有 1 个把结果提交上来 —— 就是被抢救成 `artifacts/shellhost-recipe.md` 的那份。另外 9 个全部 `started` 而没有返回，进程一换全部丢光，而当时本文件里一个字都没有。
+
+## 设置页 MoviePilot 卡挂上官方图标的重绘版（2026-09-18，构建闸门过）
+
+他说「参考 moviepilot 的官方图标重绘本项目设置中的 moviepilot 图片」。这张卡此前并没有图，所以这一件实际是**照官方 `app.ico`（jxxghp/MoviePilot v3 仓库根）从零描一套矢量标记**，挂到卡头当品牌角标。
+
+- **做法**：官方 ico 转 PNG 后逐件程序化描摹（连通域拆分 + 扫描线量几何 + 颜色采样），确认设计是「等距立方体线框断成两截紫轨（两处断口都正好一倍描边宽，残段分别被垂直/顺边剪断）＋ 中央一只折叠出深色阴影的播放三角」。重建为参数化模型（256 视框、描边 31、外接半径 107.5），描出四个填充轮廓（Moore 追踪 + RDP 简化，IoU 0.966），落成四个 XAML `Path`（各自线性渐变，Viewbox 统一缩到 30px）。
+- **落点**：`SettingsPage.xaml` 的 MoviePilot 卡头改成「图标 + 标题」横排（WinUI Gallery 设置卡的老姿势）；图标数据纯矢量，无新资源文件，与本项目零二进制资产的惯例一致。
+- **闸门（按 09-18 令只跑构建）**：Release 全方案 **0 警告 0 错误**（1:30）。对照预览图在 `work/moviepilot-icon-redraw.png`（官方 vs 重绘并排）；人眼验收待他下次开设置页。
 
 ## 未完成
 

@@ -251,6 +251,21 @@
   </ItemGroup>
 
   <!--
+    独占模式视频窗的 Lua UI（uosc 嵌入版），来自 assets/mpv-ui —— 出处、许可证与裁剪记录见该目录的
+    README.md（不随发布；脚本与字体随发布）。装载发生在 LibMpvBackend.StartAsync（独占管线起播时
+    load-script），运行期由 mpv 从盘上按绝对路径读，与 shaders、fonts 同一个理由：不走 ms-appx。
+
+    .md 排除：README 只进仓库。LICENSE.LGPL 与 fonts/LICENSE-MaterialIcons.txt 必须随发布 ——
+    LGPL 要求随二进制附带许可证文本。
+  -->
+  <ItemGroup>
+    <None Include="..\..\assets\mpv-ui\**\*.*" Exclude="..\..\assets\mpv-ui\**\*.md">
+      <Link>mpv-ui\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
     ！不要删掉这个目标。删了程序还是能构建、能发布，只有一运行就死在 App.xaml：
 
         Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'

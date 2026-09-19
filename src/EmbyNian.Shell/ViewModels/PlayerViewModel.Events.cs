@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Text.Json;
+using System.Text.Encodings.Web;
+using System.Text.Json.Serialization;
 using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -38,6 +41,73 @@ public sealed partial class PlayerViewModel
     {
         if (progress.Title.Length > 0) Title = progress.Title;
     });
+
+    /// <summary>
+    /// 独占模式视频窗里 Lua UI（uosc 嵌入版）的请求。三条业务消息：换集（±1，走 Emby 的单集导航，
+    /// 与控制窗的上一集/下一集同一句话）；要选集菜单（宿主把本季单集经 open-menu 推回给 uosc 画，
+    /// 这一项是宿主唯一的数据源）；点选菜单里的某集（1 起算的序号）。就绪握手由句柄侧记档。
+    /// 进度条拖动不在此列 —— uosc 直接对 mpv 发 seek，宿主从属性观察收到结果，不必经手。
+    /// 消息从 mpv 的事件线程直接进来，先落界面线程；换集交给 <see cref="StepEpisodeAsync"/>/
+    /// <see cref="SwitchEpisode"/> 自己的守卫，这里不再另设一层 —— 双保险比一层保险更难排障。
+    /// </summary>
+    private void OnVideoWindowMessage(string key, string value) => OnUi(() =>
+    {
+        if (!_playback.IsPlaying) return;
+
+        switch (key)
+        {
+            case VideoWindowContract.Episode:
+                _ = StepEpisodeAsync(int.Parse(value, CultureInfo.InvariantCulture));
+                break;
+
+            case VideoWindowContract.Episodes:
+                _ = PushEpisodeMenuAsync();
+                break;
+
+            case VideoWindowContract.EpisodeIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index):
+                if (index >= 1 && index <= Episodes.Count) SwitchEpisode(Episodes[index - 1]);
+                break;
+        }
+    });
+
+    /// <summary>
+    /// 把本季单集推给视频窗的 uosc 画成菜单。uosc 的 open-menu 吃一份 JSON
+    /// （type/title/items），点中一项时它把 item 的 value 当 mpv 命令执行——所以每项的
+    /// value 就是一条回宿主的 script-message，序号对应这一份菜单的次序。当前集打上 active。
+    /// 没有集列表（非剧集、列表没到手）也回一份菜单，放一行说明而不是让按钮看起来是死的。
+    /// </summary>
+    private async Task PushEpisodeMenuAsync()
+    {
+        List<EpisodeMenuItem> items = Episodes.Count == 0
+            ? [new EpisodeMenuItem("（这一场没有可用的集列表）", null, false, false)]
+            : [.. Episodes.Select((episode, index) => new EpisodeMenuItem(
+                episode.ToPlaybackTitle(),
+                $"script-message {VideoWindowContract.EpisodeIndex} {index + 1}",
+                true,
+                string.Equals(episode.Id, PlayingItemId, StringComparison.Ordinal)))];
+
+        var menu = new EpisodeMenu("episodes", "选集", items);
+        var json = JsonSerializer.Serialize(menu, EpisodeMenuJson.Options);
+
+        if (!await _playback.CommandAsync("script-message", "open-menu", json).ConfigureAwait(true))
+            Log.Warn(Category, "推送选集菜单到视频窗失败");
+    }
+
+    /// <summary>uosc open-menu 的菜单形状，与 uosc MenuData 的字段对齐（多出来的字段会被忽略）。</summary>
+    private sealed record EpisodeMenu(string Type, string Title, IReadOnlyList<EpisodeMenuItem> Items);
+
+    private sealed record EpisodeMenuItem(string Title, string? Value, bool Selectable, bool Active);
+
+    private static class EpisodeMenuJson
+    {
+        public static readonly JsonSerializerOptions Options = new()
+        {
+            // uosc 的 parse_json 认小写字段；DefaultIgnoreCondition 让 Selectable=false 的项不发 value。
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
+    }
 
     private void OnStatusChanged(PlayerStatus status) => OnUi(() => ApplyStatus(status));
 

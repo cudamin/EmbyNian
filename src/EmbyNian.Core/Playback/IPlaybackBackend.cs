@@ -128,3 +128,18 @@ public interface IPlayerControl
     /// </summary>
     Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// 独占模式视频窗里 Lua UI（uosc 嵌入版）与宿主的通道。只有内置 libmpv 的独占会话实现它；
+/// 外部 mpv.exe 后端没有这条通道，也不需要 —— 判据是类型测试（<c>handle is IPlayerHostMessages</c>），
+/// 不让 <see cref="IPlayerControl"/> 背上第二份「控制」含义。
+/// <para>
+/// 事件从 mpv 的事件线程发出，订阅方（<see cref="PlaybackService"/>）原样转发，落到界面线程的事
+/// 归最终订阅者。契约见 <see cref="Mpv.VideoWindowContract"/>。
+/// </para>
+/// </summary>
+public interface IPlayerHostMessages
+{
+    /// <summary>一条已通过契约解析的 <c>embynian-*</c> 消息（key、value）。</summary>
+    event Action<string, string>? HostMessageReceived;
+}

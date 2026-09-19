@@ -65,6 +65,13 @@ public sealed class PlaybackService(
     /// <summary>Fires when mpv publishes a track list, so the pickers never have to poll for one.</summary>
     public event Action<IReadOnlyList<MpvTrack>>? TracksChanged;
 
+    /// <summary>
+    /// 独占模式视频窗 Lua UI 发来的 <c>embynian-*</c> 消息（uosc 就绪握手、换集请求）。
+    /// 只有实现了 <see cref="IPlayerHostMessages"/> 的会话（内置 libmpv 独占）有这一路；
+    /// 事件照原样转发，mpv 的事件线程发来就在那个线程上 —— 落界面线程的事归最终订阅者。
+    /// </summary>
+    public event Action<string, string>? VideoWindowMessage;
+
     public bool IsPlaying => _current is not null;
 
     public bool? PictureInHostWindow => _current?.PictureInHostWindow;
@@ -360,6 +367,8 @@ public sealed class PlaybackService(
 
         control.StatusChanged += OnStatusChanged;
         control.TracksChanged += OnTracksChanged;
+
+        if (handle is IPlayerHostMessages host) host.HostMessageReceived += OnHostMessage;
     }
 
     private void Unsubscribe(IPlaybackHandle handle)
@@ -368,11 +377,15 @@ public sealed class PlaybackService(
 
         control.StatusChanged -= OnStatusChanged;
         control.TracksChanged -= OnTracksChanged;
+
+        if (handle is IPlayerHostMessages host) host.HostMessageReceived -= OnHostMessage;
     }
 
     private void OnStatusChanged(PlayerStatus status) => StatusChanged?.Invoke(status);
 
     private void OnTracksChanged(IReadOnlyList<MpvTrack> tracks) => TracksChanged?.Invoke(tracks);
+
+    private void OnHostMessage(string key, string value) => VideoWindowMessage?.Invoke(key, value);
 
     /// <summary>Stops whatever is playing; safe to call when nothing is.</summary>
     public async Task StopAsync()

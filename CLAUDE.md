@@ -63,6 +63,8 @@
 
 **四道闸门只在发布新版本时全跑，自检在内；日常代码改动不跑闸门。** 他的裁定，2026-09-18，推翻 2026-09-12 的「任何代码改动后全跑」。自检的存在是为了抓其他东西看不见的——光标/隐藏腿与浮现规则是另外三道闸门对其失明的机制——而且它是四道中最慢的（对应用逐页完整走一遍），所以它跟另外三道一起留给发版。
 
+**但「不跑闸门」不等于「不用发布」——每次修改完（代码、XAML、资源，一律）都要重发 publish**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1 -NoArchive`。桌面快捷方式指向 `artifacts\publish\win-x64`，只 build 不 publish，用户双击快捷方式看到的永远是旧版（2026-09-18「快捷方式怎么没变化」即此）。发前确认程序没开着，撞文件锁就请他关掉再发。
+
 `PATH` 上的 `dotnet` 不可用：它是 8.0.403，本项目要 .NET 10。SDK 在 `%USERPROFILE%\.dotnet\dotnet.exe`，不在 `PATH`。**单节点构建**——本机 Windows SDK 的多节点 workload 解析器让并行构建间歇性无输出失败。
 
 1. 构建

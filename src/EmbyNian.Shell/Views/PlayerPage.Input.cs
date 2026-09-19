@@ -417,7 +417,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (!Attached || _window is null) return;
+        if (!Attached || _window is null || _inputSuspended) return;
 
         // 需求 7's search box has the keyboard: everything below is a font name's letters as much as it is a
         // command. Typing 「Consolas」 would otherwise mute the film, skip to the next episode and reset the
@@ -531,7 +531,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnSpaceShortcut(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key != VirtualKey.Space || !Attached || _window is null || _typing) return;
+        if (e.Key != VirtualKey.Space || !Attached || _window is null || _typing || _inputSuspended) return;
 
         var stroke = new KeyStroke("Space", false, false, false);
         if (ShortcutCatalog.Lookup(ViewModel.ShortcutBindings, stroke) != "toggle-pause") return;
@@ -577,7 +577,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// <summary>接不接这一下。菜单/弹层开着让路，正在打字让路，其余只认空格和 Esc 两颗。</summary>
     bool IWin32KeySink.WantsKey(int virtualKey)
     {
-        if (!Attached || _typing) return false;
+        if (!Attached || _typing || _inputSuspended) return false;
 
         // 焦点在弹层上时 Win32 焦点本来就在岛里、走不到这里；这道闸留给「弹层开着而焦点又掉出岛」
         // 这种状态机打架的时刻 —— Esc 该归 XAML 去关弹层，兜底路不越权。
@@ -593,7 +593,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     void IWin32KeySink.Handle(int virtualKey)
     {
         var key = (VirtualKey)virtualKey;
-        if (!Attached || !Dispatch(key)) return;
+        if (!Attached || _inputSuspended || !Dispatch(key)) return;
 
         // 姓名牌：兜底路自己的名字，和 XAML 那两路（「按键 X」「空格（播放/暂停）」）分得开 ——
         // 以后日志里见到「（Win32 兜底）」就是焦点掉出岛的那一阵。
@@ -645,6 +645,12 @@ public sealed partial class PlayerPage : IWin32KeySink
             return;
         }
         if (_window is null) return;
+
+        // 进退全屏之前先收掉标题条拖动（2026-09-18）：双击标题那一路，第二下按下可能已经拿了拖动
+        // （Hold(Drag) on、窗口记着拖动起点），DoubleTapped 的全屏切换随后就到 —— 拖着的状态进全屏，
+        // DragTo 的 Fullscreen 分支会把起点丢掉，而 Hold 没人放，控件从此被钉在屏上
+        // （实机日志 11:36:57-11:37:16：hold=True 挂了 9~18 秒，按住鼠标=False，控件永不隐藏）。
+        EndWindowDrag();
 
         _window.Fullscreen = on;
         FullscreenGlyph.Glyph = Glyph(on ? FullscreenExitCode : FullscreenEnterCode);
@@ -726,9 +732,8 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     /// <summary>
     /// 右上角那颗「关闭」（2026-09-15 的拍板）：播放中点它不再把窗口关掉 —— 主窗口播放时那一下等于退出
-    /// 整个程序 —— 而是停止播放、外壳回主页。独立窗口模式同一句话也成立：停止播放会把那个窗口顺带收掉
-    /// （PlayerHidden 上接着两头），主窗口则回到主页。没有外壳（页面还没挂上）时退回原样关窗口，那条路
-    /// 只有程序自身收尾才会走到。
+    /// 整个程序 —— 而是停止播放、外壳回主页。没有外壳（页面还没挂上）时退回原样关窗口，那条路只有程序
+    /// 自身收尾才会走到。
     /// </summary>
     private void OnCloseWindow(object sender, RoutedEventArgs e)
     {

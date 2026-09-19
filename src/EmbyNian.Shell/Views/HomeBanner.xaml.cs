@@ -131,6 +131,13 @@ public sealed partial class HomeBanner : UserControl
     }
 
     /// <summary>
+    /// 带子里那块字（左边站着的标题、读数、简介、按钮那一整块）。矮窗档翻档时页面要在它身上补一趟位移
+    /// （见 <see cref="HomeFoldMotion"/>）：它让位那一下是把底边距整段换掉（<see cref="PlaceInfo"/>），
+    /// 一像素不差地硬切；而压上来的那一排是滑上来的，两头差着两百来像素，不同时走就是「字先跳、排后到」。
+    /// </summary>
+    internal FrameworkElement InfoBlock => Info;
+
+    /// <summary>
     /// 矮窗档开、关（页面量完几何后拨，排高一起递进来）。三个开关各回各位：字块让位（<see cref="PlaceInfo"/>）、
     /// 右下读数（<see cref="SyncSlideStatus"/>）、简介的高度线（<see cref="SynopsisVisibility"/>）。
     /// </summary>
