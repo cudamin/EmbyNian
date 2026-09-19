@@ -499,7 +499,7 @@ function read_directory(path, opts)
 	return files, directories
 end
 
--- 嵌入版：目录/播放列表导航（get_adjacent_files、decide_navigation_in_list、
+-- EMBYNIAN[nav-removed] — 目录/播放列表导航（get_adjacent_files、decide_navigation_in_list、
 -- navigate_directory/navigate_playlist/navigate_item）与删除文件（delete_file、
 -- delete_file_navigate）整块删除。宿主（C#）独占「播什么、播完去哪」，
 -- Emby 客户端里没有这些入口存在的合法场景。
@@ -905,6 +905,16 @@ function render()
 	state.render_last_time = mp.get_time()
 
 	cursor:clear_zones()
+
+	-- EMBYNIAN[click-pause] — 「轻点空白画面切换暂停」的兜底命中区。每帧登记在这里（早于所有元素，
+	-- 也就是最低优先级）：find_zone 从后往前找，任何元素/菜单先命中就轮不到它。动作与理由见
+	-- main.lua 的 EMBYNIAN[click-pause]；main.lua 先 require 本文件、后定义那个函数，所以这里必须
+	-- 判空（render 只在定时器/属性变化后跑，那时它已经在了）。
+	if embynian_click_pause_zone then embynian_click_pause_zone() end
+
+	-- EMBYNIAN[wheel-volume] — 「滚轮＝音量（只闪右侧音量条）」的兜底命中区，登记位置与理由同上面那条：
+	-- 最前面＝最低优先级，时间轴/速度条/音量条先命中就轮不到它（后登记的盖住先登记的）。
+	if embynian_wheel_volume_zone then embynian_wheel_volume_zone() end
 
 	-- Actual rendering
 	local ass = assdraw.ass_new()

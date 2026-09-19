@@ -86,7 +86,7 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
             // ClientMessage 只在 Lua UI 在场时才值得收 —— 它是脚本与宿主的唯一通道。
             PruneEvents(context, keepClientMessage: uiOptions is not null);
 
-            var surface = ApplyOptions(context, request, uiOptions);
+            var (surface, pipelineOptions) = ApplyOptions(context, request, uiOptions);
 
             var error = LibMpvNative.mpv_initialize(context);
             if (error < 0) throw new InvalidOperationException($"mpv 初始化失败：{Describe(error)}");
@@ -94,11 +94,30 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 
             LibMpvNative.mpv_request_log_messages(context, "warn");
 
-            // 脚本在 loadfile 之前装载：uosc 先把属性观察架起来，文件一开控件就有数据，
-            // 而不是先画一条空进度条再等下一轮属性广播。
-            if (uiOptions is not null) LoadScript(context, MpvUi.ScriptPath(AppContext.BaseDirectory));
+            // Lua UI 只装一次，装的是 MpvUi.Build 交给 mpv 的 `scripts` 选项 —— 上面那一串选项在
+            // mpv_initialize 之前就生效，脚本在 loadfile 之前已经把属性观察架好，文件一开控件就有
+            // 数据。这里**不再**另发一条 load-script：那样的装载路径会把脚本命名成 main（按文件名），
+            // 于是同一份 uosc 装两次（日志里两条「视频窗 Lua UI 已就绪」即此），而 main 那份的绑定
+            // 名字是 main/…、控制条上的 script-binding uosc/… 调不到它，白跑一套渲染与观察、还把
+            // 每条宿主消息的回声翻一倍。2026-09-19 撤。
 
-            var handle = new LibMpvHandle(context, surface);
+            // 换片快路的签名：管线、管线必需项、Lua UI 项，加上这一票选项表的基线部分（去掉末尾的
+            // 着色器链 —— 链是运行期能改的，换片时重写，不该把快路挡在门外）。判断在 Mpv.InlineSwitch：
+            // 逐项相等才允许同一个实例换片，因为 mpv 的启动选项在 initialize 之后改不动。
+            // 下一次的签名按当时的设置现算（管线换了就自然对不上）；独立管线的选项表不含画布尺寸，
+            // 所以这里不传 size —— 集成管线本来就不走这条快路（surface 非空）。
+            var signature = new PlaybackLaunchSignature(
+                settings.Pipeline,
+                pipelineOptions,
+                [.. uiOptions ?? []],
+                Baseline(request.PlayerOptions, request.ShaderOptionCount));
+
+            var handle = new LibMpvHandle(context, surface, signature, next => new PlaybackLaunchSignature(
+                settings.Pipeline,
+                [.. LibMpvPipelinePolicy.Build(settings.Pipeline, next.PlayerOptions)
+                    .Select(option => new KeyValuePair<string, string>(option.Name, option.Value))],
+                [.. uiOptions ?? []],
+                Baseline(next.PlayerOptions, next.ShaderOptionCount)));
             handle.Start(request);
             context = IntPtr.Zero; // ownership moved to the handle
             Log.Info(Category, uiOptions is null
@@ -122,9 +141,13 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
     /// native D3D11 window, with exclusive fullscreen requested when that window goes fullscreen.
     /// A window by itself is not evidence of exclusive presentation. The selected surface (or
     /// null) stays with this session even if settings change during playback.
+    /// <para>
+    /// 第二个返回值是那串管线必需项本身：换片快路要拿它当签名的一部分（见 <see cref="Mpv.InlineSwitch"/>），
+    /// 而它在这里就已经算好了 —— 再算一遍等于把「这一串是什么」写两处。
+    /// </para>
     /// </summary>
-    private IVideoSurface? ApplyOptions(IntPtr context, PlaybackRequest request,
-        IReadOnlyList<KeyValuePair<string, string>>? uiOptions)
+    private (IVideoSurface? Surface, IReadOnlyList<KeyValuePair<string, string>> PipelineOptions) ApplyOptions(
+        IntPtr context, PlaybackRequest request, IReadOnlyList<KeyValuePair<string, string>>? uiOptions)
     {
         // Nothing is said about config here: libmpv already defaults to config=no, so no mpv.conf,
         // input.conf or ~~/ path from any mpv installation is in play. Everything below, plus the
@@ -206,8 +229,12 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         // Ordinary options keep their order; pipeline-critical options are filtered and pinned
         // AFTER them, so even the default gpu-api=vulkan cannot replace D3D11. Required failures
         // abort before initialize/loadfile instead of falling back to a different presentation path.
-        foreach (var option in LibMpvPipelinePolicy.Build(pipeline, request.PlayerOptions, surface?.Size ?? default))
+        var contract = LibMpvPipelinePolicy.Build(pipeline, request.PlayerOptions, surface?.Size ?? default);
+        var pipelineOptions = new List<KeyValuePair<string, string>>(contract.Count);
+        foreach (var option in contract)
         {
+            pipelineOptions.Add(new(option.Name, option.Value));
+
             var error = LibMpvNative.mpv_set_option_string(context, option.Name, option.Value);
             option.EnsureAccepted(error);
             if (error < 0) Log.Warn(Category, $"设置 mpv 选项 {option.Name} 失败：{Describe(error)}");
@@ -216,7 +243,7 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         Log.Info(Category, surface is null
             ? "独立播放：mpv D3D11 原生 window，已请求 d3d11-exclusive-fs=yes（进入全屏时生效，非独占状态证明）；客户端不介入几何"
             : "集成播放：D3D11 composition，独占全屏关闭，画面由宿主合成");
-        return surface;
+        return (surface, pipelineOptions);
     }
 
     internal static IVideoSurface? SelectSurface(VideoPipelineKind pipeline, Func<IVideoSurface?> provider) =>
@@ -278,24 +305,16 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
     }
 
     /// <summary>
-    /// 在初始化之后、loadfile 之前把视频窗的 Lua UI 装进来（<c>load-script</c> 命令）。失败只记日志：
-    /// UI 是添头，加载不出来就退回没有屏幕控件的独占播放，不能因此拦下起播。
+    /// 票里那份选项表去掉末尾那条着色器链之后的基线。链有多少项是票自己带着的
+    /// （<see cref="PlaybackRequest.ShaderOptionCount"/>），所以这里不用去猜是哪一档。
+    /// internal static：换片快路的签名只认基线这一节，测试看得见。
     /// </summary>
-    private static void LoadScript(IntPtr context, string scriptPath)
+    internal static IReadOnlyList<KeyValuePair<string, string>> Baseline(
+        IReadOnlyList<KeyValuePair<string, string>> options,
+        int chainOptions)
     {
-        var array = new IntPtr[3];
-        try
-        {
-            array[0] = Marshal.StringToCoTaskMemUTF8("load-script");
-            array[1] = Marshal.StringToCoTaskMemUTF8(scriptPath);
-            var error = LibMpvNative.mpv_command(context, array);
-            if (error < 0) Log.Warn(Category, $"装载视频窗 Lua UI 失败：{Describe(error)}");
-        }
-        finally
-        {
-            Marshal.FreeCoTaskMem(array[0]);
-            Marshal.FreeCoTaskMem(array[1]);
-        }
+        var keep = Math.Max(0, options.Count - Math.Max(0, chainOptions));
+        return keep == options.Count ? options : [.. options.Take(keep)];
     }
 
     /// <summary>Option errors are logged, not fatal — a bad shader path must not stop the film.</summary>
@@ -328,8 +347,16 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
 /// is an integrated-pipeline member only: 独立播放 has no panel to serve — mpv draws into its own
 /// top-level window — so it arrives here with a null surface and none of this machinery arms.
 /// </para>
+/// <para>
+/// 换片快路（<see cref="SwapToAsync"/>，2026-09-19）：独占模式的选集与连播在本实例上换源，
+/// 不关窗口、不重装 Lua UI。签名的比对与要写哪些属性都在 <see cref="Mpv.InlineSwitch"/> 里。
+/// </para>
 /// </summary>
-internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPlaybackHandle, IPlayerControl, IPlayerHostMessages
+internal sealed class LibMpvHandle(
+    IntPtr context,
+    IVideoSurface? surface,
+    PlaybackLaunchSignature? signature,
+    Func<PlaybackRequest, PlaybackLaunchSignature>? signatureFor) : IPlaybackHandle, IPlayerControl, IPlayerHostMessages
 {
     private const string Category = "mpv";
     private const int LogTailLines = 40;
@@ -355,20 +382,45 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     /// </summary>
     private const ulong ObserveSwapchain = 10;
 
+    /// <summary>
+    /// <c>vo-configured</c>，只在独占模式订阅：出生时 <c>force-window=no</c>（不冒黑框），
+    /// 这一位翻真＝窗口带着画面立起来了，此刻把 force-window 改回 yes，窗口从此跨 EOF 与跨换片都活着。
+    /// </summary>
+    private const ulong ObserveVoConfigured = 11;
+
     private readonly Queue<string> _logTail = new(LogTailLines);
-    private readonly TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
-    /// Serialises control/property calls and composition handoff against destruction. The event
-    /// reader is joined separately before destruction; queued callers then see the destroyed
-    /// flag and walk away instead of touching freed memory.
+    /// 这一跑的收场信号。换片快路会把它换成新的一只（见 <see cref="SwapToAsync"/>）：旧的被
+    /// <see cref="HandOver"/> 解开，新的等下一集结束 —— 监视读的始终是「当前这一跑」的那只。
     /// </summary>
+    private TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Serialises control/property calls and composition handoff against destruction. The event
+    /// reader is joined separately before destruction; queued callers then see the destroyed
+    /// flag and walk away instead of touching freed memory.</summary>
     private readonly LibMpvLifetimeGate _apiGate = new();
 
     private Thread? _eventThread;
     private long _lastPositionMs = -1;
     private volatile bool _stopRequested;
     private volatile bool _leaveLoop;
+
+    /// <summary>换片交接（见 <see cref="HandOver"/>）—— 收尾据此不拆实例。</summary>
+    private volatile bool _handedOver;
+
+    /// <summary>刚发过一条 <c>loadfile</c> 换片：事件线程在 file-loaded 那一拍清掉上一集的读数。</summary>
+    private volatile bool _swapping;
+
+    /// <summary>独占模式的窗口已经立起来了（`vo-configured`），`force-window` 已改回 yes —— 只做一次。</summary>
+    private volatile bool _windowHeld;
+
+    /// <summary>
+    /// 「跟着一集走」那批属性的出厂值（<c>option-info/&lt;名字&gt;/default-value</c>），起播时读一次。
+    /// 换片时哪个名字不在新票的选项表里就按它拨回去 —— 见 <see cref="Mpv.InlineSwitch.FilmScoped"/>。
+    /// </summary>
+    private IReadOnlyDictionary<string, string> _filmDefaults = new Dictionary<string, string>(StringComparer.Ordinal);
+
 
     /// <summary>Only ever touched by the event thread, then published through <see cref="Status"/>.</summary>
     private PlayerStatus _status = new();
@@ -399,6 +451,10 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
     /// <summary>Starts the event thread, subscribes to the state the chrome needs, then loads the file.</summary>
     internal void Start(PlaybackRequest request)
     {
+        // 换片要用的「出厂值」在这一拍读：事件线程还没起来，没有任何并发，而且此刻还没有任何一集
+        // 改过这些属性（见 InlineSwitch.FilmScoped 的说明）。
+        _filmDefaults = ReadFilmDefaults();
+
         Observe(ObserveTimePos, "time-pos", LibMpvNative.FormatDouble);
         Observe(ObserveDuration, "duration", LibMpvNative.FormatDouble);
         Observe(ObservePause, "pause", LibMpvNative.FormatFlag);
@@ -425,6 +481,12 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
             // transparent while the stream opens.
             _ = Task.Run(RefreshComposition);
         }
+        else
+        {
+            // 独占模式：出生时 force-window=no，窗口要等画面，所以「按住窗口」得等 vo-configured
+            // 翻真（见 OnPropertyChange）。集成模式不需要——它的 force-window 一直是 immediate。
+            Observe(ObserveVoConfigured, "vo-configured", LibMpvNative.FormatFlag);
+        }
 
         _eventThread = new Thread(EventLoop) { IsBackground = true, Name = "libmpv-events" };
         _eventThread.Start();
@@ -432,6 +494,116 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
         Command("loadfile", request.MediaUrl.AbsoluteUri, "replace");
         Log.Info(Category, $"内置播放器开始播放 {request.MediaUrl.AbsoluteUri}");
     }
+
+    // ---- taking the next file in the same window ---------------------------------
+    //
+    // 独占模式的选集与连播走的这条（2026-09-19 用户令「换集不要每次都关窗重开」）。判断在
+    // Mpv.InlineSwitch 里（纯函数），这里只管执行：先把手头这一跑叫醒（HandOver），再在这一拍把
+    // 下一票的运行期部分写下去、发一条 loadfile。窗口、全屏状态、整套 uosc 都不动。
+
+    /// <summary>快路只对独占模式的内置会话开放：集成管线的画面挂在宿主合成树上，换源要动的几何不止一份。</summary>
+    private bool Swapable => surface is null && signature is not null && signatureFor is not null;
+
+    public bool WasHandedOver => _handedOver;
+
+    public bool CanSwapTo(PlaybackRequest request) =>
+        Swapable && InlineSwitch.SameSignature(signature!, signatureFor!(request));
+
+    /// <summary>
+    /// 叫醒正等着这一跑的监视（它去发「停止」与最后位置的上报），但**不 quit** —— 这正是「不关窗」
+    /// 与「关窗重开」的分界。mpv 还活着、还是 idle，下一集的 loadfile 紧接着就来。
+    /// </summary>
+    public void HandOver()
+    {
+        _handedOver = true;
+        _exit.TrySetResult(new PlaybackExit(PlaybackEndReason.Stopped, LastPosition, 0, null));
+    }
+
+    public Task<bool> SwapToAsync(PlaybackRequest request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!Swapable) return Task.FromResult(false);
+
+        // 三处「不接」都要说得出理由：签名对不上（启动配置变了，事后改也无效）、已经在收场、
+        // 命令被拒。前两处是判断，第三处是 mpv 的答复 —— 都退回「停掉重开」那条老路。
+        if (!InlineSwitch.SameSignature(signature!, signatureFor!(request)))
+        {
+            Log.Info(Category, "换片快路让位：这一次的启动配置与正在跑的那份不同（管线或选项变了）");
+            return Task.FromResult(false);
+        }
+
+        if (_stopRequested || _exit.Task.IsCompleted)
+        {
+            Log.Info(Category, "换片快路让位：这个实例已经在收场");
+            return Task.FromResult(false);
+        }
+
+        foreach (var (name, value) in InlineSwitch.FilmScoped(_filmDefaults, request)) Write(name, value);
+        foreach (var (name, value) in InlineSwitch.PerFile(request)) Write(name, value);
+
+        // 上一集的位置当场作废：这一票要是打不开（候选版本还有下一版要试），收尾报的也不该是别人的位置。
+        // 上一跑的最后位置已经在 HandOver 那一拍读走了，这里清掉不影响它的上报。
+        Interlocked.Exchange(ref _lastPositionMs, -1);
+
+        // 新一跑的收场信号；「这次 loadfile 是换片」的记号给事件线程用（忽略被替掉那份的 end-file、
+        // 在 start-file 清掉上一集的读数）；交接旗翻回来，这一跑收尾时该拆就得拆（它是上一跑的事）。
+        _exit = new TaskCompletionSource<PlaybackExit>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _swapping = true;
+        _handedOver = false;
+
+        if (!Command("loadfile", request.MediaUrl.AbsoluteUri, "replace"))
+        {
+            _swapping = false;
+            Log.Warn(Category, "换片快路让位：loadfile 未被接受");
+            return Task.FromResult(false);
+        }
+
+        Log.Info(Category, $"独占换片：不关窗口，同一个 mpv 换源 —— {request.Title}");
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// 问 mpv 要这批「跟着一集走」的属性的出厂默认值（<c>option-info/&lt;名字&gt;/default-value</c>）。
+    /// 起播时读一次，在事件线程起来之前 —— 那一拍没有任何并发。
+    /// </summary>
+    private IReadOnlyDictionary<string, string> ReadFilmDefaults()
+    {
+        var defaults = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var name in InlineSwitch.PerFilmNames)
+        {
+            if (ReadText($"option-info/{name}/default-value") is { Length: > 0 } value) defaults[name] = value;
+        }
+
+        return defaults;
+    }
+
+    /// <summary>一条属性的文本值（同步，走 API 闸门）；读不到就是 null。</summary>
+    private string? ReadText(string name) => Guard(() =>
+    {
+        // mpv hands back a copy it allocated, so the string has to be marshalled out and the
+        // copy released before the gate is dropped — nothing else will ever free it.
+        var pointer = LibMpvNative.mpv_get_property_string(context, name);
+        if (pointer == IntPtr.Zero) return null;
+
+        try
+        {
+            return Marshal.PtrToStringUTF8(pointer);
+        }
+        finally
+        {
+            LibMpvNative.mpv_free(pointer);
+        }
+    });
+
+    /// <summary>写一条属性，失败记一条日志（不拦下换片：写不进去的最坏结果是这一集沿用上一集的某项设置）。</summary>
+    private void Write(string name, string value) => Guard(() =>
+    {
+        var error = LibMpvNative.mpv_set_property_string(context, name, value);
+        if (error < 0) Log.Warn(Category, $"写 mpv 属性 {name} 失败：{LibMpvBackend.Describe(error)}");
+        return true;
+    });
 
     private void Observe(ulong id, string name, int format)
     {
@@ -464,10 +636,42 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
                 case LibMpvNative.EventEndFile:
                     var end = Marshal.PtrToStructure<LibMpvNative.MpvEventEndFile>(mpvEvent.Data);
                     Log.Debug(Category, $"内置播放器报告文件结束：reason={end.Reason} error={end.Error}");
+
+                    // 换源那一下，mpv 会替**被换掉的那个文件**报一条 end-file，然后才 start-file（实测
+                    // 2026-09-19：两次换源两条 end-file）。照单全收的话新一集的监视会当场以为播完了，
+                    // 界面立刻退回浏览页 —— 所以从发出 loadfile 到新文件 start-file 之间，这条不算数。
+                    if (_swapping)
+                    {
+                        Log.Debug(Category, "（这条属于被换掉的那个文件，不计入本次播放）");
+                        break;
+                    }
+
                     Finish(Classify(end.Reason), end.Error);
                     break;
 
+                case LibMpvNative.EventStartFile:
+                    // 新文件的装载从此开始：换片那一刻起，「这一跑」的读数就该重新算了（位置尤其要紧 ——
+                    // 留着上一集的位置，这一集被停掉时上报的「看到哪儿」就是别人的）。
+                    if (_swapping)
+                    {
+                        _swapping = false;
+                        Interlocked.Exchange(ref _lastPositionMs, -1);
+                        _status = _status with { Position = -1, Duration = 0, CacheEnd = 0, Loaded = false };
+                        Log.Info(Category, "独占换片：同一个视频窗已换上新片源（窗口与 Lua UI 都没动）");
+                    }
+                    break;
+
                 case LibMpvNative.EventFileLoaded:
+                    // 只有声音的文件（没有视频轨）永远不会让 vo 立起来，force-window=no 之下就一个窗口都
+                    // 没有 —— 那种片子还是得给扇窗，不然连 uosc 的控件都无处可画。视频文件走 vo-configured
+                    // 那条路（见 OnPropertyChange），这里是给「没有画面可等」的情形兜底。
+                    if (surface is null && !_windowHeld && (ReadText("vid") is null or "no"))
+                    {
+                        _windowHeld = true;
+                        Write("force-window", "yes");
+                        Log.Debug(Category, "这一版没有视频轨，独占窗口提前立起（force-window=yes）");
+                    }
+
                     Publish(_status with { Loaded = true });
                     PublishTracks();
                     break;
@@ -515,6 +719,22 @@ internal sealed class LibMpvHandle(IntPtr context, IVideoSurface? surface) : IPl
         if (mpvEvent.ReplyUserData == ObserveSwapchain)
         {
             RefreshComposition();
+            return;
+        }
+
+        // 独占模式：窗口带着画面立起来了 —— 出生时是 force-window=no（不冒黑框），这一刻改回 yes，
+        // 窗口此后跨 EOF、跨换片都活着（运行期可改，2026-09-19 实测：改这一下窗口不闪，且换源与播完
+        // 之后窗口都还在）。只做一次；文件换掉时 vo-configured 可能再翻一遍，不必重复写。
+        if (mpvEvent.ReplyUserData == ObserveVoConfigured)
+        {
+            var configured = Marshal.PtrToStructure<LibMpvNative.MpvEventProperty>(mpvEvent.Data);
+            if (configured.Data != IntPtr.Zero && ReadFlag(configured) && !_windowHeld)
+            {
+                _windowHeld = true;
+                Write("force-window", "yes");
+                Log.Debug(Category, "独占窗口已立起：force-window 改回 yes（播完与换片都不再收窗）");
+            }
+
             return;
         }
 

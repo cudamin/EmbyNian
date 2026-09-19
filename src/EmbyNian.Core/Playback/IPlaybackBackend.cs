@@ -46,6 +46,35 @@ public interface IPlaybackHandle : IAsyncDisposable
     /// <summary>Asks mpv to quit, falling back to killing it if it will not.</summary>
     Task StopAsync();
 
+    /// <summary>
+    /// 能不能把 <paramref name="request"/> 这一票接过来，在**同一个**实例里播 —— 同一个 mpv、同一个窗口、
+    /// 同一套 Lua UI。默认不行：外部 <c>mpv.exe</c> 每次起播都是一个新进程，集成管线的画面挂在宿主的
+    /// 合成树上，换片快路只给独占模式的内置播放器（2026-09-19 用户令「换集不要每次都关窗重开」）。
+    /// </summary>
+    bool CanSwapTo(PlaybackRequest request) => false;
+
+    /// <summary>
+    /// 把当前这一跑的收场信号交给调用方：正在等它的监视据此收尾（发「停止」与最后位置的上报），**但不让
+    /// mpv 退出** —— 同一个实例紧接着要放下一集。默认什么都不做（那些后端本来就没得交接）。
+    /// <para>
+    /// 与 <see cref="StopAsync"/> 的分界就是这条快路的全部：一个 quit 掉窗口，一个留着它。
+    /// </para>
+    /// </summary>
+    void HandOver()
+    {
+    }
+
+    /// <summary>
+    /// 在这个实例上换片：把这一票的运行期部分写下去（见 <c>InlineSwitch</c>），再 <c>loadfile</c>。
+    /// false＝没接住（签名对不上、实例已经在收场、命令被拒），调用方回到「停掉重开」那条路。
+    /// </summary>
+    Task<bool> SwapToAsync(PlaybackRequest request, CancellationToken cancellationToken) => Task.FromResult(false);
+
+    /// <summary>
+    /// 这一跑是否已经被交接给下一集。收尾据此不拆实例、不退订、不清 <c>_current</c> —— 下一集正在用它们。
+    /// </summary>
+    bool WasHandedOver => false;
+
     /// <summary>Shows a message on mpv's OSD; silently does nothing without a control channel.</summary>
     Task ShowMessageAsync(string text);
 

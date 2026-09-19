@@ -1,27 +1,61 @@
 --[[ uosc | https://github.com/tomasklaen/uosc ]]
 --
--- EmbyNian 内置分支：只随独占模式（libmpv 自建视频窗口）由宿主以 load-script 装载。
--- 与上游 5.12.0 的差异集中在这一份 main.lua 和 lib/utils.lua：
---   * 本文件底部加了宿主握手与命令转发（embynian-* script-message，见「EMBYNIAN HOST」一节）；
---   * 默认值改写为嵌入场景专用（无系统托管的窗口按钮、无播放列表/目录导航入口）；
---   * 删掉了宿主不该有的能力入口：删除文件、文件/目录浏览打开、在线字幕下载。
--- 宿主（C# LibMpvBackend）负责 osc=no、osd-fonts-dir 与 load-script；其余一切照旧。
+-- ┌─ EmbyNian 内置分支 ─────────────────────────────────────────────────────────
+-- │ 只随独占模式（libmpv 自建视频窗口）由宿主 C# LibMpvBackend 以 load-script 装载；
+-- │ 集成模式不装载任何 Lua。宿主负责 osc=no、osd-fonts-dir 与 load-script，其余照旧。
+-- │ 基线：上游 uosc 5.12.0（见下方 uosc_version）。
+-- │
+-- │ 补丁清单（升级 uosc 时按此逐条重打）。每处改动都用 `EMBYNIAN[槽名]` 标记，
+-- │ 全仓一条命令即可枚举全部落点：
+-- │     grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
+-- │
+-- │   main.lua（本文件）
+-- │     EMBYNIAN[host]          宿主通道：embynian_notify 与 embynian-ready 握手
+-- │     EMBYNIAN[pkgpath]       模块搜索路径自举（load-script 不加 package.path）
+-- │     EMBYNIAN[controls]      控制条默认值（换集/选集顶替播放列表入口）
+-- │     EMBYNIAN[topbar]        无边框顶栏（系统标题栏不存在，顶栏画窗口按钮）
+-- │     EMBYNIAN[color]         用户原配色（Fluent 深色一档）
+-- │     EMBYNIAN[autoload]      autoload 强制 false（defaults 与读配置后各一处）
+-- │     EMBYNIAN[fileend]       handle_file_end / file_end_timer 整块删除
+-- │     EMBYNIAN[osddim]        d3d11 起播画布尺寸兜底观察
+-- │     EMBYNIAN[ui-bind]       脚本绑定叫 embynian-ui-*，宿主消息叫 embynian-*，两套名字不许同名
+-- │     EMBYNIAN[episode]       embynian-ui-* 三个绑定与裁剪说明
+-- │     EMBYNIAN[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
+-- │                             含双击闸：单击押后到 mpv 的双击窗口外才证实，第二拍「按下」即撤
+-- │                             （撤在按下不撤在松开——独占全屏切换会把光标挪走、松开过不了位置闸）
+-- │     EMBYNIAN[wheel-volume]  空白画面滚轮＝音量（no-osd，只闪右侧音量条，不落 mpv 的 OSD）
+-- │   elements/Controls.lua
+-- │     EMBYNIAN[episode]       控制条快捷项映射到上面的绑定
+-- │   elements/Volume.lua
+-- │     EMBYNIAN[vol-osd]       音量条自己改音量也走 no-osd（拖条/滚条不再冒 mpv 的 OSD）
+-- │   lib/utils.lua
+-- │     EMBYNIAN[nav-removed]   目录/播放列表导航与删文件整块删除
+-- │     EMBYNIAN[click-pause]   每帧登记「轻点暂停」的兜底命中区（登记顺序＝最低优先级）
+-- │     EMBYNIAN[wheel-volume]  同一处登记「滚轮音量」的兜底命中区（同上）
+-- │   lib/menus.lua
+-- │     EMBYNIAN[subdl-removed] 在线字幕下载整块删除
+-- │
+-- │ 宿主消息契约（embynian-* 值域）与验证步骤见 assets/mpv-ui/README.md。
+-- └─────────────────────────────────────────────────────────────────────────────
 local uosc_version = '5.12.0'
 
 mp.commandv('script-message', 'uosc-version', uosc_version)
 
 mp.set_property('osc', 'no')
 
---[[ EMBYNIAN HOST ]]
+--[[ EMBYNIAN[host] — 宿主通道（握手 + 命令转发） ]]
 
 -- 与 C# 宿主（LibMpvBackend/LibMpvHandle）的通道：宿主在 MPV_EVENT_CLIENT_MESSAGE 上
 -- 只认第一个参数以 `embynian-` 开头的 script-message，其余一律忽略。uosc 对 mpv 自身的
 -- 控制（拖进度条、换轨、全部菜单命令）直接走 mpv 命令，不经过宿主 —— 宿主通过属性观察
 -- 收到结果，不需要通知。装载完成先握手：宿主据此在日志里证明 Lua UI 活着。
+--
+-- ⚠️ 发给宿主的 key 不许与任何脚本绑定同名（见下方 EMBYNIAN[ui-bind]）：mpv 把 script-message
+-- 也派给同名绑定，同名＝这条消息把自己再叫醒一次，自激成刷屏。绑定统一叫 embynian-ui-…。
 function embynian_notify(key, value) mp.commandv('script-message', key, value) end
 embynian_notify('embynian-ready', uosc_version)
 
--- 模块搜索路径自举：mpv 只在「配置目录扫描」装载脚本时把脚本目录加进 package.path；
+-- EMBYNIAN[pkgpath] — 模块搜索路径自举：mpv 只在「配置目录扫描」装载脚本时把脚本目录加进 package.path；
 -- 宿主经 load-script/scripts 选项按绝对路径装载时不会加，require('lib/std') 找不到
 -- 同目录的模块（实测 2026-09-19：握手能发出来纯因它在第一个 require 之前）。
 -- 不能用 mp.get_script_directory()——实测 --script=<文件> 装载下它返回空；直接从
@@ -63,11 +97,11 @@ defaults = {
 	timeline_cache = true,
 	timeline_heatmap = 'overlay',
 
-	-- 嵌入默认控制条：上一集/下一集在行首（左下角），选集菜单（embynian-episodes，宿主推送
-	-- 本季单集）顶替上游的「视频轨」按钮；mpv 自身能应答的项照旧。播放列表/目录导航、打开
-	-- 文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
+	-- EMBYNIAN[controls] — 控制条默认值：上一集/下一集在行首（左下角），选集菜单（embynian-ui-episodes →
+	-- embynian-episodes 找宿主，宿主推送本季单集）顶替上游的「视频轨」按钮；mpv 自身能应答的项照旧。
+	-- 播放列表/目录导航、打开文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
 	controls =
-	'<video,audio>embynian-episode-prev,<video,audio>embynian-episode-next,gap,menu,<video,audio>embynian-episodes,<video,audio>subtitles,<has_many_audio>audio,<has_many_edition>editions,<has_chapter>chapters,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,gap,fullscreen',
+	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,gap,menu,<video,audio>embynian-ui-episodes,<video,audio>subtitles,<has_many_audio>audio,<has_many_edition>editions,<has_chapter>chapters,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,gap,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
@@ -89,7 +123,7 @@ defaults = {
 	-- 用户原配置：输入即搜索会锁死「同键关闭菜单」，嵌入后保持 no
 	menu_type_to_search = false,
 
-	-- mpv 窗口以 border=no 无边框起播（宿主固定），系统标题栏不再存在——uosc 顶栏顶上：
+	-- EMBYNIAN[topbar] — mpv 窗口以 border=no 无边框起播（宿主固定），系统标题栏不再存在——uosc 顶栏顶上：
 	-- 标题＋最小化/最大化/关闭画进画面（右上），与用户原 mpv 配置同款。关闭=quit，宿主
 	-- 把它当停止处理。
 	top_bar = 'no-border',
@@ -103,7 +137,7 @@ defaults = {
 
 	window_border_size = 0,
 
-	-- 宿主拥有「播什么、播完去哪」（选集/连播都走 Emby），uosc 的目录续播一律关死，
+	-- EMBYNIAN[autoload] — 宿主拥有「播什么、播完去哪」（选集/连播都走 Emby），uosc 的目录续播一律关死，
 	-- 也不再让它反过来改 keep-open。
 	autoload = false,
 	shuffle = false,
@@ -114,7 +148,7 @@ defaults = {
 	font_scale = 1,
 	text_border = 1.2,
 	border_radius = 2,
-	-- 用户原配色（Fluent 深色一档），与 EmbyNian 外壳的五套深色主题同族
+	-- EMBYNIAN[color] — 用户原配色（Fluent 深色一档），与 EmbyNian 外壳的五套深色主题同族
 	color = 'foreground=FFFBFE,foreground_text=1C1B1F,background=1C1B1F,background_text=FFFBFE',
 	opacity = 'menu=0.9,submenu=0.7,curtain=0.5',
 	animation_duration = 100,
@@ -165,7 +199,7 @@ function handle_options(changed_options)
 	request_render()
 end
 opt.read_options(options, 'uosc', handle_options)
--- 宿主裁定（见 defaults 注释）：autoload 在嵌入环境里没有任何合法入口，
+-- EMBYNIAN[autoload] — 宿主裁定（见 defaults 注释）：autoload 在嵌入环境里没有任何合法入口，
 -- 手改的 script-opts 也不允许把它打开 —— 目录续播会 loadfile 任意本机文件。
 options.autoload = false
 -- Normalize values
@@ -601,7 +635,7 @@ function set_state(name, value)
 	Elements:trigger('prop_' .. name, value)
 end
 
--- 嵌入版：handle_file_end 与 file_end_timer 整块删除 —— 播放列表/目录续播的入口
+-- EMBYNIAN[fileend] — handle_file_end 与 file_end_timer 整块删除 —— 播放列表/目录续播的入口
 -- （autoplay、shuffle、playlist 导航）已全部裁掉，「播完去哪」只归 C# 宿主的连播规则管。
 
 function update_render_delay(name, fps)
@@ -703,16 +737,16 @@ mp.observe_property('pause', 'bool', create_state_setter('pause'))
 mp.observe_property('volume', 'number', create_state_setter('volume'))
 mp.observe_property('volume-max', 'number', create_state_setter('volume_max'))
 mp.observe_property('mute', 'bool', create_state_setter('mute'))
-	mp.observe_property('osd-dimensions', 'native', function(name, val)
-		update_display_dimensions()
-		request_render()
-	end)
-	-- 画布尺寸兜底（嵌入版实测 2026-09-19）：d3d11 窗口管线下 osd-dimensions 的 native 观察
-	-- 在起播初段会漏掉「画布=视频尺寸 → 画布=窗口尺寸」那一次变化，uosc 拿着旧画布布局，
-	-- 控件画得出来而点击热区全部错位（菜单/字幕「点了没反应」）。number 观察两个尺寸属性，
-	-- 每次变化都强制重测——重复调 update_display_dimensions 是幂等的。
-	mp.observe_property('osd-width', 'number', function() update_display_dimensions() end)
-	mp.observe_property('osd-height', 'number', function() update_display_dimensions() end)
+mp.observe_property('osd-dimensions', 'native', function(name, val)
+	update_display_dimensions()
+	request_render()
+end)
+-- EMBYNIAN[osddim] — 画布尺寸兜底（实测 2026-09-19）：d3d11 窗口管线下 osd-dimensions 的 native
+-- 观察在起播初段会漏掉「画布=视频尺寸 → 画布=窗口尺寸」那一次变化，uosc 拿着旧画布布局，
+-- 控件画得出来而点击热区全部错位（菜单/字幕「点了没反应」）。number 观察两个尺寸属性，
+-- 每次变化都强制重测——重复调 update_display_dimensions 是幂等的。
+mp.observe_property('osd-width', 'number', function() update_display_dimensions() end)
+mp.observe_property('osd-height', 'number', function() update_display_dimensions() end)
 mp.observe_property('display-hidpi-scale', 'native', create_state_setter('hidpi_scale', update_display_dimensions))
 mp.observe_property('cache', 'string', create_state_setter('cache'))
 mp.observe_property('cache-buffering-state', 'number', create_state_setter('cache_buffering'))
@@ -917,14 +951,21 @@ bind_command('editions', create_self_updating_menu_opener({
 	end,
 	on_activate = function(event) mp.commandv('set', 'edition', event.value) end,
 }))
--- 嵌入版绑定裁剪：stream-quality（外部 quality-menu 脚本不在宿主里）、open-file/items/
+-- EMBYNIAN[episode] — 绑定裁剪：stream-quality（外部 quality-menu 脚本不在宿主里）、open-file/items/
 -- first/last 系（文件与播放列表导航，宿主禁止）、shuffle、paste 系（绕过宿主 loadfile）、
 -- delete-file 系（删除用户文件）、show-in-directory / open-config-directory（拉起外部进程）
--- 全部删除；换集经 embynian-episode-* 交给宿主的 Emby 导航（见 Controls 快捷项），
+-- 全部删除；换集经 embynian-ui-* 交给宿主的 Emby 导航（见 Controls 快捷项），
 -- 选集菜单向宿主要数据（embynian-episodes → 宿主 open-menu 推回）。
-bind_command('embynian-episode-prev', function() embynian_notify('embynian-episode', '-1') end)
-bind_command('embynian-episode-next', function() embynian_notify('embynian-episode', '1') end)
-bind_command('embynian-episodes', function() embynian_notify('embynian-episodes', '') end)
+--
+-- EMBYNIAN[ui-bind] — 绑定名（embynian-ui-…）与宿主消息名（embynian-…）必须分家，这不是口味问题：
+-- mpv 把一条 `script-message <名字>` 同时派给**同名**的脚本绑定。旧版这里叫 embynian-episodes，
+-- 于是按钮发的消息又把按钮自己叫醒，一条消息变 1.3 万条/秒的刷屏（2026-09-19 实测：单发一条
+-- script-message 得 120657 条回声），视频卡顿、菜单被宿主逐条 open-menu 重建到点不动 —— 用户
+-- 报的「点选集卡顿／点一集不换／点击变暂停／退不出去」全出自这一条。上一集/下一集没这个毛病，
+-- 正是因为它们的绑定叫 embynian-episode-prev/next、消息叫 embynian-episode，本来就不同名。
+bind_command('embynian-ui-prev', function() embynian_notify('embynian-episode', '-1') end)
+bind_command('embynian-ui-next', function() embynian_notify('embynian-episode', '1') end)
+bind_command('embynian-ui-episodes', function() embynian_notify('embynian-episodes', '') end)
 bind_command('menu-prev', function() Elements:maybe('menu', 'navigate_by_items', -1) end)
 bind_command('menu-next', function() Elements:maybe('menu', 'navigate_by_items', 1) end)
 bind_command('menu-prev-page', function() Elements:maybe('menu', 'navigate_by_page', -1) end)
@@ -967,6 +1008,121 @@ bind_command('copy-to-clipboard', function()
 		mp.commandv('show-text', t('Nothing to copy'), 3000)
 	end
 end)
+
+-- EMBYNIAN[click-pause] — 轻点空白画面切换暂停/播放（动作在这里，命中区每帧登记在 lib/utils.lua）。
+--
+-- 为什么不再用 mp.add_key_binding('MBTN_LEFT', …)（旧版即此，2026-09-19 撤）：那是拿第二条路去和
+-- uosc 的 force 绑定抢同一个键，而「这一下点击归谁」取决于每帧 decide_keybinds 是否及时 —— 脚本
+-- 一旦被什么拖住（比如 EMBYNIAN[ui-bind] 那场自激刷屏），命中区状态就是陈的，点菜单、点控件会穿
+-- 透到这条备用绑定上，于是「点选集里的一集」变成「暂停」——用户报的「点击操作会触发自动暂停」。
+-- 改成 uosc 自己的兜底命中区之后每一下点击只有一个答主：find_zone 从后往前找，元素与菜单先登记，
+-- 轮不到它就说明指针在空白画面上。
+--   · 登记顺序＝最低优先级（lib/utils.lua 的 render 里紧接 clear_zones，早于所有元素）。
+--   · window_drag = true：留住「按住画面拖动窗口」（window-dragging=yes，见 Core/Mpv/MpvUi.cs 的
+--     装配）；也让 decide_keybinds 把等级留在 1 而不是 2（等级 2 顺带禁掉光标自动隐藏，等级 1 的
+--     allow-vo-dragging+allow-hide-cursor 正是要的）。
+--   · 菜单开着时它天然让位：菜单的 primary_down/up 是 primary_click 的传播阻断者（lib/cursor.lua）。
+--   · 位移阈值 6px 与 0.5s 时窗把「拖窗口」和「轻点」分开，与旧版同一条判据。
+-- 双击闸（2026-09-19，用户令「双击画面 全屏/还原时不要触发开始和暂停」；修法对齐集成模式的
+-- TapPicture/SecondTapOnPicture：单击押后到双击窗口之外才证实，第二拍「按下」即撤）。
+-- 为什么撤在第二拍的**按下**而不是松开 —— 真窗口实测（work/probe-doubleclick-real-trace.txt，
+-- exclusive-fs=yes）：双击的四条光标事件 uosc 全都收到了（down/up/down/up），押后那一拍也照发
+-- （提交=1、撤销=0、pause 照翻）—— 因为第二拍按下当场触发 mpv 内建 MBTN_LEFT_DBL＝全屏，独占
+-- 全屏切换里 uosc 的 update_fullormaxed 会 cursor:leave() 把光标挪到无穷远，第二拍的松开于是
+-- 过不了 ≤6px 位置闸（或 find_zone 直接扑空），撤销永远轮不到跑。而按下事件先于全屏切换送达，
+-- 闸只能挂在那里。mpv 自己那层无嫌疑：内建 MBTN_LEFT 是 ignore（input-bindings 实录），不发暂停。
+--   · 双击判定与 mpv 同源：同一把尺 input-doubleclick-time（默认 300ms），从第一次按下起算；
+--     mpv 的 DBL 本来就只看间隔不看位置，这里一致。
+--   · 第二拍按下若落在控件命中区上（find_zone('primary_down') 有主），不算双击 —— 那是「点完画面
+--     马上去点按钮」，押后的暂停照给；控件上 mpv 的内建 DBL 本来就被 uosc 的 ignore 闸住，不全屏。
+--   · 代价与集成模式同款：轻点暂停比手慢一个双击窗口（约 210ms），嫌慢调小 input-doubleclick-time。
+-- 判据与读数：work/probe-click-pause-wheel.py（命令账）＋ work/probe-doubleclick-real.py（真窗口）。
+embynian_click_pause_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, window_drag = true}
+embynian_click_pause_pending = nil  -- 还没到期的那一拍（在飞＝这一下还没被证明是单击）
+embynian_click_pause_press_last = nil -- 上一次左键按下的时刻（任意位置，判第二拍用）
+embynian_click_pause_second_half = false -- 最近一次按下是不是「画布上的双击第二拍」
+
+function embynian_click_pause_window()
+	local option = mp.get_property_native('input-doubleclick-time')
+	return type(option) == 'number' and option > 0 and option / 1000 or 0.3
+end
+
+-- 押后到期：窗口里没有第二拍按下 ⇒ 单击证实，发那一条暂停。
+function embynian_click_pause_commit()
+	embynian_click_pause_pending = nil
+	mp.commandv('cycle', 'pause')
+	Elements:flash({'pause_indicator'})
+end
+
+-- 双击的第二拍（或换源/收摊）：作废已押后的那一拍。
+function embynian_click_pause_cancel()
+	if embynian_click_pause_pending then
+		embynian_click_pause_pending:kill()
+		embynian_click_pause_pending = nil
+	end
+end
+
+-- 每一次左键按下（任意位置）都过这里：记时刻；画布上且与上一拍间隔小于双击窗口＝双击的第二拍，
+-- 当场撤掉押后的那一拍 —— 必须赶在全屏切换把光标挪走之前（见顶部说明）。
+cursor:on('primary_down', function()
+	local now = mp.get_time()
+	local on_canvas = cursor:find_zone('primary_down') == nil -- 画面兜底区是 primary_down 的阻断者
+	embynian_click_pause_second_half = on_canvas
+		and embynian_click_pause_press_last ~= nil
+		and now - embynian_click_pause_press_last < embynian_click_pause_window()
+	embynian_click_pause_press_last = now
+	if embynian_click_pause_second_half then embynian_click_pause_cancel() end
+end)
+
+-- 押后那一拍要是撞上换源/收摊（片尾自动连播、用户换集）就作废 —— 与 ChromeReveal 的「新一播放＝Reset」
+-- 同一条道理：那一拍不该打在新一集身上。
+for _, embynian_event in ipairs({'start-file', 'end-file'}) do
+	mp.register_event(embynian_event, embynian_click_pause_cancel)
+end
+
+function embynian_click_pause_zone()
+	local hitbox = embynian_click_pause_hitbox
+	hitbox.bx, hitbox.by = display.width, display.height
+	cursor:zone('primary_click', hitbox, function()
+		local down = cursor.last_events.primary_down
+		-- 三道具闸，缺一条都会误伤：① 这一下按下的「起点」必须没被别的区接管（zone_handled）——
+		-- 点菜单外那一下正是靠它躲开的：菜单的兜底区接下了按下（顺手关菜单），松开时菜单已经拆完，
+		-- 光看命中区会以为这是一次空白点击，于是「关菜单」顺带把片子暂停（2026-09-19 探针实测）；
+		-- ② 时窗 0.5s、③ 位移 ≤6px —— 把上一次的按下、把拖动窗口都排除在外。
+		if down and not down.zone_handled and mp.get_time() - down.time < 0.5
+			and math.abs(cursor.x - down.x) + math.abs(cursor.y - down.y) <= 6 then
+			if embynian_click_pause_second_half then return end -- 双击的第二拍：全屏/还原归 mpv，这里不发
+			embynian_click_pause_pending = mp.add_timeout(
+				math.max(0, down.time + embynian_click_pause_window() - mp.get_time()),
+				embynian_click_pause_commit)
+		end
+	end)
+end
+
+-- EMBYNIAN[wheel-volume] — 空白画面上的滚轮＝音量，反馈只落 uosc 自己那根（右侧音量条）。
+--
+-- 为什么要有这一条：mpv 内建的 `WHEEL_UP add volume 2` 会带出**左上角**那行 OSD「Volume」
+-- （uosc 关掉的只是 mpv 自带的 OSC，不是这层 OSD；宿主已设的 osd-bar=no 也拦不住它的文字），
+-- 而 uosc 右侧那根音量条的位置正好没人用 —— 用户令「滚轮调整音量时不要在左上角显示 Volume，
+-- 直接显示右侧的音量条」。接管之后音量走 `no-osd`（命令级前缀，mpv 对这条命令不更新 OSD），
+-- 反馈改由 flash 音量元素承担。
+-- 命中区登记位置与规矩同上面那条：render 里最前面＝最低优先级，指针落在时间轴/速度条/音量条上时
+-- 它们的命中区先命中，滚轮仍归它们（跳转 / 倍速 / volume_step）；只有空白画面才落到这里。
+-- 步进 2 与 mpv 内建同速（实测 work/probe-input-before.txt 的 `add volume  2`），换了实现不许改手感。
+embynian_wheel_volume_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720}
+embynian_wheel_volume_step = 2
+
+function embynian_set_volume(delta)
+	mp.commandv('no-osd', 'add', 'volume', tostring(delta))
+	Elements:flash({'volume'})
+end
+
+function embynian_wheel_volume_zone()
+	local hitbox = embynian_wheel_volume_hitbox
+	hitbox.bx, hitbox.by = display.width, display.height
+	cursor:zone('wheel_up', hitbox, function() embynian_set_volume(embynian_wheel_volume_step) end)
+	cursor:zone('wheel_down', hitbox, function() embynian_set_volume(-embynian_wheel_volume_step) end)
+end
 
 --[[ MESSAGE HANDLERS ]]
 

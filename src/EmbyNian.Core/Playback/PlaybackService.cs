@@ -223,7 +223,31 @@ public sealed class PlaybackService(
     /// </summary>
     private async Task<PlaybackResult> PlayOneAsync(PlaybackTicket ticket, CancellationToken cancellationToken)
     {
-        await StopAsync().ConfigureAwait(false);
+        // 计划在等闸门之前算：它只要会话与设置，而换片快路要先拿它去问「正在跑的那个实例接不接得住这一票」。
+        // 它从前在闸门之后算（上面那句注释说的「抛异常别漏掉闸门」）—— 放在等闸门之前，抛在这里同样漏不掉
+        // 闸门，而收尾一步不少：停掉正在跑的、报一声「现在没在播」，再把错误交出去。
+        PlaybackRequest request;
+        try
+        {
+            var connection = session.Connection ?? throw new InvalidOperationException("尚未登录 Emby");
+            request = planner.Plan(ticket, connection);
+        }
+        catch
+        {
+            await StopAsync().ConfigureAwait(false);
+            RaiseNowPlaying(null);
+            throw;
+        }
+
+        // 换片快路（独占模式，2026-09-19 用户令「换集不要每次都关窗重开」）：正在跑的实例能接这一票就不
+        // 关窗口 —— 同一个 mpv、同一个 uosc、同一个全屏，只换文件。次序是先把手头这一跑叫醒
+        // （HandOver：它去发「停止」与最后位置的上报，但不 quit），等它彻底跑完（闸门放开），再在这个
+        // 实例上换源；快路没接住就落回「停掉重开」那条老路。
+        var live = _current;
+        var takeover = live is not null && live.CanSwapTo(request) ? live : null;
+        if (takeover is null) await StopAsync().ConfigureAwait(false);
+        else takeover.HandOver();
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         // Everything after the gate is taken belongs inside this try, and the try therefore opens on the
@@ -232,12 +256,11 @@ public sealed class PlaybackService(
         // wait and the try leaks it permanently: the throw is caught upstream and shown as a 「播放失败」
         // notice, nothing looks fatal, and every later play then waits on a semaphore no one will ever
         // release — the cover art stays up, with no error and no timeout, for the rest of the process.
-        // The two lines that make that concrete are the sign-in check and planner.Plan immediately below.
+        // The throw that concretely mattered — planner.Plan — now happens before the wait, which is the
+        // one place it cannot leak the gate; what is left in here is the launch itself.
         IPlaybackHandle? handle = null;
         try
         {
-            var connection = session.Connection ?? throw new InvalidOperationException("尚未登录 Emby");
-            var request = planner.Plan(ticket, connection);
             var playSessionId = Guid.NewGuid().ToString("N");
             _launchOptions = request.PlayerOptions;
             _launchGroupOptionCount = request.ShaderOptionCount;
@@ -253,10 +276,28 @@ public sealed class PlaybackService(
                 settings.Video.QualityPreset,
                 request.PlayerOptions);
 
-            var backend = backendFactory();
-            handle = await backend.StartAsync(request, cancellationToken).ConfigureAwait(false);
-            _current = handle;
-            Subscribe(handle);
+            if (takeover is not null && await takeover.SwapToAsync(request, cancellationToken).ConfigureAwait(false))
+            {
+                // 同一个句柄：_current 与订阅都还是它，不必再来一遍 —— 这正是「不关窗」的全部含义。
+                handle = takeover;
+            }
+            else
+            {
+                if (takeover is not null)
+                {
+                    // 快路让位。两个可能：那个实例刚被交接放过收尾（它按「已交接」跳过了拆机），那就停掉、
+                    // 把拆机补上，再谈重开；或者前一场已经把自己收干净了（_current 不再是它，闸门放开前
+                    // 就拆完了），那这里什么都不用做 —— 别再拆一次。
+                    await StopAsync().ConfigureAwait(false);
+                    if (ReferenceEquals(_current, takeover)) await ReleaseAsync(takeover).ConfigureAwait(false);
+                }
+
+                var backend = backendFactory();
+                handle = await backend.StartAsync(request, cancellationToken).ConfigureAwait(false);
+                _current = handle;
+                Subscribe(handle);
+            }
+
             RaiseNowPlaying(ticket.Item);
 
             await ReportAsync("开始", client => client.ReportPlaybackStartAsync(
@@ -300,23 +341,9 @@ public sealed class PlaybackService(
         }
         finally
         {
-            if (ReferenceEquals(_current, handle)) _current = null;
-            if (handle is not null)
-            {
-                Unsubscribe(handle);
-
-                // 清理不是播放结果。句柄释放失败从前会从这个 finally 里抛出去，一下坏三件事：它顶掉 try
-                // 里真正的结果或错误、跳过下面那几行清空、而且跳过最后那一句 _gate.Release() —— 也就是
-                // 上面那段注释描述的闸门泄漏，只是从另一头进来的。所以它只记一条日志。
-                try
-                {
-                    await handle.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception error)
-                {
-                    Log.Warn(Category, "释放播放句柄失败", error);
-                }
-            }
+            // 交接给下一集的那一跑什么都不拆：句柄、订阅、_current 都留着 —— 下一拍的事件正用着它们，
+            // 而 mpv 还活着（那正是「不关窗」）。其余情况按老样子把这一跑收干净。
+            if (handle is not null && !handle.WasHandedOver) await ReleaseAsync(handle).ConfigureAwait(false);
 
             _launchOptions = [];
             _launchGroupOptionCount = 0;
@@ -325,6 +352,31 @@ public sealed class PlaybackService(
             LaunchQualityPreset = null;
             RaiseNowPlaying(null);
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 把一个句柄按收尾的次序拆干净：退订、释放、清掉 <c>_current</c>。两处用它 —— 每次播放的收尾，
+    /// 以及换片快路让位时补的那一刀（那一跑的收尾按「已交接」跳过了这一节，再没人补就既漏水又占着
+    /// <c>_current</c>）。
+    /// <para>
+    /// 清理不是播放结果。句柄释放失败从前会从 finally 里抛出去，一下坏三件事：它顶掉 try 里真正的
+    /// 结果或错误、跳过后面那几行清空、而且跳过最后那一句 <c>_gate.Release()</c> —— 也就是上面那段注释
+    /// 描述的闸门泄漏，只是从另一头进来的。所以它只记一条日志。
+    /// </para>
+    /// </summary>
+    private async Task ReleaseAsync(IPlaybackHandle handle)
+    {
+        if (ReferenceEquals(_current, handle)) _current = null;
+        Unsubscribe(handle);
+
+        try
+        {
+            await handle.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "释放播放句柄失败", error);
         }
     }
 

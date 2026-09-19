@@ -5220,7 +5220,11 @@ internal static class PlaybackTests
             var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, input);
             Assert.Equal("scale=bilinear,profile=high-quality,scale=spline36,glsl-shaders-append=local.glsl,scale=ewa_lanczossharp",
                 string.Join(",", plan.Where(option => !option.Required).Select(option => $"{option.Name}={option.Value}")));
-            Assert.Equal("vo=gpu-next,gpu-api=d3d11,gpu-context=d3d11,d3d11-output-mode=window,d3d11-exclusive-fs=yes,force-window=immediate,input-default-bindings=yes,input-vo-keyboard=yes,input-media-keys=no",
+            // 独占模式 force-window=no：窗口要等画面，所以不会先冒一个 960x540 的黑框再跳成整画面
+            // （2026-09-19 实测：yes 出生 960x540 居中、文件一开跳 1280x720，源打不开时那个黑框还一直挂着；
+            // no 全程无窗口，能放时以终值尺寸出生）。画面一上来由 LibMpvHandle 改回 yes 把窗口按住。
+            // 集成模式仍是 immediate，见下一条断言。
+            Assert.Equal("vo=gpu-next,gpu-api=d3d11,gpu-context=d3d11,d3d11-output-mode=window,d3d11-exclusive-fs=yes,force-window=no,input-default-bindings=yes,input-vo-keyboard=yes,input-media-keys=no",
                 string.Join(",", plan.Where(option => option.Required).Select(option => $"{option.Name}={option.Value}")));
             var firstRequired = plan.ToList().FindIndex(option => option.Required);
             Assert.True(plan.Skip(firstRequired).All(option => option.Required), "后面不能再有普通选项覆盖管线");
@@ -5257,6 +5261,9 @@ internal static class PlaybackTests
             Assert.Equal("composition", plan.Single(option => option.Name == "d3d11-output-mode").Value);
             Assert.Equal("no", plan.Single(option => option.Name == "d3d11-exclusive-fs").Value);
             Assert.Equal("1600x900", plan.Single(option => option.Name == "d3d11-composition-size").Value);
+            // 集成模式必须 immediate：合成交换链要在文件加载前存在，宿主才接得进 XAML 面板。
+            // 独占模式那半（force-window=no）在上一条测试钉死，两半合起来锁住整个分叉。
+            Assert.Equal("immediate", plan.Single(option => option.Name == "force-window").Value);
             Assert.True(plan.Where(option => option.Name.StartsWith("input-", StringComparison.Ordinal)).All(option => option.Value == "no"));
             Assert.False(plan.Any(option => option.Name == "wid"));
             foreach (var size in new[] { (0, 0), (1280, 0), (-1, 720) })
@@ -5280,10 +5287,21 @@ internal static class PlaybackTests
         Test("mpv 管线：会话画面归属来自实际 surface，不调用 DLL", () =>
         {
             // Do not start or dispose these synthetic handles: only inspect the immutable destination.
-            IPlaybackHandle native = new LibMpvHandle(IntPtr.Zero, null);
-            IPlaybackHandle integrated = new LibMpvHandle(IntPtr.Zero, new PipelineTestSurface());
+            // 后两个参数是换片快路（独占模式不关窗换源）的签名与「下次签名怎么算」，合成句柄一律给 null ——
+            // 没有签名的会话永远不接快路，断言就在下面那一行。
+            IPlaybackHandle native = new LibMpvHandle(IntPtr.Zero, null, null, null);
+            IPlaybackHandle integrated = new LibMpvHandle(IntPtr.Zero, new PipelineTestSurface(), null, null);
             Assert.Equal<bool?>(false, native.PictureInHostWindow);
             Assert.Equal<bool?>(true, integrated.PictureInHostWindow);
+
+            var anywhere = new PlaybackRequest
+            {
+                MediaUrl = new Uri("http://server/emby/Videos/1/stream.mkv"),
+                Title = "任何一集",
+            };
+            Assert.False(native.CanSwapTo(anywhere), "没有签名的会话不许接快路（退回停掉重开）");
+            Assert.False(integrated.CanSwapTo(anywhere), "集成管线按契约不接快路");
+            Assert.False(native.WasHandedOver, "没被交接过的句柄，收尾时该拆就得拆");
         });
     }
 

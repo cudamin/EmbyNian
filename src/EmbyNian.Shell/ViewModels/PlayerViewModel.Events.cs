@@ -61,7 +61,17 @@ public sealed partial class PlayerViewModel
                 break;
 
             case VideoWindowContract.Episodes:
-                _ = PushEpisodeMenuAsync();
+                // 幂等动作过闸：同一段窗口里只回推一份菜单。脚本自激时（2026-09-19 那次）这里就是
+                // 宿主的活口 —— 挡下的条数进日志，不是静默吞掉。
+                if (_episodeMenuGate.TryAccept(DateTime.UtcNow))
+                {
+                    _ = PushEpisodeMenuAsync();
+                }
+                else if (_episodeMenuGate.ShouldReport(DateTime.UtcNow))
+                {
+                    Log.Warn(Category,
+                        $"选集菜单请求被闸门挡下（累计 {_episodeMenuGate.Suppressed} 条）——视频窗脚本可能在刷屏");
+                }
                 break;
 
             case VideoWindowContract.EpisodeIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index):

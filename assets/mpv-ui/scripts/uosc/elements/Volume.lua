@@ -26,7 +26,9 @@ function VolumeSlider:get_visibility() return Elements.volume:get_visibility(sel
 function VolumeSlider:set_volume(volume)
 	volume = round(volume / options.volume_step) * options.volume_step
 	if state.volume == volume then return end
-	mp.commandv('set', 'volume', clamp(0, volume, state.volume_max))
+	-- EMBYNIAN[vol-osd] — 音量变化一律不落 mpv 的 OSD（左上角那行「Volume」）：uosc 自己画出音量值，
+	-- mpv 再叠一层既重复又跑到左上角去。no-osd 是命令级前缀（见 mpv 手册 Input Command Prefixes）。
+	mp.commandv('no-osd', 'set', 'volume', clamp(0, volume, state.volume_max))
 end
 
 function VolumeSlider:set_from_cursor()

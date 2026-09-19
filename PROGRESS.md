@@ -2,6 +2,77 @@
 
 最后更新：2026-09-19
 
+## 独占模式输入两修：双击画面不再顺带暂停、滚轮音量只亮右侧音量条（2026-09-19 第六轮）
+
+> 用户报两条：「独占模式下双击画面 全屏/还原时不要触发开始和暂停」「独占模式下用滚轮调整音量时不要在左上角显示Volume 直接显示右侧的音量条」。
+
+**双击那两下到底发生了什么（实测，`work/probe-click-pause-wheel.py`：vo=null 合成事件对着命令账数）**：mpv 的内建绑定是「第一下照发 `cycle pause`、第二下再发 `MBTN_LEFT_DBL`」，它自己没有押后机制；uosc 的兜底点击区跟着在每个松开拍各发一条 ⇒ 双击＝**两条 `cycle pause`**（净变化为零，屏上却是连闪暂停徽标＋画面卡两下）。
+
+**修（双击闸，`EMBYNIAN[click-pause]`；修法对齐集成模式的 TapPicture/SecondTapOnPicture）**：单击押后到 mpv 的双击窗口（`input-doubleclick-time`，默认 300ms，从**第一次按下**起算）之外才证实；**第二拍的「按下」当场撤掉押后那一拍**（`cursor:on('primary_down')`）。换源/收摊（`start-file`/`end-file`）时同样作废。代价与集成模式同款：轻点暂停比手慢一个双击窗口（约 **210ms**），嫌慢调小 `input-doubleclick-time`。
+
+**为什么撤销必须挂在「按下」上（第一版撤在松开，用户复测双击仍切暂停）**：`work/probe-doubleclick-real.py`（真窗口＋合成鼠标，含 `d3d11-exclusive-fs=yes`）抓到全程——双击的四条光标事件 uosc **全收到了**（down 4.658 / up 4.691 / down 4.812 / up 4.956），押后那一拍照样在 down1+300ms=4.958 发了 `cycle pause`、撤销计数为 0：第二拍按下当场触发 mpv 内建 `MBTN_LEFT_DBL`＝全屏，**独占全屏切换里 uosc 的 `update_fullormaxed` 会 `cursor:leave()` 把光标挪到无穷远**，第二拍的松开于是过不了 ≤6px 位置闸（或 find_zone 扑空），撤销永远轮不到跑。按下事件先于全屏切换送达，闸只能挂在那里。mpv 自己那层无嫌疑：内建 `MBTN_LEFT` 是 `ignore`（`input-bindings` 全量实录），第二拍的 up 也确实迟到（4.956 > 4.958 的截止线只差 2ms，侥幸不成立）。第二拍落在控件命中区上不算双击——「点完画面马上去点按钮」，押后的暂停照给；控件上 mpv 的内建 DBL 本就被 uosc 的 ignore 闸住，不全屏。
+
+**真窗口前后对照（`work/probe-doubleclick-real-{before,after}.txt`）**：双击后 fullscreen 照翻（no→yes），pause 从「no→yes（切了）」修成「**no→no（不动）**」，命令账从 1 条 `cycle pause` 修成 **0 条**，撤销 0→1。vo=null 命令账（`work/probe-input-after2.txt`）新增 P3b「第二拍只按下不松开（up 被吃掉）」：**0 条**；单击仍 1 条、两次慢点击仍 2 条、滚轮/时间轴/音量条各归其主。
+
+**滚轮音量为什么会在左上角写字**：mpv 内建 `WHEEL_UP add volume 2` 走的是键分派那条路，带出 mpv 自己的 OSD 文字（宿主已设的 `osd-bar=no` 只关了条，文字照写；uosc 关掉的只是自带 OSC）。实拍（`work/probe-input-osd-shot.py`：黑底 lavfi 源 ＋ `PrintWindow(PW_RENDERFULLCONTENT)`——mpv 的 `screenshot-to-file` 不含 OSD 层，抓回来全黑）证实：补丁前滚轮那一张左上角亮 **928** 像素，就是「Volume: 110%」白字；而客户端 API 直接 `add volume 2` 反而不写字 —— 这层 OSD 挂在键分派上，不挂在命令上。
+
+**修（滚轮音量，`EMBYNIAN[wheel-volume]`）**：uosc 兜底命中区接管空白画面的滚轮（登记在 render 最前＝最低优先级，时间轴/速度条/音量条先命中仍归它们，实测时间轴 `seek 5`、音量条 `volume_step` 都没被抢走）：`no-osd add volume ±2`（步进与 mpv 内建同速）＋ flash 右侧音量条；音量条自己改音量（拖、滚）也一并 `no-osd`（`elements/Volume.lua` 的 `EMBYNIAN[vol-osd]`）。实拍对照：滚轮那一张左上角 **0** 亮像素、右侧音量条区亮 **9138** 像素（值 110 画在条上）；静置四拍无「野条」（不经输入右侧不亮）。
+
+**闸门**：构建 0 警告 0 错误；单测 **945/945**（「独占模式输入补丁：双击闸与 no-osd 音量都在」，含「撤销必须挂在第二拍按下上」的源码钉子，防升级丢失）；发布 **526 文件 / 302.7MB / 11 GLSL**，脚本自报「发布验证通过」。点击流程回归（`work/probe-uosc-menu-flow.py`）全绿：点选集 1 条、点一集 1 条、关菜单不误暂停、空白单击仍切暂停。
+
+## 独占模式启播不再冒黑框：`force-window=no` 出生、画面一到按住（2026-09-19 第五轮）
+
+> 用户截图报「启播的时候有时候会有个黑框会闪一下」。截图里那块黑约 869x212 DIP、落在浏览页中间 —— 量下来就是 mpv 那扇自建窗口。
+
+**根因（实测，`work/probe-mpv-window.py`：真实窗口 ＋ 枚举本进程的窗口矩形，10ms 一拍）**：独占模式原来用 `force-window=yes`，mpv 在 **initialize 那一拍**就把窗口生出来（+0.099s，**960x540 居中、全黑**），文件一开再 resize 成视频尺寸（1280x720）—— 这一次尺寸跳变就是「黑框闪一下」；而源打不开时（用户库里那版 404）那个 960x540 的黑框**一直挂着**，因为窗口已经生出来了、没什么可关。
+
+**修**：独占模式改 `force-window=no` —— initialize 与「打不开的源」全程**没有窗口** ✓，能放的源在 +0.071s 时以**终值尺寸**出生（无中间尺寸）✓，开着自动全屏的那一档同样一出生就整屏（实测 0→2560x1440）✓。代价是 `no` 之下播完（EOF）mpv 会把窗口收掉（实测 +0.118s 窗口消失），所以画面一上来就把它按住：`LibMpvHandle` 订阅 `vo-configured`，翻真那一刻把 `force-window` 改回 `yes`（运行期可改 —— 实测改这一下窗口不闪，且此后跨 EOF 与跨换片都活着，正好是铁律 8 那扇窗要的）。只有声音的文件（没有视频轨，vo 永远立不起来）在 file-loaded 那一拍兜底改 `yes`，否则它连 uosc 控件的地方都没有。
+
+**顺带量到的三条**：uosc 的握手与窗口无关（没有窗口时照常 `embynian-ready`，画布尺寸靠既有的 `osd-width/height` 观察兜底）；同一实例就地换源时窗口是**同一个句柄**、只按新片尺寸 resize（这一条以前只有 vo=null 的探针证过）；`vo-configured` 与窗口出现是同一拍，所以「按住」不会提前把黑窗生出来。
+
+**闸门**：构建 0 警告 0 错误；单测 **944/944**（管线契约那两条断言跟着改成 `force-window=no`）。
+
+## 独占模式换片不再关窗：同一个 mpv 换源（2026-09-19 第四轮）
+
+> 用户问「独占模式下切换集数的时候一定要关闭窗口吗？不能直接切换片源吗？」—— 能。而且这是代码里早就留了话的一件事：`LibMpvBackend.ApplyOptions` 里那句注释写着 `idle=yes` 存在的理由之一是「one day, **load the next episode into the same window**」。
+
+**原来为什么必须关**：换集走 `StartPlaybackAsync(replaceExisting: true)` → `PlaybackService.PlayOneAsync` → 先 `StopAsync()`（`Command("quit")` ＝ **mpv 顶层窗口销毁**）再 `StartAsync()`（新 mpv、新窗口、uosc 重装）。于是整窗闪一下、全屏退出再进、控制条消失一两秒。
+
+**现在**：`PlayOneAsync` 先问正在跑的句柄一句 `CanSwapTo(这一票)`；能接就不关窗 —— 交接次序是 `HandOver()`（叫醒上一跑的监视，让它照常发「停止」与最后位置的上报，但**不 quit**）→ 等闸门（上一跑彻底跑完、上报也发完）→ `SwapToAsync()`（写运行期属性 + `loadfile`）。**判断**全在 `Core/Mpv/InlineSwitch.cs`（纯函数，测试看得见），**执行**在 `LibMpvHandle.SwapToAsync`，**接线**在 `PlaybackService.PlayOneAsync`。集成管线与外部 mpv.exe 一律不接（前者画面挂在宿主合成树上，后者每次起播都是一个新进程）。
+
+**签名闸（`InlineSwitch.SameSignature`）**：管线 ＋ 管线必需项 ＋ Lua UI 项 ＋ 票里选项表**去掉末尾着色器链**的基线，逐项相等才接。理由是 mpv 的启动选项只在 `mpv_initialize` 之前有效，对不上的那部分事后改也没用；而链是运行期能改的（在播时换档本来就是这个客户端的功能，见 `ShaderSwitch`），所以不算进签名 —— 否则「同一部剧里 720p 与 1080p 各一集」会白丢快路。
+
+**要拨回去的属性**（`InlineSwitch.PerFilmNames`）：名单从画面菜单（每一行动的那个属性）与 `ShaderGroupCatalog.NeutralOptions` 推出来，再加字幕/音频延迟、倍速、音量、静音；值 = 新票里的值 → mpv 的 `option-info/<名字>/default-value` → `NeutralOptions` 的空值 → 空串。用 mpv 自己的出厂值而不是「上一集起播时的值」，是为了让两集之间改过的设置（比如关掉去色带）在下一集生效。这一票自己那几条（起播位置、`aid`/`sid`、语言优先、`sub-files` 替换式重写、请求头、标题、`pause=no`）由 `InlineSwitch.PerFile` 拼。
+
+**探针抓出来的一条真坑**：`loadfile` 会先替**被换掉的那个文件**报一条 `end-file(reason=2)`，然后才是 `start-file` → `file-loaded`（`work/probe-inline-switch.py` 两次换源两次都是这个次序）。照单全收的话，新一集的监视会当场以为「这一跑播完了」，界面立刻退回浏览页 —— 所以「发出 loadfile 之后、新文件 start-file 之前」的 end-file 一律丢掉，上一集的读数（位置/时长/Loaded）也在 start-file 那一拍重算。
+
+**实测**（同一支探针，无窗口）：同一实例换源 **55ms**，关窗重开新实例 **73ms**；两次换源之后 uosc 的 `embynian-ready` 握手仍然只有 **1 次**（＝整套控件没重装，这正是「不关窗」最要紧的一半）；59 条属性写在活实例上全部被接受；`option-info/*/default-value` 46/50 个名字读得到。
+
+**闸门**：构建 0 警告 0 错误；单测 **944/944**（新增 `InlineSwitchTests` 五条：签名四条全等、链不算数、名字名单、拨回值、这一票自己的属性）。
+
+## 独占模式选集/字幕点击五连修：消息名撞绑定名自激、uosc 装两份、点击误暂停（2026-09-19 第三轮）
+
+> 用户实测五条：「点击左下角选集画面时出现卡顿」「在选集页点击其他集后不会自动切换播放」「点击操作会触发自动暂停」「无法退出选集页面返回正常播放」「字幕菜单也存在类似的问题」。
+
+**根因一（自激刷屏，四条症状都出自它）**：uosc 侧按钮绑定叫 `embynian-episodes`，它发出的宿主消息也叫 `embynian-episodes` —— mpv 把一条 `script-message` **同时**派给同名的脚本绑定，于是这条消息把按钮自己再叫醒一次。实测：单发一条得 **120657 条回声／4s**；真机日志两场（16:40:13→16:41:39、19:01→19:04）约 **1500 条/秒**、一天 7.5MB 日志。宿主逐条回推 `open-menu`，`Menu:open` 把前一秒刚建好的菜单关掉重建 ⇒ 真实点击的 down/up 落在两个不同代的菜单对象上（新对象 `drag_last_y` 是 nil）⇒ 不激活 ⇒「点一集不换」；风暴里 uosc 的 `render()` 跑不完 ⇒ 命中区与键位等级陈旧 ⇒「退不出去」「点击变暂停」；字幕菜单是 uosc 自家菜单，同一套输入状态机被打死 ⇒「字幕也这样」。上一集/下一集从来没事，正因为它们的绑定叫 `embynian-episode-prev/next` 而消息叫 `embynian-episode` —— 本来就不同名。
+**修**：Lua 绑定名一律改成 `embynian-ui-prev/next/episodes`（宿主消息名不动，C# 契约与既有测试不受影响）；规矩写进 `main.lua` 的 `EMBYNIAN[ui-bind]` 与 `assets/mpv-ui/README.md`；两条守卫：`MpvUiTests` 新增「uosc 绑定名与宿主消息名不许同名」（扫 `assets` 源码比对契约键），宿主侧新增 `Core/Mpv/EpisodeMenuRequestGate.cs`（幂等请求 400ms 内只放一条、挡下条数进日志，调用点 `PlayerViewModel.Events.cs`）。
+
+**根因二**：uosc 装了两份 —— `scripts` 选项交目录（脚本名 `uosc`，控制条的 `script-binding uosc/…` 靠它）之外，`LibMpvBackend.LoadScript` 又 `load-script <main.lua>`（按文件名命名成 `main`）。日志里每次起播两条「视频窗 Lua UI 已就绪」即此；`main` 那份的绑定没人调得到，白跑一套渲染与观察、还把每条消息的回声翻倍。**修**：删 `LoadScript`，uosc 只由 `scripts` 装一份。
+
+**根因三（探针抓出来的收尾）**：「轻点画面暂停」原本是 `mp.add_key_binding('MBTN_LEFT', …)`，即与 uosc 的 force 绑定抢同一个键的第二条路 —— 命中区状态一陈旧（脚本被拖住时必陈旧），点菜单就穿透成暂停。**修**：改成 uosc 自己的兜底命中区（动作 `embynian_click_pause_zone`，每帧在 `lib/utils.lua` 的 `render()` 里**早于所有元素**登记）。三道具闸：`down.zone_handled`（点菜单外关菜单不再顺带暂停）、0.5s 时窗、6px 位移；`window_drag = true` 保住「按住画面拖动窗口」。
+
+**验证（新增无人探针，不需要人在机器前）**：`work/probe-uosc-menu-flow.py`（vo=null + libmpv，自己扮演宿主跑完「点选集→回推 open-menu→点一集→点菜单外→点字幕按钮→点空白」）。判据前后对照：
+
+| 步骤 | 修复前 | 修复后 |
+|---|---|---|
+| 点一次选集按钮（1.5s 内） | 1822 条 `embynian-episodes` | **1** 条 |
+| 点菜单里的一集 | 0 条 `embynian-episode-index` | **1** 条 |
+| 点菜单外 | 菜单仍 open | **closed**，且 pause 不变 |
+| 字幕按钮 | 菜单没换成 sub（还是 episodes） | `type=sub` 开合正常 |
+| 空白处单击 | pause 不动（状态机被打死） | pause 翻转（设计行为保住） |
+
+报告落在 `work/probe-uosc-flow-before.txt` / `-after.txt`。构建 0 警告 0 错误；单测 **939/939**（新增四条：闸门三条＋同名守卫一条）。
+
 ## uosc 实测反馈七连修：中心 OSD 条、标题栏内置、控制条重排、画布错位（2026-09-19 第二轮）
 
 > 用户实测独占模式后七条：「做两个音量条干什么去掉中心那个」「标题怎么回事，去掉标题栏按钮内置到画面」「去掉右下角单个循环」「上一集下一集移到左下角」「左下角菜单、字幕点了没反应」「视频按钮改为集列表」「打开弄了个小窗，参考集成模式」。

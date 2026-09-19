@@ -31,3 +31,5 @@ shell.png
 # AI 助手的工作数据目录（记忆、会话状态），不是项目源码
 .workbuddy/
 .zcode/
+# 本机沙箱构建的环境变量兜底（写死了本机用户路径），不入库
+envprobe.props

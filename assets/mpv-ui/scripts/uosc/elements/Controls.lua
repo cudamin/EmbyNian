@@ -50,11 +50,12 @@ function Controls:init_options()
 		['items'] = 'command:list_alt:script-binding uosc/items#playlist>1?' .. t('Playlist/Files'),
 		prev = 'command:arrow_back_ios:script-binding uosc/prev?' .. t('Previous'),
 		next = 'command:arrow_forward_ios:script-binding uosc/next?' .. t('Next'),
-		-- 嵌入版新增：换集不经 mpv 播放列表，转成 embynian-episode 消息交给 C# 宿主的 Emby 导航；
+		-- EMBYNIAN[episode] — 换集不经 mpv 播放列表，转成 embynian-episode 消息交给 C# 宿主的 Emby 导航；
 		-- 选集列表向宿主要数据（embynian-episodes），宿主以 open-menu 推回本季单集。
-		['embynian-episode-prev'] = 'command:skip_previous:script-binding uosc/embynian-episode-prev?' .. t('Previous'),
-		['embynian-episode-next'] = 'command:skip_next:script-binding uosc/embynian-episode-next?' .. t('Next'),
-		['embynian-episodes'] = 'command:list_alt:script-binding uosc/embynian-episodes?' .. t('Episodes'),
+		-- 绑定名 embynian-ui-… 与消息名 embynian-… 分家是硬规矩：同名会被 script-message 喂回来自激（见 main.lua）。
+		['embynian-ui-prev'] = 'command:skip_previous:script-binding uosc/embynian-ui-prev?' .. t('Previous'),
+		['embynian-ui-next'] = 'command:skip_next:script-binding uosc/embynian-ui-next?' .. t('Next'),
+		['embynian-ui-episodes'] = 'command:list_alt:script-binding uosc/embynian-ui-episodes?' .. t('Episodes'),
 		first = 'command:first_page:script-binding uosc/first?' .. t('First'),
 		last = 'command:last_page:script-binding uosc/last?' .. t('Last'),
 		['loop-playlist'] = 'cycle:repeat:loop-playlist:no/inf!?' .. t('Loop playlist'),

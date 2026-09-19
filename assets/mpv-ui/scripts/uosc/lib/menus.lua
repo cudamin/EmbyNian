@@ -910,5 +910,5 @@ function create_track_loader_menu_opener(opts)
 	end
 end
 
--- 嵌入版：open_subtitle_downloader（OpenSubtitles 在线字幕下载，curl 子进程）整块删除。
+-- EMBYNIAN[subdl-removed] — open_subtitle_downloader（OpenSubtitles 在线字幕下载，curl 子进程）整块删除。
 -- 外部 API key 不随库发布；字幕由 Emby 服务器与用户本地文件提供。

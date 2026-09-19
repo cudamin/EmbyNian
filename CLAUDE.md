@@ -18,7 +18,7 @@
 
 一个 Emby 桌面客户端。WinUI 3 + Windows App SDK 2.4.0 + .NET 10 + C#，非打包，x64；播放内核是 libmpv。三个项目：`src/EmbyNian.Core`（无 NuGet、无 UI 包，因此是唯一能被单元测试直接触及的层）、`src/EmbyNian.Shell`（WinUI 外壳）、`tests/EmbyNian.Tests`（控制台测试运行器）。
 
-**播放架构是双管线并存**（「独占模式」＝项目里的独立模式/Standalone）：集成模式（默认）将 mpv 的 Composition 交换链嵌入 WinUI 视觉树实现控件混排；独占模式让 mpv 自建顶层窗口、独占交换链直接呈现——以窗口模型分离换取极致性能。播放细节见 `embynian-playback` 技能。
+**播放架构是双管线并存**（「独占模式」＝项目里的独立模式/Standalone）：集成模式（默认）将 mpv 的 Composition 交换链嵌入 WinUI 视觉树实现控件混排；独占模式让 mpv 自建顶层窗口、独占交换链直接呈现——以窗口模型分离换取极致性能。独占模式的屏幕控件是装箱的 uosc（`assets/mpv-ui`，宿主消息名与脚本绑定名分家），换片（选集/连播/换片）也在**同一个 mpv 窗口**里换源、不关窗重开（签名闸见 `Core/Mpv/InlineSwitch.cs`）。播放细节见 `embynian-player-architecture` 技能。
 
 代码风格记录在 [`.editorconfig`](.editorconfig)——文件范围命名空间、不用 `this.`、私有字段 `_camelCase`、const 与 static readonly 用 `PascalCase`、LF、4 空格。它写于 2026-09-05，依据是对代码树的实测而非个人偏好，所以它的 `warning` 级别规则是全部 230 个 `.cs` 文件已经全部通过的。
 
@@ -128,7 +128,7 @@ Emby 访问令牌以 DPAPI 加密存储。**永远不打印、不写日志、不
 - **反斜杠经不过本 shell 的 `node -e '...'`。** 单引号里的 `"\\s"` 到达时是 `\s`，JavaScript 随后读成裸 `s`，于是字符串拼接出来的正则静默匹配错误的东西并报零命中而非失败。用 `String.raw`、正则字面量，或先把脚本写到文件里（2026-09-05，一次 19 处的编辑脚本静默什么都没干之后）。
 - **WinUI 标记编译器在过期缓存上失败、重试即成功。** `WMC9999 Xaml Internal Error`——「未将对象引用设置到对象的实例」或「指定的参数已超出有效值的范围」——不是 XAML 的错；2026-09-05 它同时打在构建与发布闸门上，整个会话没碰过任何 .xaml 文件，两次都在下一次运行、零代码改动下通过。同一次运行还可能编译 **.cs 文件的过期快照**，为已经不存在的代码报错。重跑闸门一次再下结论。
 - **删掉 `bin\x64\Release` 会让下一次发布产出无法启动的应用**，而且闸门 3 曾照样报「验证通过」。`EmbyNian.pri` 必须把三个框架 `.pri` 合并进去，而合并输入是「PRI 生成运行时输出目录里已有哪些 `.pri` 文件」——非打包、非自包含，它们来自 `runtimes-framework`，即**只在发布时**到达。所以清空后的第一次发布产出 103 KB 的 `EmbyNian.pri` 而非 2.2 MB，发布轻 2 MB，exe 死在 `App.xaml`，报 `Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'`。**把发布再跑一遍就行**——第一次会把那三个文件留在原地。2026-09-05 实测；`tools/verify-publish.ps1` 现在会就此判闸门 3 失败而不是放行。
-- **鼠标光标拍不下来**——GDI 截图拍不到，`winapp ui screenshot` 也拍不到，`--capture-screen` 也不行（2026-09-05 实测：指针停在窗口内、裁剪图按其自身坐标检查过）。`tools/cursor-watch.ps1` 是唯一的绕法，`tools/shot.ps1` 干不了这事；怎么做、为什么在 `embynian-verification` 技能。
+- **鼠标光标拍不下来**——GDI 截图拍不到，`winapp ui screenshot` 也拍不到，`--capture-screen` 也不行（2026-09-05 实测：指针停在窗口内、裁剪图按其自身坐标检查过）。`tools/cursor-watch.ps1` 是唯一的绕法，`tools/shot.ps1` 干不了这事；怎么做、为什么在 `embynian-player-architecture` 技能（references 卷）。
 - 命令行开关，全部：`--dump-ui`、`--hide-cursor`（把播放页停在屏幕上，只跑它的 10 Hz 心跳，其他什么都不做，以便观察指针的两秒自动隐藏——不播放任何东西）、`--maximized`、`--play`、`--screen`、`--scroll-end`、`--scroll-half`、`--self-check`、`--show-detail`、`--show-episode`、`--show-library`、`--show-menu`（弹出首页第一张卡片的「更多」菜单）、`--show-osd`（把播放页覆盖层停在屏幕上，不播放一个字节；可选 `pinned`、`paused` 或 `playing`）、`--show-settings`（可选分类，如 `--show-settings 关于`；默认「界面」）、`--theme`。**`--hide-cursor`、`--show-menu` 与 `--show-osd` 各自单独使用，绝不与 `--self-check` 同用，也绝不同用。**（`--show-rail` 是给首页右侧栏的，那一栏 2026-09-08 移除；开关随之而去。）
 
 ## 怎么汇报（How To Report）

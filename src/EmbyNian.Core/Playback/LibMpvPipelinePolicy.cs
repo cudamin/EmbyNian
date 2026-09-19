@@ -41,7 +41,20 @@ internal static class LibMpvPipelinePolicy
         // window/auto alone still uses DWM. This requests exclusive fullscreen when mpv's
         // fullscreen state is enabled; it does NOT claim DXGI/the driver granted exclusivity.
         options.Add(new("d3d11-exclusive-fs", integrated ? "no" : "yes", Required: true));
-        options.Add(new("force-window", "immediate", Required: true));
+        // 集成模式必须 immediate：合成交换链要在文件加载前就存在，宿主才能把它接进 XAML 面板
+        // （见 LibMpvBackend 里合成附加的第一遍，否则面板一直黑）。
+        //
+        // 独占模式用 **no**：mpv 自建顶层窗口，而 immediate/yes 都会在拿到视频尺寸**之前**就把窗口生出来 ——
+        // 2026-09-19 本机实测（work/probe-mpv-window.py，真实窗口、枚举本进程的窗口矩形）：
+        //   yes：initialize 后 0.1s 冒出 960x540 的黑窗（居中），文件一开跳成 1280x720 ⇒ 用户报的
+        //        「启播的时候有时候会有个黑框会闪一下」就是这一跳；源打不开（库里那版 404）时那个黑框
+        //        还一直挂着，因为窗口已经生出来了没什么可关。
+        //   no：initialize 与「打不开的源」全程**没有窗口**；能放的源在 0.1s 时以**终值尺寸**出生
+        //        （1280x720，无中间尺寸）。auto-fullscreen 那一档同样是一出生就整屏（实测 0→2560x1440）。
+        // 代价是播完（EOF）时窗口会被 mpv 收掉 —— 所以画面一上来就把它按住，见 LibMpvHandle：
+        // 观察 vo-configured 翻真之后把 force-window 改回 yes（运行期可改，实测窗口不闪、且能跨 loadfile
+        // 与 EOF 活着，这正是「不关窗换片」要的那扇窗）。
+        options.Add(new("force-window", integrated ? "immediate" : "no", Required: true));
         options.Add(new("input-default-bindings", integrated ? "no" : "yes", Required: true));
         options.Add(new("input-vo-keyboard", integrated ? "no" : "yes", Required: true));
         // The shell owns global media keys even when mpv owns the focused video window's keys.

@@ -115,6 +115,12 @@ public sealed partial class PlayerViewModel : ObservableObject
     private readonly SkipCoordinator _skips = new();
 
     /// <summary>
+    /// 视频窗「要选集菜单」的闸门（见 <see cref="EmbyNian.Mpv.EpisodeMenuRequestGate"/>）。收下按键的
+    /// 是 uosc 的控件，它一旦自激，宿主在几十秒里能收到几十万条请求 —— 这个闸门就是那一下的活口。
+    /// </summary>
+    private readonly EpisodeMenuRequestGate _episodeMenuGate = new();
+
+    /// <summary>
     /// Cancels anything in flight on the way out. Created here rather than per attach and deliberately
     /// never disposed: a poll waiting on a five-hundred-millisecond delay comes back and reads
     /// <c>Token</c>, and a disposed source would answer that with an exception instead of a cancellation.
