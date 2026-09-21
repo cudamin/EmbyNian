@@ -1,3 +1,4 @@
+using EmbyNian.Emby;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
@@ -63,6 +64,8 @@ public sealed partial class PlayerPage
         var was = Visibility;
         var wasCover = ViewModel.CoverUp;
         var wasEpisodes = ViewModel.EpisodeControlsVisible;
+        var wasVersions = ViewModel.VersionControlsVisible;
+        var wasItem = ViewModel.CurrentItem;
         var wasOffer = ViewModel.SkipOffered;
         var wasCaption = ViewModel.SkipCaption;
 
@@ -70,6 +73,23 @@ public sealed partial class PlayerPage
         ViewModel.EpisodeControlsVisible = true;
         ViewModel.SkipOffered = true;
         ViewModel.SkipCaption = "跳过片头";
+
+        // 「版本」按钮和上一集/下一集同一个坏法：收起时自动化名字一问就是空的，跟它有没有名字无关。
+        // 它比那一对还难伺候 —— 它的可见性由「这个条目有几版」推出来，而自检跑在没有播放的时候，
+        // 手上那个条目是空的，于是它必然是收起的。造一个挂着两版源的条目顶上，走完再还回去
+        // （它跟着 CurrentItem 走，不是单独一格，所以还的也得是那一条）。
+        // 2026-09-21：这一条是**真逮到过东西**才有的 —— 那次失败报的正是 VersionButton 没名字，
+        // 底因是 VersionControlsVisible 被 FillSiblingsAsync 的 await 之后重新算了一遍。
+        if (wasVersions == false)
+        {
+            ViewModel.CurrentItem = new EmbyItem
+            {
+                Id = "selfcheck-version-probe",
+                Name = "自检",
+                MediaSources = [new MediaSource(), new MediaSource()]
+            };
+        }
+
         UpdateLayout();
 
         var named = 0;
@@ -120,13 +140,19 @@ public sealed partial class PlayerPage
         ViewModel.EpisodeControlsVisible = wasEpisodes;
         ViewModel.SkipOffered = wasOffer;
         ViewModel.SkipCaption = wasCaption;
+
+        // 「有几版」那一格跟着条目走，所以还的时候要先还条目 —— 直接写它会被下面那次赋值立刻改回去。
+        ViewModel.CurrentItem = wasItem;
+        if (ViewModel.VersionControlsVisible != wasVersions) ViewModel.VersionControlsVisible = wasVersions;
+
         Visibility = was;
         UpdateLayout();
 
         var ok = mute.Count == 0 && named > 0 && focus && loud.Count == 0
                  && idle && spinning && settled
                  && Visibility == was && ViewModel.CoverUp == wasCover
-                 && ViewModel.EpisodeControlsVisible == wasEpisodes && ViewModel.SkipOffered == wasOffer;
+                 && ViewModel.EpisodeControlsVisible == wasEpisodes && ViewModel.SkipOffered == wasOffer
+                 && ViewModel.VersionControlsVisible == wasVersions && ReferenceEquals(ViewModel.CurrentItem, wasItem);
 
         return (ok,
             $"{named} 个控件报出了名字"

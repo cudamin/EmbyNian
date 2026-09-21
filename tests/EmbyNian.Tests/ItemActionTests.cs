@@ -21,7 +21,7 @@ namespace EmbyNian.Tests;
 /// </summary>
 internal static class ItemActionTests
 {
-    private const string Base = "http://192.168.31.230:8896/emby/";
+    private const string Base = "http://192.0.2.10:8896/emby/";
 
     public static void Register()
     {
@@ -363,7 +363,11 @@ internal static class ItemActionTests
 
             var season = new EmbyItem
             {
-                Id = "se2", Name = "第 2 季", Type = EmbyItemType.Season, SeriesId = "s1", SeriesName = "攻壳机动队"
+                Id = "se2",
+                Name = "第 2 季",
+                Type = EmbyItemType.Season,
+                SeriesId = "s1",
+                SeriesName = "攻壳机动队"
             };
             Assert.Equal(("s1", "se2"), DownloadPlan.EpisodeQuery(season),
                 "季要用它所属剧的 id 去问，自己那个 id 只当季筛选 —— 单集列表那个接口只认剧");
@@ -453,7 +457,7 @@ internal static class ItemActionTests
                 new Uri(Base),
                 "token-1",
                 "u1",
-                "donxuelian",
+                "docuser",
                 "果服",
                 DeviceIdentity.Create("device-1", "3.0.0")));
 

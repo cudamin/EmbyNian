@@ -177,6 +177,41 @@ public static class SettingsMigration
             }
         }
 
+        // v16 moves the short 快进/快退 跨度 from 10 秒 to 5 秒 (2026-09-20, 「新增键盘上的左和右设置为播放
+        // 进度快退五秒和快进五秒」). 10 was the shipped default up to v15, so a file holding it under **both**
+        // halves of the pair is a file where nobody ever picked one — the two rows have only ever moved
+        // together, and this step only fires when they still agree. A file holding 10 under one of them and
+        // something else under the other was typed in, and stays.
+        //
+        // v16 新增的那对大步跨度（↑ / ↓ 的 30 秒）在这里不用写一行：v15 的文件里根本没有这两个键，反序列化
+        // 之后它们就是属性的初始值 30，和任何新加字段一样。
+        if (version < 16
+            && settings.Playback.SeekForwardSeconds == 10
+            && settings.Playback.SeekBackwardSeconds == 10)
+        {
+            settings.Playback.SeekForwardSeconds = 5;
+            settings.Playback.SeekBackwardSeconds = 5;
+        }
+
+        // v17 moves 字幕字体 to Noto Sans CJK SC, the family this client now ships and the one the
+        // reference player's own mpv.conf names (2026-09-21, 「默认字体和当前字体改用Noto Sans CJK SC，这个
+        // 字体要内置到程序里」). What it replaces is the chain of shipped defaults, not any decision: v14
+        // wrote Microsoft YaHei onto every file that had never picked one, and v12 wrote
+        // 方正中等线简体 onto the same files before that — so both names here, under either of the two
+        // spellings 方正 answers to, mean 「nobody chose」. Everything else was picked and stays; from
+        // v17 on, a stored Noto is a decision too, and the older families remain bundled and selectable.
+        if (version < 17)
+        {
+            var storedFont = settings.Playback.SubtitleFontFamily.Trim();
+            if (storedFont.Length == 0
+                || storedFont.Equals("Microsoft YaHei", StringComparison.OrdinalIgnoreCase)
+                || storedFont.Equals("方正中等线简体", StringComparison.Ordinal)
+                || storedFont.Equals("FZZhongDengXian-Z07S", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Playback.SubtitleFontFamily = "Noto Sans CJK SC";
+            }
+        }
+
         settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
         return Normalize(settings);
     }
@@ -327,6 +362,8 @@ public static class SettingsMigration
         settings.Playback.ProgressReportIntervalSeconds = Math.Clamp(settings.Playback.ProgressReportIntervalSeconds, 1, 60);
         settings.Playback.SeekForwardSeconds = Math.Clamp(settings.Playback.SeekForwardSeconds, 1, 600);
         settings.Playback.SeekBackwardSeconds = Math.Clamp(settings.Playback.SeekBackwardSeconds, 1, 600);
+        settings.Playback.SeekForwardLongSeconds = Math.Clamp(settings.Playback.SeekForwardLongSeconds, 1, 600);
+        settings.Playback.SeekBackwardLongSeconds = Math.Clamp(settings.Playback.SeekBackwardLongSeconds, 1, 600);
         settings.Playback.ResumeRewindSeconds = Math.Clamp(settings.Playback.ResumeRewindSeconds, 0, 120);
         settings.Playback.SubtitleBackOpacity = Math.Clamp(settings.Playback.SubtitleBackOpacity, 0, 100);
         settings.Playback.SubtitleScalePercent = Math.Clamp(settings.Playback.SubtitleScalePercent,

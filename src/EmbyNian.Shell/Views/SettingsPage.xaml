@@ -451,7 +451,7 @@
                             <TextBox
                                 AutomationProperties.Name="MoviePilot 地址"
                                 Header="服务地址"
-                                PlaceholderText="192.168.31.230:3001"
+                                PlaceholderText="192.0.2.10:3001"
                                 Text="{x:Bind Url, Mode=TwoWay}" />
 
                             <TextBox

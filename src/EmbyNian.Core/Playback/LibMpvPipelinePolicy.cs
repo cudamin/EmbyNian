@@ -38,9 +38,17 @@ internal static class LibMpvPipelinePolicy
         options.Add(new("gpu-api", "d3d11", Required: true));
         options.Add(new("gpu-context", "d3d11", Required: true));
         options.Add(new("d3d11-output-mode", integrated ? "composition" : "window", Required: true));
-        // window/auto alone still uses DWM. This requests exclusive fullscreen when mpv's
-        // fullscreen state is enabled; it does NOT claim DXGI/the driver granted exclusivity.
-        options.Add(new("d3d11-exclusive-fs", integrated ? "no" : "yes", Required: true));
+        // 两条管线都 **no**（参考项目 dyphire/mpv-config：`d3d11-exclusive-fs` 那行是注释掉的 ——
+        // 也就是关，mpv 出厂就是关，而 `d3d11-flip` 那行同样注释着，翻转模型「性能最好」的默认因此留着）。
+        //
+        // 独占模式此前是 `yes`，正是它让「独占模式下切全屏和窗口化」卡顿、闪烁、画面像倒退一下、慢半拍
+        // 才铺满（2026-09-20 用户报）：exclusive-fs=yes 会在进/退全屏那一刻向 DXGI 申请独占全屏，交换链
+        // 重建、显示模式切换，而这恰恰是别的播放器（以及这份参考配置）为了切换顺滑都不开的东西。关掉之后
+        // 走的是无边框窗口化全屏（DWM 合成、翻转模型），切换像普通播放器一样干净；代价只是放弃「独占全屏」
+        // 那点极致性能 —— 对局域网放电影几乎无感。集成模式本来就是 `no`（画面合成进 XAML 树，压根没有可独占
+        // 的顶层交换链），这一改把两条并到同一个值上。仍显式钉死而不省略：mpv 的默认是 no 不代表可以不写，
+        // 哪天默认变了得由这里说了算（本项目「不继承没钉住的默认」）。
+        options.Add(new("d3d11-exclusive-fs", "no", Required: true));
         // 集成模式必须 immediate：合成交换链要在文件加载前就存在，宿主才能把它接进 XAML 面板
         // （见 LibMpvBackend 里合成附加的第一遍，否则面板一直黑）。
         //

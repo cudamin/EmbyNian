@@ -20,6 +20,8 @@
 -- │     EMBYNIAN[osddim]        d3d11 起播画布尺寸兜底观察
 -- │     EMBYNIAN[ui-bind]       脚本绑定叫 embynian-ui-*，宿主消息叫 embynian-*，两套名字不许同名
 -- │     EMBYNIAN[episode]       embynian-ui-* 三个绑定与裁剪说明
+-- │     EMBYNIAN[version]       换版本的第四个绑定（embynian-ui-versions）与 ≡ 菜单里那一行；
+-- │                             uosc 的控件表是静态的，所以入口固定在 ≡ 菜单里，不随版本数增减。
 -- │     EMBYNIAN[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
 -- │                             含双击闸：单击押后到 mpv 的双击窗口外才证实，第二拍「按下」即撤
 -- │                             （撤在按下不撤在松开——独占全屏切换会把光标挪走、松开过不了位置闸）
@@ -392,6 +394,12 @@ function create_default_menu_items()
 	return {
 		{title = t('Subtitles'), value = 'script-binding uosc/subtitles'},
 		{title = t('Audio tracks'), value = 'script-binding uosc/audio'},
+		-- EMBYNIAN[version] — 换版本（同一部片的另一个文件）走宿主的 Emby 导航，同选集：这一项只把请求
+		-- 发给宿主（embynian-ui-versions → embynian-versions），菜单由宿主推回。
+		-- 标题写死中文而不是 t('Versions')：uosc 的本地化按 slang 找 intl/<lang>.json，而宿主的 slang 是
+		-- 「chi,zho,…」这类语言代码，目录里没有对应文件，t() 会原样吐回英文键名。上游自带的几个键有中文
+		-- 译文也不会命中，所以这里不跟它走。（其余几项的中文问题另案。）
+		{title = '版本', value = 'script-binding uosc/embynian-ui-versions'},
 		{title = t('Chapters'), value = 'script-binding uosc/chapters'},
 		{
 			title = t('Utils'),
@@ -966,6 +974,9 @@ bind_command('editions', create_self_updating_menu_opener({
 bind_command('embynian-ui-prev', function() embynian_notify('embynian-episode', '-1') end)
 bind_command('embynian-ui-next', function() embynian_notify('embynian-episode', '1') end)
 bind_command('embynian-ui-episodes', function() embynian_notify('embynian-episodes', '') end)
+-- EMBYNIAN[version] — 版本菜单向宿主要数据（embynian-versions → 宿主 open-menu 推回这一条目的媒体源）。
+-- 与上面三条同一个形状：绑定叫 embynian-ui-…，消息叫 embynian-…，两套名字不许同名。
+bind_command('embynian-ui-versions', function() embynian_notify('embynian-versions', '') end)
 bind_command('menu-prev', function() Elements:maybe('menu', 'navigate_by_items', -1) end)
 bind_command('menu-next', function() Elements:maybe('menu', 'navigate_by_items', 1) end)
 bind_command('menu-prev-page', function() Elements:maybe('menu', 'navigate_by_page', -1) end)

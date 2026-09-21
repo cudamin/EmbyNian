@@ -42,6 +42,7 @@ public sealed partial class PlayerPage
             ((SolidColorBrush)Resources[key]).Color = ThemeHost.ToColor(colour);
 
         Wash("PlayerBottomScrim", PlayerPalette.BottomScrimStops);
+        PaintExit();
     }
 
     /// <summary>

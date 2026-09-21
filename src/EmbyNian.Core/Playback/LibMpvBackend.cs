@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
+using EmbyNian.Infrastructure;
 using EmbyNian.Mpv;
 
 namespace EmbyNian.Playback;
@@ -13,8 +14,17 @@ namespace EmbyNian.Playback;
 /// libmpv is <c>config=no</c> by default, so no mpv.conf, input.conf or script from any mpv
 /// installation is ever read. Everything the player does comes from the settings page by way of
 /// <see cref="PlaybackRequest.PlayerOptions"/>.
+/// <para>
+/// <see cref="PlaybackSettings"/> rides along next to <c>MpvSettings</c> for the one thing that is a
+/// setting but not an mpv option: the four arrow keys' 跨度, which reach mpv as runtime
+/// <c>keybind</c> commands rather than as launch options (2026-09-20, see <see cref="MpvSeekKeys"/>).
+/// </para>
 /// </summary>
-public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> surfaceProvider, Func<bool>? autoFullscreen = null) : IPlaybackBackend
+public sealed class LibMpvBackend(
+    MpvSettings settings,
+    PlaybackSettings playback,
+    Func<IVideoSurface?> surfaceProvider,
+    Func<bool>? autoFullscreen = null) : IPlaybackBackend
 {
     private const string Category = "mpv";
     private const string LibraryName = "libmpv-2.dll";
@@ -83,6 +93,14 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
             if (uiOptions is null && settings.Pipeline == VideoPipelineKind.Standalone)
                 Log.Warn(Category, $"独占模式未找到 Lua UI 装箱（{MpvUi.ScriptRelativePath}），本次播放没有屏幕控件");
 
+            // 独占模式那四颗方向键的步长（2026-09-20）。集成模式的键盘归 shell 的快捷键表、mpv 的输入层
+            // 整个是关的（input-default-bindings=no），所以那一档不碰 mpv 的绑定表；独占模式正好反过来 ——
+            // 视频窗里的键由 mpv 自己那张内建表处理，而内建值是 ↑↓ = ±60 秒，得从这里改写。为什么走
+            // keybind、为什么秒数不写进装箱文件，都在 MpvSeekKeys 的类注释里。
+            var seekKeys = settings.Pipeline == VideoPipelineKind.Standalone
+                ? MpvSeekKeys.Bindings(playback)
+                : null;
+
             // ClientMessage 只在 Lua UI 在场时才值得收 —— 它是脚本与宿主的唯一通道。
             PruneEvents(context, keepClientMessage: uiOptions is not null);
 
@@ -91,6 +109,13 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
             var error = LibMpvNative.mpv_initialize(context);
             if (error < 0) throw new InvalidOperationException($"mpv 初始化失败：{Describe(error)}");
             cancellationToken.ThrowIfCancellationRequested();
+
+            // 四条 keybind 得等 mpv 起来之后再发：它们不是启动选项（没有 initialize 之前的写法），而是输入层
+            // 的运行期命令，落在比内建高一级的优先级上，所以内建那四条不再执行。失败只记日志 —— 退化成 mpv
+            // 自己的 ±60 / ±5 秒，片子照放。
+            if (seekKeys is not null)
+                foreach (var (seekKey, seekCommand) in seekKeys)
+                    Run(context, "keybind", seekKey, seekCommand);
 
             LibMpvNative.mpv_request_log_messages(context, "warn");
 
@@ -110,6 +135,7 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
                 settings.Pipeline,
                 pipelineOptions,
                 [.. uiOptions ?? []],
+                [.. seekKeys ?? []],
                 Baseline(request.PlayerOptions, request.ShaderOptionCount));
 
             var handle = new LibMpvHandle(context, surface, signature, next => new PlaybackLaunchSignature(
@@ -117,6 +143,12 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
                 [.. LibMpvPipelinePolicy.Build(settings.Pipeline, next.PlayerOptions)
                     .Select(option => new KeyValuePair<string, string>(option.Name, option.Value))],
                 [.. uiOptions ?? []],
+                // 方向键这一节下一次**重算**，不抄上面那份快照：它随设置走，而签名在这里的作用正是「设置
+                // 改过就别拿旧的一层接着用」（换片前把大步跨度从 30 改成 20 —— 不复用实例，重发 keybind）。
+                // 其余几节是装箱与管线的固定契约，抄快照才对。
+                settings.Pipeline == VideoPipelineKind.Standalone
+                    ? [.. MpvSeekKeys.Bindings(playback)]
+                    : (IReadOnlyList<KeyValuePair<string, string>>)[],
                 Baseline(next.PlayerOptions, next.ShaderOptionCount)));
             handle.Start(request);
             context = IntPtr.Zero; // ownership moved to the handle
@@ -220,10 +252,21 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         // 放在管线契约之前：契约是必需项，永远后写后赢。
         foreach (var option in uiOptions ?? []) Set(context, option.Key, option.Value);
 
+        // 独占模式那扇 mpv 窗口的窗口策略（窗口形状跟画面、出生尺寸下限、拖窗吸附）—— 参考项目 mpv.conf
+        // 那一组里的三条，理由与出处见 StandaloneWindowPolicy。与上面那串同在管线契约之前，且都不是必需项。
+        foreach (var option in StandaloneWindowPolicy.Options(pipeline)) Set(context, option.Key, option.Value);
+
         // 「开始播放后自动全屏」在独占模式的落地：起播即全屏，不先冒一个小窗再跳
         // （mpv 自建窗口没有宿主动画可借，直接以全屏出生就是最接近集成模式的形态）。
         // 边框永远去掉——标题与窗口按钮归 uosc 顶栏，这一位不跟随设置。
-        if (pipeline == VideoPipelineKind.Standalone && (autoFullscreen?.Invoke() ?? false))
+        //
+        // 2026-09-20：这一句的合取式归一到 WindowForms.WantsAutoFullscreen —— 四个调用点（这里、
+        // 播放页进场换手、播放页开播应答、独占模式开播应答）从此共用一个答主。这里传「窗口化」＝
+        // 「还没全屏」，那是事实：起播前 mpv 窗口还没出生、fullscreen 属性也还没读；而 fullscreen=yes
+        // 是幂等的，最坏情况只是多发一条命令。
+        if (pipeline == VideoPipelineKind.Standalone
+            && WindowForms.WantsAutoFullscreen(
+                autoFullscreen?.Invoke() ?? false, lifecycleActive: true, WindowForm.Windowed))
             Set(context, "fullscreen", "yes");
 
         // Ordinary options keep their order; pipeline-critical options are filtered and pinned
@@ -241,7 +284,7 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         }
 
         Log.Info(Category, surface is null
-            ? "独立播放：mpv D3D11 原生 window，已请求 d3d11-exclusive-fs=yes（进入全屏时生效，非独占状态证明）；客户端不介入几何"
+            ? "独立播放：mpv D3D11 原生 window，d3d11-exclusive-fs=no（无边框窗口化全屏，切换顺滑）；客户端不介入几何"
             : "集成播放：D3D11 composition，独占全屏关闭，画面由宿主合成");
         return (surface, pipelineOptions);
     }
@@ -323,6 +366,40 @@ public sealed class LibMpvBackend(MpvSettings settings, Func<IVideoSurface?> sur
         if (value is null) return;
         var error = LibMpvNative.mpv_set_option_string(context, name, value);
         if (error < 0) Log.Warn(Category, $"设置 mpv 选项 {name} 失败：{Describe(error)}");
+    }
+
+    /// <summary>
+    /// One runtime command on a bare context — i.e. before a <see cref="LibMpvHandle"/> exists. The four
+    /// <c>keybind</c> calls that give the arrow keys their steps (2026-09-20) are the only caller so far.
+    /// <para>
+    /// Same marshalling as <see cref="LibMpvHandle.Command"/> — UTF-8, null-terminated — and the same
+    /// promise about failure: logged, never fatal. A key that will not bind leaves mpv's own built-in
+    /// step in place, which is a worse number, not a broken film.
+    /// </para>
+    /// </summary>
+    internal static bool Run(IntPtr context, params string[] arguments)
+    {
+        var array = new IntPtr[arguments.Length + 1];
+        var allocations = new List<IntPtr>(arguments.Length);
+
+        try
+        {
+            for (var index = 0; index < arguments.Length; index++)
+            {
+                var pointer = Marshal.StringToCoTaskMemUTF8(arguments[index]);
+                allocations.Add(pointer);
+                array[index] = pointer;
+            }
+
+            array[^1] = IntPtr.Zero;
+            var error = LibMpvNative.mpv_command(context, array);
+            if (error < 0) Log.Warn(Category, $"mpv 命令 {arguments[0]} 失败：{Describe(error)}");
+            return error >= 0;
+        }
+        finally
+        {
+            foreach (var pointer in allocations) Marshal.FreeCoTaskMem(pointer);
+        }
     }
 
     internal static string Describe(int error)
@@ -475,6 +552,7 @@ internal sealed class LibMpvHandle(
             Observe(ObserveSwapchain, "display-swapchain", LibMpvNative.FormatNone);
 
             surface.GeometryChanged += OnGeometryChanged;
+            surface.SetFrameCapture(CaptureFrameAsync);
 
             // First pass before the file loads: force-window=immediate may already have produced
             // a swapchain, and attaching it now is what keeps the panel black rather than
@@ -883,9 +961,13 @@ internal sealed class LibMpvHandle(
         }, composition: true);
     }
 
+    private Task<VideoFrame?> CaptureFrameAsync() => Task.Run(() =>
+        _apiGate.Run(() => LibMpvFrame.Capture(context), composition: true));
+
     private void StopComposition() => _apiGate.StopComposition(() =>
     {
         if (surface is null) return;
+        surface.SetFrameCapture(null);
         surface.GeometryChanged -= OnGeometryChanged;
         surface.AttachSwapChain(IntPtr.Zero);
     });
@@ -1174,32 +1256,15 @@ internal sealed class LibMpvHandle(
         }
     }
 
-    /// <summary>Sends a command as a null-terminated UTF-8 argument list.</summary>
+    /// <summary>
+    /// Sends a command as a null-terminated UTF-8 argument list. The marshalling itself lives in
+    /// <see cref="LibMpvBackend.Run"/> — the same call the arrow keys' <c>keybind</c> goes through before
+    /// this handle exists.
+    /// </summary>
     private bool Command(params string[] arguments)
     {
-        var array = new IntPtr[arguments.Length + 1];
-        var allocations = new List<IntPtr>(arguments.Length);
-
-        try
-        {
-            for (var index = 0; index < arguments.Length; index++)
-            {
-                var pointer = Marshal.StringToCoTaskMemUTF8(arguments[index]);
-                allocations.Add(pointer);
-                array[index] = pointer;
-            }
-
-            array[^1] = IntPtr.Zero;
-            var error = LibMpvNative.mpv_command(context, array);
-            if (error < 0) Log.Warn(Category, $"mpv 命令 {arguments[0]} 失败：{LibMpvBackend.Describe(error)}");
-
-            // 返回值交出去，不只是写进日志：调用方要拿它决定「按了截图之后到底要不要说已保存」。
-            return error >= 0;
-        }
-        finally
-        {
-            foreach (var pointer in allocations) Marshal.FreeCoTaskMem(pointer);
-        }
+        // 返回值交出去，不只是写进日志：调用方要拿它决定「按了截图之后到底要不要说已保存」。
+        return LibMpvBackend.Run(context, arguments);
     }
 }
 

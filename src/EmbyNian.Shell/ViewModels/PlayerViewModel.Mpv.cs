@@ -48,12 +48,20 @@ public sealed partial class PlayerViewModel
     }
 
     /// <summary>
-    /// 快进/快退 by the 跨度 from settings. Both arrow keys go through here, so the number the settings page
-    /// shows is the number they move by.
+    /// 快进/快退 by the short 跨度 from settings —— ← / → 那一路。设置页上印的是几，这里就跳几。
     /// </summary>
     internal void SeekForward() => SeekBy(Settings.Playback.SeekForwardSeconds);
 
     internal void SeekBackward() => SeekBy(-Settings.Playback.SeekBackwardSeconds);
+
+    /// <summary>
+    /// 大步 快进/快退 —— ↑ / ↓ 那一路（2026-09-20，动作表里那两条 <c>seek-*-long</c>）。与上面那对是
+    /// 同一件事的两种幅度，所以同样落到 <see cref="SeekBy"/>：发出去的都只是「相对跳 N 秒」，区别只在 N
+    /// 从哪个设置里读。
+    /// </summary>
+    internal void SeekForwardLong() => SeekBy(Settings.Playback.SeekForwardLongSeconds);
+
+    internal void SeekBackwardLong() => SeekBy(-Settings.Playback.SeekBackwardLongSeconds);
 
     private void SeekBy(int seconds) => _ = _playback.CommandAsync(
         "seek",
@@ -183,6 +191,13 @@ public sealed partial class PlayerViewModel
             video?.Height ?? 0,
             _surface,
             _shaderPlan.Measure.Tier);
+
+        // 退场保留那一帧要按「画面本来什么形状」摆，而这个数只有码流尺寸能给 —— 另外三个候选
+        // （呈现矩形、mpv 缓冲尺寸、dwidth/dheight）在窗口与画面不同形时全都是窗口比例。详见
+        // CompositionVideoTarget.SourceAspect。读不到就报零，那边会退回别的来源。
+        SourceAspectChanged?.Invoke(video is { Width: > 0, Height: > 0 } stream
+            ? (double)stream.Width!.Value / stream.Height!.Value
+            : 0);
 
         _launchOutput = _surface.Active;
         return _launchOutput;

@@ -339,7 +339,17 @@ public sealed partial class PlayerViewModel
         if (_nowPlaying is { } item)
         {
             lines.Add($"标题：{item.ToPlaybackTitle()}");
-            if (item.MediaSources.Count > 0) lines.Add($"媒体源：{item.MediaSources[0].ToQualityLabel()}");
+
+            // 说的是**正在放的那一版**，且名字与画质一起写。这一页存在的意义是事后能说清「当时到底放的是
+            // 什么」，而一个条目挂两版时（4K HDR / 1080p），只写画质那一句答不出是哪一份文件；
+            // 只写名字又答不出是什么分辨率 —— 两句都要。问第一个媒体源是旧写法，换过版就报错了文件。
+            if (PlayingSource is { } playing)
+            {
+                var quality = playing.ToQualityLabel();
+                lines.Add(quality.Length > 0
+                    ? $"媒体源：{ItemDetail.SourceLabel(playing)}（{quality}）"
+                    : $"媒体源：{ItemDetail.SourceLabel(playing)}");
+            }
         }
 
         if (Status.HasDuration) lines.Add($"时长：{Status.DurationClock}");

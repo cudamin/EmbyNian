@@ -115,10 +115,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     private readonly SkipCoordinator _skips = new();
 
     /// <summary>
-    /// 视频窗「要选集菜单」的闸门（见 <see cref="EmbyNian.Mpv.EpisodeMenuRequestGate"/>）。收下按键的
-    /// 是 uosc 的控件，它一旦自激，宿主在几十秒里能收到几十万条请求 —— 这个闸门就是那一下的活口。
+    /// 视频窗「要一份菜单」的两道闸门（见 <see cref="EmbyNian.Mpv.MenuRequestGate"/>）：选集一道、版本一道。
+    /// 收下按键的是 uosc 的控件，它一旦自激，宿主在几十秒里能收到几十万条请求 —— 这个闸门就是那一下的活口。
+    /// 分开两道而不是共用一道：它们是两个按钮，用户点完选集再点版本不该被对方吃掉。
     /// </summary>
-    private readonly EpisodeMenuRequestGate _episodeMenuGate = new();
+    private readonly MenuRequestGate _episodeMenuGate = new();
+
+    private readonly MenuRequestGate _versionMenuGate = new();
 
     /// <summary>
     /// Cancels anything in flight on the way out. Created here rather than per attach and deliberately
@@ -164,6 +167,12 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>Prevents repeated boundary clicks from starting the same server lookup or replacement twice.</summary>
     private bool _episodeLookupBusy;
     private string? _episodeSwitchTargetId;
+
+    /// <summary>
+    /// 正在换的那一版（换版途中挡第二下）。存<b>对象</b>而不是源 Id：Emby 对一部分直连文件不返回源 Id，
+    /// 几个版本会撞成同一个空 Id —— 同 <see cref="Playback.MediaVersionSwitch.Same"/> 的规矩。
+    /// </summary>
+    private MediaSource? _versionSwitchTarget;
 
     private long _seekTouched;
     private double? _seekPending;
@@ -410,6 +419,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>The picture's own shape, for the window to keep itself in. Zero means 「stop keeping」.</summary>
     internal event Action<double>? PictureAspectChanged;
 
+    /// <summary>
+    /// 片子<b>码流自己</b>的宽高比，换片时报一次。与 <see cref="PictureAspectChanged"/> 分开是因为两者
+    /// 的用途不同：那个给窗口整形（要的是「显示成什么形状」，全屏时含黑边），这个给退场保留那一帧
+    /// 定位（要的是「画面本来什么形状」，与窗口无关）。零表示这一部读不到码流尺寸。
+    /// </summary>
+    internal event Action<double>? SourceAspectChanged;
+
     /// <summary>A fresh set of 统计 rows to draw.</summary>
     internal event Action<IReadOnlyList<PlaybackStatRow>>? StatsUpdated;
 
@@ -489,6 +505,54 @@ public sealed partial class PlayerViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(EpisodeControlsVisibility))]
     public partial bool EpisodeControlsVisible { get; set; }
 
+    /// <summary>
+    /// 这个条目挂了几版文件 —— 有第二版才有了「版本」按钮（<see cref="VersionControlsVisibility"/>）。
+    /// <para>
+    /// Emby 上一个条目挂两版是常态（4K 与 1080p、剧场版与导演剪辑版），而绝大多数条目只有一版：
+    /// 一个常年摆在那里、点开只有一行的按钮比没有这个按钮更烦人，所以它按这个数露面。
+    /// 独占模式视频窗里那条菜单项不受这里管 —— uosc 的控件表是静态的，见
+    /// <see cref="PushVersionMenuAsync"/>。
+    /// </para>
+    /// <para>
+    /// **只由「手上这个条目」算出来，不从别处推**（2026-09-21）。它的三个写点全都在
+    /// <see cref="CurrentItem"/> 上，于是无论谁先后动 —— 媒体信息先到、还是单集列表先补齐 —— 这一格
+    /// 都是那次赋值的副产品，两处不可能互相矛盾。原先它是 <c>OnNowPlayingChanged</c> 按
+    /// <c>item.MediaSources.Count</c> 直接写的，而 <see cref="FillSiblingsAsync"/> 那个 await 之后又
+    /// 把「手上这个条目」换成了服务器的记录；两边一旦换了次序，控制条上就会出现一颗点开只有
+    /// 「没有可切换的版本」的按钮（自检逮到过，见 <c>ProbeNarration</c> 的 <c>VersionButton</c>）。
+    /// </para>
+    /// <para>
+    /// 与 <see cref="Episodes"/> 之间没有这样的引用关系：那两个按钮由
+    /// <see cref="EpisodeControlsVisible"/> 管，而它在补齐单集列表时是被明写的一行，因为「这个条目是不是
+    /// 单集」本来就不该由列表长度推——剧集详情里只有一集也是单集。
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(VersionControlsVisibility))]
+    public partial bool VersionControlsVisible { get; set; }
+
+    /// <summary>
+    /// 手上这个条目 —— 正在播的那一条，带媒体信息与媒体源。三个写点：
+    /// <see cref="PlayerViewModel.Transport.StartPlaybackAsync"/> 拿到详情之后一次，
+    /// <see cref="PlayerViewModel.Transport.FillSiblingsAsync"/> 等待服务器记录之后一次（与
+    /// <see cref="Episodes"/> 同一拍），<see cref="PlayerViewModel.Transport.SwitchVersion"/> 换版之后一次。
+    /// <para>
+    /// 它存在的理由是让 <see cref="VersionControlsVisible"/> 无懈可击：列表与「有几版」是同一次赋值的
+    /// 两个结果，没有第二个人需要记得跟着改。见那一格的注释。
+    /// </para>
+    /// </summary>
+    internal EmbyItem? CurrentItem
+    {
+        get => _currentItem;
+        set
+        {
+            _currentItem = value;
+            VersionControlsVisible = value is not null && value.MediaSources.Count > 1;
+        }
+    }
+
+    private EmbyItem? _currentItem;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SkipVisibility))]
     public partial bool SkipOffered { get; set; }
@@ -553,6 +617,8 @@ public sealed partial class PlayerViewModel : ObservableObject
 
     public Visibility EpisodeControlsVisibility => Show(EpisodeControlsVisible);
 
+    public Visibility VersionControlsVisibility => Show(VersionControlsVisible);
+
     public Visibility SkipVisibility => Show(SkipOffered);
 
     public Visibility CoverVisibility => Show(CoverUp);
@@ -606,6 +672,15 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal IReadOnlyList<EmbyItem> Episodes { get; private set; } = [];
 
     internal string PlayingItemId { get; private set; } = "";
+
+    /// <summary>这个条目上的全部版本，顺序就是「版本」菜单里的次序。没在播时是空表。</summary>
+    internal IReadOnlyList<MediaSource> Versions => MediaVersionSwitch.Versions(_nowPlaying);
+
+    /// <summary>
+    /// 正在放的那一版 —— <b>条目版本表里的那一行</b>，候选回退落定之后的那一版（见
+    /// <see cref="PlaybackService.PlayingSource"/>）。菜单勾的就是它；认不出来时 null，那时菜单一行都不勾。
+    /// </summary>
+    internal MediaSource? PlayingSource => MediaVersionSwitch.Playing(_nowPlaying, _playback.PlayingSource);
 
     /// <summary>Where the chapter boundaries are, for the ticks the page draws under the slider.</summary>
     internal IReadOnlyList<SkipChapter> ChapterMarks { get; private set; } = [];

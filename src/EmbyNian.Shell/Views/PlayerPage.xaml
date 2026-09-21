@@ -99,6 +99,9 @@
         <SolidColorBrush x:Key="PlayerSkipBrush" />
         <SolidColorBrush x:Key="PlayerCoverBrush" />
         <SolidColorBrush x:Key="PlayerStageBrush" />
+        <!-- 退场底那一支：与 PlayerStageBrush 分开一支，因为它的色号不由播放页的调色板上，而是由
+             PaintPalette 按应用当前主题写进来（见标记里 ExitBackdrop 那段）。 -->
+        <SolidColorBrush x:Key="PlayerExitBrush" />
         <SolidColorBrush x:Key="PlayerEdgeFaintBrush" />
         <SolidColorBrush x:Key="PlayerEdgeBrush" />
         <SolidColorBrush x:Key="PlayerEdgeStrongBrush" />
@@ -239,6 +242,31 @@
         <Grid
             x:Name="Stage"
             Background="{StaticResource PlayerStageBrush}"
+            IsHitTestVisible="False"
+            Visibility="Collapsed" />
+
+        <!-- ================= 退场底 =================
+             退出播放那一趟立起来的一块保险面，只有退场期间在（EnterPlayer 里一定收掉，见 PlayerPage.Exit.cs）。
+             它铺的是窗口洗出来的那支底，也就是浏览页的底。
+
+             它为什么还在（2026-09-20 晚重新设计之后，它已经不是淡出的主角）：退场那一拍窗口会从播放几何
+             一口气跳成浏览几何，而画面是挂在 VideoHost 上的 SpriteVisual，要到同一帧的布局里才被摆到新
+             尺寸上。这一块面就压在那道缝下面 —— 万一画面那一拍没盖满新宿主，露出来的是浏览页同色的底，
+             而不是一圈 #16181C 的窗口色（2026-09-20 用户第二张截图量到的正是那一圈）。
+
+             真正在动的是画面自己：CompositionVideoTarget.RetainDim 被逐拍拧上去（PlayerMotion.ExitDimAt），
+             最后一帧从全亮一路溶解到零，底下的浏览页因此是「浮现」出来的。这块面随本页的不透明度一起淡，
+             但它排在画面**之下**，正常情况下从头到尾看不见。
+
+             底色写 PlayerExitBrush 而不是直接 {ThemeResource LayerFillColorDefaultBrush}：写主题键的话它
+             会在本页的主题作用域里求值，而这一页是 RequestedTheme="Dark" —— 一套浅色主题上退出播放会露
+             出一块深色的面。这一支由 PaintPalette 按**应用**当前主题上色（两支本来就是同一个色号）。
+
+             z 序：舞台 → 退场底 → 画面 → 控件。两处 IsHitTestVisible 都是 False，所以这一块不吃指针，
+             也不影响「指针上压着谁」那条光标判据。 -->
+        <Grid
+            x:Name="ExitBackdrop"
+            Background="{StaticResource PlayerExitBrush}"
             IsHitTestVisible="False"
             Visibility="Collapsed" />
 
@@ -857,6 +885,16 @@
                         Visibility="{x:Bind ViewModel.EpisodeControlsVisibility, Mode=OneWay}">
                         <Button.Flyout>
                             <MenuFlyout x:Name="EpisodeMenu" Placement="Top" Opening="OnEpisodeMenuOpening" />
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button
+                        x:Name="VersionButton"
+                x:Uid="PlayerPage_VersionButton"
+                        Style="{StaticResource OsdButtonStyle}"
+                        Visibility="{x:Bind ViewModel.VersionControlsVisibility, Mode=OneWay}">
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="VersionMenu" Placement="Top" Opening="OnVersionMenuOpening" />
                         </Button.Flyout>
                     </Button>
 

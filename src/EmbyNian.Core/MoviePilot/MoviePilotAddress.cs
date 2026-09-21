@@ -47,7 +47,7 @@ public static class MoviePilotAddress
         var trimmed = text.Trim();
 
         // A scheme is required for Uri to treat this as absolute; anything without one gets http://, which is
-        // what lets "192.168.31.230:3001" parse as host plus port instead of as a relative path.
+        // what lets "192.0.2.10:3001" parse as host plus port instead of as a relative path.
         if (!trimmed.Contains("://", StringComparison.Ordinal)) trimmed = DefaultScheme + "://" + trimmed;
 
         if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var parsed))

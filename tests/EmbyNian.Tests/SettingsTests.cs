@@ -185,7 +185,7 @@ internal static class SettingsTests
         {
             const string v1 = """
             {
-              "ServerUrl": "http://192.168.31.230:8896",
+              "ServerUrl": "http://192.0.2.10:8896",
               "Username": "老王",
               "UserId": "u-1",
               "AccessToken": "token-v1",
@@ -198,7 +198,7 @@ internal static class SettingsTests
 
             Assert.Equal(1, settings.Servers.Count);
             var server = settings.Servers[0];
-            Assert.Equal("http://192.168.31.230:8896", server.Url);
+            Assert.Equal("http://192.0.2.10:8896", server.Url);
             Assert.Equal(1, server.Accounts.Count);
             Assert.Equal("老王", server.Accounts[0].Username);
             Assert.Equal("u-1", server.Accounts[0].UserId);
@@ -231,7 +231,7 @@ internal static class SettingsTests
                 {
                   "Id": "s-1",
                   "Name": "果服",
-                  "Url": "http://192.168.31.230:8896",
+                  "Url": "http://192.0.2.10:8896",
                   "Accounts": [
                     { "Id": "a-1", "Username": "我", "UserId": "u-1", "ProtectedPassword": "AQAAdpapi==", "AccessToken": "tok" }
                   ]
@@ -254,7 +254,7 @@ internal static class SettingsTests
         {
             var original = SettingsMigration.NewDefaults();
             original.Servers[0].Name = "果服";
-            original.Servers[0].Url = "http://192.168.31.230:8896";
+            original.Servers[0].Url = "http://192.0.2.10:8896";
             original.Shaders.Enabled = false;
             original.Shaders.Gpu = EmbyNian.Mpv.GpuTier.High;
             original.Shaders.ManualGroup = "anime-sweet";
@@ -969,26 +969,29 @@ internal static class SettingsTests
         Test("迁移：v14 把字幕默认字体换回 Microsoft YaHei", () =>
         {
             // 「默认字体改为Microsoft YaHei」（2026-09-06）。v12 把装机默认挪到程序自带的方正中等线
-            // 简体时写过一批文件，v14 把它们一并跟到新默认 —— 存着旧默认就是没挑过字体，v12 怎么搬
-            // 方正中等线简体，v14 就怎么搬回来。自带字体的英文族名 FZZhongDengXian-Z07S 是同一个家族，
-            // 一样要跟；自己挑的字体（思源黑体）不动。
+            // 简体时写过一批文件，v14 把它们一并跟到新默认 —— 存着旧默认就是没挑过字体。自带字体的英文
+            // 族名 FZZhongDengXian-Z07S 是同一个家族，一样要跟；自己挑的字体（思源黑体）不动。
+            //
+            // **v17 起终点不再是雅黑**（见下面那条 v17 的测试）：这些断言读的是一条链的终点，所以
+            // v14 写进去的雅黑接着被 v17 带到 Noto。分两步留下来的价值是「存着旧默认 = 没挑过」这条
+            // 判据本身还钉着 —— 直接拿一个 v14 之后的文件去验，v17 那条测试才是它该管的事。
             var v12default = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"方正中等线简体"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", v12default.Playback.SubtitleFontFamily);
+            Assert.Equal("Noto Sans CJK SC", v12default.Playback.SubtitleFontFamily);
 
             var alias = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"FZZhongDengXian-Z07S"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", alias.Playback.SubtitleFontFamily, "英文族名是同一家族，一样跟到新默认");
+            Assert.Equal("Noto Sans CJK SC", alias.Playback.SubtitleFontFamily, "英文族名是同一家族，一样跟到新默认");
 
-            // v11 的文件先过 v12 再过 v14：Microsoft YaHei → 方正中等线简体 → Microsoft YaHei，终点
-            // 还是新默认；.Heiti J 那个从来画不出来的名字也一样。
+            // v11 的文件先过 v12 再过 v14：Microsoft YaHei → 方正中等线简体 → Microsoft YaHei，v17
+            // 再把雅黑带走；.Heiti J 那个从来画不出来的名字也一样。
             var v11 = SettingsMigration.FromJson(
                 """{"SchemaVersion":11,"Playback":{"SubtitleFontFamily":"Microsoft YaHei"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", v11.Playback.SubtitleFontFamily);
+            Assert.Equal("Noto Sans CJK SC", v11.Playback.SubtitleFontFamily);
 
             var macish = SettingsMigration.FromJson(
                 """{"SchemaVersion":11,"Playback":{"SubtitleFontFamily":".Heiti J"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", macish.Playback.SubtitleFontFamily);
+            Assert.Equal("Noto Sans CJK SC", macish.Playback.SubtitleFontFamily);
 
             var picked = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"思源黑体 CN"}}""", Protector);
@@ -996,17 +999,49 @@ internal static class SettingsTests
 
             var empty = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":""}}""", Protector);
-            Assert.Equal("Microsoft YaHei", empty.Playback.SubtitleFontFamily, "空值走兜底族名，兜底族名就是新默认");
+            Assert.Equal("Noto Sans CJK SC", empty.Playback.SubtitleFontFamily, "空值走兜底族名，兜底族名就是新默认");
+        });
 
-            // v14 起再存方正中等线简体就是他的决定 —— 字体照样自带、照样可选，迁移不许再碰。
-            var deliberate = SettingsMigration.FromJson(
+        Test("迁移：v17 把字幕默认字体换成 Noto Sans CJK SC", () =>
+        {
+            // 「默认字体和当前字体改用Noto Sans CJK SC，这个字体要内置到程序里」（2026-09-21）。这一款
+            // 随程序走（assets/fonts，mpv 靠 sub-fonts-dir 找到它），也是参考播放器 mpv.conf 里点名的
+            // 那个族。要带过来的是 v14 写进去的雅黑与 v12 写进去的方正 —— 存着旧出厂默认就是没挑过。
+            var yahei = SettingsMigration.FromJson(
+                """{"SchemaVersion":16,"Playback":{"SubtitleFontFamily":"Microsoft YaHei"}}""", Protector);
+            Assert.Equal("Noto Sans CJK SC", yahei.Playback.SubtitleFontFamily, "v14 写进去的装机默认跟过来");
+
+            var fangzheng = SettingsMigration.FromJson(
+                """{"SchemaVersion":16,"Playback":{"SubtitleFontFamily":"方正中等线简体"}}""", Protector);
+            Assert.Equal("Noto Sans CJK SC", fangzheng.Playback.SubtitleFontFamily, "v12 写进去的装机默认跟过来");
+
+            var fangzhengAlias = SettingsMigration.FromJson(
+                """{"SchemaVersion":16,"Playback":{"SubtitleFontFamily":"FZZhongDengXian-Z07S"}}""", Protector);
+            Assert.Equal("Noto Sans CJK SC", fangzhengAlias.Playback.SubtitleFontFamily, "英文族名是同一家族");
+
+            var empty = SettingsMigration.FromJson(
+                """{"SchemaVersion":16,"Playback":{"SubtitleFontFamily":""}}""", Protector);
+            Assert.Equal("Noto Sans CJK SC", empty.Playback.SubtitleFontFamily, "空值走兜底族名");
+
+            var picked = SettingsMigration.FromJson(
+                """{"SchemaVersion":16,"Playback":{"SubtitleFontFamily":"思源黑体 CN"}}""", Protector);
+            Assert.Equal("思源黑体 CN", picked.Playback.SubtitleFontFamily, "自己挑的字体不是装机默认，不许动");
+
+            // v17 起再存雅黑或方正就是他的决定 —— 两款字体照样自带、照样可选，迁移不许再碰。
+            var deliberateYahei = SettingsMigration.FromJson(
+                "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
+                    + ",\"Playback\":{\"SubtitleFontFamily\":\"Microsoft YaHei\"}}",
+                Protector);
+            Assert.Equal("Microsoft YaHei", deliberateYahei.Playback.SubtitleFontFamily);
+
+            var deliberateFangzheng = SettingsMigration.FromJson(
                 "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
                     + ",\"Playback\":{\"SubtitleFontFamily\":\"方正中等线简体\"}}",
                 Protector);
-            Assert.Equal("方正中等线简体", deliberate.Playback.SubtitleFontFamily);
+            Assert.Equal("方正中等线简体", deliberateFangzheng.Playback.SubtitleFontFamily);
 
-            Assert.Equal("Microsoft YaHei", new PlaybackSettings().SubtitleFontFamily, "装机默认是每台 Windows 都有的雅黑");
-            Assert.Equal("Microsoft YaHei", FontFamilies.Default, "兜底族名也是它：Windows 上一定找得到");
+            Assert.Equal("Noto Sans CJK SC", new PlaybackSettings().SubtitleFontFamily, "装机默认是随程序走的那一款");
+            Assert.Equal("Noto Sans CJK SC", FontFamilies.Default, "兜底族名也是它：sub-fonts-dir 一定找得到");
         });
 
         Test("描边大小、阴影：从固定几档改成自由数字输入", () =>
@@ -1082,11 +1117,39 @@ internal static class SettingsTests
             Assert.Equal("", junk.Playback.SubtitleBorderColor, "位数不够的也一样");
         });
 
+        Test("迁移 v16：左右键的跨度从 10 改成 5，只翻两行都还停在旧默认的那份文件", () =>
+        {
+            // 「新增键盘上的左和右设置为播放进度快退五秒和快进五秒」（2026-09-20）。10 是 v15 的装机默认，
+            // 而且这两行从来是一起动的 —— 所以「两行都还是 10」＝ 没人挑过，可以翻；只动过其中一行的是他
+            // 自己的决定，一律不碰。
+            var untouched = SettingsMigration.FromJson(
+                """{"SchemaVersion":15,"Playback":{"SeekForwardSeconds":10,"SeekBackwardSeconds":10}}""", Protector);
+            Assert.Equal(5, untouched.Playback.SeekForwardSeconds);
+            Assert.Equal(5, untouched.Playback.SeekBackwardSeconds);
+
+            var chosen = SettingsMigration.FromJson(
+                """{"SchemaVersion":15,"Playback":{"SeekForwardSeconds":15,"SeekBackwardSeconds":10}}""", Protector);
+            Assert.Equal(15, chosen.Playback.SeekForwardSeconds, "动过的那一行是他的决定，迁移不许碰");
+            Assert.Equal(10, chosen.Playback.SeekBackwardSeconds, "两行不一致就不是「没人挑过」，这一份整个不动");
+
+            // 大步那对是 v16 新加的字段，v15 的文件里根本没有这两个键：落到装机默认 30，和任何新字段一样，
+            // 不需要为它写一行迁移。
+            Assert.Equal(30, untouched.Playback.SeekForwardLongSeconds);
+            Assert.Equal(30, untouched.Playback.SeekBackwardLongSeconds);
+            Assert.Equal(AppSettings.CurrentSchemaVersion, untouched.SchemaVersion);
+            Assert.Equal(30, SettingsMigration.FromJson("""{"SchemaVersion":15}""", Protector)
+                .Playback.SeekForwardLongSeconds, "老文件没有这两个键时走属性的初始值");
+            Assert.Equal(30, new PlaybackSettings().SeekForwardLongSeconds, "装机默认就是 30");
+            Assert.Equal(5, new PlaybackSettings().SeekForwardSeconds, "装机默认就是 5");
+        });
+
         Test("规整：跨度与音频延迟被夹回范围", () =>
         {
             var settings = SettingsMigration.NewDefaults();
             settings.Playback.SeekForwardSeconds = 0;
             settings.Playback.SeekBackwardSeconds = 9000;
+            settings.Playback.SeekForwardLongSeconds = 0;
+            settings.Playback.SeekBackwardLongSeconds = 9000;
             settings.Playback.ResumeRewindSeconds = -5;
             settings.Audio.DelayMilliseconds = 99999;
             settings.Video.NetworkCacheMegabytes = -1;
@@ -1095,6 +1158,8 @@ internal static class SettingsTests
 
             Assert.Equal(1, settings.Playback.SeekForwardSeconds);
             Assert.Equal(600, settings.Playback.SeekBackwardSeconds);
+            Assert.Equal(1, settings.Playback.SeekForwardLongSeconds);
+            Assert.Equal(600, settings.Playback.SeekBackwardLongSeconds);
             Assert.Equal(0, settings.Playback.ResumeRewindSeconds);
             Assert.Equal(5000, settings.Audio.DelayMilliseconds);
             Assert.Equal(0, settings.Video.NetworkCacheMegabytes);
@@ -1316,7 +1381,7 @@ internal static class SettingsTests
 
             var server = settings.Servers[0];
             server.Name = "客厅那台";
-            server.Url = "http://192.168.31.230:8896";
+            server.Url = "http://192.0.2.10:8896";
 
             var account = new AccountProfile { Username = "老王", UserId = "u-1" };
             vault.SetPassword(account, "密码123", remember: true);
@@ -1331,7 +1396,7 @@ internal static class SettingsTests
             Assert.Equal(1, settings.Servers.Count, "服务器一台都不许少");
             Assert.True(ReferenceEquals(server, settings.Servers[0]), "还是原来那一台，不是重建的");
             Assert.Equal("客厅那台", server.Name);
-            Assert.Equal("http://192.168.31.230:8896", server.Url);
+            Assert.Equal("http://192.0.2.10:8896", server.Url);
             Assert.Equal(1, server.Accounts.Count);
             Assert.Equal("老王", server.Accounts[0].Username);
             Assert.Equal("密码123", vault.GetPassword(account), "密码还在，恢复默认不等于退出登录");

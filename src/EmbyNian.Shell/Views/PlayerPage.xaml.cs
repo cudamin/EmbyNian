@@ -1,6 +1,7 @@
 using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.ViewModels;
@@ -342,7 +343,12 @@ public sealed partial class PlayerPage : UserControl
 
         // Before anything else that draws: the XAML declares the overlay's brushes empty and this fills
         // them from PlayerPalette. Unpainted they are transparent, not missing — see PlayerPage.Palette.cs.
+        // 退场底那一支也在这一句里（PaintExit），理由与其余几支相同：它是画上去的，不是求出来的。
         PaintPalette();
+
+        // 换主题时那两支画上去的颜色（退场底、以及 Palette 里那些）要跟着翻。本页没有登记进
+        // ThemeHost.Register —— RequestedTheme 是写死的 Dark，见标记 —— 所以只能自己听一声。
+        WireExitTheme();
 
         // Same reasoning one step further: the pin's two states — which of the two drawn pins is showing, the
         // name a screen reader gets, the tooltip — are written by one method, so the markup carries no second
@@ -481,6 +487,7 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.ChaptersChanged += OnChaptersChanged;
         ViewModel.StatusApplied += OnStatusApplied;
         ViewModel.PictureAspectChanged += OnPictureAspectChanged;
+        ViewModel.SourceAspectChanged += OnSourceAspectChanged;
         ViewModel.StatsUpdated += OnStatsUpdated;
 
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
@@ -521,6 +528,7 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     internal void Shutdown()
     {
+        CancelWindowChange();
         _ticker.Stop();
         DropTapHold();
 
@@ -576,6 +584,7 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.ChaptersChanged -= OnChaptersChanged;
         ViewModel.StatusApplied -= OnStatusApplied;
         ViewModel.PictureAspectChanged -= OnPictureAspectChanged;
+        ViewModel.SourceAspectChanged -= OnSourceAspectChanged;
         ViewModel.StatsUpdated -= OnStatsUpdated;
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
 
@@ -675,6 +684,10 @@ public sealed partial class PlayerPage : UserControl
 
         Visibility = Visibility.Visible;
         Stage.Visibility = Visibility.Visible;
+
+        // 退场底与压暗旋钮一定收掉：EnterPlayer 的入口闸只挡「已经在台上」，挡不住「上一次退场没走完
+        // 就又进了播放」（换片、连播、用户手快）。一个留在屏上的退场底会盖住这一整趟播放。
+        EndPlayerExit();
         if (_cursorHidden) _woke = "播放页就位";
         _chrome.Reset(Now);
         Render();
@@ -709,6 +722,7 @@ public sealed partial class PlayerPage : UserControl
     {
         if (_shell is null || _window is null || !_onStage) return;
 
+        CancelWindowChange();
         _onStage = false;
         _inputSuspended = true;
         _ticker.Stop();
@@ -727,15 +741,84 @@ public sealed partial class PlayerPage : UserControl
         HideChapterPeek();
         RenderChapterTicks();
 
-        // FreeSizing 在整个还原事务里保持 true，避免中间的 WM_SIZE 覆盖播放前的浏览位置。
-        // RestorePlayerToBrowse 在同一拍触发 ClientRectTransition：岛布局同步与画面跑动都在那里。
-        _window.RestorePlayerToBrowse();
-        _window.VideoVisible = false;
+        // 退场底先立起来 —— 它是「窗口跳变那几拍」的保险面。这一趟窗口**一个像素都不动**（见下），
+        // 所以它铺的就是这一刻的客户区，立起来就是对的尺寸。
+        BeginPlayerExit();
+        PaintExit();
+
+        // 细线必须在这一拍收掉，而且只能在这一层收。
+        //
+        // 2026-09-20 用户第四张截图里那条横贯中缝的白线就是它（量出来 3px 高、颜色 (224,228,234)）。
+        // `Render()` 里那条判据早就加了 `!_inputSuspended`，可**退场这条路上从来没有人调过 Render()** ——
+        // 于是那一句等于没写，细线保持播放时的「浮层收着 → 亮着」一路亮到本页收摊。不去调 Render()：
+        // 那会把整排控件的可见性按 `_chrome` 当前状态重算一遍，而退场要的是「什么都不露」。
+        ThinLine.Visibility = Visibility.Collapsed;
+
+        // ① 外壳先放回来 —— 浏览页就位。这一页还盖在它上面，此刻看不出来。
+        //
+        // 2026-09-20 第三张截图（「不要显示这个画面啊，弄个动画过渡」）量出来的形状：上面 68% 是 Mica
+        // （#0E1A27，DWM 采的壁纸）、下面 32% 是窗口底色 #16181C、中间一条白细线。根因是
+        // `ShowPlayer(false)` 只把 ContentHost 从 Collapsed 放回 Visible，那棵树的第一帧要等下一次
+        // Measure/Arrange 才画得上屏 —— 淡出走到后半段露出来的**还不是浏览页，是刚打开、还没画东西的
+        // Mica**。所以放回来之后立刻强制一次布局，让浏览页在这一拍就把第一帧排出来。
         _shell.ShowPlayer(false);
-        _window.FreeSizing = false;
         FullscreenGlyph.Glyph = Glyph(FullscreenEnterCode);
-        TransitionPage(entering: false, CompletePlayerExit);
+        SynchronizePlaybackLayout();
+
+        // ② 这一页在**一个不动的窗口里**淡出：最后一帧由 DrivePlayerExit 逐拍溶解，底下露出来的是
+        //    已经排好版的浏览页。
+        //
+        //    **2026-09-20 晚把「窗口还原」挪到落定之后（用户令「就不能直接切到主页，然后再调整窗口大小吗？」）。**
+        //    原来窗口是在淡出**之前**还原的，理由是「那一跳被不透明舞台盖着，看不见」—— 盖得住 XAML，
+        //    盖不住**呈现**：`SetWindowPos` 之后合成器会先吐一拍「新窗口尺寸 + 旧内容」，而这一页的内容
+        //    （画面是挂在岛里的 SpriteVisual、面是 XAML）全都还按旧尺寸画着。用户第四张截图量到的
+        //    形状就是这样：上面 68%（1514×846 ＝ 播放几何）是定在那里的最后一帧、下面 32% 是窗口底色
+        //    #16181C、中间一条白细线。窗口迟一拍再动，那一拍就不存在了 —— 而迟的那一拍上屏的是浏览页，
+        //    垫底那一条与浏览页同一个量级的深色，再出现也看不出（见 CompletePlayerExit）。
+        //
+        //    窗口还原本身也不再是这个函数的事：它挪进 CompletePlayerExit，而且只在这条路上才做
+        //    （见 _restoreBrowseOnExit —— Detach 那条路也会调 CompletePlayerExit，但那时页面可能根本
+        //    没上过台，把窗口掰回上一次记下的浏览几何是无事生非）。
+        _restoreBrowseOnExit = true;
+
+        // ③ **不立刻溶解**（2026-09-20 晚，用户令「退出的时候不第一时间去掉画面，等背景图加载出来之后
+        //    再无缝替换」）。上面 ① 的 ShowPlayer(false) 让浏览页就位，但它那张背景图（主页轮播、详情页
+        //    背景）要一次网络往返才到；溶解只有 240ms，图没到就溶解完，露出来的正是用户截图里那块发灰的
+        //    空页面。改成先按住最后一帧（BeginPlayerExit 已立起铺满与放宽的保险丝），等浏览页报就绪
+        //    （ActiveContentReady）再起同一条溶解轨道，中间那块灰就不存在了 —— 全文在 ExitWhenBrowseReady。
+        ExitWhenBrowseReady();
     }
+
+    /// <summary>
+    /// 退场落定之后才把 Mica 打开。<b>刻意晚于整页淡出</b>（见 `LeavePlayer` 里那段注释）：
+    /// 淡出期间开它，漏出来的就是一块壁纸采样面；等到这一页与退场底都收干净、浏览页已经在屏上了再开，
+    /// 它只是浏览态该有的那层底，谁也看不见它被打开过。
+    /// </summary>
+    private void RestoreBrowseBackdrop()
+    {
+        if (_window is not null) _window.VideoVisible = false;
+    }
+
+    /// <summary>
+    /// 把整棵树按**当前**客户区强制排一次版。
+    /// <para>
+    /// 走的是 <c>HostWindow.SynchronizeContentLayout</c>（它量的就是 <c>_content</c> 那棵树，这一页
+    /// 在里头），不在这里另写一遍 —— 同一件事只有一个落点是这个程序的规矩。
+    /// </para>
+    /// <para>
+    /// 为什么退场非要在窗口动的前后各来一次：那一刻页面的 <c>Stage</c> 与 <c>ExitBackdrop</c> 铺的
+    /// 是「这一刻的客户区」，而窗口马上就要变高。少这一次，中间那几拍里新露出来的那一条既没有舞台
+    /// 也没有退场底，Mica（<c>VideoVisible=false</c> 会把它重新打开）与窗口底色 <c>BaseBrush</c>
+    /// 就会各露一块 —— 2026-09-20 用户第二张截图里那两截色即此。
+    /// </para>
+    /// <para>
+    /// <b>2026-09-20 晚起，退场那一趟的三次调用换了位置</b>（窗口还原挪到落定之后）：<c>LeavePlayer</c>
+    /// 里两次（外壳放回来之后一次、淡出开始之前一次），加上 <c>CompletePlayerExit</c> 里窗口改完尺寸那次。
+    /// 现在要护的是两棵树 —— 淡出期间护的是「这一页 + 它底下那棵浏览页」，改尺寸那一次护的是
+    /// 「浏览页该排多高」。
+    /// </para>
+    /// </summary>
+    private void SynchronizePlaybackLayout() => _window?.SynchronizeContentLayout();
 
     /// <summary>A new file is on screen, so the chrome starts its countdown from now.</summary>
     private void OnPlaybackStarted()
@@ -753,7 +836,11 @@ public sealed partial class PlayerPage : UserControl
         // 进场轨道还在飞时不在这里跳窗：快启动的片子（本地小文件）这条事件来得比换手早，抢在淡入
         // 呈现之前跳窗就是把「旧尺寸内容钉在放大后的窗口左上角」放出来。交给淡入换手上那条
         // EnterAutoFullscreen；换集时没有进场轨道（_enterAnimating 假），照旧当拍落位。
-        if (ViewModel.AutoFullscreenOnPlayback && !_enterAnimating)
+        //
+        // 2026-09-20：判断归一到 WindowForms.WantsAutoFullscreen（与进场换手、独占模式那两处同一句）。
+        // lifecycleActive 在这里恒为真 —— 能收到开播应答就是在真播放；窗口形态问的是这一刻的真实形态。
+        if (!_enterAnimating && WindowForms.WantsAutoFullscreen(
+            ViewModel.AutoFullscreenOnPlayback, lifecycleActive: true, _window!.Form))
             SetFullscreen(true);
 
         // 第九报（2026-09-15）：姓名牌。用户报「屏幕一全屏播放时，屏幕二的 AyuGram 收到消息会唤起屏幕一
@@ -904,6 +991,9 @@ public sealed partial class PlayerPage : UserControl
         // （实机实录 2026-09-17：1515x851 被掰成 1515x629，用户对着黑窗问「这是什么情况」）。
         if (!ViewModel.PictureInHostWindow) return;
 
+        // 画面自己的比例同时交给合成层：退出播放保留的那一帧要按视频的比例摆，而它此时拿不到缓冲
+        // （链已交还），又不能让全屏时含黑边的缓冲尺寸顶替。详见 CompositionVideoTarget.PictureAspect。
+        _videoTarget.PictureAspect = aspect;
         _window.PictureAspect = aspect;
         if (aspect <= 0) return;
 
@@ -911,6 +1001,13 @@ public sealed partial class PlayerPage : UserControl
 
         _window.FitToPicture();
     }
+
+    /// <summary>
+    /// 片子码流自己的比例，只交给合成层一件事：退场保留那一帧按它定位。与
+    /// <see cref="OnPictureAspectChanged"/> 刻意分开 —— 那个数在窗口里被 letterbox/panscan 之后就是
+    /// 窗口比例，拿它摆最后一帧会让画面缩成一条窄带（2026-09-20 用户截图那条「丑」）。
+    /// </summary>
+    private void OnSourceAspectChanged(double aspect) => _videoTarget.SourceAspect = aspect;
 
     /// <summary>
     /// A fresh set of 统计 readings. An empty set with the panel closed is the panel being put away, and

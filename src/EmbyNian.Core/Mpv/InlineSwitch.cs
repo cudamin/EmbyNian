@@ -5,11 +5,13 @@ using EmbyNian.Playback;
 namespace EmbyNian.Mpv;
 
 /// <summary>
-/// 一次起播在 mpv 实例上钉下的东西：管线、管线的必需项、Lua UI 的装配项，以及票里那份选项表**去掉末尾
-/// 着色器链**之后的基线。换片快路只认逐项相等的签名。
+/// 一次起播在 mpv 实例上钉下的东西：管线、管线的必需项、Lua UI 的装配项、方向键的步长，以及票里那份选项表
+/// **去掉末尾着色器链**之后的基线。换片快路只认逐项相等的签名。
 /// <para>
 /// 为什么必须逐项相等：mpv 的启动选项只在 <c>mpv_initialize</c> 之前有效（<c>mpv_set_option_string</c>
 /// 之后只当属性写），所以「换个片但启动配置变了」这一情形的唯一诚实答案是关窗重开 —— 签名就是那条界线。
+/// 方向键那四条 <c>keybind</c> 虽然能运行期改，却是按「这次起播时的设置」发出去的（见 <c>MpvSeekKeys</c>），
+/// 所以它们也算这次起播的一部分：设置改过就不该拿旧的一层接着用，否则屏上印的秒数与按下去的位移会分家。
 /// </para>
 /// <para>
 /// 为什么把着色器链排除在外：链是运行期能改的（这个客户端本来就有在播时切换档位的功能，见
@@ -21,6 +23,7 @@ public sealed record PlaybackLaunchSignature(
     VideoPipelineKind Pipeline,
     IReadOnlyList<KeyValuePair<string, string>> PipelineOptions,
     IReadOnlyList<KeyValuePair<string, string>> UiOptions,
+    IReadOnlyList<KeyValuePair<string, string>> SeekKeyOptions,
     IReadOnlyList<KeyValuePair<string, string>> BaselineOptions);
 
 /// <summary>
@@ -43,6 +46,7 @@ public static class InlineSwitch
         running.Pipeline == next.Pipeline
         && Same(running.PipelineOptions, next.PipelineOptions)
         && Same(running.UiOptions, next.UiOptions)
+        && Same(running.SeekKeyOptions, next.SeekKeyOptions)
         && Same(running.BaselineOptions, next.BaselineOptions);
 
     /// <summary>

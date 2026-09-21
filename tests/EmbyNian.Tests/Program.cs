@@ -11,6 +11,7 @@ internal static class Program
         PlaybackTests.Register();
         SettingsTests.Register();
         ShortcutTests.Register();
+        SeekKeyTests.Register();
         ServiceTests.Register();
         FontTests.Register();
         HtmlColorTests.Register();
@@ -37,10 +38,13 @@ internal static class Program
         PlayerPaletteTests.Register();
         PlayerMotionTests.Register();
         MpvUiTests.Register();
+        MediaVersionTests.Register();
         InlineSwitchTests.Register();
+        WindowFormTests.Register();
         PinIndicatorTests.Register();
         AboutTests.Register();
         MoviePilotTests.Register();
+        AgreementsTests.Register();
 
         return TestHarness.Run();
     }

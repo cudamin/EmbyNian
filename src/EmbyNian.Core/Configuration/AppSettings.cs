@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 15;
+    public const int CurrentSchemaVersion = 17;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -146,9 +146,16 @@ public sealed class MpvSettings
 
     /// <summary>
     /// 内置播放器的渲染管线：集成模式将画面合成进 XAML 视觉树；独占模式由 mpv 自建原生窗口，
-    /// 自管 D3D11 交换链，全屏时请求 DXGI 独占。只对内置 libmpv 有效，下一次播放生效。
+    /// 自管 D3D11 交换链、无边框窗口化全屏。只对内置 libmpv 有效，下一次播放生效。
+    /// <para>
+    /// <b>默认独占（2026-09-20，用户裁定）。</b>集成模式全屏切换那一下画面合成层追不上窗口尺寸
+    /// （窗口瞬间到全屏、合成进窗口的那层界面要几帧才按新尺寸重新提交），第一次进全屏尤其明显 ——
+    /// 界面线程没有「立刻重画」这句话，盖不住也修不平（试过压暗幕，只是把「画面缩角」换成「黑闪」，
+    /// 同一个根子的两张脸）。独占模式画面在 mpv 自己的顶层窗口里、不经过这层合成，切换干净，是这台机器上
+    /// 唯一「像别的播放器一样顺」的路。代价是屏幕控件用 mpv 的 uosc 而非 shell 的 XAML chrome。
+    /// </para>
     /// </summary>
-    public VideoPipelineKind Pipeline { get; set; } = VideoPipelineKind.Integrated;
+    public VideoPipelineKind Pipeline { get; set; } = VideoPipelineKind.Standalone;
 
     /// <summary>
     /// The user's own <c>mpv.exe</c>, and only the external backend needs it. Empty out of the box:
@@ -204,7 +211,7 @@ public enum VideoPipelineKind
     /// <summary>集成模式：画面合成进 XAML 视觉树，与控件混排。</summary>
     Integrated,
 
-    /// <summary>独占模式：mpv 自管 D3D11 原生窗口交换链，全屏时请求 DXGI 独占。</summary>
+    /// <summary>独占模式：mpv 自管 D3D11 原生窗口交换链，无边框窗口化全屏（不请求 DXGI 独占，切换顺滑）。</summary>
     Standalone
 }
 
@@ -266,16 +273,16 @@ public sealed class PlaybackSettings
     /// It only ever looked right because the user's mpv.conf named a real family of its own. See
     /// <see cref="Infrastructure.FontFamilies.Resolve"/>.
     /// <para>
-    /// <b>Microsoft YaHei since v14</b>（「默认字体改为Microsoft YaHei」, 2026-09-06）— the family every
-    /// Windows install carries, so the default renders without leaning on the bundled copy. It held the
-    /// default up to v11, lost it to 方正中等线简体 in v12 and took it back in v14; that font stays
-    /// shipped (assets/fonts, handed to mpv as <c>sub-fonts-dir</c>) and selectable — see
-    /// <see cref="Infrastructure.FontFamilies.Default"/> for the whole history. mpv wants the family
-    /// name, which for the bundled font is 「方正中等线简体」; 常规 is the style within that family, and
-    /// asking for 「方正中等线简体常规」 by name matches nothing.
+    /// <b>Noto Sans CJK SC since v17</b>（「默认字体和当前字体改用Noto Sans CJK SC，这个字体要内置到程序
+    /// 里」, 2026-09-21）— the family the reference player's own mpv.conf names, and one this client now
+    /// ships in assets/fonts. It is handed to mpv through <c>sub-fonts-dir</c>, so it renders without
+    /// being installed into Windows, which is what 「内置到程序里」 asks for. The seat's history:
+    /// Microsoft YaHei up to v11, 方正中等线简体 from v12, back to Microsoft YaHei at v14, and this from
+    /// v17. Every previous occupant stays shipped and selectable — they just no longer answer for
+    /// 「never picked」. See <see cref="Infrastructure.FontFamilies.Default"/>.
     /// </para>
     /// </summary>
-    public string SubtitleFontFamily { get; set; } = "Microsoft YaHei";
+    public string SubtitleFontFamily { get; set; } = "Noto Sans CJK SC";
 
     /// <summary>
     /// 外观应用范围, mpv's <c>sub-ass-override</c>. Empty is mpv's own <c>scale</c>, under which an
@@ -378,11 +385,33 @@ public sealed class PlaybackSettings
     /// </summary>
     public bool StretchWideImageSubtitles { get; set; } = true;
 
-    /// <summary>How far → jumps, in seconds.</summary>
-    public int SeekForwardSeconds { get; set; } = 10;
+    /// <summary>
+    /// How far → jumps, in seconds — the short pair, which is ← / → in both pipelines.
+    /// <para>
+    /// 5 rather than the 10 this shipped with up to v15: 「新增键盘上的左和右设置为播放进度快退五秒和
+    /// 快进五秒」(用户令, 2026-09-20). A file still holding 10 under both this and
+    /// <see cref="SeekBackwardSeconds"/> is a file where nobody ever chose one, so migration v16 flips it;
+    /// a file holding 10 under only one of them is a decision and stays.
+    /// </para>
+    /// </summary>
+    public int SeekForwardSeconds { get; set; } = 5;
 
-    /// <summary>How far ← jumps, in seconds.</summary>
-    public int SeekBackwardSeconds { get; set; } = 10;
+    /// <summary>How far ← jumps, in seconds. See <see cref="SeekForwardSeconds"/>.</summary>
+    public int SeekBackwardSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// How far ↑ jumps, in seconds — the long pair, which is ↑ / ↓ in both pipelines.
+    /// <para>
+    /// 30 is the number the same dictation names (「上方向键和下方向键改为播放进度快进30秒和快退30秒」).
+    /// A pair of its own rather than a second reading of the short one: ↑ and → are two different
+    /// gestures on the same key cluster, so they are two numbers — the settings page shows four rows,
+    /// and every one of the four arrow keys moves by exactly the number printed next to it.
+    /// </para>
+    /// </summary>
+    public int SeekForwardLongSeconds { get; set; } = 30;
+
+    /// <summary>How far ↓ jumps, in seconds. See <see cref="SeekForwardLongSeconds"/>.</summary>
+    public int SeekBackwardLongSeconds { get; set; } = 30;
 
     /// <summary>
     /// Backs the resume position up by this many seconds, so a file continues a moment before where
@@ -930,7 +959,7 @@ public sealed class MoviePilotSettings
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// The API address as typed, e.g. <c>192.168.31.230:3001</c>. Normalised through
+    /// The API address as typed, e.g. <c>192.0.2.10:3001</c>. Normalised through
     /// <see cref="MoviePilot.MoviePilotAddress"/> on the way in and out; stored as the user's own text so a
     /// half-typed address survives a restart.
     /// </summary>

@@ -221,6 +221,11 @@ public sealed partial class PlayerViewModel
             _parent = parent;
             PlayingItemId = detail.Id;
 
+            // 手上这个条目 —— 详情这一份是这条路手上最全的（2026-09-21）。写在这里，「有几版」与
+            // 有没有第二版可换就是同一次赋值的两个结果（见 VersionControlsVisible 的注释）；
+            // OnNowPlayingChanged 随后会再写一遍，用的是它拿到的那个 item。
+            CurrentItem = detail;
+
             // 「从继续观看点击播放后，无法切换上下集」: a shelf row is a flat set of resume points across every
             // show, so the page that started this playback had no sibling list to hand over. Asked for here
             // rather than by each caller — the search results and the mixed 最近添加 grids have the same
@@ -401,6 +406,13 @@ public sealed partial class PlayerViewModel
             // arrives, so the two buttons it governs would stay hidden over a perfectly good list.
             EpisodeControlsVisible = true;
 
+            // 手上这个条目换成服务器的记录 —— 它带的媒体源比调用方手里那份全（2026-09-21）。
+            // EpisodeControlsVisible 上面是明写的，「有几版」却跟着这一次赋值自己走
+            // （见 VersionControlsVisible 的注释）：这两件事从前分开写，于是自检逮到过一颗点开只有
+            // 「没有可切换的版本」的按钮 —— 这台机器上这个 await 正好输给了 OnNowPlayingChanged，
+            // 那一格被拿初始化对象重新算了一遍，它手上的 MediaSources 是空的。
+            CurrentItem = episode;
+
             Log.Debug(Category, $"补齐本季单集列表：{siblings.Count} 集");
         }
         catch (OperationCanceledException)
@@ -417,6 +429,81 @@ public sealed partial class PlayerViewModel
     {
         if (string.Equals(episode.Id, PlayingItemId, StringComparison.Ordinal)) return;
         StartEpisode(new EpisodeDestination(episode, Episodes));
+    }
+
+    /// <summary>
+    /// 换版本, from the 版本 picker: 这个条目的另一份文件（4K ↔ 1080p、剧场版 ↔ 导演剪辑版），
+    /// 从同一处接着放。独占模式视频窗里那条菜单项也走到这里。
+    /// <para>
+    /// 位置与轨道这两条规矩与候选版本的自动重试一模一样（见 <see cref="PlaybackService.PlayAsync"/>）：位置照旧
+    /// ——「看到哪儿」与版本无关；显式的音轨/字幕选择作废 —— 那些 Emby 流索引是对着旧一版挑的，新一版的流布局
+    /// 未必对得上，改让 alang/slang 重新决定。换的是文件、不是片子，所以条目、所属剧集、上报身份全都不动。
+    /// </para>
+    /// <para>
+    /// 不该换的两种情况（目标不是这个条目的一版、或者就是正在放的那一版）全在
+    /// <see cref="MediaVersionSwitch.ShouldSwitch"/> 里，这里不抄第二遍。
+    /// </para>
+    /// </summary>
+    internal void SwitchVersion(MediaSource? source)
+    {
+        if (!MediaVersionSwitch.ShouldSwitch(_nowPlaying, source, _playback.PlayingSource)) return;
+
+        StartVersion(source!);
+    }
+
+    /// <summary>
+    /// 一次换版只放一次进去（<c>_versionSwitchTarget</c>），与 <see cref="StartEpisode"/> 的守卫同一个意思：
+    /// 双击菜单行、或者视频窗把同一条消息发两遍，都不该在两份文件上各起一次播放。
+    /// </summary>
+    private void StartVersion(MediaSource source)
+    {
+        if (_versionSwitchTarget is not null) return;
+
+        _versionSwitchTarget = source;
+        _ = StartVersionAsync(source);
+    }
+
+    private async Task StartVersionAsync(MediaSource source)
+    {
+        try
+        {
+            var item = _nowPlaying;
+            if (item is null) return;
+
+            var position = Status.HasPosition ? Status.Position : (double?)null;
+
+            var choice = new PlaybackChoice(
+                source,
+                AudioStreamIndex: null,
+                SubtitleStreamIndex: null,
+                SubtitlesDisabled: false,
+                StartTicks: MediaVersionSwitch.StartTicks(position, item.ResumeTicks));
+
+            // replaceExisting: true —— 正在放的那一跑由这一条路接手（独占模式是同一个 mpv 换源、集成模式是停掉
+            // 重开），与换集、与「挂着片子再点一部」共用同一条管线，这里不另建一条。
+            Log.Info(Category,
+                $"换版本：{ItemDetail.SourceLabel(source)}，从 {TimeFormat.Clock(choice.StartTicks)} 接着放");
+
+            await StartPlaybackAsync(item, _parent, choice, Episodes, replaceExisting: true).ConfigureAwait(true);
+
+            // 换到哪一版也是「手上这个条目」的一部分（2026-09-21）：这一条路上面那句带的是
+            // replaceExisting: true，回来的路上 StartPlaybackAsync 未必重新取过详情，而 mpv 报的
+            // PlayingSource 要等文件开起来才更新（见 PlayingSourceLabel）。于是「正在放的是哪一版」
+            // 与「这个条目还有没有别的版」在菜单里都是这一格说了算 —— 见 VersionControlsVisible 的注释。
+            CurrentItem = item;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            Log.Error(Category, "切换版本失败", error);
+            Noticed?.Invoke($"切换版本失败：{error.Message}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            if (ReferenceEquals(_versionSwitchTarget, source)) _versionSwitchTarget = null;
+        }
     }
 
     /// <summary>上一集 / 下一集. The local season is walked first; only a boundary costs a server request.</summary>
@@ -546,11 +633,25 @@ public sealed partial class PlayerViewModel
     private void LeavePlayer()
     {
         _playerUp = false;
+
+        // 退出时把加载遮罩收掉（万一正好在加载中途退出）：这一趟返回浏览的无缝过渡由页面侧的留帧
+        // 溶解接管（RetainFill/RetainDim，见 PlayerPage.Exit.cs 与 ExitWhenBrowseReady），不靠这块遮罩。
         HideCover();
 
-        // 遮罩垫底的背景图也是这一场播放的：退场就放下，下一场自己取自己的（2026-09-15）。
-        // 记录一并忘掉 —— 不然下一场点同一部片，Id 去重会把它当成「图还在」直接跳过。
-        CoverBackdrop = null;
+        // 遮罩垫底的背景图**不在这里放下**（2026-09-20 用户报「给这个返回主页的页面也加上背景图」）。
+        //
+        // 它原来是跟着这一场播放一起丢的。问题是「遮罩亮起」与「新图到位」之间有一段空档：
+        // 换片／换集／连播那几趟，遮罩是在 `_playerHold > 0` 的手里亮起来的（见 `OnNowPlayingChanged`），
+        // 而那一刻新片那张图还在路上（一次网络往返加解码）。于是用户点「第 8 集 → 返回主页」这个来回里，
+        // 看到的常常就是**一整片纯色的「正在切换…」**：实测那张截图 1513×851 整块 `#0C0E11`，一个像素的
+        // 图都没有 —— 那不是「图取不到」，是遮罩亮起来的时候手上根本没有图。
+        //
+        // 留下上一张就补上了这个空档：同一部剧里换集，它本来就是对的那一张（剧集背景图）；换另一部片，
+        // 也只是在遮罩上多停一两百毫秒的上一张 —— 比一片纯色好看，也比一片纯色诚实（那底下确实还是
+        // 上一场的画面）。`LoadCoverBackdropAsync` 一拿到新的就换掉，取空则保持这一张。
+        //
+        // **去重记录仍然要忘掉**：不然下一场点同一部片，Id 去重会把它当成「图还在」直接跳过，
+        // 新的一场就永远等不到自己的图。
         _coverBackdropItemId = null;
 
         // The other way out, and the usual one: the file ran to its end. Ticks stop with the player, so an

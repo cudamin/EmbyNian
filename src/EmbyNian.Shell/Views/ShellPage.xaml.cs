@@ -3,6 +3,7 @@ using System.Numerics;
 using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
@@ -392,6 +393,27 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// <summary>浏览态那一块（面包屑 + 页面）。</summary>
     internal FrameworkElement BrowseRoot => ContentHost;
 
+    /// <summary>
+    /// 此刻框里那一页报没报「内容都到齐了」——退出播放要等它，等到了才开始溶解最后一帧
+    /// （2026-09-20 用户令「退出的时候不第一时间去掉画面，等背景图加载出来之后再无缝替换」）。
+    /// <para>
+    /// <b>没有页面的那几种情形一律算就绪</b>：框是空的（探针那条没导航过的路、刚退出登录）、
+    /// 页面类型自己就不报就绪（设置页那几页没有什么可等的）。这一条不写，“没有可等的东西”就会
+    /// 退化成“永远等下去”，而屏上停着的是一张按着不放的旧画面。
+    /// </para>
+    /// <para>
+    /// 三个报就绪的页面用的是它们各自 <c>IsReady</c> —— 与外壳自己那些等待循环（
+    /// <see cref="Attach"/> 之后的首页/媒体库/详情页）同一个信号。
+    /// </para>
+    /// </summary>
+    internal bool ActiveContentReady => ContentFrame.Content switch
+    {
+        HomePage home => home.IsReady,
+        LibraryPage library => library.IsReady,
+        DetailPage detail => detail.IsReady,
+        _ => true
+    };
+
     internal Frame Pages => ContentFrame;
 
     internal string? CurrentTag => _current;
@@ -585,7 +607,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
     private void OnHeadlessPlaybackStarted()
     {
         if (Player.Attached) return;
-        if (Player.ViewModel.AutoFullscreenOnPlayback) Player.ViewModel.SetNativeFullscreen(true);
+
+        // 要不要自动全屏归 Core 那一个答主（2026-09-20 归一，四处共用 WindowForms.WantsAutoFullscreen）。
+        // lifecycleActive 在这里恒为真 —— 这条事件只在真开播时到达；形态传「窗口化」＝「还没全屏」：
+        // mpv 窗口的形态由 mpv 的属性持有，这里读不到它，而 fullscreen=yes 是幂等的，最坏情况只是把
+        // 后端起播时已经设过的那一条再发一次。
+        if (WindowForms.WantsAutoFullscreen(
+            Player.ViewModel.AutoFullscreenOnPlayback, lifecycleActive: true, WindowForm.Windowed))
+            Player.ViewModel.SetNativeFullscreen(true);
     }
 
     /// <summary>

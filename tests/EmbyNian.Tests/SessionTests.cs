@@ -32,7 +32,7 @@ internal static class SessionTests
     private const string PublicInfo = """{ "ServerName": "果服", "Version": "4.9.5.0", "Id": "s1" }""";
 
     private const string SignedIn = """
-    { "AccessToken": "token-fresh", "ServerId": "s1", "User": { "Id": "u1", "Name": "donxuelian" } }
+    { "AccessToken": "token-fresh", "ServerId": "s1", "User": { "Id": "u1", "Name": "docuser" } }
     """;
 
     /// <summary>「最近添加」回的是一个裸数组，不是 <c>{ "Items": … }</c> —— 这一层的形状各接口不一样。</summary>
@@ -363,52 +363,52 @@ internal static class SessionTests
         }
 
         foreach (var changeServer in new[] { false, true })
-        foreach (var duringReauthentication in new[] { false, true })
-        {
-            var identity = changeServer ? "服务器" : "账号";
-            var moment = duringReauthentication ? "自动重登中" : "旧请求返回 401 前";
-            Test($"切换{identity}发生在{moment}：旧写操作不重试到新身份", () =>
+            foreach (var duringReauthentication in new[] { false, true })
             {
-                var userId = changeServer ? "u1" : "u2";
-                var replacementReply = "{\"AccessToken\":\"replacement-token\",\"User\":{\"Id\":\"" + userId + "\",\"Name\":\"replacement\"}}";
-                var transport = new StubTransport()
-                    .Answer("Views", Views)
-                    .Answer("System/Info/Public", PublicInfo)
-                    .Sequence("Users/AuthenticateByName", (HttpStatusCode.OK, replacementReply), (HttpStatusCode.OK, SignedIn))
-                    .Sequence("PlayedItems", (HttpStatusCode.Unauthorized, ""), (HttpStatusCode.OK, "{}"));
-                var (session, server, account) = Signed(transport);
-                using var lifetime = session;
-                account.ProtectedPassword = PassthroughSecretProtector.Instance.Protect("pw");
-                account.RememberPassword = true;
-                Assert.True(Wait(session.TryRestoreAsync(server, account, CancellationToken.None)));
-
-                var replacementServer = changeServer
-                    ? new ServerProfile { Name = "另一台假服务器", Url = "https://replacement.example.test" }
-                    : server;
-                var replacementAccount = new AccountProfile { Username = "replacement", UserId = userId };
-                replacementServer.Accounts.Add(replacementAccount);
-                var announced = 0;
-                session.SignedOut += (_, _) => announced++;
-                var once = false;
-                transport.When(duringReauthentication ? "Users/AuthenticateByName" : "PlayedItems", () =>
+                var identity = changeServer ? "服务器" : "账号";
+                var moment = duringReauthentication ? "自动重登中" : "旧请求返回 401 前";
+                Test($"切换{identity}发生在{moment}：旧写操作不重试到新身份", () =>
                 {
-                    if (once) return;
-                    once = true;
-                    session.SignOut();
-                    session.SignInAsync(replacementServer, replacementAccount, "pw", replacementAccount.Username, true, CancellationToken.None)
-                        .GetAwaiter().GetResult();
+                    var userId = changeServer ? "u1" : "u2";
+                    var replacementReply = "{\"AccessToken\":\"replacement-token\",\"User\":{\"Id\":\"" + userId + "\",\"Name\":\"replacement\"}}";
+                    var transport = new StubTransport()
+                        .Answer("Views", Views)
+                        .Answer("System/Info/Public", PublicInfo)
+                        .Sequence("Users/AuthenticateByName", (HttpStatusCode.OK, replacementReply), (HttpStatusCode.OK, SignedIn))
+                        .Sequence("PlayedItems", (HttpStatusCode.Unauthorized, ""), (HttpStatusCode.OK, "{}"));
+                    var (session, server, account) = Signed(transport);
+                    using var lifetime = session;
+                    account.ProtectedPassword = PassthroughSecretProtector.Instance.Protect("pw");
+                    account.RememberPassword = true;
+                    Assert.True(Wait(session.TryRestoreAsync(server, account, CancellationToken.None)));
+
+                    var replacementServer = changeServer
+                        ? new ServerProfile { Name = "另一台假服务器", Url = "https://replacement.example.test" }
+                        : server;
+                    var replacementAccount = new AccountProfile { Username = "replacement", UserId = userId };
+                    replacementServer.Accounts.Add(replacementAccount);
+                    var announced = 0;
+                    session.SignedOut += (_, _) => announced++;
+                    var once = false;
+                    transport.When(duringReauthentication ? "Users/AuthenticateByName" : "PlayedItems", () =>
+                    {
+                        if (once) return;
+                        once = true;
+                        session.SignOut();
+                        session.SignInAsync(replacementServer, replacementAccount, "pw", replacementAccount.Username, true, CancellationToken.None)
+                            .GetAwaiter().GetResult();
+                    });
+
+                    Assert.Throws<EmbyTokenExpiredException>(() => Wait(session.ExecuteAsync(
+                        (client, token) => client.MarkPlayedAsync("m1", token), CancellationToken.None)));
+
+                    Assert.True(session.IsSignedIn, "旧请求作废不等于退出新会话");
+                    Assert.True(ReferenceEquals(replacementAccount, session.Account));
+                    Assert.True(replacementAccount.HasSavedToken);
+                    Assert.Equal(1, announced);
+                    Assert.Equal(1, transport.SentTo("PlayedItems").Count, "旧账号的标记观看不能发送给新账号或新服务器");
                 });
-
-                Assert.Throws<EmbyTokenExpiredException>(() => Wait(session.ExecuteAsync(
-                    (client, token) => client.MarkPlayedAsync("m1", token), CancellationToken.None)));
-
-                Assert.True(session.IsSignedIn, "旧请求作废不等于退出新会话");
-                Assert.True(ReferenceEquals(replacementAccount, session.Account));
-                Assert.True(replacementAccount.HasSavedToken);
-                Assert.Equal(1, announced);
-                Assert.Equal(1, transport.SentTo("PlayedItems").Count, "旧账号的标记观看不能发送给新账号或新服务器");
-            });
-        }
+            }
     }
 
     /// <summary>
@@ -505,10 +505,10 @@ internal static class SessionTests
     private static (EmbySession Session, ServerProfile Server, AccountProfile Account) Signed(StubTransport transport)
     {
         var settings = new AppSettings();
-        var server = new ServerProfile { Name = "我的服务器", Url = "http://192.168.31.230:8896" };
+        var server = new ServerProfile { Name = "我的服务器", Url = "http://192.0.2.10:8896" };
         var account = new AccountProfile
         {
-            Username = "donxuelian",
+            Username = "docuser",
             UserId = "u1",
             ProtectedAccessToken = PassthroughSecretProtector.Instance.Protect("token-1")
         };

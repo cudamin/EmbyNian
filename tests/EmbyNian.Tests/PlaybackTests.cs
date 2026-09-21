@@ -1940,7 +1940,7 @@ internal static class PlaybackTests
 
             settings.Playback.SubtitleFontFamily = @"D:\字体\我自己的字体.ttf";
             Assert.Equal(FontFamilies.Default, Font(),
-                "认不出来的文件宁可退回默认族（Microsoft YaHei），也不能把路径当族名传出去");
+                "认不出来的文件宁可退回默认族（Noto Sans CJK SC，随程序走的那一款），也不能把路径当族名传出去");
 
             settings.Playback.SubtitleFontFamily = "思源黑体 CN";
             Assert.Equal("思源黑体 CN", Font());
@@ -2535,7 +2535,7 @@ internal static class PlaybackTests
             Assert.Equal("0.5", options["sub-border-size"]);
             Assert.Equal("0.000/0.000/0.000/1.000", options["sub-border-color"]);
             Assert.Equal("0.5", options["sub-shadow-offset"]);
-            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Microsoft YaHei（v14 起的默认）");
+            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Noto Sans CJK SC（v17 起的默认，随程序走）");
             Assert.False(options.ContainsKey("sub-codepage"),
                 "出厂是自动识别编码：写死 gb18030 会把 Big5 的繁体字幕读成乱码");
             Assert.Equal("0.000/0.000/0.000/0.600", options["sub-back-color"],
@@ -5049,9 +5049,9 @@ internal static class PlaybackTests
     // 两条管线按 VideoPipelineKind 分流；独立播放自建顶层窗口，不向 IVideoSurface 要几何或交换链。
     private static void RegisterPipelineDiscriminator()
     {
-        Test("双管线：渲染管线的装机默认是集成模式", () =>
+        Test("双管线：渲染管线的装机默认是独占模式（2026-09-20 改，集成模式全屏切换有合成层追尺寸的卡顿）", () =>
         {
-            Assert.Equal(VideoPipelineKind.Integrated, new MpvSettings().Pipeline);
+            Assert.Equal(VideoPipelineKind.Standalone, new MpvSettings().Pipeline);
         });
 
         Test("双管线：候选版本顺序——票里那版在前，其余版本按库序跟后", () =>
@@ -5224,7 +5224,7 @@ internal static class PlaybackTests
             // （2026-09-19 实测：yes 出生 960x540 居中、文件一开跳 1280x720，源打不开时那个黑框还一直挂着；
             // no 全程无窗口，能放时以终值尺寸出生）。画面一上来由 LibMpvHandle 改回 yes 把窗口按住。
             // 集成模式仍是 immediate，见下一条断言。
-            Assert.Equal("vo=gpu-next,gpu-api=d3d11,gpu-context=d3d11,d3d11-output-mode=window,d3d11-exclusive-fs=yes,force-window=no,input-default-bindings=yes,input-vo-keyboard=yes,input-media-keys=no",
+            Assert.Equal("vo=gpu-next,gpu-api=d3d11,gpu-context=d3d11,d3d11-output-mode=window,d3d11-exclusive-fs=no,force-window=no,input-default-bindings=yes,input-vo-keyboard=yes,input-media-keys=no",
                 string.Join(",", plan.Where(option => option.Required).Select(option => $"{option.Name}={option.Value}")));
             var firstRequired = plan.ToList().FindIndex(option => option.Required);
             Assert.True(plan.Skip(firstRequired).All(option => option.Required), "后面不能再有普通选项覆盖管线");
@@ -5251,7 +5251,7 @@ internal static class PlaybackTests
             var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, conflicts, (4096, 2160));
             Assert.True(plan.All(option => option.Required), "冲突输入不应有一条送入 DLL");
             Assert.False(plan.Any(option => option.Name == "wid" || option.Name == "d3d11-composition-size"));
-            Assert.False(plan.Any(option => option.Name == "fullscreen"), "请求独占不等于强制进入全屏");
+            Assert.False(plan.Any(option => option.Name == "fullscreen"), "管线契约不强制进入全屏");
         });
 
         Test("mpv 管线：集成隔离独占及原生键盘，尺寸仍来自宿主", () =>
@@ -5499,7 +5499,7 @@ internal static class PlaybackTests
     }
 
     private static EmbyConnection Connection() => new(
-        new Uri("http://192.168.31.230:8896/emby/"),
+        new Uri("http://192.0.2.10:8896/emby/"),
         "token-abc",
         "user-1",
         "我",
@@ -5548,13 +5548,13 @@ internal static class PlaybackTests
         bool vintage = true,
         GpuTier gpu = GpuTier.Low,
         string manual = "") => new()
-    {
-        Enabled = enabled,
-        AutoAnimeProfile = anime,
-        RestoreVintageSources = vintage,
-        Gpu = gpu,
-        ManualGroup = manual
-    };
+        {
+            Enabled = enabled,
+            AutoAnimeProfile = anime,
+            RestoreVintageSources = vintage,
+            Gpu = gpu,
+            ManualGroup = manual
+        };
 
     private static EmbyItem Item(
         string name,

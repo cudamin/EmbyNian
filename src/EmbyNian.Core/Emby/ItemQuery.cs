@@ -184,17 +184,17 @@ public sealed class ItemQuery
         bool descending,
         ItemFilters? filters,
         IReadOnlyList<string>? types = null) => new()
-    {
-        Recursive = true,
-        IsResumable = true,
-        IncludeItemTypes = types ?? SweptTypes,
-        MediaTypes = "Video",
-        SortBy = sortBy,
-        Descending = descending,
-        StartIndex = startIndex,
-        Limit = limit,
-        Filters = filters
-    };
+        {
+            Recursive = true,
+            IsResumable = true,
+            IncludeItemTypes = types ?? SweptTypes,
+            MediaTypes = "Video",
+            SortBy = sortBy,
+            Descending = descending,
+            StartIndex = startIndex,
+            Limit = limit,
+            Filters = filters
+        };
 
     /// <summary>
     /// 主页「接下来看」那一排点进去的那张网格。判据是「这部剧一集都没看过」—— Emby 的 NextUp 语义落到通用
@@ -215,17 +215,17 @@ public sealed class ItemQuery
         bool descending,
         ItemFilters? filters,
         IReadOnlyList<string> types) => new()
-    {
-        Recursive = true,
-        IsPlayed = false,
-        IncludeItemTypes = types,
-        MediaTypes = "Video",
-        SortBy = sortBy,
-        Descending = descending,
-        StartIndex = startIndex,
-        Limit = limit,
-        Filters = filters
-    };
+        {
+            Recursive = true,
+            IsPlayed = false,
+            IncludeItemTypes = types,
+            MediaTypes = "Video",
+            SortBy = sortBy,
+            Descending = descending,
+            StartIndex = startIndex,
+            Limit = limit,
+            Filters = filters
+        };
 
     /// <summary>
     /// The item types a library kind flattens to, or empty when it has to be browsed folder by folder.

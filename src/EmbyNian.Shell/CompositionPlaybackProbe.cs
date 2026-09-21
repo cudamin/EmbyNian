@@ -37,7 +37,7 @@ internal static class CompositionPlaybackProbe
         {
             Directory.CreateDirectory(options.Paths.LogDirectory);
             report = new StreamWriter(Path.Combine(options.Paths.LogDirectory, "composition-probe.txt"))
-                { AutoFlush = true };
+            { AutoFlush = true };
             Write($"本地合成诊断，PID={Environment.ProcessId}，程序={Environment.ProcessPath}");
             Write("隔离运行：未创建 ShellServices / PlaybackService / EmbySession，不读写用户设置。");
             Write("验证范围：真实 PlayerPage + CompositionVideoTarget；未接 VM，不验证完整 OSD 交互。");
@@ -61,6 +61,7 @@ internal static class CompositionPlaybackProbe
             Write($"窗口 HWND=0x{window.Handle.ToInt64():X}，surface={surface.Size}");
 
             var backend = new LibMpvBackend(new MpvSettings { Pipeline = VideoPipelineKind.Integrated },
+                new PlaybackSettings(),
                 () => surface);
             var request = new PlaybackRequest
             {

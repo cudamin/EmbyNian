@@ -7,7 +7,7 @@ description: "EmbyNian playback: the two libmpv backends, PlaybackPlanner, progr
 
 EmbyNian is an Emby desktop client (WinUI 3 + .NET 10, unpackaged x64, repo at `C:\Users\89400\EmbyNian`) whose playback core is **libmpv**. Earlier names EmbyGearless / EmbyMpvClient survive only in the settings-migration path in `Core/Infrastructure/AppPaths.cs`; anything calling the project by an old name is out of date.
 
-**The rules are in `CLAUDE.md`, which is loaded whenever this skill is, and it outranks this file on every conflict** — never start real playback while verifying, never let the access token into a URL, a log or the self-check report, don't change `libmpv-2.dll`'s version, and navigate with switches rather than the mouse. This file keeps no second copy of them. `PROGRESS.md`'s 在途工作 section is the only cross-window handoff.
+**The rules are in `CLAUDE.md`, which is loaded whenever this skill is, and it outranks this file on every conflict** — real playback follows the three tiers there (nothing plays by default; a change to the playback pipeline uses `--probe-cursor` / `--probe-player-motion` with a local file; pointing anything at the real server asks him first), never let the access token into a URL, a log or the self-check report, don't change `libmpv-2.dll`'s version, and navigate with switches rather than the mouse. This file keeps no second copy of them. `PROGRESS.md`'s 在途工作 section is the only cross-window handoff.
 
 Architecture rules (DI, the `Attach` pattern, judgments into Core) are the `embynian-winui-shell` skill; the gate procedure is `embynian-verification`; shaders and 画质档位 are `mpv-shader-quality`.
 

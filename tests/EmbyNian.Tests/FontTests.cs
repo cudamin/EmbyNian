@@ -212,16 +212,17 @@ internal static class FontTests
                 "每台 Windows 都有 Arial");
         });
 
-        // The bundled subtitle font ships with the program (assets/fonts, handed to mpv as
-        // sub-fonts-dir). It stopped being the settings default in v14 — Microsoft YaHei is — but it
-        // stays selectable, so the thing to assert is the shipped file itself: it has to parse to the
-        // family the catalogue offers under both of its names, or picking it from the settings page
-        // writes a font name nothing can find.
-        const string bundledFont = "方正中等线简体";
-        var bundled = FindRepositoryRoot() is { } repo
-            ? Path.Combine(repo, "assets", "fonts", bundledFont + ".ttf")
+        // The bundled subtitle fonts ship with the program (assets/fonts, handed to mpv as
+        // sub-fonts-dir). Noto Sans CJK SC became the 装机默认 in v17 (2026-09-21, 「默认字体和当前字体
+        // 改用Noto Sans CJK SC，这个字体要内置到程序里」); 方正中等线简体 held it in v12 and stays
+        // bundled and selectable. The thing to assert is the shipped files themselves: each has to parse
+        // to the family the catalogue offers, or picking it from the settings page writes a font name
+        // nothing can find — and the family the client hands mpv by default has to be one of them, since
+        // it is the only reason that default renders on a machine that never installed anything.
+        var fontsDirectory = FindRepositoryRoot() is { } repo
+            ? Path.Combine(repo, "assets", "fonts")
             : null;
-        if (bundled is null || !File.Exists(bundled))
+        if (fontsDirectory is null || !Directory.Exists(fontsDirectory))
         {
             Skip("字体表：程序自带的字幕字体解析出的族名可以被选中", "找不到仓库里的 assets/fonts");
             return;
@@ -229,16 +230,37 @@ internal static class FontTests
 
         Test("字体表：程序自带的字幕字体解析出的族名可以被选中", () =>
         {
-            var catalogue = FontCatalogue.Scan([Path.GetDirectoryName(bundled)!]);
+            var catalogue = FontCatalogue.Scan([fontsDirectory]);
 
-            Assert.Equal(1, catalogue.Families.Count, "自带目录里就这一个字体文件");
-            Assert.True(catalogue.Families[0].AnswersTo(bundledFont),
-                $"自带文件的族名（{catalogue.Families[0].Name}，别名 {string.Join("、", catalogue.Families[0].AlsoCalled)}）"
-                    + "要认得它自己的中文名 —— 这款文件的两个名字一个英文一个中文，存哪一边都要挑得到");
+            // Every shipped file parses, and no file is a family the catalogue cannot name.
+            Assert.True(catalogue.FileCount >= 2,
+                $"自带目录里应有方正与 Noto 共两个文件，只读出 {catalogue.FileCount} 个");
 
-            // 存中文写法时列表里不能冒出一个没有文件撑着的重影行。
-            Assert.Equal(1, catalogue.Including(bundledFont).Families.Count,
-                "中文写法是这款字体的别名，不该被当成没装过的字体再补一条");
+            foreach (var entry in catalogue.Families)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(entry.Name), "自带字体必须报出一个族名");
+            }
+
+            // 方正中等线简体：中文名与英文名是同一款文件的两个名字，存哪一边都要挑得到。
+            Assert.True(catalogue.Families.Any(entry => entry.AnswersTo("方正中等线简体")),
+                "自带目录里的方正没被认出来，存中文名的那份设置就挑不回这一行");
+
+            // Noto Sans CJK SC 是一支单字面可变字体（NotoSansCJKsc-VF.ttf）—— 不是参考项目那种 .ttc 集合。
+            // 2026-09-21 实测：libass 的 process_fontdata 会把文件里每一个 face 都注册成独立的族，而每支
+            // NotoSansCJK-*.ttc 有 10 个 face（CJK SC/TC/JP/KR/HK ＋ Noto Sans **Mono** CJK 同名五支），
+            // 整支塞进 sub-fonts-dir 会让字体列表凭空多出十行。所以这一关盯两件事：Noto 在列表里恰好只有
+            // 一行（多一行就说明装箱的是一支集合，或者多放了一份文件），以及那一行就是客户端的兜底族名 ——
+            // sub-fonts-dir 是那个默认唯一的落脚处。
+            var noto = catalogue.Families.Where(entry => entry.AnswersTo("Noto Sans CJK SC")).ToList();
+            Assert.Equal(1, noto.Count,
+                "Noto Sans CJK SC 在自带字体里只该有一行：装箱的是单字面 VF，不是多字面集合");
+            Assert.Equal(1, catalogue.Including("Noto Sans CJK SC").Families.Count(entry => entry.AnswersTo("Noto Sans CJK SC")),
+                "兜底族名在列表里只该有一行，不该被当成没装过的字体再补一条");
+
+            Assert.True(catalogue.Families.Any(entry => entry.AnswersTo(FontFamilies.Default)),
+                $"自带目录里没有兜底族名「{FontFamilies.Default}」，每台机器都得等它自己装");
+            Assert.True(noto[0].AnswersTo(FontFamilies.Default),
+                $"兜底族名「{FontFamilies.Default}」那一行不在自带字体里，否则拿它渲染就会落到别的字体上");
         });
     }
 

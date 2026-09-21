@@ -76,6 +76,18 @@ public sealed partial class PlayerPage
         Settle();
         Sample("退出全屏后", wanted: true);
 
+        // 退场的后半段：细线必须已经收了。2026-09-20 用户截图里那条横贯底边的白线就是它在退场那 220ms 里
+        // 一直亮着 —— 页面在淡出，它不动，于是页面淡到零的那一拍屏上还剩下它。_inputSuspended 由退场第 0 拍
+        // 立起、落定拍撤下，这里只借它把 Render 逼到「退场中」那一档，读完立刻还原。
+        var suspended = _inputSuspended;
+        _inputSuspended = true;
+        Settle();
+        Sample("退场中浮层收起", wanted: false);
+        _inputSuspended = suspended;
+
+        Settle();
+        Sample("退场读数还原后", wanted: true);
+
         // Left the way a player that is not running should be, for the same reason ProbeReveal is — the page
         // put back first, so the last Render leaves the line down rather than across the library grid.
         Visibility = was;

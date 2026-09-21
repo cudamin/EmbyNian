@@ -23,6 +23,9 @@ public interface IVideoSurface
     /// </summary>
     event Action? GeometryChanged;
 
+    /// <summary>后端提供线程安全的独立帧副本；结束播放时撤销，旧委托也必须能安全返回空。</summary>
+    void SetFrameCapture(Func<Task<VideoFrame?>>? capture) { }
+
     /// <summary>
     /// Attaches mpv's <c>display-swapchain</c> to the composition surface;
     /// <see cref="IntPtr.Zero"/> detaches the current picture.

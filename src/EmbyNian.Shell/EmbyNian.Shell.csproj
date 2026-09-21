@@ -41,8 +41,9 @@
          this machine can actually bootstrap. The 1.x line needed a per-release
          MicrosoftCorporationII.WinAppRuntime.Main package, and only 1.4, 1.5 and 1.8 were installed
          (1.6 and 1.7 restored but could not bootstrap). The 2.x line packages its runtime
-         differently — one Microsoft.WindowsAppRuntime.2 framework package, present here at 2.4.0.0 —
-         so 2.4.0 bootstraps unpackaged and the startup self-check passes against it. (Spelling that
+         differently — one Microsoft.WindowsAppRuntime.2 framework package, present here at 2.5.1.0
+         (2.3.1.0 and 2.4.0.0 are also installed) — so 2.5.1 bootstraps unpackaged and the startup
+         self-check passes against it. (Spelling that
          switch with its two leading dashes here is what an XML comment cannot hold: MSB4025, and the
          whole project stops loading.) -->
     <WindowsPackageType>None</WindowsPackageType>
@@ -113,19 +114,23 @@
       the meta-package contributes nothing else — its props and targets only declare a VS project
       capability.
 
-      The versions are exactly what Microsoft.WindowsAppSDK 2.4.0's nuspec resolves to, so the
-      framework package the bootstrapper finds (Microsoft.WindowsAppRuntime.2 2.4.0.0 on this
-      machine) is unchanged: same runtime, fewer files copied. Going back is one line — put the
-      meta-package reference back and delete these six.
+      The versions are exactly what Microsoft.WindowsAppSDK 2.5.1's nuspec resolves to (bumped from
+      2.4.0 on 2026-09-21, 用户「有更新版本的稳定版要主动更新」), so the framework package the
+      bootstrapper finds (Microsoft.WindowsAppRuntime.2 2.5.1.0 on this machine) matches: same runtime
+      line, fewer files copied. The four features a video client does not have still stay out — .ML /
+      .AI / .Search / .Widgets are absent from the 2.5.1 graph here too, so onnxruntime does not come
+      back. Going back is one line — put the meta-package reference back and delete these six. The six
+      versions 2.5.1 resolves to: Base 2.0.4, Foundation 2.3.12, InteractiveExperiences 2.1.9,
+      WinUI 2.3.9, DWrite 2.1.0, Runtime [2.5.1].
     -->
     <PackageReference Include="Microsoft.WindowsAppSDK.Base" Version="2.0.4" />
     <!-- GeneratePathProperty on the three packages that carry a framework .pri: the injection target
          below needs their on-disk roots to find the files. See that target for the whole story. -->
-    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.9" GeneratePathProperty="true" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.6" GeneratePathProperty="true" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.6" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" GeneratePathProperty="true" />
     <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="2.1.0" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="[2.4.0]" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="[2.5.1]" />
     <!-- MVVM, source-generated. The pages bind to view models rather than reaching for named XAML
          elements, and this package is what makes that cheap enough to be worth doing everywhere:
          [ObservableProperty] on a partial property writes the backing field, the setter and the
@@ -165,11 +170,11 @@
          it first. Registered in Composition/ShellServices.cs; the container itself stays in this
          project so Core keeps taking no package references and the test runner can still reach the
          services without one. Same major as the framework, for the reason given just below. -->
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
     <!-- DPAPI, for the saved password and token. WinUI does not reference the desktop framework, so
          this is an explicit package. Kept on the same major as the target framework: an 8.0.x here
          drags the 8.0 System.Runtime contract into a net10.0 build for no reason. -->
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
@@ -235,13 +240,28 @@
 
   <!--
     The bundled 字幕字体, from assets/fonts in this repository — 「这个字体打包进程序里」（2026-09-06）.
-    The shipped 方正中等线简体 is the 装机默认 of 设置 → 字幕 → 字体, and mpv is pointed at this folder by
-    sub-fonts-dir at every launch (ShellServices → PlaybackPlanner → MpvBaseline), so it renders without
-    being installed into Windows. The folder is also part of what FontLibrary scans, so the picker offers
-    it with a real preview on a machine that does not have it.
+    mpv is pointed at this folder by sub-fonts-dir at every launch (ShellServices → PlaybackPlanner →
+    MpvBaseline), so these render without being installed into Windows. The folder is also part of what
+    FontLibrary scans, so the picker offers them with a real preview.
+
+    **Noto Sans CJK SC joined on 2026-09-21**（「默认字体和当前字体改用Noto Sans CJK SC，这个字体要内置到
+    程序里」）. One file, not the reference project's three collections: measured 2026-09-21, libass's
+    process_fontdata walks face_index up to face->num_faces and registers *every* face as its own family,
+    and each NotoSansCJK-*.ttc holds ten (CJK SC/TC/JP/KR/HK plus the matching five of Noto Sans **Mono**
+    CJK) — so a collection would put ten families into the 字体 list where one was called for, and leave
+    four un-distinguishable SC siblings beside the one that was asked for. NotoSansCJKsc-VF.ttf answers to
+    exactly 「Noto Sans CJK SC」 and carries the whole weight axis, so 设置 → 字幕 → 加粗 still works
+    without a second file. (Regular + Bold as two files was the first cut and is also fine — it is what
+    方正中等线简体's sibling would have looked like — but the VF is one copy instead of two and the name it
+    reports cannot drift from the one settings store.) The family name is what the reference project's own
+    mpv.conf names (「Noto Sans CJK SC」/「Noto Sans Mono CJK SC」，C:\Users\89400\Desktop\mpv_config-*.），
+    所以内置之后字幕与参考播放器同一个字体。
+
+    方正中等线简体 stays shipped and selectable — it just no longer answers for 「never picked」.
 
     Kept next to the shaders and vulkan-1.dll rather than as ms-appx resources: playback runs through
-    libmpv on a plain path, not through a package URI.
+    libmpv on a plain path, not through a package URI. (The user-interface fonts are a separate
+    question and read this folder through ms-appx — see Theme/Styles.xaml.)
   -->
   <ItemGroup>
     <None Include="..\..\assets\fonts\*.ttf;..\..\assets\fonts\*.otf;..\..\assets\fonts\*.ttc">

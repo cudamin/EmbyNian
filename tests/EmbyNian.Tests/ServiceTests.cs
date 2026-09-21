@@ -39,16 +39,16 @@ internal static class ServiceTests
             {
                 var before = settings.Servers.Count;
 
-                var first = service.ResolveServer("192.168.31.230:8896");
+                var first = service.ResolveServer("192.0.2.10:8896");
                 Assert.Equal(before + 1, settings.Servers.Count, "没见过的服务器要落到设置里");
-                Assert.Equal("http://192.168.31.230:8896", first.Url, "存下来的是规范化之后的写法");
+                Assert.Equal("http://192.0.2.10:8896", first.Url, "存下来的是规范化之后的写法");
 
                 foreach (var spelling in new[]
                 {
-                    "http://192.168.31.230:8896",
-                    "http://192.168.31.230:8896/",
-                    "http://192.168.31.230:8896/emby",
-                    "http://192.168.31.230:8896/emby/"
+                    "http://192.0.2.10:8896",
+                    "http://192.0.2.10:8896/",
+                    "http://192.0.2.10:8896/emby",
+                    "http://192.0.2.10:8896/emby/"
                 })
                 {
                     Assert.True(
@@ -71,13 +71,13 @@ internal static class ServiceTests
             {
                 // What a hand-typed address looks like once it has been saved: it works, but it is not the
                 // form the sign-in page shows.
-                var saved = new ServerProfile { Url = "http://192.168.31.230:8896/emby/" };
+                var saved = new ServerProfile { Url = "http://192.0.2.10:8896/emby/" };
                 settings.Servers.Add(saved);
 
-                var resolved = service.ResolveServer("192.168.31.230:8896");
+                var resolved = service.ResolveServer("192.0.2.10:8896");
 
                 Assert.True(ReferenceEquals(saved, resolved), "地址一样就是同一份配置");
-                Assert.Equal("http://192.168.31.230:8896", saved.Url, "再登录一次就把写法整理好");
+                Assert.Equal("http://192.0.2.10:8896", saved.Url, "再登录一次就把写法整理好");
             }
             finally
             {

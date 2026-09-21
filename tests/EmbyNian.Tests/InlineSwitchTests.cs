@@ -156,7 +156,8 @@ internal static class InlineSwitchTests
         VideoPipelineKind pipeline,
         IReadOnlyList<KeyValuePair<string, string>> pipelineOptions,
         IReadOnlyList<KeyValuePair<string, string>> uiOptions,
-        IReadOnlyList<KeyValuePair<string, string>> baseline) => new(pipeline, pipelineOptions, uiOptions, baseline);
+        IReadOnlyList<KeyValuePair<string, string>> baseline) =>
+        new(pipeline, pipelineOptions, uiOptions, [], baseline);
 
     private static PlaybackRequest Request() => new()
     {

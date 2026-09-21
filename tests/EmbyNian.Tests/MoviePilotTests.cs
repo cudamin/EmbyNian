@@ -37,10 +37,10 @@ internal static class MoviePilotTests
     {
         Test("MoviePilot 地址：光敲主机名和端口就是合法地址", () =>
         {
-            Assert.True(MoviePilotAddress.TryNormalize("192.168.31.230:3001", out var address, out var error), error);
+            Assert.True(MoviePilotAddress.TryNormalize("192.0.2.10:3001", out var address, out var error), error);
             Assert.NotNull(address);
             Assert.Equal("http", address!.Scheme, "没写协议时应当补 http");
-            Assert.Equal("192.168.31.230", address.Host);
+            Assert.Equal("192.0.2.10", address.Host);
             Assert.Equal(3001, address.Port);
         });
 
@@ -48,7 +48,7 @@ internal static class MoviePilotTests
         {
             // 这条是这张卡最容易搞错的地方：MoviePilot 的网页界面和 API 是两个端口，
             // http://host/ 解析出来会是 80，而 80 上什么都没有。
-            Assert.True(MoviePilotAddress.TryNormalize("192.168.31.230", out var address, out _));
+            Assert.True(MoviePilotAddress.TryNormalize("192.0.2.10", out var address, out _));
             Assert.Equal(3001, address!.Port);
         });
 
@@ -56,15 +56,15 @@ internal static class MoviePilotTests
         {
             // 明写着 3000 的人是在说「我的 API 就在 3000 上」。替他改掉等于让他对着一个能连通的地址看
             // 「连不上」，而真正的答案（这个端口上没有 API）是他自己一看就明白的。
-            Assert.True(MoviePilotAddress.TryNormalize("192.168.31.230:3000", out var address, out _));
+            Assert.True(MoviePilotAddress.TryNormalize("192.0.2.10:3000", out var address, out _));
             Assert.Equal(3000, address!.Port);
         });
 
         Test("MoviePilot 地址：带路径的网址只取到主机和端口", () =>
         {
             // 从浏览器地址栏复制下来的一整串是常事，尾巴上的页面路径不该进到 API 地址里。
-            Assert.True(MoviePilotAddress.TryNormalize("http://192.168.31.230:3001/#/dashboard", out var address, out _));
-            Assert.Equal("http://192.168.31.230:3001/", address!.AbsoluteUri);
+            Assert.True(MoviePilotAddress.TryNormalize("http://192.0.2.10:3001/#/dashboard", out var address, out _));
+            Assert.Equal("http://192.0.2.10:3001/", address!.AbsoluteUri);
         });
 
         Test("MoviePilot 地址：空着不算错，那只是还没填", () =>
@@ -89,13 +89,13 @@ internal static class MoviePilotTests
         {
             // 存的是用户看得懂的那一串，用的必须是归一化过的那一个 —— 两个方向都要能对上。
             // API 端口那一档不带 :3001 的尾巴：那是默认值，写出来只会让下一次归一化多绕一圈。
-            Assert.True(MoviePilotAddress.TryNormalize("192.168.31.230:3001", out var address, out _));
-            Assert.Equal("192.168.31.230", MoviePilotAddress.ToDisplayString(address!));
+            Assert.True(MoviePilotAddress.TryNormalize("192.0.2.10:3001", out var address, out _));
+            Assert.Equal("192.0.2.10", MoviePilotAddress.ToDisplayString(address!));
             Assert.Equal(3001, address!.Port, "收起来了，但用的时候仍是 3001");
 
             // 自己写的非默认端口要留在显示串里 —— 丢掉它等于把用户写的东西改掉了。
-            Assert.True(MoviePilotAddress.TryNormalize("192.168.31.230:3000", out var custom, out _));
-            Assert.Equal("192.168.31.230:3000", MoviePilotAddress.ToDisplayString(custom!));
+            Assert.True(MoviePilotAddress.TryNormalize("192.0.2.10:3000", out var custom, out _));
+            Assert.Equal("192.0.2.10:3000", MoviePilotAddress.ToDisplayString(custom!));
 
             // 而显示串本身读回去还是同一个地址：来回走一趟不该越走越远。
             Assert.True(MoviePilotAddress.TryNormalize(MoviePilotAddress.ToDisplayString(custom!), out var again, out _));
@@ -104,15 +104,15 @@ internal static class MoviePilotTests
 
         Test("MoviePilot 地址：拼出来的请求地址落在 api/v1 底下", () =>
         {
-            Assert.True(MoviePilotAddress.TryNormalize("192.168.31.230:3001", out var address, out _));
+            Assert.True(MoviePilotAddress.TryNormalize("192.0.2.10:3001", out var address, out _));
 
             Assert.Equal(
-                "http://192.168.31.230:3001/api/v1/dashboard/system",
+                "http://192.0.2.10:3001/api/v1/dashboard/system",
                 MoviePilotAddress.Combine(address!, "api/v1/dashboard/system").AbsoluteUri);
 
             // 前头多一个斜杠的写法也该落在同一个地方 —— 这是调用方最容易写错的那一下。
             Assert.Equal(
-                "http://192.168.31.230:3001/api/v1/subscribe/",
+                "http://192.0.2.10:3001/api/v1/subscribe/",
                 MoviePilotAddress.Combine(address!, "/api/v1/subscribe/").AbsoluteUri);
         });
     }
@@ -127,21 +127,21 @@ internal static class MoviePilotTests
         Test("MoviePilot 客户端：登录发的是表单，拿的是 JWT", () =>
         {
             var transport = new StubTransport().Answer("login/access-token",
-                """{"access_token":"jwt-abc","token_type":"bearer","super_user":true,"user_id":1,"user_name":"donxuelian"}""");
+                """{"access_token":"jwt-abc","token_type":"bearer","super_user":true,"user_id":1,"user_name":"docuser"}""");
 
             using var client = new MoviePilotClient(transport);
-            var session = client.SignInAsync(Base, "donxuelian", "tafei520.", CancellationToken.None)
+            var session = client.SignInAsync(Base, "docuser", "docpass.1", CancellationToken.None)
                 .GetAwaiter().GetResult();
 
             Assert.Equal("jwt-abc", session.AccessToken);
-            Assert.Equal("donxuelian", session.UserName);
+            Assert.Equal("docuser", session.UserName);
             Assert.True(session.SuperUser, "这台服务器上这个账号是超级管理员，标志位该照实读出来");
 
             // 表单，不是 JSON。发 JSON 会被 FastAPI 回 422，而那个错看起来像是「参数没填」。
             var sent = transport.Only("login/access-token");
             Assert.Equal("POST", sent.Method);
-            Assert.Contains("username=donxuelian", sent.Body);
-            Assert.Contains("password=tafei520.", sent.Body);
+            Assert.Contains("username=docuser", sent.Body);
+            Assert.Contains("password=docpass.1", sent.Body);
             Assert.DoesNotContain("\"username\"", sent.Body, "这不是一个 JSON 正文");
         });
 
@@ -152,7 +152,7 @@ internal static class MoviePilotTests
 
             using var client = new MoviePilotClient(transport);
             var error = Assert.Catch<MoviePilotException>(() =>
-                client.SignInAsync(Base, "donxuelian", "wrong", CancellationToken.None).GetAwaiter().GetResult());
+                client.SignInAsync(Base, "docuser", "wrong", CancellationToken.None).GetAwaiter().GetResult());
 
             Assert.Contains("用户名或密码", error.Message);
         });
@@ -205,7 +205,7 @@ internal static class MoviePilotTests
             var error = Assert.Catch<MoviePilotUnreachableException>(() =>
                 client.GetAsync(Base, "jwt", "dashboard/system", CancellationToken.None).GetAwaiter().GetResult());
 
-            Assert.Contains("192.168.31.230", error.Message, "连不上时得说连的是哪儿");
+            Assert.Contains("192.0.2.10", error.Message, "连不上时得说连的是哪儿");
         });
     }
 
@@ -220,7 +220,7 @@ internal static class MoviePilotTests
         {
             var transport = new StubTransport()
                 .Answer("login/access-token",
-                    """{"access_token":"jwt","super_user":true,"user_name":"donxuelian","user_id":1}""")
+                    """{"access_token":"jwt","super_user":true,"user_name":"docuser","user_id":1}""")
                 .Answer("dashboard/system",
                     """{"success":true,"data":{"hostname":"moviepilot-v3","operating_system":"Debian GNU/Linux 13","version":"v3.0.1"}}""")
                 .Answer("mediaserver/clients", """{"success":true,"data":[{"name":"EMBY","type":"emby"}]}""")
@@ -229,7 +229,7 @@ internal static class MoviePilotTests
 
             using var client = new MoviePilotClient(transport);
             var status = new MoviePilotProbe(client)
-                .RunAsync(Base, "donxuelian", "tafei520.", CancellationToken.None)
+                .RunAsync(Base, "docuser", "docpass.1", CancellationToken.None)
                 .GetAwaiter().GetResult();
 
             Assert.Equal("v3.0.1", status.Version);
@@ -277,9 +277,9 @@ internal static class MoviePilotTests
             var settings = new MoviePilotSettings();
             var credentials = new MoviePilotCredentials(PassthroughSecretProtector.Instance);
 
-            credentials.SetPassword(settings, "tafei520.");
+            credentials.SetPassword(settings, "docpass.1");
             Assert.True(settings.HasSavedPassword, "存过就该说存过");
-            Assert.Equal("tafei520.", credentials.GetPassword(settings));
+            Assert.Equal("docpass.1", credentials.GetPassword(settings));
 
             // 清空是真的清空 —— 用户在框里删掉之后不该还留着上一个。
             credentials.ClearPassword(settings);
@@ -298,7 +298,7 @@ internal static class MoviePilotTests
         });
     }
 
-    private static Uri Base => new("http://192.168.31.230:3001/");
+    private static Uri Base => new("http://192.0.2.10:3001/");
 
     private static JsonElement Json(string text)
     {

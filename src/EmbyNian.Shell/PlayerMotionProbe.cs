@@ -42,7 +42,7 @@ internal static class PlayerMotionProbe
     {
         Directory.CreateDirectory(options.Paths.LogDirectory);
         using var report = new StreamWriter(Path.Combine(options.Paths.LogDirectory, "player-motion-probe.txt"))
-            { AutoFlush = true };
+        { AutoFlush = true };
         using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(55));
         var token = stopping.Token;
         HostWindow? window = null;
@@ -119,7 +119,12 @@ internal static class PlayerMotionProbe
             Require(!window.IsMaximized && page.MotionProbeState.Identity, "无视频还原落定");
             layoutSample.Stop();
 
-            var backend = new LibMpvBackend(new MpvSettings { Pipeline = VideoPipelineKind.Integrated }, () => surface);
+            var backend = new LibMpvBackend(new MpvSettings { Pipeline = VideoPipelineKind.Integrated },
+                new PlaybackSettings(), () => surface);
+            // 真实那条路（PlayerViewModel.PrepareShaderPlans）在这里会报一次片子的码流比例；探针直接
+            // new 了后端、绕过了那个入口，所以补上 —— 否则「保留帧按画面真实比例摆放」那条修正
+            // 在探针里等于没验。素材是 16:9。
+            page.ProbeSourceAspect(16d / 9d);
             handle = await backend.StartAsync(new PlaybackRequest
             {
                 MediaUrl = media,
@@ -144,45 +149,352 @@ internal static class PlayerMotionProbe
             {
                 Write($"阶段：播放中{stage}");
                 var before = transitions;
-                window.ToggleMaximize();
+                page.ToggleMaximizeRequested();
+                await page.WindowChange;
                 await Until(() => surface.IsContentReady && !page.MotionProbeState.Animating, $"{stage}后缓冲与动效落定");
                 Require(transitions == before + 1, $"{stage}仅发布一个几何终点");
                 Require(page.MotionProbeState.Identity, $"{stage}后页面无残留缩放");
                 await Task.Delay(450, token);
             }
 
+            // 2026-09-20「拖动窗口边缘时画面闪烁」的那一条。以前没有连续拖动的逐帧证据，所以这一条
+            // 一直挂着没动代码 —— 这里补上：以 16ms 一拍连续改窗口尺寸（模拟一次真实拖动），每一拍
+            // 读一次画面<b>实际占的矩形</b>（PlacedRect，从 SpriteVisual 反算），看它有没有在
+            // 「铺满」与「按比例缩进去留黑边」之间来回跳。
+            //
+            // 判据是「不许回退」：拖动期间窗口被 WM_SIZING 按画面比例锁着，窗口形状就是画面形状，
+            // 画面就该一直铺满。缓冲追赶期间掉进 contain 分支（旧版就是这样）会让余白忽有忽无 ——
+            // 那正是用户报的闪烁。跑完这一趟再等缓冲落定。
+            Write("阶段：连续拖动窗口边缘（逐帧看画面有没有回退成留边）");
+            Native.GetWindowRect(window.Handle, out var dragStart);
+            var dragRaster = surface.RasterizationScale;
+            var dragFrames = 0;
+            var shrinkFrames = 0;
+            var pendingFrames = 0;
+            var dragDetail = new List<string>();
+            for (var step = 1; step <= 12; step++)
+            {
+                // 宽高同步缩一点：窗口比例不变（画面比例锁着），只是整体变小。
+                var scale = 1d - step * 0.015;
+                var width = (int)Math.Round(dragStart.Width * scale);
+                var height = (int)Math.Round(dragStart.Height * scale);
+                Native.SetWindowPos(
+                    window.Handle, Native.HwndTop,
+                    dragStart.Left, dragStart.Top, width, height,
+                    Native.SwpNoZOrder | Native.SwpNoActivate);
+                await Task.Delay(16, token);
+
+                var placed = surface.PlacedRect;
+                var host = surface.HostSize;
+                var hostWidth = host.Width * dragRaster;
+                var hostHeight = host.Height * dragRaster;
+                if (placed.Width <= 0 || placed.Height <= 0 || hostWidth <= 0 || hostHeight <= 0) continue;
+
+                if (surface.IsResizePending) pendingFrames++;
+                dragFrames++;
+                // 「铺满」＝两个方向都贴边（±4%）。掉进 contain 就会有一个方向明显缩进去。
+                var fillsWidth = Math.Abs(placed.Width / hostWidth - 1) <= 0.04;
+                var fillsHeight = Math.Abs(placed.Height / hostHeight - 1) <= 0.04;
+                if (!fillsWidth || !fillsHeight)
+                {
+                    shrinkFrames++;
+                    if (dragDetail.Count < 4)
+                        dragDetail.Add($"step{step}: 画面 {placed.Width:0}x{placed.Height:0}"
+                            + $" / 宿主 {hostWidth:0}x{hostHeight:0}"
+                            + $" pending={surface.IsResizePending}");
+                }
+            }
+            foreach (var line in dragDetail) Write($"拖动异常帧：{line}");
+            Write($"拖动取样：{dragFrames} 拍，缓冲追赶中 {pendingFrames} 拍，画面未铺满 {shrinkFrames} 拍");
+
+            Require(dragFrames >= 8, $"拖动逐帧取样拿到足够样点（实得 {dragFrames}）");
+            Require(shrinkFrames == 0,
+                $"拖动全程画面始终铺满，不出现忽有忽无的黑边：未铺满 {shrinkFrames} 拍");
+            await Until(() => surface.IsContentReady && !surface.IsResizePending, "拖动结束后缓冲追上新尺寸");
+            Native.SetWindowPos(
+                window.Handle, Native.HwndTop,
+                dragStart.Left, dragStart.Top, dragStart.Width, dragStart.Height,
+                Native.SwpNoZOrder | Native.SwpNoActivate);
+            await Until(() => surface.IsContentReady && !surface.IsResizePending, "摆回原尺寸后缓冲再次落定");
+
             Write("阶段：快速全屏往返");
             page.SetFullscreen(true);
+            await page.WindowChange;
+            await RequireSettled("进全屏");
             await Task.Delay(65, token);
             page.SetFullscreen(false);
+            await page.WindowChange;
+            await RequireSettled("退全屏");
             await Task.Delay(65, token);
             page.SetFullscreen(true);
-            await Until(() => surface.IsContentReady && !page.MotionProbeState.Animating, "快速往返最终全屏正确");
+            await page.WindowChange;
+            await Until(() => window.Fullscreen && surface.IsContentReady && !page.MotionProbeState.Animating, "快速往返最终全屏正确");
             await Task.Delay(500, token);
             page.SetFullscreen(false);
-            await Until(() => surface.IsContentReady && !page.MotionProbeState.Animating, "快速往返最终窗口化正确");
+            await page.WindowChange;
+            await Until(() => !window.Fullscreen && surface.IsContentReady && !page.MotionProbeState.Animating, "快速往返最终窗口化正确");
+
+            // 本地 Visual 属性只验证交接后的几何；切换中的像素空白由外部连续抓屏检查。
+            async Task RequireSettled(string stage)
+            {
+                var samples = 0;
+                var loose = 0;
+                var stretched = 0;
+                string? first = null;
+                for (var step = 0; step < 16; step++)
+                {
+                    var placed = surface.PlacedRect;
+                    var client = window.ClientSize;
+                    var content = surface.AttachedContentSize;
+                    samples++;
+
+                    // ① 贴在窗口里：至少一个方向贴边 ±4%。
+                    var off = placed.Width <= 0 || placed.Height <= 0 || client.Width <= 0 || client.Height <= 0
+                        || (Math.Abs(placed.Width / client.Width - 1) > 0.04
+                            && Math.Abs(placed.Height / client.Height - 1) > 0.04);
+                    // ② 还是画面自己的比例（没被新窗口掰变形）——「铺满」那条错法就死在这一条上。
+                    var bent = content is { Width: > 0, Height: > 0 }
+                        && Math.Abs(placed.Width / placed.Height / ((double)content.Width / content.Height) - 1) > 0.02;
+
+                    if (off) loose++;
+                    if (bent) stretched++;
+                    if (off || bent)
+                        first ??= $"画面 {placed.Width:0}x{placed.Height:0} @窗口 {client.Width}x{client.Height}"
+                            + $" 缓冲 {content.Width}x{content.Height}";
+                    await Task.Delay(16, token);
+                }
+                Write($"{stage}取样：{samples} 拍，未贴住窗口 {loose} 拍，被掰变形 {stretched} 拍"
+                    + (first is null ? "" : $"（首帧 {first}）"));
+                Require(loose == 0 && stretched == 0,
+                    $"{stage}当场落位：跳变后每一拍画面都已贴在窗口里、比例也没被掰弯，"
+                    + "不是从旧矩形爬过去、也没被拉变形");
+            }
+
+            Write("阶段：取帧期间快速反向");
+            page.SetFullscreen(true);
+            await Task.Delay(10, token);
+            page.SetFullscreen(false);
+            await page.WindowChange;
+            Require(!window.Fullscreen, "快速反向以最后请求为准");
+            Require(!page.FullscreenFrameVisible, "快速反向后保留帧已收回");
+
+            Write("阶段：暂停时全屏往返");
+            await handle.SetPropertyAsync("pause", true, token);
+            await Until(() => control.Status.Paused, "本地素材已暂停");
+            foreach (var fullscreen in new[] { true, false })
+            {
+                page.SetFullscreen(fullscreen);
+                await page.WindowChange;
+                Require(window.Fullscreen == fullscreen && surface.IsContentReady && !page.FullscreenFrameVisible,
+                    $"暂停时{(fullscreen ? "进" : "退")}全屏落定且保留帧已收回");
+            }
+            await handle.SetPropertyAsync("pause", false, token);
 
             Write("阶段：最大化进全屏再退出");
-            window.ToggleMaximize();
+            page.ToggleMaximizeRequested();
+            await page.WindowChange;
             await Task.Delay(350, token);
             page.SetFullscreen(true);
+            await page.WindowChange;
             await Task.Delay(350, token);
             page.SetFullscreen(false);
+            await page.WindowChange;
             await Task.Delay(350, token);
             Require(window.IsMaximized, "最大化状态在全屏往返后保留");
 
             Write("阶段：退出播放");
+            // 退场底、压暗旋钮、铺满旗三样在退场之前必须是收着的。播放中留着任何一样都是实打实的观感
+            // 事故：一层底盖住整趟播放、一部永远偏暗的片子、或者一张被裁掉边角的画面。先钉住「进场／
+            // 播放时不在」—— 2026-09-20 晚新加的那面「铺满」旗没有这一步，就会悄悄跟着下一趟播放走。
+            Require(!page.ExitProbeState.Backdrop && page.ExitProbeState.Dim == 0 && !page.ExitProbeState.Fill,
+                "播放中退场底收着、留帧压暗为 0、铺满旗关着");
             await handle.StopAsync();
             await handle.DisposeAsync();
             handle = null;
             await Task.Delay(60, token);
-            Require(!surface.HasAttachedVisual && surface.AttachedContentSize.Width > 0,
-                "播放已停止，退场保留最后视频帧");
+            Require(!surface.HasAttachedVisual, "播放已停止，交换链已交还（画面不再由 mpv 供帧）");
+            Require(surface.IsRetained, "退场进入保留态（最后一帧在屏上、缓冲已交还）");
+
+            // 2026-09-20 用户报「退出播放时下方瞬间出现大片空白」的那一段：拆链在前、还原浏览几何在后，
+            // 窗口一口气变矮变宽，而画面上没有任何东西会自己跟过来 —— 旧版在这里把呈现计时器停掉、
+            // 又把刷新路径全堵死，那一帧于是冻在旧尺寸，右下露出的就是 Stage 的深色。
+            //
+            // 这一段必须**逐拍取样**才盖得住：窗口还原是瞬时的，等它落定再看读数已经晚了（这正是
+            // 旧探针 Delay(350) 漏掉它的原因）。取的是 PlacedRect —— 从 SpriteVisual 反算出来的
+            // 「实际摆成什么样」，把宿主尺寸算在内；余白一出现它立刻就不是画面比例了。
+            var aspect = 0d;
+            var retainedSamples = 0;
+            var blankSamples = 0;
+            var sampled = 0;
+            var dimmedSamples = 0;
+            var backdropSamples = 0;
+            var shapeMismatchSamples = 0;
+            var shortBackdropSamples = 0;
+            var shortStageSamples = 0;
+
+            // 2026-09-20 晚「重新设计退场」补的四个：铺满旗立着几拍、压暗过程里最亮的那一档是多少、
+            // 有几拍的压暗停在**中途**（既不是 0 也不是 1）、以及底边那条细进度线有没有被收掉。
+            // 中间那个数是「一路溶解」与「一步压到 15%」唯一分得开的地方 —— 一步到位那种写法，
+            // 中途档位一个都不会有；最后那个数盯的是「判据写了却没人调 Render()」那种死代码。
+            var fillSamples = 0;
+            var brightestDim = double.MaxValue;
+            var partialDimSamples = 0;
+            var thinLineSamples = 0;
+
+            var shortDetail = new List<string>();
+            var shapeDetail = new List<string>();
+            var insideSample = new List<string>();
             page.EndMotionProbe();
+            for (var tick = 0; tick < 30; tick++)
+            {
+                await Task.Delay(16, token);
+                if (!surface.IsRetained && tick > 4) break;
+                var placed = surface.PlacedRect;
+                var host = surface.HostSize;
+                var hostWidth = host.Width * surface.RasterizationScale;
+                var hostHeight = host.Height * surface.RasterizationScale;
+
+                // 退场那 240ms 里另外几样必须一直成立：这一页在淡出、最后一帧在溶解、并且它是**铺满**
+                // 新宿主的（铺不满就会在窗口变形的那一帧露出底）。少任何一样，屏上留下的就是「缩在
+                // 角落的最后一帧 + 一圈窗口色」（2026-09-20 用户截图）。先读它们，再读几何：几何那一支
+                // 在宿主尺寸为 0 时会 continue。
+                var exit = page.ExitProbeState;
+                if (exit.Backdrop) backdropSamples++;
+                if (exit.Fill) fillSamples++;
+                if (exit.Dim > 0) dimmedSamples++;
+                // 只统计**正数**里最小的那个：「一路溶解」的那一趟会读到 0.0x 这一档；而旧那套
+                // 一步压到 0.85 的写法只读得到 0.85，于是这一条当场翻红。把 0 也算进来的话，
+                // 起手那个 0 会把最亮值压成 0，这条判据就成了摆设。
+                if (exit.Dim > 0 && exit.Dim < brightestDim) brightestDim = exit.Dim;
+                if (exit.Dim > 0 && exit.Dim < 1) partialDimSamples++;
+                if (exit.ThinLine) thinLineSamples++;
+
+                // 2026-09-20 补的第四条：底**立着**不够，还得**铺满**。
+                //
+                // 用户第二张截图（「怎么退出播放页面返回主页的时候还是这样」，点左上角返回箭头，退出的
+                // 瞬间截图）量出来的形状是上 65% 这一页、下 30% 一整块 #16181C，中间一条硬分界 ——
+                // 那不是「底没立起来」（它立起来了，上面那条断言一直是绿的），是**底只铺到了窗口变高之前
+                // 的高度**。LeavePlayer 里 RestorePlayerToBrowse 让窗口一口气变高，这一页的 Measure/Arrange
+                // 要等下一帧才跟上，中间那几拍新露出来的那一条既没有舞台也没有退场底。
+                //
+                // 原先这里只读 PlacedRect（画面那一半）与 ExitProbeState（底在不在），**没有一处问过它
+                // 铺了多高**，所以这个错法能全绿通过。现在补上：底与舞台的高必须贴住这一刻的客户区高。
+                // 判据给 2px 容差（ActualHeight 是布局值，客户区是整数，两者在 DPI 缩放下未必逐位相等）；
+                // 那次「只铺到旧高度」的错法差的是 137px（760-623），离容差差着两个数量级，杀得掉。
+                var cover = page.ExitCoverProbeState;
+                if (cover.WindowHeight > 0)
+                {
+                    if (cover.BackdropHeight > 0 && cover.WindowHeight - cover.BackdropHeight > 2)
+                    {
+                        shortBackdropSamples++;
+                        if (shortDetail.Count < 4)
+                            shortDetail.Add($"退场底只铺到 {cover.BackdropHeight:0}，客户区 {cover.WindowHeight:0}"
+                                + $"（差 {cover.WindowHeight - cover.BackdropHeight:0}px）");
+                    }
+                    if (cover.StageHeight > 0 && cover.WindowHeight - cover.StageHeight > 2)
+                    {
+                        shortStageSamples++;
+                        if (shortDetail.Count < 4)
+                            shortDetail.Add($"舞台只铺到 {cover.StageHeight:0}，客户区 {cover.WindowHeight:0}"
+                                + $"（差 {cover.WindowHeight - cover.StageHeight:0}px）");
+                    }
+                }
+
+                if (placed.Width <= 0 || placed.Height <= 0 || hostWidth <= 0 || hostHeight <= 0) continue;
+
+                sampled++;
+                if (aspect <= 0) aspect = placed.Width / placed.Height;
+
+                // 2026-09-20 用户截图那条「丑」的正主：保留态的形状一度被宿主污染 —— 窗口被掰成竖形时
+                // 呈现矩形与 PictureAspect 都是竖的，最后一帧于是被按竖形 contain 成一条窄带
+                // （竖屏档实测 shape=1080x1872 对 16:9 的视频，屏上留下 42% 宽的带、上下大片黑）。
+                //
+                // 判据用「形状等不等于广告里的那个数」：探针已经用 ProbeSourceAspect 把素材的 16:9
+                // 写了进去，所以保留态的形状就必须是 16:9（±4%）。宿主形状在这里是竖的，两者天差地别，
+                // 拿窗口比例顶替一眼就能看出来 —— 这是我第一版判据漏掉的那条（那时只比「与宿主不同形」，
+                // 形状与摆放一起错也能过）。
+                var shape = page.RetainedShapeProbeState;
+                if (shape.Width > 0 && shape.Height > 0)
+                {
+                    var shapeAspect = shape.Width / shape.Height;
+                    if (Math.Abs(shapeAspect / (16d / 9d) - 1) > 0.04)
+                    {
+                        shapeMismatchSamples++;
+                        if (shapeDetail.Count < 4)
+                            shapeDetail.Add($"形状 {shape.Width:0.###}x{shape.Height:0.###}"
+                                + $"（{shapeAspect:F3}）≠ 素材的 {16d / 9d:F3}"
+                                + $"，宿主 {hostWidth:0}x{hostHeight:0}");
+                    }
+                }
+
+                // 这一帧在宿主里的「覆盖度」：画面占了宿主面积的多大一块。留边是正常的（浏览窗口
+                // 未必同比例），但整块画面若一直缩在旧尺寸里，覆盖度会明显偏小、且四周余白持续存在。
+                var coverX = placed.Width / hostWidth;
+                var coverY = placed.Height / hostHeight;
+                var coversSide = Math.Min(coverX, coverY);
+                if (surface.IsRetained) retainedSamples++;
+                // contain 摆放的正确判据：至少一个方向贴满（±3%），另一个方向按比例留边。
+                var fillsOneSide = Math.Abs(coverX - 1) <= 0.03 || Math.Abs(coverY - 1) <= 0.03;
+                if (!fillsOneSide && surface.IsRetained) blankSamples++;
+                if (tick % 6 == 0)
+                    insideSample.Add($"{placed.Width:0}x{placed.Height:0}@host{hostWidth:0}x{hostHeight:0}"
+                        + $" cover={coversSide:F3} retained={surface.IsRetained}"
+                        + $" shape={shape.Width:0.###}x{shape.Height:0.###}");
+            }
+            foreach (var line in shapeDetail) Write($"退场形状不符：{line}");
+            foreach (var line in shortDetail) Write($"退场面不够高：{line}");
+            foreach (var line in insideSample) Write($"退场取样：{line}");
+            Write($"退场取样：{sampled} 拍，其中保留态 {retainedSamples} 拍，未贴边 {blankSamples} 拍"
+                + $"，形状不符 {shapeMismatchSamples} 拍"
+                + $"，退场底立着 {backdropSamples} 拍，留帧压暗 {dimmedSamples} 拍"
+                + $"，面不够高 {shortBackdropSamples + shortStageSamples} 拍"
+                + $"（底 {shortBackdropSamples} / 舞台 {shortStageSamples}）"
+                + $"，铺满 {fillSamples} 拍，溶解中途 {partialDimSamples} 拍，起手最亮 {brightestDim:F3}"
+                + $"，细线立着 {thinLineSamples} 拍");
+
+            Require(retainedSamples > 0, "退场逐拍取样确实落在保留态里（不是等落定才看）");
+            Require(blankSamples == 0,
+                $"保留期每一拍画面都按视频比例铺满宿主的一条边（余白不成片）：未贴边 {blankSamples} 拍");
+            Require(shapeMismatchSamples == 0,
+                $"保留态的形状是画面自己的比例（最后一帧不会被缩成窄带）：不符 {shapeMismatchSamples} 拍");
+            Require(aspect > 0, "保留期画面保持了可用的形状（比例来自视频而非浏览窗口）");
+            Require(backdropSamples > 0, "退场期间退场底立着（整页淡出有一块面可以淡）");
+            Require(dimmedSamples > 0, "退场期间留帧已被压暗");
+            // 2026-09-20 晚「重新设计退场」的三条。前两条说的是**铺满**（窗口变形那一帧不许缩成信匣），
+            // 后两条说的是**溶解**（起手还亮着、中途有档位）—— 这正是「一路退去」与旧那套「一步压到
+            // 15% 再让一块不透明的底淡掉」唯一分得开的地方。
+            Require(fillSamples > 0, "退场期间留帧是铺满新宿主的（窗口变形那一帧不缩成信匣）");
+            Require(partialDimSamples >= 3,
+                $"退场留帧的压暗停在中途的拍数够得上「一路溶解」：只有 {partialDimSamples} 拍");
+            Require(brightestDim < 0.5,
+                $"退场起手那一帧画面还亮着（不是一步压到 15%）：读到最暗的是 {brightestDim:F3}");
+            // 2026-09-20 第四张用户截图里那条 3px 的白线：细线画在**页面**的底边上，页面淡掉它还在。
+            // 判据在 `Render()` 里早就写了，可退场这条路上从来没有人调过 `Render()` —— 于是它一直亮着，
+            // 而 `ProbeThinLine` 自己会调 `Render()`，所以自检一直是绿的。这条读的是**真实退场那一趟**。
+            Require(thinLineSamples == 0,
+                $"退场期间底边那条细进度线已收掉（页面淡掉之后不会还亮着一条）：立着 {thinLineSamples} 拍");
+            // 2026-09-20 加的这一条才是用户第二张截图的正主：「立着」与「铺满」是两件事。
+            // 「面不够高」的那两拍组合里，舞台那一支是**同一块面**的另一半证据 —— 底铺到哪、舞台就铺到哪，
+            // 两个数一起贴住客户区，新露出来的那一条才既有舞台也有底，才不会露出 Mica / 窗口底色。
+            Require(shortBackdropSamples == 0,
+                $"退场期间退场底每一拍都铺满客户区（窗口变高时底立刻跟上，不会只铺到旧高度）：不够高 {shortBackdropSamples} 拍");
+            Require(shortStageSamples == 0,
+                $"退场期间舞台每一拍都铺满客户区（新露出的那一条有舞台垫着）：不够高 {shortStageSamples} 拍");
+
             await Task.Delay(350, token);
             Require(!page.PlayerVisible && page.MotionProbeState.Identity && !window.PlaybackTitleBar,
                 "退场后页面收起，变换和标题栏恢复");
-            Require(surface.AttachedContentSize.Width == 0, "退场后最后帧引用已释放");
+            Require(!page.ExitProbeState.Backdrop && page.ExitProbeState.Dim == 0,
+                "退场收摊后退场底收起、留帧压暗归零（不会留在下一趟播放上）");
+            // 2026-09-20 用户报「给这个返回主页的页面也加上背景图」：遮罩那块垫底图**退场不许被丢掉** ——
+            // 丢了的话下一趟遮罩亮起来时是一整片纯色（换片那几趟遮罩是在 `_playerHold > 0` 手里亮的，
+            // 新片那张图还在路上，用户实测屏上整块 `#0C0E11`、一个像素的图都没有）。
+            // 探针进场前就把 `CoverBackdrop` 摆好了（见 RunScoped 开头），走到这里它必须还在。
+            Require(page.ViewModel.CoverBackdrop is not null,
+                "退场不会把遮罩垫底图丢下（下一趟遮罩不会是一片纯色）");
+            Require(surface.AttachedContentSize.Width == 0, "退场收摊后缓冲尺寸已清空");
+            Require(surface.PlacedRect.Width == 0, "退场收摊后 SpriteVisual 已拆掉（画面不留残影）");
+            Require(!surface.IsRetained, "退场收摊后保留态结束");
             Native.GetWindowRect(window.Handle, out var restored);
             Require(!window.IsMaximized && restored.Left == browse.Left && restored.Top == browse.Top
                 && restored.Width == browse.Width && restored.Height == browse.Height, "退出回到播放前的浏览几何");

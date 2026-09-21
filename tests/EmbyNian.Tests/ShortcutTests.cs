@@ -17,9 +17,9 @@ internal static class ShortcutTests
 
     public static void Register()
     {
-        Test("快捷键表：19 个动作，Id 不重复、默认键不重复、没有一个默认落在保留键上", () =>
+        Test("快捷键表：21 个动作，Id 不重复、默认键不重复、没有一个默认落在保留键上", () =>
         {
-            Assert.Equal(19, ShortcutCatalog.Actions.Count);
+            Assert.Equal(21, ShortcutCatalog.Actions.Count);
 
             var ids = ShortcutCatalog.Actions.Select(a => a.Id).ToList();
             Assert.Equal(ids.Count, ids.Distinct(StringComparer.Ordinal).Count(), "动作 Id 有重复");
@@ -39,6 +39,28 @@ internal static class ShortcutTests
             Assert.Equal(Key("BracketLeft"), Default("speed-down"));
             Assert.Equal(Key("Z"), Default("subtitle-delay-decrease"));
             Assert.Equal(Key("Z", shift: true), Default("subtitle-delay-increase"));
+        });
+
+        Test("快捷键表：四颗方向键各归一对步长，音量让到 Ctrl+方向键（2026-09-20 那两句话）", () =>
+        {
+            KeyStroke Default(string id) => ShortcutCatalog.Actions.First(a => a.Id == id).Default;
+
+            // 「新增键盘上的左和右设置为播放进度快退五秒和快进五秒」
+            Assert.Equal(Key("Left"), Default("seek-backward"));
+            Assert.Equal(Key("Right"), Default("seek-forward"));
+
+            // 「上方向键和下方向键改为播放进度快进30秒和快退30秒」
+            Assert.Equal(Key("Down"), Default("seek-backward-long"));
+            Assert.Equal(Key("Up"), Default("seek-forward-long"));
+
+            // 上下被这两条占走之后，音量剩下的那份：带着 Ctrl，不是没有 —— 一颗键只归一个动作，但音量
+            // 这东西不该因为方向键改用处就从键盘上消失。
+            Assert.Equal(Key("Up", ctrl: true), Default("volume-up"));
+            Assert.Equal(Key("Down", ctrl: true), Default("volume-down"));
+
+            // 四颗方向键的裸键一个都没剩下给别人，四条大步/短步也不必同名同物。
+            Assert.Equal("快退（大步）", ShortcutCatalog.Label("seek-backward-long"));
+            Assert.Equal("快进（大步）", ShortcutCatalog.Label("seek-forward-long"));
         });
 
         Test("Resolve：没动过用默认，空串是解绑，动过用动过的", () =>

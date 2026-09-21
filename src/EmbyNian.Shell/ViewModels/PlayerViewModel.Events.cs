@@ -43,12 +43,14 @@ public sealed partial class PlayerViewModel
     });
 
     /// <summary>
-    /// 独占模式视频窗里 Lua UI（uosc 嵌入版）的请求。三条业务消息：换集（±1，走 Emby 的单集导航，
+    /// 独占模式视频窗里 Lua UI（uosc 嵌入版）的请求。五条业务消息：换集（±1，走 Emby 的单集导航，
     /// 与控制窗的上一集/下一集同一句话）；要选集菜单（宿主把本季单集经 open-menu 推回给 uosc 画，
-    /// 这一项是宿主唯一的数据源）；点选菜单里的某集（1 起算的序号）。就绪握手由句柄侧记档。
+    /// 这一项是宿主唯一的数据源）；点选菜单里的某集（1 起算的序号）；要版本菜单与点选某一版（同一个形状，
+    /// 数据源是条目自己的媒体源表）。就绪握手由句柄侧记档。
     /// 进度条拖动不在此列 —— uosc 直接对 mpv 发 seek，宿主从属性观察收到结果，不必经手。
-    /// 消息从 mpv 的事件线程直接进来，先落界面线程；换集交给 <see cref="StepEpisodeAsync"/>/
-    /// <see cref="SwitchEpisode"/> 自己的守卫，这里不再另设一层 —— 双保险比一层保险更难排障。
+    /// 消息从 mpv 的事件线程直接进来，先落界面线程；换集与换版交给
+    /// <see cref="StepEpisodeAsync"/>/<see cref="SwitchEpisode"/>/<see cref="SwitchVersion"/> 自己的守卫，
+    /// 这里不再另设一层 —— 双保险比一层保险更难排障。
     /// </summary>
     private void OnVideoWindowMessage(string key, string value) => OnUi(() =>
     {
@@ -77,38 +79,97 @@ public sealed partial class PlayerViewModel
             case VideoWindowContract.EpisodeIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index):
                 if (index >= 1 && index <= Episodes.Count) SwitchEpisode(Episodes[index - 1]);
                 break;
+
+            case VideoWindowContract.Versions:
+                // 版本菜单同一条规矩、自己的那道闸：菜单是幂等的，而自激的脚本不问它是哪一扇菜单。
+                if (_versionMenuGate.TryAccept(DateTime.UtcNow))
+                {
+                    _ = PushVersionMenuAsync();
+                }
+                else if (_versionMenuGate.ShouldReport(DateTime.UtcNow))
+                {
+                    Log.Warn(Category,
+                        $"版本菜单请求被闸门挡下（累计 {_versionMenuGate.Suppressed} 条）——视频窗脚本可能在刷屏");
+                }
+                break;
+
+            case VideoWindowContract.VersionIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var version):
+                // 1 起算的序号对着推送那一份菜单的次序；越界与垃圾由 MediaVersionSwitch.At 挡成 null，
+                // 而「点了正在放的那一版」由 SwitchVersion 自己吞掉 —— 这道守卫不在这儿再抄一遍。
+                SwitchVersion(MediaVersionSwitch.At(_nowPlaying, version));
+                break;
         }
     });
 
     /// <summary>
-    /// 把本季单集推给视频窗的 uosc 画成菜单。uosc 的 open-menu 吃一份 JSON
-    /// （type/title/items），点中一项时它把 item 的 value 当 mpv 命令执行——所以每项的
-    /// value 就是一条回宿主的 script-message，序号对应这一份菜单的次序。当前集打上 active。
-    /// 没有集列表（非剧集、列表没到手）也回一份菜单，放一行说明而不是让按钮看起来是死的。
+    /// 把本季单集推给视频窗的 uosc 画成菜单。当前集打上 active；没有集列表（非剧集、列表没到手）也回
+    /// 一份菜单，放一行说明而不是让按钮看起来是死的。
     /// </summary>
     private async Task PushEpisodeMenuAsync()
     {
-        List<EpisodeMenuItem> items = Episodes.Count == 0
-            ? [new EpisodeMenuItem("（这一场没有可用的集列表）", null, false, false)]
-            : [.. Episodes.Select((episode, index) => new EpisodeMenuItem(
+        List<UoscMenuItem> items = Episodes.Count == 0
+            ? [new UoscMenuItem("（这一场没有可用的集列表）", null, false, false)]
+            : [.. Episodes.Select((episode, index) => new UoscMenuItem(
                 episode.ToPlaybackTitle(),
                 $"script-message {VideoWindowContract.EpisodeIndex} {index + 1}",
                 true,
                 string.Equals(episode.Id, PlayingItemId, StringComparison.Ordinal)))];
 
-        var menu = new EpisodeMenu("episodes", "选集", items);
-        var json = JsonSerializer.Serialize(menu, EpisodeMenuJson.Options);
-
-        if (!await _playback.CommandAsync("script-message", "open-menu", json).ConfigureAwait(true))
-            Log.Warn(Category, "推送选集菜单到视频窗失败");
+        await SendMenuAsync("episodes", "选集", items).ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// 把这一条目的版本推给视频窗画成菜单：4K HDR、1080p、导演剪辑版……正在放的那一版打上 active。
+    /// <para>
+    /// 与选集菜单同一个形状、同一套规矩，只有两处不同。其一，右边那列暗字带着画质（<c>4K · HEVC · 8.4 GB</c>）——
+    /// 选集行上写的是集名与集号，而两个版本的名字可以一模一样（「4K HDR」与「4K HDR 修复版」），
+    /// 视频窗里又没有详情页那张媒体信息表可看，所以这一列是唯一分得清两份文件的地方。其二，
+    /// 只有一版时也回一份菜单，那一行是「没有可切换的版本」而不是让菜单看起来没打开。
+    /// </para>
+    /// </summary>
+    private async Task PushVersionMenuAsync()
+    {
+        var versions = Versions;
+
+        List<UoscMenuItem> items = versions.Count <= 1
+            ? [new UoscMenuItem("没有可切换的版本", null, false, false)]
+            : [.. versions.Select((source, index) => new UoscMenuItem(
+                ItemDetail.SourceLabel(source),
+                $"script-message {VideoWindowContract.VersionIndex} {index + 1}",
+                true,
+                MediaVersionSwitch.Same(source, PlayingSource),
+                QualityTail(source)))];
+
+        await SendMenuAsync("versions", "版本", items).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// 一份 uosc 菜单的推送。uosc 的 <c>open-menu</c> 吃一份 JSON（type/title/items），点中一项时它把该项的
+    /// <c>value</c> 当 mpv 命令执行 —— 所以每一项的 value 就是一条回宿主的 <c>script-message</c>，
+    /// 序号对应这一份菜单里的次序。
+    /// </summary>
+    private async Task SendMenuAsync(string type, string title, IReadOnlyList<UoscMenuItem> items)
+    {
+        var json = JsonSerializer.Serialize(new UoscMenu(type, title, items), UoscMenuJson.Options);
+
+        if (!await _playback.CommandAsync("script-message", "open-menu", json).ConfigureAwait(true))
+            Log.Warn(Category, $"推送「{title}」菜单到视频窗失败");
+    }
+
+    /// <summary>菜单行右边那列暗字：这份文件到底是什么。问不出画质就交 null，不写一个空字符串上去。</summary>
+    private static string? QualityTail(MediaSource source) =>
+        source.ToQualityLabel() is { Length: > 0 } quality ? quality : null;
+
     /// <summary>uosc open-menu 的菜单形状，与 uosc MenuData 的字段对齐（多出来的字段会被忽略）。</summary>
-    private sealed record EpisodeMenu(string Type, string Title, IReadOnlyList<EpisodeMenuItem> Items);
+    private sealed record UoscMenu(string Type, string Title, IReadOnlyList<UoscMenuItem> Items);
 
-    private sealed record EpisodeMenuItem(string Title, string? Value, bool Selectable, bool Active);
+    /// <summary>
+    /// 菜单里的一行。<see cref="Hint"/> 是右边那列暗字（uosc 的 <c>hint</c>）：选集用不上（值里已经有
+    /// 集号），版本用得上 —— 那正是「两份文件同一个名字」时唯一说得清的地方。
+    /// </summary>
+    private sealed record UoscMenuItem(string Title, string? Value, bool Selectable, bool Active, string? Hint = null);
 
-    private static class EpisodeMenuJson
+    private static class UoscMenuJson
     {
         public static readonly JsonSerializerOptions Options = new()
         {
@@ -139,6 +200,14 @@ public sealed partial class PlayerViewModel
         if (item is not null
             && string.Equals(_episodeSwitchTargetId, item.Id, StringComparison.Ordinal))
             _episodeSwitchTargetId = null;
+
+        // 换版在途标记同样在这一刻放开 —— 它挡的是「同一下点两遍」，不是整场播放。
+        // 少了这一句，「换到版本 2 再切回版本 1」永远不生效（2026-09-20 用户报的就是这个）：
+        // StartVersion 的守卫看的是这个标记，而发起换版那一路的 finally 要等 **整场播放** 结束才返回，
+        // 中间那几个小时里标记一直挂着，于是菜单里点哪一版都没反应。
+        // 不去比「宣布的这一版是不是我刚才点的那一版」：服务器可能回退到另一个候选打开，
+        // 那之后还必须点得动 —— 换集那条能比是因为它比的是播的哪一集，这里的回退恰恰是常规情形。
+        if (item is not null) _versionSwitchTarget = null;
         Tracks = [];
 
         // Converted once and kept: the 跳过 plan and the preview's still both read Emby's marks, and the
@@ -178,9 +247,20 @@ public sealed partial class PlayerViewModel
 
         Title = item.ToPlaybackTitle();
         Subtitle = item.Type == EmbyItemType.Episode ? item.SeriesName ?? "" : item.CardSubtitle;
-        SourceLabel = item.MediaSources.Count > 0 ? item.MediaSources[0].ToQualityLabel() : "";
+
+        // 控制条中间那行读数是**正在放的那一版**的，见 PlayingSourceLabel。
+        SourceLabel = PlayingSourceLabel(item);
         EpisodeControlsVisible = item.Type == EmbyItemType.Episode
             && (Episodes.Count > 1 || !string.IsNullOrEmpty(item.SeriesId));
+
+        // 有没有第二版可换。「版本」按钮只在这一格为真时露面（控制条上那个按钮绑的就是它），
+        // 独占模式视频窗里的那条菜单项则不受它管 —— uosc 的控件列表是静态的，露出与否由
+        // 那一份菜单自己说（只有一版时回一行「没有可切换的版本」）。
+        //
+        // 这一格跟着「手上这个条目」走，不在这里自己算（2026-09-21）。拿到的 item 可能是初始化对象
+        // （浏览级元数据没有媒体源），而 FillSiblingsAsync 后来会把服务器那条更全的换上去；
+        // 两边各算各的就会打架，见 CurrentItem 与 VersionControlsVisible 的注释。
+        CurrentItem = item;
 
         // Before the player is shown rather than after: the window is reshaped for the picture while the
         // picture is still being opened, so the first frame arrives into a client area that is already its
@@ -200,6 +280,23 @@ public sealed partial class PlayerViewModel
         _ = LoadCoverBackdropAsync(item);
         ApplySkipOffer();
     });
+
+    /// <summary>
+    /// 控制条中间那行「1080p · HEVC · 8.4 GB」说的是哪一份文件。
+    /// <para>
+    /// 问的必须是<b>正在放的那一版</b>，不是 <c>MediaSources[0]</c>。单版本的条目上两者恰好是同一份文件，
+    /// 所以「问第一个」这个写法一直没露馅；条目一旦挂了两版、用户又换过版，那行就会一直报第一版的画质 ——
+    /// 屏上看到的是「换了版本，中间那行纹丝不动」，而真实的画面已经换成另一份文件了。认不出在播的是哪一版
+    /// （外部 mpv.exe 后端不经过这里的启动记账、或者刚起播还没落定）时才退回第一版。
+    /// </para>
+    /// </summary>
+    private string PlayingSourceLabel(EmbyItem? item)
+    {
+        var source = MediaVersionSwitch.Playing(item, _playback.PlayingSource)
+            ?? item?.MediaSources.FirstOrDefault();
+
+        return source?.ToQualityLabel() ?? "";
+    }
 
     /// <summary>
     /// 遮罩垫底的背景图（2026-09-15「视频刚开播还在加载缓存没有正片画面时背景要用背景图」）。按

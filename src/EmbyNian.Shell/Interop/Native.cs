@@ -267,6 +267,28 @@ internal static partial class Native
     public const uint SwpNoZOrder = 0x0004;
     public const uint SwpNoActivate = 0x0010;
 
+    // ---- WinEvent hook（2026-09-21「进入全屏时任务栏仍可见」的守 band 顶） -------------------
+    // explorer 会在前台切换／z 序重排之后把 Shell_TrayWnd 重新提到 topmost band 的顶上，压过全屏窗口
+    // （实测 work/probe-tray-during-fs.txt：进全屏 190 毫秒内任务栏爬回画面）。轮询压不住这种毫秒级的
+    // 爬回，只有事件驱动：挂 out-of-context 的 WinEvent hook，凡是任务栏（或它的子窗）发生 z 序重排或
+    // 系统前台变化，当拍把自己重新提回 band 顶。回调跑在装钩线程（UI 线程）上，窗口是同线程的，
+    // SetWindowPos 直接安全。
+    public const uint EventSystemForeground = 0x0003;
+    public const uint EventObjectReorder = 0x8004;
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    public delegate void WinEventDelegate(
+        IntPtr hook, uint evt, IntPtr window, IntPtr idObject, IntPtr idChild, uint thread, uint time);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial IntPtr SetWinEventHook(
+        uint eventMin, uint eventMax, IntPtr modifier, WinEventDelegate procedure,
+        uint process, uint thread, uint flags);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnhookWinEvent(IntPtr hook);
+
     /// <summary>
     /// Throws away the old client pixels instead of blitting them to the new position. Right for a
     /// video surface: the frame is about to be redrawn at a different size anyway, and copying it

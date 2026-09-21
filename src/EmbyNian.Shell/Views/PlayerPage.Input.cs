@@ -450,8 +450,8 @@ public sealed partial class PlayerPage : IWin32KeySink
                 ViewModel.ExitNativeFullscreenOrStop();
                 return true;
 
-            case VirtualKey.Escape when _window!.Fullscreen:
-                ToggleFullscreen();
+            case VirtualKey.Escape when _window!.Fullscreen || _fullscreenWanted == true:
+                SetFullscreen(false);
                 return true;
 
             case VirtualKey.Escape:
@@ -477,7 +477,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     private Dictionary<string, Action>? _shortcutHandlers;
 
     /// <summary>
-    /// 动作 Id → 这一下做什么，可重绑那 19 个动作的另一半。Core 那张表（<see cref="ShortcutCatalog"/>）定
+    /// 动作 Id → 这一下做什么，可重绑那 21 个动作的另一半。Core 那张表（<see cref="ShortcutCatalog"/>）定
     /// 「键→动作」，这张表定「动作→干什么」，靠动作 Id 对上。这一头必须留在页面：音量增减和静音要顺带闪一下
     /// 音量条（走会闪条的页面包装 <see cref="NudgeVolume"/> / <see cref="ToggleMute"/>，不是直接调视图模型），
     /// 全屏和置顶是窗口的事、mpv 一无所知。<b>少一个动作没有处理器 = 那颗键按下去没反应</b>，自检
@@ -489,6 +489,8 @@ public sealed partial class PlayerPage : IWin32KeySink
         ["toggle-pause"] = () => ViewModel.TogglePause(),
         ["seek-backward"] = () => ViewModel.SeekBackward(),
         ["seek-forward"] = () => ViewModel.SeekForward(),
+        ["seek-backward-long"] = () => ViewModel.SeekBackwardLong(),
+        ["seek-forward-long"] = () => ViewModel.SeekForwardLong(),
         ["volume-up"] = () => NudgeVolume(KeyStep),
         ["volume-down"] = () => NudgeVolume(-KeyStep),
         ["toggle-fullscreen"] = ToggleFullscreen,
@@ -624,7 +626,7 @@ public sealed partial class PlayerPage : IWin32KeySink
         }
         if (_window is null) return;
 
-        SetFullscreen(!_window.Fullscreen);
+        SetFullscreen(!(_fullscreenWanted ?? _window.Fullscreen));
     }
 
     /// <summary>
@@ -652,8 +654,15 @@ public sealed partial class PlayerPage : IWin32KeySink
         // （实机日志 11:36:57-11:37:16：hold=True 挂了 9~18 秒，按住鼠标=False，控件永不隐藏）。
         EndWindowDrag();
 
-        _window.Fullscreen = on;
-        FullscreenGlyph.Glyph = Glyph(on ? FullscreenExitCode : FullscreenEnterCode);
+        RequestFullscreen(on);
+    }
+
+    /// <summary>立即改窗口状态；保留帧那一段由 <c>ChangeWindowAsync</c> 负责。</summary>
+    private void ApplyFullscreen(bool on)
+    {
+        if (_window is not { } window) return;
+        window.Fullscreen = on;
+        FullscreenGlyph.Glyph = Glyph(window.Fullscreen ? FullscreenExitCode : FullscreenEnterCode);
 
         // 右上角那一颗的图标也跟着走（全屏时它是「窗口化」）。Render 只在标题条露着的时候才更新它，
         // 而按 F 或 Esc 进出全屏之后，人往往是**把鼠标移到右上角去看**的 —— 那时候才更新就已经晚了。
@@ -719,13 +728,17 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     private void OnMinimizeWindow(object sender, RoutedEventArgs e) => _window?.Minimize();
 
-    private void OnToggleMaximizeWindow(object sender, RoutedEventArgs e)
+    private void OnToggleMaximizeWindow(object sender, RoutedEventArgs e) => ToggleMaximizeRequested();
+
+    /// <summary>
+    /// 右上角那一颗的真实语义：全屏时它是「窗口化」，其余时候才是最大化／还原。
+    /// <c>ToggleMaximize</c> 在全屏下会站着不动（窗口的边归显示器），所以这里必须分成两支。
+    /// 探针也走这一条，抓的画面才是用户按下去的那条路。
+    /// </summary>
+    internal void ToggleMaximizeRequested()
     {
-        // 全屏时这一颗是「窗口化」，不是「最大化」：退出全屏、窗口回到进全屏前的大小（那份几何
-        // HostWindow.Fullscreen 自己记着）。其余时候才是真正的最大化／还原 —— ToggleMaximize 在全屏下
-        // 会站着不动（窗口的边归显示器），所以这里必须分成两支，不能只把它转过去。
         if (_window?.Fullscreen == true) SetFullscreen(false);
-        else _window?.ToggleMaximize();
+        else if (_window is { } window) RequestMaximize(!window.IsMaximized);
 
         UpdateMaximizeGlyph();
     }
@@ -759,9 +772,8 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         MaximizeButton.Visibility = Visibility.Visible;
 
-        MaximizeGlyph.Glyph = Glyph(_window?.Fullscreen == true || _window?.IsMaximized == true
-            ? RestoreGlyphCode
-            : MaximizeGlyphCode);
+        // 「占满屏幕」问一次归一那个答主（全屏或最大化都要画成还原）—— 别再在这里拼一遍两个属性。
+        MaximizeGlyph.Glyph = Glyph(_window?.OccupiesScreen == true ? RestoreGlyphCode : MaximizeGlyphCode);
     }
 
     // ---- 音量 --------------------------------------------------------------------

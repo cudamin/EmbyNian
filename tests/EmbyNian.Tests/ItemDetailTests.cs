@@ -674,7 +674,10 @@ internal static class ItemDetailTests
             // A season page asks for itself.
             var season = new EmbyItem
             {
-                Id = "season2", Name = "第二季", Type = EmbyItemType.Season, SeriesId = "series1"
+                Id = "season2",
+                Name = "第二季",
+                Type = EmbyItemType.Season,
+                SeriesId = "series1"
             };
             AssertScope(ItemDetail.EpisodeScope(season, null), "series1", "season2", "第二季");
 
@@ -776,23 +779,27 @@ internal static class ItemDetailTests
 
             Assert.Equal(2, ItemDetail.EpisodeFocus(episodes, new EmbyItem
             {
-                Id = "ep3", Type = EmbyItemType.Episode
+                Id = "ep3",
+                Type = EmbyItemType.Episode
             }));
 
             // 第一张就是自己时答 0，和「别动」是同一个答案 —— 本来就已经在带子的开头。
             Assert.Equal(0, ItemDetail.EpisodeFocus(episodes, new EmbyItem
             {
-                Id = "ep1", Type = EmbyItemType.Episode
+                Id = "ep1",
+                Type = EmbyItemType.Episode
             }));
 
             // 剧页、电影页、换了一季之后的列表里都没有「这一集」，0 读作「别动」而不是「第一集」。
             Assert.Equal(0, ItemDetail.EpisodeFocus(episodes, new EmbyItem
             {
-                Id = "ep9", Type = EmbyItemType.Episode
+                Id = "ep9",
+                Type = EmbyItemType.Episode
             }));
             Assert.Equal(0, ItemDetail.EpisodeFocus(episodes, new EmbyItem
             {
-                Id = "ep3", Type = EmbyItemType.Season
+                Id = "ep3",
+                Type = EmbyItemType.Season
             }));
             Assert.Equal(0, ItemDetail.EpisodeFocus(episodes, null));
             Assert.Equal(0, ItemDetail.EpisodeFocus([], new EmbyItem { Id = "ep3", Type = EmbyItemType.Episode }));
@@ -874,8 +881,8 @@ internal static class ItemDetailTests
         {
             var item = new EmbyItem { Id = "42", ServerId = "srv" };
 
-            Assert.Equal("http://192.168.31.230:8896/web/index.html#!/item?id=42&serverId=srv",
-                ItemDetail.WebUrl(new Uri("http://192.168.31.230:8896/emby/"), item));
+            Assert.Equal("http://192.0.2.10:8896/web/index.html#!/item?id=42&serverId=srv",
+                ItemDetail.WebUrl(new Uri("http://192.0.2.10:8896/emby/"), item));
 
             // The address came from something a person typed, so the case is not ours to assume.
             Assert.Equal("http://h:8096/web/index.html#!/item?id=42&serverId=srv",

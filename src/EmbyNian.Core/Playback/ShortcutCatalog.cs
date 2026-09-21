@@ -50,18 +50,31 @@ public static class ShortcutCatalog
     /// </summary>
     public static readonly IReadOnlyList<string> ReservedKeys = ["Escape", "Y"];
 
-    /// <summary>19 个可重绑动作，次序就是设置页上从上到下的次序。默认值和改造前那张 switch 表一模一样。</summary>
+    /// <summary>
+    /// 21 个可重绑动作，次序就是设置页上从上到下的次序。前 17 个的默认值和改造前那张 switch 表一模一样。
+    /// <para>
+    /// 后 4 个动作用的是那 4 颗方向键，是 2026-09-20 那两句话加出来的：「新增键盘上的左和右设置为播放进度
+    /// 快退五秒和快进五秒，上方向键和下方向键改为播放进度快进30秒和快退30秒」。四颗方向键因此各有一对步长 ——
+    /// 短的那对是 <c>seek-backward</c> / <c>seek-forward</c>（← →，用设置里的「快退/快进跨度」），新的
+    /// 长的那对是下面两个（↑ ↓，用「大步快退/大步快进跨度」，装机 30 秒）。原先 ↑↓ 的音量搬到了 Ctrl+↑↓：
+    /// 一颗键只能归一个动作，而一个动作只能有一颗键，所以「上下改为快进快退」这句话必然把音量让出去 —— 让到
+    /// 修饰键上而不是删掉，是因为音量条还在、滚轮还在，键盘那一半不该凭空消失。
+    /// </para>
+    /// </summary>
     public static IReadOnlyList<ShortcutAction> Actions { get; } = Build();
 
-    private static KeyStroke K(string key, bool shift = false) => new(key, false, false, shift);
+    private static KeyStroke K(string key, bool ctrl = false, bool shift = false) =>
+        new(key, ctrl, false, shift);
 
     private static IReadOnlyList<ShortcutAction> Build() =>
     [
         new("toggle-pause", "播放 / 暂停", K("Space")),
         new("seek-backward", "快退", K("Left")),
         new("seek-forward", "快进", K("Right")),
-        new("volume-up", "音量增大", K("Up")),
-        new("volume-down", "音量减小", K("Down")),
+        new("seek-backward-long", "快退（大步）", K("Down")),
+        new("seek-forward-long", "快进（大步）", K("Up")),
+        new("volume-up", "音量增大", K("Up", ctrl: true)),
+        new("volume-down", "音量减小", K("Down", ctrl: true)),
         new("toggle-fullscreen", "全屏切换", K("F")),
         new("toggle-mute", "静音", K("M")),
         new("previous-episode", "上一集", K("P")),

@@ -8,11 +8,12 @@ using Microsoft.UI.Xaml.Controls;
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
-/// The player's six flyouts: 选集, 音轨, 字幕, 倍速, 画面 and ⚙更多.
+/// The player's seven flyouts: 选集, 版本, 音轨, 字幕, 倍速, 画面 and ⚙更多.
 /// <para>
-/// All six are built as they open rather than declared in XAML, because every row of every one of them
-/// shows a current value — which episode is playing, which track mpv picked, the delay the keys left, the
-/// shader group in force. A menu declared once would be a menu that went stale on the first change.
+/// All of them are built as they open rather than declared in XAML, because every row of every one of them
+/// shows a current value — which episode is playing, which version of the file is on screen, which track mpv
+/// picked, the delay the keys left, the shader group in force. A menu declared once would be a menu that went
+/// stale on the first change.
 /// </para>
 /// <para>
 /// Each row's click does exactly one thing: call the view model. Which episode comes next, what a track
@@ -63,6 +64,55 @@ public sealed partial class PlayerPage
     {
         var code = episode.EpisodeCode;
         return code.Length > 0 ? $"{code}  {episode.Name}" : episode.Name;
+    }
+
+    // ---- 版本 --------------------------------------------------------------------
+
+    /// <summary>
+    /// 版本: 这个条目的其他文件 —— 4K HDR、1080p、导演剪辑版 —— 正在放的那一版打着勾。
+    /// <para>
+    /// 每次打开都重建，理由和其他几个菜单一样：哪一行该打勾，换过版就变了。
+    /// </para>
+    /// <para>
+    /// 只在条目的媒体源多于一条时这个按钮才在屏上（<see cref="PlayerViewModel.VersionControlsVisibility"/>），
+    /// 所以「一行版本都没有」这一支只在自检里走到（没在播，也就没有条目）—— 它照样得建出一行来，
+    /// 否则自检报告里那个菜单会是空的，而空菜单和坏菜单在报告里长得一样。
+    /// </para>
+    /// </summary>
+    private void OnVersionMenuOpening(object sender, object e)
+    {
+        if (!Attached) return;
+
+        VersionMenu.Items.Clear();
+
+        var versions = ViewModel.Versions;
+        if (versions.Count == 0)
+        {
+            VersionMenu.Items.Add(new MenuFlyoutItem { Text = "没有可切换的版本", IsEnabled = false });
+            return;
+        }
+
+        foreach (var source in versions)
+        {
+            var row = new RadioMenuFlyoutItem
+            {
+                Text = ItemDetail.SourceLabel(source),
+                IsChecked = MediaVersionSwitch.Same(source, ViewModel.PlayingSource),
+                Tag = source
+            };
+
+            // 右边那列暗字是这份文件到底是什么。详情页那个媒体源下拉只报名字（「媒体源的选项太长了」），
+            // 因为名字旁边那张媒体信息表已经把画质写全了；播放页没有那张表，而两个版本可以重名，
+            // 所以画质在这里必须跟着——用的是两个轨道菜单同一列。
+            if (source.ToQualityLabel() is { Length: > 0 } quality) row.KeyboardAcceleratorTextOverride = quality;
+
+            row.Click += (clicked, _) =>
+            {
+                if (clicked is MenuFlyoutItem { Tag: MediaSource picked }) ViewModel.SwitchVersion(picked);
+            };
+
+            VersionMenu.Items.Add(row);
+        }
     }
 
     // ---- 音轨 / 字幕 --------------------------------------------------------------

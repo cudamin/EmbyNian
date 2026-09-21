@@ -150,6 +150,25 @@ internal sealed class HostWindow : IDisposable
     private const uint BandTimerInterval = 250;
 
     /// <summary>
+    /// 全屏期间盯任务栏 z 序的两枚 WinEvent hook（前台切换、z 序重排各一枚），它盯的那个窗口（主屏
+    /// 任务栏），与回调委托本身的存活引用（SetWinEventHook 不替调用方保管委托，让它被回收 = 下一次
+    /// 重排直接崩进程）。进全屏装、退出全屏卸；四样一起清，别让半套活过全屏。
+    /// </summary>
+    private IntPtr _trayHookForeground;
+
+    private IntPtr _trayHookReorder;
+
+    private IntPtr _trayHwnd;
+
+    private Native.WinEventDelegate? _trayHookProc;
+
+    /// <summary>
+    /// 被本场全屏藏起来的主屏任务栏（Shell_TrayWnd）。零＝没有谁被我们藏着 —— 这是唯一的恢复凭据，
+    /// 退出全屏、让位给前台应用、窗口销毁、进程收摊，每一处都凭它把任务栏原样放回来。
+    /// </summary>
+    private IntPtr _hiddenTray;
+
+    /// <summary>
     /// Where a title-bar drag took hold, in screen pixels, and the window origin it took hold from. Held
     /// rather than recomputed per move so the grab point stays under the cursor for the whole drag instead
     /// of the window creeping by one rounding error per event.
@@ -738,13 +757,29 @@ internal sealed class HostWindow : IDisposable
             ClientRectTransition?.Invoke(before, after);
     }
 
-    /// <summary>岛的尺寸通知晚于 SetWindowPos；离散切换先用真实客户区排好树，避免一帧旧布局露在新窗口里。</summary>
+    /// <summary>
+    /// 岛的尺寸通知晚于 SetWindowPos；离散切换先用真实客户区排好树，避免一帧旧布局露在新窗口里。
+    /// <para>
+    /// <b>折算成 DIP 用的是岛<b>自己的</b>栅格化比例，不是 <see cref="WindowDpi"/>（2026-09-20 晚，
+    /// 用户报「集成模式第一次全屏一瞬间画面不占满、右边像网页那样露出一条滚动条」）。</b>这两个数平时
+    /// 相等，唯独在离散切换（尤其第一次进全屏）那一拍会分家 —— 与 <c>CompositionVideoTarget._snappedClient</c>
+    /// 记的是同一件事：跳变刚过时 <see cref="WindowDpi"/> 可能已经报出目标屏的 DPI（比如 1.2225），而
+    /// 岛此刻的栅格化比例还是 1.0，要到下一次真实尺寸通知才纠正。那一拍若按 <see cref="WindowDpi"/> 折
+    /// （<c>width / 1.2225</c>），整棵树被摆成比客户区<b>小一圈</b>的尺寸，右边和下边就露出底下的浏览页
+    /// （连同它的滚动条），画面也读作「没占满」。画面那一层（SpriteVisual）走的是窗口报的物理矩形、
+    /// 不吃这个折算，所以它自己是对的 —— 露出来的是没被树盖住的那一条。改用岛的栅格化比例，树就正好
+    /// 铺满客户区。岛还没就绪（<c>XamlRoot</c> 为空）时退回 <see cref="WindowDpi"/>，那是没有更好答案的
+    /// 唯一时刻。1.0 缩放的屏上两者本就相等，这一改是恒等变换 —— 探针（栅格化比例 1.0）因此看不见这个 bug。
+    /// </para>
+    /// </summary>
     internal void SynchronizeContentLayout()
     {
         if (_content is not FrameworkElement root || Handle == IntPtr.Zero) return;
         var (width, height) = ClientSize;
         if (width <= 0 || height <= 0) return;
-        var raster = WindowDpi / 96d;
+        var raster = root.XamlRoot?.RasterizationScale is > 0 and var islandRaster
+            ? islandRaster
+            : WindowDpi / 96d;
         root.Measure(new Windows.Foundation.Size(width / raster, height / raster));
         root.Arrange(new Windows.Foundation.Rect(0, 0, width / raster, height / raster));
         root.UpdateLayout();
@@ -905,6 +940,28 @@ internal sealed class HostWindow : IDisposable
     public bool IsMaximized => Handle != IntPtr.Zero && Native.IsZoomed(Handle);
 
     /// <summary>
+    /// 这一扇窗口此刻的形态 —— 集成模式的形态事实源（独占模式的窗口归 mpv，问 mpv 的属性）。
+    /// <para>
+    /// 2026-09-20 加。此前「全屏」与「最大化」两个事实在窗口这一层各自被问，而合起来那句「边已经归显示器」
+    /// 在五处各写了一遍（<see cref="FitToPicture"/>、<see cref="BeginDrag"/>、<see cref="BrowseFoldMeasurable"/>、
+    /// <c>AspectLock</c>、播放页那颗按钮的图标），写成四种样子。现在那一句归 <see cref="OccupiesScreen"/>、
+    /// 形态本身归这里，下游只问这两个。
+    /// </para>
+    /// <para>
+    /// 依据是参考项目（一份 mpv 便携配置）里的分家方式：mpv 交 <c>fullscreen</c> 与 <c>window-maximized</c>
+    /// 两个属性，uosc 把它们归一成 <c>fullormaxed</c> 一个布尔给所有下游 —— 与本层和
+    /// <see cref="OccupiesScreen"/> 的这一对是同一种形状。
+    /// </para>
+    /// </summary>
+    public WindowForm Form => WindowForms.Of(Fullscreen, IsMaximized);
+
+    /// <summary>
+    /// 窗口是否已经占满屏幕（全屏或最大化）—— 参考项目里 uosc 的 <c>fullormaxed</c> 那一句。
+    /// 凡是「边归显示器了，因此不该按比例整形／不该拖动／不该锁形状」的判断都问它。
+    /// </summary>
+    public bool OccupiesScreen => WindowForms.OccupiesScreen(Form);
+
+    /// <summary>
     /// 缩放窗口时按画面比例联动: the shape the client area is held in while the user drags an edge, as
     /// width ÷ height, or 0 for the ordinary unconstrained window.
     /// <para>
@@ -980,7 +1037,8 @@ internal sealed class HostWindow : IDisposable
     {
         get
         {
-            if (PictureAspect > 0 || Fullscreen || IsMaximized) return false;
+            // 「占满屏幕」归一成一句（参考项目 uosc 的 fullormaxed）：全屏与最大化在这里不必分开写。
+            if (PictureAspect > 0 || OccupiesScreen) return false;
 
             var (width, height) = ClientSize;
             return width > 0 && height > 0 && width <= (HomeCarousel.WindowAspect * height) + 2;
@@ -1151,7 +1209,7 @@ internal sealed class HostWindow : IDisposable
     public void FitToPicture()
     {
         if (Handle == IntPtr.Zero || PictureAspect <= 0) return;
-        if (Fullscreen || Native.IsZoomed(Handle) || Native.IsIconic(Handle)) return;
+        if (OccupiesScreen || Native.IsIconic(Handle)) return;
         if (!Native.GetWindowRect(Handle, out var bounds)) return;
 
         var dpi = Native.GetDpiForWindow(Handle);
@@ -1201,7 +1259,7 @@ internal sealed class HostWindow : IDisposable
     {
         if (Handle == IntPtr.Zero) return (false, "没有窗口");
         if (!Native.GetWindowRect(Handle, out var bounds)) return (false, "读不到窗口矩形");
-        if (Fullscreen || Native.IsZoomed(Handle)) return (true, "全屏或最大化，边沿归显示器");
+        if (OccupiesScreen) return (true, $"{WindowForms.Name(Form)}，边沿归显示器");
 
         var dpi = Native.GetDpiForWindow(Handle);
         if (dpi == 0) dpi = 96;
@@ -1453,7 +1511,17 @@ internal sealed class HostWindow : IDisposable
         if (Handle != IntPtr.Zero) Native.ShowWindow(Handle, Native.SwMinimize);
     }
 
-    /// <summary>Toggles maximize/restore from the playback title bar.</summary>
+    /// <summary>
+    /// Toggles maximize/restore from the playback title bar.
+    /// <para>
+    /// <c>suppressIntermediateFrames</c> 与全屏（<see cref="Fullscreen"/>）、退出播放还原
+    /// （<see cref="RestorePlayerToBrowse"/>）同款，是这两处早有、这里 2026-09-20 漏掉的一味：不关它，
+    /// 窗口外框 <c>SetWindowPos</c> 一拍到位，DWM 却仍对客户区画面放它那趟约 200ms 的缩放过渡 —— 而画面
+    /// 那块 SpriteVisual 已经在同一拍被 <c>SnapPresentation</c> 摆到终点尺寸了，于是过渡期间画面比窗口慢半拍：
+    /// 放大（最大化）时看着「没占满」，缩小（窗口化）时看着「有残留」。关掉过渡，窗口与画面同拍落位，跟全屏
+    /// 切换一样干净。探针只在动效落定后读 <c>PlacedRect</c>，读不到 DWM 这层过渡，所以此前一直是绿的。
+    /// </para>
+    /// </summary>
     public void ToggleMaximize()
     {
         if (Handle == IntPtr.Zero || Fullscreen) return;
@@ -1461,7 +1529,7 @@ internal sealed class HostWindow : IDisposable
         {
             Native.ShowWindow(Handle, IsMaximized ? Native.SwRestore : Native.SwMaximize);
             FitToPicture();
-        });
+        }, suppressIntermediateFrames: true);
     }
 
     /// <summary>
@@ -1482,7 +1550,7 @@ internal sealed class HostWindow : IDisposable
     public bool BeginDrag(NativePoint grab)
     {
         _drag = null;
-        if (Handle == IntPtr.Zero || Fullscreen || IsMaximized) return false;
+        if (Handle == IntPtr.Zero || OccupiesScreen) return false;
         if (!Native.GetWindowRect(Handle, out var bounds)) return false;
 
         _drag = (grab, bounds.Left, bounds.Top);
@@ -1560,10 +1628,13 @@ internal sealed class HostWindow : IDisposable
         Native.MarkFullscreen(Handle, true);
 
         // And from here on, whoever comes forward is judged on the spot — see JudgeBand for why the
-        // activation message alone is not enough to keep that promise.
+        // activation message alone is not enough to keep that promise. HoldBand keeps the band every
+        // tick, and the tray hook answers the sub-second climb-backs that a quarter-second tick cannot.
         _judged = IntPtr.Zero;
         _band = true;
         Native.SetTimer(Handle, BandTimer, BandTimerInterval, IntPtr.Zero);
+        WatchTrayOrder();
+        HideTrayForFullscreen();
 
         Log.Info(Category, $"进入全屏 {screen.Width}x{screen.Height}，窗口置顶以盖住任务栏");
     }
@@ -1600,6 +1671,7 @@ internal sealed class HostWindow : IDisposable
         _restore = null;
 
         Native.KillTimer(Handle, BandTimer);
+        StopWatchingTrayOrder();
         _judged = IntPtr.Zero;
         _band = false;
 
@@ -1609,13 +1681,22 @@ internal sealed class HostWindow : IDisposable
 
         Native.SetWindowLongPtr(Handle, Native.GwlStyle, saved.Style);
         var bounds = _restoringBrowse && HasBrowseGeometry
-            ? new NativeRect { Left = _browse.Bounds.Left, Top = _browse.Bounds.Top,
-                Right = _browse.Bounds.Right, Bottom = _browse.Bounds.Bottom }
+            ? new NativeRect
+            {
+                Left = _browse.Bounds.Left,
+                Top = _browse.Bounds.Top,
+                Right = _browse.Bounds.Right,
+                Bottom = _browse.Bounds.Bottom
+            }
             : saved.Bounds;
         Native.SetWindowPos(
             Handle, _topMost ? Native.HwndTopMost : Native.HwndNoTopMost,
             bounds.Left, bounds.Top, bounds.Width, bounds.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
+
+        // 任务栏放回排在窗口还原之后：先放任务栏再还原矩形的那几拍（快速进出全屏时大约三百毫秒），
+        // 任务栏会横在还没缩回去的画面上 —— 与 EnterFullscreen 的「先藏再跳」互为镜像。
+        RestoreTray();
 
         if (!_restoringBrowse)
         {
@@ -1660,6 +1741,125 @@ internal sealed class HostWindow : IDisposable
             Handle, Native.HwndTopMost,
             0, 0, 0, 0,
             Native.SwpNoMove | Native.SwpNoSize | Native.SwpNoActivate);
+        HideTrayForFullscreen();
+    }
+
+    /// <summary>
+    /// 全屏期间每一拍把自己重新提到 topmost band 的顶上（用户报「进入全屏时任务栏仍可见」，2026-09-21）。
+    /// <para>
+    /// 进全屏那一拍的 <see cref="Native.HwndTopMost"/> 只赢一次：explorer 会在任何激活／托盘事件之后把
+    /// Shell_TrayWnd 重新 SetWindowPos(HWND_TOPMOST) 提回去，而这一版 Windows（26200 实测）的主任务栏
+    /// 既不守 <see cref="Native.MarkFullscreen"/> 的让位声明（返回 true 但任务栏不让），也不再认
+    /// 「全屏窗口比它高」这套 —— <c>work/probe-tray-during-fs.txt</c> 里全屏窗口 (0,0)-(2560,1440) 在
+    /// 190 毫秒内就被它盖回，此后画面上一直横着任务栏（全屏期间任务栏占 1833 拍、本窗口只占 115 拍）。
+    /// 副屏任务栏（Shell_SecondaryTrayWnd）让位照旧，所以跑在副屏的自检从来看不见这件事。
+    /// </para>
+    /// <para>
+    /// 判据是 <see cref="_band"/>：给前台应用让位的那几拍（用户在看别的窗口）不抢回来，那是
+    /// <see cref="JudgeBand"/> 的设计；手动置顶（<see cref="_topMost"/>）那几拍 <see cref="_band"/>
+    /// 一直是 true，自然一起守。对已经在 band 顶的自己再提一次是无害的幂等操作，所以不用探测
+    /// 「有没有被爬过」，每一拍都提 —— 任务栏就算爬回来，最多 250 毫秒后就被压回去。
+    /// </para>
+    /// </summary>
+    private void HoldBand()
+    {
+        if (Handle == IntPtr.Zero || !Fullscreen || !_band) return;
+
+        Native.SetWindowPos(
+            Handle, Native.HwndTopMost,
+            0, 0, 0, 0,
+            Native.SwpNoMove | Native.SwpNoSize | Native.SwpNoActivate);
+    }
+
+    /// <summary>
+    /// 盯住主屏任务栏（Shell_TrayWnd）的 z 序：系统前台一变、或者 explorer 内部谁重排了一次，全屏窗口
+    /// 就会在几十毫秒内被它盖回画面上（2026-09-21 实测 work/probe-tray-during-fs.txt：进全屏 190 毫秒
+    /// 爬回，BandTimer 一拍 250 毫秒压不住），所以轮询之外还要事件驱动 —— 这两个事件里任何一个落到
+    /// 任务栏身上，回调当拍调 <see cref="HoldBand"/> 把窗口提回 band 顶。回调跑在装钩的线程上，也就是
+    /// 这个窗口自己的 UI 线程，窗口消息循环把它泵出来。
+    /// </summary>
+    private void WatchTrayOrder()
+    {
+        if (_trayHookForeground != IntPtr.Zero || _trayHookReorder != IntPtr.Zero) return;
+
+        _trayHwnd = Native.FindWindow("Shell_TrayWnd", null);
+        _trayHookProc = TrayOrderChanged;
+        _trayHookForeground = Native.SetWinEventHook(
+            Native.EventSystemForeground, Native.EventSystemForeground,
+            IntPtr.Zero, _trayHookProc, 0, 0, 0);
+        _trayHookReorder = Native.SetWinEventHook(
+            Native.EventObjectReorder, Native.EventObjectReorder,
+            IntPtr.Zero, _trayHookProc, 0, 0, 0);
+        if (_trayHookForeground == IntPtr.Zero && _trayHookReorder == IntPtr.Zero)
+            Log.Warn(Category, "装任务栏顺序钩子都失败，全屏置顶只剩定时器兜底");
+    }
+
+    private void StopWatchingTrayOrder()
+    {
+        if (_trayHookForeground != IntPtr.Zero) Native.UnhookWinEvent(_trayHookForeground);
+        if (_trayHookReorder != IntPtr.Zero) Native.UnhookWinEvent(_trayHookReorder);
+        _trayHookForeground = IntPtr.Zero;
+        _trayHookReorder = IntPtr.Zero;
+        _trayHwnd = IntPtr.Zero;
+        _trayHookProc = null;
+    }
+
+    /// <summary>
+    /// 把全屏这块屏上的任务栏藏起来（2026-09-21，用户报「进入全屏时任务栏仍可见」的最终修法）。
+    /// <para>
+    /// 之前的两层（topmost band、WinEvent hook 当拍提回）在这台 Windows（26200 实测）的主屏上都输：
+    /// 爬回期间窗口仍带着 WS_EX_TOPMOST、矩形仍盖满显示器，任务栏的像素却在中点之上 —— 这版主任务栏
+    /// 的显示层级在一切 topmost 窗口之上，z 序竞争只能赢到 DWM 重排的过渡期（140~400 毫秒），换不回
+    /// 永久。唯一站得住的路是让任务栏本身退场：SW_HIDE（探针 work/probe-tray-during-fs.txt 三轮对照，
+    /// topmost／hook 两层都压不住的那 150 毫秒空窗只有它填得上）。副屏任务栏（Shell_SecondaryTrayWnd）
+    /// 让位照旧有效、自检一直是绿的，所以只动主屏这一条 —— 全屏落在主屏（MONITORINFOF_PRIMARY）才藏。
+    /// </para>
+    /// <para>
+    /// 藏是临时的，凭据 <see cref="_hiddenTray"/> 在四条路上放回（退出全屏、给前台应用让位、窗口销毁、
+    /// Dispose 收摊）；恢复用 SW_SHOWNA，不从 explorer 手里抢前台。用户按 Win 键／点屏幕底边时
+    /// explorer 自己把任务栏弹回来，那是用户的意图，不与它争。
+    /// </para>
+    /// </summary>
+    private void HideTrayForFullscreen()
+    {
+        if (Handle == IntPtr.Zero || !Fullscreen || _hiddenTray != IntPtr.Zero) return;
+
+        try
+        {
+            var monitor = Native.MonitorFromWindow(Handle, Native.MonitorDefaultToNearest);
+            var info = new MonitorInfoEx { Size = (uint)Marshal.SizeOf<MonitorInfoEx>() };
+            if (!Native.GetMonitorInfoEx(monitor, ref info) || (info.Flags & 1) == 0) return;
+
+            var tray = Native.FindWindow("Shell_TrayWnd", null);
+            if (tray == IntPtr.Zero || !Native.ShowWindow(tray, Native.SwHide)) return;
+
+            _hiddenTray = tray;
+            Log.Info(Category, "主屏任务栏已临时收起，退场时放回");
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "收起主屏任务栏失败，置顶与钩子兜底仍在", error);
+        }
+    }
+
+    /// <summary>把 <see cref="HideTrayForFullscreen"/> 藏掉的任务栏放回来。幂等，凭据归零即无事可做。</summary>
+    private void RestoreTray()
+    {
+        if (_hiddenTray == IntPtr.Zero) return;
+
+        Native.ShowWindow(_hiddenTray, Native.SwShowNoActivate);
+        _hiddenTray = IntPtr.Zero;
+    }
+
+    private void TrayOrderChanged(IntPtr hook, uint evt, IntPtr window, IntPtr idObject, IntPtr idChild,
+        uint thread, uint time)
+    {
+        _ = hook; _ = evt; _ = idObject; _ = idChild; _ = thread; _ = time;
+
+        if (_trayHwnd == IntPtr.Zero || window == IntPtr.Zero) return;
+        if (Native.GetAncestor(window, Native.GaRoot) != _trayHwnd) return;
+
+        HoldBand();
     }
 
     /// <summary>
@@ -1711,6 +1911,10 @@ internal sealed class HostWindow : IDisposable
             Handle, Native.HwndNoTopMost,
             0, 0, 0, 0,
             Native.SwpNoMove | Native.SwpNoSize | Native.SwpNoActivate);
+
+        // 让位给别人看的那几拍，藏起来的任务栏也一起回来 —— 用户切走是因为要看那个窗口，
+        // 而不是要在一条没有任务栏的桌面上找它。
+        RestoreTray();
 
         Log.Info(Category, $"前台交给 {Describe(other)}，全屏画面会挡着它，让出置顶"
             + $"（画面 {VisibleFrameOf(Handle)}，它 {VisibleFrameOf(other)}）");
@@ -2715,7 +2919,11 @@ internal sealed class HostWindow : IDisposable
                 break;
 
             case Native.WmTimer when (nuint)(nint)wParam == BandTimer:
-                if (Fullscreen) JudgeBand();
+                if (Fullscreen)
+                {
+                    JudgeBand();
+                    HoldBand();
+                }
                 return IntPtr.Zero;
 
             case Native.WmDpiChanged:
@@ -2740,6 +2948,8 @@ internal sealed class HostWindow : IDisposable
             case Native.WmDestroy:
                 // 钩子赶在消息循环还在的时候摘掉：线程活着而钩子悬着，每颗键都要多过一遍死委托。
                 UninstallKeyboardFallback();
+                StopWatchingTrayOrder();
+                RestoreTray();
                 Windows.Remove(window);
                 Handle = IntPtr.Zero;
 
@@ -2779,7 +2989,11 @@ internal sealed class HostWindow : IDisposable
     private IntPtr LockAspectDuringResize(IntPtr window, IntPtr wParam, IntPtr lParam)
     {
         var aspect = PictureAspect;
-        if (aspect <= 0 || Fullscreen || Native.IsZoomed(window))
+
+        // 边归显示器的时候形状不归我们管 —— 归一那一句（参考项目 uosc 的 fullormaxed）。这里用传来的
+        // window 而不是 OccupiesScreen 属性读的 Handle：这个判断长在消息处理里，问的应当是「正在变的那扇窗」。
+        // 两者在本程序里恒为同一扇，但把事实说清楚比省一个参数值钱。
+        if (aspect <= 0 || WindowForms.OccupiesScreen(WindowForms.Of(Fullscreen, Native.IsZoomed(window))))
             return Native.DefWindowProc(window, Native.WmSizing, wParam, lParam);
 
         var edge = (ResizeEdge)(int)wParam;
@@ -2883,6 +3097,7 @@ internal sealed class HostWindow : IDisposable
         // Unmark before the window goes, so a shutdown from fullscreen cannot leave the shell holding a
         // dead hwnd as the reason the taskbar is standing aside.
         if (Handle != IntPtr.Zero && Fullscreen) Native.MarkFullscreen(Handle, false);
+        RestoreTray();
 
         // 第九报（2026-09-15）：躲过了窗口生命周期的两条要还。类光标活过窗口本身（同一个类此后新建的
         // 窗口共用它），负计数锁活过窗口本身（同一个 UI 线程上后继的窗口共用那个队列）。

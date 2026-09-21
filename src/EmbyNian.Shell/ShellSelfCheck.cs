@@ -911,7 +911,8 @@ internal static partial class ShellSelfCheck
     /// </para>
     /// </summary>
     private static bool OpenFilePage(ShellPage shell)
-    {        if (_fileOpened || shell.Pages.Content is not DetailPage page) return false;
+    {
+        if (_fileOpened || shell.Pages.Content is not DetailPage page) return false;
 
         _fileOpened = true;
         if (EmbyItemType.IsPlayable(page.ViewModel.ItemType)) return false;

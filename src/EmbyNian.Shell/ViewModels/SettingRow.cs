@@ -577,7 +577,8 @@ public sealed partial class SettingShortcutRow : SettingRow
 /// </para>
 /// </summary>
 public sealed partial class SettingFactRow : SettingRow
-{    private readonly Action? _act;
+{
+    private readonly Action? _act;
     internal SettingFactRow(string label, string? note, string value, string? actionLabel = null, Action? act = null)
         : base(label, note)
     {

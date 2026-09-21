@@ -111,6 +111,19 @@ public static class VideoWindowContract
     public const string EpisodeIndex = "embynian-episode-index";
 
     /// <summary>
+    /// 请求弹出「版本」菜单（值保留）；宿主把正在放的这个条目的媒体源经 open-menu 推给 uosc 画出来。
+    /// <para>
+    /// 与 <see cref="Episodes"/> 同款：脚本那头的绑定叫 <c>embynian-ui-versions</c>，与这个键**故意不同名**
+    /// （同名＝这条消息把发出它的绑定又叫醒一次，见 <see cref="Episodes"/> 与
+    /// <see cref="MenuRequestGate"/>）。
+    /// </para>
+    /// </summary>
+    public const string Versions = "embynian-versions";
+
+    /// <summary>版本菜单里点中的一项，值是 1 起算的版本序号（对应宿主推送菜单时的次序）。</summary>
+    public const string VersionIndex = "embynian-version-index";
+
+    /// <summary>
     /// 把一条 client-message 的参数解析成宿主消息；不是宿主的消息、值不合契约的，返回 null。
     /// </summary>
     public static VideoWindowMessage? Parse(IReadOnlyList<string> arguments)
@@ -121,14 +134,14 @@ public static class VideoWindowContract
         var value = arguments[1];
 
         if (key == Episode) return value is "-1" or "1" ? new VideoWindowMessage(key, value) : null;
-        if (key == EpisodeIndex)
+        if (key is EpisodeIndex or VersionIndex)
         {
             return int.TryParse(value, out var index) && index is >= 1 and <= 100000
                 ? new VideoWindowMessage(key, value)
                 : null;
         }
 
-        if (key is Ready or Seek or Episodes) return new VideoWindowMessage(key, value);
+        if (key is Ready or Seek or Episodes or Versions) return new VideoWindowMessage(key, value);
 
         return null;
     }

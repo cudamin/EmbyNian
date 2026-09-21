@@ -619,7 +619,12 @@ public sealed partial class PlayerPage
         // across the whole bottom of the monitor with nothing to frame them, and the point of full screen is
         // that nothing but the film is on screen. Only while the player is up either way, or it would draw a
         // line across the bottom of the library grid the moment the page went away.
-        ThinLine.Visibility = !state.Bar && Visibility == Visibility.Visible && _window?.Fullscreen != true
+        //
+        // 退场那 220ms 里也一样要收：细线画在画面的下边缘，而退场是把这一页整个淡掉 —— 页面淡到零时它还
+        // 是满亮的两像素，正是 2026-09-20 用户截图里那条横贯底边的白线。判据取 _inputSuspended（退场第 0 拍
+        // 立起、落定拍撤下），不取 _onStage：后者在退场一开始就是假的，而这条线要消失的只是后半段。
+        ThinLine.Visibility = !state.Bar && !_inputSuspended
+            && Visibility == Visibility.Visible && _window?.Fullscreen != true
             ? Visibility.Visible
             : Visibility.Collapsed;
 

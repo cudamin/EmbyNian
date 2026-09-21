@@ -13,18 +13,58 @@ namespace EmbyNian.Infrastructure;
 public static class FontFamilies
 {
     /// <summary>
-    /// Fallback family: Microsoft YaHei, which every Windows install carries — the reason the first
-    /// fallback chose it, and the reason it was given the job again (v14, 「默认字体改为Microsoft YaHei」).
-    /// It had lost the seat to 方正中等线简体 in v12, on the grounds that the bundled copy travels with
-    /// the program and is therefore always findable; that font stays bundled (assets/fonts, handed to
-    /// mpv as <c>sub-fonts-dir</c>) and selectable, it just no longer answers for an empty setting —
-    /// 雅黑 does, on every machine this Windows-only client runs on. A family mpv cannot find anywhere
-    /// degrades to its own fallback, which on CJK text is how tofu happens.
+    /// Fallback family: Noto Sans CJK SC — 「默认字体和当前字体改用Noto Sans CJK SC，这个字体要内置到
+    /// 程序里」 (2026-09-21).
+    /// <para>
+    /// It answers for an empty setting because it travels with the program: the file rides in
+    /// assets/fonts and mpv is handed that folder as <c>sub-fonts-dir</c> at every launch, so the family
+    /// resolves on a machine that never installed it. That is the same argument 方正中等线简体 had, and
+    /// the difference is which font was asked for: 方正 shipped because 「字幕默认用方正中等线简体」 said
+    /// so (v12), Microsoft YaHei took the seat at v14 (「默认字体改为Microsoft YaHei」) for the opposite
+    /// reason — every Windows box has it — and this one is the family the reference player's own
+    /// mpv.conf names (<c>sub-font="Noto Sans CJK SC"</c>).
+    /// </para>
+    /// <para>
+    /// <b>What is bundled is the single-face <c>NotoSansCJKsc-VF.ttf</c>, not the <c>.ttc</c> collection
+    /// the reference project ships.</b> Measured 2026-09-21: libass's <c>process_fontdata</c> walks
+    /// <c>face_index</c> from 0 to <c>face-&gt;num_faces</c> and registers <em>every</em> face of a file as
+    /// a family of its own (the reason a <c>.ttc</c> works in <c>~/.config/mpv/fonts</c> on Linux — the
+    /// directory there goes through fontconfig, which does the same thing). Both Noto CJK collections hold
+    /// ten faces each: Noto Sans CJK SC/TC/JP/KR/HK plus the matching five of Noto Sans <b>Mono</b> CJK.
+    /// Dropping the collection in would therefore put ten families into the 字体 list where one was asked
+    /// for, and the SC family would arrive with four sibling variants a user cannot tell apart by name.
+    /// The VF file answers to exactly one family name and carries the whole weight axis, which is also
+    /// what makes 字幕加粗 work without a second file.
+    /// </para>
+    /// <para>
+    /// Previous occupants stay bundled and selectable; they just no longer answer for 「never picked」.
+    /// A family mpv cannot find anywhere degrades to its own fallback, which on CJK text is how tofu
+    /// happens — the reason this has to be a family the shipped directory actually contains.
+    /// </para>
     /// </summary>
-    public const string Default = "Microsoft YaHei";
+    public const string Default = "Noto Sans CJK SC";
 
     private static readonly Dictionary<string, string> ByFileName = new(StringComparer.OrdinalIgnoreCase)
     {
+        // The bundled families first, so a stored path to one of them maps back to the family this
+        // client ships. Noto Sans CJK rides as one single-face variable file (see Default's remarks for
+        // why the .ttc collection the reference project uses is not what is bundled) — so unlike the
+        // weight-indexed .ttc names below, this one file is the whole family.
+        ["notosanscjksc-vf.ttf"] = "Noto Sans CJK SC",
+        // The collection names stay mapped anyway: a settings file from a build that bundled them, or a
+        // hand-typed path to the copy in C:\Windows\Fonts, still resolves to the family it stands for.
+        ["notosanscjk-regular.ttc"] = "Noto Sans CJK SC",
+        ["notosanscjk-bold.ttc"] = "Noto Sans CJK SC",
+        ["notosanscjk-light.ttc"] = "Noto Sans CJK SC",
+        ["notosanscjk-medium.ttc"] = "Noto Sans CJK SC",
+        ["notosanscjk-demilight.ttc"] = "Noto Sans CJK SC",
+        ["notosanscjk-thin.ttc"] = "Noto Sans CJK SC",
+        ["notosanscjk-black.ttc"] = "Noto Sans CJK SC",
+        ["notosanscjksc-vf.ttf"] = "Noto Sans CJK SC",
+        ["notosanscjksc-regular.otf"] = "Noto Sans CJK SC",
+        ["notosanscjksc-bold.otf"] = "Noto Sans CJK SC",
+        ["方正中等线简体.ttf"] = "方正中等线简体",
+        ["fzzhongdengxian-z07s.ttf"] = "方正中等线简体",
         ["msyh.ttc"] = "Microsoft YaHei",
         ["msyh.ttf"] = "Microsoft YaHei",
         ["msyhbd.ttc"] = "Microsoft YaHei",
@@ -107,7 +147,8 @@ public static class FontFamilies
         // A path would be meaningless to mpv; the family behind it may not be, so it is looked up.
         if (value.Contains('\\') || value.Contains('/') || value.EndsWith(".ttc", StringComparison.OrdinalIgnoreCase)
             || value.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)
-            || value.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
+            || value.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)
+            || value.EndsWith(".otc", StringComparison.OrdinalIgnoreCase))
         {
             var family = FromFileName(value);
             Diagnostics.Log.Warn("mpv", family is null

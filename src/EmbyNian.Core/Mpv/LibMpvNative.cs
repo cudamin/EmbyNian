@@ -147,6 +147,9 @@ internal static class LibMpvNative
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int mpv_command(IntPtr context, IntPtr[] args);
 
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int mpv_command_ret(IntPtr context, IntPtr[] args, IntPtr result);
+
     // ---- event loop -------------------------------------------------------------
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]

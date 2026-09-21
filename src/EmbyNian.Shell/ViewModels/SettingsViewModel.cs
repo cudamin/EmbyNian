@@ -112,7 +112,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingSubtitlePreviewRow? _subtitlePreview;
     private Func<Task>? _pushSubtitleStyle;
 
-    /// <summary>快捷键卡里那 19 行可重绑的行，握着好在重绑/清空之后逐行刷新显示（同 <see cref="HomeRows"/> 那样握着一行的理由）。</summary>
+    /// <summary>快捷键卡里那 21 行可重绑的行，握着好在重绑/清空之后逐行刷新显示（同 <see cref="HomeRows"/> 那样握着一行的理由）。</summary>
     private readonly List<SettingShortcutRow> _shortcutRows = [];
 
     /// <summary>The cards, in the order they appear in the left-hand list.</summary>
@@ -446,8 +446,18 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
                 "放到这个百分比以上，这一条就算看过"),
-            Number("快进跨度（秒）", 1, 600, () => playback.SeekForwardSeconds, value => playback.SeekForwardSeconds = value),
-            Number("快退跨度（秒）", 1, 600, () => playback.SeekBackwardSeconds, value => playback.SeekBackwardSeconds = value),
+            // 四颗方向键、两对步长（2026-09-20 用户令）：← / → 用上面这两行，↑ / ↓ 用下面那两行。两对都印在
+            // 设置页上，因为两个管线各有一套输入处理 —— 集成模式的键盘归 shell 的快捷键表，独占模式的键盘是
+            // mpv 自己那层（keybind，见 <c>MpvSeekKeys</c>）—— 而两套都从这几个字段取值。屏上印的数字与按下
+            // 去的位移因此永远对得上，不会出现「改了设置、按键还是老样子」那种界面在骗人。
+            Number("快进跨度（秒）", 1, 600, () => playback.SeekForwardSeconds, value => playback.SeekForwardSeconds = value,
+                "→ 键跳这么多秒"),
+            Number("快退跨度（秒）", 1, 600, () => playback.SeekBackwardSeconds, value => playback.SeekBackwardSeconds = value,
+                "← 键跳这么多秒"),
+            Number("大步快进跨度（秒）", 1, 600, () => playback.SeekForwardLongSeconds, value => playback.SeekForwardLongSeconds = value,
+                "↑ 键跳这么多秒"),
+            Number("大步快退跨度（秒）", 1, 600, () => playback.SeekBackwardLongSeconds, value => playback.SeekBackwardLongSeconds = value,
+                "↓ 键跳这么多秒"),
             Number("续播自动快退（秒）", 0, 120, () => playback.ResumeRewindSeconds, value => playback.ResumeRewindSeconds = value),
             Number("进度上报间隔（秒）", 1, 60, () => playback.ProgressReportIntervalSeconds, value => playback.ProgressReportIntervalSeconds = value),
             Choice("跳过片头片尾", SkipModes, () => playback.SkipSections, value => playback.SkipSections = value),
@@ -1058,7 +1068,7 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     /// <summary>
     /// 快捷键：播放器那些键盘动作，做成参考图那样一行一个、右边一个可重绑的方框（「参考上图在设置中新增快捷键
-    /// 功能」，2026-09-08）。19 行可改的走 <see cref="SettingShortcutRow"/>；Esc、Y 两个固定键以只读行显示，让人
+    /// 功能」，2026-09-08）。21 行可改的走 <see cref="SettingShortcutRow"/>；Esc、Y 两个固定键以只读行显示，让人
     /// 看到全貌（为什么固定见 <see cref="ShortcutCatalog.ReservedKeys"/>）；末一行一颗「恢复默认快捷键」，只清
     /// 快捷键、不动别的。判断全在 Core 的 <see cref="ShortcutCatalog"/>；这里只把动作翻成行、把方框敲定的键交回去。
     /// </summary>

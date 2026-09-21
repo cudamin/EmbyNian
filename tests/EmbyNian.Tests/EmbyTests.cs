@@ -10,7 +10,7 @@ namespace EmbyNian.Tests;
 /// <summary>URL building, address normalisation and the formatting helpers the UI leans on.</summary>
 internal static class EmbyTests
 {
-    private static readonly Uri ApiBase = new("http://192.168.31.230:8896/emby/");
+    private static readonly Uri ApiBase = new("http://192.0.2.10:8896/emby/");
 
     public static void Register()
     {
@@ -33,7 +33,7 @@ internal static class EmbyTests
     {
         Test("服务器地址：补协议、补 /emby/", () =>
         {
-            Assert.Equal("http://192.168.31.230:8896/emby/", EmbyServerAddress.Normalize("192.168.31.230:8896").AbsoluteUri);
+            Assert.Equal("http://192.0.2.10:8896/emby/", EmbyServerAddress.Normalize("192.0.2.10:8896").AbsoluteUri);
             Assert.Equal("http://h:8096/emby/", EmbyServerAddress.Normalize("http://h:8096").AbsoluteUri);
             Assert.Equal("http://h:8096/emby/", EmbyServerAddress.Normalize("http://h:8096/").AbsoluteUri);
         });
@@ -68,7 +68,7 @@ internal static class EmbyTests
 
         Test("服务器地址：显示回给用户时去掉 /emby", () =>
         {
-            Assert.Equal("http://192.168.31.230:8896", EmbyServerAddress.ToDisplayString(ApiBase));
+            Assert.Equal("http://192.0.2.10:8896", EmbyServerAddress.ToDisplayString(ApiBase));
             Assert.Equal("https://nas.example.com/media",
                 EmbyServerAddress.ToDisplayString(new Uri("https://nas.example.com/media/emby/")));
         });
@@ -78,8 +78,8 @@ internal static class EmbyTests
     {
         Test("控制台地址：网页端根目录 + dashboard 路由", () =>
         {
-            Assert.Equal("http://192.168.31.230:8896/web/index.html#!/dashboard", EmbyWebConsole.Url(ApiBase));
-            Assert.Equal("http://192.168.31.230:8896", EmbyWebConsole.Root(ApiBase));
+            Assert.Equal("http://192.0.2.10:8896/web/index.html#!/dashboard", EmbyWebConsole.Url(ApiBase));
+            Assert.Equal("http://192.0.2.10:8896", EmbyWebConsole.Root(ApiBase));
         });
 
         Test("控制台地址：子路径与默认端口都跟着走", () =>
@@ -97,7 +97,7 @@ internal static class EmbyTests
             Assert.Contains(EmbyWebConsole.StorageKey, script);
             Assert.Contains("\"user-1\"", script);
             Assert.Contains("\"token-1\"", script);
-            Assert.Contains("\"http://192.168.31.230:8896\"", script);
+            Assert.Contains("\"http://192.0.2.10:8896\"", script);
             Assert.Contains("ManualAddressOnly", script);
             Assert.Contains("server.Users = users", script);
         });
@@ -107,7 +107,7 @@ internal static class EmbyTests
             var script = EmbyWebConsole.SignInScript(ApiBase, "user-1", "token-1", "Emby");
 
             Assert.Contains("location.host", script);
-            Assert.Contains("\"192.168.31.230:8896\"", script);
+            Assert.Contains("\"192.0.2.10:8896\"", script);
 
             // 默认端口的 https 站点，location.host 里不带 :443。
             var plain = EmbyWebConsole.SignInScript(EmbyServerAddress.Normalize("https://nas.example.com"), "u", "t", "Emby");
@@ -158,7 +158,7 @@ internal static class EmbyTests
         {
             var script = EmbyWebConsole.ThemeScript(ApiBase, "user-1");
             Assert.Contains("location.host", script);
-            Assert.Contains("\"192.168.31.230:8896\"", script);
+            Assert.Contains("\"192.0.2.10:8896\"", script);
 
             Assert.Throws<ArgumentException>(() => EmbyWebConsole.ThemeScript(ApiBase, ""));
         });
@@ -234,7 +234,7 @@ internal static class EmbyTests
         {
             var url = EmbyUrl.Stream(ApiBase, "42", "src1", "mkv");
 
-            Assert.Equal("http://192.168.31.230:8896/emby/Videos/42/stream.mkv?Static=true&MediaSourceId=src1", url.AbsoluteUri);
+            Assert.Equal("http://192.0.2.10:8896/emby/Videos/42/stream.mkv?Static=true&MediaSourceId=src1", url.AbsoluteUri);
             Assert.DoesNotContain("api_key", url.AbsoluteUri, "令牌只能走请求头");
             Assert.DoesNotContain("X-Emby-Token", url.AbsoluteUri);
         });

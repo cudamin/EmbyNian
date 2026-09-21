@@ -140,6 +140,20 @@ public sealed class PlaybackService(
     public string? LaunchQualityPreset { get; private set; }
 
     /// <summary>
+    /// 这一跑真正在放的那一版媒体源 —— <b>候选回退落定之后</b>的那一版，不是票里点的那一版。
+    /// <para>
+    /// 播放页的「版本」菜单和它中间那行画质读数问的就是它。票里那一版只说了用户的意思，而这一版是
+    /// 服务器上真的打开了的那份文件：一版打不开时会自动换下一版（<see cref="CandidateSources"/>），
+    /// 此后再问票，屏上标的就会是另一份文件。
+    /// </para>
+    /// <para>
+    /// 记的是<b>对象</b>而不是源 Id：Emby 对一部分直连文件不返回源 Id，那时按 Id 认会把几个版本认成
+    /// 同一版 —— 与 <see cref="Emby.ItemDetail.PickSource"/> 同一条规矩。播完随其它启动事实一起清掉。
+    /// </para>
+    /// </summary>
+    public MediaSource? PlayingSource { get; private set; }
+
+    /// <summary>
     /// Which audio output device mpv actually opened, once it has said — 「wasapi（扬声器 (Realtek…)）」. Null
     /// until then, and on a backend with no control channel.
     /// <para>
@@ -267,6 +281,11 @@ public sealed class PlaybackService(
             LaunchShaderProfile = request.ShaderProfile;
             LaunchShaderReason = request.ShaderReason;
             LaunchQualityPreset = settings.Video.QualityPreset;
+
+            // 在播的是哪一版，与其它启动事实一起记档，且早于 RaiseNowPlaying —— 播放页收到「现在播的是谁」
+            // 的那一刻就要拿它去标菜单、写控制条中间那行读数。票里那一版在这里就是这一趟候选的那一版，
+            // 所以候选回退之后，屏上认出来的必然是真正打开的那份文件。
+            PlayingSource = ticket.Source;
             AudioDeviceInUse = null;
             LastLaunch = new LaunchRecord(
                 DateTimeOffset.Now,
@@ -350,6 +369,7 @@ public sealed class PlaybackService(
             LaunchShaderProfile = null;
             LaunchShaderReason = null;
             LaunchQualityPreset = null;
+            PlayingSource = null;
             RaiseNowPlaying(null);
             _gate.Release();
         }

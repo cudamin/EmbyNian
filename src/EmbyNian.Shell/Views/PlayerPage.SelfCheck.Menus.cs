@@ -8,8 +8,8 @@ using Windows.Foundation;
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
-/// 六个浮出菜单，一个一个打开：右键那份画面菜单（<c>ProbePictureMenu</c>，逐行对着 Core 那份目录数）、控制条上
-/// 那五个下拉（<c>ProbeControlMenus</c>）、还有 需求 7 的字幕字体那个能搜的框（<c>ProbeSubtitleFont</c>）。
+/// 七个浮出菜单，一个一个打开：右键那份画面菜单（<c>ProbePictureMenu</c>，逐行对着 Core 那份目录数）、控制条上
+/// 那六个下拉（<c>ProbeControlMenus</c>）、还有 需求 7 的字幕字体那个能搜的框（<c>ProbeSubtitleFont</c>）。
 /// <para>
 /// 它们没有一个是在标记里声明好的 —— 每一个都是自己的 <c>Opening</c> 那一刻才把内容填出来，所以「打开会不会
 /// 崩、开出来是不是空的」这两件事只有真按一次才知道。拆成几个文件的缘由见 <c>PlayerPage.SelfCheck.cs</c> 的
@@ -78,18 +78,19 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// Opens all five control-bar pickers the way a click on each would, and reports what they built.
+    /// Opens all six control-bar pickers the way a click on each would, and reports what they built.
     /// <para>
     /// Every one of them is filled by its <c>Opening</c> handler rather than declared in XAML, so until
-    /// something opens them they are five empty <c>MenuFlyout</c>s that cannot fail. A missing resource
+    /// something opens them they are six empty <c>MenuFlyout</c>s that cannot fail. A missing resource
     /// key or a null dereference in any of the builders would first be seen by a user mid-film, which is
     /// the worst possible moment and the reason this probe exists.
     /// </para>
     /// <para>
     /// Nothing is playing, so what is being proved is the empty case of each: 单集 has no episode list,
-    /// the two track pickers have no tracks, 倍速 is built from a static list and should be full anyway,
-    /// and 更多 reads settings rather than the file and should also be full. An empty picker that builds a
-    /// 「没有可选的…」 row is a pass; one that builds nothing at all is not.
+    /// 版本 has no item to have versions of, the two track pickers have no tracks, 倍速 is built from a
+    /// static list and should be full anyway, and 更多 reads settings rather than the file and should also
+    /// be full. An empty picker that builds a 「没有可选的…」 row is a pass; one that builds nothing at all
+    /// is not.
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbeControlMenus()
@@ -120,8 +121,10 @@ public sealed partial class PlayerPage
         }
 
         // 单集 and the two track pickers each owe one row even with nothing loaded — the 「没有可选的单集」
-        // placeholder and 字幕's 关闭字幕. 倍速 owes one per SpeedChoices entry, 更多 owes its seven rows.
+        // placeholder and 字幕's 关闭字幕. 倍速 owes one per SpeedChoices entry, 更多 owes its seven rows,
+        // 版本 owes the 「没有可切换的版本」 row (nothing is playing, so there is no item to have versions of).
         Open("单集", EpisodeMenu, () => OnEpisodeMenuOpening(this, new object()), 1);
+        Open("版本", VersionMenu, () => OnVersionMenuOpening(this, new object()), 1);
         Open("音轨", AudioMenu, () => OnAudioMenuOpening(this, new object()), 1);
         Open("字幕", SubtitleMenu, () => OnSubtitleMenuOpening(this, new object()), 1);
         Open("倍速", SpeedMenu, () => OnSpeedMenuOpening(this, new object()), PlayerViewModel.SpeedChoices.Length);

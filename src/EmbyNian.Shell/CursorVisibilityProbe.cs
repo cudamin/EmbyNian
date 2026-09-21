@@ -25,7 +25,7 @@ internal static class CursorVisibilityProbe
     {
         Directory.CreateDirectory(options.Paths.LogDirectory);
         using var report = new StreamWriter(Path.Combine(options.Paths.LogDirectory, "cursor-probe.txt"))
-            { AutoFlush = true };
+        { AutoFlush = true };
         var originalForeground = Native.GetForegroundWindow();
         var restorePointer = Native.GetCursorPos(out var originalPointer);
         HostWindow? window = null;
@@ -61,6 +61,7 @@ internal static class CursorVisibilityProbe
             {
                 var media = CompositionPlaybackProbe.LocalFile(file);
                 var backend = new LibMpvBackend(new MpvSettings { Pipeline = VideoPipelineKind.Integrated },
+                    new PlaybackSettings(),
                     () => page.VideoSurface);
                 playback = await backend.StartAsync(new PlaybackRequest
                 {

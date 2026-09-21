@@ -126,7 +126,7 @@ internal static class MpvUiTests
         // 请求、逐条回推 open-menu，界面卡到点不动 —— 这个闸门就是那一刻的活口，三条判据都得钉住。
         TestHarness.Test("选集菜单请求闸门：窗口内挡住、窗口边界放行", () =>
         {
-            var gate = new EpisodeMenuRequestGate(TimeSpan.FromMilliseconds(400));
+            var gate = new MenuRequestGate(TimeSpan.FromMilliseconds(400));
             var start = new DateTime(2026, 9, 19, 19, 0, 0, DateTimeKind.Utc);
 
             Assert.True(gate.TryAccept(start), "第一条必须放行");
@@ -139,7 +139,7 @@ internal static class MpvUiTests
         // 被挡下不是静默丢弃：第一次立刻记一条，之后每秒最多一条（否则日志自己也成刷屏）。
         TestHarness.Test("选集菜单请求闸门：日志第一次立刻响，之后每秒最多一条", () =>
         {
-            var gate = new EpisodeMenuRequestGate();
+            var gate = new MenuRequestGate();
             var start = new DateTime(2026, 9, 19, 19, 0, 0, DateTimeKind.Utc);
 
             Assert.True(gate.ShouldReport(start), "第一次被挡下就该出声");
@@ -151,7 +151,7 @@ internal static class MpvUiTests
         // 一条都不该被吃掉。
         TestHarness.Test("选集菜单请求闸门：一秒的刷屏只放个位数过去", () =>
         {
-            var gate = new EpisodeMenuRequestGate();
+            var gate = new MenuRequestGate();
             var start = new DateTime(2026, 9, 19, 19, 0, 0, DateTimeKind.Utc);
             var accepted = 0;
 
@@ -178,6 +178,7 @@ internal static class MpvUiTests
             {
                 VideoWindowContract.Ready, VideoWindowContract.Seek, VideoWindowContract.Episode,
                 VideoWindowContract.Episodes, VideoWindowContract.EpisodeIndex,
+                VideoWindowContract.Versions, VideoWindowContract.VersionIndex,
             };
             var bindings = new List<string>();
 
@@ -226,6 +227,40 @@ internal static class MpvUiTests
             Assert.True(utils.Contains("embynian_wheel_volume_zone()"), "滚轮音量命中区没在 render 里登记");
             // 音量条自己改音量（拖/滚那条）同样不落 mpv 的 OSD —— uosc 自己画着数值。
             Assert.True(volume.Contains("'no-osd', 'set', 'volume'"), "音量条改音量没走 no-osd");
+        });
+
+        // 版本菜单契约（2026-09-20）：请求值保留即可通过；点选只认 1 起算的正整数序号 —— 与选集同一套判据，
+        // 因为「差一位」在这里换到的是旁边那一版文件，屏上看起来完全正常（片子还是那部片子）。
+        TestHarness.Test("版本请求与序号点选的契约", () =>
+        {
+            var request = VideoWindowContract.Parse(["embynian-versions", ""]);
+            Assert.Equal(VideoWindowContract.Versions, request?.Key);
+
+            var pick = VideoWindowContract.Parse(["embynian-version-index", "2"]);
+            Assert.Equal(VideoWindowContract.VersionIndex, pick?.Key);
+            Assert.Equal("2", pick?.Value);
+
+            Assert.Null(VideoWindowContract.Parse(["embynian-version-index", "0"]));
+            Assert.Null(VideoWindowContract.Parse(["embynian-version-index", "-1"]));
+            Assert.Null(VideoWindowContract.Parse(["embynian-version-index", "first"]));
+        });
+
+        // 2026-09-20（用户令「在播放页面切换不同版本」）：独占模式的入口在 ≡ 菜单里 —— uosc 的控制条是静态
+        // 配置，没有「有第二版才露」这种条件可写，所以那个位置固定，菜单内容（宿主推回）才随条目变。
+        // 补丁最怕「升级 uosc 时重打清单漏条」：这里对着源码钉住那三处（绑定、要数据的消息、≡ 菜单里的入口）。
+        TestHarness.Test("独占模式版本菜单：绑定、≡ 菜单入口都在", () =>
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var main = File.ReadAllText(Path.Combine(
+                directory!.FullName, "assets", "mpv-ui", "scripts", "uosc", "main.lua"));
+
+            Assert.True(main.Contains("bind_command('embynian-ui-versions'"), "版本绑定丢了");
+            Assert.True(main.Contains("embynian_notify('embynian-versions', '')"), "要版本数据的消息丢了");
+            Assert.True(main.Contains("script-binding uosc/embynian-ui-versions"), "≡ 菜单里的版本入口丢了");
         });
     }
 }

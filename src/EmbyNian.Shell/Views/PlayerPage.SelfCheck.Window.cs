@@ -1,3 +1,4 @@
+using EmbyNian.Infrastructure;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Xaml;
@@ -79,7 +80,7 @@ public sealed partial class PlayerPage
         // The glyphs the two toggles write. Read after Render, which is what calls UpdateMaximizeGlyph.
         // 全屏和最大化答的是同一支「还原」：「还原」在这里是两件事共用的一个手势 —— 全屏时点下去退出全屏
         // （窗口回到进全屏前的大小），最大化时点下去还原窗口。判据只有一处，两支各写各的图标就会在这里红。
-        var restore = _window.Fullscreen || _window.IsMaximized;
+        var restore = _window.OccupiesScreen;
 
         if (MaximizeGlyph.Glyph != Glyph(restore ? RestoreGlyphCode : MaximizeGlyphCode))
             trouble.Add("最大化图标与窗口不符");
@@ -454,11 +455,12 @@ public sealed partial class PlayerPage
         string fitted;
         var shaped = true;
 
-        if (_window.Fullscreen || _window.IsMaximized)
+        if (_window.OccupiesScreen)
         {
             // Both mean the edges belong to the monitor and FitToPicture stands aside, so asking about the
-            // client shape here would be asking about the screen's.
-            fitted = $"{(_window.Fullscreen ? "全屏" : "已最大化")}，不整形";
+            // client shape here would be asking about the screen's. 两种形态同一个答主、同一句话报，
+            // 所以这里的措辞也不必再分两支（归一那一句见 OccupiesScreen）。
+            fitted = $"{WindowForms.Name(_window.Form)}，不整形";
         }
         else
         {
