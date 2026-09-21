@@ -3,6 +3,7 @@ using EmbyNian.Emby;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -56,6 +57,11 @@ public sealed partial class HomePage : Page, IShellContent
 
     /// <summary>矮窗档的重查已经排了一拍还没跑。防止 <see cref="ViewModel"/> 那一头一连串增删把重查排成一把。</summary>
     private bool _foldScheduled;
+
+    /// <summary>
+    /// 上一次真的翻了档的时刻（毫秒，单调钟）。两次翻档之间要隔够一趟行程才许再翻一次 —— 见 <see cref="Fold"/>。
+    /// </summary>
+    private long _foldPlacedAt;
 
     /// <summary>
     /// 矮窗档那一段行程（见 <see cref="HomeFoldMotion"/>）：正在走的那一趟，没有就是 null。它同时是「这会儿屏上
@@ -121,7 +127,13 @@ public sealed partial class HomePage : Page, IShellContent
         SizeChanged += (_, _) => UpdateLibraryOverlay();
         Banner.SizeChanged += (_, _) => UpdateLibraryOverlay();
         Banner.SlideChanged += (_, _) => UpdateLibraryOverlay();
-        ViewModel.Shelves.CollectionChanged += (_, _) => ScheduleFold();
+        // 但**翻档自己搬那一排也会响这条事件**（HomeViewModel.ApplyLibraryOverlay）：那不是「货架集合变了」，
+        // 据它再排一次重查就是自己喂自己 —— 翻档 → 重查 → 再翻档，滚起来就是 2026-09-18 两场、09-21 一场
+        // 「矮窗档来回翻」把界面线程吃干的样子。搬动那一下挂的记号见 HomeViewModel.ShelvesChangeIsOverlay。
+        ViewModel.Shelves.CollectionChanged += (_, _) =>
+        {
+            if (!ViewModel.ShelvesChangeIsOverlay) ScheduleFold();
+        };
         ViewModel.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(ViewModel.BusyVisibility) or nameof(ViewModel.NoticeVisibility))
@@ -302,14 +314,68 @@ public sealed partial class HomePage : Page, IShellContent
             Scroller.Margin = new Thickness(sheet.Left, wanted, sheet.Right, sheet.Bottom);
     }
 
+    /// <summary>单调钟（毫秒）。这一页只拿它量「距上一趟摆档过了多久」，见 <see cref="Fold"/>。</summary>
+    private static long Now => Environment.TickCount64;
+
+    /// <summary>
+    /// 矮窗档一趟行程要走多久：宿主那一趟（<see cref="HomeFoldMotion.DurationMilliseconds"/>）＋迟一拍起步的
+    /// 补位那一趟。两次翻档之间至少隔这么久 —— 落定之前量到的都是过渡态几何，见 <see cref="Fold"/>。
+    /// </summary>
+    private static long FoldSettleMilliseconds => HomeFoldMotion.DurationMilliseconds * 2L;
+
+    /// <summary>被「等上一趟落地」拦下的那一次判定，到点补跑一次（别把用户停手那一拍的决定丢掉）。</summary>
+    private DispatcherQueueTimer? _foldRetry;
+
     /// <summary>
     /// 换上矮窗档的另一档：翻之前先把旧落点量下来，量完再搬 —— <see cref="HomeViewModel.SetLibraryOverlay"/> 当场
-    /// 就把那一排搬进搬出，搬完再量就是新落点了。同一档上重复调用什么都不量（拉窗口时每一下 SizeChanged 都走到这儿）。
+    /// 就把那一排搬进搬出，搬完再量就是新落点了。同一档上重复调用什么都不做（拉窗口时每一下 SizeChanged 都走到这儿，
+    /// <see cref="HomeViewModel.SetLibraryOverlay"/> 自己也按这个早退）。
+    /// <para>
+    /// <b>两次翻档之间要等上一趟落地</b>（<see cref="FoldSettleMilliseconds"/>）。这一条 2026-09-21 才补上，补的是
+    /// 「拿飞在半路的几何判档」：一趟的位移写在 <c>TranslateTransform.Y</c> 上，而量几何的
+    /// <c>TransformToVisual</c> 吃这一支变换 —— 上一趟还在飞，下一拍量到的既不是旧档的几何也不是新档的几何，
+    /// 判出来的档自然也不作数，于是翻一次、量歪一次、再翻一次。日志里那一万像素的行程
+    /// （<c>矮窗档：媒体库那一排落回横排（行程 10011 像素…）</c>，排卡线被读成 −9541）就是这么来的。
+    /// </para>
+    /// <para>
+    /// 这一条同时是这类暴走的速度上限。一天里三场「矮窗档来回翻」（09-18 两场共两万六千行、09-21 一场三万行／27 秒）
+    /// 都是每 6 毫秒翻一次，把界面线程吃干 —— 播放页的遮罩揭不掉、键鼠没有一拍排得上队，用户看到的就是
+    /// 「卡在背景图加载界面、退不出去，声音还在后台放」。隔开之后，最坏也只是半秒翻一次。
+    /// </para>
     /// </summary>
     private void Fold(bool decided)
     {
-        if (ViewModel.LibraryOnBanner != decided) MeasureBeforeFold();
+        if (ViewModel.LibraryOnBanner == decided) return;
+
+        var since = Now - _foldPlacedAt;
+        if (since < FoldSettleMilliseconds)
+        {
+            // 拦下的这一次不能就这么丢了：用户拉着窗口停在半路，档位就会停在旧的那一档上。约在落地那一刻补一次。
+            if (DispatcherQueue is { } queue && (_foldRetry ??= CreateFoldRetry(queue)) is { } retry)
+            {
+                retry.Stop();
+                retry.Interval = TimeSpan.FromMilliseconds(FoldSettleMilliseconds - since);
+                retry.Start();
+            }
+
+            return;
+        }
+
+        _foldPlacedAt = Now;
+        MeasureBeforeFold();
         ViewModel.SetLibraryOverlay(decided);
+    }
+
+    private DispatcherQueueTimer CreateFoldRetry(DispatcherQueue queue)
+    {
+        var timer = queue.CreateTimer();
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            UpdateLibraryOverlay();
+        };
+        return timer;
     }
 
     /// <summary>
@@ -544,20 +610,24 @@ public sealed partial class HomePage : Page, IShellContent
         // **不能等摆完再量落点**：Repeater 的重排跟着滚动视口慢一拍，当场量到的是没换过位置的旧数。
         var overlay = TopIn(LibraryOverlay, BannerZone);
         var hostDrift = HomeFoldMotion.DriftOf(LibraryOverlay);
+        var distance = before.Strip is { } line ? line - overlay : 0;
 
-        if (hostDrift is null || before.Strip is not { } strip)
+        // 行程还得是这一页量得出来的数：矮窗档搬的就是屏上那几排，一趟最多穿过一屏多一点。量歪了
+        // （从 Repeater 池子里取回来的一排停在虚拟化给的临时位置上）会算出上万像素 —— 这一趟放它走，那个位移
+        // 又会被下一个重查读成「真几何」，正是 Fold 那条注释里说的自己喂自己的环。宁可一刀硬切，不要半截动画。
+        var plausible = before.Strip is not null && Math.Abs(distance) <= Math.Max(Scroller.ActualHeight * 2, 320);
+
+        if (hostDrift is null || !plausible)
         {
-            // 宿主这一趟规划不成（宿主身上挂着别人的变换，或者旧账里没量到那条线）：整趟放弃，按老样子直接落定
-            // —— 宁可一刀硬切，不要半截动画。走到这一行多半是谁又动了宿主的 RenderTransform。
-            Log.Warn(Category, $"矮窗档这一趟规划不成：位移={(hostDrift is null ? "拿不到" : "有")}"
+            // 宿主这一趟规划不成（宿主身上挂着别人的变换，旧账里没量到那条线，或者行程离谱）：整趟放弃，按老样子
+            // 直接落定。走到这一行多半是谁又动了宿主的 RenderTransform，或者刚重排完的树上还没量出真位置。
+            Log.Warn(Category, $"矮窗档这一趟规划不成：位移={(hostDrift is null ? "拿不到" : $"{distance:0} 像素")}"
                 + $"（宿主变换={LibraryOverlay.RenderTransform?.GetType().Name ?? "空"}）"
                 + $" 排卡线={(before.Strip.HasValue ? before.Strip.Value.ToString("0") : "量不到")} 压上={on}");
             if (!on) HandBack();
             _fold = null;
             return;
         }
-
-        var distance = strip - overlay;
         _fold.Slide(hostDrift, on ? distance : 0, on ? 0 : distance);
 
         // 回默认那一趟：宿主的淡出压在最后一百来毫秒里 —— 它要一路托着那一排卡滑到横排，落点上那一份

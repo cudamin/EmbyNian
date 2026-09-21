@@ -408,8 +408,8 @@ internal static partial class ShellSelfCheck
         }
 
         // 从播放回来那一趟 —— 「点击开始播放后点击左上方的返回，集列表会跑到下方去」。走的是真的那三步（外壳收起、
-        // 照着当前页面重新导航、外壳回来），一个字节都不放，见 ShellSelfCheck.ReturnFromPlayer。两条都判：那一带集
-        // 还在规矩说的那一层上、页面没有自己滚下去。
+        // 照当前页面刷新一遍数据、外壳回来），一个字节都不放，见 ShellSelfCheck.ReturnFromPlayer。两条都判：那一带集
+        // 还在规矩说的那一层上、这一趟回来没有把页面自己滚下去。
         if (_fileReturn is { } back) check("播放回来那一页", back.Ok, back.Detail);
         else report.AppendLine("[信息] 播放回来那一页 — 这次没走到文件页");
 

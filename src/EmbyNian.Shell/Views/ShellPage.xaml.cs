@@ -732,24 +732,23 @@ public sealed partial class ShellPage : UserControl, IShellActions
     void IShellActions.Notify(string message, InfoBarSeverity severity) => Notify(message, severity);
 
     /// <summary>
-    /// Rebuilds whatever page is showing. Called after a playback, because the item's 已看 mark and its
-    /// resume position have both just changed on the server and the grid behind the player is still
-    /// drawing the values it was opened with.
-    /// <para>
-    /// Re-navigation rather than a refresh method on every page: each page already builds itself from
-    /// its request in <c>OnNavigatedTo</c>, so this cannot drift from the way the page loads normally.
-    /// The entry the re-navigation pushes is then dropped, or 「返回」 would walk back through the same
-    /// page a second time.
-    /// </para>
+    /// 播放后只重读数据，不重新导航：原页面和已经解码的背景图必须留着接住退出画面，
+    /// 续播点与已看状态仍在服务器停止上报完成后刷新。
     /// </summary>
     internal void RefreshActive()
     {
-        if (ContentFrame.Content is not IShellContent page) return;
-
-        ContentFrame.Navigate(page.GetType(), page.NavigationRequest, BrowseTransition());
-
-        if (ContentFrame.BackStack.Count > 0) ContentFrame.BackStack.RemoveAt(ContentFrame.BackStack.Count - 1);
-        SyncChrome();
+        switch (ContentFrame.Content)
+        {
+            case HomePage home:
+                _ = home.ViewModel.RefreshPlaybackAsync();
+                break;
+            case DetailPage detail:
+                _ = detail.ViewModel.ReloadAsync();
+                break;
+            case LibraryPage library:
+                _ = library.ViewModel.ReloadAsync();
+                break;
+        }
     }
 
     /// <summary>

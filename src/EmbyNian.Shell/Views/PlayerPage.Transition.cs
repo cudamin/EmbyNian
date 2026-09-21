@@ -1,5 +1,6 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Playback;
+using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -331,6 +332,39 @@ public sealed partial class PlayerPage
 
         // 客户区刚变过，这一拍读到的才是「浏览页该排多高、岛该多大」。
         SynchronizePlaybackLayout();
+    }
+
+    /// <summary>
+    /// 用户关闭播放页时直接交回现成的浏览页。必须先呈现再停 mpv：保留交换链引用并不能阻止
+    /// mpv 的 stop/quit 把里面的像素清空，等后端退出以后再做留帧动画已经来不及。
+    /// </summary>
+    internal async Task ReturnToBrowseBeforeStopAsync()
+    {
+        if (!_onStage || _window is not { } window) return;
+        var compositor = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(this).Compositor;
+
+        LeavePlayer();
+        var generation = _windowChangeGeneration;
+        CancelPageTransition();
+        // 浏览页先在当前尺寸上屏，随后才还原窗口，避免新窗口里闪出旧尺寸的播放画面。
+        _restoreBrowseOnExit = false;
+        CompletePlayerExit();
+        try
+        {
+            await compositor.RequestCommitAsync().AsTask().WaitAsync(TimeSpan.FromMilliseconds(250));
+            VideoFrameOverlay.Flush();
+        }
+        finally
+        {
+            if (!_onStage && _window == window && generation == _windowChangeGeneration)
+            {
+                window.RestorePlayerToBrowse();
+                window.FreeSizing = false;
+                SynchronizePlaybackLayout();
+            }
+        }
+        await compositor.RequestCommitAsync().AsTask().WaitAsync(TimeSpan.FromMilliseconds(250));
+        VideoFrameOverlay.Flush();
     }
 
     private void StopPlayerMotion()

@@ -1,68 +1,67 @@
 ---
 name: "embynian-verification"
-description: "Verify a code change to the EmbyNian project (C:\\Users\\89400\\EmbyNian): the gates — Release build, tests, publish after any change, plus the self-check when a version ships or when the self-check itself changed — what passing looks like for each, which self-check report lines are allowed to differ, and screenshot checking per theme. Use after any EmbyNian code change, or when asked to 验证 / 跑一遍闸门 / 发新版本."
+description: "Verify EmbyNian changes using the current gates in CLAUDE.md. Interpret self-check results, distinguish fresh Release tests from stale output, inspect screenshots and pointer evidence, and report playback coverage gaps. Use after code changes or when asked to 验证 / 跑一遍闸门 / 发新版本."
 ---
 
-# EmbyNian — running the gates, and what the gates cannot see
+# EmbyNian — verification evidence
 
-**Test after any code change; publish when a round of changes ends. The other two gates run when a version ships** (2026-09-21 split the old 「everything at release」 into two tiers: the tests are the one gate cheap enough to run every time — a full round is ten-odd seconds, offline, and touches no server — while the self-check is the slowest, so it stays with the release) **and the self-check also runs whenever the self-check's own code changed** — a change to the checks that nobody ran is an unverified change. **The commands themselves, the SDK path, the single-node build flags, the switch list, the two tiers, the extra release-time checks and this machine's traps are all in `CLAUDE.md`** — which is loaded whenever this skill is, so read them there. `CLAUDE.md` is the source of truth and wins on any conflict with this file; this file holds the procedure and the traps around it, and deliberately keeps no second copy of anything already written there.
+**When to run each gate, the exact commands, SDK selection, working-tree and delivery rules, theme coverage, and playback authorization live in [CLAUDE.md](../../../CLAUDE.md).** Use that policy rather than a second schedule here. This skill explains what the measurements mean and where a green result is insufficient. Architecture is `embynian-winui-shell`; playback is `embynian-playback`; shaders are `mpv-shader-quality`.
 
-Architecture rules are the `embynian-winui-shell` skill; playback is `embynian-playback`; shaders and 画质档位 are `mpv-shader-quality`.
+## Before accepting a result
 
-## The gates, in order
+- Confirm the tested files and output belong to the current working tree. A test run needs a successful build of the current test code and Core, not merely `-c Release`: `--no-build` can run stale Release output too. Publishing the Shell does not refresh the test assembly.
+- Report counts observed on this run, failures and skips separately. Do not turn a missing fixture or unavailable UI input into a pass.
+- A publish in an isolated worktree is not delivery to the existing desktop shortcut. Verify the actual delivery path using the rule in CLAUDE.md.
+- The local cursor, player-motion and composition probes currently select the integrated pipeline. Their success does not validate the standalone window, uosc or standalone source switching. Report that gap when those features change.
+- `--screen` makes a diagnostic run independent of saved window placement. Normal self-check can use a saved account and read server data; it is not the isolated offline playback path.
 
-| # | Gate | When | Passing looks like |
-|---|---|---|---|
-| 1 | build | any change | 0 errors **and** 0 warnings |
-| 2 | test | any change | 「全部通过」 with exit code 0 — **only trustworthy when the command carries `-c Release`** |
-| 3 | publish | any change | the script completes; it refuses to run at all if `libmpv-2.dll` is missing from the repo root |
-| 4 | self-check | a version ships, or the self-check changed | `tools/selfcheck-diff.ps1` says 绿 — no `[失败]` line, no check that disappeared from the baseline, no 「通过 → 信息」 downgrade — and the access token's occurrence count in that report is **0** |
+## Comparing self-check reports
 
-Four things worth knowing before the first command:
+Use `tools/selfcheck-diff.ps1`; its acceptance criteria and baseline-update policy are in CLAUDE.md. It compares check names and statuses, not changing numbers inside details, and handles non-maximized placement for its run before restoring settings. **Do not manually cross out failures to manufacture a green report.**
 
-- **Gate 2 without `-c Release` is gate 2 switched off.** `dotnet run` looks for Debug output, so with `--no-build` it runs whatever stale binary sits in `bin\Debug` and still prints 「全部通过」 with exit code 0. When this was caught on 2026-08-31 that binary was two days old and 160 tests short of the source.
-- Report the passing count as a number observed on this run. **Never write it into a document or a memory** — it grows as development goes on.
-- **Gate 3 takes `-NoArchive`** while iterating: it skips the zip nobody looks at.
-- **A run that names `--screen` neither reads nor writes the saved window placement.** That is what keeps the report's client-size and browse-shape readings on a stable baseline instead of following whatever size the user last dragged the window to.
+When investigating a raw report, the explanation of volatile readings is in [docs/开发与验证.md](../../../docs/开发与验证.md), under “逐行比报告：每次都会变的行”. The baseline is [docs/selfcheck-baseline.txt](../../../docs/selfcheck-baseline.txt). Keep that explanation there rather than duplicating the list.
 
-## Comparing the report line by line
+**To prove a red is not yours, run the previous published build against it.** Every republish moves `artifacts/publish` to `C:\Users\89400\EmbyNian-stale\publish-<stamp>`, and each stale copy is a complete self-contained build (its own `libmpv-2.dll` and assets) made from the tree *before* the change in hand. Launch it straight from there and let it write its own report over `%LOCALAPPDATA%\EmbyNian\logs\selfcheck-shell.txt` — copy the current report into `work\` first, and compare the two `EmbyNian.dll` SHA256 to prove they really are different binaries:
 
-Ten lines differ every run **by design** — cross those off first, and anything else that moved is worth investigating. **The list lives in [`docs/开发与验证.md`](../../docs/开发与验证.md) under 「逐行比报告：每次都会变的行」, and that is its only live copy**; when a new check adds a volatile line, update it there.
+```powershell
+$env:Path = 'C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem'
+$p = Start-Process -FilePath '<stale>\win-x64\EmbyNian.exe' -ArgumentList '--self-check' -PassThru
+$null = $p.WaitForExit(300000)
+```
 
-**Routine runs do not read the log by hand any more** (2026-09-21). Gate 4 is `tools/selfcheck-diff.ps1`: it compares only *which checks ran and what each one answered*, so every volatile number — all ten lines above live inside details — is out of the comparison by construction, and the three lines that used to go red when the window was maximized are handled inside the script, which flips `WindowMaximized` for its own run and restores `settings.json` afterwards. Cross lines off by hand only while you are debugging the script itself. **The baseline is [`docs/selfcheck-baseline.txt`](../../docs/selfcheck-baseline.txt)** — 「status + check name」 only; a failing check is never written into it, because any `[失败]` is red regardless of the baseline; run `-UpdateBaseline` after reading a run, not instead of reading it.
+Measured 2026-09-21: after a home-page change, two reds appeared (`播放回来那一页`、`服务器页面`). The pre-change build reproduced `播放回来那一页` **with a character-identical reading** (`页面滚在 891`), and the third red slot swapped between two unrelated checks across the two runs — a pre-existing red plus a timing-sensitive one, neither caused by the change. Only a red that is absent before and present after is yours to chase. Note this also shows the baseline (captured at 16:24 that day) had drifted from the working tree: do not `-UpdateBaseline` to make someone else's in-flight work look green.
 
-**When 「鼠标真等两秒就藏」 goes red, read `不符：` — not the diagnostic numbers.** That leg carries a dozen counters and every one of them is printed to be read by a human, but only the `不符：` list at the end of the line names the assertion that actually failed. Three reds (09-02, 09-04, and one that went red twice before passing on the third run) were filed against 「someone touched the mouse — the report says so, 轮询问出 1 次移动」, and that number says the opposite: **1 is what a completely undisturbed leg reports** (the probe clears its own 「where is the pointer」 state before the window, so the first poll always counts one; a pointer that truly never moves is filtered out before the counter). 2026-09-05 the probe was corrected to judge disturbance on that count as well as on the end position, and to spell out in the line which of the two it was — so a genuinely disturbed leg now prints 「这一轮只作参考」 and asserts nothing instead of going red. **A red on this leg from here on is a real reading**: get the `不符：` list and the 「空事件」 count into the handover doc before re-running, since a spurious un-hide arrives as a XAML event and is what 08-31 already caught once.
 
-**Two half-legs of the same check carry the cursor's two failure modes**, and both are judged rather than printed: 「藏好后挪一个像素：过后还藏着」 (a one-pixel displacement — desk rattle, sensor drift, or the player's own ask — must not wake it; added 2026-09-12 for 「鼠标隐藏了一会又会自动跑出来」, verified red by setting `ChromeReveal.MovePixels` to 1) and 「挪一下就回来」 (a real displacement must wake it at once). The first one prints 「指针没挪动，这一句只作参考」 when `MovePointerTo`/`SetCursorPos` could not move anything, which is the only tolerance it has — unlike the old legs it does not depend on the island hearing injected input.
+**When “鼠标真等两秒就藏” fails, start with `不符：`, not the diagnostic counters.** The first poll establishes a pointer baseline, so a movement count of 1 can describe a completely undisturbed leg. The probe checks disturbance using both movement count and final position; a genuinely disturbed leg says “这一轮只作参考”. Save the failed assertion and “空事件” count before retrying, because an unexpected un-hide can arrive as a XAML event.
+
+Two checks exercise different cursor failures: “藏好后挪一个像素：过后还藏着” rejects waking from tiny displacement, while “挪一下就回来” requires a real displacement to reveal it. A result saying “指针没挪动，这一句只作参考” is a coverage limitation, not proof of the first behavior. Internal hidden state is not a substitute for the visible system cursor.
 
 ## Moving the pointer, and proving it moved
 
-`CLAUDE.md` states the rule (navigate with the app's own switches, never the mouse) and why it exists. This section holds what was measured behind it — re-measured 2026-09-05 with a message-counting window parked under the cursor, because the old blanket 「程序里挪鼠标一律没用」 was what made 「让系统重新问一次」 get written as an injection that never fired.
+Navigation and authorization follow CLAUDE.md. The measurements below were made on this machine on 2026-09-05; use them to choose a probe, then verify that the current run actually delivered its input.
 
-| Attempt | What it produces | Does the pointer move |
+| Attempt | Observed messages | Pointer movement |
 |---|---|---|
-| `SendInput` relative move of (0,0) | nothing at all — 0 `WM_MOUSEMOVE`, 0 `WM_SETCURSOR`, return value 1 either way | no |
-| `SetCursorPos` to the point it already occupies | one of each, **and from a process that is not in the foreground** | no |
-| `SendInput` with a real displacement | moved it in one run, not in another — don't lean on it | sometimes |
-| `SetCursorPos` with a real displacement | twice out of twice, from a terminal, onto a window on the other monitor | yes |
+| `SendInput` relative move of (0,0) | No `WM_MOUSEMOVE` or `WM_SETCURSOR`, despite return value 1 | No |
+| `SetCursorPos` to the existing position | One of each, including from a background process | No |
+| `SendInput` with a real displacement | Delivery varied between runs | Must measure |
+| `SetCursorPos` with a real displacement | Coordinate changed, including across monitors | Yes in the measured runs |
 
-Two consequences, and they are the same measurement from two sides:
+- **Moving the coordinate is not proof that the XAML island received input.** `SetCursorPos` can move it while the island sees no pointer events. A one-pixel `SendInput` out and back has reached the input queue and made WinUI re-read `ProtectedCursor`; check the island's pointer-event count to prove delivery. `GetCursorInfo` answers about the cursor, not input delivery.
+- **Do not base a screenshot on a parked pointer.** The user can move the same mouse before capture. Hover-only UI uses the state switches in CLAUDE.md.
+- Restore pointer position and input-thread attachments when a probe exits. Permission denial is not an invitation to try a different injection mechanism.
 
-- **A move only reaches the XAML island if it goes through the input queue, and only if it is a real displacement.** `SetCursorPos` moves the coordinate without producing input, so the island hears nothing — 「XAML 事件 0 次」 for a pointer it demonstrably moved. A zero-displacement `SendInput` produces nothing at all, which the self-check printed for months as 「真实输入注不进」. **A one-pixel `SendInput` out and straight back is heard** (「真实输入到位」, same probe, same machine), and it is the only lever that makes WinUI re-read `ProtectedCursor` — i.e. that reaches the pixels a pointer sitting over XAML content is drawn from. So: to make the framework look again, inject a real displacement and undo it; to prove that it looked, read the island's own pointer-event count, **never `GetCursorInfo`**.
-- **Don't build a screenshot on a parked pointer.** `SetCursorPos` really can put it over a hover target, but the user's own hand is on the same mouse and the hover is gone by the time the shutter opens — this was tried on the home rail's paging bars and the photograph came back without them. Hover-only affordances get a `--show-*` switch instead.
+## Screenshots — what property checks cannot see
 
-## Screenshots — for what the gates cannot see
+A correctly reported property does not prove correct pixels. Prior failures included a clipped poster and a background layer with no visible content despite passing geometry checks. Pair the relevant property assertions with actual screen evidence.
 
-Every defect actually caught in this project came from someone looking at the screen: a strip cropped off a poster, an empty patch in the top-left corner, a black border around the episode list. The gates went green on all three.
-
-- **`tools/shot.ps1`** launches, shoots and closes: `-Exe <path> -ExeArgs "--theme midnight --show-settings" -SettleMs N`. When shooting the settings window, pass `--screen 2` and `-WindowTitle 设置` — without the screen argument it raises the window onto the primary monitor, over whatever the user is doing, and this has already photographed the user's game once.
-- **A shot at a chosen window size is `work/shot-resize.ps1`** — `tools/shot.ps1` plus `-ResizeWidth/-ResizeHeight` (a `SetWindowPos` between raising the window and settling; that is where the 866- and 1554-wide detail-page artifacts came from). Run it from the PowerShell tool, never by calling powershell out of bash — that call is blocked outright — and expect no stdout back: the proof is the PNG itself, not the script's last line.
-- **`--dump-ui`** writes one screenshot (`selfcheck-shell.png`, the frame after the last page) plus a visual tree. Per-page photography is `shot.ps1`'s job, not the self-check's.
-- **Touched colours, spacing or type size → shoot the default theme, and one more if the change could read differently on another.** All five themes are dark since `daylight` was deleted (2026-09-05, the user's call), so there is no longer a light theme to shoot — which is also why a hard-coded shell colour now goes unnoticed; see `CLAUDE.md`'s theme clause.
-- **「有没有箭头」 needs `tools/cursor-watch.ps1`, never `shot.ps1`.** A GDI screenshot never contains the cursor. `cursor-watch.ps1` prints `GetCursorInfo` as a timeline and, when the flag says a cursor is showing, draws that cursor into the capture with `DrawIconEx` — so 「有箭头」 and 「没有箭头」 become visible in an image. It never touches z-order, the foreground or the cursor position, which is exactly why `shot.ps1` is the wrong tool here: it raises the window topmost and back, and that changes which queue owns the cursor.
-- **`winapp ui` can read a live window without touching it.** `inspect`, `search`, `get-value`, `get-property` and `wait-for` are pure UI-Automation reads — no pointer moves, no clicks — which makes them a safer way to assert what is actually on screen than `poke.ps1`, and `wait-for --value` picks the right pattern per control type by itself. Its interacting verbs are bound by `CLAUDE.md`. Full verb list and the batch-script template are in the `winui-ui-testing` skill.
-- Navigate with the app's own switches rather than the mouse, and follow the three playback tiers in `CLAUDE.md`'s 「播放相关改动的验证」: nothing plays by default; a change to the playback pipeline uses the local-file probes (`--probe-cursor` / `--probe-player-motion`, isolated data directory, no sign-in, no watch-state); pointing anything at the real server asks the user first. Both switch lists, and why the mouse is not an option here, are in `CLAUDE.md`.
+- **`tools/shot.ps1`** launches, captures and closes. For the settings window, select a non-primary screen when available and pass `-WindowTitle 设置`; otherwise it can raise the wrong window over the user's work. Screen choice follows CLAUDE.md on single-monitor machines.
+- **Chosen window size:** the local `work/shot-resize.ps1` helper has been used with `-ResizeWidth/-ResizeHeight`. `work/` is not tracked, so check it exists and read it before reuse; it is not a clean-checkout prerequisite. Respect the current tools' permissions rather than relying on a previous sandbox's behavior.
+- **`--dump-ui`** writes `selfcheck-shell.png` and a visual tree after the last self-check page. It does not composite Mica, so use a real screen capture to judge colors. Per-page photography is `shot.ps1`'s job.
+- **Theme coverage follows CLAUDE.md.** For spacing or type-size changes without color changes, inspect the affected page and relevant window sizes. Read the live theme list from `UiThemes.cs`; do not resurrect a deleted theme just for a screenshot.
+- **“有没有箭头” needs cursor evidence.** `tools/cursor-watch.ps1` reads `GetCursorInfo` over time and uses `DrawIconEx` to put a visible cursor into a capture. It does not change z-order, foreground or pointer position. `shot.ps1` raises the window, which can change the input queue that owns the cursor, so it is not interchangeable with this test.
+- **Read-only UI Automation** (`inspect`, `search`, `get-value`, `get-property`, `wait-for`) can inspect a running window without moving the user's pointer. For templated controls, locate the owning item before a local handle; the source scanner skips these controls and cannot prove runtime addressability. Interacting verbs remain subject to CLAUDE.md's safety rules.
 
 ## Other scripts
 
-`smoke.ps1` at the repo root starts the app, waits, then reports whether the process is still alive and prints this run's log. In `tools/`: `verify-publish.ps1`, `backup.ps1`, `shortcut.ps1`, `zoom.ps1`, `poke.ps1`, `cursor-watch.ps1`, `line-icons.awk`. Operating detail that isn't a rule — building for ordinary running, `publish.ps1`'s other switches, what the self-check walks through, where the data directory is — is in [`docs/开发与验证.md`](../../docs/开发与验证.md).
+`smoke.ps1` starts the app, waits and reports whether it is alive; survival alone does not validate playback. Helpers under `tools/` include `verify-publish.ps1`, `backup.ps1`, `shortcut.ps1`, `zoom.ps1`, `poke.ps1` and `cursor-watch.ps1`. Parameters, data paths and detailed report interpretation belong in [docs/开发与验证.md](../../../docs/开发与验证.md).

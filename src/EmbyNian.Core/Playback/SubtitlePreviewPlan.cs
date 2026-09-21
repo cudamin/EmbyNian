@@ -14,7 +14,7 @@ public sealed record SubtitlePreviewLayer(double X, double Y, string Color, doub
 /// <summary>
 /// The 字幕示例 preview as it should be drawn, straight off the 字幕外观 settings — 「参考图2新增字幕外观
 /// 功能」（2026-09-06）: the 字幕 card's top strip draws the sample line with the current font, size,
-/// bold, colours, outline, shadow and plate, and redraws when any of those rows change.
+/// weight, colours, outline, shadow and plate, and redraws when any of those rows change.
 /// <para>
 /// A pure function so the mapping is pinned by unit tests, and the one place that answers 「这张卡上的
 /// 十几行合在一起是什么样子」. It follows the card's own row semantics rather than libass internals:
@@ -35,7 +35,7 @@ public sealed record SubtitlePreviewLayer(double X, double Y, string Color, doub
 public sealed record SubtitlePreviewPlan(
     string FontFamily,
     double FontSize,
-    bool Bold,
+    int Weight,
     string Text,
     string TextColor,
     IReadOnlyList<SubtitlePreviewLayer> Layers,
@@ -100,7 +100,7 @@ public sealed record SubtitlePreviewPlan(
         return new(
             FontFamilies.Resolve(subtitles.SubtitleFontFamily),
             Math.Max(0, subtitles.SubtitleFontSize > 0 ? subtitles.SubtitleFontSize : MpvDefaultFontSize) * scale,
-            subtitles.SubtitleBold,
+            PlaybackSettings.ClampWeight(subtitles.SubtitleFontWeight),
             text,
             RgbOr(subtitles.SubtitleColor, "#FFFFFF"),
             layers,

@@ -159,7 +159,11 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
                  ["pause", "duration", "volume", "mute", "speed", "paused-for-cache", "demuxer-cache-time", "track-list"])
             await _ipc.ObservePropertyAsync(property, cancellationToken).ConfigureAwait(false);
 
-        Update(status => status with { Loaded = true });
+        // 外部 mpv.exe 这一档没有事件通道（只有 named pipe 上的属性观察），拿不到内置后端那条
+        // playback-restart；而它的画面在 mpv 自己的顶层窗口里，窗口是带着画面出生的（force-window
+        // 那一套见 StandaloneWindowHint 那条注释）。所以这一拍就是这一档能给出的最诚实的答案，
+        // 与改动前的行为一致：会话起来＝可以揭遮罩。
+        Update(status => status with { Loaded = true, PictureStarted = true });
 
         var stopping = _finished.Token;
         _poller = Task.Run(() => PollPositionAsync(stopping), CancellationToken.None);

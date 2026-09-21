@@ -37,6 +37,7 @@ internal static class Program
         ThemeTests.Register();
         PlayerPaletteTests.Register();
         PlayerMotionTests.Register();
+        PictureRevealTests.Register();
         MpvUiTests.Register();
         MediaVersionTests.Register();
         InlineSwitchTests.Register();

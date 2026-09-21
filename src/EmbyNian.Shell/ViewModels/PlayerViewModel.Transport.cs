@@ -113,13 +113,27 @@ public sealed partial class PlayerViewModel
     }
 
     /// <summary>停止播放. Asks mpv to quit rather than cancelling, so the final position is still reported.</summary>
-    internal async Task StopAsync()
+    internal Task StopAsync()
     {
-        // Before the wait: 「stop」 is one of the two ways out of the player, and the level the film was left
-        // at has to reach the file whether or not another tick ever comes.
-        FlushVolume(settled: false);
+        if (!_stopTask.IsCompleted) return _stopTask;
+        return _stopTask = StopPlaybackAsync();
+    }
 
+    private async Task StopPlaybackAsync()
+    {
+        FlushVolume(settled: false);
         if (!_playback.IsPlaying) return;
+
+        try
+        {
+            if (PrepareStopAsync is { } prepare) await prepare().ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            // 呈现失败不能挡住用户的停止命令，也不能漏掉后端的最终进度上报。
+            Log.Warn(Category, "停止前返回浏览页失败", error);
+        }
+
         await _playback.StopAsync().ConfigureAwait(true);
     }
 
@@ -145,6 +159,10 @@ public sealed partial class PlayerViewModel
         // Taken here, before the fetch and before the call that stops whatever is playing; released in
         // the finally once this playback has ended and any auto-advance has been decided.
         _playerHold++;
+
+        // 这一场播放的号（见 _playbackAttempt）：比停掉旧那一刀更早，所以旧一场收尾时判得出「已经有新的一场了」。
+        var attempt = ++_playbackAttempt;
+
         try
         {
             // 需求 7's box, made useful before the strip it sits in can be revealed: the scan is a few
@@ -258,16 +276,25 @@ public sealed partial class PlayerViewModel
             // 「播放已停止」 belongs to the end of a viewing, not to the seam between two episodes: the
             // switch already says what it is doing, and two toasts stacked over a half-built player were
             // part of what 「画面错乱」 looked like.
-            var following = NextEpisodeToAutoPlay(result, detail);
-            if (following is null)
+            //
+            // 换集与换版比这句话还要严一层（2026-09-21）：它们是把上一场**停掉**再开下一场，所以上一场那条
+            // await 回来的时候，说的根本不是自己 —— 报的是别人（新的一场）的开场，主语错了。屏上多一句假话
+            // 还在其次，要紧的是它顺手让主页重新装了一次货：那一刻窗口还在播放几何上、主页那一排正重排，
+            // 这一次重装就成了 2026-09-21 那场「矮窗档来回翻、界面卡死」的引信（详见 HomePage.UpdateLibraryOverlay）。
+            // 只有最新那一场有资格说自己结束了。
+            var newest = attempt == _playbackAttempt;
+
+            var following = newest ? NextEpisodeToAutoPlay(result, detail) : null;
+            if (newest && following is null)
             {
                 Noticed?.Invoke(
                     result.ToChinese(),
                     result.Exit.IsFailure ? InfoBarSeverity.Error : InfoBarSeverity.Success);
             }
 
-            // The item's watched flag and resume position have just changed on the server.
-            RefreshRequested?.Invoke();
+            // The item's watched flag and resume position have just changed on the server. 换到下一场那条路
+            // 自己收尾时会再报一次，被接手的那一场不必替它做。
+            if (newest) RefreshRequested?.Invoke();
 
             if (following is not null)
             {

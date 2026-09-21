@@ -1940,7 +1940,7 @@ internal static class PlaybackTests
 
             settings.Playback.SubtitleFontFamily = @"D:\字体\我自己的字体.ttf";
             Assert.Equal(FontFamilies.Default, Font(),
-                "认不出来的文件宁可退回默认族（Noto Sans CJK SC，随程序走的那一款），也不能把路径当族名传出去");
+                "认不出来的文件宁可退回默认族（Microsoft YaHei，系统自带），也不能把路径当族名传出去");
 
             settings.Playback.SubtitleFontFamily = "思源黑体 CN";
             Assert.Equal("思源黑体 CN", Font());
@@ -2502,7 +2502,7 @@ internal static class PlaybackTests
                 SubtitleFontFamily = "SimHei",
                 SubtitleFontSize = 60,
                 SubtitleScalePercent = 120,
-                SubtitleBold = true,
+                SubtitleFontWeight = PlaybackSettings.BoldSubtitleWeight,
                 SubtitleColor = "#FFFFFF",
                 SubtitleBorderSize = "3",
                 SubtitleBorderColor = "#000000",
@@ -2527,20 +2527,37 @@ internal static class PlaybackTests
         Test("输出：字幕出厂样式是用户 2026-09-06 定的那一套", () =>
         {
             // 「把默认字幕样式设置为…」：他给的八项里字号、颜色、描边、阴影当时就是出厂值，v13 换掉的是
-            // 加粗（关）和底板颜色（黑色）。底板样式仍然出厂关，所以那行颜色只给阴影上色。
+            // 加粗（关）和底板颜色（黑色）。底板样式仍然出厂关，所以那行颜色只给阴影上色。出厂字重是常规
+            // （v18 把加粗开关并成三档字重），所以 sub-bold 仍是 no。
             var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
 
             Assert.Equal("50", options["sub-font-size"]);
-            Assert.Equal("no", options["sub-bold"], "v13 起出厂不加粗：整套默认外观是他定的，粗体不在其中");
+            Assert.Equal("no", options["sub-bold"], "出厂字重是常规：sub-bold 只有到「粗」那一档才发 yes");
             Assert.Equal("0.5", options["sub-border-size"]);
             Assert.Equal("0.000/0.000/0.000/1.000", options["sub-border-color"]);
             Assert.Equal("0.5", options["sub-shadow-offset"]);
-            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Noto Sans CJK SC（v17 起的默认，随程序走）");
+            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Microsoft YaHei（v18 起的默认，系统自带、不打包）");
             Assert.False(options.ContainsKey("sub-codepage"),
                 "出厂是自动识别编码：写死 gb18030 会把 Big5 的繁体字幕读成乱码");
             Assert.Equal("0.000/0.000/0.000/0.600", options["sub-back-color"],
                 "出厂黑色，随 底板不透明度 60% 一起发 —— 底板关着时它就是阴影的颜色");
             Assert.False(options.ContainsKey("sub-border-style"), "出厂没有底板，跟以前看到的一样");
+        });
+
+        Test("输出：三档字重落到 sub-font 与 sub-bold 上", () =>
+        {
+            // mpv 没有字重选项，字重变成「发哪个族名 + 要不要 sub-bold」（FontFamilies.ResolveWeighted，
+            // 单测在 FontTests 钉着）。这一关只确认 SubtitleAppearance 真的照它发。
+            (string Font, string Bold) Emit(int weight)
+            {
+                var options = Options(MpvOutputOptions.SubtitleAppearance(
+                    new PlaybackSettings { SubtitleFontFamily = "Microsoft YaHei", SubtitleFontWeight = weight }));
+                return (options["sub-font"], options["sub-bold"]);
+            }
+
+            Assert.Equal(("Microsoft YaHei Light", "no"), Emit(PlaybackSettings.LightSubtitleWeight), "细：族名接 Light、不加粗");
+            Assert.Equal(("Microsoft YaHei", "no"), Emit(PlaybackSettings.RegularSubtitleWeight), "常规：本体、不加粗");
+            Assert.Equal(("Microsoft YaHei", "yes"), Emit(PlaybackSettings.BoldSubtitleWeight), "粗：本体 + sub-bold");
         });
 
         Test("输出：宽画面的图形字幕才拉伸到画面", () =>

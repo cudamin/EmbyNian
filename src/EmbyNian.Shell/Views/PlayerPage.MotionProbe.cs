@@ -84,4 +84,20 @@ public sealed partial class PlayerPage
     /// 所以这里补上，否则「保留帧按画面真实比例摆放」这条修正等于没被验到。
     /// </summary>
     internal void ProbeSourceAspect(double aspect) => _videoTarget.SourceAspect = aspect;
+
+    /// <summary>
+    /// 探针专用：「mpv 说首帧已经交给视频输出」这一句的手动转交。真实那条路上它从状态快照来
+    /// （<c>OnStatusApplied</c> → <see cref="NotePictureStarted"/>），而探针自己 new 了后端、不经过
+    /// <c>PlayerViewModel</c> 那条订阅，所以由探针自己把后端读到的那一位递进来 ——
+    /// 与 <see cref="ProbeSourceAspect"/> 同一个理由。
+    /// </summary>
+    internal void ProbePictureStarted() => NotePictureStarted();
+
+    /// <summary>
+    /// 遮罩那一场的三样读数，专给「加载遮罩揭得早不早」用：屏幕底下有没有真画面、遮罩这一刻的不透明度、
+    /// 以及这一场已经等了多少毫秒。判据是「<c>HasPicture</c> 为假的那一段里 <c>Opacity</c> 必须一直是 1」
+    /// —— 遮罩还在等首帧就先淡下去，用户看到的就是背景图与正片之间那段黑。
+    /// </summary>
+    internal (bool HasPicture, double Opacity, bool ContentReady) CoverProbeState =>
+        (_videoTarget.HasPicture, Cover.Opacity, _videoTarget.IsContentReady);
 }

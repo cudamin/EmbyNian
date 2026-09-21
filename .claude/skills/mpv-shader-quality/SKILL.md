@@ -13,7 +13,7 @@ Techniques and traps for the shader / 画质档位 side of the player, and the l
 2. `src/EmbyNian.Core/Mpv/` — `UpscaleTier.cs`, `ShaderGroup.cs`, `ShaderGroupCatalog.cs`, `ShaderChainRules.cs`, `ShaderLibrary.cs`, `ShaderSwitch.cs`. The live model. Type and member names in this skill may be stale; the code wins.
 3. `画质档位重构-任务书.md` at the repo root — the decisions behind the current shape, plus what changed from the earlier plan.
 
-**The standing rules are in `CLAUDE.md`, which is loaded whenever this skill is, and it outranks this file on every conflict** — the prime directive, the four gates, no real playback while verifying, credentials. `PROGRESS.md`'s 在途工作 section says what the current phase is about. Playback itself is the `embynian-playback` skill; the gate procedure is `embynian-verification`.
+**The current policy is in [CLAUDE.md](../../../CLAUDE.md)**: verification gates, playback authorization and probe coverage, credentials, and upgrades. This skill adds shader-specific measurements, not a second policy. `PROGRESS.md` records current work and earlier measurements; playback is `embynian-playback`, evidence is `embynian-verification`.
 
 **There are no named 配置组 any more.** Until 2026-09-03 there were five hand-named groups picked by 片源分辨率. Now a `ShaderGroup` is *one cell of the 档位表*: `live|anime` × scale tier, with 显卡档 selecting a different chain behind the same id. So "make a new group" is really one of three different jobs — swapping a shader inside a cell (the usual one), bringing in a file and deciding which cells it belongs in, or letting the user assemble and save a chain of his own, which **does not exist**: that is a feature request, not an edit.
 
@@ -25,7 +25,7 @@ Techniques and traps for the shader / 画质档位 side of the player, and the l
 4. **Its prerequisites travel with it.** Chain options are derived from the chain in the catalog rather than written per cell, so teach the derivation once instead of copying options into every cell.
 5. **Two lists must not drift**: the csproj copy list and the C# table. A test pins them and names the offending file when it fails.
 6. **New mpv option → `NeutralOptions` entry + the both-directions round-trip test.** No exceptions; see the traps below.
-7. **Four gates, then eyes.** Gates green first; then A/B on screen with the chain readout visible. You cannot judge the picture — he can.
+7. **Run the applicable gates from CLAUDE.md, then inspect the permitted local render.** An A/B needs a visible chain readout, so the user can judge the picture while the assistant verifies which processing actually ran.
 
 ## Never judge a shader by its filename
 
@@ -64,19 +64,19 @@ Factor = actual render-target height ÷ source height. **Output means the render
 - **The UI lying.** Quality presets and chains both wrote `scale`/`cscale`/`dscale`; the chain is applied last, so the chain always won while the settings page kept displaying the preset. Whenever two layers can write the same mpv option, one of them must stop, and a test should assert what the renderer actually ends up with rather than what the decision layer intended.
 - **着色器 is off out of the box and 画质预设 is not its sub-option** (both the user's call, 2026-09-05). So 画质预设 is the first row of the 画质与着色器 card, above 启用着色器, and it goes out as a `profile=` on every launch whichever way that switch is set — a contract test pins exactly that. Don't make the preset conditional on a chain existing, and don't reorder the card back.
 
-## Inspecting a chain without playing anything real
+## Inspecting a permitted local render
 
-Never verify this against the live Emby server — `CLAUDE.md` says why. Use the external `mpv.exe` backend with a **local file** instead:
+The following measurements apply to an isolated local-file run permitted by CLAUDE.md, not to the live Emby account. An external-player diagnostic must establish equivalent local-file and no-server isolation before use; these techniques are not an additional authorization. The integrated probes do not certify the external or standalone pipeline.
 
 - mpv's stats page lists every pass with its output size. That answers "is this shader running at all", "at what size" and "how expensive is it" directly. If you ever need a cost number, use measured pass times; don't invent cost tiers.
 - `screenshot window` captures the rendered result including shaders, so an A/B is two PNGs.
 - `--msg-level=vo/gpu=v` shows hook resolution and shader compile failures.
 - **Know what the fixture actually is before reading anything into a shot.** The `ffmpeg-probe` skill (user scope, `py <script>` — see `CLAUDE.md`) reads bit depth, chroma subsampling and HDR side data out of a file in one command, and `ffmpeg-hdr-color` covers PQ/HLG and tone mapping; a chroma-reconstruction or deband A/B against a source whose subsampling or transfer you guessed at proves nothing.
 
-Whether the picture actually looks better is the user's call, not yours — every real defect in this area was caught by him looking at the screen. Ship a switchable A/B plus an on-screen readout of which chain is live, then ask him.
+The user judges whether the picture is preferable; the assistant verifies that the intended chain ran and that the comparison used equivalent source, geometry and output conditions. Provide a switchable A/B with a visible chain readout rather than treating passing rules as proof of better image quality.
 
 ## Upstream
 
 ArtCNN (Artoriuz, MIT) and the igv / agyild gists are maintained; Anime4K stopped in 2021 but its multi-step Mode A is still useful at large factors. ravu (bjin/mpv-prescalers, LGPL) ships `.hook`, not `.glsl` — keep upstream filenames so the next update can be diffed, and prefer the `-ar` anti-ringing variants. ArtCNN's `Chroma` models are ONNX-only, so GLSL chroma reconstruction means CfL. One shipped file already needs a local `#define` re-applied on every update, which is why the README records local edits per file.
 
-Shader size is not a constraint in this project: the publish directory is around 300 MB and `libmpv-2.dll` alone is 117 MB. Never argue for dropping a capability on file-size grounds.
+Shader size alone is not a reason to drop a useful capability. Measure the current payload when it matters; dependency and payload trade-offs follow CLAUDE.md rather than a stale size estimate.

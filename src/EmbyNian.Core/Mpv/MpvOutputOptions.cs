@@ -683,7 +683,11 @@ public static class MpvOutputOptions
         // ASS/SSA subtitle at all.
         Add(options, "sub-ass-override", subtitles.SubtitleAssOverride);
 
-        Add(options, "sub-font", FontFamilies.Resolve(subtitles.SubtitleFontFamily));
+        // 字幕字体 and 字重 are one decision to mpv: the weight has no option of its own, so it is folded
+        // into which family name goes out and whether sub-bold rides along. One writer for both — see
+        // FontFamilies.ResolveWeighted.
+        var (subFont, bold) = FontFamilies.ResolveWeighted(subtitles.SubtitleFontFamily, subtitles.SubtitleFontWeight);
+        Add(options, "sub-font", subFont);
 
         if (subtitles.SubtitleFontSize > 0)
             Add(options, "sub-font-size", subtitles.SubtitleFontSize.ToString(CultureInfo.InvariantCulture));
@@ -696,7 +700,7 @@ public static class MpvOutputOptions
                 (subtitles.SubtitleScalePercent / 100.0).ToString("0.##", CultureInfo.InvariantCulture));
         }
 
-        Add(options, "sub-bold", subtitles.SubtitleBold ? "yes" : Off);
+        Add(options, "sub-bold", bold ? "yes" : Off);
         Add(options, "sub-color", ToMpvColor(subtitles.SubtitleColor, 100));
         Add(options, "sub-border-size", subtitles.SubtitleBorderSize);
         Add(options, "sub-border-color", ToMpvColor(subtitles.SubtitleBorderColor, 100));

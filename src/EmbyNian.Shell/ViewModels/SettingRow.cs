@@ -902,8 +902,8 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
     [
         .. Model.Layers.Select(layer => new PreviewLayer(
             layer.X, layer.Y, BrushFor(layer.Color, layer.Opacity),
-            Model.Text, FontFamilyValue, Model.FontSize, Weight(Model.Bold))),
-        new(0, 0, BrushFor(Model.TextColor, 1), Model.Text, FontFamilyValue, Model.FontSize, Weight(Model.Bold))
+            Model.Text, FontFamilyValue, Model.FontSize, Weight(Model.Weight))),
+        new(0, 0, BrushFor(Model.TextColor, 1), Model.Text, FontFamilyValue, Model.FontSize, Weight(Model.Weight))
     ];
 
     private static Brush BrushFor(string color, double opacity)
@@ -917,7 +917,9 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
         return new SolidColorBrush(Windows.UI.Color.FromArgb((byte)Math.Round(opacity * 255), r, g, b));
     }
 
-    private static FontWeight Weight(bool bold) => new() { Weight = (ushort)(bold ? 700 : 400) };
+    /// <summary>字重直接映射到 WinUI 的 <see cref="FontWeight"/>：预览用应用自己的文字栈，300/400/700
+    /// 就是雅黑的 Light/常规/粗。这只是屏上那条示例的近似，libass 那套字体匹配不在这里。</summary>
+    private static FontWeight Weight(int weight) => new() { Weight = (ushort)weight };
 
     /// <summary>
     /// 自检：改设置 → 重画这根线通不通。就地造一个假行、拿着一份假设置拨三下（同
@@ -928,7 +930,7 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
     {
         var subtitles = new PlaybackSettings
         {
-            SubtitleBold = true,
+            SubtitleFontWeight = PlaybackSettings.BoldSubtitleWeight,
             SubtitleColor = "#AC5D5D",
             SubtitleBorderSize = "3",
             SubtitleBorderColor = "#000000",
@@ -941,7 +943,7 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
         var drawn = row.Model;
 
         // 出厂那张：描边 3 换成 3.9 像素的一圈八份，阴影 1 换成 1.3 像素的一份，底板关着 —— 共九层。
-        var initial = drawn.Bold && drawn.TextColor == "#AC5D5D" && !drawn.Plate
+        var initial = drawn.Weight == PlaybackSettings.BoldSubtitleWeight && drawn.TextColor == "#AC5D5D" && !drawn.Plate
             && drawn.Layers.Count == 9
             && Math.Abs(drawn.Layers[0].X - 1.3) < 0.001 && drawn.Layers[0].Color == "#123456"
             && drawn.Layers[0].Opacity > 0.39 && drawn.Layers[0].Opacity < 0.41

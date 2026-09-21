@@ -302,6 +302,17 @@ public sealed partial class DetailPage : Page, IShellContent
     }
 
     /// <summary>
+    /// 这一页正文滚到了哪里。给自检读「播放回来那一趟有没有把页面自己滚下去」用。
+    /// <para>
+    /// 这一位是必需的，因为「页面滚在 0」不再是这一页该有的样子：走到播放回来那一步之前，自检已经自己滚过这一页
+    /// （媒体信息与页尾横幅都在折页底下），而 2026-09-21 起播放回来走的是原地重读、不再重新导航 —— 旧那一版
+    /// 顺带把滚动位置清成 0，于是同一条读得出的 <c>0</c> 既可能是「没人滚过」，也可能是「重新装了一页」。只有
+    /// 「回来前 → 回来后」这一对才说明是那一趟干的。
+    /// </para>
+    /// </summary>
+    internal double BodyScrollOffset => Body.VerticalOffset;
+
+    /// <summary>
     /// 自检：从播放回来那一趟走完之后，这一页还是刚打开的样子 —— 「点击开始播放后点击左上方的返回，集列表会跑到
     /// 下方去」。
     /// <para>
@@ -313,17 +324,20 @@ public sealed partial class DetailPage : Page, IShellContent
     /// <para>
     /// 两句话，各对一种屏上看得见、别的读数一条都不会响的坏法。那一带集得是正文那张纸的第一块
     /// （<see cref="PlaceEpisodes"/>）：它掉到纸的最后、也就是被撑满第一屏的尾部之后时，屏上就是「集列表跑到下方
-    /// 去了」。页面没有自己滚下去：滚下去那一版头图那一叠字被切在视口上沿外面，而屏上看着像「这一页的头图怎么
-    /// 没了」。
+    /// 去了」。这一趟回来自己不许把页面滚下去：滚下去那一版头图那一叠字被切在视口上沿外面，而屏上看着像「这一页的头图
+    /// 怎么没了」。
+    /// <para>
+    /// 第二句从 2026-09-21 起问的是<em>差值</em>（<paramref name="scrollBefore"/> → 现在），不是「滚在 0」：
+    /// 播放回来不再重新导航，这一页会留着自检自己滚过的位置，而那与「这一趟把页面滚了」是两回事。
     /// </para>
     /// </summary>
-    internal (bool Ok, string Detail) ReturnRead()
+    internal (bool Ok, string Detail) ReturnRead(double scrollBefore, double afterRefresh, double afterHide)
     {
         var host = BodySheet.Children.IndexOf(EpisodePanel);
         var where = host == 0 ? "纸上第一块" : host > 0 ? $"纸上第 {host + 1} 块" : "纸上没有它";
         var offset = Body.VerticalOffset;
         var placed = host == 0;
-        var top = offset < 1;
+        var top = Math.Abs(offset - scrollBefore) < 1;
 
         var at = Body.Content is UIElement content
             ? EpisodePanel.TransformToVisual(content).TransformPoint(new Point(0, 0)).Y
@@ -333,9 +347,9 @@ public sealed partial class DetailPage : Page, IShellContent
             $"{EmbyItemType.ToChinese(ViewModel.ItemType)}页，那一带集在{where}、"
                 + $"从内容 {at:0} 起；带高 {ViewModel.HeroHeight:0}、尾部 {HeroTail.ActualHeight:0}"
                 + $"（下限 {ViewModel.TailMinHeight:0}）、纸面上沿 {PaperOffset():0}、视口 {ViewModel.Viewport:0}、"
-                + $"页面滚在 {offset:0}"
+                + $"页面 {scrollBefore:0} → 刷新后 {afterRefresh:0} → 收起后 {afterHide:0} → 读数 {offset:0}"
                 + (placed ? "" : "，集带没排在纸的第一块")
-                + (top ? "" : "，页面自己滚下去了"));
+                + (top ? "" : "，这一趟回来把页面滚下去了"));
     }
 
     /// <summary>

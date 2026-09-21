@@ -436,6 +436,19 @@ public readonly record struct PlayerStatus
     /// <summary>Set once mpv has the file open; before that the bar shows 「正在打开…」.</summary>
     public bool Loaded { get; init; }
 
+    /// <summary>
+    /// mpv 说这一场播放<b>真的开始了</b>：它的 <c>playback-restart</c> 事件（首帧已经交给视频输出 —— 出处与
+    /// 实测见 <see cref="PictureReveal"/>）。<b>与 <see cref="Loaded"/> 不是一回事</b>，两者之间隔着解码首帧
+    /// 与着色器编译，走网络时还隔着服务器吐第一段的时间：实测本地文件是 110ms 对 485ms，直播转码那一档
+    /// 差到秒级。「能打开」与「有画面」是两问，遮罩只该听后者。
+    /// <para>
+    /// 一旦为真就保持真 —— 它在一次播放里是单调的，下一次播放由后端换了新的会话、遮罩亮起时从头再等
+    /// （见 <c>CompositionVideoTarget.BeginPictureWait</c>）。外部 mpv.exe 那条后端没有事件通道，在它的
+    /// 「这一场起来了」那一拍直接置上，见 <c>MpvProcessBackend</c>。
+    /// </para>
+    /// </summary>
+    public bool PictureStarted { get; init; }
+
     public bool HasPosition => Position >= 0;
 
     public bool HasDuration => Duration > 0.05;
@@ -458,6 +471,7 @@ public readonly record struct PlayerStatus
         || Buffering != other.Buffering
         || Muted != other.Muted
         || Loaded != other.Loaded
+        || PictureStarted != other.PictureStarted
         || HasPosition != other.HasPosition
         || Math.Abs(Volume - other.Volume) > 0.5
         || Math.Abs(Speed - other.Speed) > 0.005

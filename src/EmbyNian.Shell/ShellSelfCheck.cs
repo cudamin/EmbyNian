@@ -260,6 +260,19 @@ internal static partial class ShellSelfCheck
     private static (string Type, bool Ok, string Detail)? _fileReturn;
 
     /// <summary>
+    /// 那一趟开始之前这一页正文滚在哪儿（<c>DetailPage.BodyScrollOffset</c>）。见 <see cref="ReturnFromPlayer"/>：
+    /// 自检自己先滚过这一页，所以「回来之后滚在 0」既不是现状、也不是这一页该有的样子。
+    /// </summary>
+    private static double _returnScrollBefore;
+
+    /// <summary>刷完数据、还没收起播放层时这一页滚在哪儿。两个数把「滚」拆成两半：刷新那一半，收起那一半。</summary>
+    private static double _returnScrollAfterRefresh;
+
+    /// <summary>收起播放层那一拍（同步读，紧挨着那两句之后）这一页滚在哪儿 —— 这一位跟上面那位一起，把「滚」拆成
+    /// 刷新、收起、后台落定三段。</summary>
+    private static double _returnScrollAfterHide;
+
+    /// <summary>
     /// How many ticks have looked at 媒体信息 and found rows still missing. <see cref="ShowInfo"/>'s scroll is
     /// a queued operation and a repeater builds its rows during the layout pass that follows, so the tick
     /// after it has sometimes laid the table out and sometimes not — a single look that finds rows missing is
@@ -687,7 +700,7 @@ internal static partial class ShellSelfCheck
 
                 if (_fileReturn is null && shell.Pages.Content is DetailPage back)
                 {
-                    var (returnOk, returnRead) = back.ReturnRead();
+                    var (returnOk, returnRead) = back.ReturnRead(_returnScrollBefore, _returnScrollAfterRefresh, _returnScrollAfterHide);
                     _fileReturn = (back.ViewModel.ItemType, returnOk, returnRead);
                 }
             }
@@ -962,32 +975,42 @@ internal static partial class ShellSelfCheck
     /// <summary>
     /// 走一遍「从播放回来」那一趟 —— 「点击开始播放后点击左上方的返回，集列表会跑到下方去」。
     /// <para>
-    /// 停止播放之后外壳按顺序做三件事：收起导航外壳（播放开始那一下做的）、照着当前页面重新导航一遍
+    /// 停止播放之后外壳按顺序做三件事：收起导航外壳（播放开始那一下做的）、把当前这一页刷新一遍
     /// （<c>PlayerViewModel</c> 停下来先喊 <c>RefreshRequested</c>，因为服务器上的已看和断点都刚变过）、再把导航
-    /// 外壳放回来（<c>LeavePlayer</c>）。要紧的是次序：那一次重新导航是在外壳还收着的时候发生的，页面于是在一棵
-    /// 量不到尺寸的树上走完 <c>OnNavigatedTo</c> —— 这正是它和「点一张卡片进来」唯一的不同。
+    /// 外壳放回来（<c>LeavePlayer</c>）。要紧的是次序：那一次刷新是在外壳还收着的时候发生的，页面于是在一棵量不到
+    /// 尺寸的树上被重新读了一遍条目 —— 这正是它和「点一张卡片进来」唯一的不同。
+    /// <para>
+    /// 2026-09-21 起那一次刷新不再重新导航（<c>ShellPage.RefreshActive</c> 改成原地重读，为了退出播放时不丢已解码
+    /// 的背景图、不闪纯色），于是这一页会留着自己这一路滚过的位置。所以读数问的是「这一趟有没有把页面滚下去」的
+    /// 差值，不是「滚在 0」，见 <c>DetailPage.ReturnRead</c>。
     /// </para>
     /// <para>
     /// 不放片子：真放一次会往用户自己的服务器上写已看和断点（见 <c>CLAUDE.md</c>「验证时不要真实播放」），而这三步
     /// 一个都不碰播放。播放层自己摆上来并接过焦点那两句照旧走 —— 那是 <c>EnterPlayer</c> 做的，而收起它的时候框架
     /// 要把焦点挪给别人，挪到哪儿就把哪儿滚进视口，也就是用户看见的另一半（页面自己滚下去）。读数在下一拍取
-    /// （<see cref="_fileReturn"/>）：重新导航之后那一页要重新读一趟条目。
+    /// （<see cref="_fileReturn"/>）。
     /// </para>
     /// </summary>
     private static bool ReturnFromPlayer(ShellPage shell)
     {
-        if (_returned || shell.Pages.Content is not DetailPage) return false;
+        if (_returned || shell.Pages.Content is not DetailPage back) return false;
 
         _returned = true;
+
+        // 这一趟开始前的位置。走完三步之后再读的是绝对值，而自检为了让媒体信息与页尾横幅进视口，早就把这一页自己
+        // 滚过了 —— 只有这两个数之差才说明是这一趟干的（见 DetailPage.ReturnRead）。
+        _returnScrollBefore = back.BodyScrollOffset;
 
         shell.PlayerRoot.Visibility = Visibility.Visible;
         shell.PlayerRoot.Focus(FocusState.Programmatic);
         shell.ShowPlayer(true);
 
         shell.RefreshActive();
+        _returnScrollAfterRefresh = back.BodyScrollOffset;
 
         shell.PlayerRoot.Visibility = Visibility.Collapsed;
         shell.ShowPlayer(false);
+        _returnScrollAfterHide = back.BodyScrollOffset;
         return true;
     }
 

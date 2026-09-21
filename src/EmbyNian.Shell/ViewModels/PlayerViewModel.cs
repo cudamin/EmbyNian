@@ -142,6 +142,22 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>See the class remarks: the reason the player survives the seam between two episodes.</summary>
     private int _playerHold;
 
+    /// <summary>
+    /// 这是第几场「开始播放」。每进一次 <c>PlayerViewModel.Transport.StartPlaybackAsync</c> 就加一，那一次调用
+    /// 自己记着自己的号，收尾时要开口之前先问一句「我还是最新那一场吗」。
+    /// <para>
+    /// 换集、换版、挂着片子再点一部，都是**把上一场停掉、再开下一场**：上一场那条 await 返回的时候，下一场
+    /// 往往已经在开了。它若照样弹一句「播放已停止」、照样让主页重新装货，屏上就是一句假话，主页还白装一次货 ——
+    /// 2026-09-21「换版本后界面卡死」就是这一句把主页带进了重排暴走（见 <c>HomePage.UpdateLibraryOverlay</c>）。
+    /// </para>
+    /// <para>
+    /// 不拿 <see cref="_generation"/> 顶这一位：那是「这个回答属于哪一场」，由新一场被宣布时（<c>RaiseNowPlaying</c>）
+    /// 推进 —— 实测旧一场收尾时新一场的文件还没开（日志里「播放已停止」早于「开始播放」150 毫秒），那一刻
+    /// <see cref="_generation"/> 还是旧数，判不出来。这一位在调用入口同步推进，早于停旧那一刀，判断才成立。
+    /// </para>
+    /// </summary>
+    private int _playbackAttempt;
+
     /// <summary>从点下播放到收场；进场淡入完成那一拍的换手（收浏览层＋自动全屏）只认它 —— 工具预览不持它，不跳窗。</summary>
     internal bool PlaybackLifecycleActive => _playerHold > 0;
 
@@ -402,6 +418,11 @@ public sealed partial class PlayerViewModel : ObservableObject
 
     /// <summary>Put the window back: fullscreen left, 置顶 dropped, cursor shown, shell returned.</summary>
     internal event Action? PlayerHidden;
+
+    /// <summary>停止后端前，先让浏览页真正接住画面；独占播放没有附加页面，不需要这一步。</summary>
+    internal Func<Task>? PrepareStopAsync { get; set; }
+
+    private Task _stopTask = Task.CompletedTask;
 
     /// <summary>A new file is on screen: the chrome starts its countdown from now.</summary>
     internal event Action? PlaybackStarted;

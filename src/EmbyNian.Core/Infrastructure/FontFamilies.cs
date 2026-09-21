@@ -13,46 +13,34 @@ namespace EmbyNian.Infrastructure;
 public static class FontFamilies
 {
     /// <summary>
-    /// Fallback family: Noto Sans CJK SC — 「默认字体和当前字体改用Noto Sans CJK SC，这个字体要内置到
-    /// 程序里」 (2026-09-21).
+    /// Fallback family: Microsoft YaHei — 「不要放字体进去，默认就用雅黑」 (2026-09-21).
     /// <para>
-    /// It answers for an empty setting because it travels with the program: the file rides in
-    /// assets/fonts and mpv is handed that folder as <c>sub-fonts-dir</c> at every launch, so the family
-    /// resolves on a machine that never installed it. That is the same argument 方正中等线简体 had, and
-    /// the difference is which font was asked for: 方正 shipped because 「字幕默认用方正中等线简体」 said
-    /// so (v12), Microsoft YaHei took the seat at v14 (「默认字体改为Microsoft YaHei」) for the opposite
-    /// reason — every Windows box has it — and this one is the family the reference player's own
-    /// mpv.conf names (<c>sub-font="Noto Sans CJK SC"</c>).
+    /// It answers for an empty setting because <b>every Windows install has it</b>, so nothing has to be
+    /// shipped and the family always resolves. That is the opposite argument to the one that briefly ran
+    /// v17: for one day the default was a bundled Noto Sans CJK SC <em>variable</em> font, and its default
+    /// instance was Thin (weight 100) — which is why subtitles rendered far thinner than the reference
+    /// player until this reverted it. YaHei is a normal weight and its Light / Bold faces
+    /// (<c>msyhl.ttc</c> / <c>msyhbd.ttc</c>) are what <see cref="ResolveWeighted"/> reaches for the 细 / 粗
+    /// steps — again, no bundling.
     /// </para>
     /// <para>
-    /// <b>What is bundled is the single-face <c>NotoSansCJKsc-VF.ttf</c>, not the <c>.ttc</c> collection
-    /// the reference project ships.</b> Measured 2026-09-21: libass's <c>process_fontdata</c> walks
-    /// <c>face_index</c> from 0 to <c>face-&gt;num_faces</c> and registers <em>every</em> face of a file as
-    /// a family of its own (the reason a <c>.ttc</c> works in <c>~/.config/mpv/fonts</c> on Linux — the
-    /// directory there goes through fontconfig, which does the same thing). Both Noto CJK collections hold
-    /// ten faces each: Noto Sans CJK SC/TC/JP/KR/HK plus the matching five of Noto Sans <b>Mono</b> CJK.
-    /// Dropping the collection in would therefore put ten families into the 字体 list where one was asked
-    /// for, and the SC family would arrive with four sibling variants a user cannot tell apart by name.
-    /// The VF file answers to exactly one family name and carries the whole weight axis, which is also
-    /// what makes 字幕加粗 work without a second file.
-    /// </para>
-    /// <para>
-    /// Previous occupants stay bundled and selectable; they just no longer answer for 「never picked」.
-    /// A family mpv cannot find anywhere degrades to its own fallback, which on CJK text is how tofu
-    /// happens — the reason this has to be a family the shipped directory actually contains.
+    /// 方正中等线简体 stays bundled and selectable; it just no longer answers for 「never picked」. A
+    /// family mpv cannot find anywhere degrades to its own fallback, which on CJK text is how tofu
+    /// happens — the reason this has to be a family every machine actually has.
     /// </para>
     /// </summary>
-    public const string Default = "Noto Sans CJK SC";
+    public const string Default = "Microsoft YaHei";
 
     private static readonly Dictionary<string, string> ByFileName = new(StringComparer.OrdinalIgnoreCase)
     {
-        // The bundled families first, so a stored path to one of them maps back to the family this
-        // client ships. Noto Sans CJK rides as one single-face variable file (see Default's remarks for
-        // why the .ttc collection the reference project uses is not what is bundled) — so unlike the
-        // weight-indexed .ttc names below, this one file is the whole family.
+        // 方正中等线简体 is the one font this client still bundles, so a stored path to it maps back to
+        // the family. Everything else here is a courtesy for a hand-typed path or a settings file from an
+        // older build: the file may sit in C:\Windows\Fonts, and mapping its name to the family it stands
+        // for is better than passing a path mpv would ignore. Noto Sans CJK is no longer bundled (v18,
+        // 「不要放字体进去」) but its names stay mapped for exactly that reason.
+        ["方正中等线简体.ttf"] = "方正中等线简体",
+        ["fzzhongdengxian-z07s.ttf"] = "方正中等线简体",
         ["notosanscjksc-vf.ttf"] = "Noto Sans CJK SC",
-        // The collection names stay mapped anyway: a settings file from a build that bundled them, or a
-        // hand-typed path to the copy in C:\Windows\Fonts, still resolves to the family it stands for.
         ["notosanscjk-regular.ttc"] = "Noto Sans CJK SC",
         ["notosanscjk-bold.ttc"] = "Noto Sans CJK SC",
         ["notosanscjk-light.ttc"] = "Noto Sans CJK SC",
@@ -60,11 +48,8 @@ public static class FontFamilies
         ["notosanscjk-demilight.ttc"] = "Noto Sans CJK SC",
         ["notosanscjk-thin.ttc"] = "Noto Sans CJK SC",
         ["notosanscjk-black.ttc"] = "Noto Sans CJK SC",
-        ["notosanscjksc-vf.ttf"] = "Noto Sans CJK SC",
         ["notosanscjksc-regular.otf"] = "Noto Sans CJK SC",
         ["notosanscjksc-bold.otf"] = "Noto Sans CJK SC",
-        ["方正中等线简体.ttf"] = "方正中等线简体",
-        ["fzzhongdengxian-z07s.ttf"] = "方正中等线简体",
         ["msyh.ttc"] = "Microsoft YaHei",
         ["msyh.ttf"] = "Microsoft YaHei",
         ["msyhbd.ttc"] = "Microsoft YaHei",
@@ -158,5 +143,43 @@ public static class FontFamilies
         }
 
         return value;
+    }
+
+    /// <summary>
+    /// The <c>sub-font</c> family string and the <c>sub-bold</c> flag for a chosen family at a chosen
+    /// 字重. mpv has no numeric weight option (measured 2026-09-06: <c>sub-font-weight</c> does not exist),
+    /// so a weight is realised here, at the level libass can act on:
+    /// <list type="bullet">
+    /// <item>细 (≤ <see cref="Configuration.PlaybackSettings.LightSubtitleWeight"/>): the family's Light sibling
+    /// (「Microsoft YaHei」 → 「Microsoft YaHei Light」). A family without a Light face falls back to itself,
+    /// so 细 is a no-op there rather than tofu — libass matches by name and keeps the base when the light
+    /// name resolves nowhere.</item>
+    /// <item>常规: the family as-is, no bold.</item>
+    /// <item>粗 (≥ <see cref="Configuration.PlaybackSettings.BoldSubtitleWeight"/>): the family plus
+    /// <c>sub-bold=yes</c>, which uses a real bold face when the family has one (YaHei does) and libass's
+    /// synthetic emboldening otherwise — the exact behaviour the old 加粗 toggle had.</item>
+    /// </list>
+    /// Measured 2026-09-21 against the shipped libmpv: Microsoft YaHei Light / Regular / Bold render as a
+    /// clean light→heavy ladder, and the reason this is a family-level trick rather than an option is that
+    /// the variable-font route (a single VF driven by name) came out non-monotonic on this build.
+    /// </summary>
+    public static (string Font, bool Bold) ResolveWeighted(string? configured, int weight)
+    {
+        var family = Resolve(configured);
+        var w = Configuration.PlaybackSettings.ClampWeight(weight);
+
+        if (w >= Configuration.PlaybackSettings.BoldSubtitleWeight) return (family, true);
+
+        if (w <= Configuration.PlaybackSettings.LightSubtitleWeight)
+        {
+            // Do not stack 「 Light」 onto a family that already names it, or a picked
+            // 「Microsoft YaHei Light」 at 细 would ask mpv for 「... Light Light」.
+            var light = family.EndsWith(" Light", StringComparison.OrdinalIgnoreCase)
+                ? family
+                : family + " Light";
+            return (light, false);
+        }
+
+        return (family, false);
     }
 }

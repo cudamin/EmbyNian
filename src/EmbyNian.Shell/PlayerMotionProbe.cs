@@ -125,7 +125,7 @@ internal static class PlayerMotionProbe
             // new 了后端、绕过了那个入口，所以补上 —— 否则「保留帧按画面真实比例摆放」那条修正
             // 在探针里等于没验。素材是 16:9。
             page.ProbeSourceAspect(16d / 9d);
-            handle = await backend.StartAsync(new PlaybackRequest
+            var request = new PlaybackRequest
             {
                 MediaUrl = media,
                 Title = "本地动画验证",
@@ -137,12 +137,68 @@ internal static class PlayerMotionProbe
                     new("access-references", "no"), new("load-unsafe-playlists", "no"),
                     new("demuxer-lavf-o", "protocol_whitelist=file")
                 ]
-            }, token);
+            };
+            // 2026-09-21 用户报「背景图 → 一段黑屏 → 正片」：遮罩揭得比首帧早。判据是
+            // 「屏幕底下还没有真画面（HasPicture 为假）的那几拍里，遮罩必须一直是不透明的」——
+            // 旧代码在 file-loaded 那一拍就揭，而首帧在几百毫秒之后，那一段里遮罩已经淡到 0。
+            // 这里只读不写：HasPicture 由后端真实的那一位（mpv 的 playback-restart）驱动。
+            var coverWatch = window.Content!.DispatcherQueue.CreateTimer();
+            coverWatch.Interval = TimeSpan.FromMilliseconds(16);
+            var coverTicks = 0;
+            var earlyFades = 0;
+            var dimmest = 1d;
+            var firstPictureTick = -1;
+            coverWatch.Tick += (_, _) =>
+            {
+                if (!page.PlayerVisible) return;
+                var state = page.CoverProbeState;
+                coverTicks++;
+                if (state.HasPicture)
+                {
+                    if (firstPictureTick < 0) firstPictureTick = coverTicks;
+                    return;
+                }
+                if (state.Opacity < 0.99) earlyFades++;
+                dimmest = Math.Min(dimmest, state.Opacity);
+            };
+            coverWatch.Start();
+
+            handle = await backend.StartAsync(request, token);
             var control = (IPlayerControl)handle;
-            await Until(() => control.Status.Loaded && surface.IsContentReady, "实际视频缓冲尺寸追上宿主");
-            Write($"缓冲={surface.AttachedContentSize}，宿主={surface.Size}");
+
+            // 真实那一路 VM 的规矩就是这一句：file-loaded 且不在缓冲，就把遮罩交出去（HideCover → CoverUp=false），
+            // 什么时候真的淡走则由页面按「屏幕底下有没有真画面」定。探针照这条走，验的才是用户看到的那条路。
+            await Until(() => control.Status.Loaded, "file-loaded");
             page.ViewModel.CoverUp = false;
-            await Task.Delay(350, token);
+
+            var waited = 0;
+            var signalled = false;
+            while (waited < 4000 && !(surface.HasPicture && surface.IsContentReady))
+            {
+                // 「首帧已经交给视频输出」这句从真实后端读（它由 mpv 的 playback-restart 填），再手动递给页面 ——
+                // 探针自己 new 了后端，绕过了 PlayerViewModel 那条状态订阅（真实那条路见 OnStatusApplied）。
+                if (!signalled && control.Status.PictureStarted)
+                {
+                    signalled = true;
+                    page.ProbePictureStarted();
+                    Write($"mpv 报告首帧已交给视频输出（已装载={control.Status.Loaded}）");
+                }
+                await Task.Delay(50, token);
+                waited += 50;
+                if (waited % 500 == 0)
+                    Write($"等首帧：HasPicture={surface.HasPicture}，押过帧={surface.PresentsSinceArm}，"
+                        + $"挂链={surface.HasAttachedVisual}，缓冲={surface.AttachedContentSize}，宿主={surface.Size}，"
+                        + $"缓冲已追上宿主={surface.IsContentReady}");
+            }
+            Require(signalled, "mpv 报告首帧已交给视频输出");
+            Require(surface.HasPicture && surface.IsContentReady, "屏幕底下有真画面且缓冲追上宿主");
+            Write($"首帧时序：缓冲={surface.AttachedContentSize}，宿主={surface.Size}");
+
+            await Task.Delay(320, token);
+            coverWatch.Stop();
+            Write($"遮罩时序：揭遮罩之后取样 {coverTicks} 拍，首帧落在第 {firstPictureTick} 拍；"
+                + $"「还没画面就先淡了」{earlyFades} 拍（最低不透明度 {dimmest:0.###}）");
+            Require(earlyFades == 0, "遮罩不许在首帧之前开始淡出（背景图与正片之间那段黑屏）");
             Require(page.MotionProbeState.CoverHidden, "就绪后加载遮罩完全退场");
 
             foreach (var stage in new[] { "最大化", "还原", "最大化", "还原" })
@@ -544,6 +600,49 @@ internal static class PlayerMotionProbe
             Require(!window.Fullscreen && !page.PlayerVisible && page.MotionProbeState.Identity,
                 "自动全屏进场的退场完整，回到窗口化");
             services.GetRequiredService<AppSettings>().Playback.AutoFullscreenOnPlayback = false;
+
+            // 隔离进程未登录，返回目标是登录页；用本地背景标记它，不加载任何服务器图片。
+            shell.SignInRoot.Background = new ImageBrush
+            {
+                ImageSource = page.ViewModel.CoverBackdrop,
+                Stretch = Stretch.UniformToFill
+            };
+            foreach (var fullscreen in new[] { false, true })
+            {
+                Write($"阶段：{(fullscreen ? "全屏" : "窗口化")}关闭前直接返回浏览页");
+                page.ViewModel.CoverUp = true;
+                page.BeginMotionProbe(fullscreen);
+                await page.WindowChange;
+                await Task.Delay(400, token);
+                handle = await backend.StartAsync(request, token);
+                control = (IPlayerControl)handle;
+                await Until(() => control.Status.PictureStarted, "关闭回归的本地视频首帧已上屏");
+                page.ProbePictureStarted();
+                await Until(() => surface.HasPicture && surface.IsContentReady, "关闭回归的本地视频已显示");
+                page.ViewModel.CoverUp = false;
+                await Task.Delay(350, token);
+
+                Require(page.ViewModel.PrepareStopAsync is not null, "停止前的页面交接已经接线");
+                await page.ViewModel.PrepareStopAsync!();
+                Require(control.Status.Loaded, "先返回浏览页时后端仍有视频，尚未发送停止");
+                Require(!page.PlayerVisible && shell.SignInVisible && !window.PlaybackTitleBar && !window.Fullscreen,
+                    "停止前浏览页已显示，播放器及全屏已收回");
+                Require(page.MotionProbeState.Identity && !page.MotionProbeState.Animating,
+                    "直接返回没有残留缩放或退场计时器");
+                Native.GetWindowRect(window.Handle, out restored);
+                Require(restored.Left == browse.Left && restored.Top == browse.Top
+                    && restored.Width == browse.Width && restored.Height == browse.Height,
+                    "直接返回恢复原浏览窗口");
+
+                await handle.StopAsync();
+                await handle.DisposeAsync();
+                handle = null;
+                // 超过旧留帧的 1200ms 保险丝，模拟停止上报慢；浏览页不能因此退回纯色播放层。
+                await Task.Delay(1400, token);
+                page.EndMotionProbe();
+                Require(!page.PlayerVisible && shell.SignInVisible && !surface.IsRetained,
+                    "后端拆除和迟到的退出通知不会重新盖住浏览页");
+            }
             ExitCode = 0;
             Write("结果：全部通过");
 

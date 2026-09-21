@@ -303,12 +303,18 @@ public sealed class LibMpvBackend(
     /// the loop discards still costs a queue entry, a thread wakeup and a marshalled struct, and
     /// the loop reads exactly six: shutdown, log-message, end-file, file-loaded, property-change
     /// and queue-overflow. What remains — the three reply types (every call here is synchronous,
-    /// so they were never fired anyway), start-file, the two reconfigs, seek,
-    /// playback-restart and hook — was delivered only to be picked up and thrown away, so a seek
-    /// burst or a resize storm queued nothing at all.
+    /// so they were never fired anyway), start-file, the two reconfigs, seek and hook — was
+    /// delivered only to be picked up and thrown away, so a seek burst or a resize storm queued
+    /// nothing at all. <c>playback-restart</c> was in that list too until the 背景图黑屏那一天
+    /// （见 <see cref="PictureReveal"/>）：它是「首帧上屏」的唯一通知，现在由事件循环消费。
     /// <para>
     /// ClientMessage（Lua 脚本的 script-message）是这条规则的唯一条件豁免：独占模式装载 uosc 时，
     /// 它是脚本向宿主报「已就绪」和送换集请求的唯一通道，必须保留；其余播放照旧停订。
+    /// </para>
+    /// <para>
+    /// <c>playback-restart</c> 是唯一的例外，而且它必须留着：那是「首帧已经交给视频输出」的唯一通知，
+    /// 加载遮罩（背景图）揭不揭就靠它 —— 见 <see cref="PictureReveal"/>。它不在启动期成串，一次播放里
+    /// 只在起播与每次 seek 落定时各来一条。
     /// </para>
     /// <para>
     /// Deliberately before <c>mpv_initialize</c>, so nothing mpv does during startup queues either.
@@ -330,7 +336,6 @@ public sealed class LibMpvBackend(
             LibMpvNative.EventVideoReconfig,
             LibMpvNative.EventAudioReconfig,
             LibMpvNative.EventSeek,
-            LibMpvNative.EventPlaybackRestart,
             LibMpvNative.EventHook
         ];
 
@@ -752,6 +757,14 @@ internal sealed class LibMpvHandle(
 
                     Publish(_status with { Loaded = true });
                     PublishTracks();
+                    break;
+
+                case LibMpvNative.EventPlaybackRestart:
+                    // 首帧已经交给视频输出 —— 加载遮罩（背景图）唯一的揭开判据，见 PictureReveal。
+                    // mpv 在每次 seek 落定时也会补一条（那一拍画面确实已经回来了，说「播放重新开始」
+                    // 并不假），而这一位一旦为真就该保持为真：遮罩只在起播那一段等着它。
+                    Log.Debug(Category, "mpv 报告播放真的开始了（首帧已交给视频输出）");
+                    Publish(_status with { PictureStarted = true });
                     break;
 
                 case LibMpvNative.EventPropertyChange:

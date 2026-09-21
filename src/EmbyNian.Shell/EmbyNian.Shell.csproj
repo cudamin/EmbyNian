@@ -244,18 +244,12 @@
     MpvBaseline), so these render without being installed into Windows. The folder is also part of what
     FontLibrary scans, so the picker offers them with a real preview.
 
-    **Noto Sans CJK SC joined on 2026-09-21**（「默认字体和当前字体改用Noto Sans CJK SC，这个字体要内置到
-    程序里」）. One file, not the reference project's three collections: measured 2026-09-21, libass's
-    process_fontdata walks face_index up to face->num_faces and registers *every* face as its own family,
-    and each NotoSansCJK-*.ttc holds ten (CJK SC/TC/JP/KR/HK plus the matching five of Noto Sans **Mono**
-    CJK) — so a collection would put ten families into the 字体 list where one was called for, and leave
-    four un-distinguishable SC siblings beside the one that was asked for. NotoSansCJKsc-VF.ttf answers to
-    exactly 「Noto Sans CJK SC」 and carries the whole weight axis, so 设置 → 字幕 → 加粗 still works
-    without a second file. (Regular + Bold as two files was the first cut and is also fine — it is what
-    方正中等线简体's sibling would have looked like — but the VF is one copy instead of two and the name it
-    reports cannot drift from the one settings store.) The family name is what the reference project's own
-    mpv.conf names (「Noto Sans CJK SC」/「Noto Sans Mono CJK SC」，C:\Users\89400\Desktop\mpv_config-*.），
-    所以内置之后字幕与参考播放器同一个字体。
+    **No subtitle font is bundled for the default any more**（「不要放字体进去，默认就用雅黑」，2026-09-21）.
+    v17 briefly bundled NotoSansCJKsc-VF.ttf and made it the default; that variable font's default instance
+    was Thin (weight 100), which is why subtitles rendered far thinner than the reference player. v18 reverts
+    both: the default is Microsoft YaHei (every Windows install has it, normal weight, nothing to ship) and
+    the three 字重 steps (细/常规/粗) reach YaHei's Light/Regular/Bold faces — all system fonts. See
+    Core/Infrastructure/FontFamilies.ResolveWeighted.
 
     方正中等线简体 stays shipped and selectable — it just no longer answers for 「never picked」.
 

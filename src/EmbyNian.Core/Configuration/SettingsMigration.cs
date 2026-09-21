@@ -153,9 +153,10 @@ public static class SettingsMigration
         // whether the stored value is a colour at all rather than whether it is empty, because 「none」
         // only lands on empty inside Normalize, which runs after these steps. At v13 and above a stored
         // value is a decision and stays.
+        // v18 folds 加粗 into a three-step 字重, so the old bold field is gone; the weight is decided in
+        // the v18 step below. What stays here is 底板颜色, still pinned to black for a pre-v13 file.
         if (version < 13)
         {
-            if (settings.Playback.SubtitleBold) settings.Playback.SubtitleBold = false;
             if (Rgb(settings.Playback.SubtitleBackColor).Length == 0)
                 settings.Playback.SubtitleBackColor = "#000000";
         }
@@ -210,6 +211,34 @@ public static class SettingsMigration
             {
                 settings.Playback.SubtitleFontFamily = "Noto Sans CJK SC";
             }
+        }
+
+        // v18 reverts v17: the default 字幕字体 goes back to Microsoft YaHei and the bundled Noto Sans
+        // CJK SC variable font is gone (「不要放字体进去，默认就用雅黑」, 2026-09-21). v17 had briefly
+        // moved every never-picked file to that Noto, whose default instance was Thin — the reason
+        // subtitles looked far thinner than the reference player. Empty and 「Noto Sans CJK SC」 both mean
+        // 「nobody chose, or chose the font that is no longer shipped」, and both go to YaHei: a stored
+        // Noto is carried over even if it was a deliberate pick, because the file is no longer bundled and
+        // would otherwise render tofu. Microsoft YaHei / 方正 / anything else was a real choice and stays.
+        if (version < 18)
+        {
+            var storedFont = settings.Playback.SubtitleFontFamily.Trim();
+            if (storedFont.Length == 0
+                || storedFont.Equals("Noto Sans CJK SC", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Playback.SubtitleFontFamily = "Microsoft YaHei";
+            }
+
+            // 加粗 (a bool) folds into 字重 (three steps). A file that carried a real 加粗=on — which only
+            // v13+ could, since v13 forced the shipped-on default off and made a later 「on」 a decision —
+            // lands on 粗; everything else, pre-v13 included, lands on 常规. The old field is gone from
+            // the model, so it is read from the raw document rather than off `settings`.
+            var priorBold = version >= 13
+                && root.TryGetProperty("Playback", out var priorPlayback)
+                && (ReadBool(priorPlayback, "SubtitleBold") ?? false);
+            settings.Playback.SubtitleFontWeight = priorBold
+                ? PlaybackSettings.BoldSubtitleWeight
+                : PlaybackSettings.RegularSubtitleWeight;
         }
 
         settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
@@ -371,6 +400,9 @@ public static class SettingsMigration
 
         // The same rule the settings row applies as it is typed — see PlaybackSettings.ClampFontSize.
         settings.Playback.SubtitleFontSize = PlaybackSettings.ClampFontSize(settings.Playback.SubtitleFontSize);
+        // 字重 snaps to one of the three steps; a hand-edited number or a value from a build with a
+        // different scale cannot hand mpv something the row could not have produced.
+        settings.Playback.SubtitleFontWeight = PlaybackSettings.ClampWeight(settings.Playback.SubtitleFontWeight);
         settings.Video.NetworkCacheMegabytes = Math.Clamp(settings.Video.NetworkCacheMegabytes, 0, 4096);
         settings.Audio.DelayMilliseconds = Math.Clamp(settings.Audio.DelayMilliseconds, -5000, 5000);
         settings.Audio.Volume = Math.Clamp(settings.Audio.Volume, 0, AudioSettings.MaxVolume);
@@ -531,8 +563,8 @@ public static class SettingsMigration
 
         if (!root.TryGetProperty("Playback", out var stored) || stored.ValueKind != JsonValueKind.Object) return;
 
-        // v3's own default was true, so a false here was a deliberate choice and stays.
-        if (ReadBool(stored, "SubtitleBold") is null) playback.SubtitleBold = true;
+        // 加粗 is no longer a field here: from v18 the 字重 is decided in the version step, where a pre-v13
+        // file (this legacy path is one) always lands on 常规 — the same end state v13 forced 加粗 to.
 
         // 字幕字体 used to be the path of a font file, which mpv silently ignored.
         if (ReadString(stored, "SubtitleFontPath") is { Length: > 0 } fontPath)

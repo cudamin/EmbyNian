@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using EmbyNian.Configuration;
 using EmbyNian.Infrastructure;
 using static EmbyNian.Tests.TestHarness;
 
@@ -29,7 +30,58 @@ internal static class FontTests
         RegisterParser();
         RegisterCatalogue();
         RegisterSearch();
+        RegisterWeight();
         RegisterMachine();
+    }
+
+    private static void RegisterWeight()
+    {
+        // ResolveWeighted 是「字重」那三档唯一的落点：mpv 没有字重选项，所以字重变成「发哪个族名 +
+        // 要不要 sub-bold」。这条钉住三档各自发什么，尤其是 细 靠给族名接一个「 Light」——雅黑上恰好命中
+        // Microsoft YaHei Light，别的字体上 libass 找不到就退回本体（no-op，不是豆腐块）。
+        Test("字重：常规发本体、不加粗", () =>
+        {
+            var (font, bold) = FontFamilies.ResolveWeighted("Microsoft YaHei", PlaybackSettings.RegularSubtitleWeight);
+            Assert.Equal("Microsoft YaHei", font);
+            Assert.False(bold);
+        });
+
+        Test("字重：粗发本体 + sub-bold", () =>
+        {
+            var (font, bold) = FontFamilies.ResolveWeighted("Microsoft YaHei", PlaybackSettings.BoldSubtitleWeight);
+            Assert.Equal("Microsoft YaHei", font, "粗不是换族名，是让本体开 sub-bold（有真粗体就用真的）");
+            Assert.True(bold);
+        });
+
+        Test("字重：细给族名接一个「 Light」", () =>
+        {
+            var (font, bold) = FontFamilies.ResolveWeighted("Microsoft YaHei", PlaybackSettings.LightSubtitleWeight);
+            Assert.Equal("Microsoft YaHei Light", font, "雅黑上恰好命中系统自带的 Light 那一支");
+            Assert.False(bold);
+        });
+
+        Test("字重：细不会把「 Light」叠两遍", () =>
+        {
+            var (font, _) = FontFamilies.ResolveWeighted("Microsoft YaHei Light", PlaybackSettings.LightSubtitleWeight);
+            Assert.Equal("Microsoft YaHei Light", font, "本来就带 Light 的族名，细这一档不再接一个 Light");
+        });
+
+        Test("字重：空族名先兜底成默认，再按字重发", () =>
+        {
+            var (light, _) = FontFamilies.ResolveWeighted("", PlaybackSettings.LightSubtitleWeight);
+            Assert.Equal(FontFamilies.Default + " Light", light, "空值走兜底族名（雅黑），细再接 Light");
+
+            var (bold, isBold) = FontFamilies.ResolveWeighted(null, PlaybackSettings.BoldSubtitleWeight);
+            Assert.Equal(FontFamilies.Default, bold);
+            Assert.True(isBold);
+        });
+
+        Test("字重：越界的字重先吸附到最近一档", () =>
+        {
+            var (font, bold) = FontFamilies.ResolveWeighted("SimHei", 999);
+            Assert.Equal("SimHei", font, "999 吸附到粗：发本体 + sub-bold");
+            Assert.True(bold);
+        });
     }
 
     private static void RegisterParser()
@@ -212,13 +264,12 @@ internal static class FontTests
                 "每台 Windows 都有 Arial");
         });
 
-        // The bundled subtitle fonts ship with the program (assets/fonts, handed to mpv as
-        // sub-fonts-dir). Noto Sans CJK SC became the 装机默认 in v17 (2026-09-21, 「默认字体和当前字体
-        // 改用Noto Sans CJK SC，这个字体要内置到程序里」); 方正中等线简体 held it in v12 and stays
-        // bundled and selectable. The thing to assert is the shipped files themselves: each has to parse
-        // to the family the catalogue offers, or picking it from the settings page writes a font name
-        // nothing can find — and the family the client hands mpv by default has to be one of them, since
-        // it is the only reason that default renders on a machine that never installed anything.
+        // The one subtitle font still bundled (assets/fonts, handed to mpv as sub-fonts-dir) is
+        // 方正中等线简体 — it held the 装机默认 in v12 and stays selectable. **The default is no longer
+        // bundled**: v18 (「不要放字体进去，默认就用雅黑」, 2026-09-21) put Microsoft YaHei — a system
+        // font — back as the default, and dropped the thin Noto VF v17 had shipped. So the thing to assert
+        // is just that the shipped 方正 file parses to a family the catalogue can name under both its
+        // spellings; the default's rendering rides on the system font, not on this folder.
         var fontsDirectory = FindRepositoryRoot() is { } repo
             ? Path.Combine(repo, "assets", "fonts")
             : null;
@@ -232,9 +283,8 @@ internal static class FontTests
         {
             var catalogue = FontCatalogue.Scan([fontsDirectory]);
 
-            // Every shipped file parses, and no file is a family the catalogue cannot name.
-            Assert.True(catalogue.FileCount >= 2,
-                $"自带目录里应有方正与 Noto 共两个文件，只读出 {catalogue.FileCount} 个");
+            Assert.True(catalogue.FileCount >= 1,
+                $"自带目录里至少应有方正一个文件，只读出 {catalogue.FileCount} 个");
 
             foreach (var entry in catalogue.Families)
             {
@@ -244,23 +294,6 @@ internal static class FontTests
             // 方正中等线简体：中文名与英文名是同一款文件的两个名字，存哪一边都要挑得到。
             Assert.True(catalogue.Families.Any(entry => entry.AnswersTo("方正中等线简体")),
                 "自带目录里的方正没被认出来，存中文名的那份设置就挑不回这一行");
-
-            // Noto Sans CJK SC 是一支单字面可变字体（NotoSansCJKsc-VF.ttf）—— 不是参考项目那种 .ttc 集合。
-            // 2026-09-21 实测：libass 的 process_fontdata 会把文件里每一个 face 都注册成独立的族，而每支
-            // NotoSansCJK-*.ttc 有 10 个 face（CJK SC/TC/JP/KR/HK ＋ Noto Sans **Mono** CJK 同名五支），
-            // 整支塞进 sub-fonts-dir 会让字体列表凭空多出十行。所以这一关盯两件事：Noto 在列表里恰好只有
-            // 一行（多一行就说明装箱的是一支集合，或者多放了一份文件），以及那一行就是客户端的兜底族名 ——
-            // sub-fonts-dir 是那个默认唯一的落脚处。
-            var noto = catalogue.Families.Where(entry => entry.AnswersTo("Noto Sans CJK SC")).ToList();
-            Assert.Equal(1, noto.Count,
-                "Noto Sans CJK SC 在自带字体里只该有一行：装箱的是单字面 VF，不是多字面集合");
-            Assert.Equal(1, catalogue.Including("Noto Sans CJK SC").Families.Count(entry => entry.AnswersTo("Noto Sans CJK SC")),
-                "兜底族名在列表里只该有一行，不该被当成没装过的字体再补一条");
-
-            Assert.True(catalogue.Families.Any(entry => entry.AnswersTo(FontFamilies.Default)),
-                $"自带目录里没有兜底族名「{FontFamilies.Default}」，每台机器都得等它自己装");
-            Assert.True(noto[0].AnswersTo(FontFamilies.Default),
-                $"兜底族名「{FontFamilies.Default}」那一行不在自带字体里，否则拿它渲染就会落到别的字体上");
         });
     }
 

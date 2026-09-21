@@ -31,6 +31,12 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     private const int CreateSurfaceSlot = 5;
     private const int GetDescriptionSlot = 18;
 
+    /// <summary>
+    /// <c>IDXGISwapChain::GetLastPresentCount</c>（IDXGISwapChain1 继承来的那一格）：这条链被 Present 过
+    /// 几次。「挂上链」与「链里有画面」是两件事，这一支是分开它们的唯一办法 —— 见 <see cref="PictureReveal"/>。
+    /// </summary>
+    private const int GetPresentCountSlot = 17;
+
     private const int TickMilliseconds = 16;
     private const int WatchCeilingMilliseconds = 1500;
 
@@ -137,6 +143,22 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     /// <summary>保留态的保险丝起点；到点还没人来收就自己收，免得一台停摆的计时器一直跑着。</summary>
     private long _retainedWatchStarted;
 
+    /// <summary>
+    /// mpv 说过这一场播放真的开始了没有（它的 <c>playback-restart</c>，见 <see cref="PictureReveal"/>）。
+    /// 由播放页在状态那一拍转交进来；遮罩亮起时从头清过一遍。
+    /// </summary>
+    private volatile bool _pictureStarted;
+
+    /// <summary>
+    /// 遮罩亮起之后，在这条交换链上数到的 Present 次数（<c>GetLastPresentCount</c> 的增量）。
+    /// 与 <see cref="_pictureStarted"/> 一起构成 <see cref="HasPicture"/>，理由见
+    /// <see cref="PictureReveal"/>。
+    /// </summary>
+    private int _presentsSinceArm;
+
+    /// <summary>挂链那一刻这条链的 Present 计数，用来数增量。</summary>
+    private int _presentsAtAttach = -1;
+
     /// <summary>保留态最多活多久。退场是 240ms 的轨道，这里给足余量再自己收。</summary>
     private const int RetainedCeilingMilliseconds = 1200;
 
@@ -207,6 +229,54 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     internal double RasterizationScale => RasterScale();
     internal bool IsContentReady => HasAttachedVisual && VideoPresentation.Matches(
         _attachedContent.Width, _attachedContent.Height, _size.Width, _size.Height);
+
+    /// <summary>
+    /// 屏幕底下这块面上<b>已经有真画面了</b>没有 —— 加载遮罩（背景图）揭不揭就看它。
+    /// 两个前提缺一不可，判据本身在 <see cref="PictureReveal.Ready"/>，理由与实测都在那里。
+    /// </summary>
+    internal bool HasPicture => PictureReveal.Ready(
+        _pictureStarted, _attached != IntPtr.Zero, Volatile.Read(ref _presentsSinceArm));
+
+    /// <summary>
+    /// 这一场已经宣布开始、链也挂上了，但还没在这条链上数到一帧 —— 逐拍那条路要在这段里继续跑，
+    /// 见 <see cref="NotePlaybackStarted"/> 与 <see cref="OnPresentationTick"/>。
+    /// </summary>
+    private bool AwaitingPicture =>
+        _pictureStarted && _attached != IntPtr.Zero && Volatile.Read(ref _presentsSinceArm) == 0;
+
+    /// <summary>给探针读的：遮罩亮起之后在这条链上数到了几帧。</summary>
+    internal int PresentsSinceArm => Volatile.Read(ref _presentsSinceArm);
+
+    /// <summary>
+    /// 遮罩亮起（＝又要从头等一次首帧）时调用：把「有没有画面」这两个前提清零，重新数。
+    /// <para>
+    /// <b>为什么要在这一拍清，而不是等挂链/换会话时清。</b>「等首帧」这件事的起点就是遮罩亮起 —— 它由
+    /// <c>ShowCover</c> 在起播、换集、换版本这三条路的<b>最前面</b>点亮，一定早于 mpv 开文件，所以清零
+    /// 之后等到的必然是这一场的通知。反过来，靠「挂链时清」会漏掉会话交界：旧会话交还交换链那一下可以被
+    /// 合并掉（<see cref="AttachSwapChain"/> 只保留最后一条待办），而新会话的链未必是新地址，两种漏法都会
+    /// 让上一场的 <c>playback-restart</c> 直接当成这一场的答案 —— 于是遮罩又提前揭了，正是要修的那条。
+    /// </para>
+    /// </summary>
+    internal void BeginPictureWait()
+    {
+        _pictureStarted = false;
+        Interlocked.Exchange(ref _presentsSinceArm, 0);
+    }
+
+    /// <summary>
+    /// mpv 说这一场播放真的开始了（它的 <c>playback-restart</c>）。播放页在状态那一拍转交进来 ——
+    /// 它同时也是「独占那一档 mpv 自己的窗口带着画面立起来了」的答案。
+    /// <para>
+    /// <b>顺带把逐拍那条叫起来。</b>呈现计时器在这之前多半已经停了：挂链那一刻 <c>IsContentReady</c> 就为真，
+    /// 它当场收工，而「这条链被押过帧没有」只有 <see cref="RefreshPresentation"/> 读得到 —— 少了这一句，
+    /// 计数就永远停在 0，遮罩要一直等到那张 6 秒的网（2026-09-21 探针实测：`屏幕底下有真画面` 超时）。
+    /// </para>
+    /// </summary>
+    internal void NotePlaybackStarted()
+    {
+        _pictureStarted = true;
+        if (_attached != IntPtr.Zero) WatchPresentation();
+    }
 
     /// <summary>退场的最后一帧可以比 mpv 会话多活一小段；收起页面时必须放掉引用。</summary>
     internal bool RetainLastFrame
@@ -446,7 +516,9 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         if (_disposed || _visual is null || _attached == IntPtr.Zero) return;
 
         var raster = RasterScale();
-        var observed = _retained ? default : ReadContentSize(_attached);
+        var stats = _retained ? default : ReadSurfaceStats(_attached);
+        CountPresents(stats.Presents);
+        var observed = (Width: stats.Width, Height: stats.Height);
         if (observed is { Width: > 0, Height: > 0 } && observed != _attachedContent)
         {
             _attachedContent = observed;
@@ -672,7 +744,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
 
         RefreshPresentation();
         if (_disposed || _attached == IntPtr.Zero
-            || (IsContentReady && _snappedClient == default)
+            || (IsContentReady && _snappedClient == default && !AwaitingPicture)
             || _presentationClock.ElapsedMilliseconds - _watchStarted > WatchCeilingMilliseconds)
             _presentationTimer.Stop();
     }
@@ -792,6 +864,12 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         _resizePending = false;
         _snappedClient = default;
         _snappedAt = 0;
+
+        // 「有没有真画面」这一对也随这一场作废：收摊之后下一场从头等。（会话交界那一刀在
+        // BeginPictureWait —— 那一条由遮罩亮起时砍，这一条只管收摊。）
+        _pictureStarted = false;
+        Interlocked.Exchange(ref _presentsSinceArm, 0);
+        _presentsAtAttach = -1;
     }
 
     private void ReleaseVisual()
@@ -838,18 +916,47 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         SourceAspect = 0;
     }
 
-    private static (int Width, int Height) ReadContentSize(IntPtr chain)
+    /// <summary>
+    /// 这条链现在是什么尺寸、被押过几帧 —— 一次 QueryInterface 里问完（两支都在同一张表上）。
+    /// Present 计数是「有没有真画面」的唯一证据，出处与实测见 <see cref="PictureReveal"/>。
+    /// </summary>
+    private static (int Width, int Height, int Presents) ReadSurfaceStats(IntPtr chain)
     {
         if (Marshal.QueryInterface(chain, in SwapChain1Iid, out var swapChain1) < 0) return default;
         try
         {
-            var method = Marshal.GetDelegateForFunctionPointer<GetDescriptionDelegate>(
-                Marshal.ReadIntPtr(Marshal.ReadIntPtr(swapChain1), GetDescriptionSlot * IntPtr.Size));
-            return method(swapChain1, out var description) >= 0
+            var table = Marshal.ReadIntPtr(swapChain1);
+            var describe = Marshal.GetDelegateForFunctionPointer<GetDescriptionDelegate>(
+                Marshal.ReadIntPtr(table, GetDescriptionSlot * IntPtr.Size));
+            var count = Marshal.GetDelegateForFunctionPointer<GetPresentCountDelegate>(
+                Marshal.ReadIntPtr(table, GetPresentCountSlot * IntPtr.Size));
+
+            var presents = count(swapChain1, out var presentCount) >= 0 && presentCount <= int.MaxValue
+                ? (int)presentCount : -1;
+
+            return describe(swapChain1, out var description) >= 0
                 && description.Width <= int.MaxValue && description.Height <= int.MaxValue
-                ? ((int)description.Width, (int)description.Height) : default;
+                ? ((int)description.Width, (int)description.Height, presents) : (0, 0, presents);
         }
         finally { Marshal.Release(swapChain1); }
+    }
+
+    /// <summary>
+    /// 数这条链被押过几帧。第一份读数只当基准 —— <b>建链那一下 mpv 就会连押两三帧空画面</b>（实测挂链
+    /// 那一刻计数已经是 2），把基准当成「押过了」等于什么都没拦。链换了（计数比基准小）重新取基准。
+    /// </summary>
+    private void CountPresents(int presents)
+    {
+        if (presents < 0) return;
+        if (_presentsAtAttach < 0 || presents < _presentsAtAttach)
+        {
+            _presentsAtAttach = presents;
+            return;
+        }
+        if (presents == _presentsAtAttach) return;
+
+        _presentsAtAttach = presents;
+        Interlocked.Increment(ref _presentsSinceArm);
     }
 
     private static ICompositionSurface CreateSurface(Compositor compositor, IntPtr chain)
@@ -884,4 +991,8 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int CreateSurfaceDelegate(IntPtr self, IntPtr chain, out IntPtr surface);
+
+    /// <summary><c>IDXGISwapChain::GetLastPresentCount</c>：出参是这条链累计押过多少帧。</summary>
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int GetPresentCountDelegate(IntPtr self, out uint presentCount);
 }

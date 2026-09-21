@@ -526,11 +526,18 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "在字号之上再乘一次。ASS/SSA 字幕不用「强制」也认这一项，是唯一能把它们调大的旋钮。"
                     + "出厂默认 100，就是「不缩放」；想回去就拖回 100", "sub-scale"),
 
-            // 粗细做不成滑块：libmpv 的选项表整个探过一遍（artifacts/sub-probe/weight-probe.ps1，2026-09-06），
-            // 字重类只有 sub-bold 一个 yes/no 开关，sub-font-weight 根本不存在 —— 滑块底下没有连续的东西可拉，
-            // 硬做成滑块就是一个只有两档的滑块，不如开关诚实。要改成滑块形状的话是一句话的事，等他点头。
-            Toggle("字幕加粗", "只有常规和加粗两档 —— mpv 没有更细的字重可调", () => playback.SubtitleBold, Live<bool>(value => playback.SubtitleBold = value),
-                "sub-bold"),
+            // 字重三档（「默认雅黑 + 仍做三档字重」，2026-09-21）。mpv 没有 sub-font-weight（2026-09-06 探过
+            // 选项表），所以字重不是一个 mpv 选项，而是「发哪个字体族名 + 要不要开 sub-bold」——见
+            // FontFamilies.ResolveWeighted，两者一处算。选值经 Live 走，一改就把整套字幕外观重发给正在播的片子
+            // （sub-font 与 sub-bold 都在 SubtitleStyleOptions 里，一起被重推）。
+            Choice("字重",
+                [("细", PlaybackSettings.LightSubtitleWeight),
+                 ("常规", PlaybackSettings.RegularSubtitleWeight),
+                 ("粗", PlaybackSettings.BoldSubtitleWeight)],
+                () => PlaybackSettings.ClampWeight(playback.SubtitleFontWeight),
+                Live<int>(value => playback.SubtitleFontWeight = value),
+                Annotate("常规是出厂。细只对自带细体的字体有效（比如微软雅黑），别的字体上等于常规；"
+                    + "粗对谁都能加粗。mpv 没有连续字重可调，就这三档", "sub-font · sub-bold")),
             ColorRow("文字颜色", () => playback.SubtitleColor, Live<string>(value => playback.SubtitleColor = value), "sub-color",
                 "HTML 颜色代码（#RRGGBB），点色块从拾色器里挑，随便什么颜色都能给"),
             UnitSlider("描边大小", SubtitlePreviewPlan.MpvDefaultBorderSize,

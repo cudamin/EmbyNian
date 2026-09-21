@@ -483,6 +483,7 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.RefreshRequested += OnRefreshRequested;
         ViewModel.PlayerShown += EnterPlayer;
         ViewModel.PlayerHidden += LeavePlayer;
+        ViewModel.PrepareStopAsync = ReturnToBrowseBeforeStopAsync;
         ViewModel.PlaybackStarted += OnPlaybackStarted;
         ViewModel.ChaptersChanged += OnChaptersChanged;
         ViewModel.StatusApplied += OnStatusApplied;
@@ -580,6 +581,7 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.RefreshRequested -= OnRefreshRequested;
         ViewModel.PlayerShown -= EnterPlayer;
         ViewModel.PlayerHidden -= LeavePlayer;
+        ViewModel.PrepareStopAsync = null;
         ViewModel.PlaybackStarted -= OnPlaybackStarted;
         ViewModel.ChaptersChanged -= OnChaptersChanged;
         ViewModel.StatusApplied -= OnStatusApplied;
@@ -868,6 +870,10 @@ public sealed partial class PlayerPage : UserControl
     private void OnStatusApplied(PlayerStatus status)
     {
         _seekClock.DurationSeconds = status.Duration;
+
+        // 「这一场播放真的开始了」是**事件**不是状态：它一次性到，而遮罩等的正是它。放在这里转交而不是
+        // 每拍去问，是因为它来了之后才有必要唤醒那条等待 —— 之外的时候遮罩的计时器自己在数。
+        if (status.PictureStarted) NotePictureStarted();
 
         // The marks were known before the duration was, and they cannot be placed without it.
         if (Math.Abs(status.Duration - _ticksFor) > 0.001) RenderChapterTicks();

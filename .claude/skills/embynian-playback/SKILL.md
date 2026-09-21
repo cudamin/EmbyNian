@@ -1,27 +1,27 @@
 ---
 name: "embynian-playback"
-description: "EmbyNian playback: the two libmpv backends, PlaybackPlanner, progress reporting to Sessions/Playing, resume points, watched/favourite state, audio and subtitle track selection, episode navigation, chapters and skip, the player's OSD, audio output device and screenshots. Use when touching src/EmbyNian.Core/Playback, src/EmbyNian.Core/Mpv, ViewModels/PlayerViewModel.cs or Views/PlayerPage.* in the EmbyNian project (C:\\Users\\89400\\EmbyNian)."
+description: "EmbyNian playback: libmpv and external-mpv backends, integrated and standalone pipelines, playback planning and progress, resume, OSD, subtitles, audio tracks and source switching. Use when touching Core/Playback, Core/Mpv, PlayerViewModel or PlayerPage; authorization and verification policy live in CLAUDE.md."
 ---
 
 # EmbyNian — playback
 
-EmbyNian is an Emby desktop client (WinUI 3 + .NET 10, unpackaged x64, repo at `C:\Users\89400\EmbyNian`) whose playback core is **libmpv**. Earlier names EmbyGearless / EmbyMpvClient survive only in the settings-migration path in `Core/Infrastructure/AppPaths.cs`; anything calling the project by an old name is out of date.
+EmbyNian is a WinUI 3 + .NET desktop client, unpackaged and x64, with libmpv as its built-in playback core. Work from the current checkout. Earlier application names survive in settings migration; current names and paths come from the source.
 
-**The rules are in `CLAUDE.md`, which is loaded whenever this skill is, and it outranks this file on every conflict** — real playback follows the three tiers there (nothing plays by default; a change to the playback pipeline uses `--probe-cursor` / `--probe-player-motion` with a local file; pointing anything at the real server asks him first), never let the access token into a URL, a log or the self-check report, don't change `libmpv-2.dll`'s version, and navigate with switches rather than the mouse. This file keeps no second copy of them. `PROGRESS.md`'s 在途工作 section is the only cross-window handoff.
+**Policy lives in [CLAUDE.md](../../../CLAUDE.md)**: playback authorization and probe coverage, credentials, navigation, dependency upgrades and verification gates. Read that policy rather than maintaining another copy here. `PROGRESS.md` records in-flight work and earlier measurements.
 
-Architecture rules (DI, the `Attach` pattern, judgments into Core) are the `embynian-winui-shell` skill; the gate procedure is `embynian-verification`; shaders and 画质档位 are `mpv-shader-quality`.
+Architecture is `embynian-winui-shell`; evidence and measurements are `embynian-verification`; shaders are `mpv-shader-quality`.
 
-Three things about those constraints that `CLAUDE.md` doesn't say:
+Operational details:
 
-- **The player's own self-check probes run without loading a film at all** — synthetic sections and a collapsed player. If a change genuinely needs a real file, use a local one or hand it to the user; never point it at the server.
-- **`libmpv-2.dll` lives in the repo root**, is linked into the build output by `EmbyNian.Shell.csproj` and copied next to the exe on publish; `tools/publish.ps1` throws 「找不到 …libmpv-2.dll」 if it is missing.
-- **How the token stays out of everything:** `EmbyUrl.Stream` deliberately carries no `api_key` — the token travels in an `X-Emby-Token` header, which mpv is handed via `--http-header-fields` — and `EmbyHttp` strips the query before anything is logged.
+- The normal player's self-check uses synthetic state without loading a film. Local-file probes are a different path; their isolation and integrated-only coverage are specified in CLAUDE.md. Neither proves standalone playback works.
+- **`libmpv-2.dll` lives in the current working-tree root**, is linked into build output by `EmbyNian.Shell.csproj` and copied next to the exe on publish. The binary is not tracked; a new worktree needs an explicitly supplied, matching copy before publishing.
+- **How the token stays out of URLs:** `EmbyUrl.Stream` carries no `api_key`; it uses an `X-Emby-Token` header, passed to mpv through `http-header-fields`. `EmbyHttp` strips query strings before logging. Do not print option values containing those headers.
 
 ## The shape of playback
 
 `IPlaybackBackend` is the seam, and it is what lets both backends exist at once: everything above it — the planner, the progress reports, the player chrome — only ever sees a `PlaybackRequest` going in and an `IPlaybackHandle` coming out, so the choice stays a per-play setting rather than an architectural commitment.
 
-- **`LibMpvBackend`** — libmpv loaded in-process, rendering into the client's own window. `LibMpvBackend.Locate(MpvSettings)` is the **single answer** for where `libmpv-2.dll` is; that probe used to be private to the backend and is now shared.
+- **`LibMpvBackend`** — libmpv loaded in-process, with integrated composition rendering or a standalone native window according to the pipeline. `LibMpvBackend.Locate(MpvSettings)` is the shared library-location probe.
 - **`MpvProcessBackend`** — the user's own `mpv.exe` in a window of its own, driven over IPC.
 - **`PlaybackBackendFactory`** picks one; the container hands `PlaybackService` a `Func<IPlaybackBackend>` rather than an instance.
 
@@ -79,7 +79,7 @@ Three things about those constraints that `CLAUDE.md` doesn't say:
 
 `ViewModels/PlayerViewModel.cs` is where playback state converges, and it is **the only view model in the DI container** — a film keeps playing behind the library page, so its state has to outlive navigation. `Views/PlayerPage` is split into `.xaml`, `.xaml.cs`, `.Chrome.cs`, `.Input.cs`, `.Menus.cs`, `.Panels.cs`, `.Fonts.cs`, `.Palette.cs` plus a set of `.SelfCheck.*` files.
 
-**`PlayerPage` is a sibling `UserControl` of the navigation shell, not a page inside the `Frame`**: it is a transparent XAML island with mpv's child window showing through from underneath. That is why the title bar, the window buttons and window dragging during playback are this page's own job rather than the shell's.
+**`PlayerPage` is a sibling `UserControl` of the navigation shell, not a page inside the `Frame`.** It hosts the integrated pipeline's composition surface and owns the playback title bar, window controls and dragging. The standalone pipeline uses mpv's native top-level window and uosc instead; do not infer its behavior from the integrated page.
 
 **mpv's `dwidth`/`dheight` exist before the video is configured and fall back to the window's client size then** (libmpv 0.41, measured off the 2026-09-12 上下黑边 incident in PROGRESS.md — a slowly decoding mp4 answered the aspect poll with the window's own shape, and the window then locked to itself, letterboxing the real picture). `video-params/*` is the family that genuinely appears only once the video is known: gate any read of the display pair on `video-params/w` first. The same belief in another guise — 「the properties do not exist until a frame is decoded」 — sat in the aspect poll's own comment for months, so don't trust a property-existence claim that a 404'd or remuxed file never got to exercise.
 
@@ -90,8 +90,8 @@ Two rules about the 10 Hz ticker:
 
 ## Tests
 
-`tests/EmbyNian.Tests` reaches Core only, which is why decisions belong there. Playback-adjacent suites: `PlaybackTests.cs`, `PinIndicatorTests.cs`, `PlayerPaletteTests.cs`, `ItemDetailTests.cs`, `StartupArgsTests.cs`, plus `SettingsTests.cs` for the settings and migration half. Add to these rather than opening a new file per change, and register any new suite in `Program.cs`.
+`tests/EmbyNian.Tests` currently references Core. Important playback rules belong in independently testable code; use the layering policy in CLAUDE.md rather than moving every local UI predicate into Core. Relevant suites include `PlaybackTests.cs`, `InlineSwitchTests.cs`, `MpvUiTests.cs`, `PinIndicatorTests.cs`, `PlayerPaletteTests.cs`, `ItemDetailTests.cs`, `StartupArgsTests.cs` and `SettingsTests.cs`. Reuse the appropriate suite and register new suites in `Program.cs`.
 
-When changing playback synchronisation, put these through the tests or the self-check: stop and close, episode switch, auto-next, resume position, progress reporting, server state write-back, and cancellation mid-flight.
+When changing playback synchronisation, check stop/close, episode switch, auto-next, resume, progress reporting, server-state write-back and cancellation as applicable. Pure rules can be unit-tested; static Lua/source assertions do not prove runtime behavior. Use isolated probes only for the paths they actually exercise, and do not test server write-back without the authorization in CLAUDE.md.
 
-Then run the gates — build, test and publish always, the self-check when a version ships (or when the check itself changed). The when and the procedure are in the `embynian-verification` skill.
+Run the applicable gates from CLAUDE.md; consult `embynian-verification` for interpreting results. Report any affected standalone behavior that lacks runtime verification.

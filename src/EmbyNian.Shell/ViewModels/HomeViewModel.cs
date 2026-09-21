@@ -88,6 +88,21 @@ public sealed partial class HomeViewModel : PageViewModel
     internal bool LibraryOnBanner => _libraryOnBanner;
 
     /// <summary>
+    /// 刚刚那次 <see cref="Shelves"/> 的增删是矮窗档自己搬的（<see cref="ApplyLibraryOverlay"/> 里的搬进搬出），
+    /// 不是重新装货。页面据此**不排重查**。
+    /// <para>
+    /// 少了这一格就是自己喂自己：翻档 → 集合变化 → 页面排一次重查 → 重查又翻档。2026-09-18 两场、09-21 一场
+    /// 「矮窗档来回翻」都是这个环在滚，最后那场刷了三万行日志、把界面线程吃干二十七秒（见 <c>HomePage</c> 的
+    /// <c>Shelves.CollectionChanged</c>）。
+    /// </para>
+    /// <para>
+    /// 重建货架（<see cref="BuildShelves"/> 里那次 <c>Clear</c> 与逐个 <c>Add</c>）不落在这个记号里 —— 那才是
+    /// 页面该重查的「货架集合真变了」。
+    /// </para>
+    /// </summary>
+    internal bool ShelvesChangeIsOverlay { get; private set; }
+
+    /// <summary>
     /// 媒体库那一排（版面钥匙 <see cref="HomeLayout.Libraries"/>），装到了东西才记 —— 勾掉或者空的账号没有这一排，
     /// 矮窗档整个不参与。它和 <see cref="LibraryFlowIndex"/> 都是每次 <see cref="LoadAsync"/> 重建横排时落定的。
     /// </summary>
@@ -124,13 +139,22 @@ public sealed partial class HomeViewModel : PageViewModel
             return;
         }
 
-        if (_libraryOnBanner)
+        // 搬的时候挂记号：这一下集合变化是翻档自己造成的，页面据此不排重查（见 ShelvesChangeIsOverlay）。
+        ShelvesChangeIsOverlay = true;
+        try
         {
-            if (Shelves.Contains(shelf)) Shelves.Remove(shelf);
+            if (_libraryOnBanner)
+            {
+                if (Shelves.Contains(shelf)) Shelves.Remove(shelf);
+            }
+            else if (!Shelves.Contains(shelf) && LibraryFlowIndex >= 0)
+            {
+                Shelves.Insert(Math.Min(LibraryFlowIndex, Shelves.Count), shelf);
+            }
         }
-        else if (!Shelves.Contains(shelf) && LibraryFlowIndex >= 0)
+        finally
         {
-            Shelves.Insert(Math.Min(LibraryFlowIndex, Shelves.Count), shelf);
+            ShelvesChangeIsOverlay = false;
         }
     }
 
@@ -273,7 +297,10 @@ public sealed partial class HomeViewModel : PageViewModel
 
     public override Task ReloadAsync() => LoadAsync();
 
-    private async Task LoadAsync()
+    /// <summary>播放只改变观看状态，不重建轮播，以免返回时丢掉已解码背景并重置轮播位置。</summary>
+    internal Task RefreshPlaybackAsync() => LoadAsync(refreshSlides: false);
+
+    private async Task LoadAsync(bool refreshSlides = true)
     {
         if (_session is null || _actions is null || _all.Length == 0) return;
 
@@ -296,7 +323,7 @@ public sealed partial class HomeViewModel : PageViewModel
         var carouselMedia = carouselUi?.CarouselMedia ?? Emby.CarouselMediaType.All;
         var latestSize = Math.Max(LatestSize, carouselCount * 3);
 
-        var latest = FetchAsync("轮播", (client, ct) =>
+        var latest = refreshSlides ? FetchAsync("轮播", (client, ct) =>
             carouselUi is not null && carouselUi.CarouselSource == Emby.CarouselSource.Random
                 ? client.GetRandomAsync(latestSize, Emby.HomeCarousel.RandomTypes(carouselMedia), ct)
                 : client.GetLatestAsync(
@@ -306,7 +333,7 @@ public sealed partial class HomeViewModel : PageViewModel
                     Emby.HomeCarousel.LatestTypes(carouselMedia) is { Count: > 0 } types
                         ? string.Join(',', types)
                         : null),
-            token);
+            token) : Task.FromResult(new List<EmbyItem>());
 
         // 媒体库那几排各问一次自己那个库的最近添加。只问勾着的那几排 —— 勾掉一排就是连这次请求一起省掉。
         // 整个服务器的「最近添加」那一排 2026-09-12 从版面上退役了，但它没有断请求 —— 轮播 2026-09-13 起
@@ -392,7 +419,7 @@ public sealed partial class HomeViewModel : PageViewModel
         // 需求 5 → 2026-09-13「轮播图改用前十个最近添加」，同日下午张数进了设置：轮播不再站在继续观看上，
         // 只站设置里那个来源发回来的头若干张（筛掉没有宽图、并掉同一部剧，是 HomeCarousel 的事）。关掉轮播
         // 就一张都不造，带子自己收起来。
-        Slides = _banner ? BuildSlides(newest, carouselCount) : [];
+        if (refreshSlides) Slides = _banner ? BuildSlides(newest, carouselCount) : [];
 
         LoadedCount = resumed.Count + next.Count + added.Count;
 
