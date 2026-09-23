@@ -1,6 +1,6 @@
 # EmbyNian
 
-这是一个个人自用的客户端，在天才程序员Claude、GPT、DeepSeek、GLM的协助下完成开发。
+自用的Emby客户端，由天才程序员Claude、GPT、DeepSeek、GLM完成开发。
 
 telegram 发布频道：https://t.me/EmbyNian
 
