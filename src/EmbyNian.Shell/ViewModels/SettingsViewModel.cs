@@ -444,6 +444,15 @@ public sealed partial class SettingsViewModel : PageViewModel
                 + "连播的下一集不会把你从全屏里顶出来，按 F 退出后也不会被下一集顶回去",
                 () => playback.AutoFullscreenOnPlayback, value => playback.AutoFullscreenOnPlayback = value),
 
+            // 「调整窗口大小后继续播放」（用户令 2026-09-23）：拖窗口边沿那一趟会先把 mpv 冻住再抓帧（同
+            // 2026-09-22 切全屏那一趟 —— 覆盖层上那帧与撤掉时屏上那帧同帧），这一行只管松手之后往哪边走。
+            // 冻那一半没有开关；而且用户自己按下的暂停一根手指都不碰，与这一档无关。
+            // 现读设置，不走任何通知管道：下一次拖边收尾就认新的值。
+            Toggle("调整窗口大小后继续播放",
+                "拖窗口边沿改大小的时候画面会先停住，松开鼠标后自动接着放。关掉它就停在暂停，要自己按播放。"
+                + "只对集成模式有效（画面嵌在本窗口里的那种）；独占模式的窗口归 mpv 自己管，拖动不经过这里",
+                () => playback.ResumeAfterWindowResize, value => playback.ResumeAfterWindowResize = value),
+
             Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
                 "放到这个百分比以上，这一条就算看过"),
             // 四颗方向键、两对步长（2026-09-20 用户令）：← / → 用上面这两行，↑ / ↓ 用下面那两行。两对都印在

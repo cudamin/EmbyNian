@@ -671,6 +671,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
         PlaybackChoice? choice,
         IReadOnlyList<EmbyItem>? episodes) => PlayAsync(item, parent, choice, episodes);
 
+    /// <summary>进播放前记下的详情页滚动位；收起播放层那一路交给详情页按回去（见 <see cref="ShowPlayer"/>、DetailPage.KeepScrollThroughReveal）。</summary>
+    private double? _detailScrollBeforePlayer;
+
     /// <summary>
     /// Gives the window to the player, or takes it back. The browse container is collapsed rather than
     /// merely covered: the XAML island is a single surface, so an opaque background behind the player
@@ -680,6 +683,10 @@ public sealed partial class ShellPage : UserControl, IShellActions
     {
         if (playing)
         {
+            // 退出播放要停在离开详情页时的位置：收起播放层时框架会把焦点挪进详情页、随之把落点滚进视口
+            // （见 ShellSelfCheck.ReturnFromPlayer 注释）。进播放前记下滚动位，收起那一路交给详情页按回去。
+            _detailScrollBeforePlayer = (ContentFrame.Content as DetailPage)?.BodyScrollOffset;
+
             Chrome.Visibility = Visibility.Collapsed;
             if (_window is not null) _window.PlaybackTitleBar = true;
             ContentHost.Visibility = Visibility.Collapsed;
@@ -706,6 +713,12 @@ public sealed partial class ShellPage : UserControl, IShellActions
         {
             SignIn.Visibility = Visibility.Visible;
         }
+
+        // 回到的还是那张详情页时，把它按回离开时的滚动位（焦点那一跳见 DetailPage.KeepScrollThroughReveal）。
+        // 回主页那条路（ClosePlayerToHome 先 GoTo("home")）这里 Content 已不是详情页，不还原，符合预期。
+        if (_detailScrollBeforePlayer is { } offset && ContentFrame.Content is DetailPage detail)
+            detail.KeepScrollThroughReveal(offset);
+        _detailScrollBeforePlayer = null;
     }
 
     /// <summary>

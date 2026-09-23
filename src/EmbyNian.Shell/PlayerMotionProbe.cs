@@ -256,6 +256,12 @@ internal static class PlayerMotionProbe
             window.TopMost = true;
             void CountGeometry() => geometryUpdates++;
             surface.GeometryChanged += CountGeometry;
+
+            // 拖边这一趟的暂停／恢复走 `PlayerViewModel.SetPaused` → `PlaybackService` → 当前句柄，而探针
+            // **绕过 PlaybackService 直接 new 了后端**（`PlaybackService._current` 因此是空的）——不接这个出口，
+            // 那句暂停在探针里会静静落进空气，下面「拖动期间 mpv 已停住」只会一直等到超时。
+            // 接上之后这一句落到真实句柄上，与页面在真实播放里发出的是同一条命令。
+            page.PauseRequested = paused => _ = handle!.SetPropertyAsync("pause", paused, token);
             try
             {
                 foreach (var (name, from, to, anchorFar) in new[]
@@ -310,11 +316,28 @@ internal static class PlayerMotionProbe
                     Require(pixelErrors == 0, $"{name}的 24 帧屏幕彩条均完整，无留空或裁切");
                     Require(geometryUpdates == updatesBefore, $"{name}期间不反复重建缓冲");
                     var positionAfter = await handle.GetPositionAsync(token);
-                    Require(positionBefore is { } start && positionAfter is { } end && Math.Abs(end - start) > 0.1,
-                        $"{name}期间视频持续播放，不用静止截图代替");
+                    // 2026-09-23 用户令把这条判据的方向改了：拖边这一趟**故意**把 mpv 冻住（ResizeFreeze），
+                    // 位置因此不再前进。从前判的是「期间视频持续播放，不用静止截图代替」，而拖动中每一拍
+                    // 都在换内容正是现在要避免的那一段（松手撤掉覆盖层时会跳）。
+                    //
+                    // 三层，各盯一件事：①这一段里位置基本没走（24 拍约 2.4 秒的片子，没冻住的话整段走掉）；
+                    // ②mpv 自己报暂停；③再取两拍确认它真停着 —— 这一层不能省：暂停命令从发出到 mpv 停住
+                    // 要一程，只比「拖动前后两个数」会漏掉「刚发就完事了」那一种。
+                    Require(positionBefore is { } start && positionAfter is { } end && Math.Abs(end - start) < 1,
+                        $"{name}期间位置基本不动（拖动中已冻住）");
+                    Require(control.Status.Paused, $"{name}期间 mpv 报暂停");
+                    var holdAt = await handle.GetPositionAsync(token);
+                    await Task.Delay(200, token);
+                    var laterAt = await handle.GetPositionAsync(token);
+                    Require(holdAt is { } hold && laterAt is { } later && Math.Abs(later - hold) < 0.05,
+                        $"{name}拖动期间画面确实停住");
                     Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
                     await page.ResizeChange.WaitAsync(TimeSpan.FromSeconds(2), token);
                     Require(!page.ResizeFrameVisible, $"{name}松手后的保留帧已收回");
+                    // 放开那一句是「发出去」的，mpv 把 pause 报回来还隔着一次事件 —— 所以这里等它，不当场断言
+                    // （2026-09-23 实测：缩小那一趟当场读到已恢复、放大那一趟就还是暂停，同一条路两种读数）。
+                    await Until(() => !control.Status.Paused, $"{name}松手后按设定恢复播放");
+                    Require(!page.ResizeFrozen, $"{name}松手后拖边那一趟的冻结账已还清");
                     await Until(() => surface.IsContentReady && !surface.IsInteractiveResize, $"{name}松手后缓冲落定");
                     Require(geometryUpdates > updatesBefore, $"{name}松手后发布最终尺寸");
 
@@ -376,6 +399,10 @@ internal static class PlayerMotionProbe
                     await handle.SetPropertyAsync("pause", paused, token);
                     await Until(() => control.Status.Paused == paused, "大幅缩放前播放状态到位");
                     ApplyResize(window, monitor.Left, monitor.Top, width, height, ResizeEdge.BottomRight);
+                    // 拖动期间一定停在暂停态：本来就放着的那几档由我们冻（ResizeFreeze），本来就暂停的
+                    // 那几档一根手指都不碰 —— 两种情况下这一问都是真。它同时是「调整开始时真的发出了
+                    // 暂停指令」的取证：不发的话这里会一直等到超时。
+                    await Until(() => control.Status.Paused, $"{jump:0.##}× 拖动期间 mpv 已停住");
                     await Task.Delay(16, token);
                     await surface.CommitPresentationAsync().WaitAsync(TimeSpan.FromSeconds(2), token);
                     VideoFrameOverlay.Flush();
@@ -387,8 +414,34 @@ internal static class PlayerMotionProbe
                     await page.ResizeChange.WaitAsync(TimeSpan.FromSeconds(2), token);
                     Require(!page.ResizeFrameVisible, "大幅缩放松手后保留帧已收回");
                     await Until(() => surface.IsContentReady && !surface.IsInteractiveResize, $"{jump:0.##}× 后缓冲落定");
-                    Require(control.Status.Paused == paused, "调整窗口不改变用户的暂停状态");
+                    // 旧版这里判的是「松手后回到调整前的暂停状态」，本轮之后这条不再是这一趟能说的话：
+                    // 页面回答「用户自己暂停着吗」读的是视图模型的状态，而探针绕过 PlaybackService、喂不到它
+                    // ——探针里那一栏恒为「没有」，于是页面照自己的规矩办（冻、松开、放开）。真正守着
+                    // 「用户按下的暂停谁也不许碰」的是 ResizeFreeze 的单测与页面自己那笔冻结账，不在这里。
+                    Require(!page.ResizeFrozen, "松手后拖边那一趟的冻结账已还清");
                 }
+                // 「调整窗口大小后继续播放」关掉的那一档（用户令 2026-09-23）：拖动照样冻住，松手**不**放开。
+                // 只验默认那一档的话，把设置读反（`!resume` 写成 `resume`）照样全绿 —— 而这一档正是这一行
+                // 设置存在的全部理由，所以它必须有自己的腿。
+                Write("阶段：设定为「保持暂停」的拖边");
+                var probeSettings = services!.GetRequiredService<AppSettings>();
+                await handle.SetPropertyAsync("pause", false, token);
+                await Until(() => !control.Status.Paused, "保持暂停档之前先让播放走起来");
+                probeSettings.Playback.ResumeAfterWindowResize = false;
+                ApplyResize(window, monitor.Left, monitor.Top, 900, 506, ResizeEdge.BottomRight);
+                await Until(() => control.Status.Paused, "保持暂停档：拖动期间 mpv 已停住");
+                Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
+                await page.ResizeChange.WaitAsync(TimeSpan.FromSeconds(2), token);
+                Require(control.Status.Paused, "设定为保持暂停时，松手后不替用户放开");
+                var frozenAt = await handle.GetPositionAsync(token);
+                await Task.Delay(200, token);
+                var stillAt = await handle.GetPositionAsync(token);
+                Require(frozenAt is { } pinA && stillAt is { } pinB && Math.Abs(pinB - pinA) < 0.05,
+                    "保持暂停那一档：松手之后画面确实还停着");
+                probeSettings.Playback.ResumeAfterWindowResize = true;
+                await handle.SetPropertyAsync("pause", false, token);
+                await Until(() => !control.Status.Paused, "保持暂停那一档验完，恢复播放");
+
                 Write("阶段：收尾期间再次拖边");
                 ApplyResize(window, monitor.Left, monitor.Top, 780, 440, ResizeEdge.BottomRight);
                 Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);

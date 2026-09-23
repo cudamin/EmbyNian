@@ -813,6 +813,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal bool AutoFullscreenOnPlayback => Settings.Playback.AutoFullscreenOnPlayback;
 
     /// <summary>
+    /// 「调整窗口大小后继续播放」（<see cref="Configuration.PlaybackSettings.ResumeAfterWindowResize"/>），
+    /// 拖边收尾那一拍现读。同 <see cref="AutoFullscreenOnPlayback"/> 的规矩：设置窗口是另一扇窗，
+    /// 那里改过的开关必须在<b>下一次拖边</b>就生效，而拖边收尾读的是这里、不是页面自己缓存下来的一份。
+    /// </summary>
+    internal bool ResumeAfterWindowResize => Settings.Playback.ResumeAfterWindowResize;
+
+    /// <summary>
     /// 播放中、后端已明确表态「画面在宿主窗口外」的那一刻才为真 —— 全屏键交给 mpv（Esc 先退
     /// mpv 的全屏）的唯一判据。未开播或后端不表态时它是 false：还没有画面，谈不上「画面在外面」。
     /// </summary>

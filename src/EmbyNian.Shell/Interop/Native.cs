@@ -754,18 +754,6 @@ internal static partial class Native
     public static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 
     /// <summary>
-    /// How long the OS itself allows between two clicks for them to count as a double click, in
-    /// milliseconds. The ceiling on how long 点击画面暂停 is held back before it is issued — see
-    /// <see cref="EmbyNian.Playback.PictureTap.HoldFor"/>, which caps it far below this on purpose.
-    /// <para>
-    /// Asked afresh per tap rather than cached: it is a Control Panel setting and can change while the app runs, and
-    /// one user32 call is cheaper than keeping a copy in step with it.
-    /// </para>
-    /// </summary>
-    [LibraryImport("user32.dll")]
-    public static partial uint GetDoubleClickTime();
-
-    /// <summary>
     /// The whole of what the OS will say about the desktop's cursor: the raw <c>CURSORINFO</c> flags, the shape
     /// handle, and where it believes the pointer is. Printed by the cursor probe as an outside witness and
     /// asserted on nowhere, for the reasons in <see cref="GetCursor"/>: 「藏起来了没有」 came back 「显示」 with

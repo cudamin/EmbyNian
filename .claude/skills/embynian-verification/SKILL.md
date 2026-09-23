@@ -14,6 +14,8 @@ description: "Verify EmbyNian changes using the current gates in CLAUDE.md. Inte
 - A publish in an isolated worktree is not delivery to the existing desktop shortcut. Verify the actual delivery path using the rule in CLAUDE.md.
 - The local cursor, player-motion and composition probes currently select the integrated pipeline. Their success does not validate the standalone window, uosc or standalone source switching. Report that gap when those features change.
 - `--screen` makes a diagnostic run independent of saved window placement. Normal self-check can use a saved account and read server data; it is not the isolated offline playback path.
+- **`--probe-player-motion` 的 `BeginMotionProbe` 会停掉播放页的轮询计时器**（`PlayerPage.MotionProbe.cs` 里的 `_ticker.Stop()`），而**任何住在 `OnTick` 里的判据在那个探针里都不会跑** —— 每拍前台位（`WakeClick` 那条「叫醒窗口的那一下不作数」要它）、光标规则都是。2026-09-23 验这条时因此白跑三趟，最后靠临时加一个「把轮询开回来」的探针口子（跑完删）才拿到读数。要在运动探针里验这类东西，先临时开轮询，别把「判据没触发」当成「判据不成立」。
+- **点画面的手势有两处真鼠标探针**：`work/probe-activation-click.py`（独占：真 mpv 窗口 + uosc 探针拷贝，`focused`/键位等级/押后提交撤销都有读数）与运动探针里那段临时装置（集成：真页面的三行点击日志 ＋ 把前台交给别的窗口）。两者都在**用户的活桌面**上合成鼠标，落点被别的窗口盖住时那一发会点进他正在用的窗口里 —— 点前必须问一句「指针底下是不是本进程的窗口/桌面」（探针里已加）。
 
 ## Comparing self-check reports
 

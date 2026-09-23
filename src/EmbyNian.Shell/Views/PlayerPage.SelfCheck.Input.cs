@@ -253,10 +253,14 @@ public sealed partial class PlayerPage
         // trouble to run into because nothing it names has been realised.
         var was = Visibility;
         var wasMuted = _pulseMutedAt;
+        var wasHandoff = _handoffMutedAt;
 
-        // A double tap in the last fraction of a second silences the badge on purpose, and this probe asks the
-        // badge to speak. Cleared rather than worked around, and put back on the way out.
+        // A double tap in the last fraction of a second silences the badge on purpose, and so does a window
+        // handoff for a good deal longer (see Muted / _handoffMutedAt, added 2026-09-22 after this probe was
+        // written). A fullscreen probe just before this one leaves that second mute set, so it — like the
+        // double-tap one — is cleared here rather than worked around, and both are put back on the way out.
         _pulseMutedAt = null;
+        _handoffMutedAt = null;
         Visibility = Visibility.Visible;
         UpdateLayout();
 
@@ -325,6 +329,7 @@ public sealed partial class PlayerPage
         // page the shell is really on.
         HidePulse();
         _pulseMutedAt = wasMuted;
+        _handoffMutedAt = wasHandoff;
         Visibility = was;
         UpdateLayout();
 
@@ -358,7 +363,13 @@ public sealed partial class PlayerPage
 
         var was = Visibility;
         var wasMuted = _pulseMutedAt;
+        var wasHandoff = _handoffMutedAt;
         var wasBadge = PulseBadge.Visibility;
+
+        // 同 ProbePulse：窗口切换那一位静默锚（_handoffMutedAt，2026-09-22 加的）会被紧邻的全屏探针留成
+        // set，而这一关问的是双击那一位（_pulseMutedAt），得先把前者清掉、末了放回，否则第 ④ 步
+        // 「徽标本来出得来」永远为假。
+        _handoffMutedAt = null;
 
         Visibility = Visibility.Visible;
         UpdateLayout();
@@ -376,7 +387,8 @@ public sealed partial class PlayerPage
         _pulseMutedAt = null;
         TapPicture();
         Want("单击攥住了", _tapHold.IsEnabled && _tap.Pending && !_tap.Issued);
-        report.Add($"攥住 {_tapHold.Interval.TotalMilliseconds:0} 毫秒（系统双击 {Native.GetDoubleClickTime()}）");
+        report.Add($"攥住 {_tapHold.Interval.TotalMilliseconds:0} 毫秒"
+            + $"（与独占模式、与参考 mpv 配置同一把尺）");
 
         // ② 到期. Called the way PlayerPage.SelfCheck.Cursor calls OnTick — the timer's own handler, by hand.
         OnTapHoldElapsed(this, EventArgs.Empty);
@@ -419,6 +431,7 @@ public sealed partial class PlayerPage
         DropTapHold();
         HidePulse();
         _pulseMutedAt = wasMuted;
+        _handoffMutedAt = wasHandoff;
         PulseBadge.Visibility = wasBadge;
         Visibility = was;
         UpdateLayout();

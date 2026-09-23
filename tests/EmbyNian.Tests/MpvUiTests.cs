@@ -11,15 +11,15 @@ internal static class MpvUiTests
     internal static void Register()
     {
         // 装配选项：osc 与 mpv 自带的音量/跳转 OSD 条关掉（中心那根重复的大滑条）、
-        // 无边框＋可拖动（标题与窗口按钮归 uosc 顶栏）、字体目录指向装箱、脚本指向 uosc 目录。
-        // 缺一项 uosc 就画不出图标、冒出重复控件或根本起不来，所以逐项点名，而不是只数个数。
-        // scripts 必须是目录不是 main.lua：交文件 mpv 把脚本命名成 main，控制条每个按钮的
+        // 无边框＋可拖动（标题与窗口按钮归 uosc 顶栏）、字体目录指向装箱、押后窗口与集成模式同一把尺、
+        // 脚本指向 uosc 目录。缺一项 uosc 就画不出图标、冒出重复控件或根本起不来，所以逐项点名，
+        // 而不是只数个数。scripts 必须是目录不是 main.lua：交文件 mpv 把脚本命名成 main，控制条每个按钮的
         // script-binding uosc/… 就全找不到、整排静默失效（2026-09-19 实测）。这一行钉死它。
         TestHarness.Test("Lua UI 装配选项：逐项点名", () =>
         {
             var options = MpvUi.Build(@"C:\app\mpv-ui\scripts\uosc", @"C:\app\mpv-ui\fonts");
 
-            Assert.Equal(8, options.Count);
+            Assert.Equal(9, options.Count);
             Assert.Equal(("osc", "no"), (options[0].Key, options[0].Value));
             Assert.Equal(("osd-bar", "no"), (options[1].Key, options[1].Value));
             Assert.Equal(("osd-on-seek", "no"), (options[2].Key, options[2].Value));
@@ -27,9 +27,12 @@ internal static class MpvUiTests
             Assert.Equal(("window-dragging", "yes"), (options[4].Key, options[4].Value));
             Assert.Equal(("osd-fonts-dir", @"C:\app\mpv-ui\fonts"), (options[5].Key, options[5].Value));
             Assert.Equal(("osd-font", "Microsoft YaHei"), (options[6].Key, options[6].Value));
+            // 押后窗口（用户令 2026-09-23）：uosc 那颗兜底命中区读它，mpv 认双击也用它 ——
+            // 值与集成模式那份押后是同一个常量（PlaybackTests 的「点画面」族点名了这个等式）。
+            Assert.Equal(("input-doubleclick-time", "300"), (options[7].Key, options[7].Value));
             // 目录，非 main.lua —— 脚本名才会是 uosc，uosc/… 绑定才解析得到。
-            Assert.Equal(("scripts", @"C:\app\mpv-ui\scripts\uosc"), (options[7].Key, options[7].Value));
-            Assert.False(options[7].Value.Contains("main.lua"), "scripts 交的必须是目录，不是 main.lua");
+            Assert.Equal(("scripts", @"C:\app\mpv-ui\scripts\uosc"), (options[8].Key, options[8].Value));
+            Assert.False(options[8].Value.Contains("main.lua"), "scripts 交的必须是目录，不是 main.lua");
         });
 
         // 装箱不齐 = 没有 Lua UI，播放照旧。返回 null 而不是半份配置：一个「osc 关了、
@@ -281,6 +284,9 @@ internal static class MpvUiTests
             Assert.True(main.Contains("input-doubleclick-time"), "双击闸丢了：窗口没跟 mpv 的双击窗口对齐");
             Assert.True(main.Contains("embynian_click_pause_cancel"), "双击闸丢了：没有撤销入口");
             Assert.True(main.Contains("cursor:on('primary_down'"), "双击闸丢了：撤销没挂在第二拍的按下上");
+            // 叫醒窗口的那一下不作数（用户令 2026-09-23）：判据是 mpv 的 focused，命中在兜底命中区里。
+            Assert.True(main.Contains("embynian_click_pause_waking"), "点击暂停丢了：没有「叫醒窗口的那一下」这道闸");
+            Assert.True(main.Contains("observe_property('focused'"), "点击暂停丢了：没有订阅 focused，叫醒那一下判不出来");
             // 滚轮＝音量：兜底命中区要在 render 里登记（最低优先级，元素先命中），命令必须 no-osd。
             Assert.True(main.Contains("embynian_wheel_volume_zone"), "滚轮音量丢了：main.lua 里没有兜底命中区");
             Assert.True(main.Contains("'no-osd', 'add', 'volume'"), "滚轮音量没走 no-osd：左上角的 Volume OSD 会回来");
@@ -305,22 +311,40 @@ internal static class MpvUiTests
             Assert.Null(VideoWindowContract.Parse(["embynian-version-index", "first"]));
         });
 
-        // 2026-09-20（用户令「在播放页面切换不同版本」）：独占模式的入口在 ≡ 菜单里 —— uosc 的控制条是静态
-        // 配置，没有「有第二版才露」这种条件可写，所以那个位置固定，菜单内容（宿主推回）才随条目变。
-        // 补丁最怕「升级 uosc 时重打清单漏条」：这里对着源码钉住那三处（绑定、要数据的消息、≡ 菜单里的入口）。
-        TestHarness.Test("独占模式版本菜单：绑定、≡ 菜单入口都在", () =>
+        // 2026-09-20（用户令「在播放页面切换不同版本」）与 2026-09-23（用户令「独占模式也要有切换版本的
+        // 按钮」「菜单按钮改成右键那个画面菜单」「音频按钮只有一条音轨时也在」）：独占模式的入口有两处 ——
+        // ≡ 菜单里那一行，以及控制条上常驻的版本/画面菜单两颗按钮。uosc 的控制条是静态配置，没有
+        // 「有第二版才露」这种条件可写，所以按钮常驻，菜单内容（宿主推回）随条目变 —— 「只有一版」
+        // 由宿主的菜单文案交代（回一行「没有可切换的版本」，见 PlayerViewModel.Events.cs）。
+        // 补丁最怕「升级 uosc 时重打清单漏条」：这里对着源码钉住那几处（绑定、要数据的消息、控制条上的
+        // 拼写、Controls.lua 里的快捷项简写、音频按钮不带条件）。
+        TestHarness.Test("独占模式版本与画面菜单：绑定、控制条落点都在", () =>
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
                 directory = directory.Parent;
             Assert.NotNull(directory);
 
-            var main = File.ReadAllText(Path.Combine(
-                directory!.FullName, "assets", "mpv-ui", "scripts", "uosc", "main.lua"));
+            var uosc = Path.Combine(directory!.FullName, "assets", "mpv-ui", "scripts", "uosc");
+            var main = File.ReadAllText(Path.Combine(uosc, "main.lua"));
+            var controls = File.ReadAllText(Path.Combine(uosc, "elements", "Controls.lua"));
 
             Assert.True(main.Contains("bind_command('embynian-ui-versions'"), "版本绑定丢了");
             Assert.True(main.Contains("embynian_notify('embynian-versions', '')"), "要版本数据的消息丢了");
             Assert.True(main.Contains("script-binding uosc/embynian-ui-versions"), "≡ 菜单里的版本入口丢了");
+
+            // 控制条上那两颗新按钮。拼写取 controls 默认值里独有的那一截（带 <video,audio> 前缀、
+            // 两侧逗号），简写在 elements/Controls.lua 的 shorthands 表里 —— 少一处，uosc 会走到
+            // 「unknown element kind」并把那一项之后的按钮整排丢掉（Controls:init_options 的 break）。
+            Assert.True(main.Contains(",<video,audio>embynian-ui-versions,"), "控制条上的版本按钮丢了");
+            Assert.True(main.Contains(",embynian-ui-picture-menu,"), "控制条上的画面菜单按钮丢了");
+            Assert.True(controls.Contains("['embynian-ui-versions']"), "版本按钮的快捷项简写丢了");
+            Assert.True(controls.Contains("['embynian-ui-picture-menu']"), "画面菜单按钮的快捷项简写丢了");
+            // 画面菜单按钮与右键点画面是同一条绑定（绑定名与消息名分家，见上一节的硬规矩）。
+            Assert.True(main.Contains("bind_command('embynian-ui-picture-menu'"), "画面菜单绑定丢了");
+
+            // 音频按钮：只有一条音轨时也要在。带上 <has_many_audio> 就是「多轨才显示」的旧行为。
+            Assert.False(main.Contains("<has_many_audio>audio"), "音频按钮又带上「多音轨才显示」的条件了");
         });
     }
 }

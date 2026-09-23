@@ -1,3 +1,4 @@
+using EmbyNian.Diagnostics;
 using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.ViewModels;
@@ -28,6 +29,24 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     /// <summary>How far one press of ↑/↓ moves 音量 — coarser than the wheel on purpose.</summary>
     private const int KeyStep = 5;
+
+    /// <summary>本页日志的门类，与 <c>PlayerPage.ClientRect.cs</c> 那几行同款。</summary>
+    private const string LogCategory = "播放器";
+
+    /// <summary>
+    /// 这一拍按下是不是「叫醒窗口的那一下」（判定见 <see cref="PlayerPage.OnPointerPressed"/>）：按下那一刻
+    /// 记下来，给同一拍的 Tapped 用，Tapped 里用完就清。
+    /// </summary>
+    private bool _wakingTap;
+
+    /// <summary>
+    /// 严格前台位的两个派生量，每拍在 <c>PlayerPage.Chrome.cs</c> 的轮询里更新：<c>_wasForeground</c> 是
+    /// <b>上一拍</b>问到的严格前台位（叫醒判据的主料），<c>_foregroundSinceAt</c> 是轮询看到「窗口变成前台」
+    /// 那一刻（只作兜底）。判据用哪个、为什么，见 <see cref="WakeClick"/>。
+    /// </summary>
+    private bool _wasForeground;
+
+    private long _foregroundSinceAt;
 
     // ---- the pointer ------------------------------------------------------------
 
@@ -186,6 +205,16 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         var point = e.GetCurrentPoint(Root).Position;
 
+        // **叫醒窗口的那一下不作数**（用户令 2026-09-23：「先点一下让窗口置顶，然后再点一下触发暂停/播放」）：
+        // 判据的主料是**上一拍**问到的严格前台位 _wasForeground —— 按下这一刻窗口已经是前台了（激活在按下
+        // 之前只隔 1~5ms），只有上一拍分得出「这一下之前我们在不在前台」。此刻现问一次严格前台位，配上一拍那个
+        // 值交给 WakeClick 判（为什么不能拿「刚变前台多久」当主料，见那里）。按下后把 _wasForeground 记成此刻的
+        // 真值，于是**紧接着的第二下**（已是前台）自然不算叫醒。
+        var handle = _window?.Handle ?? IntPtr.Zero;
+        var foregroundNow = handle != IntPtr.Zero && Native.GetForegroundWindow() == handle;
+        var waking = WakeClick.IsWaking(foregroundNow, _wasForeground, Now - _foregroundSinceAt);
+        _wasForeground = foregroundNow;
+
         if (BeginWindowDrag(point, e.Pointer))
         {
             e.Handled = true;
@@ -193,7 +222,22 @@ public sealed partial class PlayerPage : IWin32KeySink
         }
 
         // 点在画面上的那一下：宽限押后。单击在攥够那一刻给（OnTapHoldElapsed），双击根本不给。
-        if (TapOnPicture(point, e.OriginalSource)) return;
+        if (TapOnPicture(point, e.OriginalSource))
+        {
+            _wakingTap = waking;
+
+            // 点击手势的第一环留一行（另两环见 OnTapHoldElapsed 与 SecondTapOnPicture）。用户报过
+            // 「点第一下没反应、要再点一下」，而这几行是唯一能把几种坏法分开的读数：这一下**根本没到过
+            // 页面**（没有这一行）、**是叫醒窗口的那一下**（这一行写着「叫醒」）、**到了也下发了**
+            // （这一行 + 后面那句「攥够到点」）、**到了但被第二下撤了**（+「双击的第二下」）。
+            Log.Debug(LogCategory, _wakingTap
+                ? "点击画面：按下（这一下是叫醒窗口的，不作数）"
+                : $"点击画面：按下（前台=0x{Native.GetForegroundWindow():X}）");
+            return;
+        }
+
+        // 按下不在画面上（控件、标题条、浮层）：这一下与「点击画面暂停」无关，别让它把上一拍的账留给后面。
+        _wakingTap = false;
 
         // A press is a hand even when it moves nothing, and the show line should say so: label it before
         // Render writes the line, exactly as the poll labels its own wake before the reseed.
@@ -331,15 +375,29 @@ public sealed partial class PlayerPage : IWin32KeySink
             return;
         }
 
+        // **叫醒窗口的那一下不作数**（用户令 2026-09-23：「先点一下让窗口置顶，然后再点一下触发暂停/播放」）。
+        // 这是 Windows 上内容区的通用规矩 —— 激活点击只激活、不落在控件上 —— 而 WinUI 会把这一下当成一次
+        // 正常的 Tapped 递过来（实测：点桌面再点画面，按下与 Tapped 都会到，暂停也跟着切了）。所以由我们
+        // 自己吃掉：这一下不攥，于是它既不暂停，也不会被紧接着的第二下当成「双击的第一拍」去撤。
+        // 那一票由 HostWindow 在 WM_MOUSEACTIVATE 时记下、按下那一拍消费（见 OnPointerPressed 的 _wakingTap）。
+        if (_wakingTap)
+        {
+            _wakingTap = false;
+            DropTapHold();
+            e.Handled = true;
+            return;
+        }
+
         TapPicture();
         e.Handled = true;
     }
 
     /// <summary>
     /// The tap itself: recorded and held rather than issued, because the first click of a double click raises
-    /// a <c>Tapped</c> too. <see cref="PictureTap.HoldFor"/> caps the wait far below the OS's own double-click
-    /// interval — half a second of nothing after clicking the picture would be a worse fault than the one this
-    /// fixes.
+    /// a <c>Tapped</c> too. The wait is <see cref="PictureTap.ClickDelayMilliseconds"/> — the same ruler
+    /// mpv's own double-click window uses, and the same one the bundled uosc presses on
+    /// (<c>embynian_click_pause_window</c> reads <c>input-doubleclick-time</c>, which <c>MpvUi.Build</c> now
+    /// writes from that same constant): 两种模式、以及用户的参考 mpv 配置，一次点击的押后都是一把尺。
     /// <para>
     /// Its own method rather than only a handler body: <c>TappedRoutedEventArgs</c> cannot be constructed, so
     /// this is the only shape the self-check can reach.
@@ -348,7 +406,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     private void TapPicture()
     {
         _tap.First(ViewModel.Paused);
-        _tapHold.Interval = TimeSpan.FromMilliseconds(PictureTap.HoldFor(Native.GetDoubleClickTime()));
+        _tapHold.Interval = TimeSpan.FromMilliseconds(PictureTap.ClickDelayMilliseconds);
         _tapHold.Start();
     }
 
@@ -364,6 +422,9 @@ public sealed partial class PlayerPage : IWin32KeySink
 
         if (_tap.Elapsed() && Attached)
         {
+            // 点击手势的第二环（另两环见 OnPointerPressed 与 SecondTapOnPicture）。
+            Log.Debug(LogCategory, "点击画面：攥够到点，下发暂停/播放");
+
             ViewModel.TogglePause();
 
             // 单击证实了才给控件宽限（2026-09-18 随「双击不呼出控件」从按压挪到这里）：快双击从头到尾
@@ -387,7 +448,13 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         _tapHold.Stop();
 
-        if (_tap.Second() is { } before && Attached) ViewModel.SetPaused(before);
+        var undo = _tap.Second();
+
+        // 点击手势的第三环（另两环见 OnPointerPressed 与 OnTapHoldElapsed）：没有值＝那一次暂停从来
+        // 没下发过（快双击，干净），有值＝刚下发就撤回（慢双击，画面卡了一下）。
+        Log.Debug(LogCategory, $"点击画面：双击的第二下（要撤回的暂停＝{(undo is { } value ? value : "无")}）");
+
+        if (undo is { } before && Attached) ViewModel.SetPaused(before);
 
         _pulseMutedAt = Now;
         HidePulse();

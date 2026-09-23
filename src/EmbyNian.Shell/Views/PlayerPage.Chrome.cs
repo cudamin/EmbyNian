@@ -1226,6 +1226,14 @@ public sealed partial class PlayerPage
                 && under != IntPtr.Zero
                 && Native.GetWindowThreadProcessId(under, out _) == Native.GetCurrentThreadId());
 
+        // 「叫醒窗口的那一下点击不作数」（用户令 2026-09-23）要的是**严格**的前台位，而且必须是**每一拍**问的：
+        // 按下送到页面时窗口已经是前台了（激活在按下之前），现问是问不出来的 —— 判据（上一拍的前台位是主料，
+        // 「刚变前台多久」只作兜底）与理由见 WakeClick。上面那个 focused 宽到「指针还在我们窗口上」，拿来判这个
+        // 会把「点桌面」那条路也算成前台，所以这里另问一次严格前台位记着，给下一次按下用。
+        var foreground = handle != IntPtr.Zero && Native.GetForegroundWindow() == handle;
+        if (foreground && !_wasForeground) _foregroundSinceAt = Now;
+        _wasForeground = foreground;
+
         if (_chrome.WindowFocused != focused)
         {
             if (!focused && _cursorHidden) _woke = "窗口失去焦点";

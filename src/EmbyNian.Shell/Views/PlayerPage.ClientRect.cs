@@ -18,8 +18,64 @@ public sealed partial class PlayerPage
     private VideoFrameOverlay? _resizeFrame;
     private Task _resizeChange = Task.CompletedTask;
 
+    /// <summary>
+    /// 用户正压在窗口边沿（或标题上）那个模态回环里 —— <c>WM_ENTERSIZEMOVE</c> 到 <c>WM_EXITSIZEMOVE</c>。
+    /// <para>
+    /// <b>它不是「尺寸正在变」的判据，而是「这会儿的尺寸变化是手拖出来的」那一扇门。</b>
+    /// 拖标题移动窗口（<c>WM_ENTERSIZEMOVE</c> 一样会来，可客户区尺寸根本没变）、进全屏／最大化、
+    /// 播放开始时按画面比例整形、程序化改窗口尺寸，都会改客户区；只有这一扇门里的那几次才该冻结播放 ——
+    /// 冻结那笔账的放行口是拖边收尾，门外的尺寸变化没有人会来放开它（见 <see cref="BeginResizeFreeze"/>）。
+    /// </para>
+    /// </summary>
+    private bool _resizeLoop;
+
+    /// <summary>
+    /// 拖边这一趟<b>是我们把播放冻住的</b>（还欠用户一次放开）——「松手之后按设定放开」这笔账就记在这一位上。
+    /// 只有 <see cref="BeginResizeFreeze"/> 会立起它，只有 <see cref="ReleaseResizeFreezeAsync"/> 会收掉它。
+    /// </summary>
+    private bool _resizePaused;
+
+    /// <summary>
+    /// 那一下 <c>pause=yes</c> 的任务；放开之前先等它落地，免得 <c>pause=no</c> 跑在它前面、
+    /// 净结果成了「停着」而没有人再来放开（见 <see cref="ReleaseResizeFreezeAsync"/>）。
+    /// </summary>
+    private Task _resizeFreeze = Task.CompletedTask;
+
     internal Task ResizeChange => _resizeChange;
     internal bool ResizeFrameVisible => _resizeFrame is not null;
+
+    /// <summary>拖边这一趟的冻结账立着没有（探针读它，用户看不见）。</summary>
+    internal bool ResizeFrozen => _resizePaused;
+
+    /// <summary>
+    /// 探针用的出口：把「冻住播放／放开」这一句接到哪儿去。
+    /// <para>
+    /// 真实那条路是 <see cref="PlayerViewModel.SetPaused"/>（→ <c>PlaybackService</c> → 当前那个 mpv 句柄），
+    /// 也就是空格键与「轻点画面」走的那一句。<b>探针那一头绕过 PlaybackService 直接 new 了后端</b>
+    /// （<c>PlayerMotionProbe</c> 要的是「不登录、不起真实播放」），于是 <c>PlaybackService._current</c> 是空的 ——
+    /// 同一句在探针里会静静落进空气：拖动期间 mpv 照旧在放，`--probe-player-motion` 那几条新判据就什么都验不到
+    /// （2026-09-23 实测：位置一路走掉了 24 拍）。接上这个出口，探针把它接到自己那个真实句柄上。
+    /// 与 <c>ProbePictureStarted</c>／<c>ProbeSourceAspect</c> 是同一种做法：把真实那条路喂不到的东西递进去。
+    /// </para>
+    /// <para>
+    /// <b>只管拖边那一趟。</b>窗口切换那一趟（<see cref="FreezeForHandoffAsync"/>／<c>ChangeWindowAsync</c>）
+    /// 仍旧直连 <see cref="PlayerViewModel.SetPaused"/> —— 探针的窗口切换腿读的是几何与保留帧，不经过这里，
+    /// 接上去反而会把那几腿的时序改掉。
+    /// </para>
+    /// </summary>
+    internal Action<bool>? PauseRequested { get; set; }
+
+    /// <summary>拖边这一趟发「暂停／恢复」的唯一出口。没接出口就是真实那条路（见 <see cref="PauseRequested"/>）。</summary>
+    private void SetPaused(bool paused)
+    {
+        if (PauseRequested is { } sink)
+        {
+            sink(paused);
+            return;
+        }
+
+        ViewModel.SetPaused(paused);
+    }
 
     /// <summary>
     /// 缓冲与布局追上客户区后，仍给合成器一小段提交时间；描述符更新不等于新画面已上屏。
@@ -285,35 +341,66 @@ public sealed partial class PlayerPage
     private void OnClientSizeChanged(NativeRect client)
     {
         if (!_onStage || !ViewModel.PictureInHostWindow || _window is null) return;
+
+        // 尺寸真的开始变了 —— **调整的「开始」在这一拍，不在 WM_ENTERSIZEMOVE**。
+        //
+        // 用户令 2026-09-23：「当检测到窗口大小调整时自动暂停 mpv 播放器」。这一拍（WM_SIZE）是整条路上
+        // 唯一能证明「客户区真的变了」的地方；而 WM_ENTERSIZEMOVE 拖标题移动窗口时照样会来，拿它当触发点
+        // 等于每次挪窗都冻一次、松手再放开 —— 一次纯粹的位置调整会平白断一下声音、断一下画面。
+        if (_resizeLoop) BeginResizeFreeze();
+
         _videoTarget.ResizePresentation(client);
         _resizeFrame?.Show(client, _window.Fullscreen || _window.TopMost);
     }
 
+    /// <summary>
+    /// 一次拖动事务的开始与结束（<c>WM_ENTERSIZEMOVE</c> / <c>WM_EXITSIZEMOVE</c>）—— <b>几何那一半</b>。
+    /// <para>
+    /// 播放那一半（冻结与放开）不在这两个端点上：开始要等客户区真的报出新尺寸
+    /// （<see cref="BeginResizeFreeze"/> 挂在 <see cref="OnClientSizeChanged"/> 上），放开的动作要等保留帧
+    /// 撤掉之后（<see cref="FinishResizeAsync"/>）。理由都在那两处。
+    /// </para>
+    /// </summary>
     private void OnInteractiveResizeChanged(bool active)
     {
         if (active)
         {
+            _resizeLoop = true;
             if (!_onStage || !ViewModel.PictureInHostWindow) return;
             _resizeGeneration++;
             _resizeFrame?.Dispose();
             _resizeFrame = null;
             _videoTarget.SetInteractiveResize(true);
         }
-        else if (_videoTarget.IsInteractiveResize && _window is { } window)
+        else
         {
-            _resizeChange = FinishResizeAsync(window, ++_resizeGeneration);
+            _resizeLoop = false;
+            // 松手之后有两条路，两条都管住那笔冻结账：有几何收尾的走 FinishResizeAsync（放开排在保留帧
+            // 撤掉之后 —— 早一步放开，盖着的那帧还停在旧内容上而声音已经走过去了，撤掉时画面会往前跳），
+            // 没有几何收尾的（这一趟没挂链）就当场放开。
+            if (_videoTarget.IsInteractiveResize && _window is { } window)
+                _resizeChange = FinishResizeAsync(window, ++_resizeGeneration);
+            else
+                _resizeChange = ReleaseResizeFreezeAsync();
         }
     }
 
     /// <summary>
     /// ResizeBuffers 与合成提交不是同一事务。松手时保留画面到新缓冲上屏，
-    /// 否则会短暂用新尺寸裁旧像素；不暂停视频或音频，也不在整段拖动中抓帧。
+    /// 否则会短暂用新尺寸裁旧像素。
+    /// <para>
+    /// <b>2026-09-23 起这一趟也管着「放开播放」。</b>拖动那一段 mpv 已经被冻住（见 <see cref="BeginResizeFreeze"/>），
+    /// 放开的动作排在这里、而且排在保留帧撤掉之后：要是松手就放开，覆盖层盖的是那张静止帧而声音已经走过去了，
+    /// 撤掉时画面会往前跳那一段 —— 与切全屏那一趟同一条理由（见 <see cref="FreezeForHandoffAsync"/>）。
+    /// </para>
     /// </summary>
     private async Task FinishResizeAsync(HostWindow window, int generation)
     {
         if (_videoTarget.IsContentReady)
         {
+            // 缓冲在松手之前就追上了（这一趟没怎么改尺寸）：没有覆盖层可撤，放开当场做。
             _videoTarget.SetInteractiveResize(false);
+            await ReleaseResizeFreezeAsync();
             return;
         }
         VideoFrameOverlay? overlay = null;
@@ -358,14 +445,88 @@ public sealed partial class PlayerPage
             if (ReferenceEquals(_resizeFrame, overlay)) _resizeFrame = null;
             overlay?.Dispose();
         }
+
+        // 覆盖层已经撤掉，屏上那一帧就是接下来要接着放的那一帧 —— 这时候才谈放开。
+        // `Current()` 为假＝这一趟被下一轮拖动（或取消）接手了：那笔冻结账归接手的那一趟，由它收尾时放开。
+        if (Current()) await ReleaseResizeFreezeAsync();
+    }
+
+    /// <summary>
+    /// 拖边真的开始改尺寸的那一拍：把播放冻住（用户令 2026-09-23，判据在
+    /// <see cref="ResizeFreeze.Freezes"/>）。
+    /// <para>
+    /// <b>为什么冻的是 mpv 而不是别的。</b>集成模式里这扇窗是应用自己的，mpv 在进程内、没有自己的窗口，
+    /// 「暂停播放器」就是往它发 <c>pause=yes</c>：画面与声音一起停住，而它照样会按新的 composition 尺寸重建
+    /// 缓冲（实测 100ms，见 <c>work/probe-pause-resize.py</c>）—— 收尾那条「等画面就绪」因此仍然到得了，
+    /// 覆盖层上那帧与撤掉时屏上那帧也才是同一帧。
+    /// </para>
+    /// <para>
+    /// 一进这个模态回环只冻一次：<see cref="OnClientSizeChanged"/> 在拖动里每几毫秒就被叫一次，
+    /// 这道守卫是它不重复发命令的唯一原因。用户自己暂停着的时候<b>一根手指都不碰</b>
+    /// （<see cref="ResizeFreeze.Freezes"/> 的第一问），那时这一位也不会立起来，收尾自然也不会替他放开。
+    /// </para>
+    /// </summary>
+    private void BeginResizeFreeze()
+    {
+        if (_resizePaused) return;
+        if (!ResizeFreeze.Freezes(ViewModel.Paused, _onStage, ViewModel.PictureInHostWindow)) return;
+
+        _resizePaused = true;
+        _resizeFreeze = FreezeForResizeAsync();
+    }
+
+    private async Task FreezeForResizeAsync()
+    {
+        // 与抓帧那一趟同一笔账：暂停徽标不该冒出来（见 PlayerPage.Muted 与 HandoffPulseMuteMilliseconds）。
+        _handoffMutedAt = Now;
+        SetPaused(true);
+
+        // 等它真的停住才让收尾去抓帧 —— 发号那一句是不等结果的那一路（`SetPropertyAsync` 发完就丢）。
+        // 上限只给 12 拍（约 190ms）：真等不到也照走，坏处不过是覆盖层上那帧还在动，
+        // 不至于把用户松手那一下拖住。
+        for (var step = 0; step < 12 && !ViewModel.Paused; step++)
+            await Task.Delay(16);
+    }
+
+    /// <summary>
+    /// 松手之后按设定替用户放开（<see cref="ResizeFreeze.Resumes"/>：这一趟冻过 ∧ 设置里那一行说继续）。
+    /// <para>
+    /// <b>先等我们那一下 <c>pause=yes</c> 落地再发放开</b>：两条命令要是次序倒了，净结果就是「停着」，
+    /// 而此后没有任何人会再来放开它 —— 那正是这条路上唯一一个不可接受的坏法。等错方向不花钱：
+    /// 那时它顶多多停几十毫秒，而这段本来就被覆盖层盖着。
+    /// </para>
+    /// <para>
+    /// 放开之后还要等状态真的翻过来才报「收尾完了」，因为读它的人（探针、自检）要的是屏上的事实，
+    /// 而 mpv 把 <c>pause</c> 报回来还隔着一次往返。
+    /// </para>
+    /// </summary>
+    private async Task ReleaseResizeFreezeAsync()
+    {
+        var froze = _resizePaused;
+        _resizePaused = false;
+        if (!ResizeFreeze.Resumes(froze, ViewModel.ResumeAfterWindowResize)) return;
+
+        await _resizeFreeze;
+
+        _handoffMutedAt = Now;
+        SetPaused(false);
+        for (var step = 0; step < 12 && ViewModel.Paused; step++)
+            await Task.Delay(16);
     }
 
     private void CancelResizeChange()
     {
         _resizeGeneration++;
+        _resizeLoop = false;
         _resizeFrame?.Dispose();
         _resizeFrame = null;
         _videoTarget.SetInteractiveResize(false);
+
+        // 冻结那笔账不能丢给下一趟：窗口切换事务只看得见「现在停着」，看不出这是谁按的 ——
+        // 一笔没人还的账就是「画面从此不再动」。这一句不等它落地（这里是同步返回），紧接着的窗口切换
+        // 事务会自己决定要不要再冻一次；最坏也只是那一趟少冻一下（它把这次放开误读成「用户暂停着」，
+        // 于是跳过冻结，而放开已经发出去了，播放照常回来）。
+        _ = ReleaseResizeFreezeAsync();
     }
 
     private void EnterAutoFullscreen()

@@ -111,10 +111,11 @@ public sealed partial class PlayerPage : UserControl
     private long? _pulseMutedAt;
 
     /// <summary>
-    /// 切换窗口那一趟的静默锚（2026-09-22，用户令「切全屏和窗口化的时候暂停播放，和截图无缝衔接」）。
-    /// 那一趟会临时把 mpv 冻住再抓帧（见 <see cref="FreezeForHandoffAsync"/>），而暂停／恢复这两个状态边
-    /// 都不是用户按的 —— 屏中间不该冒出暂停徽标。与双击那一位同一种账法（跨度而不是计数：状态边回来的
-    /// 早晚都不确定），只是跨度更长。
+    /// 我们自己冻住播放那两趟的静默锚（2026-09-22 切全屏／最大化那一趟；2026-09-23 起也管着拖边那一趟）：
+    /// 前者会临时把 mpv 冻住再抓帧（见 <see cref="FreezeForHandoffAsync"/>），后者从拖动开始冻到收尾
+    /// （见 <see cref="BeginResizeFreeze"/>／<see cref="ReleaseResizeFreezeAsync"/>）。两趟里暂停／恢复
+    /// 这两个状态边都不是用户按的 —— 屏中间不该冒出用户按过的暂停徽标。与双击那一位同一种账法
+    /// （跨度而不是计数：状态边回来的早晚都不确定），只是跨度更长。
     /// </summary>
     private long? _handoffMutedAt;
 

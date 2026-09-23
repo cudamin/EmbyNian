@@ -15,7 +15,8 @@ namespace EmbyNian.Shell.Windowing;
 
 /// <summary>
 /// mpv 的交换链留在独立 SpriteVisual 上。呈现矩形按物理像素记，与缓冲尺寸、DPI 和窗口原点分开。
-/// 拖边期间保持渲染缓冲不变，合成器缩放持续更新的画面；松手后才交给 mpv 最终尺寸。
+/// 拖边期间保持渲染缓冲不变，靠合成变换把画面缩放着跟住窗口；mpv 在这一段被页面冻住
+/// （见 <see cref="ResizeFreeze"/>），松手后才交给它最终尺寸、再按设定放开。
 /// 交换链画笔的 Stretch 不负责缩放，Size 是裁剪框，因此必须按实测缓冲尺寸设置 Scale。
 /// 客户区跳变瞬时落位，不插值播放画面的几何。
 /// </summary>
@@ -422,8 +423,14 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         ? visual.Compositor.RequestCommitAsync().AsTask() : Task.CompletedTask;
 
     /// <summary>
-    /// 拖边只改呈现尺寸，视频仍往同一块缓冲里连续出帧。Size 也必须保持稳定，
+    /// 拖边只改呈现尺寸，缓冲尺寸在这一段保持稳定（画面靠合成变换缩放着跟住窗口）。Size 也必须保持稳定，
     /// 因为后端除了响应 GeometryChanged，还会在交换链通知中主动读取它。
+    /// <para>
+    /// <b>这一段里 mpv 是被页面冻住的</b>（用户令 2026-09-23，判据在 <see cref="ResizeFreeze"/>）——
+    /// 从前这里写的是「视频仍往同一块缓冲里连续出帧」，那话只说明缓冲不换、不断言内容在动：拖动中每一拍
+    /// 都在换内容，正是收尾撤掉覆盖层时会跳的那一段。冻住之后这条链只被押一帧就静止，覆盖层上那帧与
+    /// 撤掉时屏上那帧是同一帧。
+    /// </para>
     /// </summary>
     internal void SetInteractiveResize(bool active)
     {

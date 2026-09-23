@@ -511,6 +511,27 @@ public sealed class PlaybackSettings
     public bool AutoFullscreenOnPlayback { get; set; }
 
     /// <summary>
+    /// 拖窗口边沿改完大小、松开鼠标之后继续播放（用户令 2026-09-23）。关掉它＝松开之后停在暂停，要用户自己按播放。
+    /// <para>
+    /// <b>调整开始那一下一定冻，没有开关</b> —— 那是同一道令的另一半，判据在 <see cref="Playback.ResizeFreeze"/>：
+    /// 拖动那一段的画面是靠合成变换拉伸着跟窗口走的，mpv 先停住，松手后盖上去的那张静止帧与撤掉时屏上那帧
+    /// 才是同一帧。这一行只管松手之后往哪边走。
+    /// </para>
+    /// <para>
+    /// <b>只对集成模式有效。</b>那一档的画面嵌在本窗口的视觉树里、窗口是应用自己的；独占模式与外部 mpv.exe
+    /// 的画面在 mpv 自建的顶层窗口里，用户拖的是它那扇窗，走不到这条路上（<see cref="Playback.ResizeFreeze.Freezes"/>
+    /// 里那一问）。
+    /// </para>
+    /// <para>
+    /// 装机默认开，所以缺这个键的旧设置文件读出来就是「继续播放」，不需要为它加一条迁移 —— 同
+    /// <see cref="AutoFullscreenOnPlayback"/> 那条。这一行改完当场生效：拖边收尾那一拍现读设置文件里的值
+    /// （<c>PlayerViewModel.ResumeAfterWindowResize</c>），与 <see cref="AutoFullscreenOnPlayback"/> 去同一个
+    /// 地方读，不经过任何通知管道。
+    /// </para>
+    /// </summary>
+    public bool ResumeAfterWindowResize { get; set; } = true;
+
+    /// <summary>
     /// 播放页置顶开关的持久化偏好：「对播放页面"是否置顶"的设置进行持久化保存，程序重启后仍保留上次
     /// 选择」（用户的话，2026-09-15）。
     /// <para>

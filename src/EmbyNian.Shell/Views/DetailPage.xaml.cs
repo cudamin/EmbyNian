@@ -1256,6 +1256,42 @@ public sealed partial class DetailPage : Page, IShellContent
         Body.ScrollTo(0, top, new ScrollingScrollOptions(ScrollingAnimationMode.Disabled));
     }
 
+    private double? _revealScrollTarget;
+    private long _revealArmedAt;
+
+    /// <summary>
+    /// 播放层收起、详情页重新露出来那一小段里，把滚动位按在离开时看的地方。
+    /// <para>
+    /// 收起播放层时框架会把焦点挪进这一页，随之把落点滚进视口（见 <c>ShellSelfCheck.ReturnFromPlayer</c> 注释）——
+    /// 于是退出播放后页面自己往下跳了一截。退出播放该停在离开时的位置，所以在焦点那一跳之后把偏移按回去：钩住
+    /// <see cref="ScrollView.ViewChanged"/>，在收起后那 600ms 的窗口里撤销框架滚过去的那一下；窗口之外的滚动是
+    /// 用户自己在滚，只撤钩子、不再拽他（2026-09-23：字幕/音轨那批把详情页版面改高、焦点落点比从前低之后这一跳
+    /// 才显出来，闸门 4「播放回来那一页」记的就是它）。<see cref="ShowPlayer"/> 进播放时记位、收起时叫这一句。
+    /// </para>
+    /// </summary>
+    internal void KeepScrollThroughReveal(double offset)
+    {
+        _revealScrollTarget = offset;
+        _revealArmedAt = Environment.TickCount64;
+        Body.ViewChanged -= OnRevealViewChanged;
+        Body.ViewChanged += OnRevealViewChanged;
+    }
+
+    private void OnRevealViewChanged(ScrollView sender, object args)
+    {
+        if (_revealScrollTarget is not { } off || Environment.TickCount64 - _revealArmedAt > 600)
+        {
+            Body.ViewChanged -= OnRevealViewChanged;
+            _revealScrollTarget = null;
+            return;
+        }
+
+        // 已经在位（多半是我们刚按回去触发的这一次 ViewChanged）就别再按，免得空转。
+        if (Math.Abs(Body.VerticalOffset - off) < 1) return;
+
+        Body.ScrollTo(0, off, new ScrollingScrollOptions(ScrollingAnimationMode.Disabled));
+    }
+
     /// <summary>
     /// Every non-empty piece of text under one node, joined. Used on a realised 媒体信息 row, where it is
     /// the label and its value: 「文 件： Silo.S03E09…」.

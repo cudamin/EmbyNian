@@ -32,6 +32,7 @@ internal static class PlaybackTests
         RegisterSkipCoordinator();
         RegisterChromeReveal();
         RegisterPictureTap();
+        RegisterWakeClick();
         RegisterCursorMask();
         RegisterPulseArt();
         RegisterPipelineDiscriminator();
@@ -4885,6 +4886,41 @@ internal static class PlaybackTests
         }
     });
 
+    // ---- 叫醒窗口的那一下点击 ----------------------------------------------------
+    //
+    // 用户令 2026-09-23：「先点一下让窗口置顶，然后再点一下触发暂停/播放」。判据的主料是**上一拍**问出来的
+    // 严格前台位（播放页每拍 100ms 问一次，光标规则也要用它）：按下那一刻窗口已经是前台了（激活在按下之前只
+    // 隔 1~5ms），只有上一拍分得出「这一下之前我们在不在前台」。头一版拿「刚变前台 ≤250ms」当主料、而那个时刻
+    // 是轮询记的、轮询抓不到那 1~5ms，于是它一直是陈值、叫醒那一下反被当普通点击——用户实测「点一下就播了」正是
+    // 这个，现在「刚变前台」只留作轮询恰好抓到时的兜底。独占模式那份在 uosc 的 EMBYNIAN[click-pause-wake]
+    // （判据是 mpv 的 focused 属性），MpvUiTests 里对着源码钉住。
+
+    private static void RegisterWakeClick()
+    {
+        Test("叫醒点击：此刻是前台、上一拍还不是 —— 就是叫醒那一下，不该顺带暂停/播放", () =>
+        {
+            Assert.True(WakeClick.IsWaking(foregroundNow: true, wasForeground: false, foregroundForMilliseconds: 99999),
+                "点别的窗口再点画面：上一拍问到「不在前台」，这一下把窗口叫醒 —— 不作数（陈值 99999 也不影响）");
+            Assert.False(WakeClick.IsWaking(foregroundNow: true, wasForeground: true, foregroundForMilliseconds: 99999),
+                "上一拍就已经在前台 ⇒ 普通点击，照常暂停/播放");
+        });
+
+        Test("叫醒点击：轮询正好抓到激活那一拍时，靠「刚变前台」兜底", () =>
+        {
+            Assert.True(WakeClick.IsWaking(true, wasForeground: true, WakeClick.RegainedMilliseconds),
+                "轮询恰好落在激活与按下之间、把上一拍前台位写成了 true —— 靠「刚变前台 ≤250ms」仍认成叫醒");
+            Assert.False(WakeClick.IsWaking(true, true, WakeClick.RegainedMilliseconds + 1),
+                "又是前台位 true、变前台还超过 250ms ⇒ Alt+Tab 唤回后隔一会才点，照常暂停/播放");
+            Assert.False(WakeClick.IsWaking(true, true, -1), "差值为负（时刻还没记）且上一拍已是前台，不算");
+        });
+
+        Test("叫醒点击：没激活成前台的点击不可能是叫醒那一下", () =>
+        {
+            Assert.False(WakeClick.IsWaking(foregroundNow: false, wasForeground: false, 3),
+                "此刻都不是前台 ⇒ 这一下没把谁叫醒");
+        });
+    }
+
     // ---- 点画面那一下 ----------------------------------------------------------
     //
     // 「双击画面全屏的时候会触发暂停和开始」。从前是单击立刻暂停、双击再撤回 —— 净状态对，可屏上闪两次徽标，
@@ -4892,19 +4928,22 @@ internal static class PlaybackTests
 
     private static void RegisterPictureTap()
     {
-        Test("点画面：攥的时间不超过上限，也不超过系统那个数", () =>
+        Test("点画面：押后窗口就是参考 mpv 配置那一把尺，独占模式也照它写", () =>
         {
-            // 这台机器上系统答 500 —— 照它攥就是每次点画面暂停都要等半秒。
-            Assert.Equal(PictureTap.HoldCapMilliseconds, PictureTap.HoldFor(500));
-            Assert.Equal(80, PictureTap.HoldFor(80), "系统那个数更小就听它的");
-            Assert.Equal(PictureTap.HoldCapMilliseconds, PictureTap.HoldFor(0), "问不出来就用上限");
-            Assert.Equal(PictureTap.HoldCapMilliseconds, PictureTap.HoldFor(-1));
+            // 用户令 2026-09-23：参考 C:\mpv_config-2026.08.12 的延迟（那份配置用 inputevent.lua 按
+            // input-doubleclick-time 押后，mpv 这条属性的默认值是 300），集成与独占统一到同一个数。
+            Assert.Equal(300L, PictureTap.ClickDelayMilliseconds);
+            // 一个数管两处：独占模式的装配按它写 mpv 属性，uosc 那颗兜底命中区读的正是这个属性。
+            var ui = MpvUi.Build("mpv-ui/scripts/uosc", "mpv-ui/fonts");
+            var entries = ui.Where(option => option.Key == "input-doubleclick-time").ToList();
+            Assert.Equal(1, entries.Count);
+            Assert.Equal("300", entries[0].Value, "独占模式的押后窗口没跟集成模式那个常量走");
         });
 
-        Test("点画面：徽标静音期比攥的上限长", () =>
+        Test("点画面：徽标静音期比押后窗口长", () =>
         {
-            // 撤回那一下的状态沿要走 mpv 一趟回来，静音期短于攥的时间就会漏出那一次徽标。
-            Assert.True(PictureTap.PulseMuteMilliseconds > PictureTap.HoldCapMilliseconds);
+            // 撤回那一下的状态沿要走 mpv 一趟回来，静音期短于押后的时间就会漏出那一次徽标。
+            Assert.True(PictureTap.PulseMuteMilliseconds > PictureTap.ClickDelayMilliseconds);
         });
 
         Test("点画面：单击攥住，不当场下发", () =>

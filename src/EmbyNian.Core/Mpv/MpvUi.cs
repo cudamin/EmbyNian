@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace EmbyNian.Mpv;
 
 /// <summary>
@@ -84,6 +86,12 @@ public static class MpvUi
         new("window-dragging", "yes"),
         new("osd-fonts-dir", fontsDirectory),
         new("osd-font", OsdFont),
+        // 点击画面暂停那一拍押后多久 —— uosc 那颗兜底命中区读的就是这个属性（main.lua 的
+        // embynian_click_pause_window），mpv 自己认「双击」也用同一把尺（input.c 的 doubleclick_time）。
+        // 值取 PictureTap.ClickDelayMilliseconds：**一个数管三件事**（集成模式的押后、这里的押后、
+        // mpv 的双击窗口），两种模式与用户那份参考 mpv 配置因此是同一条延迟（用户令 2026-09-23）。
+        new("input-doubleclick-time",
+            Playback.PictureTap.ClickDelayMilliseconds.ToString(CultureInfo.InvariantCulture)),
         new("scripts", scriptDirectory),
     ];
 

@@ -1,3 +1,4 @@
+using System.Threading;
 using EmbyNian.Infrastructure;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Windowing;
@@ -94,6 +95,7 @@ public sealed partial class PlayerPage
         var wasFullscreen = _window.Fullscreen;
 
         SetFullscreen(true);
+        DrainWindowChange();
         UpdateLayout();
 
         foreach (var (name, button) in new (string Name, FrameworkElement Element)[]
@@ -110,6 +112,7 @@ public sealed partial class PlayerPage
         if (MaximizeGlyph.Glyph != Glyph(RestoreGlyphCode)) trouble.Add("全屏时窗口化图标不对");
 
         SetFullscreen(wasFullscreen);
+        DrainWindowChange();
         UpdateLayout();
 
         // Left the way a player that is not running should be, for the same reason ProbeReveal is.
@@ -126,6 +129,26 @@ public sealed partial class PlayerPage
             + $"；右上角那颗={(_window.Fullscreen ? "窗口化" : restore ? "还原" : "最大化")}"
             + $"，窗口{(_window.IsMaximized ? "已最大化" : "未最大化")}"
             + $"，{(_window.Fullscreen ? "全屏" : "窗口化")}");
+    }
+
+    /// <summary>
+    /// 把窗口切换那一趟异步走完再往下读。<c>ChangeWindowAsync</c> 自 2026-09-22 起会先冻住播放
+    /// （<see cref="FreezeForHandoffAsync"/> 里 <c>await Task.Delay</c> 等 mpv 停住），而自检不真播放、那句
+    /// <c>pause=yes</c> 落进空气 —— 于是那段 await 实打实占了约 200 毫秒，<c>SetFullscreen</c> 当拍不落地。
+    /// 探针不等它，读到的还是切换前的状态（右上角图标、退全屏按比例整形都验不到，2026-09-23 闸门 4 两条回退
+    /// 就是它）。照光标探针那一套泵消息、等 <see cref="WindowChange"/> 落地（<c>Pump</c> 见
+    /// PlayerPage.SelfCheck.Cursor），给足冻结上限加抓帧兜底的余量。
+    /// </summary>
+    private void DrainWindowChange()
+    {
+        var until = Now + 2000;
+        while (!WindowChange.IsCompleted && Now < until)
+        {
+            Pump();
+            Thread.Sleep(16);
+        }
+
+        Pump();
     }
 
     /// <summary>
@@ -484,8 +507,10 @@ public sealed partial class PlayerPage
         _window.PictureAspect = 4d / 3d;
 
         SetFullscreen(true);
+        DrainWindowChange();
         UpdateLayout();
         SetFullscreen(false);
+        DrainWindowChange();
         UpdateLayout();
 
         var afterSize = _window.ClientSize;
@@ -531,8 +556,10 @@ public sealed partial class PlayerPage
         var haveShaped = Native.GetWindowRect(_window.Handle, out var shapedRect);
 
         SetFullscreen(true);
+        DrainWindowChange();
         OnPictureAspectChanged(0);
         SetFullscreen(false);
+        DrainWindowChange();
 
         _window.FreeSizing = false;
         _window.RestoreBrowseGeometry();

@@ -72,9 +72,16 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
      `pause` 观察器里的 `file_end_timer:kill()` 残留引用一并清掉——nil 索引会让 mpv
      整个销毁脚本，UI 一片空白，实测 2026-09-19）；
    - `options.autoload` 在读入配置后强制为 false。
-   - 新增绑定 `embynian-ui-prev/next`（换集）、`embynian-ui-episodes`（要选集菜单）——
-     控制条行首是上一集/下一集，随后是菜单与选集；上游的「视频轨」按钮由选集菜单顶替，
-     单曲循环按钮不设（连播归宿主）。**绑定名带 `-ui-`、宿主消息名不带，是硬规矩**：mpv 把一条
+   - 新增绑定 `embynian-ui-prev/next`（换集）、`embynian-ui-episodes`（要选集菜单）、
+     `embynian-ui-versions`（要版本菜单）、`embynian-ui-picture-menu`（要画面菜单）。
+     控制条 2026-09-23 按用户令重排为三组：**左下**上一集/下一集/统计/章节（有章节时）/画面菜单，
+     **中下**上一章节/倍速/下一章节，**右下**选集/版本/音频/字幕，全屏在最右。四处与旧版不同：
+     那颗菜单按钮开的是**画面菜单**（与集成模式的「更多」按钮、独占模式右键同一份
+     `PlayerMenuCatalog`；uosc 自带的 ≡ 菜单保留，只是控制条上不再有它的入口）；音频按钮不再带
+     「多音轨才显示」的条件（只有一条音轨时也在，简写自带的 `#audio>1` 徽章仍只在一轨以上标数字）；
+     「版本」是 Emby 的媒体源切换，上游那颗 mpv 剪辑版本按钮（`<has_many_edition>editions`）已撤，
+     免得两颗同名。上游的「视频轨」按钮由选集菜单顶替，单曲循环按钮不设（连播归宿主）。
+     **绑定名带 `-ui-`、宿主消息名不带，是硬规矩**：mpv 把一条
      `script-message` 也派给同名的脚本绑定，同名就等于「这条消息把自己再叫醒一次」——
      2026-09-19 的实测事故即此（详见下节）。
    - 「轻点空白画面切换暂停」不再用 `mp.add_key_binding('MBTN_LEFT', …)`（旧版即此，已撤）：
@@ -82,15 +89,19 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
      「暂停」。现在它是 uosc 自己的兜底命中区（动作在 main.lua 的 `embynian_click_pause_zone`，
      每帧在 `lib/utils.lua` 的 `render()` 里、早于所有元素登记一次），于是每一下点击只有一个答主。
      **含双击闸（2026-09-19，修法对齐集成模式的 TapPicture/SecondTapOnPicture）**：单击押后到 mpv
-     的双击窗口（`input-doubleclick-time`，默认 300ms，从第一次按下起算）之外才证实；**第二拍的
-     「按下」当场撤掉押后那一拍**（`cursor:on('primary_down')`）。为什么撤在按下不撤在松开——
-     真窗口实测：双击的第二拍按下当场触发 mpv 内建 `MBTN_LEFT_DBL`＝全屏，独占全屏切换里 uosc 的
-     `update_fullormaxed` 会 `cursor:leave()` 把光标挪到无穷远，第二拍的松开过不了 ≤6px 位置闸，
-     撤销永远轮不到跑（四条光标事件全到、提交=1、撤销=0、pause 照翻）。mpv 自己那层无嫌疑：内建
-     `MBTN_LEFT` 是 `ignore`。第二拍落在控件命中区上不算双击（「点完画面马上去点按钮」，押后的
-     暂停照给；控件上 mpv 的 DBL 本就被 uosc 的 ignore 闸住）。代价与集成模式同款：轻点暂停比手
-     慢一个双击窗口（约 210ms），嫌慢调小 `input-doubleclick-time`。换源/收摊（`start-file`/
-     `end-file`）时作废押后那一拍，不打在新一集身上。
+     的双击窗口之外才证实；**第二拍的「按下」当场撤掉押后那一拍**（`cursor:on('primary_down')`）。
+     押后窗口＝`input-doubleclick-time`，**值由宿主按 `PictureTap.ClickDelayMilliseconds`（300 毫秒）
+     写进装配**（`MpvUi.Build`）—— 集成模式那份押后是同一个常量，两种模式与用户的参考 mpv 配置
+     （`C:\mpv_config-2026.08.12` 的 `inputevent.lua` 也拿这个属性做 debounce）于是同一条延迟
+     （用户令 2026-09-23）。为什么撤在按下不撤在松开——真窗口实测：双击的第二拍按下当场触发 mpv 内建
+     `MBTN_LEFT_DBL`＝全屏，独占全屏切换里 uosc 的 `update_fullormaxed` 会 `cursor:leave()` 把光标挪到
+     无穷远，第二拍的松开过不了 ≤6px 位置闸，撤销永远轮不到跑（四条光标事件全到、提交=1、撤销=0、pause
+     照翻）。mpv 自己那层无嫌疑：内建 `MBTN_LEFT` 是 `ignore`。第二拍落在控件命中区上不算双击（「点完画面
+     马上去点按钮」，押后的暂停照给；控件上 mpv 的 DBL 本就被 uosc 的 ignore 闸住）。**叫醒窗口的那一下
+     不作数**（`EMBYNIAN[click-pause-wake]`，用户令 2026-09-23「先点一下让窗口置顶，然后再点一下触发
+     播放」）：判据是 mpv 的 `focused`（w32 的 VO 在 WM_SETFOCUS/WM_KILLFOCUS 上更新），按下时刻距
+     窗口变前台 ≤0.4 秒的那一下什么都不做。代价与集成模式同款：轻点暂停比手慢一个押后窗口（300 毫秒）。
+     换源/收摊（`start-file`/`end-file`）时作废押后那一拍，不打在新一集身上。
    - 「空白画面滚轮＝音量」（2026-09-19，`embynian_wheel_volume_zone`）：mpv 内建的
      `WHEEL_UP add volume 2` 会带出**左上角**那行「Volume: N%」OSD（`osd-bar=no` 拦不住它的文字，
      uosc 关掉的只是自带 OSC），接管之后音量走 `no-osd add volume 2`（步进与内建同速），反馈改由
@@ -119,6 +130,10 @@ uosc → 宿主（`MPV_EVENT_CLIENT_MESSAGE`，契约与解析在 `src/EmbyNian.
 | `embynian-episode` | `-1` / `1` | 换集请求 → `PlayerViewModel.StepEpisodeAsync`（Emby 单集导航） |
 | `embynian-episodes` | （保留） | 要选集菜单；宿主把本季单集经 `open-menu` 推回 uosc 画 |
 | `embynian-episode-index` | 1 起算序号 | 选集菜单点中的一项 → `PlayerViewModel.SwitchEpisode` |
+| `embynian-versions` | （保留） | 要版本菜单；宿主把这一条目的媒体源经 `open-menu` 推回（只有一版时回一行「没有可切换的版本」） |
+| `embynian-version-index` | 1 起算序号 | 版本菜单点中的一项 → `PlayerViewModel.SwitchVersion` |
+| `embynian-picture-menu` | （保留） | 要画面菜单；右键、键盘菜单键与控制条那颗按钮走的是同一条绑定 |
+| `embynian-menu-index` | 1 起算序号 | 画面菜单点中的一行 → `RunMenuNodeAsync`（与集成模式右键点同一行是同一句执行） |
 | `embynian-seek` | 0–1 比例 | 预留扩展；当前 uosc 时间轴直接对 mpv seek，不经宿主 |
 
 不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc 一条：`open-menu`（选集

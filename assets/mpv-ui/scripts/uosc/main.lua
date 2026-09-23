@@ -12,7 +12,7 @@
 -- │   main.lua（本文件）
 -- │     EMBYNIAN[host]          宿主通道：embynian_notify 与 embynian-ready 握手
 -- │     EMBYNIAN[pkgpath]       模块搜索路径自举（load-script 不加 package.path）
--- │     EMBYNIAN[controls]      控制条默认值（换集/选集顶替播放列表入口）
+-- │     EMBYNIAN[controls]      控制条默认值与排布（换集/选集/版本/画面菜单顶替播放列表入口）
 -- │     EMBYNIAN[topbar]        无边框顶栏（系统标题栏不存在，顶栏画窗口按钮）
 -- │     EMBYNIAN[color]         用户原配色（Fluent 深色一档）
 -- │     EMBYNIAN[autoload]      autoload 强制 false（defaults 与读配置后各一处）
@@ -20,14 +20,18 @@
 -- │     EMBYNIAN[osddim]        d3d11 起播画布尺寸兜底观察
 -- │     EMBYNIAN[ui-bind]       脚本绑定叫 embynian-ui-*，宿主消息叫 embynian-*，两套名字不许同名
 -- │     EMBYNIAN[episode]       embynian-ui-* 三个绑定与裁剪说明
--- │     EMBYNIAN[version]       换版本的第四个绑定（embynian-ui-versions）与 ≡ 菜单里那一行；
--- │                             uosc 的控件表是静态的，所以入口固定在 ≡ 菜单里，不随版本数增减。
+-- │     EMBYNIAN[version]       换版本的第四个绑定（embynian-ui-versions）：≡ 菜单里那一行，
+-- │                             外加控制条上那颗常驻的「版本」按钮。uosc 的控件表是静态的，
+-- │                             没有「有第二版才露」这种条件可写，所以按钮常驻、菜单内容随条目变。
+-- │     EMBYNIAN[picture-menu]  第五个绑定（embynian-ui-picture-menu）：独占模式右键/菜单键，
+-- │                             以及控制条上那颗「画面菜单」按钮 —— 三者同一份 PlayerMenuCatalog。
 -- │     EMBYNIAN[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
 -- │                             含双击闸：单击押后到 mpv 的双击窗口外才证实，第二拍「按下」即撤
 -- │                             （撤在按下不撤在松开——独占全屏切换会把光标挪走、松开过不了位置闸）
 -- │     EMBYNIAN[wheel-volume]  空白画面滚轮＝音量（no-osd，只闪右侧音量条，不落 mpv 的 OSD）
 -- │   elements/Controls.lua
 -- │     EMBYNIAN[episode]       控制条快捷项映射到上面的绑定
+-- │     EMBYNIAN[controls]      控制条新加的两项快捷项：版本、画面菜单
 -- │   elements/Volume.lua
 -- │     EMBYNIAN[vol-osd]       音量条自己改音量也走 no-osd（拖条/滚条不再冒 mpv 的 OSD）
 -- │   lib/utils.lua
@@ -99,11 +103,23 @@ defaults = {
 	timeline_cache = true,
 	timeline_heatmap = 'overlay',
 
-	-- EMBYNIAN[controls] — 控制条默认值：上一集/下一集在行首（左下角），选集菜单（embynian-ui-episodes →
-	-- embynian-episodes 找宿主，宿主推送本季单集）顶替上游的「视频轨」按钮；mpv 自身能应答的项照旧。
+	-- EMBYNIAN[controls] — 控制条默认值与排布（2026-09-23 用户令重排）：
+	--   左下：上一集、下一集、统计、章节（有章节时）、画面菜单；
+	--   中下：上一章节、倍速、下一章节（有章节时）；
+	--   右下：选集、版本、音频、字幕、全屏。
+	-- 三处与旧版不同，各有原因：
+	--   · 那颗菜单按钮开的是**画面菜单** —— 与集成模式的「更多」按钮、独占模式的右键同一份
+	--     PlayerMenuCatalog（用户令「改成右键画面呼出的那个菜单」）。绑定因此换成
+	--     uosc/embynian-ui-picture-menu；uosc 自带的 ≡ 菜单没删，只是控制条上不再有它的入口。
+	--   · 字幕/选集/音频/版本四颗在右侧挨着全屏；音频**不带** <has_many_audio> 条件 —— 只有一条音轨
+	--     时那颗按钮也要在（简写自带的 #audio>1 徽章照旧：一轨以上才在角上标数字）。
+	--   · 「版本」按钮是 Emby 的媒体源切换（embynian-ui-versions → 宿主把这一条的媒体源推回菜单），
+	--     不是上游的 <has_many_edition>editions（mpv 自己的剪辑版本，那颗已撤 —— 两颗都叫「版本」
+	--     只会让人点错；要看 mpv 的剪辑版本，≡ 菜单的「工具 → 剪辑版本」还在）。
+	--     宿主那侧本来就对「只有一版」有交代：菜单回一行「没有可切换的版本」，不是空菜单。
 	-- 播放列表/目录导航、打开文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
 	controls =
-	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,gap,menu,<video,audio>embynian-ui-episodes,<video,audio>subtitles,<has_many_audio>audio,<has_many_edition>editions,<has_chapter>chapters,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,gap,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,fullscreen',
+	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,embynian-ui-picture-menu,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,gap,<video,audio>embynian-ui-episodes,<video,audio>embynian-ui-versions,audio,<video,audio>subtitles,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
@@ -1051,11 +1067,15 @@ end)
 -- 全屏切换里 uosc 的 update_fullormaxed 会 cursor:leave() 把光标挪到无穷远，第二拍的松开于是
 -- 过不了 ≤6px 位置闸（或 find_zone 直接扑空），撤销永远轮不到跑。而按下事件先于全屏切换送达，
 -- 闸只能挂在那里。mpv 自己那层无嫌疑：内建 MBTN_LEFT 是 ignore（input-bindings 实录），不发暂停。
---   · 双击判定与 mpv 同源：同一把尺 input-doubleclick-time（默认 300ms），从第一次按下起算；
---     mpv 的 DBL 本来就只看间隔不看位置，这里一致。
+--   · 双击判定与 mpv 同源：同一把尺 input-doubleclick-time，从第一次按下起算；mpv 的 DBL 本来就只看
+--     间隔不看位置，这里一致。**这个值由宿主写进装配**（MpvUi.Build，值取 PictureTap.ClickDelayMilliseconds
+--     = 300 毫秒，与集成模式那份押后是同一个常量，用户令 2026-09-23「两种模式的延迟统一，参考
+--     C:\mpv_config-2026.08.12」——那份配置的 inputevent.lua 也是拿 mpv 这条属性的默认值做 debounce 的）。
+--     脚本只读它，不自己定数。
 --   · 第二拍按下若落在控件命中区上（find_zone('primary_down') 有主），不算双击 —— 那是「点完画面
 --     马上去点按钮」，押后的暂停照给；控件上 mpv 的内建 DBL 本来就被 uosc 的 ignore 闸住，不全屏。
---   · 代价与集成模式同款：轻点暂停比手慢一个双击窗口（约 210ms），嫌慢调小 input-doubleclick-time。
+--   · 叫醒窗口的那一下不作数：见下面 EMBYNIAN[click-pause-wake]。
+--   · 代价与集成模式同款：轻点暂停比手慢一个押后窗口（300 毫秒）。
 -- 判据与读数：work/probe-click-pause-wheel.py（命令账）＋ work/probe-doubleclick-real.py（真窗口）。
 embynian_click_pause_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, window_drag = true}
 embynian_click_pause_pending = nil  -- 还没到期的那一拍（在飞＝这一下还没被证明是单击）
@@ -1065,6 +1085,23 @@ embynian_click_pause_second_half = false -- 最近一次按下是不是「画布
 function embynian_click_pause_window()
 	local option = mp.get_property_native('input-doubleclick-time')
 	return type(option) == 'number' and option > 0 and option / 1000 or 0.3
+end
+
+-- EMBYNIAN[click-pause-wake] — **叫醒窗口的那一下不作数**（用户令 2026-09-23：「先点一下让窗口置顶，
+-- 然后再点一下触发暂停/播放」）。这是 Windows 上内容区的通用规矩：激活点击只激活、不落在内容上；
+-- 不加这一条，从别的窗口回来点画面的第一下会当场切掉暂停/播放（实测 work/probe-activation-click-*.txt）。
+-- 判据是 mpv 的 focused 属性：w32 的 VO 在 WM_SETFOCUS/WM_KILLFOCUS 上更新它（w32_common.c 的
+-- VOCTRL_GET_FOCUSED），于是「按下的时刻 − 窗口变成前台的时刻 ≤ 0.4 秒」就是这一下。
+-- Alt+Tab 唤回不算 —— 那种第一次点击本来就该照常暂停，而 mpv 分不出两者，所以取的是「刚变前台」这个
+-- 更宽的口子：代价是唤回之后 0.4 秒内的第一下点击会被吃掉一次（与 Windows 自己那一套同款）。
+embynian_click_pause_focus_at = nil
+mp.observe_property('focused', 'bool', function(_, value)
+	if value then embynian_click_pause_focus_at = mp.get_time() end
+end)
+
+function embynian_click_pause_waking(press_time)
+	return embynian_click_pause_focus_at ~= nil
+		and press_time - embynian_click_pause_focus_at <= 0.4
 end
 
 -- 押后到期：窗口里没有第二拍按下 ⇒ 单击证实，发那一条暂停。
@@ -1112,6 +1149,7 @@ function embynian_click_pause_zone()
 		if down and not down.zone_handled and mp.get_time() - down.time < 0.5
 			and math.abs(cursor.x - down.x) + math.abs(cursor.y - down.y) <= 6 then
 			if embynian_click_pause_second_half then return end -- 双击的第二拍：全屏/还原归 mpv，这里不发
+			if embynian_click_pause_waking(down.time) then return end -- 叫醒窗口的那一下不作数（见上面那条）
 			embynian_click_pause_pending = mp.add_timeout(
 				math.max(0, down.time + embynian_click_pause_window() - mp.get_time()),
 				embynian_click_pause_commit)

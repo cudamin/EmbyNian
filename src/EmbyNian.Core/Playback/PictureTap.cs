@@ -8,9 +8,9 @@ namespace EmbyNian.Playback;
 /// 了一下又恢复了。
 /// </para>
 /// <para>
-/// 现在的做法是<b>先攥住</b>：点在画面上那一下不当场下发，攥 <see cref="HoldFor"/> 毫秒；这段时间里第二下到了，
-/// 那一次暂停就<b>从来没有发生过</b>，双击就是干净的一次全屏切换。攥不住的（双击比这段时间慢）照旧走撤回那条路，
-/// 只是徽标会被静音 —— 见 <see cref="PulseMuteMilliseconds"/>。
+/// 现在的做法是<b>先攥住</b>：点在画面上那一下不当场下发，攥 <see cref="ClickDelayMilliseconds"/> 毫秒；这段时间
+/// 里第二下到了，那一次暂停就<b>从来没有发生过</b>，双击就是干净的一次全屏切换。攥不住的（双击比这段时间慢）照旧
+/// 走撤回那条路，只是徽标会被静音 —— 见 <see cref="PulseMuteMilliseconds"/>。
 /// </para>
 /// <para>
 /// 做成有状态的类而不是纯函数，是照 <see cref="ChromeReveal"/> 和 <see cref="SkipCoordinator"/> 的样子来的：手势
@@ -21,33 +21,32 @@ namespace EmbyNian.Playback;
 public sealed class PictureTap
 {
     /// <summary>
-    /// 攥住单击最多这么久。
+    /// 单击押后多久才证实（毫秒）—— <b>两种模式、以及用户那份参考 mpv 配置，都用这一个数</b>（用户令 2026-09-23）。
     /// <para>
-    /// 上限是 150 而不是操作系统自己那个数：这台机器上 <c>GetDoubleClickTime()</c> 答 500 毫秒，照它攥就是每次
-    /// 点画面暂停都要等半秒才有反应，那是用一个新毛病换掉一个旧毛病。150 毫秒以下人感觉不出延迟，而比它慢的那些
-    /// 双击会落到「撤回并静音」那条路上 —— 代价只是画面卡顿一下、不出徽标，播放状态照旧不变。
+    /// 300 不是新挑的数：参考配置（<c>C:\mpv_config-2026.08.12</c>）里单击暂停就是 <c>inputevent.lua</c> 拿
+    /// <c>input-doubleclick-time</c> 做 debounce 押后的，而 mpv 这条属性的默认值正是 300（那份配置没有改它）。
+    /// 独占模式这一头读的也是同一个属性（<c>assets/mpv-ui/scripts/uosc/main.lua</c> 的
+    /// <c>embynian_click_pause_window</c>），装配现在按这个常量显式写进去（<c>MpvUi.Build</c> 的
+    /// <c>input-doubleclick-time</c>）—— 一个数管住「押后多久」与「多久之内算双击」两件事，两条管线再也分不开。
+    /// </para>
+    /// <para>
+    /// <b>从前为什么是 150。</b>旧写法是 <c>min(GetDoubleClickTime(), 150)</c>：这台机器上系统双击间隔是 500 毫秒，
+    /// 照它押后太钝，于是砍到 150 —— 代价是手快一点的双击（两下相距 150~300 毫秒）落在押后之外，双击会先暂停再
+    /// 撤回：徽标被静音，mpv 却真的停了一下。用户 2026-09-23 点名按参考配置的延迟对齐，于是两种模式都用 300，
+    /// 系统那个 500 不再参与 —— 它本来也不属于任何一边的判定（集成模式的双击由 WinUI 认，独占由 mpv 自己认）。
     /// </para>
     /// </summary>
-    public const long HoldCapMilliseconds = 150;
+    public const long ClickDelayMilliseconds = 300;
 
     /// <summary>
     /// 双击之后这么久内不放徽标。
     /// <para>
-    /// 比 <see cref="HoldCapMilliseconds"/> 长，因为撤回那一下要走 mpv 一趟再回来：状态沿是 mpv 推回来的，早一步
+    /// 比 <see cref="ClickDelayMilliseconds"/> 长，因为撤回那一下要走 mpv 一趟再回来：状态沿是 mpv 推回来的，早一步
     /// 晚一步、甚至被它合并掉都可能。按「多久之内」算而不是「数几次状态沿」正是为这件事 —— 一个数不动的计数器会
     /// 把后面每一次真暂停的徽标都吃掉。
     /// </para>
     /// </summary>
     public const long PulseMuteMilliseconds = 400;
-
-    /// <summary>
-    /// 这一下攥多久：不超过操作系统对「双击」的定义，也不超过 <see cref="HoldCapMilliseconds"/>。系统答 0 或者
-    /// 负数（问不出来）就用上限 —— 攥得久一点最多是暂停慢一点，攥不住则是这次修的那件事又回来了。
-    /// </summary>
-    public static long HoldFor(long systemDoubleClickMilliseconds) =>
-        systemDoubleClickMilliseconds <= 0
-            ? HoldCapMilliseconds
-            : Math.Min(systemDoubleClickMilliseconds, HoldCapMilliseconds);
 
     private bool? _held;
 
