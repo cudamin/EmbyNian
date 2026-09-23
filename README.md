@@ -1,5 +1,7 @@
 # EmbyNian
 
+这是一个个人自用的客户端，在天才程序员Claude、GPT、DeepSeek、GLM的协助下完成开发。
+
 telegram 发布频道：https://t.me/EmbyNian
 
 一个 Emby 服务器（4.9.x）的 Windows 桌面客户端。不套壳网页，界面是原生 WinUI 3，播放内核是 libmpv。解压即用，没有安装程序，也没有自动更新。
@@ -28,8 +30,6 @@ telegram 发布频道：https://t.me/EmbyNian
 ![详情页](docs/screenshots/detail.jpg)
 
 **界面** — 五套深色配色（墨绿、纯黑、午夜、石墨、紫夜），点一下立即生效。窗口拉窄时版式自己换成紧凑布局。支持键盘、鼠标、触摸。
-
-![设置](docs/screenshots/settings.jpg)
 
 ## 快捷键
 
@@ -83,7 +83,7 @@ telegram 发布频道：https://t.me/EmbyNian
 
 ## 说明
 
-这是一个个人自用的客户端，纯 AI 开发。播放内核用到的着色器、`vulkan-1.dll` 和 `libmpv-2.dll` 都已随发布包一起打包，**安装完开箱即用，不需要另外装 mpv 或其它东西**。
+播放内核用到的着色器、`vulkan-1.dll` 和 `libmpv-2.dll` 都已随发布包一起打包，**安装完开箱即用，不需要另外装 mpv 或其它东西**。
 
 只有从源码构建时才需要自己准备：`libmpv-2.dll` 有 117 MB，为避免把仓库撑大，它没有入库，构建前要放到仓库根目录（缺失时构建照常通过，只是播放时报找不到内核）。
 
