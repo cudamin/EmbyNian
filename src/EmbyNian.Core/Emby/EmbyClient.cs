@@ -91,15 +91,39 @@ public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
         return http.GetJsonAsync<EmbyItem>(url, Context, cancellationToken);
     }
 
-    public async Task<List<EmbyItem>> GetResumeAsync(int limit, CancellationToken cancellationToken)
+    /// <summary>
+    /// 服务器自己那条 Resume 接口 —— <b>「继续观看」的全部口径都在它手里</b>：有播放进度、没标已看、
+    /// 没被 <c>HideFromResume</c> 移出。主页那一排和那一排点进去的那一页都从这里拿，两处就不可能再对不上。
+    /// <para>
+    /// 2026-09-22 用户报「首页的继续观看怎么只有一项了」：查下来那一排本来就只有一项（服务器上「有播放进度」
+    /// 的九条里，五条已标已看、三条被移出继续观看），真正错的是点进去那一页 —— 它走通用查询
+    /// <c>Filters=IsResumable</c>，装了九条，于是「一排 1 项、进去 9 项」。
+    /// </para>
+    /// <para>
+    /// 这个差别在通用查询里补不出来，所以那一页只能问接口本身：实测 <c>Filters=IsResumable,IsUnplayed</c>
+    /// 只收到四条（还差被移出的那三条），而「被移出」这个条件通用查询里没有词可以表达 —— 把
+    /// <c>NotHiddenFromResume</c> 塞进 Filters，服务器一个都不认、静默丢掉，照样回四条（未知筛选词不报错）。
+    /// </para>
+    /// <para>
+    /// <c>StartIndex</c> 这条接口是真认的（实测 <c>StartIndex=1&amp;Limit=1</c> 会真的跳过头一条），所以点进去
+    /// 那一页照旧能往下翻。<c>SortBy</c> 与 <c>Filters</c> 一概不发：这一页的次序和口径都由服务器定，
+    /// 界面上那两颗键在这一页也就收起来了（见 <c>LibraryViewModel.SortFilterVisibility</c>）。
+    /// </para>
+    /// </summary>
+    /// <param name="startIndex">翻页用的起点；<see cref="GetResumeAsync"/> 传 0。</param>
+    public async Task<ItemsResult> QueryResumeAsync(int startIndex, int limit, CancellationToken cancellationToken)
     {
         var url = EmbyUrl.Combine(ApiBase, $"Users/{Connection.UserId}/Items/Resume",
+            ("StartIndex", startIndex.ToString()),
             ("Limit", limit.ToString()),
             ("Fields", EmbyFields.Browse),
             ("MediaTypes", "Video"));
-        var result = await http.GetJsonAsync<ItemsResult>(url, Context, cancellationToken).ConfigureAwait(false);
-        return result.Items;
+        return await http.GetJsonAsync<ItemsResult>(url, Context, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>主页那一排只要清单，不要总数 —— 接口本身见 <see cref="QueryResumeAsync"/>。</summary>
+    public async Task<List<EmbyItem>> GetResumeAsync(int limit, CancellationToken cancellationToken) =>
+        (await QueryResumeAsync(startIndex: 0, limit, cancellationToken).ConfigureAwait(false)).Items;
 
     /// <summary>Note: this endpoint returns a bare array rather than an ItemsResult.</summary>
     /// <param name="includeItemTypes">

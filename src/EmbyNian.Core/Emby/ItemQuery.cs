@@ -104,9 +104,14 @@ public sealed class ItemQuery
     /// </para>
     /// <para>
     /// 2026-09-14「继续观看里面为什么里面东西那么多」：那一页从前用 <see cref="IsPlayed"/>=false
-    /// （<c>IsUnplayed</c>）装「没看完的」，把一部都没开过头的也装了进来 —— 一整面墙。Emby 自己那条
-    /// Resume 接口（<c>EmbyClient.GetResumeAsync</c>，主页那一排的来源）的语义是「有播放进度」，不是
-    /// 「没看完」；这一页要的正是主页那一排的整个清单，判据必须跟它对齐。
+    /// （<c>IsUnplayed</c>）装「没看完的」，把一部都没开过头的也装了进来 —— 一整面墙。当时的那一页因此改成了
+    /// 「有播放进度」这一条。
+    /// </para>
+    /// <para>
+    /// 2026-09-22 更正：这一条和 Emby 那条 Resume 接口（<c>EmbyClient.QueryResumeAsync</c>）并不是一回事 ——
+    /// 它只问「有没有播放进度」，不问「标没标已看」「有没有被移出继续观看」。同一天实测：本接口给 9 条、
+    /// 那条接口给 1 条。继续观看那一页因此改问那条接口本身，这一条如今只剩筛选面板上「可继续播放」那一格
+    /// 在用。
     /// </para>
     /// </summary>
     public bool IsResumable { get; init; }
@@ -159,51 +164,20 @@ public sealed class ItemQuery
     };
 
     /// <summary>
-    /// 主页「继续观看」那一排点进去的那张网格 —— 2026-09-14「新增点击图中红框的标题可以进入对应的页面」。
-    /// <para>
-    /// 这一页要的是主页那一排的整个清单：主页上每一排只摆几项，点标题进去看全部。主页那一排走的是服务器
-    /// 自己的 Resume 接口（<c>EmbyClient.GetResumeAsync</c>），这一页走的通用查询必须和它装同一批东西 ——
-    /// 2026-09-14「继续观看里面为什么里面东西那么多」的病根就是两边没对齐：这里从前用
-    /// <see cref="IsPlayed"/>=false（<c>Filters=IsUnplayed</c>）装「没看完的」，把一部都没开过头的也算了进去，
-    /// 点进来是一整面海报墙；而那条接口的语义是「有播放进度」（<see cref="IsResumable"/>）。现在判据对齐了，
-    /// 主页那排是六项，这一页就是这六项。
-    /// </para>
-    /// <para>
-    /// 这里不走那条专用接口，是为了让这一页和搜索、类型、演职人员那几页同住 <c>LibraryPage</c>：那一页有排序、
-    /// 有筛选、有翻页、有记忆键，另开一条专用接口等于把这些重写一遍。
-    /// </para>
-    /// <para>
-    /// <see cref="MediaTypes"/> 还是写上 <c>Video</c>。<see cref="SweptTypes"/> 里的 <see cref="EmbyItemType.Series"/>
-    /// 留着无害 —— 播放进度属于文件，一部剧自己没有进度条，<see cref="IsResumable"/> 这一刀天然把它切在外面。
-    /// </para>
-    /// </summary>
-    public static ItemQuery Resume(
-        int startIndex,
-        int limit,
-        string sortBy,
-        bool descending,
-        ItemFilters? filters,
-        IReadOnlyList<string>? types = null) => new()
-        {
-            Recursive = true,
-            IsResumable = true,
-            IncludeItemTypes = types ?? SweptTypes,
-            MediaTypes = "Video",
-            SortBy = sortBy,
-            Descending = descending,
-            StartIndex = startIndex,
-            Limit = limit,
-            Filters = filters
-        };
-
-    /// <summary>
     /// 主页「接下来看」那一排点进去的那张网格。判据是「这部剧一集都没看过」—— Emby 的 NextUp 语义落到通用
     /// 查询上就是 <see cref="IsPlayed"/>=false（<c>Filters=IsUnplayed</c>）加一份把单集排除掉的类型名单：一集
     /// 继承整部剧的已看状态，单集留在名单里，一部看了一半的剧也会满足「没看完」，那一页就和「继续观看」长成
     /// 同一页了。
     /// <para>
-    /// 2026-09-14 从 <see cref="Resume"/> 里拆出来的另一半：那一页的判据从「没看完」换成了「有播放进度」，而
-    /// 这一页的语义本来就不该跟着变 —— 两页问的是两个问题，共用一个工厂只会让改其中一个的时候悄悄动了另一个。
+    /// 2026-09-14 从当初那个 Resume 工厂里拆出来的另一半（那个工厂 2026-09-22 已删：继续观看那一页改问服务器
+    /// 那条 Resume 接口本身，见 <c>EmbyClient.QueryResumeAsync</c>）：那一页的判据从「没看完」换成了「有播放
+    /// 进度」，而这一页的语义本来就不该跟着变 —— 两页问的是两个问题，共用一个工厂只会让改其中一个的时候悄悄
+    /// 动了另一个。
+    /// </para>
+    /// <para>
+    /// 这一页此后仍走通用查询，和主页那一排的 <c>EmbyClient.GetNextUpAsync</c> 不是同一条路 —— 两边的差别没有
+    /// 继续观看那一对小（今天两边问的都是「一集都没看过的剧集」），但属于同一类隐患，2026-09-22 记进 PROGRESS
+    /// 待察：真出现「一排 N 项、进去 M 项」就照继续观看那一对的办法办。
     /// </para>
     /// </summary>
     /// <param name="types">这一页认哪几种条目类型；<c>LibraryViewModel.BuildQuery</c> 递的是

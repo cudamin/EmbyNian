@@ -419,17 +419,17 @@ public sealed partial class HomePage : Page, IShellContent
         element.TransformToVisual(space).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
 
     /// <summary>
-    /// 矮窗档：窗口拉矮到「继续观看」牌子底下那条线被第一屏裁掉之后，把媒体库那一排压到轮播封面的左下角，下面那排
-    /// 向上补位；再矮到轮播被一屏压矮（裁切超出设计形状）就恢复默认（用户的话，2026-09-13，触发线同日从
-    /// 「下一排整个出屏」改成「窗口裁切超过继续观看下方的那条线」—— 线以下只剩一块有招牌没货的牌子，最难看）。
+    /// 矮窗档：窗口拉矮到那条线被第一屏裁掉之后，把媒体库那一排压到轮播封面的左下角，下面那排向上补位；再矮到轮播
+    /// 被一屏压矮（裁切超出设计形状）就恢复默认（用户的话，2026-09-13；2026-09-22 那条线又往下挪了一排 ——「改为
+    /// 快要显示下方媒体库封面的时候上移」，见 <see cref="HomeFold"/> 开头那一段）。
     /// 界线本身是 <see cref="HomeFold"/> 的纯函数（Core 的单测盯着），这里出的是量几何和执行的那一半。
     /// <para>
     /// 量的全是「滚回顶上」的几何（<see cref="ScreenTopAtScrollZero"/> 添回滚动位移）：判定认的是窗口高矮，
-    /// 不认滚动位置 —— 拿现场坐标判，用户往下滚一下这一档就会自己翻面。那条线 ＝ 下一排的顶 ＋ 牌子的高；
-    /// 压上档里媒体库不在横排了，下一排补在它那个位置，顶就是「媒体库的顶」，而媒体库那一排的高要按默认摆法
-    /// 还原（牌子 ＋ 空当 ＋ 排卡）—— 牌子和空当从补位那排的模板上量（<see cref="HeadOf"/>），同一张模板
-    /// 同一个宽，两头一个数；排卡那一截量轮播上那份宿主（<c>LibraryOverlay</c>，压上档里牌子收起、宿主里
-    /// 只有排卡）。
+    /// 不认滚动位置 —— 拿现场坐标判，用户往下滚一下这一档就会自己翻面。那条线由 <see cref="HomeFold.CoversLine"/>
+    /// 从「媒体库下面那一排」的顶算出来（它自己的封面顶，或者再下面那一排的封面顶）；压上档里媒体库不在横排了，
+    /// 补位那排站在它那一格上，顶就是「媒体库的顶」，而媒体库那一排的高要按默认摆法还原（牌子 ＋ 空当 ＋ 排卡）
+    /// —— 牌子和空当从补位那排的模板上量（<see cref="HeadOf"/>），同一张模板同一个宽，两头一个数；排卡那一截
+    /// 量轮播上那份宿主（<c>LibraryOverlay</c>，压上档里牌子收起、宿主里只有排卡）。
     /// </para>
     /// <para>
     /// 无声退出的几档：轮播收起来（没有幻灯片／设置里关掉）没有左下角可压；媒体库那一排不存在（勾掉或者空）；
@@ -475,44 +475,74 @@ public sealed partial class HomePage : Page, IShellContent
                 UpdateLayout();
             }
 
-            // 那条线按默认摆法还原：补位那排的顶 ＋ 默认摆法里媒体库那一排的高（牌子 ＋ 空当 ＋ 排卡）＋ 排间
-            // 空当 ＋「继续观看」自己牌子的高。宿主还没排完的那一拍退回排卡自己的高（RowHeight，条带绑的就是
-            // 它），牌子量不到的那一拍退回排顶口径 —— 都有下一拍校正。
+            // 那条线按默认摆法还原：补位那排此刻站在媒体库那一格上，它的顶就是**媒体库**的顶；添回媒体库整排的
+            // 高（牌子 ＋ 空当 ＋ 排卡）和一道排间空当，才是补位那排自己在默认摆法里的顶 —— 线由
+            // <see cref="HomeFold.CoversLine"/> 从这个顶往下算，两个方向量到的因此是同一条线。宿主还没排完的
+            // 那一拍退回排卡自己的高（RowHeight，条带绑的就是它），牌子量不到的那一拍退回排顶口径 —— 都有下一拍校正。
             var head = HeadOf(filler);
             var strip = LibraryOverlay.ActualHeight > 0
                 ? LibraryOverlay.ActualHeight
                 : ViewModel.LibraryShelf?.RowHeight ?? 0;
 
-            nextRowLine = ScreenTopAtScrollZero(filler)
-                + (head?.Height ?? 0) + (head?.Gap ?? 0) + strip
-                + gap
-                + (head?.Height ?? 0);
+            nextRowLine = HomeFold.CoversLine(
+                ScreenTopAtScrollZero(filler)
+                    + (head?.Height ?? 0) + (head?.Gap ?? 0) + strip
+                    + gap,
+                head?.Height ?? 0,
+                head?.Gap ?? 0,
+                ViewModel.Shelves[index].RowHeight,
+                gap,
+                hasBelow: index + 1 < ViewModel.Shelves.Count);
             hasNext = true;
         }
         else
         {
-            // 默认档：媒体库还在横排里，线 ＝ 它整排的下沿 ＋ 排间空当 ＋ 下一排牌子的高。牌子从媒体库自己
-            // 那块上量 —— 同一张模板，每排的牌子一样高。
+            // 默认档：媒体库还在横排里，线 ＝ 它**下面那一排的再下面那一排**的封面顶（<see cref="HomeFold.CoversLine"/>；
+            // 2026-09-22 从「下面那一排自己的封面顶」往下挪了一排，见 HomeFold 开头那一段）。牌子、空当、排卡
+            // 都从排好的树上量 —— 同一张模板，每排的牌子一个高，不写死。
             if (ViewModel.LibraryShelf is not { } shelf || !ViewModel.Shelves.Contains(shelf)) return;
 
-            if (ShelfRepeater.TryGetElement(ViewModel.LibraryFlowIndex) is not FrameworkElement element)
+            var below = ViewModel.LibraryFlowIndex + 1;
+
+            // 媒体库是最后一排：它下面没有排可以补位，压上去没有意义（同从前那一档）。
+            if (below >= ViewModel.Shelves.Count)
             {
-                element = (FrameworkElement)ShelfRepeater.GetOrCreateElement(ViewModel.LibraryFlowIndex);
+                Fold(false);
+                ApplyLibraryChrome();
+                return;
+            }
+
+            if (ShelfRepeater.TryGetElement(below) is not FrameworkElement next)
+            {
+                next = (FrameworkElement)ShelfRepeater.GetOrCreateElement(below);
                 UpdateLayout();
             }
 
-            nextRowLine = ScreenTopAtScrollZero(element)
-                + element.ActualHeight
-                + gap
-                + (HeadOf(element)?.Height ?? 0);
-            hasNext = ViewModel.LibraryFlowIndex + 1 < ViewModel.Shelves.Count;
+            var head = HeadOf(next);
+
+            nextRowLine = HomeFold.CoversLine(
+                ScreenTopAtScrollZero(next),
+                head?.Height ?? 0,
+                head?.Gap ?? 0,
+                ViewModel.Shelves[below].RowHeight,
+                gap,
+                hasBelow: below + 1 < ViewModel.Shelves.Count);
+            hasNext = true;
         }
 
         // 带子的设计形状有多高（不被一屏封住的那一份，<see cref="HomeCarousel.NaturalHeight"/>）：视口够不到
         // 它，带子就被压矮、剧照上下裁切超出默认档 —— 那是回默认的线（2026-09-13「轮播图上下裁切过多时隐藏」）。
         var bandNatural = HomeCarousel.NaturalHeight(Banner.ActualWidth);
 
-        Fold(hasNext && HomeFold.LibraryOnBanner(viewport, nextRowLine, bandNatural));
+        var decided = hasNext && HomeFold.LibraryOnBanner(viewport, nextRowLine, bandNatural);
+
+        // 翻档前后各记一条线的账：验收这一档时不用去猜界线落在哪一排（<see cref="HomeFold.CoversLine"/>）。
+        // 被「等上一趟落地」拦下的那一次也记 —— 那条日志正好说明这一拍量到的是哪条线。
+        if (decided != ViewModel.LibraryOnBanner)
+            Log.Info(Category, $"矮窗档界线：线 {nextRowLine:0}、视口 {viewport:0}"
+                + $"（带子的设计形状 {bandNatural:0}）→ {(decided ? "压上轮播" : "回默认")}");
+
+        Fold(decided);
         ApplyLibraryChrome();
     }
 

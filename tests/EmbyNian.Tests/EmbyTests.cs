@@ -352,25 +352,35 @@ internal static class EmbyTests
             Assert.DoesNotContain("Filters=", new ItemQuery().ToQueryString(), "不过滤时不该发这个参数");
         });
 
-        Test("查询：继续观看那一页要的是「有播放进度的」", () =>
+        Test("查询：继续观看那一页问的就是服务器那条 Resume 接口", () =>
         {
-            // 2026-09-14「新增点击图中红框的标题可以进入对应的页面」，同日「里面东西那么多」改判据：主页
-            // 「继续观看」那一排点进去的那张网格，要的是主页那一排（服务器 Resume 接口）的整个清单 ——
-            // 判据是 Filters=IsResumable「有播放进度」，不是 IsUnplayed「没看完」：后者把一部都没开过头的
-            // 也装进来，点进去是一整面海报墙。
-            var query = ItemQuery.Resume(startIndex: 0, limit: 60, EmbySortBy.DateAdded, descending: true, filters: null);
+            // 2026-09-22 用户报「首页的继续观看怎么只有一项了」。查下来那一排本来就只有一项（服务器上
+            // 「有播放进度」的九条里，五条已标已看、三条被移出继续观看），真正错的是点进去那一页：它走通用
+            // 查询 Filters=IsResumable，装了九条 —— 一排 1 项、进去 9 项。
+            //
+            // 这个差别在通用查询里补不出来（同一天实测：Filters=IsResumable,IsUnplayed 只有四条，而
+            // NotHiddenFromResume 这类未知筛选词服务器静默丢掉、照样四条），所以那一页改问这条接口本身。
+            // 这一条钉的就是「发的是哪条路，带的是哪几个参数」。
+            var stub = new StubTransport().Answer("Items/Resume", """{ "Items": [], "TotalRecordCount": 0 }""");
+            var client = new EmbyClient(
+                new EmbyHttp(stub),
+                new EmbyConnection(ApiBase, "token-1", "u1", "docuser", "果服",
+                    DeviceIdentity.Create("device-1", "3.0.0")));
 
-            Assert.Contains("Filters=IsResumable", query.ToQueryString(), "这一页装的是看到一半的");
-            Assert.DoesNotContain("IsUnplayed", query.ToQueryString(), "从没开过头的不是「看到一半」");
-            Assert.Contains("MediaTypes=Video", query.ToQueryString(), "不能把没听过的音乐也算进来");
-            Assert.Contains("Recursive=true", query.ToQueryString(), "这一排不属于任何库，只能全服务器扫");
-            Assert.Contains("IncludeItemTypes=", query.ToQueryString());
-            Assert.DoesNotContain("ParentId=", query.ToQueryString(), "这一排没有库，不该带上父目录");
+            var answer = client.GetResumeAsync(12, CancellationToken.None).GetAwaiter().GetResult();
 
-            // 排序跟着这一页的菜单走。
-            Assert.Contains("SortOrder=Descending", query.ToQueryString());
-            Assert.Contains("StartIndex=0", query.ToQueryString());
-            Assert.Contains("Limit=60", query.ToQueryString());
+            Assert.Equal(0, answer.Count, "假答案里一条都没有，回读出来也该是空的");
+            var sent = stub.Only("Items/Resume");
+            Assert.Contains("Users/u1/Items/Resume", sent.Url, "这一页问的是那条专用接口，不是通用查询");
+            Assert.Contains("MediaTypes=Video", sent.Url, "不能把没听过的音乐也算进来");
+            Assert.Contains("StartIndex=0", sent.Url);
+            Assert.Contains("Limit=12", sent.Url);
+
+            // 排序和筛选一概不发，也不该发：这一页的次序和口径由服务器定，界面上那两颗键在这一页也收起来了
+            // （LibraryViewModel.SortFilterVisibility）。少了这两条断言，哪天有人顺手把通用查询接回来都不会有
+            // 东西变红 —— 而那就又是「一排 1 项、进去 9 项」。
+            Assert.DoesNotContain("SortBy=", sent.Url, "这一页的次序由服务器定，不该再发一个排序");
+            Assert.DoesNotContain("Filters=", sent.Url, "「已看的不列、被移出的不列」是接口自己的口径，不是我们筛的");
         });
 
         Test("查询：接下来看那一页还是「一集都没看过的剧集」", () =>

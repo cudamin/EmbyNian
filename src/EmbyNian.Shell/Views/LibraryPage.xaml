@@ -222,6 +222,7 @@
                          same flag, so the three cannot come apart. -->
                     <ToggleSplitButton
                         x:Name="SortButton"
+                        Visibility="{x:Bind ViewModel.SortFilterVisibility, Mode=OneWay}"
                         HorizontalContentAlignment="Center"
                         IsChecked="{x:Bind ViewModel.SortDescending, Mode=TwoWay}"
                         MinWidth="0"
@@ -284,6 +285,7 @@
 
                     <Button
                         x:Name="FilterButton"
+                        Visibility="{x:Bind ViewModel.SortFilterVisibility, Mode=OneWay}"
                         HorizontalContentAlignment="Center"
                         MinWidth="0"
                         ToolTipService.ToolTip="{x:Bind ViewModel.FilterTooltip, Mode=OneWay}">

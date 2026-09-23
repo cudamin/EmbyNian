@@ -349,6 +349,23 @@ public sealed partial class LibraryViewModel : PageViewModel
     internal bool HasMore => _total < 0 || Cards.Count < _total;
 
     /// <summary>
+    /// 这一页是不是主页「继续观看」那一排点进来的。见 <see cref="ReadAsync"/>：这一页的条目整份由服务器那条
+    /// Resume 接口给，通用查询一条都不发。
+    /// </summary>
+    private bool IsResumePage => _request?.Row == HomeLayout.HomeRowTarget.Resume;
+
+    /// <summary>
+    /// 「排序」与「筛选」这两颗键在这一页在不在。
+    /// <para>
+    /// 继续观看那一页的次序和口径都由服务器那条 Resume 接口定（已看的不列、被移出的不列），两颗键按下去
+    /// 什么都不会变 —— <see cref="SortKey"/> 改了不发、<see cref="_filters"/> 也进不了那次请求。与其摆着两颗
+    /// 骗人的键（项目规矩：界面不许骗人），不如收起来；Emby 自己的继续观看也不给这两颗。视图切换留着：
+    /// 那是这张网格怎么画，与服务器无关。
+    /// </para>
+    /// </summary>
+    public Visibility SortFilterVisibility => Show(!IsResumePage);
+
+    /// <summary>
     /// Handed the navigation payload and the four capabilities one grid draws from, once per navigation to
     /// the page.
     /// <para>
@@ -391,6 +408,9 @@ public sealed partial class LibraryViewModel : PageViewModel
             : request.Row is not null ? "这里还没有看过的内容"
             : "这里没有内容";
         OnPropertyChanged(nameof(SearchVisibility));
+
+        // 这两颗键在不在，也是这一页的身份说的（见 SortFilterVisibility）—— 换一个请求就得重问一次。
+        OnPropertyChanged(nameof(SortFilterVisibility));
 
         RestoreSort();
         RestoreFilters();
@@ -437,9 +457,10 @@ public sealed partial class LibraryViewModel : PageViewModel
         {
             var start = reset ? 0 : Cards.Count;
 
-            // No query at all: the search page with an empty box. Asked anyway, it would go out as
-            // 「list everything under no parent」 and come back as the server's whole root.
-            if (BuildQuery(start) is not { } query)
+            // Nothing to ask: the search page with an empty box. Asked anyway, it would go out as
+            // 「list everything under no parent」 and come back as the server's whole root. Which source
+            // the rows come from is ReadAsync's business — 继续观看那一页问的不是通用查询。
+            if (await ReadAsync(start, token).ConfigureAwait(true) is not { } result)
             {
                 foreach (var card in Cards) card.AbandonPoster();
                 Cards.Clear();
@@ -452,10 +473,6 @@ public sealed partial class LibraryViewModel : PageViewModel
                 PageArrived?.Invoke();
                 return;
             }
-
-            var result = await _session!
-                .ExecuteAsync((client, ct) => client.GetItemsAsync(query, ct), token)
-                .ConfigureAwait(true);
 
             if (!IsCurrent(token)) return;
 
@@ -497,6 +514,29 @@ public sealed partial class LibraryViewModel : PageViewModel
             // through their full ten-second poll whenever a library failed to read.
             EndLoad(token);
         }
+    }
+
+    /// <summary>
+    /// One page of rows, from whichever source this grid's identity says.
+    /// <para>
+    /// 继续观看那一页（<see cref="IsResumePage"/>）整份交给服务器自己那条 Resume 接口 —— 那一排点进去要的
+    /// 就是那一排的整个清单，两边同源才不会「一排 1 项、进去 9 项」（2026-09-22 用户报的正是这个）。别的页
+    /// 走通用查询，排序、筛选、翻页、字母跳转照旧。
+    /// </para>
+    /// </summary>
+    /// <returns>null ＝ 这一页没什么可问的（搜索页空着那个框，<see cref="BuildQuery"/> 也为它返回 null）。</returns>
+    private async Task<ItemsResult?> ReadAsync(int start, CancellationToken token)
+    {
+        if (IsResumePage)
+            return await _session!
+                .ExecuteAsync((client, ct) => client.QueryResumeAsync(start, _settings!.PageSize, ct), token)
+                .ConfigureAwait(true);
+
+        if (BuildQuery(start) is not { } query) return null;
+
+        return await _session!
+            .ExecuteAsync((client, ct) => client.GetItemsAsync(query, ct), token)
+            .ConfigureAwait(true);
     }
 
     /// <summary>
@@ -638,12 +678,10 @@ public sealed partial class LibraryViewModel : PageViewModel
                 var start = Cards.Count;
                 while (true)
                 {
-                    if (BuildQuery(start) is not { } query) break;
-
-                    var page = await _session!
-                        .ExecuteAsync((client, ct) => client.GetItemsAsync(query, ct), token)
-                        .ConfigureAwait(true);
-                    if (!IsCurrent(token) || page.Items.Count == 0) break;
+                    // 和这一页读第一屏时同源（见 ReadAsync）：继续观看那一页要接着往下拿的也是服务器那条
+                    // Resume 接口，不是通用查询 —— 两边混着拿，播放全部那一串就该少东西了。
+                    if (await ReadAsync(start, token).ConfigureAwait(true) is not { } page
+                        || !IsCurrent(token) || page.Items.Count == 0) break;
 
                     items.AddRange(page.Items.Where(item => item.IsPlayable));
                     start += page.Items.Count;
@@ -1066,11 +1104,17 @@ public sealed partial class LibraryViewModel : PageViewModel
         {
             return row switch
             {
-                // 继续观看：有播放进度的可播放项 —— 判据和 Emby 自己那条 Resume 接口一致（见 ItemQuery.Resume）。
-                // 2026-09-14「里面东西那么多」：从前是 IsUnplayed，把一部都没开过头的也装进来；现在换
-                // Filters=IsResumable，主页那排六项，这一页就是这六项。
-                HomeLayout.HomeRowTarget.Resume =>
-                    ItemQuery.Resume(start, limit, SortKey, SortDescending, _filters),
+                // 继续观看这一页没有通用查询可发：它整份由服务器那条 Resume 接口给（见 IsResumePage 与
+                // ReadAsync），这里返回 null 是「这一页不发通用查询」，不是「这一页没得问」—— LoadAsync 先问
+                // ReadAsync，这一支走不到。
+                //
+                // 2026-09-22 之前这里发的是 ItemQuery.Resume（Filters=IsResumable）。那一条只问「有没有播放
+                // 进度」，不问「标没标已看」「有没有被移出继续观看」：同一天服务器上它给 9 条、Resume 接口给
+                // 1 条，于是主页那排 1 项、点进去 9 项。这个差别在通用查询里补不出来 ——
+                // Filters=IsResumable,IsUnplayed 只收到 4 条，而「被移出」没有对应的筛选词，把
+                // NotHiddenFromResume 塞进去会被服务器静默丢掉（实测）。那个工厂因此一并删了：留着它只会让
+                // 下一个人再走一遍这条错路。
+                HomeLayout.HomeRowTarget.Resume => null,
 
                 // 接下来看：Emby 的 NextUp 是「这部剧的下一集还没看」，落到通用查询上是「一集都还没看过的
                 // 剧集」。所以走自己的工厂（2026-09-14 从 Resume 拆出来的另一半），多给一个把单集排除掉的
