@@ -6,8 +6,6 @@ telegram 发布频道：https://t.me/EmbyNian
 
 界面是原生 WinUI 3，播放内核是 libmpv。解压即用，
 
-![主页](docs/screenshots/home.jpg)
-
 ## 设计参考
 
 - UI 界面参考 **Emby 小秘** 设计。
