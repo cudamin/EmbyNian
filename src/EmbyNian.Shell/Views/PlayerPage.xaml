@@ -93,7 +93,6 @@
         <SolidColorBrush x:Key="PlayerInkSoftBrush" />
         <SolidColorBrush x:Key="PlayerInkDimBrush" />
         <SolidColorBrush x:Key="PlayerInkFaintBrush" />
-        <SolidColorBrush x:Key="PlayerStatsBrush" />
         <SolidColorBrush x:Key="PlayerRailBrush" />
         <SolidColorBrush x:Key="PlayerPeekBrush" />
         <SolidColorBrush x:Key="PlayerSkipBrush" />
@@ -401,26 +400,17 @@
                     </AutoSuggestBox.ItemTemplate>
                 </AutoSuggestBox>
 
-                <!-- 统计. A toggle, because the panel it opens stays up until it is closed again: it is
-                     read while something is going wrong, and a readout that vanished when the chrome
-                     hid itself would be gone exactly when it was being watched.
-
-                     Foreground stated rather than inherited, and it is a fix rather than a flourish: a
-                     ToggleButton's default foreground is the framework's TextFillColorPrimaryBrush, which
-                     ThemeHost points at the *application* theme's text colour — and an application-level
-                     brush is not re-resolved by this page's RequestedTheme="Dark". Under 晴昼 that is
-                     #15181D, near-black, drawn over a near-black scrim. The eleven buttons that go through
-                     OsdButtonStyle never had the problem; this one and the pin beside it were the two that
-                     had slipped out of PlayerPalette's 「the overlay does not follow the theme」 rule. -->
-                <ToggleButton
+                <!-- 三态由 mpv 的统计脚本持有，不把它镜像成独立的二态开关。
+                     显式使用播放器前景色，避免跟随应用主题而降低画面上的对比度。 -->
+                <Button
                     x:Name="StatsButton"
-                x:Uid="PlayerPage_StatsButton"
+                    x:Uid="PlayerPage_StatsButton"
                     Background="Transparent"
                     BorderThickness="0"
                     CornerRadius="{StaticResource EgCardCornerRadius}"
                     FontFamily="{StaticResource EgUiFontFamily}"
                     Foreground="{StaticResource PlayerInkBrush}"
-                    IsChecked="{x:Bind ViewModel.StatsOpen, Mode=TwoWay}"
+                    Command="{x:Bind ViewModel.CycleStatsCommand, Mode=OneWay}"
                     Padding="10,6" />
 
                 <!-- 窗口置顶. 「置顶开启后不要改变按键颜色，绘制一个置顶开启图标来替换」.
@@ -537,37 +527,10 @@
             </StackPanel>
         </Grid>
 
-        <!-- ================= 播放统计面板 =================
-             Drawn here rather than by mpv's stats.lua, and not by choice: the bundled libmpv-2.dll is
-             built without Lua, so the script that would have drawn it was never loaded. PlaybackStats
-             owns which properties are read and what the rows say; this is where they land.
-
-             Below the title strip and outside the reveal rule — the strip comes and goes with the
-             pointer, and a panel that came and went with it could not be read.
-
-             The top inset is absent on purpose: how far down this sits is 「under the title strip」, and
-             PlayerPage.PlaceOverlays works it out from the strip's own height. It used to be written here
-             as 104, which was that height plus a gap, restated in a file that would not have noticed the
-             strip changing. The left inset stays — that one is this panel's own taste, not a clearance. -->
-        <Border
-            x:Name="StatsPanel"
-            HorizontalAlignment="Left"
-            VerticalAlignment="Top"
-            Margin="20,0,0,0"
-            Padding="14,10"
-            Background="{StaticResource PlayerStatsBrush}"
-            BorderBrush="{StaticResource PlayerEdgeFaintBrush}"
-            BorderThickness="1"
-            CornerRadius="{StaticResource EgCardCornerRadius}"
-            IsHitTestVisible="False"
-            Visibility="{x:Bind ViewModel.StatsVisibility, Mode=OneWay}">
-            <Grid x:Name="StatsRows" ColumnSpacing="16" RowSpacing="3">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-            </Grid>
-        </Border>
+        <!-- 播放统计面板 2026-09-22 起不在这棵树上：它由 mpv 自己画进 OSD 层（中文覆盖版脚本装箱在
+             mpv-ui/scripts/stats.lua，装配见 Core 的 MpvStats）。集成模式的画面本来就是 mpv 的输出，
+             所以它照样出现在这里；绘制、读数、按键与生命周期都归 mpv —— 因为验收要的是「统计项与参考
+             项目逐项一致」加「全中文」，而自绘的那十一行两条都做不到。 -->
 
         <!-- ================= 右侧：音量条 =================
              Its own overlay rather than a slider inside the transport bar. The pointer reaches the
@@ -600,13 +563,20 @@
                  back. It is not a reversal for its own sake: the ceiling moved from 100 to 130 in between, and
                  the thumb's position cannot say which side of 100 the film is on.
 
-             「把音量条再改大一点」 (2026-09-04), and the three overrides below are how — not a Width, for the
-             reason above. Widening the two content margins symmetrically is the one way to make the grab band
-             wider than the template's 32 without moving the track off centre, and it is what the note here
-             used to say nothing did yet: 18 + 8 + 18 = 44, the same 44 the crooked hard Width once claimed,
-             this time with the track in the middle of it. The thumb's two keys really are the Horizontal ones
-             — the vertical template reads SliderHorizontalThumbWidth/Height for its own thumb, which is a
-             framework quirk and not a typo here.
+            「把音量条再改大一点」 (2026-09-04), and the three overrides below are how — not a Width, for the
+            reason above. Widening the two content margins symmetrically is the one way to make the grab band
+            wider than the template's 32 without moving the track off centre, and it is what the note here
+            used to say nothing did yet: 18 + 8 + 18 = 44, the same 44 the crooked hard Width once claimed,
+            this time with the track in the middle of it. The thumb's two keys really are the Horizontal ones
+            — the vertical template reads SliderHorizontalThumbWidth/Height for its own thumb, which is a
+            framework quirk and not a typo here.
+
+             Two-way bindings here are onto the <b>刻度</b>, not onto 音量 itself (2026-09-22 用户令):
+             「音量条上 100 到 101 这一刻度区间的显示长度拉长，比前后相邻区间占更多空间，其他区间照旧」.
+             Value binds ViewModel.VolumeAxis and Maximum binds ViewModel.VolumeAxisMaximum, so the markup
+             still states no number of its own — the whole scale lives in Core's VolumeScale (100→101 占四个
+             units, 其余每档一个, 顶从 130 变成 133). 换上 130 的旧绑法，条子照样画得出来、拖着也动，
+             只是 100→101 那一段又缩回一根头发丝宽 —— 自检的「滑杆上限」与「两段像素」两条盯这个。
         -->
         <Border
             x:Name="Rail"
@@ -644,11 +614,11 @@
                     Height="300"
                     HorizontalAlignment="Center"
                     IsThumbToolTipEnabled="False"
-                    Maximum="{x:Bind ViewModel.VolumeMaximum, Mode=OneWay}"
+                    Maximum="{x:Bind ViewModel.VolumeAxisMaximum, Mode=OneWay}"
                     Minimum="0"
                     Orientation="Vertical"
                     StepFrequency="1"
-                    Value="{x:Bind ViewModel.Volume, Mode=TwoWay}">
+                    Value="{x:Bind ViewModel.VolumeAxis, Mode=TwoWay}">
                     <Slider.Resources>
                         <x:Double x:Key="SliderPreContentMargin">18</x:Double>
                         <x:Double x:Key="SliderPostContentMargin">18</x:Double>

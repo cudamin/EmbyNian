@@ -3,8 +3,12 @@
 独占模式（内置 libmpv 自建 D3D11 顶层窗口）起播时，`LibMpvBackend` 交给 mpv 的 `scripts` 选项指向
 **这里的 `scripts/uosc` 目录**（交目录不交文件：mpv 用目录名给脚本命名，脚本名必须是 `uosc`，控制条上
 每个按钮的动作都是 `script-binding uosc/…`），uosc 由此装进视频窗：进度条、控制条、音量条、轨道/章节/
-版本菜单和暂停指示都画在 mpv 自己的 OSD 层 —— 只装一份，`load-script` 那条老路已撤（它会把同一份 uosc
-按文件名装成第二份 `main`，2026-09-19）。集成模式的画面在 XAML 视觉树里，控件归外壳，不装载任何 Lua。
+版本菜单和暂停指示都画在 mpv 自己的 OSD 层 —— 只装一份，这条老路不再用于 uosc（`load-script` 会把同一份
+uosc 按文件名装成第二份 `main`，2026-09-19 撤）。集成模式的画面在 XAML 视觉树里，控件归外壳，**uosc 一概不装**。
+
+2026-09-22 起这一目录还装着第二个脚本 `scripts/stats.lua`（播放统计，见下节）：它两条管线都装，走的是运行期
+`load-script`（按文件名 → 脚本名 `stats`，所以文件名不能改），所以「集成模式不装载任何 Lua」这句话从那天起
+只对 uosc 成立。
 
 ## 出处与版本
 
@@ -15,6 +19,33 @@
   **Apache 2.0**（`fonts/LICENSE-MaterialIcons.txt`，随发布附带）。
 - 装箱范围：`scripts/uosc`（main + lib + elements + intl/zh-hans 等翻译）、两个字体文件。
   其余脚本（thumbfast、quality-menu、chapterskip 等）与 `bin/ziggy` 一律不装箱。
+
+## 播放统计脚本 stats.lua（2026-09-22 加入）
+
+- **它是什么**：mpv 内置脚本 `player/lua/stats.lua` 的**简体中文覆盖版**。统计项（6 个页面 / 107 个字段标签 /
+  顺序 / 计算逻辑）与参考项目 <https://github.com/dyphire/mpv-config> 所用的那份上游脚本逐项一致，只有展示
+  文案译成中文；两份文件的字符串骨架 diff 只有文件头注释 + 两张显示名映射（轨道类型、轨道标记）。
+  逐项对照表见 `work/播放统计对照报告.md`。
+- **为什么覆盖而不是自绘**：mpv 的内置统计脚本没有任何 i18n 机制，`script-opts/stats.conf` 只管样式与行为，
+  一个字的文案都不承载 —— 想改词只有「放一份同名脚本顶掉它」一条路。原来的客户端自绘面板（`PlaybackStats.cs`）
+  因此退场，留档在 `work/removed-2026-09-22/`。
+- **怎么装**：Core 的 `MpvStats` 在起播时（`mpv_initialize` 之后）发一条运行期 `load-script <绝对路径>`，
+  两条 libmpv 管线都发；外置 `mpv.exe` 后端走命令行 `--script=`（它 `--no-config`，读不到用户目录的 scripts/）。
+  同时 `MpvBaseline` 里 `load-stats-overlay=no` 关掉内置英文版 —— 不关会有两份脚本抢 `stats/display-stats`
+  这个名字。**文件名必须保持 `stats.lua`**：脚本名取自文件名，`script-binding stats/…` 靠它解析。
+- **三态循环（2026-09-22 改）**：那颗「统计」按钮不再是二态开关，而是循环 —— 关闭 → **播放统计**（第 1 页）→
+  **着色器统计**（第 2 页 `vo_stats`，即 mpv 的 `vo-passes`：帧计时 Frame Timings、新帧 Fresh、重绘 Redraw，全部汉化）
+  → 关闭。逻辑集中在 `EMBYNIAN[cycle]` 那个命名函数 `cycle_stats`，用「当前显示的是第几页」而不是外壳的镜像位当
+  状态源，所以键盘、uosc 菜单和集成模式按钮三条入口混用也不会走散。绑定名 `stats/cycle-stats`。着色器统计页
+  用 `persistent_overlay` 常驻绘制、不被音量/跳转提示覆盖，随视频输出变化实时重绘；换源（`start-file`）时收面板并
+  归位到第 1 页。
+- **怎么叫出来**：独占模式归 mpv 的输入层，Core 另绑 `i`（一次性，`display-stats`）/`I`（三态循环，`cycle-stats`），
+  uosc 控制条上有「统计」按钮、菜单「工具 → 统计」也走同一条 `cycle-stats`；集成模式的键盘归外壳，播放页那颗
+  「统计」按钮发 `script-binding stats/cycle-stats`（`PlayerViewModel.CycleStatsCommand`）。老的 `display-stats-toggle`
+  绑定保留未删，作向后兼容入口。
+- **画在哪**：mpv 的 OSD 层。独占模式那是它自己的窗口；集成模式那是合成进 XAML 的那一帧，所以两边都看得见。
+- **许可证**：与 mpv 项目一致（GPL-2.0-or-later）。它替换掉的那份内置脚本本来就在随发布一起走的 `libmpv-2.dll`
+  里，本文件只是把它换成中文版放在盘上 —— 出处已在脚本头部写明。**如果发行时要附许可证文本，这一条要一并考虑。**
 
 ## 与上游的差异（嵌入版裁剪）
 

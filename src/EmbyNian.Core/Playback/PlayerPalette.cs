@@ -85,7 +85,6 @@ public static class PlayerPalette
 
         // 三块牌子。透明度递增：统计面板最透（它挡着画面的左上角，而且一直开着），音量条居中，
         // 章节预览最实（里面有一张缩略图，底透了缩略图就发灰）。
-        ("PlayerStatsBrush", Panel.WithAlpha(0xD9)),
         ("PlayerRailBrush", Panel.WithAlpha(0xE6)),
         ("PlayerPeekBrush", Panel.WithAlpha(0xF2)),
 

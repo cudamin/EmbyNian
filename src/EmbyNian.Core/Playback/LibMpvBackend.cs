@@ -101,6 +101,16 @@ public sealed class LibMpvBackend(
                 ? MpvSeekKeys.Bindings(playback)
                 : null;
 
+            // 独占模式还要多两颗统计键（i 一次性 / I 常驻）。与方向键同一个理由：视频窗里的键由 mpv 的输入层
+            // 处理，得自己绑；集成模式的键归 shell 的快捷键表，那两颗不在这里发（见 MpvStats 的类注释）。
+            // 它们不随设置变，所以不进换片快路的签名 —— 那一节只装「改了设置就该换一层」的东西。
+            var statsKeys = settings.Pipeline == VideoPipelineKind.Standalone ? MpvStats.Keys() : null;
+
+            // 呼出 uosc 右键菜单的两颗键（MBTN_RIGHT / MENU）。gate 在 uiOptions —— uosc 没装载时
+            // `script-binding uosc/menu` 这条绑定压根不存在，绑了也只是白发一条被拒的命令。config=no 之下
+            // input.conf 不读、uosc 又默认不绑键，所以这两颗必须自己补，理由见 MpvUi.MenuKeys。
+            var menuKeys = uiOptions is not null ? MpvUi.MenuKeys() : null;
+
             // ClientMessage 只在 Lua UI 在场时才值得收 —— 它是脚本与宿主的唯一通道。
             PruneEvents(context, keepClientMessage: uiOptions is not null);
 
@@ -116,6 +126,27 @@ public sealed class LibMpvBackend(
             if (seekKeys is not null)
                 foreach (var (seekKey, seekCommand) in seekKeys)
                     Run(context, "keybind", seekKey, seekCommand);
+
+            if (statsKeys is not null)
+                foreach (var (statsKey, statsCommand) in statsKeys)
+                    Run(context, "keybind", statsKey, statsCommand);
+
+            if (menuKeys is not null)
+                foreach (var (menuKey, menuCommand) in menuKeys)
+                    Run(context, "keybind", menuKey, menuCommand);
+
+            // 播放统计脚本：两条管线都在这里装。为什么是运行期的 load-script 而不是那条 scripts 选项
+            // （独占模式的 uosc 走的正是它），为什么文件名必须是 stats.lua —— 见 MpvStats 的类注释。
+            // 缺席与失败都只记日志：统计是读数，不是播放的一部分。
+            if (MpvStats.Exists(AppContext.BaseDirectory))
+            {
+                if (!Run(context, "load-script", MpvStats.ScriptPath(AppContext.BaseDirectory)))
+                    Log.Warn(Category, $"统计脚本装载失败（{MpvStats.ScriptRelativePath}），本次播放没有统计面板");
+            }
+            else
+            {
+                Log.Warn(Category, $"统计脚本装箱缺失（{MpvStats.ScriptRelativePath}），本次播放没有统计面板");
+            }
 
             LibMpvNative.mpv_request_log_messages(context, "warn");
 
@@ -985,7 +1016,37 @@ internal sealed class LibMpvHandle(
         surface.AttachSwapChain(IntPtr.Zero);
     });
 
-    private void OnGeometryChanged() => _ = Task.Run(RefreshComposition);
+    private int _compositionRefreshPending;
+    private int _compositionRefreshRunning;
+
+    private void OnGeometryChanged()
+    {
+        Interlocked.Exchange(ref _compositionRefreshPending, 1);
+        StartCompositionRefresh();
+    }
+
+    private void StartCompositionRefresh()
+    {
+        if (Interlocked.CompareExchange(ref _compositionRefreshRunning, 1, 0) != 0) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                while (Interlocked.Exchange(ref _compositionRefreshPending, 0) != 0)
+                    RefreshComposition();
+            }
+            catch (Exception error)
+            {
+                Log.Warn(Category, "更新视频输出尺寸失败", error);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _compositionRefreshRunning, 0);
+                // 请求可能落在最后一次读 pending 与放开 running 之间，不能漏掉最终尺寸。
+                if (Volatile.Read(ref _compositionRefreshPending) != 0) StartCompositionRefresh();
+            }
+        });
+    }
 
     private void RememberLog(IntPtr data)
     {

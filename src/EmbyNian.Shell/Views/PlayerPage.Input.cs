@@ -167,7 +167,7 @@ public sealed partial class PlayerPage : IWin32KeySink
         // （「未标注的显示路径」的最后一个漏网生产路径）。
         if (_cursorHidden) _woke = "滚轮调音量";
 
-        NudgeVolume(delta > 0 ? WheelStep : -WheelStep);
+        RollVolume(delta > 0 ? WheelStep : -WheelStep);
         e.Handled = true;
     }
 
@@ -437,10 +437,18 @@ public sealed partial class PlayerPage : IWin32KeySink
     }
 
     /// <summary>
-    /// 这一下有没有当成播放器键位处理掉。两个固定键在前（原样，不查修饰键，和改造前一致）：Esc 全屏则退出全屏、
-    /// 否则停止播放（Esc 是全局「退出」、也是设置里重绑方框的取消键）；Y 只在出现跳过提示时确认跳过 —— 没提示时
-    /// 它落到下面那张表、查不到就返回 false，那一下照旧不被吃掉，和改造前「Y 不是播放器键」一致。其余键走可重绑
-    /// 那张表。<see cref="ShortcutCatalog"/> 把 Esc、Y 列为保留键，所以那张表永远不会绑上这两颗。
+    /// 这一下有没有当成播放器键位处理掉。固定键在前（原样，不查修饰键，和改造前一致）：Esc 全屏则退出全屏、
+    /// 否则停止播放（Esc 是全局「退出」、也是设置里重绑方框的取消键）；Y 只在出现跳过提示时确认跳过、N 只在
+    /// 出现跳过提示时关掉它（Y 接受、N 拒绝，成一对）—— 都是「没提示时它落到下面那张表」。
+    /// <para>
+    /// Esc、Y 是 <see cref="ShortcutCatalog.ReservedKeys"/> 里的保留键，可重绑那张表永远不会绑上它们；<b>N 不是</b>
+    /// —— 它默认就是「下一集」（<c>next-episode</c>）。所以 N 这一支只在**提示立着**时抢下这一下当「关闭」，其余
+    /// 时候（含没提示）落到下面那张表、照常走它绑到的动作。跳过提示只立 15 秒、又多在片头/片尾，那一小段里把 N
+    /// 让给「关闭提示」是有意的取舍：真要下一集，提示收掉后再按一下 N 即可。
+    /// </para>
+    /// <para>
+    /// 其余键走可重绑那张表：认不出的键、查不到动作、或没有处理器的，返回 false，那一下照旧不被吃掉。
+    /// </para>
     /// </summary>
     private bool Dispatch(VirtualKey key)
     {
@@ -460,6 +468,10 @@ public sealed partial class PlayerPage : IWin32KeySink
 
             case VirtualKey.Y when ViewModel.SkipOffered:
                 ViewModel.TakeSkip();
+                return true;
+
+            case VirtualKey.N when ViewModel.SkipOffered:
+                ViewModel.DismissSkip();
                 return true;
         }
 
@@ -784,15 +796,27 @@ public sealed partial class PlayerPage : IWin32KeySink
     // it to reveal it the usual way.
 
     /// <summary>
-    /// Moves the volume and shows the rail. Both the wheel and the arrow keys land here, so the readout they
-    /// bring up is the same for either; how far each one moves is the caller's (<see cref="WheelStep"/>
-    /// against <see cref="KeyStep"/>).
+    /// Moves the volume and shows the rail, from ↑/↓. The readout the wheel and the keys bring up is the same
+    /// for either; how far each one moves is the caller's (<see cref="WheelStep"/> against <see cref="KeyStep"/>).
     /// </summary>
-    private void NudgeVolume(int delta)
+    private void NudgeVolume(double delta)
     {
         if (!Attached) return;
 
         ViewModel.NudgeVolume(delta);
+        if (_chrome.FlashRail(Now)) Render();
+    }
+
+    /// <summary>
+    /// 滚轮那一半：沿音量条的刻度走（<see cref="VolumeScale"/>），100→101 那一格要两格、其余每格仍是两档
+    /// （2026-09-22 用户令）。与上面分开写，是因为两者在 100 附近的步长语义已经不同 —— 方向键一步 5 个音量
+    /// 本来就跨得过那一格，滚轮一格 2 个单位跨不过，得把没走完的半格留下来接着累积。
+    /// </summary>
+    private void RollVolume(double delta)
+    {
+        if (!Attached) return;
+
+        ViewModel.RollVolume(delta);
         if (_chrome.FlashRail(Now)) Render();
     }
 

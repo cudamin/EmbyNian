@@ -6,6 +6,29 @@ internal static class PlayerMotionTests
 {
     internal static void Register()
     {
+        TestHarness.Test("自动全屏进场只溶解，整页不缩放或位移", () =>
+        {
+            var run = PlayerMotion.FullscreenEnter(PlayerMotion.Pose.Entering, 1000);
+            Assert.Equal(new PlayerMotion.Pose(0, 1, 0), run.At(1000));
+            var previous = 0d;
+            for (var elapsed = 0; elapsed <= PlayerMotion.FullscreenEnterMilliseconds; elapsed++)
+            {
+                var pose = run.At(1000 + elapsed);
+                Assert.Equal(1d, pose.Scale);
+                Assert.Equal(0d, pose.OffsetY);
+                Assert.True(pose.Opacity >= previous && pose.Opacity <= 1);
+                previous = pose.Opacity;
+            }
+            Assert.Equal(PlayerMotion.Pose.Visible, run.At(long.MaxValue));
+        });
+        TestHarness.Test("自动全屏重入承接当前透明度，不继承退场的缩放", () =>
+        {
+            var from = new PlayerMotion.Pose(0.4, PlayerMotion.ExitScale, PlayerMotion.ExitTravel);
+            var run = PlayerMotion.FullscreenEnter(from, 1000);
+            Assert.Equal(new PlayerMotion.Pose(0.4, 1, 0), run.At(500));
+            Assert.True(run.At(1080).Opacity > 0.4);
+            Assert.Equal(PlayerMotion.Pose.Visible, run.At(1000 + PlayerMotion.FullscreenEnterMilliseconds));
+        });
         TestHarness.Test("播放器进场先遮住浏览页，再完成轻微位移", () =>
         {
             var run = PlayerMotion.Page(true, PlayerMotion.Pose.Entering, 1000);
@@ -118,6 +141,28 @@ internal static class PlayerMotionTests
             Assert.Equal(0d, placement.Top);
             // 屏上宽度 = (1920/1.5) × 1 × 1.5 = 1920。
             Assert.True(Math.Abs(1920 / 1.5 * placement.ScaleX * 1.5 - 1920) < 0.001);
+        });
+        TestHarness.Test("拖边时稳定缓冲可连续缩放与反向，松手换缓冲不改变最终画幅", () =>
+        {
+            foreach (var raster in new[] { 1d, 1.25, 1.5, 2d })
+            {
+                foreach (var ratio in new[] { 0.64, 0.72, 1d, 1.5, 0.65, 1.35, 0.7 })
+                {
+                    var frame = new VideoPresentation.Rect(0, 0, 1280 * ratio, 720 * ratio);
+                    var placement = VideoPresentation.ForFrame(1280, 720, frame, raster);
+                    Assert.True(Math.Abs(1280 / raster * placement.ScaleX * raster - frame.Width) < 0.001);
+                    Assert.True(Math.Abs(720 / raster * placement.ScaleY * raster - frame.Height) < 0.001);
+                    Assert.True(Math.Abs(placement.ScaleX - placement.ScaleY) < 0.001);
+                    Assert.Equal(0d, placement.Left);
+                    Assert.Equal(0d, placement.Top);
+                }
+                var final = new VideoPresentation.Rect(0, 0, 1920, 1080);
+                var oldBuffer = VideoPresentation.ForFrame(1280, 720, final, raster);
+                var newBuffer = VideoPresentation.ForFrame(1920, 1080, final, raster);
+                Assert.Equal(1280 * oldBuffer.ScaleX, 1920 * newBuffer.ScaleX);
+                Assert.Equal(720 * oldBuffer.ScaleY, 1080 * newBuffer.ScaleY);
+                Assert.Equal(1d, newBuffer.ScaleX);
+            }
         });
         TestHarness.Test("呈现矩形坏输入退回单位摆放，不产生无穷变换", () =>
         {

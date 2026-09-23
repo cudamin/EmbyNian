@@ -53,19 +53,19 @@ internal static class PlayerPaletteTests
 
     private static void RegisterSurfaces()
     {
-        Test("播放器配色：三块牌子同一个底色，透明度递增", () =>
+        Test("播放器配色：两块牌子同一个底色，透明度递增", () =>
         {
-            var stats = Find("PlayerStatsBrush");
             var rail = Find("PlayerRailBrush");
             var peek = Find("PlayerPeekBrush");
 
-            // 同一个 RGB：三块牌子并排浮在同一帧画面上，底色差一点点就是「其中一块看着发蓝」。
-            foreach (var (name, colour) in new[] { ("统计面板", stats), ("音量条", rail), ("章节预览", peek) })
+            // 同一个 RGB：两块牌子并排浮在同一帧画面上，底色差一点点就是「其中一块看着发蓝」。
+            //
+            // 2026-09-22 起只剩两块：统计面板那份 PlayerStatsBrush 随自绘面板一起退场（面板改由 mpv 画进
+            // OSD 层），而它原本是这三块里最透的那一头。
+            foreach (var (name, colour) in new[] { ("音量条", rail), ("章节预览", peek) })
                 Assert.Equal(PlayerPalette.Panel with { A = colour.A }, colour, $"{name}的底色不是那块牌子的底色");
 
-            // 次序是有理由的：统计面板一直开着、挡住画面左上角，所以最透；章节预览里装着一张缩略图，
-            // 底一透缩略图就发灰，所以最实。
-            Assert.True(stats.A < rail.A, "统计面板没有比音量条更透");
+            // 次序是有理由的：章节预览里装着一张缩略图，底一透缩略图就发灰，所以最实。
             Assert.True(rail.A < peek.A, "音量条没有比章节预览更透");
         });
 

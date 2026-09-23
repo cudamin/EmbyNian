@@ -31,6 +31,9 @@ public sealed partial class PlayerViewModel
 {
     // ---- what the keys and the menus write to mpv ---------------------------------
 
+    [RelayCommand]
+    private void CycleStats() => _ = _playback.CommandAsync("script-binding", MpvStats.CycleBinding);
+
     /// <summary>播放/暂停, from the transport button, the space bar and a tap on the picture.</summary>
     internal void SetPaused(bool paused) => _ = _playback.SetPropertyAsync("pause", paused);
 
@@ -140,10 +143,35 @@ public sealed partial class PlayerViewModel
     }
 
     /// <summary>
-    /// 音量 from the keyboard. Writes the bound property rather than mpv directly, so the slider, the
+    /// 音量 from the arrow keys. Writes the bound property rather than mpv directly, so the slider, the
     /// number beside it and the mpv property all move together — the same path a drag takes.
+    /// <para>
+    /// 直接落在音量上，不走 <see cref="VolumeScale"/> 的棘轮：一步 5 个音量本来就不小于 100→101 那一格
+    /// （4 个单位），"这一档要不要多按几下"这个问题在这些步长上不存在 —— 用户要的那件事只关于滚轮。
+    /// </para>
     /// </summary>
-    internal void NudgeVolume(int delta) => Volume = Math.Clamp(Volume + delta, 0, AudioSettings.MaxVolume);
+    internal void NudgeVolume(double delta) => Volume = Math.Clamp(Volume + delta, 0, AudioSettings.MaxVolume);
+
+    /// <summary>
+    /// 音量 from the wheel. 一格 2 个<b>轴</b>单位，沿刻度走（<see cref="VolumeScale.Step"/>）：100→101 那一格
+    /// 要两格，其余每格仍是两档。没走满的路留在 <see cref="VolumeAxis"/> 上等下一次接着走，所以数值不动时
+    /// 滑块也会先爬一点 —— 那正是「这一段更长」看得见的样子。
+    /// </summary>
+    internal void RollVolume(double delta)
+    {
+        var (level, axis) = VolumeScale.Step(Volume, VolumeAxis, delta);
+
+        _axisByRoll = true;
+        try
+        {
+            VolumeAxis = axis;
+            if (Math.Abs(level - Volume) > 0.001) Volume = level;
+        }
+        finally
+        {
+            _axisByRoll = false;
+        }
+    }
 
     /// <summary>静音切换. mpv owns the flag; the glyph follows from the next status it reports.</summary>
     internal void ToggleMute() => _ = _playback.SetPropertyAsync("mute", !Status.Muted);

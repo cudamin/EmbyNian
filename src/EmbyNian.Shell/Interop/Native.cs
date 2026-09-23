@@ -227,6 +227,7 @@ internal static partial class Native
     /// </para>
     /// </summary>
     public const uint WmSizing = 0x0214;
+    public const uint WmEnterSizeMove = 0x0231;
 
     /// <summary>
     /// WM_EXITSIZEMOVE, sent once when a move or resize drag ends. The moment 「how big is this window and

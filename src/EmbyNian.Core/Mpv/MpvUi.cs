@@ -35,6 +35,30 @@ public static class MpvUi
     /// <summary>uosc 的图标与贴图字体（Material Icons Rounded 等），相对程序目录。</summary>
     public const string FontsRelativeDir = "mpv-ui/fonts";
 
+    /// <summary>
+    /// 呼出画面菜单的键（右键 <c>MBTN_RIGHT</c> 与键盘菜单键 <c>MENU</c>），起播后经运行期 <c>keybind</c>
+    /// 补发（与 <see cref="MpvSeekKeys"/>、<see cref="MpvStats"/> 同一处同一时机）。
+    /// <para>
+    /// <b>为什么必须在这里补。</b> 本项目两条管线都以 <c>config=no</c> 起播（见 <see cref="Playback.LibMpvBackend"/>），
+    /// 那份用户 input.conf 根本不读，而 uosc 默认不给任何键绑菜单（它指望用户自己在 input.conf 里写
+    /// <c>mbtn_right script-binding uosc/menu</c>）——于是独占模式里<b>右键点画面呼不出菜单</b>。这里把两颗补上，
+    /// 落在比内建高一级的优先级上（<c>keybind</c> priority 11），内建的 <c>MBTN_RIGHT</c> 不再执行。
+    /// </para>
+    /// <para>
+    /// 绑的<b>不是</b> uosc 自带的 <c>uosc/menu</c>（那是 uosc 自己那张精简默认菜单），而是
+    /// <c>uosc/embynian-ui-picture-menu</c> —— 它向宿主要 <see cref="VideoWindowContract.PictureMenu"/>，
+    /// 宿主把 <see cref="PlayerMenuCatalog"/> 那张树（集成模式右键用的同一份）推回来画。这样两条管线的画面菜单
+    /// 是同一个数据源、同一套执行（「参考集成模式」）。两颗都是常量、不随设置变，所以<b>不进换片启动签名</b>
+    /// （与 <see cref="MpvStats.Keys"/> 同款）。集成模式键盘归 shell、mpv 输入层整个关着
+    /// （<c>input-default-bindings=no</c>），这两颗一颗都不会发出去 —— 调用方按管线取舍。
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<KeyValuePair<string, string>> MenuKeys() =>
+    [
+        new("MBTN_RIGHT", "script-binding uosc/embynian-ui-picture-menu"),
+        new("MENU", "script-binding uosc/embynian-ui-picture-menu")
+    ];
+
     /// <summary>uosc 文本用的字体。Windows 全都有，也不吃用户字幕字体设置 —— 那是字幕的事。</summary>
     public const string OsdFont = "Microsoft YaHei";
 
@@ -124,6 +148,23 @@ public static class VideoWindowContract
     public const string VersionIndex = "embynian-version-index";
 
     /// <summary>
+    /// 请求弹出「画面菜单」（值保留）——右键点画面就发它。宿主把 <see cref="PlayerMenuCatalog"/>
+    /// （集成模式右键那张同一份树）经 open-menu 推给 uosc 画出来，所以两条管线的画面菜单是同一个数据源、
+    /// 同一套执行（点中回 <see cref="MenuIndex"/>，宿主用 RunMenuNodeAsync 跑，与集成模式一字不差）。
+    /// <para>
+    /// 与 <see cref="Episodes"/>、<see cref="Versions"/> 同款：脚本那头的绑定叫 <c>embynian-ui-picture-menu</c>，
+    /// 与这个键**故意不同名**（同名＝这条消息把发出它的绑定又叫醒一次，见 <see cref="Episodes"/>）。
+    /// </para>
+    /// </summary>
+    public const string PictureMenu = "embynian-picture-menu";
+
+    /// <summary>
+    /// 画面菜单里点中的一项，值是 1 起算的序号，对着 <see cref="PlayerMenuCatalog.Commands"/> 那份
+    /// 展平后的命令叶子表（宿主推送菜单时按同一次序编号）。
+    /// </summary>
+    public const string MenuIndex = "embynian-menu-index";
+
+    /// <summary>
     /// 把一条 client-message 的参数解析成宿主消息；不是宿主的消息、值不合契约的，返回 null。
     /// </summary>
     public static VideoWindowMessage? Parse(IReadOnlyList<string> arguments)
@@ -134,14 +175,14 @@ public static class VideoWindowContract
         var value = arguments[1];
 
         if (key == Episode) return value is "-1" or "1" ? new VideoWindowMessage(key, value) : null;
-        if (key is EpisodeIndex or VersionIndex)
+        if (key is EpisodeIndex or VersionIndex or MenuIndex)
         {
             return int.TryParse(value, out var index) && index is >= 1 and <= 100000
                 ? new VideoWindowMessage(key, value)
                 : null;
         }
 
-        if (key is Ready or Seek or Episodes or Versions) return new VideoWindowMessage(key, value);
+        if (key is Ready or Seek or Episodes or Versions or PictureMenu) return new VideoWindowMessage(key, value);
 
         return null;
     }

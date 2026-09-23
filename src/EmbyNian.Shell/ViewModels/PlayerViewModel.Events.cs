@@ -98,8 +98,84 @@ public sealed partial class PlayerViewModel
                 // 而「点了正在放的那一版」由 SwitchVersion 自己吞掉 —— 这道守卫不在这儿再抄一遍。
                 SwitchVersion(MediaVersionSwitch.At(_nowPlaying, version));
                 break;
+
+            case VideoWindowContract.PictureMenu:
+                // 画面菜单同选集/版本那一套：幂等、自激时挡下并记数。数据源是 PlayerMenuCatalog（集成模式
+                // 右键那张同一份树），所以两条管线的画面菜单一模一样。
+                if (_pictureMenuGate.TryAccept(DateTime.UtcNow))
+                {
+                    _ = PushPictureMenuAsync();
+                }
+                else if (_pictureMenuGate.ShouldReport(DateTime.UtcNow))
+                {
+                    Log.Warn(Category,
+                        $"画面菜单请求被闸门挡下（累计 {_pictureMenuGate.Suppressed} 条）——视频窗脚本可能在刷屏");
+                }
+                break;
+
+            case VideoWindowContract.MenuIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var row):
+                // 1 起算的序号对着 PlayerMenuCatalog.Commands（宿主推送时按同一次序编号）。越界的丢掉，
+                // 命中的交给 RunMenuNodeAsync —— 与集成模式右键点同一行走的是同一句执行（命令＋${property} 提示）。
+                if (row >= 1 && row <= PlayerMenuCatalog.Commands.Count)
+                    _ = RunMenuNodeAsync(PlayerMenuCatalog.Commands[row - 1]);
+                break;
         }
     });
+
+    /// <summary>
+    /// 把 <see cref="PlayerMenuCatalog"/> 那张树推给视频窗的 uosc 画成菜单 —— 集成模式右键用的同一份，所以
+    /// 「参考集成模式」在这里是字面意义上的同一个数据源。命令行的 <c>value</c> 是回宿主的一条
+    /// <see cref="VideoWindowContract.MenuIndex"/>（序号对着 <see cref="PlayerMenuCatalog.Commands"/> 的次序），
+    /// 点中时宿主用 <c>RunMenuNodeAsync</c> 跑 —— 多条命令的「重置」行与 <c>${property}</c> 提示都靠它，
+    /// uosc 那头单条 value 表达不了，所以统一回宿主执行。
+    /// </summary>
+    private async Task PushPictureMenuAsync()
+    {
+        var command = 0;
+        var items = BuildPictureMenuItems(PlayerMenuCatalog.Root, ref command);
+        await SendMenuAsync("picture", "画面", items).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// 一层目录变成 uosc 菜单行，子菜单递归。命令叶子按 DFS 先序编号（与 <see cref="PlayerMenuCatalog.Commands"/>
+    /// 的次序对齐，测试钉住两者一致）；分隔线画在它前一行上（uosc 的分隔是「这一行之后画条线」的属性，不是独立行）；
+    /// 组是子菜单、本身不可点。
+    /// </summary>
+    private static List<UoscMenuItem> BuildPictureMenuItems(IReadOnlyList<PlayerMenuNode> nodes, ref int command)
+    {
+        var items = new List<UoscMenuItem>(nodes.Count);
+
+        foreach (var node in nodes)
+        {
+            switch (node.Kind)
+            {
+                case PlayerMenuKind.Separator:
+                    // uosc 没有独立的分隔行，只有「这一行下面画条线」——落在前一行上。开头就是分隔线、
+                    // 或前一行已经被标过，都当没有（菜单里两条紧挨的分隔线本就不该出现）。
+                    if (items.Count > 0 && items[^1].Separator != true)
+                        items[^1] = items[^1] with { Separator = true };
+                    break;
+
+                case PlayerMenuKind.Group:
+                    var children = BuildPictureMenuItems(node.Children, ref command);
+                    // 子菜单那一行必须可选中（selectable 默认真、这里显式给真）——否则 uosc 里点不开它；
+                    // 它没有 value（点它是进子菜单，不是跑命令），items 一有值 uosc 就当它是子菜单。
+                    items.Add(new UoscMenuItem(node.Label, null, true, false, Items: children));
+                    break;
+
+                default:
+                    command++;
+                    items.Add(new UoscMenuItem(
+                        node.Label,
+                        $"script-message {VideoWindowContract.MenuIndex} {command.ToString(CultureInfo.InvariantCulture)}",
+                        true,
+                        false));
+                    break;
+            }
+        }
+
+        return items;
+    }
 
     /// <summary>
     /// 把本季单集推给视频窗的 uosc 画成菜单。当前集打上 active；没有集列表（非剧集、列表没到手）也回
@@ -165,9 +241,18 @@ public sealed partial class PlayerViewModel
 
     /// <summary>
     /// 菜单里的一行。<see cref="Hint"/> 是右边那列暗字（uosc 的 <c>hint</c>）：选集用不上（值里已经有
-    /// 集号），版本用得上 —— 那正是「两份文件同一个名字」时唯一说得清的地方。
+    /// 集号），版本用得上 —— 那正是「两份文件同一个名字」时唯一说得清的地方。<see cref="Items"/> 有值时这一行
+    /// 是子菜单（画面菜单的分组用），<see cref="Separator"/> 为真时在这一行下方画一条分隔线（uosc 的分隔是
+    /// 行属性，不是独立行）。两者都只在写非默认值时进 JSON（见 <see cref="UoscMenuJson"/>）。
     /// </summary>
-    private sealed record UoscMenuItem(string Title, string? Value, bool Selectable, bool Active, string? Hint = null);
+    private sealed record UoscMenuItem(
+        string Title,
+        string? Value,
+        bool Selectable,
+        bool Active,
+        string? Hint = null,
+        IReadOnlyList<UoscMenuItem>? Items = null,
+        bool? Separator = null);
 
     private static class UoscMenuJson
     {
@@ -502,9 +587,17 @@ public sealed partial class PlayerViewModel
     /// through rather than coalesced: a volume change is a single value mpv applies instantly, and the thumb and
     /// the figure above it have to keep up with the hand rather than with the next status poll — which, until
     /// this level settles, is not allowed to write them at all (see <see cref="ApplyStatus"/>).
+    /// <para>
+    /// 第一件事是把滑杆摆到这一档的刻度上（<see cref="VolumeScale.Axis"/>），两个例外写在下面。
+    /// </para>
     /// </summary>
     partial void OnVolumeChanged(double value)
     {
+        // 位置归手的两种情形不写回去：用户正拖着滑块（写回去等于跟手打架），以及滚轮刚把半格留在轴上
+        // （那半格是它下一次要接着走的，抹平了就等于每一格都从头开始，100→101 永远走不到）。mpv 回读那一档
+        // 必须写 —— 它是 _pushing 里的，同样走得到这里。
+        if (!_axisByHand && !_axisByRoll) VolumeAxis = VolumeScale.Axis(value);
+
         if (_pushing) return;
 
         var level = Math.Clamp(Math.Round(value), 0, AudioSettings.MaxVolume);
@@ -514,6 +607,33 @@ public sealed partial class PlayerViewModel
         // own config blocked, so a level nobody wrote down is 100 again by the next episode.
         _volumePending = (int)level;
         _volumeTouched = Now;
+    }
+
+    /// <summary>
+    /// 滑杆自己给的位置：用户拖着它，或者滚轮刚在轴上走了一格（后者由 <see cref="RollVolume"/> 标了
+    /// <c>_axisByRoll</c>，直接返回）。换算回音量（<see cref="VolumeScale.Level"/>）再就近取整 —— 落在
+    /// 100 与 101 之间那半格时给的是小数，两档各占半格，就近收正是不偏不倚的分界（100.5 归 101）。
+    /// <para>
+    /// <c>_pushing</c> 那一档不接：那是 mpv 回读把滑块摆回刻度点（见 <see cref="OnVolumeChanged"/>），
+    /// 这里要是也认，两个属性会互相写回去。
+    /// </para>
+    /// </summary>
+    partial void OnVolumeAxisChanged(double value)
+    {
+        if (_axisByRoll || _pushing) return;
+
+        var level = Math.Round(VolumeScale.Level(value), MidpointRounding.AwayFromZero);
+        if (Math.Abs(level - Volume) < 0.001) return;
+
+        _axisByHand = true;
+        try
+        {
+            Volume = level;
+        }
+        finally
+        {
+            _axisByHand = false;
+        }
     }
 
     /// <summary>

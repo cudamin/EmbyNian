@@ -17,8 +17,10 @@ public interface IVideoSurface
     (int Width, int Height) Size { get; }
 
     /// <summary>
-    /// A layout size or rasterization scale changed. Raised on the UI thread and debounced
-    /// during resize. The backend writes <see cref="Size"/> to <c>d3d11-composition-size</c>
+    /// The requested rendering size or rasterization scale changed. Raised on the UI thread.
+    /// Interactive resizing may keep this size stable while the compositor scales live frames;
+    /// the final rendering size is published when the drag ends.
+    /// The backend writes <see cref="Size"/> to <c>d3d11-composition-size</c>
     /// and refreshes the current swapchain.
     /// </summary>
     event Action? GeometryChanged;

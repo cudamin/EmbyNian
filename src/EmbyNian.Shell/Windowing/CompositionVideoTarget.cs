@@ -14,14 +14,10 @@ using WinRT;
 namespace EmbyNian.Shell.Windowing;
 
 /// <summary>
-/// mpv 的交换链留在独立 SpriteVisual 上，画笔始终填满呈现矩形。矩形按物理像素记，与缓冲尺寸、
-/// DPI 和窗口原点分开；中途换缓冲只改变清晰度，不改变画面的大小和落点。
-/// 实际缓冲仍逐拍通过 GetDesc1 读取，只用于判定就绪，不再控制 Visual 的尺寸。
-/// <para>
-/// <b>客户区跳变一律瞬时落位，没有任何过渡动画</b>（2026-09-20 用户令「去掉集成模式下切换全屏和
-/// 窗口化的画面动画，参考其他播放器正常切换就好」）—— 见 <see cref="SnapPresentation"/>。这里曾经
-/// 有一趟 240ms 的「画面跑动」，逐拍在旧矩形与新矩形之间插值，已随该令删除。
-/// </para>
+/// mpv 的交换链留在独立 SpriteVisual 上。呈现矩形按物理像素记，与缓冲尺寸、DPI 和窗口原点分开。
+/// 拖边期间保持渲染缓冲不变，合成器缩放持续更新的画面；松手后才交给 mpv 最终尺寸。
+/// 交换链画笔的 Stretch 不负责缩放，Size 是裁剪框，因此必须按实测缓冲尺寸设置 Scale。
+/// 客户区跳变瞬时落位，不插值播放画面的几何。
 /// </summary>
 internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
 {
@@ -48,7 +44,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
 
     private readonly FrameworkElement _host;
     private readonly DispatcherQueue _dispatcher;
-    private readonly DispatcherQueueTimer _debounce;
+    private readonly DispatcherQueueTimer _geometryTimer;
     private readonly DispatcherQueueTimer _presentationTimer;
     private readonly Stopwatch _presentationClock = Stopwatch.StartNew();
     private readonly object _gate = new();
@@ -61,6 +57,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     private bool _queued;
     private bool _disposed;
     private bool _retainLastFrame;
+    private (int Width, int Height) _interactiveBuffer;
 
     /// <summary>留在屏上那一帧的压暗系数。见 <see cref="RetainDim"/>。</summary>
     private double _retainDim;
@@ -69,6 +66,9 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     private (int Width, int Height) _size;
     private (int Width, int Height) _previous;
     private (int Width, int Height) _attachedContent;
+
+    /// <summary>最后一次实际读取的缓冲尺寸；留帧时仍需它来计算缩放，不能用请求尺寸或固定延时猜。</summary>
+    private (int Width, int Height) _pixels;
 
     /// <summary>最近一次算出的呈现矩形（物理像素，以宿主客户区左上角为原点）。</summary>
     private VideoPresentation.Rect _clientRect;
@@ -99,6 +99,12 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     /// </para>
     /// </summary>
     private bool _resizePending;
+
+    /// <summary>
+    /// 摆放三件套被 <c>--probe-composition</c> 的「缩放定律」一节钉住了：逐拍与保留态两条路都必须让开，
+    /// 否则它们会在 16ms 之内把探针写进去的值盖掉，量到的是生产代码那一版而不是实验那一版。
+    /// </summary>
+    private bool _probePinned;
 
     /// <summary>
     /// 保留态（最后一帧还在屏上、缓冲已交还）里那一帧的<b>形状</b>：宽高比，物理像素。
@@ -180,6 +186,10 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     /// <summary>宿主要了新尺寸、mpv 的缓冲还在追赶；这一段画面继续铺满，不回退 contain。</summary>
     internal bool IsResizePending => _resizePending;
 
+    internal bool IsInteractiveResize => _interactiveBuffer is { Width: > 0, Height: > 0 };
+
+    internal (int Width, int Height) PixelSize => _pixels;
+
     /// <summary>
     /// 从本地 Visual 属性反算的目标矩形，不代表合成器已经显示的像素。
     /// 实际空白、父级裁剪和交换链交接仍须用屏幕逐帧捕获验证。
@@ -190,11 +200,51 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         {
             if (_visual is not { } visual) return default;
             var raster = RasterScale();
-            return new VideoPresentation.Rect(
-                visual.Offset.X * raster,
-                visual.Offset.Y * raster,
-                visual.Size.X * visual.Scale.X * raster,
-                visual.Size.Y * visual.Scale.Y * raster);
+            var scale = visual.Scale.X;
+            var left = visual.Offset.X * raster;
+            var top = visual.Offset.Y * raster;
+            var width = visual.Size.X * scale * raster;
+            var height = visual.Size.Y * scale * raster;
+
+            // 这一份读数的语义是「**画面**占的矩形」，不是「那 SpriteVisual 占的矩形」：视觉的 Size 是
+            // 裁剪框、框的是**整块缓冲**（mpv 会在里面按画面比例留一圈信箱边），所以要把画面在缓冲里
+            // 那一块的位置与大小折进来。不折的话，竖屏全屏那种「缓冲与画面不同形」的台位上，读数会把
+            // 整块缓冲（含黑边）当成画面上报，与探针判「比例有没有被掰弯」的语义对不上（2026-09-22）。
+            var picture = OutputAspect;
+            if (picture > 0 && width > 0 && height > 0)
+            {
+                // 画面在「内容」里的位置：按画面自己的比例居中放进去（与 RefreshRetained 同一套算术）。
+                var contentWidth = visual.Size.X * raster;
+                var contentHeight = visual.Size.Y * raster;
+                var unit = Math.Min(contentWidth / picture, contentHeight);
+                if (double.IsFinite(unit) && unit > 0)
+                {
+                    var innerWidth = picture * unit;
+                    var innerHeight = unit;
+                    left += (contentWidth - innerWidth) / 2 * scale;
+                    top += (contentHeight - innerHeight) / 2 * scale;
+                    width = innerWidth * scale;
+                    height = innerHeight * scale;
+                }
+            }
+
+            return new VideoPresentation.Rect(left, top, width, height);
+        }
+    }
+
+    /// <summary>
+    /// 画面自己的宽高比（宽 ÷ 高），零＝还不知道。给 <see cref="PlacedRect"/> 折信箱边用：保留态用
+    /// <see cref="_retainedShape"/>（退场那一刻定下来的画面形状），其余时候用宿主写进来的
+    /// <see cref="SourceAspect"/>，最后才退回 <see cref="PictureAspect"/>（那是显示尺寸，窗口里被
+    /// letterbox 之后会与宿主同形，只有前两个都没有时才用得上）。
+    /// </summary>
+    private double OutputAspect
+    {
+        get
+        {
+            if (_retained && _retainedShape.Width > 0 && _retainedShape.Height > 0)
+                return _retainedShape.Width / _retainedShape.Height;
+            return SourceAspect > 0 ? SourceAspect : PictureAspect;
         }
     }
 
@@ -202,10 +252,10 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     {
         _host = host;
         _dispatcher = host.DispatcherQueue;
-        _debounce = _dispatcher.CreateTimer();
-        _debounce.Interval = TimeSpan.FromMilliseconds(100);
-        _debounce.IsRepeating = false;
-        _debounce.Tick += OnDebounce;
+        _geometryTimer = _dispatcher.CreateTimer();
+        _geometryTimer.Interval = TimeSpan.FromMilliseconds(TickMilliseconds);
+        _geometryTimer.IsRepeating = false;
+        _geometryTimer.Tick += OnGeometryTick;
         _presentationTimer = _dispatcher.CreateTimer();
         _presentationTimer.Interval = TimeSpan.FromMilliseconds(TickMilliseconds);
         _presentationTimer.Tick += OnPresentationTick;
@@ -364,16 +414,29 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     internal void HoldGeometry(bool hold)
     {
         _geometryHeld = hold;
-        if (hold) _debounce.Stop();
+        if (hold) _geometryTimer.Stop();
         else SynchronizeGeometry();
     }
 
     internal Task CommitPresentationAsync() => _visual is { } visual
         ? visual.Compositor.RequestCommitAsync().AsTask() : Task.CompletedTask;
 
+    /// <summary>
+    /// 拖边只改呈现尺寸，视频仍往同一块缓冲里连续出帧。Size 也必须保持稳定，
+    /// 因为后端除了响应 GeometryChanged，还会在交换链通知中主动读取它。
+    /// </summary>
+    internal void SetInteractiveResize(bool active)
+    {
+        if (_disposed || active == IsInteractiveResize) return;
+        lock (_gate)
+            _interactiveBuffer = active && _attached != IntPtr.Zero ? _size : default;
+        if (active) _geometryTimer.Stop();
+        else SynchronizeGeometry();
+    }
+
     public (int Width, int Height) Size
     {
-        get { lock (_gate) return _size; }
+        get { lock (_gate) return IsInteractiveResize ? _interactiveBuffer : _size; }
     }
 
     public void AttachSwapChain(IntPtr swapChain)
@@ -504,11 +567,20 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         _snappedClient = (toScreen.Width, toScreen.Height);
         _snappedAt = _presentationClock.ElapsedMilliseconds;
         SetSize(_snappedClient);
-        _debounce.Stop();
+        _geometryTimer.Stop();
         RefreshPresentation();
         Dispatch();
         WatchPresentation();
         Log.Debug(Category, $"画面落位：{toScreen.Width}×{toScreen.Height}（无过渡）");
+    }
+
+    internal void ResizePresentation(NativeRect client)
+    {
+        if (_disposed || client.Width <= 0 || client.Height <= 0) return;
+        _snappedClient = (client.Width, client.Height);
+        _snappedAt = _presentationClock.ElapsedMilliseconds;
+        if (!SetSize(_snappedClient)) return;
+        Schedule();
     }
 
     internal void RefreshPresentation()
@@ -524,6 +596,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
             _attachedContent = observed;
             Log.Debug(Category, $"实际视频缓冲 {observed.Width}x{observed.Height}，宿主 {_size.Width}x{_size.Height}");
         }
+        TrackPixels(observed);
 
         // 缓冲追上宿主了，这一趟尺寸追赶到此为止 —— 拖动的「正在追赶」解除。
         if (_resizePending && _attachedContent is { Width: > 0, Height: > 0 }
@@ -537,6 +610,13 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         if (frame.Width <= 0 || frame.Height <= 0) return;
 
         ApplyFrame(frame, raster);
+    }
+
+    /// <summary>缓冲以实际读数为准；交还交换链后仍保留尺寸供最后一帧使用。</summary>
+    private void TrackPixels((int Width, int Height) observed)
+    {
+        if (observed is not { Width: > 0, Height: > 0 }) return;
+        _pixels = observed;
     }
 
     /// <summary>
@@ -557,7 +637,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
                 || _presentationClock.ElapsedMilliseconds - _snappedAt > SnapTrustMilliseconds)
                 _snappedClient = default;
             else
-                return _clientRect = FrameBox(jumped.Width, jumped.Height, resizePending: false);
+                return _clientRect = FrameBox(jumped.Width, jumped.Height, _resizePending);
         }
 
         if (hostWidth <= 0 || hostHeight <= 0) return _clientRect;
@@ -596,17 +676,90 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
             content.Width * contain.ScaleX, content.Height * contain.ScaleY);
     }
 
+    /// <summary>
+    /// 把这一帧摆进目标矩形。
+    /// <para>
+    /// <b>这里必须用 Offset＋Scale，不能写 Size。</b>2026-09-22 的「缩放定律」实测（
+    /// <c>--probe-composition</c> 一节，四拍读数就在报告里）：交换链的像素是被<b>一比一贴在宿主左上角</b>
+    /// 的 —— <c>SpriteVisual.Size</c> 与画笔的 <c>Stretch=Fill</c> 都不改变它画出来的尺寸，
+    /// <c>Size</c> 只当裁剪框（在本地坐标里、早于 <c>Scale</c>），真正决定画面多大、在哪儿的只有
+    /// <c>Offset</c> 与 <c>Scale</c>，而缩放中心必须钉在原点。
+    /// </para>
+    /// <para>
+    /// <b>为什么「写 Size」这个写法能在树里活这么久。</b>缓冲与宿主一致时两种写法算出同一个结果
+    /// （Offset=0、Scale=1），所以稳定期永远看不出问题；只有<b>缓冲还在旧尺寸上的那几拍</b>才露馅 ——
+    /// 放大时画面以旧尺寸缩在左上角、右下露出页面底色，缩小时被窗口切掉。用户 2026-09-22 报的
+    /// 「放大短时铺不满、缩小短时被裁切」正是这两条，详见 <see cref="FrameBox"/> 与 <c>_resizePending</c>。
+    /// </para>
+    /// <para>
+    /// 缩放是「两个物理像素长度之比」（与光栅化比例无关），落点按光栅化比例折算成 DIP ——
+    /// 与 <see cref="VideoPresentation.ForFrame"/> 的约定一致，生产路径上唯一算摆放的地方也是它。
+    /// </para>
+    /// </summary>
     private void ApplyFrame(VideoPresentation.Rect frame, double raster)
     {
+        if (_probePinned) return;
         if (_visual is not { } visual) return;
-        var dips = VideoPresentation.ToDips(frame, raster);
-        if (dips.Width <= 0 || dips.Height <= 0) return;
+        // 请求尺寸可能已经改变；缩放的分母只能是实际缓冲，不能提前换成目标尺寸。
+        if (_pixels is not { Width: > 0, Height: > 0 } content) return;
+        if (frame.Width <= 0 || frame.Height <= 0 || raster <= 0) return;
 
-        // 活交换链的尺寸独立更新；Visual 只描述目标矩形，不再把缓冲尺寸与补偿缩放分开提交。
-        visual.Size = new Vector2((float)dips.Width, (float)dips.Height);
-        visual.Offset = new Vector3((float)dips.Left, (float)dips.Top, 0);
-        visual.Scale = Vector3.One;
+        var placement = VideoPresentation.ForFrame(content.Width, content.Height, frame, raster);
+        visual.CenterPoint = Vector3.Zero;
+        visual.Size = new Vector2((float)(content.Width / raster), (float)(content.Height / raster));
+        visual.Offset = new Vector3((float)placement.Left, (float)placement.Top, 0);
+        visual.Scale = new Vector3((float)placement.ScaleX, (float)placement.ScaleY, 1);
     }
+
+    /// <summary>
+    /// <b>探针专用</b>（<c>--probe-composition</c> 的「缩放定律」一节）：把 SpriteVisual 的摆放三件套直接
+    /// 钉在给定值上（DIP），并让逐拍那条路与保留态那条路都不再覆盖它。
+    /// <para>
+    /// <b>为什么必须有这个口子。</b>2026-09-22 的问题「集成模式放大时画面铺不满、缩小时被裁切」只可能来自
+    /// 一句话：旧缓冲被换进新客户区的那几拍里，合成器到底认不认 <c>Size</c> 与 <c>Scale</c>。生产代码只会把
+    /// 两者按同一个假设算出来（Size＝目标矩形、Scale＝1），永远得不出反证；这里把它们分开钉住，就能在
+    /// <b>窗口完全不动</b>的条件下逐条量屏幕像素 —— 排除了 XAML 布局、岛裁剪和 mpv 重建时间三个干扰项。
+    /// 生产代码永不调用；用完 <see cref="ReleaseProbePlacement"/> 放掉。
+    /// </para>
+    /// </summary>
+    internal void PinProbePlacement(double left, double top, double width, double height, double scale)
+    {
+        if (_visual is not { } visual) return;
+        _probePinned = true;
+        visual.CenterPoint = Vector3.Zero;
+        visual.Size = new Vector2((float)width, (float)height);
+        visual.Offset = new Vector3((float)left, (float)top, 0);
+        visual.Scale = new Vector3((float)scale, (float)scale, 1);
+    }
+
+    /// <summary>
+    /// <b>探针专用</b>：换一条摆放路线 —— 把画笔自己钉成 <c>Stretch=None</c> 加一个纯缩放的
+    /// <c>TransformMatrix</c>（这是 <see cref="CompositionSurfaceBrush"/> 文档里「不想让画笔替我缩放」时的
+    /// 写法）。与 <see cref="PinProbePlacement"/> 二选一，用来分辨「像素缩放」这件事到底该由视觉的
+    /// <c>Scale</c> 干还是由画笔的矩阵干 —— 2026-09-22 实测：<c>Size</c> 与 <c>Stretch=Fill</c> 都不干。
+    /// </summary>
+    internal void PinProbeBrushScale(double scale)
+    {
+        if (_brush is null || _visual is null) return;
+        _probePinned = true;
+        _visual.CenterPoint = Vector3.Zero;
+        _visual.Offset = Vector3.Zero;
+        _visual.Scale = Vector3.One;
+        _brush.Stretch = CompositionStretch.None;
+        _brush.TransformMatrix = Matrix3x2.CreateScale((float)scale);
+    }
+
+    /// <summary>放掉 <see cref="PinProbePlacement"/> 的钉子，逐拍那条路从此照旧写。</summary>
+    internal void ReleaseProbePlacement()
+    {
+        _probePinned = false;
+        if (_brush is not { } brush) return;
+        brush.Stretch = CompositionStretch.Fill;
+        brush.TransformMatrix = Matrix3x2.Identity;
+    }
+
+    /// <summary>摆放三件套被探针钉住了（此时生产代码算出来的那一版不会写进视觉）。</summary>
+    internal bool IsProbePinned => _probePinned;
 
     /// <summary>
     /// 交还交换链但把画面留在屏上：视觉与画笔原样不动（断链不会让已经画上去的那一帧消失），
@@ -659,6 +812,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
             chosen = (spare.Width, spare.Height);
 
         _retainedShape = chosen;
+        // 保留态要用的「这块像素有多大」就是准星 `_pixels`（RefreshRetained 自己读），不必再留一份。
         ReleaseAttached();
         _attachedContent = default;
     }
@@ -669,38 +823,83 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     /// 框里，否则下半屏就是空的 —— 用户看到的「退出播放时下方瞬间出现大片空白」（2026-09-20）。
     /// <para>
     /// 与正片那两条（<see cref="CurrentFrame"/> 逐拍摆、<see cref="SnapPresentation"/> 跳变落位）的
-    /// 区别：这里没有缓冲、也没有新尺寸可等，唯一的输入是宿主尺寸与画面形状，所以是「把这张画放进
-    /// 变大了的框里」。退场那一跳本来就是窗口瞬变，画面跟着瞬变，两边才不会各走各的。
+    /// 区别：这里没有缓冲、也没有新尺寸可等，手上的输入只有宿主尺寸、画面形状和那一块像素自己的尺寸，
+    /// 所以是「把这张画放进变大了的框里」。退场那一跳本来就是窗口瞬变，画面跟着瞬变，两边才不会各走各的。
+    /// </para>
+    /// <para>
+    /// 摆法照旧走 <see cref="ApplyFrame"/> 那条规矩（Size＝裁剪框、Scale 才是大小、CenterPoint 在原点）：
+    /// 先在缓冲里按画面比例找出「画面占哪一块」（<c>inner</c>），再算出「上屏该占哪一块」（<c>fit</c>），
+    /// 两块之比就是 Scale，两块左上角之差就是 Offset。画面四周那圈黑边是缓冲自带的，会一起跟着走。
     /// </para>
     /// </summary>
     private void RefreshRetained()
     {
-        if (_disposed || !_retained || _visual is null) return;
+        if (_probePinned || _disposed || !_retained || _visual is null) return;
 
         var raster = RasterScale();
         var hostWidth = _host.ActualWidth * raster;
         var hostHeight = _host.ActualHeight * raster;
         if (hostWidth <= 0 || hostHeight <= 0) return;
 
-        // 缓冲已经交还，能用的只有「画面是什么形状」这个事实。按它等比放进新宿主：默认**留边**
-        //（宁可留黑边也不把画面拉变形），退场那一趟是**铺满**（RetainFill，理由见它自己的注释）。
-        var width = _retainedShape.Width;
-        var height = _retainedShape.Height;
-        if (width <= 0 || height <= 0) return;
+        var shape = _retainedShape;
+        if (shape.Width <= 0 || shape.Height <= 0) return;
 
-        var scale = VideoPresentation.FitScale(width, height, hostWidth, hostHeight, RetainFill);
-        if (scale <= 0) return;
+        // 缓冲已经交还，但**那块像素还在屏上**，而它是最后一帧的整块交换链 —— 画面只占其中一块
+        //（mpv 在缓冲里按画面比例留过黑边）。所以按「画面在缓冲里的位置 → 画面上屏该占的矩形」算，
+        // 不能把「形状」当成整块内容去铺：`_retainedShape` 是一个**比例**（比如 1.777×1），拿它当
+        // SpriteVisual.Size 会得到一个不到两像素宽的裁剪框（Size 是裁剪框，2026-09-22 实测），
+        // 最后一帧会被裁成一条线再放大 —— 屏上是一块糊掉的纯色。Size 取整块缓冲 ÷ 光栅化比例，
+        // 那正是「把整块内容都留在框里」。准星（`_pixels`）说了不上来时退回形状，与从前一样。
+
+        // 画面在缓冲里占哪一块：按画面比例居中放进去（mpv 留黑边也是居中的）。形状是一个**比例**
+        //（比如 16/9 × 1），所以先把它放大到「贴着缓冲的那一边」的尺度，再居中。
+        var (inner, innerScale, content) = RetainedInner();
+        if (inner.Width <= 0 || inner.Height <= 0) return;
+
+        // 画面上屏该占哪一块：默认**留边**（宁可留黑边也不把画面拉变形），退场那一趟是**铺满**
+        //（RetainFill，理由见它自己的注释）。
+        var fit = VideoPresentation.FitScale(shape.Width, shape.Height, hostWidth, hostHeight, RetainFill);
+        if (fit <= 0) return;
+
+        // 两头都是「画面那一块」，所以一个比例就够；落点要减掉画面在缓冲里的偏移。
+        var scale = fit / innerScale;
+        var targetLeft = (hostWidth - shape.Width * fit) / 2;
+        var targetTop = (hostHeight - shape.Height * fit) / 2;
 
         var visual = _visual;
-        visual.Size = new Vector2((float)(width / raster), (float)(height / raster));
+        visual.CenterPoint = Vector3.Zero;
+        visual.Size = new Vector2((float)(content.Width / raster), (float)(content.Height / raster));
         visual.Scale = new Vector3((float)scale, (float)scale, 1);
         visual.Offset = new Vector3(
-            (float)((hostWidth - width * scale) / raster / 2),
-            (float)((hostHeight - height * scale) / raster / 2), 0);
+            (float)((targetLeft - inner.Left * scale) / raster),
+            (float)((targetTop - inner.Top * scale) / raster), 0);
 
         // 压暗那一支也逐拍写：退场是「一边跟着宿主重摆、一边随着整页暗下去」，两个都要每拍对齐。
         // 正常路径下 _retainDim 是 0，这一句就是把它写回原亮度（换集的留帧因此绝不会继承上一趟的暗）。
         visual.Opacity = (float)(1 - _retainDim);
+    }
+
+    /// <summary>
+    /// 保留态里「画面」在那一块缓冲里占哪一块（缓冲物理像素）、「形状的一个单位等于多少缓冲像素」，
+    /// 以及那块缓冲本身多大。<see cref="RefreshRetained"/> 用它把画面摆到该在的位置上。
+    /// </summary>
+    private (VideoPresentation.Rect Inner, double Scale, (double Width, double Height) Content) RetainedInner()
+    {
+        var shape = _retainedShape;
+        if (shape.Width <= 0 || shape.Height <= 0) return (default, 0, default);
+
+        // 缓冲自己的尺寸（物理像素）：优先用准星（这是画面被画进去时的尺寸），退而用形状。
+        var content = _pixels is { Width: > 0, Height: > 0 } known
+            ? (Width: (double)known.Width, Height: (double)known.Height)
+            : shape;
+
+        var scale = Math.Min(content.Width / shape.Width, content.Height / shape.Height);
+        if (!double.IsFinite(scale) || scale <= 0) return (default, 0, content);
+
+        var width = shape.Width * scale;
+        var height = shape.Height * scale;
+        return (new VideoPresentation.Rect(
+            (content.Width - width) / 2, (content.Height - height) / 2, width, height), scale, content);
     }
 
     private void WatchRetained()
@@ -715,7 +914,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     {
         if (_disposed) return;
         Measure();
-        _debounce.Stop();
+        _geometryTimer.Stop();
         RefreshPresentation();
         Dispatch();
         WatchPresentation();
@@ -759,7 +958,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
     {
         SubscribeRoot(_host.XamlRoot);
         Measure();
-        RestartDebounce();
+        QueueGeometry();
         if (_attached == IntPtr.Zero) return;
         try { Attach(_attached); }
         catch (Exception error) { Log.Warn(Category, "恢复 Composition 视频层失败", error); }
@@ -767,7 +966,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
 
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
-        _debounce.Stop();
+        _geometryTimer.Stop();
         _presentationTimer.Stop();
         SubscribeRoot(null);
         ReleaseVisual();
@@ -813,16 +1012,16 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         }
     }
 
-    private void RestartDebounce()
+    private void QueueGeometry()
     {
-        _debounce.Stop();
-        _debounce.Start();
+        // 合并一拍内的变化，但后来的尺寸不能把已经排好的派发继续向后推。
+        if (!_geometryHeld && !IsInteractiveResize && !_geometryTimer.IsRunning) _geometryTimer.Start();
     }
 
     private void Schedule()
     {
-        // 保留态：宿主一变就当场重摆，不走 100ms 防抖。退场时窗口是一口气变高的（不是拖动），
-        // 拖上防抖就是「窗口已经到位、画面过一百毫秒才跟过来」——那正是要修的空白。
+        // 保留态：宿主一变就当场重摆，不走防抖。退场时窗口是一口气变高的（不是拖动），
+        // 拖上防抖就是「窗口已经到位、画面过一会儿才跟过来」——那正是要修的空白。
         if (_retained)
         {
             RefreshRetained();
@@ -841,16 +1040,17 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         var after = (double)_size.Width * _size.Height;
         if (before > 0 && after > 0 && (after >= before * 1.5 || after * 1.5 <= before))
         {
-            _debounce.Stop();
+            _geometryTimer.Stop();
             Dispatch();
         }
-        else RestartDebounce();
+        else QueueGeometry();
     }
 
-    private void OnDebounce(DispatcherQueueTimer sender, object args) => Dispatch();
+    private void OnGeometryTick(DispatcherQueueTimer sender, object args) => Dispatch();
     private void Dispatch()
     {
-        if (!_geometryHeld) GeometryChanged?.Invoke();
+        if (_geometryHeld || IsInteractiveResize) return;
+        GeometryChanged?.Invoke();
     }
 
     private void ClearSurface()
@@ -860,6 +1060,8 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         _attachedContent = default;
         _retained = false;
         _retainedShape = default;
+        _pixels = default;
+        lock (_gate) _interactiveBuffer = default;
         _clientRect = default;
         _resizePending = false;
         _snappedClient = default;
@@ -905,8 +1107,8 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         _host.Unloaded -= OnUnloaded;
         _host.SizeChanged -= OnSizeChanged;
         SubscribeRoot(null);
-        _debounce.Stop();
-        _debounce.Tick -= OnDebounce;
+        _geometryTimer.Stop();
+        _geometryTimer.Tick -= OnGeometryTick;
         _presentationTimer.Stop();
         _presentationTimer.Tick -= OnPresentationTick;
         GeometryChanged = null;

@@ -34,11 +34,11 @@ public static class MpvBaseline
     /// </param>
     /// <param name="title">The film's title, for the screenshot file name. Empty is handled.</param>
     /// <param name="fontsDirectory">
-    /// Where this client's bundled 字幕字体 live (assets/fonts, copied next to the exe). mpv's
+    /// Where this client's bundled 字幕字体 would live (assets/fonts, copied next to the exe). mpv's
     /// <c>sub-fonts-dir</c> — font files there are used for subtitles without being installed into
-    /// Windows, which is the whole mechanism behind 「这个字体打包进程序里」: the shipped
-    /// 方正中等线简体 reaches mpv by this one option, and any future font dropped into that folder is
-    /// pickable the same way. Null skips it, which is what a test wants.
+    /// Windows. Nothing is bundled today (v19's default, Microsoft YaHei UI Semibold, is a system font),
+    /// so this points at an empty or absent folder, which mpv tolerates; the option stays so a font
+    /// dropped into that folder is picked up without a code change. Null skips it, which is what a test wants.
     /// </param>
     public static IReadOnlyList<KeyValuePair<string, string>> Build(
         string? shaderCacheDirectory = null,
@@ -63,7 +63,18 @@ public static class MpvBaseline
             // Windows that profile is usually whatever the monitor's driver dropped there rather than
             // a measurement. This is the floor, not a verdict: 设置 → 视频输出 → 自动 ICC 校色
             // (VideoSettings.IccProfileAuto) is emitted after this list and lifts it to yes.
-            new("icc-profile-auto", "no")
+            new("icc-profile-auto", "no"),
+
+            // mpv 自带的统计脚本（内置 stats.lua）关掉。它只有英文，而这里要的是参考项目那一套统计项的
+            // 中文版，那份覆盖脚本由 MpvStats 后装（两条 libmpv 管线走运行期 load-script，外置 mpv.exe 走
+            // --script=）。不关就会有两份脚本同时申请 stats/display-stats 这个名字。
+            new("load-stats-overlay", "no"),
+
+            // 统计面板现在是 mpv 画的 OSD（见 MpvStats），而它通篇是中文。mpv 的默认 OSD 字体是
+            // sans-serif，在 Windows 上落到 Arial 那一支、靠字形回退去借中文字体；这里直接点名一款系统一定
+            // 有的中文字体，省掉那次回退。独占模式的 Lua UI 也写同一个值（MpvUi 的 osd-font），这里只是让
+            // 集成模式同样有 —— 一处取值，两处引用同一个常量。
+            new("osd-font", MpvUi.OsdFont)
         };
 
         if (!string.IsNullOrWhiteSpace(shaderCacheDirectory))

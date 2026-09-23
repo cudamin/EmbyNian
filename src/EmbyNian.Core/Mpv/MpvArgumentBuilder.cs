@@ -37,6 +37,12 @@ public static class MpvArgumentBuilder
         // position to disagree with the server's.
         arguments.Add("--no-config");
 
+        // 播放统计（参考项目那一套统计项的中文覆盖版，见 MpvStats）。--no-config 让 mpv 不再读用户配置目录
+        // 里那棵 scripts/，所以这一份必须自己交出去；`--script`（单数）重复出现是累加，不与别的脚本互相顶掉。
+        // 装箱缺失只是没有统计面板，不是起播失败 —— 缺席即跳过。
+        if (MpvStats.Exists(AppContext.BaseDirectory))
+            arguments.Add($"--script={MpvStats.ScriptPath(AppContext.BaseDirectory)}");
+
         // Belt and braces, as in the libmpv backend: --no-config already blocks the watch_later file,
         // and the client owning the start position is meant to be the rule rather than a side effect.
         arguments.Add("--resume-playback=no");

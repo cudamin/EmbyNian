@@ -54,6 +54,20 @@ public sealed partial class PlayerViewModel
     [RelayCommand]
     internal void TakeSkip() => AcceptSkip(null);
 
+    /// <summary>
+    /// 关掉正立着的 跳过 提议而不跳转（快捷键 N，与 <see cref="TakeSkip"/> 的 Y 成一对）：按钮当场收起，且只要
+    /// 位置还留在这一段里就不再冒出来；退出这一段再回来是一次刻意的操作，会重新提议 —— 这套语义全在
+    /// <see cref="SkipCoordinator.Decline"/>，这里只把它接到视图模型的可见状态上。键盘那一路（<c>PlayerPage.Dispatch</c>）
+    /// 只在提示立着时才把 N 交到这里，所以进来时 <see cref="SkipOffered"/> 必真；那道判断留作第二重保险。
+    /// </summary>
+    internal void DismissSkip()
+    {
+        if (!SkipOffered) return;
+
+        _skips.Decline();
+        SkipOffered = false;
+    }
+
     // ---- starting and stopping ---------------------------------------------------
 
     /// <summary>
@@ -232,7 +246,11 @@ public sealed partial class PlayerViewModel
                 return;
             }
 
-            var source = choice?.Source ?? detail.MediaSources[0];
+            // 用户点名了某版就用那版；没点名（直接播放、自动连播）时按视频文件名筛选挑默认版本，
+            // 多版本才有区别，单版本仍是服务器第一版。
+            var source = choice?.Source
+                ?? MediaVersionSwitch.Preferred(detail, Settings.Playback.VideoFileRules)
+                ?? detail.MediaSources[0];
             var resumeTicks = Settings.Playback.ResumeFromSavedPosition ? detail.ResumeTicks : 0;
 
             Episodes = episodes ?? [];
@@ -703,7 +721,6 @@ public sealed partial class PlayerViewModel
         _embyMarks = [];
         _chapterStills.Clear();
         ClearChapterPeek();
-        StatsOpen = false;
         _aspect = 0;
 
         // 着色器档位 is per playback: the two prepared plans describe a file that is no longer open, and a tick

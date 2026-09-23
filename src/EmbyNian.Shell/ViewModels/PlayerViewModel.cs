@@ -115,13 +115,15 @@ public sealed partial class PlayerViewModel : ObservableObject
     private readonly SkipCoordinator _skips = new();
 
     /// <summary>
-    /// 视频窗「要一份菜单」的两道闸门（见 <see cref="EmbyNian.Mpv.MenuRequestGate"/>）：选集一道、版本一道。
+    /// 视频窗「要一份菜单」的三道闸门（见 <see cref="EmbyNian.Mpv.MenuRequestGate"/>）：选集、版本、画面各一道。
     /// 收下按键的是 uosc 的控件，它一旦自激，宿主在几十秒里能收到几十万条请求 —— 这个闸门就是那一下的活口。
-    /// 分开两道而不是共用一道：它们是两个按钮，用户点完选集再点版本不该被对方吃掉。
+    /// 各占一道而不是共用一道：它们是不同的按钮/右键，用户点完一个再点另一个不该被对方吃掉。
     /// </summary>
     private readonly MenuRequestGate _episodeMenuGate = new();
 
     private readonly MenuRequestGate _versionMenuGate = new();
+
+    private readonly MenuRequestGate _pictureMenuGate = new();
 
     /// <summary>
     /// Cancels anything in flight on the way out. Created here rather than per attach and deliberately
@@ -205,10 +207,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>The volume the settings file has not been told about yet, and when it last moved.</summary>
     private int? _volumePending;
     private long _volumeTouched;
-
-    /// <summary>When the 统计 panel last read mpv, and whether a read is still outstanding.</summary>
-    private long _statsRead;
-    private bool _statsBusy;
 
     /// <summary>The last aspect handed to the window, so an unchanged one is not written again.</summary>
     private double _aspect;
@@ -447,9 +445,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// </summary>
     internal event Action<double>? SourceAspectChanged;
 
-    /// <summary>A fresh set of 统计 rows to draw.</summary>
-    internal event Action<IReadOnlyList<PlaybackStatRow>>? StatsUpdated;
-
     // ---- what the chrome shows ---------------------------------------------------
 
     [ObservableProperty]
@@ -492,10 +487,33 @@ public sealed partial class PlayerViewModel : ObservableObject
     [ObservableProperty]
     public partial double SeekValue { get; set; }
 
-    /// <summary>音量, 0–<see cref="VolumeMaximum"/>, two-way for the same reason the seek bar is.</summary>
+    /// <summary>音量, 0–<see cref="AudioSettings.MaxVolume"/>, two-way for the same reason the seek bar is.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(VolumeLabel))]
     public partial double Volume { get; set; }
+
+    /// <summary>
+    /// 音量条上滑杆的位置 —— 条子自己的刻度（<see cref="VolumeScale"/>）。它与 <see cref="Volume"/> 之间隔着
+    /// 「100→101 占四个单位、其余每档一个单位」那一步换算，所以两者不再是一回事。Two-way for the same reason
+    /// the seek bar is：mpv 与用户都能写它。
+    /// <para>
+    /// 停在两档之间是会的，也是要的：滚轮一格只走 2 个单位，而 100→101 那一格宽 4 —— 「这一格还没走满」时
+    /// 数值不动，滑块先爬那么一点，第二格才跳档。用户要的「这一段要多滚几格」就落在这里（2026-09-22 用户令）。
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    public partial double VolumeAxis { get; set; }
+
+    /// <summary>
+    /// 这一次 <see cref="VolumeAxis"/> 的变更是滑块自己给的（用户在拖它），所以不要把位置写回去。
+    /// </summary>
+    private bool _axisByHand;
+
+    /// <summary>
+    /// 这一次 <see cref="VolumeAxis"/> 的变更是滚轮算出来的（<see cref="RollVolume"/>）—— 那半格归它继续走，
+    /// 同样不要写回去，也跳过就近取整。
+    /// </summary>
+    private bool _axisByRoll;
 
     /// <summary>
     /// The figure above the rail. 「给音量条上方加上数字」 (2026-09-04) — the same readout that
@@ -514,8 +532,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// How far the rail goes, so the slider in the markup does not state a ceiling of its own. It used to say
     /// <c>Maximum="100"</c>, one of six independent places that pinned the volume at 100 — and a rail whose top
     /// disagrees with what gets stored is a rail that lies about how loud the film is going to be.
+    /// <para>
+    /// 2026-09-22 起滑杆的上限是<b>刻度上的顶</b>（<see cref="VolumeScale.MaximumAxis"/>，133），不再是
+    /// <see cref="AudioSettings.MaxVolume"/> 本身：100 以上每档都被抬高 3 个单位，顶也跟着抬。绑错了屏上
+    /// 看不出异样（滑杆照旧能拖），只是拖不到 130 去、并且每一档的位置都偏 —— 自检那条「滑杆上限」盯这个。
+    /// </para>
     /// </summary>
-    public double VolumeMaximum => AudioSettings.MaxVolume;
+    public double VolumeAxisMaximum => VolumeScale.MaximumAxis;
 
     /// <summary>The rail's speaker glyph, or the crossed-out one while muted.</summary>
     [ObservableProperty]
@@ -624,16 +647,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ChapterStillVisibility))]
     public partial BitmapImage? ChapterStill { get; set; }
 
-    /// <summary>
-    /// Whether the 统计 panel is up. Two-way from its own toggle button, and deliberately outside the reveal
-    /// rule the rest of the chrome lives under — the panel is up because someone asked for it, and a numbers
-    /// readout that vanished when the pointer stopped moving would be unreadable, which is the whole reason
-    /// mpv's own <c>stats.lua</c> is a toggle too.
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(StatsVisibility))]
-    public partial bool StatsOpen { get; set; }
-
     public Visibility SubtitleVisibility => Show(Subtitle is { Length: > 0 });
 
     public Visibility EpisodeControlsVisibility => Show(EpisodeControlsVisible);
@@ -643,8 +656,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     public Visibility SkipVisibility => Show(SkipOffered);
 
     public Visibility CoverVisibility => Show(CoverUp);
-
-    public Visibility StatsVisibility => Show(StatsOpen);
 
     /// <summary>
     /// Whether the hover preview has a picture to show. A server that never extracted chapter images has
@@ -663,23 +674,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     public Visibility ChapterCaptionVisibility => Show(ChapterCaption is { Length: > 0 });
 
     private static Visibility Show(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
-
-    /// <summary>
-    /// Opening reads immediately rather than waiting up to a second for the next refresh: an empty panel
-    /// that filled in a beat later would look like it had failed to open. Closing hands the page an empty
-    /// row set, which is what clears the grid.
-    /// </summary>
-    partial void OnStatsOpenChanged(bool value)
-    {
-        if (!value)
-        {
-            StatsUpdated?.Invoke([]);
-            return;
-        }
-
-        _statsRead = 0;
-        _ = RefreshStatsAsync();
-    }
 
     // ---- what the page's menus and probes read -----------------------------------
 

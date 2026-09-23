@@ -103,7 +103,7 @@ defaults = {
 	-- embynian-episodes 找宿主，宿主推送本季单集）顶替上游的「视频轨」按钮；mpv 自身能应答的项照旧。
 	-- 播放列表/目录导航、打开文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
 	controls =
-	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,gap,menu,<video,audio>embynian-ui-episodes,<video,audio>subtitles,<has_many_audio>audio,<has_many_edition>editions,<has_chapter>chapters,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,gap,fullscreen',
+	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,gap,menu,<video,audio>embynian-ui-episodes,<video,audio>subtitles,<has_many_audio>audio,<has_many_edition>editions,<has_chapter>chapters,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,gap,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
@@ -392,34 +392,38 @@ update_config()
 -- 要么是宿主明令禁止的能力。选集继续走控制窗；这里只留 mpv 自身能应答的事。
 function create_default_menu_items()
 	return {
-		{title = t('Subtitles'), value = 'script-binding uosc/subtitles'},
-		{title = t('Audio tracks'), value = 'script-binding uosc/audio'},
+		{title = '字幕', value = 'script-binding uosc/subtitles'},
+		{title = '音轨', value = 'script-binding uosc/audio'},
 		-- EMBYNIAN[version] — 换版本（同一部片的另一个文件）走宿主的 Emby 导航，同选集：这一项只把请求
 		-- 发给宿主（embynian-ui-versions → embynian-versions），菜单由宿主推回。
 		-- 标题写死中文而不是 t('Versions')：uosc 的本地化按 slang 找 intl/<lang>.json，而宿主的 slang 是
 		-- 「chi,zho,…」这类语言代码，目录里没有对应文件，t() 会原样吐回英文键名。上游自带的几个键有中文
-		-- 译文也不会命中，所以这里不跟它走。（其余几项的中文问题另案。）
+		-- 译文也不会命中，所以这里不跟它走。
+		-- 2026-09-22：其余几项一并写死中文（原来是这条注释末尾的「另案」）。理由与上面同一条 —— t() 在这
+		-- 台机器上命中不了；而半张中文半张英文的菜单比全英文更糟。
 		{title = '版本', value = 'script-binding uosc/embynian-ui-versions'},
-		{title = t('Chapters'), value = 'script-binding uosc/chapters'},
+		{title = '章节', value = 'script-binding uosc/chapters'},
 		{
-			title = t('Utils'),
+			title = '工具',
 			items = {
 				{
-					title = t('Aspect ratio'),
+					title = '画面比例',
 					items = {
-						{title = t('Default'), value = 'set video-aspect-override no'},
+						{title = '默认', value = 'set video-aspect-override no'},
 						{title = '16:9', value = 'set video-aspect-override "16:9"'},
 						{title = '4:3', value = 'set video-aspect-override "4:3"'},
 						{title = '2.35:1', value = 'set video-aspect-override "2.35:1"'},
 					},
 				},
-				{title = t('Audio devices'), value = 'script-binding uosc/audio-device'},
-				{title = t('Editions'), value = 'script-binding uosc/editions'},
-				{title = t('Screenshot'), value = 'async screenshot'},
-				{title = t('Key bindings'), value = 'script-binding uosc/keybinds'},
+				{title = '音频设备', value = 'script-binding uosc/audio-device'},
+				{title = '剪辑版本', value = 'script-binding uosc/editions'},
+				{title = '截图', value = 'async screenshot'},
+				-- 状态归 stats 脚本，菜单与控制条共用同一个三态入口。
+				{title = '统计', value = 'script-binding stats/cycle-stats'},
+				{title = '按键绑定', value = 'script-binding uosc/keybinds'},
 			},
 		},
-		{title = t('Quit'), value = 'quit'},
+		{title = '退出', value = 'quit'},
 	}
 end
 
@@ -977,6 +981,11 @@ bind_command('embynian-ui-episodes', function() embynian_notify('embynian-episod
 -- EMBYNIAN[version] — 版本菜单向宿主要数据（embynian-versions → 宿主 open-menu 推回这一条目的媒体源）。
 -- 与上面三条同一个形状：绑定叫 embynian-ui-…，消息叫 embynian-…，两套名字不许同名。
 bind_command('embynian-ui-versions', function() embynian_notify('embynian-versions', '') end)
+-- EMBYNIAN[picture-menu] — 右键点画面呼出的「画面菜单」向宿主要数据（embynian-picture-menu → 宿主把
+-- PlayerMenuCatalog 那张树 open-menu 推回，与集成模式右键同一份）。右键/菜单键的绑定由宿主起播后经
+-- keybind 补上（config=no 之下 input.conf 不读、uosc 默认不绑键，见 MpvUi.MenuKeys）。同一个形状：绑定叫
+-- embynian-ui-picture-menu、消息叫 embynian-picture-menu，两套名字不许同名（理由见上面 EMBYNIAN[ui-bind]）。
+bind_command('embynian-ui-picture-menu', function() embynian_notify('embynian-picture-menu', '') end)
 bind_command('menu-prev', function() Elements:maybe('menu', 'navigate_by_items', -1) end)
 bind_command('menu-next', function() Elements:maybe('menu', 'navigate_by_items', 1) end)
 bind_command('menu-prev-page', function() Elements:maybe('menu', 'navigate_by_page', -1) end)

@@ -42,14 +42,15 @@ public sealed partial class PlayerPage
     private void HideCoverPlate()
     {
         if (Cover.Visibility != Visibility.Visible) return;
-        if (!_onStage || !HomeMotion.AnimationsEnabled || XamlRoot is null)
+        if (!_onStage || XamlRoot is null)
         {
             ResetCover();
             Cover.Visibility = Visibility.Collapsed;
             return;
         }
 
-        _revealStarted = Now;
+        if (_coverFade is not null) return;
+        if (_revealTimer?.IsRunning != true) _revealStarted = Now;
         if (PictureReady)
         {
             FadeCover();
@@ -70,7 +71,8 @@ public sealed partial class PlayerPage
     /// 看到的是「正片缩在左上角一小块」（2026-09-18 用户截图）。
     /// </para>
     /// </summary>
-    private bool PictureReady => _videoTarget.HasPicture
+    private bool PictureReady => !_startupHandoverPending && _windowChange.IsCompleted
+        && !_enterAnimating && _videoTarget.HasPicture
         && (!ViewModel.PictureInHostWindow || _videoTarget.IsContentReady);
 
     /// <summary>
@@ -121,6 +123,11 @@ public sealed partial class PlayerPage
         if (_coverFade is not null) return;
         Log.Debug(Category, $"遮罩揭开：从收起遮罩起等了 {Now - _revealStarted}ms"
             + $"（首帧信号={_videoTarget.HasPicture}，缓冲已追上宿主={_videoTarget.IsContentReady}）");
+        if (!HomeMotion.AnimationsEnabled)
+        {
+            CompleteCoverExit();
+            return;
+        }
         var board = new Storyboard();
         Animate(board, Cover, "Opacity", Cover.Opacity, 0, PlayerMotion.CoverMilliseconds);
         _coverFade = board;

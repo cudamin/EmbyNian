@@ -1,3 +1,4 @@
+using EmbyNian.Mpv;
 using EmbyNian.Playback;
 using Microsoft.UI.Xaml;
 
@@ -8,6 +9,10 @@ namespace EmbyNian.Shell.Views;
 /// <para>
 /// 两样都是代码画的、都只在真开着一部片子的时候第一次出现，所以编译碰不到它们，单元测试也只能碰到算数那一半。
 /// 拆成几个文件的缘由见 <c>PlayerPage.SelfCheck.cs</c> 的类注释。
+/// </para>
+/// <para>
+/// 2026-09-22 之后 <c>ProbeStats</c> 验的东西变了：统计面板改由 mpv 画（<see cref="MpvStats"/>），这一页
+/// 只剩「装箱在、按钮与标志位同步」可验 —— 面板本身不在这棵树上了。
 /// </para>
 /// </summary>
 public sealed partial class PlayerPage
@@ -88,6 +93,17 @@ public sealed partial class PlayerPage
         Settle();
         Sample("退场读数还原后", wanted: true);
 
+        // 拖动标题移动窗口那一趟（2026-09-22，用户令「拖动过程中不要显示进度条和音量条」）：两根条都不画，
+        // 细线也就没有「浮层收起」那一段可站 —— 它补的正是「进度条收起时仍留一条读数」，而拖动期间连读数
+        // 都不要。走页面自己的 Hold，接线断了这一关才红。
+        Hold(true, ChromeHold.Drag);
+        Settle();
+        Sample("拖动窗口时", wanted: false);
+
+        Hold(false, ChromeHold.Drag);
+        Settle();
+        Sample("拖动结束后", wanted: true);
+
         // Left the way a player that is not running should be, for the same reason ProbeReveal is — the page
         // put back first, so the last Render leaves the line down rather than across the library grid.
         Visibility = was;
@@ -101,60 +117,20 @@ public sealed partial class PlayerPage
             string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));
     }
 
-    /// <summary>
-    /// Opens the 统计 panel, fills it through the real formatting path, and puts it away again.
-    /// <para>
-    /// <see cref="PlaybackStats"/> is unit-tested on its own; what cannot be tested there is this page's
-    /// half — that the toggle, the panel and <see cref="PlayerViewModel.StatsOpen"/> are wired to each
-    /// other rather than each to itself, that the two brush keys <see cref="RenderStatRows"/> asks for
-    /// resolve in this page's own resource scope, and that the grid it draws into really has the second
-    /// column the values go in. Every one of those is a crash or a blank panel the first time a user
-    /// presses 统计, and none of them shows up in a build.
-    /// </para>
-    /// </summary>
+    /// <summary>只验证装箱与命令接线；Lua 的三态、清屏与计时读数另由离线探针验证。</summary>
     internal (bool Ok, string Detail) ProbeStats()
     {
         if (!Attached) return (false, "播放层未接线");
 
-        // A partial reading set on purpose: mpv answers nothing at all for a property that does not apply
-        // to the file, so the omissions are the interesting half. No audio-params here, which is the
-        // silent-file case, and the panel should come out with no 声道与采样率 row rather than a blank one.
-        var readings = new Dictionary<string, string?>(StringComparer.Ordinal)
-        {
-            ["width"] = "1920",
-            ["height"] = "1080",
-            ["video-codec"] = "h264 (High)",
-            ["audio-codec-name"] = "aac",
-            ["hwdec-current"] = "d3d11va-copy",
-            ["current-vo"] = "gpu-next",
-            ["video-bitrate"] = "4200000",
-            ["avsync"] = "-0.002",
-            ["container-fps"] = "23.976"
-        };
+        var boxed = MpvStats.Exists(AppContext.BaseDirectory);
 
-        // Through the bound property rather than through a method of its own: the button, the panel and the
-        // view model share one flag now, and driving that flag is what proves the three agree.
-        ViewModel.StatsOpen = true;
-        var opened = StatsPanel.Visibility == Visibility.Visible && (StatsButton.IsChecked ?? false);
+        var wired = ReferenceEquals(StatsButton.Command, ViewModel.CycleStatsCommand)
+            && ViewModel.CycleStatsCommand.CanExecute(null);
 
-        var rows = PlaybackStats.Format(readings);
-        RenderStatRows(rows);
-        var drawn = StatsRows.Children.Count;
-        var lines = StatsRows.RowDefinitions.Count;
+        var keys = string.Join("/", MpvStats.Keys().Select(pair => pair.Key));
 
-        // The empty case has its own row, and it is the one a user actually sees first.
-        RenderStatRows([]);
-        var waiting = StatsRows.Children.Count == 1;
-
-        ViewModel.StatsOpen = false;
-        var closed = StatsPanel.Visibility == Visibility.Collapsed
-                     && !(StatsButton.IsChecked ?? false)
-                     && StatsRows.Children.Count == 0;
-
-        // Two children per row — the label and its value — is what proves both columns were reached.
-        var ok = opened && closed && waiting && rows.Count > 0 && drawn == rows.Count * 2 && lines == rows.Count;
-
-        return (ok, $"{PlaybackStats.Fields.Count} 个属性，{rows.Count} 行 → {drawn} 个文本块／{lines} 行高"
-                    + $"；开={opened}，空态占位={waiting}，关={closed}");
+        return (boxed && wired,
+            $"统计脚本 {MpvStats.ScriptRelativePath}：{(boxed ? "已装箱" : "缺失")}"
+            + $"；三态按钮命令接线={wired}；独占模式键位 {keys}；实际显示另验");
     }
 }

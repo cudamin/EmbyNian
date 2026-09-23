@@ -155,7 +155,6 @@ public sealed partial class PlayerPage
                      ("音量条", Rail),
                      ("进度条", SeekTrack),
                      ("跳过", SkipButton),
-                     ("统计", StatsPanel),
                      ("切换遮罩", Cover)
                  })
         {

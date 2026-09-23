@@ -419,10 +419,6 @@ public sealed partial class PlayerPage
     /// </summary>
     private void PlaceOverlays()
     {
-        // Declared, so it answers even while the strip is collapsed, which it is whenever the pointer has
-        // been still — and 统计 is pinned open by a button and outlives the strip on purpose.
-        Nudge(StatsPanel, new Thickness(StatsPanel.Margin.Left, TitleStrip.Height + OverlayGap, 0, 0));
-
         Nudge(SkipButton, new Thickness(0, 0, SkipButton.Margin.Right, BarHeight() + OverlayGap));
 
         static void Nudge(FrameworkElement element, Thickness margin)
@@ -460,10 +456,10 @@ public sealed partial class PlayerPage
     /// over it. Everything hidden answers 「picture」, which is the common case: with the chrome down the
     /// whole window is the film.
     /// <para>
-    /// The 统计 panel and the 「正在切换…」 cover are asked about separately from
-    /// <see cref="PartAt(Point)"/> because they are not parts of the reveal rule — the panel is pinned
-    /// open by a button and the cover belongs to the handover — but a click on either is still not a
-    /// click on the film.
+    /// The 「正在切换…」 cover is asked about separately from <see cref="PartAt(Point)"/> because it is not
+    /// part of the reveal rule — it belongs to the handover — but a click on it is still not a click on the
+    /// film. (统计 used to be asked about here too; since 2026-09-22 it is not a page element at all but
+    /// mpv's own OSD, so a click on those numbers is a click on the picture, as it is in mpv itself.)
     /// </para>
     /// <para>
     /// <paramref name="origin"/> is the element the tap actually landed on, and it is the half geometry
@@ -476,7 +472,7 @@ public sealed partial class PlayerPage
     /// </summary>
     private bool TapOnPicture(Point point, object? origin = null) =>
         !FromChrome(origin) && PartAt(point) == ChromePart.None
-        && !Covers(StatsPanel, point) && !Covers(Cover, point);
+        && !Covers(Cover, point);
 
     /// <summary>
     /// Whether the tap landed inside one of the overlays rather than on the film. Walks up from the element
@@ -495,7 +491,7 @@ public sealed partial class PlayerPage
         for (var node = origin as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
         {
             if (ReferenceEquals(node, Bar) || ReferenceEquals(node, TitleStrip) || ReferenceEquals(node, Rail)
-                || ReferenceEquals(node, SkipButton) || ReferenceEquals(node, StatsPanel)
+                || ReferenceEquals(node, SkipButton)
                 || ReferenceEquals(node, Cover))
                 return true;
 
@@ -623,7 +619,11 @@ public sealed partial class PlayerPage
         // 退场那 220ms 里也一样要收：细线画在画面的下边缘，而退场是把这一页整个淡掉 —— 页面淡到零时它还
         // 是满亮的两像素，正是 2026-09-20 用户截图里那条横贯底边的白线。判据取 _inputSuspended（退场第 0 拍
         // 立起、落定拍撤下），不取 _onStage：后者在退场一开始就是假的，而这条线要消失的只是后半段。
-        ThinLine.Visibility = !state.Bar && !_inputSuspended
+        //
+        // 拖动标题移动窗口那一趟也不画（2026-09-22，与「拖动过程中不要显示进度条和音量条」同一句话）：
+        // 它补的正是「进度条收起时仍留一条读数」，而拖动期间进度条是**特地**收起来的 —— 照旧亮起来，那句话
+        // 就被一根两像素的进度线拆掉了。规则那边收了 Bar/Title/Rail 三样里的两样，这一样不归它管，在这里收。
+        ThinLine.Visibility = !state.Bar && !_chrome.WindowDragging && !_inputSuspended
             && Visibility == Visibility.Visible && _window?.Fullscreen != true
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -1054,7 +1054,9 @@ public sealed partial class PlayerPage
         /// <summary>One of the six menus is open — the pointer is in it, not resting on the picture.</summary>
         Menu = 1,
 
-        /// <summary>The window is being dragged by the title strip, which reports nothing while the hand holds still.</summary>
+        /// <summary>The window is being dragged by the title strip, which reports nothing while the hand holds still.
+        /// 也是唯一一个带例外的理由：钉住三样控件，但进度条与音量条在拖动期间不许出现（2026-09-22 用户令），
+        /// 由 <see cref="ChromeReveal.SetWindowDrag"/> 单独告诉规则。</summary>
         Drag = 2,
 
         /// <summary>播放信息 is up.</summary>
@@ -1080,8 +1082,14 @@ public sealed partial class PlayerPage
     /// away from under the caret. The rule in Core keeps a single flag on purpose — 「something is holding
     /// it」 is all a reveal rule can act on — so the bookkeeping belongs here, where the reasons are.
     /// </para>
+    /// <para>
+    /// <see cref="ChromeHold.Drag"/> 是唯一一个「钉住」还带着条件放行的理由（2026-09-22 用户令「拖动过程中
+    /// 不要显示进度条和音量条」）：拖动期间窗口在动，两根条谁也没空读，所以它是单独一位告诉规则的
+    /// （<see cref="ChromeReveal.SetWindowDrag"/>），而标题条照旧被钉着 —— 手就在它上面。这一位与钉住由同一个
+    /// 位推出，因此拖动那三处收尾（正常松开、指针事件丢了的对账、进退全屏前先收）都不必各自记得再放一次。
+    /// </para>
     /// </summary>
-    private void Hold(bool held, ChromeHold reason)
+    private void Hold(bool held, ChromeHold reason, long? now = null)
     {
         var before = _holds;
         _holds = held ? _holds | reason : _holds & ~reason;
@@ -1091,7 +1099,16 @@ public sealed partial class PlayerPage
         // standing over the picture for another window's worth of it.
         if (_holds == before) return;
 
-        if (_chrome.SetHold(_holds != ChromeHold.None, Now)) Render();
+        // 时钟默认是真的 Environment.TickCount64；只有 ProbeReveal 会传进它那套合成时钟 —— 那一关把空闲/停靠
+        // 两个窗口快进了好几秒，若这里仍按真 Now 落账，松手那一拍规则会拿「合成的现在」减「真的刚才」算出好几秒
+        // 的空闲，把控件当场收掉。生产路径一律不传，照旧走 Now。
+        var stamp = now ?? Now;
+
+        // 两问都先落进规则，再画一次：中间那个状态（钉子已放而拖动还在，或反过来）绝不能被合成器看见 ——
+        // 拖动开始那一拍它正是「三样齐全」，一帧都不能画出去。
+        var changed = _chrome.SetHold(_holds != ChromeHold.None, stamp);
+        if (_chrome.SetWindowDrag(_holds.HasFlag(ChromeHold.Drag), stamp)) changed = true;
+        if (changed) Render();
     }
 
     /// <summary>

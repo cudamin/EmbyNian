@@ -39,7 +39,6 @@ internal static class PlaybackTests
         RegisterNativeFullscreen();
         RegisterVideoSurfaceSize();
         RegisterLibMpvLifetime();
-        RegisterPlaybackStats();
         RegisterAspectLock();
         RegisterPlayerMenu();
         RegisterEpisodeNavigation();
@@ -1830,9 +1829,9 @@ internal static class PlaybackTests
 
         Test("计划：程序自带的字幕字体目录以 sub-fonts-dir 交给 mpv", () =>
         {
-            // 「这个字体打包进程序里」（2026-09-06）：方正中等线简体随程序走（assets/fonts，构建和发布都
-            // 拷在 exe 旁边），mpv 靠这一个选项到那个目录里找字体，不依赖这台机器装没装。目录是壳那一头
-            // 传进来的，所以测试里给一个假路径只验「给就发、不给就不发」。
+            // sub-fonts-dir 指向 exe 旁边的 fonts 目录，往里丢字体就能被 mpv 认出、不依赖这台机器装没装。
+            // v19 起不再自带任何字幕字体（默认微软雅黑 UI 半粗是系统字体），目录今天是空的；这个机制留着。
+            // 目录是壳那一头传进来的，所以测试里给一个假路径只验「给就发、不给就不发」。
             var (planner, _) = Planner(fonts: @"C:apponts");
             var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
 
@@ -1997,7 +1996,7 @@ internal static class PlaybackTests
         {
             var source = SourceWith(
                 Stream(0, "Video", height: 1080),
-                Stream(1, "Subtitle", language: "chi", title: "繁體中文"),
+                Stream(1, "Subtitle", language: "zh-Hant"),
                 Stream(2, "Subtitle", language: "eng"));
 
             var settings = Playback(subtitles: ["简体中文", "英语", "繁体中文"]);
@@ -2009,29 +2008,79 @@ internal static class PlaybackTests
             Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "繁体排在前面就该选它");
         });
 
-        Test("选轨：简体优先时不会挑走标着繁体的轨道", () =>
+        Test("选轨：语言与标题分家——语言只看 Language，简繁靠字段而非标题", () =>
         {
-            // 两条都只写 chi，差别只在标题上——这正是交给 mpv 的 slang 做不到的事。
-            var source = SourceWith(
-                Stream(0, "Video", height: 1080),
-                Stream(1, "Subtitle", language: "chi", title: "繁體中文特效"),
-                Stream(2, "Subtitle", language: "chi", title: "简体中文"));
-
-            var auto = TrackSelection.Resolve(Playback(subtitles: ["简体中文"]), source);
-            Assert.Equal(2, auto.Subtitle.Stream!.Index);
-        });
-
-        Test("选轨：标题写 Chinese Simplified 的轨道也算简体", () =>
-        {
-            // 语言字段只有 chi，简体与否全看标题；英文写法认不出来时它只能靠中文兜底，
-            // 简体和繁体同时在片子里就排不出先后。
-            var source = SourceWith(
+            // 「把 Language 和 Title 分离」（2026-09-22）：两条都只写 chi，标题写着简繁的英文名。语言这一关只认
+            // Language —— chi 都算「中文」（通用），但都不是「简体中文」；标题里的「Chinese Simplified」不再把
+            // 一条轨冒充成简体（这是从前靠标题 hint 做、如今刻意不做的事）。
+            var byTitle = SourceWith(
                 Stream(0, "Video", height: 1080),
                 Stream(1, "Subtitle", language: "chi", title: "Traditional Chinese"),
                 Stream(2, "Subtitle", language: "chi", title: "Chinese Simplified"));
 
-            var auto = TrackSelection.Resolve(Playback(subtitles: ["简体中文"]), source);
-            Assert.Equal(2, auto.Subtitle.Stream!.Index, "英文写的简体要认，英文写的繁体不能冒充");
+            var simplified = Playback(subtitles: ["简体中文"]);
+            simplified.SubtitleFallbackToDefault = false;
+            Assert.True(TrackSelection.Resolve(simplified, byTitle).Subtitle.Disabled,
+                "标题写着 Chinese Simplified 也不算简体——语言不看标题");
+
+            simplified.SubtitleLanguages = ["中文"];
+            Assert.NotNull(TrackSelection.Resolve(simplified, byTitle).Subtitle.Stream);
+
+            // 真写了语言码就照旧排先后：繁体轨用 zh-Hant，简体优先时轮不到它。
+            var byCode = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "zh-Hant"),
+                Stream(2, "Subtitle", language: "zh-Hans"));
+            Assert.Equal(2, TrackSelection.Resolve(Playback(subtitles: ["简体中文"]), byCode).Subtitle.Stream!.Index,
+                "简体优先时挑 zh-Hans 那条，不碰 zh-Hant");
+        });
+
+        Test("选轨：语言选中之后标题「排除」把不想要的压到最后（软兜底）", () =>
+        {
+            // 「先确定哪几条字幕是中文，然后再决定不要双语和特效」（2026-09-22）。语言选中两条中文之后，标题这一关
+            // 才决定取谁：排除「特效」→ 干净那条胜出；优先「特效」→ 反过来；全被排除时还是给一条，不因标题不合意
+            // 就没字幕。
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "中文特效"),
+                Stream(2, "Subtitle", language: "chi", title: "中文"));
+
+            var settings = Playback(subtitles: ["中文"]);
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Exclude)];
+            Assert.Equal(2, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "含「特效」的被压到后面");
+
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Prefer)];
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "「优先」时含关键词的排前头");
+
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Neutral)];
+            var neutral = TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index;
+            Assert.True(neutral is 1 or 2, "默认（中立）不改变次序，落回默认轨规则");
+
+            var onlyEffects = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "中文特效"));
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Exclude)];
+            Assert.Equal(1, TrackSelection.Resolve(settings, onlyEffects).Subtitle.Stream!.Index,
+                "只剩被排除的那条时还是给它——排除是软的");
+        });
+
+        Test("标题打分：优先 +1、排除 −1、默认不计，子串大小写不敏感", () =>
+        {
+            List<KeywordRule> rules =
+            [
+                new("双语", TitlePreference.Exclude),
+                new("特效", TitlePreference.Exclude),
+                new("SDH", TitlePreference.Prefer)
+            ];
+
+            Assert.Equal(0, KeywordFilter.Score("简体中文", rules));
+            Assert.Equal(-1, KeywordFilter.Score("中英双语", rules));
+            Assert.Equal(-2, KeywordFilter.Score("双语特效", rules), "两个候补词各扣一分");
+            Assert.Equal(1, KeywordFilter.Score("English sdh", rules), "子串、大小写不敏感");
+            Assert.Equal(0, KeywordFilter.Score("双语sdh", rules), "一候补一优先相抵");
+            Assert.Equal(0, KeywordFilter.Score(null, rules));
+            Assert.Equal(0, KeywordFilter.Score("双语", []), "没有规则时这一关不作用");
+            Assert.Equal(0, KeywordFilter.Score("双语", [new("双语", TitlePreference.Neutral)]), "默认词不计分");
         });
 
         Test("选轨：一个语言都对不上时按开关决定回退还是关掉", () =>
@@ -2086,6 +2135,88 @@ internal static class PlaybackTests
             Assert.True(TrackLanguagePriority.Matches(TrackLanguagePriority.Any, "kor", "kor", "한국어"));
             Assert.True(TrackLanguagePriority.Matches(TrackLanguagePriority.Any, "", "", ""), "什么都没标的轨道也算「其他」");
             Assert.False(TrackLanguagePriority.Matches("其他字幕x", "kor", "", ""), "得是整个名字，不是前缀");
+        });
+
+        Test("OrderedChoices：下拉那张表的排法", () =>
+        {
+            static string Checked(IEnumerable<(string Name, bool Checked)> choices) =>
+                string.Join(",", choices.Where(choice => choice.Checked).Select(choice => choice.Name));
+
+            // 什么都没选：整目录都在、一个都不勾，「其他字幕」垫底。头一项是目录里第一个（简体中文），没勾。
+            var empty = TrackLanguagePriority.OrderedChoices([]);
+            Assert.Equal("", Checked(empty), "没存过就一个都不勾");
+            Assert.Equal(("简体中文", false), empty[0]);
+            Assert.Equal((TrackLanguagePriority.Any, false), empty[^1], "「其他字幕」垫在最后");
+            Assert.Equal(TrackLanguagePriority.Catalogue.Count + 1, empty.Count, "整目录加一个「其他字幕」");
+            Assert.Equal(empty.Count, empty.Select(choice => choice.Name).Distinct().Count(), "不许有重的");
+
+            // 选过的排在前头，照存的次序；勾了的滤出来照原样，就是存回去的优先级列表。
+            var picked = TrackLanguagePriority.OrderedChoices(["英语", "中文"]);
+            Assert.Equal(("英语", true), picked[0]);
+            Assert.Equal(("中文", true), picked[1]);
+            Assert.Equal("英语,中文", Checked(picked), "勾了的照屏上次序滤出来 == 存进去的次序");
+            Assert.Equal(TrackLanguagePriority.Catalogue.Count + 1, picked.Count, "选过的也是从目录里挪上来的，总数不变");
+            Assert.Equal(picked.Count, picked.Select(choice => choice.Name).Distinct().Count(), "挪上来的不该在下面又出现一次");
+
+            // 存档里的码和别名先归一化再排：chs → 简体中文，勾着，排头一个。
+            Assert.Equal(("简体中文", true), TrackLanguagePriority.OrderedChoices(["chs"])[0], "码先归一化成名字");
+
+            // 存档里带「其他字幕」：勾着排在选过的那批里，底下不再多出一个。
+            var withAny = TrackLanguagePriority.OrderedChoices(["简体中文", TrackLanguagePriority.Any]);
+            Assert.Equal("简体中文,其他字幕", Checked(withAny));
+            Assert.Equal(1, withAny.Count(choice => choice.Name == TrackLanguagePriority.Any), "「其他字幕」只出现一次");
+
+            // 字幕表排掉普通话、粤语（「删掉字幕优先级里的普通话、粤语」）：offered 不列、总数少两个；
+            // 就算存档里有也不出现（下次存盘就掉了）。目录本身没删它们 —— 音轨那份还要用。
+            string[] exclude = ["普通话", "粤语"];
+            var subtitle = TrackLanguagePriority.OrderedChoices([], exclude);
+            Assert.False(subtitle.Any(choice => choice.Name is "普通话" or "粤语"), "字幕表不列普通话、粤语");
+            Assert.Equal(TrackLanguagePriority.Catalogue.Count - 1, subtitle.Count, "少两个语言、加一个「其他字幕」");
+            var hadThem = TrackLanguagePriority.OrderedChoices(["粤语", "简体中文"], exclude);
+            Assert.Equal("简体中文", Checked(hadThem), "存档里的粤语也不显示，只留下没被排除的");
+            Assert.True(TrackLanguagePriority.Catalogue.Any(entry => entry.Label == "粤语"), "目录本身仍留着粤语给音轨用");
+        });
+
+        Test("关键词规则：WithExclusions 末尾补候补词，不重复不覆盖", () =>
+        {
+            static string Dump(IEnumerable<KeywordRule> rules) =>
+                string.Join(",", rules.Select(rule => $"{rule.Term}:{rule.State}"));
+
+            // 空词跳过；给的词补成候补（Exclude），排在用户规则后头。
+            List<KeywordRule> user = [new("双语", TitlePreference.Exclude)];
+            Assert.Equal("双语:Exclude,繁:Exclude,繁体:Exclude", Dump(KeywordFilter.WithExclusions(user, "繁", "", "繁体")));
+
+            // 用户自己给「繁」设过态度：以他的为准，不覆盖、不重复加。
+            List<KeywordRule> keep = [new("繁", TitlePreference.Prefer)];
+            var merged = KeywordFilter.WithExclusions(keep, "繁", "繁体");
+            Assert.Equal(TitlePreference.Prefer, merged.First(rule => rule.Term == "繁").State, "用户点名的态度不被覆盖");
+            Assert.Equal(1, merged.Count(rule => rule.Term == "繁"), "不重复加");
+        });
+
+        Test("选轨：选简体中文时，标题带繁体的中文轨沉底", () =>
+        {
+            // 一条只标 chi、标题「繁体中文」，一条只标 chi、标题「简体中文」。语言这一关简体中文（zh-Hans）都不匹配，
+            // 落到通用「中文」——两条都算中文；标题这一关因为优先级里有简体中文，自动排除「繁」，繁体那条沉底。
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "繁体中文"),
+                Stream(2, "Subtitle", language: "chi", title: "简体中文"));
+
+            var settings = Playback(subtitles: ["简体中文", "中文"]);
+            Assert.Equal(2, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index,
+                "选了简体中文，繁体标题的那条让位给没标繁的");
+
+            // 没选简体中文（只有通用中文）时不排繁：按默认轨定夺，不因标题沉底。
+            settings.SubtitleLanguages = ["中文"];
+            var noSimplified = TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index;
+            Assert.True(noSimplified is 1 or 2, "没点简体就不自动排繁");
+
+            // 只有繁体那一条时仍给它 —— 排除是软的。
+            var onlyTraditional = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "繁体中文"));
+            Assert.Equal(1, TrackSelection.Resolve(Playback(subtitles: ["简体中文", "中文"]), onlyTraditional).Subtitle.Stream!.Index,
+                "只剩繁体那条时还是给它");
         });
 
         Test("选轨：字幕模式 强制/外语/关闭", () =>
@@ -2147,6 +2278,45 @@ internal static class PlaybackTests
             // 单选变成优先级列表」的核心 —— 单选表达不出「首选韩语，其次日语」。
             settings.AudioLanguages = ["韩语", "日语"];
             Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index, "第一种没有就问第二种，而不是直接回默认轨");
+        });
+
+        Test("选轨：音轨格式筛选在同一语言里挑，但越不过语言优先级", () =>
+        {
+            var source = new MediaSource
+            {
+                Id = "src1",
+                DefaultAudioStreamIndex = 1,
+                MediaStreams =
+                [
+                    Stream(0, "Video", height: 1080),
+                    Stream(1, "Audio", language: "jpn", codec: "aac", channelLayout: "stereo", channels: 2),
+                    Stream(2, "Audio", language: "jpn", codec: "truehd", title: "TrueHD Atmos", channelLayout: "7.1", channels: 8),
+                    Stream(3, "Audio", language: "eng", codec: "truehd", title: "TrueHD Atmos", channelLayout: "7.1", channels: 8)
+                ]
+            };
+
+            var settings = Playback(subtitles: []);
+            settings.AudioLanguages = ["日语"];
+
+            // 没设格式规则（全中立）：同一语言里仍是默认轨优先，选到服务器默认的那条 aac。
+            settings.AudioFormatRules = [];
+            Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index, "格式规则全空时，同语言里照旧按默认轨");
+
+            // 优先 TrueHD：日语那两条里把 TrueHD 抬上来，越过服务器默认的 aac。
+            settings.AudioFormatRules = [new("TrueHD", TitlePreference.Prefer)];
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "优先词把同语言里的 TrueHD 抬到默认轨之前");
+
+            // 7.1 命中 ChannelLayout 字段，同样有效。
+            settings.AudioFormatRules = [new("7.1", TitlePreference.Prefer)];
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "声道布局也参与打分");
+
+            // 语言是第一位的：英语那条虽然也是 TrueHD Atmos，却不该越过日语优先级。
+            settings.AudioFormatRules = [new("Atmos", TitlePreference.Prefer)];
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "格式只在同一语言内部作用，日语 TrueHD 不因英语也是 Atmos 就输给它");
+
+            // 候补词把一条压到最后：TrueHD 设为候补时，日语里回到 aac。
+            settings.AudioFormatRules = [new("TrueHD", TitlePreference.Exclude)];
+            Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index, "候补词把 TrueHD 压后，同语言里回到另一条");
         });
     }
 
@@ -2502,7 +2672,7 @@ internal static class PlaybackTests
                 SubtitleFontFamily = "SimHei",
                 SubtitleFontSize = 60,
                 SubtitleScalePercent = 120,
-                SubtitleFontWeight = PlaybackSettings.BoldSubtitleWeight,
+                SubtitleBold = true,
                 SubtitleColor = "#FFFFFF",
                 SubtitleBorderSize = "3",
                 SubtitleBorderColor = "#000000",
@@ -2527,16 +2697,16 @@ internal static class PlaybackTests
         Test("输出：字幕出厂样式是用户 2026-09-06 定的那一套", () =>
         {
             // 「把默认字幕样式设置为…」：他给的八项里字号、颜色、描边、阴影当时就是出厂值，v13 换掉的是
-            // 加粗（关）和底板颜色（黑色）。底板样式仍然出厂关，所以那行颜色只给阴影上色。出厂字重是常规
-            // （v18 把加粗开关并成三档字重），所以 sub-bold 仍是 no。
+            // 加粗（关）和底板颜色（黑色）。底板样式仍然出厂关，所以那行颜色只给阴影上色。出厂不加粗
+            // （v20 把三档字重退回加粗开关，出厂关），所以 sub-bold 仍是 no。
             var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
 
             Assert.Equal("50", options["sub-font-size"]);
-            Assert.Equal("no", options["sub-bold"], "出厂字重是常规：sub-bold 只有到「粗」那一档才发 yes");
+            Assert.Equal("no", options["sub-bold"], "出厂不加粗：sub-bold 只有开了加粗才发 yes");
             Assert.Equal("0.5", options["sub-border-size"]);
             Assert.Equal("0.000/0.000/0.000/1.000", options["sub-border-color"]);
             Assert.Equal("0.5", options["sub-shadow-offset"]);
-            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Microsoft YaHei（v18 起的默认，系统自带、不打包）");
+            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Microsoft YaHei UI Semibold（v19 起的默认，系统自带、不打包）");
             Assert.False(options.ContainsKey("sub-codepage"),
                 "出厂是自动识别编码：写死 gb18030 会把 Big5 的繁体字幕读成乱码");
             Assert.Equal("0.000/0.000/0.000/0.600", options["sub-back-color"],
@@ -2544,20 +2714,19 @@ internal static class PlaybackTests
             Assert.False(options.ContainsKey("sub-border-style"), "出厂没有底板，跟以前看到的一样");
         });
 
-        Test("输出：三档字重落到 sub-font 与 sub-bold 上", () =>
+        Test("输出：字幕加粗开关落到 sub-bold 上，字体族名照发", () =>
         {
-            // mpv 没有字重选项，字重变成「发哪个族名 + 要不要 sub-bold」（FontFamilies.ResolveWeighted，
-            // 单测在 FontTests 钉着）。这一关只确认 SubtitleAppearance 真的照它发。
-            (string Font, string Bold) Emit(int weight)
+            // 字重那三档 v20 退成一个 sub-bold 开关（mpv 唯一能开关的字重手段）。这一关确认
+            // SubtitleAppearance 把族名原样发出去、加粗与否直接映射 sub-bold。
+            (string Font, string Bold) Emit(bool bold)
             {
                 var options = Options(MpvOutputOptions.SubtitleAppearance(
-                    new PlaybackSettings { SubtitleFontFamily = "Microsoft YaHei", SubtitleFontWeight = weight }));
+                    new PlaybackSettings { SubtitleFontFamily = "Microsoft YaHei", SubtitleBold = bold }));
                 return (options["sub-font"], options["sub-bold"]);
             }
 
-            Assert.Equal(("Microsoft YaHei Light", "no"), Emit(PlaybackSettings.LightSubtitleWeight), "细：族名接 Light、不加粗");
-            Assert.Equal(("Microsoft YaHei", "no"), Emit(PlaybackSettings.RegularSubtitleWeight), "常规：本体、不加粗");
-            Assert.Equal(("Microsoft YaHei", "yes"), Emit(PlaybackSettings.BoldSubtitleWeight), "粗：本体 + sub-bold");
+            Assert.Equal(("Microsoft YaHei", "no"), Emit(false), "不加粗：族名原样、sub-bold=no");
+            Assert.Equal(("Microsoft YaHei", "yes"), Emit(true), "加粗：族名原样、sub-bold=yes");
         });
 
         Test("输出：宽画面的图形字幕才拉伸到画面", () =>
@@ -2965,7 +3134,8 @@ internal static class PlaybackTests
             Assert.True(skips.Prompt.Visible);
             Assert.Equal("跳过片头", skips.Prompt.Caption);
             Assert.Equal(1, skips.Prompt.Remaining, "刚出现时倒计时是满的");
-            Assert.Contains("快捷键 Y", skips.Prompt.Tip);
+            Assert.Contains("Y 跳过", skips.Prompt.Tip, "提示里写清 Y 是接受");
+            Assert.Contains("N 关闭", skips.Prompt.Tip, "提示里写清 N 是关闭");
             Assert.Contains("1:30", skips.Prompt.Tip, "提示里写清落点");
 
             skips.Advance(17.5, playing: true);
@@ -3271,6 +3441,39 @@ internal static class PlaybackTests
 
             chrome.SetKeep(false, now + 9900);
             Assert.False(chrome.State.Any, "加载完就交回给指针——它还在死区里");
+        });
+
+        Test("播放器控件：拖动标题移动窗口时不画进度条和音量条", () =>
+        {
+            // 「在播放页面中，当用户长按标题并拖动播放窗口时，拖动过程中不要显示进度条和音量条」(2026-09-22)。
+            // 拖动这一趟窗口跟着手走，两根条既没人读、又跟着一起晃；标题条必须留着 —— 手就压在它上面。
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+            Assert.False(chrome.State.Any);
+
+            // 拖动之前两根条都在，位置一并在底部带与右边缘上：这样「之后都没了」才不是因为没有理由。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: 0.5, now + 1050);
+            Assert.Equal(new ChromeState(true, false, true), chrome.State);
+
+            chrome.SetWindowDrag(true, now + 1100);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State, "拖动期间只剩标题条");
+            Assert.Equal(0d, chrome.RailStrength, "音量条连强度都是零");
+            Assert.False(chrome.Tick(now + 5000), "拖动期间时间流逝不改变这一档");
+
+            // 拖动自己也带「钉住」这个理由，但钉住不许把两根条带回来：拖动那一支排在钉住前面。
+            chrome.SetHold(true, now + 5100);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State, "钉住加拖动，还是只剩标题条");
+
+            // 滚轮改音量的那一记宽限也不许在拖动期间把音量条亮起来 —— 「不要显示」是整段拖动，不是「除非……」
+            chrome.FlashRail(now + 5200);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State);
+
+            // 松手：钉子还在（页面那一头两把一起放），照旧是钉住的样子。
+            chrome.SetWindowDrag(false, now + 5300);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State);
+
+            chrome.SetHold(false, now + 5400);
+            Assert.Equal(new ChromeState(true, false, true), chrome.State, "放干净之后交回给指针的位置");
         });
 
         Test("播放器控件：键盘命令在画面中间也给反馈", () =>
@@ -3960,136 +4163,6 @@ internal static class PlaybackTests
         now = 100_000;
         return new ChromeReveal();
     }
-
-    // ---- 播放统计面板 ----------------------------------------------------------
-
-    private static void RegisterPlaybackStats()
-    {
-        Test("播放统计：读得到的都排成行，读不到的一行都不占", () =>
-        {
-            var rows = PlaybackStats.Format(new Dictionary<string, string?>
-            {
-                ["time-pos"] = "125.4",
-                ["duration"] = "3600",
-                ["speed"] = "1",
-                ["video-codec"] = "h264",
-                ["width"] = "1920",
-                ["height"] = "1080"
-            });
-
-            var labels = rows.Select(row => row.Label).ToArray();
-
-            Assert.Equal("2:05.4 / 1:00:00.0", Value(rows, "位置"));
-            Assert.Equal("1.00×", Value(rows, "倍速"));
-            Assert.Equal("h264", Value(rows, "编码"), "只有视频编码时不留分隔符");
-            Assert.Equal("1920×1080", Value(rows, "分辨率"));
-
-            // 一个没给的项目就该整行不见——写「未知」看起来像读失败了。
-            Assert.False(labels.Contains("缓存"), "没给缓存就不该有缓存行");
-            Assert.False(labels.Contains("硬件解码"));
-            Assert.False(labels.Contains("丢帧"), "两个计数器都没给才算读不到");
-        });
-
-        Test("播放统计：面板问的每一项都用得上", () =>
-        {
-            var readings = PlaybackStats.Fields.ToDictionary(field => field, _ => (string?)"1");
-            readings["hwdec-current"] = "d3d11va";
-            readings["video-codec"] = "hevc";
-            readings["audio-codec-name"] = "eac3";
-            readings["current-vo"] = "gpu-next";
-            readings["video-params/pixelformat"] = "yuv420p10";
-
-            var rows = PlaybackStats.Format(readings);
-
-            // README 数的是十三行；问的属性比行多，因为有几行是两个属性拼的。
-            Assert.Equal(13, rows.Count, string.Join("、", rows.Select(row => row.Label)));
-            Assert.Equal(PlaybackStats.Fields.Count, PlaybackStats.Fields.Distinct().Count(), "问重了就是白问一次");
-            Assert.True(rows.All(row => row.Value.Length > 0), "有行就得有值");
-        });
-
-        Test("播放统计：缓存有速度才写速度，没速度不写「0 B/s」", () =>
-        {
-            Assert.Equal("12.5 秒 · 2.4 MB/s", Value(PlaybackStats.Format(new Dictionary<string, string?>
-            {
-                ["demuxer-cache-duration"] = "12.53",
-                ["cache-speed"] = "2516582"
-            }), "缓存"));
-
-            // 本地文件读满了就不再取，写成 0 B/s 会被当成卡住。
-            Assert.Equal("12.5 秒", Value(PlaybackStats.Format(new Dictionary<string, string?>
-            {
-                ["demuxer-cache-duration"] = "12.53",
-                ["cache-speed"] = "0"
-            }), "缓存"));
-        });
-
-        Test("播放统计：音视频同步带正负号，往哪边偏才是要看的", () =>
-        {
-            Assert.Equal("-0.012 秒", Value(Sync("-0.0124"), "音视频同步"));
-            Assert.Equal("+0.031 秒", Value(Sync("0.0312"), "音视频同步"));
-            Assert.Equal("0.000 秒", Value(Sync("0"), "音视频同步"));
-
-            static IReadOnlyList<PlaybackStatRow> Sync(string value) =>
-                PlaybackStats.Format(new Dictionary<string, string?> { ["avsync"] = value });
-        });
-
-        Test("播放统计：帧率对得上就只写一个数", () =>
-        {
-            Assert.Equal("23.976", Value(Fps("23.976", "23.9758"), "帧率"), "差不到百分之一就是同一个");
-            Assert.Equal("23.976 → 21.4", Value(Fps("23.976", "21.4"), "帧率"), "跟不上才要写实际值");
-            Assert.Equal("59.94", Value(Fps(null, "59.94"), "帧率"), "容器没写就用实测的");
-
-            static IReadOnlyList<PlaybackStatRow> Fps(string? declared, string? actual) =>
-                PlaybackStats.Format(new Dictionary<string, string?>
-                {
-                    ["container-fps"] = declared,
-                    ["estimated-vf-fps"] = actual
-                });
-        });
-
-        Test("播放统计：码率按十进制千位，缓存速度按 1024", () =>
-        {
-            var rows = PlaybackStats.Format(new Dictionary<string, string?>
-            {
-                ["video-bitrate"] = "8000000",
-                ["audio-bitrate"] = "640000",
-                ["cache-speed"] = "1048576",
-                ["demuxer-cache-duration"] = "1"
-            });
-
-            // 谁都把这个文件叫 8 Mbps，这里就不能写成 7.63。
-            Assert.Equal("视频 8.00 Mbps · 音频 640 kbps", Value(rows, "码率"));
-            Assert.Equal("1.0 秒 · 1.0 MB/s", Value(rows, "缓存"), "字节数还是 1024 进位");
-        });
-
-        Test("播放统计：软件解码写成人话，丢帧零也要报", () =>
-        {
-            var rows = PlaybackStats.Format(new Dictionary<string, string?>
-            {
-                ["hwdec-current"] = "no",
-                ["frame-drop-count"] = "0",
-                ["decoder-frame-drop-count"] = "3",
-                ["audio-params/channel-count"] = "6",
-                ["audio-params/samplerate"] = "48000"
-            });
-
-            Assert.Equal("软件解码", Value(rows, "硬件解码"), "「硬件解码：no」不是一句话");
-            Assert.Equal("输出 0 · 解码 3", Value(rows, "丢帧"), "「丢帧 0」正是卡顿时要的答案");
-            Assert.Equal("6 声道 · 48 kHz", Value(rows, "声道与采样率"));
-        });
-
-        Test("播放统计：一项都读不到就是空面板，不是一屏问号", () =>
-        {
-            Assert.Equal(0, PlaybackStats.Format(new Dictionary<string, string?>()).Count);
-            Assert.Equal(0, PlaybackStats.Format(
-                PlaybackStats.Fields.ToDictionary(field => field, _ => (string?)null)).Count);
-            Assert.Equal(0, PlaybackStats.Format(
-                PlaybackStats.Fields.ToDictionary(field => field, _ => (string?)"  ")).Count, "空白也算读不到");
-        });
-    }
-
-    private static string Value(IReadOnlyList<PlaybackStatRow> rows, string label) =>
-        rows.FirstOrDefault(row => row.Label == label).Value ?? "";
 
     // ---- 窗口比例联动 ----------------------------------------------------------
 
@@ -5605,6 +5678,8 @@ internal static class PlaybackTests
         string? displayLanguage = null,
         string? codec = null,
         string? title = null,
+        string? channelLayout = null,
+        int? channels = null,
         int? width = null,
         int? height = null,
         double? frameRate = null,
@@ -5618,6 +5693,8 @@ internal static class PlaybackTests
             DisplayLanguage = displayLanguage,
             Codec = codec,
             Title = title,
+            ChannelLayout = channelLayout,
+            Channels = channels,
             Width = width,
             Height = height,
             AverageFrameRate = frameRate,

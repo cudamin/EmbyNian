@@ -133,6 +133,23 @@ public sealed partial class PlayerPage
         Sample($"停在进度条上 {ChromeReveal.ParkedIdleMilliseconds}ms 后",
             bar: false, title: false, rail: false, cursorHidden: true);
 
+        // 拖动标题移动窗口: 「在播放页面中，当用户长按标题并拖动播放窗口时，拖动过程中不要显示进度条和音量条」
+        // (2026-09-22). 走页面自己的 Hold 而不是直接拧规则：这一关要钉的正是「拖动这个理由接上规则了没有」，
+        // 只拧规则的话接线断了它照样绿。指针此刻正报在底部带上 —— 位置是在要进度条，而拖动不许给。
+        //
+        // 把这套合成时钟传进 Hold（它默认按真的 Environment.TickCount64 落账）：这一关早把空闲/停靠两个窗口
+        // 快进了好几秒，若 Hold 仍按真 Now 记这一记活动，松手那一拍规则会拿「合成的现在」减「真的刚才」算出
+        // 好几秒空闲，控件当场收掉 —— 松开那一样就永远读不到「交回给指针」。
+        Hold(true, ChromeHold.Drag, ++clock);
+        Sample("拖动标题移动窗口", bar: false, title: true, rail: false, cursorHidden: false);
+
+        // 松开：两把一起放，照旧交回给指针的位置。松手那一记（SetWindowDrag/SetHold 放开时重盖空闲钟）就在
+        // 合成时钟的此刻，指针仍报在底部带上 —— 直接读就是位置自己的答案（进度条在、光标回来）。不再补 Settle：
+        // 一个 Settle 要走满 SettleMilliseconds（2201ms），比停靠窗口（2000ms）还长，读到的必然是「静止到期、
+        // 全收了」而不是「刚松手」；而这一关此刻没有任何在跑的宽限要等（滚轮那次 FlashRail 早在合成时钟里过期了）。
+        Hold(false, ChromeHold.Drag, ++clock);
+        Sample("松开标题之后", bar: true, title: false, rail: false, cursorHidden: false);
+
         // 状态推送: the one thing that arrives at this rate while a film is actually playing, and the one
         // thing this probe never used to drive. mpv publishes four or more snapshots a second and the page
         // hands every one of them to the loading latch, which used to read 「not loading」 as activity — so
@@ -218,12 +235,17 @@ public sealed partial class PlayerPage
         report.Add($"音量条 {Rail.ActualWidth:F0}×{Rail.ActualHeight:F0}，滑杆高 {VolumeSlider.ActualHeight:F0}");
         Want("音量条尺寸", VolumeSlider.ActualHeight >= 280 && Rail.ActualWidth >= 64);
 
-        // 天花板：屏上这根滑杆的上限必须就是存得下的那个上限。这一条是「音量上不去 100% 以上」那件活里唯一一处
-        // 单测碰不到的：另外五处都在 Core 或者视图模型里，而这一处从前是 XAML 里写死的 Maximum="100"，现在绑到
-        // ViewModel.VolumeMaximum 上 —— 绑失效了屏上看不出任何异样（滑杆照样能拖，只是拖不到 130），而这正是
-        // 「界面在骗人」：滑杆的顶和真正存下去的值不是一回事。
-        report.Add($"滑杆上限 {VolumeSlider.Maximum:0}，设置里存得下 {AudioSettings.MaxVolume}");
-        Want("音量滑杆的上限和存得下的一致", Math.Abs(VolumeSlider.Maximum - AudioSettings.MaxVolume) < 0.5);
+        // 天花板：屏上这根滑杆的上限必须就是刻度的顶。这一条是「音量上不去 100% 以上」那件活里唯一一处
+        // 单测碰不到的：另外五处都在 Core 或者视图模型里，而这一处从前是 XAML 里写死的 Maximum="100"，现在
+        // 绑到 ViewModel.VolumeAxisMaximum 上 —— 绑失效了屏上看不出任何异样（滑杆照样能拖，只是拖不到 130），
+        // 而这正是「界面在骗人」：滑杆的顶和真正存下去的值不是一回事。
+        // 2026-09-22 起这个顶是<b>刻度上的顶</b>（133）而不是音量本身（130），所以两条一起要：它等于
+        // VolumeScale 的顶，且反算回去正好是存得下的那个音量。
+        report.Add($"滑杆上限 {VolumeSlider.Maximum:0}（刻度顶），反算回音量 {VolumeScale.Level(VolumeSlider.Maximum):0}，"
+            + $"设置里存得下 {AudioSettings.MaxVolume}");
+        Want("音量滑杆的上限是刻度的顶", Math.Abs(VolumeSlider.Maximum - VolumeScale.MaximumAxis) < 0.5);
+        Want("音量滑杆的上限反算回去就是存得下的音量",
+            Math.Abs(VolumeScale.Level(VolumeSlider.Maximum) - AudioSettings.MaxVolume) < 0.5);
 
         // 摆正: 「音量条的位置是歪的」. WinUI's vertical Slider template puts the track and the thumb in three
         // columns — SliderPreContentMargin, the track, SliderPostContentMargin — and not one of them is a star,
@@ -262,11 +284,23 @@ public sealed partial class PlayerPage
         // or removed here changes no other report line.
         var figure = RailStack.Children.Count > 0 ? RailStack.Children[0] as TextBlock : null;
         var says = figure?.Text ?? "";
-        var agrees = int.TryParse(says, out var shown) && Math.Abs(shown - Math.Round(VolumeSlider.Value)) < 0.5;
 
-        report.Add($"条上 {RailStack.Children.Count} 样，上方的数字「{says}」对滑杆的 {VolumeSlider.Value:0}");
+        // 滑杆上现在是刻度（VolumeAxis），所以数字对的是「反算回去的音量」，不是滑杆值本身。
+        var level = VolumeScale.Level(VolumeSlider.Value);
+        var agrees = int.TryParse(says, out var shown) && Math.Abs(shown - Math.Round(level)) < 0.5;
+
+        report.Add($"条上 {RailStack.Children.Count} 样，上方的数字「{says}」对滑杆 {VolumeSlider.Value:0}（刻度）＝音量 {level:0}");
         Want("音量条上有数字、滑杆和静音键", RailStack.Children.Count == 3 && figure is not null);
         Want("上方的数字和滑杆一致", agrees);
+
+        // 拉长（2026-09-22 用户令）：「音量条上 100 到 101 这一刻度区间的显示长度拉长，比前后相邻区间占更多
+        // 空间」. 量的是刻度换算到这条轨道上的像素 —— 一段 100→101 与一段普通档（50→51）比。纯换算加现成的
+        // 轨道长度，不动音量、不碰 mpv。绑回 130 的旧上限时这两段的比会掉到 1，第一条 Want 当场红。
+        var pixelsPerUnit = track is null ? 0d : box.Height / VolumeScale.MaximumAxis;
+        var kneePixels = pixelsPerUnit * VolumeScale.Width(100);
+        var plainPixels = pixelsPerUnit * VolumeScale.Width(50);
+        report.Add($"100→101 一段 {kneePixels:0.0} 像素，普通一档 {plainPixels:0.0} 像素");
+        Want("100→101 那一段比普通一档长得多", track is not null && kneePixels > plainPixels * 3);
 
         // 淡入淡出, and the standing visibility it needs: the rail is the one piece of chrome that is always
         // laid out and only ever changes strength, so a Visibility flip creeping back in here would take the
@@ -350,16 +384,18 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// Puts both overlays up at once and measures what they were supposed to be clearing: 统计 under the
-    /// title strip, 跳过 over the transport bar.
+    /// Puts the 跳过 offer up and measures what it was supposed to be clearing: the transport bar.
     /// <para>
-    /// Both insets used to be written down — 104 and 148 — and both were wrong in a way no build could
-    /// see. The panel's 104 was the strip's own 96 plus a gap restated in a second file, so a strip that
-    /// changed height would have taken the panel with it in the markup and nowhere else. The button's 148
-    /// was a guess at a height nothing declares at all: the bar's height comes out of its fonts and its
-    /// padding, and one larger font in the transport row would have drawn the 跳过 offer across the seek
-    /// slider. Both are computed now, off the thing they have to clear, which is why this probe asserts a
-    /// distance rather than a number — the numbers are printed for the record and are free to change.
+    /// That inset used to be written down — 148 — and was wrong in a way no build could see: it was a guess
+    /// at a height nothing declares at all, because the bar's height comes out of its fonts and its padding,
+    /// and one larger font in the transport row would have drawn the offer across the seek slider. It is
+    /// computed now, off the thing it has to clear, which is why this probe asserts a distance rather than a
+    /// number — the numbers are printed for the record and are free to change.
+    /// </para>
+    /// <para>
+    /// 统计 used to be the second overlay here (its own inset was the same kind of restated number, 104 for
+    /// the strip's 96). Since 2026-09-22 the panel is mpv's own OSD rather than a page element, so there is
+    /// nothing of it to place and nothing of it to measure.
     /// </para>
     /// <para>
     /// The measure fallback gets driven on purpose too. Before a film's first frame the bar is visible and
@@ -375,7 +411,6 @@ public sealed partial class PlayerPage
         var was = Visibility;
         var wasOffer = ViewModel.SkipOffered;
         var wasCaption = ViewModel.SkipCaption;
-        var wasStats = ViewModel.StatsOpen;
 
         Visibility = Visibility.Visible;
         UpdateLayout();
@@ -388,22 +423,6 @@ public sealed partial class PlayerPage
 
         ViewModel.SkipOffered = true;
         ViewModel.SkipCaption = "跳过片头";
-        ViewModel.StatsOpen = true;
-
-        // Filled through the real formatting path so the panel has the height it has in front of a person.
-        // A partial reading set, the same way ProbeStats does it.
-        RenderStatRows(PlaybackStats.Format(new Dictionary<string, string?>(StringComparer.Ordinal)
-        {
-            ["width"] = "1920",
-            ["height"] = "1080",
-            ["video-codec"] = "h264 (High)",
-            ["audio-codec-name"] = "aac",
-            ["hwdec-current"] = "d3d11va-copy",
-            ["current-vo"] = "gpu-next",
-            ["video-bitrate"] = "4200000",
-            ["avsync"] = "-0.002",
-            ["container-fps"] = "23.976"
-        }));
         UpdateLayout();
 
         // The placement itself, called the way EnterPlayer and the bar's own SizeChanged call it.
@@ -413,7 +432,6 @@ public sealed partial class PlayerPage
         var picture = BoundsOf(Root);
         var strip = BoundsOf(TitleStrip);
         var bar = BoundsOf(Bar);
-        var stats = BoundsOf(StatsPanel);
         var skip = BoundsOf(SkipButton);
 
         var report = new List<string>();
@@ -424,22 +442,17 @@ public sealed partial class PlayerPage
             if (!ok) wrong.Add(what);
         }
 
-        var above = stats.Top - strip.Bottom;
         var below = bar.Top - skip.Bottom;
 
-        report.Add($"标题栏高 {strip.Height:F0}，统计面板 {stats.Width:F0}×{stats.Height:F0} 让开 {above:F1}");
         report.Add($"进度条高 {bar.Height:F0}，跳过按钮 {skip.Width:F0}×{skip.Height:F0} 让开 {below:F1}");
 
-        Want("四样都得有尺寸", strip.Height > 0 && bar.Height > 0 && stats.Height > 0 && skip.Height > 0);
-        Want("统计面板不压标题栏", !Overlaps(stats, strip));
+        Want("三样都得有尺寸", strip.Height > 0 && bar.Height > 0 && skip.Height > 0);
         Want("跳过按钮不压进度条", !Overlaps(skip, bar));
-        Want("统计面板在画面里", Encloses(picture, stats));
         Want("跳过按钮在画面里", Encloses(picture, skip));
 
         // The distances themselves, which is what says they were derived rather than typed: each overlay
         // sits exactly one gap off the edge of what it clears. A margin re-hardcoded to some number that
         // happens not to overlap today would pass the two checks above and fail these two.
-        Want("统计面板的间距是量出来的", Math.Abs(above - OverlayGap) < GeometrySlack);
         Want("跳过按钮的间距是量出来的", Math.Abs(below - OverlayGap) < GeometrySlack);
 
         // 量具本身. Take the bar out of the layout so its ActualHeight really is 0 — the state it is in
@@ -459,10 +472,9 @@ public sealed partial class PlayerPage
         Want("量具跟排版结果对得上", Math.Abs(measured - arranged) < 1);
 
         // Put everything back, page first, so the last Render leaves nothing of the player's over the
-        // library grid behind it. Closing 统计 is what empties the grid.
+        // library grid behind it.
         ViewModel.SkipOffered = wasOffer;
         ViewModel.SkipCaption = wasCaption;
-        ViewModel.StatsOpen = wasStats;
         Visibility = was;
         _chrome.Reset(++clock);
         _chrome.Tick(clock + SettleMilliseconds);

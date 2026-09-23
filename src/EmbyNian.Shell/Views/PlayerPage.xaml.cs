@@ -111,6 +111,14 @@ public sealed partial class PlayerPage : UserControl
     private long? _pulseMutedAt;
 
     /// <summary>
+    /// 切换窗口那一趟的静默锚（2026-09-22，用户令「切全屏和窗口化的时候暂停播放，和截图无缝衔接」）。
+    /// 那一趟会临时把 mpv 冻住再抓帧（见 <see cref="FreezeForHandoffAsync"/>），而暂停／恢复这两个状态边
+    /// 都不是用户按的 —— 屏中间不该冒出暂停徽标。与双击那一位同一种账法（跨度而不是计数：状态边回来的
+    /// 早晚都不确定），只是跨度更长。
+    /// </summary>
+    private long? _handoffMutedAt;
+
+    /// <summary>
     /// Drives three things that expire rather than happen: the reveal rule's idle window, the 跳过
     /// offer's countdown, and the seek the user is dragging. Ten hertz, and only while the player is on
     /// screen — the WinForms shell ran a 40 ms timer for the whole session because mpv's child window
@@ -397,7 +405,7 @@ public sealed partial class PlayerPage : UserControl
         Root.AddHandler(KeyDownEvent, new KeyEventHandler(OnSpaceShortcut), handledEventsToo: true);
         // Click 的路由事件标识符在这套投影里没暴露（ButtonBase、Button 上都没有），所以这些不带菜单的
         // 按钮一颗颗订阅；带 Flyout 的六颗不订阅 —— 菜单要靠焦点接管上下键（见 OnChromeClick）。
-        // 统计那颗是 ToggleButton，所以数组的类型是 ButtonBase。
+        // 公共输入反馈也用于滑条以外的按钮。
         foreach (var button in new ButtonBase[] { BackButton, StatsButton, PinButton, MuteButton, SkipButton,
                      PreviousButton, PlayButton, NextButton, FullscreenButton,
                      MinimizeButton, MaximizeButton, CloseButton })
@@ -489,7 +497,6 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.StatusApplied += OnStatusApplied;
         ViewModel.PictureAspectChanged += OnPictureAspectChanged;
         ViewModel.SourceAspectChanged += OnSourceAspectChanged;
-        ViewModel.StatsUpdated += OnStatsUpdated;
 
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         if (ViewModel.CoverUp) ShowCoverPlate();
@@ -504,6 +511,8 @@ public sealed partial class PlayerPage : UserControl
         window.GeometryChanged += OnGeometryChanged;
 
         window.ClientRectTransition += OnClientRectTransition;
+        window.ClientSizeChanged += OnClientSizeChanged;
+        window.InteractiveResizeChanged += OnInteractiveResizeChanged;
 
         // mpv.net 的「未激活不藏」（2026-09-16 照搬）：焦点位喂给规则，藏匿条件里那一问由它回答。
         // 第二十九报（2026-09-17）起这一位不再走 WM_ACTIVATE 事件、改由 OnTick 每拍重问——判据从
@@ -542,6 +551,8 @@ public sealed partial class PlayerPage : UserControl
         {
             _window.GeometryChanged -= OnGeometryChanged;
             _window.ClientRectTransition -= OnClientRectTransition;
+            _window.ClientSizeChanged -= OnClientSizeChanged;
+            _window.InteractiveResizeChanged -= OnInteractiveResizeChanged;
         }
         _onStage = false;
         StopPlayerMotion();
@@ -587,7 +598,6 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.StatusApplied -= OnStatusApplied;
         ViewModel.PictureAspectChanged -= OnPictureAspectChanged;
         ViewModel.SourceAspectChanged -= OnSourceAspectChanged;
-        ViewModel.StatsUpdated -= OnStatsUpdated;
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
 
         ViewModel.MeasureSurface = null;
@@ -596,6 +606,8 @@ public sealed partial class PlayerPage : UserControl
         {
             _window.GeometryChanged -= OnGeometryChanged;
             _window.ClientRectTransition -= OnClientRectTransition;
+            _window.ClientSizeChanged -= OnClientSizeChanged;
+            _window.InteractiveResizeChanged -= OnInteractiveResizeChanged;
         }
 
         // 键盘兜底同步摘下：接键人跟着这一次 Attach 走，别让下一任（下一次 Attach 的页）的老号码还留在线上。
@@ -699,21 +711,12 @@ public sealed partial class PlayerPage : UserControl
         _polledKnown = false;
         _ticker.Start();
 
-        // 先开进场轨道：溶解发生在没动过的窗口里。收浏览层与跳全屏都挂在淡入完成那一拍 —— 页面不透明了、
-        // 底下是近黑的遮罩，这时换窗口，岛面换新尺寸前那几帧旧画面残影只是一块深色；排在第 0 拍则把亮着的
-        // 浏览页缩在放大后的窗口左上角闪出来（2026-09-18 用户截图）。理由全文在 TransitionPage。
-        // 这一带刻意不做强制布局：进场时客户区跟浏览时一模一样，全树 Measure/Arrange 纯属白算，却要吃掉
-        // 约九十毫秒（重主页实机诊断 2026-09-19），把淡入的呈现窗口挤没了——跳变那一拍的同步在
-        // PublishClientRect 里，那里才是尺寸真变了的时刻。
+        _startupHandoverPending = true;
+        var fullscreenEntry = ViewModel.PictureInHostWindow && WindowForms.WantsAutoFullscreen(
+            ViewModel.AutoFullscreenOnPlayback, ViewModel.PlaybackLifecycleActive, _window.Form);
         TransitionPage(entering: true,
-            landed: () => { },
-            faded: () =>
-            {
-                if (!_onStage) return;
-                _shell?.ShowPlayer(true);
-                if (_window is not null) _window.VideoVisible = true;
-                EnterAutoFullscreen();
-            });
+            landed: () => _ = CompletePlayerEntranceAsync(),
+            fullscreenEntry: fullscreenEntry);
         _window.PlaybackTitleBar = true;
         _videoTarget.SynchronizeGeometry();
         Focus(FocusState.Programmatic);
@@ -841,7 +844,7 @@ public sealed partial class PlayerPage : UserControl
         //
         // 2026-09-20：判断归一到 WindowForms.WantsAutoFullscreen（与进场换手、独占模式那两处同一句）。
         // lifecycleActive 在这里恒为真 —— 能收到开播应答就是在真播放；窗口形态问的是这一刻的真实形态。
-        if (!_enterAnimating && WindowForms.WantsAutoFullscreen(
+        if (!_startupHandoverPending && !_enterAnimating && WindowForms.WantsAutoFullscreen(
             ViewModel.AutoFullscreenOnPlayback, lifecycleActive: true, _window!.Form))
             SetFullscreen(true);
 
@@ -950,7 +953,16 @@ public sealed partial class PlayerPage : UserControl
     /// arrive early, late, or be coalesced away entirely — and a counter that never came down would eat the
     /// badge for every real pause after it.
     /// </summary>
-    private bool Muted => _pulseMutedAt is { } at && Now - at < PictureTap.PulseMuteMilliseconds;
+    private bool Muted =>
+        (_pulseMutedAt is { } at && Now - at < PictureTap.PulseMuteMilliseconds)
+        || (_handoffMutedAt is { } handoff && Now - handoff < HandoffPulseMuteMilliseconds);
+
+    /// <summary>
+    /// 切换窗口那一趟的静默跨度。取一千八百毫秒是照最坏那一趟量的：抓帧上限 750 ＋ 窗口切换几十毫秒
+    /// ＋ 等画面就绪上限 750 ＋ mpv 把 pause 状态报回来的那一程。**宁长不短**：短的代价是屏中间闪出一个
+    /// 用户没按过的暂停徽标，长的代价只是这一秒八里真按了暂停也不画徽标（播放状态本身仍然是对的）。
+    /// </summary>
+    private const long HandoffPulseMuteMilliseconds = 1800;
 
     /// <summary>
     /// The badge's fifth of a second is up. Collapsed rather than merely left at zero opacity: a transparent
@@ -1003,7 +1015,8 @@ public sealed partial class PlayerPage : UserControl
         _window.PictureAspect = aspect;
         if (aspect <= 0) return;
 
-        if (_onStage && ViewModel.CoverUp && ViewModel.AutoFullscreenOnPlayback) return;
+        if (_onStage && ViewModel.AutoFullscreenOnPlayback
+            && (_startupHandoverPending || _fullscreenWanted == true || ViewModel.CoverUp)) return;
 
         _window.FitToPicture();
     }
@@ -1014,23 +1027,6 @@ public sealed partial class PlayerPage : UserControl
     /// 窗口比例，拿它摆最后一帧会让画面缩成一条窄带（2026-09-20 用户截图那条「丑」）。
     /// </summary>
     private void OnSourceAspectChanged(double aspect) => _videoTarget.SourceAspect = aspect;
-
-    /// <summary>
-    /// A fresh set of 统计 readings. An empty set with the panel closed is the panel being put away, and
-    /// clears the grid; an empty set with it open is mpv having answered nothing yet, which has a row of
-    /// its own — see <see cref="RenderStatRows"/>.
-    /// </summary>
-    private void OnStatsUpdated(IReadOnlyList<PlaybackStatRow> rows)
-    {
-        if (rows.Count == 0 && !ViewModel.StatsOpen)
-        {
-            StatsRows.Children.Clear();
-            StatsRows.RowDefinitions.Clear();
-            return;
-        }
-
-        RenderStatRows(rows);
-    }
 
     private static string Glyph(int codepoint) => char.ConvertFromUtf32(codepoint);
 

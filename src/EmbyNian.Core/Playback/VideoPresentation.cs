@@ -23,8 +23,8 @@ public static class VideoPresentation
     }
 
     /// <summary>
-    /// SpriteVisual 的摆放：等比（或逐轴）缩放加左上角偏移，全部 DIP。交换链画笔只会把缓冲拉伸进
-    /// Visual 的尺寸，所以「按哪个矩形呈现」全部由这一组量表达。
+    /// SpriteVisual 的摆放：等比（或逐轴）缩放加左上角 DIP 偏移。
+    /// 交换链画笔的 Size 只提供裁剪框，实际缩放必须由 Scale 表达。
     /// </summary>
     public readonly record struct Placement(double ScaleX, double ScaleY, double Left, double Top)
     {

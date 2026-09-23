@@ -195,7 +195,7 @@ public sealed class SkipCoordinator
     {
         var target = TimeFormat.Clock(TimeSpan.FromSeconds(TargetOf(section)));
         var source = section.Certain ? $"章节：{section.Label}" : $"推测的{section.Label}";
-        return $"跳到 {target}（{source}） · 快捷键 Y";
+        return $"跳到 {target}（{source}） · Y 跳过 · N 关闭";
     }
 
     /// <summary>The same section, allowing for two chapter lists that disagree by a rounding error.</summary>

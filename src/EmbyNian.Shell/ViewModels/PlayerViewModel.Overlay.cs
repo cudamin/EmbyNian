@@ -17,7 +17,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 namespace EmbyNian.Shell.ViewModels;
 
 /// <summary>
-/// 浮层上那几块读数：播放统计、章节缩略图、按画面比例联动窗口、十赫兹那一跳、播放信息，以及共用的那两个小工具。
+/// 浮层上那几块读数：章节缩略图、按画面比例联动窗口、十赫兹那一跳、播放信息，以及共用的那两个小工具。
 /// <para>
 /// 这一片全是「每一跳都要跑一遍」的东西，所以它里面刻意不在每一跳里新建对象 —— 十赫兹乘上一部电影是几十万次分配。
 /// </para>
@@ -29,75 +29,6 @@ namespace EmbyNian.Shell.ViewModels;
 /// </summary>
 public sealed partial class PlayerViewModel
 {
-    // ---- 播放统计 ----------------------------------------------------------------
-
-    /// <summary>
-    /// Reads the panel's properties and hands the formatted rows to the page, once a second while the panel
-    /// is open. How it asks is the backend's answer, not this method's guess: see
-    /// <see cref="PlaybackService.ReadsOverlap"/>.
-    /// <para>
-    /// Neither branch runs the batch the way this used to. Awaiting an already-completed task continues
-    /// synchronously, and the in-process player's reads <em>are</em> already complete when they come back —
-    /// each one is a native call made on the calling thread — so twenty-one 「awaited」 reads were in truth
-    /// twenty-one native calls in a single unbroken stretch of the UI thread, every second, for as long as
-    /// the panel stood open. Nothing about that is visible in a frame rate counter; it is visible in a
-    /// pointer that moves in steps while the panel is up.
-    /// </para>
-    /// <para>
-    /// So: across a pipe, ask for all of them at once and wait once — the cost there is round trips, and they
-    /// pipeline. In-process, keep the single file (a shared gate would serialise them anyway) but run the whole
-    /// stretch off the UI thread. The per-read 「已经关掉了就别问了」 bail survives only in the second branch,
-    /// where reads still happen one after another; in the first they are all already in flight by the time the
-    /// panel could close, and the two checks around the batch are what stop a late answer from being drawn.
-    /// </para>
-    /// <para>
-    /// The re-entry guard is what matters most either way: a batch that took longer than the refresh interval
-    /// would otherwise start another before the first came back, and the two would interleave into the same grid.
-    /// </para>
-    /// </summary>
-    private async Task RefreshStatsAsync()
-    {
-        if (_statsBusy) return;
-
-        _statsBusy = true;
-        try
-        {
-            var fields = PlaybackStats.Fields;
-            var readings = new Dictionary<string, string?>(fields.Count, StringComparer.Ordinal);
-
-            if (_playback.ReadsOverlap)
-            {
-                var pending = new Task<string?>[fields.Count];
-                for (var index = 0; index < fields.Count; index++) pending[index] = _playback.GetTextAsync(fields[index]);
-
-                var values = await Task.WhenAll(pending).ConfigureAwait(true);
-                for (var index = 0; index < fields.Count; index++) readings[fields[index]] = values[index];
-            }
-            else
-            {
-                // ConfigureAwait(true) on the way back: the invoke below touches the page's grid.
-                await Task.Run(async () =>
-                {
-                    foreach (var field in fields)
-                    {
-                        if (!StatsOpen) return;
-
-                        readings[field] = await _playback.GetTextAsync(field).ConfigureAwait(false);
-                    }
-                }).ConfigureAwait(true);
-            }
-
-            if (!StatsOpen) return;
-
-            StatsUpdated?.Invoke(PlaybackStats.Format(readings));
-            _statsRead = Now;
-        }
-        finally
-        {
-            _statsBusy = false;
-        }
-    }
-
     // ---- 章节缩略图预览 -----------------------------------------------------------
 
     /// <summary>
@@ -312,7 +243,6 @@ public sealed partial class PlayerViewModel
         }
 
         // 每秒刷新一次.
-        if (StatsOpen && Now - _statsRead >= PlaybackStats.RefreshMilliseconds) _ = RefreshStatsAsync();
 
         FlushVolume();
 

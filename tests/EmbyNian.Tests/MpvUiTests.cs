@@ -61,6 +61,65 @@ internal static class MpvUiTests
             Assert.False(scripts.Value.Contains(".lua"), "scripts 交的必须是目录，不是 .lua 文件");
         });
 
+        // 右键菜单呼出键（2026-09-22 用户令「参考集成模式」）：config=no 之下 input.conf 不读、uosc 默认不绑键，
+        // 所以「右键点画面出菜单」这件事得宿主自己补。绑的不是 uosc 自带的精简菜单，而是
+        // embynian-ui-picture-menu —— 它向宿主要 PlayerMenuCatalog（集成模式右键那张同一份树）。这里钉三处：
+        // MenuKeys 发的是 MBTN_RIGHT / MENU → script-binding uosc/embynian-ui-picture-menu；它指向的绑定在脚本里
+        // 真的登记了；而那条绑定发的消息是 embynian-picture-menu（与绑定名不同名，否则自激刷屏）。
+        TestHarness.Test("右键菜单呼出键：MBTN_RIGHT/MENU 指向真实的画面菜单绑定", () =>
+        {
+            var keys = MpvUi.MenuKeys();
+            Assert.Equal(2, keys.Count);
+            Assert.Equal(("MBTN_RIGHT", "script-binding uosc/embynian-ui-picture-menu"), (keys[0].Key, keys[0].Value));
+            Assert.Equal(("MENU", "script-binding uosc/embynian-ui-picture-menu"), (keys[1].Key, keys[1].Value));
+
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var main = File.ReadAllText(Path.Combine(
+                directory!.FullName, "assets", "mpv-ui", "scripts", "uosc", "main.lua"));
+            Assert.True(main.Contains("bind_command('embynian-ui-picture-menu'"),
+                "画面菜单绑定丢了：补发的 keybind 会指向一条不存在的绑定");
+            Assert.True(main.Contains("embynian_notify('embynian-picture-menu'"),
+                "画面菜单向宿主要数据的消息丢了");
+        });
+
+        // 画面菜单契约：请求值保留即可通过；点选只认 1 起算的正整数序号（对着 PlayerMenuCatalog.Commands 的次序）——
+        // 与选集/版本同一套判据，因为「差一位」在这里跑到的是旁边那一行命令，屏上未必看得出点错了。
+        TestHarness.Test("画面菜单请求与序号点选的契约", () =>
+        {
+            var request = VideoWindowContract.Parse(["embynian-picture-menu", ""]);
+            Assert.Equal(VideoWindowContract.PictureMenu, request?.Key);
+
+            var pick = VideoWindowContract.Parse(["embynian-menu-index", "5"]);
+            Assert.Equal(VideoWindowContract.MenuIndex, pick?.Key);
+            Assert.Equal("5", pick?.Value);
+
+            Assert.Null(VideoWindowContract.Parse(["embynian-menu-index", "0"]));
+            Assert.Null(VideoWindowContract.Parse(["embynian-menu-index", "-1"]));
+            Assert.Null(VideoWindowContract.Parse(["embynian-menu-index", "reset"]));
+        });
+
+        // 画面菜单的数据源就是 PlayerMenuCatalog（集成模式右键那张树）。Commands 是宿主推送菜单时给每条命令行
+        // 编号、点中后回宿主 RunMenuNodeAsync 要用的那份展平表：必须与 Flatten 的 DFS 先序一致、全是命令叶子、
+        // 且非空 —— 序号一旦与序列化那头的编号次序不一致，点一行跑的就是另一行的命令。
+        TestHarness.Test("画面菜单命令表：与 Flatten 先序一致、全是命令叶子", () =>
+        {
+            var commands = PlayerMenuCatalog.Commands;
+            Assert.True(commands.Count > 0, "命令表不该是空的");
+
+            var expected = PlayerMenuCatalog.Flatten(PlayerMenuCatalog.Root)
+                .Where(node => node.Kind == PlayerMenuKind.Command)
+                .ToList();
+
+            Assert.Equal(expected.Count, commands.Count);
+            for (var i = 0; i < expected.Count; i++)
+                Assert.True(ReferenceEquals(expected[i], commands[i]),
+                    $"第 {i + 1} 项与 Flatten 先序对不上：序列化编号会和这份表错位");
+        });
+
         // 换集契约：只有 ±1 是合法值，别的（0、2、"next"、空串）都不许漏过去 ——
         // 那些会变成 int.Parse 的异常或一次方向不明的导航。
         TestHarness.Test("换集消息只认正负一", () =>
@@ -179,6 +238,7 @@ internal static class MpvUiTests
                 VideoWindowContract.Ready, VideoWindowContract.Seek, VideoWindowContract.Episode,
                 VideoWindowContract.Episodes, VideoWindowContract.EpisodeIndex,
                 VideoWindowContract.Versions, VideoWindowContract.VersionIndex,
+                VideoWindowContract.PictureMenu, VideoWindowContract.MenuIndex,
             };
             var bindings = new List<string>();
 

@@ -274,6 +274,20 @@ public static class PlayerMenuCatalog
     }
 
     /// <summary>
+    /// The runnable rows, flattened in the tree's own DFS pre-order — groups and separators dropped.
+    /// <para>
+    /// This is the addressing the 独占模式 picture menu uses: the shell serialises <see cref="Root"/> to the
+    /// uosc menu and gives each command row a 1-based index into <b>this</b> list; a click sends that index
+    /// back (<see cref="Mpv.VideoWindowContract.MenuIndex"/>) and the host runs <c>Commands[index-1]</c>
+    /// through the same <c>RunMenuNodeAsync</c> the integrated menu uses. One catalogue, one execution — so
+    /// the two pipelines cannot describe different menus. The serialiser must number command rows in this
+    /// same order (a test pins that the two walks agree).
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<PlayerMenuNode> Commands { get; } =
+        [.. Flatten(Root).Where(node => node.Kind == PlayerMenuKind.Command)];
+
+    /// <summary>
     /// A rule between two runs of items. A property rather than a shared instance so that
     /// <see cref="Root"/> can use it: a static initializer reading another one declared below it gets
     /// null, and a null separator is a crash rather than a missing line.

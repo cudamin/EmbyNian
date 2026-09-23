@@ -12,6 +12,8 @@ public sealed partial class PlayerPage
     }
 
     internal void EndMotionProbe() => LeavePlayer();
+    internal bool StartupHandoverPending => _startupHandoverPending;
+    internal void ProbePictureAspect(double aspect) => OnPictureAspectChanged(aspect);
 
     /// <summary>
     /// 退场底与舞台铺到了多高，以及这一刻客户区多高 —— 专给探针判「底够不够高」用（2026-09-20 加）。

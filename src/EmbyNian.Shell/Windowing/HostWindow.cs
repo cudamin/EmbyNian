@@ -723,6 +723,12 @@ internal sealed class HostWindow : IDisposable
     /// <summary>一次离散窗口切换的客户区起止矩形；全屏、最大化和还原共用，合并中间的 WM_SIZE。</summary>
     internal event Action<NativeRect, NativeRect>? ClientRectTransition;
 
+    /// <summary>连续调整时的真实客户区，早于 XAML SizeChanged。</summary>
+    internal event Action<NativeRect>? ClientSizeChanged;
+
+    internal event Action<bool>? InteractiveResizeChanged;
+    private bool _interactiveResize;
+
     private void ChangeClientRect(Action change, bool suppressIntermediateFrames = false)
     {
         var before = ClientRectOnScreen();
@@ -2887,8 +2893,11 @@ internal sealed class HostWindow : IDisposable
                 OnSize();
                 _lastClientRect = ClientRectOnScreen();
                 _lastMaximized = IsMaximized;
-                if (_clientTransitionDepth == 0 && changedMaximize && !Native.IsIconic(window))
-                    PublishClientRect(beforeSize);
+                if (_clientTransitionDepth == 0 && !Native.IsIconic(window))
+                {
+                    if (changedMaximize) PublishClientRect(beforeSize);
+                    else ClientSizeChanged?.Invoke(_lastClientRect);
+                }
 
                 // 最大化和还原也在这里落定 —— 那两下不是拖动，不发 WM_EXITSIZEMOVE。最大化那一档只抬那一位、
                 // 尺寸留着上一次量到的，见 RememberPlacement。
@@ -2903,7 +2912,20 @@ internal sealed class HostWindow : IDisposable
             case Native.WmSizing:
                 return LockAspectDuringResize(window, wParam, lParam);
 
+            case Native.WmEnterSizeMove:
+                if (!_interactiveResize)
+                {
+                    _interactiveResize = true;
+                    InteractiveResizeChanged?.Invoke(true);
+                }
+                break;
+
             case Native.WmExitSizeMove:
+                if (_interactiveResize)
+                {
+                    _interactiveResize = false;
+                    InteractiveResizeChanged?.Invoke(false);
+                }
                 RememberPlacement();
                 GeometryChanged?.Invoke();
                 break;

@@ -48,6 +48,10 @@ public readonly record struct ChromeState(bool Bar, bool Title, bool Rail)
 /// that made them flips was about them: a bar you are aiming at should not need to catch up with you.
 /// </para>
 /// <para>
+/// 指针之外的第二个输入是「正在拖动窗口」（<see cref="SetWindowDrag"/>）：这一趟窗口跟着手走，位置那套判据
+/// 整段不作数，屏上只留标题条 —— 手就压在它上面 —— 进度条与音量条一个都不画。
+/// </para>
+/// <para>
 /// Extracted from the WinForms <c>VideoSurface</c>, which had the identical rule welded to a 40 ms
 /// <c>Cursor.Position</c> poll: mpv's child window swallowed every mouse message that landed on the
 /// video, so the only way to see movement was to sample the cursor. In the WinUI 3 shell the XAML
@@ -239,6 +243,22 @@ public sealed class ChromeReveal
     private bool _keepChrome;
 
     /// <summary>
+    /// 窗口正被标题条拖着走（2026-09-22，用户令「在播放页面中，当用户长按标题并拖动播放窗口时，拖动过程中
+    /// 不要显示进度条和音量条」）。
+    /// <para>
+    /// 它压过 <see cref="HoldChrome"/>，而不是与它并列：拖动那条路上控件本来就是被钉住的（手停在标题条上
+    /// 不动，空闲钟不该说话），可钉住的原话是「三样一起给」，而这一趟要的恰好是「三样里只留一样」。
+    /// <see cref="Decide"/> 里拖动那一支因此排在钉住前面。
+    /// </para>
+    /// <para>
+    /// 留下的那一样是标题条，是必须的：手就压在它上面，拖动是它的手势，把它收掉等于把手上那颗东西抽走。
+    /// 而进度条与音量条在这一趟里既没有读得进去的人，又是画在一块正跟着窗口晃的画面上 —— 拖动时窗口每一拍
+    /// 都在动，两根条跟着重排、跟着晃，比它们本身的信息量显眼得多。
+    /// </para>
+    /// </summary>
+    private bool _windowDragging;
+
+    /// <summary>
     /// Starts fully revealed: playback has just begun, the pointer may be anywhere, and the first thing
     /// the user needs is to see that there are controls at all. Every field agrees so a layout pass that
     /// runs before the first pointer event cannot read a state where the bar is up with no volume beside it.
@@ -326,6 +346,24 @@ public sealed class ChromeReveal
 
         _keepChrome = kept;
         if (!kept) _lastActivity = now;
+        return Settle(now);
+    }
+
+    /// <summary>
+    /// 拖动标题条移动窗口开始／结束（2026-09-22，用户令见 <see cref="_windowDragging"/>）。与
+    /// <see cref="SetHold"/> / <see cref="SetKeep"/> 同款：锁存，重复告知不作数；放开时重盖空闲钟。
+    /// <para>
+    /// 放开时那一记重盖是必要的，理由和另外两个不同：拖动期间页面那一头不问指针轮询（窗口跟着指针走，
+    /// 指针相对窗口没动过），所以整段拖动里一次活动都没落账。若照「上一记活动」去算，一场拖长的拖动松手
+    /// 那一拍，空闲钟已经走满，控件会当场收掉 —— 而手刚放开，它想看的正是那些控件。
+    /// </para>
+    /// </summary>
+    public bool SetWindowDrag(bool dragging, long now)
+    {
+        if (_windowDragging == dragging) return Settle(now);
+
+        _windowDragging = dragging;
+        if (!dragging) _lastActivity = now;
         return Settle(now);
     }
 
@@ -501,6 +539,12 @@ public sealed class ChromeReveal
     public bool Silenced => _silenced;
 
     /// <summary>
+    /// 窗口此刻是不是正被标题条拖着。与 <see cref="Silenced"/> 同款：给页面与诊断读的只读读数 ——
+    /// 底边那条细进度线要按它决定画不画（见 <c>PlayerPage.Render</c>），而它不在 <see cref="State"/> 里。
+    /// </summary>
+    public bool WindowDragging => _windowDragging;
+
+    /// <summary>
     /// 收掉一切：宽限、音量条读数、位置的显示理由，控件全部离屏。双击全屏／还原在切换当拍调用它，
     /// <c>true</c> 表示屏上确实有东西被收走了（调用方要画一遍）。
     /// </summary>
@@ -613,8 +657,14 @@ public sealed class ChromeReveal
 
     private ChromeState Decide(long now)
     {
-        // A flyout is open, a drag is in progress, or the file is still loading: the controls are the way
-        // out of that state, so nothing about the pointer may take them away.
+        // 拖动标题移动窗口（2026-09-22，用户令「拖动过程中不要显示进度条和音量条」）：三样里只留标题条。
+        // 这一支排在钉住前面，因为拖动同时也是「钉住」的一个理由（手停在标题条上不动），而钉住的原话是
+        // 三样一起给 —— 谁想给两根条的例外加条件，先看清楚这个先后。
+        if (_windowDragging) return new ChromeState(false, true, false);
+
+        // A flyout is open or the file is still loading: the controls are the way out of that state, so
+        // nothing about the pointer may take them away. （窗口拖动从前也在这一支里，2026-09-22 起它自己一支，
+        // 见上面那两行 —— 它要的恰好是「三样里只留一样」。）
         if (HoldChrome || KeepChrome || now < _forceUntil) return new ChromeState(true, true, true);
 
         // 双击全屏／还原的纯净闸（2026-09-18）：在真手再动（Moved/WakeFully/FlashRail/Reset 解锁）之前，

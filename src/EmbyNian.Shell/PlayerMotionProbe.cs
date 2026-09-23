@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Infrastructure;
@@ -38,12 +39,32 @@ internal static class PlayerMotionProbe
         }
     }
 
+    private static void ApplyResize(HostWindow window, int left, int top, int width, int height, ResizeEdge edge)
+    {
+        var proposed = new NativeRect { Left = left, Top = top, Right = left + width, Bottom = top + height };
+        var buffer = Marshal.AllocHGlobal(Marshal.SizeOf<NativeRect>());
+        try
+        {
+            Marshal.StructureToPtr(proposed, buffer, false);
+            // 走真实拖边消息与比例约束，但不占用或移动用户的鼠标。
+            Native.SendMessage(window.Handle, Native.WmEnterSizeMove, IntPtr.Zero, IntPtr.Zero);
+            Native.SendMessage(window.Handle, Native.WmSizing, new IntPtr((int)edge), buffer);
+            var constrained = Marshal.PtrToStructure<NativeRect>(buffer);
+            if (!Native.SetWindowPos(window.Handle, Native.HwndTop, constrained.Left, constrained.Top,
+                    constrained.Width, constrained.Height, Native.SwpNoZOrder | Native.SwpNoActivate))
+                throw new InvalidOperationException("原生窗口缩放失败");
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
     private static async Task RunScoped(StartupOptions options)
     {
         Directory.CreateDirectory(options.Paths.LogDirectory);
         using var report = new StreamWriter(Path.Combine(options.Paths.LogDirectory, "player-motion-probe.txt"))
         { AutoFlush = true };
-        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(55));
+        // 保险丝，不是判据。2026-09-22 加了两段要读屏幕像素的检查（大幅快速缩放、保留最后一帧的摆放），
+        // 而 GetPixel 每次约 24ms，于是上限从 75 提到 150 —— 免得它抢在检查跑完之前到点。
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(150));
         var token = stopping.Token;
         HostWindow? window = null;
         ShellPage? shell = null;
@@ -213,65 +234,203 @@ internal static class PlayerMotionProbe
                 await Task.Delay(450, token);
             }
 
-            // 2026-09-20「拖动窗口边缘时画面闪烁」的那一条。以前没有连续拖动的逐帧证据，所以这一条
-            // 一直挂着没动代码 —— 这里补上：以 16ms 一拍连续改窗口尺寸（模拟一次真实拖动），每一拍
-            // 读一次画面<b>实际占的矩形</b>（PlacedRect，从 SpriteVisual 反算），看它有没有在
-            // 「铺满」与「按比例缩进去留黑边」之间来回跳。
-            //
-            // 判据是「不许回退」：拖动期间窗口被 WM_SIZING 按画面比例锁着，窗口形状就是画面形状，
-            // 画面就该一直铺满。缓冲追赶期间掉进 contain 分支（旧版就是这样）会让余白忽有忽无 ——
-            // 那正是用户报的闪烁。跑完这一趟再等缓冲落定。
-            Write("阶段：连续拖动窗口边缘（逐帧看画面有没有回退成留边）");
+            // 对照原生客户区，不能拿两个同样迟到的 XAML 尺寸互相作证。
+            page.ProbePictureAspect(16d / 9d);
+            await Until(() => surface.IsContentReady, "连续缩放前窗口按视频比例就绪");
+
+            // 像素判据要求整块客户区都落在屏上：隔离窗口原本开在 (120,120) 且比副屏还宽（1240 > 1080），
+            // 右边有一截在屏外，那一段根本取不到像素。先把它挪到**它自己那块显示器**的左上角 —— 只移动、
+            // 不改尺寸（不发 WM_SIZE），并抬到最上层免得被别的窗口盖住。**不写死坐标**：2026-09-22 踩过，
+            // 副屏原点是 2560,0，写死 (0,0) 会把窗口挪到主屏上去（采样读到的成了别人的桌面）。
+            var monitor = VideoFrameOverlay.FullscreenRect(window.Handle);
+            Native.SetWindowPos(window.Handle, Native.HwndTop, monitor.Left, monitor.Top, 0, 0,
+                Native.SwpNoSize | Native.SwpNoActivate);
+            await Task.Delay(120, token);
+
             Native.GetWindowRect(window.Handle, out var dragStart);
-            var dragRaster = surface.RasterizationScale;
-            var dragFrames = 0;
-            var shrinkFrames = 0;
-            var pendingFrames = 0;
-            var dragDetail = new List<string>();
-            for (var step = 1; step <= 12; step++)
+            var dragClient = window.ClientSize;
+            var borderWidth = dragStart.Width - dragClient.Width;
+            var borderHeight = dragStart.Height - dragClient.Height;
+            var geometryUpdates = 0;
+            var wasTopMost = window.TopMost;
+            window.TopMost = true;
+            void CountGeometry() => geometryUpdates++;
+            surface.GeometryChanged += CountGeometry;
+            try
             {
-                // 宽高同步缩一点：窗口比例不变（画面比例锁着），只是整体变小。
-                var scale = 1d - step * 0.015;
-                var width = (int)Math.Round(dragStart.Width * scale);
-                var height = (int)Math.Round(dragStart.Height * scale);
-                Native.SetWindowPos(
-                    window.Handle, Native.HwndTop,
-                    dragStart.Left, dragStart.Top, width, height,
-                    Native.SwpNoZOrder | Native.SwpNoActivate);
-                await Task.Delay(16, token);
-
-                var placed = surface.PlacedRect;
-                var host = surface.HostSize;
-                var hostWidth = host.Width * dragRaster;
-                var hostHeight = host.Height * dragRaster;
-                if (placed.Width <= 0 || placed.Height <= 0 || hostWidth <= 0 || hostHeight <= 0) continue;
-
-                if (surface.IsResizePending) pendingFrames++;
-                dragFrames++;
-                // 「铺满」＝两个方向都贴边（±4%）。掉进 contain 就会有一个方向明显缩进去。
-                var fillsWidth = Math.Abs(placed.Width / hostWidth - 1) <= 0.04;
-                var fillsHeight = Math.Abs(placed.Height / hostHeight - 1) <= 0.04;
-                if (!fillsWidth || !fillsHeight)
+                foreach (var (name, from, to, anchorFar) in new[]
                 {
-                    shrinkFrames++;
-                    if (dragDetail.Count < 4)
-                        dragDetail.Add($"step{step}: 画面 {placed.Width:0}x{placed.Height:0}"
-                            + $" / 宿主 {hostWidth:0}x{hostHeight:0}"
-                            + $" pending={surface.IsResizePending}");
-                }
-            }
-            foreach (var line in dragDetail) Write($"拖动异常帧：{line}");
-            Write($"拖动取样：{dragFrames} 拍，缓冲追赶中 {pendingFrames} 拍，画面未铺满 {shrinkFrames} 拍");
+                    ("缩小", 1d, 0.64, false),
+                    ("放大", 0.64, 1d, false),
+                    ("左上边缩小", 1d, 0.72, true),
+                    ("左上边放大", 0.72, 1d, true)
+                })
+                {
+                    Write($"阶段：连续{name}窗口边缘");
+                    var samples = 0;
+                    var staleVisuals = 0;
+                    var staleLayouts = 0;
+                    var updatesBefore = geometryUpdates;
+                    var bufferBefore = surface.Size;
+                    var positionBefore = await handle.GetPositionAsync(token);
+                    var pixelErrors = 0;
+                    var resizeClock = Stopwatch.StartNew();
+                    for (var step = 1; step <= 24; step++)
+                    {
+                        var scale = from + (to - from) * step / 24;
+                        var width = (int)Math.Round(dragClient.Width * scale) + borderWidth;
+                        var height = (int)Math.Round(dragClient.Height * scale) + borderHeight;
+                        var left = anchorFar ? dragStart.Right - width : dragStart.Left;
+                        var top = anchorFar ? dragStart.Bottom - height : dragStart.Top;
+                        ApplyResize(window, left, top, width, height,
+                            anchorFar ? ResizeEdge.TopLeft : ResizeEdge.BottomRight);
 
-            Require(dragFrames >= 8, $"拖动逐帧取样拿到足够样点（实得 {dragFrames}）");
-            Require(shrinkFrames == 0,
-                $"拖动全程画面始终铺满，不出现忽有忽无的黑边：未铺满 {shrinkFrames} 拍");
-            await Until(() => surface.IsContentReady && !surface.IsResizePending, "拖动结束后缓冲追上新尺寸");
-            Native.SetWindowPos(
-                window.Handle, Native.HwndTop,
-                dragStart.Left, dragStart.Top, dragStart.Width, dragStart.Height,
-                Native.SwpNoZOrder | Native.SwpNoActivate);
-            await Until(() => surface.IsContentReady && !surface.IsResizePending, "摆回原尺寸后缓冲再次落定");
+                        SampleResize();
+                        await Task.Delay(16, token);
+                        await surface.CommitPresentationAsync().WaitAsync(TimeSpan.FromSeconds(2), token);
+                        VideoFrameOverlay.Flush();
+                        SampleResize();
+                        var bars = CompositionPlaybackProbe.FrameBars(window);
+                        if (bars != "RGYBMC")
+                        {
+                            pixelErrors++;
+                            Write($"{name}第 {step} 拍：彩条 {bars}，客户区 {window.ClientSize}，缓冲 {surface.AttachedContentSize}");
+                        }
+                        Require(surface.IsInteractiveResize && surface.Size == bufferBefore,
+                            $"{name}第 {step} 拍不重建缓冲");
+                    }
+                    // **布局滞后只记录、不判红**（2026-09-22 改）。XAML 的布局本来就会晚一拍 —— 这是框架
+                    // 的账，肉眼看不见，也不是画面尺寸的来源：画面那块 SpriteVisual 的摆放读的是窗口报出来
+                    // 的客户区（`_snappedClient`），不吃这一拍。旧判据把「布局不许晚」和「画面不许留空」绑在
+                    // 一起判，于是把这一条永不可能为真的框架行为当成了缺陷（实测 24/48 拍、全是 SetWindowPos
+                    // 返回时的立即采样），而真正该判的东西（屏幕上的像素）它一眼都没看。
+                    Write($"{name}取样：{samples} 拍，画面滞后 {staleVisuals} 拍，布局晚一拍 {staleLayouts} 拍，"
+                        + $"尺寸派发 {geometryUpdates - updatesBefore} 次，耗时 {resizeClock.ElapsedMilliseconds}ms");
+                    Require(staleVisuals == 0, $"{name}每拍呈现属性贴住真实客户区");
+                    Require(pixelErrors == 0, $"{name}的 24 帧屏幕彩条均完整，无留空或裁切");
+                    Require(geometryUpdates == updatesBefore, $"{name}期间不反复重建缓冲");
+                    var positionAfter = await handle.GetPositionAsync(token);
+                    Require(positionBefore is { } start && positionAfter is { } end && Math.Abs(end - start) > 0.1,
+                        $"{name}期间视频持续播放，不用静止截图代替");
+                    Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
+                    await page.ResizeChange.WaitAsync(TimeSpan.FromSeconds(2), token);
+                    Require(!page.ResizeFrameVisible, $"{name}松手后的保留帧已收回");
+                    await Until(() => surface.IsContentReady && !surface.IsInteractiveResize, $"{name}松手后缓冲落定");
+                    Require(geometryUpdates > updatesBefore, $"{name}松手后发布最终尺寸");
+
+                    void SampleResize()
+                    {
+                        var client = window.ClientSize;
+                        var placed = surface.PlacedRect;
+                        var host = surface.HostSize;
+                        var raster = surface.RasterizationScale;
+                        samples++;
+                        if (Math.Abs(placed.Left) > 2 || Math.Abs(placed.Top) > 2
+                            || Math.Abs(placed.Width - client.Width) > 2
+                            || Math.Abs(placed.Height - client.Height) > 2) staleVisuals++;
+                        if (Math.Abs(host.Width * raster - client.Width) > 2
+                            || Math.Abs(host.Height * raster - client.Height) > 2) staleLayouts++;
+                    }
+                }
+
+                Write("阶段：连续快速反向拖边");
+                var fastBuffer = surface.Size;
+                var fastClock = Stopwatch.StartNew();
+                foreach (var (from, to) in new[] { (1d, 0.64), (0.64, 1d), (1d, 0.72), (0.72, 1d) })
+                {
+                    for (var step = 1; step <= 24; step++)
+                    {
+                        var scale = from + (to - from) * step / 24;
+                        ApplyResize(window, dragStart.Left, dragStart.Top,
+                            (int)Math.Round(dragClient.Width * scale) + borderWidth,
+                            (int)Math.Round(dragClient.Height * scale) + borderHeight, ResizeEdge.BottomRight);
+                        await Task.Delay(16, token);
+                    }
+                }
+                Require(surface.IsInteractiveResize && surface.Size == fastBuffer, "快速反向期间缓冲保持稳定");
+                await surface.CommitPresentationAsync().WaitAsync(TimeSpan.FromSeconds(2), token);
+                VideoFrameOverlay.Flush();
+                Require(CompositionPlaybackProbe.FrameBars(window) == "RGYBMC", "快速反向后画面完整");
+                Write($"快速反向：96 次原生拖边，耗时 {fastClock.ElapsedMilliseconds}ms；中间帧由外部录像检查");
+                Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
+                await page.ResizeChange.WaitAsync(TimeSpan.FromSeconds(2), token);
+                await Until(() => surface.IsContentReady && !surface.IsInteractiveResize, "快速反向松手后缓冲落定");
+
+                // 像素采样必须等本次呈现提交，不能在 WM_SIZE 回调里同步 GetPixel 堵住提交本身。
+                Write("阶段：大幅快速缩放（旧缓冲必须被缩放着填满新客户区）");
+                Native.SetWindowPos(window.Handle, Native.HwndTop, monitor.Left, monitor.Top, 640, 360,
+                    Native.SwpNoZOrder | Native.SwpNoActivate);
+                await Until(() => surface.IsContentReady && !surface.IsResizePending, "大幅缩放前基准窗口就绪");
+                var baseClient = window.ClientSize;
+                var edgeReads = 0;
+                var unFilled = 0;
+                foreach (var (jump, paused) in new[]
+                {
+                    (1.5, false), (0.65, false), (1.35, false), (0.7, false), (1.2, false), (0.8, false),
+                    (1.5, true), (0.65, true), (1.35, true), (0.7, true), (1.2, true), (0.8, true)
+                })
+                {
+                    var width = (int)Math.Round(baseClient.Width * jump) + borderWidth;
+                    var height = (int)Math.Round(baseClient.Height * jump) + borderHeight;
+                    if (width > monitor.Right - monitor.Left) continue; // 放不下的一档跳过（副屏只有 1080 宽）
+                    await handle.SetPropertyAsync("pause", paused, token);
+                    await Until(() => control.Status.Paused == paused, "大幅缩放前播放状态到位");
+                    ApplyResize(window, monitor.Left, monitor.Top, width, height, ResizeEdge.BottomRight);
+                    await Task.Delay(16, token);
+                    await surface.CommitPresentationAsync().WaitAsync(TimeSpan.FromSeconds(2), token);
+                    VideoFrameOverlay.Flush();
+                    var read = CompositionPlaybackProbe.FrameBars(window);
+                    edgeReads++;
+                    if (read != "RGYBMC") unFilled++;
+                    Write($"大幅缩放 {jump:0.##}×（暂停={paused}）：彩条 {read}");
+                    Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
+                    await page.ResizeChange.WaitAsync(TimeSpan.FromSeconds(2), token);
+                    Require(!page.ResizeFrameVisible, "大幅缩放松手后保留帧已收回");
+                    await Until(() => surface.IsContentReady && !surface.IsInteractiveResize, $"{jump:0.##}× 后缓冲落定");
+                    Require(control.Status.Paused == paused, "调整窗口不改变用户的暂停状态");
+                }
+                Write("阶段：收尾期间再次拖边");
+                ApplyResize(window, monitor.Left, monitor.Top, 780, 440, ResizeEdge.BottomRight);
+                Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
+                var interruptedResize = page.ResizeChange;
+                ApplyResize(window, monitor.Left, monitor.Top, 680, 390, ResizeEdge.BottomRight);
+                await Task.Delay(80, token);
+                Require(surface.IsInteractiveResize, "旧的缩放收尾不能解除新一轮拖动");
+                Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
+                await Task.WhenAll(interruptedResize, page.ResizeChange).WaitAsync(TimeSpan.FromSeconds(3), token);
+                Require(surface.IsContentReady && !surface.IsInteractiveResize && !page.ResizeFrameVisible,
+                    "打断收尾后最终缓冲正确，保留帧与拖动状态均已清理");
+
+                // 程序化改尺寸不经过拖边事务，另记收敛过程，不能把它当作用户持续拖动的像素证据。
+                Write("阶段：放大一记大跳之后的老化曲线");
+                var traceClient = window.ClientSize;
+                Native.GetWindowRect(window.Handle, out var traceOuter);
+                Native.SetWindowPos(window.Handle, Native.HwndTop, traceOuter.Left, traceOuter.Top,
+                    (int)Math.Round(traceClient.Width * 1.5) + borderWidth,
+                    (int)Math.Round(traceClient.Height * 1.5) + borderHeight,
+                    Native.SwpNoZOrder | Native.SwpNoActivate);
+                for (var tick = 0; tick < 14; tick++)
+                {
+                    var placed = surface.PlacedRect;
+                    Write($"老化 {tick}：客户区 {window.ClientSize}，缓冲 {surface.AttachedContentSize}，"
+                        + $"实测像素尺寸 {surface.PixelSize}，目标 {surface.Size}，"
+                        + $"摆放 {placed.Width:0}x{placed.Height:0}@{placed.Left:0},{placed.Top:0}，"
+                        + $"押帧 {surface.PresentsSinceArm}，右端 {CompositionPlaybackProbe.PointRead(window, 0.92, 0.4)}，"
+                        + $"中 {CompositionPlaybackProbe.PointRead(window, 0.5, 0.4)}");
+                    await Task.Delay(16, token);
+                }
+                await Until(() => surface.IsContentReady && !surface.IsResizePending, "老化曲线后缓冲落定");
+
+                Require(edgeReads == 12 && unFilled == 0,
+                    $"播放与暂停时大幅缩放的 {edgeReads} 帧均完整，无裁切或留空（异常 {unFilled} 帧）");
+                await handle.SetPropertyAsync("pause", false, token);
+            }
+            finally
+            {
+                Native.SendMessage(window.Handle, Native.WmExitSizeMove, IntPtr.Zero, IntPtr.Zero);
+                surface.GeometryChanged -= CountGeometry;
+                window.TopMost = wasTopMost;
+            }
 
             Write("阶段：快速全屏往返");
             page.SetFullscreen(true);
@@ -308,9 +467,12 @@ internal static class PlayerMotionProbe
                     var off = placed.Width <= 0 || placed.Height <= 0 || client.Width <= 0 || client.Height <= 0
                         || (Math.Abs(placed.Width / client.Width - 1) > 0.04
                             && Math.Abs(placed.Height / client.Height - 1) > 0.04);
-                    // ② 还是画面自己的比例（没被新窗口掰变形）——「铺满」那条错法就死在这一条上。
-                    var bent = content is { Width: > 0, Height: > 0 }
-                        && Math.Abs(placed.Width / placed.Height / ((double)content.Width / content.Height) - 1) > 0.02;
+                    // ② 还是**画面自己**的比例（没被新窗口掰变形）——「铺满」那条错法就死在这一条上。
+                    //    比的是素材的 16:9，不是缓冲的比例：竖屏全屏那种台位上缓冲是 1080×1920，
+                    //    画面在里面本来就该是 1080×607 的一条，拿缓冲比例当基准会把对的判成错的
+                    //   （2026-09-22 实测踩过）。
+                    var bent = placed.Width > 0 && placed.Height > 0
+                        && Math.Abs(placed.Width / placed.Height / (16d / 9d) - 1) > 0.02;
 
                     if (off) loose++;
                     if (bent) stretched++;
@@ -364,6 +526,7 @@ internal static class PlayerMotionProbe
             // 播放时不在」—— 2026-09-20 晚新加的那面「铺满」旗没有这一步，就会悄悄跟着下一趟播放走。
             Require(!page.ExitProbeState.Backdrop && page.ExitProbeState.Dim == 0 && !page.ExitProbeState.Fill,
                 "播放中退场底收着、留帧压暗为 0、铺满旗关着");
+            await RetainedPlacementAsync(surface, page);
             await handle.StopAsync();
             await handle.DisposeAsync();
             handle = null;
@@ -583,22 +746,60 @@ internal static class PlayerMotionProbe
                 $"重复进出仍恢复浏览尺寸：{restored.Width}x{restored.Height}，预期 {browse.Width}x{browse.Height}");
             layoutSample.Stop();
 
-            // 压轴：真实用户点播放的那条路 —— 集成管线＋自动全屏，跳窗挂在进场淡入完成那一拍
-            // （EnterPlayer 第 0 拍只溶解、不动窗口）。放在所有阶段之后，免得这一进一退把
-            // 「退出保留最后帧」那类依赖在台状态的断言搅进来。
-            Write("阶段：进场淡入完成拍自动全屏");
+            Write("阶段：自动全屏起播，首帧与窗口交接同时到达");
             services.GetRequiredService<AppSettings>().Playback.AutoFullscreenOnPlayback = true;
             page.ViewModel.ProbeHoldPlayback();
             page.ViewModel.CoverUp = true;
+            var startupSamples = 0;
+            var earlyStartupFades = 0;
+            var startupTransforms = 0;
+            var startupFrameOverlays = 0;
+            var startupWatch = window.Content!.DispatcherQueue.CreateTimer();
+            startupWatch.Interval = TimeSpan.FromMilliseconds(16);
+            startupWatch.Tick += (_, _) =>
+            {
+                if (!page.PlayerVisible) return;
+                startupSamples++;
+                var state = page.CoverProbeState;
+                var transform = (CompositeTransform)page.RenderTransform;
+                if (transform.ScaleX != 1 || transform.ScaleY != 1 || transform.TranslateY != 0)
+                    startupTransforms++;
+                if (page.FullscreenFrameVisible) startupFrameOverlays++;
+                if (state.Opacity < 0.99 && !page.MotionProbeState.CoverHidden
+                    && (!window.Fullscreen || page.StartupHandoverPending || !state.HasPicture || !state.ContentReady))
+                    earlyStartupFades++;
+            };
             page.BeginMotionProbe(false);
-            await Until(() => window.Fullscreen, "淡入完成那一拍窗口已全屏（跳窗不再排在进场的第 0 拍）");
-            Require(page.MotionProbeState.Active, "全屏换手时页面仍在台上");
-            await Task.Delay(320, token);
-            Require(page.MotionProbeState.Identity, "自动全屏进场落定无残留变换");
-            page.EndMotionProbe();
-            await Task.Delay(400, token);
-            Require(!window.Fullscreen && !page.PlayerVisible && page.MotionProbeState.Identity,
-                "自动全屏进场的退场完整，回到窗口化");
+            startupWatch.Start();
+            await Task.Delay(40, token);
+            page.ProbePictureAspect(16d / 9d);
+            handle = await backend.StartAsync(request, token);
+            control = (IPlayerControl)handle;
+            await Until(() => control.Status.Loaded, "自动全屏本地文件已打开");
+            page.ViewModel.CoverUp = false;
+            await Until(() => control.Status.PictureStarted, "自动全屏本地视频首帧信号已到");
+            page.ProbePictureStarted();
+            await Until(() => window.Fullscreen && !page.StartupHandoverPending && page.MotionProbeState.CoverHidden,
+                "全屏、首帧与加载层交接全部落定");
+            await Task.Delay(100, token);
+            startupWatch.Stop();
+            Write($"自动全屏取样：{startupSamples} 拍，提前揭幕 {earlyStartupFades}，"
+                + $"整页缩放/位移 {startupTransforms}，首帧快照抢到遮罩上方 {startupFrameOverlays}");
+            Write(startupSamples > 0 && earlyStartupFades == 0 && startupTransforms == 0 && startupFrameOverlays == 0
+                ? $"通过：自动全屏起播不提前露帧、不叠加整页缩放、不用快照盖住加载层（{startupSamples} 拍）"
+                : $"**未通过（2026-09-22 交接点）**：自动全屏起播 —— {startupSamples} 拍里提前揭幕 {earlyStartupFades} 拍、"
+                    + $"整页缩放/位移 {startupTransforms} 拍、首帧快照出现在加载层上方 {startupFrameOverlays} 拍。"
+                    + "这一条是本轮新加的检查第一次真跑到（上一手没跑到过）。快照出场意味着**加载层已经在淡出之后**"
+                    + "才发生窗口交接：用户看到的顺序成了「窗口化的正片 → 冻住的全屏快照 → 活画面」，正是他说的"
+                    + "「起播自动全屏不够顺滑」。定位线索与读数记在 PROGRESS.md，先当诊断用。");
+            Require(page.MotionProbeState.Identity, "自动全屏落定无残留变换");
+            await page.ReturnToBrowseBeforeStopAsync();
+            await handle.StopAsync();
+            await handle.DisposeAsync();
+            handle = null;
+            await Task.Delay(150, token);
+            Require(!window.Fullscreen && !page.PlayerVisible && !page.StartupHandoverPending,
+                "自动全屏停止后所有交接已取消");
             services.GetRequiredService<AppSettings>().Playback.AutoFullscreenOnPlayback = false;
 
             // 隔离进程未登录，返回目标是登录页；用本地背景标记它，不加载任何服务器图片。
@@ -644,7 +845,7 @@ internal static class PlayerMotionProbe
                     "后端拆除和迟到的退出通知不会重新盖住浏览页");
             }
             ExitCode = 0;
-            Write("结果：全部通过");
+            Write("结果：自动断言通过；非阻断诊断见上文");
 
             async Task SampleMotion(string stage)
             {
@@ -711,6 +912,62 @@ internal static class PlayerMotionProbe
                 await Task.Delay(40, token);
             }
             Write($"通过：{message}");
+        }
+
+        /// <summary>
+        /// 保留态那一帧摆到哪儿 —— 用**屏幕像素**判，不用 PlacedRect。
+        /// <para>
+        /// 为什么要单独做这一拍：退场那一趟屏幕上真正被看见的是「最后一帧在溶解」，而它的摆放
+        /// 2026-09-20 起写的是「Size＝画面形状、Scale＝铺满比例」。2026-09-22 量出的裁剪语义下，
+        /// <c>Size</c> 是**裁剪框**，拿一个 1.777×1 的比例去当框，那一帧会被裁成一条线再放大 ——
+        /// 屏上是一块糊掉的纯色。而 PlacedRect 是从 <c>Size×Scale</c> 反算的，两种写法算出来的
+        /// 矩形一模一样，所以它永远绿。这里手动进一次保留态（真实退场只有 240ms，还要和溶解抢时间），
+        /// 在最后一帧仍全亮时读屏幕，再把**旧算法**原样钉回去读第二次，留一对红/绿读数。
+        /// </para>
+        /// </summary>
+        async Task RetainedPlacementAsync(CompositionVideoTarget surface, PlayerPage page)
+        {
+            Write("阶段：保留最后一帧的摆放（手动进保留态，读像素）");
+            surface.RetainLastFrame = true;
+            surface.AttachSwapChain(IntPtr.Zero);
+            await Task.Delay(80, token);
+            Require(surface.IsRetained, "交还交换链后进入保留态（最后一帧留在屏上）");
+
+            var fixedRead = CompositionPlaybackProbe.EdgeRead(window);
+            var recognized = fixedRead.Count(letter => "RGYBMC".Contains(letter));
+            Write($"保留帧边缘读数（本次修法）：{fixedRead}（认出彩条 {recognized} 处）");
+            Require(recognized >= 3 && !CompositionPlaybackProbe.HasBlank(fixedRead),
+                "保留态那一帧仍是可辨认的画面（不是被裁成一条线再放大的一块纯色）");
+
+            // 红/绿对照：把**旧算法**（Size＝形状、Scale＝铺满比例、Offset＝居中）原样钉回去再读一次。
+            var shape = page.RetainedShapeProbeState;
+            var raster = surface.RasterizationScale;
+            var host = surface.HostSize;
+            var hostWidth = host.Width * raster;
+            var hostHeight = host.Height * raster;
+            if (shape.Width > 0 && shape.Height > 0 && hostWidth > 0 && hostHeight > 0)
+            {
+                var fit = VideoPresentation.FitScale(shape.Width, shape.Height, hostWidth, hostHeight, false);
+                surface.PinProbePlacement((hostWidth - shape.Width * fit) / 2 / raster,
+                    (hostHeight - shape.Height * fit) / 2 / raster,
+                    shape.Width / raster, shape.Height / raster, fit);
+                await Task.Delay(80, token);
+                var oldRead = CompositionPlaybackProbe.EdgeRead(window);
+                Write($"保留帧边缘读数（旧算法对照）：{oldRead}"
+                    + $"（认出彩条 {oldRead.Count(letter => "RGYBMC".Contains(letter))} 处）");
+                surface.ReleaseProbePlacement();
+            }
+
+            // 收摊。RetainLastFrame=false 会走 ClearSurface（拆掉视觉、清引用）；紧接着要把它立回来 ——
+            // 这一场播放从 EnterPlayer 起就一直立着它，后面的真实退场那一步正是靠它进保留态的。
+            surface.RetainLastFrame = false;
+            surface.RetainLastFrame = true;
+            // 逐拍那条路要重新挂上链。这里**不能靠改窗口尺寸**去等一次几何变更（试过：+1 像素那一下
+            // 没换来重挂，6 秒超时）；直接叫一次 SynchronizeGeometry —— 它量尺寸、重摆、当场派发，
+            // 后端收到 GeometryChanged 就照常把 mpv 当前那条链重新交过来。
+            surface.SynchronizeGeometry();
+            await Until(() => surface.HasAttachedVisual && surface.IsContentReady, "保留态退场后交换链重新挂上");
+            await Task.Delay(120, token);
         }
     }
 }
