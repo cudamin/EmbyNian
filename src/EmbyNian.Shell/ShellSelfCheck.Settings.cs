@@ -236,6 +236,19 @@ internal static partial class ShellSelfCheck
         check("主页版面表换得了次序", homeDrag is { Ok: true },
             homeDrag is { } drag ? drag.Detail : "没有建出主页版面表");
 
+        // 字幕语言优先级那张下拉里的表：勾一下真进列表、上下箭头真换得动次序、下拉上那句话真跟着变（见
+        // SettingLanguagesRow.Probe）。和主页那张表一个道理 —— 这台机器上注不进鼠标事件，勾和拖没法自动做
+        // 一遍，就地造一张假表拨一遍是这件事唯一验得到的形式；表在浮层里，屏上那颗下拉按钮点不开（点不了真
+        // 下拉：注不进鼠标事件），所以这一条走的是假表那条路，不碰屏上这一页。
+        var subtitleLanguages = SettingLanguagesRow.Probe();
+        check("字幕语言优先级换得了次序", subtitleLanguages.Ok, subtitleLanguages.Detail);
+
+        // 字幕标题筛选那张表：加一条真进表、换态度（优先/默认/排除）真写盘、按「×」真删掉、重复词不重复加（见
+        // SettingTitleRulesRow.Probe）。同上，这台机器上注不进鼠标事件，点下拉、按按钮没法自动做一遍，假表是唯一验
+        // 得到的形式。
+        var subtitleTitleRules = SettingTitleRulesRow.Probe();
+        check("字幕标题筛选加删改都写对", subtitleTitleRules.Ok, subtitleTitleRules.Detail);
+
         // 视频同步那一行的说明写的是「此刻真正生效的值」，而改得动它的有四处：它自己、启用插值、高帧率回退，
         // 和插值关闭阈值（那一句例外里带着它填的那个数）。
         // 少接一处，屏上一点区别都看不出来 —— 说明还在，只是说的是上一次的事，也就是这一行本来要治的那个
@@ -473,26 +486,11 @@ internal static partial class ShellSelfCheck
         var seek = player.ProbeSeekTrack();
         check("进度条指针下不铺白", seek.Ok, seek.Detail);
 
-        // The one step the rule above cannot vouch for: that 「hide the cursor」 leaves the process. Every
-        // cursor expectation in the reveal probe reads the page's own field back, which is why
-        // 「鼠标指针还是不会自动隐藏」 could be true of a run that passed.
-        var cursor = player.ProbeCursor();
-        check("藏鼠标真的到了系统", cursor.Ok, cursor.Detail);
-
-        // And the same hiding with nothing invented: real seconds, the real ten-hertz ticker, the pointer left
-        // where a hand would leave it, in a window and full screen. Every other cursor check here supplies its
-        // own timestamps, and a rule driven by a clock the probe made up cannot be caught restamping that
-        // clock — which is what 「鼠标指针还是不会自动隐藏」 was, twice over.
-        var alive = player.ProbeCursorAlive();
-        check("鼠标真等两秒就藏", alive.Ok, alive.Detail);
-
-        // 第十一报（2026-09-15）到第二十一报（2026-09-16）追的都是同一件事：藏匿期别的进程把指针搬走
-        // 几十像素，光标不该跟着出来。这一关是自检里少有的能真的把用户那个场景跑一遍的 —— 触发它的
-        // 不是真实输入，而这台机器注不进真实输入恰好不妨碍它（SetCursorPos 只是一个位置，不是一次事件）。
-        // 五条腿两个方向都判：一记 60、隔开的第二记、没有见证的动画、**带见证但只走 60 的幽灵**
-        // （十九、二十报那个签名）全都不许醒；净位移够一百、连着三拍的手必须醒。
-        var warp = player.ProbeCursorWarp();
-        check("藏匿期净位移走不够一百像素不醒", warp.Ok, warp.Detail);
+        // 光标隐藏那三关（藏鼠标真的到了系统 / 鼠标真等两秒就藏 / 藏匿期净位移不醒）不再登记进自检。
+        // 它们要求真鼠标全程静止且输入桌面在我们手上，而用户就在这台机器上用同一只鼠标 —— 一动，这三关
+        // 就翻红，报的是环境噪声不是回归（长期抽风记录见 PROGRESS.md，用户 2026-09-22 拍板停跑）。三个探针
+        // （ProbeCursor / ProbeCursorAlive / ProbeCursorWarp，PlayerPage.SelfCheck.Cursor.cs）保留：里面成篇的
+        // 注释解释的是生产光标代码「为什么这么写」，且隔离探针 --probe-cursor 仍在用其中的 ProbeCursorModifierPreservation。
 
         // 全屏时最下方会有进度条: the thin bottom line is the one piece of chrome the reveal rule cannot state
         // on its own, because its rule is the inverse — up when the bar is down — and because half of it is

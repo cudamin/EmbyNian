@@ -51,6 +51,12 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
     /// <summary>主页版面那张可拖拽、带勾选的表，见 <see cref="SettingHomeLayoutRow"/>。</summary>
     public DataTemplate? HomeLayout { get; set; }
 
+    /// <summary>字幕语言优先级那颗下拉，点开是一张可拖拽、带勾选的语言表，见 <see cref="SettingLanguagesRow"/>。</summary>
+    public DataTemplate? Languages { get; set; }
+
+    /// <summary>字幕标题筛选那张表：一行一个关键词加优先/默认/排除，可自定义添加，见 <see cref="SettingTitleRulesRow"/>。</summary>
+    public DataTemplate? TitleRules { get; set; }
+
     /// <summary>MoviePilot 接入卡：一个开关、两个输入框、一颗测试按钮，见 <see cref="SettingMoviePilotRow"/>。</summary>
     public DataTemplate? MoviePilot { get; set; }
 
@@ -60,6 +66,8 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
         // before the plain toggle, because a group of toggles is not one toggle.
         SettingThemeRow => Theme,
         SettingHomeLayoutRow => HomeLayout,
+        SettingLanguagesRow => Languages,
+        SettingTitleRulesRow => TitleRules,
         SettingMoviePilotRow => MoviePilot,
         SettingFactRow => Fact,
         SettingShortcutRow => Shortcut,

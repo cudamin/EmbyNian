@@ -239,23 +239,21 @@
   </ItemGroup>
 
   <!--
-    The bundled 字幕字体, from assets/fonts in this repository — 「这个字体打包进程序里」（2026-09-06）.
-    mpv is pointed at this folder by sub-fonts-dir at every launch (ShellServices → PlaybackPlanner →
-    MpvBaseline), so these render without being installed into Windows. The folder is also part of what
-    FontLibrary scans, so the picker offers them with a real preview.
+    The bundled-subtitle-font mechanism: mpv is pointed at assets/fonts (copied to fonts\ next to the exe)
+    by sub-fonts-dir at every launch (ShellServices → PlaybackPlanner → MpvBaseline), so any font file
+    dropped in here renders without being installed into Windows, and FontLibrary scans the same folder so
+    the picker offers it with a real preview.
 
-    **No subtitle font is bundled for the default any more**（「不要放字体进去，默认就用雅黑」，2026-09-21）.
-    v17 briefly bundled NotoSansCJKsc-VF.ttf and made it the default; that variable font's default instance
-    was Thin (weight 100), which is why subtitles rendered far thinner than the reference player. v18 reverts
-    both: the default is Microsoft YaHei (every Windows install has it, normal weight, nothing to ship) and
-    the three 字重 steps (细/常规/粗) reach YaHei's Light/Regular/Bold faces — all system fonts. See
-    Core/Infrastructure/FontFamilies.ResolveWeighted.
-
-    方正中等线简体 stays shipped and selectable — it just no longer answers for 「never picked」.
+    **Nothing is bundled right now.** The default 字幕字体 is Microsoft YaHei UI Semibold (v19,
+    2026-09-22) — a Windows system font, so nothing has to ship for it. The history of what used to sit
+    here: NotoSansCJKsc-VF.ttf for one day (v17, a variable font whose Thin default instance made subtitles
+    far too thin), and 方正中等线简体 before and after that until v19 dropped it（「默认设雅黑UI半粗 +
+    删掉方正 ttf」）. The glob below stays so a future font dropped into assets/fonts is picked up the same
+    way; it simply matches no files today.
 
     Kept next to the shaders and vulkan-1.dll rather than as ms-appx resources: playback runs through
     libmpv on a plain path, not through a package URI. (The user-interface fonts are a separate
-    question and read this folder through ms-appx — see Theme/Styles.xaml.)
+    question and read through ms-appx — see Theme/Styles.xaml.)
   -->
   <ItemGroup>
     <None Include="..\..\assets\fonts\*.ttf;..\..\assets\fonts\*.otf;..\..\assets\fonts\*.ttc">

@@ -13,31 +13,31 @@ namespace EmbyNian.Infrastructure;
 public static class FontFamilies
 {
     /// <summary>
-    /// Fallback family: Microsoft YaHei — 「不要放字体进去，默认就用雅黑」 (2026-09-21).
+    /// Fallback family: Microsoft YaHei UI Semibold — the default since v19 (2026-09-22).
     /// <para>
     /// It answers for an empty setting because <b>every Windows install has it</b>, so nothing has to be
-    /// shipped and the family always resolves. That is the opposite argument to the one that briefly ran
-    /// v17: for one day the default was a bundled Noto Sans CJK SC <em>variable</em> font, and its default
-    /// instance was Thin (weight 100) — which is why subtitles rendered far thinner than the reference
-    /// player until this reverted it. YaHei is a normal weight and its Light / Bold faces
-    /// (<c>msyhl.ttc</c> / <c>msyhbd.ttc</c>) are what <see cref="ResolveWeighted"/> reaches for the 细 / 粗
-    /// steps — again, no bundling.
+    /// shipped and the family always resolves. It is also the face people were already seeing: setting the
+    /// bundled 方正中等线简体 at the 细 step asks mpv for a nonexistent 「方正中等线简体 Light」, and
+    /// libass's own fallback resolved the CJK glyphs to Microsoft YaHei UI Semibold (measured 2026-09-22
+    /// against the shipped libmpv: <c>fontselect: (方正中等线简体 Light) -> ArialMT</c> for Latin, then
+    /// <c>Glyph 0x6D4B not found ... -> MicrosoftYaHeiUISemibold</c> for the Chinese). That look was
+    /// preferred, so it is now reached by name rather than by accident.
     /// </para>
     /// <para>
-    /// 方正中等线简体 stays bundled and selectable; it just no longer answers for 「never picked」. A
-    /// family mpv cannot find anywhere degrades to its own fallback, which on CJK text is how tofu
-    /// happens — the reason this has to be a family every machine actually has.
+    /// No subtitle font is bundled any more (v19 dropped 方正中等线简体). A family mpv cannot find anywhere
+    /// degrades to libass's own fallback, which on CJK text is how tofu happens — the reason this has to be
+    /// a family every machine actually has, and YaHei UI is.
     /// </para>
     /// </summary>
-    public const string Default = "Microsoft YaHei";
+    public const string Default = "Microsoft YaHei UI Semibold";
 
     private static readonly Dictionary<string, string> ByFileName = new(StringComparer.OrdinalIgnoreCase)
     {
-        // 方正中等线简体 is the one font this client still bundles, so a stored path to it maps back to
-        // the family. Everything else here is a courtesy for a hand-typed path or a settings file from an
-        // older build: the file may sit in C:\Windows\Fonts, and mapping its name to the family it stands
-        // for is better than passing a path mpv would ignore. Noto Sans CJK is no longer bundled (v18,
-        // 「不要放字体进去」) but its names stay mapped for exactly that reason.
+        // None of these are bundled any more (v19 dropped 方正中等线简体, v18 dropped Noto Sans CJK).
+        // The whole table is a courtesy for a hand-typed path or a settings file from an older build: the
+        // file may sit in C:\Windows\Fonts, and mapping its name to the family it stands for is better than
+        // passing a path mpv would ignore. The two unbundled families' names stay mapped for exactly that
+        // reason — a leftover stored path still resolves to a real installed family instead of tofu.
         ["方正中等线简体.ttf"] = "方正中等线简体",
         ["fzzhongdengxian-z07s.ttf"] = "方正中等线简体",
         ["notosanscjksc-vf.ttf"] = "Noto Sans CJK SC",
@@ -143,43 +143,5 @@ public static class FontFamilies
         }
 
         return value;
-    }
-
-    /// <summary>
-    /// The <c>sub-font</c> family string and the <c>sub-bold</c> flag for a chosen family at a chosen
-    /// 字重. mpv has no numeric weight option (measured 2026-09-06: <c>sub-font-weight</c> does not exist),
-    /// so a weight is realised here, at the level libass can act on:
-    /// <list type="bullet">
-    /// <item>细 (≤ <see cref="Configuration.PlaybackSettings.LightSubtitleWeight"/>): the family's Light sibling
-    /// (「Microsoft YaHei」 → 「Microsoft YaHei Light」). A family without a Light face falls back to itself,
-    /// so 细 is a no-op there rather than tofu — libass matches by name and keeps the base when the light
-    /// name resolves nowhere.</item>
-    /// <item>常规: the family as-is, no bold.</item>
-    /// <item>粗 (≥ <see cref="Configuration.PlaybackSettings.BoldSubtitleWeight"/>): the family plus
-    /// <c>sub-bold=yes</c>, which uses a real bold face when the family has one (YaHei does) and libass's
-    /// synthetic emboldening otherwise — the exact behaviour the old 加粗 toggle had.</item>
-    /// </list>
-    /// Measured 2026-09-21 against the shipped libmpv: Microsoft YaHei Light / Regular / Bold render as a
-    /// clean light→heavy ladder, and the reason this is a family-level trick rather than an option is that
-    /// the variable-font route (a single VF driven by name) came out non-monotonic on this build.
-    /// </summary>
-    public static (string Font, bool Bold) ResolveWeighted(string? configured, int weight)
-    {
-        var family = Resolve(configured);
-        var w = Configuration.PlaybackSettings.ClampWeight(weight);
-
-        if (w >= Configuration.PlaybackSettings.BoldSubtitleWeight) return (family, true);
-
-        if (w <= Configuration.PlaybackSettings.LightSubtitleWeight)
-        {
-            // Do not stack 「 Light」 onto a family that already names it, or a picked
-            // 「Microsoft YaHei Light」 at 细 would ask mpv for 「... Light Light」.
-            var light = family.EndsWith(" Light", StringComparison.OrdinalIgnoreCase)
-                ? family
-                : family + " Light";
-            return (light, false);
-        }
-
-        return (family, false);
     }
 }

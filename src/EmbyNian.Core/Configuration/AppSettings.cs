@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 18;
+    public const int CurrentSchemaVersion = 22;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -246,6 +246,27 @@ public sealed class PlaybackSettings
     public List<string> AudioLanguages { get; set; } = [];
 
     /// <summary>
+    /// 音轨格式筛选规则（「给音轨新增语言优先级和格式优先级」，2026-09-22）。语言这一关选出「哪几条是这个语言」之后，
+    /// 格式这一关在那批轨里按编码／声道的关键词再挑一遍：优先＝含这个词的排前头，候补＝往后排，默认＝不生效。和字幕
+    /// 标题筛选、视频文件名筛选同一套 <see cref="KeywordRule"/>／<see cref="Playback.KeywordFilter"/>，只是打分的文本是
+    /// 轨的 Codec／Profile／ChannelLayout／标题拼起来的（TrueHD、DTS-HD、Atmos、7.1、5.1 这些词就落在那里）。
+    /// <para>
+    /// 出厂给几条常见格式词、全设成中立（不生效）—— 让用户在设置页看得见能改哪些词，装机行为不变（同一语言里仍是默认
+    /// 轨优先）。格式只在<em>同一语言内部</em>做取舍：语言优先级仍是第一位的，日语 TrueHD 不会因为英语是 Atmos 就输给它。
+    /// </para>
+    /// </summary>
+    public List<KeywordRule> AudioFormatRules { get; set; } =
+    [
+        new("Atmos", TitlePreference.Neutral),
+        new("TrueHD", TitlePreference.Neutral),
+        new("DTS-HD", TitlePreference.Neutral),
+        new("DTS", TitlePreference.Neutral),
+        new("FLAC", TitlePreference.Neutral),
+        new("7.1", TitlePreference.Neutral),
+        new("5.1", TitlePreference.Neutral)
+    ];
+
+    /// <summary>
     /// Subtitle languages in priority order: the first one the file actually has wins. Stored as
     /// names (简体中文) rather than codes so one entry can cover the several codes and title
     /// spellings a 简体 track turns up with.
@@ -256,6 +277,32 @@ public sealed class PlaybackSettings
     /// </para>
     /// </summary>
     public List<string> SubtitleLanguages { get; set; } = ["简体中文", "中文"];
+
+    /// <summary>
+    /// 标题筛选规则（「先按语言选中文，再按标题决定不要双语/特效」，2026-09-22）。语言这一关选出「哪几条是中文」
+    /// 之后，标题这一关在那批轨里再挑一遍：每条规则一个关键词加一种态度（优先/默认/排除），见
+    /// <see cref="Playback.SubtitleTitleFilter"/>。
+    /// <para>
+    /// 出厂给「双语」「特效」两个词、都设成默认（中立、不生效）—— 用户按需自己改成排除或优先，装机行为不变。
+    /// 语言从此不看标题（<see cref="TrackLanguagePriority.Matches"/> 的 <c>includeTitle</c>），两件事分家。
+    /// </para>
+    /// </summary>
+    public List<KeywordRule> SubtitleTitleRules { get; set; } =
+    [
+        new("双语", TitlePreference.Neutral),
+        new("特效", TitlePreference.Neutral)
+    ];
+
+    /// <summary>
+    /// 视频文件名筛选规则（「参考标题筛选，在播放行为里新增视频文件名筛选」，2026-09-22）。一个条目有多版本（多个
+    /// 文件）时，默认播哪一个由这组规则的关键词按文件名打分决定：优先＝含这个词的版本优先，候补＝往后排，默认＝
+    /// 不生效。和字幕标题筛选同一套 <see cref="KeywordRule"/>／<see cref="Playback.KeywordFilter"/>。
+    /// <para>
+    /// 出厂为空 —— 文件名里的发布组标记（REMUX、4K、枪版…）因人而异，不替用户假设，装机行为不变（默认仍是服务器
+    /// 返回的第一个版本）。单版本条目一律不受影响。
+    /// </para>
+    /// </summary>
+    public List<KeywordRule> VideoFileRules { get; set; } = [];
 
     /// <summary>When subtitles come on by themselves.</summary>
     public SubtitleMode SubtitleMode { get; set; } = SubtitleMode.Always;
@@ -273,18 +320,20 @@ public sealed class PlaybackSettings
     /// It only ever looked right because the user's mpv.conf named a real family of its own. See
     /// <see cref="Infrastructure.FontFamilies.Resolve"/>.
     /// <para>
-    /// <b>Microsoft YaHei since v18</b>（「不要放字体进去，默认就用雅黑」, 2026-09-21）— every Windows
-    /// install has it, it is a normal weight (not the thin default that v17's bundled Noto variable font
-    /// rendered), and nothing has to be shipped for it. v17 briefly moved this to a bundled Noto Sans CJK
-    /// SC variable font whose default instance was Thin — that is what made subtitles look far thinner
-    /// than the reference player — and v18 reverts both the default and the bundling. The seat's history:
-    /// Microsoft YaHei up to v11, 方正中等线简体 from v12, back to Microsoft YaHei at v14, a one-day Noto
-    /// at v17, and Microsoft YaHei again from v18. The weight it renders at is
-    /// <see cref="SubtitleFontWeight"/>, not baked into the family. See
+    /// <b>Microsoft YaHei UI Semibold since v19</b>（2026-09-22）— a Windows system font, so nothing has
+    /// to be shipped for it. It is the face libass was already substituting for people who set the bundled
+    /// 方正中等线简体 at the 细 step: 细 asks mpv for a nonexistent 「方正中等线简体 Light」, and libass's
+    /// own fallback resolved the CJK glyphs to Microsoft YaHei UI Semibold (measured 2026-09-22). That
+    /// look was preferred, so it is now the default in its own right — reached by name, not by accident.
+    /// v19 also drops the bundled 方正中等线简体: nothing is shipped for the default any more. The seat's
+    /// history: Microsoft YaHei up to v11, 方正中等线简体 from v12, back to Microsoft YaHei at v14, a
+    /// one-day bundled Noto Sans CJK SC (whose Thin default instance made subtitles look far too thin) at
+    /// v17, Microsoft YaHei again from v18, and Microsoft YaHei UI Semibold from v19. Whether it renders
+    /// bold is <see cref="SubtitleBold"/>, not baked into the family. See
     /// <see cref="Infrastructure.FontFamilies.Default"/>.
     /// </para>
     /// </summary>
-    public string SubtitleFontFamily { get; set; } = "Microsoft YaHei";
+    public string SubtitleFontFamily { get; set; } = "Microsoft YaHei UI Semibold";
 
     /// <summary>
     /// 外观应用范围, mpv's <c>sub-ass-override</c>. Empty is mpv's own <c>scale</c>, under which an
@@ -323,15 +372,19 @@ public sealed class PlaybackSettings
     public int SubtitleScalePercent { get; set; } = 100;
 
     /// <summary>
-    /// 字重, one of <see cref="SubtitleWeights"/> (细 300 / 常规 400 / 粗 700). Replaces the old
-    /// <c>字幕加粗</c> on/off toggle from v18（「默认雅黑 + 仍做三档字重」, 2026-09-21）: mpv has no
-    /// numeric weight option, so a weight is realised at the font-selection level — see
-    /// <see cref="Infrastructure.FontFamilies.ResolveWeighted"/>, which turns (family, weight) into the
-    /// <c>sub-font</c> string and the <c>sub-bold</c> flag. For Microsoft YaHei — the default — the three
-    /// steps land on its Light / Regular / Bold faces, all system fonts. 常规 is the shipped default;
-    /// <see cref="SettingsMigration"/>'s v18 step maps a stored 加粗 to 粗 and everything else to 常规.
+    /// 字幕加粗, mpv's <c>sub-bold</c>. On (<c>sub-bold=yes</c>) uses the family's real bold face when it
+    /// has one and libass's synthetic emboldening otherwise; off leaves the family at its own weight.
+    /// <para>
+    /// A plain on/off since v20（2026-09-22, 「删掉字重选项，改为 sub-bold」）. v18–v19 briefly made this a
+    /// three-step 字重 (细/常规/粗) realised by appending 「 Light」 to the family name or flipping
+    /// <c>sub-bold</c>, but the 细 step only worked on families with a real Light face — the v19 default,
+    /// Microsoft YaHei UI Semibold, has none, so 细 collapsed to 常规 there. mpv has no numeric weight
+    /// option anyway (measured 2026-09-06: <c>sub-font-weight</c> does not exist), so this is back to the
+    /// one thing libass can actually toggle. <see cref="SettingsMigration"/>'s v20 step maps a stored 字重
+    /// of 粗 to on and everything else to off.
+    /// </para>
     /// </summary>
-    public int SubtitleFontWeight { get; set; } = RegularSubtitleWeight;
+    public bool SubtitleBold { get; set; }
 
     /// <summary>文字颜色 as <c>#RRGGBB</c>; empty leaves mpv's default alone.</summary>
     public string SubtitleColor { get; set; } = "#FFFFFF";
@@ -490,31 +543,6 @@ public sealed class PlaybackSettings
     /// </summary>
     public static int ClampFontSize(int value) =>
         value <= 0 ? 0 : Math.Clamp(value, MinimumSubtitleFontSize, MaximumSubtitleFontSize);
-
-    /// <summary>细 —— 雅黑之类带细体的字体走 Light 那一面；没有细体的字体退回常规。</summary>
-    public const int LightSubtitleWeight = 300;
-
-    /// <summary>常规，装机默认。</summary>
-    public const int RegularSubtitleWeight = 400;
-
-    /// <summary>粗 —— <c>sub-bold=yes</c>，字体有真粗体就用真的，没有由 libass 合成。</summary>
-    public const int BoldSubtitleWeight = 700;
-
-    /// <summary>
-    /// 字重 只此三档：mpv 没有连续的字重可调，硬做一个滑块底下没东西可拉（2026-09-06 探过 option 表，
-    /// <c>sub-font-weight</c> 根本不存在）。三档分别落到 <see cref="Infrastructure.FontFamilies.ResolveWeighted"/>
-    /// 的三条路上。
-    /// </summary>
-    public static readonly IReadOnlyList<int> SubtitleWeights =
-        [LightSubtitleWeight, RegularSubtitleWeight, BoldSubtitleWeight];
-
-    /// <summary>把任意存值（含旧文件、手改文件）吸附到最近的一档，越界一律回常规。</summary>
-    public static int ClampWeight(int value) => value switch
-    {
-        <= 350 and >= 250 => LightSubtitleWeight,
-        >= 550 => BoldSubtitleWeight,
-        _ => RegularSubtitleWeight,
-    };
 
     /// <summary>字幕缩放 range, in percent. Wide on purpose — a 4K film on a small window and a 1080p
     /// one across a projector want very different numbers out of the same 字号.</summary>

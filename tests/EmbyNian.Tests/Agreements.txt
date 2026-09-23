@@ -36,7 +36,7 @@ font-size  Views/LibraryPage.xaml  8
 font-size  Views/PlayerPage.xaml  7
 font-size  Views/PosterCard.xaml  9
 font-size  Views/ServersPage.xaml  7
-font-size  Views/SettingsPage.xaml  7
+font-size  Views/SettingsPage.xaml  10
 font-size  Views/ShelfHead.xaml  1
 font-size  Views/ShelfStrip.xaml  2
 font-size  Views/ShellPage.xaml  3
@@ -319,8 +319,6 @@ handle  Views/PlayerPage.xaml  SpeedMenu
 handle  Views/PlayerPage.xaml  Stage
 handle  Views/PlayerPage.xaml  StandaloneHint
 handle  Views/PlayerPage.xaml  StatsButton
-handle  Views/PlayerPage.xaml  StatsPanel
-handle  Views/PlayerPage.xaml  StatsRows
 handle  Views/PlayerPage.xaml  SubtitleButton
 handle  Views/PlayerPage.xaml  SubtitleMenu
 handle  Views/PlayerPage.xaml  SubtitleText

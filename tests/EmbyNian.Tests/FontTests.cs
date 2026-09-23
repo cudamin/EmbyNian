@@ -30,58 +30,7 @@ internal static class FontTests
         RegisterParser();
         RegisterCatalogue();
         RegisterSearch();
-        RegisterWeight();
         RegisterMachine();
-    }
-
-    private static void RegisterWeight()
-    {
-        // ResolveWeighted 是「字重」那三档唯一的落点：mpv 没有字重选项，所以字重变成「发哪个族名 +
-        // 要不要 sub-bold」。这条钉住三档各自发什么，尤其是 细 靠给族名接一个「 Light」——雅黑上恰好命中
-        // Microsoft YaHei Light，别的字体上 libass 找不到就退回本体（no-op，不是豆腐块）。
-        Test("字重：常规发本体、不加粗", () =>
-        {
-            var (font, bold) = FontFamilies.ResolveWeighted("Microsoft YaHei", PlaybackSettings.RegularSubtitleWeight);
-            Assert.Equal("Microsoft YaHei", font);
-            Assert.False(bold);
-        });
-
-        Test("字重：粗发本体 + sub-bold", () =>
-        {
-            var (font, bold) = FontFamilies.ResolveWeighted("Microsoft YaHei", PlaybackSettings.BoldSubtitleWeight);
-            Assert.Equal("Microsoft YaHei", font, "粗不是换族名，是让本体开 sub-bold（有真粗体就用真的）");
-            Assert.True(bold);
-        });
-
-        Test("字重：细给族名接一个「 Light」", () =>
-        {
-            var (font, bold) = FontFamilies.ResolveWeighted("Microsoft YaHei", PlaybackSettings.LightSubtitleWeight);
-            Assert.Equal("Microsoft YaHei Light", font, "雅黑上恰好命中系统自带的 Light 那一支");
-            Assert.False(bold);
-        });
-
-        Test("字重：细不会把「 Light」叠两遍", () =>
-        {
-            var (font, _) = FontFamilies.ResolveWeighted("Microsoft YaHei Light", PlaybackSettings.LightSubtitleWeight);
-            Assert.Equal("Microsoft YaHei Light", font, "本来就带 Light 的族名，细这一档不再接一个 Light");
-        });
-
-        Test("字重：空族名先兜底成默认，再按字重发", () =>
-        {
-            var (light, _) = FontFamilies.ResolveWeighted("", PlaybackSettings.LightSubtitleWeight);
-            Assert.Equal(FontFamilies.Default + " Light", light, "空值走兜底族名（雅黑），细再接 Light");
-
-            var (bold, isBold) = FontFamilies.ResolveWeighted(null, PlaybackSettings.BoldSubtitleWeight);
-            Assert.Equal(FontFamilies.Default, bold);
-            Assert.True(isBold);
-        });
-
-        Test("字重：越界的字重先吸附到最近一档", () =>
-        {
-            var (font, bold) = FontFamilies.ResolveWeighted("SimHei", 999);
-            Assert.Equal("SimHei", font, "999 吸附到粗：发本体 + sub-bold");
-            Assert.True(bold);
-        });
     }
 
     private static void RegisterParser()
@@ -264,36 +213,33 @@ internal static class FontTests
                 "每台 Windows 都有 Arial");
         });
 
-        // The one subtitle font still bundled (assets/fonts, handed to mpv as sub-fonts-dir) is
-        // 方正中等线简体 — it held the 装机默认 in v12 and stays selectable. **The default is no longer
-        // bundled**: v18 (「不要放字体进去，默认就用雅黑」, 2026-09-21) put Microsoft YaHei — a system
-        // font — back as the default, and dropped the thin Noto VF v17 had shipped. So the thing to assert
-        // is just that the shipped 方正 file parses to a family the catalogue can name under both its
-        // spellings; the default's rendering rides on the system font, not on this folder.
+        // Nothing is bundled since v19 (2026-09-22): the default 字幕字体 is Microsoft YaHei UI Semibold,
+        // a Windows system font, so the default's rendering rides on the system, not on assets/fonts. This
+        // asserts the folder carries no font file — both because that is the current design and because it
+        // guards the licensing line: Microsoft YaHei (the family the default names) is proprietary and must
+        // not be dropped into assets/fonts to 「bundle」 it, and neither should any other commercial font
+        // land here without a deliberate decision.
         var fontsDirectory = FindRepositoryRoot() is { } repo
             ? Path.Combine(repo, "assets", "fonts")
             : null;
-        if (fontsDirectory is null || !Directory.Exists(fontsDirectory))
+        if (fontsDirectory is null)
         {
-            Skip("字体表：程序自带的字幕字体解析出的族名可以被选中", "找不到仓库里的 assets/fonts");
+            Skip("字体表：assets/fonts 不再打包任何字幕字体", "找不到仓库根目录");
             return;
         }
 
-        Test("字体表：程序自带的字幕字体解析出的族名可以被选中", () =>
+        Test("字体表：assets/fonts 不再打包任何字幕字体", () =>
         {
-            var catalogue = FontCatalogue.Scan([fontsDirectory]);
+            var fontFiles = Directory.Exists(fontsDirectory)
+                ? Directory.EnumerateFiles(fontsDirectory)
+                    .Where(file => new[] { ".ttf", ".otf", ".ttc", ".otc" }
+                        .Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                    .ToList()
+                : [];
 
-            Assert.True(catalogue.FileCount >= 1,
-                $"自带目录里至少应有方正一个文件，只读出 {catalogue.FileCount} 个");
-
-            foreach (var entry in catalogue.Families)
-            {
-                Assert.False(string.IsNullOrWhiteSpace(entry.Name), "自带字体必须报出一个族名");
-            }
-
-            // 方正中等线简体：中文名与英文名是同一款文件的两个名字，存哪一边都要挑得到。
-            Assert.True(catalogue.Families.Any(entry => entry.AnswersTo("方正中等线简体")),
-                "自带目录里的方正没被认出来，存中文名的那份设置就挑不回这一行");
+            Assert.True(fontFiles.Count == 0,
+                $"v19 起不打包字幕字体（默认改用系统自带的微软雅黑 UI 半粗），别把商业字体塞进公开仓库；"
+                    + $"assets/fonts 里却有：{string.Join("、", fontFiles.Select(Path.GetFileName))}");
         });
     }
 

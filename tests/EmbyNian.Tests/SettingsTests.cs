@@ -440,8 +440,8 @@ internal static class SettingsTests
             Assert.Equal("#000000", settings.Playback.SubtitleBorderColor);
             Assert.Equal("0.5", settings.Playback.SubtitleShadowOffset);
             Assert.Equal(50, settings.Playback.SubtitleFontSize);
-            Assert.Equal(PlaybackSettings.RegularSubtitleWeight, settings.Playback.SubtitleFontWeight,
-                "v18 把加粗折进三档字重：v13 之前的文件里加粗不是一个选择，一律落到常规");
+            Assert.False(settings.Playback.SubtitleBold,
+                "v13 之前的文件里加粗不是一个选择，一律落到不加粗（v20 是 bool）");
             Assert.Equal("#000000", settings.Playback.SubtitleBackColor, "文件没存过底板颜色，v13 带上新的出厂黑");
             Assert.Equal("SimHei", settings.Playback.SubtitleFontFamily, "旧的字体文件路径要换成 mpv 认的字体族名");
         });
@@ -481,8 +481,8 @@ internal static class SettingsTests
             Assert.Equal("#FFFFFF", settings.Playback.SubtitleBorderColor);
             Assert.Equal("0", settings.Playback.SubtitleShadowOffset);
             Assert.Equal(36, settings.Playback.SubtitleFontSize);
-            Assert.Equal(PlaybackSettings.RegularSubtitleWeight, settings.Playback.SubtitleFontWeight,
-                "v13 之前加粗与否都不是选择，v18 一律落到常规");
+            Assert.False(settings.Playback.SubtitleBold,
+                "v13 之前加粗与否都不是选择，一律落到不加粗");
         });
 
         // 「色彩范围默认使用 PC(0-255)」。v4 之前留空的意思是「跟随片源标记」，绝大多数片源标的是 TV 范围，
@@ -967,27 +967,26 @@ internal static class SettingsTests
             Assert.Equal("", carried.Playback.SubtitleBackStyle);
         });
 
-        Test("迁移：默认字体最终落在 Microsoft YaHei（v14 定、v17 岔到 Noto、v18 又拉回来）", () =>
+        Test("迁移：默认字体最终落在微软雅黑 UI 半粗（v14 雅黑、v17 Noto、v18 回雅黑、v19 又改半粗）", () =>
         {
-            // 「默认字体改为Microsoft YaHei」（v14, 2026-09-06）→「改用 Noto Sans CJK SC，内置到程序里」
-            // （v17, 2026-09-21）→「不要放字体进去，默认就用雅黑」（v18, 同日推翻 v17）。这些断言读的是
-            // 整条链的终点：存着任何一代旧出厂默认（方正 / 雅黑 / Noto / 空）都算「没挑过」，一路跟到 v18
-            // 的雅黑；自己挑的字体（思源黑体）一步都不动。
+            // 一路的出厂默认：v14 雅黑 →v17 Noto →v18 雅黑 →v19「默认设雅黑UI半粗 + 删掉方正 ttf」
+            // （2026-09-22）。这些断言读的是整条链的终点：存着任何一代旧出厂默认（方正 / 雅黑 / Noto / 空）
+            // 都算「没挑过」，一路跟到 v19 的雅黑 UI 半粗；自己挑的字体（思源黑体）一步都不动。
             var v12default = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"方正中等线简体"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", v12default.Playback.SubtitleFontFamily);
+            Assert.Equal("Microsoft YaHei UI Semibold", v12default.Playback.SubtitleFontFamily);
 
             var alias = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"FZZhongDengXian-Z07S"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", alias.Playback.SubtitleFontFamily, "英文族名是同一家族，一样跟到新默认");
+            Assert.Equal("Microsoft YaHei UI Semibold", alias.Playback.SubtitleFontFamily, "英文族名是同一家族，一样跟到新默认");
 
             var v11 = SettingsMigration.FromJson(
                 """{"SchemaVersion":11,"Playback":{"SubtitleFontFamily":"Microsoft YaHei"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", v11.Playback.SubtitleFontFamily);
+            Assert.Equal("Microsoft YaHei UI Semibold", v11.Playback.SubtitleFontFamily);
 
             var macish = SettingsMigration.FromJson(
                 """{"SchemaVersion":11,"Playback":{"SubtitleFontFamily":".Heiti J"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", macish.Playback.SubtitleFontFamily);
+            Assert.Equal("Microsoft YaHei UI Semibold", macish.Playback.SubtitleFontFamily);
 
             var picked = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":"思源黑体 CN"}}""", Protector);
@@ -995,63 +994,70 @@ internal static class SettingsTests
 
             var empty = SettingsMigration.FromJson(
                 """{"SchemaVersion":13,"Playback":{"SubtitleFontFamily":""}}""", Protector);
-            Assert.Equal("Microsoft YaHei", empty.Playback.SubtitleFontFamily, "空值走兜底族名，兜底族名就是新默认");
+            Assert.Equal("Microsoft YaHei UI Semibold", empty.Playback.SubtitleFontFamily, "空值走兜底族名，兜底族名就是新默认");
         });
 
-        Test("迁移：v18 默认换回雅黑、不再打包 Noto，加粗折进三档字重", () =>
+        Test("迁移：v19 默认改微软雅黑 UI 半粗、方正带走；v20 字重退回加粗开关", () =>
         {
-            // 「不要放字体进去，默认就用雅黑」+「默认雅黑 + 仍做三档字重」（2026-09-21）。v17 那一天把默认
-            // 挪到内置的 Noto 可变字体，它出厂那一档是 Thin（最细）—— 字幕过细的根因。v18 一并推翻：默认
-            // 回到系统自带的雅黑，Noto 不再打包。存着 Noto（哪怕是那一天特意挑的）也带回雅黑：文件已经不
-            // 随程序走，留着只会画成豆腐块。存着雅黑本身、方正、或别的字体是真选择，不动。
+            // v18「不要放字体进去，默认就用雅黑」；v19「默认设雅黑UI半粗 + 删掉方正 ttf」（2026-09-22）。
+            // 这些跑到当前版本（19），所以终点是雅黑 UI 半粗。v17 的 Noto、旧出厂雅黑、空值都算「没挑过」，
+            // 跟到新默认。方正在 v19 之前是「自带可选、真选择不动」，v19 把它从自带目录删了 —— 于是和 v18
+            // 处理 Noto 同一条理：不再随程序走的字体留着只会画成 libass 的兜底，索性带到新默认。别的字体
+            // （思源黑体之类真选择）不动。
             var fromNoto = SettingsMigration.FromJson(
                 """{"SchemaVersion":17,"Playback":{"SubtitleFontFamily":"Noto Sans CJK SC"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", fromNoto.Playback.SubtitleFontFamily, "v17 的 Noto（已不打包）带回雅黑");
+            Assert.Equal("Microsoft YaHei UI Semibold", fromNoto.Playback.SubtitleFontFamily, "v17 的 Noto（已不打包）跟到新默认");
 
             var empty = SettingsMigration.FromJson(
                 """{"SchemaVersion":17,"Playback":{"SubtitleFontFamily":""}}""", Protector);
-            Assert.Equal("Microsoft YaHei", empty.Playback.SubtitleFontFamily, "空值走兜底族名");
+            Assert.Equal("Microsoft YaHei UI Semibold", empty.Playback.SubtitleFontFamily, "空值走兜底族名");
 
             var deliberateYahei = SettingsMigration.FromJson(
                 """{"SchemaVersion":17,"Playback":{"SubtitleFontFamily":"Microsoft YaHei"}}""", Protector);
-            Assert.Equal("Microsoft YaHei", deliberateYahei.Playback.SubtitleFontFamily);
+            Assert.Equal("Microsoft YaHei UI Semibold", deliberateYahei.Playback.SubtitleFontFamily, "旧出厂雅黑算没挑过，跟到新默认");
 
             var deliberateFangzheng = SettingsMigration.FromJson(
                 """{"SchemaVersion":17,"Playback":{"SubtitleFontFamily":"方正中等线简体"}}""", Protector);
-            Assert.Equal("方正中等线简体", deliberateFangzheng.Playback.SubtitleFontFamily, "自带方正照样可选，不动");
+            Assert.Equal("Microsoft YaHei UI Semibold", deliberateFangzheng.Playback.SubtitleFontFamily,
+                "方正 v19 起不再打包，和 v18 的 Noto 同理带到新默认");
 
-            // 加粗（一个 bool）折进三档字重。只有 v13+ 存下的「加粗=开」是一个真决定（v13 把旧出厂的开
-            // 强制关，此后的开才算数）→ 落到粗；其余、含 v13 之前，一律常规。
+            // 加粗（一个 bool）。只有 v13+ 存下的「加粗=开」是真决定（v13 把旧出厂的开强制关，此后的开才
+            // 算数）→ 留开；其余、含 v13 之前，一律关。v18 那一步定，v20 之后仍是这个 bool。
             var reallyBold = SettingsMigration.FromJson(
                 """{"SchemaVersion":16,"Playback":{"SubtitleBold":true}}""", Protector);
-            Assert.Equal(PlaybackSettings.BoldSubtitleWeight, reallyBold.Playback.SubtitleFontWeight,
-                "v13+ 存下的加粗是真决定，落到粗");
+            Assert.True(reallyBold.Playback.SubtitleBold, "v13+ 存下的加粗是真决定，留开");
 
             var notBold = SettingsMigration.FromJson(
                 """{"SchemaVersion":16,"Playback":{"SubtitleBold":false}}""", Protector);
-            Assert.Equal(PlaybackSettings.RegularSubtitleWeight, notBold.Playback.SubtitleFontWeight);
+            Assert.False(notBold.Playback.SubtitleBold);
 
             var preV13Bold = SettingsMigration.FromJson(
                 """{"SchemaVersion":12,"Playback":{"SubtitleBold":true}}""", Protector);
-            Assert.Equal(PlaybackSettings.RegularSubtitleWeight, preV13Bold.Playback.SubtitleFontWeight,
-                "v13 之前加粗不是选择，落到常规");
+            Assert.False(preV13Bold.Playback.SubtitleBold, "v13 之前加粗不是选择，落到关");
 
-            // 当前版本的文件不再跑 v18 步，字重照存值来；越界的手改值吸附到最近一档。
-            var deliberateWeight = SettingsMigration.FromJson(
+            // v18/v19 存的是三档字重的整数，v20 按它折算：粗（≥550）→ 开，常规/细 → 关。
+            var weightBold = SettingsMigration.FromJson(
+                """{"SchemaVersion":19,"Playback":{"SubtitleFontWeight":700}}""", Protector);
+            Assert.True(weightBold.Playback.SubtitleBold, "旧的「粗」这一档折成加粗开");
+
+            var weightRegular = SettingsMigration.FromJson(
+                """{"SchemaVersion":19,"Playback":{"SubtitleFontWeight":400}}""", Protector);
+            Assert.False(weightRegular.Playback.SubtitleBold, "旧的「常规」折成不加粗");
+
+            var weightLight = SettingsMigration.FromJson(
+                """{"SchemaVersion":18,"Playback":{"SubtitleFontWeight":300}}""", Protector);
+            Assert.False(weightLight.Playback.SubtitleBold, "旧的「细」折成不加粗");
+
+            // 当前版本的文件不再跑 v20 步，加粗照存值来。
+            var deliberateBold = SettingsMigration.FromJson(
                 "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
-                    + ",\"Playback\":{\"SubtitleFontWeight\":700}}",
+                    + ",\"Playback\":{\"SubtitleBold\":true}}",
                 Protector);
-            Assert.Equal(PlaybackSettings.BoldSubtitleWeight, deliberateWeight.Playback.SubtitleFontWeight);
+            Assert.True(deliberateBold.Playback.SubtitleBold);
 
-            var handEdited = SettingsMigration.FromJson(
-                "{\"SchemaVersion\":" + AppSettings.CurrentSchemaVersion
-                    + ",\"Playback\":{\"SubtitleFontWeight\":999}}",
-                Protector);
-            Assert.Equal(PlaybackSettings.BoldSubtitleWeight, handEdited.Playback.SubtitleFontWeight, "越界吸附到最近一档");
-
-            Assert.Equal("Microsoft YaHei", new PlaybackSettings().SubtitleFontFamily, "装机默认是系统自带的雅黑");
-            Assert.Equal("Microsoft YaHei", FontFamilies.Default, "兜底族名也是它：每台 Windows 都有");
-            Assert.Equal(PlaybackSettings.RegularSubtitleWeight, new PlaybackSettings().SubtitleFontWeight, "装机默认字重是常规");
+            Assert.Equal("Microsoft YaHei UI Semibold", new PlaybackSettings().SubtitleFontFamily, "装机默认是系统自带的雅黑 UI 半粗");
+            Assert.Equal("Microsoft YaHei UI Semibold", FontFamilies.Default, "兜底族名也是它：每台 Windows 都有");
+            Assert.False(new PlaybackSettings().SubtitleBold, "装机默认不加粗");
         });
 
         Test("描边大小、阴影：从固定几档改成自由数字输入", () =>
@@ -1082,7 +1088,7 @@ internal static class SettingsTests
         Test("迁移：v13 把出厂底板颜色钉成黑色", () =>
         {
             // 「把默认字幕样式设置为…」（2026-09-06）。底板颜色旧出厂是「不设置」（从来没人挑过颜色），
-            // v13 带上黑色；自己挑过的一律不动。（加粗那一半已并进三档字重，见「v18 …」那条测试。）
+            // v13 带上黑色；自己挑过的一律不动。（加粗那一半的迁移见「v19…v20」那条测试。）
             var upgraded = SettingsMigration.FromJson(
                 """{"SchemaVersion":12,"Playback":{"SubtitleBackColor":""}}""", Protector);
             Assert.Equal("#000000", upgraded.Playback.SubtitleBackColor, "存着「不设置」就是没挑过颜色，带上新出厂的黑");
@@ -1305,6 +1311,47 @@ internal static class SettingsTests
                 "音轨那一行现在也吃这种写法，而它从前一整串会被当成一个语言名");
 
             static string Joined(string? typed) => string.Join(", ", TrackLanguagePriority.ParseList(typed));
+        });
+
+        Test("设置：关键词规则出厂值、规整去空去重", () =>
+        {
+            // 字幕标题筛选出厂给「双语」「特效」两个词，都设成默认（中立、不生效）；视频文件名筛选出厂为空。
+            var defaults = SettingsMigration.NewDefaults().Playback;
+            Assert.Equal("双语,特效", string.Join(",", defaults.SubtitleTitleRules.Select(rule => rule.Term)));
+            Assert.True(defaults.SubtitleTitleRules.All(rule => rule.State == TitlePreference.Neutral), "两个默认词都是中立");
+            Assert.Equal(0, defaults.VideoFileRules.Count, "视频文件名筛选出厂为空");
+            // 音轨格式筛选出厂给几条常见格式词，也都是默认（中立、不生效）——看得见能改哪些词，装机行为不变。
+            Assert.Equal("Atmos,TrueHD,DTS-HD,DTS,FLAC,7.1,5.1", string.Join(",", defaults.AudioFormatRules.Select(rule => rule.Term)));
+            Assert.True(defaults.AudioFormatRules.All(rule => rule.State == TitlePreference.Neutral), "格式预置词都是中立");
+
+            // 规整：修掉两头空白、丢掉空词、同一个词只留第一条（大小写不敏感保留先出现的态度），认不出的态度落回默认。
+            // 字幕标题、视频文件名两张表走同一段清理（CleanKeywordRules）。
+            var settings = SettingsMigration.NewDefaults();
+            settings.Playback.SubtitleTitleRules =
+            [
+                new("  双语  ", TitlePreference.Exclude),
+                new("", TitlePreference.Prefer),
+                new("双语", TitlePreference.Prefer),
+                new("特效", (TitlePreference)999)
+            ];
+            settings.Playback.VideoFileRules =
+            [
+                new("REMUX", TitlePreference.Prefer),
+                new("remux", TitlePreference.Exclude)
+            ];
+            settings.Playback.AudioFormatRules =
+            [
+                new("  TrueHD  ", TitlePreference.Prefer),
+                new("truehd", TitlePreference.Exclude)
+            ];
+            SettingsMigration.Normalize(settings);
+            var cleaned = settings.Playback.SubtitleTitleRules;
+            Assert.Equal("双语,特效", string.Join(",", cleaned.Select(rule => rule.Term)), "去空去重、修空白");
+            Assert.Equal(TitlePreference.Exclude, cleaned[0].State, "重复的词只留第一条那个态度");
+            Assert.Equal(TitlePreference.Neutral, cleaned[1].State, "认不出的态度落回默认");
+            Assert.Equal("REMUX", string.Join(",", settings.Playback.VideoFileRules.Select(rule => rule.Term)), "文件名规则大小写不敏感去重");
+            Assert.Equal("TrueHD", string.Join(",", settings.Playback.AudioFormatRules.Select(rule => rule.Term)), "格式规则同样去空白、大小写不敏感去重");
+            Assert.Equal(TitlePreference.Prefer, settings.Playback.AudioFormatRules[0].State, "重复的词只留第一条那个态度");
         });
     }
 

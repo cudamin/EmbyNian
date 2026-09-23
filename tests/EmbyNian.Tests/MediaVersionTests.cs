@@ -141,5 +141,40 @@ internal static class MediaVersionTests
             Assert.Null(MediaVersionSwitch.Playing(item, null));
             Assert.Null(MediaVersionSwitch.Playing(null, item.MediaSources[0]));
         });
+
+        // 默认播哪一版：按视频文件名筛选规则打分（「参考标题筛选，新增视频文件名筛选」）。
+        Test("版本：默认版本按文件名规则挑，单版本/没规则一律第一版", () =>
+        {
+            var item = new EmbyItem
+            {
+                MediaSources =
+                [
+                    new MediaSource { Id = "a", Path = @"X:\Movies\电影.2160p.WEB-DL.mp4" },
+                    new MediaSource { Id = "b", Name = "REMUX", Path = @"X:\Movies\电影.1080p.BluRay.REMUX.mkv" },
+                    new MediaSource { Id = "c", Path = @"X:\Movies\电影.枪版.mp4" }
+                ]
+            };
+
+            // 没有规则：还是服务器第一版（行为不变）。
+            Assert.True(ReferenceEquals(item.MediaSources[0], MediaVersionSwitch.Preferred(item, [])));
+            Assert.True(ReferenceEquals(item.MediaSources[0], MediaVersionSwitch.Preferred(item, null)));
+
+            // 优先 REMUX：命中版本名/文件名里的 REMUX，抬到最前。
+            Assert.Equal("b", MediaVersionSwitch.Preferred(item, [new("REMUX", TitlePreference.Prefer)])?.Id);
+
+            // 候补 枪版：把枪版压到最后；同分（其余两版都 0 分）时保留服务器次序，取第一版。
+            Assert.Equal("a", MediaVersionSwitch.Preferred(item, [new("枪版", TitlePreference.Exclude)])?.Id);
+
+            // 优先 2160p、同时候补 枪版：2160p 那版 +1 胜出。
+            Assert.Equal("a", MediaVersionSwitch.Preferred(item,
+                [new("2160p", TitlePreference.Prefer), new("枪版", TitlePreference.Exclude)])?.Id);
+
+            // 全被压低时软兜底：只有枪版一版且它被候补，仍然给它。
+            var onlyCam = new EmbyItem { MediaSources = [new MediaSource { Id = "c", Path = @"X:\电影.枪版.mp4" }] };
+            Assert.Equal("c", MediaVersionSwitch.Preferred(onlyCam, [new("枪版", TitlePreference.Exclude)])?.Id, "只剩它时还是给它");
+
+            Assert.Null(MediaVersionSwitch.Preferred(null, [new("REMUX", TitlePreference.Prefer)]));
+            Assert.Null(MediaVersionSwitch.Preferred(new EmbyItem(), [new("REMUX", TitlePreference.Prefer)]));
+        });
     }
 }

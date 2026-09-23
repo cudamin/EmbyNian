@@ -79,8 +79,8 @@ internal static class ShellServices
             paths.ScreenshotDirectory,
 
             // 字幕字体随程序走的那一个目录（assets/fonts，构建和发布都把它拷在 exe 旁边），交给 mpv 的
-            // sub-fonts-dir：自带的方正中等线简体靠它被 mpv 找到（v14 起装机默认是微软雅黑，自带款仍是
-            // 可选项），不依赖这台机器装没装。
+            // sub-fonts-dir。v19 起不再自带任何字幕字体（默认微软雅黑 UI 半粗是系统字体），这个目录现在是
+            // 空的或不存在，mpv 能容忍；留着这条是为了往里丢字体就能被认出来，不必改代码。
             Path.Combine(AppContext.BaseDirectory, "fonts")));
         services.AddSingleton<ShaderStaging>();
         services.AddSingleton<PlaybackBackendFactory>();

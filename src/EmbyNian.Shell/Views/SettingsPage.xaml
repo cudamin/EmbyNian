@@ -781,6 +781,195 @@
             </local:SettingRowTemplates.HomeLayout>
 
             <!--
+              字幕语言优先级（「参考上图改成复选下拉」，2026-09-22）：右边一颗下拉按钮显示当前挑好的语言，点开
+              是一张带勾选、按住能拖、也能用箭头换次序的语言表 —— 换掉了原先那个手打逗号分隔的输入框。表和主页
+              版面那张（上面 HomeLayout）是同一套：勾选决定进不进优先级列表，次序决定谁先匹配。
+
+              两处不同：表放在下拉的浮层里，所以给它一个 MaxHeight 自己滚就行 —— 浮层本身是个独立弹窗，不像整
+              页那样会和外层滚动条互抢（HomeLayout 摊在页面上才必须按行数给死高度）。存的是「勾了的那些名字，
+              照屏上次序」，那句连起来的话就是下拉按钮上显示的 Summary。
+
+              那两颗上下箭头和主页那张表一样不是拖拽的备胎，是这件事唯一验得到的形式：这台机器上注不进鼠标
+              事件，拖和勾没法自动做一遍，而一张勾不动、换不了次序的下拉在屏上和好用的长得一模一样
+              （见 SettingLanguagesRow.Probe 与自检「字幕语言优先级换得了次序」）。
+            -->
+            <local:SettingRowTemplates.Languages>
+                <DataTemplate x:DataType="vm:SettingLanguagesRow">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Top">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                TextWrapping="Wrap"
+                                Visibility="{x:Bind NoteVisibility}" />
+                        </StackPanel>
+                        <DropDownButton
+                            AutomationProperties.Name="{x:Bind Label}"
+                            Grid.Column="1"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            MinWidth="260">
+                            <TextBlock
+                                Text="{x:Bind Summary, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis" />
+                            <DropDownButton.Flyout>
+                                <Flyout Placement="Bottom">
+                                    <!-- 浮层自带 padding，这里再收窄一点，让表贴着按钮的宽度。 -->
+                                    <ListView
+                                        AllowDrop="True"
+                                        CanDragItems="True"
+                                        CanReorderItems="True"
+                                        ItemsSource="{x:Bind Choices}"
+                                        MaxHeight="420"
+                                        MinWidth="280"
+                                        ReorderMode="Enabled"
+                                        SelectionMode="None">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:LanguageChoice">
+                                                <Grid ColumnSpacing="10">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <CheckBox
+                                                        AutomationProperties.Name="{x:Bind Name}"
+                                                        IsChecked="{x:Bind Checked, Mode=TwoWay}"
+                                                        MinWidth="0" />
+
+                                                    <TextBlock
+                                                        Grid.Column="1"
+                                                        Text="{x:Bind Name}"
+                                                        VerticalAlignment="Center" />
+
+                                                    <!-- 换次序那两颗。到顶的「上移」和到底的「下移」置灰
+                                                         （CanUp/CanDown）：按下去也不动的按钮亮着，第一次按的
+                                                         人只会以为这张表是坏的。 -->
+                                                    <Button x:Uid="SettingsPage_ButtonL1"
+                                                        Grid.Column="2"
+                                                        Command="{x:Bind UpCommand}"
+                                                        IsEnabled="{x:Bind CanUp, Mode=OneWay}"
+                                                        Style="{StaticResource EgHomeShiftStyle}">
+                                                        <FontIcon
+                                                            FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                            FontSize="12"
+                                                            Glyph="&#xE70E;" />
+                                                    </Button>
+
+                                                    <Button x:Uid="SettingsPage_ButtonL2"
+                                                        Grid.Column="3"
+                                                        Command="{x:Bind DownCommand}"
+                                                        IsEnabled="{x:Bind CanDown, Mode=OneWay}"
+                                                        Style="{StaticResource EgHomeShiftStyle}">
+                                                        <FontIcon
+                                                            FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                            FontSize="12"
+                                                            Glyph="&#xE70D;" />
+                                                    </Button>
+
+                                                    <!-- 把手：这一行拖得动的那句话，和框架自己的拖拽列表同一个字形。 -->
+                                                    <FontIcon
+                                                        Grid.Column="4"
+                                                        FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                        FontSize="14"
+                                                        Foreground="{ThemeResource EgTextFaintBrush}"
+                                                        Glyph="&#xE76F;"
+                                                        VerticalAlignment="Center" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </Flyout>
+                            </DropDownButton.Flyout>
+                        </DropDownButton>
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.Languages>
+
+            <!--
+              字幕标题筛选（「双语／特效单独设 优先／默认／排除，可自定义添加」，2026-09-22）：语言选完之后按标题
+              里的关键词再挑一遍。整幅宽的一张块（同主页版面表、开关组），因为一行是「词 ＋ 三档下拉 ＋ 删除」，
+              塞进 320 宽的控件列会挤。底下一个输入框加「添加」自定义加词。不做拖拽换位 —— 各词独立加减分，次序
+              不影响结果（见 SettingTitleRulesRow）。删除按钮和「添加」都用文字，不用 FontIcon，免得动字号基线。
+            -->
+            <local:SettingRowTemplates.TitleRules>
+                <DataTemplate x:DataType="vm:SettingTitleRulesRow">
+                    <StackPanel Style="{StaticResource EgSettingBlockStyle}">
+                        <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                        <TextBlock
+                            Style="{StaticResource EgSettingNote}"
+                            Text="{x:Bind Note}"
+                            TextWrapping="Wrap"
+                            Visibility="{x:Bind NoteVisibility}" />
+
+                        <ItemsControl ItemsSource="{x:Bind Rules}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="6" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:TitleRuleChoice">
+                                    <Grid ColumnSpacing="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock
+                                            Text="{x:Bind Term}"
+                                            TextTrimming="CharacterEllipsis"
+                                            VerticalAlignment="Center" />
+
+                                        <!-- 优先 / 默认 / 排除 三档。SelectedIndex 双向绑到 StateIndex，映到 State。 -->
+                                        <ComboBox
+                                            Grid.Column="1"
+                                            AutomationProperties.Name="{x:Bind Term}"
+                                            ItemsSource="{x:Bind StateLabels}"
+                                            MinWidth="120"
+                                            SelectedIndex="{x:Bind StateIndex, Mode=TwoWay}" />
+
+                                        <Button
+                                            Grid.Column="2"
+                                            AutomationProperties.Name="删除该词"
+                                            Command="{x:Bind RemoveSelfCommand}"
+                                            Content="✕"
+                                            ToolTipService.ToolTip="从标题筛选里去掉这个词" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- 自定义添加：敲一个词，回车或按「添加」把它加成一条中立规则。 -->
+                        <Grid ColumnSpacing="10" Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox
+                                AutomationProperties.Name="新增标题关键词"
+                                PlaceholderText="自定义词，如 中英、SDH"
+                                Text="{x:Bind NewTerm, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button
+                                Grid.Column="1"
+                                AutomationProperties.Name="添加标题关键词"
+                                Command="{x:Bind AddCommand}"
+                                Content="添加" />
+                        </Grid>
+                    </StackPanel>
+                </DataTemplate>
+            </local:SettingRowTemplates.TitleRules>
+
+            <!--
               一行读数：左边标签、底下一行值（等宽，多半是个路径，所以要能折行），右边一颗可有可无的按钮。
               值不摆进控件列 —— 那一列只有 320 宽，一个路径在里面要折三行；标签列本来就宽，值跟着标签走。
             -->

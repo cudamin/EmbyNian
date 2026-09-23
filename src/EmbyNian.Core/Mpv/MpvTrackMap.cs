@@ -128,7 +128,11 @@ public static class TrackPreference
                ?? pool[0];
     }
 
-    /// <summary>Whether <paramref name="stream"/> is in the language <paramref name="preferred"/> names.</summary>
-    public static bool LanguageMatches(MediaStream stream, string preferred) =>
-        TrackLanguagePriority.Matches(preferred, stream.Language, stream.DisplayLanguage, stream.Title ?? stream.DisplayTitle);
+    /// <summary>
+    /// Whether <paramref name="stream"/> is in the language <paramref name="preferred"/> names.
+    /// <paramref name="includeTitle"/> lets the track title stand in for a vague language field via keyword
+    /// hints — on for 音轨, off for 字幕 where the title is judged separately（见 <see cref="TrackLanguagePriority.Matches"/>）.
+    /// </summary>
+    public static bool LanguageMatches(MediaStream stream, string preferred, bool includeTitle = true) =>
+        TrackLanguagePriority.Matches(preferred, stream.Language, stream.DisplayLanguage, stream.Title ?? stream.DisplayTitle, includeTitle);
 }

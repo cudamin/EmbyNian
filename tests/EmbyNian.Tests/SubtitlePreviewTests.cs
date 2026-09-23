@@ -29,10 +29,10 @@ internal static class SubtitlePreviewTests
         {
             var plan = SubtitlePreviewPlan.Plan(new PlaybackSettings(), scale: 1, text: "字幕示例");
 
-            Assert.Equal("Microsoft YaHei", plan.FontFamily,
-                "预览的字体就是设置里那个族名（v18 起的默认，系统自带）");
+            Assert.Equal("Microsoft YaHei UI Semibold", plan.FontFamily,
+                "预览的字体就是设置里那个族名（v19 起的默认，系统自带）");
             Assert.Equal(50, plan.FontSize, "出厂字号 50，scale=1 时一个单位一个像素");
-            Assert.Equal(PlaybackSettings.RegularSubtitleWeight, plan.Weight, "出厂字重是常规（v18 起）");
+            Assert.False(plan.Bold, "出厂不加粗（v20 起字重退回加粗开关）");
             Assert.Equal("字幕示例", plan.Text);
             Assert.Equal("#FFFFFF", plan.TextColor);
             Assert.False(plan.Plate, "出厂没有底板");

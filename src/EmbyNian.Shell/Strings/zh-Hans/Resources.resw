@@ -460,7 +460,7 @@
     <value>播放速度</value>
   </data>
   <data name="PlayerPage_StatsButton.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
-    <value>播放统计</value>
+    <value>循环切换：播放统计 → 着色器统计 → 关闭</value>
   </data>
   <data name="PlayerPage_StatsButton.Content" xml:space="preserve">
     <value>统计</value>
@@ -530,6 +530,18 @@
   </data>
   <data name="SettingsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>往下挪一排</value>
+  </data>
+  <data name="SettingsPage_ButtonL1.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>上移</value>
+  </data>
+  <data name="SettingsPage_ButtonL1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>把这个语言往上挪一格，越靠上越优先</value>
+  </data>
+  <data name="SettingsPage_ButtonL2.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>下移</value>
+  </data>
+  <data name="SettingsPage_ButtonL2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>把这个语言往下挪一格</value>
   </data>
   <data name="SettingsPage_SliderA1.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>mpv 参数滑块</value>

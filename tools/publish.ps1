@@ -97,7 +97,9 @@ if (-not $dotnet) {
 # 着色器文件（2026-09-03 起）和 libmpv 唯一那个非系统依赖 vulkan-1.dll（2026-09-04 起）都在仓库里，
 # 由 csproj 当普通内容文件拷进输出目录 —— 从前两样都是发布时从 `C:\mpv_config-2026.08.12` 现拷的，
 # 那等于「这个程序能不能正确发布，取决于另一个软件还装没装」。下面这两条只在检出不完整时会红。
-foreach ($asset in @('assets\shaders', 'assets\mpv-runtime\vulkan-1.dll', 'assets\fonts')) {
+# assets\fonts 不在这张必备清单里：v19 起不再打包任何字幕字体（默认微软雅黑 UI 半粗是系统字体），
+# 那个目录空了会被 git 一并删掉，属正常状态，不是检出不完整。
+foreach ($asset in @('assets\shaders', 'assets\mpv-runtime\vulkan-1.dll')) {
     $assetPath = Join-Path $repo $asset
     if (-not (Test-Path -LiteralPath $assetPath)) {
         throw "找不到 $assetPath。它是仓库的一部分，检出不完整时才会缺。"

@@ -321,6 +321,52 @@ public static class TrackLanguagePriority
     }
 
     /// <summary>
+    /// The full pick list for the settings drop-down, in priority order: the languages already chosen
+    /// (canonicalised, in their stored order), then every catalogue language not yet chosen, then
+    /// <see cref="Any"/>. The checked entries are exactly the stored priority list; the unchecked ones
+    /// round the menu out so a language joins the list by being ticked. Order in the returned list is the
+    /// priority the user sees and drags — filtering it back down to the checked names, in this order, is
+    /// what gets stored.
+    /// <para>
+    /// A stored name the catalogue does not know (a hand-written raw code from an older build) stays,
+    /// checked, at the front where it was; the catalogue's own labels follow. Nothing is dropped, so the
+    /// drop-down can never quietly lose a language the settings file already holds.
+    /// </para>
+    /// <para>
+    /// <paramref name="exclude"/> keeps a language out of this list altogether — offered <em>and</em> stored.
+    /// 字幕 passes 普通话/粤语（「删掉字幕优先级里的普通话、粤语」，2026-09-22）: they name a spoken variant, which
+    /// is an 音轨 distinction, not something a subtitle track is labelled by. The catalogue keeps them for the
+    /// 音轨 side; only the subtitle drop-down leaves them out, and a subtitle file that somehow stored one
+    /// drops it on the next save rather than showing a language the row no longer offers.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<(string Name, bool Checked)> OrderedChoices(IEnumerable<string>? stored, IReadOnlyCollection<string>? exclude = null)
+    {
+        bool Excluded(string name) => exclude is { Count: > 0 } && exclude.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+        var chosen = CleanList(stored);
+        var result = new List<(string, bool)>(chosen.Count + Table.Length + 1);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var name in chosen)
+        {
+            if (Excluded(name)) continue;
+            result.Add((name, true));
+            seen.Add(name);
+        }
+
+        foreach (var entry in Table)
+        {
+            if (Excluded(entry.Label)) continue;
+            if (seen.Add(entry.Label)) result.Add((entry.Label, false));
+        }
+
+        if (seen.Add(Any)) result.Add((Any, false));
+
+        return result;
+    }
+
+    /// <summary>
     /// The same conversion for an already-split list, which is how the subtitle-language priority is
     /// stored now that it is a multi-select rather than a typed-in string.
     /// </summary>
@@ -349,8 +395,16 @@ public static class TrackLanguagePriority
     /// of its family, still matches every Chinese track whatever variant it claims. <see cref="Any"/>
     /// matches every track whatever it claims, which is the point of it.
     /// </para>
+    /// <para>
+    /// <paramref name="includeTitle"/> decides whether the track <em>title</em> may stand in for a
+    /// missing/vague language field via the hint keywords（「简体」on a track whose Language is only
+    /// <c>chi</c>）. The 字幕 side turns this off（「把 Language 和 Title 分离」，2026-09-22）so language means
+    /// language only and the title is judged separately by <see cref="SubtitleTitleFilter"/>; the 音轨 side
+    /// keeps it on, because a <c>chi</c>-labelled track titled 粤语 has no other way to be told from 普通话.
+    /// The code and family matching never used the title, so only the hint line is gated.
+    /// </para>
     /// </summary>
-    public static bool Matches(string? token, string? language, string? displayLanguage, string? title)
+    public static bool Matches(string? token, string? language, string? displayLanguage, string? title, bool includeTitle = true)
     {
         var trimmed = (token ?? "").Trim();
         if (trimmed.Length == 0) return false;
@@ -361,7 +415,8 @@ public static class TrackLanguagePriority
         if (CodeMatches(language, codes) || CodeMatches(displayLanguage, codes)) return true;
 
         var hints = entry?.Hints ?? [];
-        if (ContainsHint(language, hints) || ContainsHint(displayLanguage, hints) || ContainsHint(title, hints)) return true;
+        if (ContainsHint(language, hints) || ContainsHint(displayLanguage, hints)) return true;
+        if (includeTitle && ContainsHint(title, hints)) return true;
 
         // 中文 names the family, so a 简体 or 繁体 track answers to it as well.
         if (entry is null || !entry.Generic) return false;

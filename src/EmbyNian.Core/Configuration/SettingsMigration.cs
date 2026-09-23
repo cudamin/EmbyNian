@@ -153,8 +153,8 @@ public static class SettingsMigration
         // whether the stored value is a colour at all rather than whether it is empty, because 「none」
         // only lands on empty inside Normalize, which runs after these steps. At v13 and above a stored
         // value is a decision and stays.
-        // v18 folds 加粗 into a three-step 字重, so the old bold field is gone; the weight is decided in
-        // the v18 step below. What stays here is 底板颜色, still pinned to black for a pre-v13 file.
+        // 加粗 is decided by the v18 step below (v18–v19 routed it through a three-step 字重; v20 folds it
+        // back to the plain bool). What stays here is 底板颜色, still pinned to black for a pre-v13 file.
         if (version < 13)
         {
             if (Rgb(settings.Playback.SubtitleBackColor).Length == 0)
@@ -229,16 +229,51 @@ public static class SettingsMigration
                 settings.Playback.SubtitleFontFamily = "Microsoft YaHei";
             }
 
-            // 加粗 (a bool) folds into 字重 (three steps). A file that carried a real 加粗=on — which only
-            // v13+ could, since v13 forced the shipped-on default off and made a later 「on」 a decision —
-            // lands on 粗; everything else, pre-v13 included, lands on 常规. The old field is gone from
-            // the model, so it is read from the raw document rather than off `settings`.
+            // 加粗 is only a real decision on a v13+ file — v13 forced the shipped-on default off and made a
+            // later 「on」 a choice — so a pre-v13 加粗=on is not carried. v18–v19 folded this into a
+            // three-step 字重; v20 (below) folds it straight back to this same bool, so this step lands on
+            // SubtitleBold directly. The field is read from the raw document because a pre-v13 file that had
+            // 加粗=on deserialized it into SubtitleBold already, and this must override that to off.
             var priorBold = version >= 13
                 && root.TryGetProperty("Playback", out var priorPlayback)
                 && (ReadBool(priorPlayback, "SubtitleBold") ?? false);
-            settings.Playback.SubtitleFontWeight = priorBold
-                ? PlaybackSettings.BoldSubtitleWeight
-                : PlaybackSettings.RegularSubtitleWeight;
+            settings.Playback.SubtitleBold = priorBold;
+        }
+
+        // v19 makes 字幕字体 Microsoft YaHei UI Semibold and drops the bundled 方正中等线简体
+        // (2026-09-22). The face was already what people saw: setting 方正中等线简体 at 细 asks mpv for a
+        // nonexistent 「方正中等线简体 Light」, and libass's fallback resolved the CJK glyphs to Microsoft
+        // YaHei UI Semibold (measured that day). It was preferred, so it becomes the default reached by
+        // name. 方正 is no longer bundled, so a stored value naming it (either spelling) is carried to the
+        // new default the same way v18 carried the unbundled Noto — otherwise it would render as libass's
+        // fallback, not as itself. Empty (never picked) and the two prior shipped defaults — Microsoft
+        // YaHei and Noto Sans CJK SC — move too; anything else was a real choice and stays. Empty also
+        // reaches the new default through Normalize's ResolveFontFamily, but it is named here so the whole
+        // set of 「never picked」 values reads in one place.
+        if (version < 19)
+        {
+            var storedFont = settings.Playback.SubtitleFontFamily.Trim();
+            if (storedFont.Length == 0
+                || storedFont.Equals("Microsoft YaHei", StringComparison.OrdinalIgnoreCase)
+                || storedFont.Equals("Noto Sans CJK SC", StringComparison.OrdinalIgnoreCase)
+                || storedFont.Equals("方正中等线简体", StringComparison.Ordinal)
+                || storedFont.Equals("FZZhongDengXian-Z07S", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Playback.SubtitleFontFamily = "Microsoft YaHei UI Semibold";
+            }
+        }
+
+        // v20 drops the three-step 字重 and goes back to a plain 加粗 on/off (2026-09-22,
+        // 「删掉字重选项，改为 sub-bold」). The 字重 only bought a working 细 on families with a real Light
+        // face, which the v19 default does not have. A v18/v19 file stored SubtitleFontWeight (an int the
+        // current model no longer has a property for), so it is read from the raw document: 粗 (≥ 550, the
+        // old 粗 step) becomes 加粗=on, everything else off. A pre-v18 file has no SubtitleFontWeight; its
+        // 加粗 was already decided by the v18 step above, so this leaves SubtitleBold as it stands.
+        if (version < 20 && root.TryGetProperty("Playback", out var weightHolder)
+            && weightHolder.ValueKind == JsonValueKind.Object
+            && ReadInt(weightHolder, "SubtitleFontWeight") is { } storedWeight)
+        {
+            settings.Playback.SubtitleBold = storedWeight >= 550;
         }
 
         settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
@@ -305,6 +340,26 @@ public static class SettingsMigration
 
         if (settings.Playback.AudioLanguages is null) settings.Playback.AudioLanguages = [];
         if (settings.Playback.SubtitleLanguages is null) settings.Playback.SubtitleLanguages = [];
+        // 标题规则整段是 JSON null 时（老文件根本没这个字段则由属性初始化器补上，不到这儿）：回到出厂那两条中立词。
+        if (settings.Playback.SubtitleTitleRules is null)
+            settings.Playback.SubtitleTitleRules = [new("双语", TitlePreference.Neutral), new("特效", TitlePreference.Neutral)];
+        settings.Playback.SubtitleTitleRules.RemoveAll(rule => rule is null);
+        // 视频文件名规则整段 null：出厂本来就是空的，回到空即可。
+        if (settings.Playback.VideoFileRules is null) settings.Playback.VideoFileRules = [];
+        settings.Playback.VideoFileRules.RemoveAll(rule => rule is null);
+        // 音轨格式规则整段 null（老文件没这个字段则由属性初始化器补上，不到这儿）：回到出厂那几条中立词。
+        if (settings.Playback.AudioFormatRules is null)
+            settings.Playback.AudioFormatRules =
+            [
+                new("Atmos", TitlePreference.Neutral),
+                new("TrueHD", TitlePreference.Neutral),
+                new("DTS-HD", TitlePreference.Neutral),
+                new("DTS", TitlePreference.Neutral),
+                new("FLAC", TitlePreference.Neutral),
+                new("7.1", TitlePreference.Neutral),
+                new("5.1", TitlePreference.Neutral)
+            ];
+        settings.Playback.AudioFormatRules.RemoveAll(rule => rule is null);
         if (settings.Audio.PassthroughCodecs is null) settings.Audio.PassthroughCodecs = [];
         if (settings.Shaders.AnimeKeywords is null) settings.Shaders.AnimeKeywords = [];
 
@@ -400,9 +455,7 @@ public static class SettingsMigration
 
         // The same rule the settings row applies as it is typed — see PlaybackSettings.ClampFontSize.
         settings.Playback.SubtitleFontSize = PlaybackSettings.ClampFontSize(settings.Playback.SubtitleFontSize);
-        // 字重 snaps to one of the three steps; a hand-edited number or a value from a build with a
-        // different scale cannot hand mpv something the row could not have produced.
-        settings.Playback.SubtitleFontWeight = PlaybackSettings.ClampWeight(settings.Playback.SubtitleFontWeight);
+        // 字幕加粗 is a bool now (v20) — nothing to clamp.
         settings.Video.NetworkCacheMegabytes = Math.Clamp(settings.Video.NetworkCacheMegabytes, 0, 4096);
         settings.Audio.DelayMilliseconds = Math.Clamp(settings.Audio.DelayMilliseconds, -5000, 5000);
         settings.Audio.Volume = Math.Clamp(settings.Audio.Volume, 0, AudioSettings.MaxVolume);
@@ -417,6 +470,9 @@ public static class SettingsMigration
 
         settings.Playback.AudioLanguages = TrackLanguagePriority.CleanList(settings.Playback.AudioLanguages);
         settings.Playback.SubtitleLanguages = TrackLanguagePriority.CleanList(settings.Playback.SubtitleLanguages);
+        settings.Playback.SubtitleTitleRules = CleanKeywordRules(settings.Playback.SubtitleTitleRules);
+        settings.Playback.VideoFileRules = CleanKeywordRules(settings.Playback.VideoFileRules);
+        settings.Playback.AudioFormatRules = CleanKeywordRules(settings.Playback.AudioFormatRules);
         settings.Audio.PassthroughCodecs = CleanCodecs(settings.Audio.PassthroughCodecs);
 
         // Every one of these reaches mpv as an option value, and mpv exits rather than plays when it
@@ -586,6 +642,25 @@ public static class SettingsMigration
         foreach (var choice in MpvOutputOptions.PassthroughCodecs)
         {
             if (codecs?.Contains(choice.Value, StringComparer.OrdinalIgnoreCase) == true) cleaned.Add(choice.Value);
+        }
+
+        return cleaned;
+    }
+
+    /// <summary>
+    /// 关键词规则去空去重：修掉词两头的空白、丢掉空词，同一个词只留第一条（大小写不敏感），认不出来的态度落回默认。
+    /// 手改的文件可能写重词或空词；设置页那两张表（字幕标题、视频文件名）也从这儿过一遍，存回去的就是屏上看到的样子。
+    /// </summary>
+    private static List<KeywordRule> CleanKeywordRules(List<KeywordRule>? rules)
+    {
+        var cleaned = new List<KeywordRule>(rules?.Count ?? 0);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rule in rules ?? [])
+        {
+            var term = (rule?.Term ?? "").Trim();
+            if (term.Length == 0 || !seen.Add(term)) continue;
+            var state = Enum.IsDefined(rule!.State) ? rule.State : TitlePreference.Neutral;
+            cleaned.Add(new KeywordRule(term, state));
         }
 
         return cleaned;

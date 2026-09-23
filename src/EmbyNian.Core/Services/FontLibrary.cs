@@ -47,11 +47,12 @@ public sealed class FontLibrary
     {
         var clock = Stopwatch.StartNew();
 
-        // The fonts the program ships with (exe 旁边的 fonts 目录) join the two Windows stores, so the
-        // 字体 picker offers 方正中等线简体 with a real preview even on a machine that never installed
-        // it — and anything later dropped into that folder shows up the same way. The directory is the
-        // same one playback hands mpv as sub-fonts-dir (ShellServices), so 「the picker lists it」 and
-        // 「mpv can use it」 are one fact.
+        // The fonts the program ships with (exe 旁边的 fonts 目录) join the two Windows stores, so any
+        // font dropped into that folder shows up in the 字体 picker with a real preview even on a machine
+        // that never installed it. Nothing is bundled since v19 (the default is a system font), so today
+        // this folder is empty or absent — handled like any missing directory. It is the same one playback
+        // hands mpv as sub-fonts-dir (ShellServices), so 「the picker lists it」 and 「mpv can use it」 are
+        // one fact.
         var directories = FontCatalogue.Directories
             .Append(Path.Combine(AppContext.BaseDirectory, "fonts"))
             .ToList();

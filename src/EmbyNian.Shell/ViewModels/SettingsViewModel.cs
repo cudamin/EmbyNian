@@ -462,11 +462,28 @@ public sealed partial class SettingsViewModel : PageViewModel
             Number("进度上报间隔（秒）", 1, 60, () => playback.ProgressReportIntervalSeconds, value => playback.ProgressReportIntervalSeconds = value),
             Choice("跳过片头片尾", SkipModes, () => playback.SkipSections, value => playback.SkipSections = value),
 
-            // 音轨语言优先级, the same row shape and the same parser as the 字幕 card's. It was a single-pick
-            // drop-down up to v9, which could not express 「日语 > 粤语 > 英语」 at all — and mpv's own alang has
-            // always taken a list. An empty box is 「跟随服务器默认音轨」, which is what the old 「默认音轨」 entry
-            // and its companion mode both meant.
-            Languages("音轨语言优先级", "日语, 粤语, 英语", () => playback.AudioLanguages, value => playback.AudioLanguages = value)
+            // 音轨语言优先级, the same drop-down as the 字幕 card's since 2026-09-22（「给音轨新增语言优先级和格式
+            // 优先级」——语言这栏跟字幕一样改成勾选下拉）. It was a single-pick up to v9, which could not express
+            // 「日语 > 粤语 > 英语」 at all; an empty list is 「跟随服务器默认音轨」. Unlike 字幕, 音轨 keeps 普通话／粤语
+            // in the menu —— they name a spoken variant, which is exactly an 音轨 distinction.
+            LanguagePriority("音轨语言优先级", "未指定，跟随服务器默认音轨", () => playback.AudioLanguages, value => playback.AudioLanguages = value,
+                "点开勾语言，越靠上越优先，按住或用箭头换次序。空着就是「跟随服务器默认音轨」。"
+                    + "「其他字幕」这类兜底项对音轨同样代表「前面都没有时，有一条别的语言的总比没有好」。下次播放生效"),
+
+            // 音轨格式筛选（「给音轨新增语言优先级和格式优先级」，2026-09-22）：语言选完之后，在同一语言那批轨里按
+            // 编码／声道的关键词再挑一遍。和字幕标题筛选、视频文件名筛选同一套控件与打分（KeywordRules），只是它看的
+            // 是 TrueHD／DTS-HD／Atmos／7.1／5.1 这些格式词。出厂几条常见词都设成默认（不生效）。
+            KeywordRules("音轨格式筛选", () => playback.AudioFormatRules, value => playback.AudioFormatRules = value,
+                "语言选出「哪几条是这个语言」之后，再按编码／声道里的词挑一遍：优先＝含这个词的排前头，候补＝排到最后"
+                    + "（同语言只剩它时仍会给一条），默认＝不生效。预置 Atmos、TrueHD、DTS-HD、DTS、FLAC、7.1、5.1，"
+                    + "输入框可自定义添加。格式只在同一语言内部作用，不会越过语言优先级。下次播放生效"),
+
+            // 视频文件名筛选（「参考标题筛选，新增视频文件名筛选」，2026-09-22）：一个条目挂多版本（多个文件）时，
+            // 默认播哪一版按文件名里的关键词挑。和字幕标题筛选同一套控件与打分，只是它筛的是版本文件名。
+            KeywordRules("视频文件名筛选", () => playback.VideoFileRules, value => playback.VideoFileRules = value,
+                "一部片子有多个版本（多个文件）时，按文件名里的词决定默认播哪一版：优先＝含这个词的版本优先，"
+                    + "候补＝往后排（只剩它时仍会用它），默认＝不生效。输入框可自定义添加，如 REMUX、4K、HDR、枪版。"
+                    + "只有一个版本的片子不受影响。下次播放生效")
         ]);
     }
 
@@ -498,9 +515,18 @@ public sealed partial class SettingsViewModel : PageViewModel
         [
             preview,
 
-            Languages("字幕语言优先级", "简体中文, 中文", () => playback.SubtitleLanguages, value => playback.SubtitleLanguages = value,
-                "「其他字幕」是一个预设的名字，代表任何别的语言的字幕 —— 填在最后就是「前面都不匹配时，有一条别的语言的总比没有好」。"
-                    + "下次播放生效"),
+            LanguagePriority("字幕语言优先级", "未指定，跟随文件默认字幕", () => playback.SubtitleLanguages, value => playback.SubtitleLanguages = value,
+                "点开勾语言，越靠上越优先，按住或用箭头换次序。「其他字幕」是一个预设项，代表任何别的语言的字幕 —— "
+                    + "排在最后就是「前面都不匹配时，有一条别的语言的总比没有好」。下次播放生效",
+                // 普通话、粤语是「说的是哪种」，那是音轨的区分，字幕轨不按这个标；字幕表不列它们（音轨那份仍可用）。
+                exclude: ["普通话", "粤语"]),
+
+            // 标题筛选：语言选完之后按标题里的关键词再挑一遍（「先确定哪几条是中文，再决定不要双语和特效」）。
+            // 语言和标题从此分家 —— 语言只看轨的语言字段，这里只看标题。
+            KeywordRules("标题筛选", () => playback.SubtitleTitleRules, value => playback.SubtitleTitleRules = value,
+                "语言选出「哪几条是中文」之后，再按标题里的词挑一遍：优先＝含这个词的排前头，候补＝排到最后（同语言"
+                    + "只剩它时仍会给一条，不至于没字幕），默认＝不生效。输入框可自定义添加词。"
+                    + "另：字幕语言里选了「简体中文」时，会自动把标题带「繁 / 繁体」的排为候补。下次播放生效"),
             Choice("显示模式", SubtitleModes, () => playback.SubtitleMode, value => playback.SubtitleMode = value),
             Toggle("没有匹配语言时使用默认字幕", "按优先级挑不到一条字幕时，就用文件自带的默认那条", () => playback.SubtitleFallbackToDefault, value => playback.SubtitleFallbackToDefault = value),
 
@@ -526,18 +552,12 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "在字号之上再乘一次。ASS/SSA 字幕不用「强制」也认这一项，是唯一能把它们调大的旋钮。"
                     + "出厂默认 100，就是「不缩放」；想回去就拖回 100", "sub-scale"),
 
-            // 字重三档（「默认雅黑 + 仍做三档字重」，2026-09-21）。mpv 没有 sub-font-weight（2026-09-06 探过
-            // 选项表），所以字重不是一个 mpv 选项，而是「发哪个字体族名 + 要不要开 sub-bold」——见
-            // FontFamilies.ResolveWeighted，两者一处算。选值经 Live 走，一改就把整套字幕外观重发给正在播的片子
-            // （sub-font 与 sub-bold 都在 SubtitleStyleOptions 里，一起被重推）。
-            Choice("字重",
-                [("细", PlaybackSettings.LightSubtitleWeight),
-                 ("常规", PlaybackSettings.RegularSubtitleWeight),
-                 ("粗", PlaybackSettings.BoldSubtitleWeight)],
-                () => PlaybackSettings.ClampWeight(playback.SubtitleFontWeight),
-                Live<int>(value => playback.SubtitleFontWeight = value),
-                Annotate("常规是出厂。细只对自带细体的字体有效（比如微软雅黑），别的字体上等于常规；"
-                    + "粗对谁都能加粗。mpv 没有连续字重可调，就这三档", "sub-font · sub-bold")),
+            // 字幕加粗（2026-09-22「删掉字重选项，改为 sub-bold」）。mpv 没有连续字重可调，能开关的只有
+            // sub-bold 这一个，所以早先那个三档字重（v18–v19）退回成一个开关：开了字体用粗体、没真粗体的由
+            // libmpv 合成。选值经 Live 走，一改就把整套字幕外观重发给正在播的片子（sub-bold 在
+            // SubtitleStyleOptions 里，一起被重推）。
+            Toggle("字幕加粗", "开了字幕用粗体：字体有真粗体就用真的，没有的由 libmpv 合成加粗",
+                () => playback.SubtitleBold, Live<bool>(value => playback.SubtitleBold = value), "sub-bold"),
             ColorRow("文字颜色", () => playback.SubtitleColor, Live<string>(value => playback.SubtitleColor = value), "sub-color",
                 "HTML 颜色代码（#RRGGBB），点色块从拾色器里挑，随便什么颜色都能给"),
             UnitSlider("描边大小", SubtitlePreviewPlan.MpvDefaultBorderSize,
@@ -1611,23 +1631,23 @@ public sealed partial class SettingsViewModel : PageViewModel
         }, Save);
 
     /// <summary>
-    /// A list of languages in priority order. <see cref="List"/> parsed by the language catalogue instead of
-    /// by punctuation alone: mpv writes a priority list with <c>&gt;</c> and so did this client's own v2
-    /// settings file, so that is how a person writes one here too — and 「简体中文 &gt; 中文」 used to be stored
-    /// as a single language of that name, matching nothing, with the box happily showing it back.
-    /// <para>
-    /// Names are canonicalised, which is also what the settings document does to this list on load, so the
-    /// redisplayed box is exactly what ends up in the file. A name the catalogue does not know is kept as
-    /// written and reaches mpv as a raw language code.
-    /// </para>
+    /// A priority list picked from a drop-down of check-boxes rather than typed out — 字幕语言优先级 became this
+    /// on 2026-09-22（「参考上图改成复选下拉」）. The list arrives ordered by <see cref="TrackLanguagePriority.OrderedChoices"/>
+    /// (chosen first, in stored order, then the rest of the catalogue, then 其他字幕); ticking a language adds it,
+    /// dragging or the arrows set its priority, and what is stored is the ticked names in that order. See
+    /// <see cref="SettingLanguagesRow"/> — it and <see cref="Languages"/> reach the same
+    /// <see cref="PlaybackSettings.SubtitleLanguages"/>, so a settings file written by either still reads back.
+    /// <paramref name="placeholder"/> is what the drop-down button shows while nothing is ticked.
     /// </summary>
-    private SettingTextRow Languages(string label, string placeholder, Func<List<string>> read, Action<List<string>> write, string? note = null) =>
-        new(label, note, placeholder, string.Join(", ", read()), typed =>
-        {
-            var items = TrackLanguagePriority.ParseList(typed);
-            write(items);
-            return string.Join(", ", items);
-        }, Save);
+    private SettingLanguagesRow LanguagePriority(string label, string placeholder, Func<List<string>> read, Action<List<string>> write, string? note = null, IReadOnlyCollection<string>? exclude = null) =>
+        new(label, note, placeholder, read, write, Save, exclude);
+
+    /// <summary>
+    /// 一张关键词规则表：一行一个词加 优先／默认／候补，可自定义添加。字幕标题筛选、视频文件名筛选两处共用同一套
+    /// <see cref="KeywordRule"/>／<see cref="KeywordFilter"/>／<see cref="SettingTitleRulesRow"/>。
+    /// </summary>
+    private SettingTitleRulesRow KeywordRules(string label, Func<List<KeywordRule>> read, Action<List<KeywordRule>> write, string? note = null) =>
+        new(label, note, read, write, Save);
 
     /// <summary>
     /// Splits a typed list of plain words. Both widths of comma and semicolon, plus the ideographic comma —

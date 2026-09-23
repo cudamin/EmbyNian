@@ -82,4 +82,30 @@ public static class MediaVersionSwitch
         item is null || playing is null
             ? null
             : item.MediaSources.FirstOrDefault(source => Same(source, playing));
+
+    /// <summary>
+    /// 多版本时默认播哪一版（「参考标题筛选，新增视频文件名筛选」，2026-09-22）：按视频文件名规则打分，取分最高的
+    /// 那一版；同分时保留服务器次序取第一个，和从前「默认第一版」一致。没有条目/规则、或只有一版时直接是服务器
+    /// 第一版 —— <b>单版本条目一律不受影响</b>。用在起播挑默认版本处（详情页预选、直接播放），换版仍走
+    /// <see cref="ShouldSwitch"/>／<see cref="At"/> 那条用户点名的路。
+    /// </summary>
+    public static MediaSource? Preferred(EmbyItem? item, IReadOnlyList<KeywordRule>? rules)
+    {
+        var sources = item?.MediaSources;
+        if (sources is null || sources.Count == 0) return null;
+        if (sources.Count == 1 || rules is null || rules.Count == 0) return sources[0];
+
+        var ranked = KeywordFilter.Rank(sources, rules, FileText);
+        return ranked.Count > 0 ? ranked[0] : sources[0];
+    }
+
+    /// <summary>
+    /// 一版用来按文件名筛的文本：版本名加文件名。发布组标记（REMUX、4K、枪版…）多半在文件名里，版本名也可能带，
+    /// 两个都算上。<c>System.IO.Path</c> 写全名，免得和 <see cref="MediaSource.Path"/> 撞名。
+    /// </summary>
+    private static string FileText(MediaSource source)
+    {
+        var file = source.Path is { Length: > 0 } path ? System.IO.Path.GetFileName(path) : "";
+        return $"{source.Name} {file}".Trim();
+    }
 }

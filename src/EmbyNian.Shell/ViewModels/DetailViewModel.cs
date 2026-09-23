@@ -1913,7 +1913,9 @@ public sealed partial class DetailViewModel : PageViewModel
 
         foreach (var row in ItemDetail.SourceRows(target)) Sources.Add(row);
 
-        var wanted = target.DefaultMediaSource ?? target.MediaSources.FirstOrDefault();
+        // 默认预选哪一版：多版本时按视频文件名筛选规则挑（单版本／没规则时就是服务器第一版，同从前）。
+        var rules = Attached ? Settings.Playback.VideoFileRules : null;
+        var wanted = MediaVersionSwitch.Preferred(target, rules) ?? target.DefaultMediaSource ?? target.MediaSources.FirstOrDefault();
         var picked = ItemDetail.PickSource(Sources, wanted);
 
         if (Equals(SelectedSource, picked)) ShowSource(picked?.Source);
