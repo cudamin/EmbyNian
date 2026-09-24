@@ -1,9 +1,12 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using EmbyNian.Diagnostics;
+using Microsoft.Win32.SafeHandles;
 
 namespace EmbyNian.Mpv;
 
@@ -11,9 +14,9 @@ namespace EmbyNian.Mpv;
 /// The control channel to a running mpv: JSON commands out, events and replies in, over a
 /// Windows named pipe.
 /// <para>
-/// Everything here is best-effort by design. mpv is a separate process the user can close at any
-/// moment, so a broken pipe is a normal end-of-session and not an error to surface: the playback
-/// session degrades to "no live position" instead of failing.
+/// Connection identity is mandatory. Once connected, live reads are best-effort because mpv is
+/// a separate process the user can close at any time; startup commands must instead be checked
+/// by the caller and an unanswered command must prevent loading the media.
 /// </para>
 /// </summary>
 public sealed class MpvIpcClient : IAsyncDisposable
@@ -30,6 +33,7 @@ public sealed class MpvIpcClient : IAsyncDisposable
     private int _nextObserverId;
     private Task? _reader;
     private volatile bool _disposed;
+    private volatile bool _closed;
 
     private MpvIpcClient(NamedPipeClientStream pipe) => _pipe = pipe;
 
@@ -42,7 +46,10 @@ public sealed class MpvIpcClient : IAsyncDisposable
     /// <summary>Fired once when the pipe closes, whatever the cause.</summary>
     public event Action? Closed;
 
-    public bool IsConnected => !_disposed && _pipe.IsConnected;
+    public bool IsConnected => !_disposed && !_closed && _pipe.IsConnected;
+
+    /// <summary>Drain the last end-file event after process exit before classifying that exit.</summary>
+    internal Task Completion => _reader ?? Task.CompletedTask;
 
     /// <summary>A pipe name unique to this launch, so it cannot collide with a manually started mpv.</summary>
     public static string CreatePipeName() => $"embynian-{Guid.NewGuid():N}";
@@ -55,19 +62,28 @@ public sealed class MpvIpcClient : IAsyncDisposable
     /// single attempt would nearly always lose the race; the caller cancels
     /// <paramref name="cancellationToken"/> when the process exits, which stops the wait early
     /// instead of burning the whole timeout on a launch that already failed.
+    /// The pipe must belong to the current user and the exact process just launched. Anonymous
+    /// impersonation prevents a server from using our identity; no commands/readers precede the PID check.
+    /// This does not isolate malicious code already running as the same Windows user.
     /// </summary>
-    public static async Task<MpvIpcClient?> ConnectAsync(string pipeName, TimeSpan timeout, CancellationToken cancellationToken)
+    public static async Task<MpvIpcClient?> ConnectAsync(
+        string pipeName, int processId, TimeSpan timeout, CancellationToken cancellationToken)
     {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("安全 mpv 管道需要 Windows");
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
         var deadline = Stopwatch.StartNew();
 
         while (deadline.Elapsed < timeout)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, TokenImpersonationLevel.Anonymous);
             try
             {
                 await pipe.ConnectAsync(200, cancellationToken).ConfigureAwait(false);
+                if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out var serverId) || serverId != (uint)processId)
+                    throw new InvalidOperationException("mpv 启动通道的进程身份不符，已拒绝发送播放请求");
                 var client = new MpvIpcClient(pipe);
                 client.Start();
                 Log.Debug(Category, $"已连接 mpv 控制通道：{pipeName}（等待 {deadline.ElapsedMilliseconds} ms）");
@@ -88,11 +104,20 @@ public sealed class MpvIpcClient : IAsyncDisposable
                 await pipe.DisposeAsync().ConfigureAwait(false);
                 await Task.Delay(50, cancellationToken).ConfigureAwait(false);
             }
+            catch
+            {
+                await pipe.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
 
-        Log.Warn(Category, $"在 {timeout.TotalSeconds:0.#} 秒内未能连接 mpv 控制通道，本次播放不上报进度");
+        Log.Warn(Category, $"在 {timeout.TotalSeconds:0.#} 秒内未能连接 mpv 安全启动通道");
         return null;
     }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
 
     private void Start() => _reader = Task.Run(ReadLoopAsync);
 
@@ -123,8 +148,9 @@ public sealed class MpvIpcClient : IAsyncDisposable
         }
         finally
         {
+            _closed = true;
             FailPending(new IOException("mpv 控制通道已关闭"));
-            Closed?.Invoke();
+            Raise(() => Closed?.Invoke());
         }
     }
 
@@ -132,7 +158,8 @@ public sealed class MpvIpcClient : IAsyncDisposable
     {
         if (!MpvIpcMessage.TryParse(line, out var message))
         {
-            Log.Debug(Category, $"忽略无法解析的 mpv 消息：{Truncate(line)}");
+            // Malformed messages and mpv errors may echo the request, including HTTP headers.
+            Log.Debug(Category, "忽略无法解析的 mpv 消息");
             return;
         }
 
@@ -215,8 +242,8 @@ public sealed class MpvIpcClient : IAsyncDisposable
 
     /// <summary>
     /// Sends a command and waits for its reply. Returns null instead of throwing when the pipe
-    /// is gone or mpv does not answer: every caller here treats an unanswered command as
-    /// "no live data", never as a failure worth showing the user.
+    /// is gone or mpv does not answer. The startup caller treats null as a hard failure; live
+    /// property reads can degrade to unknown. Explicit caller cancellation always propagates.
     /// </summary>
     public async Task<MpvIpcMessage?> RequestAsync(CancellationToken cancellationToken, params object?[] command)
     {
@@ -228,18 +255,21 @@ public sealed class MpvIpcClient : IAsyncDisposable
 
         try
         {
-            await WriteAsync(Encode(command, requestId), cancellationToken).ConfigureAwait(false);
-
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closing.Token);
             timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            await WriteAsync(Encode(command, requestId), timeout.Token).ConfigureAwait(false);
 
             await using var registration = timeout.Token.Register(() => waiter.TrySetCanceled()).ConfigureAwait(false);
             var reply = await waiter.Task.ConfigureAwait(false);
 
             if (!reply.IsSuccess)
-                Log.Debug(Category, $"mpv 拒绝命令 {command.FirstOrDefault()}：{reply.Error}");
+                Log.Debug(Category, "mpv 拒绝了一条命令");
 
             return reply;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException)
         {
@@ -318,6 +348,4 @@ public sealed class MpvIpcClient : IAsyncDisposable
         _writeGate.Dispose();
         _closing.Dispose();
     }
-
-    private static string Truncate(string text) => text.Length <= 200 ? text : text[..200] + "…";
 }

@@ -25,8 +25,9 @@ public sealed class MpvProcessBackend(MpvSettings settings) : IPlaybackBackend
     {
         if (Validate() is { } problem) throw new InvalidOperationException(problem);
 
-        var pipeName = settings.EnableIpc ? MpvIpcClient.CreatePipeName() : null;
-        var arguments = MpvArgumentBuilder.Build(request, pipeName is null ? null : MpvIpcClient.ToPipePath(pipeName));
+        cancellationToken.ThrowIfCancellationRequested();
+        var pipeName = MpvIpcClient.CreatePipeName();
+        var arguments = MpvArgumentBuilder.Build(request, MpvIpcClient.ToPipePath(pipeName));
 
         var start = new ProcessStartInfo
         {
@@ -34,6 +35,7 @@ public sealed class MpvProcessBackend(MpvSettings settings) : IPlaybackBackend
             UseShellExecute = false,
             CreateNoWindow = false,
             RedirectStandardError = true,
+            RedirectStandardOutput = true,
             // So that anything mpv itself resolves relative to its own folder — a codec list, a
             // fontconfig cache — behaves as it would if it had been launched from there by hand.
             WorkingDirectory = Path.GetDirectoryName(settings.ExecutablePath) ?? Environment.CurrentDirectory
@@ -41,7 +43,7 @@ public sealed class MpvProcessBackend(MpvSettings settings) : IPlaybackBackend
 
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
 
-        Log.Info(Category, $"启动 mpv：{CommandLine.Describe(MpvArgumentBuilder.Redact(arguments))}");
+        Log.Info(Category, "启动外部 mpv：通过验证身份的管道传递播放请求");
         if (request.ShaderProfile is { } profile)
             Log.Info(Category, $"着色器配置组：{profile}（{request.ShaderReason}）");
 
@@ -49,7 +51,7 @@ public sealed class MpvProcessBackend(MpvSettings settings) : IPlaybackBackend
         var handle = new MpvProcessHandle(process);
         try
         {
-            await handle.AttachAsync(pipeName, cancellationToken).ConfigureAwait(false);
+            await handle.AttachAsync(pipeName, request, settings.EnableIpc, cancellationToken).ConfigureAwait(false);
             return handle;
         }
         catch
@@ -67,12 +69,14 @@ public sealed class MpvProcessBackend(MpvSettings settings) : IPlaybackBackend
 internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlayerControl
 {
     private const string Category = "mpv";
-    private const int StderrTailLines = 40;
-
-    private readonly Queue<string> _stderrTail = new(StderrTailLines);
     private readonly CancellationTokenSource _finished = new();
 
+    // Always retained until quit/disposal. _ipc is only the optional live-control capability;
+    // disabling progress never makes authentication fall back to argv or opens UI control.
+    private MpvIpcClient? _startup;
     private MpvIpcClient? _ipc;
+    private Task? _outputDrain;
+    private int _disposeStarted;
     private Task? _poller;
     /// <summary>
     /// Milliseconds, or -1 for "not known yet". A nullable double cannot be volatile, and the
@@ -90,7 +94,7 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
     private PlayerStatus _status = new();
     private readonly object _statusGate = new();
 
-    public bool HasControlChannel => _ipc is not null;
+    public bool HasControlChannel => _ipc is { IsConnected: true };
 
     /// <summary>
     /// 外部 mpv.exe 的画面永远在它自己的顶层窗口里（<see cref="Mpv.MpvArgumentBuilder"/> 从不传
@@ -109,17 +113,14 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
 
     public event Action<IReadOnlyList<MpvTrack>>? TracksChanged;
 
-    internal async Task AttachAsync(string? pipeName, CancellationToken cancellationToken)
+    internal async Task AttachAsync(
+        string pipeName, PlaybackRequest request, bool enableControl, CancellationToken cancellationToken)
     {
-        CollectStandardError();
+        // mpv can echo headers in errors. Drain both streams without retaining or publishing their text.
+        _outputDrain = Task.WhenAll(
+            process.StandardError.BaseStream.CopyToAsync(Stream.Null),
+            process.StandardOutput.BaseStream.CopyToAsync(Stream.Null));
 
-        if (pipeName is null)
-        {
-            Log.Info(Category, "已按设置关闭 mpv 控制通道，本次播放不上报播放进度");
-            return;
-        }
-
-        // mpv exiting is also an answer: stop waiting for a pipe that will never appear.
         using var giveUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         void OnExited(object? sender, EventArgs arguments) => Cancel(giveUp);
 
@@ -129,42 +130,53 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
             process.Exited += OnExited;
             if (process.HasExited) Cancel(giveUp);
 
-            _ipc = await MpvIpcClient.ConnectAsync(pipeName, TimeSpan.FromSeconds(10), giveUp.Token).ConfigureAwait(false);
+            _startup = await MpvIpcClient.ConnectAsync(pipeName, process.Id, TimeSpan.FromSeconds(10), giveUp.Token)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException("无法建立 mpv 安全启动通道，未发送播放请求");
+            _startup.Closed += () => Cancel(_finished);
+
+            if (enableControl)
+            {
+                _ipc = _startup;
+                _ipc.FileEnded += reason => _endReason = reason switch
+                {
+                    MpvEndFileReason.Eof or MpvEndFileReason.Error or MpvEndFileReason.Quit or MpvEndFileReason.Stop => reason,
+                    _ => MpvEndFileReason.Unknown
+                };
+                _ipc.PropertyChanged += OnPropertyChanged;
+                // Position stays on the poller: time-pos would notify across the pipe on every frame.
+                foreach (var property in (string[])
+                         ["pause", "duration", "volume", "mute", "speed", "paused-for-cache", "demuxer-cache-time", "track-list"])
+                    await _ipc.ObservePropertyAsync(property, giveUp.Token).ConfigureAwait(false);
+            }
+
+            foreach (var command in MpvArgumentBuilder.LoadCommands(request))
+            {
+                giveUp.Token.ThrowIfCancellationRequested();
+                if (!await _startup.SendAsync(giveUp.Token, command).ConfigureAwait(false))
+                    throw new InvalidOperationException("mpv 未确认安全起播命令，已停止启动；请检查外部播放器版本");
+            }
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            Log.Warn(Category, "mpv 在建立控制通道前就退出了");
-            return;
+            throw new InvalidOperationException("mpv 在安全起播完成前退出了");
         }
         finally
         {
             process.Exited -= OnExited;
         }
 
-        if (_ipc is null) return;
-
-        _ipc.FileEnded += reason =>
+        if (!enableControl)
         {
-            _endReason = reason;
-            Log.Debug(Category, $"mpv 报告文件结束：{reason}");
-        };
+            // No file-end observation either: reporting EOF upstream would mark the item watched
+            // despite opting out of progress. idle=once still lets the process exit on its own.
+            Log.Info(Category, "已关闭 mpv 进度与控制，仅保留安全起播和退出通道，本次不上报进度");
+            return;
+        }
 
-        _ipc.PropertyChanged += OnPropertyChanged;
-        _ipc.Closed += () => Cancel(_finished);
-
-        // Everything the client's chrome draws except the position, which stays on the poller
-        // below. time-pos notifies on every frame, and here every notification is a JSON line
-        // across a pipe — the one property where the client is better off asking.
-        foreach (var property in (string[])
-                 ["pause", "duration", "volume", "mute", "speed", "paused-for-cache", "demuxer-cache-time", "track-list"])
-            await _ipc.ObservePropertyAsync(property, cancellationToken).ConfigureAwait(false);
-
-        // 外部 mpv.exe 这一档没有事件通道（只有 named pipe 上的属性观察），拿不到内置后端那条
-        // playback-restart；而它的画面在 mpv 自己的顶层窗口里，窗口是带着画面出生的（force-window
-        // 那一套见 StandaloneWindowHint 那条注释）。所以这一拍就是这一档能给出的最诚实的答案，
-        // 与改动前的行为一致：会话起来＝可以揭遮罩。
+        // External mpv owns its window. This is command acceptance, not proof of a rendered frame.
         Update(status => status with { Loaded = true, PictureStarted = true });
-
         var stopping = _finished.Token;
         _poller = Task.Run(() => PollPositionAsync(stopping), CancellationToken.None);
     }
@@ -287,10 +299,21 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
     {
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
         Cancel(_finished);
+        if (_ipc is not null)
+        {
+            try
+            {
+                await _ipc.Completion.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // Exit is certain even if another inherited pipe handle prevents EOF on the pipe.
+            }
+        }
 
         var exitCode = SafeExitCode();
         var reason = Classify(exitCode);
-        var message = reason == PlaybackEndReason.Error ? DescribeFailure(exitCode) : null;
+        var message = reason == PlaybackEndReason.Error ? $"mpv 播放失败（退出代码 {exitCode}）" : null;
 
         Log.Info(Category, $"mpv 已退出（代码 {exitCode}，原因 {_endReason ?? "未知"}）");
         return new PlaybackExit(reason, LastPosition, exitCode, message);
@@ -306,51 +329,13 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         _ => exitCode == 0 ? PlaybackEndReason.Unknown : PlaybackEndReason.Error
     };
 
-    private string DescribeFailure(int exitCode)
-    {
-        lock (_stderrTail)
-        {
-            var detail = _stderrTail.LastOrDefault(line => line.Contains("Failed", StringComparison.OrdinalIgnoreCase)
-                                                           || line.Contains("error", StringComparison.OrdinalIgnoreCase)
-                                                           || line.Contains("Cannot", StringComparison.OrdinalIgnoreCase));
-            return detail ?? $"mpv 以代码 {exitCode} 退出";
-        }
-    }
-
-    /// <summary>
-    /// Keeps the tail of mpv's terminal output so a failure can say why. Not logged line by
-    /// line: this config sets msg-level=all=info, which would bury everything else.
-    /// </summary>
-    private void CollectStandardError()
-    {
-        process.ErrorDataReceived += (_, arguments) =>
-        {
-            if (arguments.Data is not { Length: > 0 } line) return;
-
-            lock (_stderrTail)
-            {
-                if (_stderrTail.Count == StderrTailLines) _stderrTail.Dequeue();
-                _stderrTail.Enqueue(line);
-            }
-        };
-
-        try
-        {
-            process.BeginErrorReadLine();
-        }
-        catch (InvalidOperationException)
-        {
-            // Already exited; nothing to read.
-        }
-    }
-
     public async Task StopAsync()
     {
         _stopRequested = true;
 
-        if (_ipc is { IsConnected: true })
+        if (_startup is { IsConnected: true })
         {
-            await _ipc.QuitAsync().ConfigureAwait(false);
+            await _startup.QuitAsync().ConfigureAwait(false);
             if (await WaitForExitWithinAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false)) return;
         }
 
@@ -554,6 +539,7 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0) return;
         // 句柄一放出去，这个进程就没人管了。正常收尾那一头 mpv 已经退了，这一下只花一次 HasExited 的钱；
         // 句柄还活着就被 Dispose 的那些路（起播失败、上报那一句抛了别的错）却正是 mpv 被漏在外面继续放
         // 的地方 —— 从前这里只拆观察用的管线，从不开口请 mpv 走，两个后端的 Dispose 语义也从此一致。
@@ -579,7 +565,18 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
             }
         }
 
-        if (_ipc is not null) await _ipc.DisposeAsync().ConfigureAwait(false);
+        if (_startup is not null) await _startup.DisposeAsync().ConfigureAwait(false);
+        if (_outputDrain is not null)
+        {
+            try
+            {
+                await _outputDrain.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is TimeoutException or IOException or ObjectDisposedException)
+            {
+                // Diagnostic text is deliberately discarded, also on failure.
+            }
+        }
 
         _finished.Dispose();
         process.Dispose();

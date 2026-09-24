@@ -62,7 +62,11 @@ public sealed class PlaybackPlanner(
 
         // Hoisted out of the initializer below because two things need it: what mpv is told to call the film,
         // and what a screenshot of it is called.
-        var title = item.ToPlaybackTitle();
+        // 2026-09-24 用户令「这是独占模式下左上角的标题，在尾部也新增制作组」（例：再见菈菈 S01E12 再见菈菈
+        // - Studio GreenTea）：mpv 左上角那行就是 force-media-title，喂的正是这个字符串。制作组从正在排的
+        // 这一版自己的文件名里取 —— 拼在票上而不是拼在条目上，候选回退落到哪一版，标题就跟着哪一版的组名走。
+        // 集成模式左上角的标题条走的是 item.ToPlaybackTitle() 那条路，不经过这里，按用户指的范围保持原样。
+        var title = ReleaseGroup.DecorateTitle(item.ToPlaybackTitle(), source.Path);
 
         var request = new PlaybackRequest
         {

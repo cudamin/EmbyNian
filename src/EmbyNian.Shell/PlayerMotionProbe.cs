@@ -222,6 +222,33 @@ internal static class PlayerMotionProbe
             Require(earlyFades == 0, "遮罩不许在首帧之前开始淡出（背景图与正片之间那段黑屏）");
             Require(page.MotionProbeState.CoverHidden, "就绪后加载遮罩完全退场");
 
+            // 2026-09-23 用户报「集成模式下进度条左边的时间与进度条不会实时刷新」：真凶在状态合流门槛的
+            // 比较基线 —— `LibMpvHandle.Publish` 拿同一个字段既当「最新值」又当「上次发布值」，mpv 每帧报
+            // 一次 time-pos、1× 播放下每次只挪约 0.03 秒，0.25 秒的门缝于是永远只有一步宽，推送只在暂停、
+            // 缓冲这类粗事件上跳一下（单测 `StatusCoalescerTests` 钉的是合流器本身，**钉不住它有没有被
+            // 接在这条链上**；上面「遮罩时序」读的是画面，也不经过状态推送）。
+            // 所以这里量的是真实的一整条链：mpv 事件线程 → `Publish` → `IPlayerControl.StatusChanged`
+            // —— 视图模型的 `SeekValue` 与 `PositionClock`（进度条和它左边那个时间）的全部来源。旧代码
+            // 在这 3 秒里只会数出 0~1 次。
+            Write("阶段：状态推送是否跟着片子走（进度条与它左边那个时间的全部来源）");
+            var pushes = 0;
+            var advanced = 0;
+            var lastPushedPosition = double.NaN;
+            void CountPushes(PlayerStatus status)
+            {
+                // 回调全部来自 mpv 事件线程同一条线，先后有保证，记录「上一次的位置」用不着加锁。
+                pushes++;
+                if (!double.IsNaN(lastPushedPosition) && status.Position > lastPushedPosition + 0.05) advanced++;
+                lastPushedPosition = status.Position;
+            }
+
+            control.StatusChanged += CountPushes;
+            await Task.Delay(3000, token);
+            control.StatusChanged -= CountPushes;
+            Write($"状态推送：3 秒内 {pushes} 次，其中位置确实往前走的 {advanced} 次（门槛 0.25 秒 ⇒ 约 4 次/秒）");
+            Require(pushes >= 8, $"平顺播放时状态快照必须周期性推送（3 秒至少 8 次），实际只有 {pushes} 次");
+            Require(advanced >= pushes / 2, $"推送之间位置确实在前进（进度条会走），实际 {advanced}/{pushes}");
+
             foreach (var stage in new[] { "最大化", "还原", "最大化", "还原" })
             {
                 Write($"阶段：播放中{stage}");

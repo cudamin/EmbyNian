@@ -54,6 +54,15 @@ public sealed partial class PlayerViewModel
     /// </summary>
     private void OnVideoWindowMessage(string key, string value) => OnUi(() =>
     {
+        // 装载握手先于「在播」那一问：uosc 是在 mpv_initialize 时装上的，而文件在那之后才打开 ——
+        // 握手到的时候片子往往还没开，可宿主手上已经有「这个条目有几版」了。那颗「版本」按钮要在画面
+        // 出来之前就摆对，所以这一条不能让它被下面的闸挡掉（其余几条都是「播放中的请求」，照旧要闸）。
+        if (key == VideoWindowContract.Ready)
+        {
+            NoteVersionCount();
+            return;
+        }
+
         if (!_playback.IsPlaying) return;
 
         switch (key)
@@ -192,6 +201,33 @@ public sealed partial class PlayerViewModel
                 string.Equals(episode.Id, PlayingItemId, StringComparison.Ordinal)))];
 
         await SendMenuAsync("episodes", "选集", items).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// 把「这个条目挂了几版」告诉独占模式的视频窗 —— uosc 那颗「版本」按钮按这个数露面，只有一版时
+    /// 它压根不在控制条上（用户令 2026-09-23：「只有一个版本的情况下不显示…」）。
+    /// <para>
+    /// 与 <see cref="PlayerViewModel.VersionControlsVisible"/> 是同一个数的两个去处：集成模式那颗按钮归外壳，
+    /// 独占模式那颗归 uosc —— 而 uosc 的控件表是静态的，露不露面只能由宿主把答案送过去（门在 Lua 那侧，
+    /// <c>state.has_many_versions</c>，见 assets/mpv-ui/scripts/uosc/main.lua 的 EMBYNIAN[version-count]）。
+    /// </para>
+    /// <para>
+    /// 调用点都是「那一格刚被写过」的时刻：<see cref="PlayerViewModel.CurrentItem"/> 的 setter
+    /// （新一集开播、服务器那份更全的记录到手、换版之后），以及视频窗装载握手的应答 —— 后一条管的是
+    /// 「画面还没出来就摆对」。发不出去不算错：起播前那一次赋值天然还没有会话，静默。
+    /// </para>
+    /// </summary>
+    private void NoteVersionCount() => _ = PushVersionCountAsync();
+
+    private async Task PushVersionCountAsync()
+    {
+        // 只有独占模式的视频窗里装着 uosc（HeadlessPlayback）；集成模式那两个数字归外壳，没人接这条消息。
+        if (!HeadlessPlayback) return;
+
+        var value = Versions.Count.ToString(CultureInfo.InvariantCulture);
+
+        if (!await _playback.CommandAsync("script-message", VideoWindowContract.VersionCount, value).ConfigureAwait(true))
+            Log.Debug(Category, $"「有几版」（{value}）没能送到视频窗 —— uosc 还没起来？");
     }
 
     /// <summary>
@@ -380,7 +416,14 @@ public sealed partial class PlayerViewModel
         var source = MediaVersionSwitch.Playing(item, _playback.PlayingSource)
             ?? item?.MediaSources.FirstOrDefault();
 
-        return source?.ToQualityLabel() ?? "";
+        var label = source?.ToQualityLabel() ?? "";
+        // 2026-09-24 用户令「这是进度条中间的视频格式，在最后新增制作组，取文件名 再见菈菈 S01E12
+        // 1080p.AAC-Studio GreenTea 后面的 Studio GreenTea」：画质读数（1080p · HEVC · MP4 · 261.8MB）
+        // 尾部接上正在放这一版文件名里的制作组。问的照样是正在放的那一版（见上），换过版本后这一行
+        // 会经 OnNowPlayingChanged 重算，组名跟着换；文件名里认不出组名就维持原样。
+        var group = ReleaseGroup.FromFileName(source?.Path);
+        if (group.Length == 0) return label;
+        return label.Length > 0 ? $"{label}  ·  {group}" : group;
     }
 
     /// <summary>

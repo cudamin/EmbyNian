@@ -2,13 +2,18 @@ namespace EmbyNian.Tests;
 
 internal static class Program
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (MpvProcessTests.IsChild(args)) return MpvProcessTests.RunChildAsync(args).GetAwaiter().GetResult();
+        if (args is ["selfcheck-mutex-fixture", var source, var target])
+            return SelfCheckTests.RunMutexChild(source, target);
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.WriteLine("EmbyNian Core 测试");
         Console.WriteLine();
 
         PlaybackTests.Register();
+        MpvProcessTests.Register();
+        SelfCheckTests.Register();
         SettingsTests.Register();
         ShortcutTests.Register();
         SeekKeyTests.Register();
@@ -38,10 +43,12 @@ internal static class Program
         PlayerPaletteTests.Register();
         PlayerMotionTests.Register();
         PictureRevealTests.Register();
+        StatusCoalescerTests.Register();
         ResizeFreezeTests.Register();
         VolumeScaleTests.Register();
         MpvUiTests.Register();
         MediaVersionTests.Register();
+        ReleaseGroupTests.Register();
         InlineSwitchTests.Register();
         WindowFormTests.Register();
         PinIndicatorTests.Register();

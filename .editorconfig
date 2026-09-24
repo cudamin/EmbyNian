@@ -34,6 +34,11 @@ indent_size = 4
 [*.{json,js,yml,yaml}]
 indent_size = 2
 
+[*.ps1]
+# Windows PowerShell 5.1 needs a BOM to read Chinese source consistently.
+charset = utf-8-bom
+indent_size = 4
+
 [*.md]
 # Markdown gives two trailing spaces a meaning, so the global trim would eat line breaks.
 trim_trailing_whitespace = false

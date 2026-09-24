@@ -28,7 +28,8 @@ public sealed class PlaybackService(
     EmbySession session,
     AppSettings settings,
     Func<IPlaybackBackend> backendFactory,
-    PlaybackPlanner planner)
+    PlaybackPlanner planner,
+    bool allowPlayback = true)
 {
     private const string Category = "playback";
 
@@ -188,6 +189,8 @@ public sealed class PlaybackService(
     /// </summary>
     public async Task<PlaybackResult> PlayAsync(PlaybackTicket ticket, CancellationToken cancellationToken)
     {
+        // A self-check may navigate real library data, but must never start a backend or report playback.
+        if (!allowPlayback) throw new InvalidOperationException("自检模式禁止真实播放");
         var candidates = CandidateSources(ticket);
 
         for (var index = 0; index < candidates.Count; index++)

@@ -592,6 +592,12 @@ public sealed partial class PlayerViewModel : ObservableObject
         {
             _currentItem = value;
             VersionControlsVisible = value is not null && value.MediaSources.Count > 1;
+
+            // 独占模式视频窗里那颗「版本」按钮吃的是同一个数（用户令 2026-09-23「只有一个版本的情况下
+            // 不显示…」）：uosc 的控件表是静态的，露不露面得宿主把答案告诉它。写在同一格里，「有几版」
+            // 与「那颗按钮该不该在」就是同一次赋值的两个结果，两处不可能互相矛盾 —— 与上面那一格的
+            // 理由一模一样。
+            NoteVersionCount();
         }
     }
 

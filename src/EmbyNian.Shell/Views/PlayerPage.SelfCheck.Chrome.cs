@@ -204,6 +204,14 @@ public sealed partial class PlayerPage
     /// on this thread is that the transition is still attached and still has a duration; a run in front of a
     /// person is what says it looks right.
     /// </para>
+    /// </para>
+    /// <para>
+    /// 这一关要过两支画面：<b>够大</b>时量的是强度那一套（下面那些点），<b>小到尺寸线以下</b>时音量条
+    /// 一个像素都不该有（用户令 2026-09-23「集成模式下窗口小于一定程度的时候自动隐藏音量条」）。
+    /// 两支得在同一趟里量完，因为自检窗口的大小不由探针决定 —— 这一页读「画面多大」的两口是
+    /// <see cref="PictureWidth"/>／<see cref="PictureHeight"/>，探针因此能把那个读数临时摆到想量的
+    /// 那一档（<see cref="_probePictureSize"/>），生产路径永远是 <c>Root</c> 上的真实读数。
+    /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbeRailFade()
     {
@@ -217,8 +225,11 @@ public sealed partial class PlayerPage
             return (false, "画面还没有尺寸，量不出右侧带");
         }
 
-        var width = Root.ActualWidth;
-        var height = Root.ActualHeight;
+        // 强度那一套只在大画面上成立，而自检窗口未必够大 —— 所以先把画面读数按「刚过阈值」摆好，
+        // 阈值以下那一支到末尾单独量。动的只是读数，真窗口一个像素都不动。
+        var width = Math.Max(Root.ActualWidth, ChromeReveal.RailMinPictureWidth + 1);
+        var height = Math.Max(Root.ActualHeight, ChromeReveal.RailMinPictureHeight + 1);
+        _probePictureSize = new Size(width, height);
         var clock = Now;
         var report = new List<string>();
         var wrong = new List<string>();
@@ -371,9 +382,37 @@ public sealed partial class PlayerPage
         Render();
         Want("收起后不挡点击", !Rail.IsHitTestVisible && Rail.Opacity == 0);
 
+        // 小画面：音量条一个像素都不画（用户令 2026-09-23）。三件一起量：尺寸线高过音量条自己、窄过线时
+        // 不画、矮过线时也不画（连滚轮那次读数都不画 —— 小窗口里的音量从此没有数字可看，这个代价是那句话
+        // 的正面含义，见 ChromeReveal.RailRoom）。
+        report.Add($"音量条自己 {Rail.ActualWidth:F0}×{Rail.ActualHeight:F0}，"
+            + $"尺寸线 {ChromeReveal.RailMinPictureWidth:F0}×{ChromeReveal.RailMinPictureHeight:F0}");
+        Want("尺寸线容得下音量条自己",
+            Rail.ActualHeight > 0 && Rail.ActualHeight <= ChromeReveal.RailMinPictureHeight);
+
+        _probePictureSize = new Size(ChromeReveal.RailMinPictureWidth - 1, height);
+        clock += SettleMilliseconds;
+        _chrome.Tick(clock);
+        var narrow = Strength(ChromeReveal.RailMinPictureWidth - 2, height / 2);
+        _chrome.FlashRail(++clock);
+        Render();
+        var narrowWheel = Rail.Opacity;
+        report.Add($"窄画面（{ChromeReveal.RailMinPictureWidth - 1:F0} 宽）指针压在最右缘={narrow:P0}，滚轮后={narrowWheel:P0}");
+        Want("画面窄过尺寸线时音量条不画", narrow == 0);
+        Want("画面窄过尺寸线时滚轮也不画音量条", narrowWheel == 0);
+
+        _probePictureSize = new Size(width, ChromeReveal.RailMinPictureHeight - 1);
+        clock += SettleMilliseconds;
+        _chrome.Tick(clock);
+        var squat = Strength(width - 1, (ChromeReveal.RailMinPictureHeight - 1) / 2.0);
+        report.Add($"矮画面（{ChromeReveal.RailMinPictureHeight - 1:F0} 高）指针压在最右缘={squat:P0}");
+        Want("画面矮过尺寸线时音量条不画", squat == 0);
+
         // Put back the way ProbeThinLine does it: the page first, so the last Render leaves nothing of the
-        // player's over the library grid behind it.
+        // player's over the library grid behind it. 画面读数也在这里还给窗口 —— 这一趟之后
+        // PictureWidth/PictureHeight 又只是 Root 上的两个数了。
         Visibility = was;
+        _probePictureSize = null;
         _chrome.Reset(++clock);
         _chrome.Tick(clock + SettleMilliseconds);
         SetCursorHidden(false);

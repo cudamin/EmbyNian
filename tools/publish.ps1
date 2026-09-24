@@ -123,6 +123,15 @@ $zipPath = Join-Path $outputRootResolved "EmbyNian-$version-$Runtime.zip"
 $msixPath = Join-Path $outputRootResolved "EmbyNian-$version-$Runtime.msix"
 $stageRoot = Join-Path $outputRootResolved "msix-stage\$Runtime"
 
+if (-not $SkipPublish) {
+    $targetExe = Join-Path $publishRoot 'EmbyNian.exe'
+    foreach ($running in @(Get-Process -Name 'EmbyNian' -ErrorAction SilentlyContinue)) {
+        if (-not $running.Path -or [string]::Equals($running.Path, $targetExe, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw '交付程序仍在运行或无法确认它的路径。请先关闭目标应用再发布；原发布目录尚未清理。'
+        }
+    }
+}
+
 New-Item -ItemType Directory -Path $outputRootResolved -Force | Out-Null
 
 # 只有真要重新发布的时候才清 publish；-SkipPublish 那一趟连碰都不碰它。理由是文件锁：程序正开着的时候
@@ -157,6 +166,10 @@ $publishArgs = @(
     'publish', $project,
     '-c', $Configuration,
     '-r', $Runtime,
+    '-m:1',
+    '-p:BuildInParallel=false',
+    '-p:UseSharedCompilation=false',
+    '-p:MSBuildNodeReuse=false',
     '--self-contained', ($selfContained.ToString().ToLowerInvariant()),
     '-p:Platform=x64',
     ('-p:WindowsAppSDKSelfContained=' + $selfContained.ToString().ToLowerInvariant()),

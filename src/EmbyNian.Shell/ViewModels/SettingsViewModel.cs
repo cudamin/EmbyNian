@@ -406,22 +406,13 @@ public sealed partial class SettingsViewModel : PageViewModel
                     + "可以一边挂着片子一边继续翻媒体库，再点别的片子直接换成新点的这部；关掉视频窗就是"
                     + "停止播放。只对内置 libmpv 有效，下一次播放生效。"),
 
-            // 这句说明是这一行存在的第二个理由，而且它是安全性的一句实话，不是介绍。外部 mpv.exe 那条路把
-            // X-Emby-Token 写在 --http-header-fields-append= 上，也就是写在另一个进程的命令行上 —— 任务管理器、
-            // 任何进程工具、崩溃转储都读得到。内置 libmpv 不经过命令行（那个头是在进程里用 mpv_set_option_string
-            // 设的），所以默认后端没有这件事。
-            //
-            // 为什么是「把话说出来」而不是「把代码改掉」：两条真修法各有代价，而且这台机器上一条都验不了（验证
-            // 时不许真实播放，本机也没装外部 mpv.exe）。写一份临时 mpv 配置文件传 header 等于把令牌明文落到磁盘
-            // 上，正好抵掉「settings.json 泄了也不是一个可用凭据」这个 DPAPI 换来的性质；改成先连上 IPC 再注入
-            // （--idle=once 加 loadfile）安全上最干净，但会长出第二条起播路径、一种新的卡死方式（通道建不起来
-            // 就永远待机），而且「关掉 IPC」那一档就没法播了。三条路里只有这一条是验得住的，而它把决定交回给
-            // 真正要走这条路的人 —— 这个后端本来就要用户自己填路径才用得上。要真修，选 IPC 那条。
+            // 认证只经过核验了服务端进程身份的管道。关闭进度不关闭这个启动必需通道；失败就停止，
+            // 不退回命令行或临时明文文件。它仍然信任所选程序和同一 Windows 用户下的代码。
             PathBox("mpv.exe 路径", "mpv.exe 路径", () => Settings.Mpv.ExecutablePath, value => Settings.Mpv.ExecutablePath = value,
-                "只有「外部 mpv.exe」这个后端要它。走这个后端时，访问令牌会出现在 mpv 的进程命令行上（任务管理器、"
-                    + "进程工具、崩溃转储都读得到）；内置播放器不经过命令行，没有这件事。"),
+                "只有「外部 mpv.exe」后端需要它。访问令牌通过核验进程身份的管道传递，不放进命令行或临时文件；"
+                    + "无法建立安全通道就停止起播。请只选择可信的 mpv.exe，同一 Windows 用户下的恶意程序仍可能窃取凭据。"),
 
-            Toggle("启用 IPC 进度通道", "关掉之后服务器就拿不到精确的播放位置了", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value)
+            Toggle("启用 IPC 进度通道", "关掉后不读取或上报进度，也不提供客户端控制；安全起播和退出仍需管道", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value)
         ]);
 
     private SettingSection PlaybackCard()

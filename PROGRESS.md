@@ -1,6 +1,53 @@
 # 开发进度
 
-最后更新：2026-09-23
+最后更新：2026-09-24
+
+## 集成模式小窗口不画音量条 ＋ 独占模式控制条再排（选集/版本进左下、版本按需露面、音轨那一组与全屏空一个按钮宽）（2026-09-23，构建+单测+离线探针+发布全绿；09-24 追加「独占控制条字幕与音频互换」，同轮验证；未提交）
+
+用户两条原话：①「集成模式下窗口小于一定程度的时候自动隐藏音量条」；②「把独占模式里的选集和选版本的按钮移动到左下（从左到右，选集倒数第二个选版本最后一个，只有一个版本的情况下不显示选集数按钮），把字幕和音轨按钮往左移动一些，让音轨按钮和全屏/窗口按钮相隔一个按钮的空位」。
+
+**① 音量条的尺寸线**：判据＝Core 的纯函数 `ChromeReveal.RailRoom(宽, 高)`，两个常量 `RailMinPictureWidth = 720`、`RailMinPictureHeight = 560` —— 都从**音量条自己的尺寸**反推（条子约 68×415，加右边距 22 与右缘 160 的唤出带）。**两个方向各自成立**：宽而矮（拖下边缘）与窄而高都要收，所以是合取。页面两处收口：`Render()` 里 `FadeRail(state.Rail && RailRoom() ? … : 0)` 是**唯一**落点（指针走近右缘那条路与滚轮/按键那条路都经过它），`RailNear()` 在小画面上一律答 -1 —— 于是规则那一头压根不以为它该露面，右缘也不再吊住控件与光标。**跨线要自己画一趟**：`OnRootResized` 补一句 `Render()`（窗口跨过阈值时规则那一头什么都没变，不补它，缩小后的窗口里音量条会照旧挂着直到下一次指针移动）；不存缓存位 —— 「画面多大」只有一个答主。**代价写明白：小窗口里滚轮调音量再没有数字可看**，那是「自动隐藏」的正面含义。
+
+**② 独占模式控制条**（uosc 的 `controls` 默认值 ＋ 一条新的**宿主 → uosc** 消息）：左下＝上一集/下一集/统计/章节（有章节时）/画面菜单/**选集/版本**（左→右：选集倒数第二、版本最后）；中下不动；右下＝字幕/音频/（`gap:1` 一个按钮宽的空位）/全屏。三处要点：
+- **版本那颗按需露面**：uosc 的控件表是静态的（上一轮这里写着「写不出『有第二版才露』」），这一轮照它自己的 `has_many_edition` 那一路加门 —— 新消息 `embynian-version-count`（`VideoWindowContract.VersionCount`）写 `state.has_many_versions`，controls 串挂 `<has_many_versions>embynian-ui-versions`。宿主出口 `PlayerViewModel.PushVersionCountAsync`，两个发送时刻＝**uosc 装载握手**（那片子还没开，宿主手里已经有答案，按钮在画面出来之前就摆对）与 `CurrentItem` 的 setter（新一集/媒体信息更全的那份/换版之后，与集成模式那颗按钮同一个数）。`Parse` **故意不认**这条：script-message 是广播，认了它就是「自己应自己」的第二个自激源。
+- **空一个按钮宽**：那颗 `gap:1` 就是空位（uosc 的 `gap` 是本项宽度的倍数，默认 0.3）。
+- **一处判断留档（2026-09-24 已按用户令作废）**：原话那个空位点的是「音轨按钮」，而当日右侧两颗的先后未动（音频在字幕左边），空位因此落在字幕与全屏之间 —— 读作「那一组」与全屏隔开。**09-24 用户令「把独占模式下字幕和音频的按钮位置互换」：两颗已调过来**（左→右：字幕、音频），空位随之落在音频与全屏之间，正合原话字面（音轨挨着空位）。集成模式（`PlayerPage.xaml`）那两颗仍是音频在前，本轮只动独占这一处。另外原话里的「选集数按钮」按「版本按钮」理解（「只有一个版本的情况下不显示」只能指它）。
+
+**改了哪些文件**：`Core/Playback/ChromeReveal.cs`（常量＋`RailRoom`）、`Shell/Views/PlayerPage.Chrome.cs`（`PictureWidth/Height` 两口＋`_probePictureSize`＋`RailRoom()`＋`RailNear`/`Render` 两处收口＋`OnRootResized`）、`Shell/Views/PlayerPage.SelfCheck.Chrome.cs`（`ProbeRailFade` 加小画面一支）、`Core/Mpv/MpvUi.cs`（`VersionCount`）、`Shell/ViewModels/PlayerViewModel.cs`（`CurrentItem` 里补一句）、`Shell/ViewModels/PlayerViewModel.Events.cs`（握手分支＋`PushVersionCountAsync`）、`assets/mpv-ui/scripts/uosc/main.lua`（controls 串＋state 一格＋消息处理器）、`assets/mpv-ui/README.md`、`tests/EmbyNian.Tests/{PlaybackTests,MpvUiTests}.cs`、`work/{check-uosc-controls.py,probe-uosc-menu-flow.py,luacheck-uosc.lua}`。
+
+**验证**：构建（全解决方案 Release）**0 警 0 错**，exit 0；单测 **1040 项全过 / 0 失败 / 0 跳过**（新增 `PlaybackTests`「画面小到尺寸线以下就没有音量条」一条，扩了 `MpvUiTests` 那条守卫：左下尾巴/右下那一组/门两头/契约名单）；`luajit` 语法检查两个 Lua 文件通过；`work/check-uosc-controls.py` 16 项全解析（它新加一关「显示条件有没有人写」）；**离线探针** `work/probe-uosc-menu-flow.py assets/mpv-ui/scripts/uosc lay2-20260923`（vo=null）：P1 的 dump 正是新排布（左下 8/42/76/110/144/178，右下 1140/1174/**1240**，字幕右缘 1206 与全屏左缘 1240 之间那 34px ＝ 32 的按钮 ＋ 2 的间距）、**P11 段**送 `version-count 1` → 版本按钮 0 颗、送 `2` → 1 颗（「收得住也回得来」），P9/P10 版本与画面菜单照旧各 1 条；报告 `work/probe-uosc-flow-lay2-20260923.txt`。发布（闸门 3）**526 文件 / 300.0 MB / 11 GLSL**「发布验证通过」，`artifacts/publish/win-x64` 的 `EmbyNian.dll`、`EmbyNian.Core.dll` 与本次 build 逐字节同一份（sha256 相等）、装箱的 `main.lua` 与源文件同哈希。
+
+**闸门 4（本轮改了自检，按规矩当轮跑）**：`tools/selfcheck-diff.ps1` → **红 ｜ 检查 173、失败 3、消失 0、降级 2、新增 0**。三条失败＝「跨季相邻单集」（《伪恋》服务端季数据，老红）＋「窗口命令按钮」「屏幕像素」。**后两条是既有红、不是本轮引出**：把改动**前**的发布件（`EmbyNian-stale\publish-20260923-234539`）用同一个脚本跑一遍，得到的读数**一字不差**（同样是 173/3、同样这两条降级）。它们相对 `docs/selfcheck-baseline.txt` 记的「通过」属基线漂移，大概率是今天早些时候那两轮未提交改动的探针老化（`ChangeWindowAsync` 现在多了冻/放两步、读窗口状态的探针又抢在异步落地之前 —— 三十六报修过同一个毛病），**按规矩没有更新基线、也没有替它洗绿**，留给专门一轮。本轮那一条改动过的自检 `ProbeRailFade` 是**通过**的，读数里带着新支：`音量条自己 68×415，尺寸线 720×560；窄画面（719 宽）指针压在最右缘=0%，滚轮后=0%；矮画面（559 高）指针压在最右缘=0%`。
+
+**没验证到的（照实说）**：全程离线、未真实播放；「小窗口里滚轮没有数字可看」的观感、以及独占模式那条 `gap:1` 的屏上样子，都要他的眼睛过一遍（探针只能量 rect 与 opacity）。**未提交**。
+
+用户报「集成模式下进度条的数据不会实时刷新」（当晚又报了一次，补的是「进度条左边的时间」——同一条链上的两个读数）。
+
+**病根（从首次提交就在，不是这两天的回退）**：`LibMpvBackend.Publish` 拿 `_status` 同时当「最新值」和「合流门槛的比较基线」。mpv 每帧报一次 `time-pos`（约 60 次/秒，1× 播放下每次只挪约 0.03 秒），而 `PlayerStatus.DiffersFrom` 的位置门槛是 0.25 秒。基线跟着每一帧往前爬，门缝永远只有一步宽、`StatusChanged` 对位置这一路永远不发——于是集成模式那条 WinUI 进度条只在暂停、缓冲、整秒缓存这类粗事件上跳一下，平顺播放时看着就是「不动/不实时」。**独占模式不受影响**：uosc 是 mpv 里的 Lua，直接读 mpv 属性，根本不经过这条 C# 推送。
+
+**修法**：把合流基线单独拿出来成 `Core/Playback/StatusCoalescer.cs`（纯类、可测）。`_status` 照旧每帧刷新供 `Status` 直接读取；`_coalescer.ShouldPublish` 用「上一次真正发出去的那一帧」当基线——一小步够不着阈值时**不动基线**，累计过 0.25 秒才发一次（≈4 次/秒，正是原本想要的节流）。`Publish` 从九行缩到「刷新 `_status`＋问合流器发不发」两行。
+
+**验证**：闸门 1 全量 Release 构建 **0 警 0 错**；闸门 2 先编译再测 **1039/1039**（0 失败 0 跳过），含新增 `StatusCoalescerTests` 三条——主判据「每帧只挪一点、累计过阈值仍周期性发布」会在病根回来时当场变红。**实机也过了**：`--probe-player-motion` 本轮新加「状态推送是否跟着片子走」一关（本地彩条素材、不走服务器），3 秒内 `IPlayerControl.StatusChanged` 到了 **11 次、位置确实前进 10/11**——病根还在的时候这条链是 0。
+
+**实机那一关是怎么补上的**：上一手探针读位置走 `GetPositionAsync` 直读，**不经过状态推送**，所以只能靠单测＋推理。这轮在 `PlayerMotionProbe` 首帧段落之后插了「状态推送是否跟着片子走」：订阅 `IPlayerControl.StatusChanged` 数 3 秒，两条硬断言——「平顺播放 3 秒至少 8 次推送（0.25 秒门槛 ⇒ 约 4 次/秒）」与「推送之间位置确实在前进」。它量的就是 mpv 事件线程 → `LibMpvHandle.Publish` → `StatusChanged` 这条真实链，进度条与它左边那个时间的**全部**来源；`StatusCoalescerTests` 钉合流器本身，这一关钉「合流器有没有被接在这条路上」，两头都锁死。
+
+**没验证到的（照实说）**：
+- 外部 `mpv.exe` 后端（`MpvProcessBackend.Update`）结构上同款，但它的位置走 1 秒一次的轮询、位置一路正常；只有被观察的 `demuxer-cache-time`（缓存条）可能同样爬不过阈值，属次要。它正被另一轮安全重构改着，本次**不顺手动它**。
+- 闸门 4 没跑：这次改动住在播放状态推送里，自检不播放、够不到它；发布读数 **526 文件 / 300.0 MB / 11 GLSL**，`EmbyNian.Core.dll` 已确认含合流器（用户桌面快捷方式指的就是这份）。
+- 探针顺带冒出一条**非阻断诊断**：「自动全屏起播——首帧快照抢到加载层上方 12 拍」。这条检查是上一轮新加的、今天头一次真跑到；它指向的是 2026-09-22「在途交接」里起播自动全屏过渡那件事（见下文），不是本轮引入，也不挡闸门。
+
+## 规则与执行一致性修订（2026-09-23，验证完成、未提交）
+
+用户在审查后授权开始修改。本轮由主目录 `C:/Users/89400/EmbyNian` 交付；本会话写主规则、开发文档、项目技能、编辑器配置及维护脚本。外部 mpv 安全启动和自检运行隔离在各自临时工作树开发，整合后在主树统一验证和发布；中断任务的旧树部分工作不视为完成。已有 `.zcodeignore` 保留、不纳入本轮。
+
+- 规则保留分层默认值和安全红线，把完整命令、开关说明与本机排障放到开发文档；明确合法基线退役、共享桌面串行验证，以及旧失败也不能当绿。
+- 清理验证技能中的自动旧包归档假设与退役光标三关；补充 Lua/uosc 技能触发范围。
+- 发布传递完整单节点参数，并在清理前拒绝仍运行的交付进程；`build.cmd test` 先编译再执行。
+- PowerShell 的 BOM/LF 要求落到 `.editorconfig` 和 `check-scripts.ps1`；维护工具回归使用本树隔离夹具，不覆盖真实发布或分析器。
+- 产品安全两处（各自临时树开发、已整合进主树）：①外部 mpv 进程后端的凭据不再走命令行——`MpvArgumentBuilder` 命令行只留安全开关与 `--input-ipc-server`，`OwnsStartup` 挡下任何想覆盖 http-/input-ipc-/字幕音轨加载的播放器选项；令牌与带认证的媒体地址改由校验过的命名管道用 IPC `set_property http-header-fields`／`loadfile` 下发，不进 argv、不进 URL、不进日志。②自检隔离：`SelfCheckRun` 每次用独立 `artifacts/selfcheck/run-<guid>` 目录、只复制 settings.json、写隔离回执，`selfcheck-diff.ps1` 拒绝启动未声明隔离协议的旧 exe；Program 的自检分支在迁移之前返回，生产设置不改、不整份恢复。
+- 另有一份未整合的 `AppPaths.IsSelfCheck` 迁移守卫（旧自检树 agent-a4ced 的方案）：主树靠 Program 分支顺序已让自检路径够不到迁移、且运行目录已有 settings.json 迁移也会跳过，那层是重复防护，按「不加没人调用的机关」不并入，旧树留档（如需可从会话记录取回）。
+- 本轮主树四道闸门读数：构建 0 警 0 错、`format whitespace` exit 0；先编译再测 **1036/1036**（0 失败 0 跳过），另 test-maintenance 13/13、test-selfcheck-diff **41/41**、check-scripts 15；发布 526 文件 / 300.0 MB / 11 GLSL 到快捷方式指向目录；闸门 4 只剩老红《伪恋》跨季服务端数据，与基线比消失 0／降级 0／新增 0。同轮修好 `selfcheck-diff.ps1` 把「失败又不在基线」错报成 `[新增]` 的老毛病（与基线约定对齐：失败行本就不登记），补两条回归夹具。
+- 没验证到（照实说）：全程离线、未真实播放；本机无真实 mpv.exe，外部进程后端与真实 mpv 版本的兼容未验；凭据外泄按占位令牌核对自检日志/报告为 0 次，真实明文未读。未提交、未推送。
 
 ## 三十六报：整合发版 v0.0.18——闸门 4 头一次跑这批播放改动，五条回退全定位（四条自检探针老化、一条真回退），修好后只剩老红《伪恋》（2026-09-23）
 

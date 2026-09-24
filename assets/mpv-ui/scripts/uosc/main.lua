@@ -21,8 +21,13 @@
 -- │     EMBYNIAN[ui-bind]       脚本绑定叫 embynian-ui-*，宿主消息叫 embynian-*，两套名字不许同名
 -- │     EMBYNIAN[episode]       embynian-ui-* 三个绑定与裁剪说明
 -- │     EMBYNIAN[version]       换版本的第四个绑定（embynian-ui-versions）：≡ 菜单里那一行，
--- │                             外加控制条上那颗常驻的「版本」按钮。uosc 的控件表是静态的，
--- │                             没有「有第二版才露」这种条件可写，所以按钮常驻、菜单内容随条目变。
+-- │                             外加控制条上那颗「版本」按钮（2026-09-23 起按需露面，见下一条）。
+-- │     EMBYNIAN[version-count] 宿主 → uosc 的通道：embynian-version-count <几版> 写进
+-- │                             state.has_many_versions，控制条上那颗「版本」按钮按它露面 ——
+-- │                             只有一版时它不在屏上。uosc 的控件表本来是静态的（原来这里写着
+-- │                             「写不出有第二版才露这种条件」），照的正是它自己 has_many_edition
+-- │                             那一路的形状：has_ 开头的条件读 state 表，谁改状态谁 trigger
+-- │                             dispositions。
 -- │     EMBYNIAN[picture-menu]  第五个绑定（embynian-ui-picture-menu）：独占模式右键/菜单键，
 -- │                             以及控制条上那颗「画面菜单」按钮 —— 三者同一份 PlayerMenuCatalog。
 -- │     EMBYNIAN[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
@@ -103,23 +108,31 @@ defaults = {
 	timeline_cache = true,
 	timeline_heatmap = 'overlay',
 
-	-- EMBYNIAN[controls] — 控制条默认值与排布（2026-09-23 用户令重排）：
-	--   左下：上一集、下一集、统计、章节（有章节时）、画面菜单；
+	-- EMBYNIAN[controls] — 控制条默认值与排布（2026-09-23 用户令两轮；09-24 再一轮：字幕与音频互换）：
+	--   左下：上一集、下一集、统计、章节（有章节时）、画面菜单、**选集、版本**；
 	--   中下：上一章节、倍速、下一章节（有章节时）；
-	--   右下：选集、版本、音频、字幕、全屏。
-	-- 三处与旧版不同，各有原因：
+	--   右下：字幕、audio、（空一个按钮宽）、全屏。
+	-- 四处与旧版不同，各有原因：
 	--   · 那颗菜单按钮开的是**画面菜单** —— 与集成模式的「更多」按钮、独占模式的右键同一份
 	--     PlayerMenuCatalog（用户令「改成右键画面呼出的那个菜单」）。绑定因此换成
 	--     uosc/embynian-ui-picture-menu；uosc 自带的 ≡ 菜单没删，只是控制条上不再有它的入口。
-	--   · 字幕/选集/音频/版本四颗在右侧挨着全屏；音频**不带** <has_many_audio> 条件 —— 只有一条音轨
-	--     时那颗按钮也要在（简写自带的 #audio>1 徽章照旧：一轨以上才在角上标数字）。
+	--   · **选集与版本挪到左下**（用户令「把独占模式里的选集和选版本的按钮移动到左下」，左→右次序
+	--     按原话：选集倒数第二个、版本最后一个）；**版本那颗按需露面**（<has_many_versions>，
+	--     只有一版时整颗不在屏上）—— 见文件头的 EMBYNIAN[version-count]。
+	--   · **音频与字幕往左让，与全屏之间空出一个按钮宽**（用户令「把字幕和音轨按钮往左移动一些，
+	--     让音轨按钮和全屏/窗口按钮相隔一个按钮的空位」）：那颗 `gap:1` 就是那个空位 —— uosc 的 gap
+	--     是本项宽度的倍数（默认 0.3），写 1 正好一个按钮。**2026-09-24 用户令「把独占模式下字幕和
+	--     音频的按钮位置互换」——两颗的先后已调过来**：左→右现在是**字幕、音频**，空位因此落在音频
+	--     与全屏之间（上一轮「两颗先后没动、空位落在字幕之后」那句留档随之作废；空位改按字面读，
+	--     正好挨着原话点的「音轨按钮」）。**与集成模式相反**：`PlayerPage.xaml` 里那两颗是音频在前、
+	--     字幕在后，本轮只按要求动了独占这一处。**音频**照旧不带 <has_many_audio> 条件（只有一条音轨
+	--     时那颗按钮也要在；简写自带的 #audio>1 徽章照旧：一轨以上才在角上标数字）。
 	--   · 「版本」按钮是 Emby 的媒体源切换（embynian-ui-versions → 宿主把这一条的媒体源推回菜单），
 	--     不是上游的 <has_many_edition>editions（mpv 自己的剪辑版本，那颗已撤 —— 两颗都叫「版本」
 	--     只会让人点错；要看 mpv 的剪辑版本，≡ 菜单的「工具 → 剪辑版本」还在）。
-	--     宿主那侧本来就对「只有一版」有交代：菜单回一行「没有可切换的版本」，不是空菜单。
 	-- 播放列表/目录导航、打开文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
 	controls =
-	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,embynian-ui-picture-menu,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,gap,<video,audio>embynian-ui-episodes,<video,audio>embynian-ui-versions,audio,<video,audio>subtitles,fullscreen',
+	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,embynian-ui-picture-menu,<video,audio>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,<video,audio>subtitles,audio,gap:1,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
@@ -494,6 +507,10 @@ state = {
 	has_audio = false,
 	has_sub = false,
 	has_chapter = false,
+	-- EMBYNIAN[version-count] — 这个条目挂了几版文件，由宿主的 embynian-version-count 消息写进来
+	-- （uosc 自己问不出 Emby 的媒体源表）。默认 false＝那颗「版本」按钮先不画：宿主在装载握手那一刻
+	-- 就会把真答案送过来（它能早答，是因为「播哪一条、这条有几版」在 mpv 起来之前就已经在它手上了）。
+	has_many_versions = false,
 	has_playlist = false,
 	shuffle = options.shuffle,
 	---@type nil|{pos: number; paths: string[]}
@@ -1002,6 +1019,23 @@ bind_command('embynian-ui-versions', function() embynian_notify('embynian-versio
 -- keybind 补上（config=no 之下 input.conf 不读、uosc 默认不绑键，见 MpvUi.MenuKeys）。同一个形状：绑定叫
 -- embynian-ui-picture-menu、消息叫 embynian-picture-menu，两套名字不许同名（理由见上面 EMBYNIAN[ui-bind]）。
 bind_command('embynian-ui-picture-menu', function() embynian_notify('embynian-picture-menu', '') end)
+
+-- EMBYNIAN[version-count] — 宿主 → uosc 的通道：这个条目挂了几版文件。
+-- 上面那一排都是 uosc 向宿主要东西，这一条反过来 —— 宿主主动把答案送来，控制条上那颗「版本」按钮按它
+-- 露面（只有一版时整颗不在屏上；用户令 2026-09-23「只有一个版本的情况下不显示…」）。
+--
+-- 门写在 controls 串里（<has_many_versions>embynian-ui-versions），形状照 mpv 自己的 <has_many_edition>——
+-- uosc 的 has_ 开头的显示条件读的是 state 表，所以这里只需写格 + 催一次 dispositions（等于
+-- chapter-list / editions 那两个观察器做的事）。**不改 controls 串**：uosc 的 options 只在装载时读一遍，
+-- 运行期换整张控件表反而要重造全部按钮。
+--
+-- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：绑定一律 embynian-ui-…，这条是 embynian-…，
+-- 而且 uosc 这边只有 register_script_message，没有同名的 bind_command。
+mp.register_script_message('embynian-version-count', function(value)
+	set_state('has_many_versions', (tonumber(value) or 0) > 1)
+	Elements:trigger('dispositions')
+end)
+
 bind_command('menu-prev', function() Elements:maybe('menu', 'navigate_by_items', -1) end)
 bind_command('menu-next', function() Elements:maybe('menu', 'navigate_by_items', 1) end)
 bind_command('menu-prev-page', function() Elements:maybe('menu', 'navigate_by_page', -1) end)

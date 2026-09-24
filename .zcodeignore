@@ -1,0 +1,67 @@
+bin/
+obj/
+publish/
+*.user
+*.suo
+.vs/
+.idea/
+artifacts/
+work/
+work-*/
+outputs/
+*.log
+
+# 117 MB 的 mpv 运行库，仅在存在时被复制进发布目录（见 Shell 项目），不入库
+libmpv-2.dll
+
+# 构建与测试时重定向到文件的控制台输出
+testrun.txt
+pubout.txt
+
+# 验证用的截图。留在磁盘上供翻阅，但不入库：git 存不了 PNG 的增量，这三处合起来 50 MB 出头，
+# 一旦进了历史就永远在里面。PROGRESS.md 引用它们时用的是路径，路径在本机照旧打得开。
+shots/
+docs/shots/
+shell.png
+
+# `.claude/skills` 是入库的（技能跟着代码走，见 CLAUDE.md），但同一个目录下的临时工作树不是：
+# 那是会话自己开的检出，随时生随时灭。
+.claude/worktrees/
+
+# AI 助手的工作数据目录（记忆、会话状态），不是项目源码
+.workbuddy/
+.zcode/
+# 本机沙箱构建的环境变量兜底（写死了本机用户路径），不入库
+envprobe.props
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

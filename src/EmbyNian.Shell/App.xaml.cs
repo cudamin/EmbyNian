@@ -83,7 +83,7 @@ public partial class App : Application
 
         try
         {
-            var services = ShellServices.Build(_options.Paths);
+            var services = ShellServices.Build(_options.Paths, selfCheck: _options.SelfCheck);
             _container = services;
 
             var ui = services.GetRequiredService<ISettingsService>().Settings.Ui;
@@ -131,7 +131,7 @@ public partial class App : Application
             // 上次关掉时的尺寸、位置和最大化状态。`--maximized` 说了就最大化，没说就照上次那一档 —— 命令行是
             // 「这一次这么开」，记下来的那一份是「平时就这么开」，两者不冲突。摆得下摆不下由 HostWindow 问屏幕。
             _window.Show(
-                _options.StartMaximized || ui.WindowMaximized,
+                !_options.SelfCheck && (_options.StartMaximized || ui.WindowMaximized),
                 _options.Screen,
                 new WindowBounds(
                     ui.WindowLeft,
@@ -150,10 +150,12 @@ public partial class App : Application
                 () => _shell.PlayerRoot.VideoSurface;
             shell.AttachWindow(_window);
 
-            _activation = ActivationListener.Start(
-                _options.ActivationEventName,
-                DispatcherQueue.GetForCurrentThread(),
-                () => _window?.Activate());
+            // A self-check must never consume the production activation signal.
+            if (!_options.SelfCheck)
+                _activation = ActivationListener.Start(
+                    _options.ActivationEventName,
+                    DispatcherQueue.GetForCurrentThread(),
+                    () => _window?.Activate());
 
             if (_options.SelfCheck) ShellSelfCheck.ScheduleFor(_window, shell, services, _options);
 
@@ -164,6 +166,7 @@ public partial class App : Application
         catch (Exception error)
         {
             Log.Error(Category, "创建主窗口失败", error);
+            if (_options.SelfCheck) ShellSelfCheck.ReportCrash(_options, error, "自检窗口初始化失败");
             Exit();
         }
     }

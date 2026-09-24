@@ -455,6 +455,7 @@ switch  --screen
 switch  --scroll-end
 switch  --scroll-half
 switch  --self-check
+switch  --self-check-data
 switch  --show-cover
 switch  --show-detail
 switch  --show-episode

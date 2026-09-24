@@ -73,14 +73,21 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
      整个销毁脚本，UI 一片空白，实测 2026-09-19）；
    - `options.autoload` 在读入配置后强制为 false。
    - 新增绑定 `embynian-ui-prev/next`（换集）、`embynian-ui-episodes`（要选集菜单）、
-     `embynian-ui-versions`（要版本菜单）、`embynian-ui-picture-menu`（要画面菜单）。
-     控制条 2026-09-23 按用户令重排为三组：**左下**上一集/下一集/统计/章节（有章节时）/画面菜单，
-     **中下**上一章节/倍速/下一章节，**右下**选集/版本/音频/字幕，全屏在最右。四处与旧版不同：
+     `embynian-ui-versions`（要版本菜单）、`embynian-ui-picture-menu`（要画面菜单）；新增**宿主 → uosc**
+     的一条 `mp.register_script_message('embynian-version-count')`（见 `EMBYNIAN[version-count]`）。
+     控制条 2026-09-23 按用户令重排为三组（同日第二轮又改了一次）：**左下**上一集/下一集/统计/
+     章节（有章节时）/画面菜单/**选集/版本**，**中下**上一章节/倍速/下一章节，**右下**字幕/音频/
+     （空一个按钮宽 `gap:1`）/全屏。六处与旧版不同：
      那颗菜单按钮开的是**画面菜单**（与集成模式的「更多」按钮、独占模式右键同一份
      `PlayerMenuCatalog`；uosc 自带的 ≡ 菜单保留，只是控制条上不再有它的入口）；音频按钮不再带
      「多音轨才显示」的条件（只有一条音轨时也在，简写自带的 `#audio>1` 徽章仍只在一轨以上标数字）；
      「版本」是 Emby 的媒体源切换，上游那颗 mpv 剪辑版本按钮（`<has_many_edition>editions`）已撤，
-     免得两颗同名。上游的「视频轨」按钮由选集菜单顶替，单曲循环按钮不设（连播归宿主）。
+     免得两颗同名；选集与版本两颗在左下那一组的**尾巴**（左→右：选集倒数第二、版本最后）；
+     「版本」那颗**按需露面** —— `has_many_versions` 门（宿主的 `embynian-version-count` 写它），
+     只有一版时整颗不在屏上；**字幕与音频**（2026-09-24 用户令「把独占模式下字幕和音频的按钮位置
+     互换」，左→右现在是 字幕、音频，空位随之落在音频与全屏之间 —— 与集成模式 `PlayerPage.xaml`
+     里「音频在前」的次序相反）与全屏之间空出**一个按钮宽**（那颗 `gap:1`；`gap` 是本项宽度的
+     倍数，默认 0.3）。上游的「视频轨」按钮由选集菜单顶替，单曲循环按钮不设（连播归宿主）。
      **绑定名带 `-ui-`、宿主消息名不带，是硬规矩**：mpv 把一条
      `script-message` 也派给同名的脚本绑定，同名就等于「这条消息把自己再叫醒一次」——
      2026-09-19 的实测事故即此（详见下节）。
@@ -136,9 +143,11 @@ uosc → 宿主（`MPV_EVENT_CLIENT_MESSAGE`，契约与解析在 `src/EmbyNian.
 | `embynian-menu-index` | 1 起算序号 | 画面菜单点中的一行 → `RunMenuNodeAsync`（与集成模式右键点同一行是同一句执行） |
 | `embynian-seek` | 0–1 比例 | 预留扩展；当前 uosc 时间轴直接对 mpv seek，不经宿主 |
 
-不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc 一条：`open-menu`（选集
-菜单的 JSON，shape 与 uosc MenuData 对齐）。uosc 靠 mpv 属性观察自取其余全部状态（音量、
-轨道、章节的变化会自动反映到控制窗的选择器——它们读的是同一份 mpv 状态）。
+不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc **两条**：`open-menu`（菜单的
+JSON，shape 与 uosc MenuData 对齐）与 `embynian-version-count`（这个条目挂了几版文件，控制条上那颗
+「版本」按钮按它露面 —— 只有一版时整颗不在屏上；值是一个十进制整数，uosc 那边只看它是否大于 1）。
+uosc 靠 mpv 属性观察自取其余全部状态（音量、轨道、章节的变化会自动反映到控制窗的选择器——它们读的
+是同一份 mpv 状态）。
 
 ### 两套名字不许同名（2026-09-19 事故）
 

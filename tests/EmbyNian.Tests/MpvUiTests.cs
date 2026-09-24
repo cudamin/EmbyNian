@@ -242,6 +242,9 @@ internal static class MpvUiTests
                 VideoWindowContract.Episodes, VideoWindowContract.EpisodeIndex,
                 VideoWindowContract.Versions, VideoWindowContract.VersionIndex,
                 VideoWindowContract.PictureMenu, VideoWindowContract.MenuIndex,
+                // 方向相反的那一条也数进来：宿主 → uosc 的消息照样不许与脚本绑定同名 ——
+                // mpv 把 script-message 派给同名绑定是不分方向的。
+                VideoWindowContract.VersionCount,
             };
             var bindings = new List<string>();
 
@@ -309,15 +312,22 @@ internal static class MpvUiTests
             Assert.Null(VideoWindowContract.Parse(["embynian-version-index", "0"]));
             Assert.Null(VideoWindowContract.Parse(["embynian-version-index", "-1"]));
             Assert.Null(VideoWindowContract.Parse(["embynian-version-index", "first"]));
+
+            // 宿主 → uosc 的那一条不进 Parse：script-message 是广播，自己发出去的东西原则上会回到
+            // 自己的事件队列 —— 认了它，宿主就成了「自己应自己」的第二个自激源（第一个见 MpvUiTests
+            // 的绑定同名那条）。它只该由 uosc 那头的 register_script_message 收到。
+            Assert.Null(VideoWindowContract.Parse([VideoWindowContract.VersionCount, "2"]));
         });
 
-        // 2026-09-20（用户令「在播放页面切换不同版本」）与 2026-09-23（用户令「独占模式也要有切换版本的
-        // 按钮」「菜单按钮改成右键那个画面菜单」「音频按钮只有一条音轨时也在」）：独占模式的入口有两处 ——
-        // ≡ 菜单里那一行，以及控制条上常驻的版本/画面菜单两颗按钮。uosc 的控制条是静态配置，没有
-        // 「有第二版才露」这种条件可写，所以按钮常驻，菜单内容（宿主推回）随条目变 —— 「只有一版」
-        // 由宿主的菜单文案交代（回一行「没有可切换的版本」，见 PlayerViewModel.Events.cs）。
-        // 补丁最怕「升级 uosc 时重打清单漏条」：这里对着源码钉住那几处（绑定、要数据的消息、控制条上的
-        // 拼写、Controls.lua 里的快捷项简写、音频按钮不带条件）。
+        // 2026-09-20（用户令「在播放页面切换不同版本」）与 2026-09-23 两轮（「独占模式也要有切换版本的
+        // 按钮」「菜单按钮改成右键那个画面菜单」「音频按钮只有一条音轨时也在」，随后「把选集和选版本的
+        // 按钮移动到左下」「把字幕和音轨按钮往左移动一些，让音轨按钮和全屏/窗口按钮相隔一个按钮的空位」
+        // 「只有一个版本的情况下不显示…」；2026-09-24 又一条「把独占模式下字幕和音频的按钮位置互换」）：独占模式的入口有两处 —— ≡ 菜单里那一行，以及控制条上那颗
+        // 「版本」按钮。**按钮现在按需露面**：uosc 的控件表是静态的，露不露面由宿主的 embynian-version-count
+        // 消息写进 state.has_many_versions，门挂在 controls 串的 <has_many_versions> 上（照 mpv 自己的
+        // has_many_edition 那一路）。补丁最怕「升级 uosc 时重打清单漏条」：这里对着源码钉住那几处
+        // （绑定、要数据的消息、控制条上的拼写与落点、Controls.lua 里的快捷项简写、音频按钮不带条件，
+        // 以及那把「按需露面」的门两头都在）。
         TestHarness.Test("独占模式版本与画面菜单：绑定、控制条落点都在", () =>
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -333,15 +343,30 @@ internal static class MpvUiTests
             Assert.True(main.Contains("embynian_notify('embynian-versions', '')"), "要版本数据的消息丢了");
             Assert.True(main.Contains("script-binding uosc/embynian-ui-versions"), "≡ 菜单里的版本入口丢了");
 
-            // 控制条上那两颗新按钮。拼写取 controls 默认值里独有的那一截（带 <video,audio> 前缀、
-            // 两侧逗号），简写在 elements/Controls.lua 的 shorthands 表里 —— 少一处，uosc 会走到
-            // 「unknown element kind」并把那一项之后的按钮整排丢掉（Controls:init_options 的 break）。
-            Assert.True(main.Contains(",<video,audio>embynian-ui-versions,"), "控制条上的版本按钮丢了");
-            Assert.True(main.Contains(",embynian-ui-picture-menu,"), "控制条上的画面菜单按钮丢了");
+            // 控制条上的两颗按钮与它们的**落点**（2026-09-23 第二轮重排；2026-09-24 用户令「把独占模式下
+            // 字幕和音频的按钮位置互换」后再调一次）：选集与版本进左下那一组的尾巴
+            // （左→右：选集倒数第二、版本最后），右下是 字幕、音频、空一个按钮宽(gap:1)、全屏。
+            // 拼写取 controls 默认值里独有的那一截 —— 少一处，uosc 会走到「unknown element kind」并把
+            // 那一项之后的按钮整排丢掉（Controls:init_options 的 break）。
+            Assert.True(main.Contains(",embynian-ui-picture-menu,<video,audio>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,"),
+                "左下那一组的尾巴（画面菜单、选集、版本）丢了或次序不对");
+            Assert.True(main.Contains(",space,<video,audio>subtitles,audio,gap:1,fullscreen'"),
+                "右下那一组（字幕、音频、空一个按钮宽、全屏）丢了或次序不对");
             Assert.True(controls.Contains("['embynian-ui-versions']"), "版本按钮的快捷项简写丢了");
             Assert.True(controls.Contains("['embynian-ui-picture-menu']"), "画面菜单按钮的快捷项简写丢了");
             // 画面菜单按钮与右键点画面是同一条绑定（绑定名与消息名分家，见上一节的硬规矩）。
             Assert.True(main.Contains("bind_command('embynian-ui-picture-menu'"), "画面菜单绑定丢了");
+
+            // 只有一版时那颗按钮不在屏上：门挂在 controls 串上，两头在 main.lua —— 接消息的那个处理器
+            // 与 state 里那一格。缺任一头，按钮要么永远不出现、要么永远出现，屏上都看不出是坏的。
+            Assert.True(main.Contains("<has_many_versions>embynian-ui-versions"),
+                "版本按钮没挂上「有第二版才露」那道门");
+            Assert.True(main.Contains("register_script_message('embynian-version-count'"),
+                "「有几版」这条宿主消息没人接：那颗按钮永远不会出现");
+            Assert.True(main.Contains("set_state('has_many_versions'"),
+                "has_many_versions 没人写：那道门永远关着");
+            Assert.True(main.Contains("has_many_versions = false,"),
+                "state 表里没有 has_many_versions 那一格 —— 默认值该是「先不画」");
 
             // 音频按钮：只有一条音轨时也要在。带上 <has_many_audio> 就是「多轨才显示」的旧行为。
             Assert.False(main.Contains("<has_many_audio>audio"), "音频按钮又带上「多音轨才显示」的条件了");

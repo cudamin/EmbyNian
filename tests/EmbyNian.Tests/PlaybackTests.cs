@@ -266,6 +266,9 @@ internal static class PlaybackTests
 
     // ---- 启动参数 --------------------------------------------------------------
 
+    private static IReadOnlyList<string> LaunchArguments(PlaybackRequest request, string pipe = @"\\.\pipe\embynian-test") =>
+        MpvArgumentBuilder.Build(request, pipe);
+
     private static void RegisterArguments()
     {
         Test("启动参数：设置项按给定顺序排列，最后一个说了算", () =>
@@ -277,7 +280,7 @@ internal static class PlaybackTests
                 PlayerOptions = [new("vo", "gpu-next"), new("hwdec", "auto-safe"), new("hwdec", "no")]
             };
 
-            var arguments = MpvArgumentBuilder.Build(request);
+            var arguments = LaunchArguments(request);
             var first = IndexOfPrefix(arguments, "--hwdec=auto-safe");
             var last = IndexOfPrefix(arguments, "--hwdec=no");
 
@@ -288,13 +291,13 @@ internal static class PlaybackTests
 
         Test("启动参数：不再往命令行末尾追加手写参数", () =>
         {
-            var line = Line(MpvArgumentBuilder.Build(Request()));
+            var line = Line(LaunchArguments(Request()));
             Assert.DoesNotContain("--fullscreen", line, "附加参数已删除，不该再有任何来源不明的参数");
         });
 
         Test("启动参数：--no-config 排在最前，且不再有 --include / --profile", () =>
         {
-            var arguments = MpvArgumentBuilder.Build(Request());
+            var arguments = LaunchArguments(Request());
 
             Assert.Equal("--no-config", arguments[0],
                 "必须是第一个参数：后面的选项才不会因为配置文件已经写过而变成空操作");
@@ -305,20 +308,21 @@ internal static class PlaybackTests
             Assert.DoesNotContain("--config-dir=", line);
         });
 
-        Test("启动参数：始终显式给出 --start 并关掉 mpv 自身续播", () =>
+        Test("启动参数：续播偏移在 IPC 首次加载前设置，并关掉 mpv 自身续播", () =>
         {
-            var fromStart = Line(MpvArgumentBuilder.Build(Request()));
-            Assert.Contains("--start=0", fromStart, "「从头播放」不能变成「从 mpv 上次停下的地方播放」");
+            var fromStart = Line(LaunchArguments(Request()));
+            Assert.DoesNotContain("--start=", fromStart);
+            Assert.Equal("0", MpvArgumentBuilder.LoadCommands(Request())[2][2]);
+            Assert.Equal("1234.5", MpvArgumentBuilder.LoadCommands(Request(start: 1234.5))[2][2]);
+            Assert.Equal("0", MpvArgumentBuilder.LoadCommands(Request(start: -2))[2][2]);
             Assert.Contains("--resume-playback=no", fromStart);
             Assert.Contains("--save-position-on-quit=no", fromStart);
-
-            Assert.Contains("--start=1234.5", Line(MpvArgumentBuilder.Build(Request(start: 1234.5))));
         });
 
         Test("启动参数：必须让 mpv 在播完后退出", () =>
         {
-            var line = Line(MpvArgumentBuilder.Build(Request()));
-            Assert.Contains("--idle=no", line);
+            var line = Line(LaunchArguments(Request()));
+            Assert.Contains("--idle=once", line);
             Assert.Contains("--keep-open=no", line);
         });
 
@@ -331,68 +335,75 @@ internal static class PlaybackTests
                 ExternalSubtitles = [new Uri("http://server/emby/Videos/1/1/Subtitles/4/Stream.ass")]
             };
 
-            var arguments = MpvArgumentBuilder.Build(request);
+            var arguments = LaunchArguments(request);
             Assert.Contains("--aid=2", Line(arguments));
             Assert.Contains("--sid=3", Line(arguments));
-            Assert.Contains("--sub-file=http://server/emby/Videos/1/1/Subtitles/4/Stream.ass", Line(arguments));
+            Assert.DoesNotContain("--sub-file", Line(arguments));
+            Assert.Equal(request.ExternalSubtitles[0].AbsoluteUri,
+                ((string[])MpvArgumentBuilder.LoadCommands(request)[1][2]!)[0]);
         });
 
         Test("启动参数：关闭字幕时用 --sid=no 覆盖 slang", () =>
         {
-            var line = Line(MpvArgumentBuilder.Build(Request() with { SubtitleId = 3, SubtitlesDisabled = true }));
+            var line = Line(LaunchArguments(Request() with { SubtitleId = 3, SubtitlesDisabled = true }));
             Assert.Contains("--sid=no", line);
             Assert.DoesNotContain("--sid=3", line);
         });
 
-        Test("启动参数：请求头逐条追加，URL 排在 -- 之后", () =>
+        Test("启动参数：HTTP 头和媒体只在 IPC 加载命令中", () =>
         {
-            var arguments = MpvArgumentBuilder.Build(Request() with
+            var request = Request() with
             {
                 HttpHeaders =
                 [
                     new("X-Emby-Token", "abc123"),
                     new("X-Emby-Authorization", """MediaBrowser Client="EmbyNian", Device="PC" """)
                 ]
-            });
+            };
+            var arguments = LaunchArguments(request);
+            Assert.DoesNotContain("http-header", Line(arguments));
+            Assert.DoesNotContain("abc123", Line(arguments));
+            Assert.DoesNotContain("Videos/1/stream.mkv", Line(arguments));
+            Assert.False(arguments.Contains("--"), "进程启动时没有媒体参数");
 
-            var appends = arguments.Count(argument => argument.StartsWith("--http-header-fields-append=", StringComparison.Ordinal));
-            Assert.Equal(2, appends, "每个请求头一条 -append，含逗号的值才不会被拆成两条");
-
-            var separator = arguments.ToList().IndexOf("--");
-            Assert.True(separator >= 0, "URL 前必须有 --");
-            Assert.Equal(arguments.Count - 1, separator + 1, "URL 必须是最后一个参数");
-            Assert.Contains("Videos/1/stream.mkv", arguments[^1]);
+            var commands = MpvArgumentBuilder.LoadCommands(request);
+            Assert.Equal("http-header-fields", commands[0][1]);
+            var headers = (string[])commands[0][2]!;
+            Assert.Equal(2, headers.Length);
+            Assert.Equal("X-Emby-Authorization: " + request.HttpHeaders[1].Value, headers[1]);
+            Assert.Equal("loadfile", commands[^1][0]);
+            Assert.Equal(request.MediaUrl.AbsoluteUri, commands[^1][1]);
         });
 
-        Test("启动参数：设置项插在 URL 之前", () =>
+        Test("启动参数：非敏感输出设置继续通过参数传入", () =>
         {
-            var arguments = MpvArgumentBuilder.Build(Request() with
+            var arguments = LaunchArguments(Request() with
             {
                 PlayerOptions = [new("fullscreen", "yes"), new("volume", "80")]
             });
-
-            var separator = arguments.ToList().IndexOf("--");
-            Assert.True(arguments.ToList().IndexOf("--fullscreen=yes") < separator, "选项不能落到 -- 之后被当成文件");
+            Assert.Contains("--fullscreen=yes", Line(arguments));
+            Assert.Contains("--volume=80", Line(arguments));
         });
 
-        Test("启动参数：日志里必须看不到 Emby 令牌", () =>
+        Test("启动参数：没有需要靠日志脱敏补救的令牌", () =>
         {
-            var arguments = MpvArgumentBuilder.Build(Request() with
+            var arguments = LaunchArguments(Request() with
             {
-                HttpHeaders = [new("X-Emby-Token", "SECRET-TOKEN")]
+                HttpHeaders = [new("X-Emby-Token", "SECRET-TOKEN"), new("Authorization", "Bearer OTHER-TOKEN")]
             });
-
-            var redacted = Line(MpvArgumentBuilder.Redact(arguments));
-            Assert.DoesNotContain("SECRET-TOKEN", redacted);
-            Assert.Contains("X-Emby-Token: ***", redacted);
-            Assert.Contains("SECRET-TOKEN", Line(arguments), "真正传给 mpv 的参数当然还带着令牌");
+            Assert.DoesNotContain("SECRET-TOKEN", Line(arguments));
+            Assert.DoesNotContain("OTHER-TOKEN", Line(arguments));
+            Assert.DoesNotContain("Authorization", Line(arguments));
+            Assert.Contains("--terminal=no", Line(arguments));
         });
 
-        Test("启动参数：IPC 管道只在给出时出现", () =>
+        Test("启动参数：安全起播必须有管道且不允许选项覆盖边界", () =>
         {
-            Assert.DoesNotContain("--input-ipc-server", Line(MpvArgumentBuilder.Build(Request())));
+            Assert.Throws<ArgumentException>(() => MpvArgumentBuilder.Build(Request(), ""));
             Assert.Contains(@"--input-ipc-server=\\.\pipe\embynian-x",
-                Line(MpvArgumentBuilder.Build(Request(), @"\\.\pipe\embynian-x")));
+                Line(LaunchArguments(Request(), @"\\.\pipe\embynian-x")));
+            foreach (var name in new[] { "http-header-fields", "http-header-fields-append", "input-ipc-server", "idle", "log-file", "sub-files" })
+                Assert.Throws<InvalidOperationException>(() => LaunchArguments(Request() with { PlayerOptions = [new(name, "no")] }));
         });
 
         Test("IPC 管道名：每次启动都不同，避免撞上手动开的 mpv", () =>
@@ -1658,13 +1669,15 @@ internal static class PlaybackTests
         Test("计划：默认不让 mpv 记住播放位置", () =>
         {
             var (planner, _) = Planner();
-            var line = Line(MpvArgumentBuilder.Build(planner.Plan(Ticket() with { StartTicks = 6_000_000_000 }, Connection())));
+            var line = Line(LaunchArguments(planner.Plan(Ticket() with { StartTicks = 6_000_000_000 }, Connection())));
 
             // --no-config 已经把 watch_later 文件一起挡掉了，这两条是双保险：进度归服务器管，
             // mpv 不该另存一份跟服务器对不上的位置。
             Assert.Contains("--resume-playback=no", line);
             Assert.Contains("--save-position-on-quit=no", line);
-            Assert.Contains("--start=600", line, "位置由客户端给出：10 分钟 = 600 秒");
+            Assert.Equal("600", MpvArgumentBuilder.LoadCommands(
+                planner.Plan(Ticket() with { StartTicks = 6_000_000_000 }, Connection()))[2][2],
+                "位置由客户端在首次加载前给出：10 分钟 = 600 秒");
         });
 
         Test("计划：着色器档位连同它自己的缩放器一起变成 mpv 选项", () =>
@@ -1978,7 +1991,7 @@ internal static class PlaybackTests
                 PlayerOptions = [new("sub-font", "Microsoft YaHei")]
             };
 
-            var line = Line(MpvArgumentBuilder.Build(request));
+            var line = Line(LaunchArguments(request));
             Assert.Contains("--slang=zh,chi", line);
             Assert.Contains("--alang=jpn", line);
 
@@ -3568,6 +3581,27 @@ internal static class PlaybackTests
 
             Assert.True(chrome.Tick(now + 1100 + ChromeReveal.ParkedIdleMilliseconds), "指针撂在右边缘上不该把音量条钉死");
             Assert.False(chrome.State.Any);
+        });
+
+        // 音量条的尺寸线（用户令 2026-09-23「集成模式下窗口小于一定程度的时候自动隐藏音量条」）：
+        // 「什么时候不画」那半是 Core 里的算术，这里钉边界；页面那半（Render 与 RailNear 真的按它收）
+        // 归自检 ProbeRailFade —— 它手上有排过版的音量条元素，能把「门槛高过条子自己」也量出来。
+        Test("播放器控件：画面小到尺寸线以下就没有音量条", () =>
+        {
+            Assert.True(ChromeReveal.RailRoom(ChromeReveal.RailMinPictureWidth, ChromeReveal.RailMinPictureHeight),
+                "两条边正好等于阈值算容得下");
+            Assert.True(ChromeReveal.RailRoom(3840, 2160), "4K 那么大的画面当然容得下");
+
+            Assert.False(ChromeReveal.RailRoom(ChromeReveal.RailMinPictureWidth - 1, 2160),
+                "窄过线一格就不容 —— 窄而高的窗口也要收");
+            Assert.False(ChromeReveal.RailRoom(3840, ChromeReveal.RailMinPictureHeight - 1),
+                "矮过线一格就不容 —— 宽而矮的窗口也要收");
+            Assert.False(ChromeReveal.RailRoom(0, 0), "页面还没排过版（0×0）时必须是不容");
+
+            // 高度那条线是照着音量条自己量的（条子约 428 高）：线比条子矮，就意味着「容得下」的那一档里
+            // 条子会被窗口切掉。这一条只钉量级，精确那一半由自检拿真元素去比。
+            Assert.True(ChromeReveal.RailMinPictureHeight >= 500,
+                $"尺寸线比音量条自己（约 428 高）没高出多少：{ChromeReveal.RailMinPictureHeight}");
         });
 
         // 需求 10：「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」。

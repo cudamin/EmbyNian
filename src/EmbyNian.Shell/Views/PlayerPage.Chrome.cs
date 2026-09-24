@@ -317,6 +317,14 @@ public sealed partial class PlayerPage
         // moved, so 「the pointer has not been still」 is the true answer and the idle clock has to start again.
         if (!Attached) return;
 
+        // 音量条那道尺寸线（用户令 2026-09-23）：画面跨过阈值时，规则那一头什么都不会变 —— 指针没动、
+        // 显隐也没翻 —— 所以这一趟必须自己画一遍，否则缩到阈值以下的窗口里音量条会照旧挂着，直到下一次
+        // 指针移动（而那时它才「忽然」消失，看着像掉了一拍）。不加缓存位、无条件调 Render：它里面每一句
+        // 赋值都带值比较（Visibility 同值、FadeRail 比 opacity、ThinLine 同值），没变的那几样本来就不会
+        // 碰布局树 —— 而「画面多大」只有一个答主，另存一份就是又一条会发霉的手抄副本（见 PlaceOverlays
+        // 里关于「重赋同一个边距会让指针事件重盖空闲钟」的那段，说的正是这件事的另一面）。
+        Render();
+
         // 藏匿期例外（2026-09-16 第二轮复核）：这条路同样以零路程、无见证、无累加掀掉藏匿，而它的
         // 触发源与本项目无关 —— DPI 变化、显示器拓扑变化（AyuGram 就在第二块屏上）、工作区变化、
         // mpv 重建交换链，任何一次都可能。藏匿期 chrome 本来就是收的，「窗口大小变了所以控件挪了位」
@@ -516,16 +524,43 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
+    /// 画面此刻多大 —— 平常就是这一页自己的读数，而自检可以临时把答案换掉。
+    /// <para>
+    /// 这一道缝只为 <see cref="ProbeRailFade"/> 存在：音量条那条尺寸门槛（<see cref="ChromeReveal.RailRoom"/>）
+    /// 的「假」那一支要在真窗口里验，而探针改不了窗口大小。默认分支永远是真实读数，见两个属性的
+    /// <c>??</c>；覆盖只发生在那个探针方法里，且出去就还回去。
+    /// </para>
+    /// </summary>
+    private Size? _probePictureSize;
+
+    private double PictureWidth => _probePictureSize?.Width ?? Root.ActualWidth;
+
+    private double PictureHeight => _probePictureSize?.Height ?? Root.ActualHeight;
+
+    /// <summary>
+    /// 这个画面容得下音量条吗（<see cref="ChromeReveal.RailRoom"/>）。假的时候音量条一个像素都不画 ——
+    /// <see cref="Render"/> 那一支是唯一的落点，而 <see cref="RailNear"/> 也一并答「指针不在唤出带里」，
+    /// 于是规则那一头压根不会以为它该露面（<c>ChromeState.Rail</c> 为假，右缘因此也不再吊住控件与光标）。
+    /// </summary>
+    private bool RailRoom() => ChromeReveal.RailRoom(PictureWidth, PictureHeight);
+
+    /// <summary>
     /// How deep into the rail's approach strip along the right edge a point is: -1 outside it, 0 at its
     /// inner boundary, 1 hard against the edge. The rule turns that into both 「show the rail」 and
     /// 「how strongly」 — 「鼠标指针越接近右边的中心显示越明显」 — and the strip's width is the whole of the
     /// horizontal half of it, so the value is a plain fraction of <see cref="RailZoneWidth"/>.
+    /// <para>
+    /// 这条带子整个不存在于小窗口里（用户令 2026-09-23「窗口小于一定程度的时候自动隐藏音量条」）：
+    /// <see cref="RailRoom"/> 为假时一律答 -1，于是「指针走到右缘」不再是音量条的理由，也不再算「停在控件上」
+    /// （那一位会让空闲钟变长，<c>ChromeReveal.Parked</c>）。
+    /// </para>
     /// </summary>
     private double RailNear(Point point)
     {
-        if (Root.ActualWidth <= 0) return -1;
+        var width = PictureWidth;
+        if (width <= 0 || !RailRoom()) return -1;
 
-        var edge = Root.ActualWidth - RailZoneWidth;
+        var edge = width - RailZoneWidth;
         if (point.X < edge) return -1;
 
         return Math.Clamp((point.X - edge) / RailZoneWidth, 0, 1);
@@ -592,13 +627,20 @@ public sealed partial class PlayerPage
     /// cursor. Flips for the bar and the strip because requirement 9 was
     /// 「不要淡入淡出了，鼠标移动到对应位置直接显示」; the rail is the one exception the user later asked for,
     /// see <see cref="FadeRail"/>.
+    /// <para>
+    /// 音量条那道尺寸门槛（用户令 2026-09-23「窗口小于一定程度的时候自动隐藏音量条」）也收在这一句里：
+    /// 画面小到一定程度就<b>一个像素都不画</b> —— 不为指针走近右缘画，也不为滚轮／按键的读数画。
+    /// 这是唯一收得住两边的地方：<c>Rail.Opacity</c> 只有 <see cref="FadeRail"/> 会写，而 FadeRail
+    /// 只有这里会调（<see cref="RailNear"/> 那一半管的是「规则以为它该不该出现」）。规则那一头照旧算它的
+    /// 答案，页面只是在画的时候把这一档扣掉 —— 于是窗口重新变大时不需要任何补偿动作。
+    /// </para>
     /// </summary>
     private void Render()
     {
         var state = _chrome.State;
         Bar.Visibility = state.Bar ? Visibility.Visible : Visibility.Collapsed;
         TitleStrip.Visibility = state.Title ? Visibility.Visible : Visibility.Collapsed;
-        FadeRail(state.Rail ? _chrome.RailStrength : 0);
+        FadeRail(state.Rail && RailRoom() ? _chrome.RailStrength : 0);
 
         // The three window commands live in the strip, so they come and go with it. What is left to decide
         // per reveal is which of 最大化/还原 the middle one is offering, and whether it is offering anything.

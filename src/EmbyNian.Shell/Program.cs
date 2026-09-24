@@ -1,9 +1,14 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Infrastructure;
 using EmbyNian.Shell.Interop;
+using EmbyNian.Shell.Security;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using static EmbyNian.Infrastructure.StartupArgs;
+
+// Read without launching the executable by selfcheck-diff.ps1. Older binaries must not be
+// invoked with an unknown isolation switch and allowed to fall through to production startup.
+[assembly: System.Reflection.AssemblyMetadata("EmbyNian.SelfCheckIsolation", "1")]
 
 namespace EmbyNian.Shell;
 
@@ -217,6 +222,23 @@ internal static class Program
 
         var paths = AppPaths.Default;
 
+        // Includes malformed self-check/data requests: no migration, normal activation or probe may
+        // run before this validation. Preparation errors never open a fallback client or print secrets.
+        if (RequestsSelfCheck(args))
+        {
+            try
+            {
+                var target = ValidateSelfCheck(args);
+                using var run = SelfCheckRun.Create(paths, target, DpapiSecretProtector.Instance);
+                return Run(args, run.Paths, migratedFrom: null, selfCheck: true);
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"[失败] 自检隔离准备失败（{error.GetType().Name}）；未启动主程序");
+                return 1;
+            }
+        }
+
         // This must precede migration AND the normal instance signal: a malformed probe must
         // never fall through to the real client, nor activate an already-running Emby session.
         if (CompositionPlaybackProbe.IsRequested(args))
@@ -246,36 +268,27 @@ internal static class Program
         // and why the packaged case is first are in AppPaths.PriorRoots.
         var migratedFrom = paths.MigrateFromAny(AppPaths.PriorRoots);
 
-        var selfCheck = Has(args, "--self-check");
-
-        // The self-check runs before the single-instance mutex on purpose: it has to be runnable
-        // while the client is open, and two of them cannot fight over anything.
-        if (!selfCheck)
+        if (LegacyInstanceIsRunning())
         {
-            if (LegacyInstanceIsRunning())
-            {
-                SignalRunningInstance(LegacyActivationEventName);
-                return 0;
-            }
-
-            using var existing = new Mutex(true, InstanceMutexName, out var isFirst);
-            if (!isFirst)
-            {
-                SignalRunningInstance(ActivationEventName);
-                return 0;
-            }
-
-            try
-            {
-                return Run(args, paths, migratedFrom, selfCheck: false);
-            }
-            finally
-            {
-                existing.ReleaseMutex();
-            }
+            SignalRunningInstance(LegacyActivationEventName);
+            return 0;
         }
 
-        return Run(args, paths, migratedFrom, selfCheck: true);
+        using var existing = new Mutex(true, InstanceMutexName, out var isFirst);
+        if (!isFirst)
+        {
+            SignalRunningInstance(ActivationEventName);
+            return 0;
+        }
+
+        try
+        {
+            return Run(args, paths, migratedFrom, selfCheck: false);
+        }
+        finally
+        {
+            existing.ReleaseMutex();
+        }
     }
 
     private static int Run(string[] args, AppPaths paths, string? migratedFrom, bool selfCheck)

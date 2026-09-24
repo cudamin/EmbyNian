@@ -1,6 +1,6 @@
 ---
 name: "embynian-playback"
-description: "EmbyNian playback: libmpv and external-mpv backends, integrated and standalone pipelines, playback planning and progress, resume, OSD, subtitles, audio tracks and source switching. Use when touching Core/Playback, Core/Mpv, PlayerViewModel or PlayerPage; authorization and verification policy live in CLAUDE.md."
+description: "EmbyNian playback: libmpv and external-mpv backends, integrated and standalone pipelines, playback planning and progress, resume, OSD, subtitles, audio tracks and source switching. Use when touching Core/Playback, Core/Mpv, PlayerViewModel, PlayerPage, or assets/mpv-ui Lua/uosc controls, including standalone menus and gestures; authorization and verification policy live in CLAUDE.md."
 ---
 
 # EmbyNian — playback
@@ -15,7 +15,8 @@ Operational details:
 
 - The normal player's self-check uses synthetic state without loading a film. Local-file probes are a different path; their isolation and integrated-only coverage are specified in CLAUDE.md. Neither proves standalone playback works.
 - **`libmpv-2.dll` lives in the current working-tree root**, is linked into build output by `EmbyNian.Shell.csproj` and copied next to the exe on publish. The binary is not tracked; a new worktree needs an explicitly supplied, matching copy before publishing.
-- **How the token stays out of URLs:** `EmbyUrl.Stream` carries no `api_key`; it uses an `X-Emby-Token` header, passed to mpv through `http-header-fields`. `EmbyHttp` strips query strings before logging. Do not print option values containing those headers.
+- **Keep credentials out of URLs, process arguments and logs:** `EmbyUrl.Stream` carries no `api_key`; the token is an `X-Emby-Token` header. libmpv receives options in-process. The external backend starts idle without headers/media/subtitle arguments, verifies the IPC server belongs to the process it just launched, then applies headers before loading any media. Do not print header option values or raw IPC/stderr payloads; log redaction alone cannot protect process arguments.
+- External `EnableIpc=false` disables playback observation/control/progress, not the authenticated startup/quit transport. Failure to establish that startup transport must stop startup rather than fall back to credentials in arguments or temporary files. This channel does not claim to defend against malicious code already running as the same user.
 
 ## The shape of playback
 

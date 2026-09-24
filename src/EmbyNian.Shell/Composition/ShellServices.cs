@@ -38,7 +38,7 @@ internal static class ShellServices
     /// directory has to have happened before anything reads settings.json, and only the entry point knows
     /// it did.
     /// </summary>
-    internal static ServiceProvider Build(AppPaths paths)
+    internal static ServiceProvider Build(AppPaths paths, bool selfCheck = false)
     {
         paths.EnsureCreated();
 
@@ -53,7 +53,13 @@ internal static class ShellServices
         // be a singleton rather than something re-read per request: two instances would mean an edit on
         // one page invisible to the next. EnsureDeviceId runs here, on the way in, for the same reason it
         // used to run in the composition root — every request the session makes carries the device id.
-        services.AddSingleton(provider => provider.GetRequiredService<SettingsStore>().Load().EnsureDeviceId());
+        services.AddSingleton(provider =>
+        {
+            var store = provider.GetRequiredService<SettingsStore>();
+            var settings = selfCheck ? store.LoadStrict() : store.Load();
+            if (selfCheck) settings.Ui.WindowMaximized = false;
+            return settings.EnsureDeviceId();
+        });
 
         // ---- the server -------------------------------------------------------------------------------
         services.AddSingleton<CredentialVault>();
@@ -98,7 +104,8 @@ internal static class ShellServices
             provider.GetRequiredService<EmbySession>(),
             provider.GetRequiredService<AppSettings>(),
             provider.GetRequiredService<PlaybackBackendFactory>().Create,
-            provider.GetRequiredService<PlaybackPlanner>()));
+            provider.GetRequiredService<PlaybackPlanner>(),
+            allowPlayback: !selfCheck));
 
         // ---- the optional second service ---------------------------------------------------------------
         // MoviePilot, when the user has one. Registered unconditionally rather than behind a check on the

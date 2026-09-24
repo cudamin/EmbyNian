@@ -37,6 +37,26 @@ public sealed class SettingsStore(AppPaths paths, ISecretProtector protector)
         return SettingsMigration.NewDefaults();
     }
 
+    /// <summary>
+    /// Loads only the copied, saved DPAPI-format document. Unlike ordinary startup, a diagnostic must
+    /// fail rather than silently switch to backup/defaults or quarantine its input. No file writes.
+    /// Legacy plaintext documents are deliberately not imported by self-check.
+    /// </summary>
+    public AppSettings LoadStrict()
+    {
+        var json = File.ReadAllText(Paths.SettingsFile);
+        using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        });
+        if (document.RootElement.ValueKind != JsonValueKind.Object
+            || !document.RootElement.TryGetProperty("SchemaVersion", out var version)
+            || !version.TryGetInt32(out var number) || number < 2 || number > AppSettings.CurrentSchemaVersion)
+            throw new InvalidDataException("自检需要已保存的 DPAPI 格式设置，不导入旧明文设置或默认值");
+        return SettingsMigration.FromJson(json, protector);
+    }
+
     public void Save(AppSettings settings)
     {
         try

@@ -122,9 +122,10 @@ public static class InlineSwitch
             new("slang", next.SubtitleLanguage ?? ""),
             new("sub-files", next.ExternalSubtitles.Count == 0
                 ? ""
-                // 普通列表选项（逗号分隔、反斜杠转义），不是 glsl-shaders 那种 file-list（分号分隔）——
-                // MpvListValue 两家都有，别拿错。
-                : string.Join(",", next.ExternalSubtitles.Select(uri => MpvListValue.Escape(uri.AbsoluteUri)))),
+                // sub-files 是 file-list（分号分隔、反斜杠转义），与 glsl-shaders 同类，不是逗号列表 —— 对随包
+                // libmpv 实测确认（逗号不切分、分号才切成多条），换片走的属性接口分隔符与启动选项一致。所以用
+                // MpvListValue.JoinFiles，别用逗号那家（Escape）；从前误按逗号列表拼，两条以上外挂字幕会被并成一条坏路径。
+                : MpvListValue.JoinFiles(next.ExternalSubtitles.Select(uri => uri.AbsoluteUri))),
             new("http-header-fields", next.HttpHeaders.Count == 0
                 ? ""
                 : string.Join(",",

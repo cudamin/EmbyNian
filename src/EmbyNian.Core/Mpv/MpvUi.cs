@@ -111,7 +111,10 @@ public static class MpvUi
 public readonly record struct VideoWindowMessage(string Key, string Value);
 
 /// <summary>
-/// <c>embynian-*</c> 消息契约：uosc 嵌入版经 <c>script-message</c> 发给宿主的全部内容。
+/// <c>embynian-*</c> 消息契约：uosc 嵌入版与宿主之间那几条 <c>script-message</c> 的名字与值域 ——
+/// 绝大多数是 uosc 发给宿主的（<see cref="Parse"/> 收的就是这一批），另有反向的一条
+/// <see cref="VersionCount"/>（宿主 → uosc），它故意不进 Parse：宿主不会收到自己发出去的东西。
+/// uosc 那头的 <c>open-menu</c> 也是这个方向，名字留在发送处。
 /// <para>
 /// 只认带 <c>embynian-</c> 前缀的消息，其余（uosc 自己的版本广播等）一律丢弃 —— 队列里混进什么
 /// 不由宿主决定，契约按前缀收窄是防串台的第一道闸。值域也在这张表里收窄：进度是可解析的小数、
@@ -171,6 +174,24 @@ public static class VideoWindowContract
     /// 展平后的命令叶子表（宿主推送菜单时按同一次序编号）。
     /// </summary>
     public const string MenuIndex = "embynian-menu-index";
+
+    /// <summary>
+    /// <b>宿主 → uosc 的第二条</b>（第一条是 <c>open-menu</c>）：这个条目有几版文件，uosc 那颗「版本」
+    /// 按钮按这个数露面 —— 只有一版时它压根不在控制条上（用户令 2026-09-23：「只有一个版本的情况下
+    /// 不显示…」；uosc 的控件表本来写不出这种条件，见 uosc 侧新加的 <c>has_many_versions</c> 门）。
+    /// <para>
+    /// 方向与上面那一批相反，所以它<b>故意不进 <see cref="Parse"/></b>：宿主不会收到自己发出去的东西。
+    /// 名字照旧守 <see cref="Episodes"/> 那条硬规矩 —— 不许与任何脚本绑定同名（uosc 那边是一条
+    /// <c>mp.register_script_message('embynian-version-count', …)</c>，绑定一律叫 <c>embynian-ui-…</c>），
+    /// <c>MpvUiTests</c> 的「绑定名与消息名不许同名」把它一并数进去。
+    /// </para>
+    /// <para>
+    /// 什么时候发：uosc 装载完成的握手（<see cref="Ready"/>）那一下 —— 那时宿主手里已经知道答案，
+    /// 画面都还没出来；以及条目手上那份媒体源可能变全的三处（新一集开播、服务器那份更全的记录到手、
+    /// 换版之后）。全部收在 <c>PlayerViewModel.PushVersionCountAsync</c> 一个出口。
+    /// </para>
+    /// </summary>
+    public const string VersionCount = "embynian-version-count";
 
     /// <summary>
     /// 把一条 client-message 的参数解析成宿主消息；不是宿主的消息、值不合契约的，返回 null。

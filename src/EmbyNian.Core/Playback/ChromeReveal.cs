@@ -219,6 +219,47 @@ public sealed class ChromeReveal
     /// </summary>
     public const double RailFloor = 0.35;
 
+    /// <summary>
+    /// 画面小于这个宽度（逻辑像素）就不画音量条了 —— 用户令 2026-09-23：
+    /// 「集成模式下窗口小于一定程度的时候自动隐藏音量条」。
+    /// <para>
+    /// 两个数是从<b>音量条自己的尺寸</b>反推的，不是拍的（条子的尺寸由 <c>ProbeRailFade</c> 每次读出：
+    /// 约 68 宽 × 428 高 ＝ 滑杆 300 ＋ 数字 ＋ 静音键 ＋ 上下各 20 的内边距）：
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>高度 <see cref="RailMinPictureHeight"/>：条子自己的 428 再留三成余量。再矮，条子上下就会被
+    ///     窗口切掉 —— 那不是「音量条」而是一根被裁过的柱子。</item>
+    ///   <item>宽度 720：条子连它右边那 22 的边距占 90，而右缘那条唤出带占 160（页面的
+    ///     <c>PlayerPage.RailZoneWidth</c>）—— 两者合起来 250，正好是 720 的三分之一；再窄下去，
+    ///     「音量」这件事比画面本身还抢眼。</item>
+    /// </list>
+    /// <para>
+    /// 两个方向各自成立，所以判据是合取：拖窗口下边缘拖出的「宽而矮」与拖右边缘拖出的「窄而高」都要收。
+    /// 要调就调这两个常量 —— 改大改小只影响「小到什么程度才收」，与 <see cref="RailStrength"/> 那条
+    /// 由指针距离决定的曲线无关。
+    /// </para>
+    /// <para>
+    /// 它住在 Core 而不是页面里，理由与 <see cref="EdgeBandFraction"/> 同款：这是一条「什么时候不画」的
+    /// 规则，拿两个数就答得出来，单元测试钉得住；页面只负责把窗口的尺寸递进来。
+    /// </para>
+    /// </summary>
+    public const double RailMinPictureWidth = 720;
+
+    /// <summary>画面矮于这个高度就不画音量条了。推导见 <see cref="RailMinPictureWidth"/>。</summary>
+    public const double RailMinPictureHeight = 560;
+
+    /// <summary>
+    /// 这么大的画面容得下音量条吗。假的时候这条音量条<b>一个像素都不画</b>：既不为指针走近右缘而露面，
+    /// 也不为滚轮／按键的读数而露面 —— 「自动隐藏」是按那句话的正面意思做的（窗口小 ⇒ 没有音量条），
+    /// 代价写在明处：<b>小窗口里滚轮调音量再没有数字可看</b>，把窗口放大或进全屏就有。
+    /// <para>
+    /// 它只答「这个画面配不配有一条音量条」，与「此刻该不该显示」是两问；后一问仍旧归
+    /// <see cref="Pointer"/> 那条路（位置、滚轮宽限、手压在滑杆上）。
+    /// </para>
+    /// </summary>
+    public static bool RailRoom(double pictureWidth, double pictureHeight) =>
+        pictureWidth >= RailMinPictureWidth && pictureHeight >= RailMinPictureHeight;
+
     private long _lastActivity;
 
     /// <summary>Until this tick count the whole chrome shows whatever the pointer is doing.</summary>

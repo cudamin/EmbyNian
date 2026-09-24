@@ -12,6 +12,9 @@ namespace EmbyNian.Infrastructure;
 /// </summary>
 public static class StartupArgs
 {
+    private const string SelfCheckFlag = "--self-check";
+    private const string SelfCheckDataFlag = "--self-check-data";
+
     /// <summary>
     /// 这个开关在不在。前面的横线和斜杠都不算数，大小写也不算 —— <c>--dump-ui</c>、<c>-dump-ui</c>、
     /// <c>/Dump-UI</c> 是同一个开关。
@@ -19,6 +22,43 @@ public static class StartupArgs
     public static bool Has(string[] args, string flag) =>
         args.Any(argument => string.Equals(
             argument.TrimStart('-', '/'), flag.TrimStart('-'), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Self-check is a separate startup mode, including malformed requests. Validate before migration,
+    /// probe dispatch or activation; unknown switches must never fall through to the normal client.
+    /// </summary>
+    public static bool RequestsSelfCheck(string[] args) => args.Any(argument =>
+        argument.TrimStart('-', '/').Split('=')[0].Equals(SelfCheckFlag[2..], StringComparison.OrdinalIgnoreCase)
+        || argument.TrimStart('-', '/').Split('=')[0].Equals(SelfCheckDataFlag[2..], StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Returns the optional fresh data directory; throws for every unsupported combination.</summary>
+    public static string? ValidateSelfCheck(string[] args)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? data = null;
+        for (var index = 0; index < args.Length; index++)
+        {
+            var parts = args[index].TrimStart('-', '/').Split('=', 2);
+            var name = parts[0].ToLowerInvariant();
+            if (!seen.Add(name)) throw new ArgumentException("自检参数不能重复");
+            if (name is "self-check" or "dump-ui")
+            {
+                if (parts.Length != 1) throw new ArgumentException("自检布尔开关不接受值");
+                continue;
+            }
+            if (name is not ("self-check-data" or "screen" or "theme"))
+                throw new ArgumentException("自检只允许 self-check、self-check-data、dump-ui、screen、theme");
+            var value = parts.Length == 2 ? parts[1]
+                : index + 1 < args.Length ? args[++index] : null;
+            if (string.IsNullOrWhiteSpace(value) || value.StartsWith('-') || value.StartsWith('/'))
+                throw new ArgumentException("自检参数缺少有效的值");
+            if (name == "screen" && (!int.TryParse(value, out var screen) || screen < 1))
+                throw new ArgumentException("自检 screen 必须是从 1 开始的屏幕编号");
+            if (name == "self-check-data") data = value;
+        }
+        if (!seen.Contains("self-check")) throw new ArgumentException("self-check-data 只能和 self-check 一起使用");
+        return data;
+    }
 
     /// <summary>
     /// 这个开关给的值，两种写法都认 —— <c>--theme misty</c> 或者 <c>--theme=misty</c>；开关没出现、或者后面

@@ -143,7 +143,9 @@ internal static class InlineSwitchTests
             Assert.Equal("754.25", chosen["start"]);                               // 小数点永远是点
             Assert.Equal("jpn", chosen["alang"]);
             Assert.Equal("chi", chosen["slang"]);
-            Assert.Equal("http://server/a\\,b.srt,http://server/c.srt", chosen["sub-files"]);
+            // sub-files 是 file-list：分号分隔，逗号是路径里的普通字符（不转义、不切分）——
+            // 对随包 libmpv 实测过。两条外挂字幕拼成分号分隔的一串。
+            Assert.Equal("http://server/a,b.srt;http://server/c.srt", chosen["sub-files"]);
             Assert.Equal("no", chosen["pause"]);
 
             var muted = InlineSwitch.PerFile(Request() with { SubtitlesDisabled = true })

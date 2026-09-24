@@ -266,7 +266,15 @@ public sealed class LibMpvBackend(
         if (!string.IsNullOrWhiteSpace(request.SubtitleLanguage)) Set(context, "slang", request.SubtitleLanguage);
 
         // 字幕字体 arrives with the rest of 字幕外观 through PlayerOptions below — one writer for sub-font.
-        foreach (var subtitle in request.ExternalSubtitles) Set(context, "sub-files-append", subtitle.AbsoluteUri);
+
+        // 外挂字幕整表写进 sub-files，不能用 sub-files-append —— 与紧接着的 http-header-fields 同一个坑：
+        // mpv_set_option_string 不认命令行才有的 -append 后缀（对随包 libmpv 实测返回 option not found，属性接口
+        // sub-files-append 也是 property not found）。此处从前误写成 sub-files-append，内置管线下外挂字幕一条都
+        // 没进过 mpv（字幕按钮里空空如也）；外部 mpv.exe 后端走 IPC 的 options/sub-files 数组，不受这个坑影响。
+        // 分隔与转义交给 MpvListValue.JoinFiles：sub-files 是 file-list（分号分隔），与 glsl-shaders 同类，不是
+        // http-header-fields 那种逗号列表 —— 对随包 libmpv 实测确认（逗号不切分、分号才切成多条）。
+        if (request.ExternalSubtitles.Count > 0)
+            Set(context, "sub-files", MpvListValue.JoinFiles(request.ExternalSubtitles.Select(uri => uri.AbsoluteUri)));
 
         // http-header-fields-append 是命令行专有写法，libmpv 的 mpv_set_option_string 认不出来
         // （option not found）。http-header-fields 才是可设置的选项：逗号分隔、反斜杠转义。
@@ -537,6 +545,15 @@ internal sealed class LibMpvHandle(
 
     /// <summary>Only ever touched by the event thread, then published through <see cref="Status"/>.</summary>
     private PlayerStatus _status = new();
+
+    /// <summary>
+    /// The <c>StatusChanged</c> gate, kept out of <see cref="_status"/> on purpose: <see cref="_status"/>
+    /// is the freshest value for a direct <see cref="Status"/> read, while the coalescer measures the
+    /// threshold against the last snapshot it actually let through. Sharing one field advanced the
+    /// comparison baseline on every sub-threshold tick, so the position never accumulated the 0.25s the
+    /// gate wants and the 集成模式 seek bar never moved — see <see cref="StatusCoalescer"/>.
+    /// </summary>
+    private readonly StatusCoalescer _coalescer = new();
 
     public bool HasControlChannel => true;
 
@@ -947,17 +964,18 @@ internal sealed class LibMpvHandle(
     /// Publishes a snapshot, but only when it differs in something the chrome draws. mpv notifies
     /// time-pos observers on every frame; forwarding all of them would marshal sixty UI updates a
     /// second to redraw the same pixels.
+    /// <para>
+    /// <see cref="_status"/> is set unconditionally so a direct <see cref="Status"/> read always sees the
+    /// freshest value; the <see cref="StatusCoalescer"/> owns the threshold and measures it against the
+    /// last snapshot it let through, not against this one. Those two must stay apart — measuring the gate
+    /// against the always-fresh value let the position creep forever without ever tripping it, which is
+    /// what stopped the 集成模式 seek bar from moving between coarse events.
+    /// </para>
     /// </summary>
     private void Publish(PlayerStatus status)
     {
-        if (!status.DiffersFrom(_status))
-        {
-            _status = status;
-            return;
-        }
-
         _status = status;
-        StatusChanged?.Invoke(status);
+        if (_coalescer.ShouldPublish(status)) StatusChanged?.Invoke(status);
     }
 
     private void PublishTracks()

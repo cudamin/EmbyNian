@@ -85,13 +85,13 @@ internal static class AgreementsTests
                 $"winapp ui 与 UIA 脚本从此找不到这个控件；确认是有意替换之后再更新基线。");
         });
 
-        Test("约定：命令行开关与 CLAUDE.md 的清单一字不差", () =>
+        Test("约定：命令行开关变化要复核并同步开发文档", () =>
         {
             var added = Added("switch");
             var missing = Missing("switch");
             Assert.True(added.Count == 0 && missing.Count == 0,
-                $"开关表动了：新增 {Show(added)}；消失 {Show(missing)}。CLAUDE.md 那份「全部」清单、docs/开发与验证.md" +
-                $"里的用法都要跟着改，然后更新基线。");
+                $"开关表动了：新增 {Show(added)}；消失 {Show(missing)}。docs/开发与验证.md 的「命令行开关」一节要跟着改，" +
+                $"再更新基线。这条只比源码与基线，不代替阅读文档里的用法与组合限制。");
         });
 
         Test("约定：tools/analyzers 那份副本还在、没被换过（缺了它闸门 1 会静默失明）", () =>
@@ -136,7 +136,8 @@ internal static class AgreementsTests
                 entries.Add($"handle  {name}  {match.Groups[1].Value}");
         }
 
-        foreach (var name in SwitchNames(Path.Combine(shell, "Program.cs")))
+        foreach (var name in SwitchNames(Path.Combine(shell, "Program.cs"))
+            .Concat(SwitchNames(Path.Combine(root, "src", "EmbyNian.Core", "Infrastructure", "StartupArgs.cs"))))
             entries.Add($"switch  {name}");
 
         var analyzerDir = Path.Combine(root, "tools", "analyzers");
@@ -147,13 +148,14 @@ internal static class AgreementsTests
         var snapshot = entries.Distinct(StringComparer.Ordinal).OrderBy(line => line, StringComparer.Ordinal).ToArray();
 
         // 每次现写一份当前快照：基线要更新时以它为准，而不是把基线改成「现在的样子」再声称通过。
-        File.WriteAllText(Path.Combine(root, CandidateRelativePath.Replace('/', Path.DirectorySeparatorChar)),
-            Candidate(snapshot), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        var candidatePath = Path.Combine(root, CandidateRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(candidatePath)!);
+        File.WriteAllText(candidatePath, Candidate(snapshot), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         return snapshot;
     }
 
-    /// <summary>开关写在 <c>Program.cs</c> 的字面量里；<c>StartupArgs</c> 只提供 Has/Text 两个读法。</summary>
+    /// <summary>开关来自 Program 与 Core 的 StartupArgs；自检白名单在后者，须一并复核。</summary>
     private static IEnumerable<string> SwitchNames(string programFile)
     {
         if (!File.Exists(programFile)) return [];

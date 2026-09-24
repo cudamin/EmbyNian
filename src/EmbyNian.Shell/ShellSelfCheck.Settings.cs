@@ -275,21 +275,20 @@ internal static partial class ShellSelfCheck
             $"说明里{(drcNote.Contains("AC-3") ? "有" : "没有")}「AC-3」字样、"
                 + $"{(hasNormalize ? "并且" : "但是没有")}「音量均衡」那一行；这张卡 {audioRows.Count} 行");
 
-        // 「mpv.exe 路径」那一行的说明必须写着「命令行」。外部 mpv.exe 那条路把 X-Emby-Token 写在
-        // --http-header-fields-append= 上，也就是写在另一个进程的命令行上；内置 libmpv 在进程里设那个头，
-        // 所以默认后端没有这件事。三条处置里（临时配置文件、IPC 注入、把话说出来）只有最后一条在这台机器上
-        // 验得住 —— 不许真实播放，本机也没装外部 mpv.exe。而一句「把话说出来」的处置全靠那句话真的在屏上，
-        // 所以它和「动态范围压缩只对 AC-3 有效」是同一类：最可能的坏法是哪天被人「整理」掉，而单测进不到外壳
-        // 这个程序集。顺带确认这张卡四行都在 —— 说明挂在一行不存在的行上等于没有说明（渲染管线行是
-        // 2026-09-16 双管线那次加的，加行不改这里的判据，自检就会红着骂人）。
+        // 安全起播已经替换旧命令行传头：保留可见提示检查，但不能继续要求屏上承诺泄露令牌。
+        // 这里只验证说明与四个设置行；管道身份和起播顺序由 Core 的离线子进程夹具验证。
         var playerRows = page.ViewModel.Sections
             .FirstOrDefault(section => section.Category == "播放器")?.Rows ?? [];
         var pathNote = playerRows.FirstOrDefault(row => row.Label == "mpv.exe 路径")?.Note ?? "";
-        var saysCommandLine = pathNote.Contains("命令行", StringComparison.Ordinal);
+        var saysSecureStartup = pathNote.Contains("核验进程身份", StringComparison.Ordinal)
+            && pathNote.Contains("不放进命令行或临时文件", StringComparison.Ordinal)
+            && pathNote.Contains("停止起播", StringComparison.Ordinal);
+        var ipcNote = playerRows.FirstOrDefault(row => row.Label == "启用 IPC 进度通道")?.Note ?? "";
         var hasPipeline = playerRows.Any(row => row.Label == "渲染管线");
 
-        check("mpv.exe 路径那一行写明令牌会上命令行", saysCommandLine && hasPipeline && playerRows.Count == 4,
-            $"说明里{(saysCommandLine ? "有" : "没有")}「命令行」字样、"
+        check("mpv.exe 路径那一行写明安全通道要求",
+            saysSecureStartup && ipcNote.Contains("起播和退出仍需管道", StringComparison.Ordinal) && hasPipeline && playerRows.Count == 4,
+            $"安全起播说明{(saysSecureStartup ? "完整" : "缺失")}、"
                 + $"{(hasPipeline ? "并且" : "但是没有")}「渲染管线」那一行；这张卡 {playerRows.Count} 行"
                 + $"（应当 4 行：后端、渲染管线、路径、IPC）");
 

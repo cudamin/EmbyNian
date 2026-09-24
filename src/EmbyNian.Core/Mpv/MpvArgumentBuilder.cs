@@ -15,11 +15,12 @@ namespace EmbyNian.Mpv;
 public static class MpvArgumentBuilder
 {
     /// <param name="ipcPipe">
-    /// Full pipe path for <c>--input-ipc-server</c>, or null for no control channel. Passed
-    /// separately because the pipe is the backend's business, not part of what to play.
+    /// Full pipe path for <c>--input-ipc-server</c>. Required even when progress/control is disabled:
+    /// authentication and loading always travel over the verified startup channel, never argv.
     /// </param>
-    public static IReadOnlyList<string> Build(PlaybackRequest request, string? ipcPipe = null)
+    public static IReadOnlyList<string> Build(PlaybackRequest request, string ipcPipe)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ipcPipe);
         var arguments = new List<string>(24);
 
         // The client sets every option it needs itself, and mpv.conf/input.conf are the user's own
@@ -48,14 +49,12 @@ public static class MpvArgumentBuilder
         arguments.Add("--resume-playback=no");
         arguments.Add("--save-position-on-quit=no");
 
-        // Always explicit, including 0: "start from the beginning" must not turn into
-        // "wherever mpv last stopped".
-        arguments.Add($"--start={Seconds(request.StartSeconds)}");
-
-        // mpv idles at the end of a file by default only when told to; here the process lifetime is
-        // the playback session, so both of these have to be explicit.
-        arguments.Add("--idle=no");
+        // Wait for the first loadfile, then exit at EOF/error instead of leaving an empty window.
+        // start travels over IPC immediately before that first load, not a command-line playlist entry.
+        arguments.Add("--idle=once");
         arguments.Add("--keep-open=no");
+        // mpv diagnostics may echo HTTP options. Do not create a log or expose its terminal output.
+        arguments.Add("--terminal=no");
 
         if (request.AudioId is { } audioId) arguments.Add($"--aid={audioId}");
 
@@ -67,43 +66,45 @@ public static class MpvArgumentBuilder
         if (!string.IsNullOrWhiteSpace(request.AudioLanguage)) arguments.Add($"--alang={request.AudioLanguage}");
         if (!string.IsNullOrWhiteSpace(request.SubtitleLanguage)) arguments.Add($"--slang={request.SubtitleLanguage}");
 
-        // 字幕字体 is not here: it travels in PlayerOptions with the other ten 字幕外观 options, so that
-        // 「谁发 sub-font」 has one answer (MpvOutputOptions.SubtitleAppearance).
-        foreach (var subtitle in request.ExternalSubtitles)
-            arguments.Add($"--sub-file={subtitle.AbsoluteUri}");
-
-        foreach (var (name, value) in request.HttpHeaders)
-        {
-            // -append adds one item without the comma escaping the plain list option needs, so
-            // a header value containing a comma cannot split into two broken headers.
-            arguments.Add($"--http-header-fields-append={name}: {value}");
-        }
+        // External subtitles are also deferred: they may need the same HTTP headers as the video.
 
         if (!string.IsNullOrWhiteSpace(request.Title))
             arguments.Add($"--force-media-title={request.Title}");
 
-        if (!string.IsNullOrWhiteSpace(ipcPipe))
-            arguments.Add($"--input-ipc-server={ipcPipe}");
+        arguments.Add($"--input-ipc-server={ipcPipe}");
 
-        // 画质预设、视频输出 / 音频输出 settings and the 着色器配置组, in the order the planner assembled
-        // them: mpv's last occurrence of an option wins, so the group has the last word over the preset.
+        // Preserve the planner's last-value-wins order for picture/audio/shader options. Transport,
+        // logging and preload options may not undo the startup boundary, even in a malformed request.
         foreach (var (name, value) in request.PlayerOptions)
+        {
+            if (OwnsStartup(name))
+                throw new InvalidOperationException("播放器选项不能覆盖安全起播通道、认证或文件加载设置");
             arguments.Add($"--{name}={value}");
-
-        // Everything after -- is a file, so a URL that happens to start with a dash cannot be
-        // parsed as an option.
-        arguments.Add("--");
-        arguments.Add(request.MediaUrl.AbsoluteUri);
+        }
 
         return arguments;
     }
 
-    /// <summary>Same list with the Emby token replaced, for the log.</summary>
-    public static IReadOnlyList<string> Redact(IEnumerable<string> arguments) =>
-        [.. arguments.Select(argument =>
-            argument.StartsWith("--http-header-fields-append=X-Emby-Token:", StringComparison.OrdinalIgnoreCase)
-                ? "--http-header-fields-append=X-Emby-Token: ***"
-                : argument)];
+    /// <summary>
+    /// Ordered commands for a verified pipe. JSON arrays preserve commas and Unicode in HTTP headers
+    /// and subtitle URLs; every command must succeed before the next one can be sent.
+    /// </summary>
+    public static IReadOnlyList<object?[]> LoadCommands(PlaybackRequest request) =>
+    [
+        ["set_property", "http-header-fields", request.HttpHeaders.Select(header => $"{header.Key}: {header.Value}").ToArray()],
+        ["set_property", "options/sub-files", request.ExternalSubtitles.Select(uri => uri.AbsoluteUri).ToArray()],
+        ["set_property", "options/start", Seconds(request.StartSeconds)],
+        ["loadfile", request.MediaUrl.AbsoluteUri, "replace"]
+    ];
+
+    private static bool OwnsStartup(string name) =>
+        name.StartsWith("http-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("input-ipc-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("sub-file", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("audio-file", StringComparison.OrdinalIgnoreCase) && name != "audio-file-auto"
+        || name is "idle" or "keep-open" or "start" or "config" or "config-dir" or "include"
+            or "playlist" or "log-file" or "terminal" or "msg-level" or "user-agent" or "referrer"
+            or "cookies" or "cookies-file" or "resume-playback" or "save-position-on-quit";
 
     private static string Seconds(double value) =>
         Math.Max(0, value).ToString("0.###", CultureInfo.InvariantCulture);

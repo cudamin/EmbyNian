@@ -5,7 +5,7 @@
 # 没跑。和已经修过的 PRI 事故同一类：闸门是绿的，但它没在查。
 #
 #   tools\refresh-analyzers.ps1          把技能里的两份拷过来，并打印新哈希
-#   tools\refresh-analyzers.ps1 -Check   只比不动：两边不一致就退出码 1（发版前跑这条）
+#   tools\refresh-analyzers.ps1 -Check   只比本机候选与仓库载荷，供独立升级评估，不是发版必过项
 #
 # 拷完把哈希写进 tests\EmbyNian.Tests\Agreements.txt 的 analyzer 行 —— 那里有一条测试会先红给你看
 # （AgreementsTests「tools/analyzers 那份副本还在、没被换过」）。
@@ -14,7 +14,7 @@ param(
     # 只比不动：技能里那份与本仓库这份不一致时退出码 1。
     [switch]$Check,
 
-    # 技能里 analyzer 目录，默认在用户 .claude 的插件缓存里按版本找最新的一个。
+    # 技能里的 analyzer 目录；默认按插件文件写时间选候选，不保证语义版本最新。
     [string]$SkillRoot
 )
 
@@ -74,7 +74,8 @@ if ($Check) {
     foreach ($item in $drift) {
         Write-Output "  $($item.Name)：技能 $($item.Source)，仓库 $($item.Target)"
     }
-    Write-Output '跑一次不带 -Check 的本脚本刷新，把新哈希写进 tests\EmbyNian.Tests\Agreements.txt，再跑闸门 2。'
+    Write-Output '这只是本机候选差异，不是发版失败。先核实来源和版本，单独安排升级；不要为匹配旧插件降级仓库载荷。'
+    Write-Output '确定升级后用 -SkillRoot 指定来源刷新，复核诊断与哈希、逐行更新 Agreements.txt，再完整运行闸门 1～4。'
     exit 1
 }
 
