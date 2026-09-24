@@ -25,7 +25,8 @@ telegram 发布频道：https://t.me/EmbyNian
 ### 系统要求
 
 - Windows 10 1809 及以上，仅 x64
-- 服务器：Emby 4.10.x
+- Emby 4.10.x
+- MoviePilot 3.x.x
 - 可选：「服务器控制台」页需要 WebView2 Runtime，没有则提示改用浏览器打开
 
 ### 下载
