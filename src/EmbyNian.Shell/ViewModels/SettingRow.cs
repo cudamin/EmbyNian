@@ -590,6 +590,12 @@ public sealed partial class SettingFactRow : SettingRow
     /// <summary>那一行值。等宽字排，因为多数时候它是一个路径。</summary>
     public string Value { get; }
 
+    /// <summary>
+    /// 值那一行空着就不占地方 —— 「关于」卡底下那三颗动作按钮（备份、恢复配置、恢复默认）只有标签、说明和按钮，
+    /// 没有值可显示，而一条空的等宽行会在标签和说明之间垫出一道谁也解释不了的缝。同 <see cref="NoteVisibility"/>。
+    /// </summary>
+    public Visibility ValueVisibility => Value.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+
     public string ActionLabel { get; }
 
     /// <summary>没有按钮的那几行不给它留位置，同 <see cref="SettingRow.NoteVisibility"/>。</summary>

@@ -33,6 +33,8 @@ font-size  Views/DiagnosticsPage.xaml  8
 font-size  Views/EpisodeRow.xaml  3
 font-size  Views/HomeBanner.xaml  4
 font-size  Views/LibraryPage.xaml  8
+font-size  Views/MoviePilotSearchPanel.xaml  2
+font-size  Views/NotificationsPage.xaml  3
 font-size  Views/PlayerPage.xaml  7
 font-size  Views/PosterCard.xaml  9
 font-size  Views/ServersPage.xaml  7
@@ -193,6 +195,7 @@ handle  Views/HomeBanner.xaml  TitleText
 handle  Views/HomeBanner.xaml  Top
 handle  Views/HomePage.xaml  Banner
 handle  Views/HomePage.xaml  BannerZone
+handle  Views/HomePage.xaml  DownloadRepeater
 handle  Views/HomePage.xaml  LibraryHost
 handle  Views/HomePage.xaml  LibraryOverlay
 handle  Views/HomePage.xaml  Overlay
@@ -260,6 +263,10 @@ handle  Views/MetadataDialog.xaml  Problem
 handle  Views/MetadataDialog.xaml  ProductionYearBox
 handle  Views/MetadataDialog.xaml  SortNameBox
 handle  Views/MetadataDialog.xaml  TagsBox
+handle  Views/NotificationsPage.xaml  NotificationsAddButton
+handle  Views/NotificationsPage.xaml  NotificationsEntryList
+handle  Views/NotificationsPage.xaml  NotificationsRefreshButton
+handle  Views/NotificationsPage.xaml  PageLayout
 handle  Views/PlayerPage.xaml  AudioButton
 handle  Views/PlayerPage.xaml  AudioMenu
 handle  Views/PlayerPage.xaml  BackButton

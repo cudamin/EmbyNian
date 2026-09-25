@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
+using EmbyNian.MoviePilot;
 using EmbyNian.Services;
 using EmbyNian.Shell.Views;
 using Microsoft.UI.Xaml;
@@ -29,6 +30,10 @@ namespace EmbyNian.Shell.ViewModels;
 /// 勾掉的那一排连请求一起省掉：媒体库那几排各是一次「这个库的最近添加」，不看的库不该每次开主页都问一遍。
 /// </para>
 /// <para>
+/// MoviePilot 开着的时候，这一页还多一排「正在下载」（<see cref="DownloadRows"/>）：还没进库、正在下载器里
+/// 跑的片子提前用封面站上首页，进度五秒一班地推上来。这一排不进版面表 —— 在不在屏上由有没有任务在下载说了算。
+/// </para>
+/// <para>
 /// 设置 → 界面 → 「显示主页轮播大图」关掉之后这一页就是一叠普通的货架（<see cref="_banner"/>）：顶上那张大图
 /// 没有了，所有内容都横着排、按各自在版面表上的位置站着。
 /// </para>
@@ -44,6 +49,13 @@ public sealed partial class HomeViewModel : PageViewModel
     private const int LatestSize = 24;
 
     /// <summary>
+    /// 「正在下载」一排的两班钟：正常五秒一班（进度读数的实时感就在这一格上），连不上退到三十秒一班 ——
+    /// 五秒一条 Warn 是流水账，三十秒一条是「这条线坏了」的正常心跳。
+    /// </summary>
+    private const int DownloadPollSeconds = 5;
+    private const int DownloadPollErrorSeconds = 30;
+
+    /// <summary>
     /// <see cref="LoadedCount"/> before the first load. The self-check already speaks this language —
     /// it reports a negative count as 未读取 — and it keeps 「nothing came back」 distinct from
     /// 「nothing has been asked yet」, which is the difference between an empty server and a slow one.
@@ -55,6 +67,24 @@ public sealed partial class HomeViewModel : PageViewModel
     private EmbyImageStore? _images;
     private ISettingsService? _settings;
     private IReadOnlyList<EmbyItem> _libraryViews = [];
+
+    /// <summary>
+    /// 「正在下载」一排的来源。为空 = 这台环境没有 MoviePilot（自检的隔离运行目录没有、测试也没有），
+    /// 轮询整个不发生。有，也只在 <see cref="MoviePilotService.Enabled"/> 时才轮。
+    /// </summary>
+    private MoviePilotService? _moviePilot;
+
+    /// <summary>轮询这一趟的命。停在 <see cref="Cancel"/>（翻页走人）和下一次 <see cref="Attach"/>。</summary>
+    private CancellationTokenSource? _downloadPolling;
+
+    /// <summary>
+    /// 「正在下载」那一排。整个首页最多这一排（没有任务时整排不存在，见 <see cref="DownloadRows"/>），
+    /// 轮到新一轮读数时卡片在它里面原地增删改 —— 对账规则在 <see cref="MoviePilotDownload.Plan"/>。
+    /// </summary>
+    private DownloadRow? _downloadRow;
+
+    /// <summary>连接已经在报错（连续失败）：第一声 Warn 之后再不重复喊，退避到慢一档。</summary>
+    private bool _downloadFailing;
 
     /// <summary>角标那个开关，<see cref="Attach"/> 时取一次的快照 —— 见那一段的说明。卡片尺寸从前也在这张
     /// 快照上（<c>_poster</c>/<c>_still</c>），2026-09-05「海报宽度」那行设置删掉之后就只剩这一个了。</summary>
@@ -172,6 +202,16 @@ public sealed partial class HomeViewModel : PageViewModel
     public ObservableCollection<CardShelf> Shelves { get; } = [];
 
     /// <summary>
+    /// 「正在下载」一排的宿主：0 或 1 个 <see cref="DownloadRow"/>。与 <see cref="Shelves"/> 同一条规矩 ——
+    /// 空的排不存在（一个没有任何任务的账号，这一排连一格高度都不该占），所以它自己也是一个集合，
+    /// 页面把它排在 <see cref="Shelves"/> 那一叠的前面：还没入库的片子，站在最显眼的位置上。
+    /// </summary>
+    public ObservableCollection<DownloadRow> DownloadRows { get; } = [];
+
+    /// <summary>一排都没有时把宿主整个收起 —— 连它的下边距一起，不留一道谁也看不见的空。</summary>
+    public Visibility DownloadsVisibility => Show(DownloadRows.Count > 0);
+
+    /// <summary>
     /// 需求 5 的那条大图轮播（<see cref="HomeCarousel"/>）：设置里那个来源（最近添加或随机）、那一类媒体
     /// （全部、电影或剧集）的头几张，each drawn as one full-width backdrop instead of a card.
     /// 2026-09-13「轮播图改用前十个最近添加」之后继续观看不再参加，同日下午来源、媒体、张数三样进了设置。
@@ -214,19 +254,25 @@ public sealed partial class HomeViewModel : PageViewModel
     /// navigation, on purpose (see <see cref="_all"/>). The session and the image store are kept — every
     /// row's request goes through the one, and the carousel builds a slide per load out of the other.
     /// </para>
+    /// <para>
+    /// <paramref name="moviePilot"/> 没有就传 null（没有 MoviePilot 的环境）：「正在下载」一排整排不发生。
+    /// 有，也只有设置里开了才轮询（<see cref="StartDownloadPolling"/>），翻页走人时随 <see cref="Cancel"/> 停。
+    /// </para>
     /// </summary>
     internal void Attach(
         IShellActions actions,
         IReadOnlyList<EmbyItem> libraryViews,
         ISettingsService settings,
         EmbySession session,
-        EmbyImageStore images)
+        EmbyImageStore images,
+        MoviePilotService? moviePilot = null)
     {
         _actions = actions;
         _libraryViews = libraryViews;
         _session = session;
         _images = images;
         _settings = settings;
+        _moviePilot = moviePilot;
 
         var ui = settings.Settings.Ui;
 
@@ -234,6 +280,7 @@ public sealed partial class HomeViewModel : PageViewModel
         // 快照上只剩角标这一个真正的设置读数。
         _badges = ui.ShowWatchedIndicators;
 
+        StartDownloadPolling();
         BuildShelves();
     }
 
@@ -613,6 +660,161 @@ public sealed partial class HomeViewModel : PageViewModel
                 Log.Warn(Category, $"{shelf.Title} 的牌子收到了点击，但目标是无处可去的 {shelf.Target}");
                 break;
         }
+    }
+
+    /// <summary>
+    /// 「实时推送」的那半边：MoviePilot 没有给客户端的推送通道，推是用每五秒一班的轮询装出来的。一趟跟着
+    /// 一趟串行跑（上一趟没回来不发下一趟），读回来经 <see cref="MoviePilotDownload.Plan"/> 对账，屏上于是
+    /// 只动数字和进度条，不闪排。
+    /// <para>
+    /// 报错退到慢一档（30 秒）再试：连不上的话每五秒喊一声 Warn 就是流水账，只有第一声是给排查的人看的。
+    /// 没配好（地址、账号）的 MoviePilot 一次就把轮询停了 —— 那不是网络抖动，是「没这回事」。
+    /// </para>
+    /// </summary>
+    private async Task PollDownloadsAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                var tasks = await _moviePilot!.DownloadingAsync(token).ConfigureAwait(true);
+                if (token.IsCancellationRequested) return;
+
+                ApplyDownloads(tasks);
+                _downloadFailing = false;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (MoviePilotException error)
+            {
+                if (token.IsCancellationRequested) return;
+
+                // 没填地址、没填账号：这条链上每一趟都会同样地失败，退避救不了它，停掉才是对的。
+                if (error is MoviePilotUnreachableException)
+                {
+                    if (!_downloadFailing) Log.Warn(Category, "读取 MoviePilot 下载列表失败", error);
+                    _downloadFailing = true;
+                }
+                else
+                {
+                    Log.Warn(Category, "MoviePilot 下载监控停了", error);
+                    return;
+                }
+            }
+            catch (Exception error)
+            {
+                if (token.IsCancellationRequested) return;
+                if (!_downloadFailing) Log.Warn(Category, "读取 MoviePilot 下载列表失败", error);
+                _downloadFailing = true;
+            }
+
+            var seconds = _downloadFailing ? DownloadPollErrorSeconds : DownloadPollSeconds;
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(seconds), token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 一轮读数落到排上：消失的卡连图一起撤、新增的按服务器那一串里的位置插进来（先发取图）、
+    /// 两边都有的就地改进度。三件事全认 <see cref="MoviePilotDownloadTask.Hash"/>。
+    /// <para>
+    /// 空读数不用单写一路 —— 「全没了」就是一份全是删除的差量，删完排空了，把它从 <see cref="DownloadRows"/>
+    /// 里摘掉，整排自然消失。
+    /// </para>
+    /// </summary>
+    private void ApplyDownloads(IReadOnlyList<MoviePilotDownloadTask> tasks)
+    {
+        var row = _downloadRow ??= new DownloadRow();
+        var plan = MoviePilotDownload.Plan([.. row.Cards.Select(card => card.Current)], tasks);
+
+        // 安静的一轮（值-aware 的差量连「值没变」都不算事）：到此为止，一张卡都不惊动。
+        if (plan.IsEmpty) return;
+
+        foreach (var hash in plan.Removals)
+        {
+            var index = -1;
+            for (var probe = 0; probe < row.Cards.Count; probe++)
+            {
+                if (row.Cards[probe].Hash == hash)
+                {
+                    index = probe;
+                    break;
+                }
+            }
+
+            if (index < 0) continue;
+            row.Cards[index].AbandonImage();
+            row.Cards.RemoveAt(index);
+        }
+
+        foreach (var addition in plan.Additions)
+        {
+            if (_moviePilot is null) break;
+
+            var card = new DownloadCard(addition.Task, DownloadRow.CardWidth);
+            row.Cards.Insert(Math.Min(addition.Index, row.Cards.Count), card);
+            _ = card.EnsureImageAsync(_moviePilot);
+        }
+
+        foreach (var update in plan.Updates)
+        {
+            var card = row.Cards.FirstOrDefault(item => item.Hash == update.Hash);
+            card?.Update(update);
+        }
+
+        if (row.Cards.Count > 0 && !DownloadRows.Contains(row)) DownloadRows.Add(row);
+        if (row.Cards.Count == 0 && DownloadRows.Contains(row)) DownloadRows.Remove(row);
+        OnPropertyChanged(nameof(DownloadsVisibility));
+    }
+
+    /// <summary>收掉这一排：图和在路上那一趟一起作废，排从屏上摘下来。轮询停与「没有任务」共用这一句。</summary>
+    private void ClearDownloads()
+    {
+        if (_downloadRow is not { } row) return;
+
+        foreach (var card in row.Cards) card.AbandonImage();
+        row.Cards.Clear();
+        DownloadRows.Remove(row);
+        OnPropertyChanged(nameof(DownloadsVisibility));
+    }
+
+    private void StartDownloadPolling()
+    {
+        StopDownloadPolling();
+
+        // 没接上 MoviePilot（隔离运行目录、测试）或者设置里关着：这一排整排不发生，一个请求都不发。
+        if (_moviePilot is not { Enabled: true }) return;
+
+        _downloadFailing = false;
+        _downloadPolling = new CancellationTokenSource();
+        _ = PollDownloadsAsync(_downloadPolling.Token);
+    }
+
+    private void StopDownloadPolling()
+    {
+        _downloadPolling?.Cancel();
+        _downloadPolling?.Dispose();
+        _downloadPolling = null;
+        _downloadFailing = false;
+        ClearDownloads();
+    }
+
+    /// <summary>
+    /// 翻页走人：轮询和这一排的图一起收掉。下次回到主页 <see cref="Attach"/> 会重新起一班，第一趟几乎立刻
+    /// 回来，屏上不缺那一排 —— 犯不上在看不见的页面后面养着五秒一次的请求和几张贴着的解码画面。
+    /// </summary>
+    public override void Cancel()
+    {
+        StopDownloadPolling();
+        base.Cancel();
     }
 
     /// <summary>

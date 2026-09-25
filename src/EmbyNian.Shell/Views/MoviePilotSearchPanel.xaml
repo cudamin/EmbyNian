@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  搜索页里 MoviePilot 那一段：一列结果卡（海报 + 标题/类型/简介 + 订阅键），加上自己的忙/空/错提示。
+  和 Emby 那半是两张网格，页面用分段切换在两者之间切显隐（见 LibraryPage）。字号、颜色一律走 Eg* 样式与
+  主题角色键，不写死内联数字或色值。海报是外站 URL，用 ImageBrush/Image 盖满固定小框，取不到就字形占位。
+-->
+<UserControl
+    x:Class="EmbyNian.Shell.Views.MoviePilotSearchPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:automation="using:Microsoft.UI.Xaml.Automation"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    xmlns:vm="using:EmbyNian.Shell.ViewModels">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 忙时那根不定长的细线，单独占一行，免得它一出现就把下面的列表顶一下。 -->
+        <ProgressBar
+            Grid.Row="0"
+            Height="2"
+            IsIndeterminate="True"
+            Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+
+        <!-- 关着就整个收起来（NoticeVisibility），不占那一行的高。 -->
+        <InfoBar
+            Grid.Row="1"
+            IsClosable="True"
+            IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+            Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+            Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+            Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
+            Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
+
+        <ItemsView
+            x:Name="Results"
+            Grid.Row="2"
+            IsItemInvokedEnabled="False"
+            ItemTransitionProvider="{x:Null}"
+            ItemsSource="{x:Bind ViewModel.Results, Mode=OneWay}"
+            SelectionMode="None">
+            <ItemsView.Layout>
+                <StackLayout Spacing="12" />
+            </ItemsView.Layout>
+            <ItemsView.ItemTemplate>
+                <DataTemplate x:DataType="vm:MoviePilotResult">
+                    <ItemContainer>
+                        <Grid
+                            Padding="12"
+                            ColumnSpacing="16"
+                            Background="{ThemeResource EgSurfaceBrush}"
+                            BorderBrush="{ThemeResource EgBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource EgCardCornerRadius}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 固定小框，Border 的圆角把里面的图裁圆；取不到海报就露出底下那个字形。 -->
+                            <Border
+                                Width="64"
+                                Height="96"
+                                Background="{ThemeResource EgSurfaceAltBrush}"
+                                CornerRadius="{StaticResource EgPosterCornerRadius}">
+                                <Grid>
+                                    <FontIcon
+                                        FontSize="24"
+                                        Foreground="{ThemeResource EgTextDimBrush}"
+                                        Glyph="&#xE8B2;"
+                                        Visibility="{x:Bind GlyphVisibility}" />
+                                    <Image
+                                        Source="{x:Bind Poster}"
+                                        Stretch="UniformToFill"
+                                        Visibility="{x:Bind PosterVisibility}" />
+                                </Grid>
+                            </Border>
+
+                            <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                                <TextBlock
+                                    MaxLines="1"
+                                    Style="{StaticResource EgSubheadStyle}"
+                                    Text="{x:Bind Title}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <TextBlock
+                                    Foreground="{ThemeResource EgAccentBrush}"
+                                    Style="{StaticResource EgCaptionStyle}"
+                                    Text="{x:Bind TypeLabel}"
+                                    Visibility="{x:Bind TypeVisibility}" />
+                                <TextBlock
+                                    Foreground="{ThemeResource EgTextDimBrush}"
+                                    MaxLines="2"
+                                    Style="{StaticResource EgCaptionStyle}"
+                                    Text="{x:Bind Overview}"
+                                    TextTrimming="CharacterEllipsis"
+                                    TextWrapping="Wrap"
+                                    Visibility="{x:Bind OverviewVisibility}" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="8">
+                                <Button
+                                    HorizontalAlignment="Stretch"
+                                    automation:AutomationProperties.Name="{x:Bind SubscribeAutomationName}"
+                                    Command="{x:Bind SubscribeCommand}"
+                                    Content="{x:Bind SubscribeLabel, Mode=OneWay}"
+                                    Style="{StaticResource EgPrimaryButtonStyle}"
+                                    ToolTipService.ToolTip="{x:Bind SubscribeAutomationName}" />
+                                <Button
+                                    HorizontalAlignment="Stretch"
+                                    automation:AutomationProperties.Name="{x:Bind SearchResourcesAutomationName}"
+                                    Command="{x:Bind SearchResourcesCommand}"
+                                    Content="搜索资源"
+                                    Style="{StaticResource EgSecondaryButtonStyle}"
+                                    ToolTipService.ToolTip="{x:Bind SearchResourcesAutomationName}" />
+                            </StackPanel>
+                        </Grid>
+                    </ItemContainer>
+                </DataTemplate>
+            </ItemsView.ItemTemplate>
+        </ItemsView>
+
+        <!-- 还没搜、没搜到，都落这句；忙的时候（EmptyVisibility 为否）收起。 -->
+        <StackPanel
+            Grid.Row="2"
+            Margin="24,72,24,0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Top"
+            Spacing="20"
+            Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}">
+            <Border Width="72" Height="72" Background="{ThemeResource EgSurfaceAltBrush}" CornerRadius="24">
+                <FontIcon FontSize="28" Foreground="{ThemeResource EgAccentBrush}" Glyph="&#xE721;" />
+            </Border>
+            <TextBlock
+                Foreground="{ThemeResource EgTextDimBrush}"
+                Style="{StaticResource EgBodyStyle}"
+                Text="{x:Bind ViewModel.EmptyNotice, Mode=OneWay}"
+                TextAlignment="Center"
+                TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- 资源覆盖面板：点某条结果的「搜索资源」时盖上来，返回收起。默认藏着，见 ShowResourcesAsync / OnResourceClosed。 -->
+        <local:MoviePilotResourcePanel
+            x:Name="ResourceOverlay"
+            Grid.Row="0"
+            Grid.RowSpan="3"
+            Closed="OnResourceClosed"
+            Visibility="Collapsed" />
+    </Grid>
+</UserControl>

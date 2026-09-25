@@ -1,5 +1,6 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.MoviePilot;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -134,6 +135,9 @@ public sealed partial class HomePage : Page, IShellContent
         {
             if (!ViewModel.ShelvesChangeIsOverlay) ScheduleFold();
         };
+        // 「正在下载」一排来去（第一个任务出现、最后一个任务消失）也挪动货架的顶，矮窗档跟着重查一遍。
+        // 行内进度跳动不响这条事件 —— 那不挪任何一排的位置。
+        ViewModel.DownloadRows.CollectionChanged += (_, _) => ScheduleFold();
         ViewModel.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(ViewModel.BusyVisibility) or nameof(ViewModel.NoticeVisibility))
@@ -888,7 +892,7 @@ public sealed partial class HomePage : Page, IShellContent
         var card = (cards.FirstOrDefault(poster => poster.Card?.Item.IsPlayable == true) ?? cards.FirstOrDefault())?.Card;
         if (card is null) return null;
 
-        var plan = ItemMenu.For(card.Item);
+        var plan = ItemMenu.For(card.Item, _actions.MoviePilotEnabled);
         var menu = ItemCommands.Build(_session, _actions, this, card);
         var labels = new List<string>(menu.Items.Count);
         var ok = menu.Items.Count == plan.Count;
@@ -1041,7 +1045,8 @@ public sealed partial class HomePage : Page, IShellContent
             request.LibraryViews,
             settings,
             _session,
-            services.GetRequiredService<EmbyImageStore>());
+            services.GetRequiredService<EmbyImageStore>(),
+            services.GetRequiredService<MoviePilotService>());
 
         // 轮播的停留秒数（设置 → 主页 → 「封面轮换秒数」，2026-09-13）页面一进来就同步一次 —— 带子自己
         // 没有设置，它等的是这句话。

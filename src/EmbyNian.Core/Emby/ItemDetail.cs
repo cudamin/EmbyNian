@@ -55,6 +55,19 @@ public sealed record InfoRow(string Label, string Value, string Second = "")
 }
 
 /// <summary>
+/// 媒体源（多版本）的排法，设置页「媒体源排序」那颗下拉的两个档（2026-09-24）。详情页的媒体源行、
+/// 播放器的版本菜单、默认版本的「同分取第一」和自动换源的候选读的是<b>同一张表</b>，这一个选择四处一起变。
+/// </summary>
+public enum MediaSourceOrder
+{
+    /// <summary>服务器给的次序 —— 这项设置出现之前一直的样子。</summary>
+    Default = 0,
+
+    /// <summary>最新入库的那一版排最前（「把最新入库的排前面」，2026-09-24）。</summary>
+    NewestFirst = 1
+}
+
+/// <summary>
 /// Every string and list the 详情页 puts on screen, as pure functions of an already-fetched item.
 /// <para>
 /// Split out of the page rather than left in it for two reasons. The first is that the test project
@@ -377,7 +390,31 @@ public static class ItemDetail
         return name;
     }
 
-    /// <summary>The 媒体源 picker's rows, in the order the server returned the files.</summary>
+    /// <summary>
+    /// 把条目的版本表排成<b>最新入库在前</b>（2026-09-24 用户令：「同一个资源的不同版本排序，把最新入库的
+    /// 排前面」）。<paramref name="added"/> 是版本条目号 → 入库时间，由 <c>EmbyClient</c> 用一条
+    /// <c>/Items?Ids=…</c> 批量问回来；表上没有问到时间的那一版排最后，同时间的保持服务器给的相对次序
+    /// （LINQ 的排序是稳定排序）。没有问到任何时间、或者只有一版，就是原样 —— 服务器怎么给还怎么给。
+    /// <para>
+    /// 排的是<b>条目自己的表</b>，所以详情页的媒体源行、播放器的版本菜单、默认版本的「同分取第一」、
+    /// 打不开时的自动换源候选，四处读的是同一张表，一次排好处处一致。重排只动次序不动对象：菜单里
+    /// 勾着的、票里点着的还是原来那些实例。
+    /// </para>
+    /// </summary>
+    public static void OrderVersionsNewestFirst(EmbyItem item, IReadOnlyDictionary<string, DateTimeOffset> added)
+    {
+        if (item.MediaSources.Count < 2 || added.Count == 0) return;
+
+        var ordered = item.MediaSources
+            .OrderByDescending(source =>
+                added.TryGetValue(source.ItemId, out var date) ? date : DateTimeOffset.MinValue)
+            .ToList();
+
+        item.MediaSources.Clear();
+        item.MediaSources.AddRange(ordered);
+    }
+
+    /// <summary>The 媒体源 picker's rows, newest-added version first（<see cref="OrderVersionsNewestFirst"/> 排好的）.</summary>
     public static IReadOnlyList<SourceRow> SourceRows(EmbyItem item) =>
         item.MediaSources.Select(source => new SourceRow(source, SourceLabel(source))).ToList();
 

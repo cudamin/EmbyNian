@@ -4586,6 +4586,96 @@ internal static class PlaybackTests
             Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.StepInSeason(episodes, "s1e1", 0));
             Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.StepInSeason(episodes, "s1e1", 2));
         });
+
+        // ---- 跨季落地的选集改由服务器按季返回（2026-09-24《伪恋》跨季相邻单集） ----
+        //
+        // 全剧列表里，排进 S01 播出的 air-order 特典记在 S00；按 SeasonId 本地筛 S01 只有 2 集，而服务器按季返回
+        // 会把那颗特典并进 S01。ResolveAdjacentAsync 让上一集/下一集跨季落地时的「选集」改问服务器按季要，和季详情页一致。
+
+        Test("剧集导航：跨季落地的选集改用服务器按季返回（含并进来的特典）", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("sp", "s0", 0, 1),
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            // 服务器按 S01 返回时把 air-order 特典并了进来 = 3 集；本地在全剧列表按 SeasonId 筛只会得到 e1、e2。
+            var serverSeason1 = new List<EmbyItem>
+            {
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("spInS1", "s1", 1, 2),
+                QueueEpisode("e2", "s1", 1, 3)
+            };
+
+            var destination = EpisodeNavigation.ResolveAdjacentAsync(
+                seriesWide, "sp", 1,
+                _ => Task.FromResult<IReadOnlyList<EmbyItem>>(serverSeason1)).GetAwaiter().GetResult();
+
+            Assert.Equal("e1", destination?.Episode.Id);
+            Assert.Equal(3, destination?.Siblings.Count ?? 0);
+            Assert.True(destination!.Siblings.Select(s => s.Id).SequenceEqual(new[] { "e1", "spInS1", "e2" }));
+        });
+
+        Test("剧集导航：服务器按季那份拿不到时退回本地筛的选集", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("sp", "s0", 0, 1),
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            var destination = EpisodeNavigation.ResolveAdjacentAsync(
+                seriesWide, "sp", 1,
+                _ => Task.FromResult<IReadOnlyList<EmbyItem>>([])).GetAwaiter().GetResult();
+
+            Assert.Equal("e1", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+            Assert.True(destination!.Siblings.All(s => s.SeasonId == "s1"));
+        });
+
+        Test("剧集导航：服务器那份不含落点时也退回本地选集", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("sp", "s0", 0, 1),
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            // 服务器回了一份对不上落点的列表：够不着目标，宁可用本地那份，也好过没有选集。
+            var wrong = new List<EmbyItem> { QueueEpisode("other", "s1", 1, 9) };
+
+            var destination = EpisodeNavigation.ResolveAdjacentAsync(
+                seriesWide, "sp", 1,
+                _ => Task.FromResult<IReadOnlyList<EmbyItem>>(wrong)).GetAwaiter().GetResult();
+
+            Assert.Equal("e1", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+        });
+
+        Test("剧集导航：跨季落地在两端越界返回 null，且不问服务器", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            var asked = false;
+            Func<string?, Task<IReadOnlyList<EmbyItem>>> fetch = _ =>
+            {
+                asked = true;
+                return Task.FromResult<IReadOnlyList<EmbyItem>>([]);
+            };
+
+            // 最后一集再往后、第一集再往前都没有相邻集：直接 null，服务器一次都不碰。
+            Assert.Null(EpisodeNavigation.ResolveAdjacentAsync(seriesWide, "e2", 1, fetch).GetAwaiter().GetResult());
+            Assert.Null(EpisodeNavigation.ResolveAdjacentAsync(seriesWide, "e1", -1, fetch).GetAwaiter().GetResult());
+            Assert.False(asked);
+        });
     }
 
     // ---- 播放闸门 --------------------------------------------------------------

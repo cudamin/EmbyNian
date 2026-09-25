@@ -519,6 +519,19 @@ internal static partial class ShellSelfCheck
     private static int _dashboardStep;
 
     /// <summary>
+    /// 「通知」那一页的走查步（2026-09-25，通知从卡片改成内嵌页时加的）：0 没开始，1 已选中、等它装载完，
+    /// 2 快照拿完、该去控制台了。排在卡片走完之后、控制台之前 —— 卡片那边一走完名单就只剩内嵌页，通知是
+    /// 顺路的第一站。装载要真连服务器读一次条目表，所以中间那档是「等多久都在等」：拿不到 ready 就一直
+    /// return true，装载完的那一拍才落快照。
+    /// </summary>
+    private static int _notificationsStep;
+
+    /// <summary>「通知」页的快照，见 <see cref="VisitNotifications"/>。</summary>
+    private static NotificationsState? _notifications;
+
+    private sealed record NotificationsState(bool Ready, int Bound, int Drawn, bool CanConfirm);
+
+    /// <summary>
     /// One entry per settings category the walk has opened, in the order it opened them. A list rather than
     /// a single snapshot because the settings stage is a walk of its own: see <see cref="WalkSettings"/>.
     /// Everything else about that page is read live, since it is the one the walk ends on.
@@ -617,11 +630,13 @@ internal static partial class ShellSelfCheck
         4 => 98,
 
         // The settings page is settled just as fast, but its stage is a walk rather than a look: every card,
-        // one per tick, and then 需求 8's console — the one thing in this stage that waits on the network. That
-        // page has a 15-second watchdog of its own, so this budget only has to be wide enough that it, and not
-        // this, is what ends the wait: a deadline reached mid-console would report a console that had merely not
-        // answered yet as a broken one.
-        _ => 152
+        // one per tick, then 「通知」— an embedded page of its own whose first screen is a round trip to the
+        // server (2026-09-25,通知从卡片改成内嵌页时进来的；Settled 的 switch 也因此补了它那一档) — and then
+        // 需求 8's console, the one thing in this stage that waits on the network longest. That page has a
+        // 15-second watchdog of its own, so this budget only has to be wide enough that it, and not this, is
+        // what ends the wait: a deadline reached mid-console would report a console that had merely not
+        // answered yet as a broken one. 152 was exactly cards + console with nothing to spare.
+        _ => 164
     };
 
     /// <summary>
@@ -755,6 +770,12 @@ internal static partial class ShellSelfCheck
         // having arrived on 诊断.
         if (_dashboardStep > 0) return VisitDashboard(page);
 
+        // 「通知」排在控制台之前：同样是内嵌页，同样是卡片走完后的顺路一站，快照落在 <see cref="_notifications"/>。
+        // 两站的步进检查按「后到的站先查」排（控制台、通知）——每站的 Visit 只认自己 step==1 那
+        // 一拍，step 走到 2 之后它就该答「没地方了」；快照落完的那一拍下一步已经指给下一站，若下一站的检查排在
+        // 后面，就会被上一站 step==2 的 false 当场截住，后面整段走不到。
+        if (_notificationsStep > 0) return VisitNotifications(page);
+
         // The stage before this one was 诊断, and that is a category of this page now — with the page cached,
         // the walk arrives on it. There is nothing to record for a hosted category (both have snapshots of
         // their own), so the first tick here only has to open the first card.
@@ -784,11 +805,37 @@ internal static partial class ShellSelfCheck
             return true;
         }
 
-        // Cards done; the last entry in this page's list is the embedded console. Selecting it navigates the
-        // hosted frame there and then, so the next tick's <see cref="Settled"/> gate is the console's own.
-        _dashboardStep = 1;
-        page.SelectedCategory = SettingsViewModel.DashboardCategory;
+        // Cards done. First the notifications page (it loads when selected, so the next ticks are its
+        // Settled gate), then the embedded console.
+        _notificationsStep = 1;
+        page.SelectedCategory = SettingsViewModel.NotificationsCategory;
         return true;
+    }
+
+    /// <summary>
+    /// 「通知」那一页（2026-09-25）：选中、等装载、落快照、再去下一站 —— 四件事各占一拍，等待不设上限，
+    /// 因为那页的第一屏就是一次真连服务器的读取。只读：不开编辑器、不点测试 —— 这两个都有对外副作用
+    /// （测试会让服务器真的往外发一条），不是自检该碰的。
+    /// </summary>
+    private static bool VisitNotifications(SettingsPage page)
+    {
+        if (_notificationsStep == 1)
+        {
+            // 选中之后 HostedFrame 才导航过来；还没到就再等一拍。装载没完（IsReady 假）同样等 ——
+            // 页面自己会画进度条，快照要的是装载完的那份。
+            if (page.Notifications is not { } notifications || !notifications.IsReady) return true;
+
+            var (bound, drawn) = notifications.Realised;
+            _notifications = new NotificationsState(
+                notifications.IsReady, bound, drawn, notifications.ViewModel.CanConfirm);
+            _notificationsStep = 2;
+
+            _dashboardStep = 1;
+            page.SelectedCategory = SettingsViewModel.DashboardCategory;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1046,6 +1093,11 @@ internal static partial class ShellSelfCheck
             // reports ready on every ending, the failures and its own 15-second give-up included, so this gate
             // cannot be the thing that hangs.
             DashboardPage dashboard => dashboard.IsReady,
+
+            // 「通知」也住这个框里（2026-09-25）。漏了它不是「等不住」而是「等死」：Face 会落到下面的
+            // `_ => false`，闸门永远不放行，剩余预算烧完后整段走查被强行放行 —— 控制台就是在那一拍被读的，
+            // 两趟红全是这么来的。有这个档，闸门等的才是页面自己的装载完成。
+            NotificationsPage notifications => notifications.IsReady,
             _ => false
         };
 }

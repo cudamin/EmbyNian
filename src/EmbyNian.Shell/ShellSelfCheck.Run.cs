@@ -269,6 +269,7 @@ internal static partial class ShellSelfCheck
             ReportSeasons(report, Check);
             ReportServers(shell, report, Check);
             ReportDiagnostics(shell, report, Check);
+            ReportNotifications(report, Check);
             ReportSettings(
                 shell,
                 services.GetRequiredService<EmbyNian.Emby.EmbyImageStore>(),

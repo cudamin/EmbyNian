@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「更多」菜单 →「手动整理…」：让 MoviePilot 把条目背后的文件识别、改名、搬进媒体库目录。
+
+  表单的规则（哪个值合法、正文怎么拼）都在 Core 的 MoviePilotTransfer / MoviePilotService.Transfer，这里只管
+  摆字段和把键接上去。安全次序是死的：先「预览」（服务器只算一遍，不动文件），预览全绿才放开
+  「立即整理 / 加入整理队列」—— 没看过会搬到哪儿就按整理，等于蒙着眼搬文件。
+-->
+<ContentDialog
+    x:Class="EmbyNian.Shell.Views.MoviePilotReorganizeDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:moviepilot="using:EmbyNian.MoviePilot"
+    mc:Ignorable="d"
+    DefaultButton="None"
+    PrimaryButtonClick="OnPrimarySubmit"
+    SecondaryButtonClick="OnSecondarySubmit">
+
+    <ContentDialog.Resources>
+        <!-- 表有十来个字段，548 的出厂上限会把两列挤成一列。 -->
+        <x:Double x:Key="ContentDialogMaxWidth">760</x:Double>
+    </ContentDialog.Resources>
+
+    <ScrollViewer
+        HorizontalScrollMode="Disabled"
+        MaxHeight="560"
+        VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="0,0,12,0" Spacing="12">
+
+            <!-- 校验和失败都在这一条上说话；它开着时提交键一定关着。 -->
+            <InfoBar
+                x:Name="Problem"
+                IsClosable="False"
+                IsOpen="False"
+                Severity="Error" />
+
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="SourceLabel" Style="{StaticResource EgEyebrowStyle}" Text="源文件" />
+                <TextBox
+                    x:Name="SourcePathBox"
+                    IsReadOnly="True"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <ComboBox
+                    x:Name="TargetStorageBox"
+                    Header="目的存储"
+                    HorizontalAlignment="Stretch" />
+
+                <ComboBox
+                    x:Name="TransferTypeBox"
+                    Grid.Column="1"
+                    Header="整理方式"
+                    HorizontalAlignment="Stretch"
+                    SelectedIndex="0">
+                    <ComboBoxItem Content="按目的目录配置" Tag="" />
+                    <ComboBoxItem Content="复制" Tag="copy" />
+                    <ComboBoxItem Content="移动（源文件会被移走）" Tag="move" />
+                    <ComboBoxItem Content="硬链接" Tag="link" />
+                    <ComboBoxItem Content="软链接" Tag="softlink" />
+                </ComboBox>
+            </Grid>
+
+            <ComboBox
+                x:Name="TargetPathBox"
+                Header="目的路径"
+                HorizontalAlignment="Stretch"
+                IsEditable="True" />
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <ComboBox
+                    x:Name="TypeBox"
+                    Header="类型"
+                    HorizontalAlignment="Stretch"
+                    SelectionChanged="OnTypeChanged">
+                    <ComboBoxItem Content="电影" Tag="电影" />
+                    <ComboBoxItem Content="电视剧" Tag="电视剧" />
+                </ComboBox>
+
+                <ComboBox
+                    x:Name="SourceBox"
+                    Grid.Column="1"
+                    Header="数据源"
+                    HorizontalAlignment="Stretch" />
+            </Grid>
+
+            <AutoSuggestBox
+                x:Name="MediaIdBox"
+                Header="媒体编号（TheMovieDb）"
+                PlaceholderText="留空自动识别；填了就用这个编号"
+                QueryIcon="Find"
+                TextChanged="OnMediaIdChanged"
+                QuerySubmitted="OnMediaIdQuery"
+                SuggestionChosen="OnSuggestionChosen" />
+
+            <Grid x:Name="EpisodeRow" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBox x:Name="SeasonBox" Header="季号（特别篇为 0，留空自动识别）" />
+
+                <TextBox
+                    x:Name="EpisodeBox"
+                    Grid.Column="1"
+                    Header="指定集数（留空按文件名识别）" />
+            </Grid>
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBox x:Name="PartBox" Header="指定 Part（如 part1）" />
+
+                <TextBox x:Name="MinSizeBox" Header="最小文件大小（MB）" Text="0" TextChanged="OnEdited" />
+            </Grid>
+
+            <!-- 目的目录配置默认会带前两个开关的值；这里照着摆，勾选状态从匹配结果来。 -->
+            <Grid ColumnSpacing="24" RowSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition />
+                    <RowDefinition />
+                    <RowDefinition />
+                </Grid.RowDefinitions>
+
+                <ToggleSwitch
+                    x:Name="TypeFolderToggle"
+                    Header="按类型分类"
+                    OffContent="关"
+                    OnContent="开"
+                    Toggled="OnEdited" />
+
+                <ToggleSwitch
+                    x:Name="CategoryFolderToggle"
+                    Grid.Column="1"
+                    Header="按类别分类"
+                    OffContent="关"
+                    OnContent="开"
+                    Toggled="OnEdited" />
+
+                <ToggleSwitch
+                    x:Name="ScrapeToggle"
+                    Grid.Row="1"
+                    Header="整理后刮削元数据"
+                    OffContent="关"
+                    OnContent="开"
+                    Toggled="OnEdited" />
+
+                <ToggleSwitch
+                    x:Name="FromHistoryToggle"
+                    Grid.Row="1"
+                    Grid.Column="1"
+                    Header="复用历史识别信息"
+                    OffContent="关"
+                    OnContent="开"
+                    Toggled="OnEdited" />
+
+                <ToggleSwitch
+                    x:Name="ReorganizeToggle"
+                    Grid.Row="2"
+                    Header="重新整理"
+                    OffContent="跳过已整理成功的"
+                    OnContent="清理命中历史后重来"
+                    Toggled="OnReorganizeToggled" />
+            </Grid>
+
+            <!-- 预览是提交的守门人：这一行按下去之前，底下两颗提交键关着。 -->
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Button
+                    x:Name="PreviewButton"
+                    Click="OnPreview"
+                    Content="预览"
+                    Style="{StaticResource EgSecondaryButtonStyle}" />
+
+                <ProgressRing
+                    x:Name="PreviewRing"
+                    Grid.Column="1"
+                    Width="24"
+                    Height="24"
+                    Margin="8,0,0,0"
+                    IsActive="False" />
+
+                <TextBlock
+                    x:Name="PreviewSummary"
+                    Grid.Column="2"
+                    Margin="8,0,0,0"
+                    Style="{StaticResource EgCaptionStyle}"
+                    VerticalAlignment="Center"
+                    TextWrapping="Wrap" />
+            </Grid>
+
+            <ListView
+                x:Name="PreviewList"
+                MaxHeight="180"
+                IsItemClickEnabled="False"
+                SelectionMode="None"
+                Visibility="Collapsed">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="moviepilot:MoviePilotTransferLine">
+                        <StackPanel Spacing="2">
+                            <TextBlock
+                                Style="{StaticResource EgCaptionStyle}"
+                                Text="{x:Bind Headline}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Foreground="{ThemeResource EgTextFaintBrush}"
+                                Style="{StaticResource EgCaptionStyle}"
+                                Text="{x:Bind StatusLine}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

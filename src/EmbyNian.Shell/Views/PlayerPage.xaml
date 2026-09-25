@@ -214,8 +214,13 @@
          UIElement.ProtectedCursor, which is protected and therefore only reachable from a derived type. That
          is what actually hides the mouse pointer over the picture: while the pointer is over XAML content the
          shape on screen is the framework's, and nothing this process does on the UI thread is on that path.
-         See PictureSurface and HostWindow.BlankInputCursor. -->
-    <local:PictureSurface x:Name="Root" Background="Transparent" SizeChanged="OnRootResized">
+         See PictureSurface and HostWindow.BlankInputCursor.
+
+         AllowDrop + DragOver/Drop 只服务集成管线那一条：画面嵌在本窗口的视觉树里、VideoHost 又
+         IsHitTestVisible=False，所以拖到画面上的文件落在 Root 上，交给 OnPictureDrop 挂字幕。独占窗口
+         与外部 mpv.exe 的画面另起顶层窗口，拖拽由 mpv 原生的 drag-and-drop 接住，走不到这里。 -->
+    <local:PictureSurface x:Name="Root" Background="Transparent" SizeChanged="OnRootResized"
+                          AllowDrop="True" DragOver="OnPictureDragOver" Drop="OnPictureDrop">
 
         <!-- ================= 右键画面菜单 =================
              The tree is PlayerMenuCatalog's, harvested from the bundled input.conf's own uosc menu, so

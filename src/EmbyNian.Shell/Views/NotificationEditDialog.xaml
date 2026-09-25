@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The notification entry editor (设置 → 通知 → 添加/点条目): the in-app replica of the official web app's
+  notification editor, plus the Webhooks plugin's own entry form (名称 / URL / 请求类型 — its editor page
+  webhookeditorjs edits exactly those three).
+
+  Static frame here; the parts that are data-driven — the event matrix from the server's Types answer, the
+  user/library/device pickers — are built in code-behind, the way the official editor builds its checkbox
+  lists. Saving is taken over from the ContentDialog protocol button (the click handler cancels the close
+  and hides the dialog itself only when the server accepted), so a rejected save leaves the form on screen
+  with the reason instead of throwing the user's typing away.
+-->
+<ContentDialog
+    x:Class="EmbyNian.Shell.Views.NotificationEditDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    PrimaryButtonText="保存"
+    CloseButtonText="取消"
+    DefaultButton="Primary">
+    <ContentDialog.Resources>
+        <!-- 对话框里 code-behind 建出来的那一批（事件矩阵、筛选名单）用的两条文字样式。定义在本文件里，
+             code 那边从 Resources 取 —— 现成样式带 ThemeResource 画刷，主题对了颜色就对。 -->
+        <Style x:Key="DlgNote" TargetType="TextBlock" BasedOn="{StaticResource EgCaptionStyle}">
+            <Setter Property="Foreground" Value="{ThemeResource EgTextDimBrush}" />
+        </Style>
+        <Style x:Key="DlgFaint" TargetType="TextBlock" BasedOn="{StaticResource EgCaptionStyle}">
+            <Setter Property="Foreground" Value="{ThemeResource EgTextFaintBrush}" />
+        </Style>
+    </ContentDialog.Resources>
+    <ScrollViewer MaxHeight="560" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="16" MinWidth="440">
+            <StackPanel Spacing="8">
+                <TextBox
+                    x:Name="NameBox"
+                    Header="名称（可选）"
+                    PlaceholderText="例：MoviePilot" />
+                <StackPanel x:Name="WebhookFields" Spacing="8">
+                    <TextBox
+                        x:Name="UrlBox"
+                        Header="Webhook 地址"
+                        PlaceholderText="http://192.0.2.10:3001/api/v1/webhook?token=你的令牌" />
+                    <ComboBox
+                        x:Name="RequestType"
+                        Header="请求类型"
+                        MinWidth="260"
+                        SelectedIndex="0">
+                        <ComboBoxItem Content="简单表单" />
+                        <ComboBoxItem Content="多部分表单（multipart/form-data）" />
+                    </ComboBox>
+                </StackPanel>
+                <TextBlock
+                    x:Name="OtherServiceNote"
+                    Style="{StaticResource EgCaptionStyle}"
+                    Foreground="{ThemeResource EgTextDimBrush}"
+                    Text="这个服务的专属选项本客户端不编辑 —— 到 Emby 控制台的插件页里改；在这里改名称、挑事件、限定范围照常有效。"
+                    TextWrapping="Wrap"
+                    Visibility="Collapsed" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Style="{StaticResource EgBodyStyle}" Text="订阅的事件" />
+                <TextBlock
+                    Style="{StaticResource EgCaptionStyle}"
+                    Foreground="{ThemeResource EgTextDimBrush}"
+                    Text="勾哪几类发哪几类；一条都不勾，这个渠道就什么都不发。"
+                    TextWrapping="Wrap" />
+                <StackPanel x:Name="EventList" Spacing="14" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Style="{StaticResource EgBodyStyle}" Text="限定（可多选；全不勾＝不限定）" />
+                <StackPanel x:Name="FilterList" Spacing="10" />
+            </StackPanel>
+
+            <Button
+                x:Name="TestButton"
+                Click="OnTest"
+                Content="发送测试通知"
+                Style="{StaticResource EgSecondaryButtonStyle}" />
+
+            <InfoBar
+                x:Name="ResultBar"
+                IsClosable="False"
+                IsOpen="False" />
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

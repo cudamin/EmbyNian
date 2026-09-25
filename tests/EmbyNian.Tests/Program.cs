@@ -12,9 +12,11 @@ internal static class Program
         Console.WriteLine();
 
         PlaybackTests.Register();
+        SubtitleFileTests.Register();
         MpvProcessTests.Register();
         SelfCheckTests.Register();
         SettingsTests.Register();
+        NotificationTests.Register();
         ShortcutTests.Register();
         SeekKeyTests.Register();
         ServiceTests.Register();
@@ -54,6 +56,8 @@ internal static class Program
         PinIndicatorTests.Register();
         AboutTests.Register();
         MoviePilotTests.Register();
+        MoviePilotTransferTests.Register();
+        MoviePilotVersionQueryTests.Register();
         AgreementsTests.Register();
 
         return TestHarness.Run();

@@ -576,6 +576,12 @@ internal static partial class ShellSelfCheck
 
             foreach (var series in candidates)
             {
+                // 走产品自己那段跨季落地（ResolveAdjacentAsync），而不是直接 Step —— 这条自检核对的正是它给出的
+                // 选集（forward.Siblings）与服务端按季返回（下面独立再取的 scoped）逐个相同。back 只看落点是谁，仍用 Step。
+                async Task<IReadOnlyList<EmbyItem>> FetchSeasonAsync(string? seasonId) => await session
+                    .ExecuteAsync((client, token) => client.GetEpisodesAsync(series.Id, seasonId, token), budget.Token)
+                    .ConfigureAwait(true);
+
                 var episodes = await session
                     .ExecuteAsync((client, token) => client.GetEpisodesAsync(series.Id, null, token), budget.Token)
                     .ConfigureAwait(true);
@@ -585,7 +591,9 @@ internal static partial class ShellSelfCheck
                 var last = episodes[boundary];
                 var first = episodes[boundary + 1];
 
-                var forward = EpisodeNavigation.Step(episodes, last.Id, 1);
+                var forward = await EpisodeNavigation
+                    .ResolveAdjacentAsync(episodes, last.Id, 1, FetchSeasonAsync)
+                    .ConfigureAwait(true);
                 var back = forward is null ? null : EpisodeNavigation.Step(episodes, forward.Episode.Id, -1);
 
                 var scoped = await session

@@ -77,6 +77,29 @@ internal static partial class ShellSelfCheck
     }
 
     /// <summary>
+    /// 「通知」那一页，读走查里 <see cref="VisitNotifications"/> 落下的快照 —— 之后那几拍已经走到控制台和卡片，
+    /// 页面不再是它。2026-09-25 通知从卡片改成内嵌页时加的。
+    /// <para>
+    /// 条目数不设下限（一台一条通知都没配过的服务器上空页就是对的答案），但「建了行」和「画出行」必须相等 ——
+    /// 那是模板出事时唯一会响的铃，跟服务器页两个数一个道理。CanConfirm 单独一档：这页的删除靠确认框，
+    /// 绳子忘了接就是按钮按下去没声没息。
+    /// </para>
+    /// </summary>
+    private static void ReportNotifications(StringBuilder report, Action<string, bool, string> check)
+    {
+        if (_notifications is not { } notifications)
+        {
+            report.AppendLine("[信息] 通知页面 — 未打开");
+            return;
+        }
+
+        var (ready, bound, drawn, canConfirm) = notifications;
+        check("通知页面", ready && drawn == bound,
+            ready ? $"{bound} 条通知（已渲染 {drawn}）" : "页面没装载完（服务器读取没回来）");
+        check("通知确认框", canConfirm, canConfirm ? "删除前问得出话" : "确认框没接上 —— 删除会一声不吭");
+    }
+
+    /// <summary>
     /// The settings page, which is where the walk now ends, so the page itself is read live and only the
     /// per-card counts come from the walk.
     /// <para>
@@ -117,14 +140,12 @@ internal static partial class ShellSelfCheck
 
         // The left-hand list and the cards, against each other. Both are written out by hand and in different
         // places, so a category with no card is an entry that shows an empty pane and a card with no category
-        // is a card no one can reach. 服务器 and 诊断 are the two entries that are deliberately not cards —
-        // they are pages hosted in the same column (需求 2) — so they join the cards on that side. 恢复默认
-        // （2026-09-13）is a third one: not a destination at all, an entry whose whole job is to be picked and
-        // then ask.
+        // is a card no one can reach. 服务器, 诊断 and 服务器控制台 are the entries that are deliberately not
+        // cards — they are pages hosted in the same column (需求 2) — so they join the cards on that side.
+        // （「恢复默认」曾是名单末尾的第四项，2026-09-24 搬进了「关于」卡，不再在这份名单里，见下方那一关。）
         var reachable = page.Cards
             .Select(card => card.Category)
             .Concat(SettingsViewModel.HostedCategories)
-            .Concat([SettingsViewModel.ResetCategory])
             .ToList();
 
         var unreachable = reachable
@@ -307,33 +328,36 @@ internal static partial class ShellSelfCheck
                     + $"这台机器上可选 {devices.Count} 个设备"
                     + (devices.Count > 0 ? $"，第一个是「{devices[0].Label}」" : "（还没读到或者读不到）"));
 
-        // 「恢复默认」，左边名单的最底下一项。2026-09-13 按他一句「恢复默认的位置不对，应该在左边的列表中，
-        // 且点击后要二次确认」从卡片叠的最下面搬进名单 —— 点中它不换卡片，先问一次确认再说。什么都不真按，
-        // 这一关问三件事：名单末尾是不是它（破坏性的那一档摆在清单末尾，是从上读到下的人最后才遇到的东西）、
-        // 问出来的对话框讲没讲清服务器和账号不动、以及这一页问得出那次确认没有。
+        // 配置的备份、恢复和恢复默认，都在「关于」卡最底下那三颗动作按钮上（用户令 2026-09-24：「把恢复默认设置
+        // 移动到关于中，在关于中新增配置文件备份和恢复配置」）。恢复默认从前是左边名单末尾的一项，这一关也跟着从
+        // 「名单末尾是不是它」改成了「关于卡上这三颗在不在、线接没接上」。什么都不真按，问四件事：三颗按钮都在、
+        // 恢复默认那次确认框仍把「服务器和账号不动」讲清楚、确认框接上了页面（CanConfirm）、备份/恢复的文件框也
+        // 接上了（CanPickFiles）。
         //
-        // 那句「服务器和账号不动」是这一关盯的东西。按钮的时代它铺在 ToolTip 里（SettingsPage_ResetButton，
-        // 那颗按钮 2026-09-13 连同它在卡片叠底下的位置一起删了），名单里的一项没有 ToolTip，于是这句话搬进了
-        // 确认对话框（SettingsViewModel.ResetDialogMessage）—— 按下之前唯一把「哪些回默认、哪些不动」讲全的
-        // 地方。代码里的字符串自检本来够不着，所以那两句话提成常量，读常量就是读屏上那句话。
-        //
-        // 再往后那半句是这一关存在的理由。对话框要页面的 XamlRoot，所以视图模型只能等页面把 ConfirmRequest
-        // 递过来；页面漏了那一句，ConfirmAsync 一律答「否」—— 按钮按下去什么都不发生，屏上一个字都不说，
-        // 行数、模板、渲染读数一个都不会差。单测进不到外壳这个程序集，这台机器上也注不进鼠标事件，所以这是
-        // 那件事唯一验得到的形式。至于「哪些回默认、哪些不动」，那是 Core 那一头的事（SettingsReset.Restore，
-        // 单测钉着）。
-        var categories = page.Categories;
-        var resetInList = categories.Count > 0
-            && string.Equals(categories[^1], SettingsViewModel.ResetCategory, StringComparison.Ordinal);
+        // 那句「不会退出登录」是这一关一直盯的东西（从前它在按钮的 ToolTip 里，后来搬进确认对话框，见
+        // SettingsViewModel.ResetDialogMessage）。两根线断掉都是屏上看不出来的：确认框那根断了，点「恢复默认/恢复」
+        // 什么都不发生、行数模板渲染读数一个不差；文件框那根断了，点「备份/恢复」弹不出框。单测进不到外壳、这台
+        // 机器也注不进鼠标事件，所以这是那几件事唯一验得到的形式。「哪些回默认、哪些被覆盖、哪些不动」在 Core
+        // （SettingsReset.Restore / SettingsPreferences.Apply，单测钉着）。
+        var aboutActions = (page.ViewModel.Sections
+                .FirstOrDefault(section => section.Category == "关于")?.Rows ?? [])
+            .OfType<SettingFactRow>()
+            .Where(row => row.ActionLabel.Length > 0)
+            .Select(row => row.Label)
+            .ToList();
+        var hasReset = aboutActions.Contains(SettingsViewModel.ResetDialogTitle);
+        var hasBackup = aboutActions.Contains("备份配置文件");
+        var hasRestore = aboutActions.Contains("恢复配置");
         var saysAccountsStay = SettingsViewModel.ResetDialogMessage.Contains("不会退出登录", StringComparison.Ordinal);
         var canAsk = page.ViewModel.CanConfirm;
+        var canPick = page.ViewModel.CanPickFiles;
 
-        check("恢复默认在名单末尾、问得出确认", resetInList && saysAccountsStay && canAsk,
-            !resetInList
-                ? $"左边名单末尾不是恢复默认（{(categories.Count > 0 ? $"末一项「{categories[^1]}」" : "名单是空的")}）"
-                : $"左边名单 {categories.Count} 项、末一项「{categories[^1]}」；对话框"
-                    + $"{(saysAccountsStay ? "写明了服务器和账号不动" : "没写服务器和账号会怎样")}；"
-                    + $"确认对话框{(canAsk ? "已接上页面" : "没接上，点下去会一律当成「取消」")}");
+        check("关于卡备份恢复与恢复默认",
+            hasReset && hasBackup && hasRestore && saysAccountsStay && canAsk && canPick,
+            $"关于卡动作按钮：{(aboutActions.Count == 0 ? "无" : string.Join('、', aboutActions))}；"
+                + $"恢复默认{(hasReset ? "在" : "缺")}、备份{(hasBackup ? "在" : "缺")}、恢复配置{(hasRestore ? "在" : "缺")}；"
+                + $"确认框{(saysAccountsStay ? "写明了服务器和账号不动" : "没写")}、{(canAsk ? "已接上页面" : "没接上")}；"
+                + $"文件框{(canPick ? "已接上" : "没接上，点下去弹不出框")}");
 
         // The one path this page's cache guard exists for. Pressing 设置 again re-navigates the settings
         // window's frame to this same page type, and a page that rebuilt itself on the way in would throw

@@ -190,6 +190,58 @@ public sealed partial class PlayerViewModel
                 : track)];
     }
 
+    /// <summary>
+    /// 把拖进画面的外挂字幕交给 mpv 当场挂上并选中 —— 集成管线专用的那条拖拽路（<see cref="SubtitleFile"/>
+    /// 已按后缀筛过、去过重、保住了次序）。
+    /// <para>
+    /// 逐条 <c>sub-add … select</c> 而不是一次性丢过去：<c>select</c> 是「挂上并立刻切过去」，按次序走完，
+    /// 最后成功的那条自然成为当前字幕，其余留在轨道表里可切。挂轨会触发 mpv 重发 track-list，字幕选单下次
+    /// 打开就见得到新轨（见 <c>OnTracksChanged</c>），这里不必自己补。
+    /// </para>
+    /// <para>
+    /// 没在放就先不挂 —— <c>sub-add</c> 挂到「没有片子」上没有意义，给一句提示比让 mpv 静静吞掉强。独占
+    /// 窗口与外部 mpv.exe 的画面不在本窗口里，拖拽由 mpv 原生接住，根本走不到这里。
+    /// </para>
+    /// </summary>
+    internal async Task AddExternalSubtitlesAsync(IReadOnlyList<string> droppedPaths)
+    {
+        var subs = SubtitleFile.Filter(droppedPaths);
+        if (subs.Count == 0)
+        {
+            Noticed?.Invoke("拖进来的文件里没有字幕（支持 srt/ass/ssa/sub/vtt 等）", InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!_playback.IsPlaying)
+        {
+            Noticed?.Invoke("先开始播放，再把字幕拖进来", InfoBarSeverity.Warning);
+            return;
+        }
+
+        var added = 0;
+        string? current = null;
+        foreach (var path in subs)
+        {
+            if (await _playback.CommandAsync("sub-add", path, "select").ConfigureAwait(true))
+            {
+                added++;
+                current = path;
+            }
+        }
+
+        if (added == 0)
+        {
+            Noticed?.Invoke("字幕没能加载（详见日志）", InfoBarSeverity.Error);
+            return;
+        }
+
+        Noticed?.Invoke(
+            added == 1
+                ? $"已加载字幕：{System.IO.Path.GetFileName(current)}"
+                : $"已加载 {added} 条字幕，当前：{System.IO.Path.GetFileName(current)}",
+            InfoBarSeverity.Informational);
+    }
+
     // ---- 着色器与画面菜单 ---------------------------------------------------------
 
     /// <summary>

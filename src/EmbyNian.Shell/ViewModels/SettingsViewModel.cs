@@ -4,6 +4,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Configuration;
+using EmbyNian.Diagnostics;
 using EmbyNian.MoviePilot;
 using EmbyNian.Mpv;
 using EmbyNian.Playback;
@@ -90,6 +91,13 @@ public sealed partial class SettingsViewModel : PageViewModel
         ("关闭", SkipSectionMode.Off)
     ];
 
+    // 媒体源排序（「在设置中新增自定义选项，媒体源排序 默认/新入库在前」，2026-09-24）。两档照他点的名。
+    private static readonly (string Label, Emby.MediaSourceOrder Value)[] MediaSourceOrders =
+    [
+        ("默认", Emby.MediaSourceOrder.Default),
+        ("新入库在前", Emby.MediaSourceOrder.NewestFirst)
+    ];
+
     private static readonly (string Label, SubtitleMode Value)[] SubtitleModes =
     [
         ("总是显示匹配字幕", SubtitleMode.Always),
@@ -130,12 +138,24 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// file, an embedded browser on the server's own console — hosted in the settings page's own frame rather
     /// than flattened into setting rows they do not fit.
     /// <para>
+    /// 「通知」也住这一边（2026-09-25）：它原是一张普通设置卡（客户端直发 webhook 的那套）；改走 Emby 服务器的
+    /// 通知系统之后，它要的是「条目列表 + 增删改 + 测试」——和服务器页一样是一整页会说话的东西，塞进行卡片里
+    /// 反而两头不是。
+    /// </para>
+    /// <para>
     /// Public and static because three places have to agree on the same names: the list built here, the
     /// page's <c>Hosted</c> switch that knows what to navigate to, and the self-check's comparison of the
     /// list against the cards — which without this would report them as entries selecting nothing.
     /// </para>
     /// </summary>
-    public static IReadOnlyList<string> HostedCategories { get; } = ["服务器", "诊断", DashboardCategory];
+    public static IReadOnlyList<string> HostedCategories { get; } =
+        ["服务器", "诊断", NotificationsCategory, DashboardCategory];
+
+    /// <summary>
+    /// 「通知」那一页. Named because the navigation switch and the self-check both have to say it —
+    /// same reason as <see cref="DashboardCategory"/>.
+    /// </summary>
+    public const string NotificationsCategory = "通知";
 
     /// <summary>
     /// 需求 8 的那一页. Named because the page's navigation switch and the self-check both have to say it,
@@ -143,17 +163,13 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// </summary>
     public const string DashboardCategory = "服务器控制台";
 
-    /// <summary>
-    /// 左边名单最底下的「恢复默认」（用户的话，2026-09-13：「恢复默认的位置不对，应该在左边的列表中，且点击后
-    /// 要二次确认」）。它不是分类也不是页面：选中它的一刻弹回原来的分类、跟着把确认对话框问出来
-    /// （见 <see cref="OnSelectedCategoryChanged"/>），所以它进 <see cref="Categories"/> 让名单和紧凑下拉都
-    /// 造得出这一项，但不进 <see cref="HostedCategories"/> —— 那份管的是「选了要导航到哪个内嵌页」，而它
-    /// 没有页。摆在名单末尾是老规矩：破坏性的那一档，是从上读到下的人最后才遇到的东西。
-    /// </summary>
-    public const string ResetCategory = "恢复默认";
-
-    /// <summary>The left-hand list. Order is the order of the cards, then the hosted pages, then 恢复默认.</summary>
-    public IReadOnlyList<string> Categories { get; } = [.. CardCategories, .. HostedCategories, ResetCategory];
+    /// <summary>The left-hand list. Order is the order of the cards, then the hosted pages.</summary>
+    /// <remarks>
+    /// 「恢复默认」曾是这份名单末尾的一项（2026-09-13～2026-09-24）；2026-09-24 按「把恢复默认设置移动到关于中」
+    /// 搬进了「关于」卡，和新增的「备份配置文件」「恢复配置」并作三颗动作按钮 —— 见 <see cref="AboutCard"/>。它不再
+    /// 是名单里的一项，所以这里也不再有它。
+    /// </remarks>
+    public IReadOnlyList<string> Categories { get; } = [.. CardCategories, .. HostedCategories];
 
     public ObservableCollection<SettingSection> Sections { get; } = [];
 
@@ -356,31 +372,38 @@ public sealed partial class SettingsViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 左边名单真正停着的那个分类 —— 「恢复默认」不算数：它在名单里存在只为被点中的一刻弹确认，从来没被
-    /// 「选中」过。初值和 <see cref="SelectedCategory"/> 的初值是同一个分类，两处要一起改。
+    /// 「恢复默认」「恢复配置」都要弹一次确认框，而 <c>ContentDialog</c> 同时只许一个 —— 这一挡挡掉对话框还没
+    /// 合上时的第二次点击。备份不弹框（它不动任何东西），不占这一挡。
     /// </summary>
-    private string _activeCategory = FirstCardCategory;
-
-    /// <summary>「恢复默认」的确认对话框还没合上的一挡，挡掉第二次点击 —— ContentDialog 同时只许一个。</summary>
     private bool _restoring;
 
-    /// <summary>
-    /// 选中的分类变了。大多数时候这就是「换一张卡」；唯一例外是 <see cref="ResetCategory"/>：它不是分类，
-    /// 没有卡片也没有内嵌页，选中它的那一刻马上弹回原来的分类（列表上的高亮跟着回去，内容一格都不闪 ——
-    /// 弹回发生在同一次属性通知里，界面来不及画出中间态），跟着把确认对话框问出来。问的那件事在
-    /// <see cref="AskRestoreAsync"/>，异步的部分它自己去等。
-    /// </summary>
-    partial void OnSelectedCategoryChanged(string value)
-    {
-        if (string.Equals(value, ResetCategory, StringComparison.Ordinal))
-        {
-            _ = AskRestoreAsync();
-            return;
-        }
+    /// <summary>选中的分类变了：换一张卡。内嵌页（服务器 / 诊断 / 控制台）由页面盯着 <see cref="SelectedCategory"/> 自己导航。</summary>
+    partial void OnSelectedCategoryChanged(string value) => ShowCategory(value);
 
-        _activeCategory = value;
-        ShowCategory(value);
+    /// <summary>存文件框：给一个建议文件名，回来的是用户选的落点（取消或弹不出来是 null）。见 <see cref="Views.SettingsFile"/>。</summary>
+    internal delegate Task<string?> SaveFileRequest(string suggestedName);
+
+    /// <summary>开文件框：回来的是用户挑的那个文件的路径（取消或弹不出来是 null）。见 <see cref="Views.SettingsFile"/>。</summary>
+    internal delegate Task<string?> OpenFileRequest();
+
+    private SaveFileRequest? _saveFile;
+    private OpenFileRequest? _openFile;
+
+    /// <summary>
+    /// 页面把两个文件框交进来（备份要存、恢复配置要开），和基类的 <c>UseConfirm</c> 交确认框是同一手：文件框
+    /// 要页面的 <see cref="Microsoft.UI.Xaml.XamlRoot"/> 才拿得到窗口句柄，摆得出它的只有页面。
+    /// </summary>
+    internal void UseFilePickers(SaveFileRequest save, OpenFileRequest open)
+    {
+        _saveFile = save;
+        _openFile = open;
     }
+
+    /// <summary>
+    /// 自检用：备份 / 恢复配置那两颗按钮的文件框接上了没有 —— 没接上点下去弹不出框，什么都不会发生，屏上一个
+    /// 字都不说（同基类的 <c>CanConfirm</c> 盯确认框那根线）。
+    /// </summary>
+    internal bool CanPickFiles => _saveFile is not null && _openFile is not null;
 
     private void ShowCategory(string category)
     {
@@ -477,6 +500,15 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "语言选出「哪几条是这个语言」之后，再按编码／声道里的词挑一遍：优先＝含这个词的排前头，候补＝排到最后"
                     + "（同语言只剩它时仍会给一条），默认＝不生效。预置 Atmos、TrueHD、DTS-HD、DTS、FLAC、7.1、5.1，"
                     + "输入框可自定义添加。格式只在同一语言内部作用，不会越过语言优先级。下次播放生效"),
+
+            // 媒体源排序（2026-09-24）：一个条目挂多版本时详情页媒体源行、播放器版本菜单的次序，也顺带决定
+            // 没挑到规则时默认播哪一版。现读设置 —— 下一次打开详情页或下一次起播就认新的值，没有已经摆着的
+            // 东西要重排。
+            Choice("媒体源排序", MediaSourceOrders, () => playback.MediaSourceOrder, value => playback.MediaSourceOrder = value,
+                "一部片子有多个版本（多个文件）时，详情页「媒体源」那一行和播放器里「版本」菜单的次序："
+                    + "默认＝服务器给的次序；新入库在前＝最新入库的那一版排最前（按服务器记的入库时间，"
+                    + "每一版要多问一次服务器）。没有文件名规则可依时，默认播的也是排在最前的那一版。"
+                    + "只有一个版本的片子不受影响。下次打开详情页或下次播放生效"),
 
             // 视频文件名筛选（「参考标题筛选，新增视频文件名筛选」，2026-09-22）：一个条目挂多版本（多个文件）时，
             // 默认播哪一版按文件名里的关键词挑。和字幕标题筛选同一套控件与打分，只是它筛的是版本文件名。
@@ -1334,13 +1366,31 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "打开", () => _launcher?.OpenFolder(paths.ScreenshotDirectory)));
         }
 
-        return new SettingSection("关于", "关于", "版本、播放内核，和这个程序在磁盘上的几个位置。", rows);
+        // 「把恢复默认设置移动到关于中，在关于中新增配置文件备份和恢复配置的功能」（用户令 2026-09-24）。三行都是
+        // 动作行：只有标签、说明和一颗按钮，没有值（Value 空 → SettingFactRow.ValueVisibility 收起那一行）。三件事
+        // 都只碰「偏好设置」那一摊，判据在 Core 的 SettingsPreferences —— 服务器、账号、登录状态和窗口位置一个字
+        // 不动。破坏性的「恢复默认设置」摆在最末，是从上读到下的人最后才遇到的东西（同它从前在左边名单末尾那会儿）。
+        // 备份 / 恢复配置要弹文件框，文件框由页面交进来（UseFilePickers）；没有页面（测试路径）时那两颗按下去
+        // 什么都不发生，恢复默认仍能走（它只用确认框，不用文件框）。
+        rows.Add(Fact("备份配置文件",
+            "把你的偏好设置（播放、字幕、画质、音频、快捷键、主题、界面等）导出成一个文件；不含服务器、账号和登录信息，"
+                + "可以带到别的机器或重装之后用来恢复", "",
+            "备份到文件…", () => _ = BackupAsync()));
+        rows.Add(Fact("恢复配置",
+            "从之前备份的文件里读回偏好设置，覆盖当前这些设置。服务器、账号和登录不受影响；这一步不能撤销", "",
+            "从文件恢复…", () => _ = RestoreFromFileAsync()));
+        rows.Add(Fact("恢复默认设置",
+            "把设置页管的每一项改回装机时的样子。服务器、账号、登录状态和窗口位置都不动；这一步不能撤销", "",
+            "恢复默认", () => _ = RestoreDefaultsAsync()));
+
+        return new SettingSection("关于", "关于",
+            "版本、播放内核，这个程序在磁盘上的几个位置，以及配置的备份、恢复和恢复默认。", rows);
     }
 
     /// <summary>
-    /// 「恢复默认」的确认对话框那两句话。提出来是因为自检要盯「按下之前把『服务器和账号不动』讲清楚」的那句话
-    /// 还在不在 —— 从前那句话在按钮的 ToolTip 里（SettingsPage_ResetButton），左边名单里的一项没有 ToolTip，
-    /// 对话框成了按下之前唯一把这件事讲全的地方，所以自检改盯这两个常量（见 ShellSelfCheck.Settings）。
+    /// 「恢复默认设置」确认对话框那两句话。提出来是因为自检要盯「按下之前把『服务器和账号不动』讲清楚」的那句话
+    /// 还在不在 —— 「关于」卡上那颗「恢复默认」按钮没有 ToolTip（Fact 行也不给），对话框成了按下之前唯一把这件事
+    /// 讲全的地方，所以自检改盯这两个常量（见 ShellSelfCheck.Settings）。
     /// </summary>
     internal const string ResetDialogTitle = "恢复默认设置";
 
@@ -1350,32 +1400,39 @@ public sealed partial class SettingsViewModel : PageViewModel
         + "服务器和账号不会动（不会退出登录），窗口位置和大小、各媒体库的排序筛选视图、播放器音量也都保留。";
 
     /// <summary>
-    /// 左边名单最底下的「恢复默认」被点中之后的那一路。它先进 <see cref="OnSelectedCategoryChanged"/>：选中
-    /// 的一刻弹回原来的分类（<see cref="_activeCategory"/>），跟着走到这里问那一次确认 —— 用户的话，
-    /// 2026-09-13：「恢复默认的位置不对，应该在左边的列表中，且点击后要二次确认」。
-    /// <para>
-    /// <b>它原先自己占一张卡</b>：「恢复默认」分类下唯一一行，为一行开一张卡的理由是「够不着」—— 它最先是
-    /// 「关于」卡的第八行，那张卡在设置窗口里第七行就到底，屏上根本看不见。2026-09-06 按他一句
-    /// 「恢复默认按钮移到右上角，下方的恢复默认页面删除」搬进页头（PageSlate 的 Trailing 格），卡和左边名单
-    /// 里的分类一起删了 —— 页头是整页最靠上的位置，比任何一张卡都够得着。2026-09-13 页头整个删掉
-    /// （「把设置页面左上角的标题栏的图标和设置字样去掉」），它落到卡片叠的最下面；同日他又说位置不对，
-    /// 这才进了左边名单、回到了它 2026-09-06 之前的样子 —— 点名单里的一项，而不是按一颗散着的按钮。
-    /// </para>
-    /// <para>
-    /// 确认真的点下去之后走 <see cref="RestoreDefaultsAsync"/>。<see cref="_restoring"/> 挡的是同一帧里的
-    /// 第二次点击：对话框要一次 <c>ShowAsync</c> 的时间才摆出来，而名单可以点得比那更快。
-    /// </para>
+    /// 「恢复配置」确认对话框那两句话。和恢复默认同一副骨架，把「服务器、账号、登录不动」讲清楚 —— 这一步同样
+    /// 不能撤销，覆盖的是当前那一摊偏好。
     /// </summary>
-    private async Task AskRestoreAsync()
+    internal const string RestoreDialogTitle = "恢复配置";
+
+    /// <summary>同 <see cref="RestoreDialogTitle"/>。</summary>
+    internal const string RestoreDialogMessage =
+        "会用备份文件里的偏好设置覆盖当前的播放、字幕、画质、音频、快捷键、主题、界面等设置，这一步不能撤销。\n\n"
+        + "服务器和账号不会动（不会退出登录），窗口位置和大小、各媒体库的排序筛选视图、播放器音量也都保留。";
+
+    /// <summary>
+    /// 「恢复默认设置」被按下之后的那一路（按钮住在「关于」卡上，见 <see cref="AboutCard"/>）。哪些回默认、哪些
+    /// 不动由 Core 那一头判（<see cref="SettingsReset.Restore"/> → <see cref="SettingsPreferences"/>，单测钉着），
+    /// 这里剩下的是「问一次」和「改完让屏上跟上」。<see cref="_restoring"/> 挡掉对话框还没合上时的第二次点击。
+    /// 善后（重刷主题、喊 ShellPrefs、整页重建）和恢复配置共用 <see cref="ReapplyAndReloadAsync"/>，那一段说清了
+    /// 三件为什么一件都不能少。
+    /// </summary>
+    private async Task RestoreDefaultsAsync()
     {
-        if (_restoring) return;
+        if (_settings is null || _restoring) return;
         _restoring = true;
         try
         {
-            // 先弹回，再问。在对话框里点了取消的时候，名单也该停在原来的分类上 —— 「恢复默认」
-            // 从来没有真的被选中过。
-            SelectedCategory = _activeCategory;
-            await RestoreDefaultsAsync().ConfigureAwait(true);
+            var agreed = await ConfirmAsync(ResetDialogTitle, ResetDialogMessage, "恢复默认").ConfigureAwait(true);
+            if (!agreed) return;
+
+            SettingsReset.Restore(_settings.Settings);
+            _settings.Save();
+
+            // 顺带把「没动的是哪些」再讲一遍 —— 本来就都在默认值上的人按一下屏上什么都不变，一颗看起来没反应的
+            // 按钮，下一步就是再按一遍。
+            await ReapplyAndReloadAsync("设置已改回装机时的样子。服务器、账号、窗口位置和各媒体库的排序筛选都没有动。")
+                .ConfigureAwait(true);
         }
         finally
         {
@@ -1384,44 +1441,85 @@ public sealed partial class SettingsViewModel : PageViewModel
     }
 
     /// <summary>
-    /// 「恢复默认设置」在对话框里被确认之后。哪些回默认、哪些不动由 Core 那一头判（<see cref="SettingsReset.Restore"/>，
-    /// 单测钉着），这里剩下的是「问一次」和「改完让屏上跟上」。
-    /// <para>
-    /// <b>三件善后一件都不能少，而少了哪一件屏上都只是「设置了但没用」。</b> 主题要当场重刷，不然颜色要等到下次
-    /// 启动才回默认；<see cref="ShellPrefs"/> 要喊一声，那是侧边栏、图片缓存上限、主页版面这三件
-    /// 改完当场生效的唯一一根线（设置页开在另一个窗口里，手上没有主窗口的 HWND，也没有主页那一页）；整页要重建，
-    /// 因为每一行只在造出来的时候读一次设置、此后只写（见类注释），所以不重建的话文件已经是默认值而屏上六十行
-    /// 还是旧的。
-    /// </para>
-    /// <para>
-    /// 重建走的是 <see cref="ReloadAsync"/> 本身，不是另写一段：那是页面第一次打开走的同一段，自检每一轮都把它
-    /// 连着每张卡片走一遍，所以这里只剩一个调用点会错。字体和音频设备两份名单都是按进程缓存的，所以重建一次
-    /// 不会再去扫字体、也不会再开一个 libmpv 句柄。问话的入口在 <see cref="AskRestoreAsync"/> —— 从那里进来的
-    /// 时候名单已经弹回了原来的分类，确认之后重建出来的就是它。
-    /// </para>
+    /// 「备份配置文件」：把偏好设置导出成用户选的一个文件。只含偏好，不含服务器、账号、令牌和窗口位置（判据在
+    /// <see cref="SettingsPreferences"/>），所以这个文件可以安全带到别的机器。不问确认 —— 它不动现有的任何东西。
+    /// 文件框由页面交进来（<see cref="UseFilePickers"/>）；没接上（没有页面的测试路径）就直接返回，不假装成功。
     /// </summary>
-    private async Task RestoreDefaultsAsync()
+    private async Task BackupAsync()
     {
-        if (_settings is null) return;
+        if (_settings is null || _saveFile is null) return;
 
-        var agreed = await ConfirmAsync(ResetDialogTitle, ResetDialogMessage, "恢复默认").ConfigureAwait(true);
+        var path = await _saveFile.Invoke($"EmbyNian-偏好设置-{DateTime.Now:yyyyMMdd-HHmmss}.json").ConfigureAwait(true);
+        if (path is null) return;
 
-        if (!agreed) return;
+        try
+        {
+            _settings.ExportPreferences(path);
+            Notify(null, $"偏好设置已备份到：{path}", InfoBarSeverity.Success);
+        }
+        catch (Exception error)
+        {
+            Report("备份配置文件失败", error);
+        }
+    }
 
-        SettingsReset.Restore(_settings.Settings);
-        _settings.Save();
+    /// <summary>
+    /// 「恢复配置」：从备份文件读回偏好设置，盖掉当前这些偏好。服务器、账号、登录状态和窗口位置不受影响（同恢复
+    /// 默认，判据在 <see cref="SettingsPreferences"/>）。不能撤销，所以<b>先读、确认是个有效备份、再问</b> —— 免得
+    /// 用户点了「恢复」才发现挑错了文件。认不出来的文件在 <see cref="ISettingsService.ReadBackup"/> 里就抛了。
+    /// 确认之后走的善后和恢复默认同一段（<see cref="ReapplyAndReloadAsync"/>）。
+    /// </summary>
+    private async Task RestoreFromFileAsync()
+    {
+        if (_settings is null || _openFile is null || _restoring) return;
+        _restoring = true;
+        try
+        {
+            var path = await _openFile.Invoke().ConfigureAwait(true);
+            if (path is null) return;
 
+            AppSettings loaded;
+            try
+            {
+                loaded = _settings.ReadBackup(path);
+            }
+            catch (Exception error)
+            {
+                Notify("这个文件不是有效的配置备份", Failure.Describe(error), InfoBarSeverity.Warning);
+                return;
+            }
+
+            var agreed = await ConfirmAsync(RestoreDialogTitle, RestoreDialogMessage, "恢复").ConfigureAwait(true);
+            if (!agreed) return;
+
+            SettingsPreferences.Apply(_settings.Settings, loaded);
+            _settings.Save();
+            await ReapplyAndReloadAsync("已从备份恢复偏好设置。服务器、账号、登录状态和窗口位置都没有动。")
+                .ConfigureAwait(true);
+        }
+        finally
+        {
+            _restoring = false;
+        }
+    }
+
+    /// <summary>
+    /// 恢复默认 / 恢复配置 改完设置文档之后的善后（落盘那一步在各自调用方，因为两条各 Save 一次）。三件一件都
+    /// 不能少，而少了哪一件屏上都只是「设置了但没用」：主题当场重刷（不然颜色要等下次启动才变），
+    /// <see cref="ShellPrefs"/> 喊一声（侧边栏、图片缓存上限、主页版面改完当场生效的唯一一根线 —— 设置页开在
+    /// 另一个窗口，手上没有主窗口的 HWND、也没有主页那一页），整页重建（每一行只在造出来时读一次设置、此后
+    /// 只写，见类注释，不重建的话文件已经变了、屏上六十行还是旧的）。重建走 <see cref="ReloadAsync"/> 本身，
+    /// 字体和音频设备两份名单按进程缓存，重建一次不会再扫字体或开 libmpv 句柄。
+    /// </summary>
+    private async Task ReapplyAndReloadAsync(string notice)
+    {
         var ui = Settings.Ui;
         ThemeHost.Apply(ui.Theme);
         ShellPrefs.Apply(ui);
 
         await ReloadAsync().ConfigureAwait(true);
 
-        // 说一声。屏上多半看得出来（配色可能整套换了、六十行读数都动了），可本来就都在默认值上的人按一下会什么都
-        // 看不见 —— 一颗看起来没反应的按钮，下一步就是再按一遍。顺带把「没动的是哪些」再讲一遍，那是关于一次
-        // 恢复默认最该让人放心的一句。
-        Notify(null, "设置已改回装机时的样子。服务器、账号、窗口位置和各媒体库的排序筛选都没有动。",
-            InfoBarSeverity.Success);
+        Notify(null, notice, InfoBarSeverity.Success);
     }
 
     /// <summary>

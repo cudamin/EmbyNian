@@ -1,4 +1,5 @@
 using EmbyNian.Infrastructure;
+using EmbyNian.MoviePilot;
 
 namespace EmbyNian.Emby;
 
@@ -51,6 +52,20 @@ public enum ItemCommand
 
     OpenSeries,
 
+    /// <summary>
+    /// 在 MoviePilot 搜索这个条目的其他版本：新开一个窗口，按条目算好的关键字（见
+    /// <see cref="MoviePilotVersionQuery"/>）去 MoviePilot 的站点搜索里找可下载的版本。
+    /// 只在用户开了 MoviePilot、且条目对得上一部片时出现。
+    /// </summary>
+    MoviePilotVersions,
+
+    /// <summary>
+    /// 让 MoviePilot 手动整理这个条目背后的文件：识别、改名、搬进媒体库目录（见
+    /// <see cref="MoviePilot.MoviePilotTransfer"/>）。同「搜索其他版本」一道，只在开了 MoviePilot 且条目
+    /// 对得上一部片时出现 —— 它会移动服务器上的文件，出现的位置比它能做的事保守。
+    /// </summary>
+    MoviePilotReorganize,
+
     Delete
 }
 
@@ -84,10 +99,15 @@ public static class ItemMenu
     /// 这个条目的菜单，从上到下。分隔线已经摆好：空的那一段不会留下一条线，也不会有两条线挨在一起、
     /// 或者一条线开头结尾（见 <see cref="Join"/>）。
     /// </summary>
-    public static IReadOnlyList<ItemMenuEntry> For(EmbyItem item) => Join(
+    /// <param name="moviePilotEnabled">
+    /// 用户在设置里开没开 MoviePilot。开了才给「在 MoviePilot 搜索其他版本」那一条 —— 没开就和从前一模一样，
+    /// 免得点下去弹个连不上的窗口。默认关：全新装机没有 MoviePilot，测试里不点名这一项的也照旧只看基础菜单。
+    /// </param>
+    public static IReadOnlyList<ItemMenuEntry> For(EmbyItem item, bool moviePilotEnabled = false) => Join(
         Opening(item),
         UserState(item),
         Organising(item),
+        MoviePilotBlock(item, moviePilotEnabled),
         Metadata(item),
         Navigation(item),
         Destructive(item));
@@ -164,6 +184,22 @@ public static class ItemMenu
         if (IsFile(item) || IsEpisodeSet(item)) rows.Add(new(ItemCommand.Download, "下载到设备"));
         return rows;
     }
+
+    /// <summary>
+    /// 「搜索其他版本」和「手动整理」—— 用户开了 MoviePilot 才有，且只在能对上一部片的那四种条目上（电影、剧、
+    /// 季、单集，见 <see cref="MoviePilotVersionQuery.Supports"/>）。合集、媒体库、演职人员没有对应的一部片，
+    /// 不给这两条。
+    /// <para>
+    /// 四种条目同一句措辞（用户 2026-09-24：措辞别太长，去掉「在 MoviePilot」和「本季/本集」）；范围的区别落在
+    /// 发出去的搜索词上（季带 <c>S0x</c>、集带 <c>S0x E0x</c>），那套拼法由
+    /// <see cref="MoviePilotVersionQuery.Keyword"/> 定，不在标题里重复。「手动整理」带省略号：它弹的是一张
+    /// 表单，不是按下去就做完的事。
+    /// </para>
+    /// </summary>
+    private static List<ItemMenuEntry> MoviePilotBlock(EmbyItem item, bool enabled) =>
+        enabled && MoviePilotVersionQuery.Supports(item)
+            ? [new(ItemCommand.MoviePilotVersions, "搜索其他版本"), new(ItemCommand.MoviePilotReorganize, "手动整理…")]
+            : [];
 
     /// <summary>
     /// 元数据那一叠。<see cref="ItemCommand.Scrape"/> 和 <see cref="ItemCommand.RefreshMetadata"/> 是两条不同的话：

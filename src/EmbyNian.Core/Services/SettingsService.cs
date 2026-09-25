@@ -29,6 +29,19 @@ public interface ISettingsService
     AccountProfile ResolveAccount(ServerProfile server, string username);
 
     void Save();
+
+    /// <summary>
+    /// 把偏好设置导出到用户选的文件。只含偏好，不含服务器、账号、令牌和窗口位置（见
+    /// <see cref="SettingsPreferences"/>），所以这个文件可以带到别的机器或重装后用来恢复。
+    /// </summary>
+    void ExportPreferences(string path);
+
+    /// <summary>
+    /// 读一个偏好备份文件，交回解析好的设置；认不出来的文件抛异常（见 <see cref="SettingsStore.ReadBackup"/>）。
+    /// 只负责读和认，不动当前的 <see cref="Settings"/> —— 盖不盖回去、盖哪些，由调用方走
+    /// <see cref="SettingsPreferences.Apply"/> 决定。
+    /// </summary>
+    AppSettings ReadBackup(string path);
 }
 
 /// <inheritdoc cref="ISettingsService"/>
@@ -106,4 +119,10 @@ public sealed class SettingsService(SettingsStore store, AppSettings settings) :
             Log.Warn(Category, "保存设置失败", error);
         }
     }
+
+    /// <inheritdoc />
+    public void ExportPreferences(string path) => store.SaveBackup(path, Settings);
+
+    /// <inheritdoc />
+    public AppSettings ReadBackup(string path) => store.ReadBackup(path);
 }

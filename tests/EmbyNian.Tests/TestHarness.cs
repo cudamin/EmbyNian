@@ -78,14 +78,16 @@ internal static class Assert
         if (value is null) throw new AssertionException($"期望非 null：{message}");
     }
 
-    public static void Contains(string expectedSubstring, string actual, string message = "")
+    public static void Contains(string expectedSubstring, string? actual, string message = "")
     {
+        if (actual is null) throw new AssertionException($"期望包含 <{expectedSubstring}>，实际 null {message}");
         if (actual.Contains(expectedSubstring, StringComparison.Ordinal)) return;
         throw new AssertionException($"期望包含 <{expectedSubstring}>，实际 <{Truncate(actual)}> {message}");
     }
 
-    public static void DoesNotContain(string unexpected, string actual, string message = "")
+    public static void DoesNotContain(string unexpected, string? actual, string message = "")
     {
+        if (actual is null) throw new AssertionException($"期望不包含 <{unexpected}>，实际 null {message}");
         if (!actual.Contains(unexpected, StringComparison.Ordinal)) return;
         throw new AssertionException($"期望不包含 <{unexpected}>，实际 <{Truncate(actual)}> {message}");
     }

@@ -806,4 +806,49 @@
   <data name="LibraryPage_BrowseHint.Text" xml:space="preserve">
     <value>浏览与筛选</value>
   </data>
+  <data name="LibraryPage_SourceEmby.Content" xml:space="preserve">
+    <value>我的媒体库</value>
+  </data>
+  <data name="LibraryPage_SourceMoviePilot.Content" xml:space="preserve">
+    <value>MoviePilot</value>
+  </data>
+  <data name="NotificationsPage_Heading.Text" xml:space="preserve">
+    <value>通知</value>
+  </data>
+  <data name="NotificationsPage_AddAction.Label" xml:space="preserve">
+    <value>添加通知</value>
+  </data>
+  <data name="NotificationsPage_AddAction.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>添加通知</value>
+  </data>
+  <data name="NotificationsPage_RefreshAction.Label" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="NotificationsPage_RefreshAction.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>刷新通知列表</value>
+  </data>
+  <data name="NotificationsPage_EmptyHeading.Text" xml:space="preserve">
+    <value>还没有配置任何通知</value>
+  </data>
+  <data name="NotificationsPage_TextBlock8.Text" xml:space="preserve">
+    <value>点「添加通知」建一条：挑一个渠道、勾上要转发的事件、填目的地地址。之后播放、入库这些事就由 Emby 服务器替你往外发了。</value>
+  </data>
+  <data name="NotificationsPage_ButtonA1.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>发送测试通知</value>
+  </data>
+  <data name="NotificationsPage_ButtonA1.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>让服务器按这条配置真发一次</value>
+  </data>
+  <data name="NotificationsPage_ButtonA2.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>编辑这条通知</value>
+  </data>
+  <data name="NotificationsPage_ButtonA2.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>编辑这条通知</value>
+  </data>
+  <data name="NotificationsPage_ButtonA3.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>删除这条通知</value>
+  </data>
+  <data name="NotificationsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>删除这条通知</value>
+  </data>
 </root>

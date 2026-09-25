@@ -12,7 +12,7 @@ namespace EmbyNian.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    public const int CurrentSchemaVersion = 22;
+    public const int CurrentSchemaVersion = 23;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -303,6 +303,15 @@ public sealed class PlaybackSettings
     /// </para>
     /// </summary>
     public List<KeywordRule> VideoFileRules { get; set; } = [];
+
+    /// <summary>
+    /// 媒体源（多版本）的排法（「在设置中新增自定义选项，媒体源排序 默认/新入库在前」，2026-09-24）。
+    /// 详情页媒体源行、播放器版本菜单、默认版本的「同分取第一」和自动换源候选共用同一张表，这一个选择四处
+    /// 一起变 —— 判据在 <see cref="Emby.ItemDetail.OrderVersionsNewestFirst"/>。装机默认「新入库在前」，
+    /// 就是当天那条「把最新入库的排前面」的原始要求；「默认」是服务器给的次序，想回去就拨回去。枚举存整数，
+    /// 认不出来的值在 <c>SettingsMigration.Normalize</c> 里拨回装机默认。
+    /// </summary>
+    public Emby.MediaSourceOrder MediaSourceOrder { get; set; } = Emby.MediaSourceOrder.NewestFirst;
 
     /// <summary>When subtitles come on by themselves.</summary>
     public SubtitleMode SubtitleMode { get; set; } = SubtitleMode.Always;

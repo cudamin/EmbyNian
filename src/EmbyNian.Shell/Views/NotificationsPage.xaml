@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The notifications page (设置 → 通知，2026-09-25): the Emby server's own per-user notification entries,
+  listed, added, edited, deleted and test-fired from here. This is the in-app replica of the official web
+  app's /settings/notifications.html — same four endpoints, same semantics; the entry data lives on the
+  server, never in settings.json.
+
+  Layout follows ServersPage on purpose: heading + command bar, one indeterminate bar, one notice bar, an
+  empty state, then the list. Every binding is x:Bind for the same reason as there — compiled against a
+  named type, so a renamed property fails the build instead of silently drawing nothing.
+-->
+<Page
+    x:Class="EmbyNian.Shell.Views.NotificationsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views"
+    xmlns:vm="using:EmbyNian.Shell.ViewModels"
+    Background="{ThemeResource EgWindowBrush}">
+
+    <Page.Resources>
+        <DataTemplate x:Key="EntryTemplate" x:DataType="vm:NotificationRow">
+            <Border
+                Background="{ThemeResource EgSurfaceBrush}"
+                BorderBrush="{ThemeResource EgBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource EgCardCornerRadius}"
+                Margin="0,0,0,12"
+                Padding="20,16">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="4" VerticalAlignment="Center">
+                        <TextBlock FontSize="{StaticResource EgSubheadFontSize}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Text="{x:Bind DisplayName}" />
+                        <TextBlock
+                            FontSize="{StaticResource EgCaptionFontSize}"
+                            Foreground="{ThemeResource EgTextDimBrush}"
+                            Text="{x:Bind ServiceName}" />
+                        <TextBlock
+                            FontSize="{StaticResource EgCaptionFontSize}"
+                            Foreground="{ThemeResource EgTextFaintBrush}"
+                            Text="{x:Bind EventsSummary}"
+                            TextTrimming="CharacterEllipsis"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button x:Uid="NotificationsPage_ButtonA1"
+                            Style="{StaticResource EgIconButtonStyle}"
+                            Command="{x:Bind Owner.TestCommand}"
+                            CommandParameter="{x:Bind}">
+                            <FontIcon Glyph="&#xE724;" />
+                        </Button>
+                        <Button x:Uid="NotificationsPage_ButtonA2"
+                            Style="{StaticResource EgIconButtonStyle}"
+                            Command="{x:Bind Owner.EditCommand}"
+                            CommandParameter="{x:Bind}">
+                            <FontIcon Glyph="&#xE70F;" />
+                        </Button>
+                        <Button x:Uid="NotificationsPage_ButtonA3"
+                            Style="{StaticResource EgIconButtonStyle}"
+                            Command="{x:Bind Owner.DeleteCommand}"
+                            CommandParameter="{x:Bind}">
+                            <FontIcon Glyph="&#xE74D;" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid x:Name="PageLayout" Margin="{StaticResource EgPageMargin}" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid ColumnSpacing="16" RowSpacing="14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Border Width="48" Height="48" CornerRadius="16" Background="{ThemeResource EgAccentSoftBrush}">
+                <FontIcon Glyph="&#xE7E7;" Foreground="{ThemeResource EgAccentBrush}" FontSize="24" />
+            </Border>
+            <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock x:Uid="NotificationsPage_Heading" FontSize="26" FontWeight="SemiBold" />
+                <TextBlock Text="{x:Bind ViewModel.Subheading, Mode=OneWay}" Foreground="{ThemeResource EgTextDimBrush}" TextWrapping="Wrap" />
+            </StackPanel>
+            <CommandBar Grid.Row="1" Grid.ColumnSpan="2" HorizontalAlignment="Stretch"
+                DefaultLabelPosition="Right" Background="{ThemeResource EgSurfaceBrush}"
+                CornerRadius="12" IsOpen="False">
+                <AppBarButton x:Uid="NotificationsPage_AddAction" AutomationProperties.AutomationId="NotificationsAddButton"
+                    Icon="Add" Command="{x:Bind ViewModel.AddNotificationCommand}" />
+                <AppBarButton x:Uid="NotificationsPage_RefreshAction" AutomationProperties.AutomationId="NotificationsRefreshButton"
+                    Icon="Refresh" Command="{x:Bind ViewModel.RefreshCommand}" />
+            </CommandBar>
+        </Grid>
+
+        <StackPanel Grid.Row="1" Spacing="8">
+            <ProgressBar IsIndeterminate="True" Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+            <!-- TwoWay on IsOpen, so dismissing the bar is recorded rather than only drawn. -->
+            <InfoBar
+                IsClosable="True"
+                IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+                Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+                Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+                Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
+        </StackPanel>
+
+        <ScrollView Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <Border Background="{ThemeResource EgSurfaceBrush}" BorderBrush="{ThemeResource EgBorderBrush}"
+                    BorderThickness="1" CornerRadius="{StaticResource EgCardCornerRadius}" Padding="32"
+                    Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}">
+                    <StackPanel HorizontalAlignment="Center" Spacing="16" MaxWidth="420">
+                        <FontIcon Glyph="&#xE7E7;" FontSize="40" Foreground="{ThemeResource EgAccentBrush}" />
+                        <TextBlock x:Uid="NotificationsPage_EmptyHeading" FontSize="{StaticResource EgTitleFontSize}" FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock x:Uid="NotificationsPage_TextBlock8" Foreground="{ThemeResource EgTextDimBrush}"
+                            TextWrapping="Wrap" TextAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 点条目打开编辑器 —— 官方网页端的列表就是这个语义；三颗按钮只做单件事。 -->
+                <ListView
+                    AutomationProperties.AutomationId="NotificationsEntryList"
+                    IsItemClickEnabled="True"
+                    ItemClick="OnEntryPicked"
+                    ItemTemplate="{StaticResource EntryTemplate}"
+                    ItemsSource="{x:Bind ViewModel.Entries, Mode=OneWay}"
+                    SelectionMode="None" />
+            </StackPanel>
+        </ScrollView>
+    </Grid>
+</Page>

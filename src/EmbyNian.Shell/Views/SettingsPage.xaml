@@ -986,7 +986,8 @@
                                 IsTextSelectionEnabled="True"
                                 Style="{StaticResource EgDataStyle}"
                                 Text="{x:Bind Value}"
-                                TextWrapping="Wrap" />
+                                TextWrapping="Wrap"
+                                Visibility="{x:Bind ValueVisibility}" />
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
                                 Text="{x:Bind Note}"
@@ -1066,8 +1067,8 @@
         <!--
           **页头整个没有了**（用户的话，2026-09-13：「把设置页面左上角的标题栏的图标和设置字样去掉」「删除
           设置页面左上角的打造你的观影方式……这些字」）。那一格 2026-09-11 删过一次场面（PageSlate 场记板），
-          剩下「打造你的观影方式」加一行小字站在左上角；这一次连字带格子全删 —— 分类那一列和「恢复默认」
-          之外的什么都不剩，内容直接顶到最上面。窗口标题栏（SettingsWindow）同日也摘了图标和字样，左上角
+          剩下「打造你的观影方式」加一行小字站在左上角；这一次连字带格子全删 —— 分类那一列之外的什么都不剩，
+          内容直接顶到最上面。窗口标题栏（SettingsWindow）同日也摘了图标和字样，左上角
           从外到里都是空的。
         -->
         <InfoBar
@@ -1158,11 +1159,11 @@
 
             <!--
               需求 2 的后半句：「诊断和服务器移动到设置里」. The left-hand list now ends with three entries that are
-              not cards — 服务器 and 诊断 are whole pages, with a server list that talks to the network and a
-              log view that tails a file, and neither is expressible as a stack of setting rows; 恢复默认
-              （2026-09-13）is not a destination at all — picking it asks the confirmation and springs back.
-              Which of the first two is visible follows the selected category, decided in the view
-              model rather than here so the page and the self-check read the same flag.
+              not cards — 服务器, 诊断 and 服务器控制台 are whole pages, with a server list that talks to the network,
+              a log view that tails a file and an embedded browser, and none is expressible as a stack of setting
+              rows. Which one is visible follows the selected category, decided in the view model rather than here
+              so the page and the self-check read the same flag. （「恢复默认」曾是这份名单末尾的第四项，2026-09-24
+              搬进了「关于」卡，见 SettingsViewModel.AboutCard。）
             -->
             <Grid x:Name="SettingsContent" Grid.Column="1" Grid.RowSpan="2">
                 <!--
@@ -1227,10 +1228,10 @@
                         </ItemsControl>
 
                         <!--
-                          「恢复默认」不再住这一列。它原先自己占一张卡（左边名单里的一个分类），2026-09-06 搬进页头，
-                          页头删掉后又落到卡片叠的最下面；2026-09-13 按他一句「恢复默认的位置不对，应该在左边的
-                          列表中，且点击后要二次确认」进了左边名单 —— 和服务器、诊断一样是名单里的一项，点中它
-                          不换卡片，先问一次再说。走到哪儿去了，见 SettingsViewModel.ResetCategory。
+                          「恢复默认」不住这一列。它一路搬过好几处（关于卡第八行 → 页头 → 卡片叠底 → 左边名单末尾），
+                          2026-09-24 按「把恢复默认设置移动到关于中」落回「关于」卡 —— 和同轮新增的「备份配置文件」
+                          「恢复配置」并作三颗动作按钮，见 SettingsViewModel.AboutCard。它不再是分类，所以这一列里
+                          没有它。
                         -->
                     </StackPanel>
                 </ScrollView>

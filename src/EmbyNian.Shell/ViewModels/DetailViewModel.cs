@@ -1614,7 +1614,8 @@ public sealed partial class DetailViewModel : PageViewModel
             Preview(seed);
 
             var detail = await _session!
-                .ExecuteAsync((client, ct) => client.GetItemAsync(seed.Id, ct), token).ConfigureAwait(true);
+                .ExecuteAsync((client, ct) => client.GetItemAsync(
+                    seed.Id, ct, order: Settings.Playback.MediaSourceOrder), token).ConfigureAwait(true);
             if (!IsCurrent(token)) return;
 
             Apply(detail);
@@ -2068,7 +2069,8 @@ public sealed partial class DetailViewModel : PageViewModel
 
         var detail = target.MediaSources.Count > 0
             ? target
-            : await _session!.ExecuteAsync((client, ct) => client.GetItemAsync(target.Id, ct), token)
+            : await _session!.ExecuteAsync((client, ct) => client.GetItemAsync(
+                target.Id, ct, order: Settings.Playback.MediaSourceOrder), token)
                 .ConfigureAwait(true);
         if (!IsCurrent(token)) return;
 

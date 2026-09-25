@@ -244,6 +244,14 @@ public sealed class MediaSource
 {
     public string Id { get; set; } = "";
 
+    /// <summary>
+    /// 这一版在服务器上<b>自己的条目号</b>。多版本电影在 Emby 里每一版都是独立条目，合并进主条目的
+    /// 媒体源表时把它捎上 —— 版本的入库时间按它问（见 <see cref="ItemDetail.OrderVersionsNewestFirst"/>；
+    /// 备选版本条目被服务器藏起来、批量列表问不到，只有带着这个号一条请求才认）。空表示服务器没给，
+    /// 那一版不参与按时间排序。
+    /// </summary>
+    public string ItemId { get; set; } = "";
+
     public string? Name { get; set; }
 
     public string? Path { get; set; }
@@ -374,6 +382,12 @@ public sealed class EmbyItem
     public string Type { get; set; } = "";
 
     public string? ServerId { get; set; }
+
+    /// <summary>
+    /// 服务器上这个条目自己的文件路径（Emby 只在请求带 <c>Fields=Path</c> 时才发）。MoviePilot 的整理/转移要拿它
+    /// 当「这是磁盘上的哪个文件」。多版本条目每一版各自的路径在 <see cref="MediaSource.Path"/> 上，这一份是条目级的那个。
+    /// </summary>
+    public string? Path { get; set; }
 
     public string? Overview { get; set; }
 

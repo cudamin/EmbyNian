@@ -18,7 +18,8 @@ namespace EmbyNian.Playback;
 /// </summary>
 public static class MediaVersionSwitch
 {
-    /// <summary>这个条目上有哪几版，顺序就是菜单里的次序。没有条目（没在放）时是空表。</summary>
+    /// <summary>这个条目上有哪几版，顺序就是菜单里的次序 —— 拿到的表已经由 <see cref="ItemDetail.OrderVersionsNewestFirst"/>
+    /// 排成最新入库在前。没有条目（没在放）时是空表。</summary>
     public static IReadOnlyList<MediaSource> Versions(EmbyItem? item) => item?.MediaSources ?? [];
 
     /// <summary>
@@ -85,8 +86,10 @@ public static class MediaVersionSwitch
 
     /// <summary>
     /// 多版本时默认播哪一版（「参考标题筛选，新增视频文件名筛选」，2026-09-22）：按视频文件名规则打分，取分最高的
-    /// 那一版；同分时保留服务器次序取第一个，和从前「默认第一版」一致。没有条目/规则、或只有一版时直接是服务器
-    /// 第一版 —— <b>单版本条目一律不受影响</b>。用在起播挑默认版本处（详情页预选、直接播放），换版仍走
+    /// 那一版；同分时保留表里的次序取第一个 —— 那张表 2026-09-24 起是「最新入库在前」（见
+    /// <see cref="ItemDetail.OrderVersionsNewestFirst"/>），所以没规则可依时默认的就是最新入库的那一版，
+    /// 与从前「默认第一版」一脉相承。没有条目/规则、或只有一版时直接是表里第一版 ——
+    /// <b>单版本条目一律不受影响</b>。用在起播挑默认版本处（详情页预选、直接播放），换版仍走
     /// <see cref="ShouldSwitch"/>／<see cref="At"/> 那条用户点名的路。
     /// </summary>
     public static MediaSource? Preferred(EmbyItem? item, IReadOnlyList<KeywordRule>? rules)

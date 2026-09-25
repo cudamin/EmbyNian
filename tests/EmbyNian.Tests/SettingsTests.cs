@@ -24,6 +24,7 @@ internal static class SettingsTests
         RegisterMigration();
         RegisterNormalize();
         RegisterReset();
+        RegisterBackup();
         RegisterVault();
         RegisterStore();
         RegisterPaths();
@@ -796,6 +797,30 @@ internal static class SettingsTests
             Assert.Equal("anime-large", settings.Shaders.ManualGroup, "表里有的 id 要原样留着");
         });
 
+        // 媒体源排序（2026-09-24「媒体源排序 默认/新入库在前」）。装机默认「新入库在前」—— 那是同一天
+        // 「把最新入库的排前面」的原始要求，「默认」那档是给他留的回头路。枚举存整数，和评分来源、跳过片头
+        // 片尾一条规矩：手改的文件留下认不出来的数字，拨回装机默认，别让那颗下拉不知道显示什么。
+        Test("规整：媒体源排序装机默认「新入库在前」，认不出来的值拨回去，选过的「默认」不动", () =>
+        {
+            var settings = SettingsMigration.NewDefaults();
+            Assert.Equal(Emby.MediaSourceOrder.NewestFirst, settings.Playback.MediaSourceOrder,
+                "装机默认就是当天那条原始要求");
+
+            settings.Playback.MediaSourceOrder = (Emby.MediaSourceOrder)99;
+            SettingsMigration.Normalize(settings);
+            Assert.Equal(Emby.MediaSourceOrder.NewestFirst, settings.Playback.MediaSourceOrder,
+                "认不出来的数字就是「没人选过」");
+
+            settings.Playback.MediaSourceOrder = Emby.MediaSourceOrder.Default;
+            SettingsMigration.Normalize(settings);
+            Assert.Equal(Emby.MediaSourceOrder.Default, settings.Playback.MediaSourceOrder, "选过的档要留着");
+
+            // 旧版本升上来的文件根本没有这个键：反序列化落到属性初始值上，还是「新入库在前」。
+            var upgraded = SettingsMigration.FromJson(
+                "{ \"SchemaVersion\":" + AppSettings.CurrentSchemaVersion + " }", Protector);
+            Assert.Equal(Emby.MediaSourceOrder.NewestFirst, upgraded.Playback.MediaSourceOrder);
+        });
+
         Test("迁移：v6 那四个配置组名和两个阈值不再写回文件，而「所有视频默认启用」跟着走", () =>
         {
             // 属性没了，反序列化器碰到没处放的键本来就不出声 —— 这一条钉的是「真的不出声」，
@@ -1507,6 +1532,151 @@ internal static class SettingsTests
             Assert.True(ReferenceEquals(shaders, settings.Shaders), "Shaders 必须是就地改的");
             Assert.True(ReferenceEquals(ui, settings.Ui), "Ui 必须是就地改的");
             Assert.Equal(new VideoSettings().Renderer, video.Renderer, "而且那个原来的对象里真的换成了默认值");
+        });
+    }
+
+    /// <summary>
+    /// 配置文件备份与恢复配置（用户令 2026-09-24）。和恢复默认走的是同一份分区（<see cref="SettingsPreferences"/>），
+    /// 所以钉的是同一件事的几个角：偏好从备份盖回来、身份和记下来的一个字不动、备份文件里不带任何凭据，认不出来
+    /// 的文件被拒绝。头一条也用反射逐组比，理由和恢复默认那几条一样：以后往设置类上加一项偏好，这一条自己就会
+    /// 把它算进来。
+    /// </summary>
+    private static void RegisterBackup()
+    {
+        Test("备份恢复：偏好从备份盖回来，身份和记下来的都不动", () =>
+        {
+            var dir = Directory.CreateTempSubdirectory("embynian-backup").FullName;
+            try
+            {
+                var store = new SettingsStore(new AppPaths(dir), Protector);
+
+                // 源：偏好每一组都改过，还带着身份、记下来的窗口大小和一个非默认音量。
+                var source = SettingsMigration.NewDefaults();
+                foreach (var group in new object[] { source.Mpv, source.Playback, source.Video, source.Shaders })
+                    Assert.True(MutateAll(group) > 0, $"{group.GetType().Name} 一项都没改，这一条会变空话");
+                source.Ui.Theme = "midnight";
+                source.Ui.PageSize = 37;
+                source.Shortcuts.Bindings["toggle-pause"] = "F";
+                source.Audio.ExclusiveMode = true;
+                source.Audio.DelayMilliseconds = 250;
+                source.Audio.Volume = 118;
+                source.Ui.WindowWidth = 1600;
+                source.Servers[0].Name = "源那台";
+
+                var path = Path.Combine(dir, "backup.json");
+                store.SaveBackup(path, source);
+                var loaded = store.ReadBackup(path);
+
+                // 目的地：自己的身份、自己记下来的窗口大小和音量，偏好都还在默认值上。
+                var target = SettingsMigration.NewDefaults();
+                var targetDeviceId = target.DeviceId;
+                target.Servers[0].Name = "目的地那台";
+                target.Audio.Volume = 77;
+                target.Ui.WindowWidth = 800;
+
+                SettingsPreferences.Apply(target, loaded);
+
+                // 偏好：四组整组、快捷键、界面里的偏好都从备份盖过来了（逐组比对上归一化之后的备份）。
+                AssertDefaults(target.Mpv, loaded.Mpv);
+                AssertDefaults(target.Playback, loaded.Playback);
+                AssertDefaults(target.Video, loaded.Video);
+                AssertDefaults(target.Shaders, loaded.Shaders);
+                Assert.Equal("midnight", target.Ui.Theme);
+                Assert.Equal(37, target.Ui.PageSize);
+                Assert.Equal("F", target.Shortcuts.Bindings["toggle-pause"]);
+                Assert.True(target.Audio.ExclusiveMode, "音频独占是偏好，跟着备份走");
+                Assert.Equal(250, target.Audio.DelayMilliseconds, "音频延迟是偏好，跟着备份走");
+
+                // 身份、记下来的位置、音量：一个字都没动，还是目的地自己的。
+                Assert.Equal(targetDeviceId, target.DeviceId, "备份不带设备 id，恢复也不改它");
+                Assert.Equal("目的地那台", target.Servers[0].Name, "服务器是目的地自己的");
+                Assert.Equal(77, target.Audio.Volume, "音量是记下来的，不跟着备份走");
+                Assert.Equal(800, target.Ui.WindowWidth, "窗口大小是记下来的，不跟着备份走");
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        });
+
+        Test("备份：导出的文件不含服务器、账号和令牌", () =>
+        {
+            var dir = Directory.CreateTempSubdirectory("embynian-backup").FullName;
+            try
+            {
+                var store = new SettingsStore(new AppPaths(dir), Protector);
+                var vault = new CredentialVault(Protector);
+
+                var settings = SettingsMigration.NewDefaults();
+                var server = settings.Servers[0];
+                server.Name = "客厅那台";
+                var account = new AccountProfile { Username = "老王" };
+                vault.SetAccessToken(account, "token-abc");
+                vault.SetPassword(account, "密码123", remember: true);
+                server.Accounts.Add(account);
+                settings.MoviePilot.Username = "mp用户";
+
+                var path = Path.Combine(dir, "backup.json");
+                store.SaveBackup(path, settings);
+                var text = File.ReadAllText(path);
+
+                // Passthrough protector 存的是明文，所以这几个字面值真出现的话就查得到。
+                Assert.DoesNotContain("token-abc", text, "备份文件里不该有访问令牌");
+                Assert.DoesNotContain("密码123", text, "备份文件里不该有密码");
+                Assert.DoesNotContain("客厅那台", text, "备份文件里不该有服务器");
+                Assert.DoesNotContain("老王", text, "备份文件里不该有账号");
+                Assert.DoesNotContain("mp用户", text, "备份文件里不该有 MoviePilot 账号");
+
+                // 身份那几栏在文件里是空的：服务器空数组、设备 id 空串。（读回来时归一化会给临时对象补出设备 id
+                // 和占位服务器，但那是 loaded 的事 —— 恢复配置只从它抄偏好、身份一栏都不碰，见「偏好从备份盖回来」
+                // 那条。所以这里查的是文件本身，不是读回来的对象。）
+                Assert.Contains("\"Servers\": []", text, "备份文件里没有服务器");
+                Assert.Contains("\"DeviceId\": \"\"", text, "备份文件里没有设备 id");
+
+                // 仍是个能认的有效备份：认不出来的文件 ReadBackup 会抛（见「认不出来的文件被拒绝」那条）。
+                _ = store.ReadBackup(path);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        });
+
+        Test("恢复配置：认不出来的文件被拒绝，不悄悄回退默认", () =>
+        {
+            var dir = Directory.CreateTempSubdirectory("embynian-backup").FullName;
+            try
+            {
+                var store = new SettingsStore(new AppPaths(dir), Protector);
+
+                var notJson = Path.Combine(dir, "notjson.json");
+                File.WriteAllText(notJson, "{ 这不是 JSON");
+                Assert.Throws<JsonException>(() => store.ReadBackup(notJson), "不是 JSON 的文件要抛");
+
+                var noSchema = Path.Combine(dir, "noschema.json");
+                File.WriteAllText(noSchema, "{}");
+                Assert.Throws<InvalidDataException>(() => store.ReadBackup(noSchema), "没有 SchemaVersion 的要拒");
+
+                var future = Path.Combine(dir, "future.json");
+                File.WriteAllText(future, $$"""{"SchemaVersion":{{AppSettings.CurrentSchemaVersion + 1}}}""");
+                Assert.Throws<InvalidDataException>(() => store.ReadBackup(future), "比当前还新的版本要拒");
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        });
+
+        Test("恢复配置：几个子对象还是原来那几个", () =>
+        {
+            // 同恢复默认那一条钉的坑：容器和设置页各处抓着子对象本身，换成新对象的话屏上全默认、行为照旧。
+            var source = SettingsMigration.NewDefaults();
+            source.Video.Renderer = "gpu";
+
+            var target = SettingsMigration.NewDefaults();
+            var (mpv, playback, video, audio, shaders, ui) =
+                (target.Mpv, target.Playback, target.Video, target.Audio, target.Shaders, target.Ui);
+
+            SettingsPreferences.Apply(target, source);
+
+            Assert.True(ReferenceEquals(mpv, target.Mpv), "Mpv 必须是就地改的");
+            Assert.True(ReferenceEquals(playback, target.Playback), "Playback 必须是就地改的");
+            Assert.True(ReferenceEquals(video, target.Video), "Video 必须是就地改的");
+            Assert.True(ReferenceEquals(audio, target.Audio), "Audio 必须是就地改的");
+            Assert.True(ReferenceEquals(shaders, target.Shaders), "Shaders 必须是就地改的");
+            Assert.True(ReferenceEquals(ui, target.Ui), "Ui 必须是就地改的");
+            Assert.Equal("gpu", target.Video.Renderer, "而且那个原来的对象里真的盖上了备份的值");
         });
     }
 

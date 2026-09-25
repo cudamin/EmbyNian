@@ -105,6 +105,12 @@ public sealed partial class ShellPage : UserControl, IShellActions
     private SettingsWindow? _settingsWindow;
 
     /// <summary>
+    /// 「在 MoviePilot 搜索其他版本」的第二窗口（需求：点击后新开一个窗口），第一次点那条菜单时建、之后留着，
+    /// 每次点重新填词再弹。Nullable：可能建不起来（第二个 XAML 窗口会创建失败），那时就报一句、不弹，同设置窗口。
+    /// </summary>
+    private MoviePilotWindow? _moviePilotWindow;
+
+    /// <summary>
     /// 标题栏的静止前景。悬停采用强调色，停用采用淡墨，按钮的背景始终透明。
     /// <para>
     /// 自己立两支画刷而不是把 <c>EgTextBrush</c> 直接塞到键上：这里要换的不是颜色跟着主题走，而是同一颗
@@ -560,6 +566,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         _settingsWindow?.Close();
         _settingsWindow = null;
+
+        _moviePilotWindow?.Close();
+        _moviePilotWindow = null;
     }
 
     /// <summary>
@@ -895,6 +904,73 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
+    /// 「在 MoviePilot 搜索其他版本」（<see cref="IShellActions.SearchMoviePilotVersions"/>）：新开或复用那个第二
+    /// 窗口，按条目算好的关键字去搜。第二窗口的生命周期归外壳，同 <see cref="ShowSettings"/> / <see cref="SettingsWindow"/>。
+    /// </summary>
+    internal void SearchMoviePilotVersions(EmbyItem item)
+    {
+        if (_services is null) return;
+
+        // 菜单没开 MoviePilot 时本不该走到这里（那一条根本不出现，见 ItemMenu），这里再挡一手：设置里关着就什么
+        // 都不做，不弹一个连不上的窗口。
+        var service = _services.GetService<EmbyNian.MoviePilot.MoviePilotService>();
+        if (service is null || !service.Enabled) return;
+
+        _moviePilotWindow ??= MoviePilotWindow.TryCreate(_window);
+        if (_moviePilotWindow is null)
+        {
+            Notify("打不开 MoviePilot 窗口，请稍后再试", InfoBarSeverity.Error);
+            return;
+        }
+
+        _moviePilotWindow.Show(service, item);
+    }
+
+    /// <summary>
+    /// 「手动整理」（<see cref="IShellActions.ShowMoviePilotReorganize"/>）：主窗口上弹那张表单。文件清单和
+    /// 身份由菜单那头收好（<see cref="EmbyNian.MoviePilot.MoviePilotTransferCollect"/>），这里只负责两件外壳
+    /// 的事：容器里的 <c>MoviePilotService</c>，和对话框要挂的 <c>XamlRoot</c>（主窗口的根）。
+    /// </summary>
+    internal void ShowMoviePilotReorganize(EmbyNian.MoviePilot.MoviePilotTransferContext context)
+    {
+        if (_services is null) return;
+
+        // 同「搜索其他版本」：设置里关着就什么都不做 —— 菜单那一头本就不该把这一条排出来。
+        var service = _services.GetService<EmbyNian.MoviePilot.MoviePilotService>();
+        if (service is null || !service.Enabled) return;
+
+        if (Root.XamlRoot is not { } root)
+        {
+            Notify("现在弹不出手动整理的表单，请稍后再试", InfoBarSeverity.Error);
+            return;
+        }
+
+        _ = ShowMoviePilotReorganizeAsync(service, context, root);
+    }
+
+    private static async Task ShowMoviePilotReorganizeAsync(
+        EmbyNian.MoviePilot.MoviePilotService service,
+        EmbyNian.MoviePilot.MoviePilotTransferContext context,
+        Microsoft.UI.Xaml.XamlRoot root)
+    {
+        // 确认话术走 ConfirmDialog：和删除、刮削覆盖是同一个问题渠道，「重新整理」那一档会真的清历史。
+        var dialog = new MoviePilotReorganizeDialog(service, context, ConfirmDialog.For((FrameworkElement)root.Content!))
+        {
+            XamlRoot = root
+        };
+
+        try
+        {
+            await dialog.ShowAsync().AsTask().ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            // 一棵浮层根上同时只能有一张对话框（WinUI 直接抛）。收掉是安全的 —— 什么都没有被整理。
+            Log.Warn("moviepilot窗口", "弹不出手动整理表单", error);
+        }
+    }
+
+    /// <summary>
     /// Opens one item, choosing between its detail page and another grid. The one place that choice is
     /// made, so a poster on the home page, one in a library and 打开 in the context menu all agree.
     /// </summary>
@@ -952,6 +1028,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     void IShellActions.OpenItem(EmbyItem item) => OpenItem(item);
+
+    bool IShellActions.MoviePilotEnabled =>
+        _services?.GetService<EmbyNian.MoviePilot.MoviePilotService>()?.Enabled ?? false;
+
+    void IShellActions.SearchMoviePilotVersions(EmbyItem item) => SearchMoviePilotVersions(item);
+
+    void IShellActions.ShowMoviePilotReorganize(EmbyNian.MoviePilot.MoviePilotTransferContext context) =>
+        ShowMoviePilotReorganize(context);
 
     bool IShellActions.TryOpenLibrary(string id) => TryOpenLibrary(id);
 

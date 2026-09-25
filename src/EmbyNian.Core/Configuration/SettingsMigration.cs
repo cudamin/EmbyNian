@@ -443,6 +443,7 @@ public static class SettingsMigration
         }
 
         settings.Playback.MarkWatchedPercent = Math.Clamp(settings.Playback.MarkWatchedPercent, 50, 100);
+
         settings.Playback.ProgressReportIntervalSeconds = Math.Clamp(settings.Playback.ProgressReportIntervalSeconds, 1, 60);
         settings.Playback.SeekForwardSeconds = Math.Clamp(settings.Playback.SeekForwardSeconds, 1, 600);
         settings.Playback.SeekBackwardSeconds = Math.Clamp(settings.Playback.SeekBackwardSeconds, 1, 600);
@@ -467,6 +468,11 @@ public static class SettingsMigration
 
         if (!Enum.IsDefined(settings.Playback.SkipSections)) settings.Playback.SkipSections = SkipSectionMode.Ask;
         if (!Enum.IsDefined(settings.Playback.SubtitleMode)) settings.Playback.SubtitleMode = SubtitleMode.Always;
+
+        // 媒体源排序（2026-09-24）。同上面两颗枚举一条规矩：手改的文件可能留下认不出来的整数，留着的话设置里
+        // 那颗下拉不知道显示什么。拨回装机默认「新入库在前」—— 那也是这项设置出厂时的一切文件落到的档。
+        if (!Enum.IsDefined(settings.Playback.MediaSourceOrder))
+            settings.Playback.MediaSourceOrder = Emby.MediaSourceOrder.NewestFirst;
 
         settings.Playback.AudioLanguages = TrackLanguagePriority.CleanList(settings.Playback.AudioLanguages);
         settings.Playback.SubtitleLanguages = TrackLanguagePriority.CleanList(settings.Playback.SubtitleLanguages);

@@ -23,6 +23,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:automation="using:Microsoft.UI.Xaml.Automation"
     xmlns:local="using:EmbyNian.Shell.Views"
+    xmlns:tkcontrols="using:CommunityToolkit.WinUI.Controls"
     xmlns:vm="using:EmbyNian.Shell.ViewModels"
     Background="{ThemeResource LayerFillColorDefaultBrush}">
 
@@ -186,25 +187,36 @@
                      three view shapes, paging, the letter bar — is this grid already.
 
                      摆在行的左端（从前在标题底下）：页头没了之后它是这一页顶上唯一的「这是干什么用的」，
-                     而工具条那一头本来就排满了。
-                     440 是写死的宽度：它是这一行里唯一一个按内容取不到合适尺寸的东西。 -->
-                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
-                    Visibility="{x:Bind local:LibraryPage.BrowseHintVisibility(ViewModel.SearchVisibility), Mode=OneWay}">
-                    <FontIcon Glyph="&#xE8B7;" FontSize="16" Foreground="{ThemeResource EgAccentBrush}" />
-                    <TextBlock x:Uid="LibraryPage_BrowseHint" Style="{StaticResource EgCaptionStyle}" VerticalAlignment="Center" />
-                </StackPanel>
+                     而工具条那一头本来就排满了。搜索框、浏览提示、以及「我的媒体库 / MoviePilot」分段合在这一
+                     排横着摆——浏览提示与搜索框互斥显隐，分段只在搜索页且接了 MoviePilot 时出现。 -->
+                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
+                        Visibility="{x:Bind local:LibraryPage.BrowseHintVisibility(ViewModel.SearchVisibility), Mode=OneWay}">
+                        <FontIcon Glyph="&#xE8B7;" FontSize="16" Foreground="{ThemeResource EgAccentBrush}" />
+                        <TextBlock x:Uid="LibraryPage_BrowseHint" Style="{StaticResource EgCaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
 
-                <AutoSuggestBox
-                    x:Name="SearchInput"
-                    x:Uid="LibrarySearchBox"
-                    HorizontalAlignment="Stretch"
-                    Width="240"
-                    CornerRadius="12"
-                    VerticalAlignment="Center"
-                    QueryIcon="Find"
-                    QuerySubmitted="OnSearchSubmitted"
-                    Text="{x:Bind ViewModel.SearchText, Mode=OneWay}"
-                    Visibility="{x:Bind ViewModel.SearchVisibility, Mode=OneWay}" />
+                    <AutoSuggestBox
+                        x:Name="SearchInput"
+                        x:Uid="LibrarySearchBox"
+                        Width="240"
+                        CornerRadius="12"
+                        VerticalAlignment="Center"
+                        QueryIcon="Find"
+                        QuerySubmitted="OnSearchSubmitted"
+                        Text="{x:Bind ViewModel.SearchText, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.SearchVisibility, Mode=OneWay}" />
+
+                    <!-- 结果来源：库里的 Emby，还是去 MoviePilot 找新片。见 LibraryPage.OnSourceChanged。 -->
+                    <tkcontrols:Segmented
+                        x:Name="SourceTabs"
+                        SelectedIndex="0"
+                        VerticalAlignment="Center"
+                        Visibility="{x:Bind ViewModel.MoviePilotTabsVisibility, Mode=OneWay}">
+                        <tkcontrols:SegmentedItem x:Uid="LibraryPage_SourceEmby" />
+                        <tkcontrols:SegmentedItem x:Uid="LibraryPage_SourceMoviePilot" />
+                    </tkcontrols:Segmented>
+                </StackPanel>
 
                 <StackPanel
                     x:Name="Toolbar"
@@ -389,9 +401,12 @@
             Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
             Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" />
 
-        <!-- Grid so the letter bar can sit over the scroller's right edge without taking a column
-             away from it（Emby 的 alphaPicker 是 position:fixed 的覆盖层，不是布局成员）。 -->
-        <Grid Grid.Row="2">
+        <!-- Emby 结果区整块（网格 + 字母条 + 空态）包进 EmbyContent，好被「MoviePilot」分段一处切走
+             （见 OnSourceChanged）。 -->
+        <Grid x:Name="EmbyContent" Grid.Row="2">
+            <!-- Grid so the letter bar can sit over the scroller's right edge without taking a column
+                 away from it（Emby 的 alphaPicker 是 position:fixed 的覆盖层，不是布局成员）。 -->
+            <Grid>
             <ItemsView
                 x:Name="Cards"
                 IsItemInvokedEnabled="True"
@@ -430,7 +445,6 @@
         </Grid>
 
         <StackPanel
-            Grid.Row="2"
             HorizontalAlignment="Center"
             Margin="24,72,24,0"
             Spacing="20"
@@ -441,5 +455,12 @@
             </Border>
             <TextBlock Style="{StaticResource EgBodyStyle}" Foreground="{ThemeResource EgTextDimBrush}" Text="{x:Bind ViewModel.EmptyNotice, Mode=OneWay}" TextWrapping="Wrap" TextAlignment="Center" />
         </StackPanel>
+        </Grid>
+
+        <!-- MoviePilot 那一段，和 EmbyContent 叠在同一格，按分段切显隐（默认藏着，见 OnSourceChanged）。 -->
+        <local:MoviePilotSearchPanel
+            x:Name="MoviePilotPanel"
+            Grid.Row="2"
+            Visibility="Collapsed" />
     </Grid>
 </Page>

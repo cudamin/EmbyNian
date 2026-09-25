@@ -21,6 +21,7 @@ internal static class ItemMenuTests
         RegisterSeries();
         RegisterMovie();
         RegisterShape();
+        RegisterMoviePilot();
         RegisterDownloadPlan();
     }
 
@@ -364,6 +365,57 @@ internal static class ItemMenuTests
         });
     }
 
+    /// <summary>开了 MoviePilot 之后多出来的那一条「在 MoviePilot 搜索…版本」。</summary>
+    private static void RegisterMoviePilot()
+    {
+        Test("更多菜单：没开 MoviePilot 时谁都没有「搜索其他版本」那一条", () =>
+        {
+            foreach (var item in (EmbyItem[])[
+                new() { Id = "m1", Type = EmbyItemType.Movie },
+                new() { Id = "s1", Type = EmbyItemType.Series },
+                Resuming()])
+                Assert.DoesNotContain("搜索其他版本", Labels(item));
+        });
+
+        Test("更多菜单：开了 MoviePilot，电影和剧上各有一条「搜索其他版本」", () =>
+        {
+            Assert.Contains("搜索其他版本", LabelsMp(new EmbyItem { Id = "m1", Type = EmbyItemType.Movie }));
+            Assert.Contains("搜索其他版本", LabelsMp(new EmbyItem { Id = "s1", Type = EmbyItemType.Series }));
+        });
+
+        Test("更多菜单：季和集也是同一句「搜索其他版本」（不分本季本集）", () =>
+        {
+            Assert.Contains("搜索其他版本", LabelsMp(new EmbyItem { Id = "n1", Type = EmbyItemType.Season }));
+            Assert.Contains("搜索其他版本", LabelsMp(Resuming()));
+        });
+
+        Test("更多菜单：合集、媒体库、演职人员上没有「搜索其他版本」那一条", () =>
+        {
+            foreach (var type in (string[])[EmbyItemType.BoxSet, EmbyItemType.CollectionFolder, EmbyItemType.Person])
+                Assert.DoesNotContain("搜索其他版本", LabelsMp(new EmbyItem { Id = "x", Type = type }));
+        });
+
+        Test("更多菜单：开了 MoviePilot 也不打乱形状——删除仍是最后一条、没有两条挨着的分隔线", () =>
+        {
+            foreach (var item in (EmbyItem[])[
+                Resuming(),
+                new() { Id = "s1", Type = EmbyItemType.Series },
+                new() { Id = "m1", Type = EmbyItemType.Movie },
+                new() { Id = "n1", Type = EmbyItemType.Season }])
+            {
+                var menu = ItemMenu.For(item, moviePilotEnabled: true);
+
+                Assert.False(menu[0].IsRule, $"{item.Type} 的菜单以分隔线开头");
+                Assert.False(menu[^1].IsRule, $"{item.Type} 的菜单以分隔线结尾");
+                for (var index = 1; index < menu.Count; index++)
+                    Assert.False(menu[index].IsRule && menu[index - 1].IsRule, $"{item.Type} 有两条挨着的分隔线");
+            }
+
+            var film = ItemMenu.For(new EmbyItem { Id = "m1", Type = EmbyItemType.Movie }, moviePilotEnabled: true);
+            Assert.Equal(ItemCommand.Delete, film[^1].Command);
+        });
+    }
+
     /// <summary>继续观看那一排上的一张卡：一集看了三成，没看完。</summary>
     private static EmbyItem Resuming() => new()
     {
@@ -378,4 +430,7 @@ internal static class ItemMenuTests
 
     private static string Labels(EmbyItem item) =>
         string.Join(" | ", ItemMenu.For(item).Select(row => row.IsRule ? "──" : row.Label));
+
+    private static string LabelsMp(EmbyItem item) =>
+        string.Join(" | ", ItemMenu.For(item, moviePilotEnabled: true).Select(row => row.IsRule ? "──" : row.Label));
 }

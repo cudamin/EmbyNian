@@ -85,10 +85,60 @@ public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
             .Distinct(StringComparer.Ordinal)];
     }
 
-    public Task<EmbyItem> GetItemAsync(string itemId, CancellationToken cancellationToken, string fields = EmbyFields.Detail)
+    /// <summary>
+    /// 取一个条目。<paramref name="order"/> 是媒体源的排法（设置页「媒体源排序」，2026-09-24）：只有点名
+    /// 「新入库在前」才去问各版本的入库时间并重排（多一次旁路请求，见 <see cref="OrderVersionsByAddedAsync"/>）；
+    /// 「默认」就是服务器给的次序，一个字节都不多问。详情页与播放器起播都从这一条拿条目，所以那两处界面
+    /// 读到的版本表次序天然一致。
+    /// </summary>
+    public async Task<EmbyItem> GetItemAsync(string itemId, CancellationToken cancellationToken,
+        string fields = EmbyFields.Detail, MediaSourceOrder order = MediaSourceOrder.Default)
     {
         var url = EmbyUrl.Combine(ApiBase, $"Users/{Connection.UserId}/Items/{itemId}", ("Fields", fields));
-        return http.GetJsonAsync<EmbyItem>(url, Context, cancellationToken);
+        var item = await http.GetJsonAsync<EmbyItem>(url, Context, cancellationToken).ConfigureAwait(false);
+        if (order == MediaSourceOrder.NewestFirst)
+            await OrderVersionsByAddedAsync(item, cancellationToken).ConfigureAwait(false);
+        return item;
+    }
+
+    /// <summary>
+    /// 多版本条目的版本表按<b>入库时间</b>重排，最新入库的排最前（2026-09-24 用户令）。只在设置点名
+    /// 「新入库在前」时被调（<see cref="GetItemAsync"/> 的 <c>order</c>）。拿不到时间就保持
+    /// 服务器给的次序 —— 一次排序的旁路请求不该绊倒详情本身，失败只记一笔。
+    /// <para>
+    /// 每一版的入库时间服务器不在媒体源上给（MediaSourceInfo 一个日期字段都没有），但每一版在服务器上
+    /// 本来就是一个条目（<see cref="MediaSource.ItemId"/>），它的 <c>DateCreated</c> 就是入库时间。实测
+    /// （Emby 4.10，探针在 <c>work/versions-probe</c>）：备选版本条目被服务器藏起来，
+    /// <c>/Users/{uid}/Items?Ids=…</c> 只回主条目；<b>不带用户前缀的 <c>/Items?Ids=…</c> 全都认</b>，
+    /// 一条请求问齐全部版本。单版本条目根本不发这一条。
+    /// </para>
+    /// </summary>
+    private async Task OrderVersionsByAddedAsync(EmbyItem item, CancellationToken cancellationToken)
+    {
+        var ids = item.MediaSources
+            .Select(source => source.ItemId)
+            .Where(id => id.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (ids.Count < 2) return;
+
+        try
+        {
+            var url = EmbyUrl.Combine(ApiBase, "Items",
+                ("Ids", string.Join(',', ids)),
+                ("Fields", "DateCreated"));
+            var result = await http.GetJsonAsync<ItemsResult>(url, Context, cancellationToken).ConfigureAwait(false);
+            var added = result.Items
+                .Where(version => version.DateCreated is not null)
+                .ToDictionary(version => version.Id, version => version.DateCreated!.Value);
+
+            ItemDetail.OrderVersionsNewestFirst(item, added);
+            Log.Debug(Category, $"《{item.Name}》{item.MediaSources.Count} 版已按入库时间排好（最新在前）");
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            Log.Warn(Category, "版本的入库时间没拿到，保持服务器次序", error);
+        }
     }
 
     /// <summary>
@@ -397,6 +447,70 @@ public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
 
     public Task ReportPlaybackStoppedAsync(PlaybackReport report, CancellationToken cancellationToken) =>
         http.PostAsync(EmbyUrl.Combine(ApiBase, "Sessions/Playing/Stopped"), report, Context, cancellationToken);
+
+    // ---- notifications ---------------------------------------------------------
+    //
+    // 「把本项目的通知改为 emby 的，让 emby 负责转发」（用户令 2026-09-25）：通知条目的增删改查走服务器 4.8+
+    // 那套「用户通知」接口 —— 就是官方网页端 /settings/notifications.html 用的四条路。四条都带 UserId 查询
+    // 参数：官方网页端就是这么问的，而且实测不带它时 Defaults 一类端点直接空引用 500。
+
+    /// <summary>装在服务器上的通知服务（通知渠道）。这台服务器上装了官方 Webhooks 插件时，答案就是它。</summary>
+    public Task<List<NotificationServiceInfo>> GetNotificationServicesAsync(CancellationToken cancellationToken) =>
+        http.GetJsonAsync<List<NotificationServiceInfo>>(
+            EmbyUrl.Combine(ApiBase, "Notifications/Services", ("UserId", Connection.UserId)), Context, cancellationToken);
+
+    /// <summary>可订阅的事件清单，按类分节。名字服务器已按用户的语言本地化，界面上直接用，不再自带一份词表。</summary>
+    public Task<List<NotificationCategoryInfo>> GetNotificationTypesAsync(CancellationToken cancellationToken) =>
+        http.GetJsonAsync<List<NotificationCategoryInfo>>(
+            EmbyUrl.Combine(ApiBase, "Notifications/Types", ("UserId", Connection.UserId)), Context, cancellationToken);
+
+    /// <summary>当前用户已配置的通知条目（「通知」页的列表本体）。</summary>
+    public Task<List<UserNotificationInfo>> GetNotificationsAsync(CancellationToken cancellationToken) =>
+        http.GetJsonAsync<List<UserNotificationInfo>>(
+            EmbyUrl.Combine(ApiBase, "Notifications/Services/Configured", ("UserId", Connection.UserId)),
+            Context, cancellationToken);
+
+    /// <summary>一条新通知的铺底（官方网页端「添加」的起点）：服务键、启用状态和该服务自己的默认选项，
+    /// 事件表是空的 —— 事件由编辑器选。服务键取自 <see cref="NotificationServiceInfo.Id"/>。</summary>
+    public Task<UserNotificationInfo> GetNotificationDefaultsAsync(string notifierKey, CancellationToken cancellationToken) =>
+        http.GetJsonAsync<UserNotificationInfo>(
+            EmbyUrl.Combine(ApiBase, "Notifications/Services/Defaults",
+                ("UserId", Connection.UserId), ("NotifierKey", notifierKey)), Context, cancellationToken);
+
+    /// <summary>保存一条通知（新建与编辑同一条路，整份 POST —— 官方网页端就是这个节拍）。</summary>
+    public Task SaveNotificationAsync(UserNotificationInfo entry, CancellationToken cancellationToken) =>
+        http.PostAsync(EmbyUrl.Combine(ApiBase, "Notifications/Services/Configured"), entry, Context, cancellationToken);
+
+    /// <summary>删一条通知。官方网页端删的是「这条 + 这个用户」，两个参数都在查询串上。</summary>
+    public Task DeleteNotificationAsync(string entryId, CancellationToken cancellationToken) =>
+        http.DeleteAsync(EmbyUrl.Combine(ApiBase, "Notifications/Services/Configured",
+            ("Id", entryId), ("UserId", Connection.UserId)), Context, cancellationToken);
+
+    /// <summary>让服务器按这条通知的配置真发一次。目的地不通、令牌不对时服务器把原因写进错误回应里，这里不吞。</summary>
+    public Task TestNotificationAsync(UserNotificationInfo entry, CancellationToken cancellationToken) =>
+        http.PostAsync(EmbyUrl.Combine(ApiBase, "Notifications/Services/Test"), entry, Context, cancellationToken);
+
+    /// <summary>「限定用户」选择框的数据源（管理员才用得上，但读这四个名字没有权限门槛）。</summary>
+    public Task<List<NotificationUser>> GetNotificationUsersAsync(CancellationToken cancellationToken) =>
+        http.GetJsonAsync<List<NotificationUser>>(
+            EmbyUrl.Combine(ApiBase, "Users",
+                ("SortBy", "SortName"), ("SortOrder", "Ascending"), ("EnableImages", "false")),
+            Context, cancellationToken);
+
+    /// <summary>「限定媒体库」选择框的数据源。</summary>
+    public Task<List<NotificationLibrary>> GetNotificationLibrariesAsync(CancellationToken cancellationToken) =>
+        http.GetJsonAsync<List<NotificationLibrary>>(
+            EmbyUrl.Combine(ApiBase, "Library/VirtualFolders",
+                ("SortBy", "SortName"), ("SortOrder", "Ascending"), ("EnableImages", "false")),
+            Context, cancellationToken);
+
+    /// <summary>「限定设备」选择框的数据源。</summary>
+    public async Task<List<NotificationDevice>> GetNotificationDevicesAsync(CancellationToken cancellationToken)
+    {
+        var list = await http.GetJsonAsync<NotificationDeviceList>(
+            EmbyUrl.Combine(ApiBase, "Devices"), Context, cancellationToken).ConfigureAwait(false);
+        return list.Items;
+    }
 
     // ---- server dashboard ------------------------------------------------------
 

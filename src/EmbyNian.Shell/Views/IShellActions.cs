@@ -62,6 +62,31 @@ internal interface IShellActions
     /// </para>
     /// </summary>
     void SetTitleStrip(TitleStrip strip);
+
+    /// <summary>
+    /// 用户在设置里开没开 MoviePilot —— 决定「更多」菜单上给不给「在 MoviePilot 搜索其他版本」那一条。菜单由
+    /// Core 的 <see cref="Emby.ItemMenu.For"/> 按条目排，这一位是它唯一够不着、得由外壳递进去的输入（见
+    /// <see cref="ItemCommands.Build"/>）。
+    /// </summary>
+    bool MoviePilotEnabled { get; }
+
+    /// <summary>
+    /// 「在 MoviePilot 搜索其他版本」：新开一个窗口，按条目算好的关键字（见
+    /// <see cref="EmbyNian.MoviePilot.MoviePilotVersionQuery"/>）去 MoviePilot 的站点搜索里列可下载的版本。
+    /// <para>
+    /// 走外壳而不是页面自己开：第二个窗口的生命周期、和设置窗口一样「关掉 X 不等于退出进程」的那套，只有外壳
+    /// 管得了（见 <c>ShellPage.SearchMoviePilotVersions</c> / <c>MoviePilotWindow</c>）。
+    /// </para>
+    /// </summary>
+    void SearchMoviePilotVersions(EmbyItem item);
+
+    /// <summary>
+    /// 「手动整理」：在 MoviePilot 上把条目背后的文件识别、改名、搬进媒体库目录。走外壳 ——
+    /// <see cref="EmbyNian.MoviePilot.MoviePilotService"/> 在容器里，而对话框要主窗口的 <c>XamlRoot</c>；
+    /// 要整理哪些文件、按什么身份，由调用方先用 <see cref="EmbyNian.MoviePilot.MoviePilotTransferCollect"/>
+    /// 收好（那一步要 Emby 会话，外壳不该再碰）。
+    /// </summary>
+    void ShowMoviePilotReorganize(EmbyNian.MoviePilot.MoviePilotTransferContext context);
 }
 
 /// <summary>

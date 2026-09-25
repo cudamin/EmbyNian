@@ -1,5 +1,6 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.MoviePilot;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,6 +59,13 @@ public sealed partial class LibraryPage : Page, IShellContent
         // template and the menu ticks are both named elements, which is exactly what a view model
         // must not reach for.
         ViewModel.PropertyChanged += OnViewModelChanged;
+
+        // Wired here rather than in the markup on purpose: the Segmented raises SelectionChanged while its
+        // items are being built inside InitializeComponent — before EmbyContent / MoviePilotPanel (further
+        // down the tree) have been assigned — so a markup handler runs ApplySource against null fields and
+        // crashes the page. Subscribing after InitializeComponent skips that init-time firing; every later
+        // change lands with the whole tree in place.
+        SourceTabs.SelectionChanged += OnSourceChanged;
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
@@ -296,6 +304,15 @@ public sealed partial class LibraryPage : Page, IShellContent
             services.GetRequiredService<EmbyImageStore>(),
             _capabilities);
 
+        // MoviePilot 那半的连接服务，交给面板（它自己接确认对话框）。只有搜索页且接了 MoviePilot 时那个分段
+        // 才出现，但服务无条件拿——构造它不花什么，也省得这里再判一次设置。
+        MoviePilotPanel.Attach(services.GetRequiredService<MoviePilotService>());
+
+        // 每次进来都从「我的媒体库」开始：Emby 那半可见、MoviePilot 那半藏着。SelectedIndex 已是 0 时不触发
+        // SelectionChanged，所以显式对一次账。
+        SourceTabs.SelectedIndex = 0;
+        ApplySource();
+
         ApplyView();
 
         _ = ViewModel.ReloadAsync();
@@ -305,6 +322,7 @@ public sealed partial class LibraryPage : Page, IShellContent
     {
         ViewModel.Cancel();
         FilterPane.Dismiss();
+        MoviePilotPanel.Release();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -482,9 +500,46 @@ public sealed partial class LibraryPage : Page, IShellContent
     /// <summary>
     /// 搜索页's own box. Handed to the view model rather than turned into a navigation: this is already
     /// the right page, and one back-stack entry per word typed is not a history anyone wants to walk.
+    /// <para>
+    /// 按当前来源分流：在「MoviePilot」那一段时把词交给那半的面板，否则照旧搜 Emby 库。
+    /// </para>
     /// </summary>
-    private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs e) =>
-        _ = ViewModel.SearchAsync(e.QueryText ?? sender.Text ?? string.Empty);
+    private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs e)
+    {
+        var text = e.QueryText ?? sender.Text ?? string.Empty;
+
+        if (IsMoviePilotSource) _ = MoviePilotPanel.SearchAsync(text);
+        else _ = ViewModel.SearchAsync(text);
+    }
+
+    /// <summary>此刻在不在「MoviePilot」那一段。分段不可见（没接 MoviePilot、或不是搜索页）时永远为否。</summary>
+    private bool IsMoviePilotSource =>
+        SourceTabs.Visibility == Visibility.Visible && SourceTabs.SelectedIndex == 1;
+
+    private void OnSourceChanged(object sender, SelectionChangedEventArgs e) => ApplySource();
+
+    /// <summary>
+    /// 把选中的来源应用到屏上：Emby 那半（网格、字母条、空态）和 MoviePilot 那半只显其一；Emby 的工具条
+    /// （排序/筛选/视图/播放）只在 Emby 那半在场时才有意义，切走时一并收起，免得摆一排按下去没反应的键
+    /// （项目规矩：界面不许骗人）。切到 MoviePilot 时，Emby 在 Row 1 的进度条和提示条 MoviePilot 面板盖不住，
+    /// 所以取消在飞的读取、关掉提示，让它们按各自的绑定收起；再用搜索框现有的词跑一次 MoviePilot 搜索。
+    /// 纯 UI 行为，留在 code-behind。
+    /// </summary>
+    private void ApplySource()
+    {
+        var moviePilot = IsMoviePilotSource;
+
+        MoviePilotPanel.Visibility = moviePilot ? Visibility.Visible : Visibility.Collapsed;
+        EmbyContent.Visibility = moviePilot ? Visibility.Collapsed : Visibility.Visible;
+        Toolbar.Visibility = moviePilot ? Visibility.Collapsed : Visibility.Visible;
+
+        if (!moviePilot) return;
+
+        ViewModel.Cancel();
+        ViewModel.NoticeOpen = false;
+
+        _ = MoviePilotPanel.SearchAsync(SearchInput.Text ?? string.Empty);
+    }
 
     /// <summary>A view shape was picked out of the view menu. The Tag carries the enum name — the
     /// menu is markup, and an enum-typed Tag would need a converter either way.</summary>

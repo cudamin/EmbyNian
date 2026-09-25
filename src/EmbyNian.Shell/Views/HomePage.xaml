@@ -128,6 +128,78 @@
                 </StackPanel>
             </Grid>
         </DataTemplate>
+
+        <!--
+          正在下载的一排（2026-09-25「监控moviepilot下载管理，提前入库，在首页的封面实时推送下载进度」）：
+          还没进库、正在 MoviePilot 下载器里跑的片子，用封面提前站上首页，进度推在卡上。
+
+          骨架照 ShelfTemplate 抄（Grid 隔一层留给模板根、牌子加横带），但模板单独一份：卡不是 PosterCard
+          （背后不是 Emby 条目，点不开详情，没有播放按钮那套悬浮层），排也没有去处（牌子不带大于号）。
+          这一排在不在屏上由「此刻有没有任务在下载」说了算 —— 没有任务时 ViewModel.DownloadRows 是空的，
+          下面的 ItemsRepeater 连同它的下边距一起收起。
+        -->
+        <DataTemplate x:Key="DownloadCardTemplate" x:DataType="vm:DownloadCard">
+            <Grid
+                Width="{x:Bind CardWidth}"
+                HorizontalAlignment="Center"
+                ToolTipService.ToolTip="{x:Bind ToolTip, Mode=OneWay}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Border Height="{x:Bind PosterHeight}" Style="{StaticResource EgFrameStyle}">
+                    <Grid>
+                        <FontIcon Style="{StaticResource EgArtworkEmptyGlyphStyle}" Glyph="{x:Bind Glyph}" />
+                        <Image Source="{x:Bind Image, Mode=OneWay}" Stretch="UniformToFill" />
+                        <!-- 暂停的那一枚角标；下载中不占地方 —— 进度条自己会说话。 -->
+                        <Border
+                            Style="{StaticResource EgCornerBadgeStyle}"
+                            Visibility="{x:Bind PauseBadgeVisibility, Mode=OneWay}">
+                            <FontIcon
+                                FontSize="{ThemeResource EgCaptionFontSize}"
+                                Foreground="{ThemeResource EgTextOnAccentBrush}"
+                                Glyph="&#xE769;" />
+                        </Border>
+                        <Grid Height="{StaticResource EgProgressThickness}" VerticalAlignment="Bottom">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Bind ProgressDone, Mode=OneWay}" />
+                                <ColumnDefinition Width="{x:Bind ProgressLeft, Mode=OneWay}" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.ColumnSpan="2" Background="{ThemeResource EgOnScrimDimBrush}" Opacity="0.24" />
+                            <Border Background="{ThemeResource EgAccentBrush}" />
+                        </Grid>
+                    </Grid>
+                </Border>
+                <StackPanel Grid.Row="1" Margin="0,8,0,0">
+                    <TextBlock
+                        FontWeight="SemiBold"
+                        MaxLines="1"
+                        Style="{StaticResource EgBodyStyle}"
+                        Text="{x:Bind Title, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                    <TextBlock
+                        MaxLines="1"
+                        Style="{StaticResource EgDataStyle}"
+                        Text="{x:Bind InfoLine, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="DownloadShelfTemplate" x:DataType="vm:DownloadRow">
+            <StackPanel Spacing="{StaticResource EgSpaceM}">
+                <local:ShelfHead
+                    IsHitTestVisible="False"
+                    Note="{x:Bind Note, Mode=OneWay}"
+                    Offer="False"
+                    Title="{x:Bind Title, Mode=OneTime}" />
+                <local:ShelfStrip
+                    Height="{x:Bind RowHeight}"
+                    ItemSpacing="18"
+                    ItemTemplate="{StaticResource DownloadCardTemplate}"
+                    ItemsSource="{x:Bind Cards}" />
+            </StackPanel>
+        </DataTemplate>
     </Page.Resources>
 
     <!--
@@ -237,6 +309,17 @@
                         Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
                         Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
                         Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
+
+                    <ItemsRepeater
+                        x:Name="DownloadRepeater"
+                        Margin="0,0,0,18"
+                        ItemTemplate="{StaticResource DownloadShelfTemplate}"
+                        ItemsSource="{x:Bind ViewModel.DownloadRows, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.DownloadsVisibility, Mode=OneWay}">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Orientation="Vertical" Spacing="18" />
+                        </ItemsRepeater.Layout>
+                    </ItemsRepeater>
 
                     <ItemsRepeater
                         x:Name="ShelfRepeater"

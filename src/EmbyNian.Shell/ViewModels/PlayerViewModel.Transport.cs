@@ -205,7 +205,8 @@ public sealed partial class PlayerViewModel
             var detail = item.MediaSources.Count > 0
                 ? item
                 : await _session
-                    .ExecuteAsync((client, token) => client.GetItemAsync(item.Id, token), _lifetime.Token)
+                    .ExecuteAsync((client, token) => client.GetItemAsync(
+                        item.Id, token, order: Settings.Playback.MediaSourceOrder), _lifetime.Token)
                     .ConfigureAwait(true);
 
             if (detail.Type is EmbyItemType.Series or EmbyItemType.Season)
@@ -603,8 +604,10 @@ public sealed partial class PlayerViewModel
     {
         if (string.IsNullOrEmpty(current.SeriesId)) return null;
 
-        // A null season asks Emby for the whole series in broadcast order. EpisodeNavigation narrows the
-        // destination back to its own season before it is handed to the player and 选集 menu.
+        // A null season asks Emby for the whole series in broadcast order — the only list where a 上一集/下一集
+        // that crosses a season boundary can be found. EpisodeNavigation.ResolveAdjacentAsync then lands on the
+        // destination and, for the 选集 menu, re-asks the server for that destination's own season exactly as the
+        // detail page does, so the two paths agree on the season's episode count (air-order 特典 included).
         var seriesEpisodes = await _session
             .ExecuteAsync(
                 (client, token) => client.GetEpisodesAsync(
@@ -614,7 +617,15 @@ public sealed partial class PlayerViewModel
                 _lifetime.Token)
             .ConfigureAwait(true);
 
-        return EpisodeNavigation.Step(seriesEpisodes, current.Id, offset);
+        return await EpisodeNavigation
+            .ResolveAdjacentAsync(seriesEpisodes, current.Id, offset, FetchSeasonAsync)
+            .ConfigureAwait(true);
+
+        async Task<IReadOnlyList<EmbyItem>> FetchSeasonAsync(string? seasonId) => await _session
+            .ExecuteAsync(
+                (client, token) => client.GetEpisodesAsync(current.SeriesId!, seasonId, token),
+                _lifetime.Token)
+            .ConfigureAwait(true);
     }
 
     private void StartEpisode(EpisodeDestination destination)

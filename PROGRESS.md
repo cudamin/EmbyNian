@@ -1,6 +1,185 @@
 # 开发进度
 
-最后更新：2026-09-24
+最后更新：2026-09-25
+
+## ⚠️ 待实机验收：今天和昨天新增的功能都还没用户实机测过，别默认它们没问题（2026-09-24 用户令记录）
+
+用户原话：「今天和昨天新增的这些功能，我都还没实机测试能不能用、好不好用，别默认它们都没有问题。」这一节是**总账**——下面各节里散着的「没验证到（留用户手点）」都汇到这里。**自动闸门（构建 0 警、单测全过、自检探针绿）证明的是「代码编译得过、判据/形状/离线行为对」，不等于「你在真机上点着能用、好用」。** 在用户逐条点过、明说 OK 之前，这些功能一律按「可能有问题」对待、不当已验收；本节保留到验收后再销。
+
+**这台机器为什么替不了实机**：注不进真鼠标/拖拽手势、弹不出真实文件对话框、三条离线探针固定走集成管线（不覆盖独占窗口/uosc/外部 mpv）、自检对 MoviePilot 只会「真登录读一眼下载列表」这一件读操作（订阅/下载/整理这类副作用键一概不点）、也不真起播改真库观看记录。所以下面每条「待点」都得用户在自己的环境里过一眼。
+
+**今天（09-25 第四批，首页「正在下载」一排，已随四十报提交）**：
+- **首页新增「正在下载」一排**——MoviePilot 开着时，还没进 Emby 库、正在下载器里跑的片子提前用封面站上首页（大图下面第一排）：卡上进度条实时走、标题底下一行「百分比 · 速度 · 剩余时间」，悬停有完整账（容量、站点、季集）。五秒一班轮询，同一张卡原地改数字不重排；任务下载完（整理进库后）自己从排里消失。没有任务时整排不存在，一格高度都不占。
+- **真机看点**——在 MoviePilot 上发起一个下载，回主页看：排有没有出现、封面出不出来（封面走 MoviePilot 图片代理，兜底直连 TMDB；都不行就是灰底字形）、进度条动不动、下载完成后排会不会自己消失。之前那批订阅/下载按钮正好当发射器。
+
+**今天（09-25 第二批，通知改走 Emby，已随四十报提交）**：
+- **通知页整体改版**——设置→「通知」现在是一整页（不再是卡片）：列表、添加、编辑、删除、测试都真连你的 Emby 服务器。你服务器上现成那条「MP」（Webhooks→MoviePilot）应该在列表里显示为 1 条、事件摘要齐全。点它改改名字再存回去、点删除再取消，都试一遍。
+- **编辑器**——挑事件（按类全选/半选）、Webhooks 的地址与请求类型、用户/媒体库/设备三栏限定；「发送测试通知」会让服务器真往 MoviePilot 发一条，MoviePilot 那头收到才算通。
+- **旧 Webhook 设置没了**——设置里原来的「播放通知（Webhook）」开关、地址、触发百分比、事件名四行整个退役（客户端直发改为 Emby 转发，用户令 09-25）；旧 settings.json 里的那节下次落盘自动消失，MoviePilot 转发从此由你服务器上那条 Webhooks 目的地负责（播放时照常上报会话，服务器自然会推）。
+
+**今天（09-24 深夜→25 凌晨，均已随四十报提交）**：
+- **MoviePilot「手动整理…」新表单**——电影/剧/季/集的封面卡点「更多→手动整理…」，看表单自动带出的存储/目的路径/类型/编号对不对，按「预览」看清单，再拿一个不心疼的文件真整理一次；「移动」「重新整理」会各多问一句确认。（协议按上游 v3.0.1 核对、判据 25 条单测钉住；真连你的 MoviePilot 的往返没跑过，自检碰不到）
+- **媒体源排序（默认/新入库在前）**——点开一部多版本电影，看「媒体源」下拉是否最新入库在前；拨回「默认」再看是否回到服务器次序。（排序判据 Core 单测钉住，真机没点过）
+- **拖字幕进画面自动挂上**——集成模式放一部片，把 .srt/.ass 拖进画面，看是否自动挂上、切成当前字幕、字幕选单里也能切到。（认字幕/去重单测钉住；真实 drop→sub-add→select 没跑过；独占/外部 mpv 由 mpv 原生接、不在这段代码里）
+- **「恢复默认」进「关于」卡 + 配置备份/恢复**——设置→关于点「备份到文件…」存一份，再「从文件恢复…」选回来，看提示与结果。（备份读写、偏好盖回而身份不动由单测钉住；两个系统文件对话框本身没弹过）
+- **MoviePilot「搜索其他版本」新窗口**——集/季/剧/电影任一页或封面卡点「更多→搜索其他版本」，看窗口弹出、关键字对不对、能否搜到并下载。
+- **MoviePilot 订阅修复 + 资源搜索/下载**——切到 MoviePilot 段搜一部片：（a）点「订阅」看上次那条 422「请求参数不正确」修好没；（b）点「搜索资源」等一会儿看种子列表，挑一条「下载」看是否真加进 MoviePilot。（都要真连你的 MoviePilot，自检碰不到）
+- **搜索页 MoviePilot 搜索与订阅**——搜索页切到「MoviePilot」段搜片、点订阅，看真实往返。
+- **独占控制条字幕/音频互换**——独占模式看那两颗顺序（左→右：字幕、音频）、空位是否落在音频与全屏之间。（离线探针只量了 rect，屏上样子没看）
+- **播放读数尾部新增制作组**（已提交 13a0258）——看播放读数尾部制作组显示对不对。
+
+**昨天（09-23，含 v0.0.18 发版那批）**：
+- **集成模式小窗口自动隐藏音量条**——把集成窗口缩到尺寸线以下看音量条是否消失；「小窗口滚轮调音量没有数字可看」的观感要你的眼睛过一遍。
+- **集成模式进度条实时刷新**——平顺播放时看进度条和它左边的时间是否实时在动。（病根修法有单测＋本地彩条探针钉住，真库真播放手感没验）
+- **v0.0.18 那批**：字幕/音轨筛选重整、字幕字体设置（schema 到 v22）、统计中文覆盖脚本、独占画面菜单、音量条刻度与全屏缩放过渡、「继续观看」两处同源、矮窗档触发线下移一排、叫醒点击判据、拖窗口边沿自动暂停——当时按三档政策全程离线验证，真机手感/观感没系统性过一遍，建议随上面一起点。
+- **外部 mpv 凭据改走 IPC 命名管道**（09-23 安全重构）——结构改动，本机无真实 mpv.exe，外部进程后端与真实 mpv 的兼容没验；用外部 mpv 后端的话要过一眼。
+
+**《伪恋》跨季相邻单集选集数（今天也改了，别再当它是「未修的既有红」）**——这条原先记成「待单独一轮修（未修）」，其实代码已经落地（下方那节标题已订正）：产品的 `ResolveAdjacentEpisodeAsync` 改走新抽的 Core 纯函数 `EpisodeNavigation.ResolveAdjacentAsync`——跨季点「下一集」落地时的「选集」改按落点那一季问服务器要，和季详情页同一条路；`PlaybackTests` 加了《伪恋》23 vs 20 的单测钉住，自检探针 `ProbeSeasonsAsync` 也改走同一段代码、基线 `跨季相邻单集` 随之登记「通过」。所以它不再是「挂在闸门 4 上的老红」。**同样待你实机点**：真机从特典（S00）跨进第一季点「下一集」，看播放器选集是不是 23 集、和季详情页一致；另外这条自检探针不是每趟都撞上伪恋（可能跳过或落到别的剧），基线转绿还得确认那趟真走到了季边界。本会话只读代码确认了改动在，没重跑闸门。
+
+## 四十报：整合发版 v0.0.19——下载监控排、通知改走 Emby、MoviePilot 手动整理/资源搜索等批次收拢（2026-09-25，四道闸门全过）
+
+**这一轮是整合发版会话**：把 v0.0.18（09-23）之后攒下的改动并成一个版本，升号 0.0.18 → 0.0.19（`Directory.Build.props` 三处），四道闸门全跑。这批收进去的：首页「正在下载」一排（下载监控、提前入库、封面实时推进度）、通知改走 Emby（通知设置页照网页端复刻、旧 Webhook 直发退役）、MoviePilot「手动整理…」表单与「搜索其他版本」窗口、资源搜索/下载、订阅 422 修复、媒体源排序（新入库在前）、拖字幕进画面自动挂载、「恢复默认」进「关于」卡＋配置备份/恢复、集成模式小窗口自动隐藏音量条与进度条实时刷新、跨季相邻单集选集（`EpisodeNavigation.ResolveAdjacentAsync`，《伪恋》判据转绿）、外部 mpv 凭据改走 IPC 命名管道。
+
+**闸门读数**：构建 0 警 0 错——发版构建头一趟带出 `MoviePilotTransferTests` 在途的 6 条 CS8604（`Problem(...)` 可空传进 `Assert.Contains`），修在 `TestHarness.Contains/DoesNotContain`：actual 收成 `string?`、null 时给「期望包含…实际 null」的断言失败，测试代码一处不用改；`format whitespace --verify-no-changes` exit 0；`check-scripts.ps1` 15 个脚本过。单测 **1137/1137**（0 失败 0 跳过）。发布 **526 文件 / 300.3 MB / 11 GLSL**，`verify-publish` 过；应用未运行，快捷方式未动。闸门 4 自检 **175 项失败 0**，与基线比消失 0、降级 0、新增 0。
+
+**安装包验证链**（`work/verify-install-0.0.19.ps1`）：`installer.ps1 -SkipPublish` 出包 `artifacts/EmbyNian_windows-x64_0.0.19.exe`（82.5 MB）→ 静默装到 `artifacts\_installtest`（exit 0，桌面图标任务默认不勾、没动快捷方式）→ 与发布目录逐一比对：**526=526、missing 0、extra 0、MD5 全对、FileVersion 0.0.19.0** → 装出来的那份 `--self-check`：175 项失败 0、基线无增减 → 静默卸载 exit 0、目录删净。
+
+**待实机验收照旧**：顶部总账未销——这批的功能点（下载排观感、通知真发、整理往返、订阅/下载）都还没用户手点过，发布不等于验收。
+
+## 首页「正在下载」一排：MoviePilot 下载监控、提前入库、封面实时推进度（2026-09-25，四道闸门全过；已随四十报提交）
+
+
+用户令（09-25）：「监控moviepilot下载管理，提前入库，在首页的封面实时推送下载进度」。三句话拆成一件事：还没进 Emby 媒体库、正在 MoviePilot 下载器里跑的片子，用封面提前站上首页第一排，进度推在卡上。
+
+- **协议两头核对**：`GET download/`（正在下载）在 v2 与 v3.0.1 逐字段一致（协议快照 `work/moviepilot-protocol-20260924-M8nFhS`），`media` 那块在 v2 是字典、v3 是 `DownloadTaskMedia`，序列化键名相同（`type/title/poster/backdrop/image`），一份解析通吃。海报/背景图是下载历史里存的完整 TMDB 网址，只认 `http(s)` 绝对地址。
+- **Core**（`MoviePilot/MoviePilotDownload.cs`）：任务记录 + 宽容解析（信封/裸数组/`list` 包装都认；没有 hash 或没有标题的行跳过）+ 卡片两行字的拼法（百分比打头、速度补 `/s`、剩时直用后端排好版的「1时20分30秒」、暂停直说）+ **值感知差量计划**（`Plan`：没了的删、多了的按服务器次序插、两边都有的不动位置、值相等的连属性通知都不发 —— record 值相等就是「没变」，安静的一轮是空计划）。`MoviePilotClient` 加了 `CookieContainer` 和取字节一条；`MoviePilotService` 加 `DownloadingAsync`（Debug 级记数，五秒一条 Info 就是流水账）与 `FetchImageAsync`/`FetchImageDirectAsync`。
+- **封面两级取法，代理优先**：`system/cache/image` 这个接口不认 Bearer 头、只认网页端那枚资源 Cookie —— 而它由任何一趟带 Bearer 的 API 调用顺手 `Set-Cookie` 种下（v2/v3 的 `verify_token` 都这么做），所以客户端挂一个 `CookieContainer`、轮询先于取图，次序天然是对的；服务器够得着 TMDB 还带磁盘缓存，客户端直连不上图源时这条路是唯一能出图的。直连是兜底；两级都空就是灰底字形，不重试（一个任务的封面不会中途换）。单图 8 秒掐表。
+- **Shell**（`DownloadCard.cs` + `HomeViewModel` + `HomePage.xaml`）：卡片照 `CardItem` 的形状抄但不是它的子类 —— 背后不是 Emby 条目，点不开详情、没有播放按钮，进度条用同一套星号列。轮询五秒一班、出错退三十秒、配置残缺一次就停；卡片在排里**原地增删改**（`MoviePilotDownload.Plan` 的差量落地），不整排重搭。排挂在货架前面（还没入库的片子站最显眼的位置），不在版面表里 —— 在不在屏上由有没有任务说了算；矮窗档的重查挂上它的来去。翻页走人轮询和图一起收（`Cancel` 覆写），回主页第一班几乎立刻回来。
+- **端到端真连了一次**：自检那趟 12:47:03 真登录了 MoviePilot（用户 donxuelian）并轮询到「0 个任务」——当时没有下载任务，整排正确地没出现，176 项检查全绿。**带卡片的屏上样子没验过**（不能替用户真发起一个下载），进顶部待验收清单。
+- **测试**：`MoviePilotTests` 新增「下载监控」7 条（裸数组/信封解析、hash 必有、标题三级回退、进度夹取、海报只认绝对地址、两行字与暂停与零速、差量三则含安静一轮、服务往返与取图 URL 转义）。**1139/1139 全过**（原 1132 + 7）。
+- **闸门**：①构建 0 错＋format whitespace 过（**7 条警告全是并行窗口在途未提交文件带进来的**：`MoviePilotTransferTests.cs` 6 条 CS8604、`EmbyServerPage.xaml` 1 条 WUI2011，非本轮，本批文件 0 警告）；②1139 全过；③发布 526 文件 / 300.4 MB 已落交付目录（应用未运行，未动快捷方式指向）；④绿——176 项检查失败 0、新增 0。基线只登记 `handle Views/HomePage.xaml DownloadRepeater` 一行（新 repeater 的 x:Name），字号/颜色基线零新增（新模板全走刻度资源与主题画刷）。
+- **没验证到（留用户手点）**：真有任务时的整排观感（封面出不出得来取决于服务器图源连通性与 `SECURITY_IMAGE_DOMAINS` 白名单——默认含 image.tmdb.org）、进度条实时跳动、完成后自动消失。自检只证明「0 任务时链路通、排不出现」。
+
+## 设置「Emby Server」页当日加、当日拆（2026-09-25；已随四十报提交）
+
+09-25 早些时候按用户令加过一版「设置 → Emby Server」页（网页端控制台 控制台/用户/媒体库 三页的只读复刻，当时闸门 1/2/4 全过）；同日用户令「删除设置中的 Emby Server」，整页**未提交即拆**，树里已无痕。拆的东西：页面（`EmbyServerPage`）、视图模型（`EmbyServerViewModel`）、子导航字形转换器（`EmbyServerSectionGlyphConverter`）、Core 传输形状（`Emby/ServerAdmin.cs`）、`EmbyClient` 管理端六方法（Sessions/整份 Users/VirtualFolders/ActivityLog/每库条目数/用户头像字节）与 `EmbyUrl.UserImage`；设置名单、字形表、自检走查（步进字段、`VisitEmbyServer`、`Settled` 档、报告节、Run 里的调用）、resw 六条、约定基线 8 行（handle 7 + font-size 1）、自检基线 1 行（「通过 Emby Server 页面」）、`EmbyTests.RegisterServerAdmin` 两条，一并回收。设置内嵌走查回到 通知 → 网页控制台 两站，走查顺序注释改回「两站后到先查」。
+
+- **闸门**：①构建 0 错（6 条 CS8604 仍是 `MoviePilotTransferTests.cs` 在途文件的，非本轮；顺带消掉了原先 `EmbyServerPage.xaml` 那条 WUI2011）；②**1137/1137 全过**（原 1139 − 拆掉的 RegisterServerAdmin 两条）；③未跑发布——按多窗口规矩留给整合会话；④**绿**——175 项检查（原 176 − 「Emby Server 页面」一项）失败 0、消失 0、降级 0、新增 0，走查改线（通知直接交棒网页控制台）实跑无恙。
+
+## 通知改走 Emby：让服务器负责转发，通知设置页照官方网页端复刻（2026-09-25，四道闸门全过；已随四十报提交）
+
+用户令（09-25）：「1.把本项目的通知改为emby的，让emby负责转发 2.复刻emby网页设置中的通知界面。」这是对 09-24 那句「客户端直接发送」的正式反转：客户端不再自己向 MoviePilot 发 webhook，播放事件照旧经 `Sessions/Playing*` 报给服务器，由服务器上装的通知服务（这台只装了官方 Webhooks 插件）转发到目的地；通知条目本身的管理界面搬进客户端，照官方网页端 `/settings/notifications.html` 复刻。
+
+- **先把官方那页的接口逐条实测了一遍**（本地探针脚本 + 服务器自带网页端 JS 反查）：4.10 的通知路由是 `Notifications/Services`（渠道）、`Notifications/Types`（事件表，名字服务器已本地化）、`Notifications/Services/Configured`（条目列表 GET / 保存 POST / 删除 DELETE）、`Notifications/Services/Defaults`（新建铺底）、`Notifications/Services/Test`（测试发送）。**全都带 `UserId` 查询参数**——不带它时 `Defaults` 一类端点直接空引用 500；带 `{UserId}` 路径变量的老路由在这台上已死（「Could not find property UserId」），不是可用的路。
+- **Core**（`Emby/Notifications.cs` + `EmbyClient` 通知区）：五个 DTO + 九个方法，字段按本机 4.10.40 实测与官方 swagger 双头核对；`UserNotificationInfo.Clone()` 深拷贝（编辑器动副本，服务器收下才落屏）。
+- **Shell**（`NotificationsPage` + `NotificationsViewModel` + `NotificationEditDialog` + `NotificationServicePicker`）：「通知」从设置卡改成第四个内嵌页（`HostedCategories` 新成员，排在控制台前）。列表行＝自定义名/服务名/事件摘要，三颗按钮（测试/编辑/删除，删除走 ConfirmDialog）；添加＝服务挑选（只有一个渠道就径直进编辑器）→ Defaults 铺底 → 编辑器；编辑器复刻官方语义——按类分节的事件矩阵（类全选框三态联动，「媒体库」节下挂「按剧集/专辑分组」，同官方）、Webhooks 专属三字段（名称/地址/请求类型，抄插件自家编辑页 `webhookeditorjs`）、用户/媒体库/设备三栏限定（名单拿不到就留空说明，不拦编辑）。保存接手协议按钮：存成了才收，存砸了原因留在屏上、表单原样待着。
+- **旧的一套整个退役**：`WebhookNotifier`/`WebhookPayload`/`NotificationSettings`、PlaybackService 的 MaybeNotify 一次闸、设置页四行、DI 注册、迁移里的 Repair 与夹取、备份文档注释——全部移除。旧 settings.json 里的 `Notifications` 节按「未知成员忽略」读进来不炸、下次落盘自动消失（单测钉住）。
+- **自检吃了两枪才打对**：通知页加入走查后控制台连红两趟、症状还不一样（一趟没注入、一趟注入了却「尚未取样」）。病根不在预算也不在通知页本身——`ShellSelfCheck.Settled` 的 switch 没有 NotificationsPage 这一档，Face 落到 `_ => false`，闸门永远不放行，剩余预算烧完后整段走查被强行放行，控制台就是在那一拍被读的。补上这一档（页面自己的 IsReady 进闸门）＋设置阶段预算 152→164（走查多了一页要真连服务器读一趟）后转绿。教训：**内嵌页每加一页，Settled 那张 switch 就要补一档，不然它会把整段走查拖到 deadline 上强拆。**
+- **UIA 探针又抓到一个**：拿 UIA 点「添加通知」实开编辑器，第一枪就炸出 `DlgNote` KeyNotFound——元素自己的 `Resources[key]` 索引器**不做树上查找**，XAML 里写在对话框级资源表的样式，到子元素身上取就是取不到。改成构造时从对话框自己的 Resources 取好存字段。编辑器随后实开成功（截图 `work/notification-editor.png`：事件矩阵带服务器本地化名、请求类型默认跟服务器 Defaults 的 multipart）；通知页列表截图 `work/notifications-page.png`。教训同 `Settled` 那条：**新界面的第一眼必须真开一次，闸门绿不等于能开。**
+- **左栏图标**：「通知」此前不在分类字形表里、一直落兜底齿轮，顺手补上（0xE7E7，与页头同字形）。
+- **测试**：`NotificationTests` 整体重写——请求形状（GET 带 UserId、DELETE 恰好一趟且 Id/UserId 都在查询串、POST 正文 PascalCase 且令牌不进正文）、解析（真实「MP」条目样例、Devices 信封、媒体库 Guid 优先回落 ItemId）、Clone 深拷贝、旧设置节退役。**1130/1130 全过**（原 1131 中通知相关 8 条退役、新 7 条进来）。
+- **四道闸门**：①构建 0 警 0 错＋format 过；②1130 全过；③发布 526 文件 / 300.2 MB 已落交付目录；④**绿**——175 项检查失败 0，新增「通知页面」（1 条通知，已渲染 1，真实读到服务器上那条 Webhooks→MoviePilot）与「通知确认框」两项并已登记基线。字号基线同步登记 `NotificationsPage 3`（26 标题/24×40 图标字形，两处可归刻度的已换成 Eg* 字号资源）。
+- **没验证到（留用户手点）**：真机点开设置→通知看列表与那条「MP」；编辑器里改名字/换事件/改地址存回去；「发送测试通知」让服务器真发一条、MoviePilot 那头收没收到；删除确认与空态。自检只读了列表，编辑/测试/删除这三个有对外副作用的键一概没替你按。
+
+## 「更多」菜单新增 MoviePilot「手动整理…」：预览先行、核过文件才动手（2026-09-25 深夜，构建＋单测＋发布已过；闸门 4 因显示器熄屏红在「屏幕像素」，与本批无关，证据见下；已随四十报提交）
+
+用户令（09-24，附官方前端截图）：「参考上方图片给更多按钮中新增 mp 的 手动整理 功能。你要是能做的更好，可以不参考上图。」随后「具体细节你决定，我睡觉去了」。协议按上游 v3.0.1 源码核对（另一窗口的调查代理下载了后端/前端源码，快照在 `work/moviepilot-protocol-20260924-M8nFhS`），没有照抄官方弹窗的全部字段——按本客户端的判断收成一份更小的表单。
+
+- **入口**：`ItemMenu.MoviePilotBlock` 在「搜索其他版本」下面加「手动整理…」（同一判据：开了 MoviePilot、条目对得上一部片；枚举 `ItemCommand.MoviePilotReorganize`，字形 0xE8B5）。自检的「卡片更多菜单」实读出 22 行、含新行，通过。
+- **身份收集在 Core（`MoviePilotTransferCollect`）**：菜单上的条目来自列表查询、没有路径，先按 `Files+ProviderIds` 现问一遍；**单集/季回溯到剧集的 TMDB 号**（MoviePilot 认的是剧，季集另算），季/整部剧把底下每集的文件收成一批（上限 30，截断在表单里看得见）。
+- **路径兑换不猜**：Emby 报来的路径先经 `storage/list` 换成 MoviePilot 自己认的 FileItem，换不出就停——**绝不退而整理父目录**（那种兜底会把没点名的文件一起搬走）。只支持本地存储源；相对路径、网址、磁盘根在 `MoviePilotTransfer.IsAbsolutePath` 一层就挡下。
+- **预览是提交的守门人**：`transfer/manual?background=…` 同一接口，`preview:true` 只算不动；预览全绿才放开「立即整理 / 加入整理队列」；表单一变预览作废。`success:false` 的信封**不抛**——部分成功要留着逐文件回执，绝不能整批重试（服务器已收走一半）。`accepted` 只说「已接收」，`completed` 才是完成，界面用词分开。
+- **危险档多问一句**：移动（源文件会没）和「重新整理」（清理命中历史）先走 `ConfirmDialog`；复制＋预览单在眼前则不再烦。
+- **Shell**：`MoviePilotReorganizeDialog`（ContentDialog，两列表单＋预览清单），从 `ShellPage.ShowMoviePilotReorganize`（`IShellActions` 新成员）弹，XamlRoot 用主窗口根，确认话术走 `ConfirmDialog`。文件收集在 `ItemCommands` 的 Guard 里做（要 Emby 会话）。
+- **测试**：新增 `MoviePilotTransferTests` 25 条（路径判据、请求校验与正文形状、回执解析与 CanSubmit、服务层真路径往返含 storage/list 换不出就停、部分成功信封、收集器的电影/单集/一季三案、菜单两案）。**1131/1131 全过**。
+- **四道闸门**：①构建 0 警 0 错＋format 过；②1131 全过；③发布 526 文件 / 300.2 MB 已落到交付目录；④**红**——「屏幕像素」整片 #16181C「XAML 岛没有合成任何东西」（另有一趟「服务器页面」偶发同病后自愈）。**已证明与本批无关**：(a) 系统 23:59:35 Kernel-Power 566 显示器熄屏（会话 0→1），23:09 那趟基线绿在熄屏前；(b) 用 HEAD（13a0258，不含任何窗口的未提交改动）在隔离工作树另构建，正常启动同样整窗空白；(c) 离屏渲染（--dump-ui PNG）完好、其余 172 项全过——只有「岛→屏幕」的呈现随显示器熄掉而失效；SC_MONITORPOWER 与 ES_DISPLAY_REQUIRED 都没能救回。**基线未动，不洗绿**；待用户醒来（显示器亮着）重跑 `tools/selfcheck-diff.ps1` 应即回绿。
+- **没验证到（留用户手点）**：真机连你的 MoviePilot 点「更多→手动整理…」：看表单自动带出的存储/路径/编号对不对、预览清单、真整理一个不心疼的文件；「屏幕像素」那关也要显示器亮着重跑确认。
+
+
+
+用户令两句：「把同一个资源的不同版本排序，把最新入库的排前面」；随后「在设置中新增自定义选项，媒体源排序 默认/新入库在前」。说的是详情页那颗「媒体源」下拉的行序 —— 播放器「版本」菜单、默认选版、自动换源候选读的是同一张表，一起变。
+
+- **先直连服务器取证（探针在 `work/versions-probe`）**：`MediaSourceInfo` 一个日期字段都没有（openapi 全量规范核过）；但多版本电影每一版在服务器上是**独立条目**，媒体源带着自己的 `ItemId`，版本条目的 `DateCreated` 就是入库时间。两个坑实测清楚：MediaSources 只有详情接口回（列表接口不回，首轮探针 0 条是问错了门）；备选版本条目被 `/Users/{uid}/Items?Ids=…` 滤掉，**不带用户前缀的 `/Items?Ids=…` 全都认** —— 一条请求问齐全部版本（9/9，本库 7 部多版本电影全核过）。
+- **判据在 Core 一处，单测钉住**：`ItemDetail.OrderVersionsNewestFirst(item, added)` 把条目的版本表稳定排成最新在前 —— 没问到时间的沉底、同时间的保持服务器次序（稳定排序）、只有一版或什么时间都没问到就是原样；重排只动次序不动对象。新增枚举 `MediaSourceOrder`（`Default`＝服务器次序 / `NewestFirst`＝新入库在前）。
+- **落点在 `EmbyClient.GetItemAsync`**：新增可选参数 `order`（默认 `Default`＝一个字节不多问）；点名 `NewestFirst` 才发那条旁路请求（单版本条目根本不发），失败只记一笔、保持服务器次序 —— 排序的旁路请求不绊倒详情本身。三个取数点传设置：详情页主载入与播放目标重取（`DetailViewModel`）、播放器起播重取（`PlayerViewModel.Transport`）。
+- **设置**：schema v22→v23；`PlaybackSettings.MediaSourceOrder`，装机默认 **`NewestFirst`**（＝当天原始要求；「默认」那档是服务器次序的回头路，他本意若相反一句话改回）。设置页「播放行为」卡、视频文件名筛选上面新增「媒体源排序」下拉两档；`Normalize` 把认不出来的枚举值拨回装机默认；恢复默认走反射自动带上。
+- **坑**：测试骨架 `Assert.Equal` 对 `List<T>` 是引用相等（`EqualityComparer<T>.Default`），集合比较必须逐行断言 —— 新测试两条第一趟红在这里，不在产品代码。
+- **验证**：构建 **0 警 0 错**；单测 **1093/1093**（新增媒体源排序 3 条＋设置规整 1 条）；发布 **526 个文件 / 300.1 MB**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`0DF77CCB…`）；旧 publish/bin 挪到 `EmbyNian-stale\publish-20260924-180736`、`bin-20260924-180736`。
+- **没验证到（留用户手点）**：真机点开一部多版本电影（好家伙 / 头脑特工队2 都行），看「媒体源」下拉是不是最新入库的在前；设置里拨回「默认」再看是不是回到服务器次序。
+
+## 拖字幕进画面自动挂上（集成管线，2026-09-24，四道闸门到基线；已随四十报提交）
+
+用户令：「新增支持拖拽字幕文件到画面中自动调用」。把外挂字幕（srt/ass/ssa/sub/vtt 等）拖进正在播放的画面，运行时 `sub-add … select` 当场挂上并切过去，省掉进菜单挑轨那一步。
+
+- **认字幕的判据只在 Core 一处，单测钉住。** 新增 `SubtitleFile`（`EmbyNian.Playback`）：`IsSubtitle(path)` 只看后缀、大小写不论；`Filter(paths)` 只留字幕、按整路径大小写不敏感去重、**保序**（次序决定谁最后 `select` 成当前字幕）。**有意不收 `.txt`/`.utf` 这类泛文本**——`sub-add` 挂错后缀 mpv 只会静静拒绝，没有报错浮层，宁可放过也不误挂一条乱码轨。这张后缀表错得起、错了却在屏上看不出来，所以钉成 7 条单测（ass/ssa 与 vtt/webvtt 两对、视频/音频/图片/文本都不认、空与无后缀、筛选保序、去重、空表）。
+- **挂轨的活在 VM**：`PlayerViewModel.Mpv.cs` 的 `AddExternalSubtitlesAsync` 逐条 `sub-add path select`（`select`＝挂上并立刻切过去，按序走完最后成功那条自然成当前字幕，其余留轨道表可切）；**没在播放先提示别挂**（挂到「没有片子」上没意义）；全失败报错。挂轨会触发 mpv 重发 `track-list`，字幕选单下次打开就见得到新轨，这里不必自己补。
+- **接口在 code-behind**：`PlayerPage` 的 `Root`（`PictureSurface`）加 `AllowDrop` + `DragOver`/`Drop`；DragOver 认出 `StorageItems` 才接、给「加载字幕」浮标；Drop 取 deferral、异步读 `StorageFile.Path`、交给 VM，未 `Attach` 时一律不接。纯 UI 拖放行为留在 code-behind，不为它加中间层。
+- **只处理集成管线。** 独占窗口/uosc 与外部 mpv.exe 的画面不在本窗口里，拖放由 mpv 原生的 drag-and-drop 自己接，根本走不到这段 WinUI 代码——所以这一件不动它们。
+- **坑**：XAML 的 XML 注释里不能含 `--`（WMC9997，第一次全量构建就炸在那条注释里写的 `--drag-and-drop`），把注释改成「原生的 drag-and-drop」即清；C# 的 `///` 文档注释里 `<c>--drag-and-drop</c>` 是文本内容，不受此限。
+- **闸门**：①构建 **0 警 0 错** ＋ `format whitespace` 过；②先编译再测 **1089/1089**（0 失败 0 跳过，新增 `SubtitleFileTests` 7 条）；③发布 **526 个文件 / 300.1 MB / 11 GLSL**，落在快捷方式那份上；④自检 **173 项、消失 0/降级 0/新增 0**（本趟详情页探针没撞上伪恋，失败行 0；既有的《伪恋》跨季仍是待单独一轮修的事，没因这趟绿了就当它好了，也没动基线）。Agreements 基线一字未动（`Root` 已有 `x:Name`、无新内联字号/颜色、无新开关、无新三段绑定）。
+- **没验证到（照实说，留用户手点）**：**真·拖一份 .srt/.ass 到正在播放的画面上，看它挂上并切过去**——这台机器注不进鼠标/拖拽手势，三条离线探针又都固定走集成管线且不覆盖拖放，所以端到端的 drop→sub-add→select→提示 只能手点。认字幕/筛选去重由单测钉住，VM 与 code-behind 编译通过但那趟真实拖放的运行行为没自动验到；独占/外部 mpv 由 mpv 原生接、不在本次代码里。请在集成模式放一部片，把外挂字幕拖进画面，看是否自动挂上、切成当前字幕、字幕选单里也能切到。
+
+## 把「恢复默认设置」移进「关于」卡，并新增「配置文件备份 / 恢复配置」（2026-09-24，四道闸门到基线；已随四十报提交）
+
+用户令：「把恢复默认设置移动到关于中，在关于中新增配置文件备份和恢复配置的功能」。备份范围问了一次，用户选**仅偏好设置**（推荐档）——播放/字幕/画质/音频/快捷键/主题/界面等调过的设置，**不含服务器、账号、登录令牌、设备 id 和窗口位置**，所以备份文件可安全带到别的机器，恢复也立刻生效、无需重启（身份不动＝在跑的会话不动）。
+
+- **「偏好设置」判据只写一处，三处共用。** 新增 Core `SettingsPreferences`：`Apply(live, source)`（把 source 的偏好就地盖进 live，再归一化——身份/记下来的窗口位置/音量/MoviePilot 一律不碰）＋ `ToBackupDocument`（一份只含偏好、身份全空的文档，拿去序列化就是备份文件；不归一化，免得顺手补出个设备 id）。**恢复默认从此也走这条**：`SettingsReset.Restore(s)` 收成一句 `SettingsPreferences.Apply(s, new AppSettings())`。理由是那份文档反复警惕的坑——「列要清的」漏新设置、「列要留的」清掉新设置，两处各写一份分区迟早对不上；现在分区只有一份。
+- **备份文件的读写在 `SettingsStore`**：`SaveBackup`（序列化偏好文档，用户选的落点，UTF-8 无 BOM）、`ReadBackup`（同 `LoadStrict`：认不出来的文件**抛异常**，不悄悄回退默认/隔离——恢复配置要么真拿到能用的偏好、要么明说这不是有效备份）。经 `ISettingsService.ExportPreferences` / `ReadBackup` 递给页面。
+- **恢复默认从左边名单搬进「关于」卡。** 删掉 `SettingsViewModel.ResetCategory`（连同名单里那一项和 `OnSelectedCategoryChanged` 的弹回逻辑）；「关于」卡底部新增三行动作（`SettingFactRow`）：**备份配置文件 / 恢复配置 / 恢复默认设置**，破坏性的恢复默认排最末。备份不问确认（不动任何东西），恢复配置**先读+验证是有效备份、再弹确认**（免得点了「恢复」才发现挑错文件），恢复默认照旧弹确认；两者善后（重刷主题＋ShellPrefs＋整页重建）共用一段。
+- **文件框**：新增 Shell `SettingsFile`（镜像 `ArtworkFile`——WinUI 桌面版 `FileSavePicker`/`FileOpenPicker` 要窗口句柄，从页面 `XamlRoot` 问），页面像交确认框那样把两个委托交给视图模型（`UseFilePickers`）。`SettingFactRow` 加 `ValueVisibility`：值空就收起那一行，免得动作行在标签和说明间垫一道空缝。
+- **自检那一关跟着改名**：`恢复默认在名单末尾、问得出确认` → **`关于卡备份恢复与恢复默认`**（恢复默认不在名单里了）。新关问四件：三颗动作按钮都在关于卡、恢复默认确认框仍写明「不会退出登录」、确认框接上页面（`CanConfirm`）、文件框接上（`CanPickFiles`，新加）。基线只改这一行（旧名退役、新名登记）。`设置页面` 那关的 reachable 去掉了 ResetCategory 一节。
+- **闸门**：①构建 **0 警 0 错** ＋ `format whitespace` 过；②先编译再测 **1078/1078**（0 失败 0 跳过，新增 4 条：偏好盖回来+身份不动、备份文件不含服务器/账号/令牌、认不出来的文件被拒、子对象就地改；反射逐组比，新加偏好项自动算进来）；③发布 **526 个文件 / 300.1 MB / 11 GLSL**，落在快捷方式那份上；④自检 `关于卡备份恢复与恢复默认` **通过**、`设置页面/设置分类走查/设置行模板` 全绿（关于卡 10 行、行容器 122/122 都画出来）。`scan-automation-ids` 退出 0（三颗按钮在 Fact 模板里，按「所属项＋局部句柄」跳过，同既有「打开」键）。Agreements 基线一字未动（无新内联字号/颜色/句柄/嵌套绑定/开关）。真机拍了「关于」卡最大化图，三行按钮与说明就位、无空值缝、左侧列表已无「恢复默认」。
+- **闸门 4 整体是红的，但红的不是这次的改动。** 唯一稳定失败是既有的 **《伪恋》跨季相邻单集**（`ShellSelfCheck.Pages.cs`，未改动文件，真库数据触发：选集 20 集、服务端按季 23 集）——两轮自检都一样。头一轮还多报了几项「消失/降级」（集页首屏、媒体信息行/表格、文件页单集形状），是自检这一趟详情页停在了剧集页（淡岛百景）而非文件页所致，**第二轮落到文件页就全绿了（消失 0 / 降级 0 / 新增 0）**——数据相关，非本次改动。没有为掩盖它动基线。
+- **没验证到（照实说，留用户手点）**：**真·弹文件框选路径存/取**——这台机器注不进鼠标、也弹不出真实文件对话框，自检只能验到「文件框已接上」（`CanPickFiles`）。备份文件的写、读、认不出来就拒、偏好盖回而身份不动，都由 Core 单测钉住；没验的是那两个系统文件对话框本身。请在 设置 → 关于 点「备份到文件…」存一份，再点「从文件恢复…」选回来，看提示与结果。
+
+## 《伪恋》跨季相邻单集——跨季点「下一集」后选集比季详情页少了并入的特典（2026-09-24 记录；**同日已修：代码落地、单测＋自检探针钉住，待实机点**）
+
+> **2026-09-24 订正**：这条已经修了，不再是「待单独修（未修）」。下面的根因分析仍然成立；实际修法见本节末尾「已落地」那条。真机点选集数那一眼还没验，已并入上方「待实机验收总账」。
+
+闸门 4 唯一稳定的红，此前几批都挂着它含糊报「既有、非本次改动」。用户点它「闸门红的你不修？」，这一轮把根挖清、记成一件待单独修的事，**不并进设置/MoviePilot 的在途交付，也不动基线洗绿**。
+
+- **确是既有、早于当前所有在途工作。** 这条 `跨季相邻单集` 和 `详情页季切换` 同出 `ShellSelfCheck.Pages.cs` 的 `ReportSeasons`，而后者要先跑完前面那句 `check("跨季相邻单集", …)` 才轮得到。基线里 `详情页季切换` 是**通过**（第 114 行）、`跨季相邻单集` **压根没登记**——探针明明跑到了后一关，前一关却缺席，只有一种可能：**上次定基线那一趟它就是失败**（失败行不写进基线）。所以红在定基线时就红了，与设置、MoviePilot 这些新改动无关，那个文件也没动过。
+- **不是数据噪声，是真的产品不一致。** 这条探针走的正是「跨季点下一集」的真实产品路径。跨季那一步 `PlayerViewModel.ResolveAdjacentEpisodeAsync`（[Transport.cs:602](src/EmbyNian.Shell/ViewModels/PlayerViewModel.Transport.cs)）**先拉整部剧的单集列表**（`GetEpisodesAsync(seriesId, null)`），再用 `EpisodeNavigation.Step` 按 `SeasonId` 在本地筛出目标季当选集；而其他所有取选集的地方——季详情页 `DetailViewModel.LoadEpisodesAsync`（[DetailViewModel.cs:1995](src/EmbyNian.Shell/ViewModels/DetailViewModel.cs)）、季内上一集/下一集——都是**直接问服务器要这一季**（`GetEpisodesAsync(seriesId, seasonId)`）。伪恋带 S00 特典：服务器按季返回时会把「排在这一季里播出」的特典（air-order 元数据）并进来 = **23** 集，本地按 `SeasonId` 筛整剧列表却把特典算在 S00、筛掉了 = **20** 集。于是：进伪恋第一季详情页选集是 23，从特典 S00E04 点「下一集」跨进第一季，播放器选集只剩 20——**同一季，两条路给的选集对不上**。（次一集/上一集本身是对的，只有选集这份列表不一致。）
+- **修法（已落地 2026-09-24）**：跨季落地的「选集」改按落点那一季问服务器要，与季详情页一致。抽了 Core 纯函数 `EpisodeNavigation.ResolveAdjacentAsync(seriesEpisodes, currentItemId, offset, fetchSeasonEpisodes)`——`Step` 只定下一集是谁，再 `fetchSeasonEpisodes(目标季 SeasonId)`（＝`GetEpisodesAsync(seriesId, seasonId)`）取整季当 `Siblings`；服务器那份为空、或没带上落点时退回 `Step` 本地筛的那份，越界照 `Step` 返回 null、压根不问服务器。产品的 `ResolveAdjacentEpisodeAsync`（[Transport.cs:603](src/EmbyNian.Shell/ViewModels/PlayerViewModel.Transport.cs)）与自检探针 `ProbeSeasonsAsync`（[ShellSelfCheck.Reads.cs:555](src/EmbyNian.Shell/ShellSelfCheck.Reads.cs)）都改走这**同一段**——自检核对的正是产品行为、合法转绿（不是改探针判据洗绿）。`PlaybackTests` 加了《伪恋》23 vs 20 与越界返回 null 的单测钉住。
+- **待验（并入上方总账）**：**属可见的选集行为改动＋播放子系统**，按三档走播放档；这条只读真库（拉单集列表、不起播、无副作用），自检那一趟就能证——但探针落到哪部剧看库里顺序、不是每次都撞上伪恋，基线 `跨季相邻单集` 转绿要确认那趟确实走到了季边界。真机跨季点「下一集」看选集 23 集、和季详情页一致那一眼还没点。本会话只读代码确认改动在，没重跑闸门。
+- **基线**：`docs/selfcheck-baseline.txt` 现已登记 `跨季相邻单集 通过`（此前它失败、失败行不进基线，见上一条）；设置与各批 MoviePilot 改动各自的四道闸门是绿的。
+
+## MoviePilot：「更多」菜单加「搜索其他版本」，点开新窗口按关键字列可下载版本（2026-09-24，四道闸门到基线；已随四十报提交）
+
+用户要在集/季/剧/电影页面以及封面卡的「更多」按钮里加一条，去 MoviePilot 找同一条目的其他版本；点击后**新开一个窗口**。中途几轮定下：搜索词按页面给——**剧＝`剧名`、季＝`剧名 S0x`、集＝`剧名 S0x E0x`、电影＝`电影名`**；菜单标题最后定成短的一句**「搜索其他版本」**（不带「在 MoviePilot」，也不分「本季/本集」）。
+
+- **落点就是那一张菜单，不按页面分。** 菜单由 Core 的 `ItemMenu.For` 排、`ItemCommands` 搭，判据是条目类型不是画在哪一页——所以只在 `ItemMenu.For(item, moviePilotEnabled)` 里加一段（电影/剧/季/集才给，见 `MoviePilotVersionQuery.Supports`），详情页两颗更多键、封面卡的更多、以及主页/媒体库右键菜单就**一处全有**了。用户点名的四种页面 + 封面都覆盖到，且同一条目在哪儿点开都一样。
+- **开关经 `IShellActions` 递进去。** `ItemMenu.For` 多一个 `bool moviePilotEnabled=false`（默认关＝装机默认，老测试照旧只看基础菜单）；`ItemCommands.Build` 和自检 `HomePage.MenuRead` 都读同一处 `IShellActions.MoviePilotEnabled`（ShellPage 从 `MoviePilotService.Enabled` 取），两边永远对得上，自检「卡片更多菜单」不破。
+- **Core 新增**：`MoviePilotVersionQuery`（一个条目→搜索词，纯函数配测试：季号取自己的 `IndexNumber`、集的季号取 `ParentIndexNumber`、剧名取 `SeriesName` 缺了退条目名、季号缺失就只发剧名不发光「S」）；`MoviePilotService.SearchByKeywordAsync` 走 **`GET search/title?keyword=`**（MoviePilot v3「模糊搜索资源」，直接回种子的 `Context` 列表，同 `search/media` 一套形状，已按 jxxghp/MoviePilot 源码核对）。`MoviePilotMediaParser.ToResource` 放宽：没有 `torrent_info` 外壳的扁种子也认（防形状漂移）。
+- **Shell 新增**：`MoviePilotWindow`（第二顶层窗口，照 `SettingsWindow` 那套——建一次留着、X 只隐不关免得关掉最后一个窗口就退进程、标题栏配色跟主题）；`MoviePilotVersionsView`(+`MoviePilotVersionsViewModel`)＝顶上一个可改的搜索框（进来填好关键字，删掉 S01/E01 就放宽＝用户要的「去掉过滤」）＋一列版本，行复用资源面板的 `MoviePilotResourceRow`（站点/标题/清晰度·体积·做种＋下载键，二次确认）。`ItemCommand.MoviePilotVersions` 在 `ItemCommands.Invoke` 里就一句 `shell.SearchMoviePilotVersions(item)`，窗口生命周期归 ShellPage（`_moviePilotWindow`，`Shutdown` 里关）。
+- **闸门**：①构建 **0 警 0 错** ＋ `format whitespace` 过；②先编译再测 **1074/1074**（0 失败 0 跳过，新增 `MoviePilotVersionQueryTests` 7 条＋菜单/关键词/扁种子解析若干）；③发布 **526 个文件 / 300.1 MB / 11 GLSL**，落在快捷方式那份上；④自检 **173 项、消失 0/降级 0/新增 0**，唯一红是既有的《伪恋》跨季（与基线一致）。`scan-automation-ids` 退出 0（搜索框走 `x:Name` 可定位，下载键在模板里按「所属项＋局部句柄」跳过）。基线一字未动（新句柄不进 handle 基线，新 XAML 无内联字号/颜色）。`--show-menu` 实拍确认那一条以「搜索其他版本」出现在下载与元数据之间、独占一段。
+- **没验证到（照实说，留用户手点）**：**真·点开窗口搜出版本、真·下载**——打开窗口会对用户自建的 MoviePilot 发一趟 `search/title`（去各站点现捞），和此前几批一样把真往返留给用户点。窗口外观按 `SettingsWindow` 那套搭、行按资源面板那套搭，都是验过的底子；搜索词/菜单/解析由单测钉住。请在集/季/剧/电影任一页（或封面卡）点「更多 → 搜索其他版本」，看窗口弹出、关键字对不对、能不能搜到版本并下载。
+
+## MoviePilot：订阅「请求参数不正确」修复 ＋ 新增资源搜索与下载（2026-09-24，四道闸门全绿；已随四十报提交）
+
+用户两条反馈：①「订阅貌似用不了，订阅《现在不是出轨的问题》失败：请求参数不正确」；②「怎么只能订阅，不能搜索资源？」。
+
+- **订阅 422 病根**：订阅正文里带了 `year`，而 v3.0.1 订阅 schema 的 `year` 是 `Optional[str]`，我们发的是数字 —— pydantic v2 不拿 int 当 str，整条请求被判 422「请求参数不正确」。修法：`SubscribeBody` 不再发 `year`（`media_source`+`media_id` 这对 TMDB id 已唯一定位，年份多余，少发一个就少一处能顶回来的地方）。单测 `订阅正文只带该带的` 加断言：即便 `Year` 有值也不进正文。**本机无法真连他的 MoviePilot 验证，改的是「正文合不合 schema」，最终要用户重试一次。**
+- **新增资源搜索**（用户当初选的是「展示+订阅」，这轮按新要求补上）：媒体卡多一颗「搜索资源」（次级键，与「订阅」竖排）。点它盖上一层**资源覆盖面板**，列出该片的可下载种子（站点/标题/清晰度·体积·做种数），每行一颗「下载」。
+  - **为什么是覆盖面板不是 ContentDialog**：下载要弹二次确认（一个 ContentDialog），而 WinUI 同时只允许一个 ContentDialog —— 资源列表若也是对话框，确认框弹不出来。做成 `MoviePilotSearchPanel` 之上的一层覆盖面板（`MoviePilotResourcePanel`，Grid.RowSpan 全覆盖、默认 Collapsed），确认框就能照弹。
+  - **API（按 v3.0.1 源码核对）**：搜资源 `GET search/media/{media_id}?media_source=…`（精确搜，回 `Context` 列表）；下载 `POST download/add`，正文 `torrent_in` 收的是**整份 torrent_info 对象**（不是磁力/种子链接），所以 `MoviePilotResource` 把那份原始 JSON `Clone()` 留着、下载时原样回传，另带身份对让服务器认片。下载器/保存路径不填，走默认。
+  - **客户端超时 30→120 秒**：资源搜索要 MoviePilot 现去各站点捞种子，几十秒常事；连不上仍由 `ConnectTimeout=8s` 快速兜底，登录/识别搜索秒回够不着这个上限。面板用一圈 `ProgressRing`＋「正在各站点搜索资源…」撑住这段等待。
+- **Core 新增**：`MoviePilotResource`（种子模型＋人话体积/元信息行）、`MoviePilotMediaParser.ParseResources`/`DownloadBody`、`MoviePilotService.SearchResourcesAsync`/`DownloadAsync`、`MoviePilotClient.PostAsync` 复用已抽的 `ReadDataAsync`。**Shell 新增**：`MoviePilotResourceViewModel`(+`MoviePilotResourceRow`)、`MoviePilotResourcePanel`。资源行的「下载」与媒体卡的「订阅」同构：回调给视图模型、二次确认、四态键。
+- **坑**：资源面板的 ItemsView 起名 `x:Name="Resources"`，撞了 `FrameworkElement.Resources` —— 生成代码 CS0108 告警（隐藏基类成员），第一次全量构建 2 警。改名 `ResourceList` 即清。**教训：控件 x:Name 别用 `Resources`/`Content` 这类 FrameworkElement 已有的成员名。**
+- **闸门**：①构建 **0 警 0 错** ＋ 空格通过；②测试 **1059/1059**（较上轮净增 3：资源解析、下载正文、连接服务的资源搜+下载各一条，订阅那条改了断言）；③发布 **526 个文件 / 300.1 MB / 11 GLSL**；④自检 **173 项、消失 0/降级 0/新增 0**，唯一红仍是既有《伪恋》跨季。基线无新增改动（资源面板不写内联字号、只用主题角色色）。
+- **没验证到（留用户手点）**：**真·搜出资源、真·下载、以及订阅这次修没修好** —— 都要真连他的 MoviePilot。自检不联真服务器、不点这些副作用键。请用户：切到 MoviePilot 段搜一部片 →（a）点「订阅」看这次成不成；（b）点「搜索资源」等一会儿看种子列表，挑一条「下载」看 MoviePilot 里是否真加进了下载。
+
+## 搜索页新增 MoviePilot 搜索与订阅（2026-09-24，四道闸门全绿；已随四十报提交）
+
+用户原话「在搜索页面新增MoviePilot的搜索功能」。问过两件产品事，用户定：①**分段切换**——搜索框旁一个「我的媒体库 / MoviePilot」两段选择器，切到 MoviePilot 才联网搜；②**展示 + 订阅**——每条结果带「订阅」键，下单前二次确认。这一件正是设置卡（09-14）埋的「搜索订阅」那半。
+
+- **底子复用**：`Core/MoviePilot/` 的 `MoviePilotClient`（登录换 JWT + 通用 `GetAsync`）、`MoviePilotCredentials`、`MoviePilotAddress`、异常族、`MoviePilotSettings` 都是现成的，此前只被设置卡「测试连接」用。这一件补了「常驻连接」和搜索页那一半 UI。
+- **Core 新增**：`MoviePilotMedia`（结果模型：标题/年份/类型/简介/海报 + 身份对 `media_source`+`media_id`）、`MoviePilotMediaParser`（拆 `media/search` 的裸数组、拼订阅正文，对字段名/形状宽容，仿 `MoviePilotProbe.Names`）、`MoviePilotService`（**按需登录、缓存 JWT、令牌过期自动重登重放一次**，`SearchAsync`/`SubscribeAsync`）。`MoviePilotClient` 加了 `PostAsync`，与 `GetAsync` 共用抽出来的 `ReadDataAsync`（401→过期、200 揣 success:false 当失败、拆信封三件事一处，两条路不会各走各的）。
+- **Shell 新增**：`MoviePilotSearchViewModel`(+`MoviePilotResult` 一张卡的订阅态/海报) 继承 `PageViewModel`；`MoviePilotSearchPanel`（一列结果卡：海报盖固定小框、标题/类型/简介、订阅键；忙/空/错自带）。海报是外站 URL，走 `BitmapImage{UriSource}`，不进 EmbyImageStore。订阅走 `ConfirmDialog` 二次确认再 POST。
+- **接进 LibraryPage（＝搜索页）**：Emby 结果整块包进 `EmbyContent`，MoviePilot 面板叠同一格，`Segmented`（CommunityToolkit，已在 csproj）在两者间切显隐；分段只在 `IsSearch && MoviePilot.Enabled` 出现（`LibraryViewModel.MoviePilotTabsVisibility`），没接就和从前一样。切到 MoviePilot 时收起 Emby 工具条（排序/筛选/视图/播放）不摆没反应的键。API 已按 v3.0.1 源码核对（`media/search?title=`、`POST subscribe/` 的身份对）。
+- **⚠️ 本轮的坑（第四道才炸，前三道全绿）**：`Segmented` 在 `InitializeComponent` 里建子项时就抛 `SelectionChanged`，那一刻树里靠后的 `EmbyContent`/`MoviePilotPanel` 还没赋值，markup 上的 `SelectionChanged` 处理器于是对着 null 跑 `ApplySource` → `NullReferenceException`，**一进任何媒体库页就崩**（自检 172 项全「消失」、退出码 0xC000027B）。修法：处理器改在构造函数 `InitializeComponent()` **之后**用代码挂（`SourceTabs.SelectionChanged += OnSourceChanged`），初始化期那次自激就接不到了，之后每次都带着整棵树跑。**教训：给会在装载期发选择事件的控件（Segmented 这类）挂 SelectionChanged，别写在 markup 里，要在 InitializeComponent 之后挂。**
+- **闸门**：①构建 **0 警 0 错** ＋ `format whitespace` 通过；②先编译再测 **1056/1056**（0 失败 0 跳过，新增 MoviePilot 解析/POST/连接服务共 8 条，含令牌过期重放那条）；③发布 **526 个文件 / 300.0 MB / 11 GLSL**，落在快捷方式那份上；④自检 **173 项、消失 0/降级 0/新增 0**，唯一红是既有的《伪恋》跨季（与基线一致）。基线动了一处：`font-size` 加 `MoviePilotSearchPanel.xaml 2`（两颗 FontIcon 字形度量，占位图标 + 空态图标，后者与 LibraryPage 空态同款 28）。自检实拍确认分段就位（用户设置里 MoviePilot 已启用，分段真出现了、默认「我的媒体库」，页面不崩）。
+- **没验证到（照实说，留用户手点）**：**真·切到 MoviePilot 搜出片、真·点订阅在服务器上建订阅**——自检不真联 MoviePilot、不点订阅这种对外副作用，地址账号也不入公开仓库。解析/客户端/连接服务由单测＋真机形状 JSON 夹具钉住；那一眼的真实往返得用户在自己的 MoviePilot 上验一次。另：`type` 取值、`poster_path` 是否绝对 URL、剧集订阅要不要带 `season`——按宽容解析先做，真机一验即定。
 
 ## 集成模式小窗口不画音量条 ＋ 独占模式控制条再排（选集/版本进左下、版本按需露面、音轨那一组与全屏空一个按钮宽）（2026-09-23，构建+单测+离线探针+发布全绿；09-24 追加「独占控制条字幕与音频互换」，同轮验证；未提交）
 

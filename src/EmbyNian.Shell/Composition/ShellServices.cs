@@ -117,6 +117,10 @@ internal static class ShellServices
         services.AddSingleton<MoviePilotProbe>();
         services.AddSingleton<MoviePilotCredentials>();
 
+        // 搜索页那半功能的连接服务：按需登录、缓存 JWT、令牌过期自重登。单例，好让一次登录的 token 跨多次搜索
+        // 复用；它只吃 Core 类型，注册在这儿和 PlaybackService 同理。
+        services.AddSingleton<MoviePilotService>();
+
         // ---- what the view models depend on ----------------------------------------------------------
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<IServerCapabilities, ServerCapabilities>();

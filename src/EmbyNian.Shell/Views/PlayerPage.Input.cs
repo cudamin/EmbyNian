@@ -8,7 +8,9 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
+using Windows.Storage;
 using Windows.System;
 
 namespace EmbyNian.Shell.Views;
@@ -895,5 +897,60 @@ public sealed partial class PlayerPage : IWin32KeySink
 
         ViewModel.ToggleMute();
         if (_chrome.FlashRail(Now)) Render();
+    }
+
+    // ---- 拖字幕进画面 ------------------------------------------------------------
+    //
+    // 只有集成管线走这里：画面嵌在本窗口的视觉树里、VideoHost 又 IsHitTestVisible=False，拖到画面上的
+    // 文件落在 Root 上。独占窗口与外部 mpv.exe 另起顶层窗口，拖拽由 mpv 原生 --drag-and-drop 接住，到不了
+    // 这。认后缀、挂字幕都在视图模型那头（AddExternalSubtitlesAsync），这里只把拖进来的文件路径捞出来递过去。
+
+    /// <summary>
+    /// 拖着文件悬在画面上时表个态：只认「文件」这一类拖拽（<see cref="StandardDataFormats.StorageItems"/>），
+    /// 接住并把鼠标旁的字样改成「加载字幕」，让用户松手前就知道松下去会发生什么。不接的话光标是「禁止」，
+    /// 松手也不会触发 <see cref="OnPictureDrop"/>。
+    /// </summary>
+    private void OnPictureDragOver(object sender, DragEventArgs e)
+    {
+        if (!Attached || !e.DataView.Contains(StandardDataFormats.StorageItems)) return;
+
+        e.AcceptedOperation = DataPackageOperation.Copy;
+        e.DragUIOverride.Caption = "加载字幕";
+        e.DragUIOverride.IsCaptionVisible = true;
+        e.DragUIOverride.IsGlyphVisible = true;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 松手：把拖进来的每一份文件的本地路径捞出来，交给视图模型去筛字幕、挂进 mpv。
+    /// <para>
+    /// <c>GetStorageItemsAsync</c> 要 await，所以先取一张 <c>Deferral</c> 把这一拍的拖拽事务按住，捞完再放 ——
+    /// 不然事件一返回拖拽就算结束，异步那半截拿到的是已经作废的数据。只收得到本地路径的
+    /// <see cref="StorageFile"/>（文件夹和非文件项没有能喂给 <c>sub-add</c> 的路径），空路径顺手滤掉。
+    /// </para>
+    /// </summary>
+    private async void OnPictureDrop(object sender, DragEventArgs e)
+    {
+        if (!Attached || !e.DataView.Contains(StandardDataFormats.StorageItems)) return;
+
+        var deferral = e.GetDeferral();
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            var paths = items.OfType<StorageFile>()
+                .Select(file => file.Path)
+                .Where(path => !string.IsNullOrEmpty(path))
+                .ToList();
+
+            if (paths.Count > 0) await ViewModel.AddExternalSubtitlesAsync(paths);
+        }
+        catch (Exception error)
+        {
+            Log.Debug(LogCategory, $"拖拽字幕失败：{error.Message}");
+        }
+        finally
+        {
+            deferral.Complete();
+        }
     }
 }

@@ -220,8 +220,9 @@ public sealed class PlaybackService(
     }
 
     /// <summary>
-    /// 播放的候选版本顺序：票里那一版（用户选的，或默认的第一个）在前，条目的其余版本按库序跟在
-    /// 后面，按 Id 去重。internal static：候选顺序是契约，测试看得见。
+    /// 播放的候选版本顺序：票里那一版（用户选的，或默认的第一个）在前，条目的其余版本按表序跟在
+    /// 后面（那张表 2026-09-24 起是「最新入库在前」，见 <see cref="ItemDetail.OrderVersionsNewestFirst"/>），
+    /// 按 Id 去重。internal static：候选顺序是契约，测试看得见。
     /// </summary>
     internal static IReadOnlyList<MediaSource> CandidateSources(PlaybackTicket ticket)
     {
@@ -741,7 +742,8 @@ public sealed class PlaybackService(
                     .ConfigureAwait(false);
             }
 
-            return await exitTask.ConfigureAwait(false);
+            var exit = await exitTask.ConfigureAwait(false);
+            return exit;
         }
         finally
         {

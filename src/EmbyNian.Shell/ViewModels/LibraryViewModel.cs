@@ -327,6 +327,14 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// </summary>
     public Visibility SearchVisibility => Show(_request?.IsSearch == true);
 
+    /// <summary>
+    /// 搜索框旁边那个「我的媒体库 / MoviePilot」分段切换在不在。只有搜索页、而且用户在设置里开了 MoviePilot
+    /// 时才出现；没接 MoviePilot 的话这一页和从前一模一样。判据留在这里而不是页面，和 <see cref="SearchVisibility"/>
+    /// 一伙 —— 换一个请求或改了设置就重问一次。
+    /// </summary>
+    public Visibility MoviePilotTabsVisibility =>
+        Show(_request?.IsSearch == true && _settings?.Settings.MoviePilot.Enabled == true);
+
     /// <summary>What the box holds, so it survives the page being rebuilt around it.</summary>
     [ObservableProperty]
     public partial string SearchText { get; set; }
@@ -408,6 +416,7 @@ public sealed partial class LibraryViewModel : PageViewModel
             : request.Row is not null ? "这里还没有看过的内容"
             : "这里没有内容";
         OnPropertyChanged(nameof(SearchVisibility));
+        OnPropertyChanged(nameof(MoviePilotTabsVisibility));
 
         // 这两颗键在不在，也是这一页的身份说的（见 SortFilterVisibility）—— 换一个请求就得重问一次。
         OnPropertyChanged(nameof(SortFilterVisibility));

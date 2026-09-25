@@ -64,14 +64,6 @@ public static class EmbyUrl
             ("tag", tag));
     }
 
-    public static Uri UserImage(Uri apiBase, string userId, string? tag, int maxWidth)
-    {
-        return Combine(apiBase, $"Users/{userId}/Images/Primary",
-            ("maxWidth", maxWidth.ToString()),
-            ("quality", "90"),
-            ("tag", tag));
-    }
-
     internal static string NormalizeSubtitleExtension(string codec) => codec.ToLowerInvariant() switch
     {
         "subrip" or "srt" => "srt",

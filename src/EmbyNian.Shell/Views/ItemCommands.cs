@@ -1,5 +1,6 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.MoviePilot;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -143,7 +144,7 @@ internal static partial class ItemCommands
     {
         var menu = new MenuFlyout { Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft };
 
-        foreach (var row in ItemMenu.For(card.Item))
+        foreach (var row in ItemMenu.For(card.Item, shell.MoviePilotEnabled))
         {
             if (row.Command is not { } command)
             {
@@ -255,6 +256,29 @@ internal static partial class ItemCommands
 
             case ItemCommand.OpenSeries:
                 OpenSeries(session, shell, item);
+                break;
+
+            // 新开一个窗口去 MoviePilot 找这个条目的其他版本；关键字怎么拼由 Core 定（MoviePilotVersionQuery），
+            // 窗口生命周期归外壳（同设置窗口）。
+            case ItemCommand.MoviePilotVersions:
+                shell.SearchMoviePilotVersions(item);
+                break;
+
+            // MoviePilot 手动整理：先把这个条目背后的文件和身份收齐（列表里的卡片没有路径），再交给外壳弹表单。
+            case ItemCommand.MoviePilotReorganize:
+                _ = GuardAsync(shell, "手动整理失败", async () =>
+                {
+                    var context = await AskAsync(session, (client, token) =>
+                        MoviePilotTransferCollect.CollectAsync(client, item, token)).ConfigureAwait(true);
+
+                    if (context.Files.Count == 0)
+                    {
+                        shell.Notify($"「{item.Name}」背后没有找到可整理的文件", InfoBarSeverity.Warning);
+                        return;
+                    }
+
+                    shell.ShowMoviePilotReorganize(context);
+                });
                 break;
 
             case ItemCommand.Delete:
@@ -423,6 +447,8 @@ internal static partial class ItemCommands
             ItemCommand.RefreshMetadata => 0xE72C,
             ItemCommand.ScanLibrary => 0xE895,
             ItemCommand.OpenSeries => 0xE7F4,
+            ItemCommand.MoviePilotVersions => 0xE721,
+            ItemCommand.MoviePilotReorganize => 0xE8B5,
             ItemCommand.Delete => 0xE74D,
 
             // 漏登记一条不该在屏上变成一个空框：退到「更多」那三个点。

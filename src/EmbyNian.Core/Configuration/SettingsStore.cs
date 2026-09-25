@@ -57,6 +57,42 @@ public sealed class SettingsStore(AppPaths paths, ISecretProtector protector)
         return SettingsMigration.FromJson(json, protector);
     }
 
+    /// <summary>
+    /// 把偏好设置导出成一个备份文件：只含偏好，不含身份和凭据（服务器、账号、令牌、设备 id 都不写；见
+    /// <see cref="SettingsPreferences"/>），所以这个文件可以安全带到别的机器。写的是普通的 settings.json 形状，
+    /// 自己也读得回来、也能手看。落点是用户选的，不走 <see cref="Save"/> 那条原子写 ＋ 备份主文件的路。
+    /// </summary>
+    public void SaveBackup(string path, AppSettings settings)
+    {
+        var document = SettingsPreferences.ToBackupDocument(settings);
+        document.SchemaVersion = AppSettings.CurrentSchemaVersion;
+
+        var json = JsonSerializer.Serialize(document, SettingsSerializer.WriteOptions);
+        File.WriteAllText(path, json, new UTF8Encoding(false));
+    }
+
+    /// <summary>
+    /// 读一个偏好备份文件，交回解析好的设置。和 <see cref="LoadStrict"/> 一样：认不出来的文件<b>抛异常</b>，不悄悄
+    /// 回退默认、不隔离、不写盘 —— 恢复配置要么真拿到一份能用的偏好，要么明确告诉用户这不是个有效备份。备份里没有
+    /// 凭据（身份是空的），所以 <paramref name="path"/> 里即便有点什么，protector 也没有令牌要去解；签名要它只是因为
+    /// 迁移管线统一收它。
+    /// </summary>
+    public AppSettings ReadBackup(string path)
+    {
+        var json = File.ReadAllText(path);
+        using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        });
+        if (document.RootElement.ValueKind != JsonValueKind.Object
+            || !document.RootElement.TryGetProperty("SchemaVersion", out var version)
+            || !version.TryGetInt32(out var number) || number < 2 || number > AppSettings.CurrentSchemaVersion)
+            throw new InvalidDataException("这个文件不是有效的 EmbyNian 配置备份");
+
+        return SettingsMigration.FromJson(json, protector);
+    }
+
     public void Save(AppSettings settings)
     {
         try

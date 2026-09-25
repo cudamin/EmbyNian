@@ -61,6 +61,10 @@ public sealed partial class SettingsPage : Page, IShellContent
         // 那一句，也是同一个理由：视图模型手上只有问题和答案，摆得出对话框的只有页面。
         ViewModel.UseConfirm(ConfirmDialog.For(this));
 
+        // 「关于」卡上的「备份配置文件」「恢复配置」两颗按钮要弹文件框，而文件框同样要这一页的 XamlRoot 才拿得到
+        // 窗口句柄（见 SettingsFile）。同上一句一手交出去。
+        ViewModel.UseFilePickers(SettingsFile.SaveFor(this), SettingsFile.OpenFor(this));
+
         // The two hosted entries are selected the same way a card is, so the frame that holds them has to
         // follow the selection rather than only the navigation parameter.
         ViewModel.PropertyChanged += (_, e) =>
@@ -372,6 +376,11 @@ public sealed partial class SettingsPage : Page, IShellContent
             page = typeof(DiagnosticsPage);
             parameter = new DiagnosticsRequest(services);
         }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.NotificationsCategory)
+        {
+            page = typeof(NotificationsPage);
+            parameter = new NotificationsRequest(services);
+        }
         else if (ViewModel.SelectedCategory == SettingsViewModel.DashboardCategory)
         {
             page = typeof(DashboardPage);
@@ -399,6 +408,9 @@ public sealed partial class SettingsPage : Page, IShellContent
 
     /// <summary>需求 8 的内嵌控制台，只在它正显示时不为 null；自检通过它读那一页的状态。</summary>
     internal DashboardPage? Dashboard => HostedFrame.Content as DashboardPage;
+
+    /// <summary>「通知」那一页正住在这个框里时的引用；自检读它。</summary>
+    internal NotificationsPage? Notifications => HostedFrame.Content as NotificationsPage;
 
     /// <summary>
     /// Drops whatever the hosted frame is holding, without changing which category is selected.

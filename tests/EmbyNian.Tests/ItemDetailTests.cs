@@ -483,6 +483,85 @@ internal static class ItemDetailTests
             Assert.Equal(0, ItemDetail.SourceRows(new EmbyItem()).Count);
         });
 
+        // 2026-09-24 用户令「同一个资源的不同版本排序，把最新入库的排前面」：次序由 EmbyClient 用一条
+        // /Items?Ids=… 问回每版条目的 DateCreated 后交到这里排。排的是条目自己的表 —— 详情页媒体源行、
+        // 播放器版本菜单、默认版本「同分取第一」、自动换源候选读的是同一张表。三个错法都不报错：
+        // 排成升序（最旧的排了前面）、把没问到时间的版本弄丢、同时间版本次序抖动。
+        Test("媒体源：版本表重排成最新入库在前，对象原封不动", () =>
+        {
+            var item = new EmbyItem
+            {
+                MediaSources =
+                [
+                    new MediaSource { Id = "a", ItemId = "100", Name = "先入库" },
+                    new MediaSource { Id = "b", ItemId = "300", Name = "最新" },
+                    new MediaSource { Id = "c", ItemId = "200", Name = "中间" }
+                ]
+            };
+            var originals = item.MediaSources.ToList();
+            var added = new Dictionary<string, DateTimeOffset>
+            {
+                ["100"] = new(2026, 7, 19, 0, 0, 0, TimeSpan.Zero),
+                ["200"] = new(2026, 8, 1, 0, 0, 0, TimeSpan.Zero),
+                ["300"] = new(2026, 9, 9, 0, 0, 0, TimeSpan.Zero)
+            };
+
+            ItemDetail.OrderVersionsNewestFirst(item, added);
+
+            Assert.Equal("最新", item.MediaSources[0].Name);
+            Assert.Equal("中间", item.MediaSources[1].Name);
+            Assert.Equal("先入库", item.MediaSources[2].Name);
+            // 重排只动次序不动对象：菜单勾着的、票里点着的还是原来那些实例。
+            Assert.Equal(3, item.MediaSources.Count);
+            Assert.True(originals.All(item.MediaSources.Contains), "对象还是原来那些实例");
+        });
+
+        Test("媒体源：没问到时间的沉底，同时间的保持服务器次序", () =>
+        {
+            var item = new EmbyItem
+            {
+                MediaSources =
+                [
+                    new MediaSource { Id = "a", ItemId = "100", Name = "旧" },
+                    new MediaSource { Id = "b", Name = "没有条目号" },
+                    new MediaSource { Id = "c", ItemId = "200", Name = "同日甲" },
+                    new MediaSource { Id = "d", ItemId = "300", Name = "同日乙" }
+                ]
+            };
+            var same = new DateTimeOffset(2026, 8, 8, 0, 0, 0, TimeSpan.Zero);
+            var added = new Dictionary<string, DateTimeOffset> { ["100"] = same, ["200"] = same, ["300"] = same };
+
+            ItemDetail.OrderVersionsNewestFirst(item, added);
+
+            // 同一时间：服务器给的相对次序（旧、甲、乙）一字不动；没有 ItemId 的那一版沉底。
+            Assert.Equal("旧", item.MediaSources[0].Name);
+            Assert.Equal("同日甲", item.MediaSources[1].Name);
+            Assert.Equal("同日乙", item.MediaSources[2].Name);
+            Assert.Equal("没有条目号", item.MediaSources[3].Name);
+        });
+
+        Test("媒体源：一版、或什么时间都没问到，就是原样", () =>
+        {
+            var single = new EmbyItem { MediaSources = [new MediaSource { Id = "a", ItemId = "100", Name = "独一版" }] };
+            ItemDetail.OrderVersionsNewestFirst(single, new Dictionary<string, DateTimeOffset>
+            {
+                ["100"] = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+            });
+            Assert.Equal("独一版", single.MediaSources[0].Name);
+
+            var silent = new EmbyItem
+            {
+                MediaSources =
+                [
+                    new MediaSource { Id = "a", Name = "第一版" },
+                    new MediaSource { Id = "b", Name = "第二版" }
+                ]
+            };
+            ItemDetail.OrderVersionsNewestFirst(silent, new Dictionary<string, DateTimeOffset>());
+            Assert.Equal("第一版", silent.MediaSources[0].Name);
+            Assert.Equal("第二版", silent.MediaSources[1].Name);
+        });
+
         Test("媒体源：默认源按引用命中，与 id 无关", () =>
         {
             var item = new EmbyItem
