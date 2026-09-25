@@ -18,7 +18,7 @@ telegram 发布频道：https://t.me/EmbyNian
 
 **字幕筛选** — 字幕优先级筛选，排除繁体中文，优先选择双语字幕、特效字幕。
 
-**MoviePilot** — 通过调用MoviePilot API内置多个功能的快捷键，提高片库管理效率。
+**MoviePilot API调用** — 通过调用MoviePilot API内置多个功能的快捷键，提高片库管理效率。
 
 **界面** — 五套深色配色墨绿、纯黑、午夜、石墨、紫夜，首页轮播图。
 
