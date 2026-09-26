@@ -66,10 +66,9 @@ public static class MpvOutputOptions
 
     public static readonly MpvChoice[] Renderers =
     [
-        new(Inherit, "自动挑选（Windows 上是 GPU）"),
-        new("gpu-next", "GPU-Next（新，画质更好）"),
-        new("gpu", "GPU（兼容性最好）"),
-        new("dmabuf-wayland", "DMAbuf（仅 Wayland）")
+        new(Inherit, "自动（由外部 mpv 版本决定）"),
+        new("gpu-next", "GPU-Next"),
+        new("gpu", "GPU（兼容回退）")
     ];
 
     public static readonly MpvChoice[] GpuApis =
@@ -84,17 +83,35 @@ public static class MpvOutputOptions
     [
         new(Inherit, "不指定（等同纯软件解码）"),
         new("auto-safe", "自动（推荐）"),
+        new("auto-copy-safe", "自动（复制回内存，兼容滤镜）"),
         new("d3d11va", "D3D11VA"),
         new("d3d11va-copy", "D3D11VA（复制回内存）"),
+        new("d3d12va-copy", "D3D12VA（复制回内存）"),
         new("dxva2", "DXVA2"),
-        new("nvdec", "NVDEC（NVIDIA）"),
+        new("nvdec", "NVDEC（NVIDIA，需匹配图形接口）"),
+        new("nvdec-copy", "NVDEC（复制回内存）"),
         new("vulkan", "Vulkan"),
         new(Off, "关闭（纯软件解码）")
     ];
 
+    public static readonly MpvChoice[] DeinterlaceModes =
+    [
+        new("no", "关闭"), new("auto", "自动（仅检测为隔行时处理）"), new("yes", "强制开启（逐行片源也处理）")
+    ];
+
+    public static readonly MpvChoice[] DitherDepths =
+    [
+        new("auto", "自动（按输出位深）"), new("8", "8 bit"), new("10", "10 bit")
+    ];
+
+    public static readonly MpvChoice[] DebandStrengths =
+    [
+        new("low", "低（保留更多细节）"), new("medium", "中"), new("high", "高（更强，可能抹掉细节）")
+    ];
+
     public static readonly MpvChoice[] OutputLevels =
     [
-        new(Inherit, "跟随片源标记"),
+        new(Inherit, "自动（PC 全范围）"),
         new("full", "PC（0-255）"),
         new("limited", "电视（16-235）")
     ];
@@ -133,7 +150,7 @@ public static class MpvOutputOptions
     public static readonly MpvChoice[] InterpolationKernels =
     [
         new("oversample", "过采样（最省，运动最干净）"),
-        new("mitchell", "Mitchell（mpv 自己的默认，均衡）"),
+        new("mitchell", "Mitchell（均衡）"),
         new("catmull_rom", "Catmull-Rom（更锐一档）"),
         new("bicubic", "双三次"),
         new("spline36", "Spline36（更锐，轻微振铃）"),
@@ -146,7 +163,7 @@ public static class MpvOutputOptions
     /// </summary>
     public static readonly MpvChoice[] Dithers =
     [
-        new(Inherit, "不抖动（直接截断到显示位深）"),
+        new(Inherit, "继承画质预设（未指定时为 Fruit）"),
         new("fruit", "Fruit（推荐）"),
         new("ordered", "有序抖动（最省）"),
         new("error-diffusion", "误差扩散（最好，最费）"),
@@ -173,9 +190,9 @@ public static class MpvOutputOptions
     /// </summary>
     public static readonly MpvChoice[] HdrModes =
     [
-        new(Inherit, "不干预（由 mpv 自己决定）"),
-        new("tonemap", "映射到 SDR（推荐）"),
-        new("passthrough", "直通给显示器（需要 HDR 屏）")
+        new(Inherit, "自动适配显示器"),
+        new("tonemap", "映射到 SDR"),
+        new("passthrough", "HDR 输出（按显示器能力映射）")
     ];
 
     public static readonly MpvChoice[] Channels =
@@ -449,7 +466,7 @@ public static class MpvOutputOptions
         Add(options, "gpu-api", video.GpuApi);
         Add(options, "hwdec", video.HardwareDecoding);
         Add(options, "video-output-levels", video.OutputLevels);
-        if (video.Deinterlace) Add(options, "deinterlace", "yes");
+        if (video.DeinterlaceMode is "auto" or "yes") Add(options, "deinterlace", video.DeinterlaceMode);
 
         // 视频同步 and 插值 are decided together by ResolveSync — one writer, so 「设置页显示的值」 and
         // 「真正发出去的值」 cannot drift apart.
@@ -475,9 +492,9 @@ public static class MpvOutputOptions
 
         Add(options, "video-sync", sync);
 
-        AddDither(options, video.Dither);
-        AddDeband(options, video.Deband, source, animated);
-        AddHdr(options, video.HdrMode, source);
+        AddDither(options, video.Dither, video.DitherDepth);
+        AddDeband(options, video.Deband, source, animated, video.DebandStrength);
+        options.AddRange(HdrOptions.Build(video, source));
 
         // 宽于 16:9 的片源默认裁切填充. Only for a source that is actually letterboxed here — sent for a 16:9 file
         // it would crop the picture for nothing. mpv's own default is 0, and every playback is a fresh mpv, so
@@ -488,7 +505,8 @@ public static class MpvOutputOptions
         // into that profile's space, so HDR 直通 stops being 直通. Only ever sent as 「on」 — MpvBaseline
         // states icc-profile-auto=no on every launch, so 「off」 is already the floor and sending it again
         // here would be two layers writing one option for no gain. Same shape as every other bool here.
-        if (video.IccProfileAuto) Add(options, "icc-profile-auto", "yes");
+        if (video.IccProfileAuto && !HdrOptions.OwnsColorSpace(video, source))
+            Add(options, "icc-profile-auto", "yes");
 
         if (video.NetworkCacheMegabytes > 0)
         {
@@ -574,10 +592,14 @@ public static class MpvOutputOptions
     /// surface rather than a guessed number; it is also mpv's own default here, and naming it explicitly
     /// is what makes 「关闭」 reversible without a restart.
     /// </summary>
-    private static void AddDither(List<KeyValuePair<string, string>> options, string dither)
+    private static void AddDither(List<KeyValuePair<string, string>> options, string dither, string depth)
     {
         var value = dither.Trim();
-        if (value.Length == 0) return;
+        if (value.Length == 0)
+        {
+            if (depth is "8" or "10") Add(options, "dither-depth", depth);
+            return;
+        }
 
         if (value.Equals(Off, StringComparison.OrdinalIgnoreCase))
         {
@@ -585,7 +607,7 @@ public static class MpvOutputOptions
             return;
         }
 
-        Add(options, "dither-depth", Auto);
+        Add(options, "dither-depth", depth is "8" or "10" ? depth : Auto);
         Add(options, "dither", value);
 
         // 6 is the size the pattern repeats at. Larger is less visible and costs a bigger LUT; this is
@@ -598,7 +620,7 @@ public static class MpvOutputOptions
     /// removes the banding a low-bitrate 8-bit encode leaves in a gradient without visibly softening
     /// detail. mpv's own defaults are three times as expensive.
     /// </summary>
-    private static void AddDeband(List<KeyValuePair<string, string>> options, string mode, SourceProfile? source, bool animated)
+    private static void AddDeband(List<KeyValuePair<string, string>> options, string mode, SourceProfile? source, bool animated, string strength)
     {
         var value = mode.Trim();
         if (value.Length == 0) return;
@@ -624,38 +646,10 @@ public static class MpvOutputOptions
         }
 
         Add(options, "deband", "yes");
-        Add(options, "deband-iterations", "1");
-        Add(options, "deband-threshold", "48");
+        Add(options, "deband-iterations", strength == "high" ? "3" : strength == "medium" ? "2" : "1");
+        Add(options, "deband-threshold", strength is "medium" or "high" ? "64" : "48");
         Add(options, "deband-range", "16");
-        Add(options, "deband-grain", "16");
-    }
-
-    /// <summary>
-    /// HDR 处理, only for a source Emby reports as HDR. Nothing is sent for an SDR file: every one of
-    /// these options would be a no-op on it, and sending a tone-mapping curve for a file that has no
-    /// tones to map only makes the log harder to read.
-    /// </summary>
-    private static void AddHdr(List<KeyValuePair<string, string>> options, string mode, SourceProfile? source)
-    {
-        var value = mode.Trim();
-        if (value.Length == 0 || source is not { IsHdr: true }) return;
-
-        if (value.Equals("passthrough", StringComparison.OrdinalIgnoreCase))
-        {
-            // Hand the display the HDR signal and let it do the mapping. clip is the only honest
-            // curve here: anything else would tone-map twice.
-            Add(options, "target-colorspace-hint", "yes");
-            Add(options, "tone-mapping", "clip");
-            Add(options, "hdr-compute-peak", Off);
-            return;
-        }
-
-        Add(options, "target-colorspace-hint", Off);
-        Add(options, "tone-mapping", Auto);
-
-        // Measures each scene's real peak on the GPU instead of trusting the file's metadata, which is
-        // routinely wrong by a factor of several. auto lets mpv skip it where it would cost too much.
-        Add(options, "hdr-compute-peak", Auto);
+        Add(options, "deband-grain", strength is "medium" or "high" ? "24" : "16");
     }
 
     /// <summary>
@@ -811,6 +805,8 @@ public static class MpvOutputOptions
         }
 
         if (!video.Interpolation) return (chosen, false, null);
+        if (chosen.Length > 0 && !chosen.StartsWith("display-", StringComparison.Ordinal))
+            return (chosen, false, "当前选择的是音频同步，插值不会启用；请选择显示同步或不指定");
 
         return (chosen.Length == 0 ? "display-resample" : chosen, true, null);
     }

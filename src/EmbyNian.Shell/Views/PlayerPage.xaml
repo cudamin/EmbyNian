@@ -96,6 +96,8 @@
         <SolidColorBrush x:Key="PlayerRailBrush" />
         <SolidColorBrush x:Key="PlayerPeekBrush" />
         <SolidColorBrush x:Key="PlayerSkipBrush" />
+        <SolidColorBrush x:Key="PlayerSkipHoverBrush" />
+        <SolidColorBrush x:Key="PlayerSkipPressedBrush" />
         <SolidColorBrush x:Key="PlayerCoverBrush" />
         <SolidColorBrush x:Key="PlayerStageBrush" />
         <!-- 退场底那一支：与 PlayerStageBrush 分开一支，因为它的色号不由播放页的调色板上，而是由
@@ -139,6 +141,31 @@
             <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets" />
             <Setter Property="FontSize" Value="16" />
         </Style>
+
+        <!-- 播放页上的输入框底是透明的（用户 2026-09-26，指字幕字体那个搜索框，原话：「集成模式播放页面的
+             搜索框背景要透明的」）。上一轮把 TextControl 一族接进角色表（09-26 第五批）时，底换成了不透明的
+             卡面色 —— 坐在设置页的卡上是那张皮该有的样子，浮在画面上就是一块板子；而这一页的规矩本来就是
+             控件浮在画面上不带底（上一条 OsdButtonStyle 的话），何况 2026-09-18 起标题条那道罩子也删了，
+             头顶没有 scrim 替它垫底。于是页面上把这四态的底压回透明：页级普通键压过应用级的主题键，
+             ThemeResource 每次进状态都会重新查找，悬停/聚焦两态跟着一起透明 —— 只压 Normal 是不够的，
+             搜索框真正干活的时候是聚焦态。字、占位字与发丝边线照旧走角色表；只影响这一页，设置页那些坐在
+             卡上的输入框照旧是卡面那张皮。下拉的建议列表住在 Popup 里（同 ComboBox 那条老账：Popup 树
+             解析不到页面资源），它用的是自己的条目资源，本来就不吃 TextControl 这几个键。 -->
+        <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
+        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+        <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent" />
+
+        <!-- 框是白的（用户 2026-09-26，原话：「改成白色的框」，紧跟上一条透明底而来）。上一条压回透明之后，
+             边线还是应用那张皮上的深色发丝（EgBorderBrush）—— 压在亮画面上看不见，这颗浮在视频上的搜索框
+             就只剩几个字。播放器自己的白有现成的角色：PlayerInkBrush 是 OSD 正文与图标那一档白（
+             #F2F4F7，不跟主题走、专为压画面而设）。四态边线全部指到它 —— StaticResource 取的是同一支
+             画刷对象，PaintPalette 改它的 Color，边线当场跟着走；禁用那态退到最淡的描边档。背景照旧透明：
+             白框透底，画面亮暗都找得到框。 -->
+        <StaticResource x:Key="TextControlBorderBrush" ResourceKey="PlayerInkBrush" />
+        <StaticResource x:Key="TextControlBorderBrushPointerOver" ResourceKey="PlayerInkBrush" />
+        <StaticResource x:Key="TextControlBorderBrushFocused" ResourceKey="PlayerInkBrush" />
+        <StaticResource x:Key="TextControlBorderBrushDisabled" ResourceKey="PlayerEdgeFaintBrush" />
 
         <!-- ================= 暂停/播放 那两个形状 =================
              「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」, and 「太丑」 was measurable
@@ -659,24 +686,40 @@
              height at all — two auto rows and its padding, so its height is whatever its buttons and its
              fonts come to. PlayerPage.PlaceOverlays measures it. The 148 that used to be here was a guess
              at that height, and one larger font in the transport row would have had this offer drawn
-             across the seek slider. -->
+             across the seek slider.
+
+             厚度加倍（用户令 2026-09-26「跳过片头/片尾的按钮厚度*2」）：垂直 padding 14→28，圆角 20→28、
+             行距 6→10、图标行距 8→10、倒计时条 2→4 一并跟上 —— 只加高不加这些，内容会在加厚后的壳里显得
+             上下两块各漂各的；水平 padding 20→24 让左右留白和新的高度成比例。占位与避让仍由 PlaceOverlays
+             量出来，这里没有需要跟着改的硬编码高度。
+
+             悬停不再变透明（用户令 2026-09-26「鼠标移到按钮上的时候背景会变成透明的」）：默认模板的
+             PointerOver/Pressed 态各拿一套系统 ThemeResource 盖底 —— 深色自定义底上就是「变透明」。修法与
+             ProbeSeekTrack 修滑杆白条同款：在按钮自己的资源字典里把那四个键按回来，底用调色板新添的
+             悬停/按下两支（同一个 Raised，悬停实一档、按下暗一档），边框照旧 PlayerEdgeStrongBrush。 -->
         <Button
             x:Name="SkipButton"
             HorizontalAlignment="Right"
             VerticalAlignment="Bottom"
             Margin="0,0,28,0"
-            Padding="16,10"
+            Padding="24,28"
             Background="{StaticResource PlayerSkipBrush}"
             BorderBrush="{StaticResource PlayerEdgeStrongBrush}"
             BorderThickness="1"
-            CornerRadius="20"
+            CornerRadius="28"
             Command="{x:Bind ViewModel.TakeSkipCommand}"
             AutomationProperties.Name="{x:Bind ViewModel.SkipCaption, Mode=OneWay}"
             Visibility="{x:Bind ViewModel.SkipVisibility, Mode=OneWay}">
-            <StackPanel Spacing="6">
-                <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button.Resources>
+                <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerSkipHoverBrush" />
+                <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerSkipPressedBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="PlayerEdgeStrongBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="PlayerEdgeStrongBrush" />
+            </Button.Resources>
+            <StackPanel Spacing="10">
+                <StackPanel Orientation="Horizontal" Spacing="10">
                     <FontIcon Glyph="&#xE893;" Style="{StaticResource OsdGlyphStyle}" />
-                    <TextBlock x:Name="SkipText" Text="{x:Bind ViewModel.SkipCaption, Mode=OneWay}" />
+                    <TextBlock x:Name="SkipText" Text="{x:Bind ViewModel.SkipCaption, Mode=OneWay}" FontSize="{StaticResource EgSubheadFontSize}" VerticalAlignment="Center" />
                     <TextBlock x:Name="SkipTip" Text="{x:Bind ViewModel.SkipTip, Mode=OneWay}" Foreground="{StaticResource PlayerInkFaintBrush}" FontSize="{StaticResource EgCaptionFontSize}" VerticalAlignment="Center" />
                 </StackPanel>
 
@@ -688,7 +731,7 @@
                      and 「跳过片头 15 秒后消失 · 87%」 is not the button's name. -->
                 <ProgressBar
                     x:Name="SkipCountdown"
-                    Height="2"
+                    Height="4"
                     Maximum="1"
                     Minimum="0"
                     Value="{x:Bind ViewModel.SkipRemaining, Mode=OneWay}"
@@ -889,10 +932,48 @@
                         </Button.Flyout>
                     </Button>
 
+                    <!-- 倍速轮盘（2026-09-25 用户令「改为竖置的滚动条滚轮，刻度居中，使用鼠标滚轮翻动或者
+                         鼠标左键长按拖拽」）。刻度带在 Core 的 SpeedWheel 手里：快在上、慢在下，当前值停
+                         在正中的高亮带里；滚轮向上与拖拽向下是同一个方向（露出上面更快的那几根），算术与
+                         手势的接线见 PlayerPage.SpeedWheel.cs。菜单那一版（MenuFlyout 八行）被这一版取代：
+                         刻度是给「扫一眼就拨到哪一档」用的，一列菜单行做不到。 -->
                     <Button x:Name="SpeedButton"
                 x:Uid="PlayerPage_SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource OsdButtonStyle}">
                         <Button.Flyout>
-                            <MenuFlyout x:Name="SpeedMenu" Placement="Top" Opening="OnSpeedMenuOpening" />
+                            <Flyout x:Name="SpeedWheelFlyout" Placement="Top" Opened="OnSpeedWheelOpened" Closed="OnSpeedWheelClosed">
+                                <Flyout.FlyoutPresenterStyle>
+                                    <Style TargetType="FlyoutPresenter">
+                                        <!-- 壳一层全部脱掉：底、边、内边距、圆角、阴影都归下面这块面板自己画，
+                                             否则菜单壳的浅色底会从轮盘四周露出一圈。 -->
+                                        <Setter Property="Background" Value="Transparent" />
+                                        <Setter Property="BorderThickness" Value="0" />
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="CornerRadius" Value="0" />
+                                        <Setter Property="IsDefaultShadowEnabled" Value="False" />
+                                    </Style>
+                                </Flyout.FlyoutPresenterStyle>
+                                <Border
+                                    x:Name="SpeedWheelPanel"
+                                    Width="104"
+                                    Height="252"
+                                    Background="{StaticResource PlayerRailBrush}"
+                                    CornerRadius="20">
+                                    <Grid>
+                                        <!-- 中线高亮带：当前值停的那一格。IsHitTestVisible=False —— 拖拽的
+                                             手从头到尾只归面板一家记，刻度与高亮带都不许抢。 -->
+                                        <Border
+                                            Height="40"
+                                            Margin="10,0"
+                                            VerticalAlignment="Center"
+                                            Background="{StaticResource PlayerTrackBrush}"
+                                            CornerRadius="10"
+                                            IsHitTestVisible="False" />
+                                        <!-- 刻度带：刻度由代码摆上来（PlayerPage.SpeedWheel.BuildSpeedWheel），
+                                             Canvas.Top 按 SpeedWheel.TickOffset 逐拍走。 -->
+                                        <Canvas x:Name="SpeedWheelTrack" />
+                                    </Grid>
+                                </Border>
+                            </Flyout>
                         </Button.Flyout>
                     </Button>
 

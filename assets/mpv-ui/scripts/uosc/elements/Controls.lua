@@ -55,13 +55,14 @@ function Controls:init_options()
 		-- 绑定名 embynian-ui-… 与消息名 embynian-… 分家是硬规矩：同名会被 script-message 喂回来自激（见 main.lua）。
 		['embynian-ui-prev'] = 'command:skip_previous:script-binding uosc/embynian-ui-prev?' .. t('Previous'),
 		['embynian-ui-next'] = 'command:skip_next:script-binding uosc/embynian-ui-next?' .. t('Next'),
-		['embynian-ui-episodes'] = 'command:list_alt:script-binding uosc/embynian-ui-episodes?' .. t('Episodes'),
+		['embynian-ui-episodes'] = 'command:list_alt:script-binding uosc/embynian-ui-episodes?选集',
 		-- EMBYNIAN[controls] — 控制条上新增的两颗（2026-09-23）：版本与画面菜单。两者都只是把宿主那两条
 		-- 既有通道摆到按钮上 —— 画面菜单与集成模式的「更多」按钮、独占模式的右键点画面是同一份
 		-- PlayerMenuCatalog（绑定同一个 uosc/embynian-ui-picture-menu）；版本菜单向宿主要这一条目的媒体源。
 		-- tooltip 写死中文：t() 的译文只在 intl/<slang>.json 命中时才有（见 main.lua
-		-- create_default_menu_items 的同一条注释），这两颗新补丁不跟它走；图标名是 Material Icons 的名字，
+		-- create_default_menu_items 的同一条注释），这几颗新补丁不跟它走；图标名是 Material Icons 的名字，
 		-- settings 与集成模式的「更多」同形，movie_filter 与上游的剪辑版本同形。
+		-- 选集那颗 2026-09-26 起也写死中文（用户令「改名为 选集」，原来走 t('Episodes') 落在英文上）。
 		['embynian-ui-versions'] = 'command:movie_filter:script-binding uosc/embynian-ui-versions?版本',
 		['embynian-ui-picture-menu'] = 'command:settings:script-binding uosc/embynian-ui-picture-menu?画面菜单',
 		first = 'command:first_page:script-binding uosc/first?' .. t('First'),

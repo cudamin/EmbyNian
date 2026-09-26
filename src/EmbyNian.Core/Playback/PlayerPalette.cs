@@ -89,7 +89,13 @@ public static class PlayerPalette
         ("PlayerPeekBrush", Panel.WithAlpha(0xF2)),
 
         // 「跳过片头」那颗按钮，和换集时把上一集最后一帧盖住的那层（这一层必须是全不透明的）。
+        // 悬停/按下两支跟着 2026-09-26 的键位改动一起来（用户令「鼠标移到按钮上的时候背景会变成透明的」）：
+        // 默认 Button 模板的 PointerOver/Pressed 态各拿一套系统 ThemeResource 盖底，深色自定义底上就是「变透明」。
+        // 修法是把态键按回按钮自己的资源字典（ProbeSeekTrack 修滑杆白条的同一手法），这两支就是按回去的底 ——
+        // 同一个 Raised：悬停实一档（0xE6→0xF2，等被按的东西亮半分），按下暗一档（0xE6→0xD9）。
         ("PlayerSkipBrush", Raised.WithAlpha(0xE6)),
+        ("PlayerSkipHoverBrush", Raised.WithAlpha(0xF2)),
+        ("PlayerSkipPressedBrush", Raised.WithAlpha(0xD9)),
         ("PlayerCoverBrush", Film.WithAlpha(0xFF)),
 
         // 播放页自己那块舞台底（2026-09-18，进出页面的转场要用它）：和换集那层遮挡同色、同样必须全不透明，

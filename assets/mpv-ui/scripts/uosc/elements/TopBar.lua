@@ -29,6 +29,11 @@ function TopBar:init()
 	local min = {icon = 'minimize', command = function() mp.command('cycle window-minimized') end}
 	self.buttons = options.top_bar_controls == 'left' and {close, max, min} or {min, max, close}
 
+	-- EMBYNIAN[topbar-back] — 左上角返回按钮：独占窗口是独立顶层窗，退出 mpv 即回到外壳（详情页），
+	-- 与集成模式左上角的返回同位同义（用户令 2026-09-26「给独占模式左上角加个返回按钮」）。图标用
+	-- arrow_back_ios（uosc 上一集按钮同款，装箱的 Material Icons Round 里确有此字形）。
+	self.back_button = {icon = 'arrow_back_ios', command = function() mp.command('quit') end}
+
 	self:register_observers()
 	self:decide_enabled()
 	self:update_dimensions()
@@ -267,6 +272,37 @@ function TopBar:render()
 
 			button_ax = button_ax + self.size
 		end
+	end
+
+	-- EMBYNIAN[topbar-back] — 返回按钮画在窗口标题左侧（点它退出 mpv＝回到外壳详情页）。放在窗口控制块之后、
+	-- 标题之前：控制块在右侧（top_bar_controls='right'，独占默认）时不动 ax，返回按钮就落在最左；画法与
+	-- 上面 min/max/close 一致（悬停反色，非悬停淡底），画完把标题起点 ax 右移一个按钮宽。
+	do
+		local rect = {ax = ax, ay = ay, bx = ax + self.size, by = by}
+		local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
+		-- EMBYNIAN[topbar-back] — 返回键始终带一块可见背景：uosc 窗口按钮默认 opacity.controls=0，静止时只有
+		-- 图标、没有底（压在亮画面上看不清），用户要「给返回键加背景」。静止＝半透深底＋亮箭头，悬停＝翻成亮底暗箭头。
+		local bg_opacity = is_hover and 1 or 0.55
+		local button_fg = is_hover and bg or fg
+		local button_bg = is_hover and fg or bg
+
+		cursor:zone('primary_click', rect, self.back_button.command)
+
+		local bg_size = self.size - margin
+		local bg_ax, bg_ay = rect.ax + margin, rect.ay + margin
+		local bg_bx, bg_by = bg_ax + bg_size, bg_ay + bg_size
+
+		ass:rect(bg_ax, bg_ay, bg_bx, bg_by, {
+			color = button_bg, opacity = visibility * bg_opacity, radius = state.radius,
+		})
+		ass:icon(bg_ax + bg_size / 2, bg_ay + bg_size / 2, bg_size * 0.5, self.back_button.icon, {
+			color = button_fg,
+			border_color = button_bg,
+			opacity = visibility,
+			border = options.text_border * state.scale,
+		})
+
+		ax = ax + self.size
 	end
 
 	-- Window title

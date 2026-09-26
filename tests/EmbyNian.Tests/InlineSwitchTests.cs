@@ -14,6 +14,48 @@ internal static class InlineSwitchTests
 {
     internal static void Register()
     {
+        // 接管入口闸：交接（HandOver 完成旧收场信号）是快路的**正常入口** —— 那是叫醒监视去发停止
+        // 上报，不是实例在收场。真正要挡的是用户叫停过、没交接但信号已完成、实例已销毁。从前这道
+        // 闸把「已交接且信号已完成」也拒了，同窗换片整个被自己挡死。
+        TestHarness.Test("换片接管：交接后照常接下一票，叫停与真收场才让位", () =>
+        {
+            Assert.True(InlineSwitch.CanTakeOver(stopRequested: false, handedOver: true, exitCompleted: true, destroyed: false),
+                "已交接且旧信号完成 —— 正是快路的正常入口");
+            Assert.True(InlineSwitch.CanTakeOver(stopRequested: false, handedOver: false, exitCompleted: false, destroyed: false),
+                "正常播放中");
+            Assert.False(InlineSwitch.CanTakeOver(stopRequested: true, handedOver: true, exitCompleted: true, destroyed: false),
+                "用户叫停过，quit 在路上");
+            Assert.False(InlineSwitch.CanTakeOver(stopRequested: false, handedOver: false, exitCompleted: true, destroyed: false),
+                "没交接但信号完成 —— 文件真放完或报错，没有可接续的东西");
+            Assert.False(InlineSwitch.CanTakeOver(stopRequested: false, handedOver: true, exitCompleted: true, destroyed: true),
+                "实例已销毁");
+            Assert.False(InlineSwitch.CanTakeOver(stopRequested: true, handedOver: false, exitCompleted: false, destroyed: false),
+                "叫停优先于一切");
+        });
+
+        // 截图模板随片名走，不进必须相等的启动基线：常规换集集名不同，把它算进基线就把最常见的
+        // 同窗换片挡死在签名那一步。换片时由 PerFile 按新票重写。
+        TestHarness.Test("换片签名：截图模板不算基线，换片时按新票重写", () =>
+        {
+            Assert.True(InlineSwitch.PerFileSignatureNames.Contains("screenshot-template"),
+                "截图模板必须在随片重写的名单上");
+
+            var next = Request() with
+            {
+                PlayerOptions =
+                [
+                    new("screenshot-directory", @"C:\shots"),
+                    new("screenshot-format", "png"),
+                    new("screenshot-template", "这一集 %wH.%wM.%wS-%02n"),
+                ],
+            };
+            var perFile = InlineSwitch.PerFile(next).ToDictionary(entry => entry.Key, entry => entry.Value);
+            Assert.Equal("这一集 %wH.%wM.%wS-%02n", perFile["screenshot-template"], "换片时按新票的集名重写模板");
+
+            var bare = InlineSwitch.PerFile(Request()).ToDictionary(entry => entry.Key, entry => entry.Value);
+            Assert.False(bare.ContainsKey("screenshot-template"), "票里没有截图选项（功能没开）就不写，签名本来就不等");
+        });
+
         // 签名逐项相等才允许同一个实例换片：管线、管线必需项、Lua UI 项、票里选项表的基线部分。
         // 任何一条不同都只能关窗重开 —— mpv 的启动选项在 initialize 之后改不动。
         TestHarness.Test("换片签名：四条全等才接，差一条就不接", () =>

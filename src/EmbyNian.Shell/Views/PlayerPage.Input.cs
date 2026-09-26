@@ -241,11 +241,23 @@ public sealed partial class PlayerPage : IWin32KeySink
         // 按下不在画面上（控件、标题条、浮层）：这一下与「点击画面暂停」无关，别让它把上一拍的账留给后面。
         _wakingTap = false;
 
+        // 点在跳过按钮上的那一下不叫控件（用户令 2026-09-26「点击按钮跳过片头/片尾的时候 进度条会出来闪一下」）：
+        // 这一按要的是「跳」，跟回车/Esc 收提示同一句话（Dispatch 那两支 wakeChrome=false）——控件被这一按
+        // 叫出来、跳转后又被空闲钟收走，就是那一眼闪。与 ChromeReveal 的 Skip 支（指针压在按钮上不点亮
+        // bar）闭环；offer 不在时按钮 Collapsed，<see cref="Covers"/> 自己答假，其余按下照旧。
+        if (PressOnSkipButton(point)) return;
+
         // A press is a hand even when it moves nothing, and the show line should say so: label it before
         // Render writes the line, exactly as the poll labels its own wake before the reseed.
         if (_cursorHidden) _woke = "点击（画面上按下）";
         if (_chrome.WakeFully(Now)) Render();
     }
+
+    /// <summary>
+    /// 这一按是不是落在跳过按钮上。单独一个方法只为了让自检能问同一句话 —— <see cref="OnPointerPressed"/>
+    /// 拿它决定「叫不叫控件」，探针在摆好的 offer 上核对几何与可见性两问都在位。
+    /// </summary>
+    internal bool PressOnSkipButton(Point point) => Covers(SkipButton, point);
 
     // ---- 拖动标题栏移动窗口 -------------------------------------------------------
     //
@@ -390,6 +402,20 @@ public sealed partial class PlayerPage : IWin32KeySink
             return;
         }
 
+        // 有跳过片头/片尾浮层时，点画面先把它收掉，且这一下**不暂停**（用户令 2026-09-25：「点击视频画面
+        // 自动隐藏跳过按钮，不要触发暂停/开始」）。等同键盘 Esc（见 Dispatch 里 VirtualKey.Escape when
+        // SkipOffered，2026-09-26 起关闭提示归 Esc，原先归 N）—— 点画面的
+        // 意思是「别挡着，也别停」。收掉走 DismissSkip（内部 _skips.Decline），不是光把 SkipOffered 抹掉：
+        // 10Hz 那拍 ApplySkipOffer 会照 SkipCoordinator 的状态把浮层再挂回来，只有 Decline 记下「这一段
+        // 谢绝了」才压得住。攥着的那一下也一并作废，免得被紧接着的双击当成第一拍去撤。
+        if (ViewModel.SkipOffered)
+        {
+            ViewModel.DismissSkip();
+            DropTapHold();
+            e.Handled = true;
+            return;
+        }
+
         TapPicture();
         e.Handled = true;
     }
@@ -494,55 +520,80 @@ public sealed partial class PlayerPage : IWin32KeySink
         // way out of the box and then out of fullscreen.
         if (_typing) return;
 
-        if (!Dispatch(e.Key)) return;
+        if (!Dispatch(e.Key, out var wake)) return;
 
         e.Handled = true;
 
         // A keyboard command has no pointer behind it, so the chrome is shown wherever the pointer
         // happens to be resting — otherwise pressing Space over the middle of the picture changes the
-        // playback state with nothing on screen to say so.
+        // playback state with nothing on screen to say so. 收提示的两颗例外不叫控件（wake=false）：
+        // 「按回车/ESC 后会唤出进度条」（用户令 2026-09-26），见 Dispatch。
         if (_cursorHidden) _woke = $"按键 {e.Key}";
-        if (_chrome.WakeFully(Now)) Render();
+        if (wake && _chrome.WakeFully(Now)) Render();
     }
 
     /// <summary>
-    /// 这一下有没有当成播放器键位处理掉。固定键在前（原样，不查修饰键，和改造前一致）：Esc 全屏则退出全屏、
-    /// 否则停止播放（Esc 是全局「退出」、也是设置里重绑方框的取消键）；Y 只在出现跳过提示时确认跳过、N 只在
-    /// 出现跳过提示时关掉它（Y 接受、N 拒绝，成一对）—— 都是「没提示时它落到下面那张表」。
+    /// 这一下有没有当成播放器键位处理掉。固定键在前（原样，不查修饰键，和改造前一致）：Esc 跳过提示立着时
+    /// 先归「关闭提示」（用户令 2026-09-26「把关闭跳过按钮从 N 改成 ESC」），没提示时才是老三样 —— 全屏则退
+    /// 全屏、否则停止播放（Esc 是全局「退出」、也是设置里重绑方框的取消键）；回车只在出现跳过提示时确认跳过
+    /// （原 Y，用户令 2026-09-26「把确认跳过片头/片尾从 Y 改成回车」）—— 没提示时它落到下面那张表。
     /// <para>
-    /// Esc、Y 是 <see cref="ShortcutCatalog.ReservedKeys"/> 里的保留键，可重绑那张表永远不会绑上它们；<b>N 不是</b>
-    /// —— 它默认就是「下一集」（<c>next-episode</c>）。所以 N 这一支只在**提示立着**时抢下这一下当「关闭」，其余
-    /// 时候（含没提示）落到下面那张表、照常走它绑到的动作。跳过提示只立 15 秒、又多在片头/片尾，那一小段里把 N
-    /// 让给「关闭提示」是有意的取舍：真要下一集，提示收掉后再按一下 N 即可。
+    /// Esc、回车是 <see cref="ShortcutCatalog.ReservedKeys"/> 里的保留键，可重绑那张表永远不会绑上它们；
+    /// <b>N 不是</b> —— 它默认就是「下一集」（<c>next-episode</c>）。原来 N 兼管「关闭跳过提示」那一支已随
+    /// 这条改动退役：提示只立 15 秒、又多在片头/片尾，那一小段里把 Esc 让给「关闭提示」是有意的取舍 ——
+    /// 真要退全屏/下一集，提示收掉后再按一下即可。
+    /// </para>
+    /// <para>
+    /// <paramref name="wakeChrome"/> 答的是「这一下要不要把整套控件叫出来」：跳过提示的那两颗不要 ——
+    /// 「按回车/ESC 后会唤出进度条」（用户令 2026-09-26）说的就是它们。收提示是「别挡着」，不是「要看控件」，
+    /// 与点画面收提示（OnTapped 那一支，从来不给宽限）同一句话；其余键照旧给宽限 —— 退全屏、暂停这些命令
+    /// 没有指针在场时，控件是唯一的回执。
     /// </para>
     /// <para>
     /// 其余键走可重绑那张表：认不出的键、查不到动作、或没有处理器的，返回 false，那一下照旧不被吃掉。
     /// </para>
     /// </summary>
-    private bool Dispatch(VirtualKey key)
+    private bool Dispatch(VirtualKey key, out bool wakeChrome)
     {
         switch (key)
         {
+            // 提示立着时 Esc 先归「关闭跳过提示」（用户令 2026-09-26），排在退出全屏/停止之前 ——
+            // 与点画面收提示（OnTapped 那一支）同一句话：这一下的意思是「别挡着」，不是「退出」。
+            // 这两支都不给控件宽限（wakeChrome=false）。
+            case VirtualKey.Escape when ViewModel.SkipOffered:
+                ViewModel.DismissSkip();
+                wakeChrome = false;
+                return true;
+
             case VirtualKey.Escape when ViewModel.NativeWindowPlayback:
                 ViewModel.ExitNativeFullscreenOrStop();
-                return true;
+                break;
 
             case VirtualKey.Escape when _window!.Fullscreen || _fullscreenWanted == true:
                 SetFullscreen(false);
-                return true;
+                break;
 
             case VirtualKey.Escape:
                 ViewModel.Stop();
-                return true;
+                break;
 
-            case VirtualKey.Y when ViewModel.SkipOffered:
+            case VirtualKey.Enter when ViewModel.SkipOffered:
                 ViewModel.TakeSkip();
+                wakeChrome = false;
                 return true;
 
-            case VirtualKey.N when ViewModel.SkipOffered:
-                ViewModel.DismissSkip();
-                return true;
+            default:
+                return ShortcutCommand(key, out wakeChrome);
         }
+
+        wakeChrome = true;
+        return true;
+    }
+
+    /// <summary>Dispatch 的后半截：可重绑那张表的查找与执行。单独一个方法只是为了让上面的 switch 能提前返回。</summary>
+    private bool ShortcutCommand(VirtualKey key, out bool wakeChrome)
+    {
+        wakeChrome = true;
 
         // 修饰键 KeyRoutedEventArgs 不带，从 Native 读（同改造前 Z/X 那套）。认不出的键当没有快捷键。
         if (KeyStrokeInterop.Token(key) is not { } token) return false;
@@ -676,12 +727,13 @@ public sealed partial class PlayerPage : IWin32KeySink
     void IWin32KeySink.Handle(int virtualKey)
     {
         var key = (VirtualKey)virtualKey;
-        if (!Attached || _inputSuspended || !Dispatch(key)) return;
+        if (!Attached || _inputSuspended || !Dispatch(key, out var wake)) return;
 
         // 姓名牌：兜底路自己的名字，和 XAML 那两路（「按键 X」「空格（播放/暂停）」）分得开 ——
-        // 以后日志里见到「（Win32 兜底）」就是焦点掉出岛的那一阵。
+        // 以后日志里见到「（Win32 兜底）」就是焦点掉出岛的那一阵。收提示那两颗不给控件宽限，
+        // 与岛内那条路同一句话（wake=false）。
         if (_cursorHidden) _woke = key == VirtualKey.Space ? "空格（播放/暂停，Win32 兜底）" : $"按键 {key}（Win32 兜底）";
-        if (_chrome.WakeFully(Now)) Render();
+        if (wake && _chrome.WakeFully(Now)) Render();
     }
 
     /// <summary>

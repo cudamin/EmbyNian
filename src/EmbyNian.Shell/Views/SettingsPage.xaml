@@ -48,42 +48,41 @@
         </Style>
 
         <!--
-          **一行设置就是一张卡**（2026-09-06 按 WinUI-Gallery 那套重排，「整套重画」）。Gallery 的设置页是
-          「一个分组标题 ＋ 一叠各自带底色和细边的行」（那套里叫 SettingsCard），而这一页从前是「一张大卡
-          ＋ 里面一叠没有边界的行」：八十行只靠 10 像素的间距分家，长一点的说明折两行之后，上下两行的字就
-          连成了一片。
+          **行不再自带卡皮**（2026-09-25 复刻 QQ 设置的分区框，换掉 09-06 那套「一行一卡」）。QQ 的分法是
+          「分区标题 ＋ 一整张卡，行和行之间一条细线」；行的外观于是收敛到「不透明底色 ＋ 内边距」，
+          边框、圆角全部交给分组那张卡（见下面分区模板里的 Border）。
 
-          做成一个 `Grid` 的样式而不是给每个模板套一层 `Border`：WinUI 的 `Grid` 自己就有 Background /
-          BorderBrush / BorderThickness / CornerRadius / Padding 这五样，而八个行模板的根本来就是 Grid ——
-          所以这一步是把每个模板上那句 `Margin="0,3,0,3" ColumnSpacing="24"` 换成一句 `Style`，一处不用多包。
+          **底色必须是不透明的卡底色**，这是行间细线的付账方式：细线不画在行上（末行会多出一条），而是
+          ItemsPanel 垫一层 EgBorderBrush、行与行之间只留 1px 缝，缝里露出来的就是线 —— 行一透明，
+          整行都会被那层垫底染了色。所以这个 Background 不许换成 ThemeResource 之外的半透明画刷。
 
-          **底色和边用的是 Gallery 自己那两个键**（`CardBackgroundFillColorDefaultBrush` /
-          `CardStrokeColorDefaultBrush`）—— `Palette.xaml` 早就把它们映到了本项目的角色表上，只是一直没人引。
-          圆角 4 而不是 8：8 是「一块能放东西的板」那一档（卡片、对话框），一行只有 60 高，8 的圆角在它身上
-          看起来是个胶囊。
+          控件那一列多宽（上面的 EgSettingControlWidth）跟卡皮无关，六种行（开关、下拉、数字、滑块、输入、
+          字体）照旧共用，控件落在同一条竖线上。行高顺 QQ 收了一档：MinHeight 68 → 60；2026-09-26 再收到
+          40（用户的话：「设置页面的极简模式字体要放在上下线条的中间，上下空位间距参考下图进行修改」，附一张
+          QQ 文件设置区的截图）：精简模式把说明收走之后一行只剩标签，60 的下限把标签顶在上头（上空 11、
+          下空约 30）；40 让行高回落到「一行标签 ＋ 上下各 11」的天然高度（约 42），标签正好落在上下两条
+          细线的正中间，空位就是截图上那个分量。说明开着的行内容本来就 ≥60，这个下限碰不到它们。
+          行内「标签＋说明」那层 StackPanel 统一 VerticalAlignment=Center：说明收起后标签要跟右边那颗
+          Center 的控件同一条中线；说明开着时内容撑满整行，Center 不生效 —— 两种模式共用一句，不用分。
+          两处例外照旧：字体行保持 Top（列表展开时行被拉到三百多高，居中会把标签吊在半空），MoviePilot
+          卡的标签列跟着一整列控件走，不动。
         -->
         <Style x:Key="EgSettingRowStyle" TargetType="Grid">
             <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
-            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-            <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
-            <Setter Property="CornerRadius" Value="12" />
-            <Setter Property="Padding" Value="20,14,20,14" />
-            <Setter Property="MinHeight" Value="68" />
+            <Setter Property="Padding" Value="20,11,20,11" />
+            <Setter Property="MinHeight" Value="40" />
             <Setter Property="ColumnSpacing" Value="24" />
         </Style>
 
         <!--
-          高一档的那三行同一张卡：主题色板、开关组、主页版面那张表。它们不是「左边一句话右边一个控件」那种
-          形状（标题在上、内容在下一整块），所以根是 StackPanel 而不是 Grid —— 而 WinUI 的 StackPanel 同样
-          自带那五样，于是这两个样式除了 TargetType 和 Spacing 一个字不差。
-          没有 `MinHeight`：它们本来就比 60 高得多，写上去只是一句永远成立的话。
+          高一档的行（主题色板、开关组、主页版面那张表，后来字幕标题筛选也是）从前自己是一张小卡；进了
+          分区卡之后边框和圆角撤掉，底色留下 —— 不是忘了撤：它们和普通行一样得是不透明的卡底色，行间
+          那条 1px 细线才只在缝里露出来（见 EgSettingRowStyle 上头那段）。
+          没有 `MinHeight`：它们本来就比 40 高得多，写上去只是一句永远成立的话。
         -->
         <Style x:Key="EgSettingBlockStyle" TargetType="StackPanel">
             <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
-            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-            <Setter Property="BorderThickness" Value="{StaticResource EgHairline}" />
-            <Setter Property="CornerRadius" Value="4" />
-            <Setter Property="Padding" Value="16,12,16,12" />
+            <Setter Property="Padding" Value="20,12,20,12" />
             <Setter Property="Spacing" Value="8" />
         </Style>
 
@@ -127,6 +126,173 @@
         </Style>
 
         <!--
+          QQ 式下拉的条目（2026-09-25「复刻 QQ 的选择框」）。框架默认的 ComboBoxItem 在选中项左边画一粒
+          药丸（Pill）；QQ 那张图是「圆角高亮 ＋ 选中项右侧一颗勾」，所以模板自己画：悬停/按下/选中沿用
+          框架自己的那组 ComboBoxItem* 画刷键（跟着主题走），Pill 换成右边的勾（E73E，强调色，读屏是
+          Raw —— 勾只是选中态的回声，条目本体已经念过一遍了）。
+
+          浮层本身的底色不在这里：Popup 树里解析不到页面资源，浮层底走 Palette.xaml 那支应用级的
+          ComboBoxDropDownBackground（亚克力）。闭合框的皮也没动 —— 要复刻的是弹出来的那张单子。
+          状态名单跟框架默认模板对齐（Normal / PointerOver / Pressed / Disabled ＋ Selected 四个变体），
+          少写一个状态的那一格就会停在错误的高亮上。
+        -->
+        <Style x:Key="EgComboItemStyle" TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{ThemeResource ComboBoxItemForeground}" />
+            <Setter Property="Background" Value="{ThemeResource ComboBoxItemBackground}" />
+            <Setter Property="Padding" Value="{ThemeResource ComboBoxItemThemePadding}" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="UseSystemFocusVisuals" Value="True" />
+            <Setter Property="FocusVisualMargin" Value="-3" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <!-- 外圈 6,2 的缩进：高亮是一颗不贴浮层边的圆角药丸，QQ 那张图就是这个站法。 -->
+                        <Grid
+                            x:Name="LayoutRoot"
+                            Margin="6,2"
+                            Background="{TemplateBinding Background}"
+                            Control.IsTemplateFocusTarget="True"
+                            CornerRadius="{TemplateBinding CornerRadius}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter
+                                x:Name="ContentPresenter"
+                                Margin="{TemplateBinding Padding}"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                ContentTransitions="{TemplateBinding ContentTransitions}"
+                                Foreground="{TemplateBinding Foreground}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="Center" />
+                            <TextBlock
+                                x:Name="CheckGlyph"
+                                Grid.Column="1"
+                                Margin="0,0,12,0"
+                                VerticalAlignment="Center"
+                                AutomationProperties.AccessibilityView="Raw"
+                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                FontSize="{StaticResource EgBodyFontSize}"
+                                Foreground="{ThemeResource EgAccentBrush}"
+                                Text="&#xE73E;"
+                                IsHitTestVisible="False"
+                                Opacity="0" />
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundPointerOver}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundPointerOver}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundPressed}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundPressed}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundDisabled}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundDisabled}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Selected">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CheckGlyph" Storyboard.TargetProperty="Opacity">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="1" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundSelected}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundSelected}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="SelectedUnfocused">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CheckGlyph" Storyboard.TargetProperty="Opacity">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="1" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundSelectedUnfocused}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundSelectedUnfocused}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="SelectedDisabled">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CheckGlyph" Storyboard.TargetProperty="Opacity">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="1" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundSelectedDisabled}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundSelectedDisabled}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="SelectedPointerOver">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CheckGlyph" Storyboard.TargetProperty="Opacity">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="1" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundSelectedPointerOver}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundSelectedPointerOver}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="SelectedPressed">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CheckGlyph" Storyboard.TargetProperty="Opacity">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="1" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="LayoutRoot" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemBackgroundSelectedPressed}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Foreground">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ComboBoxItemForegroundSelectedPressed}" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 本页所有下拉（选择行、字幕标题筛选那几颗小的、紧凑模式那颗分类框）都吃这一条：
+             只换容器样式，闭合框本身不吃自定义皮。 -->
+        <Style TargetType="ComboBox" BasedOn="{StaticResource DefaultComboBoxStyle}">
+            <Setter Property="ItemContainerStyle" Value="{StaticResource EgComboItemStyle}" />
+        </Style>
+
+        <!--
           Keyed rather than inlined into the selector below, because the passthrough group renders the same
           shape for each of its own toggles and a DataTemplate can be used by both.
           <para>
@@ -157,14 +323,15 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Spacing="2">
+                <StackPanel Spacing="2" VerticalAlignment="Center">
                     <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                     <TextBlock
                         Style="{StaticResource EgSettingNote}"
                         Text="{x:Bind Note}"
-                        Visibility="{x:Bind NoteVisibility}" />
+                        Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                 </StackPanel>
                 <ToggleSwitch x:Uid="SettingsPage_ToggleSwitch2"
+                    AutomationProperties.Name="{x:Bind Label}"
                     Grid.Column="1"
                     HorizontalAlignment="Left"
                     IsOn="{x:Bind IsOn, Mode=TwoWay}"
@@ -181,7 +348,7 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                             <!--
                               OneWay 而不是默认的 OneTime：视频同步那一行的说明写的是「此刻真正生效的值」，
@@ -194,6 +361,7 @@
                                 Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <ComboBox
+                            AutomationProperties.Name="{x:Bind Label}"
                             Grid.Column="1"
                             DisplayMemberPath="Label"
                             HorizontalAlignment="Stretch"
@@ -243,7 +411,7 @@
                         <TextBlock
                             Style="{StaticResource EgSettingNote}"
                             Text="{x:Bind Note}"
-                            Visibility="{x:Bind NoteVisibility}" />
+                            Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         <ItemsControl ItemsSource="{x:Bind Swatches}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -324,12 +492,12 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
                                 Text="{x:Bind Note}"
-                                Visibility="{x:Bind NoteVisibility}" />
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <NumberBox
                             Grid.Column="1"
@@ -343,6 +511,40 @@
                 </DataTemplate>
             </local:SettingRowTemplates.Number>
 
+            <local:SettingRowTemplates.OptionalNumber>
+                <DataTemplate x:DataType="vm:SettingOptionalNumberRow">
+                    <Grid Style="{StaticResource EgSettingRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
+                            <TextBlock
+                                Style="{StaticResource EgSettingNote}"
+                                Text="{x:Bind Note}"
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                            <CheckBox
+                                x:Name="UseAutomaticValue"
+                                AutomationProperties.Name="{x:Bind Label}"
+                                Content="自动"
+                                IsChecked="{x:Bind Automatic, Mode=TwoWay}" />
+                            <NumberBox
+                                x:Name="ManualValue"
+                                AutomationProperties.Name="{x:Bind Label}"
+                                IsEnabled="{x:Bind InputEnabled, Mode=OneWay}"
+                                Minimum="{x:Bind Minimum}"
+                                Maximum="{x:Bind Maximum}"
+                                SpinButtonPlacementMode="Compact"
+                                Value="{x:Bind Value, Mode=TwoWay}"
+                                Width="160" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </local:SettingRowTemplates.OptionalNumber>
+
             <local:SettingRowTemplates.Slider>
                 <DataTemplate x:DataType="vm:SettingSliderRow">
                     <Grid Style="{StaticResource EgSettingRowStyle}">
@@ -350,12 +552,12 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
                                 Text="{x:Bind Note}"
-                                Visibility="{x:Bind NoteVisibility}" />
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <!--
                           数值读数跟着滑块走（SettingSliderRow.ValueLabel）。滑块自己不显示数字，而这一页的
@@ -400,12 +602,12 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
                                 Text="{x:Bind Note}"
-                                Visibility="{x:Bind NoteVisibility}" />
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <TextBox
                             Grid.Column="1"
@@ -428,7 +630,7 @@
                       外面这一层必须是 Grid 而不是 StackPanel：EgSettingRowStyle 的 TargetType 是 Grid，而 XAML
                       的 Style 不允许跨类型套用 —— 套错的后果不是构建报错，是模板实例化那一刻抛 COMException
                       （2026-09-14 自检在「界面 → MoviePilot」这一步就是这么倒的）。所以卡片外观由 Grid 承载，
-                      竖排交给里面那个 StackPanel。MinHeight 的 68 是给一行的下限，这张卡比它高得多，不冲突。
+                      竖排交给里面那个 StackPanel。MinHeight 的 40 是给一行的下限，这张卡比它高得多，不冲突。
                     -->
                     <Grid Style="{StaticResource EgSettingRowStyle}">
                         <StackPanel Spacing="10">
@@ -438,7 +640,7 @@
                                     Style="{StaticResource EgSettingNote}"
                                     Text="{x:Bind Note}"
                                     TextWrapping="Wrap"
-                                    Visibility="{x:Bind NoteVisibility}" />
+                                    Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                             </StackPanel>
 
                             <ToggleSwitch
@@ -523,7 +725,7 @@
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
                                 Text="{x:Bind Note}"
-                                Visibility="{x:Bind NoteVisibility}" />
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <StackPanel Grid.Column="1" MinWidth="260" Spacing="6">
                             <TextBox
@@ -579,7 +781,7 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
@@ -708,7 +910,7 @@
                         <TextBlock
                             Style="{StaticResource EgSettingNote}"
                             Text="{x:Bind Note}"
-                            Visibility="{x:Bind NoteVisibility}" />
+                            Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
 
                         <ListView
                             AllowDrop="True"
@@ -800,13 +1002,13 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2" VerticalAlignment="Top">
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
                                 Text="{x:Bind Note}"
                                 TextWrapping="Wrap"
-                                Visibility="{x:Bind NoteVisibility}" />
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <DropDownButton
                             AutomationProperties.Name="{x:Bind Label}"
@@ -908,7 +1110,7 @@
                             Style="{StaticResource EgSettingNote}"
                             Text="{x:Bind Note}"
                             TextWrapping="Wrap"
-                            Visibility="{x:Bind NoteVisibility}" />
+                            Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
 
                         <ItemsControl ItemsSource="{x:Bind Rules}">
                             <ItemsControl.ItemsPanel>
@@ -980,7 +1182,7 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="{StaticResource EgSettingControlWidth}" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource EgSettingLabel}" Text="{x:Bind Label}" />
                             <TextBlock
                                 IsTextSelectionEnabled="True"
@@ -991,7 +1193,7 @@
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
                                 Text="{x:Bind Note}"
-                                Visibility="{x:Bind NoteVisibility}" />
+                                Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
                         <Button
                             Grid.Column="1"
@@ -1192,13 +1394,11 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:SettingSection">
                                     <!--
-                                      **这一层从「一张卡」变成了「一个分组」**（2026-09-06 按 WinUI-Gallery 那套
-                                      重排）。从前它是一张带底色、带细边、圆角 8 的大卡，里面一叠没有边界的行；
-                                      现在每一行自己是一张卡（EgSettingRowStyle），而这一层只剩牌子、说明和那一叠
-                                      行 —— 底色、边框、圆角、内边距全部撤掉。
-                                      **理由是卡不该套卡**：Gallery 的设置页没有外面这一层，而两层圆角套在一起，
-                                      外层那圈边就成了一条谁都解释不了的线；真做出来的样子是「一叠卡浮在一张卡上」。
-                                      外层撤掉之后，这一叠行左右直接对齐页边（EgPageMargin 的 24），和别的页面一样。
+                                      **一个分组一张卡**（2026-09-25 复刻 QQ 设置的分区框，换掉 09-06 那套
+                                      「外层只剩牌子、行各自成卡」的摆法）。QQ 的分区是「小标题 ＋ 一整张圆角卡，
+                                      行和行之间一条细线」；现在牌子、说明站在卡外，底下这张 Border 把整组的行
+                                      全装进去。行自己的卡皮撤了（EgSettingRowStyle / EgSettingBlockStyle），
+                                      卡皮由这里的 Border 一处画。
                                     -->
                                     <StackPanel Spacing="12" Margin="0,0,0,36" Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
                                         <!--
@@ -1211,17 +1411,33 @@
                                         <TextBlock
                                             Style="{StaticResource EgSettingNote}"
                                             Text="{x:Bind Description}" />
-                                        <ItemsControl
-                                            ItemTemplateSelector="{StaticResource EgSettingRows}"
-                                            ItemsSource="{x:Bind Rows}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <!-- 4，不是 10：行与行之间现在有两条细边和两块底色在分家，
-                                                         再留 10 就是一叠互不相干的砖头。Gallery 那套也是这个数。 -->
-                                                    <StackPanel Spacing="4" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                        </ItemsControl>
+                                        <!--
+                                          **Padding 6 是给行的方角留的**：Border 的圆角剪不动里面的内容（色板那
+                                          六块留方是同一个道理），行的方角要是顶到卡角，就会从圆弧外面戳出去。
+                                          行整体缩进 6 之后，方角落在圆弧以内（半径 12、缩进 6，方角离圆心的
+                                          距离不到半径），圆角才真的是圆的。
+
+                                          **行间的细线**不画在任何一行上（末行会多出一条收不了尾）：行的底色是
+                                          不透明的卡底色（见 EgSettingRowStyle 上头那段），ItemsPanel 垫一层
+                                          EgBorderBrush，行与行之间只留 1px 的缝 —— 缝里露出来的就是线，首行
+                                          之上、末行之下自然是空的。QQ 卡里那条线就是这个站法。
+                                        -->
+                                        <Border
+                                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            BorderThickness="{StaticResource EgHairline}"
+                                            CornerRadius="12"
+                                            Padding="6">
+                                            <ItemsControl
+                                                ItemTemplateSelector="{StaticResource EgSettingRows}"
+                                                ItemsSource="{x:Bind Rows}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Background="{ThemeResource EgBorderBrush}" Spacing="1" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                            </ItemsControl>
+                                        </Border>
                                     </StackPanel>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>

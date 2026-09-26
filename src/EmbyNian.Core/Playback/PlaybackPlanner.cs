@@ -60,6 +60,11 @@ public sealed class PlaybackPlanner(
         var tracks = ResolveTracks(ticket, source);
         var chainOptions = decision.Group?.ToMpvOptions(ShaderGroupCatalog.ShaderRoot) ?? [];
 
+        // 国漫判定（用户令 2026-09-26「新增国漫播放进度自定义百分比标记已看」）：在计划层做掉、结论随票走，
+        // 服务层只拿阈值 —— 它手上没有条目元数据。起播日志里说一声，回看「这部怎么按国漫算的」时有处可查。
+        var donghua = DonghuaRule.Matches(item, ticket.Parent);
+        if (donghua) Log.Info(Category, $"《{item.Name}》命中国漫（类型：动画，发行公司带腾讯/哔哩哔哩/优酷/爱奇艺），标记已看走单独阈值");
+
         // Hoisted out of the initializer below because two things need it: what mpv is told to call the film,
         // and what a screenshot of it is called.
         // 2026-09-24 用户令「这是独占模式下左上角的标题，在尾部也新增制作组」（例：再见菈菈 S01E12 再见菈菈
@@ -86,6 +91,7 @@ public sealed class PlaybackPlanner(
             PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision, chainOptions, ticket.DisplayRefreshHz, title),
             RunTimeTicks = source.RunTimeTicks ?? item.RunTimeTicks ?? 0,
             ItemId = item.Id,
+            IsDonghua = donghua,
             MediaSourceId = source.Id,
             AudioStreamIndex = tracks.AudioIndex,
             SubtitleStreamIndex = tracks.SubtitlesDisabled ? null : tracks.SubtitleIndex
@@ -132,10 +138,15 @@ public sealed class PlaybackPlanner(
         // are part of it is that a chain says what it needs and this says whether the settings meet it. Logged
         // rather than enforced — those three are the user's to set, and a chain rewriting 视频渲染 behind their
         // back is 「界面在骗人」 from the other end.
+        // 内置播放器的渲染后端与图形接口由管线契约锁定（LibMpvPipelinePolicy），设置页对它不提供这两项——
+        // 检查按真正会跑的值问，而不是按设置里存着、内置根本不用的值问；hwdec 两条后端都从设置来，照旧。
+        var pipelineOwned = settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv;
         if (decision.HasGroup)
         {
             foreach (var problem in MpvRenderCheck.Problems(
-                settings.Video.Renderer, settings.Video.GpuApi, settings.Video.HardwareDecoding, decision.Group))
+                pipelineOwned ? LibMpvPipelinePolicy.ForcedRenderer : settings.Video.Renderer,
+                pipelineOwned ? LibMpvPipelinePolicy.ForcedApi : settings.Video.GpuApi,
+                settings.Video.HardwareDecoding, decision.Group, pipelineOwned))
             {
                 Log.Warn(Category, $"着色器档位的运行条件：{problem}");
             }

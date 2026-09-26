@@ -67,6 +67,7 @@ public sealed partial class HomeViewModel : PageViewModel
     private EmbyImageStore? _images;
     private ISettingsService? _settings;
     private IReadOnlyList<EmbyItem> _libraryViews = [];
+    private readonly HomeRefresh _refresh = new();
 
     /// <summary>
     /// 「正在下载」一排的来源。为空 = 这台环境没有 MoviePilot（自检的隔离运行目录没有、测试也没有），
@@ -292,6 +293,7 @@ public sealed partial class HomeViewModel : PageViewModel
     {
         if (_images is not { } images) return;
 
+        _refresh.Invalidate();
         var ui = _settings?.Settings.Ui;
         var plan = HomeLayout.Plan(ui?.HomeRows, _libraryViews);
 
@@ -352,6 +354,8 @@ public sealed partial class HomeViewModel : PageViewModel
         if (_session is null || _actions is null || _all.Length == 0) return;
 
         var token = BeginLoad();
+        var refreshVersion = _refresh.Begin();
+        refreshSlides = _refresh.NeedsSlides(refreshSlides);
         Subheading = "正在读取…";
 
         // Started together rather than awaited one after another: a round trip per row in sequence is
@@ -467,6 +471,7 @@ public sealed partial class HomeViewModel : PageViewModel
         // 只站设置里那个来源发回来的头若干张（筛掉没有宽图、并掉同一部剧，是 HomeCarousel 的事）。关掉轮播
         // 就一张都不造，带子自己收起来。
         if (refreshSlides) Slides = _banner ? BuildSlides(newest, carouselCount) : [];
+        _refresh.Complete(refreshVersion, refreshSlides);
 
         LoadedCount = resumed.Count + next.Count + added.Count;
 

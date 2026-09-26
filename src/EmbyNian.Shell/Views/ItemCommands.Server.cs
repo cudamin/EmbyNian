@@ -194,8 +194,10 @@ internal static partial class ItemCommands
     private static Task DownloadAsync(EmbySession session, IShellActions shell, CardItem card) =>
         GuardAsync(shell, "下载失败", async () =>
         {
+            var scope = session.Capture();
             var item = card.Item;
-            var files = await FilesOfAsync(session, item).ConfigureAwait(true);
+            var files = await FilesOfAsync(scope, item).ConfigureAwait(true);
+            scope.ThrowIfNotCurrent();
 
             if (files.Count == 0)
             {
@@ -211,7 +213,8 @@ internal static partial class ItemCommands
             await DownloadGate.WaitAsync(CancellationToken.None).ConfigureAwait(true);
             try
             {
-                await SaveAsync(session, shell, item, files, folder).ConfigureAwait(true);
+                scope.ThrowIfNotCurrent();
+                await SaveAsync(scope, shell, item, files, folder).ConfigureAwait(true);
             }
             finally
             {
@@ -232,12 +235,12 @@ internal static partial class ItemCommands
     /// 加一个季筛选），搬进 Core 才有单测钉得住。
     /// </para>
     /// </summary>
-    private static async Task<IReadOnlyList<EmbyItem>> FilesOfAsync(EmbySession session, EmbyItem item)
+    private static async Task<IReadOnlyList<EmbyItem>> FilesOfAsync(EmbySessionScope scope, EmbyItem item)
     {
         if (!ItemMenu.IsEpisodeSet(item))
         {
-            var full = await AskAsync(session, (client, token) =>
-                    client.GetItemAsync(item.Id, token, EmbyFields.Files))
+            var full = await scope.ExecuteAsync((client, token) =>
+                    client.GetItemAsync(item.Id, token, EmbyFields.Files), CancellationToken.None)
                 .ConfigureAwait(true);
 
             return full.DefaultMediaSource is null ? [] : [full];
@@ -245,17 +248,17 @@ internal static partial class ItemCommands
 
         if (DownloadPlan.EpisodeQuery(item) is not ({ Length: > 0 } show, var seasonId)) return [];
 
-        return await AskAsync(session, (client, token) => client.GetEpisodesAsync(
+        return await scope.ExecuteAsync((client, token) => client.GetEpisodesAsync(
                 show,
                 seasonId,
                 token,
-                EmbyFields.Files))
+                EmbyFields.Files), CancellationToken.None)
             .ConfigureAwait(true);
     }
 
     /// <summary>一个个存下来，边下边在提示条上报进度。</summary>
     private static async Task SaveAsync(
-        EmbySession session,
+        EmbySessionScope scope,
         IShellActions shell,
         EmbyItem item,
         IReadOnlyList<EmbyItem> files,
@@ -268,14 +271,15 @@ internal static partial class ItemCommands
 
         foreach (var file in files)
         {
+            scope.ThrowIfNotCurrent();
             index++;
 
             // 手上这一份没带媒体源就补问一次：后缀名只有它说得出来，而没有后缀的影片双击打不开。
             var source = file.DefaultMediaSource;
             if (source is null)
             {
-                var full = await AskAsync(session, (client, token) =>
-                        client.GetItemAsync(file.Id, token, EmbyFields.Files))
+                var full = await scope.ExecuteAsync((client, token) =>
+                        client.GetItemAsync(file.Id, token, EmbyFields.Files), CancellationToken.None)
                     .ConfigureAwait(true);
 
                 source = full.DefaultMediaSource;
@@ -298,7 +302,8 @@ internal static partial class ItemCommands
 
             shell.Notify($"正在下载 {head}…");
 
-            await TellAsync(session, (client, token) => client.DownloadToFileAsync(file.Id, path, progress, token))
+            scope.ThrowIfNotCurrent();
+            await scope.ExecuteAsync((client, token) => client.DownloadToFileAsync(file.Id, path, progress, token), CancellationToken.None)
                 .ConfigureAwait(true);
 
             saved++;

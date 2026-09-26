@@ -7,8 +7,11 @@ using EmbyNian.Mpv;
 namespace EmbyNian.Playback;
 
 /// <summary>Live playback state for the now-playing bar.</summary>
-public readonly record struct PlaybackProgress(long PositionTicks, long RunTimeTicks, bool IsPaused, string Title)
+public readonly record struct PlaybackProgress(long PositionTicks, long RunTimeTicks, bool IsPaused, string Title, long Generation)
 {
+    /// <summary>旧调用点与新事件订阅的兼容形状；Generation 0 只在测试里出现。</summary>
+    public PlaybackProgress(long PositionTicks, long RunTimeTicks, bool IsPaused, string Title) : this(PositionTicks, RunTimeTicks, IsPaused, Title, 0) { }
+
     public double Fraction => RunTimeTicks > 0 ? Math.Clamp(PositionTicks / (double)RunTimeTicks, 0, 1) : 0;
 
     public string Clock => RunTimeTicks > 0
@@ -35,7 +38,22 @@ public sealed class PlaybackService(
 
     private readonly SemaphoreSlim _gate = new(1, 1);
 
+    /// <summary>在场句柄 → 当前所属播放的代次；监控与回调按它过滤旧片的迟到事件。</summary>
+    private readonly Dictionary<IPlaybackHandle, long> _swapGeneration = [];
+
     private IPlaybackHandle? _current;
+
+    /// <summary>
+    /// 当前这一跑的身份序号。每场播放开始时递增；进度事件带着它出发，迟到回调（暂停上报、被换掉的
+    /// 旧文件）按它与 <see cref="_playbackGeneration"/> 比对，对不上就不许再写状态、不再上报 —— 这是
+    /// 「旧片标题盖住新片」那类事故的唯一防线。
+    /// </summary>
+    public long Generation => _playbackGeneration;
+    private long _playbackGeneration;
+
+    /// <summary>停止（或换片）后必须撤销的待启动请求：每张票进场时记下编号，用户 Stop 把计数往前推，
+    /// 仍拿着旧编号等闸门的请求据此知道自己已被撤销。</summary>
+    private long _pendingRequest;
 
     /// <summary>
     /// The mpv options the running playback was started with, so a mid-playback change can put back
@@ -191,6 +209,26 @@ public sealed class PlaybackService(
     {
         // A self-check may navigate real library data, but must never start a backend or report playback.
         if (!allowPlayback) throw new InvalidOperationException("自检模式禁止真实播放");
+
+        // 这一次起播的编号：用户 Stop 作废的是「比它晚等待」的待启动请求，而不是这一场已经建立的播放。
+        var pending = ++_pendingRequest;
+
+        // 这一场播放的身份：开始、进度、暂停、停止与已观看全部走它 —— 影片在 A 上开始，用户浏览切到 B
+        // 之后，A 的收尾上报仍发给 A，而不是落到 B 头上（同服换账号同理）。显式退出登录会使这把
+        // scope 失效，上报随即失败并被记录，与从前「退出登录后不再上报」是同一档结果。
+        // 未登录时 Capture 抛「尚未登录」，走与计划失败同一条收尾：报一声「现在没在播」，把错误交出去。
+        EmbySessionScope scope;
+        try
+        {
+            scope = session.Capture();
+        }
+        catch
+        {
+            await StopCurrentAsync().ConfigureAwait(false);
+            RaiseNowPlaying(null);
+            throw;
+        }
+
         var candidates = CandidateSources(ticket);
 
         for (var index = 0; index < candidates.Count; index++)
@@ -206,7 +244,7 @@ public sealed class PlaybackService(
                     SubtitlesDisabled = false
                 };
 
-            var result = await PlayOneAsync(attempt, cancellationToken).ConfigureAwait(false);
+            var result = await PlayOneAsync(scope, attempt, cancellationToken, pending).ConfigureAwait(false);
 
             if (!result.Exit.IsFailure || index == candidates.Count - 1) return result;
 
@@ -239,20 +277,24 @@ public sealed class PlaybackService(
     /// 一次候选版本上的完整播放：从停掉旧的到收尾上报。原 <see cref="PlayAsync"/> 的主体，包进候选
     /// 循环里跑，一次循环一趟。
     /// </summary>
-    private async Task<PlaybackResult> PlayOneAsync(PlaybackTicket ticket, CancellationToken cancellationToken)
+    private async Task<PlaybackResult> PlayOneAsync(
+        EmbySessionScope scope,
+        PlaybackTicket ticket,
+        CancellationToken cancellationToken,
+        long pending)
     {
         // 计划在等闸门之前算：它只要会话与设置，而换片快路要先拿它去问「正在跑的那个实例接不接得住这一票」。
         // 它从前在闸门之后算（上面那句注释说的「抛异常别漏掉闸门」）—— 放在等闸门之前，抛在这里同样漏不掉
-        // 闸门，而收尾一步不少：停掉正在跑的、报一声「现在没在播」，再把错误交出去。
+        // 闸门，而收尾一步不少：停掉正在跑的、报一声「现在没在播」，再把错误交出去。计划用的是本场的
+        // 身份快照（scope），不是浏览此刻在哪台服务器。
         PlaybackRequest request;
         try
         {
-            var connection = session.Connection ?? throw new InvalidOperationException("尚未登录 Emby");
-            request = planner.Plan(ticket, connection);
+            request = planner.Plan(ticket, scope.Connection);
         }
         catch
         {
-            await StopAsync().ConfigureAwait(false);
+            await StopCurrentAsync().ConfigureAwait(false);
             RaiseNowPlaying(null);
             throw;
         }
@@ -263,10 +305,17 @@ public sealed class PlaybackService(
         // 实例上换源；快路没接住就落回「停掉重开」那条老路。
         var live = _current;
         var takeover = live is not null && live.CanSwapTo(request) ? live : null;
-        if (takeover is null) await StopAsync().ConfigureAwait(false);
+        // 内部停旧片（为这一票腾场子）不能作废这一票自己 —— 作废只归用户的那一路 StopAsync。
+        if (takeover is null) await StopCurrentAsync().ConfigureAwait(false);
         else takeover.HandOver();
 
+        // 等闸门期间用户可能按下停止：这一场已经不该开始。用待启动编号判断，静默退出（取消不是错误）。
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (_pendingRequest > pending)
+        {
+            _gate.Release();
+            throw new OperationCanceledException("等待期间用户已停止播放");
+        }
 
         // Everything after the gate is taken belongs inside this try, and the try therefore opens on the
         // very next line rather than further down where the interesting work starts. The gate is a
@@ -280,6 +329,7 @@ public sealed class PlaybackService(
         try
         {
             var playSessionId = Guid.NewGuid().ToString("N");
+            var generation = ++_playbackGeneration;
             _launchOptions = request.PlayerOptions;
             _launchGroupOptionCount = request.ShaderOptionCount;
             LaunchShaderProfile = request.ShaderProfile;
@@ -303,6 +353,7 @@ public sealed class PlaybackService(
             {
                 // 同一个句柄：_current 与订阅都还是它，不必再来一遍 —— 这正是「不关窗」的全部含义。
                 handle = takeover;
+                _swapGeneration[handle] = generation;
             }
             else
             {
@@ -311,25 +362,26 @@ public sealed class PlaybackService(
                     // 快路让位。两个可能：那个实例刚被交接放过收尾（它按「已交接」跳过了拆机），那就停掉、
                     // 把拆机补上，再谈重开；或者前一场已经把自己收干净了（_current 不再是它，闸门放开前
                     // 就拆完了），那这里什么都不用做 —— 别再拆一次。
-                    await StopAsync().ConfigureAwait(false);
+                    await StopCurrentAsync().ConfigureAwait(false);
                     if (ReferenceEquals(_current, takeover)) await ReleaseAsync(takeover).ConfigureAwait(false);
                 }
 
                 var backend = backendFactory();
                 handle = await backend.StartAsync(request, cancellationToken).ConfigureAwait(false);
                 _current = handle;
+                _swapGeneration[handle] = generation;
                 Subscribe(handle);
             }
 
             RaiseNowPlaying(ticket.Item);
 
-            await ReportAsync("开始", client => client.ReportPlaybackStartAsync(
+            await ReportAsync(scope, "开始", client => client.ReportPlaybackStartAsync(
                 Build(request, playSessionId, ticket.StartTicks, false, null), cancellationToken)).ConfigureAwait(false);
 
             PlaybackExit exit;
             try
             {
-                exit = await MonitorAsync(handle, request, playSessionId, ticket, cancellationToken).ConfigureAwait(false);
+                exit = await MonitorAsync(scope, handle, request, playSessionId, ticket, cancellationToken, generation).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -360,13 +412,17 @@ public sealed class PlaybackService(
                 exit = new PlaybackExit(PlaybackEndReason.Stopped, position, 0, null);
             }
 
-            return await FinishAsync(exit, request, playSessionId, ticket).ConfigureAwait(false);
+            return await FinishAsync(scope, exit, request, playSessionId, ticket).ConfigureAwait(false);
         }
         finally
         {
             // 交接给下一集的那一跑什么都不拆：句柄、订阅、_current 都留着 —— 下一拍的事件正用着它们，
             // 而 mpv 还活着（那正是「不关窗」）。其余情况按老样子把这一跑收干净。
-            if (handle is not null && !handle.WasHandedOver) await ReleaseAsync(handle).ConfigureAwait(false);
+            if (handle is not null && !handle.WasHandedOver)
+            {
+                _swapGeneration.Remove(handle);
+                await ReleaseAsync(handle).ConfigureAwait(false);
+            }
 
             _launchOptions = [];
             _launchGroupOptionCount = 0;
@@ -465,6 +521,15 @@ public sealed class PlaybackService(
 
     /// <summary>Stops whatever is playing; safe to call when nothing is.</summary>
     public async Task StopAsync()
+    {
+        // 用户（或流程）叫停：把还在等待的待启动请求作废。已建立的播放照常收尾上报。
+        _pendingRequest++;
+
+        await StopCurrentAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>只停当前句柄，不动待启动编号 —— 换片腾场、计划失败收尾这些内部路径用。</summary>
+    private async Task StopCurrentAsync()
     {
         var handle = _current;
         if (handle is null) return;
@@ -692,33 +757,56 @@ public sealed class PlaybackService(
     /// half a unit test cannot reach.
     /// </para>
     /// </summary>
-    public async Task SetShaderGroupAsync(ShaderGroup? group)
+    public async Task<bool> SetShaderGroupAsync(ShaderGroup? group)
     {
-        // 整批认这一个句柄，见 SetPropertyAsync(handle, …)：一条链十来个选项，中间切得了集。
-        if (_current is not { } handle) return;
-
-        var options = ShaderSwitch.Options(
-            _launchOptions,
-            _launchGroupOptionCount,
-            group,
-            ShaderGroupCatalog.ShaderRoot);
-
-        foreach (var (name, value) in options) await SetPropertyAsync(handle, name, value).ConfigureAwait(false);
-
-        Log.Info(Category, group is null ? "已关闭着色器" : $"已切换着色器档位：{group.Name}");
+        var handle = _current;
+        if (handle is not IPlayerControl control || !handle.HasControlChannel) return false;
+        var generation = _playbackGeneration;
+        var launch = _launchOptions;
+        var chainCount = _launchGroupOptionCount;
+        try
+        {
+            var profiles = await handle.GetTextAsync("profile-list", CancellationToken.None).ConfigureAwait(false);
+            var defaults = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, neutral) in ShaderGroupCatalog.NeutralOptions)
+                defaults[name] = await handle.GetTextAsync($"option-info/{name}/default-value", CancellationToken.None)
+                    .ConfigureAwait(false) ?? neutral;
+            var options = ShaderSwitch.Options(launch, chainCount, group, ShaderGroupCatalog.ShaderRoot, profiles, defaults);
+            foreach (var (name, value) in options)
+            {
+                if (!ReferenceEquals(_current, handle) || generation != _playbackGeneration) return false;
+                if (!await control.CommandAsync(["set", name, value], CancellationToken.None).ConfigureAwait(false))
+                {
+                    Log.Warn(Category, $"着色器切换未完成：播放器拒绝 {name}");
+                    return false;
+                }
+            }
+            if (!ReferenceEquals(_current, handle) || generation != _playbackGeneration) return false;
+            Log.Info(Category, group is null ? "已关闭着色器" : $"已切换着色器档位：{group.Name}");
+            return true;
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "着色器切换失败", error);
+            return false;
+        }
     }
 
     private async Task<PlaybackExit> MonitorAsync(
+        EmbySessionScope scope,
         IPlaybackHandle handle,
         PlaybackRequest request,
         string playSessionId,
         PlaybackTicket ticket,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long generation)
     {
         var interval = TimeSpan.FromSeconds(Math.Clamp(settings.Playback.ProgressReportIntervalSeconds, 1, 60));
         var exitTask = handle.WaitForExitAsync(cancellationToken);
 
-        void OnPauseChanged(bool paused) => _ = ReportPauseAsync(handle, request, playSessionId, paused);
+        // fire-and-forget 的暂停上报必须带上本场代次：停止或换片之后，旧片迟到的读数不许再写状态、
+        // 不许再向服务器发进度 —— 退出事件只退订后续，撤不掉已经在飞的那一趟。
+        void OnPauseChanged(bool paused) => _ = ReportPauseAsync(scope, handle, request, playSessionId, paused, generation);
 
         handle.PauseChanged += OnPauseChanged;
 
@@ -730,14 +818,17 @@ public sealed class PlaybackService(
             {
                 var tick = timer.WaitForNextTickAsync(cancellationToken).AsTask();
                 if (await Task.WhenAny(exitTask, tick).ConfigureAwait(false) == exitTask) break;
+                if (_swapGeneration.GetValueOrDefault(handle) != generation) break;
 
                 var position = await handle.GetPositionAsync(cancellationToken).ConfigureAwait(false);
                 if (position is null) continue;
+                if (_swapGeneration.GetValueOrDefault(handle) != generation) break;
 
                 var ticks = TimeFormat.ToTicks(position.Value);
-                ProgressChanged?.Invoke(new PlaybackProgress(ticks, request.RunTimeTicks, handle.IsPaused, request.Title));
+                ProgressChanged?.Invoke(new PlaybackProgress(
+                    ticks, request.RunTimeTicks, handle.IsPaused, request.Title, generation));
 
-                await ReportAsync("进度", client => client.ReportPlaybackProgressAsync(
+                await ReportAsync(scope, "进度", client => client.ReportPlaybackProgressAsync(
                     Build(request, playSessionId, ticks, handle.IsPaused, "timeupdate"), cancellationToken))
                     .ConfigureAwait(false);
             }
@@ -751,21 +842,34 @@ public sealed class PlaybackService(
         }
     }
 
-    private async Task ReportPauseAsync(IPlaybackHandle handle, PlaybackRequest request, string playSessionId, bool paused)
+    private async Task ReportPauseAsync(
+        EmbySessionScope scope,
+        IPlaybackHandle handle,
+        PlaybackRequest request,
+        string playSessionId,
+        bool paused,
+        long generation)
     {
+        // 迟到防线的第一问：这一场已经被换掉/收尾，读数再准也不属于现在。
+        if (_swapGeneration.GetValueOrDefault(handle) != generation) return;
+
         // Reported immediately rather than on the next tick: a pause the server learns about
         // five seconds late shows up as five seconds of phantom playback on other clients.
         var position = await handle.GetPositionAsync(CancellationToken.None).ConfigureAwait(false);
+
+        if (_swapGeneration.GetValueOrDefault(handle) != generation) return;
         var ticks = TimeFormat.ToTicks(position ?? 0);
 
-        ProgressChanged?.Invoke(new PlaybackProgress(ticks, request.RunTimeTicks, paused, request.Title));
+        ProgressChanged?.Invoke(new PlaybackProgress(
+            ticks, request.RunTimeTicks, paused, request.Title, generation));
 
-        await ReportAsync(paused ? "暂停" : "继续", client => client.ReportPlaybackProgressAsync(
+        await ReportAsync(scope, paused ? "暂停" : "继续", client => client.ReportPlaybackProgressAsync(
             Build(request, playSessionId, ticks, paused, paused ? "pause" : "unpause"), CancellationToken.None))
             .ConfigureAwait(false);
     }
 
     private async Task<PlaybackResult> FinishAsync(
+        EmbySessionScope scope,
         PlaybackExit exit,
         PlaybackRequest request,
         string playSessionId,
@@ -776,12 +880,12 @@ public sealed class PlaybackService(
 
         var report = Build(request, playSessionId, positionTicks, false, null);
         report.Failed = exit.IsFailure;
-        var reported = await ReportAsync("停止", client =>
+        var reported = await ReportAsync(scope, "停止", client =>
             client.ReportPlaybackStoppedAsync(report, CancellationToken.None)).ConfigureAwait(false);
 
         if (watched)
         {
-            await ReportAsync("标记已观看", client =>
+            await ReportAsync(scope, "标记已观看", client =>
                 client.MarkPlayedAsync(request.ItemId, CancellationToken.None)).ConfigureAwait(false);
         }
 
@@ -812,7 +916,12 @@ public sealed class PlaybackService(
         // a file watched because it was left paused, so nothing is marked at all.
         if (exit.PositionSeconds is null || request.RunTimeTicks <= 0) return false;
 
-        var threshold = Math.Clamp(settings.Playback.MarkWatchedPercent, 50, 100) / 100d;
+        // 国漫单独一档（用户令 2026-09-26）：判定是计划层算好带在票上的（PlaybackRequest.IsDonghua），
+        // 这里只管按哪一档取数 —— 同一个夹取范围（50–100），两档各自的值。
+        var percent = request.IsDonghua
+            ? settings.Playback.DonghuaMarkWatchedPercent
+            : settings.Playback.MarkWatchedPercent;
+        var threshold = Math.Clamp(percent, 50, 100) / 100d;
         return positionTicks >= request.RunTimeTicks * threshold;
     }
 
@@ -850,14 +959,18 @@ public sealed class PlaybackService(
     /// <summary>
     /// A failed report must never interrupt playback: the file is already on screen, and the
     /// server catching up late is far better than an error dialog over the video.
+    /// <para>
+    /// 上报走本场的身份快照（<see cref="EmbySessionScope"/>）而不是全局会话：影片在 A 上开始，
+    /// 浏览切到 B 后 A 的收尾仍发给 A。退出登录作废 scope，上报失败被记录 —— 与从前一样不打断播放。
+    /// </para>
     /// </summary>
-    private async Task<bool> ReportAsync(string what, Func<EmbyClient, Task> report)
+    private async Task<bool> ReportAsync(EmbySessionScope scope, string what, Func<EmbyClient, Task> report)
     {
         if (!settings.Playback.ReportProgressToServer) return false;
 
         try
         {
-            await session.ExecuteAsync((client, _) => report(client), CancellationToken.None).ConfigureAwait(false);
+            await scope.ExecuteAsync((client, _) => report(client), CancellationToken.None).ConfigureAwait(false);
             return true;
         }
         catch (Exception error)

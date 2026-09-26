@@ -204,7 +204,7 @@ public sealed partial class SettingsPage : Page, IShellContent
     /// What the self-check reports: the cards and rows that were built, and the category on screen.
     /// </summary>
     internal (int Sections, int Rows, string SelectedCategory, int VisibleRows) Summary => (
-        ViewModel.Sections.Count,
+        ViewModel.Cards.Count,
         ViewModel.RowCount,
         SelectedCategory,
         VisibleRows);
@@ -329,6 +329,7 @@ public sealed partial class SettingsPage : Page, IShellContent
     private bool Select(string category)
     {
         if (string.IsNullOrEmpty(category)) return false;
+        if (category == "着色器") category = "视频输出";
 
         var target = ViewModel.Categories.Contains(category, StringComparer.Ordinal)
             ? category

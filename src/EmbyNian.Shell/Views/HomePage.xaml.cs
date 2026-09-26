@@ -444,6 +444,14 @@ public sealed partial class HomePage : Page, IShellContent
     {
         if (XamlRoot is null) return;
 
+        // 播放层占着窗口这一整段里不判（2026-09-25 用户报「全屏从播放页面退出的时候，媒体库别乱上下移动」）。
+        // 这一段里窗口几何要在全屏 / 播放几何 / 浏览几何之间跳好几次，每一步都会给这一页一次尺寸变化；
+        // 照每一次重排矮窗档，用户看到的就是媒体库自己上下一趟 —— 实测日志里那次是视口 867 判成
+        // 「压上轮播」、13 毫秒后视口 1271 又判回「回默认」，两趟 260ms 的位移动画接在一起。这一段里的
+        // 量测全是中间态，没有一次作数。播放页退场落定时会把这一位放掉，紧接着那次强制布局就是补判
+        // （见 HostWindow.PlayerLayer）。
+        if (_window?.PlayerLayer == true) return;
+
         // 判定吃的是排完的树：带高、货架顶都要此刻的坐标（同 FoldRead 的两拍）。
         UpdateLayout();
 
@@ -451,6 +459,10 @@ public sealed partial class HomePage : Page, IShellContent
 
         if (viewport <= 0 || Banner.Visibility != Visibility.Visible)
         {
+            // 量不到视口、或者带子这一拍收着：这一档没有左下角可压，回默认。
+            // **别把这一句改成「保持原档」**：2026-09-25 第三轮改过一次，用户当场退回来说「返回主页的时候
+            // 媒体库应该是会动的」。它正是「从电影页面返回主页」那套观感的来源 —— 重载把幻灯片清空又填回来
+            // 的那几拍带子收着，判一次回默认；幻灯片回来了再判回压上，屏上于是走一趟完整的升档动画。
             Fold(false);
             ApplyLibraryChrome();
             return;
@@ -466,6 +478,8 @@ public sealed partial class HomePage : Page, IShellContent
             // （重载之后媒体库成了最后一排之类）这一档没有意义，回默认。
             var index = ViewModel.LibraryFlowIndex;
 
+            // 补位那一排量不到（重载之后媒体库成了最后一排之类）：这一档没有意义，回默认。
+            // **同样别改成「保持原档」** —— 与上面那一处是同一件事的两半（2026-09-25 第三轮的教训）。
             if (index < 0 || index >= ViewModel.Shelves.Count)
             {
                 Fold(false);
@@ -565,6 +579,12 @@ public sealed partial class HomePage : Page, IShellContent
             UpdateLibraryOverlay();
         });
     }
+
+    /// <summary>
+    /// 播放层把窗口交回来那一拍：排一拍补判矮窗档。**排一拍而不是当拍判** —— 事件是在播放页的收摊里同步
+    /// 发的，那时浏览页刚被放回、这一页的树还没排完；量半成品几何正是「矮窗档这一趟规划不成」那条日志。
+    /// </summary>
+    private void OnPlayerLayerEnded() => ScheduleFold();
 
     /// <summary>
     /// 按视图模型此刻的矮窗档状态拨这一页的屏上开关：宿主、浅墨、轮播那头的让位；翻档的那一趟还要把三样东西的
@@ -1028,6 +1048,14 @@ public sealed partial class HomePage : Page, IShellContent
         _window = request.Window;
         Tag = "home";
 
+        // 播放层把窗口交回来的那一拍补判一次矮窗档 —— 它占着窗口的那一段里尺寸量测全是中间态、一律不判
+        // （见 UpdateLibraryOverlay 开头那道门与 HostWindow.PlayerLayer）。先退订再挂：Attach 有可能被喊第二次。
+        if (_window is { } host)
+        {
+            host.PlayerLayerEnded -= OnPlayerLayerEnded;
+            host.PlayerLayerEnded += OnPlayerLayerEnded;
+        }
+
         // 标题栏那一行浮在剧照上，所以那一行的墨走固定的浅墨（不跟主题走）—— 和详情页头图铺到顶边时一个规矩。
         // 带子还没有幻灯片时下面判成 Plain，见 PaintInk。
         _actions?.SetTitleStrip(TitleStrip.OnScrim);
@@ -1062,6 +1090,7 @@ public sealed partial class HomePage : Page, IShellContent
     public void Release()
     {
         ShellPrefs.Changed -= OnShellPrefsChanged;
+        if (_window is not null) _window.PlayerLayerEnded -= OnPlayerLayerEnded;
 
         // 这一页走了，把标题栏还回它自己的规矩（别的页都按主题那支墨）。不还的话下一次它就一直浅着。
         _actions?.SetTitleStrip(TitleStrip.Plain);

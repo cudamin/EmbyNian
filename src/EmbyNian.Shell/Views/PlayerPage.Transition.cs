@@ -3,6 +3,7 @@ using EmbyNian.Playback;
 using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 
 namespace EmbyNian.Shell.Views;
@@ -20,10 +21,12 @@ public sealed partial class PlayerPage
     /// <summary>
     /// 变换由同一颗钟逐拍写入，反向时从当前姿势续接。不能用 Storyboard 驱动 RenderTransform：
     /// 岛在进场中途重新布局时，该动画曾停在起点且不发 Completed，控制条因此被推出窗口。
-    /// 自动全屏只溶解、不缩放整页，窗口几何由进场完成后的交接单独处理。
+    /// <para>
+    /// 只管「小窗里的淡入淡出」这一种转场。起播开了自动全屏的那条不走这里 —— 它「一上来就整屏」，
+    /// 由 <see cref="EnterFullscreenAtOnce"/> 直接整屏、纯色层盖住长大那一拍（用户令 2026-09-25）。
+    /// </para>
     /// </summary>
-    private void TransitionPage(bool entering, Action landed,
-        Action<double>? progress = null, bool fullscreenEntry = false)
+    private void TransitionPage(bool entering, Action landed, Action<double>? progress = null)
     {
         var now = Now;
         var from = _pageTransition?.At(now)
@@ -38,9 +41,7 @@ public sealed partial class PlayerPage
             return;
         }
 
-        var transition = fullscreenEntry
-            ? PlayerMotion.FullscreenEnter(from, now)
-            : PlayerMotion.Page(entering, from, now);
+        var transition = PlayerMotion.Page(entering, from, now);
         _pageTransition = transition;
         ApplyPagePose(transition.From);
         _enterAnimating = entering;
@@ -111,6 +112,87 @@ public sealed partial class PlayerPage
         bool Current() => generation == _windowChangeGeneration && _onStage && _window == window;
     }
 
+    /// <summary>
+    /// 「一上来就整屏」（用户令 2026-09-25）：起播开了自动全屏时，不在小窗里淡入再跳全屏，而是当拍
+    /// 直接把窗口整屏、播放页从第一帧就整屏，最贴近「播放中按 F 切全屏」那种即时感。
+    /// <para>
+    /// 窗口从浏览几何长到整屏那一拍，岛的合成提交晚 <c>SetWindowPos</c> 一两拍；浏览页此刻也还停在小窗
+    /// 尺寸。两者都用加载遮罩同色的纯色顶层层盖住（<see cref="VideoFrameOverlay"/> 由 DWM 直接合成、不吃
+    /// 岛的滞后），等整屏加载层提交上屏再撤，于是从头到尾看不到「先小窗、再放大」。
+    /// </para>
+    /// </summary>
+    private void EnterFullscreenAtOnce()
+    {
+        if (_window is not { } window) return;
+
+        // 播放页立刻不透明（不走淡入），铺满整屏的黑舞台＋加载层。
+        ApplyPagePose(PlayerMotion.Pose.Visible);
+
+        // 纯色层先盖满整个显示器：盖住「浏览页还在小窗」这一瞬，也盖住紧接着窗口长大的那一拍。
+        // 2026-09-25 起铺的是遮罩那张背景图（图没到手才退回纯色，见 StartupCover）—— 从前一律铺近黑，
+        // 用户看到的因此是「先全屏黑一片、再切到背景图」。
+        var cover = StartupCover(window.Handle);
+        cover.Show(VideoFrameOverlay.FullscreenRect(window.Handle), topmost: true);
+        VideoFrameOverlay.Flush();
+
+        _shell?.ShowPlayer(true);
+        window.VideoVisible = true;
+        // 同步整屏：Fullscreen 的 setter 里 SynchronizeContentLayout 已把整屏 Cover 排到位。
+        window.Fullscreen = true;
+
+        // 没有异步窗口交接了 —— 遮罩揭开判据 PictureReady 读这一位，置假它才会在画面就绪时揭开。
+        _startupHandoverPending = false;
+
+        _ = RevealAfterInstantFullscreenAsync(cover);
+    }
+
+    /// <summary>
+    /// 整屏 Cover 上屏之后立刻撤纯色层 —— 它是「窗口长到整屏那一拍」的临时垫层，不是加载遮罩。
+    /// <para>
+    /// <b>为什么不能等 <c>RequestCommitAsync</c> 的回执。</b>原先这里等的是它、上限 350ms，而它在这条路上
+    /// 实测不兑现（日志原话：<c>起播整屏覆盖层提交未确认，照撤：The operation has timed out.</c>）——
+    /// 那 350ms 的纯色层盖住的不只是窗口长大的那一两帧，还有<b>已经到位的遮罩背景图</b>，用户看到的因此
+    /// 是「先黑一片、再切到背景图」（2026-09-25 用户报）。这里要的其实只是「这次布局出过帧了没有」，
+    /// 那是渲染回调答得了的，不是提交回执答得了的。
+    /// </para>
+    /// </summary>
+    private async Task RevealAfterInstantFullscreenAsync(VideoFrameOverlay cover)
+    {
+        var started = Now;
+        await WaitFramesAsync(2);
+        VideoFrameOverlay.Flush();
+        cover.Dispose();
+
+        // 这一行是给验收用的：它直接回答「起播自动全屏那一下到底黑了多少毫秒」——图还没到位的那一段
+        // 遮罩自己也在纯色上，所以这个数只说明覆盖层那一截，不是用户看到的全部。
+        Log.Debug(Category, $"起播整屏覆盖层撤下：盖了 {Now - started}ms");
+    }
+
+    /// <summary>
+    /// 等合成器出过 <paramref name="frames"/> 帧。没有渲染回调的场合（窗口被最小化、显示器熄了）也要走得动，
+    /// 所以每一帧都兜一张 32ms 的网 —— 这一处的等待只能短不能长：它就是覆盖层的寿命。
+    /// </summary>
+    private static async Task WaitFramesAsync(int frames)
+    {
+        for (var frame = 0; frame < frames; frame++)
+        {
+            var rendered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnRendering(object? sender, object args)
+            {
+                CompositionTarget.Rendering -= OnRendering;
+                rendered.TrySetResult();
+            }
+
+            CompositionTarget.Rendering += OnRendering;
+            _ = Task.Delay(32).ContinueWith(
+                _ => rendered.TrySetResult(),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            await rendered.Task;
+        }
+    }
+
     private void ApplyPagePose(PlayerMotion.Pose pose)
     {
         Opacity = pose.Opacity;
@@ -160,6 +242,20 @@ public sealed partial class PlayerPage
     /// </para>
     /// </summary>
     private bool _restoreBrowseOnExit;
+
+    /// <summary>
+    /// 这一趟退场<b>不留溶解</b>：片子停下之前从播放页走的那条路（<see cref="ReturnToBrowseBeforeStopAsync"/>）
+    /// 已经把那最后一帧交在一块不随窗口变形的覆盖层上，本页收姿势那 240ms 溶解只剩一块空舞台在淡 ——
+    /// 用户要的是「直接切回主页」（2026-09-25 用户令），所以那一趟当拍收摊。立起与消费都在
+    /// <see cref="LeavePlayer"/> 一处，别的收摊路（Detach、真收摊）看不到它。
+    /// </summary>
+    private bool _exitSnap;
+
+    /// <summary>
+    /// 这一趟退场落定没有 —— 等在 <see cref="ReturnToBrowseBeforeStopAsync"/> 那一头的人拿它当信号（停播放
+    /// 排在动画之后，见那一段）。非空即「正等」，由 <see cref="CompletePlayerExit"/> 放行并清掉。
+    /// </summary>
+    private TaskCompletionSource? _exitLanded;
 
     /// <summary>
     /// 退场等待浏览页报就绪的那颗表；非空即「最后一帧还按着，溶解没起」。
@@ -277,50 +373,123 @@ public sealed partial class PlayerPage
             if (_window is not null) _window.FreeSizing = false;
         }
 
+        // **窗口几何到这一拍才算落定**，播放层这一位因此收在这里、而且收在下面那次强制布局之前：
+        // 上面那两次 SetWindowPos（退全屏 → 还浏览几何）给浏览页的量测全是中间态，中途放开门，主页
+        // 会先按播放几何翻一趟档、再按浏览几何翻回来 —— 用户看到的就是媒体库上下各跑一次 260ms 的动画
+        // （2026-09-25 实测日志：视口 867 → 压上轮播、13ms 后视口 1271 → 回默认）。放开门之后的这一次
+        // SynchronizePlaybackLayout 会给主页一次尺寸变化，该判的档在那一拍一次判完。
+        _window?.SetPlayerLayer(false);
+
         // Mica 到这一拍才打开：整页与退场底都收干净了，底下是已经画好的浏览页，开它谁也看不见。
         // 早开一步就会在窗口改尺寸的那几拍里漏出一块壁纸采样面（2026-09-20 用户第三张截图）。
         RestoreBrowseBackdrop();
 
         // 客户区刚变过，这一拍读到的才是「浏览页该排多高、岛该多大」。
         SynchronizePlaybackLayout();
+
+        // **退场落定**：等在 <see cref="ReturnToBrowseBeforeStopAsync"/> 那一头的人放行 —— 停播放要排在
+        // 动画走完之后，留帧与那层 SpriteVisual 在动画期间才活着（见那一段）。幂等：Detach 一类不经这条
+        // 路进来的收摊，这里放的是空的。
+        var landed = _exitLanded;
+        _exitLanded = null;
+        landed?.TrySetResult();
     }
 
     /// <summary>
     /// 用户关闭播放页时直接交回现成的浏览页。必须先呈现再停 mpv：保留交换链引用并不能阻止
-    /// mpv 的 stop/quit 把里面的像素清空，等后端退出以后再做留帧动画已经来不及。
+    /// mpv 的 stop/quit 把里面的像素清空。
+    /// <para>
+    /// <b>2026-09-25 第三轮起，这一趟不留溶解、也不再让画面跟着窗口缩</b>（用户令「退出播放窗口化的一瞬间
+    /// 会有视频的残留画面，不能直接切回主页吗」）。第二轮这一趟走的是「等浏览页就绪 → 最后一帧逐拍溶解」，
+    /// 而窗口在那之前就已经缩回浏览几何 —— 画面跟着缩进小窗的那一截，用户读作「残留画面」。现在那一帧
+    /// 交在一块<b>不随窗口变形</b>的覆盖层上（见 ①②），本页当拍收摊，撤层时屏上就是主页。
+    /// </para>
+    /// <para>
+    /// 停播放仍旧排在落定之后：调用方（<c>StopPlaybackAsync</c>）等这一趟返回才停 mpv，而这一趟在覆盖层
+    /// 撤掉之前不会返回 —— mpv 那一刀清像素时，屏上早就不靠它的像素活着了。
+    /// </para>
     /// </summary>
     internal async Task ReturnToBrowseBeforeStopAsync()
     {
         if (!_onStage || _window is not { } window) return;
-        var compositor = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(this).Compositor;
 
-        LeavePlayer();
-        var generation = _windowChangeGeneration;
-        CancelPageTransition();
-        // 浏览页先在当前尺寸上屏，随后才还原窗口，避免新窗口里闪出旧尺寸的播放画面。
-        _restoreBrowseOnExit = false;
-        CompletePlayerExit();
-        try
+        // ① 先抓一帧，铺成一块**不随窗口变形**的整屏覆盖层（2026-09-25 用户令「退出播放窗口化的一瞬间会有
+        //    视频的残留画面，不能直接切回主页吗」）。从前这一趟是让画面跟着窗口一起缩、缩完再逐拍溶解 ——
+        //    全屏视频缩进小窗的那一截就是用户说的「残留画面」。覆盖层由 DWM 直接合成、定位在屏幕上，
+        //    窗口怎么缩它都不动，于是「窗口化」这件事发生在一张静止的画底下，谁也看不见。
+        //    抓不到帧照常往下走：屏上剩的是退场底（没有画面可残留，也就没有这一条）。
+        VideoFrameOverlay? handoff = null;
+        if (_videoTarget.HasAttachedVisual)
         {
-            await compositor.RequestCommitAsync().AsTask().WaitAsync(TimeSpan.FromMilliseconds(250));
-            VideoFrameOverlay.Flush();
-        }
-        finally
-        {
-            if (!_onStage && _window == window && generation == _windowChangeGeneration)
+            try
             {
-                window.RestorePlayerToBrowse();
-                window.FreeSizing = false;
-                SynchronizePlaybackLayout();
+                var frame = await _videoTarget.CaptureFrameAsync().WaitAsync(TimeSpan.FromMilliseconds(750));
+                if (frame is not null)
+                {
+                    handoff = new VideoFrameOverlay(window.Handle, frame);
+                    handoff.Show(VideoFrameOverlay.FullscreenRect(window.Handle), topmost: true);
+                    VideoFrameOverlay.Flush();
+                }
+            }
+            catch (Exception error)
+            {
+                Log.Warn(Category, "退场抓帧不成，这一趟没有覆盖层遮挡", error);
             }
         }
-        await compositor.RequestCommitAsync().AsTask().WaitAsync(TimeSpan.FromMilliseconds(250));
+
+        // ② 岛里那一帧立刻放掉。屏上由覆盖层接着，于是接下来几步里没有任何东西会跟着窗口一起缩 ——
+        //    这是「不再有残留画面」的全部机制。放掉之后本页是一块空舞台，所以下面那一趟也不留溶解。
+        _videoTarget.RetainLastFrame = false;
+
+        // ③ 窗口先收回浏览几何，再让浏览页露出来 —— 关键在这一步要早于 LeavePlayer 里的
+        // ShowPlayer(false)+强制排版（2026-09-25，用户报「退出播放页面会触发媒体库上移」，以及更早那条
+        // 「全屏退出主页轮播图先大后小」）。
+        //
+        // 少了这一步，浏览页会先按<b>整屏宽度</b>排一次版：媒体库那种响应式网格因此列数变多、内容变矮，
+        // ScrollView 把竖直滚动位夹小；等窗口缩回小窗、网格又变高，可偏移已经被夹过 —— 同一像素偏移落在
+        // 更靠上的内容上，看起来就是「整个媒体库往上跳了一截」。主页轮播图则是先按整屏宽了一下。收回窗口
+        // 之后浏览页只在浏览尺寸下排这一次版，两样都不再发生。
+        window.RestorePlayerToBrowse();
+        window.FreeSizing = false;
+
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _exitLanded = landed;
+
+        _exitSnap = true;
+        LeavePlayer();
+
+        // `_restoreBrowseOnExit` **不能在这里清**：窗口上面已经还原过，CompletePlayerExit 里那一次
+        // RestorePlayerToBrowse() 是空操作（见它自己的守卫）。
+        try
+        {
+            // 落定上限 3 秒：这一趟是当拍收摊（_exitSnap），正常几乎是立刻回来。到点照走 —— 停播放不能被
+            // 一趟收摊卡死，那种卡法没有出路（画面还挂着、窗口已经交回浏览页）。
+            await landed.Task.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
+        }
+        catch (TimeoutException)
+        {
+            Log.Warn(Category, "退场没在 3 秒内落定，照常停播放");
+        }
+
+        // ④ 等合成器出两帧再撤覆盖层：浏览页刚被放回来，它要排完版、画上屏。撤早了露出的是还没画东西的
+        //    窗口底色（2026-09-20 用户第三张截图里那两截色）。这里等「布局出过帧了没有」比等提交回执可靠，
+        //    理由与 RevealAfterInstantFullscreenAsync 同一段。撤了之后屏上就是主页 —— 再没有任何东西挡着。
+        await WaitFramesAsync(2);
+        handoff?.Dispose();
         VideoFrameOverlay.Flush();
+
+        // ⑤ 退到主页这一趟，让主页重走一遍它平时那趟「回主页」（2026-09-25 用户报「退出时媒体还是没有
+        //    动画」，要「和从电影页面返回到主页的动画一样」）。放这一句的位置就是全部要点：必须在播放层
+        //    收摊之后（上面那一步）—— 早一句，主页的矮窗档判定会被播放层那道门挡掉，翻档的动画根本不会
+        //    发生。是不是真的回主页由外壳判断（从详情页进播放的退出后该回详情页，那一档不动）。
+        _shell?.ReturnToHomeAfterPlayer();
     }
 
     private void StopPlayerMotion()
     {
         _inputSuspended = true;
+        // 收摊这条路绕过 CompletePlayerExit，播放层这一位要在这里还 —— 一笔没人还的账就是「主页从此不再翻档」。
+        _window?.SetPlayerLayer(false);
         CancelPageTransition();
         ResetCover();
         ApplyPagePose(PlayerMotion.Pose.Visible);

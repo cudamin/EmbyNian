@@ -43,11 +43,18 @@ public static class MpvRenderCheck
     /// question is 「这条链吃不吃这个图形接口的亏」, and asking the chain is the only way to answer it without
     /// naming ArtCNN here.
     /// </param>
+    /// <param name="pipelineOwned">
+    /// True when the renderer and API were decided by the player's own pipeline contract (内置播放器) rather
+    /// than by the settings page. The renderer-mismatch problems are then about values nobody chose and are
+    /// dropped, and the compute-pass advice names what a user of the fixed pipeline can actually do instead
+    /// of pointing at a 图形接口 setting that does not apply.
+    /// </param>
     public static IReadOnlyList<string> Problems(
         string? renderer,
         string? gpuApi,
         string? hardwareDecoding,
-        ShaderGroup? chain = null)
+        ShaderGroup? chain = null,
+        bool pipelineOwned = false)
     {
         var vo = (renderer ?? "").Trim();
         var api = (gpuApi ?? "").Trim();
@@ -56,15 +63,19 @@ public static class MpvRenderCheck
 
         // mpv-prescalers records this one as a concrete failure rather than a preference: vo=gpu with
         // gpu-api=d3d11 reports rgba16f as unavailable, and the ravu hooks then do not load at all — a chain
-        // that is configured, logged and silently absent from the picture.
-        if (vo == "gpu" && api == "d3d11")
+        // that is configured, logged and silently absent from the picture. Both inputs are settings-owned
+        // here; the pipeline-owned path (内置) forces gpu-next and never reaches this branch.
+        if (!pipelineOwned)
         {
-            problems.Add("视频渲染是 gpu、图形接口是 d3d11：这个组合会报 rgba16f 格式不可用，ravu 那几条链根本加载不上"
-                + $"（换成 {PreferredRenderer}，或者把图形接口换成 vulkan）");
-        }
-        else if (vo.Length > 0 && vo != PreferredRenderer)
-        {
-            problems.Add($"视频渲染是 {vo}，而这套档位是照 {PreferredRenderer} 调的（ArtCNN 和 CfL 的官方说明都写它）");
+            if (vo == "gpu" && api == "d3d11")
+            {
+                problems.Add("视频渲染是 gpu、图形接口是 d3d11：这个组合会报 rgba16f 格式不可用，ravu 那几条链根本加载不上"
+                    + $"（换成 {PreferredRenderer}，或者把图形接口换成 vulkan）");
+            }
+            else if (vo.Length > 0 && vo != PreferredRenderer)
+            {
+                problems.Add($"视频渲染是 {vo}，而这套档位是照 {PreferredRenderer} 调的（ArtCNN 和 CfL 的官方说明都写它）");
+            }
         }
 
         // The largest cost cliff on this machine, and the reason 图形接口 has been vulkan since 2026-09-04.
@@ -75,9 +86,13 @@ public static class MpvRenderCheck
         var compute = chain?.Shaders.Sum(shader => shader.ComputePasses) ?? 0;
         if (compute > 0 && (api.Length == 0 || api == "d3d11"))
         {
-            problems.Add($"图形接口是 {(api.Length == 0 ? "自动挑选（Windows 上就是 Direct3D 11）" : "Direct3D 11")}，"
-                + $"而这条链有 {compute} 个 compute pass：本机实测同一条链在 D3D11 上只有 8.7 fps、Vulkan 上 45 fps，"
-                + $"24fps 的片子会跟不上（把图形接口换成 {PreferredApi}）");
+            problems.Add(pipelineOwned
+                ? $"内置播放器的管线固定使用 Direct3D 11，而这条链有 {compute} 个 compute pass："
+                    + "本机实测同一条链在 D3D11 上只有 8.7 fps、Vulkan 上 45 fps，24fps 的片子可能跟不上——"
+                    + "内置管线改不了图形接口，卡顿时请降低显卡档位、关闭着色器，或改用外部 mpv（图形接口设为 Vulkan）"
+                : $"图形接口是 {(api.Length == 0 ? "自动挑选（Windows 上就是 Direct3D 11）" : "Direct3D 11")}，"
+                    + $"而这条链有 {compute} 个 compute pass：本机实测同一条链在 D3D11 上只有 8.7 fps、Vulkan 上 45 fps，"
+                    + $"24fps 的片子会跟不上（把图形接口换成 {PreferredApi}）");
         }
 
         // 「关闭（纯软件解码）」 is a real choice and stays one; it is only worth a line because a 4K file plus a

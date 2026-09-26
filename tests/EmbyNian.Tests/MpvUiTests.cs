@@ -123,6 +123,74 @@ internal static class MpvUiTests
                     $"第 {i + 1} 项与 Flatten 先序对不上：序列化编号会和这份表错位");
         });
 
+        // 打勾的判据：一行「是不是当前这一档」怎么读 mpv 的回答。四种读法各钉一遍，因为读错比不读更坏 ——
+        // 屏上会打在错的那一行。Equals 大小写不敏感；Bool 只认 yes/true/非零数（auto 不算开）；Positive 认正数
+        // （panscan 0 关、1 开）；Ratio 把 video-aspect-override 的「1.777778」当 16:9，「no」对着负数（关闭态）。
+        TestHarness.Test("画面菜单打勾判据：四种读法各就各位", () =>
+        {
+            var hwdec = new PlayerMenuState("hwdec", PlayerMenuMatch.Equals, "auto-safe", Radio: true);
+            Assert.True(hwdec.IsChecked("auto-safe"));
+            Assert.True(hwdec.IsChecked("AUTO-SAFE"), "大小写不敏感");
+            Assert.False(hwdec.IsChecked("no"));
+            Assert.False(hwdec.IsChecked(null), "读不到＝不打勾");
+            Assert.False(hwdec.IsChecked(""));
+
+            var flag = new PlayerMenuState("interpolation", PlayerMenuMatch.Bool);
+            Assert.True(flag.IsChecked("yes"));
+            Assert.True(flag.IsChecked("1"));
+            Assert.False(flag.IsChecked("no"));
+            Assert.False(flag.IsChecked("0"));
+            Assert.False(flag.IsChecked("auto"), "auto 不当作「开」");
+
+            var panscan = new PlayerMenuState("panscan", PlayerMenuMatch.Positive);
+            Assert.True(panscan.IsChecked("1.000000"));
+            Assert.False(panscan.IsChecked("0.000000"));
+
+            var wide = new PlayerMenuState("video-aspect-override", PlayerMenuMatch.Ratio, "16:9", Radio: true);
+            Assert.True(wide.IsChecked("1.777778"), "1.777778 就是 16:9");
+            Assert.False(wide.IsChecked("1.333333"), "4:3 不是 16:9");
+            Assert.False(wide.IsChecked("-1.000000"), "关闭态不是某个具体比例");
+
+            var off = new PlayerMenuState("video-aspect-override", PlayerMenuMatch.Ratio, "no", Radio: true);
+            Assert.True(off.IsChecked("-1.000000"), "负数＝默认值（关）打勾");
+            Assert.False(off.IsChecked("1.777778"), "设了 16:9，默认值那一行就不打勾");
+        });
+
+        // 读什么属性由 CheckProperties 汇总，去重（解码方式八行共用一次 hwdec）。核心不变式：一条 Equals 的
+        // 单选行，「打勾用的值」必须等于「set 写下去的值」—— 一旦某天有人改了标签或抄错一处，点一行却打勾在
+        // 另一行（或哪一行都不亮），这条先红。用户当初问的正是这个：解码方式开了哪个得看得出来。
+        TestHarness.Test("画面菜单打勾：属性表去重、单选行「打勾＝所设」", () =>
+        {
+            var properties = PlayerMenuCatalog.CheckProperties;
+            Assert.Equal(properties.Distinct(StringComparer.Ordinal).Count(), properties.Count);
+            Assert.True(properties.Contains("hwdec"), "hwdec 该在打勾属性表里");
+            Assert.True(properties.Contains("audio-channels"), "audio-channels 该在打勾属性表里");
+            Assert.True(properties.Contains("panscan"), "panscan 该在打勾属性表里");
+            Assert.True(properties.Contains("loop-file"), "loop-file 该在打勾属性表里");
+
+            // 每一条 set P V 的单选行：State 认的值就是命令写的值，属性也对得上。
+            foreach (var node in PlayerMenuCatalog.Commands)
+            {
+                if (node.State is not { Radio: true, Match: PlayerMenuMatch.Equals } state) continue;
+
+                var command = node.Commands[0];
+                Assert.Equal("set", command[0]);
+                Assert.Equal(state.Property, command[1]);
+                Assert.Equal(state.Value, command[2]);
+            }
+
+            // 就着一次读数点勾：hwdec 读回 d3d11va，则只有 d3d11va 那一行亮，别的 hwdec 行都不亮。
+            var values = new Dictionary<string, string?>(StringComparer.Ordinal) { ["hwdec"] = "d3d11va" };
+            var hwdecRows = PlayerMenuCatalog.Commands
+                .Where(node => node.State?.Property == "hwdec").ToList();
+
+            Assert.True(hwdecRows.Count >= 5, "解码方式该有多行");
+            Assert.Equal(1, hwdecRows.Count(node => node.IsCheckedBy(values)));
+            Assert.True(hwdecRows.Single(node => node.Label.Contains("d3d11va", StringComparison.Ordinal)
+                                                  && !node.Label.Contains("copy", StringComparison.Ordinal))
+                .IsCheckedBy(values), "读回 d3d11va，就该 d3d11va 那一行亮");
+        });
+
         // 换集契约：只有 ±1 是合法值，别的（0、2、"next"、空串）都不许漏过去 ——
         // 那些会变成 int.Parse 的异常或一次方向不明的导航。
         TestHarness.Test("换集消息只认正负一", () =>
@@ -245,6 +313,7 @@ internal static class MpvUiTests
                 // 方向相反的那一条也数进来：宿主 → uosc 的消息照样不许与脚本绑定同名 ——
                 // mpv 把 script-message 派给同名绑定是不分方向的。
                 VideoWindowContract.VersionCount,
+                VideoWindowContract.EpisodeCount,
             };
             var bindings = new List<string>();
 
@@ -348,7 +417,7 @@ internal static class MpvUiTests
             // （左→右：选集倒数第二、版本最后），右下是 字幕、音频、空一个按钮宽(gap:1)、全屏。
             // 拼写取 controls 默认值里独有的那一截 —— 少一处，uosc 会走到「unknown element kind」并把
             // 那一项之后的按钮整排丢掉（Controls:init_options 的 break）。
-            Assert.True(main.Contains(",embynian-ui-picture-menu,<video,audio>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,"),
+            Assert.True(main.Contains(",embynian-ui-picture-menu,<has_episodes>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,"),
                 "左下那一组的尾巴（画面菜单、选集、版本）丢了或次序不对");
             Assert.True(main.Contains(",space,<video,audio>subtitles,audio,gap:1,fullscreen'"),
                 "右下那一组（字幕、音频、空一个按钮宽、全屏）丢了或次序不对");
@@ -368,8 +437,53 @@ internal static class MpvUiTests
             Assert.True(main.Contains("has_many_versions = false,"),
                 "state 表里没有 has_many_versions 那一格 —— 默认值该是「先不画」");
 
+            // 选集按钮与版本同一套「按需露面」（2026-09-26 用户令「播放电影的时候不要显示这个按钮」；
+            // 门 <has_episodes>，宿主的 embynian-episode-count 写它，0＝电影＝整颗不在屏上），四头都在：
+            // controls 串上的门、消息处理器、state 格子、Controls.lua 里写死中文的 tooltip（原来走
+            // t('Episodes')，译文表没有就落在英文上）。宿主 → uosc 的键不进 Parse，同版本那条。
+            Assert.True(main.Contains("<has_episodes>embynian-ui-episodes"),
+                "选集按钮没挂上「是单集才露」那道门");
+            Assert.True(main.Contains("register_script_message('embynian-episode-count'"),
+                "「是不是单集」这条宿主消息没人接：播电影时那颗按钮下不来");
+            Assert.True(main.Contains("set_state('has_episodes'"),
+                "has_episodes 没人写：那道门永远关着");
+            Assert.True(main.Contains("has_episodes = false,"),
+                "state 表里没有 has_episodes 那一格 —— 默认值该是「先不画」");
+            Assert.True(controls.Contains("embynian-ui-episodes?选集"),
+                "选集按钮的 tooltip 没写死中文 —— t('Episodes') 会落在英文上");
+            Assert.Null(VideoWindowContract.Parse([VideoWindowContract.EpisodeCount, "1"]));
+
             // 音频按钮：只有一条音轨时也要在。带上 <has_many_audio> 就是「多轨才显示」的旧行为。
             Assert.False(main.Contains("<has_many_audio>audio"), "音频按钮又带上「多音轨才显示」的条件了");
+        });
+
+        // 2026-09-26（用户令「独占模式右键菜单参考集成模式的弹出方式，去掉那种居中的模式」「左上角加返回按钮」）：
+        // 两处都是直接改 uosc 元件、又是升级 uosc 时最容易漏打的补丁，对着源码钉住。
+        //   · Menu.lua 锚点补丁（EMBYNIAN[menu-anchor]）：宿主推来的菜单带 embynian_anchor 时在光标处弹出、
+        //     不屏幕居中、不压暗幕布 —— 弹出方式与集成模式的右键/按钮浮层一致（用户要「弹出方式一样」）。
+        //   · TopBar.lua 左上角返回按钮（EMBYNIAN[topbar-back]）：点它退出 mpv＝回到外壳详情页。
+        // 都是运行期观感（三条离线探针固定走集成管线、不覆盖 uosc），这里只保证补丁没被 uosc 升级冲掉。
+        TestHarness.Test("独占模式菜单锚点与左上角返回按钮：uosc 补丁都在", () =>
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var uosc = Path.Combine(directory!.FullName, "assets", "mpv-ui", "scripts", "uosc");
+            var menu = File.ReadAllText(Path.Combine(uosc, "elements", "Menu.lua"));
+            var topbar = File.ReadAllText(Path.Combine(uosc, "elements", "TopBar.lua"));
+
+            // 菜单锚点：读 embynian_anchor 记下光标锚点、摆位用 self.anchor、锚点在时跳过幕布登记
+            // （少了这条，菜单又变回压暗整屏的居中大模态）。
+            Assert.True(menu.Contains("embynian_anchor"), "菜单锚点补丁丢了：Menu.lua 不读 embynian_anchor");
+            Assert.True(menu.Contains("self.anchor"), "菜单锚点补丁丢了：Menu.lua 没有 anchor 摆位");
+            Assert.True(menu.Contains("if not self.anchor then Elements:maybe('curtain', 'register'"),
+                "菜单锚点补丁丢了：锚点菜单没跳过压暗幕布，会变回居中模态");
+
+            // 返回按钮：按钮定义在、图标是 arrow_back_ios（装箱 Material Icons Round 里确有此字形）。
+            Assert.True(topbar.Contains("self.back_button"), "左上角返回按钮丢了：TopBar.lua 没有 back_button");
+            Assert.True(topbar.Contains("arrow_back_ios"), "返回按钮图标丢了");
         });
     }
 }

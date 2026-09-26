@@ -44,6 +44,7 @@ internal static class PlaybackTests
         RegisterPlayerMenu();
         RegisterEpisodeNavigation();
         RegisterPlaybackGate();
+        RegisterDonghua();
         RegisterPlaybackBatches();
     }
 
@@ -725,6 +726,75 @@ internal static class PlaybackTests
 
             static string Join(Dictionary<string, string> live) =>
                 string.Join("\n", live.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
+        });
+
+        // profile-list 的样例，形状照 mpv 自己的 JSON（[{name, options:[{key, value}]}]）：
+        // fast 与 high-quality 的内容是从自带的 libmpv-2.dll（v0.41.0-923）--show-profile 上抄的。
+        const string ProfilesJson = """
+            [
+              { "name": "fast", "options": [
+                { "key": "scale", "value": "bilinear" },
+                { "key": "dscale", "value": "bilinear" },
+                { "key": "dither", "value": "no" },
+                { "key": "correct-downscaling", "value": "no" },
+                { "key": "linear-downscaling", "value": "no" },
+                { "key": "sigmoid-upscaling", "value": "no" },
+                { "key": "hdr-compute-peak", "value": "no" },
+                { "key": "allow-delayed-peak-detect", "value": "yes" } ] },
+              { "name": "high-quality", "options": [
+                { "key": "scale", "value": "ewa_lanczossharp" },
+                { "key": "scale-antiring", "value": "0.6" },
+                { "key": "hdr-peak-percentile", "value": "99.995" },
+                { "key": "hdr-contrast-recovery", "value": "0.30" } ] }
+            ]
+            """;
+
+        Test("画质预设：profile=fast 展开成内置的那一组选项，没有 profile 的原样通过", () =>
+        {
+            KeyValuePair<string, string>[] launch = [new("profile", "fast"), new("vo", "gpu-next")];
+            var fast = Options(MpvProfiles.Expand(launch, ProfilesJson));
+
+            Assert.Equal("bilinear", fast["scale"]);
+            Assert.Equal("bilinear", fast["dscale"]);
+            Assert.Equal("no", fast["dither"]);
+            Assert.Equal("no", fast["correct-downscaling"]);
+            Assert.Equal("no", fast["linear-downscaling"]);
+            Assert.Equal("no", fast["sigmoid-upscaling"]);
+            Assert.Equal("no", fast["hdr-compute-peak"]);
+            Assert.Equal("yes", fast["allow-delayed-peak-detect"]);
+            Assert.Equal("gpu-next", fast["vo"], "profile 之外的选项原样保留、原位不动");
+
+            var high = Options(MpvProfiles.Expand([new("profile", "high-quality")], ProfilesJson));
+            Assert.Equal("ewa_lanczossharp", high["scale"]);
+            Assert.Equal("0.30", high["hdr-contrast-recovery"]);
+
+            // 一张表都没有 profile 项时根本不该碰 JSON：拿到什么交回什么，连 null 都合法。
+            var plain = new KeyValuePair<string, string>[] { new("scale", "spline36"), new("deband", "yes") };
+            var same = MpvProfiles.Expand(plain, null);
+            Assert.Equal(2, same.Count, "不含 profile 的 options 原样返回");
+            Assert.Equal("spline36", same[0].Value);
+            Assert.Equal("yes", same[1].Value);
+
+            // 两种失败都要喊出来：名字不认识，或者播放器压根没给出目录 —— 静默跳过等于把画质
+            // 悄悄换成默认，而 mpv 对不认识的 profile 是不播的，这里不能比它更宽容。
+            Assert.Throws<InvalidOperationException>(() => MpvProfiles.Expand([new("profile", "fast")], null));
+            Assert.Throws<InvalidOperationException>(() => MpvProfiles.Expand([new("profile", "没有这一档")], ProfilesJson));
+        });
+
+        Test("画质预设：切档回落的是展开后的预设值，defaults 压过还原表里的出厂常量", () =>
+        {
+            // 起播带了 profile=fast：关链（group=null）时 scale 应回到 fast 展开的 bilinear，
+            // 而不是出厂的 lanczos —— 基线先经 MpvProfiles.Expand 展开，再按名字取值。
+            var off = Options(ShaderSwitch.Options([new("profile", "fast")], 0, null, @"C:\shaders", ProfilesJson));
+            Assert.Equal("bilinear", off["scale"], "回落的是画质预设展开后的值，不是出厂的 lanczos");
+            Assert.Equal("", off["glsl-shaders"], "关链时链本身照旧清空");
+
+            // cscale 不在 fast 的展开结果里：还原表给它的出厂常量是空串，而起播时问 mpv 要的
+            // option-info 出厂值（defaults）应该赢过那个空串 —— 「出厂值」以这台播放器报的为准。
+            var withDefaults = Options(ShaderSwitch.Options(
+                [new("profile", "fast")], 0, null, @"C:\shaders", ProfilesJson,
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["cscale"] = "bilinear" }));
+            Assert.Equal("bilinear", withDefaults["cscale"], "defaults 优先于还原表里的出厂常量");
         });
 
         Test("着色器档位：九十六格每一格都过得了那套规则", () =>
@@ -1428,6 +1498,33 @@ internal static class PlaybackTests
 
             Assert.Contains("硬件解码是关的", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "vulkan", "")));
             Assert.Contains("gpu-next", string.Join("\n", MpvRenderCheck.Problems("gpu", "vulkan", "auto-safe")));
+        });
+
+        // 内置播放器的渲染后端与图形接口由管线契约锁定，设置页对它根本不提供这两项——
+        // 兼容性检查必须按真正会跑的值问，而不是按设置里存着、内置根本不用的值问：
+        // 存量文件里的 gpu/vulkan 不得再编出「ravu 加载不上」「建议换 vulkan」这类没人能照做的提醒。
+        Test("运行条件：管线锁定的后端按事实问，提醒说的是用户真能做的事", () =>
+        {
+            var artcnn = ShaderGroupCatalog.Resolve(animated: true, UpscaleTier.Slight, GpuTier.Low);
+
+            // 设置里哪怕存着最坏的组合（gpu + d3d11），管线自有它的事实，渲染那两条问题不再产出。
+            Assert.Equal("", string.Join("\n",
+                MpvRenderCheck.Problems("gpu", "d3d11", "auto-safe", artcnn, pipelineOwned: true)
+                    .Where(problem => problem.Contains("渲染") || problem.Contains("ravu"))));
+
+            // compute 提醒还在（这是真会发生的卡顿），但建议不再是「换 vulkan」——内置改不了那一项。
+            var compute = string.Join("\n", MpvRenderCheck.Problems(
+                LibMpvPipelinePolicy.ForcedRenderer, LibMpvPipelinePolicy.ForcedApi, "auto-safe", artcnn, pipelineOwned: true));
+            Assert.Contains("compute pass", compute);
+            Assert.Contains("内置播放器的管线固定使用 Direct3D 11", compute);
+            Assert.DoesNotContain("把图形接口换成", compute);
+
+            // 常量与管线契约同源：Build 写出去的 vo/gpu-api 就是这两个名字，两处不许各自漂。
+            var contract = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, []);
+            Assert.Equal(LibMpvPipelinePolicy.ForcedRenderer,
+                contract.Single(option => option.Name == "vo").Value);
+            Assert.Equal(LibMpvPipelinePolicy.ForcedApi,
+                contract.Single(option => option.Name == "gpu-api").Value);
         });
 
         Test("运行条件：带 compute pass 的链撞上 d3d11 要被点出来（2026-09-04 那五倍）", () =>
@@ -2456,7 +2553,7 @@ internal static class PlaybackTests
                 GpuApi = "d3d11",
                 HardwareDecoding = "d3d11va",
                 OutputLevels = "limited",
-                Deinterlace = true,
+                DeinterlaceMode = "yes",
                 NetworkCacheMegabytes = 200
             };
 
@@ -2808,14 +2905,52 @@ internal static class PlaybackTests
 
             var tonemap = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), null, hdr));
             Assert.Equal("no", tonemap["target-colorspace-hint"]);
-            Assert.Equal("auto", tonemap["tone-mapping"]);
-            Assert.Equal("auto", tonemap["hdr-compute-peak"]);
+            Assert.Equal("bt.1886", tonemap["target-trc"]);
+            Assert.Equal("bt.709", tonemap["target-prim"]);
+            Assert.False(tonemap.ContainsKey("tone-mapping"), "映射曲线继承预设或内核默认");
 
             var passthrough = Options(MpvOutputOptions.Build(
                 new VideoSettings { HdrMode = "passthrough" }, new AudioSettings(), null, hdr));
-            Assert.Equal("yes", passthrough["target-colorspace-hint"]);
-            Assert.Equal("clip", passthrough["tone-mapping"], "交给显示器映射之后再映射一次就是映射两遍");
-            Assert.Equal("no", passthrough["hdr-compute-peak"]);
+            Assert.Equal("auto", passthrough["target-colorspace-hint"]);
+            Assert.Equal("target", passthrough["target-colorspace-hint-mode"]);
+            Assert.False(passthrough.ContainsKey("tone-mapping"), "不可强制 clip 截断高光");
+            Assert.False(passthrough.ContainsKey("hdr-compute-peak"), "HDR 输出也保留峰值检测能力");
+        });
+
+        Test("输出：HDR 输出峰值只在 HDR 输出时发 target-peak，映射到 SDR 时不发", () =>
+        {
+            var hdr = new SourceProfile(3840, 2160, 10, 24, true);
+
+            var passthrough = Options(HdrOptions.Build(
+                new VideoSettings { HdrMode = "passthrough", HdrPeakNits = 600 }, hdr));
+            Assert.Equal("600", passthrough["target-peak"], "用户钉死的峰值就是这个数，交给显示器去够");
+
+            var tonemap = Options(HdrOptions.Build(
+                new VideoSettings { HdrMode = "tonemap", HdrPeakNits = 600 }, hdr));
+            Assert.False(tonemap.ContainsKey("target-peak"), "映射到 SDR 时目标已经钉死在 bt.1886/bt.709，手填峰值是矛盾的两层");
+        });
+
+        Test("输出：杜比视界元数据默认保留，关掉一层才发一条 vf", () =>
+        {
+            var hdr = new SourceProfile(3840, 2160, 10, 24, true);
+
+            var kept = Options(HdrOptions.Build(new VideoSettings(), hdr));
+            Assert.False(kept.ContainsKey("vf"), "三个元数据开关全默认时不该有任何 vf");
+
+            var dropped = Options(HdrOptions.Build(
+                new VideoSettings { DolbyVisionMetadata = false }, hdr));
+            Assert.Equal("@embynian-hdr:format=dolbyvision=no", dropped["vf"], "只关一层就只写那一个词");
+        });
+
+        Test("输出：hdr-contrast-recovery 手动给了就发，null 就一条不发", () =>
+        {
+            var manual = Options(HdrOptions.Build(
+                new VideoSettings { HdrContrastRecovery = 0.5 }, new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.Equal("0.5", manual["hdr-contrast-recovery"], "手动值越过画质预设，直接写进启动选项");
+
+            var automatic = Options(HdrOptions.Build(
+                new VideoSettings(), new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.False(automatic.ContainsKey("hdr-contrast-recovery"), "null 是「交给画质预设」：预设没开就是一条不发");
         });
 
         Test("输出：自动 ICC 校色关着一条都不发，打开了才发 yes", () =>
@@ -3148,8 +3283,8 @@ internal static class PlaybackTests
             Assert.True(skips.Prompt.Visible);
             Assert.Equal("跳过片头", skips.Prompt.Caption);
             Assert.Equal(1, skips.Prompt.Remaining, "刚出现时倒计时是满的");
-            Assert.Contains("Y 跳过", skips.Prompt.Tip, "提示里写清 Y 是接受");
-            Assert.Contains("N 关闭", skips.Prompt.Tip, "提示里写清 N 是关闭");
+            Assert.Contains("回车跳过", skips.Prompt.Tip, "提示里写清回车是接受（2026-09-26 键位改动：Y→回车）");
+            Assert.Contains("Esc 关闭", skips.Prompt.Tip, "提示里写清 Esc 是关闭（2026-09-26 键位改动：N→Esc）");
             Assert.Contains("1:30", skips.Prompt.Tip, "提示里写清落点");
 
             skips.Advance(17.5, playing: true);
@@ -3413,6 +3548,26 @@ internal static class PlaybackTests
 
             chrome.Pointer(y: 40, height: 1000, ChromePart.Title, railNear: 1, now + 1200);
             Assert.Equal(new ChromeState(false, true, true), chrome.State, "顶部条和音量条可以同时在");
+        });
+
+        Test("播放器控件：压在跳过按钮上不唤进度条", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            // 「鼠标移到按钮上的时候不会唤出进度条」（用户令 2026-09-26）：按钮按 offer 的节拍自己显隐，
+            // 指针到它上面不等于「要看控制条」。按钮恰在底部边缘带里（y 940/1000 过 0.88 的带线），
+            // 底带判据要让位 —— Skip 这一支盖过 Edges 的结果。
+            chrome.Pointer(y: 940, height: 1000, ChromePart.Skip, railNear: -1, now + 1100);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+
+            // 手在按钮上停着也不算「该收的没收」：停靠耐心照旧，状态不再变。
+            Assert.False(chrome.Pointer(y: 940, height: 1000, ChromePart.Skip, railNear: -1, now + 5000));
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+
+            // 挪出按钮、回到底部边缘带（按钮之外）照旧唤条 —— 让位的只有按钮自己那块地方。
+            chrome.Pointer(y: 985, height: 1000, ChromePart.None, railNear: -1, now + 5100);
+            Assert.True(chrome.State.Bar);
         });
 
         Test("播放器控件：指针停在控件上就不算静止", () =>
@@ -4678,6 +4833,126 @@ internal static class PlaybackTests
         });
     }
 
+    // ---- 国漫标记已看 --------------------------------------------------------------
+    //
+    // 用户令 2026-09-26「新增国漫播放进度自定义百分比标记已看」：命中国漫（类型：动画 ∧ 发行公司带
+    // 腾讯/哔哩哔哩）的条目按 DonghuaMarkWatchedPercent 单独一档算，不吃全局 MarkWatchedPercent。
+    // 判定是纯函数（DonghuaRule），直接摆矩阵；阈值的选择（ShouldMarkWatched）借假后端走一遍真的播放
+    // 结束 —— 那是这条规则真正生效的地方。
+
+    private static void RegisterDonghua()
+    {
+        Test("国漫判定：类型加发行公司两关都过才算", () =>
+        {
+            Assert.True(IsDonghua(DonghuaRule.Genre, "Tencent Video"));
+            Assert.True(IsDonghua(DonghuaRule.Genre, "Tencent"));
+            Assert.True(IsDonghua(DonghuaRule.Genre, "tencent pictures"), "发行公司不分大小写");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "bilibili"));
+            Assert.True(IsDonghua(DonghuaRule.Genre, "哔哩哔哩"), "中文库把发行公司写成中文的也兜住");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "Youku"), "同日续令「把Youku和iQiyi也带上」");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "iQIYI"), "不分大小写");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "优酷"), "中文写法兜底");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "爱奇艺"), "中文写法兜底");
+            Assert.True(IsDonghua(null, "Tencent Video", tags: ["国产动画"]), "类型也认标签里的");
+
+            Assert.False(IsDonghua(DonghuaRule.Genre, "企鹅影视"), "不是腾讯/哔哩哔哩的发行公司不算");
+            Assert.False(IsDonghua("科幻", "Tencent Video"), "腾讯引进的真人剧不算");
+            Assert.False(IsDonghua(DonghuaRule.Genre), "只有类型、没有发行公司不算");
+        });
+
+        Test("国漫判定：剧集条目自己不带元数据时看剧集那一层", () =>
+        {
+            var series = Item("某部国漫剧集", type: EmbyItemType.Series, genres: [DonghuaRule.Genre]);
+            series.Studios.Add(new EmbyStudio { Name = "bilibili" });
+            var episode = Item("第 1 集", type: EmbyItemType.Episode);
+
+            Assert.True(DonghuaRule.Matches(episode, series), "类型和发行公司都长在剧集上");
+            Assert.False(DonghuaRule.Matches(episode), "没有剧集那一层就谈不上国漫");
+
+            var liveAction = Item("某部真人剧集", type: EmbyItemType.Series, genres: ["科幻"]);
+            liveAction.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+            Assert.False(DonghuaRule.Matches(episode, liveAction), "腾讯引进的真人剧不算");
+        });
+
+        Test("国漫判定：计划层把结论带进播放请求", () =>
+        {
+            var (planner, _) = Planner();
+            var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+            donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+
+            Assert.True(planner.Plan(Ticket() with { Item = donghua }, Connection()).IsDonghua);
+            Assert.False(planner.Plan(Ticket(), Connection()).IsDonghua, "普通条目不命中国漫");
+        });
+
+        Test("国漫标记已看：六成停下时全局档不算看，国漫档算", () =>
+            MarkDonghuaWatchedAsync().GetAwaiter().GetResult());
+
+        Test("国漫标记已看：放到结尾不看百分比，照算看过", () =>
+            MarkDonghuaWatchedToEndAsync().GetAwaiter().GetResult());
+    }
+
+    private static bool IsDonghua(string? genre, string? studio = null, List<string>? tags = null)
+    {
+        var item = Item("某部片", genres: genre is null ? null : [genre], tags: tags);
+        if (studio is not null) item.Studios.Add(new EmbyStudio { Name = studio });
+        return DonghuaRule.Matches(item);
+    }
+
+    /// <summary>
+    /// 标记已看这条规则的端到端：<c>Source()</c> 是两小时，放到 4321 秒（六成刚过线）。全局档 90%
+    /// 明确够不着，国漫档 60% 明确够得着 —— 一位观众两个条目，差别只该出在国漫那一关上。
+    /// </summary>
+    private static async Task MarkDonghuaWatchedAsync()
+    {
+        var first = new PlaybackStubHandle();
+        var second = new PlaybackStubHandle();
+        var (service, session) = PlayingService(settings =>
+        {
+            settings.Playback.ReportProgressToServer = true;
+            settings.Playback.DonghuaMarkWatchedPercent = 60;
+        }, first, second);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        // 上报打了假传输层的 404 不要紧：上报失败不影响「算不算看过」的判定，PlaybackResult.MarkedWatched
+        // 就是 ShouldMarkWatched 的原话。
+        var plainResult = await RunOnceAsync(service, Ticket(), first, cancellation.Token,
+            endOfFile: false, positionSeconds: 4321);
+        Assert.False(plainResult.MarkedWatched, "全局档 90%：放到六成不算看过");
+
+        var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+        donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+        var donghuaResult = await RunOnceAsync(service, Ticket() with { Item = donghua }, second, cancellation.Token,
+            endOfFile: false, positionSeconds: 4321);
+        Assert.True(donghuaResult.MarkedWatched, "国漫档 60%：放到六成出头就算看过");
+    }
+
+    /// <summary>EOF 那一档不看百分比（<see cref="PlaybackService.ShouldMarkWatched"/> 的第一句），国漫条目同样照算。</summary>
+    private static async Task MarkDonghuaWatchedToEndAsync()
+    {
+        var handle = new PlaybackStubHandle();
+        var (service, session) = PlayingService(
+            settings => settings.Playback.ReportProgressToServer = true, handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+        donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+        var result = await RunOnceAsync(service, Ticket() with { Item = donghua }, handle, cancellation.Token,
+            endOfFile: true, positionSeconds: null);
+        Assert.True(result.MarkedWatched, "放到结尾（EOF）不看百分比，照算看过");
+    }
+
+    private static async Task<PlaybackResult> RunOnceAsync(
+        PlaybackService service, PlaybackTicket ticket, PlaybackStubHandle handle,
+        CancellationToken cancellation, bool endOfFile, double? positionSeconds)
+    {
+        var playing = service.PlayAsync(ticket, cancellation);
+        await handle.Started.Task.WaitAsync(cancellation);
+        handle.End(positionSeconds, endOfFile ? PlaybackEndReason.EndOfFile : PlaybackEndReason.Stopped);
+        return await playing.WaitAsync(cancellation);
+    }
+
     // ---- 播放闸门 --------------------------------------------------------------
 
     /// <summary>
@@ -4865,14 +5140,25 @@ internal static class PlaybackTests
         shaders ? service.SetShaderGroupAsync(null) : service.ApplySubtitleStyleAsync();
 
     /// <summary>假登录和假后端：只走内存中的传输，不访问服务器、不启动 mpv，也不写设置文件。</summary>
-    private static (PlaybackService Service, EmbySession Session) PlayingService(params PlaybackStubHandle[] handles)
+    private static (PlaybackService Service, EmbySession Session) PlayingService(params PlaybackStubHandle[] handles) =>
+        PlayingService(null, handles);
+
+    /// <inheritdoc cref="PlayingService(PlaybackStubHandle[])"/>
+    /// <param name="configure">
+    /// 在服务拿到这份设置之前拨几项 —— 标记已看那批要开着上报、拨国漫阈值，基建里固定的关上报压不住它。
+    /// </param>
+    private static (PlaybackService Service, EmbySession Session) PlayingService(
+        Action<AppSettings>? configure, params PlaybackStubHandle[] handles)
     {
         var settings = new AppSettings();
         settings.Playback.ReportProgressToServer = false;
         settings.Playback.SubtitleAssOverride = "";
+        configure?.Invoke(settings);
         var transport = new StubTransport()
             .Answer("Views", """{ "Items": [], "TotalRecordCount": 0 }""")
-            .Answer("System/Info/Public", """{ "ServerName": "离线测试", "Id": "stub" }""");
+            .Answer("System/Info/Public", """{ "ServerName": "离线测试", "Id": "stub" }""")
+            // 国漫标记已看那批把上报打开了：Sessions 那三条给个空应答，别让每一趟上报都 404 出一屏噪音。
+            .Answer("Sessions", "{}");
         var session = new EmbySession(
             settings,
             new SettingsStore(
@@ -4909,7 +5195,9 @@ internal static class PlaybackTests
             Task.FromResult<IPlaybackHandle>(_handles.Dequeue());
     }
 
-    private sealed class PlaybackStubHandle : IPlaybackHandle
+    // 着色器切换的批次现在走 IPlayerControl.CommandAsync（「set 属性 值」），不再走句柄的 SetPropertyAsync；
+    // 假句柄必须也是控制通道，否则 SetShaderGroupAsync 在门口就退回 false，一行都发不出去。
+    private sealed class PlaybackStubHandle : IPlaybackHandle, IPlayerControl
     {
         private readonly TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -4927,7 +5215,8 @@ internal static class PlaybackTests
         public bool IsPaused => false;
         public event Action<bool>? PauseChanged { add { } remove { } }
 
-        public void End() => _exit.TrySetResult(new PlaybackExit(PlaybackEndReason.Stopped, 0, 0, null));
+        public void End(double? positionSeconds = null, PlaybackEndReason reason = PlaybackEndReason.Stopped) =>
+            _exit.TrySetResult(new PlaybackExit(reason, positionSeconds, 0, null));
 
         public Task<PlaybackExit> WaitForExitAsync(CancellationToken cancellationToken)
         {
@@ -4948,11 +5237,28 @@ internal static class PlaybackTests
             if (BeforeSet is { } before) await before();
         }
 
+        public PlayerStatus Status => new();
+
+        public event Action<PlayerStatus>? StatusChanged { add { } remove { } }
+
+        public event Action<IReadOnlyList<MpvTrack>>? TracksChanged { add { } remove { } }
+
+        // 「set」就是一次属性写入：与 SetPropertyAsync 走同一条记录（含 BeforeSet 挂起点），
+        // 其余命令不是属性写，只回「已接受」。
+        public async Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+        {
+            if (arguments.Count >= 3 && string.Equals(arguments[0], "set", StringComparison.Ordinal))
+                await SetPropertyAsync(arguments[1], arguments[2], cancellationToken);
+            return true;
+        }
+
         public async Task<string?> GetTextAsync(string name, CancellationToken cancellationToken)
         {
             Reads.Add(name);
             if (BeforeRead is { } before) await before();
-            return name == "fullscreen" ? Fullscreen : "播放器默认值";
+            return name == "fullscreen" ? Fullscreen
+                : name == "profile-list" ? "[]" // 画质预设目录：默认设置不带 profile 项，展开器不会解析它
+                : "播放器默认值";
         }
 
         public Task<double?> GetPositionAsync(CancellationToken cancellationToken) => Task.FromResult<double?>(0);

@@ -18,6 +18,8 @@ public sealed class MoviePilotCredentials(ISecretProtector protector)
 
     public string GetPassword(MoviePilotSettings settings) => Unwrap(settings.ProtectedPassword);
 
+    internal string GetPassword(string protectedPassword) => Unwrap(protectedPassword);
+
     public void SetPassword(MoviePilotSettings settings, string password) =>
         settings.ProtectedPassword = string.IsNullOrEmpty(password) ? "" : Wrap(password);
 

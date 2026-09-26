@@ -66,8 +66,62 @@ public abstract class SettingRow : ObservableObject
     /// </summary>
     internal void Restate(string note) => Note = note ?? "";
 
-    /// <summary>Collapses the note's <c>TextBlock</c> so an absent note takes no vertical space.</summary>
-    public Visibility NoteVisibility => Note.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+    /// <summary>
+    /// Collapses the note's <c>TextBlock</c> so an absent note takes no vertical space — and so 精简模式
+    /// （设置 → 界面，2026-09-25）can take every note off the page at once.
+    /// <para>
+    /// The mode is page-wide state, not a per-row one, so it lives on the type instead of being threaded
+    /// through sixty constructors: <see cref="SettingsViewModel"/> aligns it while building the page and again
+    /// the moment the toggle flips, and every row reads it here. The templates bind this OneWay, and
+    /// <see cref="RefreshNoteVisibility"/> is the message that tells them the mode moved — the same message
+    /// the <see cref="Note"/> setter already sends for the one row that restates itself.
+    /// </para>
+    /// </summary>
+    public Visibility NoteVisibility =>
+        Note.Length == 0 || NotesHidden ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>精简模式开着：整页的说明都收起。谁设、何时设，见 <see cref="NoteVisibility"/>。</summary>
+    internal static bool NotesHidden { get; set; }
+
+    /// <summary>
+    /// 精简模式拨了一下：对每一行把可见性重算的消息喊一遍。The view model walks the sections and calls this
+    /// on every row — a row knows nothing about the mode beyond reading it above. Not a refresh pass in the
+    /// sense the page forbids: nothing is recomputed, this only repeats for every row what the Note setter
+    /// already does for one.
+    /// </summary>
+    internal void RefreshNoteVisibility() => OnPropertyChanged(nameof(NoteVisibility));
+
+    /// <summary>
+    /// 自检：精简模式收得下、放得出。就地造一行假开关行拨一遍 —— 单元测试进不到外壳这个程序集，这一条非有
+    /// 不可的理由同 <see cref="SettingChoiceRow.Probe"/>：收/放任何一档卡住，屏上的样子都是「拨了没反应」，
+    /// 别的读数一个都不动。拨完把标记放回原样，别让自检跑过的那一页停在精简里。
+    /// <para>
+    /// 叫 <c>ProbeCompactMode</c> 而不是 <c>Probe</c>：好几行类型各自有一个自己的静态 <c>Probe</c>，基类再挂
+    /// 一个同名的就是把它们全部遮成 CS0108 警告（实测过一轮）。
+    /// </para>
+    /// </summary>
+    internal static (bool Ok, string Detail) ProbeCompactMode()
+    {
+        var restore = NotesHidden;
+        try
+        {
+            var row = new SettingToggleRow("探针", "一行说明", true, _ => { }, () => { });
+
+            NotesHidden = false;
+            var shown = row.NoteVisibility == Visibility.Visible;
+            NotesHidden = true;
+            var taken = row.NoteVisibility == Visibility.Collapsed;
+            NotesHidden = false;
+            var given = row.NoteVisibility == Visibility.Visible;
+
+            return (shown && taken && given,
+                $"说明默认{(shown ? "显示" : "没显示")}、精简拨上{(taken ? "收起" : "还在")}、拨回{(given ? "放出来" : "没放出来")}");
+        }
+        finally
+        {
+            NotesHidden = restore;
+        }
+    }
 }
 
 /// <summary>
@@ -222,19 +276,26 @@ public sealed partial class SettingChoiceRow : SettingRow
 /// <summary>
 /// A switch bound to one setting. Unlike the other rows this one carries its own header and sits full
 /// width, so its label is not in the shared left-hand column and its note becomes the tooltip.
+/// <para>
+/// The optional <c>after</c> hook is the same shape <see cref="SettingChoiceRow"/> has: fired after the
+/// save, for the row whose flip has consequences beyond the document. 精简模式 is the one that needs it —
+/// the whole page's notes follow that switch, and they live on the rows, not in the file.
+/// </para>
 /// </summary>
 public sealed partial class SettingToggleRow : SettingRow
 {
     private readonly Action<bool> _write;
     private readonly Action _save;
+    private readonly Action? _after;
     private readonly bool _seeded;
 
-    internal SettingToggleRow(string label, string note, bool value, Action<bool> write, Action save)
+    internal SettingToggleRow(string label, string note, bool value, Action<bool> write, Action save, Action? after = null)
         : base(label, note)
     {
         IsOn = value;
         _write = write;
         _save = save;
+        _after = after;
         _seeded = true;
     }
 
@@ -246,6 +307,7 @@ public sealed partial class SettingToggleRow : SettingRow
         if (!_seeded) return;
         _write(value);
         _save();
+        _after?.Invoke();
     }
 }
 

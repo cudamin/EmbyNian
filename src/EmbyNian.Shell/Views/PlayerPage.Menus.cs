@@ -24,6 +24,12 @@ namespace EmbyNian.Shell.Views;
 /// </summary>
 public sealed partial class PlayerPage
 {
+    /// <summary>
+    /// The 画面菜单 rows that can show a tick, paired with their catalogue node, collected as the menu is built
+    /// once. <see cref="RefreshPictureChecksAsync"/> walks this on every open to set each tick from mpv.
+    /// </summary>
+    private readonly List<(MenuFlyoutItem Item, PlayerMenuNode Node)> _pictureChecks = [];
+
     // ---- 选集 --------------------------------------------------------------------
 
     private void OnEpisodeMenuOpening(object sender, object e)
@@ -182,32 +188,10 @@ public sealed partial class PlayerPage
     }
 
     // ---- 倍速 --------------------------------------------------------------------
-
-    private void OnSpeedMenuOpening(object sender, object e)
-    {
-        if (!Attached) return;
-
-        SpeedMenu.Items.Clear();
-
-        foreach (var rate in PlayerViewModel.SpeedChoices)
-        {
-            var row = new RadioMenuFlyoutItem
-            {
-                Text = rate == 1 ? "1.0×（正常）" : $"{rate.ToString("0.0#", CultureInfo.InvariantCulture)}×",
-                IsChecked = Math.Abs(ViewModel.Status.Speed - rate) < 0.005,
-                Tag = rate
-            };
-
-            // No notice: the menu row the user just clicked is already the answer to 「什么倍速」, and mpv's
-            // own OSD text over it would be one message too many.
-            row.Click += (source, args) =>
-            {
-                if (source is MenuFlyoutItem { Tag: double picked }) ViewModel.SetSpeed(picked, notice: false);
-            };
-
-            SpeedMenu.Items.Add(row);
-        }
-    }
+    //
+    // 倍速不再是菜单（2026-09-25 用户令「改为竖置的滚动条滚轮，刻度居中，使用鼠标滚轮翻动或者鼠标左键
+    // 长按拖拽」）：按钮开的是 SpeedWheelFlyout 那只轮盘，刻度与手势的接线在 PlayerPage.SpeedWheel.cs，
+    // 算术在 Core 的 SpeedWheel。这里原先是 OnSpeedMenuOpening —— 八行 RadioMenuFlyoutItem 的旧路。
 
     // ---- ⚙更多 -------------------------------------------------------------------
 
@@ -362,19 +346,56 @@ public sealed partial class PlayerPage
     // ---- 画面 --------------------------------------------------------------------
 
     /// <summary>
-    /// 画面: mpv's own video controls — 缩放、旋转、去色带、锐化、重置 — as a menu, built once and kept,
-    /// because unlike the other five nothing in it shows a current value. The rows are
-    /// <see cref="PlayerMenuCatalog"/>'s, in Core: a table of labels and mpv commands, which is why adding
-    /// one is a line of data rather than a handler.
+    /// 画面: mpv's own video controls — 缩放、旋转、去色带、锐化、重置 — as a menu. Its structure（labels and
+    /// commands）never changes, so it is built once and kept; what does change is which rows are current —
+    /// 解码方式, 声道布局, 抖动补偿… — and that is refreshed on every open by reading those properties from mpv
+    /// (see <see cref="RefreshPictureChecksAsync"/>). The rows are <see cref="PlayerMenuCatalog"/>'s, in Core: a
+    /// table of labels, mpv commands and — for the checkable ones — the property that ticks them, which is why
+    /// adding one is a line of data rather than a handler.
     /// </summary>
     private void OnPictureMenuOpening(object sender, object e)
     {
-        if (PictureMenu.Items.Count > 0) return;
+        if (PictureMenu.Items.Count == 0)
+        {
+            _pictureChecks.Clear();
+            foreach (var item in BuildMenuItems(PlayerMenuCatalog.Root)) PictureMenu.Items.Add(item);
+        }
 
-        foreach (var item in BuildMenuItems(PlayerMenuCatalog.Root)) PictureMenu.Items.Add(item);
+        _ = RefreshPictureChecksAsync();
     }
 
-    /// <summary>One level of the catalogue as WinUI menu rows. Recurses for submenus.</summary>
+    /// <summary>
+    /// Re-reads the mpv properties the checkable rows tick from and sets each row's tick. Fired on every open
+    /// (the flyout is already on screen; on the in-process backend the reads finish before it is seen). No
+    /// film / no control channel → the reads come back null and every row goes unticked, which is the honest
+    /// answer — same as <see cref="ProbePictureMenu"/>'s synthetic state.
+    /// </summary>
+    private async Task RefreshPictureChecksAsync()
+    {
+        if (!Attached || _pictureChecks.Count == 0) return;
+
+        var values = await ViewModel.ReadMenuChecksAsync().ConfigureAwait(true);
+
+        foreach (var (item, node) in _pictureChecks)
+            SetChecked(item, node.IsCheckedBy(values));
+    }
+
+    private static void SetChecked(MenuFlyoutItem item, bool value)
+    {
+        switch (item)
+        {
+            case RadioMenuFlyoutItem radio: radio.IsChecked = value; break;
+            case ToggleMenuFlyoutItem toggle: toggle.IsChecked = value; break;
+        }
+    }
+
+    /// <summary>
+    /// One level of the catalogue as WinUI menu rows. Recurses for submenus. A row that can show its current
+    /// state（<see cref="PlayerMenuNode.State"/>）becomes a <see cref="RadioMenuFlyoutItem"/>（radio choices —
+    /// 解码方式, 声道布局, 宽高比）or a <see cref="ToggleMenuFlyoutItem"/>（on/off — 抖动补偿, 裁切填充…）; the
+    /// tick itself is set later by <see cref="RefreshPictureChecksAsync"/>. Every kind still runs through the
+    /// one <see cref="PlayerViewModel.RunMenuNodeAsync"/> click, so nothing about execution changes.
+    /// </summary>
     private IEnumerable<MenuFlyoutItemBase> BuildMenuItems(IReadOnlyList<PlayerMenuNode> nodes)
     {
         foreach (var node in nodes)
@@ -392,12 +413,23 @@ public sealed partial class PlayerPage
                     break;
 
                 default:
-                    var row = new MenuFlyoutItem { Text = node.Label, Tag = node };
+                    // Radio for a mutually-exclusive choice, toggle for an on/off row, plain for a pure action.
+                    // GroupName keys the radio set to its property so a click reads as clean single-selection;
+                    // the menu is built once, so no group accumulates across opens（选集 菜单那条陷阱不在这里）.
+                    MenuFlyoutItem row =
+                        node.State is null ? new MenuFlyoutItem { Text = node.Label, Tag = node }
+                        : node.State.Radio
+                            ? new RadioMenuFlyoutItem { Text = node.Label, Tag = node, GroupName = "pic-" + node.State.Property }
+                            : new ToggleMenuFlyoutItem { Text = node.Label, Tag = node };
+
                     row.Click += (source, args) =>
                     {
                         if (Attached && source is MenuFlyoutItem { Tag: PlayerMenuNode picked })
                             _ = ViewModel.RunMenuNodeAsync(picked);
                     };
+
+                    if (node.State is not null) _pictureChecks.Add((row, node));
+
                     yield return row;
                     break;
             }

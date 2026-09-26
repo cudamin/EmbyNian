@@ -14,7 +14,6 @@ public static class PlayerMotion
     public const int ExitMilliseconds = 240;
 
     public const int CoverMilliseconds = 240;
-    public const int FullscreenEnterMilliseconds = 160;
     public const double DepthScale = 1.018;
     public const double Travel = 12;
 
@@ -50,11 +49,6 @@ public static class PlayerMotion
                 Lerp(From.OffsetY, To.OffsetY, motion));
         }
     }
-
-    /// <summary>自动全屏只做透明度交接，窗口变形不再与页面缩放、纵向位移叠加。</summary>
-    public static Transition FullscreenEnter(Pose from, long now) => new(
-        new Pose(from.Opacity, 1, 0), Pose.Visible, now,
-        FullscreenEnterMilliseconds, FullscreenEnterMilliseconds);
 
     public static Transition Page(bool entering, Pose from, long now) => new(
         from,

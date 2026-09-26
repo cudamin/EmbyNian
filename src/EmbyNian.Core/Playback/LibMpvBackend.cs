@@ -394,6 +394,11 @@ public sealed class LibMpvBackend(
     /// <summary>
     /// 票里那份选项表去掉末尾那条着色器链之后的基线。链有多少项是票自己带着的
     /// （<see cref="PlaybackRequest.ShaderOptionCount"/>），所以这里不用去猜是哪一档。
+    /// <para>
+    /// 再摘掉 <see cref="InlineSwitch.PerFileSignatureNames"/> 上的逐片选项（今天只有截图模板）：它带着
+    /// 影片标题，逐片都不同，是换片时按新票重写的运行期选项（见 <c>InlineSwitch.PerFile</c>），不描述
+    /// 「这次启动的配置」—— 留在基线里，集名不同的常规换集会在签名这一步白丢掉快路。
+    /// </para>
     /// internal static：换片快路的签名只认基线这一节，测试看得见。
     /// </summary>
     internal static IReadOnlyList<KeyValuePair<string, string>> Baseline(
@@ -401,7 +406,11 @@ public sealed class LibMpvBackend(
         int chainOptions)
     {
         var keep = Math.Max(0, options.Count - Math.Max(0, chainOptions));
-        return keep == options.Count ? options : [.. options.Take(keep)];
+        var baseline = keep == options.Count ? options : [.. options.Take(keep)];
+
+        return baseline.Any(option => InlineSwitch.PerFileSignatureNames.Contains(option.Key))
+            ? [.. baseline.Where(option => !InlineSwitch.PerFileSignatureNames.Contains(option.Key))]
+            : baseline;
     }
 
     /// <summary>Option errors are logged, not fatal — a bad shader path must not stop the film.</summary>
@@ -656,21 +665,39 @@ internal sealed class LibMpvHandle(
 
         if (!Swapable) return Task.FromResult(false);
 
-        // 三处「不接」都要说得出理由：签名对不上（启动配置变了，事后改也无效）、已经在收场、
-        // 命令被拒。前两处是判断，第三处是 mpv 的答复 —— 都退回「停掉重开」那条老路。
+        // 三处「不接」都要说得出理由：签名对不上（启动配置变了，事后改也无效）、实例不在可接续的
+        // 状态、命令被拒。前两处是判断，第三处是 mpv 的答复 —— 都退回「停掉重开」那条老路。
         if (!InlineSwitch.SameSignature(signature!, signatureFor!(request)))
         {
             Log.Info(Category, "换片快路让位：这一次的启动配置与正在跑的那份不同（管线或选项变了）");
             return Task.FromResult(false);
         }
 
-        if (_stopRequested || _exit.Task.IsCompleted)
+        // 「已经在收场」的判据在 InlineSwitch.CanTakeOver：交接（HandOver）完成旧收场信号是快路的
+        // **正常入口** —— 那是叫醒监视去发「停止」上报，不是实例在收场。真正要挡的是用户叫停过
+        // （quit 在路上）、没交接过但信号已完成（文件真放完或报错）、以及实例已销毁。从前这道闸
+        // 把「已交接且信号已完成」也拒了，同窗换片整个被自己挡死。
+        if (!InlineSwitch.CanTakeOver(
+                stopRequested: _stopRequested,
+                handedOver: _handedOver,
+                exitCompleted: _exit.Task.IsCompleted,
+                destroyed: _apiGate.IsDestroyed))
         {
-            Log.Info(Category, "换片快路让位：这个实例已经在收场");
+            Log.Info(Category, "换片快路让位：这个实例已经在收场（被叫停、放完或已销毁）");
             return Task.FromResult(false);
         }
 
-        foreach (var (name, value) in InlineSwitch.FilmScoped(_filmDefaults, request)) Write(name, value);
+        IReadOnlyList<KeyValuePair<string, string>> filmOptions;
+        try
+        {
+            filmOptions = InlineSwitch.FilmScoped(_filmDefaults, request, ReadText("profile-list"));
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "换片无法恢复画质预设，改为重新启动播放器", error);
+            return Task.FromResult(false);
+        }
+        foreach (var (name, value) in filmOptions) Write(name, value);
         foreach (var (name, value) in InlineSwitch.PerFile(request)) Write(name, value);
 
         // 上一集的位置当场作废：这一票要是打不开（候选版本还有下一版要试），收尾报的也不该是别人的位置。
@@ -1370,6 +1397,12 @@ internal sealed class LibMpvLifetimeGate
     private readonly Lock _sync = new();
     private bool _compositionStopped;
     private bool _destroyed;
+
+    /// <summary>实例是否已销毁 —— 换片快路的入口据此拒绝一个已经不存在的上下文。</summary>
+    internal bool IsDestroyed
+    {
+        get { lock (_sync) return _destroyed; }
+    }
 
     internal T? Run<T>(Func<T> work, bool composition = false)
     {

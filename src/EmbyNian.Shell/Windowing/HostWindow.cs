@@ -177,7 +177,41 @@ internal sealed class HostWindow : IDisposable
 
     private bool _topMost;
     private bool _playbackTitleBar;
+    private bool _playerLayer;
     private bool _cursorHidden;
+
+    /// <summary>
+    /// 播放层此刻是不是占着这扇窗 —— 播放页进场那一拍立起，退场落定（或收摊）才收掉。
+    /// <para>
+    /// <b>这一整段里窗口几何会跳好几次</b>：起播自动全屏是「浏览几何 → 整屏」，退出播放是「整屏 → 播放几何
+    /// → 浏览几何」，而每一步都会给浏览页一次尺寸变化。浏览页若跟着每一次跳变重排自己的版面（主页的矮窗档
+    /// 就是照尺寸判的），用户看到的就是「退出播放时媒体库自己上下一趟」—— 2026-09-25 用户报的就是这个：
+    /// 日志里 867（播放几何）那一下判成「压上轮播」、13ms 后 1271（浏览几何）又判回「回默认」，两趟 260ms
+    /// 的位移动画接在一起。
+    /// </para>
+    /// <para>
+    /// 所以这一位是给浏览页用的「这会儿的量测都不作数」的记号，<b>它不是「有没有在播放」的判据</b>
+    /// （那个归视图模型的播放生命周期位与管线判据）。落定之后必须由播放页那一趟布局再补判一次，
+    /// 否则播放期间改过的尺寸会被永远跳过。
+    /// </para>
+    /// </summary>
+    internal bool PlayerLayer => _playerLayer;
+
+    /// <summary>
+    /// 播放层把窗口交回来那一拍。浏览页照它补判一次自己的版面 —— 播放层占着的那一段里所有尺寸量测都
+    /// 不作数（见 <see cref="PlayerLayer"/>），该判的档必须在几何落定之后补上；而落定之后窗口未必再变一次
+    /// 尺寸，「播放期间窗口被拖过」那一档光等尺寸变化会漏掉。
+    /// </summary>
+    internal event Action? PlayerLayerEnded;
+
+    /// <summary>只有播放页会动这一位 —— 立起在 <c>PlayerPage.EnterPlayer</c>，收在两条收摊路上（见 <see cref="PlayerLayer"/>）。</summary>
+    internal void SetPlayerLayer(bool on)
+    {
+        if (_playerLayer == on) return;
+
+        _playerLayer = on;
+        if (!on) PlayerLayerEnded?.Invoke();
+    }
 
     /// <summary>The transparent cursor behind <see cref="Blank"/>, made on first use and freed on dispose.</summary>
     private IntPtr _blank;

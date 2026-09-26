@@ -6,29 +6,6 @@ internal static class PlayerMotionTests
 {
     internal static void Register()
     {
-        TestHarness.Test("自动全屏进场只溶解，整页不缩放或位移", () =>
-        {
-            var run = PlayerMotion.FullscreenEnter(PlayerMotion.Pose.Entering, 1000);
-            Assert.Equal(new PlayerMotion.Pose(0, 1, 0), run.At(1000));
-            var previous = 0d;
-            for (var elapsed = 0; elapsed <= PlayerMotion.FullscreenEnterMilliseconds; elapsed++)
-            {
-                var pose = run.At(1000 + elapsed);
-                Assert.Equal(1d, pose.Scale);
-                Assert.Equal(0d, pose.OffsetY);
-                Assert.True(pose.Opacity >= previous && pose.Opacity <= 1);
-                previous = pose.Opacity;
-            }
-            Assert.Equal(PlayerMotion.Pose.Visible, run.At(long.MaxValue));
-        });
-        TestHarness.Test("自动全屏重入承接当前透明度，不继承退场的缩放", () =>
-        {
-            var from = new PlayerMotion.Pose(0.4, PlayerMotion.ExitScale, PlayerMotion.ExitTravel);
-            var run = PlayerMotion.FullscreenEnter(from, 1000);
-            Assert.Equal(new PlayerMotion.Pose(0.4, 1, 0), run.At(500));
-            Assert.True(run.At(1080).Opacity > 0.4);
-            Assert.Equal(PlayerMotion.Pose.Visible, run.At(1000 + PlayerMotion.FullscreenEnterMilliseconds));
-        });
         TestHarness.Test("播放器进场先遮住浏览页，再完成轻微位移", () =>
         {
             var run = PlayerMotion.Page(true, PlayerMotion.Pose.Entering, 1000);

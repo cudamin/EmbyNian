@@ -128,14 +128,14 @@ internal static class ShortcutTests
             Assert.Equal("toggle-mute", ShortcutCatalog.Lookup(result.Bindings, Key("M")));
         });
 
-        Test("Rebind：保留键（Esc/Y）和空键都当空操作，绑定不动", () =>
+        Test("Rebind：保留键（Esc/回车）和空键都当空操作，绑定不动", () =>
         {
             var esc = ShortcutCatalog.Rebind(Empty(), "toggle-pause", Key("Escape"));
             Assert.Null(esc.Conflict);
             Assert.Equal(0, esc.Bindings.Count);
 
-            var y = ShortcutCatalog.Rebind(Empty(), "toggle-pause", Key("Y"));
-            Assert.Equal(0, y.Bindings.Count);
+            var enter = ShortcutCatalog.Rebind(Empty(), "toggle-pause", Key("Enter"));
+            Assert.Equal(0, enter.Bindings.Count);
 
             var empty = ShortcutCatalog.Rebind(Empty(), "toggle-pause", KeyStroke.None);
             Assert.Equal(0, empty.Bindings.Count);
@@ -182,11 +182,12 @@ internal static class ShortcutTests
             Assert.Equal("未设置", ShortcutCatalog.Format(KeyStroke.None));
         });
 
-        Test("IsReserved：Esc 和 Y 是保留键（连着修饰键也算），别的不是", () =>
+        Test("IsReserved：Esc 和回车是保留键（连着修饰键也算），别的不是", () =>
         {
             Assert.True(ShortcutCatalog.IsReserved(Key("Escape")));
-            Assert.True(ShortcutCatalog.IsReserved(Key("Y")));
-            Assert.True(ShortcutCatalog.IsReserved(Key("Y", ctrl: true)), "带修饰键的 Y 也保留 —— 固定的那颗 Y 键不查修饰键");
+            Assert.True(ShortcutCatalog.IsReserved(Key("Enter")), "回车 2026-09-26 起接替 Y 当确认跳过的固定键");
+            Assert.True(ShortcutCatalog.IsReserved(Key("Enter", ctrl: true)), "带修饰键的回车也保留 —— 固定的那颗确认跳过键不查修饰键");
+            Assert.False(ShortcutCatalog.IsReserved(Key("Y")), "Y 随确认跳过改到回车而退役，从此可以绑");
             Assert.False(ShortcutCatalog.IsReserved(Key("F")));
             Assert.False(ShortcutCatalog.IsReserved(Key("Space")));
         });

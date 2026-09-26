@@ -36,19 +36,21 @@ public sealed record ShortcutAction(string Id, string Label, KeyStroke Default);
 /// 自然落到它的默认上。
 /// </para>
 /// <para>
-/// <b>Esc 和 Y 不在这张表里。</b> 它俩是固定键（Esc 全屏则退否则停、Y 只在出现跳过提示时确认跳过），留在
-/// <c>PlayerPage.OnKeyDown</c> 里原样处理，不参与重绑 —— 见 <see cref="ReservedKeys"/>。所以捕获到这两个键的
-/// 时候要拦住（<see cref="IsReserved"/>），不让任何可重绑动作占上它们，否则同一个键会有两种意思。
+/// <b>Esc 和回车不在这张表里。</b> 它俩是固定键（Esc 跳过提示立着时先关提示、否则全屏则退否则停；回车只在
+/// 出现跳过提示时确认跳过），留在 <c>PlayerPage.OnKeyDown</c> 里原样处理，不参与重绑 —— 见
+/// <see cref="ReservedKeys"/>。所以捕获到这两个键的时候要拦住（<see cref="IsReserved"/>），不让任何可重绑
+/// 动作占上它们，否则同一个键会有两种意思。
 /// </para>
 /// </summary>
 public static class ShortcutCatalog
 {
     /// <summary>
-    /// 不许绑的键（整颗键、连着任何修饰键都不许）：Esc 是全局「退出」、还兼做重绑方框的「取消」；Y 只在出现
-    /// 跳过提示时有效、它的名字还印在播放画面的那句提示上（<c>SkipCoordinator</c>，Core，被测试钉着）。这两个
-    /// 留作固定键比让人改掉、再让画面上的提示对不上要稳。
+    /// 不许绑的键（整颗键、连着任何修饰键都不许）：Esc 是全局「退出」、还兼做重绑方框的「取消」；回车只在
+    /// 出现跳过提示时有效、它的名字还印在播放画面的那句提示上（<c>SkipCoordinator</c>，被测试钉着）。这两个
+    /// 留作固定键比让人改掉、再让画面上的提示对不上要稳。Y 原先也在这里，2026-09-26 随「确认跳过从 Y 改成
+    /// 回车」（用户令）退役 —— 它不再有固定用途，可以绑了。
     /// </summary>
-    public static readonly IReadOnlyList<string> ReservedKeys = ["Escape", "Y"];
+    public static readonly IReadOnlyList<string> ReservedKeys = ["Escape", "Enter"];
 
     /// <summary>
     /// 21 个可重绑动作，次序就是设置页上从上到下的次序。前 17 个的默认值和改造前那张 switch 表一模一样。
@@ -133,7 +135,7 @@ public static class ShortcutCatalog
     /// 都不改；调用方负责提示「先清掉那边再绑」。这样保证任何时候都不会两个动作共用一个键，派发不含糊，也不会
     /// 悄悄把别处的键抹掉。绑到自己的默认键上就把这条改动记录删掉（回到「没动过」），别的写进字典。
     /// </para>
-    /// <para>空键、保留键（Esc/Y）都当空操作原样返回 —— 方框那边本来就拦在前面，这里是第二道防线，可被测试钉住。</para>
+    /// <para>空键、保留键（Esc/回车）都当空操作原样返回 —— 方框那边本来就拦在前面，这里是第二道防线，可被测试钉住。</para>
     /// </summary>
     public static RebindResult Rebind(IReadOnlyDictionary<string, string> bindings, string id, KeyStroke stroke)
     {
@@ -244,6 +246,7 @@ public static class ShortcutCatalog
     private static string Display(string key) => key switch
     {
         "Space" => "空格",
+        "Enter" => "回车",
         "Left" => "←",
         "Right" => "→",
         "Up" => "↑",

@@ -3,12 +3,7 @@ using EmbyNian.Diagnostics;
 
 namespace EmbyNian.Emby;
 
-/// <summary>
-/// Owns the signed-in state: which server/account is active, the live
-/// <see cref="EmbyClient"/>, and the one-shot re-authentication that happens when a
-/// stored token has expired. Views call <see cref="ExecuteAsync{T}"/> so that recovery
-/// is automatic instead of being re-implemented per screen.
-/// </summary>
+/// <summary>当前浏览身份，以及仅能提交到原身份的一次令牌恢复。</summary>
 public sealed class EmbySession : IDisposable
 {
     private const string Category = "session";
@@ -18,48 +13,22 @@ public sealed class EmbySession : IDisposable
     private readonly SettingsStore _store;
     private readonly CredentialVault _vault;
     private readonly SemaphoreSlim _reauthenticationGate = new(1, 1);
-
-    private EmbyClient? _client;
-
-    /// <summary>
-    /// Bumped by every <see cref="EndSession"/>. What it is for: the re-authentication below awaits the
-    /// network, and the user can press 退出登录 while that is in flight — the UI thread is free during the
-    /// await. Without this, the sign-in that lands a moment later adopts a fresh client and brings back a
-    /// session the user has already left: the shell is on the login page while this object holds a live
-    /// token and every request keeps working.
-    /// <para>
-    /// The check runs under <see cref="_lifecycleGate"/> <em>before</em> the late sign-in is adopted, so
-    /// the re-authentication walks away without installing anything. A user who signed out and then signed
-    /// back in inside that window therefore keeps the session he just built, and the caller retries against
-    /// his client; a user who only signed out is left with nothing — no client, and no fresh token in the
-    /// vault that a restart could silently pull him back in with.
-    /// </para>
-    /// </summary>
-    private int _generation;
-
-    /// <summary>
-    /// 串开「会话换人」的几步：<see cref="EndSession"/> 和重新登录的落地（<see cref="CommitSignIn"/>）都在
-    /// 它里面做。没有它，「退出登录」可以正好落在重新登录那趟的轮次检查和落地之间 —— 一个几条指令宽的窗口，
-    /// 但落进去就是「已退出登录」喊过了、会话却又活了。锁里没有 await，最长的一次持有是一次落盘，几毫秒。
-    /// </summary>
     private readonly object _lifecycleGate = new();
 
-    /// <summary>
-    /// The library list <see cref="TryRestoreAsync"/> already has in hand, waiting to be collected by the
-    /// shell that is about to ask for the same thing. See <see cref="TakeRestoredViews"/>.
-    /// </summary>
+    private EmbyClient? _client;
+    private EmbySessionScope.Identity? _identity;
     private List<EmbyItem>? _restoredViews;
+    private CancellationTokenSource _scopeLifetime = new();
+    private long _generation;
+    private long _clientGeneration;
+    private long _scopeGeneration;
+    private bool _disposed;
 
     public EmbySession(AppSettings settings, SettingsStore store, CredentialVault vault, DeviceIdentity device)
         : this(settings, store, vault, device, null)
     {
     }
 
-    /// <summary>
-    /// The same session with its transport handed in. For tests only, and it is what lets the restore path
-    /// be exercised at all: 「一个刚过期的令牌」「服务器答了但没有媒体库」这几档在真服务器上是碰不到的，而它们
-    /// 正是这一层出过事的地方。
-    /// </summary>
     internal EmbySession(
         AppSettings settings,
         SettingsStore store,
@@ -75,7 +44,6 @@ public sealed class EmbySession : IDisposable
         Device = device;
     }
 
-    /// <summary>Raised when the session ends and the shell must return to the login page.</summary>
     public event EventHandler<string>? SignedOut;
 
     public EmbyServerGateway Gateway { get; }
@@ -86,41 +54,88 @@ public sealed class EmbySession : IDisposable
 
     public AccountProfile? Account { get; private set; }
 
-    public bool IsSignedIn => _client is not null;
+    public bool IsSignedIn => Connection is not null;
 
-    public EmbyConnection? Connection => _client?.Connection;
+    public EmbyConnection? Connection
+    {
+        get { lock (_lifecycleGate) return _client?.Connection; }
+    }
 
-    public EmbyClient Client => _client ?? throw new InvalidOperationException("尚未登录 Emby");
+    public EmbyClient Client
+    {
+        get
+        {
+            lock (_lifecycleGate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _client ?? throw new InvalidOperationException("尚未登录 Emby");
+            }
+        }
+    }
 
-    /// <summary>
-    /// The name to show for the connected server: what the server calls itself, which is what the
-    /// login handshake reads out of <c>/System/Info/Public</c>. Falls back to the label saved in
-    /// settings, and is empty when nobody is signed in.
-    /// </summary>
     public string ServerDisplayName =>
         Connection?.ServerName is { Length: > 0 } name ? name : Server?.Name ?? "";
 
+    /// <summary>固定一场播放或下载的身份；浏览切服不撤销，退出登录和释放会话撤销。</summary>
+    public EmbySessionScope Capture()
+    {
+        lock (_lifecycleGate)
+        {
+            _ = Client;
+            return new EmbySessionScope(this, _identity!, _scopeGeneration, _scopeLifetime.Token);
+        }
+    }
+
     public async Task SignInAsync(ServerProfile server, AccountProfile account, string password, string username, bool rememberPassword, CancellationToken cancellationToken)
     {
-        var connection = await AuthenticateAsync(server, username, password, cancellationToken).ConfigureAwait(false);
-        CommitSignIn(server, account, connection, password, rememberPassword);
+        cancellationToken.ThrowIfCancellationRequested();
+        var generation = BeginIdentityChange();
+        try
+        {
+            var apiBase = EmbyServerAddress.Normalize(server.Url);
+            var connection = await Gateway.AuthenticateAsync(apiBase, username, password, cancellationToken).ConfigureAwait(false);
+
+            lock (_lifecycleGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!CanCommit(generation) || !HasAddress(server, apiBase))
+                    throw new OperationCanceledException("登录操作已被新的身份选择替代", cancellationToken);
+
+                CommitSignIn(server, account, connection, password, rememberPassword);
+            }
+        }
+        finally
+        {
+            FinishIdentityChange(generation);
+        }
     }
 
-    /// <summary>一趟登录的网络那一半：把用户名密码换成一条连接。</summary>
-    private async Task<EmbyConnection> AuthenticateAsync(ServerProfile server, string username, string password, CancellationToken cancellationToken)
+    /// <summary>显式登录和恢复都先占有轮次，较早发出的成功或失败不能改变较晚的选择。</summary>
+    private long BeginIdentityChange()
     {
-        var apiBase = EmbyServerAddress.Normalize(server.Url);
-        return await Gateway.AuthenticateAsync(apiBase, username, password, cancellationToken).ConfigureAwait(false);
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _restoredViews = null;
+            return ++_generation;
+        }
     }
 
-    /// <summary>
-    /// 一趟登录的落地那一半：档案、vault、client、落盘。
-    /// <para>
-    /// 和网络那一半拆开只有一个理由：重新登录那一趟（<see cref="TryReauthenticateAsync"/>）要在两半之间
-    /// 插一道 <see cref="_lifecycleGate"/> 下的检查 —— 网络等着的正是用户能按「退出登录」的那段时间，
-    /// 落地之前必须重新确认他没按。
-    /// </para>
-    /// </summary>
+    private void FinishIdentityChange(long generation)
+    {
+        lock (_lifecycleGate)
+        {
+            // 切换失败可继续使用旧浏览身份，但切换前已发出的恢复仍然作废。
+            if (CanCommit(generation) && _client is not null) _clientGeneration = generation;
+        }
+    }
+
+    private bool CanCommit(long generation) => !_disposed && generation == _generation;
+
+    private static bool HasAddress(ServerProfile server, Uri apiBase) =>
+        EmbyServerAddress.TryNormalize(server.Url, out var current, out _) && current == apiBase;
+
+    // 调用方持有 lifecycleGate，凭据、当前 client 和最后身份必须一起提交。
     private void CommitSignIn(ServerProfile server, AccountProfile account, EmbyConnection connection, string password, bool rememberPassword)
     {
         account.Username = connection.UserName;
@@ -128,40 +143,59 @@ public sealed class EmbySession : IDisposable
         account.LastSignedIn = DateTimeOffset.Now;
         _vault.SetAccessToken(account, connection.AccessToken);
         _vault.SetPassword(account, password, rememberPassword);
-
         Adopt(server, account, connection);
         Persist();
     }
 
-    /// <summary>
-    /// Tries the token saved from a previous run so a restart does not always land on
-    /// the password prompt. Falls back to the saved password, then gives up quietly.
-    /// </summary>
+    /// <summary>保存令牌失效时用保存密码恢复；整条路径只属于进入时取得的身份轮次。</summary>
     public async Task<bool> TryRestoreAsync(ServerProfile server, AccountProfile account, CancellationToken cancellationToken)
     {
-        var token = _vault.GetAccessToken(account);
-        if (token.Length == 0 || account.UserId.Length == 0) return false;
-
-        if (!EmbyServerAddress.TryNormalize(server.Url, out var apiBase, out _)) return false;
-
-        var connection = new EmbyConnection(apiBase, token, account.UserId, account.Username, server.Name, Device);
-        var candidate = new EmbyClient(_http, connection);
-
+        cancellationToken.ThrowIfCancellationRequested();
+        var generation = BeginIdentityChange();
         try
         {
-            // 这一趟同时是两件事：它既证明这个令牌还好使，又正好取回了外壳紧接着就要的那份媒体库列表 ——
-            // 所以答案存下来给它，见 TakeRestoredViews。从前是扔掉的，于是每次启动这个接口都被问两遍
-            // （日志里两行「读取到 N 个媒体库」相隔 20 毫秒）。
+            return await RestoreAsync(server, account, generation, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            FinishIdentityChange(generation);
+        }
+    }
+
+    private async Task<bool> RestoreAsync(ServerProfile server, AccountProfile account, long generation, CancellationToken cancellationToken)
+    {
+        var savedToken = account.ProtectedAccessToken;
+        var token = _vault.GetAccessToken(account);
+        var userId = account.UserId;
+        var username = account.Username;
+        if (token.Length == 0 || userId.Length == 0) return false;
+        if (!EmbyServerAddress.TryNormalize(server.Url, out var apiBase, out _)) return false;
+
+        var connection = new EmbyConnection(apiBase, token, userId, username, server.Name, Device);
+        var candidate = new EmbyClient(_http, connection);
+        try
+        {
             var views = await candidate.GetViewsAsync(cancellationToken).ConfigureAwait(false);
-            Adopt(server, account, await NameServerAsync(apiBase, connection, cancellationToken).ConfigureAwait(false));
-            _restoredViews = views;
+            connection = await NameServerAsync(apiBase, connection, cancellationToken).ConfigureAwait(false);
+            lock (_lifecycleGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!CanCommit(generation) || !HasAddress(server, apiBase)) return false;
+                Adopt(server, account, connection);
+                _restoredViews = views;
+            }
+
             Log.Info(Category, "已使用保存的令牌恢复登录");
             return true;
         }
         catch (EmbyTokenExpiredException)
         {
+            lock (_lifecycleGate)
+            {
+                if (!CanCommit(generation) || !HasAddress(server, apiBase)) return false;
+                if (account.ProtectedAccessToken == savedToken) _vault.ClearAccessToken(account);
+            }
             Log.Info(Category, "保存的令牌已失效");
-            _vault.ClearAccessToken(account);
         }
         catch (EmbyApiException error)
         {
@@ -169,13 +203,25 @@ public sealed class EmbySession : IDisposable
             return false;
         }
 
-        if (!account.HasSavedPassword) return false;
+        string password;
+        bool rememberPassword;
+        lock (_lifecycleGate)
+        {
+            if (!CanCommit(generation) || !HasAddress(server, apiBase) || !account.HasSavedPassword) return false;
+            password = _vault.GetPassword(account);
+            rememberPassword = account.RememberPassword;
+        }
 
         try
         {
-            await SignInAsync(server, account, _vault.GetPassword(account), account.Username, account.RememberPassword, cancellationToken)
-                .ConfigureAwait(false);
-            return true;
+            connection = await Gateway.AuthenticateAsync(apiBase, username, password, cancellationToken).ConfigureAwait(false);
+            lock (_lifecycleGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!CanCommit(generation) || !HasAddress(server, apiBase)) return false;
+                CommitSignIn(server, account, connection, password, rememberPassword);
+                return true;
+            }
         }
         catch (EmbyApiException error)
         {
@@ -184,50 +230,27 @@ public sealed class EmbySession : IDisposable
         }
     }
 
-    /// <summary>
-    /// 恢复登录时那一趟已经取回来的媒体库列表，交出去一次就没了；从来没有过、或者已经被领走了就是 null，
-    /// 那时候调用方照旧自己去问服务器。
-    /// <para>
-    /// <see cref="TryRestoreAsync"/> 拿「取一次媒体库列表」当令牌有效性的探针，而外壳启动时紧接着要的正是同
-    /// 一份列表 —— 从前那个答案被扔掉，于是每次启动这个接口都被问两遍。局域网上是二十来毫秒，走反代或者外网
-    /// 就是几百毫秒，而它压在「看到第一屏」的路上。
-    /// </para>
-    /// <para>
-    /// **只给一次**是要紧的：刷新（换账号回来、手动重新读取）必须真去问服务器，否则新加的媒体库永远不出现。
-    /// 换连接也作废（见 <c>Adopt</c>）—— 留着就是拿上一个账号的库给这一个账号建导航栏。
-    /// </para>
-    /// </summary>
+    /// <summary>恢复令牌的探针已经取回媒体库，只交给外壳一次。</summary>
     public List<EmbyItem>? TakeRestoredViews()
     {
-        var views = _restoredViews;
-        _restoredViews = null;
-        return views;
+        lock (_lifecycleGate)
+        {
+            var views = _restoredViews;
+            _restoredViews = null;
+            return views;
+        }
     }
 
-    public async Task<T> ExecuteAsync<T>(Func<EmbyClient, CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    public Task<T> ExecuteAsync<T>(Func<EmbyClient, CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
     {
-        var client = Client;
-        try
+        EmbyClient client;
+        long generation;
+        lock (_lifecycleGate)
         {
-            return await operation(client, cancellationToken).ConfigureAwait(false);
+            client = Client;
+            generation = _clientGeneration;
         }
-        catch (EmbyTokenExpiredException)
-        {
-            switch (await TryReauthenticateAsync(client, cancellationToken).ConfigureAwait(false))
-            {
-                case Recovery.Retry:
-                    return await operation(Client, cancellationToken).ConfigureAwait(false);
-
-                // 会话在这中间换了身份。这一趟属于一个已经不存在的身份，原样交回调用方 —— 但一根汗毛都不
-                // 碰用户刚建立的新会话：它是无辜的，把它踢回登录页比这一趟失败糟得多。
-                case Recovery.Void:
-                    throw;
-
-                default:
-                    EndSession("登录状态已过期，请重新登录");
-                    throw;
-            }
-        }
+        return ExecuteWithClientAsync(client, generation, operation, cancellationToken);
     }
 
     public Task ExecuteAsync(Func<EmbyClient, CancellationToken, Task> operation, CancellationToken cancellationToken) =>
@@ -237,98 +260,122 @@ public sealed class EmbySession : IDisposable
             return true;
         }, cancellationToken);
 
-    public void SignOut() => EndSession("已退出登录");
-
-    /// <summary>一趟自动重新登录的下场，也就是「被 401 打断的那一趟还能不能接着走」的三种答案。</summary>
-    private enum Recovery
+    internal bool IsCurrent(EmbySessionScope scope)
     {
-        /// <summary>续上了：拿现在手上这条连接把原来那个请求重试一遍。</summary>
-        Retry,
-
-        /// <summary>会话换了身份（换了账号或者换了服务器）：这一趟作废，而新会话不受牵连。</summary>
-        Void,
-
-        /// <summary>续不上，也没人接班：会话到此为止。</summary>
-        Failed
+        lock (_lifecycleGate)
+            return !_disposed && scope.Generation == _scopeGeneration
+                && _client?.Connection.IsSameIdentityAs(scope.Connection) == true;
     }
 
-    /// <summary>
-    /// 重登这一趟等网络的时候，会话被别人换掉了 —— 那原来那个请求归谁，看现在这条连接是不是同一个身份。
-    /// <para>
-    /// 三个出口（等闸门时就发现换了人、重登成功但轮次对不上、重登失败）问的是同一个问题，所以答案只写这
-    /// 一处。从前三处各写各的，而且问的都是「手上还有没有 client」—— 于是换了账号照样算「续上了」，上一个
-    /// 账号的写操作被拿新身份重发了一遍。
-    /// </para>
-    /// </summary>
-    private Recovery AfterHandover(EmbyClient stale) => _client is { } live
-        ? live.Connection.IsSameIdentityAs(stale.Connection) ? Recovery.Retry : Recovery.Void
-        : Recovery.Failed;
+    internal async Task<T> ExecuteAsync<T>(EmbySessionScope scope, Func<EmbyClient, CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, scope.Lifetime);
+        EmbyClient client;
+        long generation;
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (scope.Generation != _scopeGeneration) throw new OperationCanceledException("已退出捕获的登录会话", lifetime.Token);
+            lifetime.Token.ThrowIfCancellationRequested();
+            if (_client?.Connection.IsSameIdentityAs(scope.Connection) == true) scope.Follow(_identity!);
+            client = scope.Client;
+            generation = _clientGeneration;
+        }
 
-    private async Task<Recovery> TryReauthenticateAsync(EmbyClient stale, CancellationToken cancellationToken)
+        var result = await ExecuteWithClientAsync(client, generation, operation, lifetime.Token).ConfigureAwait(false);
+        lifetime.Token.ThrowIfCancellationRequested();
+        return result;
+    }
+
+    private async Task<T> ExecuteWithClientAsync<T>(EmbyClient client, long generation, Func<EmbyClient, CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await operation(client, cancellationToken).ConfigureAwait(false);
+        }
+        catch (EmbyTokenExpiredException)
+        {
+            var fresh = await TryReauthenticateAsync(client, generation, cancellationToken).ConfigureAwait(false);
+            if (fresh is null) throw;
+            cancellationToken.ThrowIfCancellationRequested();
+            // 重试持有已核对身份的 client，而不是在 await 之后重新读取全局 Client。
+            return await operation(fresh, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private EmbyClient? SameIdentityClient(EmbyClient stale) =>
+        !_disposed && !ReferenceEquals(_client, stale)
+            && _client?.Connection.IsSameIdentityAs(stale.Connection) == true ? _client : null;
+
+    private async Task<EmbyClient?> TryReauthenticateAsync(EmbyClient stale, long generation, CancellationToken cancellationToken)
     {
         await _reauthenticationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // Another caller may already have refreshed while we waited on the gate.
-            if (!ReferenceEquals(_client, stale)) return AfterHandover(stale);
+            ServerProfile? server;
+            AccountProfile? account;
+            string password;
+            string savedPassword;
+            bool rememberPassword;
+            lock (_lifecycleGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!ReferenceEquals(_client, stale)) return SameIdentityClient(stale);
+                if (!CanCommit(generation)) return null;
+                server = Server;
+                account = Account;
+                savedPassword = account?.ProtectedPassword ?? "";
+                password = account is null ? "" : _vault.GetPassword(account);
+                rememberPassword = account?.RememberPassword ?? false;
+            }
 
-            var server = Server;
-            var account = Account;
-            if (server is null || account is null || !account.HasSavedPassword) return Recovery.Failed;
-
-            var generation = _generation;
-
-            Log.Info(Category, "令牌过期，正在使用保存的密码重新登录");
+            if (server is null || account is null || savedPassword.Length == 0)
+            {
+                EndSession("登录状态已过期，请重新登录", stale, generation);
+                return null;
+            }
 
             EmbyConnection connection;
             try
             {
-                connection = await AuthenticateAsync(server, account.Username, _vault.GetPassword(account), cancellationToken)
+                Log.Info(Category, "令牌过期，正在使用保存的密码重新登录");
+                connection = await Gateway.AuthenticateAsync(stale.Connection.ApiBase, stale.Connection.UserName, password, cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (Exception error) when (_generation != generation)
+            catch (Exception error)
             {
-                // 这一趟失败了，但失败也可能已经无关：它等网络的时候用户自己退了又登了。那时候「续不上」
-                // 是对上一个身份说的，不该连累现在这一位 —— 从前这里只有一句 return false，于是紧接着的
-                // EndSession 把用户刚建立的会话注销掉了。
-                Log.Warn(Category, "重新登录失败时会话已经换了主人，这次失败作废", error);
-                return AfterHandover(stale);
-            }
-            catch (EmbyApiException error)
-            {
+                lock (_lifecycleGate)
+                {
+                    if (!CanCommit(generation) || !ReferenceEquals(_client, stale)) return SameIdentityClient(stale);
+                }
+                if (error is not EmbyApiException) throw;
                 Log.Warn(Category, "自动重新登录失败", error);
-                return Recovery.Failed;
+                EndSession("登录状态已过期，请重新登录", stale, generation);
+                return null;
             }
 
-            // 网络等着的正是用户能按「退出登录」的那段时间（见 _generation）。落地之前在
-            // <see cref="_lifecycleGate"/> 下重新对一遍轮次 —— 对不上就什么都不做：不 Adopt、不写 vault、
-            // 不落盘。他会话已经不在了的话，装上一条新 client 就是把它复活，写一条新令牌就是让下次启动
-            // 悄悄把他拉回来；他退出之后又登录了的话，什么都不动正好保住他刚建立的会话。
             lock (_lifecycleGate)
             {
-                if (generation != _generation)
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!CanCommit(generation) || !ReferenceEquals(_client, stale)) return SameIdentityClient(stale);
+                if (!HasAddress(server, stale.Connection.ApiBase) || account.ProtectedPassword != savedPassword) return null;
+                if (connection.IsSameIdentityAs(stale.Connection))
                 {
-                    Log.Info(Category, "重新登录成功时会话已经换了主人，这次登录作废");
-                    return AfterHandover(stale);
+                    CommitSignIn(server, account, connection, password, rememberPassword);
+                    return _client;
                 }
-
-                CommitSignIn(server, account, connection, _vault.GetPassword(account), account.RememberPassword);
             }
 
-            return Recovery.Retry;
+            EndSession("登录状态已过期，请重新登录", stale, generation);
+            return null;
         }
         finally
         {
+            // Dispose 不释放这个托管闸门，仍在飞的调用必须能归还它。
             _reauthenticationGate.Release();
         }
     }
 
-    /// <summary>
-    /// Puts the server's own name on a restored connection. The token path builds its connection out
-    /// of saved settings, where the name is only the local label, so a restart used to show the
-    /// stand-in ("我的 Emby") where a fresh sign-in shows the real name. Cosmetic, so any failure
-    /// keeps the label rather than breaking a restore that already works.
-    /// </summary>
     private async Task<EmbyConnection> NameServerAsync(Uri apiBase, EmbyConnection connection, CancellationToken cancellationToken)
     {
         try
@@ -345,37 +392,48 @@ public sealed class EmbySession : IDisposable
 
     private void Adopt(ServerProfile server, AccountProfile account, EmbyConnection connection)
     {
-        // 换了连接就作废：那一份是上一个账号（或者上一台服务器）的媒体库，交出去就是拿别人的库建导航栏。
-        // 恢复登录那一路在这一句之后才存，见 TryRestoreAsync。
         _restoredViews = null;
-
-        // A profile still carrying a stand-in name picks up what the server calls itself, so the
-        // login page's server list and the rail agree. A name the user typed is left alone.
         if (connection.ServerName.Length > 0 && server.HasPlaceholderName) server.Name = connection.ServerName;
-
         Server = server;
         Account = account;
         _client = new EmbyClient(_http, connection);
+        _clientGeneration = _generation;
+        if (_identity?.Client.Connection.IsSameIdentityAs(connection) == true)
+            _identity.Client = _client;
+        else
+            _identity = new EmbySessionScope.Identity(_client);
         _settings.Remember(server, account);
     }
 
-    private void EndSession(string reason)
+    public void SignOut() => EndSession("已退出登录");
+
+    private void EndSession(string reason, EmbyClient? expected = null, long generation = 0)
     {
+        CancellationTokenSource lifetime;
         lock (_lifecycleGate)
         {
-            if (_client is null) return;
-            _client = null;
-            _generation++;
-
-            // 访问令牌跟着会话一起走：留着它，下次启动 TryRestoreAsync 会拿它把用户悄悄拉回来，
-            // 「退出登录」就跨不过一次重启了。记住的密码不动 —— 那是他在登录页上亲自勾的选项，
-            // 留着它，登录页才能让他一键回来。
-            if (Account is { } account) _vault.ClearAccessToken(account);
+            if (_disposed || (expected is not null && (!CanCommit(generation) || !ReferenceEquals(_client, expected)))) return;
+            lifetime = _scopeLifetime;
+            _scopeLifetime = new CancellationTokenSource();
+            EndSessionLocked(reason);
         }
 
-        // 档案上的改动要落到盘上，否则文件里那份 DPAPI 包着的旧令牌在下次保存之前一直都在。
-        Persist();
+        lifetime.Cancel();
+        lifetime.Dispose();
+    }
 
+    private void EndSessionLocked(string reason)
+    {
+        var wasSignedIn = _client is not null;
+        _client = null;
+        _identity = null;
+        _restoredViews = null;
+        _generation++;
+        _scopeGeneration++;
+        if (!wasSignedIn) return;
+
+        if (Account is { } account) _vault.ClearAccessToken(account);
+        Persist();
         Log.Info(Category, reason);
         SignedOut?.Invoke(this, reason);
     }
@@ -388,14 +446,27 @@ public sealed class EmbySession : IDisposable
         }
         catch (Exception error)
         {
-            // A failed save must not invalidate a successful login.
-            Log.Warn(Category, "登录成功但保存设置失败", error);
+            Log.Warn(Category, "保存登录设置失败", error);
         }
     }
 
     public void Dispose()
     {
-        _reauthenticationGate.Dispose();
+        CancellationTokenSource lifetime;
+        lock (_lifecycleGate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _generation++;
+            _scopeGeneration++;
+            _client = null;
+            _identity = null;
+            _restoredViews = null;
+            lifetime = _scopeLifetime;
+        }
+
+        lifetime.Cancel();
+        lifetime.Dispose();
         _http.Dispose();
     }
 }

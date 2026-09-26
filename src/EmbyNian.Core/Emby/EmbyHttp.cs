@@ -51,8 +51,22 @@ public sealed class EmbyHttp : IDisposable
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
             MaxConnectionsPerServer = 12,
             AutomaticDecompression = DecompressionMethods.All,
-            ConnectTimeout = TimeSpan.FromSeconds(8)
+            ConnectTimeout = TimeSpan.FromSeconds(8),
+            AllowAutoRedirect = false,
+            UseCookies = false
         };
+
+        // 注入真实 handler 时也不能绕过逐跳认证边界。
+        if (handler is SocketsHttpHandler sockets)
+        {
+            sockets.AllowAutoRedirect = false;
+            sockets.UseCookies = false;
+        }
+        else if (handler is HttpClientHandler clientHandler)
+        {
+            clientHandler.AllowAutoRedirect = false;
+            clientHandler.UseCookies = false;
+        }
 
         _handler = handler;
         _http = new HttpClient(handler, disposeHandler: false) { Timeout = requestTimeout };
@@ -172,7 +186,10 @@ public sealed class EmbyHttp : IDisposable
         try
         {
             using var response = await SendAsync(method, url, body, context, deadline.Token).ConfigureAwait(false);
-            return await read(response, deadline.Token).ConfigureAwait(false);
+            deadline.Token.ThrowIfCancellationRequested();
+            var result = await read(response, deadline.Token).ConfigureAwait(false);
+            deadline.Token.ThrowIfCancellationRequested();
+            return result;
         }
         catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
         {
@@ -241,6 +258,7 @@ public sealed class EmbyHttp : IDisposable
             if (total is { } expected && done != expected)
                 throw new IOException($"下载不完整：收到 {done} 字节，服务器说有 {expected} 字节");
 
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporary, path, overwrite: true);
             progress?.Report((done, total ?? done));
             return done;
@@ -274,52 +292,69 @@ public sealed class EmbyHttp : IDisposable
         CancellationToken cancellationToken,
         HttpClient? via = null)
     {
-        using var request = new HttpRequestMessage(method, url);
-        request.Headers.TryAddWithoutValidation("X-Emby-Authorization", context.Device.ToAuthorizationHeader());
-        if (!string.IsNullOrEmpty(context.AccessToken))
-            request.Headers.TryAddWithoutValidation("X-Emby-Token", context.AccessToken);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        EmbyHttpRedirect.Validate(url);
+        var payload = body switch
+        {
+            null => null,
+            RawBody raw => raw,
+            // Emby 需要准确的 Content-Length，跳转也只能重放同一份已序列化正文。
+            _ => new RawBody(JsonSerializer.SerializeToUtf8Bytes(body, Json), "application/json")
+        };
+        var authenticated = true;
+        for (var redirects = 0; ; redirects++)
+        {
+            using var request = new HttpRequestMessage(method, url);
+            if (authenticated)
+            {
+                request.Headers.TryAddWithoutValidation("X-Emby-Authorization", context.Device.ToAuthorizationHeader());
+                if (!string.IsNullOrEmpty(context.AccessToken))
+                    request.Headers.TryAddWithoutValidation("X-Emby-Token", context.AccessToken);
+            }
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            if (payload is not null)
+            {
+                request.Content = new ByteArrayContent(payload.Bytes);
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue(payload.ContentType);
+            }
 
-        if (body is RawBody raw)
-        {
-            // 上传一张图：正文就是这些字节，一个字都不动它。
-            request.Content = new ByteArrayContent(raw.Bytes);
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue(raw.ContentType);
-        }
-        else if (body is not null)
-        {
-            // JsonContent sends the body with Transfer-Encoding: chunked, which Emby 4.9.5
-            // cannot read — the JSON never binds and every request fails with
-            // "Value cannot be null. (Parameter 'name')". Pre-serialize to bytes so the
-            // request goes out with a Content-Length header instead.
-            var json = JsonSerializer.Serialize(body, Json);
-            request.Content = new ByteArrayContent(Encoding.UTF8.GetBytes(json));
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-        }
+            HttpResponseMessage response;
+            try
+            {
+                response = await (via ?? _http)
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TaskCanceledException error) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new EmbyUnreachableException($"连接 {url.Host} 超时", error);
+            }
+            catch (HttpRequestException error)
+            {
+                throw new EmbyUnreachableException($"无法连接到 {url.Host}：{error.Message}", error);
+            }
 
-        HttpResponseMessage response;
-        try
-        {
-            response = await (via ?? _http)
-                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (TaskCanceledException error) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new EmbyUnreachableException($"连接 {url.Host} 超时", error);
-        }
-        catch (HttpRequestException error)
-        {
-            throw new EmbyUnreachableException($"无法连接到 {url.Host}：{error.Message}", error);
-        }
+            if (response.IsSuccessStatusCode) return response;
 
-        if (response.IsSuccessStatusCode) return response;
+            using (response)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (EmbyHttpRedirect.IsRedirect(response.StatusCode))
+                {
+                    if (redirects >= EmbyHttpRedirect.Limit)
+                        throw new EmbyApiException("服务器重定向次数过多", response.StatusCode);
+                    var next = EmbyHttpRedirect.Next(url, response.Headers.Location, method, response.StatusCode, context.IsAuthenticationAttempt);
+                    authenticated &= EmbyHttpRedirect.SameOrigin(url, next);
+                    url = next;
+                    continue;
+                }
 
-        using (response)
-        {
-            var responseBody = await ReadBodySafelyAsync(response, cancellationToken).ConfigureAwait(false);
-            Log.Warn(Category, $"{method} {Redact(url)} -> {(int)response.StatusCode} {response.ReasonPhrase}");
-            throw Translate(method, url, response.StatusCode, response.ReasonPhrase, responseBody, context.IsAuthenticationAttempt);
+                var responseBody = await ReadBodySafelyAsync(response, cancellationToken).ConfigureAwait(false);
+                Log.Warn(Category, $"{method} {Redact(url)} -> {(int)response.StatusCode} {response.ReasonPhrase}");
+                // 资源来源的 401 不是 Emby 令牌失效，不能触发原服务器重新登录。
+                if (!authenticated && response.StatusCode == HttpStatusCode.Unauthorized)
+                    throw new EmbyApiException("重定向资源拒绝访问", response.StatusCode);
+                throw Translate(method, url, response.StatusCode, response.ReasonPhrase, responseBody, context.IsAuthenticationAttempt);
+            }
         }
     }
 

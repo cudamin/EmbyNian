@@ -95,6 +95,33 @@ public static class VideoPresentation
         return double.IsFinite(scale) && scale > 0 ? scale : 0;
     }
 
+    /// <summary>
+    /// 把一张图<b>铺满</b>给定目标框时，该从它里面取的那一块（cover）：比例与目标一致、居中，
+    /// 且不越出图本身。图比目标「宽」就裁左右，比目标「高」就裁上下。
+    /// <para>
+    /// 起播那一趟的整屏覆盖层要用它（2026-09-25，用户令「不要黑屏，主页和背景图无缝切换」）：那块层
+    /// 显示的就是加载遮罩垫底的背景图，而遮罩里那张图是 <c>UniformToFill</c> 摆的 —— 覆盖层按 contain
+    /// 摆、遮罩按 cover 摆，撤层那一刻图上会跳一下，正好落在这个修复要消灭的那一瞬里。
+    /// </para>
+    /// <para>形状说不上来时整幅取用（<paramref name="left"/>/<paramref name="top"/> 起的那一块），调用方据此退回原样。</para>
+    /// </summary>
+    public static Rect FillSource(int sourceWidth, int sourceHeight,
+        int targetWidth, int targetHeight, int left, int top)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 || targetHeight <= 0)
+            return new Rect(left, top, Math.Max(sourceWidth, 0), Math.Max(sourceHeight, 0));
+
+        var targetAspect = (double)targetWidth / targetHeight;
+        var sourceAspect = (double)sourceWidth / sourceHeight;
+
+        var width = sourceAspect > targetAspect ? sourceHeight * targetAspect : sourceWidth;
+        var height = sourceAspect > targetAspect ? sourceHeight : sourceWidth / targetAspect;
+
+        width = Math.Clamp(width, 1, sourceWidth);
+        height = Math.Clamp(height, 1, sourceHeight);
+        return new Rect(left + (sourceWidth - width) / 2, top + (sourceHeight - height) / 2, width, height);
+    }
+
     /// <summary>两块摆放之间按进度插值；落点恒等时插到头就是单位摆放。</summary>
     public static Placement Between(Placement from, Placement to, double progress)
     {

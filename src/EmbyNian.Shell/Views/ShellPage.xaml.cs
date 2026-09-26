@@ -664,7 +664,10 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// <para>
     /// 先停后走：主窗口模式由 <c>PlayerHidden</c> 把窗口还原成浏览的样子；独占模式的收场则由同一条
     /// 事件把播放页挂回主窗口（见 <c>OnHeadlessPlaybackHidden</c>），随后主页这一导航落在本窗口的框里。
-    /// 已在主页时 <see cref="GoTo"/> 自己短路，重复点也不产生历史记录。
+    /// </para>
+    /// <para>
+    /// 已在主页时 <see cref="GoTo"/> 自己短路（重复点不产生历史记录）。**退出播放回主页那一趟不靠这里
+    /// 出动画** —— 它的导航排在播放层收摊之后，见 <see cref="ReturnToHomeAfterPlayer"/>。
     /// </para>
     /// </summary>
     internal void ClosePlayerToHome()
@@ -672,6 +675,29 @@ public sealed partial class ShellPage : UserControl, IShellActions
         if (Player.ViewModel.PlayingNow) _ = Player.ViewModel.StopAsync();
 
         GoTo("home");
+    }
+
+    /// <summary>
+    /// 播放层把窗口交回浏览页之后，回主页那一趟补一次**真正的导航**（2026-09-25 用户报「退出时媒体还是
+    /// 没有动画」，要「和从电影页面返回到主页的动画一样」）。
+    /// <para>
+    /// <b>为什么少这一句就没有动画。</b>从电影页面返回主页是一条真导航：<c>ContentFrame</c> 里造一个新的
+    /// <c>HomePage</c>（这个页面没有设 <c>NavigationCacheMode</c>，默认不缓存），矮窗档的开关从默认（关）
+    /// 起算，判一次才升到轮播左下角 —— 屏上那 260ms 的升档行程就是用户记住的那套观感。而退出播放**不是
+    /// 导航**（主页一直挂在下面、开关一直开着），照原样回来一趟动画都没有。这里补的正是那一条：与点导航栏
+    /// 上的主页是同一个 <see cref="GoTo"/>，只是带 <c>force</c> 绕过「已经在主页」那道短路。
+    /// </para>
+    /// <para>
+    /// 只在当前内容真是主页时才做（从详情页进播放的，退出后该回详情页，那是另一档，不该把主页拉上来）。
+    /// 代价与从别的页面返回主页同一档：主页重读一次数据（几排货架加轮播），位置回到顶部 —— 本来就是
+    /// 用户要的那个观感。
+    /// </para>
+    /// </summary>
+    internal void ReturnToHomeAfterPlayer()
+    {
+        if (ContentFrame.Content is not HomePage) return;
+
+        GoTo("home", force: true);
     }
 
     Task IShellActions.PlayAsync(
@@ -819,8 +845,18 @@ public sealed partial class ShellPage : UserControl, IShellActions
         AccountServer.Text = string.IsNullOrWhiteSpace(server) ? "未连接服务器" : server;
     }
 
-    /// <summary>Navigates to a tag, whether the request came from the tab row or from a page.</summary>
-    public void GoTo(string tag)
+    /// <summary>
+    /// Navigates to a tag, whether the request came from the tab row or from a page.
+    /// <para>
+    /// <paramref name="force"/> 是给「退出播放回主页」那条路用的（<see cref="ClosePlayerToHome"/>）：
+    /// 从主页点开一部片再退回来时 <c>_current</c> 还是 <c>"home"</c>，不带 force 的话这里会早退 ——
+    /// 主页不重新导航就没有那趟矮窗档升档动画（新页面实例的档位从默认起算，判一次才升上去），
+    /// 而「从电影页面返回主页」走的正是「真导航 + 重载」那条路，所以它有动画。用户要的是两边一样
+    /// （2026-09-25 报「退出时媒体还是没有动画」）。导航栏那几颗按钮仍旧不带 force —— 已经在那一页
+    /// 上再点一次，本来就不该把页面重造一遍。
+    /// </para>
+    /// </summary>
+    public void GoTo(string tag, bool force = false)
     {
         if (_services is null) return;
 
@@ -833,7 +869,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
             return;
         }
 
-        if (_current == tag) return;
+        if (!force && _current == tag) return;
 
         if (tag == "home")
         {

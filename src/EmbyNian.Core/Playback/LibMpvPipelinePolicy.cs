@@ -20,6 +20,13 @@ internal static class LibMpvPipelinePolicy
     /// client-owned rendering/input options, then append the required pipeline contract.
     /// In particular, never even send wid or composition-size in the standalone pipeline.
     /// </summary>
+    /// <summary>
+    /// 内置播放器两条管线实际锁定的渲染后端与图形接口——管线契约在设置之后强制写入，
+    /// 设置页对内置后端不提供这两项（只读显示这里的事实），兼容性检查也按这里的值问。
+    /// </summary>
+    internal const string ForcedRenderer = "gpu-next";
+    internal const string ForcedApi = "d3d11";
+
     internal static IReadOnlyList<LibMpvPipelineOption> Build(
         VideoPipelineKind pipeline,
         IReadOnlyList<KeyValuePair<string, string>> playerOptions,
@@ -34,9 +41,9 @@ internal static class LibMpvPipelinePolicy
 
         // These names/values are verified against the bundled fork, not upstream's "flipping".
         // A single renderer (no fallback list) prevents quietly switching to a different pipeline.
-        options.Add(new("vo", "gpu-next", Required: true));
-        options.Add(new("gpu-api", "d3d11", Required: true));
-        options.Add(new("gpu-context", "d3d11", Required: true));
+        options.Add(new("vo", ForcedRenderer, Required: true));
+        options.Add(new("gpu-api", ForcedApi, Required: true));
+        options.Add(new("gpu-context", ForcedApi, Required: true));
         options.Add(new("d3d11-output-mode", integrated ? "composition" : "window", Required: true));
         // 两条管线都 **no**（参考项目 dyphire/mpv-config：`d3d11-exclusive-fs` 那行是注释掉的 ——
         // 也就是关，mpv 出厂就是关，而 `d3d11-flip` 那行同样注释着，翻转模型「性能最好」的默认因此留着）。

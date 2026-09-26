@@ -85,6 +85,36 @@ public sealed partial class PlayerPage
     internal Task WindowChange => _windowChange;
     internal bool FullscreenFrameVisible => _windowFrame is not null;
 
+    /// <summary>
+    /// 加载遮罩那支底色，折成分层窗口用的不透明 BGRA。起播自动全屏那一趟没有画面帧可抓，
+    /// 用它铺一块与 <c>Cover</c> 同色的纯色覆盖层挡住窗口长大那一拍（见 <see cref="ChangeWindowAsync"/>）。
+    /// 解析不到就退回黑色 —— 那一拍宁可盖一块黑，也好过露出底下的桌面／窗口色闪一下。
+    /// </summary>
+    private uint CoverOverlayColor()
+    {
+        var color = (Resources["PlayerCoverBrush"] as Microsoft.UI.Xaml.Media.SolidColorBrush)?.Color
+            ?? Microsoft.UI.Colors.Black;
+        return (uint)((0xFFu << 24) | ((uint)color.R << 16) | ((uint)color.G << 8) | color.B);
+    }
+
+    /// <summary>
+    /// 起播那条路上挡窗口长大的层。
+    /// <para>
+    /// <b>2026-09-25 起优先铺遮罩那张背景图</b>（用户令「不要黑屏，主页和背景图无缝切换」）。从前它一律
+    /// 铺 <see cref="CoverOverlayColor"/> 那块近黑，于是那一两拍用户看到的是「全屏黑一片」，紧接着才切到
+    /// 遮罩里的背景图 —— 一段本不该存在的黑。铺上同一张图（烘法与遮罩一致，见 <c>CoverArtwork</c>）之后，
+    /// 窗口长大那一拍屏上已经是背景图，遮罩接上来时纹丝不动。
+    /// </para>
+    /// <para>
+    /// 图没到手（这一部没有背景图、解码失败、或者取图还没回来）时退回纯色，与这条修复之前一模一样 ——
+    /// 少一次变黑是赚的，多一块底色不算赔。
+    /// </para>
+    /// </summary>
+    private VideoFrameOverlay StartupCover(IntPtr window) =>
+        ViewModel.CoverBackdropFrame is { } frame
+            ? new VideoFrameOverlay(window, frame, cover: true)
+            : new VideoFrameOverlay(window, CoverOverlayColor());
+
     /// <summary>想要全屏／退出全屏；与最大化请求互斥（后一个请求作废前一个）。</summary>
     private void RequestFullscreen(bool on)
     {
@@ -127,11 +157,12 @@ public sealed partial class PlayerPage
 
     private async Task ChangeWindowAsync()
     {
+        var pause = new HandoffPause();
         while (_window is { } window && Pending(window))
         {
             var generation = _windowChangeGeneration;
             var held = false;
-            var resume = false;
+            VideoFrameOverlay? growCover = null;
             try
             {
                 // 先把播放冻住，再抓帧。
@@ -144,7 +175,10 @@ public sealed partial class PlayerPage
                 // 且抓到的这一帧与撤掉保留帧时屏上那一帧**同帧**。
                 // 「播放中抓帧」给不了后一件：覆盖层每多盖一毫秒，撤掉时就多跳一毫秒的内容 ——
                 // 用户看到的那一下「退回」有它一半。
-                resume = await FreezeForHandoffAsync();
+                await FreezeForHandoffAsync(pause);
+
+                // 这一趟是不是「变大」（进全屏／最大化）—— 抓帧铺覆盖层与下面加载态的纯色覆盖层都看它。
+                var growing = _fullscreenWanted == true || _maximizeWanted == true;
 
                 if (_videoTarget.HasAttachedVisual && Cover.Visibility != Microsoft.UI.Xaml.Visibility.Visible)
                 {
@@ -159,7 +193,6 @@ public sealed partial class PlayerPage
                         // 变大那一趟（进全屏／最大化）先按<b>目标</b>矩形摆好，再动窗口：合成器若先吐
                         // 一拍「新几何 + 旧内容」，屏上已经是对的样子。变小那一趟缩到哪要等窗口自己算
                         // （还原矩形 + 按比例整形），所以仍旧先按当前矩形摆、改完再摆一次。
-                        var growing = _fullscreenWanted == true || _maximizeWanted == true;
                         var bounds = growing
                             ? (_fullscreenWanted == true
                                 ? VideoFrameOverlay.FullscreenRect(window.Handle)
@@ -177,7 +210,42 @@ public sealed partial class PlayerPage
                     }
                 }
 
+                // 起播自动全屏那一趟没有画面帧可抓（还在加载、Cover 立着），而窗口马上要长到全屏 ——
+                // 手动全屏靠上面抓到的帧盖住长大那一拍，这里没有帧，就用加载遮罩同色的纯色顶层层盖同一拍。
+                // 少了它，窗口长到全屏那一下右下角会露一下：SetWindowPos 是瞬时的，岛的合成提交晚它一两拍，
+                // 而加载遮罩是岛内 XAML，SynchronizeContentLayout 只同步布局、提交仍滞后（用户 2026-09-25 报
+                // 「起播自动全屏时窗口右下角闪一下」，且「先进播放页再手动全屏没有」——那条走的正是上面抓帧的路）。
+                if (_windowFrame is null && growing && Cover.Visibility == Microsoft.UI.Xaml.Visibility.Visible)
+                {
+                    var target = _fullscreenWanted == true
+                        ? VideoFrameOverlay.FullscreenRect(window.Handle)
+                        : VideoFrameOverlay.WorkArea(window.Handle);
+                    growCover = StartupCover(window.Handle);
+                    growCover.Show(target, topmost: true);
+                    VideoFrameOverlay.Flush();
+                }
+
                 ApplyPending(window);
+
+                if (growCover is not null)
+                {
+                    // 窗口已长到位：把纯色层挪到最终客户区，逼一次页面提交把全屏 Cover 排上屏，再撤层 ——
+                    // 撤早了（全屏 Cover 还没提交）右下角照样露一拍，所以先等这一次提交落地。
+                    growCover.Show(VideoFrameOverlay.ClientRect(window.Handle), topmost: true);
+                    VideoFrameOverlay.Flush();
+                    try
+                    {
+                        await Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(this).Compositor
+                            .RequestCommitAsync().AsTask().WaitAsync(TimeSpan.FromMilliseconds(350));
+                    }
+                    catch (Exception commit)
+                    {
+                        Log.Debug("播放器", $"起播全屏覆盖层提交未确认，照撤：{commit.Message}");
+                    }
+                    growCover.Dispose();
+                    growCover = null;
+                }
+
                 if (_windowFrame is { } overlay)
                     overlay.Show(VideoFrameOverlay.ClientRect(window.Handle), window.Fullscreen || window.TopMost);
                 if (held)
@@ -240,6 +308,7 @@ public sealed partial class PlayerPage
             {
                 _windowFrame?.Dispose();
                 _windowFrame = null;
+                growCover?.Dispose();
                 if (held) _videoTarget.HoldGeometry(false);
 
                 // 替用户把播放放开 —— 但要等**整趟事务**走完，不是这一趟走完。快速反向（连点全屏／
@@ -247,7 +316,9 @@ public sealed partial class PlayerPage
                 // 「同帧」，声音还会跟着「断-续-断-续」。`Pending` 还立着就继续冻着。
                 // 静默锚在这里再推一次：mpv 把 `pause=false` 报回来还要一程，那一下同样不是用户按的
                 //（见 `PlayerPage.Muted` 与 `HandoffPulseMuteMilliseconds`）。
-                if (resume && !Pending(window))
+                if (pause.Release(
+                    generation == _windowChangeGeneration && _window == window && _onStage,
+                    Pending(window)))
                 {
                     _handoffMutedAt = Now;
                     ViewModel.SetPaused(false);
@@ -259,7 +330,7 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 切换窗口这一趟先把播放冻住；返回「这一趟要不要替用户把播放放开」。
+    /// 切换窗口前冻结播放，恢复责任由整趟事务持有。
     /// <para>
     /// 用户 2026-09-22 的原话是「可以想办法在切全屏和窗口化的时候暂停播放，和截图无缝衔接嘛」。
     /// 两件事靠它一起成立：抓到的帧是**静止**的那一帧（撤掉保留帧时屏上还是同一帧，中间不跳内容），
@@ -268,13 +339,13 @@ public sealed partial class PlayerPage
     /// 这一点是动手前专门量过的，量不下来这个方案就只会把 750ms 保险丝吃满。
     /// </para>
     /// <para>
-    /// <b>用户自己暂停着的时候一根手指都不碰</b>：那时返回 false，既不改它的暂停、收尾也不会替它放开。
+    /// <b>用户自己暂停着的时候一根手指都不碰</b>：不取得恢复责任，也不改变暂停。
     /// 只有「本来在放、被我们冻住」才记着这一笔要在收尾还回去。
     /// </para>
     /// </summary>
-    private async Task<bool> FreezeForHandoffAsync()
+    private async Task FreezeForHandoffAsync(HandoffPause pause)
     {
-        if (ViewModel.Paused) return false;
+        if (!pause.Acquire(ViewModel.Paused)) return;
 
         _handoffMutedAt = Now;
         ViewModel.SetPaused(true);
@@ -284,8 +355,6 @@ public sealed partial class PlayerPage
         // 不至于把用户按下去的那一下拖住。
         for (var step = 0; step < 12 && !ViewModel.Paused; step++)
             await Task.Delay(16);
-
-        return true;
     }
 
     private void CancelWindowChange()

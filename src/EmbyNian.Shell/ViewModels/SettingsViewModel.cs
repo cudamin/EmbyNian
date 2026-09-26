@@ -28,7 +28,7 @@ public sealed partial class SettingSection : ObservableObject
 
     /// <summary>
     /// The entry in the left-hand list that shows this card. Kept separate from <see cref="Title"/> because
-    /// one card's heading is longer than its category name — 「画质与着色器」 under 「着色器」 — and matching
+    /// several cards can share one category — 「画质与着色器」 under 「视频输出」 — and matching
     /// the two by substring, as this page used to, makes every future heading a trap.
     /// </summary>
     public string Category { get; }
@@ -130,7 +130,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// scroll to the bottom for.
     /// </remarks>
     private static readonly string[] CardCategories =
-        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "着色器", "主页", "界面", "MoviePilot", "快捷键", "关于"];
+        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "主页", "界面", "MoviePilot", "快捷键", "关于"];
 
     /// <summary>
     /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
@@ -211,7 +211,8 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// builds its rows and a single look at this page would leave every card but one untouched.
     /// </summary>
     internal IReadOnlyList<(string Category, int Rows)> Cards =>
-        [.. Sections.Select(section => (section.Category, Containers(section)))];
+        [.. Sections.GroupBy(section => section.Category, StringComparer.Ordinal)
+            .Select(group => (group.Key, group.Sum(Containers)))];
 
     /// <summary>
     /// Row containers one card puts on the tree, which is not the same as its row count: a toggle group is one
@@ -278,13 +279,18 @@ public sealed partial class SettingsViewModel : PageViewModel
     {
         if (_settings is null) return Task.CompletedTask;
 
+        // 精简模式是页级状态（SettingRow.NotesHidden），建卡之前先对齐 —— 行的可见性在容器落到树上那一刻
+        // 才求值，这里晚了才是错的。恢复默认那趟重走这里，同一句话把它拨回新文档的样子。
+        SettingRow.NotesHidden = Settings.Ui.CompactMode;
+
         Sections.Clear();
         Sections.Add(PlayerCard());
         Sections.Add(PlaybackCard());
         Sections.Add(SubtitleCard());
         Sections.Add(VideoCard());
-        Sections.Add(AudioCard());
+        Sections.Add(HdrCard());
         Sections.Add(ShaderCard());
+        Sections.Add(AudioCard());
         Sections.Add(HomeCard());
         Sections.Add(InterfaceCard());
         Sections.Add(MoviePilotCard());
@@ -420,7 +426,8 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingSection PlayerCard() =>
         new("播放器", "播放器", "用程序里内置的播放器播，还是调起独立的 mpv.exe 来播。",
         [
-            Choice("播放后端", Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value),
+            Pick("播放后端", null, Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value,
+                EqualityComparer<MpvBackendKind>.Default, after: RefreshVideoBackend),
 
             Choice("渲染管线", Pipelines, () => Settings.Mpv.Pipeline, value => Settings.Mpv.Pipeline = value,
                 "集成模式把视频与 WinUI 控件混排；独占模式固定使用 D3D11，由 mpv 自建窗口、自管交换链，"
@@ -469,6 +476,11 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
                 "放到这个百分比以上，这一条就算看过"),
+
+            // 国漫单独一档（「新增国漫播放进度自定义百分比标记已看」，用户令 2026-09-26）：命中的判定在 Core 的
+            // DonghuaRule（类型：动画 ∧ 发行公司带腾讯/哔哩哔哩），这里只管数值。现读设置，下一次播放结束就认。
+            Number("国漫标记已观看阈值（%）", 50, 100, () => playback.DonghuaMarkWatchedPercent, value => playback.DonghuaMarkWatchedPercent = value,
+                "类型为动画、发行公司带腾讯、哔哩哔哩、优酷或爱奇艺的片子单独按这一档算，不吃上面那行的值"),
             // 四颗方向键、两对步长（2026-09-20 用户令）：← / → 用上面这两行，↑ / ↓ 用下面那两行。两对都印在
             // 设置页上，因为两个管线各有一套输入处理 —— 集成模式的键盘归 shell 的快捷键表，独占模式的键盘是
             // mpv 自己那层（keybind，见 <c>MpvSeekKeys</c>）—— 而两套都从这几个字段取值。屏上印的数字与按下
@@ -651,127 +663,6 @@ public sealed partial class SettingsViewModel : PageViewModel
             _ = _pushSubtitleStyle?.Invoke();
         };
 
-    private SettingSection VideoCard()
-    {
-        var video = Settings.Video;
-
-        // 视频同步 states the value in force, not the value stored, so it has writers to follow: its own
-        // drop-down, 启用插值 a few rows below, and 插值关闭阈值 (whose number appears in the note's sentence
-        // about the fallback rule). All of them restate it — the row is held in a local so each can.
-        // Those rows used to contradict each other: this one said 「不指定（等同音频同步）」 while
-        // display-resample was what mpv got. Missing a writer put the same lie back the other way round: pick
-        // 显示同步 here and the line underneath still said 音频同步.
-        SettingChoiceRow? sync = null;
-        sync = Mpv("视频同步", MpvOutputOptions.VideoSync, () => video.VideoSync, value => video.VideoSync = value,
-            "video-sync", SyncNote(video), () => sync!.Restate(SyncNote(video)));
-
-        return new SettingSection("视频输出", "视频输出", "渲染、硬件解码、同步和网络缓冲。",
-        [
-            Mpv("视频渲染", MpvOutputOptions.Renderers, () => video.Renderer, value => video.Renderer = value,
-                "vo", "着色器档位是照 GPU-Next 调的；GPU 那一档只当回退"),
-            Mpv("图形接口", MpvOutputOptions.GpuApis, () => video.GpuApi, value => video.GpuApi = value,
-                "gpu-api", "装机默认是 Vulkan：带 compute pass 的链（ArtCNN 那几档）在 Direct3D 11 上慢五倍左右"),
-            Mpv("硬件解码", MpvOutputOptions.HardwareDecoders, () => video.HardwareDecoding, value => video.HardwareDecoding = value,
-                "hwdec", "装机默认是「自动」；选「不指定」等同于纯软件解码"),
-            Mpv("色彩范围", MpvOutputOptions.OutputLevels, () => video.OutputLevels, value => video.OutputLevels = value,
-                "video-output-levels"),
-            sync!,
-            Toggle("宽于 16:9 的片源裁切填充",
-                "2.35:1 的电影铺满 16:9 的屏幕，代价是每一帧的左右两边被裁掉（贴边的字幕也会跟着没）。"
-                + "只对真的有黑边的片源出手；播放器右键菜单里可以对单部片子临时改",
-                () => video.FillWideSources, value => video.FillWideSources = value,
-                "panscan"),
-            Toggle("启用反交错", "只对老电视那种隔行片源有意义，别的片源开了也没影响", () => video.Deinterlace, value => video.Deinterlace = value,
-                "deinterlace"),
-            Toggle("启用插值",
-                "补偿刷新率不匹配造成的抖动：沿时间轴混合相邻两帧，不是电视上那种运动补偿。它必须靠显示同步才生效，"
-                + "而开销出在显示同步那一头 —— 那时 mpv 最后一趟渲染改成按刷新率跑，这台机器上实测 24.7% 变 50.1% 显卡；"
-                + "高刷屏上它能补的抖动本来也很小，所以屏幕刷新率超过下面那行阈值时，回退那一项会把两者一起收回",
-                () => video.Interpolation,
-                value =>
-                {
-                    video.Interpolation = value;
-
-                    // 这一项一变，上面那一行「实际生效」就变了。页面没有整体刷新，也不该有 —— 只有因果关系
-                    // 明确的这几处自己去改那一行。
-                    sync!.Restate(SyncNote(video));
-                },
-                "interpolation、tscale"),
-            Mpv("插值算法", MpvOutputOptions.InterpolationKernels, () => video.Tscale, value => video.Tscale = value,
-                "tscale", "只在「启用插值」开着时随它一起生效。过采样最省、运动最干净 —— 装机就是它；"
-                    + "往下几档是真正的重建滤波，运动更顺，代价是快速移动的锐利边缘周围可能出现轻微振铃"),
-            Toggle("高帧率或高刷新率时使用音频同步",
-                "片源超过约 47fps，或屏幕刷新率超过下一行填的数，就回到音频同步、插值不生效：这两种情况下显示同步"
-                + "只剩算力开销。关掉它可以强行让显示同步在任何屏幕上生效",
-                () => video.HighFrameRateAudioSync,
-                value =>
-                {
-                    video.HighFrameRateAudioSync = value;
-
-                    // 又一个写手：它改不了「此刻生效」那半句（这一页上没有片子、也不知道是哪块屏），可它决定
-                    // 那一行末尾还讲不讲那两条例外。
-                    sync!.Restate(SyncNote(video));
-                },
-                "video-sync、interpolation"),
-            Number("插值关闭阈值（Hz）",
-                VideoSettings.MinimumHighRefreshRateLimitHz,
-                VideoSettings.MaximumHighRefreshRateLimitHz,
-                () => video.HighRefreshRateLimitHz,
-                value => video.HighRefreshRateLimitHz = (int)value,
-                "播放窗口所在屏幕的刷新率大于这个数时，把插值连同显示同步一起收回（回到音频同步）—— 那个刷新率下"
-                    + "显示同步按刷新率重跑最后一趟渲染，实测 144Hz 上显卡占用翻倍、能补的抖动却几乎为零。"
-                    + $"装机 {VideoSettings.DefaultHighRefreshRateLimitHz}；只在上面那个回退开关开着时生效，"
-                    + "想彻底关掉它就填到最小",
-                () => sync!.Restate(SyncNote(video)),
-                "video-sync、interpolation"),
-            Slider("网络缓冲（MB）", 0, 4096, 64, () => video.NetworkCacheMegabytes, value => video.NetworkCacheMegabytes = (int)value,
-                "播网络片源时先往前攒多少数据，卡顿就调大；0 是 mpv 自己的默认", "demuxer-max-bytes"),
-            Mpv("抖动", MpvOutputOptions.Dithers, () => video.Dither, value => video.Dither = value,
-                "dither、dither-depth", "色深抖动，和上面的插值无关：落到显示器位深时撒一层噪声，免得渐变上出现色带"),
-            Mpv("去色带", MpvOutputOptions.DebandModes, () => video.Deband, value => video.Deband = value,
-                "deband", "大倍数档（放大 2.2 倍以上）改用链里的 hdeband，那时候这一项不生效"),
-            Mpv("HDR 处理", MpvOutputOptions.HdrModes, () => video.HdrMode, value => video.HdrMode = value,
-                "tone-mapping、target-colorspace-hint"),
-            Toggle("自动 ICC 校色", "按系统给这块屏设的 ICC 配置文件校色；屏幕没校准过开了会偏色，开着也会让上面的 HDR 直通失效",
-                () => video.IccProfileAuto, value => video.IccProfileAuto = value, "icc-profile-auto")
-        ]);
-    }
-
-    /// <summary>
-    /// 视频同步 那一行的说明：此刻真正生效的值，加上会改变它的两条规则。
-    /// <para>
-    /// The value comes from <see cref="MpvOutputOptions.ResolveSync"/> — the same function that decides what mpv
-    /// is actually sent — so the page cannot say one thing while the player does another. That was the bug: the
-    /// drop-down read 「不指定（等同音频同步）」 with 插值 on, and <c>display-resample</c> was in force.
-    /// </para>
-    /// <para>
-    /// 高帧率 and 高刷新率 are both stated in words rather than resolved, for the same reason: neither is knowable
-    /// from this page. No film is playing while it is open, and this window is not the player's — it may not even
-    /// be on the monitor the film will land on. What they resolve to is written to the log at every launch
-    /// (<c>PlaybackPlanner</c>) and the 诊断 page lists the options mpv was actually given.
-    /// </para>
-    /// </summary>
-    private static string SyncNote(VideoSettings video)
-    {
-        var (value, _, _) = MpvOutputOptions.ResolveSync(video);
-
-        // An empty resolved value is 「没发这个选项」, and mpv's own default is audio sync. Naming that rather
-        // than echoing the catalogue's 「不指定」 label back: 「此刻生效：不指定」 answers nothing.
-        var live = value.Length == 0
-            ? "此刻生效：音频同步（mpv 不收到这个选项时的默认）"
-            : $"此刻生效：{MpvOutputOptions.Describe(MpvOutputOptions.VideoSync, value)}";
-
-        var because = video.Interpolation && (video.VideoSync ?? "").Trim().Length == 0
-            ? "因为「启用插值」开着"
-            : "";
-
-        var exception = video.HighFrameRateAudioSync
-            ? $"片源超过约 47fps、或屏幕刷新率超过 {video.HighRefreshRateLimitHz}Hz（「插值关闭阈值」那一行）时一律回到音频同步"
-            : "";
-
-        return string.Join("；", new[] { live, because, exception }.Where(part => part.Length > 0));
-    }
-
     private SettingSection AudioCard()
     {
         var audio = Settings.Audio;
@@ -836,64 +727,6 @@ public sealed partial class SettingsViewModel : PageViewModel
             choices,
             selected,
             Save);
-    }
-
-    /// <summary>
-    /// 画质与着色器. Four dropdowns of group names and two resolution thresholds until 2026-09-03; now the
-    /// chain is computed (放大倍数 × 片源类型 × 显卡档) and what is left here is the three answers that are
-    /// genuinely the user's — how much GPU there is, whether to pin one chain by hand, and whether animated
-    /// content should use the animated half of the table at all.
-    /// <para>
-    /// <b>画质预设 stands first, above 启用着色器 — the user's call, 2026-09-05</b>（「把画质预设移到着色器开关
-    /// 上面，着色器开关不影响画质预设」）. The two are independent switches: the preset is handed to mpv as a
-    /// <c>profile=</c> on every launch whether or not a chain is running (<c>MpvOutputOptions.Build</c>), and
-    /// nothing in this card writes the other one's value. With 着色器 now off out of the box
-    /// (<c>ShaderAutomationSettings.Enabled</c>) the preset is also the only 画质 switch a fresh install has,
-    /// which is the other reason it goes first.
-    /// </para>
-    /// </summary>
-    private SettingSection ShaderCard()
-    {
-        var shaders = Settings.Shaders;
-        var video = Settings.Video;
-
-        // Named in plain terms rather than by any measurement: this is the one thing on the page that only
-        // the person in front of the machine can answer, and 「核显」 is a word they know.
-        (string Label, GpuTier Value)[] gpuTiers =
-        [
-            ("低档 — 核显或入门老卡（Vega、Iris Xe、GTX 1050）", GpuTier.Low),
-            ("中档 — 入门独显（GTX 1650、RX 6500 XT、Arc A380）", GpuTier.Medium),
-            ("高档 — RTX 3060 / RX 6700 及以上", GpuTier.High)
-        ];
-
-        // The eight ids never change with 显卡档 — that setting swaps what each one loads, not which ones
-        // exist — so a pinned choice survives changing it and this list needs no reseeding.
-        (string Label, string Value)[] chains =
-        [
-            ("自动（按放大倍数挑）", ""),
-            .. _shaders!.Catalog.Select(item => (Label: item.DisplayName, Value: item.Id))
-        ];
-
-        return new SettingSection("着色器", "画质与着色器", "画质预设一直生效；着色器是另一件事，开着的时候按放大倍数、片源类型和显卡档自动挑一条链。",
-        [
-            Mpv("画质预设", MpvOutputOptions.QualityPresets, () => video.QualityPreset, value => video.QualityPreset = value,
-                "profile", "fast 省算力、high-quality 更细腻，两个都是 mpv 自己内置的。这一项和下面的着色器开关互不影响："
-                    + "开关开着关着，这一档都照样交给 mpv。唯一重叠的是缩放器那三项 —— 着色器链本身就是一套缩放器，"
-                    + "开着链的时候那三项归链，预设的其余部分照旧生效"),
-            Toggle("启用着色器", "装机默认关闭；关掉之后缩放完全交给 mpv 自己，也就是上面那一档画质预设",
-                () => shaders.Enabled, value => shaders.Enabled = value,
-                "glsl-shaders"),
-            Choice("显卡档位", gpuTiers, () => shaders.Gpu, value => shaders.Gpu = value,
-                "决定每一档用多重的链，和片源无关。装机默认是低档"),
-            Choice("手动指定档位", chains, () => shaders.ManualGroup, value => shaders.ManualGroup = value,
-                "留在「自动」就按放大倍数挑；想前后对比时在这里钉住一条。每一档具体挂了哪几个着色器，在播放器的 更多 → 着色器 菜单里逐行写着"),
-            Toggle("自动识别动画", "按 Emby 类型和标签关键词匹配，命中就走动画那半张表", () => shaders.AutoAnimeProfile, value => shaders.AutoAnimeProfile = value),
-            List("动画关键词", "动画, 动漫, Anime", () => shaders.AnimeKeywords, value => shaders.AnimeKeywords = value),
-            Toggle("老片源修复", "片源高度不超过 576 线（DVD 那一代）时，链的最前面加去色带；中高档还加轻度降噪",
-                () => shaders.RestoreVintageSources, value => shaders.RestoreVintageSources = value),
-            Toggle("8K 片源关闭着色器", "宽 ≥7000 或高 ≥3000 的片源不套用任何链，避免 GPU 过载", () => shaders.DisableForUltraHighRes, value => shaders.DisableForUltraHighRes = value)
-
-        ]);
     }
 
     /// <summary>
@@ -1088,7 +921,7 @@ public sealed partial class SettingsViewModel : PageViewModel
                 + "只是下次看到那些封面时要重新下载一遍。",
             after: () => ShellPrefs.Apply(ui));
 
-        return new SettingSection("界面", "界面", "配色主题、媒体库分页和图片缓存上限。",
+        return new SettingSection("界面", "界面", "配色主题、隐藏功能下方说明、媒体库分页和图片缓存上限。",
         [
             Themes,
 
@@ -1121,14 +954,44 @@ public sealed partial class SettingsViewModel : PageViewModel
                     + "客户端换不出来，只能在服务器认出这个条目属于哪一家时把那一家的名字写上去，认不出来就写"
                     + "「公众评分」。豆瓣要服务器上装了豆瓣刮削插件才认得出来。"),
 
-            Toggle("显示观看状态标记", "在海报角上显示已看和收藏状态", () => ui.ShowWatchedIndicators, value => ui.ShowWatchedIndicators = value)
+            Toggle("显示观看状态标记", "在海报角上显示已看和收藏状态", () => ui.ShowWatchedIndicators, value => ui.ShowWatchedIndicators = value),
+
+            // 「在设置中新增一个精简模式，开启后隐藏各项功能下方的说明」（用户的话，2026-09-25）。收放是页级
+            // 的事（SettingRow.NotesHidden），所以 after 里先对齐标记、再逐行喊一遍 —— 与 ShowHomeBanner 不同，
+            // 这件事不出设置页，不走 ShellPrefs。开关行自己的说明也在「各项功能」之列：开着它，连介绍它自己的
+            // 那行小字一起收走 —— 趁它还显示着，把这句话读完再拨。
+            // 屏上的名字改成新话：「把极简模式改名为隐藏功能下方说明」（用户的话，2026-09-26）—— 名字
+            // 直接说它干什么；键名 CompactMode、自检里的 ProbeCompactMode 不动，改的只是给人看的字。
+            Toggle("隐藏功能下方说明", "开启后，这一页每一条设置下面的小字说明都收起来，只留标签和控件；想看某条是"
+                + "什么意思，把它关掉就放回来",
+                () => ui.CompactMode,
+                value => ui.CompactMode = value,
+                after: () =>
+                {
+                    SettingRow.NotesHidden = ui.CompactMode;
+                    RefreshNoteVisibility();
+                })
         ]);
     }
 
     /// <summary>
+    /// 精简模式拨了一下：整页每一行的说明可见性都变了，逐行把消息喊过去。The page deliberately has no refresh
+    /// pass — this is not one: no value is recomputed, each row is only told that a property it already exposes
+    /// moved, which is exactly the message the Note setter sends when 视频同步's row restates itself. Rows in
+    /// cards that have never been opened have no containers yet, so there is nothing to tell — their bindings
+    /// read the flag when they are first built.
+    /// </summary>
+    private void RefreshNoteVisibility()
+    {
+        foreach (var section in Sections)
+            foreach (var row in section.Rows)
+                row.RefreshNoteVisibility();
+    }
+
+    /// <summary>
     /// 快捷键：播放器那些键盘动作，做成参考图那样一行一个、右边一个可重绑的方框（「参考上图在设置中新增快捷键
-    /// 功能」，2026-09-08）。21 行可改的走 <see cref="SettingShortcutRow"/>；Esc、Y 两个固定键以只读行显示，让人
-    /// 看到全貌（为什么固定见 <see cref="ShortcutCatalog.ReservedKeys"/>）；末一行一颗「恢复默认快捷键」，只清
+    /// 功能」，2026-09-08）。21 行可改的走 <see cref="SettingShortcutRow"/>；Esc、回车两个固定键以只读行显示，
+    /// 让人看到全貌（为什么固定见 <see cref="ShortcutCatalog.ReservedKeys"/>）；末一行一颗「恢复默认快捷键」，只清
     /// 快捷键、不动别的。判断全在 Core 的 <see cref="ShortcutCatalog"/>；这里只把动作翻成行、把方框敲定的键交回去。
     /// </summary>
     private SettingSection ShortcutsCard()
@@ -1149,8 +1012,9 @@ public sealed partial class SettingsViewModel : PageViewModel
         }
 
         // 两个固定键，只读显示，让人看到全貌（为什么固定见 ShortcutCatalog.ReservedKeys）。
-        rows.Add(Fact("退出全屏 / 停止", "固定，不可更改", "Esc"));
-        rows.Add(Fact("确认跳过片头 / 片尾", "固定，不可更改；只在出现跳过提示时有效", "Y"));
+        // 2026-09-26（用户令）：确认跳过 Y→回车、关闭跳过提示 N→Esc —— Esc 因此先兼「关闭提示」那一档。
+        rows.Add(Fact("退出全屏 / 停止", "固定，不可更改；跳过提示立着时先关闭提示", "Esc"));
+        rows.Add(Fact("确认跳过片头 / 片尾", "固定，不可更改；只在出现跳过提示时有效", "回车"));
 
         // 只清快捷键、不动别的（列表最下面那颗「恢复默认」清的是全部设置，作用域比这颗宽）。
         rows.Add(Fact("恢复默认快捷键", "把上面这些快捷键改回装机时的默认，其他设置不受影响",
@@ -1621,8 +1485,12 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingColorRow ColorRow(string label, Func<string> read, Action<string> write, string mpvOption, string? note = null) =>
         new(label, Annotate(note, mpvOption), read(), write, Save);
 
-    private SettingToggleRow Toggle(string label, string note, Func<bool> read, Action<bool> write, string mpvOption = "") =>
-        new(label, Annotate(note, mpvOption) ?? "", read(), write, Save);
+    /// <summary>
+    /// 一行开关。The optional <c>after</c> hook mirrors the Choice row's: fired after the save, for the one
+    /// switch whose flip means more than the document — 精简模式，整页的说明跟着它收放（2026-09-25）。
+    /// </summary>
+    private SettingToggleRow Toggle(string label, string note, Func<bool> read, Action<bool> write, string mpvOption = "", Action? after = null) =>
+        new(label, Annotate(note, mpvOption) ?? "", read(), write, Save, after);
 
     private SettingNumberRow Number(string label, double minimum, double maximum, Func<int> read, Action<int> write, string? note = null, Action? after = null, string mpvOption = "") =>
         new(label, Annotate(note, mpvOption), minimum, maximum, read(), value => write((int)value), () => read(), Save, after);

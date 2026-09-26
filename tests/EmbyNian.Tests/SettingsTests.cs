@@ -653,8 +653,15 @@ internal static class SettingsTests
         Test("规整：越界数值被夹回合理范围", () =>
         {
             var settings = SettingsMigration.NewDefaults();
+
+            // 国漫那一档出厂 85、全局那一档出厂 90（用户令 2026-09-26「国漫的标记已看默认改为百分之85，
+            // 其他的默认为百分之90」）—— 出厂值本身也要钉住，别让哪次手滑把两档并成同一个数。
+            Assert.Equal(85, settings.Playback.DonghuaMarkWatchedPercent);
+            Assert.Equal(90, settings.Playback.MarkWatchedPercent);
+
             settings.Ui.PageSize = 100000;
             settings.Playback.MarkWatchedPercent = 5;
+            settings.Playback.DonghuaMarkWatchedPercent = 5;
             settings.Playback.ProgressReportIntervalSeconds = 0;
             settings.Ui.ImageCacheMegabytes = 999999;
 
@@ -662,6 +669,8 @@ internal static class SettingsTests
 
             Assert.Equal(500, settings.Ui.PageSize);
             Assert.Equal(50, settings.Playback.MarkWatchedPercent);
+            Assert.Equal(50, settings.Playback.DonghuaMarkWatchedPercent,
+                "国漫那一档的范围和全局那一档是同一对数");
             Assert.Equal(1, settings.Playback.ProgressReportIntervalSeconds);
             Assert.Equal(EmbyNian.Emby.ImageCachePolicy.MaxMegabytes, settings.Ui.ImageCacheMegabytes,
                 "图片缓存上限的范围必须和设置页那一行是同一对数");
@@ -1417,6 +1426,7 @@ internal static class SettingsTests
             ui.PageSize = 37;
             ui.ShowWatchedIndicators = false;
             ui.ShowHomeBanner = false;
+            ui.CompactMode = true;
             ui.ImageCacheMegabytes = ImageCachePolicy.MaxMegabytes;
             ui.ScoreSource = ScoreSource.Critic;
             ui.HomeRows = [new HomeRowSetting { Key = "library:1", Title = "改过", Visible = false }];
@@ -1439,6 +1449,7 @@ internal static class SettingsTests
             Assert.Equal(fresh.PageSize, ui.PageSize);
             Assert.Equal(fresh.ShowWatchedIndicators, ui.ShowWatchedIndicators);
             Assert.Equal(fresh.ShowHomeBanner, ui.ShowHomeBanner, "「恢复默认」之后主页轮播大图要是开的");
+            Assert.Equal(fresh.CompactMode, ui.CompactMode, "「恢复默认」之后精简模式要是关的（说明全部放回来）");
             Assert.Equal(fresh.ImageCacheMegabytes, ui.ImageCacheMegabytes);
             Assert.Equal(fresh.ScoreSource, ui.ScoreSource);
             Assert.Equal(0, ui.HomeRows.Count, "主页版面回到空，也就是「照默认版面排」");

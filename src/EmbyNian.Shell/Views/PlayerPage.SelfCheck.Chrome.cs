@@ -492,7 +492,26 @@ public sealed partial class PlayerPage
         // The distances themselves, which is what says they were derived rather than typed: each overlay
         // sits exactly one gap off the edge of what it clears. A margin re-hardcoded to some number that
         // happens not to overlap today would pass the two checks above and fail these two.
-        Want("跳过按钮的间距是量出来的", Math.Abs(below - OverlayGap) < GeometrySlack);
+        // 2026-09-26 起按钮在「让开」之上再抬 SkipLift（用户令「上移按钮」），量出来的间距是两者的和。
+        Want("跳过按钮的间距是量出来的", Math.Abs(below - (OverlayGap + SkipLift)) < GeometrySlack);
+
+        // 倒计时插值（用户令 2026-09-26「按钮上的倒计时进度条不是很顺滑」）。这一关开头的
+        // SkipOffered=true 那一拍已经走真链路把表开起来（直接赋值也发 PropertyChanged）。这里再走
+        // <see cref="PlayerViewModel.ShowSkipPrompt"/>（自检专用门）校准一拍，然后用合成时刻问插值读数
+        // —— 表刚开、流速还是满速档：余值 1→0 立满 15 秒，750ms 后应在 0.95。
+        ViewModel.ShowSkipPrompt(new SkipPrompt(true, "跳过片头", "", 1.0));
+        var countdownAnchor = Now;
+        report.Add($"倒计时 表开={_skipCountdownTimer?.IsRunning == true}，锚 {SkipCountdown.Value:0.###}，"
+            + $"750ms 后应到 {SkipCountdownShown(countdownAnchor + 750):0.###}");
+        Want("倒计时表开着", _skipCountdownTimer?.IsRunning == true);
+        Want("倒计时锚点当拍铺上", Math.Abs(SkipCountdown.Value - 1.0) < 0.005);
+        Want("倒计时沿满速走", Math.Abs(SkipCountdownShown(countdownAnchor + 750) - 0.95) < 0.02);
+
+        // 按下判定（用户令 2026-09-26「点击按钮跳过片头/片尾的时候 进度条会出来闪一下」）：offer 立着时
+        // 按在按钮上的那一下算按钮的、不叫控件 —— 判定（PressOnSkipButton）与几何在这里钉住；接线本身
+        // 编译与读码为准，探针喂不了 PointerRoutedEventArgs。
+        var skipCentre = new Point(skip.Left + skip.Width / 2, skip.Top + skip.Height / 2);
+        Want("压在跳过按钮上的按下算按钮的", PressOnSkipButton(skipCentre));
 
         // 量具本身. Take the bar out of the layout so its ActualHeight really is 0 — the state it is in
         // before the first film — and make the fallback do the work.
@@ -524,6 +543,14 @@ public sealed partial class PlayerPage
         // And the remembered height back to the arranged one, since the fallback above left it holding a
         // measurement taken with the bar out of the tree.
         PlaceOverlays();
+
+        // 收场那一问（offer 收掉 → 按钮 Collapsed → 同一坐标不再算它，倒计时表也停了）。上一关把
+        // offer 摆起来过、这里已还回去，常态 wasOffer=false 才验 —— 免得探针自己把自己搞红。
+        if (!wasOffer)
+        {
+            Want("offer 收掉后同一坐标不算按钮", !PressOnSkipButton(skipCentre));
+            Want("offer 收掉后倒计时表停了", _skipCountdownTimer?.IsRunning != true);
+        }
 
         return (wrong.Count == 0,
             string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));

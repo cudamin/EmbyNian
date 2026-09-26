@@ -70,6 +70,14 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     private const double OverlayGap = 8;
 
+    /// <summary>
+    /// 跳过按钮再往上让出的那一段（用户令 2026-09-26「上移按钮」，配合「鼠标移到按钮上的时候不会唤出进度条」）：
+    /// 只贴着进度条上方（OverlayGap）时，够按钮的手势从进度条上一滑而过；抬高一段，按钮离控制条远一截、
+    /// 也离底部的唤出带远一截。加在 <see cref="OverlayGap"/> 之上而不是改它 —— 那一格的语义是「让开」，这一格
+    /// 是「再抬」，两句话分开写。探针的间距断言读的是两者的和（ProbeClearance）。
+    /// </summary>
+    private const double SkipLift = 24;
+
     private readonly ChromeReveal _chrome = new();
     private readonly SeekClockConverter _seekClock;
 
@@ -422,11 +430,15 @@ public sealed partial class PlayerPage : UserControl
         _ticker.Tick += OnTick;
 
         // A flyout is where the pointer went, so the chrome must not read the stillness as disinterest.
-        foreach (var flyout in new[] { EpisodeMenu, AudioMenu, SubtitleMenu, SpeedMenu, MoreMenu, PictureMenu })
+        // 倍速那一颗 2026-09-25 起开的是轮盘（SpeedWheelFlyout），不是 MenuFlyout —— Opened/Closed 是
+        // FlyoutBase 上的事件，六颗照旧一起挂牌。
+        foreach (var flyout in new FlyoutBase[] { EpisodeMenu, AudioMenu, SubtitleMenu, SpeedWheelFlyout, MoreMenu, PictureMenu })
         {
             flyout.Opened += (_, _) => Hold(true, ChromeHold.Menu);
             flyout.Closed += (_, _) => Hold(false, ChromeHold.Menu);
         }
+
+        WireSpeedWheel();
     }
 
     /// <summary>
@@ -542,6 +554,7 @@ public sealed partial class PlayerPage : UserControl
         CancelWindowChange();
         _ticker.Stop();
         DropTapHold();
+        StopSkipCountdown();
 
         // 十八报：与 LeavePlayer 同理 —— 藏着的时候关停也是一条显示路径，挂上名再放。
         if (_cursorHidden) _woke = "播放层关停";
@@ -600,6 +613,10 @@ public sealed partial class PlayerPage : UserControl
         ViewModel.PictureAspectChanged -= OnPictureAspectChanged;
         ViewModel.SourceAspectChanged -= OnSourceAspectChanged;
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+
+        // 退订在先，offer 的收场通知到不了这一页了 —— 倒计时表兜底停掉（PlayerPage.Skip.cs），
+        // 别让它挂着一支没人管的计时器。
+        StopSkipCountdown();
 
         ViewModel.MeasureSurface = null;
         ViewModel.MeasureRefreshHz = null;
@@ -688,6 +705,11 @@ public sealed partial class PlayerPage : UserControl
         _inputSuspended = false;
         _videoTarget.RetainLastFrame = true;
         _window.FreeSizing = true;
+
+        // 从这一拍起窗口归播放层用：浏览页在这期间量到的尺寸全是中间态（全屏／播放几何／浏览几何），
+        // 按它们重排版面就是用户退出播放时看到的「媒体库上下跑一趟」。收在两条收摊路上，落定后再补判
+        // 一次（见 HostWindow.PlayerLayer）。
+        _window.SetPlayerLayer(true);
         UpdateStandaloneHint();
         if (ViewModel.PictureInHostWindow)
             _cursorVisibilityEvents ??= new CursorVisibilityEvents(_window.Handle, OnSystemCursorChanged);
@@ -712,12 +734,19 @@ public sealed partial class PlayerPage : UserControl
         _polledKnown = false;
         _ticker.Start();
 
-        _startupHandoverPending = true;
+        // 起播开了自动全屏时「一上来就整屏」（用户令 2026-09-25）：不在小窗里淡入再跳全屏，直接整屏，
+        // 见 EnterFullscreenAtOnce。其余情形照旧在小窗里淡入、落定后走窗口交接（自动全屏关时那一句空转）。
         var fullscreenEntry = ViewModel.PictureInHostWindow && WindowForms.WantsAutoFullscreen(
             ViewModel.AutoFullscreenOnPlayback, ViewModel.PlaybackLifecycleActive, _window.Form);
-        TransitionPage(entering: true,
-            landed: () => _ = CompletePlayerEntranceAsync(),
-            fullscreenEntry: fullscreenEntry);
+        if (fullscreenEntry)
+        {
+            EnterFullscreenAtOnce();
+        }
+        else
+        {
+            _startupHandoverPending = true;
+            TransitionPage(entering: true, landed: () => _ = CompletePlayerEntranceAsync());
+        }
         _window.PlaybackTitleBar = true;
         _videoTarget.SynchronizeGeometry();
         Focus(FocusState.Programmatic);
@@ -785,14 +814,23 @@ public sealed partial class PlayerPage : UserControl
         //    窗口还原本身也不再是这个函数的事：它挪进 CompletePlayerExit，而且只在这条路上才做
         //    （见 _restoreBrowseOnExit —— Detach 那条路也会调 CompletePlayerExit，但那时页面可能根本
         //    没上过台，把窗口掰回上一次记下的浏览几何是无事生非）。
-        _restoreBrowseOnExit = true;
-
         // ③ **不立刻溶解**（2026-09-20 晚，用户令「退出的时候不第一时间去掉画面，等背景图加载出来之后
         //    再无缝替换」）。上面 ① 的 ShowPlayer(false) 让浏览页就位，但它那张背景图（主页轮播、详情页
         //    背景）要一次网络往返才到；溶解只有 240ms，图没到就溶解完，露出来的正是用户截图里那块发灰的
         //    空页面。改成先按住最后一帧（BeginPlayerExit 已立起铺满与放宽的保险丝），等浏览页报就绪
         //    （ActiveContentReady）再起同一条溶解轨道，中间那块灰就不存在了 —— 全文在 ExitWhenBrowseReady。
-        ExitWhenBrowseReady();
+        //
+        //    **2026-09-25 起，从按返回走的那条路（ReturnToBrowseBeforeStopAsync）不走这一趟了**（用户令
+        //    「退出播放窗口化的一瞬间会有视频的残留画面，不能直接切回主页吗」）。那条路把最后一帧交在一块
+        //    不随窗口变形的覆盖层上，本页此刻是一块空舞台 —— 再走溶解，屏上只剩一块近黑在慢慢淡。它当拍
+        //    收摊，屏上由那块覆盖层接着，撤层时就是主页。其余收摊路（Detach、真收摊）照旧走等就绪与溶解：
+        //    它们没有覆盖层，这一趟仍是那几条旧账的解。
+        _restoreBrowseOnExit = true;
+
+        var snap = _exitSnap;
+        _exitSnap = false;
+        if (snap) CompletePlayerExit();
+        else ExitWhenBrowseReady();
     }
 
     /// <summary>

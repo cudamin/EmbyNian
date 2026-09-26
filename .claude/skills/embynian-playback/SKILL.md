@@ -46,6 +46,7 @@ Operational details:
 - Cadence: a `PeriodicTimer` at `settings.Playback.ProgressReportIntervalSeconds`, clamped to 1–60 seconds.
 - Resume comes from the item's own user data: `EmbyItem.ResumeTicks` is `UserData.PlaybackPositionTicks`, and `HasResumePosition` additionally requires the fraction to sit strictly between 0.001 and 0.995 — so a barely-started and a nearly-finished item both correctly read as "nothing to resume". `PlayerViewModel` starts at `choice?.StartTicks ?? resumeTicks`.
 - Watched / favourite / hide-from-resume go through `EmbyClient` (`Users/{id}/PlayedItems/{id}`, `Users/{id}/FavoriteItems/{id}`, `HideFromResume`) and are driven from `Views/ItemCommands.cs` and its `ItemCommands.Server.cs` half. **`MarkUnplayed` also clears the resume position; 「从继续观看中移除」 deliberately does not** — that distinction is documented at the client method and is worth preserving. Optimistic UI here has bitten once: the 「标记为已观看」 tick jumped back to its old value before the server answered.
+- **标记已看阈值有两档（2026-09-26）**: the global `MarkWatchedPercent`, and a per-item `DonghuaMarkWatchedPercent` for 国漫 — items whose genres/tags say 动画 **and** whose studios carry tencent/bilibili/哔哩哔哩/youku/iqiyi plus their Chinese spellings (`DonghuaRule`, both levels consulted so episodes see the series). The planner decides and carries the verdict as `PlaybackRequest.IsDonghua` because the service holds no item metadata; `ShouldMarkWatched` only picks the threshold. EOF still marks watched regardless of percent.
 
 ## Tracks, episodes, chapters — the pure functions
 

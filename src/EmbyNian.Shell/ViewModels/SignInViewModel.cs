@@ -62,6 +62,9 @@ public sealed partial class SignInViewModel : PageViewModel
     private ISettingsService? _settings;
     private EmbySession? _session;
     private CredentialVault? _vault;
+    private Uri? _usersAddress;
+    private string _passwordAddress = "";
+    private string _passwordUsername = "";
 
     /// <summary>
     /// Whether the user list is being filled rather than picked from. The view model's version of what
@@ -227,7 +230,7 @@ public sealed partial class SignInViewModel : PageViewModel
         Address = server?.Url ?? "";
         Username = account?.Username ?? "";
         Remember = account?.RememberPassword ?? true;
-        Password = ReadSavedPassword(account);
+        Password = ReadSavedPassword(EmbySignInIdentity.SavedAccount(Settings.Servers, Address, Username));
 
         FillSavedServers();
         RequestFocus(SignInFocus.Next);
@@ -285,7 +288,7 @@ public sealed partial class SignInViewModel : PageViewModel
         var account = server.FindAccount(Settings.LastAccountId) ?? server.Accounts.FirstOrDefault();
         Username = account?.Username ?? "";
         Remember = account?.RememberPassword ?? true;
-        Password = ReadSavedPassword(account);
+        Password = ReadSavedPassword(EmbySignInIdentity.SavedAccount(Settings.Servers, Address, Username));
 
         // Picking a server is a statement of intent; no reason to make the user press 连接 as well.
         _ = ConnectAsync();
@@ -325,12 +328,13 @@ public sealed partial class SignInViewModel : PageViewModel
             // this failure is swallowed rather than allowed to end the connect.
             var users = await ListUsersAsync(gateway, apiBase, token).ConfigureAwait(true);
 
-            if (!IsCurrent(token)) return;
+            if (!IsCurrent(token) || !EmbySignInIdentity.SameAddress(Address, apiBase.AbsoluteUri)) return;
 
             ServerLabel = info.ServerName is { Length: > 0 } name
                 ? $"{name}　·　Emby {info.Version}"
                 : apiBase.Host;
 
+            _usersAddress = apiBase;
             ShowCredentialStep(users);
         }
         catch (OperationCanceledException)
@@ -417,9 +421,11 @@ public sealed partial class SignInViewModel : PageViewModel
         {
             var server = _settings!.ResolveServer(Address);
             var account = _settings.ResolveAccount(server, username);
+            var passwordless = EmbySignInIdentity.IsPasswordless(Address, _usersAddress, username, SelectedUser);
+            var password = EmbySignInIdentity.PasswordFor(Address, username, Password, _passwordAddress, _passwordUsername, passwordless);
 
             await _session!
-                .SignInAsync(server, account, Password, username, Remember, token)
+                .SignInAsync(server, account, password, username, Remember, token)
                 .ConfigureAwait(true);
 
             if (!IsCurrent(token)) return;
@@ -456,28 +462,45 @@ public sealed partial class SignInViewModel : PageViewModel
     /// </summary>
     partial void OnSelectedUserChanged(EmbyUser? value)
     {
-        if (_filling || value is null) return;
+        if (_filling || value is null || !Attached || _usersAddress is null
+            || !EmbySignInIdentity.SameAddress(Address, _usersAddress.AbsoluteUri)) return;
 
         Username = value.Name;
-
-        // The server settings remember, not the one currently typed in the box. Deliberately: this is a
-        // password lookup, and the vault only has one for an account that was signed into before.
-        var saved = _settings?.Settings.ResolveLastServer() is { } server
-            ? server.Accounts.FirstOrDefault(candidate =>
-                string.Equals(candidate.Username, value.Name, StringComparison.OrdinalIgnoreCase))
-            : null;
-
-        Password = ReadSavedPassword(saved);
+        var saved = EmbySignInIdentity.SavedAccount(Settings.Servers, Address, value.Name);
+        Password = value.HasPassword ? ReadSavedPassword(saved) : "";
         Remember = saved?.RememberPassword ?? true;
 
         if (!value.HasPassword)
         {
-            // A passwordless account has nothing left to ask for.
             _ = SignInAsync();
             return;
         }
 
         RequestFocus(SignInFocus.Password);
+    }
+
+    partial void OnAddressChanged(string oldValue, string newValue)
+    {
+        if (EmbySignInIdentity.SameAddress(oldValue, newValue)) return;
+        Password = "";
+        _passwordAddress = "";
+        _passwordUsername = "";
+        _usersAddress = null;
+        SelectedUser = null;
+        Users.Clear();
+        Cancel();
+        ShowAddressStep();
+    }
+
+    partial void OnUsernameChanged(string oldValue, string newValue)
+    {
+        if (!EmbySignInIdentity.SameUsername(oldValue, newValue)) Password = "";
+    }
+
+    partial void OnPasswordChanged(string value)
+    {
+        _passwordAddress = Address;
+        _passwordUsername = Username;
     }
 
     /// <summary>Re-asks the three gated commands, and relabels the sign-in button.</summary>

@@ -280,8 +280,15 @@ internal static partial class ShellSelfCheck
             .FirstOrDefault(section => section.Category == "视频输出")?.Rows
             .FirstOrDefault(row => row.Label == "视频同步")?.Note ?? "";
 
-        check("视频同步那一行说的是此刻生效的值", restate.Ok && liveNote.Contains("此刻生效"),
+        check("视频同步那一行说的是下次播放的值", restate.Ok && liveNote.Contains("下次播放"),
             $"{restate.Detail}；屏上那一行写着「{liveNote}」");
+
+        var videoSections = page.ViewModel.Sections.Where(section => section.Category == "视频输出").ToList();
+        var optionalNumbers = videoSections.SelectMany(section => section.Rows).OfType<SettingOptionalNumberRow>().ToList();
+        var optionalProbe = SettingOptionalNumberRow.Probe();
+        check("视频输出包含 HDR 与着色器", videoSections.Count == 3 && !page.Categories.Contains("着色器")
+            && optionalNumbers.Count == 5 && optionalProbe.Ok,
+            $"视频输出 {videoSections.Count} 个分区、{optionalNumbers.Count} 个自动/手动数值；{optionalProbe.Detail}");
 
         // 「动态范围压缩」下发的是 ad-lavc-ac3drc，那是 AC-3 解码器的选项 —— DTS / TrueHD / AAC / FLAC 轨一律
         // 没有反应。而那一行读起来像是通用的「让对白清楚一点」，所以说明里必须写着适用范围，否则它就是在骗人。
@@ -295,6 +302,14 @@ internal static partial class ShellSelfCheck
         check("动态范围压缩那一行写明只对 AC-3 有效", drcNote.Contains("AC-3") && hasNormalize,
             $"说明里{(drcNote.Contains("AC-3") ? "有" : "没有")}「AC-3」字样、"
                 + $"{(hasNormalize ? "并且" : "但是没有")}「音量均衡」那一行；这张卡 {audioRows.Count} 行");
+
+        // 精简模式（「在设置中新增一个精简模式，开启后隐藏各项功能下方的说明」，2026-09-25）：假行拨一遍
+        // （SettingRow.Probe），不碰屏上这一页 —— 这台机器注不进鼠标事件，拨不了真的开关；而收/放任何一档
+        // 卡住，屏上的样子都是「拨了没反应」，别的读数一个都不动。
+        // 屏上的名字 2026-09-26 改成「隐藏功能下方说明」（「把极简模式改名为隐藏功能下方说明」，用户的
+        // 话），读数跟着换名；探针与判定不动。
+        var compact = SettingRow.ProbeCompactMode();
+        check("隐藏功能下方说明收放", compact.Ok, compact.Detail);
 
         // 安全起播已经替换旧命令行传头：保留可见提示检查，但不能继续要求屏上承诺泄露令牌。
         // 这里只验证说明与四个设置行；管道身份和起播顺序由 Core 的离线子进程夹具验证。
@@ -534,6 +549,11 @@ internal static partial class ShellSelfCheck
 
         var menus = player.ProbeControlMenus();
         check("控制栏菜单", menus.Ok, menus.Detail);
+
+        // 倍速不再是菜单（2026-09-25 用户令）：按钮开的是竖置轮盘，刻度带在构造时就摆好了 —— 根数、
+        // 文案、当前值居中与「快在上」的方向都从这里看。
+        var speedWheel = player.ProbeSpeedWheel();
+        check("倍速轮盘", speedWheel.Ok, speedWheel.Detail);
 
         // 需求 7. Three of the things this asks about are collisions with the player rather than faults in
         // the box: the strip's drag-guard list, the chrome hold a flyout used to be able to steal, and the

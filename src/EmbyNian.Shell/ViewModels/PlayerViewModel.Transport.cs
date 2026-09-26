@@ -55,10 +55,11 @@ public sealed partial class PlayerViewModel
     internal void TakeSkip() => AcceptSkip(null);
 
     /// <summary>
-    /// 关掉正立着的 跳过 提议而不跳转（快捷键 N，与 <see cref="TakeSkip"/> 的 Y 成一对）：按钮当场收起，且只要
+    /// 关掉正立着的 跳过 提议而不跳转（快捷键 Esc，与 <see cref="TakeSkip"/> 的回车成一对；2026-09-26 起由
+    /// 原 N 挪到 Esc，用户令「把关闭跳过按钮从 N 改成 ESC」）：按钮当场收起，且只要
     /// 位置还留在这一段里就不再冒出来；退出这一段再回来是一次刻意的操作，会重新提议 —— 这套语义全在
     /// <see cref="SkipCoordinator.Decline"/>，这里只把它接到视图模型的可见状态上。键盘那一路（<c>PlayerPage.Dispatch</c>）
-    /// 只在提示立着时才把 N 交到这里，所以进来时 <see cref="SkipOffered"/> 必真；那道判断留作第二重保险。
+    /// 只在提示立着时才把 Esc 交到这里，所以进来时 <see cref="SkipOffered"/> 必真；那道判断留作第二重保险。
     /// </summary>
     internal void DismissSkip()
     {
@@ -135,6 +136,10 @@ public sealed partial class PlayerViewModel
 
     private async Task StopPlaybackAsync()
     {
+        // 用户停止先撤掉所有还在准备中的起播（封面等待、媒体详情、选集解析），再谈停已建立的播放 ——
+        // 准备期 _playback.IsPlaying 还是 false，从前这里会直接 return，停止根本够不着那场还没起来的播放。
+        _startIntent.CancelAll();
+
         FlushVolume(settled: false);
         if (!_playback.IsPlaying) return;
 
@@ -174,6 +179,10 @@ public sealed partial class PlayerViewModel
         // the finally once this playback has ended and any auto-advance has been decided.
         _playerHold++;
 
+        // 这一次起播的意图票：新的 Begin 作废所有旧起播（最后点选的那次胜出），用户停止作废全部。
+        // 各段网络之后 IsCurrent 对不上就静默放弃 —— 取消不是错误。
+        var intent = _startIntent.Begin();
+
         // 这一场播放的号（见 _playbackAttempt）：比停掉旧那一刀更早，所以旧一场收尾时判得出「已经有新的一场了」。
         var attempt = ++_playbackAttempt;
 
@@ -191,14 +200,15 @@ public sealed partial class PlayerViewModel
             // 画面位置（说明牌、置顶这些进场预设读的那一位）不再在这里预写缓存：<see cref="PictureInHostWindow"/>
             // 没有会话时按设置推算，公式本身就是「本次播放的意图」——这里曾有的手工缓存是它的手抄副本，
             // 且在「外部 mpv.exe 后端」上与后端的表态相互矛盾（2026-09-17 判据归一时删）。
+            // 背景图垫底**先等它到手，再进播放页**（用户令 2026-09-25「不要黑屏，主页和背景图无缝切换」）：
+            // 遮罩在图到手之前是一整块近黑的纯色，而起播自动全屏那一趟是当拍整屏 —— 那一段纯色就是用户
+            // 看到的「先全屏黑屏、然后才切到背景图」。先把图备好，屏上一直停在主页不动，换过来的第一眼
+            // 就是背景图。上限到了照常进（遮罩退回纯色，与从前一样），见 WaitCoverBackdropAsync。
+            await WaitCoverBackdropAsync(item).ConfigureAwait(true);
+            if (!_startIntent.IsCurrent(intent)) return;
+
             EnterPlayer();
             ShowCover(replaceExisting ? "正在切换…" : "正在获取媒体信息…");
-
-            // 背景图垫底从这一刻就开始取，不等媒体信息：用户点的卡片已经在手（海报用的就是它的图片
-            // 字段），等 OnNowPlayingChanged 才动手，加载态里遮罩就只剩纯色了（2026-09-15 用户截图
-            // 「第二点貌似没有生效」正是这个窗口）。详情就绪后 OnNowPlayingChanged 那一遍按 Id 去重、
-            // 取空会重试，这里不用等它。剧集卡先取剧集自己的背景图 —— 播的正是它。
-            _ = LoadCoverBackdropAsync(item);
 
             // A card fetched for browsing carries no MediaSources, and those are what hold the tracks,
             // the container and the runtime.
@@ -208,6 +218,8 @@ public sealed partial class PlayerViewModel
                     .ExecuteAsync((client, token) => client.GetItemAsync(
                         item.Id, token, order: Settings.Playback.MediaSourceOrder), _lifetime.Token)
                     .ConfigureAwait(true);
+
+            if (!_startIntent.IsCurrent(intent)) return;
 
             if (detail.Type is EmbyItemType.Series or EmbyItemType.Season)
             {
@@ -270,6 +282,7 @@ public sealed partial class PlayerViewModel
             if (Episodes.Count == 0 && detail.Type == EmbyItemType.Episode) _ = FillSiblingsAsync(detail);
 
             var parentItem = parent ?? await ResolveSeriesAsync(detail).ConfigureAwait(true);
+            if (!_startIntent.IsCurrent(intent)) return;
             var output = PrepareShaderPlans(detail, source, parentItem);
 
             var ticket = new PlaybackTicket
@@ -289,6 +302,9 @@ public sealed partial class PlayerViewModel
             SubtitleDelay = 0;
             AudioDelay = 0;
 
+            // 交给后端前的最后一问：停在这一拍的话，连后端都不要碰 —— Core 那头的待启动编号
+            // 也会把仍在等待闸门的旧请求作废（用户 Stop 的同一刀）。
+            if (!_startIntent.IsCurrent(intent)) return;
 
             var result = await _playback.PlayAsync(ticket, _lifetime.Token).ConfigureAwait(true);
 
@@ -451,6 +467,10 @@ public sealed partial class PlayerViewModel
             // OnNowPlayingChanged has already decided this from an empty list by the time the answer
             // arrives, so the two buttons it governs would stay hidden over a perfectly good list.
             EpisodeControlsVisible = true;
+
+            // 独占模式那颗「选集」按钮吃同一个数（2026-09-26 用户令）：握手那一拍播的若是单集，
+            // uosc 那头的门已经按握手时的值开了，这里把「列表补齐」再确认一遍；值没变就是白发一条。
+            NoteEpisodeCount();
 
             // 手上这个条目换成服务器的记录 —— 它带的媒体源比调用方手里那份全（2026-09-21）。
             // EpisodeControlsVisible 上面是明写的，「有几版」却跟着这一次赋值自己走

@@ -74,7 +74,9 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
    - `options.autoload` 在读入配置后强制为 false。
    - 新增绑定 `embynian-ui-prev/next`（换集）、`embynian-ui-episodes`（要选集菜单）、
      `embynian-ui-versions`（要版本菜单）、`embynian-ui-picture-menu`（要画面菜单）；新增**宿主 → uosc**
-     的一条 `mp.register_script_message('embynian-version-count')`（见 `EMBYNIAN[version-count]`）。
+     的两条 `mp.register_script_message('embynian-version-count')`（见 `EMBYNIAN[version-count]`）与
+     `mp.register_script_message('embynian-episode-count')`（见 `EMBYNIAN[episode-count]`，选集按钮
+     播电影时不在屏上，2026-09-26 用户令）。
      控制条 2026-09-23 按用户令重排为三组（同日第二轮又改了一次）：**左下**上一集/下一集/统计/
      章节（有章节时）/画面菜单/**选集/版本**，**中下**上一章节/倍速/下一章节，**右下**字幕/音频/
      （空一个按钮宽 `gap:1`）/全屏。六处与旧版不同：
@@ -115,7 +117,9 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
      flash 右侧音量条承担；指针落在时间轴/速度条/音量条上时滚轮仍归它们（跳转/倍速/volume_step）。
      音量条自己改音量（拖、滚）也一并 `no-osd`（`elements/Volume.lua` 的 `EMBYNIAN[vol-osd]`）。
    - `top_bar_controls='right'`：mpv 以 border=no 无边框起播（宿主固定），系统标题栏不存在，
-     顶栏画标题与最小化/最大化/关闭（关闭=quit，宿主当停止处理）。
+     顶栏画标题与最小化/最大化/关闭（关闭=quit，宿主当停止处理）。**左上角另加一颗返回按钮**
+     （`EMBYNIAN[topbar-back]`，`elements/TopBar.lua`）：点它同样 `quit`＝回到外壳详情页，与集成模式
+     左上角的返回同位同义（用户令 2026-09-26）。
    - `osd-width`/`osd-height` number 观察兜底：d3d11 窗口管线下 osd-dimensions 的 native 观察
      会漏掉起播初段「画布=视频尺寸→画布=窗口尺寸」的变化，导致控件可见而点击热区全错位。
 2. **lib/utils.lua**：目录/播放列表导航（`get_adjacent_files`、`decide_navigation_in_list`、
@@ -143,9 +147,14 @@ uosc → 宿主（`MPV_EVENT_CLIENT_MESSAGE`，契约与解析在 `src/EmbyNian.
 | `embynian-menu-index` | 1 起算序号 | 画面菜单点中的一行 → `RunMenuNodeAsync`（与集成模式右键点同一行是同一句执行） |
 | `embynian-seek` | 0–1 比例 | 预留扩展；当前 uosc 时间轴直接对 mpv seek，不经宿主 |
 
-不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc **两条**：`open-menu`（菜单的
-JSON，shape 与 uosc MenuData 对齐）与 `embynian-version-count`（这个条目挂了几版文件，控制条上那颗
-「版本」按钮按它露面 —— 只有一版时整颗不在屏上；值是一个十进制整数，uosc 那边只看它是否大于 1）。
+不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc **三条**：`open-menu`（菜单的
+JSON，shape 与 uosc MenuData 对齐；画面/选集/版本三张都带 `embynian_anchor: true`，uosc 据此把菜单画在
+光标处而不是屏幕居中、也不压暗整屏幕的幕布 —— 弹出方式与集成模式的右键/按钮浮层一致，见
+`EMBYNIAN[menu-anchor]`，`elements/Menu.lua`）、`embynian-version-count`（这个条目挂了几版文件，控制条上那颗
+「版本」按钮按它露面 —— 只有一版时整颗不在屏上；值是一个十进制整数，uosc 那边只看它是否大于 1）
+与 `embynian-episode-count`（正在放的是不是单集，0＝电影 / 1＝单集；控制条上那颗「选集」按钮按它露面 ——
+播电影时整颗不在屏上，2026-09-26 用户令「播放电影的时候不要显示这个按钮」；按钮的 tooltip 同批写死为
+「选集」，原来是 `t('Episodes')`、译文表没有就落在英文上）。
 uosc 靠 mpv 属性观察自取其余全部状态（音量、轨道、章节的变化会自动反映到控制窗的选择器——它们读的
 是同一份 mpv 状态）。
 

@@ -641,8 +641,8 @@ public sealed partial class LibraryViewModel : PageViewModel
     {
         if (_request is null || _actions is null) return;
 
-        var items = await PlayableItemsAsync().ConfigureAwait(true);
-        if (items.Count == 0) return;
+        var (items, token) = await PlayableItemsAsync().ConfigureAwait(true);
+        if (items.Count == 0 || !IsCurrent(token)) return;
 
         Log.Info(Category, $"播放全部：{items.Count} 项，从「{items[0].Name}」开始");
         await _actions.PlayAsync(items[0], episodes: items).ConfigureAwait(true);
@@ -656,8 +656,8 @@ public sealed partial class LibraryViewModel : PageViewModel
     {
         if (_request is null || _actions is null) return;
 
-        var items = await PlayableItemsAsync().ConfigureAwait(true);
-        if (items.Count == 0) return;
+        var (items, token) = await PlayableItemsAsync().ConfigureAwait(true);
+        if (items.Count == 0 || !IsCurrent(token)) return;
 
         var random = Random.Shared;
         for (var index = items.Count - 1; index > 0; index--)
@@ -675,41 +675,21 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// has more than one page and the user has not scrolled, the rest are asked for in one go — 播放
     /// 全部 with only the first hundred is 播放前一百.
     /// </summary>
-    private async Task<List<EmbyItem>> PlayableItemsAsync()
+    private async Task<(List<EmbyItem> Items, CancellationToken Token)> PlayableItemsAsync()
     {
-        var items = Cards.Select(card => card.Item).Where(item => item.IsPlayable).ToList();
-
-        if (HasMore && _request is { } request)
+        var loaded = Cards.Select(card => card.Item).ToList();
+        var hasMore = HasMore;
+        var token = BeginLoad();
+        try
         {
-            var token = BeginLoad();
-            try
-            {
-                var start = Cards.Count;
-                while (true)
-                {
-                    // 和这一页读第一屏时同源（见 ReadAsync）：继续观看那一页要接着往下拿的也是服务器那条
-                    // Resume 接口，不是通用查询 —— 两边混着拿，播放全部那一串就该少东西了。
-                    if (await ReadAsync(start, token).ConfigureAwait(true) is not { } page
-                        || !IsCurrent(token) || page.Items.Count == 0) break;
-
-                    items.AddRange(page.Items.Where(item => item.IsPlayable));
-                    start += page.Items.Count;
-                    if (start >= page.TotalRecordCount) break;
-                }
-
-                EndLoad(token);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (Exception error)
-            {
-                Log.Warn(Category, "读取全部条目失败", error);
-                if (IsCurrent(token)) EndLoad(token);
-            }
+            var items = await PlayableList.CollectAsync(
+                loaded, hasMore, ReadAsync, () => IsCurrent(token), token).ConfigureAwait(true);
+            return (items, token);
         }
-
-        return items;
+        finally
+        {
+            EndLoad(token);
+        }
     }
 
     /// <summary>

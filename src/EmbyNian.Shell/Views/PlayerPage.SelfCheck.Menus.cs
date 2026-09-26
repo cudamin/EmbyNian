@@ -1,5 +1,7 @@
+using System.Globalization;
 using EmbyNian.Diagnostics;
 using EmbyNian.Mpv;
+using EmbyNian.Playback;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -39,10 +41,17 @@ public sealed partial class PlayerPage
         // again with every count still adding up.
         var panscan = catalogue.Any(node => node.Label.Contains("裁切填充", StringComparison.Ordinal));
 
-        var ok = rows == wantRows && groups == wantGroups && rules == wantRules && panscan;
+        // 打勾: every row the catalogue marks checkable（解码方式, 声道布局, 抖动补偿…）must have built as a
+        // radio/toggle and been registered for refresh. Counted against the catalogue, not a number here, so a
+        // newly checkable row is covered the day it is added. Reads mpv when the menu opened above; with no film
+        // the reads came back null and nothing is ticked — a pass, since what is proved here is the wiring.
+        var wantChecks = catalogue.Count(node => node.State is not null);
+        var checks = _pictureChecks.Count;
+
+        var ok = rows == wantRows && groups == wantGroups && rules == wantRules && panscan && checks == wantChecks;
 
         return (ok, $"{rows}/{wantRows} 行、{groups}/{wantGroups} 个子菜单、{rules}/{wantRules} 条分隔线"
-                    + $"，裁切填充={(panscan ? "在" : "缺")}");
+                    + $"，裁切填充={(panscan ? "在" : "缺")}、可打勾 {checks}/{wantChecks} 行");
     }
 
     /// <summary>Walks a built flyout the same way <see cref="BuildMenuItems"/> built it.</summary>
@@ -78,19 +87,19 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// Opens all six control-bar pickers the way a click on each would, and reports what they built.
+    /// Opens all five control-bar pickers the way a click on each would, and reports what they built.
     /// <para>
     /// Every one of them is filled by its <c>Opening</c> handler rather than declared in XAML, so until
-    /// something opens them they are six empty <c>MenuFlyout</c>s that cannot fail. A missing resource
+    /// something opens them they are five empty <c>MenuFlyout</c>s that cannot fail. A missing resource
     /// key or a null dereference in any of the builders would first be seen by a user mid-film, which is
     /// the worst possible moment and the reason this probe exists.
     /// </para>
     /// <para>
     /// Nothing is playing, so what is being proved is the empty case of each: 单集 has no episode list,
-    /// 版本 has no item to have versions of, the two track pickers have no tracks, 倍速 is built from a
-    /// static list and should be full anyway, and 更多 reads settings rather than the file and should also
-    /// be full. An empty picker that builds a 「没有可选的…」 row is a pass; one that builds nothing at all
-    /// is not.
+    /// 版本 has no item to have versions of, the two track pickers have no tracks, and 更多 reads settings
+    /// rather than the file and should also be full. An empty picker that builds a 「没有可选的…」 row is a
+    /// pass; one that builds nothing at all is not. 倍速 used to be the sixth — 2026-09-25 起它是轮盘，
+    /// 由 <see cref="ProbeSpeedWheel"/> 单独看着。
     /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbeControlMenus()
@@ -121,16 +130,75 @@ public sealed partial class PlayerPage
         }
 
         // 单集 and the two track pickers each owe one row even with nothing loaded — the 「没有可选的单集」
-        // placeholder and 字幕's 关闭字幕. 倍速 owes one per SpeedChoices entry, 更多 owes its seven rows,
-        // 版本 owes the 「没有可切换的版本」 row (nothing is playing, so there is no item to have versions of).
+        // placeholder and 字幕's 关闭字幕. 更多 owes its seven rows, 版本 owes the 「没有可切换的版本」 row
+        // (nothing is playing, so there is no item to have versions of).
         Open("单集", EpisodeMenu, () => OnEpisodeMenuOpening(this, new object()), 1);
         Open("版本", VersionMenu, () => OnVersionMenuOpening(this, new object()), 1);
         Open("音轨", AudioMenu, () => OnAudioMenuOpening(this, new object()), 1);
         Open("字幕", SubtitleMenu, () => OnSubtitleMenuOpening(this, new object()), 1);
-        Open("倍速", SpeedMenu, () => OnSpeedMenuOpening(this, new object()), PlayerViewModel.SpeedChoices.Length);
         Open("更多", MoreMenu, () => OnMoreMenuOpening(this, new object()), 6);
 
         return (failures == 0, string.Join("、", built));
+    }
+
+    /// <summary>
+    /// 倍速轮盘（2026-09-25 用户令「改为竖置的滚动条滚轮，刻度居中」）开出来的那条刻度带。它不是菜单 ——
+    /// 刻度在构造时就摆上了（<see cref="WireSpeedWheel"/>），所以这里不开浮层，只验摆好的那条带：
+    /// <para>
+    /// 根数与文案逐根对齐刻度表（<c>0.0#</c> 那套写法；表是键盘微调与轮盘共用那份，0.1～1 每 0.1、
+    /// 1～20 每 1）；当前速度停在中线（整数位置上偏移必须为零）；
+    /// 摆位方向是快在上、慢在下 —— 方向写反的轮盘（快在下）从这条读数上当场翻红。手势与交单的那一半在
+    /// SpeedWheelTests（Core 算术）与页面分部里，探针碰不到真鼠标，与全页同一处境。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) ProbeSpeedWheel()
+    {
+        var choices = PlayerViewModel.SpeedChoices;
+        BuildSpeedWheel();
+        var ticks = _wheelTicks!;
+
+        var trouble = new List<string>();
+
+        if (ticks.Length != choices.Length)
+        {
+            trouble.Add($"刻度 {ticks.Length} 根，表上 {choices.Length} 档");
+        }
+        else
+        {
+            for (var index = 0; index < choices.Length; index++)
+            {
+                var want = WheelTickText(choices[index]);
+                if (!string.Equals(ticks[index].Text, want, StringComparison.Ordinal))
+                    trouble.Add($"第 {index + 1} 根是「{ticks[index].Text}」，表上是「{want}」");
+            }
+        }
+
+        // 当前速度停在中线。表外速度（键盘微调给出的）合法地停在两根之间，那一档不判居中 —— 判了就是
+        // 把「诚实插值」当成了错。
+        var position = SpeedWheel.PositionFor(ViewModel.Status.Speed, choices);
+        if (Math.Abs(position - Math.Round(position)) < 0.001)
+        {
+            var nearest = SpeedWheel.Snap(position, choices.Length);
+            var offset = SpeedWheel.TickOffset(nearest, position);
+            if (Math.Abs(offset) > 0.001) trouble.Add($"中线那根刻度偏了 {offset:0.##} 逻辑像素");
+        }
+
+        // 方向：最快那根必须排在最慢那根上面（y 更小）。摆位读数要先跑一遍 RenderWheel —— 刻度只在
+        // 摆过之后才有 Canvas.Top 可读。
+        if (ticks.Length >= 2)
+        {
+            RenderWheel();
+            var topTick = Canvas.GetTop(ticks[^1]);
+            var bottomTick = Canvas.GetTop(ticks[0]);
+            if (double.IsNaN(topTick) || double.IsNaN(bottomTick)) trouble.Add("刻度还没有摆位读数");
+            else if (topTick >= bottomTick)
+                trouble.Add($"最快那根（y={topTick:0}）没有排在最慢那根（y={bottomTick:0}）上面");
+        }
+
+        return (trouble.Count == 0,
+            trouble.Count == 0
+                ? $"{ticks.Length} 根刻度，当前 {ViewModel.Status.Speed.ToString("0.0#", CultureInfo.InvariantCulture)}× 停在中线，快在上慢在下"
+                : string.Join('、', trouble));
     }
 
     /// <summary>

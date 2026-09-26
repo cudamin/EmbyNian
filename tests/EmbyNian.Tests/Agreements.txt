@@ -322,7 +322,9 @@ handle  Views/PlayerPage.xaml  SkipText
 handle  Views/PlayerPage.xaml  SkipTip
 handle  Views/PlayerPage.xaml  SourceText
 handle  Views/PlayerPage.xaml  SpeedButton
-handle  Views/PlayerPage.xaml  SpeedMenu
+handle  Views/PlayerPage.xaml  SpeedWheelFlyout
+handle  Views/PlayerPage.xaml  SpeedWheelPanel
+handle  Views/PlayerPage.xaml  SpeedWheelTrack
 handle  Views/PlayerPage.xaml  Stage
 handle  Views/PlayerPage.xaml  StandaloneHint
 handle  Views/PlayerPage.xaml  StatsButton

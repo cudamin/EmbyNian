@@ -50,6 +50,23 @@ public static class InlineSwitch
         && Same(running.BaselineOptions, next.BaselineOptions);
 
     /// <summary>
+    /// 会随影片标题变、但换片时按新票重写的选项名 —— 不进必须相等的启动基线（见
+    /// <c>LibMpvBackend.Baseline</c>），换片时由 <see cref="PerFile"/> 按新票重写。名单里今天只有
+    /// 截图模板一条：常规换集集名不同，模板跟着集名走，把它算进基线就把最常见的同窗换片挡死在签名。
+    /// </summary>
+    public static IReadOnlyList<string> PerFileSignatureNames { get; } = ["screenshot-template"];
+
+    /// <summary>
+    /// 这个实例此刻还能不能接下一票（<c>LibMpvHandle.SwapToAsync</c> 的入口闸）。交接
+    /// （<c>HandOver</c>）把旧一跑的收场信号完成掉，那是叫醒监视去发「停止」上报，<b>不是</b>实例在
+    /// 收场 —— 所以「已交接且旧信号已完成」恰恰是快路的正常入口，从前正是这道闸把同窗换片整个挡死。
+    /// 真正要挡的只有三种：用户叫停过（quit 在路上）、实例已销毁、以及没交接过但收场信号已完成
+    /// （文件真的放完或报错，实例里已经没有可接续的东西）。
+    /// </summary>
+    public static bool CanTakeOver(bool stopRequested, bool handedOver, bool exitCompleted, bool destroyed) =>
+        !stopRequested && !destroyed && (handedOver || !exitCompleted);
+
+    /// <summary>
     /// 「这一集改过就不该带去下一集」的属性名。来源是应用自己那两份运行期名字清单 —— 画面菜单碰得到的
     /// 属性（<see cref="PlayerMenuCatalog"/> 的每一行）与任何着色器链会碰的名字
     /// （<see cref="ShaderGroupCatalog.NeutralOptions"/>），再加上不在菜单里却会跟着一集走的几只
@@ -70,13 +87,15 @@ public static class InlineSwitch
     /// </summary>
     public static IReadOnlyList<KeyValuePair<string, string>> FilmScoped(
         IReadOnlyDictionary<string, string> defaults,
-        PlaybackRequest next)
+        PlaybackRequest next,
+        string? profilesJson = null)
     {
+        var expanded = MpvProfiles.Expand(next.PlayerOptions, profilesJson);
         var plan = new List<KeyValuePair<string, string>>(PerFilmNames.Count);
 
         foreach (var name in PerFilmNames)
         {
-            var value = LastValue(next.PlayerOptions, name)
+            var value = LastValue(expanded, name)
                 ?? (defaults.TryGetValue(name, out var fallback) ? fallback : null)
                 ?? Neutral(name);
 
@@ -133,6 +152,13 @@ public static class InlineSwitch
             new("force-media-title", next.Title),
             new("pause", "no"),
         };
+
+        // 截图模板随片名走（每部片一个模板）：起播时它已经随 PlayerOptions 应用过一次，这里在换片时
+        // 按新票再写一遍 —— planner 放的那条就在新票自己的选项表里。它因此不进启动基线
+        // （<see cref="PerFileSignatureNames"/>），否则集名不同的常规换集在签名那一步就丢了快路。
+        // 新票没有这条（截图功能整个没开）就不写：那时 directory/format 也不在，签名本来就不等。
+        if (LastValue(next.PlayerOptions, "screenshot-template") is { } template)
+            plan.Add(new("screenshot-template", template));
 
         return plan;
     }

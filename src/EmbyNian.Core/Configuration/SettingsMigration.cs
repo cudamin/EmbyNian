@@ -32,6 +32,11 @@ public static class SettingsMigration
         // holding a JSON null for one of them deserializes to a real null there.
         var settings = Repair(version >= 2 ? ReadCurrent(json) : ReadLegacy(root, protector));
 
+        if (root.TryGetProperty("Video", out var videoSection) && videoSection.ValueKind == JsonValueKind.Object
+            && !videoSection.TryGetProperty("DeinterlaceMode", out _)
+            && videoSection.TryGetProperty("Deinterlace", out var deinterlace))
+            settings.Video.DeinterlaceMode = deinterlace.ValueKind == JsonValueKind.True ? "yes" : "no";
+
         // v2 stored the track languages as two typed-in priority strings. v3 keeps the subtitle
         // languages as an ordered multi-select and the audio language as a single choice, so the old
         // fields — which the current shape no longer has properties for — are read from the raw
@@ -443,6 +448,8 @@ public static class SettingsMigration
         }
 
         settings.Playback.MarkWatchedPercent = Math.Clamp(settings.Playback.MarkWatchedPercent, 50, 100);
+        // 国漫单独一档（用户令 2026-09-26），范围与全局那一档相同，见设置页那两行。
+        settings.Playback.DonghuaMarkWatchedPercent = Math.Clamp(settings.Playback.DonghuaMarkWatchedPercent, 50, 100);
 
         settings.Playback.ProgressReportIntervalSeconds = Math.Clamp(settings.Playback.ProgressReportIntervalSeconds, 1, 60);
         settings.Playback.SeekForwardSeconds = Math.Clamp(settings.Playback.SeekForwardSeconds, 1, 600);
@@ -503,6 +510,19 @@ public static class SettingsMigration
         settings.Video.Dither = Choice(MpvOutputOptions.Dithers, settings.Video.Dither);
         settings.Video.Deband = Choice(MpvOutputOptions.DebandModes, settings.Video.Deband);
         settings.Video.HdrMode = Choice(MpvOutputOptions.HdrModes, settings.Video.HdrMode);
+        settings.Video.DeinterlaceMode = Choice(MpvOutputOptions.DeinterlaceModes, settings.Video.DeinterlaceMode);
+        if (settings.Video.DeinterlaceMode.Length == 0) settings.Video.DeinterlaceMode = "no";
+        settings.Video.DitherDepth = Choice(MpvOutputOptions.DitherDepths, settings.Video.DitherDepth);
+        if (settings.Video.DitherDepth.Length == 0) settings.Video.DitherDepth = "auto";
+        settings.Video.DebandStrength = Choice(MpvOutputOptions.DebandStrengths, settings.Video.DebandStrength);
+        if (settings.Video.DebandStrength.Length == 0) settings.Video.DebandStrength = "low";
+        settings.Video.ToneMapping = Choice(HdrOptions.ToneMappings, settings.Video.ToneMapping);
+        settings.Video.HdrComputePeak = Choice(HdrOptions.PeakDetection, settings.Video.HdrComputePeak);
+        settings.Video.HdrPeakNits = HdrOptions.Clamp(settings.Video.HdrPeakNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
+        settings.Video.HdrReferenceWhiteNits = HdrOptions.Clamp(settings.Video.HdrReferenceWhiteNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
+        settings.Video.HdrSubtitleNits = HdrOptions.Clamp(settings.Video.HdrSubtitleNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
+        settings.Video.HdrImageSubtitleNits = HdrOptions.Clamp(settings.Video.HdrImageSubtitleNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
+        settings.Video.HdrContrastRecovery = HdrOptions.Clamp(settings.Video.HdrContrastRecovery, 0, 2);
         settings.Audio.Channels = Choice(MpvOutputOptions.Channels, settings.Audio.Channels);
         settings.Audio.DynamicRange = Choice(MpvOutputOptions.DynamicRange, settings.Audio.DynamicRange);
         settings.Audio.VolumeNormalize = Choice(MpvOutputOptions.VolumeNormalizers, settings.Audio.VolumeNormalize);

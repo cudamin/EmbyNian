@@ -25,6 +25,8 @@ internal static class Program
         SubtitlePreviewTests.Register();
         EmbyTests.Register();
         SessionTests.Register();
+        IdentityRegressionTests.Register();
+        HttpRedirectTests.Register();
         FailurePathTests.Register();
         ImageCacheTests.Register();
         ItemDetailTests.Register();
@@ -35,6 +37,8 @@ internal static class Program
         HomeFoldTests.Register();
         BackdropBlurTests.Register();
         HomeLayoutTests.Register();
+        UiLifecycleTests.Register();
+        StartIntentTests.Register();
         DiagnosticsTests.Register();
         ScreenTests.Register();
         CardStripTests.Register();
@@ -44,10 +48,12 @@ internal static class Program
         ThemeTests.Register();
         PlayerPaletteTests.Register();
         PlayerMotionTests.Register();
+        CoverArtworkTests.Register();
         PictureRevealTests.Register();
         StatusCoalescerTests.Register();
         ResizeFreezeTests.Register();
         VolumeScaleTests.Register();
+        SpeedWheelTests.Register();
         MpvUiTests.Register();
         MediaVersionTests.Register();
         ReleaseGroupTests.Register();

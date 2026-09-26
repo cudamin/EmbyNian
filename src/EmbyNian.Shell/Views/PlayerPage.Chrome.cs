@@ -427,7 +427,9 @@ public sealed partial class PlayerPage
     /// </summary>
     private void PlaceOverlays()
     {
-        Nudge(SkipButton, new Thickness(0, 0, SkipButton.Margin.Right, BarHeight() + OverlayGap));
+        // 2026-09-26 起在「让开」之上再抬一段 SkipLift（用户令「上移按钮」）—— 只贴着进度条时，够按钮的
+        // 手势总要擦着进度条走，而压上按钮又不再点亮它（ChromeReveal 的 Skip 支）。
+        Nudge(SkipButton, new Thickness(0, 0, SkipButton.Margin.Right, BarHeight() + OverlayGap + SkipLift));
 
         static void Nudge(FrameworkElement element, Thickness margin)
         {

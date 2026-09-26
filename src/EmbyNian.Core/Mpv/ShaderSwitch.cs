@@ -30,12 +30,16 @@ public static class ShaderSwitch
         IReadOnlyList<KeyValuePair<string, string>> launch,
         int launchChainOptions,
         ShaderGroup? group,
-        string shaderRoot)
+        string shaderRoot,
+        string? profilesJson = null,
+        IReadOnlyDictionary<string, string>? defaults = null)
     {
+        var baseline = MpvProfiles.Expand(launch.Take(Math.Max(0, launch.Count - launchChainOptions)).ToArray(), profilesJson);
         var applied = new Dictionary<string, string>(StringComparer.Ordinal);
         var order = new List<string>();
 
-        foreach (var (name, neutral) in ShaderGroupCatalog.NeutralOptions) Set(name, LaunchValue(name) ?? neutral);
+        foreach (var (name, neutral) in ShaderGroupCatalog.NeutralOptions)
+            Set(name, LaunchValue(name) ?? (defaults?.TryGetValue(name, out var fallback) == true ? fallback : neutral));
 
         Set("glsl-shaders", group is null ? "" : MpvListValue.JoinFiles(group.ResolveShaderPaths(shaderRoot)));
 
@@ -55,11 +59,9 @@ public static class ShaderSwitch
         // name twice — true today (the 画质预设 stopped naming the three scalers), and not a thing to rely on.
         string? LaunchValue(string name)
         {
-            var limit = Math.Max(0, launch.Count - launchChainOptions);
-
-            for (var index = limit - 1; index >= 0; index--)
+            for (var index = baseline.Count - 1; index >= 0; index--)
             {
-                if (string.Equals(launch[index].Key, name, StringComparison.Ordinal)) return launch[index].Value;
+                if (string.Equals(baseline[index].Key, name, StringComparison.Ordinal)) return baseline[index].Value;
             }
 
             return null;

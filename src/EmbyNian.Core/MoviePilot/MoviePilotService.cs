@@ -26,8 +26,13 @@ public sealed partial class MoviePilotService(
     /// <summary>一次只让一趟登录在飞，省得同时来两次搜索各登一次。</summary>
     private readonly SemaphoreSlim _signIn = new(1, 1);
 
-    /// <summary>上一次登录的结果，连着它当时连的是哪个地址；地址在设置里被改了就作废重登。</summary>
-    private MoviePilotSession? _session;
+    private readonly object _sessionGate = new();
+    private CachedSession? _session;
+
+    // 只比较密文快照；明文仅在实际登录时解开，不作为缓存键或诊断文字。
+    private sealed record SessionIdentity(Uri ApiBase, string Username, string ProtectedPassword);
+
+    private sealed record CachedSession(SessionIdentity Identity, MoviePilotSession Session);
 
     /// <summary>用户在设置里开没开这项。搜索页拿它决定那个分段切换在不在。</summary>
     public bool Enabled => settings.MoviePilot.Enabled;
@@ -164,18 +169,27 @@ public sealed partial class MoviePilotService(
         Func<Uri, string, Task<T>> call,
         CancellationToken cancellationToken)
     {
-        var apiBase = ResolveAddress();
-        var session = await EnsureSessionAsync(apiBase, cancellationToken).ConfigureAwait(false);
-
+        var identity = CaptureIdentity();
+        var session = await EnsureSessionAsync(identity, cancellationToken).ConfigureAwait(false);
+        CheckIdentity(identity, cancellationToken);
         try
         {
-            return await call(apiBase, session.AccessToken).ConfigureAwait(false);
+            var result = await call(identity.ApiBase, session.Session.AccessToken).ConfigureAwait(false);
+            CheckIdentity(identity, cancellationToken);
+            return result;
         }
         catch (MoviePilotTokenExpiredException)
         {
-            _session = null;
-            var fresh = await EnsureSessionAsync(apiBase, cancellationToken).ConfigureAwait(false);
-            return await call(apiBase, fresh.AccessToken).ConfigureAwait(false);
+            lock (_sessionGate)
+            {
+                CheckIdentity(identity, cancellationToken);
+                if (ReferenceEquals(_session, session)) _session = null;
+            }
+            var fresh = await EnsureSessionAsync(identity, cancellationToken).ConfigureAwait(false);
+            CheckIdentity(identity, cancellationToken);
+            var result = await call(identity.ApiBase, fresh.Session.AccessToken).ConfigureAwait(false);
+            CheckIdentity(identity, cancellationToken);
+            return result;
         }
     }
 
@@ -188,25 +202,63 @@ public sealed partial class MoviePilotService(
         return address ?? throw new MoviePilotException("先在设置里填上 MoviePilot 的服务地址");
     }
 
-    /// <summary>缓存的会话，或用保存的用户名和 DPAPI 密码现登录一个。地址变了就重登。</summary>
-    private async Task<MoviePilotSession> EnsureSessionAsync(Uri apiBase, CancellationToken cancellationToken)
+    private SessionIdentity CaptureIdentity()
     {
-        if (_session is { } cached && cached.ApiBase == apiBase) return cached;
+        var moviePilot = settings.MoviePilot;
+        if (!MoviePilotAddress.TryNormalize(moviePilot.Url, out var apiBase, out var error))
+            throw new MoviePilotException(error);
+        if (apiBase is null) throw new MoviePilotException("先在设置里填上 MoviePilot 的服务地址");
+        return new SessionIdentity(apiBase, moviePilot.Username?.Trim() ?? "", moviePilot.ProtectedPassword);
+    }
+
+    private void CheckIdentity(SessionIdentity identity, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = settings.MoviePilot;
+        if (!MoviePilotAddress.TryNormalize(current.Url, out var apiBase, out _) || identity.ApiBase != apiBase
+            || !string.Equals(identity.Username, current.Username?.Trim(), StringComparison.Ordinal)
+            || identity.ProtectedPassword != current.ProtectedPassword)
+            throw new OperationCanceledException("MoviePilot 登录配置已改变，请重新操作", cancellationToken);
+    }
+
+    private async Task<CachedSession> EnsureSessionAsync(SessionIdentity identity, CancellationToken cancellationToken)
+    {
+        lock (_sessionGate)
+        {
+            CheckIdentity(identity, cancellationToken);
+            if (_session is { } cached && cached.Identity == identity) return cached;
+            _session = null;
+        }
 
         await _signIn.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_session is { } again && again.ApiBase == apiBase) return again;
+            lock (_sessionGate)
+            {
+                CheckIdentity(identity, cancellationToken);
+                if (_session is { } cached && cached.Identity == identity) return cached;
+            }
 
-            var moviePilot = settings.MoviePilot;
-            var username = moviePilot.Username?.Trim() ?? "";
-            var password = credentials.GetPassword(moviePilot);
-
-            if (username.Length == 0 || password.Length == 0)
+            var password = credentials.GetPassword(identity.ProtectedPassword);
+            if (identity.Username.Length == 0 || password.Length == 0)
                 throw new MoviePilotException("MoviePilot 还没填用户名或密码，先去设置里连一下");
 
-            _session = await client.SignInAsync(apiBase, username, password, cancellationToken).ConfigureAwait(false);
-            return _session;
+            MoviePilotSession session;
+            try
+            {
+                session = await client.SignInAsync(identity.ApiBase, identity.Username, password, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                CheckIdentity(identity, cancellationToken);
+                throw;
+            }
+            lock (_sessionGate)
+            {
+                CheckIdentity(identity, cancellationToken);
+                _session = new CachedSession(identity, session);
+                return _session;
+            }
         }
         finally
         {

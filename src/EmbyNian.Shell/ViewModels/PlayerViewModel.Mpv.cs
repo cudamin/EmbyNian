@@ -95,13 +95,13 @@ public sealed partial class PlayerViewModel
             "1500");
     }
 
-    /// <summary>倍速微调, clamped to the range the 倍速 menu offers so the two cannot disagree.</summary>
+    /// <summary>倍速微调, clamped to the range the 倍速轮盘 offers so the two cannot disagree.</summary>
     internal void NudgeSpeed(double delta) =>
         SetSpeed(Math.Round(Math.Clamp(Status.Speed + delta, SpeedChoices[0], SpeedChoices[^1]), 2));
 
     /// <summary>
-    /// 倍速. The keys say what they did on the OSD; the menu does not, because the row that was just
-    /// ticked and the button that now reads 「1.25×」 have already said it.
+    /// 倍速. The keys say what they did on the OSD; the wheel does not, because the tick that just
+    /// crossed the center and the button that now reads 「2×」 have already said it.
     /// </summary>
     internal void SetSpeed(double speed, bool notice = true)
     {
@@ -384,9 +384,7 @@ public sealed partial class PlayerViewModel
             return;
         }
 
-        ActiveShader = plan.Group;
-        _ = _playback.SetShaderGroupAsync(plan.Group);
-        Log.Info(ShaderLog, $"{because}，着色器档位改为：{plan.Reason}");
+        _ = ChangeShaderGroupAsync(plan.Group, pinned: false);
     }
 
     /// <summary>
@@ -408,14 +406,35 @@ public sealed partial class PlayerViewModel
     /// halfway through a comparison would otherwise put the other chain back.
     /// </para>
     /// </summary>
-    internal void ApplyShaderGroup(ShaderGroup? group)
+    private bool _shaderSwitching;
+
+    internal bool ShaderChoicePinned => _shaderPinned;
+
+    internal void ApplyShaderGroup(ShaderGroup? group) => _ = ChangeShaderGroupAsync(group, pinned: true);
+
+    internal void RestoreShaderPlan() => _ = ChangeShaderGroupAsync(_shaderPlan.Group, pinned: false);
+
+    private async Task ChangeShaderGroupAsync(ShaderGroup? group, bool pinned)
     {
-        _shaderPinned = true;
-        ActiveShader = group;
-        _ = _playback.SetShaderGroupAsync(group);
-        Noticed?.Invoke(
-            group is null ? "已关闭着色器" : $"已切换着色器：{group.DisplayName}",
-            InfoBarSeverity.Informational);
+        if (_shaderSwitching) return;
+        _shaderSwitching = true;
+        var source = PlayingSource;
+        try
+        {
+            var applied = await _playback.SetShaderGroupAsync(group).ConfigureAwait(true);
+            if (!ReferenceEquals(source, PlayingSource)) return;
+            if (applied)
+            {
+                _shaderPinned = pinned;
+                ActiveShader = group;
+            }
+            var message = applied
+                ? group is null ? "已关闭着色器，已恢复本次画质预设" : $"已切换着色器：{group.DisplayName}"
+                : "着色器未能完整应用，请查看日志或重新播放";
+            Noticed?.Invoke(message, applied ? InfoBarSeverity.Informational : InfoBarSeverity.Warning);
+            await _playback.CommandAsync("show-text", message, "2500").ConfigureAwait(true);
+        }
+        finally { _shaderSwitching = false; }
     }
 
     /// <summary>

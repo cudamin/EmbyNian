@@ -175,6 +175,8 @@ public static class VideoWindowContract
     /// </summary>
     public const string MenuIndex = "embynian-menu-index";
 
+    public const string Shader = "embynian-shader";
+
     /// <summary>
     /// <b>宿主 → uosc 的第二条</b>（第一条是 <c>open-menu</c>）：这个条目有几版文件，uosc 那颗「版本」
     /// 按钮按这个数露面 —— 只有一版时它压根不在控制条上（用户令 2026-09-23：「只有一个版本的情况下
@@ -194,6 +196,26 @@ public static class VideoWindowContract
     public const string VersionCount = "embynian-version-count";
 
     /// <summary>
+    /// <b>宿主 → uosc</b>：正在放的是不是单集（0＝电影，1＝单集），uosc 那颗「选集」按钮按它露面 ——
+    /// 播电影时它压根不在控制条上（2026-09-26 用户令「播放电影的时候不要显示这个按钮」）。
+    /// <para>
+    /// 与 <see cref="VersionCount"/> 同一条路、同一个理由：uosc 的控件表是静态的，露不露面只能由宿主把
+    /// 答案送过去（门在 Lua 那侧，<c>state.has_episodes</c>，见 assets/mpv-ui/scripts/uosc/main.lua 的
+    /// EMBYNIAN[episode-count]）。方向相反，所以它<b>故意不进 <see cref="Parse"/></b>；名字照旧守
+    /// <see cref="Episodes"/> 那条硬规矩 —— 不许与任何脚本绑定同名（uosc 那边是一条
+    /// <c>mp.register_script_message('embynian-episode-count', …)</c>），<c>MpvUiTests</c> 的
+    /// 「绑定名与消息名不许同名」把它一并数进去。
+    /// </para>
+    /// <para>
+    /// 什么时候发：与 <see cref="VersionCount"/> 同拍 —— uosc 装载完成的握手（<see cref="Ready"/>）
+    /// 那一下，以及「正在放的是不是单集」被明写的两处（新一集开播的
+    /// <c>PlayerViewModel.OnNowPlayingChanged</c>、单集列表补齐的 <c>PlayerViewModel.FillSiblingsAsync</c>）。
+    /// 全部收在 <c>PlayerViewModel.PushEpisodeCountAsync</c> 一个出口。
+    /// </para>
+    /// </summary>
+    public const string EpisodeCount = "embynian-episode-count";
+
+    /// <summary>
     /// 把一条 client-message 的参数解析成宿主消息；不是宿主的消息、值不合契约的，返回 null。
     /// </summary>
     public static VideoWindowMessage? Parse(IReadOnlyList<string> arguments)
@@ -203,6 +225,9 @@ public static class VideoWindowContract
         var key = arguments[0];
         var value = arguments[1];
 
+        if (key == Shader)
+            return value is "off" or "auto" || ShaderGroupCatalog.Ids.Contains(value, StringComparer.Ordinal)
+                ? new VideoWindowMessage(key, value) : null;
         if (key == Episode) return value is "-1" or "1" ? new VideoWindowMessage(key, value) : null;
         if (key is EpisodeIndex or VersionIndex or MenuIndex)
         {

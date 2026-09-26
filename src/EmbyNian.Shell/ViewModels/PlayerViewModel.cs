@@ -91,8 +91,14 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>The chapter preview's picture width, mirrored from the XAML so the two cannot drift.</summary>
     internal const int ChapterPeekWidth = 212;
 
-    /// <summary>倍速's own range. The menu offers exactly these, and the keys clamp to their ends.</summary>
-    internal static readonly double[] SpeedChoices = [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0];
+    /// <summary>倍速's own range (2026-09-25 用户令：0.1 到 1 每档 0.1、1 到 20 每档 1). The wheel offers
+    /// exactly these, and the keys clamp to their ends.</summary>
+    internal static readonly double[] SpeedChoices =
+    [
+        0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+        2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0,
+        11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0,
+    ];
 
     /// <summary>The delay nudges both A/V delay submenus offer, in seconds.</summary>
     internal static readonly double[] DelayNudges = [-1, -0.1, 0.1, 1];
@@ -131,6 +137,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <c>Token</c>, and a disposed source would answer that with an exception instead of a cancellation.
     /// </summary>
     private readonly CancellationTokenSource _lifetime = new();
+
+    /// <summary>
+    /// 起播准备期的意图代次：封面等待、媒体详情、选集解析这几段网络之间，用户随时可能按停止 ——
+    /// 停止要能撤掉<b>还在准备中</b>的起播，而不是只停已经建立的播放。规则在 Core 的
+    /// <see cref="StartIntent"/>（新起播作废旧起播，用户停止作废全部），Transport 那一头接线。
+    /// </summary>
+    private readonly StartIntent _startIntent = new();
 
     /// <summary>
     /// The stills for the hover preview, by chapter index, decoded once each. A null value is a chapter
@@ -634,6 +647,17 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     public partial BitmapImage? CoverBackdrop { get; set; }
+
+    /// <summary>
+    /// 同一张背景图的像素版，给起播整屏那块 DWM 覆盖层用（2026-09-25 用户令「不要黑屏，主页和背景图
+    /// 无缝切换」）。
+    /// <para>
+    /// 与 <see cref="CoverBackdrop"/> 一次解码、一起就位：那块层显示的必须是遮罩里那张图本身，否则窗口
+    /// 长大的一两拍又变成一块近黑。取不到（解码失败、这个条目根本没图）时保持 null，覆盖层退回纯色 ——
+    /// 那时它与这条修复之前一模一样，不多也不少。
+    /// </para>
+    /// </summary>
+    internal VideoFrame? CoverBackdropFrame { get; private set; }
 
     /// <summary>背景图正在取/已就位的条目 Id：同一部片不重复下载；真正拿到图才算数，取空就忘掉以便重试。</summary>
     private string? _coverBackdropItemId;

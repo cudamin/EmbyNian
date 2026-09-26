@@ -224,6 +224,14 @@ public sealed class PlaybackSettings
     /// <summary>Watched once playback passes this share of the runtime.</summary>
     public int MarkWatchedPercent { get; set; } = 90;
 
+    /// <summary>
+    /// 国漫单独的标记已看阈值（「新增国漫播放进度自定义百分比标记已看」，用户令 2026-09-26；默认值同日续令
+    /// 「国漫的标记已看默认改为百分之85，其他的默认为百分之90」）。命中国漫的条目（类型：动画，发行公司带
+    /// 腾讯/哔哩哔哩/优酷/爱奇艺，判定在 <see cref="Playback.DonghuaRule"/>）按这一档算，不吃
+    /// <see cref="MarkWatchedPercent"/>——后者保持出厂 90。
+    /// </summary>
+    public int DonghuaMarkWatchedPercent { get; set; } = 85;
+
     public int ProgressReportIntervalSeconds { get; set; } = 5;
 
     /// <summary>
@@ -651,8 +659,8 @@ public sealed class VideoSettings
     /// <summary>mpv's <c>video-sync</c>: 视频显示同步.</summary>
     public string VideoSync { get; set; } = "";
 
-    /// <summary>mpv's <c>deinterlace</c>: 反交错, for interlaced broadcast sources.</summary>
-    public bool Deinterlace { get; set; }
+    /// <summary>反交错：no、auto 或 yes；强制开启会处理逐行视频。</summary>
+    public string DeinterlaceMode { get; set; } = "no";
 
     /// <summary>mpv's <c>interpolation</c>: smooths judder, and needs display sync to do anything.</summary>
     public bool Interpolation { get; set; }
@@ -681,6 +689,36 @@ public sealed class VideoSettings
 
     /// <summary>What to do with an HDR source; see <see cref="Mpv.MpvOutputOptions.HdrModes"/>.</summary>
     public string HdrMode { get; set; } = "tonemap";
+
+    /// <summary>空值继承画质预设；其余是 mpv 的色调映射算法。</summary>
+    public string ToneMapping { get; set; } = "";
+
+    /// <summary>HDR 输出峰值，单位 nits；null 交给显示器检测，不套用到 SDR 映射。</summary>
+    public double? HdrPeakNits { get; set; }
+
+    /// <summary>HDR 环境中的参考白亮度，单位 nits；null 跟随系统。</summary>
+    public double? HdrReferenceWhiteNits { get; set; }
+
+    public double? HdrSubtitleNits { get; set; }
+
+    /// <summary>PGS/VobSub 图形字幕亮度，单位 nits；null 保持内核默认。</summary>
+    public double? HdrImageSubtitleNits { get; set; }
+
+    public string HdrComputePeak { get; set; } = "";
+
+    public double? HdrContrastRecovery { get; set; }
+
+    /// <summary>默认保留 RPU；关闭仅供具有兼容基础层的杜比视界片源排障。</summary>
+    public bool DolbyVisionMetadata { get; set; } = true;
+
+    public bool DolbyVisionEnhancementLayer { get; set; } = true;
+
+    public bool Hdr10PlusMetadata { get; set; } = true;
+
+    /// <summary>auto、8 或 10；与抖动算法分开，不改变显卡链路位深。</summary>
+    public string DitherDepth { get; set; } = "auto";
+
+    public string DebandStrength { get; set; } = "low";
 
     /// <summary>
     /// 自动 ICC 校色 (mpv's <c>icc-profile-auto</c>): hand mpv the ICC profile Windows currently has set for
@@ -1093,6 +1131,23 @@ public sealed class UiSettings
     // 没处放的键本来就不出声，所以旧设置文件里留下的那一行照旧读得起来，只是没人再听它的。
 
     public bool ShowWatchedIndicators { get; set; } = true;
+
+    /// <summary>
+    /// 隐藏功能下方说明（屏上原叫「精简模式」）—— 「在设置中新增一个精简模式，开启后隐藏各项功能下方的
+    /// 说明」（用户的话，2026-09-25）；「把极简模式改名为隐藏功能下方说明」（用户的话，2026-09-26），
+    /// 名字直接说它干什么，键名 CompactMode 不动。
+    /// <para>
+    /// 开着的时候，设置页每一条行标签下面那行小字说明整页收起，只留标签和控件；开关本身就在设置 → 界面卡上，
+    /// 拨一下当场生效，不用重开设置页。收的是「各条功能下面的说明」：卡片标题底下那一句分区介绍不属于哪一条
+    /// 功能，照旧显示。开关行自己的说明也在「各项功能」之列 —— 开着它，连介绍它自己的那行小字一起收走。
+    /// </para>
+    /// <para>
+    /// 装机默认关，所以缺这个键的旧设置文件读出来就是关，行为一个像素都不变，也不需要为它加一条迁移 ——
+    /// 同 <see cref="ShowHomeBanner"/> 那条。恢复默认（<see cref="SettingsPreferences"/>）对界面组是「默认当
+    /// 偏好、例外具名留下」的整组抄法，这一项自动跟着回关，不用具名豁免。
+    /// </para>
+    /// </summary>
+    public bool CompactMode { get; set; }
 
     /// <summary>
     /// 主页顶上那张轮播大图显不显示 —— 「在设置中新增关闭轮播图的功能」。

@@ -107,6 +107,7 @@ function Menu:init(data, callback, opts)
 	self.callback = callback
 	self.opts = opts or {}
 	self.offset_x = 0 -- Used for submenu transition animation.
+	self.anchor = nil -- EMBYNIAN[menu-anchor]: {x,y} 光标锚点；set 时菜单在光标处弹出、不居中、不压暗幕布。
 	self.mouse_nav = self.opts.mouse_nav -- Stops pre-selecting items
 	self.item_height = nil
 	self.min_width = nil
@@ -139,6 +140,15 @@ function Menu:init(data, callback, opts)
 		utils.shared_script_property_set('uosc-menu-type', self.type or 'undefined')
 	end
 	mp.set_property_native('user-data/uosc/menu/type', self.type or 'undefined')
+	-- EMBYNIAN[menu-anchor] — 宿主推来的画面/选集/版本菜单要像集成模式那样在光标处弹出（右键点哪弹哪），
+	-- 不走 uosc 默认的屏幕居中大模态：**在 update(data) 之前**记下打开时的光标位置当锚点 —— 首次量算
+	-- （update_dimensions/update_coordinates）就得用它，晚一步菜单会先居中再跳。锚点在时还跳过压暗整屏
+	-- 的幕布（见下）。锚点缺席（普通键盘菜单、或光标不可用）时一切照旧居中，无回归。
+	if data.embynian_anchor and type(cursor.x) == 'number' and cursor.x ~= math.huge
+		and type(cursor.y) == 'number' and cursor.y ~= math.huge then
+		self.anchor = {x = cursor.x, y = cursor.y}
+	end
+
 	self:update(data)
 
 	for _, menu in ipairs(self.all) do self:scroll_to_index(menu.selected_index, menu.id) end
@@ -146,7 +156,7 @@ function Menu:init(data, callback, opts)
 
 	self:tween_property('opacity', 0, 1)
 	self:enable_key_bindings()
-	Elements:maybe('curtain', 'register', self.id)
+	if not self.anchor then Elements:maybe('curtain', 'register', self.id) end
 
 	if data.search_submit then
 		-- We have to defer this so that menu callbacks don't fire before the menu
@@ -160,7 +170,8 @@ end
 function Menu:destroy()
 	Element.destroy(self)
 	self.is_closing = false
-	if not self.is_being_replaced then Elements:maybe('curtain', 'unregister', self.id) end
+	-- EMBYNIAN[menu-anchor] — 锚点菜单当初没登记幕布，这里也就不注销（unregister 幂等，防的是计数错乱）。
+	if not self.is_being_replaced and not self.anchor then Elements:maybe('curtain', 'unregister', self.id) end
 	if utils.shared_script_property_set then
 		utils.shared_script_property_set('uosc-menu-type', nil)
 	end
@@ -349,11 +360,18 @@ function Menu:update_dimensions()
 		local max_height = height_available - title_height - footnote_height
 		local content_height = self.scroll_step * #menu.items
 		menu.height = math.min(content_height - self.item_spacing, max_height)
-		menu.top = clamp(
-			title_height + margin + self.padding,
-			menu.search and math.min(menu.search.min_top, menu.search.source.top) or height_available,
-			round((height_available - menu.height + title_height) / 2)
-		)
+		local min_top = title_height + margin + self.padding
+		if menu.is_root and self.anchor then
+			-- EMBYNIAN[menu-anchor] — 上缘贴着光标（标题在其上方，留一格 padding）；顶到下边就上移，整menu保持在屏内。
+			local max_top = display.height - margin - self.padding - menu.height
+			menu.top = clamp(min_top, self.anchor.y + title_height + self.padding, math.max(min_top, max_top))
+		else
+			menu.top = clamp(
+				min_top,
+				menu.search and math.min(menu.search.min_top, menu.search.source.top) or height_available,
+				round((height_available - menu.height + title_height) / 2)
+			)
+		end
 		if menu.search then
 			menu.search.min_top = math.min(menu.search.min_top, menu.top)
 			menu.search.max_width = math.max(menu.search.max_width, menu.width)
@@ -367,7 +385,14 @@ end
 
 -- Updates element coordinates to match padding box of currently open (sub)menu.
 function Menu:update_coordinates()
-	local ax = round((display.width - self.current.width) / 2 - self.padding) + self.offset_x
+	-- EMBYNIAN[menu-anchor] — 锚点在时左缘贴光标（横向夹住不越屏）；否则照旧屏幕居中。
+	local ax
+	if self.anchor then
+		local max_ax = display.width - self.current.width - self.padding * 2
+		ax = round(clamp(0, self.anchor.x - self.padding, math.max(0, max_ax))) + self.offset_x
+	else
+		ax = round((display.width - self.current.width) / 2 - self.padding) + self.offset_x
+	end
 	self:set_coordinates(
 		ax, self.current.top - self.padding,
 		ax + self.current.width + self.padding * 2, self.current.top + self.current.height + self.padding
@@ -610,7 +635,10 @@ function Menu:slide_in_menu(id, x)
 	local menu = self:get_menu(id)
 	if not menu then return end
 	self:activate_menu(id)
-	self:tween(-(display.width / 2 - menu.width / 2 - x), 0, function(offset) self:set_offset_x(offset) end)
+	-- EMBYNIAN[menu-anchor] — 锚点菜单不做「让当前子菜单回到屏幕中心」的横移，保持贴着光标那一处的层叠。
+	if not self.anchor then
+		self:tween(-(display.width / 2 - menu.width / 2 - x), 0, function(offset) self:set_offset_x(offset) end)
+	end
 	self.opacity = 1 -- in case tween above canceled fade in animation
 end
 
@@ -639,7 +667,10 @@ function Menu:activate_selected_item(shortcut, is_pointer)
 				self:select_index(1, item.id)
 			end
 			self:activate_menu(item.id)
-			self:tween(self.offset_x + menu.width / 2, 0, function(offset) self:set_offset_x(offset) end)
+			-- EMBYNIAN[menu-anchor] — 同上：锚点菜单进子菜单不横移回中心。
+			if not self.anchor then
+				self:tween(self.offset_x + menu.width / 2, 0, function(offset) self:set_offset_x(offset) end)
+			end
 			self.opacity = 1 -- in case tween above canceled fade in animation
 		else
 			local actions = item.actions or menu.item_actions

@@ -13,6 +13,10 @@ public enum ChromePart
     Volume,
 
     /// <summary>The skip-intro button, which shows on its own schedule rather than on proximity.</summary>
+    ///
+    /// 一句补充（2026-09-26）：指针压在 Skip 上也不点亮 bar/title（<see cref="ChromeReveal.Decide"/> 的
+    /// Skip 支，用户令「鼠标移到按钮上的时候不会唤出进度条」）—— 按钮自己跟着 offer 显隐，压着它的指针
+    /// 只剩下停靠耐心（<see cref="ChromeReveal.Parked"/>，光标别在按钮上藏掉）与音量条的既有判据。
     Skip
 }
 
@@ -722,8 +726,13 @@ public sealed class ChromeReveal
 
         // A pointer already on a control means the user arrived, whatever the bands say — the rail in
         // particular stands clear of the bottom fifth.
+        //
+        // 压在跳过按钮上不唤进度条（用户令 2026-09-26「鼠标移到按钮上的时候不会唤出进度条」）：按钮按
+        // offer 的节拍自己显隐（SkipVisibility），指针到它上面不等于「要看控制条」—— 而它恰在底部边缘带里，
+        // 底带判据会把进度条带出来。这一支盖过 Edges 的结果：bar/title 都不亮，音量条照旧走自己的判据。
         if (_part == ChromePart.Bar) bar = true;
-        if (_part == ChromePart.Title) title = true;
+        else if (_part == ChromePart.Title) title = true;
+        else if (_part == ChromePart.Skip) (bar, title) = (false, false);
 
         // 「显示进度条的时候不需要同步显示音量条」: the bar used to be one of the rail's reasons, and it was
         // the wrong kind of reason — the pointer being in the bottom band is a request for the transport

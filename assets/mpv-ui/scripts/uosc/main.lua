@@ -28,6 +28,10 @@
 -- │                             「写不出有第二版才露这种条件」），照的正是它自己 has_many_edition
 -- │                             那一路的形状：has_ 开头的条件读 state 表，谁改状态谁 trigger
 -- │                             dispositions。
+-- │     EMBYNIAN[episode-count] 宿主 → uosc 的通道：embynian-episode-count <0/1> 写进
+-- │                             state.has_episodes，控制条上那颗「选集」按钮按它露面 ——
+-- │                             播放电影（非单集）时它不在屏上（2026-09-26 用户令「播放电影的时候
+-- │                             不要显示这个按钮」）。与 version-count 同一条路。
 -- │     EMBYNIAN[picture-menu]  第五个绑定（embynian-ui-picture-menu）：独占模式右键/菜单键，
 -- │                             以及控制条上那颗「画面菜单」按钮 —— 三者同一份 PlayerMenuCatalog。
 -- │     EMBYNIAN[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
@@ -37,6 +41,11 @@
 -- │   elements/Controls.lua
 -- │     EMBYNIAN[episode]       控制条快捷项映射到上面的绑定
 -- │     EMBYNIAN[controls]      控制条新加的两项快捷项：版本、画面菜单
+-- │   elements/Menu.lua
+-- │     EMBYNIAN[menu-anchor]   宿主推来的菜单（画面/选集/版本）带 embynian_anchor 时在光标处弹出、
+-- │                             不屏幕居中、不压暗幕布 —— 弹出方式与集成模式的右键/按钮浮层一致
+-- │   elements/TopBar.lua
+-- │     EMBYNIAN[topbar-back]   左上角返回按钮：退出 mpv＝回到外壳详情页（与集成模式左上角返回同位同义）
 -- │   elements/Volume.lua
 -- │     EMBYNIAN[vol-osd]       音量条自己改音量也走 no-osd（拖条/滚条不再冒 mpv 的 OSD）
 -- │   lib/utils.lua
@@ -118,7 +127,9 @@ defaults = {
 	--     uosc/embynian-ui-picture-menu；uosc 自带的 ≡ 菜单没删，只是控制条上不再有它的入口。
 	--   · **选集与版本挪到左下**（用户令「把独占模式里的选集和选版本的按钮移动到左下」，左→右次序
 	--     按原话：选集倒数第二个、版本最后一个）；**版本那颗按需露面**（<has_many_versions>，
-	--     只有一版时整颗不在屏上）—— 见文件头的 EMBYNIAN[version-count]。
+	--     只有一版时整颗不在屏上）—— 见文件头的 EMBYNIAN[version-count]。**选集那颗也按需露面**
+	--     （2026-09-26 用户令「播放电影的时候不要显示这个按钮」：门 <has_episodes>，宿主的
+	--     embynian-episode-count 写它，播电影＝0＝整颗不在屏上）—— 见文件头的 EMBYNIAN[episode-count]。
 	--   · **音频与字幕往左让，与全屏之间空出一个按钮宽**（用户令「把字幕和音轨按钮往左移动一些，
 	--     让音轨按钮和全屏/窗口按钮相隔一个按钮的空位」）：那颗 `gap:1` 就是那个空位 —— uosc 的 gap
 	--     是本项宽度的倍数（默认 0.3），写 1 正好一个按钮。**2026-09-24 用户令「把独占模式下字幕和
@@ -132,7 +143,7 @@ defaults = {
 	--     只会让人点错；要看 mpv 的剪辑版本，≡ 菜单的「工具 → 剪辑版本」还在）。
 	-- 播放列表/目录导航、打开文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
 	controls =
-	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,embynian-ui-picture-menu,<video,audio>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,<video,audio>subtitles,audio,gap:1,fullscreen',
+	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,embynian-ui-picture-menu,<has_episodes>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,<video,audio>subtitles,audio,gap:1,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
@@ -148,8 +159,12 @@ defaults = {
 	speed_step = 0.1,
 	speed_step_is_factor = false,
 
-	menu_item_height = 36,
-	menu_min_width = 260,
+	-- EMBYNIAN[menu-size] — 菜单整体再收小一点（用户令 2026-09-26「右键菜单缩小一点」）：行高从上游 50、
+	-- 本项目原先 36 降到 30；菜单字号是 item_height*0.48（见 Menu.lua 的 update_content_dimensions），所以行高一降，
+	-- 行高与字号、连带菜单宽度（宽度由最长一行的文字宽度定）一起收小。min_width 一并从 260 降到 220（只影响全是
+	-- 短项的菜单）。作用于所有 uosc 菜单（画面/选集/版本/字幕/音频/章节）。
+	menu_item_height = 30,
+	menu_min_width = 220,
 	menu_padding = 1,
 	-- 用户原配置：输入即搜索会锁死「同键关闭菜单」，嵌入后保持 no
 	menu_type_to_search = false,
@@ -511,6 +526,10 @@ state = {
 	-- （uosc 自己问不出 Emby 的媒体源表）。默认 false＝那颗「版本」按钮先不画：宿主在装载握手那一刻
 	-- 就会把真答案送过来（它能早答，是因为「播哪一条、这条有几版」在 mpv 起来之前就已经在它手上了）。
 	has_many_versions = false,
+	-- EMBYNIAN[episode-count] — 正在放的是不是单集，由宿主的 embynian-episode-count 消息写进来
+	-- （mpv 只看见一条文件，分不出电影与剧）。默认 false＝那颗「选集」按钮先不画：宿主在装载握手那一刻
+	-- 就会把真答案送过来。默认不画的另一面是「播电影时它不在屏上」（2026-09-26 用户令）。
+	has_episodes = false,
 	has_playlist = false,
 	shuffle = options.shuffle,
 	---@type nil|{pos: number; paths: string[]}
@@ -1033,6 +1052,15 @@ bind_command('embynian-ui-picture-menu', function() embynian_notify('embynian-pi
 -- 而且 uosc 这边只有 register_script_message，没有同名的 bind_command。
 mp.register_script_message('embynian-version-count', function(value)
 	set_state('has_many_versions', (tonumber(value) or 0) > 1)
+	Elements:trigger('dispositions')
+end)
+
+-- EMBYNIAN[episode-count] — 宿主 → uosc 的通道：正在放的是不是单集（0＝电影，1＝单集）。
+-- 与 version-count 同一条路、同一个形状：门写在 controls 串里（<has_episodes>embynian-ui-episodes），
+-- 播电影时那颗「选集」按钮整颗不在屏上（2026-09-26 用户令「播放电影的时候不要显示这个按钮」）。
+-- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：uosc 这边只有 register_script_message。
+mp.register_script_message('embynian-episode-count', function(value)
+	set_state('has_episodes', (tonumber(value) or 0) > 0)
 	Elements:trigger('dispositions')
 end)
 

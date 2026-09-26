@@ -13,11 +13,31 @@ internal sealed partial class VideoFrameOverlay : IDisposable
     private static readonly WindowProcedure Procedure = Dispatch;
     private static bool _registered;
     private IntPtr _window;
-    private readonly VideoFrame _frame;
 
-    internal VideoFrameOverlay(IntPtr owner, VideoFrame frame)
+    /// <summary>要盖的那一帧；纯色模式（<see cref="_solid"/>）时为空。</summary>
+    private readonly VideoFrame? _frame;
+
+    /// <summary>
+    /// 这一帧按<b>铺满</b>摆（cover，超出的方向裁掉）还是按 contain 摆（留边）。默认 contain。
+    /// <para>
+    /// 两条起播整屏的路要 cover：那块层显示的是加载遮罩垫底的背景图，而遮罩里那张图是 <c>UniformToFill</c>
+    /// —— 覆盖层留边、遮罩裁切，撤层那一刻图上会跳一下（2026-09-25，用户令「不要黑屏，主页和背景图无缝切换」）。
+    /// 视频画面那一趟（窗口切换抓的帧）仍旧 contain，与留帧的默认摆法同一套。
+    /// </para>
+    /// </summary>
+    private readonly bool _cover;
+
+    /// <summary>
+    /// 无帧的纯色模式：整块按 <see cref="_fill"/> 铺满。起播自动全屏那一趟还在加载、抓不到画面帧，
+    /// 用加载遮罩同色的纯色层盖住窗口长到全屏那一拍（见 <c>PlayerPage.ChangeWindowAsync</c>）。
+    /// </summary>
+    private readonly bool _solid;
+
+    /// <summary>纯色模式的填充色，分层窗口的 BGRA（不透明，见 <see cref="Show"/> 的 ULW_OPAQUE）。</summary>
+    private readonly uint _fill;
+
+    private VideoFrameOverlay(IntPtr owner)
     {
-        _frame = frame;
         if (!_registered)
         {
             var name = Marshal.StringToHGlobalUni(ClassName);
@@ -41,6 +61,20 @@ internal sealed partial class VideoFrameOverlay : IDisposable
             Native.WsExLayered | Native.WsExToolWindow | Native.WsExNoActivate | Transparent,
             ClassName, "", Native.WsPopup, 0, 0, 1, 1, owner, IntPtr.Zero, Native.GetModuleHandle(null), IntPtr.Zero);
         if (_window == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
+    /// <summary>盖一帧真画面（视频换尺寸／进退全屏那一拍的承接，按 contain 摆）。</summary>
+    internal VideoFrameOverlay(IntPtr owner, VideoFrame frame, bool cover = false) : this(owner)
+    {
+        _frame = frame;
+        _cover = cover;
+    }
+
+    /// <summary>盖一块纯色（没有画面可抓时，如起播加载中长到全屏）。<paramref name="fill"/> 是不透明 BGRA。</summary>
+    internal VideoFrameOverlay(IntPtr owner, uint fill) : this(owner)
+    {
+        _solid = true;
+        _fill = fill;
     }
 
     internal unsafe void Show(NativeRect bounds, bool topmost)
@@ -69,26 +103,42 @@ internal sealed partial class VideoFrameOverlay : IDisposable
         try
         {
             new Span<byte>((void*)bits, checked(bounds.Width * bounds.Height * 4)).Clear();
-            var picture = _frame.Picture;
-            var scale = VideoPresentation.FitScale(picture.Width, picture.Height, bounds.Width, bounds.Height, false);
-            var width = (int)Math.Round(picture.Width * scale);
-            var height = (int)Math.Round(picture.Height * scale);
-            var source = new BitmapInfo
+            if (_solid)
             {
-                Size = (uint)Marshal.SizeOf<BitmapInfo>(),
-                Width = _frame.Stride / 4,
-                Height = -_frame.Height,
-                Planes = 1,
-                BitCount = 32
-            };
-            SetStretchBltMode(memory, 4);
-            SetBrushOrgEx(memory, 0, 0, IntPtr.Zero);
-            fixed (byte* pixels = _frame.Pixels)
+                // 无帧：整块铺不透明纯色（ULW_OPAQUE 下按不透明显示，与加载遮罩同色）。
+                new Span<uint>((void*)bits, bounds.Width * bounds.Height).Fill(_fill);
+            }
+            else if (_frame is { } frame)
             {
-                if (StretchDIBits(memory, (bounds.Width - width) / 2, (bounds.Height - height) / 2,
-                        width, height, (int)picture.Left, (int)picture.Top, (int)picture.Width, (int)picture.Height,
-                        (IntPtr)pixels, ref source, 0, 0x00CC0020) == 0)
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                var picture = frame.Picture;
+                var source = new BitmapInfo
+                {
+                    Size = (uint)Marshal.SizeOf<BitmapInfo>(),
+                    Width = frame.Stride / 4,
+                    Height = -frame.Height,
+                    Planes = 1,
+                    BitCount = 32
+                };
+                SetStretchBltMode(memory, 4);
+                SetBrushOrgEx(memory, 0, 0, IntPtr.Zero);
+                fixed (byte* pixels = frame.Pixels)
+                {
+                    // 铺满那一档：目标恒是整块，改的是「从源里取哪一块」；留边那一档：源取可见画面，目标居中。
+                    var from = _cover
+                        ? VideoPresentation.FillSource((int)picture.Width, (int)picture.Height,
+                            bounds.Width, bounds.Height, (int)picture.Left, (int)picture.Top)
+                        : picture;
+                    var scale = _cover
+                        ? 1d
+                        : VideoPresentation.FitScale(picture.Width, picture.Height, bounds.Width, bounds.Height, false);
+                    var width = _cover ? bounds.Width : (int)Math.Round(picture.Width * scale);
+                    var height = _cover ? bounds.Height : (int)Math.Round(picture.Height * scale);
+                    if (StretchDIBits(memory, (bounds.Width - width) / 2, (bounds.Height - height) / 2,
+                            width, height, (int)Math.Round(from.Left), (int)Math.Round(from.Top),
+                            (int)Math.Round(from.Width), (int)Math.Round(from.Height),
+                            (IntPtr)pixels, ref source, 0, 0x00CC0020) == 0)
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
             }
             var position = new NativePoint { X = bounds.Left, Y = bounds.Top };
             var size = new NativePoint { X = bounds.Width, Y = bounds.Height };

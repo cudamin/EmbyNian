@@ -28,6 +28,8 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
 
     public DataTemplate? Number { get; set; }
 
+    public DataTemplate? OptionalNumber { get; set; }
+
     public DataTemplate? Slider { get; set; }
 
     public DataTemplate? Text { get; set; }
@@ -76,6 +78,7 @@ public sealed partial class SettingRowTemplates : DataTemplateSelector
         SettingToggleRow => Toggle,
         SettingSliderRow => Slider,
         SettingNumberRow => Number,
+        SettingOptionalNumberRow => OptionalNumber,
         SettingFontRow => Font,
         SettingColorRow => Color,
         SettingSubtitlePreviewRow => Preview,

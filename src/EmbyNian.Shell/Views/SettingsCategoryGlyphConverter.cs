@@ -26,7 +26,6 @@ public sealed class SettingsCategoryGlyphConverter : IValueConverter
         ["字幕"] = 0xE8D2,         // Font（字）
         ["视频输出"] = 0xE7F4,     // TVMonitor
         ["音频输出"] = 0xE767,     // Volume
-        ["着色器"] = 0xE790,       // Color（画质、调色）
         ["主页"] = 0xE80F,         // Home
         ["界面"] = 0xE771,         // Personalize
         ["快捷键"] = 0xE765,       // KeyboardClassic

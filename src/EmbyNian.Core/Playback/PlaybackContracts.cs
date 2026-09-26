@@ -164,6 +164,14 @@ public sealed record PlaybackRequest
 
     public string ItemId { get; init; } = "";
 
+    /// <summary>
+    /// 这一条命中国漫（<see cref="DonghuaRule"/>：类型：动画 ∧ 发行公司带腾讯/哔哩哔哩）。标记已看的阈值按
+    /// <see cref="Configuration.PlaybackSettings.DonghuaMarkWatchedPercent"/> 单独算。判定在
+    /// <see cref="PlaybackPlanner"/> 做掉、这里只带结论：服务层手上没有条目元数据，而这是一张
+    /// 「no Emby types」的票，元数据过不了这道缝，结论过得去。
+    /// </summary>
+    public bool IsDonghua { get; init; }
+
     public string? MediaSourceId { get; init; }
 
     /// <summary>Emby stream indexes, kept for the playback reports rather than for mpv.</summary>
