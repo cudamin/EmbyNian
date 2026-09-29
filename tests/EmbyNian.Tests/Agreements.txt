@@ -362,6 +362,7 @@ handle  Views/SettingsPage.xaml  CategoryNavigation
 handle  Views/SettingsPage.xaml  CompactCategoryNavigation
 handle  Views/SettingsPage.xaml  CompactSettings
 handle  Views/SettingsPage.xaml  HostedFrame
+handle  Views/SettingsPage.xaml  RetrySaveSettingsButton
 handle  Views/SettingsPage.xaml  SettingsBody
 handle  Views/SettingsPage.xaml  SettingsCategoryList
 handle  Views/SettingsPage.xaml  SettingsCategoryPicker
@@ -369,6 +370,7 @@ handle  Views/SettingsPage.xaml  SettingsContent
 handle  Views/SettingsPage.xaml  SettingsLayout
 handle  Views/SettingsPage.xaml  SettingsNavColumn
 handle  Views/SettingsPage.xaml  SettingsWidthStates
+handle  Views/SettingsPage.xaml  UnsavedSettingsNotice
 handle  Views/SettingsPage.xaml  WideSettings
 handle  Views/ShelfHead.xaml  CommonStates
 handle  Views/ShelfHead.xaml  Disabled
@@ -444,6 +446,10 @@ handle  Views/SignInPage.xaml  WelcomePanel
 handle  Views/SignInPage.xaml  WelcomeTitle
 handle  Views/SignInPage.xaml  WideWelcome
 handle  Views/SubtitleDialog.xaml  Busy
+handle  Views/SubtitleDialog.xaml  CancelDeleteButton
+handle  Views/SubtitleDialog.xaml  ConfirmDeleteButton
+handle  Views/SubtitleDialog.xaml  DeleteConfirmation
+handle  Views/SubtitleDialog.xaml  DeleteConfirmationText
 handle  Views/SubtitleDialog.xaml  LanguageBox
 handle  Views/SubtitleDialog.xaml  NoTracks
 handle  Views/SubtitleDialog.xaml  Results
@@ -457,6 +463,7 @@ switch  --play
 switch  --probe-composition
 switch  --probe-cursor
 switch  --probe-player-motion
+switch  --probe-subtitles
 switch  --screen
 switch  --scroll-end
 switch  --scroll-half

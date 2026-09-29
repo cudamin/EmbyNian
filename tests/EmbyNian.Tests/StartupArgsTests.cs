@@ -14,6 +14,34 @@ internal static class StartupArgsTests
 {
     public static void Register()
     {
+        Test("字幕离线探针：独立入口与非法组合不落入正常启动", () =>
+        {
+            foreach (var args in new[]
+            {
+                new[] { "--probe-subtitles" },
+                new[] { "--probe-subtitles", "inspect", "--screen", "2" },
+                new[] { "/probe-subtitles=inspect", "--theme=midnight" }
+            })
+            {
+                Assert.True(StartupArgs.RequestsSubtitleProbe(args));
+                StartupArgs.ValidateSubtitleProbe(args);
+            }
+            foreach (var args in new[]
+            {
+                new[] { "--probe-subtitles=" },
+                new[] { "--probe-subtitles", "--play" },
+                new[] { "--probe-subtitles", "--self-check" },
+                new[] { "--probe-subtitles", "--show-settings" },
+                new[] { "--probe-subtitles", "--screen", "0" },
+                new[] { "--probe-subtitles", "--theme" },
+                new[] { "--probe-subtitles", "--probe-subtitles" }
+            })
+            {
+                Assert.True(StartupArgs.RequestsSubtitleProbe(args));
+                Assert.Throws<ArgumentException>(() => StartupArgs.ValidateSubtitleProbe(args));
+            }
+        });
+
         Test("命令行：开关在不在，横线斜杠大小写都不算数", () =>
         {
             string[] args = ["--self-check", "-dump-ui", "/Screen", "2"];

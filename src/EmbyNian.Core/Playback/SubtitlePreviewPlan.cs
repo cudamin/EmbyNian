@@ -65,7 +65,7 @@ public sealed record SubtitlePreviewPlan(
             backColor,
             backgroundBox ? backOpacity : 0)
         {
-            PlatePadding = backgroundBox ? shadow : 0
+            PlatePadding = backgroundBox ? outline + shadow : 0
         };
     }
 

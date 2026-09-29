@@ -31,6 +31,34 @@ public static class StartupArgs
         argument.TrimStart('-', '/').Split('=')[0].Equals(SelfCheckFlag[2..], StringComparison.OrdinalIgnoreCase)
         || argument.TrimStart('-', '/').Split('=')[0].Equals(SelfCheckDataFlag[2..], StringComparison.OrdinalIgnoreCase));
 
+    public static bool RequestsSubtitleProbe(string[] args) => args.Any(argument =>
+        argument.TrimStart('-', '/').Split('=', 2)[0].Equals("probe-subtitles", StringComparison.OrdinalIgnoreCase));
+
+    public static void ValidateSubtitleProbe(string[] args)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < args.Length; index++)
+        {
+            var parts = args[index].TrimStart('-', '/').Split('=', 2);
+            var name = parts[0].ToLowerInvariant();
+            if (!seen.Add(name)) throw new ArgumentException("字幕探针参数不能重复");
+            if (name == "probe-subtitles")
+            {
+                var mode = parts.Length == 2 ? parts[1]
+                    : index + 1 < args.Length && args[index + 1] == "inspect" ? args[++index] : null;
+                if (mode is not null && mode != "inspect") throw new ArgumentException("字幕探针只接受 inspect 模式");
+                continue;
+            }
+            if (name is not ("screen" or "theme")) throw new ArgumentException("字幕探针不能与其他启动模式组合");
+            var value = parts.Length == 2 ? parts[1] : index + 1 < args.Length ? args[++index] : null;
+            if (string.IsNullOrWhiteSpace(value) || value.StartsWith('-') || value.StartsWith('/'))
+                throw new ArgumentException("字幕探针参数缺少值");
+            if (name == "screen" && (!int.TryParse(value, out var screen) || screen < 1))
+                throw new ArgumentException("屏幕编号必须从 1 开始");
+        }
+        if (!seen.Contains("probe-subtitles")) throw new ArgumentException("缺少字幕探针开关");
+    }
+
     /// <summary>Returns the optional fresh data directory; throws for every unsupported combination.</summary>
     public static string? ValidateSelfCheck(string[] args)
     {

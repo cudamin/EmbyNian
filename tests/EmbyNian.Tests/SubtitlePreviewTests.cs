@@ -97,8 +97,8 @@ internal static class SubtitlePreviewTests
             Assert.Equal("#FFFFFF", plan.TextColor);
             Assert.Equal("#000000", plan.Layers[1].Color, "描边颜色退到 mpv 自己的黑");
             Assert.Equal("#000000", plan.Layers[0].Color, "底板颜色退到 mpv 自己的黑");
-            Assert.True(Math.Abs(plan.Layers[0].Opacity - 0.69) < 0.001,
-                "没挑过底板颜色时，透明度也是 mpv 自己那份（约 69%），不走设置里的 60%");
+            Assert.True(Math.Abs(plan.Layers[0].Opacity - 0.6) < 0.001,
+                "未指定背景色仍使用设置中的透明度，只把颜色回退为黑色");
         });
 
         Test("字幕预览：描边填 0 就真的没有描边", () =>
@@ -113,6 +113,19 @@ internal static class SubtitlePreviewTests
 
     private static void RegisterPlate()
     {
+        Test("字幕背景盒：大描边零留白仍包住描边", () =>
+        {
+            var plan = SubtitlePreviewPlan.Plan(new PlaybackSettings
+            {
+                SubtitleBackStyle = "background-box",
+                SubtitleBorderSize = "10",
+                SubtitleShadowOffset = "0"
+            }, 1.3, "较长一行\n短行");
+            Assert.Equal(13.0, plan.PlatePadding);
+            Assert.True(plan.Layers.All(layer => Math.Abs(layer.X) <= plan.PlatePadding
+                && Math.Abs(layer.Y) <= plan.PlatePadding));
+        });
+
         Test("字幕预览：底板三档各画些什么", () =>
         {
             var subtitles = new PlaybackSettings { SubtitleBackColor = "#123456", SubtitleBackOpacity = 40 };
@@ -131,7 +144,8 @@ internal static class SubtitlePreviewTests
                 }, scale: 1, text: "字幕示例");
             Assert.True(box.Plate);
             Assert.True(Math.Abs(box.PlateOpacity - 0.4) < 0.001, "贴着字的底板按那一行的透明度画");
-            Assert.Equal(9, box.Layers.Count, "背景盒不收阴影，描边和阴影照旧");
+            Assert.Equal(8, box.Layers.Count, "整体背景盒保留文字描边，但不另画字形阴影");
+            Assert.Equal(1.0, box.PlatePadding, "背景盒包住描边后再加留白");
 
             var opaque = SubtitlePreviewPlan.Plan(
                 new PlaybackSettings
@@ -140,9 +154,13 @@ internal static class SubtitlePreviewTests
                     SubtitleBackOpacity = 40,
                     SubtitleBackStyle = "opaque-box"
                 }, scale: 1, text: "字幕示例");
-            Assert.True(opaque.Plate);
-            Assert.Equal(1, opaque.PlateOpacity, "整行不透明方框就是 100%");
-            Assert.Equal(8, opaque.Layers.Count, "实心板把阴影盖得死死的，再画一层是白画");
+            Assert.False(opaque.Plate, "逐行盒不画包住全部行的统一背景");
+            Assert.Equal(2, opaque.Layers.Count, "一层阴影盒、一层描边盒");
+            Assert.True(opaque.Layers.All(layer => layer.IsBox));
+            Assert.Equal("#123456", opaque.Layers[0].Color);
+            Assert.Equal(0.4, opaque.Layers[0].Opacity);
+            Assert.Equal("#000000", opaque.Layers[1].Color);
+            Assert.Equal(1, opaque.Layers[1].Opacity);
         });
     }
 

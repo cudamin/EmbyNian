@@ -10,6 +10,36 @@ internal static class SubtitleBehaviorTests
 {
     public static void Register()
     {
+        Test("字幕预览：百分比缩放同步放大字号、描边与阴影", () =>
+        {
+            foreach (var percent in new[] { 50, 100, 200, 300 })
+            {
+                var settings = new PlaybackSettings { SubtitleScalePercent = percent };
+                var plan = SubtitlePreviewPlan.Plan(settings, 1.3, "两行\n字幕");
+                Assert.Equal(65.0 * percent / 100, plan.FontSize);
+                Assert.True(Math.Abs(plan.Layers[0].X - 0.65 * percent / 100) < 0.001);
+            }
+        });
+
+        Test("字幕底板：未指定颜色仍应用透明度，预览与 mpv 参数一致", () =>
+        {
+            foreach (var opacity in new[] { 0, 40, 100 })
+            {
+                var settings = new PlaybackSettings
+                {
+                    SubtitleBackColor = "",
+                    SubtitleBackOpacity = opacity,
+                    SubtitleBackStyle = "background-box"
+                };
+                var plan = SubtitlePreviewPlan.Plan(settings, 1, "两行\n字幕");
+                Assert.Equal(opacity / 100.0, plan.PlateOpacity);
+                Assert.Equal("#000000", plan.PlateColor);
+                var options = MpvOutputOptions.SubtitleAppearance(settings).ToDictionary(pair => pair.Key, pair => pair.Value);
+                Assert.Equal($"0.000/0.000/0.000/{(opacity / 100.0).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)}",
+                    options["sub-back-color"]);
+            }
+        });
+
         Test("字幕外语模式：兜底项不是听得懂的语言", () =>
         {
             var source = Source(Audio(1, "jpn"), Subtitle(2, "chi"));
@@ -122,8 +152,12 @@ internal static class SubtitleBehaviorTests
         {
             var defaults = new Dictionary<string, string>
             {
-                ["sub-visibility"] = "yes", ["secondary-sid"] = "no", ["secondary-sub-visibility"] = "yes",
-                ["secondary-sub-delay"] = "0", ["secondary-sub-pos"] = "0", ["secondary-sub-ass-override"] = "strip"
+                ["sub-visibility"] = "yes",
+                ["secondary-sid"] = "no",
+                ["secondary-sub-visibility"] = "yes",
+                ["secondary-sub-delay"] = "0",
+                ["secondary-sub-pos"] = "0",
+                ["secondary-sub-ass-override"] = "strip"
             };
             var request = new PlaybackRequest { MediaUrl = new Uri("http://192.0.2.1/fixture"), Title = "fixture" };
             var options = InlineSwitch.FilmScoped(defaults, request).ToDictionary(option => option.Key, option => option.Value);

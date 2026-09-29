@@ -607,7 +607,8 @@ public sealed partial class PlayerPage
         PinGlyphBox.Width = pin.Width;
         PinGlyphBox.Height = pin.Height;
 
-        // 格：可见底就是按钮自己的 Width/Height（悬停底、已置顶常亮底都画在这块上，格涨它们跟着涨）。
+        // 格：可见底就是按钮自己的 Width/Height（悬停那两档底画在这块上，格涨它们跟着涨；置顶那颗
+        // 2026-09-29 起不再有已置顶那一档的底）。
         var cell = fullscreen ? FullscreenCommandCell : WindowCommandCell;
         var corner = fullscreen ? 3d : 2d;
         foreach (var button in new[] { PinButton, MinimizeButton, MaximizeButton, CloseButton })

@@ -323,7 +323,13 @@ public sealed class EmbyImageStore
     private int _sincePrune;
 
     /// <summary>Trims the oldest files when the cache grows past its budget. Fire-and-forget at startup.</summary>
-    public void PruneInBackground() => Task.Run(Prune);
+    public void PruneInBackground()
+    {
+        // VSTHRD110 留在 warning 的代价：刻意的放手要显式写成丢弃（与 SharedWork 里 _ = ContinueWith
+        // 同一惯用式），否则构建门禁会把这条真信号淹没在已知命中里。用户原话「把你建议装的装上吧」
+        // 2026-09-29：随 Threading.Analyzers 引入治理，行为零变化。
+        _ = Task.Run(Prune);
+    }
 
     /// <summary>Off the UI thread: a full cache is thousands of files, and the answer is only a caption.</summary>
     public Task<ImageCacheUsage> MeasureAsync() => Task.Run(() => Measure(_directory));

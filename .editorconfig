@@ -136,6 +136,69 @@ dotnet_diagnostic.IDE0052.severity = suggestion
 # Windows-only by construction. Repeated here so the reason is findable from this file too.
 dotnet_diagnostic.CA1416.severity = none
 
+# ---- VSTHRD（Microsoft.VisualStudio.Threading.Analyzers，2026-09-29 引入）---------------------------
+# 逐条实测后定级：首测（Core）命中如下，Shell 侧构建通过即视为零命中。每条降级都点名现场与失效
+# 条件；现场改掉后应把级别提回 warning，别让 suggestion 变成永久后门。
+
+# 同步等待任务。唯一命中 FontLibrary.Ready——IsCompletedSuccessfully 守卫后的 .Result，守卫保证
+# 永不阻塞，规则认不出守卫。真正会阻塞的形式（Task.Wait / .GetAwaiter().GetResult()）已由
+# tools/BannedSymbols.txt 的黑名单执法（RS0030），此处留 suggestion 只是 IDE 提示。
+# 失效条件：出现绕过黑名单的阻塞写法或守卫被删。
+dotnet_diagnostic.VSTHRD002.severity = suggestion
+
+# Lazy<Task<T>>.Value。唯一命中 SharedWork.RunAsync——Lazy 工厂契约是「启动异步工作、立即返回
+# Task」，从不阻塞（测试钉着这张行为表），VSTHRD011 担心的「工厂内同步等待」构造上不成立；规则
+# 看不清委托性质。换 AsyncLazy<T> 要给 Core 引运行时包，违背 Core 无包惯例。
+# 失效条件：任何调用方传入会同步阻塞的 work 委托。
+dotnet_diagnostic.VSTHRD011.severity = suggestion
+
+# 有 Async 同类方法时用同步方法。唯一命中 MoviePilotClient.PostReplyAsync——小载荷 JSON 构建
+# StringContent 的刻意同步写法，SerializeAsync 要走流，不值当。
+# 失效条件：序列化大载荷（此时该改异步）。
+dotnet_diagnostic.VSTHRD103.severity = suggestion
+
+# 可等待方法命名带 Async 后缀。现存四处：MoviePilotTransferCollect(70/104/115)、EmbyImageStore(134)。
+# 改名是独立清理轮的事，不混进分析器引入这轮。
+# 失效条件：上述四处改名完成后，应提回 warning。
+dotnet_diagnostic.VSTHRD200.severity = suggestion
+
+# async void。Shell 首测 19 处，全部是 WinUI 事件处理（对话框按钮、页面键盘/指针事件）——这是
+# XAML 事件模型的既定写法，处理器都自带 try/catch；改成 Task 返回需要给每个事件配包装器，
+# 是独立的 UI 层清理轮，不属于分析器引入。
+# 失效条件：新增 async void 时处理器内必须兜住异常，这是纪律不是门禁。
+dotnet_diagnostic.VSTHRD100.severity = suggestion
+
+# await 别处启动的 Task。Shell 首测 17 处（PlayerMotionProbe 10、DetailViewModel 4、PlayerPage 三处
+# 分部各 1）——探针与视图模型刻意 await 共享/延迟任务，是「等待已在飞的工作」的惯用式；规则的
+# 死锁场景针对 JoinableTask 上下文，本应用是普通 DispatcherQueue 世界，构造上不成立。
+# 失效条件：如果将来引入 JoinableTaskFactory 或 SyncContext 阻塞等待，须重新评估全部 17 处。
+dotnet_diagnostic.VSTHRD003.severity = suggestion
+
+# async lambda 配 void 委托。Shell 首测 2 处（MoviePilotReorganizeDialog:46、ShellSelfCheck:573），
+# 与 VSTHRD100 同族——事件订阅处的 async lambda 是 XAML 事件模型的写法。
+# 失效条件：同 VSTHRD100，lambda 内必须兜住异常。
+dotnet_diagnostic.VSTHRD101.severity = suggestion
+
+# ---- RCS（Roslynator.Analyzers 5.0.0，2026-09-29 先实测后采纳）--------------------------------------
+# 首测（Core+Shell）6 处命中、3 条规则，其余三百多条零命中——这正是它保持 warning 资格的依据。
+# 调查记录见 work/roslynator-survey.md。每条降级点名现场与失效条件。
+
+# 空 catch(Exception)。三处全是带注释的兜底：MoviePilotTransferCollect:43（集/季的 TMDB 编号查
+# 失败就留空，不能拿冒充整部剧）、LibMpvNative:64（DLL 搜索路径提示不能带崩播放）、
+# SettingsViewModel:1251（建目录失败交给资源管理器报错）。
+# 失效条件：出现连注释都没有、真吞异常的空 catch；或上述三处语义变了。
+dotnet_diagnostic.RCS1075.severity = suggestion
+
+# 异常类补标准构造器重载。EmbyApiException / MoviePilotException 各一处：单一构造器（可选参数）
+# 是刻意设计，三个子类全走主构造器；补四个重载只会制造没人调用的 API 面。
+# 失效条件：出现无 message 构造、反序列化或其他需要标准重载的真实调用场景。
+dotnet_diagnostic.RCS1194.severity = suggestion
+
+# 返回 null 代替已完成 Task。唯一命中 FilterPanelViewModel.Lookup(116)：返回类型就是 Task<T>?，
+# null 是文档化契约（面板未 Attach 时无请求可发），调用方先判空；换成 Task.FromResult 会改契约。
+# 失效条件：非可空 Task 返回类型上出现 return null——那是真隐患，届时本条应提回 warning。
+dotnet_diagnostic.RCS1210.severity = suggestion
+
 [tests/**/*.cs]
 # The test runner is one console project whose asserts read as prose; naming rules that fit production
 # types make its Chinese-named test registrations noisy for no gain.

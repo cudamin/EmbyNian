@@ -22,6 +22,9 @@ public sealed partial class PlayerPage
         var versions = ViewModel.VersionControlsVisible;
         var status = ViewModel.Status;
         var chapters = ViewModel.ChapterMarks;
+        // 自动跟随（2026-09-29「播放时自动置顶」）让下面喂进来的播放状态动真格的置顶：进门前记下、
+        // 退出门放回去，别让探针把这一档漏给后面的检查。
+        var wasTop = _window?.TopMost == true;
         var issues = new List<string>();
         var sizes = new[] { 1280, 680, 560, 520, 420, 300, 240, 180 };
         try
@@ -154,6 +157,8 @@ public sealed partial class PlayerPage
         var versions = ViewModel.VersionControlsVisible;
         var status = ViewModel.Status;
         var chapters = ViewModel.ChapterMarks;
+        // 与 ProbeTransportLayout 同一条：喂进来的播放状态会动真格的置顶（2026-09-29 自动跟随），进门前记下。
+        var wasTop = _window?.TopMost == true;
         try
         {
             Visibility = Visibility.Visible;
@@ -203,6 +208,7 @@ public sealed partial class PlayerPage
             ViewModel.EpisodeControlsVisible = episodes;
             ViewModel.VersionControlsVisible = versions;
             ViewModel.SetTransportProbeStatus(status, chapters);
+            if (_window is not null) SetPinned(wasTop);
             Root.Width = oldWidth;
             Root.Height = oldHeight;
             Stage.Visibility = stage;

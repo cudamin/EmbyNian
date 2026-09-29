@@ -64,8 +64,12 @@
 -- │                             本文件选项区 EMBYNIAN[menu-style]，几何与上色在 Menu.lua 同名槽
 -- │   elements/TopBar.lua
 -- │     EMBYNIAN[topbar-back]   左上角返回按钮：退出 mpv＝回到外壳详情页（与集成模式左上角返回同位同义）
--- │     EMBYNIAN[topbar-pin]    右上角置顶按钮（push_pin）：点它 cycle ontop（置顶这块 mpv 窗口），已置顶时
--- │                             常亮一整块（见 render 里 lit）；状态由 main.lua 的 ontop 观察器送进来
+-- │     EMBYNIAN[topbar-pin]    右上角置顶按钮（push_pin）：点它 cycle ontop（置顶这块 mpv 窗口）；状态画在
+-- │                             图钉的姿势上 —— 未置顶斜 35°、置顶立正（用户令 2026-09-29「置顶不要长亮」，
+-- │                             见 render 里 EMBYNIAN[topbar-pin-tilt]）；状态由 main.lua 的 ontop 观察器送进来
+-- │     EMBYNIAN[ontop-follows-pause] 置顶跟着播放状态走：在播 ontop yes、暂停 no（用户令 2026-09-29
+-- │                             「播放时自动置顶，暂停时自动取消置顶」），换片由 file-loaded 补一拍，
+-- │                             空闲不跟；手动 cycle ontop 仍即时生效，只撑到下一条边沿
 -- │     EMBYNIAN[topbar-back-glass] 返回键可见底与标题那块玻璃**同形同色**：都高 size-2*margin、同从
 -- │                             self.ay+margin 起；返回键那一块四周各让 margin（左缘＝窗口左缘＋margin，
 -- │                             用户令 2026-09-28 更晚「左边的空隙要和上面的一样大」）；静止档不透明度取
@@ -882,6 +886,19 @@ mp.observe_property('idle-active', 'bool', function(_, idle)
 	mp.commandv('script-message-to', 'thumbfast', 'clear')
 end)
 mp.observe_property('pause', 'bool', create_state_setter('pause'))
+-- EMBYNIAN[ontop-follows-pause] — 独占那颗图钉跟着播放状态走（用户令 2026-09-29「播放时自动置顶，暂停时
+-- 自动取消置顶」）：在播＝ontop yes、暂停＝ontop no，顶栏图钉立没立正由上面那条 ontop 观察器跟着画。
+-- 手动那颗（cycle ontop）仍即时生效，只是只撑到下一条边沿 —— 与集成那头 SetPinned 的规矩同一句
+-- （PlayerPage.OnStatusApplied）。两处来源：pause 的每一条边沿（uosc 按钮、快捷键、宿主经 IPC 暂停，
+-- 从哪来都一样）；以及 file-loaded —— 片与片之间 pause 常常不变（换片不换窗，同窗换片那条路），
+-- 光盯它会漏掉「新片开播」这一下。空闲不跟（idle-active）：没有片子在放，置不置顶归手动，
+-- 别把空闲那扇窗也按到顶上。
+local function follow_pause_ontop(paused)
+	if mp.get_property_bool('idle-active') then return end
+	mp.set_property_bool('ontop', not paused)
+end
+mp.observe_property('pause', 'bool', function(_, paused) follow_pause_ontop(paused) end)
+mp.register_event('file-loaded', function() follow_pause_ontop(mp.get_property_native('pause')) end)
 mp.observe_property('volume', 'number', create_state_setter('volume'))
 mp.observe_property('volume-max', 'number', create_state_setter('volume_max'))
 mp.observe_property('mute', 'bool', create_state_setter('mute'))

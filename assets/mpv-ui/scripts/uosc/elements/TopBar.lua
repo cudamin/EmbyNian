@@ -30,7 +30,7 @@ function TopBar:init()
 	-- border=no、系统标题栏不存在），所以「置顶」在这个窗口上就是 mpv 的 ontop 属性，不需要经过宿主。
 	-- 排在窗口三颗的**左边**（集成那一排也正是「置顶、最小化、最大化、关闭」），top_bar_controls='left'
 	-- 时整排镜子一样翻过去、它落在最右。图标 push_pin —— 装箱的 MaterialIconsRound 里确有此字形（与集成
-	-- 那颗 PathIcon 的图钉同义）。已置顶那一档怎么画见 render 里 lit 那段。
+	-- 那颗 PathIcon 的图钉同义）。已置顶那一档怎么画见 render 里 EMBYNIAN[topbar-pin-tilt] 那段。
 	local pin = {icon = 'push_pin', command = function() mp.command('cycle ontop') end, is_pin = true}
 	self.buttons = options.top_bar_controls == 'left' and {close, max, min, pin} or {pin, min, max, close}
 
@@ -238,12 +238,17 @@ function TopBar:render()
 
 			local rect = {ax = button_ax, ay = ay, bx = button_ax + self.size, by = by}
 			local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
-			-- EMBYNIAN[topbar-pin] — 置顶那颗**已置顶时就亮着**（同一颗在按钮表里带 is_pin，状态读 state.ontop：
-			-- main.lua 观察 mpv 的 ontop 属性写进来）。为什么不用另一个图标表示两档 —— 集成模式那两颗是画出来
-			-- 的几何（躺着的空心钉／立着的实心钉），而 uosc 的图标字体只有实心钉一支，画不出第二档；于是状态
-			-- 只能靠这一层：亮着的含义就是「已置顶」，用的正是悬停那一档的样子（机器上「激活」的既有语言）。
-			-- 其余按钮 lit 恒等于 is_hover，一个字没变。
-			local lit = is_hover or (button.is_pin and state.ontop == true) or false
+			-- EMBYNIAN[topbar-pin-tilt] — 状态画在图钉的姿势上（用户令 2026-09-29「置顶不要长亮，改为非置顶
+			-- 的时候图标是斜的，置顶的时候恢复原样」）：未置顶斜 35°、置顶立正。角度取自
+			-- EmbyNian.Shell 那颗的 PinTiltDegrees（PlayerPage.Input.cs）—— 两头同一个姿势、同一份来历。
+			-- libass 的 \frz 正角是**逆时针**，集成那头 WinUI RotateTransform 正角是顺时针，所以这里取
+			-- 负号：-35 画出来与集成 +35 同一个方向（钉头向右倒）。ass:txt 的 opts.rotate 原生接这个标记
+			-- （lib/ass.lua），icon 把 opts 整包递下去，不用另开一路。旋转绕锚点（\an5 的字面中心）转，
+			-- 图标不会甩出那格底。上一版「已置顶整颗常亮」那一档（lit 认 state.ontop）同日撤下 —— lit 回到
+			-- 与其余几颗同一句 is_hover，亮与不亮只剩悬停那一层；is_pin 仍在，是姿势那一半的路标。
+			-- 状态来源没变：main.lua 观察 mpv 的 ontop 属性写 state.ontop，图钉立没立正跟着它走。
+			local lit = is_hover
+			local icon_rotate = button.is_pin and state.ontop ~= true and -35 or nil
 			local opacity = lit and 1 or config.opacity.controls
 			local button_fg = lit and (button.hover_fg or bg) or fg
 			local button_bg = lit and (button.hover_bg or fg) or bg
@@ -263,6 +268,7 @@ function TopBar:render()
 				border_color = button_bg,
 				opacity = visibility,
 				border = options.text_border * state.scale,
+				rotate = icon_rotate,
 			})
 
 			button_ax = button_ax + self.size

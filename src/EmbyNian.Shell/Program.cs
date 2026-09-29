@@ -28,6 +28,10 @@ public sealed record StartupOptions
 
     public string? ProbeCompositionFile { get; init; }
 
+    public bool ProbeSubtitles { get; init; }
+
+    public bool InspectSubtitles { get; init; }
+
     public bool ProbeCursor { get; init; }
 
     public string? ProbeCursorFile { get; init; }
@@ -237,6 +241,31 @@ internal static class Program
 
         var paths = AppPaths.Default;
 
+        if (RequestsSubtitleProbe(args))
+        {
+            try
+            {
+                ValidateSubtitleProbe(args);
+                using var mutex = new Mutex(false, SelfCheckRun.MutexName);
+                bool acquired;
+                try { acquired = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired) throw new InvalidOperationException("另一个诊断正在使用桌面");
+                try
+                {
+                    paths = new AppPaths(Path.Combine(paths.LogDirectory,
+                        $"subtitle-probe-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Environment.ProcessId}"));
+                    return Run(args, paths, migratedFrom: null, selfCheck: false);
+                }
+                finally { mutex.ReleaseMutex(); }
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"[失败] 字幕探针准备失败（{error.GetType().Name}）；未启动主程序");
+                return 1;
+            }
+        }
+
         // Includes malformed self-check/data requests: no migration, normal activation or probe may
         // run before this validation. Preparation errors never open a fallback client or print secrets.
         if (RequestsSelfCheck(args))
@@ -324,6 +353,8 @@ internal static class Program
             StartMaximized = Has(args, "--maximized"),
             SelfCheck = selfCheck,
             DumpUi = Has(args, "--dump-ui"),
+            ProbeSubtitles = RequestsSubtitleProbe(args),
+            InspectSubtitles = Text(args, "--probe-subtitles") == "inspect",
             ProbeComposition = CompositionPlaybackProbe.IsRequested(args),
             ProbeCompositionFile = Text(args, "--probe-composition"),
             ProbeCursor = CursorVisibilityProbe.IsRequested(args),
@@ -371,7 +402,8 @@ internal static class Program
             });
 
             Log.Info(Category, "正常退出");
-            return options.ProbeComposition ? CompositionPlaybackProbe.ExitCode
+            return options.ProbeSubtitles ? SubtitleSettingsProbe.ExitCode
+                : options.ProbeComposition ? CompositionPlaybackProbe.ExitCode
                 : options.ProbeCursor ? CursorVisibilityProbe.ExitCode
                 : options.ProbePlayerMotion ? PlayerMotionProbe.ExitCode : ShellSelfCheck.ExitCode;
         }

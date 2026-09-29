@@ -347,6 +347,10 @@ public sealed partial class PlayerPage : UserControl
         // 与这一页别的墨是不是同一个调子只能靠运气。放这里是因为它要的画刷刚刚由 PaintPalette 填好。
         SetStripGlyphInk(null);
 
+        // 底部那一排同上（2026-09-29 起它的墨也归 SetTransportGlyphInk 一笔笔管，见 PlayerPage.Input.cs）：
+        // 指针第一次到达之前先把常态的白写下去，别让常态的颜色靠图标的默认值碰运气。
+        SetTransportGlyphInk(null);
+
         // 换主题时那两支画上去的颜色（退场底、以及 Palette 里那些）要跟着翻。本页没有登记进
         // ThemeHost.Register —— RequestedTheme 是写死的 Dark，见标记 —— 所以只能自己听一声。
         WireExitTheme();
@@ -355,10 +359,10 @@ public sealed partial class PlayerPage : UserControl
         // 自己长的两个 Border（标题一块、剧名一块，见 PlayerPage.xaml 里 TitleBox／SubtitleBox 那段标记），上一版
         // 那段按文字栏高度算的 TitleGlassFit 与它的 TitleInset 一起删掉了 —— 两个数要手动对齐的那种账，能不算就不算。
 
-        // Same reasoning one step further: the pin's two states — whether it is lit (底与图标色), the name a
-        // screen reader gets, the tooltip — are written by one method, so the markup carries no second copy of
-        // the starting state for them to drift out of step with. The window is not attached yet, which
-        // SetPinned allows for.
+        // Same reasoning one step further: the pin's two states — whether the glyph is tilted (图钉的姿势),
+        // the name a screen reader gets, the tooltip — are written by one method, so the markup carries no
+        // second copy of the starting state for them to drift out of step with. The window is not attached
+        // yet, which SetPinned allows for.
         SetPinned(false);
         WireTransport();
 
@@ -959,6 +963,14 @@ public sealed partial class PlayerPage : UserControl
         var opening = _paused is null;
         _paused = status.Paused;
         if (!opening && !ViewModel.TimelinePauseFeedbackSuppressed) Pulse(status.Paused);
+
+        // 置顶跟着播放状态走（用户令 2026-09-29「播放时自动置顶，暂停时自动取消置顶」）：在播＝立起，
+        // 暂停＝放下。手动那颗（按钮／T 键）仍即时生效，但只撑到下一条边沿 —— 边沿一来，状态归播放说了算；
+        // 记账也不落盘（写设置的只有用户亲手拨的那一下，见 TogglePinByHand）。两道守卫：
+        // 独占模式不归这里管（画面在 mpv 自己的窗里，主窗口保持可浏览；那一头由 main.lua 的
+        // EMBYNIAN[ontop-follows-pause] 直接跟 mpv 的 pause 属性）；下了台也不跟（LeavePlayer 已放下，
+        // 迟到的状态不许把浏览中的主窗口又按到顶上去）。
+        if (_onStage && ViewModel.PictureInHostWindow) SetPinned(!status.Paused);
     }
 
     /// <summary>

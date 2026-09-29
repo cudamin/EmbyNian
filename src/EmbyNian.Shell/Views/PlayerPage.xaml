@@ -235,7 +235,7 @@
              四颗各 35 见方、彼此隔 5，整排仍是 4 × 40 ＝ 160 的占位、贴右上角、右缘让 5。于是屏幕上看得见的
              方块与独占一样大，**点击格与贴角位置一个字没动**（自检那两条「35×35」与「格距仍是 40」一起钉）。
              置顶那颗的**状态**也跟着换成独占总表示法（见 `WindowButtons` 那段与 `SetPinned`）：一颗实心
-             图钉 + 已置顶时**整颗常亮**。 -->
+             图钉（2026-09-29 起状态画在姿势上 —— 未置顶斜 35°、置顶立正，「整颗常亮」那一档同日撤下）。 -->
         <Style x:Key="WindowGlyphStyle" TargetType="FontIcon" BasedOn="{StaticResource OsdGlyphStyle}">
             <Setter Property="FontSize" Value="13.125" />
         </Style>
@@ -690,8 +690,11 @@
 
                  置顶那颗**一个人一颗图钉**（2026-09-28 深夜第五批，用户令「把集成模式右上角的置顶图标换成跟
                  独占模式一样的」）：**实心 `push_pin`**，几何与尺寸都从独占那一头来（来历见 `WindowGlyphStyle`
-                 那段与 `PinGlyph` 的 Data），**已置顶时整颗常亮**（底换悬停那一档的白、图标转深色 —— 就是独占
-                 `lit = is_hover or (button.is_pin and state.ontop)` 那一句），不再有「两颗图钉切换」那回事。
+                 那段与 `PinGlyph` 的 Data）。**状态画在图钉的姿势上**（2026-09-29，用户令「置顶不要长亮，改为
+                 非置顶的时候图标是斜的，置顶的时候恢复原样」）：未置顶斜 35°、置顶立正（角度归
+                 `SetPinned`，见 `PinTiltDegrees`；独占那头同一批换，`TopBar.lua` 的
+                 EMBYNIAN[topbar-pin-tilt]），不再有「两颗图钉切换」，也不再有「已置顶时整颗常亮」那层底 ——
+                 底从此与其余几颗同一套，只剩悬停/按下那两档。
                  它的名字与 tooltip 不在这里写：SetPinned 两边一起写，因为两者都得说出当前是哪一档。
 
                  三颗窗口命令**全档都在**，全屏那一档也不例外：最右边那颗在全屏时换成「还原」的图标、点下去
@@ -710,17 +713,16 @@
                  只能是半透明白，理由见 `PlayerPalette.StripHoverAlpha` 的注释），关闭那颗是系统 caption 关闭键
                  的红（`#C42B1C`，按下压暗一成），也就是首页那颗的样子。
                  （统计那颗撤下后白底那几颗只剩三颗，调色板与自检名单同步收窄。）
-                 （**置顶那颗已置顶时的常亮用的就是同一支白** —— SetPinned 把 `PlayerStripHoverBrush` 写进控件
-                 自己的 `Background`，模板在 Normal 那一态照 `TemplateBinding` 画它，所以那一支同时也是「没有指针
-                 压着时的底」，底色这一半不必另起一支；图标那一半同样归 `SetStripGlyphInk`。）
+                 （置顶那颗 2026-09-29 起不再有已置顶那一档的底，上一版「SetPinned 把
+                 `PlayerStripHoverBrush` 写进控件自己的 Background」那半条随之撤下 —— 常驻底这一问回到
+                 「四颗都没有」一条上。图标那一半仍归 `SetStripGlyphInk`。）
 
                  <p>**白底上的图标归 C# 换**（同一条令里问实的那一半）：那几颗的图标本身是白的，压在白上会糊成
                  一片，所以悬停时转深色 —— 而模板那两态换的是 `ContentPresenter.Foreground`，`FontIcon`／
                  `PathIcon` 的 Foreground **不从那里继承下来**（实测：模板那一层换了、图标还是白的），于是这一条
                  走 `SetStripGlyphInk`，由这一栏的 `PointerMoved`／`PointerExited` 推。**只换指针压着的那一颗**
-                 （第一版写成四颗一起换，用户当场问「怎么是四个按钮一起变色」）。**置顶那颗多一个理由**：已置顶时
-                 它也要转深色（那时它常亮着、底是白的，白底上留白图标会糊成一片）—— 于是它由「指针压着**或**已
-                 置顶」推出，这也是 `SetStripGlyphInk` 要记住 `_pinned` 与指针此刻压着哪一颗的原因。
+                 （第一版写成四颗一起换，用户当场问「怎么是四个按钮一起变色」）。置顶那颗 2026-09-29 起与其余
+                 几颗同一句：常亮那一档撤了，墨色不再由置顶状态钉在深色上，只看指针。
                  关闭那颗不进这一条
                  （红底上的白叉本来就是对的）。自检走 `VisualStateManager.GoToState` 把两态推上去读模板里的底与
                  前景，另外**逐颗**调 `SetStripGlyphInk`、把每一颗自己的墨与其余几颗都读一遍 —— 照片拍不到这几档
@@ -753,14 +755,21 @@
                         <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
                     </Button.Resources>
                     <!-- 外面这层 Viewbox 是**两档尺寸**的落点（见 WindowPinGlyph）：PathIcon 不缩放几何，那份
-                         Data 的坐标只对应窗口档那一对实框，全屏档要放大 1.3 就只能在框上做。 -->
+                         Data 的坐标只对应窗口档那一对实框，全屏档要放大 1.3 就只能在框上做。
+                         也是**姿势的转轴**（2026-09-29，未置顶斜 35°、置顶立正，角度归 SetPinned 的
+                         PinTiltDegrees）：原点钉在框心 —— RenderTransform 不进布局，两档实框的读数不受搅动；
+                         斜过来后墨迹的外接框约 16×17（窗口档），35 见方的格装得下。 -->
                     <Viewbox
                         x:Name="PinGlyphBox"
                         Width="9.793"
                         Height="14"
                         Stretch="Uniform"
                         HorizontalAlignment="Center"
-                        VerticalAlignment="Center">
+                        VerticalAlignment="Center"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Viewbox.RenderTransform>
+                            <RotateTransform Angle="35" />
+                        </Viewbox.RenderTransform>
                         <PathIcon
                             x:Name="PinGlyph"
                             Width="9.793"
@@ -981,7 +990,18 @@
         <Grid x:Name="Bar" VerticalAlignment="Bottom"
               SizeChanged="OnBarResized" Visibility="Collapsed">
             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="31" /></Grid.RowDefinitions>
-            <Grid x:Name="TransportRow" Margin="8,8,8,8" ColumnSpacing="2" SizeChanged="OnTransportResized">
+            <Grid x:Name="TransportRow" Margin="8,8,8,8" ColumnSpacing="2" SizeChanged="OnTransportResized"
+                  PointerMoved="OnTransportPointerMoved" PointerExited="OnTransportPointerExited">
+                <!-- 这一整排按钮的悬停/按下两档（用户令 2026-09-29「集成模式进度条上方的按钮，鼠标移动到按钮上
+                     时背景过于透明，请参考右上角的按钮进行修改」）：照右上那几颗的同一套 —— 框架模板那两态
+                     的默认底压在画面上几乎看不见（「过于透明」的就是它），把那四个键按到调色板上：底＝半透明
+                     的白（悬停 0xCC／按下 0xE6，同 PlayerPalette.StripHoverAlpha 那笔账），前景＝白底上的深墨。
+                     **一排 13 颗、每颗自己一份**（下面各自的 Button.Resources，与右上那批、跳过那颗同一手法）：
+                     第一版写在 TransportRow 的行字典里图省事，当轮自检红 —— 事后查明红的主因是自检把
+                     ArrangeTransport **收掉的按钮**也拿去量（模板不物化，读回空，红得冤枉；在屏的那四颗走
+                     行字典倒是过的）。但那轮已经多花一趟，这里就不再替「祖先字典」那一路赌第二轮，
+                     换成全页统一的每颗自己的一份。图标墨色那半不在这里 —— 模板换不到 FontIcon 的
+                     Foreground，由 SetTransportGlyphInk 随指针一笔笔写（与右上同一句，见 PlayerPage.Input.cs）。 -->
                 <!-- 按钮条按指针离底边的近度淡入（用户令 2026-09-27「参独占模式鼠标位置越靠近窗口下方按钮条
                      越明显」）：强度是 ChromeReveal.BarStrength，页面写在这一行的 Opacity 上；进度条（下面的
                      SeekTrack）用同一条强度长高。只淡按钮这一行，进度条那一行另走裁剪生长。 -->
@@ -994,32 +1014,80 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel x:Name="TransportLeft" Orientation="Horizontal" Spacing="2" VerticalAlignment="Bottom">
                     <Button x:Name="PreviousButton" x:Uid="PlayerPage_PreviousButton" Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.PreviousEpisodeCommand}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE892;" Style="{StaticResource TransportGlyphStyle}" />
                     </Button>
                     <Button x:Name="PlayButton" x:Uid="PlayerPage_PlayButton" Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.TogglePauseCommand}" AutomationProperties.AcceleratorKey="Space">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon x:Name="PlayGlyph" Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" Style="{StaticResource TransportGlyphStyle}" />
                     </Button>
                     <Button x:Name="NextButton" x:Uid="PlayerPage_NextButton" Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.NextEpisodeCommand}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE893;" Style="{StaticResource TransportGlyphStyle}" />
                     </Button>
                     <Button x:Name="TransportStatsButton"  Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.CycleStatsCommand}" AutomationProperties.Name="统计" ToolTipService.ToolTip="统计">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE9D9;" Style="{StaticResource TransportGlyphStyle}" />
                     </Button>
                     <Button x:Name="ChapterButton"  Style="{StaticResource TransportButtonStyle}" AutomationProperties.Name="章节" ToolTipService.ToolTip="章节">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE8FD;" Style="{StaticResource TransportGlyphStyle}" />
                         <Button.Flyout><MenuFlyout x:Name="ChapterMenu" Placement="Top" Opening="OnChapterMenuOpening" /></Button.Flyout>
                     </Button>
                     <Button x:Name="EpisodeButton" x:Uid="PlayerPage_EpisodeButton" Style="{StaticResource TransportButtonStyle}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE8F1;" Style="{StaticResource TransportGlyphStyle}" />
                         <Button.Flyout><MenuFlyout x:Name="EpisodeMenu" Placement="Top" Opening="OnEpisodeMenuOpening" /></Button.Flyout>
                     </Button>
                     <Button x:Name="VersionButton" x:Uid="PlayerPage_VersionButton" Style="{StaticResource TransportButtonStyle}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE8B7;" Style="{StaticResource TransportGlyphStyle}" />
                         <Button.Flyout><MenuFlyout x:Name="VersionMenu" Placement="Top" Opening="OnVersionMenuOpening" /></Button.Flyout>
                     </Button>
                 </StackPanel>
                 <StackPanel x:Name="TransportMiddle" Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Bottom">
                     <Button x:Name="PreviousChapterButton" VerticalAlignment="Bottom"  Style="{StaticResource TransportButtonStyle}" Click="OnPreviousChapter" AutomationProperties.Name="上一章节" ToolTipService.ToolTip="上一章节">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE892;" Style="{StaticResource TransportGlyphStyle}" />
                     </Button>
                     <Grid x:Name="SpeedStrip" Width="146" Height="42" Background="{StaticResource PlayerRailBrush}">
@@ -1036,6 +1104,13 @@
                     </Grid>
                     <Button x:Name="SpeedButton"
                 x:Uid="PlayerPage_SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource TransportButtonStyle}" Width="64" Visibility="Collapsed">
+                        <!-- 文字倍速键同一套悬停（内容是 TextBlock，跟着模板前景走，白底上字转深）。 -->
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <Button.Flyout>
                             <Flyout x:Name="SpeedWheelFlyout" Placement="Top" Opened="OnSpeedWheelOpened" Closed="OnSpeedWheelClosed">
                                 <Flyout.FlyoutPresenterStyle>
@@ -1075,6 +1150,12 @@
                     </Button>
 
                     <Button x:Name="NextChapterButton" VerticalAlignment="Bottom"  Style="{StaticResource TransportButtonStyle}" Click="OnNextChapter" AutomationProperties.Name="下一章节" ToolTipService.ToolTip="下一章节">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE893;" Style="{StaticResource TransportGlyphStyle}" />
                     </Button>
                 </StackPanel>
@@ -1085,14 +1166,32 @@
                          AudioButton 的右边距（＝格宽，XAML 初值 32 是窗口档），行缝由 StackPanel 的 Spacing 在
                          它右侧补上，全屏键照旧钉在右缘；全屏/最大化档随 ApplyTransportScale 摆成 42。 -->
                     <Button x:Name="SubtitleButton" x:Uid="PlayerPage_SubtitleButton" Style="{StaticResource TransportButtonStyle}" >
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xED1E;" Style="{StaticResource TransportGlyphStyle}" />
                         <Button.Flyout><MenuFlyout x:Name="SubtitleMenu" Placement="Top" Opening="OnSubtitleMenuOpening" /></Button.Flyout>
                     </Button>
                     <Button x:Name="AudioButton" x:Uid="PlayerPage_AudioButton" Style="{StaticResource TransportButtonStyle}" Margin="0,0,32,0" >
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon Glyph="&#xE8D6;" Style="{StaticResource TransportGlyphStyle}" />
                         <Button.Flyout><MenuFlyout x:Name="AudioMenu" Placement="Top" Opening="OnAudioMenuOpening" /></Button.Flyout>
                     </Button>
                     <Button x:Name="FullscreenButton" x:Uid="PlayerPage_FullscreenButton" Style="{StaticResource TransportButtonStyle}" Click="OnToggleFullscreen" AutomationProperties.AcceleratorKey="F">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
                         <FontIcon x:Name="FullscreenGlyph" Glyph="&#xE740;" Style="{StaticResource TransportGlyphStyle}" />
                     </Button>
                 </StackPanel>

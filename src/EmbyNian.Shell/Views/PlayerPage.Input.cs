@@ -52,15 +52,14 @@ public sealed partial class PlayerPage : IWin32KeySink
     private long _foregroundSinceAt;
 
     /// <summary>
-    /// 置顶此刻是不是开着（<c>HostWindow.TopMost</c> 在这一页的副本）。
-    /// <para>
-    /// 它只有一个用处：<see cref="SetStripGlyphInk"/> 要给置顶那颗图标算颜色 —— 已置顶时那颗**常亮**
-    /// （深色图标压在半透明白底上），与指针在不在它上面无关。去问窗口那个属性也行，但那个方法在
-    /// <see cref="Attach"/> 之前就被构造函数调用过（那时还没有窗口），而且 <see cref="SetPinned"/> 是这一页
-    /// 唯一能改那面旗子的地方 —— 本地留一份就不必每拍去问，也不必在还没接线时编一个答案。
-    /// </para>
+    /// 未置顶那一档图钉的倾角（度）。用户令 2026-09-29「置顶不要长亮，改为非置顶的时候图标是斜的，置顶的时候
+    /// 恢复原样」：状态不再画在底色上（那一档整颗常亮的画法同日撤下），改画在**图钉自己的姿势**上 —— 未置顶
+    /// 斜着、置顶立正。方向取顺时针（WinUI RotateTransform 正角＝顺时针，钉头向右倒），独占那头 libass 的
+    /// <c>\frz</c> 正角是逆时针，所以那边取负号 —— 两头同一个姿势（见 <c>TopBar.lua</c> 的
+    /// EMBYNIAN[topbar-pin-tilt]）。35° 与悬停白底那一格（35 见方）相安：斜过来后墨迹的外接框约 16×17，
+    /// 离格缘还有余量。
     /// </summary>
-    private bool _pinned;
+    internal const double PinTiltDegrees = 35;
 
     /// <summary>
     /// 指针此刻压在这一栏的哪一颗上（<see cref="SetStripGlyphInk"/> 的上一拍结论）。
@@ -844,6 +843,11 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// 还要把选择记进设置（「对播放页面"是否置顶"的设置进行持久化保存，程序重启后仍保留上次选择」，
     /// 2026-09-15）：恢复进场那一档是 <c>EnterPlayer</c> 的事，探针与退出播放的放下不记账，只有用户
     /// 亲手拨的这一下才算数。
+    /// <para>
+    /// **2026-09-29 起置顶跟着播放状态走了**（用户令「播放时自动置顶，暂停时自动取消置顶」，见
+    /// <c>OnStatusApplied</c>）：这一下仍然立即生效，但只撑到下一条播放/暂停边沿 —— 边沿一来，状态归播放
+    /// 说了算。记账照旧只认亲手拨的这一下，自动跟随不落盘。
+    /// </para>
     /// </summary>
     private void TogglePinByHand()
     {
@@ -864,11 +868,11 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// been the right shape all along — one real piece of state on the window, one glyph swapped on screen.
     /// </para>
     /// <para>
-    /// <b>已置顶那一档 2026-09-28 深夜第五批改过</b>（用户令「把集成模式右上角的置顶图标换成跟独占模式
-    /// 一样的」）：从前这里换的是**两颗画出来的图钉**（躺着那颗空心钉／立着那颗实心钉），现在只有**一颗**
-    /// —— 独占同一支字体的 <c>push_pin</c>，连形状都是从那支字体里取的轮廓。状态改由「整颗常亮」表示，
-    /// 就是独占那一头 <c>elements/TopBar.lua</c> 里 <c>lit = is_hover or state.ontop</c> 的写法：已置顶＝
-    /// 底换成悬停那一档的白、图标转深色；未置顶＝没有底、图标白（与这一排其余几颗同款）。
+    /// <b>已置顶那一档 2026-09-29 又改过一次</b>（用户令「置顶不要长亮，改为非置顶的时候图标是斜的，置顶的
+    /// 时候恢复原样」）：上一版（2026-09-28 深夜第五批）状态由「整颗常亮」表示 —— 底换成悬停那一档的白、
+    /// 图标转深色；用户不要那层长亮的底了，状态改画在**图钉的姿势**上：未置顶斜着（<see cref="PinTiltDegrees"/>）、
+    /// 置顶立正，底与墨色从此与其余几颗同一套（只有悬停那一句）。独占那头同一批换（<c>TopBar.lua</c> 的
+    /// EMBYNIAN[topbar-pin-tilt]），两边的姿势同一个方向。
     /// </para>
     /// <para>
     /// The window is checked for null separately because the page's constructor calls this before
@@ -880,14 +884,13 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         if (_window is not null) _window.TopMost = pinned;
 
-        _pinned = pinned;
+        // 状态画在图钉的姿势上（用户令 2026-09-29）：未置顶斜着、置顶立正。转的是外面的 Viewbox（两档尺寸
+        // 的落点），RenderTransform 不进布局，两档的实框读数不受它搅动；原点写死在 XAML 的
+        // RenderTransformOrigin（0.5,0.5），这里只动角度。常亮那一层底同日撤下 —— 底从此只有悬停/按下
+        // 模板那两档，与其余几颗同一套。
+        if (PinGlyphBox.RenderTransform is Microsoft.UI.Xaml.Media.RotateTransform tilt)
+            tilt.Angle = pinned ? 0 : PinTiltDegrees;
 
-        // 常亮那一层：底走控件自己的 Background（模板在 Normal 那一态就照它画；指针压上去/按下时模板另有
-        // 那两支资源字典里的刷子，见 PlayerPage.xaml 那一栏的标记），图标色交给 SetStripGlyphInk ——
-        // 白底上的白图标会糊成一片，理由与悬停那一档同一条。
-        PinButton.Background = pinned && Resources["PlayerStripHoverBrush"] is Brush lit
-            ? lit
-            : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         SetStripGlyphInk(_stripHot);
 
         AutomationProperties.SetName(PinButton, PinIndicator.Name(pinned));
@@ -947,14 +950,14 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     /// <summary>
     /// 这几颗的图标此刻各是什么色：<paramref name="hot"/> 那一颗（指针压着的）用深色，其余几颗回白；
-    /// 传 null 就是全白（指针不在这几颗上）—— 只有置顶那颗已置顶的时候是例外，那时它常亮着，与指针无关。
+    /// 传 null 就是全白（指针不在这几颗上）。
     /// <para>
     /// 关闭那颗**不在名单里**：它悬停时是红的，红底上的白叉本来就是对的（用户令只说「这四个按钮」）。
     /// </para>
     /// <para>
-    /// 置顶那颗有两个理由转深色：指针压着它，**或者它已经置顶** —— 那时它整颗常亮，底是悬停那一档的白
-    /// （<see cref="SetPinned"/> 摆的），白底上留白图标就会糊成一片。这一句就是独占
-    /// <c>elements/TopBar.lua</c> 里的 <c>lit = is_hover or (button.is_pin and state.ontop)</c>。
+    /// 置顶那颗 2026-09-29 起与其余两颗同一句：状态改画在图钉的姿势上（<see cref="SetPinned"/>），不再有
+    /// 「已置顶时常亮、墨色跟着钉死在深色」那一档 —— 独占 <c>TopBar.lua</c> 里
+    /// <c>lit = is_hover or (button.is_pin and state.ontop)</c> 那半句同日一起撤。
     /// </para>
     /// </summary>
     internal void SetStripGlyphInk(Button? hot)
@@ -964,9 +967,65 @@ public sealed partial class PlayerPage : IWin32KeySink
         if (Resources["PlayerStripHoverInkBrush"] is not Brush ink) return;
         if (Resources["PlayerInkBrush"] is not Brush rest) return;
 
-        PinGlyph.Foreground = _pinned || ReferenceEquals(hot, PinButton) ? ink : rest;
+        PinGlyph.Foreground = ReferenceEquals(hot, PinButton) ? ink : rest;
         MinimizeGlyph.Foreground = ReferenceEquals(hot, MinimizeButton) ? ink : rest;
         MaximizeGlyph.Foreground = ReferenceEquals(hot, MaximizeButton) ? ink : rest;
+    }
+
+    // ---- 底部那一排按钮（进度条上方）------------------------------------------------
+    //
+    // 悬停/按下两档与右上那几颗同一套（用户令 2026-09-29「集成模式进度条上方的按钮，鼠标移动到按钮上时
+    // 背景过于透明，请参考右上角的按钮进行修改」）。底与前景那半归框架的 Button 模板：那四个键按在这一行
+    // 的行字典里（见 PlayerPage.xaml 的 TransportRow），模板进两态就取用。图标墨色这半只能走这里 ——
+    // 理由与右上那句相同：模板换的是 ContentPresenter.Foreground，FontIcon 的 Foreground 不从那里继承下来
+    // （2026-09-27 实测）。
+
+    /// <summary>
+    /// 指针在这一排里动一下：把**压着的那一颗**的图标换成深色，其余几颗回白。
+    /// <para>
+    /// 判据与右上那一条同一句：取自事件源往上的祖先链（到 TransportRow 为止），不按 PointerEntered／
+    /// PointerExited 的先后判 —— 那两个事件的先后没有保证。一排里**每一颗都入名单**（没有右上那颗
+    /// 「关闭」那样的例外：这一排悬停一律是白底）。
+    /// </para>
+    /// </summary>
+    private void OnTransportPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        Button? under = null;
+
+        for (var node = e.OriginalSource as DependencyObject;
+             node is not null && !ReferenceEquals(node, TransportRow);
+             node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is Button button) { under = button; break; }
+        }
+
+        SetTransportGlyphInk(under);
+    }
+
+    /// <summary>指针离开这一排（或落在排里的空处）—— 余下的几颗一起抬回白。</summary>
+    private void OnTransportPointerExited(object sender, PointerRoutedEventArgs e) => SetTransportGlyphInk(null);
+
+    /// <summary>这一排的按钮与各自内容里那颗 FontIcon，按行序排（倍速键的内容是文字，进不了这份名单）。</summary>
+    private IEnumerable<(Button Button, FontIcon Glyph)> TransportGlyphs()
+    {
+        foreach (var group in new[] { TransportLeft, TransportMiddle, TransportRight })
+            foreach (var child in group.Children)
+                if (child is Button button && button.Content is FontIcon glyph)
+                    yield return (button, glyph);
+    }
+
+    /// <summary>
+    /// 底部一排的图标此刻各是什么色：<paramref name="hot"/> 那一颗（指针压着的）用深色，其余几颗回白；
+    /// 传 null 就是全白（指针不在这一排上）。与 <see cref="SetStripGlyphInk"/> 同一句话的另一份名单 ——
+    /// 那一份管右上（关闭那颗例外），这一份管底部（没有例外）。
+    /// </summary>
+    internal void SetTransportGlyphInk(Button? hot)
+    {
+        if (Resources["PlayerStripHoverInkBrush"] is not Brush ink) return;
+        if (Resources["PlayerInkBrush"] is not Brush rest) return;
+
+        foreach (var (button, glyph) in TransportGlyphs())
+            glyph.Foreground = ReferenceEquals(hot, button) ? ink : rest;
     }
 
     private void OnMinimizeWindow(object sender, RoutedEventArgs e) => _window?.Minimize();

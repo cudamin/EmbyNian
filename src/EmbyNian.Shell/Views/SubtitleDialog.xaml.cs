@@ -52,6 +52,10 @@ public sealed partial class SubtitleDialog : ContentDialog
     private readonly Func<string, Task<List<RemoteSubtitleInfo>>> _search;
     private readonly Func<RemoteSubtitleInfo, Task> _download;
     private readonly Func<MediaStream, Task> _delete;
+    private readonly string _sourceLabel;
+    private SubtitleTrack? _pendingDelete;
+    private Button? _deleteButton;
+    private bool _deleting;
 
     private readonly ObservableCollection<SubtitleTrack> _tracks = [];
     private readonly ObservableCollection<SubtitleCandidate> _results = [];
@@ -71,6 +75,12 @@ public sealed partial class SubtitleDialog : ContentDialog
         _search = search;
         _download = download;
         _delete = delete;
+        _sourceLabel = ItemDetail.SourceLabel(source);
+        Closing += (_, args) =>
+        {
+            if (_deleting) args.Cancel = true;
+            else CancelDelete();
+        };
 
         // 只列外挂的：内嵌在容器里的那些服务器删不掉，摆一颗按不动的「删除」在旁边只会让人以为坏了。
         foreach (var stream in source.SubtitleStreams.Where(stream => stream.IsExternal))
@@ -166,30 +176,108 @@ public sealed partial class SubtitleDialog : ContentDialog
         }
     }
 
-    /// <summary>
-    /// 删掉一条外挂字幕。删的是服务器上的那个字幕文件，不可撤销 —— 但它随时能再搜一条回来，所以这里不再问
-    /// 一句：一层层确认会让「删掉三条不对的字幕」变成六次点击。
-    /// </summary>
-    private async void OnDelete(object sender, RoutedEventArgs e)
+    private void OnDelete(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { DataContext: SubtitleTrack track } button) return;
+        if (_deleting || sender is not Button { DataContext: SubtitleTrack track } button) return;
+        BeginDelete(track, button);
+    }
 
-        button.IsEnabled = false;
+    private void BeginDelete(SubtitleTrack track, Button? button = null)
+    {
+        CancelDelete();
+        _pendingDelete = track;
+        _deleteButton = button;
+        if (button is not null) button.IsEnabled = false;
+        // ContentDialog cannot open another ContentDialog on its UI thread.
+        DeleteConfirmationText.Text = $"字幕：{track.Label}\n媒体文件：{_sourceLabel}\n"
+            + "将永久删除服务器上的字幕文件，影响此媒体库中的其他用户；不是仅从本次播放移除，无法撤销。";
+        DeleteConfirmation.Visibility = Visibility.Visible;
+        CancelDeleteButton.Focus(FocusState.Programmatic);
+    }
+
+    private void OnCancelDelete(object sender, RoutedEventArgs e) => CancelDelete();
+
+    private void CancelDelete()
+    {
+        if (_deleting) return;
+        _pendingDelete = null;
+        DeleteConfirmation.Visibility = Visibility.Collapsed;
+        if (_deleteButton is { } button)
+        {
+            button.IsEnabled = true;
+            button.Focus(FocusState.Programmatic);
+        }
+        _deleteButton = null;
+    }
+
+    private async void OnConfirmDelete(object sender, RoutedEventArgs e) => await DeleteConfirmedAsync();
+
+    internal void ShowDeleteConfirmationForProbe()
+    {
+        if (App.Instance?.SubtitleProbeActive == true && _tracks.Count > 0) BeginDelete(_tracks[0]);
+    }
+
+    internal static async Task<(bool Ok, string Detail)> ProbeDeleteConfirmationAsync()
+    {
+        var stream = new MediaStream { Index = 1, Type = "Subtitle", Codec = "srt", IsExternal = true, Title = "离线字幕" };
+        var source = new MediaSource { Id = "fixture", Name = "离线文件", MediaStreams = [stream] };
+        var calls = 0;
+        var fail = false;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialog = new SubtitleDialog(new EmbyItem { Id = "fixture", Name = "离线夹具" }, source,
+            _ => Task.FromResult(new List<RemoteSubtitleInfo>()), _ => Task.CompletedTask,
+            _ => { calls++; return fail ? Task.FromException(new IOException("模拟失败")) : completion.Task; });
+        var track = dialog._tracks[0];
+        dialog.BeginDelete(track);
+        var asked = calls == 0 && !dialog.Touched && dialog.DeleteConfirmation.Visibility == Visibility.Visible
+            && dialog.DeleteConfirmationText.Text.Contains("无法撤销");
+        dialog.CancelDelete();
+        await dialog.DeleteConfirmedAsync();
+        var cancelled = calls == 0 && dialog._tracks.Count == 1 && !dialog.Touched;
+        fail = true;
+        dialog.BeginDelete(track);
+        await dialog.DeleteConfirmedAsync();
+        var failed = calls == 1 && dialog._tracks.Count == 1 && !dialog.Touched && !dialog._deleting;
+        fail = false;
+        dialog.BeginDelete(track);
+        var pending = dialog.DeleteConfirmedAsync();
+        await dialog.DeleteConfirmedAsync();
+        var once = calls == 2 && dialog._deleting;
+        completion.SetResult();
+        await pending;
+        var deleted = dialog._tracks.Count == 0 && dialog.Touched && !dialog._deleting;
+        return (asked && cancelled && failed && once && deleted,
+            $"假委托：确认前零请求={asked}、取消={cancelled}、失败保留={failed}、重复点击只发一次={once}、确认后删除={deleted}");
+    }
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_deleting || _pendingDelete is not { } track || !_tracks.Contains(track)) return;
+        _deleting = true;
+        ConfirmDeleteButton.IsEnabled = false;
+        CancelDeleteButton.IsEnabled = false;
+        Tracks.IsEnabled = false;
 
         try
         {
             await _delete(track.Stream).ConfigureAwait(true);
-
             _tracks.Remove(track);
             ShowTracks();
             Touched = true;
-            Say($"已删除「{track.Label}」。");
+            Say($"已删除服务器字幕「{track.Label}」。");
         }
         catch (Exception error)
         {
             Log.Warn(Category, "删除字幕失败", error);
             Say($"删除字幕失败：{Failure.Describe(error)}");
-            button.IsEnabled = true;
+        }
+        finally
+        {
+            _deleting = false;
+            ConfirmDeleteButton.IsEnabled = true;
+            CancelDeleteButton.IsEnabled = true;
+            Tracks.IsEnabled = true;
+            CancelDelete();
         }
     }
 }

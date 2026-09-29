@@ -2,6 +2,37 @@
 
 最后更新：2026-09-29
 
+## 字幕审查问题修复收尾：选轨、预览、颜色、保存反馈和删除确认；新增离线探针与项目技能（2026-09-29）
+
+用户要求：对字幕设置审查后开始修复，修完生成技能；最多一个子代理同时运行，限流自动重试。本会话没有执行 Git 提交/推送。共享树期间其他会话提交了部分在途 Core 改动（当前 HEAD `982dea6` 已包含一部分），因此本条按完整当前源码和运行证据交付，不把“diff 变小”当代码被撤回，也不覆盖其他会话的截图目录、播放器或分析器改动。
+
+**修复范围**：报告中的 12 项。外语判断不把“其他字幕”当作听得懂的语言，自动字幕按最终手选音轨判断；自动候选过滤不可播放外挂，详情页禁用并说明；严格默认字幕回退不再被标题评分改选，空语言表语义与文案一致；独占同窗换片重置主/次字幕可见性、次字幕选择/延迟/位置/样式。预览区支持不同长度双行、缩放和真实的逐行盒/整体背景盒角色，整体盒包住描边再加留白；HEX/RGB 以原始 RGB 为准，不经整数 HSV 反算丢精度；空底板颜色使用黑色但透明度仍生效。恢复/导入同步当前字幕；保存失败持久提示并可重试。删除服务器字幕先展示字幕名、媒体文件和不可撤销影响，确认前零请求，取消不删，重复确认只发一次。
+
+**新增验证入口**：`--probe-subtitles [inspect]`，Program 在迁移、真实设置加载和单实例信号之前隔离；只接受 screen/theme，拒绝与播放/正常导航/自检混用。新默认设置、禁止 HTTP 的处理器、无登录/PlaybackService、假字幕操作；与自检共用桌面互斥。真实挂树控件验证 HEX/RGB，不能用尚未 Loaded 的 TextBox 的静默 TextChanged 当失败或通过。参数验证测试、说明及 switch/handle 基线已同步。`inspect` 可留屏检查，普通模式运行后退出。
+
+**验证证据**：
+
+- 完整 Release 构建 0 警告/0 错误；当前测试 **1369/1369、0 失败、0 跳过**（包含大描边零留白的复核补测）。本轮受影响文件 `format whitespace --verify-no-changes --include …` 通过，`git diff --check` 通过。自动化扫描的 2 个无句柄控件仍在封面编辑对话框，新增字幕控件均有句柄。
+- 开发探针最终目录 `%LOCALAPPDATA%/EmbyNian/logs/subtitle-probe-20260929-122026712-14256/logs/`；发布探针 `subtitle-probe-20260929-122407878-27832/logs/`，退出码均 0。精确输入、禁选、删除确认/取消/失败/去重、保存失败/重试、恢复推送均通过；目录留有未保存提示、三种样式、150% 缩放、颜色与删除确认截图。真屏检查删除确认文案/取消保留和设置页预览、外观区域，无真实字幕写操作。
+- 裸 mpv（随包 v0.41.0-923）本地 SRT＋lavfi 换片：修前主可见性 no、次字幕 2/no；应用当前 Core 复位名单后为 **yes、no、yes**。当前 Core 夹具同时复核两方向手选音轨、通配语言、不可用外挂、严格默认回退与透明度端点。
+- 发布到 `artifacts/publish/win-x64`：**527 文件、300.7 MB、11 GLSL**，verify-publish 通过；发布 DLL SHA256 `40ca41f369064d6d73a8ef166c475e6a25c8c5c5a94efffd5a037029cb8950b2` 与 obj 编译产物一致。未改快捷方式、未打新版本或安装包。
+- 最终发布件闸门 4：`artifacts/selfcheck/run-6a1022373201469d9479df30575aecf8/logs/selfcheck-shell.txt`，179 项，**1 失败、0 消失、1 降级**，仍为「文件页文件选项」音频右边缘 590 超出可用 588。发布前旧件对照 `run-c4b90c9b67684fd8b47bc75c61a8416e` 同读数复现；其另一条「字幕示例预览跟着外观走」失败已在修复件消失。**完整闸门仍红，未更新 selfcheck-baseline 掩盖它。**
+
+**技能**：`.agents/skills/embynian-subtitles/SKILL.md`＋`references/test-matrix.md`，按标准项目技能目录安装；元数据、路径和文档链接检查通过，串行复核三个试用提示后补上审查只读/扩展授权边界。它是静态场景验收，不声称新会话自动触发已实测；已有播放技能同步了选轨、底板与探针说明。
+
+**范围边界**：没有新增独立双字幕面板/AI/下载源，没有修改指定本地 mpv.conf，没有真实服务器播放、下载或删除字幕；普通自检可能只读登录真实库，不能称其离线。裸内核＋设置探针不代替完整独占 uosc/外部 mpv 实播，也未宣称 ASS/PGS/HDR 全场景视觉验收。
+
+## 引入三个 NuGet 分析器：Threading.Analyzers 18.7.23＋BannedApiAnalyzers 5.6.0＋Roslynator 5.0.0（2026-09-29 用户令「把你建议装的装上吧」，闸门 1/2/3 本域全绿；闸门 4 两条红 A/B 实证历版）
+
+用户原话：「把你建议装的装上吧」（前情：问了 CommunityToolkit.Mvvm 在不在用，之后点名 Threading.Analyzers、Roslynator、BannedApiAnalyzers 三件套）。
+
+**改法**：`Directory.Build.props` 新增一个 ItemGroup——三个 `PackageReference` 全 `PrivateAssets="all"`（编译期分析器不落发布件），**只进 Core 与 Shell，Tests 排除**（控制台跑器的同步等待是测试惯例，规则在测试里全是噪声）；Core 的「无运行时包」轻量选择不破。`tools/BannedSymbols.txt` 经 `AdditionalFiles` 进黑名单执法（RS0030），只收**当前源码零命中**的危险形式：Task.Wait 全重载、Task/Task&lt;T&gt;.GetAwaiter（`.GetAwaiter().GetResult()` 同步阻塞惯用式的必经入口）。刻意不收三样（理由写在 props 注释）：`Task<T>.Result`（四处 WhenAll/IsCompletedSuccessfully 守卫后读取是现行惯例）、`DateTime.Now`（四处刻意的本地时间）、`Thread.Sleep`（全在自检泵）。
+
+**实测与治理**（先测后接，每条降级在 .editorconfig 点名现场＋失效条件）：VSTHRD 首测 Core 一处**错误**（VSTHRD011 SharedWork 的 Lazy 工厂——构造上只启动异步工作从不阻塞，误报，降 suggestion 带失效条件）＋6 警告；Shell 38 警告（VSTHRD100 async void×19、VSTHRD003 跨上下文 await×17、VSTHRD101×2——全是 WinUI 事件模型既定写法）→ 三条降 suggestion。VSTHRD110 **保住 warning**：唯一命中 EmbyImageStore.PruneInBackground 改成 `_ = Task.Run(Prune)` 显式丢弃（与 SharedWork 同惯用式，行为零变化，本轮唯一产品代码改动）。BannedApi 两轮构建零命中。Roslynator 按承诺先实测：**6 处命中、3 条规则**（RCS1075 空 catch×3 全带注释兜底、RCS1194 异常构造器×2 单构造器是刻意设计、RCS1210 可空 Task 契约返回 null×1），量小可治理 → 保留，三条降 suggestion，调查记录 `work/roslynator-survey.md`；主包不含格式规则，格式辖区仍是闸门 1 的 dotnet format。
+
+- **验证**：闸门 1 构建 **0 警 0 错**（三包在场）＋空白检查过（顺手治掉 `SubtitleBehaviorTests.cs` 两行折行——上一轮记录的树级遗留红，token 零变化）；闸门 2 单测 **1359/1363，4 红用 HEAD 干净工作树 A/B 一字不差重现**（982dea6 提交态自带，与字幕窗口在途归因记录吻合，非本轮）；闸门 3 发布 527 文件/300.6 MB/11 GLSL，新鲜度三判据全中（publish dll==obj 重编产物；dll/PRI 与 stale/publish-win-x64-180449 双 DIFF）；闸门 4 自检 2 处降级（「文件页文件选项」「字幕示例预览跟着外观走」）——对旧 exe 同尺 A/B **一字不差重现＝历版红**，与上一条元数据轮的归因记录同源；在案多日的「窗口命令按钮」红本轮两轮自检均未出现。桌面快捷方式即指新发布目录。
+- **代价与边界**：六条降级规则在构建不拦、IDE 可见——失效条件到了必须提回 warning，别让 suggestion 变永久后门；黑名单新收条目前必须先把现存调用清零（流程见 .editorconfig 头注释）。本轮文件（props/.editorconfig/BannedSymbols.txt/EmbyImageStore.cs/SubtitleBehaviorTests.cs 空白）未提交，与第六批补批同树待用户拍板。
+
 ## 播放页左上角元数据字号收一档、集成与独占两模式同步等大（2026-09-29 用户令，构建＋实拍探针＋发布＋闸门 4 本域绿；单测 4 红、自检 2 红均为他窗在途）
 
 用户原话：「左上角的的这个元数据缩小一点点，集成模式和独占模式大小要一致」。
@@ -864,6 +895,7 @@ Segoe Fluent Icons ≈ 0.875），逐颗对不齐，按平均算要乘 **0.75** 
 - **着色器切换两处修复**——①画质预设恢复（P2）：`MpvProfiles.Expand` 读运行中播放器的 `profile-list` JSON 把 `profile=fast/high-quality` 展开成真实选项，`ShaderSwitch.Options` 与 `InlineSwitch.FilmScoped` 都先展开基线再还原——此前关链会把 fast 的 bilinear 还原成出厂 lanczos（本机 libmpv 实测复现过），现在回落的是预设值；`SetShaderGroupAsync` 改走 `IPlayerControl.CommandAsync` 逐条下发并核对返回值，读不到 profile-list 或某条被拒就返回 false，不再「没核对就报成功」。②独占模式菜单（P2）：uosc 画面菜单顶部新增「着色器」子菜单（恢复设置方案/关闭/八档带链条描述），新契约键 `embynian-shader`（值域收窄到 off/auto/八档 id）；集成与独占同一份 `ApplyShaderGroup`，切换成功才钉住档位并提示，失败提示「未能完整应用」+ show-text。菜单另修两处：插值那行从单个 cycle 改成「开启（同时使用显示同步）」radio＋「关闭」——单开插值在音频同步下是无效组合；截图三行参数改为 scaled+subtitles/video/window 并按实际语义改名（旧的「屏上这一帧」实际按原始尺寸渲染，带门槛的着色器不跑）。
 - **反交错与文案修正**——`Deinterlace` bool → `DeinterlaceMode`（no/auto/yes，FromJson 迁移旧 bool 键），界面说明不再说「别的片源开了也没影响」；抖动「不抖动」更名「继承画质预设」、色彩范围「跟随片源标记」更名「自动（PC 全范围）」、插值算法里「mpv 自己的默认」删去（实测 oversample）、硬解目录补 auto-copy-safe/d3d12va-copy/nvdec-copy、渲染器目录删 dmabuf-wayland（Windows 没有这个 vo）、视频同步行说明改说「下次播放」的值（设置页本来就不动正在播的片子，旧「此刻生效」是句谎话）。
 - **验证**：构建 0 警 0 错、`format whitespace` 过、`git diff --check` 干净；单测 **1302/1302**（子代理修了两个跟不上新契约的测试桩并补 5 条回归：profile 展开、切档回落预设值、target-peak 只在 HDR 输出发、杜比 vf 开关、对比度恢复）；随包 libmpv 隔离句柄实测 14 个新参数值全部接受（screenshot 是命令不是选项，-5 属预期）；闸门 4 自检 **178 项全绿**——「视频同步…此刻生效」按更名流程改基线为「…下次播放的值」，新增「视频输出包含 HDR 与着色器」一条，另两条新增（倍速轮盘、隐藏功能下方说明收放）属同树其他在途批次、本次一并确认通过后录入基线。
+- **技能沉淀**——本轮地形落成随库技能 `embynian-video-output`（`.claude/skills/`，quick_validate 过）：选项四层书写顺序、内置管线锁定的 vo/gpu-api、画质预设展开（MpvProfiles）、HDR/杜比语义、抖动/去色带/插值的真实开关、运行时切换契约与不起播的隔离探针；CLAUDE.md 技能名单同步加了一行。
 - **补刀（对照审查报告回访时发现的尾巴）**——兼容性检查（`MpvRenderCheck`）此前仍读设置里存着、内置播放器根本不用的 vo/gpu-api：存量文件里的 gpu/d3d11 会编出「ravu 加载不上」的假提醒，默认 vulkan 则让内置真跑 d3d11 的 compute 卡顿永远报不出来。现在 `LibMpvPipelinePolicy` 把锁定的 gpu-next/d3d11 提成常量（`ForcedRenderer`/`ForcedApi`，Build 与检查同源），规划器对内置后端按事实问（`pipelineOwned` 分支：渲染不匹配的两条不再产出，compute 提醒给出降档/关着色器/改外部播放器这种用户真能做的建议）；单测 +1 钉住常量与契约不许漂。**单测 1303/1303**。
 - **没验证到（留实机）**：HDR/杜比设置的实机画面（需要 HDR 片源与 HDR 屏）、独占模式着色器子菜单的 uosc 观感、着色器切换失败提示的实机路径；**闸门 3 未跑——桌面快捷方式仍是旧版**，等这棵树的在途批次收敛后由整合会话一并发布。
 

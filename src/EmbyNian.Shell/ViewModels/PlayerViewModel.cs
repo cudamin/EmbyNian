@@ -821,17 +821,44 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>
     /// 播放页置顶的持久化偏好（<see cref="Configuration.PlaybackSettings.PinWindowTopmost"/>），页面进场时
     /// 按它把窗口立回上一回的那一档。读写分两口而不是一个属性，因为「读」在播放开始、而「写」只属于用户
-    /// 拨开关那一下 —— 探针和退出播放也会动窗口的置顶，那些都不许碰这份记账。
+    /// 拨开关那一下 —— 探针、退出播放与**播放/暂停的自动跟随**（2026-09-29 用户令「播放时自动置顶，暂停时
+    /// 自动取消置顶」）也会动窗口的置顶，那些都不许碰这份记账；播放一开始，第一条状态边沿就会按「在播」
+    /// 把它盖过去（见 PlayerPage.OnStatusApplied），它撑的只是进场到开播之间那一小段。
     /// </summary>
     internal bool SavedPinTopmost => Settings.Playback.PinWindowTopmost;
 
-    /// <summary>用户拨了置顶开关，记下来。同值不落盘，拨得再勤也只是内存里的一次比较。</summary>
+    /// <summary>用户拨了置顶开关，记下来。同值不落盘，拨得再勤也只是内存里的一次比较；自动跟随不记账 ——
+    /// 那是播放的状态，不是用户的偏好。</summary>
     internal void SavePinTopmost(bool pinned)
     {
         if (Settings.Playback.PinWindowTopmost == pinned) return;
 
         Settings.Playback.PinWindowTopmost = pinned;
         _settings.Save();
+    }
+
+    /// <summary>
+    /// 自检那关「置顶开关」用的钩子：<paramref name="value"/> 给了就把管线档/后端按到集成（只动内存，
+    /// 不落盘），传 null 只读不写；两讫都返回改前的值，探针的退出门拿它放回去。
+    /// <para>
+    /// 为什么要有它：<see cref="PictureInHostWindow"/> 在还没有会话时按设置推算，而这台机器的管线档是
+    /// 会被翻到独占的（「窗口命令按钮」那一条红过的环境病）—— 播放/暂停自动跟随那一关若照设置读，
+    /// 翻到独占的机器上就会假红。探针要的是那条代码路，不是这台机器此刻的口味，所以把两枚设置直接
+    /// 摆到集成再喂状态。
+    /// </para>
+    /// </summary>
+    internal VideoPipelineKind ProbeForcePipeline(VideoPipelineKind? value)
+    {
+        var was = Settings.Mpv.Pipeline;
+        if (value is { } forced) Settings.Mpv.Pipeline = forced;
+        return was;
+    }
+
+    internal MpvBackendKind ProbeForceBackend(MpvBackendKind? value)
+    {
+        var was = Settings.Mpv.Backend;
+        if (value is { } forced) Settings.Mpv.Backend = forced;
+        return was;
     }
 
     /// <summary>

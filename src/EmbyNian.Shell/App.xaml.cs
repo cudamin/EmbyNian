@@ -57,9 +57,17 @@ public partial class App : Application
 
     internal HostWindow? Window => _window;
 
+    internal bool SubtitleProbeActive => _options.ProbeSubtitles;
+
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         Instance = this;
+
+        if (_options.ProbeSubtitles)
+        {
+            _ = SubtitleSettingsProbe.RunAsync(_options);
+            return;
+        }
 
         // 与 Program.cs 的探针分派同一套次序（Composition → Cursor → Motion）：两个开关同时出现时，
         // 这里执行的那一个必须就是 Program 选定目录与退出码的那一个。

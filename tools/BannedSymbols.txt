@@ -1,0 +1,8 @@
+M:System.Threading.Tasks.Task.Wait()
+M:System.Threading.Tasks.Task.Wait(System.Int32)
+M:System.Threading.Tasks.Task.Wait(System.TimeSpan)
+M:System.Threading.Tasks.Task.Wait(System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.Wait(System.Int32,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.Wait(System.TimeSpan,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.GetAwaiter()
+M:System.Threading.Tasks.Task`1.GetAwaiter()

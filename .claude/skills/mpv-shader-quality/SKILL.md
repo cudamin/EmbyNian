@@ -10,12 +10,11 @@ Techniques and traps for the shader / 画质档位 side of the player, and the l
 ## Read these first, in this order
 
 1. `assets/shaders/README.md` — what each shipped file is, where it came from, and **which files gate themselves**.
-2. `src/EmbyNian.Core/Mpv/` — `UpscaleTier.cs`, `ShaderGroup.cs`, `ShaderGroupCatalog.cs`, `ShaderChainRules.cs`, `ShaderLibrary.cs`, `ShaderSwitch.cs`. The live model. Type and member names in this skill may be stale; the code wins.
-3. `画质档位重构-任务书.md` at the repo root — the decisions behind the current shape, plus what changed from the earlier plan.
+2. `src/EmbyNian.Core/Mpv/` — `UpscaleTier.cs`, `ShaderGroup.cs`, `ShaderGroupCatalog.cs`, `ShaderChainRules.cs`, `ShaderLibrary.cs`, `ShaderSwitch.cs`. The live model, and where the decisions behind the current shape are recorded (the file-level comments). Type and member names in this skill may be stale; the code wins.
 
 **The current policy is in [CLAUDE.md](../../../CLAUDE.md)**: verification gates, playback authorization and probe coverage, credentials, and upgrades. This skill adds shader-specific measurements, not a second policy. `PROGRESS.md` records current work and earlier measurements; playback is `embynian-playback`, evidence is `embynian-verification`.
 
-**There are no named 配置组 any more.** Until 2026-09-03 there were five hand-named groups picked by 片源分辨率. Now a `ShaderGroup` is *one cell of the 档位表*: `live|anime` × scale tier, with 显卡档 selecting a different chain behind the same id. So "make a new group" is really one of three different jobs — swapping a shader inside a cell (the usual one), bringing in a file and deciding which cells it belongs in, or letting the user assemble and save a chain of his own, which **does not exist**: that is a feature request, not an edit.
+**There are no named 配置组 any more.** Until 2026-09-03 there were five hand-named groups picked by 片源分辨率. Now a `ShaderGroup` is *one cell of the 档位表*: `live|anime` × scale tier, with 显卡档 selecting a different chain behind the same id. (Two more axes swap the chain without entering the id, because they follow the source rather than the user's choice: `Vintage` for 老片源 ≤576 lines and `FastMotion` for 高帧率 >30fps — check `ShaderGroupCatalog` for the current set.) So "make a new group" is really one of three different jobs — swapping a shader inside a cell (the usual one), bringing in a file and deciding which cells it belongs in, or letting the user assemble and save a chain of his own, which **does not exist**: that is a feature request, not an edit.
 
 ## Adding or swapping a shader — the loop
 
@@ -23,13 +22,13 @@ Techniques and traps for the shader / 画质档位 side of the player, and the l
 2. **Read it before placing it** (next section). Does it scale, what is its gate, which hook point, which plane, is it multi-pass?
 3. **Place it, then check the gate against the tier.** A shader whose gate never opens for a cell's factor range is a no-op in that cell — that is how `FSRCNNX_x1` and `CAS` got proposed for tiers they could never act in.
 4. **Its prerequisites travel with it.** Chain options are derived from the chain in the catalog rather than written per cell, so teach the derivation once instead of copying options into every cell.
-5. **Two lists must not drift**: the csproj copy list and the C# table. A test pins them and names the offending file when it fails.
+5. **The C# 档位表 and the shipped files must not drift**: a test compares `ShaderGroupCatalog.ShaderFiles` against the actual `.glsl`/`.hook` files on disk, both directions, and names the offending file when it fails. (The csproj copies by wildcard, so there is no hand-written copy list to keep in sync.)
 6. **New mpv option → `NeutralOptions` entry + the both-directions round-trip test.** No exceptions; see the traps below.
 7. **Run the applicable gates from CLAUDE.md, then inspect the permitted local render.** An A/B needs a visible chain readout, so the user can judge the picture while the assistant verifies which processing actually ran.
 
 ## Never judge a shader by its filename
 
-Three separate mistakes here came from reading the name instead of the file: `FSRCNNX_x1` shipped for a long time as the low-resolution "upscaler" and does not upscale at all; `CAS` was proposed for a matrix where its gate can never fire; `Ani4Kv2_ArtCNN_C4F32_i2` turned out to be a third-party repack of upstream ArtCNN carrying a CC BY-NC weight licence. Open the file — four things are readable at the top of each pass:
+Three separate mistakes here came from reading the name instead of the file, and none of the three is boxed: `FSRCNNX_x1` was taken for the low-resolution "upscaler" though it does not upscale at all (README lists it among the considered-but-not-boxed files); `CAS` was proposed for a matrix where its gate can never fire; `Ani4Kv2_ArtCNN_C4F32_i2` turned out to be a third-party repack of upstream ArtCNN carrying a CC BY-NC weight licence. Open the file — four things are readable at the top of each pass:
 
 - `//!WIDTH` / `//!HEIGHT` — whether it changes resolution and by how much (`LUMA.w 2.0 *` is a 2× doubler). **No such directive anywhere in the file means it does not scale**, whatever the name says.
 - `//!WHEN` — its gate. `OUTPUT.w LUMA.w / 1.3 >` means it silently does nothing below 1.3×.
@@ -62,7 +61,7 @@ Factor = actual render-target height ÷ source height. **Output means the render
 
 - **Option residue.** Every mpv option any chain sets must appear in the `NeutralOptions` restore table, with the round-trip test in both directions. Miss one and switching away from that chain leaves the option — possibly a whole shader file — still in effect.
 - **The UI lying.** Quality presets and chains both wrote `scale`/`cscale`/`dscale`; the chain is applied last, so the chain always won while the settings page kept displaying the preset. Whenever two layers can write the same mpv option, one of them must stop, and a test should assert what the renderer actually ends up with rather than what the decision layer intended.
-- **着色器 is off out of the box and 画质预设 is not its sub-option** (both the user's call, 2026-09-05). So 画质预设 is the first row of the 画质与着色器 card, above 启用着色器, and it goes out as a `profile=` on every launch whichever way that switch is set — a contract test pins exactly that. Don't make the preset conditional on a chain existing, and don't reorder the card back.
+- **着色器 is off out of the box and 画质预设 is not its sub-option** (both the user's call, 2026-09-05). So 画质预设 is the first row of the 画质与着色器 card, above 启用着色器, and it is decided independently of that switch — a contract test pins that the `profile` handed to mpv does not change with the 启用着色器 state (the `default` preset sends no `profile` key at all; the others send `profile=<preset>`). Don't make the preset conditional on a chain existing, and don't reorder the card back.
 
 ## Inspecting a permitted local render
 

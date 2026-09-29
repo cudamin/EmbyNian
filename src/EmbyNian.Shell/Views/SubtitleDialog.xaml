@@ -52,6 +52,18 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
+        <Border x:Name="DeleteConfirmation" Visibility="Collapsed" BorderBrush="{ThemeResource EgBorderBrush}"
+            BorderThickness="1" Padding="12">
+            <StackPanel Spacing="8">
+                <TextBlock Text="删除服务器字幕文件？" Style="{StaticResource EgSectionTitleStyle}" />
+                <TextBlock x:Name="DeleteConfirmationText" TextWrapping="Wrap" Style="{StaticResource EgBodyStyle}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="CancelDeleteButton" Content="取消" Click="OnCancelDelete" />
+                    <Button x:Name="ConfirmDeleteButton" Content="删除服务器文件" Click="OnConfirmDelete" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <Border Style="{StaticResource EgRuleStyle}" />
 
         <Grid ColumnSpacing="12">

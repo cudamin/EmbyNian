@@ -1,5 +1,7 @@
 using System.Threading;
+using EmbyNian.Configuration;
 using EmbyNian.Infrastructure;
+using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Xaml;
@@ -195,7 +197,7 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 置顶开关: 屏上唯一能读出它状态的那一颗，两半都要量。
+    /// 置顶开关: 屏上唯一能读出它状态的那一颗，三半都要量。
     /// <para>
     /// **2026-09-28 深夜第五批它换过一次对象**（用户令「把集成模式右上角的置顶图标换成跟独占模式一样
     /// 的」）：从前是两颗画出来的图钉（躺着那颗空心钉／立着那颗实心钉），现在是**一颗** —— 独占同一支字体
@@ -205,11 +207,19 @@ public sealed partial class PlayerPage
     /// 而这一颗只在影片中途露面。
     /// </para>
     /// <para>
-    /// **状态那一半改成了「整颗常亮」**（独占 <c>elements/TopBar.lua</c> 的
-    /// <c>lit = is_hover or (button.is_pin and state.ontop)</c> 是同一句）：已置顶＝底换成悬停那一档的白、图标
-    /// 转深色；未置顶＝没有底、图标白。两样都读得出来，所以「拨了开关屏上没反应」照样拦得住 —— 而这一颗
-    /// **本来就只有这么两条线索**：屏上是那颗图钉，读屏软件那一头是 <c>PinIndicator</c> 的两句话，两边都得
-    /// 跟着状态走。
+    /// **状态那一半 2026-09-29 又换了一次画法**（用户令「置顶不要长亮，改为非置顶的时候图标是斜的，置顶的
+    /// 时候恢复原样」）：上一版「整颗常亮」（底换悬停那一档的白）同日撤下 —— 底从此与其余几颗同一套、只剩
+    /// 悬停/按下，状态改画在**图钉的姿势**上：未置顶斜 <see cref="PlayerPage.PinTiltDegrees"/> 度、置顶立正
+    /// （独占那头 <c>TopBar.lua</c> 的 EMBYNIAN[topbar-pin-tilt] 同一批，\frz −35 同一个方向）。两样都读得
+    /// 出来（底是透明的、角度跟着档走），所以「拨了开关屏上没反应」照样拦得住 —— 而这一颗**本来就只有这么
+    /// 两条线索**：屏上是那颗图钉，读屏软件那一头是 <c>PinIndicator</c> 的两句话，两边都得跟着状态走。
+    /// </para>
+    /// <para>
+    /// **第三半是自动跟随**（同日另一条令「播放时自动置顶，暂停时自动取消置顶」）：边沿在
+    /// <c>OnStatusApplied</c>，探针从 <see cref="PlayerViewModel.SetTransportProbeStatus"/> 喂合成状态 ——
+    /// 那是真实播放走的同一条 ApplyStatus 路 —— 播放要立起、暂停要放斜，姿势与窗口置顶一起跟着走。
+    /// 崩它的方式：守卫写歪（独占模式误把可浏览的主窗口按到顶上）、或者边沿只顾角标忘了置顶 —— 都是
+    /// 编译与截图看不见的事。
     /// </para>
     /// <para>
     /// The reset at the end is not housekeeping. A probe that left the main window in the topmost band would
@@ -233,37 +243,31 @@ public sealed partial class PlayerPage
 
         var report = new List<string>();
         var wrong = new List<string>();
-        var reads = new List<(bool Pinned, string Bed, string Ink, string Name, bool Top)>();
+        var reads = new List<(bool Pinned, string Bed, double Angle, string Name, bool Top)>();
 
         foreach (var pinned in new[] { false, true })
         {
             SetPinned(pinned);
             UpdateLayout();
 
-            reads.Add((pinned, Fill(PinButton), Tone(PinGlyph.Foreground), PeerName(PinButton), _window.TopMost));
+            reads.Add((pinned, Fill(PinButton), Tilt(PinGlyphBox), PeerName(PinButton), _window.TopMost));
         }
 
-        // 那三支要对的色号从调色板里现取（不写字面量）：白底与深墨都是 PaintPalette 从 PlayerPalette 写进来的，
-        // 写死一个数在这里，改主题或改浓度时这一关就会假绿。
+        // 底色那一支从调色板里现取（不写字面量）：2026-09-29 起两档都**不画底** —— 常亮那一档撤了，
+        // 底只剩 XAML 写的 Transparent，与其余几颗同一套。
         var litBed = Tone(Resources["PlayerStripHoverBrush"] as Brush);
-        var hotInk = Tone(Resources["PlayerStripHoverInkBrush"] as Brush);
-        var restInk = Tone(Resources["PlayerInkBrush"] as Brush);
-
-        // 没置顶的普通一颗：它此刻没被指针压着，底是透明的 —— 已置顶那一档必须跟它不一样，不然「亮了」这件事
-        // 只是图上说说。
         var plainBed = Fill(MinimizeButton);
 
         report.Add($"底色：未置顶 {reads[0].Bed}、已置顶 {reads[1].Bed}（悬停那一档 {litBed}；"
             + $"没置顶的普通一颗 {plainBed}）");
-        report.Add($"图标：未置顶 {reads[0].Ink}、已置顶 {reads[1].Ink}（常态那支 {restInk}、压着时那支 {hotInk}）");
+        report.Add($"姿势：未置顶 {reads[0].Angle:0.#}°、已置顶 {reads[1].Angle:0.#}°（要 {PinTiltDegrees:0.#}° / 0°）");
         report.Add($"名字：「{reads[0].Name}」/「{reads[1].Name}」");
         report.Add($"窗口置顶：{reads[0].Top} / {reads[1].Top}");
 
         Want("未置顶那一档不画底色", reads[0].Bed is "不画" || reads[0].Bed.StartsWith("00", StringComparison.Ordinal));
-        Want("已置顶那一档的底就是悬停那一档的白", reads[1].Bed == litBed);
-        Want("已置顶那一档真的亮了（与没置顶的普通一颗不是同一层底）", reads[1].Bed != plainBed);
-        Want("未置顶的图标是常态那支白", reads[0].Ink == restInk);
-        Want("已置顶的图标转深色", reads[1].Ink == hotInk);
+        Want("已置顶那一档也不再画底（常亮同日撤下）", reads[1].Bed is "不画" || reads[1].Bed.StartsWith("00", StringComparison.Ordinal));
+        Want("未置顶的图钉是斜的", Math.Abs(reads[0].Angle - PinTiltDegrees) < 0.01);
+        Want("已置顶的图钉立正", Math.Abs(reads[1].Angle) < 0.01);
         Want("两档名字都不空", reads.All(read => read.Name.Trim().Length > 0));
         Want("两档名字不一样", !string.Equals(reads[0].Name, reads[1].Name, StringComparison.Ordinal));
         Want("状态跟着到了窗口", reads[0].Top == false && reads[1].Top);
@@ -293,6 +297,54 @@ public sealed partial class PlayerPage
 
         // 只报不判：拍照裁图要按这个框定位，而它跟着字体、缩放和这一排别的控件走。
         report.Add($"按钮 {BoundsOf(PinButton).Width:0}×{BoundsOf(PinButton).Height:0} @ {BoundsOf(PinButton).Left:0},{BoundsOf(PinButton).Top:0}");
+
+        // 自动跟随那一半（用户令 2026-09-29「播放时自动置顶，暂停时自动取消置顶」）：把合成状态从
+        // SetTransportProbeStatus 喂进来 —— 那是真实状态走的那条 ApplyStatus 路 —— 播放的边沿要立起图钉、
+        // 暂停的边沿要放下。OnStatusApplied 那条守卫（在台上＋画面在宿主窗）探针也得照实摆上：_onStage
+        // 只在 EnterPlayer 才立起，自检没有那一拍，这里手动摆上、退门放回；管线档/后端两枚设置按到集成
+        // （机器翻到独占时这里会假红，见 ProbeForcePipeline），同样退门放回。记账（SavePinTopmost）不在
+        // 这一条上：自动跟随是播放的状态，不是用户的偏好。喂完把原状态放回去，再把 loading 那一拍锁存
+        // 掀掉 —— 回灌的存档多半是未加载，OnStatusApplied 会顺手把控制条按回「加载中钉住」，而 Reset
+        // 不清这一位，不掀就漏给后面的 ProbeTap。
+        var keepStatus = ViewModel.Status;
+        var keepMarks = ViewModel.ChapterMarks;
+        var keepPipeline = ViewModel.ProbeForcePipeline(VideoPipelineKind.Integrated);
+        var keepBackend = ViewModel.ProbeForceBackend(MpvBackendKind.BuiltInLibMpv);
+        var wasOnStage = _onStage;
+        _onStage = true;
+        // 起跳点摆干净：_paused 归 null（LeavePlayer 之后的那个值）、图钉放下 —— 下面两条边沿（开播立起、
+        // 暂停放下）就都是真实发生的，不吃这一关之前任何探针留下的口味。
+        _paused = null;
+        SetPinned(false);
+        try
+        {
+            ViewModel.SetTransportProbeStatus(new PlayerStatus { Duration = 1200, Position = 60, Loaded = true, Paused = false }, []);
+            UpdateLayout();
+            var playingTop = _window.TopMost;
+            var playingAngle = Tilt(PinGlyphBox);
+            var playingBed = Fill(PinButton);
+
+            ViewModel.SetTransportProbeStatus(new PlayerStatus { Duration = 1200, Position = 90, Loaded = true, Paused = true }, []);
+            UpdateLayout();
+            var pausedTop = _window.TopMost;
+            var pausedAngle = Tilt(PinGlyphBox);
+            var pausedBed = Fill(PinButton);
+
+            report.Add($"自动跟随：播放 置顶={playingTop}、姿势 {playingAngle:0.#}°、底 {playingBed}；"
+                + $"暂停 置顶={pausedTop}、姿势 {pausedAngle:0.#}°、底 {pausedBed}");
+            Want("播放中的边沿自动置顶（图钉立正）", playingTop && Math.Abs(playingAngle) < 0.01);
+            Want("暂停的边沿自动取消置顶（图钉放斜）", !pausedTop && Math.Abs(pausedAngle - PinTiltDegrees) < 0.01);
+            Want("自动跟随也不画底", (playingBed is "不画" || playingBed.StartsWith("00", StringComparison.Ordinal))
+                && (pausedBed is "不画" || pausedBed.StartsWith("00", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            ViewModel.SetTransportProbeStatus(keepStatus, keepMarks);
+            ViewModel.ProbeForcePipeline(keepPipeline);
+            ViewModel.ProbeForceBackend(keepBackend);
+            _onStage = wasOnStage;
+            _chrome.SetKeep(false, clock);
+        }
 
         SetPinned(wasTop);
         _chrome.Reset(++clock);
@@ -331,14 +383,19 @@ public sealed partial class PlayerPage
         static string PeerName(UIElement element) =>
             Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer
                 .CreatePeerForElement(element)?.GetName() ?? "";
+
+        // 图钉此刻的姿势（2026-09-29 状态的那一半）：SetPinned 摆在 PinGlyphBox 的那个角度。-transform 不在
+        // （或不是 RotateTransform）就是「斜着」那一档被谁拆了 —— 报 −1 让这一关红，而不是静悄悄当成立正。
+        static double Tilt(FrameworkElement element) =>
+            element.RenderTransform is Microsoft.UI.Xaml.Media.RotateTransform tilt ? tilt.Angle : -1;
     }
 
     /// <summary>
     /// 一支画刷的色号，写成报告与判据共用的那一个串：<c>AARRGGBB</c>（大写十六进制），不画就是「不画」。
     /// <para>
-    /// 置顶那一关要比三支色号（悬停那一档的白、常态那支白、压着时那支深）。报告里印的是读出来的数，
-    /// 而拿来对的期望值**取自同一个资源字典**（<c>Resources["PlayerStripHoverBrush"]</c> 那几支）—— 不写字面量，
-    /// 于是「有人把某一支换回了框架默认」拦得住，调色板自己改浓度也不会让这一关假红。
+    /// 置顶那一关要比两支底（悬停那一档的白、常态的透明 —— 2026-09-29 起常亮那一档撤了，两档都要「不画」）。
+    /// 报告里印的是读出来的数，而拿来对的期望值**取自同一个资源字典**（<c>Resources["PlayerStripHoverBrush"]</c>
+    /// 那几支）—— 不写字面量，于是「有人把某一支换回了框架默认」拦得住，调色板自己改浓度也不会让这一关假红。
     /// </para>
     /// </summary>
     private static string Tone(Brush? brush) => brush switch

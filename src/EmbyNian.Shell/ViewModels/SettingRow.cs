@@ -931,6 +931,8 @@ public sealed record PreviewLayer(
     public Thickness BoxMargin => new(-Padding);
 }
 
+public sealed record SubtitlePreviewLine(IReadOnlyList<PreviewLayer> Layers);
+
 /// <summary>
 /// 字幕卡顶上那条「字幕示例」：照 字幕外观 各行的当前值画出的一条样字 —— 「参考图2新增字幕外观功能」
 /// （2026-09-06）。它不写任何设置，是这一页上唯一只画不写的行，存在的理由和别的行相反：别的行说的是
@@ -960,7 +962,7 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
     internal const double Scale = 1.3;
 
     /// <summary>预览画的字。放在行上而不是 Core，因为它是给屏幕看的词。逗号跟着站：示例连标点一起照，外观对逗号也是描边加阴影的一层。</summary>
-    public const string Sample = "字幕示例，";
+    public const string Sample = "字幕示例，\n第二行";
 
     internal SettingSubtitlePreviewRow(string label, string? note, PlaybackSettings subtitles)
         : base(label, note)
@@ -985,16 +987,23 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
         OnPropertyChanged(nameof(StripHeight));
         OnPropertyChanged(nameof(FontFamilyValue));
         OnPropertyChanged(nameof(PlateBrush));
+        OnPropertyChanged(nameof(PlatePadding));
         OnPropertyChanged(nameof(Layers));
+        OnPropertyChanged(nameof(Lines));
     }
 
-    /// <summary>那条的高：跟着字号走，字大条也大 —— 撑出一条 208 像素的预览比把 160 号的字削头去脚诚实。</summary>
-    public double StripHeight => Model.FontSize + 26 + (Model.Plate ? 2 * Model.PlatePadding : 0);
+    public double StripHeight => Model.FontSize * 2.6 + 26 + 2 * Model.PlatePadding;
 
     public FontFamily FontFamilyValue => _family ??= new FontFamily(Model.FontFamily);
 
     /// <summary>底板那块色，没有底板时是空 —— <c>Background</c> 对 null 的回答就是「不画」。</summary>
     public Brush? PlateBrush => Model.Plate ? BrushFor(Model.PlateColor, Model.PlateOpacity) : null;
+
+    public Thickness PlatePadding => new(Model.PlatePadding);
+
+    public IReadOnlyList<SubtitlePreviewLine> Lines =>
+        [.. Model.Text.Split('\n').Select(text => new SubtitlePreviewLine(
+            [.. Layers.Select(layer => layer with { Text = text })]))];
 
     /// <summary>
     /// 要叠的几层字，先画的在底下：阴影、描边那一圈，最后是正文本身 —— 所以模板只需要一个叠着画的
@@ -1061,22 +1070,25 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
             && row.Model.Layers[0].IsBox && Math.Abs(row.Model.Layers[0].Opacity - 0.4) < 0.001
             && row.Model.Layers[0].Color == "#123456"
             && row.Model.Layers[1].IsBox && row.Model.Layers[1].Color == "#000000"
-            && Math.Abs(row.Model.PlatePadding - 3.9) < 0.001;
+            && Math.Abs(row.Model.Layers[1].Padding - 3.9) < 0.001;
 
         // 描边关掉（阴影也归零后）：什么都不剩，只剩背景盒（background-box）那一块。
         subtitles.SubtitleBackStyle = "background-box";
         row.Refresh();
-        var boxed = row.Model.Plate && row.Model.Layers.Count == 0
-            && Math.Abs(row.Model.PlatePadding - 1.3) < 0.001
+        var boxed = row.Model.Plate && row.Model.Layers.Count == 8
+            && Math.Abs(row.Model.PlatePadding - 5.2) < 0.001
             && Math.Abs(row.Model.PlateOpacity - 0.4) < 0.001;
         subtitles.SubtitleShadowOffset = "0";
         subtitles.SubtitleBorderSize = "0";
         row.Refresh();
         var bare = row.Model.Plate && row.Model.Layers.Count == 0;
 
-        return (initial && opaque && bare,
-            $"假行：出厂样式{(initial ? "画出阴影加一圈八份的描边" : "没按设置画（" + drawn.Layers.Count + " 层）")}、"
-                + $"整行方框{(opaque ? "按不透明画且阴影收掉" : "没跟上")}、"
-                + $"描边关掉后{(bare ? "只剩底板" : "还剩东西")}");
+        var beforeScale = row.Model.FontSize;
+        subtitles.SubtitleScalePercent = 200;
+        row.Refresh();
+        var scaled = Math.Abs(row.Model.FontSize - beforeScale * 2) < 0.001;
+
+        return (initial && opaque && boxed && bare && scaled,
+            $"假行：文字描边阴影={initial}、逐行盒颜色={opaque}、整体背景盒={boxed}、去描边={bare}、缩放={scaled}");
     }
 }

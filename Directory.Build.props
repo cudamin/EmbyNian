@@ -72,4 +72,39 @@
   <Import Project="$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets"
           Condition="Exists('$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets')" />
 
+  <!--
+    NuGet 分析器三个，用户原话「把你建议装的装上吧」2026-09-29 引入。只进 Core 与 Shell，
+    Tests 排除——控制台跑器的同步等待（GetAwaiter().GetResult() 一类）是测试惯例，规则在
+    测试里全是噪声；这也让 BannedSymbols 黑名单天然只管生产代码。PrivateAssets="all"：
+    分析器只活在编译期，不落发布件，Core 也不因此破「无运行时包」的轻量选择。
+
+    - Microsoft.VisualStudio.Threading.Analyzers：VSTHRD 系列，编译期抓 async void、
+      同步阻塞异步、UI 线程违规。严重级不走包默认值，逐条在 .editorconfig 定级（该文件
+      新增的 VSTHRD 节），定级依据是构建实测，不是包里写什么就收什么。
+    - Microsoft.CodeAnalysis.BannedApiAnalyzers：黑名单执法（RS0030），清单在
+      tools/BannedSymbols.txt。清单只收当前源码零命中的危险形式——Task.Wait 全重载与
+      Task/Task<T>.GetAwaiter（.GetAwaiter().GetResult() 同步阻塞惯用式的必经入口）。
+
+    刻意不进黑名单的三样，收编前必须先改掉现存调用，否则就是制造「教人无视的警告」：
+      - Task<T>.Result：HomeViewModel / NotificationsViewModel / MoviePilotReorganizeDialog /
+        FontLibrary 在 WhenAll 汇合或 IsCompletedSuccessfully 守卫后的读取是现行惯例，
+        RS0030 与 VSTHRD002 都认不出「已完成守卫」，只知道「碰了 Result」。
+      - DateTime.Now：Log 留存清理、SettingsStore 损坏文件命名、诊断页「更新于」、偏好
+        导出文件名，四处都是刻意的本地时间（给人看的时间戳与文件名），不是误用。
+      - Thread.Sleep：全部在自检泵代码（PlayerPage.SelfCheck.*、ShellSelfCheck.Fullscreen），
+        是测试钩子里刻意的节拍等待。
+
+    版本是 2026-09-29 查的 nuget.org 最新稳定版；升级按 CLAUDE.md「依赖与分析器升级」
+    一节：不进 preview，独立成轮，先 restore 再验。
+  -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'EmbyNian.Tests'">
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.7.23" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" PrivateAssets="all" />
+    <!-- Roslynator 5.0.0：先实测后采纳（主包不含格式规则，格式辖区仍是闸门 1 的 dotnet format）。
+         首测 6 处命中、3 条规则，全是刻意写法，逐条降级与失效条件见 .editorconfig 的 RCS 节；
+         调查记录在 work/roslynator-survey.md。 -->
+    <PackageReference Include="Roslynator.Analyzers" Version="5.0.0" PrivateAssets="all" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)tools\BannedSymbols.txt" />
+  </ItemGroup>
+
 </Project>

@@ -24,8 +24,10 @@ Emby 桌面客户端：WinUI 3、Windows App SDK、.NET 10、C#，非打包、x6
 
 - [embynian-winui-shell](.claude/skills/embynian-winui-shell/SKILL.md)：修改或审查 C# / XAML 前读取，说明分层、DI、Attach 与 UI 陷阱。
 - [embynian-playback](.claude/skills/embynian-playback/SKILL.md)：播放后端、进度上报、字幕音轨、换片，以及 `assets/mpv-ui` 中的 Lua/uosc 独占控件。
+- [embynian-subtitles](.claude/skills/embynian-subtitles/SKILL.md)：字幕设置的审查、修复与验证——语言选择、强制/外语音轨、ASS/SRT/PGS 样式、双语/次字幕、颜色输入、预览与服务器字幕管理。
 - [embynian-verification](.claude/skills/embynian-verification/SKILL.md)：验证读数、截图、指针移动及其证据。
 - [mpv-shader-quality](.claude/skills/mpv-shader-quality/SKILL.md)：着色器档位与画质链。
+- [embynian-video-output](.claude/skills/embynian-video-output/SKILL.md)：视频输出三卡（基础输出、HDR 与杜比视界、画质与着色器）与 mpv 选项的落地。
 - [embynian-moviepilot](.claude/skills/embynian-moviepilot/SKILL.md)：MoviePilot 接入的来源身份（TMDB／豆瓣／IMDb）、搜索、订阅与原记录重整协议及验证边界。
 
 通用 `winui-*` 技能来自用户级技能目录或插件。**与本文件冲突时以本文件为准。** 规则改动须同步相关技能、开发文档、脚本帮助与运行提示；不在技能里另立升级、验证或安全政策，不在 `.workbuddy/`、`.zcode/` 复制规则。当前文件数、测试数、控件数从本次源码或工具输出获取。
@@ -60,8 +62,9 @@ Emby 桌面客户端：WinUI 3、Windows App SDK、.NET 10、C#，非打包、x6
 **主动跟进稳定版，但作为独立的一轮改动，不顺手混入无关修复。** 不采用 preview / rc / beta。先说明范围，改版本后还原依赖，再走完整四道闸门；运行覆盖不到的部分照实报告。
 
 - NuGet 版本来自项目文件；改包版本或新工作树首次构建前完成 restore，不能拿旧 `obj/project.assets.json` 验新版本。
-- WindowsAppSDK Runtime 升级要关注 onnxruntime 等新增载荷；报告实际包体积变化，由用户决定是否接受明显增重。
-- `libmpv-2.dll` 是手动维护的原生二进制；更新后验证构建、发布与受影响的管线，仍遵守播放安全边界。
+- Shell 引用的是 WindowsAppSDK 的六个子包而非 meta 整包，为的是把 onnxruntime/DirectML 等推理载荷挡在发布件外（包名与版本见 Shell csproj 注释）；升级时保持拆分，不装回整包。Runtime 升级要关注新增载荷，报告实际包体积变化，由用户决定是否接受明显增重。
+- Toolkit 各包的 nuspec 拖着 meta 整包依赖，Shell 里那条 `ExcludeAssets="all"` 的 meta 钉版就是喂它的占位，不是死重量，删了构建必死（MSB4011）；Toolkit 升级放宽最低 WinAppSDK 版本后才能删（细节见 Shell csproj 注释）。
+- `libmpv-2.dll` 是手动维护的原生二进制，静态导入随 `assets/mpv-runtime` 发布的 `vulkan-1.dll`——缺它 libmpv 加载失败，与是否选 Vulkan 后端无关；更新后验证构建、发布与受影响的管线，仍遵守播放安全边界。
 - **发版使用仓库已确定的分析器与哈希。** `tools/refresh-analyzers.ps1 -Check` 只供发现本机插件差异，不是发版必过项；按写时间选候选不保证版本最新，找不到插件时的退出码 0 也不代表载荷完整。
 - 升级分析器须明确来源（必要时传 `-SkillRoot`），复核新诊断与哈希后逐行更新基线并完整验证，不为迁就本机旧插件降级仓库载荷。
 

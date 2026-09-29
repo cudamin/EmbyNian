@@ -295,6 +295,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     public override Task ReloadAsync()
     {
         if (_settings is null) return Task.CompletedTask;
+        HasUnsavedChanges = _settings.HasUnsavedChanges;
 
         // 精简模式是页级状态（SettingRow.NotesHidden），建卡之前先对齐 —— 行的可见性在容器落到树上那一刻
         // 才求值，这里晚了才是错的。恢复默认那趟重走这里，同一句话把它拨回新文档的样子。
@@ -436,7 +437,25 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     private AppSettings Settings => _settings!.Settings;
 
-    private void Save() => _settings?.Save();
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UnsavedVisibility))]
+    [NotifyCanExecuteChangedFor(nameof(RetrySaveCommand))]
+    public partial bool HasUnsavedChanges { get; set; }
+
+    public Visibility UnsavedVisibility => Show(HasUnsavedChanges);
+
+    private void Save()
+    {
+        if (_settings is null) return;
+        HasUnsavedChanges = !_settings.TrySave();
+    }
+
+    [RelayCommand(CanExecute = nameof(HasUnsavedChanges))]
+    private void RetrySave()
+    {
+        Save();
+        if (!HasUnsavedChanges) Notify(null, "设置已保存。", InfoBarSeverity.Success);
+    }
 
     // ── Cards ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -567,8 +586,8 @@ public sealed partial class SettingsViewModel : PageViewModel
         // 它是行列表的第一行，重画的线只有 Live<T> 那一条 —— 外观每一行写完设置都从那儿过，所以预览
         // 不可能停在旧样子上。
         var preview = new SettingSubtitlePreviewRow("字幕示例",
-            "照下面那些外观行此刻的值画出的大概样子：字体、字号、加粗、颜色、描边、阴影、底板。"
-                + "不是播放画面，大小是示意 —— 实际多大跟片源分辨率走。", playback);
+            "纯文本字幕的样式示意：两行文字可比较逐行盒与整体背景盒，大小会跟随字号和缩放。"
+                + "不是 libass 播放画面；实际尺寸还受窗口大小与字幕格式影响。", playback);
         _subtitlePreview = preview;
 
         // 底板颜色 states which of its two jobs it is doing, so the row above it cannot be a lie: mpv
@@ -581,7 +600,7 @@ public sealed partial class SettingsViewModel : PageViewModel
             () => playback.SubtitleBackColor, Live<string>(value => playback.SubtitleBackColor = value),
             "sub-back-color", BackColorNote(playback));
 
-        return new SettingSection("字幕", "字幕", "语言优先级和字幕外观。语言按逗号分隔，越靠前越优先，"
+        return new SettingSection("字幕", "字幕", "语言优先级和字幕外观。勾选语言并排序，越靠上越优先，"
             + "「其他字幕」代表任何别的语言的字幕、放在最后可兜底。"
             + "外观这一组改完立刻作用到正在播的片子；语言、显示模式和字幕编码下次播放生效。",
         [
@@ -589,7 +608,8 @@ public sealed partial class SettingsViewModel : PageViewModel
 
             LanguagePriority("字幕语言优先级", "未指定，跟随文件默认字幕", () => playback.SubtitleLanguages, value => playback.SubtitleLanguages = value,
                 "点开勾语言，越靠上越优先，按住或用箭头换次序。「其他字幕」是一个预设项，代表任何别的语言的字幕 —— "
-                    + "排在最后就是「前面都不匹配时，有一条别的语言的总比没有好」。下次播放生效",
+                    + "排在最后就是「前面都不匹配时，有一条别的语言的总比没有好」。空列表只跟随明确的默认轨；"
+                    + "仍服从显示模式，没有默认轨就不显示。下次播放生效",
                 // 普通话、粤语是「说的是哪种」，那是音轨的区分，字幕轨不按这个标；字幕表不列它们（音轨那份仍可用）。
                 exclude: ["普通话", "粤语"]),
 
@@ -600,7 +620,8 @@ public sealed partial class SettingsViewModel : PageViewModel
                     + "只剩它时仍会给一条，不至于没字幕），默认＝不生效。输入框可自定义添加词。"
                     + "另：字幕语言里选了「简体中文」时，会自动把标题带「繁 / 繁体」的排为候补。下次播放生效"),
             Choice("显示模式", SubtitleModes, () => playback.SubtitleMode, value => playback.SubtitleMode = value),
-            Toggle("没有匹配语言时使用默认字幕", "按优先级挑不到一条字幕时，就用文件自带的默认那条", () => playback.SubtitleFallbackToDefault, value => playback.SubtitleFallbackToDefault = value),
+            Toggle("没有匹配语言时使用默认字幕", "只回退服务器指定或文件标记的默认字幕，不再按标题改选别的轨道；没有默认轨就不显示。"
+                + "允许任意语言兜底请在语言列表末尾加入「其他字幕」。空语言列表不受本开关影响", () => playback.SubtitleFallbackToDefault, value => playback.SubtitleFallbackToDefault = value),
 
             // 这一行管着它下面那一整组。放在这儿而不是外观末尾：番剧和压制组的内封字幕大量是 ASS，
             // 而 mpv 默认让 ASS 自己的样式说话 —— 也就是说下面九行对那些文件一个字都改不动。
@@ -608,7 +629,7 @@ public sealed partial class SettingsViewModel : PageViewModel
                 () => playback.SubtitleAssOverride, Live<string>(value => playback.SubtitleAssOverride = value),
                 "sub-ass-override",
                 "ASS/SSA 字幕自带字体和颜色，默认由它自己说了算，下面这些外观只对纯文本字幕（srt/vtt）生效。"
-                    + "蓝光原盘那种图形字幕（PGS/VOBSUB）是图片，两种选法都改不动它"),
+                    + "强制覆盖可能破坏 ASS 的定位与特效。蓝光原盘的图形字幕（PGS/VOBSUB）是图片，字体和文字颜色无法改变它"),
 
             Font("字体", "列出这台机器装的字体和程序自带的字体，可搜索；mpv 认的是字体族名，不是文件路径",
                 () => playback.SubtitleFontFamily, Live<string>(value => playback.SubtitleFontFamily = value), "sub-font"),
@@ -636,10 +657,10 @@ public sealed partial class SettingsViewModel : PageViewModel
                 () => playback.SubtitleBorderSize, Live<string>(value => playback.SubtitleBorderSize = value),
                 "文字外那一圈边的宽度，拖到 0 就是没有描边。出厂 0.5，mpv 自己是 1.65", "sub-border-size"),
             ColorRow("描边颜色", () => playback.SubtitleBorderColor, Live<string>(value => playback.SubtitleBorderColor = value), "sub-border-color"),
-            UnitSlider("阴影", 0,
+            UnitSlider("阴影偏移 / 背景盒留白", 0,
                 () => playback.SubtitleShadowOffset, Live<string>(value => playback.SubtitleShadowOffset = value),
-                "文字右下那一道影子的偏移，拖到 0 就是没有阴影；出厂 0.5，mpv 默认不画。"
-                    + "影子的颜色跟着下面的「底板颜色」走 —— mpv 里这两个是同一个颜色", "sub-shadow-offset"),
+                "普通样式和逐行盒：阴影向右下偏移；整体背景盒：控制底板留白，不另画文字阴影。"
+                    + "出厂 0.5；阴影与背景盒都使用下面的底板颜色", "sub-shadow-offset"),
 
             Mpv("字幕底板", MpvOutputOptions.SubtitleBackStyles, () => playback.SubtitleBackStyle,
                 Live<string>(value =>
@@ -654,7 +675,7 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "sub-border-style", "亮画面上最管用的一项。关着的时候只有描边和阴影"),
             backColor!,
             Slider("底板不透明度（%）", 0, 100, 5, () => playback.SubtitleBackOpacity, Live<double>(value => playback.SubtitleBackOpacity = (int)value),
-                "上一行那个颜色的浓淡，拖到 100 就是完全不透明", "sub-back-color"),
+                "控制底板颜色的透明度；颜色选「不设置」时使用黑色，透明度仍按此值。逐行盒的描边盒由描边颜色控制", "sub-back-color"),
 
             Mpv("字幕编码", MpvOutputOptions.SubtitleCodepages, () => playback.SubtitleCodepage, value => playback.SubtitleCodepage = value,
                 "sub-codepage", "只对不是 UTF-8 的文本字幕有意义。选了具体编码就不再自动识别了，"
@@ -670,9 +691,12 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// 阴影用的是同一个颜色，所以这一行到底在给什么上色，只有上面那一行能回答。
     /// </summary>
     private static string BackColorNote(PlaybackSettings playback) =>
-        playback.SubtitleBackStyle.Length == 0
-            ? "现在给阴影上色 —— 上面那一行「字幕底板」关着，所以画不出底板"
-            : "现在给底板上色";
+        playback.SubtitleBackStyle switch
+        {
+            "background-box" => "给包住所有文字行的背景盒上色；不设置时使用黑色，透明度由下一行控制",
+            "opaque-box" => "给逐行盒的阴影上色；描边盒使用描边颜色。不设置时使用黑色",
+            _ => "给文字阴影上色；字幕底板关闭时不画背景盒。不设置时使用黑色"
+        };
 
     /// <summary>
     /// 字幕外观那一组的写入口：写完设置，再推给正在播的那部片子，再喊卡顶那条「字幕示例」重画一遍。
@@ -1092,7 +1116,8 @@ public sealed partial class SettingsViewModel : PageViewModel
         Settings.Shortcuts.Bindings = new Dictionary<string, string>(StringComparer.Ordinal);
         Save();
         RefreshShortcutRows();
-        Notify(null, "播放器快捷键已恢复默认。其他设置没有动。", InfoBarSeverity.Success);
+        Notify(null, HasUnsavedChanges ? "快捷键已在本次运行恢复默认，但尚未保存。" : "播放器快捷键已恢复默认。其他设置没有动。",
+            HasUnsavedChanges ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
     }
 
     /// <summary>照当前绑定把每一行的显示串重算一遍（重绑、清一个、清全部之后都走它）。</summary>
@@ -1360,12 +1385,16 @@ public sealed partial class SettingsViewModel : PageViewModel
             if (!agreed) return;
 
             SettingsReset.Restore(_settings.Settings);
-            _settings.Save();
+            Save();
 
             // 顺带把「没动的是哪些」再讲一遍 —— 本来就都在默认值上的人按一下屏上什么都不变，一颗看起来没反应的
             // 按钮，下一步就是再按一遍。
             await ReapplyAndReloadAsync("设置已改回装机时的样子。服务器、账号、窗口位置和各媒体库的排序筛选都没有动。")
                 .ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            Report("恢复默认设置失败", error);
         }
         finally
         {
@@ -1426,9 +1455,13 @@ public sealed partial class SettingsViewModel : PageViewModel
             if (!agreed) return;
 
             SettingsPreferences.Apply(_settings.Settings, loaded);
-            _settings.Save();
+            Save();
             await ReapplyAndReloadAsync("已从备份恢复偏好设置。服务器、账号、登录状态和窗口位置都没有动。")
                 .ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            Report("恢复配置失败", error);
         }
         finally
         {
@@ -1444,6 +1477,29 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// 只写，见类注释，不重建的话文件已经变了、屏上六十行还是旧的）。重建走 <see cref="ReloadAsync"/> 本身，
     /// 字体和音频设备两份名单按进程缓存，重建一次不会再扫字体或开 libmpv 句柄。
     /// </summary>
+    internal async Task<bool> ProbeSubtitleRestoreAsync()
+    {
+        if (App.Instance?.SubtitleProbeActive != true || _settings is null || _paths is null) return false;
+        var push = _pushSubtitleStyle;
+        var count = 0;
+        _pushSubtitleStyle = async () => { count++; if (push is not null) await push(); };
+        UseConfirm((_, _, _) => Task.FromResult(true));
+        try
+        {
+            Settings.Playback.SubtitleFontSize = 72;
+            await RestoreDefaultsAsync();
+            var reset = count == 1 && Settings.Playback.SubtitleFontSize == new PlaybackSettings().SubtitleFontSize;
+            var backup = Path.Combine(_paths.Root, "subtitle-probe-backup.json");
+            Settings.Playback.SubtitleFontSize = 64;
+            _settings.ExportPreferences(backup);
+            Settings.Playback.SubtitleFontSize = 80;
+            _openFile = () => Task.FromResult<string?>(backup);
+            await RestoreFromFileAsync();
+            return reset && count == 2 && Settings.Playback.SubtitleFontSize == 64 && !HasUnsavedChanges;
+        }
+        finally { _pushSubtitleStyle = push; }
+    }
+
     private async Task ReapplyAndReloadAsync(string notice)
     {
         var ui = Settings.Ui;
@@ -1451,8 +1507,11 @@ public sealed partial class SettingsViewModel : PageViewModel
         ShellPrefs.Apply(ui);
 
         await ReloadAsync().ConfigureAwait(true);
+        if (_pushSubtitleStyle is { } pushSubtitleStyle) await pushSubtitleStyle().ConfigureAwait(true);
+        AnnounceScreenshotDirectory();
 
-        Notify(null, notice, InfoBarSeverity.Success);
+        Notify(null, HasUnsavedChanges ? "偏好已在本次运行应用，但尚未保存；请重试保存。" : notice,
+            HasUnsavedChanges ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
     }
 
     /// <summary>

@@ -563,9 +563,13 @@ internal static class MpvUiTests
 
         // 右上角置顶按钮（2026-09-28 晚用户令「给独占模式右上角也加个置顶图标」）：与上面返回按钮同一类
         // —— 直接改 uosc 元件、升级 uosc 时最容易漏打，对着源码钉住。**两头都要在**：
-        //   · TopBar.lua 那颗按钮本体（pin／push_pin／`cycle ontop`）与它的状态画法（is_pin 那一档）；
-        //   · main.lua 的状态来源（state.ontop ＋ mpv `ontop` 属性的观察器）—— 只打一头的话，按钮点得动
-        //     而「已置顶」永远不亮（状态没人送），或反过来状态有了而屏上没有那颗按钮。
+        //   · TopBar.lua 那颗按钮本体（pin／push_pin／`cycle ontop`）与它的状态画法（is_pin ＋ \frz 斜图钉
+        //     那一档，2026-09-29 用户令「置顶不要长亮，改为非置顶的时候图标是斜的，置顶的时候恢复原样」
+        //     起状态画在姿势上 —— lit 只看悬停）；
+        //   · main.lua 的状态来源（state.ontop ＋ mpv `ontop` 属性的观察器）与自动跟随
+        //     （EMBYNIAN[ontop-follows-pause]，2026-09-29 用户令「播放时自动置顶，暂停时自动取消置顶」）
+        //     —— 只打一头的话，按钮点得动而图钉永远斜着立不正（状态没人送），或状态有了而屏上没有
+        //     那颗按钮，或点得动却不跟着播放/暂停走。
         // 图标 push_pin 与装箱的 MaterialIconsRound-Regular.otf 里的字形同名（集成模式那颗 PathIcon
         // 的图钉与它同义，两模式同一颗图钉）。
         TestHarness.Test("独占模式右上角置顶按钮：uosc 补丁两头都在", () =>
@@ -585,12 +589,27 @@ internal static class MpvUiTests
             Assert.True(topbar.Contains("{close, max, min, pin}"), "置顶按钮没排进顶栏那一栏（left 排布）");
             Assert.True(topbar.Contains("icon = 'push_pin'"), "置顶按钮的图标丢了：应是 push_pin");
             Assert.True(topbar.Contains("cycle ontop"), "置顶按钮不切 ontop：点了什么也不会发生");
-            Assert.True(topbar.Contains("is_pin"), "置顶按钮的「已置顶」那一档丢了：那颗永远不会亮");
+            Assert.True(topbar.Contains("is_pin"), "置顶按钮的状态画法丢了：未置顶那档没人斜图钉");
+            // 状态画在姿势上（2026-09-29）：未置顶斜 35°（libass \frz 正角逆时针，取负号与集成那头
+            // RotateTransform +35 同一个方向）、置顶立正。
+            Assert.True(topbar.Contains("rotate = icon_rotate"), "斜图钉没画：ass:icon 的 rotate 没接上");
+            Assert.True(topbar.Contains("-35"), "未置顶那一档的倾角丢了：图钉永远立正，两档看不出分别");
 
             Assert.True(main.Contains("ontop = mp.get_property_native('ontop')"),
                 "顶栏拿不到置顶的初值：进播放时那颗按钮的状态是空的");
             Assert.True(main.Contains("observe_property('ontop'"),
-                "ontop 没人观察：用户点了置顶，那颗按钮不会跟着亮");
+                "ontop 没人观察：用户点了置顶，那颗图钉不会立正");
+
+            // 置顶跟着播放状态走（2026-09-29 用户令「播放时自动置顶，暂停时自动取消置顶」）：
+            // main.lua 的 EMBYNIAN[ontop-follows-pause] 三件事 —— pause 的边沿、file-loaded（换片那条路
+            // pause 常常不变，光盯它会漏掉新片开播）、空闲不跟（没有片子在放，置顶归手动）。
+            Assert.True(main.Contains("follow_pause_ontop"), "自动跟随的函数丢了：播放/暂停不再动置顶");
+            Assert.True(main.Contains("observe_property('pause', 'bool', function(_, paused) follow_pause_ontop(paused) end)"),
+                "pause 的边沿没接自动跟随：暂停不会取消置顶、恢复不会置顶");
+            Assert.True(main.Contains("register_event('file-loaded', function() follow_pause_ontop"),
+                "换片那一下没接自动跟随：pause 不变的换片路上新片不会置顶");
+            Assert.True(main.Contains("if mp.get_property_bool('idle-active') then return end"),
+                "空闲那档的守卫丢了：没有片子在放也会被按到顶上");
         });
 
         // 跳过片头/片尾契约（2026-09-26 用户令「独占模式下 跳过片头/片尾的按钮不显示」）：集成模式那颗

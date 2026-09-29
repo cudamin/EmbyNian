@@ -816,11 +816,10 @@ public sealed partial class PlayerPage
         // 「右上角的按钮照搬首页的就好」）。它们几颗现在直接
         // 住在 WindowButtons 那一栏里，头顶没有 Border；悬停那一层由框架的 Button 模板给。
         // 2026-09-27 晚「统计」摘掉后，这一栏剩四颗（置顶、最小化、最大化、关闭）。
-        // **置顶那颗 2026-09-28 深夜第五批起是唯一的例外**：已置顶时它整颗常亮，那层底由 SetPinned 亲手写进
-        // 控件自己的 Background（用的就是悬停那一支白 —— 独占 lit 那一档的画法是同一句）。所以这一关按
-        // **置顶状态**分两支：没置顶时四颗都不画底，置顶时三颗不画、置顶那颗画的是那一支白。
+        // **置顶那颗曾经的例外同日撤下了**（2026-09-28 深夜第五批起它已置顶时常亮，那层底由 SetPinned 亲手
+        // 写进控件自己的 Background；用户令 2026-09-29「置顶不要长亮」把常亮那一档整条撤掉，状态改画在
+        // 图钉的姿势上 —— 见 ProbePin）—— 于是这一关回到一条：四颗平时都不画底，置顶状态不再分两支。
         var beds = new List<string>();
-        var litBed = Resources["PlayerStripHoverBrush"];
 
         foreach (var (name, control) in new (string Name, FrameworkElement Element)[]
                  {
@@ -836,12 +835,7 @@ public sealed partial class PlayerPage
                 continue;
             }
 
-            if (ReferenceEquals(control, PinButton) && _pinned)
-            {
-                if (control is not Button { Background: { } lit } || !ReferenceEquals(lit, litBed))
-                    beds.Add($"{name}已置顶却没有常亮那一层底");
-            }
-            else if (control is not Button button || button.Background is not { } own
+            if (control is not Button button || button.Background is not { } own
                 || own is not SolidColorBrush { Color.A: 0 })
             {
                 beds.Add($"{name}自己画了底");
@@ -849,9 +843,9 @@ public sealed partial class PlayerPage
         }
 
         report.Add(beds.Count == 0
-            ? $"右上角那几颗平时没有底（置顶那颗此刻 {(_pinned ? "亮着" : "没亮")}）"
+            ? "右上角那四颗平时都没有底（置顶那颗的常亮档已撤）"
             : $"有问题：{string.Join('、', beds)}");
-        Want("右上角那几颗平时没有底（置顶那颗已置顶时例外，它那时常亮）", beds.Count == 0);
+        Want("右上角那四颗平时都没有底（置顶不再例外）", beds.Count == 0);
 
         // 尺寸复刻独占顶栏（用户令 2026-09-28「复刻独占模式右上角的最小化、窗口化、关闭三个按钮，替换掉
         // 集成模式右上角的 winui 按钮」）：独占 `elements/TopBar.lua` 那几颗各占 **top_bar_size＝40** 的一格，
@@ -942,9 +936,9 @@ public sealed partial class PlayerPage
         // 事件），这里量的是它推到的那一端；接线本身只有读码与实机验收。
         // **一格一格地问**：第一版这里是「四颗一起转深色」，用户当场问「怎么是四个按钮一起变色」——
         // 所以现在每一颗都要单独推一次，而且要检查**其余几颗回到了白**（这一条才是那个 bug 的判据）。
-        // 2026-09-27 晚「统计」摘掉后，这一份名单只剩置顶、最小化、最大化三颗；2026-09-28 深夜第五批起置顶那颗
-        // 只有**一颗** PathIcon，而且**已置顶时它本来就该是深色**（常亮那一档是白底）—— 于是下面按「此刻置顶开
-        // 着没有」算它的期望色，其余几颗照旧只看指针。
+        // 2026-09-27 晚「统计」摘掉后，这一份名单只剩置顶、最小化、最大化三颗；置顶那颗 2026-09-29 起与其余
+        // 两颗同一句 —— 常亮那一档撤了（用户令「置顶不要长亮」），墨色不再按置顶状态钉在深色上，期望值
+        // 只看指针。
         var glyphSets = new (string Name, Button Button, IconElement[] Glyphs)[]
         {
             ("置顶", PinButton, [PinGlyph]),
@@ -953,7 +947,6 @@ public sealed partial class PlayerPage
         };
 
         var mixed = new List<string>();
-        var pinnedInk = _pinned ? "PlayerStripHoverInkBrush" : "PlayerInkBrush";
 
         foreach (var (name, button, _) in glyphSets)
         {
@@ -963,7 +956,7 @@ public sealed partial class PlayerPage
             {
                 var want = ReferenceEquals(button, otherButton)
                     ? "PlayerStripHoverInkBrush"
-                    : ReferenceEquals(otherButton, PinButton) ? pinnedInk : "PlayerInkBrush";
+                    : "PlayerInkBrush";
 
                 if (theirs.Any(glyph => !ReferenceEquals(glyph.Foreground, Resources[want])))
                     mixed.Add($"{name}压着的时候{otherName}那颗不是{want}");
@@ -977,20 +970,96 @@ public sealed partial class PlayerPage
 
         SetStripGlyphInk(null);
 
-        // 指针不在这一栏时该回白的那几颗里，已置顶的置顶那颗不算 —— 它那时**常亮**着，深色才是对的。
+        // 指针不在这一栏时三颗都该回白 —— 置顶那颗不再例外（常亮档撤了，见 ProbePin）。
         var leftDark = glyphSets
-            .Where(set => !ReferenceEquals(set.Button, PinButton) || !_pinned)
             .SelectMany(set => set.Glyphs)
             .Count(glyph => !ReferenceEquals(glyph.Foreground, Resources["PlayerInkBrush"]));
 
-        var pinWord = _pinned ? "常亮着、一直是深色" : "没置顶、照常回白";
-
         report.Add(mixed.Count == 0 && leftDark == 0
-            ? $"四颗的图标一个一个换（压着的那颗转深色、其余几颗白；置顶那颗此刻{pinWord}）"
+            ? "三颗的图标一个一个换（压着的那颗转深色、其余几颗白）"
             : $"图标不对：{string.Join('、', mixed)}"
               + (leftDark == 0 ? string.Empty : $"；指针不在这一栏时有 {leftDark} 个还是深色"));
 
-        Want("压着的那一颗图标转深色、其余几颗回白（置顶那颗已置顶时另算）", mixed.Count == 0 && leftDark == 0);
+        Want("压着的那一颗图标转深色、其余几颗回白", mixed.Count == 0 && leftDark == 0);
+
+        // 底部那一排按钮的悬停/按下两档（用户令 2026-09-29「集成模式进度条上方的按钮，鼠标移动到按钮上时
+        // 背景过于透明，请参考右上角的按钮进行修改」）：与右上那批同一问 —— 底与前景那半是**每颗自己的
+        // Button.Resources**（与右上、与跳过那颗同一手法；第一版的行字典当轮红过，见 PlayerPage.xaml
+        // 那段标记里的账），漏了键的那颗仍是框架那层白一成，在这里红。
+        // 图标墨色那半同右上：模板换不到 FontIcon，由 SetTransportGlyphInk 一笔笔写，这里一格一格问
+        // （压着的那颗深、其余白、指针离开全白）—— 这一排没有右上「关闭」那样的例外，全是白底深墨。
+        // **量之前先把整排摆出来**（与跳过按钮那一关同一做法：摆起来、量完、收场还回去）：自检的视窗里
+        // 没有集、没有章节，ArrangeTransport 会把上一集/下一集/播放/章节/选集那些颗收掉 —— 收掉的按钮
+        // 模板不物化，GoToState 推不进去，读回来的底永远是空，红的是「按钮不在屏上」不是悬停。
+        var transportDull = new List<string>();
+        var transport = TransportGlyphs().ToList();
+        var transportWas = transport.Select(pair => (pair.Button, pair.Button.Visibility)).ToList();
+
+        foreach (var (button, _) in transport)
+            button.Visibility = Visibility.Visible;
+
+        UpdateLayout();
+
+        foreach (var (button, _) in transport)
+        {
+            foreach (var (state, bedKey) in new[]
+                     {
+                         ("PointerOver", "PlayerStripHoverBrush"),
+                         ("Pressed", "PlayerStripPressedBrush")
+                     })
+            {
+                VisualStateManager.GoToState(button, state, false);
+
+                if (!ReferenceEquals(Bed(button), Resources[bedKey]))
+                    transportDull.Add($"{button.Name}（{button.Visibility}）的{state}底不是{bedKey}");
+
+                if (!ReferenceEquals(Ink(button), Resources["PlayerStripHoverInkBrush"]))
+                    transportDull.Add($"{button.Name}（{button.Visibility}）的{state}前景没有转深色");
+            }
+
+            VisualStateManager.GoToState(button, "Normal", false);
+        }
+
+        foreach (var (button, restore) in transportWas)
+            button.Visibility = restore;
+
+        UpdateLayout();
+
+        report.Add(transportDull.Count == 0
+            ? $"底部一排 {transport.Count} 颗的悬停/按下都按回了调色板（白底两档、前景深墨）"
+            : $"底部悬停不对：{string.Join('、', transportDull)}");
+        Want("底部一排的悬停/按下都按回了调色板", transportDull.Count == 0);
+
+        var transportMixed = new List<string>();
+
+        foreach (var (button, _) in transport)
+        {
+            SetTransportGlyphInk(button);
+
+            foreach (var (other, otherGlyph) in transport)
+            {
+                var want = ReferenceEquals(button, other)
+                    ? "PlayerStripHoverInkBrush"
+                    : "PlayerInkBrush";
+
+                if (!ReferenceEquals(otherGlyph.Foreground, Resources[want]))
+                    transportMixed.Add($"{button.Name}压着的时候{other.Name}那颗不是{want}");
+            }
+        }
+
+        SetTransportGlyphInk(null);
+
+        var transportLeftWhite = transport
+            .Count(pair => !ReferenceEquals(pair.Glyph.Foreground, Resources["PlayerInkBrush"]));
+
+        report.Add(transportMixed.Count == 0 && transportLeftWhite == 0
+            ? $"底部一排 {transport.Count} 颗的图标一格一格换（压着的那颗转深色、其余几颗白）"
+            : $"底部图标不对：{string.Join('、', transportMixed)}"
+              + (transportLeftWhite == 0
+                  ? string.Empty
+                  : $"；指针不在这一排时有 {transportLeftWhite} 个还是深色"));
+
+        Want("底部一排压着的那颗图标转深色、其余几颗回白", transportMixed.Count == 0 && transportLeftWhite == 0);
 
         Want("跳过按钮不压进度条", !Overlaps(skip, bar));
         Want("跳过按钮在画面里", Encloses(picture, skip));

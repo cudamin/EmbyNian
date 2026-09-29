@@ -30,6 +30,10 @@ public interface ISettingsService
 
     void Save();
 
+    bool TrySave();
+
+    bool HasUnsavedChanges { get; }
+
     /// <summary>
     /// 把偏好设置导出到用户选的文件。只含偏好，不含服务器、账号、令牌和窗口位置（见
     /// <see cref="SettingsPreferences"/>），所以这个文件可以带到别的机器或重装后用来恢复。
@@ -108,15 +112,23 @@ public sealed class SettingsService(SettingsStore store, AppSettings settings) :
     /// Writes the settings out, and never throws: every caller is a UI action that has already happened —
     /// a toggle flipped, a server renamed — and there is nothing for it to undo.
     /// </summary>
-    public void Save()
+    public bool HasUnsavedChanges { get; private set; }
+
+    public void Save() => TrySave();
+
+    public bool TrySave()
     {
         try
         {
             store.Save(Settings);
+            HasUnsavedChanges = false;
+            return true;
         }
         catch (Exception error)
         {
+            HasUnsavedChanges = true;
             Log.Warn(Category, "保存设置失败", error);
+            return false;
         }
     }
 

@@ -186,6 +186,29 @@ internal static class ServiceTests
 
     private static void RegisterSave()
     {
+        Test("保存：失败保留内存值和未保存状态，重试成功清除标记", () =>
+        {
+            var (service, settings, root) = NewService();
+            try
+            {
+                var path = new AppPaths(root).SettingsFile;
+                Assert.True(service.TrySave());
+                settings.Playback.SubtitleFontSize = 72;
+                using (var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    Assert.False(service.TrySave());
+                    Assert.True(service.HasUnsavedChanges);
+                    Assert.Equal(72, settings.Playback.SubtitleFontSize);
+                    service.Save();
+                    Assert.True(service.HasUnsavedChanges, "旧 Save 调用不抛异常也不丢失失败状态");
+                }
+                Assert.True(service.TrySave());
+                Assert.False(service.HasUnsavedChanges);
+                Assert.Equal(72, new SettingsStore(new AppPaths(root), Protector).Load().Playback.SubtitleFontSize);
+            }
+            finally { Cleanup(root); }
+        });
+
         Test("保存：写下去的东西读得回来", () =>
         {
             var (service, settings, root) = NewService();

@@ -2241,7 +2241,9 @@ internal static class PlaybackTests
                 Stream(1, "Subtitle", language: "kor"));
 
             var settings = Playback(subtitles: ["简体中文"]);
-            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "默认回退到文件自带的字幕");
+            Assert.True(TrackSelection.Resolve(settings, source).Subtitle.Disabled, "没有默认标记时不任意选轨");
+            source.DefaultSubtitleStreamIndex = 1;
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "回退只选明确的默认字幕");
 
             settings.SubtitleFallbackToDefault = false;
             var off = TrackSelection.Resolve(settings, source).Subtitle;
@@ -2771,12 +2773,11 @@ internal static class PlaybackTests
             Assert.Equal("background-box", box["sub-border-style"]);
             Assert.Equal("0.000/0.000/0.000/0.600", box["sub-back-color"]);
 
-            // 底板开着、颜色留「不设置」：只发样式，颜色交给 mpv 自己那个黑。这一档以前根本到不了
-            //（「不设置」要显式写出来 —— v13 起出厂颜色是黑色，不写就是带着颜色来的）。
+            // 未指定背景色仍使用黑色，并保留单独的不透明度选择。
             var inherited = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
                 new PlaybackSettings { SubtitleBackStyle = "opaque-box", SubtitleBackColor = "" }));
             Assert.Equal("opaque-box", inherited["sub-border-style"]);
-            Assert.False(inherited.ContainsKey("sub-back-color"));
+            Assert.Equal("0.000/0.000/0.000/0.600", inherited["sub-back-color"]);
         });
 
         Test("输出：外观应用范围只在「强制」时发出去", () =>

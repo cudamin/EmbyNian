@@ -16,6 +16,23 @@ internal static class HtmlColorTests
     {
         RegisterParseAndFormat();
         RegisterHsv();
+
+        Test("颜色选择：HEX 与 RGB 精确保留，读取 HSV 不损失原值", () =>
+        {
+            var selection = new HtmlColorSelection();
+            foreach (var text in new[] { "#123456", "#AC5D5D", "#FE0102", "#010203", "#808080" })
+            {
+                Assert.True(selection.SetHex(text));
+                _ = (selection.Hue, selection.Saturation, selection.Value);
+                Assert.Equal(text, selection.Hex);
+                selection.SetRgb(selection.Rgb);
+                Assert.Equal(text, selection.Hex);
+            }
+            Assert.False(selection.SetHex("#123"));
+            Assert.Equal("#808080", selection.Hex, "输入未完成时保留之前的颜色");
+            selection.SetHsv(120, 100, 100);
+            Assert.Equal("#00FF00", selection.Hex, "明确编辑 HSV 后才由 HSV 计算 RGB");
+        });
     }
 
     private static void RegisterParseAndFormat()

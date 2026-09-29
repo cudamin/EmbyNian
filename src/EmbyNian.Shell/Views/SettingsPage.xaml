@@ -846,36 +846,53 @@
                                 Height="{x:Bind StripHeight, Mode=OneWay}"
                                 x:Uid="SettingsPage_SubtitlePreview"
                                 HorizontalAlignment="Stretch">
-                                <Border
-                                    Background="{x:Bind PlateBrush, Mode=OneWay}"
-                                    HorizontalAlignment="Center"
-                                    Padding="22,2"
-                                    VerticalAlignment="Center">
-                                    <ItemsControl ItemsSource="{x:Bind Layers, Mode=OneWay}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <Grid />
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:PreviewLayer">
-                                                <TextBlock
-                                                    AutomationProperties.AccessibilityView="Raw"
-                                                    FontFamily="{x:Bind Family}"
-                                                    FontSize="{x:Bind Size}"
-                                                    FontWeight="{x:Bind Weight}"
-                                                    Foreground="{x:Bind Brush}"
-                                                    HorizontalAlignment="Center"
-                                                    IsHitTestVisible="False"
-                                                    Text="{x:Bind Text}">
-                                                    <TextBlock.RenderTransform>
-                                                        <TranslateTransform X="{x:Bind X}" Y="{x:Bind Y}" />
-                                                    </TextBlock.RenderTransform>
-                                                </TextBlock>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </Border>
+                                <ScrollViewer
+                                    HorizontalScrollBarVisibility="Auto"
+                                    HorizontalScrollMode="Enabled"
+                                    VerticalScrollBarVisibility="Disabled"
+                                    VerticalScrollMode="Disabled">
+                                    <Border
+                                        Background="{x:Bind PlateBrush, Mode=OneWay}"
+                                        HorizontalAlignment="Center"
+                                        Padding="{x:Bind PlatePadding, Mode=OneWay}"
+                                        VerticalAlignment="Center">
+                                        <ItemsControl ItemsSource="{x:Bind Lines, Mode=OneWay}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:SubtitlePreviewLine">
+                                                    <ItemsControl ItemsSource="{x:Bind Layers}" HorizontalAlignment="Center">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <Grid />
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:PreviewLayer">
+                                                                <Border
+                                                                    Background="{x:Bind Background}"
+                                                                    Padding="{x:Bind BoxPadding}"
+                                                                    Margin="{x:Bind BoxMargin}"
+                                                                    HorizontalAlignment="Center"
+                                                                    IsHitTestVisible="False">
+                                                                    <Border.RenderTransform>
+                                                                        <TranslateTransform X="{x:Bind X}" Y="{x:Bind Y}" />
+                                                                    </Border.RenderTransform>
+                                                                    <TextBlock
+                                                                        AutomationProperties.AccessibilityView="Raw"
+                                                                        FontFamily="{x:Bind Family}"
+                                                                        FontSize="{x:Bind Size}"
+                                                                        FontWeight="{x:Bind Weight}"
+                                                                        Foreground="{x:Bind Brush}"
+                                                                        Opacity="{x:Bind GlyphOpacity}"
+                                                                        Text="{x:Bind Text}" />
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Border>
+                                </ScrollViewer>
                             </Grid>
                             <TextBlock
                                 Style="{StaticResource EgSettingNote}"
@@ -1273,14 +1290,27 @@
           内容直接顶到最上面。窗口标题栏（SettingsWindow）同日也摘了图标和字样，左上角
           从外到里都是空的。
         -->
-        <InfoBar
-            Grid.Row="0"
-            IsClosable="True"
-            IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
-            Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
-            Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
-            Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
-            Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
+        <StackPanel Grid.Row="0" Spacing="8">
+            <InfoBar
+                IsClosable="True"
+                IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}"
+                Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+                Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+                Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
+            <InfoBar
+                x:Name="UnsavedSettingsNotice"
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasUnsavedChanges, Mode=OneWay}"
+                Severity="Warning"
+                Title="设置尚未保存"
+                Message="修改仍在本次运行中生效，但关闭程序后可能丢失。请检查磁盘空间和目录权限后重试。"
+                Visibility="{x:Bind ViewModel.UnsavedVisibility, Mode=OneWay}">
+                <InfoBar.ActionButton>
+                    <Button x:Name="RetrySaveSettingsButton" Content="重试保存" Command="{x:Bind ViewModel.RetrySaveCommand}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+        </StackPanel>
 
         <Grid x:Name="SettingsBody" Grid.Row="1" Margin="0,12,0,0" ColumnSpacing="24">
             <Grid.ColumnDefinitions>

@@ -21,10 +21,10 @@ namespace EmbyNian.Shell.Views;
 /// </summary>
 public sealed partial class HtmlColorPicker : UserControl
 {
-    /// <summary>The current colour as H 0–360, S 0–100, V 0–100 — what the two drag surfaces edit.</summary>
-    private int _h;
-    private int _s;
-    private int _v = 100;
+    private readonly HtmlColorSelection _selection = new();
+    private int _h => _selection.Hue;
+    private int _s => _selection.Saturation;
+    private int _v => _selection.Value;
 
     /// <summary>
     /// True while this control is putting a value on the screen or through <see cref="Color"/>, so its
@@ -89,11 +89,7 @@ public sealed partial class HtmlColorPicker : UserControl
 
         // From outside — the row the picker is bound to. Nothing here commits back: only the user's own
         // gestures do, and they go through SetColor.
-        if (HtmlColor.TryParse(args.NewValue as string, out var rgb))
-        {
-            var (r, g, b) = HtmlColor.Rgb(rgb);
-            (picker._h, picker._s, picker._v) = HtmlColor.ToHsv(r, g, b);
-        }
+        picker._selection.SetHex(args.NewValue as string);
 
         picker.Refresh();
     }
@@ -154,8 +150,8 @@ public sealed partial class HtmlColorPicker : UserControl
     private void DragSquare(PointerRoutedEventArgs e)
     {
         var point = e.GetCurrentPoint(SatValSquare).Position;
-        _s = ToPercent(point.X, SatValSquare.ActualWidth);
-        _v = 100 - ToPercent(point.Y, SatValSquare.ActualHeight);
+        _selection.SetHsv(_h, ToPercent(point.X, SatValSquare.ActualWidth),
+            100 - ToPercent(point.Y, SatValSquare.ActualHeight));
         Refresh();
     }
 
@@ -163,7 +159,7 @@ public sealed partial class HtmlColorPicker : UserControl
     private void DragHue(PointerRoutedEventArgs e)
     {
         var point = e.GetCurrentPoint(HueBar).Position;
-        _h = (int)Math.Round(360 * Math.Clamp(point.Y / Math.Max(1, HueBar.ActualHeight), 0, 1)) % 360;
+        _selection.SetHsv((int)Math.Round(360 * Math.Clamp(point.Y / Math.Max(1, HueBar.ActualHeight), 0, 1)), _s, _v);
         Refresh();
     }
 
@@ -176,11 +172,11 @@ public sealed partial class HtmlColorPicker : UserControl
 
         // An emptied number box reports NaN rather than zero; casting that to a byte would throw. A
         // cleared channel simply means nothing new was said, so the current one stands until a number is.
-        var (currentR, currentG, currentB) = HtmlColor.FromHsv(_h, _s, _v);
+        var (currentR, currentG, currentB) = HtmlColor.Rgb(_selection.Rgb);
         var r = Channel(RedBox.Value, currentR);
         var g = Channel(GreenBox.Value, currentG);
         var b = Channel(BlueBox.Value, currentB);
-        (_h, _s, _v) = HtmlColor.ToHsv(r, g, b);
+        _selection.SetRgb(HtmlColor.Pack(r, g, b));
         Refresh();
         Commit();
     }
@@ -189,9 +185,8 @@ public sealed partial class HtmlColorPicker : UserControl
     {
         if (_quiet) return;
 
-        _h = Axis(HueBox.Value, _h, max: 360) % 360;
-        _s = Axis(SaturationBox.Value, _s, max: 100);
-        _v = Axis(ValueBox.Value, _v, max: 100);
+        _selection.SetHsv(Axis(HueBox.Value, _h, max: 360),
+            Axis(SaturationBox.Value, _s, max: 100), Axis(ValueBox.Value, _v, max: 100));
         Refresh();
         Commit();
     }
@@ -210,10 +205,7 @@ public sealed partial class HtmlColorPicker : UserControl
 
         // Live, like the page it is modelled on — but only when what is typed is a whole colour. A half-
         // typed code is left in the box alone; the colour moves on when the sixth digit lands.
-        if (!HtmlColor.TryParse(HexBox.Text, out var rgb)) return;
-
-        var (r, g, b) = HtmlColor.Rgb(rgb);
-        (_h, _s, _v) = HtmlColor.ToHsv(r, g, b);
+        if (!_selection.SetHex(HexBox.Text)) return;
         Refresh();
         Commit();
     }
@@ -224,11 +216,7 @@ public sealed partial class HtmlColorPicker : UserControl
     private void Commit() => SetColor(HtmlColor.Format(CurrentColor()));
 
     /// <summary>The state as a packed <c>RRGGBB</c> — the one form every reader here wants.</summary>
-    private int CurrentColor()
-    {
-        var (r, g, b) = HtmlColor.FromHsv(_h, _s, _v);
-        return HtmlColor.Pack(r, g, b);
-    }
+    private int CurrentColor() => _selection.Rgb;
 
     /// <summary>Draws the state onto everything, quietly — the number boxes included.</summary>
     private void Refresh()
@@ -245,10 +233,13 @@ public sealed partial class HtmlColorPicker : UserControl
 
             // The thumbs sit on Canvas, which sizes children by Left/Top rather than by alignment. Half a
             // thumb in from each edge keeps the circle inside the square at the corners.
-            Canvas.SetLeft(SatValThumb, Math.Clamp(_s / 100.0 * (SatValSquare.ActualWidth - 12), 0, SatValSquare.ActualWidth - 12));
-            Canvas.SetTop(SatValThumb, Math.Clamp((100 - _v) / 100.0 * (SatValSquare.ActualHeight - 12), 0, SatValSquare.ActualHeight - 12));
+            var squareWidth = Math.Max(0, SatValSquare.ActualWidth - 12);
+            var squareHeight = Math.Max(0, SatValSquare.ActualHeight - 12);
+            var hueHeight = Math.Max(0, HueBar.ActualHeight - 6);
+            Canvas.SetLeft(SatValThumb, _s / 100.0 * squareWidth);
+            Canvas.SetTop(SatValThumb, (100 - _v) / 100.0 * squareHeight);
             Canvas.SetLeft(HueThumb, -2);
-            Canvas.SetTop(HueThumb, Math.Clamp(_h / 360.0 * (HueBar.ActualHeight - 6), 0, HueBar.ActualHeight - 6));
+            Canvas.SetTop(HueThumb, _h / 360.0 * hueHeight);
 
             RedBox.Value = r;
             GreenBox.Value = g;
@@ -266,6 +257,29 @@ public sealed partial class HtmlColorPicker : UserControl
     {
         var hex = HtmlColor.Format(CurrentColor());
         if (!string.Equals(HexBox.Text, hex, StringComparison.Ordinal)) HexBox.Text = hex;
+    }
+
+    internal static async Task<(bool Ok, string Detail)> ProbeExactInputAsync(HtmlColorPicker picker)
+    {
+        var exact = true;
+        var values = new List<string>();
+        await Task.Delay(50);
+        foreach (var hex in new[] { "#123456", "#AC5D5D", "#FE0102" })
+        {
+            picker.HexBox.Text = hex;
+            await Task.Delay(50);
+            values.Add($"{hex}:{picker.Color}/{picker.HexBox.Text}");
+            exact &= picker.Color == hex && picker.HexBox.Text == hex;
+        }
+        picker.Color = "#123456";
+        await Task.Delay(50);
+        picker.RedBox.Value = 19;
+        await Task.Delay(50);
+        var rgb = picker.Color == "#133456";
+        picker.SetColor("");
+        await Task.Delay(50);
+        var cleared = picker.Color.Length == 0;
+        return (exact && rgb && cleared, $"真实控件假数据：HEX 精确={exact}、RGB 精确={rgb}、清空={cleared}；{string.Join("；", values)}");
     }
 
     private static Windows.UI.Color ToColor(int rgb)
