@@ -1,6 +1,847 @@
 # 开发进度
 
-最后更新：2026-09-26
+最后更新：2026-09-29
+
+## 播放页左上角元数据字号收一档、集成与独占两模式同步等大（2026-09-29 用户令，构建＋实拍探针＋发布＋闸门 4 本域绿；单测 4 红、自检 2 红均为他窗在途）
+
+用户原话：「左上角的的这个元数据缩小一点点，集成模式和独占模式大小要一致」。
+
+**改法**：两模式本来就是同一套公式（独占 `\fs` = `round(alt_title_size × 因子)`，集成 = `\fs` × 0.75 的 96 DPI 换算），这次把因子从 0.77 收到 0.71、两头一起落一档：独占窗口档 `\fs18`→17、全屏档 `\fs24`→22（`elements/TopBar.lua` 的 `EMBYNIAN[topbar-subline-size]`；`alt_title_size` 24/31 与整条顶栏几何一像素没动）；集成窗口档 13.5→12.75、全屏档 18→16.5（`Styles.xaml` 的 `EgSublineFontSize`＋`PlayerPage.Chrome.cs` 的 `WindowSubtitleFont`/`FullscreenSubtitleFont`）；自检断言常量与报告跟到 12.75（`PlayerPage.SelfCheck.Chrome.cs`，字号报告 F0→F2 免得 12.75 显示成 13）。相关注释数字（PlayerPage.xaml 两处陈旧的「字号 24」一并纠正）与历史令记录同步。
+
+- **验证**：luajit `loadfile` 语法过；Release 构建 0 警 0 错；单测 **1359/1363，4 红与上午截图目录会话记录的是同一批**（字幕窗口在途 diff：选轨回退、sub-border-style、字幕预览×2 —— `TrackSelection.cs`/`MpvOutputOptions.cs`/`SubtitlePreviewPlan.cs` 文件 mtime 11:16–11:39 在本条动手之前，本条一个没碰；本域的「uosc 补丁都在」四条全过）。字号基线计数不变（Styles.xaml 仍 2 处内联）。
+- **独占实拍**（`work/probe-topbar-look.py patched`，白底 lavfi 真窗口）：玻璃带几何与取色原样（返回键 y[5..34]、副标题带 y[36..59]、两条 1px 缝、两块都是 28,27,31）；副标题墨迹 **276×12**（改前 `\fs18` 实测 292 宽，292×17/18≈276，正好一档）；副标题玻璃宽 309（改前 313/326 随内容）；放大图 `work/shots/topbar-patched-zoom.png` 字形斜体正常。
+- **集成侧运行期**：发布构建自检「浮层让开控制条」通过，Detail 明读「字号 12.75、斜体 Italic」、剧名玻璃 321×24 挂返回键正下方 1.0 不变。
+- **闸门 3/4**：发布 527 文件 / 300.6 MB / 11 GLSL（verify-publish 过，桌面快捷方式即指此目录）；自检发布构建 `run-b5e34300…` 失败 2 —— ①「文件页文件选项」②「字幕示例预览跟着外观走」；对**改动前发布件**（`EmbyNian-stale/publish-win-x64-20260929-093249`）的对照轮 `run-9377e6e0…` 失败 1：「文件页文件选项」同一读数复现（历版在案环境红）、「字幕示例预览」彼处绿 —— 即它来自上午 11:16–11:39 字幕窗口的在途 Core diff，与本条无关。本域「浮层让开控制条」两轮全绿。
+- **覆盖缺口**：独占全屏档（`\fs22`）没有单独实拍（2026-09-28 起的老缺口）；集成带真实内容的左上角视觉仍需真播才拍得到（`--show-osd` 那路无内容），字号以自检读数为凭。「缩小一点点」落在一档（约 −6%），嫌不够再加档。
+
+## 设置新增「截图保存目录」：空着用装机落点，填了当场生效（2026-09-29 用户令，构建＋1365 单测中本域全绿＋发布＋闸门 4 本域绿）
+
+用户原话：「在设置中新增截图的保存目录」。
+
+**改法**：设置存新键 `Mpv.ScreenshotDirectory`（空＝装机落点 `<数据目录>\screenshots`，缺键读出来行为不变，无需迁移；恢复默认/备份恢复经 `SettingsPreferences` 整组抄 `Mpv` 自动跟着走）。「哪里落」的裁决只有一个函数——`AppPaths.ResolveScreenshotDirectory(configured, fallback)`：`TypedPath.Clean` 掉「复制为路径」的引号空白，相对路径展开成绝对（外置 mpv.exe 工作目录在 mpv.exe 那层、内置 libmpv 用本进程的，同一个「相对」会落两个地方），非法字符原样交回让 mpv 报「未保存」而不悄悄改。三处同源：计划层起播选项（`PlaybackPlanner.ScreenshotDirectory` 每次现算）、关于卡「截图目录」读数、自检「截图有落点」。**当场生效**：新方法 `PlaybackService.ApplyScreenshotDirectoryAsync` 写正播那部的 `screenshot-directory` 属性，经 Attach 递方法组（同字幕外观那条缝）——改了目录，正播的下一张截图就落新目录，uosc 画面菜单副标题展开的也是它。
+
+**建目录的两道时机都不在行提交里**（每敲一键提交一次，会把路径每个前缀都建成文件夹）：App 启动建一次（自检与「打开」等得到），关于卡「打开」按钮先建再开。`SettingFactRow.Value` 由此改成可变（内部 set＋通知）——播放器卡改目录，关于卡那行不重开窗口就跟上。
+
+- **验证**：Release 全方案 0 警 0 错；单测新增 2 条（设置压过兜底＋清空回兜底；裁决函数合同七断言）全过，**1359/1363，4 红全部是字幕窗口在途 diff 的既有红**（选轨回退、sub-border-style、字幕预览×2 —— 与菜单样式窗口当天记下的同一批，文件 `TrackSelection.cs`/`MpvOutputOptions.cs`/`SubtitlePreviewPlan.cs` 本条一个没碰）。空白检查：本条 10 个文件 `--include` 全过；树级红在 `SubtitleBehaviorTests.cs`（他窗未跟踪新文件，不动）。自检（dev 与发布构建各跑一遍，`run-c28f9375…`/`run-abc1e4f1…`）：**本域全绿**——「截图有落点」改判同一条裁决规则后通过、播放器卡行数断言 4→5 并加钉「截图那行写明留空时的落点」、「设置分类走查/行模板」5 行全渲染；实拍 `work/shot-player-card.png`（第五行截图保存目录、占位符正常）与 `work/shot-about-card.png`（截图目录行显示裁决后的绝对路径）。发布 527 文件 / 300.6 MB / 11 GLSL。
+- **闸门 4 仍红两条、都不是本条的**：①「文件页文件选项」——历版在案的环境红；②「字幕示例预览跟着外观走」——字幕窗口在途 diff 引进（其单测同域同红），待那窗自己收。**交付目录因此带着那批在途改动**（上午光标会话同样如此），字幕窗口收尾后随下次整合再验。
+- **待实机**：①设置→播放器填一个目录，正播中的片子按画面菜单三档截图，文件应落新目录、关于卡读数当场换；②清空那一行，回到数据目录 screenshots；③下次起播同一份设置生效（计划层路）。推送那半（正播写属性）与 mpv 建目录那半无法离线验，走实机。
+
+## 独占模式右键菜单整把换成参考 mpv 配置的样式：字号 20 随窗缩放、悬停行白底深字、不透明 #222222 底板（2026-09-29 用户令，构建＋实拍探针；单测 4 红为同树在途）
+
+用户原话：「参考C:\mpv_config-2026.08.12修改本项目独占模式的右键菜单界面」。
+
+**参考配置的右键菜单是什么**：那份整合包 `portable_config/input.conf` 的 `MBTN_Right context-menu` 绑的是 **mpv 0.41+ 内建的 `context_menu.lua`**（本机那份 mpv.exe 带 `--load-context-menu`），样式写在 `portable_config/script-opts/context_menu.conf`。上游源码（`player/lua/context_menu.lua`，696 行）的几何公式：行高＝字号×(1+gap)、缩放＝`osd_height/720`（`scale_with_window=auto`）、悬停行白底（`focused_back_color`）深字（`focused_color`）、底板取 `osd-back-color` 黑时兜底 `#222222` 不透明、圆角 5、白描边 0.5、分隔线用 `disabled_color`。独占模式的菜单是 uosc 的 Menu 元件画的（宿主经 `open-menu` 推 PlayerMenuCatalog 那张树），所以改的是 `elements/Menu.lua` 的渲染＋`main.lua` 的选项表，逐项映射全部记在两处 `EMBYNIAN[menu-style]` 槽（选项区那份是翻译表，Menu.lua 那份是几何与上色；README 差异清单同步）。
+
+**换掉的旧尺子**：2026-09-26「右键菜单缩小一点」那轮的 `menu_item_height=30`（字号＝行高×0.48＝14.4，`state.scale` 基准）整把让位 —— 那轮压的是上游 50/24 的过大，这轮的尺子直接来自参考配置：`menu_font_size=20`、行高＝字号×1.2、缩放＝`display.height/720`（720p 高的窗口＝参考原值，1080p＝×1.5，不吃 uosc 的 `scale_fullscreen`）。悬停行从 0.15 淡染改成**整行白**（active 行＝当前值照旧 0.8 白高亮，两档白靠深浅分）；行间上游那道 0.04 细线照参考菜单撤掉，分隔线改 `#555555`；菜单底板不再吃 `opacity` 的 menu/submenu 两档半透明。**不搬的两件**（理由写在选项区注释）：子菜单悬停开合延迟 0.2s（要动 uosc 导航状态机，风险大于收益）、勾选框列（uosc 用 active 高亮示当前值，同义不同形）。
+
+- **验证**：`luajit -e assert(loadfile(...))` 两文件语法过；headless 点击流程探针 `work/probe-uosc-flow-menustyle.txt` 全绿 —— 点选集回 1 条 `embynian-episode-index`、版本菜单选第 2 行回 1 条且值为 2、点菜单外收摊且 pause 只在空白单击翻、版本按钮一版收两版回（P10「没找到画面菜单按钮」是 09-27 撤按钮后的既有状态，09-23/24 的历史报告里它还在）；**实拍探针** `work/probe-uosc-menu-style.py`（真窗口＋PrintWindow，`work/uosc-shot/menustyle-{a,b,c}.png`）：画面样菜单悬停行白底深字、子菜单 active 行 0.8 白、底板不透明圆角白描边、键盘 `down` 后白行跟着走、选集样菜单标题栏照旧 —— 11 行菜单高 272px＝11×24＋2×padding(4)，正是新公式（720 高窗口 scale=1）。
+- **构建＋单测**：Release 全方案 0 警 0 错。单测 **1356/1360**，4 条失败（选轨回退开关、sub-border-style 输出、字幕预览×2）**全部落在带着其他窗口未提交改动的 C# 文件上**（`TrackSelection.cs`、`MpvOutputOptions.cs`、`SubtitlePreviewPlan.cs`，合计 +48/−89 行在途 diff）；本条只动了 `assets/mpv-ui` 的 Lua 与 README、外加 `work/` 探针，不在任何程序集里 —— 4 红是在途工作的既有红，待那批会话自己收。
+- **闸门 3 未跑**：同树在途 C# 红着，此刻发布=把未验证的代码一起带出去；交付目录的桌面快捷方式仍是上一轮版本，下次整合发版时这份菜单样式随 `mpv-ui` 一起进交付目录。
+- **待实机**：①独占模式右键点画面，菜单应如 `menustyle-a.png`（白底悬停行、不透明底板、细白描边）；②分辨率/窗口越大菜单越大（随窗缩放，同参考 mpv 的行为——**全屏不再有 uosc 那档 ×1.3 跳变**）；③选集/版本/音轨/字幕/章节所有 uosc 菜单同款。
+
+## 独占模式鼠标不会自动隐藏：两条整画布兜底区骗了 on_control，cursor-autohide 恒被钉成 no（2026-09-29 用户报，构建＋1353 单测＋发布）
+
+用户原话：「独占模式下鼠标不会自动隐藏，请修复」—— 实机验收上一条（09-29 光标分家）时抓到的回归。
+
+**根因（探针实锤）**：上一条把 `cursor:on_control()` 的判据写成「`find_zone` 的四条任一命中」，但 EMBYNIAN 的两条兜底命中区 —— 点画面暂停（`embynian_click_pause_zone`，`primary_click`）与滚轮音量（`embynian_wheel_volume_zone`，`wheel_up`/`wheel_down`）—— **罩着整个画布**（`hitbox = 0,0 → display.width, display.height`，每帧在 render 最前登记）。它们是「画面」的交互区、不是「控件」：指针停在画面正中央也命中，`find_zone('primary_click')`／`('wheel_up')` 恒非 nil → hold 恒真 → `cursor-autohide` 被钉成 `no`（激活那一拍就翻），mpv 永远不收光标。上一条的探针存档（`probe-hold-visible-hold.txt`，死区 1.16s 藏）是**兜底区蒙出来的正确假象** + 当时判据尚未换成 find_zone 的混合产物 —— 病形由重跑的 `work/probe-hold-visible-repro.txt` 实锤：激活后 `autohide=no`、死区停四秒 `showing=True`。
+
+**改法**：两条兜底 hitbox（`main.lua`）打上 `embynian_fallback = true` 标记；`cursor.lua` 的 `on_control()` 弃用 `find_zone`（它只回第一个命中的区，空白画面上兜底区就是唯一命中，拿回来还得自己丢），改成**自己从后往前遍历 zones、跳过带标记的兜底区**，其余 `primary_down`/`primary_click`/`wheel_up`/`wheel_down` 命中才算压在控件本体上。真控件的 zone 由各元件在 render 里注册（音量条 wheel zone、时间轴 seek zone、按钮 primary zone），兜底区跳过后它们接得住。`MpvUiTests` 的「独占模式光标保活补丁」一条同步更新：反面钉「`on_control` 函数体里不许出现 `find_zone`」、正面钉「必须出现 `embynian_fallback`」、另加「`main.lua` 里 `embynian_fallback = true` 至少两处」—— 重打补丁漏掉标记＝病根原样回来。
+
+**探针自身两处修正**（不修会一直量出假象）：①音轨：`av://lavfi:sine` 作 `audio-add` **从未挂上**（track-list 无音轨 → `has_audio=false` → 音量条 visibility 恒 0、zone 不注册），改用 python 标准库现生成的真实 wav；②挂轨时机：`loadfile` 后立刻发 `audio-add` 吃 **-12（INVALID_PARAMETER）**，必须等窗口/加载就绪后再挂（挂上后等 `track-list/0/type == 'audio'`）。没有音轨的探针会得出「音量条上光标被收走」的假读数 —— 那不是 uosc 的行为，是音量条根本不在。
+
+**修复后读数（`work/probe-hold-visible-fix3.txt`，`has_audio=true`）**：死区 1.17s 后 `showing=False`（autohide 维持 `1000`）；时间轴四秒不藏（timeline 自己的 zone 命中，`autohide=no`）；音量条四秒不藏（音量条 wheel zone 接住）；顶栏带 (200,10)（标题玻璃，非按钮）1.16s 后光标藏、`top_bar` 可见度恒 1.00 —— 控件照留、光标照走，正是 09-29 那条令的字面。
+
+- **验证**：构建 0 警 0 错；单测 **1353/1353**、0 失败 0 跳过。发布 527 文件 / 300.6 MB / 11 GLSL（旧产物挪 `EmbyNian-stale\publish-win-x64-20260929-093249` 与 `EmbyNian.Shell-bin-20260929-093249`），新鲜度：publish dll == obj dll（`ca8d968c…`）、与上一轮 publish 的 dll（`e0a7df2c…`）DIFFER；PRI 相同（本轮只动 Lua 与测试，不进资源索引）。publish 目录的 `cursor.lua`/`main.lua` 均带 `embynian_fallback`。
+- **行为变化两点**：①顶栏**标题区**（非按钮）指针压住时光标一秒后照藏、顶栏照留 —— 上一条 hold 版靠兜底区把它钉住，按 09-29 令「只认按钮」的字面收窄；②**无声片**（`has_audio=false`）右缘压着的是画面不是音量条（uosc 本来就不画），光标照藏 —— 有声片才有音量条与它的保活。
+- **待实机**：①独占模式画面中间停一秒，光标应藏；②压进度条／音量条／控制条按钮／顶栏窗口按钮与返回键，光标不藏；③停在唤出带里控件留着、光标照藏；④换集/连播/菜单开关后光标自动隐藏不失效。
+- 本条未跑闸门 4（日常改动不跑）；上一条在途的「窗口命令按钮」红与本条无关、未收。
+
+## 光标与控件彻底分家：只有压在控件**本体**上才不藏鼠标，停在唤出带里照藏（2026-09-29 用户令，构建＋1353 单测）
+
+用户原话（两遍，第二遍是修正）：「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，触发渐变的时候不隐藏控件，但是要隐藏鼠标。」
+
+**这是对上一轮那一句的收窄**（上一轮见下一条：`!next.Any`／`element.proximity > 0`）。上一轮把「控件在不在屏上」当成光标的闸，于是**唤出带**（触发渐变的位置）也把光标留住了 —— 与「触发渐变时要隐藏鼠标」正相反。这一轮把两半彻底拆开，各认各的判据：
+
+- **控件那一半一个字没动**：还是只看位置（唤出带 + 压在控件上那两个理由），停在带里控件就留着（2026-09-28 那条令）。
+- **光标那一半收窄到「本体」**：只有指针**正压在**看得见摸得着的那一块上才不藏。
+
+**改法（集成模式，`ChromeReveal`）**：`Settle` 里光标那一格从 `!next.Any` 换成新的 `PointerHolds`（＝`HoldsCursor(_part)`）—— 只认 `ChromePart` 那四处命中（`Bar`／`Title`／`Volume`／`Skip`），`None` 不算。同一条判据开成 `public static HoldsCursor(ChromePart)` 给外壳诊断行用（`PlayerPage.ExplainNoHide` 读页面自己那份 `_pointerOn`，两处必须同一个答案，所以判据只有一个）。`ChromeState.Any` 保留 —— 页面 `ChromeUp` 与日志行还在读它，它不是光标那一问了。
+
+**改法（独占模式，uosc）**：`lib/cursor.lua` 的 `EMBYNIAN[cursor-hold]` 把判据从「四块元件的 `proximity > 0`」换成 `cursor:on_control()` —— 问 uosc 自己的**命中区**（`cursor:find_zone` 的 `primary_down`／`primary_click`／`wheel_up`／`wheel_down` 四条任一命中）。问命中区而不是自己拿矩形算，是因为**按钮级几何只有元件自己知道**：控制条那一排按钮、顶栏那四颗窗口按钮与返回键、音量条的静音键、时间轴上的章节圆点各自注册的是**它们自己的小矩形**，比元件本体小得多 —— 这一问因此比按元件矩形算更窄也更准，正好落在用户点名的「按钮」上。落点仍是 `queue_autohide()` 的第一行。
+
+**上一轮那版为什么错**（记在源码注释里，测试反面钉着）：`element.proximity > 0` 是**唤出带** —— 指针落进带子（离元件矩形 120px 以内、还没碰到它）就把光标钉住了。uosc 的 `Element:update_proximity()` 里只有进入矩形内（`proximity_raw == 0`）才是 `proximity == 1`，所以带子是 `0 < p < 1` 那一段。这版不是「改个符号」，是换判据源：从「元件的 proximity」换成「光标自己的命中区」。
+
+- **验证**：构建 0 警 0 错；单测 **1353/1353**、0 失败 0 跳过。新增一条 `MpvUiTests`「压在控件本体上不藏、唤出带里照藏」把 uosc 补丁钉在源码上（含「判据函数体里既不许出现 `cursor_leave_fadeout_elements` 也不许出现 `proximity`」两条反面）。发布 527 文件 / 300.6 MB / 11 GLSL（旧产物挪 `EmbyNian-stale\publish-20260929-084751` 与 `shell-bin-20260929-084751`），新鲜度两条全中：publish dll == obj dll（`2882d7f6…`）、与上一轮 publish 的 dll（`1a39e661…`）DIFFER。
+- **单测对账（三处旧断言随行为改口）**：①「滚轮改音量时单独亮出音量条」—— 从前 `FlashRail` 那一拍就断言 `CursorHidden=false`，现在指针在死区里、空闲钟先走满，光标照走，改成量「光标走了不牵连音量条」；②「拖动标题移动窗口时不画进度条和音量条」—— `Tick` 现在会返回 `true`（光标翻一格），改成量 `State` 那一格而不是返回值；③「从音量条上离开窗口也要收起音量条」—— 进入区那一支现在光标会翻真，`Tick` 因此也返回 `true`，同样改成量 `State`。三处都是断言写得比新行为更死，不是行为错。
+- **闸门 4**：`自检 179、失败 2；消失 0、降级 2、新增 0`（`run-1acc7ac3…`）。**「显隐规则」本轮先红后绿**：探针自己那一步写错了 —— 「指针回到画面中间」原本断言 `cursorHidden: true`，可那一记 `Pointer(...)` 默认 `moved: true`，横越画面是一次真移动、空闲钟从它重数，于是光标当场回来（带里那一秒已经走过）。改成 `false`，并把理由写进注释；「画面中间静止 1000ms 后」那一档仍旧读 `true`。修后读数正是本次令的样子：**在唤出带里停四秒→进度条 100%、鼠标已隐藏**；压在进度条／音量条本体上四秒→鼠标还在。
+- **本轮留下的两条红都不是本次改动的**：①「文件页文件选项」（Episode 页音频 318–590 出界，窗口宽 1064）—— 历版在案的环境红，每轮都有；②「窗口命令按钮」（全屏时窗口化图标不对）—— **在途未提交的「第六批补批」引进的**，与光标改动无关（`PlayerPage.Chrome.cs` 那 +521 行按钮格两档在本轮开工前就压在树里）。第二条待那一批的会话自己收，或者由用户拍板本轮是否照发。
+- **待实机**：①压在进度条／音量条／上方的按钮上，光标不许消失；②停在底部或右缘的**唤出带**里（没碰到控件），控件留着、光标一秒后照藏；③两种模式表现一致。
+
+## 控件自动隐藏两分家：控件只认位置、光标才是那条钟；独占模式把 cursor-autohide 钉住（2026-09-28 用户令，构建＋1352 单测＋发布＋闸门 4 过）
+
+用户原话：「请按以下要求修改集成模式和独占模式下的控件自动隐藏行为：当鼠标停留在对应控件的渐变触发位置时，不要自动隐藏这些控件；当鼠标停留在音量条或进度条上时，不要自动隐藏鼠标指针。请在两种模式下分别处理，并确保修改后的交互逻辑一致。」（另：「具体细节你决定，我睡觉去了」）
+
+**先取证，再动手**（`work/probe-hold-visible.py`，真窗口＋真 libmpv＋挂音轨的 lavfi 源，四个景各停四秒，逐拍读 OS 的 `GetCursorInfo` 与 uosc 侧读数；补丁前读数 `work/probe-hold-visible-before.txt` 与 `_hold-before.log`）—— 摸清了两个模式的**实情不同**：
+
+- **独占模式「控件那一半」本来就已经成立**：uosc 的元件显隐只看 proximity，而 proximity 只在 `cursor:leave()` 时归零，`leave` 挂的是 hover=false／全屏切换／菜单禁用器 —— **mpv 自己收光标不会把 hover 翻假**。实测：压在顶栏带上四秒，OS 光标 `showing=false`，而 `top_bar` 的可见度一直是 1.00、`timeline` 压在时间轴上时也一直 1.00。
+- **独占模式「光标那一半」是真毛病**：宿主不碰 `cursor-autohide`（`ShowMpvCursor` 那道 `PictureInHostWindow` 门），于是收光标的是 mpv 自己的默认 1000ms —— 实测右缘那一段 1.16 秒后 `showing` 翻假，**压在音量条/进度条上照收**。uosc 原有的「命中区等级 2 顺带禁掉自动隐藏」只覆盖「指针正压在注册过命中区的元件上」，不是位置判据。
+- **集成模式两半都要改**：三条边从前各有一条空闲窗口（静止 650ms／停在控件上 2000ms），到期就收 —— 这正是用户点名的「停在渐变触发位置控件自己又淡没了」。
+
+**改法（集成模式，`ChromeReveal` 是唯一判据）**：`Decide` 里那一条「空闲窗口走了就把三样一起收掉」整个删除 —— 三条边现在**只认位置**（唤出带 + 「指针正压在控件上」那两个既有理由），外加钉住／拖动／双击纯净闸与两条宽限期。空闲钟只剩一个客户：**鼠标指针**（`CursorIdleMilliseconds`），而它只在「屏上什么都没有」时才走（`Settle` 里那个 `!next.Any`）—— 于是同一句话的另一半「压在音量条/进度条上不藏鼠标」是这条结构推出来的结果，两根条各自都是「屏上有东西」的理由。随之删除的死件：`IdleMilliseconds`、`ParkedIdleMilliseconds`、`Parked`、`IdleWindow`。
+
+**改法（独占模式，uosc `EMBYNIAN[cursor-hold]`）**：`lib/cursor.lua` 里指针落在那四块控件（`config.cursor_leave_fadeout_elements` —— 与「光标离开时淡出哪几块」同一份名单，不另抄）的 proximity 带里就把 mpv 的 `cursor-autohide` 钉成 `no`，离开把装配时的原值还回去。`no` 是 mpv 认的取值：playloop 每拍重算可见性，`cursor_autohide_delay == -1` 那一支直接置真并推 `VOCTRL_SET_CURSOR_VISIBILITY`，**已经藏着的光标也会当场放回来**（`player/playloop.c` v0.40.0 第 840 行）。挂点是 `queue_autohide()` 的**第一行** —— 装箱 `options.autohide=false`，排在 `is_autohide_allowed()` 那道闸之后就永远跑不到。**补丁后的读数**（`work/probe-hold-visible-hold.txt`）：死区照旧 1.16s 后 `showing=false`；时间轴／音量条／顶栏带三处全程 `showing=true`，`autohide=no` 49 拍 vs 补丁前 80 拍全是 `1000`。
+
+**代价写明白（这是本轮唯一推翻旧结论的地方）**：指针撂在唤出带里不动，控件与光标就**一直挂着**（从前两秒后收走）。2026-09-15 那次报的正是反过来的毛病（「全屏时最下方的进度条不会自动隐藏，鼠标也不会自动隐藏」），当时用「停靠只买耐心（2000ms）」修的；用户这条更晚的指令把它翻了过来，要收回来只有一条路：把指针挪回画面中间或移出窗口。**另一处顺带的行为变化**：加载闩／浮层钉子放开那一拍，死区里的指针会让控件当场收（从前有 650ms 缓冲）—— 位置说了算，没有再为「刚放开」留一拍。
+
+- **验证**：构建 0 警 0 错（`work/build-gate1.log`）；单测 **1352/1352**、0 失败 0 跳过（`work/test-gate2.log`，新增一条 `MpvUiTests`「独占模式光标保活补丁：压在音量条/进度条上不藏」把 uosc 补丁钉在源码上，含「挂点必须在 `is_autohide_allowed` 前面」那条）；改动 9 个文件行尾全 LF。发布 **527 文件 / 300.6 MB / 11 GLSL**（旧产物挪 `EmbyNian-stale\publish-20260929-002505`），新鲜度：publish dll == obj dll（`6b81f9a9…`）、与上一轮 publish 的 dll 不同。
+- **闸门 4**：`自检 179、失败 1；消失 0、降级 1、新增 0`（`run-1bb3d7d9…`）—— 唯一失败仍是既有环境红「文件页文件选项」（Episode 页音频 318–590 出界，窗口宽 1064，历版在案）。**「显隐规则」那一关本轮先红后绿**：新加的六拍里有「松开标题之后」读成音量条 100% —— 探查下来是**探针自己的次序问题**（前一步把指针停在音量条上了，没先报回底部带），不是生产代码；已修：拖动那一拍之前补一次 `Pointer(height-10, …)`。
+- **待实机（两点，都要手看）**：①指针停在底部/右缘的唤出带里不动，控件与光标都不该收（松开指针挪回画面中间，控件应立刻收、光标一秒后藏）；②压在音量条/进度条上停住，光标不许消失。独占模式那一半建议顺手看一眼顶栏带上光标也留着（与集成模式一致，是本轮故意做的对齐）。
+- **连带**：本树还压着别的在途改动（`MoviePilot*`／`EmbyItem`／uosc 顶栏与跳过按钮那几份），发布件把它们一起打进去了 —— 本轮一个字节都没碰它们（`git status` 115 项，本轮涉及 9 个文件）。
+
+## 右上四颗的格两档：可见底 35→46、缝 5→6、右让 5→6、圆角 2→3（2026-09-28 深夜第六批补批，构建＋单测＋发布）
+
+用户令（附截图）：「集成模式下这个四个按钮全屏和最大化时没放大，修复」。第六批把整条浮层并了档，但漏了这一栏的**格** —— 此前两档的只有图标字号（13.125/17.25，`ApplyWindowGlyphScale`）与图钉实框（`PinGlyphBox`），四颗的可见底 35 见方、彼此的缝 5、右让 5、往下让 4、圆角 2 全是 XAML 写死的窗口档：全屏下图标涨了、框没涨，看起来就是「没放大」。
+
+- **全屏/最大化档照独占 `TopBar.lua` 同一批公式在 1.3 档的读数**：size 52（round(40×1.3)）、margin 6（floor((52−26)/4)）⇒ 可见底 **46**（`bg_size ＝ size − margin`）、彼此的缝 **6**（＝margin，`bg_ay ＝ ay ＋ margin` 同源）、右让 **6**；圆角 **3**（`state.radius`）。往下让位 4 无独占链（第五批拍板），按策略 ×1.3 ＝ **5.2**。
+- **落点**：`ApplyWindowGlyphScale` 从「只摆图标字号＋图钉实框」扩成连格一起摆 —— 四颗 `Width`/`Height`、`WindowButtons.Spacing`、`WindowButtons.Margin`、四颗 `CornerRadius`；新增 `WindowCommandCell/Gap/Inset/Top` 两档常量（`PlayerPage.Chrome.cs`）；XAML 那一栏的注释同批写明两档（35/5/4/5/圆角 2 仍是窗口档初值）。
+- **自检核对**：`ProbeClearance` 的「右上四颗都是 35×35」「四颗的左缘步进仍是 40」两条量的是窗口档（它开头把窗口摆回普通窗口再量），不受影响；`ProbeWindowCommands` 的「图钉实框比格小（<40）」在全屏档 18.2 仍成立；悬停底/已置顶常亮底画在按钮自己的 Width/Height 上，格涨它们跟着涨，不用另改。
+- **验证**：构建 0 警 0 错（`work/build-pin.log`）、单测 **1351/1351** 0 失败 0 跳过（`work/test-pin.log`）；发布 527 文件 / 300.6 MB / 11 GLSL（旧产物挪 `EmbyNian-stale\publish-20260928-233638` 与 `shell-bin-20260928-233638`），新鲜度三条全中：publish dll == obj dll（`c0127c44…`）、与上一轮 publish 的 dll/PRI 都 DIFFER。
+- **待实机**：全屏/最大化档的 46/6/6/3/5.2 没有实拍（`--show-osd` 不接受合成输入的老坑），真机按 F 看一眼即可。
+
+## 集成模式整条浮层并入独占的 scale 策略：按钮格、行缝、内缩、倍速条、音量条、跳过按钮全随档（2026-09-28 深夜第六批，构建＋单测＋发布）
+
+用户令：「复刻独占模式的控件放大策略到集成模式」（此前刚问清了独占那头＝`state.scale = hidpi × (fullormaxed ? 1.3 : 1)`，全屏/最大化都算大档、倍率与分辨率无关）。此时集成已并了四簇（标题簇、进度条图标行、右上四颗、时间轴 31/40），剩下的固定件这一批全归进来 —— XAML 里那句「按钮格没动……要对齐说一声」等的就是这一轮。
+
+- **判据与倍率不新增**：全沿用 `BigChrome`（全屏或最大化，全页唯一那一处）；新增 `ChromeFactor`（＝1.3）只给 `ArrangeTransport` 里两处动态公式用。hidpi 那一半不用复刻 —— WinUI 的有效像素本来就随系统 DPI 走，uosc 的 `hidpi_scale` 是给 ASS 物理像素补的那一层。
+- **按钮行**（`ApplyTransportScale` 从「只动图标字号」扩成整行）：格 32→**42**、行内缝与三个 StackPanel 的 Spacing 2→**3**、行 Margin 8→**10**（＝uosc `Controls.lua` 的 round(32×1.3)／round(2×1.3)／round(8×1.3)）、圆角 2→**3**；倍速条高 42→**54.6**、宽档 100/146 ×1.3（动态处，`ChromeFactor`）、文字倍速键宽 64→**83.2**。
+- **音量条**（新 `ApplyRailScale`）：宽 40→**52**（＝uosc `Volume.lua` round(volume_size×scale)）、静音键格 40→52、贴缘让位 20→**26**、轨高夹取上限 280→**364**（`ArrangeTransport` 里那一个数分两档，公式本体不动）、静音键图标 22→**28.6**（窗口档 22 是第五批拍板的现值，全屏 ×1.3；不照 uosc 的 0.7 链重推成 27 —— 窗口那颗本来就与 21 差 1，重推两档反而对不上）、100 刻度横档 6→7.8、数字底让位 8→10.4。`PaintTransportReadouts` 的数字裁剪宽从手抄 40 改读 `VolumeTrack.ActualWidth`，不然涨到 52 时数字被裁。
+- **跳过按钮**（新 `ApplySkipScale`）：Padding 24/28→**31.2/36.4**、圆角 28→**36.4**、右让位 28→36.4（Margin 的 Bottom 现值原样带回 —— 那一位是 `PlaceOverlays` 的，它每趟整条重写）、行距 10→**13**、倒计时条 4→**5.2**、图标 16→**20.8**、标题 16→20.8、提示 12→**15.6**。XAML 里 `SkipStack`/`SkipRow`/`SkipGlyph` 补名。
+- **接线**：`ApplyTitleScale` 在原两处之后新带 `ApplyRailScale`／`ApplySkipScale`，末尾补一次 `ArrangeTransport()` —— 形态变了但 Root 尺寸恰好没变的路（最大化↔全屏同尺寸）没有 SizeChanged 替它重跑宽档与轨高上限。**范围**：弹层不并（菜单/轮盘/seek 预览是另一族表面；独占随 scale 缩的是 uosc 自绘 Menu，集成这边是系统样式 Flyout，两边弹层都没跟）。
+- **验证**：构建 0 警 0 错（`work/build-scale.log`）；单测 **1351/1351**、0 失败 0 跳过（`work/test-scale.log`）；三个改动文件行尾全 LF。发布 527 文件 / 300.6 MB / 11 GLSL（旧产物挪 `EmbyNian-stale\publish-20260928-230614` 与 `shell-bin-20260928-230614`）。**dll sha 那笔账修正**：挪走 bin 后 publish 必按它自己的 `DebugType=None` 重编一遍，与 build 的 dll 字节**必然**不同 —— 新鲜度判据改为「publish dll == obj dll（本轮 `088b36b9…`）」＋「与上一轮 publish 的 dll／PRI 都不同」，本轮三条全中。没跑闸门 4（非发版；自检里钉轨宽 40 的那一关量的是窗口档，BigChrome 为假不受影响）。
+- **待实机**：全屏/最大化档的全部新数（42/3/10/52/364/54.6/28.6/跳过按钮一组）只有单测与读数，没有实拍 —— 自检探针不进全屏，`--show-osd` 那条路不接受合成输入（见上批记录），全屏档一贯只能真机按 F 看。
+
+## 集成右上四颗照独占窗口档对齐：置顶换成同一颗实心图钉＋已置顶常亮，图标回到 13.125、可见底收到 35（2026-09-28 深夜第五批，闸门 1-4 过＋两头实拍）
+
+用户令两条（原话）：「把集成模式右上角的置顶图标换成跟独占模式一样的」；「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的窗口模式下右上角的一样大」。第二句动手前问了一句「已置顶时想显示成什么样」，用户选了**「跟独占完全一致」**（取消「两颗图钉切换」，改成一颗实心图钉＋整颗常亮）。
+
+**置顶那颗换人**（`PlayerPage.xaml` 的 `PinGlyph`）。
+- 形状不再是自绘的两颗几何，而是**独占同一支字体的同一个字形**：`assets/mpv-ui/fonts/MaterialIconsRound-Regular.otf` 的 `push_pin`（cmap 0xF10D，upem 512 里占 298×426 单位）—— 用 fontTools 取轮廓、Y 轴翻过来、等比缩到 0~9.793 × 0~14。
+- 尺寸照独占的**实拍**定：`work/probe-topbar-pin.txt`（1280×720、阈值 200 的白核连通域）读到 **9×14**，宽跟着高走 ⇒ **9.793×14**（`WindowPinGlyph`），全屏档 ×1.3 ⇒ 12.731×18.2。两档摆在外面那层 `PinGlyphBox`（Viewbox）上。
+- **踩了一个坑并在同一轮修掉**：`PathIcon` **不缩放几何**（项目里早有记录，`ShellPage` 那五颗图标的注释就是为它写的）。第一版把字体的原始坐标（0~512）直接填进 Data，实拍里那颗图钉是**空的** —— 整颗落在 9.793×14 的框外面，白底上一个深色像素都没有（`work/shots/topstrip-int-pin5.png`：置顶格深像素 379 ＝ 格内暗背景，白块里一个都没有）。改成与控件**同尺度**的坐标后一次通过（`topstrip-int-pin5b.png`，那颗实心图钉清清楚楚）。自检新增一条「图钉的墨框就是窗口档那一对（坐标与控件同尺度）」钉它。
+- **状态改成「整颗常亮」**（`PlayerPage.Input.cs` 的 `SetPinned`）：已置顶＝底换悬停那一档的白（`PlayerStripHoverBrush` 写进控件自己的 `Background`，Normal 态模板照 TemplateBinding 画它）、图标转深色；未置顶＝没有底、图标白。这就是独占 `elements/TopBar.lua` 的 `lit = is_hover or (button.is_pin and state.ontop)`。`SetStripGlyphInk` 因此新增两个字段（`_pinned`、`_stripHot`）：置顶那颗由「指针压着**或**已置顶」推颜色，拨开关时还得把指针压着的那颗重算一遍（否则一次置顶切换会把压着的那颗的深色抹回白）。
+
+**四颗的图标与可见底一起对齐窗口档。**
+- 三颗窗口命令的**图标回到 13.125／17.25**（＝撤销深夜第三批那一除，`WindowCommandGlyph`／`FullscreenCommandGlyph`）。
+- **可见底从 40 见方收到 35**（＝独占 `size 40 − margin 5`，`margin ＝ floor((40−20)/4) ＝ 5`）：四颗按钮各 35 见方、`WindowButtons` 加 `Spacing="5"` —— 40 那个数改当**步进**用，整排仍是 4×40＝160、贴右上角、右缘让 5、往下让 4，与独占逐项相同。自检两条一起钉：「右上四颗都是 35×35」＋「四颗的左缘步进仍是 40」。
+
+**自检与测试**：`ProbePin` 按新机制重写（一颗图钉；底色/图标色两档；墨框与实框；按钮尺寸），`ProbeClearance` 里「四颗 40×40」改 35×35、「平时没有底」按**置顶状态**分两支、`glyphSets` 名单收到一颗 `PinGlyph`、`SetStripGlyphInk` 那关的期望色按 `_pinned` 算。约定基线的 `handle` 段 **PinOffIcon／PinOnIcon → PinGlyph**（有意替换，逐行确认后改）。闸门 1 **0 警告 0 错误**＋空白检查过；闸门 2 **1351 项全过**；闸门 3 发布 **527 文件／300.6 MB／11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致；闸门 4 检查 **179**、失败 1（**文件页文件选项** —— 与 A/B 旧件一字不差 ⇒ 环境/历版红，照发只记）。
+
+**实拍**（`work/shot-topstrip-int.py`；两张都是**已置顶**那一档，正好构成对照）：`work/shots/topstrip-int-before.png`（旧件：暗底＋白色小圆头图钉、四颗可见底 40）→ `work/shots/topstrip-int-pin5b.png`（新件：白底＋深色实心 `push_pin`、四颗可见底 35）。对照图 `work/shots/topstrip-int-pin5-compare.png`。
+
+**没做的**：全屏档只在自检里量过（实框 12.731×18.2、墨框不跟着变），没有全屏实拍；独占那一头一个字没动；「未置顶」那一档也没有实拍（形状与已置顶同源，同一份 Data）。
+
+## 集成模式右上四颗图标缩小 1.3 倍＋整排左移 5 像素；独占模式右上角加置顶按钮（2026-09-28 深夜第四批，闸门 1-3 过＋两头实拍量尺）
+
+用户令两条（原话）：「把集成模式右上角的这四个图标缩小 1.3 倍，向左移五个像素」；「给独占模式右上角也加个置顶图标」。
+
+**集成这一头（两笔都落在那同一排上，格与「贴右缘、往下让 4」一个字没动）。**
+- **四个图标一起缩**：窗口三颗（最小化／最大化／关闭）13.125 → **10.096**（＝13.125 ÷ 1.3），全屏档 17.25 →
+  **13.269**；置顶那颗 `PathIcon` 16 见方 → **12.31**（＝16 ÷ 1.3）。落点：`PlayerPage.xaml` 的
+  `WindowGlyphStyle` 与两颗 `PathIcon` 的 `Width`/`Height`，`PlayerPage.Chrome.cs` 的 `WindowCommandGlyph`／
+  `FullscreenCommandGlyph`。**上一条条目里那句「置顶那颗不动」按这条令作废** —— 用户点的是照片上那**四个**
+  图标（图钉、最小化、最大化、关闭），不是三颗。
+- **整排左移 5**：`WindowButtons` 的 `Margin` 右值 0 → 5（那一栏住在 2 号 Auto 列里，右边让出 5 ＝ 整排往
+  左挪 5）。左边距仍是 0 —— 左移靠右缘让位，不是靠左缘推（后者会把这一栏从右缘顶开，看起来就是没对齐）。
+
+**独占这一头：右上角加一颗置顶按钮**（`elements/TopBar.lua` 的 `EMBYNIAN[topbar-pin]`）。
+- 排在窗口三颗的**左边**，与集成那一排同序（置顶、最小化、最大化、关闭）：`{pin, min, max, close}`
+  （`top_bar_controls='left'` 时镜像成 `{close, max, min, pin}`）。
+- 点它 `cycle ontop` ＝把这扇 mpv 窗口置顶 —— **不经过宿主**：宿主那头的 `TopMost` 管的是它自己的主窗口
+  （集成模式走 `PlayerPage.Input.cs` 的 `SetPinned`），独占的窗口就是 mpv 那个顶层窗，置顶在它身上就是
+  `ontop` 这个属性。
+- 图标 `push_pin`（装箱的 MaterialIconsRound 里确有此字形，与集成那颗 PathIcon 的图钉同义）。
+  **已置顶那颗常亮**（借悬停那一档的底与反色图标）：uosc 的图标字体只有实心钉一支，画不出集成那两颗
+  「躺着的空心钉／立着的实心钉」，状态只能靠这一层表示 —— 亮着的含义就是已置顶。
+- 状态来源在 `main.lua`：`state.ontop` 初值 ＋ `mp.observe_property('ontop', 'bool', create_state_setter('ontop'))`
+  （与 fullscreen／maximized 同一个形状，谁改的它都从那里回到顶栏重画）。两处补丁清单（main.lua 文件头、
+  `assets/mpv-ui/README.md`）都已登记；`MpvUiTests` 新增守卫「独占模式右上角置顶按钮：uosc 补丁两头都在」。
+
+**实拍与量尺（脚本与报告都在 `work/`）**
+- 集成（`work/shot-topstrip-int.py pin13` ＋ 连通域量尺 `work/measure-topstrip-int.py`）：那一排里**有底的那
+  一颗**（自检钉浮层时会把「最小化」按进 PointerOver）两轮照片里都是 40×40、中心 x **963.5 → 958.5**（＝
+  左移 5）；应用自己的关闭叉宽 **14 → 10**、亮像素 65 → 20。为什么另写一把尺：原来那把自己按「贴右缘、
+  40 见方」推格，左移 5 之后整排错了一格，把邻格白底算进了置顶那格（第一次量出假的 `26×40`）；而且
+  `--show-osd` 那条路上系统标题栏那三颗压在应用那排上（更暗、高 8px、y11..19），格内混着两层，连通域
+  才分得开（这两个坑都写进了新脚本的文件头）。
+- 独占（新探针 `work/probe-topbar-pin.py`：真窗口 ＋ 真 libass ＋ 中灰底 ＋ `set-min-visibility 1 top_bar`
+  绕显隐闸 ＋ `PrintWindow` 抓窗口面）：uosc 报 `buttons=4`、名单 `push_pin[pin],minimize,crop_square,close`；
+  置顶那一格亮像素 **未置顶 64 → 已置顶 1139 → 再放下 64**（可见底 35 见方 ＝ 1225 像素），其余三颗两档
+  一字不变（9／40／21）⇒ **判定全过**。第一版探针把格按「最右是置顶」切，全错位一格（已置顶读到的 1139
+  其实是最左那颗的，判据却拿去对关闭那颗），修正与教训记在脚本里。
+
+**闸门**
+- 闸门 1：构建 0 警 0 错（`work/rep-toppin-build2.log`）、`dotnet format whitespace --verify-no-changes` 过
+  （`rep-toppin-format.log` 空文件）。闸门 2：单测 **1351/1351**、0 失败 0 跳过（`rep-toppin-test.log`，
+  比上轮多 1 ＝ 新增的那条置顶守卫）。闸门 3：发布 **527 文件 / 300.6 MB / 11 GLSL**，publish 与 build 的
+  `EmbyNian.dll` sha256 一致（`c8c16b1f…`）。
+- **闸门 4：检查 179、失败 2、新增 0、消失 0**（`work/rep-toppin-selfcheck.log`）。两条都是**既有红**：
+  「文件页文件选项」是历版在案的（上一条条目已记）；**「窗口命令按钮」这一条在会话前的产物上一字不差地
+  重现** —— 同一脚本加 `-Exe EmbyNian-stale\publish-20260928-213034\win-x64\EmbyNian.exe`（那是本轮动手
+  之前那一份）跑出同样的两行红（`work/rep-toppin-selfcheck-prev.log`），两边读数都是「右上角那颗=最大化，
+  窗口未最大化，窗口化」⇒ 那一关的 `SetFullscreen(true)` 没落地，属环境，不是本轮改动引出。
+- **本轮改动自己带的判据全绿**：`ProbeClearance` 新增「置顶那颗图钉也缩了 1.3 倍（可见那颗实框 12.31
+  见方）」「实框比它自己那一格小（40 见方的格没被拉伸填满）」「右上那一排的右缘离客户区右缘 5 像素」——
+  三条读数都在「浮层让开控制条」那一关里印了出来：「图标字号都是 10.096（窗口档；＝独占 17.5 × 0.75 ÷ 1.3）」
+  「置顶图钉：可见那颗实框 **12×12**（写的是 12.31）」「那一栏实框右缘离客户区右缘 **5.0**」；同一关里
+  「右上四颗都是 40×40」照旧成立 ⇒ 格确实没动。置顶那颗的 `ActualWidth` 是这一轮最要紧的一条：只读
+  XAML 里写的 `Width` 会「写着 12.31、画出来却是 40」而照样绿，读布局结果才证明它真被缩了。
+
+**⚠️ 待实机验收（都在他手上，本轮验不到）**
+- 集成那四颗缩小 + 整排左移的**肉眼观感**（照片能证明读数，好看不好看要他自己看）。
+- 独占那颗按钮的**真实鼠标点击**：探针切的是状态（`set ontop`）与画法，点击路径靠 uosc 的 `cursor:zone`
+  （与窗口三颗同一套机制）没注入过指针；`cycle ontop` 这条命令本身只有源码断言在守。
+- 独占的置顶**不写设置**（集成那颗是 `SavedPinTopmost` 持久化的）：独立 mpv 窗口一关就没了，两模式各管各的。
+  要跟着集成一起记，说一声。
+
+## 集成模式右上角三颗窗口命令的图标：字号照独占窗口档换算，两档判据放宽到「全屏或最大化」（2026-09-28 最晚，闸门 1-4 过＋实拍逐颗量尺）
+
+用户令两条（原话）：「集成模式窗口化的时候右上角的图标太大了，改成跟独立模式窗口化时一样大」；
+更晚「你就不能跟独占模式一样，全屏的时候放大，窗口化的时候缩小吗」＋「包括进度条上方的按钮」「包括进度条」。
+
+**根因：与进度条那一行同一笔账 —— 照数字抄，没乘 0.75。** 右上那一排是 2026-09-28 白天那批「复刻独占
+模式右上角的最小化、窗口化、关闭」做的：**格**照 uosc 复刻了（40 见方、无缝、贴角、不带常驻底），**字号
+却仍是照首页 caption 抄来的 16**。而独占那一头是 `elements/TopBar.lua` 的
+`ass:icon(bg_ax + bg_size / 2, …, bg_size * 0.5, button.icon, …)` —— 图标画在**可见底**（40 减去
+`margin = floor((size - font_size) / 4)`＝5，即 35 见方）的中心、直径是它的一半 ＝ **17.5**，单位是 libass
+的 `\fs`（72 DPI 的 pt）；而 WinUI 的 `FontSize` 是 96 DPI 的 px，**× 0.75 才等大** ⇒ **13.125**。
+全屏那一档独占整条顶栏按 `state.scale`＝1.3 放大（size 52、margin 6、可见底 46、图标 23）⇒ **17.25**。
+
+**先量再改。** 两支探针（都是本轮新写的）：独占那头 `work/probe-topbar-buttons.py`（真窗口 ＋ 真 libass
+＋ 中灰底 `av://lavfi:color=c=gray` ＋ `set-min-visibility 1 top_bar` 绕显隐闸 ＋ `PrintWindow` 抓窗口面，
+按 uosc 报出来的 `top_bar_size` 推格、逐颗量墨迹）；集成这头 `work/shot-topstrip-int.py`（钉住浮层那条
+命令行开关 ＋ 屏幕 DC 抓客户区 ＋ 指针停进顶部唤出带）。窗口档逐颗（集成只算**应用自己那三颗**）：
+
+| 那颗 | 独占（含 1.2px 描边 ／ 白核） | 集成改前 16px | 集成改后 13.125px |
+|---|---|---|---|
+| 最小化（横杠） | 11 ／ 9 | 16×2 | 14×2 |
+| 最大化（方框） | 15 ／ 11 | 16 | 13 |
+| 关闭（叉） | 13 ／ 9 | 16 | 13 |
+
+三颗按同一个 13.125 画出来，**逐颗对不齐是正常的**（Segoe Fluent Icons 这几个符号的墨框＝1.0 em，
+MaterialIcons 那颗是 0.56~0.65 em），按平均对齐 —— 与进度条那一行同一条规矩。关闭那一颗最干净：
+独占屏上 13、集成照 13.125 画出来 13，一格不差。
+
+**⚠️ 量这四格新踩到的一层（第一版读数就错在这里）**：`--show-osd` 那条路**没有摘掉 WS_CAPTION**，系统
+标题栏那三颗窗口键就压在应用自己那一排上、**高 8 像素、更暗**。于是「最小化／最大化／关闭」三格里的墨迹
+是**两层叠在一起** —— 最大化那颗因此量出 23×21 的「双方框」，多出来的那个小方块其实是系统那颗；关闭那颗
+量出 16×21（顶上那 5 行是系统的叉）。置顶那颗没有系统对应物，全排只有它是干净的 —— 认出这一点靠的正是
+它。真播放里 WS_CAPTION 是被摘掉的，屏上没有这一层。要只量应用那三颗：纵带收到 **y≥17**。
+
+**改法（只动图标，不动格）**：
+- `PlayerPage.xaml`：新增 `WindowGlyphStyle`（`BasedOn OsdGlyphStyle`，`FontSize` **13.125**），
+  `MinimizeGlyph`／`MaximizeGlyph` 换用它；关闭那颗原先是个无名内联 `FontIcon`，补上
+  `x:Name="CloseGlyph"` 并换用同一支（全屏档要靠名字改它）。
+- `PlayerPage.Chrome.cs`：新增 `WindowCommandGlyph = 13.125` / `FullscreenCommandGlyph = 17.25` 与
+  `ApplyWindowGlyphScale(bool)`；它在 `ApplyTitleScale` 里紧跟 `ApplyTransportScale` 之后被带上 ——
+  进出全屏与进页面那四条路只调那一个方法。
+- `PlayerPage.SelfCheck.Chrome.cs`：`ProbeClearance` 里补一关「右上三颗窗口命令的图标是窗口档那一档字号」
+  （读三颗的 `FontSize`；它在 `ProbeWindowCommands` 那几关之前跑，页面还在窗口档）。
+- **格（40 见方、无缝、贴角）、悬停底、置顶那颗（16 见方的 PathIcon）一个字都没动。**
+
+**第二笔（同晚更晚那条用户令）：大档的判据从「全屏」放宽成「全屏或最大化」。** 用户令：「你就不能跟
+独占模式一样，全屏的时候放大，窗口化的时候缩小吗」＋「包括进度条上方的按钮」「包括进度条」。
+独占那一头正是这样：`state.scale = hidpi * (fullormaxed and scale_fullscreen or scale)` —— `fullormaxed`
+把最大化一起算进 1.3。**页面上本来就有一个先例：时间轴**（`Timeline.cs` 的 `TimelineFullHeight` ＝31/40，
+一直这么判），所以这一笔不是新规矩，是把标题簇、进度条上面那一行、右上那三颗都并到时间轴那条判据上：
+
+- `PlayerPage.Chrome.cs`：新增 `BigChrome => _window is { Fullscreen: true } or { IsMaximized: true }`
+  （全页唯一判据）、`ApplyChromeScale()`（按形态摆）与 `SyncChromeScale()`（档位真的变了才重摆）；
+  `ApplyTitleScale` 开头记下 `_chromeBig`。兜底摆在 `OnGeometryChanged`（＝`WM_SIZE`）里 —— 系统那几条
+  改形态的路（双击标题、Win+↑、拖到顶）谁都不经过页面的窗口 API，只有 `WM_SIZE` 是共同痕迹。
+- 四个调用点：`ApplyFullscreen` 与 `SetFullscreen`（画面不在宿主窗那支）改成 `on || IsMaximized`；
+  `EnterPlayer` 与 `OnPlaybackStarted` 改成走 `ApplyChromeScale()`（最大化着进页面时，XAML 里那档初值
+  不是这一档）。退全屏回到最大化那一档时，`IsMaximized` 当拍还读不到 —— 随后那次 `WM_SIZE` 补上。
+- **自检两处**（这一笔引出的必然）：① `ProbeWindowCommands` 里补了三条断言 —— 全屏时三颗＝17.25、
+  **最大化时＝17.25、还原时＝13.125**（这一档没有照片能拍，只能钉在自检里）；② `ProbeClearance`
+  开头把窗口摆成**普通窗口**再量、量完还原 —— 它整关量的是窗口档的数（玻璃 30、上沿 5、字号 20/13.5、
+  图标 13.125/16.5），判据放宽之后一个最大化的自检窗口会让它整关按大档画、于是全红。
+
+- 闸门 1：构建 0 警 0 错（`work/rep-winglyph-build2.log`／`rep-big2-build.log`）、
+  `dotnet format whitespace --verify-no-changes` 过（`work/rep-winglyph-format.log` 空文件）。闸门 2：
+  单测 **1350/1350**、0 失败 0 跳过（`work/rep-big2-test.log`）。闸门 3：发布 **527 文件 / 300.6 MB /
+  11 GLSL**（`发布验证通过`），publish 与 build 的 `EmbyNian.dll` sha256 一致（`a694d46a…`；旧产物挪
+  `EmbyNian-stale\publish-20260928-200607`）。发布件里 `13.125`／`17.25` 两个 double 都在。
+- **闸门 4：检查 179、失败 1（历版在案的「文件页文件选项」）、新增 0、消失 0**（`rep-big2-selfcheck.log`；
+  报告 `artifacts/selfcheck/run-e684dd2d.../logs/selfcheck-shell.txt`）。两条相关关都 [通过]：
+  「浮层让开控制条」印出「右上三颗窗口命令的图标字号都是 13.125（窗口档；＝独占 17.5 × 0.75）·… 窗口化」，
+  「窗口命令按钮」整关通过 ⇒ 里面那三条新断言（全屏 17.25／最大化 17.25／还原 13.125）都成立。
+  **这条同时补上了「全屏那一档没有照片」那个洞** —— 全屏与最大化两档现在都有自动判据。
+- **写 XAML 注释时踩的两条**：XML 注释里不能出现 `--`（一张 markdown 表格的分隔行与 `--show-osd`
+  都当场把构建打成 `WMC9997`）——改用列表、把命令行开关写成「那条钉浮层的开关」。
+- **没跑闸门 4**：这一轮不是发版、不升依赖。新加那一关读的是三颗的 `FontSize`，窗口档初值就写在
+  XAML 里（13.125），`ProbeClearance` 之前没有任何探针推过全屏档 ⇒ 两条路都读得到 13.125。
+- **⚠️ 全屏那一档（17.25）没拍成照**：与进度条那一轮同一个原因（那条路不接受合成输入），它走的是
+  与 `ApplyTitleScale` 同一组调用点，数是按 uosc 的 `state.scale` 算式推的。真机按一下 F 就能看到。
+
+## 集成模式进度条上面那一行图标：字号按「pt → px」对齐独占两档（2026-09-28 晚，闸门 1-3 过＋实拍逐格量尺）
+
+用户令一条（原话）：「集成模式进图条上面的图标要和独占模式一样，全屏时稍微放大」。
+
+**根因：又是两套刻度。** 集成的 `TransportGlyphStyle` 写 22px，而独占那一行是 uosc 的
+`ass:icon(x, y, font_size, 'skip_previous', …)`，`font_size = round(controls_size × state.scale × 0.7)`
+—— 窗口档 **22**、全屏档 `round(round(32×1.3)×0.7)`＝**29**，单位是 libass 的 `\fs`（72 DPI 的 pt），
+而 WinUI 的 `FontSize` 是 96 DPI 的 px，**乘 0.75 才等大**。照数字抄，集成等于独占的 1.33 倍 ——
+与同一晚那笔「集成模式下面的元数据体积太大了，与独占模式不一致」（18 → 13.5）**同一个根因**。顺带钉死：
+uosc 的按钮格（`controls_size=32` / `spacing=2` / `margin=8`）与集成 `TransportButtonStyle` 逐项相同，
+差的**只有字号**。
+
+**先量再改。** 新探针 `work/probe-controlbar-look.py`（真窗口 ＋ 真 libass ＋ 中灰底
+`av://lavfi:color=c=gray`，用 uosc 自己的 `script-message set-min-visibility 1 controls` 绕显隐闸，
+`PrintWindow` 抓窗口面后**按 uosc 报出来的格逐格量墨迹**）：窗口档（`\fs22`，格 32）下
+`skip_previous` 10×10、`skip_next` 10×10、`analytics` 16×16、`list_alt` 16×16、`movie_filter` 18×14、
+`closed_caption` 16×14、`graphic_eq` 16×18、`crop_free` 16×16 —— **平均墨高 14.25、墨宽 14.75**。
+集成那一头拿改前的旧发布件在同一窗口尺寸下实拍（`work/shot-controlbar-int.py`，`--show-osd pinned`，
+逐格量）平均墨高 19.25。两套图标的「墨框／字号」比例不同（MaterialIconsRound 约 0.5~0.75、
+Segoe Fluent Icons ≈ 0.875），逐颗对不齐，按平均算要乘 **0.75** —— 与那条换算同一个数
+（18.67 × 0.75 = 14.0 vs 14.25）。
+
+**改法（只动图标，不动格）**：
+- `PlayerPage.xaml`：`TransportGlyphStyle` 22 → **16.5**（＝22×0.75）；新增 `RailGlyphStyle`（22）给右缘
+  音量杆那颗静音键 —— 独占那一颗属 `volume_size=40` 那一档（`round(40×0.7)`＝28 号＝21px），本来就比这
+  一行大一档，分出来单立一支免得被带下去。`MuteGlyph` 改用新键。
+- `PlayerPage.Chrome.cs`：新增 `WindowTransportGlyph = 16.5` / `FullscreenTransportGlyph = 21.75`（＝29×0.75）
+  与 `ApplyTransportScale(bool)`；它在 `ApplyTitleScale` 的**头一句**被带上 —— 进出全屏与进页面那四条路
+  都只调那一个方法，两套尺寸一起摆，不可能漏一条。
+- **按钮格、间距、左右边距、`ArrangeTransport` 的按宽度收放一个字都没动。**
+
+**实测（同窗口尺寸 1064×792 的改前/改后逐格对照，`work/shot-controlbar-int-{before,after}.png`）**：
+
+| 格 | 改前 22px | 改后 16.5px | 比值 | 独占同位置（换算到同一格） |
+|---|---|---|---|---|
+| 左1（这一档只摆得出统计那颗） | 20×20 | 15×15 | 0.75 | `analytics` 16×16 → 折算 15.4 |
+| 右3 全屏 | 20×20 | 15×15 | 0.75 | `crop_free` 16×16 |
+| 右2 音频 | 17×21 | 14×17 | 0.81 | `graphic_eq` 16×18 |
+| 右1 字幕 | 22×16 | 17×13 | 0.81 | `closed_caption` 16×14 |
+
+对照图 `work/controlbar-icon-before-after.png`（独占窗口档 / 集成改前 / 集成改后，同一 3 倍放大）：改后
+三颗与独占那一行的墨迹**差 1~2 像素**，改前是大出三分之一的那一档。
+
+- 闸门 1：构建 0 警 0 错（`work/rep-glyph-build.log`）、`dotnet format whitespace --verify-no-changes` 过
+  （`work/rep-glyph-format.log` 空文件＝无改动）。闸门 2：单测 **1350/1350**、0 失败 0 跳过
+  （`work/rep-glyph-test.log`）。闸门 3：发布 **527 文件 / 300.6 MB / 11 GLSL**，`发布验证通过`，
+  publish 与 build 的 `EmbyNian.dll` sha256 一致（`d98d671e…`；旧产物挪
+  `EmbyNian-stale\publish-20260928-181923`）。发布件里 `16.5`（4 处）与 `21.75`（2 处）两个 double 都在。
+- **没跑闸门 4**：这一轮不是发版、不升依赖、也没碰自检 —— 逐条查过，自检里**没有任何一关读这一行的字号**
+  （读的只有标题簇的字号与那一排控件的可见性/排布），格与排布又一字未动，改动落不进任何一条读数。
+  要按惯例比一遍基线说一声。
+- **⚠️ 全屏那一档（21.75）这一轮没拍到照。** `--show-osd` 那条路里合成点击进不去（`mouse_event` 与
+  `PostMessage` 都试过，`--key-fs` 最小化/还原＋发 F 键也试过，客户区都不动）—— 那条路本就是拍浮层用的、
+  不接受合成输入。它走的是**与标题簇两档同一组调用点**（那条路用户已经在用），值是 `16.5 × 29/22` 这一步
+  乘出来的；真机按一下 F 就能看到。**没动的地方**：按钮格（32／2／8）、音量杆那颗静音键（22）、
+  独占全屏那一档会连格一起涨到 42／3／10 —— 本轮点的是图标，要对齐说一声。
+
+## 集成模式音量条改用独占 uosc 的「到矩形的距离」proximity（2026-09-28 最晚，闸门 1-3 过＋发布 527 文件；闸门 4 检查 179、失败 1、新增 0）
+
+用户令一条（原话）：「集成模式鼠标需要移动到比独占模式更右边才会显示音量条，请参考独占模式修复集成模式」。
+
+**根因：先前只把 `RailFloor` 降到 0，没换判定曲线。** 中线附近逐点对比：
+- **触发线晚 20px**：集成在离右缘 160px（页面 `RailZoneWidth` 那条线性带内沿）才开始露；独占 uosc 在 180px（音量矩形左沿 `width-60` 减 `proximity_out=120`）就开始。
+- **斜率太缓**：集成 `railNear` 从 0 线性升到 1、一直贴右缘才满，还要再乘竖向中心偏置 `Centred`；独占在 100px（左沿减 `proximity_in=40`）就满、再往右一路满。于是在关键的接近段集成暗得多——感知上就是「要更靠右才看得见」。
+
+**关键事实**：集成的 `Rail` 在 XAML 里就是 `Width=40`、右边距 20、纵向居中，与独占 uosc 的音量矩形（`volume_size=40`、`margin=size/2=20`、右贴、纵向居中）**几何完全一致**。所以照 uosc 量「指针到这条真矩形的欧氏距离」再套它的 proximity 曲线，结果**就等于独占**。
+
+**改法**（几何在页面、曲线在 Core，照标题/控制条的分工）：
+- `ChromeReveal`：新增 `public static RailProximity(dist)`＝`Reveal(dist,0)`（uosc 曲线，单测钉）；`Loudness` 去掉 `* Centred`（`_railNear` 现在就是页面算好的 proximity）；**`Centred` 属性退役**；`RailStrength`/`RailFloor`/`_railNear`/`Pointer` 注同步。
+- `PlayerPage.RailNear` 重写：`!RailRoom()` 或未排版 → -1；否则量指针到 `OriginIn(Rail)`＋`ActualWidth/Height` 那条真矩形的欧氏距离（`dx=max(ax-x,x-bx)`、`dy=max(ay-y,y-by)`），`RailProximity(dist)`，proximity≤0 折成 -1（＝独占 proximity 0 不画）。删掉页面常量 `RailZoneWidth`（`RailNear` 是其唯一用户）。量真元素而非抄常量——唤出范围跟着 XAML 走，没有会漂的第二份尺寸。
+- 顺手订正 `RailMinPictureWidth` 注里已过时的「68×428/22 边距」（现条子 40 宽/20 边距/约 320 高）。
+
+**实测为证**（自检 `ProbeRailFade`，日志第 152 行）：**音量条 40×320**（证实与 uosc 同几何）；**刚进右侧带=1%**（离矩形 119px，proximity≈0.0125——独占那条几乎不可见的起淡沿，证明触发线已回到独占的距离）、**右缘中央=100%**、**右缘靠上=0%**（四角因欧氏距离远而自然变暗，接手原 `Centred` 那项覆盖）、**由外向内递增=是**；滚轮/手在滑杆上=100%；窄/矮画面=0%（尺寸门槛照旧）。「显隐规则」也整条通过。
+
+- 闸门 1 构建 0 警 0 错、`format whitespace` 过；闸门 2 单测 **1350/1350**、0 失败 0 跳过（退役「越靠画面中心越明显」离线测试＝`Centred` 已退，新增「proximity 曲线照独占」补上，净不变）；闸门 3 发布 **527 文件 / 300.6 MB**，验证通过。
+- 闸门 4：检查 179、**失败 1、新增 0**、降级 1——唯一那条是历版在案、随真实库数据波动的「文件页文件选项」（Episode 页音频行出界 2px），与本次音量条改动无关；本轮改的「音量条淡入淡出」如实**通过**。基线一行未改（标签全留原样，聚合项仍绿）。
+
+**留用户实机核对**：这台机器注不进鼠标事件，分级淡入的中间档、以及「音量条与独占同一位置开始显示」的真实手感，须在实机与独占并排核对（自检只摆拍了数值曲线）。
+
+**没动的地方**：左上角亚克力浓度（跟指针变深那套，仍走 `EdgeBandFraction`）、标题条/控制条那两条边的唤出、独占 uosc 本身（只作对齐参照）。
+
+## 集成模式右上角窗口按钮悬停底 五成 → 八成（2026-09-28 更晚，闸门 1-3 过＋发布 527 文件；闸门 4 检查 179、失败 1、新增 0）
+
+用户令一条（原话）：「集成模式右上角的这个背景太透明了」（附一张最小化那颗悬停态的截图）。
+
+**根因就是浓度本身**：那几颗悬停/按下的底是 2026-09-27 第五批定的「白色亚克力」—— `StripHoverAlpha = 0x80`（五成）、
+`StripPressedAlpha = 0x99`（六成）。五成的白压在**亮画面**（蓝天白云、亮场景）上会糊进去，与 09-27 第四批
+「背景颜色太浅了容易和画面合在一起」是同一件事，只是那次只提到五成。**量用户那张截图核准**：悬停块内
+(174,210,224)、紧邻天空 (105,173,200)，反解 alpha ≈ 0.46（＝五成，代码如实）。
+
+**改法**（档位用户选定）：悬停 `0x80 → 0xCC`（八成）、按下 `0x99 → 0xE6`（九成，两档仍差一成）。落三处：
+- `PlayerPalette.StripHoverAlpha` / `StripPressedAlpha` ＋ 那两段注释（把「趋势单向、别回调」写进去）；
+- `PlayerPage.xaml` 那条注释里的「悬停五成、按下六成」→ 八成/九成（另补 09-28 这条令）；
+- `PlayerPaletteTests` 那条「不许变白板」的卡口上界 `0xC0`（75%）→ `0xE0`（87.5%）—— 八成会顶到旧上界，非改不可。
+
+**实测（新取证出口）**：`ShowChromeForShot` 的 `pinned` 分支末尾会把「最小化」那颗按进 `PointerOver`（走自检同一条
+`GoToState`），照片里就量得到那张白底 —— **实测块内 (206,206,207)、块外 (13,16,18)，反解 alpha 0.798 ↔ `0xCC`**。
+两个坑（都回写进技能了）：推到 `UpdateLayout()` **之后**才有效（放前面拍到的是光板）；且**必须先在代码里断掉
+`WindowButtons` 的 `PointerMoved`／`PointerExited`** —— 窗口激活时那一次 `PointerExited` 会把状态抹回 `Normal`、
+图标墨也一并回白（第一次实拍就是这么白的）。
+
+- 构建 0 警 0 错；单测 **1350/1350**、0 失败 0 跳过；发布 **527 文件 / 300.6 MB**，Shell 与 Core 两个 dll 都与 build
+  逐字节一致，旧产物挪 `EmbyNian-stale\publish-20260928-172928`。
+- 闸门 4：检查 179、**失败 1、新增 0**、降级 1（唯一那条是历版在案的「文件页文件选项」＝ Episode 页音频出界；
+  上一轮还在红的「窗口命令按钮」这次因窗口处于窗口化态而通过 —— 那条本就随窗口状态波动）。
+- 对照图 `work/strip-hover-before-after.png`（你的截图那块 vs 新实拍）、档位模拟图 `work/strip-alpha-options.png`。
+
+**没动的地方**：左上角那几块玻璃的浓度（跟指针变深那套）一字未改；关闭那颗的红（`#C42B1C`，本来就不透明）。
+
+## 集成模式元数据行字号按「pt → px」换算改回 13.5（2026-09-28 更晚，闸门 1-3 过；闸门 4 179/2/0/2/0 与改前逐条相同，零新增红）
+
+用户令一条（原话）：「集成模式下面的元数据体积太大了，与独占模式不一致」。
+
+**根因：字号是两套刻度。** 上一轮「复刻标题」把 uosc 的 `\fs` 值照抄进了 `FontSize` —— 但 libass 的 `\fs` 按 **72 DPI 的 pt** 渲染，WinUI 的 `FontSize` 是 **96 DPI 的 px**，**72/96 ＝ 0.75**。几何（玻璃尺寸、内缩、缝、行高）照抄是对的，唯独**字号要乘 0.75**。
+
+**实测为证**（两头同串「└ 1920 x 1080 · HEVC · AAC · Studio GreenTea」，探针实拍 ＋ 逐像素量墨迹）：
+
+| | 字号 | 屏上墨迹宽 |
+|---|---|---|
+| 独占 窗口档（uosc `\fs`） | 18 | **292**（玻璃 326） |
+| 独占 全屏档（uosc `\fs`） | 24 | **388**（＝292 × 1.33，与字号比一致 ⇒ 换算是线性的） |
+| 集成 改前 | 18px | **385**（≈ 独占的全屏档，比窗口档大三分之一） |
+| 集成 改后 | 13.5px | **288**（与独占差 4px / 1.4%） |
+
+- **`Styles.xaml`**：`EgSublineFontSize` 18 → **13.5**（注释写全了刻度换算与实测）。
+- **`ApplyTitleScale`**：`WindowSubtitleFont` 18 → **13.5**、`FullscreenSubtitleFont` 24 → **18**（＝各自 `\fs` × 0.75），summary 里单列一段说明两套刻度。
+- **自检 `ProbeClearance`**：期望值常量同改，读数从「剧名玻璃 445×24、字号 18」变成「**339×24、字号 14**」（13.5 按 `F0` 显示成 14），其余一行未动。
+- **取证出口**：`PlayerPage.ShowChromeForShot` 在 `pinned` 时补摆一行样例标题与元数据（`--show-osd` 那一路 ViewModel 是空的、第二行会收起，照片上量不到集成这一头）；独占那头 `work/probe-topbar-look.py` 的 SUBLINE 同批对齐成同一个串 —— **同串才比得出两边的玻璃与墨迹**。
+- **验证**：闸门 1 构建 0 警 0 错；闸门 2 单测 **1350/1350**、0 失败 0 跳过（`work/rep-meta-test.log`）；闸门 3 发布 527 文件（旧件挪 `EmbyNian-stale\publish-20260928-171029`）；闸门 4（前台非沙箱）**检查 179、失败 2、消失 0、降级 2、新增 0** —— 仍是那两条既有环境红（`窗口命令按钮`＝生产 `Mpv.Pipeline = 1` 独占档导致宿主窗全屏不落地；`文件页文件选项`＝Episode 页音频出界），与改前发布件逐条相同。
+- **同批量到、本轮没改的**：**第一行标题也一样偏大三分之一**（独占窗口档是 `\fs20`、全屏 `\fs26`，集成写的是 20 / 26）。用户这一轮只点了第二行，所以只改了第二行；要对齐就是 `EgTitleFontSize` 20 → **15**、全屏 26 → **19.5** 两处。
+
+
+## 集成模式左上角标题簇照独占复刻（2026-09-28 更晚，闸门 1-3 过；闸门 4 检查 179 失败 2 —— 与改前发布件逐条相同，本批零新增红）
+
+用户令一条（原话）：「把独占模式的标题复刻到集成模式」。问实了两个口径：**整个左上角一起复刻**（返回键也算），**保留集成自己那支「跟指针越靠上越深」的玻璃浓度**（不照搬独占的实心近黑）。
+
+**两档数照独占的公式推**（`elements/TopBar.lua`：字号 `floor((size - ceil(size*0.25)*2) * font_scale)`、内缩 `margin = floor((size-font_size)/4)`、玻璃 `size - 2*margin`、缝 `title_spacing = round(1*scale)`、第二行高 `alt_title_size = round(font_size*1.2)`、第二行字号 `round(alt_title_size*0.77)`、左右内边距 `round(font_size/2)`）：
+
+| | 窗口档（size 40 / 字号 20 / margin 5） | 全屏档（size 52 / 字号 26 / margin 6） |
+|---|---|---|
+| 返回键玻璃 | **30 见方、四周各让 5** | 40 见方、让 6 |
+| 标题玻璃 | 高 30、上沿 5、左缘 36（＝返回键右缘 35 ＋1） | 高 40、上沿 6、左缘 47 |
+| 第二行玻璃 | 左缘 5、上沿 36（＝返回键玻璃下沿 35 ＋1）、高 24、内边距 10 | 左缘 6、上沿 47、高 31、内边距 13 |
+
+> 第二行那一栏最初照抄了 uosc 的 `\fs` 值（18 / 24），**当晚按「pt → px」刻度改成 13.5 / 18**（见上一条）——几何是对的，只有字号要乘 0.75。
+
+- **`PlayerPage.xaml`**：返回键那格 `Margin 0,4 → 5,5`、按钮 40 → 30；`TitleBox` `Margin 4,4 → 1,5`、`Height 40 → 30`、`Padding 12,0 → 10,0`；`SubtitleBox` `Margin 0,45 → 5,36`、加 `Height=24`、`Padding 12,4 → 10,0`；第二行文本改**斜体＋`PlayerInkMetaBrush`（中性浅灰 `#C8C8C8`）＋前缀「└ 」**。前缀走 TextBlock 里内联的 `Run`（`x:Bind ViewModel.Subtitle`），**不动 ViewModel** —— 推给独占 uosc 的那条消息（`PushSublineAsync`）走 `PlaybackTitles.Subline` 另一个来源，不会被双重前缀。
+- **`PlayerPage.Chrome.cs` 的 `ApplyTitleScale`**：两档照上表**逐档写死**。原来那版按「窗口档 ×1.3」推 —— 副标题 16×1.3 取整只有 21，而独占全屏那一档是 24；`_titleFontBase`/`_subtitleFontBase`/`FullscreenTitleScale` 随之退役，新增 `TitleGap = 1`（＝独占的 `title_spacing`，作标题框的左边距）。
+- **`PlayerPalette`**：新增 `InkMeta`（`#C8C8C8`）与表项 `PlayerInkMetaBrush` —— 与独占那一行的 `c8c8c8` **同一个值**。**没有**改 `InkDim`：那一档还管总时长/源信息，偏冷更深（`#A5ADBA`），混用会把那几处一起拖下水。`Styles.xaml` 新增 `EgSublineFontSize`（值是阶里 18 那一个）；XAML 里不写死颜色/字号 —— `Agreements` 的 `color`（`PlayerPage.xaml` 4 处）与 `font-size` 两条仍然零新增（基线未动）。
+- **自检 `ProbeClearance`**：历史上那条「顶部一排在同一条基线上」**退役** —— 复刻之后左上那一簇中线 20、右上那一排 24，本来就该是两条线（独占那边同样是两条：它的窗口键可见底 35 见方、中心 22.5，左边三块中心 20）。换成「左上那一簇自己一条中线（返回键玻璃与标题玻璃同高同顶）」＋「右上那一排在同一条基线上」；返回键那组常量 `40/0/4 → 30/5/5`；新增「第二行挂在返回键玻璃正下方（左缘同一条、上沿＝它的下沿＋1）」「剧名的字是那一档中性浅灰」「剧名的字走斜体」「剧名的字是自己那一档字号」。**没有新增/改名/退役检查名**（闸门 4「新增 0、消失 0」为证）。
+- **验证**：闸门 1 构建 0 警 0 错（`work/rep-title-build.log`）；闸门 2 单测 **1350/1350**、0 失败 0 跳过（`work/rep-title-test.log`）；闸门 3 发布 **527 文件 / 300.6 MB / 11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`51758e52…`），产物里 `PlayerInkMetaBrush`/`C8C8C8` 在 Core.dll、`EgSublineFontSize` 在 `EmbyNian.pri`。
+- **闸门 4**（`selfcheck-diff.ps1`，前台非沙箱）：**检查 179、失败 2、消失 0、降级 2、新增 0**。两条失败是「窗口命令按钮」（生产线 `settings.json` 的 `Mpv.Pipeline = 1` ＝ **Standalone 独占档**，自检无播放会话时 `PictureInHostWindow` 推算为假、宿主窗全屏不落地 —— 与 09-28 那轮记下的根因同一句话）与「文件页文件选项」（Episode 页音频 318–590 出界，历版在案）。**改前发布件（`EmbyNian-stale\publish-20260928-164403`）在同一档位下跑出逐条相同的报告**（同样 179/2/0/2/0、同样那两条，`work/rep-title-selfcheck-before.log`）—— 本批零新增红。
+- **新几何下的自检读数**（`[通过] 浮层让开控制条`）：返回键 **30×30 在 5,5**；标题那块玻璃 **501×30**、上留 2.0 下留 2.6；中线 **返回键 20.0、标题框 20.0（差 0.0）／右上那一排 24.0、24.0、24.0（差 0.0）**；返回与片名之间 **1.0**；剧名那块玻璃 **445×24** 在标题之下 **1.0**；**字号 18、斜体 Italic**；圆角全 2；满深线 y=56.0 动态跟随；左上玻璃浓度阶梯照旧（0→40、1→B3）。改前同一关的读数是「标题玻璃 505×40、上留 7.0 下留 7.6、五处中线全 24.0、返回键 40×40」。
+- **代价说在明处**：左上与右上自此不在一条基线上（差 4 像素）。这是复刻的必然结果，独占那边也一样 —— 「两模式同形」指的是**左上角这三块的内部关系**（玻璃 30、让 5、缝 1、第二行挂在返回键玻璃正下方），不是整条顶栏一刀切。
+- **照片那一路（`--show-osd pinned`）区分度极低**：浮层是半透明的、`--show-osd` 那一路 ViewModel 又是空的，新旧两张实拍在左上角只差 2.14% 像素（`work/shots/title-clone-{old,new}.png`、对照图 `work/title-clone-before-after.png`）。尺寸判据一律以自检读数为准（技能里同一条）。
+
+
+
+用户令一条（原话）：「把这个添加到元数据的前面」，随令附了一张「└」的字形截图。「└ 」正是参考项目 uosc 原版给**章节那一行**加的前缀（`TopBar.lua` 的 `prefix = left_aligned and '' or '└ '`，本项目的章节行已整段撤下）。
+
+- **`EMBYNIAN[topbar-subline-branch]`（`elements/TopBar.lua`）**：副标题渲染时前面缀 `'└ '`，照参考项目那个条件（`top_bar_controls='left'` 的老摆法不加）。**量字宽与画字都用带前缀的那一串**（`subline_text` 同时喂给 `text_width` 与 `ass:txt`），玻璃框宽因此跟着宽 13px；前缀画在玻璃里面（与参考项目同一个位置）。前缀吃整行同一个 `italic`，所以「└」也跟着斜。
+- **实拍**（`work/probe-topbar-look.py patched`）：副标题玻璃 x[5..330]（宽 326，改前 313）、墨迹 bbox 宽 292（改前 280），玻璃带与两条 1px 缝一字未变；放大图 `work/shots/topbar-patched-zoom.png` 里「└ 1920 x 1080 · AV1」清楚可见、字形正常（Microsoft YaHei 有制表符字形，不是缺字方框）。
+- **只改了独占**：集成模式的第二行（`SubtitleBox`）没有加这个前缀 —— 用户这张截图点的是独占，要对齐说一声。同批仍未合的还有「集成第二行仍是亮白」（见下一条）。
+
+## 独占顶栏续修：整簇左边也内缩 margin（左缝＝上缝）＋主标题接回剧名＋元数据字色转浅灰（2026-09-28 更晚，构建 0 警 0 错＋1350 单测全过＋发布 527 文件；实拍探针量的）
+
+用户令三条（原话）：①「左边的空隙要和上面的一样大」；②「然后标题前面加上剧名」；③「元数据的字体加点灰色」；随令附了独占左上角一张截图。那张图只有 115 宽、还含窗口外 15px 桌面，逐像素量出「改前」：返回键玻璃与副标题玻璃**都贴窗口左缘**（左缝 0），而两行玻璃的上沿都让了 5 —— 所以①指的是「左缝 0 → 5」。
+
+- **①整簇左边内缩（`EMBYNIAN[topbar-back-glass]`，`elements/TopBar.lua`）**：返回键玻璃从「左缘贴窗口左缘」改成**四周各让 margin**（左缘＝窗口左缘＋margin，与上沿同一个数）—— 整簇按 margin 内缩，左缝与上缝同数；返回键玻璃右缘＋`title_spacing` 仍是标题左缘（那条 1px 缝不动），**副标题的左缘跟着落到返回键玻璃同一条线**（`subline_ax = self.ax + margin`，不再单独贴窗口左缘 —— 它本来就是「挂在返回键正下方、与返回键对齐」那条令的产物）。窗口档实测：返回键玻璃 x[5..34]、副标题左缘 5、标题左缘 36。
+- **②主标题接回剧名（`EmbyItem.ToPlaybackHeadline`）**：单集从「SxxExx 集名」改成「**剧名** SxxExx 集名」—— 直接复用同一条 `ToPlaybackTitle()`，两处不再各写一份。2026-09-27 那条「剧名从这一行让给第二行的文件信息」被这条令翻案（第二行如今只剩分辨率/编码/音频/组名，剧名本来就不出现）。两条管线共用它，**集成模式左上角标题条同一批带上剧名**。跟着改口的三处注释（`PlaybackPlanner`、`PlayerViewModel.Events`）与一条单测断言（`EmbyTests`「单集标题带上剧名与集号」里的 headline 期望值）。
+- **③元数据字色转浅灰（`EMBYNIAN[topbar-subline-dim]`）**：副标题 `opts.color` 从与标题同色的 `bgt`（FFFBFE）改成 `c8c8c8`；实拍墨迹最亮档＝(199,199,199) ✓。**这里有个坑**：`lib/ass.lua` 的 `ass_mt:txt` 把 `opts.color` **原样接在 `\1c&H` 后面**，也就是要写 ASS 的 BBGGRR 顺序（`config.color.*` 是 `serialize_rgba` 换过序的）—— 本值是中性灰、两个顺序同串才没踩。
+- **实拍**（`work/probe-topbar-look.py patched`）：玻璃带一 y[5..34]（30 高）、带二 y[36..59]（24 高）；返回键玻璃 x[5..34]、标题玻璃左缘 36、副标题玻璃 x[5..317]；**两条缝各 1px、两块玻璃取色都是 (28,27,31)**；对照图 `work/topbar-round2-before-after.png`（用户那张截图 vs 改后实拍，同比例并排）。
+- **未验 / 连带**：全屏档（`scale_fullscreen=1.3` → 左缝/上缝＝6）仍没单独实拍；**集成模式第二行仍是亮白**（用户这批只针对独占那张截图），两模式在这一处又差一档 —— 要对齐说一声。
+
+## 独占顶栏：标题玻璃回参考尺寸＋两条缝收 1px＋返回键玻璃与标题同形同色＋副标题斜体（2026-09-28 晚，构建 0 警 0 错＋1350 单测全过＋发布 527 文件/300.6MB/11 GLSL；实拍探针量的）
+
+用户令四条（原话）：①「把标题的大小改回跟 C:\mpv_config-2026.08.12 这个项目一样大小」；②「返回键跟标题的间隙右边要跟下面一致」；③「标题下方的视频元数据改为斜体」；④「返回按钮的背景要和标题的背景一致」。
+
+三处口径会歧义，先问清再动手（三问三答）：①＝改的是**玻璃尺寸**不是字号（两边字号公式与取值本来就一样：窗口档 20、全屏档 26）；②＝**两条缝都收成 1px**；④＝**连大小一起跟标题一致**（明知与 09-28 那条「两模式返回键同大」相抵，用户选了这条）。
+
+- **`elements/TopBar.lua`**：
+  - `EMBYNIAN[topbar-back-glass]`：返回键可见底从「整格 `top_bar_size`＝40 见方、贴角、静止档写死 0.55」改成**与标题那块玻璃同形同色** —— 高 `size-2*margin`（窗口档 30）、从 `self.ay+margin` 起、贴窗口左缘（与它正下方的副标题同一左缘）、静止档 `config.opacity.title`（＝1，与标题同一个数）；命中区跟着可见底一起收（老写法是整格 40 见方，指针压在标题左端也会点亮返回键），图标仍按可见底的一半画。
+  - 返回键与标题之间那条缝从 `margin` 收成 `title_spacing`（＝1）：返回键那一段画完把 `ax` 推到 `rect.bx + self.title_spacing`，标题的 `title_ax` 因此不再另加 `margin`（uosc 原版那个 margin 是「窗口左缘到标题」的量，这里已被返回键占掉）。
+  - 标题玻璃回到 uosc 自家「上下各让 margin」那一条（`title_ay = self.ay + margin`、`by = by - margin`，播放列表序号那格同批回 `by - margin`）。副标题因此自然落到「标题玻璃下沿＋`title_spacing`」，**与返回键玻璃下沿也是 1px** —— 两条缝都是 1。
+  - `EMBYNIAN[topbar-subline-italic]`：副标题 `opts.italic = true`。
+- **实拍取证**（新探针 `work/probe-topbar-look.py <patched|noitalic>`；真窗口 + 白底 lavfi + uosc 自己的 `set-min-visibility` 钉住顶栏显隐）：窗口档读数 = 返回键玻璃 y[5..34]（30 高）＋标题玻璃 y[5..34]（30 高）、标题左缘 x=31＝返回键玻璃右缘＋1、副标题玻璃 y[36..59]（24 高）左缘 x=0＝返回键玻璃左缘；**两条缝各 1px、两块玻璃同一组精确掩码取色都是 (28,27,31)**。对照用户原截图（改前：返回键玻璃 40×40 淡灰、标题玻璃画满 40 高、缝 5px/1px）做成 `work/topbar-before-after.png`，另存两块放大图 `work/shots/topbar-{patched,noitalic}-zoom.png`；报告 `work/probe-topbar-*.txt`。
+- **斜体必须先证**：OSD 字体是 Microsoft YaHei（`MpvUi.OsdFont`），**它没有斜体字面**，`\i1` 未必出得来 —— 所以做了开/关 A/B 实拍：`patched` 那张副标题明显右倾、`noitalic` 那张正立，框宽随 `text_width` 的斜体增量宽了 4px。结论：libass 会合成倾斜，这条令成立。
+- **三处旧文档按代码回写**：`main.lua` 文件头补丁清单、`assets/mpv-ui/README.md` 顶栏那一段（含明写「**两模式的返回键大小自此不再相同**」）、`PlayerPage.SelfCheck.Chrome.cs` 里「返回键与独占模式同大」的注释与断言名（**只改说法，数值断言一律不动** —— 那几条量的本来就是集成这一头）。
+- **踩过的坑（留给下次）**：①嵌入场景里 **mpv 根本不上报 `mouse-pos`**（uosc 侧 `cursor.x` 恒为 inf、`proximity_raw=inf`），顶栏按接近度永远不露面 —— `SetCursorPos` 与合成鼠标移动都不管用（同目录那条真窗口双击探针能拿到坐标，是因为它先点了鼠标）；最后走 uosc 自己的 `script-message set-min-visibility 1 top_bar` 绕显隐闸，**几何一字未改**。②`--scripts` 要交 **uosc 目录本身**，交它的父目录＝日志里 `Cannot find main.* for any supported scripting backend`。③`cursor-autohide` 的值域上限是 3000（写 100000 会被 `mpv_set_option_string` 直接拒掉）。
+- **未验 / 连带**：全屏档（`scale_fullscreen=1.3` → size 52、margin 6 → 玻璃 40 高、上沿 6）没有单独实拍；整条顶栏的高度由 65 缩到 60（少的就是标题玻璃那 5px 上边距）。**两模式自此在左上角不同形**：集成那头返回键仍 40×40、标题框仍 40 高、副标题仍正立 —— 用户这一批只点了独占模式，集成一头一个像素没动。
+
+## 独占顶栏去章节行＋副标题改四项挂返回键下＋两模式返回键统一 40×40＋集成标题簇窗口/全屏两档尺寸（2026-09-28，构建＋1350 单测过；闸门 4 对开发件 179 项失败 2 均为环境红）
+
+用户令四条：①去掉独占模式下左上角标题下方的章节和时间；②下方那一栏改为「分辨率+视频编码+音频格式+组名」，然后移动到返回按钮的下方；③统一集成模式和独占模式左上角返回按钮的大小，高度要求和右边标题的高度一样；④参考独占模式为集成模式的窗口和全屏设置不一样的标题尺寸。
+
+- **独占 uosc（`elements/TopBar.lua`）**：①「当前章节＋剩余时间」那一行整段撤下（`select_current_chapter`/`on_prop_time`/`on_prop_chapters`/`chapter_size` 与渲染块全删，`EMBYNIAN[topbar-no-chapter]`；控制条上的章节菜单不受影响）；②副标题（`set_subline` 那行）渲染的左缘从「主标题的左缘」改成**窗口左缘**（`self.ax`，与返回键那块对齐，`EMBYNIAN[topbar-subline]`），`top_bar_controls='left'` 的老摆法保留；③返回键的可见底从 uosc 自家 margin 内缩的 35 见方放大成**整格 `top_bar_size` 见方、贴角**（`EMBYNIAN[topbar-back-size]`），标题条/播放列表格同批画满整格同高（`title_ay` 从 `self.ay` 起、不再上下各让 margin），于是返回键高度＝标题条高度、且与集成模式那颗 40×40 同大。
+- **副标题内容（`PlaybackTitles.Subline`，两模式同源）**：前置「分辨率」＝主视频轨 `宽 x 高`（格式照媒体信息那格），四项「分辨率 · 视频编码 · 音频格式 · 组名」逐项为空跳过；注释与 `MpvUi.Subline` 契约文档、`main.lua` 文件头、mpv-ui README（宿主→uosc 清单补登记 `embynian-subline`，四条→五条）同步改口。
+- **集成 XAML（`PlayerPage.xaml` TitleStrip）**：返回键 35 见方左让 5 **翻回 40×40 贴左**（Margin 0,4）——2026-09-28 晚那条「照独占可见块收 35」被这条令翻了案，独占那头同批放大成整格，两边同大且高度＝标题框 40；行内容（返回键/标题框/右上那一排）包进一层三列 Grid，`SubtitleBox` 挪出星号列、直接挂 TitleStrip 底下（放进 Auto 列会把列撑开、把标题推右）：左缘 0＝返回键那块玻璃的左缘、上沿 45＝返回键排下沿（4＋40）＋1px 缝（独占 `title_spacing` 同数）。
+- **窗口/全屏两档标题尺寸（用户令④，参考独占 `scale_fullscreen=1.3`）**：新 `ApplyTitleScale(bool)`（`PlayerPage.Chrome.cs`）——全屏档＝窗口档 ×1.3 取整：返回键 52×52、标题框 52 高、两行字号 26/21（基准字号第一次调用时从 XAML 资源值捞底）、内边距 12→16、「往下让 4」→5、副标题上沿 45→58（＝5＋52＋1 重算）；窗口档把 XAML 默认值显式摆回去。挂线四处：`ApplyFullscreen`（宿主窗路）、`SetFullscreen` 原生支路（浮层是同一棵 XAML）、`EnterFullscreenAtOnce`（进场即全屏不走 ApplyFullscreen）、`OnPlaybackStarted` 原生复位路（直接改 `window.Fullscreen` 不经过 ApplyFullscreen）。窗口档几何进页面即幂等归位。
+- **自检（`PlayerPage.SelfCheck.Chrome.cs`）**：返回键一问改钉「40 见方、贴角」＋恢复「返回键边长＝标题框高度」一条；基线一问把返回键重新纳入（五块中线全 24.0，最大差 0.0）；样例副标题换成新四项内容。**没有新增/改名/退役检查名**（读数都长在「浮层让开控制条」的 Detail 里），`Agreements.txt` 删一条 handle（`TitleTexts` StackPanel 拆掉后名字不再存在，UIA 脚本无人引用，基线按「有意替换」流程更新）。
+- **测试**：`EmbyTests` 文件信息行两条改四项期望（含「视频轨没给宽高＝整项跳过」一关）。
+- **验证**：构建 0 警 0 错；闸门 2 单测 **1350/1350**（含更新后的四项副标题期望）；闸门 3 发布 **527 文件 / 300.6 MB / 11 GLSL**（`verify-publish` 过，桌面快捷方式即指此目录）；闸门 4 两轮：对开发件（`selfcheck-diff -Exe`，`run-af678020…`）时「窗口命令按钮」红——插桩实测根因：生产 `settings.json` 当日 13:10–14:48 间管线档位在**独占**档，自检无播放会话时 `PictureInHostWindow` 按设置推算为假，`SetFullscreen` 走原生支路、宿主窗全屏永不落地（日志 `TEMP-BISECT SetFullscreen(True) PictureInHostWindow=False` 为证；置空本批全部代码重跑照样红）——14:48 用户把档位切回集成后，对**发布件**的闸门 4（`run-e86ce250…`）该关转绿：**检查 179、失败 1、消失 0、降级 1、新增 0**，唯一失败＝既有环境红**「文件页文件选项」**（Episode 页音频 318–590 出界，历版在案）。这条探针随档位翻转的结构性敏感留给下一轮处置（自检对独占默认档的既有缺口）。「浮层让开控制条」在新几何下全绿（返回键 40×40 @ 0,4、五块中线最大差 0.0、剧名玻璃 389×29 在标题之下 1.0、满深线 y=70 动态跟随、圆角全 2）。
+- **覆盖缺口（照 CLAUDE.md）**：独占 uosc 的三处（无章节行、副标题四项挂返回键下、返回键整格）**无运行期探针**——三条离线探针固定走集成管线，须真起播独占窗口（要授权）才看得到渲染，本轮以 Lua 结构复核＋静态断言为据；集成模式全屏档的 52/26/21 一档自检探针量不到，需实机进全屏核对（`--show-osd` 那路背后是浏览页不是视频，布局以 `ProbeClearance` 读数为准）。
+
+## 时间轴亚克力退役＋集成返回键照独占可见块收 35 让 5（2026-09-28 晚，闸门 1-3 过、闸门 4 检查 179 失败 1 为既有环境红）
+
+用户令两句：「集成模式进度条上升时候亚克力效果时有时无的，去掉亚克力效果吧」；「参考独占模式的返回键位置修改集成模式返回键的位置」（附两边截图）。
+
+- **亚克力为什么拆**：上一批那层「视频取样底图＋AcrylicBrush」只在取样成功后才摆上来，而取样被 seek、拖动、换片一次次作废（`CaptureEpoch` 每次作废在途帧），用户看到的就是「时有时无」。拆法是整条采样链退役：XAML 里 `TimelineBackdrop`＋`TimelineAcrylic` 两层删掉，`PlayerPage.TimelineMaterial.cs` 只剩高对比度／系统「透明效果」那套**换挡**（恒定 `_timelineFallback` 半透明 0x70／关闭时实色／高对比度系统色，独占 uosc 时间轴压画面上的也是一层恒定半透明深色，两边一致）；`IVideoSurface.SetBackdropCapture`、`LibMpvBackend.CaptureBackdropAsync`、`CompositionVideoTarget` 的 `_captureBackdrop/_captureEpoch`、`VideoFrameRegion`、`LibMpvFrame.CopyRegion` 整链删除；`--probe-player-motion` 时间轴阶段不再等「亚克力已取得视频像素」、不再存 `timeline-video-sample.png`（`PlayerPage.TimelineProbe.cs`、开发文档同步）。`BackdropBlur` 本体留着（详情页头图还在用）。
+- **返回键对齐独占**：独占 `elements/TopBar.lua` 那颗的命中区是 `top_bar_size=40` 贴角，**可见的底**是 40 − margin 5 ＝ 35 见方、从角上让进 5。上一批「对齐独占」把集成可见块也做成了 40 见方贴左，用户对着两边截图指出仍不齐 —— 现在收成 **35 见方、左让 5**（`OsdButtonStyle` 的 `MinWidth=40` 得在按钮上按回 35），顶上仍走浮层自己那档「往下让 4」（与标题框同一个数，独占是全条让 5，只差这屏上分不出的 1 档）；右缘仍抵在 40 上，返回与片名那条 4 的缝不动。玻璃照旧常驻、仍是左上角那支跟指针变深的 `PlayerGlassTopBrush`。`ProbeClearance` 相应改钉：基线一问把返回键再排除出去（它 35 高、与标题框 40 不同档了），「边长＝标题框高度」那条被新令取代，换成「35 见方、左让 5」＋「右缘仍在 40 上」。
+- **一次事故与恢复（照实记）**：清理时一次用 node 脚本改 `LibMpvBackend.cs`（按 CRLF 切行，文件实为 LF）把整份文件清成了 0 字节 —— 而它带着另一窗口未提交的改动。恢复走了三层证据：ZCode 会话快照（artifacts 的 beforeContent＋structuredPatch）与 db 里的 Edit 记录链互相印证重放出最后已知状态；再按 git numstat 基准（+73/−2）追出差的 9 行是另一会话 03:18 跑 `dotnet format whitespace`（无 `--verify`）把 `_status with {...}` 一行展开成多行的纯空白改动，跑同一命令补齐；最后把重建版编译出的 Core.dll 与该会话 11:43 真实闸门构建的 DLL 逐字节比对 —— 973,824 字节等长、差异只在 MVID／源哈希／PDB GUID（IL 方法体零差异），证明重建在功能上与被毁文件完全一致。**教训记下：改仓库源码只用 Edit 工具，不用脚本写文件。**
+- **验证**：闸门 1 构建 0 警 0 错、`format whitespace` 过、`check-scripts` 过；闸门 2 单测 **1350/1350**（−1＝退役的 `VideoFrameRegion` 取样测试，`TimelineParityTests` 相应删）；闸门 3 发布 **527 文件 / 300.6 MB / 11 GLSL**；闸门 4 `selfcheck-diff`：**检查 179、失败 1、消失 0、降级 1、新增 0** —— 失败仍是既有环境红「文件页文件选项」（Episode 页音频 318–590 出界，随真实库音轨名宽度浮动，历版在案，本批不触 DetailPage），重跑两遍同果；「浮层让开控制条」在新几何下全绿（返回键 35×35、左上角 5,4、圆角 2、返回与片名之间 4.0、常驻玻璃与浓度阶梯照旧）。**截图**：`work/_osd-backbutton.png`（`--show-osd pinned`，发布件）＋角落 6 倍放大 `work/_osd-corner6x.png` —— 返回键玻璃从角上让进、外壳导航从透明标题条透出，与独占布局一致。
+- **覆盖缺口（照 CLAUDE.md）**：恒定半透明底压在**真视频**上的观感（替代原亚克力的那一眼）与返回键 35 见方在真播放画面上的观感，需用户实机核对（`--show-osd` 那张背后是浏览页不是视频）；独占模式与 uosc 一字未动。
+
+## 集成模式进度条全面对齐独占 uosc：章节吸附/彩段/已播填充/缓存纹理/缓存秒数/A-B/视频取样亚克力（2026-09-28，闸门 1-2 过、闸门 4 对开发件 179 项失败 1 既有环境红）
+
+用户令：参考独占模式进度条重构集成模式进度条，章节吸附、片头片尾变色标注、已播放阴影、缓存等全部一致，进度条背景用半透明亚克力。
+
+- **数据层（Core，纯函数＋单测，两后端共用）**：新 `TimelineChapterMap`（照 uosc `serialize_chapter_ranges` 移植：标题小写匹配、章节缺名本地化、OP/ED 广告/SponsorBlock 配对与重叠中点切分、颜色 `#30ABF9@0x64`／`#C54E4E@0x80`）；新 `TimelineCache`（`demuxer-cache-state.seekable-ranges` 补集、BOF/EOF 拓边、≤0.5s 过滤合并、`cache-duration/speed<60s` 缓存秒数）；`PlayerStatus` 增 Cache/CacheMode/NetworkSource/Chapters/LoopA/LoopB，`DiffersFrom` 相应扩门。`LibMpvBackend` 订阅 7 个新属性（cache-state/cache/demuxer-via-network/chapter-list/ab-loop-a/b），换片清空；`MpvProcessBackend` 同步观察与 JSON 解析。`TimelineScale` 增 `TimeAt/XAt/ChapterAt（二维最近菱形）/ChapterRadius/TextOpacity/Clock（按整片时长固定位数）`。
+- **章节实时性**：mpv `chapter-list` 观察直达 `ApplyStatus`，通知到即换 `ChapterMarks`＋重算 SkipSections（mpv 0/1 章不再卡 Emby 旧章；`RefineSkipSectionsAsync` 的 count<2 早退门移除）；换片/换集清 `ChapterMenu` 右键兜底旧章行。
+- **XAML 时间轴重绘**（`PlayerPage.Timeline.cs`，从 Chrome 分出）：已播放填充（`#FFFBFE` 不透明块）、章节菱形贴条顶（全部保留含 0 起点，悬停放大 2×）、片段色块（在缓存纹理之上）、未缓存区间斜纹（白/黑双层 8px 循环，复用 PathFigure 不每拍新建）、A/B 底边三角、悬停 1px 反色竖线＋吸附章名、`EgTimelineFontSize=18` 按 31/40 档缩放、双份时间文字正反 clip 双绘保留。`SeekTrack` 高度照 uosc 窗口化 31/全屏 40，`GrowTimeline` 改为真实改行高（不再裁剪 31px），收起 2px 细线保留色段与缓存刻度（新 `ThinTimelineSections/Cache`）。
+- **交互**：按下即暂停＋精确 seek（`absolute+exact`），拖动 30s/s 阈值切 keyframes、100ms 合并，松手恢复原暂停态；章节菱形二维命中优先于拖条（按下即跳章、不改暂停），拖动期不吸附、SHIFT 无特判（照 shipping uosc）；滚轮 ±5s；悬停时间与竖线走同一 `TimeAt/XAt`（旧版悬停读数与实际落点不一致的缝关闭）；章节菜单改 `RadioMenuFlyoutItem` 当前章打勾；双击全屏不再被进度条触发；时间轴获得焦点时键盘 ↑↓ 空格仍走全局键位表。
+- **视频取样亚克力**（`PlayerPage.TimelineMaterial.cs`）：应用内 AcrylicBrush 采不到 mpv 交换链（`PlayerPalette.GlassAlpha` 那笔账），时间轴改走「mpv `screenshot-raw window` 区域取样（≤640 宽、含 24px 上方余量）→ Core `BackdropBlur` 盒式模糊 → `WriteableBitmap`（强制不透明 alpha）→ 底层 Image ＋ `AcrylicBrush`（TintOpacity 0.32/Lum 0.12）」。取样只在中国条件（满强度、有画面、非拖动/拖窗/换片/退场、系统透明效果开），暂停与位置不变不重取，单帧实测 19–49ms，间隔按耗时自适应 250–1500ms；失败退透明底并只警告一次。高对比度切系统色、关闭透明效果切实底；`CaptureEpoch` 换会话/停播作废在途帧，Dispose 摘委托。标题栏仍用半透明纯色（`PlayerPalette` 注释补记差异）。
+- **配套**：`PlayerSlider` 增 `PressPosition/KeyCommand` 钩子；`IVideoSurface.SetBackdropCapture`＋`VideoFrameRegion` 裁切（`LibMpvFrame.CopyRegion` 最近采样、alpha 置 255）；换主题五套各拍 `timeline-screen-*.png`。
+- **测试**：新 `TimelineParityTests` 11 关（彩段定界/不偷 SkipSection 推断/章节规范化/广告配对/配色与 uosc 配置逐字对表/缓存岛/首尾拓边/EOF 区分/状态门/二维吸附/取样裁切/时间格式）；`PlayerViewModel.ProbeTimelineState` 保留；自检新关「播放控制条统一布局与手势」扩 `ProbeTimelineArtwork`（色段/缓存空洞/缓存秒数/A-B/细条保留/二维吸附跳章/RangeValue/收缩/换片清理）；`MpvProcessTests` 观察计数 8→14；`ProbeSkipAndChapters` 章节起点计数 3→4（照 uosc 保留 0 起点）；`ProbeThinLine` 最大化态预期跟随窗口。`assets/mpv-ui` 的 uosc `chapter_range_patterns` 小写化补 `^intro$`/`^片尾$`/`^credits$`（原 `^Intro%s*Start`/`^End$` 因大小写永不命中，`EMBYNIAN[timeline-parity]`），另以 `work/timeline-uosc-parity.lua` 直接跑**生产 Lua 实现** 16 案对表通过。
+- **验证**：闸门 1 构建 0 警 0 错、`format whitespace` 过、`check-scripts` 过；闸门 2 单测 **1351/1351**；闸门 4（开发件，`selfcheck-diff -Exe`）：**检查 179、失败 1、消失 0、降级 1、新增 0** —— 失败仍是既有环境红「文件页文件选项」（Episode 页音频 318–590 出界，历版在案，本批不触 DetailPage）。本地真实播放探针（`--probe-player-motion` ＋ 彩条夹具）时间轴阶段全绿：mpv 章节变更通知、二维命中精确跳章（落点 4s±0.15）、播放/暂停两种拖动收尾、A/B 属性到屏、**真视频取样亚克力**（640×15、19–49ms），五主题屏照在 `logs/timeline-screen-*.png`、取样证据 `timeline-video-sample.png`。同探针随后「保留最后一帧」像素检查两次报「窗口被遮挡」——桌面正被使用触发防遮挡保护，同代码 11:21 完整一轮该段为绿；时间轴阶段两轮均绿，未再重试打扰桌面。
+- **覆盖缺口（照 CLAUDE.md）**：独占 uosc 时间轴的运行期回归只有 `work/timeline-uosc-parity.lua` 的生产实现离线对表与既有静态断言，真窗口 uosc 渲染未起播验证；集成时间轴的真机拖动手感（吸附半径、细线→完整轨道的生长）需用户实机核对；外部 mpv.exe 后端的时间轴（无控制通道）不适用本批改动。
+
+## 集成模式左上角标题栏对齐独占：SxxExx 集名 ＋ 第二行文件信息、返回键/标题/窗口键统一 40 见方圆角 2（2026-09-28，四道闸门过；自检 179、失败 1 为既有环境红）
+
+用户令六条，都是「把集成模式播放页左上角改成和独占模式（uosc 顶栏）一致」：①电视剧主标题只用「SxxExx 集名」，第二行的剧名改成「视频编码 · 音轨 · 组名」、挪到第二行，两模式显示一致；②主标题字号参独占；③圆角太圆、改成跟独占一样；④返回键高度＝右边标题、正方形；⑤位置参独占；⑥复刻独占右上角最小化/窗口化/关闭三颗，替换原 winui 按钮。两处默认取舍（原澄清问题被打断）：「音轨」＝主音轨编码（AAC 那种）、第二行缩进对齐主标题（照独占）。
+
+- **数据（Core，两模式共用、纯函数＋单测）**：`EmbyItem.ToPlaybackHeadline()`（单集＝`SxxExx 集名`、电影＝片名，不带剧名前缀；`ToPlaybackTitle` 不动，诊断/下载命名照用）；新增 `Playback/PlaybackTitles.Subline(MediaSource)`＝`视频编码 · 主音轨编码 · 组名`（逐项空则跳过，复用 `ReleaseGroup.FromFileName`）。`ReleaseGroup.DecorateTitle` 随「主标题不再缀组名」退役（含其单测）；进度条中间那条画质读数尾部的组名（`PlayingSourceLabel`）不动。
+- **接线**：`PlaybackPlanner` 的 `force-media-title`（独占＋外部 mpv）改喂 headline；`PlayerViewModel.OnNowPlayingChanged` 的 `Title`＝headline、`Subtitle`＝`Subline(正在放那一版)`（抽出 `PlayingSourceOrFirst` 复用）；新增 `PushSublineAsync` 经新契约 `embynian-subline` 把第二行推给独占 uosc（与 version/episode-count 同拍：握手＋每场开播/换集/换版）。
+- **独占 uosc**：patch `elements/TopBar.lua` 新增 `set_subline`（写 `self.alt_title`＋`update_render_titles`，`top_bar_alt_title_place='below'` 天然画在主标题正下方）；`main.lua` 注册 `embynian-subline`；补丁清单两处登记。
+- **集成 XAML（`PlayerPage.xaml` TitleStrip）**：返回键 40×40、圆角 8→2；标题框 Height=40 文字垂直居中、字号仍 20、圆角 8→2；第二行框字号 12→16、圆角 8→2、内容改绑文件信息（主标题正下方、缩进对齐、白字）；右上四颗（置顶/最小化/最大化/关闭）46×32→40×40、圆角 8→2、图标 10→16，整栏往下让 4 —— 返回键、标题框、右上一排三者中线同在一条线（照独占 `top_bar_size=40`、`border_radius=2`）。
+- **自检**（`PlayerPage.SelfCheck.Chrome.cs` 的 `ProbeClearance`）：新增「返回键边长＝标题框高度且正方形」「右上四颗复刻独占是 40×40」；「同一条基线」把返回键与标题框一并纳入；圆角那一问仍比「互相相等」（8 换 2 照样绿）；测试串换成新内容。**没有新增/改名/退役检查名**，基线不动（闸门 4「新增 0、消失 0」为证）。
+- **测试**：新增 `ToPlaybackHeadline`／`Subline`（含缺项/空源）／`Subline 不进 Parse`／`uosc subline 补丁两头都在`；`ReleaseGroupTests` 删 `DecorateTitle`；`MpvUiTests` 名字冲突表加 `Subline`。
+- **验证**：闸门 1 构建 0 警 0 错、`format whitespace` 过；闸门 2 单测 **1338/1338**；闸门 3 发布 **527 文件 / 300.5 MB / 11 GLSL**（`verify-publish` 过，桌面快捷方式即指此目录）；闸门 4（`selfcheck-diff.ps1`，`run-fa83c3fc…`）：**检查 179、失败行 1、消失 0、降级 1、新增 0**。那 1 失败＝既有环境红 **「文件页文件选项」**（Episode 页音频 318–590 出界 2px、可用 280–588、窗口 1064），**读数与历版在案那条一字不差**、随真实库音轨名宽度浮动；本批 diff 零触及 DetailPage/EgPicker/WrapLayout（本轮未留改前发布件对照，仅凭读数一致＋diff 范围判定）。`ProbeClearance`（"浮层让开控制条"）**全绿**：标题那块玻璃 505×40、上下留白 7.0/7.6；中线（顶部一排）返回/标题框/置顶/最小化/关闭 全 24.0（最大差 0.0）；返回键 40×40 在 0,4；圆角 返回/集名/片名/右上 全 2；剧名那块 274×29 在标题之下 4.0；右上四颗 40×40。
+- **覆盖缺口（照 CLAUDE.md）**：独占那两行（`embynian-subline` 副标题 ＋ headline 的 `force-media-title`）**无运行期探针** —— 三条离线探针固定走集成管线，只有静态 Lua 断言（`MpvUiTests` 补丁在位）＋需真起播独占窗口（要授权）才看得到渲染，本轮未真播。集成模式带**真实剧集内容**的左上角视觉（"SxxExx 集名"＋文件信息行）同样需真播才拍得到；本轮 `--show-osd`（含 `playing`）只证明浮层不崩、标题栏文字空（无片），几何以 `ProbeClearance` 精确读数为准。
+
+## 集成浮层照独占分级淡入：标题/音量/按钮条/进度条按鼠标位置越靠近越明显（2026-09-27 晚第三批，构建＋1334 单测＋发布过；自检 179 项、失败 1 为既有环境红）
+
+用户令四条，都是「参独占模式鼠标位置越靠近窗口<b>X</b>，<b>Y</b>越明显，修改集成模式的鼠标位置判断」：①越靠上→标题越明显；②越靠右→音量条越明显（**集成模式本已如此**，是样板）；③越靠下→按钮条越明显；④越靠下→进度条**显示越多**，还有**进度条的显示方式**。独占 uosc 的显隐是按指针到控件的距离分级淡入（`Element:update_proximity`），而集成模式此前标题条/控制条是二值直显（旧需求 9「不要淡入淡出了，鼠标移动到对应位置直接显示」），只有音量条淡入。本批把三条边都改成音量条那套。
+
+- **`ChromeReveal`（Core）新增两条强度**：`TitleStrength`（随指针靠近顶边升起）、`BarStrength`（随靠近底边升起），与既有 `RailStrength` 完全同构 —— 钉住/键盘宽限/手压在条上给满，其余按 `TopNear`/`BottomNear`（唤出带内沿到边缘线性，照 uosc **不设下限**，一路淡到 0）。`ChromeState` 那三个布尔与所有钉住/空闲/静默/拖窗分支**一字未动**，只在 `Settle()` 里跟着 `RailStrength` 一起算、一起比较（量化到百分位）。类注里记下了这次对旧需求 9 的反转。
+- **页面（`PlayerPage.Chrome.cs` + `PlayerPage.xaml`）**：`Render()` 把标题条、按钮行（`TransportRow`）从 `Visibility` 翻转改成写 `Opacity=强度`（新 `FadeStrip`：强度到 0 连命中一起收，与 `FadeRail` 同法），XAML 给这两处各加一支 0.22s 的隐式 `ScalarTransition`（照音量条 `Rail` 那支）。进度条（`SeekTrack`）用新 `GrowTimeline` 按 `BarStrength` **裁剪生长** —— 从一条 3px 细线长到完整 31px 轨道（照 uosc `Timeline:get_effective_size`）：裁剪从底边往上露出，**不动布局**（按钮不跳、滑杆/时间戳/章节刻度照旧排在完整高度上、只是被裁掉上半截），命中随裁剪同步收（细着够不着、长起来才好拖）。复用一块 `RectangleGeometry` 不每拍新建。`ThinLine`（窗口化时的常驻细进度线）保留原规则不动 —— 出带子外是它，进带子里换成会生长的时间轴。
+- **自检**（`PlayerPage.SelfCheck.Chrome.cs` 的 `ProbeReveal`）：读数从「在/不在」改成带出每一样此刻的浓度（进度条/标题栏/音量条各报 `Opacity`），并加「看得见就得点得了」两问（标题条里压着窗口按钮，一块看不见却能点的条会吞画面点击）。**没有新增/改名/退役任何检查名**，基线因此不动（闸门 4 报「新增 0」为证）。
+- **测试**（`PlaybackTests.cs` 的 `RegisterChromeReveal`，1331→1334）：新增「标题条越往上越明显」「控制条越往下越明显」「手压在条上/键盘唤出一律给满」三关，钉住带内沿处为 0、边缘为 1、一路单调、readout 理由给满；既有 `RailStrength`/`TopGlassDepth` 全绿。
+- **验证**：闸门 1 构建 0 警 0 错、`format whitespace` 过；闸门 2 单测 **1334/1334**；闸门 3 发布 **527 文件 / 300.5 MB / 11 GLSL**（`verify-publish` 过，桌面快捷方式即指此目录）；闸门 4（`selfcheck-diff.ps1`，`run-ab2a79f5…`）：**检查 179、失败行 1、消失 0、降级 1、新增 0**。那 1 失败＝既有环境红 **「文件页文件选项」**（Episode 页音频 318–590 出界 2px，历版在案、随真实库音轨名宽度浮动，**与本批一行代码不沾**——本批只动 `ChromeReveal`/`PlayerPage.Chrome`/`.xaml`/`.SelfCheck.Chrome`/`PlaybackTests` 五处，无 DetailPage）。本批那几关全绿：`显隐规则`（指向底部→进度条 89%、停在进度条上→100%、拖动→标题栏 100%、指向右边缘→音量条 100%）、`音量条淡入淡出`、`进度条指针下不铺白`（满档 1064×31）、`浮层让开控制条`。
+- **照片**：`work/osd-after.png`（`--show-osd playing`，发布件）—— 满档下音量条（右侧 100）、底部时间轴与控制都在，确认满强度这一档没坏。**分级淡入的中间档拍不到**（这台机器注不进鼠标事件，`--show-osd` 走 `WakeFully` 一律钉满），留用户实机核对。
+- **待实机**：①指针从画面中间往顶边推，标题条一档一档变明显的手感；②往底边推，按钮条变明显、进度条从细线长到完整轨道的手感（含「细线那一档＝3px」够不够、生长快慢）；③三条边都无下限、带内沿处很淡，会不会觉得太虚（要加下限就改 `TitleLoudness`/`BarLoudness` 一处常量）；④进带子那一下 `ThinLine`（faint 2px）→时间轴（3px）的接手有没有明显的一跳。
+
+- **追记（同批第二趟，用户实机对比独占后）**：用户报「集成模式要鼠标下移到更低才开始显示进度条，标题也要更靠近上方才显示」——触发线离边太近、比独占晚。先把 `ChromeReveal.EdgeBandFraction` 从 0.12 调回 0.20 试了一版（比例带），但那仍是画面高度的比例、不是独占那种绝对像素。
+
+- **追记（同批第三趟，用户令「改成跟独占一样」＋「包括音量条」）**：三条边的唤出全部改成**按绝对像素**算的 uosc proximity（`elements/Element.lua` 的 `proximity_in=40`／`proximity_out=120`，与分辨率无关，这正是比例带做不到的）。`ChromeReveal` 新增 `Reveal(distPx, barPx)` 纯函数照抄那条曲线，顶边控件矩形按独占 `top_bar_size=40`（满显 ≤80px、全隐 ≥160px＝`TopReachPixels`），底边按控制条＋时间轴那一簇 88（满显 ≤128px、全隐 ≥208px＝`BottomReachPixels`，比顶边深一截，正对「进度条要下移到更低才显示」）；`Edges`／`TopNear`／`BottomNear` 全走它，存了一份画面像素高 `_height` 做换算。**音量条**（「包括音量条」）：它右缘那条唤出带本就是 160px 绝对像素（＝独占 `volume_size 40`＋`proximity_out 120`），已对齐；这趟把 `RailFloor` 从 0.35 **改成 0**，让它跟标题条、控制条一样从 0 淡起（独占没有下限），中心偏置（用户早先令「越接近右边的中心越明显」）与 160px 唤出带都留着。**`EdgeBandFraction`（0.20）现在只管左上角亚克力那条深浅曲线**，不再是控件唤出线——亚克力被「标题条在不在」兜着（那几块玻璃是标题条的孩子），越不出唤出范围，所以没为它也改像素、去牵动 `TopGlassDepth` 的签名与那批测试。自检读数为证：顶部带下沿 y=158（这台窗口高≈792），音量条「刚进右侧带」从 35% 变 1%（无下限、照独占淡起）、右缘中央 99%、右缘靠上 2%；`显隐规则`/`音量条淡入淡出`/`浮层让开控制条`/`进度条指针下不铺白` 全绿。测试改了几处魔数为按像素常量算（`TopReachPixels`/`BottomReachPixels`，边界避开浮点尾数），并解开了「亚克力带＝标题唤出线」那条已不成立的耦合断言。**代价说清**：现在是绝对像素、跟独占一致，与分辨率无关；早先那版比例带（0.20）在极高/极小窗口会忽早忽晚，这趟不再有那问题。四道闸门重跑：构建 0/0、`format whitespace` 过、单测 **1334/1334**、发布 **527 文件 / 300.5 MB / 11 GLSL**；闸门 4 **检查 179、失败 2、消失 0、降级 2、新增 0**（日志 `run-3151d8fc…`）——两条失败都是既有环境红、与本轮五个文件（`ChromeReveal`/`PlayerPage.Chrome`/`.xaml`/`.SelfCheck.Chrome`/`PlaybackTests`）无关：**「文件页文件选项」**（Episode 页音频 318–590 出界，随真实库音轨名宽度浮动）与**「窗口命令按钮」**（全屏时窗口化图标那条，属同树在途的全屏/窗口按钮那批——全屏图标由 `ApplyFullscreen` 直接写、不经本轮改的 `Render` 那条 `state.Title` 门，是 `DrainWindowChange` 那段异步换窗超时的老毛病，本轮一行没碰窗口/全屏/DetailPage 代码）。
+
+
+## 摘掉控制条四颗按钮与进度条上方黑底（2026-09-27 晚第二批，构建＋1331 单测＋发布过；自检 179 项、失败 2 均为既有环境红）
+
+用户令四条：①移除集成模式右上角统计按钮；②移除集成模式右下角更多按钮；③移除集成模式进度条上方的一大块背景（问实＝去掉半透明黑底）；④移除集成模式与独占模式左下角的画面按钮。
+
+- **右上角统计按钮**（`PlayerPage.xaml` 原 `StatsButton`/`StatsGlyph`，612–641）：整颗删除。连带清理：`PlayerPage.Input.cs` 的 `OnStripControl` 命中名单、`SetStripGlyphInk`/`StripInks`（白底几颗由四颗收成三颗：置顶/最小化/最大化）；`PlayerPage.xaml.cs` 的 `OnChromeClick` 订阅名单；`App.xaml` 那支 `PlayerPage_StatsButton` 的两条 `.resw` 文案退役。**三态统计仍在**：控制条左下那颗 `TransportStatsButton` 保留，`SelfCheck.Picture.cs` 的 `ProbeStats` 接线判据随之改问它。
+- **右下角更多按钮**（原 `MoreButton`/`MoreMenu`，953–956）：按钮与它挂的 `MoreMenu` 一起删除。**菜单本体没删** —— 着色器三档、跳过片头/片尾、自动连播、播放信息这几行**只有这一处入口**（问过用户，选「并进右键画面菜单」）：`OnMoreMenuOpening` 参数化成 `(MenuFlyout menu, FrameworkElement anchor)`，由 `OnPictureMenuOpening` 在目录之后接一条分隔线、把这一棵整棵拼进 `PictureMenu`。`PlayerPage.SelfCheck.Menus.cs` 的 `ProbePictureMenu` 两侧计数同步把这一棵算进去（现拼一次量行数，不写死数字；读数 **112/112 行…含并进来的「更多」22 行**）。
+- **进度条上方黑底**（`Bar` 的 `Background="{StaticResource PlayerGlassBrush}"`）：整块撤掉，按钮行与进度条直接压在画面上；进度条那一行仍有自己的轨道底（`SeekTrack` 的 `PlayerRailBrush`），拖拽目标照旧可见。`PlayerGlassBrush` 现只剩标题条与逐控件玻璃两处可见（`PlayerPalette` 与 XAML 注释同步订正）。
+- **左下角画面按钮**：集成模式删 `PictureButton`（872–874）＋ `PlayerPage.Transport.cs` 的 `OnOpenPictureMenu` 与 `ArrangeTransport` 里那行 Visibility；独占模式从 `main.lua` 的 controls 串去掉 `embynian-ui-picture-menu`。**绑定没删** —— 右键点画面仍走同一条 `uosc/embynian-ui-picture-menu`（`MpvUiTests` 的钉死断言改成「控制条上没有了、绑定与简写都还在」）。
+- **`Agreements.txt` handle 基线**：删 `StatsButton`、`StatsGlyph`、`MoreButton`、`MoreMenu` 四行（`PictureButton` 无 `x:Uid`、本来不在基线）。
+- **验证**：构建 0 警 0 错；单测 **1331/1331**；`format whitespace` 过；旧产物挪 `EmbyNian-stale\publish-20260927-210907`／`shell-bin-20260927-210907`；发布 **527 文件 / 300.5 MB / 11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`39acc923…`）；闸门 4（发布件）：**检查 179、失败 2、消失 0、新增 0**（日志 `run-7eadc54c…`）。两条失败均既有环境红、与本轮无关：**「文件页文件选项」**（音频 318–590 出界 2px，PROGRESS 历版在案、与旧发布件读数一致）、**「窗口命令按钮」**（全屏时窗口化图标那条，属同树在途的全屏/窗口按钮那批，本轮一行没碰窗口/全屏/DetailPage 代码）。本轮自己那几关全绿：`播放统计面板`（接线=True）、`右键画面菜单`（含并进来的更多 22 行）、`浮层让开控制条`（右上那一排已只剩置顶/最小化/关闭）、`播放控制条统一布局与手势`（8 档宽度全过）。
+- **待实机**：①四颗按钮撤下后各档窗宽下按钮排布是否合意；②右键画面菜单接上「更多」那一棵后，子菜单（音轨/字幕/播放速度/选集/版本…）的弹出锚点与手感；③进度条上方没有黑底后，亮画面上按钮与时间读数的可读性。
+
+## 集成播放控制条照独占模式统一（2026-09-27 晚，构建＋1331 单测＋发布过；自检 179 项、失败 1 为既有环境红）
+
+用户令五条：照独占 uosc 改集成底部按钮布局与位置、重绘进度条与音量条、去掉右下音轨/字幕延迟入口、统一两套布局并适当优化。
+
+- **底部结构照 uosc 翻转**（`PlayerPage.xaml` 新 Bar）：按钮一行在上（左组 上一集/播放/下一集/统计/章节/画面/选集/版本，中组 上一章节/横向倍速/下一章节，右组 字幕/音轨/更多/全屏），时间轴 31px 全宽贴底、时间文字画在条内（右端是按倍速折算的负剩余时长，`TimelineScale.Remaining`），章节菱形（6px 旋转方块）贴条顶可点击，缓冲条移到顶边 2px。按钮 32 见方、图标 22、间距 2、左右 8（`TransportButtonStyle`/`TransportGlyphStyle`）。原「播放键居左+中间 SourceText」的旧版式退役（`SourceText` 从 `Agreements.txt` handle 段删除，控件随用户令消失）。
+- **时间轴手势照 Timeline.lua**（`PlayerViewModel.Timeline.cs` + `PlayerSlider`）：按下记住原暂停态→暂停→立即精确 seek；拖动按 30s/s 阈值切 keyframes/exact（`TimelineScale.PreferKeyframes`），100ms 合并窗口；松手恢复原暂停态；换片/停止/丢捕获经 epoch+generation+attempt 三重闸收尾，暂停脉冲在拖动期与宽限期内被压掉（`TimelinePauseFeedbackSuppressed`）。滚轮分区：时间轴 ±5s、音量条 ±1、画面 ±2、倍速条 ±0.1（`PlayerPage.Input.OnPointerWheel` 按 `Covers` 分派，`PlayerSlider` 空实现挡掉滑杆自带滚轮）。
+- **音量照 Volume.lua 重绘**：右侧 40 宽块状填充条（轨道/数字/静音键各 40），100 刻度凹口与反白数字由 `PaintTransportReadouts` 的两块裁剪层实现；线性 0–130（`VolumeScale` 退役 133 非线性棘轮，测试重写为线性四案）；条内滚轮 ±1、画面 ±2、右键任意位置解除静音并回 100（`ResetVolume`）。
+- **横向倍速条照 Speed.lua**：中组 146×42 填充块（窄窗 100），滚轮 ±0.1、左右拖、右键归 1；`SpeedValue` 成为视图模型上的实值，`SetSpeed` 只走它，mpv 回声 1s 内不抢手上的值；旧竖置轮盘和按钮整段收进 `Visibility=Collapsed` 保留（`SpeedButton` 仅 160–220px 窗宽一档补位），`ChromeHold.Speed` 新档钉住拖动。
+- **延迟入口退役**：`MoreMenu` 删掉「字幕延迟/音频延迟」两个子菜单与 `BuildDelayMenu`（`DelayNudges` 常量随删）；延迟仍可由快捷键 Z/X 那对（`NudgeDelay`）使用，音轨/字幕两颗选轨按钮保留。更多菜单补 播放/暂停、统计、章节前后、章节列表、画面、选集、版本、音轨、字幕、播放速度 等行，窄窗收走的按钮从这里可达。
+- **窄窗响应**（`ArrangeTransport`，8 档宽度 1280→180 全过）：680 以下收 统计/章节/章节前后，520 以下收 上一集/下一集/选集/版本，220 以下收倍速条（160–220 换回按钮），300 以下收 音轨/字幕（更多菜单里有），188–680 显示播放键（宽窗照 uosc 不画，暂停走画面单击/空格）。音量条高度按窗口高自适应（80–280）。
+- **自检**：新关「播放控制条统一布局与手势」（`PlayerPage.SelfCheck.Transport.cs`）量 8 档宽度的无重叠/贴底/读屏、延迟入口消失、以及合成状态下的拖动四案（两种起点记原暂停态、旧回声不抢、松手/换片/未知时长收尾；`SetTransportProbeStatus` 拒绝在真实播放期被调用）；`--dump-ui` 追加三档渲染截图 `player-transport-{1280,560,320}.png`。旧「音量条淡入淡出」/「进度条指针下不铺白」判据改到填充式结构上（`Want("填充音量条尺寸")` 等），基线按规则逐行补了新检查名。
+- **验证**：构建 0 警 0 错；单测 **1331/1331**（VolumeScaleTests 重写 4 案 + TimelineScaleTests 新 4 案，`Agreements.txt` 删 `SourceText` handle 一行）；`format whitespace` 过；发布 **527 文件 / 300.5 MB / 11 GLSL**（`tools/publish.ps1 -NoArchive`，桌面快捷方式即指此目录）；闸门 4（发布件）：**检查 179、失败行 1（既有环境红「文件页文件选项」，音频 318–590 出界——PROGRESS 在案、与旧发布件读数一致）、消失 0、降级 1（同一条）、新增 0**（日志 `run-428b6a25…`；新增检查已逐行入基线）。
+- **实机核对**（`--show-osd` 开发件，UIA 只读）：底部按钮顺序与 uosc 一致、时间轴贴底、音量块与静音键在右、更多菜单无延迟入口且补行齐全、读屏名称齐全（播放进度/播放速度/音量/静音等）。真实播放与拖动手感留给用户实机。
+- **待实机**：①拖动进度条的手感（暂停→seek→恢复的节奏）；②音量块右键回 100 的顺序感；③窄窗各档按钮收放的取舍是否合意；④横向倍速条滚轮/拖动的灵敏度（`ChromeHold.Speed` 钉的是拖动期显隐）。
+
+## 白底换色只换压着的那一颗（2026-09-27 傍晚第五批的第二趟，构建＋1329 单测＋发布过；自检 178 项、失败 1 为既有环境红）
+
+用户一句（收到上一批之后）：「**怎么是四个按钮一起变色**」。
+
+- **根因**：上一版 `SetStripGlyphInk(bool)` 是**整栏一个旗标** —— 指针只要落进这一栏，那几个图标一起转深色。屏上看着是：压着的那一颗有白底＋深色图标（对），**另外三颗没有白底、图标却是深色的** —— 深色图标压在画面上几乎看不见，等于那三颗被「弄没了」。
+- **修法**：`SetStripGlyphInk(Button? hot)` 改成**逐颗判** —— 只有 `hot` 那一颗的图标用深色，其余几颗当场写回白；`PointerMoved` 先沿祖先链找出**指针底下那一颗**（新加的 `StripInks`），再把它传进去，指针不在这四颗上（含离开这一栏）传 null。**底色那一半本来就是逐颗的**（框架的 Button 模板按控件自己的态走），所以只有图标这半需要动。
+- **判据跟着改成逐颗**（这才是那个 bug 的判据）：四颗各推一次，每次都要求「压着的那颗是深色、**其余三颗都是白**」，并检查关闭那颗没跟着转；最后传 null 再要求四颗全白 —— 只查「压着的那颗变没变」是查不出「四个一起变」的。
+- **顺带记一个探针自己的坑**：这一条第一版判据里写的是 `foreach (var (other, _, theirs) in glyphSets)` —— 元组第一项是**名字**，`other` 拿到的是字符串，`ReferenceEquals(button, other)` 永远假，于是判据自己红了一趟（报的是「统计压着的时候统计那颗不是 PlayerInkBrush」，而屏上那一刻是对的）。解构多元组要按位置对号。
+- **静息态明写一次**：`PlayerPage` 构造函数在 `PaintPalette()` 之后补一句 `SetStripGlyphInk(null)` —— 那几个图标的 Foreground 是被这一支一笔笔写的（它们不从模板继承下来），第一次指针事件之前没人写过，不写这一句常态的颜色就是**图标的默认值**，与这一页别的墨是不是一个调子只能靠运气。
+- **验证**：构建 0 警 0 错；单测 **1329/1329**；`format whitespace` 过；发布 **527 文件 / 300.5 MB / 11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`d8801a8c…`）；闸门 4 **检查 178、失败行 1（同一条既有环境红「文件页文件选项」）、消失 0、降级 1、新增 0**，那一关这次读作 **「四颗的图标一个一个换（压着的那颗转深色、其余三颗白）」**（日志 `run-410c7ce8…`）。中途那一趟（改判据之前）自检红在「浮层让开控制条」，红的是判据自己 —— app 侧那一次改动本来就是对的，如实记在这里。
+- **照片**：`work/strip8-after.png` 与上一批的 `strip7-after.png` 逐像素比 —— 差异全在底下那张轮播图的渲染上（**同一行里没有按钮的那一段**均值 2.33／最大 36，比那五颗那一带的 1.51 还大；只动了图标的四个像素级差别被它盖住），校准带（y 62–72）一字不差。静息态这一批没动，悬停那两档照片本来就拍不到。
+- **待实机**：指针压到某一颗上，只有那一颗的图标转深色、其余三颗仍旧白（这是这一趟的全部内容）。
+
+## 左上角圆角收到 8 并整体下移 4、右上四颗悬停改成白色亚克力（图标转深色）（2026-09-27 傍晚第五批，构建＋1329 单测＋发布过；自检 178 项、失败 1 为既有环境红）
+
+用户令三条（原话）：「**左上角的边框圆角太圆了**」、「**返回和集名/片名往下移动一点点**」、「**这四个按钮鼠标移到上面的时候要用白色亚克力背景**」（带一张截图，圈的是统计、置顶、最小化、最大化四颗 —— 关闭那颗不在里面）。三处数值都问实了：圆角 **8**、下移 **4 像素**、白色那层 **白五成且图标转深色**（问的就是「四颗的图标本身是白的，底太白会糊在一起」这笔账）。
+
+### 一、圆角 12 → 8
+
+- 集名/片名那两块从 `CornerRadius="12"` 收到 **8** —— 于是左上角三块（返回键那块玻璃、集名、片名）与右上那一排**同一个数**。自检量的是**互相相等**（四处的 `CornerRadius` 两两相同），不是写死的 8。
+
+### 二、返回键与集名/片名一起往下让 4
+
+- 返回键那一格与 `TitleTexts` 各加 `Margin` 顶边 4。**满深线跟着走**：那条线是从剧名那块的下沿量出来的，58 → **62**（自检读数里能看见它跟着挪）。
+- 「整条控件在同一条基线上」那一问现在只剩**右上那一排**（统计/置顶/最小化/最大化的中线全是 16.0，最大差 0.0）；返回键（第三批 40 见方起中线 20）与标题那一行（这一批起 20.7）都不在里面了，各由自己那一问守着 —— 返回键那条改成「40 见方」（不再要求贴着顶边），另立一条「**返回键与集名/片名一起往下让了同一个数**」。四个像素是多少不重要，一个挪一个不挪才是屏上看得出的错位。
+
+### 三、那四颗的悬停：一层半透明的白，图标转深色
+
+- **底**（`PlayerPalette`）：`PlayerStripHoverBrush` ＝ 白 **0x80**（五成）、`PlayerStripPressedBrush` ＝ 白 **0x99**（六成，按下去实一档）。上一版那支近黑（film 0xE6／0xFF）随这一条令退役。**不是真亚克力**：真亚克力采不到视频那一层（整笔账见 `GlassAlpha`），压在画面上只会是一块不透的板；半透明的白与底下做普通 alpha 混合，这是「白玻璃」在本架构下做得成的样子（代价是没有模糊）。
+- **墨**（`PlayerStripHoverInkBrush` ＝ `#101419`）：那四颗的图标悬停/按下时转深色，白底上的白图标会糊成一片。**关闭那颗不进这一条** —— 它悬停时是红的，红底上的白叉本来就是对的。
+- **一个实测出来的坑，值得记下来**：框架的 Button 模板**确实**会把 `ContentPresenter.Foreground` 也换掉（四颗各自把 `ButtonForegroundPointerOver`／`Pressed` 按回调色板之后，自检读那一层是全绿的）—— 但 **`FontIcon`／`PathIcon` 的 `Foreground` 不从那里继承下来**：第一趟自检就是红在这一条上（「悬停时图标自己也换成了深色」），屏上模板换了、图标还是白的。于是图标那半改走 C#（`PlayerPage.SetStripGlyphInk`），由这一栏的 `PointerMoved`／`PointerExited` 推；判据取自**事件源往上的祖先链**（指针从一颗挪到隔壁时 Enter/Exit 的先后没有保证，按先后判会留下「压着 B、图标却是白的」那一帧）。为它给统计、最小化那两颗的 `FontIcon` 补了 `x:Name`（`StatsGlyph`／`MinimizeGlyph`），`Agreements.txt` 的 handle 段按快照补了四条（`StatsGlyph`／`SubtitleBox`／`TitleBox`／`TitleTexts` —— 后三条是前几批就漏掉的）。
+
+### 四、验证与交付
+
+- **自检读数**（`artifacts/selfcheck/run-3d078bc1df214fc5ad5c16e6774d7471/logs/selfcheck-shell.txt`）：**「中线（右上那一排）：统计 16.0、置顶 16.0、最小化 16.0、关闭 16.0，最大差 0.0；返回键 40×40，在客户区左上角 0,4，中线 24.0；标题那一行字中线 20.7（往下让了 4）；圆角：返回键那块玻璃 8、集名 8、片名 8、右上那一排 8；返回与片名之间 4.0；满深线 y=62.0（剧名那块玻璃下沿 66.0、返回键下沿 44.0）；右上五颗的悬停/按下都按回了调色板（四颗白底、关闭那颗是红的）；四颗的图标两档都在调色板上（统计、置顶（未置顶那颗）、置顶（已置顶那颗）、最小化、最大化）」**。
+- **闸门**：构建 0 警 0 错；单测 **1329/1329**（跑了两遍：第二遍是补完 `Agreements.txt` 那四条 handle 之后的复核）；`format whitespace` 过；旧产物挪 `EmbyNian-stale\publish-20260927-181309`／`shell-bin-20260927-181309`；发布 **527 文件 / 300.5 MB / 11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`89dce0e4…`）。
+- **闸门 4**：中间那一趟（图标那条还挂在模板上）红在「浮层让开控制条」，改成 C# 之后 **检查 178、失败行 1（同一条既有环境红「文件页文件选项」）、消失 0、降级 1、新增 0**（日志 `run-3d078bc1…`）。
+- **照片**：`work/strip7-after.png`（本轮）与 `work/strip6-after.png`（上一批）同开关同尺寸，逐像素比：**差别集中在左上角那一簇**（均值 3.59、集中在第 8–39 行 —— 就是那 4 像素的下移与变方的角），右上那五颗 0.09、标题条其余部分 0.04、控制条 0.00；放大对照 `strip6-left.png`／`strip7-left.png` 里看得见整簇往下挪、玻璃的角也收紧了。**悬停那两档照片拍不到**（这台机器注不进鼠标事件），那两档由自检推状态读模板与 `SetStripGlyphInk` 答。
+- **待实机**：①指针压到那四颗上的白底（白五成压在亮画面 vs 暗画面上各是什么样）；②图标那一跳色（白→深）在真指针下顺不顺；③关闭那颗的红；④圆角 8 与下移 4 的手感。
+
+## 满深线提到剧名下沿之上、右上五颗的悬停底自己按回来（关闭那颗是红的）（2026-09-27 傍晚第四批，构建＋1329 单测＋发布过；自检 178 项、失败 1 为既有环境红）
+
+用户令两条（原话）：「**左上角的颜色深度在鼠标移动到剧名下方那条线之前一点的时候达到最大**」、「**鼠标移动到右上角的关闭的时候背景要和首页一样变成红色，然后右上角另外几个按钮鼠标移动到按钮上的时候背景颜色太浅了容易和画面合在一起**」。
+
+### 一、满深线：从「贴着顶边才最深」改成「走到剧名下方那条线之前一点就满了」
+
+- **Core 那条曲线多了一个参数**（`ChromeReveal.TopGlassDepth(pointerY, fullAt)`）：`fullAt` 之上一律 1（最深），从它到顶部唤出带（`EdgeBandFraction`）的下沿线性退到 0，带子外一律 0。`EdgeBandFraction` 顺带从 `private` 提成 `public` —— 现在有两个消费者要拿它做算术（这条曲线，以及页面探针要问「带子下沿在哪」），让它们各抄一个 0.12 是最坏的，因为这条带子被改过（0.20 → 0.12）。新增 `TopGlassFullInset = 4`：「那条线**之前**一点」里的那一点，0 的话鼠标擦着下沿往下一走玻璃就开始变淡。
+- **那条线由页面量出来**（`PlayerPage.TopGlassFullAt`）：左簇里**最下面那块玻璃**的下沿（有剧名时就是剧名那块 —— 用户那句话里的「剧名下方那条线」；没有剧名时退到标题那块与返回键里靠下的那一个），再往上让 `TopGlassFullInset` 那么多像素。**量出来的不是写死的**：剧名有没有、字号多大、返回键长多高，任何一样改了它都跟着走。
+- **读数**（自检，两行真字摆着）：**满深线 y=58.0（剧名那块玻璃下沿 62.0、返回键下沿 40.0），顶部带下沿 y=95.0；指针 y→深度 46→1、58→1、77→0.5、95→0、101→0**。
+
+### 二、右上五颗的悬停/按下：从框架默认那层换成调色板里的四支
+
+- **四颗（统计、置顶、最小化、最大化）**：框架默认那层（深色主题里白一成上下）压在画面上几乎看不见，正是用户说的「太浅了容易和画面合在一起」。改成与左边那几块同一族的近黑 —— `PlayerStripHoverBrush`（遮九成 0xE6）／`PlayerStripPressedBrush`（遮满 0xFF，它们**没有常态底**，「按下比悬停暗一档」在这一族上只会看着像没反应）。
+- **关闭那颗**：`PlayerCloseHoverBrush` ＝ **#C42B1C**，按下压暗一成（#B02719）。这个值照的是**首页那颗**——外壳开了 `ExtendsContentIntoTitleBar`，那三颗窗口按钮是系统画的 caption 按钮，Win11 上悬停就是这支红。**没在屏上悬停取样过**：那要把指针停到首页那颗关闭键上，验证技能里是禁止的（用户用的是同一只鼠标）；与看到的红对不上就改 `PlayerPalette.CloseRed` 一处。
+- **写法与「跳过」那颗同一手法**：五颗各自在自己的资源字典里把 `ButtonBackgroundPointerOver`／`ButtonBackgroundPressed` 按到调色板上（光写控件自己的 `Background` 没用 —— 框架的 Button 模板进这两态就把 `ContentPresenter` 的底换掉）。圆角仍旧是这一排的 8（**没有**照 caption 那颗的直角：同一排里一颗直角会很扎眼，用户那句话说的是颜色；要改说一声）。
+- **照片拍不到这两档**（这台机器注不进鼠标事件），所以自检把状态推上去读模板：`VisualStateManager.GoToState` 走 PointerOver 与 Pressed，读 `ContentPresenter.Background`，与应该那支 `ReferenceEquals`，量完回 Normal。读数：**「右上五颗的悬停/按下都按回了调色板（关闭那颗是红的）」** —— 键按回来而模板没取用、或者四颗里漏了一颗（漏的那颗仍是框架那层白一成），都在这里红。
+
+### 三、验证与交付
+
+- **闸门**：构建 0 警 0 错（中途两次自找的：`new List<…>[]` 写成了数组套列表、`new[] { Border, Border, Button }` 没有最佳公共类型）；单测 **1328 → 1329**（新增「标题条右上那几颗的悬停底 —— 四颗近黑、关闭那颗是首页那个红」，钉 #C42B1C 这个值本身；那条深度曲线的测试改成两个参数，并把 0.12 换回 `EdgeBandFraction`）；`format whitespace` 过；旧产物挪 `EmbyNian-stale\publish-20260927-174340`／`shell-bin-20260927-174340`；发布 **527 文件 / 300.5 MB / 11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`aa10f726…`）。
+- **闸门 4**：**检查 178、失败行 1（同一条既有环境红「文件页文件选项」）、消失 0、降级 1、新增 0** —— 与上一批一字不差（日志 `run-3754e4fb…`）。
+- **照片**：`work/strip6-after.png`（本轮）与 `work/strip5-after.png`（傍晚第三批）同开关同尺寸，逐像素比下来：**静息态没动** —— 全页差别最大的一处在**材料之外**的页面中段（均值 1.46 级、1.6% 的通道差过 24），那是底下那张轮播图自己的渲染差；标题条那 96 行均值 0.70，控制条那 90 行均值 0.06。照片给不了的正是这一轮改的那两样（两档悬停、满深线都要指针）。
+- **待实机**：①鼠标从带子下沿往顶边推，58 那一档起就不再变深的手感（含「是不是够深」）；②右上五颗悬停时那块近黑压在各种画面上够不够跳（四颗里若还有看着淡的，改 `StripHoverAlpha` 一处）；③关闭那颗的红与首页那颗对不对得上。
+
+## 左上角玻璃跟着指针变深、返回键照独占模式 40 见方并与片名紧凑（2026-09-27 傍晚第三批，构建＋1328 单测＋发布过；自检 178 项、失败 1 为既有环境红）
+
+用户令三条（原话）：「**加深左上角亚克力背景的颜色，鼠标位置越靠上亚克力背景的颜色越深**」、「**把统计的亚克力背景去掉，然后换个图标，排列在置顶的左边**」、「**让返回和片名紧凑一点，返回按钮放大一点**」。第二条与第一条的前半在这一批的上一趟已经落进工作树（统计那颗的底撤掉、图标换成 Segoe Fluent Icons 的 E9D2、挪到置顶左边），那一趟在写自检时断了；本次开工前把两处问实了：深浅**怎么**跟鼠标联动（答：越靠顶边越深，**返回键＋片名两块一起**）、返回键放大到多大（答：**40×40，照独占模式那颗**）。
+
+### 一、左上角那三块：从「两个常数」改成「一条跟着指针走的直线」
+
+- **Core 的算术**（`src/EmbyNian.Core/Playback/PlayerPalette.cs`）：`GlassDeepAlpha`（0x8C 那个常数）退役，换成 `TopGlassAlpha` ＝ **0xB3（遮七成）**，指针贴着画面顶边时到的值；配一条纯函数 `TopGlassAlphaAt(depth)`（0 ＝ 与上下两条浮层同一档的 0x40，1 ＝ 0xB3，中间线性，越界夹回、NaN 当 0）。表里的键从 `PlayerGlassDeepBrush` 换成 **`PlayerGlassTopBrush`**（值仍是最浅那一档），并导出一个 `TopGlassKey` 常量 —— 全表只有它一支值不是常数，自检那一条「逐字节相等」的判据要靠这个键把它挑出来。
+- **带宽归 `ChromeReveal`**（`src/EmbyNian.Core/Playback/ChromeReveal.cs`）：新增 `TopGlassDepth(pointerY)` —— 指针离顶边多近，0..1。带子就是 `Edges()` 那条 **0.12** 的唤出带，这是这一批唯一一条硬约束：**「指针靠到多近才算靠上」与「标题条什么时候出来」必须是同一条线**，否则屏上会出现一块已经最深、条子却还没出来的底。
+- **页面**（`PlayerPage.xaml` ＋ `PlayerPage.Palette.cs` ＋ `PlayerPage.Chrome.cs` ＋ `PlayerPage.Input.cs`）：返回键那块底与 `TitleBox`／`SubtitleBox` 三块**共用** `PlayerGlassTopBrush`（原来返回键一档 0x8C、片名两块一档 0x40，现在是一支三级深浅跟着指针走）；新增 `ApplyTopGlass(depth)` 把那一个字节写上去，主调用点是新的 `NotePointer(point, part)`（十赫兹轮询那条路与 WinUI 事件那条路原本各自抄了一份 `_pointerAt = point; _pointerOn = part;`，并成这一处），`Render()` 里另有一处兜底 —— 窗口换尺寸时同一个 Y 换算出来的 depth 就变了。控制条照旧是 `PlayerGlassBrush`（不跟指针走：它离「左上角」很远）。
+
+### 二、返回键 40 见方、与片名之间那条缝 12 → 4
+
+- **返回键 40×40**（`top_bar_size`，见独占模式 `elements/TopBar.lua`），贴客户区左上角。**代价说在明处**：它成了这一条里唯一一颗 40 高的，中线落在 **y=20**，而右边那一排与标题那一行字仍在中线 16 上下。`ProbeClearance` 里「整条控件在同一条基线上」那一问因此**不再把返回键算进来**，另立一问「照独占模式是 40 见方、贴着客户区左上角」——只把它从旧判据里拿掉而不补新判据，等于那条线悄悄少守一颗控件。
+- **缝 12 → 4**：`TitleStrip.ColumnSpacing` 8 → 0，剩下标题自己那 4 的左边距（用户令「让返回和片名紧凑一点」）。缝收窄与按钮放大是同一条令的两半 —— 按钮长了 8 像素宽之后若照旧的 12 缝，片名反被推开一截。另立一问「返回与片名之间」（量两者之间那条缝，不许有第二个常量在中间）。
+
+### 三、判据与验证
+
+- **自检新增/改动**（都在既有那两关里，检查名没增没减）：`ProbeClearance` 里加了「返回键照独占模式是 40 见方、贴着客户区左上角」、「返回与片名是紧挨着的」、「返回与片名共用同一支玻璃」，以及**那条直线本身逐档钉住** —— 走页面真正写画刷的那条路 `ApplyTopGlass`，在 0／0.25／0.5／0.75／1 五档上读回 alpha，与 Core 那条纯函数逐档相等且严格递增，量完推回指针此刻那一档。`ProbePalette` 里那一支不再拿表里那个数去比（它值不是常数），改按本页记下的深度算出期望值 —— 「压根没画上」（alpha 0）与「画错档」两种都还拦得住。
+- **自检读数**（`artifacts/selfcheck/run-2f316e58327b486a80b4dd923c924089/logs/selfcheck-shell.txt`）：`播放层配色` **21/21 支画刷与 Core 那张表一致**；`浮层让开控制条` 那一关 —— 「**返回键 40×40，在客户区左上角 0,0，中线 20.0；返回与片名之间 4.0**；中线：统计 16.0、置顶 16.0、最小化 16.0、关闭 16.0、标题那一行字 16.7，最大差 0.7；返回键那块常驻玻璃 alpha 40（指针深度 0）；**左上角玻璃浓度（深度→alpha）0→40、0.25→5D、0.5→7A、0.75→96、1→B3**；右上角那五颗平时没有底」。
+- **单测 1326 → 1328**：新增「左上角那块玻璃越靠顶边越深，两端正好是那两档」（PlayerPaletteTests：两头、严格递增、越界与 NaN 落回基准档）与「指针越靠顶边，左上角玻璃的深度越大」（PlaybackTests：带子边上 1 与 0、带子外的 0、一路不回头，以及**同一条边**那条断言 —— y=0.12 时条子已经出来）。
+- **闸门 1／2／3**：构建 0 警 0 错；单测 **1328/1328**；`format whitespace` 过；旧产物挪 `EmbyNian-stale\publish-20260927-171721`／`shell-bin-20260927-171721`（`work\pub-move-check-r8.txt`）；`publish.ps1 -NoArchive` 过（**527 文件 / 300.5 MB / 11 GLSL**），publish 与 build 的 `EmbyNian.dll` sha256 一致（`d4f44f7c…`）。
+- **闸门 4**：**检查 178、失败行 1（既有环境红「文件页文件选项」，音频 318–590 出界）、消失 0、降级 1、新增 0** —— 与上一趟发布件那一轮一字不差（日志 `run-2f316e…`）。自检那一趟指针不在顶部带里，所以读回来的玻璃是**基准档 40**；那条直线的五档是探针自己摆上去量的。
+- **照片**：`work/strip5-after.png`（本轮，`--show-osd --screen 2`，1064×792）与 `work/strip4-after.png`（傍晚第二批，同开关同尺寸）同帧校准带（y 62–72）两版一字不差（`#353E4F`），说明页面上没换东西；放大对照 `strip5-left.png`／`strip4-left.png`（左上角 5 倍）与 `strip5-right.png`／`strip4-right.png`（右上角 3 倍）。**这条照片路能看到什么、不能看到什么，写清楚**：`--show-osd` 故意不收起导航外壳，浮层就叠在外壳自己的标题栏上，而右上那五颗按用户令「鼠标没移到按钮上的时候不要显示背景」**没有常驻底**，所以外壳的账号名、搜索与三颗窗口按钮就在那五颗的空档里露着 —— 新旧两版都如此，不是这一轮弄坏的；另外这一条路上 ViewModel 是空的，片名那两块只有最小尺寸（跟 2026-09-27 傍晚第二批记的是同一件事）。三块的**尺寸与那条缝**因此以自检的读数为准（照片给不了 4.0 这种精度），照片这一段证明的是「浮层确实叠上来了、右上那一栏五颗都在、统计那颗是图标不是文字」。
+- **待实机**：玻璃压在**真视频**上、指针从带子下沿推到顶边时那一档一档变深的手感（照片那条路底下是浏览页，而且自检那一趟指针不在带子里）；以及返回键长到 40 见方之后压在真画面上、与右边那一排的中线错开 4px 看着顺不顺眼。
+
+## 标题条三改：退役字幕字体搜索框、置顶搬到最小化左边且悬停才显底、整条对齐一条基线（2026-09-27 傍晚第二批，构建＋1326 单测＋发布过；自检 178 项、失败 1 为既有环境红）
+
+用户令四条（前三条各带一张截图）：「去掉这个」（那颗字幕字体搜索框，问实了＝「**去掉这个功能**」）、「置顶按钮移动到最小化的左边，然后**鼠标没移到按钮上的时候不要显示背景**」、「上移集数名和片名，让标题的按钮处在**同一水平线**上」，以及紧跟的一句「**右上角的按钮照搬首页的就好**」（＝照外壳窗口那颗由系统画的 caption 按钮，作废了上午「照独占模式 40 见方」那一版）。
+
+### 一、需求 7 的字幕字体搜索框：功能级退役
+
+那个框不只是控件 —— 它是「播放页上换字幕字体、正在播的片子立刻生效」这整条路，退役范围按调用者逐个核过：
+
+- **界面**：`PlayerPage.xaml` 里那颗 `AutoSuggestBox`（连同它背后那块玻璃）删掉；中间那一栏只剩「统计」。
+- **行为**：`PlayerPage.Fonts.cs` **整个文件删除**（`ShowCurrentFont`／`SearchFonts`／`PickFont`／四个 `OnFontBox*`／`BeginFontSearch`／`EndFontSearch`）；`PlayerPage.xaml.cs` 去掉 `_typing`、`_fontTextBefore`、进场那一句 `ShowCurrentFont()`、退场那三句（`_typing=false`／`IsSuggestionListOpen=false`／`Hold(false, ChromeHold.Search)`）；`PlayerPage.Input.cs` 去掉 `OnKeyDown` 的打字闸、`OnSpaceShortcut` 与 `W32KeySink.WantsKey` 里的 `_typing`，`OnStripControl` 的名单少一颗；`PlayerPage.Chrome.cs` 的 `ChromeHold.Search` 成员退役（枚举里其余成员都是显式值，不动）。
+- **视图模型**：`PlayerViewModel` 去掉 `SubtitleFont` 那一行、`FontsReady`、`SubtitleFontSetting`、`PrepareFonts`、`FillFontsAsync`、`ApplySubtitleFont`、`NoticeNoFont`、`_fonts`／`_fontsAsked`，连构造函数里的 `FontLibrary fonts` 一起（DI 注册不变，容器只是不再给它）；`PlayerViewModel.Transport.cs` 起播那两句 `PrepareFonts()`／`SubtitleFont.Reseed(...)` 一并去掉。**设置页那张「字幕字体」卡（`SettingsViewModel` ＋ `SettingFontRow`）一个字没动**，换字体去那里；它本来就是 Live 的（写 `sub-font`），实时生效不会丢。
+- **自检**：`ProbeSubtitleFont`（`PlayerPage.SelfCheck.Menus.cs`）整条退役，`ShellSelfCheck.Settings.cs` 里的「播放页字幕字体栏」调用点一并去掉 —— **检查数 179 → 178**。基线 `docs/selfcheck-baseline.txt` 按规则逐行删掉那一行（`-UpdateBaseline` 在有失败/消失时会拒绝更新，这是它设计好的行为：合法退役要人复核后手工改）。
+- **资源与约定**：`Resources.resw` 三条 `PlayerPage_FontBox.*` 删掉；页面资源里那八支 `TextControl*`（四支底＋四支边线，2026-09-26 为这颗框要的「透明底／白框」）随之退役 —— 这一页上再没有文本控件了；`tests/EmbyNian.Tests/Agreements.txt` 里 `handle Views/PlayerPage.xaml FontBox` 删掉（控件退役是用户令，句柄消失是有意的）。
+- **保留的覆盖**（退役理由的另一半）：那条探针原本守三件事 —— 标题条的按下名单、打字时钉住浮层的 Hold、打字时让开播放键位。前者的等价覆盖面在 `ProbeTap`（返回键仍在名单里、压在它上面不算按下画面），后两者随框一起消失，没有别的消费者。
+- **文档**：`docs/开发与验证.md` 那句检查范围改成「字幕字体（设置页那一张，播放页那颗搜索框 2026-09-27 已退役）」。
+
+### 二、右上角四颗：照首页那颗 caption 按钮，且平时没有底
+
+- **置顶搬到最小化的左边**（`PinButton` 从中间那一栏挪进 `WindowButtons`），四颗一律 **46×32、无缝、贴右上角** —— 外壳窗口那三颗是系统画的 caption 按钮，就是这个尺寸与位置。
+- **不带常驻玻璃**（用户令「鼠标没移到按钮上的时候不要显示背景」）：四颗背后那块 `Border` 全撤，悬停那一层由框架的 Button 模板给。返回键**保留**它的常驻玻璃（那是 2026-09-26 用户令「给返回键加背景」要的），统计也保留（压着画面的文字按钮）。
+- 自检跟着分成两问：`ProbeClearance` 里「该有常驻玻璃的两颗都有」（返回、统计）与「**右上角那四颗平时没有底**」（结构上量：四颗直接住在 `WindowButtons` 里、且自己的 `Background` 是全透明）。
+
+### 三、整条一条基线
+
+标题那一栏的顶边距 12 → 0、`TitleBox` 的 Padding 12,8 → 12,4，中间那一栏的顶边距 10 → 0；于是返回、统计、置顶、三颗窗口命令（都是贴顶的 32 高，中线 16）与标题那一行的字（中线 16.7）落在同一条线上。自检读数：**「中线：返回 16.0、统计 16.0、置顶 16.0、最小化 16.0、关闭 16.0、标题那一行字 16.7，最大差 0.7」**，另加一条断言「整条控件在同一条基线上」（最大差 < 2）。
+
+### 四、验证与交付
+
+- **闸门**：构建 0 警 0 错；单测 **1326/1326**；`format whitespace` 过；旧产物挪 `EmbyNian-stale\publish-20260927-164521`／`shell-bin-20260927-164521`；发布 **527 文件 / 300.5 MB / 11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`99694fc7…`）。
+- **闸门 4**：**检查 178**、失败 1（既有环境红「文件页文件选项」）、消失 0、降级 1、新增 0（基线更新后复核过一遍，日志 `run-0b2657f7…`；更新前那一趟 `run-e133712f…` 就是「消失 1」的来源）。标题条那一关的整行读数：**「标题那块玻璃 591×34，文字 567×25，上留 4.0 下留 4.6；中线…最大差 0.7；剧名那块玻璃 72×24，在标题之下 4.0；返回与统计背后各有一块常驻玻璃；右上角那四颗平时没有底」**。
+- **照片**：`work/strip4-after.png`（本轮）与 `work/strip3-after.png`（上一轮）同开关同尺寸，对照图 `strip4-compare.png`、右半段放大 `corner3-compare.png` —— 搜索框那一整块没了、置顶挤进窗口命令那一栏、四颗只剩图标。
+- **待实机**：悬停那四颗时框架给的那一层亮底在真视频上够不够明显（独占模式是 `opacity.controls=0` 的同款做法）；以及标题那块玻璃变矮（42 → 34）之后压在亮画面上的可读性。
+
+## 剧名单独一块、标题条按钮照独占模式的尺寸与位置（2026-09-27 傍晚，构建＋1326 单测＋发布过；自检 179 项、失败 1 为既有环境红）
+
+用户令两条：「下方的剧名单独一个框，颜色改为白色」（附一张实播截图 —— 量下来标题＋剧名当时在**同一块**玻璃里，框内遮盖 23%）与「参考独占模式修改集成模式的标题和按钮布局」。第二条问了两轮才落地：第一次答「返回、最大化、窗口化、最小化等按钮」，第二次答「**按钮的大小，和位置**」。于是照 uosc 顶栏的尺寸与位置改（不是材料 —— 材料他选的是「同一支玻璃」）。
+
+### 一、先读独占模式那一侧（`assets/mpv-ui/scripts/uosc`）
+
+- `main.lua` 的 defaults：`top_bar_size=40`、`top_bar_controls='right'`、`top_bar_title='yes'`、`top_bar_alt_title_place='below'`、`border_radius=2`、`opacity.title=1`、`opacity.controls=0`，配色 `background=1C1B1F / background_text=FFFBFE`。
+- `elements/TopBar.lua`：每颗按钮 `self.size = top_bar_size`＝40 见方；三颗窗口命令从 `bx - size*3` 起逐个 `+size`（**彼此紧挨、整块贴右上角**），返回键画在最左（`EMBYNIAN[topbar-back]`，恒带半透底）；底块 `bg_size = size - margin`（margin ＝ (40-20)/4 ＝ 5）＝35；**主标题一个框、副标题（剧名）另起一个框画在它正下方**（Alt title 那段），副标题字号 ＝ 主标题的 0.77，两块同一个 `bg`。
+- **图标到底多大（先猜错了一次）**：uosc 画的是 `ass:icon(x, y, bg_size*0.5 = 17.5, …)`，我照这个把集成模式的图标改到 18 —— 照片一看比独占模式大出一圈。回头拿装箱的 `MaterialIconsRound-Regular.otf` 量墨框（PIL，18 号）：`close` 10×10、`minimize` 10×2、`crop_square` 16×16、`close_fullscreen` 16×16、`arrow_back_ios` 12×12 —— **Material Icons 的墨框只占字号一半上下**，独占模式里看得见的图标本来就这么大，与本仓原来的 10（窗口三颗）／16（返回）本来就对得上。已改回。
+
+### 二、改了什么（`src/EmbyNian.Shell/Views/PlayerPage.xaml`）
+
+- **剧名自己一块**：`TitleTexts` 从一个 Border 变成 StackPanel，里面 `TitleBox`（标题）与 `SubtitleBox`（剧名）两块 Border，各自 `HorizontalAlignment=Left` 紧贴自己的文字；剧名的字 `PlayerInkDimBrush` → `PlayerInkBrush`（那支 OSD 亮白），`SubtitleVisibility` 从 TextBlock 挪到框上（收起就整块收）。两块之间 Spacing=4（独占模式只隔 1px，同色同深下几乎连成一块，而用户说的是「**单独**一个框」；要更贴独占改一个数）；剧名框 `Padding="12,4"`（那行字小一号，框跟着矮）。
+- **返回与三颗窗口命令**：都改成 40×40（原来 40×28／46×32）；返回贴客户区左上角（Margin 16,10 → 0,0）；三颗窗口命令**彼此紧挨**（Spacing 8 → 0）并贴右上角（Margin 0,10,12,0 → 0,0,0,0）；每颗的玻璃**内缩 4**（32 见方）—— 三块玻璃占满就又变回「一整块」了。图标字号未动（10／16）。
+- 中间那一栏（字体搜索框、统计、置顶）与上下两条浮层底一律未动。
+
+### 三、判据与验证
+
+- `ProbeClearance` 改成量两块：标题那块玻璃 vs 它里面的字；剧名那块玻璃 vs 它的字、不与标题那块重叠、在标题之下、**与标题同一支画刷**、**字是那支亮白**（`ReferenceEquals(SubtitleText.Foreground, Resources["PlayerInkBrush"])`）。探针里**临时摆一行真片名与剧名**（跟跳过按钮那一关同一个做法），量完还回去 —— 空 ViewModel 时「不铺满整条」那一问等于在量空气。
+- 自检读数（带真片名）：**「标题那块玻璃 571×42，文字 547×25，上留 8.0 下留 8.6；剧名那块玻璃 72×24（标题那块 571×42），在标题之下 4.0；七颗控件背后各有一块自己的玻璃」**。上下留白那一问的容差从半像素松到 1px：量的是文字墨框，20 号那行的行框是小数（25.4），Border 按 Padding=8 撑开两边各带半点取整 —— 那 0.6 是字体度量不是布局错；「Padding 上下对称」另有一条精确断言钉住。
+- 「每颗控件背后那块玻璃」的断言从「与控件同尺寸」改成「**不越出控件**」（返回与窗口三颗的玻璃现在小一圈）。
+- 照片：`work/strip3-after.png`（新版）与 `work/pills-after.png`（上午那版）同开关同尺寸，对照图 `strip3-compare.png`、`corner2-compare.png`（右上角）、`corner-left-compare.png`（左上角）。**剧名那块框照片里看不到**（`--show-osd` 那一路 ViewModel 是空的、副标题整块收着），只有几何与画刷答得上。
+- **闸门**：构建 0 警 0 错；单测 **1326/1326**（中途被 `AgreementsTests` 逮住一次：新写的内联 `FontSize="18"` 让「内联字号只减不增」红，改成一条样式才过 —— 那也正是把图标字号改回去的契机之一）；`format whitespace` 过；旧产物挪 `EmbyNian-stale\publish-20260927-162147`／`shell-bin-20260927-162147`（`work\pub-move-check2.txt`）；发布 **527 文件 / 300.5 MB / 11 GLSL**，publish 与 build 的 `EmbyNian.dll` sha256 一致（`04c4cf91…`）；自检 179 项、失败 1（既有环境红「文件页文件选项」）、消失 0、新增 0、降级 1（日志 `run-6f999a68…`）。
+- **待实机**：剧名那块框压在真视频上的样子、三颗窗口命令贴角之后的手感（贴角是照独占模式来的，窗口化时窗口自带的那圈边会不会啃到它，要他看一眼）。
+
+## 播放页标题条：整宽一层 → 每颗控件自己一块玻璃（2026-09-27，构建＋1326 单测＋发布过；自检 179 项、失败 1 为既有环境红）
+
+用户令一句：「给每个按钮单独设置亚克力背景，不要一大块」，附一张标题条截图。动手前问了一句（左边那行标题文字要不要自己的底），他选了「也给它一块紧贴文字的」；按钮范围四组全选（返回、字体搜索框、统计＋置顶、最小化/最大化/关闭）。
+
+- **撤掉整宽那一条**：`TitleGlass`（跨满四列的 Border）连同按内容算高度的 `TitleGlassFit`／`TitleInset`（`PlayerPage.Chrome.cs`）与 `TitleTexts.SizeChanged` 那条挂钩一起删掉。
+- **每颗一块**：新增 `OsdGlassStyle`（`Border`：`PlayerGlassBrush`＋圆角 8＋`IsHitTestVisible=False`），七颗控件各包一层 `Grid`（Border 在下、控件在上）。**玻璃写成兄弟而不是控件自己的 Background**：框架 Button 模板在悬停/按下两态会换掉 ContentPresenter 的底色，写在按钮上指针一进就没了；自检那两关（「两档都不画底色」「两档底色和别的按钮同一支」）也正是钉这一条。
+- **标题那一行**：`TitleTexts` 自己变成那个 Border（`Padding="12,8"`、`HorizontalAlignment=Left`），按内容自己长、不再铺满星号列。自检量到「标题那块玻璃 24×41、文字栏 0×25、上留 8 下留 8」（自检那一路 ViewModel 是空的；真播一集两行文字时更宽更高，上下留白仍是 8／8）。
+- **缝与对齐**：中间那一栏 Spacing 2→8，三颗窗口命令之间也摆 8；七颗高度一律 32（原来 28／31／33）、圆角一律 8（统计原来是 `EgCardCornerRadius` 16 的药丸形，悬停那一层会在角上露出底下的玻璃）。三颗窗口命令那一栏落到 y 10（原来贴顶 y 0，比同排其余控件高 10px），右边缘仍齐窗口。
+- **判据**：`ProbeClearance` 两条标题断言改成新的量法（比文字栏大、上下留白相等）＋新增「标题那块玻璃不铺满整条」「每颗控件背后都有一块自己的玻璃」（结构上量：控件住在 Grid 里、第一个孩子是 Border、与控件同尺寸、不吃指针、`ReferenceEquals` 到 `Bar.Background` 那支画刷）。
+- **照片**：`work/pills-before.png`（旧件 154024）／`pills-after.png`（新版），同一开关 `--show-osd --screen 2`、同为 1064×792。取一条材料之外的带当校准（y 62–72 两版一字不差），标题那一段（x 222–360、441–574）从「盖着」变成「没盖」；右上角三块 46 宽的药丸之间量得出 8px 的缝，置顶那块 42 宽紧挨着第一块窗口药丸、缝同样是 8。
+- **闸门 1／2／3**：构建 0 警 0 错；单测 **1326/1326**；`dotnet format whitespace` 起初红在 `PlayerPalette.cs`（167 行 CRLF，**是今日上一轮留下的、不是本轮改的**；`.gitattributes` 写着 `* text=auto eol=lf`）→ 逐字节把 CRLF 归一成 LF（`git diff --numstat` 前后都是 43/15，内容一动没动）之后过；旧产物挪 `EmbyNian-stale\publish-20260927-154024`／`shell-bin-20260927-154024`（`work\pub-move-check.txt`）；`publish.ps1 -NoArchive` 过（**527 文件 / 300.5 MB / 11 GLSL**），publish 与 build 的 `EmbyNian.dll` sha256 一致（`306efd6a…`）。
+- **闸门 4**：检查 179、失败 1、消失 0、降级 1、新增 0 —— 失败仍是那条既有环境红「文件页文件选项」（音频 318–590 出界 2px），**用改前的旧发布件重跑，读数一字不差**（`work/selfcheck-pills-old.txt`）。本轮两趟日志 `run-d75e92fa…`（新版）与 `run-7459e817…`（旧件）。
+- **待实机**：玻璃压在**真视频**上的观感只有他播一集才看得见（照片那条路底下是浏览页的内容）。另外：**控制条（底部那条）这一轮没动**，仍是整条一层 —— 要同样改成每颗一块说一声。
+
+## 播放页上下两条浮层底：黑渐变 → 同一支半透明玻璃（2026-09-27，构建＋1326 单测＋发布＋自检过；闸门 4 一条既有环境红）
+
+用户令起头是「去掉黑色渐变，给红框的位置加一层亚克力背景」，中间连着三轮：「太厚了 而且不够透明」→「不是说了太厚了，下方为什么要留一大片空位」→「透明度调到最透」。最后落在两点上：**那一层不是亚克力，是半透明的纯色；它只铺标题那一行内容的高度，不再铺满整条 96。**
+
+### 一、先把「亚克力压在视频上采不到」这件事钉死
+
+第一版做的是真 `AcrylicBrush`（底色近黑、两个浓度），并且**在 XAML 内容上验过**：扫了六组、每组一张照片读遮盖率（`work/topglass-compare.py`，0／0 那张当「未遮」参照），0.45／0.50 遮四成七八、横向跟着底下的图走，自检也报绿。然后用户播了一集、发来截图 —— 标题条是一块**近乎不透的黑**。把他那张截图量出来：标题条整条 `#101115`，它底下的画面 `#D1A979`，**只透出百分之二**。
+
+差别只有一处：**播放时这一条底下是视频**。结论：视频那一层（mpv 的 composition 交换链，经 `CompositionSurfaceBrush` 挂在 `VideoHost` 上）不参与应用内亚克力的 backdrop 采样 —— 玻璃采不到它，就只剩自己的底色，「越透越黑」，「透」这个字在这条上无从谈起。
+
+**顺带记一笔防骗**：先前把一块**纯色** `SpriteVisual`（`ColorBrush`）挂到 `VideoHost` 上做诊断时，标题条**采得到**它（拿洋红兜底色验过，照片为证）。`ColorBrush` 走普通合成路径，交换链不走 —— 两者在那种诊断照片上分不出来，只有真播一集才分得出来。**别拿那块纯色当「视频也能采到」的证据。**
+
+### 二、换成半透明纯色（`PlayerTopGlassBrush`）
+
+普通的 alpha 混合，视频也好 XAML 也好一视同仁 —— 这是「透」在本架构下唯一做得成的路子，代价是**没有模糊**（要模糊就得采到画面，而上面那条路已经断了）。取值 `0x40`：遮四分之一、透四分之三，正是用户点名的「最透」那一侧。代价写在 `PlayerPalette.TopGlassAlpha` 的注释里 —— 一行白字压在最亮的一格画面上只剩 2.5:1 上下（原来的底线是 4.5:1）。**嫌厚嫌薄都是改这一个字节。**
+
+### 三、把那一层裁到内容高度
+
+`TitleStrip` 是 96 高（命中区＋拖动区），可内容只占上面 57（控件都贴顶：返回键 margin 10、标题那一栏 12、标题 20 号、副标题 12 号）。底铺满整条的下场就是用户说的「太厚了，下方留一大片空位」—— 下半截成了一条没有内容的色带。现在这层是一个 `Border`（`Height=60`、跨满四列、排在所有控件之下、`IsHitTestVisible=False`），只包住那一行内容；96 仍然是它的命中区与拖动区，只是不再铺色。副标题收起时会多出二十来个像素（那种场次少）；要真跟着内容走得把这层挪进一个与标题同高的内层格里，而那样它就没法铺满整宽，不划算 —— 取舍写在 XAML 那段注释里。
+
+### 四、验证与交付
+
+- 构建 0 警 0 错；单测 **1327/1327**（旧的「标题条那道方向相反，到下沿散尽」随 `TopScrimStops` 一起换了两次，现在是「标题条那层底是半透明的近黑，而且落在『透』那一侧」）。
+- 照片在 `work/topglass-*.png`：`before` 是原黑渐变，`sweep-*` 是亚克力那六组，`crop-home`／`crop-hero` 是这一版。裁短了的读数：同一条竖列上 y 88–96 从旧版的 `#383E4C`（还在遮）变成 `#92A7C4`（画面自己的色）。
+- **闸门 3**：旧 `artifacts\publish\win-x64` 与 `src\EmbyNian.Shell\bin` 挪 `EmbyNian-stale\*-20260927-145147`（托管 python `shutil.move`，`work\pub-move-check.txt` 复核）；`publish.ps1 -NoArchive` 过（**527 文件 / 300.5 MB / 11 GLSL**），publish 与 build 的 `EmbyNian.dll` sha256 一致（`3fa578f0…`）。
+- **闸门 4**：红 1 条、**是本机环境红、与本次改动无关** —— 「文件页文件选项」（音频 318–590 出界 2px，可用 280–588）。用**旧发布件**（`EmbyNian-stale\publish-20260927-143543`）跑对照，同一组几何读数**一字不差**地复现（`run-d64f7551…`）。本轮两趟日志 `run-c70fd5cd…`（亚克力那版）与 `run-6e1003cd…`（这一版），都是检查 179、失败行 1、消失 0、降级 1、**新增 0**；「播放层配色」两趟都绿（这一版报「20/20 支画刷与 Core 那张表一致；PlayerBottomScrim 3 个停点」）。未改基线。自检必须从主会话前台、非沙箱跑（后台任务走沙箱网络层，会剥掉自定义认证头，做出「登录失败」的假红）。
+- **待实机**：半透明底压在**真视频**上的观感仍要用户自己看 —— 照片只证得了 XAML 内容上的效果；这一条的判据只有在他那台机器上播一集。
+
+### 补记：左边缘那个缺口（同日晚些，用户放大左上角问「这左上角是怎么回事」）
+
+量下来是两件事叠在一起，一件该修、一件不是玻璃能管的：
+
+- **真的缺口，已修**：上一步把那层底做成了 `TitleStrip` 的**子元素**（`Border`），而 `TitleStrip` 当时还带着 `Padding="16,0,0,0"` —— 内边距把子元素整体推右 16px，于是左边缘缺一条玻璃口。修前修后的读数（窗口化抓图，y 12–48）：x 8–16 从 `#13171F` 变成 `#11151B`，也就是玻璃终于压到那儿。修法：把那 16px 挪到返回键与标题那一栏各自的左边距上（`16,10,0,0` 与 `20,12,0,0`），布局不动、那层底从 x=0 铺起。**这是「用 `TitleStrip.Background` 铺满」换成「子元素 `Border`」时引入的** —— 背景不吃内边距，子元素吃。
+- **不是玻璃能管的东西，留着**：窗口化抓图里最左还有约 8px 一条，颜色 `#1A2031` **不随画面变**、整高都在，而且**旧版（`TitleStrip.Background` 铺满那一版）的照片里一模一样** —— 那是窗口化时窗口自己的一圈边，XAML 盖不到它。用户那张 14:40 的**全屏**截图里没有这一条（标题条从 x=0 铺满），因为全屏时窗口没有这圈边。
+
+### 补记二：控制条也换成同一支玻璃，标题那层底改成按内容算（同日晚些）
+
+用户令两条：「1.进度条的背景也改成跟标题一样的亚克力 2.标题的亚克力下方再裁切一点，让上下的空位对称」。
+
+- **控制条**：底色换成一模一样那一支 —— 同一天里那支画刷从 `PlayerTopGlassBrush` 改名 **`PlayerGlassBrush`**、透明度 `TopGlassAlpha` 改名 **`GlassAlpha`**，因为它不再是标题专属。原来那道「上沿全透明、0.35 处 0x8C、下沿 0xF0」的渐变罩子随第一条令退役：`BottomScrimStops` 删掉，`Wash()` 与自检里的渐变读回整段删掉，单测里钉它的那条也删（**1327 → 1326**）。内边距顺手从 `20,26,20,12` 改成 `20,12,20,12` —— 原来上 26 是给渐变留的过渡，等厚之后那 14px 只是上方的空档，而用户当天刚为「上下的空位不对称」提过一次意见。控制条实测高 **93**（自检读数）。
+- **标题那层底不再写死高度**：新增 `TitleGlassFit()`（`PlayerPage.Chrome.cs`），按标题那一栏的实际高度加两份上边距算，挂在 `TitleTexts.SizeChanged` 上。量过用户截图：文字块字形落在 y 15–53、行框 12–62；底铺到 96 时下方空 34、上方 12 —— 这就是他说的「厚」。现在自检量到「**标题那层底 49 高，文字栏 25，上留 12.0 下留 12.0**」（自检那一路 ViewModel 是空的、只有一行空行 25；真播一集两行文字时是 74 = 12 + 50 + 12）。
+- **顺手改回一处我自己上一轮算错的**：把 `TitleStrip` 的 `Padding="16,0,0,0"` 拆成两处 Margin 时，标题那一栏的左边距写成了 20 —— 按原布局该是 4（返回键那 16 已经占住左边），写 20 等于把标题又右推了 16px。已改回。
+- **判据**：`ProbeClearance` 里新增两条子断言（「标题那层底比文字栏高」「标题那层底的上下留白相等」，容差走现成的 `GeometrySlack`），量的是几何而不是照片 —— 照片量不了这件事，`--show-osd` 那一路那一栏没有字。
+- **闸门**：构建 0 警 0 错；单测 **1326/1326**（少的那条见上）；旧产物挪 `EmbyNian-stale\*-20260927-151639`；`publish.ps1 -NoArchive` 过（**527 文件 / 300.5 MB / 11 GLSL**），publish 与 build 的 `EmbyNian.dll` sha256 一致（`f0b49ae5…`）；自检 179 项、失败 1（还是那条既有环境红「文件页文件选项」）、消失 0、新增 0。
+- **代价**：控制条原来下沿遮 94%，现在整条遮 25% —— 进度轨与时间读数压在亮画面上会比从前难读得多。要更实就改 `GlassAlpha` 一个字节（上下两处一起变）。
+- **待实机**：照片只压在 XAML 内容上（`--show-osd`）；压在真视频上的观感仍要用户自己播一集看。
+
+## MoviePilot 搜索区分 TMDB／豆瓣／IMDb＋项目技能（2026-09-27，构建＋1327 单测＋发布过；自检 2 红均复现于旧件）
+
+用户令：「搜索怎么都不区分 tmdb 豆瓣 imdb 的，等会一起修了；自动重试失败的子代理；生成一个和 MoviePilot 有关的技能」。
+
+- **契约（v3.0.8 OpenAPI＋官方 v3.0.1 源码，子代理第三次重试跑通复核）**：`media/search` 的 `media_source` 是数组参数（重复传参；逗号串仅旧客户端兼容）；**IMDb 是独立来源**（值 `imdb`，编号必须 `tt`+数字，显式编号识别要求来源=imdb）；`media/source` 目录每条带 name＋media_types，内置影视来源默认登记电影＋电视剧，音乐来源显式登记音乐。
+- **Core**：`SearchAsync` 增加可选来源清单，按重复 `media_source` 传参、去重保序，不选就一个参数都不带；新增 `MediaSourcesAsync` 解析 media/source（无名条目用标识兜底，屏上不留空名字）；`MoviePilotMediaSource.IsVideo` 判影视可用（电影/电视剧/movie/tv，空类型按可用——同官方前端）；解析器补 `imdb_id`/`tvdb_id` 辅助编号回退（仅当它是当前主来源时才当主身份）；新增 `MoviePilotSourceNames` 显示名映射——认识的说人话（TMDB/豆瓣/IMDb…）、插件来源原样、不折叠成「其他」。
+- **Shell**：搜索页顶部新增「来源」下拉（`SourceFilter`，全部来源打底；目录来自 media/source、只留影视可用，取不到退内置六条）；选来源自动按上一次的词重搜；卡片标题下加来源章（与类型并排，两样都空才不留行）；订阅/搜索资源的读屏名带来源（「订阅（豆瓣）：…」）。
+- **技能**：新增项目技能 `.claude/skills/embynian-moviepilot`（SKILL.md＋references/search-identity.md、reorganization.md），quick_validate 通过；CLAUDE.md 技能清单登记一行。
+- **验证**：构建 0 警 0 错；单测 **1327/1327**（新增 6 条：来源重复传参、不选不带参、IMDb tt 编号、来源显示名、IsVideo、media/source 解析）；whitespace verify 与 diff check 过；`SourceFilter` 经 x:Name 可定位。实机（开发构建）：卡片来源章、下拉目录实取（TheMovieDb/豆瓣/Bangumi/AniList/IMDb/TVDB）、三档筛选实搜且应用日志逐条对上——无筛选 5 条、`（themoviedb）` 4 条、`（douban）` 1 条、`（imdb）` 2 条，IMDb 结果是独立 tt 身份条目；切新媒体收起旧资源面板照旧。
+- **发布**：`artifacts/publish/win-x64` 刷新（527 文件/300.5 MB），build 与 publish 的 EmbyNian.dll SHA256 一致（`cf73bcf9…`）。
+- **闸门 4 红（2 失败，均非本轮、未改基线）**：「全屏让位只看画面」为已知环境红；「文件页文件选项」（音频 318–590 出界 2px）**在改动前的旧发布件 `EmbyNian-stale/publish-20260927-100717` 上同样复现、几何一字不差**——属数据/环境漂移，本轮 diff 零触及 DetailPage/EgPicker/自检文件；本轮构建反而比旧件少一红（「详情页下拉浮层在树内」通过）。日志：run-c634f97f…、run-6e0b820a…、旧件对照 run-f7874f5b…。
+- **子代理**：按用户限令串行；前两次被服务端限流，第三次退避后跑通契约复核。说明：本会话的 Agent 工具不暴露「指定子代理模型」参数，模型由宿主分派（会话本体即 GLM-5.3-Flash）；已按用户意图以子代理继续并如实报告。
+
+## MoviePilot 原记录重整、资源信息与筛选补齐（2026-09-27，指定单集实操成功，构建＋1321 单测＋发布通过；全应用自检仍有 1 红）
+
+用户令：审查 MoviePilot 功能与 UI，手动整理应先查原记录，并将《关于我转生变成史莱姆这档事》特别篇第 7 集重整为第四季第 24 集；补种子页面、标签、优惠、发布时间与过滤；子代理至多一个同时运行。
+
+- **隔离与整合**：在 `work/moviepilot-audit-20260927` 从 c8db490 创建 detached worktree 实现，后逐文件核对主树与基版本一致再整合；`ShellPage.xaml.cs` 只合并两处 MoviePilot 调用，保留已有 `--show-picker` 与全部播放器/下拉改动。未提交、未推送、未升版本。子代理串行，定位/审查代理遭限流，主代理继续完成审查与实测。
+- **手动整理**：`MoviePilotService.History` 分页查历史，按 Emby 文件优先匹配原目标，避免选到将软链接二次当源的后续记录；通过 `logid/logids` 重整，恢复原源或成功移动的目标。目录匹配保留 `scrape/library_type_folder/library_category_folder`，修掉丢“电视剧”目录层级。换配置后原记录与预览均失效；完整预览必须逐文件对应，提交前复查记录与软链接依赖。
+- **表单与安全**：重排成原记录/媒体季集/目录/预览，修复预览集合未绑定与合法改字段后旧预览仍有效；同窗确认复选框替代嵌套 ContentDialog（旧版确认框冲突而静默取消）。预览后自动滚到结果；未确认禁提交，提交中防重复，部分失败不重试整批。批量超过 30 文件明确报错，不静默截断、不退而处理父目录；集/季不冒用自己的 TMDB 编号当剧编号。
+- **搜索 UI**：精确搜索补 `mtype`，真实剧集搜索从无结果恢复为 116 条；`MoviePilotResourceBrowser` 同时供搜索页和独立版本窗使用，显示副标题、站点、标签、优惠因子、发布时间、做种、体积、HR 与“种子页面”。增加文本/站点/清晰度/标签/优惠/时间/有种/排除 HR 组合过滤及排序；清除恢复、无匹配提示完整。仅 http(s) 站点详情可打开，不把 enclosure 或 Cookie 交给系统；原种子 JSON 仍只用于下载正文。结果层不再与底层卡片叠字，新搜索收起旧资源层，空词取消旧请求。
+- **真实单集完成**：实服 v3.0.8。通过 EmbyNian UI 查到原记录 **1820**（S00E07），预览新目标在正确的 `电视剧/.../Season 04/...S04E24` 后，只执行一次同步重整，回执 **completed 1**、新成功记录 **1828**。原始下载文件保留，新目标与源均 **719463279 字节**，旧特别篇软链接移除。仅对目标剧集做不覆盖元数据的刷新后，Emby 新条目 **12592**（S04E24，“勇者觉醒”）已收录，旧 S00E07 不再返回；应用搜索页实见。没有播放、下载、订阅或全库扫描。
+- **此前的用户操作**：用户说明旧记录 **1826** 是他用 EmbyNian 手动整理的；该记录以原特别篇软链接为源、落在少“电视剧”层的目录。本会话先检测依赖而未提交；后续只读复查确认该记录和错层级文件已经不存在，且新正确目标不存在，才执行 1820。**本会话没有删除 1826**。这段证据仅保存在 ignored `work/mp-live-audit-20260927`，未把真实服务器地址或凭据写进仓库。
+- **验证与交付**：整合 Release 构建 **0 警 0 错**，whitespace verify 与 diff check 通过，**1321/1321 单测**（0 失败 0 跳过，本轮新增 15 条），15 个 PowerShell 脚本检查通过，新增 UI 控件句柄齐全。GUI 验证 116 条→S04E24 3 条→免费 1 条→清除恢复 116；独立窗口 89 条及下载确认/取消；订阅确认/取消；种子页按钮拉起默认 Edge（未接管外部浏览器登录后正文）。发布 **527 文件/300.5 MB**，桌面 EmbyNian.lnk 仍指 `artifacts/publish/win-x64` 且已刷新；build/publish 的 EmbyNian.dll SHA256 同为 `d698e755…73bf54`。
+- **自检仍红，未改基线**：首轮 179 项、2 失败（媒体信息表格 34/32 行、全屏让位的任务栏断言）；同一发布件重跑媒体信息通过，剩 **1 失败**“全屏让位只看画面”（任务栏算挡画面=False），消失/新增均 0。旧发布件 `EmbyNian-stale/publish-20260927-100717/win-x64` 对照也有同一任务栏失败。最新日志 `artifacts/selfcheck/run-d80eb02e3883498f90f0364f947dc96e/logs/selfcheck-shell.txt`；首轮 `run-742a4ef2bc2b4fa08b00e6ef86f7ac18`；旧件 `run-f7874f5b53214ae19f708d61f3330807`。**不能称四道闸门全绿。** 本次未触及那条全屏规则，未为了洗绿改窗口/任务栏/自检代码。
+- **详细本地报告**：`work/moviepilot-audit-report-20260927.md`，含安全诊断、测试日志与本轮原始读数路径。普通界面检查覆盖主窗口 1080×800、版本窗 900×680；薄荷影院、纯黑、午夜、石墨、紫夜均已查看真实资源列表，主题均通过启动参数临时切换，不覆盖用户保存设置。最终发布版从新 S04E24 条目打开版本窗带入“剧名 S04 E24”并找到 1 条，空关键词回到提示态。业务规则住 Core，表单组装与弹窗协调留 code-behind，未为纯 UI 增加服务层。
+
+## 详情页音频/字幕下拉改成真亚克力（2026-09-27，构建＋1306 单测＋发布绿；集页/剧页有照片判据）
+
+用户令：「剧页面、电影页面，集页面，季页面，把音频和字幕的选择栏改成亚克力背景」。**根因不在浓淡**：调色板里 `ComboBoxDropDownBackground` 从 2026-09-25「复刻 QQ 的选择框」起就是一支 `AcrylicBrush`，用户前两轮各调过一次浓淡都没用 —— 根子不在这儿。真因是框架的 `ComboBox` 把弹层设成**窗口化弹层**（`ComboBox_Partial.cpp` 里 `put_ShouldConstrainToRootBounds(false)`），浮层于是开在自己那个窗口里；而 `AcrylicBrush` 是**应用内**亚克力，只采得到同一个窗口里画在它后面的 XAML（microsoft-ui-xaml #9523 的官方口径）—— 采不到就退回 `FallbackColor`，屏上是一块不透明的实心 `#20262D`（用户那张截图量出来的就是它，底下压着的剧照一像素都没透上来）。
+
+- **修法（新 `Views/EgPicker.cs`）**：`ComboBox` 的一点壳，唯一职责是在 `OnApplyTemplate` 里 `GetTemplateChild("Popup")` 拿到模板里那颗 `Popup`、把 `ShouldConstrainToRootBounds` 设回 `true` —— 浮层回到同一棵树里，应用内亚克力这才采得到底下那一页（与详情页正文那几块玻璃同一种材料）。**为什么是子类而不是改模板**：改模板要重写整份 `DefaultComboBoxStyle`，那件衣服框架还在改，一处属性换一份模板不划算。代价：树内弹层受窗口边界约束（要被窗口裁），必要时收窄；**没有铺到全应用**（设置页等仍是框架 `ComboBox`）。
+- **子类要一件衣服（`Theme/Styles.xaml`）**：`<Style TargetType="local:EgPicker" BasedOn="{StaticResource DefaultComboBoxStyle}" />`。WinUI 的隐式样式按「类型精确相等」匹配，`generic.xaml` 里 `TargetType="ComboBox"` 那一条**不会**落到子类身上 —— 不接这一行，七颗下拉会一个模板都没有、屏上是空的。
+- **换类（`Views/DetailPage.xaml`）**：详情页那**七颗**下拉全部 `ComboBox` → `local:EgPicker`（含 `Header` 的闭合标签）：集页宽版式三颗（`ColumnSource/Audio/SubtitlePicker`）＋尾部那一排三颗（`Source/Audio/SubtitlePicker`）＋季那一颗（`DetailPage_ComboBoxA4`）。四类页面共用这一份 XAML，所以这一次改的是四页一起；`x:Name`／绑定／`Visibility`／圆角全部原样。
+- **工具开关 `--show-picker`**：浮层只在点开的那一瞬之后存在，本机注不进鼠标事件（与 `--show-menu` 同一条理由），所以新增这个开关把字幕那颗弹开留着好拍照。配 `--show-detail`／`--show-episode` 用，单独用时自己走到第一张详情页；`docs/开发与验证.md` 与 `Agreements.txt` 的 `switch` 表同步。
+- **顺手修掉的工具毛病**：剧页／电影页那几颗下拉的列表**挂在播放落点那一次请求上**，不跟页面同一次到，而 `--show-picker` 从前跟着导航那一步直接问 —— 2026-09-27 拍剧页那张时问早了，回一句「这一页上没有可弹的字幕下拉」，而十几秒后照片里那颗下拉明明站在那儿。改成有界等待（`DetailPage.PickerReady`，最多 5 秒、100ms 一拍）。
+- **自检（`ShellSelfCheck.Pages.cs`「详情页下拉浮层在树内」＋`DetailPage.PickerGlass()`）**：读屏上那一份（`PickerSet` —— 集页宽版式在片名栏、其余在尾部，两份只露一份）三颗的 `PopupPart` 非空且 `ShouldConstrainToRootBounds`。这是照片之外的另一半：属性在不在。**第一趟它自己红了**：那一页只有一个媒体源，「媒体源」那颗收着，而**收起来的控件框架根本不套模板**（收着的元素不进测量），弹层部件当然不存在 —— 已收窄成只看屏上真摆出来的那几颗（`Visibility` + `ActualWidth`），三颗全收着按「没有文件选项」算过。报告里现在的读数是「媒体源 这一页收着、音频 在树内、字幕 在树内」。
+- **照片判据（`work/picker-shot.py` 抓窗口自己的面 ＋ `work/picker-map.py` 中位数二维图）**：本机前台有独占全屏的游戏，`CopyFromScreen` 只会拍到游戏画面，所以改走 `PrintWindow(…, PW_RENDERFULLCONTENT=2)`；窗口开到副屏（`--screen 2`）免得抢用户正在用的屏。看的是**弹层里那点颜色跟不跟着底走**，不是一个常数：
+  - **集页面**（`work/picker-glass-episode.png`，1372×1085）：弹层内 224 格、**123 种取值**；紧挨薄荷绿播放按钮（`#97EED5`）的一侧读出 `#384F4F`（绿晕），远离处回落到 `#262A30` 一档，亮度极差 **71.4**；与 `#20262D` 逐位相等的格子 2 个（都落在 1px 边框列）。
+  - **剧页面**（`work/picker-glass-detail.png`，1064×792）：弹层内 240 格、**59 种取值**，色值从 `#34383F` 单调退到 `#1A1F24`（上面压亮剧照、下面压暗页底），亮度极差 **55.4**；与 `#20262D` 逐位相等的格子 **0** 个。
+  - **同帧内的校准对照**：同一页上闭合态的下拉（实色 `ComboBoxBackground`＝`#20262D`）逐格读出来**全是 `#20262D`**、一种取值 —— 证明这条抓图链路忠实，且 `#20262D` 正是「没在采样」的签名。有了这个对照，弹层那半边不一样的读数才有意义。（另记一个坑：弹层的 1px 边框是亮一档的 `#303941`，沿它那一列扫会得到「一片均匀亮色」的假读数，我先踩过一次。）
+- **闸门**：构建 0 警 0 错；`format whitespace` 过（无改动）；单测 **1306/1306**（0 失败 0 跳过 —— 本轮没往测试项目加用例，新增的自检项住在 Shell 里）；旧产物挪 `EmbyNian-stale\publish-20260927-100717` / `shell-bin-20260927-100717`（`work\pub-move-check.txt` 复核，第一趟那对是 `…-100126`）；`publish.ps1 -NoArchive` 过（527 文件 / 300.4 MB / 11 GLSL），publish 与 build 的 `EmbyNian.dll` sha256 一致（`920c72f3…`）。
+- **闸门 4：红，但只剩一条，且是本机环境红，与本次改动无关** —— 「全屏让位只看画面」降级（通过 → 失败）。八个子断言里只翻了**一格**：`任务栏算挡画面=False`（期望 True）。取证：此刻 `Shell_TrayWnd` 句柄在（65766）却 `IsWindowVisible=0`、rect `(0,1392)-(2560,1440)`，而 `HostWindow.PutsNoPixelsOnScreen` 的判据正是 `IsIconic || !IsWindowVisible`（`HostWindow.cs:2049`）→ 对隐藏的任务栏必然返回 true → 这一格必假；进程表里 `wegame.exe`／`GameSDK.exe`／`GameInput*`／`GameManagerService3.exe` 都在，即**主屏此刻被一个全屏游戏占着、shell 把任务栏藏了**。这条检查拿「真任务栏」当标本去问「它算不算挡画面」，恰在这种环境下必红，而本轮一行都没碰窗口／全屏／任务栏代码。按「既有红照发只记 PROGRESS」处理：**未改基线、未动那一条**。新检查「详情页下拉浮层在树内」已按规矩录入 `docs/selfcheck-baseline.txt`（与同族的「详情页*」放在一起），并用脚本自带的 `-Log` 模式（只比对已有报告、不启动程序）复核过：检查 179、失败行 1（就是上面那条环境红）、**新增 0**。
+- **待实机**：四页里**集页与剧页有照片判据**；电影页与季页共用同一份 XAML 与同一个类（版式分别是尾部那一排 `PickerPanel` 与季那一颗挂在 `ShelfHead.Trailing` 里的），机制完全相同，本轮没单独拍 —— 季那一颗没有 `x:Name`、自检也够不着，靠同一份样式与同一个类兜着。用户自己点开四页、把「音频」「字幕」下拉弹开看一眼浮层是否透出底下的剧照即可。
+
+## 独占模式补上「跳过片头/片尾」按钮（2026-09-26，构建＋1306 单测＋发布绿；待实机看）
+
+用户令：「独占模式下 跳过片头/片尾的按钮不显示」。根因：那颗按钮是集成模式 XAML 的 `SkipButton`（`PlayerPage.xaml`，绑 `SkipOffered` 一族），而独占模式画面在 mpv 自建窗口里、XAML 外壳不在屏上，uosc 侧从来没有这颗按钮，也没有把 offer 送过去的通道——`ApplySkipOffer` 照算 offer，只是无处显示。自动跳过（Auto 档）一直好使，因为它走 `AcceptSkip` 直接 seek，不需要按钮。
+
+- **契约（`MpvUi.cs` 的 `VideoWindowContract`）**：新增 `SkipOffer`（宿主→uosc，`embynian-skip-offer <文案|空>`，与 version/episode-count 同向、**不进 Parse**）与 `SkipTake`（uosc→宿主，`embynian-skip-take`，进 Parse，值保留）。名字守老规矩：绑定 `embynian-ui-*`、宿主消息 `embynian-*`，两套不同名。
+- **宿主（`PlayerViewModel.Events.cs`）**：`ShowSkipPrompt` 里加 `PushSkipToVideoWindow`——`HeadlessPlayback` 才推、文案变了才发一条（状态每秒十拍，去重免刷屏）；`AcceptSkip` 收尾推空文案即时收起；`OnVideoWindowMessage` 加 `SkipTake` 分支 → `TakeSkip()`（与集成按钮、回车同一句 `AcceptSkip`）。`_skipPushed` 字段记最近一次推的文案。
+- **uosc（新 `elements/SkipButton.lua` ＋ `main.lua`）**：新元件画右下角一颗按钮（图标＋文案，圆角描边），offer 在就 `min_visibility=1` 常驻可见（不靠指针唤出，与集成一致），落点在控制条/时间轴上沿之上；点它 `embynian_notify('embynian-skip-take')`。`main.lua` 注册 `embynian-skip-offer` 处理器、实例化元件、`start-file` 清一次 offer；文件头 `EMBYNIAN[skip-button]` 补丁清单同步。offer 站 15 秒/离段/暂停/换集全归宿主 `SkipCoordinator`，元件不自己计时。
+- **单测（`MpvUiTests.cs`）**：加「SkipTake 进 Parse、SkipOffer 不进」契约与「uosc 补丁四头都在」（消息处理器、元件实例化、点击回推、start-file 清），两条契约键并入「绑定名/消息名不许同名」的扫描表。
+- **验证**：Release 构建 0 警 0 错；`format whitespace` 过；luajit 语法检查两个 Lua 文件过；单测 **1306/1306**（0 失败 0 跳过，比上一节 1304 多的两条就是这次）；`publish.ps1 -NoArchive` 过（527 文件＝多了 SkipButton.lua）。**闸门 4 一条红「窗口命令按钮」与本改动无关**：那条查的是标题栏把诊断窗切进全屏后「最大化→还原」图标（`PlayerPage.SelfCheck.Window.cs` 的 `SetFullscreen(true)`），本改动一行都没碰窗口/标题栏/全屏代码，同树在途的配色改动也没碰；表现是诊断窗这一趟没真进全屏（详情报「窗口未最大化」），属运行环境相关，未动基线。
+- **待实机**：独占模式播一集有片头章节的剧、设置为「询问」，走到片头那几秒——右下角应浮出「跳过片头」按钮，点它跳到片头末尾并提示；`SkipButton.lua` 的落点/字号是照集成那颗估的一版，实机可能要微调位置。**独占/uosc 三条离线探针覆盖不到，这颗按钮的实机绘制与点击尚未跑过。**
+
+## 播放页标题条加回黑色渐变（2026-09-26，构建＋1304 单测＋发布绿；待实机看）
+
+用户令：「给集成模式下的播放页面标题加黑色渐变」。集成模式标题条（返回键＋标题两行＋搜索框＋统计/置顶＋窗口键）压在画面上，亮画面顶上白字没有垫底读不清；这道罩子 2026-09-18 曾按当时的话删过（「播放页面的标题不要黑色渐变」），本轮原样恢复。
+
+- **Core（`PlayerPalette.cs`）**：加回 `TopScrimStops = [(0, 0xE6), (1, 0x00)]`——上沿最浓（Film 底 90% alpha）、到下沿散尽，方向与控制条那道相反；两个停点就够（底下只压两行字和几颗按键，不像控制条还有进度轨要托）。注释记全 09-18 删、09-26 复的两笔账。
+- **XAML（`PlayerPage.xaml`）**：加回 `PlayerTopScrim` 空渐变壳，`TitleStrip.Background` 指上它；底部 scrim 的注释同步改写。
+- **填色与自检（`PlayerPage.Palette.cs`）**：`PaintPalette` 补 `Wash("PlayerTopScrim", …)`，`ProbePalette` 的渐变表加回这一项（自检报告会报「PlayerTopScrim 2 个停点」）。
+- **单测（`PlayerPaletteTests.cs`）**：加回「播放器配色：标题条那道方向相反，到下沿散尽」——钉上沿 Offset 0、下沿散尽（alpha 0x00，画面顶上不蒙层）、逐档递淡四条断言。
+- **验证**：完整构建 0 警 0 错；单测 **1304/1304**（0 失败 0 跳过，比 v0.0.20 基线多的 1 条就是这条回归）；程序确认未运行后旧产物挪 `EmbyNian-stale\*-20260926-222348`（托管 python `shutil.move`，`work\pub-move-check.txt` 复核）；`publish.ps1 -NoArchive` 过（526 文件 / 300.4 MB / 11 GLSL），publish 与 build 的 `EmbyNian.dll` sha256 一致（`37c03aa6…`）。桌面快捷方式已指向新版。
+- **待实机**：集成模式播放一部亮画面的片子，把鼠标移到顶部——标题条背后应有一道上浓下淡的黑色渐变，标题字好读，且渐变到标题区下沿完全消失（不蒙住正片）。
 
 ## 四十一报：整合发版 v0.0.20（2026-09-26，构建＋1303 单测＋发布＋自检＋安装包全绿；GitHub Release 已发）
 

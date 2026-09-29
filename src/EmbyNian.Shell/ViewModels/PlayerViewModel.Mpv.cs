@@ -97,7 +97,7 @@ public sealed partial class PlayerViewModel
 
     /// <summary>倍速微调, clamped to the range the 倍速轮盘 offers so the two cannot disagree.</summary>
     internal void NudgeSpeed(double delta) =>
-        SetSpeed(Math.Round(Math.Clamp(Status.Speed + delta, SpeedChoices[0], SpeedChoices[^1]), 2));
+        SetSpeed(Math.Round(Math.Clamp(SpeedValue + delta, SpeedChoices[0], SpeedChoices[^1]), 2));
 
     /// <summary>
     /// 倍速. The keys say what they did on the OSD; the wheel does not, because the tick that just
@@ -105,7 +105,7 @@ public sealed partial class PlayerViewModel
     /// </summary>
     internal void SetSpeed(double speed, bool notice = true)
     {
-        _ = _playback.SetPropertyAsync("speed", speed);
+        SpeedValue = Math.Clamp(speed, SpeedChoices[0], SpeedChoices[^1]);
 
         if (!notice) return;
 
@@ -113,6 +113,15 @@ public sealed partial class PlayerViewModel
             "show-text",
             $"倍速：{speed.ToString("0.0#", CultureInfo.InvariantCulture)}×",
             "1200");
+    }
+
+    partial void OnSpeedValueChanged(double value)
+    {
+        SpeedLabel = $"{value.ToString("0.0#", CultureInfo.InvariantCulture)}×";
+        UpdateRemainingClock();
+        if (_pushing) return;
+        _speedTouched = Now;
+        _ = _playback.SetPropertyAsync("speed", value);
     }
 
     /// <summary>
@@ -142,35 +151,14 @@ public sealed partial class PlayerViewModel
         _ = _playback.SetPropertyAsync(subtitle ? "sub-delay" : "audio-delay", value);
     }
 
-    /// <summary>
-    /// 音量 from the arrow keys. Writes the bound property rather than mpv directly, so the slider, the
-    /// number beside it and the mpv property all move together — the same path a drag takes.
-    /// <para>
-    /// 直接落在音量上，不走 <see cref="VolumeScale"/> 的棘轮：一步 5 个音量本来就不小于 100→101 那一格
-    /// （4 个单位），"这一档要不要多按几下"这个问题在这些步长上不存在 —— 用户要的那件事只关于滚轮。
-    /// </para>
-    /// </summary>
-    internal void NudgeVolume(double delta) => Volume = Math.Clamp(Volume + delta, 0, AudioSettings.MaxVolume);
+    internal void NudgeVolume(double delta) => Volume = VolumeScale.Step(Volume, delta);
 
-    /// <summary>
-    /// 音量 from the wheel. 一格 2 个<b>轴</b>单位，沿刻度走（<see cref="VolumeScale.Step"/>）：100→101 那一格
-    /// 要两格，其余每格仍是两档。没走满的路留在 <see cref="VolumeAxis"/> 上等下一次接着走，所以数值不动时
-    /// 滑块也会先爬一点 —— 那正是「这一段更长」看得见的样子。
-    /// </summary>
-    internal void RollVolume(double delta)
+    internal void RollVolume(double delta) => NudgeVolume(delta);
+
+    internal void ResetVolume()
     {
-        var (level, axis) = VolumeScale.Step(Volume, VolumeAxis, delta);
-
-        _axisByRoll = true;
-        try
-        {
-            VolumeAxis = axis;
-            if (Math.Abs(level - Volume) > 0.001) Volume = level;
-        }
-        finally
-        {
-            _axisByRoll = false;
-        }
+        Volume = 100;
+        _ = _playback.SetPropertyAsync("mute", false);
     }
 
     /// <summary>静音切换. mpv owns the flag; the glyph follows from the next status it reports.</summary>

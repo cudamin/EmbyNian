@@ -14,7 +14,8 @@
 -->
 <ResourceDictionary
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views">
 
     <!-- ============================ 三种字 ============================ -->
 
@@ -48,6 +49,19 @@
     <x:Double x:Key="EgCaptionFontSize">12</x:Double>
     <x:Double x:Key="EgBodyFontSize">14</x:Double>
     <x:Double x:Key="EgSubheadFontSize">16</x:Double>
+    <!-- 播放页左上角第二行（文件信息）那一档。**它不是「阶里 18 那一个」** ——
+         独占 uosc 顶栏给这一行的字号是 `\fs` = `round(alt_title_size * 0.71)`，但 libass 的 `\fs`
+         按 **72 DPI 的 pt** 渲染，而这里的 `FontSize` 是 **96 DPI 的 px**：同一个数，屏上差 0.75 倍
+         （72/96）。实测为证（两边同串「└ 1920 x 1080 · HEVC · AAC · Studio GreenTea」，当时的 0.77 档）：
+         独占窗口档 `\fs18` 墨迹宽 292、独占全屏档 `\fs24` 宽 388（比值 1.33 ＝ 字号比，说明这条换算是线性的），
+         而集成照抄 18px 画出来是 385 —— **正好是独占全屏档那一档**，比窗口档大三分之一，用户令
+         2026-09-28 更晚「集成模式下面的元数据体积太大了，与独占模式不一致」说的就是它。
+         于是先按 18 × 0.75 ＝ 13.5 定档；用户令 2026-09-29「元数据缩小一点点，集成模式和独占模式大小要一致」
+         把独占的因子 0.77 收到 0.71（窗口档 `\fs17`、全屏档 `\fs22`），这边跟着落到 17 × 0.75 ＝ 12.75；
+         全屏档 `\fs22` → 16.5（见 ApplyTitleScale）。
+         嫌大嫌小改这一个数，**但独占 TopBar.lua 的 0.71 因子要一起动**（见那边的 EMBYNIAN[topbar-subline-size]）。 -->
+    <x:Double x:Key="EgSublineFontSize">12.75</x:Double>
+    <x:Double x:Key="EgTimelineFontSize">18</x:Double>
     <x:Double x:Key="EgTitleFontSize">20</x:Double>
     <x:Double x:Key="EgHeaderFontSize">36</x:Double>
     <x:Double x:Key="EgDisplayFontSize">52</x:Double>
@@ -96,6 +110,16 @@
       框架自己的圆角，跟设置页那些下拉一个样。
     -->
     <CornerRadius x:Key="EgPickerCornerRadius">12</CornerRadius>
+
+    <!--
+      详情页那几颗下拉的衣服：<local:EgPicker> 是 ComboBox 的子类，显式样式按「类型精确相等」匹配，框架给
+      ComboBox 的那一份隐式样式（generic.xaml 里那条 TargetType="ComboBox"）不会落到子类身上 —— 不接这一行，
+      那几颗下拉会一个模板都没有，屏上是空的。接的就是框架那一份，一个字都不改：这次要改的只是弹层开在哪棵树
+      里，那件事在 C# 里（EgPicker.OnApplyTemplate），不在样式里。
+      隐式（没有 x:Key）而不是给每颗下拉写 Style=""：七颗下拉一个样子，写七遍只会漂。
+      摆在这个文件而不是 App.xaml —— 这里管形状、Palette 管颜色，一颗下拉穿什么衣服属于前者。
+    -->
+    <Style TargetType="local:EgPicker" BasedOn="{StaticResource DefaultComboBoxStyle}" />
 
     <!-- 发丝线的粗细。结构靠它，不靠色块 —— 所以只有一档，加粗只发生在框线变强调色的时候。 -->
     <Thickness x:Key="EgHairline">1</Thickness>

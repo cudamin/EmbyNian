@@ -177,6 +177,21 @@ public sealed class MpvSettings
     /// </summary>
     public bool EnableIpc { get; set; } = true;
 
+    /// <summary>
+    /// 截图的保存目录 —— 播放器「画面」菜单里三档截图的落点（「在设置中新增截图的保存目录」，用户的话，
+    /// 2026-09-29）。<b>空就是装机落点</b>（<see cref="Infrastructure.AppPaths.ScreenshotDirectory"/>，数据目录下的
+    /// screenshots），所以缺这个键的旧设置文件读出来行为一个像素都不变，不需要迁移；「恢复默认」把它抄成空，
+    /// 也就回到了装机落点（<c>SettingsPreferences</c> 整组抄 <see cref="Mpv"/>，这里自动跟着走）。
+    /// <para>
+    /// 填了的值不直接拿去用：计划层、关于卡和自检问的都是
+    /// <see cref="Infrastructure.AppPaths.ResolveScreenshotDirectory"/> 这一个裁决 —— 清掉引号和空白、相对路径
+    /// 展开成绝对（两个后端的工作目录不同，同一个「相对」会落到两个地方，见该函数）。改完当场生效：设置页把
+    /// 裁决后的目录推给正在播的那一部（<c>PlaybackService.ApplyScreenshotDirectoryAsync</c> 写 mpv 的
+    /// <c>screenshot-directory</c> 属性）；起播那一路由计划层从这份设置里读，两处同源。
+    /// </para>
+    /// </summary>
+    public string ScreenshotDirectory { get; set; } = "";
+
     // 「libmpv-2.dll、附加参数貌似没什么用，删除」 — both are gone as of v5.
     //
     // LibMpvPath pointed at a libmpv build to load instead of the bundled one. The client ships its own

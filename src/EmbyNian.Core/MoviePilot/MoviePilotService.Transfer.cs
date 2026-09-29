@@ -39,21 +39,13 @@ public sealed partial class MoviePilotService
                 MoviePilotTransfer.Text(item, "library_storage") is { Length: > 0 } storage ? storage : "local",
                 MoviePilotTransfer.Text(item, "library_path"),
                 MoviePilotTransfer.Text(item, "transfer_type"),
-                MoviePilotTransfer.Text(item, "overwrite_mode")))
+                MoviePilotTransfer.Text(item, "overwrite_mode"),
+                MoviePilotTransfer.Bool(item, "scraping"),
+                MoviePilotTransfer.Bool(item, "library_type_folder"),
+                MoviePilotTransfer.Bool(item, "library_category_folder")))
             .ToList();
 
-        var sources = MoviePilotTransfer.Array(await CallAsync((apiBase, token) =>
-            client.GetAsync(apiBase, token, "media/source", cancellationToken), cancellationToken)
-            .ConfigureAwait(false))
-            .Where(item => MoviePilotTransfer.Text(item, "media_source").Length > 0)
-            .Select(item => new MoviePilotMediaSource(
-                MoviePilotTransfer.Text(item, "name"),
-                MoviePilotTransfer.Text(item, "media_source"),
-                MoviePilotTransfer.Array(TryMember(item, "media_types"))
-                    .Select(one => one.ValueKind == JsonValueKind.String ? one.GetString() ?? "" : "")
-                    .Where(kind => kind.Length > 0)
-                    .ToList()))
-            .ToList();
+        var sources = (await MediaSourcesAsync(cancellationToken).ConfigureAwait(false)).ToList();
 
         if (storages.Count == 0) storages.Add(new MoviePilotStorage("本地", "local"));
         if (sources.Count == 0) sources.Add(new MoviePilotMediaSource("TheMovieDb", "themoviedb", ["电影", "电视剧"]));
@@ -79,10 +71,11 @@ public sealed partial class MoviePilotService
 
         var file = files.FirstOrDefault(item =>
             MoviePilotTransfer.SamePath(MoviePilotTransfer.Text(item, "path"), sourcePath));
-        if (file.ValueKind is not JsonValueKind.Object)
+        if (file.ValueKind is not JsonValueKind.Object || !reply.Success)
             throw new MoviePilotException(
                 $"MoviePilot 看不到这个文件：{sourcePath}。它是 MoviePilot 那台机器上的路径吗？（不会改为整理父目录）");
 
+        MoviePilotTransfer.RequireFile(file, sourcePath);
         return file.Clone();
     }
 
@@ -108,17 +101,8 @@ public sealed partial class MoviePilotService
             new Dictionary<string, object?> { ["fileitem"] = file }, cancellationToken), cancellationToken)
             .ConfigureAwait(false);
 
-        var data = reply.Data;
-        var storage = MoviePilotTransfer.Text(data, "target_storage");
-        var path = MoviePilotTransfer.Text(data, "target_path");
-        if (storage.Length == 0 || path.Length == 0)
-            return new MoviePilotTransferOptions([], [], []);
-
-        return new MoviePilotTransferOptions(
-            [new MoviePilotStorage(storage, storage)],
-            [new MoviePilotDirectory(
-                storage, path, MoviePilotTransfer.Text(data, "transfer_type"), null)],
-            []);
+        if (!reply.Success) throw new MoviePilotException(reply.Message);
+        return ParseTransferTarget(reply.Data);
     }
 
     /// <summary>
@@ -127,9 +111,12 @@ public sealed partial class MoviePilotService
     public async Task<MoviePilotTransferPreview> TransferPreviewAsync(
         MoviePilotTransferRequest request, IReadOnlyList<JsonElement> files, CancellationToken cancellationToken)
     {
+        var identity = CaptureIdentity();
+        ValidateHistoryConnection(request.Histories, identity);
         var result = await TransferRunAsync(request, files, background: false, preview: true, cancellationToken)
             .ConfigureAwait(false);
-        return new MoviePilotTransferPreview(request, files, result);
+        CheckIdentity(identity, cancellationToken);
+        return new MoviePilotTransferPreview(request, files, result) { ConnectionStamp = TransferConnectionStamp(identity) };
     }
 
     /// <summary>
@@ -152,6 +139,37 @@ public sealed partial class MoviePilotService
         return result;
     }
 
+    public async Task<MoviePilotTransferResult> TransferSubmitAsync(
+        MoviePilotTransferPreview preview, bool background, CancellationToken cancellationToken)
+    {
+        if (!preview.CanSubmit) throw new MoviePilotTransferBlockedException("请先完成有效且文件齐全的整理预览");
+        var identity = CaptureIdentity();
+        if (preview.ConnectionStamp != TransferConnectionStamp(identity))
+            throw new MoviePilotTransferBlockedException("MoviePilot 连接配置已改变，请重新查找记录和预览");
+        foreach (var group in preview.Request.Histories.GroupBy(history => history.Title))
+        {
+            var current = await FindTransferHistoriesAsync(group.Key, cancellationToken).ConfigureAwait(false);
+            var dependents = MoviePilotTransferHistoryMatch.Dependents(preview.Request.Histories, current);
+            if (dependents.Count > 0)
+                throw new MoviePilotTransferBlockedException("旧目标还被其他软链接记录引用（" +
+                    string.Join("、", dependents.Select(history => $"#{history.Id}")) +
+                    "）。重新整理可能让它们失效，请先在 MoviePilot 处理引用关系；本次没有提交。");
+            foreach (var history in group)
+            {
+                var fresh = current.FirstOrDefault(item => item.Id == history.Id);
+                if (fresh is null || fresh.SourcePath != history.SourcePath || fresh.TargetPath != history.TargetPath ||
+                    fresh.Mode != history.Mode || fresh.Success != history.Success)
+                    throw new MoviePilotTransferBlockedException("原整理记录已经改变，请重新查找记录和预览");
+            }
+        }
+        CheckIdentity(identity, cancellationToken);
+        return await TransferSubmitAsync(preview.Request, preview.Files, background, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string TransferConnectionStamp(SessionIdentity identity) => Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            $"{identity.ApiBase}\n{identity.Username}\n{identity.ProtectedPassword}")));
+
     private async Task<MoviePilotTransferResult> TransferRunAsync(
         MoviePilotTransferRequest request,
         IReadOnlyList<JsonElement> files,
@@ -159,10 +177,12 @@ public sealed partial class MoviePilotService
         bool preview,
         CancellationToken cancellationToken)
     {
+        var identity = CaptureIdentity();
+        ValidateHistoryConnection(request.Histories, identity);
         var body = request.Body(files, preview);
         var reply = await CallAsync((apiBase, token) => client.PostReplyAsync(
             apiBase, token, $"transfer/manual?background={(background ? "true" : "false")}", body, cancellationToken),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, identity).ConfigureAwait(false);
 
         return MoviePilotTransfer.ParseResult(reply.Data, reply.Success, reply.Message, preview);
     }
@@ -170,4 +190,21 @@ public sealed partial class MoviePilotService
     /// <summary>media/source 里没有 media_types 时的容错：缺这个键就当不限类型。</summary>
     private static JsonElement TryMember(JsonElement item, string key) =>
         item.ValueKind == JsonValueKind.Object && item.TryGetProperty(key, out var value) ? value : default;
+
+    /// <summary>
+    /// 把 <c>media/source</c> 的回话拆成来源条目。名字没给的用标识兜底（屏上不留空名字）；
+    /// media_types 缺失或空按「不限类型」处理，交给 <see cref="MoviePilotMediaSource.IsVideo"/> 判断。
+    /// </summary>
+    private static IReadOnlyList<MoviePilotMediaSource> ParseMediaSources(JsonElement data) =>
+        MoviePilotTransfer.Array(data)
+            .Where(item => MoviePilotTransfer.Text(item, "media_source").Length > 0)
+            .Select(item => new MoviePilotMediaSource(
+                MoviePilotTransfer.Text(item, "name") is { Length: > 0 } name
+                    ? name : MoviePilotTransfer.Text(item, "media_source"),
+                MoviePilotTransfer.Text(item, "media_source"),
+                MoviePilotTransfer.Array(TryMember(item, "media_types"))
+                    .Select(one => one.ValueKind == JsonValueKind.String ? one.GetString() ?? "" : "")
+                    .Where(kind => kind.Length > 0)
+                    .ToList()))
+            .ToList();
 }

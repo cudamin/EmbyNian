@@ -139,6 +139,8 @@ public sealed partial class PlayerPage
         window.VideoVisible = true;
         // 同步整屏：Fullscreen 的 setter 里 SynchronizeContentLayout 已把整屏 Cover 排到位。
         window.Fullscreen = true;
+        // 进场即全屏那条路不走 ApplyFullscreen —— 标题簇的全屏档在这里摆上（用户令 2026-09-28）。
+        ApplyTitleScale(true);
 
         // 没有异步窗口交接了 —— 遮罩揭开判据 PictureReady 读这一位，置假它才会在画面就绪时揭开。
         _startupHandoverPending = false;

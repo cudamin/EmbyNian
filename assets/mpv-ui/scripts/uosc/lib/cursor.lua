@@ -374,6 +374,75 @@ end
 
 function cursor:leave() self:move(math.huge, math.huge) end
 
+--[[ EMBYNIAN[cursor-hold] — 指针压在控件的**本体**上（进度条、控制条/顶栏那一排按钮、音量条）时，不让
+-- mpv 收走光标。只是停在唤出带里（触发渐变的位置）不算。
+
+用户令 2026-09-29：「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，触发渐变的时候
+不隐藏控件，但是要隐藏鼠标。」这条把两半拆成了各认各的判据：
+
+  · **控件那一半这里本来就已经成立**：uosc 的元件显隐只看 proximity，而 proximity 只在 `cursor:leave()`
+    时归零，`leave` 只挂 hover=false / 全屏切换 / 菜单禁用器 —— mpv 自己收光标不会把 hover 翻假
+    （实测 work/probe-hold-visible-before.txt：压在顶栏带上四秒，`showing=false` 而 `top_bar=1.00`
+    一直没动）。所以「停在唤出带里控件不自动隐藏」不用改，本次一个字没动。
+  · **光标那一半要改**：独占模式的宿主不碰 `cursor-autohide`（见 PlayerViewModel.ShowMpvCursor 的
+    `PictureInHostWindow` 门），于是这里是 mpv 自己的默认 1000ms 在收 —— 压在音量条上也照收
+    （同一份取证：右缘那一段 1.16s 后 `showing` 翻假）。
+
+**2026-09-28 那版判据是错的**（`in_control_reach`：四块元件的 `proximity > 0` 就算数）。proximity 是
+唤出带 —— 指针落进带子（离元件矩形 120px 以内，还没碰到它）就把光标钉住了，而用户要的恰恰是「带子里
+要隐藏鼠标」。改判 `<`：`Element:update_proximity()` 里只有进入矩形内（`proximity_raw == 0`）才是
+`proximity == 1`，所以 `< 1` 就是「正压在本体上」—— 与集成模式 Core 那条 `PointerHolds`（只认
+`ChromePart` 那四处命中）是同一件事，这也正是用户令里「两种模式交互逻辑一致」的那一半。
+
+做法：指针压在**注册过命中区的元素本体**上（`primary_down` / `primary_click` /
+`wheel_up` / `wheel_down` 四条任一命中）就把 `cursor-autohide` 改成 `no`，离开时把装配时的原值还回去。
+问命中区而不是自己拿矩形算，是因为**按钮级几何只有元件自己知道**：控制条那一排按钮（Button.lua）、
+顶栏那四颗窗口按钮与返回键、音量条的静音键、时间轴上的章节圆点，各自 `cursor:zone` 注册的都是**它们自己的
+小矩形**，而元件本体（如 `controls` 那条整幅宽的控制条）比它们大得多。**这一问因此比按元件矩形算更窄也更
+准**，正好落在用户点名的「按钮」上。
+
+⚠️ **问命中区时必须跳过 EMBYNIAN 的两条兜底区**（点画面暂停＝`primary_click`、滚轮音量＝`wheel_up`/`wheel_down`，
+见 main.lua）：它们的 hitbox 罩着**整个画布**，是「画面」的交互区、不是「控件」——不跳过的话，指针停在
+空白画面上也命中，hold 恒真、`cursor-autohide` 恒为 `no`，光标永远不藏（2026-09-29 用户报
+「独占模式下鼠标不会自动隐藏」的根因；work/probe-hold-visible-repro.txt 实锤：激活那一拍 autohide 就翻 no，
+死区停四秒光标不藏）。两条兜底区的 hitbox 都带着 `embynian_fallback` 标记，判据里一律跳过。
+
+`no` 是 mpv 认的取值：playloop 每拍重算 `mouse_cursor_visible`，`cursor_autohide_delay == -1` 那一支
+直接置真并推 VOCTRL_SET_CURSOR_VISIBILITY，于是**已经藏着的光标也会当场放回来**（player/playloop.c
+的 handle_cursor_autohide，v0.40.0 第 840 行）。还原之后「鼠标静止一秒就藏」在画面中间照旧成立。
+]]
+do
+	local original = mp.get_property('cursor-autohide')
+	cursor.autohide_base = (original == nil or original == '') and '1000' or original
+	cursor.autohide_hold = false
+
+	-- 指针此刻正压在控件本体上吗。判据是「有没有一条非兜底的命中区罩着它」，见上面那段注释。
+	-- 自己遍历（从后往前＝先查后登记的高优先级区）而不是 find_zone：find_zone 只回第一个命中的区，
+	-- 而兜底区每帧登记在最前（render 最先＝优先级最低），空白画面上它就是唯一命中，拿回来还得自己丢，
+	-- 等于没问；跳过判据见 hitbox 上的 embynian_fallback 标记（main.lua）。
+	function cursor:on_control()
+		if self.hidden or self.disabled then return false end
+		for i = #self.zones, 1, -1 do
+			local zone = self.zones[i]
+			if not zone.hitbox.embynian_fallback
+				and (zone.event == 'primary_down' or zone.event == 'primary_click'
+					or zone.event == 'wheel_up' or zone.event == 'wheel_down')
+				and self:collides_with(zone.hitbox) then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- 只在结论变了的时候动 mpv 的属性（它每次改动都会唤一遍观察者与 playloop）。
+	function cursor:refresh_hold()
+		local hold = self:on_control()
+		if hold == self.autohide_hold then return end
+		self.autohide_hold = hold
+		mp.set_property('cursor-autohide', hold and 'no' or self.autohide_base)
+	end
+end
+
 function cursor:is_autohide_allowed()
 	return options.autohide and (not self.autohide_fs_only or state.fullscreen)
 		and not self.is_dragging_prevented
@@ -390,6 +459,10 @@ function cursor:autohide()
 end
 
 function cursor:queue_autohide()
+	-- EMBYNIAN[cursor-hold]：先问一次「指针压在本体上了吗」。放在那道 `options.autohide` 闸前面 ——
+	-- 装箱的默认是 autohide=false（收光标的事整个交给 mpv 的 cursor-autohide），这一句要是排在闸后就永远
+	-- 跑不到。落点挑这里是因为每一次鼠标移动（cursor:move）与每一次鼠标事件（cursor:trigger）都会经过它。
+	self:refresh_hold()
 	if self:is_autohide_allowed() then
 		self.autohide_timer:kill()
 		self.autohide_timer:resume()

@@ -160,8 +160,8 @@ public sealed partial class PlayerPage
         // 打开时停在与当前速度对应的连续位置上，不吸附 —— 理由见类注释。第一次交单之前 applied 记着
         // 现速：用户只是开开看看又关上，一格都不该多发。
         var choices = PlayerViewModel.SpeedChoices;
-        _wheelPosition = SpeedWheel.PositionFor(ViewModel.Status.Speed, choices);
-        _wheelAppliedSpeed = ViewModel.Status.Speed;
+        _wheelPosition = SpeedWheel.PositionFor(ViewModel.SpeedValue, choices);
+        _wheelAppliedSpeed = ViewModel.SpeedValue;
         RenderWheel();
 
         // 轮盘开着的时候别的路（键盘微调、恢复常速）改了速度，带子跟过去。
@@ -183,8 +183,8 @@ public sealed partial class PlayerPage
         // 别人的回声与自己下的单在这里分不开，也不必分：位置本来就停在那一档上，重摆是空操作；
         // 真被别的路改了（键盘那一对），带子这才跟着走。
         var choices = PlayerViewModel.SpeedChoices;
-        _wheelPosition = SpeedWheel.PositionFor(ViewModel.Status.Speed, choices);
-        _wheelAppliedSpeed = ViewModel.Status.Speed;
+        _wheelPosition = SpeedWheel.PositionFor(ViewModel.SpeedValue, choices);
+        _wheelAppliedSpeed = ViewModel.SpeedValue;
         RenderWheel();
     }
 

@@ -51,16 +51,7 @@ public sealed partial class PlayerPage : UserControl
     private const int MaximizeGlyphCode = 0xE922;
     private const int RestoreGlyphCode = 0xE923;
 
-    /// <summary>
-    /// How wide the volume rail's approach strip along the right edge is, in logical pixels. It is both the
-    /// distance at which the rail starts to appear and the distance over which it gets stronger —
-    /// 「鼠标指针越接近右边的中心显示越明显」 — so widening it makes the rail both easier to summon and slower
-    /// to reach full strength.
-    /// </summary>
-    private const double RailZoneWidth = 160;
-
     /// <summary>How wide one chapter tick is drawn, in pixels. Odd, so it can sit centred on its mark.</summary>
-    private const double ChapterTickWidth = 3;
 
     /// <summary>
     /// The gap the two overlays that must clear another overlay leave between themselves and it: the 统计
@@ -339,19 +330,6 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     private ChromeHold _holds;
 
-    /// <summary>
-    /// Whether 需求 7's 字幕字体 box has the keyboard. Two things follow from it: the chrome is pinned, and
-    /// the player's own single-letter keys are silenced — F, M, N, P, Space, the arrows and Backspace are
-    /// all playback commands and all characters a font name is spelled with.
-    /// </summary>
-    private bool _typing;
-
-    /// <summary>
-    /// What the box read before it was focused, so leaving it without picking anything puts the family
-    /// currently in use back rather than leaving a half-typed search sitting in the title bar.
-    /// </summary>
-    private string _fontTextBefore = string.Empty;
-
     public PlayerPage()
     {
         InitializeComponent();
@@ -363,15 +341,26 @@ public sealed partial class PlayerPage : UserControl
         // 退场底那一支也在这一句里（PaintExit），理由与其余几支相同：它是画上去的，不是求出来的。
         PaintPalette();
 
+        // 右上那四颗的图标常态那支白，这里**明写一次**（2026-09-27 傍晚第五批的第二趟）：那几个 FontIcon／
+        // PathIcon 的 Foreground 是被 SetStripGlyphInk 一笔笔写的（它们不从模板的 ContentPresenter 继承下来，
+        // 见那一支的注释），而指针事件第一次到达之前没人写过 —— 不写这一句，常态的颜色就是**图标的默认值**，
+        // 与这一页别的墨是不是同一个调子只能靠运气。放这里是因为它要的画刷刚刚由 PaintPalette 填好。
+        SetStripGlyphInk(null);
+
         // 换主题时那两支画上去的颜色（退场底、以及 Palette 里那些）要跟着翻。本页没有登记进
         // ThemeHost.Register —— RequestedTheme 是写死的 Dark，见标记 —— 所以只能自己听一声。
         WireExitTheme();
 
-        // Same reasoning one step further: the pin's two states — which of the two drawn pins is showing, the
-        // name a screen reader gets, the tooltip — are written by one method, so the markup carries no second
-        // copy of the starting state for them to drift out of step with. The window is not attached yet, which
+        // 标题那一行背后那两块玻璃不再需要代码：它们随用户令 2026-09-27 改成「每颗控件自己一块」之后，就是按内容
+        // 自己长的两个 Border（标题一块、剧名一块，见 PlayerPage.xaml 里 TitleBox／SubtitleBox 那段标记），上一版
+        // 那段按文字栏高度算的 TitleGlassFit 与它的 TitleInset 一起删掉了 —— 两个数要手动对齐的那种账，能不算就不算。
+
+        // Same reasoning one step further: the pin's two states — whether it is lit (底与图标色), the name a
+        // screen reader gets, the tooltip — are written by one method, so the markup carries no second copy of
+        // the starting state for them to drift out of step with. The window is not attached yet, which
         // SetPinned allows for.
         SetPinned(false);
+        WireTransport();
 
         _seekClock = (SeekClockConverter)Resources["SeekClockConverter"];
         _seekClock.Scale = PlayerViewModel.SeekScale;
@@ -415,7 +404,7 @@ public sealed partial class PlayerPage : UserControl
         // Click 的路由事件标识符在这套投影里没暴露（ButtonBase、Button 上都没有），所以这些不带菜单的
         // 按钮一颗颗订阅；带 Flyout 的六颗不订阅 —— 菜单要靠焦点接管上下键（见 OnChromeClick）。
         // 公共输入反馈也用于滑条以外的按钮。
-        foreach (var button in new ButtonBase[] { BackButton, StatsButton, PinButton, MuteButton, SkipButton,
+        foreach (var button in new ButtonBase[] { BackButton, PinButton, MuteButton, SkipButton,
                      PreviousButton, PlayButton, NextButton, FullscreenButton,
                      MinimizeButton, MaximizeButton, CloseButton })
         {
@@ -431,14 +420,20 @@ public sealed partial class PlayerPage : UserControl
 
         // A flyout is where the pointer went, so the chrome must not read the stillness as disinterest.
         // 倍速那一颗 2026-09-25 起开的是轮盘（SpeedWheelFlyout），不是 MenuFlyout —— Opened/Closed 是
-        // FlyoutBase 上的事件，六颗照旧一起挂牌。
-        foreach (var flyout in new FlyoutBase[] { EpisodeMenu, AudioMenu, SubtitleMenu, SpeedWheelFlyout, MoreMenu, PictureMenu })
+        // FlyoutBase 上的事件，五颗照旧一起挂牌。2026-09-27 晚右下角那颗「更多」按钮撤下后，它挂的
+        // `MoreMenu` 随之不在 XAML 里（那一棵改由右键画面菜单拼装，见 OnMoreMenuOpening 的注释）。
+        foreach (var flyout in new FlyoutBase[] { EpisodeMenu, AudioMenu, SubtitleMenu, SpeedWheelFlyout, PictureMenu })
         {
             flyout.Opened += (_, _) => Hold(true, ChromeHold.Menu);
             flyout.Closed += (_, _) => Hold(false, ChromeHold.Menu);
         }
 
         WireSpeedWheel();
+        Unloaded += (_, _) =>
+        {
+            SeekSlider.CancelDrag();
+            InlineSpeedSlider.CancelDrag();
+        };
     }
 
     /// <summary>
@@ -543,6 +538,7 @@ public sealed partial class PlayerPage : UserControl
         // The x:Bind paths were all null-rooted while ViewModel was, including the OneTime Command=
         // bindings the transport buttons use: without this the buttons would stay dead for the session.
         Bindings.Update();
+        ArrangeTransport();
     }
 
     /// <summary>
@@ -664,6 +660,9 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     private void OnGeometryChanged()
     {
+        // 两档尺寸的兜底：系统那几条改形态的路（双击标题、Win+↑、拖到顶）只留下 WM_SIZE 这一个痕迹，
+        // 而这里正是 WM_SIZE 的接收点。档位没变时它什么也不做（拖动改尺寸每几毫秒就来一次）。
+        SyncChromeScale();
         if (Attached) ViewModel.NoteSurface(MeasureSurface);
     }
 
@@ -729,13 +728,16 @@ public sealed partial class PlayerPage : UserControl
         _chrome.Reset(Now);
         Render();
         PlaceOverlays();
-        ShowCurrentFont();
         SetPinned(ViewModel.PictureInHostWindow && ViewModel.SavedPinTopmost);
         _polledKnown = false;
         _ticker.Start();
 
         // 起播开了自动全屏时「一上来就整屏」（用户令 2026-09-25）：不在小窗里淡入再跳全屏，直接整屏，
         // 见 EnterFullscreenAtOnce。其余情形照旧在小窗里淡入、落定后走窗口交接（自动全屏关时那一句空转）。
+        // 下面那条自动全屏判断之前先按宿主窗**这一刻的形态**摆一次两档尺寸（用户令 2026-09-28 更晚
+        // 「跟独占一样，全屏的时候放大，窗口化的时候缩小」）：窗口是最大化进来的时侯，XAML 里那档初值
+        // （窗口档）就不是这一档了 —— 大档那条路（EnterFullscreenAtOnce）自己会再摆一次，摆两次无害。
+        ApplyChromeScale();
         var fullscreenEntry = ViewModel.PictureInHostWindow && WindowForms.WantsAutoFullscreen(
             ViewModel.AutoFullscreenOnPlayback, ViewModel.PlaybackLifecycleActive, _window.Form);
         if (fullscreenEntry)
@@ -763,9 +765,6 @@ public sealed partial class PlayerPage : UserControl
         _ticker.Stop();
         ResetCover();
         EndWindowDrag();
-        _typing = false;
-        FontBox.IsSuggestionListOpen = false;
-        Hold(false, ChromeHold.Search);
         SetPinned(false);
         if (_cursorHidden) _woke = "播放退出";
         SetCursorHidden(false);
@@ -773,8 +772,10 @@ public sealed partial class PlayerPage : UserControl
         DropTapHold();
         _pulseMutedAt = null;
         _paused = null;
+        FinishTimelineGesture();
         HideChapterPeek();
         RenderChapterTicks();
+        ArrangeTransport();
 
         // 退场底先立起来 —— 它是「窗口跳变那几拍」的保险面。这一趟窗口**一个像素都不动**（见下），
         // 所以它铺的就是这一刻的客户区，立起来就是对的尺寸。
@@ -874,6 +875,9 @@ public sealed partial class PlayerPage : UserControl
         if (!ViewModel.PictureInHostWindow)
         {
             _window!.Fullscreen = false;
+            // 直接改窗口不经过 ApplyFullscreen —— 两档尺寸按宿主窗**这一刻的形态**归位（用户令 2026-09-28
+            // 两档尺寸；更晚那条令把大档放宽到「全屏或最大化」）。
+            ApplyChromeScale();
             SetPinned(false);
         }
         UpdateStandaloneHint();
@@ -902,6 +906,10 @@ public sealed partial class PlayerPage : UserControl
     {
         HideChapterPeek();
         RenderChapterTicks();
+        RenderTimelineLayers();
+        ArrangeTransport();
+        PictureMenu.Items.Clear();
+        _pictureChecks.Clear();
     }
 
     /// <summary>
@@ -912,6 +920,8 @@ public sealed partial class PlayerPage : UserControl
     private void OnStatusApplied(PlayerStatus status)
     {
         _seekClock.DurationSeconds = status.Duration;
+        RenderTimelineLayers();
+        UpdateTimelineMaterial();
 
         // 「这一场播放真的开始了」是**事件**不是状态：它一次性到，而遮罩等的正是它。放在这里转交而不是
         // 每拍去问，是因为它来了之后才有必要唤醒那条等待 —— 之外的时候遮罩的计时器自己在数。
@@ -948,7 +958,7 @@ public sealed partial class PlayerPage : UserControl
 
         var opening = _paused is null;
         _paused = status.Paused;
-        if (!opening) Pulse(status.Paused);
+        if (!opening && !ViewModel.TimelinePauseFeedbackSuppressed) Pulse(status.Paused);
     }
 
     /// <summary>

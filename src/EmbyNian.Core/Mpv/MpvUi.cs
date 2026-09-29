@@ -178,6 +178,30 @@ public static class VideoWindowContract
     public const string Shader = "embynian-shader";
 
     /// <summary>
+    /// uosc → 宿主：点了右下角那颗「跳过片头/片尾」按钮，值保留。→ <c>PlayerViewModel.TakeSkip</c>
+    /// （与集成模式那颗 XAML 按钮、快捷键回车走同一句 <c>AcceptSkip</c>）。
+    /// <para>
+    /// 独占模式画面在 mpv 自己的窗口里，集成模式那颗 XAML 按钮不在屏上，所以这颗按钮由宿主经
+    /// <see cref="SkipOffer"/> 推来的文案在 uosc 侧画（<c>assets/mpv-ui/scripts/uosc/elements/SkipButton.lua</c>）。
+    /// 名字守 <see cref="Episodes"/> 那条硬规矩 —— 按钮点击直接 <c>embynian_notify</c> 发这条消息，
+    /// uosc 那头没有同名脚本绑定，不自激。
+    /// </para>
+    /// </summary>
+    public const string SkipTake = "embynian-skip-take";
+
+    /// <summary>
+    /// <b>宿主 → uosc</b>：跳过片头/片尾的 offer 文案（<c>跳过片头</c>／<c>跳过片尾</c>…），空串＝收摊。
+    /// uosc 那颗按钮按它露面 —— 有文案就立起、点它回推 <see cref="SkipTake"/>。
+    /// <para>
+    /// offer 站多久、什么时候收（15 秒、离开片段、暂停、换集）全由宿主的 <c>SkipCoordinator</c> 判，
+    /// uosc 只照文案画、不自己计时。方向与 <see cref="VersionCount"/>/<see cref="EpisodeCount"/> 相同，
+    /// 所以它<b>故意不进 <see cref="Parse"/></b>（宿主不会收到自己发出去的东西）；名字照旧不与任何
+    /// 脚本绑定同名（uosc 那边只有一条 <c>register_script_message('embynian-skip-offer', …)</c>）。
+    /// </para>
+    /// </summary>
+    public const string SkipOffer = "embynian-skip-offer";
+
+    /// <summary>
     /// <b>宿主 → uosc 的第二条</b>（第一条是 <c>open-menu</c>）：这个条目有几版文件，uosc 那颗「版本」
     /// 按钮按这个数露面 —— 只有一版时它压根不在控制条上（用户令 2026-09-23：「只有一个版本的情况下
     /// 不显示…」；uosc 的控件表本来写不出这种条件，见 uosc 侧新加的 <c>has_many_versions</c> 门）。
@@ -216,6 +240,52 @@ public static class VideoWindowContract
     public const string EpisodeCount = "embynian-episode-count";
 
     /// <summary>
+    /// <b>宿主 → uosc</b>：播放页左上角第二行那句文件信息（<c>分辨率 · 视频编码 · 音频格式 · 组名</c>，见
+    /// <see cref="Playback.PlaybackTitles.Subline"/>），空串＝收起副标题。uosc 顶栏把它画成左上角返回按钮
+    /// 正下方的副标题（alt title，用户令 2026-09-28「移动到返回按钮的下方」）。
+    /// <para>
+    /// 集成模式那一行是 XAML 的 <c>SubtitleBox</c>（绑 <c>PlayerViewModel.Subtitle</c>）、不走这里；独占模式
+    /// 画面在 mpv 窗口里，那一行由 uosc 顶栏画，于是宿主把同一句话推过来（两模式同源、显示一致，用户令
+    /// 2026-09-27）。方向与 <see cref="VersionCount"/>/<see cref="EpisodeCount"/>/<see cref="SkipOffer"/> 相同，
+    /// 所以它<b>故意不进 <see cref="Parse"/></b>（宿主不会收到自己发出去的东西）；名字照旧守
+    /// <see cref="Episodes"/> 那条硬规矩 —— 不许与任何脚本绑定同名（uosc 那边只有一条
+    /// <c>mp.register_script_message('embynian-subline', …)</c>，绑定一律叫 <c>embynian-ui-…</c>），
+    /// <c>MpvUiTests</c> 的「绑定名 ≠ 消息名」把它一并数进去。
+    /// </para>
+    /// <para>
+    /// 什么时候发：与 <see cref="VersionCount"/>/<see cref="EpisodeCount"/> 同拍 —— uosc 装载完成的握手
+    /// （<see cref="Ready"/>）那一下，以及每场开播 / 换集 / 换版经 <c>OnNowPlayingChanged</c> 重算的时刻。
+    /// 全部收在 <c>PlayerViewModel.PushSublineAsync</c> 一个出口。
+    /// </para>
+    /// </summary>
+    public const string Subline = "embynian-subline";
+
+    /// <summary>
+    /// uosc → 宿主：右键画面菜单里点了一档「跳过片头片尾」，值是 <c>ask</c>／<c>auto</c>／<c>off</c>。
+    /// 宿主把它写进 <c>Settings.Playback.SkipSections</c>（与集成模式右键菜单同一格设置、同一句执行），
+    /// 那颗「跳过」按钮的 offer 由 <c>ApplySkipOffer</c> 自己跟上。
+    /// <para>
+    /// 2026-09-29 用户令「统一独占模式和集成模式的右键菜单选项」：集成模式右键菜单里这一棵（2026-09-27
+    /// 并进去的那棵「更多」）在独占模式的推送里本来缺着，补齐时这一档没有现成的消息可回 —— 与
+    /// <see cref="SkipTake"/> 同款：菜单行的 value 就是一条回宿主的 <c>script-message</c>，uosc 那头
+    /// 不注册同名的东西（未登记的 script-message 广播到脚本侧是空响），名字照旧不与任何脚本绑定同名。
+    /// </para>
+    /// </summary>
+    public const string SkipMode = "embynian-skip-mode";
+
+    /// <summary>
+    /// uosc → 宿主：右键画面菜单里拨了「自动播放下一集」，值固定 <c>toggle</c> —— 拨到哪边由宿主
+    /// 按当前值现算，不认菜单推送那一份旧值（推送与点击之间设置可能被设置窗口改过）。
+    /// </summary>
+    public const string AutoPlayNext = "embynian-autoplay-next";
+
+    /// <summary>
+    /// uosc → 宿主：右键画面菜单里点了「播放信息…」，值保留。宿主把 <c>MediaInfoText</c> 那份正文
+    /// 弹成主窗口上的对话框（独占模式播放页是摘下去的，弹窗归外壳；集成模式不走这条 —— 页面自己弹）。
+    /// </summary>
+    public const string MediaInfo = "embynian-media-info";
+
+    /// <summary>
     /// 把一条 client-message 的参数解析成宿主消息；不是宿主的消息、值不合契约的，返回 null。
     /// </summary>
     public static VideoWindowMessage? Parse(IReadOnlyList<string> arguments)
@@ -235,8 +305,11 @@ public static class VideoWindowContract
                 ? new VideoWindowMessage(key, value)
                 : null;
         }
+        if (key == SkipMode) return value is "ask" or "auto" or "off" ? new VideoWindowMessage(key, value) : null;
+        if (key == AutoPlayNext) return value == "toggle" ? new VideoWindowMessage(key, value) : null;
 
-        if (key is Ready or Seek or Episodes or Versions or PictureMenu) return new VideoWindowMessage(key, value);
+        if (key is Ready or Seek or Episodes or Versions or PictureMenu or SkipTake or MediaInfo)
+            return new VideoWindowMessage(key, value);
 
         return null;
     }

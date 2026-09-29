@@ -15,6 +15,9 @@
 -- │     EMBYNIAN[controls]      控制条默认值与排布（换集/选集/版本/画面菜单顶替播放列表入口）
 -- │     EMBYNIAN[topbar]        无边框顶栏（系统标题栏不存在，顶栏画窗口按钮）
 -- │     EMBYNIAN[color]         用户原配色（Fluent 深色一档）
+-- │     EMBYNIAN[topbar-pin]    右上角置顶按钮的状态来源：state.ontop 初值＋ontop 属性的观察器
+-- │                             （按钮本体与两档画法在 TopBar.lua，同一个槽名 —— 升级 uosc 时两处都要重打）
+-- │     EMBYNIAN[timeline-parity] 章节别名与集成 TimelineChapterMap 一致
 -- │     EMBYNIAN[autoload]      autoload 强制 false（defaults 与读配置后各一处）
 -- │     EMBYNIAN[fileend]       handle_file_end / file_end_timer 整块删除
 -- │     EMBYNIAN[osddim]        d3d11 起播画布尺寸兜底观察
@@ -34,20 +37,61 @@
 -- │                             不要显示这个按钮」）。与 version-count 同一条路。
 -- │     EMBYNIAN[picture-menu]  第五个绑定（embynian-ui-picture-menu）：独占模式右键/菜单键，
 -- │                             以及控制条上那颗「画面菜单」按钮 —— 三者同一份 PlayerMenuCatalog。
+-- │     EMBYNIAN[skip-button]   宿主 → uosc 的通道：embynian-skip-offer <文案|空> 驱动一颗右下角的
+-- │                             「跳过片头/片尾」按钮（元件在 elements/SkipButton.lua）；点它回推
+-- │                             embynian-skip-take（宿主 TakeSkip）。集成模式那颗是 XAML 的，独占
+-- │                             模式画面在 mpv 窗口里、那颗不在屏上，故由宿主把 offer 推过来画。
+-- │                             start-file 时清一次（换集途中不挂上一集的 offer）。
+-- │     EMBYNIAN[topbar-subline] 宿主 → uosc 的通道：embynian-subline <分辨率·视频编码·音频格式·组名|空>
+-- │                             写进顶栏副标题（第二行），空串＝收起。集成模式那一行是 XAML 的 SubtitleBox，
+-- │                             独占模式由 uosc 顶栏画在返回按钮正下方 —— 两模式同源同显。
 -- │     EMBYNIAN[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
 -- │                             含双击闸：单击押后到 mpv 的双击窗口外才证实，第二拍「按下」即撤
 -- │                             （撤在按下不撤在松开——独占全屏切换会把光标挪走、松开过不了位置闸）
 -- │     EMBYNIAN[wheel-volume]  空白画面滚轮＝音量（no-osd，只闪右侧音量条，不落 mpv 的 OSD）
+-- │   elements/SkipButton.lua
+-- │     EMBYNIAN[skip-button]   「跳过片头/片尾」按钮元件本体（右下角常驻可见，offer 在才画）
 -- │   elements/Controls.lua
 -- │     EMBYNIAN[episode]       控制条快捷项映射到上面的绑定
 -- │     EMBYNIAN[controls]      控制条新加的两项快捷项：版本、画面菜单
 -- │   elements/Menu.lua
 -- │     EMBYNIAN[menu-anchor]   宿主推来的菜单（画面/选集/版本）带 embynian_anchor 时在光标处弹出、
 -- │                             不屏幕居中、不压暗幕布 —— 弹出方式与集成模式的右键/按钮浮层一致
+-- │     EMBYNIAN[menu-style]    菜单样式对齐参考 mpv 配置的右键菜单（用户令 2026-09-29「参考
+-- │                             C:\mpv_config-2026.08.12 修改独占模式右键菜单界面」）：字号 20、
+-- │                             行高＝字号×(1+gap)、缩放随窗口高（osd-height/720）、悬停行白底深字、
+-- │                             底板不透明 #222222＋圆角 5＋0.5 白描边、分隔线 #555555 —— 逐项映射见
+-- │                             本文件选项区 EMBYNIAN[menu-style]，几何与上色在 Menu.lua 同名槽
 -- │   elements/TopBar.lua
 -- │     EMBYNIAN[topbar-back]   左上角返回按钮：退出 mpv＝回到外壳详情页（与集成模式左上角返回同位同义）
+-- │     EMBYNIAN[topbar-pin]    右上角置顶按钮（push_pin）：点它 cycle ontop（置顶这块 mpv 窗口），已置顶时
+-- │                             常亮一整块（见 render 里 lit）；状态由 main.lua 的 ontop 观察器送进来
+-- │     EMBYNIAN[topbar-back-glass] 返回键可见底与标题那块玻璃**同形同色**：都高 size-2*margin、同从
+-- │                             self.ay+margin 起；返回键那一块四周各让 margin（左缘＝窗口左缘＋margin，
+-- │                             用户令 2026-09-28 更晚「左边的空隙要和上面的一样大」）；静止档不透明度取
+-- │                             config.opacity.title（用户令 2026-09-28 晚「返回按钮的背景要和标题的
+-- │                             背景一致」）。那条「返回键与标题的间隙＝下面那条缝」同批收紧到 title_spacing＝1。
+-- │     EMBYNIAN[topbar-subline-italic] 副标题（第二行）走斜体（用户令 2026-09-28 晚「标题下方的视频
+-- │                             元数据改为斜体」）；顶栏每一行的玻璃回到 uosc 自家「上下各让 margin」那一条
+-- │                             （用户令 2026-09-28 晚「把标题的大小改回跟 mpv_config 项目一样大小」）。
+-- │     EMBYNIAN[topbar-subline-dim] 副标题字色从与标题同色（bgt）改成浅灰 c8c8c8（用户令 2026-09-28
+-- │                             更晚「元数据的字体加点灰色」）；左缘跟返回键玻璃同一条（窗口左缘＋margin）。
+-- │     EMBYNIAN[topbar-subline-branch] 副标题前面缀「└ 」树干（用户令 2026-09-28 更晚「把这个添加到元数据
+-- │                             的前面」；照参考项目 uosc 给章节行加的那个前缀）。
+-- │     EMBYNIAN[topbar-subline] 顶栏副标题（第二行）由宿主经 embynian-subline 直接写进来（set_subline），
+-- │                             挂在返回按钮正下方；顶栏的 top_bar_alt_title 选项留空、不吃模板
+-- │                             —— 与集成模式那一行同源同显。
+-- │     EMBYNIAN[topbar-no-chapter] 标题下方的「当前章节＋剩余时间」一行整段撤下（用户令 2026-09-28
+-- │                             「去掉独占模式下左上角标题下方的章节和时间」）；章节菜单（控制条那颗）照旧。
 -- │   elements/Volume.lua
 -- │     EMBYNIAN[vol-osd]       音量条自己改音量也走 no-osd（拖条/滚条不再冒 mpv 的 OSD）
+-- │   lib/cursor.lua
+-- │     EMBYNIAN[cursor-hold]   指针压在控件本体的命中区上（进度条、控制条/顶栏那一排按钮、音量条）时把
+-- │                             cursor-autohide 钉成 no，离开时还原 —— 用户令 2026-09-29
+-- │                             「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，
+-- │                             触发渐变的时候不隐藏控件，但是要隐藏鼠标」
+-- │                             （控件的显隐本来就是位置驱动的，不用改；见该处的长注与
+-- │                             work/probe-hold-visible-*.txt）
 -- │   lib/utils.lua
 -- │     EMBYNIAN[nav-removed]   目录/播放列表导航与删文件整块删除
 -- │     EMBYNIAN[click-pause]   每帧登记「轻点暂停」的兜底命中区（登记顺序＝最低优先级）
@@ -117,14 +161,17 @@ defaults = {
 	timeline_cache = true,
 	timeline_heatmap = 'overlay',
 
-	-- EMBYNIAN[controls] — 控制条默认值与排布（2026-09-23 用户令两轮；09-24 再一轮：字幕与音频互换）：
-	--   左下：上一集、下一集、统计、章节（有章节时）、画面菜单、**选集、版本**；
+	-- EMBYNIAN[controls] — 控制条默认值与排布（2026-09-23 用户令两轮；09-24 再一轮：字幕与音频互换；
+	--   09-27 再一轮：撤下左下那颗画面菜单按钮）：
+	--   左下：上一集、下一集、统计、章节（有章节时）、**选集、版本**；
 	--   中下：上一章节、倍速、下一章节（有章节时）；
 	--   右下：字幕、audio、（空一个按钮宽）、全屏。
-	-- 四处与旧版不同，各有原因：
-	--   · 那颗菜单按钮开的是**画面菜单** —— 与集成模式的「更多」按钮、独占模式的右键同一份
-	--     PlayerMenuCatalog（用户令「改成右键画面呼出的那个菜单」）。绑定因此换成
-	--     uosc/embynian-ui-picture-menu；uosc 自带的 ≡ 菜单没删，只是控制条上不再有它的入口。
+	-- 与旧版不同处，各有原因：
+	--   · **左下角那颗 `embynian-ui-picture-menu` 撤下了**（2026-09-27 用户令「移除集成模式和独占模式左下角的
+	--     画面按钮」）。那颗开的是**画面菜单** —— 与集成模式的「更多」按钮、独占模式的右键同一份
+	--     PlayerMenuCatalog（09-23 用户令「改成右键画面呼出的那个菜单」）。撤下来不是删功能：右键画面那一棵
+	--     照旧在（uosc 自己的右键菜单），绑定 `uosc/embynian-ui-picture-menu` 与宿主通道
+	--     `embynian-picture-menu` 都还在、只是控制条上不再有它的入口。uosc 自带的 ≡ 菜单也照旧。
 	--   · **选集与版本挪到左下**（用户令「把独占模式里的选集和选版本的按钮移动到左下」，左→右次序
 	--     按原话：选集倒数第二个、版本最后一个）；**版本那颗按需露面**（<has_many_versions>，
 	--     只有一版时整颗不在屏上）—— 见文件头的 EMBYNIAN[version-count]。**选集那颗也按需露面**
@@ -135,15 +182,16 @@ defaults = {
 	--     是本项宽度的倍数（默认 0.3），写 1 正好一个按钮。**2026-09-24 用户令「把独占模式下字幕和
 	--     音频的按钮位置互换」——两颗的先后已调过来**：左→右现在是**字幕、音频**，空位因此落在音频
 	--     与全屏之间（上一轮「两颗先后没动、空位落在字幕之后」那句留档随之作废；空位改按字面读，
-	--     正好挨着原话点的「音轨按钮」）。**与集成模式相反**：`PlayerPage.xaml` 里那两颗是音频在前、
-	--     字幕在后，本轮只按要求动了独占这一处。**音频**照旧不带 <has_many_audio> 条件（只有一条音轨
+--     正好挨着原话点的「音轨按钮」）。**集成模式已对齐**（2026-09-29 用户令「集成模式右下角的字幕和音轨键
+--     向左移一个键的空位（参考独占模式）」：`PlayerPage.xaml` 那两颗也是字幕在前、音频在后，音频与全屏
+--     之间同样空一个按钮格 —— 空位写在 AudioButton 的右边距上）。**音频**照旧不带 <has_many_audio> 条件（只有一条音轨
 	--     时那颗按钮也要在；简写自带的 #audio>1 徽章照旧：一轨以上才在角上标数字）。
 	--   · 「版本」按钮是 Emby 的媒体源切换（embynian-ui-versions → 宿主把这一条的媒体源推回菜单），
 	--     不是上游的 <has_many_edition>editions（mpv 自己的剪辑版本，那颗已撤 —— 两颗都叫「版本」
 	--     只会让人点错；要看 mpv 的剪辑版本，≡ 菜单的「工具 → 剪辑版本」还在）。
 	-- 播放列表/目录导航、打开文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
 	controls =
-	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,embynian-ui-picture-menu,<has_episodes>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,<video,audio>subtitles,audio,gap:1,fullscreen',
+	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,<has_episodes>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,<video,audio>subtitles,audio,gap:1,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
@@ -159,13 +207,39 @@ defaults = {
 	speed_step = 0.1,
 	speed_step_is_factor = false,
 
-	-- EMBYNIAN[menu-size] — 菜单整体再收小一点（用户令 2026-09-26「右键菜单缩小一点」）：行高从上游 50、
-	-- 本项目原先 36 降到 30；菜单字号是 item_height*0.48（见 Menu.lua 的 update_content_dimensions），所以行高一降，
-	-- 行高与字号、连带菜单宽度（宽度由最长一行的文字宽度定）一起收小。min_width 一并从 260 降到 220（只影响全是
-	-- 短项的菜单）。作用于所有 uosc 菜单（画面/选集/版本/字幕/音频/章节）。
-	menu_item_height = 30,
+	-- EMBYNIAN[menu-style] — 菜单样式整把换成用户参考 mpv 配置的右键菜单（用户令 2026-09-29
+	-- 「参考 C:\mpv_config-2026.08.12 修改独占模式右键菜单界面」）。那份配置右键绑的是 mpv 0.41+ 内建的
+	-- context_menu.lua（portable_config/input.conf 的 `MBTN_Right context-menu`），样式写在
+	-- portable_config/script-opts/context_menu.conf —— 下面这批选项就是那份文件的逐项映射，几何与上色
+	-- 在 Menu.lua 的同名槽里，公式照抄上游 player/lua/context_menu.lua 源码：
+	--   · font_size=20 ＋ gap=0.2（字号的百分比）→ menu_font_size=20 / menu_gap=0.2：行高＝字号×(1+gap)
+	--     （上游 get_line_height 同式）。上游 uosc「字号＝item_height×0.48」的反推不再成立 ——
+	--     2026-09-26「右键菜单缩小一点」那一轮的行高 30/字号 14.4 由此让位：那一轮压的是上游 50/24 的
+	--     过大，这一轮整把尺子换成参考菜单的（行高、字号都随窗口高走，720p 高的窗口＝原值，见下）。
+	--   · 缩放：参考菜单按窗口高缩放（scale_with_window=auto → osd_height/720），不吃 uosc 的
+	--     scale/scale_fullscreen —— Menu.lua 的 menu_scale 同款。
+	--   · padding_x=8 / padding_y=4 → menu_padding=4（uosc 只有单值内边距；横向另有 item_padding
+	--     ≈字号×0.12，两项合计≈8，与 padding_x 对上）。
+	--   · corner_radius=5、menu_outline_size=0.5（白）→ menu_corner_radius / menu_outline_*。
+	--   · 菜单底板：参考菜单不透明（background_alpha=0）、色取 osd-back-color 黑时的兜底 #222222 ——
+	--     menu_background_color 照画，opacity 的 menu/submenu 两档半透明从此不被菜单吃。
+	--   · focused_color=#222222 / focused_back_color=#FFFFFF → 悬停/键盘所在行＝白底深字（Menu.lua）；
+	--     active 行（当前值）照旧 0.8 白高亮，两档白靠深浅区分。
+	--   · disabled_color=#555555 → 分隔线（uosc 没有禁用行）；行间上游那道 0.04 细线照参考菜单撤掉。
+	-- 不搬的两件：子菜单的悬停开合延迟（seconds_to_open/close_submenus=0.2 —— uosc 子菜单跟着所在行
+	-- 即开即关，做延迟得动导航状态机，风险大于收益）；勾选框列（uosc 用 active 高亮示当前值，同义不同形）。
+	-- 作用于所有 uosc 菜单（画面/选集/版本/音轨/字幕/章节）。
+	menu_font_size = 20,
+	menu_gap = 0.2,
 	menu_min_width = 220,
-	menu_padding = 1,
+	menu_padding = 4,
+	menu_background_color = '222222',
+	menu_corner_radius = 5,
+	menu_outline_size = 0.5,
+	menu_outline_color = 'FFFFFF',
+	menu_focused_color = '222222',
+	menu_focused_back_color = 'FFFFFF',
+	menu_disabled_color = '555555',
 	-- 用户原配置：输入即搜索会锁死「同键关闭菜单」，嵌入后保持 no
 	menu_type_to_search = false,
 
@@ -196,6 +270,8 @@ defaults = {
 	border_radius = 2,
 	-- EMBYNIAN[color] — 用户原配色（Fluent 深色一档），与 EmbyNian 外壳的五套深色主题同族
 	color = 'foreground=FFFBFE,foreground_text=1C1B1F,background=1C1B1F,background_text=FFFBFE',
+	-- EMBYNIAN[menu-style] — menu/submenu 两档自 2026-09-29 起不再被菜单吃（菜单底板改不透明，见上方
+	-- 选项区 EMBYNIAN[menu-style]）；值留着不动，免得 uosc 内部默认值在别处兜底出新花样。
 	opacity = 'menu=0.9,submenu=0.7,curtain=0.5',
 	animation_duration = 100,
 	refine = 'sorting',
@@ -225,8 +301,8 @@ defaults = {
 	use_trash = false,
 	adjust_osd_margins = true,
 	chapter_ranges = 'openings:30abf964,endings:30abf964,ads:c54e4e80',
-	-- 用户原章节识别词（中英日），嵌入后原样保留
-	chapter_range_patterns = 'openings:^Intro%s*Start,オープニング$,^片头$,片头开始$;endings:^end$,^End$,エンディング$;intros:preview$,预告$,予告$;outros:credits$',
+	-- EMBYNIAN[timeline-parity] 标题先转小写；别名与集成 TimelineChapterMap 保持一致。
+	chapter_range_patterns = 'openings:^intro%s*start,^intro$,オープニング$,^片头$,片头开始$;endings:^end$,エンディング$,^片尾$,片尾开始$,^credits$;intros:preview$,预告$,予告$;outros:credits$',
 	languages = 'slang,en',
 	subtitles_directory = '~~/subtitles',
 	disable_elements = 'idle_indicator,audio_indicator',
@@ -507,6 +583,9 @@ state = {
 	fullscreen = mp.get_property_native('fullscreen'),
 	maximized = mp.get_property_native('window-maximized'),
 	fullormaxed = mp.get_property_native('fullscreen') or mp.get_property_native('window-maximized'),
+	-- EMBYNIAN[topbar-pin] — 顶栏那颗置顶按钮的状态（用户令 2026-09-28 晚「给独占模式右上角也加个置顶图标」）：
+	-- mpv 窗口自己的 ontop，与 fullscreen／maximized 同一路从属性里读初值，随后由下面的观察器维护。
+	ontop = mp.get_property_native('ontop'),
 	render_timer = nil,
 	render_last_time = 0,
 	volume = mp.get_property_native('volume'),
@@ -792,6 +871,11 @@ mp.observe_property('playlist-count', 'number', function(_, value)
 end)
 mp.observe_property('fullscreen', 'bool', create_state_setter('fullscreen', update_fullormaxed))
 mp.observe_property('window-maximized', 'bool', create_state_setter('maximized', update_fullormaxed))
+-- EMBYNIAN[topbar-pin] — 顶栏那颗置顶按钮（TopBar.lua 的 push_pin）要的第二个数：mpv 窗口此刻是不是置顶。
+-- 形状与上面两条一模一样（同一个 create_state_setter：写 state + request_render 各一次），因为「谁改的它」
+-- 不重要 —— 按钮自己（cycle ontop）、mpv 自己的快捷键或将来别处改了，都从这里回到顶栏重画一遍。
+-- **不经过宿主**：置顶在这里就是一扇 mpv 窗口的属性，宿主那边的 TopMost 管的是它自己的主窗口（集成模式）。
+mp.observe_property('ontop', 'bool', create_state_setter('ontop'))
 mp.observe_property('idle-active', 'bool', function(_, idle)
 	set_state('is_idle', idle)
 	Elements:trigger('dispositions')
@@ -1064,6 +1148,25 @@ mp.register_script_message('embynian-episode-count', function(value)
 	Elements:trigger('dispositions')
 end)
 
+-- EMBYNIAN[topbar-subline] — 宿主 → uosc 的通道：左上角第二行那句文件信息（分辨率 · 视频编码 · 音频格式 ·
+-- 组名，空串＝收起）。集成模式那一行是 XAML 的 SubtitleBox（PlayerViewModel.Subtitle 驱动）；独占模式画面在
+-- mpv 窗口里，那一行由 uosc 顶栏画，于是宿主把同一句话推过来（两模式同源、显示一致，用户令 2026-09-27、
+-- 内容 2026-09-28 加分辨率）。主标题走 force-media-title，副标题走这条 —— TopBar 把它画在返回按钮正下方。
+-- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：uosc 这边只有 register_script_message。
+mp.register_script_message('embynian-subline', function(text)
+	if Elements.top_bar then Elements.top_bar:set_subline(text or '') end
+end)
+
+-- EMBYNIAN[skip-button] — 宿主 → uosc 的通道：跳过片头/片尾的 offer 文案（空串＝收摊）。
+-- 集成模式那颗按钮是 XAML 的（PlayerPage.xaml，SkipOffered 驱动）；独占模式画面在 mpv 窗口里、
+-- 那颗不在屏上，于是宿主把这份 offer 推过来由 skip_button 元件画。offer 站多久、何时收摊全归宿主的
+-- SkipCoordinator 判，本元件不自己计时；点它由元件回推 embynian-skip-take（宿主 TakeSkip）。
+-- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：uosc 这边只有 register_script_message，
+-- 那颗按钮点击直接 embynian_notify('embynian-skip-take')，不是 bind_command。
+mp.register_script_message('embynian-skip-offer', function(caption)
+	if Elements.skip_button then Elements.skip_button:set_offer(caption) end
+end)
+
 bind_command('menu-prev', function() Elements:maybe('menu', 'navigate_by_items', -1) end)
 bind_command('menu-next', function() Elements:maybe('menu', 'navigate_by_items', 1) end)
 bind_command('menu-prev-page', function() Elements:maybe('menu', 'navigate_by_page', -1) end)
@@ -1139,7 +1242,10 @@ end)
 --   · 叫醒窗口的那一下不作数：见下面 EMBYNIAN[click-pause-wake]。
 --   · 代价与集成模式同款：轻点暂停比手慢一个押后窗口（300 毫秒）。
 -- 判据与读数：work/probe-click-pause-wheel.py（命令账）＋ work/probe-doubleclick-real.py（真窗口）。
-embynian_click_pause_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, window_drag = true}
+-- ⚠️ embynian_fallback = true：这条命中区罩着整个画布，算「画面」不算「控件」—— cursor.lua 的
+-- cursor:on_control()（光标保活判据）靠这个标记跳过它，否则指针停在空白画面上也会被当成「压在控件上」，
+-- cursor-autohide 被钉成 no、光标永不藏（2026-09-29 用户报「独占模式下鼠标不会自动隐藏」的根因）。
+embynian_click_pause_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, window_drag = true, embynian_fallback = true}
 embynian_click_pause_pending = nil  -- 还没到期的那一拍（在飞＝这一下还没被证明是单击）
 embynian_click_pause_press_last = nil -- 上一次左键按下的时刻（任意位置，判第二拍用）
 embynian_click_pause_second_half = false -- 最近一次按下是不是「画布上的双击第二拍」
@@ -1199,6 +1305,12 @@ for _, embynian_event in ipairs({'start-file', 'end-file'}) do
 	mp.register_event(embynian_event, embynian_click_pause_cancel)
 end
 
+-- EMBYNIAN[skip-button] — 换源即收起上一片的「跳过」offer：宿主下一拍也会按新片重推，但换集加载途中
+-- 不该还挂着上一集的「跳过片尾」。宿主发空文案是常规收摊路径，这一条是保险。
+mp.register_event('start-file', function()
+	if Elements.skip_button then Elements.skip_button:set_offer('') end
+end)
+
 function embynian_click_pause_zone()
 	local hitbox = embynian_click_pause_hitbox
 	hitbox.bx, hitbox.by = display.width, display.height
@@ -1229,7 +1341,9 @@ end
 -- 命中区登记位置与规矩同上面那条：render 里最前面＝最低优先级，指针落在时间轴/速度条/音量条上时
 -- 它们的命中区先命中，滚轮仍归它们（跳转 / 倍速 / volume_step）；只有空白画面才落到这里。
 -- 步进 2 与 mpv 内建同速（实测 work/probe-input-before.txt 的 `add volume  2`），换了实现不许改手感。
-embynian_wheel_volume_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720}
+-- embynian_fallback = true 的用意见上面 click_pause_hitbox 那条注释：整画布兜底区不算控件，
+-- cursor:on_control() 光标保活判据靠这个标记跳过它。
+embynian_wheel_volume_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, embynian_fallback = true}
 embynian_wheel_volume_step = 2
 
 function embynian_set_volume(delta)
@@ -1330,6 +1444,9 @@ local constructors = {
 
 -- Required elements
 require('elements/Curtain'):new()
+-- EMBYNIAN[skip-button] — 独占模式「跳过片头/片尾」按钮（宿主经 embynian-skip-offer 驱动，见上面的
+-- 消息处理器与 elements/SkipButton.lua）。与 Curtain 一样直接实例化：它不进 Manager 的可禁用清单。
+require('elements/SkipButton'):new()
 
 -- Element manager
 -- Handles creating and destroying elements based on disabled_elements user+script config.

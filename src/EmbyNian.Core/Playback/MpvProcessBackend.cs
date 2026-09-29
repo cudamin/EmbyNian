@@ -146,7 +146,8 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
                 _ipc.PropertyChanged += OnPropertyChanged;
                 // Position stays on the poller: time-pos would notify across the pipe on every frame.
                 foreach (var property in (string[])
-                         ["pause", "duration", "volume", "mute", "speed", "paused-for-cache", "demuxer-cache-time", "track-list"])
+                         ["pause", "duration", "volume", "mute", "speed", "paused-for-cache", "demuxer-cache-time", "track-list",
+                             "demuxer-cache-state", "cache", "demuxer-via-network", "chapter-list", "ab-loop-a", "ab-loop-b"])
                     await _ipc.ObservePropertyAsync(property, giveUp.Token).ConfigureAwait(false);
             }
 
@@ -213,6 +214,12 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
             "speed" => message.AsDouble() is { } speed ? status with { Speed = speed } : status,
             "paused-for-cache" => message.AsBoolean() is { } waiting ? status with { Buffering = waiting } : status,
             "demuxer-cache-time" => message.AsDouble() is { } cache ? status with { CacheEnd = Math.Max(0, cache) } : status,
+            "demuxer-cache-state" => status with { Cache = message.Data is { } data ? TimelineCache.Parse(data) : TimelineCache.Empty },
+            "cache" => status with { CacheMode = message.AsString() ?? "auto" },
+            "demuxer-via-network" => status with { NetworkSource = message.AsBoolean() == true },
+            "chapter-list" => status with { Chapters = ParseChapters(message.Data) },
+            "ab-loop-a" => status with { LoopA = message.AsDouble() },
+            "ab-loop-b" => status with { LoopB = message.AsDouble() },
             _ => status
         });
     }
@@ -460,6 +467,20 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         {
             return [];
         }
+    }
+
+    private static IReadOnlyList<SkipChapter> ParseChapters(JsonElement? data)
+    {
+        if (data is not { ValueKind: JsonValueKind.Array } array) return [];
+        var chapters = new List<SkipChapter>();
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("time", out var time)
+                || time.ValueKind != JsonValueKind.Number || !time.TryGetDouble(out var seconds)
+                || !double.IsFinite(seconds) || seconds < 0) continue;
+            chapters.Add(new(seconds, TryText(item, "title", out var title) ? title : null));
+        }
+        return chapters.ToArray();
     }
 
     private static bool TryText(JsonElement element, string name, out string value)

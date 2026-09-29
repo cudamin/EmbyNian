@@ -1,5 +1,6 @@
 using EmbyNian.MoviePilot;
 using EmbyNian.Shell.ViewModels;
+using EmbyNian.Shell.Platform;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -27,15 +28,18 @@ public sealed partial class MoviePilotResourcePanel : UserControl
     internal MoviePilotResourceViewModel ViewModel { get; } = new();
 
     /// <summary>接上服务与要搜的片，接好确认对话框，立刻开搜。</summary>
-    internal void Open(MoviePilotService service, MoviePilotMedia media)
+    internal void Open(MoviePilotService service, MoviePilotMedia media, ISystemLauncher launcher)
     {
-        ViewModel.Attach(service, media);
+        ViewModel.Attach(service, media, launcher);
+        ResourceList.Attach(ViewModel.Browser);
         ViewModel.UseConfirm(ConfirmDialog.For(this));
         _ = ViewModel.SearchAsync();
     }
 
     /// <summary>收起时收手：取消在飞的搜索。</summary>
     internal void Release() => ViewModel.Cancel();
+
+    private void OnRetry(object sender, RoutedEventArgs e) => _ = ViewModel.SearchAsync();
 
     private void OnClose(object sender, RoutedEventArgs e) => Closed?.Invoke(this, EventArgs.Empty);
 }

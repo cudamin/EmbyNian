@@ -1277,6 +1277,15 @@ public sealed partial class DetailViewModel : PageViewModel
     [ObservableProperty]
     public partial TrackRow? SelectedSubtitle { get; set; }
 
+    partial void OnSelectedAudioChanged(TrackRow? value)
+    {
+        if (!Attached || SelectedSource?.Source is not { } source || SubtitleTracks.Count == 0) return;
+        var wasAutomatic = ReferenceEquals(SelectedSubtitle, SubtitleTracks[0]);
+        var automatic = ItemDetail.SubtitleRows(Settings.Playback, source, value?.Stream)[0];
+        SubtitleTracks[0] = automatic;
+        if (wasAutomatic) SelectedSubtitle = automatic;
+    }
+
     /// <summary>
     /// Only a show with more than one season gets a picker. No conjunct on the item's type, unlike the
     /// page this replaces: <see cref="LoadSeriesAsync"/> is the only thing that fills

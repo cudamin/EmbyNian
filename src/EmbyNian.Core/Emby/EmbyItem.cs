@@ -598,6 +598,21 @@ public sealed class EmbyItem
         return code.Length > 0 ? $"{prefix}{code} {Name}".Trim() : $"{prefix}{Name}".Trim();
     }
 
+    /// <summary>
+    /// 播放页左上角那一行主标题：单集＝「剧名 SxxExx 集名」（用现成的 <see cref="EpisodeCode"/>），其余留片名本身。
+    /// <para>
+    /// 2026-09-27 那版曾**不带剧名前缀**（当时的说法是「剧名让给第二行的文件信息」）；**2026-09-28 晚按用户令
+    /// 「标题前面加上剧名」改回带前缀** —— 第二行如今是「分辨率 · 视频编码 · 音频格式 · 组名」，剧名在那行里
+    /// 本来就不出现，主标题于是把它接回来。写法直接复用 <see cref="ToPlaybackTitle"/>（同一条字符串），
+    /// 两处不再各写一份、也不会再悄悄走偏；诊断 / 概览 / 下载命名用的仍是同一个方法。
+    /// </para>
+    /// <para>
+    /// 两条管线共用它 —— 集成模式的标题条与独占模式的 <c>force-media-title</c>（<see cref="Playback.PlaybackPlanner"/>
+    /// 与 <c>PlayerViewModel</c> 各喂一处）。
+    /// </para>
+    /// </summary>
+    public string ToPlaybackHeadline() => ToPlaybackTitle();
+
     public string? PrimaryImageTag => ImageTags.TryGetValue("Primary", out var tag) ? tag : null;
 
     public string? ThumbImageTag => ImageTags.TryGetValue("Thumb", out var tag) ? tag : null;

@@ -54,6 +54,12 @@ public sealed partial class PlayerViewModel
     /// 消息从 mpv 的事件线程直接进来，先落界面线程；换集与换版交给
     /// <see cref="StepEpisodeAsync"/>/<see cref="SwitchEpisode"/>/<see cref="SwitchVersion"/> 自己的守卫，
     /// 这里不再另设一层 —— 双保险比一层保险更难排障。
+    /// <para>
+    /// 2026-09-29 统一右键菜单后又添三条（见 <see cref="PushPictureMenuAsync"/>）：跳过档位
+    /// （<see cref="VideoWindowContract.SkipMode"/>）、连播开关（<see cref="VideoWindowContract.AutoPlayNext"/>）
+    /// 与播放信息（<see cref="VideoWindowContract.MediaInfo"/>）—— 集成模式右键菜单里「更多」那一棵
+    /// 在独占模式的同款行，点中回宿主执行。
+    /// </para>
     /// </summary>
     private void OnVideoWindowMessage(string key, string value) => OnUi(() =>
     {
@@ -66,6 +72,9 @@ public sealed partial class PlayerViewModel
             // 选集按钮同一个道理（2026-09-26 用户令「播放电影的时候不要显示这个按钮」）：画面还没出来
             // 就把「现在放的是不是单集」告诉 uosc，别等 OnNowPlayingChanged。
             NoteEpisodeCount();
+            // 左上角第二行的文件信息也一样：握手到的时候宿主手上已经有条目与媒体源，趁画面还没出来把
+            // 副标题摆对，别等第一次 OnNowPlayingChanged。
+            NoteSubline();
             return;
         }
 
@@ -140,16 +149,121 @@ public sealed partial class PlayerViewModel
                 if (row >= 1 && row <= PlayerMenuCatalog.Commands.Count)
                     _ = RunMenuNodeAsync(PlayerMenuCatalog.Commands[row - 1]);
                 break;
+
+            case VideoWindowContract.SkipTake:
+                // 独占模式那颗「跳过」按钮被点了。与集成模式那颗 XAML 按钮、快捷键回车同一句执行 ——
+                // 都走 AcceptSkip（seek 到片段另一端并 show-text）；offer 是否还立着由 SkipCoordinator 自己判。
+                TakeSkip();
+                break;
+
+            case VideoWindowContract.SkipMode:
+                // 右键画面菜单的「跳过片头片尾」子菜单点了一档（2026-09-29 统一右键菜单）。值域由 Parse
+                // 收成 ask/auto/off；setter 落盘并经 ApplySkipOffer 让「跳过」按钮的 offer 当场跟上 ——
+                // 与集成模式右键点同一档写的是同一格设置。
+                SkipMode = value switch
+                {
+                    "auto" => SkipSectionMode.Auto,
+                    "off" => SkipSectionMode.Off,
+                    _ => SkipSectionMode.Ask
+                };
+                break;
+
+            case VideoWindowContract.AutoPlayNext:
+                // 右键画面菜单拨了「自动播放下一集」。值固定 toggle：拨到哪边由这里按当前值现算，
+                // 不认菜单推送那一份旧值（推送与点击之间设置窗口可能改过它）。
+                AutoPlayNextEpisode = !AutoPlayNextEpisode;
+                break;
+
+            case VideoWindowContract.MediaInfo:
+                // 右键画面菜单点了「播放信息…」。独占模式播放页是摘下去的，弹窗归外壳（ShellPage 接
+                // MediaInfoRequested 弹主窗口）；集成模式不走这条 —— 页面上的菜单行自己弹同一张。
+                MediaInfoRequested?.Invoke();
+                break;
         }
     });
 
     /// <summary>
-    /// 把 <see cref="PlayerMenuCatalog"/> 那张树推给视频窗的 uosc 画成菜单 —— 集成模式右键用的同一份，所以
-    /// 「参考集成模式」在这里是字面意义上的同一个数据源。命令行的 <c>value</c> 是回宿主的一条
-    /// <see cref="VideoWindowContract.MenuIndex"/>（序号对着 <see cref="PlayerMenuCatalog.Commands"/> 的次序），
-    /// 点中时宿主用 <c>RunMenuNodeAsync</c> 跑 —— 多条命令的「重置」行与 <c>${property}</c> 提示都靠它，
-    /// uosc 那头单条 value 表达不了，所以统一回宿主执行。
+    /// 把右键画面菜单推给视频窗的 uosc 画 —— 与集成模式右键（<c>PlayerPage.OnPictureMenuOpening</c>）<b>同一张</b>：
+    /// 前半是 <see cref="PlayerMenuCatalog"/> 那棵目录（命令叶子按 DFS 先序编号，序号对着
+    /// <see cref="PlayerMenuCatalog.Commands"/>，点中回 <see cref="VideoWindowContract.MenuIndex"/>、宿主用
+    /// <c>RunMenuNodeAsync</c> 跑），后半是集成模式「更多」那一棵的同款 —— 版本…、着色器、跳过片头片尾、
+    /// 自动播放下一集、播放信息…（2026-09-29 用户令「统一独占模式和集成模式的右键菜单选项」；在那之前
+    /// 这里只推目录加一条置顶的着色器，两边差着一截）。
+    /// <para>
+    /// 「更多」的那几行在两条管线里各有各的拼法（集成侧是 XAML 行、走 <c>PlayerPage.OnMoreMenuOpening</c>，
+    /// 这里是 uosc 菜单行），但数据源与执行是同一份：版本开的是同一张版本菜单、着色器/跳过写的是同一格
+    /// 设置、连播同一格、播放信息同一份正文。**改任何一边的行集、次序或文案，另一边要跟上** —— 两处
+    /// 旁边的注释就是互相指认的路标。
+    /// </para>
     /// </summary>
+    private async Task PushPictureMenuAsync()
+    {
+        var checks = await ReadMenuChecksAsync().ConfigureAwait(true);
+
+        var command = 0;
+        var items = BuildPictureMenuItems(PlayerMenuCatalog.Root, checks, ref command);
+
+        // 目录与「更多」之间的一条分隔线（集成侧 OnPictureMenuOpening 插的那条 MenuFlyoutSeparator）。
+        // uosc 的分隔线是「这一行之后画条线」的行属性而不是独立行，落在前一行上（与目录里的分隔同款）。
+        if (items.Count > 0 && items[^1].Separator != true)
+            items[^1] = items[^1] with { Separator = true };
+
+        // —— 「更多」那一棵，行集与次序照抄 OnMoreMenuOpening：版本…（有第二版才在）、着色器、跳过片头片尾、
+        // 自动播放下一集、播放信息…；集成侧在这些行之间放的是独立分隔线，这里落在前一行上。
+        if (VersionControlsVisible)
+            items.Add(new UoscMenuItem("版本…", $"script-message {VideoWindowContract.Versions} open",
+                true, false, Separator: true));
+
+        items.Add(BuildUoscShaderMenu());
+        items[^1] = items[^1] with { Separator = true };
+        items.Add(BuildUoscSkipMenu());
+        items.Add(new UoscMenuItem("自动播放下一集",
+            $"script-message {VideoWindowContract.AutoPlayNext} toggle", true, AutoPlayNextEpisode, Separator: true));
+        items.Add(new UoscMenuItem("播放信息…", $"script-message {VideoWindowContract.MediaInfo} open", true, false));
+
+        // title 传 null：画面菜单不画顶部那行「画面」（用户令 2026-09-26）；仍带 anchor 贴光标弹。
+        await SendMenuAsync("picture", null, items, anchor: true).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// 「更多」里的着色器子菜单，uosc 行版 —— 与集成模式 <c>PlayerPage.BuildShaderMenu</c> 同一批行、同一个
+    /// 打勾判据：恢复设置的方案（没钉档时亮）、关闭着色器、分隔线、八档各带右列暗字链名（钉档且命中才亮）。
+    /// 点中回 <see cref="VideoWindowContract.Shader"/>，宿主那头与旧的三档同一句执行。
+    /// </summary>
+    private UoscMenuItem BuildUoscShaderMenu()
+    {
+        List<UoscMenuItem> rows =
+        [
+            new("恢复设置的方案", $"script-message {VideoWindowContract.Shader} auto", true, !_shaderPinned),
+            new("关闭着色器", $"script-message {VideoWindowContract.Shader} off", true,
+                _shaderPinned && ActiveShader is null, Separator: true),
+            .. ShaderCatalog.Select(group => new UoscMenuItem(group.DisplayName,
+                $"script-message {VideoWindowContract.Shader} {group.Id}", true,
+                _shaderPinned && ActiveShader?.Id == group.Id, group.Description))
+        ];
+
+        return new UoscMenuItem($"着色器：{ActiveShader?.Name ?? "未启用"}", null, true, false, Items: rows);
+    }
+
+    /// <summary>
+    /// 「更多」里的跳过片头片尾子菜单，uosc 行版 —— 与集成模式 <c>PlayerPage.BuildSkipMenu</c> 同一批行、
+    /// 同一句文案（<see cref="SkipModeLabel"/>）；点中回 <see cref="VideoWindowContract.SkipMode"/>，
+    /// 宿主写进与集成模式同一格设置。
+    /// </summary>
+    private UoscMenuItem BuildUoscSkipMenu()
+    {
+        var mode = SkipMode;
+
+        var rows = new[] { SkipSectionMode.Ask, SkipSectionMode.Auto, SkipSectionMode.Off }
+            .Select(choice => new UoscMenuItem(
+                SkipModeLabel(choice),
+                $"script-message {VideoWindowContract.SkipMode} {SkipModeToken(choice)}",
+                true,
+                mode == choice))
+            .ToList();
+
+        return new UoscMenuItem($"跳过片头片尾：{SkipModeLabel(mode)}", null, true, false, Items: rows);
+    }
     /// <summary>
     /// Reads the mpv properties the 画面菜单 ticks from — <see cref="PlayerMenuCatalog.CheckProperties"/>, one
     /// read each — so a menu about to open can mark the current 解码方式, 声道布局, 抖动补偿…. Read on open
@@ -165,25 +279,6 @@ public sealed partial class PlayerViewModel
             values[property] = await _playback.GetTextAsync(property).ConfigureAwait(true);
 
         return values;
-    }
-
-    private async Task PushPictureMenuAsync()
-    {
-        var checks = await ReadMenuChecksAsync().ConfigureAwait(true);
-
-        var command = 0;
-        var items = BuildPictureMenuItems(PlayerMenuCatalog.Root, checks, ref command);
-        List<UoscMenuItem> shaders =
-        [
-            new("恢复设置的方案", $"script-message {VideoWindowContract.Shader} auto", true, !_shaderPinned),
-            new("关闭着色器", $"script-message {VideoWindowContract.Shader} off", true, _shaderPinned && ActiveShader is null),
-            .. ShaderCatalog.Select(group => new UoscMenuItem(group.DisplayName,
-                $"script-message {VideoWindowContract.Shader} {group.Id}", true,
-                _shaderPinned && ActiveShader?.Id == group.Id, group.Description))
-        ];
-        items.Insert(0, new UoscMenuItem("着色器", null, true, false, Items: shaders));
-        // title 传 null：画面菜单不画顶部那行「画面」（用户令 2026-09-26）；仍带 anchor 贴光标弹。
-        await SendMenuAsync("picture", null, items, anchor: true).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -300,6 +395,31 @@ public sealed partial class PlayerViewModel
             Log.Debug(Category, $"「是不是单集」（{value}）没能送到视频窗 —— uosc 还没起来？");
     }
 
+    private void NoteSubline() => _ = PushSublineAsync();
+
+    /// <summary>
+    /// 把左上角第二行那句文件信息（<see cref="PlaybackTitles.Subline"/> ＝「分辨率 · 视频编码 · 音频格式 ·
+    /// 组名」）推给独占模式视频窗的 uosc 顶栏，画成返回按钮正下方的副标题。集成模式那一行是 XAML 的
+    /// <c>SubtitleBox</c>（绑 <see cref="Subtitle"/>），不走这里 —— 两模式同源、显示一致（用户令 2026-09-27，
+    /// 内容与位置 2026-09-28 跟进）。
+    /// <para>
+    /// 与 <see cref="NoteVersionCount"/>/<see cref="NoteEpisodeCount"/> 同一个形状、同样的调用时机（uosc 握手
+    /// ＋ 每场 <c>OnNowPlayingChanged</c>）。取的是正在放那一版的媒体源（<see cref="PlayingSourceOrFirst"/>）—— 与
+    /// 集成模式那一行、进度条中间那条画质读数同一份。握手那一下条目多半还没落定，<see cref="PlayingSourceOrFirst"/>
+    /// 给 null、值是空串（uosc 那头＝先不画副标题），文件开起来后 <c>OnNowPlayingChanged</c> 再推一次真值。
+    /// 发不出去不算错：起播前那一次天然还没有会话，静默。
+    /// </para>
+    /// </summary>
+    private async Task PushSublineAsync()
+    {
+        if (!HeadlessPlayback) return;
+
+        var value = PlaybackTitles.Subline(PlayingSourceOrFirst(_nowPlaying));
+
+        if (!await _playback.CommandAsync("script-message", VideoWindowContract.Subline, value).ConfigureAwait(true))
+            Log.Debug(Category, "左上角第二行的文件信息没能送到视频窗 —— uosc 还没起来？");
+    }
+
     /// <summary>
     /// 把这一条目的版本推给视频窗画成菜单：4K HDR、1080p、导演剪辑版……正在放的那一版打上 active。
     /// <para>
@@ -400,6 +520,7 @@ public sealed partial class PlayerViewModel
         // Re-armed per playback, before anything can look at it: switching episodes comes through here,
         // and the previous episode's opening is not this one's. The server's chapter marks are the
         // starting point; RefineSkipSectionsAsync replaces them with mpv's once the file is open.
+        ResetTimelineDrag();
         _generation++;
 
         // The old file's scrub and in-flight seek mean nothing here: a seek left in flight would hold the
@@ -456,8 +577,14 @@ public sealed partial class PlayerViewModel
             return;
         }
 
-        Title = item.ToPlaybackTitle();
-        Subtitle = item.Type == EmbyItemType.Episode ? item.SeriesName ?? "" : item.CardSubtitle;
+        // 左上角主标题＝headline（**带剧名**：单集＝「剧名 SxxExx 集名」，电影＝片名）；第二行是文件信息
+        // 「分辨率 · 视频编码 · 音频格式 · 组名」（用户令 2026-09-27「电视剧左上角标题要用 SxxExx 集名，
+        // 下方的片名改为视频编码+音轨+组名」；2026-09-28 前置分辨率并挪到返回按钮正下方；**同日更晚用户令
+        // 「标题前面加上剧名」，09-27 那版「剧名让给第二行」被翻案** —— 第二行如今只剩分辨率/编码/音频/组名，
+        // 剧名不在那儿）。两条管线同源、显示一致（独占那两行由 uosc 顶栏画，NoteSubline 把第二行
+        // 推过去；主标题走 force-media-title＝同一个 ToPlaybackHeadline）。
+        Title = item.ToPlaybackHeadline();
+        Subtitle = PlaybackTitles.Subline(PlayingSourceOrFirst(item));
 
         // 控制条中间那行读数是**正在放的那一版**的，见 PlayingSourceLabel。
         SourceLabel = PlayingSourceLabel(item);
@@ -468,6 +595,10 @@ public sealed partial class PlayerViewModel
         // 按钮」）：播电影时这一格是假，uosc 那头整颗按钮跟着不在屏上。集成模式那两颗归外壳，白收一条
         // 消息没人理（见 PushEpisodeCountAsync 的 HeadlessPlayback 闸）。
         NoteEpisodeCount();
+
+        // 左上角第二行那句文件信息推给独占模式的 uosc 顶栏副标题（集成模式那一行是上面的 Subtitle，
+        // 走 XAML）。换集 / 换版都经这里重算，组名与编码跟着走。
+        NoteSubline();
 
         // 有没有第二版可换。「版本」按钮只在这一格为真时露面（控制条上那个按钮绑的就是它），
         // 独占模式视频窗里的那条菜单项则不受它管 —— uosc 的控件列表是静态的，露出与否由
@@ -498,24 +629,32 @@ public sealed partial class PlayerViewModel
     });
 
     /// <summary>
-    /// 控制条中间那行「1080p · HEVC · 8.4 GB」说的是哪一份文件。
+    /// 正在放的是哪一份文件（媒体源），**认不出就退回第一版** —— 进度条中间那行画质读数
+    /// （<see cref="PlayingSourceLabel"/>）与左上角第二行的文件信息（<see cref="PlaybackTitles.Subline"/>）都问它。
     /// <para>
     /// 问的必须是<b>正在放的那一版</b>，不是 <c>MediaSources[0]</c>。单版本的条目上两者恰好是同一份文件，
-    /// 所以「问第一个」这个写法一直没露馅；条目一旦挂了两版、用户又换过版，那行就会一直报第一版的画质 ——
-    /// 屏上看到的是「换了版本，中间那行纹丝不动」，而真实的画面已经换成另一份文件了。认不出在播的是哪一版
+    /// 所以「问第一个」这个写法一直没露馅；条目一旦挂了两版、用户又换过版，那两处就会一直报第一版的信息 ——
+    /// 屏上看到的是「换了版本，画质/文件信息纹丝不动」，而真实的画面已经换成另一份文件了。认不出在播的是哪一版
     /// （外部 mpv.exe 后端不经过这里的启动记账、或者刚起播还没落定）时才退回第一版。
     /// </para>
+    /// <para>
+    /// 与 <see cref="PlayingSource"/> 属性的差别只在末尾那一步兜底：属性认不出给 null（菜单打勾要 null 才知道
+    /// 「哪一行都不勾」），这里为了屏上那两处读数总有内容可显示而退回第一版。
+    /// </para>
+    /// </summary>
+    private MediaSource? PlayingSourceOrFirst(EmbyItem? item) =>
+        MediaVersionSwitch.Playing(item, _playback.PlayingSource) ?? item?.MediaSources.FirstOrDefault();
+
+    /// <summary>
+    /// 控制条中间那行「1080p · HEVC · 8.4 GB · 制作组」说的是哪一份文件 —— 取<see cref="PlayingSourceOrFirst"/>
+    /// 的画质读数，尾部接上正在放这一版文件名里的制作组（2026-09-24 用户令）。换过版本后这一行会经
+    /// <c>OnNowPlayingChanged</c> 重算，组名跟着换；文件名里认不出组名就维持原样。
     /// </summary>
     private string PlayingSourceLabel(EmbyItem? item)
     {
-        var source = MediaVersionSwitch.Playing(item, _playback.PlayingSource)
-            ?? item?.MediaSources.FirstOrDefault();
+        var source = PlayingSourceOrFirst(item);
 
         var label = source?.ToQualityLabel() ?? "";
-        // 2026-09-24 用户令「这是进度条中间的视频格式，在最后新增制作组，取文件名 再见菈菈 S01E12
-        // 1080p.AAC-Studio GreenTea 后面的 Studio GreenTea」：画质读数（1080p · HEVC · MP4 · 261.8MB）
-        // 尾部接上正在放这一版文件名里的制作组。问的照样是正在放的那一版（见上），换过版本后这一行
-        // 会经 OnNowPlayingChanged 重算，组名跟着换；文件名里认不出组名就维持原样。
         var group = ReleaseGroup.FromFileName(source?.Path);
         if (group.Length == 0) return label;
         return label.Length > 0 ? $"{label}  ·  {group}" : group;
@@ -665,17 +804,33 @@ public sealed partial class PlayerViewModel
     /// </summary>
     private void ApplyStatus(PlayerStatus status)
     {
+        var durationChanged = Math.Abs(Status.Duration - status.Duration) > 0.05;
         Status = status;
+        if (status.Loaded && status.Chapters is { } chapters)
+        {
+            var chaptersChanged = !ReferenceEquals(chapters, ChapterMarks) && !chapters.SequenceEqual(ChapterMarks);
+            if (status.HasDuration && (chaptersChanged || durationChanged))
+                _skips.Refine(SkipSectionPlanner.Resolve(chapters, status.Duration), status.Duration);
+            if (chaptersChanged)
+            {
+                ChapterMarks = chapters;
+                ClearChapterPeek();
+                ChaptersChanged?.Invoke();
+            }
+        }
 
         PlayPauseGlyph = Glyph(status.Paused ? PlayGlyphCode : PauseGlyphCode);
         DurationClock = status.HasDuration ? status.DurationClock : "0:00";
         CacheFraction = status.CacheFraction;
-        SpeedLabel = $"{status.Speed.ToString("0.0#", CultureInfo.InvariantCulture)}×";
+
         ThinFraction = Math.Clamp(status.Fraction, 0, 1);
 
         _pushing = true;
         try
         {
+            if (Now - _speedTouched >= 1000 || Math.Abs(status.Speed - SpeedValue) < 0.005)
+                SpeedValue = Math.Clamp(status.Speed, SpeedChoices[0], SpeedChoices[^1]);
+            SpeedLabel = $"{SpeedValue.ToString("0.0#", CultureInfo.InvariantCulture)}×";
             // The user's own drag wins for as long as it is the more current answer: mpv reports the
             // position it is still seeking away from, and letting that write the slider back would drag
             // the thumb out from under the pointer. A seek that has been sent but not landed gets the
@@ -684,7 +839,7 @@ public sealed partial class PlayerViewModel
             if (SeekBarFollows(status))
             {
                 SeekValue = status.Fraction * SeekScale;
-                PositionClock = status.HasPosition ? status.PositionClock : "0:00";
+                PositionClock = status.HasPosition ? TimelineScale.Clock(status.Position, status.Duration) : "0:00";
             }
 
             // 音量 has the same problem and it was visible: 「滚轮调音量的时候不是很顺滑，音量条一顿一顿的」
@@ -702,7 +857,8 @@ public sealed partial class PlayerViewModel
 
         // 静音's own glyph is still the whole of the mute readout — the figure above the rail says how loud,
         // not whether (「给音量条上方加上数字」).
-        SoundGlyph = Glyph(status.Muted ? MutedGlyphCode : VolumeGlyphCode);
+        SoundGlyph = Glyph(status.Muted ? MutedGlyphCode : status.Volume <= 0 ? 0xE992 : status.Volume <= 60 ? 0xE993 : VolumeGlyphCode);
+        UpdateRemainingClock();
 
         // The new file is decoding, so there is a real picture to show and the cover has done its job.
         // Anything earlier than Loaded would uncover the seam it was put up for.
@@ -748,7 +904,8 @@ public sealed partial class PlayerViewModel
     /// </summary>
     partial void OnSeekValueChanged(double value)
     {
-        if (_pushing) return;
+        UpdateRemainingClock();
+        if (_pushing || !Status.HasDuration) return;
 
         _seekTouched = Now;
         _seekPending = Math.Clamp(value / SeekScale, 0, 1);
@@ -756,7 +913,7 @@ public sealed partial class PlayerViewModel
         // The clock keeps up with the thumb rather than with mpv, so a drag reads as a scrub instead of
         // as a slider that has come loose from the number beside it.
         if (Status.HasDuration)
-            PositionClock = TimeFormat.Clock(TimeSpan.FromSeconds(_seekPending.Value * Status.Duration));
+            PositionClock = TimelineScale.Clock(_seekPending.Value * Status.Duration, Status.Duration);
     }
 
     /// <summary>
@@ -764,17 +921,9 @@ public sealed partial class PlayerViewModel
     /// through rather than coalesced: a volume change is a single value mpv applies instantly, and the thumb and
     /// the figure above it have to keep up with the hand rather than with the next status poll — which, until
     /// this level settles, is not allowed to write them at all (see <see cref="ApplyStatus"/>).
-    /// <para>
-    /// 第一件事是把滑杆摆到这一档的刻度上（<see cref="VolumeScale.Axis"/>），两个例外写在下面。
-    /// </para>
     /// </summary>
     partial void OnVolumeChanged(double value)
     {
-        // 位置归手的两种情形不写回去：用户正拖着滑块（写回去等于跟手打架），以及滚轮刚把半格留在轴上
-        // （那半格是它下一次要接着走的，抹平了就等于每一格都从头开始，100→101 永远走不到）。mpv 回读那一档
-        // 必须写 —— 它是 _pushing 里的，同样走得到这里。
-        if (!_axisByHand && !_axisByRoll) VolumeAxis = VolumeScale.Axis(value);
-
         if (_pushing) return;
 
         var level = Math.Clamp(Math.Round(value), 0, AudioSettings.MaxVolume);
@@ -784,33 +933,6 @@ public sealed partial class PlayerViewModel
         // own config blocked, so a level nobody wrote down is 100 again by the next episode.
         _volumePending = (int)level;
         _volumeTouched = Now;
-    }
-
-    /// <summary>
-    /// 滑杆自己给的位置：用户拖着它，或者滚轮刚在轴上走了一格（后者由 <see cref="RollVolume"/> 标了
-    /// <c>_axisByRoll</c>，直接返回）。换算回音量（<see cref="VolumeScale.Level"/>）再就近取整 —— 落在
-    /// 100 与 101 之间那半格时给的是小数，两档各占半格，就近收正是不偏不倚的分界（100.5 归 101）。
-    /// <para>
-    /// <c>_pushing</c> 那一档不接：那是 mpv 回读把滑块摆回刻度点（见 <see cref="OnVolumeChanged"/>），
-    /// 这里要是也认，两个属性会互相写回去。
-    /// </para>
-    /// </summary>
-    partial void OnVolumeAxisChanged(double value)
-    {
-        if (_axisByRoll || _pushing) return;
-
-        var level = Math.Round(VolumeScale.Level(value), MidpointRounding.AwayFromZero);
-        if (Math.Abs(level - Volume) < 0.001) return;
-
-        _axisByHand = true;
-        try
-        {
-            Volume = level;
-        }
-        finally
-        {
-            _axisByHand = false;
-        }
     }
 
     /// <summary>
@@ -889,7 +1011,7 @@ public sealed partial class PlayerViewModel
         // Null means the property is not there yet; a real answer of 0 or 1 means this file has
         // nothing to read and waiting longer will not change that.
         if (count is null) return false;
-        if (count < 2) return true;
+        if (generation != _generation || Status.Chapters is not null) return true;
 
         // The whole list in one call, rather than two reads per chapter: on the external backend
         // that walk was a JSON round trip a question — twenty chapters made forty-two — and the
@@ -955,11 +1077,36 @@ public sealed partial class PlayerViewModel
     internal void ShowSkipPrompt(SkipPrompt prompt)
     {
         SkipOffered = prompt.Visible;
+
+        // 独占模式画面在 mpv 窗口里、那颗 XAML 按钮不在屏上，把这份 offer 推给视频窗的 uosc 画一颗
+        // （集成模式白推：HeadlessPlayback 才发；见 PushSkipToVideoWindow）。可见与否都推 —— 收摊也是一条消息。
+        PushSkipToVideoWindow(prompt.Visible, prompt.Caption);
+
         if (!prompt.Visible) return;
 
         SkipCaption = prompt.Caption;
         SkipTip = prompt.Tip;
         SkipRemaining = prompt.Remaining;
+    }
+
+    /// <summary>
+    /// 把「跳过」offer 的文案推给独占模式视频窗的 uosc 按钮（<see cref="VideoWindowContract.SkipOffer"/>，
+    /// 空串＝收摊）。集成模式那颗按钮绑的是 <see cref="SkipOffered"/> 一族属性、不走这里，所以只有
+    /// <see cref="HeadlessPlayback"/> 才发。
+    /// <para>
+    /// 状态每秒采十次都会经 <see cref="ShowSkipPrompt"/>，只在文案真变了才发一条 —— 同一句「跳过片头」
+    /// 一秒重发十遍既费事也可能扰动 uosc 的重绘。发不出去（uosc 还没起来、句柄刚换）不算错，静默。
+    /// </para>
+    /// </summary>
+    private void PushSkipToVideoWindow(bool visible, string? caption)
+    {
+        if (!HeadlessPlayback) return;
+
+        var value = visible ? caption ?? "" : "";
+        if (string.Equals(value, _skipPushed, StringComparison.Ordinal)) return;
+
+        _skipPushed = value;
+        _ = _playback.CommandAsync("script-message", VideoWindowContract.SkipOffer, value);
     }
 
     /// <summary>
@@ -988,6 +1135,9 @@ public sealed partial class PlayerViewModel
         _ = _playback.CommandAsync("show-text", jump.Notice, "2500");
 
         SkipOffered = false;
+        // 独占模式那颗 uosc 按钮当场收起 —— 下一拍 ApplySkipOffer 也会收（seek 后已不在片段里），
+        // 这一句免得点完到下一拍之间那颗按钮还挂着。集成模式白推（HeadlessPlayback 闸）。
+        PushSkipToVideoWindow(false, "");
     }
 
 }

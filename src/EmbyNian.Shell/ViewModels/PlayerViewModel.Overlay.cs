@@ -38,16 +38,16 @@ public sealed partial class PlayerViewModel
     /// <returns>Whether there is anything to preview at that moment, which there is for any open file.</returns>
     internal bool PeekChapterAt(double seconds)
     {
-        if (_nowPlaying is null) return false;
+        if (!Status.HasDuration) return false;
 
-        var moment = Math.Max(0, seconds);
+        var moment = Math.Clamp(seconds, 0, Status.Duration);
 
         // Every pixel of movement, unlike the contents below: the time is the one part of the box that is
         // about where the pointer is rather than about which chapter it landed in. Written before anything
         // can return, because the readout is the half that is always available — plenty of servers extract
         // no chapters at all, and the slider's own tooltip only appears while the thumb is being dragged,
         // so hovering such a file used to show nothing whatsoever.
-        ChapterClock = TimeFormat.Clock(TimeSpan.FromSeconds(moment));
+        ChapterClock = TimelineScale.Clock(moment, Status.Duration);
 
         // Two lookups against two lists, both correct — see ChapterTimeline. The name comes from whichever
         // marks the bar is currently drawing, which is mpv's once it has published them; the picture is
@@ -57,13 +57,14 @@ public sealed partial class PlayerViewModel
 
         // Contents only when the chapter changes: the box follows the pointer along the bar, and reloading
         // the same still for every pixel of that would be absurd.
+        ChapterCaption = TimelineChapters.CaptionAt(moment);
         if (named == _peekChapter && still == _peekStill) return true;
 
         _peekChapter = named;
         _peekStill = still;
-        ChapterCaption = ChapterTimeline.Caption(ChapterMarks, named);
 
-        if (still >= 0 && _nowPlaying.Chapters[still] is { HasImage: true } info)
+        if (_nowPlaying is not null && still >= 0 && still < _nowPlaying.Chapters.Count
+            && _nowPlaying.Chapters[still] is { HasImage: true } info)
             _ = LoadChapterStillAsync(_generation, _nowPlaying.Id, still, info.ImageTag);
         else
             ChapterStill = null;
@@ -228,19 +229,7 @@ public sealed partial class PlayerViewModel
     /// </summary>
     internal void Tick()
     {
-        // Coalesced rather than sent per event: a drag along the bar raises a change for every pixel, and
-        // mpv would spend the drag servicing seeks to positions the pointer had already left.
-        if (_seekPending is { } fraction)
-        {
-            _seekPending = null;
-
-            // Remembered as in flight: until mpv reports the target position, the bar keeps the value the
-            // hand left rather than the pre-seek position mpv keeps reporting (see SeekBarFollows).
-            _seekSent = fraction;
-            _seekSentAt = Now;
-
-            _ = _playback.SetPropertyAsync("percent-pos", fraction * 100);
-        }
+        FlushTimelineSeek();
 
         // 每秒刷新一次.
 

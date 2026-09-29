@@ -291,6 +291,8 @@ internal static class PlayerMotionProbe
             page.PauseRequested = paused => _ = handle!.SetPropertyAsync("pause", paused, token);
             try
             {
+                Write("阶段：真实时间轴功能与视频亚克力");
+                await page.ProbeLiveTimelineAsync(handle, options.Paths.LogDirectory, Write, token);
                 foreach (var (name, from, to, anchorFar) in new[]
                 {
                     ("缩小", 1d, 0.64, false),

@@ -314,6 +314,16 @@ internal static class MpvUiTests
                 // mpv 把 script-message 派给同名绑定是不分方向的。
                 VideoWindowContract.VersionCount,
                 VideoWindowContract.EpisodeCount,
+                // 跳过片头/片尾那两条：uosc→宿主的 SkipTake（按钮点击）与宿主→uosc 的 SkipOffer（推文案）。
+                VideoWindowContract.SkipTake,
+                VideoWindowContract.SkipOffer,
+                // 左上角第二行的文件信息（宿主→uosc，方向不影响这条硬规矩）。
+                VideoWindowContract.Subline,
+                // 右键菜单统一（2026-09-29）添的三条：跳过档位、连播开关、播放信息 —— 「更多」那一棵
+                // 在独占模式的同款行点中回宿主的 value。
+                VideoWindowContract.SkipMode,
+                VideoWindowContract.AutoPlayNext,
+                VideoWindowContract.MediaInfo,
             };
             var bindings = new List<string>();
 
@@ -367,6 +377,63 @@ internal static class MpvUiTests
             Assert.True(volume.Contains("'no-osd', 'set', 'volume'"), "音量条改音量没走 no-osd");
         });
 
+        // 2026-09-29（用户令「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，触发
+        // 渐变的时候不隐藏控件，但是要隐藏鼠标」）：判据是**控件本体的命中区**，不是唤出带。这一块补丁
+        // 落在 lib/cursor.lua 里，同样属于「升级 uosc 时最容易漏重打」的那一类 —— 对着源码钉死；
+        // 行为级判据是 work/probe-hold-visible-{before,hold}.txt（真窗口 + 真 libmpv，四个景各停四秒，
+        // 逐拍读 GetCursorInfo 的 showing 位与 uosc 侧的 cursor-autohide）。
+        TestHarness.Test("独占模式光标保活补丁：压在控件本体上不藏、唤出带里照藏", () =>
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var uosc = Path.Combine(directory!.FullName, "assets", "mpv-ui", "scripts", "uosc");
+            var cursor = File.ReadAllText(Path.Combine(uosc, "lib", "cursor.lua"));
+
+            Assert.True(cursor.Contains("EMBYNIAN[cursor-hold]"), "光标保活补丁丢了：没有槽名标记");
+            // 判据是命中区：压在按钮/滑杆/进度条那一块上才不收。2026-09-29 晚修：on_control 必须**自己遍历**
+            // zones 而不能用 find_zone —— EMBYNIAN 的两条兜底区（点画面暂停／滚轮音量）罩着**整个画布**，
+            // find_zone 会把它们当成控件，指针停在空白画面上也 hold，cursor-autohide 恒为 no、光标永不藏
+            // （work/probe-hold-visible-repro.txt 实锤：激活那一拍 autohide 就翻 no）。
+            Assert.True(cursor.Contains("function cursor:on_control()"), "光标保活补丁丢了：没有本体命中这一问");
+            // 反面同样要钉：**不许再按 proximity 判** —— 那是唤出带，正是用户要「藏鼠标」的地方。
+            Assert.False(cursor.Contains("element.proximity > 0"),
+                "光标保活补丁退回了按唤出带判：带子里也会把光标钉住，与用户令相反");
+            // 也不许把「离开时淡出哪四块」那份名单拿来当判据（2026-09-28 那版就是它，见 work 里的
+            // 旧证据）。`config.cursor_leave_fadeout_elements` 本身在上游的淡出循环里合法存在，
+            // 所以这里钉的是「补丁的判据函数体里没有它」——
+            var body = cursor.Substring(
+                cursor.IndexOf("function cursor:on_control()", StringComparison.Ordinal));
+            body = body[..body.IndexOf("\n\tend", StringComparison.Ordinal)];
+            Assert.False(body.Contains("cursor_leave_fadeout_elements"),
+                "光标保活补丁又拿唤出带的名单当判据了：那一份名单管的是「离开时淡出哪几块」");
+            Assert.False(body.Contains("proximity"),
+                "光标保活补丁又拿 proximity 当判据了：那是唤出带，不是本体");
+            Assert.False(body.Contains("find_zone"),
+                "on_control 不许用 find_zone：两条整画布兜底区会被当成控件，光标永不藏（2026-09-29 用户报）");
+            Assert.True(body.Contains("embynian_fallback"),
+                "on_control 必须跳过带 embynian_fallback 标记的兜底区（整画布的点画面暂停／滚轮音量区不是控件）");
+
+            // 标记的另一头：main.lua 里两条兜底 hitbox 必须真的带着 embynian_fallback —— 判据跳过它靠的就是
+            // 这个字段，重打补丁时漏了标记＝「光标永不藏」那条病根原样回来。
+            var main = File.ReadAllText(Path.Combine(uosc, "main.lua"));
+            var fallbackMarks = System.Text.RegularExpressions.Regex.Matches(main, "embynian_fallback = true").Count;
+            Assert.True(fallbackMarks >= 2,
+                $"main.lua 里两条兜底命中区必须带 embynian_fallback = true 标记，现在只数到 {fallbackMarks} 处");
+            // 钉成 no、离开还原 —— 两条都要在：只有一边的话，光标不是永不藏就是白补。
+            Assert.True(cursor.Contains("cursor.autohide_base"), "光标保活补丁丢了：没记装配时的原值，还原不了");
+            Assert.True(cursor.Contains("mp.set_property('cursor-autohide'"), "光标保活补丁丢了：没有改 mpv 的属性");
+            // 落点必须在 queue_autohide 的**第一行**：装箱默认 options.autohide=false，排在
+            // `is_autohide_allowed()` 那道闸之后就永远跑不到（重打清单时最容易漏掉的正是这条）。
+            var queue = cursor.IndexOf("function cursor:queue_autohide()", StringComparison.Ordinal);
+            var refresh = cursor.IndexOf("self:refresh_hold()", queue + 1, StringComparison.Ordinal);
+            var guard = cursor.IndexOf("if self:is_autohide_allowed()", queue + 1, StringComparison.Ordinal);
+            Assert.True(queue >= 0 && refresh > queue && guard > refresh,
+                "光标保活补丁丢了：refresh_hold 没排在 is_autohide_allowed 那道闸前面");
+        });
+
         // 版本菜单契约（2026-09-20）：请求值保留即可通过；点选只认 1 起算的正整数序号 —— 与选集同一套判据，
         // 因为「差一位」在这里换到的是旁边那一版文件，屏上看起来完全正常（片子还是那部片子）。
         TestHarness.Test("版本请求与序号点选的契约", () =>
@@ -415,16 +482,24 @@ internal static class MpvUiTests
             // 控制条上的两颗按钮与它们的**落点**（2026-09-23 第二轮重排；2026-09-24 用户令「把独占模式下
             // 字幕和音频的按钮位置互换」后再调一次）：选集与版本进左下那一组的尾巴
             // （左→右：选集倒数第二、版本最后），右下是 字幕、音频、空一个按钮宽(gap:1)、全屏。
+            // **2026-09-27 晚**用户令「移除集成模式和独占模式左下角的画面按钮」：原来 `picture-menu` 那颗
+            // 在章节之后、选集之前，本轮整颗撤下 —— 左下那一段现在是…统计、章节、选集、版本。
             // 拼写取 controls 默认值里独有的那一截 —— 少一处，uosc 会走到「unknown element kind」并把
             // 那一项之后的按钮整排丢掉（Controls:init_options 的 break）。
-            Assert.True(main.Contains(",embynian-ui-picture-menu,<has_episodes>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,"),
-                "左下那一组的尾巴（画面菜单、选集、版本）丢了或次序不对");
+            Assert.True(main.Contains("<has_chapter>chapters,<has_episodes>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,"),
+                "左下那一组的尾巴（章节、选集、版本）丢了或次序不对");
             Assert.True(main.Contains(",space,<video,audio>subtitles,audio,gap:1,fullscreen'"),
                 "右下那一组（字幕、音频、空一个按钮宽、全屏）丢了或次序不对");
             Assert.True(controls.Contains("['embynian-ui-versions']"), "版本按钮的快捷项简写丢了");
-            Assert.True(controls.Contains("['embynian-ui-picture-menu']"), "画面菜单按钮的快捷项简写丢了");
-            // 画面菜单按钮与右键点画面是同一条绑定（绑定名与消息名分家，见上一节的硬规矩）。
-            Assert.True(main.Contains("bind_command('embynian-ui-picture-menu'"), "画面菜单绑定丢了");
+
+            // 「画面菜单」那颗**控制条按钮**撤下了（2026-09-27 用户令），但**功能没删**：右键点画面仍是
+            // 同一条绑定，绑定名与消息名分家（见上一节的硬规矩）。这两处留着正是「撤的只是入口」的判据。
+            Assert.False(main.Contains("embynian-ui-picture-menu,<has_episodes>"),
+                "控制条上那颗画面菜单按钮又回来了");
+            Assert.True(main.Contains("bind_command('embynian-ui-picture-menu'"),
+                "画面菜单绑定（右键那条）丢了 —— 撤的是控制条入口，不是绑定");
+            Assert.True(controls.Contains("['embynian-ui-picture-menu']"),
+                "画面菜单按钮的快捷项简写丢了 —— 右键菜单还要用它");
 
             // 只有一版时那颗按钮不在屏上：门挂在 controls 串上，两头在 main.lua —— 接消息的那个处理器
             // 与 state 里那一格。缺任一头，按钮要么永远不出现、要么永远出现，屏上都看不出是坏的。
@@ -484,6 +559,130 @@ internal static class MpvUiTests
             // 返回按钮：按钮定义在、图标是 arrow_back_ios（装箱 Material Icons Round 里确有此字形）。
             Assert.True(topbar.Contains("self.back_button"), "左上角返回按钮丢了：TopBar.lua 没有 back_button");
             Assert.True(topbar.Contains("arrow_back_ios"), "返回按钮图标丢了");
+        });
+
+        // 右上角置顶按钮（2026-09-28 晚用户令「给独占模式右上角也加个置顶图标」）：与上面返回按钮同一类
+        // —— 直接改 uosc 元件、升级 uosc 时最容易漏打，对着源码钉住。**两头都要在**：
+        //   · TopBar.lua 那颗按钮本体（pin／push_pin／`cycle ontop`）与它的状态画法（is_pin 那一档）；
+        //   · main.lua 的状态来源（state.ontop ＋ mpv `ontop` 属性的观察器）—— 只打一头的话，按钮点得动
+        //     而「已置顶」永远不亮（状态没人送），或反过来状态有了而屏上没有那颗按钮。
+        // 图标 push_pin 与装箱的 MaterialIconsRound-Regular.otf 里的字形同名（集成模式那颗 PathIcon
+        // 的图钉与它同义，两模式同一颗图钉）。
+        TestHarness.Test("独占模式右上角置顶按钮：uosc 补丁两头都在", () =>
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var uosc = Path.Combine(directory!.FullName, "assets", "mpv-ui", "scripts", "uosc");
+            var main = File.ReadAllText(Path.Combine(uosc, "main.lua"));
+            var topbar = File.ReadAllText(Path.Combine(uosc, "elements", "TopBar.lua"));
+
+            // 按「顶端那一栏排在窗口三颗的左边」钉：buttons 表里 pin 与那三颗在同一个字面量里，
+            // 顺序读得出来（left 排布是镜像）。
+            Assert.True(topbar.Contains("{pin, min, max, close}"), "置顶按钮没排进顶栏那一栏（right 排布）");
+            Assert.True(topbar.Contains("{close, max, min, pin}"), "置顶按钮没排进顶栏那一栏（left 排布）");
+            Assert.True(topbar.Contains("icon = 'push_pin'"), "置顶按钮的图标丢了：应是 push_pin");
+            Assert.True(topbar.Contains("cycle ontop"), "置顶按钮不切 ontop：点了什么也不会发生");
+            Assert.True(topbar.Contains("is_pin"), "置顶按钮的「已置顶」那一档丢了：那颗永远不会亮");
+
+            Assert.True(main.Contains("ontop = mp.get_property_native('ontop')"),
+                "顶栏拿不到置顶的初值：进播放时那颗按钮的状态是空的");
+            Assert.True(main.Contains("observe_property('ontop'"),
+                "ontop 没人观察：用户点了置顶，那颗按钮不会跟着亮");
+        });
+
+        // 跳过片头/片尾契约（2026-09-26 用户令「独占模式下 跳过片头/片尾的按钮不显示」）：集成模式那颗
+        // 是 XAML 的 SkipButton，独占模式画面在 mpv 窗口里、那颗不在屏上，于是宿主把 offer 经
+        // embynian-skip-offer 推给 uosc 的 SkipButton 元件画，点它回推 embynian-skip-take（宿主 TakeSkip）。
+        //   · SkipTake（uosc→宿主）进 Parse、值保留即可通过；
+        //   · SkipOffer（宿主→uosc）**不进 Parse** —— 与 version-count/episode-count 同理，宿主不收自己发的。
+        TestHarness.Test("跳过按钮契约：SkipTake 进 Parse、SkipOffer 不进", () =>
+        {
+            var take = VideoWindowContract.Parse(["embynian-skip-take", ""]);
+            Assert.Equal(VideoWindowContract.SkipTake, take?.Key);
+
+            // 带个杂值也照样通过（值保留）：真正的「跳不跳」由 SkipCoordinator 判，契约只认键。
+            var takeWithValue = VideoWindowContract.Parse(["embynian-skip-take", "x"]);
+            Assert.Equal(VideoWindowContract.SkipTake, takeWithValue?.Key);
+
+            Assert.Null(VideoWindowContract.Parse([VideoWindowContract.SkipOffer, "跳过片头"]));
+        });
+
+        // 右键菜单统一（2026-09-29 用户令「统一独占模式和集成模式的右键菜单选项」）添的三条：
+        //   · SkipMode 值只认 ask/auto/off —— 三个词各是一档设置，Parse 放过一个杂词，点一行「询问」
+        //     就可能落成另一档（这不是显示问题，是替用户改了设置）；
+        //   · AutoPlayNext 值固定 toggle —— 拨到哪边由宿主按当前值现算，on/off 一类旧值一律不收；
+        //   · MediaInfo 值保留即可通过 —— 真正的正文由宿主现拼（MediaInfoText）。
+        TestHarness.Test("右键菜单统一三条消息的契约", () =>
+        {
+            Assert.Equal(VideoWindowContract.SkipMode, VideoWindowContract.Parse(["embynian-skip-mode", "ask"])?.Key);
+            Assert.Equal(VideoWindowContract.SkipMode, VideoWindowContract.Parse(["embynian-skip-mode", "auto"])?.Key);
+            Assert.Equal(VideoWindowContract.SkipMode, VideoWindowContract.Parse(["embynian-skip-mode", "off"])?.Key);
+            Assert.Null(VideoWindowContract.Parse(["embynian-skip-mode", "yes"]));
+            Assert.Null(VideoWindowContract.Parse(["embynian-skip-mode", ""]));
+
+            var toggle = VideoWindowContract.Parse(["embynian-autoplay-next", "toggle"]);
+            Assert.Equal(VideoWindowContract.AutoPlayNext, toggle?.Key);
+            Assert.Null(VideoWindowContract.Parse(["embynian-autoplay-next", "on"]));
+
+            var info = VideoWindowContract.Parse(["embynian-media-info", "open"]);
+            Assert.Equal(VideoWindowContract.MediaInfo, info?.Key);
+        });
+
+        // 跳过按钮在 uosc 侧的四头都在（升级 uosc 时最容易漏打的补丁，对着源码钉住）：宿主消息处理器、
+        // 元件实例化、元件本体里的点击回推、以及 start-file 收摊。都是运行期观感（三条离线探针固定走集成
+        // 管线、不覆盖 uosc），这里只保证补丁没被 uosc 升级冲掉。
+        TestHarness.Test("独占模式跳过按钮：uosc 补丁四头都在", () =>
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var uosc = Path.Combine(directory!.FullName, "assets", "mpv-ui", "scripts", "uosc");
+            var main = File.ReadAllText(Path.Combine(uosc, "main.lua"));
+            var element = File.ReadAllText(Path.Combine(uosc, "elements", "SkipButton.lua"));
+
+            Assert.True(main.Contains("register_script_message('embynian-skip-offer'"),
+                "「跳过」offer 这条宿主消息没人接：那颗按钮永远不会出现");
+            Assert.True(main.Contains("require('elements/SkipButton'):new()"),
+                "SkipButton 元件没实例化：消息接了也没元件画");
+            Assert.True(element.Contains("embynian_notify('embynian-skip-take'"),
+                "跳过按钮点击没回推 embynian-skip-take：点了没反应");
+            Assert.True(main.Contains("Elements.skip_button:set_offer('')"),
+                "换源没清 offer：换集途中会挂着上一集的「跳过片尾」");
+        });
+
+        // 左上角第二行的文件信息契约（用户令 2026-09-27「下方的片名改为视频编码+音轨+组名……两模式一致」）：
+        // 集成模式那一行是 XAML 的 SubtitleBox，独占模式由宿主经 embynian-subline 推给 uosc 顶栏画成副标题。
+        // 方向是宿主→uosc，所以它**不进 Parse**（宿主不收自己发的，与 version-count/episode-count/skip-offer 同理）。
+        TestHarness.Test("文件信息行契约：Subline 不进 Parse", () =>
+        {
+            Assert.Null(VideoWindowContract.Parse([VideoWindowContract.Subline, "HEVC · AAC · Studio GreenTea"]));
+        });
+
+        // 副标题在 uosc 侧的两头都在（升级 uosc 时最容易漏打的补丁，对着源码钉住）：main.lua 的消息处理器、
+        // TopBar.lua 的 set_subline 方法。都是运行期观感（三条离线探针固定走集成管线、不覆盖 uosc），这里只
+        // 保证补丁没被 uosc 升级冲掉。顶栏 top_bar_alt_title_place 必须是 'below'，副标题才画在主标题正下方。
+        TestHarness.Test("独占模式左上角副标题：uosc 补丁两头都在", () =>
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var uosc = Path.Combine(directory!.FullName, "assets", "mpv-ui", "scripts", "uosc");
+            var main = File.ReadAllText(Path.Combine(uosc, "main.lua"));
+            var topbar = File.ReadAllText(Path.Combine(uosc, "elements", "TopBar.lua"));
+
+            Assert.True(main.Contains("register_script_message('embynian-subline'"),
+                "「文件信息」这条宿主消息没人接：独占模式左上角第二行永远空着");
+            Assert.True(topbar.Contains("function TopBar:set_subline"),
+                "TopBar 没有 set_subline：消息接了也没处写副标题");
+            Assert.True(main.Contains("top_bar_alt_title_place = 'below'"),
+                "副标题没设成画在主标题正下方（below）");
         });
     }
 }

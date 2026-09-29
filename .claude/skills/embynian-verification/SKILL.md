@@ -33,6 +33,8 @@ Keep both reports and run under comparable account, server-data and window condi
 
 Historical diagnoses in PROGRESS.md describe their own runs. They do not waive a current red gate or justify a baseline update. See the development document's “逐行比报告：每次都会变的行” for raw-report interpretation.
 
+**Answering “is this red mine?”** — `tools/selfcheck-diff.ps1 -Exe <path to an archived pre-change publish>` runs the same baseline comparison against the build from before the current edits, so the same two runs differ only by the change under test. When a red reproduces there with the same reading, it is an environment or long-standing red: say so and quote both logs. The publishes moved to `EmbyNian-stale\publish-<timestamp>\win-x64` by the pre-publish step are the natural candidates; their timestamps are the only identifier, so name the exact one used. This is cheaper and far more conclusive than guessing which assertion could have moved.
+
 ### Retired cursor checks
 
 The three ordinary self-checks retired on 2026-09-22 depended on an undisturbed physical mouse: `藏鼠标真的到了系统`, `鼠标真等两秒就藏`, and `藏匿期净位移走不够一百像素不醒`. Do not register or run them as required gates again. This does not retire `--probe-cursor`, `--hide-cursor`, or valid cursor assertions in other checks.
@@ -64,6 +66,7 @@ Correct properties do not prove correct pixels. A clipped poster or blank backgr
 - Color changes cover every live theme; spacing/type changes cover the affected page and relevant window sizes. Read the live list from `UiThemes.cs`, not an old screenshot list.
 - “有没有箭头” needs cursor evidence: `tools/cursor-watch.ps1` records `GetCursorInfo` and draws the visible cursor into a capture. It does not change foreground, z-order or pointer position. `shot.ps1` raises a window, which can change which input queue owns the cursor, so the tools are not interchangeable.
 - Read-only UI Automation can inspect without moving the pointer. In templates, locate the owning item then its local handle; the source scanner skips templates and cannot prove runtime addressability. Interacting verbs remain subject to playback authorization.
+- **Measuring a row of controls: do not derive the cells from “flush against the right edge”.** A measurement script that numbers cells that way is off by the whole shift the moment that row is moved sideways, and it silently folds a neighbour's background into the cell being measured. Locate cells from the layout actually reported (uosc's `size` × `buttons`) or, better, use connected components over the region — that also separates two stacked layers (an application glyph under a system caption glyph) that a fixed grid merges into one bounding box.
 
 ## Tool changes
 

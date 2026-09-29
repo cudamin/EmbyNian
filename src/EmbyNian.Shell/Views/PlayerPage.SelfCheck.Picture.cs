@@ -33,6 +33,7 @@ public sealed partial class PlayerPage
         if (_window.Fullscreen) return (false, "窗口已在全屏，无从对比");
 
         var was = Visibility;
+        var wasMaximized = _window.IsMaximized;
         Visibility = Visibility.Visible;
         UpdateLayout();
 
@@ -60,7 +61,7 @@ public sealed partial class PlayerPage
         }
 
         Settle();
-        Sample("窗口化时浮层收起", wanted: true);
+        Sample("窗口化时浮层收起", wanted: !wasMaximized);
 
         try
         {
@@ -79,7 +80,7 @@ public sealed partial class PlayerPage
         }
 
         Settle();
-        Sample("退出全屏后", wanted: true);
+        Sample("退出全屏后", wanted: !wasMaximized);
 
         // 退场的后半段：细线必须已经收了。2026-09-20 用户截图里那条横贯底边的白线就是它在退场那 220ms 里
         // 一直亮着 —— 页面在淡出，它不动，于是页面淡到零的那一拍屏上还剩下它。_inputSuspended 由退场第 0 拍
@@ -91,7 +92,7 @@ public sealed partial class PlayerPage
         _inputSuspended = suspended;
 
         Settle();
-        Sample("退场读数还原后", wanted: true);
+        Sample("退场读数还原后", wanted: !wasMaximized);
 
         // 拖动标题移动窗口那一趟（2026-09-22，用户令「拖动过程中不要显示进度条和音量条」）：两根条都不画，
         // 细线也就没有「浮层收起」那一段可站 —— 它补的正是「进度条收起时仍留一条读数」，而拖动期间连读数
@@ -102,7 +103,7 @@ public sealed partial class PlayerPage
 
         Hold(false, ChromeHold.Drag);
         Settle();
-        Sample("拖动结束后", wanted: true);
+        Sample("拖动结束后", wanted: !wasMaximized);
 
         // Left the way a player that is not running should be, for the same reason ProbeReveal is — the page
         // put back first, so the last Render leaves the line down rather than across the library grid.
@@ -124,7 +125,9 @@ public sealed partial class PlayerPage
 
         var boxed = MpvStats.Exists(AppContext.BaseDirectory);
 
-        var wired = ReferenceEquals(StatsButton.Command, ViewModel.CycleStatsCommand)
+        // 2026-09-27 晚右上角那颗「统计」摘掉后（用户令「移除集成模式右上角的统计按钮」），集成模式里
+        // 三态按钮只剩控制条左下那颗（`TransportStatsButton`），接线判据随之改问它。
+        var wired = ReferenceEquals(TransportStatsButton.Command, ViewModel.CycleStatsCommand)
             && ViewModel.CycleStatsCommand.CanExecute(null);
 
         var keys = string.Join("/", MpvStats.Keys().Select(pair => pair.Key));

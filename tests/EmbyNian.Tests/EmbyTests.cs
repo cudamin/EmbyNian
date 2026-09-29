@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
+using EmbyNian.Playback;
 using static EmbyNian.Tests.TestHarness;
 
 namespace EmbyNian.Tests;
@@ -980,13 +981,73 @@ internal static class EmbyTests
 
             Assert.Equal("S01E02", episode.EpisodeCode);
             Assert.Equal("葬送的芙莉莲 S01E02 旅途的终点", episode.ToPlaybackTitle());
+            // 播放页左上角主标题**带**剧名前缀（用户令 2026-09-28 晚「标题前面加上剧名」；09-27 那版「不带剧名
+            // 前缀、只留 SxxExx 集名」被这条令翻案，两处现在是同一条字符串）。
+            Assert.Equal("葬送的芙莉莲 S01E02 旅途的终点", episode.ToPlaybackHeadline());
         });
 
         Test("条目：电影标题就是片名", () =>
         {
             var movie = new EmbyItem { Name = "你的名字", Type = EmbyItemType.Movie, ProductionYear = 2016 };
             Assert.Equal("你的名字", movie.ToPlaybackTitle());
+            Assert.Equal("你的名字", movie.ToPlaybackHeadline());
             Assert.Equal("2016", movie.CardSubtitle);
+        });
+
+        Test("文件信息行：分辨率 · 视频编码 · 音频格式 · 组名", () =>
+        {
+            var source = new MediaSource
+            {
+                Path = @"\\NAS\media\再见菈菈\Season 1\再见菈菈 S01E12 1080p.AAC-Studio GreenTea.mp4",
+                DefaultAudioStreamIndex = 2,
+                MediaStreams =
+                {
+                    new MediaStream { Index = 1, Type = "Video", Codec = "hevc", Width = 1920, Height = 1080 },
+                    new MediaStream { Index = 2, Type = "Audio", Codec = "aac" }
+                }
+            };
+
+            // 主视频轨的 宽 x 高、视频编码大写、主音轨（默认轨）编码大写、文件名尾部的组名，
+            // 用 " · " 拼起来（两模式共用这一句）。
+            Assert.Equal("1920 x 1080  ·  HEVC  ·  AAC  ·  Studio GreenTea", PlaybackTitles.Subline(source));
+        });
+
+        Test("文件信息行：缺项跳过、空源给空串", () =>
+        {
+            // 没有组名（文件名里没有 -）：只剩分辨率 · 视频编码 · 音频格式。
+            var noGroup = new MediaSource
+            {
+                Path = @"D:\media\Show.S01E01.1080p.mkv",
+                MediaStreams =
+                {
+                    new MediaStream { Index = 1, Type = "Video", Codec = "h264", Width = 1920, Height = 1080 },
+                    new MediaStream { Index = 2, Type = "Audio", Codec = "ac3" }
+                }
+            };
+            Assert.Equal("1920 x 1080  ·  H264  ·  AC3", PlaybackTitles.Subline(noGroup));
+
+            // 没有服务器点名的默认音轨号：退到第一条音轨。
+            var firstAudio = new MediaSource
+            {
+                Path = @"D:\media\Movie-GRP.mkv",
+                MediaStreams =
+                {
+                    new MediaStream { Index = 1, Type = "Video", Codec = "av1", Width = 3840, Height = 2160 },
+                    new MediaStream { Index = 3, Type = "Audio", Codec = "flac" }
+                }
+            };
+            Assert.Equal("3840 x 2160  ·  AV1  ·  FLAC  ·  GRP", PlaybackTitles.Subline(firstAudio));
+
+            // 只有视频、没有音轨也没有组名；视频轨连宽高都没给 —— 分辨率整项跳过。
+            var videoOnly = new MediaSource
+            {
+                Path = @"D:\media\clip.mp4",
+                MediaStreams = { new MediaStream { Index = 1, Type = "Video", Codec = "vp9" } }
+            };
+            Assert.Equal("VP9", PlaybackTitles.Subline(videoOnly));
+
+            // 空源＝空串（集成模式那一行 SubtitleVisibility 会收起）。
+            Assert.Equal("", PlaybackTitles.Subline(null));
         });
 
         Test("条目：续播判定要排除刚开头和快结束", () =>

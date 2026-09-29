@@ -306,7 +306,8 @@ public sealed partial class LibraryPage : Page, IShellContent
 
         // MoviePilot 那半的连接服务，交给面板（它自己接确认对话框）。只有搜索页且接了 MoviePilot 时那个分段
         // 才出现，但服务无条件拿——构造它不花什么，也省得这里再判一次设置。
-        MoviePilotPanel.Attach(services.GetRequiredService<MoviePilotService>());
+        MoviePilotPanel.Attach(services.GetRequiredService<MoviePilotService>(),
+            services.GetRequiredService<EmbyNian.Shell.Platform.ISystemLauncher>());
 
         // 每次进来都从「我的媒体库」开始：Emby 那半可见、MoviePilot 那半藏着。SelectedIndex 已是 0 时不触发
         // SelectionChanged，所以显式对一次账。

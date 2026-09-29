@@ -161,6 +161,21 @@ public sealed record StartupOptions
     public bool ScrollHalf { get; init; }
 
     /// <summary>
+    /// Tooling only: 把详情页那颗字幕下拉弹开留着，好给它拍一张（<c>--show-picker</c>）。配 <c>--show-detail</c>
+    /// 或 <c>--show-episode</c> 用；单独用时自己走到第一个图书馆的第一张详情页。
+    /// <para>
+    /// 和 <see cref="ShowMenu"/> 同一条理由：浮层只在点开的那一瞬之后存在，等是等不出来的，而这台机器上注不进
+    /// 鼠标事件。弹层开在哪一棵树里、透不透得出底下那一页，是 2026-09-27「音频和字幕的选择栏改成亚克力背景」
+    /// 那一轮的事 —— 那张照片是判据本身，不是配图：浮层底下压着的就是头图那张剧照，量得出来它透没透。
+    /// </para>
+    /// <para>
+    /// 单独用，别和 <see cref="ShowSettings"/>、<see cref="ShowLibrary"/>、<see cref="ShowMenu"/> 凑一起：
+    /// 那三个要么抢激活要么换页，一次导航就把这张浮层散掉了。
+    /// </para>
+    /// </summary>
+    public bool ShowPicker { get; init; }
+
+    /// <summary>
     /// Tooling only: open the first library and play the first thing in it. The player is the one part of
     /// the shell that cannot be reached by waiting, and a screenshot of a stopped player says nothing.
     /// </summary>
@@ -327,6 +342,7 @@ internal static class Program
             ShowDetail = Has(args, "--show-detail"),
             ShowEpisode = Has(args, "--show-episode"),
             ShowCover = Has(args, "--show-cover"),
+            ShowPicker = Has(args, "--show-picker"),
             ScrollEnd = Has(args, "--scroll-end"),
             ScrollHalf = Has(args, "--scroll-half"),
             PlayFirst = Has(args, "--play"),

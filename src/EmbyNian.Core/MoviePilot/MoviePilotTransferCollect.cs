@@ -12,8 +12,7 @@ namespace EmbyNian.MoviePilot;
 /// 认的是剧，季集另算。
 /// </para>
 /// <para>
-/// 文件数有上限（<see cref="MaxFiles"/>）：一部几百集的剧整批发过去，预览就成了一堵墙。到顶就截断，多出来的
-/// 让用户整季去点 —— 数量在弹窗里看得见，不是静默丢。
+/// 文件数有上限（<see cref="MaxFiles"/>）：超过上限明确停止，请用户按季或单集操作，不静默截断。
 /// </para>
 /// </summary>
 public static class MoviePilotTransferCollect
@@ -30,21 +29,22 @@ public static class MoviePilotTransferCollect
         var detail = await client.GetItemAsync(item.Id, cancellationToken, Fields).ConfigureAwait(false);
 
         var series = detail;
+        var television = detail.Type is not EmbyItemType.Movie;
+        string? mediaId = detail.Type is EmbyItemType.Movie or EmbyItemType.Series ? TmdbId(detail) : null;
         if (detail.Type is EmbyItemType.Episode or EmbyItemType.Season &&
             detail.SeriesId is { Length: > 0 } seriesId)
         {
             try
             {
                 series = await client.GetItemAsync(seriesId, cancellationToken, "ProviderIds,Name").ConfigureAwait(false);
+                mediaId = TmdbId(series);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception)
             {
-                // 剧条目问不到时退回手上的：身份还可能从单集自己的 ProviderIds 上来，比直接放弃强。
+                // 集和季的 TMDB 编号不是剧编号；查询失败时留空，不能拿它们冒充整部剧。
             }
         }
-
-        var television = detail.Type is not EmbyItemType.Movie;
-        var mediaId = TmdbId(series) ?? TmdbId(detail) ?? "";
         var season = detail.Type switch
         {
             EmbyItemType.Season => detail.IndexNumber,
@@ -56,7 +56,7 @@ public static class MoviePilotTransferCollect
         return new MoviePilotTransferContext(
             television ? series.Name is { Length: > 0 } ? series.Name : detail.SeriesName ?? detail.Name : detail.Name,
             television ? MoviePilotTransferRequest.TypeSeries : MoviePilotTransferRequest.TypeMovie,
-            mediaId,
+            mediaId ?? "",
             season,
             detail.Type == EmbyItemType.Episode ? detail.IndexNumber?.ToString(CultureInfo.InvariantCulture) ?? "" : "",
             files);
@@ -81,8 +81,10 @@ public static class MoviePilotTransferCollect
         var files = leaves
             .SelectMany(PathsOf)
             .DistinctBy(file => file.Path, StringComparer.Ordinal)
-            .Take(MaxFiles)
+            .Take(MaxFiles + 1)
             .ToList();
+        if (files.Count > MaxFiles)
+            throw new MoviePilotException($"此条目超过 {MaxFiles} 个文件，请按季或单集整理；不会只提交前 {MaxFiles} 个文件");
         return files;
     }
 
@@ -117,10 +119,6 @@ public static class MoviePilotTransferCollect
         var episodes = new List<EmbyItem>();
         foreach (var season in seasons)
             episodes.AddRange(await Children(client, season.Id, cancellationToken).ConfigureAwait(false));
-
-        // 一季都没有（可能是查不动）：整部剧条目自己的 Path 还在，至少让 MoviePilot 看一眼那个目录。
-        if (episodes.Count == 0 && series.Path is { Length: > 0 })
-            return [series];
 
         return episodes;
     }

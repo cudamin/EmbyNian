@@ -40,19 +40,45 @@ public sealed partial class MoviePilotService(
     /// <summary>
     /// 搜一个关键字。空词直接回空，不发请求。<c>media/search</c> 回的是裸数组，交给
     /// <see cref="MoviePilotMediaParser"/> 拆。取前 30 条（一屏够看），这一版不翻页。
+    /// <para>
+    /// <paramref name="sources"/> 不为空时按官方前端的办法把来源一个一个作为重复的 <c>media_source</c>
+    /// 查询参数带上（v3.0.8 的 OpenAPI 是数组、逗号串只是旧客户端兼容）；一个都不选就是全来源，
+    /// 什么都不加 —— 由服务器按它自己的来源顺序排序分页。
+    /// </para>
     /// </summary>
-    public async Task<IReadOnlyList<MoviePilotMedia>> SearchAsync(string term, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<MoviePilotMedia>> SearchAsync(
+        string term, CancellationToken cancellationToken, IReadOnlyList<string>? sources = null)
     {
         var keyword = term.Trim();
         if (keyword.Length == 0) return [];
 
+        var selected = (sources ?? [])
+            .Select(source => source.Trim())
+            .Where(source => source.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var path = $"media/search?title={Uri.EscapeDataString(keyword)}&type=media&page=1&count=30";
+        foreach (var source in selected)
+            path += $"&media_source={Uri.EscapeDataString(source)}";
+
         var data = await CallAsync((apiBase, token) =>
             client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken).ConfigureAwait(false);
 
         var results = MoviePilotMediaParser.Parse(data);
-        Log.Info(Category, $"MoviePilot 搜「{keyword}」：{results.Count} 条");
+        Log.Info(Category, $"MoviePilot 搜「{keyword}」" +
+            (selected.Count > 0 ? $"（{string.Join("、", selected)}）" : "") + $"：{results.Count} 条");
         return results;
+    }
+
+    /// <summary>
+    /// 影视/音乐的来源目录（<c>media/source</c>）：内置来源加启用的插件来源，每条带显示名和 media_types。
+    /// 搜索页的来源下拉从这里来；条目解析出问题或名字没给的，用标识兜底，不留一个空名字在屏上。
+    /// </summary>
+    public async Task<IReadOnlyList<MoviePilotMediaSource>> MediaSourcesAsync(CancellationToken cancellationToken)
+    {
+        var data = await CallAsync((apiBase, token) =>
+            client.GetAsync(apiBase, token, "media/source", cancellationToken), cancellationToken).ConfigureAwait(false);
+        return ParseMediaSources(data);
     }
 
     /// <summary>
@@ -83,6 +109,7 @@ public sealed partial class MoviePilotService(
         if (!media.CanSubscribe) return [];
 
         var path = $"search/media/{Uri.EscapeDataString(media.MediaId!)}?media_source={Uri.EscapeDataString(media.MediaSource!)}";
+        if (!string.IsNullOrWhiteSpace(media.Type)) path += $"&mtype={Uri.EscapeDataString(media.Type)}";
         var data = await CallAsync((apiBase, token) =>
             client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken).ConfigureAwait(false);
 
@@ -167,9 +194,10 @@ public sealed partial class MoviePilotService(
     /// </summary>
     private async Task<T> CallAsync<T>(
         Func<Uri, string, Task<T>> call,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SessionIdentity? expectedIdentity = null)
     {
-        var identity = CaptureIdentity();
+        var identity = expectedIdentity ?? CaptureIdentity();
         var session = await EnsureSessionAsync(identity, cancellationToken).ConfigureAwait(false);
         CheckIdentity(identity, cancellationToken);
         try

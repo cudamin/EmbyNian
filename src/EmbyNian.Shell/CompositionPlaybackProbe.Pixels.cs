@@ -2,11 +2,26 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Windowing;
+using Windows.Graphics.Imaging;
+using Windows.Storage.Streams;
 
 namespace EmbyNian.Shell;
 
 internal static partial class CompositionPlaybackProbe
 {
+    internal static async Task SaveScreenAsync(HostWindow window, string file)
+    {
+        var screen = CapturePixels(window);
+        using var stream = new InMemoryRandomAccessStream();
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore,
+            (uint)screen.Width, (uint)screen.Height, 96, 96, screen.Bytes);
+        await encoder.FlushAsync();
+        stream.Seek(0);
+        using var output = File.Create(file);
+        await stream.AsStreamForRead().CopyToAsync(output);
+    }
+
     // GetPixel 每问一点都会等待屏幕，连续读点既跨帧又堵住 UI 提交。
     // 一次 BitBlt 取得同一帧，后续颜色判断只读内存。
     private static ScreenPixels CapturePixels(HostWindow window)

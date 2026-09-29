@@ -1105,6 +1105,7 @@ internal sealed class CompositionVideoTarget : IVideoSurface, IDisposable
         {
             if (_disposed) return;
             _disposed = true;
+            _captureFrame = null;
             if (_pending != IntPtr.Zero) Marshal.Release(_pending);
             _pending = IntPtr.Zero;
             _hasPending = false;

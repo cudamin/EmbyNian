@@ -119,16 +119,84 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
    - `top_bar_controls='right'`：mpv 以 border=no 无边框起播（宿主固定），系统标题栏不存在，
      顶栏画标题与最小化/最大化/关闭（关闭=quit，宿主当停止处理）。**左上角另加一颗返回按钮**
      （`EMBYNIAN[topbar-back]`，`elements/TopBar.lua`）：点它同样 `quit`＝回到外壳详情页，与集成模式
-     左上角的返回同位同义（用户令 2026-09-26）。
+     左上角的返回同位同义（用户令 2026-09-26）。**可见底与标题那块玻璃同形同色**
+     （`EMBYNIAN[topbar-back-glass]`，用户令 2026-09-28 晚「返回按钮的背景要和标题的背景一致」）：
+     两块都高 `size-2*margin`（窗口档 40 的一行里画 30）、同从 `self.ay+margin` 起；返回键那一块
+     **四周各让 margin**（左缘＝窗口左缘＋margin，用户令 2026-09-28 更晚「左边的空隙要和上面的一样大」
+     —— 于是整簇按 margin 内缩，左缝与上缝同数），它正下方那行文件信息的左缘也落在同一条线上；
+     返回键那块的不透明度从写死的 0.55 提到与标题同一档 `config.opacity.title`（静止时不再发灰）。
+     返回键与标题之间那条缝从 `margin` 收成 `title_spacing`（1），与返回键正下方那条缝一致
+     （用户令 2026-09-28 晚「返回键跟标题的间隙右边要跟下面一致」）。各行玻璃回到 uosc 自家
+     「上下各让 margin」那一条（同批用户令「把标题的大小改回跟 mpv_config 项目一样大小」）——
+     2026-09-28 那版「整格 top_bar_size 见方贴角、标题条同高」随之撤回，**两模式的返回键大小自此不再相同**
+     （集成模式那颗仍是 40×40）。**标题下方的「当前章节＋剩余时间」一行整段撤下**
+     （`EMBYNIAN[topbar-no-chapter]`，用户令 2026-09-28；控制条上的章节菜单照旧）；第二行那句文件信息
+     （分辨率 · 视频编码 · 音频格式 · 组名）走**斜体**（`EMBYNIAN[topbar-subline-italic]`，用户令
+     2026-09-28 晚「标题下方的视频元数据改为斜体」；osd-font 是 Microsoft YaHei、本身没有斜体字面，
+     实测 libass 会合成倾斜，见 `work/probe-topbar-look.py` 的 A/B）＋**浅灰字色** `c8c8c8`
+     （`EMBYNIAN[topbar-subline-dim]`，同批用户令「元数据的字体加点灰色」；`ass.txt` 把 `opts.color`
+     原样接在 `\1c&H` 后面，所以那里写的是 ASS 的 BBGGRR 顺序 —— 中性灰两个顺序同串，不踩坑）
+     ＋**前缀「└ 」树干**（`EMBYNIAN[topbar-subline-branch]`，用户令 2026-09-28 更晚「把这个添加到元数据
+     的前面」；参考项目 uosc 原版给**章节那一行**加的就是这个前缀，这里照它画在副标题上，量字宽与画字
+     都用带前缀的那一串，框宽跟着一起宽）。
+   - **右上角另一颗：置顶**（`EMBYNIAN[topbar-pin]`，用户令 2026-09-28 晚「给独占模式右上角也加个置顶
+     图标」）：排在窗口三颗的**左边**，与集成模式那一排同序（置顶、最小化、最大化、关闭）；点它
+     `cycle ontop` ＝把这扇 mpv 窗口置顶 —— **不经过宿主**，宿主那头的 `TopMost` 管的是它自己的主窗口
+     （集成模式走 `SetPinned`）。图标 `push_pin`（装箱的 MaterialIconsRound 里确有此字形）；**已置顶时
+     那颗常亮**（借用悬停那一档的底与反色图标）。**这一套 2026-09-28 深夜第五批反向统一了** ——
+     集成那头照这一颗办（用户令「把集成模式右上角的置顶图标换成跟独占模式一样的」）：它现在也是**一颗**
+     实心 `push_pin`（形状与尺寸都取自这一支字体的同一颗字形，见 `PlayerPage.xaml` 的 `PinGlyph` 与
+     `PlayerPage.Chrome.cs` 的 `WindowPinGlyph`）、已置顶时同样整颗常亮；从前那句「uosc 画不出集成那两颗
+     躺着的空心钉／立着的实心钉」随这条令作废，两边不再有那两颗。状态由 main.lua 观察 mpv 的 `ontop` 属性
+     送进顶栏（同一个 `create_state_setter`，谁改的都从这里回来）。
+   - **菜单样式对齐参考 mpv 配置的右键菜单**（`EMBYNIAN[menu-style]`，用户令 2026-09-29「参考
+     C:\mpv_config-2026.08.12 修改独占模式右键菜单界面」；那份配置右键绑的是 mpv 0.41+ 内建的
+     context_menu.lua，样式在 portable_config/script-opts/context_menu.conf，画菜单的是同一个 uosc
+     Menu 元件）：字号 20、行高＝字号×(1+gap)、**缩放随窗口高**（osd-height/720，同参考配置的
+     scale_with_window=auto；不再吃 uosc 的 scale/scale_fullscreen）、悬停行**白底深字**
+     （#FFFFFF/#222222；active 行＝当前值照旧 0.8 白高亮，两档白靠深浅区分）、底板**不透明** #222222
+     ＋圆角 5＋0.5 白细描边、分隔线 #555555（行与行之间上游那道 0.04 细线照参考菜单撤掉）。
+     2026-09-26「右键菜单缩小一点」的行高 30 由此让位 —— 那一轮压的是上游 50/24 的过大，这一轮整把
+     尺子换成参考菜单的（720p 高的窗口＝参考原值，1080p＝×1.5）。逐项映射与「不搬的两件」（子菜单
+     悬停开合延迟、勾选框列）写在 main.lua 选项区同名槽；几何与上色在 `elements/Menu.lua` 同名槽。
    - `osd-width`/`osd-height` number 观察兜底：d3d11 窗口管线下 osd-dimensions 的 native 观察
      会漏掉起播初段「画布=视频尺寸→画布=窗口尺寸」的变化，导致控件可见而点击热区全错位。
 2. **lib/utils.lua**：目录/播放列表导航（`get_adjacent_files`、`decide_navigation_in_list`、
    `navigate_*`）与删文件（`delete_file`、`delete_file_navigate`）整块删除；`render()` 里
    `cursor:clear_zones()` 之后多登记一个「轻点空白画面切换暂停」的兜底命中区（动作在 main.lua）。
-3. **lib/menus.lua**：`open_subtitle_downloader`（OpenSubtitles 下载，curl 子进程）整块删除，
+3. **lib/cursor.lua**：`EMBYNIAN[cursor-hold]` —— 指针正压在**控件本体**的命中区上（进度条 / 时间轴、
+   控制条与顶栏那一排按钮、音量条及其静音键、跳过按钮）时，把 mpv 的 `cursor-autohide` 钉成 `no`，
+   离开时把装配时的原值还回去（用户令 2026-09-29「只有鼠标停在控件，进度条和上方的按钮还有音量条上的
+   时候才不隐藏鼠标，触发渐变的时候不隐藏控件，但是要隐藏鼠标」）。三点要说清：
+   - **控件那一半不用改**：uosc 的元件显隐只看 `proximity`，而 `proximity` 只在 `cursor:leave()` 时归零，
+     `leave` 挂的是 hover=false / 全屏切换 / 菜单禁用器 —— **mpv 自己收光标不会把 hover 翻假**，所以
+     「指针停在唤出带里，控件就被收走」在视频窗里本来就不成立（真窗口实测：压在顶栏带上四秒，
+     `showing=false` 而 `top_bar` 的可见度一直是 1.00）。
+   - **光标那一半是这里改的**：独占模式的宿主不碰 `cursor-autohide`（`PlayerViewModel.ShowMpvCursor`
+     那道 `PictureInHostWindow` 门），于是收光标的是 mpv 自己的默认 1000ms —— 压在音量条上照收
+     （同一份取证：右缘那一段 1.16 秒后 `showing` 翻假）。
+   - **判据问的是命中区，不是 `proximity`**（2026-09-29 修正）：`cursor:find_zone('primary_down' |
+     'primary_click' | 'wheel_up' | 'wheel_down')` 任一命中即算「压在本体上」。问命中区而不是拿元件矩形
+     算，是因为**按钮级几何只有元件自己知道** —— 一排控制按钮、顶栏四颗窗口键与返回键、音量条的静音键、
+     时间轴的章节圆点，各自注册的都是自己的小矩形，而元件本体（如 `controls` 那条整幅宽的控制条）比它们
+     大得多，这一问因此比按元件矩形算更窄也更准。**用 `proximity > 0` 是错的**：那是唤出带，指针离元件
+     120px 以内就算数，正把「带子里」也钉住了光标 —— 用户要的恰恰是带子里要藏（`update_proximity` 只有
+     进入矩形内、`proximity_raw == 0` 才是 `proximity == 1`）。
+   - `no` 是 mpv 认的取值 —— playloop 每拍重算可见性，`cursor_autohide_delay == -1` 那一支直接置真并推
+     `VOCTRL_SET_CURSOR_VISIBILITY`，**已经藏着的光标也会当场放回来**；还原之后「静止一秒就藏」在画面
+     中间照旧成立。取证：`work/probe-hold-visible.py`（真窗口 + 真 `libmpv`，四个景各停四秒，逐拍读
+     `GetCursorInfo` 与 uosc 的 `cursor-autohide`），补丁前后两份读数在
+     `work/probe-hold-visible-{before,hold}.txt`。
+4. **lib/menus.lua**：`open_subtitle_downloader`（OpenSubtitles 下载，curl 子进程）整块删除，
    外部 API key 不随库发布。
-4. **script-opts**：不装箱。播放以 `config=no` 起播，mpv 根本不会读 script-opts；
+5. **script-opts**：不装箱。播放以 `config=no` 起播，mpv 根本不会读 script-opts；
    全部嵌入值直接写在 main.lua 的 `defaults` 表里，注释即文档。
+
+## 时间轴一致性
+
+集成模式的 `TimelineChapterMap` / `TimelineCache` 与这里的 `Timeline.lua` 对齐：已播放填充、章节菱形命中、片段颜色、未缓存区间纹理、缓存秒数、A/B 循环端点与倍速剩余时间。片段着色不依赖自动跳过设置；广告配对也保留。`EMBYNIAN[timeline-parity]` 将标题模式统一为小写，补齐 Intro、片尾与 credits 的别名，两种模式同步生效。
+
+集成模式额外使用视频取样支撑的 WinUI 亚克力背景；独占模式仍使用 uosc 的半透明背景。未装箱的 thumbfast、YouTube 热图没有 Emby 数据源，不作为时间轴已有功能。
 
 ## 宿主通道（embynian-* script-message）
 
@@ -145,16 +213,23 @@ uosc → 宿主（`MPV_EVENT_CLIENT_MESSAGE`，契约与解析在 `src/EmbyNian.
 | `embynian-version-index` | 1 起算序号 | 版本菜单点中的一项 → `PlayerViewModel.SwitchVersion` |
 | `embynian-picture-menu` | （保留） | 要画面菜单；右键、键盘菜单键与控制条那颗按钮走的是同一条绑定 |
 | `embynian-menu-index` | 1 起算序号 | 画面菜单点中的一行 → `RunMenuNodeAsync`（与集成模式右键点同一行是同一句执行） |
+| `embynian-skip-take` | （保留） | 点右下角「跳过片头/片尾」按钮 → `PlayerViewModel.TakeSkip`（与集成模式那颗 XAML 按钮、回车同一句 `AcceptSkip`） |
 | `embynian-seek` | 0–1 比例 | 预留扩展；当前 uosc 时间轴直接对 mpv seek，不经宿主 |
 
-不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc **三条**：`open-menu`（菜单的
+不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc **五条**：`open-menu`（菜单的
 JSON，shape 与 uosc MenuData 对齐；画面/选集/版本三张都带 `embynian_anchor: true`，uosc 据此把菜单画在
 光标处而不是屏幕居中、也不压暗整屏幕的幕布 —— 弹出方式与集成模式的右键/按钮浮层一致，见
 `EMBYNIAN[menu-anchor]`，`elements/Menu.lua`）、`embynian-version-count`（这个条目挂了几版文件，控制条上那颗
-「版本」按钮按它露面 —— 只有一版时整颗不在屏上；值是一个十进制整数，uosc 那边只看它是否大于 1）
-与 `embynian-episode-count`（正在放的是不是单集，0＝电影 / 1＝单集；控制条上那颗「选集」按钮按它露面 ——
+「版本」按钮按它露面 —— 只有一版时整颗不在屏上；值是一个十进制整数，uosc 那边只看它是否大于 1）、
+`embynian-episode-count`（正在放的是不是单集，0＝电影 / 1＝单集；控制条上那颗「选集」按钮按它露面 ——
 播电影时整颗不在屏上，2026-09-26 用户令「播放电影的时候不要显示这个按钮」；按钮的 tooltip 同批写死为
-「选集」，原来是 `t('Episodes')`、译文表没有就落在英文上）。
+「选集」，原来是 `t('Episodes')`、译文表没有就落在英文上）、`embynian-skip-offer`（跳过片头/片尾的 offer
+文案，空串＝收摊；右下角那颗「跳过」按钮按它露面 —— 集成模式那颗是 XAML 的、独占模式画面在 mpv 窗口里
+故由宿主推文案给 uosc 画，见 `EMBYNIAN[skip-button]`，`elements/SkipButton.lua`；offer 站多久由宿主
+`SkipCoordinator` 判，点它回推 `embynian-skip-take`）与 `embynian-subline`（左上角第二行那句文件信息
+「分辨率 · 视频编码 · 音频格式 · 组名」，空串＝收起；uosc 把它画在**返回按钮的正下方**，左缘＝窗口左缘，
+见 `EMBYNIAN[topbar-subline]`，`elements/TopBar.lua` 的 `set_subline`；集成模式那一行是 XAML 的
+`SubtitleBox`，两句同源，见 `PlaybackTitles.Subline`）。
 uosc 靠 mpv 属性观察自取其余全部状态（音量、轨道、章节的变化会自动反映到控制窗的选择器——它们读的
 是同一份 mpv 状态）。
 

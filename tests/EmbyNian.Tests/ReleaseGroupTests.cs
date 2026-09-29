@@ -4,11 +4,12 @@ using static EmbyNian.Tests.TestHarness;
 namespace EmbyNian.Tests;
 
 /// <summary>
-/// 制作组（release group）的认法与两处拼装（<see cref="ReleaseGroup"/>）。
+/// 制作组（release group）的认法（<see cref="ReleaseGroup.FromFileName"/>）。
 /// <para>
-/// 用户令（2026-09-24）：进度条中间的画质读数与独占模式左上角的标题，尾部都要缀上「文件名最后一个
-/// - 后面的那一段」。这条规则错得起但错了很烦：组名认错一行、分隔符孤零零挂在头上、候选回退后标题
-/// 报着别人的组 —— 都在屏上看得见，所以钉在这里。
+/// 用户令（2026-09-24）：进度条中间的画质读数尾部要缀上「文件名最后一个 - 后面的那一段」；2026-09-27
+/// 又把它加进播放页左上角第二行的文件信息（视频编码 · 音轨 · 组名）。两处都只用 FromFileName 取那一段。
+/// 这条规则错得起但错了很烦：组名认错一行、分隔符孤零零挂在头上 —— 都在屏上看得见，所以钉在这里。
+/// （DecorateTitle 随左上角主标题不再缀组名而退役，2026-09-27。）
 /// </para>
 /// </summary>
 internal static class ReleaseGroupTests
@@ -19,9 +20,6 @@ internal static class ReleaseGroupTests
         Test("制作组：用户给的那份文件名", () =>
         {
             Assert.Equal("Studio GreenTea", ReleaseGroup.FromFileName(
-                @"\\NAS\media\再见菈菈\Season 1\再见菈菈 S01E12 1080p.AAC-Studio GreenTea.mp4"));
-            Assert.Equal("再见菈菈 S01E12 再见菈菈 - Studio GreenTea", ReleaseGroup.DecorateTitle(
-                "再见菈菈 S01E12 再见菈菈",
                 @"\\NAS\media\再见菈菈\Season 1\再见菈菈 S01E12 1080p.AAC-Studio GreenTea.mp4"));
         });
 
@@ -47,19 +45,14 @@ internal static class ReleaseGroupTests
             Assert.Equal("GRP", ReleaseGroup.FromFileName(@"D:\media\Show-GRP.v2"));
         });
 
-        // 认不出的情形一律给空串，两处读数各回各的原样 —— 不产孤零零的分隔符。
-        Test("制作组：认不出就给空，标题不接尾巴", () =>
+        // 认不出的情形一律给空串 —— 追加处（画质读数、左上角第二行）各回各的原样，不产孤零零的分隔符。
+        Test("制作组：认不出就给空", () =>
         {
             Assert.Equal("", ReleaseGroup.FromFileName(null));
             Assert.Equal("", ReleaseGroup.FromFileName(""));
             Assert.Equal("", ReleaseGroup.FromFileName(@"D:\media\Show.S01E01.1080p.mkv"));
             Assert.Equal("", ReleaseGroup.FromFileName(@"D:\media\Show-"));
             Assert.Equal("", ReleaseGroup.FromFileName(@"D:\media\Show-   .mkv"));
-
-            Assert.Equal("再见菈菈 S01E12 再见菈菈", ReleaseGroup.DecorateTitle("再见菈菈 S01E12 再见菈菈", null));
-            Assert.Equal("再见菈菈 S01E12 再见菈菈", ReleaseGroup.DecorateTitle("再见菈菈 S01E12 再见菈菈", @"D:\media\Show.mkv"));
-            Assert.Equal("GRP", ReleaseGroup.DecorateTitle(null, @"D:\media\Show-GRP.mkv"));
-            Assert.Equal("", ReleaseGroup.DecorateTitle("", @"D:\media\Show.mkv"));
         });
 
         // 画质读数的原料（ToQualityLabel）本身不带组名 —— 追加只发生在 Shell 的 PlayingSourceLabel 一侧，

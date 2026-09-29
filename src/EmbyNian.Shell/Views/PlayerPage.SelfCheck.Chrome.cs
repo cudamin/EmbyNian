@@ -2,6 +2,7 @@ using EmbyNian.Configuration;
 using EmbyNian.Playback;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 
 namespace EmbyNian.Shell.Views;
@@ -56,9 +57,11 @@ public sealed partial class PlayerPage
             var isTitle = TitleStrip.Visibility == Visibility.Visible;
             var isRail = Rail.Opacity > 0;
 
+            // 三条边现在都分级淡入（用户令 2026-09-27「参独占模式……」），所以每一样的读数都带上它此刻的浓度，
+            // 不再只报「在/不在」——「越明显」这件事只有把 Opacity 读出来才看得见。
             var up = new List<string>(3);
-            if (isBar) up.Add("进度条");
-            if (isTitle) up.Add("标题栏");
+            if (isBar) up.Add($"进度条 {TransportRow.Opacity:P0}");
+            if (isTitle) up.Add($"标题栏 {TitleStrip.Opacity:P0}");
             if (isRail) up.Add($"音量条 {Rail.Opacity:P0}");
 
             // The cursor only appears in the line that asked about it, and it has to appear there: the two
@@ -72,6 +75,11 @@ public sealed partial class PlayerPage
             // A rail drawn at zero must not be clickable and a rail on screen must be, or the fade would
             // either swallow taps meant for the picture or refuse the hand reaching for the slider.
             if (Rail.IsHitTestVisible != isRail) wrong.Add($"{what}的音量条命中测试没跟上");
+
+            // 标题条与按钮行同理：这两关里凡是「出现」的都在强度大于零的位置（底部近处、停在条上、拖动钉住），
+            // 一块看不见却还能点的条子会吞掉画面上的点击，标题条里更压着窗口按钮。
+            if (isBar && !TransportRow.IsHitTestVisible) wrong.Add($"{what}的按钮行看得见却点不了");
+            if (isTitle && !TitleStrip.IsHitTestVisible) wrong.Add($"{what}的标题条看得见却点不了");
 
             // Read off the page rather than off the rule: this is the field Render pushed to ShowCursor,
             // and an unbalanced pair there leaves the cursor invisible over every window in the process.
@@ -102,51 +110,64 @@ public sealed partial class PlayerPage
         _chrome.FlashRail(++clock);
         Sample("滚轮调音量", bar: false, title: false, rail: true);
 
-        // 静止：requirement 11's 「自动隐藏的速度再快些」, and the cursor that follows on a window of its own —
-        // 「全屏播放且鼠标在画面上时，鼠标静止不动两秒之后要自动隐藏」. Sampled twice because the two windows are
-        // the whole point: the chrome goes at 650 ms with the cursor still there to aim with, and only the
-        // second, longer stillness takes the cursor. Settled first, so the wheel's rail grace is not still
-        // running when the shorter of the two is asked about.
+        // 这一档是 2026-09-28 与 09-29 两条用户令合起来的样子，**两半各认各的**：
+        //   · 控件（09-28）：「当鼠标停留在对应控件的渐变触发位置时，不要自动隐藏这些控件」—— 只认位置，
+        //     从前静止 650ms / 停在控件上 2000ms 就收的那套已经删掉，指针撂在唤出带里多久都还在。
+        //   · 光标（09-29）：「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，触发
+        //     渐变的时候不隐藏控件，但是要隐藏鼠标」—— 只认**本体**（ChromePart 那四处命中），唤出带里照走。
+        // 三个位置都要量：带里（控件留、光标走）、死区（都收）、本体上（都不动）。
         Settle();
         var still = ++clock;
         _chrome.Pointer(height - 10, height, ChromePart.None, railNear: -1, still);
+        Sample("指针停在底部唤出带里", bar: true, title: false, rail: false, cursorHidden: false);
 
-        clock = still + ChromeReveal.IdleMilliseconds + 1;
+        clock = still + (ChromeReveal.CursorIdleMilliseconds * 4);
         _chrome.Tick(clock);
-        Sample($"静止 {ChromeReveal.IdleMilliseconds}ms 后",
-            bar: false, title: false, rail: false, cursorHidden: false);
+        Sample("在唤出带里停四秒", bar: true, title: false, rail: false, cursorHidden: true);
 
-        clock = still + ChromeReveal.CursorIdleMilliseconds + 1;
+        // 回到死区：控件当场收（位置说了算）。**光标在这一记上会回来** —— 指针横越画面是一次真移动，
+        // 空闲钟从这一记重数，所以此刻是「控件已收、光标还在」；它再静止一格空闲钟才走，见下一句。
+        // （早先这里写的是 cursorHidden: true，那是把「藏匿期不许被自己这一记唤醒」的老规矩用到了
+        // 显示期上 —— 09-29 起光标只认本体，带里的那一秒已经走过了，回来是一记新手。）
+        _chrome.Pointer(height / 2, height, ChromePart.None, railNear: -1, ++clock);
+        Sample("指针回到画面中间", bar: false, title: false, rail: false, cursorHidden: false);
+
+        clock += ChromeReveal.CursorIdleMilliseconds + 1;
         _chrome.Tick(clock);
-        Sample($"静止 {ChromeReveal.CursorIdleMilliseconds}ms 后",
+        Sample($"画面中间静止 {ChromeReveal.CursorIdleMilliseconds}ms 后",
             bar: false, title: false, rail: false, cursorHidden: true);
 
-        // 停在控件上: 「全屏时最下方的进度条不会自动隐藏，鼠标也不会自动隐藏」. A pointer resting on a control
-        // buys patience rather than immunity, and this is the case that used to have none — windowed, the
-        // page notices the pointer leaving the client area and clears it; full screen there is nowhere to
-        // leave to, so nothing but this timeout ever opened the latch.
+        // 压在进度条本体上（那一段底部带里最实的位置）与音量条本体上：光标同样不许走 —— 这就是 09-29
+        // 那半句话的正题（`ChromePart.Bar` / `ChromePart.Volume` 就是「本体」）。
         _chrome.Pointer(height - 10, height, ChromePart.Bar, railNear: -1, ++clock);
-        Sample("停在进度条上", bar: true, title: false, rail: false, cursorHidden: false);
+        Sample("压在进度条上", bar: true, title: false, rail: false, cursorHidden: false);
 
-        clock += ChromeReveal.ParkedIdleMilliseconds + 1;
+        clock += ChromeReveal.CursorIdleMilliseconds * 4;
         _chrome.Tick(clock);
-        Sample($"停在进度条上 {ChromeReveal.ParkedIdleMilliseconds}ms 后",
-            bar: false, title: false, rail: false, cursorHidden: true);
+        Sample("压在进度条上四秒", bar: true, title: false, rail: false, cursorHidden: false);
+
+        _chrome.Pointer(height / 2, height, ChromePart.Volume, railNear: 1, ++clock);
+        Sample("压在音量条上", bar: false, title: false, rail: true, cursorHidden: false);
+
+        clock += ChromeReveal.CursorIdleMilliseconds * 4;
+        _chrome.Tick(clock);
+        Sample("压在音量条上四秒", bar: false, title: false, rail: true, cursorHidden: false);
 
         // 拖动标题移动窗口: 「在播放页面中，当用户长按标题并拖动播放窗口时，拖动过程中不要显示进度条和音量条」
         // (2026-09-22). 走页面自己的 Hold 而不是直接拧规则：这一关要钉的正是「拖动这个理由接上规则了没有」，
-        // 只拧规则的话接线断了它照样绿。指针此刻正报在底部带上 —— 位置是在要进度条，而拖动不许给。
+        // 只拧规则的话接线断了它照样绿。**先把指针报回底部带上**（前几步把它停在音量条上了）：位置是在要
+        // 进度条，而拖动不许给 —— 松开那一拍要读的也正是这个位置。
         //
-        // 把这套合成时钟传进 Hold（它默认按真的 Environment.TickCount64 落账）：这一关早把空闲/停靠两个窗口
-        // 快进了好几秒，若 Hold 仍按真 Now 记这一记活动，松手那一拍规则会拿「合成的现在」减「真的刚才」算出
-        // 好几秒空闲，控件当场收掉 —— 松开那一样就永远读不到「交回给指针」。
+        // 把这套合成时钟传进 Hold（它默认按真的 Environment.TickCount64 落账）：这一关早把空闲窗口与
+        // 宽限期快进了好几秒，若 Hold 仍按真 Now 记这一记活动，松手那一拍规则会拿「合成的现在」减「真的
+        // 刚才」算出好几秒空闲，光标当场被收 —— 松开那一样就永远读不到「交回给指针」。
+        _chrome.Pointer(height - 10, height, ChromePart.None, railNear: -1, ++clock);
         Hold(true, ChromeHold.Drag, ++clock);
         Sample("拖动标题移动窗口", bar: false, title: true, rail: false, cursorHidden: false);
 
         // 松开：两把一起放，照旧交回给指针的位置。松手那一记（SetWindowDrag/SetHold 放开时重盖空闲钟）就在
         // 合成时钟的此刻，指针仍报在底部带上 —— 直接读就是位置自己的答案（进度条在、光标回来）。不再补 Settle：
-        // 一个 Settle 要走满 SettleMilliseconds（2201ms），比停靠窗口（2000ms）还长，读到的必然是「静止到期、
-        // 全收了」而不是「刚松手」；而这一关此刻没有任何在跑的宽限要等（滚轮那次 FlashRail 早在合成时钟里过期了）。
+        // 一个 Settle 要走满 SettleMilliseconds（2201ms），比光标那一秒还长，读到的会是「已经藏了」。
         Hold(false, ChromeHold.Drag, ++clock);
         Sample("松开标题之后", bar: true, title: false, rail: false, cursorHidden: false);
 
@@ -154,10 +175,11 @@ public sealed partial class PlayerPage
         // thing this probe never used to drive. mpv publishes four or more snapshots a second and the page
         // hands every one of them to the loading latch, which used to read 「not loading」 as activity — so
         // the idle clock was restamped four times a second and nothing ever expired:
-        // 「别什么进度条标题音量条都持久显示在画面上」, then 「鼠标指针还是不会自动隐藏」. Driven at the real
-        // cadence rather than asserted about, because the arithmetic was never the part that was wrong.
+        // 「鼠标指针还是不会自动隐藏」. 2026-09-28 起这条钟只量光标，所以这一拍挪到画面中间量它：
+        // 指针在死区里，每 250ms 推一份状态，一秒之后光标仍然必须走。Driven at the real cadence rather
+        // than asserted about, because the arithmetic was never the part that was wrong.
         var pushing = ++clock;
-        _chrome.Pointer(height - 10, height, ChromePart.None, railNear: -1, pushing);
+        _chrome.Pointer(height / 2, height, ChromePart.None, railNear: -1, pushing);
 
         for (var t = pushing; t <= pushing + ChromeReveal.CursorIdleMilliseconds; t += 250)
             _chrome.SetKeep(false, t);
@@ -244,74 +266,21 @@ public sealed partial class PlayerPage
         // markup still reading 300. 「把音量条再改大一点」 raised both floors: the slider is 300 tall and the
         // grab band 44 wide (18 + 8 + 18), so the pill comes to 68 with its padding.
         report.Add($"音量条 {Rail.ActualWidth:F0}×{Rail.ActualHeight:F0}，滑杆高 {VolumeSlider.ActualHeight:F0}");
-        Want("音量条尺寸", VolumeSlider.ActualHeight >= 280 && Rail.ActualWidth >= 64);
+        Want("填充音量条尺寸", VolumeSlider.ActualHeight >= 80 && Math.Abs(Rail.ActualWidth - 40) < 1);
 
-        // 天花板：屏上这根滑杆的上限必须就是刻度的顶。这一条是「音量上不去 100% 以上」那件活里唯一一处
-        // 单测碰不到的：另外五处都在 Core 或者视图模型里，而这一处从前是 XAML 里写死的 Maximum="100"，现在
-        // 绑到 ViewModel.VolumeAxisMaximum 上 —— 绑失效了屏上看不出任何异样（滑杆照样能拖，只是拖不到 130），
-        // 而这正是「界面在骗人」：滑杆的顶和真正存下去的值不是一回事。
-        // 2026-09-22 起这个顶是<b>刻度上的顶</b>（133）而不是音量本身（130），所以两条一起要：它等于
-        // VolumeScale 的顶，且反算回去正好是存得下的那个音量。
-        report.Add($"滑杆上限 {VolumeSlider.Maximum:0}（刻度顶），反算回音量 {VolumeScale.Level(VolumeSlider.Maximum):0}，"
-            + $"设置里存得下 {AudioSettings.MaxVolume}");
-        Want("音量滑杆的上限是刻度的顶", Math.Abs(VolumeSlider.Maximum - VolumeScale.MaximumAxis) < 0.5);
-        Want("音量滑杆的上限反算回去就是存得下的音量",
-            Math.Abs(VolumeScale.Level(VolumeSlider.Maximum) - AudioSettings.MaxVolume) < 0.5);
-
-        // 摆正: 「音量条的位置是歪的」. WinUI's vertical Slider template puts the track and the thumb in three
-        // columns — SliderPreContentMargin, the track, SliderPostContentMargin — and not one of them is a star,
-        // so a slider given a hard Width leaves the surplus empty on its right and the track sits left of
-        // centre: Width="44" was 6 pixels off, inside a pill whose figure and mute button were centred, which
-        // is the whole of what looked crooked. 「把音量条再改大一点」 widened the same band back to 44 by raising
-        // those two margins together, which is why this measurement matters more now rather than less — raising
-        // one of the two is the same fault with a different cause, and nothing but a measurement can say so.
+        Want("音量滑杆上限跟随真实音量", Math.Abs(VolumeSlider.Maximum - AudioSettings.MaxVolume) < 0.5);
         var track = PartNamed(VolumeSlider, "VerticalTrackRect");
         var rail = BoundsOf(Rail);
         var box = track is null ? default : BoundsOf(track);
         var offset = track is null ? double.NaN : box.Left + box.Width / 2 - (rail.Left + rail.Width / 2);
-
-        report.Add(track is null ? "找不到滑杆轨道" : $"轨道 {box.Width:F0} 宽，中心偏离音量条中心 {offset:0.0} 像素");
-
-        // A whole pixel rather than this file's usual half: this compares two centres, so it takes layout
-        // rounding twice over at 125% scaling. Structurally the answer is 0.
-        Want("滑杆轨道在音量条正中", track is not null && Math.Abs(offset) <= 1);
-
-        // 轨道也粗了一档：SliderTrackThemeHeight 从 4 抬到 8。这一条和上面那条是一对 —— 那五个 ThemeResource 覆盖
-        // 是在滑杆自己的 Resources 里写的，键名写错、或者哪天框架换了键名，模板照旧渲染、屏上照旧有一根滑杆，只是
-        // 又变细了，而没有任何一关会红。
-        Want("轨道加粗了", track is not null && box.Width >= 7);
-
-        // 不要边框: 「音量条不需要边框」. Worth an assertion rather than a glance, because PlayerEdgeBrush is
-        // still on the palette (the chapter preview uses it) — put back here and every colour check stays
-        // green while the rail wears a ring nobody asked for.
-        var edge = Rail.BorderThickness;
-        report.Add($"描边 {edge.Left:0}/{edge.Top:0}/{edge.Right:0}/{edge.Bottom:0}");
-        Want("音量条不描边", edge is { Left: 0, Top: 0, Right: 0, Bottom: 0 });
-
-        // 上方的数字: 「给音量条上方加上数字」 (2026-09-04), which is the same readout 「不需要…上方的数字」 took
-        // off the day before — so what is checked is both that it is there and that it says the level the slider
-        // is at. A figure that has come loose from the thumb is worse than no figure: it is the rail lying about
-        // how loud the film is. Counted as well, because the narration walk stops at controls: a TextBlock added
-        // or removed here changes no other report line.
-        var figure = RailStack.Children.Count > 0 ? RailStack.Children[0] as TextBlock : null;
-        var says = figure?.Text ?? "";
-
-        // 滑杆上现在是刻度（VolumeAxis），所以数字对的是「反算回去的音量」，不是滑杆值本身。
-        var level = VolumeScale.Level(VolumeSlider.Value);
-        var agrees = int.TryParse(says, out var shown) && Math.Abs(shown - Math.Round(level)) < 0.5;
-
-        report.Add($"条上 {RailStack.Children.Count} 样，上方的数字「{says}」对滑杆 {VolumeSlider.Value:0}（刻度）＝音量 {level:0}");
-        Want("音量条上有数字、滑杆和静音键", RailStack.Children.Count == 3 && figure is not null);
-        Want("上方的数字和滑杆一致", agrees);
-
-        // 拉长（2026-09-22 用户令）：「音量条上 100 到 101 这一刻度区间的显示长度拉长，比前后相邻区间占更多
-        // 空间」. 量的是刻度换算到这条轨道上的像素 —— 一段 100→101 与一段普通档（50→51）比。纯换算加现成的
-        // 轨道长度，不动音量、不碰 mpv。绑回 130 的旧上限时这两段的比会掉到 1，第一条 Want 当场红。
-        var pixelsPerUnit = track is null ? 0d : box.Height / VolumeScale.MaximumAxis;
-        var kneePixels = pixelsPerUnit * VolumeScale.Width(100);
-        var plainPixels = pixelsPerUnit * VolumeScale.Width(50);
-        report.Add($"100→101 一段 {kneePixels:0.0} 像素，普通一档 {plainPixels:0.0} 像素");
-        Want("100→101 那一段比普通一档长得多", track is not null && kneePixels > plainPixels * 3);
+        report.Add($"轨道 {box.Width:F0} 宽，中心偏移 {offset:0.0}，音量 {VolumeSlider.Value:0}/{VolumeSlider.Maximum:0}");
+        Want("填充轨道与音量条同宽且居中", track is not null && Math.Abs(offset) <= 1 && Math.Abs(box.Width - rail.Width) < 1);
+        Want("音量条不描边", Rail.BorderThickness is { Left: 0, Top: 0, Right: 0, Bottom: 0 });
+        var says = VolumeText.Text;
+        Want("音量数字与滑杆一致", int.TryParse(says, out var shown) && Math.Abs(shown - VolumeSlider.Value) < 0.5);
+        Want("音量数字在轨道内，静音键在下方", BoundsOf(VolumeText).Bottom <= box.Bottom
+            && BoundsOf(VolumeText).Top >= box.Top && BoundsOf(MuteButton).Top >= box.Bottom - 1);
+        Want("100刻度与线性比例一致", Math.Abs(VolumeHundredMark.Margin.Top - VolumeTrack.ActualHeight * (1 - 100 / VolumeSlider.Maximum)) < 1);
 
         // 淡入淡出, and the standing visibility it needs: the rail is the one piece of chrome that is always
         // laid out and only ever changes strength, so a Visibility flip creeping back in here would take the
@@ -329,26 +298,39 @@ public sealed partial class PlayerPage
             return Rail.Opacity;
         }
 
+        // Sampled against the volume rail's own rectangle — uosc measures proximity to that rect, and so does
+        // RailNear now (2026-09-28「参考独占模式修复」, no more RailZoneWidth strip). rail = BoundsOf(Rail),
+        // in Root coordinates like the points Strength feeds in; reachStart is where proximity crosses 0.
+        var railMidX = (rail.Left + rail.Right) / 2;
+        var railMidY = rail.Top + rail.Height / 2;
+        var reachStart = rail.Left - ChromeReveal.ProximityOutPixels;
+
         var middle = Strength(width / 2, height / 2);
-        var entering = Strength(width - RailZoneWidth + 1, height / 2);
-        var edgeCentre = Strength(width - 1, height / 2);
-        var edgeTop = Strength(width - 1, 8);
+        var entering = Strength(reachStart + 1, railMidY);
+        var edgeCentre = Strength(railMidX, railMidY);
+        var edgeTop = Strength(rail.Right, 8);
 
         report.Add($"画面中间={middle:P0}，刚进右侧带={entering:P0}，右缘中央={edgeCentre:P0}，右缘靠上={edgeTop:P0}");
 
         Want("画面中间不显示音量条", middle == 0);
-        Want("刚进右侧带就到下限", Math.Abs(entering - ChromeReveal.RailFloor) < 0.005);
-        Want("右缘中央最明显", edgeCentre > 0.98);
-        Want("越偏离中心越淡", edgeTop < edgeCentre - 0.1 && edgeTop >= ChromeReveal.RailFloor - 0.005);
 
-        // 越接近…越明显 as a curve rather than as four points: nine samples across the strip at the vertical
-        // middle, each at least as strong as the one to its left. Quantised to hundredths at the source, so
-        // this is an ordering over exact values and not a tolerance.
+        // 刚进右侧带几乎不显示：音量条照独占没有下限（RailFloor=0），离矩形 proximity_out（120px）那条反达线上
+        // proximity 恰好从 0 起，往里一像素还不足百分之二 —— 跟标题条、控制条一样从近乎零起淡（旧版「刚进带就到
+        // 35% 下限」已退）。
+        Want("刚进右侧带几乎不显示", entering < 0.05);
+        Want("右缘中央最明显", edgeCentre > 0.98);
+        // 右缘的上下两角是去顶部按钮、去进度条的路：指针到纵向居中的音量条矩形欧氏距离一远，proximity 自然落回近零，
+        // 「越偏离中心越淡」这项覆盖就落在这里（旧的 Core 竖向中心偏置 Centred 已退役，改由这条真几何承担）。
+        Want("越偏离中心越淡", edgeTop < edgeCentre - 0.1 && edgeTop >= 0);
+
+        // 越接近…越明显 as a curve rather than as four points: nine samples from the reveal reach inward to the
+        // rail's centre at the vertical middle, each at least as strong as the one to its left. Quantised to
+        // hundredths at the source, so this is an ordering over exact values and not a tolerance.
         var rising = true;
         var previous = -1.0;
         for (var step = 0; step <= 8; step++)
         {
-            var value = Strength(width - RailZoneWidth + step * (RailZoneWidth - 1) / 8.0, height / 2);
+            var value = Strength(reachStart + step * (railMidX - reachStart) / 8.0, railMidY);
             if (value < previous) rising = false;
             previous = value;
         }
@@ -447,6 +429,17 @@ public sealed partial class PlayerPage
     {
         if (!Attached) return (false, "播放层未接线");
 
+        // 这一关量的是**窗口档**那一档的数（返回键玻璃 30 见方、上沿 5、标题字号 20/12.75、图标 13.125/16.5、
+        // 两行之间那几条缝 …）。2026-09-28 更晚把两档的判据放宽成「全屏**或最大化**」（＝独占的
+        // `fullormaxed`；时间轴一直这么判，见 `TimelineFullHeight`）之后，一个最大化的自检窗口会让这一整关
+        // 按大档画、于是整关全红 —— 所以先把窗口摆成**普通窗口**，量完还原。这一关的假设由此从隐含变成写明。
+        var wasFullscreen = _window!.Fullscreen;
+        var wasMaximized = _window.IsMaximized;
+        if (wasFullscreen) { SetFullscreen(false); DrainWindowChange(); }
+        if (_window.IsMaximized) { RequestMaximize(false); DrainWindowChange(); }
+        ApplyChromeScale();
+        UpdateLayout();
+
         var was = Visibility;
         var wasOffer = ViewModel.SkipOffered;
         var wasCaption = ViewModel.SkipCaption;
@@ -481,11 +474,524 @@ public sealed partial class PlayerPage
             if (!ok) wrong.Add(what);
         }
 
+        // 模板里那层底与那支前景：框架的 Button 模板进 PointerOver/Pressed 两态写的就是这两个部件属性。
+        Brush? Bed(Button button) =>
+            PartNamed(button, "ContentPresenter") is ContentPresenter presenter ? presenter.Background : null;
+
+        Brush? Ink(Button button) =>
+            PartNamed(button, "ContentPresenter") is ContentPresenter presenter ? presenter.Foreground : null;
+
         var below = bar.Top - skip.Bottom;
 
         report.Add($"进度条高 {bar.Height:F0}，跳过按钮 {skip.Width:F0}×{skip.Height:F0} 让开 {below:F1}");
 
         Want("三样都得有尺寸", strip.Height > 0 && bar.Height > 0 && skip.Height > 0);
+
+        // 标题那一行背后那块玻璃：紧贴文字（Padding 撑开、上下留白相等），而且**不是整条**。
+        // 量的是几何而不是照片 —— 照片量不了：--show-osd 那一路 ViewModel 是空的、那一栏没有字，玻璃跟着缩到
+        // 最矮，看不出「有标题时」的样子。上一版那块底是与文字栏分开的一层整宽 Border，所以量得出「底比文字栏
+        // 高」；这一版那块底就是每一行字自己的容器（TitleBox／SubtitleBox），比的是它里面的那个 TextBlock。
+        // **这里给两行字各摆一行真文字**（跟跳过按钮那一关同一个做法：摆起来、量完、收场还回去）：空标题时
+        // 玻璃只有两侧的 Padding 宽，「不铺满整条」那一问等于在量空气；摆一行长片名才是用户截图里的场面。
+        var wasTitle = ViewModel.Title;
+        var wasSubtitle = ViewModel.Subtitle;
+        ViewModel.Title = "S01E05 塔 | 糟糕时间 | 算盘与麻花辫 | 飞驰而过的青春";
+        ViewModel.Subtitle = "1920 x 1080  ·  HEVC  ·  AAC  ·  Studio GreenTea";
+        UpdateLayout();
+
+        var titleText = BoundsOf(TitleText);
+        var box = BoundsOf(TitleBox);
+        var above = titleText.Top - box.Top;
+        var under = box.Bottom - titleText.Bottom;
+
+        report.Add($"标题那块玻璃 {box.Width:F0}×{box.Height:F0}，文字 {titleText.Width:F0}×{titleText.Height:F0}，"
+            + $"上留 {above:F1} 下留 {under:F1}");
+
+        Want("标题那块玻璃比文字大", box.Height > titleText.Height && box.Width > titleText.Width);
+
+        // 上下留白这一问的容差比别处（GeometrySlack 半像素）松一档：这里量的是**文字**的墨框，20 号那行的行框
+        // 是小数（25.4 上下），Border 按 Padding 撑开之后两边各带半点取整 —— 那 0.6 是字体度量不是布局错。
+        // 真正要防的是「有人把 Padding 写成上下不等」那种不对称，那一问下面单独钉。
+        Want("标题那块玻璃的上下留白相等", Math.Abs(above - under) < 1.0);
+        Want("标题那块玻璃的 Padding 上下对称", TitleBox.Padding.Top == TitleBox.Padding.Bottom);
+
+        // 用户令 2026-09-27「不要一大块」：一行长片名也到不了右上角那一栏。
+        Want("标题那块玻璃不铺满整条",
+            box.Right < BoundsOf(WindowButtons).Left + GeometrySlack && box.Width < strip.Width - 40);
+
+        // **两条线**（用户令 2026-09-28 更晚「把独占模式的标题复刻到集成模式」之后的形状）：左上那一簇
+        // 自己一条 —— 返回键玻璃与标题玻璃同高同顶（上沿都是 5、都是 30 高，中线 20）；右上那一排自己
+        // 一条 —— 置顶＋三颗窗口命令 40 见方、往下让 4（中线 24）。
+        // 历史上那条「顶部一排在同一条基线上」量的是「左上＋右上五处一个中线」，随复刻退役：左上按独占
+        // 收成 30 见方、让 5 之后两条线差 4 像素。独占那头本来也是两条（它那三颗窗口键的可见底 35 见方、
+        // 中心 22.5，左边这三块中心 20）—— 所以「复刻」指的是左上角这三块的内部关系，不是整条顶栏一刀切。
+        var back = BoundsOf(BackButton);
+
+        double Centre(FrameworkElement element)
+        {
+            var bounds = BoundsOf(element);
+            return bounds.Top + (bounds.Height / 2);
+        }
+
+        var upperGap = Math.Abs(Centre(BackButton) - Centre(TitleBox));
+        var rightRow = new[] { PinButton, MinimizeButton, CloseButton }.Select(Centre).ToArray();
+        var rightSpread = rightRow.Max() - rightRow.Min();
+
+        report.Add($"中线：返回键 {Centre(BackButton):F1}、标题框 {Centre(TitleBox):F1}（差 {upperGap:F1}）；"
+            + $"右上那一排 {string.Join('、', rightRow.Select(value => value.ToString("F1")))}（差 {rightSpread:F1}）");
+
+        Want("左上那一簇自己一条中线：返回键玻璃与标题玻璃同高同顶", upperGap < 2.0);
+        Want("右上那一排在同一条基线上", rightSpread < 2.0);
+
+        // 右上那三颗窗口命令的**图标字号**（用户令 2026-09-28 晚「集成模式窗口化的时候右上角的图标太大了，
+        // 改成跟独立模式窗口化时一样大」；同日深夜先「缩小 1.3 倍」缩过一轮，第五批「把集成模式右上角的
+        // 四个图标还有这四个图标的背景改成跟独占模式的窗口模式下右上角的一样大」又把那一笔整段撤回）：
+        // 窗口档 13.125 ＝ 独占那一头的 17.5 × 0.75（`\fs` 是 72 DPI 的 pt、这里的 FontSize 是 96 DPI 的
+        // px），全屏档 17.25。数的来历与实拍读数在 `WindowGlyphStyle` 那段标记里；这一关只问「真摆上去了
+        // 没有」—— 更早那三颗是照首页 caption 抄来的 16（实拍：关闭叉 16×16 对独占 13×13、最小化横杠
+        // 16 对 11）。置顶那颗不在这条判据里（它是 PathIcon、不吃字号，见下面单立的那一条）。
+        const double WindowCommandGlyph = 13.125;
+        var stripGlyphs = new[] { (Name: "最小化", Glyph: MinimizeGlyph), (Name: "最大化", Glyph: MaximizeGlyph),
+                                  (Name: "关闭", Glyph: CloseGlyph) };
+        var offSize = stripGlyphs.Where(item => Math.Abs(item.Glyph.FontSize - WindowCommandGlyph) > 0.01)
+            .Select(item => $"{item.Name} {item.Glyph.FontSize:0.###}").ToList();
+
+        report.Add(offSize.Count == 0
+            ? $"右上三颗窗口命令的图标字号都是 {WindowCommandGlyph}（窗口档；＝独占 17.5 × 0.75）"
+            : $"右上三颗窗口命令的图标字号不对：{string.Join('、', offSize)}");
+        Want("右上三颗窗口命令的图标是窗口档那一档字号", offSize.Count == 0);
+
+        // **四个**图标里的第四个：置顶那颗图钉。它 2026-09-28 深夜第五批换成了独占同一支字体的同一颗
+        // （用户令「把集成模式右上角的置顶图标换成跟独占模式一样的」），尺寸于是跟三颗窗口命令分开量 —— 它是
+        // `PathIcon`、几何自己带比例、不吃 FontSize，报的是一对实框（`WindowPinGlyph`，窗口档 9.793 × 14
+        // ＝ 独占实拍的白核 9 × 14）。判据读的是**布局之后**的 `ActualWidth`／`ActualHeight`，不是 XAML 里
+        // 写的 `Width`：这一栏的可点格是 40 的步进，若这层布局没吃到那个数（Stretch 填满格、或外面套了别的
+        // 东西），只读设置值就会「写着 9.793、画出来却是 40」而这一关照样绿。
+        var pinWant = BigChrome ? FullscreenPinGlyph : WindowPinGlyph;
+
+        report.Add($"置顶图钉：实框 {PinGlyphBox.ActualWidth:0.###}×{PinGlyphBox.ActualHeight:0.###}"
+            + $"（写的是 {PinGlyphBox.Width:0.###}×{PinGlyphBox.Height:0.###}；这一档要 "
+            + $"{pinWant.Width}×{pinWant.Height}；里面那份几何是 {PinGlyph.Data?.Bounds.Width:0.###}×"
+            + $"{PinGlyph.Data?.Bounds.Height:0.###}）");
+        Want("置顶那颗图钉是这一档那一对实框（窗口档 9.793×14，与独占实拍同数）",
+            Math.Abs(PinGlyphBox.ActualWidth - pinWant.Width) < GeometrySlack
+            && Math.Abs(PinGlyphBox.ActualHeight - pinWant.Height) < GeometrySlack);
+        Want("置顶那颗图钉的实框比它自己那一格小（40 的步进没有被拉伸填满）",
+            PinGlyphBox.ActualWidth < 40 - GeometrySlack);
+
+        // 同一条令的另一半：**整排左移五个像素**。两条判据一起看：设置值（那一栏的右边距 5、左边距 0）与
+        // 布局结果（那一栏的右缘离客户区右缘 5）。左边距必须是 0：左移靠右缘让位，不是靠左缘推（后者会把
+        // 这一栏从右缘顶开，看起来就是「没对齐」）。
+        var rightGap = Root.ActualWidth - BoundsOf(WindowButtons).Right;
+        report.Add($"那一栏实框右缘离客户区右缘 {rightGap:F1}（客户区宽 {Root.ActualWidth:F0}）");
+        Want("右上那一排左移了 5 像素（右边距 5、左边距 0）",
+            Math.Abs(WindowButtons.Margin.Right - 5) < GeometrySlack && WindowButtons.Margin.Left == 0);
+        Want("右上那一排的右缘离客户区右缘 5 像素", Math.Abs(rightGap - 5) < 1.0);
+
+        // 独占模式顶栏那颗返回键（`elements/TopBar.lua` 的 EMBYNIAN[topbar-back-glass]）：可见底是
+        // **整格 top_bar_size＝40 里上下左右各让 margin＝5** ＝ 30 见方（2026-09-28 晚「返回按钮的背景要和
+        // 标题的背景一致」＋「把标题的大小改回跟 mpv_config 项目一样大小」），那块玻璃正好与它自己的标题
+        // 玻璃同形同色。2026-09-28 更晚「把独占模式的标题复刻到集成模式」把集成这一头也照它办了 ——
+        // 下面这几条量的就是这一头，数值与独占逐像素一致。
+        const double BackSquare = 30;
+        const double BackInset = 5;
+        const double TopDrop = 5;
+
+        report.Add($"返回键 {back.Width:F0}×{back.Height:F0}，在客户区左上角 {back.Left:F0},{back.Top:F0}，"
+            + $"中线 {back.Top + (back.Height / 2):F1}；标题那一行字中线 "
+            + $"{titleText.Top + (titleText.Height / 2):F1}（往下让了 {box.Top:F0}）");
+
+        Want("返回键玻璃 30 见方、四周各让 5（与独占同一档）",
+            Math.Abs(back.Width - BackSquare) < GeometrySlack
+            && Math.Abs(back.Height - BackSquare) < GeometrySlack
+            && Math.Abs(back.Left - BackInset) < GeometrySlack
+            && Math.Abs(back.Top - BackInset) < GeometrySlack);
+
+        // 右缘＝5 ＋ 30 ＝ 35；标题玻璃的左缘正是它再加那条 1px 的缝（＝独占的 `title_spacing`）。
+        Want("返回键玻璃右缘在 35 上", Math.Abs(back.Right - (BackInset + BackSquare)) < GeometrySlack);
+
+        // 「返回键边长＝标题框高度」（用户令 2026-09-28，两模式同一条）：30 见方对 30 高的标题框 ——
+        // 这也是「两块玻璃同形」里的一半，全屏档（玻璃 40、标题框 40）同样成立。
+        Want("返回键边长＝标题框高度",
+            Math.Abs(back.Height - box.Height) < GeometrySlack);
+
+        // 用户令 2026-09-27 傍晚第五批「返回和集名/片名往下移动一点点」：这一簇**一起**往下，量的是
+        // 「两处挪的是同一个数」——数字是多少不重要（复刻之后是 5，＝独占的 margin），一个挪一个不挪
+        // 才是屏上看得出的错位。
+        Want("返回键与集名/片名一起往下让了同一个数",
+            Math.Abs(back.Top - TopDrop) < GeometrySlack && Math.Abs(box.Top - TopDrop) < GeometrySlack);
+
+        // 圆角（用户令 2026-09-28「左上角标题太圆了，改成跟独占一样」，问实了＝照独占 border_radius=2）：量的是
+        // **互相相等**、不是写死的数 —— 左上角那三块（返回键那块玻璃、集名、片名）与右上那一排同一个数（8 换 2
+        // 它照样绿）。2026-09-27 晚「统计」摘掉后，右上那一排改由置顶那一颗代表（同款按钮、同一个圆角）。
+        var backGlass = BackButton.Parent is Grid backCell && backCell.Children.Count > 0
+            ? backCell.Children[0] as Border
+            : null;
+
+        report.Add($"圆角：返回键那块玻璃 {backGlass?.CornerRadius.TopLeft}、集名 {TitleBox.CornerRadius.TopLeft}、"
+            + $"片名 {SubtitleBox.CornerRadius.TopLeft}、右上那一排 {PinButton.CornerRadius.TopLeft}");
+
+        Want("左上角那几块的圆角与右上那一排同一个数",
+            backGlass is not null
+            && backGlass.CornerRadius == TitleBox.CornerRadius
+            && TitleBox.CornerRadius == SubtitleBox.CornerRadius
+            && SubtitleBox.CornerRadius == PinButton.CornerRadius);
+
+        // 返回与片名之间的那条缝（2026-09-27 傍晚第三批「让返回和片名紧凑一点」收窄过，2026-09-28 更晚
+        // 「复刻标题」把它定成那个 1 —— ＝独占两行之间、以及返回键与标题之间用的同一个 `title_spacing`）。
+        // 量的是两者之间那条缝，不是边距的字面值 —— 谁把 ColumnSpacing 加回去都拦得住。
+        report.Add($"返回与片名之间 {box.Left - back.Right:F1}");
+
+        Want("返回与片名之间是那条 1px 的缝", Math.Abs((box.Left - back.Right) - TitleGap) < GeometrySlack);
+
+        // 第二行**自己一块**（用户令 2026-09-27「下方的剧名单独一个框」，2026-09-28 把内容换成文件信息那四段）。
+        // 独占模式里正是两块：主标题一个框、副标题另起一个框画在**返回键的正下方**（TopBar.lua 的
+        // Main title / Alt title）。2026-09-28 更晚「复刻标题」把这一块的字与落点也照独占办了 —— 斜体、
+        // 中性浅灰（不再是亮白）、前面缀「└ 」、左缘跟返回键玻璃同一条、上沿＝返回键玻璃下沿＋1。
+        const double SubtitleFontSize = 12.75;
+
+        var subText = BoundsOf(SubtitleText);
+        var subBox = BoundsOf(SubtitleBox);
+
+        report.Add($"剧名那块玻璃 {subBox.Width:F0}×{subBox.Height:F0}（标题那块 {box.Width:F0}×{box.Height:F0}），"
+            + $"在标题之下 {subBox.Top - box.Bottom:F1}；字号 {SubtitleText.FontSize:F2}、斜体 {SubtitleText.FontStyle}");
+
+        Want("剧名自己一块玻璃", !ReferenceEquals(SubtitleBox, TitleBox)
+            && ReferenceEquals(SubtitleBox.Background, TitleBox.Background)
+            && subBox.Width > 0 && subBox.Height > 0);
+        Want("剧名那块玻璃比它的字大", subBox.Height > subText.Height && subBox.Width > subText.Width);
+        Want("剧名那块玻璃不与标题那块重叠", !Overlaps(subBox, box));
+        Want("剧名那块玻璃在标题之下", subBox.Top >= box.Bottom - GeometrySlack);
+
+        // 落点照独占：左缘＝返回键玻璃左缘；上沿＝返回键玻璃下沿＋1，那条缝就是同一个 `title_spacing`。
+        Want("第二行挂在返回键玻璃正下方（左缘同一条、上沿＝它的下沿＋1）",
+            Math.Abs(subBox.Left - back.Left) < GeometrySlack
+            && Math.Abs(subBox.Top - (back.Bottom + TitleGap)) < GeometrySlack);
+
+        // 字（用户令 2026-09-28 晚「元数据的字体加点灰色」＋「标题下方的视频元数据改为斜体」）：色是那一档
+        // 中性浅灰、与独占同一个值；斜体照独占。**字号是 12.75 不是 18**：独占 uosc 那一行是
+        // `round(alt_title_size * 0.71)` ＝ `\fs` 17（2026-09-29 令「缩小一点点」从 0.77/18 收小），
+        // 而 libass 的 `\fs` 按 72 DPI 的 pt 渲染、这里的 FontSize 是 96 DPI 的 px，乘 0.75 才等大
+        // （用户令 2026-09-28 更晚「集成模式下面的元数据体积太大了」修的换算）。
+        Want("剧名的字是那一档中性浅灰（与独占同一个值）",
+            ReferenceEquals(SubtitleText.Foreground, Resources["PlayerInkMetaBrush"]));
+        Want("剧名的字走斜体", SubtitleText.FontStyle == Windows.UI.Text.FontStyle.Italic);
+        Want("剧名的字是自己那一档字号", Math.Abs(SubtitleText.FontSize - SubtitleFontSize) < GeometrySlack);
+
+        // 「深到底」那条线（用户令 2026-09-27 傍晚第四批「左上角的颜色深度在鼠标移动到剧名下方那条线之前
+        // 一点的时候达到最大」）。两个数要一起看：**线在哪**（页面按左簇最下面那块玻璃的下沿量出来的）
+        // 与**线之上是不是真的满了**（页面那条接线：指针 Y → 深度）。
+        // 它必须在「两行字还摆着」这一段里量 —— 下面的收场把剧名收回之后，左簇最下面那块玻璃就变成返回键
+        // 那颗，线跟着上移（返回键玻璃 30 高、上沿 5），量的就不是这句话说的那条线了。
+        // 量法：把指针读数临时换成几个合成位置，走页面自己的 <see cref="TopGlassDepth"/>，量完原样放回去。
+        var wasPointer = _pointerAt;
+        var fullAt = TopGlassFullAt();
+        var fullPx = fullAt * Root.ActualHeight;
+        var bandPx = ChromeReveal.EdgeBandFraction * Root.ActualHeight;
+
+        // 五个合成位置：线之上、就在线上、半路、带子下沿、带子外面。
+        var spotAt = new[]
+        {
+            Math.Max(0, fullPx - 12),
+            fullPx,
+            (fullPx + bandPx) / 2,
+            bandPx,
+            bandPx + 6
+        };
+
+        var depthAt = new List<(double Y, double Depth)>();
+
+        foreach (var spot in spotAt)
+        {
+            _pointerAt = new Point(4, spot);
+            depthAt.Add((spot, TopGlassDepth()));
+        }
+
+        _pointerAt = wasPointer;
+        ApplyTopGlass(TopGlassDepth());
+
+        report.Add($"满深线 y={fullPx:F1}（剧名那块玻璃下沿 {subBox.Bottom:F1}、返回键下沿 {back.Bottom:F1}），"
+            + $"顶部带下沿 y={bandPx:F1}；指针 y→深度 "
+            + string.Join('、', depthAt.Select(read => $"{read.Y:F0}→{read.Depth:0.##}")));
+
+        Want("满深线在剧名那块玻璃的下沿之上一点点",
+            fullAt > 0 && fullAt < ChromeReveal.EdgeBandFraction
+            && Math.Abs((subBox.Bottom - ChromeReveal.TopGlassFullInset) - fullPx) < 1.5);
+
+        Want("指针到满深线就满了、退到带子下沿就最淡",
+            Math.Abs(depthAt[0].Depth - 1) < 0.001
+            && Math.Abs(depthAt[1].Depth - 1) < 0.001
+            && depthAt[2].Depth is > 0 and < 1
+            && Math.Abs(depthAt[3].Depth) < 0.001
+            && Math.Abs(depthAt[4].Depth) < 0.001);
+
+        // 两行字收回原样（下面那颗跳过按钮的几何、以及收场那一拍都按常态走）。
+        ViewModel.Title = wasTitle;
+        ViewModel.Subtitle = wasSubtitle;
+        UpdateLayout();
+
+        // 常驻玻璃整条只剩**左上角那三块**：返回键（2026-09-26 用户令「给返回键加背景」留下的），以及标题与
+        // 剧名那两块。三块共用**同一支**画刷 —— 也就是跟着指针高度变深的那一支（用户令 2026-09-27 傍晚第三批
+        // 「加深左上角亚克力背景的颜色，鼠标位置越靠上亚克力背景的颜色越深」，问实了＝返回键与片名两块一起跟
+        // 指针走）。统计那颗的底在同一批按用户令去掉（「把统计的亚克力背景去掉」）。结构上量：控件住在一个
+        // Grid 里、第一个孩子是那块 Border、不吃指针、不越出控件。
+        var bare = new List<string>();
+        var pillAlpha = 0;
+        Brush? lead = null;
+
+        foreach (var (name, control) in new (string Name, FrameworkElement Element)[]
+                 {
+                     ("返回", BackButton)
+                 })
+        {
+            if (control.Parent is not Grid cell || cell.Children.Count < 2 || cell.Children[0] is not Border pill)
+            {
+                bare.Add($"{name}没有");
+                continue;
+            }
+
+            // 三块共用那一支是**跟着指针高度变深**的那一支（用户令 2026-09-27 傍晚第三批「加深左上角亚克力
+            // 背景的颜色，鼠标位置越靠上亚克力背景的颜色越深」）：它的值不是一个常数，所以这里比的是
+            // 「是不是那一支」加「浓度是不是本页此刻这一档」——常数那条比法在这一支上必红，而「压根没画上」
+            // （alpha 0）两种比法都拦得住。
+            if (!ReferenceEquals(pill.Background, Resources[PlayerPalette.TopGlassKey])
+                || pill.Background is not SolidColorBrush { Color.A: var alpha })
+                bare.Add($"{name}那块不是左上角那支玻璃");
+            else if (alpha != PlayerPalette.TopGlassAlphaAt(_topGlassDepth))
+                bare.Add($"{name}那块的浓度 {alpha:X2} 不是本页此刻那一档 "
+                    + $"{PlayerPalette.TopGlassAlphaAt(_topGlassDepth):X2}");
+            else if (pill.IsHitTestVisible) bare.Add($"{name}那块会吃指针");
+            else if (!Encloses(BoundsOf(control), BoundsOf(pill))) bare.Add($"{name}那块越出了按钮");
+            else
+            {
+                lead = pill.Background;
+                pillAlpha = alpha;
+            }
+        }
+
+        report.Add(bare.Count == 0
+            ? $"返回键那块常驻玻璃 alpha {pillAlpha:X2}（指针深度 {_topGlassDepth:0.##}）"
+            : $"背后不对:{string.Join('、', bare)}");
+        Want("返回那颗带的是左上角那支玻璃", bare.Count == 0);
+
+        // 那三块（返回键、标题、剧名）是**同一支**画刷，而这支画刷是全表唯一一支拿不到常数的：
+        // 不钉住这一条，返回键那块按「跟指针走」上色、片名那两块忘了换过来的话，屏上是左上角两档深浅并排，
+        // 而上面那一问照样绿。
+        Want("返回与片名共用同一支玻璃",
+            lead is not null
+            && ReferenceEquals(lead, TitleBox.Background)
+            && ReferenceEquals(SubtitleBox.Background, TitleBox.Background));
+
+        // 「鼠标位置越靠上，亚克力背景的颜色越深」这条直线本身，逐档钉住。量法走页面真正写画刷的那条路
+        // （ApplyTopGlass），不是照 Core 那条纯函数自己乘一遍 —— 后者只是算术，而这里要证明的是「页面真的
+        // 按它写」：写错了档、写错了画刷、写反了方向，三种都在这儿现形。
+        var ramp = new List<string>();
+        var rungs = new[] { 0.0, 0.25, 0.5, 0.75, 1.0 };
+        var laid = true;
+
+        foreach (var depth in rungs)
+        {
+            ApplyTopGlass(depth);
+
+            var got = ((SolidColorBrush)Resources[PlayerPalette.TopGlassKey]).Color.A;
+            var want = PlayerPalette.TopGlassAlphaAt(depth);
+
+            if (got != want) laid = false;
+            ramp.Add($"{depth:0.##}→{got:X2}");
+        }
+
+        // 收场把它推回指针此刻那一档：上面那五个值是探针自己摆上来的，不是屏上的样子。
+        ApplyTopGlass(TopGlassDepth());
+
+        var ladder = rungs.Select(PlayerPalette.TopGlassAlphaAt).ToList();
+
+        report.Add($"左上角玻璃浓度（深度→alpha）{string.Join('、', ramp)}");
+        Want("左上角玻璃跟着指针高度变深",
+            laid
+            && Enumerable.Range(1, ladder.Count - 1).All(rung => ladder[rung] > ladder[rung - 1])
+            && ladder[0] == PlayerPalette.GlassAlpha
+            && ladder[^1] < byte.MaxValue);
+
+        // 右上角那一栏**不许**有常驻玻璃（用户令 2026-09-27 傍晚「鼠标没移到按钮上的时候不要显示背景」、
+        // 「右上角的按钮照搬首页的就好」）。它们几颗现在直接
+        // 住在 WindowButtons 那一栏里，头顶没有 Border；悬停那一层由框架的 Button 模板给。
+        // 2026-09-27 晚「统计」摘掉后，这一栏剩四颗（置顶、最小化、最大化、关闭）。
+        // **置顶那颗 2026-09-28 深夜第五批起是唯一的例外**：已置顶时它整颗常亮，那层底由 SetPinned 亲手写进
+        // 控件自己的 Background（用的就是悬停那一支白 —— 独占 lit 那一档的画法是同一句）。所以这一关按
+        // **置顶状态**分两支：没置顶时四颗都不画底，置顶时三颗不画、置顶那颗画的是那一支白。
+        var beds = new List<string>();
+        var litBed = Resources["PlayerStripHoverBrush"];
+
+        foreach (var (name, control) in new (string Name, FrameworkElement Element)[]
+                 {
+                     ("置顶", PinButton),
+                     ("最小化", MinimizeButton),
+                     ("最大化", MaximizeButton),
+                     ("关闭", CloseButton)
+                 })
+        {
+            if (!ReferenceEquals(control.Parent, WindowButtons))
+            {
+                beds.Add($"{name}不在窗口命令那一栏");
+                continue;
+            }
+
+            if (ReferenceEquals(control, PinButton) && _pinned)
+            {
+                if (control is not Button { Background: { } lit } || !ReferenceEquals(lit, litBed))
+                    beds.Add($"{name}已置顶却没有常亮那一层底");
+            }
+            else if (control is not Button button || button.Background is not { } own
+                || own is not SolidColorBrush { Color.A: 0 })
+            {
+                beds.Add($"{name}自己画了底");
+            }
+        }
+
+        report.Add(beds.Count == 0
+            ? $"右上角那几颗平时没有底（置顶那颗此刻 {(_pinned ? "亮着" : "没亮")}）"
+            : $"有问题：{string.Join('、', beds)}");
+        Want("右上角那几颗平时没有底（置顶那颗已置顶时例外，它那时常亮）", beds.Count == 0);
+
+        // 尺寸复刻独占顶栏（用户令 2026-09-28「复刻独占模式右上角的最小化、窗口化、关闭三个按钮，替换掉
+        // 集成模式右上角的 winui 按钮」）：独占 `elements/TopBar.lua` 那几颗各占 **top_bar_size＝40** 的一格，
+        // 而**画出来的可见底**是 `size − margin`＝**35**（margin＝floor((40−20)/4)＝5）。
+        // 2026-09-28 深夜第五批用户令「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的窗口
+        // 模式下右上角的一样大」：集成的按钮从 40 见方收成 **35 见方**（＝那一层可见底），40 那个数改由这一栏
+        // 的 `Spacing` ＋ 整栏右边距维持成**步进**（见 PlayerPage.xaml 那一栏的标记）—— 于是四颗的格距与占位
+        // 仍与独占一样，屏幕上看得见的方块一样大。逐颗量。
+        var oversized = new List<string>();
+
+        foreach (var (name, button) in new[]
+                 {
+                     ("置顶", PinButton), ("最小化", MinimizeButton),
+                     ("最大化", MaximizeButton), ("关闭", CloseButton)
+                 })
+        {
+            var bounds = BoundsOf(button);
+            if (Math.Abs(bounds.Width - 35) >= GeometrySlack || Math.Abs(bounds.Height - 35) >= GeometrySlack)
+                oversized.Add($"{name} {bounds.Width:F0}×{bounds.Height:F0}");
+        }
+
+        report.Add(oversized.Count == 0 ? "右上四颗都是 35×35（复刻独占的可见底）" : $"尺寸不对：{string.Join('、', oversized)}");
+        Want("右上四颗复刻独占的可见底是 35×35 正方形", oversized.Count == 0);
+
+        // 格距那一条：35 是**画出来的底**，占位还得是 40（独占那 40 见方的格）—— 否则四颗会挤成更窄的一排、
+        // 贴右缘的位置也跟着挪。量的是相邻两颗左缘之差，不读 `Spacing` 那个数本身。
+        var steps = new[] { PinButton, MinimizeButton, MaximizeButton, CloseButton }
+            .Select(button => BoundsOf(button).Left).ToArray();
+        var gaps = steps.Zip(steps.Skip(1), (left, right) => right - left).ToArray();
+
+        report.Add($"四颗的左缘步进 {string.Join('、', gaps.Select(gap => gap.ToString("F1")))}");
+
+        Want("四颗的格距仍是 40（35 只是可见底，占位没变）",
+            gaps.All(gap => Math.Abs(gap - 40) < GeometrySlack));
+
+        // 悬停/按下那两档（用户令 2026-09-27 傍晚第四批「鼠标移动到右上角的关闭的时候背景要和首页一样变成
+        // 红色，然后右上角另外几个按钮鼠标移动到按钮上的时候背景颜色太浅了容易和画面合在一起」；第五批
+        // 「这四个按钮鼠标移到上面的时候要用白色亚克力背景」＝几颗改成一层半透明的白，并且问实了白底上的
+        // 图标要转深色）。
+        // **照片拍不到这两档**（这台机器注不进鼠标事件），所以把状态推上去读模板：框架的 Button 模板进
+        // PointerOver/Pressed 两态会把 `ContentPresenter` 的底**与前景**换成那几个 ThemeResource，而那几颗
+        // 各自在自己的资源字典里把它们按到了调色板上（与「跳过」那颗、滑杆白条同一手法）。键按回来了、
+        // 模板却没取用，或者这一栏里漏了一颗（漏的那颗仍是框架那层白一成，压在画面上几乎看不见），都在这里红。
+        // 关闭那颗最后一格是空的：**红底上的白叉本来就是对的**，它不该被顺手一起换成深色。
+        // 2026-09-27 晚「统计」摘掉后，白底那几颗只剩置顶、最小化、最大化三颗。
+        var hovers = new (string Name, Button Button, string Hover, string Pressed, string Ink)[]
+        {
+            ("置顶", PinButton, "PlayerStripHoverBrush", "PlayerStripPressedBrush", "PlayerStripHoverInkBrush"),
+            ("最小化", MinimizeButton, "PlayerStripHoverBrush", "PlayerStripPressedBrush", "PlayerStripHoverInkBrush"),
+            ("最大化", MaximizeButton, "PlayerStripHoverBrush", "PlayerStripPressedBrush", "PlayerStripHoverInkBrush"),
+            ("关闭", CloseButton, "PlayerCloseHoverBrush", "PlayerClosePressedBrush", "")
+        };
+
+        var dull = new List<string>();
+
+        foreach (var (name, button, hover, pressed, ink) in hovers)
+        {
+            foreach (var (state, key) in new[] { ("PointerOver", hover), ("Pressed", pressed) })
+            {
+                VisualStateManager.GoToState(button, state, false);
+
+                if (!ReferenceEquals(Bed(button), Resources[key]))
+                    dull.Add($"{name}的{state}不是{key}");
+
+                if (ink.Length > 0)
+                {
+                    if (!ReferenceEquals(Ink(button), Resources[ink])) dull.Add($"{name}的{state}图标没有转深色");
+                }
+                else if (ReferenceEquals(Ink(button), Resources["PlayerStripHoverInkBrush"]))
+                {
+                    dull.Add($"{name}不该转深色（红底上的白叉本来就是对的）");
+                }
+            }
+
+            VisualStateManager.GoToState(button, "Normal", false);
+        }
+
+        report.Add(dull.Count == 0
+            ? "右上几颗的悬停/按下都按回了调色板（白底那几颗、关闭那颗是红的）"
+            : $"悬停不对：{string.Join('、', dull)}");
+        Want("右上几颗的悬停/按下都按回了调色板", dull.Count == 0);
+
+        // 图标自己也要换（同一条令里问实的那一半）：白底上的白图标会糊成一片。
+        // **这一条不走模板**：模板换的是 `ContentPresenter.Foreground`，而 `FontIcon`／`PathIcon` 的 Foreground
+        // **不从那里继承下来** —— 2026-09-27 傍晚第五批实测：模板那一层已经换成深色了（上面那一问全绿），
+        // 图标读回来还是白的。这个坑只有单独问一次图标自己才现形，所以它由页面那条线管：`SetStripGlyphInk`，
+        // 由这一栏的 PointerMoved／PointerExited 推。**指针事件那一小段接线探针喂不了**（这台机器注不进鼠标
+        // 事件），这里量的是它推到的那一端；接线本身只有读码与实机验收。
+        // **一格一格地问**：第一版这里是「四颗一起转深色」，用户当场问「怎么是四个按钮一起变色」——
+        // 所以现在每一颗都要单独推一次，而且要检查**其余几颗回到了白**（这一条才是那个 bug 的判据）。
+        // 2026-09-27 晚「统计」摘掉后，这一份名单只剩置顶、最小化、最大化三颗；2026-09-28 深夜第五批起置顶那颗
+        // 只有**一颗** PathIcon，而且**已置顶时它本来就该是深色**（常亮那一档是白底）—— 于是下面按「此刻置顶开
+        // 着没有」算它的期望色，其余几颗照旧只看指针。
+        var glyphSets = new (string Name, Button Button, IconElement[] Glyphs)[]
+        {
+            ("置顶", PinButton, [PinGlyph]),
+            ("最小化", MinimizeButton, [MinimizeGlyph]),
+            ("最大化", MaximizeButton, [MaximizeGlyph])
+        };
+
+        var mixed = new List<string>();
+        var pinnedInk = _pinned ? "PlayerStripHoverInkBrush" : "PlayerInkBrush";
+
+        foreach (var (name, button, _) in glyphSets)
+        {
+            SetStripGlyphInk(button);
+
+            foreach (var (otherName, otherButton, theirs) in glyphSets)
+            {
+                var want = ReferenceEquals(button, otherButton)
+                    ? "PlayerStripHoverInkBrush"
+                    : ReferenceEquals(otherButton, PinButton) ? pinnedInk : "PlayerInkBrush";
+
+                if (theirs.Any(glyph => !ReferenceEquals(glyph.Foreground, Resources[want])))
+                    mixed.Add($"{name}压着的时候{otherName}那颗不是{want}");
+            }
+
+            // 关闭那颗**不该**跟着转（它悬停时是红的，红底上的白叉本来就是对的）。
+            if (CloseButton.Content is FontIcon closeGlyph
+                && ReferenceEquals(closeGlyph.Foreground, Resources["PlayerStripHoverInkBrush"]))
+                mixed.Add($"{name}压着的时候关闭那颗也转深色了");
+        }
+
+        SetStripGlyphInk(null);
+
+        // 指针不在这一栏时该回白的那几颗里，已置顶的置顶那颗不算 —— 它那时**常亮**着，深色才是对的。
+        var leftDark = glyphSets
+            .Where(set => !ReferenceEquals(set.Button, PinButton) || !_pinned)
+            .SelectMany(set => set.Glyphs)
+            .Count(glyph => !ReferenceEquals(glyph.Foreground, Resources["PlayerInkBrush"]));
+
+        var pinWord = _pinned ? "常亮着、一直是深色" : "没置顶、照常回白";
+
+        report.Add(mixed.Count == 0 && leftDark == 0
+            ? $"四颗的图标一个一个换（压着的那颗转深色、其余几颗白；置顶那颗此刻{pinWord}）"
+            : $"图标不对：{string.Join('、', mixed)}"
+              + (leftDark == 0 ? string.Empty : $"；指针不在这一栏时有 {leftDark} 个还是深色"));
+
+        Want("压着的那一颗图标转深色、其余几颗回白（置顶那颗已置顶时另算）", mixed.Count == 0 && leftDark == 0);
+
         Want("跳过按钮不压进度条", !Overlaps(skip, bar));
         Want("跳过按钮在画面里", Encloses(picture, skip));
 
@@ -551,6 +1057,12 @@ public sealed partial class PlayerPage
             Want("offer 收掉后同一坐标不算按钮", !PressOnSkipButton(skipCentre));
             Want("offer 收掉后倒计时表停了", _skipCountdownTimer?.IsRunning != true);
         }
+
+        // 窗口形态还回去（这一关开头把它摆成的是**普通窗口**），两档尺寸跟着回到用户进来时那一档。
+        if (wasMaximized) { RequestMaximize(true); DrainWindowChange(); }
+        if (wasFullscreen) { SetFullscreen(true); DrainWindowChange(); }
+        ApplyChromeScale();
+        UpdateLayout();
 
         return (wrong.Count == 0,
             string.Join("；", report) + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));

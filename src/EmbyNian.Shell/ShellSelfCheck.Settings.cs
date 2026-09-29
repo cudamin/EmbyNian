@@ -312,7 +312,7 @@ internal static partial class ShellSelfCheck
         check("隐藏功能下方说明收放", compact.Ok, compact.Detail);
 
         // 安全起播已经替换旧命令行传头：保留可见提示检查，但不能继续要求屏上承诺泄露令牌。
-        // 这里只验证说明与四个设置行；管道身份和起播顺序由 Core 的离线子进程夹具验证。
+        // 这里只验证说明与五个设置行；管道身份和起播顺序由 Core 的离线子进程夹具验证。
         var playerRows = page.ViewModel.Sections
             .FirstOrDefault(section => section.Category == "播放器")?.Rows ?? [];
         var pathNote = playerRows.FirstOrDefault(row => row.Label == "mpv.exe 路径")?.Note ?? "";
@@ -321,12 +321,18 @@ internal static partial class ShellSelfCheck
             && pathNote.Contains("停止起播", StringComparison.Ordinal);
         var ipcNote = playerRows.FirstOrDefault(row => row.Label == "启用 IPC 进度通道")?.Note ?? "";
         var hasPipeline = playerRows.Any(row => row.Label == "渲染管线");
+        // 「在设置中新增截图保存目录」（2026-09-29）成了这张卡的第五行，顺带钉住：说明要指明留空时的
+        // 装机落点，和关于卡、自检「截图有落点」说的是同一回事。
+        var screenshotNote = playerRows.FirstOrDefault(row => row.Label == "截图保存目录")?.Note ?? "";
 
         check("mpv.exe 路径那一行写明安全通道要求",
-            saysSecureStartup && ipcNote.Contains("起播和退出仍需管道", StringComparison.Ordinal) && hasPipeline && playerRows.Count == 4,
+            saysSecureStartup && ipcNote.Contains("起播和退出仍需管道", StringComparison.Ordinal)
+                && hasPipeline && playerRows.Count == 5
+                && screenshotNote.Contains("留空用装机落点", StringComparison.Ordinal),
             $"安全起播说明{(saysSecureStartup ? "完整" : "缺失")}、"
-                + $"{(hasPipeline ? "并且" : "但是没有")}「渲染管线」那一行；这张卡 {playerRows.Count} 行"
-                + $"（应当 4 行：后端、渲染管线、路径、IPC）");
+                + $"{(hasPipeline ? "并且" : "但是没有")}「渲染管线」那一行、"
+                + $"截图那行{(screenshotNote.Contains("留空用装机落点") ? "写明" : "没写明")}留空时的落点；"
+                + $"这张卡 {playerRows.Count} 行（应当 5 行：后端、渲染管线、路径、IPC、截图目录）");
 
         // 音频输出设备那一行必须始终可用。设备列表要从 mpv 读（临时开一个 libmpv 句柄只为枚举），而那一趟可能
         // 答不上来 —— 找不到 libmpv、没装 WASAPI 输出、机器上没有声卡。那时候这一行必须还剩「跟随系统默认设备」
@@ -555,12 +561,6 @@ internal static partial class ShellSelfCheck
         var speedWheel = player.ProbeSpeedWheel();
         check("倍速轮盘", speedWheel.Ok, speedWheel.Detail);
 
-        // 需求 7. Three of the things this asks about are collisions with the player rather than faults in
-        // the box: the strip's drag-guard list, the chrome hold a flyout used to be able to steal, and the
-        // single letters the player owns. All three look fine until someone types into it mid-film.
-        var font = player.ProbeSubtitleFont();
-        check("播放页字幕字体栏", font.Ok, font.Detail);
-
         var skips = player.ProbeSkipAndChapters();
         check("跳过片头与章节刻度", skips.Ok, skips.Detail);
 
@@ -608,6 +608,9 @@ internal static partial class ShellSelfCheck
         // 快捷键派发（「参考上图在设置中新增快捷键功能」，2026-09-08）：每个可重绑动作在页面那张 动作→处理器 表里
         // 都有一条（少一条 = 那颗键按下去没反应），每个默认键都拼得回来（KeyStrokeInterop 认得出，方括号那两颗尤其），
         // 默认键之间不撞。三样都是编译看不见、截图看不见、也没法在这台机器上用真键盘自动按一遍的，只有这一关盯着。
+        var transport = player.ProbeTransportLayout();
+        check("播放控制条统一布局与手势", transport.Ok, transport.Detail);
+
         var shortcuts = player.ProbeShortcuts();
         check("快捷键派发", shortcuts.Ok, shortcuts.Detail);
 

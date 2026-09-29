@@ -393,8 +393,8 @@ public static class MpvOutputOptions
     public static readonly MpvChoice[] SubtitleBackStyles =
     [
         new(Inherit, "关闭（只有描边和阴影）"),
-        new("background-box", "贴着字的底板"),
-        new("opaque-box", "整行不透明方框")
+        new("background-box", "多行整体背景盒（使用底板颜色）"),
+        new("opaque-box", "逐行描边与阴影盒（使用描边及阴影颜色）")
     ];
 
     // 底板颜色 no longer has a preset list here: since 2026-09-06 it is a free-form #RRGGBB through the
@@ -702,7 +702,9 @@ public static class MpvOutputOptions
         // it is sent whether or not a colour was picked: 底板 on with 颜色 不设置 is a plate in mpv's
         // own black, which is a perfectly good answer and used to be unreachable.
         Add(options, "sub-border-style", subtitles.SubtitleBackStyle);
-        Add(options, "sub-back-color", ToMpvColor(subtitles.SubtitleBackColor, subtitles.SubtitleBackOpacity));
+        var backColor = HtmlColor.TryParse(subtitles.SubtitleBackColor, out _)
+            ? subtitles.SubtitleBackColor : "#000000";
+        Add(options, "sub-back-color", ToMpvColor(backColor, subtitles.SubtitleBackOpacity));
 
         return options;
     }

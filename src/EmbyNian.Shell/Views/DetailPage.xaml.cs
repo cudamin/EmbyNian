@@ -845,6 +845,119 @@ public sealed partial class DetailPage : Page, IShellContent
             : (PickerPanel, PickerPanel.Padding, SourcePicker, AudioPicker, SubtitlePicker);
 
     /// <summary>
+    /// Tooling: 把这一页那颗字幕下拉弹开留着（<c>--show-picker</c> 用的）。
+    /// <para>
+    /// 挑屏上那一份问（<see cref="PickerSet"/>）：集页宽版式那三颗在片名栏里，其余页面和紧凑版式在尾部，
+    /// 两份只有一份在屏上 —— 写死问尾部那一份的版本在集页上会回一句「没有可弹的」，而浮层明明就在上面。
+    /// </para>
+    /// <para>
+    /// 弹的是字幕那一颗：用户 2026-09-27 那张截图里开着的就是它，而它也是三颗里最长的一颗（「自动 · Chinese
+    /// （默认 SUBRIP）」），底下压着的照旧是头图那张剧照 —— 浮层透不透，这张照片量得出来。
+    /// </para>
+    /// </summary>
+    internal bool OpenPickerMenu()
+    {
+        var (_, _, _, _, subtitle) = PickerSet;
+        if (!PickerReady) return false;
+
+        subtitle.IsDropDownOpen = true;
+        return subtitle.IsDropDownOpen;
+    }
+
+    /// <summary>
+    /// Tooling: 这一页那颗字幕下拉这一刻能不能弹 —— <c>--show-picker</c> 等的就是这一位。
+    /// <para>
+    /// 为什么要单独留一位：那几颗下拉的单子不跟页面同一次到。集页面上它随详情一起来的，点进去就在；
+    /// 剧页／电影页上它挂在播放落点那一次请求上，要晚好几拍。2026-09-27 拍「剧页面」那张时
+    /// <c>--show-picker</c> 还是跟着导航那一步直接问的，问早了 —— 屏上那一刻列表还空着，回一句
+    /// 「这一页上没有可弹的字幕下拉」，而十几秒后照片里那颗下拉明明站在那儿、值也在（用户那一轮的原话：
+    /// 「剧页面、电影页面，集页面，季页面，把音频和字幕的选择栏改成亚克力背景」，四页都得拍得出来）。
+    /// </para>
+    /// </summary>
+    internal bool PickerReady
+    {
+        get
+        {
+            var (_, _, _, _, subtitle) = PickerSet;
+            return subtitle.Visibility == Visibility.Visible && subtitle.Items.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// 自检：这一行那几颗下拉的浮层开在<em>同一棵树</em>里没有 —— 详情页那七颗是 <see cref="EgPicker"/>，
+    /// 它整个存在的理由就是这一件事。
+    /// <para>
+    /// 为什么要钉：框架的 ComboBox 把弹层设成窗口化的（<c>ShouldConstrainToRootBounds=false</c>），浮层于是开在
+    /// 自己那个窗口里；而调色板给浮层那支是<em>应用内</em>亚克力，只采得到同一个窗口里画在它后面的东西 ——
+    /// 采不到就退回 <c>FallbackColor</c>，屏上是一块不透明的实心色（用户两轮都指过「不像亚克力」，2026-09-27
+    /// 那张截图量出来浮层是 <c>#20262D</c>，底下压着的剧照一像素都没透上来）。这一条读的是那件事的开关：
+    /// 属性还在，浮层就还是实心的，而照片之外的每一条读数都不会响。
+    /// </para>
+    /// <para>
+    /// 只读屏上那一份三颗（同 <see cref="PickerFit"/> 的理由）。季那一颗也是 EgPicker，但它没有 x:Name
+    /// —— 它挂在 <c>ShelfHead.Trailing</c> 里、只在剧页露出来，这里够不着，靠同一份样式和同一个类。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail) PickerGlass()
+    {
+        var (_, _, source, audio, subtitle) = PickerSet;
+        var read = new List<string>();
+        var strayed = 0;
+        var onScreen = 0;
+
+        foreach (var (name, picker) in new (string Name, ComboBox Picker)[]
+                 {
+                     ("媒体源", source), ("音频", audio), ("字幕", subtitle)
+                 })
+        {
+            // 收着的那一颗不读：这一行讲的是「同一个文件里挑哪条轨道」，媒体源只有一条时那一颗就收着，
+            // 而**收起来的控件框架根本不套模板**（收着的元素不进测量），弹层部件当然不存在 —— 读它是假红。
+            // 2026-09-27 闸门 4 第一趟红的就是这一句：那一页只有一个媒体源，报「媒体源 的弹层还没上树」，
+            // 而音频和字幕两颗都好好地报「在树内」。宽度那一位一并看：模板是量的时候套上的，量过才算真在屏上。
+            if (picker.Visibility != Visibility.Visible || picker.ActualWidth <= 0)
+            {
+                read.Add($"{name} 这一页收着");
+                continue;
+            }
+
+            onScreen++;
+
+            if (picker is not EgPicker shell)
+            {
+                strayed++;
+                read.Add($"{name} 是框架的 {picker.GetType().Name}");
+                continue;
+            }
+
+            if (shell.PopupPart is not { } popup)
+            {
+                strayed++;
+                read.Add($"{name} 的弹层还没上树");
+                continue;
+            }
+
+            if (!popup.ShouldConstrainToRootBounds)
+            {
+                strayed++;
+                read.Add($"{name} 的浮层还是窗口化的");
+                continue;
+            }
+
+            read.Add($"{name} 在树内");
+        }
+
+        // 三颗全收着＝这一页没有可挑的文件选项，和 PickerFit 那一边同一条理：没得读不算坏。
+        if (onScreen == 0)
+        {
+            return (true, $"{string.Join("、", read)} —— 这一页没有文件选项，浮层没得读");
+        }
+
+        return strayed == 0
+            ? (true, $"{string.Join("、", read)} —— 浮层与页面同树，应用内亚克力采得到底下那一页")
+            : (false, $"{string.Join("；", read)}（浮层回到了另一个窗口里，亚克力会退回实心色）");
+    }
+
+    /// <summary>
     /// 自检：「媒体源／音频／字幕」那一行该不该有，以及有的那一次三个下拉有没有被窗口右沿切掉。
     /// <para>
     /// 该不该有：这一行讲的是「这一个文件放哪一条轨道」，所以它只摆在讲一个文件的页面上 —— 电影和单集有，剧和

@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 using Windows.Storage;
@@ -49,6 +50,24 @@ public sealed partial class PlayerPage : IWin32KeySink
     private bool _wasForeground;
 
     private long _foregroundSinceAt;
+
+    /// <summary>
+    /// 置顶此刻是不是开着（<c>HostWindow.TopMost</c> 在这一页的副本）。
+    /// <para>
+    /// 它只有一个用处：<see cref="SetStripGlyphInk"/> 要给置顶那颗图标算颜色 —— 已置顶时那颗**常亮**
+    /// （深色图标压在半透明白底上），与指针在不在它上面无关。去问窗口那个属性也行，但那个方法在
+    /// <see cref="Attach"/> 之前就被构造函数调用过（那时还没有窗口），而且 <see cref="SetPinned"/> 是这一页
+    /// 唯一能改那面旗子的地方 —— 本地留一份就不必每拍去问，也不必在还没接线时编一个答案。
+    /// </para>
+    /// </summary>
+    private bool _pinned;
+
+    /// <summary>
+    /// 指针此刻压在这一栏的哪一颗上（<see cref="SetStripGlyphInk"/> 的上一拍结论）。
+    /// <see cref="SetPinned"/> 改完状态要把图标色重算一遍，重算时得知道指针压着谁 —— 否则拨一下置顶就会把
+    /// 指针正压着的那颗的深色抹回白。
+    /// </summary>
+    private Button? _stripHot;
 
     // ---- the pointer ------------------------------------------------------------
 
@@ -140,8 +159,7 @@ public sealed partial class PlayerPage : IWin32KeySink
             return false;
         }
 
-        _pointerAt = point;
-        _pointerOn = part;
+        NotePointer(point, part);
         _pointerMovedAt = Now;
         _pointerMoves++;
         _stillMoves = 0;
@@ -181,14 +199,21 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnPointerWheel(object sender, PointerRoutedEventArgs e)
     {
-        var delta = e.GetCurrentPoint(Root).Properties.MouseWheelDelta;
+        if (!Attached || e.Handled) return;
+        var point = e.GetCurrentPoint(Root);
+        var delta = point.Properties.MouseWheelDelta;
         if (delta == 0) return;
 
         // 顺带补牌——FlashRail 会重盖空闲时钟把藏匿翻成显示，而这一路过去不挂牌
         // （「未标注的显示路径」的最后一个漏网生产路径）。
         if (_cursorHidden) _woke = "滚轮调音量";
 
-        RollVolume(delta > 0 ? WheelStep : -WheelStep);
+        if (Covers(SpeedStrip, point.Position))
+            ViewModel.NudgeSpeed(delta > 0 ? 0.1 : -0.1);
+        else if (Covers(SeekTrack, point.Position))
+            ViewModel.SeekTimelineBy(delta > 0 ? 5 : -5);
+        else
+            RollVolume((delta > 0 ? 1 : -1) * (Covers(Rail, point.Position) ? 1 : WheelStep));
         e.Handled = true;
     }
 
@@ -289,14 +314,10 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// <summary>
     /// Whether a point in the title strip is on one of the controls it carries. Its own method because the
     /// self-check reads it: a control left off this list is a control whose press starts a window drag
-    /// instead — and for 需求 7's search box that means the caret never lands and the window follows the
-    /// hand instead.
+    /// instead.
     /// </summary>
     private bool OnStripControl(Point point) =>
         Covers(BackButton, point)
-        || Covers(FontBox, point)
-        || Covers(StatsButton, point)
-        || Covers(PinButton, point)
         || Covers(WindowButtons, point);
 
     /// <summary>
@@ -356,6 +377,11 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
+        if (Covers(Bar, e.GetPosition(Root)))
+        {
+            e.Handled = true;
+            return;
+        }
         SecondTapOnPicture();
 
         // 「双击触发全屏或还原操作时，不得呼出或显示任何 UI 控件」（用户令 2026-09-18）：把点画面
@@ -514,12 +540,6 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         if (!Attached || _window is null || _inputSuspended) return;
 
-        // 需求 7's search box has the keyboard: everything below is a font name's letters as much as it is a
-        // command. Typing 「Consolas」 would otherwise mute the film, skip to the next episode and reset the
-        // speed on the way past. The box handles Escape itself — see OnFontBoxKeyDown — so there is still a
-        // way out of the box and then out of fullscreen.
-        if (_typing) return;
-
         if (!Dispatch(e.Key, out var wake)) return;
 
         e.Handled = true;
@@ -665,7 +685,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnSpaceShortcut(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key != VirtualKey.Space || !Attached || _window is null || _typing || _inputSuspended) return;
+        if (e.Key != VirtualKey.Space || !Attached || _window is null || _inputSuspended) return;
 
         var stroke = new KeyStroke("Space", false, false, false);
         if (ShortcutCatalog.Lookup(ViewModel.ShortcutBindings, stroke) != "toggle-pause") return;
@@ -708,10 +728,10 @@ public sealed partial class PlayerPage : IWin32KeySink
     // 没有，全是这条。窗口的线程级 WH_KEYBOARD 钩子在焦点不在岛里时把空格和 Esc 送到这里；焦点在
     // 岛里时它一概放行，两条路永远只有一条出键。
 
-    /// <summary>接不接这一下。菜单/弹层开着让路，正在打字让路，其余只认空格和 Esc 两颗。</summary>
+    /// <summary>接不接这一下。菜单/弹层开着让路，其余只认空格和 Esc 两颗。</summary>
     bool IWin32KeySink.WantsKey(int virtualKey)
     {
-        if (!Attached || _typing || _inputSuspended) return false;
+        if (!Attached || _inputSuspended) return false;
 
         // 焦点在弹层上时 Win32 焦点本来就在岛里、走不到这里；这道闸留给「弹层开着而焦点又掉出岛」
         // 这种状态机打架的时刻 —— Esc 该归 XAML 去关弹层，兜底路不越权。
@@ -777,6 +797,9 @@ public sealed partial class PlayerPage : IWin32KeySink
         if (!ViewModel.PictureInHostWindow)
         {
             ViewModel.SetNativeFullscreen(on);
+            // 画面不在宿主窗里时全屏归 mpv 管，但浮层是同一棵 XAML —— 两档尺寸照走。判据与别处同一个：
+            // 全屏**或最大化**都是大档（宿主窗这一刻的形态照样读得到）。
+            ApplyTitleScale(on || _window?.IsMaximized == true);
             return;
         }
         if (_window is null) return;
@@ -795,6 +818,11 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         if (_window is not { } window) return;
         window.Fullscreen = on;
+        // 两档尺寸跟着窗口形态走（用户令 2026-09-28「参考独占模式为集成模式的窗口和全屏设置
+        // 不一样的标题尺寸」，见 ApplyTitleScale）。判据是「全屏**或最大化**」——退全屏时若回到的是
+        // 最大化那一档，大档要留着（`IsMaximized` 在退全屏那一拍还读不到，随后那次 WM_SIZE 会由
+        // `SyncChromeScale` 补上，两边都是同一个判据）。
+        ApplyTitleScale(on || window.IsMaximized);
         FullscreenGlyph.Glyph = Glyph(window.Fullscreen ? FullscreenExitCode : FullscreenEnterCode);
 
         // 右上角那一颗的图标也跟着走（全屏时它是「窗口化」）。Render 只在标题条露着的时候才更新它，
@@ -826,8 +854,8 @@ public sealed partial class PlayerPage : IWin32KeySink
     }
 
     /// <summary>
-    /// 置顶 on or off, in one place: the window, the two drawn pins, and the two sentences that tell somebody
-    /// without a pointer which way the switch is thrown.
+    /// 置顶 on or off, in one place: the window, the button's own two looks, and the two sentences that tell
+    /// somebody without a pointer which way the switch is thrown.
     /// <para>
     /// There is one piece of state now — <see cref="HostWindow.TopMost"/> — and this is the only thing that
     /// reads or writes it on this page. It used to live in two places at once, the window's flag and a
@@ -836,8 +864,15 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// been the right shape all along — one real piece of state on the window, one glyph swapped on screen.
     /// </para>
     /// <para>
+    /// <b>已置顶那一档 2026-09-28 深夜第五批改过</b>（用户令「把集成模式右上角的置顶图标换成跟独占模式
+    /// 一样的」）：从前这里换的是**两颗画出来的图钉**（躺着那颗空心钉／立着那颗实心钉），现在只有**一颗**
+    /// —— 独占同一支字体的 <c>push_pin</c>，连形状都是从那支字体里取的轮廓。状态改由「整颗常亮」表示，
+    /// 就是独占那一头 <c>elements/TopBar.lua</c> 里 <c>lit = is_hover or state.ontop</c> 的写法：已置顶＝
+    /// 底换成悬停那一档的白、图标转深色；未置顶＝没有底、图标白（与这一排其余几颗同款）。
+    /// </para>
+    /// <para>
     /// The window is checked for null separately because the page's constructor calls this before
-    /// <see cref="Attach"/> has run: the two pins and both sentences have to start out agreeing with each
+    /// <see cref="Attach"/> has run: the button's look and both sentences have to start out agreeing with each
     /// other, and the alternative is a second copy of the starting state written into the markup.
     /// </para>
     /// </summary>
@@ -845,8 +880,15 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         if (_window is not null) _window.TopMost = pinned;
 
-        PinOnIcon.Visibility = pinned ? Visibility.Visible : Visibility.Collapsed;
-        PinOffIcon.Visibility = pinned ? Visibility.Collapsed : Visibility.Visible;
+        _pinned = pinned;
+
+        // 常亮那一层：底走控件自己的 Background（模板在 Normal 那一态就照它画；指针压上去/按下时模板另有
+        // 那两支资源字典里的刷子，见 PlayerPage.xaml 那一栏的标记），图标色交给 SetStripGlyphInk ——
+        // 白底上的白图标会糊成一片，理由与悬停那一档同一条。
+        PinButton.Background = pinned && Resources["PlayerStripHoverBrush"] is Brush lit
+            ? lit
+            : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        SetStripGlyphInk(_stripHot);
 
         AutomationProperties.SetName(PinButton, PinIndicator.Name(pinned));
         ToolTipService.SetToolTip(PinButton, PinIndicator.Tip(pinned));
@@ -858,6 +900,74 @@ public sealed partial class PlayerPage : IWin32KeySink
     // caption off the window so the picture can reach the top edge, and these three are what is left of
     // it. Owning them here is also what lets them hide with the reveal rule instead of standing over the
     // picture for the whole film.
+
+    /// <summary>
+    /// 指针在这一栏里动一下：把**压着的那一颗**（统计／置顶／最小化／最大化）的图标换成深色，其余几颗回白。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚第五批：「这四个按钮鼠标移到上面的时候要用白色亚克力背景」，问实了＝白底上的
+    /// 图标要转深色。**底色那半归框架的 Button 模板**（那四颗各自把 `ButtonBackgroundPointerOver` 按到了
+    /// 调色板上，模板进那一态就换，自检读得到）；**图标这半只能走这里** —— 模板换的是
+    /// `ContentPresenter.Foreground`，而 `FontIcon`／`PathIcon` 的 `Foreground` 不从那里继承下来
+    /// （2026-09-27 实测：模板那一层换了、图标还是白的）。
+    /// </para>
+    /// <para>
+    /// **一格一格地判**（2026-09-27 傍晚第五批的第二趟）：第一版写成「指针在这一栏里＝四颗一起转深色」，
+    /// 用户当场问「怎么是四个按钮一起变色」—— 反馈本来就该只落在被压着的那一颗上，其余几颗是白的才对。
+    /// </para>
+    /// <para>
+    /// 判据取自事件源往上的祖先链，而不是每颗自己的 <c>PointerEntered</c>／<c>PointerExited</c>：指针从一颗
+    /// 挪到隔壁时那两个事件的先后没有保证，按先后判会留下「压着 B、图标却是白的」那一帧；问「源在哪颗底下」
+    /// 与先后无关。出口另有一条：<see cref="OnWindowButtonsPointerExited"/> —— 指针离开这一栏时不再有移动事件。
+    /// </para>
+    /// </summary>
+    private void OnWindowButtonsPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        Button? under = null;
+
+        for (var node = e.OriginalSource as DependencyObject;
+             node is not null && !ReferenceEquals(node, WindowButtons);
+             node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is not Button button || !StripInks(button)) continue;
+
+            under = button;
+            break;
+        }
+
+        SetStripGlyphInk(under);
+    }
+
+    /// <summary>指针离开这一栏（或落在栏里的空处）—— 余下的几颗一起抬回白。</summary>
+    private void OnWindowButtonsPointerExited(object sender, PointerRoutedEventArgs e) => SetStripGlyphInk(null);
+
+    /// <summary>这一颗的图标归 <see cref="SetStripGlyphInk"/> 管吗（关闭那颗不管：它悬停时是红的）。</summary>
+    private bool StripInks(Button button) =>
+        ReferenceEquals(button, PinButton)
+        || ReferenceEquals(button, MinimizeButton) || ReferenceEquals(button, MaximizeButton);
+
+    /// <summary>
+    /// 这几颗的图标此刻各是什么色：<paramref name="hot"/> 那一颗（指针压着的）用深色，其余几颗回白；
+    /// 传 null 就是全白（指针不在这几颗上）—— 只有置顶那颗已置顶的时候是例外，那时它常亮着，与指针无关。
+    /// <para>
+    /// 关闭那颗**不在名单里**：它悬停时是红的，红底上的白叉本来就是对的（用户令只说「这四个按钮」）。
+    /// </para>
+    /// <para>
+    /// 置顶那颗有两个理由转深色：指针压着它，**或者它已经置顶** —— 那时它整颗常亮，底是悬停那一档的白
+    /// （<see cref="SetPinned"/> 摆的），白底上留白图标就会糊成一片。这一句就是独占
+    /// <c>elements/TopBar.lua</c> 里的 <c>lit = is_hover or (button.is_pin and state.ontop)</c>。
+    /// </para>
+    /// </summary>
+    internal void SetStripGlyphInk(Button? hot)
+    {
+        _stripHot = hot;
+
+        if (Resources["PlayerStripHoverInkBrush"] is not Brush ink) return;
+        if (Resources["PlayerInkBrush"] is not Brush rest) return;
+
+        PinGlyph.Foreground = _pinned || ReferenceEquals(hot, PinButton) ? ink : rest;
+        MinimizeGlyph.Foreground = ReferenceEquals(hot, MinimizeButton) ? ink : rest;
+        MaximizeGlyph.Foreground = ReferenceEquals(hot, MaximizeButton) ? ink : rest;
+    }
 
     private void OnMinimizeWindow(object sender, RoutedEventArgs e) => _window?.Minimize();
 
@@ -929,7 +1039,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     }
 
     /// <summary>
-    /// 滚轮那一半：沿音量条的刻度走（<see cref="VolumeScale"/>），100→101 那一格要两格、其余每格仍是两档
+    /// 滚轮按线性音量变化；画面每格两档，音量条每格一档
     /// （2026-09-22 用户令）。与上面分开写，是因为两者在 100 附近的步长语义已经不同 —— 方向键一步 5 个音量
     /// 本来就跨得过那一格，滚轮一格 2 个单位跨不过，得把没走完的半格留下来接着累积。
     /// </summary>

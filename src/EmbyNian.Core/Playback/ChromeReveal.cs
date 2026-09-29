@@ -16,7 +16,7 @@ public enum ChromePart
     ///
     /// 一句补充（2026-09-26）：指针压在 Skip 上也不点亮 bar/title（<see cref="ChromeReveal.Decide"/> 的
     /// Skip 支，用户令「鼠标移到按钮上的时候不会唤出进度条」）—— 按钮自己跟着 offer 显隐，压着它的指针
-    /// 只剩下停靠耐心（<see cref="ChromeReveal.Parked"/>，光标别在按钮上藏掉）与音量条的既有判据。
+    /// 只剩下「指针压在它上面时别把光标收走」（见 <see cref="PointerHolds"/>）与音量条的既有判据。
     Skip
 }
 
@@ -36,20 +36,53 @@ public readonly record struct ChromeState(bool Bar, bool Title, bool Rail)
 /// <para>
 /// The rule is about where the pointer <em>is</em>, not merely that it moved: the transport bar is on
 /// screen while the pointer is in the bottom edge band of the picture, the top strip while it is in the
-/// top one, and a moment of stillness takes both away. The rest of the height is therefore a dead zone
-/// where neither is on screen, which is the point — that is where the subtitles are. Neither of those two
-/// fades: 「不要淡入淡出了，鼠标移动到对应位置直接显示」, so each arrives at once and at full strength. A
-/// control that is half there is slower to reach and harder to read than one that simply arrives.
+/// top one, and the volume rail while it is near its own rectangle down the right edge. The rest of the
+/// height is therefore a dead zone where none of them is on screen, which is the point — that is where
+/// the subtitles are.
 /// </para>
 /// <para>
-/// The volume rail is the exception, and it no longer rides with the transport bar:
+/// <b>时间不再收走控件（用户令 2026-09-28：「当鼠标停留在对应控件的渐变触发位置时，不要自动隐藏这些控件」）。</b>
+/// 从前每一样另有一条空闲窗口：指针静止 650ms（停在控件上则 2000ms）之后，哪怕指针仍落在它的唤出带里，
+/// 它也会被收走。用户点名的正是那一刻 ——
+/// 指针在「让控件淡入的那个位置」上停着，控件自己又淡没了。现在这三样的显隐<b>只由位置决定</b>（外加钉住、
+/// 拖动、双击纯净闸与两条宽限期），控件跟着指针走：指针在带里，控件就在；指针回到画面中间的死区，控件立刻收。
+/// 代价写在明处：指针撂在带里不动，控件就一直挂着（从前两秒后收走）—— 要收回来，把指针挪回画面中间或移出窗口。
+/// </para>
+/// <para>
+/// 空闲钟因此只剩一个客户：<b>鼠标指针自己</b>（<see cref="CursorIdleMilliseconds"/>）。它在指针没压在
+/// <b>真控件</b>上、又停在画面里的时候走 —— 于是「音量条 / 进度条上指针不藏」是这条结构推出来的结果
+/// （<see cref="PointerHolds"/>，单测里单列一条钉着）。
+/// </para>
+/// <para>
+/// <b>报上的「控件」与「光标」自此各认各的（用户令 2026-09-29：「只有鼠标停在控件进度条和音量条上方的
+/// 按钮上的时候才不隐藏鼠标，触发渐变的时候不隐藏控件，但是要隐藏鼠标」）。</b>这句话把两半拆开之后就不再
+/// 是同一条判据了：
+/// <list type="bullet">
+///   <item><b>控件</b>在它自己的唤出带里就不收 —— 带子（proximity，包括压强度的那个位置）里控件留着，
+///     这正是上一轮那条令，原样不动。</item>
+///   <item><b>光标</b>只在指针正压在控件<b>本体</b>上（按钮、滑杆）时才不走。只是把指针停在唤起控件的那个
+///     位置（带子里），控件留着、光标照走 —— 从前那条 <c>!next.Any</c> 太宽了，把「带子里」也当成
+///     「屏上有东西可瞄」。</item>
+/// </list>
+/// 于是 <c>ChromeState.Any</c> 不再是光标的闸，<see cref="PointerHolds"/> 才是：它只认
+/// <see cref="_part"/> 那四个命中的之一。
+/// </para>
+/// <para>
+/// <b>All three edges arrive by degrees, not as flips</b> (用户令 2026-09-27 四条「参独占模式……修改集成
+/// 模式的鼠标位置判断」)。<see cref="State"/> 那三个布尔仍旧只答「该不该出现」，可每一样另配一条<b>强度</b>供页面
+/// 淡入：<see cref="TitleStrength"/> 随指针靠近顶边升起、<see cref="BarStrength"/> 随靠近底边升起（进度条的
+/// 高度也跟着它长）、<see cref="RailStrength"/> 随靠近右缘中心升起。这照的是独占模式 uosc 的 proximity 淡入
+/// （距控件近则明显），<b>推翻了早先的 </b>「不要淡入淡出了，鼠标移动到对应位置直接显示」—— 那一版让标题条与
+/// 控制条二值直显，只有音量条淡入；四条令点名要三条边都跟音量条一样。强度是纯算术（<see cref="TitleLoudness"/>
+/// / <see cref="BarLoudness"/> / <see cref="Loudness"/>），页面把它写成 <c>Opacity</c> 或高度。
+/// </para>
+/// <para>
+/// The volume rail is still special in one way: it no longer rides with the transport bar —
 /// 「显示进度条的时候不需要同步显示音量条」 replaced the earlier 「显示进度条的时候音量条也要显示」, so it comes
 /// up for its own approach strip along the right edge, for a hand already resting on it, and for a moment
-/// after a wheel or key change — 「鼠标滚轮调整音量时要显示音量条」. It also arrives by degrees:
-/// <see cref="RailStrength"/> rises as the pointer closes on the middle of that edge —
-/// 「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」 — which is a strength for the
-/// page to fade to rather than a second visibility flag. The other two stay flips, because the request
-/// that made them flips was about them: a bar you are aiming at should not need to catch up with you.
+/// after a wheel or key change — 「鼠标滚轮调整音量时要显示音量条」. Its strength grades on the pointer's
+/// euclidean distance to the rail's own rectangle (uosc proximity, <see cref="RailProximity"/>), which the
+/// other two — full-width strips that only care about one axis — do not need.
 /// </para>
 /// <para>
 /// 指针之外的第二个输入是「正在拖动窗口」（<see cref="SetWindowDrag"/>）：这一趟窗口跟着手走，位置那套判据
@@ -67,48 +100,18 @@ public readonly record struct ChromeState(bool Bar, bool Title, bool Rail)
 public sealed class ChromeReveal
 {
     /// <summary>
-    /// How long the pointer has to hold still before the chrome goes away. Short on purpose
-    /// (「鼠标静止后自动隐藏的速度再快些」): the chrome comes back the instant the pointer moves into the
-    /// band it belongs to, so hiding early costs nothing but a movement, while chrome left standing over
-    /// a picture nobody is pointing at is in the way for as long as it stays. A pointer resting <em>on</em>
-    /// a control counts as activity, so this can be short without the controls dropping out from under a
-    /// hand that is aiming at them.
-    /// </summary>
-    public const long IdleMilliseconds = 650;
-
-    /// <summary>
-    /// The same window for a pointer that came to rest <em>on</em> a control. Long enough that a hand
-    /// hesitating over a button — or reading the preview above the seek bar — never has it vanish from
-    /// under it, and short enough that an abandoned cursor stops pinning the chrome over the picture.
-    /// <para>
-    /// It exists because 「parked」 used to mean 「exempt」 rather than 「patient」: while the last recorded
-    /// position was on any control the idle countdown was skipped entirely, so the chrome — and with it
-    /// the cursor, which only hides once nothing is on screen to aim at — stayed up for as long as the
-    /// pointer stayed put. Windowed that was invisible: the shell notices the pointer leaving the client
-    /// area and clears the parked position for us. Full screen the client area <em>is</em> the screen,
-    /// there is nowhere to leave to, and the latch never opened:
-    /// 「全屏时最下方的进度条不会自动隐藏，鼠标也不会自动隐藏」.
-    /// </para>
-    /// <para>
-    /// Equal to <see cref="CursorIdleMilliseconds"/> on purpose, so 「鼠标静止不动两秒之后要自动隐藏」 holds
-    /// wherever the pointer stopped: parked, the chrome and the cursor go together on the same beat, and a
-    /// hand left resting on the seek bar does not keep the picture covered.
-    /// </para>
-    /// </summary>
-    public const long ParkedIdleMilliseconds = 2000;
-
-    /// <summary>
     /// How long the pointer has to hold still before the mouse cursor itself goes.
     /// <para>
     /// <b>1000，mpv.net 的默认（2026-09-16 用户拍板「完全照搬 mpv.net」）。</b>mpv 的
     /// <c>cursor-autohide</c> 不另设时就是这个数，mpv.net 的 <c>_cursorAutohide = 1000</c> 原样照搬。
-    /// 之前是 2000（「全屏播放且鼠标在画面上时，鼠标静止不动两秒之后要自动隐藏」），那句话被今天
-    /// 这条更晚的指令接替；停靠在控件上的指针不受影响——它等的是 chrome 收起，而 chrome 的停靠
-    /// 耐心（<see cref="ParkedIdleMilliseconds"/>，2000）没动，光标随 chrome 在两秒那拍一起走。
     /// </para>
     /// <para>
-    /// 与 chrome 的窗口分开问、分开等的结构照旧：chrome 是请求（650ms 的死区静止就是「不要了」），
-    /// 光标是指针本身（拿走它要等一个「鼠标已经放下」的静止），两个数只是都变小了。
+    /// <b>2026-09-28 起它是本类唯一的空闲窗口</b>：控件那三条边的显隐改成只认位置（用户令「当鼠标停留在
+    /// 对应控件的渐变触发位置时，不要自动隐藏这些控件」，见类注），从前那两个 650/2000 的窗口随之删除。
+    /// 于是「鼠标静止一秒就藏」只在<b>指针没压在真控件上</b>时成立 —— <c>Settle</c> 里那个
+    /// <see cref="PointerHolds"/> 是它的闸：指针停在音量条、进度条、标题条或跳过按钮的<b>本体</b>上时
+    /// 光标不走（用户令 2026-09-28 的另一半「当鼠标停留在音量条或进度条上时，不要自动隐藏鼠标指针」，
+    /// 2026-09-29 收窄成「只有按钮上才不藏」，见 <see cref="PointerHolds"/>）。
     /// </para>
     /// </summary>
     public const long CursorIdleMilliseconds = 1000;
@@ -205,37 +208,126 @@ public sealed class ChromeReveal
     public bool WindowFocused { get; set; } = true;
 
     /// <summary>
-    /// 上下两条边缘带各占画面高度的比例 —— 也就是「显示上方控件与下方进度条的触发阈值」。
+    /// 左上角那几块亚克力玻璃「淡到底」那条外沿，占画面高度的比例。<b>2026-09-27 晚起它只管左上角那块
+    /// 亚克力的深浅曲线（<see cref="TopGlassDepth"/>），不再是控件的唤出线</b> —— 三条边的唤出已改成按
+    /// 绝对像素算的 uosc proximity（见 <see cref="TopNear"/> / <see cref="BottomNear"/> 与
+    /// <see cref="TopReachPixels"/>）。
     /// <para>
-    /// <b>0.12，2026-09-15 由五分之一（0.20）改小</b>（用户的话：「将播放页面显示上方控件与下方进度条的
-    /// 触发阈值调整为12%」）：带子窄了，唤出控件的手势要更明确地走到边上，压在画面中间的余地也更大 ——
-    /// 死区从五分之三涨到 76%，字幕那一带更清净。命中到控件（<see cref="ChromePart.Bar"/>、
-    /// <see cref="ChromePart.Title"/>）照旧无条件成立，跟带子多宽无关。
+    /// 留 0.20：亚克力只在标题条露着的时候才画得到（那几块玻璃是 <c>TitleStrip</c> 的孩子，条子收了它们就不画），
+    /// 而标题条露不露由像素唤出（<see cref="TopReachPixels"/>≈160px）说了算；在窗口化那种高度上 0.20×高≈160px，
+    /// 两者对得上。分辨率差很多时这条（比例）与像素唤出会有出入，但亚克力被「条子在不在」兜着，越界那截根本
+    /// 不画，看不出来 —— 所以没必要为它也改成像素、去牵动 <see cref="TopGlassDepth"/> 的签名与那几处测试。
+    /// </para>
+    /// <para>
+    /// <c>public</c>：<see cref="TopGlassDepth"/> 要在它和满深线之间插值，页面探针要问「带下沿在哪」。
     /// </para>
     /// </summary>
-    private const double EdgeBandFraction = 0.12;
+    public const double EdgeBandFraction = 0.20;
 
     /// <summary>
-    /// How strong the volume rail is at its dimmest, as a fraction of full. The floor exists because
-    /// 「越接近右边的中心显示越明显」 is about degrees of a thing that is <em>there</em>: a rail the rule has
-    /// decided to show, drawn at five percent because the pointer entered its strip at the very bottom, is
-    /// not a subtle hint but a bug someone would report. The remaining fraction is what proximity spends.
+    /// uosc 的 proximity 唤出常数（<c>elements/Element.lua</c>：<c>proximity_in=40</c>、
+    /// <c>proximity_out=120</c>，绝对像素）。指针离控件矩形近于 <see cref="ProximityInPixels"/> 就满显，
+    /// 远过 <see cref="ProximityOutPixels"/> 就全隐，中间线性 —— 用户令 2026-09-27 晚「改成跟独占一样，
+    /// 包括音量条」。绝对像素而非画面比例，是这条令的关键：独占与分辨率无关，比例会随窗口高矮忽早忽晚。
     /// </summary>
-    public const double RailFloor = 0.35;
+    public const double ProximityInPixels = 40;
+
+    /// <summary>见 <see cref="ProximityInPixels"/>。</summary>
+    public const double ProximityOutPixels = 120;
+
+    /// <summary>
+    /// 顶部那块「控件矩形」的高度（逻辑像素），照独占 uosc 的 <c>top_bar_size=40</c>。唤出的距离从这块矩形
+    /// 的下沿算：标题满显于离顶 ≤ <see cref="ProximityInPixels"/>＋这个数（80px），全隐于 ≥
+    /// <see cref="ProximityOutPixels"/>＋这个数（<see cref="TopReachPixels"/>＝160px）。用独占的 40 而不是
+    /// 本项目标题条那 96px，是为了让「什么时候开始显示」与独占一模一样，而不是更早。
+    /// </summary>
+    public const double TopBarPixels = 40;
+
+    /// <summary>
+    /// 底部那块「控件矩形」的高度（逻辑像素）：独占 uosc 底部是控制条摞在时间轴上（<c>controls_size</c> ＋
+    /// 边距 ＋ 时间轴），约 88；本项目底部整条也约 89。控制条／进度条满显于离底 ≤ 128px、全隐于 ≥
+    /// <see cref="BottomReachPixels"/>＝208px —— 比顶部深一截，正是独占底部那一簇比顶栏高的缘故，也是用户
+    /// 「进度条要鼠标下移到更低才显示」抱怨的正解（底边唤出要够高）。
+    /// </summary>
+    public const double BottomBarPixels = 88;
+
+    /// <summary>顶边唤出到此像素之外就全隐（<see cref="TopBarPixels"/>＋<see cref="ProximityOutPixels"/>）。给测试与页面读。</summary>
+    public const double TopReachPixels = TopBarPixels + ProximityOutPixels;
+
+    /// <summary>底边唤出到此像素之外就全隐（<see cref="BottomBarPixels"/>＋<see cref="ProximityOutPixels"/>）。</summary>
+    public const double BottomReachPixels = BottomBarPixels + ProximityOutPixels;
+
+    /// <summary>
+    /// 左上角那几块玻璃「深到底」那条线，比左簇最下面那块玻璃的下沿再往上这么多像素。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚第四批「左上角的颜色深度在鼠标移动到剧名下方那条线之前一点的时候达到最大」：
+    /// 那条线是 <see cref="TopGlassDepth"/> 的第二个参数，由页面按左簇里最下面那块玻璃（有剧名时就是剧名
+    /// 那块 —— 那句话里的「剧名下方那条线」）的下沿减掉这个数算出来。
+    /// </para>
+    /// <para>
+    /// **「一点」不能是 0**：正好停在沿上，鼠标擦着那条线往下一走玻璃就开始变淡，而他说的是「那条线之前
+    /// **一点**」。四个像素与这一条上其他几处缝是同一个数（标题条里那两块玻璃之间、返回与片名之间）。
+    /// </para>
+    /// </summary>
+    public const double TopGlassFullInset = 4;
+
+    /// <summary>
+    /// 指针离画面顶边有多近：<b>0 ＝ 已经到了顶部带的下沿或者根本不在带子里，1 ＝ 指针在
+    /// <paramref name="fullAt"/> 那条线之上（玻璃最深）</b>。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚「加深左上角亚克力背景的颜色，鼠标位置越靠上亚克力背景的颜色越深」，
+    /// 第四批又补了一句「颜色深度在鼠标移动到剧名下方那条线**之前一点**的时候达到最大」—— 于是这条曲线
+    /// 不是从顶边算起，而是<b>从那条线算起</b>：线之上全是 1，线以下线性退到顶部带的下沿为 0。
+    /// <paramref name="fullAt"/> 是那条线按画面高度算的比例，页面量出来的（见 <see cref="TopGlassFullInset"/>）。
+    /// </para>
+    /// <para>
+    /// 带子就是 <see cref="Edges"/> 那一条唤出带（<see cref="EdgeBandFraction"/>），这一条不是顺手：
+    /// <b>「指针靠到多近才算靠上」与「标题条什么时候出来」必须是同一条线</b>，否则会出现玻璃已经最深、
+    /// 条子却还没出来的场面 —— 那块底是条子的一部分，它不该比条子先到。
+    /// </para>
+    /// <para>
+    /// 它住在 Core 而不是页面里，理由与 <see cref="RailRoom"/>、音量条那条强度曲线同款：这是一条拿两个数
+    /// 就答得出来的规则，单元测试钉得住；页面负责把像素换算成比例、并且量出那条线在哪。指针不在画面里（-1）
+    /// 也答 0，那几块这时候根本不该在屏上。
+    /// </para>
+    /// </summary>
+    public static double TopGlassDepth(double pointerY, double fullAt)
+    {
+        if (pointerY < 0 || pointerY > EdgeBandFraction) return 0;
+
+        var full = Math.Clamp(fullAt, 0, EdgeBandFraction);
+        if (pointerY <= full) return 1;
+
+        var span = EdgeBandFraction - full;
+        if (span <= 0) return 1;
+
+        return 1 - ((pointerY - full) / span);
+    }
+
+    /// <summary>
+    /// How strong the volume rail is at its dimmest, as a fraction of full. <b>0 自 2026-09-27 晚起</b>
+    /// （用户令「改成跟独占一样，包括音量条」）：独占 uosc 的音量条按 proximity 一路淡到 0，没有下限，所以
+    /// 这里跟标题条、控制条一样从 0 起淡。它曾是 0.35（理由：「决定要显示却淡到五个百分点不是含蓄、是故障」）——
+    /// 那条顾虑让位给「与独占一致」这条更晚的指令。分级用的那条曲线是 <see cref="RailProximity"/>（指针到音量条
+    /// 矩形的 uosc 欧氏距离，页面量、Core 换算），2026-09-28「参考独占模式修复」把旧的「横向线性带 ＋ 竖向中心
+    /// 偏置」换成了它。留成具名常量而不是删掉：一处想再给下限就改这一个数，测试也照它写。
+    /// </summary>
+    public const double RailFloor = 0;
 
     /// <summary>
     /// 画面小于这个宽度（逻辑像素）就不画音量条了 —— 用户令 2026-09-23：
     /// 「集成模式下窗口小于一定程度的时候自动隐藏音量条」。
     /// <para>
-    /// 两个数是从<b>音量条自己的尺寸</b>反推的，不是拍的（条子的尺寸由 <c>ProbeRailFade</c> 每次读出：
-    /// 约 68 宽 × 428 高 ＝ 滑杆 300 ＋ 数字 ＋ 静音键 ＋ 上下各 20 的内边距）：
+    /// 两个数照<b>音量条自己的尺寸</b>定，不是拍的（条子的尺寸由 <c>ProbeRailFade</c> 每次读出：40 宽、右边距 20、
+    /// 约 320 高 ＝ 滑杆 280 ＋ 静音键 40，右贴、纵向居中 —— 与独占 uosc 的音量矩形同几何，这也是本次
+    /// 「参考独占模式修复」的前提）：
     /// </para>
     /// <list type="bullet">
-    ///   <item>高度 <see cref="RailMinPictureHeight"/>：条子自己的 428 再留三成余量。再矮，条子上下就会被
-    ///     窗口切掉 —— 那不是「音量条」而是一根被裁过的柱子。</item>
-    ///   <item>宽度 720：条子连它右边那 22 的边距占 90，而右缘那条唤出带占 160（页面的
-    ///     <c>PlayerPage.RailZoneWidth</c>）—— 两者合起来 250，正好是 720 的三分之一；再窄下去，
-    ///     「音量」这件事比画面本身还抢眼。</item>
+    ///   <item>高度 <see cref="RailMinPictureHeight"/>：条子要占满约 320 的高，而独占 uosc 还把音量条自身压在
+    ///     「顶栏到控制条之间可用高度的八成」以内——画面再矮下去，那八成很快就托不住整条 320，条子只能被上下
+    ///     切短。与其画一根裁过的柱子，不如整条不画，留足余量收在这个数。</item>
+    ///   <item>宽度 720：条子连右边距占 60，其 uosc 唤出反达（<see cref="RailProximity"/>，离矩形 120px 起淡）
+    ///     还要再往里约 120，合起来近 180 —— 画面窄过这个数，「音量」这件事就比画面本身还抢眼。</item>
     /// </list>
     /// <para>
     /// 两个方向各自成立，所以判据是合取：拖窗口下边缘拖出的「宽而矮」与拖右边缘拖出的「窄而高」都要收。
@@ -264,6 +356,7 @@ public sealed class ChromeReveal
     public static bool RailRoom(double pictureWidth, double pictureHeight) =>
         pictureWidth >= RailMinPictureWidth && pictureHeight >= RailMinPictureHeight;
 
+    /// <summary>最后一记活动的时刻（<see cref="CursorIdleMilliseconds"/> 那条钟的起点；2026-09-28 起只量光标）。</summary>
     private long _lastActivity;
 
     /// <summary>Until this tick count the whole chrome shows whatever the pointer is doing.</summary>
@@ -276,10 +369,23 @@ public sealed class ChromeReveal
     private double _pointerY = -1;
 
     /// <summary>
-    /// How deep into the rail's approach strip the pointer is: 0 at the strip's inner boundary, 1 hard
-    /// against the right edge, and -1 for a pointer that is not in the strip at all — the same 「-1 means
-    /// away」 as <see cref="_pointerY"/>, so that 「in the strip」 and 「how far in」 can be one number
-    /// instead of a flag plus a number that has to agree with it.
+    /// 画面高度（逻辑像素），最近一次指针读数带进来的。唤出范围按<b>绝对像素</b>算（照独占 uosc 的 proximity），
+    /// 要拿它把 <see cref="_pointerY"/> 那个比例换回「离边多少像素」。指针不在画面里（-1）时用不到 ——
+    /// <see cref="TopNear"/> / <see cref="BottomNear"/> 先看 <c>_pointerY &lt; 0</c> 就答 0 了。
+    /// </summary>
+    private double _height;
+
+    /// <summary>
+    /// The volume rail's reveal strength from proximity: the uosc proximity the page measured from the
+    /// pointer to the rail's own rectangle (<see cref="RailProximity"/>), so 0 at the reveal reach, 1 within
+    /// <see cref="ProximityInPixels"/> of the rail, and -1 for a pointer that is no reason to show it at all
+    /// — the same 「-1 means away」 as <see cref="_pointerY"/>, so that 「should the rail be up」 and 「how
+    /// strongly」 can be one number instead of a flag plus a number that has to agree with it.
+    /// <para>
+    /// 页面在 <c>RailNear</c> 里把 proximity 恰为 0（够到唤出反达而已）也报成 -1，于是「离得刚好够远」不构成
+    /// 显示理由，与独占 proximity 0 ＝ 不画一致；<see cref="Decide"/> 的 <c>_railNear &gt;= 0</c> 因此正好是
+    /// 「在唤出范围内」。
+    /// </para>
     /// </summary>
     private double _railNear = -1;
 
@@ -318,11 +424,40 @@ public sealed class ChromeReveal
     /// It is a strength and not a probability: full whenever the rail is a readout rather than an approach
     /// — a wheel notch, a keyboard command, a hand already on the slider, a pinned chrome — because a
     /// number nobody is pointing at still has to be legible. Proximity only grades the case proximity
-    /// caused, and it grades it on both axes at once: how far into the strip along the right edge, and how
-    /// near the middle of that edge, so the corners of the picture stay at the floor.
+    /// caused, and it grades it as the uosc volume does: the pointer's euclidean distance to the rail's own
+    /// rectangle (<see cref="RailProximity"/>), measured by the page because only it knows where the rail
+    /// sits. Both axes fall out of that one distance — the corners of the picture are far from a rail that
+    /// stands 40 wide and centred down the right edge, so they stay dark without a separate centre bias.
     /// </para>
     /// </summary>
     public double RailStrength { get; private set; } = 1;
+
+    /// <summary>
+    /// How strongly the title strip should be drawn, 0 when it is not up at all and up to 1 hard against the
+    /// top edge. The page fades to this rather than flipping to it — 「参独占模式鼠标位置越靠近窗口上方标题越
+    /// 明显」 (用户令 2026-09-27，照 uosc 的 proximity 淡入)。
+    /// <para>
+    /// The exact sibling of <see cref="RailStrength"/> along the other edge: full for every reason that is a
+    /// readout rather than an approach — a hand already on the strip, a pinned chrome, a keyboard command —
+    /// and graded by how near the pointer is to the top otherwise (<see cref="TopNear"/>). This is the reveal
+    /// half; the acrylic behind the left cluster deepens on its own curve (<see cref="TopGlassDepth"/>).
+    /// </para>
+    /// <para>
+    /// 与音量条不同，标题条<b>没有下限</b>（<see cref="RailFloor"/> 那种）：uosc 的顶栏一路淡到 0，带内沿处
+    /// 因此很淡。这是照搬独占的取舍，嫌太虚就在 <see cref="TitleLoudness"/> 里加一个下限 —— 一处常量。
+    /// </para>
+    /// </summary>
+    public double TitleStrength { get; private set; } = 1;
+
+    /// <summary>
+    /// How strongly the transport bar (the button row, and with it the growing timeline) should be drawn,
+    /// 0 when it is not up at all and up to 1 hard against the bottom edge — 「参独占模式鼠标位置越靠近窗口
+    /// 下方按钮条越明显 / 进度条显示越多」. The sibling of <see cref="RailStrength"/> and
+    /// <see cref="TitleStrength"/> along the bottom edge; graded by <see cref="BottomNear"/>, full for the
+    /// same readout reasons. The page also grows the timeline's height with it (uosc's
+    /// <c>Timeline:get_effective_size</c>, whose visibility follows the controls).
+    /// </summary>
+    public double BarStrength { get; private set; } = 1;
 
     /// <summary>
     /// Pins the chrome open regardless of the pointer. Set while one of the bar's flyouts is up: the
@@ -378,10 +513,10 @@ public sealed class ChromeReveal
     /// A latch, and it has to be one: this is called from every status snapshot mpv publishes — four or
     /// more times a second for the length of the film — and 「the hold is off, so that counts as activity」
     /// applied to each of them restamps the idle clock four times a second forever. Nothing can then ever
-    /// go idle. Not the chrome: a pointer resting in the bottom band keeps the transport bar over the
-    /// picture for the whole film, which is 「别什么进度条标题音量条都持久显示在画面上」. And not the cursor,
-    /// which needs two uninterrupted seconds it was never allowed to accumulate —
-    /// 「鼠标指针还是不会自动隐藏」. Only a real change of the hold is news; the countdown that follows one is
+    /// go idle, and the one thing that clock still decides is <see cref="CursorHidden"/> — a pointer
+    /// resting in the dead zone would keep its arrow for the whole film, which is
+    /// 「鼠标指针还是不会自动隐藏」. （控件那三样 2026-09-28 起按位置显隐，不再看这个钟；这一位对它们只剩
+    /// 「钉住 = 三样一起给」的作用。）Only a real change of the hold is news; the countdown that follows one is
     /// still measured from the change, which is why the stamp stays here rather than going away.
     /// </para>
     /// </summary>
@@ -400,7 +535,8 @@ public sealed class ChromeReveal
     /// <para>
     /// 放开时那一记重盖是必要的，理由和另外两个不同：拖动期间页面那一头不问指针轮询（窗口跟着指针走，
     /// 指针相对窗口没动过），所以整段拖动里一次活动都没落账。若照「上一记活动」去算，一场拖长的拖动松手
-    /// 那一拍，空闲钟已经走满，控件会当场收掉 —— 而手刚放开，它想看的正是那些控件。
+    /// 那一拍空闲钟已经走满，而这时指针正压在标题条上 —— 控件按位置留着，可<b>光标</b>会当场被这条走满的钟
+    /// 收走（从前更糟：控件与光标一起收）。
     /// </para>
     /// </summary>
     public bool SetWindowDrag(bool dragging, long now)
@@ -413,29 +549,34 @@ public sealed class ChromeReveal
     }
 
     /// <summary>
-    /// Whether the mouse cursor should be hidden: the pointer is over the picture, has stopped, and
-    /// there is nothing on screen to point at.
+    /// Whether the mouse cursor should be hidden: the pointer is over the picture, has stopped, and is
+    /// not resting on a control.
     /// <para>
-    /// It waits for the pointer to actually stop — for <see cref="CursorIdleMilliseconds"/>, its own window,
-    /// not the chrome's — rather than merely for the chrome to be down. The dead zone between the two edge
-    /// bands reveals nothing, so the chrome goes as soon as the pointer crosses into it, and a cursor
-    /// that vanished there would disappear in the middle of a movement with nothing on screen to explain
-    /// where it had gone.
+    /// It waits for the pointer to actually stop — for <see cref="CursorIdleMilliseconds"/>, a window of its
+    /// own — rather than merely for the chrome to be down. The dead zone between the edge bands reveals
+    /// nothing, so the chrome goes as soon as the pointer crosses into it, and a cursor that vanished there
+    /// would disappear in the middle of a movement with nothing on screen to explain where it had gone.
+    /// </para>
+    /// <para>
+    /// <b>「not resting on a control」is <see cref="PointerHolds"/>, and it is the narrower half of the two
+    /// rules</b>（用户令 2026-09-29）：控件在它自己的唤出带里就留着，光标在那条带子里照走。从前这里问的
+    /// 是「屏上有没有东西」（<c>!next.Any</c>），唤出带因此也保住了光标 —— 那句话把两半说成一条判据，
+    /// 用户点名要拆开。
     /// </para>
     /// <para>
     /// <b>「Stopped」 is decided by one clock and one sensor.</b> <see cref="Moved"/> and
     /// <see cref="Pointer(double, double, ChromePart, double, long, bool)"/> with <c>moved: true</c> are the
     /// only two things that restamp the idle clock; a report that is merely a position — the poll's own
     /// unchanged reading, a resize — is not a movement and leaves it alone. That split is what lets a
-    /// pointer genuinely at rest expire, which is the whole of 「鼠标静止不动两秒之后要自动隐藏」.
+    /// pointer genuinely at rest expire, which is the whole of 「鼠标静止不动一秒之后要自动隐藏」.
     /// </para>
     /// </summary>
     public bool CursorHidden { get; private set; }
 
     /// <summary>
-    /// 空闲钟走到了哪儿（毫秒）—— <b>只给外壳的诊断行读</b>：光标/控件该收不收的时候，这一格说清
+    /// 空闲钟走到了哪儿（毫秒）—— <b>只给外壳的诊断行读</b>：光标该藏不藏的这些时候，这一格说清
     /// 是不是被谁不停重盖着（2026-09-16 晚加的，用户报「鼠标已经不会自动隐藏了」时手边唯一的读数）。
-    /// 只读，不改任何状态。
+    /// 只读，不改任何状态。控件那三样 2026-09-28 起不看它（按位置显隐），读它只对光标有意义。
     /// </summary>
     public long IdleAgo(long now) => now - _lastActivity;
 
@@ -450,10 +591,11 @@ public sealed class ChromeReveal
 
     /// <summary>
     /// The pointer is over the picture at <paramref name="y"/> of <paramref name="height"/>, on
-    /// <paramref name="part"/>, and <paramref name="railNear"/> says how deep into the rail's approach
-    /// strip it is — -1 for 「not in it」, 0 at the strip's inner boundary, 1 hard against the right edge.
+    /// <paramref name="part"/>, and <paramref name="railNear"/> is the volume rail's uosc proximity the page
+    /// measured to the rail's rectangle — -1 for 「no reason to show it」, 0 at the reveal reach, 1 within
+    /// <see cref="ProximityInPixels"/> of the rail.
     /// <para>
-    /// The strip is asked about separately from the hit test rather than being one of its answers. A hit
+    /// The rail is asked about separately from the hit test rather than being one of its answers. A hit
     /// test has to pick a single winner, and the skip-intro button and the top strip both overlap the
     /// right edge — while the hit test was the only source of truth a pointer there resolved to Skip or
     /// Title and the rail silently refused to come up:
@@ -461,7 +603,7 @@ public sealed class ChromeReveal
     /// they get different tests.
     /// </para>
     /// <para>
-    /// Depth rather than a yes: the same reading answers 「should the rail be up」 and 「how strongly」, and
+    /// Proximity rather than a yes: the same reading answers 「should the rail be up」 and 「how strongly」, and
     /// two numbers that had to agree with each other would be one more thing to keep in step.
     /// </para>
     /// </summary>
@@ -477,10 +619,10 @@ public sealed class ChromeReveal
     /// <para>
     /// Both arrive here as a position, and they want opposite things from the idle clock. A movement is
     /// activity by definition, so it restamps the clock and the countdown starts again from here — which is
-    /// how 「鼠标静止不动两秒之后要自动隐藏」 is measured from the last thing a hand did. A position reported
+    /// how 「鼠标静止不动一秒之后要自动隐藏」 is measured from the last thing a hand did. A position reported
     /// again is the opposite: it is what the ten-hertz poll and every resize hand over, they say nothing about
     /// a hand, and restamping for them is what 「鼠标隐藏了一会然后又会自动冒出来」 was made of — a cursor
-    /// whose two seconds never get to expire, from a player whose own log says the pointer never moved.
+    /// whose second never gets to expire, from a player whose own log says the pointer never moved.
     /// </para>
     /// <para>
     /// <paramref name="moved"/> false is therefore the honest answer for a report that is only a position.
@@ -492,11 +634,12 @@ public sealed class ChromeReveal
     public bool Pointer(double y, double height, ChromePart part, double railNear, long now, bool moved)
     {
         _pointerY = height > 0 ? Math.Clamp(y / height, 0, 1) : 0;
+        _height = height;
         _part = part;
         _railNear = railNear < 0 ? -1 : Math.Clamp(railNear, 0, 1);
 
-        // Anything the pointer is resting on counts as activity even without movement, which is what
-        // keeps a short idle window from pulling a control out from under a hand aiming at it — and a report
+        // Anything the pointer is resting on counts as activity even without movement — 指针停在控件本体上
+        // 的时候光标也不该走（<see cref="PointerHolds"/> 是那一问的判据；这里记的只是空闲钟）。而 a report
         // the caller called a movement is activity whether or not it landed anywhere useful.
         if (moved || !CursorHidden) _lastActivity = now;
 
@@ -566,6 +709,43 @@ public sealed class ChromeReveal
     /// 那边搬，落点恰好落进最右那条 160 逻辑像素的带子，回笼于是整段藏匿里一次都不会发生。
     /// </summary>
     public bool PointerOnControl => _part != ChromePart.None;
+
+    /// <summary>
+    /// 指针正压在控件上、于是光标不该被收走 —— <b>只认本体，不认唤出带</b>（用户令 2026-09-29
+    /// 「只有鼠标停在控件进度条和音量条上方的按钮上的时候才不隐藏鼠标，触发渐变的时候不隐藏控件，但是要
+    /// 隐藏鼠标」）。
+    /// <para>
+    /// 三条判据在这儿各答一件事，别混：<b>控件</b>显不显由位置（唤出带，<see cref="Decide"/> 的 Eges 与
+    /// <see cref="_part"/>），<b>强度</b>由 proximity（<see cref="BarStrength"/> 那三样），<b>光标</b>藏不藏
+    /// 由这一问。从前光标那一格写的是 <c>!next.Any</c> —— 只要三条带里任何一条亮着就不藏，于是「停在唤出
+    /// 带里看控件淡入」这个位置上也把光标留住了，与「触发渐变时要隐藏鼠标」正相反。
+    /// </para>
+    /// <para>
+    /// 「本体」就是 <see cref="PartAt"/> 那四处命中：进度条／控制条那一排按钮（<see cref="ChromePart.Bar"/>）、
+    /// 标题条那几块玻璃（<see cref="ChromePart.Title"/>）、音量条的滑杆与静音键（<see cref="ChromePart.Volume"/>）、
+    /// 跳过按钮（<see cref="ChromePart.Skip"/>）。它们都是<b>看得见摸得着的一块</b>，指针压在上面时藏掉光标
+    /// 是说不通的；而带子是空无一物的位置，那里藏光标正是它该在的地方。
+    /// </para>
+    /// <para>
+    /// 音量条那一半有个来历：uosc 的音量条是一个<b>矩形</b>（40 宽、贴右缘、纵向居中），指针只要落进它自己的
+    /// 矩形就算本体 —— <see cref="ChromePart.Volume"/> 由页面按那个矩形的命中测试给出，不是按 proximity 算的。
+    /// </para>
+    /// </summary>
+    private bool PointerHolds => HoldsCursor(_part);
+
+    /// <summary>
+    /// <paramref name="part"/> 是不是「光标该为它留一手」的那几块 —— 四个都是<b>看得见摸得着的一块</b>
+    /// （进度条／控制条那一排按钮、标题条那几块玻璃、音量条的滑杆与静音键、跳过按钮）。唤出带不在其中：
+    /// 带子是空无一物的位置，指针在那里时控件留着、光标照走（用户令 2026-09-29，详见
+    /// <see cref="PointerHolds"/>）。
+    /// <para>
+    /// <c>public static</c> 是给外壳的诊断行用的（<c>PlayerPage.ExplainNoHide</c> 读的是页面自己那份
+    /// <c>_pointerOn</c>，不是规则记的那一份）—— 两处必须同一个答案，所以判据只有一个。
+    /// </para>
+    /// </summary>
+    public static bool HoldsCursor(ChromePart part) =>
+        part == ChromePart.Bar || part == ChromePart.Title
+        || part == ChromePart.Volume || part == ChromePart.Skip;
 
     /// <summary>
     /// 双击全屏／还原的「画面纯净」闸（2026-09-18，用户令「双击时不得呼出或显示任何 UI 控件」）。
@@ -649,6 +829,8 @@ public sealed class ChromeReveal
         _railNear = -1;
         State = new ChromeState(true, true, true);
         RailStrength = 1;
+        TitleStrength = 1;
+        BarStrength = 1;
         CursorHidden = false;
     }
 
@@ -657,15 +839,25 @@ public sealed class ChromeReveal
     {
         var next = Decide(now);
         var strength = next.Rail ? Loudness(now) : 0;
+        var titleStrength = next.Title ? TitleLoudness(now) : 0;
+        var barStrength = next.Bar ? BarLoudness(now) : 0;
 
         // The cursor is a process-wide resource, so it only ever hides while the pointer is genuinely
-        // over this picture with nothing on screen to aim at — and on its own, longer window, so that
-        // crossing the dead zone takes the chrome away without the cursor going with it.
+        // over this picture and not resting on a control it might be about to use.
+        //
+        // **这里只看「压在真控件上了没有」，不看「屏上有没有东西」**（用户令 2026-09-29「只有鼠标停在控件，
+        // 进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，触发渐变的时候不隐藏控件，但是要隐藏鼠标」）。
+        // 从前这一格写的是 !next.Any —— 只要三条唤出带里任何一条亮着就不藏光标，于是「停在唤出带里」这个
+        // 位置上光标也被留住了，与「触发渐变时要隐藏鼠标」正相反。控件显隐那一半一个字没动（就是上面的
+        // next：位置说了算），只把光标这一半收窄到 PointerHolds。
+        //
+        // 留在里面的三个理由各是「指针压在一块真东西上」：控件本体（PointerHolds）、弹出菜单开着
+        // （HoldChrome）、文件还在加载（KeepChrome）。
         //
         // WindowFocused 是 mpv.net 的 ActiveForm == this（2026-09-16 照搬）：窗口不在前台就不藏；
         // 这一位从真翻假的那一拍，本来藏着的 hide 也跟着变假 —— OnLostFocus → ShowCursor 那条路
         // 就是从这里走通的，外壳喂完这一位推一拍即可。
-        var hide = !next.Any
+        var hide = !PointerHolds
             && _pointerY >= 0
             && !HoldChrome
             && !KeepChrome
@@ -673,32 +865,19 @@ public sealed class ChromeReveal
             && now - _lastActivity >= CursorIdleMilliseconds;
 
         // The strength is quantised at the source rather than compared with a tolerance here, so that
-        // 「did anything change」 stays an equality — a pointer sliding along the right edge moves it in
+        // 「did anything change」 stays an equality — a pointer sliding along an edge moves it in
         // hundredths, and every hundredth is a repaint the page has asked to hear about.
-        if (next == State && strength == RailStrength && hide == CursorHidden) return false;
+        if (next == State && strength == RailStrength && titleStrength == TitleStrength
+            && barStrength == BarStrength && hide == CursorHidden) return false;
 
         State = next;
         RailStrength = strength;
+        TitleStrength = titleStrength;
+        BarStrength = barStrength;
         CursorHidden = hide;
 
         return true;
     }
-
-    /// <summary>
-    /// Whether the pointer's last known position is on a control, or in the rail's approach strip. Such a
-    /// pointer counts as activity even though no event is arriving: the WinForms rule got that from its
-    /// 40 ms poll, which refreshed the idle clock on every tick the pointer was on chrome, and with real
-    /// pointer events a still pointer produces nothing at all, so the same promise has to be stated rather
-    /// than inferred. Without it a hand hesitating over a button for two thirds of a second has the button
-    /// vanish from under it.
-    /// </summary>
-    private bool Parked => _part != ChromePart.None || _railNear >= 0;
-
-    /// <summary>
-    /// How long the recorded pointer has to stay untouched before the chrome goes. Being parked buys
-    /// patience, not immunity — see <see cref="ParkedIdleMilliseconds"/>.
-    /// </summary>
-    private long IdleWindow => Parked ? ParkedIdleMilliseconds : IdleMilliseconds;
 
     private ChromeState Decide(long now)
     {
@@ -716,12 +895,6 @@ public sealed class ChromeReveal
         // 点画面那一下给的宽限与指针所在的位置都不构成显示理由 —— 画面保持只有片子。
         if (_silenced) return new ChromeState(false, false, false);
 
-        if (now - _lastActivity >= IdleWindow)
-        {
-            // Nothing but the rail's own grace window survives the pointer going still.
-            return new ChromeState(false, false, now < _railUntil);
-        }
-
         var (bar, title) = Edges();
 
         // A pointer already on a control means the user arrived, whatever the bands say — the rail in
@@ -737,6 +910,11 @@ public sealed class ChromeReveal
         // 「显示进度条的时候不需要同步显示音量条」: the bar used to be one of the rail's reasons, and it was
         // the wrong kind of reason — the pointer being in the bottom band is a request for the transport
         // bar and says nothing at all about the volume.
+        //
+        // **这里没有时间**（用户令 2026-09-28「当鼠标停留在对应控件的渐变触发位置时，不要自动隐藏这些控件」）：
+        // 上面那几问全是「指针此刻在哪」，于是控件跟着指针走 —— 从前那一支「空闲窗口走了就把三样一起收掉」
+        // 已经删除，指针停在唤出带（或压在控件上）里多久，那一样就留多久。要收回来只有两条路：指针回到
+        // 画面中间的死区（Edges 与 _part 当场都答 false），或者移出画面（PointerLeft 清掉读数）。
         return new ChromeState(bar, title, _railNear >= 0 || _part == ChromePart.Volume || now < _railUntil);
     }
 
@@ -753,26 +931,92 @@ public sealed class ChromeReveal
         if (_part == ChromePart.Volume || _railNear < 0) return 1;
 
         // Hundredths: fine enough that a fade chasing it looks continuous, coarse enough that a mouse
-        // rattling on a desk does not repaint.
-        return Math.Round(RailFloor + (1 - RailFloor) * _railNear * Centred, 2);
+        // rattling on a desk does not repaint. _railNear is already the uosc proximity the page measured
+        // to the rail's own rectangle (both axes at once, so no separate centre bias) — see RailProximity.
+        return Math.Round(RailFloor + (1 - RailFloor) * _railNear, 2);
     }
 
     /// <summary>
-    /// How near the pointer is to the picture's vertical middle — 1 at the centre, 0 at the top and
-    /// bottom edges. The 「中心」 half of 「越接近右边的中心显示越明显」: the corners of the right edge are
-    /// where a pointer on its way to the transport bar or the window buttons passes through, so the rail
-    /// stays at its floor there and only comes up properly for a pointer that is actually heading for it.
+    /// How strongly to draw a title strip that is up — the top-edge sibling of <see cref="Loudness"/>. Full
+    /// for every reason that is a readout or a pointing rather than an approach (a hand on the strip, a pinned
+    /// chrome, a keyboard command); graded by <see cref="TopNear"/> (uosc proximity, absolute pixels) otherwise.
+    /// <para>
+    /// No floor: 「改成跟独占一样」 — all three edges now fade to nothing at their reveal reach, the volume too
+    /// (<see cref="RailFloor"/> is 0). Full against the top, invisibly faint at the reach.
+    /// </para>
     /// </summary>
-    private double Centred => _pointerY < 0 ? 0 : 1 - Math.Abs(_pointerY - 0.5) * 2;
+    private double TitleLoudness(long now)
+    {
+        if (HoldChrome || KeepChrome || now < _forceUntil || _part == ChromePart.Title) return 1;
+        return Math.Round(TopNear, 2);
+    }
 
     /// <summary>
-    /// Which of the two edge overlays the pointer is asking for. The bands used to be half the height
-    /// each, so any movement at all was already bringing chrome up over the picture.
+    /// How strongly to draw a transport bar that is up — the bottom-edge sibling of <see cref="Loudness"/>.
+    /// The page uses it for both the button row's opacity and the timeline's height (uosc grows the timeline
+    /// with the controls' visibility). Full for the same readout reasons; graded by <see cref="BottomNear"/>.
+    /// </summary>
+    private double BarLoudness(long now)
+    {
+        if (HoldChrome || KeepChrome || now < _forceUntil || _part == ChromePart.Bar) return 1;
+        return Math.Round(BottomNear, 2);
+    }
+
+    /// <summary>
+    /// 独占 uosc 的 proximity 曲线（<c>elements/Element.lua</c>）：指针离控件矩形 <paramref name="distFromEdgePx"/>
+    /// 像素（矩形贴着屏幕那条边、高 <paramref name="barPx"/>），近于 <see cref="ProximityInPixels"/> 满显（1）、
+    /// 远过 <see cref="ProximityOutPixels"/> 全隐（0），中间线性。指针不在画面里（距离 &lt; 0）答 0。
+    /// </summary>
+    private static double Reveal(double distFromEdgePx, double barPx)
+    {
+        if (distFromEdgePx < 0) return 0;
+
+        var toRect = Math.Max(0, distFromEdgePx - barPx);
+        var range = ProximityOutPixels - ProximityInPixels;
+        return 1 - Math.Clamp(toRect - ProximityInPixels, 0, range) / range;
+    }
+
+    /// <summary>
+    /// 独占 uosc 的音量条 proximity 曲线（<c>elements/Element.lua</c> ＋ <c>lib/utils.lua</c> 的
+    /// <c>get_point_to_rectangle_proximity</c>）：指针离音量条矩形 <paramref name="distancePixels"/> 像素，
+    /// 近于 <see cref="ProximityInPixels"/> 满显（1）、远过 <see cref="ProximityOutPixels"/> 全隐（0），中间线性。
+    /// <para>
+    /// <b>几何在页面、曲线在这里</b>（用户令 2026-09-28「参考独占模式修复」）：标题条／控制条是整幅宽的条，只有
+    /// Y 有意义，Core 直接拿 <see cref="_pointerY"/> 算（<see cref="TopNear"/>／<see cref="BottomNear"/>）；音量条是
+    /// 一块有限矩形，横竖两轴都要，只有页面看得到它排在哪，所以由页面量出「指针到那条 40 宽、贴右缘、纵向居中的
+    /// 真矩形的欧氏距离」（<c>PlayerPage.RailNear</c>，同 uosc 的算法），这里把距离换成强度。曲线单测钉得住
+    /// （<c>RegisterChromeReveal</c>），几何归自检的 <c>ProbeRailFade</c>——它手上有排过版的音量条元素。
+    /// </para>
+    /// <para>
+    /// 这条取代了旧的「横向线性带 ＋ 竖向中心偏置 <c>Centred</c>」那套近似：<c>Centred</c> 是 Core 拿不到矩形时
+    /// 对「竖向也该衰减」的粗略估计，改量真矩形的欧氏距离后四角变暗自然成立且更准，与独占逐像素一致。
+    /// </para>
+    /// </summary>
+    public static double RailProximity(double distancePixels) => Reveal(distancePixels, 0);
+
+    /// <summary>
+    /// How near the pointer is to the top edge — the top-edge sibling of the volume's approach, as uosc
+    /// proximity in absolute pixels (<see cref="Reveal"/> against <see cref="TopBarPixels"/>). 1 near the top,
+    /// 0 beyond <see cref="TopReachPixels"/>. Absolute pixels, not a fraction of height, so 「what counts as
+    /// near」 is the same on every window size — 「改成跟独占一样」.
+    /// </summary>
+    private double TopNear => Reveal(_pointerY < 0 ? -1 : _pointerY * _height, TopBarPixels);
+
+    /// <summary>How near the pointer is to the bottom edge, as uosc proximity in absolute pixels
+    /// (<see cref="Reveal"/> against <see cref="BottomBarPixels"/>). Symmetric to <see cref="TopNear"/>, but
+    /// reaching further because the bottom cluster is taller — the whole of 「进度条要鼠标下移到更低才显示」.</summary>
+    private double BottomNear => Reveal(_pointerY < 0 ? -1 : (1 - _pointerY) * _height, BottomBarPixels);
+
+    /// <summary>
+    /// Which of the two edge overlays the pointer is asking for. Now the uosc proximity being non-zero: the
+    /// strip or bar is 「up」 exactly while the pointer is within its reveal reach (<see cref="TopReachPixels"/>
+    /// / <see cref="BottomReachPixels"/>), and its strength then grades from there — the same one number
+    /// answers 「是否出现」 and 「多明显」, so they cannot disagree.
     /// </summary>
     private (bool Bar, bool Title) Edges()
     {
         if (_pointerY < 0) return (false, false);
 
-        return (_pointerY >= 1 - EdgeBandFraction, _pointerY <= EdgeBandFraction);
+        return (BottomNear > 0, TopNear > 0);
     }
 }

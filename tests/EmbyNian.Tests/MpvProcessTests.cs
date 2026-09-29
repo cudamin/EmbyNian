@@ -107,7 +107,7 @@ internal static class MpvProcessTests
         await audit.Completion;
         audit.Check();
         Assert.Equal(4, audit.Events.Count(e => e.StartsWith("stage:", StringComparison.Ordinal)));
-        Assert.Equal(control ? 8 : 0, audit.Events.Count(e => e == "observe"));
+        Assert.Equal(control ? 14 : 0, audit.Events.Count(e => e == "observe"));
         Assert.Equal(control, audit.Events.Contains("get"));
         Assert.Equal(control, audit.Events.Contains("control"));
         Assert.True(audit.Events.Contains("quit"));

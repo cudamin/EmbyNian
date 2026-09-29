@@ -111,7 +111,9 @@ function Menu:init(data, callback, opts)
 	self.mouse_nav = self.opts.mouse_nav -- Stops pre-selecting items
 	self.item_height = nil
 	self.min_width = nil
-	self.item_spacing = 1
+	self.menu_scale = state.scale -- EMBYNIAN[menu-style]：菜单自己的缩放（随窗口高），update_content_dimensions 重算
+	self.radius = state.radius -- EMBYNIAN[menu-style]：菜单面板的圆角基准（同上）
+	self.item_spacing = 0 -- EMBYNIAN[menu-style]：行距在 update_content_dimensions 里按字号重算
 	self.item_padding = nil
 	self.separator_size = nil
 	self.padding = nil
@@ -304,13 +306,24 @@ function Menu:update_items(items)
 end
 
 function Menu:update_content_dimensions()
-	self.item_height = round(options.menu_item_height * state.scale)
-	self.min_width = round(options.menu_min_width * state.scale)
-	self.separator_size = round(1 * state.scale)
-	self.scrollbar_size = round(2 * state.scale)
-	self.padding = round(options.menu_padding * state.scale)
-	self.gap = round(2 * state.scale)
-	self.font_size = round(self.item_height * 0.48 * options.font_scale)
+	-- EMBYNIAN[menu-style] — 菜单自己的缩放：参考 mpv 内建 context_menu 的 scale_with_window=auto
+	-- （＝osd_height/720，mpv 的 osd-scale-by-window 默认开），不吃 uosc 的 state.scale（固定 1、
+	-- 全屏 ×1.3，与参考菜单的随窗缩放不同源）。display 就是 osd-width/height 的镜像（main.lua 的
+	-- update_display_dimensions），窗口尺寸拿不到时（headless 探针、vo=null）退回 state.scale。
+	-- 字号与行高直接来自参考配置（context_menu.conf 的 font_size/gap）：行高＝字号×(1+gap)，同上游
+	-- get_line_height；上游「字号＝item_height×0.48」的反推撤销 —— 2026-09-26 那轮的 state.scale 基准
+	-- （item_height=30→字号 14.4）整把换成参考菜单的尺子。其余尺寸全部跟着 menu_scale 走。
+	local menu_scale = display.height > 0 and display.height / 720 or state.scale
+	self.menu_scale = menu_scale
+	self.font_size = round(options.menu_font_size * menu_scale * options.font_scale)
+	self.item_height = round(self.font_size * (1 + options.menu_gap))
+	self.item_spacing = 0 -- 行距已含在行高里（见上），行与行贴着排——参考菜单的密度
+	self.min_width = round(options.menu_min_width * menu_scale)
+	self.separator_size = round(1 * menu_scale)
+	self.scrollbar_size = round(2 * menu_scale)
+	self.padding = round(options.menu_padding * menu_scale)
+	self.gap = round(2 * menu_scale)
+	self.radius = round(options.border_radius * menu_scale)
 	self.font_size_hint = self.font_size - 1
 	self.item_padding = round((self.item_height - self.font_size) * 0.6)
 	self.scroll_step = self.item_height + self.item_spacing
@@ -1413,7 +1426,9 @@ function Menu:render()
 	---@param pos number Horizontal position index. 0 = current menu, <0 parent menus, >1 submenu.
 	local function draw_menu(menu, x, pos)
 		local is_current, is_parent, is_submenu = pos == 0, pos < 0, pos > 0
-		local menu_opacity = (pos == 0 and 1 or config.opacity.submenu ^ math.abs(pos)) * self.opacity
+		-- EMBYNIAN[menu-style] — 面板全部不透明（参考菜单 background_alpha=0），子菜单不再按层级
+		-- 半透明（config.opacity.submenu 从此不被菜单吃）；开关菜单的淡入淡出（self.opacity）照旧。
+		local menu_opacity = self.opacity
 		-- Scrollable content area coordinates
 		local content_rect = {
 			ax = x + self.padding,
@@ -1436,10 +1451,15 @@ function Menu:render()
 		local blur_action_index = self.mouse_nav and menu.action_index ~= nil
 
 		-- Background
+		-- EMBYNIAN[menu-style] — 底板照参考菜单画：不透明 #222222（参考菜单取 osd-back-color，黑时兜底
+		-- 222222）、圆角 corner_radius=5、0.5 白细描边；不再吃 opacity.menu 的半透明，半径也不再从
+		-- border_radius 推（参考菜单的菜单底板与行高亮是两把半径）。
 		ass:rect(bg_rect.ax, bg_rect.ay, bg_rect.bx, bg_rect.by, {
-			color = bg,
-			opacity = menu_opacity * config.opacity.menu,
-			radius = state.radius > 0 and math.min(state.radius + self.padding, state.radius * 3) or 0,
+			color = options.menu_background_color,
+			opacity = menu_opacity,
+			radius = options.menu_corner_radius > 0 and options.menu_corner_radius * self.menu_scale or 0,
+			border = options.menu_outline_size > 0 and options.menu_outline_size * self.menu_scale or nil,
+			border_color = options.menu_outline_color,
 		})
 
 		if is_parent then
@@ -1487,37 +1507,36 @@ function Menu:render()
 				by = math.min(item_ay + self.scroll_step, bg_rect.by),
 			}
 
-			local has_background = is_selected or item.active
-			local next_item = menu.items[index + 1]
-			local next_is_active = next_item and next_item.active
-			local next_has_background = menu.selected_index == index + 1 or next_is_active
-			local font_color = item.active and fgt or bgt
+			-- EMBYNIAN[menu-style] — 悬停/键盘所在行的字色翻成 focused_color（白底深字）；active 行
+			-- （当前值）照旧深字 fgt，其余 bgt。has_background 那组局部量原来只喂「行间细线」的条件，
+			-- 线撤了（见下）随之删除。
+			local font_color = is_selected and options.menu_focused_color or item.active and fgt or bgt
 			local actions = is_selected and (item.actions or menu.item_actions) -- not nil = actions are visible
 			local action = actions and actions[menu.action_index] -- not nil = action is selected
 
 			if action then selected_action = action end
 
 			-- Separator
-			if item_by < content_rect.by and ((not has_background and not next_has_background) or item.separator) then
-				local ay, by = item_by, item_by + self.separator_size
-				if has_background then
-					ay, by = ay + self.separator_size, by + self.separator_size
-				elseif next_has_background then
-					ay, by = ay - self.separator_size, by - self.separator_size
-				end
+			-- EMBYNIAN[menu-style] — 只画真正的分隔项，色用参考菜单的 disabled_color=#555555；
+			-- 行与行之间上游那道 0.04 的细线照参考菜单撤掉（参考菜单的行距里没有线）。
+			if item.separator and item_by < content_rect.by then
 				ass:rect(
-					content_rect.ax + self.item_padding, ay, content_rect.bx - self.item_padding, by,
-					{color = fg, opacity = menu_opacity * (item.separator and 0.13 or 0.04)}
+					content_rect.ax + self.item_padding, item_by, content_rect.bx - self.item_padding,
+					item_by + self.separator_size,
+					{color = options.menu_disabled_color, opacity = menu_opacity}
 				)
 			end
 
 			-- Background
-			local highlight_opacity = 0 + (item.active and 0.8 or 0) + (is_selected and 0.15 or 0)
+			-- EMBYNIAN[menu-style] — 悬停/键盘所在行＝整行白底（参考菜单 focused_back_color=#FFFFFF，
+			-- 上游是 0.15 的淡染）；active 行（当前值）照旧 fg@0.8。两档白靠深浅区分：悬停全白、当前值 0.8，
+			-- 悬停落在当前值上时取满。
+			local highlight_opacity = (item.active and 0.8 or 0) + (is_selected and 1 or 0)
 			if highlight_opacity > 0 then
 				ass:rect(content_rect.ax, item_ay, content_rect.bx, item_by, {
-					radius = state.radius,
-					color = fg,
-					opacity = highlight_opacity * menu_opacity,
+					radius = self.radius,
+					color = is_selected and options.menu_focused_back_color or fg,
+					opacity = math.min(highlight_opacity, 1) * menu_opacity,
 					clip = item_clip,
 				})
 			end
@@ -1559,7 +1578,7 @@ function Menu:render()
 						actions_rect.ax = rect.ax
 
 						ass:rect(rect.ax, rect.ay, rect.bx, rect.by, {
-							radius = state.radius > 2 and state.radius - 1 or state.radius,
+							radius = self.radius > 2 and self.radius - 1 or self.radius,
 							color = is_active and fg or bg,
 							border = is_active and self.gap or nil,
 							border_color = bg,
@@ -1592,13 +1611,15 @@ function Menu:render()
 			end
 
 			-- Selected item indicator line
+			-- EMBYNIAN[menu-style] — 悬停行已是整行白底，这根 fg 色左缘指示条落在白底上不可见，
+			-- 键盘导航（同样走 is_selected）时也一样；留作上游行为，尺寸只跟着 menu_scale。
 			if is_selected and not selected_action then
-				local size = round(2 * state.scale)
-				local v_padding = math.min(state.radius, math.ceil(self.item_height / 3))
+				local size = round(2 * self.menu_scale)
+				local v_padding = math.min(self.radius, math.ceil(self.item_height / 3))
 				ass:rect(
 					content_rect.ax - size - 1, item_ay + v_padding,
 					content_rect.ax - 1, item_by - v_padding,
-					{radius = 1 * state.scale, color = fg, opacity = menu_opacity, clip = item_clip}
+					{radius = 1 * self.menu_scale, color = fg, opacity = menu_opacity, clip = item_clip}
 				)
 			end
 
@@ -1704,13 +1725,13 @@ function Menu:render()
 			local text = selected_action and selected_action.label or is_icon_hovered and menu.footnote
 			local opacity = (is_icon_hovered and 1 or 0.5) * menu_opacity
 			ass:icon(icon_x, icon_y, self.font_size, is_icon_hovered and 'help' or 'help_outline', {
-				color = fg, border = state.scale, border_color = bg, opacity = opacity,
+				color = fg, border = self.menu_scale, border_color = bg, opacity = opacity,
 			})
 			if text then
 				ass:txt(icon_x + self.font_size * 0.75, icon_y - self.font_size * 0.5, 7, ass_escape(text), {
 					size = self.font_size,
 					color = fg,
-					border = state.scale,
+					border = self.menu_scale,
 					border_color = bg,
 					opacity = menu_opacity,
 					italic = true,
@@ -1739,7 +1760,7 @@ function Menu:render()
 			if menu.search then
 				ass:rect(content_rect.ax + 3, rect.ay + 3, content_rect.bx - 3, rect.ay + title_height - 1, {
 					color = fg .. '\\1a&HFF', opacity = menu_opacity * 0.1,
-					radius = state.radius > 0 and state.radius + self.padding or 0,
+					radius = self.radius > 0 and self.radius + self.padding or 0,
 					border = 1, border_color = fg, border_opacity = menu_opacity * 0.8
 				})
 				ass:texture(content_rect.ax + 3, rect.ay + 3, content_rect.bx - 3, rect.ay + title_height - 1, 'n', {
@@ -1748,7 +1769,7 @@ function Menu:render()
 			else
 				ass:rect(content_rect.ax + 2, rect.ay + 2, content_rect.bx - 2, rect.ay + title_height, {
 					color = fg, opacity = menu_opacity * 0.8,
-					radius = state.radius > 0 and state.radius + self.padding or 0,
+					radius = self.radius > 0 and self.radius + self.padding or 0,
 				})
 				ass:texture(content_rect.ax + 2, rect.ay + 2, content_rect.bx - 2, rect.ay + title_height, 'n', {
 					size = 80, color = bg, opacity = menu_opacity * 0.1,
@@ -1828,7 +1849,7 @@ function Menu:render()
 				-- Selected input indicator for submittable searches.
 				-- (input is selected when `selected_index` is `nil`)
 				if menu.search_debounce == 'submit' and not menu.selected_index then
-					local size_half = round(1 * state.scale)
+					local size_half = round(1 * self.menu_scale)
 					ass:rect(
 						content_rect.ax, rect.by - size_half, content_rect.bx, rect.by + size_half,
 						{color = fg, opacity = menu_opacity}

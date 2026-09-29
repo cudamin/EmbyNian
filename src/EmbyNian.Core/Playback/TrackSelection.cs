@@ -66,7 +66,8 @@ public static class TrackSelection
     /// </summary>
     public static MediaStream? ChooseAudio(PlaybackSettings settings, MediaSource source)
     {
-        var streams = source.AudioStreams.ToList();
+        var map = MpvTrackMap.Build(source);
+        var streams = source.AudioStreams.Where(stream => map.CanSelect(stream.Index)).ToList();
         if (streams.Count == 0) return null;
 
         var formatRules = settings.AudioFormatRules;
@@ -120,15 +121,18 @@ public static class TrackSelection
     {
         if (settings.SubtitleMode == SubtitleMode.Off) return SubtitleChoice.Off;
 
-        var streams = source.SubtitleStreams.ToList();
-        if (streams.Count == 0) return SubtitleChoice.None;
+        var map = MpvTrackMap.Build(source);
+        var streams = source.SubtitleStreams.Where(stream => map.CanSelect(stream.Index)).ToList();
+        if (streams.Count == 0)
+            return source.SubtitleStreams.Any() ? SubtitleChoice.Off : SubtitleChoice.None;
 
         var languages = settings.SubtitleLanguages;
 
         // 仅在音频为外语时显示：听得懂的语言不需要字幕。
         if (settings.SubtitleMode == SubtitleMode.ForeignAudioOnly
             && audio is not null
-            && languages.Any(language => TrackPreference.LanguageMatches(audio, language)))
+            && languages.Any(language => language != TrackLanguagePriority.Any
+                && TrackPreference.LanguageMatches(audio, language)))
         {
             return SubtitleChoice.Off;
         }
@@ -156,12 +160,11 @@ public static class TrackSelection
             return new SubtitleChoice(BestByTitle(matches, rules, source.DefaultSubtitleStreamIndex, forcedOnly), false);
         }
 
-        // No preferred language is present. Falling back keeps a file whose only subtitle track is
-        // labelled in a language nobody listed from starting bare, which is what the older builds did.
-        // 标题偏好照样作用于兜底那批：语言全对不上时，「不要双语/特效」仍算数。
-        return settings.SubtitleFallbackToDefault
-            ? new SubtitleChoice(BestByTitle(pool, rules, source.DefaultSubtitleStreamIndex, forcedOnly), false)
-            : SubtitleChoice.Off;
+        if (languages.Count > 0 && !settings.SubtitleFallbackToDefault) return SubtitleChoice.Off;
+
+        var fallback = pool.FirstOrDefault(stream => stream.Index == source.DefaultSubtitleStreamIndex)
+            ?? pool.FirstOrDefault(stream => stream.IsDefault);
+        return fallback is null ? SubtitleChoice.Off : new SubtitleChoice(fallback, false);
     }
 
     /// <summary>

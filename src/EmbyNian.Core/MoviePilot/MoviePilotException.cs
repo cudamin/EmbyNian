@@ -22,6 +22,9 @@ public class MoviePilotException : Exception
     public string? Body { get; }
 }
 
+/// <summary>提交前校验失败，尚未发出实际整理请求。</summary>
+public sealed class MoviePilotTransferBlockedException(string message) : MoviePilotException(message);
+
 /// <summary>Nothing answered at that address, or it answered too slowly. The one failure worth retrying.</summary>
 public sealed class MoviePilotUnreachableException(string message, Exception? inner = null)
     : MoviePilotException(message, inner: inner);

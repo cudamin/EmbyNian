@@ -397,10 +397,10 @@ internal static class MoviePilotTransferTests
                 .Answer("Items/n1", """{"Id":"n1","Name":"第 1 季","Type":"Season","SeriesId":"s1","IndexNumber":1}""")
                 .Answer("Items", $$"""{"Items":[{{episodes}}],"TotalRecordCount":40}""");
 
-            var context = Collect(transport, new EmbyItem { Id = "n1", Type = EmbyItemType.Season, Name = "第 1 季", SeriesId = "s1" });
-
-            Assert.Equal(MoviePilotTransferCollect.MaxFiles, context.Files.Count);
-            Assert.Equal("/media/x/e1.mkv", context.Files[0].Path);
+            var error = Assert.Catch<MoviePilotException>(() => Collect(transport,
+                new EmbyItem { Id = "n1", Type = EmbyItemType.Season, Name = "第 1 季", SeriesId = "s1" }));
+            Assert.Contains("超过 30 个文件", error.Message);
+            Assert.Contains("不会只提交前", error.Message);
         });
     }
 

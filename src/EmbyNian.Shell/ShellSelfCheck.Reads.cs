@@ -396,6 +396,7 @@ internal static partial class ShellSelfCheck
         var (fillOk, fill) = page.HeroFill();
         var (sealOk, seal) = page.BodySeal();
         var (fitOk, fit) = page.PickerFit();
+        var (glassOk, glass) = page.PickerGlass();
         var (washOk, wash) = page.WashRead(shell.TrailBase);
         var (stillOk, still) = page.StillShape();
         var (footerOk, footer) = page.FooterRead();
@@ -433,6 +434,8 @@ internal static partial class ShellSelfCheck
             seal,
             fitOk,
             fit,
+            glassOk,
+            glass,
             washOk,
             wash,
             stillOk,

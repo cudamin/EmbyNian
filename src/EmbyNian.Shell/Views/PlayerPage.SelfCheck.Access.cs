@@ -179,6 +179,7 @@ public sealed partial class PlayerPage
                 }
 
                 var element = (FrameworkElement)child;
+                if (element.Visibility != Visibility.Visible) continue;
                 var name = FrameworkElementAutomationPeer.CreatePeerForElement(element)?.GetName() ?? "";
 
                 if (name.Trim().Length > 0) named++;

@@ -16,6 +16,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -36,9 +37,22 @@
             Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}"
             Visibility="{x:Bind ViewModel.NoticeVisibility, Mode=OneWay}" />
 
+        <!-- 来源筛选：TMDB／豆瓣／IMDb 各是各的库，不选就是全部；目录来自 media/source，只留影视可用的。 -->
+        <ComboBox
+            x:Name="SourceFilter"
+            Grid.Row="2"
+            Header="来源"
+            Margin="0,4,0,8"
+            MinWidth="150"
+            HorizontalAlignment="Left"
+            DisplayMemberPath="Name"
+            ItemsSource="{x:Bind ViewModel.SourceChoices, Mode=OneWay}"
+            SelectedItem="{x:Bind ViewModel.SelectedSource, Mode=TwoWay}"
+            SelectionChanged="OnSourceChanged" />
+
         <ItemsView
             x:Name="Results"
-            Grid.Row="2"
+            Grid.Row="3"
             IsItemInvokedEnabled="False"
             ItemTransitionProvider="{x:Null}"
             ItemsSource="{x:Bind ViewModel.Results, Mode=OneWay}"
@@ -87,11 +101,22 @@
                                     Style="{StaticResource EgSubheadStyle}"
                                     Text="{x:Bind Title}"
                                     TextTrimming="CharacterEllipsis" />
-                                <TextBlock
-                                    Foreground="{ThemeResource EgAccentBrush}"
-                                    Style="{StaticResource EgCaptionStyle}"
-                                    Text="{x:Bind TypeLabel}"
-                                    Visibility="{x:Bind TypeVisibility}" />
+                                <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind IdentityVisibility}">
+                                    <Border
+                                        Padding="8,2"
+                                        HorizontalAlignment="Left"
+                                        Background="{ThemeResource EgSurfaceAltBrush}"
+                                        CornerRadius="{StaticResource EgPosterCornerRadius}"
+                                        Visibility="{x:Bind SourceVisibility}">
+                                        <TextBlock Foreground="{ThemeResource EgAccentBrush}" Style="{StaticResource EgCaptionStyle}" Text="{x:Bind SourceLabel}" />
+                                    </Border>
+                                    <TextBlock
+                                        Foreground="{ThemeResource EgAccentBrush}"
+                                        Style="{StaticResource EgCaptionStyle}"
+                                        Text="{x:Bind TypeLabel}"
+                                        VerticalAlignment="Center"
+                                        Visibility="{x:Bind TypeVisibility}" />
+                                </StackPanel>
                                 <TextBlock
                                     Foreground="{ThemeResource EgTextDimBrush}"
                                     MaxLines="2"
@@ -126,7 +151,7 @@
 
         <!-- 还没搜、没搜到，都落这句；忙的时候（EmptyVisibility 为否）收起。 -->
         <StackPanel
-            Grid.Row="2"
+            Grid.Row="3"
             Margin="24,72,24,0"
             HorizontalAlignment="Center"
             VerticalAlignment="Top"
@@ -147,7 +172,7 @@
         <local:MoviePilotResourcePanel
             x:Name="ResourceOverlay"
             Grid.Row="0"
-            Grid.RowSpan="3"
+            Grid.RowSpan="4"
             Closed="OnResourceClosed"
             Visibility="Collapsed" />
     </Grid>

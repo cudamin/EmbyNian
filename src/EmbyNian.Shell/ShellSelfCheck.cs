@@ -347,6 +347,8 @@ internal static partial class ShellSelfCheck
         string BodySeal,
         bool PickerFitOk,
         string PickerFit,
+        bool PickerGlassOk,
+        string PickerGlass,
         bool WashOk,
         string Wash,
         bool StillShapeOk,
@@ -593,7 +595,11 @@ internal static partial class ShellSelfCheck
 
                 // After the report, not inside it: the picture is the slow part and it is the report that
                 // the exit code comes from, so a failure to encode a PNG must not be able to cost us one.
-                if (options.DumpUi) await ShootAsync(shell, options);
+                if (options.DumpUi)
+                {
+                    await ShootAsync(shell, options);
+                    await shell.PlayerRoot.CaptureTransportSamplesAsync(options.Paths.LogDirectory);
+                }
             }
             catch (Exception error)
             {

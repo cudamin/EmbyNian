@@ -2,6 +2,7 @@ using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.MoviePilot;
 using EmbyNian.Shell.Interop;
+using EmbyNian.Shell.Platform;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -100,9 +101,9 @@ internal sealed class MoviePilotWindow
     /// Shows the window for one item: seeds the view with the keyword the item computes to
     /// (<see cref="MoviePilotVersionQuery.Keyword"/>) and runs the search, then brings the window up.
     /// </summary>
-    internal void Show(MoviePilotService service, EmbyItem item)
+    internal void Show(MoviePilotService service, EmbyItem item, ISystemLauncher launcher)
     {
-        _view.Search(service, MoviePilotVersionQuery.Keyword(item));
+        _view.Search(service, MoviePilotVersionQuery.Keyword(item), launcher);
         _window.AppWindow.Show();
         _window.Activate();
         _open = true;

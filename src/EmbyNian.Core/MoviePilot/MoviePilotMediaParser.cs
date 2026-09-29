@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace EmbyNian.MoviePilot;
@@ -103,18 +104,32 @@ public static class MoviePilotMediaParser
             ? Text(meta, "resource_pix")
             : null;
 
+        var media = context.TryGetProperty("media_info", out var info) && info.ValueKind == JsonValueKind.Object
+            ? ToMedia(info) : null;
+        var published = Text(torrent, "pubdate");
+        DateTimeOffset? publishedAt = DateTimeOffset.TryParse(published, CultureInfo.InvariantCulture,
+            DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeLocal, out var time) ? time : null;
+
         return new MoviePilotResource
         {
             Title = title!,
+            Description = Text(torrent, "description"),
             SiteName = Text(torrent, "site_name"),
             Size = Long(torrent, "size"),
-            Seeders = Number(torrent, "seeders") ?? 0,
+            Seeders = Math.Max(0, Number(torrent, "seeders") ?? 0),
             Resolution = resolution,
             PageUrl = Text(torrent, "page_url"),
+            PublishedText = published ?? Text(torrent, "date_elapsed"),
+            PublishedAt = publishedAt,
+            Promotion = Text(torrent, "volume_factor"),
+            DownloadFactor = Factor(torrent, "downloadvolumefactor"),
+            UploadFactor = Factor(torrent, "uploadvolumefactor"),
+            FreeUntil = Text(torrent, "freedate") ?? Text(torrent, "freedate_diff"),
+            HitAndRun = torrent.TryGetProperty("hit_and_run", out var hr) && hr.ValueKind == JsonValueKind.True,
+            Labels = Labels(torrent),
             TorrentInfo = torrent.Clone(),
-            // 身份对优先用「搜的是哪部片」那一对；种子自己带的当兜底。
-            MediaSource = string.IsNullOrWhiteSpace(mediaSource) ? Text(torrent, "media_source") : mediaSource,
-            MediaId = string.IsNullOrWhiteSpace(mediaId) ? Text(torrent, "media_id") : mediaId
+            MediaSource = string.IsNullOrWhiteSpace(mediaSource) ? media?.MediaSource ?? Text(torrent, "media_source") : mediaSource,
+            MediaId = string.IsNullOrWhiteSpace(mediaId) ? media?.MediaId ?? Text(torrent, "media_id") : mediaId
         };
     }
 
@@ -126,6 +141,22 @@ public static class MoviePilotMediaParser
         var title = Text(item, "title");
         if (string.IsNullOrWhiteSpace(title)) return null;
 
+        var source = Text(item, "media_source") ?? Text(item, "source");
+        var id = Text(item, "media_id");
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            id = source switch
+            {
+                "themoviedb" => Text(item, "tmdb_id"),
+                "douban" => Text(item, "douban_id"),
+                "bangumi" => Text(item, "bangumi_id"),
+                "anilist" => Text(item, "anilist_id"),
+                "imdb" => Text(item, "imdb_id"),
+                "tvdb" => Text(item, "tvdb_id"),
+                _ => null
+            };
+        }
+
         return new MoviePilotMedia
         {
             Title = title!,
@@ -133,8 +164,8 @@ public static class MoviePilotMediaParser
             Type = Text(item, "type"),
             Overview = Text(item, "overview"),
             PosterUrl = Text(item, "poster_path"),
-            MediaSource = Text(item, "media_source"),
-            MediaId = Text(item, "media_id")
+            MediaSource = source,
+            MediaId = id
         };
     }
 
@@ -177,16 +208,29 @@ public static class MoviePilotMediaParser
         };
     }
 
-    /// <summary>一个 64 位整数成员（体积可能上 GB，超 int）。数字直接取，字符串再试一次；取不到就是 0。</summary>
+    private static double? Factor(JsonElement root, string name) =>
+        double.TryParse(Text(root, name), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
+        double.IsFinite(value) && value >= 0 ? value : null;
+
+    private static IReadOnlyList<string> Labels(JsonElement torrent)
+    {
+        if (!torrent.TryGetProperty("labels", out var labels)) return [];
+        if (labels.ValueKind == JsonValueKind.String)
+            return (labels.GetString() ?? "").Split([',', '|'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (labels.ValueKind != JsonValueKind.Array) return [];
+        return labels.EnumerateArray()
+            .Select(label => label.ValueKind == JsonValueKind.String ? label.GetString() : Text(label, "name") ?? Text(label, "label"))
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>体积可能以浮点数回传；仅接受有限、非负且未越界的字节数。</summary>
     private static long Long(JsonElement root, string name)
     {
-        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty(name, out var value)) return 0;
-
-        return value.ValueKind switch
-        {
-            JsonValueKind.Number when value.TryGetInt64(out var number) => number,
-            JsonValueKind.String when long.TryParse(value.GetString(), out var parsed) => parsed,
-            _ => 0
-        };
+        if (!decimal.TryParse(Text(root, name), NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ||
+            number < 0 || number > long.MaxValue) return 0;
+        return (long)number;
     }
 }

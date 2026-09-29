@@ -15,9 +15,11 @@ namespace EmbyNian.Playback;
 /// Where mpv may cache compiled shaders; null omits the option, which is what a test wants.
 /// </param>
 /// <param name="screenshotDirectory">
-/// Where 截图 land; null omits all three screenshot options, which is what a test wants. Without it the
-/// files would go beside the executable without the user being told — which is why the screenshot rows were
-/// left out of the player menu for so long.
+/// Where 截图 land when 设置 → 播放器的「截图保存目录」is empty; null omits all three screenshot options, which
+/// is what a test wants. Without it the files would go beside the executable without the user being told —
+/// which is why the screenshot rows were left out of the player menu for so long. A configured value is
+/// resolved on top of this by <see cref="Infrastructure.AppPaths.ResolveScreenshotDirectory"/>; see
+/// <see cref="ScreenshotDirectory"/>.
 /// </param>
 /// <param name="fontsDirectory">
 /// Where the bundled 字幕字体 live, handed to mpv as <c>sub-fonts-dir</c>; null omits it, which is what
@@ -37,13 +39,19 @@ public sealed class PlaybackPlanner(
     public AutoTracks SuggestTracks(MediaSource source) => TrackSelection.Resolve(settings.Playback, source);
 
     /// <summary>
-    /// Where 截图 will land, or null when nobody said. Exposed for one reason: the self-check compares it
-    /// against <see cref="Infrastructure.AppPaths.ScreenshotDirectory"/> on the container-built planner.
-    /// Forgetting to wire it up in <c>ShellServices</c> compiles, plays, and shows nothing wrong — the
-    /// screenshots just go and sit next to the executable, which is the exact defect that kept this feature
-    /// out of the client for months.
+    /// Where 截图 will land, or null when nobody said. <b>Set first, constructor second</b>: the value is
+    /// <see cref="Infrastructure.AppPaths.ResolveScreenshotDirectory"/>'s — 设置 → 播放器的「截图保存目录」
+    /// when it holds one, the constructor's 装机落点 when it does not — asked afresh on every plan, so a
+    /// directory changed in the settings page is what the next playback is told, with no rewiring.
+    /// <para>
+    /// Exposed for one reason: the self-check compares it against the same rule on the container-built
+    /// planner. Forgetting to wire the constructor up in <c>ShellServices</c> compiles, plays, and shows
+    /// nothing wrong — the screenshots just go and sit next to the executable, which is the exact defect that
+    /// kept this feature out of the client for months.
+    /// </para>
     /// </summary>
-    public string? ScreenshotDirectory => screenshotDirectory;
+    public string? ScreenshotDirectory =>
+        AppPaths.ResolveScreenshotDirectory(settings.Mpv.ScreenshotDirectory, screenshotDirectory);
 
     public PlaybackRequest Plan(PlaybackTicket ticket, EmbyConnection connection)
     {
@@ -67,11 +75,13 @@ public sealed class PlaybackPlanner(
 
         // Hoisted out of the initializer below because two things need it: what mpv is told to call the film,
         // and what a screenshot of it is called.
-        // 2026-09-24 用户令「这是独占模式下左上角的标题，在尾部也新增制作组」（例：再见菈菈 S01E12 再见菈菈
-        // - Studio GreenTea）：mpv 左上角那行就是 force-media-title，喂的正是这个字符串。制作组从正在排的
-        // 这一版自己的文件名里取 —— 拼在票上而不是拼在条目上，候选回退落到哪一版，标题就跟着哪一版的组名走。
-        // 集成模式左上角的标题条走的是 item.ToPlaybackTitle() 那条路，不经过这里，按用户指的范围保持原样。
-        var title = ReleaseGroup.DecorateTitle(item.ToPlaybackTitle(), source.Path);
+        // 2026-09-27 用户令「电视剧左上角标题要用 SxxExx 集名……集成模式和独占模式显示的要一致」：mpv 左上角
+        // 那行就是 force-media-title，喂的是 headline（单集＝「剧名 SxxExx 集名」，电影＝片名）。**2026-09-28
+        // 晚按用户令「标题前面加上剧名」把剧名接回主标题**（09-27 那版曾不带前缀）。组名仍不缀在标题上 ——
+        // 它在第二行的文件信息里（PlaybackTitles.Subline，由 PlayerViewModel 经 embynian-subline 推给 uosc）；
+        // 进度条中间那条画质读数尾部的组名（PlayingSourceLabel）照旧不动。
+        // 集成模式左上角标题条走 item.ToPlaybackHeadline() 那条路、不经过这里，两处同源、两模式显示一致。
+        var title = item.ToPlaybackHeadline();
 
         var request = new PlaybackRequest
         {
@@ -120,7 +130,7 @@ public sealed class PlaybackPlanner(
         string title)
     {
         var options = new List<KeyValuePair<string, string>>(48);
-        options.AddRange(MpvBaseline.Build(shaderCacheDirectory, screenshotDirectory, title, fontsDirectory));
+        options.AddRange(MpvBaseline.Build(shaderCacheDirectory, ScreenshotDirectory, title, fontsDirectory));
         options.AddRange(MpvOutputOptions.Build(
             settings.Video, settings.Audio, settings.Playback, source, decision.Animated, displayRefreshHz));
         options.AddRange(chainOptions);
@@ -181,19 +191,18 @@ public sealed class PlaybackPlanner(
     /// </summary>
     private (int? AudioIndex, int? SubtitleIndex, bool SubtitlesDisabled) ResolveTracks(PlaybackTicket ticket, MediaSource source)
     {
-        // An explicit pick from the detail page's dropdowns is never second-guessed.
-        if (ticket.AudioStreamIndex is not null && (ticket.SubtitlesDisabled || ticket.SubtitleStreamIndex is not null))
-            return (ticket.AudioStreamIndex, ticket.SubtitleStreamIndex, ticket.SubtitlesDisabled);
+        var map = MpvTrackMap.Build(source);
+        var explicitAudio = source.AudioStreams.FirstOrDefault(stream =>
+            stream.Index == ticket.AudioStreamIndex && map.CanSelect(stream.Index));
+        var audio = explicitAudio ?? TrackSelection.ChooseAudio(settings.Playback, source);
 
-        var auto = TrackSelection.Resolve(settings.Playback, source);
-        var audio = ticket.AudioStreamIndex ?? auto.Audio?.Index;
+        if (ticket.SubtitlesDisabled) return (audio?.Index, null, true);
+        if (ticket.SubtitleStreamIndex is { } chosen && map.SubtitleId(chosen) is not null)
+            return (audio?.Index, chosen, false);
 
-        if (ticket.SubtitlesDisabled) return (audio, null, true);
-        if (ticket.SubtitleStreamIndex is { } chosen) return (audio, chosen, false);
-
-        var subtitle = auto.Subtitle;
-        Describe(source, audio, subtitle);
-        return (audio, subtitle.Stream?.Index, subtitle.Disabled);
+        var subtitle = TrackSelection.ChooseSubtitle(settings.Playback, source, audio);
+        Describe(source, audio?.Index, subtitle);
+        return (audio?.Index, subtitle.Stream?.Index, subtitle.Disabled);
     }
 
     private void Describe(MediaSource source, int? audioIndex, SubtitleChoice subtitle)

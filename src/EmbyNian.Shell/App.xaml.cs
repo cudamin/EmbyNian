@@ -1,3 +1,4 @@
+using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
@@ -87,6 +88,19 @@ public partial class App : Application
             _container = services;
 
             var ui = services.GetRequiredService<ISettingsService>().Settings.Ui;
+
+            // 设置里配了的截图目录（设置 → 播放器）也要一开始就在。mpv 会在第一张截图时自己建它，可「关于」卡
+            // 的「打开」和自检的「截图有落点」都等不到那一张。建失败不挡启动：没有这块盘的机器照样能用，
+            // 真去截图那一下会当场面报，日志里留一行。
+            try
+            {
+                var configured = services.GetRequiredService<AppSettings>().Mpv.ScreenshotDirectory;
+                Directory.CreateDirectory(AppPaths.ResolveScreenshotDirectory(configured, _options.Paths.ScreenshotDirectory)!);
+            }
+            catch (Exception error)
+            {
+                Log.Warn(Category, "建配置的截图目录失败", error);
+            }
 
             // 主题在任何一个控件出现之前先落地。晚一步就会看见「先绿一下再变成紫」那种闪色，因为
             // Palette.xaml 里的字面值先画了第一帧。这里只改画刷的颜色，不动 Application.RequestedTheme
@@ -203,6 +217,10 @@ public partial class App : Application
         // 的时候存在，而这条路上什么都点不进去（这台机器注不进鼠标事件），所以它必须是自己的一个开关。摆在
         // --show-detail 之后 —— 它自己就走一遍那一步，先弹面板再走就白走了。
         if (_options.ShowCover) await shell.ShowCoverAsync().ConfigureAwait(true);
+
+        // Tooling: --show-picker 把详情页那颗字幕下拉弹开留着。同 --show-cover 的位置：它自己就走一遍
+        // --show-detail 那两步（已经在详情页上就不走），所以摆在那一步之后。
+        if (_options.ShowPicker) await shell.ShowPickerMenuAsync().ConfigureAwait(true);
 
         // Tooling: --play puts real video on screen. Last, because it does not come back until playback
         // has ended, and because it collapses everything --show-library was for.

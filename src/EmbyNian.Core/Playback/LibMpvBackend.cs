@@ -517,6 +517,12 @@ internal sealed class LibMpvHandle(
     /// 这一位翻真＝窗口带着画面立起来了，此刻把 force-window 改回 yes，窗口从此跨 EOF 与跨换片都活着。
     /// </summary>
     private const ulong ObserveVoConfigured = 11;
+    private const ulong ObserveCacheState = 12;
+    private const ulong ObserveCacheMode = 13;
+    private const ulong ObserveNetwork = 14;
+    private const ulong ObserveChapters = 15;
+    private const ulong ObserveLoopA = 16;
+    private const ulong ObserveLoopB = 17;
 
     private readonly Queue<string> _logTail = new(LogTailLines);
 
@@ -602,6 +608,12 @@ internal sealed class LibMpvHandle(
         Observe(ObserveSpeed, "speed", LibMpvNative.FormatDouble);
         Observe(ObserveCacheTime, "demuxer-cache-time", LibMpvNative.FormatDouble);
         Observe(ObservePausedForCache, "paused-for-cache", LibMpvNative.FormatFlag);
+        Observe(ObserveCacheState, "demuxer-cache-state", LibMpvNative.FormatNone);
+        Observe(ObserveCacheMode, "cache", LibMpvNative.FormatNone);
+        Observe(ObserveNetwork, "demuxer-via-network", LibMpvNative.FormatFlag);
+        Observe(ObserveChapters, "chapter-list", LibMpvNative.FormatNone);
+        Observe(ObserveLoopA, "ab-loop-a", LibMpvNative.FormatNone);
+        Observe(ObserveLoopB, "ab-loop-b", LibMpvNative.FormatNone);
 
         // Notification only: the list itself is read on the event thread, where the node tree can
         // be walked and freed in one place.
@@ -814,7 +826,17 @@ internal sealed class LibMpvHandle(
                     {
                         _swapping = false;
                         Interlocked.Exchange(ref _lastPositionMs, -1);
-                        _status = _status with { Position = -1, Duration = 0, CacheEnd = 0, Loaded = false };
+                        _status = _status with
+                        {
+                            Position = -1,
+                            Duration = 0,
+                            CacheEnd = 0,
+                            Loaded = false,
+                            Cache = TimelineCache.Empty,
+                            Chapters = null,
+                            LoopA = null,
+                            LoopB = null
+                        };
                         Log.Info(Category, "独占换片：同一个视频窗已换上新片源（窗口与 Lua UI 都没动）");
                     }
                     break;
@@ -830,7 +852,7 @@ internal sealed class LibMpvHandle(
                         Log.Debug(Category, "这一版没有视频轨，独占窗口提前立起（force-window=yes）");
                     }
 
-                    Publish(_status with { Loaded = true });
+                    Publish(_status with { Loaded = true, Chapters = ReadChapterList() ?? [] });
                     PublishTracks();
                     break;
 
@@ -904,6 +926,25 @@ internal sealed class LibMpvHandle(
             return;
         }
 
+        switch (mpvEvent.ReplyUserData)
+        {
+            case ObserveCacheState:
+                Publish(_status with { Cache = ReadTimelineCache() });
+                return;
+            case ObserveCacheMode:
+                Publish(_status with { CacheMode = ReadText("cache") ?? "auto" });
+                return;
+            case ObserveChapters:
+                if (_status.Loaded) Publish(_status with { Chapters = ReadChapterList() ?? [] });
+                return;
+            case ObserveLoopA:
+                Publish(_status with { LoopA = ReadLoopPoint("ab-loop-a") });
+                return;
+            case ObserveLoopB:
+                Publish(_status with { LoopB = ReadLoopPoint("ab-loop-b") });
+                return;
+        }
+
         var property = Marshal.PtrToStructure<LibMpvNative.MpvEventProperty>(mpvEvent.Data);
 
         // A property that has become unavailable arrives with no data — time-pos does this the
@@ -941,6 +982,9 @@ internal sealed class LibMpvHandle(
             case ObservePausedForCache:
                 status = status with { Buffering = ReadFlag(property) };
                 break;
+            case ObserveNetwork:
+                status = status with { NetworkSource = ReadFlag(property) };
+                break;
             default:
                 return;
         }
@@ -950,6 +994,28 @@ internal sealed class LibMpvHandle(
         // After the snapshot, so a handler that asks for Status sees the pause it was told about.
         if (status.Paused != previous.Paused) PauseChanged?.Invoke(status.Paused);
     }
+
+    private double? ReadLoopPoint(string name) =>
+        LibMpvNative.mpv_get_property_double(context, name, LibMpvNative.FormatDouble, out var value) >= 0
+            && double.IsFinite(value) && value >= 0 ? value : null;
+
+    private TimelineCache ReadTimelineCache() => LibMpvNodes.Read(context, "demuxer-cache-state", root =>
+    {
+        var map = LibMpvNodes.Map(root);
+        var ranges = new List<TimelineRange>();
+        if (map.TryGetValue("seekable-ranges", out var list))
+        {
+            foreach (var item in LibMpvNodes.Children(list).Take(4096))
+            {
+                var range = LibMpvNodes.Map(item);
+                var start = LibMpvNodes.Double(range, "start") ?? 0;
+                var end = LibMpvNodes.Double(range, "end") ?? double.PositiveInfinity;
+                if (double.IsFinite(start) && !double.IsNaN(end) && end > start) ranges.Add(new(start, end));
+            }
+        }
+        return new TimelineCache(ranges.ToArray(), LibMpvNodes.Flag(map, "bof-cached"),
+            LibMpvNodes.Flag(map, "eof-cached"), LibMpvNodes.Flag(map, "eof"), LibMpvNodes.Double(map, "cache-duration"));
+    }, TimelineCache.Empty);
 
     private static double ReadDouble(LibMpvNative.MpvEventProperty property) =>
         property.Format == LibMpvNative.FormatDouble ? Marshal.PtrToStructure<double>(property.Data) : 0;

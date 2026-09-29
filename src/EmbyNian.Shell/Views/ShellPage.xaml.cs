@@ -538,6 +538,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // Detach/Attach 动的是页面，事件挂在 view model 上，这里挂一次就管全程。
         Player.ViewModel.PlaybackStarted += OnHeadlessPlaybackStarted;
         Player.ViewModel.PlayerHidden += OnHeadlessPlaybackHidden;
+        Player.ViewModel.MediaInfoRequested += OnHeadlessMediaInfoRequested;
 
         // 详情页要认显示器多大（纸面上沿那条线跟着显示器走，见 DetailHero.PaperLineFor），挂在这一个事件上
         // 而不是 OpenDetail 里：后退/前进重建的详情页实例不走 OpenDetail，却一样要从外壳领窗口。
@@ -561,6 +562,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // 先摘无页面播放的两条对账再拆播放器：收场事件不许往一个正在拆的壳上挂页面。
         Player.ViewModel.PlaybackStarted -= OnHeadlessPlaybackStarted;
         Player.ViewModel.PlayerHidden -= OnHeadlessPlaybackHidden;
+        Player.ViewModel.MediaInfoRequested -= OnHeadlessMediaInfoRequested;
 
         Player.Shutdown();
 
@@ -641,6 +643,37 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         RestorePlayerToShellWindow();
         Log.Info(Category, "独占播放收场，播放页已回挂主窗口");
+    }
+
+    /// <summary>
+    /// 独占模式右键菜单点了「播放信息…」（2026-09-29 统一右键菜单）：播放页是摘下去的、没有可挂对话框
+    /// 的树，这张由外壳在主窗口上弹 —— 与集成模式右键点同一行是同一张（<see cref="MediaInfoDialog"/>）。
+    /// <para>
+    /// 主窗口多半压在 mpv 视频窗后面，先把它带到前台：一张看不见的对话框和菜单坏了看上去没有区别。
+    /// mpv 那头照旧在放，关掉对话框回去就是。
+    /// </para>
+    /// </summary>
+    private void OnHeadlessMediaInfoRequested()
+    {
+        _window?.Activate();
+        _ = ShowMediaInfoOverShellAsync();
+    }
+
+    private async Task ShowMediaInfoOverShellAsync()
+    {
+        if (Root.XamlRoot is not { } root) return;
+
+        var dialog = MediaInfoDialog.Create(root, Player.ViewModel.MediaInfoText());
+
+        try
+        {
+            await dialog.ShowAsync().AsTask().ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            // 一棵浮层根上同时只能有一张对话框（WinUI 直接抛）。收掉是安全的 —— 只是这一眼没看到信息。
+            Log.Warn(Category, "弹不出播放信息对话框", error);
+        }
     }
 
     /// <summary>
@@ -959,7 +992,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
             return;
         }
 
-        _moviePilotWindow.Show(service, item);
+        _moviePilotWindow.Show(service, item, _services.GetRequiredService<EmbyNian.Shell.Platform.ISystemLauncher>());
     }
 
     /// <summary>
@@ -989,8 +1022,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         EmbyNian.MoviePilot.MoviePilotTransferContext context,
         Microsoft.UI.Xaml.XamlRoot root)
     {
-        // 确认话术走 ConfirmDialog：和删除、刮削覆盖是同一个问题渠道，「重新整理」那一档会真的清历史。
-        var dialog = new MoviePilotReorganizeDialog(service, context, ConfirmDialog.For((FrameworkElement)root.Content!))
+        var dialog = new MoviePilotReorganizeDialog(service, context)
         {
             XamlRoot = root
         };
@@ -1270,6 +1302,40 @@ public sealed partial class ShellPage : UserControl, IShellActions
         }
 
         if (!page.OpenCoverPanel()) Log.Warn(Category, "--show-cover：详情页上的面板弹不出来");
+    }
+
+    /// <summary>
+    /// Tooling: 把详情页那颗字幕下拉弹开留着（<c>--show-picker</c>），好给它拍一张。
+    /// <para>
+    /// 和 <see cref="ShowCardMenuAsync"/> 同一条理由：浮层只在点开之后存在，等是等不出来的。弹层往后走的样子
+    /// —— 它开在哪一棵树里、底下那一页透不透上来 —— 只有照片答得出来（用户的判据也是照片）。
+    /// </para>
+    /// <para>
+    /// 已经在详情页上就不再导航一遍：连着 <c>--show-detail</c> 用时，重走一次那两个点击既慢又把上一页的
+    /// 读数丢掉。单独用时自己走一遍（和 <c>--show-cover</c> 一样）。
+    /// </para>
+    /// </summary>
+    internal async Task ShowPickerMenuAsync()
+    {
+        if (ContentFrame.Content is not DetailPage) await ShowDetailAsync(episode: false).ConfigureAwait(true);
+
+        if (ContentFrame.Content is not DetailPage page)
+        {
+            Log.Warn(Category, "--show-picker：这一刻框里不是详情页");
+            return;
+        }
+
+        // 那几颗下拉的单子不跟页面同一次到：集页面上随详情一起来，剧页／电影页上挂在播放落点那一次请求
+        // 上、要晚好几拍。2026-09-27 拍剧页面那张就是问早了 —— 列表还空着，回「没有可弹的」，而照片里
+        // 那颗下拉明明在。等它站好（最多五秒，这台服务器回一次一两秒），到点还没来就照旧报没有。
+        for (var waited = 0; waited < 5000 && !page.PickerReady; waited += 100)
+        {
+            await Task.Delay(100).ConfigureAwait(true);
+        }
+
+        Log.Info(Category, page.OpenPickerMenu()
+            ? "--show-picker：已弹开字幕下拉"
+            : "--show-picker：这一页上没有可弹的字幕下拉");
     }
 
     /// <summary>

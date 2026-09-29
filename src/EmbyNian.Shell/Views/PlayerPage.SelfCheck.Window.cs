@@ -74,7 +74,7 @@ public sealed partial class PlayerPage
             var box = BoundsOf(button);
             if (box.Width <= 0 || box.Height <= 0) trouble.Add($"{name}没有尺寸");
             else if (!Encloses(strip, box)) trouble.Add($"{name}越出了标题栏");
-            else if (Overlaps(box, BoundsOf(StatsButton)) || Overlaps(box, BoundsOf(PinButton)))
+            else if (Overlaps(box, BoundsOf(PinButton)))
                 trouble.Add($"{name}压住了别的按钮");
         }
 
@@ -111,9 +111,52 @@ public sealed partial class PlayerPage
         // 全屏那一档的「还原」：图标必须是还原那支 —— 它同时是「点下去会退出全屏」这件事唯一的可见证据。
         if (MaximizeGlyph.Glyph != Glyph(RestoreGlyphCode)) trouble.Add("全屏时窗口化图标不对");
 
+        // **大档的图标字号**（用户令 2026-09-28 更晚「跟独占模式一样，全屏的时候放大，窗口化的时候缩小」＋
+        // 「包括进度条上方的按钮」）。这一档没有照片能拍：`--show-osd` 那条路不接受合成输入（见技能），
+        // 所以它在自检里钉住 —— 判据是三颗的 `FontSize` 与 `ApplyWindowGlyphScale` 该摆的那一档相等。
+        // 页面这一档的判据是 `BigChrome`（全屏**或最大化**），与时间轴的 `TimelineFullHeight` 同一个。
+        var bigGlyphs = new (string Name, FontIcon Glyph)[]
+        {
+            ("最小化", MinimizeGlyph), ("最大化", MaximizeGlyph), ("关闭", CloseGlyph)
+        };
+
+        foreach (var (name, glyph) in bigGlyphs)
+        {
+            if (Math.Abs(glyph.FontSize - FullscreenCommandGlyph) > 0.01)
+                trouble.Add($"全屏时{name}图标字号 {glyph.FontSize:0.###}（应 {FullscreenCommandGlyph}）");
+        }
+
         SetFullscreen(wasFullscreen);
         DrainWindowChange();
         UpdateLayout();
+        ApplyChromeScale();
+        UpdateLayout();
+
+        // **最大化那一档**：同一句话里的另一半 —— 大档不只是「全屏」，最大化也算（独占那头的
+        // `state.scale` 写的就是 `fullormaxed`）。这一档既没有照片也没有别的关盯着，坏起来的样子是
+        // 「最大化之后图标不跟着长大」。量完原样放回去。
+        if (!_window.Fullscreen)
+        {
+            var wasMaximized = _window.IsMaximized;
+            RequestMaximize(!wasMaximized);
+            DrainWindowChange();
+            UpdateLayout();
+
+            var wanted = !wasMaximized ? FullscreenCommandGlyph : WindowCommandGlyph;
+            var form = !wasMaximized ? "最大化" : "还原";
+
+            foreach (var (name, glyph) in bigGlyphs)
+            {
+                if (Math.Abs(glyph.FontSize - wanted) > 0.01)
+                    trouble.Add($"{form}时{name}图标字号 {glyph.FontSize:0.###}（应 {wanted}）");
+            }
+
+            RequestMaximize(wasMaximized);
+            DrainWindowChange();
+            UpdateLayout();
+            ApplyChromeScale();
+            UpdateLayout();
+        }
 
         // Left the way a player that is not running should be, for the same reason ProbeReveal is.
         _chrome.Reset(++clock);
@@ -152,15 +195,21 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 置顶开关: 「置顶开启后不要改变按键颜色，绘制一个置顶开启图标来替换」, both halves of it.
+    /// 置顶开关: 屏上唯一能读出它状态的那一颗，两半都要量。
     /// <para>
-    /// Three things fail invisibly here. The colour: the button is no longer a <c>ToggleButton</c>, so the
-    /// framework's Checked storyboard has nothing to swap — but a style that stopped being applied, or a local
-    /// background written back in, brings the accent block straight back, and this button is only on screen
-    /// mid-film. The two pins: they are drawn geometry, so 「there are two of them and they are different」 is
-    /// a question about the visual tree rather than about a font, and a copy-paste that left both states on the
-    /// same path would look like a switch that does nothing. And the state: 置顶 lives on the window now,
-    /// which is exactly what nobody looking at the screen can read back.
+    /// **2026-09-28 深夜第五批它换过一次对象**（用户令「把集成模式右上角的置顶图标换成跟独占模式一样
+    /// 的」）：从前是两颗画出来的图钉（躺着那颗空心钉／立着那颗实心钉），现在是**一颗** —— 独占同一支字体
+    /// （MaterialIconsRound）的 <c>push_pin</c>，几何是从那支字体里取的轮廓、尺寸照独占的实拍定
+    /// （<c>WindowPinGlyph</c>）。崩它的方式于是也换了：几何被谁改坏、或者那一对实框没摆上去（<c>PathIcon</c>
+    /// 既不缩放几何也不居中 —— <c>ShellPage</c> 那五颗图标的注释就是为这个坑写的），屏上都会是另一个东西，
+    /// 而这一颗只在影片中途露面。
+    /// </para>
+    /// <para>
+    /// **状态那一半改成了「整颗常亮」**（独占 <c>elements/TopBar.lua</c> 的
+    /// <c>lit = is_hover or (button.is_pin and state.ontop)</c> 是同一句）：已置顶＝底换成悬停那一档的白、图标
+    /// 转深色；未置顶＝没有底、图标白。两样都读得出来，所以「拨了开关屏上没反应」照样拦得住 —— 而这一颗
+    /// **本来就只有这么两条线索**：屏上是那颗图钉，读屏软件那一头是 <c>PinIndicator</c> 的两句话，两边都得
+    /// 跟着状态走。
     /// </para>
     /// <para>
     /// The reset at the end is not housekeeping. A probe that left the main window in the topmost band would
@@ -184,53 +233,63 @@ public sealed partial class PlayerPage
 
         var report = new List<string>();
         var wrong = new List<string>();
-        var reads = new List<(bool Pinned, string Back, string Shown, string Name, bool Top)>();
+        var reads = new List<(bool Pinned, string Bed, string Ink, string Name, bool Top)>();
 
         foreach (var pinned in new[] { false, true })
         {
             SetPinned(pinned);
             UpdateLayout();
 
-            var shown = (PinOnIcon.Visibility == Visibility.Visible, PinOffIcon.Visibility == Visibility.Visible) switch
-            {
-                (true, false) => "已置顶",
-                (false, true) => "未置顶",
-                (true, true) => "两颗都露着",
-                _ => "两颗都收着"
-            };
-
-            reads.Add((pinned, Fill(PinButton), shown, PeerName(PinButton), _window.TopMost));
+            reads.Add((pinned, Fill(PinButton), Tone(PinGlyph.Foreground), PeerName(PinButton), _window.TopMost));
         }
 
-        // The one reading the requirement is actually about, and it is compared against the eleven buttons
-        // beside it rather than against a literal: 「the same as every other button in this strip」 is the claim,
-        // and 返回 is the nearest one that has never been anything else.
-        var reference = Fill(BackButton);
+        // 那三支要对的色号从调色板里现取（不写字面量）：白底与深墨都是 PaintPalette 从 PlayerPalette 写进来的，
+        // 写死一个数在这里，改主题或改浓度时这一关就会假绿。
+        var litBed = Tone(Resources["PlayerStripHoverBrush"] as Brush);
+        var hotInk = Tone(Resources["PlayerStripHoverInkBrush"] as Brush);
+        var restInk = Tone(Resources["PlayerInkBrush"] as Brush);
 
-        report.Add($"底色：未置顶 {reads[0].Back}、已置顶 {reads[1].Back}（返回那颗 {reference}）");
-        report.Add($"图标：{reads[0].Shown} / {reads[1].Shown}");
+        // 没置顶的普通一颗：它此刻没被指针压着，底是透明的 —— 已置顶那一档必须跟它不一样，不然「亮了」这件事
+        // 只是图上说说。
+        var plainBed = Fill(MinimizeButton);
+
+        report.Add($"底色：未置顶 {reads[0].Bed}、已置顶 {reads[1].Bed}（悬停那一档 {litBed}；"
+            + $"没置顶的普通一颗 {plainBed}）");
+        report.Add($"图标：未置顶 {reads[0].Ink}、已置顶 {reads[1].Ink}（常态那支 {restInk}、压着时那支 {hotInk}）");
         report.Add($"名字：「{reads[0].Name}」/「{reads[1].Name}」");
         report.Add($"窗口置顶：{reads[0].Top} / {reads[1].Top}");
 
-        Want("两档底色一样", string.Equals(reads[0].Back, reads[1].Back, StringComparison.Ordinal));
-        Want("两档底色和别的按钮同一支", string.Equals(reads[0].Back, reference, StringComparison.Ordinal));
-        Want("两档都不画底色", reads[0].Back is "不画" || reads[0].Back.StartsWith("00", StringComparison.Ordinal));
-        Want("两档各露一颗图标", reads[0].Shown == "未置顶" && reads[1].Shown == "已置顶");
+        Want("未置顶那一档不画底色", reads[0].Bed is "不画" || reads[0].Bed.StartsWith("00", StringComparison.Ordinal));
+        Want("已置顶那一档的底就是悬停那一档的白", reads[1].Bed == litBed);
+        Want("已置顶那一档真的亮了（与没置顶的普通一颗不是同一层底）", reads[1].Bed != plainBed);
+        Want("未置顶的图标是常态那支白", reads[0].Ink == restInk);
+        Want("已置顶的图标转深色", reads[1].Ink == hotInk);
         Want("两档名字都不空", reads.All(read => read.Name.Trim().Length > 0));
         Want("两档名字不一样", !string.Equals(reads[0].Name, reads[1].Name, StringComparison.Ordinal));
         Want("状态跟着到了窗口", reads[0].Top == false && reads[1].Top);
 
-        // 两颗真的是两个形状，而且都落在 16×16 的方框里、都居中 —— PathIcon 既不缩放几何也不居中（ShellPage
-        // 那五颗图标的注释就是为这个坑写的），所以这三句只有量活的几何答得上。
-        var offBox = PinOffIcon.Data?.Bounds ?? default;
-        var onBox = PinOnIcon.Data?.Bounds ?? default;
+        // 几何那一半：墨框得是**那颗字形**（装箱的 MaterialIconsRound，upem 512 里 push_pin 占 298 × 426 单位
+        // —— 这一句挡的是「有人拿别的图钉或别的字号重画了一颗」），实框得是这一档那一对（PathIcon 只认自己
+        // 那份 Data 与那对宽高，摆错一个数就是另一个大小）。
+        var box = PinGlyph.Data?.Bounds ?? default;
+        var want = BigChrome ? FullscreenPinGlyph : WindowPinGlyph;
 
-        report.Add($"墨框：未置顶 {offBox.Width:0.0}×{offBox.Height:0.0} 中心 {offBox.X + offBox.Width / 2:0.0},{offBox.Y + offBox.Height / 2:0.0}"
-            + $"；已置顶 {onBox.Width:0.0}×{onBox.Height:0.0} 中心 {onBox.X + onBox.Width / 2:0.0},{onBox.Y + onBox.Height / 2:0.0}");
+        report.Add($"墨框 {box.Width:0.###}×{box.Height:0.###} 中心 {box.X + box.Width / 2:0.###},{box.Y + box.Height / 2:0.###}；"
+            + $"实框 {PinGlyphBox.ActualWidth:0.###}×{PinGlyphBox.ActualHeight:0.###}（这一档要 {want.Width}×{want.Height}）");
 
-        Want("两颗不是同一个形状", offBox != onBox && offBox.Width > 0 && onBox.Width > 0);
-        Want("两颗都在 16×16 的框里", Inside(offBox) && Inside(onBox));
-        Want("两颗都居中", Centred(offBox) && Centred(onBox));
+        // 墨框那一对是**窗口档**的尺寸，而且要与实框同尺度，两个理由：
+        // ① 它是从 MaterialIconsRound 的 push_pin 抠出来、**等比缩到 0~9.793 × 0~14** 的（不是字体的原始
+        //    0~512 单位）—— PathIcon 不缩放几何，坐标比控件大，整颗就落在框外、屏上空白（2026-09-28 深夜
+        //    第五批第一版的实测：白底上一个深色像素都没有；这一条就是为它钉的）。
+        // ② 全屏档的 1.3 落在外面的 Viewbox 上，所以墨框**不跟着变**，跟着变的是实框。
+        Want("图钉的墨框就是窗口档那一对（坐标与控件同尺度）",
+            Math.Abs(box.Width - WindowPinGlyph.Width) < 0.02
+            && Math.Abs(box.Height - WindowPinGlyph.Height) < 0.02);
+        Want("图钉的实框是这一档那一对",
+            Math.Abs(PinGlyphBox.ActualWidth - want.Width) < GeometrySlack
+            && Math.Abs(PinGlyphBox.ActualHeight - want.Height) < GeometrySlack);
+        Want("图钉的实框比可点的那一格小（40 的步进没被它撑开）",
+            PinGlyphBox.ActualHeight < 40 - GeometrySlack);
 
         // 只报不判：拍照裁图要按这个框定位，而它跟着字体、缩放和这一排别的控件走。
         report.Add($"按钮 {BoundsOf(PinButton).Width:0}×{BoundsOf(PinButton).Height:0} @ {BoundsOf(PinButton).Left:0},{BoundsOf(PinButton).Top:0}");
@@ -253,41 +312,41 @@ public sealed partial class PlayerPage
             if (!ok) wrong.Add(what);
         }
 
-        // 半个像素的余量按主文件那一档；16 是标记里写死的方框边长，两颗几何都是按它算的。
-        static bool Inside(Windows.Foundation.Rect box) =>
-            box.Left >= -GeometrySlack && box.Top >= -GeometrySlack
-            && box.Right <= 16 + GeometrySlack && box.Bottom <= 16 + GeometrySlack;
-
-        static bool Centred(Windows.Foundation.Rect box) =>
-            Math.Abs(box.X + box.Width / 2 - 8) <= 1 && Math.Abs(box.Y + box.Height / 2 - 8) <= 1;
-
         // 模板根上那一层的底色 —— Checked 那一族当年换的就是它。ContentPresenter 不是 Control（那一条第一趟
         // 读回来是「找不到模板根」），所以四种带 Background 的类型都要认。
         static string Fill(DependencyObject button)
         {
             if (VisualTreeHelper.GetChildrenCount(button) == 0) return "找不到模板根";
 
-            var brush = VisualTreeHelper.GetChild(button, 0) switch
+            return Tone(VisualTreeHelper.GetChild(button, 0) switch
             {
                 ContentPresenter presenter => presenter.Background,
                 Control control => control.Background,
                 Panel panel => panel.Background,
                 Border border => border.Background,
                 _ => null
-            };
-
-            return brush switch
-            {
-                null => "不画",
-                SolidColorBrush solid => $"{solid.Color.A:X2}{solid.Color.R:X2}{solid.Color.G:X2}{solid.Color.B:X2}",
-                _ => "不是纯色"
-            };
+            });
         }
 
         static string PeerName(UIElement element) =>
             Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer
                 .CreatePeerForElement(element)?.GetName() ?? "";
     }
+
+    /// <summary>
+    /// 一支画刷的色号，写成报告与判据共用的那一个串：<c>AARRGGBB</c>（大写十六进制），不画就是「不画」。
+    /// <para>
+    /// 置顶那一关要比三支色号（悬停那一档的白、常态那支白、压着时那支深）。报告里印的是读出来的数，
+    /// 而拿来对的期望值**取自同一个资源字典**（<c>Resources["PlayerStripHoverBrush"]</c> 那几支）—— 不写字面量，
+    /// 于是「有人把某一支换回了框架默认」拦得住，调色板自己改浓度也不会让这一关假红。
+    /// </para>
+    /// </summary>
+    private static string Tone(Brush? brush) => brush switch
+    {
+        null => "不画",
+        SolidColorBrush solid => $"{solid.Color.A:X2}{solid.Color.R:X2}{solid.Color.G:X2}{solid.Color.B:X2}",
+        _ => "不是纯色"
+    };
 
     /// <summary>
     /// 章节预览: where the hover box lands, what it contains, and that it leaves with the bar it belongs to.

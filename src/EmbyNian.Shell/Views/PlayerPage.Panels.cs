@@ -22,17 +22,6 @@ namespace EmbyNian.Shell.Views;
 public sealed partial class PlayerPage
 {
     /// <summary>
-    /// 播放信息正文所用的等宽字体，只在这里取一次而不是每次用到都写一遍。等宽不是装饰：那一块里全是
-    /// 数字与路径，比例字体下每一行都会随字宽抖动。
-    /// <para>
-    /// An instance field rather than a static: a static initialiser on a WinUI type can run on
-    /// whichever thread first touches the class, and a <c>FontFamily</c> made off the UI thread is a
-    /// wrong-thread failure waiting for the first film.
-    /// </para>
-    /// </summary>
-    private readonly FontFamily _mono = new("Consolas,Cascadia Mono,Microsoft YaHei UI");
-
-    /// <summary>
     /// A brush by resource key, looked up the way XAML itself would: this page's own dictionary first,
     /// then the application's.
     /// <para>
@@ -60,39 +49,16 @@ public sealed partial class PlayerPage
 
     /// <summary>
     /// 播放信息: what was actually handed to mpv, which is the only thing that answers 「为什么这个文件看
-    /// 起来不对」. Every line of the text is a playback fact and comes from
-    /// <see cref="PlayerViewModel.MediaInfoText"/>; the dialog, its scroll box and the hold on the chrome
-    /// are the only parts that are this page's.
+    /// 起来不对」. The dialog itself is <see cref="MediaInfoDialog"/> — the same one the shell puts up for
+    /// the 独占模式's right-click row, where this page is detached and cannot host it. Every line of the
+    /// text is a playback fact and comes from <see cref="PlayerViewModel.MediaInfoText"/>; what is left
+    /// here is the hold on the chrome while the user reads.
     /// </summary>
     private async Task ShowMediaInfoAsync()
     {
         if (!Attached) return;
 
-        var body = new ScrollViewer
-        {
-            MaxHeight = 420,
-            Content = new TextBlock
-            {
-                Text = ViewModel.MediaInfoText(),
-                TextWrapping = TextWrapping.Wrap,
-                IsTextSelectionEnabled = true,
-                FontFamily = _mono
-            }
-        };
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "播放信息",
-            Content = body,
-            CloseButtonText = "关闭",
-            DefaultButton = ContentDialogButton.Close,
-
-            // Dark whatever the theme is, unlike ConfirmDialog's: this one only ever comes up over
-            // playback, and a white sheet dropped on top of a film is worse than a light-theme user
-            // meeting one dark dialog.
-            RequestedTheme = ElementTheme.Dark
-        };
+        var dialog = MediaInfoDialog.Create(XamlRoot, ViewModel.MediaInfoText());
 
         // The dialog is where the pointer is for as long as it is up, and it is modal: the chrome must
         // not decide the user has lost interest while they are reading it.

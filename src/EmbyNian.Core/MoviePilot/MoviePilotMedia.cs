@@ -41,4 +41,31 @@ public sealed record MoviePilotMedia
     /// </summary>
     public bool CanSubscribe =>
         !string.IsNullOrWhiteSpace(MediaSource) && !string.IsNullOrWhiteSpace(MediaId);
+
+    /// <summary>这张卡上标来源的那一小块：TMDB／豆瓣／IMDb 各归各，认不出的原样显示。</summary>
+    public string SourceLabel => MoviePilotSourceNames.Label(MediaSource);
+}
+
+/// <summary>
+/// 已知来源标识的显示名。MoviePilot 的来源是开放集合（内置九个加插件扩展，标识格式见 MediaSource schema 的
+/// <c>pattern</c>），所以这里只做「认识的说人话、不认识的原样带出」—— 绝不把未知来源折叠成一个笼统的「其他」，
+/// 那会把豆瓣和 IMDb 的结果在屏上重新搅成一团。
+/// </summary>
+public static class MoviePilotSourceNames
+{
+    private static readonly Dictionary<string, string> Known = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["themoviedb"] = "TMDB",
+        ["douban"] = "豆瓣",
+        ["bangumi"] = "Bangumi",
+        ["anilist"] = "AniList",
+        ["imdb"] = "IMDb",
+        ["tvdb"] = "TVDB",
+        ["musicbrainz"] = "MusicBrainz",
+        ["theaudiodb"] = "TheAudioDB",
+        ["doubanmusic"] = "豆瓣音乐"
+    };
+
+    public static string Label(string? source) =>
+        source is { Length: > 0 } && Known.TryGetValue(source, out var label) ? label : source ?? "";
 }

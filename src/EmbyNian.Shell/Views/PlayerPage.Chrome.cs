@@ -142,11 +142,531 @@ public sealed partial class PlayerPage
         // are filtered against, and an anchor left behind by a fullscreen transition would make the next
         // event look like a move whether or not the hand had moved.
         var part = PartAt(point);
-        _pointerAt = point;
-        _pointerOn = part;
+        NotePointer(point, part);
 
         if (_chrome.Pointer(point.Y, Root.ActualHeight, part, RailNear(point), Now, moved)) Render();
         return true;
+    }
+
+    /// <summary>
+    /// 记下指针此刻在画面里的位置，并顺手把左上角那三块玻璃的浓度推到位。
+    /// <para>
+    /// 前两句原来是抄成两份的 —— 十赫兹那条轮询路 <see cref="ReseedPointer(bool)"/> 一份，输入那一侧的
+    /// <c>Moved</c>（WinUI 事件路）一份；2026-09-27 傍晚起它们还各有一句玻璃要说，于是并到这一处。
+    /// </para>
+    /// <para>
+    /// 玻璃写在这里而不是写在 <see cref="Render"/> 里：<c>Render</c> 只在显隐规则改了主意的时候跑，
+    /// 而指针在顶部带里上下走的时候规则什么都不改 —— 「越靠上越深」要的正是那种时候。
+    /// </para>
+    /// </summary>
+    private void NotePointer(Point point, ChromePart part)
+    {
+        _pointerAt = point;
+        _pointerOn = part;
+        ApplyTopGlass(TopGlassDepth());
+    }
+
+    /// <summary>
+    /// 左上角那三块玻璃此刻该有多深，0..1（<see cref="ChromeReveal.TopGlassDepth"/> 那条直线）。
+    /// <para>
+    /// 两处答 0：指针读数还没有过（<c>_pointerAt</c> 是 NaN，页面刚构造完正是这一档），或者画面还没排过版
+    /// （高度 0，换算不出来）。这两处那几块要么不在屏上、要么是钉住露出来的（开着菜单、<c>--show-osd</c>
+    /// 拍照那一路），该停在最浅那一档 —— 不能凭空给一块最深的底。
+    /// </para>
+    /// </summary>
+    private double TopGlassDepth()
+    {
+        if (double.IsNaN(_pointerAt.Y) || Root.ActualHeight <= 0) return 0;
+
+        return ChromeReveal.TopGlassDepth(_pointerAt.Y / Root.ActualHeight, TopGlassFullAt());
+    }
+
+    /// <summary>
+    /// 左上角那几块玻璃「深到底」那条线在画面高度的哪个位置 —— 也就是「鼠标走到哪就算靠到顶了」。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚第四批「左上角的颜色深度在鼠标移动到剧名下方那条线之前一点的时候达到最大」：
+    /// 量的是左簇里**最下面那块玻璃**的下沿（有剧名时就是剧名那块 —— 那句话里的「剧名下方那条线」；
+    /// 没有剧名时退到标题那块与返回键里靠下的那一个），再往上让
+    /// <see cref="ChromeReveal.TopGlassFullInset"/> 那么多像素。**量出来的而不是写死的**：剧名的字号、
+    /// 有没有剧名、返回键长多高，任何一样改了它都跟着走。
+    /// </para>
+    /// <para>
+    /// 条子收起时那几个元素还留着上一次排版的高度，这里照量 —— 算出来的仍是「那几块玻璃的下沿」，
+    /// 而真正用得上这个值的时候条子都在屏上（指针就在带子里）。
+    /// </para>
+    /// </summary>
+    private double TopGlassFullAt()
+    {
+        if (Root.ActualHeight <= 0) return 0;
+
+        var lowest = 0.0;
+
+        foreach (var block in new FrameworkElement[] { TitleBox, SubtitleBox, BackButton })
+        {
+            if (block.Visibility != Visibility.Visible) continue;
+
+            lowest = Math.Max(lowest, OriginIn(block).Y + block.ActualHeight);
+        }
+
+        return Math.Max(0, lowest - ChromeReveal.TopGlassFullInset) / Root.ActualHeight;
+    }
+
+    /// <summary>
+    /// 左上角标题簇（返回键、标题框、第二行文件信息框）的**两档尺寸**（用户令 2026-09-28
+    /// 「参考独占模式为集成模式的窗口和全屏设置不一样的标题尺寸」；更晚「把独占模式的标题复刻到集成模式」
+    /// 把两档的数改成照独占的公式推）。
+    /// <para>
+    /// <b>哪一档由窗口形态定：全屏**或最大化**都是大档，只有普通窗口才是小档</b>（用户令 2026-09-28
+    /// 更晚「你就不能跟独占模式一样，全屏的时候放大，窗口化的时候缩小吗」＋「包括进度条上方的按钮」）。
+    /// 独占那一头正是这样：`state.scale = hidpi * (fullormaxed and scale_fullscreen or scale)`
+    /// —— `fullormaxed` 把最大化一起算进 1.3 那一档。判据只有一处：<see cref="BigChrome"/>。
+    /// 这一处摆的也不只是标题簇：<see cref="ApplyTransportScale"/>（进度条上面那一行）与
+    /// <see cref="ApplyWindowGlyphScale"/>（右上三颗窗口命令）都由它带上。
+    /// </para>
+    /// 独占 uosc 顶栏的尺寸全由一个 <c>top_bar_size</c> 推出来（<c>elements/TopBar.lua</c>）：
+    /// 字号 <c>floor((size - ceil(size*0.25)*2) * font_scale)</c>、内缩 <c>margin = floor((size-font_size)/4)</c>、
+    /// 玻璃 <c>size - 2*margin</c> 见方、两行之间的缝 <c>title_spacing = round(1 * scale)</c>、
+    /// 第二行高 <c>alt_title_size = round(font_size * 1.2)</c>、第二行字号 <c>round(alt_title_size * 0.71)</c>
+    /// （2026-09-29 从 0.77 收小，用户令「元数据缩小一点点」，见 TopBar.lua 的 <c>EMBYNIAN[topbar-subline-size]</c>）、
+    /// 左右内边距 <c>round(font_size / 2)</c>；全屏档把 size 从 40 提到 52（<c>scale_fullscreen = 1.3</c>）。
+    /// 两档数出来是：
+    /// </summary>
+    /// <remarks>
+    /// <list type="bullet">
+    /// <item>窗口档 size 40 / 字号 20 / margin 5 —— 返回键玻璃 30 见方、四周各让 5；标题玻璃高 30、上沿 5、
+    /// 左缘＝返回键玻璃右缘＋<see cref="TitleGap"/>（＝36）；第二行左缘 5、上沿 36（＝返回键玻璃下沿 35＋1）、
+    /// 高 24、左右内边距 10。</item>
+    /// <item>全屏档 size 52 / 字号 26 / margin 6 —— 玻璃 40 见方、让 6；标题玻璃高 40、上沿 6、左缘 47；
+    /// 第二行左缘 6、上沿 47、高 31、左右内边距 13。</item>
+    /// </list>
+    /// <para>
+    /// <b>字号是两套刻度，不是同一个数。</b>几何（玻璃、内缩、缝、行高）照抄 uosc 的值就对，唯独字号要乘
+    /// <b>0.75</b>：uosc 的 `\fs` 按 <b>72 DPI 的 pt</b> 渲染，WinUI 的 <c>FontSize</c> 是 <b>96 DPI 的 px</b>
+    /// （72/96 ＝ 0.75）。实测为证（两头同串）：独占窗口档 `\fs18` 屏上墨迹宽 292、全屏档 `\fs24` 宽 388
+    /// （比值 1.33 ＝ 字号比，说明换算是线性的），而集成照抄 18px 画出来是 385。
+    /// 所以第二行的字号是 <b>12.75 / 16.5</b>（＝ 17×0.75 ／ 22×0.75；第一行的 20 / 26 同样偏大，用户那一轮
+    /// 只点了第二行，见 PROGRESS）。用户令 2026-09-28 更晚「集成模式下面的元数据体积太大了，与独占模式
+    /// 不一致」修的是换算这一条；用户令 2026-09-29「元数据缩小一点点，集成模式和独占模式大小要一致」
+    /// 把独占那头的因子 0.77 收到 0.71（两档 `\fs` 18→17、24→22），这里跟着落 12.75 / 16.5 —— 两头的数
+    /// 必须一起改（TopBar.lua 的 <c>EMBYNIAN[topbar-subline-size]</c> 有同一份清单）。
+    /// </para>
+    /// <para>
+    /// 窗口档的数就是 XAML 里写的那些，进页面先按窗口档归位（退场那一路直接改
+    /// <c>HostWindow.Fullscreen</c> 不经过 <see cref="ApplyFullscreen"/>，所以这里幂等、进页面就摆一次）。
+    /// 字号不再按「窗口档基准 ×1.3」推：那一版窗口档是 20/16，16×1.3 取整只有 21，而独占全屏那一档是 24
+    /// —— 复刻之后两档都照上表写死，原来那两个基准字段随之退役。
+    /// </para>
+    /// </remarks>
+    private const double WindowTitleFont = 20;
+    private const double WindowSubtitleFont = 12.75;
+    private const double FullscreenTitleFont = 26;
+    private const double FullscreenSubtitleFont = 16.5;
+
+    /// <summary>
+    /// 进度条上面那一行按钮的图标字号，窗口档（＝独占 `\fs22` × 0.75，与 <c>TransportGlyphStyle</c> 同一个数）
+    /// 与全屏档（＝独占 `\fs29` × 0.75）。两档由 <see cref="ApplyTransportScale"/> 摆上，来历与实拍读数见
+    /// <c>PlayerPage.xaml</c> 里 <c>TransportGlyphStyle</c> 那段标记。
+    /// </summary>
+    private const double WindowTransportGlyph = 16.5;
+
+    /// <inheritdoc cref="WindowTransportGlyph"/>
+    private const double FullscreenTransportGlyph = 21.75;
+
+    /// <summary>
+    /// 右上角那三颗窗口命令（最小化／最大化／关闭）的图标字号，窗口档（＝独占 <c>top_bar_size</c> 40 里可见底
+    /// 35 的一半 ＝ 17.5，`\fs` 是 72 DPI 的 pt ⇒ × 0.75 ＝ 13.125）与全屏档（独占整条顶栏按
+    /// `state.scale`＝1.3 放大：size 52、margin 6、可见底 46、图标 23 ⇒ 17.25）。两档由
+    /// <see cref="ApplyWindowGlyphScale"/> 摆上；来历与实拍读数见 <c>PlayerPage.xaml</c> 里
+    /// <c>WindowGlyphStyle</c> 那段标记。
+    /// <para>
+    /// <b>2026-09-28 深夜第五批用户令「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的
+    /// 窗口模式下右上角的一样大」把「缩小 1.3 倍」那一笔整段撤销</b>：那两个数各自乘 1.3 回到
+    /// <b>13.125 / 17.25</b>（曾经是 10.096 / 13.269），置顶那颗也不再是「16 见方 ÷ 1.3 的 12.31」——
+    /// 它换成了独占同一支字体的同一颗图钉，尺寸另行给出（见 <see cref="WindowPinGlyph"/>）。
+    /// 同一条令的另一半是**背景**：四颗的可见底从 40 见方收进 35（＝独占 `size 40 − margin 5`，
+    /// 落的格与步进写在 <c>PlayerPage.xaml</c> 那一栏的标记里）。
+    /// </para>
+    /// </summary>
+    private const double WindowCommandGlyph = 13.125;
+
+    /// <inheritdoc cref="WindowCommandGlyph"/>
+    private const double FullscreenCommandGlyph = 17.25;
+
+    /// <summary>
+    /// 右上角**置顶那一颗**的实框边长（宽 × 高），两档。它和三颗窗口命令不一样：那三颗是
+    /// <c>FontIcon</c>、只报一个字号，这一颗是 <c>PathIcon</c>、几何自己带比例，所以宽高各一个数。
+    /// <para>
+    /// 数的来历是**独占同一支字体的同一个字形**：独占那颗是 uosc 的
+    /// <c>ass:icon(…, bg_size * 0.5, 'push_pin', …)</c>，字号 17.5；字形取自装箱的
+    /// <c>MaterialIconsRound-Regular.otf</c>（upem 512），<c>push_pin</c> 的墨框是 298 × 426 单位
+    /// ⇒ 屏幕上 17.5 × 298/512 ＝ 10.2 宽、17.5 × 426/512 ＝ 14.6 高。实拍（`work/probe-topbar-pin.txt`，
+    /// 1280×720、阈值 200 的白核连通域）读到 **9 × 14** —— 边缘约一个像素被抗锯齿吃掉，取的是实拍值。
+    /// 宽跟着高走：14 × 298/426 ＝ **9.793**，于是这一颗在集成里的墨迹与独占那颗**同一个大小、同一个形状**
+    /// （几何就是从那一支字体里取的轮廓，见 PlayerPage.xaml 里 <c>PinGlyph</c> 的 Data）。
+    /// </para>
+    /// <para>
+    /// 全屏档＝独占有 <c>state.scale</c>＝1.3 的那一档整条顶栏等比放大，那两个数乘 1.3：
+    /// 9.793 → <b>12.731</b>、14 → <b>18.2</b>。两档由 <see cref="ApplyWindowGlyphScale"/> 摆上 ——
+    /// 摆的是外面那层 <c>PinGlyphBox</c>（Viewbox）。
+    /// </para>
+    /// <para>
+    /// <b>XAML 里那份 Data 的坐标也是按窗口档这两个数给的（0~9.793 × 0~14，由字体单位等比缩来）。</b>
+    /// 这一步不能省：<c>PathIcon</c> **不缩放几何**，把字体的原始坐标（0~512）直接填进去，整颗会落在框外，
+    /// 屏上什么都看不见 —— 2026-09-28 深夜第五批的第一版正是这样（轮廓抠得一个单位不差，实拍里却是空的）。
+    /// 同理，全屏档那个 1.3 也只能在外面那层 Viewbox 上做。判据见 <c>PlayerPage.SelfCheck.Window.cs</c> 里
+    /// 「图钉的墨框就是窗口档那一对」那一条。
+    /// </para>
+    /// </summary>
+    private static readonly (double Width, double Height) WindowPinGlyph = (9.793, 14);
+
+    /// <inheritdoc cref="WindowPinGlyph"/>
+    private static readonly (double Width, double Height) FullscreenPinGlyph = (12.731, 18.2);
+
+    /// <summary>
+    /// 右上四颗（置顶＋三颗窗口命令）的**可见底、彼此的缝、贴角让位**，两档（2026-09-28 深夜第六批补批，
+    /// 用户令「这四个按钮全屏和最大化时没放大」—— 此前只有图标字号与图钉两档，格是 XAML 写死的窗口档）。
+    /// <para>
+    /// 窗口档＝XAML 初值：35 见方、缝 5、右让 5（第五批照独占 `size 40 − margin 5` 收的）。全屏档照独占
+    /// `TopBar.lua` 的同一批公式在 `state.scale` 1.3 下重算：size 52（round(40×1.3)）、margin 6
+    /// （floor((52−26)/4)）⇒ 可见底 **46**（52−6）、缝 **6**（＝margin）、右让 **6**；圆角照
+    /// <c>state.radius</c> 2→**3**。往下让位窗口档是 4（第五批拍板，无独占链），按本策略 ×1.3 ＝ **5.2**。
+    /// </para>
+    /// </summary>
+    private const double WindowCommandCell = 35;
+    private const double FullscreenCommandCell = 46;
+    private const double WindowCommandGap = 5;
+    private const double FullscreenCommandGap = 6;
+    private const double WindowCommandInset = 5;
+    private const double FullscreenCommandInset = 6;
+    private const double WindowCommandTop = 4;
+    private const double FullscreenCommandTop = 5.2;
+
+    /// <summary>
+    /// 进度条上方那一行按钮的**按钮格、行内缝与四周内缩**，两档（用户令 2026-09-28 更晚
+    /// 「复刻独占模式的控件放大策略到集成模式」—— 前一批只点了图标字号，XAML 里那句
+    /// 「按钮格没动……要对齐说一声」等的正是这一轮）。
+    /// <para>
+    /// 数来自 uosc 的 <c>elements/Controls.lua</c>：<c>size = round(controls_size × state.scale)</c>、
+    /// <c>spacing = round(controls_spacing × state.scale)</c>、<c>margin = round(controls_margin × state.scale)</c>，
+    /// 而 main.lua 的默认是 <c>controls_size=32 / controls_spacing=2 / controls_margin=8</c> ⇒
+    /// 窗口档 32 / 2 / 8（＝XAML 初值），全屏档 round(32×1.3)=<b>42</b> / round(2×1.3)=<b>3</b> /
+    /// round(8×1.3)=<b>10</b>。圆角照 <c>state.radius = round(border_radius × scale)</c>：2 → 3。
+    /// </para>
+    /// </summary>
+    private const double WindowTransportCell = 32;
+    private const double FullscreenTransportCell = 42;
+    private const double WindowTransportGap = 2;
+    private const double FullscreenTransportGap = 3;
+    private const double WindowTransportInset = 8;
+    private const double FullscreenTransportInset = 10;
+
+    /// <summary>
+    /// 中间那格**倍速条**（Grid，146×42）与文字倍速键（64 宽，平时收起）的窗口档尺寸，及全屏档
+    /// ×1.3（54.6 / 83.2）。宽度那一维归 <see cref="ArrangeTransport"/> 按窗口宽度分档
+    /// （100/146 两档），这里只摆高度与文字键的宽度。
+    /// </summary>
+    private const double WindowSpeedStripHeight = 42;
+    private const double FullscreenSpeedStripHeight = 54.6;
+    private const double WindowSpeedButtonWidth = 64;
+    private const double FullscreenSpeedButtonWidth = 83.2;
+
+    /// <summary>
+    /// 右缘**音量条**的两档：宽度（uosc <c>Volume.lua</c> 的 <c>size = round(volume_size × state.scale)</c>，
+    /// 默认 volume_size=40 ⇒ 窗口 40、全屏 round(40×1.3)=<b>52</b>；滑杆、静音键格同宽）、贴右缘的让位
+    /// （20 → 26）、静音键图标（窗口档 22 是 09-28 第五批拍板的现值，全屏档按本策略 ×1.3 ——
+    /// 不照 uosc 的 <c>round(size×0.7)</c> 链重推：那条链给 27，可窗口档那颗本来就与 21 差 1，
+    /// 重推反而两档对不上）、轨高上限（280 是 <see cref="ArrangeTransport"/> 公式里的夹取上限，
+    /// ×1.3 = 364；公式本体不随档，上限之外的部分在矮窗里本来就被夹住）。
+    /// </summary>
+    private const double WindowRailSize = 40;
+    private const double FullscreenRailSize = 52;
+    private const double WindowRailInset = 20;
+    private const double FullscreenRailInset = 26;
+    private const double WindowRailGlyph = 22;
+    private const double FullscreenRailGlyph = 28.6;
+    private const double WindowRailTrack = 280;
+    private const double FullscreenRailTrack = 364;
+
+    /// <summary>
+    /// **跳过按钮**的两档：内边距 24×28、圆角 28、右让位 28（今天这三处同为一个 28，是 09-26
+    /// 「厚度加倍」那批定的；往后若分家再拆常数）、两组行距 10、倒计时条高 4、图标 16
+    /// （＝OsdGlyphStyle 基准）、标题 16（＝EgSubheadFontSize）、提示 12（＝EgCaptionFontSize）。
+    /// 全屏档一律 ×1.3 —— uosc 那颗 SkipButton 同样随 state.scale 缩（<c>elements/SkipButton.lua</c>
+    /// 的字号、内边距、让位全乘 scale）。
+    /// </summary>
+    private const double WindowSkipPadX = 24;
+    private const double FullscreenSkipPadX = 31.2;
+    private const double WindowSkipPadY = 28;
+    private const double FullscreenSkipPadY = 36.4;
+    private const double WindowSkipGap = 10;
+    private const double FullscreenSkipGap = 13;
+    private const double WindowSkipGlyph = 16;
+    private const double FullscreenSkipGlyph = 20.8;
+    private const double WindowSkipCaption = 16;
+    private const double FullscreenSkipCaption = 20.8;
+    private const double WindowSkipTip = 12;
+    private const double FullscreenSkipTip = 15.6;
+    private const double WindowSkipCountdown = 4;
+    private const double FullscreenSkipCountdown = 5.2;
+
+    /// <summary>
+    /// 返回键玻璃右缘与标题玻璃左缘之间那条缝（独占的 <c>title_spacing</c>＝<c>round(1 * scale)</c>，
+    /// 两档都是 1）。它在这里是标题框的左边距 —— 0 号列（Auto）的宽度正是返回键那一格（玻璃＋左内缩），
+    /// 所以「格子宽＋这个数」就是标题玻璃的左缘。
+    /// </summary>
+    private const double TitleGap = 1;
+
+    /// <summary>
+    /// 此刻摆上去的是哪一档（大档＝全屏或最大化）。<see cref="SyncChromeScale"/> 靠它只为「档位真的变了」
+    /// 重摆一次 —— 窗口几何那个事件在拖动改尺寸时每几毫秒就来一次。
+    /// </summary>
+    private bool _chromeBig;
+
+    /// <summary>
+    /// 两档的**唯一判据**：全屏**或最大化**算大档、普通窗口算小档 —— 就是独占 <c>state.scale</c> 那句
+    /// <c>fullormaxed</c>（用户令 2026-09-28 更晚「跟独占模式一样，全屏的时候放大，窗口化的时候缩小」＋
+    /// 「包括进度条上方的按钮」「包括进度条」）。
+    /// <para>
+    /// 页面上本来就有这一档的先例：**时间轴**一直这么判（<c>Timeline.cs</c> 的 <c>TimelineFullHeight</c>
+    /// ＝31 / 40，那一路连「最大化」一起算）。2026-09-28 的几批把标题簇、进度条上面那一行、右上那三颗
+    /// 并了过来；更晚「复刻独占模式的控件放大策略到集成模式」把剩下的**按钮格/行缝/内缩、倍速条、
+    /// 音量条、跳过按钮**也一并归进来 —— 自此整条浮层（标题簇、时间轴、按钮行、音量条、跳过按钮、
+    /// 右上四颗）一个口径，判据只有这一处。弹层不在其列：菜单/轮盘/seek 预览是另一族表面
+    /// （独占那边随 scale 缩的是 uosc 自己画的 Menu，集成这边是系统样式的 Flyout，两边的弹层都没跟）。
+    /// </para>
+    /// </summary>
+    private bool BigChrome => _window is { Fullscreen: true } or { IsMaximized: true };
+
+    /// <summary>
+    /// 「按窗口尺寸现算」的两处（<see cref="ArrangeTransport"/> 的倍速条宽度档与音量轨高度上限）用的
+    /// 档位倍率 —— 就是独占 <c>scale_fullscreen</c> 那个 1.3，判据同 <see cref="BigChrome"/>。写死的两档
+    /// 常量不走它；只有动态公式里这两处拿它乘，免得再埋一份判据。hidpi 那一半不用复刻：WinUI 的
+    /// 有效像素本来就随系统 DPI 走（uosc 的 hidpi_scale 是给 ASS 物理像素补的那一层）。
+    /// </summary>
+    private double ChromeFactor => BigChrome ? 1.3 : 1.0;
+
+    /// <summary>按窗口**这一刻的形态**摆两档尺寸（判据见 <see cref="BigChrome"/>）。进页面、窗口形态变了都走它。</summary>
+    internal void ApplyChromeScale() => ApplyTitleScale(BigChrome);
+
+    /// <summary>
+    /// 窗口形态变了（全屏进出、最大化／还原、Aero Snap、双击标题）就按新形态重摆两档。
+    /// 形态变化没有一条统一的通知路：全屏那两条走 <c>ApplyFullscreen</c>、最大化那颗按钮走
+    /// <c>RequestMaximize</c>，而系统那几条（双击、Win+↑、拖到顶）谁都不经过 —— 它们共同留下的痕迹只有
+    /// <c>WM_SIZE</c>，所以兜底摆在 <see cref="OnGeometryChanged"/> 里。
+    /// </summary>
+    private void SyncChromeScale()
+    {
+        if (_chromeBig != BigChrome) ApplyTitleScale(BigChrome);
+    }
+
+    internal void ApplyTitleScale(bool fullscreen)
+    {
+        // 记下这一档：SyncChromeScale 拿它比「档位变了没有」。
+        _chromeBig = fullscreen;
+
+        // 与标题簇同一批的还有四处（2026-09-28 起逐批并档，更晚「复刻独占模式的控件放大策略到集成模式」
+        // 收齐）：进度条上面那一行（图标＋按钮格，ApplyTransportScale）、右上四颗（ApplyWindowGlyphScale）、
+        // 右缘音量条（ApplyRailScale）、跳过按钮（ApplySkipScale）。进出全屏与进页面这几条路都只调
+        // 这一个方法，五处一起摆 —— 分开写迟早会漏掉一条。
+        // 先摆图标：它们只是字号，不动布局；标题那五个数里有几项会改行高。
+        ApplyTransportScale(fullscreen);
+        ApplyWindowGlyphScale(fullscreen);
+        ApplyRailScale(fullscreen);
+        ApplySkipScale(fullscreen);
+
+        // 宽度分档与高度公式那两处（倍速条宽度档、音量轨上限）按新档重算一遍：形态变了但 Root 尺寸
+        // 恰好没变的路（最大化↔全屏尺寸相同时）没有 SizeChanged 来替它跑。没进页面时它自己会早退，
+        // XAML 初值（窗口档）接着用 —— 与本方法其余各档一致。
+        ArrangeTransport();
+
+        // 每一档把五个数一次摆全：返回键（含它所在格子的内缩）、标题框（高/上沿/左右内边距）、第二行
+        // （上沿/高/左右内边距）、两行字号。逐档写死而不是抽成一个公式 —— summary 里那两个整数的来历
+        // 比算式本身重要，照公式现推一遍反而看不出「哪个数是哪来的」。
+        if (!fullscreen)
+        {
+            BackButton.Width = BackButton.Height = BackButton.MinWidth = 30;
+            if (BackButton.Parent is Grid backCell) backCell.Margin = new Thickness(5, 5, 0, 0);
+
+            TitleBox.Height = 30;
+            TitleBox.Margin = new Thickness(TitleGap, 5, 0, 0);
+            TitleBox.Padding = new Thickness(10, 0, 10, 0);
+
+            SubtitleBox.Height = 24;
+            SubtitleBox.Margin = new Thickness(5, 36, 0, 0);
+            SubtitleBox.Padding = new Thickness(10, 0, 10, 0);
+
+            TitleText.FontSize = WindowTitleFont;
+            SubtitleText.FontSize = WindowSubtitleFont;
+            return;
+        }
+
+        BackButton.Width = BackButton.Height = BackButton.MinWidth = 40;
+        if (BackButton.Parent is Grid fullCell) fullCell.Margin = new Thickness(6, 6, 0, 0);
+
+        TitleBox.Height = 40;
+        TitleBox.Margin = new Thickness(TitleGap, 6, 0, 0);
+        TitleBox.Padding = new Thickness(13, 0, 13, 0);
+
+        SubtitleBox.Height = 31;
+        SubtitleBox.Margin = new Thickness(6, 47, 0, 0);
+        SubtitleBox.Padding = new Thickness(13, 0, 13, 0);
+
+        TitleText.FontSize = FullscreenTitleFont;
+        SubtitleText.FontSize = FullscreenSubtitleFont;
+    }
+
+    /// <summary>
+    /// 进度条上面那一行按钮的**两档**：图标字号（用户令 2026-09-28「集成模式进度条上面的图标要和独占模式
+    /// 一样，全屏时稍微放大」；更晚「你就不能跟独占模式一样，全屏的时候放大，窗口化的时候缩小吗」＋
+    /// 「包括进度条上方的按钮」把大档从「全屏」放宽到「全屏或最大化」，见 <see cref="BigChrome"/>），
+    /// 以及同一条令收进来的**按钮格、行内缝、四周内缩与圆角**（2026-09-28 更晚「复刻独占模式的控件放大
+    /// 策略到集成模式」—— 独占全屏连格一起涨到 42 / 3 / 10，见 <see cref="WindowTransportCell"/>）。
+    /// <para>
+    /// 字号的数与来历写在 <c>PlayerPage.xaml</c> 的 <c>TransportGlyphStyle</c> 那段标记里：独占是 uosc 的
+    /// <c>ass:icon(…, font_size = round(32 * scale * 0.7), …)</c>，窗口档 22、全屏档 29（`\fs` 是 72 DPI 的
+    /// pt ⇒ 乘 0.75），所以这里是 16.5 / 21.75。窗口档那些数同时是 XAML 里的初值 —— 只 build 不经过这里
+    /// 的那几条路（探针、--show-osd）也还是对的。
+    /// </para>
+    /// <para>
+    /// 宽度分档（<see cref="ArrangeTransport"/> 按窗口宽度收放哪几颗、倍速条两档宽度）一个字没碰 ——
+    /// 那一头自己读 <see cref="ChromeFactor"/>。
+    /// </para>
+    /// <para>
+    /// 2026-09-29 用户令「集成模式右下角的字幕和音轨键向左移一个键的空位（参考独占模式）」又加一笔：
+    /// AudioButton 的右边距随档摆成格宽（32 / 42），字幕、音轨与全屏之间因此空出一个键位 —— 独占控制条
+    /// 音频与全屏之间 <c>gap:1</c> 的同款（净宽＝行内缝＋一格）。
+    /// </para>
+    /// </summary>
+    internal void ApplyTransportScale(bool fullscreen)
+    {
+        var glyph = fullscreen ? FullscreenTransportGlyph : WindowTransportGlyph;
+        var cell = fullscreen ? FullscreenTransportCell : WindowTransportCell;
+        var gap = fullscreen ? FullscreenTransportGap : WindowTransportGap;
+        var corner = fullscreen ? 3d : 2d;
+        TransportRow.Margin = new Thickness(fullscreen ? FullscreenTransportInset : WindowTransportInset);
+        TransportRow.ColumnSpacing = gap;
+        foreach (var group in new[] { TransportLeft, TransportMiddle, TransportRight })
+        {
+            group.Spacing = gap;
+            foreach (var child in group.Children)
+            {
+                if (child is not Button button) continue;
+                if (ReferenceEquals(button, SpeedButton))
+                {
+                    // 文字倍速键：内容是文字不是 FontIcon，随档的只有宽度。
+                    button.Width = fullscreen ? FullscreenSpeedButtonWidth : WindowSpeedButtonWidth;
+                    continue;
+                }
+                // 那一排其余每颗的内容都是一个 FontIcon；图标与格一起摆（独占全屏连格一起涨）。
+                if (button.Content is FontIcon icon) icon.FontSize = glyph;
+                button.Width = button.MinWidth = cell;
+                button.Height = button.MinHeight = cell;
+                button.CornerRadius = new CornerRadius(corner);
+            }
+        }
+        // 字幕/音轨与全屏之间空一个键位（用户令 2026-09-29「集成模式右下角的字幕和音轨键向左移一个键的空位，
+        // 参考独占模式」——独占控制条音频与全屏之间是 uosc 的 gap:1，净宽＝行内缝＋一格）：空位写成
+        // AudioButton 的右边距（＝格宽），StackPanel 的 Spacing 在它右侧补那一道缝；XAML 初值 32 是窗口档。
+        AudioButton.Margin = new Thickness(0, 0, cell, 0);
+        // 倍速条是这一格里唯一不是 Button 的（Grid）：高度随档，宽度归 ArrangeTransport。
+        SpeedStrip.Height = fullscreen ? FullscreenSpeedStripHeight : WindowSpeedStripHeight;
+    }
+
+    /// <summary>
+    /// 右上角**四颗**（三颗窗口命令＋置顶那颗）两档的图标尺寸与**格**（用户令 2026-09-28 晚「集成模式窗口化的时候
+    /// 右上角的图标太大了，改成跟独立模式窗口化时一样大」；更晚那条把大档放宽到「全屏或最大化」，见
+    /// <see cref="BigChrome"/>；深夜第三批「把集成模式右上角的这四个图标缩小 1.3 倍」缩过一轮，第五批
+    /// 「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的窗口模式下右上角的一样大」
+    /// 又把那一笔整段撤回 —— 现行数是 13.125 / 17.25）。
+    /// <para>
+    /// 数与来历写在 <c>PlayerPage.xaml</c> 的 <c>WindowGlyphStyle</c> 那段标记里：独占是 uosc 的
+    /// <c>ass:icon(bg_ax + bg_size / 2, …, bg_size * 0.5, button.icon, …)</c> —— 图标画在**可见底**（40 减去
+    /// margin 5 ＝ 35）的中心、直径是它的一半：窗口档 17.5、全屏档 23（`\fs` 是 72 DPI 的 pt ⇒ 乘 0.75 ⇒
+    /// 13.125 / 17.25）。窗口档那两个数同时是 XAML 里的初值 —— 只 build 不经过这里的那几条路（探针、
+    /// --show-osd）也还是对的。
+    /// </para>
+    /// <para>
+    /// **四颗分两套摆**：三颗窗口命令是 <c>FontIcon</c>，只报一个字号；置顶那颗是 <c>PathIcon</c>，报的是
+    /// 一对实框（<see cref="WindowPinGlyph"/>）—— 几何自己带比例、不吃字号，所以要单给宽高。
+    /// **第六批补批把格也并进来**（用户令「这四个按钮全屏和最大化时没放大」）：可见底 35→46、彼此的缝
+    /// 5→6、右让 5→6（＝独占 <c>TopBar.lua</c> 的 bg_size＝size−margin、bg_ay＝ay＋margin 那一批公式在
+    /// 1.3 档的读数，见 <see cref="WindowCommandCell"/>）、圆角 2→3；往下让位 4→5.2（×1.3）。
+    /// </para>
+    /// </summary>
+    internal void ApplyWindowGlyphScale(bool fullscreen)
+    {
+        var size = fullscreen ? FullscreenCommandGlyph : WindowCommandGlyph;
+        MinimizeGlyph.FontSize = size;
+        MaximizeGlyph.FontSize = size;
+        CloseGlyph.FontSize = size;
+
+        // 置顶那颗是 PathIcon —— 它不吃 FontSize，两档各给一对实框（数与来历见 WindowPinGlyph）。这一对摆的是
+        // 外面那层 Viewbox 而不是控件自己：**PathIcon 不缩放几何**，那份 Data 的坐标只对应窗口档那一对，
+        // 全屏档要放大 1.3 就只能交给外面那个框（见 PlayerPage.xaml 里 PinGlyphBox 那段标记）。
+        var pin = fullscreen ? FullscreenPinGlyph : WindowPinGlyph;
+        PinGlyphBox.Width = pin.Width;
+        PinGlyphBox.Height = pin.Height;
+
+        // 格：可见底就是按钮自己的 Width/Height（悬停底、已置顶常亮底都画在这块上，格涨它们跟着涨）。
+        var cell = fullscreen ? FullscreenCommandCell : WindowCommandCell;
+        var corner = fullscreen ? 3d : 2d;
+        foreach (var button in new[] { PinButton, MinimizeButton, MaximizeButton, CloseButton })
+        {
+            button.Width = button.Height = cell;
+            button.CornerRadius = new CornerRadius(corner);
+        }
+        WindowButtons.Spacing = fullscreen ? FullscreenCommandGap : WindowCommandGap;
+        WindowButtons.Margin = new Thickness(0,
+            fullscreen ? FullscreenCommandTop : WindowCommandTop,
+            fullscreen ? FullscreenCommandInset : WindowCommandInset, 0);
+    }
+
+    /// <summary>
+    /// 右缘音量条的**两档**（用户令 2026-09-28 更晚「复刻独占模式的控件放大策略到集成模式」）。
+    /// 独占那头是 uosc 的 <c>Volume.lua</c>：<c>size = round(volume_size × state.scale)</c> ⇒ 40 / 52，
+    /// 整条（滑杆、静音键格、贴缘让位）随档；轨的**高度**在集成里是按画面高度现算的
+    /// （<see cref="ArrangeTransport"/>，上限两档见 <see cref="WindowRailTrack"/>），不在这里摆。
+    /// <para>
+    /// <see cref="PaintTransportReadouts"/> 里那块数字裁剪以前手抄轨宽 40 —— 本轮改成读
+    /// <c>VolumeTrack.ActualWidth</c>，宽到 52 时数字才不会被裁掉一截。
+    /// </para>
+    /// </summary>
+    internal void ApplyRailScale(bool fullscreen)
+    {
+        var size = fullscreen ? FullscreenRailSize : WindowRailSize;
+        Rail.Width = size;
+        Rail.Margin = new Thickness(0, 0, fullscreen ? FullscreenRailInset : WindowRailInset, 0);
+        VolumeSlider.Width = size;
+        MuteButton.Width = MuteButton.Height = size;
+        MuteGlyph.FontSize = fullscreen ? FullscreenRailGlyph : WindowRailGlyph;
+        var mark = fullscreen ? 7.8 : 6.0;
+        VolumeHundredMark.BorderThickness = new Thickness(mark, 0, mark, 0);
+        var label = fullscreen ? 10.4 : 8.0;
+        VolumeText.Margin = new Thickness(0, 0, 0, label);
+        VolumeFilledLabel.Margin = new Thickness(0, 0, 0, label);
+    }
+
+    /// <summary>
+    /// 跳过按钮的**两档**（用户令 2026-09-28 更晚「复刻独占模式的控件放大策略到集成模式」）：
+    /// uosc 那颗 SkipButton 的字号、内边距、让位全乘 state.scale，集成这颗照同一个策略 ×1.3
+    /// （窗口档各数是 09-26「厚度加倍」那批拍板的现值）。
+    /// <para>
+    /// **底边让位是 <see cref="PlaceOverlays"/> 的**：它每趟整条重写 Margin、右值从现值读 ——
+    /// 这里只换右让位、把现值 Bottom 原样带回去，等 Bar 因按钮格变高而重排时它自己会再落一次。
+    /// </para>
+    /// </summary>
+    internal void ApplySkipScale(bool fullscreen)
+    {
+        var padX = fullscreen ? FullscreenSkipPadX : WindowSkipPadX;
+        var padY = fullscreen ? FullscreenSkipPadY : WindowSkipPadY;
+        SkipButton.Margin = new Thickness(0, 0, padY, SkipButton.Margin.Bottom);
+        SkipButton.Padding = new Thickness(padX, padY, padX, padY);
+        SkipButton.CornerRadius = new CornerRadius(padY);
+        SkipStack.Spacing = SkipRow.Spacing = fullscreen ? FullscreenSkipGap : WindowSkipGap;
+        SkipCountdown.Height = fullscreen ? FullscreenSkipCountdown : WindowSkipCountdown;
+        SkipGlyph.FontSize = fullscreen ? FullscreenSkipGlyph : WindowSkipGlyph;
+        SkipText.FontSize = fullscreen ? FullscreenSkipCaption : WindowSkipCaption;
+        SkipTip.FontSize = fullscreen ? FullscreenSkipTip : WindowSkipTip;
     }
 
     /// <summary>
@@ -273,11 +793,12 @@ public sealed partial class PlayerPage
     /// 光标没藏的时候，把「卡在哪一条」写出来 —— 2026-09-16 晚加，起因是用户报「现在的问题是鼠标
     /// 已经不会自动隐藏了」，而日志里同时有反例（18:53:37 进播放、18:53:40 就藏了）。
     /// <para>
-    /// 藏不藏由 <c>ChromeReveal.Settle</c> 那一句决定，四个条件：<b>chrome 已经收干净</b>
-    /// （<c>!State.Any</c>）、<b>指针在画面内</b>（<c>_pointerY &gt;= 0</c>）、<b>没有 hold/keep</b>、
-    /// <b>空闲钟走满 <see cref="ChromeReveal.CursorIdleMilliseconds"/></b>。前三个在 Core 上各有一个
-    /// 现成的只读读数，第四个看 <see cref="ChromeReveal.IdleAgo"/> —— 它小得不正常就意味着有人每拍
-    /// 重盖时钟（鼠标键按着、XAML 的事件、窗口变化都会），那才是「永远不藏」的真实样子。
+    /// 藏不藏由 <c>ChromeReveal.Settle</c> 那一句决定，四个条件：<b>指针没压在控件本体上</b>
+    /// （<c>!PointerHolds</c>，2026-09-29 起它取代了从前的 <c>!State.Any</c> —— 那句话把「控件在带里
+    /// 露着脸」也当成不藏的理由）、<b>指针在画面内</b>（<c>_pointerY &gt;= 0</c>）、<b>没有 hold/keep</b>、
+    /// <b>空闲钟走满 <see cref="ChromeReveal.CursorIdleMilliseconds"/></b>。前三个在 Core 上各有现成的读数
+    /// （控件那一问看 <c>_pointerOn</c>），第四个看 <see cref="ChromeReveal.IdleAgo"/> —— 它小得不正常就意味着
+    /// 有人每拍重盖时钟（鼠标键按着、XAML 的事件、窗口变化都会），那才是「永远不藏」的真实样子。
     /// </para>
     /// <para>
     /// 每秒至多一行，只在播放页（<see cref="Attached"/>）且外壳这本账认为光标还亮着的时候写。日志级
@@ -291,6 +812,7 @@ public sealed partial class PlayerPage
         _noHideLoggedAt = Now;
 
         Log.Debug(Category, $"光标没藏：chrome{(_chrome.State.Any ? "还在" : "已收")}"
+            + (ChromeReveal.HoldsCursor(_pointerOn) ? "且指针压在控件上" : string.Empty)
             + $"，指针{(_chrome.PointerGone ? "不在画面内" : "在画面内")}"
             + $"，hold={_chrome.HoldChrome}/keep={_chrome.KeepChrome}"
             + $"，空闲 {_chrome.IdleAgo(Now)}/{ChromeReveal.CursorIdleMilliseconds}ms"
@@ -323,6 +845,7 @@ public sealed partial class PlayerPage
         // 赋值都带值比较（Visibility 同值、FadeRail 比 opacity、ThinLine 同值），没变的那几样本来就不会
         // 碰布局树 —— 而「画面多大」只有一个答主，另存一份就是又一条会发霉的手抄副本（见 PlaceOverlays
         // 里关于「重赋同一个边距会让指针事件重盖空闲钟」的那段，说的正是这件事的另一面）。
+        ArrangeTransport();
         Render();
 
         // 藏匿期例外（2026-09-16 第二轮复核）：这条路同样以零路程、无见证、无累加掀掉藏匿，而它的
@@ -547,25 +1070,41 @@ public sealed partial class PlayerPage
     private bool RailRoom() => ChromeReveal.RailRoom(PictureWidth, PictureHeight);
 
     /// <summary>
-    /// How deep into the rail's approach strip along the right edge a point is: -1 outside it, 0 at its
-    /// inner boundary, 1 hard against the edge. The rule turns that into both 「show the rail」 and
-    /// 「how strongly」 — 「鼠标指针越接近右边的中心显示越明显」 — and the strip's width is the whole of the
-    /// horizontal half of it, so the value is a plain fraction of <see cref="RailZoneWidth"/>.
+    /// The volume rail's uosc proximity for a pointer at <paramref name="point"/> (Root coordinates): the
+    /// euclidean distance from the pointer to the rail's own rectangle, run through uosc's proximity curve
+    /// (<see cref="ChromeReveal.RailProximity"/>). -1 when the rail is no reason to show at all — a proximity
+    /// of 0 (at or past the reveal reach) is folded into -1 so 「离得刚好够远」 stops counting, matching uosc's
+    /// proximity 0 ＝ 不画. The rule turns the value into both 「show the rail」 and 「how strongly」.
     /// <para>
-    /// 这条带子整个不存在于小窗口里（用户令 2026-09-23「窗口小于一定程度的时候自动隐藏音量条」）：
+    /// 照独占逐像素量<b>真矩形</b>（<c>elements/Volume.lua</c> ＋ <c>get_point_to_rectangle_proximity</c>），
+    /// 而不是从常量重算一份几何：音量条 <c>Rail</c> 排成 40 宽、右边距 20、纵向居中，与 uosc 的音量矩形同几何
+    /// （2026-09-28「参考独占模式修复」，接替旧的 160px 横向线性带 ＋ 竖向中心偏置）。量真元素，唤出范围就跟着
+    /// XAML 走，没有会漂的第二份尺寸——触发线因此回到独占的「离右缘约 180px 起淡、约 100px 满」。
+    /// </para>
+    /// <para>
+    /// 这条唤出整个不存在于小窗口里（用户令 2026-09-23「窗口小于一定程度的时候自动隐藏音量条」）：
     /// <see cref="RailRoom"/> 为假时一律答 -1，于是「指针走到右缘」不再是音量条的理由，也不再算「停在控件上」
-    /// （那一位会让空闲钟变长，<c>ChromeReveal.Parked</c>）。
+    /// （那一位从 2026-09-28 起只影响光标：指针在控件上时屏上有东西，光标不藏）。
     /// </para>
     /// </summary>
     private double RailNear(Point point)
     {
-        var width = PictureWidth;
-        if (width <= 0 || !RailRoom()) return -1;
+        if (PictureWidth <= 0 || !RailRoom()) return -1;
 
-        var edge = width - RailZoneWidth;
-        if (point.X < edge) return -1;
+        var w = Rail.ActualWidth;
+        var h = Rail.ActualHeight;
+        if (w <= 0 || h <= 0) return -1;
 
-        return Math.Clamp((point.X - edge) / RailZoneWidth, 0, 1);
+        // uosc's get_point_to_rectangle_proximity: signed distance outside the rect on each axis, then the
+        // euclidean length of the positive (outside) parts — 0 anywhere inside the rectangle. Root coordinates
+        // throughout, so OriginIn(Rail) and the incoming point share an origin (the same pair PartAt uses).
+        var origin = OriginIn(Rail);
+        var dx = Math.Max(origin.X - point.X, point.X - (origin.X + w));
+        var dy = Math.Max(origin.Y - point.Y, point.Y - (origin.Y + h));
+        var distance = Math.Sqrt(Math.Max(0, dx) * Math.Max(0, dx) + Math.Max(0, dy) * Math.Max(0, dy));
+
+        var proximity = ChromeReveal.RailProximity(distance);
+        return proximity <= 0 ? -1 : proximity;
     }
 
     /// <summary>
@@ -642,7 +1181,20 @@ public sealed partial class PlayerPage
         var state = _chrome.State;
         Bar.Visibility = state.Bar ? Visibility.Visible : Visibility.Collapsed;
         TitleStrip.Visibility = state.Title ? Visibility.Visible : Visibility.Collapsed;
+
+        // 三条边现在都按指针的近度分级淡入，不再二值直显（用户令 2026-09-27「参独占模式……」，见
+        // ChromeReveal 类注里那次反转）：标题条与按钮行写各自的强度到 Opacity（隐式过渡在 XAML 里补间），
+        // 进度条按同一条底边强度长高。State 那三个布尔仍旧只管「该不该出现」——收起时把它们收干净、且不吃
+        // 命中，与音量条 FadeRail 同法。
+        FadeStrip(TitleStrip, state.Title ? _chrome.TitleStrength : 0);
+        FadeStrip(TransportRow, state.Bar && !_timelineHovering ? _chrome.BarStrength : 0);
+        GrowTimeline(state.Bar ? _chrome.BarStrength : 0);
         FadeRail(state.Rail && RailRoom() ? _chrome.RailStrength : 0);
+
+        // 左上角那三块玻璃的浓度也在这里重推一遍：深度是拿指针的 Y 除以**画面高度**得来的，
+        // 窗口一换尺寸，同一个 Y 就是另一档；而那类变化（全屏、最大化、拖边）不一定经过一次指针读数。
+        // 指针每动一次的那一档归 NotePointer —— 那一处是主路，这一处是兜底。
+        ApplyTopGlass(TopGlassDepth());
 
         // The three window commands live in the strip, so they come and go with it. What is left to decide
         // per reveal is which of 最大化/还原 the middle one is offering, and whether it is offering anything.
@@ -668,7 +1220,7 @@ public sealed partial class PlayerPage
         // 它补的正是「进度条收起时仍留一条读数」，而拖动期间进度条是**特地**收起来的 —— 照旧亮起来，那句话
         // 就被一根两像素的进度线拆掉了。规则那边收了 Bar/Title/Rail 三样里的两样，这一样不归它管，在这里收。
         ThinLine.Visibility = !state.Bar && !_chrome.WindowDragging && !_inputSuspended
-            && Visibility == Visibility.Visible && _window?.Fullscreen != true
+            && Visibility == Visibility.Visible && _window?.OccupiesScreen != true
             ? Visibility.Visible
             : Visibility.Collapsed;
 
@@ -705,6 +1257,35 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
+    /// 把一条浮层（标题条、按钮行）淡到 <paramref name="strength"/> 这一档。透明度交给 XAML 里那支隐式
+    /// <c>ScalarTransition</c> 补间，与 <see cref="FadeRail"/> 同法；强度到 0 就连命中一起收 —— 一块看不见
+    /// 的条子会吞掉画面上的点击（标题条里还压着窗口按钮）。「该不该出现」仍由 <see cref="Render"/> 按
+    /// <c>State</c> 收 <c>Visibility</c>，这里只管明不明显。
+    /// </summary>
+    private static void FadeStrip(FrameworkElement element, double strength)
+    {
+        var wanted = Math.Clamp(strength, 0, 1);
+        if (Math.Abs(element.Opacity - wanted) >= 0.001) element.Opacity = wanted;
+
+        var hit = wanted > 0;
+        if (element.IsHitTestVisible != hit) element.IsHitTestVisible = hit;
+    }
+
+    private const double TimelineThin = 2;
+
+    // Reserve the row while the artwork grows, so the buttons never jump or clip chapter diamonds.
+    private void GrowTimeline(double strength)
+    {
+        _timelineStrength = Math.Clamp(strength, 0, 1);
+        var full = TimelineFullHeight;
+        Bar.RowDefinitions[1].Height = new GridLength(full);
+        var height = TimelineThin + Math.Ceiling((full - TimelineThin) * _timelineStrength);
+        if (Math.Abs(SeekTrack.Height - height) > 0.01) SeekTrack.Height = height;
+        RenderTimelineLayers();
+        UpdateTimelineMaterial();
+    }
+
+    /// <summary>
     /// 工具用（<c>--show-osd [pinned|paused|playing]</c>）：把播放浮层摆到屏上留着，好让 <c>tools/shot.ps1</c>
     /// 拍一张。一个字节的视频都不播 —— <see cref="Render"/> 只读显隐规则，不问在放什么。
     /// <para>
@@ -723,7 +1304,22 @@ public sealed partial class PlayerPage
         Visibility = Visibility.Visible;
         UpdateLayout();
 
-        if (string.Equals(state, "pinned", StringComparison.OrdinalIgnoreCase)) SetPinned(true);
+        if (string.Equals(state, "pinned", StringComparison.OrdinalIgnoreCase))
+        {
+            SetPinned(true);
+
+            // 钉住浮层这一条路上 ViewModel 是空的 —— 标题与第二行那两块玻璃会缩成最小尺寸、第二行干脆
+            // 收起（Subtitle 空串＝SubtitleVisibility 收起），照片上量不出「有字时」的样子。
+            // 于是这里摆一行真数据：用户令 2026-09-28「集成模式下面的元数据体积太大了，与独占模式不一致」
+            // 那一轮需要一张两头同串的对照照片，而这是唯一能拍到集成这一头的路（真播放会写进观看历史，
+            // 不走）。摆的串与 `ProbeClearance` 那一关、以及独占探针 `work/probe-topbar-look.py` 的
+            // SUBLINE 是同一份 —— 同串才比得出两边的玻璃与墨迹。
+            if (ViewModel.Title is not { Length: > 0 })
+            {
+                ViewModel.Title = "本地动画验证";
+                ViewModel.Subtitle = "1920 x 1080 · HEVC · AAC · Studio GreenTea";
+            }
+        }
 
         if (state is "paused" or "playing")
         {
@@ -737,6 +1333,19 @@ public sealed partial class PlayerPage
         _chrome.FlashRail(Now);
         Render();
         UpdateLayout();
+
+        // 右上那几颗也是「指针压上去才有底」，而这台机器注不进鼠标事件 —— 悬停态本来拍不到照。把「最小化」
+        // 那颗按进 PointerOver（走的正是自检里那条 GoToState，不是另开一条路），照片里就量得到那一档白底的
+        // 实际浓度与转深后的图标（用户令 2026-09-28 晚「集成模式右上角的这个背景太透明了」那一轮提浓度，
+        // 判据要的就是这张照片）。两件事缺一不可，都是实测撞出来的：
+        // ① 推在 `UpdateLayout()` **之后** —— 放在前面那一版拍回来是一块光板，那时布局还没落定；
+        // ② 这一栏那两个指针处理器先**断掉** —— 窗口出现、被置顶激活时这一栏仍会收到一次 PointerExited，
+        //    把状态抹回 Normal，连 `SetStripGlyphInk` 写的墨也一并回白。
+        // 只在这一条取样路上做，正常进页面一个字都不动。
+        WindowButtons.PointerMoved -= OnWindowButtonsPointerMoved;
+        WindowButtons.PointerExited -= OnWindowButtonsPointerExited;
+        VisualStateManager.GoToState(MinimizeButton, "PointerOver", false);
+        SetStripGlyphInk(MinimizeButton);
     }
 
     /// <summary>
@@ -1086,9 +1695,8 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// Why the chrome is being kept on screen regardless of the pointer. Four independent things ask for
-    /// it and they overlap: a flyout can be opened and closed while the 字幕字体 box still has the keyboard,
-    /// and a dialog can be raised from a flyout.
+    /// Why the chrome is being kept on screen regardless of the pointer. Three independent things ask for
+    /// it and they overlap: a menu can be opened and closed while a dialog is up, and so on.
     /// </summary>
     [Flags]
     private enum ChromeHold
@@ -1106,18 +1714,19 @@ public sealed partial class PlayerPage
         /// <summary>播放信息 is up.</summary>
         Dialog = 4,
 
-        /// <summary>需求 7's 字幕字体 box has the keyboard: a strip that hid itself while being typed into.</summary>
-        Search = 8,
-
         /// <summary>
         /// 工具用：<c>--show-osd</c> 把浮层钉在屏上好拍照。<see cref="ChromeReveal.WakeFully"/> 的宽限期只有一秒多，
         /// 等不到窗口稳下来、更等不到截图脚本按下快门。
         /// </summary>
-        Shot = 16
+        Shot = 16,
+
+        Timeline = 32,
+
+        Speed = 64
     }
 
     /// <summary>
-    /// A flyout is open, a drag is running, a dialog is up, or the 字幕字体 box has the keyboard: the chrome
+    /// A flyout is open, a drag is running, or a dialog is up: the chrome
     /// stays regardless of the pointer.
     /// <para>
     /// Reason-flagged rather than a plain boolean, because <see cref="ChromeReveal.SetHold"/> is one flag
@@ -1336,159 +1945,4 @@ public sealed partial class PlayerPage
         _cursorShared = false;
     }
 
-    // ---- 章节刻度与缩略图 ---------------------------------------------------------
-
-    private void OnSeekTrackResized(object sender, SizeChangedEventArgs e) => RenderChapterTicks();
-
-    /// <summary>
-    /// Draws one tick per chapter boundary onto the canvas behind the slider, against the marks and the
-    /// run time the view model currently holds. Nothing to play means nothing to mark, which is what
-    /// clears the canvas on the way out of the player.
-    /// </summary>
-    private void RenderChapterTicks()
-    {
-        if (!Attached)
-        {
-            ChapterTicks.Children.Clear();
-            return;
-        }
-
-        var duration = ViewModel.Status.HasDuration ? ViewModel.Status.Duration : 0;
-        _ticksFor = duration;
-        RenderChapterTicks(ViewModel.ChapterMarks, SeekTrack.ActualWidth, duration);
-    }
-
-    /// <summary>
-    /// The same drawing against marks, a width and a run time given rather than read, which is the only
-    /// way the self-check can look at it: nothing is playing and the player is collapsed, so the track has
-    /// no measured width and the ordinary path would quite correctly draw nothing.
-    /// <para>
-    /// Borders rather than <c>Shapes.Rectangle</c>: a rectangle needs a <c>Fill</c> brush and would drag
-    /// <c>Microsoft.UI.Xaml.Shapes</c> in for something a one-pixel-wide bordered box already does.
-    /// </para>
-    /// <para>
-    /// The ticks already on the canvas are moved rather than thrown away and made again. Which matters for
-    /// one caller in particular: the track's <c>SizeChanged</c> redraws them, and a dragged window edge
-    /// raises that once a frame — so a file with chapters used to discard and rebuild its whole tick row
-    /// sixty times a second for as long as the hand held the edge. Only the tail is really added or removed,
-    /// and only when the number of boundaries changes, which is when the file does.
-    /// </para>
-    /// </summary>
-    private void RenderChapterTicks(IReadOnlyList<SkipChapter> marks, double width, double duration)
-    {
-        var drawn = 0;
-
-        // Two marks is the minimum that says anything: a single chapter at zero is every file.
-        if (width > 0 && duration > 0 && marks.Count >= 2)
-        {
-            // Asked once rather than per tick: the brush is the same object for every mark, and it is a
-            // dictionary walk to find.
-            var brush = BrushFor("PlayerTickBrush");
-
-            foreach (var mark in marks)
-            {
-                // The mark at zero is the start of the file, not a boundary anyone would want to see.
-                if (mark.Start <= 0.5 || mark.Start >= duration) continue;
-
-                Border tick;
-
-                if (drawn < ChapterTicks.Children.Count)
-                {
-                    tick = (Border)ChapterTicks.Children[drawn];
-                }
-                else
-                {
-                    tick = new Border { Width = ChapterTickWidth, CornerRadius = new CornerRadius(1) };
-                    ChapterTicks.Children.Add(tick);
-                }
-
-                // Assigned every time, not only at creation: the canvas's height is fixed but the brush is
-                // the theme's, and a theme can change under a file that is already playing.
-                tick.Height = ChapterTicks.Height;
-                tick.Background = brush;
-
-                Canvas.SetLeft(tick, Math.Clamp(mark.Start / duration * width - ChapterTickWidth / 2, 0, width - ChapterTickWidth));
-                drawn++;
-            }
-        }
-
-        // Whatever the last file left behind: fewer boundaries than this one has, or — leaving the player —
-        // none at all, which is what has to clear the canvas rather than leave ticks over the library grid.
-        while (ChapterTicks.Children.Count > drawn) ChapterTicks.Children.RemoveAt(ChapterTicks.Children.Count - 1);
-    }
-
-    /// <summary>
-    /// The hover preview: where the box goes, and whether there is anything to put in it. What goes in it
-    /// — the chapter's name and its still — is <see cref="PlayerViewModel.PeekChapterAt"/>'s, and arrives
-    /// through the two bindings on the box itself.
-    /// <para>
-    /// The time bubble beside it is the slider's own tooltip, which the seek clock converter already
-    /// fills — this adds the picture and the chapter's name, and nothing else, so hovering a file with no
-    /// chapter stills still behaves exactly as it did before.
-    /// </para>
-    /// </summary>
-    private void OnSeekTrackHover(object sender, PointerRoutedEventArgs e)
-    {
-        if (!Attached || !ViewModel.CanPeek) return;
-
-        var width = SeekTrack.ActualWidth;
-        if (width <= 0) return;
-
-        var x = Math.Clamp(e.GetCurrentPoint(SeekTrack).Position.X, 0, width);
-
-        if (!ViewModel.PeekChapterAt(x / width * ViewModel.Status.Duration))
-        {
-            HideChapterPeek();
-            return;
-        }
-
-        // Positioned every move, contents only when the chapter changes — which is the view model's own
-        // rule, above. The box follows the pointer along the bar for the price of a transform.
-        PositionChapterPeek(x);
-        ChapterPeek.Visibility = Visibility.Visible;
-    }
-
-    private void OnSeekTrackLeft(object sender, PointerRoutedEventArgs e)
-    {
-        // Same problem PointerExited has on Root: the slider is a child of the track, so stepping onto
-        // it raises Exited here at a position still inside the track. The OS knows where the cursor is.
-        if (PointerOverSeekTrack()) return;
-
-        HideChapterPeek();
-    }
-
-    private bool PointerOverSeekTrack()
-    {
-        if (SeekTrack.ActualWidth <= 0 || !CursorPoint(out var point)) return false;
-
-        var origin = OriginIn(SeekTrack);
-
-        // A generous vertical band, because the track is a dozen pixels tall and the preview should not
-        // flicker off at its edge.
-        return point.X >= origin.X && point.X <= origin.X + SeekTrack.ActualWidth
-            && point.Y >= origin.Y - 8 && point.Y <= origin.Y + SeekTrack.ActualHeight + 8;
-    }
-
-    /// <summary>
-    /// Puts the preview above the pointer, kept inside the picture. Translated rather than laid out with
-    /// margins, so following the pointer costs a transform rather than a layout pass per mouse move.
-    /// </summary>
-    private void PositionChapterPeek(double trackX)
-    {
-        var origin = OriginIn(SeekTrack);
-        var boxWidth = ChapterPeek.ActualWidth > 0 ? ChapterPeek.ActualWidth : PlayerViewModel.ChapterPeekWidth + 10;
-        var boxHeight = ChapterPeek.ActualHeight > 0 ? ChapterPeek.ActualHeight : 160;
-
-        var left = origin.X + trackX - boxWidth / 2;
-        if (Root.ActualWidth > 0) left = Math.Clamp(left, 8, Math.Max(8, Root.ActualWidth - boxWidth - 8));
-
-        ChapterPeekOffset.X = left;
-        ChapterPeekOffset.Y = Math.Max(8, origin.Y - boxHeight - 12);
-    }
-
-    private void HideChapterPeek()
-    {
-        ChapterPeek.Visibility = Visibility.Collapsed;
-        if (Attached) ViewModel.ClearChapterPeek();
-    }
 }

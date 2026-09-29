@@ -120,6 +120,16 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingSubtitlePreviewRow? _subtitlePreview;
     private Func<Task>? _pushSubtitleStyle;
 
+    /// <summary>「把 截图保存目录 推给正在播的那部」，见 <see cref="Attach"/> 的 <c>pushScreenshotDirectory</c>。</summary>
+    private Func<string, Task>? _pushScreenshotDirectory;
+
+    /// <summary>
+    /// 「关于」卡上那行「截图目录」，握着好让「播放器」卡上的目录一改它就当场跟上（同 <see cref="HomeRows"/>
+    /// 那样握着一行的理由）。只在 <see cref="AboutCard"/> 建出来时有值；没有「关于」卡（测试路径）就是 null，
+    /// 改目录那一头 null 检查过。
+    /// </summary>
+    private SettingFactRow? _screenshotFact;
+
     /// <summary>快捷键卡里那 21 行可重绑的行，握着好在重绑/清空之后逐行刷新显示（同 <see cref="HomeRows"/> 那样握着一行的理由）。</summary>
     private readonly List<SettingShortcutRow> _shortcutRows = [];
 
@@ -235,6 +245,11 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// the sentence above stays true. <see cref="PlaybackService.ApplySubtitleStyleAsync"/> is what arrives
     /// here; it does nothing when nothing is playing, so this page never has to ask.
     /// </param>
+    /// <param name="pushScreenshotDirectory">
+    /// 「把 截图保存目录 推给正在播的那部片子」, same seam as <paramref name="pushSubtitleStyle"/> one slot up:
+    /// <see cref="PlaybackService.ApplyScreenshotDirectoryAsync"/> arrives, nothing else of the player does,
+    /// and nothing is playing means nothing happens.
+    /// </param>
     internal void Attach(
         ISettingsService settings,
         ShaderStaging shaders,
@@ -243,6 +258,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         Platform.ISystemLauncher launcher,
         AudioDeviceCatalogue audioDevices,
         Func<Task> pushSubtitleStyle,
+        Func<string, Task> pushScreenshotDirectory,
         MoviePilotProbe moviePilot,
         MoviePilotCredentials moviePilotCredentials)
     {
@@ -253,6 +269,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         _launcher = launcher;
         _audioDevices = audioDevices;
         _pushSubtitleStyle = pushSubtitleStyle;
+        _pushScreenshotDirectory = pushScreenshotDirectory;
         _moviePilot = moviePilot;
         _moviePilotCredentials = moviePilotCredentials;
     }
@@ -442,7 +459,18 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "只有「外部 mpv.exe」后端需要它。访问令牌通过核验进程身份的管道传递，不放进命令行或临时文件；"
                     + "无法建立安全通道就停止起播。请只选择可信的 mpv.exe，同一 Windows 用户下的恶意程序仍可能窃取凭据。"),
 
-            Toggle("启用 IPC 进度通道", "关掉后不读取或上报进度，也不提供客户端控制；安全起播和退出仍需管道", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value)
+            Toggle("启用 IPC 进度通道", "关掉后不读取或上报进度，也不提供客户端控制；安全起播和退出仍需管道", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value),
+
+            // 「在设置中新增截图保存目录」（用户令 2026-09-29）。空 = 装机落点，裁决在 Core 的
+            // AppPaths.ResolveScreenshotDirectory。每敲一键提交一次（SettingTextRow 的节奏），所以这里只做
+            // 三件不要钱的事：写设置、刷新「关于」卡那行读数、把裁决后的目录推给正在播的那部 ——
+            // 建目录不在这一档（会把路径的每个前缀都建成文件夹），它归启动和「关于」卡的「打开」。
+            PathBox("截图保存目录", "例如 D:\\影屏截图", () => Settings.Mpv.ScreenshotDirectory, value =>
+            {
+                Settings.Mpv.ScreenshotDirectory = value;
+                AnnounceScreenshotDirectory();
+            }, "播放器「画面」菜单里三档截图存到这儿，文件名是片名加时间码。留空用装机落点（数据目录下的 "
+                + "screenshots 文件夹）；改完当场生效，正播着的那部也从下一张截图起落进新目录")
         ]);
 
     private SettingSection PlaybackCard()
@@ -1186,6 +1214,45 @@ public sealed partial class SettingsViewModel : PageViewModel
             + $"\n已连的下载器：{downloaders}";
     }
 
+    // ── 截图保存目录 ──────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 截图往哪儿落 —— <see cref="AppPaths.ResolveScreenshotDirectory"/> 的那一句答案：设置里填了的（清掉
+    /// 引号空白、展开成绝对）就是它，空着就是装机落点。没有 <see cref="_paths"/>（测试路径）时兜底也是空，
+    /// 调用方各有空串的走法。
+    /// </summary>
+    private string ScreenshotDirectory() =>
+        AppPaths.ResolveScreenshotDirectory(Settings.Mpv.ScreenshotDirectory, _paths?.ScreenshotDirectory) ?? "";
+
+    /// <summary>
+    /// 截图保存目录动过了，把两处「印着它」的地方当场带上：关于卡那行读数（不重开设置窗口，屏上说的也得是
+    /// 新目录），和正播着的那一部 —— mpv 的 <c>screenshot-directory</c> 属性，下一张截图起就落进新目录，
+    /// 画面菜单副标题里展开的也是它。推送没接上（测试路径）就略过；推送本身没有可败之处（<c>PlaybackService</c>
+    /// 里裹着 try），同 <see cref="_pushSubtitleStyle"/> 的调法一样不另设防。
+    /// </summary>
+    private void AnnounceScreenshotDirectory()
+    {
+        var directory = ScreenshotDirectory();
+        if (_screenshotFact is { } fact) fact.Value = directory;
+        if (directory.Length > 0) _ = _pushScreenshotDirectory?.Invoke(directory);
+    }
+
+    /// <summary>
+    /// 关于卡「截图目录」那颗「打开」：建得起就先建再开。建目录不放进行提交那一路 —— 每敲一键提交一次，
+    /// 会把路径的每个前缀都建成文件夹 —— 归启动时和这里各一道；刚改完目录还没重开过程序的人，点按钮也有
+    /// 地方可去。
+    /// </summary>
+    private void OpenScreenshotDirectory()
+    {
+        var directory = ScreenshotDirectory();
+        if (directory.Length == 0) return;
+
+        try { Directory.CreateDirectory(directory); }
+        catch (Exception) { /* 建不起就算了：盘不在、写不进，打开那一步资源管理器自己会说。 */ }
+
+        _launcher?.OpenFolder(directory);
+    }
+
     /// <summary>
     /// 关于：这份程序是哪一版、拿哪个内核在放、它的东西放在磁盘上哪儿。
     /// <para>
@@ -1223,11 +1290,13 @@ public sealed partial class SettingsViewModel : PageViewModel
             rows.Add(Fact("缓存目录", "海报和着色器缓存，删掉不会丢设置", Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root,
                 "打开", () => _launcher?.OpenFolder(Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root)));
 
-            // 播放器右键菜单 → 截屏 的落点。这一行不是装饰：截图这个功能从前根本没做，理由正是
+            // 播放器右键菜单 → 截图 的落点。这一行不是装饰：截图这个功能从前根本没做，理由正是
             // 「--no-config 之下没有 screenshot-directory，文件会落到 exe 旁边而不告诉用户」——
-            // 所以「告诉用户落在哪儿」和截图本身是同一件事的两半。
-            rows.Add(Fact("截图目录", "播放器右键菜单 → 截屏 存到这儿，文件名是片名加时间码", paths.ScreenshotDirectory,
-                "打开", () => _launcher?.OpenFolder(paths.ScreenshotDirectory)));
+            // 所以「告诉用户落在哪儿」和截图本身是同一件事的两半。2026-09-29 起这个落点跟着设置走
+            // （播放器卡的「截图保存目录」），这一行握在 _screenshotFact 上，那头一改它当场换。
+            _screenshotFact = Fact("截图目录", "播放器右键菜单 → 截图 存到这儿，文件名是片名加时间码",
+                ScreenshotDirectory(), "打开", OpenScreenshotDirectory);
+            rows.Add(_screenshotFact);
         }
 
         // 「把恢复默认设置移动到关于中，在关于中新增配置文件备份和恢复配置的功能」（用户令 2026-09-24）。三行都是

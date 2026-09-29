@@ -3,12 +3,13 @@ using System.IO;
 namespace EmbyNian.Emby;
 
 /// <summary>
-/// 从服务器上的文件名里认制作组（release group），并把它缀到两处屏上读数的尾部。
+/// 从服务器上的文件名里认制作组（release group）。
 /// <para>
-/// 用户令（2026-09-24，配两张截图）：其一，「这是进度条中间的视频格式，在最后新增制作组，取文件名
-/// 再见菈菈 S01E12 1080p.AAC-Studio GreenTea 后面的 Studio GreenTea」—— 即画质读数变成
-/// <c>1080p · HEVC · MP4 · 261.8MB · Studio GreenTea</c>；其二，「这是独占模式下左上角的标题，在尾部
-/// 也新增制作组」—— 即标题变成 <c>再见菈菈 S01E12 再见菈菈 - Studio GreenTea</c>。
+/// 用户令（2026-09-24）：进度条中间的画质读数尾部要缀上「文件名最后一个 - 后面的那一段」，例
+/// <c>1080p · HEVC · MP4 · 261.8MB · Studio GreenTea</c>（追加在 Shell 的 <c>PlayingSourceLabel</c> 一侧）。
+/// 2026-09-27 又把它加进播放页左上角第二行的文件信息（<c>视频编码 · 音轨 · 组名</c>，见
+/// <see cref="Playback.PlaybackTitles"/>）。两处都只用 <see cref="FromFileName"/> 取那一段；左上角主标题
+/// （<c>force-media-title</c> / <see cref="EmbyItem.ToPlaybackHeadline"/>）本身不再缀组名。
 /// </para>
 /// <para>
 /// 取法就按用户指的那一条：文件名（去目录、去扩展名）里<b>最后一个</b>「-」后面的那一段，去首尾空白。
@@ -36,17 +37,5 @@ public static class ReleaseGroup
         if (dot > 0 && dot > dash) name = name[..dot];
         if (dash < 0) return "";
         return name[(dash + 1)..].Trim();
-    }
-
-    /// <summary>
-    /// 独占模式左上角那一行（<c>force-media-title</c>）的拼法：标题后面接「 - 制作组」。
-    /// 标题或组名空着时返回另一边，不产孤零零的分隔符。
-    /// </summary>
-    public static string DecorateTitle(string? title, string? path)
-    {
-        var group = FromFileName(path);
-        if (group.Length == 0) return title ?? "";
-        if (string.IsNullOrWhiteSpace(title)) return group;
-        return $"{title} - {group}";
     }
 }

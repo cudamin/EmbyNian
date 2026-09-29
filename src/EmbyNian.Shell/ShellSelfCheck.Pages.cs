@@ -167,11 +167,16 @@ internal static partial class ShellSelfCheck
             + $"hwdec={(string.IsNullOrWhiteSpace(video.HardwareDecoding) ? "（未设置）" : video.HardwareDecoding)}："
             + (conditions.Count == 0 ? "没有需要提醒的" : string.Join("；", conditions)));
 
-        // 截图的落点。判的是容器里那个 PlaybackPlanner 真的拿到了这个目录 —— 忘了在 ShellServices 里传它，
+        // 截图的落点。判的是容器里那个 PlaybackPlanner 拿到的目录和同一条裁决规则（AppPaths.ResolveScreenshotDirectory
+        // 过设置里的「截图保存目录」，空着落回装机落点）算出来的一致 —— 忘了在 ShellServices 里传兜底目录，
         // 编译过、播放正常、屏上一点异样都没有，只是截出来的图落到 exe 旁边，而这正是「截图」这个功能从前
-        // 完全不做的那个理由。目录本身也要在：mpv 建不出目录时只在日志里说一句，而没人在放片子的时候读日志。
+        // 完全不做的那个理由。目录本身也要在：启动时会按同一份裁决建它，它还不在就是那一路断了，或者盘
+        // 真的不在了 —— 两种都值得报红。
+        var paths = services.GetRequiredService<AppPaths>();
+        var wanted = AppPaths.ResolveScreenshotDirectory(
+            services.GetRequiredService<AppSettings>().Mpv.ScreenshotDirectory,
+            paths.ScreenshotDirectory)!;
         var screenshots = services.GetRequiredService<PlaybackPlanner>().ScreenshotDirectory;
-        var wanted = services.GetRequiredService<AppPaths>().ScreenshotDirectory;
         var exists = Directory.Exists(wanted);
 
         check("截图有落点", string.Equals(screenshots, wanted, StringComparison.OrdinalIgnoreCase) && exists,
@@ -465,6 +470,12 @@ internal static partial class ShellSelfCheck
         // 选择项」）—— 它说的是播放键指着的那一集，所以这一条在剧页上钉的是「有落点才画、而且没人被右沿切掉」。
         // 文件页那一份读数在下面「文件页文件选项」那一条上，见 _filePickers。
         check("文件选项没出界", detail.PickerFitOk, detail.PickerFit);
+
+        // 同一行上第二件要钉住的事：这三颗下拉的浮层开在同一棵树里没有。浮层开在自己那个窗口里时，调色板给它的
+        // 那支应用内亚克力采不到底下这一页，退回 FallbackColor —— 屏上是一块实心色（用户 2026-09-27：「把音频和
+        // 字幕的选择栏改成亚克力背景」，那之前两轮调浓淡都没用，因为根子不在浓淡）。这一条读 DPI/浓淡之外的
+        // 那一半：属性在不在。照片那半边在 work/ 里那次截图里，见 PROGRESS。几何在 DetailPage.PickerGlass 里读。
+        check("详情页下拉浮层在树内", detail.PickerGlassOk, detail.PickerGlass);
 
         // 页尾那张横幅 —— 「在电影页面 剧页面 集页面的底部添加横幅」。判的是落点和两个「该空」（季页不摆、名牌
         // 已经用了这张横幅的条目不摆）：同一张图在一页上出现两次，屏上单看每一处都挺好，只有一起看才看出重了。

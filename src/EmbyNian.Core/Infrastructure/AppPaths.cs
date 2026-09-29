@@ -1,3 +1,5 @@
+using EmbyNian.Configuration;
+
 namespace EmbyNian.Infrastructure;
 
 /// <summary>
@@ -41,8 +43,37 @@ public sealed class AppPaths
     /// <c>screenshot-directory</c>, so they landed beside the executable and nobody was told where. Named
     /// here, next to the log and cache directories, and 设置 → 关于 shows the path with a button that opens it.
     /// </para>
+    /// <para>
+    /// <b>2026-09-29 起它还是兜底</b>：设置 → 播放器的「截图保存目录」留空时，截图就落在这里 —— 裁决在
+    /// <see cref="ResolveScreenshotDirectory"/>，填了的值从那一个函数过。
+    /// </para>
     /// </summary>
     public string ScreenshotDirectory => Path.Combine(Root, "screenshots");
+
+    /// <summary>
+    /// 截图落点的最终裁决：设置里那行（设置 → 播放器 → 截图保存目录）填了就用它，空着就是
+    /// <paramref name="fallback"/> —— 容器交给 <see cref="Playback.PlaybackPlanner"/> 的装机落点。计划层、
+    /// 关于卡和自检问的都是这一个函数，四处各抄一遍清洗规则就是这一类 bug 的老窝。
+    /// <para>
+    /// 清了两件事。<see cref="TypedPath.Clean"/> 掉引号和空白：资源管理器的「复制为路径」贴进来就带着一对
+    /// 引号，而带引号的值会让每一条 <c>Path</c> 调用抛异常 —— <see cref="TypedPath"/> 自己的注释里记着那次。
+    /// 相对路径展开成绝对：外置 mpv.exe 的工作目录是 mpv.exe 自己那层（<c>MpvProcessBackend</c> 起进程时
+    /// 设的），内置 libmpv 用的是本进程的工作目录 —— 同一个「相对」在两个后端会落到两个地方，在计划层
+    /// 钉死成一条，mpv 拿到的、关于卡显示的、自检比对的才是同一条路。
+    /// </para>
+    /// <para>
+    /// 字符不合法（手误打进 <c>|</c> 之类）就没法展开：原样交回。mpv 会拒绝它、那一档截图存不出、菜单按
+    /// 后端的回话说「未保存」，比在设置页里悄悄改成别的目录诚实。
+    /// </para>
+    /// </summary>
+    public static string? ResolveScreenshotDirectory(string? configured, string? fallback)
+    {
+        var value = TypedPath.Clean(configured);
+        if (value.Length == 0) return fallback;
+
+        try { return Path.GetFullPath(value); }
+        catch (Exception) { return value; }
+    }
 
     /// <summary>
     /// Where the embedded Emby console's WebView2 keeps its profile. Named explicitly because a

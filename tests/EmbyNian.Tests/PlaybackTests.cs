@@ -1938,6 +1938,46 @@ internal static class PlaybackTests
             Assert.False(without.ContainsKey("screenshot-template"));
         });
 
+        Test("计划：截图目录设置压过装机落点，清空回到装机落点", () =>
+        {
+            // 「在设置中新增截图的保存目录」（用户令 2026-09-29）：设置里填了的值进 Core 的裁决函数
+            // （AppPaths.ResolveScreenshotDirectory），构造函数里那个目录从「落点」退成「空着时的兜底」。
+            // 计划层发出去的、计划器属性上暴露给自检的，是同一个属性的两次读 —— 这里两头都断言，谁改歪了
+            // 都红。
+            var (planner, settings) = Planner(@"D:\shots");
+            settings.Mpv.ScreenshotDirectory = @"E:\影屏截图";
+
+            Assert.Equal(Path.GetFullPath(@"E:\影屏截图"), planner.ScreenshotDirectory);
+            var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.Equal(Path.GetFullPath(@"E:\影屏截图"), options["screenshot-directory"]);
+
+            // 清空（或只有空白）＝ 没表态：兜底的那一份重新站出来，和缺这个键的旧设置文件同一条路 ——
+            // 所以这个新键不需要迁移。
+            settings.Mpv.ScreenshotDirectory = "   ";
+            Assert.Equal(@"D:\shots", planner.ScreenshotDirectory, "设置空着时兜底说话");
+        });
+
+        Test("截图目录裁决：空着回兜底，引号空白清掉，相对钉成绝对", () =>
+        {
+            // 这一个函数是「哪里落」的唯一出处 —— 计划层、关于卡、自检三处问的都是它。三处各抄一遍规则
+            // 就是这一类 bug 的老窝，所以合同在这里钉死。
+            Assert.Equal(@"D:\shots", AppPaths.ResolveScreenshotDirectory(null, @"D:\shots"));
+            Assert.Equal(@"D:\shots", AppPaths.ResolveScreenshotDirectory("", @"D:\shots"));
+            Assert.Equal(@"D:\shots", AppPaths.ResolveScreenshotDirectory("  ", @"D:\shots"));
+            Assert.Null(AppPaths.ResolveScreenshotDirectory("", null), "兜底也没有就是真没有：截图三件套整体缺席");
+
+            // 资源管理器「复制为路径」贴进来的一对引号（和左右的空白）进这道门就掉。
+            Assert.Equal(@"E:\影屏截图", AppPaths.ResolveScreenshotDirectory(" \"E:\\影屏截图\" ", @"D:\shots"));
+
+            // 相对路径钉成绝对：外置 mpv.exe 的工作目录在 mpv.exe 那层，内置 libmpv 用本进程的 ——
+            // 同一个「相对」会落到两个地方，在计划层展开成一条，两个后端拿到的是同一条路。
+            Assert.Equal(Path.GetFullPath("shots"), AppPaths.ResolveScreenshotDirectory("shots", null));
+
+            // 手误打进非法字符就没法展开：原样交回，mpv 拒绝它、那一档截图报「未保存」 ——
+            // 比在设置页悄悄改成别的目录诚实。
+            Assert.Equal(@"D:\a|b", AppPaths.ResolveScreenshotDirectory(@"D:\a|b", null));
+        });
+
         Test("计划：程序自带的字幕字体目录以 sub-fonts-dir 交给 mpv", () =>
         {
             // sub-fonts-dir 指向 exe 旁边的 fonts 目录，往里丢字体就能被 mpv 认出、不依赖这台机器装没装。
@@ -3442,7 +3482,7 @@ internal static class PlaybackTests
     // 搬进 Core 之后时间是参数，于是可以把每一条要求钉成一个用例。
     private static void RegisterChromeReveal()
     {
-        Test("播放器控件：指针进底部 12% 只出进度条", () =>
+        Test("播放器控件：指针进底部边缘带只出进度条", () =>
         {
             var chrome = Chrome(out var now);
 
@@ -3457,9 +3497,10 @@ internal static class PlaybackTests
             Assert.Equal(new ChromeState(true, false, false), chrome.State);
             Assert.Equal(0d, chrome.RailStrength, "没出来的音量条强度是零");
 
-            // 阈值是 12%（2026-09-15 由五分之一改小）：贴着但没过线的地方不许出来。
-            chrome.Pointer(y: 850, height: 1000, ChromePart.None, railNear: -1, now + 1200);
-            Assert.Equal(new ChromeState(false, false, false), chrome.State, "y=0.85 还在带外");
+            // 底边唤出到 BottomReachPixels（像素，照独占 uosc）之外就在带外，不许出来。写成拿常量算，
+            // 免得唤出范围一改这条又得手改一个魔数。height 传 1000，离底 BottomReachPixels+1 像素即带外。
+            chrome.Pointer(y: 1000 - ChromeReveal.BottomReachPixels - 1, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "唤出范围之上就在带外");
         });
 
         Test("播放器控件：进度条和音量条是两个互不相干的请求", () =>
@@ -3493,7 +3534,7 @@ internal static class PlaybackTests
             }
         });
 
-        Test("播放器控件：指针进顶部 12% 只出标题栏", () =>
+        Test("播放器控件：指针进顶部边缘带只出标题栏", () =>
         {
             var chrome = Chrome(out var now);
             chrome.Tick(now + 1000);
@@ -3502,18 +3543,28 @@ internal static class PlaybackTests
             Assert.Equal(new ChromeState(false, true, false), chrome.State, "上面的条不带音量条");
         });
 
-        Test("播放器控件：静止 650 毫秒就收起", () =>
+        Test("播放器控件：指针停在唤出带里就不自动隐藏控件", () =>
         {
+            // 用户令 2026-09-28：「当鼠标停留在对应控件的渐变触发位置时，不要自动隐藏这些控件」。
+            // 从前每一样另有一条空闲窗口（静止 650ms / 停在控件上 2000ms），到期就把控件收走 —— 哪怕指针
+            // 仍落在它的唤出带里。现在这三样只认位置：指针在带里，控件就在；指针回死区，控件立刻收。
+            //
+            // **光标那一半 2026-09-29 已分家**（用户令「触发渐变的时候不隐藏控件，但是要隐藏鼠标」）：
+            // 带子里控件留着、光标照走 —— 光标只认本体（PointerHolds）。这一条因此只量控件，光标留给
+            // 下面那条「只有压在控件本体上才不收鼠标」。
             var chrome = Chrome(out var now);
 
             chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now);
             Assert.True(chrome.State.Bar);
 
-            Assert.False(chrome.Tick(now + 649), "还没到点就不该动");
-            Assert.True(chrome.State.Bar);
+            Assert.True(chrome.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "在带里停满四秒，控件那一格不许变");
+            Assert.True(chrome.State.Bar, "在带里停多久都还在");
+            Assert.True(chrome.CursorHidden, "带子里没有本体可瞄，光标按 09-29 的令照走");
 
-            Assert.True(chrome.Tick(now + 650), "「鼠标静止后自动隐藏的速度再快些」");
-            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+            // 回到画面中间的死区：位置一改，当场收干净（这一条从前靠空闲钟，现在靠位置）。
+            Assert.True(chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 6000));
+            Assert.False(chrome.State.Any);
         });
 
         Test("播放器控件：滚轮改音量时单独亮出音量条", () =>
@@ -3525,10 +3576,23 @@ internal static class PlaybackTests
             chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 1100);
             Assert.Equal(new ChromeState(false, false, false), chrome.State);
 
-            chrome.FlashRail(now + 1200);
+            // 宽限窗口比指针的空闲窗口长，数字要来得及看清。**这一格与光标无关**：指针在死区里、
+            // 又没压在控件本体上，空闲钟照走 —— 松手那一刻光标早就该走了（用户令 2026-09-29
+            // 「触发渐变的时候不隐藏控件，但是要隐藏鼠标」），留着的只是音量条自己。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 1199);
+            Assert.False(chrome.CursorHidden, "指针还压在死区上，一秒没到光标不走");
+            Assert.True(chrome.FlashRail(now + 1200));
             Assert.Equal(new ChromeState(false, false, true), chrome.State, "只亮音量条，不把整套控件拉出来");
+            Assert.Equal(0d, chrome.IdleAgo(now + 1200), "宽限那一记也是活动，空闲钟从它重数");
 
-            // 宽限窗口比指针的空闲窗口长，数字要来得及看清。
+            // 下一秒的空闲钟走满：光标走，音量条留着（它认的是宽限窗口，不是空闲钟）。
+            Assert.True(chrome.Tick(now + 1200 + ChromeReveal.CursorIdleMilliseconds),
+                "空闲钟走满，只有光标那一格变");
+            Assert.True(chrome.CursorHidden, "滚轮过后指针没再动，光标照走");
+            Assert.True(chrome.State.Rail, "光标走了不牵连音量条");
+
+            // 指针的空闲钟（1000）比窄限窗口（1200）短，所以光标先走、条子后收 —— 这正是
+            // 「数字要来得及看清」那个先后。
             Assert.False(chrome.Tick(now + 2399));
             Assert.True(chrome.State.Rail);
 
@@ -3561,7 +3625,7 @@ internal static class PlaybackTests
             chrome.Pointer(y: 940, height: 1000, ChromePart.Skip, railNear: -1, now + 1100);
             Assert.Equal(new ChromeState(false, false, false), chrome.State);
 
-            // 手在按钮上停着也不算「该收的没收」：停靠耐心照旧，状态不再变。
+            // 手在按钮上停着也一样：位置没变，状态就不变（这根条子本来就不该为它出现）。
             Assert.False(chrome.Pointer(y: 940, height: 1000, ChromePart.Skip, railNear: -1, now + 5000));
             Assert.Equal(new ChromeState(false, false, false), chrome.State);
 
@@ -3577,10 +3641,11 @@ internal static class PlaybackTests
             chrome.Pointer(y: 500, height: 1000, ChromePart.Bar, railNear: -1, now);
             Assert.True(chrome.State.Bar, "停在控件上就是到了，跟分区无关");
 
-            // 同一个位置再问一次，时间往前走——手停在按钮上不该让按钮消失。
-            // （上限在「指针停在控件上两秒后连鼠标一起收」那条：一直有事件进来就一直算活动。）
+            // 同一个位置再问一次，时间往前走——手停在按钮上多久，按钮与光标就留多久（用户令 2026-09-28；
+            // 从前这里有一条 2000ms 的上限，那正是他点名要去掉的那一条）。
             Assert.False(chrome.Pointer(y: 500, height: 1000, ChromePart.Bar, railNear: -1, now + 5000));
             Assert.True(chrome.State.Bar);
+            Assert.False(chrome.CursorHidden);
         });
 
         Test("播放器控件：面板打开或还在加载时钉住不放", () =>
@@ -3627,7 +3692,15 @@ internal static class PlaybackTests
             chrome.SetWindowDrag(true, now + 1100);
             Assert.Equal(new ChromeState(false, true, false), chrome.State, "拖动期间只剩标题条");
             Assert.Equal(0d, chrome.RailStrength, "音量条连强度都是零");
-            Assert.False(chrome.Tick(now + 5000), "拖动期间时间流逝不改变这一档");
+
+            // 拖动这一趟页面不再问轮询，指针停在原地 —— 先记一记「它就停在那里」，再从这一记往
+            // 前推一个空闲钟。拖动那一支不看时间，所以这一档一动不动；光标则从这一记起算，
+            // 满一秒就走（拖动不为它破例）—— 所以这里量的是 State 那一格，不是 Tick 的返回值：
+            // 那一拍 `true` 是光标变了一格，不是控件。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: 0.5, now + 1200, moved: false);
+            chrome.Tick(now + 1200 + ChromeReveal.CursorIdleMilliseconds);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State, "拖动期间时间流逝不改变这一档");
+            Assert.True(chrome.CursorHidden, "指针停着，光标该走（拖动也不为它破例）");
 
             // 拖动自己也带「钉住」这个理由，但钉住不许把两根条带回来：拖动那一支排在钉住前面。
             chrome.SetHold(true, now + 5100);
@@ -3675,8 +3748,11 @@ internal static class PlaybackTests
         Test("播放器控件：从音量条上离开窗口也要收起音量条", () =>
         {
             // 「鼠标移到窗口右边显示音量条之后，再移出窗口，音量条不会自动隐藏」。
-            // 停在控件上算活动，所以空闲窗口对它不起作用——离开必须自己说出来，
-            // 而外壳过去是拿事件里的坐标判断的，从子元素上离开时那个坐标还在画面里。
+            // 停在控件上按位置留着，离开必须自己说出来 —— 而外壳过去是拿事件里的坐标判断的，
+            // 从子元素上离开时那个坐标还在画面里。
+            //
+            // **光标那一半 2026-09-29 已分家**：两条路都「手还搭在上面」（控件按位置留着），
+            // 可只有真压在音量条**本体**上时光标才留 —— 只落在右缘进入区的按新令照走。
             foreach (var (part, near, what) in new (ChromePart Part, double Near, string What)[]
             {
                 (ChromePart.Volume, 1d, "指针压在音量条上"),
@@ -3690,51 +3766,128 @@ internal static class PlaybackTests
                 chrome.Pointer(y: 500, height: 1000, part, near, now + 1100);
                 Assert.True(chrome.State.Rail, what);
 
-                // 光是等一会儿不行：停着的指针本身就是活动，这也正是它以前钉住不放的原因。
-                // 等到超过停留上限才轮到时间说话，见下一条用例。
-                var patience = now + 1100 + ChromeReveal.ParkedIdleMilliseconds - 1;
-                Assert.False(chrome.Tick(patience), $"{what}：手还搭在上面的时候不该收");
-                Assert.True(chrome.State.Rail, what);
+                // 光是等一会儿不行：指针停着本身就是它该在的理由（控件按位置留着），
+                // 所以「离开」得自己说出来，见下一句。量的是 State 那一格 —— 空闲钟走满那一下
+                // 光标会翻一格（带子里没人可瞄，09-29 的令），所以 Tick 的返回值本身不说明控件。
+                var patience = now + 1100 + (ChromeReveal.CursorIdleMilliseconds * 4);
+                chrome.Tick(patience);
+                Assert.True(chrome.State.Rail, $"{what}：手还搭在上面的时候不该收");
 
-                Assert.True(chrome.PointerLeft(patience + 100), what);
+                // 光标这一格按本体分家：压在音量条上留住，只在进入区里照走。
+                var onBody = ChromeReveal.HoldsCursor(part);
+                Assert.Equal(onBody, !chrome.CursorHidden,
+                    $"{what}：光标该为「压在本体上」留，进入区不该留");
+
+                // 移出窗口：控件当场收 —— 而 `PointerLeft` 报的是「这一拍有没有变化」，
+                // 所以先让光标各自走到该在的位置，别把它那一格混进这一问里。
+                var outAt = patience + 100;
+                if (!onBody) chrome.Tick(outAt);
+                Assert.True(chrome.PointerLeft(outAt), what);
                 Assert.False(chrome.State.Any, $"{what}：移出窗口就该收");
             }
         });
 
-        Test("播放器控件：指针停在控件上两秒后连鼠标一起收", () =>
+        Test("播放器控件：压在音量条或进度条上多久都不收鼠标", () =>
         {
-            // 「全屏时最下方的进度条不会自动隐藏，鼠标也不会自动隐藏」。停在控件上买到的是耐心而不是豁免：
-            // 窗口模式下外壳发现指针离开客户区会替它清掉停留位置，全屏时客户区就是整块屏幕，
-            // 没有地方可离开，于是这个闩以前永远打不开。
-            var chrome = Chrome(out var now);
+            // 用户令 2026-09-28：「当鼠标停留在音量条或进度条上时，不要自动隐藏鼠标指针」。
+            // 2026-09-29 收窄成「只有按钮上才不藏」之后，这一条仍然成立且更准：命中的是**本体**
+            // （ChromePart.Bar / ChromePart.Volume），光标那一格问的正是它（PointerHolds）。
+            //
+            // **这一条推翻的是 2026-09-15 那次报的毛病**（「全屏时最下方的进度条不会自动隐藏，鼠标也不会
+            // 自动隐藏」）：当时用「停靠只买耐心（2000ms）」修的，用户 2026-09-28 这条更晚的指令把它翻了过来 ——
+            // 指针压在两根条上停多久都留着，要收回来只有一条路：把指针挪回画面中间（或移出窗口）。
+            foreach (var (part, what) in new (ChromePart Part, string What)[]
+            {
+                (ChromePart.Bar, "压在进度条上"),
+                (ChromePart.Volume, "压在音量条上")
+            })
+            {
+                var chrome = Chrome(out var now);
 
-            // 点⛶进全屏之后就是这个状态：指针最后一次落在进度条上，之后一动不动。
-            chrome.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, now);
-            Assert.True(chrome.State.Bar);
+                // 指针在画面中间（那里的位置判据什么都不唤），只有命中/接近这两个理由成立。
+                chrome.Pointer(y: 500, height: 1000, part, railNear: part == ChromePart.Volume ? 1 : -1, now);
+                Assert.True(chrome.State.Any, what);
 
-            Assert.False(chrome.Tick(now + ChromeReveal.ParkedIdleMilliseconds - 1), "手在按钮上犹豫的时候不该抽走按钮");
-            Assert.True(chrome.State.Bar);
-            Assert.False(chrome.CursorHidden);
+                Assert.False(chrome.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 10)), what);
+                Assert.True(chrome.State.Any, $"{what}：停着不算「没人用」");
+                Assert.False(chrome.CursorHidden, $"{what}：光标不许走");
 
-            Assert.True(chrome.Tick(now + ChromeReveal.ParkedIdleMilliseconds));
-            Assert.Equal(new ChromeState(false, false, false), chrome.State, "没人在用了就该收");
-            Assert.True(chrome.CursorHidden, "鼠标跟着一起走——它们本来就是同一条规则");
+                // 挪回画面中间：位置说了算，控件当场收，光标走完自己那一秒。
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 11000);
+                Assert.False(chrome.State.Any, what);
+                Assert.False(chrome.CursorHidden, what);
 
-            // 一动就都回来，跟平时一样。
-            Assert.True(chrome.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, now + 5000));
-            Assert.True(chrome.State.Bar);
-            Assert.False(chrome.CursorHidden);
+                Assert.True(chrome.Tick(now + 11000 + ChromeReveal.CursorIdleMilliseconds), what);
+                Assert.True(chrome.CursorHidden, what);
+            }
         });
 
-        Test("播放器控件：停在右边缘进入区也有同一个上限", () =>
+        Test("播放器控件：只有压在控件本体上才不收鼠标，停在唤出带里照收", () =>
         {
+            // 用户令 2026-09-29：「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，
+            // 触发渐变的时候不隐藏控件，但是要隐藏鼠标。」
+            //
+            // 这一条把两半拆开量。从前光标那一格问的是「屏上有没有东西」（!State.Any），于是「指针停在
+            // 唤出带里、控件正淡入」这个位置也把光标留住了 —— 与「触发渐变时要隐藏鼠标」正相反。
+            // 现在光标只认 PointerHolds（PartAt 那四处命中）。
+            //
+            // 三个位置同一把尺：中间的死区、底部唤出带（控件亮着、但指针没碰到进度条）、底带上真压在
+            // 进度条上。第一与第二个位置光标都要走，第三个不走 —— 控件在哪儿都亮着，见每句的断言。
+            var dead = Chrome(out var now);
+            dead.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.False(dead.State.Any, "画面中间本来就什么都没有");
+            Assert.True(dead.Tick(now + ChromeReveal.CursorIdleMilliseconds + 1), "中间死区里一秒就该藏");
+            Assert.True(dead.CursorHidden, "死区：光标该走");
+
+            // 底部唤出带（y=990：离底 10px，进度条的唤出区里），但**没压在进度条本体上** —— 命中的是
+            // 位置，不是控件。控件因此留着（位置说了算），光标按新令照走。
+            var band = Chrome(out now);
+            band.Pointer(y: 990, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.True(band.State.Bar, "停在底部唤出带里，进度条要留着");
+            Assert.True(band.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "唤出带里：空闲钟走满要说出「光标变了」");
+            Assert.True(band.State.Bar, "唤出带里：控件不许被收走");
+            Assert.True(band.CursorHidden, "唤出带里：光标该走（这是本次令的正题）");
+
+            // 真压在进度条上：同一条钟，光标留住 —— 控件与光标都跟着指针。
+            var onBar = Chrome(out now);
+            onBar.Pointer(y: 990, height: 1000, ChromePart.Bar, railNear: -1, now);
+            Assert.True(onBar.State.Bar, "压在进度条上");
+            Assert.False(onBar.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "压在进度条上：空闲钟走满也不该改任何东西");
+            Assert.True(onBar.State.Bar, "压在进度条上：控件留着");
+            Assert.False(onBar.CursorHidden, "压在进度条上：光标不许走");
+
+            // 四条「本体」判据一次钉住：Bar / Title / Volume / Skip 都是「压在本体上」，None 不是。
+            foreach (var part in new[] { ChromePart.Bar, ChromePart.Title, ChromePart.Volume, ChromePart.Skip })
+                Assert.True(ChromeReveal.HoldsCursor(part), $"{part} 该算「压在控件本体上」");
+            Assert.False(ChromeReveal.HoldsCursor(ChromePart.None), "None 不许算「压在控件本体上」");
+        });
+
+        Test("播放器控件：停在右边缘进入区也不自动隐藏", () =>
+        {
+            // 与「指针停在唤出带里就不自动隐藏控件」同一条令：右缘那条进入带也算「渐变触发位置」——
+            // **控件**（音量条）留在屏上。光标那一半按 09-29 的令分家：进入区不是本体，光标照走。
             var chrome = Chrome(out var now);
             chrome.Tick(now + 1000);
 
             chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: 1, now + 1100);
             Assert.True(chrome.State.Rail);
 
-            Assert.True(chrome.Tick(now + 1100 + ChromeReveal.ParkedIdleMilliseconds), "指针撂在右边缘上不该把音量条钉死");
+            Assert.True(chrome.Tick(now + 1100 + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "指针还撂在右边缘进入区里，音量条就不该收（只有光标那一格变）");
+            Assert.True(chrome.State.Rail);
+            Assert.True(chrome.CursorHidden, "进入区还是带子，光标照走");
+
+            // 真压在音量条本体上：光标才留住。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.Volume, railNear: 1, now + 6000);
+            Assert.False(chrome.Tick(now + 6000 + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "压在音量条上：空闲钟走满也不许收");
+            Assert.True(chrome.State.Rail);
+            Assert.False(chrome.CursorHidden, "压在音量条上：光标不许走");
+
+            // 走出进入区（proximity 归零）：音量条当场收。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 12000);
             Assert.False(chrome.State.Any);
         });
 
@@ -3759,9 +3912,60 @@ internal static class PlaybackTests
                 $"尺寸线比音量条自己（约 428 高）没高出多少：{ChromeReveal.RailMinPictureHeight}");
         });
 
-        // 需求 10：「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」。
-        // 尺寸和淡入淡出是页面的事（XAML 里的尺寸、OpacityTransition，由自检去量），
-        // 「越接近越明显」是这里的算术：两个方向各占一半，横着看进右边缘多深，竖着看离画面正中多近。
+        // 左上角那三块玻璃的浓度跟着指针高度走（用户令 2026-09-27 傍晚第三批「加深左上角亚克力背景的颜色，
+        // 鼠标位置越靠上亚克力背景的颜色越深」；第四批又补了「颜色深度在鼠标移动到剧名下方那条线之前一点
+        // 的时候达到最大」）。这里钉的是那条曲线 —— 它必须与标题条那条唤出带**同一条边**：玻璃最深的时候
+        // 条子一定在屏上，否则会出现一块最深、又浮在没有条子的画面上的底。颜色的那一半（这个 0..1 换成哪个
+        // alpha 字节）在 PlayerPaletteTests 里，「满深线量在哪」归自检 ProbeClearance。
+        Test("播放器控件：指针越靠顶边，左上角玻璃的深度越大", () =>
+        {
+            // 精确到浮点尾数的那种比法在这条线上不成立（0.06 / 0.12 是二进制除不尽的），所以逐档给容差。
+            static void Near(double want, double got) =>
+                Assert.True(Math.Abs(got - want) < 1e-9, $"期望 {want}，实际 {got}");
+
+            var band = ChromeReveal.EdgeBandFraction;
+
+            // 满深线摆在带子正中（页面把它量在哪儿是它自己的事，这一条只管曲线本身）。
+            var full = band / 2;
+
+            Near(1, ChromeReveal.TopGlassDepth(0, full));
+            Near(1, ChromeReveal.TopGlassDepth(full, full));
+            Near(0.5, ChromeReveal.TopGlassDepth((full + band) / 2, full));
+            Near(0, ChromeReveal.TopGlassDepth(band, full));
+
+            // 带子外面一律 0：不在带子里就谈不上「更靠上」，而条子这时也不在屏上。
+            Near(0, ChromeReveal.TopGlassDepth(band + 0.01, full));
+            Near(0, ChromeReveal.TopGlassDepth(0.5, full));
+            Near(0, ChromeReveal.TopGlassDepth(-1, full));
+
+            // 满深线压在顶边（0）上就退成上一版那条曲线：贴到顶才满。
+            Near(1, ChromeReveal.TopGlassDepth(0, 0));
+            Near(0.5, ChromeReveal.TopGlassDepth(band / 2, 0));
+            Near(0, ChromeReveal.TopGlassDepth(band, 0));
+
+            // 越界的满深线夹回带子里。跑出去（负数、或大过带子）会让整条带子一律最深 —— 那正是
+            // 「越靠上越深」这句话没有了，而屏上看着只是「这块底好像一直很深」，没人报得出来。
+            Near(1, ChromeReveal.TopGlassDepth(0, -1));
+            Near(1, ChromeReveal.TopGlassDepth(band / 2, band + 1));
+
+            // 一路往上只会更深，不许回头。
+            for (var y = band - 0.01; y > full; y -= 0.01)
+                Assert.True(ChromeReveal.TopGlassDepth(y, full) > ChromeReveal.TopGlassDepth(y + 0.01, full),
+                    $"y={y:0.00} 这一档没有比下面那一档深");
+
+            // 「之前一点」里的那一点：0 的话鼠标擦着那条线往下走玻璃就开始变淡。
+            Assert.True(ChromeReveal.TopGlassFullInset > 0, "「那条线之前一点」没有了：满深线正好压在下沿上");
+
+            // 亚克力这条曲线用的还是 EdgeBandFraction（比例），而标题条的唤出 2026-09-27 晚改成了按像素
+            // 的 uosc proximity（TopReachPixels）——两者不再是同一条线。这没关系：那几块玻璃是 TitleStrip
+            // 的孩子，条子收了就不画，而条子露不露由像素唤出说了算，所以亚克力永远越不出标题条的范围
+            // （见 EdgeBandFraction 注释）。标题条自己的唤出在「标题条越往上越明显」那条里钉。
+        });
+
+        // 需求 10 与 2026-09-28「参考独占模式修复」：音量条淡入的强度随指针靠近而升。「靠近多少」由页面量出
+        // 指针到音量条矩形的 uosc 欧氏距离 proximity（横竖两轴一次算完，见 RailProximity / ProbeRailFade），
+        // 传进来就是这里的 railNear；Core 只保证「proximity 越大越亮、贴着满、下限兜底」。旧的「两个方向各占
+        // 一半、竖向中心偏置 Centred」那套已退役，竖向衰减改由页面真几何承担。
         Test("播放器控件：音量条越往右越明显", () =>
         {
             var chrome = Chrome(out var now);
@@ -3789,28 +3993,100 @@ internal static class PlaybackTests
             Assert.Equal(1d, edge, "贴着右边缘就是满的");
         });
 
-        Test("播放器控件：音量条越靠画面中心越明显", () =>
+        // 音量条那条唤出曲线本身照独占 uosc（proximity：离控件矩形近于 proximity_in 满显、远过 proximity_out
+        // 全隐、中间线性）。几何——指针到音量条矩形的欧氏距离——在页面量、由自检 ProbeRailFade 钉（它手上有排过
+        // 版的音量条元素，能量出「越偏离中心越淡」这项四角变暗）；这里钉纯曲线，接替退役的竖向中心偏置 Centred。
+        Test("播放器控件：音量条 proximity 曲线照独占", () =>
+        {
+            Assert.Equal(1d, ChromeReveal.RailProximity(0), "贴着矩形就是满");
+            Assert.Equal(1d, ChromeReveal.RailProximity(ChromeReveal.ProximityInPixels), "到 proximity_in 仍满");
+            Assert.Equal(0d, ChromeReveal.RailProximity(ChromeReveal.ProximityOutPixels), "到 proximity_out 归零");
+            Assert.Equal(0d, ChromeReveal.RailProximity(ChromeReveal.ProximityOutPixels + 40), "更远还是零");
+
+            // proximity_in 与 proximity_out 的正中（80px）正好一半——线性。
+            var mid = (ChromeReveal.ProximityInPixels + ChromeReveal.ProximityOutPixels) / 2;
+            Assert.Equal(0.5d, ChromeReveal.RailProximity(mid), "正中该是一半");
+
+            // 单调不增：离矩形越远越淡。
+            var previous = 2d;
+            for (double d = 0; d <= 160; d += 10)
+            {
+                var p = ChromeReveal.RailProximity(d);
+                Assert.True(p <= previous + 1e-9, $"距离 {d} 反而更亮：{p} > {previous}");
+                previous = p;
+            }
+        });
+
+        // 用户令 2026-09-27 四条「参独占模式……」：标题条、控制条也照音量条改成随指针靠近边缘分级淡入。
+        // 「越明显」是这里的算术（强度 0..1），页面把它写成 Opacity / 高度（由自检去量）。
+        Test("播放器控件：标题条越往上越明显（参独占淡入）", () =>
         {
             var chrome = Chrome(out var now);
             chrome.Tick(now + 1000);
 
             double At(double y)
             {
-                chrome.Pointer(y, height: 1000, ChromePart.None, railNear: 1, now + 1100);
-                return chrome.RailStrength;
+                chrome.Pointer(y, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+                Assert.True(chrome.State.Title, $"y={y} 时标题条本来就该在");
+                return chrome.TitleStrength;
             }
 
-            var centre = At(500);
-            var quarter = At(250);
-            var top = At(10);
+            // 满显区：离顶 ≤ TopBarPixels+ProximityInPixels（80px，照独占）都是满的。
+            Assert.Equal(1d, At(0), "贴着顶边满");
+            Assert.Equal(1d, At(70), "满显区内还是满");
+            // 渐弱区：80→160px 之间线性淡出，越靠上越明显。
+            var far = At(150);
+            var mid = At(120);
+            var close = At(90);
+            Assert.True(far > 0 && close > mid && mid > far, $"越靠上越明显：{close} > {mid} > {far} > 0");
+            // 离顶到 TopReachPixels（160px）以外就出了唤出范围，标题条不再在（+5 避开边界上的浮点尾数）。
+            chrome.Pointer(ChromeReveal.TopReachPixels + 5, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.False(chrome.State.Title, "离顶过了 TopReachPixels 就出了唤出范围");
+        });
 
-            Assert.Equal(1d, centre, "右边缘的正中最明显");
-            Assert.True(quarter < centre, $"离中心远一点就该淡一点：{quarter}");
-            Assert.True(top < quarter, $"{top} 应当淡过 {quarter}");
+        Test("播放器控件：控制条越往下越明显（进度条同一条强度）", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
 
-            // 右边缘的上下两角是去顶部按钮、去进度条的路，路过不算在要音量条。
-            Assert.True(top <= ChromeReveal.RailFloor + 0.02, $"贴着角落只给下限左右：{top}");
-            Assert.True(top >= ChromeReveal.RailFloor, $"再淡也不低于下限：{top}");
+            double At(double y)
+            {
+                chrome.Pointer(y, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+                Assert.True(chrome.State.Bar, $"y={y} 时控制条本来就该在");
+                return chrome.BarStrength;
+            }
+
+            // 满显区：离底 ≤ BottomBarPixels+ProximityInPixels（128px）都是满的。
+            Assert.Equal(1d, At(1000), "贴着底边满");
+            Assert.Equal(1d, At(900), "满显区内还是满");
+            // 渐弱区：128→208px 之间线性淡出，越靠下越明显。
+            var far = At(800);
+            var mid = At(820);
+            var close = At(850);
+            Assert.True(far > 0 && close > mid && mid > far, $"越靠下越明显：{close} > {mid} > {far} > 0");
+            chrome.Pointer(1000 - ChromeReveal.BottomReachPixels - 5, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.False(chrome.State.Bar, "离底过了 BottomReachPixels 就出了唤出范围");
+        });
+
+        Test("播放器控件：手压在标题/控制条上、或键盘唤出，强度一律给足", () =>
+        {
+            // 与音量条同理：手已经搭在条上、键盘命令，都是明摆着要看的，分级只给「走近」打分。
+            var onTitle = Chrome(out var now);
+            onTitle.Tick(now + 1000);
+            onTitle.Pointer(y: 10, height: 1000, ChromePart.Title, railNear: -1, now + 1100);
+            Assert.Equal(1d, onTitle.TitleStrength, "手压在标题条上给满");
+
+            var onBar = Chrome(out now);
+            onBar.Tick(now + 1000);
+            onBar.Pointer(y: 990, height: 1000, ChromePart.Bar, railNear: -1, now + 1100);
+            Assert.Equal(1d, onBar.BarStrength, "手压在控制条上给满");
+
+            // 键盘宽限：指针在正中，靠位置算强度会是 0，可键盘命令要三样全显。
+            var keys = Chrome(out now);
+            keys.Tick(now + 1000);
+            keys.WakeFully(now + 1100);
+            Assert.Equal(1d, keys.TitleStrength, "键盘唤出时标题满");
+            Assert.Equal(1d, keys.BarStrength, "键盘唤出时控制条满");
         });
 
         Test("播放器控件：不是靠近换来的音量条一律给足", () =>
@@ -3870,11 +4146,11 @@ internal static class PlaybackTests
             chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
             Assert.False(chrome.CursorHidden, "刚动过就藏，等于在移动中间把指针弄丢");
 
-            // 控件和鼠标等的不是同一个静止：死区本来就什么都不显示，控件 650 毫秒就收，
-            // 这时候把指针也弄丢，人就在一次移动的中途失去了准头。
-            chrome.Tick(now + ChromeReveal.IdleMilliseconds);
+            // 死区里控件本来就不显示（2026-09-28 起按位置算），而光标还要自己那一秒才走 ——
+            // 还差一毫秒就把它弄丢，人就在一次移动的中途失去了准头。
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds - 1);
             Assert.False(chrome.State.Any);
-            Assert.False(chrome.CursorHidden, "控件收了鼠标还得在");
+            Assert.False(chrome.CursorHidden, "控件不在屏上的时候光标还得在，它等的是自己那一秒");
 
             Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds), "「静止一秒就藏（mpv.net 的 cursor-autohide）」");
             Assert.True(chrome.CursorHidden);
@@ -3908,7 +4184,7 @@ internal static class PlaybackTests
             Assert.False(chrome.PointerGone, "回窗之后离窗的记录必须收走，不然藏匿永远等不到指针回家");
             Assert.False(chrome.CursorHidden, "刚回来就藏，等于在手的必经之路上把指针弄丢");
 
-            Assert.True(chrome.Tick(now + 200 + ChromeReveal.CursorIdleMilliseconds), "回来停住之后，两秒照旧要藏");
+            Assert.True(chrome.Tick(now + 200 + ChromeReveal.CursorIdleMilliseconds), "回来停住之后，一秒照旧要藏");
             Assert.True(chrome.CursorHidden);
         });
 
@@ -3950,22 +4226,24 @@ internal static class PlaybackTests
             // 「鼠标指针还是不会自动隐藏」的真正原因，也是「别什么进度条标题音量条都持久显示在画面上」的：
             // mpv 每秒推四份以上的状态快照，页面每一份都会拿去问一次加载闩，而那个闩把「没在加载」
             // 当成一次活动——空闲时钟一秒被重置四回，谁都熬不到期。
+            //
+            // 2026-09-28 起这条钟只量光标（控件按位置显隐），所以这一段把指针摆在画面中间量它：
+            // 死区本来就没有控件可显示，剩下要证的正是那口钟没被推密掉。
             var chrome = Chrome(out var now);
 
-            // 指针最后落在底部边缘带（12%），之后一动不动：这就是看片时把手放下的样子。
-            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now);
-            Assert.True(chrome.State.Bar);
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.False(chrome.State.Any);
 
             // 四赫兹，整整四秒，每一份都说「已经出画面了」。
             for (var t = now; t <= now + 4000; t += 250) chrome.SetKeep(false, t);
 
-            Assert.False(chrome.State.Any, "推得再密也不是指针动了，控件该在 650 毫秒就收");
+            Assert.False(chrome.State.Any, "画面中间本来就没有控件");
             Assert.True(chrome.CursorHidden, "「静止一秒就藏（mpv.net 的 cursor-autohide）」");
 
             // 真从「加载中」翻过来的那一下仍然要重新起算：那一秒里控件是唯一的出路，刚交回来就收
-            // 等于把出路从手底下抽走。
+            // 等于把出路从手底下抽走（指针在死区时控件不再出现 —— 位置说了算；要紧的是光标那一秒）。
             var load = Chrome(out var start);
-            load.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, start);
+            load.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start);
 
             load.SetKeep(true, start + 100);
             Assert.Equal(new ChromeState(true, true, true), load.State, "还没出画面的时候控件是唯一的出路");
@@ -3974,11 +4252,10 @@ internal static class PlaybackTests
             for (var t = start + 100; t <= start + 3000; t += 250) load.SetKeep(true, t);
 
             load.SetKeep(false, start + 3100);
-            Assert.True(load.State.Bar, "刚交回给指针的这一下不算「早就静止了」");
-            Assert.False(load.CursorHidden);
+            Assert.False(load.CursorHidden, "刚交回给指针的这一下不算「早就静止了」");
 
-            Assert.True(load.Tick(start + 3100 + ChromeReveal.IdleMilliseconds), "从交回来的那一刻起算");
-            Assert.False(load.State.Any);
+            Assert.True(load.Tick(start + 3100 + ChromeReveal.CursorIdleMilliseconds), "从交回来的那一刻起算");
+            Assert.True(load.CursorHidden);
         });
 
         Test("播放器控件：换片重新全显示", () =>
@@ -4005,13 +4282,13 @@ internal static class PlaybackTests
             chrome.FlashRail(now + 1100);
             Assert.True(chrome.Pending(now + 1100));
 
-            // 控件都收了、鼠标还在，也算有待办：藏鼠标等的是它自己那两秒，而定时器要是这时候停了，
+            // 控件都收了、鼠标还在，也算有待办：藏鼠标等的是它自己那一秒，而定时器要是这时候停了，
             // 就再没有人来问「该藏了吗」。
             var idle = Chrome(out var start);
             idle.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start);
-            idle.Tick(start + ChromeReveal.IdleMilliseconds);
+            idle.Tick(start + ChromeReveal.CursorIdleMilliseconds - 1);
             Assert.False(idle.State.Any);
-            Assert.True(idle.Pending(start + ChromeReveal.IdleMilliseconds), "还差一次藏鼠标");
+            Assert.True(idle.Pending(start + ChromeReveal.CursorIdleMilliseconds - 1), "还差一次藏鼠标");
 
             idle.Tick(start + ChromeReveal.CursorIdleMilliseconds);
             Assert.True(idle.CursorHidden);
@@ -4098,9 +4375,9 @@ internal static class PlaybackTests
             // 光标露着的时候两者没有分别：一个静止的指针本来就不产生事件，所以那一半不需要这个区分。
             var shown = Chrome(out var start);
             shown.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start, moved: false);
-            shown.Tick(start + ChromeReveal.IdleMilliseconds);
+            shown.Tick(start + ChromeReveal.CursorIdleMilliseconds - 1);
             Assert.False(shown.State.Any);
-            Assert.False(shown.CursorHidden, "控件收了鼠标还得在");
+            Assert.False(shown.CursorHidden, "还差一毫秒，光标还得在");
             shown.Tick(start + ChromeReveal.CursorIdleMilliseconds);
             Assert.True(shown.CursorHidden, "露着的时候照样按空闲钟走");
         });
@@ -4208,34 +4485,33 @@ internal static class PlaybackTests
             Assert.False(chrome.CursorHidden, "一声没来由的「动了」就足以结束藏匿");
         });
 
-        Test("播放器控件：静止一秒就藏——mpv.net 的 cursor-autohide，停靠的指针仍买两秒", () =>
+        Test("播放器控件：静止一秒就藏——mpv.net 的 cursor-autohide", () =>
         {
             // 2026-09-16 照搬 mpv.net：CursorIdle 2000 → 1000（mpv 的 cursor-autohide 默认值）。
-            // 死区里 chrome 650ms 先收，光标等到 1000ms；停靠在控件上的指针等的是 chrome 的停靠
-            // 耐心（ParkedIdle 2000 没动），光标随 chrome 在两秒那拍一起走 —— 「停在哪都两秒」
-            // 的旧约在停靠这一侧原样保留。
+            // 2026-09-28 起控件那三样按位置显隐（用户令），这条钟只剩一个客户——鼠标指针；
+            // 于是「静止一秒就藏」只在画面中间（屏上什么都没有）成立，停在控件/唤出带里时不适用
+            // （见「压在音量条或进度条上多久都不收鼠标」与「指针停在唤出带里就不自动隐藏控件」两条）。
             Assert.Equal(1000L, ChromeReveal.CursorIdleMilliseconds, "mpv.net 的默认就是 1000");
 
             var chrome = Chrome(out var now);
 
-            // 死区：chrome 650ms 收，光标 1000ms 藏。
+            // 死区：屏上什么都没有，光标走完自己那一秒。
             chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
-            chrome.Tick(now + ChromeReveal.IdleMilliseconds);
-            Assert.False(chrome.State.Any, "死区里控件 650 毫秒就收");
-            Assert.False(chrome.CursorHidden, "控件收了鼠标还得在");
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds - 1);
+            Assert.False(chrome.State.Any, "画面中间本来就没有控件");
+            Assert.False(chrome.CursorHidden, "还差一毫秒，别在移动的中途把指针弄丢");
             chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
             Assert.True(chrome.CursorHidden, "静止一秒，光标该藏了");
 
-            // 停靠：指针压在进度条上，1000ms 时控件还在（停靠耐心 2000），光标不许先走；
-            // 2000ms 控件收，光标跟它一起走。
+            // 停靠：指针压在进度条上，控件与光标一起留下 —— 位置说了算，多久都不收。
             var parked = Chrome(out var start);
             parked.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, start);
             parked.Tick(start + ChromeReveal.CursorIdleMilliseconds);
-            Assert.True(parked.State.Bar, "停靠耐心还没走完，控件必须在");
+            Assert.True(parked.State.Bar, "指针还在进度条上，控件必须在");
             Assert.False(parked.CursorHidden, "控件在屏上，光标没有要保住的东西可藏");
-            parked.Tick(start + ChromeReveal.ParkedIdleMilliseconds);
-            Assert.False(parked.State.Bar, "停靠耐心走完，控件收");
-            Assert.True(parked.CursorHidden, "光标随控件一起藏");
+            parked.Tick(start + (ChromeReveal.CursorIdleMilliseconds * 10));
+            Assert.True(parked.State.Bar, "停多久都在（用户令 2026-09-28：不要自动隐藏这些控件）");
+            Assert.False(parked.CursorHidden);
         });
 
         Test("播放器控件：窗口不在前台就不藏，失焦把藏着的光标掀开", () =>

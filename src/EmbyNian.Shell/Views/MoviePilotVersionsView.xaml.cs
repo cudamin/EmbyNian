@@ -1,5 +1,6 @@
 using EmbyNian.MoviePilot;
 using EmbyNian.Shell.ViewModels;
+using EmbyNian.Shell.Platform;
 using Microsoft.UI.Xaml.Controls;
 
 namespace EmbyNian.Shell.Views;
@@ -26,9 +27,10 @@ public sealed partial class MoviePilotVersionsView : UserControl
     /// 由 <see cref="MoviePilotWindow"/> 每次弹出前调一次：接上连接服务与确认对话框，把算好的关键字填进搜索框
     /// 并立刻搜。填进框里而不是只搜一次，是为了让用户看得见发的是什么词、也好在原地改词放宽范围。
     /// </summary>
-    internal void Search(MoviePilotService service, string keyword)
+    internal void Search(MoviePilotService service, string keyword, ISystemLauncher launcher)
     {
-        ViewModel.Attach(service);
+        ViewModel.Attach(service, launcher);
+        Browser.Attach(ViewModel.Browser);
         ViewModel.UseConfirm(ConfirmDialog.For(this));
         SearchInput.Text = keyword;
         _ = ViewModel.SearchAsync(keyword);

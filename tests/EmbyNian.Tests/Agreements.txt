@@ -287,22 +287,19 @@ handle  Views/PlayerPage.xaml  DurationText
 handle  Views/PlayerPage.xaml  EpisodeButton
 handle  Views/PlayerPage.xaml  EpisodeMenu
 handle  Views/PlayerPage.xaml  ExitBackdrop
-handle  Views/PlayerPage.xaml  FontBox
 handle  Views/PlayerPage.xaml  FullscreenButton
 handle  Views/PlayerPage.xaml  FullscreenGlyph
 handle  Views/PlayerPage.xaml  MaximizeButton
 handle  Views/PlayerPage.xaml  MaximizeGlyph
 handle  Views/PlayerPage.xaml  MinimizeButton
-handle  Views/PlayerPage.xaml  MoreButton
-handle  Views/PlayerPage.xaml  MoreMenu
+handle  Views/PlayerPage.xaml  MinimizeGlyph
 handle  Views/PlayerPage.xaml  MuteButton
 handle  Views/PlayerPage.xaml  MuteGlyph
 handle  Views/PlayerPage.xaml  NextButton
 handle  Views/PlayerPage.xaml  PageTransform
 handle  Views/PlayerPage.xaml  PictureMenu
 handle  Views/PlayerPage.xaml  PinButton
-handle  Views/PlayerPage.xaml  PinOffIcon
-handle  Views/PlayerPage.xaml  PinOnIcon
+handle  Views/PlayerPage.xaml  PinGlyph
 handle  Views/PlayerPage.xaml  PlayButton
 handle  Views/PlayerPage.xaml  PlayGlyph
 handle  Views/PlayerPage.xaml  PositionText
@@ -320,18 +317,18 @@ handle  Views/PlayerPage.xaml  SkipButton
 handle  Views/PlayerPage.xaml  SkipCountdown
 handle  Views/PlayerPage.xaml  SkipText
 handle  Views/PlayerPage.xaml  SkipTip
-handle  Views/PlayerPage.xaml  SourceText
 handle  Views/PlayerPage.xaml  SpeedButton
 handle  Views/PlayerPage.xaml  SpeedWheelFlyout
 handle  Views/PlayerPage.xaml  SpeedWheelPanel
 handle  Views/PlayerPage.xaml  SpeedWheelTrack
 handle  Views/PlayerPage.xaml  Stage
 handle  Views/PlayerPage.xaml  StandaloneHint
-handle  Views/PlayerPage.xaml  StatsButton
+handle  Views/PlayerPage.xaml  SubtitleBox
 handle  Views/PlayerPage.xaml  SubtitleButton
 handle  Views/PlayerPage.xaml  SubtitleMenu
 handle  Views/PlayerPage.xaml  SubtitleText
 handle  Views/PlayerPage.xaml  ThinLine
+handle  Views/PlayerPage.xaml  TitleBox
 handle  Views/PlayerPage.xaml  TitleStrip
 handle  Views/PlayerPage.xaml  TitleText
 handle  Views/PlayerPage.xaml  VersionButton
@@ -471,5 +468,6 @@ switch  --show-episode
 switch  --show-library
 switch  --show-menu
 switch  --show-osd
+switch  --show-picker
 switch  --show-settings
 switch  --theme

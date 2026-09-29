@@ -130,6 +130,7 @@ public sealed partial class PlayerViewModel
     /// <summary>停止播放. Asks mpv to quit rather than cancelling, so the final position is still reported.</summary>
     internal Task StopAsync()
     {
+        ResetTimelineDrag();
         if (!_stopTask.IsCompleted) return _stopTask;
         return _stopTask = StopPlaybackAsync();
     }
@@ -184,16 +185,11 @@ public sealed partial class PlayerViewModel
         var intent = _startIntent.Begin();
 
         // 这一场播放的号（见 _playbackAttempt）：比停掉旧那一刀更早，所以旧一场收尾时判得出「已经有新的一场了」。
+        ResetTimelineDrag();
         var attempt = ++_playbackAttempt;
 
         try
         {
-            // 需求 7's box, made useful before the strip it sits in can be revealed: the scan is a few
-            // hundred file opens on a cold cache, and the settings window may have changed the family
-            // since this row was built.
-            PrepareFonts();
-            SubtitleFont.Reseed(Settings.Playback.SubtitleFontFamily);
-
             // The player takes over the window immediately rather than after the metadata round trip.
             // There is nothing to look at on the page behind it — the user has already committed — and
             // the cover is a better place to say what is being waited for than a toast over a grid.
@@ -741,9 +737,7 @@ public sealed partial class PlayerViewModel
         PlayingItemId = "";
         _episodeLookupBusy = false;
         _episodeSwitchTargetId = null;
-        _seekPending = null;
-        _seekSent = null;
-        _seekTouched = 0;
+        ResetTimelineDrag();
         _skips.Begin([], 0);
 
         // Everything the bar drew about this particular file. The stills especially: they are keyed by

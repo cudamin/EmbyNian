@@ -300,6 +300,10 @@ public sealed partial class SettingsPage : Page, IShellContent
                 // 这一页要的是「重发一遍字幕外观」这一件事，不是播放器。同 ShellServices 里把后端工厂当方法组
                 // 递出去的写法。
                 request.Services.GetRequiredService<PlaybackService>().ApplySubtitleStyleAsync,
+
+                // 截图保存目录同理：改一行就写进正播那部的 screenshot-directory 属性，交方法不交服务。
+                request.Services.GetRequiredService<PlaybackService>().ApplyScreenshotDirectoryAsync,
+
                 request.Services.GetRequiredService<MoviePilotProbe>(),
                 request.Services.GetRequiredService<MoviePilotCredentials>());
             _ = ViewModel.ReloadAsync();

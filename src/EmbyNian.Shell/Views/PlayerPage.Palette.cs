@@ -1,4 +1,5 @@
 using EmbyNian.Playback;
+using EmbyNian.Theming;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -9,8 +10,8 @@ namespace EmbyNian.Shell.Views;
 /// Where the overlay's colours actually get onto the screen: <see cref="PlayerPalette"/>'s table, copied
 /// into the empty brushes <c>PlayerPage.xaml</c> declares.
 /// <para>
-/// The XAML holds shells rather than values — eighteen <c>SolidColorBrush</c>es with no <c>Color</c> and
-/// two <c>LinearGradientBrush</c>es with no stops — and this fills them in from the constructor. That
+/// The XAML holds shells rather than values — twenty-six <c>SolidColorBrush</c>es with no <c>Color</c> — and
+/// this fills them in from the constructor. That
 /// works because <c>SolidColorBrush.Color</c> is a dependency property and a brush is a shared object:
 /// every <c>StaticResource</c> in the file already points at these instances, so painting one here paints
 /// everything drawn with it. Same mechanism as <c>DetailPage.PaintScrim</c>, which was the precedent for
@@ -41,31 +42,47 @@ public sealed partial class PlayerPage
         foreach (var (key, colour) in PlayerPalette.Brushes)
             ((SolidColorBrush)Resources[key]).Color = ThemeHost.ToColor(colour);
 
-        Wash("PlayerBottomScrim", PlayerPalette.BottomScrimStops);
+        // 两条浮层底（标题条、控制条）都是表里那一支普通的半透明纯色，上面这一句就把它们填了。2026-09-27
+        // 试过亚克力，压在视频上什么也采不到、屏上是一块不透的黑；同一天控制条背后那道「上沿全透明、
+        // 往下渐深」的罩子也随用户令退役 —— 整笔账见 PlayerPalette.GlassAlpha 的注释。
+        //
+        // 左上角那三块（返回键、标题、剧名）的那一支**值不是常数**：表里给的是最浅那一档，到底多深由指针
+        // 说了算。这里先把基准档立住 —— 页面构造完到第一记指针读数之间、以及自检读它的时候，屏上都是这一档。
+        ApplyTopGlass(0);
+
         PaintExit();
     }
 
     /// <summary>
-    /// Fills one of the two scrims. Only the alpha varies along either of them, so the stops carry a byte
-    /// and the RGB is <see cref="PlayerPalette.Film"/> throughout — a scrim whose hue drifted as it
-    /// deepened would tint the picture rather than dim it.
+    /// 本页此刻给左上角那三块玻璃定的浓度，0 ＝ 与上下两条浮层同一档，1 ＝ 指针贴着画面顶边。
     /// <para>
-    /// Cleared first: <see cref="PaintPalette"/> runs once per page today, and a second call that appended
-    /// would leave a gradient with two sets of stops fighting over the same offsets.
+    /// 记下来只为一件事：<see cref="ProbePalette"/> 要拿它算出「这一刻该是什么值」——
+    /// 那一支画刷是全表唯一一支拿不到常数的（见 <see cref="PlayerPalette.TopGlassKey"/>）。
     /// </para>
     /// </summary>
-    private void Wash(string key, IReadOnlyList<(double Along, byte Alpha)> stops)
-    {
-        var brush = (LinearGradientBrush)Resources[key];
-        var film = PlayerPalette.Film;
+    private double _topGlassDepth;
 
-        brush.GradientStops.Clear();
-        foreach (var (along, alpha) in stops)
-            brush.GradientStops.Add(new GradientStop
-            {
-                Offset = along,
-                Color = ThemeHost.ToColor(film.WithAlpha(alpha))
-            });
+    /// <summary>
+    /// 把左上角那三块（返回键、标题、剧名）共用的玻璃写到 <paramref name="depth"/> 这一档。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚「加深左上角亚克力背景的颜色，鼠标位置越靠上亚克力背景的颜色越深」。
+    /// 曲线是 Core 的 <see cref="PlayerPalette.TopGlassAlphaAt"/>；指针位置换算成 depth 那一半是
+    /// <see cref="ChromeReveal.TopGlassDepth"/> 的事（带子与标题条的唤出带是同一条，满深线由页面按左簇
+    /// 最下面那块玻璃的下沿量出来 —— 见 <c>TopGlassFullAt</c>）。这一层只做一件事：
+    /// 把那一个字节写到画刷上。画刷是共享对象，所以写完这一处，返回键那块、标题那块、剧名那块同时变。
+    /// </para>
+    /// <para>
+    /// 它的主调用点是 <c>NotePointer</c>（每记下一次指针位置就推一档），不是 <c>Render</c>：指针在顶部带里
+    /// 上下走的时候显隐规则常常什么都不改，Render 根本不会跑，而玻璃该跟着深。<c>Render</c> 里另外那一处
+    /// 管的是另一种变化 —— 窗口换了尺寸，同一个 Y 换算出来的 depth 就变了。
+    /// </para>
+    /// </summary>
+    private void ApplyTopGlass(double depth)
+    {
+        _topGlassDepth = depth;
+
+        if (Resources[PlayerPalette.TopGlassKey] is SolidColorBrush brush)
+            brush.Color = ThemeHost.ToColor(PlayerPalette.Film.WithAlpha(PlayerPalette.TopGlassAlphaAt(depth)));
     }
 
     /// <summary>
@@ -98,55 +115,26 @@ public sealed partial class PlayerPage
                 continue;
             }
 
-            var want = ThemeHost.ToColor(colour);
+            // 左上角那三块那一支是全表**唯一一支值不是常数**的画刷（跟着指针高度走，用户令 2026-09-27 傍晚
+            // 「鼠标位置越靠上亚克力背景的颜色越深」）：拿表里那个数去比它必红，比的是「它画上了、而且画的
+            // 正是本页此刻这一档」。那条曲线本身在 ProbeClearance 里逐档钉住 —— 两支合起来才是这件事的全貌。
+            var want = key == PlayerPalette.TopGlassKey
+                ? ThemeHost.ToColor(colour.WithAlpha(PlayerPalette.TopGlassAlphaAt(_topGlassDepth)))
+                : ThemeHost.ToColor(colour);
+
             if (brush.Color != want)
             {
                 // The hex both ways round, because 「不一致」 on its own does not say whether the brush was
                 // never painted or painted from somewhere else — and 00000000 is exactly the first case.
-                wrong.Add($"{key} 是 {Hex(brush.Color)}，表上是 {colour.ToHex()}");
+                wrong.Add($"{key} 是 {Hex(brush.Color)}，该是 {Hex(want)}");
                 continue;
             }
 
             painted++;
         }
 
-        var stops = new List<string>();
-
-        foreach (var (key, table) in new (string Key, IReadOnlyList<(double Along, byte Alpha)> Table)[]
-                 {
-                     ("PlayerBottomScrim", PlayerPalette.BottomScrimStops)
-                 })
-        {
-            if (!Resources.TryGetValue(key, out var found) || found is not LinearGradientBrush brush)
-            {
-                wrong.Add($"{key} 不在本页字典里");
-                continue;
-            }
-
-            if (brush.GradientStops.Count != table.Count)
-            {
-                wrong.Add($"{key} 有 {brush.GradientStops.Count} 个停点，表上是 {table.Count} 个");
-                continue;
-            }
-
-            for (var index = 0; index < table.Count; index++)
-            {
-                var (along, alpha) = table[index];
-                var stop = brush.GradientStops[index];
-                var want = ThemeHost.ToColor(PlayerPalette.Film.WithAlpha(alpha));
-
-                // A twentieth of a pixel's worth of offset, same slack the geometry probes use: the table
-                // holds doubles and so does GradientStop, so anything but exact equality is a real edit.
-                if (Math.Abs(stop.Offset - along) > 0.001 || stop.Color != want)
-                    wrong.Add($"{key} 第 {index + 1} 个停点是 {stop.Offset:0.##}/{Hex(stop.Color)}"
-                              + $"，表上是 {along:0.##}/{want.A:X2}");
-            }
-
-            stops.Add($"{key} {brush.GradientStops.Count} 个停点");
-        }
-
         return (wrong.Count == 0,
-            $"{painted}/{PlayerPalette.Brushes.Count} 支画刷与 Core 那张表一致；{string.Join('、', stops)}"
+            $"{painted}/{PlayerPalette.Brushes.Count} 支画刷与 Core 那张表一致"
             + (wrong.Count == 0 ? string.Empty : $"；不符：{string.Join('、', wrong)}"));
     }
 
@@ -174,7 +162,9 @@ public sealed partial class PlayerPage
         if (!Attached) return (false, "播放层未接线");
 
         var was = Visibility;
+        var oldSeekEnabled = SeekSlider.IsEnabled;
         Visibility = Visibility.Visible;
+        SeekSlider.IsEnabled = true;
         UpdateLayout();
 
         // The bar is collapsed whenever the pointer has been still, and a collapsed control has no template
@@ -183,6 +173,7 @@ public sealed partial class PlayerPage
         _chrome.WakeFully(clock);
         Render();
         UpdateLayout();
+        SeekSlider.IsEnabled = true;
 
         var report = new List<string>();
         var wrong = new List<string>();
@@ -234,11 +225,14 @@ public sealed partial class PlayerPage
 
         Want("滑杆底色是透明的纯色", Clear(Solid(SeekSlider.Background)));
         Want("已播放那一段没被一起刷成透明", reads.All(read => Visible(read.Played)));
-        Want("拇指没被一起刷成透明", reads.All(read => Visible(read.Thumb)));
+        Want("填充式时间轴不画圆形拇指", reads.All(read => Clear(read.Thumb)));
+        Want("时间轴整块填充且贴底", rect is { ActualHeight: >= 29 }
+            && Math.Abs(BoundsOf(SeekTrack).Bottom - BoundsOf(Bar).Bottom) < 1);
 
         // Put back the way the other probes do it, page first: a bar left up would be drawn over the library
         // grid behind this page, and 「显隐规则已复位」 is the check that would report it.
         VisualStateManager.GoToState(SeekSlider, "Normal", false);
+        SeekSlider.IsEnabled = oldSeekEnabled;
         Visibility = was;
         _chrome.Reset(++clock);
         _chrome.Tick(clock + SettleMilliseconds);

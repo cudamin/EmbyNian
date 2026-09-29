@@ -57,8 +57,7 @@ public sealed partial class PlayerPage
         ViewModel.ShowSkipPrompt(skips.Prompt);
         var silent = SkipButton.Visibility == Visibility.Collapsed;
 
-        // Four chapters, of which the one at zero is the start of the file rather than a boundary: three
-        // ticks is the right answer, and a renderer that drew four would put one hard against the left end.
+        // uosc keeps every chapter marker, including the one at the start of the file.
         var marks = new List<SkipChapter>
         {
             new(0, "片头"),
@@ -79,12 +78,12 @@ public sealed partial class PlayerPage
                  && silent
                  && jump is null
                  && jumped is not null
-                 && ticks == 3
+                 && ticks == 4
                  && SkipButton.Visibility == Visibility.Collapsed
                  && ChapterTicks.Children.Count == 0;
 
         return (ok, $"询问：「{caption}」{(offered ? "已提供" : "未提供")}；自动：{(silent ? "直接跳过不提示" : "仍在提示")}"
-                    + $"；章节刻度 {ticks}/3 条（4 个标记，起点不算）");
+                    + $"；章节刻度 {ticks}/4 条（包含文件起点，与独占一致）");
     }
 
     /// <summary>

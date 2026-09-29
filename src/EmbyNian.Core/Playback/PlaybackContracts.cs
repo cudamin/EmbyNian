@@ -429,6 +429,13 @@ public readonly record struct PlayerStatus
     /// <summary>How far the demuxer has read ahead, in seconds from the start of the file.</summary>
     public double CacheEnd { get; init; }
 
+    public TimelineCache Cache { get; init; } = TimelineCache.Empty;
+    public string CacheMode { get; init; } = "auto";
+    public bool NetworkSource { get; init; }
+    public IReadOnlyList<SkipChapter>? Chapters { get; init; }
+    public double? LoopA { get; init; }
+    public double? LoopB { get; init; }
+
     public bool Paused { get; init; }
 
     /// <summary>Stalled waiting for data — drawn differently from a user pause.</summary>
@@ -485,5 +492,10 @@ public readonly record struct PlayerStatus
         || Math.Abs(Speed - other.Speed) > 0.005
         || Math.Abs(Duration - other.Duration) > 0.05
         || Math.Abs(Position - other.Position) >= 0.25
-        || Math.Abs(CacheEnd - other.CacheEnd) >= 1;
+        || Math.Abs(CacheEnd - other.CacheEnd) >= 1
+        || CacheMode != other.CacheMode || NetworkSource != other.NetworkSource
+        || (Cache ?? TimelineCache.Empty).DiffersFrom(other.Cache ?? TimelineCache.Empty)
+        || LoopA != other.LoopA || LoopB != other.LoopB
+        || !ReferenceEquals(Chapters, other.Chapters) && (Chapters is null || other.Chapters is null
+            || !Chapters.SequenceEqual(other.Chapters));
 }

@@ -55,6 +55,14 @@ public sealed partial class MoviePilotResult : ObservableObject
 
     public string TypeLabel => Media.Type ?? "";
 
+    public string SourceLabel => Media.SourceLabel;
+
+    public Visibility SourceVisibility => SourceLabel.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>类型和来源那一行的可见性：两样都没有就不留一行空的。</summary>
+    public Visibility IdentityVisibility => SourceLabel.Length > 0 || Media.Type is { Length: > 0 }
+        ? Visibility.Visible : Visibility.Collapsed;
+
     public Visibility TypeVisibility => Media.Type is { Length: > 0 } ? Visibility.Visible : Visibility.Collapsed;
 
     public string Overview => Media.Overview ?? "";
@@ -88,11 +96,13 @@ public sealed partial class MoviePilotResult : ObservableObject
         _ => "订阅"
     };
 
-    /// <summary>读屏软件念出来的那一句：光一个「订阅」念不出订的是哪一部。</summary>
-    public string SubscribeAutomationName => $"订阅：{Media.Title}";
+    /// <summary>读屏软件念出来的那一句：光一个「订阅」念不出订的是哪一部；来源对了才不至于订错库。</summary>
+    public string SubscribeAutomationName => SourceLabel.Length > 0
+        ? $"订阅（{SourceLabel}）：{Media.Title}" : $"订阅：{Media.Title}";
 
     /// <summary>同上，给「搜索资源」那颗键。</summary>
-    public string SearchResourcesAutomationName => $"搜索资源：{Media.Title}";
+    public string SearchResourcesAutomationName => SourceLabel.Length > 0
+        ? $"搜索资源（{SourceLabel}）：{Media.Title}" : $"搜索资源：{Media.Title}";
 
     [RelayCommand(CanExecute = nameof(CanSubscribe))]
     private Task Subscribe() => _subscribe(this);
@@ -120,6 +130,20 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
     /// <summary>还没搜时页面中间那句话。</summary>
     private const string IdlePrompt = "输入关键字，在 MoviePilot 上找库里还没有的片子";
 
+    /// <summary>来源下拉的第一条哨兵：Id 为空表示不加 media_source，全来源都搜。</summary>
+    internal static readonly MoviePilotMediaSource AllSources = new("全部来源", "", []);
+
+    /// <summary>media/source 问不到时的兜底清单 —— 内置影视来源，别让来源筛选整个消失。</summary>
+    private static readonly IReadOnlyList<MoviePilotMediaSource> FallbackSources =
+    [
+        new("TMDB", "themoviedb", ["电影", "电视剧"]),
+        new("豆瓣", "douban", ["电影", "电视剧"]),
+        new("IMDb", "imdb", ["电影", "电视剧"]),
+        new("Bangumi", "bangumi", ["电视剧"]),
+        new("AniList", "anilist", ["电视剧"]),
+        new("TVDB", "tvdb", ["电视剧"])
+    ];
+
     private MoviePilotService? _service;
 
     /// <summary>上一次搜的词，供 <see cref="ReloadAsync"/> 重跑。</summary>
@@ -136,6 +160,12 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
 
     public ObservableCollection<MoviePilotResult> Results { get; } = [];
 
+    /// <summary>来源下拉：全部来源打底，其余按 media/source 的目录来（只留影视可用的）。</summary>
+    public ObservableCollection<MoviePilotMediaSource> SourceChoices { get; } = [AllSources];
+
+    [ObservableProperty]
+    public partial MoviePilotMediaSource SelectedSource { get; set; } = AllSources;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmptyVisibility))]
     public partial bool ShowEmptyNotice { get; set; }
@@ -146,6 +176,43 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
     public partial string EmptyNotice { get; set; }
 
     internal void Attach(MoviePilotService service) => _service = service;
+
+    /// <summary>
+    /// 来源目录装进下拉：media/source 现问一遍、只留影视可用的（<see cref="MoviePilotMediaSource.IsVideo"/>）；
+    /// 问不到（没连上、接口不在）就退到内置清单。第一项「全部来源」永远在。
+    /// </summary>
+    internal async Task LoadSourcesAsync()
+    {
+        if (_service is null) return;
+
+        IReadOnlyList<MoviePilotMediaSource> sources;
+        try
+        {
+            sources = await _service.MediaSourcesAsync(CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "读取 MoviePilot 来源目录失败，退到内置来源", error);
+            sources = [];
+        }
+
+        var choices = sources.Where(source => source.IsVideo)
+            .DistinctBy(source => source.Id, StringComparer.OrdinalIgnoreCase).ToList();
+        if (choices.Count == 0) choices = [.. FallbackSources];
+
+        SourceChoices.Clear();
+        SourceChoices.Add(AllSources);
+        foreach (var source in choices) SourceChoices.Add(source);
+        SelectedSource = AllSources;
+    }
+
+    /// <summary>换来源筛选：有上一次的词就重搜一遍，没有就只记住选择，下次搜索时生效。</summary>
+    internal Task ApplySourceFilterAsync() =>
+        SelectedSource is not null && _lastTerm.Length > 0 ? SearchAsync(_lastTerm) : Task.CompletedTask;
+
+    /// <summary>这次搜索带不带来源筛选：选了具体来源就只搜那一家。</summary>
+    private IReadOnlyList<string>? Sources =>
+        SelectedSource is { Id: { Length: > 0 } id } ? [id] : null;
 
     /// <summary>视图交给它的「开资源面板」入口，见 <see cref="SearchResourcesAsync"/>。</summary>
     internal void UseResourceOpener(Func<MoviePilotMedia, Task> open) => _openResources = open;
@@ -163,6 +230,9 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
 
         if (keyword.Length == 0)
         {
+            Cancel();
+            ClearNotice();
+            IsReady = true;
             Results.Clear();
             EmptyNotice = IdlePrompt;
             ShowEmptyNotice = true;
@@ -174,7 +244,7 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
 
         try
         {
-            var found = await _service.SearchAsync(keyword, token).ConfigureAwait(true);
+            var found = await _service.SearchAsync(keyword, token, Sources).ConfigureAwait(true);
             if (!IsCurrent(token)) return;
 
             Results.Clear();
@@ -187,6 +257,7 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
         }
         catch (OperationCanceledException)
         {
+            EndLoad(token);
         }
         catch (Exception error)
         {

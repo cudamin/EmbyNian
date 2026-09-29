@@ -234,7 +234,12 @@ public static class InlineSwitch
         foreach (var (name, _) in ShaderGroupCatalog.NeutralOptions) Add(name);
 
         // 不在菜单里、却同样会跟着一集走的：两处延迟走快捷键与 ⚙ 菜单，倍速走控制条，音量/静音走壳。
-        foreach (var name in new[] { "sub-delay", "audio-delay", "speed", "volume", "mute" }) Add(name);
+        foreach (var name in new[]
+        {
+            "sub-delay", "sub-visibility", "secondary-sid", "secondary-sub-visibility",
+            "secondary-sub-delay", "secondary-sub-pos", "secondary-sub-ass-override",
+            "audio-delay", "speed", "volume", "mute"
+        }) Add(name);
 
         return names;
     }

@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Diagnostics;
 using EmbyNian.MoviePilot;
+using EmbyNian.Shell.Platform;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -24,11 +25,14 @@ public enum MoviePilotDownloadState
 public sealed partial class MoviePilotResourceRow : ObservableObject
 {
     private readonly Func<MoviePilotResourceRow, Task> _download;
+    private readonly Action<MoviePilotResourceRow>? _openDetails;
 
-    public MoviePilotResourceRow(MoviePilotResource resource, Func<MoviePilotResourceRow, Task> download)
+    public MoviePilotResourceRow(MoviePilotResource resource, Func<MoviePilotResourceRow, Task> download,
+        Action<MoviePilotResourceRow>? openDetails = null)
     {
         Resource = resource;
         _download = download;
+        _openDetails = openDetails;
     }
 
     public MoviePilotResource Resource { get; }
@@ -60,6 +64,20 @@ public sealed partial class MoviePilotResourceRow : ObservableObject
     };
 
     public string DownloadAutomationName => $"下载：{Title}";
+    public string DetailsAutomationName => $"打开种子页面：{Title}";
+    public bool CanOpenDetails => Resource.DetailsUri is not null && _openDetails is not null;
+    public string DetailsHint => CanOpenDetails ? "在浏览器打开站点详情，不会开始下载" : "站点未提供可打开的种子页面";
+    public string Description => Resource.Description ?? "";
+    public Visibility DescriptionVisibility => Description.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    public string LabelsText => Resource.LabelsText;
+    public Visibility LabelsVisibility => LabelsText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    public string PromotionText => Resource.PromotionText;
+    public string PromotionHint => string.IsNullOrWhiteSpace(Resource.FreeUntil)
+        ? "优惠以站点当前规则为准" : $"优惠截止：{Resource.FreeUntil}；以站点为准";
+    public string PublishedLine => Resource.PublishedLine;
+
+    [RelayCommand(CanExecute = nameof(CanOpenDetails))]
+    private void OpenDetails() => _openDetails?.Invoke(this);
 
     [RelayCommand(CanExecute = nameof(CanDownload))]
     private Task Download() => _download(this);
@@ -74,6 +92,7 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
     private const string Category = "moviepilot";
 
     private MoviePilotService? _service;
+    private ISystemLauncher? _launcher;
     private MoviePilotMedia? _media;
 
     public MoviePilotResourceViewModel()
@@ -81,7 +100,8 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
         EmptyNotice = "";
     }
 
-    public ObservableCollection<MoviePilotResourceRow> Resources { get; } = [];
+    public MoviePilotResourceBrowserViewModel Browser { get; } = new();
+    public ObservableCollection<MoviePilotResourceRow> Resources => Browser.Rows;
 
     /// <summary>对话框标题那一行——搜的是哪部片。</summary>
     public string Heading => _media?.Display ?? "资源";
@@ -95,9 +115,10 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
     [ObservableProperty]
     public partial string EmptyNotice { get; set; }
 
-    internal void Attach(MoviePilotService service, MoviePilotMedia media)
+    internal void Attach(MoviePilotService service, MoviePilotMedia media, ISystemLauncher launcher)
     {
         _service = service;
+        _launcher = launcher;
         _media = media;
         OnPropertyChanged(nameof(Heading));
     }
@@ -110,6 +131,7 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
         if (_service is null || _media is null) return;
 
         var token = BeginLoad();
+        Browser.SetResults([]);
         ShowEmptyNotice = false;
 
         try
@@ -117,9 +139,7 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
             var found = await _service.SearchResourcesAsync(_media, token).ConfigureAwait(true);
             if (!IsCurrent(token)) return;
 
-            Resources.Clear();
-            foreach (var resource in found)
-                Resources.Add(new MoviePilotResourceRow(resource, DownloadAsync));
+            Browser.SetResults(found.Select(resource => new MoviePilotResourceRow(resource, DownloadAsync, OpenDetails)));
 
             EmptyNotice = "没找到可下载的资源，换个别的片或稍后再试";
             ShowEmptyNotice = found.Count == 0;
@@ -127,6 +147,7 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
         }
         catch (OperationCanceledException)
         {
+            EndLoad(token);
         }
         catch (Exception error)
         {
@@ -134,10 +155,17 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
 
             Log.Warn(Category, $"搜《{_media.Title}》资源失败", error);
             Report("搜索资源失败", error);
-            Resources.Clear();
+            Browser.SetResults([]);
             ShowEmptyNotice = false;
             EndLoad(token);
         }
+    }
+
+    private void OpenDetails(MoviePilotResourceRow row)
+    {
+        if (row.Resource.DetailsUri is not { } uri || _launcher is null) return;
+        try { _launcher.OpenUrl(uri.AbsoluteUri); }
+        catch (Exception error) { Report("打开种子页面失败", error); }
     }
 
     /// <summary>
@@ -150,7 +178,8 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
 
         var confirmed = await ConfirmAsync(
             "加入下载",
-            $"确认把这个资源加进 MoviePilot 下载吗？\n{row.Title}",
+            $"确认把这个资源加进 MoviePilot 下载吗？\n{row.Title}\n{row.Resource.PromotionText}\n" +
+            (row.Resource.HitAndRun ? "此资源有 HR 考核，请先在种子页面核对做种要求。" : "优惠和下载规则以站点当前页面为准。"),
             "下载").ConfigureAwait(true);
         if (!confirmed) return;
 

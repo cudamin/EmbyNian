@@ -625,7 +625,7 @@
                                         x:Uid="DetailPage_TextBlock2"
                                         VerticalAlignment="Center"
                                         Foreground="{StaticResource EgOnScrimBrush}" />
-                                    <ComboBox
+                                    <local:EgPicker
                                         x:Name="ColumnSourcePicker"
                                         CornerRadius="{StaticResource EgPickerCornerRadius}"
                                         DisplayMemberPath="Text"
@@ -641,7 +641,7 @@
                                         x:Uid="DetailPage_TextBlock3"
                                         VerticalAlignment="Center"
                                         Foreground="{StaticResource EgOnScrimBrush}" />
-                                    <ComboBox
+                                    <local:EgPicker
                                         x:Name="ColumnAudioPicker"
                                         CornerRadius="{StaticResource EgPickerCornerRadius}"
                                         DisplayMemberPath="Text"
@@ -657,7 +657,7 @@
                                         x:Uid="DetailPage_TextBlock4"
                                         VerticalAlignment="Center"
                                         Foreground="{StaticResource EgOnScrimBrush}" />
-                                    <ComboBox
+                                    <local:EgPicker
                                         x:Name="ColumnSubtitlePicker"
                                         CornerRadius="{StaticResource EgPickerCornerRadius}"
                                         DisplayMemberPath="Text"
@@ -940,7 +940,11 @@
                              里面那一层是 WrapRow 而不是横排的 StackPanel：下拉的宽度按各自最长那条轨道名撑，
                              窄窗口下三个加起来能超过一行，横排会把最右边那个切在窗口右沿上。宽窗口下两者摆出来
                              一模一样，见 WrapRow 的注释。三颗下拉的边角取 EgPickerCornerRadius 的 12，同集页
-                             宽版式那一份（「字幕、音频、视频的选择框边角弄圆一些」，2026-09-12）。 -->
+                             宽版式那一份（「字幕、音频、视频的选择框边角弄圆一些」，2026-09-12）。
+                             三颗都是 local:EgPicker 而不是框架的 ComboBox —— 它是 ComboBox 的一点壳，只把弹层
+                             从「开窗口」改回「同一棵树」，好让浮层那支应用内亚克力采得到底下这一页（用户
+                             2026-09-27：「把音频和字幕的选择栏改成亚克力背景」；为什么这么改写在 EgPicker.cs）。
+                             同一页上另有集页宽版式那三颗和季那一颗，一共七颗，别处（设置页等）照旧。 -->
                         <StackPanel
                             x:Name="PickerPanel"
                             Style="{StaticResource EgBodyPanelStyle}"
@@ -948,7 +952,7 @@
                             BorderThickness="0"
                             Visibility="{x:Bind ViewModel.PickersVisibility, Mode=OneWay}">
                             <local:WrapRow RowSpacing="10" Spacing="14">
-                                <ComboBox
+                                <local:EgPicker
                                     x:Name="SourcePicker"
                                     CornerRadius="{StaticResource EgPickerCornerRadius}"
                                     DisplayMemberPath="Text"
@@ -956,11 +960,11 @@
                                     MinWidth="260"
                                     SelectedItem="{x:Bind ViewModel.SelectedSource, Mode=TwoWay}"
                                     Visibility="{x:Bind ViewModel.SourceVisibility, Mode=OneWay}">
-                                    <ComboBox.Header>
+                                    <local:EgPicker.Header>
                                         <TextBlock x:Uid="DetailPage_TextBlock2" Foreground="{StaticResource EgOnScrimBrush}" />
-                                    </ComboBox.Header>
-                                </ComboBox>
-                                <ComboBox
+                                    </local:EgPicker.Header>
+                                </local:EgPicker>
+                                <local:EgPicker
                                     x:Name="AudioPicker"
                                     CornerRadius="{StaticResource EgPickerCornerRadius}"
                                     DisplayMemberPath="Text"
@@ -968,11 +972,11 @@
                                     MinWidth="200"
                                     SelectedItem="{x:Bind ViewModel.SelectedAudio, Mode=TwoWay}"
                                     Visibility="{x:Bind ViewModel.AudioVisibility, Mode=OneWay}">
-                                    <ComboBox.Header>
+                                    <local:EgPicker.Header>
                                         <TextBlock x:Uid="DetailPage_TextBlock3" Foreground="{StaticResource EgOnScrimBrush}" />
-                                    </ComboBox.Header>
-                                </ComboBox>
-                                <ComboBox
+                                    </local:EgPicker.Header>
+                                </local:EgPicker>
+                                <local:EgPicker
                                     x:Name="SubtitlePicker"
                                     CornerRadius="{StaticResource EgPickerCornerRadius}"
                                     DisplayMemberPath="Text"
@@ -980,10 +984,10 @@
                                     MinWidth="200"
                                     SelectedItem="{x:Bind ViewModel.SelectedSubtitle, Mode=TwoWay}"
                                     Visibility="{x:Bind ViewModel.SubtitleVisibility, Mode=OneWay}">
-                                    <ComboBox.Header>
+                                    <local:EgPicker.Header>
                                         <TextBlock x:Uid="DetailPage_TextBlock4" Foreground="{StaticResource EgOnScrimBrush}" />
-                                    </ComboBox.Header>
-                                </ComboBox>
+                                    </local:EgPicker.Header>
+                                </local:EgPicker>
                             </local:WrapRow>
                         </StackPanel>
 
@@ -1227,7 +1231,7 @@
                                  不报读数 —— 季数集数已经写在标题里了（「更多来自：第一季 · 12 集，已看 3 集」）。 -->
                             <local:ShelfHead x:Name="EpisodeHead" Title="{x:Bind ViewModel.EpisodeShelf.Title, Mode=OneWay}">
                                 <local:ShelfHead.Trailing>
-                                    <ComboBox x:Uid="DetailPage_ComboBoxA4"
+                                    <local:EgPicker x:Uid="DetailPage_ComboBoxA4"
                                         AutomationProperties.AutomationId="DetailSeasonPicker"
                                         DisplayMemberPath="Name"
                                         ItemsSource="{x:Bind ViewModel.Seasons, Mode=OneWay}"

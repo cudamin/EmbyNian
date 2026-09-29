@@ -1,5 +1,6 @@
 using EmbyNian.MoviePilot;
 using EmbyNian.Shell.ViewModels;
+using EmbyNian.Shell.Platform;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -17,6 +18,7 @@ namespace EmbyNian.Shell.Views;
 public sealed partial class MoviePilotSearchPanel : UserControl
 {
     private MoviePilotService? _service;
+    private ISystemLauncher? _launcher;
 
     public MoviePilotSearchPanel()
     {
@@ -29,16 +31,24 @@ public sealed partial class MoviePilotSearchPanel : UserControl
     /// 由 <see cref="LibraryPage"/> 在它那唯一一处解析块里调一次：把连接服务交给视图模型、把「订阅前二次确认」
     /// 接到本控件的 <c>XamlRoot</c> 上，并把「搜索资源」的入口交给视图模型（它只把媒体递回来，开面板归这里）。
     /// </summary>
-    internal void Attach(MoviePilotService service)
+    internal void Attach(MoviePilotService service, ISystemLauncher launcher)
     {
         _service = service;
+        _launcher = launcher;
         ViewModel.Attach(service);
         ViewModel.UseConfirm(ConfirmDialog.For(this));
         ViewModel.UseResourceOpener(ShowResourcesAsync);
+        _ = ViewModel.LoadSourcesAsync();
     }
 
     /// <summary>页面上那个共享搜索框提交、且此刻在 MoviePilot 段时，由页面把词转到这里。</summary>
-    internal Task SearchAsync(string term) => ViewModel.SearchAsync(term);
+    internal Task SearchAsync(string term)
+    {
+        ResourceOverlay.Release();
+        ResourceOverlay.Visibility = Visibility.Collapsed;
+        Results.Visibility = Visibility.Visible;
+        return ViewModel.SearchAsync(term);
+    }
 
     /// <summary>离开搜索页时收手：取消在飞的搜索，收起资源面板。</summary>
     internal void Release()
@@ -46,22 +56,29 @@ public sealed partial class MoviePilotSearchPanel : UserControl
         ViewModel.Cancel();
         ResourceOverlay.Release();
         ResourceOverlay.Visibility = Visibility.Collapsed;
+        Results.Visibility = Visibility.Visible;
     }
 
     /// <summary>点某条结果的「搜索资源」：把资源覆盖面板盖上来并开搜。</summary>
     private Task ShowResourcesAsync(MoviePilotMedia media)
     {
-        if (_service is null) return Task.CompletedTask;
+        if (_service is null || _launcher is null) return Task.CompletedTask;
 
-        ResourceOverlay.Open(_service, media);
+        ResourceOverlay.Open(_service, media, _launcher);
+        Results.Visibility = Visibility.Collapsed;
         ResourceOverlay.Visibility = Visibility.Visible;
         return Task.CompletedTask;
     }
+
+    /// <summary>来源下拉换选：交给视图模型，有上一次的词就按新来源重搜。</summary>
+    private void OnSourceChanged(object sender, SelectionChangedEventArgs e) =>
+        _ = ViewModel.ApplySourceFilterAsync();
 
     /// <summary>资源面板的返回键：收起它，回到片子列表。</summary>
     private void OnResourceClosed(object? sender, EventArgs e)
     {
         ResourceOverlay.Visibility = Visibility.Collapsed;
+        Results.Visibility = Visibility.Visible;
         ResourceOverlay.Release();
     }
 }

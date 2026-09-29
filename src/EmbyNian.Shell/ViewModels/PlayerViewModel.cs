@@ -101,16 +101,12 @@ public sealed partial class PlayerViewModel : ObservableObject
     ];
 
     /// <summary>The delay nudges both A/V delay submenus offer, in seconds.</summary>
-    internal static readonly double[] DelayNudges = [-1, -0.1, 0.1, 1];
 
     private readonly PlaybackService _playback;
     private readonly ISettingsService _settings;
     private readonly EmbySession _session;
     private readonly EmbyImageStore _images;
     private readonly ShaderGroupResolver _shaders;
-
-    /// <summary>The machine's installed families, for the title strip's 字幕字体 box. Shared with the settings page.</summary>
-    private readonly FontLibrary _fonts;
 
     /// <summary>
     /// The UI thread. Every one of the player service's events arrives on whichever thread mpv's event loop
@@ -130,6 +126,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     private readonly MenuRequestGate _versionMenuGate = new();
 
     private readonly MenuRequestGate _pictureMenuGate = new();
+
+    /// <summary>
+    /// 独占模式下最近一次推给视频窗那颗「跳过」按钮的文案（<c>""</c>＝已收摊）。状态每秒采十次都会走
+    /// <see cref="ShowSkipPrompt"/>，只在文案真变了才发一条 script-message，免得把同一句「跳过片头」
+    /// 一秒重发十遍。集成模式那颗 XAML 按钮不经这里（<see cref="HeadlessPlayback"/> 才推）。
+    /// </summary>
+    private string _skipPushed = "";
 
     /// <summary>
     /// Cancels anything in flight on the way out. Created here rather than per attach and deliberately
@@ -268,16 +271,12 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>Whether <see cref="Connect"/> has taken up the player events; a second call does nothing.</summary>
     private bool _connected;
 
-    /// <summary>Whether the 字幕字体 box has been handed the machine's families, or asked for them.</summary>
-    private bool _fontsAsked;
-
     public PlayerViewModel(
         PlaybackService playback,
         ISettingsService settings,
         EmbySession session,
         EmbyImageStore images,
         ShaderGroupResolver shaders,
-        FontLibrary fonts,
         IUiDispatcher ui)
     {
         _playback = playback;
@@ -285,96 +284,12 @@ public sealed partial class PlayerViewModel : ObservableObject
         _session = session;
         _images = images;
         _shaders = shaders;
-        _fonts = fonts;
         _ui = ui;
-
-        // 需求 7: the same row type the 设置 → 字幕 card uses, over the same setting, so there is one search
-        // and one filter in the app rather than a second one written for the OSD. What differs is what
-        // picking does — here it also has to reach the film that is playing, which is the point of putting
-        // the box on the player at all.
-        SubtitleFont = new SettingFontRow(
-            "字幕字体",
-            "输入任意一段名字搜索，回车或点一下就换",
-            Settings.Playback.SubtitleFontFamily,
-            ApplySubtitleFont,
-            _settings.Save);
 
         // Every number the bar shows starts from the same empty snapshot the stop path returns it to, so
         // the clock reads 0:00 and the glyph reads 播放 before anything has ever played.
         ApplyStatus(new PlayerStatus());
     }
-
-    /// <summary>
-    /// 需求 7 的字幕字体选择栏, bound by the title strip. Built with the settings file's family and filled
-    /// with the machine's own once <see cref="PrepareFonts"/> has been called.
-    /// </summary>
-    internal SettingFontRow SubtitleFont { get; }
-
-    /// <summary>
-    /// Whether <see cref="SubtitleFont"/> holds the machine's families rather than just the stored one.
-    /// Read by the self-check, which cannot report on a list that has not landed yet.
-    /// </summary>
-    internal bool FontsReady { get; private set; }
-
-    /// <summary>
-    /// What the settings file says the subtitle family is. For the self-check, which has no other way to
-    /// tell a picker reading the right setting from one reading nothing at all.
-    /// </summary>
-    internal string SubtitleFontSetting => Settings.Playback.SubtitleFontFamily;
-
-    /// <summary>
-    /// Hands the 字幕字体 box the installed families, once. Called as playback starts and again when the box
-    /// takes the keyboard, so a machine whose font scan is slow still gets a full list by the time anyone
-    /// can read it — and so nothing scans fonts at startup for a player that may never be opened.
-    /// </summary>
-    internal void PrepareFonts()
-    {
-        if (_fontsAsked) return;
-
-        _fontsAsked = true;
-
-        // The scan is shared with the settings page, so a user who has been there already pays nothing and
-        // — this is the half the self-check depends on — the list is in hand synchronously.
-        if (_fonts.Ready is { Families.Count: > 0 } ready)
-        {
-            SubtitleFont.Fill(ready);
-            FontsReady = true;
-            return;
-        }
-
-        _ = FillFontsAsync();
-    }
-
-    private async Task FillFontsAsync()
-    {
-        var catalogue = await _fonts.LoadAsync().ConfigureAwait(true);
-
-        SubtitleFont.Fill(catalogue);
-        FontsReady = true;
-    }
-
-    /// <summary>
-    /// What picking a family in the title strip's box does: the settings file, then the film that is
-    /// playing. mpv re-renders text subtitles from the next frame, so this is visible while it is watched
-    /// rather than at the next play — which is the whole reason the box is on the player.
-    /// </summary>
-    private void ApplySubtitleFont(string family)
-    {
-        Settings.Playback.SubtitleFontFamily = family;
-
-        _ = _playback.SetPropertyAsync("sub-font", family);
-        _ = _playback.CommandAsync("show-text", $"字幕字体：{family}", "1200");
-
-        Log.Info(Category, $"字幕字体改为「{family}」");
-    }
-
-    /// <summary>
-    /// A search in the 字幕字体 box that matched no family. On the OSD rather than in the shell's InfoBar:
-    /// the box putting the old family back is otherwise indistinguishable from a pick that silently failed,
-    /// and a notification card over a film for a typo is more than the mistake is worth.
-    /// </summary>
-    internal void NoticeNoFont(string typed) =>
-        _ = _playback.CommandAsync("show-text", $"没有找到字体「{typed}」", "1500");
 
     /// <summary>
     /// Takes up the four player events, once, before anything is played. They all end in a bound property,
@@ -430,6 +345,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>Put the window back: fullscreen left, 置顶 dropped, cursor shown, shell returned.</summary>
     internal event Action? PlayerHidden;
 
+    /// <summary>
+    /// 独占模式右键菜单点了「播放信息…」（<see cref="VideoWindowContract.MediaInfo"/>）。弹窗归外壳：
+    /// 独占播放时播放页是摘下去的、没有可挂对话框的树，主窗口还在（可浏览），由 <c>ShellPage</c> 接住
+    /// 弹同一张。集成模式不经过这里 —— 页面上的菜单行自己弹。
+    /// </summary>
+    internal event Action? MediaInfoRequested;
+
     /// <summary>停止后端前，先让浏览页真正接住画面；独占播放没有附加页面，不需要这一步。</summary>
     internal Func<Task>? PrepareStopAsync { get; set; }
 
@@ -477,12 +399,20 @@ public sealed partial class PlayerViewModel : ObservableObject
     [ObservableProperty]
     public partial string? DurationClock { get; set; }
 
+    [ObservableProperty]
+    public partial string? RemainingClock { get; set; }
+
     /// <summary>播放/暂停's own glyph, so the button never has to be told which state it is in.</summary>
     [ObservableProperty]
     public partial string? PlayPauseGlyph { get; set; }
 
     [ObservableProperty]
     public partial string? SpeedLabel { get; set; }
+
+    [ObservableProperty]
+    public partial double SpeedValue { get; set; } = 1;
+
+    private long _speedTouched;
 
     /// <summary>How much of the file mpv has buffered, drawn behind the thumb.</summary>
     [ObservableProperty]
@@ -506,29 +436,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     public partial double Volume { get; set; }
 
     /// <summary>
-    /// 音量条上滑杆的位置 —— 条子自己的刻度（<see cref="VolumeScale"/>）。它与 <see cref="Volume"/> 之间隔着
-    /// 「100→101 占四个单位、其余每档一个单位」那一步换算，所以两者不再是一回事。Two-way for the same reason
-    /// the seek bar is：mpv 与用户都能写它。
-    /// <para>
-    /// 停在两档之间是会的，也是要的：滚轮一格只走 2 个单位，而 100→101 那一格宽 4 —— 「这一格还没走满」时
-    /// 数值不动，滑块先爬那么一点，第二格才跳档。用户要的「这一段要多滚几格」就落在这里（2026-09-22 用户令）。
-    /// </para>
-    /// </summary>
-    [ObservableProperty]
-    public partial double VolumeAxis { get; set; }
-
-    /// <summary>
-    /// 这一次 <see cref="VolumeAxis"/> 的变更是滑块自己给的（用户在拖它），所以不要把位置写回去。
-    /// </summary>
-    private bool _axisByHand;
-
-    /// <summary>
-    /// 这一次 <see cref="VolumeAxis"/> 的变更是滚轮算出来的（<see cref="RollVolume"/>）—— 那半格归它继续走，
-    /// 同样不要写回去，也跳过就近取整。
-    /// </summary>
-    private bool _axisByRoll;
-
-    /// <summary>
     /// The figure above the rail. 「给音量条上方加上数字」 (2026-09-04) — the same readout that
     /// 「音量条不需要…上方的数字」 took off on 2026-09-03, so it is back deliberately rather than by accident:
     /// with a ceiling of 130 the thumb's position no longer says whether the film is at 100 or above it, and
@@ -541,17 +448,7 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// </summary>
     public string VolumeLabel => Math.Round(Volume).ToString("0", CultureInfo.InvariantCulture);
 
-    /// <summary>
-    /// How far the rail goes, so the slider in the markup does not state a ceiling of its own. It used to say
-    /// <c>Maximum="100"</c>, one of six independent places that pinned the volume at 100 — and a rail whose top
-    /// disagrees with what gets stored is a rail that lies about how loud the film is going to be.
-    /// <para>
-    /// 2026-09-22 起滑杆的上限是<b>刻度上的顶</b>（<see cref="VolumeScale.MaximumAxis"/>，133），不再是
-    /// <see cref="AudioSettings.MaxVolume"/> 本身：100 以上每档都被抬高 3 个单位，顶也跟着抬。绑错了屏上
-    /// 看不出异样（滑杆照旧能拖），只是拖不到 130 去、并且每一档的位置都偏 —— 自检那条「滑杆上限」盯这个。
-    /// </para>
-    /// </summary>
-    public double VolumeAxisMaximum => VolumeScale.MaximumAxis;
+    public double VolumeMaximum => AudioSettings.MaxVolume;
 
     /// <summary>The rail's speaker glyph, or the crossed-out one while muted.</summary>
     [ObservableProperty]
@@ -728,7 +625,17 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal MediaSource? PlayingSource => MediaVersionSwitch.Playing(_nowPlaying, _playback.PlayingSource);
 
     /// <summary>Where the chapter boundaries are, for the ticks the page draws under the slider.</summary>
-    internal IReadOnlyList<SkipChapter> ChapterMarks { get; private set; } = [];
+    private IReadOnlyList<SkipChapter> _chapterMarks = [];
+    internal TimelineChapterMap TimelineChapters { get; private set; } = TimelineChapterMap.Empty;
+    internal IReadOnlyList<SkipChapter> ChapterMarks
+    {
+        get => _chapterMarks;
+        private set
+        {
+            _chapterMarks = value;
+            TimelineChapters = TimelineChapterMap.Build(value);
+        }
+    }
 
     /// <summary>The 着色器档位 in force, which the ⚙ menu opens on. Null is 「未启用」.</summary>
     internal ShaderGroup? ActiveShader { get; private set; }
@@ -798,6 +705,25 @@ public sealed partial class PlayerViewModel : ObservableObject
             ApplySkipOffer();
         }
     }
+
+    /// <summary>
+    /// 跳过档位的行文案。集成模式右键那棵「跳过片头片尾」子菜单与独占模式推送的同名子菜单共用这一份
+    /// （2026-09-29 统一右键菜单时从页面收编上来 —— 两处各写一份就会再漂开）。
+    /// </summary>
+    internal static string SkipModeLabel(SkipSectionMode mode) => mode switch
+    {
+        SkipSectionMode.Auto => "自动跳过",
+        SkipSectionMode.Off => "关闭",
+        _ => "询问"
+    };
+
+    /// <summary>同一档位在 <see cref="VideoWindowContract.SkipMode"/> 值域里的拼法（Parse 只认这三个词）。</summary>
+    internal static string SkipModeToken(SkipSectionMode mode) => mode switch
+    {
+        SkipSectionMode.Auto => "auto",
+        SkipSectionMode.Off => "off",
+        _ => "ask"
+    };
 
     internal bool AutoPlayNextEpisode
     {
@@ -915,11 +841,11 @@ public sealed partial class PlayerViewModel : ObservableObject
     internal bool PlayingNow => _playback.IsPlaying;
 
     /// <summary>Whether the user has touched the seek bar recently enough for it to own its value.</summary>
-    internal bool Scrubbing => Now - _seekTouched < ScrubGraceMilliseconds;
+    internal bool Scrubbing => TimelineBusy || Now - _seekTouched < ScrubGraceMilliseconds;
 
     internal bool Paused => Status.Paused;
 
     /// <summary>Whether a hover over the seek track has anything to preview.</summary>
-    internal bool CanPeek => _nowPlaying is not null && Status.HasDuration;
+    internal bool CanPeek => Status.HasDuration;
 
 }

@@ -13,6 +13,7 @@ internal static class Program
 
         PlaybackTests.Register();
         SubtitleFileTests.Register();
+        SubtitleBehaviorTests.Register();
         MpvProcessTests.Register();
         SelfCheckTests.Register();
         SettingsTests.Register();
@@ -53,6 +54,8 @@ internal static class Program
         StatusCoalescerTests.Register();
         ResizeFreezeTests.Register();
         VolumeScaleTests.Register();
+        TimelineScaleTests.Register();
+        TimelineParityTests.Register();
         SpeedWheelTests.Register();
         MpvUiTests.Register();
         MediaVersionTests.Register();
@@ -62,6 +65,7 @@ internal static class Program
         PinIndicatorTests.Register();
         AboutTests.Register();
         MoviePilotTests.Register();
+        MoviePilotAuditTests.Register();
         MoviePilotTransferTests.Register();
         MoviePilotVersionQueryTests.Register();
         AgreementsTests.Register();

@@ -6,9 +6,21 @@ namespace EmbyNian.MoviePilot;
 
 public sealed record MoviePilotStorage(string Name, string Type);
 
-public sealed record MoviePilotMediaSource(string Name, string Id, IReadOnlyList<string> Types);
+public sealed record MoviePilotMediaSource(string Name, string Id, IReadOnlyList<string> Types)
+{
+    /// <summary>
+    /// 影视搜索/订阅能不能用这个来源：声明了电影/电视剧（或其英文值）才算；一条类型都没声明的按可用处理 ——
+    /// 插件来源可能不报 media_types，官方前端对空表同样放行（见 <c>utils/mediaId.ts</c> 的宽容）。
+    /// </summary>
+    public bool IsVideo => Types.Count == 0 ||
+        Types.Any(type => VideoTypeNames.Contains(type.Trim()));
 
-public sealed record MoviePilotDirectory(string Storage, string Path, string? TransferType, string? OverwriteMode);
+    private static readonly HashSet<string> VideoTypeNames = new(StringComparer.OrdinalIgnoreCase)
+    { "电影", "电视剧", "movie", "tv" };
+}
+
+public sealed record MoviePilotDirectory(string Storage, string Path, string? TransferType, string? OverwriteMode,
+    bool Scrape = false, bool TypeFolder = false, bool CategoryFolder = false);
 
 public sealed record MoviePilotTransferOptions(
     IReadOnlyList<MoviePilotStorage> Storages,
@@ -44,6 +56,7 @@ public sealed record MoviePilotTransferRequest
     public const string TypeSeries = "电视剧";
 
     public IReadOnlyList<MoviePilotTransferFile> Files { get; init; } = [];
+    public IReadOnlyList<MoviePilotTransferHistory> Histories { get; init; } = [];
     public string TargetStorage { get; init; } = "";
     public string TargetPath { get; init; } = "";
     /// <summary>空 = 不指定，按目的目录配置来。</summary>
@@ -62,11 +75,13 @@ public sealed record MoviePilotTransferRequest
     public bool Reorganize { get; init; }
 
     /// <summary>一批里第一个文件的路径，或「N 个文件」—— 显示和日志用，不参与协议。</summary>
-    public string SourceDisplay => Files.Count switch
+    public string SourceDisplay => (Histories.Count > 0
+        ? Histories.Select(history => history.TransferPath).ToList()
+        : Files.Select(file => file.Path).ToList()) switch
     {
-        0 => "",
-        1 => Files[0].Path,
-        _ => $"{Files[0].Path} 等 {Files.Count} 个文件"
+        [] => "",
+        [var path] => path,
+        var paths => $"{paths[0]} 等 {paths.Count} 个文件"
     };
 
     public string? Problem
@@ -90,6 +105,12 @@ public sealed record MoviePilotTransferRequest
             if (Type == TypeSeries && Season.Length > 0 &&
                 (!int.TryParse(Season, NumberStyles.None, CultureInfo.InvariantCulture, out var season) || season < 0))
                 return "季号须为非负整数（特别篇为 0）";
+            if (Histories.Count > 0 && (Histories.Count != Files.Count ||
+                Histories.Select(history => history.Id).Distinct().Count() != Histories.Count))
+                return "原整理记录和文件清单对不上，请重新查找记录";
+            if (FromHistory && Histories.Count == 0) return "请先找到原整理记录，再复用历史识别信息";
+            if (FromHistory && (MediaId.Length > 0 || Season.Length > 0 || Episode.Length > 0))
+                return "复用历史识别会覆盖手填的媒体编号和季集号；修改季集时请关闭它";
             return null;
         }
     }
@@ -104,11 +125,22 @@ public sealed record MoviePilotTransferRequest
         if (files.Count != Files.Count) throw new MoviePilotException("文件清单和表单对不上，已停止");
 
         for (var index = 0; index < files.Count; index++)
-            MoviePilotTransfer.RequireFile(files[index], Files[index].Path);
+        {
+            if (Histories.Count > 0)
+            {
+                var history = Histories[index];
+                if (!history.Matches(Files[index].Path) || history.Id <= 0)
+                    throw new MoviePilotException("原整理记录与 Emby 文件不匹配，已停止");
+                MoviePilotTransfer.RequireFile(files[index], history.TransferPath);
+            }
+            else MoviePilotTransfer.RequireFile(files[index], Files[index].Path);
+        }
 
         var body = new Dictionary<string, object?>
         {
-            [Files.Count == 1 ? "fileitem" : "fileitems"] = files.Count == 1 ? files[0] : (object?)files,
+            [Histories.Count > 0 ? Histories.Count == 1 ? "logid" : "logids" : Files.Count == 1 ? "fileitem" : "fileitems"] =
+                Histories.Count > 0 ? Histories.Count == 1 ? Histories[0].Id : Histories.Select(history => history.Id).ToArray()
+                    : files.Count == 1 ? files[0] : files,
             ["type_name"] = Type,
             ["min_filesize"] = int.Parse(MinimumSize, CultureInfo.InvariantCulture),
             ["scrape"] = Scrape,
@@ -196,7 +228,13 @@ public sealed record MoviePilotTransferResult(
 }
 
 public sealed record MoviePilotTransferPreview(
-    MoviePilotTransferRequest Request, IReadOnlyList<JsonElement> Files, MoviePilotTransferResult Result);
+    MoviePilotTransferRequest Request, IReadOnlyList<JsonElement> Files, MoviePilotTransferResult Result)
+{
+    internal string ConnectionStamp { get; init; } = "";
+    public bool CanSubmit => Result.CanSubmit && Result.Items.Count == Files.Count &&
+        Files.All(file => Result.Items.Count(item => MoviePilotTransfer.SamePath(item.Source,
+            MoviePilotTransfer.Text(file, "path"))) == 1);
+}
 
 public static class MoviePilotTransfer
 {
@@ -238,9 +276,9 @@ public static class MoviePilotTransfer
     /// </summary>
     public static void RequireFile(JsonElement file, string path)
     {
-        if (file.ValueKind != JsonValueKind.Object ||
+        if (!IsAbsolutePath(path) || file.ValueKind != JsonValueKind.Object ||
             Text(file, "storage") is not ("" or "local") ||
-            Text(file, "type") is not ("file" or "dir") ||
+            Text(file, "type") != "file" ||
             !SamePath(Text(file, "path"), path))
             throw new MoviePilotException(
                 $"MoviePilot 返回的文件和要整理的路径对不上（{path}），已停止；不会改为整理别的目录");

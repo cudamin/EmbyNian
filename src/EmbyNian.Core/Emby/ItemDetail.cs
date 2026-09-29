@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using EmbyNian.Configuration;
 using EmbyNian.Infrastructure;
+using EmbyNian.Mpv;
 using EmbyNian.Playback;
 
 namespace EmbyNian.Emby;
@@ -13,7 +14,10 @@ namespace EmbyNian.Emby;
 /// True only for 不使用字幕. Distinguishes it from 自动: both carry no stream, but one means 「let the
 /// client's own resolution stand」 and the other means 「pass --sid=no」.
 /// </param>
-public sealed record TrackRow(string Text, MediaStream? Stream, bool Disable);
+public sealed record TrackRow(string Text, MediaStream? Stream, bool Disable)
+{
+    public bool IsAvailable { get; init; } = true;
+}
 
 /// <summary>
 /// One row of the 媒体源 picker: a file, and what the picker calls it.
@@ -452,7 +456,8 @@ public static class ItemDetail
         var auto = TrackSelection.Resolve(settings, source);
 
         var rows = new List<TrackRow> { new(AutoLabel(auto.Audio?.ToDisplayLabel()), null, false) };
-        rows.AddRange(source.AudioStreams.Select(stream => new TrackRow(stream.ToDisplayLabel(), stream, false)));
+        var map = MpvTrackMap.Build(source);
+        rows.AddRange(source.AudioStreams.Select(stream => TrackPickerRow(stream, map)));
         return rows;
     }
 
@@ -464,13 +469,14 @@ public static class ItemDetail
     /// to be able to say so rather than hope the automatic answer stays put.
     /// </para>
     /// </summary>
-    public static IReadOnlyList<TrackRow> SubtitleRows(PlaybackSettings settings, MediaSource source)
+    public static IReadOnlyList<TrackRow> SubtitleRows(PlaybackSettings settings, MediaSource source, MediaStream? selectedAudio = null)
     {
-        var auto = TrackSelection.Resolve(settings, source);
+        var subtitle = TrackSelection.ChooseSubtitle(settings, source,
+            selectedAudio ?? TrackSelection.ChooseAudio(settings, source));
 
-        var automatic = auto.Subtitle.Disabled
+        var automatic = subtitle.Disabled
             ? "自动（不显示字幕）"
-            : AutoLabel(auto.Subtitle.Stream?.ToDisplayLabel());
+            : AutoLabel(subtitle.Stream?.ToDisplayLabel());
 
         var rows = new List<TrackRow>
         {
@@ -478,8 +484,19 @@ public static class ItemDetail
             new("不使用字幕", null, true)
         };
 
-        rows.AddRange(source.SubtitleStreams.Select(stream => new TrackRow(stream.ToDisplayLabel(), stream, false)));
+        var map = MpvTrackMap.Build(source);
+        rows.AddRange(source.SubtitleStreams.Select(stream => TrackPickerRow(stream, map)));
         return rows;
+    }
+
+    private static TrackRow TrackPickerRow(MediaStream stream, MpvTrackMap map)
+    {
+        var available = map.CanSelect(stream.Index);
+        var label = stream.ToDisplayLabel();
+        return new TrackRow(available ? label : $"{label} · 无法加载此外挂轨道", stream, false)
+        {
+            IsAvailable = available
+        };
     }
 
     /// <summary>The 自动 row's text: what the settings would pick, or who decides when nothing does.</summary>

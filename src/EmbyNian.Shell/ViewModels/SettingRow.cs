@@ -641,16 +641,33 @@ public sealed partial class SettingShortcutRow : SettingRow
 public sealed partial class SettingFactRow : SettingRow
 {
     private readonly Action? _act;
+    private string _value;
+
     internal SettingFactRow(string label, string? note, string value, string? actionLabel = null, Action? act = null)
         : base(label, note)
     {
-        Value = value;
+        _value = value;
         ActionLabel = actionLabel ?? "";
         _act = act;
     }
 
-    /// <summary>那一行值。等宽字排，因为多数时候它是一个路径。</summary>
-    public string Value { get; }
+    /// <summary>
+    /// 那一行值。等宽字排，因为多数时候它是一个路径。
+    /// <para>
+    /// <b>可变</b>，2026-09-29 起：截图保存目录搬进了「播放器」卡，而它的落点还印在「关于」卡上 —— 改了
+    /// 目录不重开设置窗口，这一行就得当场跟上，不然屏上印的就是一个不再生效的路径。今天的另一个写手是
+    /// <c>SettingsViewModel.AnnounceScreenshotDirectory</c>；赋同样的值不喊通知，绑定那边不会白动一趟。
+    /// </para>
+    /// </summary>
+    public string Value
+    {
+        get => _value;
+        internal set
+        {
+            if (SetProperty(ref _value, value))
+                OnPropertyChanged(nameof(ValueVisibility));
+        }
+    }
 
     /// <summary>
     /// 值那一行空着就不占地方 —— 「关于」卡底下那三颗动作按钮（备份、恢复配置、恢复默认）只有标签、说明和按钮，
@@ -887,6 +904,8 @@ public sealed partial class HomeRowChoice : ObservableObject
 /// <summary>
 /// 字幕示例预览里的一层字：一份示例文字的拷贝，画在自己的偏移上。阴影、描边那八份、正文本身都是一层 ——
 /// 屏上没有「给文字描边」这一回事，预览的描边就是这几份拷贝叠出来的，所以它们对模板是同一种东西。
+/// mpv 的两种「盒子」样式（opaque-box 的逐行描边/阴影盒）不用文字拷贝表达：IsBox 的那一层是一块
+/// 带内边距的色块，正文另画在它上面（Padding 与 BoxMargin 互为相反数，让盒子套住字形而不挪版面）。
 /// </summary>
 public sealed record PreviewLayer(
     double X,
@@ -895,7 +914,22 @@ public sealed record PreviewLayer(
     string Text,
     FontFamily Family,
     double Size,
-    FontWeight Weight);
+    FontWeight Weight,
+    bool IsBox = false,
+    double Padding = 0)
+{
+    /// <summary>盒子层垫在字下面（模板绑 Background）；字形层只画字（Background 为 null 就是不画）。</summary>
+    public Brush? Background => IsBox ? Brush : null;
+
+    /// <summary>字形层的字要露出来；盒子层没有字，只画那块色。</summary>
+    public double GlyphOpacity => IsBox ? 0 : 1;
+
+    /// <summary>盒子套住字形所需的内边距。</summary>
+    public Thickness BoxPadding => new(Padding);
+
+    /// <summary>负边距抵消 Padding，让盒子的中心仍落在原本的位置上。</summary>
+    public Thickness BoxMargin => new(-Padding);
+}
 
 /// <summary>
 /// 字幕卡顶上那条「字幕示例」：照 字幕外观 各行的当前值画出的一条样字 —— 「参考图2新增字幕外观功能」
@@ -955,7 +989,7 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
     }
 
     /// <summary>那条的高：跟着字号走，字大条也大 —— 撑出一条 208 像素的预览比把 160 号的字削头去脚诚实。</summary>
-    public double StripHeight => Model.FontSize + 26;
+    public double StripHeight => Model.FontSize + 26 + (Model.Plate ? 2 * Model.PlatePadding : 0);
 
     public FontFamily FontFamilyValue => _family ??= new FontFamily(Model.FontFamily);
 
@@ -970,7 +1004,8 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
     [
         .. Model.Layers.Select(layer => new PreviewLayer(
             layer.X, layer.Y, BrushFor(layer.Color, layer.Opacity),
-            Model.Text, FontFamilyValue, Model.FontSize, Bold(Model.Bold))),
+            Model.Text, FontFamilyValue, Model.FontSize, Bold(Model.Bold),
+            layer.IsBox, layer.Padding)),
         new(0, 0, BrushFor(Model.TextColor, 1), Model.Text, FontFamilyValue, Model.FontSize, Bold(Model.Bold))
     ];
 
@@ -1018,12 +1053,23 @@ public sealed partial class SettingSubtitlePreviewRow : SettingRow
             && Math.Abs(drawn.Layers[1].X - 3.9) < 0.001 && Math.Abs(drawn.Layers[1].Y) < 0.001
             && drawn.Layers[1].Color == "#000000";
 
-        // 整行不透明方框：底板按 1 画，阴影收掉，剩一圈描边 —— 八层。
+        // 逐行描边/阴影盒（opaque-box）：阴影盒用底板色、描边盒用描边色，各一块、按各自透明度画 ——
+        // 不再是「底板一律 100% 不透明」的旧说法。
         subtitles.SubtitleBackStyle = "opaque-box";
         row.Refresh();
-        var opaque = row.Model.Plate && row.Model.PlateOpacity == 1 && row.Model.Layers.Count == 8;
+        var opaque = row.Model.Layers.Count == 2
+            && row.Model.Layers[0].IsBox && Math.Abs(row.Model.Layers[0].Opacity - 0.4) < 0.001
+            && row.Model.Layers[0].Color == "#123456"
+            && row.Model.Layers[1].IsBox && row.Model.Layers[1].Color == "#000000"
+            && Math.Abs(row.Model.PlatePadding - 3.9) < 0.001;
 
-        // 描边关掉：什么都不剩，只剩底板那一块。
+        // 描边关掉（阴影也归零后）：什么都不剩，只剩背景盒（background-box）那一块。
+        subtitles.SubtitleBackStyle = "background-box";
+        row.Refresh();
+        var boxed = row.Model.Plate && row.Model.Layers.Count == 0
+            && Math.Abs(row.Model.PlatePadding - 1.3) < 0.001
+            && Math.Abs(row.Model.PlateOpacity - 0.4) < 0.001;
+        subtitles.SubtitleShadowOffset = "0";
         subtitles.SubtitleBorderSize = "0";
         row.Refresh();
         var bare = row.Model.Plate && row.Model.Layers.Count == 0;

@@ -30,7 +30,7 @@ public static class PlayerPalette
     // 颜色」是两个会各自被改的决定。
 
     /// <summary>
-    /// 压在画面上那个近黑。上下两道罩子和换集时的遮挡层都是它。
+    /// 压在画面上那个近黑。控制条背后那道罩子、标题条那层玻璃的底色，和换集时的遮挡层都是它。
     /// <para>
     /// 和 <c>DetailHero.ScrimInk</c>、<c>UiTheme.Scrim</c> 恰好同色，但故意不共用一个来源 —— 三者压的东西
     /// 不同（一帧视频、一张剧照、一整页界面），会各自被调。共用之后，把对话框的罩子调淡一点就会连带把
@@ -62,7 +62,169 @@ public static class PlayerPalette
     /// <summary>最淡的一档 —— 「跳过」按钮上那行小字和它底下十五秒的进度。</summary>
     public static ThemeColor InkFaint { get; } = ThemeColor.Parse("#8B93A0");
 
+    /// <summary>
+    /// 左上角第二行那句文件信息（分辨率 · 视频编码 · 音频格式 · 组名）专用的一档中性浅灰。
+    /// <para>
+    /// 用户令 2026-09-28 晚「元数据的字体加点灰色」先在独占模式那一头落地（uosc 顶栏那一行的
+    /// <c>color = 'c8c8c8'</c>），随后「把独占模式的标题复刻到集成模式」把**同一个值**搬到这里 ——
+    /// 复刻看的就是屏上两行一个颜色。
+    /// </para>
+    /// <para>
+    /// 它<b>不是</b> <see cref="InkDim"/> 那一档：那一档是「次要读数」（总时长、源信息、预览里的时间），
+    /// 偏冷、更深（<c>#A5ADBA</c>）。这一档是中性灰，只服务左上角那一行，所以另立一支而不是改
+    /// <see cref="InkDim"/> 的值 —— 改那一支会把总时长那几处一起拖下水。
+    /// </para>
+    /// </summary>
+    public static ThemeColor InkMeta { get; } = ThemeColor.Parse("#C8C8C8");
+
     private static ThemeColor White { get; } = ThemeColor.Rgb(0xFF, 0xFF, 0xFF);
+
+    /// <summary>
+    /// 播放页上下两条浮层底（标题条、控制条）的透明度（<c>0x40</c>：遮四分之一，透四分之三）。
+    /// **这一层是半透明的纯色，不是亚克力**，理由在下面。
+    /// <para>
+    /// 2026-09-27 用户令「去掉黑色渐变，给红框的位置加一层亚克力背景」，先照做了一版真 <c>AcrylicBrush</c>
+    /// （底色近黑、两个浓度，在**XAML 内容上**实测遮四成七八、横向跟着底下的图走，照片为证）。然后他播了一集：
+    /// 标题条是一块**近乎不透的黑**。把他那张截图量出来 —— 标题条整条 <c>#101115</c>，它底下的画面是
+    /// <c>#D1A979</c>，透光约百分之二。同一支画刷在首页、详情页那些照片上是透的，差别只有一个：**集成模式下
+    /// 这一条底下是视频**。
+    /// </para>
+    /// <para>
+    /// 结论：视频那一层（mpv 的 composition 交换链，经 <c>CompositionSurfaceBrush</c> 挂在 <c>VideoHost</c> 上）
+    /// 不参与应用内亚克力的 backdrop 采样。玻璃采不到它，就只剩自己的底色 —— 「越透越黑」，「透」这个字在这一条
+    /// 上根本无从谈起。**也别被那个便宜诊断骗第二次**：把一块纯色 <c>SpriteVisual</c>（<c>ColorBrush</c>）挂到
+    /// <c>VideoHost</c> 上时，标题条**采得到**它（2026-09-27 拿洋红兜底色验过）；<c>ColorBrush</c> 走普通合成
+    /// 路径，交换链不走。两者在那种诊断照片上分不出来，只有用户真的播一集才分得出来。
+    /// </para>
+    /// <para>
+    /// 所以这里换成普通的半透明纯色：它与下面那一层是普通的 alpha 混合，视频也好、XAML 内容也好一视同仁 ——
+    /// 这是「透」在本架构下唯一做得成的路子，代价是**没有模糊**（要模糊就得采到画面，而上面那条路已经断了）。
+    /// </para>
+    /// <para>
+    /// 上述限制只针对直接采样交换链。时间轴另由视频区域取样提供应用内像素，再叠加 AcrylicBrush；标题栏仍使用这里的透明纯色。
+    /// </para>
+    /// <para>
+    /// 为什么是四分之一：用户看过之后要的是「透明度调到最透」。同一天他还要了「进度条的背景也改成跟标题一样的
+    /// 亚克力」—— 于是上下两条浮层一度共用这一支画刷（键名从 <c>PlayerTopGlassBrush</c> 改成了中性的
+    /// <c>PlayerGlassBrush</c>，值也只留这一个）：原来控制条背后那道「上沿全透明、往下渐深到 0xF0」的罩子随那
+    /// 一条令退役了，它和等厚的玻璃是两回事（渐变在亮场上是一块黑、在暗场上什么都不是）。
+    /// **2026-09-27 晚控制条那一半也退役了**（用户令「移除集成模式进度条上方的一大块背景」）：
+    /// 控制条不再铺这支，只剩标题条在用，这一档浓度如今只有标题条一处可见。
+    /// </para>
+    /// <para>
+    /// 代价说在明处：遮四分之一之后，一行白字压在最亮的一格画面上只剩 2.5:1 上下（原来的底线是 4.5:1），亮画面
+    /// 上的标题、进度轨与时间读数都会发飘。这是「要最透」必然付的钱；觉得读不清就往上加这个数 —— 改一个字节。
+    /// </para>
+    /// <para>
+    /// 写在画刷表**前面**不是排版喜好：C# 的静态成员按声明顺序初始化，表在那一条上读这个值，声明放在后面就会
+    /// 读到 0，屏上是一整条全透明。
+    /// </para>
+    /// </summary>
+    public static byte GlassAlpha { get; } = 0x40;
+
+    /// <summary>
+    /// 左上角那几块玻璃（返回键 ＋ 片名那两块）<b>最深</b>的那一档：遮七成，指针贴到画面顶边时到的值。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚「加深左上角亚克力背景的颜色，鼠标位置越靠上亚克力背景的颜色越深」：
+    /// 那三块的底不再是「返回键一档、片名一档」的两个常数，而是<b>一条跟着指针高度走的直线</b> ——
+    /// 指针走到满深线（第四批用户令「颜色深度在鼠标移动到剧名下方那条线之前一点的时候达到最大」，
+    /// 那条线由页面量出来）之上就是这一档，退到顶部那条唤出带的下沿就回到上下两条浮层那一档
+    /// （<see cref="GlassAlpha"/>）。算术是 <see cref="TopGlassAlphaAt"/>，指针高度换算成 0..1 那一半
+    /// 归 <c>ChromeReveal.TopGlassDepth</c>（带子的宽度是它那边的 <c>EdgeBandFraction</c>：
+    /// 「指针靠到多近才算靠上」与「标题条什么时候出来」用的是同一条线，否则会出现玻璃已经最深、条子却
+    /// 还没出来的场面）。
+    /// </para>
+    /// <para>
+    /// 取值比原来那一档（0x8C，遮五成半）再深一档。0xCC 往上就是一块实心板，而用户在「加深」这个词上
+    /// 要的不是那个；觉得还不够深就加这个数，一个字节，只有这一处跟着动。
+    /// </para>
+    /// </summary>
+    public static byte TopGlassAlpha { get; } = 0xB3;
+
+    /// <summary>
+    /// 左上角那几块共用的画刷键。<c>PlayerPage.PaintPalette</c> 按它把基准档填进去、
+    /// <c>PlayerPage.ApplyTopGlass</c> 按它逐拍把指针那一档写上去，
+    /// <c>PlayerPage.ProbePalette</c> 也按它把这一支从「与表逐字节相等」那条判据里挑出来 ——
+    /// 它是全表唯一一支<b>值不是常数</b>的画刷。
+    /// </summary>
+    public const string TopGlassKey = "PlayerGlassTopBrush";
+
+    /// <summary>
+    /// 左上角那几块玻璃在 <paramref name="depth"/> 这一档的浓度。<paramref name="depth"/> 是「指针离
+    /// 顶边多近」：0 ＝ 与上下两条浮层同一档（<see cref="GlassAlpha"/>），1 ＝ 贴着顶边
+    /// （<see cref="TopGlassAlpha"/>）。
+    /// <para>
+    /// 越界的值先夹回来，NaN 当 0：这里不比别处，一个跑到 [0,1] 外面的数在 <see cref="byte"/> 上会绕回来，
+    /// 屏上不是「更淡一点」而是另一档；而这一支恰恰是压在画面上的那几块底，绕成哪一档都没人看得出来。
+    /// 指针读数还没拿到时页面本来就该给 0（<c>PlayerPage.TopGlassDepth</c> 挡了一道），这里再挡一道：
+    /// 这条函数是公开的纯函数，别的调用者不该靠「他记得先挡」才对。
+    /// </para>
+    /// <para>
+    /// 住在 Core、做成命名纯函数的理由与表里其他值一样：这条直线是「越靠上越深」那句话的<b>全部算术</b>，
+    /// 单元测试钉得住；页面只负责把指针的高度换算成 depth 再把它写上去。
+    /// </para>
+    /// </summary>
+    public static byte TopGlassAlphaAt(double depth)
+    {
+        var share = double.IsNaN(depth) ? 0 : Math.Clamp(depth, 0, 1);
+
+        return (byte)Math.Round(GlassAlpha + ((TopGlassAlpha - GlassAlpha) * share));
+    }
+
+    /// <summary>
+    /// 标题条右上那五颗（统计、置顶、最小化、最大化、关闭）鼠标压上去时那两档的底。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚第四批：「鼠标移动到右上角的关闭的时候背景要和首页一样变成红色，然后右上角另外
+    /// 几个按钮鼠标移动到按钮上的时候背景颜色太浅了容易和画面合在一起」；第五批把后半句改实了 ——
+    /// 「这四个按钮鼠标移到上面的时候要用**白色亚克力**背景」（圈的是统计、置顶、最小化、最大化四颗，
+    /// 关闭那颗仍旧是红的）。
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><b>四颗</b>：白 <see cref="StripHoverAlpha"/>（八成）／按下 <see cref="StripPressedAlpha"/>
+    ///     （九成，按下去实一档）。**八成的来历**：2026-09-28 晚用户令「集成模式右上角的这个背景太透明了」——
+    ///     第五批那版五成压在亮画面上（蓝天白云、亮场景）仍会糊进去。量过用户那张截图：悬停块内
+    ///     (173,207,222) 对紧邻天空 (93,172,203)，底下换成云（R 230 上下）就几乎分不出来。**趋势是单向的**
+    ///     （第五批「太浅了容易和画面合在一起」→ 这次「太透明」），再有这类反馈只往实里走，别往回调。
+    ///     说清楚一件事：**这不是真亚克力**，是一层半透明的白 —— 真亚克力采不到视频
+    ///     那一层（整笔账见 <see cref="GlassAlpha"/> 的注释），压在画面上只会是一块不透的板；半透明的白与底下
+    ///     做普通 alpha 混合，视频也好 XAML 也好一视同仁，这是「白玻璃」在本架构下做得成的样子（代价是没有
+    ///     模糊）。上一版那支近黑（film <c>0xE6</c>）随第五批那条令退役 —— 用户看过之后要的是白的那一边。</item>
+    ///   <item><b>关闭</b>照首页那颗 —— 外壳开了 <c>ExtendsContentIntoTitleBar</c>，那三颗窗口按钮是**系统
+    ///     画的**，Win11 上关闭键悬停就是 <see cref="CloseRed"/> 那个红，按下再压暗一成
+    ///     （<see cref="CloseRedPressed"/>）。</item>
+    /// </list>
+    /// <para>
+    /// **白底上的图标要转深色**（同一条令里问实的那一半）：那四颗的图标本身是白的，压在八成的白上会糊成
+    /// 一片。于是 <see cref="InkOnWhite"/> 是**指针压着的那一颗**在悬停/按下两态的前景色，白底黑字，与浅色
+    /// 主题里那颗 caption 按钮同一个道理；代价是指针一进一出图标会跳一次色。**只换压着的那一颗**
+    /// （2026-09-27 傍晚第五批的第二趟：第一版写成四颗一起换，用户当场问「怎么是四个按钮一起变色」）。
+    /// 关闭那颗**不改** —— 红底上的白叉本来就是对的。
+    /// </para>
+    /// </summary>
+    public static byte StripHoverAlpha { get; } = 0xCC;
+
+    /// <summary>
+    /// 那四颗按下时那一档：白九成。它们**没有常态底**，所以「按下比悬停暗一档」在这一族上只会看着像没反应 ——
+    /// 按下去实一档才是这一段里看得见的手感。悬停提到八成（2026-09-28 晚）之后按下同一批跟着提，
+    /// 两档仍差一成。
+    /// </summary>
+    public static byte StripPressedAlpha { get; } = 0xE6;
+
+    /// <summary>
+    /// 压在那层白上的墨（四颗按钮悬停/按下时图标转成的颜色）。近黑但不纯黑：纯黑压在白上边太硬，
+    /// 与这一页别的近黑也不是一个调子。
+    /// </summary>
+    public static ThemeColor InkOnWhite { get; } = ThemeColor.Parse("#101419");
+
+    /// <summary>
+    /// 关闭那颗悬停时的红：Win11 系统 caption 关闭键那一支（<c>#C42B1C</c>），也就是首页那颗鼠标压上去的
+    /// 颜色（用户令「和首页一样变成红色」）。取值照系统的值，**没有在这台机器上悬停取样过**：把指针停到首页
+    /// 那颗关闭键上取色，验证技能里是禁止的（用户用的是同一只鼠标）。
+    /// </summary>
+    public static ThemeColor CloseRed { get; } = ThemeColor.Parse("#C42B1C");
+
+    /// <summary>关闭那颗按下时那一档：上面那支红压暗一成（<c>#C42B1C</c> × 0.9）。</summary>
+    public static ThemeColor CloseRedPressed { get; } = ThemeColor.Parse("#B02719");
 
     /// <summary>
     /// 画刷键 → 颜色。<c>PlayerPage.PaintPalette</c> 逐条走这张表，把 XAML 里同名那支空画刷填上。
@@ -82,6 +244,11 @@ public static class PlayerPalette
         ("PlayerInkSoftBrush", InkSoft),
         ("PlayerInkDimBrush", InkDim),
         ("PlayerInkFaintBrush", InkFaint),
+
+        // 左上角第二行那句文件信息专用的一档（用户令 2026-09-28「把独占模式的标题复刻到集成模式」，
+        // 与独占 uosc 顶栏那一行的 c8c8c8 同一个值）。它不在上面那条「四档亮度严格递减」的梯级里 ——
+        // 那一梯级管的是「压在画面上的正文与三档次要读数」，这一支只服务那一行。
+        ("PlayerInkMetaBrush", InkMeta),
 
         // 三块牌子。透明度递增：统计面板最透（它挡着画面的左上角，而且一直开着），音量条居中，
         // 章节预览最实（里面有一张缩略图，底透了缩略图就发灰）。
@@ -103,6 +270,25 @@ public static class PlayerPalette
         // 共用一个的代价就是上面那段注释说的那种牵连。
         ("PlayerStageBrush", Film.WithAlpha(0xFF)),
 
+        // 标题条那一支（2026-09-27）。原本标题条与控制条共用，2026-09-27 晚用户令「移除集成模式进度条
+        // 上方的一大块背景」，控制条（PlayerPage.xaml 的 Bar）不再铺它，于是只剩标题条在用。
+        // **它是半透明的近黑，不是亚克力** —— 为什么，见上面 GlassAlpha 的注释，那是这一条全部的理由。
+        ("PlayerGlassBrush", Film.WithAlpha(GlassAlpha)),
+
+        // 左上角那三块（返回键 ＋ 片名两块）共用的那一支：**跟着指针高度走**（用户令 2026-09-27 傍晚
+        // 「加深左上角亚克力背景的颜色，鼠标位置越靠上亚克力背景的颜色越深」）。表里给的是它最浅那一档
+        // —— 与上下两条浮层同一支色号、同一档浓度 —— 指针往顶边去的时候由页面逐拍写深，
+        // 曲线见 TopGlassAlphaAt 的注释。它是全表唯一一支值不是常数的画刷。
+        (TopGlassKey, Film.WithAlpha(GlassAlpha)),
+
+        // 标题条右上那五颗的悬停/按下（用户令 2026-09-27 傍晚第四批、第五批）：四颗一层半透明的白，
+        // 关闭那颗一个红；白底上那四颗的图标转深色（第五批问实的那一半）。理由见 StripHoverAlpha 那段注释。
+        ("PlayerStripHoverBrush", White.WithAlpha(StripHoverAlpha)),
+        ("PlayerStripPressedBrush", White.WithAlpha(StripPressedAlpha)),
+        ("PlayerStripHoverInkBrush", InkOnWhite),
+        ("PlayerCloseHoverBrush", CloseRed),
+        ("PlayerClosePressedBrush", CloseRedPressed),
+
         // 描边三档，全是白，越该被注意的越亮：统计面板只是块读数，章节预览是浮出来的，
         // 「跳过」是唯一一颗等着被按的按钮。（中间那一档从前音量条也在用，用户要求「音量条不需要边框」之后
         // 只剩章节预览这一个用户；这支画刷留着，不是没人要了。）
@@ -122,18 +308,4 @@ public static class PlayerPalette
         // 代价写在 PulseArt 的类注释里：一帧几乎全白的画面上这颗徽标看不见。
         ("PlayerPulseBrush", White)
     ];
-
-    /// <summary>
-    /// 控制条背后那道渐深的罩子，从上沿到下沿。<c>Along</c> 就是渐变停点的 <c>Offset</c>，<c>Alpha</c> 配上
-    /// <see cref="Film"/> 就是那一档的颜色 —— 整道罩子只有 alpha 在变。
-    /// <para>
-    /// 上沿是全透明：罩子的意思是「往下越来越压得住字」，一道从半黑开始的罩子在画面中间会留出一条硬边。
-    /// </para>
-    /// </summary>
-    public static IReadOnlyList<(double Along, byte Alpha)> BottomScrimStops { get; } =
-        [(0, 0x00), (0.35, 0x8C), (1, 0xF0)];
-
-    // 标题条那道反向的罩子（TopScrimStops）删于 2026-09-18：「播放页面的标题不要黑色渐变」。
-    // TitleStrip 的 Background 一并去掉，XAML 里的 PlayerTopScrim 资源、PaintPalette 的 Wash、
-    // ProbePalette 的表项和上面那条单测跟着一起退了 —— 删干净，别留一支没人用的渐变。
 }

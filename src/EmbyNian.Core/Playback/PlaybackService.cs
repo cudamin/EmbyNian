@@ -582,6 +582,20 @@ public sealed class PlaybackService(
     }
 
     /// <summary>
+    /// 截图保存目录改了，推给正在播的那一部片子 —— mpv 的 <c>screenshot-directory</c> 属性，改完当场生效，
+    /// 画面菜单那三档截图从下一张起就落进新目录，菜单副标题里展开的也是它。没在播就什么都不做；下一部片子
+    /// 由计划层从设置里读（<see cref="PlaybackPlanner.ScreenshotDirectory"/>），走不到这里。
+    /// <para>
+    /// 设置页拿到的是这一个方法而不是 <see cref="PlaybackService"/> 本身 —— 同
+    /// <see cref="ApplySubtitleStyleAsync"/> 那条缝：一页要的是「重发一个目录」这一件事，不是播放器。进来的
+    /// 值应当是裁决过的（<see cref="Infrastructure.AppPaths.ResolveScreenshotDirectory"/>），包括「回到装机
+    /// 落点」的那一次 —— 清空设置框推回来的就是默认目录，两头的账才对得上。
+    /// </para>
+    /// </summary>
+    public Task ApplyScreenshotDirectoryAsync(string directory) =>
+        SetPropertyAsync("screenshot-directory", directory);
+
+    /// <summary>
     /// 写给<b>点名的那个句柄</b>，而且只在它还是当前这一次播放的时候写。
     /// <para>
     /// 成批地写不是一次写：字幕外观十一行、着色器档位一整条链，每一行都是一次 await，中间用户完全来得及
