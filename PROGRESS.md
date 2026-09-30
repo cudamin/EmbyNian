@@ -2,6 +2,26 @@
 
 最后更新：2026-09-30
 
+## 音频输出审查修复一批：设备失效回退、延迟基准、原生音量记忆、设备列表缓存、延迟输入清空误导与文案（2026-09-30 用户令「修复」当轮审查发现，构建＋1378 单测＋发布全过；闸门 4 环境红见文末）
+
+用户令按当轮音频输出审查报告（`work/audio-output-audit-20260930.md`）修复。**修复七件、说明五处、新增单测三条**：
+
+1. **[P1] 设备失效回退**：设置页承诺「拔掉的设备退回系统默认」，随包内核实测（v0.41.0-923，`work/audio-audit-20260930-native.log`）对指定设备失败不回退（「forced … no sound」）。现在 `AudioDeviceCatalogue.UsableDevice`（纯函数）在起播前核对：`PlaybackService` 注入设备目录（仅内置后端核对——外部 mpv.exe 的设备表是它自己的，不代它做主），设备已不在线就不发 `audio-device` 并记一条警告，链路 `PlaybackService.ResolveAudioDeviceAsync` → `PlaybackPlanner.Plan(ticket, connection, audioDevice)` → `MpvOutputOptions.Build(…, audioDevice)`，null＝不核对照旧、空串＝跟随系统默认。
+2. **延迟基准**：`PlayerViewModel.Transport` 起播时 `AudioDelay` 从清零改为播到全局延迟（毫秒÷1000）——同窗换片 `FilmScoped` 本来就把内核拨回新票里的全局值，界面基准从此一致；全局 +500ms 时首次微调是 +600ms 而不是 +100ms。
+3. **原生音量记忆**：`ApplyStatus` 里内核读数（uosc、外部 mpv 原生控件改的）现在也记入 `_volumePending`，`FlushVolume` 照常落盘。两个护栏：`_playback.CanControl` 为假（快照是缺省 100）不记，防止假读数覆盖真设置；只在读数与 `_kernelVolume`（新字段）不同时记一次，防止每拍刷新结算时间戳把音量条冻住。
+4. **设备列表空结果不缓存**：`AudioDeviceCatalogue.LoadAsync` 只缓存非空名单——首次枚举失败（dll 缺、服务短暂不可用）不再钉死整个进程，下次打开设置或下一场起播核对重新读。非空仍按进程缓存一次（原设计保留）。
+5. **延迟输入清空误导**：`SettingNumberRow` 新增 `Placeholder`（跟读回的存储值走），Number 模板绑 `PlaceholderText`——清空输入框后灰字显示仍在生效的值，不再看着像已归零（实测：清空后 UIA 值为空、灰字 500、配置仍 500）。
+6. **无障碍**：Number 模板的 NumberBox 补 `AutomationProperties.Name="{x:Bind Label}"`——从前整页数字框在 UIA 里是「没有名字的输入框」。
+7. **诊断页改口**：「实际音频输出设备 = auto（wasapi）」改为「音频输出设备（请求值与驱动）」；`NoteAudioDeviceAsync` 等到 `current-ao` 出现才记录（请求值单飞不再冒充读数）。
+
+**说明文案**：音频页头补生效时机（「保存后从下一次播放开始生效；播放中的临时调整在画面菜单里，不保存」）；设备行说明改成与新回退一致；「5.1 下混归一化」说明改为防削波本义（不再许诺「对白不再被爆炸声压过去」，指向「音量均衡」）；「完全压缩（对白最清楚）」→「完全压缩（用足片源自带的 DRC）」；loudnorm 档说明收掉「各集之间不用再调」的绝对句；五个直通开关各配格式名＋共同代价（直通后音量均衡/下混/音量条不再作用于该轨），DTS-HD 写明与「直通 DTS」同勾时按 DTS-HD 处理。
+
+**验证**：构建 **0 警 0 错**；单测 **1378/1378、0 失败 0 跳过**（新 3 条：`UsableDevice` 认名与空回退、Build 按 audioDevice 覆盖下发/不发、Plan 贯穿核对值——设置挑了设备＋核对空串 ⇒ 起播选项无 `audio-device`）；发布 **527 文件 / 300.7 MB / 11 GLSL** 过校验；设置页发布件离线探针实测（`--probe-subtitles inspect`，无账号无播放）：无障碍名读到「全局音频延迟（毫秒） 最小-5000 最大5000」、页头/设备/下混/延迟新说明在屏、清空延迟灰字 500 而配置仍 500、DRC 下拉新档位文案，截图 `work/shots/settings-audio-fixed-20260930.png` 与 `settings-audio-drc-options-20260930.txt`。
+
+**闸门 4 环境红（非本批引入，双份证据）**：两轮自检均 84 项后停在登录页（服务器未连上，「服务器版本 未知」，设置相关 100 项检查没跑到）；按验证技能用改动前提交 931bade 建临时工作树发布旧版对照（run-de7ee0c4…），**旧版复现一模一样的红**（检查 84、失败 0、消失 100、降级 1、新增 3）——是当下 Emby 服务器连不上的环境状况，不是这批改动。三份报告：`work/audio-fix-20260930-selfcheck.log`、`-selfcheck2.log`、`-selfcheck-baseline.log`。**服务器恢复后需要重跑闸门 4 补全设置相关检查**（基线未动，没有洗绿）。临时工作树已删。
+
+**没验证到**：真机拔插设备的端到端回退（探针只证明了「指定不存在的端点内核不回退＋应用层会不发」，未热拔插真耳机）；uosc 改音量落盘的实机听感；真实播放的延迟微调。按规矩本轮零真实播放、零观看记录变化；未提交。
+
 ## 「通知接管」那张手写卡片的说明漏接「隐藏功能下方说明」（2026-09-30 用户报「我不是开启了 隐藏功能下方说明 为什么下面的说明不隐藏？」，构建＋1375 单测＋发布＋闸门 4 本域绿）
 
 **用户报的**：设置 → 界面里「隐藏功能下方说明」开着，设置 → 通知里那张卡片下面的说明却照旧挂着。查本机设置文档 `%LOCALAPPDATA%\EmbyNian\settings.json`：`Ui.CompactMode = true` —— 用户没记错，是那张卡片错了。
@@ -928,7 +948,7 @@ Segoe Fluent Icons ≈ 0.875），逐颗对不齐，按平均算要乘 **0.75** 
 - **着色器切换两处修复**——①画质预设恢复（P2）：`MpvProfiles.Expand` 读运行中播放器的 `profile-list` JSON 把 `profile=fast/high-quality` 展开成真实选项，`ShaderSwitch.Options` 与 `InlineSwitch.FilmScoped` 都先展开基线再还原——此前关链会把 fast 的 bilinear 还原成出厂 lanczos（本机 libmpv 实测复现过），现在回落的是预设值；`SetShaderGroupAsync` 改走 `IPlayerControl.CommandAsync` 逐条下发并核对返回值，读不到 profile-list 或某条被拒就返回 false，不再「没核对就报成功」。②独占模式菜单（P2）：uosc 画面菜单顶部新增「着色器」子菜单（恢复设置方案/关闭/八档带链条描述），新契约键 `embynian-shader`（值域收窄到 off/auto/八档 id）；集成与独占同一份 `ApplyShaderGroup`，切换成功才钉住档位并提示，失败提示「未能完整应用」+ show-text。菜单另修两处：插值那行从单个 cycle 改成「开启（同时使用显示同步）」radio＋「关闭」——单开插值在音频同步下是无效组合；截图三行参数改为 scaled+subtitles/video/window 并按实际语义改名（旧的「屏上这一帧」实际按原始尺寸渲染，带门槛的着色器不跑）。
 - **反交错与文案修正**——`Deinterlace` bool → `DeinterlaceMode`（no/auto/yes，FromJson 迁移旧 bool 键），界面说明不再说「别的片源开了也没影响」；抖动「不抖动」更名「继承画质预设」、色彩范围「跟随片源标记」更名「自动（PC 全范围）」、插值算法里「mpv 自己的默认」删去（实测 oversample）、硬解目录补 auto-copy-safe/d3d12va-copy/nvdec-copy、渲染器目录删 dmabuf-wayland（Windows 没有这个 vo）、视频同步行说明改说「下次播放」的值（设置页本来就不动正在播的片子，旧「此刻生效」是句谎话）。
 - **验证**：构建 0 警 0 错、`format whitespace` 过、`git diff --check` 干净；单测 **1302/1302**（子代理修了两个跟不上新契约的测试桩并补 5 条回归：profile 展开、切档回落预设值、target-peak 只在 HDR 输出发、杜比 vf 开关、对比度恢复）；随包 libmpv 隔离句柄实测 14 个新参数值全部接受（screenshot 是命令不是选项，-5 属预期）；闸门 4 自检 **178 项全绿**——「视频同步…此刻生效」按更名流程改基线为「…下次播放的值」，新增「视频输出包含 HDR 与着色器」一条，另两条新增（倍速轮盘、隐藏功能下方说明收放）属同树其他在途批次、本次一并确认通过后录入基线。
-- **技能沉淀**——本轮地形落成随库技能 `embynian-video-output`（`.claude/skills/`，quick_validate 过）：选项四层书写顺序、内置管线锁定的 vo/gpu-api、画质预设展开（MpvProfiles）、HDR/杜比语义、抖动/去色带/插值的真实开关、运行时切换契约与不起播的隔离探针；CLAUDE.md 技能名单同步加了一行。
+- **技能沉淀**——本轮地形落成随库技能 `embynian-video-output`（`.claude/skills/`，quick_validate 过）：选项四层书写顺序、内置管线锁定的 vo/gpu-api、画质预设展开（MpvProfiles）、HDR/杜比语义、抖动/去色带/插值的真实开关、运行时切换契约与五层验证阶梯；CLAUDE.md 技能名单同步加了一行。
 - **补刀（对照审查报告回访时发现的尾巴）**——兼容性检查（`MpvRenderCheck`）此前仍读设置里存着、内置播放器根本不用的 vo/gpu-api：存量文件里的 gpu/d3d11 会编出「ravu 加载不上」的假提醒，默认 vulkan 则让内置真跑 d3d11 的 compute 卡顿永远报不出来。现在 `LibMpvPipelinePolicy` 把锁定的 gpu-next/d3d11 提成常量（`ForcedRenderer`/`ForcedApi`，Build 与检查同源），规划器对内置后端按事实问（`pipelineOwned` 分支：渲染不匹配的两条不再产出，compute 提醒给出降档/关着色器/改外部播放器这种用户真能做的建议）；单测 +1 钉住常量与契约不许漂。**单测 1303/1303**。
 - **没验证到（留实机）**：HDR/杜比设置的实机画面（需要 HDR 片源与 HDR 屏）、独占模式着色器子菜单的 uosc 观感、着色器切换失败提示的实机路径；**闸门 3 未跑——桌面快捷方式仍是旧版**，等这棵树的在途批次收敛后由整合会话一并发布。
 

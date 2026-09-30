@@ -66,6 +66,29 @@ public sealed class AudioDeviceCatalogue
     public static IReadOnlyList<AudioDevice> Selectable(IEnumerable<AudioDevice> devices) =>
         [.. devices.Where(device => !string.Equals(device.Name, AutoDevice, StringComparison.OrdinalIgnoreCase))];
 
+    /// <summary>
+    /// 设置里存的那台设备现在还认不认。还在名单里就交回 mpv 自己的拼写；名单里没有 —— 耳机拔了、
+    /// HDMI 端点变了、设置带到了另一台机器 —— 交回空串，也就是「跟随系统默认」。
+    /// <para>
+    /// 这是设置页那行说明承诺的回退，而 mpv 自己不兑现它：随包内核（v0.41.0-923 实测）对指定设备失败
+    /// 会一路报错到「Could not open/initialize audio device -&gt; no sound」，日志自己写着「forced with
+    /// the --audio-device option … Try unsetting it」—— 退不退，是调用方的决定。空串与 null 由调用方
+    /// 区分：这里的返回值直接进 <see cref="Mpv.MpvOutputOptions.Build"/> 的 <c>audioDevice</c> 覆盖位，
+    /// null 在那儿意味着「不核对，照设置原样」。
+    /// </para>
+    /// </summary>
+    public static string UsableDevice(string stored, IReadOnlyList<AudioDevice> devices)
+    {
+        var name = (stored ?? "").Trim();
+        if (name.Length == 0) return "";
+
+        foreach (var device in devices)
+            if (string.Equals(device.Name, name, StringComparison.OrdinalIgnoreCase))
+                return device.Name;
+
+        return "";
+    }
+
     private readonly Func<string?> _libraryPath;
 
     private IReadOnlyList<AudioDevice>? _cached;
@@ -77,13 +100,15 @@ public sealed class AudioDeviceCatalogue
     public AudioDeviceCatalogue(Func<string?> libraryPath) => _libraryPath = libraryPath;
 
     /// <summary>
-    /// The devices, read once per process. Off the calling thread — creating and initialising an mpv context
-    /// is tens of milliseconds of native work, and the settings page must not stall on it (the 字幕字体 picker
-    /// has the same shape and fills itself in a moment after the page appears).
+    /// The devices, read once per process — but only once they succeeded. Off the calling thread — creating
+    /// and initialising an mpv context is tens of milliseconds of native work, and the settings page must not
+    /// stall on it (the 字幕字体 picker has the same shape and fills itself in a moment after the page appears).
     /// <para>
     /// An empty list is a normal answer, not an error: libmpv missing, an mpv built without the WASAPI output,
     /// a machine with no sound card. The row stays usable — it keeps 「自动」 and whatever the settings file
-    /// holds.
+    /// holds. An empty answer is <b>not cached</b>: a first visit that failed (dll missing mid-upgrade, device
+    /// service briefly down) must not pin the failure for the life of the process — the next visit to the
+    /// settings page, and the next playback that wants to check its device, read afresh.
     /// </para>
     /// </summary>
     public async Task<IReadOnlyList<AudioDevice>> LoadAsync()
@@ -91,7 +116,10 @@ public sealed class AudioDeviceCatalogue
         if (_cached is { } ready) return ready;
 
         var devices = await Task.Run(Read).ConfigureAwait(false);
-        _cached = devices;
+
+        // 空名单不缓存：枚举失败是暂时状态，下一次打开设置、下一场播放要核对设备时重新读，
+        // 而不是把那一次失败钉死在进程里。非空才值得按进程记一份。
+        if (devices.Count > 0) _cached = devices;
         return devices;
     }
 

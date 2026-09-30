@@ -499,11 +499,19 @@
                                 Text="{x:Bind Note}"
                                 Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
                         </StackPanel>
+                        <!--
+                          AutomationProperties.Name：这一页的数字框从前只被定位成「两个没有名字的输入框」——
+                          延迟那行的 UIA 读数就是这样（2026-09-30 审查实测）。屏幕阅读器与 UIA 都靠它认行。
+                          PlaceholderText：清空输入框时灰字里仍显示当前生效的值 —— 清空不等于归零，设置还留着
+                          （SettingNumberRow.Placeholder）。
+                        -->
                         <NumberBox
                             Grid.Column="1"
+                            AutomationProperties.Name="{x:Bind Label}"
                             HorizontalAlignment="Left"
                             Maximum="{x:Bind Maximum}"
                             Minimum="{x:Bind Minimum}"
+                            PlaceholderText="{x:Bind Placeholder, Mode=OneWay}"
                             SpinButtonPlacementMode="Compact"
                             Value="{x:Bind Value, Mode=TwoWay}"
                             Width="160" />

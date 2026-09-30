@@ -1,6 +1,6 @@
 ---
 name: "embynian-video-output"
-description: "EmbyNian 的视频输出设置（基础输出、HDR 与杜比视界、画质与着色器三卡）与 mpv 选项的落地链路：选项书写顺序、内置管线锁定的 vo/gpu-api、画质预设展开、HDR/杜比语义、抖动/去色带/插值的真实开关、运行时着色器切换契约，以及不起播就验证选项的隔离探针。Use when touching VideoSettings, MpvOutputOptions, HdrOptions, MpvProfiles, ShaderSwitch, LibMpvPipelinePolicy, MpvRenderCheck, the 画面菜单 catalog, or the 设置→视频输出 cards; shader chain/tier content is mpv-shader-quality."
+description: "EmbyNian 的视频输出设置（基础输出、HDR 与杜比视界、画质与着色器三卡）与 mpv 选项的落地链路：选项书写顺序、内置管线锁定的 vo/gpu-api、画质预设展开、HDR/杜比语义、抖动/去色带/插值的真实开关、运行时着色器切换契约，以及五层验证阶梯（规则测试→裸内核→离线探针→视觉操作→交付门禁）。Use when touching VideoSettings, MpvOutputOptions, HdrOptions, MpvProfiles, ShaderSwitch, LibMpvPipelinePolicy, MpvRenderCheck, the 画面菜单 catalog, or the 设置→视频输出 cards; shader chain/tier content is mpv-shader-quality."
 ---
 
 # EmbyNian — 视频输出与 HDR/杜比设置
@@ -58,15 +58,32 @@ description: "EmbyNian 的视频输出设置（基础输出、HDR 与杜比视�
 
 独占模式走 uosc 菜单：契约键是 `VideoWindowContract.Shader`（`embynian-shader`），值域收窄为 `off`/`auto`/八档 id；`Parse` 拒收其余值。菜单行按 DFS 序号对 `PlayerMenuCatalog.Commands`，推送菜单带 active 高亮。
 
-## 不起播就验证选项
+## 验证阶梯
 
-随包 `libmpv-2.dll` 用 `py` ctypes 开隔离句柄（`config=no, vo=null, ao=null, video=no, audio=no, load-scripts=no, force-window=no, terminal=no`）：
+从下往上走：上一层没过不碰下一层，哪一层能回答问题就停在哪一层。
 
-- `option-info/<名>/default-value`、`/choices`、`/min`、`/max` —— 默认值以它为准，不抄文档。
-- 直接 `mpv_set_option_string` 试设值，0=接受；`screenshot` 是**命令**不是选项（-5 属预期）。
-- `profile-list` 属性读回 JSON 数组 `[{name, options:[{key,value}]}]`，就是 `MpvProfiles.Expand` 的输入形状。
+1. **纯规则测试。** 先编译当前 Core＋测试项目，再跑 runner（`--no-build` 只认刚编译出来的产物）。相关套件：`PlaybackTests`（输出／计划／运行条件／管线契约）、`SettingsTests`（迁移与 Normalize、恢复默认）、`InlineSwitchTests`（换片签名、FilmScoped、预设展开回落）、`MpvUiTests`（契约键、绑定名与消息名不同名）。
 
-不许用真实 Emby 片源验证（CLAUDE.md 第三档授权）；画质好不好由用户判断，助手只验证「该跑的链真的跑了」。
+2. **裸内核。** 无媒体上下文问选项：`py` ctypes 隔离句柄（`config=no, vo=null, ao=null, video=no, audio=no, load-scripts=no, force-window=no, terminal=no`）读 `option-info/<名>/default-value`、`/choices`、`/min`、`/max`；试设值，0=接受、负数=拒绝（`screenshot` 是命令不是选项，-5 属预期）；`profile-list` 读回 JSON 数组 `[{name, options:[{key,value}]}]`，即 `MpvProfiles.Expand` 的输入形状。需要媒体上下文的（换片、预设展开的运行期行为）只用本地临时合成素材，禁用户配置、脚本和网络。**裸内核不等于完整 uosc／独占窗口验收。**
+
+3. **真实控件离线探针。** 现有三条播放探针（`--probe-composition`、`--probe-cursor`、`--probe-player-motion`）固定走集成管线，不覆盖独占／uosc／外部 mpv——相关改动如实报覆盖缺口。字幕批次已立了先例 `--probe-subtitles [inspect]`：启动前分流隔离数据、临时默认设置、假操作委托、禁止 HTTP 的处理器，`inspect` 留屏供手工／UIA 检查，与自检共用桌面互斥须串行——给视频输出新增探针照这个边界做；在此之前，设置层验证走自检的假行探针（`SettingOptionalNumberRow.Probe`、`SettingChoiceRow.Probe`、精简模式探针），不碰屏上那一页。留屏检查也可用 `--show-settings 视频输出`（配 `tools/shot.ps1` 或 `--dump-ui`），配 `--screen`、`--theme` 指定屏与主题；这些开关不与播放／导航／自检混用。
+
+4. **视觉和 UI 操作。** 用可用的官方 Computer Use 技能，先语义定位（UIA／AutomationId；本项目 x:Name 即句柄，新控件跑 `tools/scan-automation-ids.js`）。视频输出上值得亲眼看的：三卡同分类的渲染与行模板、自动／手动数值行的切换与夹紧、切后端后两行下拉的出现／消失、着色器 A/B（统计页读数＋截图，规矩见 mpv-shader-quality）、独占着色器子菜单观感。行没挂树就量会读到空（模板／折叠的既有陷阱）：先让真实控件 Loaded（走查选中那一分类）再检查结果，别直接放宽断言。
+
+5. **项目交付门禁。** 按当前 CLAUDE.md 的四道闸门执行；测试与自检／桌面探针**串行**（共用一个互斥体）。已有失败照实报红，不因为归因旧版就说全绿；比较旧发布件时说明它是否已包含部分在途修改。发布（闸门 3）守多窗口规则：当天已有别的会话发布过就不重发，说明桌面快捷方式仍是旧版。
+
+## 参考来源与依据
+
+对照上游、核对默认值语义或新增选项时用这些（每条「能回答什么、有什么坑」详见 [references/sources.md](references/sources.md)）：
+
+- dyphire/mpv-config — <https://github.com/dyphire/mpv-config>（[mpv.conf](https://github.com/dyphire/mpv-config/blob/master/mpv.conf)）
+- 用户本地 mpv.conf — `C:/mpv_config-2026.08.12/portable_config/mpv.conf`（机器上的文件，不入库）
+- mpv.net 设置目录 — <https://github.com/mpvnet-player/mpv.net/blob/master/src/MpvNet.Windows/Resources/editor_conf.txt>
+- IINA 的 HDR 实现 — <https://github.com/iina/iina/blob/develop/iina/VideoView.swift>
+- mpv 官方选项说明 — <https://mpv.io/manual/master/>；随包内核（v0.41.0-923-g7b8915bc1）钉版：亮度/输出参数 [options.rst @ 7b8915bc1](https://github.com/mpv-player/mpv/blob/7b8915bc1/DOCS/man/options.rst)，杜比视界控制 [vf.rst @ 7b8915bc1](https://github.com/mpv-player/mpv/blob/7b8915bc1/DOCS/man/vf.rst)
+- ArtCNN — <https://github.com/Artoriuz/ArtCNN>
+
+仓库内依据：[HdrOptions.cs](../../../src/EmbyNian.Core/Mpv/HdrOptions.cs)（HDR 参数生成）、[PlayerMenuCatalog.cs](../../../src/EmbyNian.Core/Mpv/PlayerMenuCatalog.cs)（HDR 临时菜单）、[MpvOutputOptions.cs](../../../src/EmbyNian.Core/Mpv/MpvOutputOptions.cs)（选项落地）。规矩两条：**内核查询先于任何文档**；本地配置 ≠ dyphire master，上游行为不能当本地行为。
 
 ## 改这些设置时的连带
 

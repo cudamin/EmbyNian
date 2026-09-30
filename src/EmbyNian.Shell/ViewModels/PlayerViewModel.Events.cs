@@ -781,6 +781,11 @@ public sealed partial class PlayerViewModel
     /// answered is 「音频独占模式 took over <em>which</em> device」 — a question the launch options cannot answer,
     /// because 「跟随系统默认设备」 sends nothing at all.
     /// </para>
+    /// <para>
+    /// 记下的是<b>请求值加驱动</b>（「auto（wasapi）」），不是 Windows 眼里的那个端点 —— mpv 的
+    /// <c>audio-device</c> 在自动模式下就答 auto，端点名它不说。诊断页因此把这一行标成「请求值与驱动」，
+    /// 不再叫「实际设备」（2026-09-30）。
+    /// </para>
     /// </summary>
     private Task NoteAudioDeviceAsync(int generation) => PollAsync(generation, true, async () =>
     {
@@ -790,9 +795,14 @@ public sealed partial class PlayerViewModel
         var driver = await _playback.GetTextAsync("current-ao").ConfigureAwait(true);
         if (generation != _generation) return true;
 
+        // 驱动还没开（音频输出在文件交出去之后才就绪）就再等一轮：把 audio-device 的请求值单独当成
+        // 「实际设备」记下，正是诊断页那行错名的由来。轮询有次数上限；音频真打不开时宁可不记 ——
+        // 「请求了 X 但没开起来」比一个看起来成功的读数诚实。
+        if (string.IsNullOrWhiteSpace(driver)) return false;
+
         // mpv answers 「auto」 for a device nobody named, which is true but useless on its own — the driver
         // name is what says anything at all in that case.
-        var described = string.IsNullOrWhiteSpace(driver) ? device : $"{device}（{driver}）";
+        var described = $"{device}（{driver}）";
         _playback.NoteAudioDevice(described);
         Log.Info(Category, $"音频输出设备：{described}");
         return true;
@@ -848,7 +858,23 @@ public sealed partial class PlayerViewModel
             // the thumb back a step, which during a spin is the thumb going forwards and backwards. mpv's echo
             // is only read once the level has settled (_volumePending cleared by FlushVolume), and nothing
             // else moves mpv's volume in the meantime: its own input handling is switched off at launch.
-            if (_volumePending is null) Volume = Math.Clamp(Math.Round(status.Volume), 0, AudioSettings.MaxVolume);
+            if (_volumePending is null)
+            {
+                var level = (int)Math.Clamp(Math.Round(status.Volume), 0, AudioSettings.MaxVolume);
+                Volume = level;
+
+                // 内核侧改的音量也要记下来（2026-09-30 修）：uosc 与外部 mpv 的原生控件不经过
+                // OnVolumeChanged，这条轮询是它们唯一的回声 —— 从前回声被 _pushing 挡在门外，_volumePending
+                // 一直是空，FlushVolume 无值可存，下一场就从旧设置起播。两个护栏：快照必须是真的
+                // （CanControl 为假的 status.Volume 是缺省 100，把假读数存下去会覆盖真设置）；只在读数
+                // 真的变了时记一次，否则每拍刷新 _volumeTouched，结算永远等不到，音量条也会冻住。
+                if (_playback.CanControl && level != _kernelVolume)
+                {
+                    _kernelVolume = level;
+                    _volumePending = level;
+                    _volumeTouched = Now;
+                }
+            }
         }
         finally
         {

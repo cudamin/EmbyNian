@@ -32,6 +32,7 @@ public sealed class PlaybackService(
     AppSettings settings,
     Func<IPlaybackBackend> backendFactory,
     PlaybackPlanner planner,
+    AudioDeviceCatalogue? audioDevices = null,
     bool allowPlayback = true)
 {
     private const string Category = "playback";
@@ -281,6 +282,31 @@ public sealed class PlaybackService(
     }
 
     /// <summary>
+    /// 设置里挑过的音频输出设备还在线吗（<see cref="AudioDeviceCatalogue.UsableDevice"/>）。内置后端以
+    /// 随包 libmpv 的枚举为准 —— 放片子的就是它，设备名对得上；设备已不在线就退回系统默认并记一条日志，
+    /// 兑现设置页「拔掉的设备退回系统默认而不是变成没声音」的承诺。随包内核对指定设备失败是不回退的
+    /// （2026-09-30 实测：日志「was forced … Try unsetting it … no sound」），所以这一步只能在应用层做。
+    /// <para>
+    /// 外部 mpv.exe 不核对：它的设备表是它自己那一份，拿随包 libmpv 的枚举替它做主没有依据。
+    /// 返回 null 表示「没有覆盖」——设备没挑过、没有设备目录可问（测试路径）或外部后端 —— 计划层照
+    /// 设置原样走。返回空串表示「核对过了，确实不在」，计划层一条都不发，mpv 用自己的 auto。
+    /// </para>
+    /// </summary>
+    private async Task<string?> ResolveAudioDeviceAsync()
+    {
+        var stored = settings.Audio.Device.Trim();
+        if (stored.Length == 0 || audioDevices is null) return null;
+        if (settings.Mpv.Backend != MpvBackendKind.BuiltInLibMpv) return null;
+
+        var devices = await audioDevices.LoadAsync().ConfigureAwait(false);
+        var usable = AudioDeviceCatalogue.UsableDevice(stored, devices);
+        if (usable.Length > 0) return usable;
+
+        Log.Warn(Category, $"音频输出设备 {stored} 已不在线，本次播放跟随系统默认");
+        return "";
+    }
+
+    /// <summary>
     /// 一次候选版本上的完整播放：从停掉旧的到收尾上报。原 <see cref="PlayAsync"/> 的主体，包进候选
     /// 循环里跑，一次循环一趟。
     /// </summary>
@@ -297,7 +323,7 @@ public sealed class PlaybackService(
         PlaybackRequest request;
         try
         {
-            request = planner.Plan(ticket, scope.Connection);
+            request = planner.Plan(ticket, scope.Connection, await ResolveAudioDeviceAsync().ConfigureAwait(false));
         }
         catch
         {

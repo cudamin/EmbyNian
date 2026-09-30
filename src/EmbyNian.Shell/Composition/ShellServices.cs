@@ -105,6 +105,10 @@ internal static class ShellServices
             provider.GetRequiredService<AppSettings>(),
             provider.GetRequiredService<PlaybackBackendFactory>().Create,
             provider.GetRequiredService<PlaybackPlanner>(),
+
+            // 设备核对（2026-09-30）：起播前拿设备目录对一遍设置里挑的端点，已不在线就退回系统默认。
+            // 目录与播放服务同进程单例 —— 设置页枚举过一次的结果，起播核对直接复用。
+            provider.GetRequiredService<AudioDeviceCatalogue>(),
             allowPlayback: !selfCheck));
 
         // ---- the optional second service ---------------------------------------------------------------

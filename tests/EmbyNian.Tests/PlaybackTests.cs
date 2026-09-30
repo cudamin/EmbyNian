@@ -1920,6 +1920,59 @@ internal static class PlaybackTests
             Assert.Equal(0, AudioDeviceCatalogue.Selectable([]).Count);
         });
 
+        Test("音频设备：核对只认还在名单里的名字，不在就跟随系统默认", () =>
+        {
+            // 设置页承诺「拔掉的设备会退回系统默认而不是变成没声音」，而 mpv 对指定设备失败是不回退的
+            // （随包 v0.41.0-923 实测：forced → no sound）。回退因此在应用层做，判断本体在这 —— 服务层
+            // 起播前核对一次，计划层照核对结果走。
+            var devices = new[] { new AudioDevice("wasapi/abc", "扬声器"), new AudioDevice("wasapi/def", "耳机") };
+
+            Assert.Equal("wasapi/abc", AudioDeviceCatalogue.UsableDevice("wasapi/abc", devices));
+            Assert.Equal("wasapi/abc", AudioDeviceCatalogue.UsableDevice("WASAPI/ABC", devices),
+                "大小写不敏感，与设置行同一套比较");
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("wasapi/gone", devices),
+                "不在名单里＝跟随系统默认，不是没声音");
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("", devices), "没挑过设备就没什么可核对的");
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("  ", devices));
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("wasapi/abc", []), "空名单（枚举失败）时宁可疑自己");
+        });
+
+        Test("输出：音频设备按核对结果下发，核对后的空串等于跟随系统默认", () =>
+        {
+            var picked = new AudioSettings { Device = "wasapi/{0.0.0.00000000}.{9c3d1b2e}" };
+
+            // null＝不核对（外部 mpv 后端、旧调用），照设置原样发 —— 外部 mpv.exe 的设备表是它自己那一份。
+            var asIs = Options(MpvOutputOptions.Build(new VideoSettings(), picked));
+            Assert.Equal(picked.Device, asIs["audio-device"]);
+
+            var usable = Options(MpvOutputOptions.Build(new VideoSettings(), picked, audioDevice: picked.Device));
+            Assert.Equal(picked.Device, usable["audio-device"], "核对过、还在名单里：原样");
+
+            var gone = Options(MpvOutputOptions.Build(new VideoSettings(), picked, audioDevice: ""));
+            Assert.False(gone.ContainsKey("audio-device"),
+                "已不在线的设备不许再发 —— 指定端点失败时内核自己不回退，回退只能靠不发这一条");
+        });
+
+        Test("计划：核对后的设备值贯穿到起播选项", () =>
+        {
+            // 服务层把核对结果交给 Plan，Plan 转给 Build —— 这条链断在任何一处，设置里那台不在线的设备
+            // 就会原样发出去，无声的那类故障回来。设置里挑了设备、核对说不在线（空串）：起播选项里不许
+            // 出现 audio-device。
+            var settings = new AppSettings();
+            settings.Audio.Device = "wasapi/{0.0.0.00000000}.{9c3d1b2e}";
+            var planner = new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders));
+
+            var gone = Options(planner.Plan(Ticket(), Connection(), "").PlayerOptions);
+            Assert.False(gone.ContainsKey("audio-device"), "核对后的空串＝跟随系统默认，一条都不发");
+
+            var kept = Options(planner.Plan(Ticket(), Connection(), "wasapi/kept").PlayerOptions);
+            Assert.Equal("wasapi/kept", kept["audio-device"], "核对过、还在：覆盖值原样发");
+
+            var asIs = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.Equal("wasapi/{0.0.0.00000000}.{9c3d1b2e}", asIs["audio-device"],
+                "不核对（null）时照设置原样 —— 外部后端与旧调用走的老路");
+        });
+
         Test("计划：截图有落点、有格式、有片名加时间码的模板", () =>
         {
             // 截图这个功能从前一条都没有，理由是「--no-config 之下没有 screenshot-directory，文件会落到 exe

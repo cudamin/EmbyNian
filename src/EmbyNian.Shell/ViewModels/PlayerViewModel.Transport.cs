@@ -296,7 +296,11 @@ public sealed partial class PlayerViewModel
             };
 
             SubtitleDelay = 0;
-            AudioDelay = 0;
+
+            // 音频延迟的界面基准是「这一场起播内核真实带着的值」：启动选项已把全局延迟发给了 mpv，同窗
+            // 换片 FilmScoped 也会把它重置回新票选项里的同一个值。从前这里清零，全局 +500ms 时第一次
+            // 微调就从 0 加 0.1、再绝对写回 —— 全局被覆盖成 +100ms 而不是 +600ms（2026-09-30 修）。
+            AudioDelay = Math.Round(Settings.Audio.DelayMilliseconds / 1000.0, 3);
 
             // 交给后端前的最后一问：停在这一拍的话，连后端都不要碰 —— Core 那头的待启动编号
             // 也会把仍在等待闸门的旧请求作废（用户 Stop 的同一刀）。

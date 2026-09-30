@@ -718,8 +718,24 @@ public sealed partial class SettingsViewModel : PageViewModel
     private SettingSection AudioCard()
     {
         var audio = Settings.Audio;
+
+        // 直通说明的共同尾巴。直通绕过 mpv 的混音与处理链这件事比「原样解码」四个字更要紧：开了直通还
+        // 指望音量均衡、下混归一化或音量条起作用，是这一页最容易被骗的一处（mpv 手册对 audio-spdif 的
+        // 警告也是同一句）。逐格式只说差别，共同代价写一遍。
+        const string PassthroughTail =
+            "需要功放/电视支持这一格式；直通后音量均衡、下混归一化和音量条都不再作用于这条音轨";
+        var passthroughNotes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ac3"] = $"交给功放原样解码（杜比数字）。{PassthroughTail}",
+            ["eac3"] = $"交给功放原样解码（杜比数字加）。{PassthroughTail}",
+            ["dts"] = $"交给功放原样解码（DTS 核心流）。{PassthroughTail}",
+            ["dts-hd"] = $"交给功放原样解码（DTS-HD MA；与「直通 DTS」同时勾选时按这一档处理）。{PassthroughTail}",
+            ["truehd"] = $"交给功放原样解码（杜比 TrueHD，仅 HDMI）。{PassthroughTail}",
+        };
+
         var passthrough = MpvOutputOptions.PassthroughCodecs
-            .Select(codec => Toggle($"直通 {codec.Label}", "交给功放原样解码",
+            .Select(codec => Toggle($"直通 {codec.Label}",
+                passthroughNotes.GetValueOrDefault(codec.Value, "交给功放原样解码"),
                 () => audio.PassthroughCodecs.Contains(codec.Value, StringComparer.OrdinalIgnoreCase),
                 value =>
                 {
@@ -731,7 +747,10 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "audio-spdif"))
             .ToList();
 
-        return new SettingSection("音频输出", "音频输出", "输出设备、声道布局、响度、独占模式和功放直通。",
+        // 生效时机写在页头而不是每行重复：这一页的行只改设置并保存，没有字幕外观那种实时推送 —— 正在放
+        // 的片子不因这里而变（2026-09-30 审查补的说明，免得「改了却听不出变化」被当成坏了）。
+        return new SettingSection("音频输出", "音频输出", "输出设备、声道布局、响度、独占模式和功放直通。"
+            + "这一页的改动保存后从下一次播放开始生效，正在放的片子不受影响；播放中的临时调整在画面菜单里，不保存。",
         [
             // 音频输出设备. Built from whatever has already been enumerated — nothing on the first frame — and
             // refilled by FillAudioDevicesAsync a moment later. Held in a field for exactly that.
@@ -750,15 +769,15 @@ public sealed partial class SettingsViewModel : PageViewModel
             Mpv("音量均衡", MpvOutputOptions.VolumeNormalizers, () => audio.VolumeNormalize, value => audio.VolumeNormalize = value,
                 "af", "对所有编码都有效，代价是动态范围被压窄；播放器右键菜单里可以当场试听这三档"),
             Toggle("5.1 下混到两声道时归一化",
-                "两声道听 5.1 片时对白不再被爆炸声压过去，代价是整体变轻一档（这是上游自己写的代价）。"
-                + "只在下混由 mpv 完成时有效，这台机器上量过确实如此",
+                "多声道下混时防削波：把混音系数整体压到不超载，代价是整体变轻。它不单独抬高对白 —— "
+                + "想要对白清楚请用上面的「音量均衡」。只在下混由 mpv 完成时有效，这台机器上量过确实如此",
                 () => audio.NormalizeDownmix, value => audio.NormalizeDownmix = value,
                 "audio-normalize-downmix"),
             Toggle("音频独占模式", "播放时把声卡占下来、绕过系统混音，声音更原样；代价是放片的时候别的程序出不了声",
                 () => audio.ExclusiveMode, value => audio.ExclusiveMode = value,
                 "audio-exclusive"),
             Number("全局音频延迟（毫秒）", -5000, 5000, () => audio.DelayMilliseconds, value => audio.DelayMilliseconds = value,
-                null, null, "audio-delay"),
+                "正值＝声音推迟，负值＝声音提前；清空输入框不会归零，灰字是仍在生效的值", null, "audio-delay"),
             new SettingToggleGroupRow("直通格式", passthrough)
         ]);
     }
@@ -774,8 +793,8 @@ public sealed partial class SettingsViewModel : PageViewModel
 
         return new SettingChoiceRow(
             "音频输出设备",
-            Annotate("插上耳机之后独占模式该占哪一个，由这一行说。设备列表是开设置时从 mpv 读的，"
-                + "拔掉的设备会退回系统默认而不是变成没声音", "audio-device"),
+            Annotate("插上耳机之后独占模式该占哪一个，由这一行说。设备列表是开设置时从 mpv 读的；"
+                + "已不在线的设备下一次播放自动跟随系统默认，不会没声音", "audio-device"),
             choices,
             selected,
             Save);

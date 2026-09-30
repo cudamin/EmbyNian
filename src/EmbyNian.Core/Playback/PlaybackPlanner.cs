@@ -53,7 +53,12 @@ public sealed class PlaybackPlanner(
     public string? ScreenshotDirectory =>
         AppPaths.ResolveScreenshotDirectory(settings.Mpv.ScreenshotDirectory, screenshotDirectory);
 
-    public PlaybackRequest Plan(PlaybackTicket ticket, EmbyConnection connection)
+    /// <param name="audioDevice">
+    /// 服务层核对过的音频输出设备（<see cref="AudioDeviceCatalogue.UsableDevice"/>）：null＝不核对，按设置
+    /// 原样发（外部 mpv 后端与旧调用）；非 null —— 含空串 —— 覆盖设置里的值。设备已不在线时传空串，
+    /// 即跟随系统默认：设置页承诺的回退（2026-09-30），内核自己不做。
+    /// </param>
+    public PlaybackRequest Plan(PlaybackTicket ticket, EmbyConnection connection, string? audioDevice = null)
     {
         var item = ticket.Item;
         var source = ticket.Source;
@@ -98,7 +103,7 @@ public sealed class PlaybackPlanner(
             ShaderProfile = decision.Group?.Name,
             ShaderReason = decision.Reason,
             ShaderOptionCount = chainOptions.Count,
-            PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision, chainOptions, ticket.DisplayRefreshHz, title),
+            PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision, chainOptions, ticket.DisplayRefreshHz, title, audioDevice),
             RunTimeTicks = source.RunTimeTicks ?? item.RunTimeTicks ?? 0,
             ItemId = item.Id,
             IsDonghua = donghua,
@@ -127,12 +132,13 @@ public sealed class PlaybackPlanner(
         ShaderDecision decision,
         IReadOnlyList<KeyValuePair<string, string>> chainOptions,
         double displayRefreshHz,
-        string title)
+        string title,
+        string? audioDevice = null)
     {
         var options = new List<KeyValuePair<string, string>>(48);
         options.AddRange(MpvBaseline.Build(shaderCacheDirectory, ScreenshotDirectory, title, fontsDirectory));
         options.AddRange(MpvOutputOptions.Build(
-            settings.Video, settings.Audio, settings.Playback, source, decision.Animated, displayRefreshHz));
+            settings.Video, settings.Audio, settings.Playback, source, decision.Animated, displayRefreshHz, audioDevice));
         options.AddRange(chainOptions);
 
         // 「设置里开着的东西这次没生效」 has to be visible somewhere other than the settings page, which is not open

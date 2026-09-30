@@ -224,6 +224,13 @@ public sealed partial class PlayerViewModel : ObservableObject
     private int? _volumePending;
     private long _volumeTouched;
 
+    /// <summary>
+    /// 上一次从内核状态里读到并记下的音量，null＝还没读过。只用于辨认「内核侧自己变了」（uosc、外部
+    /// mpv 的原生控件都不经过 <see cref="OnVolumeChanged"/>）—— 每次轮询都重记会把结算时间戳永远刷新，
+    /// 存盘等不到，结算前轮询又不许写回，音量条会从此冻住。见 ApplyStatus。
+    /// </summary>
+    private int? _kernelVolume;
+
     /// <summary>The last aspect handed to the window, so an unchanged one is not written again.</summary>
     private double _aspect;
 

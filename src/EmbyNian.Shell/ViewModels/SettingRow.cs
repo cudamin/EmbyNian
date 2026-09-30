@@ -367,6 +367,7 @@ public sealed partial class SettingNumberRow : SettingRow
         Minimum = minimum;
         Maximum = maximum;
         Value = Math.Clamp(value, minimum, maximum);
+        Placeholder = Format(Value);
         _write = write;
         _reread = reread;
         _save = save;
@@ -381,18 +382,37 @@ public sealed partial class SettingNumberRow : SettingRow
     [ObservableProperty]
     public partial double Value { get; set; }
 
+    /// <summary>
+    /// 输入框清空后显示的灰字：此刻仍在生效的值。NumberBox 清空时 Value 变 NaN，提交被忽略（见
+    /// OnValueChanged），设置原封不动 —— 没有这个灰字，空框看起来就像「已经归零」，实际全局音频延迟
+    /// 还照旧带着（2026-09-30 实测：清空后 UIA 读到空框、配置里仍是 -5000）。跟读回的存储值走，
+    /// 提交和 <see cref="Reseed"/> 后都刷新；不清空时它藏在底下不占地方。
+    /// </summary>
+    public string Placeholder
+    {
+        get => _placeholder;
+        private set => SetProperty(ref _placeholder, value);
+    }
+
+    private string _placeholder = "";
+
     /// <summary>Re-reads the setting into the box without writing it back — for a value another row moved.</summary>
     internal void Reseed(double value)
     {
         _committing = true;
-        try { Value = value; }
+        try
+        {
+            Value = value;
+            Placeholder = Format(value);
+        }
         finally { _committing = false; }
     }
 
     partial void OnValueChanged(double value)
     {
         // An emptied NumberBox reports NaN. Writing that through would replace a real setting with
-        // nothing, so a cleared box leaves the setting where it was until a number is typed.
+        // nothing, so a cleared box leaves the setting where it was until a number is typed — and the
+        // placeholder keeps saying what that retained value is, so an empty box cannot read as 「已经归零」.
         if (!_seeded || _committing || double.IsNaN(value)) return;
 
         _committing = true;
@@ -403,11 +423,14 @@ public sealed partial class SettingNumberRow : SettingRow
 
             var stored = _reread();
             if (stored != value) Value = stored;
+            Placeholder = Format(stored);
         }
         finally { _committing = false; }
 
         _after?.Invoke();
     }
+
+    private static string Format(double value) => value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 }
 
 /// <summary>

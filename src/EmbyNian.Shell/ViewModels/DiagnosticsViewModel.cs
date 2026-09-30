@@ -522,11 +522,12 @@ public sealed partial class DiagnosticsViewModel : PageViewModel
         var builder = new StringBuilder();
         if (launch.QualityPreset is { Length: > 0 } preset) builder.AppendLine($"画质预设 = {preset}");
 
-        // 本次播放实际用的输出设备. Above the options rather than among them on purpose: it is not one of them —
-        // 「跟随系统默认设备」 sends no audio-device at all, and what 独占模式 then took over is exactly the thing
-        // nobody could see before. Read from mpv after it opened the output, so this is the answer rather than
-        // the request.
-        if (_playback.AudioDeviceInUse is { Length: > 0 } device) builder.AppendLine($"实际音频输出设备 = {device}");
+        // The audio device this playback reported. Above the options rather than among them on purpose: it is
+        // not one of them — 「跟随系统默认设备」 sends no audio-device at all, and what 独占模式 then took over
+        // is exactly the thing nobody could see before. Read from mpv after it opened the output.
+        // 标成「请求值与驱动」而不是「实际」：mpv 的 audio-device 在自动模式下答 auto，端点名（耳机/显示器/
+        // 音箱）它不说 —— auto（wasapi）只能说「没指定、走了 WASAPI」（2026-09-30 改口）。
+        if (_playback.AudioDeviceInUse is { Length: > 0 } device) builder.AppendLine($"音频输出设备（请求值与驱动）= {device}");
 
         foreach (var option in launch.Options) builder.AppendLine($"{option.Key} = {option.Value}");
         LaunchOptions = builder.ToString().TrimEnd();

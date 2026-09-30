@@ -210,7 +210,7 @@ public static class MpvOutputOptions
         new(Inherit, "不指定（等同关闭压缩）"),
         new("0", "关闭（保留原始动态范围）"),
         new("0.5", "轻度压缩"),
-        new("1", "完全压缩（对白最清楚）")
+        new("1", "完全压缩（用足片源自带的 DRC）")
     ];
 
     /// <summary>
@@ -239,7 +239,7 @@ public static class MpvOutputOptions
     [
         new(Inherit, "不启用（保留原始响度）"),
         new(DynAudNorm, "连续跟随（夜里看，安静处自动抬起来）"),
-        new(LoudNorm, "对齐到固定响度（一集接一集，各集之间不用再调）")
+        new(LoudNorm, "对齐到固定目标响度（各集起点更接近）")
     ];
 
     /// <summary>
@@ -456,7 +456,8 @@ public static class MpvOutputOptions
         PlaybackSettings? subtitles = null,
         SourceProfile? source = null,
         bool animated = false,
-        double displayRefreshHz = 0)
+        double displayRefreshHz = 0,
+        string? audioDevice = null)
     {
         var options = new List<KeyValuePair<string, string>>(32);
 
@@ -533,7 +534,14 @@ public static class MpvOutputOptions
 
         // 音频输出设备 goes out before 独占模式 for readability only — mpv takes them in either order. Empty is
         // 「跟随系统默认」, i.e. mpv's own auto, so nothing is sent.
-        Add(options, "audio-device", audio.Device);
+        //
+        // audioDevice is the service layer's check, not a second setting: null means 「not checked — send what
+        // the settings hold」 (the external mpv.exe backend, old callers), and a string — including the empty
+        // one — replaces the stored value. A device that is no longer there comes in as the empty string, and
+        // the empty string means nothing is sent: mpv follows the system default. That is the fallback the
+        // settings row promises, and the kernel does not do it itself — with a forced device that cannot be
+        // opened it errors all the way to 「no sound」 (measured on the shipped dll, 2026-09-30).
+        Add(options, "audio-device", audioDevice ?? audio.Device);
         if (audio.ExclusiveMode) Add(options, "audio-exclusive", "yes");
 
         // 音量均衡 and 5.1 下混归一化 are two separate options on purpose, and this is the one place worth
