@@ -528,10 +528,15 @@ internal static partial class ShellSelfCheck
     /// </summary>
     private static int _notificationsStep;
 
-    /// <summary>「通知」页的快照，见 <see cref="VisitNotifications"/>。</summary>
     private static NotificationsState? _notifications;
 
-    private sealed record NotificationsState(bool Ready, int Bound, int Drawn, bool CanConfirm);
+    /// <summary>
+    /// 「通知」页的快照，见 <see cref="VisitNotifications"/>。<c>StopReport</c> 是 2026-09-29 加的那一格
+    /// （界面名「通知接管」）：屏上那个开关与设置文档里的值对上了没有。<c>NoteHidden</c>／<c>NoteFollows</c>
+    /// 是 2026-09-30 补的：那张手写卡片下面那行说明跟不跟「隐藏功能下方说明」走（用户报它没跟上）。
+    /// </summary>
+    private sealed record NotificationsState(
+        bool Ready, int Bound, int Drawn, bool CanConfirm, bool StopReport, bool NoteHidden, bool NoteFollows);
 
     /// <summary>
     /// One entry per settings category the walk has opened, in the order it opened them. A list rather than
@@ -832,8 +837,11 @@ internal static partial class ShellSelfCheck
             if (page.Notifications is not { } notifications || !notifications.IsReady) return true;
 
             var (bound, drawn) = notifications.Realised;
+            var stopReport = notifications.StopReport;
+            var note = notifications.NoteState;
             _notifications = new NotificationsState(
-                notifications.IsReady, bound, drawn, notifications.ViewModel.CanConfirm);
+                notifications.IsReady, bound, drawn, notifications.ViewModel.CanConfirm,
+                stopReport.Bound, note.Hidden, note.Follows);
             _notificationsStep = 2;
 
             _dashboardStep = 1;

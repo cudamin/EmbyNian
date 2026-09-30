@@ -674,6 +674,14 @@ internal static class SettingsTests
             Assert.Equal(1, settings.Playback.ProgressReportIntervalSeconds);
             Assert.Equal(EmbyNian.Emby.ImageCachePolicy.MaxMegabytes, settings.Ui.ImageCacheMegabytes,
                 "图片缓存上限的范围必须和设置页那一行是同一对数");
+
+            // 到阈值补报播放停止那一格（用户令 2026-09-29）：它自己不带数值 —— 阈值就是上面那两档标记已看阈值，
+            // 国漫走国漫那一档（取数在 PlaybackService.StopReportPercent）。这一位只管开不开：出厂关着（替
+            // 服务器提前对条目下结论这件事得用户自己拨开），规整也不碰它。
+            Assert.False(SettingsMigration.NewDefaults().Playback.StopReportEnabled, "出厂关着");
+            settings.Playback.StopReportEnabled = true;
+            SettingsMigration.Normalize(settings);
+            Assert.True(settings.Playback.StopReportEnabled, "规整不动这一位：拨开了就保持拨开");
         });
 
         Test("规整：设置文件里没有图片缓存上限那一键时读成装机默认值", () =>

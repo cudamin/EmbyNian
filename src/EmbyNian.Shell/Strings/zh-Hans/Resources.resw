@@ -827,4 +827,19 @@
   <data name="NotificationsPage_ButtonA3.[using:Microsoft.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>删除这条通知</value>
   </data>
+  <data name="NotificationsPage_StopReportHeading.Text" xml:space="preserve">
+    <value>通知接管</value>
+  </data>
+  <data name="NotificationsPage_StopReportNote.Text" xml:space="preserve">
+    <value>这一格开着，通知的时机就交给客户端接管：进度够到「播放行为」里的标记已看阈值（国漫走国漫那一档），客户端就替你把「播放停止」补报给服务器 —— 服务器上配的通知（比如转发到 MoviePilot）随即发出；拖进度条直接跳进这个区间也算。播放本身不停，你接着看；一次播放只报这一趟，此后本场不再向服务器报进度，结束也不再报第二遍。这一格是本机设置，跟下面那份服务器上的列表不是一回事。</value>
+  </data>
+  <data name="NotificationsPage_StopReportToggle.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>通知接管</value>
+  </data>
+  <data name="NotificationsPage_StopReportToggle.OffContent" xml:space="preserve">
+    <value>关</value>
+  </data>
+  <data name="NotificationsPage_StopReportToggle.OnContent" xml:space="preserve">
+    <value>开</value>
+  </data>
 </root>

@@ -78,10 +78,19 @@ public abstract class SettingRow : ObservableObject
     /// </para>
     /// </summary>
     public Visibility NoteVisibility =>
-        Note.Length == 0 || NotesHidden ? Visibility.Collapsed : Visibility.Visible;
+        Note.Length == 0 ? Visibility.Collapsed : NotesVisibility;
 
     /// <summary>精简模式开着：整页的说明都收起。谁设、何时设，见 <see cref="NoteVisibility"/>。</summary>
     internal static bool NotesHidden { get; set; }
+
+    /// <summary>
+    /// 「隐藏功能下方说明」开着时说明收起，否则显示 —— 给设置行模板之外的**手写卡片**用（规则一条，消费方两个，
+    /// 所以它在这儿，不抄进卡片的视图模型）。设置 → 通知里那张「通知接管」就是这样一个消费方：2026-09-30
+    /// 用户报「我不是开启了 隐藏功能下方说明 为什么下面的说明不隐藏？」—— 手写卡片不经过行的模板，这条开关
+    /// 得自己接一次，它当时没接。
+    /// </summary>
+    internal static Visibility NotesVisibility =>
+        NotesHidden ? Visibility.Collapsed : Visibility.Visible;
 
     /// <summary>
     /// 精简模式拨了一下：对每一行把可见性重算的消息喊一遍。The view model walks the sections and calls this
@@ -96,6 +105,11 @@ public abstract class SettingRow : ObservableObject
     /// 不可的理由同 <see cref="SettingChoiceRow.Probe"/>：收/放任何一档卡住，屏上的样子都是「拨了没反应」，
     /// 别的读数一个都不动。拨完把标记放回原样，别让自检跑过的那一页停在精简里。
     /// <para>
+    /// 拨的是两处：行自己的 <see cref="NoteVisibility"/>（模板那条路），与手写卡片读的
+    /// <see cref="NotesVisibility"/>（2026-09-30 补 —— 手写卡片漏接这条开关正是那一天用户报的 bug，
+    /// 两条路一起量，将来谁再接一张卡片也不会只接一半）。
+    /// </para>
+    /// <para>
     /// 叫 <c>ProbeCompactMode</c> 而不是 <c>Probe</c>：好几行类型各自有一个自己的静态 <c>Probe</c>，基类再挂
     /// 一个同名的就是把它们全部遮成 CS0108 警告（实测过一轮）。
     /// </para>
@@ -109,13 +123,18 @@ public abstract class SettingRow : ObservableObject
 
             NotesHidden = false;
             var shown = row.NoteVisibility == Visibility.Visible;
+            var cardsShown = NotesVisibility == Visibility.Visible;
             NotesHidden = true;
             var taken = row.NoteVisibility == Visibility.Collapsed;
+            var cardsTaken = NotesVisibility == Visibility.Collapsed;
             NotesHidden = false;
             var given = row.NoteVisibility == Visibility.Visible;
 
-            return (shown && taken && given,
-                $"说明默认{(shown ? "显示" : "没显示")}、精简拨上{(taken ? "收起" : "还在")}、拨回{(given ? "放出来" : "没放出来")}");
+            if (!cardsShown || !cardsTaken) return (false, "手写卡片那条说明的收放没跟上「隐藏功能下方说明」");
+
+            return (shown && taken && given && cardsShown && cardsTaken,
+                $"说明默认{(shown ? "显示" : "没显示")}、精简拨上{(taken ? "收起" : "还在")}、拨回{(given ? "放出来" : "没放出来")}"
+                + $"；手写卡片那条同此（{(cardsShown ? "默认显示" : "默认就没显示")}、{(cardsTaken ? "拨上收起" : "拨上没收")}）");
         }
         finally
         {

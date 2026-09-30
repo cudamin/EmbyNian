@@ -116,6 +116,43 @@
 
         <ScrollView Grid.Row="2" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+                <!--
+                  通知接管（这一格做的事：进度到阈值补报播放停止。用户令 2026-09-29：「在设置的通知中新增功能，
+                  播放进度达到自定义百分比的时候，自动触发发送 播放-停止」，同日续令「发送通知的判断标准改为播放
+                  行为中的 标记已观看阈值(%), 要区分国漫」；2026-09-30 用户令改名「进度到阈值补报播放停止 改名为
+                  通知接管」）。这一格与下面那份列表不是一回事：列表是服务器上的通知条目，这一格是客户端自己的
+                  行为 —— 进度够到「播放行为」里的标记已看阈值（国漫走国漫那一档）就替服务器补报一趟「播放停止」，
+                  好让服务器上那条通知（本机是 Webhooks → MoviePilot）早点转发出去。所以它落在 settings.json，
+                  一个字节都不上服务器，阈值也不在这一页 —— 它读的就是「播放行为」里那两行。
+                -->
+                <Border Background="{ThemeResource EgSurfaceBrush}" BorderBrush="{ThemeResource EgBorderBrush}"
+                    BorderThickness="1" CornerRadius="{StaticResource EgCardCornerRadius}" Padding="20,16" Margin="0,0,0,12">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="4" VerticalAlignment="Center">
+                            <TextBlock x:Uid="NotificationsPage_StopReportHeading"
+                                FontSize="{StaticResource EgSubheadFontSize}"
+                                FontWeight="SemiBold"
+                                TextWrapping="Wrap" />
+                            <!-- 说明那行跟「隐藏功能下方说明」（设置 → 界面）走：开着就收起来，只留标题与开关。
+                                 这张卡片是手写的，不经过设置行的模板，所以这一条得自己绑（2026-09-30 用户报它没跟上）。 -->
+                            <TextBlock x:Name="StopReportNote" x:Uid="NotificationsPage_StopReportNote"
+                                FontSize="{StaticResource EgCaptionFontSize}"
+                                Foreground="{ThemeResource EgTextDimBrush}"
+                                TextWrapping="Wrap"
+                                Visibility="{x:Bind ViewModel.NoteVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="StopReportToggle" x:Uid="NotificationsPage_StopReportToggle"
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            AutomationProperties.AutomationId="NotificationsStopReportToggle"
+                            IsOn="{x:Bind ViewModel.StopReportEnabled, Mode=TwoWay}" />
+                    </Grid>
+                </Border>
+
                 <Border Background="{ThemeResource EgSurfaceBrush}" BorderBrush="{ThemeResource EgBorderBrush}"
                     BorderThickness="1" CornerRadius="{StaticResource EgCardCornerRadius}" Padding="32"
                     Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay}">

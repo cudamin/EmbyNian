@@ -45,6 +45,7 @@ internal static class PlaybackTests
         RegisterEpisodeNavigation();
         RegisterPlaybackGate();
         RegisterDonghua();
+        RegisterStopReport();
         RegisterPlaybackBatches();
     }
 
@@ -5230,6 +5231,255 @@ internal static class PlaybackTests
         return await playing.WaitAsync(cancellation);
     }
 
+    // ---- 到阈值补报播放停止 ------------------------------------------------------
+    //
+    // 用户令 2026-09-29：先是「在设置的通知中新增功能，播放进度达到自定义百分比的时候，自动触发发送
+    // 播放-停止」，同日续令把判断标准改成「播放行为中的 标记已观看阈值(%)，要区分国漫」，并要求
+    // 「直接从进度条跳到已观看阈值区间时触发一次通知」。所以阈值不是另立一格 —— 就是「播放行为」里那两档
+    // （国漫走国漫那一档）；够到线就补报一趟 Sessions/Playing/Stopped，服务器上那条通知
+    // （Webhooks → MoviePilot）随即把 playback.stop 转发出去。播放本身不停，一次播放只报这一趟。
+    //
+    // 取档与阈值是纯函数，直接摆矩阵；「报了几趟、报完之后还喂不喂进度」只有走真播放才看得见 —— 假传输层
+    // 把每一趟请求都记了下来（StubTransport.SentTo），断言就落在那份清单上。
+
+    private static void RegisterStopReport()
+    {
+        Test("到阈值补报停止：阈值就是标记已看那两档，国漫走国漫那一档", () =>
+        {
+            // 用户令 2026-09-29「要区分国漫」。出厂两档是 90 与 85，用的却是同一个取数函数 —— 摆不同的数
+            // 才看得出走的是哪一档。
+            Assert.Equal(85, PlaybackService.StopReportPercent(
+                isDonghua: true, markWatchedPercent: 90, donghuaMarkWatchedPercent: 85));
+            Assert.Equal(90, PlaybackService.StopReportPercent(
+                isDonghua: false, markWatchedPercent: 90, donghuaMarkWatchedPercent: 85));
+            Assert.Equal(70, PlaybackService.StopReportPercent(
+                isDonghua: true, markWatchedPercent: 90, donghuaMarkWatchedPercent: 70));
+        });
+
+        Test("到阈值补报停止：判据只看位置够没够到线，时长读不到时不报", () =>
+        {
+            const long twoHours = 2 * TimeSpan.TicksPerHour;
+
+            Assert.False(PlaybackService.ShouldReportStop(0, twoHours, enabled: true, percent: 90));
+            Assert.False(PlaybackService.ShouldReportStop((long)(twoHours * 0.89), twoHours, enabled: true, percent: 90));
+            Assert.True(PlaybackService.ShouldReportStop((long)(twoHours * 0.90), twoHours, enabled: true, percent: 90),
+                "正好到线就算到");
+            Assert.True(PlaybackService.ShouldReportStop(twoHours, twoHours, enabled: true, percent: 90));
+
+            Assert.False(PlaybackService.ShouldReportStop(twoHours, twoHours, enabled: false, percent: 50),
+                "开关关着时位置再靠后也不报 —— 出厂就是这一档");
+            Assert.False(PlaybackService.ShouldReportStop(TimeSpan.TicksPerHour, 0, enabled: true, percent: 50),
+                "时长读不到（直播、时长还没解析出来）就没有分母，不报");
+
+            // 「一路看过去」与「拖进度条跳进去」在这里是同一件事：判据只看位置在不在线以上，不问它是怎么
+            // 到那儿的 —— 跨线那一套反而会漏（续播点本来就在区间里就产生不了一次「跨」）。
+            Assert.True(PlaybackService.ShouldReportStop(twoHours, twoHours, enabled: true, percent: 100),
+                "落在线上也算");
+            Assert.False(PlaybackService.ShouldReportStop(
+                    (long)(twoHours * 0.49), twoHours, enabled: true, percent: 1),
+                "夹取范围与标记已看那两档同一对数（50–100）：写 1 也被夹到 50，四成九够不着");
+        });
+
+        Test("到阈值补报停止：够到线报一趟，此后不再喂进度，收尾也不报第二遍", () =>
+            StopReportOnceAsync().GetAwaiter().GetResult());
+
+        Test("到阈值补报停止：拖进度条直接跳进区间，也要报一趟", () =>
+            StopReportOnSeekAsync().GetAwaiter().GetResult());
+
+        Test("到阈值补报停止：开关关着时够到线也不报，收尾那一次照旧", () =>
+            StopReportSwitchedOffAsync().GetAwaiter().GetResult());
+
+        Test("到阈值补报停止：国漫档与全局档各报各的", () =>
+            StopReportFollowsDonghuaPercentAsync().GetAwaiter().GetResult());
+    }
+
+    /// <summary>
+    /// 一路看过去的那一档。<c>Source()</c> 是两小时、阈值 90%：句柄先摆在 100 秒（远没到线），让循环先跑出
+    /// 一拍<b>进度上报</b>；再把位置推到 6500 秒（过线）—— 下一拍就该结账。此后本场不再发进度、收尾也不再
+    /// 报第二遍，三条判据都落在假传输层那份请求清单上。
+    /// <para>
+    /// 位置分两步摆是这条测试第一次跑出来教会的事：一上来就摆在线以上，循环第一拍直接结账，那一拍不会有
+    /// 进度上报 —— 于是「结账之后不再喂进度」就失去了对照（前后都是 0 趟，断言恒真）。
+    /// </para>
+    /// </summary>
+    private static async Task StopReportOnceAsync()
+    {
+        var handle = new PlaybackStubHandle { PositionSeconds = 100 };
+        var (service, session, transport) = PlayingServiceWithTransport(StopReportSettings(), handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        await handle.Started.Task.WaitAsync(cancellation.Token);
+
+        // 第一拍：位置远没到线，该有一条进度上报，一趟「播放停止」都不该有。
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Progress", 1, cancellation.Token),
+            "第一拍就该有进度上报");
+        Assert.Equal(0, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 推过线：下一拍就该把「播放停止」补报出去。
+        handle.PositionSeconds = 6500;
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Stopped", 1, cancellation.Token),
+            "进度过了标记已看阈值也没看到补报的「播放停止」");
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 报过就不再喂进度：再等两拍，进度上报的趟数一动不动。
+        // （ProgressChanged 那个事件照发 —— 屏上的进度条不该停，停的只是发往服务器的那一路。）
+        var progressAtCheckpoint = transport.SentTo("Sessions/Playing/Progress").Count;
+        Assert.True(progressAtCheckpoint > 0, "结账之前本来就该有进度上报");
+        await Task.Delay(TimeSpan.FromSeconds(2.5), cancellation.Token);
+        Assert.Equal(progressAtCheckpoint, transport.SentTo("Sessions/Playing/Progress").Count);
+
+        // 真正结束：收尾不报第二遍（用户令 2026-09-29「本次播放报过一次就不必再报了」），否则服务器上那条
+        // 通知会转发两次。
+        handle.End(6500, PlaybackEndReason.EndOfFile);
+        await playing.WaitAsync(cancellation.Token);
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 「直接从进度条跳到已观看阈值区间时触发一次通知」（用户令 2026-09-29 第二条）。位置一直摆在 100 秒，
+    /// 循环那一拍永远够不到线；只有播放器状态流把位置推过线 —— 报出去了就证明是它报的，不是循环那一拍。
+    /// <para>
+    /// 状态流这一路是必要的：循环的拍子是 <c>ProgressReportIntervalSeconds</c>（默认 5 秒），跳进去又拖回来
+    /// 就可能整段错过；状态流由 mpv 每帧报位置、压到 0.25 秒一次，跳完那一刻就报得出去。
+    /// </para>
+    /// </summary>
+    private static async Task StopReportOnSeekAsync()
+    {
+        var handle = new PlaybackStubHandle { PositionSeconds = 100 };
+        var (service, session, transport) = PlayingServiceWithTransport(StopReportSettings(), handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        await handle.Started.Task.WaitAsync(cancellation.Token);
+
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Progress", 1, cancellation.Token),
+            "第一拍就该有进度上报");
+        Assert.Equal(0, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 句柄订阅状态流是在监视开始之后才做的，与测试这一头隔着一线：推给没人听的那一拍会掉在地上，
+        // 所以推几次，直到那一趟上报露头。
+        for (var attempt = 0; attempt < 40 && transport.SentTo("Sessions/Playing/Stopped").Count == 0; attempt++)
+        {
+            handle.PublishStatus(6500);
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellation.Token);
+        }
+
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 报过之后这一场就结账了，收尾不再报第二遍。
+        handle.End(6500, PlaybackEndReason.Stopped);
+        await playing.WaitAsync(cancellation.Token);
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 开关关着的那一档（出厂默认）：位置早就过了阈值，但一趟「播放停止」都不该在播放中间发出去，收尾那一次
+    /// 的报停止照旧 —— 那是关闭条目时就有的老行为，这一格不该动它。
+    /// </summary>
+    private static async Task StopReportSwitchedOffAsync()
+    {
+        var handle = new PlaybackStubHandle { PositionSeconds = 6500 };
+        var (service, session, transport) = PlayingServiceWithTransport(StopReportSettings(on: false), handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        await handle.Started.Task.WaitAsync(cancellation.Token);
+
+        // 先确认这一场真的在报进度（否则「没有停止上报」可能只是因为它什么都没报）。
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Progress", 2, cancellation.Token),
+            "没看到进度上报，这一场等于没跑起来");
+        Assert.Equal(0, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        handle.End(6500, PlaybackEndReason.EndOfFile);
+        await playing.WaitAsync(cancellation.Token);
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 「要区分国漫」的端到端：<c>Source()</c> 是两小时，位置摆在 4321 秒（六成刚过线）。国漫档 60% 够得着，
+    /// 全局档 90% 明确够不着 —— 一位观众两个条目，差别只该出在国漫那一关上。位置是摆出来的（循环一路看着
+    /// 它），所以两条都是循环那一拍报的。
+    /// </summary>
+    private static async Task StopReportFollowsDonghuaPercentAsync()
+    {
+        // 全局档 90%：六成够不着，播放中间一趟都不该报。
+        var plainHandle = new PlaybackStubHandle { PositionSeconds = 4321 };
+        var (plainService, plainSession, plainTransport) =
+            PlayingServiceWithTransport(StopReportSettings(markPercent: 90, donghuaPercent: 60), plainHandle);
+        using var plainLifetime = plainSession;
+        using var plainCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var plainPlaying = plainService.PlayAsync(Ticket(), plainCancellation.Token);
+        await plainHandle.Started.Task.WaitAsync(plainCancellation.Token);
+        Assert.True(
+            await WaitForRequestsAsync(plainTransport, "Sessions/Playing/Progress", 2, plainCancellation.Token),
+            "没看到进度上报，这一场等于没跑起来");
+        Assert.Equal(0, plainTransport.SentTo("Sessions/Playing/Stopped").Count);
+        plainHandle.End(4321, PlaybackEndReason.Stopped);
+        await plainPlaying.WaitAsync(plainCancellation.Token);
+        Assert.Equal(1, plainTransport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 国漫那一档 60%：同一个位置就够得着了 —— 播放中间该报一趟，收尾不报第二遍。
+        var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+        donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+        var donghuaHandle = new PlaybackStubHandle { PositionSeconds = 4321 };
+        var (donghuaService, donghuaSession, donghuaTransport) =
+            PlayingServiceWithTransport(StopReportSettings(markPercent: 90, donghuaPercent: 60), donghuaHandle);
+        using var donghuaLifetime = donghuaSession;
+        using var donghuaCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var donghuaPlaying = donghuaService.PlayAsync(
+            Ticket() with { Item = donghua }, donghuaCancellation.Token);
+        await donghuaHandle.Started.Task.WaitAsync(donghuaCancellation.Token);
+
+        Assert.True(
+            await WaitForRequestsAsync(donghuaTransport, "Sessions/Playing/Stopped", 1, donghuaCancellation.Token),
+            "国漫档 60%：六成刚过线就该补报一趟「播放停止」");
+        donghuaHandle.End(4321, PlaybackEndReason.Stopped);
+        await donghuaPlaying.WaitAsync(donghuaCancellation.Token);
+        Assert.Equal(1, donghuaTransport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 到阈值那一批的固定拨法：开着上报、把拍子压到 1 秒（<see cref="PlaybackSettings.ProgressReportIntervalSeconds"/>
+    /// 的下限 —— 测试要看的那一拍才等得起）、拨上那一格开关，并摆好那两档标记已看阈值。
+    /// 拍子压到下限是测试的事，不是产品行为。
+    /// </summary>
+    private static Action<AppSettings> StopReportSettings(bool on = true, int markPercent = 90, int donghuaPercent = 85) =>
+        settings =>
+        {
+            settings.Playback.ReportProgressToServer = true;
+            settings.Playback.ProgressReportIntervalSeconds = 1;
+            settings.Playback.StopReportEnabled = on;
+            settings.Playback.MarkWatchedPercent = markPercent;
+            settings.Playback.DonghuaMarkWatchedPercent = donghuaPercent;
+        };
+
+    /// <summary>
+    /// 等到假传输层上某一趟请求攒到指定趟数，或者到时放弃。<b>轮询而不是睡一个固定时长</b>：这一场由
+    /// <c>PeriodicTimer</c> 的拍子推进，慢机器上「等 1 秒」本来就要花不止 1 秒，而睡多久都只是碰运气。
+    /// </summary>
+    private static async Task<bool> WaitForRequestsAsync(
+        StubTransport transport, string fragment, int count, CancellationToken cancellation)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (transport.SentTo(fragment).Count >= count) return true;
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellation);
+        }
+
+        return false;
+    }
+
     // ---- 播放闸门 --------------------------------------------------------------
 
     /// <summary>
@@ -5427,6 +5677,17 @@ internal static class PlaybackTests
     private static (PlaybackService Service, EmbySession Session) PlayingService(
         Action<AppSettings>? configure, params PlaybackStubHandle[] handles)
     {
+        var (service, session, _) = PlayingServiceWithTransport(configure, handles);
+        return (service, session);
+    }
+
+    /// <summary>
+    /// 同上，另外把假传输层一并交出来。「到阈值补报播放停止」那一批要断言的不是结果对象，而是**到底哪几趟
+    /// 请求发出去了** —— 那件事只有记着每一趟请求的那一层答得上（<see cref="StubTransport.SentTo"/>）。
+    /// </summary>
+    private static (PlaybackService Service, EmbySession Session, StubTransport Transport) PlayingServiceWithTransport(
+        Action<AppSettings>? configure, params PlaybackStubHandle[] handles)
+    {
         var settings = new AppSettings();
         settings.Playback.ReportProgressToServer = false;
         settings.Playback.SubtitleAssOverride = "";
@@ -5453,11 +5714,12 @@ internal static class PlaybackTests
         };
         Assert.True(session.TryRestoreAsync(server, account, CancellationToken.None).GetAwaiter().GetResult());
         var backend = new PlaybackStubBackend(handles);
-        return (new PlaybackService(
+        var service = new PlaybackService(
             session,
             settings,
             () => backend,
-            new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders))), session);
+            new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders)));
+        return (service, session, transport);
     }
 
     private sealed class PlaybackStubBackend(params PlaybackStubHandle[] handles) : IPlaybackBackend
@@ -5490,6 +5752,13 @@ internal static class PlaybackTests
         public string? Fullscreen { get; init; }
         public bool HasControlChannel => true;
         public bool IsPaused => false;
+
+        /// <summary>
+        /// 进度循环读到的位置（秒）。默认 0，只有「到阈值补报播放停止」那一批把它摆到时长某个百分比上 ——
+        /// 那一条判据要的是「位置真的走过去了」，而别的测试都没问过位置。
+        /// </summary>
+        public double PositionSeconds { get; set; }
+
         public event Action<bool>? PauseChanged { add { } remove { } }
 
         public void End(double? positionSeconds = null, PlaybackEndReason reason = PlaybackEndReason.Stopped) =>
@@ -5516,7 +5785,15 @@ internal static class PlaybackTests
 
         public PlayerStatus Status => new();
 
-        public event Action<PlayerStatus>? StatusChanged { add { } remove { } }
+        /// <summary>
+        /// 真事件（其余那几个都是 no-op）：到阈值补报那一批里「拖进度条跳进阈值区间」走的就是这一路 ——
+        /// 它比进度循环那拍快，靠 <see cref="PublishStatus"/> 把一拍状态推出去。
+        /// </summary>
+        public event Action<PlayerStatus>? StatusChanged;
+
+        /// <summary>推一拍播放器状态出去：位置 <paramref name="seconds"/> 秒、时长 <paramref name="durationSeconds"/> 秒。</summary>
+        public void PublishStatus(double seconds, double durationSeconds = 7200) =>
+            StatusChanged?.Invoke(new PlayerStatus { Position = seconds, Duration = durationSeconds, Loaded = true });
 
         public event Action<IReadOnlyList<MpvTrack>>? TracksChanged { add { } remove { } }
 
@@ -5538,7 +5815,7 @@ internal static class PlaybackTests
                 : "播放器默认值";
         }
 
-        public Task<double?> GetPositionAsync(CancellationToken cancellationToken) => Task.FromResult<double?>(0);
+        public Task<double?> GetPositionAsync(CancellationToken cancellationToken) => Task.FromResult<double?>(PositionSeconds);
         public Task ShowMessageAsync(string text) => Task.CompletedTask;
         public Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<MpvTrack>>([]);
         public Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken) => Task.FromResult<double?>(null);

@@ -1,4 +1,5 @@
 using EmbyNian.Diagnostics;
+using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -54,6 +55,33 @@ public sealed partial class NotificationsPage : Page, IShellContent
 
     public object? NavigationRequest => _request;
 
+    /// <summary>
+    /// 通知接管那一格（2026-09-29 加、2026-09-30 改名；做的事是进度到阈值补报播放停止）：屏上那个开关的值，
+    /// 以及它与设置文档里的值对上了没有。自检读这一条。
+    /// <para>
+    /// 这是这一页唯一一处本地设置，绳子只有一根（视图模型 ↔ settings.json），断了屏上照样画得出来：拨一下、
+    /// 开关跟着动、重启回到旧值 —— 没有报错、没有信号。所以判据落在「控件显示的就是文档里存着的」上，
+    /// 而不是落在「控件存在」上。
+    /// </para>
+    /// </summary>
+    internal (bool Enabled, bool Bound) StopReport =>
+        (StopReportToggle?.IsOn ?? false,
+         StopReportToggle is not null && StopReportToggle.IsOn == ViewModel.StopReportEnabled);
+
+    /// <summary>
+    /// 自检读数：这张手写卡片的说明此刻真收起来了没有，以及它与「隐藏功能下方说明」
+    /// （<see cref="SettingRow.NotesHidden"/>）那一档对上了没有。
+    /// <para>
+    /// 2026-09-30 用户报「我不是开启了 隐藏功能下方说明 为什么下面的说明不隐藏？」—— 手写卡片不经过设置行的
+    /// 模板，这条开关得自己接一次，而它当时没接：拨了没反应，没有报错也没有信号。判据落在「屏上那个 TextBlock
+    /// 真的收起来了」上，不落在「卡片还在」上。
+    /// </para>
+    /// </summary>
+    internal (bool Hidden, bool Follows) NoteState =>
+        (StopReportNote?.Visibility == Visibility.Collapsed,
+         StopReportNote is not null
+             && (StopReportNote.Visibility == Visibility.Collapsed) == SettingRow.NotesHidden);
+
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
@@ -68,7 +96,9 @@ public sealed partial class NotificationsPage : Page, IShellContent
         Tag = "notifications";
 
         var services = request.Services;
-        ViewModel.Attach(services.GetRequiredService<EmbyNian.Emby.EmbySession>());
+        ViewModel.Attach(
+            services.GetRequiredService<EmbyNian.Emby.EmbySession>(),
+            services.GetRequiredService<ISettingsService>());
         _ = ViewModel.ReloadAsync();
     }
 

@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
+using EmbyNian.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -39,12 +41,22 @@ public sealed class NotificationRow(UserNotificationInfo info, string eventsSumm
 /// 条目数据全部在服务器上，本页只做增删改查，不落 settings.json —— 与「服务器」页同一个理由：会说话的东西
 /// 不进设置文档。
 /// </para>
+/// <para>
+/// <b>一个例外（2026-09-29 起，2026-09-30 定名「通知接管」）</b>：列表上面那一格。它不是服务器上的通知条目，
+/// 而是客户端自己的行为（够到「标记已看」阈值就替服务器补报一趟停止，好让那边的通知早点转发出去），
+/// 所以它只能落在本机的 settings.json 里，见 <see cref="StopReportEnabled"/>。这一页的其余一切仍然一个
+/// 字节都不存。
+/// </para>
 /// </summary>
 public sealed partial class NotificationsViewModel : PageViewModel
 {
     private const string Category = "通知";
 
     private EmbySession? _session;
+    private ISettingsService? _settings;
+
+    private bool _stopReportEnabled;
+    private bool _stopReportSeeded;
 
     /// <summary>事件表缓存：装载时拿一次，编辑器与行摘要共用。按 id 找名字的表随取随建。</summary>
     internal List<NotificationCategoryInfo> Categories { get; private set; } = [];
@@ -68,9 +80,66 @@ public sealed partial class NotificationsViewModel : PageViewModel
     /// <summary>多于一个通知服务时挑一个。同样是页面指派；返回 null 表示用户收了手。</summary>
     internal Func<List<NotificationServiceInfo>, Task<NotificationServiceInfo?>>? PickService;
 
-    internal void Attach(EmbySession session)
+    /// <summary>
+    /// 页面进来时交来的两样东西：这次要问的服务器会话，与本地那一格的设置文档（2026-09-29 起）。
+    /// <para>
+    /// 设置文档是这一页第一次出现的依赖 —— 上面那份列表整个住在服务器上，而「通知接管」是
+    /// 客户端行为，只能落在 settings.json 里。<b>读初值、读完才允许写回</b>，同
+    /// <see cref="SettingToggleRow"/> 的 <c>_seeded</c>：控件装载时的一次回推不该被当成用户拨了一下。
+    /// </para>
+    /// </summary>
+    internal void Attach(EmbySession session, ISettingsService settings)
     {
         _session = session;
+        _settings = settings;
+
+        _stopReportEnabled = settings.Settings.Playback.StopReportEnabled;
+        _stopReportSeeded = true;
+
+        OnPropertyChanged(nameof(StopReportEnabled));
+
+        // 说明那一行的收放也在这儿对齐一次：它是页级状态（「隐藏功能下方说明」，SettingRow.NotesHidden），
+        // 而这张卡片是手写的、不经过设置行的模板 —— 每次导航进来重读一遍，屏上才跟上设置里那一档。
+        OnPropertyChanged(nameof(NoteVisibility));
+    }
+
+    /// <summary>
+    /// 说明那一行收不收起来 —— 跟「隐藏功能下方说明」（设置 → 界面）走，规则在
+    /// <see cref="SettingRow.NotesVisibility"/> 那一处（一条规则、两个消费方：设置行模板与这张手写卡片）。
+    /// <para>
+    /// 2026-09-30 用户报「我不是开启了 隐藏功能下方说明 为什么下面的说明不隐藏？」—— 这张卡片当时一个字节都
+    /// 没接这条开关：它不走行的模板，绑不绑是它自己的事，而它没绑。求值时机与设置行同一条道理：容器落到树上
+    /// 那一刻读一次（<see cref="Attach"/> 里喊一声），不在别处缓存第二份。
+    /// </para>
+    /// </summary>
+    public Visibility NoteVisibility => SettingRow.NotesVisibility;
+
+    /// <summary>
+    /// 「通知接管」那一格的开关（2026-09-29 加、2026-09-30 用户令改名；用户令 2026-09-29：「在设置的通知中
+    /// 新增功能，播放进度达到自定义百分比的时候，自动触发发送 播放-停止」，同日续令「发送通知的判断标准改为
+    /// 播放行为中的 标记已观看阈值(%)，要区分国漫」）。落到 <see cref="PlaybackSettings.StopReportEnabled"/> ——
+    /// 阈值本身不在这一页，就是「播放行为」里那两档标记已看阈值（国漫走国漫那一档）。
+    /// </summary>
+    public bool StopReportEnabled
+    {
+        get => _stopReportEnabled;
+        set
+        {
+            if (_stopReportEnabled == value) return;
+
+            _stopReportEnabled = value;
+            OnPropertyChanged();
+            if (_stopReportSeeded) WriteStopReportSettings();
+        }
+    }
+
+    private void WriteStopReportSettings()
+    {
+        if (_settings is null) return;
+
+        // 拨一下就存：这一页没有「保存」按钮，跟设置页那些行一个道理（TrySave 不抛，失败只记日志）。
+        _settings.Settings.Playback.StopReportEnabled = _stopReportEnabled;
+        _settings.TrySave();
     }
 
     public override async Task ReloadAsync()

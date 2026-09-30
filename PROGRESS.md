@@ -1,26 +1,59 @@
 # 开发进度
 
-最后更新：2026-09-29
+最后更新：2026-09-30
 
-## 字幕审查问题修复收尾：选轨、预览、颜色、保存反馈和删除确认；新增离线探针与项目技能（2026-09-29）
+## 「通知接管」那张手写卡片的说明漏接「隐藏功能下方说明」（2026-09-30 用户报「我不是开启了 隐藏功能下方说明 为什么下面的说明不隐藏？」，构建＋1375 单测＋发布＋闸门 4 本域绿）
 
-用户要求：对字幕设置审查后开始修复，修完生成技能；最多一个子代理同时运行，限流自动重试。本会话没有执行 Git 提交/推送。共享树期间其他会话提交了部分在途 Core 改动（当前 HEAD `982dea6` 已包含一部分），因此本条按完整当前源码和运行证据交付，不把“diff 变小”当代码被撤回，也不覆盖其他会话的截图目录、播放器或分析器改动。
+**用户报的**：设置 → 界面里「隐藏功能下方说明」开着，设置 → 通知里那张卡片下面的说明却照旧挂着。查本机设置文档 `%LOCALAPPDATA%\EmbyNian\settings.json`：`Ui.CompactMode = true` —— 用户没记错，是那张卡片错了。
 
-**修复范围**：报告中的 12 项。外语判断不把“其他字幕”当作听得懂的语言，自动字幕按最终手选音轨判断；自动候选过滤不可播放外挂，详情页禁用并说明；严格默认字幕回退不再被标题评分改选，空语言表语义与文案一致；独占同窗换片重置主/次字幕可见性、次字幕选择/延迟/位置/样式。预览区支持不同长度双行、缩放和真实的逐行盒/整体背景盒角色，整体盒包住描边再加留白；HEX/RGB 以原始 RGB 为准，不经整数 HSV 反算丢精度；空底板颜色使用黑色但透明度仍生效。恢复/导入同步当前字幕；保存失败持久提示并可重试。删除服务器字幕先展示字幕名、媒体文件和不可撤销影响，确认前零请求，取消不删，重复确认只发一次。
+**根因**：这条开关只接在**设置行模板**上 —— `SettingRow.NoteVisibility` 读静态 `SettingRow.NotesHidden`（`SettingsViewModel` 建页时对齐一次、拨动时再对齐一次），模板 OneWay 绑它。而「通知接管」那张卡片是 2026-09-29 手写进 `NotificationsPage.xaml` 的：它不经过行的模板，**这条开关得自己接一次，当时没接** —— 拨了没反应，没有报错也没有信号。这正是设置行那条注释里写着的道理（「行的可见性在容器落到树上那一刻才求值」），手写卡片把这一步整个漏掉了。
 
-**新增验证入口**：`--probe-subtitles [inspect]`，Program 在迁移、真实设置加载和单实例信号之前隔离；只接受 screen/theme，拒绝与播放/正常导航/自检混用。新默认设置、禁止 HTTP 的处理器、无登录/PlaybackService、假字幕操作；与自检共用桌面互斥。真实挂树控件验证 HEX/RGB，不能用尚未 Loaded 的 TextBox 的静默 TextChanged 当失败或通过。参数验证测试、说明及 switch/handle 基线已同步。`inspect` 可留屏检查，普通模式运行后退出。
+**改法**（规则一条、消费方两个，规则不抄第二份）：`SettingRow` 抽出 `internal static Visibility NotesVisibility`（`NotesHidden ? Collapsed : Visible`），行模板那条路改成调它；`NotificationsViewModel` 新增 `NoteVisibility => SettingRow.NotesVisibility`，并在 `Attach` 里喊一声（页面每次导航进来都重读，不另存第二份）；卡片的说明 `TextBlock`（新 `x:Name="StopReportNote"`）绑上它。
 
-**验证证据**：
+**自检两条**：①既有那条「隐藏功能下方说明收放」的探针 `ProbeCompactMode` 扩了一档 —— 除行自己的可见性外，也拨一遍手写卡片读的那个静态，两档都量（读数末尾多一句「手写卡片那条同此（默认显示、拨上收起）」）；②**新增一条「通知接管的说明跟着那一开关走」**，判据＝屏上那个 `TextBlock` 真的收起来了、且与 `SettingRow.NotesHidden` 一致 —— 这条就是照用户报的那件事立的哨。已登记进 `docs/selfcheck-baseline.txt`（185 行），复核新增 0。
 
-- 完整 Release 构建 0 警告/0 错误；当前测试 **1369/1369、0 失败、0 跳过**（包含大描边零留白的复核补测）。本轮受影响文件 `format whitespace --verify-no-changes --include …` 通过，`git diff --check` 通过。自动化扫描的 2 个无句柄控件仍在封面编辑对话框，新增字幕控件均有句柄。
-- 开发探针最终目录 `%LOCALAPPDATA%/EmbyNian/logs/subtitle-probe-20260929-122026712-14256/logs/`；发布探针 `subtitle-probe-20260929-122407878-27832/logs/`，退出码均 0。精确输入、禁选、删除确认/取消/失败/去重、保存失败/重试、恢复推送均通过；目录留有未保存提示、三种样式、150% 缩放、颜色与删除确认截图。真屏检查删除确认文案/取消保留和设置页预览、外观区域，无真实字幕写操作。
-- 裸 mpv（随包 v0.41.0-923）本地 SRT＋lavfi 换片：修前主可见性 no、次字幕 2/no；应用当前 Core 复位名单后为 **yes、no、yes**。当前 Core 夹具同时复核两方向手选音轨、通配语言、不可用外挂、严格默认回退与透明度端点。
-- 发布到 `artifacts/publish/win-x64`：**527 文件、300.7 MB、11 GLSL**，verify-publish 通过；发布 DLL SHA256 `40ca41f369064d6d73a8ef166c475e6a25c8c5c5a94efffd5a037029cb8950b2` 与 obj 编译产物一致。未改快捷方式、未打新版本或安装包。
-- 最终发布件闸门 4：`artifacts/selfcheck/run-6a1022373201469d9479df30575aecf8/logs/selfcheck-shell.txt`，179 项，**1 失败、0 消失、1 降级**，仍为「文件页文件选项」音频右边缘 590 超出可用 588。发布前旧件对照 `run-c4b90c9b67684fd8b47bc75c61a8416e` 同读数复现；其另一条「字幕示例预览跟着外观走」失败已在修复件消失。**完整闸门仍红，未更新 selfcheck-baseline 掩盖它。**
+**验证**：构建 **0 警 0 错** ＋ `format whitespace` 过；单测 **1375/1375、0 失败 0 跳过**；发布 **527 文件 / 300.7 MB / 11 GLSL**，新鲜度三判据全中（publish dll `9a11cd18…` == obj 重编产物，与 stale `publish-win-x64-20260930-002057` 的 dll/PRI 双 DIFFER）；闸门 4 `run-31e739e4…` 检查 **181、失败 1**、消失 0、降级 1、新增 1（登记后复核 0），新那条读到「「隐藏功能下方说明」开着，卡片上那行说明收起来了」；失败仍是历版红「文件页文件选项」。截图 `work/shots/settings-notify-takeover-2-WinUIDesktopWin32WindowClass.png`（发布件走**生产设置**，也就是用户自己那一档 `CompactMode=true`：卡片只剩标题与开关）。
 
-**技能**：`.agents/skills/embynian-subtitles/SKILL.md`＋`references/test-matrix.md`，按标准项目技能目录安装；元数据、路径和文档链接检查通过，串行复核三个试用提示后补上审查只读/扩展授权边界。它是静态场景验收，不声称新会话自动触发已实测；已有播放技能同步了选轨、底板与探针说明。
+**边界（写给下一个接手的人）**：这一条开关收的是「各条功能下面的说明」，所以卡片标题、那颗开关、以及**页面**那一句介绍（「1 条通知 · 由 Emby 服务器负责发送…」）都不收 —— 与设置页「卡片标题底下那一句分区介绍照旧显示」同一条规矩。另外，**其他内嵌页（服务器／诊断／关于）里手写的说明同样没接这条线**（全仓 `NoteVisibility` 的绑定只出现在 `SettingsPage.xaml` 的行模板与 `FilterPanel.xaml`），要不要一并接上等用户发话，别自作主张铺开。
 
-**范围边界**：没有新增独立双字幕面板/AI/下载源，没有修改指定本地 mpv.conf，没有真实服务器播放、下载或删除字幕；普通自检可能只读登录真实库，不能称其离线。裸内核＋设置探针不代替完整独占 uosc/外部 mpv 实播，也未宣称 ASS/PGS/HDR 全场景视觉验收。
+## 通知页新增「通知接管」（原名「进度到阈值补报播放停止」，2026-09-30 00:10 用户令改名）：判据改用「播放行为」里的标记已看阈值（区分国漫）、拖进度条跳进区间也报、整场只报一趟（2026-09-29 用户令，四道闸门全跑、本域绿；改名后重跑重发）
+
+用户原话三条：「1.修改现有的逻辑，发送通知的判断标准改为播放行为中的 标记已观看阈值(%)，要区分国漫」「2.直接从进度条跳到已观看阈值区间时触发一次通知」「3.在通知页面新增一个开关按钮」（前情：同日稍早做过一版「自定义百分比」又整格撤掉，见下一条；本条是照新口径把那一格做回来）。追问确认的两处口径：**报过之后本场不再报**（用户原话「本次播放报过一次就不必再报了」）、**续播点本来就在区间里也立刻报**（够到阈值就报，不问它是怎么到那儿的）。
+
+**落点**：
+
+- 设置项 `PlaybackSettings.StopReportEnabled`（出厂关着）。**不再有自定义百分比那一格** —— 阈值就是「播放行为」里的 `MarkWatchedPercent` 与 `DonghuaMarkWatchedPercent` 那两档，所以这一页只有一个开关。
+- 两个纯函数：`PlaybackService.StopReportPercent(isDonghua, mark, donghua)`（取档：国漫走国漫那一档）与 `ShouldReportStop(positionTicks, runTimeTicks, enabled, percent)`（判据）。夹取范围与 `ShouldMarkWatched` 共用新常量 `MarkWatchedFloor = 50`，`ShouldMarkWatched` 的取档也改调 `StopReportPercent` —— **两处认同一条线**，不会出现「报了却没标已看」或者反过来。时长读不到（直播、时长还没解析出来）时不报：没有分母就谈不上百分比。
+- `PlaybackService.StopReportGate`：一场一个的**一次闸**（Interlocked/Volatile，0 没试过 / 1 正在报 / 2 报成了；报失败退回 0 让下一拍再试）。**两个发令处** —— 进度循环那一拍（原来那路），以及**播放器状态流** `IPlayerControl.StatusChanged`（mpv 每帧报位置、被 `StatusCoalescer` 压到 0.25 秒一次）。后者正是第 2 条的落点：拖进度条跳进区间当场就报，不必等 `ProgressReportIntervalSeconds` 那一拍（默认 5 秒，跳进去又拖回来的话那一拍可能整段错过）。两处跑在两个线程上，所以那个闸自己带着同步。
+- 报成之后本场结账：进度与暂停不再往服务器发（`ReportPauseAsync` 也收到那个闸），`FinishAsync` 拿到 `stopReported` 不再报第二遍。**「标记已看」照走** —— 条目的已看状态与那条通知是两回事，收尾该标还标。
+- UI：通知页列表上方那张卡片只留一个 `ToggleSwitch`（原来的数字框删掉，阈值不在这一页，卡片文案写明它读的是「播放行为」里那两行）；自检新增一条「通知接管那一格」（判据＝屏上那个开关就是设置文档里的值），已登记进 `docs/selfcheck-baseline.txt`。
+
+**验证**：构建 **0 警 0 错** ＋ `format whitespace` 过；单测 **1375/1375、0 失败 0 跳过**（新 6 条：取档矩阵、判据矩阵、一路看过去报一趟且此后不再喂进度且收尾不报第二遍、**拖进度条那一拍报一趟**、开关关着时够到线也不报、国漫档与全局档各报各的）；发布 **527 文件 / 300.7 MB / 11 GLSL**（`verify-publish` 过），新鲜度三判据全中（publish dll `d0da7abb…` == obj 重编产物，与 stale `publish-win-x64-20260929-235410` 的 dll/PRI 双 DIFFER）；闸门 4 `run-498867cd…` 检查 **180、失败 1**、消失 0、降级 1、**新增 1** —— 失败那条是历版红「文件页文件选项」（读数 318–590 出界／可用 280–588 一字不差），新增那条正是本格的检查且**通过**，登记基线后复核新增 0。截图 `work/shots/settings-notify-threshold-2-WinUIDesktopWin32WindowClass.png`（发布件停在 `--show-settings 通知`，命令行导航，一个指针都没动）。
+
+**改名（2026-09-30 00:10 用户令）**：用户看完上一版截图后令「进度到阈值补报播放停止 改名为 通知接管」。改的是**名字**：卡片标题、那颗开关的无障碍名、说明文案的起句（改成「这一格开着，通知的时机就交给客户端接管：……」）、自检那条检查名（「通知页阈值补报那一格」→「通知接管那一格」）与基线对应行，外加各处把它当名字用的注释（XAML、页面、视图模型，Core 的 `StopReportGate`，以及 `AppSettings` 那一段 —— 那里写明**设置键名没跟着改**：改了等于换 settings.json 里的键，于功能无益）。Core 与测试里那些「到阈值补报」是**机制描述**（它做的事），留作动词，不当名字。改名后重跑四道闸门：构建 **0 警 0 错** ＋ `format whitespace` 过；单测 **1375/1375、0 失败 0 跳过**；发布 **527 文件 / 300.7 MB / 11 GLSL**，新鲜度三判据全中（publish dll `a4e8c2f9…` == obj 重编产物，与 stale `publish-win-x64-20260930-000750` 的 dll/PRI 双 DIFFER）；闸门 4 `run-8df36a9c…` **检查 180、失败 1**、消失 0、降级 1、**新增 0** —— 报告与基线两侧同时改名、一字对应，正是「改名不是退役」的证据（若只改一侧，这里会同时冒出消失 1 与新增 1）。新截图 `work/shots/settings-notify-takeover-2-WinUIDesktopWin32WindowClass.png`。
+
+**没验证到、留用户手点**：真播到阈值那一刻服务器发没发、MoviePilot 收没收到 —— 按规矩真实播放要用户点头，本轮一次真播都没做，这一格的行为只有假后端＋假传输层的单测在背书；拨开关是不是真落盘也没实机点过（自检只读不写）。另有一处已知代价：到阈值报出去那一刻服务器就把这条会话结掉了，所以此后这一条在服务器面板上显示成「未在播放」，**续播点也停在这个百分比上**（用户在那道追问里选的就是「整场只报一趟」，选项里写明了这一条）。
+
+> 同日更晚：用户令照新口径把这一格做回来（判据改用「播放行为」的标记已看阈值、区分国漫；拖进度条跳进区间也报；整场只报一趟），见上一条。下面记的是**第一版被撤**的经过，以及那一次核出来的 Emby ↔ MoviePilot 链路事实 —— 链路那一半仍然有效。
+
+## 同日试做又撤：「进度到点补报播放停止」整格撤销（2026-09-29 深夜用户令，代码已还原、重发）
+
+先按用户令做了：「在设置的通知中新增功能，播放进度达到自定义百分比的时候，自动触发发送 播放-停止」（追问确认口径：只上报、播放继续）。做出来的是 —— 设置项 `PlaybackSettings.StopReportEnabled`／`StopReportPercent`（出厂关／90，Normalize 夹 1–100）、纯函数判据 `PlaybackService.ShouldReportStop`、`MonitorAsync` 进度循环里到点补报一趟 `Sessions/Playing/Stopped`（成功则此后本场不再发进度与暂停、`FinishAsync` 不再报第二遍）、通知页列表上方那张卡片（数字框＋开关）、自检一条「通知页进度补报那一格」。四道闸门都跑过（1373/1373、发布 527 文件 / 300.7 MB、闸门 4 该条通过并登记基线）。
+
+**当夜用户两问，两条都成立，于是整格撤掉：**
+
+1. **「是不是已经内置过」—— 是。** 旧设置里本来就有这一能力，四行：「播放通知（Webhook）」开关／地址／**触发百分比**／事件名，`PlaybackService.MaybeNotify` 就是「进度到百分比发一次」的一次闸；2026-09-25 用户令「把本项目的通知改为 emby 的，让 emby 负责转发」时，随 `WebhookNotifier` 整套退役（见下文四十报条目）。所以这一格＝把旧版「进度触发」在新架构下重做了一遍。
+2. **「不开它，插件也能收到播放进度」—— 对。** 正常停止本来就上报 `Sessions/Playing/Stopped`、暂停本来就上报（`IsPaused`），服务器对应发 `playback.stop`／`playback.pause`，MoviePilot 与插件本来就能收到；这几条路径本轮一个字没动。这一格只多出两件：**提前**（不必等停止或播完）与**异常退出兜底**（看到 X% 直接关播放器时收尾上报可能来不及发）。用户判定不值这一格的复杂度，撤。
+
+**撤销方式与重跑**：`git apply -R work/undo-code.patch` 定点反向应用（不用 reset / checkout），12 个代码与基线文件全部还原到 HEAD（`git status` 只剩本文件），逐个符号复查零残留；改动快照留在 `work/undo-backup-stopreport.patch`（将来要捡回来 `git apply` 即可）。撤销后重跑四道闸门：构建 **0 警 0 错** ＋ `format whitespace` 过；单测 **1369/1369、0 失败 0 跳过**（＝撤销前的基数，这一格新增的那 4 条随之消失）；发布 **527 文件 / 300.7 MB / 11 GLSL**，`verify-publish` 过，发布 dll 与 obj 重编产物一致（`6a660215…`）且与带这一格的那一版 DIFFER；自检 `run-03809efb…` **179 项、失败 1、消失 0、降级 1、新增 0** —— 只剩历版红「文件页文件选项」（同读数音频 318–590 出界／可用 280–588），前几轮常与它并发的「窗口命令按钮」本轮绿。
+
+**这次留下的（与功能去留无关，将来若要「让 MP 记录播放进度」直接可用）：**
+
+- **Emby 服务器上那条通知**（直连 `Notifications/Services/Configured` 读出，脚本与读数在 `work/notify-probe/`）：服务 `webhooknotifications`，启用，事件 `library.new / library.deleted / playback.start / playback.pause / playback.unpause / **playback.stop**`，目标 `http://172.17.0.1:3001/api/v1/webhook?token=…`（Docker 网桥地址 ＝ 本机 MP 的后端端口）。事件与目的地都对，缺的只是 MP 得在线。
+- **MP 侧解析**（`app/modules/emby/emby.py` 的 `get_webhook_message`）：`percentage = PlaybackInfo.PositionTicks / Item.RunTimeTicks × 100`；它 docstring 里贴的第一份示例报文正是 `"Event": "playback.stop"` 的电影事件，且带 `PlaybackInfo.PositionTicks` —— **停止事件带位置**。插件读的 `ev.tmdb_id` 在 V3 是兼容属性（`media_source == TMDB` 时返回 `media_id`），读得到，不必改。
+- **插件侧**（`SpaceCleaner.on_webhook`）：只收 `playback.stop`／`playback.pause`／`media.stop` 一类，按 `tmdb:SxxExx`（电影 `tmdb:M`）写播放缓存，**只增不减**，同一剧集只留季集最靠后的一条。两个前提缺一不可：①插件必须启用「空间清理」或「智能RSS」—— `on_webhook` 第一句就是「两个都关直接丢」，而两个默认都是 `False`；②EmbyNian 的「上报播放进度到服务器」总开关必须开着（所有播放事件的源头都在这条路上）。
+- **判定口径在插件自己手里**：它用 `_watched_threshold`（默认 85%）判「已看」，与 EmbyNian 侧任何阈值都无关。
+- 现状：MoviePilot 没在跑（3000/3001 都没监听），SpaceCleaner 也还没装到这台 MP 上（`MoviePilot-V3/config/` 下没有插件文件）。
 
 ## 引入三个 NuGet 分析器：Threading.Analyzers 18.7.23＋BannedApiAnalyzers 5.6.0＋Roslynator 5.0.0（2026-09-29 用户令「把你建议装的装上吧」，闸门 1/2/3 本域全绿；闸门 4 两条红 A/B 实证历版）
 

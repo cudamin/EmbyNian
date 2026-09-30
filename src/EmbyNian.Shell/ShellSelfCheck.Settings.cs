@@ -93,10 +93,26 @@ internal static partial class ShellSelfCheck
             return;
         }
 
-        var (ready, bound, drawn, canConfirm) = notifications;
+        var (ready, bound, drawn, canConfirm, stopReport, noteHidden, noteFollows) = notifications;
         check("通知页面", ready && drawn == bound,
             ready ? $"{bound} 条通知（已渲染 {drawn}）" : "页面没装载完（服务器读取没回来）");
         check("通知确认框", canConfirm, canConfirm ? "删除前问得出话" : "确认框没接上 —— 删除会一声不吭");
+        // 2026-09-29 那一格（界面名「通知接管」，2026-09-30 用户令改名）：进度够到标记已看阈值就补报一趟播放停止。
+        // 它是这一页唯一的本地设置，绳子断了屏上照样画得出来 —— 拨一下、开关跟着动、重启回到旧值，没有报错也没有
+        // 信号，所以量的是「屏上显示的就是设置文档里存着的」。
+        check("通知接管那一格", stopReport,
+            stopReport
+                ? "屏上那个开关就是设置文档里的值"
+                : "屏上的值与设置文档对不上 —— 这一格存不下去，或者压根没接上");
+        // 2026-09-30 用户报「我不是开启了 隐藏功能下方说明 为什么下面的说明不隐藏？」：那张卡片是手写的，
+        // 不经过设置行的模板，那条开关得自己接一次 —— 当时没接，拨了没反应、没有报错也没有信号。判据落在
+        // 「屏上那行说明真的收起来了」上。
+        check("通知接管的说明跟着那一开关走", noteFollows,
+            noteFollows
+                ? (noteHidden ? "「隐藏功能下方说明」开着，卡片上那行说明收起来了" : "那一开关关着，说明照常在")
+                : (noteHidden
+                    ? "「隐藏功能下方说明」开着，说明还挂在卡片上 —— 这张手写卡片没接那条开关"
+                    : "那一开关关着，说明却不在"));
     }
 
     /// <summary>

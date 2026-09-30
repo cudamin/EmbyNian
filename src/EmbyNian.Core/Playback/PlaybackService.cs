@@ -36,6 +36,13 @@ public sealed class PlaybackService(
 {
     private const string Category = "playback";
 
+    /// <summary>
+    /// 「标记已看」那两档百分比的共同下限。两个地方用它：<see cref="ShouldMarkWatched"/>（结束时要不要标已看）
+    /// 与 <see cref="ShouldReportStop"/>（进度够到线了没，2026-09-29 的到阈值补报）—— 两处认同一条线，
+    /// 才不会出现「报了却没标上」或者反过来。
+    /// </summary>
+    private const int MarkWatchedFloor = 50;
+
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>在场句柄 → 当前所属播放的代次；监控与回调按它过滤旧片的迟到事件。</summary>
@@ -378,10 +385,16 @@ public sealed class PlaybackService(
             await ReportAsync(scope, "开始", client => client.ReportPlaybackStartAsync(
                 Build(request, playSessionId, ticket.StartTicks, false, null), cancellationToken)).ConfigureAwait(false);
 
+            // 「进度够到标记已看阈值就补报一次播放停止」那一趟的一次闸，一场一个（见 StopReportGate）。
+            // 进度循环那一拍与播放器状态流那一拍都会来敲它，敲成一次就锁死；收尾也要读它 —— 报过一次就
+            // 不再报第二遍（用户令 2026-09-29：「本次播放报过一次就不必再报了」）。
+            var stopReport = new StopReportGate();
+
             PlaybackExit exit;
             try
             {
-                exit = await MonitorAsync(scope, handle, request, playSessionId, ticket, cancellationToken, generation).ConfigureAwait(false);
+                exit = await MonitorAsync(scope, handle, request, playSessionId, ticket, cancellationToken, generation,
+                    stopReport).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -412,7 +425,7 @@ public sealed class PlaybackService(
                 exit = new PlaybackExit(PlaybackEndReason.Stopped, position, 0, null);
             }
 
-            return await FinishAsync(scope, exit, request, playSessionId, ticket).ConfigureAwait(false);
+            return await FinishAsync(scope, exit, request, playSessionId, ticket, stopReport.Reported).ConfigureAwait(false);
         }
         finally
         {
@@ -806,6 +819,67 @@ public sealed class PlaybackService(
         }
     }
 
+    /// <summary>
+    /// 到阈值补报那一档百分比：国漫走国漫那一档，其余走全局那一档（用户令 2026-09-29：「发送通知的判断标准
+    /// 改为播放行为中的 标记已观看阈值(%)，要区分国漫」）。国漫判定是计划层算好带在票上的
+    /// （<see cref="PlaybackRequest.IsDonghua"/>），这里只管按哪一档取数 —— 与 <see cref="ShouldMarkWatched"/>
+    /// 取的是同两个数，所以「到阈值补报」和「结束时标记已看」认的是同一条线。
+    /// </summary>
+    internal static int StopReportPercent(bool isDonghua, int markWatchedPercent, int donghuaMarkWatchedPercent) =>
+        isDonghua ? donghuaMarkWatchedPercent : markWatchedPercent;
+
+    /// <summary>
+    /// 播放进度是不是够到了「补报播放停止」那条线（用户令 2026-09-29，设置项见
+    /// <see cref="Configuration.PlaybackSettings.StopReportEnabled"/>）。纯函数，单测直接摆矩阵。
+    /// <para>
+    /// 落在线上就算够到（<c>&gt;=</c>），夹取范围与 <see cref="ShouldMarkWatched"/> 同一个 —— 两处认同一条线，
+    /// 才不会出现「报了却没标已看」或者反过来。
+    /// </para>
+    /// <para>
+    /// 时长读不到（<c>runTimeTicks &lt;= 0</c>）时不报：没有分母就谈不上百分比，硬报出去的是猜的。
+    /// 直播、还没解析出时长的片子都会落到这一档。
+    /// </para>
+    /// <para>
+    /// <b>只看位置在不在线以上，不问它是怎么到那儿的</b>：「一路看过去」与「拖进度条直接跳进阈值区间」是同
+    /// 一件事（用户令 2026-09-29 的第二条正是后者）。跨线那一套判据在这里反而会漏 —— 循环转回已看过的位置、
+    /// 或者续播点本来就在区间里，都不会产生一次「跨」。
+    /// </para>
+    /// </summary>
+    internal static bool ShouldReportStop(long positionTicks, long runTimeTicks, bool enabled, int percent)
+    {
+        if (!enabled || runTimeTicks <= 0) return false;
+
+        var threshold = Math.Clamp(percent, MarkWatchedFloor, 100) / 100d;
+        return positionTicks >= runTimeTicks * threshold;
+    }
+
+    /// <summary>
+    /// 这一场「到阈值补报播放停止」的一次闸（界面上那一格叫「通知接管」）。为什么要有它：这一趟会被两处发令
+    /// —— 进度循环那一拍（每
+    /// <see cref="Configuration.PlaybackSettings.ProgressReportIntervalSeconds"/> 秒一次），与播放器状态流
+    /// 那一拍（mpv 每帧报位置、由 <see cref="StatusCoalescer"/> 压到 0.25 秒一次，跳进度条那一刻就来）。
+    /// 用户要的是「触发<b>一次</b>」，两处又跑在两个线程上（计时器一个、mpv 事件线程一个），所以状态自己
+    /// 带着同步：0＝还没试过，1＝正在报，2＝报成了。
+    /// <para>
+    /// 报失败退回 0，下一拍还会再来一次（服务器的错不该让这一格整个哑掉）；报成就锁死 —— 此后进度、暂停、
+    /// 收尾都不再往外发。这一场结束时这个对象随 <see cref="PlayOneAsync"/> 一起丢掉，下一场是新的。
+    /// </para>
+    /// </summary>
+    private sealed class StopReportGate
+    {
+        private int _state;
+
+        /// <summary>抢这一趟。true＝这一趟归你报；false＝别人正在报，或者已经报成了。</summary>
+        public bool TryClaim() => Interlocked.CompareExchange(ref _state, 1, 0) == 0;
+
+        public void MarkReported() => Volatile.Write(ref _state, 2);
+
+        public void MarkFailed() => Volatile.Write(ref _state, 0);
+
+        /// <summary>报成了没有。三处都读它：这一场的进度、暂停、收尾。</summary>
+        public bool Reported => Volatile.Read(ref _state) == 2;
+    }
+
     private async Task<PlaybackExit> MonitorAsync(
         EmbySessionScope scope,
         IPlaybackHandle handle,
@@ -813,16 +887,69 @@ public sealed class PlaybackService(
         string playSessionId,
         PlaybackTicket ticket,
         CancellationToken cancellationToken,
-        long generation)
+        long generation,
+        StopReportGate stopReport)
     {
         var interval = TimeSpan.FromSeconds(Math.Clamp(settings.Playback.ProgressReportIntervalSeconds, 1, 60));
         var exitTask = handle.WaitForExitAsync(cancellationToken);
 
+        // 到阈值补报这一场的三件常量。开关问两处：用户那一格，以及「上报播放进度到服务器」总开关 ——
+        // 总开关关着时 ReportAsync 在门口就退回 false，报不成还会被每一拍接着试，不如先问清楚。
+        // 百分比走 StopReportPercent（国漫单独一档），与收尾标记已看取同一条线。
+        var stopReportEnabled = settings.Playback.StopReportEnabled && settings.Playback.ReportProgressToServer;
+        var stopReportPercent = StopReportPercent(
+            request.IsDonghua, settings.Playback.MarkWatchedPercent, settings.Playback.DonghuaMarkWatchedPercent);
+
+        // 到阈值补报那一趟。本场只报一次：闸抢到手才算这一趟归我（状态流与进度循环两条路都会来敲），
+        // 报失败了把闸放回去让下一拍再试，报成了就锁死。
+        async Task ReportStopAsync(long ticks)
+        {
+            if (!stopReport.TryClaim()) return;
+
+            var reported = await ReportAsync(scope, "到阈值补报停止", client =>
+                client.ReportPlaybackStoppedAsync(
+                    Build(request, playSessionId, ticks, false, null), CancellationToken.None))
+                .ConfigureAwait(false);
+
+            if (!reported)
+            {
+                stopReport.MarkFailed();
+                return;
+            }
+
+            stopReport.MarkReported();
+            Log.Info(Category,
+                $"《{request.Title}》进度已到「标记已看」阈值 {stopReportPercent}%"
+                + (request.IsDonghua ? "（国漫那一档）" : "")
+                + "，已向服务器补报一次「播放停止」（本场此后不再发进度，收尾也不再报第二遍）");
+        }
+
         // fire-and-forget 的暂停上报必须带上本场代次：停止或换片之后，旧片迟到的读数不许再写状态、
-        // 不许再向服务器发进度 —— 退出事件只退订后续，撤不掉已经在飞的那一趟。
-        void OnPauseChanged(bool paused) => _ = ReportPauseAsync(scope, handle, request, playSessionId, paused, generation);
+        // 不许再向服务器发进度 —— 退出事件只退订后续，撤不掉已经在飞的那一趟。到阈值结过账之后也一样，
+        // 所以把那一场的闸一并交给它：那是同一趟上报要不要发的问题，只是晚了一拍才问。
+        void OnPauseChanged(bool paused) =>
+            _ = ReportPauseAsync(scope, handle, request, playSessionId, paused, generation, stopReport);
 
         handle.PauseChanged += OnPauseChanged;
+
+        // 播放器自己的状态流：位置一变就来问一次阈值 —— 「从进度条直接跳进阈值区间」靠的是这一路。进度
+        // 循环那拍是好几秒一次，跳进去又拖回来可能整段错过；状态流由 mpv 每帧报位置、压到 0.25 秒一次，
+        // 跳完那一刻就报得出去。没有控制通道的句柄不推它（位置本来也读不到），判据同 CanControl。
+        Action<PlayerStatus>? onStatus = null;
+        if (handle.HasControlChannel && handle is IPlayerControl control)
+        {
+            onStatus = status =>
+            {
+                if (!status.HasPosition || stopReport.Reported) return;
+
+                var ticks = TimeFormat.ToTicks(status.Position);
+                if (!ShouldReportStop(ticks, request.RunTimeTicks, stopReportEnabled, stopReportPercent)) return;
+
+                _ = ReportStopAsync(ticks);
+            };
+
+            control.StatusChanged += onStatus;
+        }
 
         try
         {
@@ -842,6 +969,20 @@ public sealed class PlaybackService(
                 ProgressChanged?.Invoke(new PlaybackProgress(
                     ticks, request.RunTimeTicks, handle.IsPaused, request.Title, generation));
 
+                // 够到阈值这一拍先补报「播放停止」，再决定要不要发这一拍的进度。状态流那一头可能已经报过，
+                // 闸自己认得出来（抢不到就当场返回）。
+                if (!stopReport.Reported && ShouldReportStop(
+                        ticks, request.RunTimeTicks, stopReportEnabled, stopReportPercent))
+                {
+                    await ReportStopAsync(ticks).ConfigureAwait(false);
+                }
+
+                // 报过一次就不再喂进度（用户令 2026-09-29：「本次播放报过一次就不必再报了」）：服务器收到
+                // Stopped 就把这条会话结掉了，再发 Progress 是把它喊回来，同一条通知也会跟着发第二遍。
+                // 播放本身照常继续，上面那句 ProgressChanged 也照发 —— 停的只是发往服务器的那一路。
+                if (stopReport.Reported) continue;
+                if (_swapGeneration.GetValueOrDefault(handle) != generation) break;
+
                 await ReportAsync(scope, "进度", client => client.ReportPlaybackProgressAsync(
                     Build(request, playSessionId, ticks, handle.IsPaused, "timeupdate"), cancellationToken))
                     .ConfigureAwait(false);
@@ -852,6 +993,7 @@ public sealed class PlaybackService(
         }
         finally
         {
+            if (onStatus is not null) ((IPlayerControl)handle).StatusChanged -= onStatus;
             handle.PauseChanged -= OnPauseChanged;
         }
     }
@@ -862,10 +1004,14 @@ public sealed class PlaybackService(
         PlaybackRequest request,
         string playSessionId,
         bool paused,
-        long generation)
+        long generation,
+        StopReportGate stopReport)
     {
         // 迟到防线的第一问：这一场已经被换掉/收尾，读数再准也不属于现在。
         if (_swapGeneration.GetValueOrDefault(handle) != generation) return;
+
+        // 到阈值已经替服务器结过账了：这一场「播放在哪儿」服务器不再关心，再报一次就是又把会话点亮。
+        if (stopReport.Reported) return;
 
         // Reported immediately rather than on the next tick: a pause the server learns about
         // five seconds late shows up as five seconds of phantom playback on other clients.
@@ -887,14 +1033,20 @@ public sealed class PlaybackService(
         PlaybackExit exit,
         PlaybackRequest request,
         string playSessionId,
-        PlaybackTicket ticket)
+        PlaybackTicket ticket,
+        bool stopReported)
     {
         var positionTicks = ResolveFinalPosition(exit, request, ticket);
         var watched = ShouldMarkWatched(exit, request, positionTicks);
 
         var report = Build(request, playSessionId, positionTicks, false, null);
         report.Failed = exit.IsFailure;
-        var reported = await ReportAsync(scope, "停止", client =>
+
+        // 到阈值已经补报过一次「播放停止」的场次，这里不再报第二遍（用户令 2026-09-29：「本次播放报过一次就
+        // 不必再报了」）—— 那一条通知已经发出去了，再报一次只会让服务器上的转发（Webhooks → MoviePilot
+        // 之类）转发第二遍。「标记已看」照走：补报那一刻服务器不一定会替我们把那条切上，而那是这一场的
+        // 正事（条目的已看状态），与通知是两回事。
+        var reported = stopReported || await ReportAsync(scope, "停止", client =>
             client.ReportPlaybackStoppedAsync(report, CancellationToken.None)).ConfigureAwait(false);
 
         if (watched)
@@ -931,11 +1083,11 @@ public sealed class PlaybackService(
         if (exit.PositionSeconds is null || request.RunTimeTicks <= 0) return false;
 
         // 国漫单独一档（用户令 2026-09-26）：判定是计划层算好带在票上的（PlaybackRequest.IsDonghua），
-        // 这里只管按哪一档取数 —— 同一个夹取范围（50–100），两档各自的值。
-        var percent = request.IsDonghua
-            ? settings.Playback.DonghuaMarkWatchedPercent
-            : settings.Playback.MarkWatchedPercent;
-        var threshold = Math.Clamp(percent, 50, 100) / 100d;
+        // 这里只管按哪一档取数 —— 同一个夹取范围（50–100），两档各自的值。取数与到阈值补报共用
+        // StopReportPercent 那一处，见 2026-09-29 令「判断标准改为播放行为中的 标记已观看阈值(%)」。
+        var percent = StopReportPercent(
+            request.IsDonghua, settings.Playback.MarkWatchedPercent, settings.Playback.DonghuaMarkWatchedPercent);
+        var threshold = Math.Clamp(percent, MarkWatchedFloor, 100) / 100d;
         return positionTicks >= request.RunTimeTicks * threshold;
     }
 

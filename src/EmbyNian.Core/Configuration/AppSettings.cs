@@ -247,6 +247,30 @@ public sealed class PlaybackSettings
     /// </summary>
     public int DonghuaMarkWatchedPercent { get; set; } = 85;
 
+    /// <summary>
+    /// 播放进度够到「标记已看」阈值时，向服务器补报一次「播放停止」（用户令 2026-09-29：「在设置的通知中
+    /// 新增功能，播放进度达到自定义百分比的时候，自动触发发送 播放-停止」，同日续令「发送通知的判断标准改为
+    /// 播放行为中的 标记已观看阈值(%)，要区分国漫」）。<b>界面上这一格叫「通知接管」</b>（2026-09-30 用户令
+    /// 「进度到阈值补报播放停止 改名为 通知接管」）—— 界面的名字在这儿对一次号：设置键名没跟着改，
+    /// 改了等于换 settings.json 里的键，于功能无益。
+    /// <para>
+    /// 阈值不是另立一格，就是 <see cref="MarkWatchedPercent"/> 与 <see cref="DonghuaMarkWatchedPercent"/>
+    /// 这两档（国漫走国漫那一档）—— 取数见 <see cref="Playback.PlaybackService.ShouldReportStop"/>，与
+    /// 「结束时标记已看」用的是同一条线，所以不会一个报一个不报。
+    /// </para>
+    /// <para>
+    /// 通知本身仍然由 Emby 服务器发（2026-09-25 起客户端不再自己发 webhook），客户端能出力的地方是把
+    /// 「这一条到线了」告诉服务器：服务器收到 <c>Sessions/Playing/Stopped</c> 就按用户配的通知条目把
+    /// <c>playback.stop</c> 转发出去（本机那条是 Webhooks → MoviePilot —— 用户要这一格就是为了让那边的
+    /// 插件早点记上进度）。<b>播放自己不停</b>，用户接着看；一次播放只补报这一趟，此后本场不再向服务器发
+    /// 进度与暂停，收尾也不再报第二遍 —— 见 <see cref="Playback.PlaybackService"/>。
+    /// </para>
+    /// <para>
+    /// 出厂关着：这是替服务器提前替条目下结论，默认不动别人的观看记录。
+    /// </para>
+    /// </summary>
+    public bool StopReportEnabled { get; set; }
+
     public int ProgressReportIntervalSeconds { get; set; } = 5;
 
     /// <summary>
