@@ -493,14 +493,22 @@
                                  半透明（默认样式的 Disabled 态会在标题后面垫一块灰底，电影页上那块灰底毫无来
                                  由），BorderThickness 归零（默认那道 1 像素描边四个状态都在画，只改背景的话标题
                                  就被一个圆角方框圈起来）。Padding 往外撑一点、Margin 补回来，悬停时的底板不至于
-                                 贴着字。 -->
+                                 贴着字。
+                                 2026-09-30 他指着集页悬停底板问「这个框怎么下面空位这么多」：实量框高 51、字
+                                 31.5，上缝 0、下缝 19.5 —— 那条缝不是内边距给的（底下只有 4），是
+                                 EgHeroTitleStyle 的行高 45 在单行时整条行盒照旧 45 高、多出的行距按 WinUI 的行栈
+                                 规则全沉到字底下（行高 45 本身是折两行不重叠的账，动不得）。修法是字自己把尾巴
+                                 修掉（Margin 底下 -14、顶上补 2，框从 51 收到 39，字落在框里上缝 2、下缝 5.5，
+                                 和文本选区一个观感），按钮底下再补回 12 让布局下沿一像素不动 —— 副标题、栏高、
+                                 其它三种页面（那三页 Disabled、底板永远透明，从来看不见这条缝）全部照旧；折两行
+                                 时两行的行距照旧 45，修的只是最后一行后面的那条尾。 -->
                             <Button
                                 x:Name="TitleButton"
                                 BorderThickness="0"
                                 Command="{x:Bind ViewModel.OpenTitleCommand}"
                                 HorizontalAlignment="Left"
                                 HorizontalContentAlignment="Left"
-                                Margin="-8,0,0,0"
+                                Margin="-8,0,0,12"
                                 MinHeight="0"
                                 MinWidth="0"
                                 Padding="8,2,8,4"
@@ -521,11 +529,12 @@
                                     <TextBlock
                                         x:Name="TitleText"
                                         Style="{StaticResource EgHeroTitleStyle}"
+                                        Margin="0,2,0,-14"
                                     MaxLines="2"
                                     Text="{x:Bind ViewModel.Title, Mode=OneWay}"
                                     TextTrimming="CharacterEllipsis"
                                     TextWrapping="Wrap" />
-                            </Button>
+                                </Button>
 
                             <!-- 副标题：单集页上是「S2:E7 - 集名」，也就是人真正来看的那一行，所以字号、字重
                                  和字色都由 ViewModel 给（标题号 + SemiBold + 不压暗）；电影和剧上这一行是类型
