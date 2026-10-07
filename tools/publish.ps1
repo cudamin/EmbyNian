@@ -10,6 +10,12 @@ param(
 
     [switch]$Msix,
 
+    # 打 Microsoft Store 上架包：包身份换成 Partner Center 预留的那一组（tools\store-identity.json），
+    # 并且**不签名** —— 商店收未签名的包，由 Partner Center 用预留身份的证书重签。`winapp package --no-sign`
+    # 的帮助原文就是这个用途：「for Store submission or an external signing pipeline」。
+    # 隐含 -Msix；与 -Sign / -CertPath 互斥（上架包带上本机自签证书，包身份和签名者就对不上了）。
+    [switch]$Store,
+
     # 给 -Msix 出来的包签名。签名用的是自签发的开发证书（winapp cert generate，出厂密码 password），
     # 它只够在本机测试 —— 而且**装这个包之前还要用管理员终端信任这张证书一次**：
     #     winapp cert install .\artifacts\devcert.pfx
@@ -54,6 +60,14 @@ $verify = Join-Path $PSScriptRoot 'verify-publish.ps1'
 $shortcutScript = Join-Path $PSScriptRoot 'shortcut.ps1'
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot = Join-Path $repo 'artifacts' }
+
+# -Store 是 -Msix 的一个变体，不是并列的另一件事：它只换身份、去签名，其余（暂存、图标、清单版本号）全同。
+if ($Store) { $Msix = $true }
+
+# 参数互斥放在最前面判：放在打包段里要等暂存完 300 MB 才报错，白等一趟。
+if ($Store -and ($Sign -or -not [string]::IsNullOrWhiteSpace($CertPath))) {
+    throw '-Store 与 -Sign / -CertPath 不能同时用：上架包必须未签名，由 Partner Center 用预留身份的证书重签。'
+}
 
 if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
     throw "找不到 WinUI Shell 项目：$project"
@@ -120,7 +134,12 @@ $packageVersion = "$version.0"
 $outputRootResolved = [System.IO.Path]::GetFullPath($OutputRoot)
 $publishRoot = Join-Path $outputRootResolved "publish\$Runtime"
 $zipPath = Join-Path $outputRootResolved "EmbyNian-$version-$Runtime.zip"
-$msixPath = Join-Path $outputRootResolved "EmbyNian-$version-$Runtime.msix"
+# 上架包与旁加载包分开命名：两者包身份不同，混在一个文件名下迟早拿错。
+$msixPath = if ($Store) {
+    Join-Path $outputRootResolved "EmbyNian-$version-$Runtime-store.msix"
+} else {
+    Join-Path $outputRootResolved "EmbyNian-$version-$Runtime.msix"
+}
 $stageRoot = Join-Path $outputRootResolved "msix-stage\$Runtime"
 
 if (-not $SkipPublish) {
@@ -253,6 +272,24 @@ if ($Msix) {
     # 按 ANSI 代码页读，于是清单里的中文进来就是乱码，写进包里的显示名和说明也跟着乱。
     $manifestXml = [xml](Get-Content -LiteralPath $manifestSource -Raw -Encoding UTF8)
     $manifestXml.Package.Identity.Version = $packageVersion
+
+    # 上架包把身份换成 Partner Center 预留的那一组。这是**唯一**允许改写清单身份的地方，值只写在
+    # tools\store-identity.json 一个文件里 —— 商店那边改了预留就同步那一份，不在脚本里写第二遍。
+    # 其余字段（能力、目标设备、图标、语言）两边共用，不复制第二份清单，免得改了这边忘了那边。
+    if ($Store) {
+        $storeIdentityPath = Join-Path $PSScriptRoot 'store-identity.json'
+        if (-not (Test-Path -LiteralPath $storeIdentityPath -PathType Leaf)) {
+            throw "请求了 -Store，但找不到 $storeIdentityPath。里面是 Partner Center「查看产品标识」那几行。"
+        }
+        $storeIdentity = Get-Content -LiteralPath $storeIdentityPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($field in @('identityName', 'publisher', 'publisherDisplayName')) {
+            if ([string]::IsNullOrWhiteSpace($storeIdentity.$field)) { throw "store-identity.json 缺字段：$field" }
+        }
+        $manifestXml.Package.Identity.Name = $storeIdentity.identityName
+        $manifestXml.Package.Identity.Publisher = $storeIdentity.publisher
+        $manifestXml.Package.Properties.PublisherDisplayName = $storeIdentity.publisherDisplayName
+    }
+
     $manifestPath = Join-Path $stageRoot 'AppxManifest.xml'
     $manifestXml.Save($manifestPath)
 
@@ -274,13 +311,23 @@ if ($Msix) {
     # verify-publish.ps1 里那一大段），让 winapp 再生成一遍会盖掉它、并出一个 103 KB 的版本 —— 装出来的
     # 程序一启动就死在 App.xaml。
     $packArgs = @('package', $stageRoot, '--manifest', $manifestPath, '--output', $msixPath, '--skip-pri')
+    if ($Store) {
+        # 显式写死 --no-sign，不靠「项目没配签名」这个默认。将来谁给项目加了签名配置，上架包会悄悄
+        # 变成自签包，而商店那边只会报一个难查的身份/签名不匹配。
+        $packArgs += '--no-sign'
+    }
     if ($cert) {
         $packArgs += @('--cert', $cert, '--cert-password', $CertPassword)
     }
     & $winapp.Path @packArgs
     if ($LASTEXITCODE -ne 0) { throw "winapp package 失败，退出码 $LASTEXITCODE。" }
 
-    if (-not $cert) {
+    if ($Store) {
+        Write-Output "上架包已生成（未签名）：$msixPath"
+        Write-Output "包身份：$($storeIdentity.identityName) ／ $($storeIdentity.publisher)"
+        Write-Output '未签名是故意的：商店收未签名的包，由 Partner Center 用预留身份的证书重签。'
+        Write-Output '下一步只能你来：Partner Center → 产品版本 → 包 → 上传这个 .msix。'
+    } elseif (-not $cert) {
         Write-Output "MSIX 已生成（未签名）：$msixPath"
         Write-Output '未签名的包装不上。加 -Sign 让脚本自签，或者用 -CertPath 指一张真证书。'
     } else {

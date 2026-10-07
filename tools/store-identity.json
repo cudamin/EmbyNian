@@ -1,0 +1,9 @@
+{
+  "_comment": "Microsoft Store 预留身份 —— 来自 Partner Center「产品版本 → 查看产品标识」。publish.ps1 -Store 用这里的前三个值覆盖 Package.appxmanifest 里的本地/旁加载身份；商店那边改了预留（改名、换发布者）就同步这一份，不要在脚本里另写一遍。后两个只作记录，打包用不到。",
+  "_source": "https://partner.microsoft.com/dashboard → 产品 → EmbyNian → 产品版本 → 查看产品标识",
+  "identityName": "MOMOKA.EmbyNian",
+  "publisher": "CN=1AA8C022-887D-4E5B-BB1D-970781A617A5",
+  "publisherDisplayName": "MOMOKA",
+  "packageFamilyName": "MOMOKA.EmbyNian_ft387wphrtwme",
+  "storeId": "9PMQ7FJ7HL4Q"
+}
