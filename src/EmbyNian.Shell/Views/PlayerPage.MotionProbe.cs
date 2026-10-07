@@ -6,6 +6,8 @@ public sealed partial class PlayerPage
 {
     internal void BeginMotionProbe(bool fullscreen)
     {
+        // 正式入口每次会 ShowCover；探针直接重进时 CoverUp 可能没变，但退场已把控件收起。
+        if (ViewModel.CoverUp && Cover.Visibility != Visibility.Visible) ShowCoverPlate();
         EnterPlayer();
         _ticker.Stop();
         if (fullscreen) SetFullscreen(true);
@@ -13,6 +15,7 @@ public sealed partial class PlayerPage
 
     internal void EndMotionProbe() => LeavePlayer();
     internal bool StartupHandoverPending => _startupHandoverPending;
+    internal bool StartupCoverSettled => _startupCoverSettled;
     internal void ProbePictureAspect(double aspect) => OnPictureAspectChanged(aspect);
 
     /// <summary>

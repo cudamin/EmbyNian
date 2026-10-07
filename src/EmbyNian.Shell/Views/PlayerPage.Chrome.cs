@@ -388,26 +388,33 @@ public sealed partial class PlayerPage
     private const double FullscreenRailTrack = 364;
 
     /// <summary>
-    /// **跳过按钮**的两档：内边距 24×28、圆角 28、右让位 28（今天这三处同为一个 28，是 09-26
-    /// 「厚度加倍」那批定的；往后若分家再拆常数）、两组行距 10、倒计时条高 4、图标 16
-    /// （＝OsdGlyphStyle 基准）、标题 16（＝EgSubheadFontSize）、提示 12（＝EgCaptionFontSize）。
-    /// 全屏档一律 ×1.3 —— uosc 那颗 SkipButton 同样随 state.scale 缩（<c>elements/SkipButton.lua</c>
-    /// 的字号、内边距、让位全乘 scale）。
+    /// **跳过按钮**的两档。<b>2026-09-30 用户令「缩小图标跳过按钮两倍」：整颗按钮一律减半</b>（那一批
+    /// 之前窗口档是内边距 24×28、圆角 28、右让位 28（09-26「厚度加倍」那批）、两组行距 10、
+    /// 倒计时条高 4、图标 16（＝OsdGlyphStyle 基准）、标题 16（＝EgSubheadFontSize）、提示 12
+    /// （＝EgCaptionFontSize））。<b>2026-10-01 用户令「跳过按钮太小，调大 1.5 倍」：在减半的基础上
+    /// 每一项 ×1.5 写死</b>（＝最初基准的 0.75；不是乘一个系数——两档的落点要能一眼读出「今天窗口档
+    /// 是几」）。全屏档一律 ×1.3（＝独占的 <c>scale_fullscreen</c>）——
+    /// uosc 那颗 SkipButton 同样随 state.scale 缩（<c>elements/SkipButton.lua</c> 的字号、内边距、
+    /// 让位全乘 scale，那边的基准数两轮都跟着集成走）。
+    /// <para>
+    /// 尺度跟着图标走：图标是用户两轮都点名的那个量（16→8→12），其余几项跟着图标走才不显得
+    /// 「小图标配大留白」——内边距、行距、标题、提示、倒计时条都是同一把尺上的量。
+    /// </para>
     /// </summary>
-    private const double WindowSkipPadX = 24;
-    private const double FullscreenSkipPadX = 31.2;
-    private const double WindowSkipPadY = 28;
-    private const double FullscreenSkipPadY = 36.4;
-    private const double WindowSkipGap = 10;
-    private const double FullscreenSkipGap = 13;
-    private const double WindowSkipGlyph = 16;
-    private const double FullscreenSkipGlyph = 20.8;
-    private const double WindowSkipCaption = 16;
-    private const double FullscreenSkipCaption = 20.8;
-    private const double WindowSkipTip = 12;
-    private const double FullscreenSkipTip = 15.6;
-    private const double WindowSkipCountdown = 4;
-    private const double FullscreenSkipCountdown = 5.2;
+    private const double WindowSkipPadX = 18;
+    private const double FullscreenSkipPadX = 23.4;
+    private const double WindowSkipPadY = 21;
+    private const double FullscreenSkipPadY = 27.3;
+    private const double WindowSkipGap = 7.5;
+    private const double FullscreenSkipGap = 9.75;
+    private const double WindowSkipGlyph = 12;
+    private const double FullscreenSkipGlyph = 15.6;
+    private const double WindowSkipCaption = 12;
+    private const double FullscreenSkipCaption = 15.6;
+    private const double WindowSkipTip = 9;
+    private const double FullscreenSkipTip = 11.7;
+    private const double WindowSkipCountdown = 3;
+    private const double FullscreenSkipCountdown = 3.9;
 
     /// <summary>
     /// 返回键玻璃右缘与标题玻璃左缘之间那条缝（独占的 <c>title_spacing</c>＝<c>round(1 * scale)</c>，
@@ -648,9 +655,11 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 跳过按钮的**两档**（用户令 2026-09-28 更晚「复刻独占模式的控件放大策略到集成模式」）：
-    /// uosc 那颗 SkipButton 的字号、内边距、让位全乘 state.scale，集成这颗照同一个策略 ×1.3
-    /// （窗口档各数是 09-26「厚度加倍」那批拍板的现值）。
+    /// 跳过按钮的**两档**（用户令 2026-09-28 更晚「复刻独占模式的控件放大策略到集成模式」，
+    /// 2026-09-30「缩小图标跳过按钮两倍」把窗口档整颗减半，2026-10-01「调大 1.5 倍」再各乘 1.5）：
+    /// uosc 那颗 SkipButton 的字号、内边距、
+    /// 让位全乘 state.scale，集成这颗照同一个策略 ×1.3。两档的数在
+    /// <see cref="WindowSkipPadX"/> 那一族常量里，这里的字形与间距只是把它们铺上去。
     /// <para>
     /// **底边让位是 <see cref="PlaceOverlays"/> 的**：它每趟整条重写 Margin、右值从现值读 ——
     /// 这里只换右让位、把现值 Bottom 原样带回去，等 Bar 因按钮格变高而重排时它自己会再落一次。
@@ -1704,7 +1713,9 @@ public sealed partial class PlayerPage
     {
         None = 0,
 
-        /// <summary>One of the six menus is open — the pointer is in it, not resting on the picture.</summary>
+        /// <summary>One of the control-bar menus is open — the pointer is in it, not resting on the picture.
+        /// 右键画面菜单不在此列（2026-10-07 起它走 <see cref="HoldPictureMenu"/> 把控件收下去，而不是钉住），
+        /// 但键盘兜底那道闸照样给它让路（读 <see cref="ChromeReveal.PictureMenuOpen"/>）。</summary>
         Menu = 1,
 
         /// <summary>The window is being dragged by the title strip, which reports nothing while the hand holds still.
@@ -1763,6 +1774,17 @@ public sealed partial class PlayerPage
         var changed = _chrome.SetHold(_holds != ChromeHold.None, stamp);
         if (_chrome.SetWindowDrag(_holds.HasFlag(ChromeHold.Drag), stamp)) changed = true;
         if (changed) Render();
+    }
+
+    /// <summary>
+    /// 右键画面菜单的挂牌，与 <see cref="Hold"/> 那把反着来：那把把三样钉在屏上（控制条上的浮层，控件是
+    /// 回得去的来路），这一把把三样收下去 —— 菜单锚在画面上，开着时它本身就是全部界面（2026-10-07 用户令，
+    /// 规则那一支见 <see cref="ChromeReveal.SetPictureMenu"/>）。不进 <see cref="_holds"/> 那本账：那本账
+    /// 只答「钉没钉住」，收下去是另一个动词，混进去两边都得加例外。
+    /// </summary>
+    private void HoldPictureMenu(bool held)
+    {
+        if (_chrome.SetPictureMenu(held, Now)) Render();
     }
 
     /// <summary>

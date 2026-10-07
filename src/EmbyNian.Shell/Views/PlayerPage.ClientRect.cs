@@ -3,6 +3,7 @@ using EmbyNian.Diagnostics;
 using EmbyNian.Infrastructure;
 using EmbyNian.Playback;
 using EmbyNian.Shell.Interop;
+using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Windowing;
 
 namespace EmbyNian.Shell.Views;
@@ -34,6 +35,7 @@ public sealed partial class PlayerPage
     /// 只有 <see cref="BeginResizeFreeze"/> 会立起它，只有 <see cref="ReleaseResizeFreezeAsync"/> 会收掉它。
     /// </summary>
     private bool _resizePaused;
+    private PlayerViewModel.InteractionContext _resizePauseContext;
 
     /// <summary>
     /// 那一下 <c>pause=yes</c> 的任务；放开之前先等它落地，免得 <c>pause=no</c> 跑在它前面、
@@ -133,6 +135,7 @@ public sealed partial class PlayerPage
 
     private void StartWindowChange()
     {
+        if (_window is { } window && Pending(window)) CancelStartupCover();
         if (!_windowChange.IsCompleted) return;
         CancelResizeChange();
         _windowChange = ChangeWindowAsync();
@@ -157,10 +160,15 @@ public sealed partial class PlayerPage
 
     private async Task ChangeWindowAsync()
     {
+        var context = ViewModel.CaptureInteraction();
+        await _resizeChange;
+        if (!Attached || !_onStage || !ViewModel.IsCurrentInteraction(context)) return;
         var pause = new HandoffPause();
-        while (_window is { } window && Pending(window))
+        while (_window is { } window && Pending(window) && _onStage && ViewModel.IsCurrentInteraction(context))
         {
             var generation = _windowChangeGeneration;
+            bool Current() => generation == _windowChangeGeneration && _window == window
+                && window.Handle != IntPtr.Zero && _onStage && Attached && ViewModel.IsCurrentInteraction(context);
             var held = false;
             VideoFrameOverlay? growCover = null;
             try
@@ -176,6 +184,7 @@ public sealed partial class PlayerPage
                 // 「播放中抓帧」给不了后一件：覆盖层每多盖一毫秒，撤掉时就多跳一毫秒的内容 ——
                 // 用户看到的那一下「退回」有它一半。
                 await FreezeForHandoffAsync(pause);
+                if (!Current()) break;
 
                 // 这一趟是不是「变大」（进全屏／最大化）—— 抓帧铺覆盖层与下面加载态的纯色覆盖层都看它。
                 var growing = _fullscreenWanted == true || _maximizeWanted == true;
@@ -185,7 +194,7 @@ public sealed partial class PlayerPage
                     _videoTarget.HoldGeometry(true);
                     held = true;
                     var frame = await _videoTarget.CaptureFrameAsync().WaitAsync(TimeSpan.FromMilliseconds(750));
-                    if (generation != _windowChangeGeneration || _window != window || !_onStage) continue;
+                    if (!Current()) break;
 
                     if (frame is not null)
                     {
@@ -220,6 +229,9 @@ public sealed partial class PlayerPage
                     var target = _fullscreenWanted == true
                         ? VideoFrameOverlay.FullscreenRect(window.Handle)
                         : VideoFrameOverlay.WorkArea(window.Handle);
+                    // 进全屏的那一档与起播整屏同一条理（见 EnterFullscreenAtOnce）：任务栏先收、覆盖层后上，
+                    // 收不回来由本趟 finally 的 Cancel 凭记账放回。最大化盖的是工作区，够不着任务栏，不动。
+                    if (_fullscreenWanted == true) window.HideTrayForImminentFullscreen();
                     growCover = StartupCover(window.Handle);
                     growCover.Show(target, topmost: true);
                     VideoFrameOverlay.Flush();
@@ -242,6 +254,7 @@ public sealed partial class PlayerPage
                     {
                         Log.Debug("播放器", $"起播全屏覆盖层提交未确认，照撤：{commit.Message}");
                     }
+                    if (!Current()) break;
                     growCover.Dispose();
                     growCover = null;
                 }
@@ -266,7 +279,7 @@ public sealed partial class PlayerPage
                     var clientHeight = 0;
 
                     // 缓冲、布局和合成提交各自异步完成，保留帧必须盖住这段交接。
-                    while (clock.ElapsedMilliseconds < 750 && generation == _windowChangeGeneration && _onStage)
+                    while (clock.ElapsedMilliseconds < 750 && Current())
                     {
                         _videoTarget.RefreshPresentation();
                         var client = window.ClientSize;
@@ -289,7 +302,7 @@ public sealed partial class PlayerPage
                         if (ready) break;
                         await Task.Delay(16);
                     }
-                    if (generation != _windowChangeGeneration) continue;
+                    if (!Current()) break;
                     await _videoTarget.CommitPresentationAsync().WaitAsync(TimeSpan.FromMilliseconds(250));
                     VideoFrameOverlay.Flush();
                     if (covered)
@@ -301,14 +314,16 @@ public sealed partial class PlayerPage
             catch (Exception error)
             {
                 Log.Warn("播放器", "窗口切换保留帧不可用，回退直接切换", error);
-                if (generation == _windowChangeGeneration && _window == window && _onStage)
-                    ApplyPending(window);
+                if (Current()) ApplyPending(window);
             }
             finally
             {
                 _windowFrame?.Dispose();
                 _windowFrame = null;
                 growCover?.Dispose();
+                // 全屏没进成的那几条路（中途失效、异常回退）：前半拍预收的任务栏凭记账放回。
+                // 全屏已落地时这是一句空操作。
+                window.CancelImminentFullscreenTray();
                 if (held) _videoTarget.HoldGeometry(false);
 
                 // 替用户把播放放开 —— 但要等**整趟事务**走完，不是这一趟走完。快速反向（连点全屏／
@@ -316,9 +331,7 @@ public sealed partial class PlayerPage
                 // 「同帧」，声音还会跟着「断-续-断-续」。`Pending` 还立着就继续冻着。
                 // 静默锚在这里再推一次：mpv 把 `pause=false` 报回来还要一程，那一下同样不是用户按的
                 //（见 `PlayerPage.Muted` 与 `HandoffPulseMuteMilliseconds`）。
-                if (pause.Release(
-                    generation == _windowChangeGeneration && _window == window && _onStage,
-                    Pending(window)))
+                if (pause.Release(Current(), Pending(window)))
                 {
                     _handoffMutedAt = Now;
                     ViewModel.SetPaused(false);
@@ -360,6 +373,7 @@ public sealed partial class PlayerPage
     private void CancelWindowChange()
     {
         _windowChangeGeneration++;
+        CancelStartupCover();
         _startupHandoverPending = false;
         _fullscreenWanted = null;
         _maximizeWanted = null;
@@ -472,8 +486,10 @@ public sealed partial class PlayerPage
             await ReleaseResizeFreezeAsync();
             return;
         }
+        var context = ViewModel.CaptureInteraction();
         VideoFrameOverlay? overlay = null;
-        bool Current() => generation == _resizeGeneration && _window == window && _onStage;
+        bool Current() => generation == _resizeGeneration && _window == window && window.Handle != IntPtr.Zero
+            && _onStage && Attached && ViewModel.IsCurrentInteraction(context);
         try
         {
             if (_videoTarget.HasAttachedVisual && Cover.Visibility != Microsoft.UI.Xaml.Visibility.Visible)
@@ -541,6 +557,7 @@ public sealed partial class PlayerPage
         if (!ResizeFreeze.Freezes(ViewModel.Paused, _onStage, ViewModel.PictureInHostWindow)) return;
 
         _resizePaused = true;
+        _resizePauseContext = ViewModel.CaptureInteraction();
         _resizeFreeze = FreezeForResizeAsync();
     }
 
@@ -571,15 +588,27 @@ public sealed partial class PlayerPage
     /// </summary>
     private async Task ReleaseResizeFreezeAsync()
     {
-        var froze = _resizePaused;
+        if (!_resizePaused) return;
+        var generation = _resizeGeneration;
+        var context = _resizePauseContext;
+        var window = _window;
+        var freeze = _resizeFreeze;
+        await freeze;
+        if (!_resizePaused || generation != _resizeGeneration || _resizeLoop
+            || !ReferenceEquals(freeze, _resizeFreeze)) return;
+        if (!Attached || _window != window || window?.Handle == IntPtr.Zero || !_onStage
+            || !ViewModel.IsCurrentInteraction(context))
+        {
+            _resizePaused = false;
+            return;
+        }
+        var resume = ResizeFreeze.Resumes(_resizePaused, ViewModel.ResumeAfterWindowResize);
         _resizePaused = false;
-        if (!ResizeFreeze.Resumes(froze, ViewModel.ResumeAfterWindowResize)) return;
-
-        await _resizeFreeze;
-
+        if (!resume) return;
         _handoffMutedAt = Now;
         SetPaused(false);
-        for (var step = 0; step < 12 && ViewModel.Paused; step++)
+        for (var step = 0; step < 12 && generation == _resizeGeneration
+             && ViewModel.IsCurrentInteraction(context) && ViewModel.Paused; step++)
             await Task.Delay(16);
     }
 
@@ -591,11 +620,9 @@ public sealed partial class PlayerPage
         _resizeFrame = null;
         _videoTarget.SetInteractiveResize(false);
 
-        // 冻结那笔账不能丢给下一趟：窗口切换事务只看得见「现在停着」，看不出这是谁按的 ——
-        // 一笔没人还的账就是「画面从此不再动」。这一句不等它落地（这里是同步返回），紧接着的窗口切换
-        // 事务会自己决定要不要再冻一次；最坏也只是那一趟少冻一下（它把这次放开误读成「用户暂停着」，
-        // 于是跳过冻结，而放开已经发出去了，播放照常回来）。
-        _ = ReleaseResizeFreezeAsync();
+        // A pending release remains owned until its pause write completes. Window handoff awaits
+        // this task before taking a new pause; newer drags keep the outstanding ownership.
+        _resizeChange = ReleaseResizeFreezeAsync();
     }
 
     private void EnterAutoFullscreen()

@@ -8,12 +8,8 @@ public sealed record MoviePilotStorage(string Name, string Type);
 
 public sealed record MoviePilotMediaSource(string Name, string Id, IReadOnlyList<string> Types)
 {
-    /// <summary>
-    /// 影视搜索/订阅能不能用这个来源：声明了电影/电视剧（或其英文值）才算；一条类型都没声明的按可用处理 ——
-    /// 插件来源可能不报 media_types，官方前端对空表同样放行（见 <c>utils/mediaId.ts</c> 的宽容）。
-    /// </summary>
-    public bool IsVideo => Types.Count == 0 ||
-        Types.Any(type => VideoTypeNames.Contains(type.Trim()));
+    /// <summary>只提供明确声明电影或电视剧能力的来源，不把显式空列表当作影视支持。</summary>
+    public bool IsVideo => Types.Any(type => VideoTypeNames.Contains(type.Trim()));
 
     private static readonly HashSet<string> VideoTypeNames = new(StringComparer.OrdinalIgnoreCase)
     { "电影", "电视剧", "movie", "tv" };
@@ -227,13 +223,55 @@ public sealed record MoviePilotTransferResult(
           $"已跳过 {Items.Count(item => item.State == "skipped")}，失败或待处理 {Items.Count(item => item.State is not ("completed" or "accepted" or "skipped"))}";
 }
 
-public sealed record MoviePilotTransferPreview(
-    MoviePilotTransferRequest Request, IReadOnlyList<JsonElement> Files, MoviePilotTransferResult Result)
+public sealed class MoviePilotTransferPreview
 {
-    internal string ConnectionStamp { get; init; } = "";
-    public bool CanSubmit => Result.CanSubmit && Result.Items.Count == Files.Count &&
+    private JsonElement _requestSnapshot;
+    private JsonElement _resultSnapshot;
+    private int _submissionStarted;
+
+    public MoviePilotTransferPreview(MoviePilotTransferRequest request, IReadOnlyList<JsonElement> files,
+        MoviePilotTransferResult result)
+    {
+        Request = request with
+        {
+            Files = System.Array.AsReadOnly(request.Files.ToArray()),
+            Histories = System.Array.AsReadOnly(request.Histories.ToArray())
+        };
+        Files = System.Array.AsReadOnly(files.Select(file => file.Clone()).ToArray());
+        Result = result;
+    }
+
+    public MoviePilotTransferRequest Request { get; }
+    public IReadOnlyList<JsonElement> Files { get; }
+    public MoviePilotTransferResult Result { get; }
+    internal string ConnectionStamp { get; private set; } = "";
+
+    public bool CanSubmit => Volatile.Read(ref _submissionStarted) == 0 && Result.CanSubmit &&
+        Result.Items.Count == Files.Count &&
         Files.All(file => Result.Items.Count(item => MoviePilotTransfer.SamePath(item.Source,
             MoviePilotTransfer.Text(file, "path"))) == 1);
+
+    internal void Seal(string connectionStamp)
+    {
+        ConnectionStamp = connectionStamp;
+        _requestSnapshot = JsonSerializer.SerializeToElement(Request.Body(Files, preview: false));
+        _resultSnapshot = JsonSerializer.SerializeToElement(Result);
+    }
+
+    public bool Matches(MoviePilotTransferRequest request) => request with { Files = Request.Files, Histories = Request.Histories } == Request &&
+        request.Files.SequenceEqual(Request.Files) && request.Histories.SequenceEqual(Request.Histories);
+
+    internal void ClaimSubmission(string connectionStamp)
+    {
+        if (ConnectionStamp.Length == 0 || ConnectionStamp != connectionStamp)
+            throw new MoviePilotTransferBlockedException("MoviePilot 连接配置已改变，请重新查找记录和预览");
+        if (!CanSubmit || !JsonElement.DeepEquals(_requestSnapshot,
+                JsonSerializer.SerializeToElement(Request.Body(Files, preview: false))) ||
+            !JsonElement.DeepEquals(_resultSnapshot, JsonSerializer.SerializeToElement(Result)))
+            throw new MoviePilotTransferBlockedException("整理预览已失效或已提交，请先核对服务端记录");
+        if (Interlocked.CompareExchange(ref _submissionStarted, 1, 0) != 0)
+            throw new MoviePilotTransferBlockedException("此预览已经提交，不能重复发送");
+    }
 }
 
 public static class MoviePilotTransfer
@@ -319,6 +357,31 @@ public static class MoviePilotTransfer
         return new MoviePilotTransferResult(success, detail.Length > 0 ? detail : message, lines, preview);
     }
 
+    internal static MoviePilotTransferResult CompleteReceipt(MoviePilotTransferResult result, MoviePilotTransferPreview preview)
+    {
+        var lines = result.Items.ToList();
+        var legacyAccepted = result.Success && lines.Count == 0;
+        foreach (var expected in preview.Result.Items)
+        {
+            var matches = lines.Where(line => SamePath(line.Source, expected.Source) ||
+                line.Source.Length == 0 && line.Target.Length > 0 && SamePath(line.Target, expected.Target)).ToList();
+            if (matches.Count == 1) continue;
+            lines.Add(new MoviePilotTransferLine
+            {
+                Source = expected.Source,
+                Target = expected.Target,
+                State = legacyAccepted ? "accepted" : "manual_review",
+                Success = legacyAccepted,
+                Message = legacyAccepted ? "服务器已接收，完成状态待确认" : "此文件没有唯一的明确回执，请在 MoviePilot 核对，勿重复提交"
+            });
+        }
+        return result with
+        {
+            Success = result.Success && lines.All(line => line.Success && line.State is "completed" or "accepted" or "skipped"),
+            Items = lines
+        };
+    }
+
     /// <summary>按下去之前给用户看的那段话：会动哪些文件、怎么动、覆盖和清历史的后果。</summary>
     public static string Confirmation(MoviePilotTransferRequest request, MoviePilotTransferResult preview, bool background)
     {
@@ -331,10 +394,14 @@ public static class MoviePilotTransfer
             _ => "按目的目录的配置（可能是移动）"
         };
 
+        var paths = string.Join("\n", preview.Items.Select(item => $"源：{item.Source}\n目标：{item.Target}"));
+        var oldTargets = request.Histories.Select(history => history.TargetPath).Where(path => path.Length > 0)
+            .Distinct(StringComparer.Ordinal).ToList();
         return $"{(background ? "把整理加入 MoviePilot 队列" : "现在整理")}，预览共 {preview.Items.Count} 项。\n" +
-            $"源：{request.SourceDisplay}\n整理方式：{mode}\n" +
+            $"整理方式：{mode}\n{paths}\n" +
             "目标同名文件按 MoviePilot 的覆盖规则处理，同名字幕、音轨可能一起整理；Emby 里记录的原路径可能失效。" +
             (request.Reorganize ? "\n重新整理会清理命中的成功历史和旧目标文件，这一步无法在本客户端撤销。" : "") +
+            (oldTargets.Count > 0 ? "\n按原记录整理仍可能清理以下旧目标（关闭重新整理也不代表保留）：\n" + string.Join("\n", oldTargets) : "") +
             (request.FromHistory ? "\n已开启复用历史识别，旧历史里的媒体信息优先于本次填写的编号。" : "");
     }
 

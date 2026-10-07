@@ -10,6 +10,19 @@ internal static class SubtitleBehaviorTests
 {
     public static void Register()
     {
+        Test("字幕颜色：所有字节精确下发，不经过三位小数舍入", () =>
+        {
+            for (var channel = 0; channel <= 255; channel++)
+            {
+                var rgb = $"#{channel:X2}{(255 - channel):X2}56";
+                Assert.Equal("#FF" + rgb[1..], MpvOutputOptions.ToMpvColor(rgb, 100));
+            }
+            Assert.Equal("#00123456", MpvOutputOptions.ToMpvColor("#123456", -1));
+            Assert.Equal("#66AC5D5D", MpvOutputOptions.ToMpvColor("#AC5D5D", 40));
+            Assert.Equal("#FFFE0102", MpvOutputOptions.ToMpvColor("#FE0102", 101));
+            Assert.Null(MpvOutputOptions.ToMpvColor("", 100));
+        });
+
         Test("字幕预览：百分比缩放同步放大字号、描边与阴影", () =>
         {
             foreach (var percent in new[] { 50, 100, 200, 300 })
@@ -35,8 +48,7 @@ internal static class SubtitleBehaviorTests
                 Assert.Equal(opacity / 100.0, plan.PlateOpacity);
                 Assert.Equal("#000000", plan.PlateColor);
                 var options = MpvOutputOptions.SubtitleAppearance(settings).ToDictionary(pair => pair.Key, pair => pair.Value);
-                Assert.Equal($"0.000/0.000/0.000/{(opacity / 100.0).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)}",
-                    options["sub-back-color"]);
+                Assert.Equal($"#{(int)Math.Round(opacity * 255.0 / 100):X2}000000", options["sub-back-color"]);
             }
         });
 
@@ -146,6 +158,32 @@ internal static class SubtitleBehaviorTests
             Assert.True(TrackSelection.Resolve(settings, source).Subtitle.Disabled);
             source.MediaStreams[1].IsDefault = true;
             Assert.Equal(2, TrackSelection.Resolve(settings, source).Subtitle.Stream?.Index);
+        });
+
+        Test("字幕元数据未知：外语模式仍关闭已知母语的字幕，未知音轨仍交给内核", () =>
+        {
+            var settings = new PlaybackSettings { SubtitleMode = SubtitleMode.ForeignAudioOnly, SubtitleLanguages = ["中文"] };
+            Assert.True(TrackSelection.Resolve(settings, Source(Audio(1, "chi"))).Subtitle.Disabled);
+            Assert.False(TrackSelection.Resolve(settings, Source(Audio(1, "jpn"))).Subtitle.Disabled);
+            Assert.False(TrackSelection.Resolve(settings, Source()).Subtitle.Disabled);
+        });
+
+        Test("同窗换片：完整字幕外观按新票重发，不继承尚未恢复的旧值", () =>
+        {
+            var appearance = MpvOutputOptions.SubtitleAppearance(new PlaybackSettings
+            {
+                SubtitleAssOverride = "force",
+                SubtitleColor = "#FFFFFF",
+                SubtitleBorderColor = "#123456"
+            });
+            var defaults = MpvOutputOptions.SubtitleStyleOptions.ToDictionary(name => name, _ => "default");
+            var request = new PlaybackRequest { MediaUrl = new Uri("http://192.0.2.1/fixture"), Title = "fixture", PlayerOptions = appearance };
+            var options = InlineSwitch.FilmScoped(defaults, request).ToDictionary(option => option.Key, option => option.Value);
+            foreach (var name in MpvOutputOptions.SubtitleStyleOptions)
+            {
+                Assert.True(options.ContainsKey(name), name);
+                Assert.Equal(appearance.LastOrDefault(option => option.Key == name).Value ?? "default", options[name], name);
+            }
         });
 
         Test("同窗换片：主次字幕可见性、次字幕选择和临时参数全部复位", () =>

@@ -69,6 +69,10 @@ public sealed partial class CoverPickerDialog : ContentDialog
     /// 那也保证了这一张表里所有网络上的事仍然只有那一个人在发。
     /// </summary>
     private readonly CoverDialog _owner;
+    private bool _closed;
+    private bool _picking;
+    internal event Action? UploadCompleted;
+    internal void CancelLoads() => _closed = true;
 
     /// <param name="kind">正在换的是哪一种图。它只用来写标题 —— 剩下的事外面那位已经知道了。</param>
     /// <param name="found">服务器列的候选。</param>
@@ -80,7 +84,7 @@ public sealed partial class CoverPickerDialog : ContentDialog
         _owner = owner;
 
         RequestedTheme = ThemeHost.Current.IsDark ? ElementTheme.Dark : ElementTheme.Light;
-        Title = $"换一张{kind.Name} — {item.Name}";
+        Title = $"{(kind.Many ? "另加一张" : "换一张")}{kind.Name} — {item.Name}";
 
         foreach (var image in found.Images.Where(image => !string.IsNullOrWhiteSpace(image.Url)).Take(Most))
             _choices.Add(new CoverChoice(image));
@@ -110,7 +114,7 @@ public sealed partial class CoverPickerDialog : ContentDialog
     /// <summary>从本机选中的那张图（字节 + 文件名），没选就是空。</summary>
     public PickedArtwork? Uploaded { get; private set; }
 
-    private void OnPicked(object sender, SelectionChangedEventArgs e) => IsPrimaryButtonEnabled = Picked is not null;
+    private void OnPicked(object sender, SelectionChangedEventArgs e) => IsPrimaryButtonEnabled = !_picking && Picked is not null;
 
     /// <summary>
     /// 从本机传一张。选完就把答案收下并关掉这张表 —— 上传那一趟由外面那张面板发，因为要往服务器写。
@@ -120,18 +124,30 @@ public sealed partial class CoverPickerDialog : ContentDialog
     /// </summary>
     private async void OnUpload(object sender, RoutedEventArgs e)
     {
+        if (_closed || _picking) return;
+        _picking = true;
+        UploadArtworkButton.IsEnabled = false;
+        IsPrimaryButtonEnabled = false;
         try
         {
-            Uploaded = await _owner.PickArtworkAsync().ConfigureAwait(true);
-            if (Uploaded is null) return;
-
-            Hide();
+            var uploaded = await _owner.PickArtworkAsync().ConfigureAwait(true);
+            if (_closed || uploaded is null) return;
+            Uploaded = uploaded;
+            Grid.SelectedItem = null;
+            UploadCompleted?.Invoke();
         }
         catch (Exception error)
         {
+            if (_closed) return;
             Log.Warn(Category, "选图片文件失败", error);
             Notice.Text = $"打不开文件选择框：{Failure.Describe(error)}";
             Notice.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            _picking = false;
+            UploadArtworkButton.IsEnabled = true;
+            IsPrimaryButtonEnabled = Picked is not null;
         }
     }
 
@@ -142,14 +158,16 @@ public sealed partial class CoverPickerDialog : ContentDialog
     {
         foreach (var choice in _choices)
         {
+            if (_closed) return;
             var address = choice.Info.ThumbnailUrl is { Length: > 0 } thumbnail ? thumbnail : choice.Info.Url;
 
             try
             {
                 var bytes = await _owner.FetchRemoteAsync(address).ConfigureAwait(true);
-                if (bytes is not { Length: > 0 }) continue;
+                if (_closed || bytes is not { Length: > 0 }) continue;
 
-                choice.Picture = await PosterLoader.DecodeAsync(bytes, ThumbnailWidth).ConfigureAwait(true);
+                var picture = await PosterLoader.DecodeAsync(bytes, ThumbnailWidth).ConfigureAwait(true);
+                if (!_closed) choice.Picture = picture;
             }
             catch (Exception error)
             {

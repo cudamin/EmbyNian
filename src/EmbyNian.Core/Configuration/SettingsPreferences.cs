@@ -83,6 +83,7 @@ public static class SettingsPreferences
             (ui.WindowLeft, ui.WindowTop, ui.WindowWidth, ui.WindowHeight, ui.WindowMaximized);
         var lastLibraryId = ui.LastLibraryId;
         var (sort, filters, views) = (ui.Sort, ui.Filters, ui.Views);
+        var (homeIdentity, homeHistory) = (ui.HomeRowsIdentity, ui.HomeRowsByIdentity);
 
         Overwrite(ui, source.Ui);
 
@@ -95,6 +96,8 @@ public static class SettingsPreferences
         ui.Sort = sort;
         ui.Filters = filters;
         ui.Views = views;
+        ui.HomeRowsIdentity = homeIdentity;
+        ui.HomeRowsByIdentity = homeHistory;
 
         // 身份（DeviceId、Servers、LastServerId、LastAccountId）和 MoviePilot 一个字都没碰 —— 这里没有一句提到
         // 它们，而 AppSettings 这一层本身不走覆盖，正是为了让「不碰」是默认状态而不是一条例外。MoviePilot 那组

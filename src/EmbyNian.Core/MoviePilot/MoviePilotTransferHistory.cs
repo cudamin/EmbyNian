@@ -7,6 +7,7 @@ public sealed record MoviePilotTransferHistory
 {
     public long Id { get; init; }
     internal string ConnectionStamp { get; init; } = "";
+    internal JsonElement Snapshot { get; init; }
     public string Title { get; init; } = "";
     public string Type { get; init; } = "";
     public string MediaSource { get; init; } = "";
@@ -34,6 +35,7 @@ public sealed record MoviePilotTransferHistory
         return new MoviePilotTransferHistory
         {
             Id = id,
+            Snapshot = item.Clone(),
             Title = Scalar(item, "title"),
             Type = Scalar(item, "type"),
             MediaSource = Scalar(item, "media_source"),
@@ -73,9 +75,8 @@ public static class MoviePilotTransferHistoryMatch
         IEnumerable<MoviePilotTransferHistory> selected, IEnumerable<MoviePilotTransferHistory> all)
     {
         var chosen = selected.ToList();
-        var ids = chosen.Select(history => history.Id).ToHashSet();
-        return all.Where(history => history.Success && history.Mode == "softlink" && !ids.Contains(history.Id) &&
-            chosen.Any(original => original.TargetPath.Length > 0 &&
+        return all.Where(history => history.Success && history.Mode == "softlink" &&
+            chosen.Any(original => original.Id != history.Id && original.TargetPath.Length > 0 &&
                 MoviePilotTransfer.SamePath(history.SourcePath, original.TargetPath))).ToList();
     }
 

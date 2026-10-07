@@ -14,7 +14,7 @@ public sealed partial class PlayerPage
     {
         InlineSpeedSlider.BeginDrag = () =>
         {
-            if (!Attached) return false;
+            if (!Attached || _inputSuspended) return false;
             _speedDragX = double.NaN;
             _speedDragStart = ViewModel.SpeedValue;
             HideChapterPeek();

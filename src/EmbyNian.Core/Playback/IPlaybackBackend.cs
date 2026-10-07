@@ -121,6 +121,13 @@ public interface IPlaybackHandle : IAsyncDisposable
     /// form at all.
     /// </summary>
     Task<string?> GetTextAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>A lossless string-list snapshot; null means unavailable, not an empty list.</summary>
+    Task<IReadOnlyList<string>?> GetStringListAsync(string name, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<string>?>(null);
+
+    /// <summary>Whether this kernel exposes an option; null when the capability cannot be read.</summary>
+    Task<bool?> HasOptionAsync(string name, CancellationToken cancellationToken) => Task.FromResult<bool?>(null);
 }
 
 /// <summary>

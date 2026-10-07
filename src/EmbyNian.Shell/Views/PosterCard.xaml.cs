@@ -38,6 +38,7 @@ internal sealed record CardHoverProbe(
     double InsetRight,
     double InsetBottom,
     bool Chrome,
+    bool HostSurfaceTransparent,
     bool Watch,
     Windows.UI.Color FrameRest,
     Windows.UI.Color FrameActive,
@@ -362,15 +363,16 @@ public sealed partial class PosterCard : UserControl
     /// </summary>
     private void AnimateCard()
     {
-        var from = (CardMotion.ScaleX, CardMotion.TranslateY, PosterMotion.ScaleX,
+        var from = (CardMotion.ScaleX, PosterMotion.ScaleX,
             Hover.Opacity, HoverShade.Opacity, PlayMotion.ScaleX);
         _motion?.Stop();
         _motion = null;
 
         var enabled = HomeMotion.AnimationsEnabled;
         var active = _hovered || _focused;
-        var scale = enabled ? (_pressed ? 0.985 : active ? 1.012 : 1) : 1;
-        var lift = enabled ? (_pressed ? 1 : active ? -3 : 0) : 0;
+        // 外层按钮和滚动视口仍按布局尺寸裁剪；整卡向外放大或上移会切掉描边。
+        // 悬停只推近框内图片，按压仍可向内轻缩，边框始终留在原来的命中范围内。
+        var scale = enabled && _pressed ? 0.985 : 1;
         var zoom = enabled && active ? 1.045 : 1;
         var opacity = _hovered ? 1 : 0;
         var shade = _hovered ? 0.78 : 0;
@@ -382,7 +384,6 @@ public sealed partial class PosterCard : UserControl
         void Settle()
         {
             CardMotion.ScaleX = CardMotion.ScaleY = scale;
-            CardMotion.TranslateY = lift;
             PosterMotion.ScaleX = PosterMotion.ScaleY = zoom;
             Hover.Opacity = opacity;
             HoverShade.Opacity = shade;
@@ -400,13 +401,12 @@ public sealed partial class PosterCard : UserControl
         var duration = _pressed ? 90 : _hovered ? 240 : 180;
         Add(CardMotion, "ScaleX", from.Item1, scale);
         Add(CardMotion, "ScaleY", from.Item1, scale);
-        Add(CardMotion, "TranslateY", from.Item2, lift);
-        Add(PosterMotion, "ScaleX", from.Item3, zoom);
-        Add(PosterMotion, "ScaleY", from.Item3, zoom);
-        Add(Hover, "Opacity", from.Item4, opacity);
-        Add(HoverShade, "Opacity", from.Item5, shade);
-        Add(PlayMotion, "ScaleX", from.Item6, play);
-        Add(PlayMotion, "ScaleY", from.Item6, play);
+        Add(PosterMotion, "ScaleX", from.Item2, zoom);
+        Add(PosterMotion, "ScaleY", from.Item2, zoom);
+        Add(Hover, "Opacity", from.Item3, opacity);
+        Add(HoverShade, "Opacity", from.Item4, shade);
+        Add(PlayMotion, "ScaleX", from.Item5, play);
+        Add(PlayMotion, "ScaleY", from.Item5, play);
         _motion = board;
         board.Completed += (_, _) =>
         {
@@ -440,7 +440,6 @@ public sealed partial class PosterCard : UserControl
         _posterFade = null;
         _hovered = _pressed = false;
         CardMotion.ScaleX = CardMotion.ScaleY = 1;
-        CardMotion.TranslateY = 0;
         PosterMotion.ScaleX = PosterMotion.ScaleY = 1;
         PlayMotion.ScaleX = PlayMotion.ScaleY = 0.92;
         Hover.Opacity = HoverShade.Opacity = 0;
@@ -554,6 +553,7 @@ public sealed partial class PosterCard : UserControl
             Art.ActualWidth - corner.X,
             Art.ActualHeight - corner.Y,
             Paints(WatchedButton) || Paints(FavoriteButton) || Paints(MoreButton),
+            HostSurfaceIsTransparent(),
             _watch.Probe(),
             rest,
             active,

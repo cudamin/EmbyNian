@@ -309,6 +309,11 @@ public sealed partial class SettingsPage : Page, IShellContent
             _ = ViewModel.ReloadAsync();
         }
 
+        // Only when the page was cached, i.e. built on an earlier visit: the fresh path's ReloadAsync
+        // already fills the device row. A cached page skips ReloadAsync by design (in-progress edits are
+        // the point), but the device list is a reading, not an edit — it re-enumerates on re-entry.
+        if (built) _ = ViewModel.RefreshAudioDevicesAsync();
+
         // Both paths, and after the build: the cached path used to return before reading the parameter at
         // all, which is the whole of 「open 设置 on 诊断」 — the second time it was asked for, it opened on
         // whatever card was last read instead. ShowHosted is called either way, because a cached page whose

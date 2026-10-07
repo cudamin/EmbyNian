@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 共用的影院海报卡：圆角封面、清晰的标题层级，以及轻上浮、图片推近和渐显操作层。 -->
+<!-- 共用的影院海报卡：圆角封面、清晰的标题层级，以及轻按压、图片推近和渐显操作层。 -->
 <UserControl
     x:Class="EmbyNian.Shell.Views.PosterCard"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"

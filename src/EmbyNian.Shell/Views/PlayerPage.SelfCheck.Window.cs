@@ -47,6 +47,11 @@ public sealed partial class PlayerPage
     {
         if (!Attached || _window is null) return (false, "播放层未接线");
 
+        // 窗口改形那一路（ChangeWindowAsync）现在只在「在台上」才动手（stage5 加的守卫），而自检没有真实
+        // 播放、_onStage 平时是假的 —— 与「置顶开关」那一关同一套：这里照实把它摆成在台上，量完放回。
+        var wasOnStage = _onStage;
+        _onStage = true;
+
         var was = Visibility;
         Visibility = Visibility.Visible;
         UpdateLayout();
@@ -167,6 +172,7 @@ public sealed partial class PlayerPage
         SetCursorHidden(false);
         Visibility = was;
         UpdateLayout();
+        _onStage = wasOnStage;
 
         return (trouble.Count == 0,
             $"标题栏 {strip.Width:0}×{strip.Height:0} 逻辑像素，三个窗口命令"
@@ -587,6 +593,11 @@ public sealed partial class PlayerPage
                 + (unchanged ? "几何和状态保持不变" : "控制窗口被误改"));
         }
 
+        // 窗口改形那一路（ChangeWindowAsync／FitToPicture）现在只在「在台上」才动手（stage5 加的守卫），
+        // 自检没有真实播放、_onStage 平时是假的 —— 与「置顶开关」同一套：这一支开始前摆成在台上，末尾放回。
+        var wasOnStage = _onStage;
+        _onStage = true;
+
         // Through the page's own handler rather than by writing the property: the wiring is the subject.
         OnPictureAspectChanged(16d / 9d);
         var took = Math.Abs(_window.PictureAspect - 16d / 9d) < 0.001;
@@ -690,6 +701,7 @@ public sealed partial class PlayerPage
         if (_window.Fullscreen != wasFullscreen) SetFullscreen(wasFullscreen);
 
         _window.PictureAspect = restore;
+        _onStage = wasOnStage;
 
         return (took && shaped && refitted && cleared && back && replay,
             $"16:9 {(took ? "已交给窗口" : "没有传到窗口")}；{fitted}；"

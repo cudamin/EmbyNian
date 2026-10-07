@@ -34,7 +34,11 @@ internal sealed record LibraryRequest
     /// </summary>
     public string? CollectionType { get; init; }
 
-    public string? SearchTerm { get; init; }
+    public string? SearchTerm { get; set; }
+
+    public double ScrollOffset { get; set; }
+
+    public int LoadedCount { get; set; }
 
     /// <summary>
     /// Whether this grid is the search page, which is a different question from whether it has anything

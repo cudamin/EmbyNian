@@ -83,6 +83,8 @@ internal static class PlayerMotionProbe
             shell.AttachWindow(window);
             var page = shell.PlayerRoot;
             var surface = (CompositionVideoTarget)page.VideoSurface!;
+            await PlayerCoverProbe.RunAsync(options.Paths, shell, window,
+                services.GetRequiredService<EmbyNian.Shell.Platform.IUiDispatcher>(), Write, token);
             var layoutSample = window.Content!.DispatcherQueue.CreateTimer();
             layoutSample.Interval = TimeSpan.FromMilliseconds(50);
             layoutSample.Tick += (_, _) =>
@@ -103,7 +105,7 @@ internal static class PlayerMotionProbe
             window.CaptureBrowseGeometry();
             var browse = window.BrowseBounds;
             Write($"隔离窗口 PID={Environment.ProcessId} HWND=0x{window.Handle:X}；本地素材={media.LocalPath}");
-            Write("未调用登录、PlaybackService.Play 或任何服务器播放上报；用真实页面的进退方法与窗口命令。");
+            Write("未登录真实账号、未调用 PlaybackService.Play 或任何服务器播放上报；本地视频直达内核，用真实页面的进退方法与窗口命令。");
             var transitions = 0;
             window.ClientRectTransition += (_, _) => transitions++;
 
@@ -863,6 +865,7 @@ internal static class PlayerMotionProbe
             page.ProbePictureStarted();
             await Until(() => window.Fullscreen && !page.StartupHandoverPending && page.MotionProbeState.CoverHidden,
                 "全屏、首帧与加载层交接全部落定");
+            Require(page.StartupCoverSettled, "自动全屏加载层凭稳定出帧交接，没有走超时撤层");
             await Task.Delay(100, token);
             startupWatch.Stop();
             Write($"自动全屏取样：{startupSamples} 拍，提前揭幕 {earlyStartupFades}，"

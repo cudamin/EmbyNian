@@ -236,7 +236,7 @@ function TopBar:render()
 				(state.maximized and 'filter_none' or 'crop_square')
 			end
 
-			local rect = {ax = button_ax, ay = ay, bx = button_ax + self.size, by = by}
+			local rect = {ax = button_ax, ay = ay, bx = button_ax + self.size, by = by, input_owner = button}
 			local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
 			-- EMBYNIAN[topbar-pin-tilt] — 状态画在图钉的姿势上（用户令 2026-09-29「置顶不要长亮，改为非置顶
 			-- 的时候图标是斜的，置顶的时候恢复原样」）：未置顶斜 35°、置顶立正。角度取自
@@ -290,6 +290,7 @@ function TopBar:render()
 			ay = ay + margin,
 			bx = ax + margin + glass,
 			by = ay + margin + glass,
+			input_owner = self.back_button,
 		}
 		local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
 		-- EMBYNIAN[topbar-back] — 返回键始终带一块可见背景：uosc 窗口按钮默认 opacity.controls=0，静止时只有
@@ -346,6 +347,7 @@ function TopBar:render()
 				ay = title_ay,
 				bx = ax + rect_width,
 				by = by - margin,
+				input_owner = self.id .. '/playlist',
 			}
 			local opacity = get_point_to_rectangle_proximity(cursor, rect) <= 0
 				and 1 or config.opacity.playlist_position
@@ -379,7 +381,7 @@ function TopBar:render()
 				local ax = left_aligned and title_bx - rect_width or title_ax
 				-- EMBYNIAN[topbar-back-glass] — 标题玻璃下沿同样让进 margin（与参考项目「上下各让 margin」一条）。
 				local by = by - margin
-				local title_rect = {ax = ax, ay = title_ay, bx = ax + rect_width, by = by}
+				local title_rect = {ax = ax, ay = title_ay, bx = ax + rect_width, by = by, input_owner = self}
 
 				if options.top_bar_alt_title_place == 'toggle' then
 					cursor:zone('primary_click', title_rect, function() self:toggle_title() end)

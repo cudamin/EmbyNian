@@ -152,15 +152,16 @@ function Timeline:on_options()
 	self:decide_progress_size()
 	self:update_dimensions()
 end
-function Timeline:handle_cursor_up()
-	if self.pressed then
-		mp.set_property_native('pause', self.pressed.pause)
-		self.pressed = false
-	end
-end
-function Timeline:on_global_mouse_leave()
+function Timeline:finish_drag(exact)
+	local pressed = self.pressed
+	if not pressed then return end
 	self.pressed = false
+	if exact and cursor.x < math.huge and cursor.y < math.huge then self:set_from_cursor() end
+	mp.set_property_native('pause', pressed.pause)
 end
+
+function Timeline:handle_cursor_up() self:finish_drag(true) end
+function Timeline:on_global_mouse_leave() self:finish_drag(false) end
 
 function Timeline:on_global_mouse_move()
 	if self.pressed then

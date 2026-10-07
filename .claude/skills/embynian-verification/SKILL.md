@@ -33,7 +33,7 @@ Keep both reports and run under comparable account, server-data and window condi
 
 Historical diagnoses in PROGRESS.md describe their own runs. They do not waive a current red gate or justify a baseline update. See the development document's “逐行比报告：每次都会变的行” for raw-report interpretation.
 
-**Answering “is this red mine?”** — `tools/selfcheck-diff.ps1 -Exe <path to an archived pre-change publish>` runs the same baseline comparison against the build from before the current edits, so the same two runs differ only by the change under test. When a red reproduces there with the same reading, it is an environment or long-standing red: say so and quote both logs. The publishes moved to `EmbyNian-stale\publish-<timestamp>\win-x64` by the pre-publish step are the natural candidates; their timestamps are the only identifier, so name the exact one used. This is cheaper and far more conclusive than guessing which assertion could have moved.
+**Answering “is this red mine?”** — run `tools/selfcheck-diff.ps1 -Exe <verified pre-change executable>` only after establishing the artifact's source and isolation support as above. An old build reproducing the symptom shows that it predates the change; it does not by itself identify the cause or exclude a regression in unexercised paths. Quote both reports, identify differing runtime conditions, and use separate evidence before attributing the failure to the environment. If no trustworthy pre-change artifact is available, report that limit rather than treating a directory timestamp as provenance. The current gate remains red.
 
 ### Retired cursor checks
 
@@ -60,7 +60,7 @@ Navigation and authorization follow CLAUDE.md. These are measurements from this 
 
 Correct properties do not prove correct pixels. A clipped poster or blank background can pass geometry checks; pair relevant assertions with actual screen evidence.
 
-- `tools/shot.ps1` launches, captures and closes. For settings, use `-WindowTitle 设置` and a non-primary display when available, so the wrong window is not raised over the user's work. Single-monitor handling follows CLAUDE.md.
+- `tools/shot.ps1` can launch, capture and close the main window; pass an explicit executable path rather than relying on its historical default. Its `-WindowTitle` selector requires an exact, nonempty native title. `SettingsWindow` currently sets `Title = string.Empty`, so `-WindowTitle 设置` cannot find it, and passing an empty title just selects the main-window path. For settings, use the available official Computer Use capability to identify the owning application and the settings window by its actual content before capturing it; do not substitute a guessed title or the main window. If no reliable window capture is available, report the screenshot gap. Prefer a non-primary display when available; single-monitor handling follows CLAUDE.md.
 - An ignored resize helper may support chosen window dimensions, but must be inspected before reuse; do not assume a previous session's scratch file exists.
 - `--dump-ui` writes the final page's PNG and visual tree in the isolated run's log directory. It does not composite Mica; use a real screen capture for colors and `shot.ps1` for per-page photography.
 - Color changes cover every live theme; spacing/type changes cover the affected page and relevant window sizes. Read the live list from `UiThemes.cs`, not an old screenshot list.

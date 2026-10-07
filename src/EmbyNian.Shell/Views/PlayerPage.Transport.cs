@@ -96,7 +96,7 @@ public sealed partial class PlayerPage
 
     private bool BeginTimelineGesture()
     {
-        if (!Attached || !ViewModel.BeginTimelineDrag()) return false;
+        if (!Attached || _inputSuspended || !ViewModel.BeginTimelineDrag()) return false;
         _timelinePointerDown = true;
         Hold(true, ChromeHold.Timeline);
         return true;

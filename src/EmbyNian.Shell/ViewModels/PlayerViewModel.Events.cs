@@ -60,9 +60,15 @@ public sealed partial class PlayerViewModel
     /// 与播放信息（<see cref="VideoWindowContract.MediaInfo"/>）—— 集成模式右键菜单里「更多」那一棵
     /// 在独占模式的同款行，点中回宿主执行。
     /// </para>
+    /// <para>
+    /// 2026-10-01 再添一条：菜单末尾那三行「去设置里改」回 <see cref="VideoWindowContract.OpenSettings"/>，
+    /// 值是 <see cref="PlayerSettingsLinks"/> 的令牌，宿主把那扇设置窗口开在该行那张卡上。
+    /// </para>
     /// </summary>
-    private void OnVideoWindowMessage(string key, string value) => OnUi(() =>
+    private void OnVideoWindowMessage(PlaybackUpdate<(string Key, string Value)> update) => OnUi(() =>
     {
+        if (update.Generation != _playback.Generation || !_playback.IsPlaying) return;
+        var (key, value) = update.Value;
         // 装载握手先于「在播」那一问：uosc 是在 mpv_initialize 时装上的，而文件在那之后才打开 ——
         // 握手到的时候片子往往还没开，可宿主手上已经有「这个条目有几版」了。那颗「版本」按钮要在画面
         // 出来之前就摆对，所以这一条不能让它被下面的闸挡掉（其余几条都是「播放中的请求」，照旧要闸）。
@@ -75,6 +81,7 @@ public sealed partial class PlayerViewModel
             // 左上角第二行的文件信息也一样：握手到的时候宿主手上已经有条目与媒体源，趁画面还没出来把
             // 副标题摆对，别等第一次 OnNowPlayingChanged。
             NoteSubline();
+            _ = PushNativeShortcutsAsync(force: true);
             return;
         }
 
@@ -82,6 +89,10 @@ public sealed partial class PlayerViewModel
 
         switch (key)
         {
+            case VideoWindowContract.Shortcut:
+                RunNativeShortcut(value);
+                break;
+
             case VideoWindowContract.Episode:
                 _ = StepEpisodeAsync(int.Parse(value, CultureInfo.InvariantCulture));
                 break;
@@ -100,8 +111,8 @@ public sealed partial class PlayerViewModel
                 }
                 break;
 
-            case VideoWindowContract.EpisodeIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index):
-                if (index >= 1 && index <= Episodes.Count) SwitchEpisode(Episodes[index - 1]);
+            case VideoWindowContract.EpisodeIndex:
+                SelectEpisodeMenu(value);
                 break;
 
             case VideoWindowContract.Versions:
@@ -117,10 +128,8 @@ public sealed partial class PlayerViewModel
                 }
                 break;
 
-            case VideoWindowContract.VersionIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var version):
-                // 1 起算的序号对着推送那一份菜单的次序；越界与垃圾由 MediaVersionSwitch.At 挡成 null，
-                // 而「点了正在放的那一版」由 SwitchVersion 自己吞掉 —— 这道守卫不在这儿再抄一遍。
-                SwitchVersion(MediaVersionSwitch.At(_nowPlaying, version));
+            case VideoWindowContract.VersionIndex:
+                SelectVersionMenu(value);
                 break;
 
             case VideoWindowContract.PictureMenu:
@@ -143,17 +152,21 @@ public sealed partial class PlayerViewModel
                 else if (ShaderCatalog.FirstOrDefault(group => group.Id == value) is { } shader) ApplyShaderGroup(shader);
                 break;
 
-            case VideoWindowContract.MenuIndex when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var row):
-                // 1 起算的序号对着 PlayerMenuCatalog.Commands（宿主推送时按同一次序编号）。越界的丢掉，
-                // 命中的交给 RunMenuNodeAsync —— 与集成模式右键点同一行走的是同一句执行（命令＋${property} 提示）。
-                if (row >= 1 && row <= PlayerMenuCatalog.Commands.Count)
-                    _ = RunMenuNodeAsync(PlayerMenuCatalog.Commands[row - 1]);
+            case VideoWindowContract.MenuIndex:
+                SelectPictureMenu(value);
                 break;
 
             case VideoWindowContract.SkipTake:
-                // 独占模式那颗「跳过」按钮被点了。与集成模式那颗 XAML 按钮、快捷键回车同一句执行 ——
-                // 都走 AcceptSkip（seek 到片段另一端并 show-text）；offer 是否还立着由 SkipCoordinator 自己判。
+                // 独占模式那颗「跳过」按钮被点了（或 offer 立着时按了回车）。与集成模式那颗 XAML 按钮、
+                // 快捷键回车同一句执行 —— 都走 AcceptSkip（seek 到片段另一端并 show-text）；offer 是否
+                // 还立着由 SkipCoordinator 自己判。
                 TakeSkip();
+                break;
+
+            case VideoWindowContract.SkipDismiss:
+                // offer 立着时按了 Esc（独占模式那把运行期绑定送来的）。与集成模式同一句：
+                // SkipCoordinator.Decline + 收起提示，且只要位置还在这一段里就不再冒出来。
+                DismissSkip();
                 break;
 
             case VideoWindowContract.SkipMode:
@@ -179,6 +192,12 @@ public sealed partial class PlayerViewModel
                 // MediaInfoRequested 弹主窗口）；集成模式不走这条 —— 页面上的菜单行自己弹同一张。
                 MediaInfoRequested?.Invoke();
                 break;
+
+            case VideoWindowContract.OpenSettings:
+                // 右键画面菜单末尾那一行「去设置里改」被点了（2026-10-01）。令牌由 Parse 收窄过，这里再查
+                // 一次表拿到那张卡 —— 与集成模式点同一行走的是同一个出口（RequestSettings），两条管线同一句。
+                if (PlayerSettingsLinks.For(value) is { } settings) RequestSettings(settings);
+                break;
         }
     });
 
@@ -194,14 +213,23 @@ public sealed partial class PlayerViewModel
     /// 这里是 uosc 菜单行），但数据源与执行是同一份：版本开的是同一张版本菜单、着色器/跳过写的是同一格
     /// 设置、连播同一格、播放信息同一份正文。**改任何一边的行集、次序或文案，另一边要跟上** —— 两处
     /// 旁边的注释就是互相指认的路标。
+    /// <para>
+    /// 2026-10-01 末尾再加三行「去设置里改」（字幕／视频输出／音频输出）：与上面那几行不同，这三行的行集
+    /// 不在这里各写一份，而是读 Core 那张表 <see cref="PlayerSettingsLinks.All"/> —— 集成侧读的也是它。
     /// </para>
     /// </summary>
     private async Task PushPictureMenuAsync()
     {
+        var context = CaptureInteraction();
+        var request = ++_pictureMenuRequest;
         var checks = await ReadMenuChecksAsync().ConfigureAwait(true);
+        if (!IsCurrentInteraction(context) || request != _pictureMenuRequest) return;
+        var snapshot = new VideoMenuSnapshot<PlayerMenuNode>(PlayerMenuCatalog.Commands);
+        _pictureMenuSnapshot = snapshot;
+        _pictureMenuContext = context;
 
         var command = 0;
-        var items = BuildPictureMenuItems(PlayerMenuCatalog.Root, checks, ref command);
+        var items = BuildPictureMenuItems(PlayerMenuCatalog.Root, checks, snapshot, ref command);
 
         // 目录与「更多」之间的一条分隔线（集成侧 OnPictureMenuOpening 插的那条 MenuFlyoutSeparator）。
         // uosc 的分隔线是「这一行之后画条线」的行属性而不是独立行，落在前一行上（与目录里的分隔同款）。
@@ -221,6 +249,19 @@ public sealed partial class PlayerViewModel
             $"script-message {VideoWindowContract.AutoPlayNext} toggle", true, AutoPlayNextEpisode, Separator: true));
         items.Add(new UoscMenuItem("播放信息…", $"script-message {VideoWindowContract.MediaInfo} open", true, false));
 
+        // —— 末尾那三行「去设置里改」（2026-10-01 用户令「在右键菜单中添加字幕、视频输出、音频输出三个按钮，
+        // 点击后打开设置页面」）。行集、次序与文案照抄集成侧 OnMoreMenuOpening 的同名三行，数据源就是那一张表
+        // （PlayerSettingsLinks.All）—— 两边各写一份的那天就是它们开始不一样的那天。
+        items[^1] = items[^1] with { Separator = true };
+        foreach (var link in PlayerSettingsLinks.All)
+        {
+            items.Add(new UoscMenuItem(
+                link.Label,
+                $"script-message {VideoWindowContract.OpenSettings} {link.Token}",
+                true,
+                false));
+        }
+
         // title 传 null：画面菜单不画顶部那行「画面」（用户令 2026-09-26）；仍带 anchor 贴光标弹。
         await SendMenuAsync("picture", null, items, anchor: true).ConfigureAwait(true);
     }
@@ -234,15 +275,15 @@ public sealed partial class PlayerViewModel
     {
         List<UoscMenuItem> rows =
         [
-            new("恢复设置的方案", $"script-message {VideoWindowContract.Shader} auto", true, !_shaderPinned),
+            new("恢复设置的方案", $"script-message {VideoWindowContract.Shader} auto", true, ShaderStateKnown && !_shaderPinned),
             new("关闭着色器", $"script-message {VideoWindowContract.Shader} off", true,
-                _shaderPinned && ActiveShader is null, Separator: true),
+                ShaderStateKnown && _shaderPinned && ActiveShader is null, Separator: true),
             .. ShaderCatalog.Select(group => new UoscMenuItem(group.DisplayName,
                 $"script-message {VideoWindowContract.Shader} {group.Id}", true,
-                _shaderPinned && ActiveShader?.Id == group.Id, group.Description))
+                ShaderStateKnown && _shaderPinned && ActiveShader?.Id == group.Id, group.Description))
         ];
 
-        return new UoscMenuItem($"着色器：{ActiveShader?.Name ?? "未启用"}", null, true, false, Items: rows);
+        return new UoscMenuItem($"着色器：{ActiveShaderLabel}", null, true, false, Items: rows);
     }
 
     /// <summary>
@@ -274,11 +315,15 @@ public sealed partial class PlayerViewModel
     internal async Task<IReadOnlyDictionary<string, string?>> ReadMenuChecksAsync()
     {
         var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var context = CaptureInteraction();
 
         foreach (var property in PlayerMenuCatalog.CheckProperties)
+        {
+            if (!IsCurrentInteraction(context)) return new Dictionary<string, string?>(StringComparer.Ordinal);
             values[property] = await _playback.GetTextAsync(property).ConfigureAwait(true);
+        }
 
-        return values;
+        return IsCurrentInteraction(context) ? values : new Dictionary<string, string?>(StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -289,7 +334,8 @@ public sealed partial class PlayerViewModel
     /// <see cref="ReadMenuChecksAsync"/>）。
     /// </summary>
     private static List<UoscMenuItem> BuildPictureMenuItems(
-        IReadOnlyList<PlayerMenuNode> nodes, IReadOnlyDictionary<string, string?> checks, ref int command)
+        IReadOnlyList<PlayerMenuNode> nodes, IReadOnlyDictionary<string, string?> checks,
+        VideoMenuSnapshot<PlayerMenuNode> snapshot, ref int command)
     {
         var items = new List<UoscMenuItem>(nodes.Count);
 
@@ -305,7 +351,7 @@ public sealed partial class PlayerViewModel
                     break;
 
                 case PlayerMenuKind.Group:
-                    var children = BuildPictureMenuItems(node.Children, checks, ref command);
+                    var children = BuildPictureMenuItems(node.Children, checks, snapshot, ref command);
                     // 子菜单那一行必须可选中（selectable 默认真、这里显式给真）——否则 uosc 里点不开它；
                     // 它没有 value（点它是进子菜单，不是跑命令），items 一有值 uosc 就当它是子菜单。
                     items.Add(new UoscMenuItem(node.Label, null, true, false, Items: children));
@@ -315,7 +361,7 @@ public sealed partial class PlayerViewModel
                     command++;
                     items.Add(new UoscMenuItem(
                         node.Label,
-                        $"script-message {VideoWindowContract.MenuIndex} {command.ToString(CultureInfo.InvariantCulture)}",
+                        $"script-message {VideoWindowContract.MenuIndex} {snapshot.ValueAt(command - 1)}",
                         true,
                         node.IsCheckedBy(checks)));
                     break;
@@ -331,11 +377,14 @@ public sealed partial class PlayerViewModel
     /// </summary>
     private async Task PushEpisodeMenuAsync()
     {
+        var snapshot = new VideoMenuSnapshot<EmbyItem>(Episodes);
+        _episodeMenuSnapshot = snapshot;
+        _episodeMenuContext = CaptureInteraction();
         List<UoscMenuItem> items = Episodes.Count == 0
             ? [new UoscMenuItem("（这一场没有可用的集列表）", null, false, false)]
             : [.. Episodes.Select((episode, index) => new UoscMenuItem(
                 episode.ToPlaybackTitle(),
-                $"script-message {VideoWindowContract.EpisodeIndex} {index + 1}",
+                $"script-message {VideoWindowContract.EpisodeIndex} {snapshot.ValueAt(index)}",
                 true,
                 string.Equals(episode.Id, PlayingItemId, StringComparison.Ordinal)))];
 
@@ -432,12 +481,15 @@ public sealed partial class PlayerViewModel
     private async Task PushVersionMenuAsync()
     {
         var versions = Versions;
+        var snapshot = new VideoMenuSnapshot<MediaSource>(versions);
+        _versionMenuSnapshot = snapshot;
+        _versionMenuContext = CaptureInteraction();
 
         List<UoscMenuItem> items = versions.Count <= 1
             ? [new UoscMenuItem("没有可切换的版本", null, false, false)]
             : [.. versions.Select((source, index) => new UoscMenuItem(
                 ItemDetail.SourceLabel(source),
-                $"script-message {VideoWindowContract.VersionIndex} {index + 1}",
+                $"script-message {VideoWindowContract.VersionIndex} {snapshot.ValueAt(index)}",
                 true,
                 MediaVersionSwitch.Same(source, PlayingSource),
                 QualityTail(source)))];
@@ -511,16 +563,30 @@ public sealed partial class PlayerViewModel
         };
     }
 
-    private void OnStatusChanged(PlayerStatus status) => OnUi(() => ApplyStatus(status));
-
-    private void OnTracksChanged(IReadOnlyList<MpvTrack> tracks) => OnUi(() => Tracks = tracks);
-
-    private void OnNowPlayingChanged(EmbyItem? item) => OnUi(() =>
+    private void OnStatusChanged(PlaybackUpdate<PlayerStatus> update) => OnUi(() =>
     {
+        if (update.Generation == _playback.Generation && _playback.IsPlaying) ApplyStatus(update.Value);
+    });
+
+    private void OnTracksChanged(PlaybackUpdate<IReadOnlyList<MpvTrack>> update) => OnUi(() =>
+    {
+        if (update.Generation == _playback.Generation && _playback.IsPlaying) Tracks = update.Value;
+    });
+
+    private void OnNowPlayingChanged(PlaybackUpdate<EmbyItem?> update) => OnUi(() =>
+    {
+        if (update.Generation != _playback.Generation) return;
+        var item = update.Value;
+        if (item is not null && !_playback.IsPlaying) return;
+        if (item is not null) _preparingPictureInHost = null;
         // Re-armed per playback, before anything can look at it: switching episodes comes through here,
         // and the previous episode's opening is not this one's. The server's chapter marks are the
         // starting point; RefineSkipSectionsAsync replaces them with mpv's once the file is open.
         ResetTimelineDrag();
+        InvalidateMenuInteractions();
+        FlushVolume(settled: false);
+        _volumeMemory.ResetObservation();
+        _volumeReady = false;
         _generation++;
 
         // The old file's scrub and in-flight seek mean nothing here: a seek left in flight would hold the
@@ -584,6 +650,7 @@ public sealed partial class PlayerViewModel
         // 剧名不在那儿）。两条管线同源、显示一致（独占那两行由 uosc 顶栏画，NoteSubline 把第二行
         // 推过去；主标题走 force-media-title＝同一个 ToPlaybackHeadline）。
         Title = item.ToPlaybackHeadline();
+        AdoptShaderLaunch(item);
         Subtitle = PlaybackTitles.Subline(PlayingSourceOrFirst(item));
 
         // 控制条中间那行读数是**正在放的那一版**的，见 PlayingSourceLabel。
@@ -616,6 +683,7 @@ public sealed partial class PlayerViewModel
         AdoptServerAspect(item);
 
         PlaybackStarted?.Invoke();
+        _ = PushNativeShortcutsAsync(force: true);
 
         _ = PopulateTracksAsync(_generation);
         _ = RefineSkipSectionsAsync(_generation);
@@ -673,14 +741,11 @@ public sealed partial class PlayerViewModel
     /// 停在主页，换过来的第一眼就是背景图。
     /// <para>
     /// 取图那件事仍旧只有 <see cref="LoadCoverBackdropAsync"/> 一处：这里只是等它那一趟，超时了它照样在
-    /// 后台跑完、遮罩随后自己换上。手上已经有一张（上一次播放留下的垫底，见 LoadCoverBackdropAsync 自己的
-    /// 注释）就直接走 —— 那种情况第一眼本来就有图，没有任何理由等。
+    /// 后台跑完、遮罩随后自己换上。只有当前条目的图才能复用；上一场留下的图必须先清掉。
     /// </para>
     /// </summary>
     private async Task WaitCoverBackdropAsync(EmbyItem? item)
     {
-        if (item is null || CoverBackdrop is not null) return;
-
         var load = LoadCoverBackdropAsync(item);
         if (load.IsCompleted) return;
 
@@ -705,22 +770,29 @@ public sealed partial class PlayerViewModel
     /// 时候，晚到的上一场下载不许盖到这一场上。垫底退回纯色遮罩，图是添头不是承重墙。
     /// </para>
     /// </summary>
-    private async Task LoadCoverBackdropAsync(EmbyItem? item)
+    private Task LoadCoverBackdropAsync(EmbyItem? item)
     {
         if (item is null)
         {
+            _coverGeneration++;
             _coverBackdropItemId = null;
-            CoverBackdrop = null;
             CoverBackdropFrame = null;
-            return;
+            CoverBackdrop = null;
+            return _coverBackdropLoad = Task.CompletedTask;
         }
 
-        // 这一部已经在取（或已就位）：同一 Id 的第二遍是重复下载，图也一样。
-        if (string.Equals(_coverBackdropItemId, item.Id, StringComparison.Ordinal)) return;
+        // 同一条目换媒体源可复用背景；还在解码时则等待原任务，不能提前放行进场。
+        if (string.Equals(_coverBackdropItemId, item.Id, StringComparison.Ordinal)) return _coverBackdropLoad;
 
         _coverBackdropItemId = item.Id;
         var generation = ++_coverGeneration;
+        CoverBackdropFrame = null;
+        CoverBackdrop = null;
+        return _coverBackdropLoad = ReadCoverBackdropAsync(item, generation);
+    }
 
+    private async Task ReadCoverBackdropAsync(EmbyItem item, int generation)
+    {
         try
         {
             var bytes = await PickCoverBackdropBytesAsync(item, EmbyImageStore.RequestWidth(1280)).ConfigureAwait(true);
@@ -735,7 +807,7 @@ public sealed partial class PlayerViewModel
 
             // 先解覆盖层那一份（起播整屏要用），再把 BitmapImage 交给遮罩：两者一起就位，等这一趟的人
             // 等到的就是「屏上和层上都有图」。像素那一份解不出来不算失败，遮罩照旧有图可垫。
-            CoverBackdropFrame = await CoverBackdropImage.DecodeAsync(bytes, PlayerPalette.Film).ConfigureAwait(true);
+            var frame = await CoverBackdropImage.DecodeAsync(bytes, PlayerPalette.Film).ConfigureAwait(true);
             if (generation != _coverGeneration) return;
 
             var image = new BitmapImage();
@@ -743,6 +815,8 @@ public sealed partial class PlayerViewModel
             await image.SetSourceAsync(stream.AsRandomAccessStream());
             if (generation != _coverGeneration) return;
 
+            // 两份结果都只在最后一次代际核对后发布，旧解码不能先写覆盖层、再发现自己过期。
+            CoverBackdropFrame = frame;
             CoverBackdrop = image;
         }
         catch (Exception ex)
@@ -852,28 +926,21 @@ public sealed partial class PlayerViewModel
                 PositionClock = status.HasPosition ? TimelineScale.Clock(status.Position, status.Duration) : "0:00";
             }
 
-            // 音量 has the same problem and it was visible: 「滚轮调音量的时候不是很顺滑，音量条一顿一顿的」
-            // (2026-09-04). Every wheel notch writes mpv asynchronously, and this poll runs ten times a second
-            // — so a poll landing between the write and mpv applying it reports the *previous* level and drags
-            // the thumb back a step, which during a spin is the thumb going forwards and backwards. mpv's echo
-            // is only read once the level has settled (_volumePending cleared by FlushVolume), and nothing
-            // else moves mpv's volume in the meantime: its own input handling is switched off at launch.
-            if (_volumePending is null)
+            if (_volumeMemory.Observe(status, _playback.CanControl, Now) is { } level)
             {
-                var level = (int)Math.Clamp(Math.Round(status.Volume), 0, AudioSettings.MaxVolume);
+                _volumeReady = true;
                 Volume = level;
-
-                // 内核侧改的音量也要记下来（2026-09-30 修）：uosc 与外部 mpv 的原生控件不经过
-                // OnVolumeChanged，这条轮询是它们唯一的回声 —— 从前回声被 _pushing 挡在门外，_volumePending
-                // 一直是空，FlushVolume 无值可存，下一场就从旧设置起播。两个护栏：快照必须是真的
-                // （CanControl 为假的 status.Volume 是缺省 100，把假读数存下去会覆盖真设置）；只在读数
-                // 真的变了时记一次，否则每拍刷新 _volumeTouched，结算永远等不到，音量条也会冻住。
-                if (_playback.CanControl && level != _kernelVolume)
-                {
-                    _kernelVolume = level;
-                    _volumePending = level;
-                    _volumeTouched = Now;
-                }
+                ScheduleVolumeSave();
+            }
+            else
+            {
+                // 加载期/暂停回声被挡时不给相对音量操作一个假的 100 基准：优先用已确认的内核值，
+                // 保护窗里停着的真实读数次之，最后才是本次起播设置——没有已证实值时显示它，
+                // 但 OnVolumeChanged 不得把显示值当相对基准发出去（见 VolumeReady）。
+                Volume = _volumeMemory.Pending
+                    ?? _volumeMemory.Queued
+                    ?? VolumeMemory.Level(_playback.Status.Volume)
+                    ?? Settings.Audio.Volume;
             }
         }
         finally
@@ -951,32 +1018,128 @@ public sealed partial class PlayerViewModel
     partial void OnVolumeChanged(double value)
     {
         if (_pushing) return;
+        // The displayed value may be this playback's launch volume while the kernel has not reported a
+        // real level yet; computing an absolute target from that guess would turn a 「down」 step into
+        // a jump to the displayed level. Once a real kernel reading has arrived the wheel's new value
+        // is exact and can be confirmed as before; before that the step itself goes to the kernel,
+        // like the delay does, and the reading that comes back owns the display.
+        if (!_playback.CanControl || !_volumeReady)
+        {
+            var baseLevel = _volumeMemory.Pending ?? _volumeMemory.Queued
+                ?? VolumeMemory.Level(Status.Volume) ?? Settings.Audio.Volume;
+            _ = StepVolumeAsync(VolumeScale.Clamp(value) - baseLevel, _playback.Generation);
+            return;
+        }
+        if (VolumeMemory.Level(value) is not { } level)
+        {
+            DisplayVolume(_volumeMemory.Pending ?? _volumeMemory.Queued
+                ?? VolumeMemory.Level(Status.Volume) ?? Settings.Audio.Volume);
+            return;
+        }
 
-        var level = Math.Clamp(Math.Round(value), 0, AudioSettings.MaxVolume);
-        _ = _playback.SetPropertyAsync("volume", level);
-
-        // Kept for the next file as well as sent to this one. Every playback launches a fresh mpv with its
-        // own config blocked, so a level nobody wrote down is 100 again by the next episode.
-        _volumePending = (int)level;
-        _volumeTouched = Now;
+        var request = _volumeMemory.Request(level, Now);
+        _ = SendVolumeAsync(request, level, _playback.Generation);
     }
 
-    /// <summary>
-    /// Writes the volume the player was left at into the settings file, once it has settled — or at once
-    /// when <paramref name="settled"/> says not to wait, which is what leaving the player does: there may be
-    /// no further tick to settle on.
-    /// </summary>
+    private bool _volumeReady;
+
+    private async Task StepVolumeAsync(double step, long generation)
+    {
+        var applied = await _playback.AdjustVolumeAsync(step).ConfigureAwait(true);
+        if (_lifetime.IsCancellationRequested || generation != _playback.Generation) return;
+        if (applied is { } level && VolumeMemory.Level(level) is { } confirmed)
+        {
+            _volumeReady = true;
+            if (_volumeMemory.Observe(new PlayerStatus { Loaded = true, Volume = level, VolumeKnown = true },
+                canControl: true, Now) is { } observed)
+            {
+                DisplayVolume(observed);
+                ScheduleVolumeSave();
+            }
+            return;
+        }
+        if (_volumeMemory.Pending is null && _volumeMemory.Queued is null)
+            DisplayVolume(VolumeMemory.Level(_playback.Status.Volume) ?? Settings.Audio.Volume);
+    }
+
+    private async Task SendVolumeAsync(long request, int level, long generation)
+    {
+        var confirmed = await _playback.SetVolumeAsync(level).ConfigureAwait(true);
+        if (_lifetime.IsCancellationRequested || generation != _playback.Generation) return;
+        if (confirmed)
+        {
+            if (_volumeMemory.Accept(request, level, Now)) ScheduleVolumeSave();
+        }
+        else if (_volumeMemory.Reject(request))
+        {
+            DisplayVolume(_volumeMemory.Queued
+                ?? VolumeMemory.Level(_playback.Status.Volume) ?? Settings.Audio.Volume);
+        }
+    }
+
+    private void DisplayVolume(int level)
+    {
+        _pushing = true;
+        try { Volume = level; }
+        finally { _pushing = false; }
+    }
+
+    private void ScheduleVolumeSave()
+    {
+        if (_volumeMemory.Pending is null || _lifetime.IsCancellationRequested
+            || _volumeSaveTask is { IsCompleted: false }) return;
+        _volumeSaveTask = SaveSettledVolumeAsync();
+    }
+
+    private async Task SaveSettledVolumeAsync()
+    {
+        try
+        {
+            while (_volumeMemory.Pending is not null || _volumeMemory.Queued is not null)
+            {
+                if (_volumeMemory.Pending is null && _volumeMemory.FlushQueued(Now) is { } adopted)
+                {
+                    DisplayVolume(adopted);
+                    ScheduleVolumeSave();
+                    continue;
+                }
+                if (_lifetime.IsCancellationRequested || _volumeMemory.Pending is null) return;
+                var due = Math.Max(_volumeMemory.DueAt, _volumeRetryAt);
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(1, due - Now)), _lifetime.Token)
+                    .ConfigureAwait(true);
+                FlushVolume();
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally { _volumeSaveTask = null; }
+    }
+
+    /// <summary>Settles independently of the page ticker; failed writes retain the same pending revision.</summary>
     private void FlushVolume(bool settled = true)
     {
-        if (_volumePending is not { } level) return;
-        if (settled && Now - _volumeTouched < VolumeSettleMilliseconds) return;
-
-        _volumePending = null;
-
-        if (Settings.Audio.Volume == level) return;
-
+        // A real kernel reading parked during the echo window outranks the older pending value at every
+        // settle point (stop, playback switch, save loop): saving the stale one would write back a
+        // level the kernel has already left behind.
+        if (_volumeMemory.FlushQueued(Now) is { } adopted)
+        {
+            DisplayVolume(adopted);
+            ScheduleVolumeSave();
+        }
+        if (_volumeMemory.Pending is not { } level) return;
+        if (settled && Now < Math.Max(_volumeMemory.DueAt, _volumeRetryAt)) return;
+        var revision = _volumeMemory.Revision;
+        var unchanged = Settings.Audio.Volume == level;
         Settings.Audio.Volume = level;
-        _settings.Save();
+        if (unchanged && !_settings.HasUnsavedChanges || _settings.TrySave())
+        {
+            _volumeMemory.Saved(revision);
+            _volumeRetryAt = 0;
+            return;
+        }
+
+        if (_volumeRetryAt == 0)
+            Noticed?.Invoke("音量已调整，但暂未保存；将自动重试", InfoBarSeverity.Warning);
+        _volumeRetryAt = Now + 5000;
     }
 
     /// <summary>
@@ -1001,13 +1164,17 @@ public sealed partial class PlayerViewModel
     /// </param>
     private async Task PollAsync(int generation, bool pauseFirst, Func<Task<bool>> attempt)
     {
-        for (var round = 0; round < PollAttempts; round++)
+        try
         {
-            if (pauseFirst || round > 0) await Task.Delay(PollIntervalMilliseconds).ConfigureAwait(true);
-
-            if (generation != _generation || !_playback.IsPlaying) return;
-            if (await attempt().ConfigureAwait(true)) return;
+            for (var round = 0; round < PollAttempts; round++)
+            {
+                if (_lifetime.IsCancellationRequested) return;
+                if (pauseFirst || round > 0) await Task.Delay(PollIntervalMilliseconds, _lifetime.Token).ConfigureAwait(true);
+                if (_lifetime.IsCancellationRequested || generation != _generation || !_playback.IsPlaying) return;
+                if (await attempt().ConfigureAwait(true)) return;
+            }
         }
+        catch (OperationCanceledException) { }
     }
 
     /// <summary>

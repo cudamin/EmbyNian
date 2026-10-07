@@ -121,11 +121,6 @@ public static class TrackSelection
     {
         if (settings.SubtitleMode == SubtitleMode.Off) return SubtitleChoice.Off;
 
-        var map = MpvTrackMap.Build(source);
-        var streams = source.SubtitleStreams.Where(stream => map.CanSelect(stream.Index)).ToList();
-        if (streams.Count == 0)
-            return source.SubtitleStreams.Any() ? SubtitleChoice.Off : SubtitleChoice.None;
-
         var languages = settings.SubtitleLanguages;
 
         // 仅在音频为外语时显示：听得懂的语言不需要字幕。
@@ -136,6 +131,11 @@ public static class TrackSelection
         {
             return SubtitleChoice.Off;
         }
+
+        var map = MpvTrackMap.Build(source);
+        var streams = source.SubtitleStreams.Where(stream => map.CanSelect(stream.Index)).ToList();
+        if (streams.Count == 0)
+            return source.SubtitleStreams.Any() ? SubtitleChoice.Off : SubtitleChoice.None;
 
         var forcedOnly = settings.SubtitleMode == SubtitleMode.ForcedOnly;
         var pool = forcedOnly ? streams.Where(stream => stream.IsForced).ToList() : streams;

@@ -23,26 +23,22 @@ internal static class LibMpvNative
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr AddDllDirectory(string directory);
 
-    private static string? _libraryPath;
-    private static int _resolverInstalled;
+    private static readonly NativeModuleBinding Module = new();
+    private static readonly object ResolverGate = new();
+    private static bool _resolverInstalled;
 
-    /// <summary>
-    /// Points every <c>libmpv-2.dll</c> import at one absolute file. Without this a configured
-    /// path outside the program folder would be found by <see cref="File.Exists"/> and then fail
-    /// to load, because a bare DllImport name is only ever resolved against the search
-    /// directories — the settings' path would be validated and then ignored.
-    /// </summary>
     internal static void UseLibrary(string path)
     {
-        _libraryPath = path;
-        if (Interlocked.Exchange(ref _resolverInstalled, 1) != 0) return;
-
-        NativeLibrary.SetDllImportResolver(typeof(LibMpvNative).Assembly, (name, _, _) =>
-            string.Equals(name, Library, StringComparison.OrdinalIgnoreCase)
-            && _libraryPath is { } resolved
-            && NativeLibrary.TryLoad(resolved, out var handle)
-                ? handle
-                : IntPtr.Zero);
+        lock (ResolverGate)
+        {
+            Module.Select(path);
+            if (_resolverInstalled) return;
+            NativeLibrary.SetDllImportResolver(typeof(LibMpvNative).Assembly, (name, _, _) =>
+                string.Equals(name, Library, StringComparison.OrdinalIgnoreCase)
+                    ? Module.Resolve(NativeLibrary.Load)
+                    : IntPtr.Zero);
+            _resolverInstalled = true;
+        }
     }
 
     /// <summary>

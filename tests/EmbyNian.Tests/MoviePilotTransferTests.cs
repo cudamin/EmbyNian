@@ -301,7 +301,7 @@ internal static class MoviePilotTransferTests
             Assert.True(preview.Result.IsPreview);
             Assert.Contains("\"preview\":true", transport.SentTo("transfer/manual")[0].Body);
 
-            var queued = service.TransferSubmitAsync(request, files, background: true, CancellationToken.None)
+            var queued = service.TransferSubmitAsync(preview, background: true, CancellationToken.None)
                 .GetAwaiter().GetResult();
             Assert.Equal("accepted", queued.Items[0].State);
             var sent = transport.Only("transfer/manual?background=true");
@@ -314,10 +314,13 @@ internal static class MoviePilotTransferTests
             var transport = new StubTransport()
                 .Answer("login/access-token", Session)
                 .Answer("transfer/manual?background=false",
-                    """{"success":false,"message":"部分文件整理失败","data":{"items":[{"state":"failed","success":false,"message":"目标已存在"}]}}""");
+                    """{"success":true,"data":{"items":[{"source":"/x/a.mkv","target":"/media/a.mkv","success":true}]}}""");
 
-            var result = ServiceOn(transport).TransferSubmitAsync(
-                Request(), [File("/x/a.mkv")], background: false, CancellationToken.None).GetAwaiter().GetResult();
+            var service = ServiceOn(transport);
+            var preview = service.TransferPreviewAsync(Request(), [File("/x/a.mkv")], CancellationToken.None).GetAwaiter().GetResult();
+            transport.Answer("transfer/manual?background=false",
+                """{"success":false,"message":"部分文件整理失败","data":{"items":[{"source":"/x/a.mkv","state":"failed","success":false,"message":"目标已存在"}]}}""");
+            var result = service.TransferSubmitAsync(preview, background: false, CancellationToken.None).GetAwaiter().GetResult();
 
             Assert.False(result.Success);
             Assert.Equal("部分文件整理失败", result.Message);
@@ -342,7 +345,7 @@ internal static class MoviePilotTransferTests
             Assert.Contains("电影", string.Join("|", options.MediaSources[0].Types));
         });
 
-        Test("手动整理服务：空机房也立得起表单（存储和数据源退默认）", () =>
+        Test("手动整理服务：空目录保留本地存储，但不伪造可用媒体来源", () =>
         {
             var transport = new StubTransport()
                 .Answer("login/access-token", Session)
@@ -354,8 +357,7 @@ internal static class MoviePilotTransferTests
 
             Assert.Equal(1, options.Storages.Count);
             Assert.Equal("local", options.Storages[0].Type);
-            Assert.Equal(1, options.MediaSources.Count);
-            Assert.Equal("themoviedb", options.MediaSources[0].Id);
+            Assert.Equal(0, options.MediaSources.Count);
         });
 
         Test("手动整理收集：电影用自己的 TMDB 号和自己的文件", () =>

@@ -100,7 +100,7 @@ public static class ShaderGroupCatalog
             {
                 GpuTier.Low => [ShaderLibrary.RavuZoom, ShaderLibrary.ChromaLite],
                 GpuTier.Medium => [ShaderLibrary.RavuZoom, ShaderLibrary.ChromaFull],
-                _ => [ShaderLibrary.RavuZoom, ShaderLibrary.ChromaFull, ShaderLibrary.SsimSuperRes]
+                _ => [ShaderLibrary.RavuZoom, ShaderLibrary.ChromaFull]
             },
 
             // 真人 · 甜点 — a 2× upscaler's home ground, and where extra arithmetic pays best. ravu-lite is

@@ -1,4 +1,7 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using EmbyNian.Diagnostics;
 using EmbyNian.Infrastructure;
 
@@ -112,9 +115,16 @@ public sealed class EmbyImageStore
             ? GetAsync(item.Id, imageType, tag, width, cancellationToken)
             : Task.FromResult<byte[]?>(null);
 
+    public EmbySessionScope? CaptureScope() => _session.IsSignedIn ? _session.Capture() : null;
+
     public Task<byte[]?> GetAsync(string itemId, string imageType, string tag, int width, CancellationToken cancellationToken) =>
+        GetAsync(_session.Capture(), itemId, imageType, tag, width, cancellationToken);
+
+    public Task<byte[]?> GetAsync(EmbySessionScope scope, string itemId, string imageType, string tag, int width,
+        CancellationToken cancellationToken) =>
         Fetch(
-            BuildKey(itemId, imageType, tag, width),
+            scope,
+            CacheKey(scope.Connection, itemId, imageType, tag, width),
             (client, token) => client.GetImageBytesAsync(itemId, imageType, tag, width, token),
             $"{itemId}/{imageType}",
             cancellationToken);
@@ -124,19 +134,26 @@ public sealed class EmbyImageStore
     /// which matters more here than for artwork: scrubbing a long episode walks over every chapter
     /// and would otherwise re-download the same frames on every pass.
     /// </summary>
-    public Task<byte[]?> GetChapterAsync(string itemId, int index, string? tag, int width, CancellationToken cancellationToken) =>
-        Fetch(
-            BuildKey(itemId, $"Chapter{index}", tag ?? "untagged", width),
+    public Task<byte[]?> GetChapterAsync(string itemId, int index, string? tag, int width, CancellationToken cancellationToken)
+    {
+        var scope = _session.Capture();
+        return Fetch(
+            scope,
+            CacheKey(scope.Connection, itemId, $"Chapter{index}", tag ?? "untagged", width),
             (client, token) => client.GetChapterImageBytesAsync(itemId, index, tag, width, token),
             $"{itemId}/Chapter/{index}",
             cancellationToken);
+    }
 
     private async Task<byte[]?> Fetch(
+        EmbySessionScope scope,
         string key,
         Func<EmbyClient, CancellationToken, Task<byte[]>> download,
         string description,
         CancellationToken cancellationToken)
     {
+        scope.ThrowIfNotCurrent();
+        cancellationToken.ThrowIfCancellationRequested();
         var path = Path.Combine(_directory, key);
 
         // A hit is a file read, and it used to be a synchronous one — on the UI thread, because that is
@@ -151,6 +168,7 @@ public sealed class EmbyImageStore
             // 是异步的，正是因为「一屏四十张卡片各停一次等磁盘」就是快速滚动时那一下卡顿。`ConfigureAwait(false)`
             // 多数时候会把这里挪到池线程上，可那只是多数：一次同步完成的读会让下面这几句原地跑在界面线程上。推时
             // 间戳只影响淘汰次序，屏上没有任何东西等它，所以让它自己去跑。
+            scope.ThrowIfNotCurrent();
             _ = Task.Run(() => Touch(path));
             return cached;
         }
@@ -158,12 +176,16 @@ public sealed class EmbyImageStore
         // Collapse duplicate requests: a fast scroll asks for the same poster repeatedly. The shared
         // download belongs to nobody, so a caller that walks away no longer empties the answer the
         // caller beside it was waiting for.
-        return await _downloads
-            .RunAsync(key, () => DownloadAsync(download, description, path), cancellationToken)
+        var bytes = await _downloads
+            .RunAsync(key, () => DownloadAsync(scope, download, description, path), cancellationToken)
             .ConfigureAwait(false);
+        scope.ThrowIfNotCurrent();
+        cancellationToken.ThrowIfCancellationRequested();
+        return bytes;
     }
 
     private async Task<byte[]?> DownloadAsync(
+        EmbySessionScope scope,
         Func<EmbyClient, CancellationToken, Task<byte[]>> download,
         string description,
         string path)
@@ -175,7 +197,9 @@ public sealed class EmbyImageStore
                 // CancellationToken.None on purpose: whoever asked first may be gone by now, and the bytes
                 // are still wanted — by the other cards waiting on this one download, and by the disk cache
                 // that makes the next visit instant. The request is bounded by the HTTP timeout instead.
-                var bytes = await _session.ExecuteAsync<byte[]>(download, CancellationToken.None).ConfigureAwait(false);
+                scope.ThrowIfNotCurrent();
+                var bytes = await scope.ExecuteAsync(download, CancellationToken.None).ConfigureAwait(false);
+                scope.ThrowIfNotCurrent();
 
                 if (bytes.Length == 0) return null;
 
@@ -276,12 +300,15 @@ public sealed class EmbyImageStore
         }
     }
 
-    private static string BuildKey(string itemId, string imageType, string tag, int width)
+    /// <summary>磁盘和解码缓存共用的身份键；令牌轮换不换图，服务器路径及账号必须区分。</summary>
+    public static string CacheKey(EmbyConnection connection, string itemId, string imageType, string tag, int width)
     {
-        // Emby ids and tags are hex strings, so they are already filename-safe;
-        // sanitise anyway rather than trusting server output with a path.
-        static string Safe(string value) => string.Concat(value.Where(char.IsLetterOrDigit));
-        return $"{Safe(itemId)}-{Safe(imageType)}-{Safe(tag)}-{width}.img";
+        var identity = JsonSerializer.Serialize(new[]
+        {
+            connection.ApiBase.AbsoluteUri, connection.UserId, itemId, imageType, tag,
+            width.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        });
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity))) + ".img";
     }
 
     /// <summary>

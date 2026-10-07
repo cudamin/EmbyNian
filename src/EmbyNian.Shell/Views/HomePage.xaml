@@ -33,14 +33,19 @@
         <!-- Declared before the shelf template that reaches for it: a StaticResource inside a
              DataTemplate is resolved as the dictionary is parsed, so a forward reference fails. -->
         <DataTemplate x:Key="CardTemplate" x:DataType="local:CardItem">
-            <!-- A Button rather than a bare card: click, keyboard activation, focus visual and hover
-                 state for free, and its own chrome removed so only the card shows. -->
+            <!-- A Button preserves click, keyboard activation and focus visuals.
+                 Background="Transparent" only covers Normal; the template's hover/pressed brushes
+                 must also be transparent because PosterCard supplies its own hover feedback. -->
             <Button
                 Background="Transparent"
                 BorderThickness="0"
                 Click="OnCardClicked"
                 ContextRequested="OnCardContextRequested"
                 Padding="0">
+                <Button.Resources>
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                </Button.Resources>
                 <local:PosterCard
                     ActionRequested="OnCardActionRequested"
                     Card="{x:Bind}"
@@ -213,6 +218,23 @@
       地方可去。两条都自带 12 的下边距，而不是靠 StackPanel.Spacing：收起来的时候它们该一个像素都不占。
     -->
     <ScrollView x:Name="Scroller" Margin="0,-32,0,0" VerticalScrollBarVisibility="Auto">
+        <!--
+          「收窄首页右边滚动条的背景遮罩」（2026-10-01）：框架那条轨道底跟滚动条一样宽（12 像素），压在
+          这一页那张通栏剧照的右端就是一条亮边。EgNarrowScrollBarStyle 把轨道收成中间一条 6 像素，
+          把手与滚动能力一个字没动 —— 底与把手是两件事，用户点名的是「背景遮罩」。
+          **只挂这一页**（不动全应用）：理由与改一处记一处的老规矩写在 Styles.xaml 那支样式上面。
+          同日晚第二轮（用户复述同一请求）：查明框架暗色主题悬停并无底板、还宽的是把手本体，已把把手
+          可视条钉成同一条 6 像素（命中区不动）——现在任何状态下最宽就是中间那 6 像素，详见 Styles.xaml。
+          **第三轮定案（同日更晚）**：用户一句「遮海报遮太多了，不是滚动条的问题」点破——他指的一直是
+          下面 Overlay 右边那 36 像素的空底（海报在那儿被裁断，看着像盖住海报的遮罩），滚动条只是恰好在
+          那条带子里。真修在 Overlay 的 Padding 上（右 36→13）；这里的两轮收窄照留 —— 方向没错、也没坏处，
+          但都不是他点的那件事。
+          **第四轮（同日最晚）**：「滚动条不要延伸到轮播图上，在下半部分显示就行」——竖滚动条的顶由
+          HomePage.PlaceScrollBar 压到轮播下沿（随带高走，没幻灯片时回到通长），XAML 里没有它的数。
+        -->
+        <ScrollView.Resources>
+            <Style BasedOn="{StaticResource EgNarrowScrollBarStyle}" TargetType="ScrollBar" />
+        </ScrollView.Resources>
         <StackPanel>
             <!--
               **页头那块牌子（PageSlate）2026-09-11 删掉了** —— 他一句「去掉左上角的这些，不要留空位」，
@@ -283,13 +305,20 @@
 
                  左右那 36 走 Padding：和大图上那块牌子对齐。
 
+                 **右边那 36 2026-10-01 晚收到 13**（用户第三轮：「遮海报遮太多了，不是滚动条的问题」——他点的一直是
+                 这条 36 像素的空底：海报在离窗口右缘 36 像素处被裁断，那块空底看着就像盖住海报的「背景遮罩」；
+                 前两轮拿它当滚动条改，方向错了）。13 = 滚动条自己那条车道（ScrollViewScrollBarsMargin 1 +
+                 ScrollBarSize 12）：海报的裁切线退到滚动条地界的左边一像素，内容区不再让出多余的一条，
+                 竖滚动条（悬停最宽 6 像素、贴在 13 的带子里）也永远不会压到海报上。**左边不动**：脊线和大图上
+                 那块牌子仍是一条；右端读数、下载排跟着 Padding 一起右移，属同一件事。
+
                  2026-09-13「首页组件的上下间距弄紧凑一些」：上沿从 24 收到 16（轮播下沿到第一排牌子之间那一口气），
                  下沿从 40 收到 28（最后一排卡片带到底边）。左右不动 —— 那条脊线和大图上的牌子是一条。
 
                  2026-09-14 主页那两排卡片缩了一档（继续观看 300→256、媒体库 240→208，见 CardSize），这四个数
                  一个没动：上沿贴的是轮播的下沿、下沿贴的是窗口底，都跟卡片高矮无关，跟着缩反而会让内容贴到边
                  上。行与行的间隔见下面 StackLayout 那一句。 -->
-            <Grid x:Name="Overlay" Background="Transparent" Padding="36,16,36,28">
+            <Grid x:Name="Overlay" Background="Transparent" Padding="36,16,13,28">
                 <StackPanel>
                     <ProgressBar
                         IsIndeterminate="True"
@@ -337,8 +366,20 @@
                                  自带的文字带（CardSize.Chrome，封面下沿到卡底的两行字）、牌子不带外来边距
                                  （ShelfHead 的根 Grid 没有 Margin），收那两处都不是「缩间距」。
                                  HomePage.xaml.cs 的矮窗档判定读的就是这一格的运行时值（UpdateLibraryOverlay 里的
-                                 gap），所以收窄这里不用另改常量 —— 换行的那条界线跟着一起走。 -->
-                            <StackLayout Orientation="Vertical" Spacing="18" />
+                                 gap），所以收窄这里不用另改常量 —— 换行的那条界线跟着一起走。
+
+                                 2026-09-30 再从 18 收到 8（用户原话「缩短媒体库和继续观看之间的距离」，配一张
+                                 圈出「媒体库那排卡底 → 继续观看牌子」那一块的截图）：同一块空白，方向也一样，
+                                 只是这次他要的更近一格。没有跟着收到 0 是因为牌子上沿还需要一点呼吸，
+                                 那 8 正好是 EgSpaceS 这一档（Styles.xaml 的间距刻度），不是新长出来的数字。
+                                 **同一个数要一起改的还有两处**：HomePage.xaml.cs 的矮窗档判定读它（自动跟），
+                                 而 tests/EmbyNian.Tests 里那一组拿 18 当排间空当的算术跟着换 8。
+
+                                 同日稍后用户看了那一版截图，一句「再缩」把 8 又收到 4 —— 到 EgSpaceXS 这一档
+                                 （Styles.xaml 刻度允许的最小一格）。**这一档到头了**：再往下就是 0，那两排会贴成
+                                 一块，牌子直接顶在上一排卡底那两行字上。真要更近，就只能动卡底那段文字带
+                                 （CardSize.Chrome 那 59），而那不在「缩间距」的范围内。 -->
+                            <StackLayout Orientation="Vertical" Spacing="4" />
                         </ItemsRepeater.Layout>
                     </ItemsRepeater>
 

@@ -49,6 +49,7 @@ public static class MoviePilotMediaParser
         if (!string.IsNullOrWhiteSpace(media.Type)) body["type"] = media.Type;
         if (!string.IsNullOrWhiteSpace(media.MediaSource)) body["media_source"] = media.MediaSource;
         if (!string.IsNullOrWhiteSpace(media.MediaId)) body["media_id"] = media.MediaId;
+        if (media.Type == MoviePilotTransferRequest.TypeSeries && media.Season is >= 0) body["season"] = media.Season.Value;
 
         return body;
     }
@@ -57,13 +58,14 @@ public static class MoviePilotMediaParser
     /// 一片资源搜索结果（<c>search/media/{id}</c> 回的 <c>Context</c> 列表）拆成种子行。没有 <c>torrent_info</c>
     /// 或它没有标题的跳过。身份对由调用方按「搜的是哪部片」传进来，盖在每一条上 —— 精确搜出来的种子都属于那一部。
     /// </summary>
-    public static IReadOnlyList<MoviePilotResource> ParseResources(JsonElement data, string? mediaSource, string? mediaId)
+    public static IReadOnlyList<MoviePilotResource> ParseResources(JsonElement data, string? mediaSource, string? mediaId,
+        MoviePilotMedia? selected = null)
     {
         if (FindArray(data) is not { } array) return [];
 
         var list = new List<MoviePilotResource>();
         foreach (var context in array.EnumerateArray())
-            if (ToResource(context, mediaSource, mediaId) is { } resource)
+            if (ToResource(context, mediaSource, mediaId, selected) is { } resource)
                 list.Add(resource);
 
         return list;
@@ -75,18 +77,24 @@ public static class MoviePilotMediaParser
     /// </summary>
     public static IReadOnlyDictionary<string, object?> DownloadBody(MoviePilotResource resource)
     {
+        if (resource.DownloadProblem is { } problem) throw new MoviePilotOperationBlockedException(problem);
         var body = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["torrent_in"] = resource.TorrentInfo
         };
 
-        if (!string.IsNullOrWhiteSpace(resource.MediaSource)) body["media_source"] = resource.MediaSource;
-        if (!string.IsNullOrWhiteSpace(resource.MediaId)) body["media_id"] = resource.MediaId;
+        if (resource.MediaInfo.ValueKind == JsonValueKind.Object) body["media_in"] = resource.MediaInfo;
+        else if (!string.IsNullOrWhiteSpace(resource.MediaSource) && !string.IsNullOrWhiteSpace(resource.MediaId))
+        {
+            body["media_source"] = resource.MediaSource;
+            body["media_id"] = resource.MediaId;
+        }
 
         return body;
     }
 
-    private static MoviePilotResource? ToResource(JsonElement context, string? mediaSource, string? mediaId)
+    private static MoviePilotResource? ToResource(JsonElement context, string? mediaSource, string? mediaId,
+        MoviePilotMedia? selected)
     {
         if (context.ValueKind != JsonValueKind.Object) return null;
 
@@ -106,6 +114,26 @@ public static class MoviePilotMediaParser
 
         var media = context.TryGetProperty("media_info", out var info) && info.ValueKind == JsonValueKind.Object
             ? ToMedia(info) : null;
+        var completeMedia = media is { CanSubscribe: true, Type: "电影" or "电视剧" };
+        var exact = selected is not null;
+        var conflicting = exact && (media is null || !completeMedia ||
+            media.MediaSource != selected!.MediaSource || media.MediaId != selected.MediaId ||
+            media.Type != selected.Type ||
+            context.TryGetProperty("media_info_is_target", out var isTarget) && isTarget.ValueKind == JsonValueKind.False ||
+            Text(context, "match_status") is { } status && status != "exact");
+        var snapshot = completeMedia && !conflicting ? info.Clone() : default;
+        string? source;
+        string? id;
+        if (!string.IsNullOrWhiteSpace(mediaSource) && !string.IsNullOrWhiteSpace(mediaId))
+            (source, id) = (mediaSource, mediaId);
+        else if (media is { CanSubscribe: true })
+            (source, id) = (media.MediaSource, media.MediaId);
+        else
+        {
+            source = Text(torrent, "media_source");
+            id = Text(torrent, "media_id");
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(id)) (source, id) = (null, null);
+        }
         var published = Text(torrent, "pubdate");
         DateTimeOffset? publishedAt = DateTimeOffset.TryParse(published, CultureInfo.InvariantCulture,
             DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeLocal, out var time) ? time : null;
@@ -128,8 +156,11 @@ public static class MoviePilotMediaParser
             HitAndRun = torrent.TryGetProperty("hit_and_run", out var hr) && hr.ValueKind == JsonValueKind.True,
             Labels = Labels(torrent),
             TorrentInfo = torrent.Clone(),
-            MediaSource = string.IsNullOrWhiteSpace(mediaSource) ? media?.MediaSource ?? Text(torrent, "media_source") : mediaSource,
-            MediaId = string.IsNullOrWhiteSpace(mediaId) ? media?.MediaId ?? Text(torrent, "media_id") : mediaId
+            MediaSource = source,
+            MediaId = id,
+            MediaType = exact ? selected!.Type : media?.Type,
+            MediaInfo = snapshot,
+            DownloadProblem = conflicting ? "资源未带回与所选来源、编号和类型一致的媒体信息，请重新搜索或在 MoviePilot 核对" : null
         };
     }
 
@@ -161,6 +192,7 @@ public static class MoviePilotMediaParser
         {
             Title = title!,
             Year = Number(item, "year"),
+            Season = Number(item, "season") is >= 0 and var season ? season : null,
             Type = Text(item, "type"),
             Overview = Text(item, "overview"),
             PosterUrl = Text(item, "poster_path"),

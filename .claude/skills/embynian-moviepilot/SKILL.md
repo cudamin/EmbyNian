@@ -30,7 +30,8 @@ description: "Develop, review and verify EmbyNian's MoviePilot integration: medi
 
 ## 资源列表
 
-- `search/media/{id}` 是已选媒体的精确搜索；带 `media_source` 和类型 `mtype`。`search/title` 是关键词搜索，不能把所有结果强行盖上一个未经核实的媒体身份。
+- `search/media/{id}` 是已选媒体的精确搜索；带 `media_source`、类型 `mtype` 和已指定的 `season`（0 是特别篇，缺失不猜 1）。保留回话中与所选来源、编号和类型一致的 `media_info`；带可信媒体信息的下载走 `download/` 的 `media_in`，不能退回 `download/add` 再按种子标题猜片。后者没有影视 `mtype` 参数。`search/title` 是关键词搜索，不能借用前一次选择的媒体身份。
+- 搜索结果绑定获取时的连接与账号。订阅、下载和整理的防重状态由服务持有，不随重搜、新行或窗口重建清空；网络结果不明时保留“请先核对”，不开放直接重试。当前防重仅在本进程有效，不是跨进程幂等或服务器最终完成证明。
 - 资源字段来自 `torrent_info`：`page_url`、`description`、`labels`、`pubdate`、`downloadvolumefactor`、`uploadvolumefactor`、`freedate`、`hit_and_run`。清晰度通常来自 `meta_info.resource_pix`。
 - 体积可能是浮点 JSON 数字，优惠因子可能是字符串；缺失不能默认为“免费”。原始数据保留在内存用于下载，显示模型只取必要字段。
 - 过滤当前结果时保持行对象、集合实例与下载状态；显示“符合条件 / 总数”，清除恢复原结果，区分没搜到和被过滤为空。

@@ -73,18 +73,25 @@ public static class MoviePilotTransferCollect
         List<EmbyItem> leaves = detail.Type switch
         {
             EmbyItemType.Movie or EmbyItemType.Episode => [detail],
-            EmbyItemType.Season => await Children(client, detail.Id, cancellationToken).ConfigureAwait(false),
-            EmbyItemType.Series => await Episodes(client, detail, cancellationToken).ConfigureAwait(false),
+            EmbyItemType.Season => await Children(client, detail.Id, recursive: false, cancellationToken).ConfigureAwait(false),
+            EmbyItemType.Series => await Children(client, detail.Id, recursive: true, cancellationToken).ConfigureAwait(false),
             _ => []
         };
 
-        var files = leaves
-            .SelectMany(PathsOf)
-            .DistinctBy(file => file.Path, StringComparer.Ordinal)
-            .Take(MaxFiles + 1)
-            .ToList();
-        if (files.Count > MaxFiles)
-            throw new MoviePilotException($"此条目超过 {MaxFiles} 个文件，请按季或单集整理；不会只提交前 {MaxFiles} 个文件");
+        var files = new List<MoviePilotTransferFile>();
+        foreach (var leaf in leaves)
+        {
+            var paths = PathsOf(leaf).ToList();
+            if (paths.Count == 0 || paths.Any(file => !MoviePilotTransfer.IsAbsolutePath(file.Path)))
+                throw new MoviePilotException($"此条目没有可核对的本地文件：{leaf.Name}。不会只整理剩余文件。");
+            foreach (var file in paths)
+            {
+                if (files.Any(existing => MoviePilotTransfer.SamePath(existing.Path, file.Path))) continue;
+                files.Add(file);
+                if (files.Count > MaxFiles)
+                    throw new MoviePilotException($"此条目超过 {MaxFiles} 个文件，请按季或单集整理；不会只提交前 {MaxFiles} 个文件");
+            }
+        }
         return files;
     }
 
@@ -102,24 +109,37 @@ public static class MoviePilotTransferCollect
             .Select(file => file!);
 
     private static async Task<List<EmbyItem>> Children(
-        EmbyClient client, string parentId, CancellationToken cancellationToken) =>
-        await client.GetItemsAsync(new ItemQuery
-        {
-            ParentId = parentId,
-            Recursive = false,
-            Fields = EmbyFields.Files
-        }, cancellationToken).ConfigureAwait(false) is { } result
-            ? result.Items
-            : [];
-
-    private static async Task<List<EmbyItem>> Episodes(
-        EmbyClient client, EmbyItem series, CancellationToken cancellationToken)
+        EmbyClient client, string parentId, bool recursive, CancellationToken cancellationToken)
     {
-        var seasons = await client.GetSeasonsAsync(series.Id, cancellationToken).ConfigureAwait(false);
         var episodes = new List<EmbyItem>();
-        foreach (var season in seasons)
-            episodes.AddRange(await Children(client, season.Id, cancellationToken).ConfigureAwait(false));
-
-        return episodes;
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        int? total = null;
+        for (var page = 0; page <= MaxFiles; page++)
+        {
+            var result = await client.GetItemsAsync(new ItemQuery
+            {
+                ParentId = parentId,
+                Recursive = recursive,
+                IncludeItemTypes = [EmbyItemType.Episode],
+                Fields = Fields,
+                StartIndex = episodes.Count,
+                Limit = MaxFiles + 1
+            }, cancellationToken).ConfigureAwait(false);
+            if (result.TotalRecordCount > MaxFiles)
+                throw new MoviePilotException($"此条目超过 {MaxFiles} 个文件，请按季或单集整理；不会只提交前 {MaxFiles} 个文件");
+            if (total is { } expected && expected != result.TotalRecordCount)
+                throw new MoviePilotException("剧集在收集文件期间发生变化，请重新操作");
+            total ??= result.TotalRecordCount;
+            foreach (var episode in result.Items)
+            {
+                if (episode.Id.Length == 0 || episode.Type != EmbyItemType.Episode || !ids.Add(episode.Id))
+                    throw new MoviePilotException("剧集分页包含无法识别或重复的条目，已停止整理");
+                episodes.Add(episode);
+            }
+            if (episodes.Count == total) return episodes;
+            if (episodes.Count > total || result.Items.Count == 0)
+                throw new MoviePilotException("剧集分页未收齐，已停止整理；不会只提交部分文件");
+        }
+        throw new MoviePilotException("剧集分页未收齐，已停止整理");
     }
 }

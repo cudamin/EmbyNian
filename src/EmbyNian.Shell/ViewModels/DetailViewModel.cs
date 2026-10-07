@@ -118,6 +118,11 @@ public sealed partial class DetailViewModel : PageViewModel
     /// the shelf still contains another.
     /// </summary>
     private EmbyItem? _loadedSeason;
+    private bool _active;
+    private int _lifetime;
+    private bool _syncingSeason;
+    private bool _switchingSeason;
+    private EmbySessionScope? _scope;
 
     /// <summary>
     /// The episodes on screen, handed to the player so 下一集 works and to the context menu so
@@ -159,7 +164,11 @@ public sealed partial class DetailViewModel : PageViewModel
         // Four rows whose visibility is a count. [NotifyPropertyChangedFor] cannot watch a collection's
         // Count — it hangs off a property's setter, and these collections are never re-assigned — so the
         // notification is hung off the collection itself, where it cannot be forgotten at a call site.
-        Seasons.CollectionChanged += (_, _) => PickerChanged(nameof(SeasonVisibility));
+        Seasons.CollectionChanged += (_, _) =>
+        {
+            PickerChanged(nameof(SeasonVisibility));
+            OnPropertyChanged(nameof(EpisodeVisibility));
+        };
 
         // 媒体源那一行多喊一声「视频：…」那一行：头图上那一行在下拉出现时收起来（同一份读数不在一屏上说两遍，
         // 见 VideoVisibility），所以这个集合一变，两处的显隐都可能翻。
@@ -1445,7 +1454,7 @@ public sealed partial class DetailViewModel : PageViewModel
     /// </summary>
     public ObservableCollection<InfoRow> InfoRows { get; } = [];
 
-    public Visibility EpisodeVisibility => Show(EpisodeShelf is { Cards.Count: > 0 });
+    public Visibility EpisodeVisibility => Show(EpisodeShelf is { Cards.Count: > 0 } || Seasons.Count > 1);
 
     /// <summary>
     /// Which of the two shapes 单集 takes on this page. Both are inside the block
@@ -1518,9 +1527,9 @@ public sealed partial class DetailViewModel : PageViewModel
                         : "，图多于 1 次 —— 完整条目回来把图白重取了一遍"));
     }
 
-    private bool CanAct => !Busy;
+    private bool CanAct => Attached && !Busy;
 
-    private bool CanPlay => !Busy && PlayTarget is not null;
+    private bool CanPlay => CanAct && PlayTarget is not null;
 
     /// <summary>
     /// Not gated on <see cref="PageViewModel.Busy"/>, unlike the buttons: following the headline is
@@ -1545,7 +1554,7 @@ public sealed partial class DetailViewModel : PageViewModel
     /// parameters, so this single question answers for all of them; past this gate they are dereferenced
     /// with <c>!</c>. <see cref="_seed"/> is a separate question — 「which item」 — and the loads ask both.
     /// </summary>
-    private bool Attached => _settings is not null;
+    private bool Attached => _active && _settings is not null && _scope?.IsCurrent == true;
 
     /// <summary>
     /// The live settings object, read through the service rather than copied: it is one instance for the
@@ -1567,6 +1576,9 @@ public sealed partial class DetailViewModel : PageViewModel
         EmbyImageStore images,
         ISystemLauncher launcher)
     {
+        Cancel();
+        _active = true;
+        _scope = images.CaptureScope();
         _actions = actions;
         _seed = request.Item;
         _settings = settings;
@@ -1606,6 +1618,8 @@ public sealed partial class DetailViewModel : PageViewModel
     }
 
     /// <inheritdoc />
+    private new bool IsCurrent(CancellationToken token) => Attached && base.IsCurrent(token);
+
     public override Task ReloadAsync() => LoadAsync();
 
     /// <summary>Re-reads the item and everything hanging off it. The one entry point; every path lands here.</summary>
@@ -1613,6 +1627,7 @@ public sealed partial class DetailViewModel : PageViewModel
     {
         if (!Attached || _seed is not { } seed) return;
 
+        _switchingSeason = false;
         var token = BeginLoad();
 
         try
@@ -1622,7 +1637,7 @@ public sealed partial class DetailViewModel : PageViewModel
             // 它们一律在等详情接口 —— 于是点一张封面进来先看一屏「正在读取」，而这是整个客户端里点得最多的动作。
             Preview(seed);
 
-            var detail = await _session!
+            var detail = await _scope!
                 .ExecuteAsync((client, ct) => client.GetItemAsync(
                     seed.Id, ct, order: Settings.Playback.MediaSourceOrder), token).ConfigureAwait(true);
             if (!IsCurrent(token)) return;
@@ -1971,24 +1986,21 @@ public sealed partial class DetailViewModel : PageViewModel
     {
         if (!Attached) return;
 
-        var seasons = await _session!
+        var seasons = await _scope!
             .ExecuteAsync((client, ct) => client.GetSeasonsAsync(series.Id, ct), token).ConfigureAwait(true);
         if (!IsCurrent(token)) return;
 
-        Seasons.Clear();
-        foreach (var season in seasons) Seasons.Add(season);
-
-        // 全部剧季 as cards, the way Emby's own series page browses seasons — each card opens that
-        // season's page. The picker stays: it switches the episode list below without leaving the page.
-        SeasonShelf?.Fill(seasons, ItemDetail.SeasonSubtitle);
-
-        // Recorded before the picker is told, so the picker's report of the selection it was just handed
-        // is not read back as a person choosing a season and does not start a second load of the very
-        // episodes this call is about to fetch.
         var picked = ItemDetail.PickSeason(seasons);
-        _loadedSeason = picked;
-        SelectedSeason = picked;
+        _syncingSeason = true;
+        try
+        {
+            Seasons.Clear();
+            foreach (var season in seasons) Seasons.Add(season);
+            SelectedSeason = picked;
+        }
+        finally { _syncingSeason = false; }
 
+        SeasonShelf?.Fill(seasons, ItemDetail.SeasonSubtitle);
         await LoadEpisodesAsync(picked, retarget: true, token).ConfigureAwait(true);
     }
 
@@ -2001,14 +2013,20 @@ public sealed partial class DetailViewModel : PageViewModel
         if (!Attached || _detail is null || EpisodeShelf is not { } shelf) return;
 
         var scope = ItemDetail.EpisodeScope(_detail, season);
-        var episodes = await _session!
+        var episodes = await _scope!
             .ExecuteAsync((client, ct) => client.GetEpisodesAsync(scope.SeriesId, scope.SeasonId, ct), token)
             .ConfigureAwait(true);
         if (!IsCurrent(token)) return;
 
-        // Commit the season and its rows together. Until the request has succeeded, _loadedSeason keeps
-        // naming the rows still visible on screen, which also gives SwitchSeasonAsync a truthful value
-        // to restore when the server rejects the new season.
+        // 播放目标也要读齐才提交，不能把新季列表与旧季目标组合成可播放状态。
+        EmbyItem? target = null;
+        if (retarget && ItemDetail.PickEpisode(episodes) is { } picked)
+        {
+            target = picked.MediaSources.Count > 0 ? picked
+                : await _scope!.ExecuteAsync((client, ct) => client.GetItemAsync(
+                    picked.Id, ct, order: Settings.Playback.MediaSourceOrder), token).ConfigureAwait(true);
+            if (!IsCurrent(token)) return;
+        }
         _loadedSeason = season;
 
         _episodes.Clear();
@@ -2027,16 +2045,11 @@ public sealed partial class DetailViewModel : PageViewModel
         // request until the first card is laid out either way. Zero on every page but an episode's own.
         EpisodeFocus = ItemDetail.EpisodeFocus(episodes, _detail);
 
-        if (!retarget) return;
-
-        if (ItemDetail.PickEpisode(episodes) is not { } target)
+        if (retarget)
         {
-            PlayTarget = null;
-            ShowTarget(null);
-            return;
+            PlayTarget = target;
+            ShowTarget(target);
         }
-
-        await ApplyPlayTargetAsync(target, token).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -2051,7 +2064,7 @@ public sealed partial class DetailViewModel : PageViewModel
 
         try
         {
-            var similar = await _session!
+            var similar = await _scope!
                 .ExecuteAsync((client, ct) => client.GetSimilarAsync(item.Id, ItemDetail.SimilarLimit, ct), token)
                 .ConfigureAwait(true);
             if (!IsCurrent(token)) return;
@@ -2078,7 +2091,7 @@ public sealed partial class DetailViewModel : PageViewModel
 
         var detail = target.MediaSources.Count > 0
             ? target
-            : await _session!.ExecuteAsync((client, ct) => client.GetItemAsync(
+            : await _scope!.ExecuteAsync((client, ct) => client.GetItemAsync(
                 target.Id, ct, order: Settings.Playback.MediaSourceOrder), token)
                 .ConfigureAwait(true);
         if (!IsCurrent(token)) return;
@@ -2108,7 +2121,7 @@ public sealed partial class DetailViewModel : PageViewModel
 
             try
             {
-                return await _session!
+                return await _scope!
                     .ExecuteAsync((client, ct) => client.GetItemAsync(series, ct), token).ConfigureAwait(true);
             }
             catch (OperationCanceledException)
@@ -2373,8 +2386,17 @@ public sealed partial class DetailViewModel : PageViewModel
     /// </summary>
     partial void OnSelectedSeasonChanged(EmbyItem? value)
     {
-        if (value is null || ReferenceEquals(value, _loadedSeason)) return;
-
+        if (_syncingSeason || value is null) return;
+        if (ReferenceEquals(value, _loadedSeason))
+        {
+            if (_switchingSeason)
+            {
+                base.Cancel();
+                _switchingSeason = false;
+                IsReady = true;
+            }
+            return;
+        }
         _ = SwitchSeasonAsync(value);
     }
 
@@ -2390,6 +2412,7 @@ public sealed partial class DetailViewModel : PageViewModel
         if (!Attached) return;
 
         var token = BeginLoad();
+        _switchingSeason = true;
 
         try
         {
@@ -2407,8 +2430,14 @@ public sealed partial class DetailViewModel : PageViewModel
             // The old shelf was deliberately left in place while loading. Put the picker back on the
             // season that shelf belongs to; its changed hook sees the same _loadedSeason and does not
             // start another request. The failed season remains selectable, so the user can retry it.
-            SelectedSeason = _loadedSeason;
+            _syncingSeason = true;
+            try { SelectedSeason = _loadedSeason; }
+            finally { _syncingSeason = false; }
             _actions?.Notify($"加载单集失败：{Failure.Describe(error)}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            if (IsCurrent(token)) _switchingSeason = false;
             EndLoad(token);
         }
     }
@@ -2486,21 +2515,26 @@ public sealed partial class DetailViewModel : PageViewModel
         if (!Attached || _detail is not { } item) return;
 
         var played = item.IsWatched;
+        var lifetime = _lifetime;
+        var scope = _scope!;
 
         try
         {
-            await _session!.ExecuteAsync((client, token) => played
+            await scope.ExecuteAsync((client, token) => played
                     ? client.MarkUnplayedAsync(item.Id, token)
                     : client.MarkPlayedAsync(item.Id, token), CancellationToken.None)
                 .ConfigureAwait(true);
 
             // Re-read rather than flipped locally: marking a season watched moves every episode's tick
             // and the show's unplayed count with it, and only the server knows what it did.
-            await LoadAsync().ConfigureAwait(true);
+            if (Attached && lifetime == _lifetime && ReferenceEquals(item, _detail) && scope.IsCurrent)
+                await LoadAsync().ConfigureAwait(true);
         }
-        catch (Exception error) when (error is not OperationCanceledException)
+        catch (OperationCanceledException) { }
+        catch (Exception error)
         {
-            _actions?.Notify($"更新观看状态失败：{Failure.Describe(error)}", InfoBarSeverity.Error);
+            if (Attached && lifetime == _lifetime)
+                _actions?.Notify($"更新观看状态失败：{Failure.Describe(error)}", InfoBarSeverity.Error);
         }
     }
 
@@ -2510,10 +2544,12 @@ public sealed partial class DetailViewModel : PageViewModel
         if (!Attached || _detail is not { } item) return;
 
         var favorite = item.UserData?.IsFavorite == true;
+        var lifetime = _lifetime;
+        var scope = _scope!;
 
         try
         {
-            await _session!.ExecuteAsync(
+            await scope.ExecuteAsync(
                     (client, token) => client.SetFavoriteAsync(item.Id, !favorite, token), CancellationToken.None)
                 .ConfigureAwait(true);
 
@@ -2521,13 +2557,16 @@ public sealed partial class DetailViewModel : PageViewModel
             // other things with it; 收藏 moves nothing — and a reload here cost the page its artwork, its
             // 演职人员 row and its 更多类似 row, all re-fetched to answer a question the click already
             // answered. The item's own copy is updated too, so the next click reads the current value.
+            if (!Attached || lifetime != _lifetime || !ReferenceEquals(item, _detail) || !scope.IsCurrent) return;
             item.UserData ??= new EmbyUserData();
             item.UserData.IsFavorite = !favorite;
             Favorite = !favorite;
         }
-        catch (Exception error) when (error is not OperationCanceledException)
+        catch (OperationCanceledException) { }
+        catch (Exception error)
         {
-            _actions?.Notify($"更新收藏失败：{Failure.Describe(error)}", InfoBarSeverity.Error);
+            if (Attached && lifetime == _lifetime)
+                _actions?.Notify($"更新收藏失败：{Failure.Describe(error)}", InfoBarSeverity.Error);
         }
     }
 
@@ -2537,7 +2576,7 @@ public sealed partial class DetailViewModel : PageViewModel
     {
         if (!Attached || _actions is null || _detail is not { } item) return;
 
-        if (_session!.Connection is not { } connection)
+        if (_scope!.Connection is not { } connection)
         {
             _actions.Notify("尚未连接到服务器", InfoBarSeverity.Warning);
             return;
@@ -2599,13 +2638,18 @@ public sealed partial class DetailViewModel : PageViewModel
     /// <inheritdoc />
     public override void Cancel()
     {
+        _active = false;
+        _lifetime++;
+        _switchingSeason = false;
         base.Cancel();
         _art?.Cancel();
+        BusyChanged();
     }
 
     /// <inheritdoc />
     public override void Dispose()
     {
+        Cancel();
         base.Dispose();
 
         _art?.Cancel();

@@ -9,25 +9,23 @@ namespace EmbyNian.Playback;
 /// <summary>Live playback state for the now-playing bar.</summary>
 public readonly record struct PlaybackProgress(long PositionTicks, long RunTimeTicks, bool IsPaused, string Title, long Generation)
 {
-    /// <summary>旧调用点与新事件订阅的兼容形状；Generation 0 只在测试里出现。</summary>
-    public PlaybackProgress(long PositionTicks, long RunTimeTicks, bool IsPaused, string Title) : this(PositionTicks, RunTimeTicks, IsPaused, Title, 0) { }
+    public PlaybackProgress(long PositionTicks, long RunTimeTicks, bool IsPaused, string Title)
+        : this(PositionTicks, RunTimeTicks, IsPaused, Title, 0) { }
 
     public double Fraction => RunTimeTicks > 0 ? Math.Clamp(PositionTicks / (double)RunTimeTicks, 0, 1) : 0;
-
     public string Clock => RunTimeTicks > 0
         ? $"{TimeFormat.Clock(PositionTicks)} / {TimeFormat.Clock(RunTimeTicks)}"
         : TimeFormat.Clock(PositionTicks);
 }
 
+/// <summary>The generation is captured at the source, before a UI dispatcher can delay delivery.</summary>
+public readonly record struct PlaybackUpdate<T>(long Generation, T Value);
+
 /// <summary>
-/// Runs one playback from start to finish and keeps the server informed while it does.
-/// <para>
-/// The server-facing half of playback lives here rather than in the UI, which is what v1 did:
-/// there, the form that happened to start playback also owned the progress timer, so closing
-/// that window stopped the reporting and Emby kept the item marked as playing forever.
-/// </para>
+/// Owns playback and server reporting independently of any page. Request cancellation, handle ownership,
+/// and final reporting are kept together so closing a page cannot abandon a server session.
 /// </summary>
-public sealed class PlaybackService(
+public sealed partial class PlaybackService(
     EmbySession session,
     AppSettings settings,
     Func<IPlaybackBackend> backendFactory,
@@ -36,116 +34,46 @@ public sealed class PlaybackService(
     bool allowPlayback = true)
 {
     private const string Category = "playback";
-
-    /// <summary>
-    /// 「标记已看」那两档百分比的共同下限。两个地方用它：<see cref="ShouldMarkWatched"/>（结束时要不要标已看）
-    /// 与 <see cref="ShouldReportStop"/>（进度够到线了没，2026-09-29 的到阈值补报）—— 两处认同一条线，
-    /// 才不会出现「报了却没标上」或者反过来。
-    /// </summary>
     private const int MarkWatchedFloor = 50;
-
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _requestGate = new();
+    private readonly HashSet<PlayOperation> _operations = [];
+    private PlayOperation? _latestRequest;
+    private volatile IPlaybackHandle? _current;
+    private volatile PlayingAttempt? _active;
+    private readonly SemaphoreSlim _audioDelayGate = new(1, 1);
+    private readonly SemaphoreSlim _volumeCommandGate = new(1, 1);
+    private readonly SemaphoreSlim _shaderGate = new(1, 1);
+    private readonly SemaphoreSlim _subtitleStyleGate = new(1, 1);
+    private long _subtitleStyleRevision;
 
-    /// <summary>在场句柄 → 当前所属播放的代次；监控与回调按它过滤旧片的迟到事件。</summary>
-    private readonly Dictionary<IPlaybackHandle, long> _swapGeneration = [];
-
-    private IPlaybackHandle? _current;
-
-    /// <summary>
-    /// 当前这一跑的身份序号。每场播放开始时递增；进度事件带着它出发，迟到回调（暂停上报、被换掉的
-    /// 旧文件）按它与 <see cref="_playbackGeneration"/> 比对，对不上就不许再写状态、不再上报 —— 这是
-    /// 「旧片标题盖住新片」那类事故的唯一防线。
-    /// </summary>
-    public long Generation => _playbackGeneration;
+    public bool ShaderStateKnown { get; private set; } = true;
     private long _playbackGeneration;
-
-    /// <summary>停止（或换片）后必须撤销的待启动请求：每张票进场时记下编号，用户 Stop 把计数往前推，
-    /// 仍拿着旧编号等闸门的请求据此知道自己已被撤销。</summary>
-    private long _pendingRequest;
-
-    /// <summary>
-    /// The mpv options the running playback was started with, so a mid-playback change can put back
-    /// what it replaces instead of guessing. Empty while nothing is playing.
-    /// </summary>
     private IReadOnlyList<KeyValuePair<string, string>> _launchOptions = [];
-
-    /// <summary>
-    /// How many entries at the end of <see cref="_launchOptions"/> came from the 着色器配置组 the playback
-    /// started with — the planner appends the group last. Those are precisely the values a group switch
-    /// replaces, so they are excluded from what it falls back to; without that, switching a group off
-    /// would restore the group's own scaler.
-    /// </summary>
     private int _launchGroupOptionCount;
 
-    /// <summary>Fires roughly once per progress report; the UI uses it for the now-playing bar.</summary>
     public event Action<PlaybackProgress>? ProgressChanged;
-
-    /// <summary>Fires when a playback starts and when it ends (null item).</summary>
     public event Action<EmbyItem?>? NowPlayingChanged;
-
-    /// <summary>
-    /// Fires whenever anything the player chrome draws changed — many times a second while the
-    /// video runs, and never on the UI thread. Subscribers marshal.
-    /// </summary>
     public event Action<PlayerStatus>? StatusChanged;
-
-    /// <summary>Fires when mpv publishes a track list, so the pickers never have to poll for one.</summary>
     public event Action<IReadOnlyList<MpvTrack>>? TracksChanged;
-
-    /// <summary>
-    /// 独占模式视频窗 Lua UI 发来的 <c>embynian-*</c> 消息（uosc 就绪握手、换集请求）。
-    /// 只有实现了 <see cref="IPlayerHostMessages"/> 的会话（内置 libmpv 独占）有这一路；
-    /// 事件照原样转发，mpv 的事件线程发来就在那个线程上 —— 落界面线程的事归最终订阅者。
-    /// </summary>
     public event Action<string, string>? VideoWindowMessage;
+    public event Action<PlaybackUpdate<EmbyItem?>>? NowPlayingUpdated;
+    public event Action<PlaybackUpdate<PlayerStatus>>? StatusUpdated;
+    public event Action<PlaybackUpdate<IReadOnlyList<MpvTrack>>>? TracksUpdated;
+    public event Action<PlaybackUpdate<(string Key, string Value)>>? VideoWindowUpdated;
 
+    public long Generation => Interlocked.Read(ref _playbackGeneration);
     public bool IsPlaying => _current is not null;
-
     public bool? PictureInHostWindow => _current?.PictureInHostWindow;
-
-    /// <summary>The last known player state; all defaults when nothing is playing.</summary>
+    public MpvBackendKind? PlayingBackend => _active?.BackendKind;
     public PlayerStatus Status => (_current as IPlayerControl)?.Status ?? new PlayerStatus();
-
-    /// <summary>
-    /// True when playback can actually be driven. False for an external mpv whose control
-    /// channel is switched off: it plays, but the client's chrome would be a row of dead buttons.
-    /// <para>
-    /// 句柄取到局部变量里再问两个问题，这不是啰嗦。<c>_current is IPlayerControl &amp;&amp; _current.HasControlChannel</c>
-    /// 读两次字段，而播放结束那一下（<see cref="PlayAsync"/> 的 finally，一路 <c>ConfigureAwait(false)</c> 之后跑在
-    /// 线程池线程上）会把它置空 —— 正好插在两次之间，第二次就是 null。问这个属性的是播放器那个 10 Hz 计时器，跑在
-    /// 界面线程上，外面没有 try/catch，所以那是一次谁都接不住的空引用；而每部片子结束都要经过这个窗口，一秒采样
-    /// 十次。同 <see cref="Build"/> 的判据和同一个理由。
-    /// </para>
-    /// </summary>
-    public bool CanControl
-    {
-        get
-        {
-            var handle = _current;
-            return handle is IPlayerControl && handle.HasControlChannel;
-        }
-    }
-
-    /// <summary>
-    /// True when the backend in use answers several property reads at once, which is how the statistics
-    /// panel decides between asking for its whole batch together and asking one at a time. False when
-    /// nothing is playing, because there is nobody to ask.
-    /// </summary>
+    public bool CanControl => _current is IPlayerControl and IPlaybackHandle { HasControlChannel: true };
     public bool ReadsOverlap => _current?.ReadsOverlap ?? false;
-
     public PlaybackPlanner Planner => planner;
-
-    /// <summary>
-    /// Exactly what mpv was launched with, in order, or an empty list when nothing is playing. Read by
-    /// 播放统计 so the 画质 page can show the options that are really in force rather than re-deriving
-    /// them from the settings — which is the whole point of having the page.
-    /// </summary>
     public IReadOnlyList<KeyValuePair<string, string>> LaunchOptions => _launchOptions;
-
-    /// <summary>The 着色器配置组 this playback started with, and the rule that chose it; null when none.</summary>
     public string? LaunchShaderProfile { get; private set; }
-
     public string? LaunchShaderReason { get; private set; }
+    public ShaderDecision? LaunchShaderDecision { get; private set; }
 
     /// <summary>
     /// The same facts as the <c>Launch*</c> properties above, but kept after playback ends rather than
@@ -165,1010 +93,401 @@ public sealed class PlaybackService(
     /// the panel is meant to say what mpv was actually given.
     /// </summary>
     public string? LaunchQualityPreset { get; private set; }
-
-    /// <summary>
-    /// 这一跑真正在放的那一版媒体源 —— <b>候选回退落定之后</b>的那一版，不是票里点的那一版。
-    /// <para>
-    /// 播放页的「版本」菜单和它中间那行画质读数问的就是它。票里那一版只说了用户的意思，而这一版是
-    /// 服务器上真的打开了的那份文件：一版打不开时会自动换下一版（<see cref="CandidateSources"/>），
-    /// 此后再问票，屏上标的就会是另一份文件。
-    /// </para>
-    /// <para>
-    /// 记的是<b>对象</b>而不是源 Id：Emby 对一部分直连文件不返回源 Id，那时按 Id 认会把几个版本认成
-    /// 同一版 —— 与 <see cref="Emby.ItemDetail.PickSource"/> 同一条规矩。播完随其它启动事实一起清掉。
-    /// </para>
-    /// </summary>
     public MediaSource? PlayingSource { get; private set; }
 
-    /// <summary>
-    /// Which audio output device mpv actually opened, once it has said — 「wasapi（扬声器 (Realtek…)）」. Null
-    /// until then, and on a backend with no control channel.
-    /// <para>
-    /// Worth a property of its own rather than reading it out of <see cref="LaunchOptions"/>, because the two
-    /// answer different questions: the launch options say what the client <em>asked</em> for, and 「跟随系统默认
-    /// 设备」 asks for nothing at all. What 独占模式 actually took over is only knowable after mpv opened it.
-    /// </para>
-    /// <para>
-    /// Kept after playback ends, like <see cref="LastLaunch"/> and for the same reason: 诊断 is read after
-    /// something went wrong, which is exactly when the live state is gone.
-    /// </para>
-    /// </summary>
+    /// <summary>The requested device and active driver, not proof of the physical Windows endpoint.</summary>
     public string? AudioDeviceInUse { get; private set; }
-
-    /// <summary>Records what mpv answered about its audio output. Called by the player once per playback.</summary>
     public void NoteAudioDevice(string? description) => AudioDeviceInUse = description;
-
-    /// <summary>The backend is chosen per play from the settings, so switching mpv styles needs no restart.</summary>
     public string? Validate() => backendFactory().Validate();
 
-    /// <summary>
-    /// Starts playback, replacing anything already running. Returns once mpv has exited, so the
-    /// caller can await the whole playback and act on the result.
-    /// <para>
-    /// 一个条目常有几版文件，而服务器库里可能挂着文件已经不在的那一版（MoviePilot 换版重命名后旧
-    /// 条目没刷新——2026-09-16 报的那次「播放失败 401」就是它：直连流吃 404，ytdl 兜底又报了个误导
-    /// 的 401）。所以这里按 <see cref="CandidateSources"/> 排一份候选顺序：票里那版先上，mpv 报
-    /// Error 就换下一版再试，直到有一版放起来或者候选用尽。换版重试时显式的轨道选择作废——那些
-    /// Emby 流索引是对着原先那版挑的，新版的流布局未必对得上，让 alang/slang 重新决定；续播位置
-    /// 保留，「看到哪儿」与版本无关。
-    /// </para>
-    /// </summary>
-    public async Task<PlaybackResult> PlayAsync(PlaybackTicket ticket, CancellationToken cancellationToken)
-    {
-        // A self-check may navigate real library data, but must never start a backend or report playback.
-        if (!allowPlayback) throw new InvalidOperationException("自检模式禁止真实播放");
-
-        // 这一次起播的编号：用户 Stop 作废的是「比它晚等待」的待启动请求，而不是这一场已经建立的播放。
-        var pending = ++_pendingRequest;
-
-        // 这一场播放的身份：开始、进度、暂停、停止与已观看全部走它 —— 影片在 A 上开始，用户浏览切到 B
-        // 之后，A 的收尾上报仍发给 A，而不是落到 B 头上（同服换账号同理）。显式退出登录会使这把
-        // scope 失效，上报随即失败并被记录，与从前「退出登录后不再上报」是同一档结果。
-        // 未登录时 Capture 抛「尚未登录」，走与计划失败同一条收尾：报一声「现在没在播」，把错误交出去。
-        EmbySessionScope scope;
-        try
-        {
-            scope = session.Capture();
-        }
-        catch
-        {
-            await StopCurrentAsync().ConfigureAwait(false);
-            RaiseNowPlaying(null);
-            throw;
-        }
-
-        var candidates = CandidateSources(ticket);
-
-        for (var index = 0; index < candidates.Count; index++)
-        {
-            var source = candidates[index];
-            var attempt = index == 0
-                ? ticket
-                : ticket with
-                {
-                    Source = source,
-                    AudioStreamIndex = null,
-                    SubtitleStreamIndex = null,
-                    SubtitlesDisabled = false
-                };
-
-            var result = await PlayOneAsync(scope, attempt, cancellationToken, pending).ConfigureAwait(false);
-
-            if (!result.Exit.IsFailure || index == candidates.Count - 1) return result;
-
-            Log.Info(Category,
-                $"《{attempt.Item.ToPlaybackTitle()}》这一版打不开（{result.Exit.Message}），"
-                + $"改试另一版（{index + 2}/{candidates.Count}）");
-        }
-
-        // 走不到这里：循环要么在非失败处返回，要么在最后一个候选处返回。
-        throw new InvalidOperationException("unreachable");
-    }
-
-    /// <summary>
-    /// 播放的候选版本顺序：票里那一版（用户选的，或默认的第一个）在前，条目的其余版本按表序跟在
-    /// 后面（那张表 2026-09-24 起是「最新入库在前」，见 <see cref="ItemDetail.OrderVersionsNewestFirst"/>），
-    /// 按 Id 去重。internal static：候选顺序是契约，测试看得见。
-    /// </summary>
     internal static IReadOnlyList<MediaSource> CandidateSources(PlaybackTicket ticket)
     {
         var sources = new List<MediaSource> { ticket.Source };
         foreach (var source in ticket.Item.MediaSources)
         {
-            if (source.Id != ticket.Source.Id) sources.Add(source);
+            if (!sources.Any(existing => MediaVersionSwitch.Same(existing, source))) sources.Add(source);
         }
-
         return sources;
     }
 
-    /// <summary>
-    /// 设置里挑过的音频输出设备还在线吗（<see cref="AudioDeviceCatalogue.UsableDevice"/>）。内置后端以
-    /// 随包 libmpv 的枚举为准 —— 放片子的就是它，设备名对得上；设备已不在线就退回系统默认并记一条日志，
-    /// 兑现设置页「拔掉的设备退回系统默认而不是变成没声音」的承诺。随包内核对指定设备失败是不回退的
-    /// （2026-09-30 实测：日志「was forced … Try unsetting it … no sound」），所以这一步只能在应用层做。
-    /// <para>
-    /// 外部 mpv.exe 不核对：它的设备表是它自己那一份，拿随包 libmpv 的枚举替它做主没有依据。
-    /// 返回 null 表示「没有覆盖」——设备没挑过、没有设备目录可问（测试路径）或外部后端 —— 计划层照
-    /// 设置原样走。返回空串表示「核对过了，确实不在」，计划层一条都不发，mpv 用自己的 auto。
-    /// </para>
-    /// </summary>
     private async Task<string?> ResolveAudioDeviceAsync()
     {
         var stored = settings.Audio.Device.Trim();
-        if (stored.Length == 0 || audioDevices is null) return null;
-        if (settings.Mpv.Backend != MpvBackendKind.BuiltInLibMpv) return null;
-
+        if (stored.Length == 0 || audioDevices is null || settings.Mpv.Backend != MpvBackendKind.BuiltInLibMpv) return null;
         var devices = await audioDevices.LoadAsync().ConfigureAwait(false);
         var usable = AudioDeviceCatalogue.UsableDevice(stored, devices);
         if (usable.Length > 0) return usable;
-
-        Log.Warn(Category, $"音频输出设备 {stored} 已不在线，本次播放跟随系统默认");
+        Log.Warn(Category, $"本次音频设备名单未找到 {stored}（设备离线或枚举不可用），本次播放尝试系统默认");
         return "";
     }
 
-    /// <summary>
-    /// 一次候选版本上的完整播放：从停掉旧的到收尾上报。原 <see cref="PlayAsync"/> 的主体，包进候选
-    /// 循环里跑，一次循环一趟。
-    /// </summary>
-    private async Task<PlaybackResult> PlayOneAsync(
-        EmbySessionScope scope,
-        PlaybackTicket ticket,
-        CancellationToken cancellationToken,
-        long pending)
-    {
-        // 计划在等闸门之前算：它只要会话与设置，而换片快路要先拿它去问「正在跑的那个实例接不接得住这一票」。
-        // 它从前在闸门之后算（上面那句注释说的「抛异常别漏掉闸门」）—— 放在等闸门之前，抛在这里同样漏不掉
-        // 闸门，而收尾一步不少：停掉正在跑的、报一声「现在没在播」，再把错误交出去。计划用的是本场的
-        // 身份快照（scope），不是浏览此刻在哪台服务器。
-        PlaybackRequest request;
-        try
-        {
-            request = planner.Plan(ticket, scope.Connection, await ResolveAudioDeviceAsync().ConfigureAwait(false));
-        }
-        catch
-        {
-            await StopCurrentAsync().ConfigureAwait(false);
-            RaiseNowPlaying(null);
-            throw;
-        }
-
-        // 换片快路（独占模式，2026-09-19 用户令「换集不要每次都关窗重开」）：正在跑的实例能接这一票就不
-        // 关窗口 —— 同一个 mpv、同一个 uosc、同一个全屏，只换文件。次序是先把手头这一跑叫醒
-        // （HandOver：它去发「停止」与最后位置的上报，但不 quit），等它彻底跑完（闸门放开），再在这个
-        // 实例上换源；快路没接住就落回「停掉重开」那条老路。
-        var live = _current;
-        var takeover = live is not null && live.CanSwapTo(request) ? live : null;
-        // 内部停旧片（为这一票腾场子）不能作废这一票自己 —— 作废只归用户的那一路 StopAsync。
-        if (takeover is null) await StopCurrentAsync().ConfigureAwait(false);
-        else takeover.HandOver();
-
-        // 等闸门期间用户可能按下停止：这一场已经不该开始。用待启动编号判断，静默退出（取消不是错误）。
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (_pendingRequest > pending)
-        {
-            _gate.Release();
-            throw new OperationCanceledException("等待期间用户已停止播放");
-        }
-
-        // Everything after the gate is taken belongs inside this try, and the try therefore opens on the
-        // very next line rather than further down where the interesting work starts. The gate is a
-        // SemaphoreSlim(1, 1) released only from the finally below, so anything that throws between the
-        // wait and the try leaks it permanently: the throw is caught upstream and shown as a 「播放失败」
-        // notice, nothing looks fatal, and every later play then waits on a semaphore no one will ever
-        // release — the cover art stays up, with no error and no timeout, for the rest of the process.
-        // The throw that concretely mattered — planner.Plan — now happens before the wait, which is the
-        // one place it cannot leak the gate; what is left in here is the launch itself.
-        IPlaybackHandle? handle = null;
-        try
-        {
-            var playSessionId = Guid.NewGuid().ToString("N");
-            var generation = ++_playbackGeneration;
-            _launchOptions = request.PlayerOptions;
-            _launchGroupOptionCount = request.ShaderOptionCount;
-            LaunchShaderProfile = request.ShaderProfile;
-            LaunchShaderReason = request.ShaderReason;
-            LaunchQualityPreset = settings.Video.QualityPreset;
-
-            // 在播的是哪一版，与其它启动事实一起记档，且早于 RaiseNowPlaying —— 播放页收到「现在播的是谁」
-            // 的那一刻就要拿它去标菜单、写控制条中间那行读数。票里那一版在这里就是这一趟候选的那一版，
-            // 所以候选回退之后，屏上认出来的必然是真正打开的那份文件。
-            PlayingSource = ticket.Source;
-            AudioDeviceInUse = null;
-            LastLaunch = new LaunchRecord(
-                DateTimeOffset.Now,
-                request.Title,
-                request.ShaderProfile,
-                request.ShaderReason,
-                settings.Video.QualityPreset,
-                request.PlayerOptions);
-
-            if (takeover is not null && await takeover.SwapToAsync(request, cancellationToken).ConfigureAwait(false))
-            {
-                // 同一个句柄：_current 与订阅都还是它，不必再来一遍 —— 这正是「不关窗」的全部含义。
-                handle = takeover;
-                _swapGeneration[handle] = generation;
-            }
-            else
-            {
-                if (takeover is not null)
-                {
-                    // 快路让位。两个可能：那个实例刚被交接放过收尾（它按「已交接」跳过了拆机），那就停掉、
-                    // 把拆机补上，再谈重开；或者前一场已经把自己收干净了（_current 不再是它，闸门放开前
-                    // 就拆完了），那这里什么都不用做 —— 别再拆一次。
-                    await StopCurrentAsync().ConfigureAwait(false);
-                    if (ReferenceEquals(_current, takeover)) await ReleaseAsync(takeover).ConfigureAwait(false);
-                }
-
-                var backend = backendFactory();
-                handle = await backend.StartAsync(request, cancellationToken).ConfigureAwait(false);
-                _current = handle;
-                _swapGeneration[handle] = generation;
-                Subscribe(handle);
-            }
-
-            RaiseNowPlaying(ticket.Item);
-
-            await ReportAsync(scope, "开始", client => client.ReportPlaybackStartAsync(
-                Build(request, playSessionId, ticket.StartTicks, false, null), cancellationToken)).ConfigureAwait(false);
-
-            // 「进度够到标记已看阈值就补报一次播放停止」那一趟的一次闸，一场一个（见 StopReportGate）。
-            // 进度循环那一拍与播放器状态流那一拍都会来敲它，敲成一次就锁死；收尾也要读它 —— 报过一次就
-            // 不再报第二遍（用户令 2026-09-29：「本次播放报过一次就不必再报了」）。
-            var stopReport = new StopReportGate();
-
-            PlaybackExit exit;
-            try
-            {
-                exit = await MonitorAsync(scope, handle, request, playSessionId, ticket, cancellationToken, generation,
-                    stopReport).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // 关窗那条路把 MonitorAsync 的令牌取消了，取消一抛出来，下面那句 FinishAsync 就整个被跳过：
-                // 服务器收不到「停止」、条目一直挂成「正在播放」，外部 mpv.exe 更是人在客户端没了它还在放 ——
-                // 恰是这个类注释里写着 v1 因此要重写的那件事，从取消这头又漏回来了。所以收尾照样走：请 mpv
-                // 停下来（等不到就杀），拿最后的位置装成一次普通的「用户叫停」，FinishAsync 的三处上报用的
-                // 都是 CancellationToken.None，取消之后仍发得出去。
-                try
-                {
-                    await handle.StopAsync().ConfigureAwait(false);
-                }
-                catch (Exception stopError)
-                {
-                    Log.Warn(Category, "收尾停止播放失败", stopError);
-                }
-
-                double? position = null;
-                try
-                {
-                    position = await handle.GetPositionAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception positionError)
-                {
-                    Log.Warn(Category, "收尾读取播放位置失败", positionError);
-                }
-
-                exit = new PlaybackExit(PlaybackEndReason.Stopped, position, 0, null);
-            }
-
-            return await FinishAsync(scope, exit, request, playSessionId, ticket, stopReport.Reported).ConfigureAwait(false);
-        }
-        finally
-        {
-            // 交接给下一集的那一跑什么都不拆：句柄、订阅、_current 都留着 —— 下一拍的事件正用着它们，
-            // 而 mpv 还活着（那正是「不关窗」）。其余情况按老样子把这一跑收干净。
-            if (handle is not null && !handle.WasHandedOver)
-            {
-                _swapGeneration.Remove(handle);
-                await ReleaseAsync(handle).ConfigureAwait(false);
-            }
-
-            _launchOptions = [];
-            _launchGroupOptionCount = 0;
-            LaunchShaderProfile = null;
-            LaunchShaderReason = null;
-            LaunchQualityPreset = null;
-            PlayingSource = null;
-            RaiseNowPlaying(null);
-            _gate.Release();
-        }
-    }
-
-    /// <summary>
-    /// 把一个句柄按收尾的次序拆干净：退订、释放、清掉 <c>_current</c>。两处用它 —— 每次播放的收尾，
-    /// 以及换片快路让位时补的那一刀（那一跑的收尾按「已交接」跳过了这一节，再没人补就既漏水又占着
-    /// <c>_current</c>）。
-    /// <para>
-    /// 清理不是播放结果。句柄释放失败从前会从 finally 里抛出去，一下坏三件事：它顶掉 try 里真正的
-    /// 结果或错误、跳过后面那几行清空、而且跳过最后那一句 <c>_gate.Release()</c> —— 也就是上面那段注释
-    /// 描述的闸门泄漏，只是从另一头进来的。所以它只记一条日志。
-    /// </para>
-    /// </summary>
     private async Task ReleaseAsync(IPlaybackHandle handle)
     {
         if (ReferenceEquals(_current, handle)) _current = null;
-        Unsubscribe(handle);
-
-        try
-        {
-            await handle.DisposeAsync().ConfigureAwait(false);
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "释放播放句柄失败", error);
-        }
+        try { await handle.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception error) { Log.Warn(Category, "释放播放句柄失败", error); }
     }
 
-    /// <summary>
-    /// 发「现在播的是谁」这一声，一个监听器一个监听器地发，谁抛了都不连累别人。
-    /// <para>
-    /// 裸的多播调用在第一个抛异常的监听器那里就停了，后面的一个都收不到；而结束那一声正好发在
-    /// <see cref="PlayAsync"/> 的 finally 里，从那儿抛出去的异常会顶掉这次播放真正的结果或错误，还会跳过它
-    /// 后面的每一行 —— 包括 <c>_gate.Release()</c>，于是此后每一次播放都在等一个永远不会放开的闸门。
-    /// </para>
-    /// <para>
-    /// 只有这一个事件这么发。它一次播放响两声，而 <see cref="StatusChanged"/> 一秒响很多次，
-    /// 为它每次都取一遍委托名单（<c>GetInvocationList</c> 每次新建一个数组）不划算。
-    /// </para>
-    /// </summary>
-    private void RaiseNowPlaying(EmbyItem? item)
+    private static async Task StopHandleAsync(IPlaybackHandle handle)
     {
-        if (NowPlayingChanged is not { } listeners) return;
+        try { await Task.Run(handle.StopAsync).ConfigureAwait(false); }
+        catch (Exception error) { Log.Warn(Category, "停止播放失败", error); }
+    }
 
+    private static void Raise<T>(Action<T>? listeners, T value)
+    {
+        if (listeners is null) return;
         foreach (var listener in listeners.GetInvocationList())
         {
-            try
-            {
-                ((Action<EmbyItem?>)listener)(item);
-            }
-            catch (Exception error)
-            {
-                Log.Warn(Category, "「正在播放」通知失败", error);
-            }
+            try { ((Action<T>)listener)(value); }
+            catch (Exception error) { Log.Warn(Category, "播放通知失败", error); }
         }
     }
 
-    /// <summary>
-    /// Forwards the backend's live state under this service's own events, so the UI subscribes
-    /// once at startup instead of re-wiring itself around every handle that comes and goes.
-    /// </summary>
-    private void Subscribe(IPlaybackHandle handle)
+    private void RaiseNowPlaying(EmbyItem? item, long generation)
     {
-        if (handle is not IPlayerControl control) return;
-
-        control.StatusChanged += OnStatusChanged;
-        control.TracksChanged += OnTracksChanged;
-
-        if (handle is IPlayerHostMessages host) host.HostMessageReceived += OnHostMessage;
+        Raise(NowPlayingUpdated, new PlaybackUpdate<EmbyItem?>(generation, item));
+        Raise(NowPlayingChanged, item);
     }
 
-    private void Unsubscribe(IPlaybackHandle handle)
-    {
-        if (handle is not IPlayerControl control) return;
+    private bool IsCurrent(PlayingAttempt attempt) => ReferenceEquals(_active, attempt) && !attempt.Ending;
 
-        control.StatusChanged -= OnStatusChanged;
-        control.TracksChanged -= OnTracksChanged;
-
-        if (handle is IPlayerHostMessages host) host.HostMessageReceived -= OnHostMessage;
-    }
-
-    private void OnStatusChanged(PlayerStatus status) => StatusChanged?.Invoke(status);
-
-    private void OnTracksChanged(IReadOnlyList<MpvTrack> tracks) => TracksChanged?.Invoke(tracks);
-
-    private void OnHostMessage(string key, string value) => VideoWindowMessage?.Invoke(key, value);
-
-    /// <summary>Stops whatever is playing; safe to call when nothing is.</summary>
-    public async Task StopAsync()
-    {
-        // 用户（或流程）叫停：把还在等待的待启动请求作废。已建立的播放照常收尾上报。
-        _pendingRequest++;
-
-        await StopCurrentAsync().ConfigureAwait(false);
-    }
-
-    /// <summary>只停当前句柄，不动待启动编号 —— 换片腾场、计划失败收尾这些内部路径用。</summary>
-    private async Task StopCurrentAsync()
-    {
-        var handle = _current;
-        if (handle is null) return;
-
-        try
-        {
-            await handle.StopAsync().ConfigureAwait(false);
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "停止播放失败", error);
-        }
-    }
+    // A batch must retain both handle and generation: inline switching deliberately reuses the handle.
+    private bool IsCurrent(IPlaybackHandle handle, long generation) =>
+        ReferenceEquals(_current, handle) && Generation == generation && _active is { Ending: false };
 
     // ---- runtime control --------------------------------------------------------
 
-    // The calls below are the live control channel the now-playing bar uses. Every one of them
-    // is best-effort: playback may end between the null check and the call, and a handle that
-    // is being torn down must not be touched. All failures just leave the UI as it was.
+    /// <summary>
+    /// Applies a wheel/arrow volume step <b>relatively in the kernel</b>, then reads the applied level
+    /// back. A step computed from the displayed value would go out as an absolute command, and the
+    /// display can legitimately be this playback's launch volume while no real kernel reading has
+    /// arrived yet — an unintended 「down」 step would then raise the level (independent review,
+    /// 2026-10-04). The returned double is the kernel's own level after the step; null means the step
+    /// was not applied and the caller must not treat its intent as fact.
+    /// </summary>
+    public async Task<double?> AdjustVolumeAsync(double step)
+    {
+        var handle = _current;
+        var generation = Generation;
+        if (!double.IsFinite(step) || handle is not IPlayerControl control || !handle.HasControlChannel) return null;
+
+        bool Current() => ReferenceEquals(_current, handle) && generation == Generation && handle.HasControlChannel;
+        await _volumeCommandGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!Current()) return null;
+            if (!await control.CommandAsync(
+                ["add", "volume", step.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)],
+                CancellationToken.None).ConfigureAwait(false) || !Current()) return null;
+            var actual = await handle.GetNumberAsync("volume", CancellationToken.None).ConfigureAwait(false);
+            if (!Current() || actual is not { } level || !double.IsFinite(level)) return null;
+            return Current() ? level : null;
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "调整音量失败", error);
+            return null;
+        }
+        finally { _volumeCommandGate.Release(); }
+    }
+
+    /// <summary>Confirms an absolute volume level; false when the command could not be verified.</summary>
+    public async Task<bool> SetVolumeAsync(double value)
+    {
+        var handle = _current;
+        var generation = Generation;
+        if (handle is not IPlayerControl control || !handle.HasControlChannel
+            || VolumeMemory.Level(value) is not { } level) return false;
+
+        await _volumeCommandGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!ReferenceEquals(_current, handle) || generation != Generation || !handle.HasControlChannel) return false;
+            var accepted = await control.CommandAsync(
+                ["set", "volume", level.ToString(System.Globalization.CultureInfo.InvariantCulture)], CancellationToken.None)
+                .ConfigureAwait(false);
+            return accepted && ReferenceEquals(_current, handle) && generation == Generation && handle.HasControlChannel;
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "设置音量失败", error);
+            return false;
+        }
+        finally { _volumeCommandGate.Release(); }
+    }
+
+    /// <summary>Adjusts in the kernel, then reads the applied seconds without changing global settings.</summary>
+    public async Task<double?> ChangeAudioDelayAsync(double value, bool relative, bool notice = false)
+    {
+        var handle = _current;
+        var generation = Generation;
+        if (!double.IsFinite(value) || handle is not IPlayerControl control || !handle.HasControlChannel) return null;
+
+        bool Current() => ReferenceEquals(_current, handle) && generation == Generation && handle.HasControlChannel;
+        await _audioDelayGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!Current()) return null;
+            var accepted = await control.CommandAsync(
+                [relative ? "add" : "set", "audio-delay", value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)],
+                CancellationToken.None).ConfigureAwait(false);
+            if (!accepted || !Current()) return null;
+            var actual = await handle.GetNumberAsync("audio-delay", CancellationToken.None).ConfigureAwait(false);
+            if (!Current() || actual is not { } seconds || !double.IsFinite(seconds)) return null;
+            if (notice)
+                await control.CommandAsync(
+                    ["show-text", "音频延迟：${audio-delay} 秒", "1200"], CancellationToken.None).ConfigureAwait(false);
+            return Current() ? seconds : null;
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "调整音频延迟失败", error);
+            return null;
+        }
+        finally { _audioDelayGate.Release(); }
+    }
 
     public async Task ExitNativeFullscreenOrStopAsync()
     {
         var handle = _current;
+        var generation = Generation;
         if (handle?.PictureInHostWindow != false) return;
-
-        var fullscreen = await GetTextAsync(handle, "fullscreen").ConfigureAwait(false);
-        if (!ReferenceEquals(_current, handle)) return;
-        if (fullscreen == "yes")
-        {
-            await SetPropertyAsync(handle, "fullscreen", false).ConfigureAwait(false);
-            return;
-        }
-
-        // A failed state read must not turn an exit-fullscreen request into a stop.
-        if (fullscreen != "no") return;
-        try
-        {
-            await handle.StopAsync().ConfigureAwait(false);
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "退出原生播放窗口失败", error);
-        }
+        var fullscreen = await GetTextAsync(handle, generation, "fullscreen").ConfigureAwait(false);
+        if (!IsCurrent(handle, generation)) return;
+        if (fullscreen == "yes") await SetPropertyAsync(handle, generation, "fullscreen", false).ConfigureAwait(false);
+        else if (fullscreen == "no") await StopAsync().ConfigureAwait(false);
     }
 
     public Task SetPropertyAsync(string name, object? value)
     {
         var handle = _current;
-        return handle is null ? Task.CompletedTask : SetPropertyAsync(handle, name, value);
+        return handle is null ? Task.CompletedTask : SetPropertyAsync(handle, Generation, name, value);
     }
 
-    /// <summary>
-    /// 截图保存目录改了，推给正在播的那一部片子 —— mpv 的 <c>screenshot-directory</c> 属性，改完当场生效，
-    /// 画面菜单那三档截图从下一张起就落进新目录，菜单副标题里展开的也是它。没在播就什么都不做；下一部片子
-    /// 由计划层从设置里读（<see cref="PlaybackPlanner.ScreenshotDirectory"/>），走不到这里。
-    /// <para>
-    /// 设置页拿到的是这一个方法而不是 <see cref="PlaybackService"/> 本身 —— 同
-    /// <see cref="ApplySubtitleStyleAsync"/> 那条缝：一页要的是「重发一个目录」这一件事，不是播放器。进来的
-    /// 值应当是裁决过的（<see cref="Infrastructure.AppPaths.ResolveScreenshotDirectory"/>），包括「回到装机
-    /// 落点」的那一次 —— 清空设置框推回来的就是默认目录，两头的账才对得上。
-    /// </para>
-    /// </summary>
-    public Task ApplyScreenshotDirectoryAsync(string directory) =>
-        SetPropertyAsync("screenshot-directory", directory);
+    public Task ApplyScreenshotDirectoryAsync(string directory) => SetPropertyAsync("screenshot-directory", directory);
 
-    /// <summary>
-    /// 写给<b>点名的那个句柄</b>，而且只在它还是当前这一次播放的时候写。
-    /// <para>
-    /// 成批地写不是一次写：字幕外观十一行、着色器档位一整条链，每一行都是一次 await，中间用户完全来得及
-    /// 切下一集。每一步都重新问一次「现在在播什么」的话，切集之后剩下那几行就写到了下一集身上 —— 上一部
-    /// 片子的字幕外观落在新片子上，而设置页显示的是新片子的值，正是这个项目栽过的「一个选项两个写手」。
-    /// 所以一批设置进门时认下句柄，一路认到底；句柄换了，这一批剩下的就地作废。
-    /// </para>
-    /// </summary>
-    private async Task SetPropertyAsync(IPlaybackHandle handle, string name, object? value)
+    private async Task SetPropertyAsync(IPlaybackHandle handle, long generation, string name, object? value)
     {
-        if (!ReferenceEquals(_current, handle)) return;
-
-        try
-        {
-            await handle.SetPropertyAsync(name, value, CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, $"设置 mpv 属性 {name} 失败", error);
-        }
+        if (!IsCurrent(handle, generation)) return;
+        try { await handle.SetPropertyAsync(name, value, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception error) { Log.Warn(Category, $"设置 mpv 属性 {name} 失败", error); }
     }
 
-    /// <summary>
-    /// 字幕外观改了，推给正在播的那一部片子。没在播就什么都不做。
-    /// <para>
-    /// <b>每一个选项都显式发一遍，包括那几行「不设置」的。</b> 起播那条路上「不设置」等于什么都不发，让
-    /// mpv 自己的默认值站住；而在一个已经跑起来的播放器上，「什么都不发」等于「沿用我刚才发过的那个值」——
-    /// 也就是把一行从「亮黄」改回「不设置」，屏上还是亮黄。所以这里把
-    /// <see cref="MpvOutputOptions.SubtitleStyleOptions"/> 走一遍，设置里不再指定的那几个就问 mpv 要它自己
-    /// 的默认值，再发回去。问 mpv 而不是在代码里抄一份默认值表：那张表这个项目已经抄错过一次
-    /// （字号写的 55，实际是 38）。
-    /// </para>
-    /// <para>
-    /// 字幕编码和图形字幕拉伸不在这条路上：编码是解码字幕那一刻用的，改了要重载字幕才算；拉伸要看片源的
-    /// 画幅，那是起播时才知道的事。这两行只能下次播放生效，设置页上就那么写。
-    /// </para>
-    /// </summary>
+    /// <summary>Unspecified live options restore mpv defaults; omitting a write would keep the old value.</summary>
     public async Task ApplySubtitleStyleAsync()
     {
-        // 整批认这一个句柄，见 SetPropertyAsync(handle, …)：这中间有十一次 await，用户切得了集。
         if (_current is not { } handle) return;
-
+        var generation = Generation;
+        var revision = Interlocked.Increment(ref _subtitleStyleRevision);
         var wanted = MpvOutputOptions.SubtitleAppearance(settings.Playback)
             .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
+        bool Current() => ReferenceEquals(_current, handle) && Generation == generation
+            && Volatile.Read(ref _subtitleStyleRevision) == revision;
 
-        foreach (var name in MpvOutputOptions.SubtitleStyleOptions)
+        await _subtitleStyleGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            var value = wanted.TryGetValue(name, out var chosen)
-                ? chosen
-                : await GetTextAsync(handle, $"option-info/{name}/default-value").ConfigureAwait(false);
+            if (!Current()) return;
+            var plan = new List<KeyValuePair<string, string>>(MpvOutputOptions.SubtitleStyleOptions.Count);
+            var unavailable = new List<string>();
+            foreach (var name in MpvOutputOptions.SubtitleStyleOptions)
+            {
+                if (!Current()) return;
+                var value = wanted.TryGetValue(name, out var chosen)
+                    ? chosen
+                    : await GetTextAsync(handle, generation, $"option-info/{name}/default-value").ConfigureAwait(false);
+                if (!Current()) return;
+                if (value is null)
+                {
+                    var supported = await handle.HasOptionAsync(name, CancellationToken.None).ConfigureAwait(false);
+                    if (!Current()) return;
+                    if (supported == false)
+                    {
+                        Log.Info(Category, $"当前内核不支持字幕选项 {name}，跳过该项");
+                    }
+                    else unavailable.Add(name);
+                    continue;
+                }
+                plan.Add(new(name, value));
+            }
 
-            if (!string.IsNullOrEmpty(value)) await SetPropertyAsync(handle, name, value).ConfigureAwait(false);
+            foreach (var (name, value) in plan)
+            {
+                if (!Current()) return;
+                try
+                {
+                    if (handle is IPlayerControl control)
+                    {
+                        if (!await control.CommandAsync(["set", name, value], CancellationToken.None).ConfigureAwait(false))
+                            unavailable.Add(name);
+                    }
+                    else await handle.SetPropertyAsync(name, value, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception error)
+                {
+                    Log.Warn(Category, $"应用字幕选项 {name} 失败", error);
+                    unavailable.Add(name);
+                }
+            }
+            if (Current() && unavailable.Count > 0)
+                throw new InvalidOperationException($"部分字幕外观未应用：{string.Join("、", unavailable)}。已保存的偏好仍会用于下次播放。");
         }
+        finally { _subtitleStyleGate.Release(); }
     }
 
     public async Task<IReadOnlyList<MpvTrack>> GetTracksAsync()
     {
         var handle = _current;
         if (handle is null) return [];
-
+        var generation = Generation;
         try
         {
-            return await handle.GetTracksAsync(CancellationToken.None).ConfigureAwait(false);
+            var tracks = await handle.GetTracksAsync(CancellationToken.None).ConfigureAwait(false);
+            return IsCurrent(handle, generation) ? tracks : [];
         }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "读取 mpv 轨道列表失败", error);
-            return [];
-        }
+        catch (Exception error) { Log.Warn(Category, "读取 mpv 轨道列表失败", error); return []; }
     }
 
-    /// <summary>
-    /// mpv's own chapter marks in one read — the call that replaced the skip-section refinement's
-    /// two reads per chapter, see <see cref="IPlaybackHandle.GetChaptersAsync"/>. Empty when
-    /// nothing is playing, the list is not up yet, or the backend could not answer; the caller
-    /// treats empty as 「not ready」 and keeps polling either way.
-    /// </summary>
     public async Task<IReadOnlyList<SkipChapter>> GetChaptersAsync()
     {
         var handle = _current;
         if (handle is null) return [];
-
+        var generation = Generation;
         try
         {
-            return await handle.GetChaptersAsync(CancellationToken.None).ConfigureAwait(false);
+            var chapters = await handle.GetChaptersAsync(CancellationToken.None).ConfigureAwait(false);
+            return IsCurrent(handle, generation) ? chapters : [];
         }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "读取 mpv 章节列表失败", error);
-            return [];
-        }
+        catch (Exception error) { Log.Warn(Category, "读取 mpv 章节列表失败", error); return []; }
     }
 
     public async Task<double?> GetNumberAsync(string name)
     {
         var handle = _current;
         if (handle is null) return null;
-
+        var generation = Generation;
         try
         {
-            return await handle.GetNumberAsync(name, CancellationToken.None).ConfigureAwait(false);
+            var value = await handle.GetNumberAsync(name, CancellationToken.None).ConfigureAwait(false);
+            return IsCurrent(handle, generation) ? value : null;
         }
-        catch (Exception error)
-        {
-            Log.Warn(Category, $"读取 mpv 属性 {name} 失败", error);
-            return null;
-        }
+        catch (Exception error) { Log.Warn(Category, $"读取 mpv 属性 {name} 失败", error); return null; }
     }
 
-    /// <summary>
-    /// A property as mpv's own text. Feeds the statistics panel, which is read repeatedly while it
-    /// is open — so a property mpv does not have comes back null and is left out, without a log line
-    /// per second complaining about it.
-    /// </summary>
     public Task<string?> GetTextAsync(string name)
     {
         var handle = _current;
-        return handle is null ? Task.FromResult<string?>(null) : GetTextAsync(handle, name);
+        return handle is null ? Task.FromResult<string?>(null) : GetTextAsync(handle, Generation, name);
     }
 
-    /// <summary>
-    /// 问<b>点名的那个句柄</b>，而且只在它还是当前这一次播放的时候问。同
-    /// <see cref="SetPropertyAsync(IPlaybackHandle, string, object?)"/> 的理由：一批设置里「读一个默认值、
-    /// 再把它写出去」是两次 await，中间切了集的话，读回来的是上一部片子的答案，写出去的却是下一部片子。
-    /// </summary>
-    private async Task<string?> GetTextAsync(IPlaybackHandle handle, string name)
+    private async Task<string?> GetTextAsync(IPlaybackHandle handle, long generation, string name)
     {
-        if (!ReferenceEquals(_current, handle)) return null;
-
+        if (!IsCurrent(handle, generation)) return null;
         try
         {
-            return await handle.GetTextAsync(name, CancellationToken.None).ConfigureAwait(false);
+            var value = await handle.GetTextAsync(name, CancellationToken.None).ConfigureAwait(false);
+            return IsCurrent(handle, generation) ? value : null;
         }
-        catch (Exception error)
-        {
-            Log.Warn(Category, $"读取 mpv 属性 {name} 失败", error);
-            return null;
-        }
+        catch (Exception error) { Log.Warn(Category, $"读取 mpv 属性 {name} 失败", error); return null; }
     }
 
-    /// <summary>
-    /// Runs one mpv command — <c>cycle pause</c>, <c>seek 10</c>, <c>frame-step</c>. This is how
-    /// every button and key in the player chrome acts: mpv's own command vocabulary, so nothing
-    /// in between has to grow a method per control.
-    /// <para>
-    /// False when mpv refused it, when there is no control channel to send it down, or when the call threw.
-    /// Most callers are buttons that have nothing to do with the answer and ignore it; the one that needs it is
-    /// the 画面 menu, which used to announce 「已保存到 …」 for a screenshot mpv had just declined to write.
-    /// </para>
-    /// </summary>
     public async Task<bool> CommandAsync(params string[] arguments)
     {
         if (_current is not IPlayerControl control) return false;
-
-        try
-        {
-            return await control.CommandAsync(arguments, CancellationToken.None).ConfigureAwait(false);
-        }
+        try { return await control.CommandAsync(arguments, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception error)
         {
-            Log.Warn(Category, $"执行 mpv 命令 {string.Join(' ', arguments)} 失败", error);
+            Log.Warn(Category, $"执行 mpv 命令 {(arguments.Length > 0 ? arguments[0] : "空命令")} 失败", error);
             return false;
         }
     }
 
-    /// <summary>
-    /// Swaps the active 着色器档位 mid-playback, scalers included. A chain is only as good as the scalers it was
-    /// tuned around, so applying just its <c>glsl-shaders</c> would give a different picture than choosing the
-    /// same chain before playing.
-    /// <para>
-    /// What to set is <see cref="ShaderSwitch.Options"/>'s to decide — including the part that makes a switch
-    /// land on 画质预设 rather than on mpv's factory defaults. All that is left here is sending it, which is the
-    /// half a unit test cannot reach.
-    /// </para>
-    /// </summary>
     public async Task<bool> SetShaderGroupAsync(ShaderGroup? group)
     {
         var handle = _current;
         if (handle is not IPlayerControl control || !handle.HasControlChannel) return false;
         var generation = _playbackGeneration;
-        var launch = _launchOptions;
-        var chainCount = _launchGroupOptionCount;
+        await _shaderGate.WaitAsync().ConfigureAwait(false);
+        var before = new Dictionary<string, string>(StringComparer.Ordinal);
+        var changed = new List<string>();
+        var stateWasKnown = ShaderStateKnown;
         try
         {
+            if (!Current()) return false;
+            if (group is not null && group.ResolveShaderPaths(ShaderGroupCatalog.ShaderRoot).Any(path => !File.Exists(path)))
+                throw new InvalidOperationException("目标着色器链缺少文件，未改变当前配置");
+            var launch = _launchOptions;
+            var chainCount = _launchGroupOptionCount;
             var profiles = await handle.GetTextAsync("profile-list", CancellationToken.None).ConfigureAwait(false);
+            if (!Current()) return false;
             var defaults = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (name, neutral) in ShaderGroupCatalog.NeutralOptions)
-                defaults[name] = await handle.GetTextAsync($"option-info/{name}/default-value", CancellationToken.None)
-                    .ConfigureAwait(false) ?? neutral;
+            foreach (var (name, _) in ShaderGroupCatalog.NeutralOptions)
+            {
+                if (name == "glsl-shaders")
+                {
+                    defaults[name] = "";
+                    continue;
+                }
+                var value = await handle.GetTextAsync($"option-info/{name}/default-value", CancellationToken.None).ConfigureAwait(false);
+                if (!Current()) return false;
+                if (value is null) throw new InvalidOperationException($"读不到 {name} 的恢复基线");
+                defaults[name] = value;
+            }
             var options = ShaderSwitch.Options(launch, chainCount, group, ShaderGroupCatalog.ShaderRoot, profiles, defaults);
+            foreach (var (name, _) in options)
+            {
+                string? value;
+                if (name == "glsl-shaders")
+                {
+                    var paths = await handle.GetStringListAsync(name, CancellationToken.None).ConfigureAwait(false);
+                    value = paths is null ? null : MpvListValue.JoinFiles(paths);
+                }
+                else value = await handle.GetTextAsync(name, CancellationToken.None).ConfigureAwait(false);
+                if (!Current()) return false;
+                if (value is null) throw new InvalidOperationException($"读不到 {name} 的切换前状态");
+                before[name] = value;
+            }
             foreach (var (name, value) in options)
             {
-                if (!ReferenceEquals(_current, handle) || generation != _playbackGeneration) return false;
+                if (!Current()) return false;
+                changed.Add(name);
                 if (!await control.CommandAsync(["set", name, value], CancellationToken.None).ConfigureAwait(false))
-                {
-                    Log.Warn(Category, $"着色器切换未完成：播放器拒绝 {name}");
-                    return false;
-                }
+                    throw new InvalidOperationException($"播放器拒绝 {name}");
             }
-            if (!ReferenceEquals(_current, handle) || generation != _playbackGeneration) return false;
+            if (!Current()) return false;
+            ShaderStateKnown = true;
             Log.Info(Category, group is null ? "已关闭着色器" : $"已切换着色器档位：{group.Name}");
             return true;
         }
         catch (Exception error)
         {
-            Log.Warn(Category, "着色器切换失败", error);
+            var restored = true;
+            foreach (var name in changed.AsEnumerable().Reverse())
+            {
+                if (!Current()) return false;
+                try
+                {
+                    restored &= await control.CommandAsync(["set", name, before[name]], CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception rollbackError)
+                {
+                    restored = false;
+                    Log.Warn(Category, $"着色器回滚 {name} 失败", rollbackError);
+                }
+            }
+            if (Current()) ShaderStateKnown = restored && stateWasKnown;
+            Log.Warn(Category, restored ? "着色器切换失败，保留切换前状态" : "着色器切换与回滚均未完成，实际状态未知", error);
             return false;
         }
+        finally { _shaderGate.Release(); }
+
+        bool Current() => ReferenceEquals(_current, handle) && generation == _playbackGeneration;
     }
 
-    /// <summary>
-    /// 到阈值补报那一档百分比：国漫走国漫那一档，其余走全局那一档（用户令 2026-09-29：「发送通知的判断标准
-    /// 改为播放行为中的 标记已观看阈值(%)，要区分国漫」）。国漫判定是计划层算好带在票上的
-    /// （<see cref="PlaybackRequest.IsDonghua"/>），这里只管按哪一档取数 —— 与 <see cref="ShouldMarkWatched"/>
-    /// 取的是同两个数，所以「到阈值补报」和「结束时标记已看」认的是同一条线。
-    /// </summary>
     internal static int StopReportPercent(bool isDonghua, int markWatchedPercent, int donghuaMarkWatchedPercent) =>
         isDonghua ? donghuaMarkWatchedPercent : markWatchedPercent;
 
-    /// <summary>
-    /// 播放进度是不是够到了「补报播放停止」那条线（用户令 2026-09-29，设置项见
-    /// <see cref="Configuration.PlaybackSettings.StopReportEnabled"/>）。纯函数，单测直接摆矩阵。
-    /// <para>
-    /// 落在线上就算够到（<c>&gt;=</c>），夹取范围与 <see cref="ShouldMarkWatched"/> 同一个 —— 两处认同一条线，
-    /// 才不会出现「报了却没标已看」或者反过来。
-    /// </para>
-    /// <para>
-    /// 时长读不到（<c>runTimeTicks &lt;= 0</c>）时不报：没有分母就谈不上百分比，硬报出去的是猜的。
-    /// 直播、还没解析出时长的片子都会落到这一档。
-    /// </para>
-    /// <para>
-    /// <b>只看位置在不在线以上，不问它是怎么到那儿的</b>：「一路看过去」与「拖进度条直接跳进阈值区间」是同
-    /// 一件事（用户令 2026-09-29 的第二条正是后者）。跨线那一套判据在这里反而会漏 —— 循环转回已看过的位置、
-    /// 或者续播点本来就在区间里，都不会产生一次「跨」。
-    /// </para>
-    /// </summary>
-    internal static bool ShouldReportStop(long positionTicks, long runTimeTicks, bool enabled, int percent)
-    {
-        if (!enabled || runTimeTicks <= 0) return false;
-
-        var threshold = Math.Clamp(percent, MarkWatchedFloor, 100) / 100d;
-        return positionTicks >= runTimeTicks * threshold;
-    }
-
-    /// <summary>
-    /// 这一场「到阈值补报播放停止」的一次闸（界面上那一格叫「通知接管」）。为什么要有它：这一趟会被两处发令
-    /// —— 进度循环那一拍（每
-    /// <see cref="Configuration.PlaybackSettings.ProgressReportIntervalSeconds"/> 秒一次），与播放器状态流
-    /// 那一拍（mpv 每帧报位置、由 <see cref="StatusCoalescer"/> 压到 0.25 秒一次，跳进度条那一刻就来）。
-    /// 用户要的是「触发<b>一次</b>」，两处又跑在两个线程上（计时器一个、mpv 事件线程一个），所以状态自己
-    /// 带着同步：0＝还没试过，1＝正在报，2＝报成了。
-    /// <para>
-    /// 报失败退回 0，下一拍还会再来一次（服务器的错不该让这一格整个哑掉）；报成就锁死 —— 此后进度、暂停、
-    /// 收尾都不再往外发。这一场结束时这个对象随 <see cref="PlayOneAsync"/> 一起丢掉，下一场是新的。
-    /// </para>
-    /// </summary>
-    private sealed class StopReportGate
-    {
-        private int _state;
-
-        /// <summary>抢这一趟。true＝这一趟归你报；false＝别人正在报，或者已经报成了。</summary>
-        public bool TryClaim() => Interlocked.CompareExchange(ref _state, 1, 0) == 0;
-
-        public void MarkReported() => Volatile.Write(ref _state, 2);
-
-        public void MarkFailed() => Volatile.Write(ref _state, 0);
-
-        /// <summary>报成了没有。三处都读它：这一场的进度、暂停、收尾。</summary>
-        public bool Reported => Volatile.Read(ref _state) == 2;
-    }
-
-    private async Task<PlaybackExit> MonitorAsync(
-        EmbySessionScope scope,
-        IPlaybackHandle handle,
-        PlaybackRequest request,
-        string playSessionId,
-        PlaybackTicket ticket,
-        CancellationToken cancellationToken,
-        long generation,
-        StopReportGate stopReport)
-    {
-        var interval = TimeSpan.FromSeconds(Math.Clamp(settings.Playback.ProgressReportIntervalSeconds, 1, 60));
-        var exitTask = handle.WaitForExitAsync(cancellationToken);
-
-        // 到阈值补报这一场的三件常量。开关问两处：用户那一格，以及「上报播放进度到服务器」总开关 ——
-        // 总开关关着时 ReportAsync 在门口就退回 false，报不成还会被每一拍接着试，不如先问清楚。
-        // 百分比走 StopReportPercent（国漫单独一档），与收尾标记已看取同一条线。
-        var stopReportEnabled = settings.Playback.StopReportEnabled && settings.Playback.ReportProgressToServer;
-        var stopReportPercent = StopReportPercent(
-            request.IsDonghua, settings.Playback.MarkWatchedPercent, settings.Playback.DonghuaMarkWatchedPercent);
-
-        // 到阈值补报那一趟。本场只报一次：闸抢到手才算这一趟归我（状态流与进度循环两条路都会来敲），
-        // 报失败了把闸放回去让下一拍再试，报成了就锁死。
-        async Task ReportStopAsync(long ticks)
-        {
-            if (!stopReport.TryClaim()) return;
-
-            var reported = await ReportAsync(scope, "到阈值补报停止", client =>
-                client.ReportPlaybackStoppedAsync(
-                    Build(request, playSessionId, ticks, false, null), CancellationToken.None))
-                .ConfigureAwait(false);
-
-            if (!reported)
-            {
-                stopReport.MarkFailed();
-                return;
-            }
-
-            stopReport.MarkReported();
-            Log.Info(Category,
-                $"《{request.Title}》进度已到「标记已看」阈值 {stopReportPercent}%"
-                + (request.IsDonghua ? "（国漫那一档）" : "")
-                + "，已向服务器补报一次「播放停止」（本场此后不再发进度，收尾也不再报第二遍）");
-        }
-
-        // fire-and-forget 的暂停上报必须带上本场代次：停止或换片之后，旧片迟到的读数不许再写状态、
-        // 不许再向服务器发进度 —— 退出事件只退订后续，撤不掉已经在飞的那一趟。到阈值结过账之后也一样，
-        // 所以把那一场的闸一并交给它：那是同一趟上报要不要发的问题，只是晚了一拍才问。
-        void OnPauseChanged(bool paused) =>
-            _ = ReportPauseAsync(scope, handle, request, playSessionId, paused, generation, stopReport);
-
-        handle.PauseChanged += OnPauseChanged;
-
-        // 播放器自己的状态流：位置一变就来问一次阈值 —— 「从进度条直接跳进阈值区间」靠的是这一路。进度
-        // 循环那拍是好几秒一次，跳进去又拖回来可能整段错过；状态流由 mpv 每帧报位置、压到 0.25 秒一次，
-        // 跳完那一刻就报得出去。没有控制通道的句柄不推它（位置本来也读不到），判据同 CanControl。
-        Action<PlayerStatus>? onStatus = null;
-        if (handle.HasControlChannel && handle is IPlayerControl control)
-        {
-            onStatus = status =>
-            {
-                if (!status.HasPosition || stopReport.Reported) return;
-
-                var ticks = TimeFormat.ToTicks(status.Position);
-                if (!ShouldReportStop(ticks, request.RunTimeTicks, stopReportEnabled, stopReportPercent)) return;
-
-                _ = ReportStopAsync(ticks);
-            };
-
-            control.StatusChanged += onStatus;
-        }
-
-        try
-        {
-            using var timer = new PeriodicTimer(interval);
-
-            while (true)
-            {
-                var tick = timer.WaitForNextTickAsync(cancellationToken).AsTask();
-                if (await Task.WhenAny(exitTask, tick).ConfigureAwait(false) == exitTask) break;
-                if (_swapGeneration.GetValueOrDefault(handle) != generation) break;
-
-                var position = await handle.GetPositionAsync(cancellationToken).ConfigureAwait(false);
-                if (position is null) continue;
-                if (_swapGeneration.GetValueOrDefault(handle) != generation) break;
-
-                var ticks = TimeFormat.ToTicks(position.Value);
-                ProgressChanged?.Invoke(new PlaybackProgress(
-                    ticks, request.RunTimeTicks, handle.IsPaused, request.Title, generation));
-
-                // 够到阈值这一拍先补报「播放停止」，再决定要不要发这一拍的进度。状态流那一头可能已经报过，
-                // 闸自己认得出来（抢不到就当场返回）。
-                if (!stopReport.Reported && ShouldReportStop(
-                        ticks, request.RunTimeTicks, stopReportEnabled, stopReportPercent))
-                {
-                    await ReportStopAsync(ticks).ConfigureAwait(false);
-                }
-
-                // 报过一次就不再喂进度（用户令 2026-09-29：「本次播放报过一次就不必再报了」）：服务器收到
-                // Stopped 就把这条会话结掉了，再发 Progress 是把它喊回来，同一条通知也会跟着发第二遍。
-                // 播放本身照常继续，上面那句 ProgressChanged 也照发 —— 停的只是发往服务器的那一路。
-                if (stopReport.Reported) continue;
-                if (_swapGeneration.GetValueOrDefault(handle) != generation) break;
-
-                await ReportAsync(scope, "进度", client => client.ReportPlaybackProgressAsync(
-                    Build(request, playSessionId, ticks, handle.IsPaused, "timeupdate"), cancellationToken))
-                    .ConfigureAwait(false);
-            }
-
-            var exit = await exitTask.ConfigureAwait(false);
-            return exit;
-        }
-        finally
-        {
-            if (onStatus is not null) ((IPlayerControl)handle).StatusChanged -= onStatus;
-            handle.PauseChanged -= OnPauseChanged;
-        }
-    }
-
-    private async Task ReportPauseAsync(
-        EmbySessionScope scope,
-        IPlaybackHandle handle,
-        PlaybackRequest request,
-        string playSessionId,
-        bool paused,
-        long generation,
-        StopReportGate stopReport)
-    {
-        // 迟到防线的第一问：这一场已经被换掉/收尾，读数再准也不属于现在。
-        if (_swapGeneration.GetValueOrDefault(handle) != generation) return;
-
-        // 到阈值已经替服务器结过账了：这一场「播放在哪儿」服务器不再关心，再报一次就是又把会话点亮。
-        if (stopReport.Reported) return;
-
-        // Reported immediately rather than on the next tick: a pause the server learns about
-        // five seconds late shows up as five seconds of phantom playback on other clients.
-        var position = await handle.GetPositionAsync(CancellationToken.None).ConfigureAwait(false);
-
-        if (_swapGeneration.GetValueOrDefault(handle) != generation) return;
-        var ticks = TimeFormat.ToTicks(position ?? 0);
-
-        ProgressChanged?.Invoke(new PlaybackProgress(
-            ticks, request.RunTimeTicks, paused, request.Title, generation));
-
-        await ReportAsync(scope, paused ? "暂停" : "继续", client => client.ReportPlaybackProgressAsync(
-            Build(request, playSessionId, ticks, paused, paused ? "pause" : "unpause"), CancellationToken.None))
-            .ConfigureAwait(false);
-    }
-
-    private async Task<PlaybackResult> FinishAsync(
-        EmbySessionScope scope,
-        PlaybackExit exit,
-        PlaybackRequest request,
-        string playSessionId,
-        PlaybackTicket ticket,
-        bool stopReported)
-    {
-        var positionTicks = ResolveFinalPosition(exit, request, ticket);
-        var watched = ShouldMarkWatched(exit, request, positionTicks);
-
-        var report = Build(request, playSessionId, positionTicks, false, null);
-        report.Failed = exit.IsFailure;
-
-        // 到阈值已经补报过一次「播放停止」的场次，这里不再报第二遍（用户令 2026-09-29：「本次播放报过一次就
-        // 不必再报了」）—— 那一条通知已经发出去了，再报一次只会让服务器上的转发（Webhooks → MoviePilot
-        // 之类）转发第二遍。「标记已看」照走：补报那一刻服务器不一定会替我们把那条切上，而那是这一场的
-        // 正事（条目的已看状态），与通知是两回事。
-        var reported = stopReported || await ReportAsync(scope, "停止", client =>
-            client.ReportPlaybackStoppedAsync(report, CancellationToken.None)).ConfigureAwait(false);
-
-        if (watched)
-        {
-            await ReportAsync(scope, "标记已观看", client =>
-                client.MarkPlayedAsync(request.ItemId, CancellationToken.None)).ConfigureAwait(false);
-        }
-
-        var result = new PlaybackResult(exit, positionTicks, watched, reported);
-        Log.Info(Category, $"《{request.Title}》{result.ToChinese()}，位置 {TimeFormat.Clock(positionTicks)}");
-        return result;
-    }
-
-    /// <summary>
-    /// Reaching the end of the file means the runtime, not whatever the last poll happened to
-    /// see: mpv stops answering time-pos before it exits, so the final poll is usually a second
-    /// or two short and the item would come back as "98% watched".
-    /// </summary>
-    private static long ResolveFinalPosition(PlaybackExit exit, PlaybackRequest request, PlaybackTicket ticket)
-    {
-        if (exit.Reason == PlaybackEndReason.EndOfFile && request.RunTimeTicks > 0) return request.RunTimeTicks;
-        if (exit.PositionSeconds is { } seconds and > 0) return TimeFormat.ToTicks(seconds);
-        return ticket.StartTicks;
-    }
-
-    private bool ShouldMarkWatched(PlaybackExit exit, PlaybackRequest request, long positionTicks)
-    {
-        if (!settings.Playback.ReportProgressToServer) return false;
-        if (exit.Reason == PlaybackEndReason.EndOfFile) return true;
-
-        // Without a control channel there is no position to judge by, and mpv's exit code says
-        // nothing about how much was watched. Guessing from elapsed wall-clock time would mark
-        // a file watched because it was left paused, so nothing is marked at all.
-        if (exit.PositionSeconds is null || request.RunTimeTicks <= 0) return false;
-
-        // 国漫单独一档（用户令 2026-09-26）：判定是计划层算好带在票上的（PlaybackRequest.IsDonghua），
-        // 这里只管按哪一档取数 —— 同一个夹取范围（50–100），两档各自的值。取数与到阈值补报共用
-        // StopReportPercent 那一处，见 2026-09-29 令「判断标准改为播放行为中的 标记已观看阈值(%)」。
-        var percent = StopReportPercent(
-            request.IsDonghua, settings.Playback.MarkWatchedPercent, settings.Playback.DonghuaMarkWatchedPercent);
-        var threshold = Math.Clamp(percent, MarkWatchedFloor, 100) / 100d;
-        return positionTicks >= request.RunTimeTicks * threshold;
-    }
-
-    private PlaybackReport Build(PlaybackRequest request, string playSessionId, long positionTicks, bool paused, string? eventName)
-    {
-        // 音量和静音跟着一起报，因为 Emby 的遥控界面会显示它们。Declared and never assigned until now: 「上报一个
-        // 永远是默认值的字段」比不上报更误导 —— 遥控那一头会显示 100 并且允许照那个数去调。
-        //
-        // 只在有控制通道的时候填：没有通道时 Status 返回的是一份全默认的快照（音量 100、没静音），那不是读数，
-        // 那是一个凑出来的数。null 的意思是「说不出来」，而 Emby 认得这个意思 —— 音量那边它自己的字段就可以为空，
-        // 静音那边不行，所以那一项为空时干脆不写进 JSON（EmbyHttp.Json 的 WhenWritingNull），服务器保留原样，
-        // 而不是被告知「没静音」。两项一起，只改一项的话遥控上还是有一个允许点、点了没用的读数。
-        //
-        // 判据是 HasControlChannel，不是「这个句柄是不是控制类型」—— 外部 mpv.exe 那个句柄**永远**是控制类型，
-        // 通道到底有没有开另由这一位说（设置里把「启用 IPC」关掉时就没有）。只按类型问的话，那条路上报的恰好是
-        // 那份凑出来的快照，也就是这几行本来要消掉的东西。同 CanControl 的判据。
-        var handle = _current;
-        var live = handle is IPlayerControl control && handle.HasControlChannel ? control : null;
-
-        return new PlaybackReport
-        {
-            ItemId = request.ItemId,
-            MediaSourceId = request.MediaSourceId,
-            PlaySessionId = playSessionId,
-            PositionTicks = positionTicks,
-            IsPaused = paused,
-            IsMuted = live?.Status.Muted,
-            VolumeLevel = live is null ? null : (int)Math.Round(Math.Clamp(live.Status.Volume, 0, AudioSettings.MaxVolume)),
-            EventName = eventName,
-            AudioStreamIndex = request.AudioStreamIndex,
-            SubtitleStreamIndex = request.SubtitleStreamIndex
-        };
-    }
-
-    /// <summary>
-    /// A failed report must never interrupt playback: the file is already on screen, and the
-    /// server catching up late is far better than an error dialog over the video.
-    /// <para>
-    /// 上报走本场的身份快照（<see cref="EmbySessionScope"/>）而不是全局会话：影片在 A 上开始，
-    /// 浏览切到 B 后 A 的收尾仍发给 A。退出登录作废 scope，上报失败被记录 —— 与从前一样不打断播放。
-    /// </para>
-    /// </summary>
-    private async Task<bool> ReportAsync(EmbySessionScope scope, string what, Func<EmbyClient, Task> report)
-    {
-        if (!settings.Playback.ReportProgressToServer) return false;
-
-        try
-        {
-            await scope.ExecuteAsync((client, _) => report(client), CancellationToken.None).ConfigureAwait(false);
-            return true;
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, $"向服务器上报「{what}」失败", error);
-            return false;
-        }
-    }
+    internal static bool ShouldReportStop(long positionTicks, long runTimeTicks, bool enabled, int percent) =>
+        enabled && runTimeTicks > 0 && positionTicks >= runTimeTicks * (Math.Clamp(percent, MarkWatchedFloor, 100) / 100d);
 }

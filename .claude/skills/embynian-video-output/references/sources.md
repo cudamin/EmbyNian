@@ -13,10 +13,10 @@
 
 ## 仓库内的依据（改 HDR/杜比相关代码先看这些落点）
 
-- [HdrOptions.cs](../../../src/EmbyNian.Core/Mpv/HdrOptions.cs) — HDR 参数生成：色彩空间接管判定（`OwnsColorSpace`）、映射到 SDR 与 HDR 输出两套、四个亮度事实、杜比/HDR10+ 元数据 vf。
-- [PlayerMenuCatalog.cs](../../../src/EmbyNian.Core/Mpv/PlayerMenuCatalog.cs) — 播放中临时菜单（「HDR 相关」组：映射曲线、动态映射、输出模式、传输特性、参考白；以及插值/截图行的现行写法）。
-- [MpvOutputOptions.cs](../../../src/EmbyNian.Core/Mpv/MpvOutputOptions.cs) — 选项目录与 `Build`：每个下拉的值域、每个说明对应发出的选项名。
-- [MpvProfiles.cs](../../../src/EmbyNian.Core/Mpv/MpvProfiles.cs) / [ShaderSwitch.cs](../../../src/EmbyNian.Core/Mpv/ShaderSwitch.cs) — 画质预设展开与运行时还原的契约。
-- [LibMpvPipelinePolicy.cs](../../../src/EmbyNian.Core/Playback/LibMpvPipelinePolicy.cs) / [MpvRenderCheck.cs](../../../src/EmbyNian.Core/Mpv/MpvRenderCheck.cs) — 管线锁定的 vo/gpu-api 与按事实问的兼容性检查。
+- [HdrOptions.cs](../../../../src/EmbyNian.Core/Mpv/HdrOptions.cs) — HDR 参数生成：色彩空间接管判定（`OwnsColorSpace`）、映射到 SDR 与 HDR 输出两套、四个亮度事实、杜比/HDR10+ 元数据 vf。
+- [PlayerMenuCatalog.cs](../../../../src/EmbyNian.Core/Mpv/PlayerMenuCatalog.cs) — 播放中临时菜单（「HDR 相关」组：映射曲线、动态映射、输出模式、传输特性、参考白；以及插值/截图行的现行写法）。
+- [MpvOutputOptions.cs](../../../../src/EmbyNian.Core/Mpv/MpvOutputOptions.cs) — 选项目录与 `Build`：每个下拉的值域、每个说明对应发出的选项名。
+- [MpvProfiles.cs](../../../../src/EmbyNian.Core/Mpv/MpvProfiles.cs) / [ShaderSwitch.cs](../../../../src/EmbyNian.Core/Mpv/ShaderSwitch.cs) — 画质预设展开与运行时还原的契约。
+- [LibMpvPipelinePolicy.cs](../../../../src/EmbyNian.Core/Playback/LibMpvPipelinePolicy.cs) / [MpvRenderCheck.cs](../../../../src/EmbyNian.Core/Mpv/MpvRenderCheck.cs) — 管线锁定的 vo/gpu-api 与按事实问的兼容性检查。
 
 **杜比视界控制说明**：内核侧入口是 [vf.rst @ 7b8915bc1](https://github.com/mpv-player/mpv/blob/7b8915bc1/DOCS/man/vf.rst) 的 `format` 滤镜（`dolbyvision`、`hdr10plus`、`enhancement-layer`、`min-luma`/`max-luma`）；元数据随 `--target-colorspace-hint-mode` 的说明（options.rst 同上，`source-dynamic` 不发送完整杜比元数据）。

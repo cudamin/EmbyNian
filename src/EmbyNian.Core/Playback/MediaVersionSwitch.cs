@@ -62,7 +62,7 @@ public static class MediaVersionSwitch
     /// </para>
     /// </summary>
     public static long StartTicks(double? positionSeconds, long fallbackTicks) =>
-        positionSeconds is { } seconds and > 0
+        positionSeconds is { } seconds && double.IsFinite(seconds) && seconds >= 0
             ? TimeFormat.ToTicks(seconds)
             : Math.Max(0, fallbackTicks);
 

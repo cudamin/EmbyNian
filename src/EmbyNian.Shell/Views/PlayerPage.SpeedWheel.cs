@@ -61,6 +61,7 @@ public sealed partial class PlayerPage
     private long _wheelStartedAt;
 
     private bool _wheelAnimating;
+    private PlayerViewModel.InteractionContext _wheelContext;
 
     /// <summary>接线与刻度的第一次摆放。构造器调用一次；刻度挂在 Flyout 的内容树里，不上屏也在树上。</summary>
     private void WireSpeedWheel()
@@ -153,6 +154,7 @@ public sealed partial class PlayerPage
     private void OnSpeedWheelOpened(object sender, object e)
     {
         if (!Attached) return;
+        _wheelContext = ViewModel.CaptureInteraction();
 
         StopWheelAnimation();
         _wheelDragging = false;
@@ -268,7 +270,11 @@ public sealed partial class PlayerPage
     /// <summary>中线跨过刻度 = 换档：把中线那一档交给 mpv。没跨过（相邻两次问的同一根）就什么都不发。</summary>
     private void ApplyWheelCrossing()
     {
-        if (!Attached) return;
+        if (!Attached || _inputSuspended || !ViewModel.IsCurrentInteraction(_wheelContext))
+        {
+            StopWheelAnimation();
+            return;
+        }
 
         var choices = PlayerViewModel.SpeedChoices;
         var speed = choices[SpeedWheel.Snap(_wheelPosition, choices.Length)];

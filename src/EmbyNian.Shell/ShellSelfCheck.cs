@@ -73,6 +73,8 @@ internal static partial class ShellSelfCheck
     /// had realised no cards to look at.
     /// </summary>
     private static (bool Ok, string Detail)? _cards;
+    private static bool _cardStatesCaptured;
+    private static bool _capturingCardStates;
 
     /// <summary>
     /// 「更多」那颗按钮点开的菜单搭成了什么样，见 <see cref="HomePage.MenuRead"/>。跟着 stage 0 一起快照，
@@ -577,10 +579,34 @@ internal static partial class ShellSelfCheck
         _timer.IsRepeating = true;
         _timer.Tick += async (timer, _) =>
         {
+            if (_capturingCardStates) return;
             _ticks++;
             if (_ticks < 3) return;
 
             if (!Settled(shell) && _ticks < Deadline) return;
+
+            if (options.DumpUi && _stage == 0 && !_cardStatesCaptured
+                && shell.Pages.Content is HomePage home
+                && home.RealisedCards().FirstOrDefault(card =>
+                    card.Card?.Item.Type == EmbyItemType.CollectionFolder) is { } libraryCard)
+            {
+                _capturingCardStates = true;
+                _cardStatesCaptured = true;
+                try
+                {
+                    await libraryCard.CaptureHostStatesAsync(state =>
+                        ShootAsync(shell, options, $"selfcheck-library-card-{state}.png"));
+                }
+                catch (Exception error)
+                {
+                    Log.Warn(Category, "媒体库卡片状态截图失败", error);
+                }
+                finally
+                {
+                    _capturingCardStates = false;
+                }
+                return;
+            }
 
             // Walk on to the next page so its own surfaces get looked at too, then keep polling for it.
             if (!shell.SignInVisible && Advance(shell, window)) return;

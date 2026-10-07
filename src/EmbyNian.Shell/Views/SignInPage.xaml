@@ -11,7 +11,8 @@
   from — which is the whole reason for asking twice instead of showing five empty boxes at once.
 
   Every piece of state here is bound to SignInViewModel. Named presentation elements only support the
-  responsive welcome layout and its entrance motion; the inputs and flyout retain their original roles.
+  two-column welcome layout — brand, illustration and tagline on the left, the card on the right at
+  wide widths — and its entrance motion; the inputs and flyout retain their original roles.
 
   The three input bindings all carry UpdateSourceTrigger=PropertyChanged. Text and Password push to the
   source on LostFocus by default, and Enter arrives while the box still has focus — without it the view
@@ -62,8 +63,6 @@
                     <VisualState.Setters>
                         <Setter Target="FormColumn.Width" Value="440" />
                         <Setter Target="WelcomePanel.Margin" Value="0,32,64,32" />
-                        <Setter Target="WelcomePanel.VerticalAlignment" Value="Center" />
-                        <Setter Target="WelcomeTitle.FontSize" Value="44" />
                         <Setter Target="WelcomeArt.Visibility" Value="Visible" />
                         <Setter Target="SignInCard.(Grid.Row)" Value="0" />
                         <Setter Target="SignInCard.(Grid.Column)" Value="1" />
@@ -86,16 +85,17 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel x:Name="WelcomePanel" Spacing="20" MaxWidth="580">
-                    <StackPanel Orientation="Horizontal" Spacing="12">
-                        <Border Background="{ThemeResource EgAccentBrush}" CornerRadius="12" Width="44" Height="44">
-                            <FontIcon FontSize="22" Foreground="{ThemeResource EgTextOnAccentBrush}" Glyph="&#xE714;" />
-                        </Border>
+                    <!-- The brand mark shows the real app icon — the same pixels the taskbar paints,
+                         not a stand-in glyph. -->
+                    <StackPanel x:Name="BrandRow" Orientation="Horizontal" Spacing="12">
+                        <Image
+                            x:Name="BrandMark"
+                            Source="ms-appx:///app-icon.png"
+                            Width="44"
+                            Height="44"
+                            AutomationProperties.AccessibilityView="Raw" />
                         <TextBlock Text="EmbyNian" FontSize="23" FontWeight="SemiBold" VerticalAlignment="Center" />
                     </StackPanel>
-                    <TextBlock x:Name="WelcomeTitle" x:Uid="SignInPage_WelcomeTitle"
-                        FontSize="32" FontWeight="SemiBold" LineHeight="58" TextWrapping="Wrap" />
-                    <TextBlock x:Uid="SignInPage_WelcomeDescription" MaxWidth="440"
-                        FontSize="16" LineHeight="27" TextWrapping="Wrap" Foreground="{ThemeResource EgTextDimBrush}" />
 
                     <!-- A quiet cinema illustration made from theme-aware shapes, so no image download
                          is needed before the user has connected their server. -->
@@ -173,12 +173,14 @@
 
                     <!-- Step one. -->
                     <StackPanel Spacing="16" Visibility="{x:Bind ViewModel.AddressVisibility, Mode=OneWay}">
+                        <!-- The label rides inside the box as the centred placeholder (用户 2026-09-30,
+                             参考账号/密码框的截图) — no header line above it. -->
                         <TextBox
                             x:Name="ServerBox"
                             x:Uid="SignInPage_ServerBox"
                             MinHeight="42"
                             KeyDown="OnAddressKeyDown"
-                            PlaceholderText="http://192.168.1.10:8096"
+                            TextAlignment="Center"
                             Text="{x:Bind ViewModel.Address, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
                         <StackPanel Spacing="10">
@@ -267,6 +269,7 @@
                             x:Uid="SignInPage_UserBox"
                             MinHeight="42"
                             KeyDown="OnCredentialKeyDown"
+                            TextAlignment="Center"
                             Text="{x:Bind ViewModel.Username, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
                         <PasswordBox

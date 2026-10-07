@@ -211,7 +211,7 @@
     .md is excluded: assets/shaders/README.md records where each file came from and is not for shipping.
   -->
   <ItemGroup>
-    <None Include="..\..\assets\shaders\**\*.glsl;..\..\assets\shaders\**\*.hook">
+    <None Include="..\..\assets\shaders\**\*.glsl;..\..\assets\shaders\**\*.hook;..\..\assets\shaders\**\*.txt">
       <Link>shaders\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
@@ -273,6 +273,19 @@
   <ItemGroup>
     <None Include="..\..\assets\mpv-ui\**\*.*" Exclude="..\..\assets\mpv-ui\**\*.md">
       <Link>mpv-ui\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    登录页左上角的品牌标志（SignInPage 的 BrandMark）：仓库根 app.ico 最大一帧（256×256）用 WIC
+    原样解码转存的 PNG（圆角外 alpha=0）。不直接喂 .ico 的原因：WinUI 的 Image 经 WIC 解多帧图标
+    时选哪一帧不受这边控制，挑中 16px 那一帧就糊了；PNG 单帧，所见即所得。任务栏与资源管理器画
+    的仍是 app.ico，两者像素同源。
+  -->
+  <ItemGroup>
+    <None Include="..\..\assets\app-icon.png">
+      <Link>app-icon.png</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

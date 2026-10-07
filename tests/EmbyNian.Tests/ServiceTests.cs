@@ -85,6 +85,29 @@ internal static class ServiceTests
             }
         });
 
+        Test("服务器查找：路径大小写不同必须保留独立的身份和凭据", () =>
+        {
+            var (service, settings, root) = NewService();
+            try
+            {
+                var before = settings.Servers.Count;
+                var lower = service.ResolveServer("https://nas.invalid/media");
+                var account = service.ResolveAccount(lower, "shared");
+                account.ProtectedAccessToken = "placeholder-lower-token";
+                account.ProtectedPassword = "placeholder-lower-password";
+
+                var upper = service.ResolveServer("https://NAS.invalid:443/Media/emby/");
+
+                Assert.False(ReferenceEquals(lower, upper), "反向代理可把两个路径交给不同服务器");
+                Assert.Equal("https://nas.invalid/media", lower.Url, "不能把已有凭据档案改指向新路径");
+                Assert.Equal("https://nas.invalid/Media", upper.Url);
+                Assert.Equal(0, upper.Accounts.Count);
+                Assert.Equal(before + 2, settings.Servers.Count);
+                Assert.True(ReferenceEquals(upper, service.ResolveServer("https://nas.invalid/Media")));
+            }
+            finally { Cleanup(root); }
+        });
+
         Test("服务器查找：端口或主机不同就是两台服务器", () =>
         {
             var (service, settings, root) = NewService();

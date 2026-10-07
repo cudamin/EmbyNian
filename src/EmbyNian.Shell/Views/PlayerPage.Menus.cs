@@ -30,6 +30,7 @@ public sealed partial class PlayerPage
     /// once. <see cref="RefreshPictureChecksAsync"/> walks this on every open to set each tick from mpv.
     /// </summary>
     private readonly List<(MenuFlyoutItem Item, PlayerMenuNode Node)> _pictureChecks = [];
+    private int _pictureStaticCount;
 
     // ---- 选集 --------------------------------------------------------------------
 
@@ -45,6 +46,7 @@ public sealed partial class PlayerPage
             return;
         }
 
+        var context = ViewModel.CaptureInteraction();
         foreach (var episode in ViewModel.Episodes)
         {
             // No GroupName, deliberately: the menu is rebuilt on every open, so a group would accumulate
@@ -60,7 +62,8 @@ public sealed partial class PlayerPage
 
             row.Click += (source, args) =>
             {
-                if (source is MenuFlyoutItem { Tag: EmbyItem picked }) ViewModel.SwitchEpisode(picked);
+                if (Attached && ViewModel.IsCurrentInteraction(context)
+                    && source is MenuFlyoutItem { Tag: EmbyItem picked }) ViewModel.SwitchEpisode(picked);
             };
 
             EpisodeMenu.Items.Add(row);
@@ -99,6 +102,7 @@ public sealed partial class PlayerPage
             return;
         }
 
+        var context = ViewModel.CaptureInteraction();
         foreach (var source in versions)
         {
             var row = new RadioMenuFlyoutItem
@@ -115,7 +119,8 @@ public sealed partial class PlayerPage
 
             row.Click += (clicked, _) =>
             {
-                if (clicked is MenuFlyoutItem { Tag: MediaSource picked }) ViewModel.SwitchVersion(picked);
+                if (Attached && ViewModel.IsCurrentInteraction(context)
+                    && clicked is MenuFlyoutItem { Tag: MediaSource picked }) ViewModel.SwitchVersion(picked);
             };
 
             VersionMenu.Items.Add(row);
@@ -148,6 +153,7 @@ public sealed partial class PlayerPage
     private void FillTrackMenu(MenuFlyout menu, Func<MpvTrack, bool> match, bool audio, string? offRow)
     {
         var tracks = ViewModel.Tracks.Where(match).ToList();
+        var context = ViewModel.CaptureInteraction();
 
         if (offRow is not null)
         {
@@ -156,7 +162,10 @@ public sealed partial class PlayerPage
                 Text = offRow,
                 IsChecked = tracks.All(track => !track.Selected)
             };
-            off.Click += (_, _) => ViewModel.SelectTrack(audio, null);
+            off.Click += (_, _) =>
+            {
+                if (Attached && ViewModel.IsCurrentInteraction(context)) ViewModel.SelectTrack(audio, null);
+            };
             menu.Items.Add(off);
 
             if (tracks.Count > 0) menu.Items.Add(new MenuFlyoutSeparator());
@@ -181,7 +190,8 @@ public sealed partial class PlayerPage
 
             row.Click += (source, _) =>
             {
-                if (source is MenuFlyoutItem { Tag: int id }) ViewModel.SelectTrack(audio, id);
+                if (Attached && ViewModel.IsCurrentInteraction(context)
+                    && source is MenuFlyoutItem { Tag: int id }) ViewModel.SelectTrack(audio, id);
             };
 
             menu.Items.Add(row);
@@ -248,6 +258,21 @@ public sealed partial class PlayerPage
         info.Click += (_, _) => _ = ShowMediaInfoAsync();
         menu.Items.Add(info);
 
+        // 2026-10-01 用户令「在右键菜单中添加字幕、视频输出、音频输出三个按钮，点击后打开设置页面」：末尾
+        // 三行，第一段分隔线与「更多」那一棵其余几行分开 —— 上面那几行改的是这一部片子当下的行为，这三行
+        // 开的是设置窗口（改了从下一次播放开始生效）。
+        //
+        // 行集、次序与文案读的是 Core 那张表（PlayerSettingsLinks.All），不是这里现写三段字：独占模式的画面
+        // 菜单推的是同一张表（PlayerViewModel.PushPictureMenuAsync），那边若各写一份，两边迟早不一样。
+        // 点了以后走 ViewModel.RequestSettings —— 与独占模式同一条出口，开窗归外壳（ShellPage）。
+        menu.Items.Add(new MenuFlyoutSeparator());
+        foreach (var link in PlayerSettingsLinks.All)
+        {
+            var row = new MenuFlyoutItem { Text = link.Label, Tag = link };
+            row.Click += OnPictureSettingsRow;
+            menu.Items.Add(row);
+        }
+
         void AddAction(string label, Action action)
         {
             var row = new MenuFlyoutItem { Text = label };
@@ -256,22 +281,36 @@ public sealed partial class PlayerPage
         }
     }
 
+    /// <summary>
+    /// 点了「更多」末尾那三行设置入口之一（2026-10-01 用户令）：把这一行交给 view model，由外壳开设置窗口。
+    /// <para>
+    /// 命名方法而不是就地写一个 lambda，是为了自检能点到同一下（<c>ClickPictureSettingsRow</c>）——
+    /// 那一条读数要的是「按真菜单行的真处理器会发生什么」，不是自检另起一句等价的话。
+    /// </para>
+    /// </summary>
+    private void OnPictureSettingsRow(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuFlyoutItem { Tag: PlayerSettingsLink picked }) ViewModel.RequestSettings(picked);
+    }
+
     private MenuFlyoutSubItem BuildShaderMenu()
     {
         var active = ViewModel.ActiveShader;
         var pinned = ViewModel.ShaderChoicePinned;
+        var known = ViewModel.ShaderStateKnown;
+        var groupName = "shader-" + Guid.NewGuid().ToString("N");
         var menu = new MenuFlyoutSubItem
         {
-            Text = active is null ? "着色器：未启用" : $"着色器：{active.Name}"
+            Text = $"着色器：{ViewModel.ActiveShaderLabel}"
         };
 
         // 恢复设置的方案（2026-09-29 统一右键菜单时从独占模式的推送收编过来，两边的行集从此一致）：
         // 没钉档时它亮着 —— 起播算出的那档在生效；钉过档之后点它是唯一回自动方案的路（两条管线同一句执行）。
-        var restore = new RadioMenuFlyoutItem { Text = "恢复设置的方案", IsChecked = !pinned };
+        var restore = new RadioMenuFlyoutItem { Text = "恢复设置的方案", GroupName = groupName, IsChecked = known && !pinned };
         restore.Click += (_, _) => ViewModel.RestoreShaderPlan();
         menu.Items.Add(restore);
 
-        var off = new RadioMenuFlyoutItem { Text = "关闭着色器", IsChecked = pinned && active is null };
+        var off = new RadioMenuFlyoutItem { Text = "关闭着色器", GroupName = groupName, IsChecked = known && pinned && active is null };
         off.Click += (_, _) => ViewModel.ApplyShaderGroup(null);
         menu.Items.Add(off);
         menu.Items.Add(new MenuFlyoutSeparator());
@@ -285,7 +324,8 @@ public sealed partial class PlayerPage
             var row = new RadioMenuFlyoutItem
             {
                 Text = group.DisplayName,
-                IsChecked = pinned && active is not null && string.Equals(active.Id, group.Id, StringComparison.Ordinal),
+                GroupName = groupName,
+                IsChecked = known && pinned && active is not null && string.Equals(active.Id, group.Id, StringComparison.Ordinal),
                 KeyboardAcceleratorTextOverride = group.Description,
                 Tag = group
             };
@@ -364,15 +404,18 @@ public sealed partial class PlayerPage
             // 同步加上了这一棵 —— 见那条判据旁的注释。
             foreach (var item in BuildMenuItems(PlayerMenuCatalog.Root)) PictureMenu.Items.Add(item);
             PictureMenu.Items.Add(new MenuFlyoutSeparator());
+            _pictureStaticCount = PictureMenu.Items.Count;
+        }
 
-            var more = new MenuFlyout { Placement = FlyoutPlacementMode.Top };
-            OnMoreMenuOpening(more, Root);
-            while (more.Items.Count > 0)
-            {
-                var row = more.Items[0];
-                more.Items.RemoveAt(0);
-                PictureMenu.Items.Add(row);
-            }
+        while (PictureMenu.Items.Count > _pictureStaticCount)
+            PictureMenu.Items.RemoveAt(PictureMenu.Items.Count - 1);
+        var more = new MenuFlyout { Placement = FlyoutPlacementMode.Top };
+        OnMoreMenuOpening(more, Root);
+        while (more.Items.Count > 0)
+        {
+            var row = more.Items[0];
+            more.Items.RemoveAt(0);
+            PictureMenu.Items.Add(row);
         }
 
         _ = RefreshPictureChecksAsync();
@@ -387,10 +430,14 @@ public sealed partial class PlayerPage
     private async Task RefreshPictureChecksAsync()
     {
         if (!Attached || _pictureChecks.Count == 0) return;
+        var viewModel = ViewModel;
+        var context = viewModel.CaptureInteraction();
+        var checks = _pictureChecks.ToArray();
 
         var values = await ViewModel.ReadMenuChecksAsync().ConfigureAwait(true);
+        if (!Attached || !ReferenceEquals(viewModel, ViewModel) || !ViewModel.IsCurrentInteraction(context)) return;
 
-        foreach (var (item, node) in _pictureChecks)
+        foreach (var (item, node) in checks)
             SetChecked(item, node.IsCheckedBy(values));
     }
 

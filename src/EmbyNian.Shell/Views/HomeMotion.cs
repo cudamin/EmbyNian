@@ -63,6 +63,12 @@ internal static class HomeMotion
 
     internal static void Reveal(FrameworkElement element) => Reveal(element, 0);
 
+    /// <summary>播放返回时结束本页的入场，包括稍后实现货架与等待 Loaded 的动画。</summary>
+    internal static void StopEnter(ItemsRepeater repeater)
+    {
+        if (Shelves.TryGetValue(repeater, out var entrance)) entrance.Detach();
+    }
+
     private static void RevealWhenLoaded(FrameworkElement element, int delay)
     {
         if (element.IsLoaded)
@@ -211,7 +217,9 @@ internal static class HomeMotion
             if (args.Element is FrameworkElement element) Stop(TargetOf(element));
         }
 
-        private void OnRootUnloaded(object sender, RoutedEventArgs e)
+        private void OnRootUnloaded(object sender, RoutedEventArgs e) => Detach();
+
+        internal void Detach()
         {
             _root.Unloaded -= OnRootUnloaded;
             _repeater.ElementPrepared -= OnPrepared;

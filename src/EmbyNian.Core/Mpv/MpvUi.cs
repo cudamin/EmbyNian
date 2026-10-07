@@ -190,6 +190,27 @@ public static class VideoWindowContract
     public const string SkipTake = "embynian-skip-take";
 
     /// <summary>
+    /// uosc → 宿主：**关掉**正立着的「跳过片头/片尾」提示而不跳转，值保留。→ <c>PlayerViewModel.DismissSkip</c>
+    /// （与集成模式那颗 XAML 按钮对应的 Esc、<c>PlayerPage.Dispatch</c> 里 <c>VirtualKey.Escape when SkipOffered</c>
+    /// 走的是同一句 <c>SkipCoordinator.Decline</c>）。
+    /// <para>
+    /// 2026-09-30 补（用户报「按回车和 esc 确认跳过不生效」——两种模式都不生效）：独占模式的键归 mpv
+    /// （<c>input-default-bindings=yes</c>），Esc 本来就是内建的「退全屏/退出」，回车没有绑定，两键都到不了
+    /// 宿主，于是提示立着按它们什么都不会发生。修法是 offer 立起那一段由 uosc 运行期补两把绑定
+    /// （<c>keybind ENTER/ESC → script-binding uosc/embynian-ui-skip-take / -dismiss</c>）、收摊时把
+    /// 原绑定原样按回去 —— 随包内核没有 <c>keyunbind</c>（v0.41.0-923 实录，work/probe-keybind-family.py），
+    /// 2026-09-30 那版用 keyunbind 还原条条失败、借走的键不还（宿主日志「Command 'keyunbind' not found.」），
+    /// 2026-10-02 改成收摊时 keybind 原绑定。所以这两条消息只在 offer 立着的那十几秒可能到达，且到达即
+    /// 意味着 mpv 那条内建绑定当时被让开了。
+    /// </para>
+    /// <para>
+    /// 与 <see cref="SkipTake"/> 同款：uosc 侧的绑定叫 <c>embynian-ui-skip-dismiss</c>、与这个键**故意
+    /// 不同名**（<see cref="Episodes"/> 那条硬规矩）。进 <see cref="Parse"/>（uosc → 宿主）。
+    /// </para>
+    /// </summary>
+    public const string SkipDismiss = "embynian-skip-dismiss";
+
+    /// <summary>
     /// <b>宿主 → uosc</b>：跳过片头/片尾的 offer 文案（<c>跳过片头</c>／<c>跳过片尾</c>…），空串＝收摊。
     /// uosc 那颗按钮按它露面 —— 有文案就立起、点它回推 <see cref="SkipTake"/>。
     /// <para>
@@ -285,6 +306,24 @@ public static class VideoWindowContract
     /// </summary>
     public const string MediaInfo = "embynian-media-info";
 
+    public const string Shortcut = "embynian-shortcut";
+    public const string Shortcuts = "embynian-shortcuts";
+
+    /// <summary>
+    /// uosc → 宿主：右键画面菜单末尾点了「字幕」「视频输出」「音频输出」三行之一（2026-10-01 用户令
+    /// 「在右键菜单中添加字幕、视频输出、音频输出三个按钮，点击后打开设置页面」），值是
+    /// <see cref="PlayerSettingsLinks"/> 的令牌（<c>subtitle</c>／<c>video</c>／<c>audio</c>）。宿主把设置窗口
+    /// 开在该行那张卡上 —— 与集成模式右键点同一行是同一句执行，那边由 <c>PlayerViewModel.RequestSettings</c>
+    /// 直接走，两条管线共用同一个出口。
+    /// <para>
+    /// 与 <see cref="SkipMode"/>/<see cref="MediaInfo"/> 同款：菜单行的 value 就是一条回宿主的
+    /// <c>script-message</c>，uosc 那头既不注册同名脚本绑定、也不做别的解释（名字照旧守
+    /// <see cref="Episodes"/> 那条硬规矩，<c>MpvUiTests</c> 的「绑定名 ≠ 消息名」把它一并数进去）。
+    /// 值域由 <see cref="PlayerSettingsLinks.For"/> 收窄：令牌认不出就是没说过这句话。
+    /// </para>
+    /// </summary>
+    public const string OpenSettings = "embynian-open-settings";
+
     /// <summary>
     /// 把一条 client-message 的参数解析成宿主消息；不是宿主的消息、值不合契约的，返回 null。
     /// </summary>
@@ -295,20 +334,26 @@ public static class VideoWindowContract
         var key = arguments[0];
         var value = arguments[1];
 
+        if (key == Shortcut)
+            return Playback.ShortcutCatalog.Actions.Any(action => action.Id == value) ? new VideoWindowMessage(key, value) : null;
+
         if (key == Shader)
             return value is "off" or "auto" || ShaderGroupCatalog.Ids.Contains(value, StringComparer.Ordinal)
                 ? new VideoWindowMessage(key, value) : null;
         if (key == Episode) return value is "-1" or "1" ? new VideoWindowMessage(key, value) : null;
         if (key is EpisodeIndex or VersionIndex or MenuIndex)
         {
-            return int.TryParse(value, out var index) && index is >= 1 and <= 100000
+            return VideoMenuSnapshot<string>.IsSelection(value)
+                || (int.TryParse(value, out var index) && index is >= 1 and <= 100000)
                 ? new VideoWindowMessage(key, value)
                 : null;
         }
         if (key == SkipMode) return value is "ask" or "auto" or "off" ? new VideoWindowMessage(key, value) : null;
         if (key == AutoPlayNext) return value == "toggle" ? new VideoWindowMessage(key, value) : null;
+        if (key == OpenSettings)
+            return PlayerSettingsLinks.For(value) is not null ? new VideoWindowMessage(key, value) : null;
 
-        if (key is Ready or Seek or Episodes or Versions or PictureMenu or SkipTake or MediaInfo)
+        if (key is Ready or Seek or Episodes or Versions or PictureMenu or SkipTake or SkipDismiss or MediaInfo)
             return new VideoWindowMessage(key, value);
 
         return null;

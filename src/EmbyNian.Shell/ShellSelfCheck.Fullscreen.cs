@@ -236,6 +236,127 @@ internal static partial class ShellSelfCheck
     }
 
     /// <summary>
+    /// 设置窗口盖在画面上：全屏播放时主窗占着 topmost band（用户还可能亲手钉了 置顶），而 topmost 窗口压着
+    /// 任何非 topmost 窗口 —— 设置窗口就是非 topmost 的。播放页右键菜单末尾那三行「打开设置」因此必须先让
+    /// 画面站台下（<c>HostWindow.StandAsideForOwnWindow</c>），否则窗口开在画面背后：用户点完什么都看不见，
+    /// 而日志里一切正常。这条读数量的是屏幕上谁在最前面。
+    /// <para>
+    /// 四件都要量，少一件就漏得掉一半：①设置窗口立着时，它正中间那一点属于它自己（不是画面）；②它开在该行
+    /// 那张卡上（<c>SettingsPage.Select</c> 认不出的名字会安静地退回「播放器」，层级上看不出任何异样）；
+    /// ③画面这会儿真的从 topmost 上下来了（不然①只是碰巧）；④收摊后画面把 topmost 拿了回来 —— 让位是借出去
+    /// 的账，拿不回来就是「全屏播放丢了置顶」。
+    /// </para>
+    /// <para>
+    /// 不需要在播：全屏 band 与手动置顶不依赖任何片子，这是这条读数能在没有服务器、不播任何东西的自检里跑的
+    /// 原因（也是它放在 <see cref="ReportFullscreen"/> 之后的原因 —— 先把全屏那几关量完，再拿真窗口做这一场）。
+    /// </para>
+    /// </summary>
+    private static void ReportSettingsOverPicture(
+        HostWindow window, ShellPage shell, Action<string, bool, string> check)
+    {
+        var wasTop = window.TopMost;
+        var wasFull = window.Fullscreen;
+        var topmostOfPicture = false;
+        var covered = false;
+        var carded = false;
+        var reclaimed = false;
+        var opened = false;
+        var clicked = false;
+
+        // 走玩家真正走的那一条：右键画面菜单末尾那一行的真处理器（表里第一行＝字幕），而不是自检自己调
+        // ShowSettings —— 「菜单行 → view model → 外壳 → 窗口」这一整根链子有一节断了，这条读数就要红。
+        var link = EmbyNian.Mpv.PlayerSettingsLinks.All[0];
+
+        try
+        {
+            window.Fullscreen = true;
+            window.TopMost = true;
+
+            clicked = shell.PlayerRoot.ClickPictureSettingsRow(link.Label);
+
+            // 窗口是同一个 UI 线程上开的，但「开出来了」要等框架把帧画上：边等边泵消息，与 ReportTaskbarStandsAside
+            // 那条轮询同一个理由 —— 堵着消息循环去量一扇刚建的窗，量到的是没画完的东西。
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (shell.SettingsWindowState is not { Open: true, Handle: not 0 } settings)
+            {
+                if (clock.ElapsedMilliseconds >= WaitMilliseconds) break;
+                Pump();
+                Thread.Sleep(25);
+            }
+
+            var state = shell.SettingsWindowState;
+            opened = state.Open && state.Handle != 0;
+
+            // 开在哪张卡上：与「窗口立起来了」是两件事 —— SettingsPage.Select 认不出的名字会安静地退回
+            // 「播放器」，那种错从层级上看完全正常。
+            var page = shell.SettingsRoot;
+            carded = page is not null
+                && string.Equals(page.SelectedCategory, link.Category, StringComparison.Ordinal);
+
+            if (opened && Native.GetWindowRect(state.Handle, out var frame))
+            {
+                var middle = new NativePoint
+                {
+                    X = (frame.Left + frame.Right) / 2,
+                    Y = (frame.Top + frame.Bottom) / 2
+                };
+
+                var hit = Native.WindowFromPoint(middle);
+                covered = hit != IntPtr.Zero && Native.GetAncestor(hit, Native.GaRoot) == state.Handle;
+
+                var pictureEx = (long)Native.GetWindowLongPtr(window.Handle, Native.GwlExStyle);
+                topmostOfPicture = (pictureEx & Native.WsExTopMost) != 0;
+            }
+
+            shell.HideSettings();
+
+            // 收摊那一半：让出去的置顶要回来（等一拍，SetWindowPos 之后风格位才读得到）。
+            var back = System.Diagnostics.Stopwatch.StartNew();
+            while (back.ElapsedMilliseconds < WaitMilliseconds)
+            {
+                var pictureEx = (long)Native.GetWindowLongPtr(window.Handle, Native.GwlExStyle);
+                if ((pictureEx & Native.WsExTopMost) != 0)
+                {
+                    reclaimed = true;
+                    break;
+                }
+
+                Pump();
+                Thread.Sleep(25);
+            }
+        }
+        finally
+        {
+            shell.HideSettings();
+            window.TopMost = wasTop;
+            window.Fullscreen = wasFull;
+        }
+
+        check("设置窗口盖在画面上",
+            clicked && opened && covered && carded && !topmostOfPicture && reclaimed,
+            !clicked
+                ? $"右键画面菜单里点不到「{link.Label}」那一行 —— 三行设置入口没接上"
+                : opened
+                    ? $"点了菜单里的「{link.Label}」，设置窗口已立起并开在「{link.Category}」卡上={carded}，"
+                        + $"它正中间的像素归它自己={covered}；立着时画面仍是 topmost={topmostOfPicture}（应为假）；"
+                        + $"收摊后画面拿回置顶={reclaimed}"
+                    : "设置窗口没立起来（已回退到主窗口内的设置页），层级无从量");
+    }
+
+    /// <summary>窗口等待那一小段里把消息泵开，别让刚建的窗在半路上等我们。</summary>
+    private static void Pump()
+    {
+        while (Native.PeekMessage(out var message, IntPtr.Zero, 0, 0, Native.PmRemove))
+        {
+            Native.TranslateMessage(ref message);
+            Native.DispatchMessage(ref message);
+        }
+    }
+
+    /// <summary>等一扇窗立起来、等一次层级变更的上限。两条路都只等这一格，超了就是没发生。</summary>
+    private const int WaitMilliseconds = 1500;
+
+    /// <summary>
     /// Whether the taskbar really is out of the way, phrased as the sentence the report prints.
     /// <para>
     /// Measured by asking who is on screen at the middle of the tray rather than by reading the tray's
@@ -309,11 +430,7 @@ internal static partial class ShellSelfCheck
         var clock = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
-            while (Native.PeekMessage(out var message, IntPtr.Zero, 0, 0, Native.PmRemove))
-            {
-                Native.TranslateMessage(ref message);
-                Native.DispatchMessage(ref message);
-            }
+            Pump();
 
             var hit = Native.WindowFromPoint(point);
             if (hit != IntPtr.Zero && Native.GetAncestor(hit, Native.GaRoot) == window)

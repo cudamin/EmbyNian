@@ -68,6 +68,10 @@ public sealed partial class HomeViewModel : PageViewModel
     private ISettingsService? _settings;
     private IReadOnlyList<EmbyItem> _libraryViews = [];
     private readonly HomeRefresh _refresh = new();
+    private EmbySessionScope? _scope;
+    private bool _active;
+    private bool Live => _active && _scope?.IsCurrent == true;
+    private bool Visible(string key) => _all.Any(entry => entry.Row.Key == key && entry.Row.Visible);
 
     /// <summary>
     /// 「正在下载」一排的来源。为空 = 这台环境没有 MoviePilot（自检的隔离运行目录没有、测试也没有），
@@ -268,6 +272,10 @@ public sealed partial class HomeViewModel : PageViewModel
         EmbyImageStore images,
         MoviePilotService? moviePilot = null)
     {
+        Cancel();
+        _active = true;
+        _scope = images.CaptureScope();
+        if (_scope is not null) BrowsingPreferences.SelectIdentity(settings.Settings.Ui, _scope.Connection);
         _actions = actions;
         _libraryViews = libraryViews;
         _session = session;
@@ -291,7 +299,7 @@ public sealed partial class HomeViewModel : PageViewModel
     /// </summary>
     private void BuildShelves()
     {
-        if (_images is not { } images) return;
+        if (_images is not { } images || !Live) return;
 
         _refresh.Invalidate();
         var ui = _settings?.Settings.Ui;
@@ -344,6 +352,8 @@ public sealed partial class HomeViewModel : PageViewModel
         return LoadAsync();
     }
 
+    private new bool IsCurrent(CancellationToken token) => Live && base.IsCurrent(token);
+
     public override Task ReloadAsync() => LoadAsync();
 
     /// <summary>播放只改变观看状态，不重建轮播，以免返回时丢掉已解码背景并重置轮播位置。</summary>
@@ -351,7 +361,7 @@ public sealed partial class HomeViewModel : PageViewModel
 
     private async Task LoadAsync(bool refreshSlides = true)
     {
-        if (_session is null || _actions is null || _all.Length == 0) return;
+        if (!Live || _session is null || _actions is null || _all.Length == 0) return;
 
         var token = BeginLoad();
         var refreshVersion = _refresh.Begin();
@@ -360,8 +370,12 @@ public sealed partial class HomeViewModel : PageViewModel
 
         // Started together rather than awaited one after another: a round trip per row in sequence is
         // a page that takes a second per shelf, and none of them depends on another's answer.
-        var resume = FetchAsync("继续观看", (client, ct) => client.GetResumeAsync(ShelfSize, ct), token);
-        var nextUp = FetchAsync("接下来看", (client, ct) => client.GetNextUpAsync(ShelfSize, ct), token);
+        var resume = Visible(HomeLayout.Resume)
+            ? FetchAsync("继续观看", (client, ct) => client.GetResumeAsync(ShelfSize, ct), token)
+            : Task.FromResult(new List<EmbyItem>());
+        var nextUp = Visible(HomeLayout.NextUp)
+            ? FetchAsync("接下来看", (client, ct) => client.GetNextUpAsync(ShelfSize, ct), token)
+            : Task.FromResult(new List<EmbyItem>());
 
         // 轮播自己的那一次请求（2026-09-13「轮播图改用前十个最近添加」；同日补上设置里的四行 ——
         // 「新增在设置中设置轮播图要使用什么媒体，和要使用最近添加还是随机的还有数量的选项。还有封面的
@@ -374,7 +388,7 @@ public sealed partial class HomeViewModel : PageViewModel
         var carouselMedia = carouselUi?.CarouselMedia ?? Emby.CarouselMediaType.All;
         var latestSize = Math.Max(LatestSize, carouselCount * 3);
 
-        var latest = refreshSlides ? FetchAsync("轮播", (client, ct) =>
+        var latest = refreshSlides && _banner ? FetchAsync("轮播", (client, ct) =>
             carouselUi is not null && carouselUi.CarouselSource == Emby.CarouselSource.Random
                 ? client.GetRandomAsync(latestSize, Emby.HomeCarousel.RandomTypes(carouselMedia), ct)
                 : client.GetLatestAsync(
@@ -573,10 +587,13 @@ public sealed partial class HomeViewModel : PageViewModel
     /// this page: a slide is one item out of three unrelated rows, so there is no 选集 it belongs to.
     /// </summary>
     internal Task PlayAsync(BannerSlide slide) =>
-        _actions is null ? Task.CompletedTask : _actions.PlayAsync(slide.Item);
+        _actions is null || !Live ? Task.CompletedTask : _actions.PlayAsync(slide.Item);
 
     /// <summary>详情 on the carousel, and the same routing decision as <see cref="Open(CardItem)"/>.</summary>
-    internal void Open(BannerSlide slide) => _actions?.OpenItem(slide.Item);
+    internal void Open(BannerSlide slide)
+    {
+        if (Live) _actions?.OpenItem(slide.Item);
+    }
 
     /// <summary>
     /// 自检: how many slides the band got, and what artwork the items behind them actually have
@@ -607,7 +624,7 @@ public sealed partial class HomeViewModel : PageViewModel
     /// </summary>
     internal void Open(CardItem card)
     {
-        if (_actions is null) return;
+        if (_actions is null || !Live || !card.IsCurrent) return;
 
         // A library's own card routes through the pane entry that opens it, so the pane highlight and
         // the breadcrumb end up exactly where clicking it in the pane would have put them.
@@ -635,6 +652,7 @@ public sealed partial class HomeViewModel : PageViewModel
     /// </remarks>
     internal void OpenShelf(CardShelf shelf)
     {
+        if (!Live) return;
         if (_actions is null)
         {
             Log.Warn(Category, $"{shelf.Title} 的牌子点了，但外壳动作还没接上");
@@ -678,19 +696,31 @@ public sealed partial class HomeViewModel : PageViewModel
     /// </summary>
     private async Task PollDownloadsAsync(CancellationToken token)
     {
+        var connection = "";
         while (!token.IsCancellationRequested)
         {
             try
             {
-                var tasks = await _moviePilot!.DownloadingAsync(token).ConfigureAwait(true);
+                if (_moviePilot is not { Enabled: true }) { ClearDownloads(); return; }
+                var current = _moviePilot.ConnectionStamp;
+                if (connection != current)
+                {
+                    ClearDownloads();
+                    connection = current;
+                }
+                var tasks = await _moviePilot.DownloadingAsync(token).ConfigureAwait(true);
                 if (token.IsCancellationRequested) return;
+                if (!_moviePilot.IsCurrentConnection(connection)) { ClearDownloads(); continue; }
 
                 ApplyDownloads(tasks);
                 _downloadFailing = false;
             }
             catch (OperationCanceledException)
             {
-                return;
+                if (token.IsCancellationRequested) return;
+                ClearDownloads();
+                connection = "";
+                if (_moviePilot is not { Enabled: true }) return;
             }
             catch (MoviePilotException error)
             {
@@ -705,6 +735,7 @@ public sealed partial class HomeViewModel : PageViewModel
                 else
                 {
                     Log.Warn(Category, "MoviePilot 下载监控停了", error);
+                    ClearDownloads();
                     return;
                 }
             }
@@ -818,6 +849,7 @@ public sealed partial class HomeViewModel : PageViewModel
     /// </summary>
     public override void Cancel()
     {
+        _active = false;
         StopDownloadPolling();
         base.Cancel();
     }
@@ -833,7 +865,8 @@ public sealed partial class HomeViewModel : PageViewModel
     {
         try
         {
-            return await _session!.ExecuteAsync(operation, token).ConfigureAwait(true);
+            if (!Live) return [];
+            return await _scope!.ExecuteAsync(operation, token).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {

@@ -231,10 +231,6 @@ public sealed partial class PlayerViewModel
     {
         FlushTimelineSeek();
 
-        // 每秒刷新一次.
-
-        FlushVolume();
-
         ApplySkipOffer();
 
         // The 400 ms a window size has to hold still before the 档位 is judged again. Here rather than on a
@@ -273,8 +269,8 @@ public sealed partial class PlayerViewModel
 
         if (Status.HasDuration) lines.Add($"时长：{Status.DurationClock}");
         if (_playback.LaunchQualityPreset is { Length: > 0 } preset) lines.Add($"画质预设：{preset}");
-        lines.Add($"着色器档位：{ActiveShader?.DisplayName ?? "未启用"}");
-        if (ActiveShader is { } chain) lines.Add($"着色器链：{chain.Description}");
+        lines.Add($"着色器档位：{(ShaderStateKnown ? ActiveShader?.DisplayName ?? "未启用" : "状态未知")}");
+        if (ShaderStateKnown && ActiveShader is { } chain) lines.Add($"着色器链：{chain.Description}");
 
         // 任务书 3.7's line, on screen: the launch decision, then the current one when the window has moved
         // since. 「开播时是这一条，现在是这一条」 is exactly what a report about frame drops needs to say.
@@ -302,7 +298,8 @@ public sealed partial class PlayerViewModel
         var video = context.Source.PrimaryVideoStream;
         var (width, height) = watch.Output;
         var measure = ShaderTier.Measure(video?.Width ?? 0, video?.Height ?? 0, width, height, watch.Tier);
-        return ShaderTier.Explain(measure, ActiveShader?.Animated ?? false, Settings.Shaders.Gpu, width, height, ActiveShader);
+        if (!ShaderStateKnown) return "着色器状态未知，请重新选择或重新播放";
+        return ShaderTier.Explain(measure, ActiveShader?.Animated ?? false, (_shaderSettings ?? Settings.Shaders).Gpu, width, height, ActiveShader);
     }
 
     // ---- plumbing ---------------------------------------------------------------
@@ -311,7 +308,10 @@ public sealed partial class PlayerViewModel
     /// Marshals onto the UI thread. Every one of the player's events arrives from mpv's own loop, and all
     /// of them end in a bound property or an event the page answers by touching the visual tree.
     /// </summary>
-    private void OnUi(Action action) => _ui.Run(action);
+    private void OnUi(Action action) => _ui.Run(() =>
+    {
+        if (!_lifetime.IsCancellationRequested) action();
+    });
 
     private static string Glyph(int codepoint) => char.ConvertFromUtf32(codepoint);
 }

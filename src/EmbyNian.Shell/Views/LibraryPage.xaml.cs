@@ -46,6 +46,8 @@ public sealed partial class LibraryPage : Page, IShellContent
     private IShellActions? _actions;
 
     private ScrollView? _scroll;
+    private bool _released = true;
+    private int _navigation;
 
     public LibraryPage()
     {
@@ -283,6 +285,8 @@ public sealed partial class LibraryPage : Page, IShellContent
         }
 
         _request = request;
+        _released = false;
+        _navigation++;
 
         // The shell reads this back to restore its pane highlight after a Frame.GoBack.
         Tag = request.Tag;
@@ -316,11 +320,33 @@ public sealed partial class LibraryPage : Page, IShellContent
 
         ApplyView();
 
-        _ = ViewModel.ReloadAsync();
+        _ = LoadNavigationAsync(request, _navigation);
+    }
+
+    private async Task LoadNavigationAsync(LibraryRequest request, int navigation)
+    {
+        var offset = request.ScrollOffset;
+        var count = request.LoadedCount;
+        var loading = ViewModel.ReloadAsync();
+        var queryToken = ViewModel.QueryToken;
+        await loading.ConfigureAwait(true);
+        if (_released || navigation != _navigation || !ViewModel.QueryCurrent(queryToken)) return;
+        if (count > 0) await ViewModel.LoadUntilAsync(count - 1).ConfigureAwait(true);
+        if (_released || navigation != _navigation || !ViewModel.QueryCurrent(queryToken)) return;
+        Cards.UpdateLayout();
+        Cards.ScrollView?.ScrollTo(0, offset, new ScrollingScrollOptions(ScrollingAnimationMode.Disabled));
     }
 
     public void Release()
     {
+        if (_released) return;
+        _released = true;
+        _navigation++;
+        if (_request is { } request)
+        {
+            request.ScrollOffset = _scroll?.VerticalOffset ?? 0;
+            request.LoadedCount = ViewModel.Cards.Count;
+        }
         ViewModel.Cancel();
         FilterPane.Dismiss();
         MoviePilotPanel.Release();
@@ -387,7 +413,7 @@ public sealed partial class LibraryPage : Page, IShellContent
 
         DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
         {
-            if (_scroll is null || !ViewModel.HasMore) return;
+            if (_released || _scroll is null || !ViewModel.HasMore) return;
             if (_scroll.ExtentHeight <= _scroll.ViewportHeight + 1) ViewModel.LoadMore();
         });
     }
@@ -534,7 +560,11 @@ public sealed partial class LibraryPage : Page, IShellContent
         EmbyContent.Visibility = moviePilot ? Visibility.Collapsed : Visibility.Visible;
         Toolbar.Visibility = moviePilot ? Visibility.Collapsed : Visibility.Visible;
 
-        if (!moviePilot) return;
+        if (!moviePilot)
+        {
+            if (!_released) ViewModel.Resume();
+            return;
+        }
 
         ViewModel.Cancel();
         ViewModel.NoticeOpen = false;
@@ -559,12 +589,11 @@ public sealed partial class LibraryPage : Page, IShellContent
     {
         if (await ViewModel.JumpToAsync(letter).ConfigureAwait(true) is not { } jump) return;
 
-        // Not every row is loaded yet; the scroll target has to be materialised first, which one page
-        // at a time is how the grid loads. Asking for the missing pages in one go is the pager's job.
-        await ViewModel.LoadUntilAsync(jump.Index).ConfigureAwait(true);
-
-        Alpha.SetCurrent(jump.Letter);
-        BringItemIntoView(jump.Index);
+        if (!_released && XamlRoot is not null)
+        {
+            Alpha.SetCurrent(jump.Letter);
+            BringItemIntoView(jump.Index);
+        }
     }
 
     /// <summary>

@@ -62,13 +62,6 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// </summary>
     private const double SeekLandedSeconds = 0.75;
 
-    /// <summary>
-    /// How long the volume has to sit still before it is written to the settings file. The wheel raises a
-    /// change per notch and the arrow keys one per press, and every save rewrites settings.json and its
-    /// backup — so it is written once the hand comes off rather than on the way.
-    /// </summary>
-    private const long VolumeSettleMilliseconds = 1200;
-
     private const int PlayGlyphCode = 0xE768;
     private const int PauseGlyphCode = 0xE769;
     private const int VolumeGlyphCode = 0xE767;
@@ -220,16 +213,10 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>那条跳转是什么时候发出去的。超时（<see cref="SeekGiveUpMilliseconds"/>）之后不再等它。</summary>
     private long _seekSentAt;
 
-    /// <summary>The volume the settings file has not been told about yet, and when it last moved.</summary>
-    private int? _volumePending;
-    private long _volumeTouched;
-
-    /// <summary>
-    /// 上一次从内核状态里读到并记下的音量，null＝还没读过。只用于辨认「内核侧自己变了」（uosc、外部
-    /// mpv 的原生控件都不经过 <see cref="OnVolumeChanged"/>）—— 每次轮询都重记会把结算时间戳永远刷新，
-    /// 存盘等不到，结算前轮询又不许写回，音量条会从此冻住。见 ApplyStatus。
-    /// </summary>
-    private int? _kernelVolume;
+    private readonly VolumeMemory _volumeMemory = new();
+    private Task? _volumeSaveTask;
+    private long _volumeRetryAt;
+    private long _audioDelayRequest;
 
     /// <summary>The last aspect handed to the window, so an unchanged one is not written again.</summary>
     private double _aspect;
@@ -247,6 +234,8 @@ public sealed partial class PlayerViewModel : ObservableObject
     private OutputWatch? _outputWatch;
     private ShaderSurface _surface;
     private ShaderDecision _shaderPlan;
+    private ShaderAutomationSettings? _shaderSettings;
+    private ShaderGroupResolver? _shaderResolver;
 
     /// <summary>The output size the launch decision was made against, so 播放信息 can say when it has moved.</summary>
     private (int Width, int Height) _launchOutput;
@@ -311,31 +300,46 @@ public sealed partial class PlayerViewModel : ObservableObject
 
         // Every one of these arrives on whichever thread mpv's event loop happens to be on.
         _playback.ProgressChanged += OnProgressChanged;
-        _playback.StatusChanged += OnStatusChanged;
-        _playback.TracksChanged += OnTracksChanged;
-        _playback.NowPlayingChanged += OnNowPlayingChanged;
-        _playback.VideoWindowMessage += OnVideoWindowMessage;
+        _playback.StatusUpdated += OnStatusChanged;
+        _playback.TracksUpdated += OnTracksChanged;
+        _playback.NowPlayingUpdated += OnNowPlayingChanged;
+        _playback.VideoWindowUpdated += OnVideoWindowMessage;
+        ShellPrefs.ShortcutsChanged += NativeShortcutsChanged;
     }
 
     /// <summary>
     /// Cancels anything in flight on the way out. The process is about to end either way; this is so a
     /// poll waiting on a five-hundred-millisecond delay does not come back to a disposed session.
     /// </summary>
-    internal void Shutdown()
-    {
-        _playback.ProgressChanged -= OnProgressChanged;
-        _playback.StatusChanged -= OnStatusChanged;
-        _playback.TracksChanged -= OnTracksChanged;
-        _playback.NowPlayingChanged -= OnNowPlayingChanged;
-        _playback.VideoWindowMessage -= OnVideoWindowMessage;
+    private Task? _shutdownTask;
+    private EmbySessionScope? _playbackScope;
+    private long _activeIntent;
+    private CancellationTokenSource? _preparing;
+    private TaskCompletionSource? _playbackIdle;
+    private bool? _presentedHeadless;
+    private bool? _preparingPictureInHost;
+    internal Action<bool>? PreparePresentation { get; set; }
 
-        try
-        {
-            _lifetime.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
+    internal void Shutdown() => _ = ShutdownAsync();
+
+    internal Task ShutdownAsync() => _shutdownTask ??= ShutdownPlaybackAsync();
+
+    private async Task ShutdownPlaybackAsync()
+    {
+        _startIntent.CancelAll();
+        _preparing?.Cancel();
+        FlushVolume(settled: false);
+        _playback.ProgressChanged -= OnProgressChanged;
+        _playback.StatusUpdated -= OnStatusChanged;
+        _playback.TracksUpdated -= OnTracksChanged;
+        _playback.NowPlayingUpdated -= OnNowPlayingChanged;
+        _playback.VideoWindowUpdated -= OnVideoWindowMessage;
+        ShellPrefs.ShortcutsChanged -= NativeShortcutsChanged;
+        _lifetime.Cancel();
+        _generation++;
+        _coverGeneration++;
+        await _playback.StopAsync().ConfigureAwait(true);
+        if (_playbackIdle is { } idle) await idle.Task.ConfigureAwait(true);
     }
 
     // ---- what only the page can do ----------------------------------------------
@@ -358,6 +362,23 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// 弹同一张。集成模式不经过这里 —— 页面上的菜单行自己弹。
     /// </summary>
     internal event Action? MediaInfoRequested;
+
+    /// <summary>
+    /// 右键画面菜单末尾那三行设置入口被点了（<c>字幕</c>／<c>视频输出</c>／<c>音频输出</c>，2026-10-01 用户令）。
+    /// 开窗归外壳：独占模式播放页是摘下去的，集成模式的设置窗口也不归页面管 —— 两条管线因此共用这一条出口
+    /// （集成侧 <c>PlayerPage.OnMoreMenuOpening</c> 的菜单行、独占侧 <see cref="VideoWindowContract.OpenSettings"/>
+    /// 都是调 <see cref="RequestSettings"/>），像 <see cref="MediaInfoRequested"/> 那样由 <c>ShellPage</c> 接住。
+    /// </summary>
+    internal event Action<PlayerSettingsLink>? SettingsRequested;
+
+    /// <summary>
+    /// 「去设置里改这一块」：把画面菜单那一行交给外壳，由它开设置窗口并落在该行那张卡上。
+    /// <para>
+    /// 一个出口而不是两处各开各的：独占模式播放时播放页根本不在树上，只有 view model 这条线通到外壳；集成
+    /// 模式走同一条，于是「点这三行会发生什么」在两个模式里不可能写出两种答案。
+    /// </para>
+    /// </summary>
+    internal void RequestSettings(PlayerSettingsLink link) => SettingsRequested?.Invoke(link);
 
     /// <summary>停止后端前，先让浏览页真正接住画面；独占播放没有附加页面，不需要这一步。</summary>
     internal Func<Task>? PrepareStopAsync { get; set; }
@@ -566,6 +587,9 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// <summary>背景图正在取/已就位的条目 Id：同一部片不重复下载；真正拿到图才算数，取空就忘掉以便重试。</summary>
     private string? _coverBackdropItemId;
 
+    /// <summary>同一条目的调用等待同一次完整解码，不能把“已经在取”误当成“已经就绪”。</summary>
+    private Task _coverBackdropLoad = Task.CompletedTask;
+
     /// <summary>背景图自己的代际号。与 <c>_generation</c> 分开：提前取图时播放代际还没递增，跟着它会白取。</summary>
     private int _coverGeneration;
 
@@ -665,8 +689,9 @@ public sealed partial class PlayerViewModel : ObservableObject
         get
         {
             var video = _shaderContext?.Source.PrimaryVideoStream;
-            var (vintage, fastMotion) = Settings.Shaders.Kind(video?.Height ?? 0, video?.FrameRate ?? 0);
-            return ShaderGroupCatalog.For(Settings.Shaders.Gpu, vintage, fastMotion);
+            var settings = _shaderSettings ?? Settings.Shaders;
+            var (vintage, fastMotion) = settings.Kind(video?.Height ?? 0, video?.FrameRate ?? 0);
+            return ShaderGroupCatalog.For(settings.Gpu, vintage, fastMotion);
         }
     }
 
@@ -761,7 +786,7 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// 管线（画面在 mpv 自建窗口），拿这一位当画面位置用，两头都会答错。
     /// </para>
     /// </summary>
-    internal bool Embedded => Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv;
+    internal bool Embedded => (_playback.PlayingBackend ?? Settings.Mpv.Backend) == MpvBackendKind.BuiltInLibMpv;
 
     /// <summary>
     /// 「开始播放后自动全屏」, as the page reads it at the moment a playback starts.
@@ -799,7 +824,7 @@ public sealed partial class PlayerViewModel : ObservableObject
     /// 的手抄副本：两处写法已经在「外部后端该答什么」上分了歧，2026-09-17 删掉，只留这一条。
     /// </para>
     /// </summary>
-    internal bool PictureInHostWindow => _playback.PictureInHostWindow
+    internal bool PictureInHostWindow => _preparingPictureInHost ?? _playback.PictureInHostWindow
         ?? (Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv
             && Settings.Mpv.Pipeline != VideoPipelineKind.Standalone);
 

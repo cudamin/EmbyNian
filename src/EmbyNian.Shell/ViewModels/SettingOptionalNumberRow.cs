@@ -8,17 +8,19 @@ public sealed partial class SettingOptionalNumberRow : SettingRow
 {
     private readonly Action<double?> _write;
     private readonly Action _save;
+    private readonly Func<double?, double?> _normalize;
     private readonly bool _seeded;
     private bool _committing;
     private double _lastValue;
 
     internal SettingOptionalNumberRow(string label, string note, double minimum, double maximum,
-        double fallback, double? value, Action<double?> write, Action save) : base(label, note)
+        double fallback, double? value, Action<double?> write, Action save, Func<double?, double?>? normalize = null) : base(label, note)
     {
         Minimum = minimum;
         Maximum = maximum;
+        _normalize = normalize ?? (number => HdrOptions.Clamp(number, minimum, maximum));
         Automatic = value is null;
-        Value = HdrOptions.Clamp(value ?? fallback, minimum, maximum) ?? minimum;
+        Value = _normalize(value ?? fallback) ?? minimum;
         _lastValue = Value;
         _write = write;
         _save = save;
@@ -46,7 +48,7 @@ public sealed partial class SettingOptionalNumberRow : SettingRow
     partial void OnValueChanged(double value)
     {
         if (!_seeded || _committing) return;
-        var bounded = HdrOptions.Clamp(value, Minimum, Maximum);
+        var bounded = _normalize(value);
         _committing = true;
         try
         {

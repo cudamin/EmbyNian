@@ -143,6 +143,7 @@ function create_self_updating_menu_opener(opts)
 			items = initial_items,
 			item_actions = actions,
 			item_actions_place = opts.actions_place,
+			bind_keys = opts.bind_keys or (opts.on_reload and {'f5'} or nil),
 			selected_index = selected_index,
 			on_move = opts.on_move and 'callback' or nil,
 			on_paste = opts.on_paste and 'callback' or nil,
@@ -297,7 +298,7 @@ function create_select_tracklist_type_menu_opener(opts)
 				if track.forced then h(t('forced')) end
 				if track.default then h(t('default')) end
 				if track.external then
-					local extension = track.title:match('%.([^%.]+)$')
+					local extension = track.title and track.title:match('%.([^%.]+)$')
 					if track.title and escaped_filename and extension then
 						track.title = trim(track.title:gsub(escaped_filename .. '%.?', ''):gsub('%.?([^%.]+)$', ''))
 						if track.title == '' or track.lang and track.title:lower() == track.lang:lower() then
@@ -377,6 +378,7 @@ function create_select_tracklist_type_menu_opener(opts)
 		serializer = serialize_tracklist,
 		on_activate = handle_activate,
 		on_key = handle_key,
+		bind_keys = {'f5'},
 		actions_place = 'outside',
 		on_paste = function(event) load_track(opts.type, event.value) end,
 	})

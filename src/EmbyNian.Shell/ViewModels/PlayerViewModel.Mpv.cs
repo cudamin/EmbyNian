@@ -130,8 +130,13 @@ public sealed partial class PlayerViewModel
     /// </summary>
     internal void NudgeDelay(bool subtitle, double delta)
     {
-        var value = Math.Round((subtitle ? SubtitleDelay : AudioDelay) + delta, 3);
-        SetDelay(subtitle, value);
+        if (!subtitle)
+        {
+            _ = ChangeAudioDelayAsync(delta, relative: true, notice: true);
+            return;
+        }
+        var value = Math.Round(SubtitleDelay + delta, 3);
+        SetDelay(subtitle: true, value);
 
         _ = _playback.CommandAsync(
             "show-text",
@@ -145,10 +150,25 @@ public sealed partial class PlayerViewModel
     /// </summary>
     internal void SetDelay(bool subtitle, double value)
     {
-        if (subtitle) SubtitleDelay = value;
-        else AudioDelay = value;
+        if (!subtitle)
+        {
+            _ = ChangeAudioDelayAsync(value, relative: false, notice: false);
+            return;
+        }
+        SubtitleDelay = value;
+        _ = _playback.SetPropertyAsync("sub-delay", value);
+    }
 
-        _ = _playback.SetPropertyAsync(subtitle ? "sub-delay" : "audio-delay", value);
+    private async Task ChangeAudioDelayAsync(double value, bool relative, bool notice)
+    {
+        var request = ++_audioDelayRequest;
+        var generation = _generation;
+        var playback = _playback.Generation;
+        var applied = await _playback.ChangeAudioDelayAsync(value, relative, notice).ConfigureAwait(true);
+        if (_lifetime.IsCancellationRequested || request != _audioDelayRequest || generation != _generation
+            || playback != _playback.Generation || !_playback.IsPlaying) return;
+        if (applied is { } seconds) AudioDelay = Math.Round(seconds, 3);
+        else Noticed?.Invoke("音频延迟未能确认，请查看日志", InfoBarSeverity.Warning);
     }
 
     internal void NudgeVolume(double delta) => Volume = VolumeScale.Step(Volume, delta);
@@ -245,9 +265,11 @@ public sealed partial class PlayerViewModel
     {
         _shaderContext = (item, source, parent);
         _shaderPinned = false;
+        _shaderSettings = Settings.Shaders.Snapshot();
+        _shaderResolver = new ShaderGroupResolver(_shaderSettings);
         _surface = Surface();
 
-        _shaderPlan = _shaders.Resolve(item, source, parent, _surface.Monitor);
+        _shaderPlan = _shaderResolver.Resolve(item, source, parent, _surface.Monitor);
 
         // What the planner picked is the 档位 the ⚙ menu opens on, so it shows the startup decision rather
         // than looking as though nothing had been applied.
@@ -269,6 +291,25 @@ public sealed partial class PlayerViewModel
 
         _launchOutput = _surface.Active;
         return _launchOutput;
+    }
+
+    private void AdoptShaderLaunch(EmbyItem item)
+    {
+        if (_playback.PlayingSource is not { } source || _playback.LaunchShaderDecision is not { } plan) return;
+        _shaderContext = (item, source, _shaderContext?.Parent);
+        _shaderPlan = plan;
+        _shaderPinned = false;
+        ActiveShader = plan.Group;
+        var video = source.PrimaryVideoStream;
+        _outputWatch = new OutputWatch(video?.Width ?? 0, video?.Height ?? 0, _surface, plan.Measure.Tier);
+        SourceAspectChanged?.Invoke(video is { Width: > 0, Height: > 0 }
+            ? (double)video.Width.Value / video.Height.Value : 0);
+        if (_surface.Monitor != _launchOutput)
+        {
+            _shaderPlan = (_shaderResolver ?? _shaders).Resolve(item, source, _shaderContext?.Parent, _surface.Monitor);
+            _outputWatch = new OutputWatch(video?.Width ?? 0, video?.Height ?? 0, _surface, _shaderPlan.Measure.Tier);
+            Switch(_shaderPlan, "加载期间换显示器");
+        }
     }
 
     /// <summary>
@@ -310,7 +351,7 @@ public sealed partial class PlayerViewModel
         // the monitor, and only a monitor move changes it.
         if (moved)
         {
-            _shaderPlan = _shaders.Resolve(context.Item, context.Source, context.Parent, surface.Monitor);
+            _shaderPlan = (_shaderResolver ?? _shaders).Resolve(context.Item, context.Source, context.Parent, surface.Monitor);
         }
 
         _surface = surface;
@@ -366,13 +407,13 @@ public sealed partial class PlayerViewModel
     /// <summary>Applies a prepared plan to the film that is playing, and says so in the log rather than on screen.</summary>
     private void Switch(ShaderDecision plan, string because)
     {
-        if (string.Equals(plan.Group?.Id ?? "", ActiveShader?.Id ?? "", StringComparison.Ordinal))
+        if (!ShaderSwitching && _playback.ShaderStateKnown && ReferenceEquals(plan.Group, ActiveShader))
         {
             Log.Debug(ShaderLog, $"{because}，档位没变：{plan.Reason}");
             return;
         }
 
-        _ = ChangeShaderGroupAsync(plan.Group, pinned: false);
+        _ = ChangeShaderGroupAsync(plan.Group, pinned: false, automatic: true);
     }
 
     /// <summary>
@@ -394,35 +435,66 @@ public sealed partial class PlayerViewModel
     /// halfway through a comparison would otherwise put the other chain back.
     /// </para>
     /// </summary>
-    private bool _shaderSwitching;
+    private int _shaderPending;
+    private bool ShaderSwitching => _shaderPending > 0;
+    private Task _pictureCommandTask = Task.CompletedTask;
+    private Task _shaderSwitchTask = Task.CompletedTask;
 
     internal bool ShaderChoicePinned => _shaderPinned;
+    internal bool ShaderStateKnown => _playback.ShaderStateKnown;
+    internal string ActiveShaderLabel => ShaderStateKnown ? ActiveShader?.Name ?? "未启用" : "状态未知，请重新选择";
 
     internal void ApplyShaderGroup(ShaderGroup? group) => _ = ChangeShaderGroupAsync(group, pinned: true);
 
-    internal void RestoreShaderPlan() => _ = ChangeShaderGroupAsync(_shaderPlan.Group, pinned: false);
+    internal void RestoreShaderPlan() => _ = ChangeShaderGroupAsync(null, pinned: false);
 
-    private async Task ChangeShaderGroupAsync(ShaderGroup? group, bool pinned)
+    private Task QueuePictureCommand(Func<Task> action)
     {
-        if (_shaderSwitching) return;
-        _shaderSwitching = true;
-        var source = PlayingSource;
-        try
+        var previous = _pictureCommandTask;
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pictureCommandTask = completed.Task;
+        return RunAsync();
+
+        async Task RunAsync()
         {
-            var applied = await _playback.SetShaderGroupAsync(group).ConfigureAwait(true);
-            if (!ReferenceEquals(source, PlayingSource)) return;
-            if (applied)
+            try
             {
-                _shaderPinned = pinned;
-                ActiveShader = group;
+                await previous.ConfigureAwait(true);
+                await action().ConfigureAwait(true);
             }
-            var message = applied
-                ? group is null ? "已关闭着色器，已恢复本次画质预设" : $"已切换着色器：{group.DisplayName}"
-                : "着色器未能完整应用，请查看日志或重新播放";
-            Noticed?.Invoke(message, applied ? InfoBarSeverity.Informational : InfoBarSeverity.Warning);
-            await _playback.CommandAsync("show-text", message, "2500").ConfigureAwait(true);
+            finally { completed.TrySetResult(); }
         }
-        finally { _shaderSwitching = false; }
+    }
+
+    private Task ChangeShaderGroupAsync(ShaderGroup? group, bool pinned, bool automatic = false)
+    {
+        var generation = _generation;
+        var playbackGeneration = _playback.Generation;
+        _shaderPending++;
+        _shaderSwitchTask = QueuePictureCommand(async () =>
+        {
+            try
+            {
+                if (generation != _generation || playbackGeneration != _playback.Generation || (automatic && _shaderPinned)) return;
+                var requested = pinned ? group : _shaderPlan.Group;
+                var applied = await _playback.SetShaderGroupAsync(requested).ConfigureAwait(true);
+                if (generation != _generation || playbackGeneration != _playback.Generation) return;
+                if (applied)
+                {
+                    _shaderPinned = pinned;
+                    ActiveShader = requested;
+                    if (!pinned && !ReferenceEquals(requested, _shaderPlan.Group))
+                        Switch(_shaderPlan, "恢复自动期间换显示器");
+                }
+                var message = applied
+                    ? requested is null ? "已关闭着色器，已恢复本次画质预设" : $"已切换着色器：{requested.DisplayName}"
+                    : ShaderStateKnown ? "着色器未能应用，已保留切换前状态" : "着色器切换与回滚未完成，状态未知，请重新选择或重新播放";
+                Noticed?.Invoke(message, applied ? InfoBarSeverity.Informational : InfoBarSeverity.Warning);
+                await _playback.CommandAsync("show-text", message, "2500").ConfigureAwait(true);
+            }
+            finally { _shaderPending--; }
+        });
+        return _shaderSwitchTask;
     }
 
     /// <summary>
@@ -439,14 +511,38 @@ public sealed partial class PlayerViewModel
     /// rather than claiming the whole row did nothing.
     /// </para>
     /// </summary>
-    internal async Task RunMenuNodeAsync(PlayerMenuNode node)
+    internal Task RunMenuNodeAsync(PlayerMenuNode node)
     {
+        var generation = _generation;
+        var playbackGeneration = _playback.Generation;
+        return QueuePictureCommand(() => RunMenuCommandsAsync(node, generation, playbackGeneration));
+    }
+
+    private async Task RunMenuCommandsAsync(PlayerMenuNode node, int generation, long playbackGeneration)
+    {
+        var context = CaptureInteraction();
         try
         {
+            if (generation != _generation || playbackGeneration != _playback.Generation) return;
+            if (!ShaderStateKnown && node.Commands.Any(command => command.Count > 1
+                && ShaderGroupCatalog.NeutralOptions.Any(option => option.Key == command[1])))
+            {
+                await _playback.CommandAsync("show-text", "着色器状态未知，请先重新选择或关闭着色器", "2000").ConfigureAwait(true);
+                return;
+            }
+            if (node.Commands.Any(command => ShaderChainRules.ConflictsWith(ActiveShader, command)))
+            {
+                await _playback.CommandAsync("show-text", "此选项由当前着色器链管理，请先关闭着色器", "2000").ConfigureAwait(true);
+                return;
+            }
             var done = true;
             foreach (var command in node.Commands)
+            {
+                if (!IsCurrentInteraction(context)) return;
                 done &= await _playback.CommandAsync([.. command]).ConfigureAwait(true);
+            }
 
+            if (!IsCurrentInteraction(context)) return;
             if (node.Notice.Length > 0)
             {
                 var verdict = node.Commands.Count > 1 ? "没全部成功" : "没成功";

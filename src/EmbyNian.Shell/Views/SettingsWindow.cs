@@ -77,6 +77,20 @@ internal sealed class SettingsWindow
     internal SizeInt32 Size => _window.AppWindow.Size;
 
     /// <summary>
+    /// 这扇窗的 HWND。自检量「设置窗口真的盖在画面之上」要用它 —— 那句问的是屏幕坐标上谁在最前面，
+    /// 只有句柄答得了。
+    /// </summary>
+    internal IntPtr Handle => Win32Interop.GetWindowFromWindowId(_window.AppWindow.Id);
+
+    /// <summary>
+    /// 收摊了（X 或 <see cref="Hide"/>）。外壳凭它把画面放下的置顶拿回来 —— 全屏播放时那扇主窗是 topmost 的，
+    /// 开设置之前先让开，收了摊就得还原（见 <c>HostWindow.StandAsideForOwnWindow</c> 与
+    /// <c>ShellPage.ShowSettings</c>）。按「真的收起了才喊」：<see cref="Hide"/> 本就有幂等闸，
+    /// <see cref="OnClosing"/> 那一支是用户按 X 的路。
+    /// </summary>
+    internal event Action? Hidden;
+
+    /// <summary>
     /// What is on screen inside this window: the hosted 服务器/诊断/服务器控制台 page when the settings page
     /// has one showing, otherwise the settings page itself. The self-check reads both trees through this.
     /// </summary>
@@ -172,6 +186,7 @@ internal sealed class SettingsWindow
         _open = false;
         Page?.ReleaseHosted();
         _window.AppWindow.Hide();
+        Hidden?.Invoke();
     }
 
     /// <summary>
@@ -207,6 +222,7 @@ internal sealed class SettingsWindow
         _open = false;
         Page?.ReleaseHosted();
         sender.Hide();
+        Hidden?.Invoke();
     }
 
     /// <summary>

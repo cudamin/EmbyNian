@@ -15,7 +15,8 @@ public enum MoviePilotDownloadState
     Idle,
     Working,
     Done,
-    Failed
+    Failed,
+    Uncertain
 }
 
 /// <summary>
@@ -53,14 +54,24 @@ public sealed partial class MoviePilotResourceRow : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(DownloadCommand))]
     public partial MoviePilotDownloadState State { get; set; }
 
-    public bool CanDownload => State is MoviePilotDownloadState.Idle or MoviePilotDownloadState.Failed;
+    public bool CanDownload => Resource.DownloadProblem is null &&
+        State is MoviePilotDownloadState.Idle or MoviePilotDownloadState.Failed;
 
-    public string DownloadLabel => State switch
+    public string DownloadLabel => Resource.DownloadProblem is not null ? "身份待核对" : State switch
     {
         MoviePilotDownloadState.Working => "添加中…",
         MoviePilotDownloadState.Done => "已加入下载",
         MoviePilotDownloadState.Failed => "重试下载",
+        MoviePilotDownloadState.Uncertain => "请先核对",
         _ => "下载"
+    };
+
+    internal static MoviePilotDownloadState StateOf(MoviePilotOperationState state) => state switch
+    {
+        MoviePilotOperationState.Working => MoviePilotDownloadState.Working,
+        MoviePilotOperationState.Submitted => MoviePilotDownloadState.Done,
+        MoviePilotOperationState.Uncertain => MoviePilotDownloadState.Uncertain,
+        _ => MoviePilotDownloadState.Idle
     };
 
     public string DownloadAutomationName => $"下载：{Title}";
@@ -94,6 +105,7 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
     private MoviePilotService? _service;
     private ISystemLauncher? _launcher;
     private MoviePilotMedia? _media;
+    private CancellationToken _query;
 
     public MoviePilotResourceViewModel()
     {
@@ -131,6 +143,7 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
         if (_service is null || _media is null) return;
 
         var token = BeginLoad();
+        _query = token;
         Browser.SetResults([]);
         ShowEmptyNotice = false;
 
@@ -139,7 +152,10 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
             var found = await _service.SearchResourcesAsync(_media, token).ConfigureAwait(true);
             if (!IsCurrent(token)) return;
 
-            Browser.SetResults(found.Select(resource => new MoviePilotResourceRow(resource, DownloadAsync, OpenDetails)));
+            Browser.SetResults(found.Select(resource => new MoviePilotResourceRow(resource, DownloadAsync, OpenDetails)
+            {
+                State = MoviePilotResourceRow.StateOf(_service.DownloadState(resource))
+            }));
 
             EmptyNotice = "没找到可下载的资源，换个别的片或稍后再试";
             ShowEmptyNotice = found.Count == 0;
@@ -174,27 +190,29 @@ public sealed partial class MoviePilotResourceViewModel : PageViewModel
     /// </summary>
     private async Task DownloadAsync(MoviePilotResourceRow row)
     {
-        if (_service is null || row.State == MoviePilotDownloadState.Working) return;
-
+        if (_service is null || !row.CanDownload || !IsCurrent(_query)) return;
+        var token = _query;
         var confirmed = await ConfirmAsync(
             "加入下载",
-            $"确认把这个资源加进 MoviePilot 下载吗？\n{row.Title}\n{row.Resource.PromotionText}\n" +
-            (row.Resource.HitAndRun ? "此资源有 HR 考核，请先在种子页面核对做种要求。" : "优惠和下载规则以站点当前页面为准。"),
+            $"确认把这个资源加进 MoviePilot 下载吗？\n{row.Resource.Confirmation}",
             "下载").ConfigureAwait(true);
-        if (!confirmed) return;
+        if (!confirmed || !IsCurrent(token)) return;
 
         row.State = MoviePilotDownloadState.Working;
         try
         {
-            await _service.DownloadAsync(row.Resource, CancellationToken.None).ConfigureAwait(true);
+            await _service.DownloadAsync(row.Resource, token).ConfigureAwait(true);
+            if (!IsCurrent(token)) return;
             row.State = MoviePilotDownloadState.Done;
             Notify(null, $"已加入下载：{row.Title}", InfoBarSeverity.Success);
         }
         catch (Exception error)
         {
-            row.State = MoviePilotDownloadState.Failed;
-            Log.Warn(Category, $"下载「{row.Title}」失败", error);
-            Report($"加入下载失败：{row.Title}", error);
+            if (!IsCurrent(token)) return;
+            row.State = error is MoviePilotOperationUncertainException or MoviePilotOperationBlockedException
+                ? MoviePilotDownloadState.Uncertain : MoviePilotDownloadState.Failed;
+            Log.Warn(Category, $"下载「{row.Title}」未完成", error);
+            Report($"加入下载未完成：{row.Title}", error);
         }
     }
 }

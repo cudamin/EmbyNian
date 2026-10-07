@@ -661,9 +661,8 @@ public static class MpvOutputOptions
     }
 
     /// <summary>
-    /// 字幕外观 as mpv options. The colours go out in mpv's <c>r/g/b/a</c> float form rather than
-    /// <c>#AARRGGBB</c>: both are accepted, and in the float form 1.0 unambiguously means opaque, which
-    /// is what 底板不透明度 has to control.
+    /// 字幕外观 as mpv options. Colors use exact <c>#AARRGGBB</c> bytes: alpha 00 is transparent,
+    /// FF is opaque. Decimal RGB rounded for display must not change a user's exact color.
     /// <para>
     /// <c>sub-border-size</c> and <c>sub-border-color</c> are the pre-0.39 names of what mpv now calls
     /// <c>sub-outline-*</c> and are still accepted as aliases. The old names are the compatible ones:
@@ -836,26 +835,12 @@ public static class MpvOutputOptions
         return trimmed.Length == 0 ? "" : trimmed;
     }
 
-    /// <summary><c>#RRGGBB</c> plus an opacity percentage as mpv's <c>r/g/b/a</c>; null when unset.</summary>
+    /// <summary><c>#RRGGBB</c> plus opacity as mpv's exact <c>#AARRGGBB</c>; null when unset.</summary>
     internal static string? ToMpvColor(string? hex, int opacityPercent)
     {
-        var value = (hex ?? "").Trim().TrimStart('#');
-        if (value.Length != 6 || !int.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var packed))
-            return null;
-
-        var alpha = Math.Clamp(opacityPercent, 0, 100) / 100.0;
-        return string.Join(
-            "/",
-            Component(packed >> 16),
-            Component(packed >> 8),
-            Component(packed),
-            Format(alpha));
-
-        static string Component(int channel) => Format((channel & 0xFF) / 255.0);
-
-        // Fixed three decimals, so every component of every colour reads the same width — including
-        // the whole numbers, which "0.###" would print as a bare 0 or 1.
-        static string Format(double part) => part.ToString("0.000", CultureInfo.InvariantCulture);
+        if (!HtmlColor.TryParse(hex, out var packed)) return null;
+        var alpha = (int)Math.Round(Math.Clamp(opacityPercent, 0, 100) * 255.0 / 100);
+        return $"#{alpha:X2}{packed:X6}";
     }
 
     private static void Add(List<KeyValuePair<string, string>> options, string name, string? value)

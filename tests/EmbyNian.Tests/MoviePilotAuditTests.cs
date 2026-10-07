@@ -10,6 +10,9 @@ internal static class MoviePilotAuditTests
 {
     public static void Register()
     {
+        MoviePilotSafetyTests.Register();
+        MoviePilotQuerySafetyTests.Register();
+
         Test("MoviePilot 资源：标签优惠时间与浮点体积完整解析", () =>
         {
             var rows = MoviePilotMediaParser.ParseResources(Json("""
@@ -229,7 +232,7 @@ internal static class MoviePilotAuditTests
         Test("MoviePilot 来源：影视筛选认电影电视剧，音乐来源不混进来", () =>
         {
             Assert.True(new MoviePilotMediaSource("TMDB", "themoviedb", ["电影", "电视剧"]).IsVideo);
-            Assert.True(new MoviePilotMediaSource("插件", "someplugin", []).IsVideo, "没声明类型按可用处理");
+            Assert.False(new MoviePilotMediaSource("插件", "someplugin", []).IsVideo, "显式空能力列表不是影视支持");
             Assert.False(new MoviePilotMediaSource("豆瓣音乐", "doubanmusic", ["专辑", "单曲"]).IsVideo);
         });
 

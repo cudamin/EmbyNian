@@ -12,6 +12,7 @@ namespace EmbyNian.Configuration;
 public sealed class SettingsStore(AppPaths paths, ISecretProtector protector)
 {
     private const string Category = "settings";
+    private readonly object _gate = new();
 
     public AppPaths Paths { get; } = paths;
 
@@ -97,14 +98,13 @@ public sealed class SettingsStore(AppPaths paths, ISecretProtector protector)
     {
         try
         {
-            SettingsMigration.Normalize(settings);
-            settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
-
-            Directory.CreateDirectory(Paths.Root);
-            if (File.Exists(Paths.SettingsFile)) File.Copy(Paths.SettingsFile, Paths.SettingsBackupFile, overwrite: true);
-
-            var json = JsonSerializer.Serialize(settings, SettingsSerializer.WriteOptions);
-            AtomicFile.WriteAllText(Paths.SettingsFile, json, new UTF8Encoding(false));
+            lock (_gate)
+            {
+                SettingsMigration.Normalize(settings);
+                settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
+                var json = JsonSerializer.Serialize(settings, SettingsSerializer.WriteOptions);
+                AtomicFile.WriteAllText(Paths.SettingsFile, json, new UTF8Encoding(false), Paths.SettingsBackupFile);
+            }
             Log.Debug(Category, "设置已保存");
         }
         catch (Exception error)
@@ -118,7 +118,15 @@ public sealed class SettingsStore(AppPaths paths, ISecretProtector protector)
     {
         try
         {
-            settings = SettingsMigration.FromJson(File.ReadAllText(path), protector);
+            var json = File.ReadAllText(path);
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("设置文件必须是 JSON 对象");
+            settings = SettingsMigration.FromJson(json, protector);
             return true;
         }
         // Deliberately every exception, not the three that used to be listed here (JSON, IO,

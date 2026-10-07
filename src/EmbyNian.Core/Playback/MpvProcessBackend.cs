@@ -122,7 +122,11 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
             process.StandardOutput.BaseStream.CopyToAsync(Stream.Null));
 
         using var giveUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        void OnExited(object? sender, EventArgs arguments) => Cancel(giveUp);
+        var loading = 0;
+        void OnExited(object? sender, EventArgs arguments)
+        {
+            if (Volatile.Read(ref loading) == 0) Cancel(giveUp);
+        }
 
         try
         {
@@ -154,6 +158,7 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
             foreach (var command in MpvArgumentBuilder.LoadCommands(request))
             {
                 giveUp.Token.ThrowIfCancellationRequested();
+                if (command[0] is "loadfile") Volatile.Write(ref loading, 1);
                 if (!await _startup.SendAsync(giveUp.Token, command).ConfigureAwait(false))
                     throw new InvalidOperationException("mpv 未确认安全起播命令，已停止启动；请检查外部播放器版本");
             }
@@ -201,7 +206,8 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
     {
         if (name == "track-list")
         {
-            if (TracksChanged is not null) _ = PublishTracksAsync();
+            var tracks = ParseTracks(message.Data);
+            if (tracks.Count > 0) TracksChanged?.Invoke(tracks);
             return;
         }
 
@@ -209,7 +215,8 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         {
             "pause" => message.AsBoolean() is { } paused ? status with { Paused = paused } : status,
             "duration" => message.AsDouble() is { } duration ? status with { Duration = Math.Max(0, duration) } : status,
-            "volume" => message.AsDouble() is { } volume ? status with { Volume = volume } : status,
+            "volume" => message.AsDouble() is { } volume && double.IsFinite(volume)
+                ? status with { Volume = volume, VolumeKnown = true } : status,
             "mute" => message.AsBoolean() is { } muted ? status with { Muted = muted } : status,
             "speed" => message.AsDouble() is { } speed ? status with { Speed = speed } : status,
             "paused-for-cache" => message.AsBoolean() is { } waiting ? status with { Buffering = waiting } : status,
@@ -222,18 +229,6 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
             "ab-loop-b" => status with { LoopB = message.AsDouble() },
             _ => status
         });
-    }
-
-    private async Task PublishTracksAsync()
-    {
-        try
-        {
-            var tracks = await GetTracksAsync(_finished.Token).ConfigureAwait(false);
-            if (tracks.Count > 0) TracksChanged?.Invoke(tracks);
-        }
-        catch (Exception error) when (error is OperationCanceledException or ObjectDisposedException)
-        {
-        }
     }
 
     /// <summary>
@@ -319,22 +314,21 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         }
 
         var exitCode = SafeExitCode();
-        var reason = Classify(exitCode);
+        var reason = Classify(_endReason, exitCode, _stopRequested);
         var message = reason == PlaybackEndReason.Error ? $"mpv 播放失败（退出代码 {exitCode}）" : null;
 
         Log.Info(Category, $"mpv 已退出（代码 {exitCode}，原因 {_endReason ?? "未知"}）");
         return new PlaybackExit(reason, LastPosition, exitCode, message);
     }
 
-    private PlaybackEndReason Classify(int exitCode) => _endReason switch
-    {
-        MpvEndFileReason.Eof => PlaybackEndReason.EndOfFile,
-        MpvEndFileReason.Error => PlaybackEndReason.Error,
-        MpvEndFileReason.Quit or MpvEndFileReason.Stop => _stopRequested ? PlaybackEndReason.Stopped : PlaybackEndReason.UserQuit,
-        // Without a control channel the exit code is all there is; mpv returns non-zero only
-        // when it could not play the file.
-        _ => exitCode == 0 ? PlaybackEndReason.Unknown : PlaybackEndReason.Error
-    };
+    internal static PlaybackEndReason Classify(string? endReason, int exitCode, bool stopRequested) =>
+        stopRequested ? PlaybackEndReason.Stopped : endReason switch
+        {
+            MpvEndFileReason.Eof => PlaybackEndReason.EndOfFile,
+            MpvEndFileReason.Error => PlaybackEndReason.Error,
+            MpvEndFileReason.Quit or MpvEndFileReason.Stop => PlaybackEndReason.UserQuit,
+            _ => exitCode == 0 ? PlaybackEndReason.Unknown : PlaybackEndReason.Error
+        };
 
     public async Task StopAsync()
     {
@@ -391,42 +385,48 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         try
         {
             using var document = JsonDocument.Parse(raw);
-            if (document.RootElement.ValueKind != JsonValueKind.Array) return [];
-
-            var tracks = new List<MpvTrack>();
-            foreach (var element in document.RootElement.EnumerateArray())
-            {
-                if (!TryText(element, "type", out var type) || type is not ("audio" or "sub" or "video")) continue;
-                if (!element.TryGetProperty("id", out var id) || !id.TryGetInt32(out var trackId)) continue;
-
-                tracks.Add(new MpvTrack(
-                    trackId,
-                    type,
-                    TryText(element, "lang", out var language) ? language : null,
-                    TryText(element, "title", out var title) ? title : null,
-                    TryFlag(element, "default"),
-                    TryFlag(element, "selected"))
-                {
-                    // Everything below is optional in mpv's own output — an old build, or a demuxer
-                    // that knows less — so each one is read on its own and left at zero when absent.
-                    Codec = TryText(element, "codec", out var codec) ? codec : null,
-                    Channels = TryText(element, "demux-channels", out var channels) ? channels : null,
-                    ChannelCount = TryNumber(element, "demux-channel-count"),
-                    SampleRate = TryNumber(element, "demux-samplerate"),
-                    BitRate = TryNumber(element, "demux-bitrate"),
-                    Forced = TryFlag(element, "forced"),
-                    External = TryFlag(element, "external"),
-                    Image = TryFlag(element, "image"),
-                    HearingImpaired = TryFlag(element, "hearing-impaired")
-                });
-            }
-
-            return tracks;
+            return ParseTracks(document.RootElement);
         }
         catch (JsonException)
         {
             return [];
         }
+    }
+
+    internal static IReadOnlyList<MpvTrack> ParseTracks(JsonElement? data)
+    {
+        if (data is not { ValueKind: JsonValueKind.Array } array) return [];
+        var tracks = new List<MpvTrack>();
+        foreach (var element in array.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object
+                || !TryText(element, "type", out var type) || type is not ("audio" or "sub" or "video")) continue;
+            if (!element.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.Number
+                || !id.TryGetInt32(out var trackId)) continue;
+
+            tracks.Add(new MpvTrack(
+                trackId,
+                type,
+                TryText(element, "lang", out var language) ? language : null,
+                TryText(element, "title", out var title) ? title : null,
+                TryFlag(element, "default"),
+                TryFlag(element, "selected"))
+            {
+                Codec = TryText(element, "codec", out var codec) ? codec : null,
+                MainSelection = OptionalIndex(element, "main-selection"),
+                FfmpegIndex = OptionalIndex(element, "ff-index"),
+                ExternalFilename = TryText(element, "external-filename", out var filename) ? filename : null,
+                Channels = TryText(element, "demux-channels", out var channels) ? channels : null,
+                ChannelCount = TryNumber(element, "demux-channel-count"),
+                SampleRate = TryNumber(element, "demux-samplerate"),
+                BitRate = TryNumber(element, "demux-bitrate"),
+                Forced = TryFlag(element, "forced"),
+                External = TryFlag(element, "external"),
+                Image = TryFlag(element, "image"),
+                HearingImpaired = TryFlag(element, "hearing-impaired")
+            });
+        }
+        return tracks;
     }
 
     /// <summary>
@@ -495,6 +495,10 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         return false;
     }
 
+    private static int? OptionalIndex(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number
+            && property.TryGetInt32(out var index) && index >= 0 ? index : null;
+
     private static bool TryFlag(JsonElement element, string name) =>
         element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.True;
 
@@ -526,10 +530,26 @@ internal sealed class MpvProcessHandle(Process process) : IPlaybackHandle, IPlay
         return await _ipc.GetNumberAsync(name, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<bool?> HasOptionAsync(string name, CancellationToken cancellationToken)
+    {
+        if (_ipc is not { IsConnected: true }) return null;
+        var reply = await _ipc.RequestAsync(cancellationToken, "get_property", $"option-info/{name}").ConfigureAwait(false);
+        if (reply is not { } value) return null;
+        if (value.IsSuccess && value.Data is { ValueKind: JsonValueKind.Object }) return true;
+        return value.Error == "property not found" ? false : null;
+    }
+
     public async Task<string?> GetTextAsync(string name, CancellationToken cancellationToken)
     {
         if (_ipc is not { IsConnected: true }) return null;
         return await _ipc.GetTextAsync(name, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<string>?> GetStringListAsync(string name, CancellationToken cancellationToken)
+    {
+        if (_ipc is not { IsConnected: true }) return null;
+        var raw = await _ipc.GetPropertyRawAsync(name, cancellationToken).ConfigureAwait(false);
+        return MpvListValue.ParseStrings(raw);
     }
 
     private async Task<bool> WaitForExitWithinAsync(TimeSpan timeout)

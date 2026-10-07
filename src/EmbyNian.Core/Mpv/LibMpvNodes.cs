@@ -47,6 +47,19 @@ internal static class LibMpvNodes
         }
     }
 
+    internal static IReadOnlyList<string>? Strings(LibMpvNative.MpvNode node)
+    {
+        if (node.Format != LibMpvNative.FormatNodeArray) return null;
+        var result = new List<string>();
+        foreach (var child in Children(node))
+        {
+            if (child.Format != LibMpvNative.FormatString || Marshal.PtrToStringUTF8(child.Union) is not { } value)
+                return null;
+            result.Add(value);
+        }
+        return result;
+    }
+
     internal static IEnumerable<LibMpvNative.MpvNode> Children(LibMpvNative.MpvNode node)
     {
         if (node.Format is not (LibMpvNative.FormatNodeArray or LibMpvNative.FormatNodeMap)) return [];

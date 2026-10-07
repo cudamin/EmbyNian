@@ -59,11 +59,9 @@ internal static class PictureRevealTests
             var shell = Source("src", "EmbyNian.Shell");
 
             var backend = core["LibMpvBackend.cs"];
-            var unusedArray = backend[backend.IndexOf("Span<int> unused", StringComparison.Ordinal)..];
-            unusedArray = unusedArray[..unusedArray.IndexOf(']')];
-            Assert.DoesNotContain("EventPlaybackRestart", unusedArray,
-                "playback-restart 又被停订了 —— 那是「首帧上屏」唯一的通知");
-            Assert.Contains("LibMpvNative.EventPlaybackRestart", backend.Replace(unusedArray, ""));
+            Assert.False(LibMpvBackend.UnusedEvents.Contains(EmbyNian.Mpv.LibMpvNative.EventPlaybackRestart),
+                "playback-restart 是首帧上屏的通知，不能停订");
+            Assert.Contains("LibMpvNative.EventPlaybackRestart", backend);
             Assert.Contains("PictureStarted = true", backend);
 
             var target = shell[Path.Combine("Windowing", "CompositionVideoTarget.cs")];

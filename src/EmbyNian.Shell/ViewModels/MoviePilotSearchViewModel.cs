@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmbyNian.Diagnostics;
+using EmbyNian.Infrastructure;
 using EmbyNian.MoviePilot;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -15,7 +16,8 @@ public enum MoviePilotSubscribeState
     Idle,
     Working,
     Done,
-    Failed
+    Failed,
+    Uncertain
 }
 
 /// <summary>
@@ -93,7 +95,16 @@ public sealed partial class MoviePilotResult : ObservableObject
         MoviePilotSubscribeState.Working => "订阅中…",
         MoviePilotSubscribeState.Done => "已订阅",
         MoviePilotSubscribeState.Failed => "重试订阅",
+        MoviePilotSubscribeState.Uncertain => "请先核对",
         _ => "订阅"
+    };
+
+    internal static MoviePilotSubscribeState StateOf(MoviePilotOperationState state) => state switch
+    {
+        MoviePilotOperationState.Working => MoviePilotSubscribeState.Working,
+        MoviePilotOperationState.Submitted => MoviePilotSubscribeState.Done,
+        MoviePilotOperationState.Uncertain => MoviePilotSubscribeState.Uncertain,
+        _ => MoviePilotSubscribeState.Idle
     };
 
     /// <summary>读屏软件念出来的那一句：光一个「订阅」念不出订的是哪一部；来源对了才不至于订错库。</summary>
@@ -145,6 +156,8 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
     ];
 
     private MoviePilotService? _service;
+    private readonly LoadGeneration _sourceLoads = new();
+    private CancellationToken _query;
 
     /// <summary>上一次搜的词，供 <see cref="ReloadAsync"/> 重跑。</summary>
     private string _lastTerm = "";
@@ -183,22 +196,24 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
     /// </summary>
     internal async Task LoadSourcesAsync()
     {
-        if (_service is null) return;
+        var token = _sourceLoads.Begin();
+        if (_service is null || !_service.Enabled) return;
 
         IReadOnlyList<MoviePilotMediaSource> sources;
         try
         {
-            sources = await _service.MediaSourcesAsync(CancellationToken.None).ConfigureAwait(true);
+            sources = await _service.MediaSourcesAsync(token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException) { return; }
         catch (Exception error)
         {
+            if (!_sourceLoads.IsCurrent(token)) return;
             Log.Warn(Category, "读取 MoviePilot 来源目录失败，退到内置来源", error);
-            sources = [];
+            sources = FallbackSources;
         }
-
+        if (!_sourceLoads.IsCurrent(token)) return;
         var choices = sources.Where(source => source.IsVideo)
             .DistinctBy(source => source.Id, StringComparer.OrdinalIgnoreCase).ToList();
-        if (choices.Count == 0) choices = [.. FallbackSources];
 
         SourceChoices.Clear();
         SourceChoices.Add(AllSources);
@@ -230,7 +245,7 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
 
         if (keyword.Length == 0)
         {
-            Cancel();
+            base.Cancel();
             ClearNotice();
             IsReady = true;
             Results.Clear();
@@ -240,6 +255,8 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
         }
 
         var token = BeginLoad();
+        _query = token;
+        Results.Clear();
         ShowEmptyNotice = false;
 
         try
@@ -249,7 +266,10 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
 
             Results.Clear();
             foreach (var media in found)
-                Results.Add(new MoviePilotResult(media, SubscribeAsync, SearchResourcesAsync));
+                Results.Add(new MoviePilotResult(media, SubscribeAsync, SearchResourcesAsync)
+                {
+                    State = MoviePilotResult.StateOf(_service.SubscribeState(media))
+                });
 
             EmptyNotice = found.Count == 0 ? $"MoviePilot 上没搜到「{keyword}」" : IdlePrompt;
             ShowEmptyNotice = found.Count == 0;
@@ -277,27 +297,42 @@ public sealed partial class MoviePilotSearchViewModel : PageViewModel
     /// </summary>
     private async Task SubscribeAsync(MoviePilotResult result)
     {
-        if (_service is null || result.State == MoviePilotSubscribeState.Working) return;
-
+        if (_service is null || !result.CanSubscribe || !IsCurrent(_query)) return;
+        var token = _query;
         var confirmed = await ConfirmAsync(
             "订阅到 MoviePilot",
-            $"确认在 MoviePilot 上订阅《{result.Media.Title}》吗？它会去找资源、可能开始下载。",
+            $"确认在 MoviePilot 上订阅以下媒体吗？\n{result.Media.Confirmation}\n它会去找资源、可能开始下载。",
             "订阅").ConfigureAwait(true);
-        if (!confirmed) return;
+        if (!confirmed || !IsCurrent(token)) return;
 
         result.State = MoviePilotSubscribeState.Working;
         try
         {
-            await _service.SubscribeAsync(result.Media, CancellationToken.None).ConfigureAwait(true);
+            await _service.SubscribeAsync(result.Media, token).ConfigureAwait(true);
+            if (!IsCurrent(token)) return;
             result.State = MoviePilotSubscribeState.Done;
             Notify(null, $"已在 MoviePilot 订阅《{result.Media.Title}》", InfoBarSeverity.Success);
         }
         catch (Exception error)
         {
-            result.State = MoviePilotSubscribeState.Failed;
-            Log.Warn(Category, $"订阅《{result.Media.Title}》失败", error);
-            Report($"订阅《{result.Media.Title}》失败", error);
+            if (!IsCurrent(token)) return;
+            result.State = error is MoviePilotOperationUncertainException or MoviePilotOperationBlockedException
+                ? MoviePilotSubscribeState.Uncertain : MoviePilotSubscribeState.Failed;
+            Log.Warn(Category, $"订阅《{result.Media.Title}》未完成", error);
+            Report($"订阅《{result.Media.Title}》未完成", error);
         }
+    }
+
+    public override void Cancel()
+    {
+        _sourceLoads.Cancel();
+        base.Cancel();
+    }
+
+    public override void Dispose()
+    {
+        _sourceLoads.Dispose();
+        base.Dispose();
     }
 
     /// <summary>一张卡的「搜索资源」按下去：交给视图去开资源覆盖面板（那要 XamlRoot），视图模型只把媒体递出去。</summary>

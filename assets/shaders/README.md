@@ -7,7 +7,9 @@
 清单由单测钉着不许和 `src/EmbyNian.Core/Mpv/ShaderGroupCatalog.cs` 里的档位表跑偏 —— 两个方向都钉：
 表点了一个磁盘上没有的文件是一种错，仓库里躺着一个没有任何档位用得上的文件是另一种。
 
-改动过的只有一处，见下面 `igv/adaptive-sharpen.glsl` 那一行。其余每个文件都和上游一字节不差。
+记录过的本地算法改动只有一处，见下面 `igv/adaptive-sharpen.glsl` 那一行；其余文件保留入库版本，不用当前上游分支冒充当年取件的逐字节证明。
+
+发布时同时携带 `NOTICE.txt` 与 LGPL-2.1、LGPL-3.0、GPL-3.0 许可全文。MIT/BSD 全文保留在各源文件头；`tools/verify-publish.ps1` 对全部 GLSL、HOOK 与许可/归属文本逐文件核对路径和 SHA-256，离线失败夹具为 `tools/test-shader-publish.ps1`。
 
 | 目录 | 上游 | 许可 |
 |---|---|---|
@@ -43,15 +45,15 @@ igv 那三个的 gist 地址（更新时按这个取）：
 
 - `ravu-lite-ar-*.hook`：`HOOKED.w OUTPUT.w / 0.707106 <`，也就是**输出不到 1.414 倍（√2）就不跑**。
   甜点档从 1.45 起，正好压在这个门槛上面一点 —— 所以这三个文件在甜点档和大倍数档全程出手，
-  而整个微放大档（1.05–1.45）它们一次都不会跑。
+  而微放大档的 1.05–约1.414 区间不会跑，不能把整个 1.05–1.45 档都写成闭门。
 - `ravu-zoom-ar-r2.hook`：`HOOKED.w OUTPUT.w <`，**只要在放大就跑**，而且直接输出到 OUTPUT 尺寸
   （这是清单里唯一能一步放到非整数倍的文件）。所以微放大档那一格是它。
 - `ArtCNN_*.glsl`：`OUTPUT.w LUMA.w / 1.3 >`，**输出不到 1.3 倍就不跑**。所以「微放大档」
   （1.05–1.45 倍）里 1.05–1.30 那一段 ArtCNN 是不出手的，那一段由 `scale=ewa_lanczossharp` 收尾。
   1080p→1440p 是 1.33 倍，在门槛上面。
 - `SSimDownscaler.glsl`：挂在 `POSTKERNEL` 上，`NATIVE_CROPPED.h POSTKERNEL.h >`，只在真的要缩小时跑。
-  1.00 倍时它挂在链里一分钱不花 —— 这就是「原生」不必单开一档的原因。
-- `SSimSuperRes.glsl`：同样挂 `POSTKERNEL`，`NATIVE_CROPPED.h OUTPUT.h <`，只在放大时跑。
+  1.00 倍时算法 pass 不执行；保留 hook 仍可能产生中间纹理，不能据此声称零开销。
+- `SSimSuperRes.glsl`：同样挂 `POSTKERNEL`，`NATIVE_CROPPED.h OUTPUT.h <`；这里的输入尺寸可能已被前序放大器改写。2026-10-04 随包 `v0.41.0-923-g7b8915bc1`、D3D11、本地 640×360 4:2:0 素材实测：RAVU-Zoom 直接到输出后，1.33× 没有任何 SSSR pass，反而比去掉它多两条中间 pass；因此真人微放大高档不再挂 SSR。RAVU-Lite 先放到 2×，甜点中/高档的 1.45–2.00× 不执行 SSR，2.13× 才出现四条 SSSR pass；保留它服务超过 2× 的区间，不许把名单写成全程执行。
 - `igv/adaptive-sharpen.glsl`、`an3223/hdeband.glsl`、`an3223/nlmeans_light.glsl`：**没有门控，一律会跑**。
   所以它们只能靠档位表决定挂不挂 —— 前者只进中高档，后两个只进老片源那一半。
 

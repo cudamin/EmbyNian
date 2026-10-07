@@ -12,8 +12,15 @@ internal static class Program
         Console.WriteLine();
 
         PlaybackTests.Register();
+        PlaybackLifecycleTests.Register();
+        BackendLifecycleTests.Register();
+        AudioOutputTests.Register();
+        VideoOutputTests.Register();
+        ShaderTransactionTests.Register();
+        PlaybackTrackStateTests.Register();
         SubtitleFileTests.Register();
         SubtitleBehaviorTests.Register();
+        SubtitleManagementTests.Register();
         MpvProcessTests.Register();
         SelfCheckTests.Register();
         SettingsTests.Register();
@@ -28,8 +35,11 @@ internal static class Program
         SessionTests.Register();
         IdentityRegressionTests.Register();
         HttpRedirectTests.Register();
+        HttpDiagnosticsTests.Register();
         FailurePathTests.Register();
         ImageCacheTests.Register();
+        ImageIdentityTests.Register();
+        BrowsingPreferencesTests.Register();
         ItemDetailTests.Register();
         ItemArtworkTests.Register();
         ItemMenuTests.Register();
@@ -49,6 +59,7 @@ internal static class Program
         ThemeTests.Register();
         PlayerPaletteTests.Register();
         PlayerMotionTests.Register();
+        PlayerInteractionTests.Register();
         CoverArtworkTests.Register();
         PictureRevealTests.Register();
         StatusCoalescerTests.Register();

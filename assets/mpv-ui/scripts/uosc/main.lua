@@ -42,6 +42,18 @@
 -- │                             embynian-skip-take（宿主 TakeSkip）。集成模式那颗是 XAML 的，独占
 -- │                             模式画面在 mpv 窗口里、那颗不在屏上，故由宿主把 offer 推过来画。
 -- │                             start-file 时清一次（换集途中不挂上一集的 offer）。
+-- │                             **尺寸与集成那颗同一个观感**（2026-09-30 用户令「缩小图标跳过按钮
+-- │                             两倍」＋「参考集成模式的跳过按钮修改独占模式的跳过按钮」）。
+-- │     EMBYNIAN[skip-keys]     同上那条 offer 的**第二半**（2026-09-30 用户报「按回车和 esc 确认
+-- │                             跳过不生效」）：offer 立着那一段，SkipButton 元件用 keybind 把
+-- │                             ENTER/KP_ENTER/ESC 借到本脚本的两条无默认键绑定上（embynian-ui-skip-take /
+-- │                             embynian-ui-skip-dismiss，见下面的 bind_command），收摊时把原绑定
+-- │                             keybind 按回去（随包内核没有 keyunbind，2026-10-02 实测，还原写法
+-- │                             见 SkipButton 的 EMBYNIAN[skip-keys-restore]）。独占模式的键盘归
+-- │                             mpv（input-default-bindings=yes），Esc 本来
+-- │                             是内建的退全屏/退出、回车没有绑定，不借这两把键，提示立着按它们
+-- │                             什么都不会发生。集成模式那半在 shell 侧（PlayerPage 的 Root 兜底
+-- │                             + Win32 钩子），不走本通道。
 -- │     EMBYNIAN[topbar-subline] 宿主 → uosc 的通道：embynian-subline <分辨率·视频编码·音频格式·组名|空>
 -- │                             写进顶栏副标题（第二行），空串＝收起。集成模式那一行是 XAML 的 SubtitleBox，
 -- │                             独占模式由 uosc 顶栏画在返回按钮正下方 —— 两模式同源同显。
@@ -57,10 +69,11 @@
 -- │   elements/Menu.lua
 -- │     EMBYNIAN[menu-anchor]   宿主推来的菜单（画面/选集/版本）带 embynian_anchor 时在光标处弹出、
 -- │                             不屏幕居中、不压暗幕布 —— 弹出方式与集成模式的右键/按钮浮层一致
--- │     EMBYNIAN[menu-style]    菜单样式对齐参考 mpv 配置的右键菜单（用户令 2026-09-29「参考
--- │                             C:\mpv_config-2026.08.12 修改独占模式右键菜单界面」）：字号 20、
--- │                             行高＝字号×(1+gap)、缩放随窗口高（osd-height/720）、悬停行白底深字、
--- │                             底板不透明 #222222＋圆角 5＋0.5 白描边、分隔线 #555555 —— 逐项映射见
+-- │     EMBYNIAN[menu-style]    菜单大小对齐集成模式右键菜单（用户令 2026-10-07「独占模式的右键菜单
+-- │                             体积太大了，大小改为跟集成模式一致（注意全屏和最大化时要放大 1.3 倍）」）：
+-- │                             字号 14、行高＝字号×(1+gap)＝42、缩放＝state.scale（DPI，全屏/最大化
+-- │                             ×1.3，不再随窗口高）；上色照 2026-09-29 参考配置那轮（悬停行白底深字、
+-- │                             底板不透明 #222222＋圆角 5＋0.5 白描边、分隔线 #555555）—— 逐项映射见
 -- │                             本文件选项区 EMBYNIAN[menu-style]，几何与上色在 Menu.lua 同名槽
 -- │   elements/TopBar.lua
 -- │     EMBYNIAN[topbar-back]   左上角返回按钮：退出 mpv＝回到外壳详情页（与集成模式左上角返回同位同义）
@@ -211,32 +224,28 @@ defaults = {
 	speed_step = 0.1,
 	speed_step_is_factor = false,
 
-	-- EMBYNIAN[menu-style] — 菜单样式整把换成用户参考 mpv 配置的右键菜单（用户令 2026-09-29
-	-- 「参考 C:\mpv_config-2026.08.12 修改独占模式右键菜单界面」）。那份配置右键绑的是 mpv 0.41+ 内建的
-	-- context_menu.lua（portable_config/input.conf 的 `MBTN_Right context-menu`），样式写在
-	-- portable_config/script-opts/context_menu.conf —— 下面这批选项就是那份文件的逐项映射，几何与上色
-	-- 在 Menu.lua 的同名槽里，公式照抄上游 player/lua/context_menu.lua 源码：
-	--   · font_size=20 ＋ gap=0.2（字号的百分比）→ menu_font_size=20 / menu_gap=0.2：行高＝字号×(1+gap)
-	--     （上游 get_line_height 同式）。上游 uosc「字号＝item_height×0.48」的反推不再成立 ——
-	--     2026-09-26「右键菜单缩小一点」那一轮的行高 30/字号 14.4 由此让位：那一轮压的是上游 50/24 的
-	--     过大，这一轮整把尺子换成参考菜单的（行高、字号都随窗口高走，720p 高的窗口＝原值，见下）。
-	--   · 缩放：参考菜单按窗口高缩放（scale_with_window=auto → osd_height/720），不吃 uosc 的
-	--     scale/scale_fullscreen —— Menu.lua 的 menu_scale 同款。
-	--   · padding_x=8 / padding_y=4 → menu_padding=4（uosc 只有单值内边距；横向另有 item_padding
-	--     ≈字号×0.12，两项合计≈8，与 padding_x 对上）。
-	--   · corner_radius=5、menu_outline_size=0.5（白）→ menu_corner_radius / menu_outline_*。
-	--   · 菜单底板：参考菜单不透明（background_alpha=0）、色取 osd-back-color 黑时的兜底 #222222 ——
-	--     menu_background_color 照画，opacity 的 menu/submenu 两档半透明从此不被菜单吃。
-	--   · focused_color=#222222 / focused_back_color=#FFFFFF → 悬停/键盘所在行＝白底深字（Menu.lua）；
-	--     active 行（当前值）照旧 0.8 白高亮，两档白靠深浅区分。
-	--   · disabled_color=#555555 → 分隔线（uosc 没有禁用行）；行间上游那道 0.04 细线照参考菜单撤掉。
-	-- 不搬的两件：子菜单的悬停开合延迟（seconds_to_open/close_submenus=0.2 —— uosc 子菜单跟着所在行
-	-- 即开即关，做延迟得动导航状态机，风险大于收益）；勾选框列（uosc 用 active 高亮示当前值，同义不同形）。
+	-- EMBYNIAN[menu-style] — 大小整把换成集成模式右键菜单（WinUI MenuFlyout）的尺子：2026-10-07
+	-- 用户令「独占模式的右键菜单体积太大了，大小改为跟集成模式一致（注意全屏和最大化时要放大 1.3
+	-- 倍）」。数字出处＝WinUI 2.3.9 generic.xaml 的 DefaultMenuFlyoutItemStyle 解剖：
+	--   · menu_font_size=14＝ControlContentThemeFontSize；一行＝MenuFlyoutItemMargin 上下 2×2
+	--     ＋MenuFlyoutItemThemePadding 上下 9/10＋14px 行盒约 18.6 ≈ 41.6 → menu_gap=2（行高＝
+	--     字号×(1+gap)=42，同上游 get_line_height 的式子；上游「字号＝item_height×0.48」的反推
+	--     与 2026-09-29 参考菜单的 font_size=20 都在此退役）。
+	--   · menu_min_width=96＝FlyoutThemeMinWidth；menu_padding=5＝MenuFlyoutPresenterThemePadding 1
+	--     ＋MenuFlyoutItemMargin 横向 4（悬停高亮的左右留白与集成同宽）。
+	--   · 缩放＝uosc 自带的 state.scale：hidpi_scale ×（全屏/最大化时 scale_fullscreen=1.3，否则
+	--     scale=1）—— 与集成菜单同样随 DPI 走，不随窗口高走（2026-09-29 那把 osd_height/720 的尺子
+	--     退役）；菜单开着时切全屏/换屏由 prop_fullormaxed/display 两路观察重算（Menu.lua 同名槽）。
+	--   · 上色/描边/圆角沿用 2026-09-29「参考 C:\mpv_config-2026.08.12」那轮批准的样子：
+	--     菜单底板不透明 #222222（background_alpha=0 的兜底色）、corner_radius=5、白描边 0.5、
+	--     悬停/键盘所在行白底深字（#FFFFFF/#222222）、active 行照旧 0.8 白高亮、分隔线 #555555。
+	-- 不搬的两件（理由同 2026-09-29 那轮）：子菜单的悬停开合延迟（seconds_to_open/close_submenus=0.2
+	-- —— 要动导航状态机，风险大于收益）；勾选框列（uosc 用 active 高亮示当前值，同义不同形）。
 	-- 作用于所有 uosc 菜单（画面/选集/版本/音轨/字幕/章节）。
-	menu_font_size = 20,
-	menu_gap = 0.2,
-	menu_min_width = 220,
-	menu_padding = 4,
+	menu_font_size = 14,
+	menu_gap = 2,
+	menu_min_width = 96,
+	menu_padding = 5,
 	menu_background_color = '222222',
 	menu_corner_radius = 5,
 	menu_outline_size = 0.5,
@@ -1184,6 +1193,11 @@ mp.register_script_message('embynian-skip-offer', function(caption)
 	if Elements.skip_button then Elements.skip_button:set_offer(caption) end
 end)
 
+bind_command('embynian-ui-skip-take', function() embynian_notify('embynian-skip-take', '') end)
+bind_command('embynian-ui-skip-dismiss', function() embynian_notify('embynian-skip-dismiss', '') end)
+
+require('lib/embynian_shortcuts')
+
 bind_command('menu-prev', function() Elements:maybe('menu', 'navigate_by_items', -1) end)
 bind_command('menu-next', function() Elements:maybe('menu', 'navigate_by_items', 1) end)
 bind_command('menu-prev-page', function() Elements:maybe('menu', 'navigate_by_page', -1) end)
@@ -1308,18 +1322,28 @@ end
 -- 当场撤掉押后的那一拍 —— 必须赶在全屏切换把光标挪走之前（见顶部说明）。
 cursor:on('primary_down', function()
 	local now = mp.get_time()
-	local on_canvas = cursor:find_zone('primary_down') == nil -- 画面兜底区是 primary_down 的阻断者
+	local zone = cursor:find_zone('primary_click')
+	local on_canvas = zone and zone.hitbox == embynian_click_pause_hitbox
 	embynian_click_pause_second_half = on_canvas
 		and embynian_click_pause_press_last ~= nil
 		and now - embynian_click_pause_press_last < embynian_click_pause_window()
-	embynian_click_pause_press_last = now
+	embynian_click_pause_press_last = on_canvas and now or nil
 	if embynian_click_pause_second_half then embynian_click_pause_cancel() end
 end)
 
 -- 押后那一拍要是撞上换源/收摊（片尾自动连播、用户换集）就作废 —— 与 ChromeReveal 的「新一播放＝Reset」
 -- 同一条道理：那一拍不该打在新一集身上。
+function embynian_click_pause_reset()
+	embynian_click_pause_cancel()
+	embynian_click_pause_press_last = nil
+	embynian_click_pause_second_half = false
+	cursor.last_events.primary_down = nil
+	cursor.last_events.secondary_down = nil
+	if Menu:is_open() then Menu:close(true) end
+end
+
 for _, embynian_event in ipairs({'start-file', 'end-file'}) do
-	mp.register_event(embynian_event, embynian_click_pause_cancel)
+	mp.register_event(embynian_event, embynian_click_pause_reset)
 end
 
 -- EMBYNIAN[skip-button] — 换源即收起上一片的「跳过」offer：宿主下一拍也会按新片重推，但换集加载途中

@@ -519,17 +519,12 @@ internal static class MoviePilotTests
         {
             var transport = new StubTransport()
                 .Answer("login/access-token", """{"access_token":"jwt","super_user":true,"user_name":"docuser","user_id":1}""")
+                .Answer("media/search", """[{"title":"星际穿越","year":2014,"type":"电影","media_source":"themoviedb","media_id":"157336"}]""")
                 .Answer("subscribe/", """{"success":true,"data":{"id":7}}""");
 
-            var media = new MoviePilotMedia
-            {
-                Title = "星际穿越",
-                Year = 2014,
-                Type = "电影",
-                MediaSource = "themoviedb",
-                MediaId = "157336"
-            };
-            ServiceOn(transport).SubscribeAsync(media, CancellationToken.None).GetAwaiter().GetResult();
+            var service = ServiceOn(transport);
+            var media = service.SearchAsync("星际穿越", CancellationToken.None).GetAwaiter().GetResult().Single();
+            service.SubscribeAsync(media, CancellationToken.None).GetAwaiter().GetResult();
 
             var sent = transport.Only("subscribe/");
             Assert.Equal("POST", sent.Method);
@@ -557,14 +552,14 @@ internal static class MoviePilotTests
             Assert.Equal(0, transport.Total, "登不了就不该发出任何请求");
         });
 
-        Test("MoviePilot 连接：资源搜索走 search/media 带 media_source，下载 POST 到 download/add", () =>
+        Test("MoviePilot 连接：精确资源下载保留媒体快照，POST 到 download/", () =>
         {
             var transport = new StubTransport()
                 .Answer("login/access-token", """{"access_token":"jwt","super_user":true,"user_name":"docuser","user_id":1}""")
-                .Answer("search/media/", """[{"torrent_info":{"title":"Some.1080p","site_name":"A","size":5368709120,"seeders":9}}]""")
-                .Answer("download/add", """{"success":true,"data":{"download_id":"abc"}}""");
+                .Answer("search/media/", """[{"media_info":{"title":"某片","media_source":"themoviedb","media_id":"157336","type":"电影"},"media_info_is_target":true,"match_status":"exact","torrent_info":{"title":"Some.1080p","site_name":"A","size":5368709120,"seeders":9}}]""")
+                .Answer("download/", """{"success":true,"data":{"download_id":"abc"}}""");
 
-            var media = new MoviePilotMedia { Title = "某片", MediaSource = "themoviedb", MediaId = "157336" };
+            var media = new MoviePilotMedia { Title = "某片", Type = "电影", MediaSource = "themoviedb", MediaId = "157336" };
             var service = ServiceOn(transport);
 
             var resources = service.SearchResourcesAsync(media, CancellationToken.None).GetAwaiter().GetResult();
@@ -574,9 +569,11 @@ internal static class MoviePilotTests
             Assert.Contains("media_source=themoviedb", sent.Url);
 
             service.DownloadAsync(resources[0], CancellationToken.None).GetAwaiter().GetResult();
-            var dl = transport.Only("download/add");
+            var dl = transport.Only("download/");
             Assert.Equal("POST", dl.Method);
-            Assert.Contains("torrent_in", dl.Body, "整份种子信息回传给 download/add");
+            Assert.Contains("torrent_in", dl.Body);
+            Assert.Contains("media_in", dl.Body);
+            Assert.Equal("电影", Json(dl.Body).GetProperty("media_in").GetProperty("type").GetString());
             Assert.Contains("Some.1080p", dl.Body);
         });
 

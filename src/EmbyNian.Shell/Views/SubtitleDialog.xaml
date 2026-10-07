@@ -19,7 +19,14 @@
     <!-- MinWidth 而不是 Width：这张表里两个列表本身没有宽度，光靠内容撑的话整张表会缩成三百来像素宽，
          而写死一个宽度在小窗口上会被裁掉右边那颗按钮。 -->
     <StackPanel MinWidth="560" Spacing="12">
-        <TextBlock x:Uid="SubtitleDialog_TextBlock2" Style="{StaticResource EgSectionTitleStyle}" />
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Uid="SubtitleDialog_TextBlock2" Style="{StaticResource EgSectionTitleStyle}" VerticalAlignment="Center" />
+            <Button x:Name="RefreshTracksButton" Grid.Column="1" Content="刷新字幕列表" Click="OnRefreshTracks" />
+        </Grid>
 
         <TextBlock
             x:Name="NoTracks"
@@ -44,7 +51,7 @@
                             TextTrimming="CharacterEllipsis"
                             VerticalAlignment="Center" />
 
-                        <Button x:Uid="SubtitleDialog_Button3"
+                        <Button x:Name="DeleteSubtitleButton" x:Uid="SubtitleDialog_Button3"
                             Click="OnDelete"
                             Grid.Column="1" />
                     </Grid>
@@ -127,7 +134,7 @@
                                 TextTrimming="CharacterEllipsis" />
                         </StackPanel>
 
-                        <Button x:Uid="SubtitleDialog_Button4"
+                        <Button x:Name="DownloadSubtitleButton" x:Uid="SubtitleDialog_Button4"
                             Click="OnDownload"
                             Grid.Column="1"
                             VerticalAlignment="Center" />

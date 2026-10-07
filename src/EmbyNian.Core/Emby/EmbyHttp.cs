@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EmbyNian.Diagnostics;
@@ -19,13 +18,7 @@ namespace EmbyNian.Emby;
 public sealed class EmbyHttp : IDisposable
 {
     private const string Category = "http";
-    private const int MaxLoggedBodyLength = 2000;
-
-    /// <summary>
-    /// 错误响应体最多读这么多字节。比 <see cref="MaxLoggedBodyLength"/> 宽出四倍，因为那一条数的是字符而
-    /// 这一条数的是字节 —— 一个汉字在 UTF-8 里是三个。见 <see cref="ReadBodySafelyAsync"/>。
-    /// </summary>
-    private const int MaxLoggedBodyBytes = MaxLoggedBodyLength * 4;
+    private const int MaxErrorBodyBytes = 8000;
 
     private readonly HttpClient _http;
 
@@ -159,7 +152,7 @@ public sealed class EmbyHttp : IDisposable
         }
         catch (Exception error) when (error is JsonException or NotSupportedException)
         {
-            Log.Debug(Category, $"{method} {Redact(url)} 没有可解析的响应体：{error.Message}");
+            Log.Debug(Category, $"{method} {Redact(url)} 没有可解析的响应体（{error.GetType().Name}）");
             return null;
         }
     }
@@ -191,9 +184,17 @@ public sealed class EmbyHttp : IDisposable
             deadline.Token.ThrowIfCancellationRequested();
             return result;
         }
-        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new EmbyUnreachableException($"连接 {url.Host} 超时", error);
+            throw new EmbyUnreachableException($"连接 {url.Host} 超时");
+        }
+        catch (HttpRequestException error)
+        {
+            throw new EmbyUnreachableException($"读取 {url.Host} 的响应失败（{error.HttpRequestError}）");
+        }
+        catch (IOException)
+        {
+            throw new EmbyUnreachableException($"读取 {url.Host} 的响应失败");
         }
     }
 
@@ -324,13 +325,13 @@ public sealed class EmbyHttp : IDisposable
                     .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (TaskCanceledException error) when (!cancellationToken.IsCancellationRequested)
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new EmbyUnreachableException($"连接 {url.Host} 超时", error);
+                throw new EmbyUnreachableException($"连接 {url.Host} 超时");
             }
             catch (HttpRequestException error)
             {
-                throw new EmbyUnreachableException($"无法连接到 {url.Host}：{error.Message}", error);
+                throw new EmbyUnreachableException($"无法连接到 {url.Host}（{error.HttpRequestError}）");
             }
 
             if (response.IsSuccessStatusCode) return response;
@@ -348,40 +349,33 @@ public sealed class EmbyHttp : IDisposable
                     continue;
                 }
 
-                var responseBody = await ReadBodySafelyAsync(response, cancellationToken).ConfigureAwait(false);
-                Log.Warn(Category, $"{method} {Redact(url)} -> {(int)response.StatusCode} {response.ReasonPhrase}");
+                await ReadBodySafelyAsync(response, cancellationToken).ConfigureAwait(false);
+                Log.Warn(Category, $"{method} {Redact(url)} -> {(int)response.StatusCode}");
                 // 资源来源的 401 不是 Emby 令牌失效，不能触发原服务器重新登录。
                 if (!authenticated && response.StatusCode == HttpStatusCode.Unauthorized)
                     throw new EmbyApiException("重定向资源拒绝访问", response.StatusCode);
-                throw Translate(method, url, response.StatusCode, response.ReasonPhrase, responseBody, context.IsAuthenticationAttempt);
+                throw Translate(url, response.StatusCode, context.IsAuthenticationAttempt);
             }
         }
     }
 
-    private static EmbyApiException Translate(
-        HttpMethod method,
-        Uri url,
-        HttpStatusCode status,
-        string? reason,
-        string? body,
-        bool isAuthenticationAttempt)
+    private static EmbyApiException Translate(Uri url, HttpStatusCode status, bool isAuthenticationAttempt)
     {
         if (status == HttpStatusCode.Unauthorized)
         {
             return isAuthenticationAttempt
-                ? new EmbyAuthenticationException("用户名或密码不正确", status, body)
+                ? new EmbyAuthenticationException("用户名或密码不正确", status)
                 : new EmbyTokenExpiredException();
         }
 
         if (status == HttpStatusCode.Forbidden)
-            return new EmbyApiException("当前账户没有访问该内容的权限", status, body);
+            return new EmbyApiException("当前账户没有访问该内容的权限", status);
 
         if (status == HttpStatusCode.NotFound)
-            return new EmbyApiException($"服务器上找不到该资源（{Redact(url)}）", status, body);
+            return new EmbyApiException($"服务器上找不到该资源（{Redact(url)}）", status);
 
-        var message = $"服务器返回 {(int)status} {reason}";
-        if (!string.IsNullOrWhiteSpace(body)) message += Environment.NewLine + body;
-        return new EmbyApiException(message, status, body);
+        // 错误正文和 ReasonPhrase 都可能回显请求凭据；异常会被界面和日志直接使用。
+        return new EmbyApiException($"服务器返回 HTTP {(int)status}", status);
     }
 
     private static async Task<T> ReadJsonAsync<T>(HttpResponseMessage response, Uri url, CancellationToken cancellationToken)
@@ -394,39 +388,30 @@ public sealed class EmbyHttp : IDisposable
         }
         catch (JsonException error)
         {
-            throw new EmbyApiException($"无法解析服务器对 {Redact(url)} 的响应：{error.Message}", response.StatusCode, null, error);
+            throw new EmbyApiException($"无法解析服务器对 {Redact(url)} 的响应（行 {error.LineNumber}，字节 {error.BytePositionInLine}）",
+                response.StatusCode);
         }
     }
 
-    private static async Task<string?> ReadBodySafelyAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private static async Task ReadBodySafelyAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         try
         {
-            // 只读开头这几千字节，而不是 ReadAsStringAsync 之后再截断：这一句是给日志和错误提示用的一句话，
-            // 而响应体的大小是对面说了算的。反代或者门户网关在一个 502 上塞回来一整页 HTML 是常事，坏掉的
-            // 服务器能塞回来更多 —— 「先整份读进内存，再切掉不要的」就是先中招再截断。
+            // 小错误响应读完以复用连接；正文受字节数和请求截止时间约束，不解码、不交给诊断。
             var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            var buffer = new byte[MaxLoggedBodyBytes];
-
+            var buffer = new byte[MaxErrorBodyBytes];
             await using (stream.ConfigureAwait(false))
             {
-                var read = await stream
-                    .ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, cancellationToken)
+                await stream.ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, cancellationToken)
                     .ConfigureAwait(false);
-
-                var text = Encoding.UTF8.GetString(buffer, 0, read).Trim();
-                if (text.Length == 0) return null;
-                return text.Length <= MaxLoggedBodyLength ? text : text[..MaxLoggedBodyLength] + "…";
             }
         }
         catch (OperationCanceledException)
         {
-            // 错误正文只是诊断信息，但等待它的取消和截止时间仍须传回调用方。
             throw;
         }
         catch
         {
-            return null;
         }
     }
 

@@ -624,16 +624,19 @@
   <data name="SignInPage_DropDownButton2.Content" xml:space="preserve">
     <value>已保存的服务器</value>
   </data>
-  <data name="SignInPage_PasswordInput.Header" xml:space="preserve">
+  <data name="SignInPage_PasswordInput.PlaceholderText" xml:space="preserve">
     <value>密码</value>
   </data>
-  <data name="SignInPage_ServerBox.Header" xml:space="preserve">
+  <!-- 2026-09-30 用户令：输入框的标签不要悬在框上方，要放进框正中间（参考账号/密码框的截图）。
+       三个框的 Header 行删掉，键从 .Header 改成 .PlaceholderText —— 文字即框内居中的占位符，
+       输入时让位。（此前一轮把「服务器地址」改挂居中 TextBlock 的做法已作废。） -->
+  <data name="SignInPage_ServerBox.PlaceholderText" xml:space="preserve">
     <value>服务器地址</value>
   </data>
   <data name="SignInPage_TextBlock3.Text" xml:space="preserve">
     <value>发现局域网服务器</value>
   </data>
-  <data name="SignInPage_UserBox.Header" xml:space="preserve">
+  <data name="SignInPage_UserBox.PlaceholderText" xml:space="preserve">
     <value>用户名</value>
   </data>
   <data name="HtmlColorPicker_BLabel.Text" xml:space="preserve">
@@ -725,12 +728,9 @@
   <data name="PosterCard_MoreButton.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>更多操作</value>
   </data>
-  <data name="SignInPage_WelcomeTitle.Text" xml:space="preserve">
-    <value>把喜爱的故事，留给今晚。</value>
-  </data>
-  <data name="SignInPage_WelcomeDescription.Text" xml:space="preserve">
-    <value>连接你的 Emby 媒体库，在自己的影院里，继续每一段精彩。</value>
-  </data>
+  <!-- 「把喜爱的故事，留给今晚。」（SignInPage_WelcomeTitle）和「连接你的 Emby 媒体库……继续每一段
+       精彩。」（SignInPage_WelcomeDescription）2026-09-30 随登录页改版一起删了（用户：「去掉这两句」）；
+       同一批左上角品牌标志换成真实应用图标（assets/app-icon.png）。 -->
   <data name="SignInPage_WelcomeNote.Text" xml:space="preserve">
     <value>电影 · 剧集 · 音乐，你的收藏都在这里</value>
   </data>

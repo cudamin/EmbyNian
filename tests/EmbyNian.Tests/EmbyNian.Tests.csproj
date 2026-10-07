@@ -16,6 +16,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EmbyNian.Core\EmbyNian.Core.csproj" />
+    <None Include="..\..\assets\shaders\**\*.glsl;..\..\assets\shaders\**\*.hook">
+      <Link>shaders\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

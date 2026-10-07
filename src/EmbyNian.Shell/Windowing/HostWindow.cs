@@ -34,6 +34,14 @@ internal interface IWin32KeySink
 
     /// <summary>接。等价于那颗键在岛内被按下时页面会做的事。</summary>
     void Handle(int virtualKey);
+
+    /// <summary>
+    /// 焦点 HWND 在岛里时，XAML 那头有没有元素真接着键盘。通常「焦点在岛里＝XAML 自己收、钩子放行」，
+    /// 但有一段「焦点进了岛、XAML 没人接」的状态（点画面叫醒窗口、进场的那几拍；2026-10-02 用户报
+    /// 「点击第二屏的窗口之后回车/Esc 失灵」）—— 没有焦点元素就没有路由事件，键掉进岛里就死，钩子
+    /// 要在那一段替 XAML 收下。假＝岛内是死的，兜底路照旧接；真＝照旧放行，两条路永远只有一条出键。
+    /// </summary>
+    bool IslandKeyboardFocusAlive { get; }
 }
 
 /// <summary>
@@ -141,6 +149,12 @@ internal sealed class HostWindow : IDisposable
     private bool _band;
 
     /// <summary>
+    /// 自家的另一扇顶层窗正立在这扇窗的画面上（今天只有设置窗口）：全屏 band 与手动置顶都先放下，等它收摊
+    /// 再原样拿回。见 <see cref="StandAsideForOwnWindow"/>。
+    /// </summary>
+    private bool _aside;
+
+    /// <summary>
     /// The <c>WM_TIMER</c> id behind <see cref="JudgeBand"/>, and how often it asks. Slow on purpose: it
     /// exists to notice a window coming forward that the fullscreen picture would be covering, and a
     /// quarter of a second is far below noticing while being nothing to run.
@@ -167,6 +181,12 @@ internal sealed class HostWindow : IDisposable
     /// 退出全屏、让位给前台应用、窗口销毁、进程收摊，每一处都凭它把任务栏原样放回来。
     /// </summary>
     private IntPtr _hiddenTray;
+
+    /// <summary>
+    /// 起播整屏进场的前半拍把任务栏预收下了，而全屏本体还没动。全屏落地（<see cref="EnterFullscreen"/>
+    /// 记下恢复矩形）时清掉；进场没走成由 <see cref="CancelImminentFullscreenTray"/> 凭它放回。
+    /// </summary>
+    private bool _trayAheadOfFullscreen;
 
     /// <summary>
     /// Where a title-bar drag took hold, in screen pixels, and the window origin it took hold from. Held
@@ -729,6 +749,8 @@ internal sealed class HostWindow : IDisposable
 
     /// <summary>Raised once the window has been destroyed, so the app can end its message loop.</summary>
     public event Action? Closed;
+    internal Func<Task>? BeforeCloseAsync { get; set; }
+    private Task? _closeTask;
 
     /// <summary>
     /// Raised whenever this window's size — or the monitor it is mostly on — may have moved: a resize in
@@ -959,6 +981,16 @@ internal sealed class HostWindow : IDisposable
     /// <summary>
     /// 置顶. Set through a z-order change rather than <c>SetForegroundWindow</c>, which the OS refuses
     /// outright when the calling process is not already in the foreground.
+    /// <para>
+    /// 全屏期间放下置顶只记账、不动 z 序（2026-10-07，用户报「集成模式下暂停的时候会显示 windows 任务栏，
+    /// 然后自动消失」）。暂停那条边沿按「暂停时自动取消置顶」（2026-09-29 用户令）走到这里把窗口
+    /// SetWindowPos(HWND_NOTOPMOST) 提出置顶带：副屏任务栏还在带里，当拍就盖回画面上；主屏被
+    /// <see cref="HideTrayForFullscreen"/> 收起的任务栏也会被 shell 当作「前台不再是全屏窗口」放回来。
+    /// 最多 250 毫秒后 <see cref="HoldBand"/> 又把窗口提回去，任务栏再收走 —— 正好是闪一下又消失。
+    /// 全屏的日子 z 序归 band 那一套管（<see cref="HoldBand"/>、<see cref="JudgeBand"/>、藏任务栏），
+    /// 这里只把旗子记下：图钉姿势照翻、<see cref="TogglePinByHand"/> 的记账照落，退出全屏时
+    /// <see cref="LeaveFullscreen"/> 按旗子放回 NOTOPMOST，「暂停不置顶」在回到窗口化的那一刻兑现。
+    /// </para>
     /// </summary>
     public bool TopMost
     {
@@ -967,6 +999,9 @@ internal sealed class HostWindow : IDisposable
         {
             if (Handle == IntPtr.Zero || _topMost == value) return;
             _topMost = value;
+
+            // 全屏里跟 band 打架只会把任务栏闪上画面：放下这一下留给 LeaveFullscreen 去做。
+            if (!value && Fullscreen) return;
 
             Native.SetWindowPos(
                 Handle,
@@ -1647,10 +1682,20 @@ internal sealed class HostWindow : IDisposable
             var style = Native.GetWindowLongPtr(Handle, Native.GwlStyle);
             Native.GetWindowRect(Handle, out var bounds);
             _restore = (bounds, style, maximized);
+
+            // 全屏是真的了：起播整屏那条路前半拍预收任务栏的记账到此两清 —— 下面的 HideTrayForFullscreen
+            // 对凭据已在的情形是幂等空操作。
+            _trayAheadOfFullscreen = false;
+
             var stripped = (long)style & ~(long)(Native.WsCaption | Native.WsThickFrame);
             Native.SetWindowLongPtr(Handle, Native.GwlStyle, new IntPtr(stripped));
         }
         finally { FreeSizing = freeSizing; }
+
+        // 任务栏先收、窗口后跳（「先藏再跳」）。SW_HIDE 由 explorer 的线程执行，本机实测发出后 1~3ms
+        // 生效（探针 2026-10-07：应用日志与任务栏可见位翻假同拍）——但它若排在 SetWindowPos 之后，窗口
+        // 盖上显示器的头几拍任务栏还画在画面上。起播整屏那条路在覆盖层之前就已经收好，这一句幂等。
+        HideTrayForFullscreen();
 
         var screen = info.Monitor;
         Native.SetWindowPos(
@@ -1674,7 +1719,6 @@ internal sealed class HostWindow : IDisposable
         _band = true;
         Native.SetTimer(Handle, BandTimer, BandTimerInterval, IntPtr.Zero);
         WatchTrayOrder();
-        HideTrayForFullscreen();
 
         Log.Info(Category, $"进入全屏 {screen.Width}x{screen.Height}，窗口置顶以盖住任务栏");
     }
@@ -1730,7 +1774,7 @@ internal sealed class HostWindow : IDisposable
             }
             : saved.Bounds;
         Native.SetWindowPos(
-            Handle, _topMost ? Native.HwndTopMost : Native.HwndNoTopMost,
+            Handle, _topMost && !_aside ? Native.HwndTopMost : Native.HwndNoTopMost,
             bounds.Left, bounds.Top, bounds.Width, bounds.Height,
             Native.SwpFrameChanged | Native.SwpNoActivate | Native.SwpNoCopyBits);
 
@@ -1745,6 +1789,66 @@ internal sealed class HostWindow : IDisposable
         }
 
         Log.Info(Category, "退出全屏");
+    }
+
+    /// <summary>
+    /// 让位给自家的一扇顶层窗（今天只有设置窗口）：把画面从 topmost band 与手动置顶上放下来，好让那扇窗真的
+    /// 看得见。
+    /// <para>
+    /// <b>为什么非放不可。</b>全屏播放时这扇窗是 topmost 的（<see cref="EnterFullscreen"/> 的 band，加上用户
+    /// 自己钉的 置顶），而 topmost 窗口压着任何非 topmost 窗口 —— 包括我们自己的设置窗口。不放下来，右键画面
+    /// 菜单末尾那三行「打开设置」就只是把窗口开在画面背后：用户点完看不见任何东西，而日志里一切正常
+    /// （2026-10-01 加这三行时发现的）。
+    /// </para>
+    /// <para>
+    /// 与 <see cref="JudgeBand"/> 的让位是两件事，所以不共用一条路：那一条的判据在别 <em>人</em>身上（谁到了
+    /// 前台、会不会被画面盖住），由定时拍自己问；这一条是「我们要给自己的一扇窗让路」，由调用方明说、也只由
+    /// 调用方收回。因此这里不动 <c>_judged</c>，也不把藏起来的任务栏放回来：任务栏继续收着、画面继续铺满整块
+    /// 屏，只是不再压在设置窗口上面。
+    /// </para>
+    /// <para>
+    /// 只在真占着台上时才记这笔账（全屏或手动置顶）：浏览状态下开设置不该往窗口状态里写任何东西，
+    /// <see cref="ReclaimAfterOwnWindow"/> 也就无事可做。
+    /// </para>
+    /// </summary>
+    internal void StandAsideForOwnWindow()
+    {
+        if (_aside || Handle == IntPtr.Zero) return;
+        if (!Fullscreen && !_topMost) return;
+
+        _aside = true;
+        // band 的闸就在 _band 上：HoldBand 每一拍提回、JudgeBand 的让位判断都看它，放下来这一位就一起停了
+        // （ApplyFullscreenZOrder 另有一道自己的闸，见那里）。
+        _band = false;
+
+        Native.SetWindowPos(
+            Handle, Native.HwndNoTopMost,
+            0, 0, 0, 0,
+            Native.SwpNoMove | Native.SwpNoSize | Native.SwpNoActivate);
+
+        Log.Info(Category, $"自家窗口要上来（{(Fullscreen ? "全屏" : "置顶")}），画面暂时让出置顶");
+    }
+
+    /// <summary>
+    /// 那扇自家的窗收摊了：把 <see cref="StandAsideForOwnWindow"/> 放下的那份拿回来。手动置顶与全屏 band 回来
+    /// 的是同一件东西（画面在最上层），所以两位一起还原：<c>_band</c> 只在全屏时有意义（<see cref="HoldBand"/>
+    /// 与让位判断都看它），置顶则照 <c>_topMost</c>。幂等；没让过位、或窗口已经不在，就什么都不做。
+    /// </summary>
+    internal void ReclaimAfterOwnWindow()
+    {
+        if (!_aside) return;
+        _aside = false;
+        if (Handle == IntPtr.Zero) return;
+        if (!Fullscreen && !_topMost) return;
+
+        _band = Fullscreen;
+        Native.SetWindowPos(
+            Handle, Native.HwndTopMost,
+            0, 0, 0, 0,
+            Native.SwpNoMove | Native.SwpNoSize | Native.SwpNoActivate);
+        HideTrayForFullscreen(); // 让位期间没动任务栏，这一句是幂等的兜底
+
+        Log.Info(Category, $"自家窗口收摊，画面回到最上层（{(Fullscreen ? "全屏" : "置顶")}）");
     }
 
     /// <summary>
@@ -1767,6 +1871,10 @@ internal sealed class HostWindow : IDisposable
     private void ApplyFullscreenZOrder(bool appActive)
     {
         if (Handle == IntPtr.Zero || !Fullscreen) return;
+
+        // 让位给自家那扇窗的这几拍不算「回到前台」：拿回 band 就会把设置窗口重新压到画面底下，
+        // 而那正是让位要避免的事。收摊由 ReclaimAfterOwnWindow 单独负责。
+        if (_aside) return;
 
         if (!appActive)
         {
@@ -1803,7 +1911,7 @@ internal sealed class HostWindow : IDisposable
     /// </summary>
     private void HoldBand()
     {
-        if (Handle == IntPtr.Zero || !Fullscreen || !_band) return;
+        if (Handle == IntPtr.Zero || !Fullscreen || !_band || _aside) return;
 
         Native.SetWindowPos(
             Handle, Native.HwndTopMost,
@@ -1864,22 +1972,85 @@ internal sealed class HostWindow : IDisposable
     {
         if (Handle == IntPtr.Zero || !Fullscreen || _hiddenTray != IntPtr.Zero) return;
 
+        HidePrimaryTray();
+    }
+
+    /// <summary>收任务栏的共用下半段：只认主屏、只记一份凭据，收下与否照实回答。失败不动凭据。</summary>
+    private bool HidePrimaryTray()
+    {
         try
         {
             var monitor = Native.MonitorFromWindow(Handle, Native.MonitorDefaultToNearest);
             var info = new MonitorInfoEx { Size = (uint)Marshal.SizeOf<MonitorInfoEx>() };
-            if (!Native.GetMonitorInfoEx(monitor, ref info) || (info.Flags & 1) == 0) return;
+            if (!Native.GetMonitorInfoEx(monitor, ref info) || (info.Flags & 1) == 0) return false;
 
             var tray = Native.FindWindow("Shell_TrayWnd", null);
-            if (tray == IntPtr.Zero || !Native.ShowWindow(tray, Native.SwHide)) return;
+            if (tray == IntPtr.Zero || !Native.ShowWindow(tray, Native.SwHide)) return false;
 
             _hiddenTray = tray;
             Log.Info(Category, "主屏任务栏已临时收起，退场时放回");
+            return true;
         }
         catch (Exception error)
         {
             Log.Warn(Category, "收起主屏任务栏失败，置顶与钩子兜底仍在", error);
+            return false;
         }
+    }
+
+    /// <summary>
+    /// 起播整屏进场的前半拍（2026-10-07，用户报「加载页面任务栏闪一下」）：在全屏窗口动之前把主屏任务栏
+    /// 收掉，并等 explorer 真把它藏掉才回来。
+    /// <para>
+    /// 为什么不等全屏本体（<see cref="EnterFullscreen"/>）再收：整屏进场是「覆盖层先上屏、窗口后长大」，
+    /// 而这一版 Windows 的主任务栏画在一切 topmost 窗口之上 —— SW_HIDE 排在覆盖层之后的话，加载图先铺满
+    /// 整块显示器，任务栏还站在上面，直到那句被执行才消失。探针实测（2026-10-07，主屏自动全屏进场）：
+    /// 从进场开始到 SW_HIDE 发出有 105ms，其中大头是覆盖层烘图上屏 —— 用户看到的「加载页上任务栏闪一下」
+    /// 就是这一段。这里把收的任务提到覆盖层之前，并等 <c>IsWindowVisible</c> 翻假才放行（本机实测
+    /// SW_HIDE 发出后 1~3ms 生效，等待通常一两拍就过去）。
+    /// </para>
+    /// <para>
+    /// 记 <see cref="_trayAheadOfFullscreen"/>：全屏落地时 <see cref="EnterFullscreen"/> 清掉；进场没走成
+    /// （读显示器失败、覆盖层抛了、进场被取消）由 <see cref="CancelImminentFullscreenTray"/> 凭它把任务栏
+    /// 放回来。副屏不动（副屏任务栏让位照旧有效）；已经全屏时不重复动手 —— 那是
+    /// <see cref="EnterFullscreen"/> 自己的职责。
+    /// </para>
+    /// </summary>
+    internal void HideTrayForImminentFullscreen()
+    {
+        if (Handle == IntPtr.Zero || _hiddenTray != IntPtr.Zero || Fullscreen) return;
+
+        _trayAheadOfFullscreen = true;
+        if (!HidePrimaryTray())
+        {
+            _trayAheadOfFullscreen = false;
+            return;
+        }
+
+        var tray = _hiddenTray;
+        var started = Environment.TickCount64;
+        while (Native.IsWindowVisible(tray) && Environment.TickCount64 - started < TrayHideGraceMilliseconds)
+            System.Threading.Thread.Sleep(2);
+
+        Log.Debug(Category, $"整屏进场前收任务栏：{Environment.TickCount64 - started}ms 确认"
+            + (Native.IsWindowVisible(tray) ? "（宽限到点仍在，照常进场）" : "已消失"));
+    }
+
+    /// <summary>
+    /// 「确认隐藏」的宽限：explorer 在忙时处理 SW_HIDE 会慢半拍；到点就进场 —— 宁可任务栏多留一拍，
+    /// 也不能把起播押在它的线程状态上。
+    /// </summary>
+    private const int TrayHideGraceMilliseconds = 120;
+
+    /// <summary>
+    /// 起播整屏进场没走成：把 <see cref="HideTrayForImminentFullscreen"/> 预收的任务栏放回来。
+    /// 全屏落地后标记已被 <see cref="EnterFullscreen"/> 清掉，这里自然无事可做；幂等。
+    /// </summary>
+    internal void CancelImminentFullscreenTray()
+    {
+        if (!_trayAheadOfFullscreen) return;
+        _trayAheadOfFullscreen = false;
+        if (!Fullscreen) RestoreTray();
     }
 
     /// <summary>把 <see cref="HideTrayForFullscreen"/> 藏掉的任务栏放回来。幂等，凭据归零即无事可做。</summary>
@@ -2291,8 +2462,20 @@ internal sealed class HostWindow : IDisposable
         Native.SetForegroundWindow(Handle);
     }
 
-    public void Close()
+    public void Close() => _closeTask ??= CloseAfterPlaybackAsync();
+
+    private async Task CloseAfterPlaybackAsync()
     {
+        if (Handle == IntPtr.Zero) return;
+        RememberPlacement();
+        try
+        {
+            if (BeforeCloseAsync is { } before) await before().ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            Log.Warn("window", "关闭前收尾失败", error);
+        }
         if (Handle != IntPtr.Zero) Native.DestroyWindow(Handle);
     }
 
@@ -2620,10 +2803,16 @@ internal sealed class HostWindow : IDisposable
     }
 
     /// <summary>
-    /// 钩子过程。只认「全新的按下」（抬起、自动重复、Alt 组合一概放行），只问空格和 Esc 两颗：
+    /// 钩子过程。只认「全新的按下」（抬起、自动重复、Alt 组合一概放行），只问空格、Esc 和回车三颗：
     /// 焦点必须在本窗口的树里、又不在岛里（岛里 XAML 自己收，两条路永远只有一条出键），页面也点头
     /// （菜单开着、正在打字时它让路），这一下才被兜住并吃掉 —— 返回 1 掐断钩子链和这颗键，
     /// DefWindowProc 再没有机会把它吞进肚里。
+    /// <para>
+    /// 回车是 2026-09-30 加的（用户报「按回车和 esc 确认跳过不生效」）：跳过提示立着时回车＝确认跳过，
+    /// 而这一颗过去在这条路上被整个丢掉 —— 焦点掉出岛时岛内两条键路都听不见，提示立着也没人接。
+    /// 它有没有事可做由页面判（<see cref="IWin32KeySink.WantsKey"/> → <c>Dispatch</c>）：提示不在时
+    /// 回车查不到动作、页面返回 false，钩子放行，一切照旧。
+    /// </para>
     /// </summary>
     private IntPtr KeyboardHookProc(int code, IntPtr wParam, IntPtr lParam)
     {
@@ -2632,13 +2821,14 @@ internal sealed class HostWindow : IDisposable
         const long KfAltDown = 0x20000000;
         const int VkSpace = 0x20;
         const int VkEscape = 0x1B;
+        const int VkReturn = 0x0D;
 
         if (code >= 0)
         {
             var bits = lParam.ToInt64();
             var vk = unchecked((int)(long)wParam);
             if ((bits & KfUp) == 0 && (bits & KfRepeat) == 0 && (bits & KfAltDown) == 0
-                && vk is VkSpace or VkEscape
+                && vk is VkSpace or VkEscape or VkReturn
                 && KeyFellThroughTheIsland(vk)
                 && _win32Keys?.WantsKey(vk) == true)
             {
@@ -2653,7 +2843,10 @@ internal sealed class HostWindow : IDisposable
     /// <summary>
     /// 这一键是不是「发给了我们、XAML 却收不到」：焦点 HWND 得在本窗口的树里（焦点在别家窗口上时
     /// 这个线程钩子根本不会被叫到，这道闸只是多一层保险），且不在岛里 —— 焦点在岛里时 XAML 那两条
-    /// 键路活着，兜底路一步都不越。问自己的线程号，不是 0：0 问到的是前台线程，而前台可能是别家。
+    /// 键路活着，兜底路一步都不越。**除非**页面作证 XAML 那头没人接（<see cref="IWin32KeySink.IslandKeyboardFocusAlive"/>）：
+    /// 焦点 HWND 在岛里而没有任何元素持有 XAML 焦点（点画面叫醒窗口、进场的那几拍）时，键掉进岛里
+    /// 就死，兜底路照旧收下（2026-10-02 用户报「点击第二屏的窗口之后回车/Esc 失灵」）。问自己的线程号，
+    /// 不是 0：0 问到的是前台线程，而前台可能是别家。
     /// </summary>
     private bool KeyFellThroughTheIsland(int vk)
     {
@@ -2663,7 +2856,13 @@ internal sealed class HostWindow : IDisposable
         var focus = info.FocusWindow;
         if (focus == IntPtr.Zero) return false;
         if (focus != Handle && !Native.IsChild(Handle, focus)) return false;
-        if (IslandHandle != IntPtr.Zero && (focus == IslandHandle || Native.IsChild(IslandHandle, focus))) return false;
+
+        if (IslandHandle != IntPtr.Zero && (focus == IslandHandle || Native.IsChild(IslandHandle, focus)))
+        {
+            // 没有接键人（首页那几拍）＝维持老规矩放行；有人接且接得住＝放行；有人接但岛内没人接键盘
+            // ＝这一下兜底路收。
+            return _win32Keys is { } sink && !sink.IslandKeyboardFocusAlive;
+        }
 
         return true;
     }
@@ -2994,11 +3193,7 @@ internal sealed class HostWindow : IDisposable
                 return IntPtr.Zero;
 
             case Native.WmClose:
-                // 最后一次，而且必须在 DestroyWindow 之前：Closed 事件由 WM_DESTROY 发出，那时候 Handle 已经
-                // 是 0，问不出这个窗口的任何几何了。程序化挪过的窗口（按画面比例联动那一下）也只有这一
-                // 处兜得住 —— 那几下不经过拖动，收不到 WM_EXITSIZEMOVE。
-                RememberPlacement();
-                Native.DestroyWindow(window);
+                Close();
                 return IntPtr.Zero;
 
             case Native.WmDestroy:

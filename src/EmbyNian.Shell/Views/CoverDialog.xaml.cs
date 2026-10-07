@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
@@ -8,30 +9,13 @@ using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace EmbyNian.Shell.Views;
 
-/// <summary>
-/// 面板上的一格：一种图，或者背景图那一排里的一张。
-/// <para>
-/// 一格自己会去取自己那张缩略图，也会在自己被改动之后重新取一遍 —— 面板因此不必知道「哪几张要刷」。这和从前来
-/// 的那一份（<c>CoverChoice</c>：只装一个候选，图由对话框统一取）不一样的地方就在这儿：那一版一格只活一次，
-/// 而这一版一格会活完整个面板的生命周期，中途被换、被删、被重新取。
-/// </para>
-/// <para>
-/// 公开的，因为 <c>x:Bind</c> 在 DataTemplate 里是按类型名编译的。
-/// </para>
-/// </summary>
+/// <summary>一种图片的一格；背景图的序号和标签共同标识所见图片。</summary>
 public sealed partial class ArtworkSlot : INotifyPropertyChanged
 {
     private BitmapImage? _picture;
     private bool _busy;
+    private int _generation;
 
-    /// <param name="kind">哪一种图。背景图那一排里几张共用同一个 <paramref name="kind"/>。</param>
-    /// <param name="index">
-    /// 背景图里这是第几张（从 0 数起）；其余几种一律 0。删的时候要它 —— 服务器按序号取。
-    /// </param>
-    /// <param name="tag">
-    /// 这个条目这一版图在服务器上那个标签，没有图就是空。取缩略图用的就是它，所以「换过了」这件事的判据是它变了
-    /// （同 <see cref="EmbyImageStore.TagFor"/> 那段说明）。
-    /// </param>
     public ArtworkSlot(ArtworkKind kind, int index, string? tag)
     {
         Kind = kind;
@@ -40,31 +24,17 @@ public sealed partial class ArtworkSlot : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
-
     public ArtworkKind Kind { get; }
-
     public int Index { get; }
-
-    /// <summary>服务器上这一版图的标签，没有图就是空。</summary>
     public string? Tag { get; private set; }
-
     public string ImageType => Kind.ImageType;
-
-    /// <summary>这一格有没有图。<see cref="ArtworkKind.Many"/> 的那一种上，这说的是「这一张」。</summary>
     public bool Has => !string.IsNullOrEmpty(Tag);
-
-    /// <summary>
-    /// 格子上那一行字。
-    /// <para>
-    /// 单张的那几种写中文名（「封面海报图」）；背景图那一排写「背景图 1」「背景图 2」—— 一排里五张一模一样的
-    /// 「背景图」是没法点的。参考图上单张那几格底下写的是尺寸，而尺寸在这儿没用：用户挑图看的是画面，不是
-    /// 一千二百九十乘一千九百三十六。
-    /// </para>
-    /// </summary>
     public string Caption => Kind.Many ? $"{Kind.Name} {Index + 1}" : Kind.Name;
-
-    /// <summary>指针停在那一格上时的一句。</summary>
-    public string Hint => Has ? $"换一张{Kind.Name}" : $"还没有{Kind.Name}，点这里加一张";
+    public string ViewName => $"查看{Caption}";
+    public string DeleteName => $"删除{Caption}";
+    public double FrameHeight => Kind.FrameHeight(Kind.Many ? 188 : 140);
+    public string Hint => Kind.Many ? "另加一张背景图（保留现有图片）"
+        : Has ? $"换一张{Kind.Name}" : $"还没有{Kind.Name}，点这里加一张";
 
     public BitmapImage? Picture
     {
@@ -77,12 +47,11 @@ public sealed partial class ArtworkSlot : INotifyPropertyChanged
         }
     }
 
-    /// <summary>有图时那两颗键的可见性，也是空格子那颗加号的可见性（反过来）。</summary>
     public Visibility HasPicture => Has ? Visibility.Visible : Visibility.Collapsed;
-
     public Visibility EmptyMark => Has ? Visibility.Collapsed : Visibility.Visible;
+    public bool Ready => !Busy;
+    public bool CanDelete => Ready && Has;
 
-    /// <summary>正忙着这一格（在换、在删）。</summary>
     public bool Busy
     {
         get => _busy;
@@ -92,91 +61,51 @@ public sealed partial class ArtworkSlot : INotifyPropertyChanged
             _busy = value;
             Raise(nameof(Busy));
             Raise(nameof(Ready));
+            Raise(nameof(CanDelete));
         }
     }
 
-    /// <summary>这一格现在能不能动。</summary>
-    public bool Ready => !_busy;
-
-    /// <summary>
-    /// 这一格现在是哪一版图。换图和删图之后调用方拿服务器新给的标签刷新它 —— 服务器给的标签才是「现在那一版」，
-    /// 而缓存是按标签存的。
-    /// </summary>
     public void Retag(string? tag)
     {
         if (string.Equals(Tag, tag, StringComparison.Ordinal)) return;
-
+        _generation++;
         Tag = tag;
-
-        // 标签一变，屏上那张就一定过期了。清掉：留着旧那张而只管标签的话，因为 Picture 是按引用比对的，
-        // 屏上会照样画着已经被删掉的那张图。
-        if (string.IsNullOrEmpty(tag)) Picture = null;
-
+        Picture = null;
         Raise(nameof(Has));
         Raise(nameof(HasPicture));
         Raise(nameof(EmptyMark));
         Raise(nameof(Hint));
+        Raise(nameof(CanDelete));
     }
 
-    /// <summary>
-    /// 这一格的缩略图。取不到就空着（那两颗键照旧能用，而它们要的是标签，不是这张缩略图）。
-    /// </summary>
-    /// <param name="fetch">
-    /// 按标签取这一版的图字节。交标签进去而不是让这一格自己拼图种，是因为取图那一路在调用方手上、按
-    /// <see cref="EmbyImageStore.TagFor"/> 那一套走。
-    /// </param>
+    internal void CancelLoad() => _generation++;
+
     internal async Task LoadAsync(Func<string, Task<byte[]?>> fetch)
     {
         if (Tag is not { Length: > 0 } tag) return;
-
+        var generation = ++_generation;
         try
         {
             var bytes = await fetch(tag).ConfigureAwait(true);
-            if (bytes is not { Length: > 0 }) return;
-
-            Picture = await PosterLoader.DecodeAsync(bytes, ThumbnailWidth).ConfigureAwait(true);
+            if (generation != _generation || bytes is not { Length: > 0 }) return;
+            var picture = await PosterLoader.DecodeAsync(bytes, 140).ConfigureAwait(true);
+            if (generation == _generation) Picture = picture;
         }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception error)
-        {
-            Log.Debug("ui", $"面板上一格取不回来（{ImageType}）：{error.Message}");
-        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { Log.Debug("ui", $"面板上一格取不回来（{ImageType}）：{error.Message}"); }
     }
-
-    /// <summary>缩略图解到多宽。和 <c>EgArtworkFrameWidth</c> 一致，见 <see cref="PosterLoader.DecodeAsync"/>。</summary>
-    private const int ThumbnailWidth = 140;
 
     private void Raise(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
-/// <summary>
-/// 面板上那三颗键（换、看、删）指的是服务器上哪一张：哪一种图，以及那一排里的第几张。
-/// <para>
-/// 一个 record 而不是两个参数，因为它得原样穿过好几层（键的 Tag → 处理函数 → 委托），而漏掉「第几张」的症状
-/// 是「删第二张背景图删掉了第一张」—— 那种错在屏上看着像是服务器记错了账。
-/// </para>
-/// </summary>
-/// <param name="ImageType">服务器那边的图种名。</param>
-/// <param name="Index">多张的那几种里这是第几张；单张的一律 0。</param>
 public readonly record struct ArtworkTarget(string ImageType, int Index);
 
-/// <summary>
-/// 「修改媒体封面图」那张面板（2026-09-13 按用户给的参考图重做）。
-/// <para>
-/// 从前的形状是「列一屏候选，挑一张换掉海报」—— 它只改得了 <c>Primary</c>，而一个条目有六种图。这一版是
-/// 每一种图各占一格的面板：哪一格动过就只刷哪一格。
-/// </para>
-/// <para>
-/// <b>它自己不做任何网络上的事。</b>四个动作（取候选、取图字节、换一张、删一张、传一张）都是交进来的委托，
-/// 因为这张表不该知道服务器是怎么连上的 —— 这条规矩是上一版立下的，这一版多出几个动作照旧遵守。
-/// </para>
-/// </summary>
+/// <summary>封面管理。子面板复用这一张 ContentDialog，服务器能力均由固定身份的委托传入。</summary>
 public sealed partial class CoverDialog : ContentDialog
 {
     private const string Category = "ui";
-
+    private const int ThumbnailWidth = 140;
+    private const int ViewerWidth = 1280;
     private readonly EmbyItem _item;
     private readonly FindArtwork _find;
     private readonly FetchArtwork _fetch;
@@ -184,39 +113,23 @@ public sealed partial class CoverDialog : ContentDialog
     private readonly DeleteArtwork _delete;
     private readonly UploadArtwork _upload;
     private readonly FetchRemote _fetchRemote;
-
-    /// <summary>重读条目。改过之后要的是服务器上现在这一版（ImageTags 变了），见 <see cref="RefreshAsync"/>。</summary>
     private readonly Func<string, Task<EmbyItem?>> _reload;
-
     private readonly List<ArtworkSlot> _slots = [];
+    private bool _busy;
+    private bool _closed;
+    private bool _uncertain;
+    private TaskCompletionSource<ContentDialogResult>? _panelCompletion;
+    private Task _initialLoad = Task.CompletedTask;
 
-    /// <summary>
-    /// 这一趟动过没有。交回给 <c>ItemCommands</c>：动过才需要让那一页重读（封面换了之后
-    /// <see cref="EmbyItem.ImageTags"/> 上那个标签也变了，而缓存是按标签存的）。
-    /// </summary>
     public bool Touched { get; private set; }
+    public bool NeedsRefresh { get; private set; }
+    public ObservableCollection<ArtworkSlot> Groups { get; } = [];
+    public ObservableCollection<ArtworkSlot> Backdrops { get; } = [];
 
-    /// <param name="find">按图种取候选：<c>(itemId, imageType)</c>。</param>
-    /// <param name="fetch">按「图种 + 标签」取这一版的图：<c>(itemId, imageType, tag, width)</c>。</param>
-    /// <param name="swap">把挑中的一张挂上去。多张的那几种要给序号，所以序号在第三个。</param>
-    /// <param name="delete">删掉一张。<b>不可撤销</b>，确认由这张表自己问。</param>
-    /// <param name="upload">从本机传一张上去。</param>
-    /// <param name="reload">重新问一遍这个条目（改完之后要「现在那一版」的标签）。</param>
-    /// <param name="fetchRemote">
-    /// 按地址取一张候选图。候选表要用它 —— 走的是「服务器代取」，而这一路也得只有一处接线。
-    /// </param>
-    public CoverDialog(
-        EmbyItem item,
-        FindArtwork find,
-        FetchArtwork fetch,
-        SwapArtwork swap,
-        DeleteArtwork delete,
-        UploadArtwork upload,
-        Func<string, Task<EmbyItem?>> reload,
-        FetchRemote fetchRemote)
+    public CoverDialog(EmbyItem item, FindArtwork find, FetchArtwork fetch, SwapArtwork swap,
+        DeleteArtwork delete, UploadArtwork upload, Func<string, Task<EmbyItem?>> reload, FetchRemote fetchRemote)
     {
         InitializeComponent();
-
         _item = item;
         _find = find;
         _fetch = fetch;
@@ -225,335 +138,262 @@ public sealed partial class CoverDialog : ContentDialog
         _upload = upload;
         _reload = reload;
         _fetchRemote = fetchRemote;
-
         RequestedTheme = ThemeHost.Current.IsDark ? ElementTheme.Dark : ElementTheme.Light;
         Title = $"修改媒体封面图 — {item.Name}";
-
-        // 上面六格 = 一个条目各一张的那几种；底下一排 = 可以有不止一张的那一种（背景图）。
-        foreach (var kind in ItemArtwork.SingleKinds) Add(Groups, [new ArtworkSlot(kind, 0, TagOf(kind))]);
-        foreach (var kind in ItemArtwork.MultipleKinds) Add(Backdrops, SlotsFor(kind));
-
-        // 不 await：一格一格慢慢回来，面板先画出来。
-        _ = LoadAsync();
+        foreach (var kind in ItemArtwork.SingleKinds)
+            Add(Groups, new ArtworkSlot(kind, 0, ItemArtwork.TagsOf(item, kind.ImageType).FirstOrDefault()));
+        Rebuild(item);
+        Opened += (_, _) =>
+        {
+            _closed = false;
+            _initialLoad = LoadAsync();
+        };
+        Closing += (_, args) =>
+        {
+            if (_panelCompletion is { } panel)
+            {
+                args.Cancel = true;
+                panel.TrySetResult(ContentDialogResult.None);
+            }
+            else if (_busy) args.Cancel = true;
+        };
+        Closed += (_, _) =>
+        {
+            _closed = true;
+            foreach (var slot in _slots) slot.CancelLoad();
+        };
     }
 
-    /// <summary>这个条目这一种图现在的标签，服务器上没有就是空。</summary>
-    private string? TagOf(ArtworkKind kind) =>
-        ItemArtwork.TagsOf(_item, kind.ImageType) is [{ Length: > 0 } first] ? first : null;
-
-    /// <summary>上面那一栏：一个条目各一张的那几种图。</summary>
-    public List<ArtworkSlot> Groups { get; } = [];
-
-    /// <summary>底下一排：可以有不止一张的那一种，一张一格。</summary>
-    public List<ArtworkSlot> Backdrops { get; } = [];
-
-    /// <summary>
-    /// 按图种铺出一格一格。多张的那一种按服务器上实际有几张铺几格 —— 一张都没有的时候不铺空格子：底下那颗
-    /// 「再加一张」已经在说这件事了，再摆一个空框就是同一句话说两遍。
-    /// <para>
-    /// 标签在这儿交给每一格，但格子里的图是后到的（<see cref="LoadAsync"/>）；这两步之所以分开，是因为
-    /// 「服务器上有哪几张」是手上这个条目的数据说了算，而缩略图要一趟网络。
-    /// </para>
-    /// </summary>
-    private List<ArtworkSlot> SlotsFor(ArtworkKind kind)
+    private void Add(ObservableCollection<ArtworkSlot> into, ArtworkSlot slot)
     {
-        var tags = ItemArtwork.TagsOf(_item, kind.ImageType);
-        var slots = new List<ArtworkSlot>(tags.Count);
-
-        for (var index = 0; index < tags.Count; index++) slots.Add(new ArtworkSlot(kind, index, tags[index]));
-
-        return slots;
+        into.Add(slot);
+        _slots.Add(slot);
+        slot.Busy = _busy;
     }
 
-    private void Add(List<ArtworkSlot> into, List<ArtworkSlot> slots)
-    {
-        into.AddRange(slots);
-        _slots.AddRange(slots);
-    }
-
-    /// <summary>一格一格把自己的缩略图取回来。逐格 await：一张慢的不会把后面的堵死在自己后面。</summary>
     private async Task LoadAsync()
     {
-        foreach (var slot in _slots) await slot.LoadAsync(tag => FetchAsync(slot, tag)).ConfigureAwait(true);
+        foreach (var slot in _slots.ToArray())
+        {
+            if (_closed) return;
+            await slot.LoadAsync(tag => _fetch(_item.Id, slot.ImageType, tag, ThumbnailWidth,
+                slot.Kind.Many ? slot.Index : null)).ConfigureAwait(true);
+        }
     }
 
-    /// <summary>取这一格那一版的图字节。宽度交给服务器，见 <see cref="EmbyImageStore.RequestWidth"/>。</summary>
-    private Task<byte[]?> FetchAsync(ArtworkSlot slot, string tag) =>
-        _fetch(_item.Id, slot.ImageType, tag, ThumbnailWidth);
-
-    /// <summary>
-    /// 按地址取一张候选图 —— 那张候选表要的。候选图不属于这个条目（它们还在刮削源上），所以这条路走的是
-    /// 「服务器代取」，见 <c>EmbyClient.GetRemoteImageBytesAsync</c>。
-    /// </summary>
-    internal Task<byte[]?> FetchRemoteAsync(string address) => _fetchRemote(address);
-
-    /// <summary>缩略图解到多宽。140 就是 <c>EgArtworkFrameWidth</c>，再宽是白解。</summary>
-    private const int ThumbnailWidth = 140;
-
+    internal Task<byte[]?> FetchRemoteAsync(string address) => _closed
+        ? Task.FromCanceled<byte[]?>(new CancellationToken(true)) : _fetchRemote(address);
+    internal async Task<PickedArtwork?> PickArtworkAsync() => await ArtworkFile.PickAsync(XamlRoot).ConfigureAwait(true);
     private static ArtworkSlot? SlotOf(object sender) => (sender as FrameworkElement)?.Tag as ArtworkSlot;
 
-    // ---- 三颗键 ---------------------------------------------------------------
+    private bool BeginOperation(bool refresh = false)
+    {
+        if (_closed || _busy || (_uncertain && !refresh)) return false;
+        _busy = true;
+        foreach (var slot in _slots) slot.Busy = true;
+        AddBackdropButton.IsEnabled = false;
+        RefreshArtworkButton.IsEnabled = false;
+        IsPrimaryButtonEnabled = false;
+        Notice.Visibility = Visibility.Collapsed;
+        return true;
+    }
 
-    /// <summary>
-    /// 换这一种图。先问服务器这一种图有哪些候选，再弹那一张小表让人挑一个，挑中的交给服务器去取。
-    /// <para>
-    /// 换图和上传是同一个入口下的两件事（候选表里那颗「从本机传一张」），因为对用户来说是同一句话
-    /// 「这一格不要这张了」。空格子点下去也走这一条 —— 那是「这儿少一张」，跟换掉一张是同一件事的两头。
-    /// </para>
-    /// </summary>
+    private void EndOperation()
+    {
+        _busy = false;
+        foreach (var slot in _slots) slot.Busy = _uncertain;
+        AddBackdropButton.IsEnabled = !_uncertain;
+        RefreshArtworkButton.IsEnabled = true;
+        IsPrimaryButtonEnabled = true;
+    }
+
+    private async Task OperateAsync(string failure, Func<Task> action, bool refresh = false)
+    {
+        if (!BeginOperation(refresh)) return;
+        try
+        {
+            await action().ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            ShowProblem("登录身份已改变，请关闭此面板后重新打开。");
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, failure, error);
+            ShowProblem($"{failure}：{Failure.Describe(error)}"
+                + (_uncertain ? "。结果尚不明确，请先刷新图片列表，不要重复提交。" : ""));
+        }
+        finally { EndOperation(); }
+    }
+
+    private async Task WriteAsync(Func<Task> write)
+    {
+        _uncertain = true;
+        NeedsRefresh = true;
+        await write().ConfigureAwait(true);
+        Touched = true;
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
     private async void OnSwap(object sender, RoutedEventArgs e)
     {
-        if (SlotOf(sender) is not { } slot || !slot.Ready) return;
-
-        var kind = slot.Kind;
-        slot.Busy = true;
-
-        try
+        if (SlotOf(sender) is not { } slot) return;
+        await OperateAsync("换封面图失败", async () =>
         {
-            var found = await _find(_item.Id, kind.ImageType).ConfigureAwait(true);
-
-            var picker = new CoverPickerDialog(_item, kind, found, this) { XamlRoot = XamlRoot };
-
-            // 算完成的有两条路：挑了候选走主按钮；本机上传那张表自己 Hide() 收尾（ShowAsync 回 None），
-            // 认的凭据是 Uploaded 本身 —— 从前这里只认 Primary，上传那一路挑完就被扔掉了。
-            if (await picker.ShowAsync() != ContentDialogResult.Primary && picker.Uploaded is null) return;
-
-            if (picker.Picked is { } chosen)
-            {
-                await _swap(_item.Id, kind.ImageType, slot.Index, chosen).ConfigureAwait(true);
-                Touched = true;
-                await RefreshAsync().ConfigureAwait(true);
-                return;
-            }
-
-            if (picker.Uploaded is { Bytes.Length: > 0 } picked)
-            {
-                await _upload(_item.Id, kind.ImageType, picked).ConfigureAwait(true);
-                Touched = true;
-                await RefreshAsync().ConfigureAwait(true);
-            }
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "换封面图失败", error);
-            await ShowProblemAsync($"换「{kind.Name}」没成：{Failure.Describe(error)}").ConfigureAwait(true);
-        }
-        finally
-        {
-            slot.Busy = false;
-        }
+            var found = await _find(_item.Id, slot.ImageType).ConfigureAwait(true);
+            var picker = new CoverPickerDialog(_item, slot.Kind, found, this);
+            var result = await ShowPanelAsync(picker).ConfigureAwait(true);
+            if (result != ContentDialogResult.Primary) return;
+            if (picker.Uploaded is { Bytes.Length: > 0 } uploaded)
+                await WriteAsync(() => _upload(_item.Id, slot.ImageType, uploaded)).ConfigureAwait(true);
+            else if (picker.Picked is { } chosen)
+                await WriteAsync(() => _swap(_item.Id, slot.ImageType, slot.Index, chosen)).ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
-    /// <summary>看大图。只读 —— 摆出来看一眼，不动服务器。</summary>
     private async void OnView(object sender, RoutedEventArgs e)
     {
-        if (SlotOf(sender) is not { } slot || slot.Tag is not { Length: > 0 } tag) return;
-
-        try
+        if (SlotOf(sender) is not { Tag.Length: > 0 } slot) return;
+        await OperateAsync("看大图失败", async () =>
         {
-            var bytes = await _fetch(_item.Id, slot.ImageType, tag, ViewerWidth).ConfigureAwait(true);
+            var bytes = await _fetch(_item.Id, slot.ImageType, slot.Tag!, ViewerWidth,
+                slot.Kind.Many ? slot.Index : null).ConfigureAwait(true);
             if (bytes is not { Length: > 0 }) return;
-
             var picture = await PosterLoader.DecodeAsync(bytes, ViewerWidth).ConfigureAwait(true);
-            if (picture is null) return;
-
-            await new ArtworkViewer(slot.Caption, picture) { XamlRoot = XamlRoot }.ShowAsync();
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "看大图失败", error);
-            await ShowProblemAsync($"这一张看不了：{Failure.Describe(error)}").ConfigureAwait(true);
-        }
+            if (picture is not null)
+                await ShowPanelAsync(new ArtworkViewer(slot.Caption, picture)).ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
-    /// <summary>大图解到多宽。这一张要铺满对话框，所以比缩略图宽一档 —— 仍然不是原图，见 <see cref="PosterLoader"/>。</summary>
-    private const int ViewerWidth = 1280;
-
-    /// <summary>
-    /// 删掉这一张。<b>这一页上唯一不可撤销的动作</b>，所以先问一句 —— 而且这句话要说清会波及什么：
-    /// 删的可能正是剧名上方那枚徽标、页尾那条横幅。
-    /// </summary>
     private async void OnDelete(object sender, RoutedEventArgs e)
     {
-        if (SlotOf(sender) is not { } slot || !slot.Ready || !slot.Has) return;
-
-        if (await AskAsync($"删掉这一张{slot.Caption}？", DeleteWarning(slot), "删掉") != ContentDialogResult.Primary)
-            return;
-
-        slot.Busy = true;
-
-        try
+        if (SlotOf(sender) is not { Has: true } slot) return;
+        await OperateAsync("删封面图失败", async () =>
         {
-            await _delete(_item.Id, slot.ImageType, slot.Kind.Many ? slot.Index : null).ConfigureAwait(true);
-
-            Touched = true;
-            await RefreshAsync().ConfigureAwait(true);
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "删封面图失败", error);
-            await ShowProblemAsync($"删「{slot.Caption}」没成：{Failure.Describe(error)}").ConfigureAwait(true);
-        }
-        finally
-        {
-            slot.Busy = false;
-        }
+            var tag = slot.Tag;
+            var tags = slot.Kind.Many ? Backdrops.Select(row => row.Tag).ToArray() : [tag];
+            if (await AskAsync($"删掉这一张{slot.Caption}？", DeleteWarning(slot), "删掉") != ContentDialogResult.Primary)
+                return;
+            var fresh = await _reload(_item.Id).ConfigureAwait(true)
+                ?? throw new InvalidOperationException("无法核对当前图片，请先刷新");
+            var current = ItemArtwork.TagsOf(fresh, slot.ImageType);
+            if (!tags.SequenceEqual(current, StringComparer.Ordinal)
+                || string.IsNullOrEmpty(tag) || current.Count(value => value == tag) != 1)
+            {
+                await RefreshAsync().ConfigureAwait(true);
+                throw new InvalidOperationException("图片列表已改变或标签不唯一，请确认新列表后再删除");
+            }
+            await WriteAsync(() => _delete(_item.Id, slot.ImageType, slot.Kind.Many ? slot.Index : null)).ConfigureAwait(true);
+        }).ConfigureAwait(true);
     }
 
-    /// <summary>再加一张背景图。它和上面那六格「换」的区别只是：这一颗不先问候选，直接开文件框。</summary>
-    private async void OnAddBackdrop(object sender, RoutedEventArgs e)
+    private async void OnAddBackdrop(object sender, RoutedEventArgs e) => await OperateAsync("上传背景图失败", async () =>
     {
-        try
-        {
-            if (await PickArtworkAsync() is not { Bytes.Length: > 0 } picked) return;
+        if (await PickArtworkAsync() is not { Bytes.Length: > 0 } picked) return;
+        if (ItemArtwork.MultipleKinds.FirstOrDefault() is not { ImageType.Length: > 0 } kind) return;
+        await WriteAsync(() => _upload(_item.Id, kind.ImageType, picked)).ConfigureAwait(true);
+    }).ConfigureAwait(true);
 
-            // 只能用第一个可以有不止一张的图种（现在就是背景图）。没有那一种时这一颗键根本不存在。
-            if (ItemArtwork.MultipleKinds.FirstOrDefault() is not { ImageType.Length: > 0 } kind) return;
+    private async void OnRefreshArtwork(object sender, RoutedEventArgs e) =>
+        await OperateAsync("刷新图片失败", RefreshAsync, refresh: true).ConfigureAwait(true);
 
-            await _upload(_item.Id, kind.ImageType, picked).ConfigureAwait(true);
-
-            Touched = true;
-            await RefreshAsync().ConfigureAwait(true);
-        }
-        catch (Exception error)
-        {
-            Log.Warn(Category, "上传背景图失败", error);
-            await ShowProblemAsync($"传这张图没成：{Failure.Describe(error)}").ConfigureAwait(true);
-        }
-    }
-
-    /// <summary>
-    /// 开文件框挑一张图。选不到（用户取消、或者这个环境拿不到窗口句柄）就是空 —— 拿 null 的调用方什么都不做，
-    /// 这一句在这里而不是在每一处调用点上，是因为两种「选不到」在用户看来是同一件事：什么都没发生。
-    /// </summary>
-    internal async Task<PickedArtwork?> PickArtworkAsync() => await ArtworkFile.PickAsync(XamlRoot).ConfigureAwait(true);
-
-    /// <summary>
-    /// 改完之后把面板整个重读一遍：手上这个条目是打开面板那一刻拿到的，服务器上现在的图得重新问它。
-    /// <para>
-    /// 整个重读而不是只刷动过那一格，是因为序号那件事 —— 背景图删掉中间一张之后，后面每一张的序号都往前挪了
-    /// 一位，只刷一格会把「第三张」的标签留在已经变成第二张的那一格上。重问一遍只有一趟请求，而面板上总共
-    /// 十来格。
-    /// </para>
-    /// </summary>
     private async Task RefreshAsync()
     {
-        // 服务器上现在这一版：条目本身已经变了（ImageTags 少了一个/多了一个），所以重新问一遍它。
-        var fresh = await _reload(_item.Id).ConfigureAwait(true);
-        if (fresh is null) return;
-
-        var groups = Groups.ToArray();
-        var backdrops = Backdrops.ToArray();
-
-        foreach (var slot in groups)
-            slot.Retag(ItemArtwork.TagsOf(fresh, slot.ImageType) is [{ Length: > 0 } first] ? first : null);
-
-        // 背景图那一排的条数会变（删一张少一格、传一张多一格），所以整排重建。
-        Rebuild(backdrops, fresh, ItemArtwork.MultipleKinds);
-
+        var fresh = await _reload(_item.Id).ConfigureAwait(true)
+            ?? throw new InvalidOperationException("服务器没有返回图片列表");
+        if (_closed) return;
+        foreach (var slot in Groups)
+            slot.Retag(ItemArtwork.TagsOf(fresh, slot.ImageType).FirstOrDefault());
+        Rebuild(fresh);
+        _uncertain = false;
         await LoadAsync().ConfigureAwait(true);
     }
 
-    /// <summary>把背景图那一排按服务器上现在的张数重建：删掉一张、传上一张之后，格子的个数都变了。</summary>
-    private void Rebuild(IReadOnlyList<ArtworkSlot> existing, EmbyItem fresh, IReadOnlyList<ArtworkKind> kinds)
+    private void Rebuild(EmbyItem fresh)
     {
-        foreach (var kind in kinds)
+        var desired = ItemArtwork.MultipleKinds.SelectMany(kind => ItemArtwork.TagsOf(fresh, kind.ImageType)
+            .Select((tag, index) => (Kind: kind, Tag: tag, Index: index))).ToArray();
+        for (var index = 0; index < desired.Length; index++)
         {
-            var tags = ItemArtwork.TagsOf(fresh, kind.ImageType);
-
-            // 够用就只换标签（格子在屏上就不会抖），不够就补。
-            for (var index = 0; index < tags.Count; index++)
-            {
-                if (index < existing.Count && existing[index].ImageType == kind.ImageType)
-                {
-                    existing[index].Retag(tags[index]);
-                    continue;
-                }
-
-                var slot = new ArtworkSlot(kind, index, tags[index]);
-                Backdrops.Add(slot);
-                _slots.Add(slot);
-            }
-
-            // 多的那几格去掉。先 Retag(null) 清掉图，再摘 —— 直接把对象摘掉的话，屏上那一格会留到下一次重排。
-            for (var index = Backdrops.Count - 1; index >= tags.Count; index--)
-            {
-                Backdrops[index].Retag(null);
-                _slots.Remove(Backdrops[index]);
-                Backdrops.RemoveAt(index);
-            }
+            var row = desired[index];
+            if (index < Backdrops.Count && Backdrops[index].ImageType == row.Kind.ImageType)
+                Backdrops[index].Retag(row.Tag);
+            else Add(Backdrops, new ArtworkSlot(row.Kind, row.Index, row.Tag));
+        }
+        while (Backdrops.Count > desired.Length)
+        {
+            var slot = Backdrops[^1];
+            slot.Retag(null);
+            slot.CancelLoad();
+            _slots.Remove(slot);
+            Backdrops.RemoveAt(Backdrops.Count - 1);
         }
     }
 
-    /// <summary>删掉这一张会波及什么。剧名上方那枚徽标和页尾那条横幅是服务器上这一种图撑着的。</summary>
-    private static string DeleteWarning(ArtworkSlot slot)
+    private static string DeleteWarning(ArtworkSlot slot) =>
+        $"服务器上这一张「{slot.Caption}」会被删掉，删了就找不回来。使用它的海报、徽标或背景也会改变。";
+
+    private Task<ContentDialogResult> AskAsync(string title, string body, string? confirm = null) => ShowPanelAsync(new ContentDialog
     {
-        var lines = new List<string> { $"服务器上这一张「{slot.Caption}」会被删掉，删了就找不回来。" };
+        Title = title,
+        Content = new TextBlock { Text = body, TextWrapping = TextWrapping.Wrap },
+        PrimaryButtonText = confirm ?? "确定",
+        CloseButtonText = "算了",
+        DefaultButton = ContentDialogButton.Close
+    });
 
-        switch (slot.ImageType)
-        {
-            case EmbyImageStore.Primary:
-                lines.Add("详情页左边那张海报会空出来。");
-                break;
-            case EmbyImageStore.Logo:
-                lines.Add("详情页剧名上方那枚徽标会空出来（这个条目还有横幅图的话，那一格会退回横幅图）。");
-                break;
-            case EmbyImageStore.Banner:
-                lines.Add("详情页剧名上方那一格和页尾那条横幅都可能空出来。");
-                break;
-            case EmbyImageStore.Backdrop:
-                lines.Add("详情页和主页轮播背后的那张画面会换成下一张备选。");
-                break;
-            case EmbyImageStore.Thumb:
-                lines.Add("卡片上那种宽的缩略图会改成用海报。");
-                break;
-        }
-
-        return string.Join(Environment.NewLine, lines);
+    private void ShowProblem(string message)
+    {
+        if (_closed) return;
+        Notice.Text = message;
+        Notice.Visibility = Visibility.Visible;
     }
 
-    /// <summary>问一句话。默认落在「算了」那一边 —— 这是不可撤销的动作，回车不该替人做决定。</summary>
-    private async Task<ContentDialogResult> AskAsync(string title, string body, string? confirm = null) =>
-        await new ContentDialog
+    // WinUI 同一 XamlRoot 只能有一张 ContentDialog；选择、查看、确认复用其内容区和命令按钮。
+    private async Task<ContentDialogResult> ShowPanelAsync(ContentDialog panel)
+    {
+        if (_closed || _panelCompletion is not null) return ContentDialogResult.None;
+        var saved = (Content, Title, PrimaryButtonText, SecondaryButtonText, CloseButtonText, DefaultButton, IsPrimaryButtonEnabled);
+        var content = panel.Content;
+        var completion = new TaskCompletionSource<ContentDialogResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _panelCompletion = completion;
+        panel.Content = null;
+        Content = content;
+        Title = panel.Title;
+        PrimaryButtonText = panel.PrimaryButtonText;
+        SecondaryButtonText = panel.SecondaryButtonText;
+        CloseButtonText = string.IsNullOrEmpty(panel.CloseButtonText) ? "返回" : panel.CloseButtonText;
+        DefaultButton = panel.DefaultButton;
+        IsPrimaryButtonEnabled = panel.IsPrimaryButtonEnabled;
+        var registration = panel.RegisterPropertyChangedCallback(IsPrimaryButtonEnabledProperty,
+            (_, _) => IsPrimaryButtonEnabled = panel.IsPrimaryButtonEnabled);
+        void Primary(ContentDialog sender, ContentDialogButtonClickEventArgs args)
+        { args.Cancel = true; completion.TrySetResult(ContentDialogResult.Primary); }
+        void Secondary(ContentDialog sender, ContentDialogButtonClickEventArgs args)
+        { args.Cancel = true; completion.TrySetResult(ContentDialogResult.Secondary); }
+        void Uploaded() => completion.TrySetResult(ContentDialogResult.Primary);
+        PrimaryButtonClick += Primary;
+        SecondaryButtonClick += Secondary;
+        if (panel is CoverPickerDialog picker) picker.UploadCompleted += Uploaded;
+        try { return await completion.Task.ConfigureAwait(true); }
+        finally
         {
-            Title = title,
-            Content = body,
-            PrimaryButtonText = confirm ?? "确定",
-            CloseButtonText = "算了",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot
-        }.ShowAsync();
-
-    /// <summary>弹一句报错。这一个面板里挂掉的每一件事都得说一句 —— 「点了没反应」是最难查的那种。</summary>
-    private Task ShowProblemAsync(string message) =>
-        new ContentDialog
-        {
-            Title = "修改媒体封面图",
-            Content = message,
-            CloseButtonText = "知道了",
-            XamlRoot = XamlRoot
-        }.ShowAsync().AsTask();
+            panel.UnregisterPropertyChangedCallback(IsPrimaryButtonEnabledProperty, registration);
+            PrimaryButtonClick -= Primary;
+            SecondaryButtonClick -= Secondary;
+            if (panel is CoverPickerDialog finishedPicker) { finishedPicker.UploadCompleted -= Uploaded; finishedPicker.CancelLoads(); }
+            Content = null;
+            panel.Content = content;
+            (Content, Title, PrimaryButtonText, SecondaryButtonText, CloseButtonText, DefaultButton, IsPrimaryButtonEnabled) = saved;
+            _panelCompletion = null;
+        }
+    }
 }
 
-/// <summary>按图种问服务器这一种图有哪些候选：<c>(itemId, imageType)</c>。</summary>
 public delegate Task<RemoteImageResult> FindArtwork(string itemId, string imageType);
-
-/// <summary>按标签取这一版的图字节：<c>(itemId, imageType, tag, width)</c>。</summary>
-public delegate Task<byte[]?> FetchArtwork(string itemId, string imageType, string tag, int width);
-
-/// <summary>
-/// 把挑中的一张挂上去。序号在第二个 —— 背景图那一排得知道改的是第几张，而单张的那几种传 0、被忽略。
-/// </summary>
+public delegate Task<byte[]?> FetchArtwork(string itemId, string imageType, string tag, int width, int? index);
 public delegate Task SwapArtwork(string itemId, string imageType, int index, RemoteImageInfo chosen);
-
-/// <summary>删掉一张。<paramref name="index"/> 为空就是「不带序号的短地址」，见 <c>EmbyClient.DeleteImageAsync</c>。</summary>
 public delegate Task DeleteArtwork(string itemId, string imageType, int? index);
-
-/// <summary>从本机传一张图上去。文件名跟着走，服务器按后缀名认格式。</summary>
 public delegate Task UploadArtwork(string itemId, string imageType, PickedArtwork picked);
-
-/// <summary>
-/// 按地址取一张候选图。候选图还在刮削源上，所以这一路走的是「服务器代取」——
-/// <c>(address)</c>，见 <c>EmbyClient.GetRemoteImageBytesAsync</c>。
-/// </summary>
 public delegate Task<byte[]?> FetchRemote(string address);

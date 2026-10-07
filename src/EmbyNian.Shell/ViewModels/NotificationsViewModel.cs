@@ -57,6 +57,24 @@ public sealed partial class NotificationsViewModel : PageViewModel
 
     private bool _stopReportEnabled;
     private bool _stopReportSeeded;
+    private EmbySessionScope? _scope;
+    private CancellationTokenSource? _lifetime;
+    private bool Live => _lifetime is { IsCancellationRequested: false } && _scope?.IsCurrent == true;
+
+    public override void Cancel()
+    {
+        _lifetime?.Cancel();
+        _lifetime?.Dispose();
+        _lifetime = null;
+        base.Cancel();
+        BusyChanged();
+    }
+
+    public override void Dispose()
+    {
+        Cancel();
+        base.Dispose();
+    }
 
     /// <summary>事件表缓存：装载时拿一次，编辑器与行摘要共用。按 id 找名字的表随取随建。</summary>
     internal List<NotificationCategoryInfo> Categories { get; private set; } = [];
@@ -64,6 +82,7 @@ public sealed partial class NotificationsViewModel : PageViewModel
     public ObservableCollection<NotificationRow> Entries { get; } = [];
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EmptyVisibility))]
     public partial bool ShowEmpty { get; set; }
 
     [ObservableProperty]
@@ -71,7 +90,7 @@ public sealed partial class NotificationsViewModel : PageViewModel
 
     public Visibility EmptyVisibility => Show(ShowEmpty);
 
-    public bool CanRun => !Busy && _session is not null;
+    public bool CanRun => !Busy && Live;
 
     /// <summary>把编辑器弹出来的那一位。编辑器要页面的 <c>XamlRoot</c>，所以由页面指派 —— 同 <see cref="PageViewModel.UseConfirm"/>
     /// 的道理，不造接口。</summary>
@@ -90,6 +109,9 @@ public sealed partial class NotificationsViewModel : PageViewModel
     /// </summary>
     internal void Attach(EmbySession session, ISettingsService settings)
     {
+        Cancel();
+        _lifetime = new CancellationTokenSource();
+        _scope = session.IsSignedIn ? session.Capture() : null;
         _session = session;
         _settings = settings;
 
@@ -142,18 +164,18 @@ public sealed partial class NotificationsViewModel : PageViewModel
         _settings.TrySave();
     }
 
+    private new bool IsCurrent(CancellationToken token) => Live && base.IsCurrent(token);
+
     public override async Task ReloadAsync()
     {
-        if (_session is null) return;
+        if (!Live) return;
 
         var token = BeginLoad();
         try
         {
-            var client = _session.Client;
-
-            // 事件表与条目表一起问：互不依赖，谁先回来都是它。
-            var typesTask = client.GetNotificationTypesAsync(token);
-            var entriesTask = client.GetNotificationsAsync(token);
+            var scope = _scope!;
+            var typesTask = scope.ExecuteAsync((client, ct) => client.GetNotificationTypesAsync(ct), token);
+            var entriesTask = scope.ExecuteAsync((client, ct) => client.GetNotificationsAsync(ct), token);
             await Task.WhenAll(typesTask, entriesTask).ConfigureAwait(true);
 
             if (!IsCurrent(token)) return;
@@ -207,31 +229,30 @@ public sealed partial class NotificationsViewModel : PageViewModel
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task AddNotificationAsync()
     {
-        if (_session is null) return;
-
+        if (!CanRun) return;
+        var scope = _scope!;
+        var token = _lifetime!.Token;
+        Busy = true;
         try
         {
-            var services = await _session.Client.GetNotificationServicesAsync(CancellationToken.None).ConfigureAwait(true);
+            var services = await scope.ExecuteAsync((client, ct) => client.GetNotificationServicesAsync(ct), token).ConfigureAwait(true);
+            EnsureCurrent(scope, token);
             if (services.Count == 0)
             {
-                Notify(null, "服务器上还没有装任何通知服务（比如官方的 Webhooks 插件），先到 Emby 控制台装一个。",
-                    InfoBarSeverity.Warning);
+                Notify(null, "服务器上还没有装任何通知服务（比如官方的 Webhooks 插件），先到 Emby 控制台装一个。", InfoBarSeverity.Warning);
                 return;
             }
-
-            var service = services.Count == 1
-                ? services[0]
-                : await (PickService?.Invoke(services) ?? Task.FromResult<NotificationServiceInfo?>(null))
-                    .ConfigureAwait(true);
+            var service = services.Count == 1 ? services[0]
+                : await (PickService?.Invoke(services) ?? Task.FromResult<NotificationServiceInfo?>(null)).ConfigureAwait(true);
+            EnsureCurrent(scope, token);
             if (service is null) return;
-
-            var context = await BuildEditorContextAsync(service.Id, isNew: true, entry: null).ConfigureAwait(true);
+            var context = await BuildEditorContextAsync(scope, token, service.Id, true, null).ConfigureAwait(true);
+            EnsureCurrent(scope, token);
             if (ShowEditor is { } show) await show(context).ConfigureAwait(true);
         }
-        catch (Exception error)
-        {
-            Report("添加通知失败", error);
-        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (Current(scope, token)) Report("添加通知失败", error); }
+        finally { if (Current(scope, token)) Busy = false; }
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
@@ -240,101 +261,105 @@ public sealed partial class NotificationsViewModel : PageViewModel
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task EditAsync(NotificationRow? row)
     {
-        if (_session is null || row is null) return;
-
+        if (!CanRun || row is null || !Entries.Contains(row)) return;
+        var scope = _scope!;
+        var token = _lifetime!.Token;
+        Busy = true;
         try
         {
-            // 编辑器动的是副本：取消编辑不能把没保存的改动留在列表那一条上 —— 列表的重读是唯一把改动
-            // 「落屏」的路，服务器收下了才重读。
-            var context = await BuildEditorContextAsync(
-                row.Info.NotifierKey ?? "", isNew: false, entry: row.Info.Clone()).ConfigureAwait(true);
+            var context = await BuildEditorContextAsync(scope, token,
+                row.Info.NotifierKey ?? "", false, row.Info.Clone()).ConfigureAwait(true);
+            EnsureCurrent(scope, token);
             if (ShowEditor is { } show) await show(context).ConfigureAwait(true);
         }
-        catch (Exception error)
-        {
-            Report("打开通知编辑器失败", error);
-        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (Current(scope, token)) Report("打开通知编辑器失败", error); }
+        finally { if (Current(scope, token)) Busy = false; }
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task TestAsync(NotificationRow? row)
     {
-        if (_session is null || row is null) return;
-
+        if (!CanRun || row is null || !Entries.Contains(row)) return;
+        var scope = _scope!;
+        var token = _lifetime!.Token;
+        Busy = true;
         try
         {
-            await _session.Client.TestNotificationAsync(row.Info.Clone(), CancellationToken.None).ConfigureAwait(true);
+            await scope.ExecuteAsync((client, ct) => client.TestNotificationAsync(row.Info.Clone(), ct), token).ConfigureAwait(true);
+            EnsureCurrent(scope, token);
             Notify(null, $"已让服务器发了一条测试通知（{row.DisplayName}）—— 到目的地看看收到没有。", InfoBarSeverity.Success);
         }
-        catch (Exception error)
-        {
-            Report($"测试通知没有发出去（{row.DisplayName}）", error);
-        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (Current(scope, token)) Report($"测试通知没有发出去（{row.DisplayName}）", error); }
+        finally { if (Current(scope, token)) Busy = false; }
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task DeleteAsync(NotificationRow? row)
     {
-        if (_session is null || row is null) return;
-
-        var confirmed = await ConfirmAsync(
-            "删除通知", $"确定删除通知「{row.DisplayName}」吗？此后这些事件不再转发，删除不能撤销。", "删除")
-            .ConfigureAwait(true);
-        if (!confirmed) return;
-
+        if (!CanRun || row is null || !Entries.Contains(row)) return;
+        var scope = _scope!;
+        var token = _lifetime!.Token;
+        Busy = true;
         try
         {
-            await _session.Client.DeleteNotificationAsync(row.Info.Id ?? "", CancellationToken.None).ConfigureAwait(true);
-            Log.Info(Category, $"已删除通知条目（{row.DisplayName}）");
+            var confirmed = await ConfirmAsync("删除通知",
+                $"确定删除通知「{row.DisplayName}」吗？此后这些事件不再转发，删除不能撤销。", "删除").ConfigureAwait(true);
+            EnsureCurrent(scope, token);
+            if (!confirmed) return;
+            await scope.ExecuteAsync((client, ct) => client.DeleteNotificationAsync(row.Info.Id ?? "", ct), token).ConfigureAwait(true);
+            EnsureCurrent(scope, token);
             await ReloadAsync().ConfigureAwait(true);
         }
-        catch (Exception error)
-        {
-            Report("删除通知失败", error);
-        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (Current(scope, token)) Report("删除通知失败", error); }
+        finally { if (Current(scope, token)) Busy = false; }
     }
 
-    /// <summary>编辑器要的一切：铺底条目（新建时来自 Defaults）、事件表、三个筛选名单、保存与测试的路。</summary>
-    private async Task<NotificationEditorContext> BuildEditorContextAsync(string notifierKey, bool isNew, UserNotificationInfo? entry)
+    private bool Current(EmbySessionScope scope, CancellationToken token) =>
+        Live && !token.IsCancellationRequested && ReferenceEquals(scope, _scope);
+
+    private void EnsureCurrent(EmbySessionScope scope, CancellationToken token)
     {
-        if (_session is null) throw new InvalidOperationException("尚未登录 Emby");
+        if (!Current(scope, token)) throw new OperationCanceledException(token);
+    }
 
-        var client = _session.Client;
-
+    private async Task<NotificationEditorContext> BuildEditorContextAsync(
+        EmbySessionScope scope, CancellationToken token, string notifierKey, bool isNew, UserNotificationInfo? entry)
+    {
+        EnsureCurrent(scope, token);
         if (isNew)
-        {
-            entry = await client.GetNotificationDefaultsAsync(notifierKey, CancellationToken.None).ConfigureAwait(true);
-        }
+            entry = await scope.ExecuteAsync((client, ct) => client.GetNotificationDefaultsAsync(notifierKey, ct), token).ConfigureAwait(true);
+        EnsureCurrent(scope, token);
         entry ??= new UserNotificationInfo { NotifierKey = notifierKey, Enabled = true };
-
-        // 三个筛选名单尽力而为：拿不到就让对应一栏空着（编辑器里说明拿不到），条目照建 —— 名单不是编辑器
-        // 的门槛，事件表才是。
-        var users = await TryAsync(client.GetNotificationUsersAsync, "用户").ConfigureAwait(true);
-        var libraries = await TryAsync(client.GetNotificationLibrariesAsync, "媒体库").ConfigureAwait(true);
-        var devices = await TryAsync(client.GetNotificationDevicesAsync, "设备").ConfigureAwait(true);
-
-        return new NotificationEditorContext(
-            entry, isNew, Categories, users, libraries, devices,
+        var users = await TryAsync((ct) => scope.ExecuteAsync((client, inner) => client.GetNotificationUsersAsync(inner), ct), "用户", token).ConfigureAwait(true);
+        EnsureCurrent(scope, token);
+        var libraries = await TryAsync((ct) => scope.ExecuteAsync((client, inner) => client.GetNotificationLibrariesAsync(inner), ct), "媒体库", token).ConfigureAwait(true);
+        EnsureCurrent(scope, token);
+        var devices = await TryAsync((ct) => scope.ExecuteAsync((client, inner) => client.GetNotificationDevicesAsync(inner), ct), "设备", token).ConfigureAwait(true);
+        EnsureCurrent(scope, token);
+        return new NotificationEditorContext(entry, isNew, Categories, users, libraries, devices,
             SaveAsync: async saved =>
             {
-                await client.SaveNotificationAsync(saved, CancellationToken.None).ConfigureAwait(true);
-                Log.Info(Category, $"已保存通知条目（{saved.FriendlyName ?? saved.ServiceName}，{saved.EventIds.Count} 个事件）");
+                EnsureCurrent(scope, token);
+                await scope.ExecuteAsync((client, ct) => client.SaveNotificationAsync(saved, ct), token).ConfigureAwait(true);
+                EnsureCurrent(scope, token);
                 await ReloadAsync().ConfigureAwait(true);
             },
             TestAsync: async tested =>
             {
-                await client.TestNotificationAsync(tested, CancellationToken.None).ConfigureAwait(true);
+                EnsureCurrent(scope, token);
+                await scope.ExecuteAsync((client, ct) => client.TestNotificationAsync(tested, ct), token).ConfigureAwait(true);
+                EnsureCurrent(scope, token);
                 return true;
             });
     }
 
-    private static async Task<List<T>> TryAsync<T>(
-        Func<CancellationToken, Task<List<T>>> fetch, string what)
+    private static async Task<List<T>> TryAsync<T>(Func<CancellationToken, Task<List<T>>> fetch, string what, CancellationToken token)
     {
-        try
-        {
-            return await fetch(CancellationToken.None).ConfigureAwait(true);
-        }
+        try { return await fetch(token).ConfigureAwait(true); }
+        catch (OperationCanceledException) { throw; }
         catch (Exception)
         {
             Log.Warn(Category, $"读取{what}名单失败，编辑器里这一栏留空");

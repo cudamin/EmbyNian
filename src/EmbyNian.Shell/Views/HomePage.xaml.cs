@@ -33,6 +33,9 @@ public sealed partial class HomePage : Page, IShellContent
 
     private HomeRequest? _request;
 
+    // 返回现成主页后不再补播入场；显式刷新或重新导航才开始新一轮。
+    private bool _entranceSuppressed;
+
     /// <summary>
     /// Resolved on navigation, for the card menus. The page needs it for nothing else — every request
     /// this page makes is the view model's.
@@ -111,15 +114,17 @@ public sealed partial class HomePage : Page, IShellContent
         InitializeComponent();
         _stayProbe = (_, _) => _stayAsked++;
 
-        // 这一页的两件事都挂在轮播上：剧照一上来就把外壳那 32 像素顶回去（SyncBleed），以及标题栏那一行的墨
-        // 跟着带面走（PaintInk）。两者都只在带子可见时有意义 —— 没有幻灯片时 Apply 会把 Visibility 收起来，
-        // 两条都在那之后重新对一遍。
-        Banner.Loaded += (_, _) => SyncBleed();
-        Banner.SizeChanged += (_, _) => SyncBleed();
+        // 这一页的三件事都挂在轮播上：剧照一上来就把外壳那 32 像素顶回去（SyncBleed），标题栏那一行的墨
+        // 跟着带面走（PaintInk），竖滚动条不从带子上压过去（PlaceScrollBar —— 「滚动条不要延伸到轮播图上，
+        // 在下半部分显示就行」，2026-10-01）。三件都只在带子可见时有意义 —— 没有幻灯片时 Apply 会把
+        // Visibility 收起来，各条都在那之后重新对一遍。
+        Banner.Loaded += (_, _) => { SyncBleed(); PlaceScrollBar(); };
+        Banner.SizeChanged += (_, _) => { SyncBleed(); PlaceScrollBar(); };
         Banner.SlideChanged += (_, _) =>
         {
             SyncBleed();
             PaintInk();
+            PlaceScrollBar();
         };
 
         // 矮窗档（媒体库压上轮播左下角）跟着窗口的高矮走：窗口、带子、货架尺寸变了都要重新量一遍。
@@ -148,7 +153,7 @@ public sealed partial class HomePage : Page, IShellContent
         // 挂在 Loaded 上是因为 XAML 里写不了 —— 见 HomeShelfMotion 那一段。
         Loaded += (_, _) =>
         {
-            HomeMotion.Enter(this, ShelfRepeater, ViewModel.Shelves.Count);
+            if (!_entranceSuppressed) HomeMotion.Enter(this, ShelfRepeater, ViewModel.Shelves.Count);
             UpdateLibraryOverlay();
         };
     }
@@ -164,6 +169,21 @@ public sealed partial class HomePage : Page, IShellContent
     internal int LoadedCount => ViewModel.LoadedCount;
 
     internal bool IsReady => ViewModel.IsReady;
+
+    /// <summary>先将现成主页落定，再露出浏览层；停止后的异步数据刷新也沿用这个静态页面。</summary>
+    internal void PreparePlaybackReturn()
+    {
+        _entranceSuppressed = true;
+        HomeMotion.StopEnter(ShelfRepeater);
+        _fold?.Stop();
+        _fold = null;
+        _foldLate?.Stop();
+        _foldLate = null;
+        _foldRetry?.Stop();
+        _foldPlacedAt = 0;
+        _foldReal = false;
+        _before = null;
+    }
 
     /// <summary>
     /// The rows the page actually drew, as 「继续观看 12、媒体库 3」. For the self-check, which otherwise
@@ -316,6 +336,58 @@ public sealed partial class HomePage : Page, IShellContent
 
         if (Math.Abs(sheet.Top - wanted) > 0.5)
             Scroller.Margin = new Thickness(sheet.Left, wanted, sheet.Right, sheet.Bottom);
+    }
+
+    /// <summary>
+    /// 这一页自己的竖滚动条（EgNarrowScrollBarStyle 那支），模板树里找到后缓存。
+    /// </summary>
+    private Microsoft.UI.Xaml.Controls.Primitives.ScrollBar? _verticalScrollBar;
+
+    /// <summary>
+    /// 把竖滚动条的顶压到轮播的下沿（「滚动条不要延伸到轮播图上，在下半部分显示就行」，2026-10-01）。
+    /// 滚动条跟着视口铺满整页，而这一页第一块内容就是通栏轮播 —— 不挪的话，滚动或悬停时那条 bar 正压在
+    /// 剧照上。量 <see cref="HomeBanner.ActualHeight"/> 而不是按宽换算（HomeCarousel.Height）：轮播收起、
+    /// 矮窗档这些档位下事件来源（与 SyncBleed 同一批 Banner 钩子）已把「带子变了」都送过来，读实际值
+    /// 省得再算；**窗口高矮不必单独听** —— 带高只随宽度走，宽度一变 Banner.SizeChanged 必响。没有幻灯片时
+    /// 带子收起（ActualHeight 归零），滚动条回到通长，本来就没有要避的东西。
+    /// <para>
+    /// 滚动条在 ScrollView 的模板树里，XAML 从外面够不着，只能下树找（这一页只此一处认识它）。找到之前
+    /// 每次触发都重试，找到后缓存 —— 模板件随控件生灭，页面活着它就活着。顺手的位置账：滚动时带子往上
+    /// 走、滚动条不动，它从「带子在顶部那一拍的下沿」起、一路到页底，正好就是「下半部分」。
+    /// </para>
+    /// </summary>
+    internal void PlaceScrollBar()
+    {
+        if (_verticalScrollBar is null)
+        {
+            _verticalScrollBar = FindVerticalScrollBar(Scroller);
+            if (_verticalScrollBar is null) return;
+        }
+
+        var top = Banner.Visibility == Visibility.Visible ? Banner.ActualHeight : 0;
+        var sheet = _verticalScrollBar.Margin;
+        if (Math.Abs(sheet.Top - top) <= 0.5) return;
+        _verticalScrollBar.Margin = new Thickness(0, top, 0, 0);
+    }
+
+    private static Microsoft.UI.Xaml.Controls.Primitives.ScrollBar? FindVerticalScrollBar(DependencyObject root)
+    {
+        if (root is Microsoft.UI.Xaml.Controls.Primitives.ScrollBar bar && bar.Orientation == Orientation.Vertical)
+            return bar;
+
+        var children = VisualTreeHelper.GetChildrenCount(root);
+        for (var index = 0; index < children; index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            // 别走进内层滚动控件（货架那几条横带自己的 ScrollView）：它们模板里也有竖滚动条，
+            // 这一页要的是 Scroller 自己模板里的那一支 —— 内层的归内层。
+            if (child is Microsoft.UI.Xaml.Controls.ScrollView or Microsoft.UI.Xaml.Controls.ScrollViewer)
+                continue;
+            var found = FindVerticalScrollBar(child);
+            if (found is not null) return found;
+        }
+
+        return null;
     }
 
     /// <summary>单调钟（毫秒）。这一页只拿它量「距上一趟摆档过了多久」，见 <see cref="Fold"/>。</summary>
@@ -602,7 +674,8 @@ public sealed partial class HomePage : Page, IShellContent
         // 「真在屏上摆过」的档才配当动画的起点：页面刚起来那几拍轮播还没有幻灯片、视口还是零，那时 `Fold` 摆下的
         // 是个假档（数据回来时还要再翻一次）—— 拿假档当起点会凭空飞一趟，而自检正是在那几拍上读坐标的。
         var real = Banner.Visibility == Visibility.Visible && ViewModel.Slides.Count > 0 && Scroller.ActualHeight > 0;
-        var flight = _foldReal && real && on != _foldOn && _before is not null
+        // 返回后的数据与尺寸变化直接落定，不能等异步刷新回来后再补一趟媒体库位移。
+        var flight = !_entranceSuppressed && _foldReal && real && on != _foldOn && _before is not null
             && HomeFoldMotion.Enabled && XamlRoot is not null;
 
         _foldOn = on;
@@ -710,11 +783,14 @@ public sealed partial class HomePage : Page, IShellContent
         var book = before.Rows;
         var flowIndex = ViewModel.LibraryFlowIndex;
         var flyingIn = on;
+        var flightOwner = _fold;
 
         if (DispatcherQueue is not { } queue) return;
 
         queue.TryEnqueue(() =>
         {
+            if (!ReferenceEquals(_fold, flightOwner)) return;
+
             var late = new HomeFoldMotion();
             var moved = 0;
 
@@ -1045,6 +1121,7 @@ public sealed partial class HomePage : Page, IShellContent
         }
 
         _request = request;
+        _entranceSuppressed = false;
         _window = request.Window;
         Tag = "home";
 
@@ -1189,6 +1266,7 @@ public sealed partial class HomePage : Page, IShellContent
 
     private void Reload()
     {
+        _entranceSuppressed = false;
         _ = ViewModel.ReloadAsync();
 
         // 重载之后是另一批货架，进场动画再放一遍（HomeMotion 那一拍是给「这一页刚画出来」用的，重载时那些

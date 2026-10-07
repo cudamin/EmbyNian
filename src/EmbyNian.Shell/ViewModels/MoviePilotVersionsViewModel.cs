@@ -15,6 +15,7 @@ public sealed partial class MoviePilotVersionsViewModel : PageViewModel
     private MoviePilotService? _service;
     private ISystemLauncher? _launcher;
     private string _lastKeyword = "";
+    private CancellationToken _query;
 
     public MoviePilotResourceBrowserViewModel Browser { get; } = new();
     public ObservableCollection<MoviePilotResourceRow> Versions => Browser.Rows;
@@ -39,6 +40,7 @@ public sealed partial class MoviePilotVersionsViewModel : PageViewModel
         var text = keyword.Trim();
         _lastKeyword = text;
         var token = BeginLoad();
+        _query = token;
         Browser.SetResults([]);
         ShowEmptyNotice = false;
         if (text.Length == 0)
@@ -52,7 +54,10 @@ public sealed partial class MoviePilotVersionsViewModel : PageViewModel
         {
             var found = await _service.SearchByKeywordAsync(text, token).ConfigureAwait(true);
             if (!IsCurrent(token)) return;
-            Browser.SetResults(found.Select(resource => new MoviePilotResourceRow(resource, DownloadAsync, OpenDetails)));
+            Browser.SetResults(found.Select(resource => new MoviePilotResourceRow(resource, DownloadAsync, OpenDetails)
+            {
+                State = MoviePilotResourceRow.StateOf(_service.DownloadState(resource))
+            }));
             EmptyNotice = $"MoviePilot 上没搜到「{text}」的可下载版本，换个关键字或稍后再试";
             ShowEmptyNotice = found.Count == 0;
         }
@@ -74,23 +79,26 @@ public sealed partial class MoviePilotVersionsViewModel : PageViewModel
 
     private async Task DownloadAsync(MoviePilotResourceRow row)
     {
-        if (_service is null || !row.CanDownload) return;
+        if (_service is null || !row.CanDownload || !IsCurrent(_query)) return;
+        var token = _query;
         var confirmed = await ConfirmAsync("加入下载",
-            $"确认把这个资源加进 MoviePilot 下载吗？\n{row.Title}\n{row.Resource.PromotionText}\n" +
-            (row.Resource.HitAndRun ? "此资源有 HR 考核，请先在种子页面核对做种要求。" : "优惠和下载规则以站点当前页面为准。"),
+            $"确认把这个资源加进 MoviePilot 下载吗？\n{row.Resource.Confirmation}",
             "下载").ConfigureAwait(true);
-        if (!confirmed) return;
+        if (!confirmed || !IsCurrent(token)) return;
         row.State = MoviePilotDownloadState.Working;
         try
         {
-            await _service.DownloadAsync(row.Resource, CancellationToken.None).ConfigureAwait(true);
+            await _service.DownloadAsync(row.Resource, token).ConfigureAwait(true);
+            if (!IsCurrent(token)) return;
             row.State = MoviePilotDownloadState.Done;
             Notify(null, $"已加入下载：{row.Title}", InfoBarSeverity.Success);
         }
         catch (Exception error)
         {
-            row.State = MoviePilotDownloadState.Failed;
-            Report($"加入下载失败：{row.Title}", error);
+            if (!IsCurrent(token)) return;
+            row.State = error is MoviePilotOperationUncertainException or MoviePilotOperationBlockedException
+                ? MoviePilotDownloadState.Uncertain : MoviePilotDownloadState.Failed;
+            Report($"加入下载未完成：{row.Title}", error);
         }
     }
 }

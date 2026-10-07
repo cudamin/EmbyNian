@@ -59,6 +59,7 @@
 
         <!-- 这一条路和上面那些候选是同一件事的两个答案，所以摆在同一张表里。 -->
         <Button
+            x:Name="UploadArtworkButton"
             Click="OnUpload"
             Style="{StaticResource EgSecondaryButtonStyle}">
             <StackPanel Orientation="Horizontal" Spacing="{StaticResource EgSpaceS}">

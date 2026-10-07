@@ -58,12 +58,21 @@ internal static partial class ItemCommands
     /// 一次请求。每一条命令都是「问服务器一次」，取消令牌一律给 <see cref="CancellationToken.None"/>：菜单点下去
     /// 之后翻到别的页，这一趟照样该走完 —— 用户要的是那件事做成，不是那一页还在。
     /// </summary>
-    private static Task<T> AskAsync<T>(EmbySession session, Func<EmbyClient, CancellationToken, Task<T>> work) =>
-        session.ExecuteAsync(work, CancellationToken.None);
+    private static async Task<T> AskAsync<T>(EmbySessionScope session, Func<EmbyClient, CancellationToken, Task<T>> work)
+    {
+        session.ThrowIfNotCurrent();
+        var result = await session.ExecuteAsync(work, CancellationToken.None).ConfigureAwait(false);
+        session.ThrowIfNotCurrent();
+        return result;
+    }
 
     /// <inheritdoc cref="AskAsync{T}"/>
-    private static Task TellAsync(EmbySession session, Func<EmbyClient, CancellationToken, Task> work) =>
-        session.ExecuteAsync(work, CancellationToken.None);
+    private static async Task TellAsync(EmbySessionScope session, Func<EmbyClient, CancellationToken, Task> work)
+    {
+        session.ThrowIfNotCurrent();
+        await session.ExecuteAsync(work, CancellationToken.None).ConfigureAwait(false);
+        session.ThrowIfNotCurrent();
+    }
 
     /// <summary>
     /// 取一段字节，取不到就是空。
@@ -74,13 +83,12 @@ internal static partial class ItemCommands
     /// 然后在赋值处报一条「可空性与目标类型不匹配」。
     /// </para>
     /// </summary>
-    private static async Task<byte[]?> FetchAsync(EmbySession session, Func<EmbyClient, CancellationToken, Task<byte[]>> work) =>
-        await session.ExecuteAsync(work, CancellationToken.None).ConfigureAwait(false);
+    private static async Task<byte[]?> FetchAsync(EmbySessionScope session, Func<EmbyClient, CancellationToken, Task<byte[]>> work) =>
+        await AskAsync(session, work).ConfigureAwait(false);
 
     /// <summary>重新问一遍这个条目，问不到就是空。理由同 <see cref="FetchAsync"/>。</summary>
-    private static async Task<EmbyItem?> ReloadAsync(EmbySession session, string itemId) =>
-        await session.ExecuteAsync(
-            (client, token) => client.GetItemAsync(itemId, token), CancellationToken.None).ConfigureAwait(false);
+    private static async Task<EmbyItem?> ReloadAsync(EmbySessionScope session, string itemId) =>
+        await AskAsync(session, (client, token) => client.GetItemAsync(itemId, token)).ConfigureAwait(false);
 
     /// <summary>
     /// 弹对话框要的那个根。取不到就什么都不做 —— 这一句只在窗口已经关掉的路上成立，那时候也没有人在等这张表。
@@ -88,7 +96,7 @@ internal static partial class ItemCommands
     private static XamlRoot? Root(FrameworkElement owner) => owner.XamlRoot;
 
     /// <summary>打开所属剧集。手上只有剧集 id，所以先按 id 问回那个条目再交给外壳。</summary>
-    private static void OpenSeries(EmbySession session, IShellActions shell, EmbyItem item)
+    private static void OpenSeries(EmbySessionScope session, IShellActions shell, EmbyItem item)
     {
         if (item.SeriesId is not { Length: > 0 } seriesId) return;
 
@@ -106,7 +114,7 @@ internal static partial class ItemCommands
     /// over the real one.
     /// </summary>
     private static Task EditAsync(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         FrameworkElement owner,
         CardItem card,
@@ -150,7 +158,7 @@ internal static partial class ItemCommands
     /// </para>
     /// </summary>
     private static Task CollectAsync(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         FrameworkElement owner,
         CardItem card) =>
@@ -191,10 +199,11 @@ internal static partial class ItemCommands
     /// <see cref="DownloadGate"/> 后面。
     /// </para>
     /// </summary>
-    private static Task DownloadAsync(EmbySession session, IShellActions shell, CardItem card) =>
+    private static Task DownloadAsync(EmbySessionScope session, IShellActions shell, CardItem card) =>
         GuardAsync(shell, "下载失败", async () =>
         {
-            var scope = session.Capture();
+            var scope = session;
+            scope.ThrowIfNotCurrent();
             var item = card.Item;
             var files = await FilesOfAsync(scope, item).ConfigureAwait(true);
             scope.ThrowIfNotCurrent();
@@ -330,7 +339,7 @@ internal static partial class ItemCommands
     /// </para>
     /// </summary>
     private static Task CoverAsync(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         FrameworkElement owner,
         CardItem card,
@@ -344,8 +353,8 @@ internal static partial class ItemCommands
             var dialog = new CoverDialog(
                 item,
                 (id, type) => AskAsync(session, (client, token) => client.GetRemoteImagesAsync(id, type, token)),
-                (id, type, tag, width) => FetchAsync(session, (client, token) =>
-                    client.GetImageBytesAsync(id, type, tag, width, token)),
+                (id, type, tag, width, index) => FetchAsync(session, (client, token) =>
+                    client.GetImageBytesAsync(id, type, tag, width, token, index)),
                 (id, type, index, chosen) => TellAsync(session, (client, token) => client.ApplyRemoteImageAsync(
                     id, type, chosen.Url, chosen.ProviderName, token)),
                 (id, type, index) => TellAsync(session, (client, token) =>
@@ -362,9 +371,9 @@ internal static partial class ItemCommands
             await dialog.ShowAsync();
 
             // 面板里改过才要重读这一页 —— 打开看了一眼就关掉，那张卡片一个像素都不必动。
-            if (!dialog.Touched) return;
+            if (!session.IsCurrent || (!dialog.Touched && !dialog.NeedsRefresh)) return;
 
-            shell.Notify($"已更新「{item.Name}」的封面图");
+            if (dialog.Touched) shell.Notify($"已更新「{item.Name}」的封面图");
             changed?.Invoke();
         });
 
@@ -377,7 +386,7 @@ internal static partial class ItemCommands
     /// </para>
     /// </summary>
     private static Task SubtitlesAsync(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         FrameworkElement owner,
         CardItem card,
@@ -397,15 +406,9 @@ internal static partial class ItemCommands
                 return;
             }
 
-            var dialog = new SubtitleDialog(
-                full,
-                source,
-                language => AskAsync(session, (client, token) =>
-                    client.SearchSubtitlesAsync(full.Id, source.Id, language, token)),
-                subtitle => TellAsync(session, (client, token) =>
-                    client.DownloadSubtitleAsync(full.Id, source.Id, subtitle.Id, token)),
-                stream => TellAsync(session, (client, token) =>
-                    client.DeleteSubtitleAsync(full.Id, stream.Index, token)))
+            var subtitles = new ServerSubtitles(session, full, source);
+            var dialog = new SubtitleDialog(full, source,
+                subtitles.SearchAsync, subtitles.DownloadAsync, subtitles.DeleteAsync, subtitles.ReloadAsync)
             {
                 XamlRoot = root
             };
@@ -413,7 +416,7 @@ internal static partial class ItemCommands
             await dialog.ShowAsync();
 
             // 这一页上「字幕」那个下拉列的是这个文件的轨道，动过就得重读一遍，否则新下的那条挑不到。
-            if (dialog.Touched) changed?.Invoke();
+            if ((dialog.Touched || dialog.NeedsRefresh) && subtitles.IsCurrent) changed?.Invoke();
         });
 
     /// <summary>
@@ -424,7 +427,7 @@ internal static partial class ItemCommands
     /// </para>
     /// </summary>
     private static Task ScrapeAsync(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         FrameworkElement owner,
         CardItem card) =>
@@ -451,7 +454,7 @@ internal static partial class ItemCommands
     /// 刷新元数据信息：缺什么补什么，现有的一个字不动 —— 所以不问，直接发。服务器在后台做，这里只报「已请求」，
     /// 说「已刷新」是替服务器说话。
     /// </summary>
-    private static void Refresh(EmbySession session, IShellActions shell, CardItem card) =>
+    private static void Refresh(EmbySessionScope session, IShellActions shell, CardItem card) =>
         _ = GuardAsync(shell, "刷新元数据失败", async () =>
         {
             await TellAsync(session, (client, token) => client.RefreshItemAsync(card.Item.Id, replace: false, token))
@@ -461,7 +464,7 @@ internal static partial class ItemCommands
         });
 
     /// <summary>重新扫描媒体库：整台服务器扫一遍，也就是服务器控制台上那颗按钮。管理员账号才用得了。</summary>
-    private static void ScanLibrary(EmbySession session, IShellActions shell) =>
+    private static void ScanLibrary(EmbySessionScope session, IShellActions shell) =>
         _ = GuardAsync(shell, "扫描媒体库失败", async () =>
         {
             await TellAsync(session, (client, token) => client.ScanLibraryAsync(token)).ConfigureAwait(true);
@@ -475,7 +478,7 @@ internal static partial class ItemCommands
     /// </para>
     /// </summary>
     private static void HideFromResume(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         CardItem card,
         Action? changed) =>
@@ -497,7 +500,7 @@ internal static partial class ItemCommands
     /// </para>
     /// </summary>
     private static Task DeleteAsync(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         FrameworkElement owner,
         CardItem card,

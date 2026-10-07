@@ -6,18 +6,21 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.System;
 
 namespace EmbyNian.Shell.Views;
 
 /// <summary>
-/// The sign-in card. All of it is <see cref="SignInViewModel"/>; what is left here is the three things
+/// The sign-in card. All of it is <see cref="SignInViewModel"/>; what is left here is the four things
 /// only an element can do.
 /// <para>
-/// Those three: put the caret in a box, because focus belongs to an element and the view model can only
+/// Those four: put the caret in a box, because focus belongs to an element and the view model can only
 /// name which one — see <see cref="SignInFocus"/>; decide what Enter means in each of the two boxes,
-/// which is a keystroke and never reaches a view model; and fill the 已保存的服务器 flyout, because a
-/// <c>MenuFlyout</c> is not an items control and has no <c>ItemsSource</c> to bind.
+/// which is a keystroke and never reaches a view model; fill the 已保存的服务器 flyout, because a
+/// <c>MenuFlyout</c> is not an items control and has no <c>ItemsSource</c> to bind; and detach the
+/// address box's stock clear button, a template part the markup cannot reach — see
+/// <see cref="DetachClearButton"/>.
 /// </para>
 /// <para>
 /// Still a <c>UserControl</c> rather than a <c>Page</c>, for the reason the markup gives: the shell keeps
@@ -52,6 +55,27 @@ public sealed partial class SignInPage : UserControl
             FocusOn(ViewModel.NextFocus());
         };
         Unloaded += (_, _) => HomeMotion.Stop(SignInLayout);
+
+        // The address rides centred in the box (TextAlignment=Center in the markup), but the stock
+        // TextBox template parks a 30-wide clear button in an Auto grid column beside the text host,
+        // and while that button is visible the column eats ~37px off the right — the centring then
+        // happens in the leftover and still reads as left-hugging. Detach the button: the Auto column
+        // collapses, the text host spans the whole box, and clearing is Ctrl+A like anywhere else.
+        // Loaded plus every focus, so a theme change that re-applies the template gets detached again
+        // before anyone types. ButtonVisible's storyboard keeps targeting the detached object through
+        // the template namescope — it animates a button nobody sees.
+        ServerBox.Loaded += (_, _) => DetachClearButton(ServerBox);
+        ServerBox.GotFocus += (_, _) => DetachClearButton(ServerBox);
+
+        // The two credential boxes ride centred too (用户 2026-09-30, 参考账号/密码两栏的截图). The
+        // username box is a TextBox like the address box: TextAlignment in the markup, and the same
+        // clear-button detach — its × would eat the right edge exactly the same way. The password box
+        // exposes no TextAlignment and its template binds none, so there the centring happens in the
+        // tree — see CentrePasswordContent.
+        UserBox.Loaded += (_, _) => DetachClearButton(UserBox);
+        UserBox.GotFocus += (_, _) => DetachClearButton(UserBox);
+        PasswordInput.Loaded += (_, _) => CentrePasswordContent(PasswordInput);
+        PasswordInput.GotFocus += (_, _) => CentrePasswordContent(PasswordInput);
     }
 
     /// <summary>Raised once <see cref="EmbySession"/> holds a live client; the shell then shows the pages.</summary>
@@ -156,6 +180,41 @@ public sealed partial class SignInPage : UserControl
     private void OnDiscoveredServerPicked(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is EmbyDiscoveredServer server) ViewModel.PickDiscovered(server);
+    }
+
+    /// <summary>
+    /// Detaches the stock clear button so the address text can centre across the whole box (see the
+    /// constructor comment for why detaching and not just hiding).
+    /// </summary>
+    private static void DetachClearButton(TextBox box)
+    {
+        if (FindNamedDescendant(box, "DeleteButton") is not { } button) return;
+        (button.Parent as Grid)?.Children.Remove(button);
+    }
+
+    /// <summary>
+    /// Centres the masked characters and the placeholder of a <see cref="PasswordBox"/>. It exposes no
+    /// <c>TextAlignment</c> and its template never binds one, so the text host — an ordinary
+    /// ScrollViewer, same part names as the TextBox template — is shrunk to its content and let the
+    /// grid centre it; the placeholder line is a real TextBlock and takes a TextAlignment directly.
+    /// </summary>
+    private static void CentrePasswordContent(PasswordBox box)
+    {
+        if (FindNamedDescendant(box, "ContentElement") is { } host) host.HorizontalAlignment = HorizontalAlignment.Center;
+        if (FindNamedDescendant(box, "PlaceholderTextContentPresenter") is TextBlock placeholder) placeholder.TextAlignment = TextAlignment.Center;
+    }
+
+    private static FrameworkElement? FindNamedDescendant(DependencyObject root, string name)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is FrameworkElement found && found.Name == name) return found;
+            var deeper = FindNamedDescendant(child, name);
+            if (deeper is not null) return deeper;
+        }
+
+        return null;
     }
 
     /// <summary>

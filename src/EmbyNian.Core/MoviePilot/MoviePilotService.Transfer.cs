@@ -23,8 +23,9 @@ public sealed partial class MoviePilotService
     /// <summary>存储、媒体库目录和刮削源：表单那几颗下拉的内容。</summary>
     public async Task<MoviePilotTransferOptions> TransferOptionsAsync(CancellationToken cancellationToken)
     {
+        var identity = CaptureIdentity();
         var storages = MoviePilotTransfer.Array(await CallAsync((apiBase, token) =>
-            client.GetAsync(apiBase, token, "storage/options", cancellationToken), cancellationToken)
+            client.GetAsync(apiBase, token, "storage/options", cancellationToken), cancellationToken, identity)
             .ConfigureAwait(false))
             .Where(item => MoviePilotTransfer.Text(item, "name").Length > 0)
             .Select(item => new MoviePilotStorage(
@@ -33,7 +34,7 @@ public sealed partial class MoviePilotService
 
         var directories = MoviePilotTransfer.Array(await CallAsync((apiBase, token) =>
             client.GetAsync(apiBase, token, "storage/directories?directory_type=library", cancellationToken),
-            cancellationToken).ConfigureAwait(false))
+            cancellationToken, identity).ConfigureAwait(false))
             .Where(item => MoviePilotTransfer.Text(item, "library_path").Length > 0)
             .Select(item => new MoviePilotDirectory(
                 MoviePilotTransfer.Text(item, "library_storage") is { Length: > 0 } storage ? storage : "local",
@@ -45,10 +46,12 @@ public sealed partial class MoviePilotService
                 MoviePilotTransfer.Bool(item, "library_category_folder")))
             .ToList();
 
-        var sources = (await MediaSourcesAsync(cancellationToken).ConfigureAwait(false)).ToList();
+        var sources = ParseMediaSources(await CallAsync((apiBase, token) =>
+            client.GetAsync(apiBase, token, "media/source", cancellationToken), cancellationToken, identity).ConfigureAwait(false))
+            .Where(source => source.IsVideo).ToList();
+        CheckIdentity(identity, cancellationToken);
 
         if (storages.Count == 0) storages.Add(new MoviePilotStorage("本地", "local"));
-        if (sources.Count == 0) sources.Add(new MoviePilotMediaSource("TheMovieDb", "themoviedb", ["电影", "电视剧"]));
 
         Log.Info(Category, $"MoviePilot 整理选项：{storages.Count} 个存储、{directories.Count} 个媒体库目录、{sources.Count} 个数据源");
         return new MoviePilotTransferOptions(storages, directories, sources);
@@ -113,10 +116,18 @@ public sealed partial class MoviePilotService
     {
         var identity = CaptureIdentity();
         ValidateHistoryConnection(request.Histories, identity);
-        var result = await TransferRunAsync(request, files, background: false, preview: true, cancellationToken)
+        var snapshot = request with
+        {
+            Files = Array.AsReadOnly(request.Files.ToArray()),
+            Histories = Array.AsReadOnly(request.Histories.ToArray())
+        };
+        var resolved = Array.AsReadOnly(files.Select(file => file.Clone()).ToArray());
+        var result = await TransferRunAsync(snapshot, resolved, background: false, preview: true, cancellationToken, identity)
             .ConfigureAwait(false);
         CheckIdentity(identity, cancellationToken);
-        return new MoviePilotTransferPreview(request, files, result) { ConnectionStamp = TransferConnectionStamp(identity) };
+        var preview = new MoviePilotTransferPreview(snapshot, resolved, result);
+        preview.Seal(TransferConnectionStamp(identity));
+        return preview;
     }
 
     /// <summary>
@@ -128,42 +139,47 @@ public sealed partial class MoviePilotService
     /// </para>
     /// </summary>
     public async Task<MoviePilotTransferResult> TransferSubmitAsync(
-        MoviePilotTransferRequest request, IReadOnlyList<JsonElement> files, bool background,
-        CancellationToken cancellationToken)
-    {
-        var result = await TransferRunAsync(request, files, background, preview: false, cancellationToken)
-            .ConfigureAwait(false);
-
-        Log.Info(Category,
-            $"MoviePilot 手动整理（{(background ? "队列" : "同步")}）：{request.SourceDisplay} → {request.TargetPath}；{result.Summary}");
-        return result;
-    }
-
-    public async Task<MoviePilotTransferResult> TransferSubmitAsync(
         MoviePilotTransferPreview preview, bool background, CancellationToken cancellationToken)
     {
-        if (!preview.CanSubmit) throw new MoviePilotTransferBlockedException("请先完成有效且文件齐全的整理预览");
         var identity = CaptureIdentity();
-        if (preview.ConnectionStamp != TransferConnectionStamp(identity))
-            throw new MoviePilotTransferBlockedException("MoviePilot 连接配置已改变，请重新查找记录和预览");
+        CheckIdentity(identity, cancellationToken);
+        preview.ClaimSubmission(TransferConnectionStamp(identity));
+        ValidateHistoryConnection(preview.Request.Histories, identity);
         foreach (var group in preview.Request.Histories.GroupBy(history => history.Title))
         {
+            CheckIdentity(identity, cancellationToken);
             var current = await FindTransferHistoriesAsync(group.Key, cancellationToken).ConfigureAwait(false);
-            var dependents = MoviePilotTransferHistoryMatch.Dependents(preview.Request.Histories, current);
-            if (dependents.Count > 0)
-                throw new MoviePilotTransferBlockedException("旧目标还被其他软链接记录引用（" +
-                    string.Join("、", dependents.Select(history => $"#{history.Id}")) +
-                    "）。重新整理可能让它们失效，请先在 MoviePilot 处理引用关系；本次没有提交。");
+            CheckIdentity(identity, cancellationToken);
             foreach (var history in group)
             {
                 var fresh = current.FirstOrDefault(item => item.Id == history.Id);
-                if (fresh is null || fresh.SourcePath != history.SourcePath || fresh.TargetPath != history.TargetPath ||
-                    fresh.Mode != history.Mode || fresh.Success != history.Success)
+                if (fresh is null || history.Snapshot.ValueKind != JsonValueKind.Object ||
+                    !JsonElement.DeepEquals(fresh.Snapshot, history.Snapshot))
                     throw new MoviePilotTransferBlockedException("原整理记录已经改变，请重新查找记录和预览");
+                MoviePilotTransfer.RequireFile(fresh.TransferFile, history.TransferPath);
             }
         }
+        foreach (var path in preview.Request.Histories.Select(history => history.TargetPath)
+                     .Where(path => path.Length > 0).Distinct(StringComparer.Ordinal))
+        {
+            CheckIdentity(identity, cancellationToken);
+            var current = await FindTransferHistoriesAsync(path, cancellationToken).ConfigureAwait(false);
+            CheckIdentity(identity, cancellationToken);
+            var dependents = MoviePilotTransferHistoryMatch.Dependents(preview.Request.Histories, current);
+            if (dependents.Count > 0)
+                throw new MoviePilotTransferBlockedException("旧目标还被软链接记录引用（" +
+                    string.Join("、", dependents.Select(history => $"#{history.Id}")) +
+                    "）。重新整理可能让它们失效，请先在 MoviePilot 处理引用关系；本次没有提交。");
+        }
         CheckIdentity(identity, cancellationToken);
-        return await TransferSubmitAsync(preview.Request, preview.Files, background, cancellationToken).ConfigureAwait(false);
+        var body = preview.Request.Body(preview.Files, preview: false);
+        var reply = await WriteAsync(identity, TransferKeys(preview), (apiBase, token) => client.PostReplyAsync(
+            apiBase, token, $"transfer/manual?background={(background ? "true" : "false")}", body, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        var result = MoviePilotTransfer.ParseResult(reply.Data, reply.Success, reply.Message, preview: false);
+        result = MoviePilotTransfer.CompleteReceipt(result, preview);
+        Log.Info(Category, $"MoviePilot 手动整理（{(background ? "队列" : "同步")}）：{result.Summary}");
+        return result;
     }
 
     private static string TransferConnectionStamp(SessionIdentity identity) => Convert.ToHexString(
@@ -175,9 +191,10 @@ public sealed partial class MoviePilotService
         IReadOnlyList<JsonElement> files,
         bool background,
         bool preview,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SessionIdentity identity)
     {
-        var identity = CaptureIdentity();
+        CheckIdentity(identity, cancellationToken);
         ValidateHistoryConnection(request.Histories, identity);
         var body = request.Body(files, preview);
         var reply = await CallAsync((apiBase, token) => client.PostReplyAsync(

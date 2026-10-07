@@ -149,16 +149,16 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
      `PlayerPage.Chrome.cs` 的 `WindowPinGlyph`）、已置顶时同样整颗常亮；从前那句「uosc 画不出集成那两颗
      躺着的空心钉／立着的实心钉」随这条令作废，两边不再有那两颗。状态由 main.lua 观察 mpv 的 `ontop` 属性
      送进顶栏（同一个 `create_state_setter`，谁改的都从这里回来）。
-   - **菜单样式对齐参考 mpv 配置的右键菜单**（`EMBYNIAN[menu-style]`，用户令 2026-09-29「参考
-     C:\mpv_config-2026.08.12 修改独占模式右键菜单界面」；那份配置右键绑的是 mpv 0.41+ 内建的
-     context_menu.lua，样式在 portable_config/script-opts/context_menu.conf，画菜单的是同一个 uosc
-     Menu 元件）：字号 20、行高＝字号×(1+gap)、**缩放随窗口高**（osd-height/720，同参考配置的
-     scale_with_window=auto；不再吃 uosc 的 scale/scale_fullscreen）、悬停行**白底深字**
-     （#FFFFFF/#222222；active 行＝当前值照旧 0.8 白高亮，两档白靠深浅区分）、底板**不透明** #222222
-     ＋圆角 5＋0.5 白细描边、分隔线 #555555（行与行之间上游那道 0.04 细线照参考菜单撤掉）。
-     2026-09-26「右键菜单缩小一点」的行高 30 由此让位 —— 那一轮压的是上游 50/24 的过大，这一轮整把
-     尺子换成参考菜单的（720p 高的窗口＝参考原值，1080p＝×1.5）。逐项映射与「不搬的两件」（子菜单
-     悬停开合延迟、勾选框列）写在 main.lua 选项区同名槽；几何与上色在 `elements/Menu.lua` 同名槽。
+   - **菜单大小对齐集成模式右键菜单**（`EMBYNIAN[menu-style]`，用户令 2026-10-07「独占模式的右键菜单
+     体积太大了，大小改为跟集成模式一致（注意全屏和最大化时要放大 1.3 倍）」；上色沿用 2026-09-29
+     「参考 C:\mpv_config-2026.08.12」那轮批准的样子，画菜单的是同一个 uosc Menu 元件）：字号 14
+     （WinUI `ControlContentThemeFontSize`）、行高＝字号×(1+gap)＝42（集成一行＝行外边距 2×2＋内边距
+     9/10＋14px 行盒 18.6 ≈ 41.6）、最小宽 96（`FlyoutThemeMinWidth`）、外围 padding 5（presenter 1
+     ＋行外边距 4）；**缩放＝uosc 的 `state.scale`**＝`hidpi_scale`×（全屏/最大化时 `scale_fullscreen`
+     =1.3，否则 `scale`=1）—— 与集成菜单同样随 DPI 走、不随窗口高走，菜单开着时切全屏/最大化也会
+     重算。悬停行**白底深字**（#FFFFFF/#222222；active 行＝当前值照旧 0.8 白高亮）、底板**不透明**
+     #222222＋圆角 5＋0.5 白细描边、分隔线 #555555 照旧。逐项映射与「不搬的两件」（子菜单悬停开合
+     延迟、勾选框列）写在 main.lua 选项区同名槽；几何与上色在 `elements/Menu.lua` 同名槽。
    - `osd-width`/`osd-height` number 观察兜底：d3d11 窗口管线下 osd-dimensions 的 native 观察
      会漏掉起播初段「画布=视频尺寸→画布=窗口尺寸」的变化，导致控件可见而点击热区全错位。
 2. **lib/utils.lua**：目录/播放列表导航（`get_adjacent_files`、`decide_navigation_in_list`、
@@ -208,15 +208,21 @@ uosc → 宿主（`MPV_EVENT_CLIENT_MESSAGE`，契约与解析在 `src/EmbyNian.
 | `embynian-ready` | uosc 版本号 | 装载握手；`LibMpvHandle` 记 `VideoWindowUiReady` 并进日志 |
 | `embynian-episode` | `-1` / `1` | 换集请求 → `PlayerViewModel.StepEpisodeAsync`（Emby 单集导航） |
 | `embynian-episodes` | （保留） | 要选集菜单；宿主把本季单集经 `open-menu` 推回 uosc 画 |
-| `embynian-episode-index` | 1 起算序号 | 选集菜单点中的一项 → `PlayerViewModel.SwitchEpisode` |
+| `embynian-episode-index` | 菜单快照 ID:1 起算序号 | 仅在创建菜单的播放身份仍有效时切换所选单集；不重新解释当前列表 |
 | `embynian-versions` | （保留） | 要版本菜单；宿主把这一条目的媒体源经 `open-menu` 推回（只有一版时回一行「没有可切换的版本」） |
-| `embynian-version-index` | 1 起算序号 | 版本菜单点中的一项 → `PlayerViewModel.SwitchVersion` |
+| `embynian-version-index` | 菜单快照 ID:1 起算序号 | 仅在创建菜单的播放身份仍有效时切换所选版本 |
 | `embynian-picture-menu` | （保留） | 要画面菜单；右键、键盘菜单键与控制条那颗按钮走的是同一条绑定 |
-| `embynian-menu-index` | 1 起算序号 | 画面菜单点中的一行 → `RunMenuNodeAsync`（与集成模式右键点同一行是同一句执行） |
+| `embynian-menu-index` | 菜单快照 ID:1 起算序号 | 画面菜单点中的一行 → `RunMenuNodeAsync`；解析同一份菜单的命令，执行期间换片或停止会中止剩余命令（与集成模式右键点同一行是同一句执行） |
+| `embynian-open-settings` | `subtitle` / `video` / `audio` | 画面菜单末尾那三行「去设置里改」点中的一行（2026-10-01）→ `PlayerViewModel.RequestSettings` → 外壳把设置窗口开在该行那张卡上（`PlayerSettingsLinks` 是这张表的唯一出处，集成模式右键读的也是它） |
 | `embynian-skip-take` | （保留） | 点右下角「跳过片头/片尾」按钮 → `PlayerViewModel.TakeSkip`（与集成模式那颗 XAML 按钮、回车同一句 `AcceptSkip`） |
+| `embynian-shortcut` | `ShortcutCatalog` 已知动作 ID | 独占键盘交给常驻视图模型执行；不依赖播放页 Attach |
 | `embynian-seek` | 0–1 比例 | 预留扩展；当前 uosc 时间轴直接对 mpv seek，不经宿主 |
 
-不带 `embynian-` 前缀的 script-message 一律被宿主忽略。宿主 → uosc **五条**：`open-menu`（菜单的
+宿主还会推送 `embynian-shortcuts`（JSON：mpv 键名 → 动作 ID；空动作表示禁用原默认键）。`lib/embynian_shortcuts.lua` 安装键绑定，菜单打开期间卸下，关闭后恢复最新映射；快捷键设置修改和恢复偏好都会通知常驻视图模型。只覆盖内置独占/uosc，不改变外部 mpv 进程后端。
+
+菜单选择值使用 `VideoMenuSnapshot` 生成的随机快照标识和序号；解析器仍容纳旧整数格式，但执行端没有对应快照时拒绝它。不能再用手写 `embynian-episode-index 2` 当作可执行菜单。`start-file`/`end-file` 关闭菜单、清理未释放的鼠标按下和延迟暂停。
+
+不带 `embynian-` 前缀的 script-message 一律被宿主忽略。其余宿主 → uosc 消息：`open-menu`（菜单的
 JSON，shape 与 uosc MenuData 对齐；画面/选集/版本三张都带 `embynian_anchor: true`，uosc 据此把菜单画在
 光标处而不是屏幕居中、也不压暗整屏幕的幕布 —— 弹出方式与集成模式的右键/按钮浮层一致，见
 `EMBYNIAN[menu-anchor]`，`elements/Menu.lua`）、`embynian-version-count`（这个条目挂了几版文件，控制条上那颗
@@ -247,6 +253,14 @@ uosc 靠 mpv 属性观察自取其余全部状态（音量、轨道、章节的�
 与宿主侧的 `EpisodeMenuRequestGate`（幂等请求一秒只放行几条，挡下的条数进日志）。
 
 ## 改动时的验证
+
+优先运行随库的离线交互回归（需要 Python `py` 和本树匹配的 libmpv）：
+
+```bash
+py tools/test-uosc.py --output work/uosc-interaction-run
+```
+
+输出目录必须不存在。运行器复制本树 uosc 到该目录并注入假时钟、属性与命令记录，不改源文件；真实随包 Lua 内核执行菜单替换、键鼠切换、点击所有权、拖动取消与最终精确 seek、重绑键和文件边界。报告 `results.json` 中检查全部通过、错误为空才退出 0。没有媒体、桌面窗口、HTTP 或用户设置访问；这是行为回归，不是视觉、真实鼠标或完整播放验收。下面旧 `work/` 探针不是干净检出的必备工具，复用前先读实现；涉及菜单选择消息的旧整数夹具需要按快照协议更新。
 
 1. 改完 Lua 先过编译检查：`luajit.exe -e "assert(loadfile('<文件>'))"`（本机 luajit 在
    mpv 整合包目录）。**注意这只能抓语法**——运行期 nil（如观察器回调里的残留引用）

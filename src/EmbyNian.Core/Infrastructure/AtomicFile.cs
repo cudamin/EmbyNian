@@ -1,44 +1,36 @@
 namespace EmbyNian.Infrastructure;
 
-/// <summary>
-/// Writes a file by writing a sibling temp file first and then replacing the target,
-/// so a crash or a full disk can never leave a half-written settings file behind.
-/// </summary>
+/// <summary>先在同目录写完整临时文件，再替换目标；可将被替换的原件同时保留为备份。</summary>
 public static class AtomicFile
 {
-    public static void WriteAllText(string path, string contents, System.Text.Encoding encoding)
-    {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+    private static readonly object CommitGate = new();
 
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, contents, encoding);
+    public static void WriteAllText(string path, string contents, System.Text.Encoding encoding, string? backupPath = null) =>
+        Write(path, temporary => File.WriteAllText(temporary, contents, encoding), backupPath);
+
+    public static void WriteAllBytes(string path, byte[] contents) =>
+        Write(path, temporary => File.WriteAllBytes(temporary, contents), null);
+
+    private static void Write(string path, Action<string> write, string? backupPath)
+    {
+        path = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        var temporary = path + $".{Guid.NewGuid():N}.tmp";
         try
         {
-            File.Move(temp, path, overwrite: true);
+            write(temporary);
+            lock (CommitGate)
+            {
+                if (backupPath is not null && File.Exists(path))
+                    File.Replace(temporary, path, Path.GetFullPath(backupPath));
+                else
+                    File.Move(temporary, path, overwrite: true);
+            }
         }
-        catch
+        finally
         {
-            TryDelete(temp);
-            throw;
-        }
-    }
-
-    public static void WriteAllBytes(string path, byte[] contents)
-    {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-
-        var temp = path + ".tmp";
-        File.WriteAllBytes(temp, contents);
-        try
-        {
-            File.Move(temp, path, overwrite: true);
-        }
-        catch
-        {
-            TryDelete(temp);
-            throw;
+            TryDelete(temporary);
         }
     }
 

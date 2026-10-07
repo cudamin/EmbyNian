@@ -82,6 +82,16 @@ public static class ShaderChainRules
         }
     }
 
+    public static bool ConflictsWith(ShaderGroup? group, IReadOnlyList<string> command)
+    {
+        if (group is null || command.Count < 2) return false;
+        var name = command[1];
+        var required = group.Shaders.SelectMany(shader => shader.Requires)
+            .LastOrDefault(option => string.Equals(option.Key, name, StringComparison.Ordinal));
+        if (required.Key is null) return false;
+        return command.Count < 3 || command[0] != "set" || command[2] != required.Value;
+    }
+
     /// <summary>Every chain in the table that breaks a rule, as 「格名：毛病」 lines. Empty when all is well.</summary>
     public static IReadOnlyList<string> ProblemsInTable() =>
     [

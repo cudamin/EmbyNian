@@ -81,8 +81,8 @@ public static class EmbyWebConsole
     /// <c>window.location = "index.html"</c>, dropping the <c>#!/dashboard</c> route it was asked for.
     /// </para>
     /// <para>
-    /// Merges rather than overwrites, and only ever for our own host. Merging keeps the server id the client
-    /// fills in after its first connection, which is what its api-client map is keyed by; the host guard is
+    /// Merges rather than overwrites, and only ever for our own origin. Merging keeps the server id the client
+    /// fills in after its first connection, which is what its api-client map is keyed by; the origin guard is
     /// because a document-start script runs in every document the control loads, and an access token must
     /// not be written into some other site's storage because a link went there.
     /// </para>
@@ -105,14 +105,13 @@ public static class EmbyWebConsole
             ["AccessToken"] = accessToken
         });
 
-        // host:port, which is what location.host is: no scheme, and no port when it is the scheme's own.
-        var host = HostLiteral(apiBase);
+        var origin = OriginLiteral(apiBase);
         var key = JsonSerializer.Serialize(StorageKey);
 
         return $$"""
             (function () {
               try {
-                if ((location.host || "").toLowerCase() !== {{host}}) return;
+                if ((location.origin || "").toLowerCase() !== {{origin}}) return;
 
                 var seed = {{seed}};
                 var key = {{key}};
@@ -180,14 +179,14 @@ public static class EmbyWebConsole
         ArgumentNullException.ThrowIfNull(apiBase);
         ArgumentException.ThrowIfNullOrEmpty(userId);
 
-        var host = HostLiteral(apiBase);
+        var origin = OriginLiteral(apiBase);
         var keys = JsonSerializer.Serialize(ThemeKeys.Select(name => $"{userId}-{name}"));
         var value = JsonSerializer.Serialize(FollowColorScheme);
 
         return $$"""
             (function () {
               try {
-                if ((location.host || "").toLowerCase() !== {{host}}) return;
+                if ((location.origin || "").toLowerCase() !== {{origin}}) return;
 
                 var keys = {{keys}};
                 for (var i = 0; i < keys.length; i++) localStorage.setItem(keys[i], {{value}});
@@ -198,10 +197,11 @@ public static class EmbyWebConsole
             """;
     }
 
-    /// <summary>
-    /// <c>location.host</c> 那个串，做成 JSON 字面量。<see cref="Uri.Authority"/> 而不是 <c>Host</c>：前者是
-    /// host:port，且端口是该 scheme 自己的默认端口时不带端口 —— 正好是 <c>location.host</c> 的形状。
-    /// </summary>
-    private static string HostLiteral(Uri apiBase) =>
-        JsonSerializer.Serialize(apiBase.Authority.ToLowerInvariant());
+    /// <summary>浏览器的 origin 包含协议、ASCII 主机名和非默认端口，不含路径。</summary>
+    private static string OriginLiteral(Uri apiBase)
+    {
+        EmbyHttpRedirect.Validate(apiBase);
+        var origin = new UriBuilder(apiBase.Scheme, apiBase.IdnHost, apiBase.Port).Uri;
+        return JsonSerializer.Serialize(origin.GetLeftPart(UriPartial.Authority).ToLowerInvariant());
+    }
 }

@@ -206,6 +206,15 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// </summary>
     internal static string FirstCardCategory => CardCategories[0];
 
+    /// <summary>
+    /// 这个名字是不是一张设置卡（不是 服务器／诊断／通知／服务器控制台 那几页）。给「点进去落在哪张卡」这类
+    /// 读数当判据用：播放页右键菜单末尾那三行设置入口（<see cref="EmbyNian.Mpv.PlayerSettingsLinks"/>）拿它
+    /// 对账，卡片改名而那一张表没跟上时当场报红 —— 找不到名字时 <c>SettingsPage.Select</c> 会安静地退回
+    /// 「播放器」，用户点「字幕」却开在别的卡上，那种错靠看是看不出来的。
+    /// </summary>
+    internal static bool IsCardCategory(string category) =>
+        CardCategories.Contains(category, StringComparer.Ordinal);
+
     /// <summary>主题那一行的色板，同样是为了让自检不必去树上找它。</summary>
     internal SettingThemeRow? Themes { get; private set; }
 
@@ -322,6 +331,14 @@ public sealed partial class SettingsViewModel : PageViewModel
     }
 
     /// <summary>
+    /// Re-enumerates the 音频输出设备 row on a cached page's re-entry. The page is deliberately cached
+    /// (half-typed text survives navigation), so ReloadAsync does not run again — but a device list is a
+    /// reading, not a preference, and the row's own note promises a fresh enumeration every visit. Only
+    /// this one row refreshes; every other card keeps its in-progress edits.
+    /// </summary>
+    internal Task RefreshAudioDevicesAsync() => FillAudioDevicesAsync();
+
+    /// <summary>
     /// Hands the 音频输出设备 row the machine's real devices once they have been enumerated. Same shape and same
     /// reason as <see cref="FillFontsAsync"/>: the list comes out of a throwaway libmpv context, which is tens
     /// of milliseconds of native work, and the page is worth more than that one row being complete on the first
@@ -331,13 +348,9 @@ public sealed partial class SettingsViewModel : PageViewModel
     {
         if (_audioDevices is null || _audioDevice is null) return;
 
-        var devices = await _audioDevices.LoadAsync().ConfigureAwait(true);
-        if (devices.Count == 0) return;
-
-        // The row may have been rebuilt while the read ran — a second visit to the page does that — so the
-        // current one is asked for rather than the one captured above.
         var row = _audioDevice;
-        if (row is null) return;
+        var devices = await _audioDevices.LoadAsync().ConfigureAwait(true);
+        if (!ReferenceEquals(row, _audioDevice)) return;
 
         var audio = Settings.Audio;
         var (choices, selected) = DeviceChoices(audio, devices);
@@ -371,7 +384,7 @@ public sealed partial class SettingsViewModel : PageViewModel
             () => audio.Device,
             value => audio.Device = value,
             StringComparer.OrdinalIgnoreCase,
-            stored => $"{stored}（设置文件中的值，这台机器上没找到）");
+            stored => $"{stored}（已保存，本次内置设备名单中未找到）");
     }
 
     /// <summary>
@@ -712,8 +725,24 @@ public sealed partial class SettingsViewModel : PageViewModel
         {
             write(value);
             _subtitlePreview?.Refresh();
-            _ = _pushSubtitleStyle?.Invoke();
+            _ = PushSubtitleStyleAsync();
         };
+
+    private async Task<bool> PushSubtitleStyleAsync()
+    {
+        if (_pushSubtitleStyle is null) return true;
+        try
+        {
+            await _pushSubtitleStyle().ConfigureAwait(true);
+            return true;
+        }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception error)
+        {
+            Report("当前播放的字幕外观未完全更新", error);
+            return false;
+        }
+    }
 
     private SettingSection AudioCard()
     {
@@ -767,7 +796,7 @@ public sealed partial class SettingsViewModel : PageViewModel
                 "只对 AC-3 / E-AC-3 音轨有效，而且要片源自带 DRC 信息；DTS、TrueHD、AAC、FLAC 一律没有反应，"
                 + "那些请用下面的「音量均衡」"),
             Mpv("音量均衡", MpvOutputOptions.VolumeNormalizers, () => audio.VolumeNormalize, value => audio.VolumeNormalize = value,
-                "af", "对所有编码都有效，代价是动态范围被压窄；播放器右键菜单里可以当场试听这三档"),
+                "af", "对解码后的音频有效（直通除外），代价是动态范围被压窄；播放器右键菜单里可以当场试听这三档"),
             Toggle("5.1 下混到两声道时归一化",
                 "多声道下混时防削波：把混音系数整体压到不超载，代价是整体变轻。它不单独抬高对白 —— "
                 + "想要对白清楚请用上面的「音量均衡」。只在下混由 mpv 完成时有效，这台机器上量过确实如此",
@@ -793,8 +822,9 @@ public sealed partial class SettingsViewModel : PageViewModel
 
         return new SettingChoiceRow(
             "音频输出设备",
-            Annotate("插上耳机之后独占模式该占哪一个，由这一行说。设备列表是开设置时从 mpv 读的；"
-                + "已不在线的设备下一次播放自动跟随系统默认，不会没声音", "audio-device"),
+            Annotate("每次打开设置会重新读取内置 libmpv 的设备名单；内置后端起播前再次核对，"
+                + "未找到时本次尝试系统默认，不改已保存的选择。外部 mpv 使用自己的设备表，不保证这些名称可用，也不执行此回退。"
+                + "播放中拔插或设备无法打开仍可能无声", "audio-device"),
             choices,
             selected,
             Save);
@@ -1145,6 +1175,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         var effective = ShortcutCatalog.Resolve(Settings.Shortcuts.Bindings);
         foreach (var row in _shortcutRows)
             row.ComboText = ShortcutCatalog.Format(effective[row.Id]);
+        ShellPrefs.ApplyShortcuts();
     }
 
     /// <summary>
@@ -1494,7 +1525,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// <see cref="ShellPrefs"/> 喊一声（侧边栏、图片缓存上限、主页版面改完当场生效的唯一一根线 —— 设置页开在
     /// 另一个窗口，手上没有主窗口的 HWND、也没有主页那一页），整页重建（每一行只在造出来时读一次设置、此后
     /// 只写，见类注释，不重建的话文件已经变了、屏上六十行还是旧的）。重建走 <see cref="ReloadAsync"/> 本身，
-    /// 字体和音频设备两份名单按进程缓存，重建一次不会再扫字体或开 libmpv 句柄。
+    /// 字体名单按进程缓存；音频设备每次重建重新枚举，旧名单不能当成设备仍在线的依据。
     /// </summary>
     internal async Task<bool> ProbeSubtitleRestoreAsync()
     {
@@ -1519,15 +1550,31 @@ public sealed partial class SettingsViewModel : PageViewModel
         finally { _pushSubtitleStyle = push; }
     }
 
+    internal async Task<bool> ProbeSubtitlePushFailureAsync()
+    {
+        if (App.Instance?.SubtitleProbeActive != true) return false;
+        var push = _pushSubtitleStyle;
+        _pushSubtitleStyle = () => Task.FromException(new InvalidOperationException("离线模拟：字幕选项读数失败"));
+        try
+        {
+            var applied = await PushSubtitleStyleAsync();
+            return !applied && NoticeOpen && NoticeTitle == "当前播放的字幕外观未完全更新"
+                && NoticeMessage?.Contains("字幕选项读数失败", StringComparison.Ordinal) == true;
+        }
+        finally { _pushSubtitleStyle = push; }
+    }
+
     private async Task ReapplyAndReloadAsync(string notice)
     {
         var ui = Settings.Ui;
         ThemeHost.Apply(ui.Theme);
         ShellPrefs.Apply(ui);
+        ShellPrefs.ApplyShortcuts();
 
         await ReloadAsync().ConfigureAwait(true);
-        if (_pushSubtitleStyle is { } pushSubtitleStyle) await pushSubtitleStyle().ConfigureAwait(true);
+        var subtitlesApplied = await PushSubtitleStyleAsync().ConfigureAwait(true);
         AnnounceScreenshotDirectory();
+        if (!subtitlesApplied) return;
 
         Notify(null, HasUnsavedChanges ? "偏好已在本次运行应用，但尚未保存；请重试保存。" : notice,
             HasUnsavedChanges ? InfoBarSeverity.Warning : InfoBarSeverity.Success);

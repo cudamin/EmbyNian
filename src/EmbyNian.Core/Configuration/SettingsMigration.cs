@@ -81,6 +81,7 @@ public static class SettingsMigration
         // 两个方向都抄，不只是「关」那一个：装机默认 2026-09-05 从「开」改成了「关」，所以一份 v6 文件里明明
         // 开着的着色器要是不照抄过来，就会被那个新默认悄悄关掉 —— 而那个开关当年是他打开的。
         if (version < 7 && root.TryGetProperty("Shaders", out var shaders)
+            && shaders.ValueKind == JsonValueKind.Object
             && shaders.TryGetProperty("ApplyToAllVideos", out var applyToAll)
             && applyToAll.ValueKind is JsonValueKind.True or JsonValueKind.False)
         {
@@ -342,6 +343,7 @@ public static class SettingsMigration
         if (settings.Shaders is null) settings.Shaders = new ShaderAutomationSettings();
         if (settings.Ui is null) settings.Ui = new UiSettings();
         if (settings.Shortcuts is null) settings.Shortcuts = new ShortcutSettings();
+        if (settings.MoviePilot is null) settings.MoviePilot = new MoviePilotSettings();
 
         if (settings.Playback.AudioLanguages is null) settings.Playback.AudioLanguages = [];
         if (settings.Playback.SubtitleLanguages is null) settings.Playback.SubtitleLanguages = [];
@@ -382,6 +384,10 @@ public static class SettingsMigration
 
         if (settings.Ui.HomeRows is null) settings.Ui.HomeRows = [];
         settings.Ui.HomeRows.RemoveAll(row => row is null);
+        settings.Ui.HomeRowsIdentity ??= "";
+        settings.Ui.HomeRowsByIdentity ??= new(StringComparer.Ordinal);
+        DropNullValues(settings.Ui.HomeRowsByIdentity);
+        foreach (var rows in settings.Ui.HomeRowsByIdentity.Values) rows.RemoveAll(row => row is null);
 
         if (settings.Ui.Sort is null) settings.Ui.Sort = new(StringComparer.Ordinal);
         if (settings.Ui.Filters is null) settings.Ui.Filters = new(StringComparer.Ordinal);
@@ -518,10 +524,10 @@ public static class SettingsMigration
         if (settings.Video.DebandStrength.Length == 0) settings.Video.DebandStrength = "low";
         settings.Video.ToneMapping = Choice(HdrOptions.ToneMappings, settings.Video.ToneMapping);
         settings.Video.HdrComputePeak = Choice(HdrOptions.PeakDetection, settings.Video.HdrComputePeak);
-        settings.Video.HdrPeakNits = HdrOptions.Clamp(settings.Video.HdrPeakNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
-        settings.Video.HdrReferenceWhiteNits = HdrOptions.Clamp(settings.Video.HdrReferenceWhiteNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
-        settings.Video.HdrSubtitleNits = HdrOptions.Clamp(settings.Video.HdrSubtitleNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
-        settings.Video.HdrImageSubtitleNits = HdrOptions.Clamp(settings.Video.HdrImageSubtitleNits, HdrOptions.MinimumNits, HdrOptions.MaximumNits);
+        settings.Video.HdrPeakNits = HdrOptions.ClampNits(settings.Video.HdrPeakNits);
+        settings.Video.HdrReferenceWhiteNits = HdrOptions.ClampNits(settings.Video.HdrReferenceWhiteNits);
+        settings.Video.HdrSubtitleNits = HdrOptions.ClampNits(settings.Video.HdrSubtitleNits);
+        settings.Video.HdrImageSubtitleNits = HdrOptions.ClampNits(settings.Video.HdrImageSubtitleNits);
         settings.Video.HdrContrastRecovery = HdrOptions.Clamp(settings.Video.HdrContrastRecovery, 0, 2);
         settings.Audio.Channels = Choice(MpvOutputOptions.Channels, settings.Audio.Channels);
         settings.Audio.DynamicRange = Choice(MpvOutputOptions.DynamicRange, settings.Audio.DynamicRange);
@@ -532,8 +538,11 @@ public static class SettingsMigration
         // 留着它的话这一行会走 Options 的「设置文件中的值」兜底分支，显示成「auto（设置文件中的值，这台机器上没
         // 找到）」，一句不实的话：auto 恰恰是永远找得到的那一个。0.0.1 那个版本的下拉里还并排放着英文的
         // 「Autoselect device」，点过它的设置文件里就存着这个值，所以这不是假想的状态。
-        if (string.Equals(settings.Audio.Device, AudioDeviceCatalogue.AutoDevice, StringComparison.OrdinalIgnoreCase))
-            settings.Audio.Device = "";
+        // JSON 的 null 也要拦：反序列化照单收下（string 属性允许 null），可下游 Device.Trim 会空引用，
+        // 两端后端全都播不了（独立审查 2026-10-04）。空串就是「跟随系统默认」，null 归一过去。
+        settings.Audio.Device = (settings.Audio.Device ?? "").Trim() is { Length: > 0 } trimmed
+            ? string.Equals(trimmed, AudioDeviceCatalogue.AutoDevice, StringComparison.OrdinalIgnoreCase) ? "" : trimmed
+            : "";
         settings.Playback.SubtitleCodepage = Choice(MpvOutputOptions.SubtitleCodepages, settings.Playback.SubtitleCodepage);
         settings.Playback.SubtitleAssOverride = Choice(MpvOutputOptions.SubtitleStyleScopes, settings.Playback.SubtitleAssOverride);
 
@@ -698,9 +707,11 @@ public static class SettingsMigration
         var trimmed = (value ?? "").Trim();
         if (trimmed.Length == 0) return "";
 
-        return choices.Any(choice => string.Equals(choice.Value, trimmed, StringComparison.OrdinalIgnoreCase))
-            ? trimmed
-            : "";
+        foreach (var choice in choices)
+        {
+            if (string.Equals(choice.Value, trimmed, StringComparison.OrdinalIgnoreCase)) return choice.Value;
+        }
+        return "";
     }
 
     /// <summary>

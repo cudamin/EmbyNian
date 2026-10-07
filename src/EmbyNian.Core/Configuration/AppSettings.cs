@@ -1027,6 +1027,17 @@ public sealed class ShaderAutomationSettings
     public List<string> AnimeKeywords { get; set; } =
         ["动画", "动漫", "国漫", "番剧", "卡通", "Anime", "Animation", "Cartoon", "アニメ"];
 
+    public ShaderAutomationSettings Snapshot() => new()
+    {
+        Enabled = Enabled,
+        Gpu = Gpu,
+        ManualGroup = ManualGroup,
+        AutoAnimeProfile = AutoAnimeProfile,
+        RestoreVintageSources = RestoreVintageSources,
+        DisableForUltraHighRes = DisableForUltraHighRes,
+        AnimeKeywords = [.. AnimeKeywords]
+    };
+
     /// <summary>Width above which <see cref="DisableForUltraHighRes"/> applies.</summary>
     public const int UltraHighResWidth = 7000;
 
@@ -1351,6 +1362,10 @@ public sealed class UiSettings
     /// </para>
     /// </summary>
     public List<HomeRowSetting> HomeRows { get; set; } = [];
+
+    public string HomeRowsIdentity { get; set; } = "";
+
+    public Dictionary<string, List<HomeRowSetting>> HomeRowsByIdentity { get; set; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>

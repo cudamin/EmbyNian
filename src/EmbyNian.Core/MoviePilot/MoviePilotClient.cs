@@ -193,7 +193,7 @@ public sealed class MoviePilotClient : IDisposable
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
-        return await ReadReplyAsync(response, cancellationToken).ConfigureAwait(false);
+        return await ReadReplyAsync(response, cancellationToken, requireEnvelope: true).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -220,7 +220,8 @@ public sealed class MoviePilotClient : IDisposable
     // 整理允许部分成功，保留失败信封里的逐文件回执，不能因此重试整批。
     private static async Task<MoviePilotReply> ReadReplyAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireEnvelope = false)
     {
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
@@ -230,10 +231,21 @@ public sealed class MoviePilotClient : IDisposable
         if (!response.IsSuccessStatusCode)
             throw new MoviePilotException(Describe(response, body, "请求"), response.StatusCode, body);
 
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement;
-        var success = root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("success", out var flag) ||
-            flag.ValueKind != JsonValueKind.False;
+        JsonElement root;
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            root = document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            throw new MoviePilotException("MoviePilot 响应无法解析，操作结果未确认");
+        }
+        var flag = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("success", out var successFlag)
+            ? successFlag : default;
+        if (requireEnvelope && flag.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new MoviePilotException("MoviePilot 没有返回明确的操作回执，请先核对服务端状态");
+        var success = flag.ValueKind != JsonValueKind.False;
         var message = MoviePilotTransfer.Text(root, "message");
         var data = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("data", out var inner)
             ? inner.Clone() : root.Clone();

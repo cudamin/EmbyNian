@@ -61,10 +61,12 @@ public sealed partial class MoviePilotService(
         foreach (var source in selected)
             path += $"&media_source={Uri.EscapeDataString(source)}";
 
+        var identity = CaptureIdentity();
         var data = await CallAsync((apiBase, token) =>
-            client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken).ConfigureAwait(false);
+            client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken, identity).ConfigureAwait(false);
 
-        var results = MoviePilotMediaParser.Parse(data);
+        var stamp = TransferConnectionStamp(identity);
+        var results = MoviePilotMediaParser.Parse(data).Select(media => media with { ConnectionStamp = stamp }).ToList();
         Log.Info(Category, $"MoviePilot 搜「{keyword}」" +
             (selected.Count > 0 ? $"（{string.Join("、", selected)}）" : "") + $"：{results.Count} 条");
         return results;
@@ -90,8 +92,9 @@ public sealed partial class MoviePilotService(
         if (!media.CanSubscribe)
             throw new MoviePilotException("这条结果缺少可订阅的身份信息，换一条试试");
 
+        var identity = RequireResultConnection(media.ConnectionStamp);
         var body = MoviePilotMediaParser.SubscribeBody(media);
-        await CallAsync((apiBase, token) =>
+        await WriteAsync(identity, [SubscribeKey(media)], (apiBase, token) =>
             client.PostAsync(apiBase, token, "subscribe/", body, cancellationToken), cancellationToken)
             .ConfigureAwait(false);
 
@@ -108,12 +111,17 @@ public sealed partial class MoviePilotService(
     {
         if (!media.CanSubscribe) return [];
 
+        var identity = media.ConnectionStamp.Length == 0 ? CaptureIdentity() : RequireResultConnection(media.ConnectionStamp);
         var path = $"search/media/{Uri.EscapeDataString(media.MediaId!)}?media_source={Uri.EscapeDataString(media.MediaSource!)}";
         if (!string.IsNullOrWhiteSpace(media.Type)) path += $"&mtype={Uri.EscapeDataString(media.Type)}";
+        if (media.Season is >= 0 && media.Type == MoviePilotTransferRequest.TypeSeries)
+            path += $"&season={media.Season.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
         var data = await CallAsync((apiBase, token) =>
-            client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken).ConfigureAwait(false);
+            client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken, identity).ConfigureAwait(false);
 
-        var resources = MoviePilotMediaParser.ParseResources(data, media.MediaSource, media.MediaId);
+        var stamp = TransferConnectionStamp(identity);
+        var resources = MoviePilotMediaParser.ParseResources(data, media.MediaSource, media.MediaId, media)
+            .Select(resource => resource with { ConnectionStamp = stamp }).ToList();
         Log.Info(Category, $"MoviePilot 为《{media.Title}》搜到 {resources.Count} 个资源");
         return resources;
     }
@@ -131,13 +139,14 @@ public sealed partial class MoviePilotService(
         var text = keyword.Trim();
         if (text.Length == 0) return [];
 
+        var identity = CaptureIdentity();
         var path = $"search/title?keyword={Uri.EscapeDataString(text)}&page=0";
         var data = await CallAsync((apiBase, token) =>
-            client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken).ConfigureAwait(false);
+            client.GetAsync(apiBase, token, path, cancellationToken), cancellationToken, identity).ConfigureAwait(false);
 
-        // 关键字搜出来的种子，身份对（media_source/media_id）由种子自己带 —— 这里传 null，让解析器从 torrent_info
-        // 里认（见 ParseResources），下载时照样能带上让服务器认片。
-        var resources = MoviePilotMediaParser.ParseResources(data, null, null);
+        var stamp = TransferConnectionStamp(identity);
+        var resources = MoviePilotMediaParser.ParseResources(data, null, null)
+            .Select(resource => resource with { ConnectionStamp = stamp }).ToList();
         Log.Info(Category, $"MoviePilot 关键词搜「{text}」：{resources.Count} 个资源");
         return resources;
     }
@@ -148,9 +157,11 @@ public sealed partial class MoviePilotService(
     /// </summary>
     public async Task DownloadAsync(MoviePilotResource resource, CancellationToken cancellationToken)
     {
+        var identity = RequireResultConnection(resource.ConnectionStamp);
         var body = MoviePilotMediaParser.DownloadBody(resource);
-        await CallAsync((apiBase, token) =>
-            client.PostAsync(apiBase, token, "download/add", body, cancellationToken), cancellationToken)
+        var path = resource.MediaInfo.ValueKind == System.Text.Json.JsonValueKind.Object ? "download/" : "download/add";
+        await WriteAsync(identity, [DownloadKey(resource)], (apiBase, token) =>
+            client.PostAsync(apiBase, token, path, body, cancellationToken), cancellationToken)
             .ConfigureAwait(false);
 
         Log.Info(Category, $"已把资源「{resource.Title}」加入 MoviePilot 下载");
@@ -243,6 +254,8 @@ public sealed partial class MoviePilotService(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var current = settings.MoviePilot;
+        if (!current.Enabled)
+            throw new OperationCanceledException("MoviePilot 已关闭，请重新启用后操作", cancellationToken);
         if (!MoviePilotAddress.TryNormalize(current.Url, out var apiBase, out _) || identity.ApiBase != apiBase
             || !string.Equals(identity.Username, current.Username?.Trim(), StringComparison.Ordinal)
             || identity.ProtectedPassword != current.ProtectedPassword)

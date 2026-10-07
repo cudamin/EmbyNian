@@ -2803,9 +2803,9 @@ internal static class PlaybackTests
             var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), subtitles));
 
             Assert.Equal("48", options["sub-font-size"]);
-            Assert.Equal("1.000/0.949/0.000/1.000", options["sub-color"], "文字本身永远不透明");
+            Assert.Equal("#FFFFF200", options["sub-color"], "文字本身永远不透明");
             Assert.Equal("3", options["sub-border-size"]);
-            Assert.Equal("0.000/0.000/0.000/0.500", options["sub-back-color"]);
+            Assert.Equal("#80000000", options["sub-back-color"]);
         });
 
         Test("输出：底板要发 sub-border-style 才画得出来", () =>
@@ -2825,13 +2825,13 @@ internal static class PlaybackTests
                     SubtitleBackOpacity = 60
                 }));
             Assert.Equal("background-box", box["sub-border-style"]);
-            Assert.Equal("0.000/0.000/0.000/0.600", box["sub-back-color"]);
+            Assert.Equal("#99000000", box["sub-back-color"]);
 
             // 未指定背景色仍使用黑色，并保留单独的不透明度选择。
             var inherited = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
                 new PlaybackSettings { SubtitleBackStyle = "opaque-box", SubtitleBackColor = "" }));
             Assert.Equal("opaque-box", inherited["sub-border-style"]);
-            Assert.Equal("0.000/0.000/0.000/0.600", inherited["sub-back-color"]);
+            Assert.Equal("#99000000", inherited["sub-back-color"]);
         });
 
         Test("输出：外观应用范围只在「强制」时发出去", () =>
@@ -2910,12 +2910,12 @@ internal static class PlaybackTests
             Assert.Equal("50", options["sub-font-size"]);
             Assert.Equal("no", options["sub-bold"], "出厂不加粗：sub-bold 只有开了加粗才发 yes");
             Assert.Equal("0.5", options["sub-border-size"]);
-            Assert.Equal("0.000/0.000/0.000/1.000", options["sub-border-color"]);
+            Assert.Equal("#FF000000", options["sub-border-color"]);
             Assert.Equal("0.5", options["sub-shadow-offset"]);
             Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Microsoft YaHei UI Semibold（v19 起的默认，系统自带、不打包）");
             Assert.False(options.ContainsKey("sub-codepage"),
                 "出厂是自动识别编码：写死 gb18030 会把 Big5 的繁体字幕读成乱码");
-            Assert.Equal("0.000/0.000/0.000/0.600", options["sub-back-color"],
+            Assert.Equal("#99000000", options["sub-back-color"],
                 "出厂黑色，随 底板不透明度 60% 一起发 —— 底板关着时它就是阴影的颜色");
             Assert.False(options.ContainsKey("sub-border-style"), "出厂没有底板，跟以前看到的一样");
         });
@@ -3732,6 +3732,54 @@ internal static class PlaybackTests
             Assert.False(chrome.State.Any, "加载完就交回给指针——它还在死区里");
         });
 
+        Test("播放器控件：右键画面菜单开着时控件全部收下去", () =>
+        {
+            // 用户令 2026-10-07「右键点击画面呼出菜单的时候不要自动显示其他控件」。这只菜单锚在画面上，
+            // 与控制条上那五只浮层（SetHold 钉住三样）相反：开着时菜单本身就是全部界面。尤其要压住位置
+            // 判据那一路 —— 菜单从画面中部开出去、被屏幕下沿裁住时，指针在菜单里的每一步都躺在底边
+            // 唤出带里，那是真手，位置规则认它。
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+            Assert.False(chrome.State.Any);
+
+            // 开菜单的前一刻指针就压在底边带里（右键低处的画面，进度条已经在屏上）。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 1050);
+            Assert.True(chrome.State.Bar);
+
+            chrome.SetPictureMenu(true, now + 1100);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "菜单开着，控件一个不画");
+            Assert.False(chrome.CursorHidden, "用户正在菜单里挑，光标不能被收走");
+
+            // 菜单里那条手是真实的移动（moved:true）：回到死区不点亮什么，贴到底边带里、离音量矩形再近
+            // 也一样 —— 位置判据在菜单开着期间整段让位。
+            chrome.Pointer(y: 400, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.False(chrome.State.Any, "指针在菜单里移动不点亮任何控件");
+            chrome.Pointer(y: 980, height: 1000, ChromePart.None, railNear: 1, now + 1300);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "就在底边带里、音量条反达之内也一样");
+
+            // 键盘宽限撞上右键：宽限的「三样全给」也不许越过菜单这一支。
+            chrome.WakeFully(now + 1400);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State,
+                "带着一屏控件开菜单正是这条令要挡的场面");
+
+            // 关上：交回给位置判据 —— 指针在哪儿控件跟着哪儿，且不带别的显示理由。宽限在开菜单那一拍
+            // 就被清掉了，这一拍要是还认它，关菜单自己就会把一屏控件弹回来。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 1450);
+            chrome.SetPictureMenu(false, now + 1500);
+            Assert.Equal(new ChromeState(true, false, false), chrome.State, "指针还在底边带里，菜单关了控件照位置回来");
+            Assert.False(chrome.CursorHidden, "关上那一拍重盖了空闲钟，光标不会立刻被收走");
+            Assert.Equal(0d, chrome.IdleAgo(now + 1500), "空闲钟从关上那一拍重数");
+            chrome.Tick(now + 1600);
+            Assert.Equal(new ChromeState(true, false, false), chrome.State,
+                "过期宽限清干净了，不会再有一屏控件弹回来");
+
+            // 新一播放是自己的世界：画面菜单那一位跟纯净闸一样不活过 Reset。
+            chrome.SetPictureMenu(true, now + 2000);
+            chrome.Reset(now + 2001);
+            Assert.False(chrome.PictureMenuOpen);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "Reset 回到开场那套全显示");
+        });
+
         Test("播放器控件：拖动标题移动窗口时不画进度条和音量条", () =>
         {
             // 「在播放页面中，当用户长按标题并拖动播放窗口时，拖动过程中不要显示进度条和音量条」(2026-09-22)。
@@ -4427,14 +4475,17 @@ internal static class PlaybackTests
                 now + ChromeReveal.CursorIdleMilliseconds + 600, moved: true));
             Assert.False(chrome.CursorHidden, "真动了就得回来");
 
-            // 光标露着的时候两者没有分别：一个静止的指针本来就不产生事件，所以那一半不需要这个区分。
+            // 只重报位置不会取消明确给出的反馈宽限；光标仍独立按空闲钟隐藏。
             var shown = Chrome(out var start);
+            shown.WakeFully(start);
             shown.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start, moved: false);
             shown.Tick(start + ChromeReveal.CursorIdleMilliseconds - 1);
-            Assert.False(shown.State.Any);
+            Assert.True(shown.State.Any);
             Assert.False(shown.CursorHidden, "还差一毫秒，光标还得在");
             shown.Tick(start + ChromeReveal.CursorIdleMilliseconds);
             Assert.True(shown.CursorHidden, "露着的时候照样按空闲钟走");
+            shown.Tick(start + ChromeReveal.GraceMilliseconds);
+            Assert.False(shown.State.Any, "反馈宽限到点后控件按位置收起");
         });
 
         Test("播放器控件：藏下去之后每一拍都稳，不是每两秒闪一下", () =>
@@ -5633,6 +5684,182 @@ internal static class PlaybackTests
         Test("播放批次：字幕默认值返回前切集，旧读数不再写入任何播放", () =>
             CheckBatchSwitchAsync(shaders: false, holdDefaultRead: true).GetAwaiter().GetResult());
 
+        Test("轨道上报：订阅前已产生的初始选择由补读快照带入停止报告", () =>
+        {
+            var handle = new PlaybackStubHandle
+            {
+                ReadTracks = () => Task.FromResult<IReadOnlyList<MpvTrack>>([
+                    new(2, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 4 },
+                    new(1, "sub", null, null, false, false) { FfmpegIndex = 6 }
+                ])
+            };
+            var (service, session, transport) = PlayingServiceWithTransport(settings => settings.Playback.ReportProgressToServer = true, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var source = SourceWith(Stream(1, "Audio"), Stream(4, "Audio"), Stream(6, "Subtitle", codec: "srt"));
+            var playing = service.PlayAsync(Ticket() with { Source = source, AudioStreamIndex = 1, SubtitleStreamIndex = 6 }, cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            handle.End();
+            playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            using var report = System.Text.Json.JsonDocument.Parse(transport.SentTo("Playing/Stopped").Single().Body);
+            Assert.Equal(4, report.RootElement.GetProperty("AudioStreamIndex").GetInt32());
+            Assert.Equal(-1, report.RootElement.GetProperty("SubtitleStreamIndex").GetInt32());
+        });
+
+        Test("轨道上报：同句柄换片返回前的选择由新场快照补齐", () =>
+        {
+            var handle = new PlaybackStubHandle { AllowSwap = true };
+            IReadOnlyList<MpvTrack> tracks = [new(1, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 1 }];
+            handle.ReadTracks = () => Task.FromResult(tracks);
+            handle.OnSwap = () =>
+            {
+                tracks = [new(2, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 4 }];
+                handle.PublishTracks(tracks);
+            };
+            var (service, session, transport) = PlayingServiceWithTransport(settings => settings.Playback.ReportProgressToServer = true, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var source = SourceWith(Stream(1, "Audio"), Stream(4, "Audio"));
+            var ticket = Ticket() with { Source = source, AudioStreamIndex = 1 };
+            var first = service.PlayAsync(ticket, cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            var second = service.PlayAsync(ticket with { Item = Item("第二片", id: "43") }, cancellation.Token);
+            handle.Swapped.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            handle.End();
+            Task.WhenAll(first, second).WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            using var report = System.Text.Json.JsonDocument.Parse(transport.SentTo("Playing/Stopped").Last().Body);
+            Assert.Equal("43", report.RootElement.GetProperty("ItemId").GetString());
+            Assert.Equal(4, report.RootElement.GetProperty("AudioStreamIndex").GetInt32());
+        });
+
+        foreach (var supported in new bool?[] { false, true, null })
+        {
+            var available = supported;
+            Test($"字幕外观：单项默认值缺失不阻断已知颜色，支持状态={available?.ToString() ?? "未知"}", () =>
+            {
+                var handle = new PlaybackStubHandle { MissingDefault = "sub-border-style", OptionAvailable = available };
+                var (service, session) = PlayingService(settings => settings.Playback.SubtitleColor = "#123456", handle);
+                using var sessionLifetime = session;
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var playing = service.PlayAsync(Ticket(), cancellation.Token);
+                handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                try
+                {
+                    if (available == false) service.ApplySubtitleStyleAsync().GetAwaiter().GetResult();
+                    else Assert.Throws<InvalidOperationException>(() => service.ApplySubtitleStyleAsync().GetAwaiter().GetResult());
+                    Assert.Equal("#FF123456", handle.Properties.Last(pair => pair.Key == "sub-color").Value);
+                    Assert.False(handle.Properties.Any(pair => pair.Key == "sub-border-style"));
+                }
+                finally { handle.End(); playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult(); }
+            });
+        }
+
+        Test("字幕外观：原生命令拒绝必须返回失败而不是假装已应用", () =>
+        {
+            var handle = new PlaybackStubHandle { RejectedProperty = "sub-color" };
+            var (service, session) = PlayingService(handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var playing = service.PlayAsync(Ticket(), cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            try { Assert.Throws<InvalidOperationException>(() => service.ApplySubtitleStyleAsync().GetAwaiter().GetResult()); }
+            finally { handle.End(); playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult(); }
+        });
+
+        Test("轨道上报：运行中切音轨和关闭主字幕后，停止报告不沿用起播票", () =>
+        {
+            var handle = new PlaybackStubHandle();
+            var (service, session, transport) = PlayingServiceWithTransport(settings =>
+            {
+                settings.Playback.ReportProgressToServer = true;
+                settings.Playback.StopReportEnabled = false;
+            }, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var source = SourceWith(Stream(0, "Video"), Stream(1, "Audio"), Stream(4, "Audio"),
+                Stream(6, "Subtitle", codec: "srt"), Stream(7, "Subtitle", codec: "srt"));
+            var playing = service.PlayAsync(Ticket() with { Source = source, AudioStreamIndex = 1, SubtitleStreamIndex = 6 }, cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            handle.PublishTracks([
+                new(2, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 4 },
+                new(1, "sub", null, null, false, false) { FfmpegIndex = 6 },
+                new(2, "sub", null, null, false, true) { MainSelection = 1, FfmpegIndex = 7 }
+            ]);
+            handle.End();
+            playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            using var json = System.Text.Json.JsonDocument.Parse(transport.SentTo("Playing/Stopped").Single().Body);
+            Assert.Equal(4, json.RootElement.GetProperty("AudioStreamIndex").GetInt32());
+            Assert.Equal(-1, json.RootElement.GetProperty("SubtitleStreamIndex").GetInt32());
+        });
+
+        Test("字幕外观批次：同片连续修改按提交次序完成，旧默认读数不覆盖新颜色", () =>
+        {
+            var handle = new PlaybackStubHandle();
+            AppSettings current = null!;
+            var (service, session) = PlayingService(value => current = value, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstRead = true;
+            handle.BeforeRead = async () =>
+            {
+                if (!firstRead) return;
+                firstRead = false;
+                entered.TrySetResult();
+                await release.Task.WaitAsync(cancellation.Token);
+            };
+            var playing = service.PlayAsync(Ticket(), cancellation.Token);
+            try
+            {
+                handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                current.Playback.SubtitleColor = "#FFFF00";
+                var older = service.ApplySubtitleStyleAsync();
+                entered.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                current.Playback.SubtitleColor = "#FFFFFF";
+                var newer = service.ApplySubtitleStyleAsync();
+                release.TrySetResult();
+                Task.WhenAll(older, newer).WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                Assert.Equal("#FFFFFFFF", handle.Properties.Last(pair => pair.Key == "sub-color").Value);
+            }
+            finally
+            {
+                release.TrySetResult();
+                handle.End();
+                playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            }
+        });
+
+        Test("备用媒体源：起播失败后重试仍保留明确关闭字幕", () =>
+        {
+            var first = new PlaybackStubHandle();
+            var second = new PlaybackStubHandle();
+            var (service, session) = PlayingService(first, second);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var a = SourceWith(Stream(0, "Video"), Stream(1, "Audio", language: "jpn"), Stream(2, "Subtitle", codec: "srt", language: "chi"));
+            var b = SourceWith(Stream(0, "Video"), Stream(1, "Audio", language: "jpn"), Stream(2, "Subtitle", codec: "srt", language: "chi"));
+            a.Id = "first";
+            b.Id = "second";
+            var item = Item("离线备用源");
+            item.MediaSources = [a, b];
+            var playing = service.PlayAsync(new PlaybackTicket { Item = item, Source = a, SubtitlesDisabled = true }, cancellation.Token);
+            try
+            {
+                first.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                first.End(reason: PlaybackEndReason.Error);
+                second.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                Assert.True(second.Request!.SubtitlesDisabled);
+                Assert.Null(second.Request.SubtitleId);
+            }
+            finally
+            {
+                first.End();
+                second.End();
+                playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            }
+        });
+
         Test("播放批次：未切集时字幕和着色器设置仍完整发送", () =>
         {
             foreach (var shaders in new[] { false, true })
@@ -5749,7 +5976,8 @@ internal static class PlaybackTests
             .Answer("Views", """{ "Items": [], "TotalRecordCount": 0 }""")
             .Answer("System/Info/Public", """{ "ServerName": "离线测试", "Id": "stub" }""")
             // 国漫标记已看那批把上报打开了：Sessions 那三条给个空应答，别让每一趟上报都 404 出一屏噪音。
-            .Answer("Sessions", "{}");
+            .Answer("Sessions", "{}")
+            .Answer("PlayedItems", "{}");
         var session = new EmbySession(
             settings,
             new SettingsStore(
@@ -5783,21 +6011,34 @@ internal static class PlaybackTests
 
         public string? Validate() => null;
 
-        public Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken) =>
-            Task.FromResult<IPlaybackHandle>(_handles.Dequeue());
+        public Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken)
+        {
+            var handle = _handles.Dequeue();
+            handle.Request = request;
+            return Task.FromResult<IPlaybackHandle>(handle);
+        }
     }
 
     // 着色器切换的批次现在走 IPlayerControl.CommandAsync（「set 属性 值」），不再走句柄的 SetPropertyAsync；
     // 假句柄必须也是控制通道，否则 SetShaderGroupAsync 在门口就退回 false，一行都发不出去。
     private sealed class PlaybackStubHandle : IPlaybackHandle, IPlayerControl
     {
-        private readonly TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Swapped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Action? OnSwap { get; set; }
+        public PlaybackRequest? Request { get; set; }
         public List<KeyValuePair<string, object?>> Properties { get; } = [];
         public List<string> Reads { get; } = [];
         public Func<Task>? BeforeSet { get; set; }
         public Func<Task>? BeforeRead { get; set; }
+        public Func<Task<IReadOnlyList<MpvTrack>>>? ReadTracks { get; set; }
+        public string? MissingDefault { get; set; }
+        public bool? OptionAvailable { get; set; }
+        public string? RejectedProperty { get; set; }
+        public bool AllowSwap { get; set; }
+        public bool WasHandedOver { get; private set; }
         public bool FailOnDispose { get; init; }
         public int DisposeCount { get; private set; }
         public int StopCount { get; private set; }
@@ -5830,6 +6071,24 @@ internal static class PlaybackTests
             return Task.CompletedTask;
         }
 
+        public bool CanSwapTo(PlaybackRequest request) => AllowSwap;
+
+        public void HandOver()
+        {
+            WasHandedOver = true;
+            End();
+        }
+
+        public Task<bool> SwapToAsync(PlaybackRequest request, CancellationToken cancellationToken)
+        {
+            _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            WasHandedOver = false;
+            Request = request;
+            OnSwap?.Invoke();
+            Swapped.TrySetResult();
+            return Task.FromResult(true);
+        }
+
         public async Task SetPropertyAsync(string name, object? value, CancellationToken cancellationToken)
         {
             Properties.Add(new(name, value));
@@ -5848,14 +6107,18 @@ internal static class PlaybackTests
         public void PublishStatus(double seconds, double durationSeconds = 7200) =>
             StatusChanged?.Invoke(new PlayerStatus { Position = seconds, Duration = durationSeconds, Loaded = true });
 
-        public event Action<IReadOnlyList<MpvTrack>>? TracksChanged { add { } remove { } }
+        public event Action<IReadOnlyList<MpvTrack>>? TracksChanged;
+        public void PublishTracks(IReadOnlyList<MpvTrack> tracks) => TracksChanged?.Invoke(tracks);
 
         // 「set」就是一次属性写入：与 SetPropertyAsync 走同一条记录（含 BeforeSet 挂起点），
         // 其余命令不是属性写，只回「已接受」。
         public async Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
         {
             if (arguments.Count >= 3 && string.Equals(arguments[0], "set", StringComparison.Ordinal))
+            {
+                if (arguments[1] == RejectedProperty) return false;
                 await SetPropertyAsync(arguments[1], arguments[2], cancellationToken);
+            }
             return true;
         }
 
@@ -5863,14 +6126,20 @@ internal static class PlaybackTests
         {
             Reads.Add(name);
             if (BeforeRead is { } before) await before();
+            if (name == $"option-info/{MissingDefault}/default-value") return null;
             return name == "fullscreen" ? Fullscreen
                 : name == "profile-list" ? "[]" // 画质预设目录：默认设置不带 profile 项，展开器不会解析它
                 : "播放器默认值";
         }
 
+        public Task<IReadOnlyList<string>?> GetStringListAsync(string name, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>?>([]);
+
         public Task<double?> GetPositionAsync(CancellationToken cancellationToken) => Task.FromResult<double?>(PositionSeconds);
         public Task ShowMessageAsync(string text) => Task.CompletedTask;
-        public Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<MpvTrack>>([]);
+        public Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken) =>
+            ReadTracks?.Invoke() ?? Task.FromResult<IReadOnlyList<MpvTrack>>([]);
+        public Task<bool?> HasOptionAsync(string name, CancellationToken cancellationToken) => Task.FromResult(OptionAvailable);
         public Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken) => Task.FromResult<double?>(null);
 
         public ValueTask DisposeAsync()

@@ -29,7 +29,7 @@ description: Audit, fix and verify EmbyNian subtitle settings and playback behav
 | 映射与规划 | `Core/Mpv/MpvTrackMap.cs`、`Core/Playback/PlaybackPlanner.cs`、`Core/Emby/ItemDetail.cs` |
 | 实时/换片 | `Core/Playback/PlaybackService.cs`、`Core/Mpv/InlineSwitch.cs` |
 | 预览和颜色 | `Core/Playback/SubtitlePreviewPlan.cs`、`Core/Infrastructure/HtmlColorSelection.cs`、`Shell/Views/HtmlColorPicker.xaml.cs` |
-| 服务器字幕管理 | `Shell/Views/SubtitleDialog.xaml.cs`、`ItemCommands.Server.cs`、`Core/Emby/EmbyClient.cs` |
+| 服务器字幕管理 | `Shell/Views/SubtitleDialog.xaml.cs`、`ItemCommands.Server.cs`、`Core/Emby/ServerSubtitles.cs` |
 | 独占次字幕 | `assets/mpv-ui/scripts/uosc/main.lua`、`lib/menus.lua` |
 
 表内 Core、Shell 分别代表 `src/EmbyNian.Core`、`src/EmbyNian.Shell`。
@@ -61,16 +61,20 @@ description: Audit, fix and verify EmbyNian subtitle settings and playback behav
 - `opaque-box` 是每行描边盒＋阴影盒：分别使用 outline 色和 back 色。名字中的 opaque 不能推导出所有颜色必须 100% 不透明。
 - `background-box` 包住所有文字行，使用 back 色，shadow offset 在此控制背景留白。使用两行不同长度字幕验证几何。
 - 背景颜色与透明度是独立用户输入。清空颜色后仍须明确透明度是继续生效还是被禁用，不能保留一个可拖但无效的滑块。
-- HEX/RGB 精确输入保持原值；整数 HSV 只能作为显示值或用户主动编辑 HSV 时的输入。典型回归值：`#123456`、`#AC5D5D`、`#FE0102`。
+- HEX/RGB 精确输入保持原值；整数 HSV 只能作为显示值或用户主动编辑 HSV 时的输入。典型回归值：`#123456`、`#AC5D5D`、`#FE0102`。内核颜色用 `#AARRGGBB` 字节下发，三位小数 RGB 会产生一阶色差；透明度量化到最近的 8 位 alpha。
+- WinUI `TextChanged` 延后触发，不能仅靠赋值期间的 `_quiet` 抑制回填；同步 `TextChanging` 记录是否用户输入，异步阶段再刷新预览和保存，避免在布局事件里改视觉树。捕获丢失要取消未提交的拖色。
 - 预览的相对缩放要跟随设置。预览不是 libass 真帧，不把字形/实际屏幕大小近似伪装成精确效果。
 - 未指定值的实时路径要显式恢复默认。仅停止发送一个选项不会清除播放中已设置的旧值。
 
 ## 生命周期与危险操作
 
-- 恢复默认、导入备份与逐项编辑应共用外观应用逻辑；检查画面、预览和持久值是否一致。
+- 恢复默认、导入备份与逐项编辑应共用外观应用逻辑；检查画面、预览和持久值是否一致。同片外观批次按编辑版本串行，先收集已知默认值再写；明确不支持的选项跳过，读数未知或写入拒绝在应用其余已知选项后返回可见的部分失败，不猜默认值、不无声废弃整批。同窗换片必须并入完整 `SubtitleStyleOptions`，不能只复位菜单碰到的两项。
+- 备用源重试可以清除源相关的流索引，不可撤销用户明确关闭字幕。缺字幕元数据不等于缺音轨信息，已知母语仍先执行 `ForeignAudioOnly` 的关闭规则。
+- `track-list/selected` 同时包含主次字幕；上报使用 `main-selection`（0 主、1 次）、容器 `ff-index` 或实际 `external-filename`，未知/本地外挂不猜服务器索引。`PlaybackTrackState` 保存本场读数，关闭为 -1，未知为 null。
 - 保存失败须留下可见的未保存状态和重试入口。重试保存当前内存值，不重新导入、不重复删除，也不静默回滚整份真实配置。
 - 同窗换片按完整可写属性清单复位，包含 uosc 控制的主次可见性、次字幕索引/延迟/位置/样式。裸 mpv 默认不会替客户端复位全部属性。
-- 区分 `sub-remove` 的“本次卸载”与 Emby DELETE 的“服务器文件删除”。服务器删除显示媒体文件、字幕名、影响和不可撤销性，确认前请求数必须为零。
+- 区分 `sub-remove` 的“本次卸载”与 Emby DELETE 的“服务器文件删除”。服务器删除显示媒体文件、字幕名、影响和不可撤销性，确认前请求数必须为零。`ServerSubtitles` 固定登录 scope 和文件；确认后重读完整字幕快照，变化或无法区分的同标签文件拒绝删除。GET/DELETE 不是原子操作，不宣称防住服务器并发替换。
+- 字幕写入和后续刷新期间不允许关闭、重复下载或并发删除。响应不明先刷新，刷新成功后通知父页重读，不通过重复写请求“修复”；`Touched` 与 `NeedsRefresh` 分别表达写入完成和需要更新父页。
 - WinUI 同一 UI 线程不能叠两个 ContentDialog。已有字幕管理对话框内使用明确的内联确认或关闭后串联确认；取消优先，不让 Enter 默认执行删除。
 
 ## 参考开源项目的方式

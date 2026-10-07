@@ -149,6 +149,20 @@ internal static class SettingsTests
             Assert.Equal("d-1", settings.DeviceId, "文件里还好的东西要留着，不能整份丢掉");
         });
 
+        Test("迁移：旧版空着色器节和当前空 MoviePilot 节不丢其他设置", () =>
+        {
+            foreach (var version in new[] { 2, 6, AppSettings.CurrentSchemaVersion })
+            {
+                var settings = SettingsMigration.FromJson($$$"""
+                    {"SchemaVersion":{{{version}}},"DeviceId":"fixture-device","Shaders":null,"MoviePilot":null,"Ui":{"PageSize":180}}
+                    """, Protector);
+                Assert.NotNull(settings.Shaders);
+                Assert.NotNull(settings.MoviePilot);
+                Assert.Equal(180, settings.Ui.PageSize);
+                Assert.Equal("fixture-device", settings.DeviceId);
+            }
+        });
+
         Test("迁移：列表、字典和它们里头的 null 都要挡住", () =>
         {
             const string json = """
@@ -1945,6 +1959,122 @@ internal static class SettingsTests
             {
                 Cleanup(root);
             }
+        });
+
+        foreach (var invalid in new[] { "", "   ", "null", "[]", "\"not-settings\"" })
+            Test($"存储：无效主文档 {JsonSerializer.Serialize(invalid)} 不能挡住有效备份", () =>
+            {
+                var root = TempRoot();
+                try
+                {
+                    var paths = new AppPaths(root);
+                    var store = new SettingsStore(paths, Protector);
+                    var settings = SettingsMigration.NewDefaults();
+                    settings.Ui.PageSize = 180;
+                    store.Save(settings);
+                    File.Move(paths.SettingsFile, paths.SettingsBackupFile);
+                    File.WriteAllText(paths.SettingsFile, invalid);
+
+                    Assert.Equal(180, store.Load().Ui.PageSize, "无效文档不能冒充读取成功");
+                    Assert.False(File.Exists(paths.SettingsFile));
+                    Assert.Equal(invalid, File.ReadAllText(Directory.GetFiles(root, "*.corrupt-*").Single()));
+                    Assert.Equal(180, store.Load().Ui.PageSize, "再次启动仍可恢复同一备份");
+                }
+                finally { Cleanup(root); }
+            });
+
+        Test("存储：主文件替换失败不能提前改写上一次备份", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                var paths = new AppPaths(root);
+                var store = new SettingsStore(paths, Protector);
+                var settings = SettingsMigration.NewDefaults();
+                settings.Ui.PageSize = 120;
+                store.Save(settings);
+                settings.Ui.PageSize = 160;
+                store.Save(settings);
+                var primary = File.ReadAllText(paths.SettingsFile);
+                var backup = File.ReadAllText(paths.SettingsBackupFile);
+                settings.Ui.PageSize = 200;
+
+                using (var locked = new FileStream(paths.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    var failure = Assert.Catch<Exception>(() => store.Save(settings));
+                    Assert.True(failure is IOException or UnauthorizedAccessException);
+                }
+
+                Assert.Equal(primary, File.ReadAllText(paths.SettingsFile));
+                Assert.Equal(backup, File.ReadAllText(paths.SettingsBackupFile));
+                Assert.Equal(2, Directory.GetFiles(root).Length, "失败后不留半份文件");
+                store.Save(settings);
+                Assert.Equal(200, store.Load().Ui.PageSize);
+                Assert.Equal(primary, File.ReadAllText(paths.SettingsBackupFile), "成功才把原主文件变成备份");
+            }
+            finally { Cleanup(root); }
+        });
+
+        Test("存储：并发保存每次都提交完整文档，备份也是完整前值", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                var store = new SettingsStore(new AppPaths(root), Protector);
+                var documents = Enumerable.Range(120, 16).Select(size =>
+                {
+                    var settings = SettingsMigration.NewDefaults();
+                    settings.Ui.PageSize = size;
+                    settings.Servers[0].Name = $"fixture-{size}";
+                    return settings;
+                }).ToArray();
+                store.Save(documents[0]);
+                Parallel.ForEach(documents, store.Save);
+                foreach (var path in new[] { store.Paths.SettingsFile, store.Paths.SettingsBackupFile })
+                {
+                    var saved = SettingsMigration.FromJson(File.ReadAllText(path), Protector);
+                    Assert.Equal($"fixture-{saved.Ui.PageSize}", saved.Servers[0].Name);
+                }
+                Assert.Equal(2, Directory.GetFiles(root).Length);
+            }
+            finally { Cleanup(root); }
+        });
+
+        Test("原子写入：同目标并发文本和字节写入不争用临时文件", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                Directory.CreateDirectory(root);
+                var path = Path.Combine(root, "fixture.bin");
+                var contents = Enumerable.Range(0, 12).Select(index => new string((char)('a' + index), 65536)).ToArray();
+                Parallel.For(0, contents.Length, index =>
+                {
+                    if (index % 2 == 0)
+                        AtomicFile.WriteAllText(path, contents[index], new System.Text.UTF8Encoding(false));
+                    else
+                        AtomicFile.WriteAllBytes(path, System.Text.Encoding.UTF8.GetBytes(contents[index]));
+                });
+                Assert.True(contents.Contains(File.ReadAllText(path)), "最终值只能是一份完整的写入");
+                Assert.Equal(1, Directory.GetFiles(root).Length);
+            }
+            finally { Cleanup(root); }
+        });
+
+        Test("原子写入：编码失败不能留下部分临时文件", () =>
+        {
+            var root = TempRoot();
+            try
+            {
+                Directory.CreateDirectory(root);
+                var target = Path.Combine(root, "a.conf");
+                File.WriteAllText(target, "original");
+                Assert.Throws<System.Text.EncoderFallbackException>(() =>
+                    AtomicFile.WriteAllText(target, new string('x', 10000) + "\ud800", new System.Text.UTF8Encoding(false, true)));
+                Assert.Equal("original", File.ReadAllText(target));
+                Assert.Equal(1, Directory.GetFiles(root).Length, "写入正文的失败也必须清理");
+            }
+            finally { Cleanup(root); }
         });
 
         Test("原子写入：临时文件不会留在目录里", () =>

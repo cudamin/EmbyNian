@@ -22,7 +22,7 @@ Techniques and traps for the shader / 画质档位 side of the player, and the l
 2. **Read it before placing it** (next section). Does it scale, what is its gate, which hook point, which plane, is it multi-pass?
 3. **Place it, then check the gate against the tier.** A shader whose gate never opens for a cell's factor range is a no-op in that cell — that is how `FSRCNNX_x1` and `CAS` got proposed for tiers they could never act in.
 4. **Its prerequisites travel with it.** Chain options are derived from the chain in the catalog rather than written per cell, so teach the derivation once instead of copying options into every cell.
-5. **The C# 档位表 and the shipped files must not drift**: a test compares `ShaderGroupCatalog.ShaderFiles` against the actual `.glsl`/`.hook` files on disk, both directions, and names the offending file when it fails. (The csproj copies by wildcard, so there is no hand-written copy list to keep in sync.)
+5. **The C# 档位表 and the shipped files must not drift**: Core tests compare the catalogue against GLSL/HOOK sources; `verify-publish.ps1` separately hashes every shipped shader and licence/notice text against the repository. Exercise missing HOOK, corrupt and extra files with `test-shader-publish.ps1`. A complete source tree does not prove a complete release folder.
 6. **New mpv option → `NeutralOptions` entry + the both-directions round-trip test.** No exceptions; see the traps below.
 7. **Run the applicable gates from CLAUDE.md, then inspect the permitted local render.** An A/B needs a visible chain readout, so the user can judge the picture while the assistant verifies which processing actually ran.
 
@@ -37,7 +37,7 @@ Three separate mistakes here came from reading the name instead of the file, and
 
 ## Being in the chain is not the same as running
 
-Several shipped files gate themselves, so a chain that looks right on paper can be partly inert. Check each candidate's gate against the tier's factor range before putting it in a cell. Don't add C# branches duplicating a gate the file already has — that gate is the reason a wrong factor can't produce "an upscaler running on a shrinking picture".
+Several shipped files gate themselves, so a chain that looks right on paper can be partly inert. Evaluate gates against the input **after earlier shaders changed its dimensions**, not only against the original source. `NATIVE_CROPPED` can already be prescaled. A whole-cell no-op should leave that cell; a shader that executes in part of a cell may stay with its range documented. Preserve file-level gates rather than copying each threshold into runtime C# switches. `vo-passes` must distinguish the shader's algorithm from intermediate passes the presence of a hook creates; no algorithm pass does not prove zero overhead.
 
 ## Order
 
@@ -55,7 +55,7 @@ Per automatic chain: at most one top-level luma upscaler, at most one post-sharp
 
 ## Scale factor
 
-Factor = actual render-target height ÷ source height. **Output means the renderer's target, not the monitor**: a 1080p file in a small window on a 4K screen is not 2×. Source resolution alone cannot pick a chain — that was this subsystem's central bug. Source *quality* (noise, banding, blocking) is a separate axis from scale factor: decide deband/denoise from source height, otherwise the same DVD gets different treatment in PAL and NTSC because their factors land in different tiers.
+`ShaderTier.Measure` uses the smaller of output-width/source-width and output-height/source-height. Current Shell policy prepares a fixed **full-screen monitor target**, not the small window's current area, to avoid repeated cold compilation. Launch tickets and the UI must use the same target and the final successful media source. A page detaching for standalone playback must not discard its window-owned display measurement. Preferences are snapshotted for the current playback; moving monitors does not adopt settings promised for the next film. The renderer's actual current size still controls per-shader gates, so the chosen tier alone cannot prove a pass ran. Source quality (Vintage) remains independent of scale factor.
 
 ## Two traps that have already bitten
 

@@ -7,6 +7,7 @@ namespace EmbyNian.MoviePilot;
 public sealed record MoviePilotResource
 {
     public required string Title { get; init; }
+    internal string ConnectionStamp { get; init; } = "";
     public string? Description { get; init; }
     public string? SiteName { get; init; }
     public long Size { get; init; }
@@ -24,6 +25,13 @@ public sealed record MoviePilotResource
     public required JsonElement TorrentInfo { get; init; }
     public string? MediaSource { get; init; }
     public string? MediaId { get; init; }
+    public string? MediaType { get; init; }
+    public JsonElement MediaInfo { get; init; }
+    public string? DownloadProblem { get; init; }
+
+    public string Confirmation => $"资源：{Title}\n站点：{SiteName ?? "未提供"}\n" +
+        (MediaId is { Length: > 0 } ? $"媒体：{MoviePilotSourceNames.Label(MediaSource)} · {MediaId} · {MediaType ?? "类型未提供"}\n" : "") +
+        $"{PromotionText}\n" + (HitAndRun ? "此资源有 HR 考核，请先在种子页面核对做种要求。" : "优惠和下载规则以站点当前页面为准。");
 
     public string SizeText => Size > 0 ? MoviePilotDownload.SizeText(Size) : "";
     public string LabelsText => string.Join(" · ", Labels);
@@ -53,12 +61,15 @@ public sealed record MoviePilotResource
 
     public bool IsFree => DownloadFactor == 0 ||
         (DownloadFactor is null && Promotion is { } promotion &&
-         (promotion.Equals("FREE", StringComparison.OrdinalIgnoreCase) ||
-          promotion.Equals("2XFREE", StringComparison.OrdinalIgnoreCase)));
+         FreePromotions.Contains(promotion.Trim()));
 
     public bool HasDiscount => IsFree || DownloadFactor is >= 0 and < 1 || UploadFactor > 1 ||
-        (DownloadFactor is null && !string.IsNullOrWhiteSpace(Promotion) &&
-         !Promotion.Equals("NORMAL", StringComparison.OrdinalIgnoreCase));
+        (DownloadFactor is null && Promotion is { } promotion && DiscountPromotions.Contains(promotion.Trim()));
+
+    private static readonly HashSet<string> FreePromotions = new(StringComparer.OrdinalIgnoreCase)
+        { "FREE", "2XFREE", "4XFREE", "免费", "2X免费", "4X免费" };
+    private static readonly HashSet<string> DiscountPromotions = new(StringComparer.OrdinalIgnoreCase)
+        { "2X", "4X", "50%", "2X 50%", "70%", "30%", "75%", "25%" };
 
     /// <summary>只打开站点详情；不把 enclosure、Cookie 或自定义协议交给系统执行。</summary>
     public Uri? DetailsUri => Uri.TryCreate(PageUrl, UriKind.Absolute, out var uri) &&

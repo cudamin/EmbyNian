@@ -69,7 +69,8 @@ public sealed class PlaybackPlanner(
             .Select(stream => EmbyUrl.Subtitle(connection.ApiBase, item.Id, source.Id, stream.Index, stream.Codec))
             .ToList();
 
-        var decision = shaders.Resolve(item, source, ticket.Parent, (ticket.OutputWidth, ticket.OutputHeight));
+        var resolver = ticket.ShaderSettings is { } shaderSettings ? new ShaderGroupResolver(shaderSettings) : shaders;
+        var decision = resolver.Resolve(item, source, ticket.Parent, (ticket.OutputWidth, ticket.OutputHeight));
         var tracks = ResolveTracks(ticket, source);
         var chainOptions = decision.Group?.ToMpvOptions(ShaderGroupCatalog.ShaderRoot) ?? [];
 
@@ -101,6 +102,7 @@ public sealed class PlaybackPlanner(
             SubtitleLanguage = TrackLanguagePriority.FromTokens(settings.Playback.SubtitleLanguages),
             AudioLanguage = TrackLanguagePriority.FromTokens(settings.Playback.AudioLanguages),
             ShaderProfile = decision.Group?.Name,
+            ShaderDecision = decision,
             ShaderReason = decision.Reason,
             ShaderOptionCount = chainOptions.Count,
             PlayerOptions = BuildPlayerOptions(DescribeSource(source), decision, chainOptions, ticket.DisplayRefreshHz, title, audioDevice),

@@ -31,6 +31,22 @@ public static class StartupArgs
         argument.TrimStart('-', '/').Split('=')[0].Equals(SelfCheckFlag[2..], StringComparison.OrdinalIgnoreCase)
         || argument.TrimStart('-', '/').Split('=')[0].Equals(SelfCheckDataFlag[2..], StringComparison.OrdinalIgnoreCase));
 
+    public static bool RequestsShellProbe(string[] args) => args.Any(argument =>
+        argument.TrimStart('-', '/').Split('=', 2)[0].Equals("probe-shell", StringComparison.OrdinalIgnoreCase));
+
+    public static void ValidateShellProbe(string[] args)
+    {
+        var translated = args.Select(argument =>
+        {
+            var parts = argument.TrimStart('-', '/').Split('=', 2);
+            return parts[0].Equals("probe-shell", StringComparison.OrdinalIgnoreCase)
+                ? "--probe-subtitles" + (parts.Length == 2 ? "=" + parts[1] : "") : argument;
+        }).ToArray();
+        if (!RequestsShellProbe(args) || RequestsSubtitleProbe(args))
+            throw new ArgumentException("Shell 探针必须独立运行");
+        ValidateSubtitleProbe(translated);
+    }
+
     public static bool RequestsSubtitleProbe(string[] args) => args.Any(argument =>
         argument.TrimStart('-', '/').Split('=', 2)[0].Equals("probe-subtitles", StringComparison.OrdinalIgnoreCase));
 

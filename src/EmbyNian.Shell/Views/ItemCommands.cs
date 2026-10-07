@@ -77,7 +77,7 @@ internal static partial class ItemCommands
             EpisodeRow { Card: { } row } => row,
             _ => null
         };
-        if (card is null) return;
+        if (card is null || !card.IsCurrent) return;
 
         switch (args.Action)
         {
@@ -153,7 +153,7 @@ internal static partial class ItemCommands
             }
 
             menu.Items.Add(Entry(row.Label, command, () =>
-                Invoke(command, session, shell, owner, card, siblings, changed)));
+                Invoke(command, shell, owner, card, siblings, changed)));
         }
 
         return menu;
@@ -175,7 +175,7 @@ internal static partial class ItemCommands
         CardItem card,
         IReadOnlyList<EmbyItem>? siblings = null,
         Action? changed = null) =>
-        Invoke(command, session, shell, owner, card, siblings, changed);
+        Invoke(command, shell, owner, card, siblings, changed);
 
     /// <summary>
     /// 按下一行之后做什么。一处 switch 而不是把动作塞进 <see cref="ItemMenu"/>：那一头是「有哪几条」，这一头
@@ -183,13 +183,13 @@ internal static partial class ItemCommands
     /// </summary>
     private static void Invoke(
         ItemCommand command,
-        EmbySession session,
         IShellActions shell,
         FrameworkElement owner,
         CardItem card,
         IReadOnlyList<EmbyItem>? siblings,
         Action? changed)
     {
+        if (card.Scope is not { IsCurrent: true } scope) return;
         var item = card.Item;
 
         switch (command)
@@ -210,52 +210,52 @@ internal static partial class ItemCommands
             // 翻面的 ToggleWatched —— 那是悬浮层上那颗按钮的活儿。
             case ItemCommand.MarkPlayed:
             case ItemCommand.MarkUnplayed:
-                SetWatched(session, shell, card, played: command == ItemCommand.MarkPlayed);
+                SetWatched(scope, shell, card, played: command == ItemCommand.MarkPlayed);
                 break;
 
             case ItemCommand.Favorite:
             case ItemCommand.Unfavorite:
-                SetFavorite(session, shell, card, favourite: command == ItemCommand.Favorite);
+                SetFavorite(scope, shell, card, favourite: command == ItemCommand.Favorite);
                 break;
 
             case ItemCommand.HideFromResume:
-                HideFromResume(session, shell, card, changed);
+                HideFromResume(scope, shell, card, changed);
                 break;
 
             case ItemCommand.AddToCollection:
-                _ = CollectAsync(session, shell, owner, card);
+                _ = CollectAsync(scope, shell, owner, card);
                 break;
 
             case ItemCommand.Download:
-                _ = DownloadAsync(session, shell, card);
+                _ = DownloadAsync(scope, shell, card);
                 break;
 
             case ItemCommand.EditMetadata:
-                _ = EditAsync(session, shell, owner, card, changed);
+                _ = EditAsync(scope, shell, owner, card, changed);
                 break;
 
             case ItemCommand.ChangeCover:
-                _ = CoverAsync(session, shell, owner, card, changed);
+                _ = CoverAsync(scope, shell, owner, card, changed);
                 break;
 
             case ItemCommand.Subtitles:
-                _ = SubtitlesAsync(session, shell, owner, card, changed);
+                _ = SubtitlesAsync(scope, shell, owner, card, changed);
                 break;
 
             case ItemCommand.Scrape:
-                _ = ScrapeAsync(session, shell, owner, card);
+                _ = ScrapeAsync(scope, shell, owner, card);
                 break;
 
             case ItemCommand.RefreshMetadata:
-                Refresh(session, shell, card);
+                Refresh(scope, shell, card);
                 break;
 
             case ItemCommand.ScanLibrary:
-                ScanLibrary(session, shell);
+                ScanLibrary(scope, shell);
                 break;
 
             case ItemCommand.OpenSeries:
-                OpenSeries(session, shell, item);
+                OpenSeries(scope, shell, item);
                 break;
 
             // 新开一个窗口去 MoviePilot 找这个条目的其他版本；关键字怎么拼由 Core 定（MoviePilotVersionQuery），
@@ -268,7 +268,7 @@ internal static partial class ItemCommands
             case ItemCommand.MoviePilotReorganize:
                 _ = GuardAsync(shell, "手动整理失败", async () =>
                 {
-                    var context = await AskAsync(session, (client, token) =>
+                    var context = await AskAsync(scope, (client, token) =>
                         MoviePilotTransferCollect.CollectAsync(client, item, token)).ConfigureAwait(true);
 
                     if (context.Files.Count == 0)
@@ -282,7 +282,7 @@ internal static partial class ItemCommands
                 break;
 
             case ItemCommand.Delete:
-                _ = DeleteAsync(session, shell, owner, card, changed);
+                _ = DeleteAsync(scope, shell, owner, card, changed);
                 break;
         }
     }
@@ -291,12 +291,18 @@ internal static partial class ItemCommands
     /// 已看，从悬浮层那颗按钮上按下的。当前状态在这里读而不是传进来：一颗按钮说的是「翻到另一面」，而它按下的
     /// 那一刻的状态才算数。
     /// </summary>
-    public static void ToggleWatched(EmbySession session, IShellActions shell, CardItem card) =>
-        SetWatched(session, shell, card, played: card.Item.UserData?.Played != true);
+    public static void ToggleWatched(EmbySession session, IShellActions shell, CardItem card)
+    {
+        if (card.Scope is { IsCurrent: true } scope)
+            SetWatched(scope, shell, card, played: card.Item.UserData?.Played != true);
+    }
 
     /// <summary>收藏。同上。</summary>
-    public static void ToggleFavorite(EmbySession session, IShellActions shell, CardItem card) =>
-        SetFavorite(session, shell, card, favourite: card.Item.UserData?.IsFavorite != true);
+    public static void ToggleFavorite(EmbySession session, IShellActions shell, CardItem card)
+    {
+        if (card.Scope is { IsCurrent: true } scope)
+            SetFavorite(scope, shell, card, favourite: card.Item.UserData?.IsFavorite != true);
+    }
 
     /// <summary>
     /// 标记为已观看 / 未观看。
@@ -305,7 +311,7 @@ internal static partial class ItemCommands
     /// 的网格是荒唐的。
     /// </para>
     /// </summary>
-    private static void SetWatched(EmbySession session, IShellActions shell, CardItem card, bool played) =>
+    private static void SetWatched(EmbySessionScope session, IShellActions shell, CardItem card, bool played) =>
         Run(
             session,
             shell,
@@ -325,7 +331,7 @@ internal static partial class ItemCommands
             }));
 
     /// <summary>收藏。同上。</summary>
-    private static void SetFavorite(EmbySession session, IShellActions shell, CardItem card, bool favourite) =>
+    private static void SetFavorite(EmbySessionScope session, IShellActions shell, CardItem card, bool favourite) =>
         Run(
             session,
             shell,
@@ -391,14 +397,14 @@ internal static partial class ItemCommands
     }
 
     private static void Run(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         string failure,
         Func<EmbyClient, CancellationToken, Task<EmbyUserData?>> work,
         Action<EmbyUserData?>? applied) => _ = RunAsync(session, shell, failure, work, applied);
 
     private static async Task RunAsync(
-        EmbySession session,
+        EmbySessionScope session,
         IShellActions shell,
         string failure,
         Func<EmbyClient, CancellationToken, Task<EmbyUserData?>> work,
@@ -406,7 +412,7 @@ internal static partial class ItemCommands
     {
         try
         {
-            var data = await session.ExecuteAsync(work, CancellationToken.None).ConfigureAwait(true);
+            var data = await AskAsync(session, work).ConfigureAwait(true);
             applied?.Invoke(data);
         }
         catch (OperationCanceledException)

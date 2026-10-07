@@ -26,10 +26,36 @@ Require-File (Join-Path $root 'libmpv-2.dll') '内置 libmpv'
 # 里没有一关会真的起播，所以这一行是它唯一的守卫。
 Require-File (Join-Path $root 'vulkan-1.dll') 'libmpv 依赖的 Vulkan loader'
 
-$shaderCount = @(Get-ChildItem -LiteralPath (Join-Path $root 'shaders') -Recurse -Filter '*.glsl' -File -ErrorAction SilentlyContinue).Count
-if ($shaderCount -eq 0) {
-    throw "发布验证失败：shaders 目录为空。着色器在仓库的 assets\shaders 里，由 Shell 项目的 csproj 拷进输出目录，先看这两处。"
+$shaderSource = Join-Path (Resolve-Path -LiteralPath $RepositoryRoot).Path 'assets\shaders'
+$shaderRoot = Join-Path $root 'shaders'
+$expectedShaders = @(Get-ChildItem -LiteralPath $shaderSource -Recurse -File |
+    Where-Object { $_.Extension -in @('.glsl', '.hook', '.txt') })
+if (@($expectedShaders | Where-Object { $_.Extension -in @('.glsl', '.hook') }).Count -eq 0) {
+    throw "发布验证失败：仓库 assets\shaders 没有可核对的着色器清单。"
 }
+foreach ($license in @('LICENSE.LGPL-3.0.txt', 'LICENSE.GPL-3.0.txt', 'LICENSE.LGPL-2.1.txt', 'NOTICE.txt')) {
+    Require-File (Join-Path $shaderSource $license) '着色器许可与归属说明'
+}
+$expectedPaths = @{}
+foreach ($source in $expectedShaders) {
+    $relative = $source.FullName.Substring($shaderSource.Length + 1)
+    $expectedPaths[$relative] = $true
+    $target = Join-Path $shaderRoot $relative
+    Require-File $target '着色器或许可文件'
+    if ((Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash) {
+        throw "发布验证失败：着色器或许可文件内容与仓库不一致：$relative"
+    }
+}
+foreach ($file in @(Get-ChildItem -LiteralPath $shaderRoot -Recurse -File)) {
+    if ($file.Extension -notin @('.glsl', '.hook', '.txt')) { continue }
+    $relative = $file.FullName.Substring($shaderRoot.Length + 1)
+    if (-not $expectedPaths.ContainsKey($relative)) {
+        throw "发布验证失败：出现清单之外的着色器或许可文件：$relative"
+    }
+}
+$shaderCount = @($expectedShaders | Where-Object { $_.Extension -eq '.glsl' }).Count
+$hookCount = @($expectedShaders | Where-Object { $_.Extension -eq '.hook' }).Count
 
 # 独占模式视频窗的 Lua UI（uosc 嵌入版，assets\mpv-ui）。缺入口脚本时 LibMpvBackend 只会降级成
 # 「没有屏幕控件的独占播放」，而四道闸门里没有一关会真的起播，所以装箱完整性只能在这里守。
@@ -88,4 +114,4 @@ if (Test-Path -LiteralPath $solution -PathType Leaf) {
 
 $files = @(Get-ChildItem -LiteralPath $root -Recurse -File)
 $bytes = ($files | Measure-Object -Property Length -Sum).Sum
-Write-Output ("发布验证通过：{0} 个文件，{1:N1} MB，{2} 个 GLSL 着色器。" -f $files.Count, ($bytes / 1MB), $shaderCount)
+Write-Output ("发布验证通过：{0} 个文件，{1:N1} MB，{2} 个 GLSL、{3} 个 HOOK 着色器（含许可逐文件校验）。" -f $files.Count, ($bytes / 1MB), $shaderCount, $hookCount)

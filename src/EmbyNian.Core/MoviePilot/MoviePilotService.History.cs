@@ -12,16 +12,23 @@ public sealed partial class MoviePilotService
         var identity = CaptureIdentity();
         var data = await CallAsync((apiBase, token) => client.GetAsync(apiBase, token,
             $"history/transfer?title={Uri.EscapeDataString(title.Trim())}&page={Math.Max(1, page)}&count=100",
-            cancellationToken), cancellationToken).ConfigureAwait(false);
+            cancellationToken), cancellationToken, identity).ConfigureAwait(false);
         var items = MoviePilotTransferHistory.Member(data, "list");
-        if (items.ValueKind != JsonValueKind.Array)
-            throw new MoviePilotException("MoviePilot 没有返回可识别的整理记录列表");
+        if (items.ValueKind != JsonValueKind.Array ||
+            !int.TryParse(MoviePilotTransferHistory.Scalar(data, "total"), NumberStyles.None,
+                CultureInfo.InvariantCulture, out var total) || total < items.GetArrayLength())
+            throw new MoviePilotException("MoviePilot 没有返回可核对总数的完整整理记录列表");
         CheckIdentity(identity, cancellationToken);
         var stamp = TransferConnectionStamp(identity);
-        var records = items.EnumerateArray().Select(MoviePilotTransferHistory.Parse)
-            .Where(item => item is not null).Select(item => item! with { ConnectionStamp = stamp }).ToList();
-        var total = int.TryParse(MoviePilotTransferHistory.Scalar(data, "total"), NumberStyles.None,
-            CultureInfo.InvariantCulture, out var count) ? count : records.Count;
+        var records = new List<MoviePilotTransferHistory>();
+        var ids = new HashSet<long>();
+        foreach (var item in items.EnumerateArray())
+        {
+            var record = MoviePilotTransferHistory.Parse(item);
+            if (record is null || !ids.Add(record.Id))
+                throw new MoviePilotException("MoviePilot 整理记录包含无法识别或重复的条目，请重新查询");
+            records.Add(record with { ConnectionStamp = stamp });
+        }
         return new MoviePilotTransferHistoryPage(records, total);
     }
 
@@ -31,16 +38,24 @@ public sealed partial class MoviePilotService
         var identity = CaptureIdentity();
         var records = new List<MoviePilotTransferHistory>();
         var ids = new HashSet<long>();
+        int? total = null;
         for (var page = 1; page <= 50; page++)
         {
             CheckIdentity(identity, cancellationToken);
             var result = await TransferHistoryAsync(title, page, cancellationToken).ConfigureAwait(false);
             CheckIdentity(identity, cancellationToken);
-            var added = 0;
+            if (total is { } expected && expected != result.Total)
+                throw new MoviePilotException("整理记录在分页期间发生变化，请重新查询");
+            total ??= result.Total;
             foreach (var record in result.Items)
-                if (ids.Add(record.Id)) { records.Add(record); added++; }
-            if (records.Count >= result.Total) return records;
-            if (added == 0) throw new MoviePilotException("整理记录分页未返回完整数据，请缩小片名或文件名后重试");
+            {
+                if (!ids.Add(record.Id))
+                    throw new MoviePilotException("整理记录分页包含重复数据，请重新查询");
+                records.Add(record);
+            }
+            if (records.Count == total) return records;
+            if (records.Count > total || result.Items.Count == 0)
+                throw new MoviePilotException("整理记录分页未返回完整数据，请缩小片名或文件名后重试");
         }
         throw new MoviePilotException("整理记录过多，请使用更完整的片名或文件名缩小范围");
     }

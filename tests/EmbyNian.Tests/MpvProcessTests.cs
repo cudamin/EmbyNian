@@ -34,6 +34,39 @@ internal static class MpvProcessTests
             return;
         }
 
+        Test("外部轨道事件：直接按通知次序消费快照，不异步重读旧列表", () =>
+        {
+            using var process = new Process();
+            var handle = new MpvProcessHandle(process);
+            var selected = new List<int>();
+            handle.TracksChanged += tracks => selected.Add(tracks.Single(track => track.Selected).Id);
+            var dispatch = typeof(MpvProcessHandle).GetMethod("OnPropertyChanged", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            foreach (var id in new[] { 1, 2 })
+            {
+                Assert.True(MpvIpcMessage.TryParse($"{{\"event\":\"property-change\",\"name\":\"track-list\",\"data\":[{{\"id\":{id},\"type\":\"sub\",\"selected\":true,\"main-selection\":0,\"ff-index\":6}}]}}", out var message));
+                dispatch.Invoke(handle, ["track-list", message]);
+            }
+            Assert.Equal("1,2", string.Join(',', selected));
+        });
+
+        Test("外部轨道解析：保留主次、外挂文件及缺失字段，不把坏条目当轨道", () =>
+        {
+            using var json = JsonDocument.Parse("""
+                [null, 7, {"id":"bad","type":"sub"},
+                 {"id":1,"type":"sub","selected":true,"main-selection":0,"ff-index":6},
+                 {"id":2,"type":"sub","selected":true,"main-selection":1,"external":true,"external-filename":"file:///C:/fixture.srt"},
+                 {"id":3,"type":"sub","selected":true}]
+                """);
+            var tracks = MpvProcessHandle.ParseTracks(json.RootElement);
+            Assert.Equal(3, tracks.Count);
+            Assert.Equal(0, tracks[0].MainSelection);
+            Assert.Equal(6, tracks[0].FfmpegIndex);
+            Assert.Equal(1, tracks[1].MainSelection);
+            Assert.Equal("file:///C:/fixture.srt", tracks[1].ExternalFilename);
+            Assert.Null(tracks[2].MainSelection);
+            Assert.Null(tracks[2].FfmpegIndex);
+        });
+
         Test("安全起播：管道 PID 不匹配时零命令，拒绝冒名服务端", () => IdentityAsync().GetAwaiter().GetResult());
         Test("安全起播：逐步确认头、外挂字幕和续播点，再加载；关闭进度不开放控制", () => SuccessAsync(false).GetAwaiter().GetResult());
         Test("安全起播：打开 IPC 才观察属性和轮询位置", () => SuccessAsync(true).GetAwaiter().GetResult());
@@ -333,7 +366,6 @@ internal static class MpvProcessTests
             await writer.WriteLineAsync(JsonSerializer.Serialize(new { request_id = id, error = "success", data = 1234.5 }));
             if (stage == 4 && mode is "eof" or "error")
             {
-                await Task.Delay(100, lifetime.Token);
                 await writer.WriteLineAsync(JsonSerializer.Serialize(new { @event = "end-file", reason = mode }));
                 await Console.Error.WriteLineAsync("Cannot open " + Token);
                 return mode == "eof" ? 0 : 2;

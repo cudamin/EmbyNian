@@ -31,6 +31,7 @@ public sealed partial class HtmlColorPicker : UserControl
     /// own echoes are not read as edits. One flag, not one per control: the refresh paths run together.
     /// </summary>
     private bool _quiet;
+    private string? _pendingHex;
 
     /// <summary>
     /// Whether each drag surface currently holds the pointer. WinUI's <c>UIElement</c> has no
@@ -50,6 +51,11 @@ public sealed partial class HtmlColorPicker : UserControl
         HueBar.PointerPressed += OnHuePressed;
         HueBar.PointerMoved += OnHueMoved;
         HueBar.PointerReleased += OnHueReleased;
+        SatValSquare.PointerCaptureLost += (_, _) => CancelDrag();
+        SatValSquare.PointerCanceled += (_, _) => CancelDrag();
+        HueBar.PointerCaptureLost += (_, _) => CancelDrag();
+        HueBar.PointerCanceled += (_, _) => CancelDrag();
+        Unloaded += (_, _) => CancelDrag();
 
         RedBox.ValueChanged += OnRgbChanged;
         GreenBox.ValueChanged += OnRgbChanged;
@@ -58,6 +64,7 @@ public sealed partial class HtmlColorPicker : UserControl
         SaturationBox.ValueChanged += OnHsvChanged;
         ValueBox.ValueChanged += OnHsvChanged;
 
+        HexBox.TextChanging += OnHexTextChanging;
         HexBox.TextChanged += OnHexTextChanged;
         HexBox.LostFocus += OnHexLostFocus;
 
@@ -104,7 +111,7 @@ public sealed partial class HtmlColorPicker : UserControl
 
     private void OnSquarePressed(object sender, PointerRoutedEventArgs e)
     {
-        SatValSquare.CapturePointer(e.Pointer);
+        if (!SatValSquare.CapturePointer(e.Pointer)) return;
         _squareDragging = true;
         DragSquare(e);
     }
@@ -126,7 +133,7 @@ public sealed partial class HtmlColorPicker : UserControl
 
     private void OnHuePressed(object sender, PointerRoutedEventArgs e)
     {
-        HueBar.CapturePointer(e.Pointer);
+        if (!HueBar.CapturePointer(e.Pointer)) return;
         _hueDragging = true;
         DragHue(e);
     }
@@ -144,6 +151,15 @@ public sealed partial class HtmlColorPicker : UserControl
         HueBar.ReleasePointerCapture(e.Pointer);
         DragHue(e);
         Commit();
+    }
+
+    private void CancelDrag()
+    {
+        if (!_squareDragging && !_hueDragging) return;
+        _squareDragging = false;
+        _hueDragging = false;
+        _selection.SetHex(Color);
+        Refresh();
     }
 
     /// <summary>Where in the square the pointer sits, as saturation across and value down.</summary>
@@ -199,13 +215,14 @@ public sealed partial class HtmlColorPicker : UserControl
     private static int Axis(double value, int current, int max) =>
         double.IsFinite(value) ? (int)Math.Clamp(Math.Round(value), 0, max) : current;
 
+    private void OnHexTextChanging(TextBox sender, TextBoxTextChangingEventArgs e) =>
+        _pendingHex = _quiet ? null : sender.Text;
+
     private void OnHexTextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_quiet) return;
-
-        // Live, like the page it is modelled on — but only when what is typed is a whole colour. A half-
-        // typed code is left in the box alone; the colour moves on when the sixth digit lands.
-        if (!_selection.SetHex(HexBox.Text)) return;
+        if (_quiet || _pendingHex is not { } text) return;
+        _pendingHex = null;
+        if (!_selection.SetHex(text)) return;
         Refresh();
         Commit();
     }
@@ -255,8 +272,14 @@ public sealed partial class HtmlColorPicker : UserControl
 
     private void RedrawHex()
     {
-        var hex = HtmlColor.Format(CurrentColor());
-        if (!string.Equals(HexBox.Text, hex, StringComparison.Ordinal)) HexBox.Text = hex;
+        var quiet = _quiet;
+        _quiet = true;
+        try
+        {
+            var hex = HtmlColor.Format(CurrentColor());
+            if (!string.Equals(HexBox.Text, hex, StringComparison.Ordinal)) HexBox.Text = hex;
+        }
+        finally { _quiet = quiet; }
     }
 
     internal static async Task<(bool Ok, string Detail)> ProbeExactInputAsync(HtmlColorPicker picker)
@@ -279,7 +302,19 @@ public sealed partial class HtmlColorPicker : UserControl
         picker.SetColor("");
         await Task.Delay(50);
         var cleared = picker.Color.Length == 0;
-        return (exact && rgb && cleared, $"真实控件假数据：HEX 精确={exact}、RGB 精确={rgb}、清空={cleared}；{string.Join("；", values)}");
+        picker.HexBox.Text = "#12";
+        await Task.Delay(50);
+        picker.OnHexLostFocus(picker.HexBox, new RoutedEventArgs());
+        await Task.Delay(50);
+        var quietRestore = picker.Color.Length == 0;
+        picker.Color = "#123456";
+        picker._squareDragging = true;
+        picker._selection.SetHex("#FE0102");
+        picker.CancelDrag();
+        var cancelledDrag = !picker._squareDragging && !picker._hueDragging
+            && picker.Color == "#123456" && picker._selection.Hex == "#123456";
+        return (exact && rgb && cleared && quietRestore && cancelledDrag,
+            $"真实控件假数据：HEX 精确={exact}、RGB 精确={rgb}、清空={cleared}、失焦不写旧值={quietRestore}、中断拖动复位={cancelledDrag}；{string.Join("；", values)}");
     }
 
     private static Windows.UI.Color ToColor(int rgb)

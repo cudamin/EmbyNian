@@ -6,6 +6,7 @@ using EmbyNian.Configuration;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using EmbyNian.MoviePilot;
+using EmbyNian.Services;
 using static EmbyNian.Tests.TestHarness;
 
 namespace EmbyNian.Tests;
@@ -19,6 +20,7 @@ internal static class IdentityRegressionTests
         RegisterPasswords();
         RegisterSessionChanges();
         RegisterScopes();
+        RegisterCapabilities();
         RegisterMoviePilot();
         RegisterDownloads();
         HttpRedirectTests.Register();
@@ -341,6 +343,69 @@ internal static class IdentityRegressionTests
             Assert.Equal(0, fixture.SignedOut);
         });
 
+        foreach (var callback in new[] { "event", "cancellation" })
+            Case($"身份 Scope：退出时 {callback} 回调异常不阻断撤销和其他订阅者", async () =>
+            {
+                using var fixture = new SessionFixture();
+                await fixture.Restore(fixture.A);
+                var scope = fixture.Session.Capture();
+                using var cleanup = new CancellationTokenSource();
+                var entered = Signal<CancellationToken>();
+                var active = scope.ExecuteAsync(async (_, token) =>
+                {
+                    entered.SetResult(token);
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }, cleanup.Token);
+                var token = await entered.Task;
+                var notified = false;
+                var cancelledWhenNotified = false;
+                if (callback == "event") fixture.Session.SignedOut += (_, _) => throw new InvalidOperationException("fixture subscriber");
+                using var registration = callback == "cancellation"
+                    ? token.Register(() => throw new InvalidOperationException("fixture cancellation")) : default;
+                fixture.Session.SignedOut += (_, _) =>
+                {
+                    notified = true;
+                    cancelledWhenNotified = token.IsCancellationRequested;
+                };
+
+                Exception? failure = null;
+                try { fixture.Session.SignOut(); }
+                catch (Exception error) { failure = error; }
+                try
+                {
+                    Assert.Null(failure, "注销清理不能被订阅者打断");
+                    Assert.True(notified);
+                    Assert.True(cancelledWhenNotified, "先撤销原会话，再通知外壳");
+                    await Fails<OperationCanceledException>(active);
+                }
+                finally
+                {
+                    registration.Dispose();
+                    cleanup.Cancel();
+                    try { await active; }
+                    catch (OperationCanceledException) { }
+                }
+            });
+
+        Case("身份 Scope：释放时取消回调异常仍释放传输层且可以重复释放", async () =>
+        {
+            using var fixture = new SessionFixture();
+            await fixture.Restore(fixture.A);
+            var scope = fixture.Session.Capture();
+            var entered = Signal<CancellationToken>();
+            var active = scope.ExecuteAsync(async (_, token) =>
+            {
+                entered.SetResult(token);
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }, None);
+            var token = await entered.Task;
+            using var registration = token.Register(() => throw new InvalidOperationException("fixture cancellation"));
+            fixture.Session.Dispose();
+            Assert.True(fixture.Transport.Disposed);
+            await Fails<OperationCanceledException>(active);
+            fixture.Session.Dispose();
+        });
+
         foreach (var dispose in new[] { false, true })
             Case($"身份 Scope：{(dispose ? "Dispose" : "SignOut")}撤销既有 scope 及在飞操作", async () =>
             {
@@ -366,6 +431,59 @@ internal static class IdentityRegressionTests
                     await Fails<OperationCanceledException>(scope.ExecuteAsync((_, _) => Task.CompletedTask, None));
                 }
             });
+    }
+
+    private static void RegisterCapabilities()
+    {
+        Case("服务器能力：A 的迟到版本不能覆盖 B，退出后不再提供旧版本", async () =>
+        {
+            using var fixture = new SessionFixture();
+            var entered = Signal<bool>();
+            var reply = Signal<HttpResponseMessage>();
+            fixture.Transport.Reply = (sent, _) =>
+            {
+                if (!sent.Url.AbsolutePath.EndsWith("/System/Info", StringComparison.Ordinal))
+                    return Task.FromResult(Standard(sent));
+                if (sent.Token == "token-a")
+                {
+                    entered.TrySetResult(true);
+                    return reply.Task;
+                }
+                return Task.FromResult(Json("{\"Version\":\"4.9.5\"}"));
+            };
+            var capabilities = new ServerCapabilities(fixture.Session);
+            await fixture.Restore(fixture.A);
+            var a = capabilities.ProbeAsync();
+            await entered.Task;
+            await fixture.Restore(fixture.B);
+            await capabilities.ProbeAsync();
+            reply.SetResult(Json("{\"Version\":\"4.6.0\"}"));
+            await a;
+
+            Assert.Equal(new Version(4, 9, 5), capabilities.ServerVersion);
+            fixture.Session.SignOut();
+            Assert.Null(capabilities.ServerVersion);
+        });
+
+        Case("服务器能力：切服后新探测尚未成功也不能沿用旧版本", async () =>
+        {
+            using var fixture = new SessionFixture();
+            fixture.Transport.Reply = (sent, _) => Task.FromResult(
+                sent.Url.AbsolutePath.EndsWith("/System/Info", StringComparison.Ordinal)
+                    ? Json("{\"Version\":\"4.6.0\"}") : Standard(sent));
+            var capabilities = new ServerCapabilities(fixture.Session);
+            await fixture.Restore(fixture.A);
+            await capabilities.ProbeAsync();
+            Assert.Equal(new Version(4, 6, 0), capabilities.ServerVersion);
+
+            await fixture.Restore(fixture.B);
+            Assert.Null(capabilities.ServerVersion);
+            fixture.Transport.Reply = (sent, _) => Task.FromResult(
+                sent.Url.AbsolutePath.EndsWith("/System/Info", StringComparison.Ordinal)
+                    ? Json("{}") : Standard(sent));
+            await capabilities.ProbeAsync();
+            Assert.Null(capabilities.ServerVersion);
+        });
     }
 
     private static void RegisterMoviePilot()
@@ -439,9 +557,11 @@ internal static class IdentityRegressionTests
                     entered.SetResult(true);
                     return reply.Task;
                 }
+                if (sent.Url.AbsolutePath.Contains("media/search", StringComparison.Ordinal))
+                    return Task.FromResult(Json("""[{"title":"synthetic","type":"电影","media_id":"1","media_source":"themoviedb"}]"""));
                 return Task.FromResult(fixture.Answer(sent));
             };
-            var media = new MoviePilotMedia { Title = "synthetic", MediaId = "1", MediaSource = "themoviedb" };
+            var media = (await fixture.Service.SearchAsync("synthetic", None)).Single();
             var old = fixture.Service.SubscribeAsync(media, None);
             await entered.Task;
             fixture.Settings.MoviePilot.Username = "b";
@@ -591,6 +711,13 @@ internal static class IdentityRegressionTests
     private sealed class Transport : HttpMessageHandler
     {
         public ConcurrentQueue<Sent> Sent { get; } = new();
+        public bool Disposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
         public Func<Sent, CancellationToken, Task<HttpResponseMessage>> Reply { get; set; } =
             (sent, _) => Task.FromResult(Standard(sent));
 

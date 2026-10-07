@@ -410,19 +410,29 @@ public sealed class EmbySession : IDisposable
     private void EndSession(string reason, EmbyClient? expected = null, long generation = 0)
     {
         CancellationTokenSource lifetime;
+        bool wasSignedIn;
+        EventHandler<string>? signedOut;
         lock (_lifecycleGate)
         {
             if (_disposed || (expected is not null && (!CanCommit(generation) || !ReferenceEquals(_client, expected)))) return;
             lifetime = _scopeLifetime;
             _scopeLifetime = new CancellationTokenSource();
-            EndSessionLocked(reason);
+            wasSignedIn = EndSessionLocked();
+            signedOut = SignedOut;
         }
 
-        lifetime.Cancel();
-        lifetime.Dispose();
+        CancelLifetime(lifetime);
+        if (!wasSignedIn) return;
+        Log.Info(Category, reason);
+        if (signedOut is null) return;
+        foreach (EventHandler<string> subscriber in signedOut.GetInvocationList())
+        {
+            try { subscriber(this, reason); }
+            catch (Exception error) { Log.Warn(Category, "退出登录通知失败", error); }
+        }
     }
 
-    private void EndSessionLocked(string reason)
+    private bool EndSessionLocked()
     {
         var wasSignedIn = _client is not null;
         _client = null;
@@ -430,12 +440,18 @@ public sealed class EmbySession : IDisposable
         _restoredViews = null;
         _generation++;
         _scopeGeneration++;
-        if (!wasSignedIn) return;
+        if (!wasSignedIn) return false;
 
         if (Account is { } account) _vault.ClearAccessToken(account);
         Persist();
-        Log.Info(Category, reason);
-        SignedOut?.Invoke(this, reason);
+        return true;
+    }
+
+    private static void CancelLifetime(CancellationTokenSource lifetime)
+    {
+        try { lifetime.Cancel(); }
+        catch (AggregateException error) { Log.Warn(Category, "撤销登录会话时回调失败", error); }
+        finally { lifetime.Dispose(); }
     }
 
     private void Persist()
@@ -465,8 +481,7 @@ public sealed class EmbySession : IDisposable
             lifetime = _scopeLifetime;
         }
 
-        lifetime.Cancel();
-        lifetime.Dispose();
-        _http.Dispose();
+        try { CancelLifetime(lifetime); }
+        finally { _http.Dispose(); }
     }
 }

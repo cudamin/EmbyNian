@@ -60,7 +60,8 @@
              标题是「更大的 YaHei」而不是标题字，和主页的同一种东西也不长一样。 -->
 
         <!-- 卡片：单集、季、推荐都用这一个 —— 普通海报卡，有悬浮播放键（有未看集时可整季续播）、
-             右键菜单、已看角标。三处的点击都只是「打开这张卡的条目」，所以一个模板一个处理器。 -->
+             右键菜单、已看角标。三处的点击都只是「打开这张卡的条目」，所以一个模板一个处理器。
+             Background 只管常态；悬停与按压的模板画刷也保持透明，反馈由 PosterCard 自己提供。 -->
         <DataTemplate x:Key="CardTemplate" x:DataType="local:CardItem">
             <Button
                 Background="Transparent"
@@ -68,6 +69,10 @@
                 Click="OnCardClicked"
                 ContextRequested="OnCardContextRequested"
                 Padding="0">
+                <Button.Resources>
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                </Button.Resources>
                 <local:PosterCard
                     ActionRequested="OnCardActionRequested"
                     Card="{x:Bind}"
@@ -77,13 +82,17 @@
         </DataTemplate>
 
         <!-- 人物卡：Person 不是可播放类型，所以卡上不会长出播放键，也没有已看和收藏，
-             右键也不挂菜单 —— 那些命令都是针对可播放条目的。 -->
+             右键也不挂菜单 —— 那些命令都是针对可播放条目的。水洗底同上压掉。 -->
         <DataTemplate x:Key="PersonTemplate" x:DataType="local:CardItem">
             <Button
                 Background="Transparent"
                 BorderThickness="0"
                 Click="OnCardClicked"
                 Padding="0">
+                <Button.Resources>
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                </Button.Resources>
                 <local:PosterCard
                     Card="{x:Bind}"
                     CardWidth="{x:Bind CardWidth}"

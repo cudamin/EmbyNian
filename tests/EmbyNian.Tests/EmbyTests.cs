@@ -107,13 +107,36 @@ internal static class EmbyTests
         {
             var script = EmbyWebConsole.SignInScript(ApiBase, "user-1", "token-1", "Emby");
 
-            Assert.Contains("location.host", script);
-            Assert.Contains("\"192.0.2.10:8896\"", script);
+            Assert.Contains("location.origin", script);
+            Assert.Contains("\"http://192.0.2.10:8896\"", script);
 
-            // 默认端口的 https 站点，location.host 里不带 :443。
             var plain = EmbyWebConsole.SignInScript(EmbyServerAddress.Normalize("https://nas.example.com"), "u", "t", "Emby");
-            Assert.Contains("\"nas.example.com\"", plain);
+            Assert.Contains("\"https://nas.example.com\"", plain);
             Assert.False(plain.Contains("nas.example.com:443", StringComparison.Ordinal));
+        });
+
+        Test("控制台脚本：来源守卫包含协议，国际域名使用浏览器的 ASCII 形式", () =>
+        {
+            var address = EmbyServerAddress.Normalize("https://例子.invalid:443/Media");
+            foreach (var script in new[]
+            {
+                EmbyWebConsole.SignInScript(address, "fixture-user", "fixture-token", "Emby"),
+                EmbyWebConsole.ThemeScript(address, "fixture-user")
+            })
+            {
+                Assert.Contains("location.origin", script);
+                Assert.Contains("\"https://xn--fsqu00a.invalid\"", script);
+                Assert.DoesNotContain("location.host", script);
+            }
+        });
+
+        Test("控制台脚本：拒绝非 HTTP 来源和带嵌入凭据的地址", () =>
+        {
+            foreach (var address in new[] { "file:///C:/emby/", "https://user:fixture-password@nas.invalid/emby/" })
+            {
+                Assert.Throws<EmbyApiException>(() => EmbyWebConsole.SignInScript(new Uri(address), "u", "t", "Emby"));
+                Assert.Throws<EmbyApiException>(() => EmbyWebConsole.ThemeScript(new Uri(address), "u"));
+            }
         });
 
         Test("控制台免登录脚本：令牌只以 JSON 转义的形式出现一次", () =>
@@ -158,8 +181,8 @@ internal static class EmbyTests
         Test("控制台主题脚本：只对自己这台服务器的页面动手，没有账号就拒绝", () =>
         {
             var script = EmbyWebConsole.ThemeScript(ApiBase, "user-1");
-            Assert.Contains("location.host", script);
-            Assert.Contains("\"192.0.2.10:8896\"", script);
+            Assert.Contains("location.origin", script);
+            Assert.Contains("\"http://192.0.2.10:8896\"", script);
 
             Assert.Throws<ArgumentException>(() => EmbyWebConsole.ThemeScript(ApiBase, ""));
         });

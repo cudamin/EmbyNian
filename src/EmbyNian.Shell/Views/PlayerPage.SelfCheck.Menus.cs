@@ -32,6 +32,10 @@ public sealed partial class PlayerPage
     /// <see cref="ProbeControlMenus"/> 里（它把这一棵现拼一只临时浮层、问「至少六行」），
     /// 这里只保证它确实落进了右键菜单。
     /// </para>
+    /// <para>
+    /// 2026-10-01 起还多读一条：末尾那三行设置入口（字幕／视频输出／音频输出）逐行对账 —— 在不在菜单里、
+    /// 带的设置落点是不是一张真卡。行数由上面两侧的计数管着，那一条管的是「点下去开哪张卡」。
+    /// </para>
     /// </summary>
     internal (bool Ok, string Detail) ProbePictureMenu()
     {
@@ -66,11 +70,81 @@ public sealed partial class PlayerPage
         var wantChecks = catalogue.Count(node => node.State is not null);
         var checks = _pictureChecks.Count;
 
-        var ok = rows == wantRows && groups == wantGroups && rules == wantRules && panscan && checks == wantChecks;
+        // 末尾那三行「去设置里改」（2026-10-01 用户令）。行数已经由上面两侧的计数管着，这里管的是**它们点得出
+        // 什么**：每一行都得在屏上，而且带的设置落点必须是一张真的设置卡。少了名字、或者 Cards 里改了名而
+        // PlayerSettingsLinks 没跟上，症状都是「点『字幕』开在播放器卡上」—— 菜单看着一切正常，只有这条读数看得见。
+        var settings = ProbeSettingsRows(PictureMenu.Items);
+
+        var ok = rows == wantRows && groups == wantGroups && rules == wantRules && panscan
+            && checks == wantChecks && settings.Ok;
 
         return (ok, $"{rows}/{wantRows} 行、{groups}/{wantGroups} 个子菜单、{rules}/{wantRules} 条分隔线"
                     + $"（含并进来的「更多」{moreRows} 行）"
-                    + $"，裁切填充={(panscan ? "在" : "缺")}、可打勾 {checks}/{wantChecks} 行");
+                    + $"，裁切填充={(panscan ? "在" : "缺")}、可打勾 {checks}/{wantChecks} 行"
+                    + $"，设置三行 {settings.Detail}");
+    }
+
+    /// <summary>
+    /// 画面菜单最末尾那三行设置入口逐行对账：表里每一行都要在菜单里找得到同名行、行上带着同一个设置落点，而
+    /// 那个落点必须是一张真的设置卡（<see cref="SettingsViewModel.IsCardCategory"/>）。
+    /// <para>
+    /// 期望值从 <see cref="PlayerSettingsLinks.All"/> 现取，不写死三个名字 —— 表里加一行、改一行，这条当天跟上。
+    /// 独占模式推的是同一张表，那边点中回宿主也是同一句执行（<c>PlayerViewModel.RequestSettings</c>），所以这
+    /// 一条读数同时替两条管线看着「按钮在不在、点下去开哪张卡」。
+    /// </para>
+    /// </summary>
+    private static (bool Ok, string Detail) ProbeSettingsRows(IEnumerable<MenuFlyoutItemBase> items)
+    {
+        var rows = items.OfType<MenuFlyoutItem>()
+            .Where(item => item.Tag is PlayerSettingsLink)
+            .ToList();
+
+        var trouble = new List<string>();
+
+        foreach (var link in PlayerSettingsLinks.All)
+        {
+            var row = rows.FirstOrDefault(item => string.Equals(item.Text, link.Label, StringComparison.Ordinal));
+            if (row is null)
+            {
+                trouble.Add($"「{link.Label}」不在菜单里");
+                continue;
+            }
+
+            if (row.Tag is not PlayerSettingsLink tagged || !string.Equals(tagged.Category, link.Category, StringComparison.Ordinal))
+                trouble.Add($"「{link.Label}」带的设置落点不是「{link.Category}」");
+
+            if (!SettingsViewModel.IsCardCategory(link.Category))
+                trouble.Add($"「{link.Label}」指向的设置卡「{link.Category}」不在卡片名单里");
+        }
+
+        if (rows.Count != PlayerSettingsLinks.All.Count)
+            trouble.Add($"菜单里 {rows.Count} 行设置入口，表上 {PlayerSettingsLinks.All.Count} 行");
+
+        return (trouble.Count == 0,
+            trouble.Count == 0
+                ? $"{rows.Count} 行都在、都落在一张真卡上（{string.Join('、', PlayerSettingsLinks.All.Select(link => link.Label))}）"
+                : string.Join('、', trouble));
+    }
+
+    /// <summary>
+    /// 点一下右键画面菜单末尾那三行设置入口里的一行：按真菜单行的真处理器走（<c>OnPictureSettingsRow</c>），
+    /// 不是自检另起一句「等于点了它」—— 这条读数要连起来的是「菜单行 → view model → 外壳开窗」整根链子。
+    /// 菜单行不在（没挂上、或表里没有这个名字）返回 false。
+    /// <para>
+    /// 调用方是外壳自检的「设置窗口盖在画面上」：它先让这扇窗立起来，再量屏幕上谁在最前面。
+    /// </para>
+    /// </summary>
+    internal bool ClickPictureSettingsRow(string label)
+    {
+        OnPictureMenuOpening(this, new object());
+
+        var row = PictureMenu.Items.OfType<MenuFlyoutItem>().FirstOrDefault(item =>
+            item.Tag is PlayerSettingsLink link && string.Equals(link.Label, label, StringComparison.Ordinal));
+
+        if (row is null) return false;
+
+        OnPictureSettingsRow(row, new RoutedEventArgs());
+        return true;
     }
 
     /// <summary>Walks a built flyout the same way <see cref="BuildMenuItems"/> built it.</summary>

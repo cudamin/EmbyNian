@@ -65,7 +65,10 @@ internal static partial class ShellSelfCheck
     /// already been decided by then.
     /// </para>
     /// </summary>
-    private static async Task ShootAsync(ShellPage shell, StartupOptions options)
+    private static Task ShootAsync(ShellPage shell, StartupOptions options) =>
+        ShootAsync(shell, options, "selfcheck-shell.png");
+
+    private static async Task ShootAsync(ShellPage shell, StartupOptions options, string name)
     {
         try
         {
@@ -98,7 +101,7 @@ internal static partial class ShellSelfCheck
             reader.ReadBytes(bytes);
 
             options.Paths.EnsureCreated();
-            var path = Path.Combine(options.Paths.LogDirectory, "selfcheck-shell.png");
+            var path = Path.Combine(options.Paths.LogDirectory, name);
             File.WriteAllBytes(path, bytes);
 
             Log.Info(Category, $"界面截图已写出 {bitmap.PixelWidth}x{bitmap.PixelHeight} → {path}");

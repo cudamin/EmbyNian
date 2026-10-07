@@ -63,6 +63,12 @@ public partial class App : Application
     {
         Instance = this;
 
+        if (_options.ProbeShell)
+        {
+            _ = ShellNavigationProbe.RunAsync(_options);
+            return;
+        }
+
         if (_options.ProbeSubtitles)
         {
             _ = SubtitleSettingsProbe.RunAsync(_options);
@@ -149,6 +155,7 @@ public partial class App : Application
 
             _window = new HostWindow { Content = shell };
             _window.Closed += OnWindowClosed;
+            _window.BeforeCloseAsync = PrepareWindowCloseAsync;
 
             // 上次关掉时的尺寸、位置和最大化状态。`--maximized` 说了就最大化，没说就照上次那一档 —— 命令行是
             // 「这一次这么开」，记下来的那一份是「平时就这么开」，两者不冲突。摆得下摆不下由 HostWindow 问屏幕。
@@ -253,6 +260,15 @@ public partial class App : Application
     {
         Log.Error(Category, $"界面线程未处理异常：{e.Message}", e.Exception);
         if (_options.SelfCheck) ShellSelfCheck.ReportCrash(_options, e.Exception, e.Message);
+    }
+
+    private async Task PrepareWindowCloseAsync()
+    {
+        _activation?.Dispose();
+        _activation = null;
+        if (_shell is null) return;
+        try { await _shell.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(25)).ConfigureAwait(true); }
+        catch (TimeoutException) { Log.Warn(Category, "播放收尾超时，最终上报可能未完成"); }
     }
 
     private void OnWindowClosed()

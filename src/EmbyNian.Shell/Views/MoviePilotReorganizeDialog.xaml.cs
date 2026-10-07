@@ -21,6 +21,7 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
     private bool _updating;
     private bool _busy;
     private bool _submitting;
+    private bool _submitted;
     private int _revision;
 
     public ObservableCollection<MoviePilotTransferLine> Lines { get; } = [];
@@ -81,8 +82,9 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
             _updating = true;
             TargetStorageBox.ItemsSource = _options.Storages;
             SourceBox.ItemsSource = _options.MediaSources;
-            SourceBox.SelectedItem = _options.MediaSources.FirstOrDefault(source => source.Id == "themoviedb")
-                ?? _options.MediaSources.FirstOrDefault();
+            var tmdb = _options.MediaSources.FirstOrDefault(source => source.Id == "themoviedb");
+            SourceBox.SelectedItem = tmdb;
+            if (tmdb is null) MediaIdBox.Text = "";
             TargetPathBox.ItemsSource = _options.Directories.Select(directory => directory.Path).Distinct().ToList();
             _updating = false;
             await FindHistoryAsync().ConfigureAwait(true);
@@ -187,7 +189,7 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
 
     private async void OnPreview(object sender, RoutedEventArgs e)
     {
-        if (_busy) return;
+        if (_busy || _submitted) return;
         InvalidatePreview();
         var request = Request;
         if (_histories.Count == 0) { Say("请先找到并选择原整理记录"); return; }
@@ -226,9 +228,10 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
 
     private async Task SubmitAsync(bool background)
     {
-        if (_busy || _submissionProblem is not null || ConfirmChanges.IsChecked != true || _preview is not { CanSubmit: true } preview) return;
-        if (Request != preview.Request) { InvalidatePreview(); Say("表单已改变，请重新预览"); return; }
+        if (_busy || _submitted || _submissionProblem is not null || ConfirmChanges.IsChecked != true || _preview is not { CanSubmit: true } preview) return;
+        if (!preview.Matches(Request)) { InvalidatePreview(); Say("表单已改变，请重新预览"); return; }
         _submitting = true;
+        _submitted = true;
         _preview = null;
         SetBusy(true);
         ConfirmationPanel.Visibility = Visibility.Collapsed;
@@ -241,7 +244,12 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
         }
         catch (MoviePilotTransferBlockedException error)
         {
+            _submitted = false;
             Say($"{error.Message}。本次没有提交整理请求。");
+        }
+        catch (MoviePilotOperationBlockedException error)
+        {
+            Say(error.Message);
         }
         catch (Exception error)
         {
@@ -292,8 +300,8 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
     {
         _busy = busy;
         PreviewRing.IsActive = busy;
-        FormPanel.IsEnabled = !busy;
-        PreviewButton.IsEnabled = !busy && _histories.Count > 0;
+        FormPanel.IsEnabled = !busy && !_submitted;
+        PreviewButton.IsEnabled = !busy && !_submitted && _histories.Count > 0;
         UpdateSubmit();
     }
 
@@ -306,11 +314,17 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
     private void OnEdited(object sender, RoutedEventArgs e) => Edited();
     private void OnSelectionEdited(object sender, SelectionChangedEventArgs e) => Edited();
     private void OnConfirmed(object sender, RoutedEventArgs e) => UpdateSubmit();
-    private void OnMediaIdChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args) => Edited();
+    private void OnMediaIdChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        if (!_updating && args.Reason == AutoSuggestionBoxTextChangeReason.UserInput) sender.ItemsSource = null;
+        Edited();
+    }
 
     private void OnTypeChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_initialized) return;
+        MediaIdBox.ItemsSource = null;
+        if (!_updating) MediaIdBox.Text = "";
         EpisodeRow.Visibility = TypeBox.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         Edited();
     }
@@ -343,8 +357,15 @@ public sealed partial class MoviePilotReorganizeDialog : ContentDialog
     private void OnSuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
     {
         if (args.SelectedItem is not MoviePilotMediaSuggestion suggestion) return;
+        if (suggestion.Media.Type != Request.Type || !suggestion.Media.CanSubscribe ||
+            _options?.MediaSources.FirstOrDefault(source => source.Id == suggestion.Media.MediaSource) is not { } source)
+        {
+            sender.ItemsSource = null;
+            Say("这条建议与当前媒体类型或可用来源不一致，请重新查找");
+            return;
+        }
         _updating = true;
-        SourceBox.SelectedItem = _options?.MediaSources.FirstOrDefault(source => source.Id == suggestion.Media.MediaSource);
+        SourceBox.SelectedItem = source;
         MediaIdBox.Text = suggestion.Media.MediaId ?? "";
         _updating = false;
         Edited();

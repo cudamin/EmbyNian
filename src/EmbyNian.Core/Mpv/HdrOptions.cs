@@ -24,6 +24,10 @@ public static class HdrOptions
     public static double? Clamp(double? value, double minimum, double maximum) =>
         value is { } number && double.IsFinite(number) ? Math.Clamp(number, minimum, maximum) : null;
 
+    public static double? ClampNits(double? value) =>
+        Clamp(value, MinimumNits, MaximumNits) is { } number
+            ? Math.Round(number, MidpointRounding.AwayFromZero) : null;
+
     public static bool OwnsColorSpace(VideoSettings video, SourceProfile? source) =>
         source is { IsHdr: true } && video.HdrMode is "tonemap" or "passthrough";
 
@@ -50,11 +54,12 @@ public static class HdrOptions
 
         if (video.ToneMapping.Length > 0) options.Add(new("tone-mapping", video.ToneMapping));
         if (video.HdrComputePeak.Length > 0) options.Add(new("hdr-compute-peak", video.HdrComputePeak));
-        if (hdr && !sdr) AddNumber("target-peak", video.HdrPeakNits);
-        AddNumber("hdr-reference-white", video.HdrReferenceWhiteNits);
-        AddNumber("sub-hdr-peak", video.HdrSubtitleNits);
-        AddNumber("image-subs-hdr-peak", video.HdrImageSubtitleNits);
-        AddNumber("hdr-contrast-recovery", video.HdrContrastRecovery, 0, 2);
+        if (hdr && !sdr) AddNits("target-peak", video.HdrPeakNits);
+        AddNits("hdr-reference-white", video.HdrReferenceWhiteNits);
+        AddNits("sub-hdr-peak", video.HdrSubtitleNits);
+        AddNits("image-subs-hdr-peak", video.HdrImageSubtitleNits);
+        if (Clamp(video.HdrContrastRecovery, 0, 2) is { } contrast)
+            options.Add(new("hdr-contrast-recovery", contrast.ToString("0.###", CultureInfo.InvariantCulture)));
 
         var filters = new List<string>();
         if (!video.DolbyVisionMetadata) filters.Add("dolbyvision=no");
@@ -63,10 +68,10 @@ public static class HdrOptions
         if (filters.Count > 0) options.Add(new("vf", "@embynian-hdr:format=" + string.Join(':', filters)));
         return options;
 
-        void AddNumber(string name, double? value, double minimum = MinimumNits, double maximum = MaximumNits)
+        void AddNits(string name, double? value)
         {
-            if (Clamp(value, minimum, maximum) is { } number)
-                options.Add(new(name, number.ToString("0.###", CultureInfo.InvariantCulture)));
+            if (ClampNits(value) is { } number)
+                options.Add(new(name, number.ToString("0", CultureInfo.InvariantCulture)));
         }
     }
 }

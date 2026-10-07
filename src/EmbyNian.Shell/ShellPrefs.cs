@@ -25,6 +25,10 @@ public static class ShellPrefs
     /// <summary>界面那一组设置改了。参数是改完之后的那一份。</summary>
     public static event Action<UiSettings>? Changed;
 
+    public static event Action? ShortcutsChanged;
+
+    public static void ApplyShortcuts() => ShortcutsChanged?.Invoke();
+
     /// <summary>由设置页那一头喊：这一份刚改过，请各位跟上。</summary>
     public static void Apply(UiSettings ui) => Changed?.Invoke(ui);
 }

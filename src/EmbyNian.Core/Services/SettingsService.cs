@@ -77,8 +77,7 @@ public sealed class SettingsService(SettingsStore store, AppSettings settings) :
 
         foreach (var candidate in Settings.Servers)
         {
-            if (EmbyServerAddress.TryNormalize(candidate.Url, out var existing, out _) &&
-                string.Equals(existing.AbsoluteUri, normalized.AbsoluteUri, StringComparison.OrdinalIgnoreCase))
+            if (EmbyServerAddress.TryNormalize(candidate.Url, out var existing, out _) && existing == normalized)
             {
                 // Keep the canonical form: a profile saved from a hand-typed host gets tidied up the
                 // first time it is signed into again.

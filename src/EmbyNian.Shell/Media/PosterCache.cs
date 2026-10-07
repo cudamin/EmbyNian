@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using Microsoft.UI.Xaml.Media.Imaging;
 
@@ -37,8 +38,8 @@ internal static class PosterCache
     /// one share a download but not a bitmap, and handing one the other's would show a picture decoded
     /// for a different size.
     /// </summary>
-    public static string Key(string itemId, string imageType, string tag, int decodeWidth) =>
-        $"{itemId}|{imageType}|{tag}|{decodeWidth}";
+    public static string Key(EmbyConnection connection, string itemId, string imageType, string tag, int decodeWidth) =>
+        EmbyImageStore.CacheKey(connection, itemId, imageType, tag, decodeWidth);
 
     public static bool TryGet(string key, [MaybeNullWhen(false)] out BitmapImage bitmap) =>
         Decoded.TryGet(key, out bitmap);

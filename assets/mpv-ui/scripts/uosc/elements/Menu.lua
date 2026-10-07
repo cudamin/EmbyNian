@@ -111,7 +111,7 @@ function Menu:init(data, callback, opts)
 	self.mouse_nav = self.opts.mouse_nav -- Stops pre-selecting items
 	self.item_height = nil
 	self.min_width = nil
-	self.menu_scale = state.scale -- EMBYNIAN[menu-style]：菜单自己的缩放（随窗口高），update_content_dimensions 重算
+	self.menu_scale = state.scale -- EMBYNIAN[menu-style]：菜单自己的缩放（DPI×全屏/最大化 1.3），update_content_dimensions 重算
 	self.radius = state.radius -- EMBYNIAN[menu-style]：菜单面板的圆角基准（同上）
 	self.item_spacing = 0 -- EMBYNIAN[menu-style]：行距在 update_content_dimensions 里按字号重算
 	self.item_padding = nil
@@ -157,6 +157,7 @@ function Menu:init(data, callback, opts)
 	if self.mouse_nav then self.current.selected_index = nil end
 
 	self:tween_property('opacity', 0, 1)
+	if embynian_clear_shortcuts then embynian_clear_shortcuts() end
 	self:enable_key_bindings()
 	if not self.anchor then Elements:maybe('curtain', 'register', self.id) end
 
@@ -172,12 +173,12 @@ end
 function Menu:destroy()
 	Element.destroy(self)
 	self.is_closing = false
-	-- EMBYNIAN[menu-anchor] — 锚点菜单当初没登记幕布，这里也就不注销（unregister 幂等，防的是计数错乱）。
-	if not self.is_being_replaced and not self.anchor then Elements:maybe('curtain', 'unregister', self.id) end
+	if not self.anchor then Elements:maybe('curtain', 'unregister', self.id) end
 	if utils.shared_script_property_set then
 		utils.shared_script_property_set('uosc-menu-type', nil)
 	end
 	mp.set_property_native('user-data/uosc/menu/type', nil)
+	if not self.is_being_replaced and embynian_refresh_shortcuts then embynian_refresh_shortcuts() end
 end
 
 ---@param data MenuData
@@ -306,18 +307,18 @@ function Menu:update_items(items)
 end
 
 function Menu:update_content_dimensions()
-	-- EMBYNIAN[menu-style] — 菜单自己的缩放：参考 mpv 内建 context_menu 的 scale_with_window=auto
-	-- （＝osd_height/720，mpv 的 osd-scale-by-window 默认开），不吃 uosc 的 state.scale（固定 1、
-	-- 全屏 ×1.3，与参考菜单的随窗缩放不同源）。display 就是 osd-width/height 的镜像（main.lua 的
-	-- update_display_dimensions），窗口尺寸拿不到时（headless 探针、vo=null）退回 state.scale。
-	-- 字号与行高直接来自参考配置（context_menu.conf 的 font_size/gap）：行高＝字号×(1+gap)，同上游
-	-- get_line_height；上游「字号＝item_height×0.48」的反推撤销 —— 2026-09-26 那轮的 state.scale 基准
-	-- （item_height=30→字号 14.4）整把换成参考菜单的尺子。其余尺寸全部跟着 menu_scale 走。
-	local menu_scale = display.height > 0 and display.height / 720 or state.scale
+	-- EMBYNIAN[menu-style] — 菜单自己的缩放＝uosc 的 state.scale（hidpi_scale × 全屏/最大化 1.3，
+	-- main.lua update_display_dimensions）：2026-10-07 用户令「独占模式的右键菜单体积太大了，大小改为
+	-- 跟集成模式一致（注意全屏和最大化时要放大 1.3 倍）」，2026-09-29 那把随窗口高的尺子
+	-- （osd_height/720，窗口越大菜单越虚胖）整把退役。基础字号与行高按集成模式右键菜单
+	-- （WinUI 2.3.9 DefaultMenuFlyoutItemStyle）解剖：字号 14＝ControlContentThemeFontSize；一行
+	-- ＝行外边距 2＋上内边距 9＋14px 行盒约 18.6＋下内边距 10＋行外边距 2 ≈ 41.6 → menu_gap=2
+	-- （行高＝字号×(1+gap)，同上游 get_line_height 的式子）。其余尺寸全部跟着 menu_scale 走。
+	local menu_scale = state.scale
 	self.menu_scale = menu_scale
 	self.font_size = round(options.menu_font_size * menu_scale * options.font_scale)
 	self.item_height = round(self.font_size * (1 + options.menu_gap))
-	self.item_spacing = 0 -- 行距已含在行高里（见上），行与行贴着排——参考菜单的密度
+	self.item_spacing = 0 -- 行距已含在行高里（集成的行外边距 2×2 折进那 42），行与行贴着排
 	self.min_width = round(options.menu_min_width * menu_scale)
 	self.separator_size = round(1 * menu_scale)
 	self.scrollbar_size = round(2 * menu_scale)
@@ -729,12 +730,27 @@ function Menu:move_selected_item_by(delta)
 	end
 end
 
-function Menu:on_display() self:update_dimensions() end
+function Menu:on_display() self:update_content_dimensions() end
 function Menu:on_prop_fullormaxed() self:update_content_dimensions() end
 function Menu:on_options() self:update_content_dimensions() end
 
+function Menu:select_from_cursor()
+	local menu = self.current
+	local x, y = cursor.x - self.ax - self.padding, cursor.y - menu.top
+	local index = math.floor((y + menu.scroll_y) / self.scroll_step) + 1
+	local item = menu.items[index]
+	self.mouse_nav = true
+	if x >= 0 and x <= menu.width and y >= 0 and y <= menu.height and item and item.selectable ~= false then
+		self:select_index(index)
+	else
+		self:select_index(nil)
+	end
+	menu.action_index = nil
+end
+
 function Menu:handle_cursor_down()
 	if self.proximity_raw <= 0 then
+		self:select_from_cursor()
 		self.drag_last_y = cursor.y
 		self.current.fling = nil
 	else
@@ -745,6 +761,7 @@ end
 ---@param shortcut? Shortcut
 function Menu:handle_cursor_up(shortcut)
 	if self.proximity_raw <= -self.padding and self.drag_last_y and not self.is_dragging then
+		self:select_from_cursor()
 		self:activate_selected_item(shortcut, true)
 	end
 	if self.is_dragging then
@@ -765,7 +782,17 @@ function Menu:handle_cursor_up(shortcut)
 	self.drag_last_y = nil
 end
 
+function Menu:on_global_mouse_leave()
+	self.is_dragging = false
+	self.drag_last_y = nil
+	self.current.fling = nil
+end
+
 function Menu:on_global_mouse_move()
+	if cursor.hidden or cursor.x == math.huge or cursor.y == math.huge then
+		self:on_global_mouse_leave()
+		return
+	end
 	self.mouse_nav = true
 	if self.drag_last_y then
 		self.is_dragging = self.is_dragging or math.abs(cursor.y - self.drag_last_y) >= 10
@@ -1299,9 +1326,9 @@ function Menu:handle_shortcut(shortcut, info)
 		}))
 	end
 
-	if (key == 'enter' and selected_item) or (id == 'right' and is_submenu and not menu.search) then
+	if ((key == 'enter' or key == 'kp_enter') and selected_item) or (id == 'right' and is_submenu and not menu.search) then
 		self:activate_selected_item(shortcut)
-	elseif id == 'enter' and menu.search and menu.search_debounce == 'submit' then
+	elseif (id == 'enter' or id == 'kp_enter') and menu.search and menu.search_debounce == 'submit' then
 		self:search_submit()
 	elseif id == 'up' or id == 'down' then
 		self:navigate_by_items(id == 'up' and -1 or 1, true)
@@ -1480,7 +1507,12 @@ function Menu:render()
 		local submenu_rect, current_item = nil, is_current and menu.selected_index and menu.items[menu.selected_index]
 		local submenu_is_hovered = false
 		if current_item and current_item.items then
-			submenu_rect = draw_menu(current_item --[[@as MenuStack]], bg_rect.bx + self.gap, 1)
+			local submenu_x = bg_rect.bx + self.gap
+			local submenu_width = current_item.width + self.padding * 2
+			if self.anchor and submenu_x + submenu_width > display.width then
+				submenu_x = math.max(0, bg_rect.ax - self.gap - submenu_width)
+			end
+			submenu_rect = draw_menu(current_item --[[@as MenuStack]], submenu_x, 1)
 			cursor:zone('primary_down', submenu_rect, self:create_action(function(shortcut)
 				self:activate_selected_item(shortcut, true)
 			end))
@@ -1569,11 +1601,14 @@ function Menu:render()
 					if not (action.filter_hidden and menu.search) then
 						local is_active = action_index == menu.action_index
 						local bx = actions_rect.ax - (i == 1 and 0 or margin)
+						item.action_inputs = item.action_inputs or {}
+						item.action_inputs[action_index] = item.action_inputs[action_index] or {}
 						local rect = {
 							ay = actions_rect.ay,
 							by = actions_rect.by,
 							ax = bx - size,
 							bx = bx,
+							input_owner = item.action_inputs[action_index],
 						}
 						actions_rect.ax = rect.ax
 
@@ -1592,11 +1627,14 @@ function Menu:render()
 						-- Re-use rect as a hitbox by growing it so it bridges gaps to prevent flickering
 						rect.ay, rect.by, rect.bx = item_ay, item_ay + self.scroll_step, rect.bx + margin
 
+						cursor:zone('primary_click', rect, self:create_action(function(shortcut)
+							self.mouse_nav = true
+							menu.selected_index = index
+							menu.action_index = action_index
+							self:activate_selected_item(shortcut, true)
+						end))
 						-- Select action on cursor hover
 						if self.mouse_nav and get_point_to_rectangle_proximity(cursor, rect) <= 0 then
-							cursor:zone('primary_click', rect, self:create_action(function(shortcut)
-								self:activate_selected_item(shortcut, true)
-							end))
 							blur_action_index = false
 							if not is_active then
 								menu.action_index = action_index

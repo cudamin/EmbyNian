@@ -405,6 +405,12 @@ public sealed partial class PlayerPage : UserControl
         // 挂在 Root 上带 handledEventsToo（见 OnSpaceShortcut）。点过的 chrome 按钮把焦点还给页面，别让
         // 「点一下音量」偷走此后整场的空格（见 OnChromeClick）。
         Root.AddHandler(KeyDownEvent, new KeyEventHandler(OnSpaceShortcut), handledEventsToo: true);
+
+        // 跳过提示立着时，回车／Esc 还要从 Root 上再兜一道（同样带 handledEventsToo）：提示一立起，指针
+        // 多半正压在那颗 Button 上，回车在它身上被当成「按这颗按钮」、事件到不了页面那一路 —— 用户按下去
+        // 期待的是「确认跳过」。这一道只在 SkipOffered 时接（见 OnSkipKeyFallback），其余时候回车/Esc 的
+        // 规矩一点不动。
+        Root.AddHandler(KeyDownEvent, new KeyEventHandler(OnSkipKeyFallback), handledEventsToo: true);
         // Click 的路由事件标识符在这套投影里没暴露（ButtonBase、Button 上都没有），所以这些不带菜单的
         // 按钮一颗颗订阅；带 Flyout 的六颗不订阅 —— 菜单要靠焦点接管上下键（见 OnChromeClick）。
         // 公共输入反馈也用于滑条以外的按钮。
@@ -416,6 +422,7 @@ public sealed partial class PlayerPage : UserControl
         }
         _spaceShortcutArmed = true;
         _chromeBlurArmed = true;
+        _skipKeyArmed = true;
 
         // One-shot in effect: a DispatcherTimer keeps ticking, and the handler's first line stops it.
         _tapHold.Tick += OnTapHoldElapsed;
@@ -424,13 +431,20 @@ public sealed partial class PlayerPage : UserControl
 
         // A flyout is where the pointer went, so the chrome must not read the stillness as disinterest.
         // 倍速那一颗 2026-09-25 起开的是轮盘（SpeedWheelFlyout），不是 MenuFlyout —— Opened/Closed 是
-        // FlyoutBase 上的事件，五颗照旧一起挂牌。2026-09-27 晚右下角那颗「更多」按钮撤下后，它挂的
+        // FlyoutBase 上的事件，四颗照旧一起挂牌。2026-09-27 晚右下角那颗「更多」按钮撤下后，它挂的
         // `MoreMenu` 随之不在 XAML 里（那一棵改由右键画面菜单拼装，见 OnMoreMenuOpening 的注释）。
-        foreach (var flyout in new FlyoutBase[] { EpisodeMenu, AudioMenu, SubtitleMenu, SpeedWheelFlyout, PictureMenu })
+        foreach (var flyout in new FlyoutBase[] { EpisodeMenu, AudioMenu, SubtitleMenu, SpeedWheelFlyout })
         {
             flyout.Opened += (_, _) => Hold(true, ChromeHold.Menu);
             flyout.Closed += (_, _) => Hold(false, ChromeHold.Menu);
         }
+
+        // 右键画面菜单不在这四颗之列（2026-10-07 用户令「右键点击画面呼出菜单的时候不要自动显示其他控件」）：
+        // 它锚在画面上，开着时菜单本身就是全部界面 —— 要的是把三样控件收下去（ChromeReveal.SetPictureMenu），
+        // 而不是把它们钉在屏上；挂牌的语义（钉住＝三样全给）对它恰好相反，所以单独一路、单独一句。
+        // 关上交回给位置判据：指针在哪儿控件跟着哪儿（规则那一头已把过期的宽限清掉，不会弹回一屏）。
+        PictureMenu.Opened += (_, _) => HoldPictureMenu(true);
+        PictureMenu.Closed += (_, _) => HoldPictureMenu(false);
 
         WireSpeedWheel();
         Unloaded += (_, _) =>
@@ -491,6 +505,7 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     internal void Attach(PlayerViewModel viewModel, ShellPage shell, HostWindow window)
     {
+        _presentationGeneration++;
         ViewModel = viewModel;
         _shell = shell;
         _window = window;
@@ -499,8 +514,6 @@ public sealed partial class PlayerPage : UserControl
         if (ViewModel.PictureInHostWindow)
             _cursorVisibilityEvents = new CursorVisibilityEvents(window.Handle, OnSystemCursorChanged);
 
-        ViewModel.Noticed += OnNoticed;
-        ViewModel.RefreshRequested += OnRefreshRequested;
         ViewModel.PlayerShown += EnterPlayer;
         ViewModel.PlayerHidden += LeavePlayer;
         ViewModel.PrepareStopAsync = ReturnToBrowseBeforeStopAsync;
@@ -515,11 +528,10 @@ public sealed partial class PlayerPage : UserControl
 
         // 着色器档位 needs to know how large the picture is being drawn, which only the window can say. Pulled
         // for the launch decision, pushed afterwards — see OnGeometryChanged.
-        ViewModel.MeasureSurface = MeasureSurface;
+        ViewModel.MeasureSurface = () => SurfaceFor(window);
 
-        // 帧同步 needs the other half of 「what screen is this」: how fast it refreshes. Pulled only, and only at
-        // launch — a window dragged to a slower screen mid-film keeps the sync mode it started with.
-        ViewModel.MeasureRefreshHz = () => _window?.RefreshHz() ?? 0;
+        // The launch display belongs to the window, including headless playback after this page detaches.
+        ViewModel.MeasureRefreshHz = window.RefreshHz;
         window.GeometryChanged += OnGeometryChanged;
 
         window.ClientRectTransition += OnClientRectTransition;
@@ -551,6 +563,7 @@ public sealed partial class PlayerPage : UserControl
     /// </summary>
     internal void Shutdown()
     {
+        _presentationGeneration++;
         CancelWindowChange();
         _ticker.Stop();
         DropTapHold();
@@ -571,6 +584,11 @@ public sealed partial class PlayerPage : UserControl
         _onStage = false;
         StopPlayerMotion();
         ViewModel?.Shutdown();
+        if (ViewModel is not null)
+        {
+            ViewModel.MeasureSurface = null;
+            ViewModel.MeasureRefreshHz = null;
+        }
         ReleaseVideoSurface();
     }
 
@@ -597,13 +615,12 @@ public sealed partial class PlayerPage : UserControl
     internal void Detach()
     {
         if (!Attached) return;
+        _presentationGeneration++;
 
         LeavePlayer();
         StopPlayerMotion();
         CompletePlayerExit();
 
-        ViewModel.Noticed -= OnNoticed;
-        ViewModel.RefreshRequested -= OnRefreshRequested;
         ViewModel.PlayerShown -= EnterPlayer;
         ViewModel.PlayerHidden -= LeavePlayer;
         ViewModel.PrepareStopAsync = null;
@@ -618,8 +635,6 @@ public sealed partial class PlayerPage : UserControl
         // 别让它挂着一支没人管的计时器。
         StopSkipCountdown();
 
-        ViewModel.MeasureSurface = null;
-        ViewModel.MeasureRefreshHz = null;
         if (_window is not null)
         {
             _window.GeometryChanged -= OnGeometryChanged;
@@ -648,11 +663,13 @@ public sealed partial class PlayerPage : UserControl
     /// 探针读数在 <c>work/embedprobe/</c>。外部 mpv.exe 后端同样按显示器算，无需再走降级链。
     /// </para>
     /// </summary>
-    private ShaderSurface MeasureSurface()
-    {
-        if (_window is null) return default;
+    private ShaderSurface MeasureSurface() => SurfaceFor(_window);
 
-        var monitor = _window.MonitorSize();
+    private static ShaderSurface SurfaceFor(HostWindow? window)
+    {
+        if (window is null) return default;
+
+        var monitor = window.MonitorSize();
         return new ShaderSurface(monitor.Width, monitor.Height, monitor.Width, monitor.Height, true);
     }
 
@@ -703,6 +720,7 @@ public sealed partial class PlayerPage : UserControl
     {
         if (_shell is null || _window is null || _onStage) return;
 
+        _presentationGeneration++;
         _window.CaptureBrowseGeometry();
         _onStage = true;
         _inputSuspended = false;
@@ -724,6 +742,11 @@ public sealed partial class PlayerPage : UserControl
 
         Visibility = Visibility.Visible;
         Stage.Visibility = Visibility.Visible;
+
+        // 键盘自持（2026-10-02「点击第二屏的窗口之后回车/Esc 失灵」）：播放页自己从不抢焦点，进场后
+        // 没有任何元素持有 XAML 焦点 —— 键掉进岛里两条 XAML 键路都听不见。进场这一拍把焦点收到页面上，
+        // 与 OnChromeClick「点完 chrome 把焦点还给页面」同一句话；已经有人持有焦点时它不动。
+        RestoreKeyboardFocus();
 
         // 退场底与压暗旋钮一定收掉：EnterPlayer 的入口闸只挡「已经在台上」，挡不住「上一次退场没走完
         // 就又进了播放」（换片、连播、用户手快）。一个留在屏上的退场底会盖住这一整趟播放。
@@ -763,6 +786,7 @@ public sealed partial class PlayerPage : UserControl
     {
         if (_shell is null || _window is null || !_onStage) return;
 
+        _presentationGeneration++;
         CancelWindowChange();
         _onStage = false;
         _inputSuspended = true;
@@ -872,6 +896,8 @@ public sealed partial class PlayerPage : UserControl
     /// <summary>A new file is on screen, so the chrome starts its countdown from now.</summary>
     private void OnPlaybackStarted()
     {
+        if (!Attached || !_onStage) return;
+        DropTapHold();
         // Whatever the last file's pause state was, this one has not been paused by anybody yet.
         _paused = null;
 

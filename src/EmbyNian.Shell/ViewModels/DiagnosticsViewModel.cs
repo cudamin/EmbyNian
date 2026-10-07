@@ -449,11 +449,8 @@ public sealed partial class DiagnosticsViewModel : PageViewModel
         if (!Categories.Contains(entry.Category, StringComparer.Ordinal))
             InsertCategory(entry.Category);
 
-        if (Passes(entry))
-        {
-            Rows.Insert(0, new LogRow(entry));
-            ShowEmptyLogs = false;
-        }
+        if (Passes(entry)) Rows.Insert(0, new LogRow(entry));
+        ShowEmptyLogs = Rows.Count == 0;
 
         RefreshCounts();
     }

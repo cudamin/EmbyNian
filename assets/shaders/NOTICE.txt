@@ -1,0 +1,41 @@
+EmbyNian bundled shader notices
+
+These shaders are distributed as editable GLSL/HOOK source files in the adjacent
+subdirectories. Their individual copyright and license notices are retained in
+those source files. No compiled shader cache is part of the distribution.
+
+ArtCNN/*.glsl
+  Upstream: https://github.com/Artoriuz/ArtCNN
+  License: MIT (full notice in each source file).
+
+CfL/*.glsl
+  Upstream: https://github.com/Artoriuz/glsl-chroma-from-luma-prediction
+  License: MIT (full notice in each source file).
+
+igv/SSimDownscaler.glsl
+  Upstream: https://gist.github.com/igv/36508af3ffc84410fe39761d6969be10
+igv/SSimSuperRes.glsl
+  Upstream: https://gist.github.com/igv/2364ffa6e81540f29cb7ab4c9bc05b6b
+  License: LGPL-3.0-or-later. See LICENSE.LGPL-3.0.txt and LICENSE.GPL-3.0.txt.
+
+igv/adaptive-sharpen.glsl
+  Upstream: https://gist.github.com/igv/8a77e4eb8276753b54bb94c1c50c317e
+  License: BSD-2-Clause (full notice in the source file).
+  Local modification: curve_height is 0.5 instead of 1.0.
+
+ravu/*.hook
+  Upstream: https://github.com/bjin/mpv-prescalers
+  License: LGPL-3.0-or-later. See LICENSE.LGPL-3.0.txt and LICENSE.GPL-3.0.txt.
+
+an3223/hdeband.glsl and an3223/nlmeans_light.glsl
+  Upstream: https://github.com/AN3223/dotfiles/tree/master/.config/mpv/shaders
+  License: LGPL-2.1-or-later. See LICENSE.LGPL-2.1.txt.
+
+License text sources (SPDX license-list-data, retrieved 2026-10-04):
+  https://raw.githubusercontent.com/spdx/license-list-data/main/text/LGPL-3.0-only.txt
+  https://raw.githubusercontent.com/spdx/license-list-data/main/text/GPL-3.0-only.txt
+  https://raw.githubusercontent.com/spdx/license-list-data/main/text/LGPL-2.1-only.txt
+The source-file notices retain the option to use a later license version.
+
+The complete distributed shader source and change history are also available at:
+  https://github.com/cudamin/EmbyNian/tree/master/assets/shaders

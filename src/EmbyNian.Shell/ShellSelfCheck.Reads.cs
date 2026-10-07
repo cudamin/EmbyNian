@@ -261,6 +261,7 @@ internal static partial class ShellSelfCheck
             if (group is not { } corner) continue;
 
             ok &= !corner.Chrome
+                && corner.HostSurfaceTransparent
                 && corner.InsetRight is > 0 and <= 16
                 && corner.InsetBottom is > 0 and <= 16
                 && corner.Watch
@@ -289,6 +290,7 @@ internal static partial class ShellSelfCheck
                 + $"、已观看 {Had(card.Watched)}、收藏 {Had(card.Favorite)}、更多 {Had(card.More)}"
                 + $"，图标组离封面右下 {card.InsetRight:0.#},{card.InsetBottom:0.#} 像素、"
                 + (card.Chrome ? "仍有按钮画底色" : "三态都不画底色")
+                + (card.HostSurfaceTransparent ? "、外层按钮三态透明" : "、外层按钮底色检查失败")
                 + (card.Watch ? "、指针位置查得出来" : "、查不到指针位置")
                 + $"，胶片格 {Format(card.FrameRest)} → 指针 {Format(card.FrameActive)}"
                 + (card.FrameFocus ? "、焦点接在外层容器上" : "、找不到能接焦点的容器");
@@ -804,7 +806,7 @@ internal static partial class ShellSelfCheck
             Providers = ["自检"]
         });
 
-        static Task<byte[]?> Fetch(string itemId, string imageType, string tag, int width) => Task.FromResult<byte[]?>(null);
+        static Task<byte[]?> Fetch(string itemId, string imageType, string tag, int width, int? index) => Task.FromResult<byte[]?>(null);
 
         static Task Swap(string itemId, string imageType, int index, RemoteImageInfo chosen) => Task.CompletedTask;
 

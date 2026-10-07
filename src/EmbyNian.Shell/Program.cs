@@ -28,6 +28,10 @@ public sealed record StartupOptions
 
     public string? ProbeCompositionFile { get; init; }
 
+    public bool ProbeShell { get; init; }
+
+    public bool InspectShell { get; init; }
+
     public bool ProbeSubtitles { get; init; }
 
     public bool InspectSubtitles { get; init; }
@@ -241,6 +245,31 @@ internal static class Program
 
         var paths = AppPaths.Default;
 
+        if (RequestsShellProbe(args))
+        {
+            try
+            {
+                ValidateShellProbe(args);
+                using var mutex = new Mutex(false, SelfCheckRun.MutexName);
+                bool acquired;
+                try { acquired = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired) throw new InvalidOperationException("另一个诊断正在使用桌面");
+                try
+                {
+                    paths = new AppPaths(Path.Combine(paths.LogDirectory,
+                        $"shell-probe-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Environment.ProcessId}"));
+                    return Run(args, paths, migratedFrom: null, selfCheck: false);
+                }
+                finally { mutex.ReleaseMutex(); }
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"[失败] Shell 探针准备失败（{error.GetType().Name}）；未启动主程序");
+                return 1;
+            }
+        }
+
         if (RequestsSubtitleProbe(args))
         {
             try
@@ -353,6 +382,8 @@ internal static class Program
             StartMaximized = Has(args, "--maximized"),
             SelfCheck = selfCheck,
             DumpUi = Has(args, "--dump-ui"),
+            ProbeShell = RequestsShellProbe(args),
+            InspectShell = Text(args, "--probe-shell") == "inspect",
             ProbeSubtitles = RequestsSubtitleProbe(args),
             InspectSubtitles = Text(args, "--probe-subtitles") == "inspect",
             ProbeComposition = CompositionPlaybackProbe.IsRequested(args),
@@ -402,7 +433,8 @@ internal static class Program
             });
 
             Log.Info(Category, "正常退出");
-            return options.ProbeSubtitles ? SubtitleSettingsProbe.ExitCode
+            return options.ProbeShell ? ShellNavigationProbe.ExitCode
+                : options.ProbeSubtitles ? SubtitleSettingsProbe.ExitCode
                 : options.ProbeComposition ? CompositionPlaybackProbe.ExitCode
                 : options.ProbeCursor ? CursorVisibilityProbe.ExitCode
                 : options.ProbePlayerMotion ? PlayerMotionProbe.ExitCode : ShellSelfCheck.ExitCode;

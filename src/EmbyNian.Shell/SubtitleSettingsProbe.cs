@@ -59,6 +59,7 @@ internal static class SubtitleSettingsProbe
             await LayoutAsync(page);
             RecordResult("字幕预览模型", SettingSubtitlePreviewRow.Probe());
             RecordResult("字幕删除确认", await SubtitleDialog.ProbeDeleteConfirmationAsync());
+            RecordResult("字幕操作收尾", await SubtitleDialog.ProbeOperationsAsync(page.XamlRoot));
 
             var check = new EgPicker { DisplayMemberPath = "Text", Width = 400 };
             var unavailable = new TrackRow("无法加载", null, false) { IsAvailable = false };
@@ -88,6 +89,7 @@ internal static class SubtitleSettingsProbe
             fontSize.Value = 50;
             var restore = await page.ViewModel.ProbeSubtitleRestoreAsync();
             Record("恢复同步字幕", restore, "恢复默认与导入备份均推送外观，仍是临时设置");
+            Record("字幕应用失败可见", await page.ViewModel.ProbeSubtitlePushFailureAsync(), "假应用委托失败显示提示，不伪装全部成功");
             rows = page.ViewModel.Sections.Single(section => section.Category == "字幕").Rows;
             var preview = rows.OfType<SettingSubtitlePreviewRow>().Single();
             var sizeRow = rows.OfType<SettingSliderRow>().Single(row => row.Label == "字号");

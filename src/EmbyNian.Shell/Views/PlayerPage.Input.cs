@@ -198,7 +198,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnPointerWheel(object sender, PointerRoutedEventArgs e)
     {
-        if (!Attached || e.Handled) return;
+        if (!Attached || e.Handled || _inputSuspended) return;
         var point = e.GetCurrentPoint(Root);
         var delta = point.Properties.MouseWheelDelta;
         if (delta == 0) return;
@@ -229,6 +229,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
+        if (!Attached || _inputSuspended) return;
         var point = e.GetCurrentPoint(Root).Position;
 
         // **叫醒窗口的那一下不作数**（用户令 2026-09-23：「先点一下让窗口置顶，然后再点一下触发暂停/播放」）：
@@ -241,7 +242,9 @@ public sealed partial class PlayerPage : IWin32KeySink
         var waking = WakeClick.IsWaking(foregroundNow, _wasForeground, Now - _foregroundSinceAt);
         _wasForeground = foregroundNow;
 
-        if (BeginWindowDrag(point, e.Pointer))
+        _wakingTap = waking;
+
+        if (e.GetCurrentPoint(Root).Properties.IsLeftButtonPressed && BeginWindowDrag(point, e.Pointer))
         {
             e.Handled = true;
             return;
@@ -376,8 +379,10 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        if (Covers(Bar, e.GetPosition(Root)))
+        if (!Attached || _inputSuspended) return;
+        if (!DoubleTapOnPicture(e.GetPosition(Root), e.OriginalSource))
         {
+            DropTapHold();
             e.Handled = true;
             return;
         }
@@ -390,7 +395,11 @@ public sealed partial class PlayerPage : IWin32KeySink
         if (_chrome.Silence(Now)) Render();
 
         ToggleFullscreen();
+        e.Handled = true;
     }
+
+    private bool DoubleTapOnPicture(Point point, object? origin) => TapOnPicture(point, origin)
+        || (Covers(TitleStrip, point) && !OnStripControl(point) && !Covers(Cover, point));
 
     /// <summary>
     /// 点击画面暂停. Only over the picture: the chrome is full of controls, and the strips they sit on are
@@ -408,7 +417,7 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnTapped(object sender, TappedRoutedEventArgs e)
     {
-        if (!Attached || !TapOnPicture(e.GetPosition(Root), e.OriginalSource))
+        if (!Attached || _inputSuspended || !TapOnPicture(e.GetPosition(Root), e.OriginalSource))
         {
             DropTapHold();
             return;
@@ -422,6 +431,10 @@ public sealed partial class PlayerPage : IWin32KeySink
         if (_wakingTap)
         {
             _wakingTap = false;
+            // 「叫醒窗口的那一下不作数」指的是不暂停/不收提示，键盘却得跟着活过来：这一下把 Win32 焦点
+            // 带进了岛，而 XAML 那头多半没人接（见 RestoreKeyboardFocus）——不接住，下一颗回车/Esc 就死在
+            // 岛里（2026-10-02 用户报「点击第二屏的窗口之后回车/Esc 失灵」的正是这一拍）。
+            RestoreKeyboardFocus();
             DropTapHold();
             e.Handled = true;
             return;
@@ -436,12 +449,14 @@ public sealed partial class PlayerPage : IWin32KeySink
         if (ViewModel.SkipOffered)
         {
             ViewModel.DismissSkip();
+            RestoreKeyboardFocus();
             DropTapHold();
             e.Handled = true;
             return;
         }
 
         TapPicture();
+        RestoreKeyboardFocus();
         e.Handled = true;
     }
 
@@ -456,8 +471,11 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// this is the only shape the self-check can reach.
     /// </para>
     /// </summary>
+    private PlayerViewModel.InteractionContext _tapContext;
+
     private void TapPicture()
     {
+        _tapContext = ViewModel.CaptureInteraction();
         _tap.First(ViewModel.Paused);
         _tapHold.Interval = TimeSpan.FromMilliseconds(PictureTap.ClickDelayMilliseconds);
         _tapHold.Start();
@@ -473,17 +491,23 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         _tapHold.Stop();
 
-        if (_tap.Elapsed() && Attached)
+        if (_tap.Elapsed() && Attached && !_inputSuspended && ViewModel.IsCurrentInteraction(_tapContext))
         {
             // 点击手势的第二环（另两环见 OnPointerPressed 与 SecondTapOnPicture）。
             Log.Debug(LogCategory, "点击画面：攥够到点，下发暂停/播放");
 
+            // 用户令 2026-10-07「暂停时不要自动显示播放控件」：落在暂停上的这一下不唤控件（暂停/播放
+            // 的回执是那枚徽标）；恢复播放照旧给宽限。
+            var resuming = ViewModel.Paused;
             ViewModel.TogglePause();
 
             // 单击证实了才给控件宽限（2026-09-18 随「双击不呼出控件」从按压挪到这里）：快双击从头到尾
             // 没有控件可闪；慢双击的闪只剩攥不住的那一小段，且在切换全屏的当拍由 Silence 收回。
-            if (_cursorHidden) _woke = "点击（画面上按下）";
-            if (_chrome.WakeFully(Now)) Render();
+            if (resuming)
+            {
+                if (_cursorHidden) _woke = "点击（画面上按下）";
+                if (_chrome.WakeFully(Now)) Render();
+            }
         }
     }
 
@@ -507,7 +531,7 @@ public sealed partial class PlayerPage : IWin32KeySink
         // 没下发过（快双击，干净），有值＝刚下发就撤回（慢双击，画面卡了一下）。
         Log.Debug(LogCategory, $"点击画面：双击的第二下（要撤回的暂停＝{(undo is { } value ? value : "无")}）");
 
-        if (undo is { } before && Attached) ViewModel.SetPaused(before);
+        if (undo is { } before && Attached && ViewModel.IsCurrentInteraction(_tapContext)) ViewModel.SetPaused(before);
 
         _pulseMutedAt = Now;
         HidePulse();
@@ -546,8 +570,10 @@ public sealed partial class PlayerPage : IWin32KeySink
         // A keyboard command has no pointer behind it, so the chrome is shown wherever the pointer
         // happens to be resting — otherwise pressing Space over the middle of the picture changes the
         // playback state with nothing on screen to say so. 收提示的两颗例外不叫控件（wake=false）：
-        // 「按回车/ESC 后会唤出进度条」（用户令 2026-09-26），见 Dispatch。
-        if (_cursorHidden) _woke = $"按键 {e.Key}";
+        // 「按回车/ESC 后会唤出进度条」（用户令 2026-09-26），见 Dispatch。落在暂停上的 toggle-pause
+        // 也不叫控件（用户令 2026-10-07「暂停时不要自动显示播放控件」，回执是那枚徽标），
+        // 见 ShortcutCommand —— 所以姓名牌跟着 wake 走，wake 为假时鼠标根本没醒，不挂名。
+        if (wake && _cursorHidden) _woke = $"按键 {e.Key}";
         if (wake && _chrome.WakeFully(Now)) Render();
     }
 
@@ -565,8 +591,10 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// <para>
     /// <paramref name="wakeChrome"/> 答的是「这一下要不要把整套控件叫出来」：跳过提示的那两颗不要 ——
     /// 「按回车/ESC 后会唤出进度条」（用户令 2026-09-26）说的就是它们。收提示是「别挡着」，不是「要看控件」，
-    /// 与点画面收提示（OnTapped 那一支，从来不给宽限）同一句话；其余键照旧给宽限 —— 退全屏、暂停这些命令
-    /// 没有指针在场时，控件是唯一的回执。
+    /// 与点画面收提示（OnTapped 那一支，从来不给宽限）同一句话。其余键照旧给宽限 —— 退全屏这些命令
+    /// 没有指针在场时，控件是唯一的回执；落在暂停上的 toggle-pause 例外（用户令 2026-10-07
+    /// 「暂停时不要自动显示播放控件」，回执是那枚徽标，宽限在 <see cref="ShortcutCommand"/> 里收走），
+    /// 恢复播放照旧给。
     /// </para>
     /// <para>
     /// 其余键走可重绑那张表：认不出的键、查不到动作、或没有处理器的，返回 false，那一下照旧不被吃掉。
@@ -620,6 +648,11 @@ public sealed partial class PlayerPage : IWin32KeySink
         var stroke = new KeyStroke(token, Native.CtrlHeld, Native.AltHeld, Native.ShiftHeld);
         var action = ShortcutCatalog.Lookup(ViewModel.ShortcutBindings, stroke);
         if (action is null || !ShortcutHandlers.TryGetValue(action, out var run)) return false;
+
+        // 用户令 2026-10-07「暂停时不要自动显示播放控件」：落在暂停上的 toggle-pause 不给控件宽限
+        // （回执是那枚徽标），恢复播放照旧。三条键路（岛内 OnKeyDown、Win32 兜底、跳过兜底）的
+        // toggle-pause 都从这一处过，方向只在这里认一次。
+        if (action == "toggle-pause" && !ViewModel.Paused) wakeChrome = false;
 
         run();
         return true;
@@ -686,18 +719,24 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         if (e.Key != VirtualKey.Space || !Attached || _window is null || _inputSuspended) return;
 
-        var stroke = new KeyStroke("Space", false, false, false);
+        var stroke = new KeyStroke("Space", Native.CtrlHeld, Native.AltHeld, Native.ShiftHeld);
         if (ShortcutCatalog.Lookup(ViewModel.ShortcutBindings, stroke) != "toggle-pause") return;
         if (FocusManager.GetFocusedElement() is ButtonBase) return;
 
+        // 用户令 2026-10-07「暂停时不要自动显示播放控件」：落在暂停上的这一下不唤控件（回执是那枚
+        // 徽标）；恢复播放照旧给宽限。与 ShortcutCommand 那条同款 —— 这条专路没经过它，方向得自己认。
+        var resuming = ViewModel.Paused;
         ViewModel.TogglePause();
         e.Handled = true;
 
         // A keyboard command has no pointer behind it, and this one may not even have had the page's usual
         // OnKeyDown half to wake the chrome on its way: show it wherever the pointer is resting, exactly as
-        // OnKeyDown does for its own keys.
-        if (_cursorHidden) _woke = "空格（播放/暂停）";
-        if (_chrome.WakeFully(Now)) Render();
+        // OnKeyDown does for its own keys. 暂停那半不在此列（用户令 2026-10-07，见上）。
+        if (resuming)
+        {
+            if (_cursorHidden) _woke = "空格（播放/暂停）";
+            if (_chrome.WakeFully(Now)) Render();
+        }
     }
 
     /// <summary>
@@ -719,6 +758,21 @@ public sealed partial class PlayerPage : IWin32KeySink
         Focus(FocusState.Programmatic);
     }
 
+    /// <summary>
+    /// 把键盘焦点收回页面 —— 仅当此刻没有任何元素持有焦点。WinUI 的规矩是点击非控件区域不移动 XAML 焦点，
+    /// 而播放页自己从不抢焦点：进场、点画面叫醒窗口之后，Win32 焦点都在岛里、XAML 那头却没有人接 ——
+    /// 没有焦点元素就没有路由事件，页面两条键路（<see cref="OnKeyDown"/>、<see cref="OnSkipKeyFallback"/>）
+    /// 一次都听不见，键死在岛里；钩子那一问（焦点在岛里＝XAML 自己收）也照旧放行，三条路全哑
+    /// （2026-10-02 用户报「点击第二屏的窗口之后回车/Esc 失灵」）。点过画面就是「键盘归播放器」的意思，
+    /// 焦点跟着点走。已有元素持有焦点（控件、弹层）时一概不动 —— 不抢按钮的空格，同 OnKeyDown 的规矩。
+    /// </summary>
+    private void RestoreKeyboardFocus()
+    {
+        if (!Attached || _window is null || _inputSuspended) return;
+        if (FocusManager.GetFocusedElement() is not null) return;
+        Focus(FocusState.Programmatic);
+    }
+
     // ---- Win32 键盘兜底 ----------------------------------------------------------
     //
     // 「新增esc退出全屏 按空格开始播放」（2026-09-15）。OnKeyDown 和 OnSpaceShortcut 都只在 Win32
@@ -727,21 +781,41 @@ public sealed partial class PlayerPage : IWin32KeySink
     // 没有，全是这条。窗口的线程级 WH_KEYBOARD 钩子在焦点不在岛里时把空格和 Esc 送到这里；焦点在
     // 岛里时它一概放行，两条路永远只有一条出键。
 
-    /// <summary>接不接这一下。菜单/弹层开着让路，其余只认空格和 Esc 两颗。</summary>
+    /// <summary>
+    /// 接不接这一下。菜单/弹层开着让路，其余只认空格、Esc 和回车三颗。
+    /// <para>
+    /// 回车是 2026-09-30 补进来的（用户报「按回车和 esc 确认跳过不生效」）：跳过提示立着时回车＝确认跳过
+    /// （原 Y，用户令 2026-09-26），而这一颗过去在这条兜底路上被整个丢掉了 —— <c>HostWindow</c> 的钩子
+    /// 根本不往上送。焦点掉出 XAML 岛（全屏期间前台被别的应用抢过、焦点落在宿主窗或视频子窗上）时，
+    /// 岛内那两条键路一条都听不见，于是提示立着、回车按下去没反应。接进来之后由
+    /// <see cref="Dispatch"/> 决定它有没有事可做 —— 提示不在时回车会落到可重绑那张表，查不到动作就返回
+    /// false、钩子照旧放行，不抢别人（比如焦点停在按钮上按回车＝按那颗按钮）的键。
+    /// </para>
+    /// </summary>
     bool IWin32KeySink.WantsKey(int virtualKey)
     {
         if (!Attached || _inputSuspended) return false;
 
         // 焦点在弹层上时 Win32 焦点本来就在岛里、走不到这里；这道闸留给「弹层开着而焦点又掉出岛」
-        // 这种状态机打架的时刻 —— Esc 该归 XAML 去关弹层，兜底路不越权。
-        if (_holds.HasFlag(ChromeHold.Menu)) return false;
+        // 这种状态机打架的时刻 —— Esc 该归 XAML 去关弹层，兜底路不越权。右键画面菜单没有挂钉住的账
+        // （它走的是收下去那一路，见 HoldPictureMenu），所以单独问一句。
+        if (_holds.HasFlag(ChromeHold.Menu) || _chrome.PictureMenuOpen) return false;
 
-        return virtualKey is (int)VirtualKey.Space or (int)VirtualKey.Escape;
+        return virtualKey is (int)VirtualKey.Space or (int)VirtualKey.Escape or (int)VirtualKey.Enter;
     }
 
     /// <summary>
-    /// 接。与岛内两条键路同一句话（<see cref="Dispatch"/>）：Esc 全屏则退全屏、非全屏则停止播放；
-    /// 空格走可重绑表 —— 表里默认绑在 toggle-pause 上，重绑走了兜底路跟着走，岛内岛外永远做同一件事。
+    /// 岛内此刻有没有元素真接着键盘。钩子问的：焦点 HWND 在岛里通常等于「XAML 自己收、兜底路放行」，
+    /// 但有一段「焦点进了岛、XAML 没人接」的状态（点击叫醒窗口那一拍、进场那一拍；见
+    /// <see cref="RestoreKeyboardFocus"/>）—— 那时键掉进岛里就死，兜底路要替 XAML 收下。回答由页面给，
+    /// 钩子在线程上、与本页同一线程（线程钩子），读 FocusManager 无跨线之忧。
+    /// </summary>
+    public bool IslandKeyboardFocusAlive => FocusManager.GetFocusedElement() is not null;
+
+    /// <summary>
+    /// 接。与岛内两条键路同一句话（<see cref="Dispatch"/>）：Esc 全屏则退全屏、非全屏则停止播放（提示立着
+    /// 时先归「关闭提示」）、回车只在提示立着时确认跳过；空格走可重绑表 —— 表里默认绑在 toggle-pause 上，
+    /// 重绑走了兜底路跟着走，岛内岛外永远做同一件事。
     /// </summary>
     void IWin32KeySink.Handle(int virtualKey)
     {
@@ -749,9 +823,49 @@ public sealed partial class PlayerPage : IWin32KeySink
         if (!Attached || _inputSuspended || !Dispatch(key, out var wake)) return;
 
         // 姓名牌：兜底路自己的名字，和 XAML 那两路（「按键 X」「空格（播放/暂停）」）分得开 ——
-        // 以后日志里见到「（Win32 兜底）」就是焦点掉出岛的那一阵。收提示那两颗不给控件宽限，
-        // 与岛内那条路同一句话（wake=false）。
-        if (_cursorHidden) _woke = key == VirtualKey.Space ? "空格（播放/暂停，Win32 兜底）" : $"按键 {key}（Win32 兜底）";
+        // 以后日志里见到「（Win32 兜底）」就是焦点掉出岛的那一阵。收提示那两颗与落在暂停上的
+        // toggle-pause 都不给控件宽限（wake=false，用户令 2026-09-26 / 2026-10-07），鼠标没醒不挂名。
+        if (wake && _cursorHidden) _woke = key == VirtualKey.Space ? "空格（播放/暂停，Win32 兜底）" : $"按键 {key}（Win32 兜底）";
+        if (wake && _chrome.WakeFully(Now)) Render();
+    }
+
+    /// <summary>
+    /// 跳过提示立着时，回车／Esc 从 <see cref="Root"/> 上再兜一道（带 <c>handledEventsToo</c>）。
+    /// <para>
+    /// <b>为什么需要这一道</b>（2026-09-30 用户报「按回车和 esc 确认跳过不生效」）：跳过提示是**常驻**
+    /// 立着的，而它一立起，指针多半正压在 <c>SkipButton</c> 自己身上 —— 那颗 <c>Button</c> 是
+    /// <c>ButtonBase</c>，回车与空格在它身上都算「按这一颗按钮」，事件在它那里就被标了已处理。页面那一路
+    /// （<see cref="OnKeyDown"/> 的 <c>KeyDown += OnKeyDown</c>）**特意不带 handledEventsToo**（那是为了
+    /// 不抢焦点按钮的空格，理由见 <see cref="OnKeyDown"/>），于是提示立着时按回车，事件到不了
+    /// <see cref="Dispatch"/>，什么都没发生 —— 而「确认跳过」正是提示立着时回车唯一的语义，用户按下去
+    /// 期待的是跳，不是「再按一次这颗按钮」。
+    /// </para>
+    /// <para>
+    /// <b>只在提示立着时接</b>：这一道是给跳过提示开的口子，不是给回车/Esc 改规矩。提示不在时直接返回、
+    /// 不标已处理，那颗焦点按钮照旧按按钮的规矩收自己的回车；Esc 也照旧走页面那一路（退全屏/停止），
+    /// 或落进 mpv。这一道只在「提示立着」这一个状态下把两颗键收进 <see cref="Dispatch"/>。
+    /// </para>
+    /// <para>
+    /// 与 <see cref="OnSpaceShortcut"/> 同一套防重：处理完标已处理，页面那一路（在树上更靠外、这次冒泡
+    /// 到不了）不会再走第二遍。焦点在页面上时空格那一颗只从 <see cref="OnKeyDown"/> 走；回车/Esc 这一头
+    /// 现在两条路都可能到（页面那一路处理完会标已处理，就不再冒到这里），一颗键每次按键只执行一次。
+    /// </para>
+    /// </summary>
+    private void OnSkipKeyFallback(object sender, KeyRoutedEventArgs e)
+    {
+        if (!Attached || _window is null || _inputSuspended) return;
+
+        if (e.Key is not (VirtualKey.Enter or VirtualKey.Escape)) return;
+
+        // 提示不在：这一道不开，回车/Esc 的规矩一点不动。
+        if (!ViewModel.SkipOffered) return;
+
+        if (!Dispatch(e.Key, out var wake)) return;
+
+        e.Handled = true;
+
+        // 与岛内那一路同一句话：收提示的两颗不给控件宽限（wake=false），见 Dispatch。
+        if (wake && _cursorHidden) _woke = $"按键 {e.Key}";
         if (wake && _chrome.WakeFully(Now)) Render();
     }
 
@@ -759,10 +873,13 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// 自检：上面两条 Root 接线（空格拦截、chrome 焦点归还）都真的挂上了。注册被拆掉是「按空格没反应」
     /// 最静默的死法 —— 键盘到不了页面那一路，屏上什么都看不见，编译也看不出，只有这里能问。
     /// </summary>
-    internal bool SpaceAndFocusWiringArmed => _spaceShortcutArmed && _chromeBlurArmed;
+    internal bool SpaceAndFocusWiringArmed => _spaceShortcutArmed && _chromeBlurArmed && _skipKeyArmed;
 
     private bool _spaceShortcutArmed;
     private bool _chromeBlurArmed;
+
+    /// <summary>跳过提示那两颗键的兜底接线（<see cref="OnSkipKeyFallback"/>）挂上了没有。</summary>
+    private bool _skipKeyArmed;
 
     // ---- the window -------------------------------------------------------------
 

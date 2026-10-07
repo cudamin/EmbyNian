@@ -39,11 +39,13 @@ public static class ShaderSwitch
         var order = new List<string>();
 
         foreach (var (name, neutral) in ShaderGroupCatalog.NeutralOptions)
-            Set(name, LaunchValue(name) ?? (defaults?.TryGetValue(name, out var fallback) == true ? fallback : neutral));
-
-        Set("glsl-shaders", group is null ? "" : MpvListValue.JoinFiles(group.ResolveShaderPaths(shaderRoot)));
+        {
+            if (name != "glsl-shaders")
+                Set(name, LaunchValue(name) ?? (defaults?.TryGetValue(name, out var fallback) == true ? fallback : neutral));
+        }
 
         foreach (var (name, value) in group?.Options ?? []) Set(name, value);
+        Set("glsl-shaders", group is null ? "" : MpvListValue.JoinFiles(group.ResolveShaderPaths(shaderRoot)));
 
         return [.. order.Select(name => new KeyValuePair<string, string>(name, applied[name]))];
 

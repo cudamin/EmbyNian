@@ -123,6 +123,12 @@ public sealed partial class PlayerPage
                 timer.Stop();
                 return;
             }
+            // 窗口交接尚未结束时，六秒兜底也不能提前把承接原生背景的加载层淡掉。
+            if (_startupHandoverPending)
+            {
+                _revealStarted = Now;
+                return;
+            }
             _videoTarget.RefreshPresentation();
             if (PictureReady)
             {

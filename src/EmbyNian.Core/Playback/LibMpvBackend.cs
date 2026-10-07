@@ -65,8 +65,9 @@ public sealed class LibMpvBackend(
     /// </summary>
     public static string? Locate(MpvSettings settings) => Probes(settings).FirstOrDefault(File.Exists);
 
-    public Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken)
+    public async Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         IntPtr context = IntPtr.Zero;
         try
         {
@@ -162,31 +163,21 @@ public sealed class LibMpvBackend(
             // 逐项相等才允许同一个实例换片，因为 mpv 的启动选项在 initialize 之后改不动。
             // 下一次的签名按当时的设置现算（管线换了就自然对不上）；独立管线的选项表不含画布尺寸，
             // 所以这里不传 size —— 集成管线本来就不走这条快路（surface 非空）。
-            var signature = new PlaybackLaunchSignature(
-                settings.Pipeline,
-                pipelineOptions,
-                [.. uiOptions ?? []],
-                [.. seekKeys ?? []],
-                Baseline(request.PlayerOptions, request.ShaderOptionCount));
-
-            var handle = new LibMpvHandle(context, surface, signature, next => new PlaybackLaunchSignature(
-                settings.Pipeline,
-                [.. LibMpvPipelinePolicy.Build(settings.Pipeline, next.PlayerOptions)
-                    .Select(option => new KeyValuePair<string, string>(option.Name, option.Value))],
-                [.. uiOptions ?? []],
-                // 方向键这一节下一次**重算**，不抄上面那份快照：它随设置走，而签名在这里的作用正是「设置
-                // 改过就别拿旧的一层接着用」（换片前把大步跨度从 30 改成 20 —— 不复用实例，重发 keybind）。
-                // 其余几节是装箱与管线的固定契约，抄快照才对。
-                settings.Pipeline == VideoPipelineKind.Standalone
-                    ? [.. MpvSeekKeys.Bindings(playback)]
-                    : (IReadOnlyList<KeyValuePair<string, string>>)[],
-                Baseline(next.PlayerOptions, next.ShaderOptionCount)));
-            handle.Start(request);
-            context = IntPtr.Zero; // ownership moved to the handle
+            cancellationToken.ThrowIfCancellationRequested();
+            var signature = Signature(settings, playback, request, uiOptions ?? []);
+            var handle = new LibMpvHandle(context, surface, signature,
+                next => Signature(settings, playback, next, uiOptions ?? []));
+            context = IntPtr.Zero;
+            try { handle.Start(request, cancellationToken); }
+            catch
+            {
+                await handle.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
             Log.Info(Category, uiOptions is null
                 ? $"内置播放器已就绪（{dllPath}）"
                 : $"内置播放器已就绪，视频窗 Lua UI 已装载（{dllPath}）");
-            return Task.FromResult<IPlaybackHandle>(handle);
+            return handle;
         }
         catch (Exception error) when (error is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
         {
@@ -282,7 +273,8 @@ public sealed class LibMpvBackend(
         {
             var fields = string.Join(",",
                 request.HttpHeaders.Select(header => $"{header.Key}: {MpvListValue.Escape(header.Value)}"));
-            Set(context, "http-header-fields", fields);
+            if (LibMpvNative.mpv_set_option_string(context, "http-header-fields", fields) < 0)
+                throw new InvalidOperationException("内置播放器未接受认证请求头，已停止启动");
         }
 
         if (!string.IsNullOrWhiteSpace(request.Title)) Set(context, "force-media-title", request.Title);
@@ -336,49 +328,31 @@ public sealed class LibMpvBackend(
     private static string FormatSeconds(double value) =>
         Math.Max(0, value).ToString("0.###", CultureInfo.InvariantCulture);
 
-    /// <summary>
-    /// Switches off every event type this client never reads — mpv.net's own opening move (its
-    /// <c>MainPlayer.Init</c> disables the whole enum and keeps only what it consumes). An event
-    /// the loop discards still costs a queue entry, a thread wakeup and a marshalled struct, and
-    /// the loop reads exactly six: shutdown, log-message, end-file, file-loaded, property-change
-    /// and queue-overflow. What remains — the three reply types (every call here is synchronous,
-    /// so they were never fired anyway), start-file, the two reconfigs, seek and hook — was
-    /// delivered only to be picked up and thrown away, so a seek burst or a resize storm queued
-    /// nothing at all. <c>playback-restart</c> was in that list too until the 背景图黑屏那一天
-    /// （见 <see cref="PictureReveal"/>）：它是「首帧上屏」的唯一通知，现在由事件循环消费。
-    /// <para>
-    /// ClientMessage（Lua 脚本的 script-message）是这条规则的唯一条件豁免：独占模式装载 uosc 时，
-    /// 它是脚本向宿主报「已就绪」和送换集请求的唯一通道，必须保留；其余播放照旧停订。
-    /// </para>
-    /// <para>
-    /// <c>playback-restart</c> 是唯一的例外，而且它必须留着：那是「首帧已经交给视频输出」的唯一通知，
-    /// 加载遮罩（背景图）揭不揭就靠它 —— 见 <see cref="PictureReveal"/>。它不在启动期成串，一次播放里
-    /// 只在起播与每次 seek 落定时各来一条。
-    /// </para>
-    /// <para>
-    /// Deliberately before <c>mpv_initialize</c>, so nothing mpv does during startup queues either.
-    /// mpv keeps a few event types for itself ("some events can't be disabled"), but a refusal is
-    /// an error return and nothing more: the loop already ignores whatever still arrives, so every
-    /// entry here degrades to no-op at worst. The deprecated ids (idle, tick) are not named — the
-    /// bundled 0.41 build does not send them, and an older dll in the user's own care is exactly
-    /// the case where today's arrive-and-be-ignored behaviour was already the answer.
-    /// </para>
-    /// </summary>
+    /// <summary>Only initialization invariants enter the signature; film-specific values are reset on swap.</summary>
+    internal static PlaybackLaunchSignature Signature(MpvSettings settings, PlaybackSettings playback,
+        PlaybackRequest request, IReadOnlyList<KeyValuePair<string, string>> uiOptions) => new(
+            settings.Pipeline,
+            [.. LibMpvPipelinePolicy.Build(settings.Pipeline, []).Where(option => option.Required)
+                .Select(option => new KeyValuePair<string, string>(option.Name, option.Value))],
+            [.. uiOptions],
+            settings.Pipeline == VideoPipelineKind.Standalone ? [.. MpvSeekKeys.Bindings(playback)] : [],
+            Baseline(request.PlayerOptions, request.ShaderOptionCount))
+        { Backend = settings.Backend };
+
+    internal static IReadOnlyList<int> UnusedEvents { get; } =
+    [
+        LibMpvNative.EventGetPropertyReply,
+        LibMpvNative.EventSetPropertyReply,
+        LibMpvNative.EventCommandReply,
+        LibMpvNative.EventVideoReconfig,
+        LibMpvNative.EventAudioReconfig,
+        LibMpvNative.EventSeek,
+        LibMpvNative.EventHook
+    ];
+
     private static void PruneEvents(IntPtr context, bool keepClientMessage)
     {
-        Span<int> unused =
-        [
-            LibMpvNative.EventGetPropertyReply,
-            LibMpvNative.EventSetPropertyReply,
-            LibMpvNative.EventCommandReply,
-            LibMpvNative.EventStartFile,
-            LibMpvNative.EventVideoReconfig,
-            LibMpvNative.EventAudioReconfig,
-            LibMpvNative.EventSeek,
-            LibMpvNative.EventHook
-        ];
-
-        foreach (var eventId in unused)
+        foreach (var eventId in UnusedEvents)
         {
             var error = LibMpvNative.mpv_request_event(context, eventId, 0);
             if (error < 0) Log.Debug(Category, $"停订 mpv 事件 {eventId} 未被接受：{Describe(error)}");
@@ -489,7 +463,6 @@ internal sealed class LibMpvHandle(
     Func<PlaybackRequest, PlaybackLaunchSignature>? signatureFor) : IPlaybackHandle, IPlayerControl, IPlayerHostMessages
 {
     private const string Category = "mpv";
-    private const int LogTailLines = 40;
     private const int ClientMessageMaxArgs = 32;
 
     // Observed properties are identified by reply id rather than by name: the event carries the
@@ -523,8 +496,6 @@ internal sealed class LibMpvHandle(
     private const ulong ObserveChapters = 15;
     private const ulong ObserveLoopA = 16;
     private const ulong ObserveLoopB = 17;
-
-    private readonly Queue<string> _logTail = new(LogTailLines);
 
     /// <summary>
     /// 这一跑的收场信号。换片快路会把它换成新的一只（见 <see cref="SwapToAsync"/>）：旧的被
@@ -594,8 +565,9 @@ internal sealed class LibMpvHandle(
     public bool VideoWindowUiReady { get; private set; }
 
     /// <summary>Starts the event thread, subscribes to the state the chrome needs, then loads the file.</summary>
-    internal void Start(PlaybackRequest request)
+    internal void Start(PlaybackRequest request, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // 换片要用的「出厂值」在这一拍读：事件线程还没起来，没有任何并发，而且此刻还没有任何一集
         // 改过这些属性（见 InlineSwitch.FilmScoped 的说明）。
         _filmDefaults = ReadFilmDefaults();
@@ -640,10 +612,14 @@ internal sealed class LibMpvHandle(
             Observe(ObserveVoConfigured, "vo-configured", LibMpvNative.FormatFlag);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         _eventThread = new Thread(EventLoop) { IsBackground = true, Name = "libmpv-events" };
         _eventThread.Start();
 
-        Command("loadfile", request.MediaUrl.AbsoluteUri, "replace");
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Command("loadfile", request.MediaUrl.AbsoluteUri, "replace"))
+            throw new InvalidOperationException("内置播放器未接受媒体加载命令");
+        cancellationToken.ThrowIfCancellationRequested();
         Log.Info(Category, $"内置播放器开始播放 {request.MediaUrl.AbsoluteUri}");
     }
 
@@ -658,79 +634,64 @@ internal sealed class LibMpvHandle(
 
     public bool WasHandedOver => _handedOver;
 
-    public bool CanSwapTo(PlaybackRequest request) =>
-        Swapable && InlineSwitch.SameSignature(signature!, signatureFor!(request));
+    public bool CanSwapTo(PlaybackRequest request) => Guard(() =>
+        Swapable && _status.Loaded && !_swapping
+        && InlineSwitch.CanTakeOver(_stopRequested, _handedOver, _exit.Task.IsCompleted, _apiGate.IsDestroyed)
+        && InlineSwitch.SameSignature(signature!, signatureFor!(request)));
 
-    /// <summary>
-    /// 叫醒正等着这一跑的监视（它去发「停止」与最后位置的上报），但**不 quit** —— 这正是「不关窗」
-    /// 与「关窗重开」的分界。mpv 还活着、还是 idle，下一集的 loadfile 紧接着就来。
-    /// </summary>
-    public void HandOver()
+    public void HandOver() => Guard(() =>
     {
+        if (_stopRequested || _exit.Task.IsCompleted) return false;
         _handedOver = true;
+        _apiGate.NextGeneration();
         _exit.TrySetResult(new PlaybackExit(PlaybackEndReason.Stopped, LastPosition, 0, null));
-    }
+        return true;
+    });
 
     public Task<bool> SwapToAsync(PlaybackRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Guard(() => Swap(request, cancellationToken)));
+    }
 
-        if (!Swapable) return Task.FromResult(false);
-
-        // 三处「不接」都要说得出理由：签名对不上（启动配置变了，事后改也无效）、实例不在可接续的
-        // 状态、命令被拒。前两处是判断，第三处是 mpv 的答复 —— 都退回「停掉重开」那条老路。
-        if (!InlineSwitch.SameSignature(signature!, signatureFor!(request)))
-        {
-            Log.Info(Category, "换片快路让位：这一次的启动配置与正在跑的那份不同（管线或选项变了）");
-            return Task.FromResult(false);
-        }
-
-        // 「已经在收场」的判据在 InlineSwitch.CanTakeOver：交接（HandOver）完成旧收场信号是快路的
-        // **正常入口** —— 那是叫醒监视去发「停止」上报，不是实例在收场。真正要挡的是用户叫停过
-        // （quit 在路上）、没交接过但信号已完成（文件真放完或报错）、以及实例已销毁。从前这道闸
-        // 把「已交接且信号已完成」也拒了，同窗换片整个被自己挡死。
-        if (!InlineSwitch.CanTakeOver(
-                stopRequested: _stopRequested,
-                handedOver: _handedOver,
-                exitCompleted: _exit.Task.IsCompleted,
-                destroyed: _apiGate.IsDestroyed))
-        {
-            Log.Info(Category, "换片快路让位：这个实例已经在收场（被叫停、放完或已销毁）");
-            return Task.FromResult(false);
-        }
+    private bool Swap(PlaybackRequest request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Swapable || !InlineSwitch.SameSignature(signature!, signatureFor!(request))
+            || !InlineSwitch.CanTakeOver(_stopRequested, _handedOver, _exit.Task.IsCompleted, _apiGate.IsDestroyed)) return false;
 
         IReadOnlyList<KeyValuePair<string, string>> filmOptions;
-        try
-        {
-            filmOptions = InlineSwitch.FilmScoped(_filmDefaults, request, ReadText("profile-list"));
-        }
+        try { filmOptions = InlineSwitch.FilmScoped(_filmDefaults, request, ReadText("profile-list")); }
         catch (Exception error)
         {
             Log.Warn(Category, "换片无法恢复画质预设，改为重新启动播放器", error);
-            return Task.FromResult(false);
+            return false;
         }
-        foreach (var (name, value) in filmOptions) Write(name, value);
-        foreach (var (name, value) in InlineSwitch.PerFile(request)) Write(name, value);
 
-        // 上一集的位置当场作废：这一票要是打不开（候选版本还有下一版要试），收尾报的也不该是别人的位置。
-        // 上一跑的最后位置已经在 HandOver 那一拍读走了，这里清掉不影响它的上报。
-        Interlocked.Exchange(ref _lastPositionMs, -1);
-
-        // 新一跑的收场信号；「这次 loadfile 是换片」的记号给事件线程用（忽略被替掉那份的 end-file、
-        // 在 start-file 清掉上一集的读数）；交接旗翻回来，这一跑收尾时该拆就得拆（它是上一跑的事）。
-        _exit = new TaskCompletionSource<PlaybackExit>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _apiGate.NextGeneration();
+        foreach (var (name, value) in filmOptions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Write(name, value)) return false;
+        }
+        foreach (var (name, value) in InlineSwitch.PerFile(request))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Write(name, value)) return false;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         _swapping = true;
+        _exit = new TaskCompletionSource<PlaybackExit>(TaskCreationOptions.RunContinuationsAsynchronously);
         _handedOver = false;
-
+        Interlocked.Exchange(ref _lastPositionMs, -1);
         if (!Command("loadfile", request.MediaUrl.AbsoluteUri, "replace"))
         {
             _swapping = false;
-            Log.Warn(Category, "换片快路让位：loadfile 未被接受");
-            return Task.FromResult(false);
+            _exit.TrySetResult(new PlaybackExit(PlaybackEndReason.Error, null, -1, "换片加载命令未被接受"));
+            return false;
         }
-
         Log.Info(Category, $"独占换片：不关窗口，同一个 mpv 换源 —— {request.Title}");
-        return Task.FromResult(true);
+        return true;
     }
 
     /// <summary>
@@ -767,12 +728,12 @@ internal sealed class LibMpvHandle(
         }
     });
 
-    /// <summary>写一条属性，失败记一条日志（不拦下换片：写不进去的最坏结果是这一集沿用上一集的某项设置）。</summary>
-    private void Write(string name, string value) => Guard(() =>
+    /// <summary>A rejected reset, especially authentication, must not be followed by loading another file.</summary>
+    private bool Write(string name, string value) => Guard(() =>
     {
         var error = LibMpvNative.mpv_set_property_string(context, name, value);
         if (error < 0) Log.Warn(Category, $"写 mpv 属性 {name} 失败：{LibMpvBackend.Describe(error)}");
-        return true;
+        return error >= 0;
     });
 
     private void Observe(ulong id, string name, int format)
@@ -796,95 +757,112 @@ internal sealed class LibMpvHandle(
             if (pointer == IntPtr.Zero) continue;
 
             var mpvEvent = Marshal.PtrToStructure<LibMpvNative.MpvEvent>(pointer);
-            switch (mpvEvent.EventId)
+            try
             {
-                case LibMpvNative.EventShutdown:
-                    Log.Info(Category, "内置播放器已关闭");
-                    Finish(_stopRequested ? PlaybackEndReason.Stopped : PlaybackEndReason.UserQuit, 0);
-                    return;
-
-                case LibMpvNative.EventEndFile:
-                    var end = Marshal.PtrToStructure<LibMpvNative.MpvEventEndFile>(mpvEvent.Data);
-                    Log.Debug(Category, $"内置播放器报告文件结束：reason={end.Reason} error={end.Error}");
-
-                    // 换源那一下，mpv 会替**被换掉的那个文件**报一条 end-file，然后才 start-file（实测
-                    // 2026-09-19：两次换源两条 end-file）。照单全收的话新一集的监视会当场以为播完了，
-                    // 界面立刻退回浏览页 —— 所以从发出 loadfile 到新文件 start-file 之间，这条不算数。
-                    if (_swapping)
-                    {
-                        Log.Debug(Category, "（这条属于被换掉的那个文件，不计入本次播放）");
-                        break;
-                    }
-
-                    Finish(Classify(end.Reason), end.Error);
-                    break;
-
-                case LibMpvNative.EventStartFile:
-                    // 新文件的装载从此开始：换片那一刻起，「这一跑」的读数就该重新算了（位置尤其要紧 ——
-                    // 留着上一集的位置，这一集被停掉时上报的「看到哪儿」就是别人的）。
-                    if (_swapping)
-                    {
-                        _swapping = false;
-                        Interlocked.Exchange(ref _lastPositionMs, -1);
-                        _status = _status with
-                        {
-                            Position = -1,
-                            Duration = 0,
-                            CacheEnd = 0,
-                            Loaded = false,
-                            Cache = TimelineCache.Empty,
-                            Chapters = null,
-                            LoopA = null,
-                            LoopB = null
-                        };
-                        Log.Info(Category, "独占换片：同一个视频窗已换上新片源（窗口与 Lua UI 都没动）");
-                    }
-                    break;
-
-                case LibMpvNative.EventFileLoaded:
-                    // 只有声音的文件（没有视频轨）永远不会让 vo 立起来，force-window=no 之下就一个窗口都
-                    // 没有 —— 那种片子还是得给扇窗，不然连 uosc 的控件都无处可画。视频文件走 vo-configured
-                    // 那条路（见 OnPropertyChange），这里是给「没有画面可等」的情形兜底。
-                    if (surface is null && !_windowHeld && (ReadText("vid") is null or "no"))
-                    {
-                        _windowHeld = true;
-                        Write("force-window", "yes");
-                        Log.Debug(Category, "这一版没有视频轨，独占窗口提前立起（force-window=yes）");
-                    }
-
-                    Publish(_status with { Loaded = true, Chapters = ReadChapterList() ?? [] });
-                    PublishTracks();
-                    break;
-
-                case LibMpvNative.EventPlaybackRestart:
-                    // 首帧已经交给视频输出 —— 加载遮罩（背景图）唯一的揭开判据，见 PictureReveal。
-                    // mpv 在每次 seek 落定时也会补一条（那一拍画面确实已经回来了，说「播放重新开始」
-                    // 并不假），而这一位一旦为真就该保持为真：遮罩只在起播那一段等着它。
-                    Log.Debug(Category, "mpv 报告播放真的开始了（首帧已交给视频输出）");
-                    Publish(_status with { PictureStarted = true });
-                    break;
-
-                case LibMpvNative.EventPropertyChange:
-                    OnPropertyChange(mpvEvent);
-                    break;
-
-                case LibMpvNative.EventClientMessage:
-                    OnClientMessage(mpvEvent.Data);
-                    break;
-
-                case LibMpvNative.EventQueueOverflow:
-                    // mpv drops events when the client falls too far behind and says so with this
-                    // one. Observers re-notify on their next change, but a stall otherwise leaves
-                    // no trace — without it a dropped file-loaded would read as mpv going quiet
-                    // for no reason.
-                    Log.Warn(Category, "mpv 事件队列溢出，溢出期间的通知已丢失");
-                    break;
-
-                case LibMpvNative.EventLogMessage:
-                    RememberLog(mpvEvent.Data);
-                    break;
+                if (Guard(() => ProcessEvent(mpvEvent))) return;
+            }
+            catch (Exception error)
+            {
+                Log.Warn(Category, "处理内置播放器事件失败", error);
             }
         }
+    }
+
+    private bool ProcessEvent(LibMpvNative.MpvEvent mpvEvent)
+    {
+        if (_swapping && mpvEvent.EventId is LibMpvNative.EventPropertyChange or LibMpvNative.EventFileLoaded
+            or LibMpvNative.EventPlaybackRestart or LibMpvNative.EventClientMessage) return false;
+        switch (mpvEvent.EventId)
+        {
+            case LibMpvNative.EventShutdown:
+                Log.Info(Category, "内置播放器已关闭");
+                Finish(_stopRequested ? PlaybackEndReason.Stopped : PlaybackEndReason.UserQuit, 0);
+                return true;
+
+            case LibMpvNative.EventEndFile:
+                var end = Marshal.PtrToStructure<LibMpvNative.MpvEventEndFile>(mpvEvent.Data);
+                Log.Debug(Category, $"内置播放器报告文件结束：reason={end.Reason} error={end.Error}");
+
+                // 换源那一下，mpv 会替**被换掉的那个文件**报一条 end-file，然后才 start-file（实测
+                // 2026-09-19：两次换源两条 end-file）。照单全收的话新一集的监视会当场以为播完了，
+                // 界面立刻退回浏览页 —— 所以从发出 loadfile 到新文件 start-file 之间，这条不算数。
+                if (_swapping)
+                {
+                    Log.Debug(Category, "（这条属于被换掉的那个文件，不计入本次播放）");
+                    break;
+                }
+
+                Finish(Classify(end.Reason), end.Error);
+                break;
+
+            case LibMpvNative.EventStartFile:
+                // 新文件的装载从此开始：换片那一刻起，「这一跑」的读数就该重新算了（位置尤其要紧 ——
+                // 留着上一集的位置，这一集被停掉时上报的「看到哪儿」就是别人的）。
+                if (_swapping)
+                {
+                    _swapping = false;
+                    Interlocked.Exchange(ref _lastPositionMs, -1);
+                    _status = _status with
+                    {
+                        Position = -1,
+                        Duration = 0,
+                        CacheEnd = 0,
+                        Loaded = false,
+                        PictureStarted = false,
+                        Buffering = false,
+                        Cache = TimelineCache.Empty,
+                        Chapters = null,
+                        LoopA = null,
+                        LoopB = null
+                    };
+                    Log.Info(Category, "独占换片：同一个视频窗已换上新片源（窗口与 Lua UI 都没动）");
+                }
+                break;
+
+            case LibMpvNative.EventFileLoaded:
+                // 只有声音的文件（没有视频轨）永远不会让 vo 立起来，force-window=no 之下就一个窗口都
+                // 没有 —— 那种片子还是得给扇窗，不然连 uosc 的控件都无处可画。视频文件走 vo-configured
+                // 那条路（见 OnPropertyChange），这里是给「没有画面可等」的情形兜底。
+                if (surface is null && !_windowHeld && (ReadText("vid") is null or "no"))
+                {
+                    _windowHeld = true;
+                    Write("force-window", "yes");
+                    Log.Debug(Category, "这一版没有视频轨，独占窗口提前立起（force-window=yes）");
+                }
+
+                Publish(_status with { Loaded = true, Chapters = ReadChapterList() ?? [] });
+                PublishTracks();
+                break;
+
+            case LibMpvNative.EventPlaybackRestart:
+                // 首帧已经交给视频输出 —— 加载遮罩（背景图）唯一的揭开判据，见 PictureReveal。
+                // mpv 在每次 seek 落定时也会补一条（那一拍画面确实已经回来了，说「播放重新开始」
+                // 并不假），而这一位一旦为真就该保持为真：遮罩只在起播那一段等着它。
+                Log.Debug(Category, "mpv 报告播放真的开始了（首帧已交给视频输出）");
+                Publish(_status with { PictureStarted = true });
+                break;
+
+            case LibMpvNative.EventPropertyChange:
+                OnPropertyChange(mpvEvent);
+                break;
+
+            case LibMpvNative.EventClientMessage:
+                OnClientMessage(mpvEvent.Data);
+                break;
+
+            case LibMpvNative.EventQueueOverflow:
+                // mpv drops events when the client falls too far behind and says so with this
+                // one. Observers re-notify on their next change, but a stall otherwise leaves
+                // no trace — without it a dropped file-loaded would read as mpv going quiet
+                // for no reason.
+                Log.Warn(Category, "mpv 事件队列溢出，溢出期间的通知已丢失");
+                break;
+
+            case LibMpvNative.EventLogMessage:
+                RememberLog(mpvEvent.Data);
+                break;
+        }
+        return false;
     }
 
     private PlaybackEndReason Classify(int endFileReason) => endFileReason switch
@@ -968,7 +946,9 @@ internal sealed class LibMpvHandle(
                 status = status with { Paused = ReadFlag(property) };
                 break;
             case ObserveVolume:
-                status = status with { Volume = ReadDouble(property) };
+                var volume = ReadDouble(property);
+                if (property.Format != LibMpvNative.FormatDouble || !double.IsFinite(volume)) return;
+                status = status with { Volume = volume, VolumeKnown = true };
                 break;
             case ObserveMute:
                 status = status with { Muted = ReadFlag(property) };
@@ -1159,19 +1139,11 @@ internal sealed class LibMpvHandle(
         });
     }
 
-    private void RememberLog(IntPtr data)
+    private static void RememberLog(IntPtr data)
     {
+        // Native diagnostics can echo authenticated URLs and headers; retain severity, never raw payload.
         var message = Marshal.PtrToStructure<LibMpvNative.MpvEventLogMessage>(data);
-        var text = Marshal.PtrToStringUTF8(message.Text);
-        if (string.IsNullOrWhiteSpace(text)) return;
-
-        lock (_logTail)
-        {
-            if (_logTail.Count == LogTailLines) _logTail.Dequeue();
-            _logTail.Enqueue(text);
-        }
-
-        Log.Debug(Category, $"mpv：{text.TrimEnd()}");
+        if (message.LogLevel <= 30) Log.Debug(Category, $"mpv 报告诊断（级别 {message.LogLevel}，原文未保留）");
     }
 
     // ---- position --------------------------------------------------------------
@@ -1203,8 +1175,11 @@ internal sealed class LibMpvHandle(
         cancellationToken.ThrowIfCancellationRequested();
 
         var text = ToMpvString(value);
-        return Task.Run(() => Guard(() =>
+        var generation = _apiGate.Generation;
+        return Task.Run(() => _apiGate.RunFor(generation, () =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_handedOver || _stopRequested) return false;
             var error = LibMpvNative.mpv_set_property_string(context, name, text);
             if (error < 0) Log.Warn(Category, $"设置 mpv 属性 {name} 失败：{LibMpvBackend.Describe(error)}");
             return true;
@@ -1217,7 +1192,12 @@ internal sealed class LibMpvHandle(
         cancellationToken.ThrowIfCancellationRequested();
 
         var copy = arguments.ToArray();
-        return Task.Run(() => Guard(() => Command(copy)), CancellationToken.None);
+        var generation = _apiGate.Generation;
+        return Task.Run(() => _apiGate.RunFor(generation, () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return !_handedOver && !_stopRequested && Command(copy);
+        }), CancellationToken.None);
     }
 
     public Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken)
@@ -1267,6 +1247,27 @@ internal sealed class LibMpvHandle(
         return Task.FromResult(value);
     }
 
+    public Task<bool?> HasOptionAsync(string name, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var value = Guard<bool?>(() =>
+        {
+            var buffer = Marshal.AllocHGlobal(Marshal.SizeOf<LibMpvNative.MpvNode>());
+            try
+            {
+                Marshal.StructureToPtr(new LibMpvNative.MpvNode(), buffer, false);
+                var result = LibMpvNative.mpv_get_property(context, $"option-info/{name}", LibMpvNative.FormatNode, buffer);
+                return result >= 0 ? true : result == -8 ? false : null;
+            }
+            finally
+            {
+                LibMpvNative.mpv_free_node_contents(buffer);
+                Marshal.FreeHGlobal(buffer);
+            }
+        });
+        return Task.FromResult(value);
+    }
+
     public Task<string?> GetTextAsync(string name, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1289,6 +1290,13 @@ internal sealed class LibMpvHandle(
         });
 
         return Task.FromResult(value);
+    }
+
+    public Task<IReadOnlyList<string>?> GetStringListAsync(string name, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Guard(() =>
+            LibMpvNodes.Read<IReadOnlyList<string>?>(context, name, LibMpvNodes.Strings, null)));
     }
 
     private static string ToMpvString(object value) => value switch
@@ -1331,6 +1339,9 @@ internal sealed class LibMpvHandle(
                     // All optional: a demuxer that cannot answer simply leaves the key out, and the
                     // picker then shows one fewer thing about the track rather than nothing at all.
                     Codec = LibMpvNodes.String(map, "codec"),
+                    MainSelection = LibMpvNodes.Int(map, "main-selection"),
+                    FfmpegIndex = LibMpvNodes.Int(map, "ff-index"),
+                    ExternalFilename = LibMpvNodes.String(map, "external-filename"),
                     Channels = LibMpvNodes.String(map, "demux-channels"),
                     ChannelCount = LibMpvNodes.Int(map, "demux-channel-count") ?? 0,
                     SampleRate = LibMpvNodes.Int(map, "demux-samplerate") ?? 0,
@@ -1354,34 +1365,30 @@ internal sealed class LibMpvHandle(
         _exit.TrySetResult(new PlaybackExit(reason, LastPosition, error, message));
     }
 
-    private string DescribeFailure(int error)
-    {
-        lock (_logTail)
-        {
-            var detail = _logTail.LastOrDefault(line => line.Contains("Failed", StringComparison.OrdinalIgnoreCase)
-                                                       || line.Contains("error", StringComparison.OrdinalIgnoreCase)
-                                                       || line.Contains("Cannot", StringComparison.OrdinalIgnoreCase));
-            return detail ?? $"内置播放器未能播放该文件（错误 {error}）";
-        }
-    }
+    private static string DescribeFailure(int error) => $"内置播放器未能播放该文件（错误 {error}）";
 
     public async Task<PlaybackExit> WaitForExitAsync(CancellationToken cancellationToken) =>
         await _exit.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-    public async Task StopAsync()
+    private readonly object _shutdownGate = new();
+    private Task? _stopTask;
+    private Task? _disposeTask;
+
+    public Task StopAsync()
+    {
+        lock (_shutdownGate) return _stopTask ??= StopCoreAsync();
+    }
+
+    private async Task StopCoreAsync()
     {
         _stopRequested = true;
-        StopComposition();
-        Guard(() =>
+        await Task.Run(() =>
         {
-            Command("quit");
-            return true;
-        });
-
-        // Whether or not mpv answers, the playback is over as far as the client is concerned;
-        // disposal is what actually tears the context down, in the right order.
+            StopComposition();
+            Guard(() => Command("quit"));
+        }).ConfigureAwait(false);
         if (!await ExitWithinAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false))
-            Finish(PlaybackEndReason.Stopped, 0);
+            Guard(() => { Finish(PlaybackEndReason.Stopped, 0); return true; });
     }
 
     public Task ShowMessageAsync(string text) =>
@@ -1393,26 +1400,23 @@ internal sealed class LibMpvHandle(
     /// old code destroyed while that thread was blocked in <c>mpv_wait_event</c> on the same
     /// context, which is a use-after-free the process only sometimes survived.
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        // Serialize detachment with the entire refresh (including its borrowed-pointer handoff).
-        // Already queued geometry work cannot attach again after this boundary. The shell owns
-        // AddRef and stale-dispatch rejection for work it sends to the UI thread.
+        lock (_shutdownGate) return new ValueTask(_disposeTask ??= Task.Run(DisposeCore));
+    }
+
+    private void DisposeCore()
+    {
         StopComposition();
         Guard(() =>
         {
-            if (!_exit.Task.IsCompleted) Command("quit");
+            if (!_exit.Task.IsCompleted || _handedOver) Command("quit");
             return true;
         });
-
         _leaveLoop = true;
         JoinWorker(TimeSpan.FromSeconds(3));
-
-        // Only reached with the event thread gone (or wedged, in which case the context is left
-        // alone on purpose: leaking it is survivable, freeing it under a live reader is not).
+        // A live native reader must never have its context freed underneath it.
         if (_eventThread is not { IsAlive: true }) Destroy();
-
-        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     /// <summary>mpv_terminate_destroy is only safe to call once, after the event thread exits.</summary>
@@ -1463,6 +1467,14 @@ internal sealed class LibMpvLifetimeGate
     private readonly Lock _sync = new();
     private bool _compositionStopped;
     private bool _destroyed;
+    private long _generation;
+
+    internal long Generation { get { lock (_sync) return _generation; } }
+    internal void NextGeneration() { lock (_sync) _generation++; }
+    internal T? RunFor<T>(long generation, Func<T> work)
+    {
+        lock (_sync) return _destroyed || generation != _generation ? default : work();
+    }
 
     /// <summary>实例是否已销毁 —— 换片快路的入口据此拒绝一个已经不存在的上下文。</summary>
     internal bool IsDestroyed

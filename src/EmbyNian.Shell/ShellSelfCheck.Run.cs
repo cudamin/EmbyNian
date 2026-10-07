@@ -438,6 +438,10 @@ internal static partial class ShellSelfCheck
         // asking whether the compositor had finished, not whether the island drew anything.
         ReportFullscreen(window, Check);
 
+        // 设置窗口盖在画面上（2026-10-01 加右键菜单那三行设置入口时补的一关）。紧挨着全屏那一关：这一关也要
+        // 真窗口进一次全屏、钉一次置顶，量完把窗口原样放回去 —— 两条一起跑，中间不做别的动窗口的事。
+        ReportSettingsOverPicture(window, shell, Check);
+
         report.AppendLine();
         report.AppendLine(failures == 0 ? "结果：全部通过" : $"结果：{failures} 项失败");
 

@@ -161,6 +161,8 @@ end
 ---@param shortcut? Shortcut
 function cursor:trigger(event, shortcut)
 	local forward, zone_handled = true, false
+	local meta = self.event_meta[event]
+	local start_zone = meta and meta.is_start and self:find_zone(meta.trigger_event)
 
 	-- Call raw event handlers.
 	local zone = self:find_zone(event)
@@ -176,7 +178,6 @@ function cursor:trigger(event, shortcut)
 
 	if event ~= 'move' then
 		-- Call compound/parent (click) event handlers if both start and end events are within `parent_zone.hitbox`.
-		local meta = self.event_meta[event]
 		if meta then
 			-- Trigger compound event
 			local parent_zone = self:find_zone(meta.trigger_event)
@@ -184,8 +185,10 @@ function cursor:trigger(event, shortcut)
 				forward = false -- Canceled here so we don't forward down events if they can lead to a click.
 				if meta.is_end then
 					local start_event = self.last_events[meta.start_event]
-					if start_event and point_collides_with(start_event, parent_zone.hitbox) and shortcut then
-						parent_zone.handler(create_shortcut('primary_click', shortcut.modifiers))
+					if start_event and not start_event.zone_handled
+						and start_event.click_target == (parent_zone.hitbox.input_owner or parent_zone.hitbox)
+						and point_collides_with(start_event, parent_zone.hitbox) and shortcut then
+						parent_zone.handler(create_shortcut(meta.trigger_event, shortcut.modifiers))
 					end
 				end
 			end
@@ -221,6 +224,7 @@ function cursor:trigger(event, shortcut)
 	-- Track last events
 	local last = self.last_events[event] or {}
 	last.x, last.y, last.time, last.zone_handled = self.x, self.y, mp.get_time(), zone_handled
+	last.click_target = start_zone and (start_zone.hitbox.input_owner or start_zone.hitbox) or nil
 	self.last_events[event] = last
 
 	-- Refresh cursor autohide timer.

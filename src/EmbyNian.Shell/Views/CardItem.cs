@@ -122,6 +122,7 @@ public sealed class CardItem : INotifyPropertyChanged
     {
         _item = item;
         _images = images;
+        Scope = images.CaptureScope();
         _width = width;
         _wide = wide;
         _subtitle = subtitle;
@@ -135,6 +136,10 @@ public sealed class CardItem : INotifyPropertyChanged
 
     /// <summary>The item behind the card. Whoever opens it needs the real thing, not a projection.</summary>
     public EmbyItem Item => _item;
+
+    internal EmbySessionScope? Scope { get; }
+
+    internal bool IsCurrent => Scope?.IsCurrent == true;
 
     public string Title => _item.Name;
 
@@ -313,6 +318,7 @@ public sealed class CardItem : INotifyPropertyChanged
         _wanted = true;
 
         if (_imageType is null || _missing || _poster is not null || _loading is not null) return;
+        if (Scope is not { IsCurrent: true } scope) return;
 
         // 上一次「没取到」还没隔够冷却时间就不问了：滚动一路会把同一张卡反复递进来，不拦的话一次断网就是每一趟
         // 滚动都朝服务器排一遍车轮战。隔够了才放行 —— 服务器多半已经喘过气来了。
@@ -331,10 +337,13 @@ public sealed class CardItem : INotifyPropertyChanged
 
         try
         {
-            var bytes = await _images.GetAsync(_item, _imageType, EmbyImageStore.RequestWidth(_width), cts.Token)
+            var tag = EmbyImageStore.TagFor(_item, _imageType);
+            if (tag is null) return;
+            var cacheKey = PosterCache.Key(scope.Connection, _item.Id, _imageType, tag, _width);
+            var bytes = await _images.GetAsync(scope, _item.Id, _imageType, tag, EmbyImageStore.RequestWidth(_width), cts.Token)
                 .ConfigureAwait(true);
 
-            if (cts.IsCancellationRequested) return;
+            if (cts.IsCancellationRequested || !scope.IsCurrent) return;
 
             if (bytes is null || bytes.Length == 0)
             {
@@ -349,9 +358,9 @@ public sealed class CardItem : INotifyPropertyChanged
             }
 
             var bitmap = await PosterLoader.DecodeAsync(bytes, _width).ConfigureAwait(true);
-            if (cts.IsCancellationRequested) return;
+            if (cts.IsCancellationRequested || !scope.IsCurrent) return;
 
-            if (bitmap is not null && PosterKey() is { } name) PosterCache.Remember(name, bitmap);
+            if (bitmap is not null) PosterCache.Remember(cacheKey, bitmap);
 
             // 屏上还要不要它（见 ReleasePoster）：不要了就只留进上面那份缓存，不塞回这张卡 —— 塞回去就是一张
             // 不在屏上的卡攥着一张解出来的画面，而那正是「放开」要防的事。
@@ -452,8 +461,8 @@ public sealed class CardItem : INotifyPropertyChanged
     /// replaced there has to read as a different picture.
     /// </summary>
     private string? PosterKey() =>
-        _imageType is not null && EmbyImageStore.TagFor(_item, _imageType) is { } tag
-            ? PosterCache.Key(_item.Id, _imageType, tag, _width)
+        Scope is { } scope && _imageType is not null && EmbyImageStore.TagFor(_item, _imageType) is { } tag
+            ? PosterCache.Key(scope.Connection, _item.Id, _imageType, tag, _width)
             : null;
 
     /// <summary>Re-reads the badges after the item's user data changes. Requirement 6 calls this.</summary>

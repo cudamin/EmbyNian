@@ -1,3 +1,4 @@
+using EmbyNian.Configuration;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 
@@ -12,6 +13,9 @@ public sealed record PlaybackTicket
     public required EmbyItem Item { get; init; }
 
     public required MediaSource Source { get; init; }
+
+    /// <summary>Frozen shader preferences shared by every candidate of this playback.</summary>
+    public ShaderAutomationSettings? ShaderSettings { get; init; }
 
     /// <summary>Emby stream index of the chosen audio track; null lets mpv/alang decide.</summary>
     public int? AudioStreamIndex { get; init; }
@@ -138,6 +142,8 @@ public sealed record PlaybackRequest
     /// </summary>
     public string? ShaderProfile { get; init; }
 
+    public ShaderDecision? ShaderDecision { get; init; }
+
     /// <summary>
     /// How many entries at the end of <see cref="PlayerOptions"/> came from the shader chain. What
     /// <c>PlaybackService.SetShaderGroupAsync</c> needs to answer 「这个选项在挂上着色器之前是什么值」 when a
@@ -213,6 +219,15 @@ public sealed record PlaybackExit(PlaybackEndReason Reason, double? PositionSeco
 /// </summary>
 public sealed record MpvTrack(int Id, string Type, string? Language, string? Title, bool Default, bool Selected)
 {
+    /// <summary>0 is the primary selection, 1 the secondary subtitle; absent when not selected or unsupported.</summary>
+    public int? MainSelection { get; init; }
+
+    /// <summary>The demuxer's container stream index, not mpv's per-type track id.</summary>
+    public int? FfmpegIndex { get; init; }
+
+    /// <summary>The actual external file, used to match a server subtitle without guessing from load order.</summary>
+    public string? ExternalFilename { get; init; }
+
     /// <summary>mpv's own codec name — <c>eac3</c>, <c>hdmv_pgs_subtitle</c> — not a pretty one.</summary>
     public string? Codec { get; init; }
 
@@ -393,6 +408,8 @@ public sealed record MpvTrack(int Id, string Type, string? Language, string? Tit
 /// <summary>The outcome the UI shows once mpv is gone.</summary>
 public sealed record PlaybackResult(PlaybackExit Exit, long PositionTicks, bool MarkedWatched, bool ProgressReported)
 {
+    public bool HasStarted { get; init; }
+
     public string ToChinese() => Exit.Reason switch
     {
         PlaybackEndReason.EndOfFile => MarkedWatched ? "播放完毕，已标记为已观看" : "播放完毕",
@@ -446,6 +463,9 @@ public readonly record struct PlayerStatus
     /// <summary>mpv's own scale, where 100 is unattenuated.</summary>
     public double Volume { get; init; } = 100;
 
+    /// <summary>True only after a finite native volume reading; the default 100 is not an observation.</summary>
+    public bool VolumeKnown { get; init; }
+
     public double Speed { get; init; } = 1;
 
     /// <summary>Set once mpv has the file open; before that the bar shows 「正在打开…」.</summary>
@@ -488,6 +508,7 @@ public readonly record struct PlayerStatus
         || Loaded != other.Loaded
         || PictureStarted != other.PictureStarted
         || HasPosition != other.HasPosition
+        || VolumeKnown != other.VolumeKnown
         || Math.Abs(Volume - other.Volume) > 0.5
         || Math.Abs(Speed - other.Speed) > 0.005
         || Math.Abs(Duration - other.Duration) > 0.05

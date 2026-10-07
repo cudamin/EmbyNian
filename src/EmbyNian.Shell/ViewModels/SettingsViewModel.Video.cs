@@ -118,7 +118,8 @@ public sealed partial class SettingsViewModel
 
     private SettingOptionalNumberRow Optional(string label, Func<double?> read, Action<double?> write,
         double fallback, string note, string option) =>
-        new(label, Annotate(note, option)!, HdrOptions.MinimumNits, HdrOptions.MaximumNits, fallback, read(), write, Save);
+        new(label, Annotate(note + " 亮度按整数 nits 保存，小数四舍五入。", option)!, HdrOptions.MinimumNits, HdrOptions.MaximumNits,
+            fallback, read(), write, Save, HdrOptions.ClampNits);
 
     private SettingSection ShaderCard()
     {

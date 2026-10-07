@@ -111,10 +111,8 @@ internal static class MediaVersionTests
             // mpv 还没报位置（null）时退回条目自己的续播点 —— 起播用的就是它。
             Assert.Equal(hour, MediaVersionSwitch.StartTicks(null, hour));
 
-            // mpv 报的<b>正好是 0</b> 也退回断点：那是「这一跑刚打开、还没跳到断点」那一刻的读数，
-            // 信它就是把看到一小时的人扔回片头。反过来的代价（从头开始看的人被送回断点）不存在 ——
-            // 那种条目的断点本来就接近 0。
-            Assert.Equal(hour, MediaVersionSwitch.StartTicks(0, hour));
+            Assert.Equal(0L, MediaVersionSwitch.StartTicks(0, hour), "有效的零位置是从头，不是未知");
+            Assert.Equal(hour, MediaVersionSwitch.StartTicks(double.NaN, hour));
 
             // 负数（有些后端用 -1 表示「还不知道」）同样退回断点，且断点本身也为负时归零。
             Assert.Equal(hour, MediaVersionSwitch.StartTicks(-1, hour));

@@ -1,6 +1,557 @@
 # 开发进度
 
-最后更新：2026-09-30
+最后更新：2026-10-07
+
+## 独占模式右键菜单大小对齐集成模式（2026-10-07，已发布、未提交）
+
+用户令「独占模式的右键菜单体积太大了，大小改为跟集成模式一致（注意全屏和最大化时要放大 1.3 倍）」。独占菜单的尺子从前随窗口高走（2026-09-29 参考配置轮的 osd_height/720、字号 20）：1080p 高的窗口字号被放大到 30、最小宽 330，窗口越大越虚胖。这轮整把换成 uosc 自带的 `state.scale`（＝hidpi_scale ×（全屏/最大化时 1.3，否则 1）），与集成菜单同样随 DPI 走、不随窗口高走；基础尺寸按集成模式右键菜单（WinUI 2.3.9 `DefaultMenuFlyoutItemStyle`）解剖定数：字号 14＝`ControlContentThemeFontSize`；行高 42（一行＝行外边距 2×2＋内边距 9/10＋14px 行盒 18.6 ≈ 41.6 → `menu_gap=2`，行行贴着排）；最小宽 96＝`FlyoutThemeMinWidth`；外围 padding 5＝presenter 1＋行外边距 4。上色/描边/圆角沿用 09-29 批准的样子（悬停行白底深字、#222222 不透明底、0.5 白描边、圆角 5、#555555 分隔线）。菜单开着时切全屏/最大化/换屏由 `prop_fullormaxed` 与 `display` 两路观察重算。改动：`assets/mpv-ui/scripts/uosc/main.lua`（四个选项＋文件头与选项区 EMBYNIAN[menu-style] 注释）、`elements/Menu.lua`（尺子与同名槽注释）、`assets/mpv-ui/README.md` 同步；`tests/EmbyNian.Tests/Lua/uosc-interaction-tests.lua` 把旧「随显示高缩放」断言换成三条——窗口基准四个数、全屏/最大化开着菜单实时 ×1.3 且切回还原、hidpi 1.5 跟随。
+
+- 验证：`py tools/test-uosc.py` 25/25 全过（bundled libmpv 的 Lua 运行时、假输入假属性假时钟，无窗口无媒体）；Release 全方案构建 0 警告 0 错误；`format whitespace` 通过；单测 1563/1563、0 失败 0 跳过；发布 `tools/publish.ps1 -NoArchive` 通过（533 文件 301.1 MB）。本机系统 DPI 96（100% 缩放）实测过；mpv win32 支持 `display-hidpi-scale`，DPI 变了菜单跟集成一样跟着走。
+- 未验证：独占菜单在真窗口里的实机观感（真起播属第三档需授权；三条离线探针固定集成管线，uosc 菜单画不出来）——字号/行高/最小宽/padding 与 1.3 规律已由 Lua 交互测试钉住，但 libass 与 DWrite 的字宽度量终究两套，「看上去一致」要用户真机看一眼；外部 mpv 后端同吃这份 uosc，同样未实机测。闸门 4 自检不覆盖 uosc 菜单且非本档要求，未跑。
+
+## 右键画面菜单不再带出控件（2026-10-07，已发布、未提交）
+
+用户令「右键点击画面呼出菜单的时候不要自动显示其他控件」（并确认独占模式正常、不用改）。根子在 `PlayerPage.xaml.cs`：右键那份画面菜单和控制条上那几只浮层挂同一把 `ChromeHold.Menu` 挂牌，一打开就把三样控件钉在屏上——「钉住＝三样全给」的语义对锚在画面上的菜单恰好反了；菜单被屏幕下沿裁住时指针一路躺在底边唤出带里，十赫兹轮询把那条真手喂给位置判据，控件还会被反复带回屏上。
+
+- **规则加了一档**（`Core/Playback/ChromeReveal.cs`）：`SetPictureMenu(open, now)` 锁存位，`Decide` 里压过钉住与位置规则（三样全收）；光标那一问也认它（用户正在菜单里挑，不收光标）；开与关都清掉 `_forceUntil`/`_railUntil` 两笔宽限——关菜单那一拍不能让一条菜单期间不可能挣到的过期宽限把一屏控件弹回来；关上时重盖空闲钟；`Reset` 不让它活过新一播放。
+- **接线换向**（`PlayerPage.xaml.cs`、`PlayerPage.Chrome.cs`）：画面菜单从钉住那组 Flyout 里摘出，`Opened`/`Closed` 走新的 `HoldPictureMenu`（收下去、渲染一遍）；控制条四只浮层照旧钉住。Win32 键盘兜底闸（`WantsKey`）补问 `PictureMenuOpen`——菜单开着而焦点掉出岛时 Esc 仍归 XAML 关菜单，兜底路不越权。
+- 底边那条两像素细进度线不在「控件」之列：它是浮层收起时常驻的读数（双击纯净闸期间也在），维持原样。
+- 验证：Release 全方案构建 0 警告 0 错误；`format whitespace --verify-no-changes` 通过；单测 1563/1563、0 失败 0 跳过（新增「播放器控件：右键画面菜单开着时控件全部收下去」，钉住菜单内真手、贴带、宽限、关上交回、Reset 五段都钉住）；发布 `tools/publish.ps1 -NoArchive` 通过（533 文件 301.1 MB）。
+- 未验证：真机上的右键手势本身（集成管线真实播放属第三档，需授权；本机注不进鼠标事件）——规则与接线已由单测与构建覆盖，实机看一眼仍欠着。独占管线与外部 mpv 未动、未测。
+
+## 集成自动全屏加载页冷态交接（2026-10-07，已发布、未提交）
+
+本轮在主工作树定点修改 `PlayerPage.Transition`、`PlayerPage.ClientRect`、`PlayerPage.Cover`、`PlayerPage.MotionProbe`、`PlayerCoverProbe`、`PlayerMotionProbe` 与验证说明，保留既有未提交工作；子代理仅做只读审查。修改前相关文件存于 `work/loading-cold-20261007`。旧路径把两次渲染等待超时也算帧，并在原生层撤下前清交接标记。现在按实际帧、岛与加载层物理尺寸、当前图片引用连续稳定后交接；稳定期从第一张合格帧起算，至少三帧及 120ms。取消/退出释放本轮原生层，旧任务不能清新层，交接期间不准淡出加载层；2 秒上限只防止原生层滞留，记失败并由探针明确断言不可走该兜底。
+
+受控回归：将加载层限制在旧尺寸 300ms，旧产品配新增断言失败于「布局迟到超过旧撤层时限时仍保留整屏背景」（`player-motion-probe-20261007-122509192-12672`）；该轮截图受其它窗口影响，不作视觉证据。探针新增连续四次进场、最大化进场、加载中退出全屏/停止/重进，以及 4:3 网格截图。迭代时修正两处测试状态：还原新增场景的最大化状态；页面退场会收起控件，但探针的 VM.CoverUp 仍可能为真，重复进场现在显式恢复加载层。后者曾被旧探针的成功退出码掩盖，现增加「凭稳定出帧交接」硬断言。
+
+- 验证：最终 Release 完整构建 0 警告/0 错误；1562 项测试通过、失败 0、跳过 0（`work/loading-cold-20261007/tests.txt`）；空白检查、`git diff --check` 通过，改动源文件均为 LF。
+- 交付：已更新快捷方式对应的 `artifacts/publish/win-x64`，发布校验 533 文件、301.1 MB；开发与发布的 EmbyNian.dll SHA-256 均为 `083786C552820BB92D21557E1BFE26EBA25264ECF4CF1248760F6F66FE9831DD`。
+- 最终发布件的主屏 `player-motion-probe-20261007-123857201-17908` 与副屏 `player-motion-probe-20261007-124118111-8300` 均退出 0，23 条加载检查和后续本地 libmpv 集成检查通过；两轮正常交接无超时兜底。普通重新进场覆盖层约 140～218ms；刻意迟到的首轮约 547～594ms，主动取消会记布局未稳定，不等于超时失败。
+- 视觉：两屏加载截图已核对；主屏 `work/loading-cold-capture-203856-screen1` 连拍共 98 帧，其中首次完整网格的 27 帧（0015～0041）内部节距和位置恒定，未夹入无图帧。保存图是缩略图、采样间隔约 33～71ms，不能排除采样之间更短的闪烁。小尺寸人工网格在竖屏的两种绘制间有 4px 源裁切取整位移，但节距相同，未改原生裁切算法。
+- 范围：验证模拟布局迟到及本地素材，不宣称复现自然长时间闲置后的全部驱动状态；未启动真实媒体库播放、未写观看记录；独占/uosc 和外部 mpv 不在本次覆盖范围。
+
+## 集成播放返回主页后补播动画（2026-10-07）
+
+- 本轮在主工作树定点修改 `HomeMotion`、`HomePage`、`ShellPage`、`PlayerPage.Transition`，保留其他未提交工作。退出覆盖层撤下后原先还会强制重新导航主页，导致先看见静态旧页、随后整页重建并入场；删除这次导航，保留现成主页和轮播。停止后的数据刷新仍正常进行。
+- 主页恢复可见之前与停止后刷新之前统一结束货架入场：解绑 `ElementPrepared`、清理待 `Loaded` 和正在运行的动画；取消媒体库位移、重试及旧补位回调。返回后的货架与矮窗布局变化直接就位，显式 `Reload` 或重新导航后恢复普通入场；轮播切换及卡片交互动效不在本轮删除范围。
+- 新增现有 `--probe-shell` 中的主页返回检查：假身份、假图片和延迟 220ms 的续播响应，两种窗口宽度，正常入场正对照，返回后及刷新后截图，每种宽度 50 次采样；窄窗口在请求途中跨过真实矮窗布局边界并还原，确认档位实际切换而没有补播。等待请求进入有 2 秒超时，能回到本例清理路径。
+- 验证：最终 Release 完整构建 0 警告、0 错误，whitespace 和定点 diff 空白检查通过；当前测试与 Core 编译后 1562/1562，0 失败、0 跳过（含约定与分析器哈希）。产品源此后未改，仅加强 Shell 探针边界覆盖。最终发布件离线探针 30/30、退出码 0；四张渲染截图已查看，不能当作真实屏幕或真实播放证据。中途探针曾与开发构建重叠造成文件占用重试，已串行重建并从最终发布件重新运行验证。
+- 交付：`artifacts/publish/win-x64` 已刷新，533 文件、301.1 MB；桌面快捷方式已核对指向该目录。最终发布 DLL 与当前 obj SHA-256 同为 `A35C405999EC379A5605B51ECA5D168D59DE16DDDC6013F676B48E3EED14BC65`。证据在 `artifacts/home-return-check/`，最终探针原目录 `shell-probe-20261007-121742662-17600`。未运行普通自检闸门 4，也未进行真实媒体播放、独占/uosc 或外部 mpv 验证；未提交、未推送。
+
+## 封面悬停放大后描边缺失（2026-10-07）
+
+- 本轮在主工作树定点修改 `Views/PosterCard.xaml.cs` 及 XAML 首注释，保留已有自检接线和其他未提交改动。原因是整卡悬停放大到 1.012 并上移 3px，超出外层 Button 的内容裁剪范围；离线四列对照中，原悬停和仅整卡变换均缺上边/侧边，仅图片放大四边完整。
+- 悬停、键盘焦点时整卡保持原始尺寸，保留框内图片 1.045 推近、遮罩及操作按钮渐显；按压只向内缩至 0.985，松开恢复，不再移动整卡。移除位移动画与重置，防止首末卡和外层按钮裁边。
+- 验证：Release Shell 构建 0 警告 0 错误，whitespace 通过；当前测试及 Core 已编译，最终测试 1562/1562、0 失败、0 跳过（含约定与分析器哈希）。独立代码复核检查了动画换向、按压恢复、禁用动画及容器复用，未发现问题。
+- 视觉证据：临时离线假图夹具覆盖横卡/竖卡的静止、悬停、按压、键盘焦点，1064×792 和 1406×792 两种窗口渲染截图已逐张检查，描边完整。诊断源文件保存到 `artifacts/card-frame-check/CardFrameDiagnostic.cs`，产品中的临时文件和入口已移除；图片为渲染截图，不冒充真实屏幕截图或真实指针事件。
+- 交付：实际 `artifacts/publish/win-x64` 已刷新，载荷校验 533 文件、301.1 MB；桌面快捷方式核对指向此目录。最终发布件 `--probe-shell --screen 2` 退出 0，29 项离线运行检查通过。证据集中在 `artifacts/card-frame-check/`。未跑普通闸门 4，未触发真实播放；未提交或推送。
+
+## 集成加载页首次闪现与换媒体串旧背景（2026-10-07 晚）
+
+用户报首次进入加载页偶尔闪出其他内容，以及换媒体先出现上一张背景。正式起播入口原先先 `EnterPlayer` 后 `ShowCover`，自动全屏内部的窗口操作和合成提交能发生在遮罩仍隐藏时；现改为页面接线完成后先立遮罩、再进场。背景等待原先看见任何非空图片就跳过，新请求也不清旧图；现始终按当前条目请求，新条目同步清掉 XAML 图片和原生覆盖层像素，同条目复用完整解码任务。解码先存局部值，两份结果经过最后一次代际核对后一起发布；退出作废迟到结果，保留已就绪图片供退场使用。
+
+新增 `PlayerCoverProbe` 接入现有 `--probe-player-motion` 首轮：假身份、假 HTTP、可取消的挂起详情和禁止媒体启动的服务，实际走 `PlayerViewModel.PlayAsync` 的准备入口，补上原探针手工先开遮罩而漏掉的顺序检查。15 条加载页检查覆盖同步清旧图、同条目等待/复用、超时、迟到下载、404、坏图、失败重试和退出后回填；截图直接读取真实屏幕，并检查实际 ImageBrush 绑定。临时窗口命中诊断已撤回，未改产品撤层等待时间。
+
+- 验证：Release 构建 0 警告 0 错误，whitespace 与 diff 空白检查通过；当前测试 1562/1562、0 失败 0 跳过（含约定与分析器哈希）。沙箱首次有 8 条路径权限失败；获准沙箱外运行后出现 1 次原子并发写入访问冲突，再跑全量通过，失败日志均保留，未修改相关测试或 Core。
+- 运行：开发输出副屏探针退出 0；最终发布件主屏探针退出 0，包含加载页 15 条检查及后续本地 libmpv 集成动效检查。主屏自动全屏采样 24 拍，提前揭幕/整页变换/快照抢到遮罩上方均为 0。两屏的首次背景、等图纯色、新背景三态截图已查看。前两次隐藏启动让窗口无法参与截图命中，改为正常显示测试窗口后通过；没有放宽截图遮挡校验。
+- 交付：`artifacts/publish/win-x64` 已刷新，533 文件、301.1 MB；桌面 EmbyNian.lnk 的 LinkInfo 两段拼接核对到该目录，未改快捷方式。发布 DLL 与当前 obj SHA-256 均为 `BD15F95C4C4AF4CBDD227E5A017492AF9239DC674ECEFBE17773313F076F3D19`。
+- 证据：`artifacts/loading-page-check/` 保存测试、发布和两屏探针报告/截图；主屏原报告为 `%LOCALAPPDATA%/EmbyNian/logs/player-motion-probe-20261007-113733711-27060/logs/player-motion-probe.txt`。
+- 边界：没有真实服务器播放或观看记录写入；未运行普通闸门 4、独占/uosc 或外部 mpv。迟到下载有确定性运行检查，解码回调交错由提交顺序审查覆盖；没有用截图宣称穷尽所有瞬态。保留原工作区修改，未提交、未推送。
+
+## 暂停不再自动唤出整套控件：三条唤出路按方向收窄（2026-10-07 晚）
+
+用户令「暂停时不要自动显示播放控件」。此前按下暂停的三条路（单击画面证实、空格专路、可重绑键经 Dispatch）都会 `ChromeReveal.WakeFully` 把标题条＋进度条＋音量条整套叫出一秒多——暂停本是为了看清那一帧，控件反而糊在上面；回执本就有那枚 0.2 秒的暂停徽标（09-28 起「暂停不钉住控件」时定的分工）。修法按方向收窄：**落在暂停上的切换不再给宽限，恢复播放照旧**（Direction 由切换前 `ViewModel.Paused` 认，三条路各自就近判断：单击在 `OnTapHoldElapsed`、空格在 `OnSpaceShortcut`、可重绑键在 `ShortcutCommand` 里按动作 Id 收 `wakeChrome`——三条键路共用那一个开关）。指示徽标、指针位置的显隐判据、光标规则、暂停自动取消置顶，全部不动；uosc 独占一侧查过无暂停唤出（persistency 全空），不需要改。配套把三条键路的诊断姓名牌（`_woke`）改成跟着 `wake` 走：wake 为假时鼠标根本没醒，不再挂假名。
+
+- **验证**：闸门 1（Release 0 警 0 错＋whitespace）✓；闸门 2（**1562/1562**，TEMP/TMP 指仓库内）✓；闸门 3（publish ✓，533 文件 301.1 MB，交付目录已刷新）。按日常代码档未跑闸门 4。
+- **没验证的**：真实播放里按暂停看画面是否保持干净——需要第三档授权或用户自测（发布件已是新版，点一下暂停即可复验）；恢复播放仍会唤出一秒多控件，用户若也不要，同一处改一行。
+
+## 起播加载页有时候闪一下主页：撤整屏覆盖层前先等新帧真的上屏（2026-10-07 晚二轮）
+
+任务栏那一闪修掉之后，用户复测报「现在有时候会闪 EmbyNian 主页」。同一条整屏进场的下一条缝：撤覆盖层（`RevealAfterInstantFullscreenAsync`）的判据是「两拍 `CompositionTarget.Rendering`」——渲染回调只证明 XAML 把新帧**画出来**了，提交→合成→上屏还隔一到两拍；覆盖层撤在这条缝里，露出来的是岛上最后一笔已提交的旧帧，即**主页**在旧窗口尺寸上的最后一笔，被合成器拉伸铺满整屏，等加载图那一帧上屏才切过去。探针实测覆盖层只盖 32ms，正好压在缝上；「有时候」就是这场竞态本身。
+
+修法（撤层必须落在上屏之后）：撤层前两连 `DwmFlush`（第一拍等「把已提交的那帧合成上屏」的那轮合成完成，第二拍作余量），并把每拍渲染等待的上限 32→80ms——渲染被饿时宁可覆盖层多活几十毫秒（盖的就是同一张加载图，毫无观感代价），也不能让「撤层」抢在「上屏」前面；`WaitFramesAsync` 加了每拍上限参数，退场那条路（`ReturnToBrowseBeforeStopAsync`）的 32ms 旧节奏不动——那边的覆盖层显示的就是抓下来的那一帧，与旧帧同内容，撤早了也看不出缝。
+
+- **验证**：闸门 1（0 警 0 错＋whitespace）✓；闸门 2（**1562/1562**）✓；闸门 3（publish ✓，交付目录 18:32 已刷新）；隔离探针 `--probe-player-motion --screen 1` 全过，覆盖层寿命 32→**47ms**（两拍渲染＋两轮合成确认都在盖着时完成），整屏进场的任务栏预收（0ms 确认）不受影响。
+- **没验证的**：用户实机复测加载页（竞态的最终裁判是肉眼看）；「主页一闪」此前是否也存在（此前被任务栏那一下盖住注意力，很可能是同一条缝的两种读法）。
+
+## 集成模式起播加载页任务栏闪一下：整屏进场改为「先收任务栏、再上覆盖层」（2026-10-07 晚）
+
+用户报「集成模式下点击开始播放后在加载页面 windows 任务栏会闪一下」。与白天那报（暂停闪现）同族但根因不同：起播自动全屏的进场是「覆盖层先上屏、窗口后长大」（2026-09-25 的无缝进场），而主屏任务栏画在一切 topmost 之上（09-21 实测），`SW_HIDE` 却排在全屏落地（`window.Fullscreen = true` → `EnterFullscreen` 末尾）才发——覆盖层把整块显示器（含任务栏那一条）铺成加载图之后，任务栏还站在上面，要等那句执行完才消失。**隔离探针实测（主屏 `--probe-player-motion`＋`work/tray-watch.ps1` 高频采样 Shell_TrayWnd 可见位）：从进场开始到任务栏真消失有 105ms，其中大头是覆盖层烘图上屏；而 SW_HIDE 一旦发出，1~3ms 内生效**——闪烁窗就是「该收而未收」的那一段。
+
+修法（顺序问题就动顺序）：`HostWindow` 新增预收对 `HideTrayForImminentFullscreen()` / `CancelImminentFullscreenTray()`——收任务栏提前到覆盖层之前发出，并等 `IsWindowVisible` 翻假才放行（宽限 120ms，explorer 忙时到点照常进场，不把起播押在它的线程上）；凭据 `_trayAheadOfFullscreen` 在全屏落地（`EnterFullscreen` 记下恢复矩形）时两清，进场没走成（读显示器失败、覆盖层抛了、窗口切换中途失效）凭它把任务栏原样放回。两条路接上：起播整屏进场（`PlayerPage.EnterFullscreenAtOnce`）与「加载遮罩还立着时手动进全屏」（`ChangeWindowAsync` 的 growCover 支路，finally 里兜底 Cancel）；`EnterFullscreen` 本体也把 `HideTrayForFullscreen` 挪到 `SetWindowPos` 之前（注释里「先藏再跳」的旧话从此是真话），手动全屏路径同样受益。副屏不动（副屏任务栏让位照旧），已经全屏时不重复收。
+
+- **验证**：闸门 1（Release 0 警 0 错＋whitespace＋check-scripts 18 脚本）✓；闸门 2（**1562/1562**，TEMP/TMP 指仓库内）✓；闸门 3（publish ✓，533 文件 301.1 MB，交付目录已刷新）。播放三档之二：隔离探针 `--probe-player-motion --screen 1`（本地彩条素材、隔离数据目录、不登录不上报）修复前**复现**（进场→任务栏消失 105ms）修复后**转绿**——两条进场路的日志都是「主屏任务栏已临时收起→0ms 确认已消失→进入全屏」，任务栏在窗口全屏落地前 60+ms 即已确认不在，watcher 逐拍对上、退出还原无回弹。
+- **没验证的**：用户实机看一眼加载页（本机探针已证时序，肉眼复核留给用户）；副屏全屏的观感（机制上不涉及）。
+- **环境（重要，复发）**：仓库根 `C:\Users\89400\EmbyNian` 的**低强制完整性标签又回来了**（`Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`，icacls 实锤；17:08 发布的 exe 连带继承 Low），后果是应用写不了 `%LOCALAPPDATA%`——**10-04 起应用日志一条没落**、所有探针静默退出 1（进程活着、日志进内存、`CreateDirectory` 被拒）。已按 10-01 结案记录的同款修法恢复：`icacls C:\Users\89400\EmbyNian /setintegritylevel (OI)(CI)M`（Git Bash 下要加 `MSYS_NO_PATHCONV=1`）。**复发第一步先查这个标签**；谁把它打回来的没查明（沙箱工具的 ACL 改写嫌疑最大）。
+
+## 集成模式全屏暂停时任务栏闪现一下又消失：暂停取消置顶不再动全屏 z 序（2026-10-07）
+
+用户报「集成模式下暂停的时候会显示 windows 任务栏，然后自动消失」。根因是两条用户令在全屏里打架：暂停边沿按 09-29「暂停时自动取消置顶」走 `SetPinned(false)` → `HostWindow.TopMost` 直接 `SetWindowPos(HWND_NOTOPMOST)`，把全屏窗口提出置顶带——副屏任务栏当拍盖回画面上、主屏被 `HideTrayForFullscreen` 收起的任务栏也会被 shell 放回；最多 250 毫秒后 `HoldBand` 又把窗口提回去，任务栏再收走，正好闪一下。修法一处：`TopMost` 置 false 且正全屏时**只记账不动 z 序**——旗子照记（图钉姿势照翻、`TogglePinByHand` 记账照落、退出全屏 `LeaveFullscreen` 按旗子放回 NOTOPMOST，「暂停不置顶」在回到窗口化那一刻兑现）；全屏期间的 z 序归 band 那套（`HoldBand`/`JudgeBand`/藏主屏任务栏）独管。播放页自检 `ProbePin` 断言的是旗子语义，不受影响。
+
+- **验证**：闸门 1（0 警 0 错＋whitespace）✓、闸门 2（1562/1562，TEMP/TMP 指仓库内）✓、闸门 3（publish ✓ 533 文件 301.1 MB，交付目录已刷新）。按日常代码档未跑闸门 4。
+- **没验证的**：真实全屏播放里暂停看任务栏是否还闪——需要真实播放（第三档授权）或用户自测；发布件已是新版，全屏暂停即可复验。
+
+## 交付：前九阶段整合成果落到主树、刷新交付目录，四道闸门全绿（2026-10-07）
+
+阶段 10 的整合成果（阶段 1–9 逐入口合并，隔离树 `work/review-stage10-20261007b`，HEAD `14372ea`）**已定点落到主树工作态并刷新实际交付目录**。这是阶段 10 交接里那句「下一步＝交付」的执行。
+
+- **落法（定点，不整份覆盖）**：主树工作态 == 整合基线提交 `64afdc5`（afc2394＋42 在途，逐字节核对）。取 `git diff 64afdc5 14372ea` 的干净增量（**173 文件：40 新增 / 133 修改 / 0 删除 / 0 重命名**，SHA-256 `c8b6a5c873b14cd9…`）在主树 `git apply`，`--check` 先过、应用后主树工作态与整合树 HEAD 树哈希一致（唯一差异是 AI 记忆文件 `.workbuddy-ai/`，非交付物）。**没有整份覆盖任何主树文件。**
+- **交付目录**：主树 `artifacts/publish/win-x64` 就地刷新，**533 文件 / 315708537 字节（≈301.1 MiB）**，11 GLSL + 4 HOOK 逐文件许可校验过。桌面快捷方式 `EmbyNian.lnk` 指向的正是这个目录里的 `EmbyNian.exe`（`TargetPath=C:\Users\89400\EmbyNian\artifacts\publish\win-x64\EmbyNian.exe`），**就地刷新即已生效，快捷方式本身无需改**。
+- **四道闸门（主树，全绿）**：① Release 构建 **0 警 0 错**＋`format whitespace` 过＋`check-scripts` **18 脚本**过；② 全量单测 **1562/1562**（0 失败 0 跳过）；③ 发布校验 **533 文件 / 301.1 MB**；④ 普通自检 **检查 182、失败 0、降级 0、消失 0、新增 0**（`artifacts/selfcheck/run-f66ca73241c548d6a56085d0bddc276f`）。
+- **本工具环境坑（不是产品问题，但复核时会撞上）**：在本工具的沙箱下，**从仓库根（如 `tests\…\bin`）启动的测试进程写系统 `%TEMP%`（`C:\Users\89400\AppData\Local\Temp`）被拒**——`Directory.CreateDirectory` 抛 `UnauthorizedAccessException`，`dotnet run` 下 70 条 temp 类用例红、`dotnet exec` 下 13 条播放类用例超时。**判据**：同一份 exe 换个目录跑，结果整个翻转——`work\…` 下 1562/1562 全过，仓库根/`tests` 下必红；把 `TEMP`/`TMP` 指到仓库内（`artifacts/delivery-tmp`）后，仓库根下也 **1562/1562**。所以是执行位置/沙箱的写权限问题，**与代码无关**。下次在这台机器上用本工具复核单测，**先把 `TEMP`/`TMP` 指到仓库内**再跑。
+- **边界**：只落到工作态，**未提交、未推送、未改版本/依赖/签名、未发 Release**；零真实服务器播放/下载/删除/订阅。主树原有 42 项在途改动**保留**（现与阶段改动合为一体，共 155 改 + 48 新）。回退点＝`afc2394` 与整合基线 `64afdc5`（后者就是交付前主树工作态的完整快照）。
+- **收尾（同日，用户令「清理 work/ 下的阶段树与隔离树」）**：11 棵 `work/review-stageN-*` 阶段/隔离树全部删除并 `git worktree prune`，`git worktree list` 只剩主树；回退提交已打标签 `delivery-base-20261007`（`64afdc5`）与 `delivery-integration-20261007`（`14372ea`）以免变不可达。随后又按用户确认清掉 `work/` 下的历史遗留产物：两个无引用录屏 `real-flow*.mkv`（17 GB）、顶层 1744 个截图 `.png` 与全部顶层 `.txt`/`.log`、132 个探针/截图目录 —— **`work/` 从 26.94 GB 降到 275 MB**。保留顶层 `.md`/`.patch`/`.json` 等记录、两个测试夹具、4 棵参考树与 12 个记录型小目录。**回收站另有约 20.8 GB 未清**（含历史删除项，需用户决定）。
+- **证据**：`work/stage10-delivery-20261007/`（`delivery.patch`、`gates-main.log`、`gate2-tests.log`、`delivery-publish.log`、`delivery-scripts.log`、`delivery-selfcheck.log`、`pre-delivery-main-status.txt`）。交付报告与下一阶段交接：`work/stage10-delivery-20261007/delivery-report-20261007.md`、`work/stage10-delivery-20261007/delivery-handoff-20261007.md`。
+
+## 跳过片头/片尾按钮调大 1.5 倍（2026-10-01 晚，集成＋独占两条管线同步）
+
+用户令「跳过按钮太小了，调大 1.5 倍」。在 09-30「缩小两倍」的基础上每一项 ×1.5（＝最初基准的 0.75），两条管线同一把尺：
+
+- **集成**：`PlayerPage.Chrome.cs` 的 `WindowSkip*` 一族 ×1.5 写死（内边距 18×21、行距 7.5、图标/标题 12、提示 9、倒计时条 3），全屏档照例 ×1.3（23.4/27.3/15.6/11.7/3.9）；`PlayerPage.xaml` 三个字号键与按钮初值（Padding/圆角/右让位 21、行距 7.5、倒计时条 3）跟着改——XAML 只是初值，事实源仍是 Chrome.cs。
+- **独占**：`assets/mpv-ui/scripts/uosc/elements/SkipButton.lua` 同步 ×1.5：字号 `\fs` 16（＝集成 12 px ÷ 0.75）、图标格 12、内边距 18×21、行距 7.5、右让位 21，全屏随 `state.scale`（1.3）自动跟上。
+- **验证**：闸门 2（1379/1379，含内联字号/颜色基线与 MpvUiTests 的 skip 契约断言）✓、whitespace ✓、闸门 3（publish ✓，528 文件 300.8 MB）。闸门 4（selfcheck-diff 对新发布件）：播放页相关检查全过且量得 **跳过按钮 201×49 → 300×71**（窗口档，宽高各 ≈×1.5）；「跳过片头与章节刻度」「点击画面暂停」（命中区/收起后不误触）均过。**自检整体判红是环境病**：服务器连不上、落在登录页（「登录状态 — 未登录」），整片页面检查因此「消失/降级」——与 9-30 晚同一症状（当晚服务器 502/死交替）。
+- **没验证的**：全屏档、独占模式那颗、真实播放里 15 秒倒计时的观感——都需要真实播放（服务器没回来）；自检在窗口档量的是同一套常量，落点可信。截图欠着，服务器恢复后补拍。
+
+## 首页滚动条三轮案定案：他点的一直是 36 像素空底，不是滚动条（2026-10-01 晚）
+
+用户请求「收窄首页右边滚动条的背景遮罩」连提三轮才定案。前三轮的弯路与最终真相：
+
+- **第一轮（另一窗口，发布件 12:00）**：把滚动条**轨道** 12→6（`EgNarrowScrollBarStyle`，只挂首页）。方向错了。
+- **第二轮（本窗口）**：用户复述。像素比对+框架源码（sparse clone microsoft-ui-xaml）查明：框架暗色主题 `ScrollBarBackground*` 三态**全透明**，「悬停 12 像素底板」不存在，还宽的是**把手本体**（悬停 12、滚轮 8）→ 把 `ThumbVisual` 可视条钉成 6 像素居中（Thumb 命中区维持框架动画，拖拽手感不变）。用户 16:40 起新版实测：那条带确实变成 6 像素了，**他仍然说宽**。
+- **第三轮（定案）**：用户附新截图＋一句「**遮海报遮太多了，不是滚动条的问题**」。重测截图：海报在离窗口右缘 36 像素处被裁断，那 36 像素空底（首页 `Overlay` 的 `Padding` 右值，「和大图上那块牌子对齐」的脊线）看着像盖住海报的遮罩，滚动条只是恰好站在那条带子里（2 像素瞬态线=触控平移指示器 `VerticalPanningThumb`，右缘那条 6 像素=第二轮钉过的把手）。**真修：Overlay 右 Padding 36→13**（=滚动条车道宽 `ScrollViewScrollBarsMargin 1 + ScrollBarSize 12`），海报裁切线推进 23 像素，滚动条永不再压海报；左边脊线与大图牌子不动。前两轮滚动条收窄照留。
+- **第四轮（同日最晚）**：「滚动条不要延伸到轮播图上，在下半部分显示就行」。竖滚动条跟着视口铺满整页（Scroller 的负边距把它一直顶到窗口顶），滚动/悬停时那条 bar 正压在通栏剧照上。修法：`HomePage.PlaceScrollBar()` 把 Scroller 模板里那支竖 ScrollBar 的 `Margin.Top` 设为 `Banner.ActualHeight`（带子可见时=轮播下沿，无幻灯片时归 0 回到通长），挂在与 SyncBleed 同一批 Banner 钩子上（Loaded/SizeChanged/SlideChanged；带高只随宽度走，宽度变必响 SizeChanged，窗口高矮不用单独听）。找模板件用下树走查，**不走进内层滚动控件**（货架横带自己的 ScrollView 模板里也有隐藏竖滚动条，会抢先被匹配）。滚动条变短后拇指比例随短轨道缩放，拖拽映射整页不变。
+- **验证**：闸门 1（0 警 0 错＋whitespace）✓、闸门 2（1379/1379）✓、闸门 3（publish ✓）——四轮全部走完。**首页实拍仍欠着**：服务器当晚在「死→502→死」之间反复（curl 000/502 交替，UIA Invoke「连接」拿到 502 横幅），PlaceScrollBar 的渲染效果没拍到；几何依据=带高公式（页宽×0.4275，用户窗口约占 43% 高）。服务器稳定后：连上首页滚一下——滚动条应从轮播下沿开始、一路到页底。
+- **工具与教训**：`work/scrollbar-*-probe.ps1`、`home-edge-shot.ps1`、`home-connect-shot.ps1`（UIA Invoke 连接可用：按钮名「连接」/id `SignInConnectButton`，不动指针）。教训：用户说「滚动条的背景遮罩」≠滚动条有问题——「遮罩」是实指那块盖住内容的底，先问清指物再动手，三轮弯路本可省两轮。
+
+## 结案：双击被拦的真凶是仓库目录上的「低强制完整性标签」（2026-10-01 第三轮续八，已修复并验收启动）
+
+**症状与终结**：双击桌面快捷方式弹「Windows 已保护你的电脑」/「打开文件 - 安全警告」。真凶查明并修复后，等同双击的 `ShellExecute` 探针 **1 秒起进程、主窗口正常、零弹窗**。
+
+- **根因**：`C:\Users\89400\EmbyNian`（目录本身）带 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`——**低强制完整性标签，可继承**；全树文件与子目录继承（exe 上是 `(I)`）。urlmon 在区域判定时查文件安全描述符（Procmon 实锤：唯一分歧点是 `QuerySecurityFile`，操作集合与 MyComputer 的对照样本完全一致），把低完整性的本地文件判为 **Internet 区** → SmartScreen 开着弹新式框、关着弹老式「打开文件 - 安全警告」，微软签名/自签签名/无 MOTW/受信任发布者商店**全部无关**——微软官方签名的 Procmon.exe 放在 `work\` 里照样被拦。
+- **为什么历轮排查全部落空**：这个标记不在任何 ADS/注册表/策略里（`Get-Item -Stream`、`dir /r`、三种读取器全看不到），**改名跟着走**（对象级），显式盖 `ZoneId=0` 的 ADS 也压不过它。判别命令就一条：`icacls <路径> | findstr Mandatory`。
+- **修复（已做，完全可逆，非关防护）**：`icacls C:\Users\89400\EmbyNian /setintegritylevel (OI)(CI)M`，继承链自动传播全树；修复后原件/副本/目录的区域判定全部回到 `MyComputer`。标签是谁在什么时候打上的未查明（目录上有 ObjectID，work 等子目录没有）；**若症状复发，第一步先查这个标签**。
+- **诊断中动过的开关（与根因无关，均已恢复出厂）**：`HKCU/HKLM ...\Explorer\SmartScreenEnabled`（删值）、`HKLM Policies\...\System\EnableSmartScreen=0`（删值）、SmartScreen 调试日志通道（重新关闭）、`AppHost\EnableWebContentEvaluation`（上轮置 0 的两处恢复为 1）。恢复后双击仍静默——MyComputer 区文件不进 SmartScreen/区域提示的任何一层。
+- **工具新增**：`tools/sign-release.ps1` 保留 `-SetShellSmartScreen`（应急开关，非本案根因）；`work/probe-smartscreen-ab.ps1`、`work/watch-dialog-owner.ps1`、`work/elevated-round*.ps1` 与 Procmon 追踪文件用完即删。
+- **遗留一层小坑**：图标缓存——排查中强制重启资源管理器导致桌面快捷方式白图标，`ie4uinit -show` 已重建，图标本体（`app.ico` 与 exe 内嵌图标）完好。
+
+## ~~找对了开关：资源管理器读的是 HKCU Explorer\SmartScreenEnabled~~（2026-10-01 第三轮续七，结论被续八推翻，保留原文仅作轨迹）
+
+**该轮把 A/B 变化归因于 `SmartScreenEnabled`，是错的**：写值前后探针行为确有变化（新式框→老式框），但那只是关掉了上层表现，老式框的来源（区域判定）未动。真正的因果链见续八。以下原文不再作为结论引用：
+
+- ~~根因：AppHost 两处不是资源管理器读的开关；真正的落点 `HKCU\...\Explorer\SmartScreenEnabled` 从未被查过——没有值 = 默认开启。~~
+- ~~A/B 实证：同一探针写值前弹 SmartScreen 新式框，写值后不再弹。~~（现象属实，归因错误）
+- ~~遗留一层：写值后探针上下文里仍弹老式安全警告，无定论。~~（续八已定论：低完整性标签 → Internet 区）
+
+
+## 半复现成功并抓到现场截图；上一轮的"HKLM 一改就好了"被本轮推翻（2026-10-01 第三轮续六）
+
+**这一轮最重要的一件事是纠正我自己上一轮的结论。** 上一轮我把"HKLM 也置 0 后 ShellExecute 立刻通过"当成了修复生效。本轮重复同一实验拿到的是相反的读数：
+
+- `ShellExecute` 起交付件：**返回了**，但**进程始终没有**（连续 4 次查询、每次间隔 2 秒，全为 0）；应用日志仍是 08:53:04、一个字节没长。
+- 也就是说，**`ShellExecute` 返回 ≠ 放行**。上一轮那次"起来了"，更像是一次偶发绕过（或者是当时那个框弹出后我误判了时序），**不能算作那个开关生效的证据**。
+
+**半复现 + 现场截图（首次拿到"框在屏幕上"的直接证据）：**
+
+用 `ShellExecute` 起交付件，再在启动后 5 秒整屏抓图（3640×1920 双屏），得到 `work\during-launch.png`：
+
+- 屏幕上**确实出现了「Windows 已保护你的电脑」那个框**（「Microsoft Defender SmartScreen 阻止了无法识别的应用启动…」），当时它压在别的窗口上、只有一颗「不运行」按钮、**不是居中模态**；
+- 同时通知区有一个「已阻止」提示；
+- 这一次仍然**没有任何 EmbyNian 进程**。
+
+那个框的摆位与按钮构成与用户发来的两张截图（居中、两颗按钮）**不完全一致**，所以现在有了一个此前没考虑过的可能性：**它不是 Windows 画的，是别的程序画的**。这正是下一步要确定的唯一一件事。
+
+**新工具（已验证可跑）：** `work\find-dialog-owner.ps1` —— 用户运行后待命，他双击快捷方式、框出现后按键，脚本报出**前台窗口的进程名 / 进程路径 / 窗口类名 / 位置**，外加全部可见顶层窗口清单和一张整屏截图。拿到"框属于哪个进程"就把这件事定了。`work\capture-blockscene.ps1` 仍在（更全的状态快照）。
+
+**本轮的排除项不变**（都有读数）：无 MOTW、签名 `Valid`/`CN=EmbyNian`、两处开关 0、360 只剩注册表残留（无进程/服务/驱动）、WDAC 8 份策略全是微软自带且无 EmbyNian 记录、无组策略覆盖、无 IFEO/兼容层。
+
+## 弹窗截图确认是标准 SmartScreen；两层开关都关掉后仍拦（2026-10-01 第三轮续五）
+
+用户发来了第二张弹窗截图，**这次看清了**：标准 SmartScreen 对话框（标题栏「Windows 已保护你的电脑」、正文「Microsoft Defender SmartScreen 阻止了无法识别的应用启动」、`应用: EmbyNian.exe`、**`发行者: EmbyNian`**、按钮「仍要运行 / 不运行」，右上角仅一个 ✕）。所以排除了"弹的是别的软件"的可能，也确认签名被认了。
+
+**这一轮又排除的几层（都有读数）：**
+
+- **360 安全卫士**：注册表 `AntiVirusProduct` 里有 `360安全卫士` 记录，但**目录不存在、进程没有、服务没有、驱动没有** —— 只剩残留注册项，排除。
+- **WDAC / 代码完整性**：`C:\Windows\System32\CodeIntegrity\CiPolicies\Active` 有 8 份 .cip，`CodeIntegrityPolicyEnforcementStatus = 2`；逐份读内容找到的都是微软自带策略（`WindowsLockdownPolicySettings`、`UMCI`、允许清单类），**没有任何一条针对 EmbyNian**；`CodeIntegrity/Operational` 日志里的事件 3033 全是 `MpDefenderCoreService.exe` 加载 Bonjour 的 `mdnsNSP.dll`，与本项目无关。
+- **组策略**：`Policies\...\Safer\CodeIdentifiers` 只有我写的那条登记；`CurrentVersion\Policies\System` 无 SmartScreen 相关项。
+- **文件是否被反手打标记**：交付件签名后 675512 字节、数据流仍只有 `:$DATA`、`Valid`，没有在拦截后被补上 MOTW（所以"拦一次就次次拦"不是标记造成的）。
+- **两处开关**：HKCU = 0、HKLM = 0，读回确认。
+
+**所以现在的矛盾是明确的、也是我承认的：** 按我在这台机器上能查到的一切（文件无 MOTW、签名有效且被识别、两处开关为 0、无第三方安全软件、无 CI 策略命中、无组策略覆盖），它**不该**被拦；但用户双击时它确实被拦，而且我自己的 `ShellExecute` 探针也复现过一次同一现象。**我判断不出剩下那一层是什么**，不再靠猜。
+
+**给用户的下一步（唯一能继续推进的动作）：** `work\capture-blockscene.ps1`（已自检跑通）——用户先运行它待命，然后双击快捷方式、弹窗出来后按回车，脚本把**弹窗那一刻**的全部可见窗口（含类名与所属进程）、两处开关、签名与数据流、应用日志、最近三分钟事件日志写进 `work\block-scene-<时间>.txt`。**这一份是隔着屏幕拿不到的东西**；拿到后再决定下一步，不再继续往注册表上叠改动。
+
+**本会话能力边界（写给下一个接手的人）：** 看不到用户屏幕；`Start-Process` 起 GUI 在本会话不可靠；`cmd start` 能起但**绕过** SmartScreen 检查，因此**不能**用作"没被拦"的证据；`ShellExecute`（等同双击）才是对的探针，且它复现过被拦。截图可以用 `tools/shot.ps1 -Attach` 抓（配合 `cmd start` 启动的实例）。
+
+## 修好了：机器级 `EnableWebContentEvaluation` 才是那个开关（2026-10-01 第三轮续四）
+
+**先复现，再改，再复测**——这一轮终于把因果关系钉死了。
+
+1. **复现**：用 shell 的 `ShellExecute`（等同双击）启动发布件 → **调用 25 秒不返回、进程起不来**；而 `cmd start`
+   那条路从来都能起来。说明拦在 Explorer 的启动路径上，且 `cmd start` **绕过**这个检查——前几轮拿它当"能跑"的证据，
+   所以一直没看见问题，这是我的方法错误。
+2. **先试错**：把**用户级** HKCU 那份置 0，用户重启资源管理器（进程启动时间 08:24:58 → 14:56:48，确实重启了），
+   **仍然被拦**。
+3. **改对**：把**机器级** `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost\EnableWebContentEvaluation` 也置 0，
+   **同一套探针立刻通过**：`ShellExecute` 立即返回、应用进程起来（PID 22768、标题 `EmbyNian`）。
+4. **现状**：HKCU = 0、HKLM = 0，两份都读回验证过。
+
+**沉淀到工具与文档，避免下次再踩：**
+
+- `tools/sign-release.ps1 -SetAppCheck Off|On` 现在**两处一起写**并读回复核；`-Status` 两处都报，**判据看 HKLM**。
+- `-Status` 里「受信任发布者」那段加了实测结论：那条登记**消不掉**这个提示（它管 SRP），别当解法。
+- 开发文档写明：判断"双击会不会被拦"要用 `ShellExecute` 或让用户双击，**`cmd start` 会绕过检查，不能作证**。
+
+**这一轮之前的判断错在哪（留档）：** 我一直用 `cmd start`/`Start-Process` 验证"能跑"，得出了"文件没被拦"的结论；
+实际上被拦的是 Explorer 那条路，而这两条路都不走它。真正让方向收敛的是用户给的两条信息（"先弹窗、点仍要运行才开"
+与弹窗原文），以及最后用 `ShellExecute` 做出的复现。
+
+**代价如实记：** `EnableWebContentEvaluation = 0` 是**关防护**，此后这台机器上**所有**未签名程序双击都不再被拦，
+不只是 EmbyNian。已获用户明确同意（问卷里选"关掉它，你帮我改"）。回退一条命令：管理员终端
+`tools\sign-release.ps1 -SetAppCheck On`。签名那部分保留（发布者显示为 EmbyNian，是真实改善）。
+
+**待用户确认：** 让他双击一次桌面快捷方式，确认在**他的**操作路径上也不再弹（我这里实测已通过，但用的是
+`ShellExecute` 探针，不是他的鼠标）。
+
+## 收尾：真正决定拦不拦的是「检查应用和文件」，已按用户同意关闭（2026-10-01 第三轮续三）
+
+**受信任发布者登记被实测证伪：** 登记写好、`authenticodeenabled = 1`、条目值全对之后，用户双击**仍然被拦**，
+弹窗里发行者仍是 `EmbyNian`。结论：`Safer\CodeIdentifiers` 那条登记管的是**软件限制策略（SRP）**，与资源管理器
+「检查应用和文件」是两套机制，**它消不掉 SmartScreen 的「无法识别的应用」提示**。这条写进了脚本注释与 `-Status`
+的输出里，不让下一个人再试一遍。
+
+**根因定论（四轮下来唯一站得住的那条）：** `EnableWebContentEvaluation`（资源管理器「检查应用和文件」）开启时，
+未签名／无下载信誉的程序双击一律被拦一次，判定在微软服务端、本机文件层面动不了，也**不会记住**「仍要运行」。
+签名把「发布者未知」变成了 `EmbyNian`（有效改善，已由用户弹窗原文证实），但消不掉提示本身；信誉只认 CA 证书或
+Microsoft Store。
+
+**已按用户选择执行（他先在问卷里选「关掉它，你帮我改」）：**
+
+- 关掉**当前用户**的开关：`HKEY_USERS\S-1-5-21-1837929227-167584001-101561885-1001\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost\EnableWebContentEvaluation = 0`。
+- **系统级 `HKLM\...\AppHost\EnableWebContentEvaluation` 保持 1 未动**；提权执行时特意按调用者 SID 定位 hive
+  （提权后 `HKCU` 会指向管理员账户，直接写 HKCU 会写错地方——这是个容易埋雷的点）。
+- 提权方式：本会话无管理员权限，用 `Start-Process -Verb RunAs` 弹 UAC 由用户确认两次（受信任发布者登记、关开关），
+  输出重定向到 `work\*-elevated.log`，**读回注册表复核**才算完成。
+- 新增 `-SetAppCheck Off|On` 与 `-Status` 里的该项读数，**要回退是一条命令**：管理员终端跑 `-SetAppCheck On`。
+  这是关防护（影响所有未签名程序），所以在脚本注释、`-Status` 输出和给用户的说明里都写明了代价。
+
+**当前状态一览（都读回验证过）：**
+
+| 项 | 值 |
+| --- | --- |
+| 用户级 `EnableWebContentEvaluation` | **0（已关）** |
+| 系统级 `EnableWebContentEvaluation` | 1（未动） |
+| `artifacts\publish\win-x64\EmbyNian.exe` | `Valid` / CN=EmbyNian / 带时间戳 |
+| `artifacts\EmbyNian_windows-x64_0.1.1.exe` | `Valid` / CN=EmbyNian / 带时间戳 |
+| Safer 受信任发布者登记 | 已写（但对 SmartScreen 无效，见上） |
+
+**尚待用户确认：** 关掉开关后双击是否真的不再弹（本会话无法观察 GUI 弹窗；`Start-Process` 在本会话启动 GUI 也不可靠，
+能用的只有 `cmd start`）。若仍弹，说明该值还需 Explorer 重启或注销后生效，或在 HKLM 层面还有一份生效值——
+那时下一步是让用户注销／重启一次再试，而不是继续加注册表条目。
+
+## 受信任发布者登记已生效（根因是登记不完整；2026-10-01 第三轮续二）
+
+查出并修掉了一个**会让整条路白跑**的漏洞：`HKLM\SOFTWARE\Policies\Microsoft\Windows\Safer\CodeIdentifiers`
+根上的 `authenticodeenabled = 0` —— **Authenticode 发布者规则是关着的**，那种状态下往 `Paths` 里写条目根本不会被读。
+`tools/sign-release.ps1 -TrustPublisher` 第一版只写了条目和根上的 `DefaultLevel`，缺了
+`262144\authenticodeenabled = 1`，用户即使跑了也不会有任何效果。现在：
+
+- `-TrustPublisher` 会写 `262144\authenticodeenabled = 1`；
+- `DefaultLevel` **只在不存在时**补 262144（不覆盖已有策略——它决定 SRP 拦还是放，动错了会把机器变成只许白名单运行）；
+- 写完**读回注册表复核**；`-Status` 也把「Authenticode 规则开关」单独列出来，并区分「键在但没条目」与「条目值不对」两种失败。
+
+**执行与验证（都已落地）：** 通过 `Start-Process -Verb RunAs` 弹出 UAC 由用户确认（本会话无管理员权限），
+脚本在提权窗口里跑完并输出到 `work\trust-publisher-elevated.log`；随后独立复核：
+
+- `262144\authenticodeenabled = 1`
+- `262144\Paths\26D36428E643C3FBB1AC9118AA9F9990124096A9`：`Authenticode = 26D36428…`、`TrustedPublisher = 1`
+- 根上 `DefaultLevel = 262144`
+- `sign-release.ps1 -Status` 三项全绿；`EnableWebContentEvaluation` **保持 1（没去关那个开关）**
+- 两个交付件仍 `Valid` / `CN=EmbyNian`
+
+**尚未验证：** 登记能否真的让 SmartScreen 不再拦——这一步只能由用户双击确认（`Secure Assessment` 那条路本会话
+跑不了 GUI 启动观察）。**如果仍拦，就只剩关掉「检查应用和文件」**，那一步是关防护，必须用户自己决定，不代做。
+
+## 签名生效了：弹窗里发布者已变成 EmbyNian，剩下的是信誉这一关（2026-10-01 第三轮续）
+
+用户回了弹窗原文：
+
+```
+Windows 已保护你的电脑
+Microsoft Defender SmartScreen 阻止了无法识别的应用启动。运行此应用可能会导致你的电脑存在风险。
+应用: EmbyNian.exe
+发行者: EmbyNian
+```
+
+**关键变化：`发行者` 那行从「发布者未知」变成了 `EmbyNian`。** 这证明自签证书 + 装进 `LocalMachine\TrustedPeople` 这条路**被 Windows 认了**——签名这一层已经打通，前一轮的判断（拦在签名/信誉层，不在文件标记上）得到验证。剩下的只剩 SmartScreen 的**下载信誉**：一个没有任何下载量的程序，即使签名可信也会被拦一次，而信誉只认 CA 证书或 Microsoft Store，本机改不动。
+
+**给用户的最后两条路（都已完成工具侧准备）：**
+
+1. `tools/sign-release.ps1 -TrustPublisher`（管理员，本脚本新增）：在
+   `HKLM\SOFTWARE\Policies\Microsoft\Windows\Safer\CodeIdentifiers\262144\Paths` 下按证书指纹登记
+   `Authenticode` + `TrustedPublisher`，也就是「把这张证书列为受信任发布者」——企业环境里常用的
+   受管配置，**不是关防护**，影响面只有这一张证书。
+2. 关掉资源管理器「检查应用和文件」（Windows 安全中心 → 应用和浏览器控制 → 基于信誉的保护设置 →
+   `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost\EnableWebContentEvaluation = 0`）。
+   这条路确定有效，但**影响所有未签名程序**，属于关防护，只能由用户决定，不代做。
+
+**坑记录：** `-TrustPublisher` 写 HKLM，非管理员会走到明确的报错分支（已实测：报「需要管理员权限」而不是崩栈）。`X509ChainPolicy.TrustMode` 在 Windows PowerShell 5.1 上不存在（第一版脚本死在这里），已改用 `X509Chain.Build`。
+
+## 桌面快捷方式被 SmartScreen 拦：定位到「签名」这一层，并已签上（2026-10-01 第三轮）
+
+用户确认了两件关键事实：拦的是**桌面快捷方式**；而且**先弹窗，点「仍要运行」之后程序才打开**。第二句把方向钉死了——拦的不是这个文件（下详），而是双击那条路上的一次**签名/信誉判定**。
+
+**这一轮拿到的硬证据（都是实测，不是推断）：**
+
+1. **同一个 exe 我这边次次能起来。** 用 `cmd start` 启动 `artifacts\publish\win-x64\EmbyNian.exe`，进程活着、`Responding=True`、**截图为证**（`work\smartscreen-investigation-app-window.png`：已登录 donxuelian · 果服、连着 192.168.31.230:3001、首页正常渲染），`cmd start /wait` 回来 `EXITCODE=0`。所以这个文件对 Windows 来说没有被拦。
+2. **全机没有任何 EmbyNian 文件带 MOTW。** C／D／E 三盘、含 Temp／Downloads／Desktop／Programs、深度 5，共 256 个 `EmbyNian*.exe`，带标记的 **0 个**；快捷方式自己与它指向的目标，数据流都只有 `:$DATA`。
+3. **没有任何"记住的拦截决定"。** IFEO 与 AppCompatFlags Layers 无条目；组策略无 SmartScreen 覆盖；`CodeIntegrity`／`AppLocker`／`Defender`／`SmartScreen` 四个日志无命中；ZoneMap／INetCache／Scans\History 无记录；受控文件夹访问关闭（0）；发布目录不是重解析点，无云同步；当前不是隔离会话。系统 Windows 11 Pro build 26200。
+4. **根源在签名这一层，不在本机。** `EnableWebContentEvaluation = 1`（资源管理器「检查应用和文件」开着），而这个 exe **没有 Authenticode 签名**。SmartScreen 对无签名文件永远给不出正面信誉，判定在微软服务端，**本机文件怎么改都改不动它**——这正是前两轮"扫标记"扫不出结果的原因，也解释了为什么它**不会记住**「仍要运行」。
+5. 中途还有一个反证：最后一次成功运行停在 08:53:04，而 12:00:57 换过新的发布件。**换过一次文件**这件事与"每次双击都问"吻合。
+
+**做了什么：**
+
+- 新增 `tools/sign-release.ps1`（签名链路，**实测通过**）：`-Status` 看现状，`-Path <文件或目录>` 签名，`-Setup`（管理员，一次性）建证书并装进 `LocalMachine\Root` + `TrustedPeople`。signtool 从 NuGet 的 `microsoft.windows.sdk.buildtools` 里取（这台机器没装 Windows SDK）。
+- **已经签上并复核**：`artifacts\publish\win-x64\EmbyNian.exe` → `Valid`、签名者 `CN=EmbyNian`、带 DigiCert 时间戳、675512 字节（签名前 668160，多出的 7 KB 是签名块）；`artifacts\EmbyNian_windows-x64_0.1.1.exe` 同样 `Valid`。桌面快捷方式指向的目标现在签名状态就是 `Valid`。
+- 签名后用 `cmd start` 又启动一次：进程照常起来（PID 23888、有窗口、`Responding=True`）——**签名没破坏可执行性**。
+- 证书链在本机**建得起来**（`X509Chain.Build` = True，根就是 `LocalMachine\TrustedPeople` 里那张 2026-09-06 的 `CN=EmbyNian`，本来就因为以前的 MSIX 旁加载装过），所以这台机器上它算"发布者可信"。
+
+**两个坑（写进脚本注释了）：** ① `X509ChainPolicy.TrustMode` 是 .NET Core 才有的，Windows PowerShell 5.1 上取它就是「找不到属性 TrustMode」——第一版脚本死在这里；② `Start-Process` 在这个会话里**不可靠**（多次挂住不返回），`cmd start` 才是能用的启动路径，验证启动行为要用后者。
+
+**要说清的代价与边界（不改口）：**
+
+- 自签证书**只对这台机器有效**。别人的机器上它不是受信任根，SmartScreen 行为与不签名相同（微软文档原文如此）。下载者要免提示，仍然只有 CA 证书或上架 Microsoft Store 两条路；用户已明确暂不买证书，所以对外发布件保持未签。
+- 如果装了证书之后**仍然**弹窗，那就只剩「关掉资源管理器那个『检查应用和文件』开关」（需要管理员；`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost\EnableWebContentEvaluation = 0`，或 Windows 安全中心 → 应用和浏览器控制 → 基于信誉的保护设置 → 关闭「检查应用和文件」）。这是关防护，我没有替用户做这个决定。
+- **签名会改交付件的字节**：`artifacts\publish\win-x64\EmbyNian.exe` 的 sha256 不再等于 `obj` 里那份重编产物。这是签名发布的正常状态，但仓库"发布件与 obj 逐字节一致"的老判据从今往后对**这个文件**不再成立，复核时要按"已签名"解释。
+
+**本轮改动：** 新增 `tools/sign-release.ps1`；签了上述两个交付件；本文件。没有改产品 C#／XAML。
+
+## 续查：用户说「是桌面这个快捷方式 EmbyNian」（2026-10-01 第二轮）
+
+用户补充：被拦的是**桌面快捷方式**。于是从快捷方式这条线重查，结论是**本机已经没有任何会被 SmartScreen 评估的 EmbyNian 文件**，而弹窗无法复现。
+
+**快捷方式与目标的实测读数：**
+
+- `C:\Users\89400\Desktop\EmbyNian.lnk` → 目标 `artifacts\publish\win-x64\EmbyNian.exe`，工作目录同目录，参数空，图标 `app.ico,0`，创建 2026-09-06 18:59:21、最后写入 2026-10-01 12:08:56（发布件 12:00:57 之后八分钟）。
+- 快捷方式自己的数据流只有 `:$DATA`；目标的流也只有 `:$DATA`（**无 MOTW**），签名 NotSigned，版本 0.1.1.0。
+- **全盘清点**：C／D／E 三个盘（含 `EmbyNian`、`EmbyNian-ab`、`EmbyNian-stale`、Temp、Downloads、Desktop、Programs，深度 5）共 256 个 `EmbyNian*.exe`，**带 MOTW 的 0 个**；今天被动过的只有发布件那一个。
+- 其它排除项：系统映像劫持（IFEO）与兼容性层（AppCompatFlags Layers）都没有 EmbyNian 条目；组策略里没有任何 SmartScreen 覆盖；`CodeIntegrity/Operational`、`AppLocker`、`Windows Defender/Operational`、`SmartScreen/Debug` 四个日志里都没有拦截记录；发布目录及其祖先都不是重解析点；没有云同步进程；当前不是隔离会话；系统是 Windows 11 Pro build 26200。
+
+**与我上一轮修掉的那两份下载件的关系：** `Downloads` 里那两个安装包（0.0.1／0.0.7）是这台机器上**曾经**唯一带 MOTW 的 EmbyNian 文件，上一轮已摘掉标记（现在读数同样是 0 个带标记）。用户那张截图很可能来自它们之中某一个（点「不运行」不会留下持久化记录，所以查不到痕迹），或来自某一版已被删除／替换的副本。**这条推断没有被证实，照实记为未证实。**
+
+**没做成的事（重要）：** 想直接启动一次把弹窗抓下来，试了三版探针都失败，**应用连一行日志都没写**（当天日志停在 08:53:04），所以既没复现弹窗也不可能据此断言「已经不拦了」。失败原因分别是：① 脚本给只读自动变量 `$PID` 赋值，窗口枚举整体失效（PowerShell 里 `$PID` 不可写，本文件另一处用 `$host_` 规避同一类坑）；② 加 P/Invoke 枚举顶层窗口的版本在 180 秒与 120 秒内都没跑完；③ 去掉 P/Invoke 的纯 `Start-Process` 探针同样超时未返回。**在这个会话里"启动 GUI 并观察弹窗"这条路走不通**——下次要验证只能靠用户双击，或换一个不在本会话里起的终端。探针脚本已全部删除，没留在工作树里。
+
+**结论（写给下一个接手的人）：** 代码签名那条线的结论不变——自签名对 SmartScreen 与不签名同效，真免提示只有 CA 证书或上架商店。这条线上本地能做的已经做尽：带标记的文件是 0 个。**如果用户下次双击桌面快捷方式仍然被拦，那说明判定依据不在这台机器可查的文件标记上**（例如他一贯用某个沙箱／虚拟机跑这个快捷方式，或弹窗来自别的东西），届时需要的是**一张弹窗原文截图**（标题栏 + 「应用」「发布者」两行），而不是再扫一遍盘。
+
+**本轮改动：** 只有本文件（PROGRESS.md）。没有改产品代码、脚本或资源，所以闸门 1～4 不适用；上一轮的 `tools/unblock-embynian.ps1` 与开发文档那两节保持原样。
+
+## 代码签名与 SmartScreen：本机摘除「来自互联网」标记（2026-10-01 用户令「修复」）
+
+用户贴了一张 SmartScreen 对话框（「Windows 已保护你的电脑 / 应用：EmbyNian.exe / 发布者：发布者未知 / 仍要运行·不运行」）。追问范围时他选了**自己这台机器上跑本地构建的 EmbyNian.exe**，并在证书路线里选了**暂不买证书、先把本机弄成不提示**。
+
+**先查事实，结果和「本地构建被拦」这个前提相反：**
+
+- 桌面快捷方式指向的 `artifacts\publish\win-x64\EmbyNian.exe`（2026-10-01 12:00:57，668160 字节）：`Get-AuthenticodeSignature` = **NotSigned**，数据流**只有 `:$DATA`**，整个发布目录 528 个文件里带标记的 **0 个**。它没有 MOTW，SmartScreen 根本不会评估它。
+- 全盘扫描（Downloads / Desktop / `%LOCALAPPDATA%\Programs` / artifacts / work）后，本机**唯一**带 MOTW 的 EmbyNian 文件是下载来的安装包：`Downloads\EmbyNian_windows-x64_0.0.1.exe`（2026-09-06）与 `0.0.7.exe`（2026-09-13），两个都 NotSigned。它们带着 `ReferrerUrl=https://github.com/cudamin/EmbyNian/releases/tag/v0.0.x`。
+- 会让未签名文件**不分来源一律被拦**的智能应用控制是**关闭**的（`VerifiedAndReputablePolicyState = 0`）；资源管理器 SmartScreen 开关是开的（`EnableWebContentEvaluation = 1`）。
+- **没查到**是哪一个确切文件弹的那张图：0.1.1 安装包在这台机器上找不到（Downloads 里只有更要的两份；GitHub API 查到 v0.1.1 资产下载数 1），按时间推断那张图多半来自下载目录里的旧安装包或上一次下载即运行。这条不确定照实记，没当成已证实。
+
+**为什么不做签名**（这是本轮最值钱的一条结论）：微软现行文档写明自签名证书的 SmartScreen 行为**与不签名相同**（[code-signing-options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)、[smartscreen-reputation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation)），拿本机自签证书签 exe 消不掉提示；OV／EV 证书首个版本也仍可能提示（信誉按发布者身份随下载量累积，EV 自 2024 年起不再免检），换证书还会清零已有信誉。真免提示只有 CA 证书（中国大陆个人走传统 CA）或上架 Microsoft Store 两条路，都已写进开发文档。
+
+**改了什么：**
+
+- 新增 `tools/unblock-embynian.ps1`：只摘 EmbyNian 自己的可执行文件的 MOTW（文件名打头 + 扩展名白名单 + PE 版本信息里 ProductName/CompanyName 就是 EmbyNian），默认只清点、加 `-Apply` 才动手，动完**读回流列表**判定成败。
+- 开发文档新增「代码签名与 SmartScreen」一节（放在发布与交付下面）：三条事实、两条真实路线、工具用法与两个坑。
+- 实际执行：`Downloads` 里那两份安装包已摘掉标记并复查（数据流只剩 `:$DATA`）。
+
+**两个踩到的坑（都写进了脚本注释与文档）：**
+
+1. **受限沙箱对工作区外的写入会被静默忽略**：`Unblock-File -ErrorAction Stop` 不抛异常、退出码正常，标记一个字节没少；同一文件上 `[System.IO.File]::OpenWrite` 明确报「访问被拒绝」，`Set-Content -Stream DshProbe` 也失败——但 `Remove-Item "$f:Zone.Identifier"` 单独报成功而流仍在。所以工具不信返回值，改判据为「重新枚举数据流」。
+2. **Inno Setup 写进 PE 的版本字符串是定长补空格的**：`ProductName` 实际是 `"EmbyNian"` 后面跟四十多个空格，按产品名认文件必须先 `Trim()`。第一版工具就因为这个一个文件都没匹配到（静默地报「没找到任何 EmbyNian 的可执行文件」）。
+
+**验证：** 工具四条路径都在工作区内用**真安装包副本 + 手动打的 MOTW** 跑过：认出（1 个带标记）→ `-Apply` 摘掉 → 独立复查流只剩 `:$DATA` → 再跑一次报「没有需要摘的」（幂等）。构建 **0 警 0 错**；`format whitespace` 通过（该命令要起命名管道 build host，受限沙箱下 EPERM，本轮按指引申请一次授权后过）；`check-scripts` **16 个脚本**全过；`test-maintenance` 13 项通过；单测 **1379 项，通过 1365，失败 14** —— 14 条**全部**是 `MpvProcessTests` 的「安全起播」，异常栈同为 `Audit.ReadAsync` / `Audit.DisposeAsync` 的命名管道 `OperationCanceledException`，即仓库已记录的沙箱环境红（历史记录 13 条，本条数随 flaky 波动）；本轮**没有改任何 C#**，所以这 14 条不可能由本轮引入。
+
+**没做与没验证的：** 闸门 3（发布）与闸门 4（自检）本轮不适用也未跑——改动只有新增 PowerShell 脚本与 Markdown，没有产品改动。**没有任何自动化手段能证明「双击后不再弹提示」**：SmartScreen 的判定在 Windows 侧，只能由用户双击一次确认；已请他试下载目录里那份安装包。
+
+## 收窄首页右边滚动条的背景遮罩（2026-10-01 用户令）
+
+用户令原文：「收窄首页右边滚动条的背景遮罩」。澄清后确定收的是**框架 ScrollBar 模板里那条轨道底**（`VerticalTrackRect`，Fill = `ScrollBarTrackFill` = `AcrylicInAppFillColorDefaultBrush`）—— 它默认跟滚动条一样宽（`ScrollBarSize` = 12），压在首页通栏剧照的右端就是一条 12 像素宽的亮边。**不是把手、也不是滚动能力**。
+
+- **必须在模板里改，不能只换画刷键**：那条轨道是 `Grid.RowSpan="5"` 的 Rectangle，宽由 ScrollBar 自己撑满（默认 `HorizontalAlignment=Stretch`），换画刷只换颜色、换不掉宽度。
+- **改法**：`Theme/Styles.xaml` 新增 `<x:Double x:Key="EgScrollBarTrackWidth">6</x:Double>` 与 `<Style x:Key="EgNarrowScrollBarStyle" BasedOn="{StaticResource DefaultScrollBarStyle}">`，整份照抄框架模板的**竖向**部分（水平部分删掉 —— 首页只竖滚），与框架的**唯一**差别是给 `VerticalTrackRect` 加了 `HorizontalAlignment="Center"` + `Width="{StaticResource EgScrollBarTrackWidth}"`（其余 `Grid.RowSpan`/`Opacity`/`StrokeThickness`/`Fill`/`Stroke`/`RadiusX`/`RadiusY` 全同）。把手（`VerticalThumb`）一字未动 —— 用户说的是「背景遮罩」，底与把手是两件事。
+- **只挂首页**：`Views/HomePage.xaml` 的 `Scroller`（`ScrollView`）`Resources` 里挂一条隐式 `ScrollBar` 样式 `BasedOn="{StaticResource EgNarrowScrollBarStyle}"`。别的页面照旧用框架那档 12 像素 —— 「按页面／按用户点名的范围改」的老规矩。
+- **验证**：构建 **0 警 0 错**；`format whitespace` 过；两份 XAML XML 良构；新样式引用的**45 个资源键全部有定义**（项目 + 框架 `generic.xaml`）；`VerticalRoot` 与框架 `DefaultScrollBarStyle` 逐行 diff —— **只差 VerticalTrackRect 的 `HorizontalAlignment` + `Width` 两属性**（复制时曾把 `MinHeight` 的 `StaticResource` 误写成 `ThemeResource`，解析到同一个 30、功能无差，已改回与框架一字不差）；发布 **528 文件 / 300.8 MB / 11 GLSL**，新发布件 dll `72eccb26…` == `obj` 重编产物、≠ 上一轮 `b703eb18…`，且 `artifacts/publish/win-x64/EmbyNian.pri`（`27f71312…`）内含 `EgNarrowScrollBarStyle`／`EgScrollBarTrackWidth` 两个新键 —— **改动确实进了交付件**。
+- **单测的环境注记**：`1379 项，通过 1366，失败 13，跳过 0`。13 条失败**全是 `MpvProcessTests` 的「安全起播」**，与本轮无关：它拿 `EmbyNian.Tests.exe`（.NET apphost）冒充 mpv 子进程，而本沙箱起不了 apphost（`hostfxr.dll` HRESULT 0x80070005）；带 `TEMP` 重定向与否失败清单 diff 一字不差。本轮是**纯 XAML 改动，未动任何 C#**。
+- **⚠️ 待主会话前台非沙箱补做两件**：①**截图核对**收窄效果（`PrintWindow`，本会话 apphost 起不来）②**闸门 4 自检**（`--self-check`，同上；本会话输出为空、2 秒即退，应用连日志都没写）。**桌面快捷方式 `EmbyNian.lnk` 已指向新的发布件**（路径不变，仍是 `artifacts\publish\win-x64\EmbyNian.exe`），双击打开即是含本次收窄的版本 —— 但**观感仍要用户看一眼**。
+
+## 右键画面菜单末尾三行设置入口：字幕／视频输出／音频输出（2026-10-01 用户令，两条管线同步）
+
+用户令原文：「在右键菜单中添加字幕、视频输出、音频输出三个按钮，点击后打开设置页面」。澄清后确定是**播放页右键画面菜单**（集成模式右键那张树 ＋ 独占模式 uosc 推的同一张），不是主页/媒体库卡片的右键菜单（那边已有一条「字幕」，做的是服务器字幕管理，与这三行不是一回事）。
+
+**落在哪一行**：「更多」那一棵的最末尾（版本… / 着色器 / 跳过片头片尾 / 自动播放下一集 / 播放信息… 之后，隔一条分隔线）。上面那几行改的是这一部片子当下的行为，这三行开的是设置窗口 —— 改了从下一次播放开始生效。
+
+- **数据源一份**（`src/EmbyNian.Core/Mpv/PlayerSettingsLinks.cs`，新文件）：三行 = 文案／令牌／设置落点。「两处各写一份」是这个项目刚交过学费的形状（2026-09-29 统一右键菜单），所以集成侧 `PlayerPage.OnMoreMenuOpening` 与独占侧 `PlayerViewModel.PushPictureMenuAsync` 读的是同一张表，加一行、改一个字都只有一处。
+- **执行一条路**：两边的点击都走 `PlayerViewModel.RequestSettings` → 新事件 `SettingsRequested` → `ShellPage.OnPlayerSettingsRequested` → `ShowSettings(category)`。集成模式本来可以让页面自己开窗，但独占模式播放页根本不在树上（只有 view model 这条线通到外壳），一个出口才写不出两种答案。
+- **独占契约**：新键 `VideoWindowContract.OpenSettings`（`embynian-open-settings`），值域由 `PlayerSettingsLinks.For` 收窄成 subtitle/video/audio —— 菜单行的 value 是视频窗那棵 Lua 树回来的，乱码从这里挡掉。uosc 侧零改动（value 就是一条 `script-message`，与 menu-index 同款）。
+- **一个必须先解决的坑（本轮最费事的一处）**：全屏播放时主窗是 topmost 的（`EnterFullscreen` 的 band ＋用户自己钉的 置顶，本机 `AutoFullscreenOnPlayback`/`PinWindowTopmost` 都是真），而 **topmost 窗口压着任何非 topmost 窗口**，设置窗口正是非 topmost 的 —— 不让位的话，点这三行只是把窗口开在画面背后，用户什么也看不见，而日志里一切正常。`HostWindow` 因此新增一对 `StandAsideForOwnWindow` / `ReclaimAfterOwnWindow`（放 `_band`、放 topmost、`HoldBand`/`JudgeBand`/`ApplyFullscreenZOrder`/`LeaveFullscreen` 四处闸住），`ShellPage.ShowSettings` 开窗前让位、`SettingsWindow.Hidden`（X 与 `HideSettings` 两条收摊路）拿回来。与 `JudgeBand` 那套「让位给别的应用」刻意分开：那条的判据在别人身上、由定时拍自己问；这条由调用方明说、也只由调用方收回，期间不动藏起来的任务栏（画面继续铺满整屏，只是不再压在设置窗口上面）。浏览状态下两句都是空操作。
+- **单测 2 条**（`MpvUiTests`）：①表本身（三行、令牌/文案/落点各自唯一、写死一遍文案与落点）；②令牌与设置卡名单对账 —— 从 `SettingsViewModel.cs` 源码里读 `CardCategories` 比对（测试项目只引用 Core），卡片改名而这张表没跟上时闸门 2 当场红，不必等自检；外加契约正反例（三个令牌进 Parse、`subtitles` 与空串不收）。`MpvUiTests` 的「绑定名 ≠ 消息名」名单加上新键。
+- **自检两处**：①`ProbePictureMenu` 读数多一段「设置三行」逐行对账（在菜单里、带同一张卡、那张卡是真卡）；②**新增一关「设置窗口盖在画面上」**（`ShellSelfCheck.Fullscreen.cs`，跟在全屏那一关之后，不播任何片子）：先 `Fullscreen = true` + `TopMost = true`，再调**真菜单行的真处理器**（`PlayerPage.ClickPictureSettingsRow`）点「字幕」，量四件事 —— 设置窗口立起来、开在「字幕」卡上、它正中间那点像素归它自己（`WindowFromPoint`）、收摊后画面把 topmost 拿回来。已登记 `docs/selfcheck-baseline.txt`。
+- **验证**：构建 **0 警 0 错**；`format whitespace` 过；单测 **1379/1379、0 失败 0 跳过**（新增 1 条）；`scan-automation-ids` 无新增待定位控件（三行是代码搭的 MenuFlyoutItem，与这张菜单其余行同款）；发布 **528 文件 / 300.7 MB / 11 GLSL**，`artifacts/publish/win-x64` 与 build 的 `EmbyNian.dll` sha256 一致（`B703EB18…`）；闸门 4 发布件 `run-69ea065d…`：**检查 182、失败 1**、消失 0、降级 1、新增 0 —— 新增的那关读数：「点了菜单里的「字幕」，设置窗口已立起并开在「字幕」卡上=True，它正中间的像素归它自己=True；立着时画面仍是 topmost=False（应为假）；收摊后画面拿回置顶=True」；`右键画面菜单` **108/108 行、19/19 子菜单、13/13 分隔线（含并进来的「更多」18 行）…设置三行 3 行都在、都落在一张真卡上**。
+- **那 1 失败是历版/环境红，非本轮**：`文件页文件选项`（Episode 页，音频 318–590 出界、可用 280–588，窗口宽 1064）。A/B：拿改动前那次交付件（`EmbyNian-stale\publish-20260930-230954`）跑同一脚本 `run-e84e1e27…`，**同一读数一字不差复现**（检查 181、失败 1、降级 1），本轮未改 `DetailPage` 那一行任何代码。
+- **闸门 2 的环境注记**：DSH 沙箱不给子进程写 `%TEMP%`，直接跑会有 44 条临时目录用例 `UnauthorizedAccessException`（与本轮无关，全是既有的临时目录测试）。把 `TEMP`/`TMP` 指到工作树内 `work/tmp` 后 **1379/1379 全过**；两次读数均已留档 `work/test-run-20261001.txt`、`work/test-final-20261001.txt`。
+- **没验证到的**：①**独占模式（uosc）那三行没有实机走一遍** —— 三条离线探针固定走集成管线，uosc 菜单要真起播才画得出来，与这张菜单其余行的既有缺口一样；契约、值域、行集由单测与共用表兜着。②**右键菜单本体没有截图**：浮层只有真右键才弹得出来（这台机器注不进鼠标事件，也不能用坐标点击），本轮拍不到；「三行在不在、文案对不对、点下去开哪张卡」由自检逐行读回，比截图更硬，但**观感（三行挨着「播放信息…」的样子）仍要用户看一眼**。③集成全屏＋置顶下的让位／收回是自检量的（真窗口、真风格位、真屏幕坐标），但**没有在真播一部片子时眼看一遍**。
+- **留给用户的判断**：那三行的字就是用户点名的三个词（「字幕」与画面菜单自带的「字幕」子菜单同名，虽然分处菜单两端、中间隔着「更多」那一棵）。若嫌重名，可以改成「字幕设置…」这类 —— 一处改 `PlayerSettingsLinks`，两条管线跟着走。
+
+## 跳过片头/片尾：回车与 Esc 确认修复＋按钮缩半＋独占对齐集成（2026-09-30 用户令四条）
+
+用户令原文四条：① 修复按回车和 esc 确认跳过不生效；② 缩小图标跳过按钮两倍；③ 全屏或最大化时跳过按钮放大 1.3 倍率；④ 参考集成模式的跳过按钮修改独占模式的跳过按钮。澄清后确定：① **两种模式都不生效**、都要修；② **只缩集成模式那颗，两个模式大小要一致**（独占 uosc `SkipButton` 跟着缩到同尺寸）；③ 在**缩小后的新尺寸上再 ×1.3**（不是沿用旧全屏档数值）；④ 独占对齐集成观感。
+
+**推断并记录（供用户纠正）**：「缩小图标跳过按钮两倍」理解为**整颗按钮减半**（不只图标本身，否则会「小图标配大留白」）；全屏档＝新基数 ×1.3。
+
+- **尺寸（集成侧，`PlayerPage.Chrome.cs` 常量块 + `ApplySkipScale`）**：窗口档整颗减半 —— 内边距 12×14、行距 5、右让位/圆角 14、倒计时条高 2、图标/标题字号 8、提示字号 6；全屏档＝各值 ×1.3（15.6／18.2／6.5／2.6／10.4／10.4／7.8）。`PlayerPage.xaml` 同步：`SkipButton` Margin/Padding/CornerRadius、`SkipStack`/`SkipRow` Spacing、`SkipCountdown` Height，`SkipGlyph` **不再用 `OsdGlyphStyle`**（其 FontSize=16）改为直写 `FontFamily` + 本页字号键。
+- **字号走有名字的键**：本页 `Resources` 新增 `<x:Double x:Key="PlayerSkipGlyphFontSize">8</x:Double>`、`PlayerSkipCaptionFontSize`=8、`PlayerSkipTipFontSize`=6，XAML 用 `{StaticResource …}` 引用 —— 首版直写内联 `FontSize="8"` 触发约定「内联字号只减不增」报警，改键后过。
+- **键盘修复（集成侧，三条路补齐）**：① `PlayerPage.Input.cs` 的 `IWin32KeySink.WantsKey` 接纳集从 Space/Escape 扩到 **+`VirtualKey.Enter`**（只问要不要，`Dispatch` 决定有没有事做）；② 新增 `OnSkipKeyFallback` 并挂在 `Root.AddHandler(KeyDownEvent, …, handledEventsToo: true)` —— 跳过按钮常驻、指针压在 `SkipButton`（`ButtonBase`）身上时回车被它当「按这颗按钮」标已处理，页面那一路不带 handledEventsToo 收不到，这一道只在 `ViewModel.SkipOffered` 时把 Enter/Escape 收进 `Dispatch`，其余时候规矩不动；③ `HostWindow.cs` 的 `KeyboardHookProc` 新增 `const int VkReturn = 0x0D`，接纳条件 `vk is VkSpace or VkEscape or VkReturn`（焦点掉出 XAML 岛时岛内两条键路都听不见，钩子过去把回车整个丢掉）。`SpaceAndFocusWiringArmed` 加上 `_skipKeyArmed`。
+- **键盘修复（独占侧，uosc 借键）**：`SkipButton.lua` 重写 —— `BORROWED_KEYS = {ENTER='embynian-ui-skip-take', ESC='embynian-ui-skip-dismiss'}`，`self:borrow_keys(borrow)` 幂等，`set_offer` 里按 `self.caption ~= nil` 借/还（`mp.commandv('keybind', key, 'script-binding uosc/'..binding)` / `mp.commandv('keyunbind', key)`）；`layout()` 尺寸改写为集成同观感（字号 `round(10.667*scale)`＝8÷0.75、图标 `round(8*scale)`、内边距 `12×14`、行距 5、右让位 14，随 `state.scale` 自动乘全屏档 1.3）；`render()` 同步摆位。`main.lua` 新增两条无默认键绑定 `embynian-ui-skip-take`／`embynian-ui-skip-dismiss`（回推 `embynian-skip-take`／`embynian-skip-dismiss`），文件头 doc block 补 `EMBYNIAN[skip-keys]` 条目并改写 `EMBYNIAN[skip-button]`。
+- **契约新增**：`MpvUi.cs` 的 `VideoWindowContract` 加 `SkipDismiss = "embynian-skip-dismiss"` 并进 `Parse` 直通列表；`PlayerViewModel.Events.cs` 加 `case VideoWindowContract.SkipDismiss: DismissSkip();`；`PlayerViewModel.Transport.cs` 的 `DismissSkip()` 收摊时 `PushSkipToVideoWindow(false, "")` 告知 uosc 归还 ENTER/ESC。
+- **测试**：`MpvUiTests.cs` 跳过契约测试加入 `SkipDismiss` 出/入 `Parse` 断言；「uosc 补丁四头都在」→「六头都在」，新增 `bind_command('embynian-ui-skip-take'`、`bind_command('embynian-ui-skip-dismiss'`、`self:borrow_keys(self.caption ~= nil)`、`mp.commandv('keybind', key`、`mp.commandv('keyunbind', key)` 断言；「绑定名与宿主消息名不许同名」守卫契约清单加 `VideoWindowContract.SkipDismiss`。
+- **闸门读数**：构建 **0 警 0 错**、`format whitespace --verify-no-changes` 过（EXIT=0）；单测 **1378/1378**、0 失败 0 跳过；发布 528 文件 / 300.7 MB / 11 GLSL，新鲜度判据 publish dll `c682c8861dec402c…` 与 obj 一字不差、与 stale 双 DIFFER；自检 **181 项、失败 1、消失 0、降级 1、新增 0**。
+- **那 1 失败是历版红，非本轮引出**：按同尺 A/B 拿上一轮发布件（`EmbyNian-stale\publish-20260928-213603`）跑，与本次**同一条**「文件页文件选项 — Episode 页…音频 318–590（出界）」读数**一字不差重现** —— 环境/历版红，未改基线洗绿。（该旧件缺 09-29 新增的两条通知接管检查，故其比较里多两条「消失」，与本轮无关。）
+- **未验证（待实机）**：集成为焦点压在 `SkipButton` 上按回车的真实往返、独占模式 ENTER/ESC 借键在 mpv 里的实际生效与归还、两模式缩小后按钮的实际观感与全屏档倍率、跳过按 ESC 关闭提示的语义。
+- 工作树同树另有登录页品牌标志／输入框居中、媒体库悬停白底移除、首页排间空当三个既有特性的未提交改动，与本轮无关，**本轮未提交、未推送**（用户没要求；提交需先做文件级切分）。
+
+## 首页货架排间空当 18 → 8 → 4（2026-09-30 用户令「缩短媒体库和继续观看之间的距离」→「再缩」）
+
+用户第一句配一张圈出「媒体库那排卡底 → 继续观看那块牌子」的截图，看了改到 8 的那一版后又一句「再缩」。改的始终是**排与排之间的纯间距**，不是卡片或牌子的任何尺寸。
+
+- **改哪一格**：`HomePage.xaml` 里 `ShelfRepeater` 的 `<StackLayout Orientation="Vertical" Spacing>`，**18 → 8 → 4**。这是整段空白里唯一一格纯间距 —— 卡底那 59 是卡片自带的文字带（`CardSize.Chrome`），牌子（`ShelfHead` 根 Grid）不带外来边距，收那两处都不是「缩间距」。同一趟 2026-09-14 已经收过一轮（36→24→22→20→18）。
+- **为什么停在 4**：4 是 `Styles.xaml` 间距刻度允许的最小一格（`EgSpaceXS`），**这一档到头了**。再往下就是 0，那两排会贴成一块，牌子直接顶在上一排卡底那两行字上。真要更近只能动卡底那段文字带（`CardSize.Chrome` 那 59），那不属「缩间距」。
+- **谁跟着这个数走**：`HomePage.xaml.cs` 的矮窗档判定读这一格的运行时值（`UpdateLibraryOverlay` 里的 `gap`），自动跟上，不用另改常量；`tests/EmbyNian.Tests/HomeFoldTests.cs` 里那一组把排间空当当输入的算术同步换成 4（那条线自矮 14，1258 → 1244）。
+- **没有动**：同一排卡片的 `ItemSpacing="18"` 两处、`DownloadRepeater` 自己那个 `Spacing="18"`（下载排是另一叠，不在用户的截图里）。
+- **闸门读数**（第二轮，最终形态）：构建 0 警 0 错、`format whitespace` 过；单测 **1378/1378**、0 失败 0 跳过；发布 528 文件 / 300.7 MB / 11 GLSL，新鲜度三判据全中（publish dll `f465a59ade43f3a9…` 与 obj 一字不差，与 stale `20260930-214656`／`20260930-213411` 双 DIFFER）；自检 **181 项、失败 1、消失 0、降级 1、新增 0**。
+- **那 1 失败是历版红，非本轮引出**：按同尺 A/B 拿上一轮发布件（`EmbyNian-stale\publish-win-x64-20260930-213411`）跑 `run-8e4b3e0e90894241a06a69304be08db6`，「文件页文件选项」音频 318–590 出界的读数**一字不差重现** —— 环境/历版红，未改基线洗绿。
+- 同树原有登录页／资源／图标／卡片三态那批改动保留一并发布；本轮未提交、未推送（用户没要求）。
+
+## 首页货架排间空当 18 → 8（2026-09-30 用户令「缩短媒体库和继续观看之间的距离」）
+
+用户配一张圈出「媒体库那排卡底 → 继续观看那块牌子」的截图。改的是**排与排之间的纯间距**，不是卡片或牌子的任何尺寸。
+
+- **改哪一格**：`HomePage.xaml` 里 `ShelfRepeater` 的 `<StackLayout Orientation="Vertical" Spacing="18" />` → `Spacing="8"`。这是整段空白里唯一一格纯间距 —— 卡底那 59 是卡片自带的文字带（`CardSize.Chrome`），牌子（`ShelfHead` 根 Grid）不带外来边距，收那两处都不是「缩间距」。同一趟 2026-09-14 已经收过一轮（36→24→22→20→18），这次再收一格。
+- **为什么是 8**：不收到 0，牌子上沿还要一点呼吸；8 正好是 `Styles.xaml` 的 `EgSpaceS` 这一档，不是新长出来的数字。
+- **谁跟着这个数走**：`HomePage.xaml.cs` 的矮窗档判定读这一格的运行时值（`UpdateLibraryOverlay` 里的 `gap`），自动跟上，不用另改常量；`tests/EmbyNian.Tests/HomeFoldTests.cs` 里那一组把 18 当排间空当的算术同步换成 8（那条线自矮 10，1258 → 1248）。
+- **没有动**：同一排卡片的 `ItemSpacing="18"` 两处、`DownloadRepeater` 自己那个 `Spacing="18"`（下载排是另一叠，不在用户的截图里）。
+- **闸门读数**：构建 0 警 0 错、`format whitespace` 过；单测 **1378/1378**、0 失败 0 跳过；发布 528 文件 / 300.7 MB / 11 GLSL，新鲜度三判据全中（publish dll `7ce5272e9fae9257…` 与 obj 一字不差，与 stale `20260930-213411`／`20260930-002057` 双 DIFFER）；自检 `run-da78d991b00b4bc89bc7f0cdcf370e77` **181 项、失败 1、消失 0、降级 1、新增 0**。
+- **那 1 失败是历版红，非本轮引出**：按同尺 A/B 拿上一轮发布件（`EmbyNian-stale\publish-win-x64-20260930-213411`）跑 `run-8e4b3e0e90894241a06a69304be08db6`，「文件页文件选项」音频 318–590 出界的读数**一字不差重现** —— 环境/历版红，未改基线洗绿。
+- 同树原有登录页／资源／图标／卡片三态那批改动保留一并发布；本轮未提交、未推送（用户没要求）。
+
+## 媒体库名称下方的悬停白底移除（2026-09-30）
+
+- 首页 CardTemplate 与详情页 CardTemplate / PersonTemplate 的外层 Button，局部覆盖悬停、按压背景为透明。保留名称、海报尺寸、点击处理器和卡片自己的框线、暗罩与焦点反馈；不改全局按钮样式。
+- 在既有「卡片悬浮按钮」自检中加入外层按钮 Normal / PointerOver / Pressed 三态背景的实际读回；缺少模板、状态切换失败或背景非透明均判失败。`--dump-ui` 增加三张媒体库卡片状态图，不移动真实指针、不点击或播放，拍完恢复状态。用模板状态验证而非真实鼠标输入，图片为 RenderTargetBitmap，不冒充 Mica 屏幕摄影。
+- Release 构建 0 警告 0 错误，空白验证退出码 0；单测 1378/1378、0 失败 0 跳过。发布到 `artifacts/publish/win-x64` 成功：528 文件 / 300.7 MB / 11 GLSL。发布程序集与 bin / obj 的 SHA256 一致：`c5d7f3ed295ea99b4dd5e29e14a143219b320394c72edc39616cb822cc1782ff`。
+- 运行证据：`artifacts/selfcheck/run-40380ce20f9e4ae1aeb6a9ee727a92f8` 的媒体库及可播放卡片均为「外层按钮三态透明」，状态图已检查无名称白底。完整自检仍红：181 项、1 失败、0 消失、1 降级；「文件页文件选项」音频选项 318–590 超出可用 280–588，越界 2 像素。
+- 改前存档 `EmbyNian-stale/publish-win-x64-20260930-002057` 在隔离运行 `run-f407c13561af4fedb765dc82367246e1` 复现相同越界读数，属既存问题，未改基线洗绿。存档自身缺后加的通知说明检查，不能将整轮存档比较称为通过。
+- 最终发布件在 `artifacts/selfcheck/run-9319ea13907e4bdc8d2ba56c3439c35c` 复验：卡片三态透明检查和渲染图均通过，完整自检仍只有上述文件页越界失败（181 项、1 失败、0 消失、1 降级），未新增回归。
+- 之前拍摄临时改动的四项真实窗口几何已定点恢复，`settings.json` 与拍摄前备份逐字节一致；后续验证全走隔离副本。详细本地证据：`work/library-card-verification.md`。同树原有登录页、资源、图标改动保留；未提交、未推送。
+## 分阶段审查第一阶段：规程与技能校正、验证工具边界核验（2026-10-01，纯文档；比较器完整进程回归受阻）
+
+按用户「先审规程和技能，再分阶段审查修复」及后续「继续」执行。范围为阶段 0 已确认的文档问题，不进入业务代码修复。采用独立工作树 `work/review-stage1-20260930`（detached `afc2394`），只写该树的 `.claude/skills`、`docs/开发与验证.md` 和本条进度；主树存在其他会话产品改动，未覆盖、未整合、未发布。
+
+- **修正**：发布不会自动保留改前包，旧版同红不能单独归因为环境或豁免本轮失败；去掉视频技能按日期免发的说法；分开普通设置页展示与隔离探针，写清 `--dump-ui` 只在自检导出、设置窗口为空标题不能用 `-WindowTitle 设置` 查找；同步音频请求值/实际端点、可配置截图目录、着色器默认值兜底与选档目标、MoviePilot `DetailsUri` 的有限校验、ItemCommands 的身份作用域与合理重构边界；修复视频来源表的本仓相对链接。
+- **工具边界**：开发文档补充 `test-selfcheck-diff.ps1` 会现场编译未签名 `Fixture.exe`，离线并不保证没有系统确认；取消或受阻须保留覆盖缺口，不能绕过安全检查取得通过。没有修改任何验证脚本或系统安全设置。
+- **已验证**：维护工具离线回归 13 项通过、退出码 0；文档静态检查扫描 14 份现行规程/技能文档，本仓链接 44 处有效，8 项修正要点通过，改动文本为 UTF-8/LF；`git diff --check` 通过。上述静态要点检查不是模型触发评估，更不是产品功能测试。
+- **未完成的运行覆盖**：自检比较器整组回归在 Windows 未知发布者提示出现后被取消，未得到完整结论与成功退出码；未重跑、未换启动机制、未放行或降低安全设置。13 项维护回归不替代这组进程验证。未构建/测试/自检 EmbyNian、未实拍、未运行原生音频探针、未访问真实库。
+- **交付边界**：纯文档修正按主规程不构建或重发应用，不能据此替主树在途产品改动验收。主树技能副本机制和 C#/csproj 历史注释未处理；本次仅修正截图指引，未实现新截图工具。补丁与结果在本隔离树 `work/stage1-evidence-20261001/`，精简交接在 `work/stage1-complete-20261001.md`；这些本机证据不入库。未提交、未推送、未合并，阶段 2 尚未开始。
+## 阶段 2：身份、网络、凭据、设置存储与公共生命周期（2026-10-01，离线修复批次完成，待整合）
+
+本轮在独立工作树 `work/review-stage2-20261001`（detached 基点 `afc2394`）完成八组修复：服务器路径大小写隔离；控制台凭据注入核对完整 origin；HTTP 普通请求的错误正文、状态文本、传输和 JSON 异常不再回显凭据；服务器版本缓存绑定身份和探测代次；空/非对象设置主文件恢复备份；旧版空着色器节及空 MoviePilot 节迁移；保存提交/备份的失败保护；退出取消回调的失败保护。文件替换共用短时提交锁，正文写入仍在锁外；保留同名不同路径的身份、已捕获播放收尾范围和现有持久化外部接口，不为此重构 Shell。
+
+- 验证：当前 Release 完整构建 0 警告、0 错误；完整控制台测试 **1407/1407，0 失败、0 跳过**（相对基点新增 29 项，另增强 2 项既有断言）；实际生成的控制台脚本用合成 `location/localStorage` 执行 **30/30**；15 份 PowerShell 脚本编码/语法检查通过。空白验证按 `Configuration=Release Platform=x64` 复核后退出 0、472 文件无变更且无工作区加载警告；默认 Debug 缺依赖的原警告保留在日志。
+- 本树发布与载荷验证通过：**527 文件、300.7 MB、11 GLSL**，输出仅本树 `artifacts/publish/win-x64`，无 ZIP/安装包。没有整合到主树，没有刷新共同交付目录或快捷方式，未暂存、提交、推送、升级或发新版本。
+- 边界：假传输和隔离文件；测试临时目录改为本树的进程级 `TEMP/TMP`，避免原系统临时目录的访问拒绝。没有读取生产设置/凭据，没有真实服务器请求、媒体播放、产品窗口运行或 GUI/实屏验证；本轮未跑产品自检，不能宣称四道闸门全绿。阶段 1 的比较器安全提示欠项不重试、不绕过。
+- 代价与余项：HTTP 错误原文不再完整显示，保留状态码、地址路径、受控类型或行列信息；并发保存保护提交，不提供任意外部对象修改的事务。DPAPI 本机往返、WebView2 真实导航、启动/窗口关闭时序仍未运行验收，后续整合由一个会话按范围补验。证据与详细报告在本树 `work/stage2-evidence`、`work/stage2-report-20261001.md`；新窗口接续看主树 `work/stage2-handoff-20261001.md`。阶段 3 未开始。
+最后更新：2026-10-02
+
+## 阶段 3：MoviePilot 查询身份与副作用提交边界（隔离树完成，未整合主树）
+
+工作树 `C:/Users/89400/EmbyNian/work/review-stage3-20261001-b`，基点 `afc2394`。阶段 1/2 补丁尚未整合；主树及归属不明的旧阶段 3 树未改。没有提交/推送、改版本、升级依赖、安装/签名或修改快捷方式。
+
+- 查询修复：精确资源保留来源/编号/类型和可信 `media_info`，下载使用支持媒体快照的 `download/`；季号包含特别篇 0 随查询/订阅保留；未知优惠不当优惠，显式空来源能力不当影视支持，半对身份不跨对象拼接。
+- 提交修复：结果绑定连接/账号；服务持有防重状态，重搜/新行/重新预览不能绕过；发送后结果不明锁为待核对，写回执要求明确布尔成功值；确认窗口返回后检查查询/离页代次。
+- 整理修复：历史和文件列表必须收齐，坏数据/重复页/缺文件停止；预览封存快照且只消费一次；提交前重核完整历史，按旧目标路径检查软链接依赖；确认列出实际源、新旧目标和清理影响；保留逐文件回执，accepted 不冒充 completed。
+- Shell 修复：缺 TMDB 不将其编号配给首来源，切类型清编号/建议；目录加载随离页取消；连接变化清旧下载卡；重复整理弹窗明确提示。集合身份与现有自动化句柄不变。
+- 验证：旧代码上 20+6 项新增回归先失败；最终 **1414 通过、0 失败、0 跳过**（基点 1378，新增 36）。完整 Release **0 警告/0 错误**；474 文件空白检查 0 修改且无加载警告；15 个 PowerShell 脚本编码/语法通过。独立假传输 WinUI 宿主 **13 项通过**，资源页/下载确认/取消与两种窗口高度实际观察完成。自包含隔离发布 **527 文件 / 300.7 MB / 11 GLSL** 校验通过。
+- **未验收**：普通闸门 4、真实 MoviePilot/Emby 请求与副作用、所有 UI 尺寸/主题、首页轮询及弹窗竞争全路径。防重仅本进程，当前无核对后解锁流程；客户端历史复查不能消除远端原子性竞态。严格媒体快照可能让旧服务结果不可下载。桌面快捷方式仍是旧版。
+- 代理：Shell 审查完整回传；查询代理四项详细证据已回传，尾部报告在反复限流/TLS 后未完整结束。按用户明确指令停止重试，复用已完成资料，不宣称代理完整通过。保留 v3.0.1 背景与已核实后端 v3.0.10-1/前端 v3.1.0 的定点依据。
+- 报告：`work/stage3-report-20261002.md`；最终证据与补丁：`work/stage3-evidence/`；主树接续入口 `work/stage3-handoff-20261002.md`。本阶段结束停下，不自动进入阶段 4。
+最后更新：2026-10-02
+
+## 第四阶段：播放会话、双后端、进度与退出（隔离批次，未整合）
+
+专用树 `work/review-stage4-20261002`，基点 `afc2394`，不包含前三阶段未整合补丁。主树在途改动未覆盖，阶段3中断查询代理未重启。两个第四阶段原审查代理在限流/传输中断后续接完成，未新建替代代理或降级。
+
+- 播放请求与运行期分开取消；停止等待整场收尾；交接取消释放遗留句柄；状态事件和原生命令绑定影片代次。上报按场串行，阈值停止不与最终停止抢发，暂停未知位置不造零，真正回到零的位置不恢复旧断点；已看结果只在写回成功后成立。
+- 双后端补起播取消、固定原生模块、完整换片签名、start-file订阅、原子换片、迟到命令隔离、主动强杀归类及最后IPC应答竞争；原生日志不再保留可能带认证信息的原文。
+- Shell保留派生播放的身份，撤销迟到选集，停止压过EOF自动下一集；通知/刷新常驻，按下一场目标协调页面，独占音量不依赖页面计时器，关窗先等播放后释放session。
+- `PlaybackService` 拆为运行控制、Lifecycle、Reporting 三个分部；代价是明确维护请求/影片/上报三种所有权，换来可控任务与假传输验证，不按行数评价重构。
+- 基点1378测试通过；新增15项先红，修复后当前1405通过/0失败/0跳过，完整构建0警告0错误。独立WinUI视图模型14项通过，原生本地WAV换片EOF/error与重复释放通过。新增真实Shell宿主检查在ShellPage XAML解析失败，未执行到窗口验收，不记通过。最终门禁、补丁、哈希及全部欠项以 `work/stage4-handoff-20261002.md` 和本树 `work/stage4-report-20261002.md` 为准。
+- 本批不提交、不推送、不改版本、不签名、不生成安装包、不改快捷方式；普通产品自检与真实服务器播放未授权执行，不能称四道闸门全绿。只结束第四阶段，不自动进入第五阶段。
+最后更新：2026-10-03
+
+## 分阶段审查：第五阶段隔离批次完成（2026-10-03，未整合主树）
+
+- 专用树：`C:/Users/89400/EmbyNian/work/review-stage5-20261003`，基点 `afc2394`，36 文件待整合；不含阶段 1～4 或主树在途补丁。主树原有 42 项修改/未跟踪文件的状态及 SHA-256 全部保持。
+- 修复：静止位置读数不重盖光标空闲钟；菜单选择绑定创建时快照/播放身份；点击不穿透菜单、不误击后来出现的按钮；uosc 菜单幕布/键鼠切换/小键盘确认/右缘展开/随窗字号及拖动收尾；独占可重绑键接上常驻视图模型；延迟点击/倍速/批量命令/抓帧与窗口冻结恢复不越过播放及页面代次。窗口纯 UI 责任仍留页面，没有为分层制造新服务。
+- 验证：完整 Release 0 警 0 错；1388 Core 测试通过，0 失败/跳过；476 文件空白检查 0 修改且无工作区加载警告；15 个 PowerShell 脚本和29个Lua文件语法通过。实际随包Lua夹具23项、未插桩原生keypress6项、真实WinUI假后端/本地原生抓帧15项通过。集成动效本地探针和**本树发布件**光标探针退出0；独占D3D11本地窗口完成右键、子菜单、实际旋转及关闭，另观察置顶。
+- 发布：仅本树 `artifacts/publish/win-x64`，528文件/300.7MB/11 GLSL，载荷校验通过；**主树与桌面快捷方式仍未更新**。两个审查代理均完整结束，限流记录与五秒监控保留，没有独立修后代理复审的结论。
+- 欠项：普通闸门4未运行、未访问真实服务器或播放真实媒体；外部mpv进程、真实Emby选集/版本副作用、多屏DPI/全部尺寸及完整动画逐帧不是本轮全部验收。前四阶段欠项不因本轮通过而销账。
+- 报告、证据与补丁：本树 `work/stage5-report-20261003.md`、`work/stage5-evidence`；换窗口入口：主树 `work/stage5-handoff-20261003.md`。本批完成后停止，阶段6未开始；未暂存、提交、推送或制作安装包。
+最后更新：2026-10-04
+
+## 分阶段审查：阶段6音频输出（2026-10-03～10-04，隔离树完成；未整合）
+
+- 本轮唯一产品写入树为 `work/review-stage6-20261003`，detached `afc2394`；不含主树在途补丁或前五阶段修复，未整合、未提交、未推送。主树42项在途改动状态与哈希经 `../review-stage6-20261003/work/stage6-evidence/main-checkpoint-final.json` 终核：**零变化**。
+- **修复（先复现后修，红→绿均有证据）**：①设备名单每次重新枚举、只共享在途读取，空/异常清旧快照（旧非空永久缓存会把拔掉的设备当在线）；②音量记忆重构为 Core `VolumeMemory`（`PlayerStatus.VolumeKnown` 区分真读数与缺省100），落盘独立于页面计时（独占无页面也结算），保存失败保留待存版本限频重试；③音量滚轮/按键：真实读数到达前走内核相对步进＋读回确认，防止把显示值当绝对目标（加载期「减一格」会把 37 跳到 98）；④保护窗内收到的内核真读数停进 `Queued`，结算点无条件优先于旧 Pending，不再被丢或被旧值覆盖保存；⑤音频延迟微调改内核相对累加＋同代次读回，拒绝不冒充成功；⑥缓存设置页重进单独刷新设备行（`RefreshAudioDevicesAsync`），与「每次打开设置重新读取」承诺一致；⑦`Audio.Device=null` 手改/导入文件在 Normalize 归一空串，不再让两端后端规划空引用崩溃；⑧服务器上报 `VolumeLevel` 仅在 `VolumeKnown` 时填写，不再把缺省100当读数发给服务器；⑨随包无声采集器加固：DLL搜索路径句柄保留、安全选项失败中止并释放、报告拒绝覆盖、9项失败夹具（`test-probe-audio-native.py`）；技能文档重写为当前实现。
+- **独立审查**：两个原审查代理经限流与一次计划模式空返回后，用官方CLI `--resume` 原会话、原模型（gpt-6-astra, max）完成完整审查（报告在 `work/stage6-evidence/agent-monitor-live/`）：9+5 项范围、5+1 项发现，上表①-⑧全部来自这些发现；`HasUnsavedChanges` 多保存者提醒留整合阶段。
+- **验证**：构建 0警0错；Core 单测 **1394/1394**（基线1378＋新增16，先红后绿均有记录）；隔离真实VM/设置行 **15项** 全过（`shell-review-fix5`）；真实随包内核接线 **17项**（`native-backends.json`：音量观察0/63/130、延迟读回、设备两次枚举、外部句柄IPC合并）；随包无声读数 **35项判定**（`native-verdict.json`）；设置页真实窗口操作：650ms落盘、清空仍650、1100/1422宽度（`visual-observations.md`）；格式 0修改；15脚本检查过；发布 **527文件/300.7MB/11 GLSL**（本树 `artifacts/publish/win-x64`，快捷方式仍指主树旧版）。
+- **边界**：普通闸门4未跑、零真实服务器请求/播放/副作用；无声探针不证明听感、功放、独占、热拔插；`HasUnsavedChanges` 多保存者、外部mpv设备表能力限制留档。
+- 补丁与清单：`work/stage6-evidence/final/`（source-only/content 主树正向预检通过，with-progress 冲突 PROGRESS.md:3；零上下文须 `--unidiff-zero`）。详细报告：`work/stage6-report-20261004.md`。
+最后更新：2026-10-05
+
+## 第七阶段：视频输出、HDR/杜比与着色器链（隔离修复与可运行验证完成，2026-10-05）
+
+- 本树：`work/review-stage7-20261004`，detached `afc2394`；前六阶段均未整合。主树起点42项在途文件及前六阶段8个已登记工作树的状态/哈希均未改动，证据在本树 `work/stage7-evidence/main-checkpoint-*.json`、`prior-stages-final.json`。
+- 修复：视频选项规范拼法；四项HDR亮度按整数nits保存/显示/下发且对比度保留小数；临时HDR成套输出模式；着色器切换前完整快照、串行提交、失败回滚/未知态；无损文件列表及Windows反斜线；缺目标文件提前拒绝；独占Detach保留尺寸/刷新率；最终候选源采纳及本次偏好快照；菜单与切链按请求次序共用队列；恢复自动排队/写入期间换屏对账；动态菜单与单选组；hdeband互斥；删除整档不执行的SSR组合；补齐许可证与发布逐文件哈希。
+- 最终验证：`review-final-fixed-build.log` Release 0警0错；`review-final-fixed-tests.log` **1400通过/0失败/0跳过**；`review-final-shell-fixed` 与 `review-final-narrow` **两宽各21项真实Shell/控件通过**；`native-final-integers.json` **33项真实随包句柄/服务接线通过**；`native-verdict.json` **34项选项与本地GPU判读通过**；发布夹具22过、维护夹具13过、16脚本编码/语法过；格式473文件0修改，无工作区加载警告。早期红项与工具故障原样保留，未改自检基线。
+- 最终发布：`review-final-publish.log` 本树自包含 **531文件/300.8MB/11 GLSL+4 HOOK**，包含四个许可/归属文本；不改主树发布目录或桌面快捷方式。没有提交、推送、版本升级、安装包或GitHub Release。
+- 审查：原着色器代理完整静态复审返回，最后一项恢复自动跨屏发现已由主会话先红后绿；原HDR代理最终交回被预算/限流/SSL阻断。用户最后要求不再跑子代理，主窗口完成余下定点核验；不冒充两份独立最终报告全部完成。
+- 未验收：普通闸门4、真实服务器请求/播放、真实HDR/杜比与全DPI视觉；官方Computer Use在本会话不可用，真实控件和GPU输出不代替屏幕实拍。阶段4同窗签名、错误传播、start-file和原生提交代次修复仍须整合后组合重验。
+- 交接：`work/stage7-handoff-20261005.md`（主树）；本树报告与补丁/manifest在 `work/stage7-evidence/`。本阶段到此停止，阶段8未开始。
+最后更新：2026-10-05
+
+## 阶段8：字幕选择、外观、双语与服务器管理（隔离审查修复，未整合）
+
+本轮独立树 `work/review-stage8-20261005`，detached afc2394；前七阶段补丁未应用，不修改主树或共同发布目录。用户要求最多一个子代理，全程串行，提供方中断与最终限定复审结论均留在 `work/stage8-evidence`。
+
+- 明确关闭字幕跨备用源保留；缺字幕元数据仍先判断已知母语；同片字幕外观按编辑代次串行，同窗复位完整外观。
+- 两后端保留主/次选择、容器索引与外挂文件身份；本场上报实际主音轨/主字幕，补取初始快照并防迟到覆盖，外部后端直接消费事件快照。
+- 字幕默认值读取失败不无声废弃整批；不支持的选项跳过，其余未知/写入拒绝显示部分应用失败。颜色下发改精确 `#AARRGGBB`，修复 `#123456` 原生读回 `#123455`。
+- 服务器字幕操作抽到固定 scope/文件的 `ServerSubtitles`，删除前核对完整快照、拒绝同标签歧义；对话框写入互斥、等待关闭、结果不明先刷新、刷新父页不重发操作。GET/DELETE 不是原子操作，未宣称抵御服务器并发替换。
+- 拾色器区分同步输入与异步文本回填，清空/失焦不复活旧颜色，丢捕获取消拖动；新增句柄逐行登记。业务身份约束在Core、界面忙态/确认留对话框，不为MVVM额外拆层。
+- 本轮当前完整Release 0警0错，1408项测试通过；正式字幕离线探针11项、正式服务/随包内核41项通过，宽/窄真实控件回归各6项通过。官方Computer Use检查了删除取消、字幕页、窄窗刷新按钮及精确RGB输入；详细视觉和未覆盖边界见本树证据目录。
+- 收尾发布及补丁哈希由 `work/stage8-evidence/final/manifest.json` 和主树 `work/stage8-handoff-20261005.md` 记录。不跑普通闸门4、不真实请求服务器/播放/删除、不更新自检基线、不提交/推送/升级/发版；桌面快捷方式仍指主树原版。
+最后更新：2026-10-07
+
+## 阶段9：媒体导航、普通 Shell 状态与界面质量（隔离修复与适用离线验证完成）
+
+- 本轮树：`work/review-stage9-20261006`，detached `afc2394`；前八阶段及本阶段均未整合。主树42项在途改动和10棵前序树起止哈希/状态一致。仅主窗口写产品，子代理严格串行，当前无活动子代理。
+- 修复：媒体库分页错误/取消/重入、搜索词和滚动归属、播放全部忙碌守卫；完整面包屑历史与切服代次/目录重试；切季目标与列表整体提交、空季选择器、迟到状态写回；图片缓存/卡片/条目命令固定身份；首页排布与库偏好按身份隔离；通知编辑生命周期/空态和诊断日志空态。
+- 封面管理重用单一ContentDialog，避免嵌套异常；图片标签动态绑定、背景图序号、操作互斥/关闭等待/不明结果先刷新；取消不能因迟到Uploaded值变成提交。真实实看再修文本按钮固定40宽裁切、无障碍动作同名、无图格过薄。纯界面协调保留code-behind，不为既有静态ItemCommands强行服务化。
+- 新增正式`--probe-shell [inspect]`：全新数据目录、假传输/身份、拒绝播放与外部网络，参数组合有离线测试，不改普通自检基线。`ReadDialogs`签名适配后的正式路径也由该探针执行。
+- 最终证据在`work/stage9-evidence`：`visual-fixed-build.log`完整Release 0警0错；`delivery-tests.log` **1391过/0失败/0跳过**（基点1378，新增13）；`visual-fixed-format.log`479文件0修改、无加载警告；15个PS脚本编码/语法通过；普通交互控件扫描无句柄0；开发件和发布件**29项Shell探针通过**。
+- 本树发布527文件/315397505字节（约300.8MiB）已校验，最终发布件探针`published-shell-probe.json`通过。**桌面快捷方式仍是主树原版**。未改版本/依赖、未暂存/提交/推送/签名/制作安装包或Release。
+- `visual-evidence.md`记录官方Computer Use宽1422×800、窄1000×880实看及删除确认取消操作；真实服务、普通闸门4、全主题/DPI及完整通知/诊断视觉未验收，不能称全产品四门全绿。零真实播放/下载/删除/共享数据修改。
+- 最后限定复审3项P2已先得3红再修成23绿；补充返回栈/切服/目录/诊断与封面取消交错后29绿。子代理限流及只读覆盖边界保留，不冒充全仓独立审查。零上下文补丁与manifest在证据目录`final`；精简交接为主树`work/stage9-handoff-20261007.md`。本阶段停止，不自动进入阶段10。
+
 
 ## 四十二报：整合发版 v0.1.1（2026-09-30，构建＋1378 单测＋发布＋安装包验证链全过；闸门 4 环境红双证据在案；GitHub Release 已发）
 

@@ -1,5 +1,6 @@
 using EmbyNian.Diagnostics;
 using EmbyNian.Playback;
+using EmbyNian.Shell.Interop;
 using EmbyNian.Shell.Windowing;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -14,6 +15,9 @@ public sealed partial class PlayerPage
     private bool _inputSuspended;
     private bool _enterAnimating;
     private bool _startupHandoverPending;
+    private VideoFrameOverlay? _startupCover;
+    private bool _startupCoverSettled;
+    private int _presentationGeneration;
     private PlayerMotion.Transition? _pageTransition;
     private DispatcherQueueTimer? _poseDriver;
     private const int PoseTickMilliseconds = 16;
@@ -124,6 +128,7 @@ public sealed partial class PlayerPage
     private void EnterFullscreenAtOnce()
     {
         if (_window is not { } window) return;
+        CancelPageTransition();
 
         // 播放页立刻不透明（不走淡入），铺满整屏的黑舞台＋加载层。
         ApplyPagePose(PlayerMotion.Pose.Visible);
@@ -132,50 +137,144 @@ public sealed partial class PlayerPage
         // 2026-09-25 起铺的是遮罩那张背景图（图没到手才退回纯色，见 StartupCover）—— 从前一律铺近黑，
         // 用户看到的因此是「先全屏黑一片、再切到背景图」。
         var cover = StartupCover(window.Handle);
-        cover.Show(VideoFrameOverlay.FullscreenRect(window.Handle), topmost: true);
-        VideoFrameOverlay.Flush();
-
-        _shell?.ShowPlayer(true);
-        window.VideoVisible = true;
-        // 同步整屏：Fullscreen 的 setter 里 SynchronizeContentLayout 已把整屏 Cover 排到位。
-        window.Fullscreen = true;
-        // 进场即全屏那条路不走 ApplyFullscreen —— 标题簇的全屏档在这里摆上（用户令 2026-09-28）。
-        ApplyTitleScale(true);
-
-        // 没有异步窗口交接了 —— 遮罩揭开判据 PictureReady 读这一位，置假它才会在画面就绪时揭开。
-        _startupHandoverPending = false;
-
-        _ = RevealAfterInstantFullscreenAsync(cover);
+        _startupCover = cover;
+        _startupCoverSettled = false;
+        _startupHandoverPending = true;
+        try
+        {
+            // 任务栏在覆盖层之前收下并等确认（2026-10-07 用户报「加载页面任务栏闪一下」）：覆盖层一上屏，
+            // 整块显示器（任务栏那一块也在内）就是加载图，而主任务栏画在一切 topmost 之上 —— SW_HIDE 若
+            // 排在覆盖层之后（从前全屏落地才收），加载图先铺满、任务栏站在上面，用户看到它闪一下才消失。
+            // 此时窗口还不是全屏，收与退都走窗口层的预收/回退一对，进场失败不会把任务栏押在半路。
+            window.HideTrayForImminentFullscreen();
+            cover.Show(VideoFrameOverlay.FullscreenRect(window.Handle), topmost: true);
+            VideoFrameOverlay.Flush();
+            _shell?.ShowPlayer(true);
+            window.VideoVisible = true;
+            window.Fullscreen = true;
+            if (!window.Fullscreen) window.CancelImminentFullscreenTray();
+            ApplyTitleScale(true);
+            _ = RevealAfterInstantFullscreenAsync(cover);
+        }
+        catch
+        {
+            CancelStartupCover();
+            window.CancelImminentFullscreenTray();
+            throw;
+        }
     }
 
     /// <summary>
-    /// 整屏 Cover 上屏之后立刻撤纯色层 —— 它是「窗口长到整屏那一拍」的临时垫层，不是加载遮罩。
-    /// <para>
-    /// <b>为什么不能等 <c>RequestCommitAsync</c> 的回执。</b>原先这里等的是它、上限 350ms，而它在这条路上
-    /// 实测不兑现（日志原话：<c>起播整屏覆盖层提交未确认，照撤：The operation has timed out.</c>）——
-    /// 那 350ms 的纯色层盖住的不只是窗口长大的那一两帧，还有<b>已经到位的遮罩背景图</b>，用户看到的因此
-    /// 是「先黑一片、再切到背景图」（2026-09-25 用户报）。这里要的其实只是「这次布局出过帧了没有」，
-    /// 那是渲染回调答得了的，不是提交回执答得了的。
-    /// </para>
+    /// 等岛、加载层和当前图片在真实客户区稳定出帧，再将原生背景交给 XAML。
+    /// 固定两次 Rendering（包括超时）不能证明新布局已呈现；冷态时旧布局还会在后续通知里回来。
+    /// RequestCommitAsync 在此岛上曾不兑现，故用连续实际帧、尺寸核对与合成余量共同判定。
     /// </summary>
     private async Task RevealAfterInstantFullscreenAsync(VideoFrameOverlay cover)
     {
         var started = Now;
-        await WaitFramesAsync(2);
-        VideoFrameOverlay.Flush();
-        cover.Dispose();
+        var generation = _presentationGeneration;
+        var window = _window;
+        var ready = false;
+        try
+        {
+            if (window is null) return;
+            SynchronizePlaybackLayout();
+            var previous = (window.ClientSize, XamlRoot?.RasterizationScale, ViewModel.CoverBackdrop);
+            var stableSince = Now;
+            var frames = 0;
+            while (Current() && Now - started < StartupCoverCeilingMilliseconds)
+            {
+                var rendered = await WaitFramesAsync(1, RevealFrameMilliseconds);
+                if (!Current()) return;
+                var current = (window.ClientSize, XamlRoot?.RasterizationScale, ViewModel.CoverBackdrop);
+                if (rendered == 0 || !StartupCoverFits(window) || current != previous)
+                {
+                    frames = 0;
+                    stableSince = Now;
+                    previous = current;
+                    continue;
+                }
+                if (frames == 0) stableSince = Now;
+                if (++frames < 3 || Now - stableSince < HandoffSettleMilliseconds) continue;
+                VideoFrameOverlay.Flush();
+                VideoFrameOverlay.Flush();
+                ready = true;
+                break;
+            }
+            if (Current() && !ready)
+                Log.Warn(Category, $"起播整屏加载层未在 {StartupCoverCeilingMilliseconds}ms 内稳定出帧，撤应急覆盖层；"
+                    + $"客户区={window.ClientSize}，岛={XamlRoot?.Size}，加载层={Cover.ActualWidth}x{Cover.ActualHeight}");
+        }
+        catch (Exception error)
+        {
+            Log.Warn(Category, "起播加载层交接检查失败，撤应急覆盖层", error);
+        }
+        finally
+        {
+            cover.Dispose();
+            // 退出或下一次进场可以先接管；迟到的旧任务只释放自己那一层。
+            if (ReferenceEquals(_startupCover, cover))
+            {
+                _startupCoverSettled = ready;
+                _startupCover = null;
+                _startupHandoverPending = false;
+                if (_onStage && Attached && !ViewModel.CoverUp) HideCoverPlate();
+            }
+            VideoFrameOverlay.Flush();
+            Log.Debug(Category, $"起播整屏覆盖层撤下：盖了 {Now - started}ms，布局稳定={ready}");
+        }
 
-        // 这一行是给验收用的：它直接回答「起播自动全屏那一下到底黑了多少毫秒」——图还没到位的那一段
-        // 遮罩自己也在纯色上，所以这个数只说明覆盖层那一截，不是用户看到的全部。
-        Log.Debug(Category, $"起播整屏覆盖层撤下：盖了 {Now - started}ms");
+        bool Current() => generation == _presentationGeneration && ReferenceEquals(_startupCover, cover)
+            && _onStage && Attached && _window == window && window is { Fullscreen: true }
+            && window.Handle != IntPtr.Zero && !Native.IsIconic(window.Handle);
     }
+
+    private bool StartupCoverFits(HostWindow window)
+    {
+        if (XamlRoot is not { RasterizationScale: > 0 } root
+            || Visibility != Visibility.Visible || Cover.Visibility != Visibility.Visible
+            || Opacity != 1 || Cover.Opacity != 1
+            || PageTransform.ScaleX != 1 || PageTransform.ScaleY != 1 || PageTransform.TranslateY != 0
+            || CoverArtwork.Background is not ImageBrush brush
+            || !ReferenceEquals(brush.ImageSource, ViewModel.CoverBackdrop)) return false;
+        var (width, height) = window.ClientSize;
+        var raster = root.RasterizationScale;
+        // 连岛本身也要追上；只看强制 Arrange 后的控件尺寸会把暂时排对误认成稳定。
+        if (!Matches(root.Size.Width, root.Size.Height)) return false;
+        return Fills(Root) && Fills(Cover) && Fills(CoverArtwork);
+
+        bool Matches(double w, double h) => width > 0 && height > 0
+            && Math.Abs(w * raster - width) <= 1 && Math.Abs(h * raster - height) <= 1;
+        bool Fills(FrameworkElement element)
+        {
+            var origin = element.TransformToVisual(Root).TransformPoint(new Windows.Foundation.Point());
+            return Matches(element.ActualWidth, element.ActualHeight)
+                && Math.Abs(origin.X * raster) <= 1 && Math.Abs(origin.Y * raster) <= 1;
+        }
+    }
+
+    private void CancelStartupCover()
+    {
+        var cover = _startupCover;
+        _startupCover = null;
+        cover?.Dispose();
+        if (cover is not null) _startupHandoverPending = false;
+    }
+
+    // 仅防故障时原生顶层窗口滞留；到此上限算交接失败，不能记作已出帧。
+    private const int StartupCoverCeilingMilliseconds = 2000;
+
+    /// <summary>整屏进场的撤层余量：渲染被饿时宁可覆盖层多活一拍，也不让「撤层」抢在「上屏」前面。</summary>
+    private const int RevealFrameMilliseconds = 80;
 
     /// <summary>
     /// 等合成器出过 <paramref name="frames"/> 帧。没有渲染回调的场合（窗口被最小化、显示器熄了）也要走得动，
-    /// 所以每一帧都兜一张 32ms 的网 —— 这一处的等待只能短不能长：它就是覆盖层的寿命。
+    /// 所以每一帧都兜一张 <paramref name="perFrameMilliseconds"/> 的网 —— 网宽由调用方按「覆盖层的寿命」定。
     /// </summary>
-    private static async Task WaitFramesAsync(int frames)
+    /// <returns>实际收到的渲染回调数；超时不算一帧。</returns>
+    private static async Task<int> WaitFramesAsync(int frames, int perFrameMilliseconds = 32)
     {
+        var count = 0;
         for (var frame = 0; frame < frames; frame++)
         {
             var rendered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -186,13 +285,14 @@ public sealed partial class PlayerPage
             }
 
             CompositionTarget.Rendering += OnRendering;
-            _ = Task.Delay(32).ContinueWith(
-                _ => rendered.TrySetResult(),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            await rendered.Task;
+            try
+            {
+                await Task.WhenAny(rendered.Task, Task.Delay(perFrameMilliseconds));
+                if (rendered.Task.IsCompletedSuccessfully) count++;
+            }
+            finally { CompositionTarget.Rendering -= OnRendering; }
         }
+        return count;
     }
 
     private void ApplyPagePose(PlayerMotion.Pose pose)
@@ -413,7 +513,11 @@ public sealed partial class PlayerPage
     /// </summary>
     internal async Task ReturnToBrowseBeforeStopAsync()
     {
-        if (!_onStage || _window is not { } window) return;
+        if (!_onStage || !Attached || _window is not { Handle: var handle } window || handle == IntPtr.Zero) return;
+        var context = ViewModel.CaptureInteraction();
+        var generation = _presentationGeneration;
+        bool Current() => generation == _presentationGeneration && _window == window
+            && window.Handle == handle && Attached && ViewModel.IsCurrentInteraction(context);
 
         // ① 先抓一帧，铺成一块**不随窗口变形**的整屏覆盖层（2026-09-25 用户令「退出播放窗口化的一瞬间会有
         //    视频的残留画面，不能直接切回主页吗」）。从前这一趟是让画面跟着窗口一起缩、缩完再逐拍溶解 ——
@@ -421,70 +525,59 @@ public sealed partial class PlayerPage
         //    窗口怎么缩它都不动，于是「窗口化」这件事发生在一张静止的画底下，谁也看不见。
         //    抓不到帧照常往下走：屏上剩的是退场底（没有画面可残留，也就没有这一条）。
         VideoFrameOverlay? handoff = null;
-        if (_videoTarget.HasAttachedVisual)
-        {
-            try
-            {
-                var frame = await _videoTarget.CaptureFrameAsync().WaitAsync(TimeSpan.FromMilliseconds(750));
-                if (frame is not null)
-                {
-                    handoff = new VideoFrameOverlay(window.Handle, frame);
-                    handoff.Show(VideoFrameOverlay.FullscreenRect(window.Handle), topmost: true);
-                    VideoFrameOverlay.Flush();
-                }
-            }
-            catch (Exception error)
-            {
-                Log.Warn(Category, "退场抓帧不成，这一趟没有覆盖层遮挡", error);
-            }
-        }
-
-        // ② 岛里那一帧立刻放掉。屏上由覆盖层接着，于是接下来几步里没有任何东西会跟着窗口一起缩 ——
-        //    这是「不再有残留画面」的全部机制。放掉之后本页是一块空舞台，所以下面那一趟也不留溶解。
-        _videoTarget.RetainLastFrame = false;
-
-        // ③ 窗口先收回浏览几何，再让浏览页露出来 —— 关键在这一步要早于 LeavePlayer 里的
-        // ShowPlayer(false)+强制排版（2026-09-25，用户报「退出播放页面会触发媒体库上移」，以及更早那条
-        // 「全屏退出主页轮播图先大后小」）。
-        //
-        // 少了这一步，浏览页会先按<b>整屏宽度</b>排一次版：媒体库那种响应式网格因此列数变多、内容变矮，
-        // ScrollView 把竖直滚动位夹小；等窗口缩回小窗、网格又变高，可偏移已经被夹过 —— 同一像素偏移落在
-        // 更靠上的内容上，看起来就是「整个媒体库往上跳了一截」。主页轮播图则是先按整屏宽了一下。收回窗口
-        // 之后浏览页只在浏览尺寸下排这一次版，两样都不再发生。
-        window.RestorePlayerToBrowse();
-        window.FreeSizing = false;
-
-        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _exitLanded = landed;
-
-        _exitSnap = true;
-        LeavePlayer();
-
-        // `_restoreBrowseOnExit` **不能在这里清**：窗口上面已经还原过，CompletePlayerExit 里那一次
-        // RestorePlayerToBrowse() 是空操作（见它自己的守卫）。
         try
         {
-            // 落定上限 3 秒：这一趟是当拍收摊（_exitSnap），正常几乎是立刻回来。到点照走 —— 停播放不能被
-            // 一趟收摊卡死，那种卡法没有出路（画面还挂着、窗口已经交回浏览页）。
-            await landed.Task.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
+            if (_videoTarget.HasAttachedVisual)
+            {
+                try
+                {
+                    var frame = await _videoTarget.CaptureFrameAsync().WaitAsync(TimeSpan.FromMilliseconds(750));
+                    if (!Current() || !_onStage) return;
+                    if (frame is not null)
+                    {
+                        handoff = new VideoFrameOverlay(handle, frame);
+                        handoff.Show(VideoFrameOverlay.FullscreenRect(handle), topmost: true);
+                        VideoFrameOverlay.Flush();
+                    }
+                }
+                catch (Exception error)
+                {
+                    Log.Warn(Category, "退场抓帧不成，这一趟没有覆盖层遮挡", error);
+                }
+            }
+            if (!Current() || !_onStage) return;
+
+            // The overlay stays at screen coordinates while the host returns to its browse size.
+            _videoTarget.RetainLastFrame = false;
+            window.RestorePlayerToBrowse();
+            window.FreeSizing = false;
+
+            var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _exitLanded = landed;
+            _exitSnap = true;
+            LeavePlayer();
+            generation = _presentationGeneration;
+
+            try
+            {
+                await landed.Task.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
+            }
+            catch (TimeoutException)
+            {
+                Log.Warn(Category, "退场没在 3 秒内落定，照常停播放");
+            }
+
+            // Layout and composition commit independently; retain the overlay for two rendered frames.
+            await WaitFramesAsync(2);
+            handoff?.Dispose();
+            handoff = null;
+            VideoFrameOverlay.Flush();
+            // 浏览页已经呈现，保持这一实例；撤层后再导航会先露出静态主页，再迟到地补播入场。
         }
-        catch (TimeoutException)
+        finally
         {
-            Log.Warn(Category, "退场没在 3 秒内落定，照常停播放");
+            handoff?.Dispose();
         }
-
-        // ④ 等合成器出两帧再撤覆盖层：浏览页刚被放回来，它要排完版、画上屏。撤早了露出的是还没画东西的
-        //    窗口底色（2026-09-20 用户第三张截图里那两截色）。这里等「布局出过帧了没有」比等提交回执可靠，
-        //    理由与 RevealAfterInstantFullscreenAsync 同一段。撤了之后屏上就是主页 —— 再没有任何东西挡着。
-        await WaitFramesAsync(2);
-        handoff?.Dispose();
-        VideoFrameOverlay.Flush();
-
-        // ⑤ 退到主页这一趟，让主页重走一遍它平时那趟「回主页」（2026-09-25 用户报「退出时媒体还是没有
-        //    动画」，要「和从电影页面返回到主页的动画一样」）。放这一句的位置就是全部要点：必须在播放层
-        //    收摊之后（上面那一步）—— 早一句，主页的矮窗档判定会被播放层那道门挡掉，翻档的动画根本不会
-        //    发生。是不是真的回主页由外壳判断（从详情页进播放的退出后该回详情页，那一档不动）。
-        _shell?.ReturnToHomeAfterPlayer();
     }
 
     private void StopPlayerMotion()

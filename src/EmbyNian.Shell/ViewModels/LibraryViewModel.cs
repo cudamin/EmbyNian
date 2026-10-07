@@ -124,6 +124,13 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// change handler does not fire a second reload of the query the key change is already reloading.
     /// </summary>
     private bool _syncingDirection;
+    private readonly LoadGeneration _queries = new();
+    private readonly LoadGeneration _jumps = new();
+    private CancellationToken _queryToken;
+    private EmbySessionScope? _scope;
+    private bool _active;
+    private bool _firstPage;
+    private bool _pageFailed;
 
     public LibraryViewModel()
     {
@@ -281,7 +288,10 @@ public sealed partial class LibraryViewModel : PageViewModel
         SortKey == EmbySortBy.Name && !SortDescending && _total is > 30);
 
     /// <summary>Whether this grid has anything the player could start, for the two play buttons.</summary>
-    internal bool HasPlayable => Cards.Any(card => card.Item.IsPlayable);
+    internal bool HasPlayable => _active && _scope?.IsCurrent == true && _firstPage && !Busy
+        && Cards.Any(card => card.Item.IsPlayable);
+
+    protected override void BusyChanged() => RowsArrived();
 
     // ---------------------------------------------------------------- 播放命令
 
@@ -391,6 +401,9 @@ public sealed partial class LibraryViewModel : PageViewModel
         EmbyImageStore images,
         IServerCapabilities capabilities)
     {
+        Cancel();
+        _active = true;
+        _scope = images.CaptureScope();
         _request = request;
         _actions = actions;
         _settings = settings;
@@ -404,7 +417,7 @@ public sealed partial class LibraryViewModel : PageViewModel
         CardWidth = CardSize.PosterWidth;
         _indicators = ui.ShowWatchedIndicators;
 
-        Heading = request.Title;
+        Heading = request.IsSearch ? LibraryRequest.SearchTitle(request.SearchTerm!) : request.Title;
         SearchText = request.SearchTerm ?? "";
 
         // 「这里没有内容」读起来像仓库空了，而这一页是「你还没看什么」—— 一部都没看完过的时候，那两句话说的
@@ -436,11 +449,11 @@ public sealed partial class LibraryViewModel : PageViewModel
         if (_request is not { IsSearch: true } request) return Task.CompletedTask;
 
         var query = term.Trim();
-        if (string.Equals(query, request.SearchTerm, StringComparison.Ordinal)) return Task.CompletedTask;
-
-        _request = request with { SearchTerm = query, Title = LibraryRequest.SearchTitle(query) };
+        request.SearchTerm = query;
+        request.ScrollOffset = 0;
+        request.LoadedCount = 0;
         SearchText = query;
-        Heading = _request.Title;
+        Heading = LibraryRequest.SearchTitle(query);
 
         return ReloadAsync();
     }
@@ -457,72 +470,81 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// </param>
     private async Task LoadAsync(bool reset)
     {
-        if (_request is null || _actions is null) return;
-        if (!reset && (Busy || !HasMore)) return;
-
+        if (!_active || _scope is not { IsCurrent: true } || _request is null || _actions is null) return;
+        if (!reset && (Busy || !HasMore || !_firstPage || _pageFailed)) return;
+        if (reset)
+        {
+            _queryToken = _queries.Begin();
+            _jumps.Cancel();
+            _firstPage = false;
+            _pageFailed = false;
+            _total = NotLoaded;
+        }
+        var queryToken = _queryToken;
         var token = BeginLoad();
-
         try
         {
             var start = reset ? 0 : Cards.Count;
-
-            // Nothing to ask: the search page with an empty box. Asked anyway, it would go out as
-            // 「list everything under no parent」 and come back as the server's whole root. Which source
-            // the rows come from is ReadAsync's business — 继续观看那一页问的不是通用查询。
-            if (await ReadAsync(start, token).ConfigureAwait(true) is not { } result)
-            {
-                foreach (var card in Cards) card.AbandonPoster();
-                Cards.Clear();
-
-                _total = 0;
-                EmptyNotice = "输入关键字开始搜索";
-                ShowEmptyNotice = true;
-
-                EndLoad(token);
-                PageArrived?.Invoke();
-                return;
-            }
-
-            if (!IsCurrent(token)) return;
-
+            var result = await ReadAsync(start, token).ConfigureAwait(true);
+            if (!QueryCurrent(queryToken) || !IsCurrent(token)) return;
             if (reset)
             {
-                // Released, not just dropped: a card still holds its decoded bitmap until it is told
-                // otherwise, and a reload that skipped this would leak one poster per card per refresh.
                 foreach (var card in Cards) card.AbandonPoster();
                 Cards.Clear();
             }
-
-            _total = result.TotalRecordCount;
-
-            foreach (var item in result.Items)
-                Cards.Add(new CardItem(item, _images!, CardBuildWidth, CardBuildWide, indicators: _indicators));
-
-            // A server that hands back nothing has nothing more to give, whatever its count said.
-            if (result.Items.Count == 0) _total = Cards.Count;
-
-            EmptyNotice = "这里没有内容";
+            _total = result?.TotalRecordCount ?? 0;
+            if (result is not null)
+            {
+                foreach (var item in result.Items)
+                    Cards.Add(new CardItem(item, _images!, CardBuildWidth, CardBuildWide, indicators: _indicators));
+                if (result.Items.Count == 0) _total = Cards.Count;
+            }
+            _firstPage = true;
+            _pageFailed = false;
+            EmptyNotice = result is null ? "输入关键字开始搜索" : "这里没有内容";
             ShowEmptyNotice = Cards.Count == 0;
-
             EndLoad(token);
             PageArrived?.Invoke();
         }
-        catch (OperationCanceledException)
-        {
-        }
+        catch (OperationCanceledException) { }
         catch (Exception error)
         {
-            Log.Warn(Category, $"读取「{_request.Title}」失败", error);
-
-            if (!IsCurrent(token)) return;
-
-            Report($"读取「{_request.Title}」失败", error);
-
-            // Ready, not stuck. IsReady means the first load has finished, whether it found anything or
-            // not, and the two tooling paths that wait on it (--show-library, --play) used to sit
-            // through their full ten-second poll whenever a library failed to read.
-            EndLoad(token);
+            if (!QueryCurrent(queryToken) || !IsCurrent(token)) return;
+            _pageFailed = true;
+            Log.Warn(Category, $"读取「{Heading}」失败", error);
+            Report($"读取「{Heading}」失败，请刷新重试", error);
         }
+        finally { EndLoad(token); }
+    }
+
+    internal CancellationToken QueryToken => _queryToken;
+
+    internal bool QueryCurrent(CancellationToken token) =>
+        _active && _scope?.IsCurrent == true && _queries.IsCurrent(token);
+
+    public override void Cancel()
+    {
+        _active = false;
+        _queries.Cancel();
+        _jumps.Cancel();
+        base.Cancel();
+        RowsArrived();
+    }
+
+    internal void Resume()
+    {
+        if (_active) return;
+        _active = _scope?.IsCurrent == true;
+        if (_active) _ = ReloadAsync();
+    }
+
+    public override void Dispose()
+    {
+        Cancel();
+        foreach (var card in Cards) card.AbandonPoster();
+        _queries.Dispose();
+        _jumps.Dispose();
+        base.Dispose();
     }
 
     /// <summary>
@@ -536,14 +558,15 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// <returns>null ＝ 这一页没什么可问的（搜索页空着那个框，<see cref="BuildQuery"/> 也为它返回 null）。</returns>
     private async Task<ItemsResult?> ReadAsync(int start, CancellationToken token)
     {
+        if (!_active || _scope is not { IsCurrent: true } scope) throw new OperationCanceledException();
         if (IsResumePage)
-            return await _session!
+            return await scope
                 .ExecuteAsync((client, ct) => client.QueryResumeAsync(start, _settings!.PageSize, ct), token)
                 .ConfigureAwait(true);
 
         if (BuildQuery(start) is not { } query) return null;
 
-        return await _session!
+        return await scope
             .ExecuteAsync((client, ct) => client.GetItemsAsync(query, ct), token)
             .ConfigureAwait(true);
     }
@@ -565,8 +588,13 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// </summary>
     internal async Task LoadUntilAsync(int index)
     {
-        while (!Busy && HasMore && Cards.Count <= index)
+        var queryToken = _queryToken;
+        while (QueryCurrent(queryToken) && !Busy && HasMore && _firstPage && !_pageFailed && Cards.Count <= index)
+        {
+            var count = Cards.Count;
             await LoadAsync(reset: false).ConfigureAwait(true);
+            if (Cards.Count <= count) break;
+        }
     }
 
     /// <summary>
@@ -639,7 +667,7 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// </summary>
     internal async Task PlayAllAsync()
     {
-        if (_request is null || _actions is null) return;
+        if (_request is null || _actions is null || !HasPlayable) return;
 
         var (items, token) = await PlayableItemsAsync().ConfigureAwait(true);
         if (items.Count == 0 || !IsCurrent(token)) return;
@@ -654,7 +682,7 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// </summary>
     internal async Task PlayRandomAsync()
     {
-        if (_request is null || _actions is null) return;
+        if (_request is null || _actions is null || !HasPlayable) return;
 
         var (items, token) = await PlayableItemsAsync().ConfigureAwait(true);
         if (items.Count == 0 || !IsCurrent(token)) return;
@@ -701,37 +729,27 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// <returns>The index of the first row at or after the letter, and the letter to light up.</returns>
     internal async Task<(int Index, string Letter)?> JumpToAsync(string letter)
     {
-        if (_request is null) return null;
-
+        if (!_active || Busy || !_firstPage || _scope is not { IsCurrent: true } scope || BuildQuery(0) is not { } source)
+            return null;
+        var queryToken = _queryToken;
+        var jumpToken = _jumps.Begin();
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(queryToken, jumpToken);
+        var token = stopping.Token;
         try
         {
-            // The bare count first: 「jump to Z in a library of 3 items」 is 「stay put」, and only the
-            // total makes that say so.
-            var total = await CountAsync(null).ConfigureAwait(true);
-            if (total is null) return null;
-
-            // # is the server's own 「not A–Z」 bucket and has no NameStartsWithOrGreater spelling; the
-            // first row is the only honest answer for it.
-            if (letter == "#") return (0, CurrentLetterOf(0));
-
-            var before = await CountAsync(letter).ConfigureAwait(true);
-            if (before is null) return null;
-
-            // CountAsync 数的是「排在这个字母及之后」的那一片（ItemQuery 把它发成
-            // NameStartsWithOrGreater，见它的注释），所以第一行落在总数减它 —— 从前写成 before 本身，
-            // 跳 C 会落在 Y 上。降序分支不写：字母栏只在升序出现（见 <see cref="AlphaVisibility"/>），
-            // 那条路没人走。
+            var total = await CountAsync(scope, source, null, token).ConfigureAwait(true);
+            if (!QueryCurrent(queryToken) || token.IsCancellationRequested) return null;
+            var before = letter == "#" ? total : await CountAsync(scope, source, letter, token).ConfigureAwait(true);
+            if (!QueryCurrent(queryToken) || token.IsCancellationRequested) return null;
             var index = Math.Clamp((int)(total - before), 0, Math.Max(0, (int)total - 1));
-
+            await LoadUntilAsync(index).ConfigureAwait(true);
+            if (!QueryCurrent(queryToken) || token.IsCancellationRequested || index >= Cards.Count) return null;
             return (index, CurrentLetterOf(index));
         }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
+        catch (OperationCanceledException) { return null; }
         catch (Exception error)
         {
-            Log.Warn(Category, $"字母跳转失败（{letter}）", error);
+            if (QueryCurrent(queryToken)) Report("字母跳转失败", error);
             return null;
         }
     }
@@ -739,16 +757,8 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// <summary>One count query with <c>Limit 0</c>, or null when it cannot be answered. With a
     /// letter, the count is of rows <b>at or after</b> that letter — <c>ItemQuery</c> sends it as
     /// <c>NameStartsWithOrGreater</c>, not a plain prefix count.</summary>
-    private async Task<long?> CountAsync(string? letter)
+    private static async Task<long> CountAsync(EmbySessionScope scope, ItemQuery source, string? letter, CancellationToken token)
     {
-        if (_request is null) return null;
-
-        // The counting query is the grid's own query with the paging stripped out and the letter
-        // applied, so the count and the rows can never disagree about what is being counted.
-        // ItemQuery is a class with init-only setters, so the copy is a construction rather than a
-        // `with` — the one thing it changes is everything it does not name.
-        if (BuildQuery(0) is not { } source) return null;
-
         var query = new ItemQuery
         {
             ParentId = source.ParentId,
@@ -768,9 +778,11 @@ public sealed partial class LibraryViewModel : PageViewModel
             NameStartsWith = letter
         };
 
-        var result = await _session!
-            .ExecuteAsync((client, ct) => client.GetItemsAsync(query, ct), CancellationToken.None)
+        scope.ThrowIfNotCurrent();
+        var result = await scope
+            .ExecuteAsync((client, ct) => client.GetItemsAsync(query, ct), token)
             .ConfigureAwait(true);
+        scope.ThrowIfNotCurrent();
 
         return result.TotalRecordCount;
     }
@@ -819,7 +831,7 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// </summary>
     internal void Open(CardItem card)
     {
-        if (_actions is null) return;
+        if (_actions is null || !_active || !card.IsCurrent) return;
 
         _actions.OpenItem(card.Item);
     }
@@ -1052,7 +1064,8 @@ public sealed partial class LibraryViewModel : PageViewModel
     /// every time one was opened.
     /// </summary>
     private string? MemoryKey() =>
-        _request is { CollectionType: not null, ParentId: { Length: > 0 } id } ? id : null;
+        _request is { CollectionType: not null, ParentId: { Length: > 0 } id } && _scope is { IsCurrent: true } scope
+            ? BrowsingPreferences.LibraryKey(scope.Connection, id) : null;
 
     private string Describe() =>
         _total <= 0 ? (Cards.Count == 0 ? "没有内容" : $"共 {Cards.Count} 项")
@@ -1082,7 +1095,7 @@ public sealed partial class LibraryViewModel : PageViewModel
                 Descending = SortDescending,
                 StartIndex = start,
                 Limit = limit,
-                Filters = _filters
+                Filters = _filters.Clone()
             };
         }
 
@@ -1131,7 +1144,7 @@ public sealed partial class LibraryViewModel : PageViewModel
                 Descending = SortDescending,
                 StartIndex = start,
                 Limit = limit,
-                Filters = _filters
+                Filters = _filters.Clone()
             };
         }
 
@@ -1153,7 +1166,7 @@ public sealed partial class LibraryViewModel : PageViewModel
                 Descending = SortDescending,
                 StartIndex = start,
                 Limit = limit,
-                Filters = _filters
+                Filters = _filters.Clone()
             };
         }
 
@@ -1172,7 +1185,7 @@ public sealed partial class LibraryViewModel : PageViewModel
             Limit = limit,
             // Sent unconditionally: an empty selection contributes no parameters, so there is nothing to
             // branch on and no way for the query and the panel to disagree.
-            Filters = _filters
+            Filters = _filters.Clone()
         };
     }
 

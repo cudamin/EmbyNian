@@ -90,41 +90,51 @@ public sealed class AudioDeviceCatalogue
     }
 
     private readonly Func<string?> _libraryPath;
-
+    private readonly Func<IReadOnlyList<AudioDevice>> _read;
+    private readonly object _loadGate = new();
+    private Task<IReadOnlyList<AudioDevice>>? _loading;
     private IReadOnlyList<AudioDevice>? _cached;
 
     /// <param name="libraryPath">
     /// Where <c>libmpv-2.dll</c> is, or null when it cannot be found. Handed in rather than probed again
     /// here: <see cref="LibMpvBackend"/> already owns that search and its answer is the one that matters.
     /// </param>
-    public AudioDeviceCatalogue(Func<string?> libraryPath) => _libraryPath = libraryPath;
-
-    /// <summary>
-    /// The devices, read once per process — but only once they succeeded. Off the calling thread — creating
-    /// and initialising an mpv context is tens of milliseconds of native work, and the settings page must not
-    /// stall on it (the 字幕字体 picker has the same shape and fills itself in a moment after the page appears).
-    /// <para>
-    /// An empty list is a normal answer, not an error: libmpv missing, an mpv built without the WASAPI output,
-    /// a machine with no sound card. The row stays usable — it keeps 「自动」 and whatever the settings file
-    /// holds. An empty answer is <b>not cached</b>: a first visit that failed (dll missing mid-upgrade, device
-    /// service briefly down) must not pin the failure for the life of the process — the next visit to the
-    /// settings page, and the next playback that wants to check its device, read afresh.
-    /// </para>
-    /// </summary>
-    public async Task<IReadOnlyList<AudioDevice>> LoadAsync()
+    public AudioDeviceCatalogue(Func<string?> libraryPath) : this(libraryPath, null)
     {
-        if (_cached is { } ready) return ready;
-
-        var devices = await Task.Run(Read).ConfigureAwait(false);
-
-        // 空名单不缓存：枚举失败是暂时状态，下一次打开设置、下一场播放要核对设备时重新读，
-        // 而不是把那一次失败钉死在进程里。非空才值得按进程记一份。
-        if (devices.Count > 0) _cached = devices;
-        return devices;
     }
 
-    /// <summary>What has already been read, or an empty list. For the self-check, which must not await.</summary>
-    public IReadOnlyList<AudioDevice> Known => _cached ?? [];
+    internal AudioDeviceCatalogue(Func<string?> libraryPath, Func<IReadOnlyList<AudioDevice>>? read)
+    {
+        _libraryPath = libraryPath;
+        _read = read ?? Read;
+    }
+
+    /// <summary>
+    /// Re-enumerates on each visit or playback check. Only concurrent callers share an in-flight read;
+    /// the last completed list is a display snapshot, never evidence that an endpoint is still online.
+    /// </summary>
+    public Task<IReadOnlyList<AudioDevice>> LoadAsync()
+    {
+        lock (_loadGate)
+        {
+            if (_loading is { IsCompleted: false }) return _loading;
+            return _loading = Task.Run(() =>
+            {
+                IReadOnlyList<AudioDevice> devices;
+                try { devices = Selectable(_read()); }
+                catch (Exception error)
+                {
+                    Log.Warn(Category, "读取音频输出设备列表失败，本次名单不可用", error);
+                    devices = [];
+                }
+                Volatile.Write(ref _cached, devices);
+                return devices;
+            });
+        }
+    }
+
+    /// <summary>The last completed enumeration, including an empty result; not a live availability check.</summary>
+    public IReadOnlyList<AudioDevice> Known => Volatile.Read(ref _cached) ?? [];
 
     private IReadOnlyList<AudioDevice> Read()
     {
@@ -146,6 +156,8 @@ public sealed class AudioDeviceCatalogue
             // Nothing must happen in this context beyond enumerating. video=no and vo=null are what keep it
             // from ever asking for a window — this runs while the settings window is open, and a stray mpv
             // window appearing over it would be a memorable bug.
+            Set(context, "config", "no");
+            Set(context, "load-scripts", "no");
             Set(context, "video", "no");
             Set(context, "vo", "null");
             Set(context, "idle", "yes");
@@ -189,6 +201,6 @@ public sealed class AudioDeviceCatalogue
     private static void Set(IntPtr context, string name, string value)
     {
         var error = LibMpvNative.mpv_set_option_string(context, name, value);
-        if (error < 0) Log.Warn(Category, $"枚举音频设备时设置 mpv 选项 {name} 失败：{LibMpvBackend.Describe(error)}");
+        if (error < 0) throw new InvalidOperationException($"枚举音频设备时设置 mpv 选项 {name} 失败：{LibMpvBackend.Describe(error)}");
     }
 }

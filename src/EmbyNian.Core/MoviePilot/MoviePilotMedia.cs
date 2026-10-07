@@ -12,8 +12,10 @@ namespace EmbyNian.MoviePilot;
 public sealed record MoviePilotMedia
 {
     public required string Title { get; init; }
+    internal string ConnectionStamp { get; init; } = "";
 
     public int? Year { get; init; }
+    public int? Season { get; init; }
 
     /// <summary>
     /// MoviePilot 的 <c>MediaType</c> 原值（这台服务器上是「电影」/「电视剧」）。原样带着而不翻成本地枚举：
@@ -34,6 +36,8 @@ public sealed record MoviePilotMedia
 
     /// <summary>屏上那一行：有年份就「标题 (年份)」，没有就光标题。</summary>
     public string Display => Year is { } year ? $"{Title} ({year})" : Title;
+    public string Confirmation => $"{Display}\n{SourceLabel} · {MediaId} · {Type ?? "类型未提供"}" +
+        (Season is { } season ? $" · 第 {season} 季" : "");
 
     /// <summary>
     /// 能不能订阅：身份对齐了才行。MoviePilot 新增订阅时 <c>media_source</c> 和 <c>media_id</c> 必须同时有效，

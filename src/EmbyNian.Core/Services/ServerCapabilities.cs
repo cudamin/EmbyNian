@@ -23,8 +23,26 @@ public sealed class ServerCapabilities(EmbySession session) : IServerCapabilitie
 {
     private const string Category = "app";
 
+    private readonly object _gate = new();
+    private EmbySessionScope? _scope;
+    private Version? _serverVersion;
+    private long _generation;
+
     /// <inheritdoc />
-    public Version? ServerVersion { get; private set; }
+    public Version? ServerVersion
+    {
+        get
+        {
+            EmbySessionScope? scope;
+            Version? version;
+            lock (_gate)
+            {
+                scope = _scope;
+                version = _serverVersion;
+            }
+            return scope?.IsCurrent == true ? version : null;
+        }
+    }
 
     /// <summary>
     /// Asks the server what version it is and remembers the answer for the rest of the session.
@@ -36,14 +54,28 @@ public sealed class ServerCapabilities(EmbySession session) : IServerCapabilitie
     /// </summary>
     public async Task ProbeAsync(CancellationToken token = default)
     {
+        long generation;
+        lock (_gate)
+        {
+            generation = ++_generation;
+            _scope = null;
+            _serverVersion = null;
+        }
+
         try
         {
-            var info = await session.ExecuteAsync((client, ct) => client.GetSystemInfoAsync(ct), token)
+            var scope = session.Capture();
+            var info = await scope.ExecuteAsync((client, ct) => client.GetSystemInfoAsync(ct), token)
                 .ConfigureAwait(false);
 
-            if (Version.TryParse(info.Version, out var version))
+            if (Version.TryParse(info.Version, out var version) && scope.IsCurrent && !token.IsCancellationRequested)
             {
-                ServerVersion = version;
+                lock (_gate)
+                {
+                    if (generation != _generation) return;
+                    _scope = scope;
+                    _serverVersion = version;
+                }
                 Log.Debug(Category, $"服务器版本 {version}");
             }
         }

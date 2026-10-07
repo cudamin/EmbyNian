@@ -43,9 +43,9 @@ public static class EmbyUrl
         return Combine(apiBase, $"Videos/{itemId}/{mediaSourceId}/Subtitles/{streamIndex}/Stream.{extension}");
     }
 
-    public static Uri Image(Uri apiBase, string itemId, string imageType, string? tag, int maxWidth)
+    public static Uri Image(Uri apiBase, string itemId, string imageType, string? tag, int maxWidth, int? index = null)
     {
-        return Combine(apiBase, $"Items/{itemId}/Images/{imageType}",
+        return Combine(apiBase, EmbyClient.ImagePath(itemId, imageType, index),
             ("maxWidth", maxWidth.ToString()),
             ("quality", "90"),
             ("tag", tag));

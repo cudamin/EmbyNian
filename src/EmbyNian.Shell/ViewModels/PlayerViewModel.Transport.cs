@@ -67,6 +67,12 @@ public sealed partial class PlayerViewModel
 
         _skips.Decline();
         SkipOffered = false;
+
+        // 独占模式那颗 uosc 按钮当场收起（与 AcceptSkip 同一句）。这一句不只是观感：uosc 那侧把
+        // 「offer 立着」当运行期键绑定的开关 —— 收到空文案才 keyunbind ENTER/ESC、把内建还给 mpv
+        // （见 elements/SkipButton.lua）。少了它，用户按 Esc 关掉提示之后 Esc 会一直被我们占着。
+        // 集成模式白推（HeadlessPlayback 闸，见 PushSkipToVideoWindow）。
+        PushSkipToVideoWindow(false, "");
     }
 
     // ---- starting and stopping ---------------------------------------------------
@@ -130,31 +136,27 @@ public sealed partial class PlayerViewModel
     /// <summary>停止播放. Asks mpv to quit rather than cancelling, so the final position is still reported.</summary>
     internal Task StopAsync()
     {
+        InvalidateMenuInteractions();
         ResetTimelineDrag();
+        _startIntent.CancelAll();
+        _preparing?.Cancel();
         if (!_stopTask.IsCompleted) return _stopTask;
         return _stopTask = StopPlaybackAsync();
     }
 
     private async Task StopPlaybackAsync()
     {
-        // 用户停止先撤掉所有还在准备中的起播（封面等待、媒体详情、选集解析），再谈停已建立的播放 ——
-        // 准备期 _playback.IsPlaying 还是 false，从前这里会直接 return，停止根本够不着那场还没起来的播放。
-        _startIntent.CancelAll();
-
         FlushVolume(settled: false);
-        if (!_playback.IsPlaying) return;
-
+        var attempt = _playbackAttempt;
         try
         {
-            if (PrepareStopAsync is { } prepare) await prepare().ConfigureAwait(true);
+            if (_playback.IsPlaying && PrepareStopAsync is { } prepare) await prepare().ConfigureAwait(true);
         }
         catch (Exception error)
         {
-            // 呈现失败不能挡住用户的停止命令，也不能漏掉后端的最终进度上报。
             Log.Warn(Category, "停止前返回浏览页失败", error);
         }
-
-        await _playback.StopAsync().ConfigureAwait(true);
+        if (attempt == _playbackAttempt) await _playback.StopAsync().ConfigureAwait(true);
     }
 
     private async Task StartPlaybackAsync(
@@ -162,8 +164,12 @@ public sealed partial class PlayerViewModel
         EmbyItem? parent,
         PlaybackChoice? choice,
         IReadOnlyList<EmbyItem>? episodes,
-        bool replaceExisting)
+        bool replaceExisting,
+        EmbySessionScope? identity = null,
+        long? continuingIntent = null)
     {
+        _lifetime.Token.ThrowIfCancellationRequested();
+        if (continuingIntent is { } inherited && !_startIntent.IsCurrent(inherited)) return;
         if (!replaceExisting && _playback.IsPlaying)
         {
             Noticed?.Invoke("已经有内容正在播放，请先停止", InfoBarSeverity.Warning);
@@ -173,16 +179,25 @@ public sealed partial class PlayerViewModel
         if (_playback.Validate() is { } problem)
         {
             Noticed?.Invoke(problem, InfoBarSeverity.Error);
+            if (_playerHold == 0 && !_playback.IsPlaying) LeavePlayer();
             return;
         }
+        var scope = identity ?? _session.Capture();
+        FlushVolume(settled: false);
+        using var preparation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _preparing?.Cancel();
+        _preparing = preparation;
+
+        FlushVolume(settled: false);
 
         // Taken here, before the fetch and before the call that stops whatever is playing; released in
         // the finally once this playback has ended and any auto-advance has been decided.
-        _playerHold++;
+        if (_playerHold++ == 0) _playbackIdle = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // 这一次起播的意图票：新的 Begin 作废所有旧起播（最后点选的那次胜出），用户停止作废全部。
         // 各段网络之后 IsCurrent 对不上就静默放弃 —— 取消不是错误。
-        var intent = _startIntent.Begin();
+        var intent = continuingIntent ?? _startIntent.Begin();
+        InvalidateMenuInteractions();
 
         // 这一场播放的号（见 _playbackAttempt）：比停掉旧那一刀更早，所以旧一场收尾时判得出「已经有新的一场了」。
         ResetTimelineDrag();
@@ -203,16 +218,23 @@ public sealed partial class PlayerViewModel
             await WaitCoverBackdropAsync(item).ConfigureAwait(true);
             if (!_startIntent.IsCurrent(intent)) return;
 
-            EnterPlayer();
+            var headless = Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv
+                && Settings.Mpv.Pipeline == VideoPipelineKind.Standalone;
+            _preparingPictureInHost = Settings.Mpv.Backend == MpvBackendKind.BuiltInLibMpv && !headless;
+            PreparePresentation?.Invoke(headless);
+            if (_presentedHeadless != headless) _playerUp = false;
+            _presentedHeadless = headless;
+            // 进场会同步改变窗口、提交合成帧；遮罩必须先立好，尤其不能让首次全屏提交裸露的控件。
             ShowCover(replaceExisting ? "正在切换…" : "正在获取媒体信息…");
+            EnterPlayer();
 
             // A card fetched for browsing carries no MediaSources, and those are what hold the tracks,
             // the container and the runtime.
             var detail = item.MediaSources.Count > 0
                 ? item
-                : await _session
+                : await scope
                     .ExecuteAsync((client, token) => client.GetItemAsync(
-                        item.Id, token, order: Settings.Playback.MediaSourceOrder), _lifetime.Token)
+                        item.Id, token, order: Settings.Playback.MediaSourceOrder), preparation.Token)
                     .ConfigureAwait(true);
 
             if (!_startIntent.IsCurrent(intent)) return;
@@ -225,7 +247,9 @@ public sealed partial class PlayerViewModel
                 // what that click does, and so 「选集」 gets the sibling list for free.
                 ShowCover("正在查找可播放的单集…");
 
-                if (await ResolveNextEpisodeAsync(detail).ConfigureAwait(true) is not { } resolved)
+                var destination = await ResolveNextEpisodeAsync(detail, scope, preparation.Token).ConfigureAwait(true);
+                if (!_startIntent.IsCurrent(intent)) return;
+                if (destination is not { } resolved)
                 {
                     Noticed?.Invoke("这部剧集下没有可播放的单集", InfoBarSeverity.Warning);
                     return;
@@ -239,7 +263,7 @@ public sealed partial class PlayerViewModel
                     detail.Type == EmbyItemType.Series ? detail : parent,
                     choice: null,
                     resolved.Siblings,
-                    replaceExisting).ConfigureAwait(true);
+                    replaceExisting, scope, intent).ConfigureAwait(true);
                 return;
             }
 
@@ -275,9 +299,9 @@ public sealed partial class PlayerViewModel
             // show, so the page that started this playback had no sibling list to hand over. Asked for here
             // rather than by each caller — the search results and the mixed 最近添加 grids have the same
             // nothing to offer — and not awaited, because the file does not wait on it.
-            if (Episodes.Count == 0 && detail.Type == EmbyItemType.Episode) _ = FillSiblingsAsync(detail);
+            if (Episodes.Count == 0 && detail.Type == EmbyItemType.Episode) _ = FillSiblingsAsync(detail, scope, intent);
 
-            var parentItem = parent ?? await ResolveSeriesAsync(detail).ConfigureAwait(true);
+            var parentItem = parent ?? await ResolveSeriesAsync(detail, scope, preparation.Token).ConfigureAwait(true);
             if (!_startIntent.IsCurrent(intent)) return;
             var output = PrepareShaderPlans(detail, source, parentItem);
 
@@ -290,6 +314,7 @@ public sealed partial class PlayerViewModel
                 SubtitlesDisabled = choice?.SubtitlesDisabled ?? false,
                 StartTicks = choice?.StartTicks ?? resumeTicks,
                 Parent = parentItem,
+                ShaderSettings = _shaderSettings,
                 OutputWidth = output.Width,
                 OutputHeight = output.Height,
                 DisplayRefreshHz = MeasureRefreshHz?.Invoke() ?? 0
@@ -306,7 +331,9 @@ public sealed partial class PlayerViewModel
             // 也会把仍在等待闸门的旧请求作废（用户 Stop 的同一刀）。
             if (!_startIntent.IsCurrent(intent)) return;
 
-            var result = await _playback.PlayAsync(ticket, _lifetime.Token).ConfigureAwait(true);
+            _playbackScope = scope;
+            _activeIntent = intent;
+            var result = await _playback.PlayAsync(ticket, scope, _lifetime.Token, preparation.Token).ConfigureAwait(true);
 
             // 「播放已停止」 belongs to the end of a viewing, not to the seam between two episodes: the
             // switch already says what it is doing, and two toasts stacked over a half-built player were
@@ -319,7 +346,7 @@ public sealed partial class PlayerViewModel
             // 只有最新那一场有资格说自己结束了。
             var newest = attempt == _playbackAttempt;
 
-            var following = newest ? NextEpisodeToAutoPlay(result, detail) : null;
+            var following = newest && _startIntent.IsCurrent(intent) ? NextEpisodeToAutoPlay(result, detail) : null;
             if (newest && following is null)
             {
                 Noticed?.Invoke(
@@ -339,18 +366,24 @@ public sealed partial class PlayerViewModel
                         _parent,
                         choice: null,
                         following.Siblings,
-                        replaceExisting: true)
+                        replaceExisting: true,
+                        identity: scope,
+                        continuingIntent: intent)
                     .ConfigureAwait(true);
             }
         }
         finally
         {
+            if (ReferenceEquals(_preparing, preparation)) _preparing = null;
             _playerHold--;
-
-            // The hold is what kept the player up; if this was the last one and nothing took over, here
-            // is where it finally comes down. Skipped while a nested playback runs, because that one
-            // holds its own.
-            if (_playerHold == 0 && !_playback.IsPlaying) LeavePlayer();
+            try
+            {
+                if (_playerHold == 0 && !_playback.IsPlaying && !_lifetime.IsCancellationRequested) LeavePlayer();
+            }
+            finally
+            {
+                if (_playerHold == 0) _playbackIdle?.TrySetResult();
+            }
         }
     }
 
@@ -384,7 +417,8 @@ public sealed partial class PlayerViewModel
     /// with its season's episode list for the 「选集」 picker. Picks the same file the detail page picks,
     /// so the badge and the page do not start different things.
     /// </summary>
-    private async Task<(EmbyItem Episode, IReadOnlyList<EmbyItem> Siblings)?> ResolveNextEpisodeAsync(EmbyItem item)
+    private async Task<(EmbyItem Episode, IReadOnlyList<EmbyItem> Siblings)?> ResolveNextEpisodeAsync(
+        EmbyItem item, EmbySessionScope scope, CancellationToken cancellationToken)
     {
         var seriesId = item.Type == EmbyItemType.Series ? item.Id : item.SeriesId;
         if (string.IsNullOrEmpty(seriesId)) return null;
@@ -394,8 +428,8 @@ public sealed partial class PlayerViewModel
 
         if (seasonId is null)
         {
-            var seasons = await _session
-                .ExecuteAsync((client, token) => client.GetSeasonsAsync(seriesId, token), _lifetime.Token)
+            var seasons = await scope
+                .ExecuteAsync((client, token) => client.GetSeasonsAsync(seriesId, token), cancellationToken)
                 .ConfigureAwait(true);
 
             // The same rule the detail page opens on — 「the first season with something left in it, 特辑
@@ -405,8 +439,8 @@ public sealed partial class PlayerViewModel
             if (ItemDetail.PickSeason(seasons) is { } opening) seasonId = opening.Id;
         }
 
-        var episodes = await _session
-            .ExecuteAsync((client, token) => client.GetEpisodesAsync(seriesId, seasonId, token), _lifetime.Token)
+        var episodes = await scope
+            .ExecuteAsync((client, token) => client.GetEpisodesAsync(seriesId, seasonId, token), cancellationToken)
             .ConfigureAwait(true);
 
         if (episodes.Count == 0) return null;
@@ -419,16 +453,17 @@ public sealed partial class PlayerViewModel
     /// Fetches the series row behind an episode. Emby's episode records usually carry no genres of
     /// their own, so without this the anime shader rule would never fire on a TV show.
     /// </summary>
-    private async Task<EmbyItem?> ResolveSeriesAsync(EmbyItem item)
+    private async Task<EmbyItem?> ResolveSeriesAsync(EmbyItem item, EmbySessionScope scope, CancellationToken cancellationToken)
     {
         if (item.Type != EmbyItemType.Episode || string.IsNullOrEmpty(item.SeriesId)) return null;
 
         try
         {
-            return await _session
-                .ExecuteAsync((client, token) => client.GetItemAsync(item.SeriesId!, token, EmbyFields.Browse), _lifetime.Token)
+            return await scope
+                .ExecuteAsync((client, token) => client.GetItemAsync(item.SeriesId!, token, EmbyFields.Browse), cancellationToken)
                 .ConfigureAwait(true);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception error)
         {
             Log.Debug(Category, $"读取所属剧集信息失败：{error.Message}");
@@ -445,7 +480,7 @@ public sealed partial class PlayerViewModel
     /// another show. It also has to contain the playing episode, or stepping from it has no anchor.
     /// </para>
     /// </summary>
-    private async Task FillSiblingsAsync(EmbyItem episode)
+    private async Task FillSiblingsAsync(EmbyItem episode, EmbySessionScope scope, long intent)
     {
         if (string.IsNullOrEmpty(episode.SeriesId)) return;
 
@@ -453,12 +488,13 @@ public sealed partial class PlayerViewModel
         {
             // A null season asks for every episode in the series, which is what an episode record with no
             // season on it deserves: a slightly wider 选集 is better than a disabled one.
-            var siblings = await _session
+            var siblings = await scope
                 .ExecuteAsync(
                     (client, token) => client.GetEpisodesAsync(episode.SeriesId!, episode.SeasonId, token),
                     _lifetime.Token)
                 .ConfigureAwait(true);
 
+            if (!_startIntent.IsCurrent(intent)) return;
             if (!string.Equals(PlayingItemId, episode.Id, StringComparison.Ordinal)) return;
             if (!siblings.Any(item => string.Equals(item.Id, episode.Id, StringComparison.Ordinal))) return;
 
@@ -534,7 +570,8 @@ public sealed partial class PlayerViewModel
         try
         {
             var item = _nowPlaying;
-            if (item is null) return;
+            var scope = _playbackScope;
+            if (item is null || scope is null || !_startIntent.IsCurrent(_activeIntent)) return;
 
             var position = Status.HasPosition ? Status.Position : (double?)null;
 
@@ -550,13 +587,7 @@ public sealed partial class PlayerViewModel
             Log.Info(Category,
                 $"换版本：{ItemDetail.SourceLabel(source)}，从 {TimeFormat.Clock(choice.StartTicks)} 接着放");
 
-            await StartPlaybackAsync(item, _parent, choice, Episodes, replaceExisting: true).ConfigureAwait(true);
-
-            // 换到哪一版也是「手上这个条目」的一部分（2026-09-21）：这一条路上面那句带的是
-            // replaceExisting: true，回来的路上 StartPlaybackAsync 未必重新取过详情，而 mpv 报的
-            // PlayingSource 要等文件开起来才更新（见 PlayingSourceLabel）。于是「正在放的是哪一版」
-            // 与「这个条目还有没有别的版」在菜单里都是这一格说了算 —— 见 VersionControlsVisible 的注释。
-            CurrentItem = item;
+            await StartPlaybackAsync(item, _parent, choice, Episodes, replaceExisting: true, identity: scope).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
@@ -593,9 +624,12 @@ public sealed partial class PlayerViewModel
         try
         {
             var playingItemId = PlayingItemId;
-            var destination = await ResolveAdjacentEpisodeAsync(current, offset).ConfigureAwait(true);
+            var intent = _activeIntent;
+            var scope = _playbackScope;
+            if (scope is null || !_startIntent.IsCurrent(intent)) return;
+            var destination = await ResolveAdjacentEpisodeAsync(current, offset, scope).ConfigureAwait(true);
 
-            // The request ran beside playback. A second command may already have put another item on screen.
+            if (!_startIntent.IsCurrent(intent)) return;
             if (!string.Equals(PlayingItemId, playingItemId, StringComparison.Ordinal)) return;
 
             if (destination is null)
@@ -620,7 +654,7 @@ public sealed partial class PlayerViewModel
         }
     }
 
-    private async Task<EpisodeDestination?> ResolveAdjacentEpisodeAsync(EmbyItem current, int offset)
+    private async Task<EpisodeDestination?> ResolveAdjacentEpisodeAsync(EmbyItem current, int offset, EmbySessionScope scope)
     {
         if (string.IsNullOrEmpty(current.SeriesId)) return null;
 
@@ -628,7 +662,7 @@ public sealed partial class PlayerViewModel
         // that crosses a season boundary can be found. EpisodeNavigation.ResolveAdjacentAsync then lands on the
         // destination and, for the 选集 menu, re-asks the server for that destination's own season exactly as the
         // detail page does, so the two paths agree on the season's episode count (air-order 特典 included).
-        var seriesEpisodes = await _session
+        var seriesEpisodes = await scope
             .ExecuteAsync(
                 (client, token) => client.GetEpisodesAsync(
                     current.SeriesId!,
@@ -641,7 +675,7 @@ public sealed partial class PlayerViewModel
             .ResolveAdjacentAsync(seriesEpisodes, current.Id, offset, FetchSeasonAsync)
             .ConfigureAwait(true);
 
-        async Task<IReadOnlyList<EmbyItem>> FetchSeasonAsync(string? seasonId) => await _session
+        async Task<IReadOnlyList<EmbyItem>> FetchSeasonAsync(string? seasonId) => await scope
             .ExecuteAsync(
                 (client, token) => client.GetEpisodesAsync(current.SeriesId!, seasonId, token),
                 _lifetime.Token)
@@ -650,6 +684,7 @@ public sealed partial class PlayerViewModel
 
     private void StartEpisode(EpisodeDestination destination)
     {
+        if (_playbackScope is null || !_startIntent.IsCurrent(_activeIntent)) return;
         if (string.Equals(destination.Episode.Id, PlayingItemId, StringComparison.Ordinal)) return;
         if (_episodeSwitchTargetId is not null) return;
 
@@ -661,12 +696,15 @@ public sealed partial class PlayerViewModel
     {
         try
         {
+            var scope = _playbackScope;
+            if (scope is null || !_startIntent.IsCurrent(_activeIntent)) return;
             await StartPlaybackAsync(
                     destination.Episode,
                     _parent,
                     choice: null,
                     destination.Siblings,
-                    replaceExisting: true)
+                    replaceExisting: true,
+                    identity: scope)
                 .ConfigureAwait(true);
         }
         catch (OperationCanceledException)
@@ -709,26 +747,18 @@ public sealed partial class PlayerViewModel
     private void LeavePlayer()
     {
         _playerUp = false;
+        _presentedHeadless = null;
+        _preparingPictureInHost = null;
 
         // 退出时把加载遮罩收掉（万一正好在加载中途退出）：这一趟返回浏览的无缝过渡由页面侧的留帧
         // 溶解接管（RetainFill/RetainDim，见 PlayerPage.Exit.cs 与 ExitWhenBrowseReady），不靠这块遮罩。
         HideCover();
 
-        // 遮罩垫底的背景图**不在这里放下**（2026-09-20 用户报「给这个返回主页的页面也加上背景图」）。
-        //
-        // 它原来是跟着这一场播放一起丢的。问题是「遮罩亮起」与「新图到位」之间有一段空档：
-        // 换片／换集／连播那几趟，遮罩是在 `_playerHold > 0` 的手里亮起来的（见 `OnNowPlayingChanged`），
-        // 而那一刻新片那张图还在路上（一次网络往返加解码）。于是用户点「第 8 集 → 返回主页」这个来回里，
-        // 看到的常常就是**一整片纯色的「正在切换…」**：实测那张截图 1513×851 整块 `#0C0E11`，一个像素的
-        // 图都没有 —— 那不是「图取不到」，是遮罩亮起来的时候手上根本没有图。
-        //
-        // 留下上一张就补上了这个空档：同一部剧里换集，它本来就是对的那一张（剧集背景图）；换另一部片，
-        // 也只是在遮罩上多停一两百毫秒的上一张 —— 比一片纯色好看，也比一片纯色诚实（那底下确实还是
-        // 上一场的画面）。`LoadCoverBackdropAsync` 一拿到新的就换掉，取空则保持这一张。
-        //
-        // **去重记录仍然要忘掉**：不然下一场点同一部片，Id 去重会把它当成「图还在」直接跳过，
-        // 新的一场就永远等不到自己的图。
+        // 退场仍可使用当前背景；下一次取图会在显示加载页之前清掉它。
+        // 同时作废在途解码，防止退出后旧结果回填，或覆盖下一场的原生覆盖层像素。
+        _coverGeneration++;
         _coverBackdropItemId = null;
+        _coverBackdropLoad = Task.CompletedTask;
 
         // The other way out, and the usual one: the file ran to its end. Ticks stop with the player, so an
         // unsaved level would be lost here rather than a second late.
@@ -738,6 +768,9 @@ public sealed partial class PlayerViewModel
         Episodes = [];
         _parent = null;
         _nowPlaying = null;
+        _playbackScope = null;
+        _activeIntent = 0;
+        CurrentItem = null;
         PlayingItemId = "";
         _episodeLookupBusy = false;
         _episodeSwitchTargetId = null;
@@ -756,6 +789,8 @@ public sealed partial class PlayerViewModel
         // arriving after this must not act on a size change that belongs to the browsing window.
         _outputWatch = null;
         _shaderContext = null;
+        _shaderSettings = null;
+        _shaderResolver = null;
         _shaderPinned = false;
         ActiveShader = null;
 

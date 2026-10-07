@@ -314,8 +314,11 @@ internal static class MpvUiTests
                 // mpv 把 script-message 派给同名绑定是不分方向的。
                 VideoWindowContract.VersionCount,
                 VideoWindowContract.EpisodeCount,
-                // 跳过片头/片尾那两条：uosc→宿主的 SkipTake（按钮点击）与宿主→uosc 的 SkipOffer（推文案）。
+                // 跳过片头/片尾那几条：uosc→宿主的 SkipTake（按钮点击）与 SkipDismiss（offer 立着时按 Esc）、
+                // 宿主→uosc 的 SkipOffer（推文案）。三条一起数 —— 2026-09-30 添 SkipDismiss 时正是靠这条
+                // 硬规矩把它与 uosc 侧的 embynian-ui-skip-dismiss 分开的。
                 VideoWindowContract.SkipTake,
+                VideoWindowContract.SkipDismiss,
                 VideoWindowContract.SkipOffer,
                 // 左上角第二行的文件信息（宿主→uosc，方向不影响这条硬规矩）。
                 VideoWindowContract.Subline,
@@ -324,6 +327,8 @@ internal static class MpvUiTests
                 VideoWindowContract.SkipMode,
                 VideoWindowContract.AutoPlayNext,
                 VideoWindowContract.MediaInfo,
+                // 2026-10-01 添的第四条：画面菜单末尾那三行设置入口（字幕／视频输出／音频输出）。
+                VideoWindowContract.OpenSettings,
             };
             var bindings = new List<string>();
 
@@ -617,7 +622,7 @@ internal static class MpvUiTests
         // embynian-skip-offer 推给 uosc 的 SkipButton 元件画，点它回推 embynian-skip-take（宿主 TakeSkip）。
         //   · SkipTake（uosc→宿主）进 Parse、值保留即可通过；
         //   · SkipOffer（宿主→uosc）**不进 Parse** —— 与 version-count/episode-count 同理，宿主不收自己发的。
-        TestHarness.Test("跳过按钮契约：SkipTake 进 Parse、SkipOffer 不进", () =>
+        TestHarness.Test("跳过按钮契约：SkipTake/SkipDismiss 进 Parse、SkipOffer 不进", () =>
         {
             var take = VideoWindowContract.Parse(["embynian-skip-take", ""]);
             Assert.Equal(VideoWindowContract.SkipTake, take?.Key);
@@ -625,6 +630,12 @@ internal static class MpvUiTests
             // 带个杂值也照样通过（值保留）：真正的「跳不跳」由 SkipCoordinator 判，契约只认键。
             var takeWithValue = VideoWindowContract.Parse(["embynian-skip-take", "x"]);
             Assert.Equal(VideoWindowContract.SkipTake, takeWithValue?.Key);
+
+            // 2026-09-30 加的「关掉提示而不跳转」那一颗（独占模式 offer 立着时按 Esc 回到宿主的那条）。
+            var dismiss = VideoWindowContract.Parse(["embynian-skip-dismiss", ""]);
+            Assert.Equal(VideoWindowContract.SkipDismiss, dismiss?.Key);
+            var dismissWithValue = VideoWindowContract.Parse(["embynian-skip-dismiss", "x"]);
+            Assert.Equal(VideoWindowContract.SkipDismiss, dismissWithValue?.Key);
 
             Assert.Null(VideoWindowContract.Parse([VideoWindowContract.SkipOffer, "跳过片头"]));
         });
@@ -650,10 +661,81 @@ internal static class MpvUiTests
             Assert.Equal(VideoWindowContract.MediaInfo, info?.Key);
         });
 
+        // 画面菜单末尾那三行设置入口（2026-10-01 用户令「在右键菜单中添加字幕、视频输出、音频输出三个按钮，
+        // 点击后打开设置页面」）。表在 Core、两条管线都读它，所以这里钉三件事：
+        //   · 表本身立得住：三行、令牌唯一、文案不空、落点互不相同；
+        //   · 令牌与设置卡对得上 —— 设置页那张卡片名单就在 SettingsViewModel 的 CardCategories 里，改卡片名
+        //     而这张表没跟上，SettingsPage.Select 会安静地退回「播放器」：点「字幕」开在别的卡上，靠看是看不
+        //     出来的（这条在闸门 2 就拦住，不用等自检）；
+        //   · 契约：三个令牌进 Parse，杂词与空串一律不收 —— 菜单行的 value 是从视频窗那棵 Lua 树回来的。
+        TestHarness.Test("画面菜单末尾三行设置入口：表的令牌与设置卡名单对得上", () =>
+        {
+            var links = PlayerSettingsLinks.All;
+
+            Assert.Equal(3, links.Count);
+            Assert.Equal(links.Count, links.Select(link => link.Token).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(links.Count, links.Select(link => link.Label).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(links.Count, links.Select(link => link.Category).Distinct(StringComparer.Ordinal).Count());
+
+            foreach (var link in links)
+            {
+                Assert.True(link.Label.Length > 0, "菜单行的字是空的");
+                Assert.True(link.Token.Length > 0, $"「{link.Label}」没有令牌，独占模式那行会发一条空消息");
+                Assert.True(link.Category.Length > 0, $"「{link.Label}」没有设置落点");
+            }
+
+            // 文案就是用户点名的三个词，落点就是设置页那三张卡 —— 写死一遍，免得改表时两边一起悄悄漂开。
+            Assert.Equal(
+                "字幕/subtitle/字幕、视频输出/video/视频输出、音频输出/audio/音频输出",
+                string.Join('、', links.Select(link => $"{link.Label}/{link.Token}/{link.Category}")));
+
+            foreach (var link in links)
+            {
+                Assert.True(ReferenceEquals(link, PlayerSettingsLinks.For(link.Token)),
+                    $"令牌「{link.Token}」查回来的不是表里这一行");
+                Assert.Equal(VideoWindowContract.OpenSettings,
+                    VideoWindowContract.Parse([VideoWindowContract.OpenSettings, link.Token])?.Key);
+            }
+
+            Assert.Null(PlayerSettingsLinks.For("subtitles"));
+            Assert.Null(PlayerSettingsLinks.For(""));
+            Assert.Null(VideoWindowContract.Parse([VideoWindowContract.OpenSettings, "subtitles"]));
+            Assert.Null(VideoWindowContract.Parse([VideoWindowContract.OpenSettings, ""]));
+
+            // 设置页那张卡片名单：从源码里读出来，不引用 Shell（测试项目只引用 Core）。
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
+                directory = directory.Parent;
+            Assert.NotNull(directory);
+
+            var settings = File.ReadAllText(Path.Combine(
+                directory!.FullName, "src", "EmbyNian.Shell", "ViewModels", "SettingsViewModel.cs"));
+            var declaration = settings.IndexOf("private static readonly string[] CardCategories =", StringComparison.Ordinal);
+            Assert.True(declaration >= 0, "SettingsViewModel 里找不到 CardCategories —— 卡片名单换写法了，这条读数要跟上");
+
+            var line = settings[declaration..settings.IndexOf(';', declaration)];
+            var cards = System.Text.RegularExpressions.Regex.Matches(line, "\"([^\"]+)\"")
+                .Select(match => match.Groups[1].Value).ToList();
+
+            Assert.True(cards.Count > 0, "CardCategories 一行都没解析出来");
+            foreach (var link in links)
+                Assert.True(cards.Contains(link.Category, StringComparer.Ordinal),
+                    $"「{link.Label}」指向的设置卡「{link.Category}」不在卡片名单里（{string.Join('、', cards)}）");
+        });
+
         // 跳过按钮在 uosc 侧的四头都在（升级 uosc 时最容易漏打的补丁，对着源码钉住）：宿主消息处理器、
         // 元件实例化、元件本体里的点击回推、以及 start-file 收摊。都是运行期观感（三条离线探针固定走集成
         // 管线、不覆盖 uosc），这里只保证补丁没被 uosc 升级冲掉。
-        TestHarness.Test("独占模式跳过按钮：uosc 补丁四头都在", () =>
+        //
+        // 2026-09-30 添第六头：offer 立着时借 ENTER/ESC 的那对 keybind（用户报「按回车和 esc
+        // 确认跳过不生效」）。这一头丢了不会崩、也看不出来 —— Esc 退回「退全屏」、回车彻底没反应，
+        // 正是被报上来的那个症状，所以对着源码把它钉死。
+        // 2026-10-02 改钉还原写法：随包内核没有 keyunbind（v0.41.0-923，work/probe-keybind-family.py
+        // 的 command-list 实录），收摊的 keyunbind 条条报错、借走的键不还 —— Esc 的「退全屏」被永久
+        // 顶掉（宿主日志 app-20261002.log 08:48:49 起两对实录）。还原改成借前抄原绑定、还时 keybind
+        // 原样按回，外加 KP_ENTER（用户按的是小键盘回车，实机日志「No key binding found for key
+        // 'KP_ENTER'」）—— 对着源码一并钉住。
+        TestHarness.Test("独占模式跳过按钮：uosc 补丁六头都在", () =>
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EmbyNian.sln")))
@@ -672,6 +754,29 @@ internal static class MpvUiTests
                 "跳过按钮点击没回推 embynian-skip-take：点了没反应");
             Assert.True(main.Contains("Elements.skip_button:set_offer('')"),
                 "换源没清 offer：换集途中会挂着上一集的「跳过片尾」");
+
+            // 第五头：两条无默认键的绑定（回车＝确认跳过、Esc＝关掉提示）。按键由元件按上去，
+            // 少了这两条，keybind 指向的绑定不存在、按下去只是被 mpv 拒掉一条命令。
+            Assert.True(main.Contains("bind_command('embynian-ui-skip-take'"),
+                "回车那条绑定没登记：offer 立着时回车没有落脚处");
+            Assert.True(main.Contains("bind_command('embynian-ui-skip-dismiss'"),
+                "Esc 那条绑定没登记：offer 立着时 Esc 关不掉提示");
+
+            // 第六头：元件里真正借键／还键的那一段。还键尤其不能少、也不能再走 keyunbind —— 少了它
+            // 或调了内核里不存在的命令，用户按 Esc 关掉提示之后 Esc 会一直被我们占着，mpv 内建的
+            // 「退全屏/退出」再也回不来。
+            Assert.True(element.Contains("self:borrow_keys(self.caption ~= nil)"),
+                "offer 立起/收摊没有借还键：回车/Esc 要么没反应、要么关掉提示后一直被占着");
+            Assert.True(element.Contains("mp.commandv('keybind', key"),
+                "没把 ENTER/ESC 按上去：offer 立着时回车/Esc 到不了宿主（用户报的那个症状）");
+            Assert.True(element.Contains("mp.commandv('keybind', key, self.originals[key] or 'ignore')"),
+                "收摊没有把原绑定 keybind 按回去：内核没有 keyunbind，借走的键会一直不还（Esc 的退全屏被顶掉）");
+            Assert.True(element.Contains("self:topmost_foreign_binding(key)"),
+                "借键前没抄原绑定：还键时无从还原，等于不还");
+            Assert.True(element.Contains("KP_ENTER = 'embynian-ui-skip-take'"),
+                "小键盘回车没借：用户按 KP_ENTER 没反应（实机日志 No key binding found for key 'KP_ENTER'）");
+            Assert.False(element.Contains("commandv('keyunbind'"),
+                "还在调 keyunbind：随包内核没有这条命令，收摊时条条报错、键不还");
         });
 
         // 左上角第二行的文件信息契约（用户令 2026-09-27「下方的片名改为视频编码+音轨+组名……两模式一致」）：

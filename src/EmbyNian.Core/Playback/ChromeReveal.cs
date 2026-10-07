@@ -410,6 +410,19 @@ public sealed class ChromeReveal
     private bool _windowDragging;
 
     /// <summary>
+    /// 右键画面菜单此刻开着（2026-10-07，用户令「右键点击画面呼出菜单的时候不要自动显示其他控件」）。
+    /// <para>
+    /// 这只菜单锚在画面上，与控制条上那五只浮层不是一类：那五只开着时控件是「回得去的来路」，钉住三样是对的
+    /// （<see cref="HoldChrome"/>）；这只开着时菜单本身就是全部界面，三样控件一个都不该在 —— 尤其指不著称位置
+    /// 判据的那一路：菜单从画面中部开出去、被屏幕下沿裁住时，指针在菜单里的每一步都躺在底边唤出带里，真手
+    /// 一动进度条就被带了回来。所以它单独一位、单独一支：<see cref="Decide"/> 里压过钉住与位置规则，
+    /// <see cref="Settle"/> 的光标那一问也认它（用户正在菜单里挑，光标不能被收走）。接线在页面那头
+    /// （<c>PlayerPage</c> 的 <c>HoldPictureMenu</c>）。
+    /// </para>
+    /// </summary>
+    private bool _pictureMenu;
+
+    /// <summary>
     /// Starts fully revealed: playback has just begun, the pointer may be anywhere, and the first thing
     /// the user needs is to see that there are controls at all. Every field agrees so a layout pass that
     /// runs before the first pointer event cannot read a state where the bar is up with no volume beside it.
@@ -549,6 +562,28 @@ public sealed class ChromeReveal
     }
 
     /// <summary>
+    /// 右键画面菜单打开／关闭（用户令与理由见 <see cref="_pictureMenu"/>）。与 <see cref="SetHold"/> /
+    /// <see cref="SetKeep"/> / <see cref="SetWindowDrag"/> 同款：锁存，重复告知不作数；关上时重盖空闲钟 ——
+    /// 菜单开着的那一阵指针在弹层上，没对画面落过一记活动，关上那一拍若照「上一记活动」去算，空闲钟早已
+    /// 走满，光标会在菜单刚消失的当拍被收走。
+    /// <para>
+    /// 两支都把 <see cref="_forceUntil"/> / <see cref="_railUntil"/> 清掉：宽限是「显示的理由」，开着时菜单
+    /// 这一支本来就压过它（留着只会骗人）；关上那一拍控件要交回给位置判据，不能让一条菜单期间不可能挣到的
+    /// 过期宽限把一屏控件弹回来 —— 那一眼闪正是这句话要挡的场面。
+    /// </para>
+    /// </summary>
+    public bool SetPictureMenu(bool open, long now)
+    {
+        if (_pictureMenu == open) return Settle(now);
+
+        _pictureMenu = open;
+        _forceUntil = 0;
+        _railUntil = 0;
+        if (!open) _lastActivity = now;
+        return Settle(now);
+    }
+
+    /// <summary>
     /// Whether the mouse cursor should be hidden: the pointer is over the picture, has stopped, and is
     /// not resting on a control.
     /// <para>
@@ -626,9 +661,8 @@ public sealed class ChromeReveal
     /// </para>
     /// <para>
     /// <paramref name="moved"/> false is therefore the honest answer for a report that is only a position.
-    /// While the cursor is showing the distinction does no work — a still pointer produces no events, and the
-    /// difference between the two readings is invisible until there is a hide to keep. It is the hidden half
-    /// that needs it.
+    /// Repeated positions must preserve both the idle clock and a keyboard grace window, whether the
+    /// cursor is currently showing or hidden. Controls keep the cursor visible through PointerHolds.
     /// </para>
     /// </summary>
     public bool Pointer(double y, double height, ChromePart part, double railNear, long now, bool moved)
@@ -638,14 +672,11 @@ public sealed class ChromeReveal
         _part = part;
         _railNear = railNear < 0 ? -1 : Math.Clamp(railNear, 0, 1);
 
-        // Anything the pointer is resting on counts as activity even without movement — 指针停在控件本体上
-        // 的时候光标也不该走（<see cref="PointerHolds"/> 是那一问的判据；这里记的只是空闲钟）。而 a report
-        // the caller called a movement is activity whether or not it landed anywhere useful.
-        if (moved || !CursorHidden) _lastActivity = now;
-
-        // A deliberate move cancels a keyboard grace window: the pointer's own position is a better
-        // answer than a countdown started before it arrived.
-        _forceUntil = 0;
+        if (moved)
+        {
+            _lastActivity = now;
+            _forceUntil = 0;
+        }
 
         return Settle(now);
     }
@@ -770,6 +801,13 @@ public sealed class ChromeReveal
     public bool WindowDragging => _windowDragging;
 
     /// <summary>
+    /// 右键画面菜单此刻是否开着（<see cref="SetPictureMenu"/>）。给页面读的只读读数：Win32 键盘兜底那道闸
+    /// 在菜单开着时也要让路 —— Esc 该归 XAML 去关菜单，兜底路不越权（与 <c>ChromeHold.Menu</c> 那五只浮层
+    /// 同一句话，只是这一位不走钉住的账）。
+    /// </summary>
+    public bool PictureMenuOpen => _pictureMenu;
+
+    /// <summary>
     /// 收掉一切：宽限、音量条读数、位置的显示理由，控件全部离屏。双击全屏／还原在切换当拍调用它，
     /// <c>true</c> 表示屏上确实有东西被收走了（调用方要画一遍）。
     /// </summary>
@@ -787,6 +825,11 @@ public sealed class ChromeReveal
     /// wherever the pointer happens to be. Used for keyboard-driven playback commands, which otherwise
     /// get no feedback at all if the pointer is resting in the middle of the picture. A deliberate show,
     /// so it also unlocks the double-click silence latch.
+    /// <para>
+    /// 暂停的半边不再走这里（用户令 2026-10-07「暂停时不要自动显示播放控件」）：暂停/播放的回执是那枚
+    /// 徽标，落在暂停上的切换（点画面、空格、可重绑键）不再给宽限；恢复播放照旧给。本类照旧不认识
+    /// 暂停 —— 是调用方在按下的方向上不来了，位置与光标那两套判据一字未动。
+    /// </para>
     /// </summary>
     public bool WakeFully(long now)
     {
@@ -816,11 +859,13 @@ public sealed class ChromeReveal
     /// <summary>
     /// Puts the chrome back the way it looks at the start of a playback. Called on each new file, because
     /// the pointer may be anywhere and the state left behind belongs to the file that just ended. A new
-    /// playback is its own world, so the double-click silence latch does not survive it.
+    /// playback is its own world, so the double-click silence latch does not survive it — 同理还有右键画面
+    /// 菜单那一位（弹层自己会关，Closed 那一拍再放是空操作）。
     /// </summary>
     public void Reset(long now)
     {
         _silenced = false;
+        _pictureMenu = false;
         _lastActivity = now;
         _forceUntil = now + GraceMilliseconds;
         _railUntil = 0;
@@ -851,8 +896,9 @@ public sealed class ChromeReveal
         // 位置上光标也被留住了，与「触发渐变时要隐藏鼠标」正相反。控件显隐那一半一个字没动（就是上面的
         // next：位置说了算），只把光标这一半收窄到 PointerHolds。
         //
-        // 留在里面的三个理由各是「指针压在一块真东西上」：控件本体（PointerHolds）、弹出菜单开着
-        // （HoldChrome）、文件还在加载（KeepChrome）。
+        // 留在里面的理由各是「指针压在一块真东西上」或「用户正忙」：控件本体（PointerHolds）、弹出菜单开着
+        // （HoldChrome）、文件还在加载（KeepChrome）、右键画面菜单开着（PictureMenuOpen —— 用户正在菜单里
+        // 挑，光标得留着，2026-10-07）。
         //
         // WindowFocused 是 mpv.net 的 ActiveForm == this（2026-09-16 照搬）：窗口不在前台就不藏；
         // 这一位从真翻假的那一拍，本来藏着的 hide 也跟着变假 —— OnLostFocus → ShowCursor 那条路
@@ -861,6 +907,7 @@ public sealed class ChromeReveal
             && _pointerY >= 0
             && !HoldChrome
             && !KeepChrome
+            && !_pictureMenu
             && WindowFocused
             && now - _lastActivity >= CursorIdleMilliseconds;
 
@@ -885,6 +932,12 @@ public sealed class ChromeReveal
         // 这一支排在钉住前面，因为拖动同时也是「钉住」的一个理由（手停在标题条上不动），而钉住的原话是
         // 三样一起给 —— 谁想给两根条的例外加条件，先看清楚这个先后。
         if (_windowDragging) return new ChromeState(false, true, false);
+
+        // 右键画面菜单开着（2026-10-07，用户令「右键点击画面呼出菜单的时候不要自动显示其他控件」）：
+        // 菜单本身就是全部界面，三样一个不画。这一支排在钉住与位置规则前面，两个压的对象都点名：位置判据
+        // 那一路见 <see cref="_pictureMenu"/>（菜单里的真手一路躺在底边唤出带里）；钉住与宽限的「三样全给」
+        // 也不许越过它 —— 右键那一下若撞上键盘宽限的尾巴，带着一屏控件开菜单正是这句话要挡的场面。
+        if (_pictureMenu) return new ChromeState(false, false, false);
 
         // A flyout is open or the file is still loading: the controls are the way out of that state, so
         // nothing about the pointer may take them away. （窗口拖动从前也在这一支里，2026-09-22 起它自己一支，

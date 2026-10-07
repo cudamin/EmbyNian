@@ -24,7 +24,10 @@ public sealed record PlaybackLaunchSignature(
     IReadOnlyList<KeyValuePair<string, string>> PipelineOptions,
     IReadOnlyList<KeyValuePair<string, string>> UiOptions,
     IReadOnlyList<KeyValuePair<string, string>> SeekKeyOptions,
-    IReadOnlyList<KeyValuePair<string, string>> BaselineOptions);
+    IReadOnlyList<KeyValuePair<string, string>> BaselineOptions)
+{
+    public MpvBackendKind Backend { get; init; } = MpvBackendKind.BuiltInLibMpv;
+}
 
 /// <summary>
 /// 同一个 mpv 实例上换片（独占模式的选集与连播不关窗口）所需要的全部**判断**，与执行分开放在这里：
@@ -43,7 +46,8 @@ public static class InlineSwitch
     /// 两次起播的签名对得上吗。对得上才允许同一个实例换片；对不上就只能停掉重开（老路）。
     /// </summary>
     public static bool SameSignature(PlaybackLaunchSignature running, PlaybackLaunchSignature next) =>
-        running.Pipeline == next.Pipeline
+        running.Backend == next.Backend
+        && running.Pipeline == next.Pipeline
         && Same(running.PipelineOptions, next.PipelineOptions)
         && Same(running.UiOptions, next.UiOptions)
         && Same(running.SeekKeyOptions, next.SeekKeyOptions)
@@ -232,6 +236,7 @@ public static class InlineSwitch
 
         // 任何链会碰的名字（含 glsl-shaders、deband、scale 那几家）。
         foreach (var (name, _) in ShaderGroupCatalog.NeutralOptions) Add(name);
+        foreach (var name in MpvOutputOptions.SubtitleStyleOptions) Add(name);
 
         // 不在菜单里、却同样会跟着一集走的：两处延迟走快捷键与 ⚙ 菜单，倍速走控制条，音量/静音走壳。
         foreach (var name in new[]

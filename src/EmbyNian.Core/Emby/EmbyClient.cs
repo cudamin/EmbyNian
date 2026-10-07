@@ -541,9 +541,10 @@ public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
 
     // ---- media ---------------------------------------------------------------
 
-    public Task<byte[]> GetImageBytesAsync(string itemId, string imageType, string? tag, int maxWidth, CancellationToken cancellationToken)
+    public Task<byte[]> GetImageBytesAsync(string itemId, string imageType, string? tag, int maxWidth, CancellationToken cancellationToken,
+        int? index = null)
     {
-        var url = EmbyUrl.Image(ApiBase, itemId, imageType, tag, maxWidth);
+        var url = EmbyUrl.Image(ApiBase, itemId, imageType, tag, maxWidth, index);
         return http.GetBytesAsync(url, Context, cancellationToken);
     }
 

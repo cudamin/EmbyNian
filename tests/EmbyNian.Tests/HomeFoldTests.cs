@@ -59,18 +59,20 @@ internal static class HomeFoldTests
         {
             // 他用的一档：1422／1527 宽的窗口，带子 653；媒体库（排卡 176）在顶上一格，从 669 起，
             // 它下面那一排（继续观看，排卡 203、牌子 46、牌子底下让 12）在默认摆法里从 921 起。
-            // 那条线 ＝ 再下面那一排的封面顶 ＝ 921 ＋（牌子 46 ＋ 空当 12 ＋ 排卡 203）＋ 排间空当 18 ＋ 牌子 46 ＋ 空当 12。
+            // 那条线 ＝ 再下面那一排的封面顶 ＝ 921 ＋（牌子 46 ＋ 空当 12 ＋ 排卡 203）＋ 排间空当 4 ＋ 牌子 46 ＋ 空当 12。
+            // 排间空当 2026-09-30 从 18 收到 8、同日再收到 4（HomePage.xaml 的 StackLayout.Spacing，用户要求
+            // 缩短媒体库与继续观看之间的距离）—— 这里的三个数跟着换，线自己矮了 14。
             var rowTop = 921.0;
-            var line = HomeFold.CoversLine(921, 46, 12, 203, 18, hasBelow: true);
+            var line = HomeFold.CoversLine(921, 46, 12, 203, 4, hasBelow: true);
 
-            Assert.Equal(921 + (46 + 12 + 203) + 18 + (46 + 12), line);
-            Assert.Equal(1258, line);
+            Assert.Equal(921 + (46 + 12 + 203) + 4 + (46 + 12), line);
+            Assert.Equal(1244, line);
 
             // 没有第二排（媒体库下面只有一排）：退回那一排自己的封面顶 —— 压上腾出的位置只够托它进第一屏。
-            Assert.Equal(rowTop + 46 + 12, HomeFold.CoversLine(rowTop, 46, 12, 203, 18, hasBelow: false));
+            Assert.Equal(rowTop + 46 + 12, HomeFold.CoversLine(rowTop, 46, 12, 203, 4, hasBelow: false));
 
             // 线比「下面那一排自己的封面顶」整整低一排：这正是 2026-09-22 挪的那一格。
-            Assert.Equal(1258 - (46 + 12 + 203) - 18, HomeFold.CoversLine(rowTop, 46, 12, 203, 18, hasBelow: false));
+            Assert.Equal(1244 - (46 + 12 + 203) - 4, HomeFold.CoversLine(rowTop, 46, 12, 203, 4, hasBelow: false));
         });
 
         Test("矮窗档：量不到视口不做决定", () =>

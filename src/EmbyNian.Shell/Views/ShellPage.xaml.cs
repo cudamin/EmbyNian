@@ -4,6 +4,7 @@ using EmbyNian.Configuration;
 using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
+using EmbyNian.Mpv;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
@@ -61,7 +62,10 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// forward there is to go.
     /// </para>
     /// </summary>
-    private readonly List<Crumb> _forward = [];
+    private readonly List<Crumb[]> _backTrails = [];
+    private readonly List<Crumb[]> _forwardTrails = [];
+    private readonly LoadGeneration _identityLoads = new();
+    private bool _librariesFailed;
 
     /// <summary>Library tag to the request that opens it, filled from the server's own view list.</summary>
     private readonly Dictionary<string, LibraryRequest> _libraries = new(StringComparer.Ordinal);
@@ -480,12 +484,16 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal object? SettingsContent => _settingsWindow is { IsOpen: true } window ? window.CurrentPage : null;
 
-    /// <summary>Whether the settings window was ever built, whether it is up, and how big it is.</summary>
-    internal (bool Created, bool Open, int Width, int Height) SettingsWindowState =>
+    /// <summary>
+    /// Whether the settings window was ever built, whether it is up, how big it is, and its handle —
+    /// 最后那一项是「设置窗口盖在画面上」那条自检要的：层级只在屏幕坐标上量得出来，而量它得先有句柄。
+    /// </summary>
+    internal (bool Created, bool Open, int Width, int Height, IntPtr Handle) SettingsWindowState =>
         (_settingsWindow is not null,
             _settingsWindow?.IsOpen == true,
             _settingsWindow?.Size.Width ?? 0,
-            _settingsWindow?.Size.Height ?? 0);
+            _settingsWindow?.Size.Height ?? 0,
+            _settingsWindow?.Handle ?? IntPtr.Zero);
 
     /// <summary>
     /// The settings page wherever it ended up: in its own window, or in this frame on a machine where that
@@ -529,6 +537,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
         if (_services is null) return;
         _window = window;
         Player.Attach(_services.GetRequiredService<PlayerViewModel>(), this, window);
+        Player.ViewModel.Noticed += Notify;
+        Player.ViewModel.RefreshRequested += RefreshActive;
+        Player.ViewModel.PreparePresentation = PreparePlaybackPresentation;
 
         // 独占模式无页面播放的两条对账（2026-09-19 用户令删掉独立控制窗）：开播那一拍页面不在场，
         // 「开始播放后自动全屏」由这里直达 mpv 的视频窗；收场那一拍（放完、停止、mpv 窗被关、起播失败）
@@ -539,6 +550,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         Player.ViewModel.PlaybackStarted += OnHeadlessPlaybackStarted;
         Player.ViewModel.PlayerHidden += OnHeadlessPlaybackHidden;
         Player.ViewModel.MediaInfoRequested += OnHeadlessMediaInfoRequested;
+        Player.ViewModel.SettingsRequested += OnPlayerSettingsRequested;
 
         // 详情页要认显示器多大（纸面上沿那条线跟着显示器走，见 DetailHero.PaperLineFor），挂在这一个事件上
         // 而不是 OpenDetail 里：后退/前进重建的详情页实例不走 OpenDetail，却一样要从外壳领窗口。
@@ -557,13 +569,25 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// one place that is allowed to end it — otherwise the process would be kept alive by a window nobody
     /// can see.
     /// </summary>
-    internal void Shutdown()
+    private Task? _shutdownTask;
+
+    internal void Shutdown() => _ = ShutdownAsync();
+
+    internal Task ShutdownAsync() => _shutdownTask ??= ShutdownPlaybackAsync();
+
+    private async Task ShutdownPlaybackAsync()
     {
+        _identityLoads.Cancel();
+        ReleaseContent();
         // 先摘无页面播放的两条对账再拆播放器：收场事件不许往一个正在拆的壳上挂页面。
         Player.ViewModel.PlaybackStarted -= OnHeadlessPlaybackStarted;
         Player.ViewModel.PlayerHidden -= OnHeadlessPlaybackHidden;
         Player.ViewModel.MediaInfoRequested -= OnHeadlessMediaInfoRequested;
-
+        Player.ViewModel.SettingsRequested -= OnPlayerSettingsRequested;
+        Player.ViewModel.Noticed -= Notify;
+        Player.ViewModel.RefreshRequested -= RefreshActive;
+        Player.ViewModel.PreparePresentation = null;
+        await Player.ViewModel.ShutdownAsync().ConfigureAwait(true);
         Player.Shutdown();
 
         _settingsWindow?.Close();
@@ -588,26 +612,16 @@ public sealed partial class ShellPage : UserControl, IShellActions
         PlaybackChoice? choice = null,
         IReadOnlyList<EmbyItem>? episodes = null)
     {
-        // 独占模式挂着片子（主窗口的播放页已摘下让位，<see cref="PlayerPage.Attached"/> 为假）：点中的
-        // 新片子直接换上去 —— 与连播下一集同一条换血管线（<see cref="PlayerViewModel.PlayReplacingAsync"/>）。
-        // 「一边挂着片子一边继续翻媒体库」（2026-09-19 用户令）翻到了想看的，点下去就该是它。
-        // 播放器页不在场，请求必须直递 view model：递给页面只会撞上「没挂上就什么都不做」那句守卫、
-        // 静悄悄返回成品质任务（2026-09-14「独立窗口播放用不了」就是这个坑）。
-        if (!Player.Attached && _services is not null)
-            return Player.ViewModel.PlayReplacingAsync(item, parent, choice, episodes);
+        if (_services is null || _shutdownTask is not null) return Task.CompletedTask;
+        return !Player.Attached
+            ? Player.ViewModel.PlayReplacingAsync(item, parent, choice, episodes)
+            : Player.ViewModel.PlayAsync(item, parent, choice, episodes);
+    }
 
-        // 独占模式的第一播：主窗口的播放页摘下来让位 —— PlayerShown 从此无话可说，浏览页纹丝不动，
-        // 片子整个交给 mpv 自建的视频窗（控件是窗里装箱的 uosc）。这件事决定在漏斗里（每一单播放都从
-        // 这儿过），而且赶在 view model 听说之前：那一头进场第一件事就是接管一扇窗（EnterPlayer），
-        // 接管哪扇必须在开播前定死，不能播起来再改。起播失败（校验不过、找不到单集）由 PlayerHidden
-        // 的对账把页面挂回来，浏览页自始至终没有动过。
-        if (Player.ViewModel.HeadlessPlayback)
-        {
-            Player.Detach();
-            return Player.ViewModel.PlayAsync(item, parent, choice, episodes);
-        }
-
-        return Player.PlayAsync(item, parent, choice, episodes);
+    private void PreparePlaybackPresentation(bool headless)
+    {
+        if (headless) Player.Detach();
+        else if (!Player.Attached) RestorePlayerToShellWindow();
     }
 
     /// <summary>
@@ -659,6 +673,13 @@ public sealed partial class ShellPage : UserControl, IShellActions
         _ = ShowMediaInfoOverShellAsync();
     }
 
+    /// <summary>
+    /// 右键画面菜单末尾那三行设置入口被点了（<see cref="PlayerViewModel.SettingsRequested"/>，2026-10-01 用户令）。
+    /// 开窗归外壳，两个模式共用这一条出口：集成模式那三行也走 view model 这扇门（而不是页面自己去开），因为
+    /// 独占模式播放时播放页根本不在树上 —— 只有这条线通到外壳，而两条管线点同一行因此是同一句执行。
+    /// </summary>
+    private void OnPlayerSettingsRequested(PlayerSettingsLink link) => ShowSettings(link.Category);
+
     private async Task ShowMediaInfoOverShellAsync()
     {
         if (Root.XamlRoot is not { } root) return;
@@ -699,38 +720,14 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// 事件把播放页挂回主窗口（见 <c>OnHeadlessPlaybackHidden</c>），随后主页这一导航落在本窗口的框里。
     /// </para>
     /// <para>
-    /// 已在主页时 <see cref="GoTo"/> 自己短路（重复点不产生历史记录）。**退出播放回主页那一趟不靠这里
-    /// 出动画** —— 它的导航排在播放层收摊之后，见 <see cref="ReturnToHomeAfterPlayer"/>。
+    /// 已在主页时 <see cref="GoTo"/> 自己短路，保留现成页面接住退场，不在播放层收摊之后重新导航补动画。
     /// </para>
     /// </summary>
     internal void ClosePlayerToHome()
     {
-        if (Player.ViewModel.PlayingNow) _ = Player.ViewModel.StopAsync();
+        _ = Player.ViewModel.StopAsync();
 
         GoTo("home");
-    }
-
-    /// <summary>
-    /// 播放层把窗口交回浏览页之后，回主页那一趟补一次**真正的导航**（2026-09-25 用户报「退出时媒体还是
-    /// 没有动画」，要「和从电影页面返回到主页的动画一样」）。
-    /// <para>
-    /// <b>为什么少这一句就没有动画。</b>从电影页面返回主页是一条真导航：<c>ContentFrame</c> 里造一个新的
-    /// <c>HomePage</c>（这个页面没有设 <c>NavigationCacheMode</c>，默认不缓存），矮窗档的开关从默认（关）
-    /// 起算，判一次才升到轮播左下角 —— 屏上那 260ms 的升档行程就是用户记住的那套观感。而退出播放**不是
-    /// 导航**（主页一直挂在下面、开关一直开着），照原样回来一趟动画都没有。这里补的正是那一条：与点导航栏
-    /// 上的主页是同一个 <see cref="GoTo"/>，只是带 <c>force</c> 绕过「已经在主页」那道短路。
-    /// </para>
-    /// <para>
-    /// 只在当前内容真是主页时才做（从详情页进播放的，退出后该回详情页，那是另一档，不该把主页拉上来）。
-    /// 代价与从别的页面返回主页同一档：主页重读一次数据（几排货架加轮播），位置回到顶部 —— 本来就是
-    /// 用户要的那个观感。
-    /// </para>
-    /// </summary>
-    internal void ReturnToHomeAfterPlayer()
-    {
-        if (ContentFrame.Content is not HomePage) return;
-
-        GoTo("home", force: true);
     }
 
     Task IShellActions.PlayAsync(
@@ -761,6 +758,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
             SignIn.Visibility = Visibility.Collapsed;
             return;
         }
+
+        if (ContentFrame.Content is HomePage home) home.PreparePlaybackReturn();
 
         Chrome.Visibility = Visibility.Visible;
         if (_window is not null) _window.PlaybackTitleBar = false;
@@ -821,6 +820,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         switch (ContentFrame.Content)
         {
             case HomePage home:
+                home.PreparePlaybackReturn();
                 _ = home.ViewModel.RefreshPlaybackAsync();
                 break;
             case DetailPage detail:
@@ -846,25 +846,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
         var account = settings.ResolveLastAccount(server);
 
         if (server is not null && account is not null && (account.HasSavedToken || account.HasSavedPassword))
-        {
-            ShowSignIn();
-            SignIn.ShowRestoring(server.Name);
-
-            try
-            {
-                if (await _session.TryRestoreAsync(server, account, CancellationToken.None).ConfigureAwait(true))
-                {
-                    await EnterShellAsync().ConfigureAwait(true);
-                    return;
-                }
-            }
-            catch (Exception error)
-            {
-                Log.Warn(Category, "自动登录失败", error);
-            }
-        }
-
-        ShowSignIn();
+            await SwitchAsync(server, account).ConfigureAwait(true);
+        else ShowSignIn();
     }
 
     /// <summary>
@@ -881,12 +864,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// <summary>
     /// Navigates to a tag, whether the request came from the tab row or from a page.
     /// <para>
-    /// <paramref name="force"/> 是给「退出播放回主页」那条路用的（<see cref="ClosePlayerToHome"/>）：
-    /// 从主页点开一部片再退回来时 <c>_current</c> 还是 <c>"home"</c>，不带 force 的话这里会早退 ——
-    /// 主页不重新导航就没有那趟矮窗档升档动画（新页面实例的档位从默认起算，判一次才升上去），
-    /// 而「从电影页面返回主页」走的正是「真导航 + 重载」那条路，所以它有动画。用户要的是两边一样
-    /// （2026-09-25 报「退出时媒体还是没有动画」）。导航栏那几颗按钮仍旧不带 force —— 已经在那一页
-    /// 上再点一次，本来就不该把页面重造一遍。
+    /// <paramref name="force"/> 供媒体库目录重试后更新主页的导航快照；普通导航与播放返回保留当前页面。
     /// </para>
     /// </summary>
     public void GoTo(string tag, bool force = false)
@@ -956,8 +934,24 @@ public sealed partial class ShellPage : UserControl, IShellActions
             return;
         }
 
+        // 全屏（或用户钉了置顶）播放时主窗是 topmost 的，而 topmost 窗口压着任何非 topmost 窗口 —— 包括这扇
+        // 设置窗口。先让开，那扇窗才真的看得见；它收摊时由 OnSettingsWindowHidden 拿回来。让位只在真占着台上
+        // 时发生，浏览状态下这两句都是空操作。
+        _window?.StandAsideForOwnWindow();
+
+        // 先撤后挂：窗口是复用的（TryCreate 只成功一次），而每次 Show 都走这里 —— 直接 += 会一次开窗多一个
+        // 订阅者，收摊时那句「拿回来」也就跑几遍。
+        _settingsWindow.Hidden -= OnSettingsWindowHidden;
+        _settingsWindow.Hidden += OnSettingsWindowHidden;
         _settingsWindow.Show(new SettingsRequest(_services, category));
     }
+
+    /// <summary>
+    /// 设置窗口收摊（用户按 X、或 <see cref="HideSettings"/>）：把 <see cref="ShowSettings"/> 让出去的置顶
+    /// 拿回来 —— 全屏画面在设置窗口立着的那段时间里一直站台下，收摊后该回到最上层（见
+    /// <c>HostWindow.ReclaimAfterOwnWindow</c>）。
+    /// </summary>
+    private void OnSettingsWindowHidden() => _window?.ReclaimAfterOwnWindow();
 
     /// <summary>
     /// Puts the settings window away and gives the main window the foreground back. Called when the shell
@@ -1017,25 +1011,30 @@ public sealed partial class ShellPage : UserControl, IShellActions
         _ = ShowMoviePilotReorganizeAsync(service, context, root);
     }
 
-    private static async Task ShowMoviePilotReorganizeAsync(
+    private bool _moviePilotReorganizeShowing;
+
+    private async Task ShowMoviePilotReorganizeAsync(
         EmbyNian.MoviePilot.MoviePilotService service,
         EmbyNian.MoviePilot.MoviePilotTransferContext context,
         Microsoft.UI.Xaml.XamlRoot root)
     {
-        var dialog = new MoviePilotReorganizeDialog(service, context)
+        if (_moviePilotReorganizeShowing)
         {
-            XamlRoot = root
-        };
-
+            Notify("请先关闭当前手动整理表单，再选择另一条目", InfoBarSeverity.Warning);
+            return;
+        }
+        _moviePilotReorganizeShowing = true;
         try
         {
+            var dialog = new MoviePilotReorganizeDialog(service, context) { XamlRoot = root };
             await dialog.ShowAsync().AsTask().ConfigureAwait(true);
         }
         catch (Exception error)
         {
-            // 一棵浮层根上同时只能有一张对话框（WinUI 直接抛）。收掉是安全的 —— 什么都没有被整理。
             Log.Warn("moviepilot窗口", "弹不出手动整理表单", error);
+            Notify("手动整理表单未打开，请关闭当前对话框后重试；本次没有提交整理请求", InfoBarSeverity.Warning);
         }
+        finally { _moviePilotReorganizeShowing = false; }
     }
 
     /// <summary>
@@ -1070,6 +1069,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal void OpenDetail(DetailRequest request)
     {
+        RememberTrail();
         ContentFrame.Navigate(typeof(DetailPage), request, BrowseTransition());
 
         _trail.Add(new Crumb(request.Title, string.Empty));
@@ -1086,6 +1086,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     internal void OpenChild(LibraryRequest request)
     {
+        RememberTrail();
         ContentFrame.Navigate(typeof(LibraryPage), request, BrowseTransition());
 
         _trail.Add(new Crumb(request.Title, request.Tag));
@@ -1372,6 +1373,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
         _current = tag;
 
         // 整体重设计使用平台入场过渡，缩短页面切换时的突兀感。
+        RememberTrail();
         ContentFrame.Navigate(page, parameter, BrowseTransition());
 
         _trail.Clear();
@@ -1385,15 +1387,27 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// breadcrumb and the gestures NavigationView routes all read the same facts here, so none of them can
     /// drift from the frame's own two stacks.
     /// </summary>
+    private void RememberTrail()
+    {
+        if (ContentFrame.Content is not null) _backTrails.Add(_trail.ToArray());
+        _forwardTrails.Clear();
+    }
+
+    private void RestoreTrail(List<Crumb[]> history)
+    {
+        _trail.Clear();
+        if (history.Count == 0) return;
+        foreach (var crumb in history[^1]) _trail.Add(crumb);
+        history.RemoveAt(history.Count - 1);
+    }
+
     private void SyncChrome()
     {
-        // Navigate() empties the frame's forward stack. Trimming here rather than at each of the six call
-        // sites is what keeps the crumbs held for 前进 from outliving the pages they name.
-        while (_forward.Count > ContentFrame.ForwardStack.Count) _forward.RemoveAt(_forward.Count - 1);
+        while (_forwardTrails.Count > ContentFrame.ForwardStack.Count) _forwardTrails.RemoveAt(_forwardTrails.Count - 1);
 
         // 主页那颗按钮在主页上自己变暗（同两支箭头「走不动就暗」的规矩）：_current 是 "home" 就是已经在主页，
         // 下钻和别的页面会把它清空，那时按钮亮着、一按回主页。
-        HomeButton.IsEnabled = _current != "home";
+        HomeButton.IsEnabled = _session?.IsSignedIn == true && (_current != "home" || _librariesFailed);
 
         ApplyChrome(ContentFrame.CanGoBack, ContentFrame.CanGoForward, _trail.Count);
     }
@@ -1469,7 +1483,23 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// （在主页上它自己变暗，见 <see cref="SyncChrome"/>）。<see cref="GoTo"/> 里 <c>_current == "home"</c>
     /// 那道门保证「已经在主页又点一次」什么都不做。
     /// </summary>
-    private void OnHomeClicked(object sender, RoutedEventArgs e) => GoTo("home");
+    private void OnHomeClicked(object sender, RoutedEventArgs e)
+    {
+        if (_librariesFailed) _ = RetryLibrariesAsync();
+        else GoTo("home");
+    }
+
+    private async Task RetryLibrariesAsync()
+    {
+        if (_session?.IsSignedIn != true) return;
+        var token = _identityLoads.Begin();
+        var scope = _session.Capture();
+        var content = ContentFrame.Content;
+        await LoadLibrariesAsync(scope, token).ConfigureAwait(true);
+        if (!_identityLoads.IsCurrent(token) || !scope.IsCurrent || !ReferenceEquals(content, ContentFrame.Content)) return;
+        GoTo("home", force: true);
+        if (_librariesFailed) Notify("媒体库目录仍未读到，点击主页按钮重试", InfoBarSeverity.Warning);
+    }
 
     /// <summary>The row's own arrows. Same walk as the keyboard's and the mouse's, so none can drift.</summary>
     private void OnBackClicked(object sender, RoutedEventArgs e) => GoBack();
@@ -1485,22 +1515,11 @@ public sealed partial class ShellPage : UserControl, IShellActions
     {
         if (!ContentFrame.CanGoBack) return;
 
-        // Read before the walk: the crumb being left behind is what 前进 has to put back. Null when the
-        // trail is already down to its last entry, which is a top-level page — the frame can still step
-        // back out of one, and stepping forward into it again needs no crumb.
-        var leaving = _trail.Count > 1 ? _trail[^1] : null;
-
+        _forwardTrails.Add(_trail.ToArray());
         ContentFrame.GoBack(BrowseTransition());
-
-        if (leaving is not null)
-        {
-            _trail.RemoveAt(_trail.Count - 1);
-            _forward.Add(leaving);
-        }
-
-        SyncChrome();
-
+        RestoreTrail(_backTrails);
         AdoptContentTag();
+        SyncChrome();
     }
 
     /// <summary>
@@ -1512,17 +1531,11 @@ public sealed partial class ShellPage : UserControl, IShellActions
     {
         if (!ContentFrame.CanGoForward) return;
 
+        _backTrails.Add(_trail.ToArray());
         ContentFrame.GoForward();
-
-        if (_forward.Count > 0)
-        {
-            _trail.Add(_forward[^1]);
-            _forward.RemoveAt(_forward.Count - 1);
-        }
-
-        SyncChrome();
-
+        RestoreTrail(_forwardTrails);
         AdoptContentTag();
+        SyncChrome();
     }
 
     private void OnBreadcrumbClicked(BreadcrumbBar sender, BreadcrumbBarItemClickedEventArgs e)
@@ -1533,23 +1546,25 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // The intermediate entries are dropped rather than walked back through: every GoBack rebuilds a
         // page, and a page rebuilt only to be left again is one more query the server did not need.
         for (var i = 0; i < steps - 1 && ContentFrame.BackStack.Count > 0; i++)
+        {
             ContentFrame.BackStack.RemoveAt(ContentFrame.BackStack.Count - 1);
+            if (_backTrails.Count > 0) _backTrails.RemoveAt(_backTrails.Count - 1);
+        }
 
         if (!ContentFrame.CanGoBack) return;
 
         ContentFrame.GoBack(BrowseTransition());
 
-        while (_trail.Count > e.Index + 1) _trail.RemoveAt(_trail.Count - 1);
+        RestoreTrail(_backTrails);
 
         // A jump is not a step: the pages between here and where the trail was have just been thrown away,
         // so there is no coherent one-step-forward left to offer. 前进 goes dim rather than promising to
         // retrace a path that no longer exists.
         ContentFrame.ForwardStack.Clear();
-        _forward.Clear();
-
-        SyncChrome();
+        _forwardTrails.Clear();
 
         AdoptContentTag();
+        SyncChrome();
     }
 
     /// <summary>
@@ -1642,7 +1657,10 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// </summary>
     private async Task EnterShellAsync()
     {
-        if (_session is null || _capabilities is null) return;
+        if (_session is null || _capabilities is null || !_session.IsSignedIn) return;
+        var token = _identityLoads.Begin();
+        var scope = _session.Capture();
+        BrowsingPreferences.SelectIdentity(Settings.Ui, scope.Connection);
 
         SignIn.Detach();
         SignIn.Visibility = Visibility.Collapsed;
@@ -1662,32 +1680,34 @@ public sealed partial class ShellPage : UserControl, IShellActions
         // this. Awaiting it here would put another round trip in front of the home page.
         _ = _capabilities.ProbeAsync();
 
-        await LoadLibrariesAsync().ConfigureAwait(true);
-
+        await LoadLibrariesAsync(scope, token).ConfigureAwait(true);
+        if (!_identityLoads.IsCurrent(token) || !scope.IsCurrent) return;
         GoTo("home");
+        if (_librariesFailed) Notify("媒体库目录读取失败，点击主页按钮可重试", InfoBarSeverity.Warning);
     }
 
-    private async Task LoadLibrariesAsync()
+    private async Task LoadLibrariesAsync(EmbySessionScope scope, CancellationToken token)
     {
-        _libraries.Clear();
-        _libraryViews.Clear();
-
         List<EmbyItem> views;
         try
         {
             // 恢复登录那一趟已经取回过一份（它拿这个接口当令牌探针），领得到就用它 —— 每次启动省掉一趟往返，
             // 而这一趟压在「看到第一屏」的路上。只给一次，所以下面每一次刷新照旧真去问服务器。
             views = _session!.TakeRestoredViews()
-                ?? await _session
-                    .ExecuteAsync((client, token) => client.GetViewsAsync(token), CancellationToken.None)
-                    .ConfigureAwait(true);
+                ?? await scope.ExecuteAsync((client, ct) => client.GetViewsAsync(ct), token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException) { return; }
         catch (Exception error)
         {
-            // 主页那一排媒体库于是空着；主页那一页会在用户真正在看的地方报同一件事。
+            if (!_identityLoads.IsCurrent(token) || !scope.IsCurrent) return;
+            _librariesFailed = true;
             Log.Warn(Category, "读取媒体库列表失败", error);
             return;
         }
+        if (!_identityLoads.IsCurrent(token) || !scope.IsCurrent) return;
+        _librariesFailed = false;
+        _libraries.Clear();
+        _libraryViews.Clear();
 
         foreach (var view in views)
         {
@@ -1784,28 +1804,28 @@ public sealed partial class ShellPage : UserControl, IShellActions
     private async Task SwitchAsync(ServerProfile server, AccountProfile? account)
     {
         if (_session is null || _settings is null) return;
-
-        if (account is not null && (account.HasSavedToken || account.HasSavedPassword))
+        ShowSignIn(server);
+        var token = _identityLoads.Begin();
+        if (account is null || (!account.HasSavedToken && !account.HasSavedPassword)) return;
+        SignIn.ShowRestoring(server.Name);
+        try
         {
-            ShowSignIn(server);
-            SignIn.ShowRestoring(server.Name);
-
-            try
+            var restored = await _session.TryRestoreAsync(server, account, token).ConfigureAwait(true);
+            if (!_identityLoads.IsCurrent(token)) return;
+            if (restored)
             {
-                if (await _session.TryRestoreAsync(server, account, CancellationToken.None).ConfigureAwait(true))
-                {
-                    _settings.Save();
-                    await EnterShellAsync().ConfigureAwait(true);
-                    return;
-                }
-            }
-            catch (Exception error)
-            {
-                Log.Warn(Category, $"切换到 {server.Name} 失败", error);
+                _settings.Save();
+                await EnterShellAsync().ConfigureAwait(true);
+                return;
             }
         }
-
-        ShowSignIn(server);
+        catch (OperationCanceledException) { return; }
+        catch (Exception error)
+        {
+            if (!_identityLoads.IsCurrent(token)) return;
+            Log.Warn(Category, $"切换到 {server.Name} 失败", error);
+        }
+        if (_identityLoads.IsCurrent(token)) ShowSignIn(server);
     }
 
     /// <summary>Lets management pages reuse the same restore/sign-in path as the account menu.</summary>
@@ -1831,6 +1851,10 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// <summary>Puts the sign-in card back in front, pointed at a particular server when there is one.</summary>
     private void ShowSignIn(ServerProfile? server = null)
     {
+        _identityLoads.Cancel();
+        _libraries.Clear();
+        _libraryViews.Clear();
+        _librariesFailed = false;
         ContentHost.Visibility = Visibility.Collapsed;
 
         // 账号那颗也收起来：没登录它没的可切，而且在登录卡上它上面的菜单（切换服务器／注销）一个都不通。
@@ -1868,8 +1892,9 @@ public sealed partial class ShellPage : UserControl, IShellActions
         if (ContentFrame.Content is IShellContent page) page.Release();
         ContentFrame.Content = null;
         ContentFrame.BackStack.Clear();
+        _backTrails.Clear();
         ContentFrame.ForwardStack.Clear();
-        _forward.Clear();
+        _forwardTrails.Clear();
         _current = null;
     }
 }
