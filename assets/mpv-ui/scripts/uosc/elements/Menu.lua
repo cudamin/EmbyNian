@@ -106,7 +106,6 @@ function Menu:init(data, callback, opts)
 	-----@type fun()
 	self.callback = callback
 	self.opts = opts or {}
-	self.offset_x = 0 -- Used for submenu transition animation.
 	self.anchor = nil -- EMBYNIAN[menu-anchor]: {x,y} 光标锚点；set 时菜单在光标处弹出、不居中、不压暗幕布。
 	self.mouse_nav = self.opts.mouse_nav -- Stops pre-selecting items
 	self.item_height = nil
@@ -114,14 +113,20 @@ function Menu:init(data, callback, opts)
 	self.menu_scale = state.scale -- EMBYNIAN[menu-style]：菜单自己的缩放（DPI×全屏/最大化 1.3），update_content_dimensions 重算
 	self.radius = state.radius -- EMBYNIAN[menu-style]：菜单面板的圆角基准（同上）
 	self.item_spacing = 0 -- EMBYNIAN[menu-style]：行距在 update_content_dimensions 里按字号重算
+	self.item_indent = nil -- EMBYNIAN[menu-style]：文字左缩进（参考菜单左侧留白显著大于右侧）
+	self.item_pad_right = nil -- EMBYNIAN[menu-style]：右列（hint/▸）距面板右缘的贴边距
+	self.hover_inset = nil -- EMBYNIAN[menu-style]：悬停行四边让空
+	self.hover_radius = nil -- EMBYNIAN[menu-style]：悬停行圆角
 	self.item_padding = nil
 	self.separator_size = nil
 	self.padding = nil
 	self.gap = nil
 	self.font_size = nil
 	self.font_size_hint = nil
-	self.scroll_step = nil -- Item height + item spacing.
+	self.scroll_step = nil -- Item height (separators take their own, smaller slot — see update_content_dimensions).
 	self.scroll_height = nil -- Items + spacings - container height.
+	self.layout = nil -- EMBYNIAN[menu-style]：可见面板矩形表 {menu, x, y, w, h}（bg 坐标），render/compute_layout 维护
+	self.drag_panel_id = nil -- EMBYNIAN[menu-style]：拖拽起始面板（拖哪条滚哪条）
 	self.opacity = 0 -- Used to fade in/out.
 	self.type = data.type
 	---@type MenuStack Root MenuStack.
@@ -307,18 +312,18 @@ function Menu:update_items(items)
 end
 
 function Menu:update_content_dimensions()
-	-- EMBYNIAN[menu-style] — 菜单自己的缩放＝uosc 的 state.scale（hidpi_scale × 全屏/最大化 1.3，
-	-- main.lua update_display_dimensions）：2026-10-07 用户令「独占模式的右键菜单体积太大了，大小改为
-	-- 跟集成模式一致（注意全屏和最大化时要放大 1.3 倍）」，2026-09-29 那把随窗口高的尺子
-	-- （osd_height/720，窗口越大菜单越虚胖）整把退役。基础字号与行高按集成模式右键菜单
-	-- （WinUI 2.3.9 DefaultMenuFlyoutItemStyle）解剖：字号 14＝ControlContentThemeFontSize；一行
-	-- ＝行外边距 2＋上内边距 9＋14px 行盒约 18.6＋下内边距 10＋行外边距 2 ≈ 41.6 → menu_gap=2
-	-- （行高＝字号×(1+gap)，同上游 get_line_height 的式子）。其余尺寸全部跟着 menu_scale 走。
+	-- EMBYNIAN[menu-style] — 尺子整把换成参考项目（C:\mpv_config-2026.08.12）右键菜单的实测值：
+	-- 2026-10-07 晚用户令「只复刻界面，不抄功能选项」。字号 20、行高＝字号×(1+gap)＝字号×1.2（行与行
+	-- 贴着排，参考图行距/字号≈22/20）；文字左缩进 36、右列贴边 8（参考图左松右紧）；面板不再有最小
+	-- 宽度（贴内容）。分隔符占自己的小槽位（上下各让 padding 的 1px 细线，参考图过分隔符行距 32＝
+	-- 24＋8），行高因此按前缀和（item_tops/content_height）算，不再假设每行等高。缩放照旧＝
+	-- state.scale（hidpi × 全屏/最大化 1.3）——同日早些那道令保留的部分，2026-09-29 那把随窗口高的
+	-- 尺子（osd_height/720）不复活。
 	local menu_scale = state.scale
 	self.menu_scale = menu_scale
 	self.font_size = round(options.menu_font_size * menu_scale * options.font_scale)
 	self.item_height = round(self.font_size * (1 + options.menu_gap))
-	self.item_spacing = 0 -- 行距已含在行高里（集成的行外边距 2×2 折进那 42），行与行贴着排
+	self.item_spacing = 0
 	self.min_width = round(options.menu_min_width * menu_scale)
 	self.separator_size = round(1 * menu_scale)
 	self.scrollbar_size = round(2 * menu_scale)
@@ -326,36 +331,64 @@ function Menu:update_content_dimensions()
 	self.gap = round(2 * menu_scale)
 	self.radius = round(options.border_radius * menu_scale)
 	self.font_size_hint = self.font_size - 1
-	self.item_padding = round((self.item_height - self.font_size) * 0.6)
+	self.item_indent = round(options.menu_item_indent * menu_scale)
+	self.item_pad_right = round(options.menu_item_pad_right * menu_scale)
+	self.hover_inset = round(options.menu_hover_inset * menu_scale)
+	self.hover_radius = round(options.menu_hover_radius * menu_scale)
+	self.item_padding = round(4 * menu_scale)
 	self.scroll_step = self.item_height + self.item_spacing
 
-	local title_opts = {size = self.font_size, italic = false, bold = false}
 	local hint_opts = {size = self.font_size_hint}
 
 	for _, menu in ipairs(self.all) do
-		title_opts.bold, title_opts.italic = true, false
-		local max_width = text_width(menu.title, title_opts) + 2 * self.item_padding
-
-		-- Estimate width of a widest item
+		-- Estimate width of a widest item：内容左缘从 item_indent 起算，右缘到 item_pad_right 止
+		local max_width = 0
 		for _, item in ipairs(menu.items) do
 			local icon_width = item.icon and self.font_size or 0
-			item.title_width = text_width(item.title, title_opts)
+			item.title_width = text_width(item.title, {
+				size = self.font_size, bold = item.bold or options.font_bold, italic = item.italic,
+			})
 			item.hint_width = text_width(item.hint, hint_opts)
-			local spacings_in_item = 1 + (item.title_width > 0 and 1 or 0)
+			local spacings_in_item = (item.title_width > 0 and 1 or 0)
 				+ (item.hint_width > 0 and 1 or 0) + (icon_width > 0 and 1 or 0)
-			local estimated_width = item.title_width + item.hint_width + icon_width
-				+ (self.item_padding * spacings_in_item)
+			local estimated_width = self.item_indent + item.title_width + item.hint_width + icon_width
+				+ (self.item_padding * spacings_in_item) + self.item_pad_right
 			if estimated_width > max_width then max_width = estimated_width end
 		end
 
 		menu.max_width = max_width
+
+		-- EMBYNIAN[menu-style] — 行位置前缀和：普通行高 item_height，分隔符槽位＝1px 线＋上下各让
+		-- padding（参考图分隔符上下各 4px 留空）。所有滚动/命中/绘制都改读这张表。
+		local item_tops = {}
+		local y = 0
+		for i, item in ipairs(menu.items) do
+			item_tops[i] = y
+			y = y + (item.separator and (self.separator_size + self.padding * 2) or self.item_height)
+		end
+		menu.item_tops = item_tops
+		menu.content_height = y
 	end
 
 	self:update_dimensions()
 end
 
+-- Height of one row (separators take a compact slot; everything else a full item row).
+function Menu:row_height(menu, index)
+	return menu.items[index].separator and (self.separator_size + self.padding * 2) or self.item_height
+end
+
+-- Content-space y of the row containing `y` (nil if below the last row).
+function Menu:index_at_y(menu, y)
+	local items = menu.items
+	for i = 1, #items do
+		local top = menu.item_tops[i]
+		if y >= top and y < top + self:row_height(menu, i) then return i end
+	end
+end
+
 function Menu:update_dimensions()
-	-- Coordinates and sizes are of the scrollable area. Title is rendered
+	-- Coordinates and sizes are of the scrollable area. Search input is rendered
 	-- above it, so we need to account for that in max_height and ay position.
 	-- This is a debt from an era where we had different cursor event handling,
 	-- and dumb titles with no search inputs. It could use a refactor.
@@ -368,15 +401,15 @@ function Menu:update_dimensions()
 	for _, menu in ipairs(self.all) do
 		local width = math.max(menu.search and menu.search.max_width or 0, menu.max_width)
 		menu.width = round(clamp(min_width, width, width_available))
-		local title_height = (menu.is_root and menu.title or menu.search) and
-			self.scroll_step + self.separator_size + 1 or 0
-		local footnote_height = self.font_size * 1.5
-		local max_height = height_available - title_height - footnote_height
-		local content_height = self.scroll_step * #menu.items
-		menu.height = math.min(content_height - self.item_spacing, max_height)
+		-- EMBYNIAN[menu-style] — 标题行整块撤下（参考菜单没有标题），只有搜索输入还在上方占一格；
+		-- 脚注随之整块撤下，不再预留高度。
+		local title_height = menu.search and self.scroll_step + self.separator_size + 1 or 0
+		local max_height = height_available - title_height
+		local content_height = menu.content_height or self.scroll_step * #menu.items
+		menu.height = math.min(content_height, max_height)
 		local min_top = title_height + margin + self.padding
 		if menu.is_root and self.anchor then
-			-- EMBYNIAN[menu-anchor] — 上缘贴着光标（标题在其上方，留一格 padding）；顶到下边就上移，整menu保持在屏内。
+			-- EMBYNIAN[menu-anchor] — 上缘贴着光标（搜索框在其上方，留一格 padding）；顶到下边就上移，整menu保持在屏内。
 			local max_top = display.height - margin - self.padding - menu.height
 			menu.top = clamp(min_top, self.anchor.y + title_height + self.padding, math.max(min_top, max_top))
 		else
@@ -390,27 +423,103 @@ function Menu:update_dimensions()
 			menu.search.min_top = math.min(menu.search.min_top, menu.top)
 			menu.search.max_width = math.max(menu.search.max_width, menu.width)
 		end
-		menu.scroll_height = math.max(content_height - menu.height - self.item_spacing, 0)
+		menu.scroll_height = math.max(content_height - menu.height, 0)
 		self:set_scroll_to(menu.scroll_y, menu.id) -- clamps scroll_y to scroll limits
 	end
 
 	self:update_coordinates()
 end
 
--- Updates element coordinates to match padding box of currently open (sub)menu.
-function Menu:update_coordinates()
-	-- EMBYNIAN[menu-anchor] — 锚点在时左缘贴光标（横向夹住不越屏）；否则照旧屏幕居中。
-	local ax
+-- EMBYNIAN[menu-style] — 参考菜单的级联布局：根面板在锚点/居中的位置上，子面板贴着父面板右缘
+-- （零缝、共用那根白描边）、顶边对齐父项里通往它的那一行，父面板原地不动（用户令 2026-10-07 晚
+-- 「只复刻界面」；上游那套「子菜单坐屏幕中、父面板往左排队」的几何退役）。返回可见面板表
+-- （{menu, x, y, w, h}，面板 bg 坐标，根在前），最后一级是 current 选中项的子菜单预览。
+function Menu:compute_layout()
+	local panels = {}
+	local root = self.root
+	local margin = round(self.item_height / 2)
+	local root_title_h = root.search and self.scroll_step + self.separator_size + 1 or 0
+	local root_w = root.width + self.padding * 2
+	local root_x
 	if self.anchor then
-		local max_ax = display.width - self.current.width - self.padding * 2
-		ax = round(clamp(0, self.anchor.x - self.padding, math.max(0, max_ax))) + self.offset_x
+		-- EMBYNIAN[menu-anchor] — 锚点在时左缘贴光标（横向夹住不越屏）；否则照旧屏幕居中。
+		root_x = round(clamp(0, self.anchor.x - self.padding, math.max(0, display.width - root_w - self.padding)))
 	else
-		ax = round((display.width - self.current.width) / 2 - self.padding) + self.offset_x
+		root_x = round((display.width - root_w) / 2)
 	end
-	self:set_coordinates(
-		ax, self.current.top - self.padding,
-		ax + self.current.width + self.padding * 2, self.current.top + self.current.height + self.padding
-	)
+	local root_y = (root.top or margin + self.padding) - root_title_h - self.padding
+	panels[#panels + 1] = {
+		menu = root, x = root_x, y = root_y, w = root_w,
+		h = root.height + root_title_h + self.padding * 2,
+	}
+
+	-- current 的祖先链（根→current），逐级落位
+	local path = {}
+	local menu = self.current
+	while menu and not menu.is_root do
+		path[#path + 1] = menu
+		menu = menu.parent_menu
+	end
+	for i = #path, 1, -1 do
+		panels[#panels + 1] = self:place_panel(panels[#panels], path[i].parent_menu, path[i], margin)
+	end
+
+	-- current 里悬停/键盘所在行若本身是子菜单 → 预览面板贴着 current 右缘（悬停即预览）
+	local selected = self.current.selected_index and self.current.items[self.current.selected_index]
+	if selected and selected.items then
+		panels[#panels + 1] = self:place_panel(panels[#panels], self.current, selected --[[@as MenuStack]], margin)
+	end
+
+	return panels
+end
+
+-- 把 child 面板贴着 parent_panel 右缘放下（零缝），顶边对齐 parent 里通往 child 的那一行；
+-- 底边越界上收、右侧越界翻到父面板左边（参考实现同一条规则）。
+function Menu:place_panel(parent_panel, parent_menu, child, margin)
+	local w = child.width + self.padding * 2
+	local h = child.height + self.padding * 2
+	local x = parent_panel.x + parent_panel.w
+	local y = parent_panel.y + self.padding
+	if parent_menu then
+		local row = itable_index_of(parent_menu.items, child)
+		if row and parent_menu.item_tops then
+			y = parent_panel.y + self.padding + parent_menu.item_tops[row] - parent_menu.scroll_y
+		end
+	end
+	y = clamp(margin, y, math.max(margin, display.height - margin - self.padding - h))
+	if x + w > display.width - margin then
+		x = parent_panel.x - w
+		if x < 0 then
+			x = math.max(0, math.min(parent_panel.x + parent_panel.w, display.width - margin - w))
+		end
+	end
+	return {menu = child, x = x, y = y, w = w, h = h}
+end
+
+-- 光标下的可见面板（self.layout 由 compute_layout 维护；从后往前＝后画者在上）。
+function Menu:panel_at(x, y)
+	local layout = self.layout
+	if not layout then return end
+	for i = #layout, 1, -1 do
+		local panel = layout[i]
+		if x >= panel.x and x <= panel.x + panel.w and y >= panel.y and y <= panel.y + panel.h then
+			return panel
+		end
+	end
+end
+
+-- Updates element coordinates to the union of the visible panels.
+function Menu:update_coordinates()
+	local panels = self:compute_layout()
+	self.layout = panels
+	local ax, ay = panels[1].x, panels[1].y
+	local bx, by = panels[1].x + panels[1].w, panels[1].y + panels[1].h
+	for i = 2, #panels do
+		local panel = panels[i]
+		ax, ay = math.min(ax, panel.x), math.min(ay, panel.y)
+		bx, by = math.max(bx, panel.x + panel.w), math.max(by, panel.y + panel.h)
+	end
+	self:set_coordinates(ax, ay, bx, by)
 end
 
 function Menu:reset_navigation()
@@ -437,10 +546,18 @@ function Menu:reset_navigation()
 	request_render()
 end
 
-function Menu:set_offset_x(offset)
-	local delta = offset - self.offset_x
-	self.offset_x = offset
-	self:set_coordinates(self.ax + delta, self.ay, self.bx + delta, self.by)
+function Menu:back()
+	if not self:is_alive() then return end
+
+	local parent = self.current.parent_menu
+
+	-- EMBYNIAN[menu-style] — 级联布局里面板位置由父项行钉死，进出子菜单不再有横移动画
+	-- （上游的 slide_in_menu/set_offset_x 随旧几何一起退役）。
+	if parent then
+		self:activate_menu(parent.id)
+	else
+		self.callback({type = 'back'})
+	end
 end
 
 function Menu:fadeout(callback) self:tween_property('opacity', 1, 0, callback) end
@@ -508,7 +625,9 @@ function Menu:scroll_to_index(index, menu_id, immediate)
 	local menu = self:get_menu(menu_id)
 	if not menu then return end
 	if (index and index >= 1 and index <= #menu.items) then
-		local position = round((self.scroll_step * (index - 1)) - ((menu.height - self.scroll_step) / 2))
+		-- EMBYNIAN[menu-style] — 行位置查前缀和表（分隔符占小槽位，行不再等高）
+		local position = round((menu.item_tops and menu.item_tops[index] or self.scroll_step * (index - 1))
+			- ((menu.height - self.scroll_step) / 2))
 		if immediate then
 			self:set_scroll_to(position, menu_id)
 		else
@@ -643,32 +762,6 @@ function Menu:delete_value(value, menu_id)
 	self:delete_index(index)
 end
 
----@param id string Menu id.
----@param x number `x` coordinate to slide from.
-function Menu:slide_in_menu(id, x)
-	local menu = self:get_menu(id)
-	if not menu then return end
-	self:activate_menu(id)
-	-- EMBYNIAN[menu-anchor] — 锚点菜单不做「让当前子菜单回到屏幕中心」的横移，保持贴着光标那一处的层叠。
-	if not self.anchor then
-		self:tween(-(display.width / 2 - menu.width / 2 - x), 0, function(offset) self:set_offset_x(offset) end)
-	end
-	self.opacity = 1 -- in case tween above canceled fade in animation
-end
-
-function Menu:back()
-	if not self:is_alive() then return end
-
-	local current = self.current
-	local parent = current.parent_menu
-
-	if parent then
-		self:slide_in_menu(parent.id, display.width / 2 - current.width / 2 - parent.width / 2 + self.offset_x)
-	else
-		self.callback({type = 'back'})
-	end
-end
-
 ---@param shortcut? Shortcut
 ---@param is_pointer? boolean Whether this was called by a pointer.
 function Menu:activate_selected_item(shortcut, is_pointer)
@@ -677,15 +770,11 @@ function Menu:activate_selected_item(shortcut, is_pointer)
 	if item then
 		-- Is submenu
 		if item.items then
-			if not self.mouse_nav then
-				self:select_index(1, item.id)
-			end
 			self:activate_menu(item.id)
-			-- EMBYNIAN[menu-anchor] — 同上：锚点菜单进子菜单不横移回中心。
-			if not self.anchor then
-				self:tween(self.offset_x + menu.width / 2, 0, function(offset) self:set_offset_x(offset) end)
-			end
-			self.opacity = 1 -- in case tween above canceled fade in animation
+			-- EMBYNIAN[menu-style] — 开子菜单时首行即选中（参考截图里子面板第一行就是高亮那格）；
+			-- 键盘路径 reset_navigation 已做过同一件事，这里统一再归一一次（幂等）。
+			self:select_by_offset(0, item)
+			self.opacity = 1
 		else
 			local actions = item.actions or menu.item_actions
 			local action = actions and actions[menu.action_index]
@@ -734,24 +823,36 @@ function Menu:on_display() self:update_content_dimensions() end
 function Menu:on_prop_fullormaxed() self:update_content_dimensions() end
 function Menu:on_options() self:update_content_dimensions() end
 
-function Menu:select_from_cursor()
-	local menu = self.current
-	local x, y = cursor.x - self.ax - self.padding, cursor.y - menu.top
-	local index = math.floor((y + menu.scroll_y) / self.scroll_step) + 1
-	local item = menu.items[index]
+-- EMBYNIAN[menu-style] — 面板感知版选行：光标在哪块可见面板上，就在哪块菜单里选行
+-- （父面板/预览子面板都是活面板，参考菜单的用法）。
+---@param panel? {menu: MenuStack, x: number, y: number, w: number, h: number}
+function Menu:select_from_cursor(panel)
+	panel = panel or self:panel_at(cursor.x, cursor.y)
+	if not panel then return end
+	local menu = panel.menu
+	local x, y = cursor.x - panel.x, cursor.y - panel.y - self.padding
+	local index = self:index_at_y(menu, y + menu.scroll_y)
+	local item = index and menu.items[index]
 	self.mouse_nav = true
-	if x >= 0 and x <= menu.width and y >= 0 and y <= menu.height and item and item.selectable ~= false then
-		self:select_index(index)
+	if x >= 0 and x <= panel.w and y >= 0 and item and item.selectable ~= false then
+		self:select_index(index, menu.id)
 	else
-		self:select_index(nil)
+		self:select_index(nil, menu.id)
 	end
 	menu.action_index = nil
 end
 
 function Menu:handle_cursor_down()
 	if self.proximity_raw <= 0 then
-		self:select_from_cursor()
+		local panel = self:panel_at(cursor.x, cursor.y)
+		if panel then
+			-- 点在非当前面板（父面板/预览子面板）上时先把它扶正成当前面板，再选中点的那一行；
+			-- 松手时 activate_selected_item 照常走（叶子执行、子菜单开下一层）。
+			if panel.menu ~= self.current then self:activate_menu(panel.menu.id) end
+			self:select_from_cursor(panel)
+		end
 		self.drag_last_y = cursor.y
+		self.drag_panel_id = panel and panel.menu.id or nil
 		self.current.fling = nil
 	else
 		self:close()
@@ -761,30 +862,38 @@ end
 ---@param shortcut? Shortcut
 function Menu:handle_cursor_up(shortcut)
 	if self.proximity_raw <= -self.padding and self.drag_last_y and not self.is_dragging then
-		self:select_from_cursor()
-		self:activate_selected_item(shortcut, true)
+		-- 只在确实点中某块面板时才激活（联合边界里面板之外的缝隙不算）
+		if self.drag_panel_id and self:panel_at(cursor.x, cursor.y) then
+			self:select_from_cursor()
+			self:activate_selected_item(shortcut, true)
+		end
 	end
 	if self.is_dragging then
 		local distance = cursor:get_velocity().y / -3
 		if math.abs(distance) > 50 then
-			self.current.fling = {
-				y = self.current.scroll_y,
-				distance = distance,
-				time = cursor.history:head().time,
-				easing = ease_out_quart,
-				duration = 0.5,
-				update_cursor = true,
-			}
-			request_render()
+			local menu = self:get_menu(self.drag_panel_id)
+			if menu then
+				menu.fling = {
+					y = menu.scroll_y,
+					distance = distance,
+					time = cursor.history:head().time,
+					easing = ease_out_quart,
+					duration = 0.5,
+					update_cursor = true,
+				}
+				request_render()
+			end
 		end
 	end
 	self.is_dragging = false
 	self.drag_last_y = nil
+	self.drag_panel_id = nil
 end
 
 function Menu:on_global_mouse_leave()
 	self.is_dragging = false
 	self.drag_last_y = nil
+	self.drag_panel_id = nil
 	self.current.fling = nil
 end
 
@@ -798,15 +907,21 @@ function Menu:on_global_mouse_move()
 		self.is_dragging = self.is_dragging or math.abs(cursor.y - self.drag_last_y) >= 10
 		if self.is_dragging then
 			local distance = self.drag_last_y - cursor.y
-			if distance ~= 0 then self:set_scroll_by(distance) end
+			if distance ~= 0 then self:set_scroll_by(distance, self.drag_panel_id) end
 			self.drag_last_y = cursor.y
 		end
 	end
 	request_render()
 end
 
-function Menu:handle_wheel_up() self:scroll_by(self.scroll_step * -3, nil, {update_cursor = true}) end
-function Menu:handle_wheel_down() self:scroll_by(self.scroll_step * 3, nil, {update_cursor = true}) end
+-- EMBYNIAN[menu-style] — 滚轮滚光标底下那块面板（参考菜单每一层都是活面板）；不在面板上时落回当前面板。
+function Menu:handle_wheel_up() self:scroll_by(self.scroll_step * -3, self:wheel_panel_id(), {update_cursor = true}) end
+function Menu:handle_wheel_down() self:scroll_by(self.scroll_step * 3, self:wheel_panel_id(), {update_cursor = true}) end
+
+function Menu:wheel_panel_id()
+	local panel = self:panel_at(cursor.x, cursor.y)
+	return panel and panel.menu.id or nil
+end
 
 ---@param offset integer
 ---@param menu? MenuStack
@@ -1430,6 +1545,11 @@ function Menu:command_or_event(command, params, event)
 	return nil
 end
 
+-- EMBYNIAN[menu-style] — 参考菜单的渲染：每帧按 compute_layout 画全部可见面板（根、祖先链、
+-- current 选中项的子菜单预览），元素边界＝面板并集；无标题/脚注/左缘指示条；悬停行 #353535
+-- 白字（左右各让 hover_inset、圆角 hover_radius）；分隔符＝通宽 1px 细线（menu_separator_color）
+-- 坐在自己的小槽位正中；hint 列全亮白、右缘贴 item_pad_right；文字左缘从 item_indent 起算
+-- （参考图左松右紧）。用户令 2026-10-07 晚「只复刻界面，不抄功能选项」。
 function Menu:render()
 	for _, menu in ipairs(self.all) do
 		if menu.fling then
@@ -1445,137 +1565,129 @@ function Menu:render()
 	cursor:zone('wheel_down', self, function() self:handle_wheel_down() end)
 	cursor:zone('wheel_up', self, function() self:handle_wheel_up() end)
 
+	-- 布局每帧重算（悬停/滚动会挪预览子面板），元素边界随之＝可见面板的并集
+	self.layout = self:compute_layout()
+	local uax, uay, ubx, uby = math.huge, math.huge, -math.huge, -math.huge
+	for _, panel in ipairs(self.layout) do
+		uax, uay = math.min(uax, panel.x), math.min(uay, panel.y)
+		ubx, uby = math.max(ubx, panel.x + panel.w), math.max(uby, panel.y + panel.h)
+	end
+	self:set_coordinates(uax, uay, ubx, uby)
+
 	local ass = assdraw.ass_new()
+
+	for _, panel in ipairs(self.layout) do
+		self:draw_panel(ass, panel)
+	end
+
+	return ass
+end
+
+---@param panel {menu: MenuStack, x: number, y: number, w: number, h: number}
+function Menu:draw_panel(ass, panel)
+	local menu = panel.menu
+	local is_current = menu == self.current
+	local menu_opacity = self.opacity
 	local icon_size = self.font_size
+	local title_h = menu.search and self.scroll_step + self.separator_size + 1 or 0
+	-- Scrollable content area coordinates（搜索框在其上方，占一格 title_h）
+	local content_rect = {
+		ax = panel.x + self.padding,
+		ay = panel.y + self.padding + title_h,
+		bx = panel.x + panel.w - self.padding,
+		by = panel.y + panel.h - self.padding,
+	}
+	local scroll_clip = '\\clip(0,' .. content_rect.ay .. ',' .. display.width .. ',' .. content_rect.by .. ')'
 
-	---@param menu MenuStack
-	---@param x number
-	---@param pos number Horizontal position index. 0 = current menu, <0 parent menus, >1 submenu.
-	local function draw_menu(menu, x, pos)
-		local is_current, is_parent, is_submenu = pos == 0, pos < 0, pos > 0
-		-- EMBYNIAN[menu-style] — 面板全部不透明（参考菜单 background_alpha=0），子菜单不再按层级
-		-- 半透明（config.opacity.submenu 从此不被菜单吃）；开关菜单的淡入淡出（self.opacity）照旧。
-		local menu_opacity = self.opacity
-		-- Scrollable content area coordinates
-		local content_rect = {
-			ax = x + self.padding,
-			ay = menu.top,
-			bx = x + self.padding + menu.width,
-			by = menu.top + menu.height,
-		}
-		-- local ax, ay, bx, by = x + self.padding, menu.top, x + menu.width + self.padding, menu.top + menu.height
-		local draw_title = menu.is_root and menu.title or menu.search
-		local scroll_clip = '\\clip(0,' .. content_rect.ay .. ',' .. display.width .. ',' .. content_rect.by .. ')'
-		local start_index = math.floor(menu.scroll_y / self.scroll_step) + 1
-		local end_index = math.ceil((menu.scroll_y + menu.height) / self.scroll_step)
-		local bg_rect = {
-			ax = x,
-			ay = content_rect.ay - (draw_title and self.scroll_step or 0) - self.padding,
-			bx = content_rect.bx + self.padding,
-			by = content_rect.by + self.padding,
-		}
-		local blur_selected_index = self.mouse_nav and is_current
-		local blur_action_index = self.mouse_nav and menu.action_index ~= nil
+	-- Background
+	ass:rect(panel.x, panel.y, panel.x + panel.w, panel.y + panel.h, {
+		color = options.menu_background_color,
+		opacity = menu_opacity,
+		radius = options.menu_corner_radius > 0 and options.menu_corner_radius * self.menu_scale or 0,
+		border = options.menu_outline_size > 0 and options.menu_outline_size * self.menu_scale or nil,
+		border_color = options.menu_outline_color,
+	})
 
-		-- Background
-		-- EMBYNIAN[menu-style] — 底板照参考菜单画：不透明 #222222（参考菜单取 osd-back-color，黑时兜底
-		-- 222222）、圆角 corner_radius=5、0.5 白细描边；不再吃 opacity.menu 的半透明，半径也不再从
-		-- border_radius 推（参考菜单的菜单底板与行高亮是两把半径）。
-		ass:rect(bg_rect.ax, bg_rect.ay, bg_rect.bx, bg_rect.by, {
-			color = options.menu_background_color,
-			opacity = menu_opacity,
-			radius = options.menu_corner_radius > 0 and options.menu_corner_radius * self.menu_scale or 0,
-			border = options.menu_outline_size > 0 and options.menu_outline_size * self.menu_scale or nil,
-			border_color = options.menu_outline_color,
-		})
+	-- Scrollbar
+	if menu.scroll_height > 0 then
+		local groove_height = menu.height - 2
+		local thumb_height = math.max((menu.height / (menu.scroll_height + menu.height)) * groove_height, 40)
+		local thumb_y = content_rect.ay + 1 + ((menu.scroll_y / menu.scroll_height) * (groove_height - thumb_height))
+		local sax = content_rect.bx - round(self.scrollbar_size / 2)
+		local sbx = sax + self.scrollbar_size
+		ass:rect(sax, thumb_y, sbx, thumb_y + thumb_height, {color = fg, opacity = menu_opacity * 0.8})
+	end
 
-		if is_parent then
-			cursor:zone('primary_down', bg_rect, self:create_action(function() self:slide_in_menu(menu.id, x) end))
+	-- Visible rows（前缀和找可见窗口；分隔符占小槽位，行不再等高）
+	local items = menu.items
+	local start_index, end_index = 1, 0
+	while start_index <= #items
+		and menu.item_tops[start_index] + self:row_height(menu, start_index) <= menu.scroll_y do
+		start_index = start_index + 1
+	end
+	end_index = start_index
+	while end_index <= #items and menu.item_tops[end_index] < menu.scroll_y + menu.height do
+		end_index = end_index + 1
+	end
+
+	local blur_selected_index = self.mouse_nav and is_current
+	local blur_action_index = self.mouse_nav and menu.action_index ~= nil
+	---@type MenuAction|nil
+	local selected_action
+	-- 悬停子菜单的预览面板（layout 末位且父级是本面板）：光标朝它去/停在它上面时，本面板的
+	-- 悬停行不被吹掉、也不被路过的行抢走（上游同一条守卫）。面板表是 x/y/w/h，几何函数要 ax/ay/bx/by。
+	local preview_rect
+	if is_current and self.layout then
+		local last = self.layout[#self.layout]
+		if last and last.menu ~= menu and last.menu.parent_menu == menu then
+			preview_rect = {ax = last.x, ay = last.y, bx = last.x + last.w, by = last.y + last.h}
 		end
+	end
 
-		-- Scrollbar
-		if menu.scroll_height > 0 then
-			local groove_height = menu.height - 2
-			local thumb_height = math.max((menu.height / (menu.scroll_height + menu.height)) * groove_height, 40)
-			local thumb_y = content_rect.ay + 1 + ((menu.scroll_y / menu.scroll_height) * (groove_height - thumb_height))
-			local sax = content_rect.bx - round(self.scrollbar_size / 2)
-			local sbx = sax + self.scrollbar_size
-			ass:rect(sax, thumb_y, sbx, thumb_y + thumb_height, {color = fg, opacity = menu_opacity * 0.8})
-		end
+	for index = start_index, end_index, 1 do
+		local item = items[index]
+		if not item then break end -- end_index deliberately overshoots by one
+		local item_ay = content_rect.ay + menu.item_tops[index] - menu.scroll_y
+		local item_height = self:row_height(menu, index)
+		local item_by = item_ay + item_height
 
-		-- Draw submenu if selected
-		local submenu_rect, current_item = nil, is_current and menu.selected_index and menu.items[menu.selected_index]
-		local submenu_is_hovered = false
-		if current_item and current_item.items then
-			local submenu_x = bg_rect.bx + self.gap
-			local submenu_width = current_item.width + self.padding * 2
-			if self.anchor and submenu_x + submenu_width > display.width then
-				submenu_x = math.max(0, bg_rect.ax - self.gap - submenu_width)
+		-- Separator
+		-- EMBYNIAN[menu-style] — 通宽 1px 细线坐在槽位正中（参考图实测线色 ≈ #3E3E3E、上下各让 4px）
+		if item.separator then
+			if item_by <= content_rect.by then
+				local line_ay = round(item_ay + item_height / 2 - self.separator_size / 2)
+				ass:rect(panel.x, line_ay, panel.x + panel.w, line_ay + self.separator_size, {
+					color = options.menu_separator_color, opacity = menu_opacity, clip = scroll_clip,
+				})
 			end
-			submenu_rect = draw_menu(current_item --[[@as MenuStack]], submenu_x, 1)
-			cursor:zone('primary_down', submenu_rect, self:create_action(function(shortcut)
-				self:activate_selected_item(shortcut, true)
-			end))
-		end
-
-		---@type MenuAction|nil
-		local selected_action
-		for index = start_index, end_index, 1 do
-			local item = menu.items[index]
-
-			if not item then break end
-
-			local item_ay = content_rect.ay - menu.scroll_y + self.scroll_step * (index - 1)
-			local item_by = item_ay + self.item_height
-			local item_center_y = item_ay + (self.item_height / 2)
+		else
+			local item_center_y = item_ay + item_height / 2
 			local item_clip = (item_ay < content_rect.ay or item_by > content_rect.by) and scroll_clip or nil
-			local content_ax, content_bx = content_rect.ax + self.item_padding,
-				content_rect.bx - self.item_padding
 			local is_selected = menu.selected_index == index
-			local item_rect_hitbox = {
-				ax = content_rect.ax,
-				ay = math.max(item_ay, bg_rect.ay),
-				bx = bg_rect.bx + (item.items and self.gap or -self.padding), -- to bridge the submenu gap with cursor
-				by = math.min(item_ay + self.scroll_step, bg_rect.by),
-			}
-
-			-- EMBYNIAN[menu-style] — 悬停/键盘所在行的字色翻成 focused_color（白底深字）；active 行
-			-- （当前值）照旧深字 fgt，其余 bgt。has_background 那组局部量原来只喂「行间细线」的条件，
-			-- 线撤了（见下）随之删除。
+			-- EMBYNIAN[menu-style] — 文字左缘从 item_indent 起算，右列（hint/▸）贴 item_pad_right
+			local text_ax, text_bx = panel.x + self.item_indent, panel.x + panel.w - self.item_pad_right
 			local font_color = is_selected and options.menu_focused_color or item.active and fgt or bgt
 			local actions = is_selected and (item.actions or menu.item_actions) -- not nil = actions are visible
 			local action = actions and actions[menu.action_index] -- not nil = action is selected
 
 			if action then selected_action = action end
 
-			-- Separator
-			-- EMBYNIAN[menu-style] — 只画真正的分隔项，色用参考菜单的 disabled_color=#555555；
-			-- 行与行之间上游那道 0.04 的细线照参考菜单撤掉（参考菜单的行距里没有线）。
-			if item.separator and item_by < content_rect.by then
-				ass:rect(
-					content_rect.ax + self.item_padding, item_by, content_rect.bx - self.item_padding,
-					item_by + self.separator_size,
-					{color = options.menu_disabled_color, opacity = menu_opacity}
-				)
-			end
-
-			-- Background
-			-- EMBYNIAN[menu-style] — 悬停/键盘所在行＝整行白底（参考菜单 focused_back_color=#FFFFFF，
-			-- 上游是 0.15 的淡染）；active 行（当前值）照旧 fg@0.8。两档白靠深浅区分：悬停全白、当前值 0.8，
-			-- 悬停落在当前值上时取满。
+			-- Hover/active row highlight
+			-- EMBYNIAN[menu-style] — 悬停/键盘所在行＝#353535 浅灰底、**字色保持白**（参考图悬停行
+			-- 实测 53 底 255 字）；active 行（当前值）照旧 fg@0.8＋深字，叠加时取悬停底色。
 			local highlight_opacity = (item.active and 0.8 or 0) + (is_selected and 1 or 0)
 			if highlight_opacity > 0 then
-				ass:rect(content_rect.ax, item_ay, content_rect.bx, item_by, {
-					radius = self.radius,
+				ass:rect(panel.x + self.hover_inset, item_ay, panel.x + panel.w - self.hover_inset, item_by, {
+					radius = self.hover_radius,
 					color = is_selected and options.menu_focused_back_color or fg,
 					opacity = math.min(highlight_opacity, 1) * menu_opacity,
 					clip = item_clip,
 				})
 			end
 
-			local title_clip_bx = content_bx
+			local title_clip_bx = text_bx
 
-			-- Actions
+			-- Actions（宿主菜单不用；uosc 内部流程保留）
 			local actions_rect
 			if is_selected and actions and #actions > 0 and not item.items then
 				local place = item.actions_place or menu.item_actions_place
@@ -1587,10 +1699,10 @@ function Menu:render()
 				actions_rect = {
 					ay = item_ay + margin,
 					by = item_by - margin,
-					is_outside = place == 'outside' and display.width - bg_rect.bx + margin * 2 > rect_width,
+					is_outside = place == 'outside' and display.width - panel.x - panel.w + margin * 2 > rect_width,
 				}
-				actions_rect.bx = actions_rect.is_outside and bg_rect.bx + margin + rect_width or
-					content_rect.bx - margin
+				actions_rect.bx = actions_rect.is_outside and panel.x + panel.w + margin + rect_width or
+					text_bx - margin
 				actions_rect.ax = actions_rect.bx
 
 				for i = 1, #actions, 1 do
@@ -1648,25 +1760,12 @@ function Menu:render()
 				title_clip_bx = actions_rect.ax - self.gap * 2
 			end
 
-			-- Selected item indicator line
-			-- EMBYNIAN[menu-style] — 悬停行已是整行白底，这根 fg 色左缘指示条落在白底上不可见，
-			-- 键盘导航（同样走 is_selected）时也一样；留作上游行为，尺寸只跟着 menu_scale。
-			if is_selected and not selected_action then
-				local size = round(2 * self.menu_scale)
-				local v_padding = math.min(self.radius, math.ceil(self.item_height / 3))
-				ass:rect(
-					content_rect.ax - size - 1, item_ay + v_padding,
-					content_rect.ax - 1, item_by - v_padding,
-					{radius = 1 * self.menu_scale, color = fg, opacity = menu_opacity, clip = item_clip}
-				)
-			end
-
-			-- Icon
+			-- Icon（子菜单的 ▸、错误 spinner 等）
 			if item.icon then
 				if not actions_rect or actions_rect.is_outside then
 					local x = (not item.title and not item.hint and item.align == 'center')
-						and bg_rect.ax + (bg_rect.bx - bg_rect.ax) / 2
-						or content_bx - (icon_size / 2)
+						and panel.x + panel.w / 2
+						or text_bx - (icon_size / 2)
 					if item.icon == 'spinner' then
 						ass:spinner(x, item_center_y, icon_size * 1.5, {color = font_color, opacity = menu_opacity * 0.8})
 					else
@@ -1675,35 +1774,36 @@ function Menu:render()
 						})
 					end
 				end
-				content_bx = content_bx - icon_size - self.item_padding
-				title_clip_bx = math.min(content_bx, title_clip_bx)
+				text_bx = text_bx - icon_size - self.item_padding
+				title_clip_bx = math.min(text_bx, title_clip_bx)
 			end
 
 			local hint_clip_bx = title_clip_bx
 			if item.hint_width > 0 then
 				-- controls title & hint clipping proportional to the ratio of their widths
 				-- both title and hint get at least 50% of the width, unless they are smaller then that
-				local width = content_bx - content_ax - self.item_padding
+				local width = text_bx - text_ax - self.item_padding
 				local title_min = math.min(item.title_width, width * 0.5)
 				local hint_min = math.min(item.hint_width, width * 0.5)
 				local title_ratio = item.title_width / (item.title_width + item.hint_width)
 				title_clip_bx = math.min(
 					title_clip_bx,
-					round(content_ax + clamp(title_min, width * title_ratio, width - hint_min))
+					round(text_ax + clamp(title_min, width * title_ratio, width - hint_min))
 				)
 			end
 
 			-- Hint
+			-- EMBYNIAN[menu-style] — 快捷键/动态值那列全亮白（参考图 b/q/PGUP 与正文同色），右缘贴边
 			if item.hint then
 				item.ass_safe_hint = item.ass_safe_hint or ass_escape(item.hint)
 				local clip = '\\clip(' .. title_clip_bx + self.item_padding .. ','
 					.. math.max(item_ay, content_rect.ay) .. ',' .. hint_clip_bx .. ','
 					.. math.min(item_by, content_rect.by) .. ')'
-				ass:txt(content_bx, item_center_y, 6, item.ass_safe_hint, {
+				ass:txt(text_bx, item_center_y, 6, item.ass_safe_hint, {
 					size = self.font_size_hint,
 					color = font_color,
 					wrap = 2,
-					opacity = 0.5 * menu_opacity,
+					opacity = menu_opacity,
 					clip = clip,
 				})
 			end
@@ -1711,13 +1811,13 @@ function Menu:render()
 			-- Title
 			if item.title then
 				item.ass_safe_title = item.ass_safe_title or ass_escape(item.title)
-				local clip = '\\clip(' .. content_rect.ax .. ',' .. math.max(item_ay, content_rect.ay) .. ','
+				local clip = '\\clip(' .. text_ax .. ',' .. math.max(item_ay, content_rect.ay) .. ','
 					.. title_clip_bx .. ',' .. math.min(item_by, content_rect.by) .. ')'
-				local title_x, align = content_ax, 4
+				local title_x, align = text_ax, 4
 				if item.align == 'right' then
 					title_x, align = title_clip_bx, 6
 				elseif item.align == 'center' then
-					title_x, align = content_ax + (title_clip_bx - content_ax) / 2, 5
+					title_x, align = text_ax + (title_clip_bx - text_ax) / 2, 5
 				end
 				ass:txt(title_x, item_center_y, align, item.ass_safe_title, {
 					size = self.font_size,
@@ -1731,216 +1831,166 @@ function Menu:render()
 			end
 
 			-- Select hovered item
-			if is_current and self.mouse_nav and item.selectable ~= false then
-				if submenu_rect and cursor:direction_to_rectangle_distance(submenu_rect)
-					or actions_rect and actions_rect.is_outside and cursor:direction_to_rectangle_distance(actions_rect) then
-					blur_selected_index = false
-				else
-					if submenu_is_hovered or get_point_to_rectangle_proximity(cursor, item_rect_hitbox) <= 0 then
+			-- EMBYNIAN[menu-style] — 每块可见面板都是活面板：光标停在哪块上，哪块的行跟着亮
+			-- （父面板高亮不吹掉，参考图「导航＋子面板首行」双高亮）；当前面板保留上游的
+			-- 吹掉（悬空白处取消选中）与去程守卫（朝预览子面板走时不换行）。
+			local item_rect_hitbox = {
+				ax = panel.x,
+				ay = math.max(item_ay, panel.y),
+				bx = panel.x + panel.w - (item.items and 0 or self.hover_inset),
+				by = math.min(item_ay + item_height, panel.y + panel.h),
+			}
+			if self.mouse_nav and item.selectable ~= false then
+				if is_current then
+					if preview_rect and cursor:direction_to_rectangle_distance(preview_rect)
+						or actions_rect and actions_rect.is_outside and cursor:direction_to_rectangle_distance(actions_rect) then
 						blur_selected_index = false
-						menu.selected_index = index
-						if not is_selected then
-							is_selected = true
-							request_render()
+					else
+						if get_point_to_rectangle_proximity(cursor, item_rect_hitbox) <= 0 then
+							blur_selected_index = false
+							if menu.selected_index ~= index then
+								menu.selected_index = index
+								request_render()
+							end
 						end
 					end
-				end
-			end
-		end
-
-		-- Footnote / Selected action label
-		if is_current and (menu.footnote or selected_action) then
-			local height_half = self.font_size
-			local icon_x, icon_y = content_rect.ax + self.font_size / 2, bg_rect.by + height_half
-			local is_icon_hovered = false
-			local icon_hitbox = {
-				ax = icon_x - height_half,
-				ay = icon_y - height_half,
-				bx = icon_x + height_half,
-				by = icon_y + height_half,
-			}
-			is_icon_hovered = get_point_to_rectangle_proximity(cursor, icon_hitbox) <= 0
-			local text = selected_action and selected_action.label or is_icon_hovered and menu.footnote
-			local opacity = (is_icon_hovered and 1 or 0.5) * menu_opacity
-			ass:icon(icon_x, icon_y, self.font_size, is_icon_hovered and 'help' or 'help_outline', {
-				color = fg, border = self.menu_scale, border_color = bg, opacity = opacity,
-			})
-			if text then
-				ass:txt(icon_x + self.font_size * 0.75, icon_y - self.font_size * 0.5, 7, ass_escape(text), {
-					size = self.font_size,
-					color = fg,
-					border = self.menu_scale,
-					border_color = bg,
-					opacity = menu_opacity,
-					italic = true,
-				})
-			end
-		end
-
-		-- Menu title
-		if draw_title then
-			local title_height = self.item_height + self.padding - 3
-			local requires_submit = menu.search_debounce == 'submit'
-			local rect = {
-				ax = content_rect.ax,
-				ay = content_rect.ay - self.scroll_step - self.separator_size - 1,
-				bx = content_rect.bx,
-				by = content_rect.ay - self.separator_size - 1,
-			}
-			-- Centers
-			rect.cx, rect.cy = round(rect.ax + (rect.bx - rect.ax) / 2), round(rect.ay + (rect.by - rect.ay) / 2)
-
-			if menu.title and not menu.ass_safe_title then
-				menu.ass_safe_title = ass_escape(menu.title)
-			end
-
-			-- Background
-			if menu.search then
-				ass:rect(content_rect.ax + 3, rect.ay + 3, content_rect.bx - 3, rect.ay + title_height - 1, {
-					color = fg .. '\\1a&HFF', opacity = menu_opacity * 0.1,
-					radius = self.radius > 0 and self.radius + self.padding or 0,
-					border = 1, border_color = fg, border_opacity = menu_opacity * 0.8
-				})
-				ass:texture(content_rect.ax + 3, rect.ay + 3, content_rect.bx - 3, rect.ay + title_height - 1, 'n', {
-					size = 80, color = bg, opacity = menu_opacity * 0.1, anchor_x = content_rect.ax + 2, anchor_y = rect.ay + 2,
-				})
-			else
-				ass:rect(content_rect.ax + 2, rect.ay + 2, content_rect.bx - 2, rect.ay + title_height, {
-					color = fg, opacity = menu_opacity * 0.8,
-					radius = self.radius > 0 and self.radius + self.padding or 0,
-				})
-				ass:texture(content_rect.ax + 2, rect.ay + 2, content_rect.bx - 2, rect.ay + title_height, 'n', {
-					size = 80, color = bg, opacity = menu_opacity * 0.1,
-				})
-			end
-
-			-- Separator
-			ass:rect(
-				rect.ax, rect.by, rect.bx, rect.by + self.separator_size, {color = fg, opacity = menu_opacity * 0.2}
-			)
-
-			-- Blur selection (also activates search input) when user clicks title
-			if is_current then
-				cursor:zone('primary_down', rect, function()
-					self:select_index(nil)
-				end)
-			end
-
-			-- Title
-			if menu.search then
-				-- Icon
-				local icon_size, icon_opacity = self.font_size * 1.3, menu_opacity * (requires_submit and 0.5 or 1)
-				local icon_rect = {
-					ax = rect.ax,
-					ay = rect.ay,
-					bx = content_rect.ax + icon_size + self.item_padding * 1.5,
-					by = rect.by,
-				}
-
-				if is_current and requires_submit then
-					cursor:zone('primary_down', icon_rect, function() self:search_submit() end)
-					if get_point_to_rectangle_proximity(cursor, icon_rect) <= 0 then
-						icon_opacity = menu_opacity
+				elseif get_point_to_rectangle_proximity(cursor, item_rect_hitbox) <= 0 then
+					if menu.selected_index ~= index then
+						menu.selected_index = index
+						request_render()
 					end
 				end
+			end
+		end
+	end
 
-				ass:icon(rect.ax + icon_size / 2, rect.cy, icon_size, 'search', {
-					color = fg,
-					opacity = icon_opacity,
-					clip = '\\clip(' ..
-						icon_rect.ax .. ',' .. icon_rect.ay .. ',' .. icon_rect.bx .. ',' .. icon_rect.by .. ')',
-				})
+	-- We are in mouse nav and cursor isn't hovering any row of the current panel
+	-- EMBYNIAN[menu-style] — 只在光标确实待在本面板里扫空时才吹掉选中；光标在别的面板上（比如
+	-- 子菜单开着、光标停在父面板那行）时保留 —— 参考图「父行＋子面板首行」两行同灰就是这条。
+	if blur_selected_index and self:panel_at(cursor.x, cursor.y) == panel then
+		menu.selected_index = nil
+	end
+	if blur_action_index then
+		menu.action_index = nil
+		request_render()
+	end
 
-				-- Query/Placeholder
-				local cursor_height_half, cursor_thickness = round(self.font_size * 0.6), round(self.font_size / 12)
-				local cursor_ax = rect.bx + 1
-				if menu.search.query ~= '' then
-					local opts = {
-						size = self.font_size,
-						color = bgt,
-						wrap = 2,
-						opacity = menu_opacity,
-						clip = '\\clip(' .. icon_rect.bx .. ',' .. rect.ay .. ',' .. rect.bx .. ',' .. rect.by .. ')',
-					}
-					local query, cursor = menu.search.query, menu.search.cursor
-					-- Add a ZWNBSP suffix to prevent libass from trimming trailing spaces
-					local head = ass_escape(string.sub(query, 1, cursor)) .. '\239\187\191'
-					local tail_no_escape = string.sub(query, cursor + 1)
-					local tail = ass_escape(tail_no_escape) .. '\239\187\191'
-					cursor_ax = math.max(round(cursor_ax - text_width(tail_no_escape, opts)), rect.cx)
-					ass:txt(cursor_ax, rect.cy, 6, head, opts)
-					ass:txt(cursor_ax, rect.cy, 4, tail, opts)
-				else
-					local placeholder = (menu.search_style == 'palette' and menu.ass_safe_title)
-						and menu.ass_safe_title
-						or (requires_submit and t('type & ctrl+enter to search') or t('type to search'))
-					ass:txt(rect.bx, rect.cy, 6, placeholder, {
-						size = self.font_size,
-						italic = true,
-						color = bgt,
-						wrap = 2,
-						opacity = menu_opacity * 0.4,
-						clip = '\\clip(' .. rect.ax .. ',' .. rect.ay .. ',' .. rect.bx .. ',' .. rect.by .. ')',
-					})
+	-- Search input（标题行整块撤下后的唯一上方部件；EmbyNian 菜单 type_to_search=no，仅 '/' 呼出）
+	if menu.search then
+		local title_height = self.item_height + self.padding - 3
+		local requires_submit = menu.search_debounce == 'submit'
+		local rect = {
+			ax = content_rect.ax,
+			ay = content_rect.ay - self.scroll_step - self.separator_size - 1,
+			bx = content_rect.bx,
+			by = content_rect.ay - self.separator_size - 1,
+		}
+		-- Centers
+		rect.cx, rect.cy = round(rect.ax + (rect.bx - rect.ax) / 2), round(rect.ay + (rect.by - rect.ay) / 2)
+
+		if menu.title and not menu.ass_safe_title then
+			menu.ass_safe_title = ass_escape(menu.title)
+		end
+
+		-- Background
+		ass:rect(content_rect.ax + 3, rect.ay + 3, content_rect.bx - 3, rect.ay + title_height - 1, {
+			color = fg .. '\\1a&HFF', opacity = menu_opacity * 0.1,
+			radius = self.radius > 0 and self.radius + self.padding or 0,
+			border = 1, border_color = fg, border_opacity = menu_opacity * 0.8
+		})
+		ass:texture(content_rect.ax + 3, rect.ay + 3, content_rect.bx - 3, rect.ay + title_height - 1, 'n', {
+			size = 80, color = bg, opacity = menu_opacity * 0.1, anchor_x = content_rect.ax + 2, anchor_y = rect.ay + 2,
+		})
+
+		-- Separator
+		ass:rect(
+			rect.ax, rect.by, rect.bx, rect.by + self.separator_size, {color = fg, opacity = menu_opacity * 0.2}
+		)
+
+		-- Blur selection (also activates search input) when user clicks title
+		if is_current then
+			cursor:zone('primary_down', rect, function()
+				self:select_index(nil)
+			end)
+		end
+
+		do
+			-- Icon
+			local icon_size, icon_opacity = self.font_size * 1.3, menu_opacity * (requires_submit and 0.5 or 1)
+			local icon_rect = {
+				ax = rect.ax,
+				ay = rect.ay,
+				bx = content_rect.ax + icon_size + self.item_padding * 1.5,
+				by = rect.by,
+			}
+
+			if is_current and requires_submit then
+				cursor:zone('primary_down', icon_rect, function() self:search_submit() end)
+				if get_point_to_rectangle_proximity(cursor, icon_rect) <= 0 then
+					icon_opacity = menu_opacity
 				end
+			end
 
-				-- Selected input indicator for submittable searches.
-				-- (input is selected when `selected_index` is `nil`)
-				if menu.search_debounce == 'submit' and not menu.selected_index then
-					local size_half = round(1 * self.menu_scale)
-					ass:rect(
-						content_rect.ax, rect.by - size_half, content_rect.bx, rect.by + size_half,
-						{color = fg, opacity = menu_opacity}
-					)
-				end
-				local input_is_blurred = menu.search_debounce == 'submit' and menu.selected_index
+			ass:icon(rect.ax + icon_size / 2, rect.cy, icon_size, 'search', {
+				color = fg,
+				opacity = icon_opacity,
+				clip = '\\clip(' ..
+					icon_rect.ax .. ',' .. icon_rect.ay .. ',' .. icon_rect.bx .. ',' .. icon_rect.by .. ')',
+			})
 
-				-- Cursor
-				local cursor_bx = cursor_ax + cursor_thickness
-				ass:rect(cursor_ax, rect.cy - cursor_height_half, cursor_bx, rect.cy + cursor_height_half, {
-					color = fg,
-					opacity = menu_opacity * (input_is_blurred and 0.5 or 1),
-					clip = '\\clip(' .. cursor_ax .. ',' .. rect.ay .. ',' .. cursor_bx .. ',' .. rect.by .. ')',
-				})
-			else
-				ass:txt(rect.cx, rect.cy, 5, menu.ass_safe_title, {
+			-- Query/Placeholder
+			local cursor_height_half, cursor_thickness = round(self.font_size * 0.6), round(self.font_size / 12)
+			local cursor_ax = rect.bx + 1
+			if menu.search.query ~= '' then
+				local opts = {
 					size = self.font_size,
-					bold = true,
-					color = bg,
+					color = bgt,
 					wrap = 2,
 					opacity = menu_opacity,
+					clip = '\\clip(' .. icon_rect.bx .. ',' .. rect.ay .. ',' .. rect.bx .. ',' .. rect.by .. ')',
+				}
+				local query, cursor = menu.search.query, menu.search.cursor
+				-- Add a ZWNBSP suffix to prevent libass from trimming trailing spaces
+				local head = ass_escape(string.sub(query, 1, cursor)) .. '\239\187\191'
+				local tail_no_escape = string.sub(query, cursor + 1)
+				local tail = ass_escape(tail_no_escape) .. '\239\187\191'
+				cursor_ax = math.max(round(cursor_ax - text_width(tail_no_escape, opts)), rect.cx)
+				ass:txt(cursor_ax, rect.cy, 6, head, opts)
+				ass:txt(cursor_ax, rect.cy, 4, tail, opts)
+			else
+				local placeholder = (menu.search_style == 'palette' and menu.ass_safe_title)
+					and menu.ass_safe_title
+					or (requires_submit and t('type & ctrl+enter to search') or t('type to search'))
+				ass:txt(rect.bx, rect.cy, 6, placeholder, {
+					size = self.font_size,
+					italic = true,
+					color = bgt,
+					wrap = 2,
+					opacity = menu_opacity * 0.4,
 					clip = '\\clip(' .. rect.ax .. ',' .. rect.ay .. ',' .. rect.bx .. ',' .. rect.by .. ')',
 				})
 			end
-		end
 
-		-- We are in mouse nav and cursor isn't hovering any item
-		if blur_selected_index then
-			menu.selected_index = nil
-		end
-		if blur_action_index then
-			menu.action_index = nil
-			request_render()
-		end
+			-- Selected input indicator for submittable searches.
+			-- (input is selected when `selected_index` is `nil`)
+			if menu.search_debounce == 'submit' and not menu.selected_index then
+				local size_half = round(1 * self.menu_scale)
+				ass:rect(
+					content_rect.ax, rect.by - size_half, content_rect.bx, rect.by + size_half,
+					{color = fg, opacity = menu_opacity}
+				)
+			end
+			local input_is_blurred = menu.search_debounce == 'submit' and menu.selected_index
 
-		return bg_rect
+			-- Cursor
+			local cursor_bx = cursor_ax + cursor_thickness
+			ass:rect(cursor_ax, rect.cy - cursor_height_half, cursor_bx, rect.cy + cursor_height_half, {
+				color = fg,
+				opacity = menu_opacity * (input_is_blurred and 0.5 or 1),
+				clip = '\\clip(' .. cursor_ax .. ',' .. rect.ay .. ',' .. cursor_bx .. ',' .. rect.by .. ')',
+			})
+		end
 	end
-
-	-- Active menu
-	draw_menu(self.current, self.ax, 0)
-
-	-- Parent menus
-	local parent_menu = self.current.parent_menu
-	local parent_offset_x, parent_horizontal_index = self.ax, -1
-
-	while parent_menu do
-		parent_offset_x = parent_offset_x - parent_menu.width - self.padding * 2 - self.gap
-		draw_menu(parent_menu, parent_offset_x, parent_horizontal_index)
-		parent_horizontal_index = parent_horizontal_index - 1
-		parent_menu = parent_menu.parent_menu
-	end
-
-	return ass
 end
 
 return Menu

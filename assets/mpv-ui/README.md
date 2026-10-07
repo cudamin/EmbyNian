@@ -291,5 +291,10 @@ py tools/test-uosc.py --output work/uosc-interaction-run
    追踪/`input-bindings` 左键全量 dump。判据：双击后 fullscreen 翻转、pause 不变、命令账无
    `cycle pause`、撤销 ≥1（撤在第二拍按下）。**注意 pump 必须处理 MPV_EVENT_CLIENT_MESSAGE(16)**，
    只收日志会把回包全丢（第一次跑就这么哑的）。报告落在 `work/probe-doubleclick-real-<tag>.txt`。
-6. 重建发布后跑 `tools/verify-publish.ps1`——它守装箱完整性（入口脚本、工具库、时间轴、
+6. `work/probe-menu-look.py` 是**右键菜单观感实拍**（真窗口＋真光标，PrintWindow 抓窗口表面）：
+   宿主形状的夹具菜单（hint/active/分隔符/两级子菜单）锚光标弹出，逐拍验证面板 #2C2C2C、
+   悬停行 #353535、白字、分隔线坐在槽位正中、根＋子面板贴缝共用叠边；后几拍 Lua 直驱
+   （桌面物理输入会抢菜单）。判据全过才退 0；报告 `work/uosc-menu-look/report.json`，
+   PNG 同目录。2026-10-07 复刻参考菜单那次抓过「预览面板喂错矩形场崩了整只脚本」的活。
+7. 重建发布后跑 `tools/verify-publish.ps1`——它守装箱完整性（入口脚本、工具库、时间轴、
    两个字体、LGPL 文本）。

@@ -159,14 +159,15 @@ do
 				item:handle_shortcut(create_shortcut('kp_enter'), {event = 'press', is_mouse = false})
 				require_equal(picked(), 2)
 			end)
-			test('menu size matches the integrated flyout metrics', function()
+			test('menu size matches the reference context menu metrics', function()
 				local item = menu()
-				-- 集成模式右键菜单（WinUI DefaultMenuFlyoutItemStyle）的解剖值，见 main.lua EMBYNIAN[menu-style]
-				require_equal(item.font_size, 14)
-				require_equal(item.item_height, 42)
-				require_equal(item.font_size_hint, 13)
-				require_equal(item.min_width, 96)
-				require_equal(item.padding, 5)
+				-- 参考项目（C:\mpv_config-2026.08.12）右键菜单的实测值，见 main.lua EMBYNIAN[menu-style]：
+				-- 字号 20、行高＝字号×1.2＝24、hint 字号−1、面板无最小宽、面板留空 4
+				require_equal(item.font_size, 20)
+				require_equal(item.item_height, 24)
+				require_equal(item.font_size_hint, 19)
+				require_equal(item.min_width, 0)
+				require_equal(item.padding, 4)
 				item:close(true)
 			end)
 			test('menu scales 1.3x live while fullscreen or maximized', function()
@@ -174,16 +175,16 @@ do
 				state.fullscreen = true
 				update_fullormaxed()
 				require_equal(state.scale, 1.3)
-				require_equal(item.font_size, 18) -- round(14 * 1.3)
-				require_equal(item.item_height, 54)
+				require_equal(item.font_size, 26) -- round(20 * 1.3)
+				require_equal(item.item_height, 31) -- round(26 * 1.2)
 				state.fullscreen, state.maximized = false, true
 				update_fullormaxed()
 				require_equal(state.scale, 1.3)
-				require_equal(item.font_size, 18)
+				require_equal(item.font_size, 26)
 				state.fullscreen, state.maximized = false, false
 				update_fullormaxed()
 				require_equal(state.scale, 1)
-				require_equal(item.font_size, 14)
+				require_equal(item.font_size, 20)
 				item:close(true)
 			end)
 			test('menu font follows the hidpi scale like the integrated flyout', function()
@@ -191,11 +192,11 @@ do
 				state.hidpi_scale = 1.5
 				update_display_dimensions() -- state.scale 重算不依赖 osd 画布，harness 里 vo=null 也一样
 				item:on_display()
-				require_equal(item.font_size, 21)
+				require_equal(item.font_size, 30)
 				state.hidpi_scale = 1
 				update_display_dimensions()
 				item:on_display()
-				require_equal(item.font_size, 14)
+				require_equal(item.font_size, 20)
 				item:close(true)
 			end)
 			test('menu pointer click supersedes keyboard selected row', function()
@@ -277,6 +278,23 @@ do
 				assert(ok, err)
 				require_equal(#boxes, 2)
 				for _, box in ipairs(boxes) do assert(box.ax >= 0 and box.bx <= display.width, 'submenu outside display') end
+				item:close(true)
+			end)
+			test('submenu preview guard survives mouse navigation toward it', function()
+				-- 2026-10-07 复刻参考菜单实拍抓的崩：预览面板表是 x/y/w/h，去程守卫把它喂给
+				-- direction_to_rectangle_distance（要 ax/ay/bx/by）＝算 nil，uosc 脚本整只死掉。
+				-- 钉住：mouse_nav 下悬停子菜单父行再渲染，必须活着（选中行被悬停改写是另一回事）。
+				cursor.x, cursor.y = 640, 360
+				cursor.history:clear()
+				local item = menu({type = 'fixture', items = {
+					{title = 'Parent', items = {{title = 'Child', value = 1}}},
+					{title = 'Leaf', value = 2},
+				}})
+				item.mouse_nav = true
+				item:select_index(1)
+				local ok, err = pcall(function() item:render() end)
+				assert(ok, 'render crashed with a hovered submenu row: ' .. tostring(err))
+				item:close(true)
 			end)
 			test('file boundary closes stale menus and releases the curtain', function()
 				menu(); emit('start-file')

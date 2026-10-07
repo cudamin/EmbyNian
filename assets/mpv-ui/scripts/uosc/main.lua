@@ -69,12 +69,14 @@
 -- │   elements/Menu.lua
 -- │     EMBYNIAN[menu-anchor]   宿主推来的菜单（画面/选集/版本）带 embynian_anchor 时在光标处弹出、
 -- │                             不屏幕居中、不压暗幕布 —— 弹出方式与集成模式的右键/按钮浮层一致
--- │     EMBYNIAN[menu-style]    菜单大小对齐集成模式右键菜单（用户令 2026-10-07「独占模式的右键菜单
--- │                             体积太大了，大小改为跟集成模式一致（注意全屏和最大化时要放大 1.3 倍）」）：
--- │                             字号 14、行高＝字号×(1+gap)＝42、缩放＝state.scale（DPI，全屏/最大化
--- │                             ×1.3，不再随窗口高）；上色照 2026-09-29 参考配置那轮（悬停行白底深字、
--- │                             底板不透明 #222222＋圆角 5＋0.5 白描边、分隔线 #555555）—— 逐项映射见
--- │                             本文件选项区 EMBYNIAN[menu-style]，几何与上色在 Menu.lua 同名槽
+-- │     EMBYNIAN[menu-style]    菜单界面整把复刻参考项目右键菜单（用户令 2026-10-07 晚「参考这个项目的
+-- │                             lua 脚本右键菜单界面修改本项目独占模式的右键菜单界面（只复刻界面，
+-- │                             不抄功能选项）」）：#2C2C2C 不透明底板＋圆角 5＋0.5 白描边、行高＝
+-- │                             字号×1.2（fs20）、悬停行 #353535 白字、hint 全亮右对齐、分隔线
+-- │                             #3E3E3E 上下各让 4；子面板贴父面板右缘零缝、顶边对齐父项行、父面板
+-- │                             不动；无标题/脚注/最小宽。缩放仍走 state.scale（DPI，全屏/最大化
+-- │                             ×1.3 —— 同日早些「大小跟集成模式一致」那道令保留的部分）。逐项映射
+-- │                             见本文件选项区 EMBYNIAN[menu-style]，几何与上色在 Menu.lua 同名槽
 -- │   elements/TopBar.lua
 -- │     EMBYNIAN[topbar-back]   左上角返回按钮：退出 mpv＝回到外壳详情页（与集成模式左上角返回同位同义）
 -- │     EMBYNIAN[topbar-pin]    右上角置顶按钮（push_pin）：点它 cycle ontop（置顶这块 mpv 窗口）；状态画在
@@ -224,35 +226,41 @@ defaults = {
 	speed_step = 0.1,
 	speed_step_is_factor = false,
 
-	-- EMBYNIAN[menu-style] — 大小整把换成集成模式右键菜单（WinUI MenuFlyout）的尺子：2026-10-07
-	-- 用户令「独占模式的右键菜单体积太大了，大小改为跟集成模式一致（注意全屏和最大化时要放大 1.3
-	-- 倍）」。数字出处＝WinUI 2.3.9 generic.xaml 的 DefaultMenuFlyoutItemStyle 解剖：
-	--   · menu_font_size=14＝ControlContentThemeFontSize；一行＝MenuFlyoutItemMargin 上下 2×2
-	--     ＋MenuFlyoutItemThemePadding 上下 9/10＋14px 行盒约 18.6 ≈ 41.6 → menu_gap=2（行高＝
-	--     字号×(1+gap)=42，同上游 get_line_height 的式子；上游「字号＝item_height×0.48」的反推
-	--     与 2026-09-29 参考菜单的 font_size=20 都在此退役）。
-	--   · menu_min_width=96＝FlyoutThemeMinWidth；menu_padding=5＝MenuFlyoutPresenterThemePadding 1
-	--     ＋MenuFlyoutItemMargin 横向 4（悬停高亮的左右留白与集成同宽）。
-	--   · 缩放＝uosc 自带的 state.scale：hidpi_scale ×（全屏/最大化时 scale_fullscreen=1.3，否则
-	--     scale=1）—— 与集成菜单同样随 DPI 走，不随窗口高走（2026-09-29 那把 osd_height/720 的尺子
-	--     退役）；菜单开着时切全屏/换屏由 prop_fullormaxed/display 两路观察重算（Menu.lua 同名槽）。
-	--   · 上色/描边/圆角沿用 2026-09-29「参考 C:\mpv_config-2026.08.12」那轮批准的样子：
-	--     菜单底板不透明 #222222（background_alpha=0 的兜底色）、corner_radius=5、白描边 0.5、
-	--     悬停/键盘所在行白底深字（#FFFFFF/#222222）、active 行照旧 0.8 白高亮、分隔线 #555555。
+	-- EMBYNIAN[menu-style] — 界面整把复刻参考项目（C:\mpv_config-2026.08.12）右键菜单的样子：
+	-- 2026-10-07 晚用户令「参考这个项目的 lua 脚本右键菜单界面修改本项目独占模式的右键菜单界面
+	-- （只复刻界面，不抄功能选项）」，随图实测定数（截图逐像素量过，见 work/ref-menu/）：
+	--   · 底板不透明 #2C2C2C、圆角 5、0.5 白细描边；行高＝字号×(1+gap)=字号×1.2（行与行贴着排，
+	--     参考图行距/字号 ≈ 22/20）；分隔符＝上下各让 padding(4) 的 1px #3E3E3E 细线（参考图实测
+	--     过分隔符处行距 32＝24＋8）。
+	--   · 悬停/键盘所在行＝#353535 浅灰底（左右各让 3、圆角 4），**字色保持白**（参考图悬停行
+	--     实测 53,53,53 底＋255 白字，不是 mpv 主线 context_menu 的白底深字）；active 行（当前值）
+	--     照旧 fg@0.8 高亮＋深字。hint（快捷键/动态值那列）从 0.5 提到全亮白，右距 8 贴边
+	--     （参考图 b/q/PGUP 与 ▸ 同一条右缘）；文字左缩进 36（参考图左侧留白显著大于右侧）。
+	--   · 级联＝参考图的骨架：子面板贴着父面板右缘（零缝、共用那根白描边）、顶边对齐父项行、
+	--     父面板原地不动；面板不再有最小宽度（参考图面板贴内容）；标题行/脚注/左缘指示条整块
+	--     撤下（参考图没有这些）。上一轮（同日早些）的 WinUI 尺寸（fs14/行高42）就此退役，
+	--     但**缩放尺子保留**：state.scale（hidpi × 全屏/最大化 1.3）依旧管大小——那道令只废了
+	--     「随窗口高」，这里不复活。
 	-- 不搬的两件（理由同 2026-09-29 那轮）：子菜单的悬停开合延迟（seconds_to_open/close_submenus=0.2
-	-- —— 要动导航状态机，风险大于收益）；勾选框列（uosc 用 active 高亮示当前值，同义不同形）。
+	-- —— 要动导航状态机，风险大于收益；点开子菜单照旧）；勾选框列（uosc 用 active 高亮示当前值，
+	-- 同义不同形）。
 	-- 作用于所有 uosc 菜单（画面/选集/版本/音轨/字幕/章节）。
-	menu_font_size = 14,
-	menu_gap = 2,
-	menu_min_width = 96,
-	menu_padding = 5,
-	menu_background_color = '222222',
+	menu_font_size = 20,
+	menu_gap = 0.2,
+	menu_min_width = 0,
+	menu_padding = 4,
+	menu_item_indent = 36,
+	menu_item_pad_right = 8,
+	menu_hover_inset = 3,
+	menu_hover_radius = 4,
+	menu_background_color = '2C2C2C',
 	menu_corner_radius = 5,
 	menu_outline_size = 0.5,
 	menu_outline_color = 'FFFFFF',
-	menu_focused_color = '222222',
-	menu_focused_back_color = 'FFFFFF',
+	menu_focused_color = 'FFFFFF',
+	menu_focused_back_color = '353535',
 	menu_disabled_color = '555555',
+	menu_separator_color = '3E3E3E',
 	-- 用户原配置：输入即搜索会锁死「同键关闭菜单」，嵌入后保持 no
 	menu_type_to_search = false,
 
