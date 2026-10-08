@@ -1,18 +1,18 @@
 ---
 name: "mpv-shader-quality"
-description: "EmbyNian's mpv picture-quality side — the loop for adding, swapping or iterating on a shader or a 档位 cell, how to read what a .glsl/.hook file actually does (self-gates, hook points, whether it scales at all), per-shader prerequisites, chain exclusivity, the scale-factor definition, the option-residue and \"UI lies\" traps, and how to inspect a live chain without starting real playback. Use when touching shaders, 画质档位, 配置组, scale/cscale/dscale, deband, upscaling or 色度重建 in the EmbyNian project."
+description: "Momoka's mpv picture-quality side — the loop for adding, swapping or iterating on a shader or a 档位 cell, how to read what a .glsl/.hook file actually does (self-gates, hook points, whether it scales at all), per-shader prerequisites, chain exclusivity, the scale-factor definition, the option-residue and \"UI lies\" traps, and how to inspect a live chain without starting real playback. Use when touching shaders, 画质档位, 配置组, scale/cscale/dscale, deband, upscaling or 色度重建 in the Momoka project."
 ---
 
-# mpv Picture Quality in EmbyNian
+# mpv Picture Quality in Momoka
 
 Techniques and traps for the shader / 画质档位 side of the player, and the loop for adding, swapping or iterating on a shader. Facts about *specific files* belong in `assets/shaders/README.md` in the repo — that is the single source for provenance, licences, local edits and per-file gates. Don't restate per-file data here; go read it there.
 
 ## Read these first, in this order
 
 1. `assets/shaders/README.md` — what each shipped file is, where it came from, and **which files gate themselves**.
-2. `src/EmbyNian.Core/Mpv/` — `UpscaleTier.cs`, `ShaderGroup.cs`, `ShaderGroupCatalog.cs`, `ShaderChainRules.cs`, `ShaderLibrary.cs`, `ShaderSwitch.cs`. The live model, and where the decisions behind the current shape are recorded (the file-level comments). Type and member names in this skill may be stale; the code wins.
+2. `src/Momoka.Core/Mpv/` — `UpscaleTier.cs`, `ShaderGroup.cs`, `ShaderGroupCatalog.cs`, `ShaderChainRules.cs`, `ShaderLibrary.cs`, `ShaderSwitch.cs`. The live model, and where the decisions behind the current shape are recorded (the file-level comments). Type and member names in this skill may be stale; the code wins.
 
-**The current policy is in [CLAUDE.md](../../../CLAUDE.md)**: verification gates, playback authorization and probe coverage, credentials, and upgrades. This skill adds shader-specific measurements, not a second policy. `PROGRESS.md` records current work and earlier measurements; playback is `embynian-playback`, evidence is `embynian-verification`.
+**The current policy is in [CLAUDE.md](../../../CLAUDE.md)**: verification gates, playback authorization and probe coverage, credentials, and upgrades. This skill adds shader-specific measurements, not a second policy. `PROGRESS.md` records current work and earlier measurements; playback is `momoka-playback`, evidence is `momoka-verification`.
 
 **There are no named 配置组 any more.** Until 2026-09-03 there were five hand-named groups picked by 片源分辨率. Now a `ShaderGroup` is *one cell of the 档位表*: `live|anime` × scale tier, with 显卡档 selecting a different chain behind the same id. (Two more axes swap the chain without entering the id, because they follow the source rather than the user's choice: `Vintage` for 老片源 ≤576 lines and `FastMotion` for 高帧率 >30fps — check `ShaderGroupCatalog` for the current set.) So "make a new group" is really one of three different jobs — swapping a shader inside a cell (the usual one), bringing in a file and deciding which cells it belongs in, or letting the user assemble and save a chain of his own, which **does not exist**: that is a feature request, not an edit.
 

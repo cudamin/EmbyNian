@@ -1,0 +1,66 @@
+<Page x:Class="Momoka.Shell.Views.MoviePilotSubscriptionPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:Momoka.Shell.ViewModels"
+    Background="{ThemeResource EgWindowBrush}">
+    <ScrollViewer x:Name="DetailScroll" VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="28" Spacing="20">
+            <TextBlock Text="MoviePilot · 订阅媒体详情" Style="{StaticResource EgSectionTitleStyle}" />
+            <Grid ColumnSpacing="24">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Border Height="225" VerticalAlignment="Top" Style="{StaticResource EgFrameStyle}">
+                    <Border.Background><ImageBrush ImageSource="{x:Bind ViewModel.DetailPoster, Mode=OneWay}" Stretch="UniformToFill" /></Border.Background>
+                </Border>
+                <StackPanel Grid.Column="1" Spacing="12">
+                    <TextBlock Text="{x:Bind ViewModel.DetailTitle, Mode=OneWay}" Style="{StaticResource EgPageTitleStyle}" TextWrapping="Wrap" />
+                    <TextBlock Text="{x:Bind ViewModel.DetailStatus, Mode=OneWay}" Foreground="{ThemeResource EgAccentBrush}" Style="{StaticResource EgBodyStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.DetailIdentity, Mode=OneWay}" Style="{StaticResource EgCaptionStyle}" TextWrapping="Wrap" Foreground="{ThemeResource EgTextFaintBrush}" />
+                    <TextBlock Text="{x:Bind ViewModel.DetailOverview, Mode=OneWay}" Style="{StaticResource EgBodyStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Button x:Name="ManageSubscription" Content="管理订阅" Click="OnManage" IsEnabled="{x:Bind ViewModel.CanManage, Mode=OneWay}" />
+                <Button x:Name="EditSubscription" Content="编辑订阅" Click="OnEdit" IsEnabled="{x:Bind ViewModel.CanManage, Mode=OneWay}" />
+                <Button x:Name="RefreshSubscriptionDetail" Content="刷新" Command="{x:Bind ViewModel.RefreshCommand}" />
+            </StackPanel>
+            <ProgressBar IsIndeterminate="True" Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+            <InfoBar IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}" Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+                Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}" />
+            <TextBlock x:Name="FilesHeading" Text="入库与缺集" Style="{StaticResource EgSectionTitleStyle}" />
+            <TextBlock Text="{x:Bind ViewModel.FileSummary, Mode=OneWay}" Style="{StaticResource EgBodyStyle}" TextWrapping="Wrap" />
+            <TextBlock Text="{x:Bind ViewModel.PlaybackStatus, Mode=OneWay}" Style="{StaticResource EgCaptionStyle}" TextWrapping="Wrap" Foreground="{ThemeResource EgTextFaintBrush}" />
+            <TextBlock Text="按 MoviePilot 关联的媒体库统计；已下载但未入库、尚未播出的集也会计入未入库。" Style="{StaticResource EgCaptionStyle}" TextWrapping="Wrap" Foreground="{ThemeResource EgTextFaintBrush}" />
+            <ComboBox x:Name="EpisodeFilter" Header="显示范围" SelectedIndex="{x:Bind ViewModel.FilterIndex, Mode=TwoWay}" MinWidth="180">
+                <ComboBoxItem Content="全部" /><ComboBoxItem Content="已入库" /><ComboBoxItem Content="缺集 / 未入库" />
+            </ComboBox>
+            <ItemsRepeater x:Name="EpisodeStatistics" ItemsSource="{x:Bind ViewModel.Episodes, Mode=OneWay}">
+                <ItemsRepeater.Layout><StackLayout Spacing="8" /></ItemsRepeater.Layout>
+                <ItemsRepeater.ItemTemplate>
+                    <DataTemplate x:DataType="vm:MoviePilotSubscriptionEpisodeRow">
+                        <Border Style="{StaticResource EgFrameStyle}" Padding="12">
+                            <Grid ColumnSpacing="16" Loaded="OnEpisodeLoaded" Tag="{x:Bind}">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <Border x:Name="EpisodeArtwork" Width="{x:Bind ArtworkWidth}" Height="{x:Bind ArtworkHeight}" Style="{StaticResource EgFrameStyle}">
+                                    <Grid>
+                                        <Grid.Background><ImageBrush ImageSource="{x:Bind Artwork, Mode=OneWay}" Stretch="UniformToFill" /></Grid.Background>
+                                        <FontIcon Glyph="&#xE714;" Style="{StaticResource EgArtworkEmptyGlyphStyle}" Visibility="{x:Bind EmptyArtworkVisibility, Mode=OneWay}" />
+                                    </Grid>
+                                </Border>
+                                <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
+                                    <TextBlock Text="{x:Bind RowTitle}" Style="{StaticResource EgBodyStyle}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{x:Bind Status}" Style="{StaticResource EgCaptionStyle}" Foreground="{ThemeResource EgAccentBrush}" />
+                                    <TextBlock Text="{x:Bind Description}" Style="{StaticResource EgCaptionStyle}" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Button x:Name="PlaySubscriptionEpisode" Grid.Column="2" Style="{StaticResource EgIconButtonStyle}" VerticalAlignment="Center"
+                                    Command="{x:Bind PlayCommand}" Visibility="{x:Bind PlayVisibility}" AutomationProperties.Name="{x:Bind PlayName, Mode=OneWay}"
+                                    ToolTipService.ToolTip="{x:Bind PlayHelp, Mode=OneWay}">
+                                    <FontIcon Glyph="&#xE768;" />
+                                </Button>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsRepeater.ItemTemplate>
+            </ItemsRepeater>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,7075 @@
+using System.Text;
+using System.Text.RegularExpressions;
+using Momoka.Configuration;
+using Momoka.Emby;
+using Momoka.Infrastructure;
+using Momoka.Mpv;
+using Momoka.Playback;
+using static Momoka.Tests.TestHarness;
+
+namespace Momoka.Tests;
+
+/// <summary>
+/// Covers the pure half of the playback layer: argument building, track numbering, shader
+/// selection, IPC framing and the planner. Everything here runs without mpv and without a
+/// server — the parts that need either are checked by the smoke run instead.
+/// </summary>
+internal static class PlaybackTests
+{
+    public static void Register()
+    {
+        RegisterCommandLine();
+        RegisterTrackMapping();
+        RegisterTrackDisplay();
+        RegisterArguments();
+        RegisterShaders();
+        RegisterIpc();
+        RegisterPlanner();
+        RegisterTrackSelection();
+        RegisterOutputOptions();
+        RegisterSkipSections();
+        RegisterChapterTimeline();
+        RegisterSkipCoordinator();
+        RegisterChromeReveal();
+        RegisterPictureTap();
+        RegisterWakeClick();
+        RegisterCursorMask();
+        RegisterPulseArt();
+        RegisterPipelineDiscriminator();
+        RegisterLibMpvPipeline();
+        RegisterNativeFullscreen();
+        RegisterVideoSurfaceSize();
+        RegisterLibMpvLifetime();
+        RegisterAspectLock();
+        RegisterPlayerMenu();
+        RegisterEpisodeNavigation();
+        RegisterPlaybackGate();
+        RegisterDonghua();
+        RegisterStopReport();
+        RegisterPlaybackBatches();
+    }
+
+    // ---- 启动命令文本 ----------------------------------------------------------
+
+    // The 「附加参数拆分」 tests that used to sit here are gone with the setting itself: CommandLine.Split
+    // no longer exists, and the class only has to render a list for the log now.
+    private static void RegisterCommandLine()
+    {
+        Test("启动命令文本：只给含空格的参数加引号", () =>
+        {
+            var text = CommandLine.Describe(["--vo=gpu-next", "--title=我的 标题", "--fullscreen"]);
+            Assert.Equal("""--vo=gpu-next "--title=我的 标题" --fullscreen""", text);
+        });
+
+        Test("启动命令文本：空参数也要引号，否则读日志时会消失", () =>
+        {
+            Assert.Equal("""--a "" --b""", CommandLine.Describe(["--a", "", "--b"]));
+            Assert.Equal("", CommandLine.Describe([]));
+        });
+    }
+
+    // ---- 轨道编号映射 ----------------------------------------------------------
+
+    private static void RegisterTrackMapping()
+    {
+        Test("轨道映射：Emby 容器索引转 mpv 的按类型编号", () =>
+        {
+            var source = SourceWith(
+                Stream(0, "Video"),
+                Stream(1, "Audio", language: "jpn"),
+                Stream(2, "Audio", language: "chi"),
+                Stream(3, "Subtitle", codec: "ass"),
+                Stream(4, "Subtitle", codec: "pgssub"));
+
+            var map = MpvTrackMap.Build(source);
+            Assert.Equal(1, map.AudioId(1), "第一条音轨是 --aid=1");
+            Assert.Equal(2, map.AudioId(2), "容器索引 2 是第二条音轨");
+            Assert.Equal(1, map.SubtitleId(3), "字幕从 1 重新计数");
+            Assert.Equal(2, map.SubtitleId(4));
+            Assert.Null(map.AudioId(0), "视频轨没有音轨编号");
+            Assert.Equal(0, map.ExternalSubtitleIndexes.Count);
+        });
+
+        Test("轨道映射：外挂文本字幕排在内封之后", () =>
+        {
+            var source = SourceWith(
+                Stream(0, "Video"),
+                Stream(1, "Audio"),
+                Stream(2, "Subtitle", codec: "ass"),
+                Stream(3, "Subtitle", codec: "srt", external: true),
+                Stream(4, "Subtitle", codec: "subrip", external: true));
+
+            var map = MpvTrackMap.Build(source);
+            Assert.Equal(1, map.SubtitleId(2));
+            Assert.Equal(2, map.SubtitleId(3), "第一个 --sub-file 接在内封字幕后面");
+            Assert.Equal(3, map.SubtitleId(4));
+            Assert.Equal(2, map.ExternalSubtitleIndexes.Count);
+            Assert.Equal(3, map.ExternalSubtitleIndexes[0], "顺序必须与命令行上 --sub-file 的顺序一致");
+        });
+
+        Test("轨道映射：无法交给 mpv 的外挂轨道不占编号", () =>
+        {
+            var source = SourceWith(
+                Stream(0, "Video"),
+                Stream(1, "Audio"),
+                Stream(2, "Audio", external: true),
+                Stream(3, "Subtitle", codec: "pgssub", external: true),
+                Stream(4, "Subtitle", codec: "srt", external: true));
+
+            var map = MpvTrackMap.Build(source);
+            Assert.Null(map.AudioId(2), "Emby 无法单独提供外挂音轨");
+            Assert.Null(map.SubtitleId(3), "外挂图形字幕无法转成文件");
+            Assert.Equal(1, map.SubtitleId(4), "被跳过的外挂轨道不能让编号错位");
+            Assert.Equal(2, map.UnavailableIndexes.Count);
+            Assert.False(map.CanSelect(3), "不可用的轨道要能被界面识别出来");
+            Assert.True(map.CanSelect(4), "可用的外挂字幕仍然可选");
+        });
+
+        Test("轨道映射：服务器乱序发送时按索引重排", () =>
+        {
+            var source = SourceWith(
+                Stream(3, "Subtitle", codec: "ass"),
+                Stream(1, "Audio"),
+                Stream(0, "Video"),
+                Stream(2, "Audio"));
+
+            var map = MpvTrackMap.Build(source);
+            Assert.Equal(1, map.AudioId(1), "编号必须按容器索引而不是数组顺序");
+            Assert.Equal(2, map.AudioId(2));
+        });
+
+        Test("轨道优选：按语言挑选并以服务器默认值决胜", () =>
+        {
+            MediaStream[] streams =
+            [
+                Stream(1, "Audio", language: "eng"),
+                Stream(2, "Audio", language: "jpn"),
+                Stream(3, "Audio", language: "jpn")
+            ];
+
+            Assert.Equal(2, TrackPreference.Choose(streams, "jpn", null)!.Index, "同语言下取第一条");
+            Assert.Equal(3, TrackPreference.Choose(streams, "jpn", 3)!.Index, "服务器默认轨优先");
+            Assert.Equal(1, TrackPreference.Choose(streams, "eng", null)!.Index);
+            Assert.Equal(1, TrackPreference.Choose(streams, "kor", null)!.Index, "无匹配语言时不返回 null");
+            Assert.Null(TrackPreference.Choose([], "chi", null), "没有轨道时返回 null");
+        });
+
+        Test("轨道优选：中文代码互认（chi / zh-CN / chs）", () =>
+        {
+            Assert.True(TrackPreference.LanguageMatches(Stream(1, "Subtitle", language: "zh-CN"), "chi"), "zh-CN 应匹配 chi");
+            Assert.True(TrackPreference.LanguageMatches(Stream(1, "Subtitle", language: "chs"), "chi"), "chs 应匹配 chi");
+            Assert.True(TrackPreference.LanguageMatches(Stream(1, "Subtitle", language: "jpn"), "ja"), "jpn 应匹配 ja");
+            Assert.True(TrackPreference.LanguageMatches(Stream(1, "Subtitle", displayLanguage: "简体中文"), "chi"), "显示语言也参与匹配");
+            Assert.False(TrackPreference.LanguageMatches(Stream(1, "Subtitle", language: "eng"), "chi"));
+            Assert.False(TrackPreference.LanguageMatches(Stream(1, "Subtitle", language: "chi"), "  "), "空偏好不算匹配");
+        });
+
+        Test("轨道优选：强制字幕开关生效", () =>
+        {
+            MediaStream[] streams =
+            [
+                Stream(1, "Subtitle", language: "chi", forced: true),
+                Stream(2, "Subtitle", language: "chi")
+            ];
+
+            Assert.Equal(2, TrackPreference.Choose(streams, "chi", null)!.Index, "默认避开强制字幕");
+            Assert.Equal(1, TrackPreference.Choose(streams, "chi", null, preferForced: true)!.Index);
+        });
+    }
+
+    // ---- 轨道显示信息 ----------------------------------------------------------
+
+    private static void RegisterTrackDisplay()
+    {
+        Test("轨道显示：语言代码译成中文名", () =>
+        {
+            Assert.Equal("普通话", TrackLanguagePriority.Describe("cmn"));
+            Assert.Equal("英语", TrackLanguagePriority.Describe("en"));
+            Assert.Equal("中文", TrackLanguagePriority.Describe("zh"));
+            Assert.Equal("简体中文", TrackLanguagePriority.Describe("zh-Hans"));
+            Assert.Equal("匈牙利语", TrackLanguagePriority.Describe("hu"), "优先级列表里没有的语言也要有名字");
+            Assert.Equal("葡萄牙语", TrackLanguagePriority.Describe("pt-BR"), "地区后缀不该让语言变成两个字母");
+            Assert.Equal("", TrackLanguagePriority.Describe(null));
+            Assert.Equal("qqq", TrackLanguagePriority.Describe("qqq"), "认不出来也要把原文留着");
+        });
+
+        Test("轨道显示：音轨列出语言、标题、编码、声道与码率", () =>
+        {
+            var track = new MpvTrack(1, "audio", "cmn", "国语配音", Default: true, Selected: true)
+            {
+                Codec = "eac3",
+                Channels = "5.1(side)",
+                ChannelCount = 6,
+                SampleRate = 48000,
+                BitRate = 640000
+            };
+
+            Assert.Equal("普通话 · 国语配音（默认）", track.DisplayName);
+            Assert.Equal("E-AC3 · 5.1 声道 · 640 kbps", track.DisplayDetail);
+            Assert.Equal("普通话", track.DisplayLabel, "收起来的按钮上只放得下语言");
+        });
+
+        Test("轨道显示：缺少的字段不留下空的分隔符", () =>
+        {
+            var bare = new MpvTrack(2, "audio", null, null, Default: false, Selected: false);
+            Assert.Equal("", bare.DisplayName, "什么都不知道时交给调用方写「轨道 n」");
+            Assert.Equal("", bare.DisplayDetail);
+
+            var codecOnly = new MpvTrack(3, "audio", "en", null, false, false) { Codec = "aac", ChannelCount = 2 };
+            Assert.Equal("英语", codecOnly.DisplayName);
+            Assert.Equal("AAC · 立体声", codecOnly.DisplayDetail, "没有码率就不写码率");
+
+            var rateOnly = new MpvTrack(4, "audio", "en", null, false, false) { Codec = "flac", ChannelCount = 2, SampleRate = 44100 };
+            Assert.Equal("FLAC · 立体声 · 44.1 kHz", rateOnly.DisplayDetail, "没有码率时退回采样率");
+        });
+
+        Test("轨道显示：标题与语言重复时只写一次", () =>
+        {
+            var track = new MpvTrack(1, "audio", "eng", "English", false, false) { Codec = "ac3", ChannelCount = 2 };
+            Assert.Equal("英语", track.DisplayName, "标题只是语言名的另一种写法，不必再写一遍");
+        });
+
+        Test("轨道显示：字幕标出格式与强制、外挂、听障", () =>
+        {
+            var forced = new MpvTrack(1, "sub", "zh", "简体", false, false)
+            {
+                Codec = "subrip",
+                Forced = true
+            };
+            Assert.Equal("中文 · 简体（强制）", forced.DisplayName);
+            Assert.Equal("SRT", forced.DisplayDetail);
+
+            var external = new MpvTrack(2, "sub", "hu", null, false, false)
+            {
+                Codec = "ass",
+                External = true,
+                HearingImpaired = true
+            };
+            Assert.Equal("匈牙利语（听障）（外挂）", external.DisplayName);
+            Assert.Equal("ASS", external.DisplayDetail);
+
+            var picture = new MpvTrack(3, "sub", "eng", null, false, false)
+            {
+                Codec = "hdmv_pgs_subtitle",
+                Image = true
+            };
+            Assert.Equal("PGS · 图形", picture.DisplayDetail, "图形字幕改不了字体，界面要说清楚");
+        });
+
+        Test("轨道显示：认不出的编码原样大写", () =>
+        {
+            var track = new MpvTrack(1, "audio", null, "备用", false, false) { Codec = "pcm_s24le", ChannelCount = 1 };
+            Assert.Equal("PCM · 单声道", track.DisplayDetail, "pcm 的各种写法都归 PCM");
+
+            var unknown = new MpvTrack(2, "audio", null, "备用", false, false) { Codec = "wavpack", ChannelCount = 8 };
+            Assert.Equal("WAVPACK · 7.1 声道", unknown.DisplayDetail, "没见过的编码名本身也是信息");
+        });
+    }
+
+    // ---- 启动参数 --------------------------------------------------------------
+
+    private static IReadOnlyList<string> LaunchArguments(PlaybackRequest request, string pipe = @"\\.\pipe\momoka-test") =>
+        MpvArgumentBuilder.Build(request, pipe);
+
+    private static void RegisterArguments()
+    {
+        Test("启动参数：设置项按给定顺序排列，最后一个说了算", () =>
+        {
+            // 附加参数 is gone as of v5, so the only thing that can override a setting is another entry
+            // later in PlayerOptions — which is exactly how 画质预设 → 视频输出 → 着色器配置组 is layered.
+            var request = Request() with
+            {
+                PlayerOptions = [new("vo", "gpu-next"), new("hwdec", "auto-safe"), new("hwdec", "no")]
+            };
+
+            var arguments = LaunchArguments(request);
+            var first = IndexOfPrefix(arguments, "--hwdec=auto-safe");
+            var last = IndexOfPrefix(arguments, "--hwdec=no");
+
+            Assert.Contains("--vo=gpu-next", Line(arguments));
+            Assert.True(first >= 0 && last > first,
+                $"mpv 取最后一次出现的值，顺序必须原样保留（实际 {first} / {last}）");
+        });
+
+        Test("启动参数：不再往命令行末尾追加手写参数", () =>
+        {
+            var line = Line(LaunchArguments(Request()));
+            Assert.DoesNotContain("--fullscreen", line, "附加参数已删除，不该再有任何来源不明的参数");
+        });
+
+        Test("启动参数：--no-config 排在最前，且不再有 --include / --profile", () =>
+        {
+            var arguments = LaunchArguments(Request());
+
+            Assert.Equal("--no-config", arguments[0],
+                "必须是第一个参数：后面的选项才不会因为配置文件已经写过而变成空操作");
+
+            var line = Line(arguments);
+            Assert.DoesNotContain("--include=", line, "配置文件已经不读了，--include 也一起退役");
+            Assert.DoesNotContain("--profile=", line, "着色器配置组现在是普通 mpv 选项，不再是 mpv.conf 里的 profile");
+            Assert.DoesNotContain("--config-dir=", line);
+        });
+
+        Test("启动参数：续播偏移在 IPC 首次加载前设置，并关掉 mpv 自身续播", () =>
+        {
+            var fromStart = Line(LaunchArguments(Request()));
+            Assert.DoesNotContain("--start=", fromStart);
+            Assert.Equal("0", MpvArgumentBuilder.LoadCommands(Request())[2][2]);
+            Assert.Equal("1234.5", MpvArgumentBuilder.LoadCommands(Request(start: 1234.5))[2][2]);
+            Assert.Equal("0", MpvArgumentBuilder.LoadCommands(Request(start: -2))[2][2]);
+            Assert.Contains("--resume-playback=no", fromStart);
+            Assert.Contains("--save-position-on-quit=no", fromStart);
+        });
+
+        Test("启动参数：必须让 mpv 在播完后退出", () =>
+        {
+            var line = Line(LaunchArguments(Request()));
+            Assert.Contains("--idle=once", line);
+            Assert.Contains("--keep-open=no", line);
+        });
+
+        Test("启动参数：音轨、字幕与外挂字幕", () =>
+        {
+            var request = Request() with
+            {
+                AudioId = 2,
+                SubtitleId = 3,
+                ExternalSubtitles = [new Uri("http://server/emby/Videos/1/1/Subtitles/4/Stream.ass")]
+            };
+
+            var arguments = LaunchArguments(request);
+            Assert.Contains("--aid=2", Line(arguments));
+            Assert.Contains("--sid=3", Line(arguments));
+            Assert.DoesNotContain("--sub-file", Line(arguments));
+            Assert.Equal(request.ExternalSubtitles[0].AbsoluteUri,
+                ((string[])MpvArgumentBuilder.LoadCommands(request)[1][2]!)[0]);
+        });
+
+        Test("启动参数：关闭字幕时用 --sid=no 覆盖 slang", () =>
+        {
+            var line = Line(LaunchArguments(Request() with { SubtitleId = 3, SubtitlesDisabled = true }));
+            Assert.Contains("--sid=no", line);
+            Assert.DoesNotContain("--sid=3", line);
+        });
+
+        Test("启动参数：HTTP 头和媒体只在 IPC 加载命令中", () =>
+        {
+            var request = Request() with
+            {
+                HttpHeaders =
+                [
+                    new("X-Emby-Token", "abc123"),
+                    new("X-Emby-Authorization", """MediaBrowser Client="Momoka", Device="PC" """)
+                ]
+            };
+            var arguments = LaunchArguments(request);
+            Assert.DoesNotContain("http-header", Line(arguments));
+            Assert.DoesNotContain("abc123", Line(arguments));
+            Assert.DoesNotContain("Videos/1/stream.mkv", Line(arguments));
+            Assert.False(arguments.Contains("--"), "进程启动时没有媒体参数");
+
+            var commands = MpvArgumentBuilder.LoadCommands(request);
+            Assert.Equal("http-header-fields", commands[0][1]);
+            var headers = (string[])commands[0][2]!;
+            Assert.Equal(2, headers.Length);
+            Assert.Equal("X-Emby-Authorization: " + request.HttpHeaders[1].Value, headers[1]);
+            Assert.Equal("loadfile", commands[^1][0]);
+            Assert.Equal(request.MediaUrl.AbsoluteUri, commands[^1][1]);
+        });
+
+        Test("启动参数：非敏感输出设置继续通过参数传入", () =>
+        {
+            var arguments = LaunchArguments(Request() with
+            {
+                PlayerOptions = [new("fullscreen", "yes"), new("volume", "80")]
+            });
+            Assert.Contains("--fullscreen=yes", Line(arguments));
+            Assert.Contains("--volume=80", Line(arguments));
+        });
+
+        Test("启动参数：没有需要靠日志脱敏补救的令牌", () =>
+        {
+            var arguments = LaunchArguments(Request() with
+            {
+                HttpHeaders = [new("X-Emby-Token", "SECRET-TOKEN"), new("Authorization", "Bearer OTHER-TOKEN")]
+            });
+            Assert.DoesNotContain("SECRET-TOKEN", Line(arguments));
+            Assert.DoesNotContain("OTHER-TOKEN", Line(arguments));
+            Assert.DoesNotContain("Authorization", Line(arguments));
+            Assert.Contains("--terminal=no", Line(arguments));
+        });
+
+        Test("启动参数：安全起播必须有管道且不允许选项覆盖边界", () =>
+        {
+            Assert.Throws<ArgumentException>(() => MpvArgumentBuilder.Build(Request(), ""));
+            Assert.Contains(@"--input-ipc-server=\\.\pipe\momoka-x",
+                Line(LaunchArguments(Request(), @"\\.\pipe\momoka-x")));
+            foreach (var name in new[] { "http-header-fields", "http-header-fields-append", "input-ipc-server", "idle", "log-file", "sub-files" })
+                Assert.Throws<InvalidOperationException>(() => LaunchArguments(Request() with { PlayerOptions = [new(name, "no")] }));
+        });
+
+        Test("IPC 管道名：每次启动都不同，避免撞上手动开的 mpv", () =>
+        {
+            var first = MpvIpcClient.CreatePipeName();
+            Assert.False(first == MpvIpcClient.CreatePipeName(), "管道名必须唯一");
+            Assert.Equal($@"\\.\pipe\{first}", MpvIpcClient.ToPipePath(first));
+            Assert.DoesNotContain("mpvsocket", first, "不能用 mpv 惯用的那个固定管道名");
+        });
+    }
+
+    // ---- 着色器档位 ------------------------------------------------------------
+
+    private static void RegisterShaders()
+    {
+        RegisterUpscaleTier();
+        RegisterOutputWatch();
+
+        Test("着色器：关掉开关就一条链都不上", () =>
+        {
+            var settings = Shaders(enabled: false);
+            Assert.Null(settings.Resolve(true, 1920, 1080, 2560, 1440).Group);
+            Assert.Null(settings.Resolve(false, 1920, 1080, 2560, 1440).Group);
+        });
+
+        Test("着色器：档位由放大倍数挑，不再由片源分辨率挑", () =>
+        {
+            var settings = Shaders();
+
+            // 同一个 1080p 片源，屏幕不同就该落在不同的档 —— 这正是从前那套规则表达不了的事。
+            Assert.Equal("live-slight", settings.Resolve(false, 1920, 1080, 2560, 1440).Group?.Id, "1080p 上 1440p 是 1.33 倍");
+            Assert.Equal("live-sweet", settings.Resolve(false, 1920, 1080, 3840, 2160).Group?.Id, "同一个片源上 4K 是 2 倍");
+            Assert.Equal("live-shrink", settings.Resolve(false, 1920, 1080, 1920, 1080).Group?.Id, "原尺寸窗口里一个放大器都不该有");
+            Assert.Equal("live-shrink", settings.Resolve(false, 3840, 2160, 2560, 1440).Group?.Id, "4K 上 1440p 全程在缩小");
+            Assert.Equal("live-large", settings.Resolve(false, 720, 480, 2560, 1440).Group?.Id, "480p 上 1440p 是 3 倍");
+        });
+
+        Test("着色器：动画走另外半张表，开关关掉就照实拍处理", () =>
+        {
+            Assert.Equal("anime-slight", Shaders().Resolve(true, 1920, 1080, 2560, 1440).Group?.Id);
+            Assert.Equal("live-slight", Shaders(anime: false).Resolve(true, 1920, 1080, 2560, 1440).Group?.Id,
+                "自动识别动画关掉之后，动画片也走实拍那一半");
+        });
+
+        Test("着色器：手动指定压过自动，而且换显卡档还在", () =>
+        {
+            var low = Shaders(manual: "anime-large");
+            Assert.Equal("anime-large", low.Resolve(false, 1920, 1080, 2560, 1440).Group?.Id, "手动指定压过 1.33 倍算出来的那一档");
+
+            // 手动指定存的是「哪一行」，显卡档换的是「哪一列」—— 所以改显卡档不会把这个选择弄丢。
+            var high = Shaders(manual: "anime-large", gpu: GpuTier.High);
+            Assert.Equal("anime-large", high.Resolve(false, 1920, 1080, 2560, 1440).Group?.Id);
+            Assert.False(
+                string.Equals(
+                    low.Resolve(false, 1920, 1080, 2560, 1440).Group!.Description,
+                    high.Resolve(false, 1920, 1080, 2560, 1440).Group!.Description,
+                    StringComparison.Ordinal),
+                "同一个 id 在两个显卡档下挂的链应该不一样");
+
+            Assert.Equal("live-slight", Shaders(manual: "这个档位并不存在").Resolve(false, 1920, 1080, 2560, 1440).Group?.Id,
+                "认不出来的 id 退回自动，而不是退回「不上着色器」");
+        });
+
+        Test("着色器：8K 片源直接关掉着色器", () =>
+        {
+            var settings = Shaders();
+            Assert.Null(settings.Resolve(false, 7680, 4320, 2560, 1440).Group,
+                "8K 解码本身就吃满核显，再叠着色器只会卡");
+
+            settings.DisableForUltraHighRes = false;
+            Assert.Equal("live-shrink", settings.Resolve(false, 7680, 4320, 2560, 1440).Group?.Id,
+                "关掉这条特例后照常按倍数走，而 8K 上 1440p 是在缩小");
+        });
+
+        Test("着色器：动画判定只看类型/风格与标签", () =>
+        {
+            var resolver = new ShaderGroupResolver(Shaders());
+
+            Assert.True(resolver.LooksAnimated(ShaderGroupResolver.StyleHints(
+                Item("紫罗兰永恒花园", genres: ["动画", "剧情"]))), "Genres 命中");
+            Assert.True(resolver.LooksAnimated(ShaderGroupResolver.StyleHints(
+                Item("某部片", tags: ["番剧"]))), "Tags 命中");
+            Assert.True(resolver.LooksAnimated(ShaderGroupResolver.StyleHints(
+                Item("某部片", genres: ["Animation"]))), "英文关键词大小写无关");
+            Assert.False(resolver.LooksAnimated(ShaderGroupResolver.StyleHints(
+                Item("动画简史", genres: ["纪录片"]))), "标题带「动画」的纪录片不能被误判");
+        });
+
+        Test("着色器：单集借用剧集的类型/风格", () =>
+        {
+            var resolver = new ShaderGroupResolver(Shaders());
+            var episode = Item("第 1 集", type: EmbyItemType.Episode);
+            var series = Item("葬送的芙莉莲", type: EmbyItemType.Series, genres: ["动画"]);
+
+            Assert.Equal("live-slight", resolver.Resolve(episode, Source1080p(), null, (2560, 1440)).Group?.Id,
+                "单集自己通常没有风格");
+            Assert.Equal("anime-slight", resolver.Resolve(episode, Source1080p(), series, (2560, 1440)).Group?.Id,
+                "有剧集兜底时应命中动画那一半");
+        });
+
+        Test("着色器：决策原因写成一行，任务书 3.7 那几样都在", () =>
+        {
+            var resolver = new ShaderGroupResolver(Shaders());
+
+            var decision = resolver.Resolve(Item("某部电影"), Source1080p(), null, (2560, 1440));
+            Assert.NotNull(decision.Group);
+
+            // 例：1.33× · 微放大档 · 真人 · 低档 · 输出 2560×1440 · ravu-zoom-ar-r2 + CfL_Prediction_Lite
+            Assert.Contains("1.33×", decision.Reason);
+            Assert.Contains("微放大档", decision.Reason);
+            Assert.Contains("真人", decision.Reason);
+            Assert.Contains("低档", decision.Reason);
+            Assert.Contains("输出 2560×1440", decision.Reason);
+            Assert.Contains("ravu-zoom-ar-r2", decision.Reason, "链上的文件名要写出来，否则掉帧的反馈没法用");
+
+            var unknown = resolver.Resolve(Item("某部电影"), Source1080p(), null);
+            Assert.Contains("输出尺寸未知", unknown.Reason, "问不出屏幕尺寸也要说清楚，不能装作量过");
+        });
+
+        Test("着色器：1:1 播放时那一行写「原生」而不是「缩小档」", () =>
+        {
+            // 撤掉第五档之后剩下的就是这个标签：SSimDownscaler 自带门控，1.00 倍时挂着不花钱，
+            // 别扭的只有 OSD 上「1.00× · 缩小档」这句话。
+            var decision = new ShaderGroupResolver(Shaders()).Resolve(Item("某部电影"), Source1080p(), null, (1920, 1080));
+
+            Assert.Equal("live-shrink", decision.Group?.Id);
+            Assert.Contains("1.00×", decision.Reason);
+            Assert.Contains("原生", decision.Reason);
+            Assert.DoesNotContain("缩小档", decision.Reason);
+        });
+
+        Test("着色器：老片源是另一根轴，可以单独关掉", () =>
+        {
+            // PAL 的 DVD 放到 1080p 是 1.88 倍，落甜点档 —— 而它照样要去带。这是把去带塞进大倍数档时
+            // 那个 bug 的回归测试：同一张碟的 NTSC 版（480 线、2.25 倍）落大倍数，PAL 版一条都没有。
+            var pal = Shaders().Resolve(false, 720, 576, 1920, 1080);
+            Assert.Equal("live-sweet", pal.Group?.Id);
+            Assert.True(pal.Group!.Vintage, "576 线是老片源");
+            Assert.Contains("hdeband", pal.Group.Description);
+            Assert.Contains("老片源修复", pal.Reason);
+
+            var ntsc = Shaders().Resolve(false, 720, 480, 1920, 1080);
+            Assert.Equal("live-large", ntsc.Group?.Id);
+            Assert.Contains("hdeband", ntsc.Group!.Description, "同一张碟的另一个区，处理必须一样");
+
+            var off = Shaders(vintage: false).Resolve(false, 720, 576, 1920, 1080);
+            Assert.False(off.Group!.Vintage);
+            Assert.DoesNotContain("hdeband", off.Group.Description);
+
+            var modern = Shaders().Resolve(false, 1280, 720, 1920, 1080);
+            Assert.False(modern.Group!.Vintage, "720p 不是老片源，哪怕它也在放大");
+        });
+
+        Test("着色器：「这是哪种片子」只有一个写手，菜单和自动挑用的是同一个答案", () =>
+        {
+            // 播放器 ⚙ 菜单要照这次播的文件列那八行 —— 一张 DVD 的行里带 hdeband，一部 60fps 的番在动画那三行上
+            // 也是 ravu。它从前是拿「当前生效的那条链」反推这两根轴的，可着色器关掉、8K 片源、开播前那一刻都没有
+            // 当前链，于是退回「不是老片源、不是高帧率」那一列：点一下动画微放大，60fps 的片子拿到 ArtCNN，正是
+            // 高帧率这根轴专门要挡住的那条（一帧 22 毫秒），而且一点就钉住一整部片子。
+            // 所以规则收在 Kind 一处，这一条钉的就是「Resolve 和菜单读的是同一句话」。
+            (int Height, double Fps, bool Vintage, bool FastMotion)[] rows =
+            [
+                (1080, 23.976, false, false),
+                (576, 23.976, true, false),
+                (1080, 59.94, false, true),
+                (480, 59.94, true, true),
+                (0, 0, false, false)
+            ];
+
+            foreach (var row in rows)
+            {
+                var settings = Shaders();
+                Assert.Equal((row.Vintage, row.FastMotion), settings.Kind(row.Height, row.Fps),
+                    $"{row.Height} 线 / {row.Fps}fps");
+
+                // 和真正挑链那条路对齐：同一个文件，Kind 说的两根轴必须就是链身上那两根。8K 和关掉着色器
+                // 那两种情况没有链可比，所以这里只走有链的组合。
+                var chain = settings.Resolve(true, 1920, row.Height, 2560, 1440, row.Fps).Group!;
+                Assert.Equal(row.Vintage, chain.Vintage, $"{row.Height} 线：老片源这根轴两边要一致");
+                Assert.Equal(row.FastMotion, chain.FastMotion, $"{row.Fps}fps：高帧率这根轴两边要一致");
+            }
+
+            // 老片源修复关掉之后，Kind 也得跟着说「不是老片源」—— 否则菜单会去列一张这次根本不会用的表。
+            Assert.Equal((false, false), Shaders(vintage: false).Kind(576, 23.976));
+            Assert.Equal((false, true), Shaders(vintage: false).Kind(576, 59.94), "高帧率那根轴不受它管");
+        });
+
+        Test("着色器：动画判定与用了哪半张表无关", () =>
+        {
+            // 去色带 =「在动画中开启」读的是这个标记，所以它必须是「这部片是不是动画」，而不是
+            // 「这次用了动画那半张表吗」—— 否则关掉自动识别动画就会连带把去色带也关了。
+            var resolver = new ShaderGroupResolver(Shaders(anime: false));
+            var decision = resolver.Resolve(Item("紫罗兰永恒花园", genres: ["动画"]), Source1080p(), null, (2560, 1440));
+
+            Assert.True(decision.Animated, "自动识别动画关着，但这部片仍然是动画");
+            Assert.Equal("live-slight", decision.Group?.Id, "开关关着就不该换到动画那一半");
+
+            var live = new ShaderGroupResolver(Shaders())
+                .Resolve(Item("某部电影", genres: ["剧情"]), Source1080p(), null, (2560, 1440));
+            Assert.False(live.Animated);
+        });
+
+        Test("着色器档位：九十六格每一格都有链，路径是程序目录下的绝对路径", () =>
+        {
+            Assert.Equal(96, ShaderGroupCatalog.All.Count, "三个显卡档 × 八个档位 × 老片源与否 × 高帧率与否");
+
+            foreach (var group in ShaderGroupCatalog.All)
+            {
+                Assert.True(group.Shaders.Count > 0, $"{group.Name} 一个着色器都没有");
+
+                var options = Options(group.ToMpvOptions(ShaderGroupCatalog.ShaderRoot));
+                Assert.True(options.ContainsKey("glsl-shaders"), $"{group.Name} 没给出 glsl-shaders");
+                Assert.True(options.ContainsKey("scale"), $"{group.Name} 没给出 scale，会沿用上一部片子的设置");
+                Assert.True(options.ContainsKey("cscale"), $"{group.Name} 没给出 cscale");
+
+                foreach (var path in options["glsl-shaders"].Split(';', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    Assert.True(Path.IsPathRooted(path), $"{path} 不是绝对路径；mpv 用 --no-config 启动，~~/ 已经无处可解析");
+                }
+            }
+        });
+
+        Test("着色器档位：八个 id 稳定、不重复，而且换显卡档、换老片源、换高帧率都是同一批 id", () =>
+        {
+            string[] expected =
+            [
+                "live-shrink", "live-slight", "live-sweet", "live-large",
+                "anime-shrink", "anime-slight", "anime-sweet", "anime-large"
+            ];
+
+            Assert.Equal(string.Join("、", expected), string.Join("、", ShaderGroupCatalog.Ids), "档位 id 和次序");
+
+            foreach (var gpu in new[] { GpuTier.Low, GpuTier.Medium, GpuTier.High })
+            {
+                foreach (var vintage in new[] { false, true })
+                {
+                    foreach (var fast in new[] { false, true })
+                    {
+                        var column = ShaderGroupCatalog.For(gpu, vintage, fast);
+                        Assert.Equal(8, column.Count, $"{gpu}／老片源={vintage}／高帧率={fast} 这一列应该正好八格");
+                        Assert.Equal(
+                            string.Join("、", expected),
+                            string.Join("、", column.Select(group => group.Id)),
+                            "id 必须跨显卡档、老片源和高帧率一致，否则改一下设置或者换一部片子就会把用户手动指定的那一档弄丢");
+                    }
+                }
+            }
+        });
+
+        Test("着色器档位：关掉一条链时把每个它动过的选项都还回去", () =>
+        {
+            var neutral = Options(ShaderGroupCatalog.NeutralOptions);
+
+            Assert.Equal("", neutral["glsl-shaders"], "不清空的话着色器会一直挂着");
+            Assert.Equal("lanczos", neutral["scale"], "mpv --no-config --list-options 报的默认值");
+            Assert.Equal("hermite", neutral["dscale"]);
+            Assert.Equal("", neutral["cscale"]);
+
+            var touched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var group in ShaderGroupCatalog.All)
+            {
+                foreach (var (name, _) in group.ToMpvOptions(ShaderGroupCatalog.ShaderRoot))
+                {
+                    touched.Add(name);
+                    Assert.True(neutral.ContainsKey(name), $"{group.Name} 改了 {name}，但关闭时没有还原它");
+                }
+            }
+
+            // 反过来也要对上：还原表里没人会设的名字，每次切档都白写一遍。移植的九组删掉时
+            // scale-antiring、dscale-antiring、linear-upscaling 就是这样留下来的。
+            foreach (var (name, _) in ShaderGroupCatalog.NeutralOptions)
+            {
+                Assert.True(touched.Contains(name), $"还原表里的 {name} 没有任何档位会动，切一次档就白写一遍");
+            }
+        });
+
+        Test("着色器档位：A→B→A 和 B→A→B 都不留残渣", () =>
+        {
+            // 走的是 PlaybackService.SetShaderGroupAsync 真正调的那个函数（ShaderSwitch.Options），不是照它
+            // 重写一遍 —— 重写一遍的测试会在真代码漂移之后照旧通过。少一个还原名字，B 设过的东西就会在切回 A
+            // 之后留一整个文件。
+            KeyValuePair<string, string>[] launch =
+            [
+                new("deband", "yes"),
+                new("scale", "spline36")
+            ];
+
+            var a = ShaderGroupCatalog.Resolve(false, UpscaleTier.Shrink, GpuTier.Low);
+            var onlyA = Live(launch, [a]);
+
+            foreach (var b in ShaderGroupCatalog.All)
+            {
+                Assert.Equal(Join(onlyA), Join(Live(launch, [a, b, a])), $"A→{b.Name}→A 之后和只上过 A 不一样");
+                Assert.Equal(Join(Live(launch, [b])), Join(Live(launch, [b, a, b])), $"{b.Name}→A→{b.Name} 之后不一样");
+            }
+
+            // 关掉着色器也算一档：文件清空、去色带回到启动时那个 yes。
+            var off = Live(launch, [a, null]);
+            Assert.Equal("", off["glsl-shaders"], "关掉之后着色器不许还挂着");
+            Assert.Equal("yes", off["deband"], "回落的是本次启动的值，不是 mpv 出厂值");
+
+            static Dictionary<string, string> Live(
+                IReadOnlyList<KeyValuePair<string, string>> launch,
+                IReadOnlyList<ShaderGroup?> sequence)
+            {
+                var live = Options(launch);
+
+                foreach (var group in sequence)
+                {
+                    // 每次切换交给 mpv 的是「还原表里的每个名字 + 新链自己的」，而屏上那台 mpv 保留的是上一次
+                    // 之后的全部状态 —— 所以这里往 live 上叠，而不是每次从头来。
+                    foreach (var (name, value) in ShaderSwitch.Options(launch, 0, group, @"C:\shaders"))
+                        live[name] = value;
+                }
+
+                return live;
+            }
+
+            static string Join(Dictionary<string, string> live) =>
+                string.Join("\n", live.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
+        });
+
+        // profile-list 的样例，形状照 mpv 自己的 JSON（[{name, options:[{key, value}]}]）：
+        // fast 与 high-quality 的内容是从自带的 libmpv-2.dll（v0.41.0-923）--show-profile 上抄的。
+        const string ProfilesJson = """
+            [
+              { "name": "fast", "options": [
+                { "key": "scale", "value": "bilinear" },
+                { "key": "dscale", "value": "bilinear" },
+                { "key": "dither", "value": "no" },
+                { "key": "correct-downscaling", "value": "no" },
+                { "key": "linear-downscaling", "value": "no" },
+                { "key": "sigmoid-upscaling", "value": "no" },
+                { "key": "hdr-compute-peak", "value": "no" },
+                { "key": "allow-delayed-peak-detect", "value": "yes" } ] },
+              { "name": "high-quality", "options": [
+                { "key": "scale", "value": "ewa_lanczossharp" },
+                { "key": "scale-antiring", "value": "0.6" },
+                { "key": "hdr-peak-percentile", "value": "99.995" },
+                { "key": "hdr-contrast-recovery", "value": "0.30" } ] }
+            ]
+            """;
+
+        Test("画质预设：profile=fast 展开成内置的那一组选项，没有 profile 的原样通过", () =>
+        {
+            KeyValuePair<string, string>[] launch = [new("profile", "fast"), new("vo", "gpu-next")];
+            var fast = Options(MpvProfiles.Expand(launch, ProfilesJson));
+
+            Assert.Equal("bilinear", fast["scale"]);
+            Assert.Equal("bilinear", fast["dscale"]);
+            Assert.Equal("no", fast["dither"]);
+            Assert.Equal("no", fast["correct-downscaling"]);
+            Assert.Equal("no", fast["linear-downscaling"]);
+            Assert.Equal("no", fast["sigmoid-upscaling"]);
+            Assert.Equal("no", fast["hdr-compute-peak"]);
+            Assert.Equal("yes", fast["allow-delayed-peak-detect"]);
+            Assert.Equal("gpu-next", fast["vo"], "profile 之外的选项原样保留、原位不动");
+
+            var high = Options(MpvProfiles.Expand([new("profile", "high-quality")], ProfilesJson));
+            Assert.Equal("ewa_lanczossharp", high["scale"]);
+            Assert.Equal("0.30", high["hdr-contrast-recovery"]);
+
+            // 一张表都没有 profile 项时根本不该碰 JSON：拿到什么交回什么，连 null 都合法。
+            var plain = new KeyValuePair<string, string>[] { new("scale", "spline36"), new("deband", "yes") };
+            var same = MpvProfiles.Expand(plain, null);
+            Assert.Equal(2, same.Count, "不含 profile 的 options 原样返回");
+            Assert.Equal("spline36", same[0].Value);
+            Assert.Equal("yes", same[1].Value);
+
+            // 两种失败都要喊出来：名字不认识，或者播放器压根没给出目录 —— 静默跳过等于把画质
+            // 悄悄换成默认，而 mpv 对不认识的 profile 是不播的，这里不能比它更宽容。
+            Assert.Throws<InvalidOperationException>(() => MpvProfiles.Expand([new("profile", "fast")], null));
+            Assert.Throws<InvalidOperationException>(() => MpvProfiles.Expand([new("profile", "没有这一档")], ProfilesJson));
+        });
+
+        Test("画质预设：切档回落的是展开后的预设值，defaults 压过还原表里的出厂常量", () =>
+        {
+            // 起播带了 profile=fast：关链（group=null）时 scale 应回到 fast 展开的 bilinear，
+            // 而不是出厂的 lanczos —— 基线先经 MpvProfiles.Expand 展开，再按名字取值。
+            var off = Options(ShaderSwitch.Options([new("profile", "fast")], 0, null, @"C:\shaders", ProfilesJson));
+            Assert.Equal("bilinear", off["scale"], "回落的是画质预设展开后的值，不是出厂的 lanczos");
+            Assert.Equal("", off["glsl-shaders"], "关链时链本身照旧清空");
+
+            // cscale 不在 fast 的展开结果里：还原表给它的出厂常量是空串，而起播时问 mpv 要的
+            // option-info 出厂值（defaults）应该赢过那个空串 —— 「出厂值」以这台播放器报的为准。
+            var withDefaults = Options(ShaderSwitch.Options(
+                [new("profile", "fast")], 0, null, @"C:\shaders", ProfilesJson,
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["cscale"] = "bilinear" }));
+            Assert.Equal("bilinear", withDefaults["cscale"], "defaults 优先于还原表里的出厂常量");
+        });
+
+        Test("着色器档位：九十六格每一格都过得了那套规则", () =>
+        {
+            // 三条互斥、缩小档不许有放大器、每格都要有色度重建、hdeband 与内置 deband 互斥、每个着色器的运行
+            // 前置条件都落在了选项里、链照 mpv 真正的执行次序写 —— 全在 ShaderChainRules 里，判的是 Descriptor
+            // 上的逻辑职责，不是数文件名。这一条红了，报告里直接写出是哪一格哪一条。
+            Assert.Equal("", string.Join("\n", ShaderChainRules.ProblemsInTable()));
+        });
+
+        Test("着色器档位：说自己是放大器就必须真的能改尺寸（FSRCNNX_x1 那一类错的机械闸门）", () =>
+        {
+            foreach (var shader in ShaderLibrary.All.Where(shader => shader.Role == ShaderRole.LumaUpscale))
+                Assert.True(shader.ChangesResolution, $"{shader.Name} 挂着亮度放大器的职责，却没有声明输出尺寸");
+
+            // 反过来验一次这条闸门真的咬得住：编一个「说是放大器、其实不改尺寸」的描述塞进一条链里，规则必须报。
+            var fake = new ShaderDescriptor(
+                "FSRCNNX_x1", "igv/FSRCNNX_x1.glsl", ShaderRole.LumaUpscale,
+                Hook: "LUMA", ChangesResolution: false, Passes: 1, Gate: "", ReadsLuma: false, ReadsChroma: false);
+
+            var broken = new ShaderGroup(false, UpscaleTier.Sweet, false, false, [fake, ShaderLibrary.ChromaLite], []);
+            Assert.Contains("放不大任何东西", string.Join("\n", ShaderChainRules.Problems(broken)));
+        });
+
+        Test("着色器档位：光域这一项跟着链里有没有人要求它走，如今哪一格都没人要求", () =>
+        {
+            foreach (var group in ShaderGroupCatalog.All)
+            {
+                var wantsOff = group.Shaders.Any(shader =>
+                    shader.Requires.Any(pair => pair.Key == "sigmoid-upscaling" && pair.Value == "no"));
+
+                Assert.Equal(wantsOff ? "no" : "yes", Options(group.Options)["sigmoid-upscaling"],
+                    $"{group.Name}：光域这一项只该跟着链里有没有人要求它走");
+
+                // Anime4K Mode A 那两个 CNN pass 是唯一要求关掉它的，2026-09-04 随「动画大倍数也换 ArtCNN」出箱。
+                // 所以现在每一格都该是 mpv 的出厂值；谁再往箱子里放一个要求关光域的着色器，这一条当场红，而那正
+                // 是需要有人想一想的时刻 —— 关光域会改变整条链的放大观感，不是一个文件自己的事。
+                Assert.False(wantsOff, $"{group.Name}：现在没有一个着色器要求关掉 sigmoid-upscaling");
+            }
+        });
+
+        Test("着色器档位：hdeband 只在老片源那一半，排最前面，nlmeans 只在中高档", () =>
+        {
+            // 走三重循环而不是拿 Contains 反查，是因为 96 格里同一条链会在两根「跟着文件走」的轴上各出现一次，
+            // 「不在低档那一列里」不再等于「不是低档」。
+            foreach (var gpu in new[] { GpuTier.Low, GpuTier.Medium, GpuTier.High })
+            {
+                foreach (var vintage in new[] { false, true })
+                {
+                    foreach (var fast in new[] { false, true })
+                    {
+                        foreach (var group in ShaderGroupCatalog.For(gpu, vintage, fast))
+                        {
+                            var deband = group.Shaders.Any(shader => shader.Role == ShaderRole.Deband);
+                            Assert.Equal(vintage, deband, $"{group.Name}：去带跟的是片源有多老，不是要放多大");
+
+                            if (!deband) continue;
+
+                            Assert.Equal("hdeband", group.Shaders[0].Name, $"{group.Name}：去带要在最前面");
+                            Assert.Equal(gpu != GpuTier.Low, group.Packages(ShaderRole.Denoise) > 0,
+                                $"{group.Name}（{gpu}）：低档只加去带，降噪要到中高档");
+                        }
+                    }
+                }
+            }
+        });
+
+        Test("着色器：高帧率片源把动画那三档换成便宜的链，档位名字不变", () =>
+        {
+            // 2026-09-04 实测：同一条 ArtCNN_C4F16 + CfL 的链，1080p 放到 2560×1440，在 vulkan 上 22 毫秒一帧
+            // （45 fps 上限），所以 24fps 的番占掉大约一半显卡，而 60fps 的片子要每秒 1.33 秒的显卡时间 —— 换不了。
+            // ravu-zoom 那条是 6.6 毫秒，什么帧率都够。
+            var settings = Shaders();
+
+            var normal = settings.Resolve(true, 1920, 1080, 2560, 1440, 23.976);
+            var fast = settings.Resolve(true, 1920, 1080, 2560, 1440, 59.94);
+
+            Assert.Equal("anime-slight", normal.Group?.Id);
+            Assert.Equal("anime-slight", fast.Group?.Id, "id 跟的是「这是动画、这是微放大」，不是「链换没换」");
+            Assert.True(fast.Group!.Animated, "片子还是动画，不能因为帧率高就说它是真人");
+            Assert.True(fast.Group.FastMotion);
+            Assert.False(normal.Group!.FastMotion);
+
+            Assert.Contains("ArtCNN", normal.Group.Description);
+            Assert.DoesNotContain("ArtCNN", fast.Group.Description, "60fps 上 CNN 放大器要退场");
+            Assert.Equal(
+                ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low).Description,
+                fast.Group.Description,
+                "退场之后走的就是真人那一格的链");
+
+            Assert.Contains("高帧率片源", fast.Reason, "屏上那一行要说清为什么链变了");
+            Assert.DoesNotContain("高帧率片源", normal.Reason);
+
+            // 三个档都要换，而缩小档两半本来就一样，所以那一格不该多出一句解释。
+            foreach (var tier in new[] { UpscaleTier.Slight, UpscaleTier.Sweet, UpscaleTier.Large })
+            {
+                Assert.Equal(
+                    ShaderGroupCatalog.Resolve(false, tier, GpuTier.Low).Description,
+                    ShaderGroupCatalog.Resolve(true, tier, GpuTier.Low, fastMotion: true).Description,
+                    $"{tier}：高帧率的动画走真人那条链");
+            }
+
+            var shrink = settings.Resolve(true, 3840, 2160, 2560, 1440, 59.94);
+            Assert.Equal("anime-shrink", shrink.Group?.Id);
+            Assert.DoesNotContain("高帧率片源", shrink.Reason, "缩小档两半本来就是同一条链，没什么可解释的");
+
+            // 中高档也一样降级：那两列用的是 C4F32，算术量是 C4F16 的四倍，所以「卡快四倍」刚好抵平，60fps 还要
+            // 再多两倍半。这台机器上验不了那两列，但比例是算得出来的。
+            foreach (var gpu in new[] { GpuTier.Medium, GpuTier.High })
+            {
+                Assert.DoesNotContain("ArtCNN",
+                    ShaderGroupCatalog.Resolve(true, UpscaleTier.Sweet, gpu, fastMotion: true).Description,
+                    $"{gpu}：高帧率片源同样不上 CNN");
+            }
+        });
+
+        Test("着色器：帧率这根轴的边界，29.97 要留在近侧", () =>
+        {
+            Assert.False(ShaderTier.IsFastMotion(0), "问不出帧率不是放弃好链的理由");
+            Assert.False(ShaderTier.IsFastMotion(23.976));
+            Assert.False(ShaderTier.IsFastMotion(25), "PAL");
+            Assert.False(ShaderTier.IsFastMotion(29.97), "NTSC 必须留在近侧，否则半个美剧库都降级");
+            Assert.False(ShaderTier.IsFastMotion(30));
+            Assert.True(ShaderTier.IsFastMotion(50));
+            Assert.True(ShaderTier.IsFastMotion(59.94));
+
+            // 帧率读的是片源的视频轨，走的是真实那条路（ShaderGroupResolver → MediaStream.FrameRate），
+            // 不是测试自己再算一遍。
+            var resolver = new ShaderGroupResolver(Shaders());
+            var series = Item("某部番", type: EmbyItemType.Series, genres: ["动画"]);
+            var episode = Item("第 1 集", type: EmbyItemType.Episode);
+
+            var slow = resolver.Resolve(episode, Source1080p(frameRate: 23.976), series, (2560, 1440));
+            var quick = resolver.Resolve(episode, Source1080p(frameRate: 59.94), series, (2560, 1440));
+
+            Assert.Contains("ArtCNN", slow.Group!.Description);
+            Assert.DoesNotContain("ArtCNN", quick.Group!.Description);
+        });
+
+        Test("着色器档位：设置里的装机默认值在表里找得到", () =>
+        {
+            var settings = new ShaderAutomationSettings();
+
+            Assert.Equal(GpuTier.Low, settings.Gpu, "装机默认是低档：这台机器的核显，也是缺键时读出来的那一档");
+            Assert.Equal("", settings.ManualGroup, "装机默认走自动");
+            Assert.False(settings.Enabled, "装机默认不开着色器 —— 用户 2026-09-05 定的，「恢复默认」交出来的也是这一档");
+            Assert.True(settings.RestoreVintageSources, "DVD 那一代的片源默认要去带");
+            Assert.Equal(8, ShaderGroupCatalog.For(settings.Gpu).Count);
+
+            // 关着的时候一条链都挑不出来，可其余几项照旧是它们的默认值 —— 开关一开就该按这几项走，
+            // 不需要再设置一遍。
+            Assert.Null(settings.Resolve(false, 1920, 1080, 2560, 1440).Group);
+        });
+
+        RegisterOldVersusNew();
+        RegisterShaderDescriptions();
+        RegisterShippedShaderFiles();
+    }
+
+    /// <summary>
+    /// 放大倍数那个纯函数。这一族是整次重构的地基：从前的规则只看片源分辨率，「4K 片源」「480p 片源」离了屏幕
+    /// 尺寸根本不成句，而当时的代码从来没问过输出有多大 —— 于是这件事在屏幕上完全看不出来，也没有一条断言碰得到它。
+    /// </summary>
+    private static void RegisterUpscaleTier()
+    {
+        Test("放大倍数：任务书那张片源→输出组合表，一格一格对", () =>
+        {
+            // 片源宽高、输出宽高、应得的倍数、应落的档
+            (int SourceWidth, int SourceHeight, int OutWidth, int OutHeight, double Factor, UpscaleTier Tier)[] table =
+            [
+                (1920, 1080, 1920, 1080, 1.00, UpscaleTier.Shrink),
+                (1920, 1080, 2560, 1440, 1.33, UpscaleTier.Slight),
+                (1920, 1080, 3840, 2160, 2.00, UpscaleTier.Sweet),
+                (1280, 720, 1920, 1080, 1.50, UpscaleTier.Sweet),
+                (1280, 720, 2560, 1440, 2.00, UpscaleTier.Sweet),
+                (1280, 720, 3840, 2160, 3.00, UpscaleTier.Large),
+                (854, 480, 1920, 1080, 2.25, UpscaleTier.Large),
+                (854, 480, 2560, 1440, 3.00, UpscaleTier.Large),
+                (854, 480, 3840, 2160, 4.50, UpscaleTier.Large),
+
+                // 576p 的两格是 2.2 那条独立轴的回归测试：PAL 的 DVD 放到 1080p 落甜点档，去带不能跟着倍数走。
+                (720, 576, 1920, 1080, 1.88, UpscaleTier.Sweet),
+                (720, 576, 2560, 1440, 2.50, UpscaleTier.Large),
+
+                (3840, 2160, 2560, 1440, 0.67, UpscaleTier.Shrink)
+            ];
+
+            foreach (var row in table)
+            {
+                var measure = ShaderTier.Measure(row.SourceWidth, row.SourceHeight, row.OutWidth, row.OutHeight);
+
+                Assert.True(Math.Abs(measure.Factor - row.Factor) < 0.02,
+                    $"{row.SourceHeight}p 上 {row.OutHeight}p 应该是 {row.Factor} 倍，算出来是 {measure.Factor:0.00}");
+                Assert.Equal(row.Tier, measure.Tier, $"{row.Factor} 倍该落在哪一档");
+            }
+        });
+
+        Test("放大倍数：四档的分界正好落在那几个数上，1.00 倍的标签是「原生」", () =>
+        {
+            Assert.Equal(UpscaleTier.Shrink, ShaderTier.Classify(1.049999), "1.05 以下还是缩小档");
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.05), "1.05 本身算微放大");
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.449999));
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(1.45), "1.45 本身算甜点");
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(2.20), "2.20 本身还算甜点档");
+            Assert.Equal(UpscaleTier.Large, ShaderTier.Classify(2.200001));
+            Assert.Equal(UpscaleTier.Shrink, ShaderTier.Classify(0), "0 倍是退化输入，落在最省的那一档");
+
+            // 撤掉第五档换来的那个标签：档还是缩小档，屏上写的是「原生」。
+            Assert.Equal("原生", ShaderTier.Label(new UpscaleMeasure(1.00, UpscaleTier.Shrink)));
+            Assert.Equal("原生", ShaderTier.Label(new UpscaleMeasure(0.95, UpscaleTier.Shrink)));
+            Assert.Equal("缩小档", ShaderTier.Label(new UpscaleMeasure(0.94, UpscaleTier.Shrink)));
+            Assert.Equal("缩小档", ShaderTier.Label(new UpscaleMeasure(0.67, UpscaleTier.Shrink)));
+            Assert.Equal("微放大档", ShaderTier.Label(new UpscaleMeasure(1.33, UpscaleTier.Slight)));
+        });
+
+        Test("放大倍数：0.05 回差 —— 慢慢拖窗口经过分界时不来回换档", () =>
+        {
+            // 没有回差，1.45 附近拖一下窗口就是 ravu-zoom 和 ravu-lite 来回换，每次换都是一次锐度当场变化
+            // 加一次着色器重新加载。
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.46, UpscaleTier.Slight), "1.44→1.46 不换档");
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(1.52, UpscaleTier.Slight), "1.44→1.52 换档");
+            Assert.Equal(UpscaleTier.Slight, ShaderTier.Classify(1.44, UpscaleTier.Slight));
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(1.44, UpscaleTier.Sweet), "已经在甜点档里就黏在甜点档");
+
+            // 在 1.44 和 1.46 之间来回时结果稳定：起点是哪一档，走完还是哪一档。
+            foreach (var start in new[] { UpscaleTier.Slight, UpscaleTier.Sweet })
+            {
+                var tier = start;
+                for (var round = 0; round < 8; round++) tier = ShaderTier.Classify(round % 2 == 0 ? 1.46 : 1.44, tier);
+                Assert.Equal(start, tier, "来回拖八次之后还该是起点那一档");
+            }
+
+            // 回差只放宽 0.05，不是「永远不换」。
+            Assert.Equal(UpscaleTier.Large, ShaderTier.Classify(2.26, UpscaleTier.Sweet));
+            Assert.Equal(UpscaleTier.Sweet, ShaderTier.Classify(2.24, UpscaleTier.Sweet));
+        });
+
+        Test("放大倍数：宽高取小的那个，2.39:1 的片子才不会被抬高一整档", () =>
+        {
+            // 1920×800 铺到 2560×1440，实际画出来是 2560×1067，也就是 1.33 倍；只看高度会读成 1.8 倍，
+            // 于是挂上一个 2 倍放大器，再被 mpv 缩回去 —— 算力全花在被丢掉的像素上。
+            var measure = ShaderTier.Measure(1920, 800, 2560, 1440);
+
+            Assert.True(Math.Abs(measure.Factor - 1.333) < 0.01, $"应该是 1.33 倍，算出来是 {measure.Factor:0.00}");
+            Assert.Equal(UpscaleTier.Slight, measure.Tier);
+            Assert.Contains("宽比", measure.Note, "宽高两个比差得多的时候要记一句，否则日志读不出这是加信封片源");
+
+            // 4:3 的 DVD 反过来是被高度限住的，那一边取小同样成立。
+            Assert.True(Math.Abs(ShaderTier.Measure(720, 480, 2560, 1440).Factor - 3.0) < 0.01);
+
+            // 等比片源不该有那句话。
+            Assert.Equal("", ShaderTier.Measure(1920, 1080, 2560, 1440).Note);
+        });
+
+        Test("放大倍数：问不出尺寸时落在微放大档，而且说清楚是问不出来", () =>
+        {
+            foreach (var (sourceWidth, sourceHeight, outWidth, outHeight, missing) in new[]
+            {
+                (0, 1080, 2560, 1440, "片源尺寸未知"),
+                (1920, 0, 2560, 1440, "片源尺寸未知"),
+                (1920, 1080, 0, 1440, "输出尺寸未知"),
+                (1920, 1080, 2560, 0, "输出尺寸未知")
+            })
+            {
+                var measure = ShaderTier.Measure(sourceWidth, sourceHeight, outWidth, outHeight);
+
+                Assert.Equal(UpscaleTier.Slight, measure.Tier,
+                    "微放大档的放大器（真人 ravu-zoom）能直接放到任意倍数，动画那一档自己带 1.3 倍门控，猜错也不会硬跑");
+                Assert.False(measure.Measured, "没量到就不能假装量到了");
+                Assert.Equal(missing, measure.Note);
+            }
+        });
+
+        Test("老片源：≤576 线是另一根轴，高度问不出来时不算老片源", () =>
+        {
+            Assert.True(ShaderTier.IsVintage(576), "PAL 的 DVD");
+            Assert.True(ShaderTier.IsVintage(480), "NTSC 的 DVD");
+            Assert.False(ShaderTier.IsVintage(577));
+            Assert.False(ShaderTier.IsVintage(720));
+            Assert.False(ShaderTier.IsVintage(0), "0 是「服务器没探过」，不是一张 DVD");
+            Assert.False(ShaderTier.IsVintage(-1));
+        });
+    }
+
+    /// <summary>
+    /// 窗口变化怎么影响链（任务书 2.3 和 2.4）。这一族是整个方案里唯一有状态的部分，也是唯一「做错了屏上看不出
+    /// 来」的部分：拖窗口时每帧重生成链的症状是掉帧，而掉帧看着像片源码率高。所以判定做成了一个不带计时器、
+    /// 不认识窗口的纯状态机，时间由调用方交进来。
+    /// </summary>
+    private static void RegisterOutputWatch()
+    {
+        static ShaderSurface Windowed(int width, int height) => new(width, height, 2560, 1440, false);
+        static ShaderSurface Full() => new(2560, 1440, 2560, 1440, true);
+
+        Test("输出尺寸：先问渲染目标，再用最近一次量到的，最后才退到显示器", () =>
+        {
+            (int Width, int Height) monitor = (2560, 1440);
+
+            var direct = ShaderSurface.Resolve((1600, 900), (1280, 720), monitor, false);
+            Assert.Equal(1600, direct.Width, "问得到就用当前渲染目标");
+            Assert.False(direct.Fallback);
+
+            var stale = ShaderSurface.Resolve(default, (1280, 720), monitor, false);
+            Assert.Equal(1280, stale.Width, "问不到就用最近一次成功量到的");
+            Assert.False(stale.Fallback, "一个旧的真尺寸不算兜底");
+
+            var guessed = ShaderSurface.Resolve(default, default, monitor, false);
+            Assert.Equal(2560, guessed.Width, "两样都没有才退到显示器");
+            Assert.True(guessed.Fallback, "退到显示器要说一声 —— 这是外部 mpv.exe 那个后端的答案");
+
+            // 不许假定 4K：兜底用的是这块屏，而不是一个写死的数。
+            Assert.Equal(1080, ShaderSurface.Resolve(default, default, (1920, 1080), false).Height);
+
+            // 全屏时铺满的是显示器，窗口矩形怎么说都不算。
+            var full = ShaderSurface.Resolve((1280, 720), default, monitor, true);
+            Assert.Equal(2560, full.Active.Width);
+            Assert.Equal(1440, full.Active.Height);
+        });
+
+        Test("窗口：连续 resize 期间一次都不重新生成链，停稳 400 毫秒才算一次", () =>
+        {
+            var watch = new OutputWatch(1920, 1080, Windowed(2560, 1440), UpscaleTier.Slight);
+            var start = DateTimeOffset.UnixEpoch;
+
+            for (var step = 1; step <= 20; step++)
+            {
+                var moment = start + TimeSpan.FromMilliseconds(step * 30);
+                var seen = watch.Observe(Windowed(2560 - step * 40, 1440 - step * 22), moment);
+
+                Assert.Equal(OutputChange.Waiting, seen.Change, $"第 {step} 次拖动就重新生成链了");
+                Assert.Equal(OutputChange.Waiting, watch.Tick(moment).Change, "拖动过程中每一跳都不许有结论");
+            }
+
+            var settled = start + TimeSpan.FromMilliseconds(20 * 30);
+            Assert.Equal(OutputChange.Waiting, watch.Tick(settled + TimeSpan.FromMilliseconds(399)).Change, "399 毫秒还不算停稳");
+
+            var verdict = watch.Tick(settled + TimeSpan.FromMilliseconds(401));
+            Assert.Equal(OutputChange.Rebuild, verdict.Change, "停稳之后才算一次");
+            Assert.False(verdict.Discrete, "这是停稳的 resize，不是离散事件");
+            Assert.Equal(1760, verdict.Width, "落定的是最后那个尺寸，中间十九个都只是被记下过");
+            Assert.False(watch.Settling);
+        });
+
+        Test("窗口：停稳后不跨档只更新尺寸，跨档才重新生成，大小两个方向都测", () =>
+        {
+            var watch = new OutputWatch(1920, 1080, Windowed(2560, 1440), UpscaleTier.Slight);
+            var clock = DateTimeOffset.UnixEpoch;
+
+            // 2560×1440 → 2400×1350 是 1.25 倍，还在微放大档里。
+            watch.Observe(Windowed(2400, 1350), clock);
+            var same = watch.Tick(clock + TimeSpan.FromMilliseconds(500));
+            Assert.Equal(OutputChange.SizeOnly, same.Change, "同一档里只该记下新尺寸");
+            Assert.Equal(2400, same.Width);
+            Assert.Equal(UpscaleTier.Slight, watch.Tier);
+            Assert.Equal(2400, watch.Output.Width, "ravu-zoom 按目标尺寸渲染，所以尺寸本身要更新");
+
+            // 缩到 1600×900 是 0.83 倍，跨到缩小档。
+            clock += TimeSpan.FromSeconds(1);
+            watch.Observe(Windowed(1600, 900), clock);
+            var smaller = watch.Tick(clock + TimeSpan.FromMilliseconds(500));
+            Assert.Equal(OutputChange.Rebuild, smaller.Change);
+            Assert.Equal(UpscaleTier.Shrink, watch.Tier);
+
+            // 反方向：拉到 3200×1800 是 1.67 倍，跨到甜点档。
+            clock += TimeSpan.FromSeconds(1);
+            watch.Observe(Windowed(3200, 1800), clock);
+            var bigger = watch.Tick(clock + TimeSpan.FromMilliseconds(500));
+            Assert.Equal(OutputChange.Rebuild, bigger.Change);
+            Assert.Equal(UpscaleTier.Sweet, watch.Tier);
+
+            // 回差在这里也管事：3200×1800 → 2800×1575 是 1.458 倍，还在甜点档（放宽后的下界是 1.40）。
+            clock += TimeSpan.FromSeconds(1);
+            watch.Observe(Windowed(2800, 1575), clock);
+            Assert.Equal(OutputChange.SizeOnly, watch.Tick(clock + TimeSpan.FromMilliseconds(500)).Change);
+            Assert.Equal(UpscaleTier.Sweet, watch.Tier);
+        });
+
+        Test("窗口：拖回原尺寸就把待定的那一个丢掉", () =>
+        {
+            var watch = new OutputWatch(1920, 1080, Windowed(2560, 1440), UpscaleTier.Slight);
+            var clock = DateTimeOffset.UnixEpoch;
+
+            watch.Observe(Windowed(1600, 900), clock);
+            Assert.True(watch.Settling);
+
+            var back = watch.Observe(Windowed(2560, 1440), clock + TimeSpan.FromMilliseconds(50));
+            Assert.Equal(OutputChange.None, back.Change);
+            Assert.False(watch.Settling, "拖回起点之后那一跳不能再去改链");
+            Assert.Equal(OutputChange.None, watch.Tick(clock + TimeSpan.FromSeconds(5)).Change);
+        });
+
+        Test("窗口：进退全屏立刻换预案，不等防抖", () =>
+        {
+            // 小窗 1600×900（0.83 倍，缩小档）里按下全屏，铺满 2560×1440 就是 1.33 倍的微放大档。
+            var watch = new OutputWatch(1920, 1080, Windowed(1600, 900), UpscaleTier.Shrink);
+            var clock = DateTimeOffset.UnixEpoch;
+
+            var entered = watch.Observe(Full(), clock);
+            Assert.Equal(OutputChange.Rebuild, entered.Change, "全屏当场生效");
+            Assert.True(entered.Discrete, "离散事件：调用方拿开播时预备好的那一套，不重新判定");
+            Assert.Equal(2560, entered.Width);
+            Assert.Equal(UpscaleTier.Slight, watch.Tier);
+            Assert.False(watch.Settling, "全屏不进防抖");
+
+            var left = watch.Observe(Windowed(1600, 900), clock);
+            Assert.Equal(OutputChange.Rebuild, left.Change, "退全屏同样当场生效");
+            Assert.True(left.Discrete);
+            Assert.Equal(UpscaleTier.Shrink, watch.Tier);
+
+            // 拖动中途按下全屏：待定的那个尺寸要跟着丢掉，否则接下来那一跳会去处理一次已经作废的变化。
+            watch.Observe(Windowed(2000, 1125), clock);
+            Assert.True(watch.Settling);
+            watch.Observe(Full(), clock + TimeSpan.FromMilliseconds(100));
+            Assert.False(watch.Settling);
+        });
+
+        Test("窗口：拖到另一台显示器是离散事件，尺寸没变也要报出来", () =>
+        {
+            // 同样大小的窗口挪到一块 4K 屏上：窗口尺寸一个像素没变，所以链不用变 —— 可全屏那一套预案是按
+            // 显示器算的，它刚刚过期了，调用方必须重算。这就是为什么这一档报的是「离散」而不是「没事」。
+            var watch = new OutputWatch(1920, 1080, Windowed(1600, 900), UpscaleTier.Shrink);
+
+            var moved = watch.Observe(new ShaderSurface(1600, 900, 3840, 2160, false), DateTimeOffset.UnixEpoch);
+
+            Assert.Equal(OutputChange.SizeOnly, moved.Change, "窗口尺寸没变，链也就不用变");
+            Assert.True(moved.Discrete, "但这是离散事件，两套方案都得重算");
+            Assert.False(watch.Settling, "换显示器不等防抖");
+        });
+    }
+
+    /// <summary>
+    /// 新旧并行对照（任务书 3.9）：拿新判定跑一遍旧五个组各自的触发条件，把差异打印出来。在不能真实播放的
+    /// 前提下这是唯一能看出行为变化的办法 —— 所以它主要是打印，只对**低档那一列**加一条断言：除了「多了色度
+    /// 重建」、「换掉那个根本不放大的 FSRCNNX_x1」、「老片源多了去带」，以及「在放大的链里去掉本来就不出手的
+    /// SSimDownscaler」之外，不许有别的变化。第一批验收就是这一句。
+    /// </summary>
+    private static void RegisterOldVersusNew()
+    {
+        Test("新旧并行对照：旧五个组的触发条件下，低档那一列只有说得出理由的变化", () =>
+        {
+            // 旧规则（v6）：高清阈值 1600 压过低清阈值 720，两者都压过「动画」那一支。
+            static string OldGroup(bool animated, int height) =>
+                height >= 1600 ? "2K-iGPU-Light"
+                : height is > 0 and <= 720 ? "2K-iGPU-SD"
+                : animated ? "2K-iGPU-Anime"
+                : "2K-iGPU";
+
+            static string[] OldChain(string group) => group switch
+            {
+                "2K-iGPU" => ["ravu-zoom-ar-r2", "SSimDownscaler"],
+                "2K-iGPU-Light" => ["SSimDownscaler"],
+                "2K-iGPU-Anime" =>
+                [
+                    "Anime4K_Clamp_Highlights", "Anime4K_Restore_CNN_M", "Anime4K_Upscale_CNN_x2_M",
+                    "Anime4K_AutoDownscalePre_x2", "Anime4K_AutoDownscalePre_x4", "Anime4K_Upscale_CNN_x2_S",
+                    "SSimDownscaler"
+                ],
+                _ => ["FSRCNNX_x1_16-0-4-1_distort", "SSimDownscaler"]
+            };
+
+            (string What, bool Animated, int Width, int Height)[] rows =
+            [
+                ("真人 1080p", false, 1920, 1080),
+                ("真人 720p", false, 1280, 720),
+                ("真人 576p（PAL DVD）", false, 720, 576),
+                ("真人 480p（NTSC DVD）", false, 854, 480),
+                ("真人 4K", false, 3840, 2160),
+                ("动画 1080p", true, 1920, 1080),
+                ("动画 720p", true, 1280, 720),
+                ("动画 4K", true, 3840, 2160)
+            ];
+
+            Console.WriteLine();
+            Console.WriteLine("  ── 新旧对照（低档、输出 2560×1440，也就是这台机器全屏）");
+
+            foreach (var row in rows)
+            {
+                var oldGroup = OldGroup(row.Animated, row.Height);
+                var old = OldChain(oldGroup);
+                var decision = Shaders().Resolve(row.Animated, row.Width, row.Height, 2560, 1440);
+                var chain = decision.Group!;
+                var now = chain.ShaderFileNames.ToArray();
+
+                var removed = old.Except(now, StringComparer.Ordinal).ToArray();
+                var added = now.Except(old, StringComparer.Ordinal).ToArray();
+
+                Console.WriteLine($"     {row.What}：{oldGroup} → {chain.Name}");
+                Console.WriteLine($"       旧：{string.Join(" + ", old)}");
+                Console.WriteLine($"       新：{string.Join(" + ", now)}");
+                if (removed.Length > 0) Console.WriteLine($"       去掉：{string.Join("、", removed)}");
+                if (added.Length > 0) Console.WriteLine($"       加上：{string.Join("、", added)}");
+
+                var swapped = removed.Any(name => name.Contains("FSRCNNX", StringComparison.Ordinal));
+
+                // 动画那三档从 Anime4K Mode A 换成 ArtCNN 是用户 2026-09-04 亲口说的「动画换 ArtCNN」（微放大和
+                // 甜点先换，大倍数当天第二句话跟着换），所以这里也是一条说得出理由的变化 —— 但只在动画那一半、
+                // 而且只换成 ArtCNN，别的都不算。
+                var toArtCnn = row.Animated && added.Any(name => name.StartsWith("ArtCNN", StringComparison.Ordinal));
+
+                foreach (var gone in removed)
+                {
+                    var excuse =
+                        gone.Contains("FSRCNNX", StringComparison.Ordinal)
+                        || (gone == "SSimDownscaler" && chain.Tier != UpscaleTier.Shrink)
+                        || (toArtCnn && gone.StartsWith("Anime4K", StringComparison.Ordinal));
+
+                    Assert.True(excuse, $"{row.What}：低档那一列去掉了 {gone}，而这一条没有理由");
+                }
+
+                foreach (var fresh in added)
+                {
+                    var excuse =
+                        fresh.StartsWith("CfL_Prediction", StringComparison.Ordinal)
+                        || fresh == "hdeband"
+                        || swapped
+                        || toArtCnn;
+
+                    Assert.True(excuse, $"{row.What}：低档那一列多了 {fresh}，而这一条没有理由");
+                }
+            }
+
+            Console.WriteLine("     2K-iGPU-Anime+（Ani4Kv2 转手的 ArtCNN）旧规则从来不会自动选中它，只能手选");
+        });
+    }
+
+    /// <para>
+    /// 从前这一条比的是 C# 目录和 csproj 里手抄的那份清单。现在着色器文件在仓库里、csproj 用通配符整棵拷，
+    /// 那份手抄的清单没了，能跑偏的地方也换了：表里点了一个磁盘上没有的文件（发出去就是 mpv 每帧报一次加载
+    /// 失败，画面只「看起来差一点」，四道闸门一条都不会红），或者仓库里躺着一个没有任何档位用得上的文件
+    /// （白装几百 KB，还得跟着上游更新）。两个方向分开报，报告里直接写出是哪个文件。
+    /// </para>
+    /// </summary>
+    private static void RegisterShippedShaderFiles()
+    {
+        const string name = "着色器档位：装箱的文件和档位表点名的一字不差";
+
+        var repo = RepositoryRoot();
+        var root = repo is null ? null : Path.Combine(repo, "assets", "shaders");
+        if (root is null || !Directory.Exists(root))
+        {
+            Skip(name, "找不到仓库里的 assets/shaders");
+            return;
+        }
+
+        Test(name, () =>
+        {
+            var onDisk = Directory
+                .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                .Where(path => path.EndsWith(".glsl", StringComparison.OrdinalIgnoreCase)
+                    || path.EndsWith(".hook", StringComparison.OrdinalIgnoreCase))
+                .Select(path => Normalize(Path.GetRelativePath(root, path)))
+                .ToHashSet(StringComparer.Ordinal);
+
+            var named = ShaderGroupCatalog.ShaderFiles.Select(Normalize).ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal("", Join(named.Except(onDisk)), "档位表点名了、assets/shaders 里却没有的着色器");
+            Assert.Equal("", Join(onDisk.Except(named)), "assets/shaders 里装着、可没有一个档位用得上的着色器");
+        });
+
+        static string Normalize(string path) => path.Replace('\\', '/').ToLowerInvariant();
+
+        static string Join(IEnumerable<string> paths) =>
+            string.Join("、", paths.OrderBy(path => path, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// 渲染层契约（任务书 5.5）：Core 判出来的那条链，交到 mpv 手上时必须还是那一条。
+    /// <para>
+    /// 这一层是唯一抓得住「Core 判得对、渲染层跑成另一条链」的地方，而这个项目已经栽过一次同类问题 —— 当年那个 HQ
+    /// 预设写 <c>cscale=bilinear</c>、配置组随后写 <c>spline36</c>、组总赢，于是设置页显示「画质预设 = HQ」而生效的
+    /// 是别的东西，界面在骗人。所以这里读的是**最终那份选项表按 mpv 的 last-wins 规则解析之后**的值，不是中间
+    /// 某一层写了什么。
+    /// </para>
+    /// </summary>
+    private static void RegisterRendererContract()
+    {
+        Test("渲染层契约：最终生效的每一项都和链说的一样，多余的都不许有", () =>
+        {
+            foreach (var preset in MpvOutputOptions.QualityPresets.Select(choice => choice.Value))
+            {
+                var (planner, settings) = Planner();
+                settings.Video.QualityPreset = preset;
+
+                var request = planner.Plan(Ticket(), Connection());
+                var chain = ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low);
+
+                // last-wins，和 mpv 自己解析这串参数的规则一致。
+                var live = Options(request.PlayerOptions);
+
+                foreach (var (name, wanted) in chain.ToMpvOptions(ShaderGroupCatalog.ShaderRoot))
+                {
+                    Assert.True(live.TryGetValue(name, out var got) && got == wanted,
+                        $"画质预设 {preset} 之下，{name} 最终是 {got ?? "（没给）"}，而链要的是 {wanted}");
+                }
+
+                // 反方向，钉的是任务书 3.6 那一句「scale / cscale / dscale 只由档位链设置」，外加着色器列表本身：
+                // 这四个名字如果被链之外的东西写过，设置页就会显示一个与实际不符的值 —— 那正是「画质预设写
+                // bilinear、组随后写 spline36、组总赢、界面在骗人」那次事故。
+                //
+                // 还原表里其余几个名字是**共有的**，故意不在这里判：去色带是设置页的一行（链只在挂了 hdeband
+                // 时接管它），光域那两项是画质预设的（链只在挂了 SSimDownscaler 时接管）。它们「被链接管时以链
+                // 为准」已经由上面那一段正向断言钉住了。
+                string[] chainOnly = ["glsl-shaders", "scale", "cscale", "dscale"];
+
+                var chainNames = chain.ToMpvOptions(ShaderGroupCatalog.ShaderRoot)
+                    .Select(pair => pair.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var name in chainOnly.Where(name => !chainNames.Contains(name)))
+                {
+                    Assert.False(live.ContainsKey(name),
+                        $"画质预设 {preset} 之下，{name} 被写成了 {live.GetValueOrDefault(name)}，可这条链没点它 —— 那就是链之外的东西在动缩放");
+                }
+
+                Assert.Equal(chain.ToMpvOptions(ShaderGroupCatalog.ShaderRoot).Count, request.ShaderOptionCount,
+                    "交给 SetShaderGroupAsync 的那个「链贡献了几项」必须准，否则切档时回落的基准就错了");
+            }
+        });
+
+        Test("渲染层契约：链里的着色器文件一个不多一个不少，次序也一样", () =>
+        {
+            var (planner, _) = Planner();
+            var request = planner.Plan(Ticket(), Connection());
+            var chain = ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low);
+
+            var live = Options(request.PlayerOptions)["glsl-shaders"];
+            var loaded = live.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(Path.GetFileName).ToArray();
+
+            Assert.Equal(
+                string.Join(" + ", chain.Files.Select(file => file.Split('/')[^1])),
+                string.Join(" + ", loaded),
+                "渲染层加载的文件和链说的必须一字不差 —— 包括次序，色度重建那一条结论就靠它");
+        });
+
+        Test("渲染层契约：关掉着色器之后没有任何一条链的选项残留", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Shaders.Enabled = false;
+
+            var request = planner.Plan(Ticket(), Connection());
+            var live = Options(request.PlayerOptions);
+
+            Assert.Equal(0, request.ShaderOptionCount);
+            Assert.False(live.ContainsKey("glsl-shaders"), "没有链的时候不该给 glsl-shaders");
+            Assert.False(live.ContainsKey("dscale"), "SSimDownscaler 的前置条件只该跟着它自己走");
+        });
+
+        // 「着色器开关不影响画质预设」—— 用户 2026-09-05 定的，设置页上画质预设因此排在着色器开关上面。
+        // 这两件事在代码里本来就是两条路（预设是一句 profile=，链是 glsl-shaders 加它自己那套缩放器），可谁哪天
+        // 顺手把预设塞进「有链才发」的那个分支里，屏上只会表现成「开了着色器画质预设就不算了」，没有别的证据。
+        Test("渲染层契约：画质预设跟着色器开关无关，两档都照样交给 mpv", () =>
+        {
+            foreach (var preset in MpvOutputOptions.QualityPresets.Select(choice => choice.Value))
+            {
+                foreach (var shaders in new[] { true, false })
+                {
+                    var (planner, settings) = Planner();
+                    settings.Shaders.Enabled = shaders;
+                    settings.Video.QualityPreset = preset;
+
+                    var live = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+                    var sent = live.TryGetValue("profile", out var value) ? value : "";
+
+                    // default 那一档是「一个字都不发」（mpv 自己的空 profile，见 MpvOutputOptions），
+                    // 所以它的答案是「没有 profile 这一项」，而这同样不许跟着开关变。
+                    Assert.Equal(preset == "default" ? "" : preset, sent,
+                        $"画质预设 {preset}、着色器{(shaders ? "开" : "关")}：交给 mpv 的 profile 是「{sent}」");
+                }
+            }
+        });
+
+        // 票上的刷新率必须真的走到 mpv 那一步。这一段是「接线」而不是「规则」—— 规则由 MpvOutputOptions 那几条单测
+        // 钉着，可忘了把 ticket.DisplayRefreshHz 传下去的话，规则永远拿到 0、永远不出手，而画面和日志都看不出来。
+        Test("渲染层契约：票上写的屏幕刷新率会走到 video-sync", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Video.Interpolation = true;
+
+            var slow = Options(planner.Plan(Ticket() with { DisplayRefreshHz = 60 }, Connection()).PlayerOptions);
+            Assert.Equal("display-resample", slow["video-sync"], "60Hz 上插值该照常生效");
+            Assert.Equal("yes", slow["interpolation"]);
+
+            var fast = Options(planner.Plan(Ticket() with { DisplayRefreshHz = 144 }, Connection()).PlayerOptions);
+            Assert.Equal("audio", fast["video-sync"], "144Hz 上显示同步只剩算力开销，票上的刷新率没接通就会看不出来");
+            Assert.Equal("no", fast["interpolation"]);
+
+            var unknown = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.Equal("display-resample", unknown["video-sync"], "读不到刷新率时不许替他做决定");
+        });
+
+        Test("运行条件：vo=gpu 配 d3d11 会被点出来，默认那一套不会", () =>
+        {
+            // mpv-prescalers 的 README 记的是一条具体故障，不是偏好：这个组合报 rgba16f 不可用，ravu 那几条链
+            // 根本加载不上 —— 配置齐全、日志正常、画面上什么都没多。
+            var broken = string.Join("\n", MpvRenderCheck.Problems("gpu", "d3d11", "auto-safe"));
+            Assert.Contains("rgba16f", broken);
+
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "vulkan", "auto-safe")),
+                "装机默认这一套不该有话说");
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "d3d11", "auto-safe")),
+                "没有链的时候 d3d11 也没什么可说的 —— 那道坎是 compute pass 的事，不是 d3d11 本身的事");
+
+            Assert.Contains("硬件解码是关的", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "vulkan", "")));
+            Assert.Contains("gpu-next", string.Join("\n", MpvRenderCheck.Problems("gpu", "vulkan", "auto-safe")));
+        });
+
+        // 内置播放器的渲染后端与图形接口由管线契约锁定，设置页对它根本不提供这两项——
+        // 兼容性检查必须按真正会跑的值问，而不是按设置里存着、内置根本不用的值问：
+        // 存量文件里的 gpu/vulkan 不得再编出「ravu 加载不上」「建议换 vulkan」这类没人能照做的提醒。
+        Test("运行条件：管线锁定的后端按事实问，提醒说的是用户真能做的事", () =>
+        {
+            var artcnn = ShaderGroupCatalog.Resolve(animated: true, UpscaleTier.Slight, GpuTier.Low);
+
+            // 设置里哪怕存着最坏的组合（gpu + d3d11），管线自有它的事实，渲染那两条问题不再产出。
+            Assert.Equal("", string.Join("\n",
+                MpvRenderCheck.Problems("gpu", "d3d11", "auto-safe", artcnn, pipelineOwned: true)
+                    .Where(problem => problem.Contains("渲染") || problem.Contains("ravu"))));
+
+            // compute 提醒还在（这是真会发生的卡顿），但建议不再是「换 vulkan」——内置改不了那一项。
+            var compute = string.Join("\n", MpvRenderCheck.Problems(
+                LibMpvPipelinePolicy.ForcedRenderer, LibMpvPipelinePolicy.ForcedApi, "auto-safe", artcnn, pipelineOwned: true));
+            Assert.Contains("compute pass", compute);
+            Assert.Contains("内置播放器的管线固定使用 Direct3D 11", compute);
+            Assert.DoesNotContain("把图形接口换成", compute);
+
+            // 常量与管线契约同源：Build 写出去的 vo/gpu-api 就是这两个名字，两处不许各自漂。
+            var contract = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, []);
+            Assert.Equal(LibMpvPipelinePolicy.ForcedRenderer,
+                contract.Single(option => option.Name == "vo").Value);
+            Assert.Equal(LibMpvPipelinePolicy.ForcedApi,
+                contract.Single(option => option.Name == "gpu-api").Value);
+        });
+
+        Test("运行条件：带 compute pass 的链撞上 d3d11 要被点出来（2026-09-04 那五倍）", () =>
+        {
+            // 同一条链、同一张卡、同一段片子，只换图形接口：vulkan 45 fps、d3d11 8.7 fps，而 24fps 的片子要 24。
+            // 判据是链里有没有 compute pass，不是「d3d11 慢」—— 片元着色器那几条链在两个接口上差别在噪声里，
+            // 所以这一条不许写成对 d3d11 的一概而论，也不许在这里点 ArtCNN 的名字。
+            var artcnn = ShaderGroupCatalog.Resolve(animated: true, UpscaleTier.Slight, GpuTier.Low);
+            var ravu = ShaderGroupCatalog.Resolve(animated: false, UpscaleTier.Slight, GpuTier.Low);
+
+            Assert.True(artcnn.Shaders.Sum(shader => shader.ComputePasses) > 0, "动画微放大那一格该有 compute pass");
+            Assert.Equal(0, ravu.Shaders.Sum(shader => shader.ComputePasses), "ravu 那一格一个都没有");
+
+            Assert.Contains("compute pass", string.Join("\n",
+                MpvRenderCheck.Problems("gpu-next", "d3d11", "auto-safe", artcnn)));
+            Assert.Contains("compute pass", string.Join("\n",
+                MpvRenderCheck.Problems("gpu-next", "", "auto-safe", artcnn)),
+                "「自动挑选」在 Windows 上就是 d3d11，不能因为它没写字就放过去");
+
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "vulkan", "auto-safe", artcnn)),
+                "vulkan 上这条链是够快的");
+            Assert.Equal("", string.Join("\n", MpvRenderCheck.Problems("gpu-next", "d3d11", "auto-safe", ravu)),
+                "没有 compute pass 的链在 d3d11 上没问题，不该被连坐");
+        });
+    }
+
+    /// <para>
+    /// 这是任务书 5.1 要的那道机械闸门。判一个着色器「是不是放大器」不能靠文件名 —— <c>FSRCNNX_x1</c> 名字像
+    /// 放大器、通篇没有一条 <c>//!WIDTH</c>，那一格因此几个月里一倍都没放大过。有了这一条，描述和文件对不上就
+    /// 当场红，包括上游哪天换了门控数字。
+    /// </para>
+    /// </summary>
+    private static void RegisterShaderDescriptions()
+    {
+        const string name = "着色器描述：每一条都和文件里的 //! 指令一致";
+
+        var repo = RepositoryRoot();
+        var root = repo is null ? null : Path.Combine(repo, "assets", "shaders");
+        if (root is null || !Directory.Exists(root))
+        {
+            Skip(name, "找不到仓库里的 assets/shaders");
+            return;
+        }
+
+        Test(name, () =>
+        {
+            foreach (var shader in ShaderLibrary.All)
+            {
+                var path = Path.Combine(root, shader.File.Replace('/', Path.DirectorySeparatorChar));
+                Assert.True(File.Exists(path), $"{shader.Name} 点的文件不在：{shader.File}");
+
+                var directives = File.ReadAllLines(path)
+                    .Select(line => line.TrimEnd())
+                    .Where(line => line.StartsWith("//!", StringComparison.Ordinal))
+                    .ToArray();
+
+                var hooks = directives.Where(line => line.StartsWith("//!HOOK ", StringComparison.Ordinal)).ToArray();
+                Assert.True(hooks.Length > 0, $"{shader.Name} 一个 //!HOOK 都没有");
+                Assert.Equal(hooks[0]["//!HOOK ".Length..], shader.Hook, $"{shader.Name} 的第一个钩子阶段");
+                Assert.Equal(hooks.Length, shader.Passes, $"{shader.Name} 的 pass 数");
+
+                var sizes = directives.Any(line =>
+                    line.StartsWith("//!WIDTH", StringComparison.Ordinal) || line.StartsWith("//!HEIGHT", StringComparison.Ordinal));
+                Assert.Equal(sizes, shader.ChangesResolution, $"{shader.Name} 有没有声明自己的输出尺寸");
+
+                var when = directives.FirstOrDefault(line => line.StartsWith("//!WHEN ", StringComparison.Ordinal));
+                Assert.Equal(when is null ? "" : when["//!WHEN ".Length..], shader.Gate, $"{shader.Name} 的门控");
+
+                Assert.Equal(directives.Contains("//!BIND LUMA"), shader.ReadsLuma, $"{shader.Name} 读不读亮度");
+                Assert.Equal(directives.Contains("//!BIND CHROMA"), shader.ReadsChroma, $"{shader.Name} 读不读色度");
+
+                // compute pass 的数目：这是「同一条链 d3d11 8.7 fps、vulkan 45 fps」那道坎唯一的判据，上游哪天
+                // 把某个 pass 从 compute 改成片元（或者反过来），这一条当场红。
+                var compute = directives.Count(line => line.StartsWith("//!COMPUTE", StringComparison.Ordinal));
+                Assert.Equal(compute, shader.ComputePasses, $"{shader.Name} 的 compute pass 数");
+            }
+        });
+    }
+
+    private static string? RepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Momoka.sln"))) return directory.FullName;
+        }
+
+        return null;
+    }
+
+    // ---- IPC 分帧与解析 --------------------------------------------------------
+
+    private static void RegisterIpc()
+    {
+        Test("IPC 分帧：一次读到两条消息", () =>
+        {
+            var buffer = new MpvIpcLineBuffer();
+            var lines = buffer.Append(Bytes("{\"event\":\"pause\"}\n{\"event\":\"unpause\"}\n"));
+            Assert.Equal(2, lines.Count);
+            Assert.Equal("{\"event\":\"pause\"}", lines[0]);
+            Assert.Equal(0, buffer.PendingBytes);
+        });
+
+        Test("IPC 分帧：消息被切成两次读取（v1 就是在这里丢消息的）", () =>
+        {
+            var buffer = new MpvIpcLineBuffer();
+            Assert.Equal(0, buffer.Append(Bytes("{\"data\":12")).Count, "半条消息先不产出");
+            Assert.True(buffer.PendingBytes > 0, "残留字节要留着");
+
+            var lines = buffer.Append(Bytes("3.5,\"request_id\":7}\n"));
+            Assert.Equal(1, lines.Count);
+            Assert.True(MpvIpcMessage.TryParse(lines[0], out var message), "拼起来必须是合法 JSON");
+            Assert.Equal(123.5, message.AsDouble());
+            Assert.Equal(7, message.RequestId);
+        });
+
+        Test("IPC 分帧：CRLF 与空行", () =>
+        {
+            var buffer = new MpvIpcLineBuffer();
+            var lines = buffer.Append(Bytes("{\"event\":\"seek\"}\r\n\n{\"event\":\"idle\"}\n"));
+            Assert.Equal(2, lines.Count, "空行不产出消息");
+            Assert.Equal("{\"event\":\"seek\"}", lines[0], "行尾的 \\r 要去掉");
+        });
+
+        Test("IPC 分帧：UTF-8 汉字跨读取边界", () =>
+        {
+            var buffer = new MpvIpcLineBuffer();
+            var payload = Bytes("{\"data\":\"第一集\"}\n");
+            // 10 落在「第」这个三字节字符的中间：分帧必须按字节缓存，等到换行才解码。
+            Assert.Equal(0, buffer.Append(payload.AsSpan(0, 10)).Count);
+            var lines = buffer.Append(payload.AsSpan(10));
+            Assert.Equal(1, lines.Count);
+            Assert.True(MpvIpcMessage.TryParse(lines[0], out var message), "汉字不能被拆坏");
+            Assert.Equal("第一集", message.AsString());
+        });
+
+        Test("IPC 解析：属性变化事件", () =>
+        {
+            Assert.True(MpvIpcMessage.TryParse("""{"event":"property-change","name":"pause","data":true}""", out var message), "应能解析");
+            Assert.Equal("property-change", message.Event);
+            Assert.Equal("pause", message.PropertyName);
+            Assert.Equal(true, message.AsBoolean());
+            Assert.False(message.IsReply, "事件不是命令回复");
+        });
+
+        Test("IPC 解析：文件结束原因", () =>
+        {
+            Assert.True(MpvIpcMessage.TryParse("""{"event":"end-file","reason":"eof"}""", out var message), "应能解析");
+            Assert.Equal(MpvEndFileReason.Eof, message.Reason);
+        });
+
+        Test("IPC 解析：成功与失败的回复", () =>
+        {
+            Assert.True(MpvIpcMessage.TryParse("""{"data":42.5,"request_id":3,"error":"success"}""", out var ok), "应能解析");
+            Assert.True(ok.IsReply, "带 request_id 的是回复");
+            Assert.True(ok.IsSuccess, "error=success 表示成功");
+            Assert.Equal(42.5, ok.AsDouble());
+
+            Assert.True(MpvIpcMessage.TryParse("""{"error":"property unavailable","request_id":4}""", out var bad), "应能解析");
+            Assert.False(bad.IsSuccess, "属性不可用时不能当成功");
+            Assert.Null(bad.AsDouble(), "没有 data 时取不到数值");
+        });
+
+        Test("IPC 解析：非 JSON 与终端输出不应抛异常", () =>
+        {
+            Assert.False(MpvIpcMessage.TryParse("", out _));
+            Assert.False(MpvIpcMessage.TryParse("[vo/gpu-next] reconfig", out _), "mpv 的终端输出不是消息");
+            Assert.False(MpvIpcMessage.TryParse("{不是 JSON", out _));
+        });
+
+        Test("IPC 编码：命令行序列化为 mpv 期望的形状", () =>
+        {
+            var payload = Encoding.UTF8.GetString(MpvIpcClient.Encode(["get_property", "time-pos"], 9));
+            Assert.Equal("{\"command\":[\"get_property\",\"time-pos\"],\"request_id\":9}\n", payload);
+        });
+
+        Test("IPC 编码：引号与汉字能原样还原", () =>
+        {
+            const string text = """《第 1 集》"引号"\反斜杠""";
+            var payload = Encoding.UTF8.GetString(MpvIpcClient.Encode(["show-text", text], 1));
+
+            // 默认编码器会把引号和汉字都写成 \uXXXX，整条命令因此是纯 ASCII，
+            // 这是好事：管道两端不会再有编码分歧。要验证的是还原后一模一样。
+            using var document = System.Text.Json.JsonDocument.Parse(payload);
+            var command = document.RootElement.GetProperty("command");
+            Assert.Equal("show-text", command[0].GetString());
+            Assert.Equal(text, command[1].GetString(), "转义后必须能还原成原文");
+            Assert.Equal(1, document.RootElement.GetProperty("request_id").GetInt32());
+            Assert.True(payload.EndsWith("\n", StringComparison.Ordinal), "mpv 按行读取，必须以换行结尾");
+            Assert.True(payload.All(character => character < 128), "载荷应为纯 ASCII");
+        });
+    }
+
+    // ---- 计划层 ----------------------------------------------------------------
+
+    private static void RegisterPlanner()
+    {
+        RegisterRendererContract();
+
+        Test("计划：URL、请求头与令牌位置", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Shaders.Enabled = false;
+
+            var request = planner.Plan(Ticket(), Connection());
+
+            Assert.Contains("Videos/42/stream.mkv", request.MediaUrl.AbsoluteUri);
+            Assert.DoesNotContain("api_key", request.MediaUrl.AbsoluteUri, "令牌不能出现在 URL 里");
+            Assert.Equal("X-Emby-Token", request.HttpHeaders[0].Key);
+            Assert.Equal("token-abc", request.HttpHeaders[0].Value);
+            Assert.Contains("MediaBrowser Client=", request.HttpHeaders[1].Value);
+        });
+
+        Test("计划：轨道索引换成 mpv 编号，外挂字幕换成 URL", () =>
+        {
+            var (planner, _) = Planner();
+            var ticket = Ticket() with { AudioStreamIndex = 2, SubtitleStreamIndex = 4 };
+
+            var request = planner.Plan(ticket, Connection());
+
+            Assert.Equal(2, request.AudioId, "容器里第二条音轨");
+            Assert.Equal(2, request.SubtitleId, "外挂字幕排在内封之后");
+            Assert.Equal(1, request.ExternalSubtitles.Count);
+            Assert.Contains("Subtitles/4", request.ExternalSubtitles[0].AbsoluteUri);
+            Assert.Equal(4, request.SubtitleStreamIndex, "上报给服务器的仍是 Emby 的索引");
+        });
+
+        Test("计划：续播位置换算成秒，关闭字幕时不上报字幕轨", () =>
+        {
+            var (planner, _) = Planner();
+            var ticket = Ticket() with { StartTicks = 6_000_000_000, SubtitleStreamIndex = 3, SubtitlesDisabled = true };
+
+            var request = planner.Plan(ticket, Connection());
+
+            Assert.Equal(600, request.StartSeconds, "10 分钟 = 600 秒");
+            Assert.True(request.SubtitlesDisabled, "用户关掉了字幕");
+            Assert.Null(request.SubtitleStreamIndex, "关掉字幕后不能再告诉服务器选了某条字幕");
+        });
+
+        Test("计划：默认不让 mpv 记住播放位置", () =>
+        {
+            var (planner, _) = Planner();
+            var line = Line(LaunchArguments(planner.Plan(Ticket() with { StartTicks = 6_000_000_000 }, Connection())));
+
+            // --no-config 已经把 watch_later 文件一起挡掉了，这两条是双保险：进度归服务器管，
+            // mpv 不该另存一份跟服务器对不上的位置。
+            Assert.Contains("--resume-playback=no", line);
+            Assert.Contains("--save-position-on-quit=no", line);
+            Assert.Equal("600", MpvArgumentBuilder.LoadCommands(
+                planner.Plan(Ticket() with { StartTicks = 6_000_000_000 }, Connection()))[2][2],
+                "位置由客户端在首次加载前给出：10 分钟 = 600 秒");
+        });
+
+        Test("计划：着色器档位连同它自己的缩放器一起变成 mpv 选项", () =>
+        {
+            var (planner, settings) = Planner();
+
+            var request = planner.Plan(Ticket(), Connection());
+            var expected = ShaderGroupCatalog.Resolve(animated: false, UpscaleTier.Slight, GpuTier.Low);
+            Assert.Equal(expected.Name, request.ShaderProfile, "1080p 上 1440p 是 1.33 倍，落在微放大档");
+
+            var options = Options(request.PlayerOptions);
+            Assert.True(options.TryGetValue("glsl-shaders", out var shaders) && shaders.Length > 0,
+                "档位必须落到 glsl-shaders 上");
+            Assert.Equal(Options(expected.Options)["scale"], options["scale"],
+                "档位自带的缩放器要跟着一起给出，否则这一档的调法就不成立了");
+            Assert.Equal(expected.Options.Count + 1, request.ShaderOptionCount,
+                "切档时要靠这个数认出「挂着色器之前」那一段，多一个少一个都会让还原读错值");
+
+            settings.Shaders.Enabled = false;
+            var plain = planner.Plan(Ticket(), Connection());
+            Assert.Null(plain.ShaderProfile);
+            Assert.Equal(0, plain.ShaderOptionCount);
+            Assert.False(Options(plain.PlayerOptions).ContainsKey("glsl-shaders"),
+                "没有档位时不必提 glsl-shaders，mpv 自己就是空的");
+        });
+
+        Test("计划：问不出屏幕尺寸时照旧播放，落在微放大档", () =>
+        {
+            var (planner, _) = Planner();
+
+            // 输出尺寸问不出来（多显示器插拔的那一刻、命令行拉起来的那一次）不该让画面完全没有着色器。
+            var request = planner.Plan(Ticket() with { OutputWidth = 0, OutputHeight = 0 }, Connection());
+
+            Assert.Equal(ShaderGroupCatalog.Resolve(false, UpscaleTier.Slight, GpuTier.Low).Name, request.ShaderProfile);
+            Assert.Contains("输出尺寸未知", request.ShaderReason!);
+            Assert.True(Options(request.PlayerOptions).ContainsKey("glsl-shaders"));
+        });
+
+        Test("计划：客户端自己的基线选项排在设置之前", () =>
+        {
+            var (planner, _) = Planner();
+            var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+
+            // 这些原本靠 mpv.conf 全局生效，配置文件不读之后必须由客户端自己给出。
+            Assert.Equal("yes", options["hr-seek"]);
+            Assert.Equal("no", options["sub-auto"], "服务器已经把外挂字幕列全了，再扫一遍目录只会多出重复轨");
+            Assert.Equal("no", options["audio-file-auto"]);
+            Assert.Equal("no", options["icc-profile-auto"], "装机默认不做 ICC 校色，设置里那个开关才把它抬成 yes");
+        });
+
+        Test("计划：打开自动 ICC 校色之后，发给 mpv 的最后一个值是 yes", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Video.IccProfileAuto = true;
+
+            var pairs = planner.Plan(Ticket(), Connection()).PlayerOptions;
+
+            // 基线先发 no、视频输出压在上面，靠的就是「后发的说了算」。所以这里不只看最终值，还要确认这两条
+            // 真的都在列表里、顺序没被谁调过 —— 只断言最终值的话，哪天基线那条被挪到后面去，测试照样绿。
+            Assert.Equal("yes", Options(pairs)["icc-profile-auto"], "最后落到 mpv 手里的必须是 yes");
+
+            var floor = -1;
+            var lifted = -1;
+            for (var index = 0; index < pairs.Count; index++)
+            {
+                if (!string.Equals(pairs[index].Key, "icc-profile-auto", StringComparison.OrdinalIgnoreCase)) continue;
+                if (pairs[index].Value == "no") floor = index;
+                if (pairs[index].Value == "yes") lifted = index;
+            }
+
+            Assert.True(floor >= 0 && lifted > floor, $"设置那条必须排在基线那条后面（实际 {floor} / {lifted}）");
+        });
+
+        Test("输出：宽片裁切填充只对真的有黑边的片源出手", () =>
+        {
+            // 交给一个 16:9 的文件就是白裁一刀 —— 那时候本来就没有黑边可填。mpv 自己的 panscan 默认是 0，而每次
+            // 播放都是新起的 mpv，所以「关」一条都不必发。
+            var wide = new SourceProfile(1920, 800, 8, 24, false);
+            var flat = new SourceProfile(1920, 1080, 8, 24, false);
+
+            var on = Options(MpvOutputOptions.Build(
+                new VideoSettings { FillWideSources = true }, new AudioSettings(), source: wide));
+            Assert.Equal("1.0", on["panscan"]);
+
+            var sixteenNine = Options(MpvOutputOptions.Build(
+                new VideoSettings { FillWideSources = true }, new AudioSettings(), source: flat));
+            Assert.False(sixteenNine.ContainsKey("panscan"), "16:9 的片源没有黑边，裁它没有意义");
+
+            var off = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), source: wide));
+            Assert.False(off.ContainsKey("panscan"), "关着的时候一条都不发");
+
+            var unknown = Options(MpvOutputOptions.Build(
+                new VideoSettings { FillWideSources = true }, new AudioSettings()));
+            Assert.False(unknown.ContainsKey("panscan"), "问不出片源形状时不许猜");
+        });
+
+        Test("输出：音频输出设备只在挑过的时候下发", () =>
+        {
+            // 空串是「跟随系统默认设备」，也就是 mpv 自己的 auto —— 一条都不发。这一项存在的全部意义是
+            // 「独占模式该占哪一个」：不发的时候占的是 Windows 那一刻认的默认设备，而那是看不见也选不了的。
+            var auto = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
+            Assert.False(auto.ContainsKey("audio-device"));
+
+            var picked = Options(MpvOutputOptions.Build(
+                new VideoSettings(),
+                new AudioSettings { Device = "wasapi/{0.0.0.00000000}.{9c3d1b2e}", ExclusiveMode = true }));
+
+            Assert.Equal("wasapi/{0.0.0.00000000}.{9c3d1b2e}", picked["audio-device"]);
+            Assert.Equal("yes", picked["audio-exclusive"], "挑了设备之后独占模式照旧要发");
+        });
+
+        Test("音频设备：没有描述就拿设备名当标签", () =>
+        {
+            // 屏上那一行显示的是描述；描述是空的时候必须退到设备名，而不是一个空白的下拉项 —— 一个看不出是
+            // 什么的选项和没有这一项一样糟。
+            Assert.Equal("扬声器 (Realtek)", new AudioDevice("wasapi/abc", "扬声器 (Realtek)").Label);
+            Assert.Equal("wasapi/abc", new AudioDevice("wasapi/abc", "").Label);
+            Assert.Equal(AudioDeviceCatalogue.AutoDevice, new AudioDevice("auto", "  ").Label);
+        });
+
+        Test("音频设备：mpv 自己那一项 auto 不进下拉", () =>
+        {
+            // audio-device-list 第一项永远是 mpv 自己的 auto（英文「Autoselect device」），而设置里那一行最前面
+            // 已经有中文的「跟随系统默认设备」（存的是空串）—— 留着它就是一个行为两行、一中一英挨着，而点了英文
+            // 那个存下来的是 auto 而不是空串，下次进来这一行就显示成「Autoselect device」。
+            //
+            // 这一条钉的是 Core 里这个判断本身。它从前在设置页的视图模型里，而单测进不到外壳那个程序集，自检也
+            // 只是把下拉项数打印出来 —— 那一句被谁删掉，四道闸门一关都不会红。
+            var selectable = AudioDeviceCatalogue.Selectable(
+            [
+                new AudioDevice("auto", "Autoselect device"),
+                new AudioDevice("wasapi/abc", "扬声器 (Realtek)"),
+                new AudioDevice("wasapi/def", "耳机")
+            ]);
+
+            Assert.Equal(2, selectable.Count, "只去掉 auto 那一项，别的一个都不许少");
+            Assert.Equal("wasapi/abc", selectable[0].Name, "剩下的保持 mpv 报的顺序");
+            Assert.Equal("wasapi/def", selectable[1].Name);
+
+            // 大小写不敢赌 mpv 永远小写；空列表是常态（找不到 libmpv、没装 WASAPI 输出、机器上没声卡）。
+            Assert.Equal(0, AudioDeviceCatalogue.Selectable([new AudioDevice("AUTO", "")]).Count);
+            Assert.Equal(0, AudioDeviceCatalogue.Selectable([]).Count);
+        });
+
+        Test("音频设备：核对只认还在名单里的名字，不在就跟随系统默认", () =>
+        {
+            // 设置页承诺「拔掉的设备会退回系统默认而不是变成没声音」，而 mpv 对指定设备失败是不回退的
+            // （随包 v0.41.0-923 实测：forced → no sound）。回退因此在应用层做，判断本体在这 —— 服务层
+            // 起播前核对一次，计划层照核对结果走。
+            var devices = new[] { new AudioDevice("wasapi/abc", "扬声器"), new AudioDevice("wasapi/def", "耳机") };
+
+            Assert.Equal("wasapi/abc", AudioDeviceCatalogue.UsableDevice("wasapi/abc", devices));
+            Assert.Equal("wasapi/abc", AudioDeviceCatalogue.UsableDevice("WASAPI/ABC", devices),
+                "大小写不敏感，与设置行同一套比较");
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("wasapi/gone", devices),
+                "不在名单里＝跟随系统默认，不是没声音");
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("", devices), "没挑过设备就没什么可核对的");
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("  ", devices));
+            Assert.Equal("", AudioDeviceCatalogue.UsableDevice("wasapi/abc", []), "空名单（枚举失败）时宁可疑自己");
+        });
+
+        Test("输出：音频设备按核对结果下发，核对后的空串等于跟随系统默认", () =>
+        {
+            var picked = new AudioSettings { Device = "wasapi/{0.0.0.00000000}.{9c3d1b2e}" };
+
+            // null＝不核对（外部 mpv 后端、旧调用），照设置原样发 —— 外部 mpv.exe 的设备表是它自己那一份。
+            var asIs = Options(MpvOutputOptions.Build(new VideoSettings(), picked));
+            Assert.Equal(picked.Device, asIs["audio-device"]);
+
+            var usable = Options(MpvOutputOptions.Build(new VideoSettings(), picked, audioDevice: picked.Device));
+            Assert.Equal(picked.Device, usable["audio-device"], "核对过、还在名单里：原样");
+
+            var gone = Options(MpvOutputOptions.Build(new VideoSettings(), picked, audioDevice: ""));
+            Assert.False(gone.ContainsKey("audio-device"),
+                "已不在线的设备不许再发 —— 指定端点失败时内核自己不回退，回退只能靠不发这一条");
+        });
+
+        Test("计划：核对后的设备值贯穿到起播选项", () =>
+        {
+            // 服务层把核对结果交给 Plan，Plan 转给 Build —— 这条链断在任何一处，设置里那台不在线的设备
+            // 就会原样发出去，无声的那类故障回来。设置里挑了设备、核对说不在线（空串）：起播选项里不许
+            // 出现 audio-device。
+            var settings = new AppSettings();
+            settings.Audio.Device = "wasapi/{0.0.0.00000000}.{9c3d1b2e}";
+            var planner = new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders));
+
+            var gone = Options(planner.Plan(Ticket(), Connection(), "").PlayerOptions);
+            Assert.False(gone.ContainsKey("audio-device"), "核对后的空串＝跟随系统默认，一条都不发");
+
+            var kept = Options(planner.Plan(Ticket(), Connection(), "wasapi/kept").PlayerOptions);
+            Assert.Equal("wasapi/kept", kept["audio-device"], "核对过、还在：覆盖值原样发");
+
+            var asIs = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.Equal("wasapi/{0.0.0.00000000}.{9c3d1b2e}", asIs["audio-device"],
+                "不核对（null）时照设置原样 —— 外部后端与旧调用走的老路");
+        });
+
+        Test("计划：截图有落点、有格式、有片名加时间码的模板", () =>
+        {
+            // 截图这个功能从前一条都没有，理由是「--no-config 之下没有 screenshot-directory，文件会落到 exe
+            // 旁边而不告诉用户」。所以这三条一起下发才算把那个理由消掉了 —— 少了落点那一条，症状正是当年那个。
+            var (planner, _) = Planner(@"D:\shots");
+            var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+
+            Assert.Equal(@"D:\shots", options["screenshot-directory"]);
+            Assert.Equal("png", options["screenshot-format"], "看画质的图不能先过一遍有损压缩");
+            Assert.True(options["screenshot-template"].Contains("%wH"), "模板里要带时间码");
+
+            // 没有落点的时候一条都不发：那是测试和命令行那条路，不是屏上那条。
+            var (bare, _) = Planner();
+            var without = Options(bare.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.False(without.ContainsKey("screenshot-directory"));
+            Assert.False(without.ContainsKey("screenshot-format"));
+            Assert.False(without.ContainsKey("screenshot-template"));
+        });
+
+        Test("计划：截图目录设置压过装机落点，清空回到装机落点", () =>
+        {
+            // 「在设置中新增截图的保存目录」（用户令 2026-09-29）：设置里填了的值进 Core 的裁决函数
+            // （AppPaths.ResolveScreenshotDirectory），构造函数里那个目录从「落点」退成「空着时的兜底」。
+            // 计划层发出去的、计划器属性上暴露给自检的，是同一个属性的两次读 —— 这里两头都断言，谁改歪了
+            // 都红。
+            var (planner, settings) = Planner(@"D:\shots");
+            settings.Mpv.ScreenshotDirectory = @"E:\影屏截图";
+
+            Assert.Equal(Path.GetFullPath(@"E:\影屏截图"), planner.ScreenshotDirectory);
+            var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.Equal(Path.GetFullPath(@"E:\影屏截图"), options["screenshot-directory"]);
+
+            // 清空（或只有空白）＝ 没表态：兜底的那一份重新站出来，和缺这个键的旧设置文件同一条路 ——
+            // 所以这个新键不需要迁移。
+            settings.Mpv.ScreenshotDirectory = "   ";
+            Assert.Equal(@"D:\shots", planner.ScreenshotDirectory, "设置空着时兜底说话");
+        });
+
+        Test("截图目录裁决：空着回兜底，引号空白清掉，相对钉成绝对", () =>
+        {
+            // 这一个函数是「哪里落」的唯一出处 —— 计划层、关于卡、自检三处问的都是它。三处各抄一遍规则
+            // 就是这一类 bug 的老窝，所以合同在这里钉死。
+            Assert.Equal(@"D:\shots", AppPaths.ResolveScreenshotDirectory(null, @"D:\shots"));
+            Assert.Equal(@"D:\shots", AppPaths.ResolveScreenshotDirectory("", @"D:\shots"));
+            Assert.Equal(@"D:\shots", AppPaths.ResolveScreenshotDirectory("  ", @"D:\shots"));
+            Assert.Null(AppPaths.ResolveScreenshotDirectory("", null), "兜底也没有就是真没有：截图三件套整体缺席");
+
+            // 资源管理器「复制为路径」贴进来的一对引号（和左右的空白）进这道门就掉。
+            Assert.Equal(@"E:\影屏截图", AppPaths.ResolveScreenshotDirectory(" \"E:\\影屏截图\" ", @"D:\shots"));
+
+            // 相对路径钉成绝对：外置 mpv.exe 的工作目录在 mpv.exe 那层，内置 libmpv 用本进程的 ——
+            // 同一个「相对」会落到两个地方，在计划层展开成一条，两个后端拿到的是同一条路。
+            Assert.Equal(Path.GetFullPath("shots"), AppPaths.ResolveScreenshotDirectory("shots", null));
+
+            // 手误打进非法字符就没法展开：原样交回，mpv 拒绝它、那一档截图报「未保存」 ——
+            // 比在设置页悄悄改成别的目录诚实。
+            Assert.Equal(@"D:\a|b", AppPaths.ResolveScreenshotDirectory(@"D:\a|b", null));
+        });
+
+        Test("计划：程序自带的字幕字体目录以 sub-fonts-dir 交给 mpv", () =>
+        {
+            // sub-fonts-dir 指向 exe 旁边的 fonts 目录，往里丢字体就能被 mpv 认出、不依赖这台机器装没装。
+            // v19 起不再自带任何字幕字体（默认微软雅黑 UI 半粗是系统字体），目录今天是空的；这个机制留着。
+            // 目录是壳那一头传进来的，所以测试里给一个假路径只验「给就发、不给就不发」。
+            var (planner, _) = Planner(fonts: @"C:apponts");
+            var options = Options(planner.Plan(Ticket(), Connection()).PlayerOptions);
+
+            Assert.Equal(@"C:apponts", options["sub-fonts-dir"]);
+
+            var (bare, _) = Planner();
+            var without = Options(bare.Plan(Ticket(), Connection()).PlayerOptions);
+            Assert.False(without.ContainsKey("sub-fonts-dir"), "测试和命令行那条路没有字体目录就不发");
+        });
+
+        Test("截图模板：片名进得去，非法文件名字符进不去", () =>
+        {
+            // 时间码用 %wH.%wM.%wS 而不是 mpv 现成的 %p：后者是 HH:MM:SS，而冒号在 Windows 文件名里非法。
+            // 末尾那个序号非有不可：mpv 不覆盖已经存在的截图，而只有模板里带序号时它才会另找一个名字 —— 少了它，
+            // 同一帧（暂停时时间码一秒都不走）连截两张，第二张干脆不存，而屏上照旧写「已保存到…」。
+            Assert.Equal("攻壳机动队 %wH.%wM.%wS-%02n", MpvBaseline.ScreenshotTemplate("攻壳机动队"));
+
+            // 服务器上的剧名带 : / ? 是常事，而这三个都不许进文件名。走的是「下载到设备」那同一份规矩
+            // （DownloadPlan.Safe），所以这个仓库里只有一个答案说「文件名里能放什么」。
+            var messy = MpvBaseline.ScreenshotTemplate("攻壳/机动队: SAC?2045");
+            foreach (var illegal in new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' })
+            {
+                Assert.False(messy.Contains(illegal), $"模板里不许出现 {illegal}");
+            }
+
+            // 百分号得自己再挡一次：Safe() 没理由管它，可 mpv 会把它读成一个自己的格式符。片名里抄来的 %n 要变成
+            // 一个普通的 n，而模板末尾那个序号是我们自己加的 —— 两者不能混。
+            Assert.True(MpvBaseline.ScreenshotTemplate("100%纯度 %n").StartsWith("100纯度 n "),
+                "片名里的百分号不许变成 mpv 的格式符");
+            Assert.True(MpvBaseline.ScreenshotTemplate("100%纯度").StartsWith("100纯度"));
+
+            // 片名一个字都不剩的时候不能落成一个只有时间码的名字，也不能是 mpv 默认那个 mpv-shotNNNN。
+            Assert.Equal("Momoka %wH.%wM.%wS-%02n", MpvBaseline.ScreenshotTemplate("  ..  "));
+            Assert.Equal("Momoka %wH.%wM.%wS-%02n", MpvBaseline.ScreenshotTemplate(null));
+        });
+
+        Test("计划：轨道建议按偏好语言给出默认值", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Playback.AudioLanguages = ["日语"];
+            settings.Playback.SubtitleLanguages = ["中文"];
+
+            var auto = planner.SuggestTracks(Source());
+
+            Assert.Equal(1, auto.Audio!.Index, "日语音轨");
+            Assert.Equal(3, auto.Subtitle.Stream!.Index, "中文字幕");
+            Assert.False(auto.Subtitle.Disabled);
+        });
+
+        Test("计划：时长优先取片源自身的时长", () =>
+        {
+            var (planner, _) = Planner();
+            var request = planner.Plan(Ticket(), Connection());
+            Assert.Equal(72_000_000_000, request.RunTimeTicks, "2 小时");
+        });
+
+        Test("计划：语言优先级转成 mpv 的 slang/alang", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Playback.SubtitleLanguages = ["简体中文", "中文", "繁体中文"];
+            settings.Playback.AudioLanguages = ["英语"];
+
+            var request = planner.Plan(Ticket(), Connection());
+
+            Assert.Equal("zh-Hans,zh_hans,zh-CN,zh_CN,zhs,sc,chs,chi-Hans,zh,chi,zho,zh-Hant,zh_hant,zh-TW,zh_TW,zh-HK,zh_HK,zht,tc,chi-Hant",
+                request.SubtitleLanguage);
+            Assert.Equal("eng,en", request.AudioLanguage);
+        });
+
+        Test("计划：音轨语言是列表，按顺序展开成 alang", () =>
+        {
+            // v9 之前这一项只放得下一种语言，「日语 > 粤语 > 英语」根本表达不出来 —— 而 mpv 的 alang 本来就吃列表。
+            var (planner, settings) = Planner();
+            settings.Playback.AudioLanguages = ["日语", "粤语", "英语"];
+
+            var request = planner.Plan(Ticket(), Connection());
+
+            Assert.Equal("jpn,ja,yue,zh-HK,eng,en", request.AudioLanguage,
+                "三种语言按填的顺序展开，每种的候选码也按它自己的顺序");
+        });
+
+        Test("计划：空的语言优先级不传 slang/alang", () =>
+        {
+            var (planner, settings) = Planner();
+            settings.Playback.SubtitleLanguages = [];
+            settings.Playback.AudioLanguages = [];
+            var request = planner.Plan(Ticket(), Connection());
+            Assert.Null(request.SubtitleLanguage);
+            Assert.Null(request.AudioLanguage, "跟随默认音轨时不该把语言写进 --alang");
+        });
+
+        Test("计划：字幕字体按字体族名传给 mpv，路径会被换成族名", () =>
+        {
+            var (planner, settings) = Planner();
+
+            // sub-font 只认字体族名。v3 存的是 C:\Windows\Fonts 下的文件路径，mpv 找不到这个「族」
+            // 就悄悄退回 sans-serif；当时没人发现，是因为用户自己的 mpv.conf 里另写了一个真族名。
+            //
+            // 从 2026-09-05 起字体和其余十个字幕外观选项走同一条路（PlayerOptions），不再单独挂在
+            // PlaybackRequest 上 —— 一个选项一个写入方，而且设置页改一行能当场推给正在播的片子。
+            string Font() => Options(planner.Plan(Ticket(), Connection()).PlayerOptions)["sub-font"];
+
+            settings.Playback.SubtitleFontFamily = @"C:\Windows\Fonts\msyh.ttc";
+            Assert.Equal("Microsoft YaHei", Font(), "认得的文件换成族名");
+
+            settings.Playback.SubtitleFontFamily = @"D:\字体\我自己的字体.ttf";
+            Assert.Equal(FontFamilies.Default, Font(),
+                "认不出来的文件宁可退回默认族（Microsoft YaHei，系统自带），也不能把路径当族名传出去");
+
+            settings.Playback.SubtitleFontFamily = "思源黑体 CN";
+            Assert.Equal("思源黑体 CN", Font());
+
+            settings.Playback.SubtitleFontFamily = "  ";
+            Assert.Equal(FontFamilies.Default, Font(), "不填时用兜底族");
+        });
+
+        Test("语言优先级：中文名、英文名与原始 mpv 码混用", () =>
+        {
+            Assert.Equal("zh,chi,zho", TrackLanguagePriority.ToMpvValue("中文"));
+            Assert.Equal("eng,en", TrackLanguagePriority.ToMpvValue("English"));
+            Assert.Equal("jpn,ja", TrackLanguagePriority.ToMpvValue("日語")); // 繁体写法也认
+            Assert.Equal("zh-Hans,zh_hans,zh-CN,zh_CN,zhs,sc,chs,chi-Hans", TrackLanguagePriority.ToMpvValue("Simplified Chinese"));
+            Assert.Equal("zh-Hans,zh_hans,zh-CN,zh_CN,zhs,sc,chs,chi-Hans", TrackLanguagePriority.ToMpvValue("Chinese Simplified"), "语序相反的英文写法也认");
+            Assert.Equal("zh,chi,zho", TrackLanguagePriority.ToMpvValue("Chinese"));
+            Assert.Equal("yue,zh-HK", TrackLanguagePriority.ToMpvValue("粤语"));
+            Assert.Equal("cmn,zh-CN,zh", TrackLanguagePriority.ToMpvValue("普通话"));
+            Assert.Equal("jpn,ja,xyz", TrackLanguagePriority.ToMpvValue("日语 > xyz"), "未知名字原样透传");
+            Assert.Equal("zh,chi,zho,eng,en", TrackLanguagePriority.ToMpvValue("中文>English"));
+            Assert.Equal("zh,chi,zho,eng,en", TrackLanguagePriority.ToMpvValue("中文，English"), "顿号分隔也能拆");
+            Assert.Equal("zh,chi,zho,eng,en", TrackLanguagePriority.ToMpvValue("中文→English"), "箭头分隔也能拆");
+            Assert.Equal("eng,en", TrackLanguagePriority.ToMpvValue("英语,English"), "重复的码只保留一份");
+            Assert.Null(TrackLanguagePriority.ToMpvValue(""));
+            Assert.Null(TrackLanguagePriority.ToMpvValue(null));
+            Assert.Null(TrackLanguagePriority.ToMpvValue("   "));
+        });
+
+        Test("启动参数：语言优先级落到命令行，字幕字体不在这儿", () =>
+        {
+            var request = Request() with
+            {
+                SubtitleLanguage = "zh,chi",
+                AudioLanguage = "jpn",
+                PlayerOptions = [new("sub-font", "Microsoft YaHei")]
+            };
+
+            var line = Line(LaunchArguments(request));
+            Assert.Contains("--slang=zh,chi", line);
+            Assert.Contains("--alang=jpn", line);
+
+            // 字幕字体和其余字幕外观一样走 PlayerOptions，所以命令行上只应该有那一份。两份的坏法不是
+            // 「值不一样」而是「哪天规则改了只改了一处」。
+            Assert.Equal(1, line.Split("--sub-font=").Length - 1, "sub-font 只能出现一次");
+            Assert.Contains("--sub-font=Microsoft YaHei", line);
+        });
+    }
+
+    // ---- 自动选轨 --------------------------------------------------------------
+
+    private static void RegisterTrackSelection()
+    {
+        Test("选轨：字幕按优先级顺序命中第一个有的语言", () =>
+        {
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "zh-Hant"),
+                Stream(2, "Subtitle", language: "eng"));
+
+            var settings = Playback(subtitles: ["简体中文", "英语", "繁体中文"]);
+            var auto = TrackSelection.Resolve(settings, source);
+
+            Assert.Equal(2, auto.Subtitle.Stream!.Index, "没有简体，就该轮到英语，而不是直接挑第一条");
+
+            settings.SubtitleLanguages = ["繁体中文", "英语"];
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "繁体排在前面就该选它");
+        });
+
+        Test("选轨：语言与标题分家——语言只看 Language，简繁靠字段而非标题", () =>
+        {
+            // 「把 Language 和 Title 分离」（2026-09-22）：两条都只写 chi，标题写着简繁的英文名。语言这一关只认
+            // Language —— chi 都算「中文」（通用），但都不是「简体中文」；标题里的「Chinese Simplified」不再把
+            // 一条轨冒充成简体（这是从前靠标题 hint 做、如今刻意不做的事）。
+            var byTitle = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "Traditional Chinese"),
+                Stream(2, "Subtitle", language: "chi", title: "Chinese Simplified"));
+
+            var simplified = Playback(subtitles: ["简体中文"]);
+            simplified.SubtitleFallbackToDefault = false;
+            Assert.True(TrackSelection.Resolve(simplified, byTitle).Subtitle.Disabled,
+                "标题写着 Chinese Simplified 也不算简体——语言不看标题");
+
+            simplified.SubtitleLanguages = ["中文"];
+            Assert.NotNull(TrackSelection.Resolve(simplified, byTitle).Subtitle.Stream);
+
+            // 真写了语言码就照旧排先后：繁体轨用 zh-Hant，简体优先时轮不到它。
+            var byCode = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "zh-Hant"),
+                Stream(2, "Subtitle", language: "zh-Hans"));
+            Assert.Equal(2, TrackSelection.Resolve(Playback(subtitles: ["简体中文"]), byCode).Subtitle.Stream!.Index,
+                "简体优先时挑 zh-Hans 那条，不碰 zh-Hant");
+        });
+
+        Test("选轨：语言选中之后标题「排除」把不想要的压到最后（软兜底）", () =>
+        {
+            // 「先确定哪几条字幕是中文，然后再决定不要双语和特效」（2026-09-22）。语言选中两条中文之后，标题这一关
+            // 才决定取谁：排除「特效」→ 干净那条胜出；优先「特效」→ 反过来；全被排除时还是给一条，不因标题不合意
+            // 就没字幕。
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "中文特效"),
+                Stream(2, "Subtitle", language: "chi", title: "中文"));
+
+            var settings = Playback(subtitles: ["中文"]);
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Exclude)];
+            Assert.Equal(2, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "含「特效」的被压到后面");
+
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Prefer)];
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "「优先」时含关键词的排前头");
+
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Neutral)];
+            var neutral = TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index;
+            Assert.True(neutral is 1 or 2, "默认（中立）不改变次序，落回默认轨规则");
+
+            var onlyEffects = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "中文特效"));
+            settings.SubtitleTitleRules = [new("特效", TitlePreference.Exclude)];
+            Assert.Equal(1, TrackSelection.Resolve(settings, onlyEffects).Subtitle.Stream!.Index,
+                "只剩被排除的那条时还是给它——排除是软的");
+        });
+
+        Test("标题打分：优先 +1、排除 −1、默认不计，子串大小写不敏感", () =>
+        {
+            List<KeywordRule> rules =
+            [
+                new("双语", TitlePreference.Exclude),
+                new("特效", TitlePreference.Exclude),
+                new("SDH", TitlePreference.Prefer)
+            ];
+
+            Assert.Equal(0, KeywordFilter.Score("简体中文", rules));
+            Assert.Equal(-1, KeywordFilter.Score("中英双语", rules));
+            Assert.Equal(-2, KeywordFilter.Score("双语特效", rules), "两个候补词各扣一分");
+            Assert.Equal(1, KeywordFilter.Score("English sdh", rules), "子串、大小写不敏感");
+            Assert.Equal(0, KeywordFilter.Score("双语sdh", rules), "一候补一优先相抵");
+            Assert.Equal(0, KeywordFilter.Score(null, rules));
+            Assert.Equal(0, KeywordFilter.Score("双语", []), "没有规则时这一关不作用");
+            Assert.Equal(0, KeywordFilter.Score("双语", [new("双语", TitlePreference.Neutral)]), "默认词不计分");
+        });
+
+        Test("选轨：一个语言都对不上时按开关决定回退还是关掉", () =>
+        {
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "kor"));
+
+            var settings = Playback(subtitles: ["简体中文"]);
+            Assert.True(TrackSelection.Resolve(settings, source).Subtitle.Disabled, "没有默认标记时不任意选轨");
+            source.DefaultSubtitleStreamIndex = 1;
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "回退只选明确的默认字幕");
+
+            settings.SubtitleFallbackToDefault = false;
+            var off = TrackSelection.Resolve(settings, source).Subtitle;
+            Assert.Null(off.Stream);
+            Assert.True(off.Disabled, "关掉回退就该明确不显示字幕");
+        });
+
+        Test("选轨：「其他字幕」兜住优先级里没点名的所有语言", () =>
+        {
+            // 「字幕优先级新增预设可选的其他字幕」（2026-09-06）：填在最后就是「前面的都要不到时，有一条
+            // 别的语言的也行」。它跟「没有匹配语言时使用默认字幕」的差别在取谁 —— 开关只肯拿文件自带的
+            // 那一条，名字能从剩下的全部里挑最好的。
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "kor"),
+                Stream(2, "Subtitle", language: "eng"));
+
+            var settings = Playback(subtitles: ["简体中文", TrackLanguagePriority.Any]);
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index,
+                "韩语英语都不是点名的语言，「其他字幕」在剩下的里面挑了文件默认的那条");
+
+            // 排在前头就轮不到点名语言了 —— 它跟任何轨道都匹配，位置就是先后。
+            settings.SubtitleLanguages = [TrackLanguagePriority.Any, "英语"];
+            Assert.Equal(1, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index,
+                "「其他字幕」排第一时谁都拦不住它");
+        });
+
+        Test("选轨：「其他字幕」不进交给 mpv 的语言表", () =>
+        {
+            // mpv 的 slang 没有「任何语言」这一档，它的规矩本来就是列表都对不上时自己兜底 ——
+            // 把这个名字翻译成码发过去只会添一个永远匹配不上的词。
+            Assert.Null(TrackLanguagePriority.ToMpvValue(TrackLanguagePriority.Any));
+            Assert.Equal("zh,chi,zho",
+                TrackLanguagePriority.ToMpvValue("中文, " + TrackLanguagePriority.Any),
+                "别的语言照常翻译，「其他字幕」只从码表里缺席");
+
+            // 存档那头要认它、留它，不跟不认识的名字一样原样当代码发。
+            Assert.Equal(TrackLanguagePriority.Any,
+                string.Join(",", TrackLanguagePriority.CleanList(["其他字幕"])), "归一化把这个名字留在表里");
+
+            // 它跟任何轨道都匹配，音频那边也一样能用。
+            Assert.True(TrackLanguagePriority.Matches(TrackLanguagePriority.Any, "kor", "kor", "한국어"));
+            Assert.True(TrackLanguagePriority.Matches(TrackLanguagePriority.Any, "", "", ""), "什么都没标的轨道也算「其他」");
+            Assert.False(TrackLanguagePriority.Matches("其他字幕x", "kor", "", ""), "得是整个名字，不是前缀");
+        });
+
+        Test("OrderedChoices：下拉那张表的排法", () =>
+        {
+            static string Checked(IEnumerable<(string Name, bool Checked)> choices) =>
+                string.Join(",", choices.Where(choice => choice.Checked).Select(choice => choice.Name));
+
+            // 什么都没选：整目录都在、一个都不勾，「其他字幕」垫底。头一项是目录里第一个（简体中文），没勾。
+            var empty = TrackLanguagePriority.OrderedChoices([]);
+            Assert.Equal("", Checked(empty), "没存过就一个都不勾");
+            Assert.Equal(("简体中文", false), empty[0]);
+            Assert.Equal((TrackLanguagePriority.Any, false), empty[^1], "「其他字幕」垫在最后");
+            Assert.Equal(TrackLanguagePriority.Catalogue.Count + 1, empty.Count, "整目录加一个「其他字幕」");
+            Assert.Equal(empty.Count, empty.Select(choice => choice.Name).Distinct().Count(), "不许有重的");
+
+            // 选过的排在前头，照存的次序；勾了的滤出来照原样，就是存回去的优先级列表。
+            var picked = TrackLanguagePriority.OrderedChoices(["英语", "中文"]);
+            Assert.Equal(("英语", true), picked[0]);
+            Assert.Equal(("中文", true), picked[1]);
+            Assert.Equal("英语,中文", Checked(picked), "勾了的照屏上次序滤出来 == 存进去的次序");
+            Assert.Equal(TrackLanguagePriority.Catalogue.Count + 1, picked.Count, "选过的也是从目录里挪上来的，总数不变");
+            Assert.Equal(picked.Count, picked.Select(choice => choice.Name).Distinct().Count(), "挪上来的不该在下面又出现一次");
+
+            // 存档里的码和别名先归一化再排：chs → 简体中文，勾着，排头一个。
+            Assert.Equal(("简体中文", true), TrackLanguagePriority.OrderedChoices(["chs"])[0], "码先归一化成名字");
+
+            // 存档里带「其他字幕」：勾着排在选过的那批里，底下不再多出一个。
+            var withAny = TrackLanguagePriority.OrderedChoices(["简体中文", TrackLanguagePriority.Any]);
+            Assert.Equal("简体中文,其他字幕", Checked(withAny));
+            Assert.Equal(1, withAny.Count(choice => choice.Name == TrackLanguagePriority.Any), "「其他字幕」只出现一次");
+
+            // 字幕表排掉普通话、粤语（「删掉字幕优先级里的普通话、粤语」）：offered 不列、总数少两个；
+            // 就算存档里有也不出现（下次存盘就掉了）。目录本身没删它们 —— 音轨那份还要用。
+            string[] exclude = ["普通话", "粤语"];
+            var subtitle = TrackLanguagePriority.OrderedChoices([], exclude);
+            Assert.False(subtitle.Any(choice => choice.Name is "普通话" or "粤语"), "字幕表不列普通话、粤语");
+            Assert.Equal(TrackLanguagePriority.Catalogue.Count - 1, subtitle.Count, "少两个语言、加一个「其他字幕」");
+            var hadThem = TrackLanguagePriority.OrderedChoices(["粤语", "简体中文"], exclude);
+            Assert.Equal("简体中文", Checked(hadThem), "存档里的粤语也不显示，只留下没被排除的");
+            Assert.True(TrackLanguagePriority.Catalogue.Any(entry => entry.Label == "粤语"), "目录本身仍留着粤语给音轨用");
+        });
+
+        Test("关键词规则：WithExclusions 末尾补候补词，不重复不覆盖", () =>
+        {
+            static string Dump(IEnumerable<KeywordRule> rules) =>
+                string.Join(",", rules.Select(rule => $"{rule.Term}:{rule.State}"));
+
+            // 空词跳过；给的词补成候补（Exclude），排在用户规则后头。
+            List<KeywordRule> user = [new("双语", TitlePreference.Exclude)];
+            Assert.Equal("双语:Exclude,繁:Exclude,繁体:Exclude", Dump(KeywordFilter.WithExclusions(user, "繁", "", "繁体")));
+
+            // 用户自己给「繁」设过态度：以他的为准，不覆盖、不重复加。
+            List<KeywordRule> keep = [new("繁", TitlePreference.Prefer)];
+            var merged = KeywordFilter.WithExclusions(keep, "繁", "繁体");
+            Assert.Equal(TitlePreference.Prefer, merged.First(rule => rule.Term == "繁").State, "用户点名的态度不被覆盖");
+            Assert.Equal(1, merged.Count(rule => rule.Term == "繁"), "不重复加");
+        });
+
+        Test("选轨：选简体中文时，标题带繁体的中文轨沉底", () =>
+        {
+            // 一条只标 chi、标题「繁体中文」，一条只标 chi、标题「简体中文」。语言这一关简体中文（zh-Hans）都不匹配，
+            // 落到通用「中文」——两条都算中文；标题这一关因为优先级里有简体中文，自动排除「繁」，繁体那条沉底。
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "繁体中文"),
+                Stream(2, "Subtitle", language: "chi", title: "简体中文"));
+
+            var settings = Playback(subtitles: ["简体中文", "中文"]);
+            Assert.Equal(2, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index,
+                "选了简体中文，繁体标题的那条让位给没标繁的");
+
+            // 没选简体中文（只有通用中文）时不排繁：按默认轨定夺，不因标题沉底。
+            settings.SubtitleLanguages = ["中文"];
+            var noSimplified = TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index;
+            Assert.True(noSimplified is 1 or 2, "没点简体就不自动排繁");
+
+            // 只有繁体那一条时仍给它 —— 排除是软的。
+            var onlyTraditional = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi", title: "繁体中文"));
+            Assert.Equal(1, TrackSelection.Resolve(Playback(subtitles: ["简体中文", "中文"]), onlyTraditional).Subtitle.Stream!.Index,
+                "只剩繁体那条时还是给它");
+        });
+
+        Test("选轨：字幕模式 强制/外语/关闭", () =>
+        {
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Audio", language: "chi"),
+                Stream(2, "Subtitle", language: "chi"),
+                Stream(3, "Subtitle", language: "chi", forced: true));
+
+            var settings = Playback(subtitles: ["中文"]);
+
+            settings.SubtitleMode = SubtitleMode.ForcedOnly;
+            Assert.Equal(3, TrackSelection.Resolve(settings, source).Subtitle.Stream!.Index, "只要强制字幕");
+
+            settings.SubtitleMode = SubtitleMode.ForeignAudioOnly;
+            Assert.True(TrackSelection.Resolve(settings, source).Subtitle.Disabled, "音轨已经是中文，不需要字幕");
+
+            settings.SubtitleMode = SubtitleMode.Off;
+            Assert.True(TrackSelection.Resolve(settings, source).Subtitle.Disabled);
+        });
+
+        Test("选轨：只要强制字幕但文件一条都没有时不退回整轨", () =>
+        {
+            var source = SourceWith(
+                Stream(0, "Video", height: 1080),
+                Stream(1, "Subtitle", language: "chi"));
+
+            var settings = Playback(subtitles: ["中文"]);
+            settings.SubtitleMode = SubtitleMode.ForcedOnly;
+
+            Assert.True(TrackSelection.Resolve(settings, source).Subtitle.Disabled, "整轨翻译不是强制字幕的替代品");
+        });
+
+        Test("选轨：音轨选默认或单选一种语言，没有优先级", () =>
+        {
+            var source = new MediaSource
+            {
+                Id = "src1",
+                DefaultAudioStreamIndex = 2,
+                MediaStreams =
+                [
+                    Stream(0, "Video", height: 1080),
+                    Stream(1, "Audio", language: "jpn"),
+                    Stream(2, "Audio", language: "chi")
+                ]
+            };
+
+            var settings = Playback(subtitles: []);
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "跟随文件自己的默认轨");
+
+            settings.AudioLanguages = ["日语"];
+            Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index);
+
+            settings.AudioLanguages = ["韩语"];
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "没有韩语音轨就回到默认轨，而不是没有声音");
+
+            // 列表按顺序问：韩语这个文件没有，粤语也没有（chi 不是 yue），落到日语。这一条是「音轨语言从
+            // 单选变成优先级列表」的核心 —— 单选表达不出「首选韩语，其次日语」。
+            settings.AudioLanguages = ["韩语", "日语"];
+            Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index, "第一种没有就问第二种，而不是直接回默认轨");
+        });
+
+        Test("选轨：音轨格式筛选在同一语言里挑，但越不过语言优先级", () =>
+        {
+            var source = new MediaSource
+            {
+                Id = "src1",
+                DefaultAudioStreamIndex = 1,
+                MediaStreams =
+                [
+                    Stream(0, "Video", height: 1080),
+                    Stream(1, "Audio", language: "jpn", codec: "aac", channelLayout: "stereo", channels: 2),
+                    Stream(2, "Audio", language: "jpn", codec: "truehd", title: "TrueHD Atmos", channelLayout: "7.1", channels: 8),
+                    Stream(3, "Audio", language: "eng", codec: "truehd", title: "TrueHD Atmos", channelLayout: "7.1", channels: 8)
+                ]
+            };
+
+            var settings = Playback(subtitles: []);
+            settings.AudioLanguages = ["日语"];
+
+            // 没设格式规则（全中立）：同一语言里仍是默认轨优先，选到服务器默认的那条 aac。
+            settings.AudioFormatRules = [];
+            Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index, "格式规则全空时，同语言里照旧按默认轨");
+
+            // 优先 TrueHD：日语那两条里把 TrueHD 抬上来，越过服务器默认的 aac。
+            settings.AudioFormatRules = [new("TrueHD", TitlePreference.Prefer)];
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "优先词把同语言里的 TrueHD 抬到默认轨之前");
+
+            // 7.1 命中 ChannelLayout 字段，同样有效。
+            settings.AudioFormatRules = [new("7.1", TitlePreference.Prefer)];
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "声道布局也参与打分");
+
+            // 语言是第一位的：英语那条虽然也是 TrueHD Atmos，却不该越过日语优先级。
+            settings.AudioFormatRules = [new("Atmos", TitlePreference.Prefer)];
+            Assert.Equal(2, TrackSelection.ChooseAudio(settings, source)!.Index, "格式只在同一语言内部作用，日语 TrueHD 不因英语也是 Atmos 就输给它");
+
+            // 候补词把一条压到最后：TrueHD 设为候补时，日语里回到 aac。
+            settings.AudioFormatRules = [new("TrueHD", TitlePreference.Exclude)];
+            Assert.Equal(1, TrackSelection.ChooseAudio(settings, source)!.Index, "候补词把 TrueHD 压后，同语言里回到另一条");
+        });
+    }
+
+    // ---- 视频与音频输出 ---------------------------------------------------------
+
+    private static void RegisterOutputOptions()
+    {
+        Test("输出：出厂设置给出的正是原先 mpv.conf 里那几条", () =>
+        {
+            // 配置文件不读之后，客户端不设的就没人设了，所以出厂值不再是一片空白。
+            var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
+
+            Assert.Equal("gpu-next", options["vo"]);
+            Assert.Equal("vulkan", options["gpu-api"],
+                "v8 起图形接口出厂是 vulkan：同一条带 compute pass 的链在 d3d11 上只有 8.7 fps、vulkan 上 45（2026-09-04 实测）");
+            Assert.Equal("auto", options["dither-depth"]);
+            Assert.Equal("fruit", options["dither"]);
+            Assert.Equal("6", options["dither-size-fruit"]);
+            Assert.Equal("full", options["video-output-levels"], "「色彩范围默认使用 PC(0-255)」");
+            Assert.Equal("auto-safe", options["hwdec"],
+                "v7 起硬解出厂就是「自动」：留空等于 mpv 的 no，也就是纯软件解码，那不是谁挑的，是装机时碰巧带着的");
+            Assert.False(options.ContainsKey("profile"), "画质预设出厂是 default，什么都不该传");
+        });
+
+        Test("输出：每一项都能单独关回 mpv 自己的默认值", () =>
+        {
+            var blank = new VideoSettings
+            {
+                QualityPreset = "",
+                Renderer = "",
+                GpuApi = "",
+                HardwareDecoding = "",
+                OutputLevels = "",
+                Dither = "",
+                Deband = "",
+                HdrMode = "",
+                HighFrameRateAudioSync = false
+            };
+
+            var options = MpvOutputOptions.Build(blank, new AudioSettings());
+            Assert.Equal(0, options.Count, "全部选「不指定」时就该一个选项都不传");
+        });
+
+        // 「画质与着色器板块新增 mpv 画质预设配置 profile=high-quality、profile=default」，加上 2026-09-04 换掉的那一
+        // 项：HQ（用户 mpv.conf 里那个手抄的段）删掉、fast（mpv 自己内置的）补上。第 0 项当天试过改名叫「无」（空值），
+        // 用户一句「改回 default」送回来了 —— 两种写法都是什么都不传，所以那是他的用词，不是这一层的行为。
+        Test("输出：画质预设就这三项，全都是 mpv 自己内置的 profile", () =>
+        {
+            Assert.Equal(
+                "default、fast、high-quality",
+                string.Join("、", MpvOutputOptions.QualityPresets.Select(choice => choice.Value)),
+                "多一项少一项都要有人想一想：预设是逐字交给 mpv 的 profile 名，mpv 不认识就直接退出，什么都不播");
+
+            Assert.Equal("default", MpvOutputOptions.QualityPresets[0].Value,
+                "SettingsMigration 认不出来的值退回第 0 项，那一项必须是「不套用」");
+        });
+
+        Test("输出：画质预设 default 什么都不传，fast 和 high-quality 走 mpv 内置 profile", () =>
+        {
+            var none = MpvOutputOptions.Build(new VideoSettings { QualityPreset = "default", OutputLevels = "" }, new AudioSettings());
+            Assert.False(Options(none).ContainsKey("profile"), "mpv 的 [default] 在 --no-config 下是空的，传了也是白传");
+
+            var high = Options(MpvOutputOptions.Build(new VideoSettings { QualityPreset = "high-quality" }, new AudioSettings()));
+            Assert.Equal("high-quality", high["profile"], "这个 profile 编在 mpv 里，不靠配置文件");
+
+            var fast = Options(MpvOutputOptions.Build(new VideoSettings { QualityPreset = "fast" }, new AudioSettings()));
+            Assert.Equal("fast", fast["profile"], "fast 同样编在 mpv 里（发布件那份 libmpv 和外部 mpv.exe 都有）");
+        });
+
+        Test("输出：画质预设只交一个 profile 名，三个缩放器一个都不碰", () =>
+        {
+            // 删掉的那个 HQ 是用户 mpv.conf 里手抄来的一段，会逐条展开成 scale-antiring / 光域那几项；而 2026-09-03
+            // 之所以先把三个缩放器从它身上拿掉，是因为档位链最后才发出去、谁都盖不住它，于是设置页写着「画质预设 =
+            // HQ」而生效的是链里的 cscale=spline36 —— 界面在骗人。现在三项预设全是 mpv 内置的 profile 名，客户端
+            // 这一侧一条选项都不再手写，那件事从根上没了地方发生。
+            foreach (var preset in MpvOutputOptions.QualityPresets.Select(choice => choice.Value))
+            {
+                var options = MpvOutputOptions.Build(
+                    new VideoSettings
+                    {
+                        QualityPreset = preset,
+                        Renderer = "",
+                        GpuApi = "",
+                        HardwareDecoding = "",
+                        OutputLevels = "",
+                        Dither = "",
+                        Deband = "",
+                        HdrMode = "",
+                        HighFrameRateAudioSync = false
+                    },
+                    new AudioSettings());
+
+                Assert.Equal(
+                    preset == "default" ? "" : "profile",
+                    string.Join("、", options.Select(pair => pair.Key)),
+                    $"画质预设 {preset} 除了一个 profile 名不该再传任何东西");
+            }
+        });
+
+        Test("输出：画质预设排在其他视频设置之前，谁在后面谁说了算", () =>
+        {
+            // 顺序就是覆盖关系：画质预设是底，视频输出压在上面，着色器配置组最后。
+            var options = MpvOutputOptions.Build(
+                new VideoSettings { QualityPreset = "high-quality", Renderer = "gpu" },
+                new AudioSettings());
+
+            var preset = -1;
+            var renderer = -1;
+            for (var index = 0; index < options.Count; index++)
+            {
+                if (options[index].Key == "profile") preset = index;
+                if (options[index].Key == "vo") renderer = index;
+            }
+
+            Assert.True(preset >= 0 && renderer > preset, $"画质预设必须在最前（实际 {preset} / {renderer}）");
+        });
+
+        Test("输出：视频设置落到 mpv 选项名上", () =>
+        {
+            var video = new VideoSettings
+            {
+                Renderer = "gpu-next",
+                GpuApi = "d3d11",
+                HardwareDecoding = "d3d11va",
+                OutputLevels = "limited",
+                DeinterlaceMode = "yes",
+                NetworkCacheMegabytes = 200
+            };
+
+            var options = Options(MpvOutputOptions.Build(video, new AudioSettings()));
+
+            Assert.Equal("gpu-next", options["vo"]);
+            Assert.Equal("d3d11", options["gpu-api"]);
+            Assert.Equal("d3d11va", options["hwdec"]);
+            Assert.Equal("limited", options["video-output-levels"]);
+            Assert.Equal("yes", options["deinterlace"]);
+            Assert.Equal("yes", options["cache"]);
+            Assert.Equal((200L * 1024 * 1024).ToString(), options["demuxer-max-bytes"]);
+        });
+
+        Test("输出：开插值必须同时打开显示同步", () =>
+        {
+            var interpolation = Options(MpvOutputOptions.Build(new VideoSettings { Interpolation = true }, new AudioSettings()));
+            Assert.Equal("yes", interpolation["interpolation"]);
+            Assert.Equal("display-resample", interpolation["video-sync"], "没有显示同步的插值在 mpv 里是无效的");
+
+            var chosen = Options(MpvOutputOptions.Build(
+                new VideoSettings { Interpolation = true, VideoSync = "display-vdrop" },
+                new AudioSettings()));
+            Assert.Equal("display-vdrop", chosen["video-sync"], "用户自己选了就不覆盖");
+        });
+
+        // 「为当前的插值功能设置更多的可选项」（2026-09-10）：插值算法从写死的 oversample 变成设置页上的一行。
+        // oversample 仍是装机默认 —— 没碰过这一行的人发出去的东西一个字都不变，这一条钉住它。
+        Test("输出：插值算法可选，装机默认还是 oversample", () =>
+        {
+            var stock = Options(MpvOutputOptions.Build(new VideoSettings { Interpolation = true }, new AudioSettings()));
+            Assert.Equal("oversample", stock["tscale"], "装机默认是从前写死的那个值，没动过这一行的人画面不变");
+
+            var sharper = Options(MpvOutputOptions.Build(
+                new VideoSettings { Interpolation = true, Tscale = "spline36" }, new AudioSettings()));
+            Assert.Equal("spline36", sharper["tscale"], "选了哪一档就发哪一档");
+
+            // 插值没开就不发 tscale —— 单发一个算法等于宣称一个不存在的设置。
+            var off = Options(MpvOutputOptions.Build(
+                new VideoSettings { Tscale = "lanczos" }, new AudioSettings()));
+            Assert.False(off.ContainsKey("tscale"));
+            Assert.False(off.ContainsKey("interpolation"));
+        });
+
+        Test("输出：音频直通按目录顺序拼成 audio-spdif", () =>
+        {
+            var audio = new AudioSettings
+            {
+                PassthroughCodecs = ["truehd", "ac3"],
+                Channels = "5.1",
+                DynamicRange = "0.5",
+                ExclusiveMode = true,
+                DelayMilliseconds = -250
+            };
+
+            var options = Options(MpvOutputOptions.Build(new VideoSettings(), audio));
+
+            Assert.Equal("ac3,truehd", options["audio-spdif"], "顺序按目录，而不是按用户勾选的先后");
+            Assert.Equal("5.1", options["audio-channels"]);
+            Assert.Equal("0.5", options["ad-lavc-ac3drc"]);
+            Assert.Equal("yes", options["audio-exclusive"]);
+            Assert.Equal("-0.25", options["audio-delay"]);
+        });
+
+        Test("输出：音量记的是上次离开播放器时那个值", () =>
+        {
+            // mpv 每次都是新起的，而且自己的配置被挡掉了，所以「没人设过的音量」永远是 100。要让换一集之后音量
+            // 还是上次那个，只能靠这个选项 ——「调整完音量后换个媒体播放音量会变回 100」说的就是它。
+            var remembered = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings { Volume = 37 }));
+            Assert.Equal("37", remembered["volume"]);
+
+            var muted = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings { Volume = 0 }));
+            Assert.Equal("0", muted["volume"], "拉到底也是个值，不能当成没设过");
+
+            var untouched = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
+            Assert.False(untouched.ContainsKey("volume"), "100 本来就是新起的 mpv 的音量，不必多说一句");
+
+            // 天花板从 100 抬到 130 那一下的回归测试。从前这里写的是 `is >= 0 and < 100`，本意是「100 不必发」，
+            // 可天花板一抬，存着的 130 就一次都发不出去：mpv 每次从 100 开始，而屏上那根滑杆停在 130 —— 又一个
+            // 界面在骗人。这一条必须钉住上限那个值本身发得出去。
+            var boosted = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings { Volume = AudioSettings.MaxVolume }));
+            Assert.Equal("130", boosted["volume"], "存着 130 就要真的发出 volume=130");
+
+            var silly = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings { Volume = 3000 }));
+            Assert.False(silly.ContainsKey("volume"),
+                "手改过的设置文件不该把音量顶到天上去 —— mpv.exe 碰到超出 volume-max 的值会直接退出");
+        });
+
+        Test("输出：音量均衡和下混归一化在 af 上共存", () =>
+        {
+            // af 是个列表选项，而这两件事都是「让对白听得清」。写成一条 af 里的两个滤镜就会互相覆盖，所以
+            // 音量均衡走 af、下混归一化走 audio-normalize-downmix，四种组合都要成立。
+            var neither = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
+            Assert.False(neither.ContainsKey("af"), "都不开就一条 af 都不发");
+            Assert.False(neither.ContainsKey("audio-normalize-downmix"), "都不开也不发下混归一化");
+
+            var normalizeOnly = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings { VolumeNormalize = MpvOutputOptions.DynAudNorm }));
+            Assert.Equal(MpvOutputOptions.DynAudNorm, normalizeOnly["af"]);
+            Assert.False(normalizeOnly.ContainsKey("audio-normalize-downmix"));
+
+            var downmixOnly = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings { NormalizeDownmix = true }));
+            Assert.False(downmixOnly.ContainsKey("af"));
+            Assert.Equal("yes", downmixOnly["audio-normalize-downmix"]);
+
+            var both = MpvOutputOptions.Build(new VideoSettings(), new AudioSettings
+            {
+                VolumeNormalize = MpvOutputOptions.LoudNorm,
+                NormalizeDownmix = true
+            });
+
+            var pairs = Options(both);
+            Assert.Equal(MpvOutputOptions.LoudNorm, pairs["af"], "两个都开时 af 还是那一条完整的滤镜串");
+            Assert.Equal("yes", pairs["audio-normalize-downmix"]);
+            Assert.Equal(1, both.Count(option => option.Key == "af"), "af 只许出现一次，否则后一条盖掉前一条");
+        });
+
+        Test("音量均衡：滤镜串只写一处，播放器菜单和设置页读的是同一份", () =>
+        {
+            // 这两处从前各写一遍同样的滤镜串。写两遍就会飘，而「菜单里的音量均衡和设置里的音量均衡不是一回事」
+            // 正是这个项目一直在还的那类债。
+            var row = PlayerMenuCatalog.Flatten(PlayerMenuCatalog.Root)
+                .FirstOrDefault(node => node.Label == "切换 音量均衡");
+
+            Assert.NotNull(row, "播放器菜单里得有「切换 音量均衡」这一行");
+
+            var arguments = row!.Commands[0];
+            Assert.True(arguments.Contains(MpvOutputOptions.DynAudNorm), "菜单里那一档必须是 MpvOutputOptions 的原串");
+            Assert.True(arguments.Contains(MpvOutputOptions.LoudNorm), "另一档同理");
+
+            // 目录里那三档：空值加上这两条，一个不多一个不少。
+            Assert.Equal(
+                $"|{MpvOutputOptions.DynAudNorm}|{MpvOutputOptions.LoudNorm}",
+                string.Join("|", MpvOutputOptions.VolumeNormalizers.Select(choice => choice.Value)),
+                "音量均衡就这三档，而且「不启用」必须是第 0 项（SettingsMigration 认不出的值退到那里）");
+        });
+
+        Test("输出：字幕外观带上颜色的不透明度", () =>
+        {
+            var subtitles = new PlaybackSettings
+            {
+                SubtitleFontSize = 48,
+                SubtitleColor = "#FFF200",
+                SubtitleBorderSize = "3",
+                SubtitleBackColor = "#000000",
+                SubtitleBackOpacity = 50
+            };
+
+            var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), subtitles));
+
+            Assert.Equal("48", options["sub-font-size"]);
+            Assert.Equal("#FFFFF200", options["sub-color"], "文字本身永远不透明");
+            Assert.Equal("3", options["sub-border-size"]);
+            Assert.Equal("#80000000", options["sub-back-color"]);
+        });
+
+        Test("输出：底板要发 sub-border-style 才画得出来", () =>
+        {
+            // 这是 2026-09-05 那个洞：mpv 0.39 之后 sub-back-color 和阴影颜色是同一个值，画成阴影还是
+            // 画成底板全看 sub-border-style，而这个选项以前一次都没发过 —— 于是「背景颜色」那一行选什么
+            // 都只是给阴影上色，屏上永远没有底板。渲图对比过：不发这一项，任何颜色任何不透明度都没有板。
+            var off = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleBackColor = "#000000" }));
+            Assert.False(off.ContainsKey("sub-border-style"), "底板关着就不发，让 mpv 自己的描边+阴影站住");
+
+            var box = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings
+                {
+                    SubtitleBackStyle = "background-box",
+                    SubtitleBackColor = "#000000",
+                    SubtitleBackOpacity = 60
+                }));
+            Assert.Equal("background-box", box["sub-border-style"]);
+            Assert.Equal("#99000000", box["sub-back-color"]);
+
+            // 未指定背景色仍使用黑色，并保留单独的不透明度选择。
+            var inherited = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleBackStyle = "opaque-box", SubtitleBackColor = "" }));
+            Assert.Equal("opaque-box", inherited["sub-border-style"]);
+            Assert.Equal("#99000000", inherited["sub-back-color"]);
+        });
+
+        Test("输出：外观应用范围只在「强制」时发出去", () =>
+        {
+            var follow = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
+            Assert.False(follow.ContainsKey("sub-ass-override"),
+                "默认跟随字幕自带样式，也就是 mpv 自己的 scale，什么都不用发");
+
+            var forced = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleAssOverride = "force" }));
+            Assert.Equal("force", forced["sub-ass-override"], "ASS/SSA 字幕要认这张卡的字体和颜色，只有这一条能让它认");
+        });
+
+        Test("输出：字幕缩放 100% 不发，别的换成 mpv 的小数", () =>
+        {
+            var plain = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
+            Assert.False(plain.ContainsKey("sub-scale"), "100 就是 mpv 自己的 1.0");
+
+            var bigger = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleScalePercent = 150 }));
+            Assert.Equal("1.5", bigger["sub-scale"]);
+
+            var smaller = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleScalePercent = 85 }));
+            Assert.Equal("0.85", smaller["sub-scale"], "小数点必须是不看区域设置的那个写法");
+        });
+
+        Test("输出：字号填 0 表示用 mpv 自己的默认字号", () =>
+        {
+            var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(),
+                new PlaybackSettings { SubtitleFontSize = 0 }));
+
+            Assert.False(options.ContainsKey("sub-font-size"));
+        });
+
+        Test("输出：字幕实时应用的选项表覆盖得住外观能发的每一个", () =>
+        {
+            // 实时那条路是照 SubtitleStyleOptions 走的：设置里改回「不设置」的那几行，要问 mpv 要它自己的
+            // 默认值再发回去，不然「不发」在一个已经跑起来的播放器上等于「沿用上一个值」。所以漏一个名字
+            // 的后果不是编译错误，而是那一行只有开得起、关不掉 —— 这条测试就是拦这个的。
+            var everything = new PlaybackSettings
+            {
+                SubtitleAssOverride = "force",
+                SubtitleFontFamily = "SimHei",
+                SubtitleFontSize = 60,
+                SubtitleScalePercent = 120,
+                SubtitleBold = true,
+                SubtitleColor = "#FFFFFF",
+                SubtitleBorderSize = "3",
+                SubtitleBorderColor = "#000000",
+                SubtitleShadowOffset = "1",
+                SubtitleBackStyle = "background-box",
+                SubtitleBackColor = "#000000"
+            };
+
+            foreach (var (name, _) in MpvOutputOptions.SubtitleAppearance(everything))
+            {
+                Assert.True(MpvOutputOptions.SubtitleStyleOptions.Contains(name),
+                    $"外观发得出 {name}，SubtitleStyleOptions 里却没有它");
+            }
+
+            // 反过来也钉住：表里不该有起播专属的那两个，它们改了只能下次播放生效。
+            Assert.False(MpvOutputOptions.SubtitleStyleOptions.Contains("sub-codepage"),
+                "字幕编码是解码字幕那一刻用的，推给正在播的片子没有意义");
+            Assert.False(MpvOutputOptions.SubtitleStyleOptions.Contains("stretch-image-subs-to-screen"),
+                "图形字幕拉伸要看片源画幅，实时那条路上没有片源");
+        });
+
+        Test("输出：字幕出厂样式是用户 2026-09-06 定的那一套", () =>
+        {
+            // 「把默认字幕样式设置为…」：他给的八项里字号、颜色、描边、阴影当时就是出厂值，v13 换掉的是
+            // 加粗（关）和底板颜色（黑色）。底板样式仍然出厂关，所以那行颜色只给阴影上色。出厂不加粗
+            // （v20 把三档字重退回加粗开关，出厂关），所以 sub-bold 仍是 no。
+            var options = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), new PlaybackSettings()));
+
+            Assert.Equal("50", options["sub-font-size"]);
+            Assert.Equal("no", options["sub-bold"], "出厂不加粗：sub-bold 只有开了加粗才发 yes");
+            Assert.Equal("0.5", options["sub-border-size"]);
+            Assert.Equal("#FF000000", options["sub-border-color"]);
+            Assert.Equal("0.5", options["sub-shadow-offset"]);
+            Assert.Equal(FontFamilies.Default, options["sub-font"], "出厂字幕字体是 Microsoft YaHei UI Semibold（v19 起的默认，系统自带、不打包）");
+            Assert.False(options.ContainsKey("sub-codepage"),
+                "出厂是自动识别编码：写死 gb18030 会把 Big5 的繁体字幕读成乱码");
+            Assert.Equal("#99000000", options["sub-back-color"],
+                "出厂黑色，随 底板不透明度 60% 一起发 —— 底板关着时它就是阴影的颜色");
+            Assert.False(options.ContainsKey("sub-border-style"), "出厂没有底板，跟以前看到的一样");
+        });
+
+        Test("输出：字幕加粗开关落到 sub-bold 上，字体族名照发", () =>
+        {
+            // 字重那三档 v20 退成一个 sub-bold 开关（mpv 唯一能开关的字重手段）。这一关确认
+            // SubtitleAppearance 把族名原样发出去、加粗与否直接映射 sub-bold。
+            (string Font, string Bold) Emit(bool bold)
+            {
+                var options = Options(MpvOutputOptions.SubtitleAppearance(
+                    new PlaybackSettings { SubtitleFontFamily = "Microsoft YaHei", SubtitleBold = bold }));
+                return (options["sub-font"], options["sub-bold"]);
+            }
+
+            Assert.Equal(("Microsoft YaHei", "no"), Emit(false), "不加粗：族名原样、sub-bold=no");
+            Assert.Equal(("Microsoft YaHei", "yes"), Emit(true), "加粗：族名原样、sub-bold=yes");
+        });
+
+        Test("输出：宽画面的图形字幕才拉伸到画面", () =>
+        {
+            var subtitles = new PlaybackSettings();
+
+            var wide = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings(), subtitles, new SourceProfile(3840, 1600, 10, 24, false)));
+            Assert.Equal("yes", wide["stretch-image-subs-to-screen"], "2.39:1 的编码切掉了黑边，PGS 会掉到画面外");
+
+            var standard = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings(), subtitles, new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.False(standard.ContainsKey("stretch-image-subs-to-screen"), "16:9 的片源不需要动");
+        });
+
+        Test("输出：去色带只对 8bit 片源自动打开", () =>
+        {
+            var video = new VideoSettings();
+
+            var eightBit = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.Equal("yes", eightBit["deband"]);
+            Assert.Equal("1", eightBit["deband-iterations"], "核显只吃得下一轮");
+            Assert.Equal("48", eightBit["deband-threshold"]);
+            Assert.Equal("16", eightBit["deband-range"]);
+            Assert.Equal("16", eightBit["deband-grain"]);
+
+            var tenBit = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, new SourceProfile(3840, 2160, 10, 24, false)));
+            Assert.Equal("no", tenBit["deband"], "10bit 片源本来就有去色带要凭空造出来的精度");
+        });
+
+        // 「去色带的选项中新增，在动漫中开启」
+        Test("输出：去色带「在动画中开启」只看是不是动画，不看位深", () =>
+        {
+            var video = new VideoSettings { Deband = MpvOutputOptions.Anime };
+            var tenBitSource = new SourceProfile(1920, 1080, 10, 24, false);
+
+            var anime = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, tenBitSource, animated: true));
+            Assert.Equal("yes", anime["deband"], "动画的平涂大色块最容易出色带，10bit 也一样");
+            Assert.Equal("1", anime["deband-iterations"]);
+
+            var live = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.Equal("no", live["deband"], "实拍片不开：这一项选的就是「只在动画里开」");
+        });
+
+        Test("输出：去色带其余几档不受动画标记影响", () =>
+        {
+            var source = new SourceProfile(1920, 1080, 10, 24, false);
+
+            Assert.Equal("yes", Options(MpvOutputOptions.Build(
+                new VideoSettings { Deband = "yes" }, new AudioSettings(), null, source, animated: false))["deband"]);
+            Assert.Equal("no", Options(MpvOutputOptions.Build(
+                new VideoSettings { Deband = "no" }, new AudioSettings(), null, source, animated: true))["deband"]);
+            Assert.False(Options(MpvOutputOptions.Build(
+                new VideoSettings { Deband = "" }, new AudioSettings(), null, source, animated: true)).ContainsKey("deband"),
+                "选「不设置」就是一条都不传");
+        });
+
+        Test("输出：HDR 只对 HDR 片源发选项，两种模式各自成套", () =>
+        {
+            var sdr = Options(MpvOutputOptions.Build(
+                new VideoSettings(), new AudioSettings(), null, new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.False(sdr.ContainsKey("tone-mapping"), "SDR 片源上这些选项条条都是空操作");
+
+            var hdr = new SourceProfile(3840, 2160, 10, 24, true);
+
+            var tonemap = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings(), null, hdr));
+            Assert.Equal("no", tonemap["target-colorspace-hint"]);
+            Assert.Equal("bt.1886", tonemap["target-trc"]);
+            Assert.Equal("bt.709", tonemap["target-prim"]);
+            Assert.False(tonemap.ContainsKey("tone-mapping"), "映射曲线继承预设或内核默认");
+
+            var passthrough = Options(MpvOutputOptions.Build(
+                new VideoSettings { HdrMode = "passthrough" }, new AudioSettings(), null, hdr));
+            Assert.Equal("auto", passthrough["target-colorspace-hint"]);
+            Assert.Equal("target", passthrough["target-colorspace-hint-mode"]);
+            Assert.False(passthrough.ContainsKey("tone-mapping"), "不可强制 clip 截断高光");
+            Assert.False(passthrough.ContainsKey("hdr-compute-peak"), "HDR 输出也保留峰值检测能力");
+        });
+
+        Test("输出：HDR 输出峰值只在 HDR 输出时发 target-peak，映射到 SDR 时不发", () =>
+        {
+            var hdr = new SourceProfile(3840, 2160, 10, 24, true);
+
+            var passthrough = Options(HdrOptions.Build(
+                new VideoSettings { HdrMode = "passthrough", HdrPeakNits = 600 }, hdr));
+            Assert.Equal("600", passthrough["target-peak"], "用户钉死的峰值就是这个数，交给显示器去够");
+
+            var tonemap = Options(HdrOptions.Build(
+                new VideoSettings { HdrMode = "tonemap", HdrPeakNits = 600 }, hdr));
+            Assert.False(tonemap.ContainsKey("target-peak"), "映射到 SDR 时目标已经钉死在 bt.1886/bt.709，手填峰值是矛盾的两层");
+        });
+
+        Test("输出：杜比视界元数据默认保留，关掉一层才发一条 vf", () =>
+        {
+            var hdr = new SourceProfile(3840, 2160, 10, 24, true);
+
+            var kept = Options(HdrOptions.Build(new VideoSettings(), hdr));
+            Assert.False(kept.ContainsKey("vf"), "三个元数据开关全默认时不该有任何 vf");
+
+            var dropped = Options(HdrOptions.Build(
+                new VideoSettings { DolbyVisionMetadata = false }, hdr));
+            Assert.Equal("@momoka-hdr:format=dolbyvision=no", dropped["vf"], "只关一层就只写那一个词");
+        });
+
+        Test("输出：hdr-contrast-recovery 手动给了就发，null 就一条不发", () =>
+        {
+            var manual = Options(HdrOptions.Build(
+                new VideoSettings { HdrContrastRecovery = 0.5 }, new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.Equal("0.5", manual["hdr-contrast-recovery"], "手动值越过画质预设，直接写进启动选项");
+
+            var automatic = Options(HdrOptions.Build(
+                new VideoSettings(), new SourceProfile(1920, 1080, 8, 24, false)));
+            Assert.False(automatic.ContainsKey("hdr-contrast-recovery"), "null 是「交给画质预设」：预设没开就是一条不发");
+        });
+
+        Test("输出：自动 ICC 校色关着一条都不发，打开了才发 yes", () =>
+        {
+            var off = Options(MpvOutputOptions.Build(new VideoSettings(), new AudioSettings()));
+            Assert.False(off.ContainsKey("icc-profile-auto"),
+                "装机默认是关的，而基线那条 icc-profile-auto=no 已经把「关」说清楚了，这里再发一遍就是两层写同一个选项");
+
+            var on = Options(MpvOutputOptions.Build(new VideoSettings { IccProfileAuto = true }, new AudioSettings()));
+            Assert.Equal("yes", on["icc-profile-auto"]);
+        });
+
+        Test("输出：高帧率片源回退到音频同步", () =>
+        {
+            var video = new VideoSettings { Interpolation = true };
+
+            var high = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, new SourceProfile(1920, 1080, 8, 60, false)));
+            Assert.Equal("audio", high["video-sync"], "显示同步已经没有多余的节拍可以重采样了");
+            Assert.Equal("no", high["interpolation"], "60fps 的片源没有东西可插");
+
+            var normal = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, new SourceProfile(1920, 1080, 8, 23.976, false)));
+            Assert.Equal("display-resample", normal["video-sync"]);
+            Assert.Equal("yes", normal["interpolation"]);
+        });
+
+        // 2026-09-04 实测（interp-cost.ps1，1080p 全屏到 2560×1440、gpu-next + vulkan、不挂链）：显示同步会把 mpv
+        // 最后一趟渲染（混帧 + 色彩编码 + 抖动，约 1.1 毫秒）从每视频帧 24 次改成每次刷新 144 次，Windows 自己的
+        // 进程 GPU 计数器从 24.7% 涨到 50.1%；而 144 ÷ 24 = 6.000，没有节奏要补，vo-passes 几乎只报
+        // 「frame mixing (1 frame)」。用户自己那份 mpv.conf 里的 [fps-fix] 用的就是 display-fps > 120 这条规则。
+        Test("输出：高刷新率屏幕同样回退到音频同步，插值跟着不生效", () =>
+        {
+            var video = new VideoSettings { Interpolation = true };
+            var film = new SourceProfile(1920, 1080, 8, 23.976, false);
+
+            var fast = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, 144));
+            Assert.Equal("audio", fast["video-sync"], "144Hz 上显示同步只剩算力开销");
+            Assert.Equal("no", fast["interpolation"], "插值开着也要显式发 no —— 复用的 mpv 实例上「不发」等于沿用上一部片子的 yes");
+            Assert.False(fast.ContainsKey("tscale"), "插值没生效就不该留下 tscale");
+
+            // 一档一档地过边界：120 本身不算超过，60Hz 屏和「读不到刷新率」都照旧走显示同步。
+            foreach (var hz in new[] { 0.0, 60, 100, 120 })
+            {
+                var kept = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, hz));
+                Assert.Equal("display-resample", kept["video-sync"], $"{hz}Hz：这里显示同步是划算的");
+                Assert.Equal("yes", kept["interpolation"], $"{hz}Hz：插值应该生效");
+            }
+
+            Assert.Equal("display-resample",
+                Options(MpvOutputOptions.Build(
+                    new VideoSettings { Interpolation = true, HighFrameRateAudioSync = false },
+                    new AudioSettings(), null, film, false, 144))["video-sync"],
+                "关掉那个开关就该把显示同步还给任何屏幕");
+
+            // 两条规则各自都要能说出自己为什么出手 —— 日志和设置页读的是同一句话。
+            var (_, _, byRefresh) = MpvOutputOptions.ResolveSync(video, film, 144);
+            var (_, _, byFrameRate) = MpvOutputOptions.ResolveSync(video, new SourceProfile(1920, 1080, 8, 59.94, false), 60);
+            var (_, _, neither) = MpvOutputOptions.ResolveSync(video, film, 60);
+
+            Assert.Contains("144", byRefresh ?? "", "那句话要带上量到的刷新率");
+            Assert.Contains("59.94", byFrameRate ?? "", "那句话要带上片源帧率");
+            Assert.True(neither is null, "没回退就不该有话说");
+        });
+
+        // 「在设置中新增自定义输入框，显示器刷新率大于该数值时关闭插值」（2026-09-10）：120 那个写死的数变成
+        // 设置页上一行。上一条钉的是装机默认那一档，这一条钉的是「真的读设置里那个数」。
+        Test("输出：刷新率阈值读设置里填的那个数", () =>
+        {
+            var video = new VideoSettings { Interpolation = true, HighRefreshRateLimitHz = 100 };
+            var film = new SourceProfile(1920, 1080, 8, 23.976, false);
+
+            // 「大于」才算：等于阈值的那一档照旧走显示同步。
+            var atEdge = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, 100));
+            Assert.Equal("display-resample", atEdge["video-sync"]);
+            Assert.Equal("yes", atEdge["interpolation"]);
+
+            var over = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, film, false, 120));
+            Assert.Equal("audio", over["video-sync"], "120Hz 超过填的 100，该收回插值");
+            Assert.Equal("no", over["interpolation"]);
+
+            // 填得比默认低照样由总闸说了算：回退关着，显示同步就还给任何屏幕。
+            Assert.Equal("display-resample",
+                Options(MpvOutputOptions.Build(
+                    new VideoSettings { Interpolation = true, HighRefreshRateLimitHz = 100, HighFrameRateAudioSync = false },
+                    new AudioSettings(), null, film, false, 240))["video-sync"],
+                "关掉那个回退开关就该把显示同步还给任何屏幕");
+
+            var (_, _, why) = MpvOutputOptions.ResolveSync(video, film, 120);
+            Assert.Contains("100", why ?? "", "那句话要带上设置里填的那个数，而不是写死的 120");
+        });
+
+        Test("输出：设置页读到的「此刻生效」和真正发出去的 video-sync 是同一个答案", () =>
+        {
+            // 「界面在骗人」那一类的机械闸门。从前 video-sync 有两个写手：设置里存的那一项，和插值那条
+            // 「留空就改成 display-resample」，再加高帧率那条又写一遍 —— 设置页显示第一个，mpv 收到最后一个。
+            // 现在只有 ResolveSync 一个写手，这一条把它和 Build 真正发出去的东西对起来，两个方向都对。
+            // 刷新率那一轴 2026-09-04 加进来：它是第四个可能改写这两项的东西，也就是第四个能让两边分家的地方。
+            foreach (var stored in new[] { "", "audio", "display-resample", "display-vdrop" })
+            {
+                foreach (var interpolation in new[] { false, true })
+                {
+                    foreach (var fallback in new[] { false, true })
+                    {
+                        foreach (var fps in new[] { 0.0, 23.976, 59.94 })
+                        {
+                            foreach (var hz in new[] { 0.0, 60, 144 })
+                            {
+                                var video = new VideoSettings
+                                {
+                                    VideoSync = stored,
+                                    Interpolation = interpolation,
+                                    HighFrameRateAudioSync = fallback
+                                };
+                                SourceProfile? source = fps > 0 ? new SourceProfile(1920, 1080, 8, fps, false) : null;
+
+                                var (sync, live, _) = MpvOutputOptions.ResolveSync(video, source, hz);
+                                var sent = Options(MpvOutputOptions.Build(video, new AudioSettings(), null, source, false, hz));
+                                var what = $"存「{(stored.Length == 0 ? "不指定" : stored)}」、插值 {interpolation}、"
+                                    + $"回退 {fallback}、片源 {(fps > 0 ? fps + "fps" : "帧率未知")}、"
+                                    + $"屏幕 {(hz > 0 ? hz + "Hz" : "刷新率未知")}";
+
+                                Assert.Equal(sync, sent.TryGetValue("video-sync", out var emitted) ? emitted : "",
+                                    $"{what}：video-sync");
+
+                                // 插值开着却被回退规则否掉时必须显式发 no —— 什么都不发在一个复用的 mpv 实例上
+                                // 等于沿用上一部片子的 yes。
+                                Assert.Equal(live ? "yes" : interpolation ? "no" : "",
+                                    sent.TryGetValue("interpolation", out var flag) ? flag : "",
+                                    $"{what}：interpolation");
+
+                                Assert.Equal(live, sent.ContainsKey("tscale"), $"{what}：tscale 只跟着真的开着的插值走");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // ---- 跳过片头片尾 ----------------------------------------------------------
+
+    private static void RegisterSkipSections()
+    {
+        Test("跳过：命名章节同时给出片头和片尾", () =>
+        {
+            var sections = SkipSectionPlanner.Resolve(Episode(
+                Chapter(0, "片头"),
+                Chapter(88, "正片"),
+                Chapter(1380, "片尾")));
+
+            Assert.Equal(2, sections.Count);
+
+            Assert.Equal(SkipSectionKind.Opening, sections[0].Kind);
+            Assert.Equal(0, sections[0].Start);
+            Assert.Equal(88, sections[0].End);
+            Assert.True(sections[0].Certain, "章节名给出的区间不是推测");
+            Assert.Equal("跳过片头", sections[0].Caption);
+
+            Assert.Equal(SkipSectionKind.Ending, sections[1].Kind);
+            Assert.Equal(1380, sections[1].Start);
+            Assert.Equal(1500, sections[1].End, "最后一个章节一直放到片尾");
+        });
+
+        Test("跳过：冷开场时命名章节不在第一位", () =>
+        {
+            var sections = SkipSectionPlanner.Resolve(Episode(
+                Chapter(0, "前情提要"),
+                Chapter(65, "OP"),
+                Chapter(155, "正片")));
+
+            // 前情提要 紧接着 OP，合成一次跳跃：分开就要按两下才进正片。
+            Assert.Equal(1, sections.Count);
+            Assert.Equal(0, sections[0].Start);
+            Assert.Equal(155, sections[0].End);
+            Assert.Equal("跳过片头", sections[0].Caption, "合并后用落点那一段的名字");
+        });
+
+        Test("跳过：ED / Preview 都算片尾，并且合成一段", () =>
+        {
+            var sections = SkipSectionPlanner.Resolve(Episode(
+                Chapter(0, "正片"),
+                Chapter(1320, "ED"),
+                Chapter(1410, "Preview")));
+
+            Assert.Equal(1, sections.Count);
+            Assert.Equal(SkipSectionKind.Ending, sections[0].Kind);
+            Assert.Equal(1320, sections[0].Start);
+            Assert.Equal(1500, sections[0].End);
+            Assert.Equal("跳过片尾", sections[0].Caption, "合并后用起点那一段的名字");
+        });
+
+        Test("跳过：电影也认命名章节", () =>
+        {
+            var sections = SkipSectionPlanner.Resolve(Watchable(
+                EmbyItemType.Movie,
+                Chapter(0, "Opening Titles"),
+                Chapter(75, "Act One")));
+
+            Assert.Equal(1, sections.Count);
+            Assert.Equal(75, sections[0].End);
+        });
+
+        Test("跳过：没有章节名时按位置和长度推测", () =>
+        {
+            var sections = SkipSectionPlanner.Resolve(Episode(Chapter(0), Chapter(92), Chapter(1200)));
+
+            Assert.Equal(1, sections.Count);
+            Assert.Equal(92, sections[0].End);
+            Assert.False(sections[0].Certain, "章节长度只是推测");
+        });
+
+        Test("跳过：无名章节的长度必须落在 80–100 秒", () =>
+        {
+            Assert.Equal(0, SkipSectionPlanner.Resolve(Episode(Chapter(0), Chapter(420), Chapter(1200))).Count);
+            Assert.Equal(0, SkipSectionPlanner.Resolve(Episode(Chapter(0), Chapter(9), Chapter(1200))).Count);
+        });
+
+        Test("跳过：中间的无名章节是一场戏，不是片头片尾", () =>
+        {
+            var sections = SkipSectionPlanner.Resolve(Episode(
+                Chapter(0),
+                Chapter(300),
+                Chapter(600),
+                Chapter(690),
+                Chapter(900),
+                Chapter(1200)));
+
+            Assert.Equal(0, sections.Count, "第 690 秒那段 90 秒的章节在正片中间");
+        });
+
+        Test("跳过：位置和名字冲突时以位置为准", () =>
+        {
+            Assert.Equal(
+                0,
+                SkipSectionPlanner.Resolve(Episode(Chapter(0, "正片"), Chapter(600, "OP"), Chapter(700, "继续"))).Count,
+                "十分钟处的「OP」是标错的章节");
+
+            Assert.Equal(
+                0,
+                SkipSectionPlanner.Resolve(Episode(Chapter(0, "ED"), Chapter(120, "正片"))).Count,
+                "前半段的「ED」不是片尾");
+
+            Assert.Equal(
+                0,
+                SkipSectionPlanner.Resolve(Episode(Chapter(0, "片头"), Chapter(6, "正片"), Chapter(1200))).Count,
+                "六秒就结束的「片头」是发行商 logo");
+        });
+
+        Test("跳过：没有章节或文件太短就什么都不给", () =>
+        {
+            Assert.Equal(0, SkipSectionPlanner.Resolve(Episode()).Count, "没有章节就不猜，免得每集都冒出按钮");
+            Assert.Equal(0, SkipSectionPlanner.Resolve(Watchable(EmbyItemType.Movie)).Count);
+            Assert.Equal(0, SkipSectionPlanner.Resolve(null).Count);
+
+            var short3Minutes = Watchable(EmbyItemType.Episode, Chapter(0), Chapter(85), Chapter(150));
+            short3Minutes.RunTimeTicks = TimeSpan.FromMinutes(3).Ticks;
+            Assert.Equal(0, SkipSectionPlanner.Resolve(short3Minutes).Count, "三分钟的文件没有片头可跳");
+        });
+
+        Test("跳过：Covers 只在区间内成立", () =>
+        {
+            var section = new SkipSection(SkipSectionKind.Opening, 65, 155, "片头", Certain: true);
+
+            Assert.False(section.Covers(30), "冷开场还没放完");
+            Assert.True(section.Covers(65));
+            Assert.True(section.Covers(154));
+            Assert.False(section.Covers(154.6), "临界半秒内不再提示，免得点了原地不动");
+            Assert.False(section.Covers(160));
+            Assert.False(section.Covers(-1), "尚未拿到位置时不提示");
+        });
+    }
+
+    // ---- 进度条上的章节读数 ----------------------------------------------------
+
+    private static void RegisterChapterTimeline()
+    {
+        Test("章节读数：落在最后一个不晚于该时刻的章节里", () =>
+        {
+            IReadOnlyList<SkipChapter> marks =
+            [
+                new SkipChapter(0, "片头"),
+                new SkipChapter(90, "正片"),
+                new SkipChapter(1380, "片尾")
+            ];
+
+            Assert.Equal(0, ChapterTimeline.IndexAt(marks, 0));
+            Assert.Equal(0, ChapterTimeline.IndexAt(marks, 89.9));
+            Assert.Equal(1, ChapterTimeline.IndexAt(marks, 90), "章节起点那一秒算在这一章里");
+            Assert.Equal(1, ChapterTimeline.IndexAt(marks, 1379));
+            Assert.Equal(2, ChapterTimeline.IndexAt(marks, 5000), "超出末尾仍留在最后一章");
+        });
+
+        Test("章节读数：没有章节，或者停在第一个之前，都是没有", () =>
+        {
+            Assert.Equal(-1, ChapterTimeline.IndexAt([], 42), "服务器没抽过章节的文件");
+            Assert.Equal(-1, ChapterTimeline.IndexAt([new SkipChapter(12, null)], 5), "第一个标记之前");
+            Assert.Equal(-1, ChapterTimeline.IndexAt([new SkipChapter(0, null)], -3), "还没量到位置");
+        });
+
+        Test("章节读数：没有名字就叫「章节 N」，编号从 1 起", () =>
+        {
+            IReadOnlyList<SkipChapter> marks =
+            [
+                new SkipChapter(0, null),
+                new SkipChapter(90, "  正片  "),
+                new SkipChapter(600, "   ")
+            ];
+
+            Assert.Equal("章节 1", ChapterTimeline.Caption(marks, 0));
+            Assert.Equal("正片", ChapterTimeline.Caption(marks, 1), "两头的空白不要带进浮层");
+            Assert.Equal("章节 3", ChapterTimeline.Caption(marks, 2), "只有空白等于没有名字");
+        });
+
+        Test("章节读数：没有章节时给空串，让那一行整条收起来", () =>
+        {
+            Assert.Equal("", ChapterTimeline.Caption([], 0));
+            Assert.Equal("", ChapterTimeline.Caption([new SkipChapter(0, "片头")], -1));
+            Assert.Equal("", ChapterTimeline.Caption([new SkipChapter(0, "片头")], 7), "越界不能抛");
+        });
+    }
+
+    // ---- 跳过的提示与跳跃 ------------------------------------------------------
+
+    private static void RegisterSkipCoordinator()
+    {
+        Test("跳过：进入区间后提示，15 秒无人理会就收回", () =>
+        {
+            var skips = Coordinator(out _);
+
+            Assert.Null(skips.Advance(10, playing: true), "询问模式不会自己跳");
+            Assert.True(skips.Prompt.Visible);
+            Assert.Equal("跳过片头", skips.Prompt.Caption);
+            Assert.Equal(1, skips.Prompt.Remaining, "刚出现时倒计时是满的");
+            Assert.Contains("回车跳过", skips.Prompt.Tip, "提示里写清回车是接受（2026-09-26 键位改动：Y→回车）");
+            Assert.Contains("Esc 关闭", skips.Prompt.Tip, "提示里写清 Esc 是关闭（2026-09-26 键位改动：N→Esc）");
+            Assert.Contains("1:30", skips.Prompt.Tip, "提示里写清落点");
+
+            skips.Advance(17.5, playing: true);
+            Assert.True(skips.Prompt.Visible);
+            Assert.Equal(0.5, skips.Prompt.Remaining, "倒计时随播放位置走");
+
+            skips.Advance(25.1, playing: true);
+            Assert.False(skips.Prompt.Visible, "不理会本身就是回答");
+
+            skips.Advance(60, playing: true);
+            Assert.False(skips.Prompt.Visible, "过期之后不会在同一段里再冒出来");
+        });
+
+        Test("跳过：没有可跳的文件时收回提示，恢复后重新计时", () =>
+        {
+            var skips = Coordinator(out _);
+
+            skips.Advance(10, playing: true);
+            Assert.True(skips.Prompt.Visible);
+
+            // 最小化、失去控制通道、播放结束都走这条路。
+            skips.Advance(10, playing: false);
+            Assert.False(skips.Prompt.Visible);
+
+            skips.Advance(12, playing: true);
+            Assert.True(skips.Prompt.Visible);
+            Assert.Equal(1, skips.Prompt.Remaining, "重新出现就重新给满 15 秒");
+        });
+
+        Test("跳过：接受之后给出落点，并且不再提示", () =>
+        {
+            var skips = Coordinator(out _);
+
+            skips.Advance(10, playing: true);
+            var jump = skips.Accept();
+
+            Assert.NotNull(jump);
+            Assert.Equal(90, jump!.Value.Target);
+            Assert.Equal("已跳过片头: 0:00-1:30", jump.Value.Notice);
+            Assert.False(skips.Prompt.Visible);
+
+            Assert.Null(skips.Accept(), "没有待回答的提示就没有可接受的跳跃");
+
+            skips.Advance(20, playing: true);
+            Assert.False(skips.Prompt.Visible, "已经跳过的一段不会在回看时再追着问");
+        });
+
+        Test("跳过：拒绝只在本段内有效，退回去会重新提示", () =>
+        {
+            var skips = Coordinator(out _);
+
+            skips.Advance(10, playing: true);
+            skips.Decline();
+            Assert.False(skips.Prompt.Visible);
+
+            skips.Advance(20, playing: true);
+            Assert.False(skips.Prompt.Visible, "同一段里不再纠缠");
+
+            // 离开区间再回来是一次刻意的操作，值得重新问一次。
+            skips.Advance(600, playing: true);
+            skips.Advance(10, playing: true);
+            Assert.True(skips.Prompt.Visible);
+        });
+
+        Test("跳过：自动模式只在刚进入区间时跳", () =>
+        {
+            var skips = Coordinator(out _);
+            skips.Mode = SkipSectionMode.Auto;
+
+            var jump = skips.Advance(0.5, playing: true);
+            Assert.NotNull(jump);
+            Assert.Equal(90, jump!.Value.Target);
+            Assert.False(skips.Prompt.Visible, "自动模式不显示按钮");
+
+            skips.Advance(600, playing: true);
+            Assert.Null(skips.Advance(10, playing: true), "同一段只自动跳一次");
+
+            var fresh = Coordinator(out _);
+            fresh.Mode = SkipSectionMode.Auto;
+            Assert.Null(fresh.Advance(40, playing: true), "拖到片头中间是有意为之，不该被甩出去");
+        });
+
+        Test("跳过：关闭之后既不提示也不跳", () =>
+        {
+            var skips = Coordinator(out _);
+            skips.Mode = SkipSectionMode.Off;
+
+            Assert.Null(skips.Advance(10, playing: true));
+            Assert.False(skips.Prompt.Visible);
+        });
+
+        Test("跳过：换用 mpv 的章节表不会重复提问", () =>
+        {
+            var skips = Coordinator(out var sections);
+
+            skips.Advance(10, playing: true);
+            Assert.NotNull(skips.Accept());
+
+            // mpv 报回同一段片头，只差了个舍入误差；已经跳过就不该再问。
+            skips.Refine(
+                [new SkipSection(SkipSectionKind.Opening, 0.2, 90, "片头", Certain: true), sections[1]],
+                1500);
+
+            skips.Advance(20, playing: true);
+            Assert.False(skips.Prompt.Visible);
+
+            // 新表里多出来的片尾照样提示。
+            skips.Advance(1400, playing: true);
+            Assert.True(skips.Prompt.Visible);
+            Assert.Equal("跳过片尾", skips.Prompt.Caption);
+        });
+
+        Test("跳过：跳到文件结尾时留半秒给 mpv 自己收尾", () =>
+        {
+            var skips = Coordinator(out _);
+
+            var jump = skips.Advance(1400, playing: true);
+            Assert.Null(jump, "询问模式先给按钮");
+
+            var accepted = skips.Accept();
+            Assert.NotNull(accepted);
+            Assert.Equal(1499.5, accepted!.Value.Target, "不要求 mpv 跳到刚好不在文件里的位置");
+        });
+
+        Test("跳过：换片重新开始，忘掉上一集的决定", () =>
+        {
+            var skips = Coordinator(out var sections);
+
+            skips.Advance(10, playing: true);
+            skips.Accept();
+
+            skips.Begin(sections, 1500);
+            skips.Advance(10, playing: true);
+            Assert.True(skips.Prompt.Visible, "上一集的片头不是这一集的");
+        });
+    }
+
+    /// <summary>A coordinator over one 25-minute episode: 0–90 片头, 1380–1500 片尾, 询问 mode.</summary>
+    private static SkipCoordinator Coordinator(out IReadOnlyList<SkipSection> sections)
+    {
+        sections =
+        [
+            new SkipSection(SkipSectionKind.Opening, 0, 90, "片头", Certain: true),
+            new SkipSection(SkipSectionKind.Ending, 1380, 1500, "片尾", Certain: true)
+        ];
+
+        var skips = new SkipCoordinator();
+        skips.Begin(sections, 1500);
+        return skips;
+    }
+
+    // ---- 播放器控件显隐 --------------------------------------------------------
+
+    // 需求 9、10、11 全在这条规则里。WinForms 版本把它焊在 40 毫秒的指针轮询上，没法单独检验；
+    // 搬进 Core 之后时间是参数，于是可以把每一条要求钉成一个用例。
+    private static void RegisterChromeReveal()
+    {
+        Test("播放器控件：指针进底部边缘带只出进度条", () =>
+        {
+            var chrome = Chrome(out var now);
+
+            // 先让它收起来，否则读到的是开场那次全显示。
+            Assert.True(chrome.Tick(now + 1000));
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+
+            // 「显示进度条的时候不需要同步显示音量条」——推翻了原先的「进度条出来时音量条也要出来」：
+            // 指针进底部边缘带是在要进度条，跟音量一点关系都没有。
+            Assert.Equal(new ChromeState(true, false, false), chrome.State);
+            Assert.Equal(0d, chrome.RailStrength, "没出来的音量条强度是零");
+
+            // 底边唤出到 BottomReachPixels（像素，照独占 uosc）之外就在带外，不许出来。写成拿常量算，
+            // 免得唤出范围一改这条又得手改一个魔数。height 传 1000，离底 BottomReachPixels+1 像素即带外。
+            chrome.Pointer(y: 1000 - ChromeReveal.BottomReachPixels - 1, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "唤出范围之上就在带外");
+        });
+
+        Test("播放器控件：进度条和音量条是两个互不相干的请求", () =>
+        {
+            // 需求 9 的另一半：拆开之后两者可以各自成立，也可以同时成立，但谁都不再是谁的理由。
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: 0.5, now + 1100);
+            Assert.Equal(new ChromeState(true, false, true), chrome.State, "在底部又在右边缘，两个请求都算数");
+
+            // 挪出右边缘：进度条留下，音量条走。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.Equal(new ChromeState(true, false, false), chrome.State);
+
+            // 反过来也一样：进了右边缘的中段，进度条不跟着出来。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: 0.5, now + 1300);
+            Assert.Equal(new ChromeState(false, false, true), chrome.State);
+        });
+
+        Test("播放器控件：指针在画面中间什么都不出来", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            // 中间三分之三是死区，字幕就在那里。
+            foreach (var y in new[] { 210d, 500d, 790d })
+            {
+                chrome.Pointer(y, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+                Assert.Equal(new ChromeState(false, false, false), chrome.State, $"y={y}");
+            }
+        });
+
+        Test("播放器控件：指针进顶部边缘带只出标题栏", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            chrome.Pointer(y: 40, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State, "上面的条不带音量条");
+        });
+
+        Test("播放器控件：指针停在唤出带里就不自动隐藏控件", () =>
+        {
+            // 用户令 2026-09-28：「当鼠标停留在对应控件的渐变触发位置时，不要自动隐藏这些控件」。
+            // 从前每一样另有一条空闲窗口（静止 650ms / 停在控件上 2000ms），到期就把控件收走 —— 哪怕指针
+            // 仍落在它的唤出带里。现在这三样只认位置：指针在带里，控件就在；指针回死区，控件立刻收。
+            //
+            // **光标那一半 2026-09-29 已分家**（用户令「触发渐变的时候不隐藏控件，但是要隐藏鼠标」）：
+            // 带子里控件留着、光标照走 —— 光标只认本体（PointerHolds）。这一条因此只量控件，光标留给
+            // 下面那条「只有压在控件本体上才不收鼠标」。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.True(chrome.State.Bar);
+
+            Assert.True(chrome.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "在带里停满四秒，控件那一格不许变");
+            Assert.True(chrome.State.Bar, "在带里停多久都还在");
+            Assert.True(chrome.CursorHidden, "带子里没有本体可瞄，光标按 09-29 的令照走");
+
+            // 回到画面中间的死区：位置一改，当场收干净（这一条从前靠空闲钟，现在靠位置）。
+            Assert.True(chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 6000));
+            Assert.False(chrome.State.Any);
+        });
+
+        Test("播放器控件：滚轮改音量时单独亮出音量条", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            // 指针停在画面正中，滚轮却要有读数：「鼠标滚轮调整音量时要显示音量条」。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+
+            // 宽限窗口比指针的空闲窗口长，数字要来得及看清。**这一格与光标无关**：指针在死区里、
+            // 又没压在控件本体上，空闲钟照走 —— 松手那一刻光标早就该走了（用户令 2026-09-29
+            // 「触发渐变的时候不隐藏控件，但是要隐藏鼠标」），留着的只是音量条自己。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 1199);
+            Assert.False(chrome.CursorHidden, "指针还压在死区上，一秒没到光标不走");
+            Assert.True(chrome.FlashRail(now + 1200));
+            Assert.Equal(new ChromeState(false, false, true), chrome.State, "只亮音量条，不把整套控件拉出来");
+            Assert.Equal(0d, chrome.IdleAgo(now + 1200), "宽限那一记也是活动，空闲钟从它重数");
+
+            // 下一秒的空闲钟走满：光标走，音量条留着（它认的是宽限窗口，不是空闲钟）。
+            Assert.True(chrome.Tick(now + 1200 + ChromeReveal.CursorIdleMilliseconds),
+                "空闲钟走满，只有光标那一格变");
+            Assert.True(chrome.CursorHidden, "滚轮过后指针没再动，光标照走");
+            Assert.True(chrome.State.Rail, "光标走了不牵连音量条");
+
+            // 指针的空闲钟（1000）比窄限窗口（1200）短，所以光标先走、条子后收 —— 这正是
+            // 「数字要来得及看清」那个先后。
+            Assert.False(chrome.Tick(now + 2399));
+            Assert.True(chrome.State.Rail);
+
+            Assert.True(chrome.Tick(now + 2400));
+            Assert.False(chrome.State.Rail);
+        });
+
+        Test("播放器控件：右边缘进入区不受命中测试影响", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            // 「音量条判定有问题，我鼠标移到窗口右边有时候不会显示」：跳过按钮和顶部条都压在右边缘上，
+            // 命中测试只能选一个赢家，所以进入区是单独一问。
+            chrome.Pointer(y: 100, height: 1000, ChromePart.Skip, railNear: 1, now + 1100);
+            Assert.True(chrome.State.Rail, "命中到跳过按钮也不该把音量条挡回去");
+
+            chrome.Pointer(y: 40, height: 1000, ChromePart.Title, railNear: 1, now + 1200);
+            Assert.Equal(new ChromeState(false, true, true), chrome.State, "顶部条和音量条可以同时在");
+        });
+
+        Test("播放器控件：压在跳过按钮上不唤进度条", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            // 「鼠标移到按钮上的时候不会唤出进度条」（用户令 2026-09-26）：按钮按 offer 的节拍自己显隐，
+            // 指针到它上面不等于「要看控制条」。按钮恰在底部边缘带里（y 940/1000 过 0.88 的带线），
+            // 底带判据要让位 —— Skip 这一支盖过 Edges 的结果。
+            chrome.Pointer(y: 940, height: 1000, ChromePart.Skip, railNear: -1, now + 1100);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+
+            // 手在按钮上停着也一样：位置没变，状态就不变（这根条子本来就不该为它出现）。
+            Assert.False(chrome.Pointer(y: 940, height: 1000, ChromePart.Skip, railNear: -1, now + 5000));
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+
+            // 挪出按钮、回到底部边缘带（按钮之外）照旧唤条 —— 让位的只有按钮自己那块地方。
+            chrome.Pointer(y: 985, height: 1000, ChromePart.None, railNear: -1, now + 5100);
+            Assert.True(chrome.State.Bar);
+        });
+
+        Test("播放器控件：指针停在控件上就不算静止", () =>
+        {
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.Bar, railNear: -1, now);
+            Assert.True(chrome.State.Bar, "停在控件上就是到了，跟分区无关");
+
+            // 同一个位置再问一次，时间往前走——手停在按钮上多久，按钮与光标就留多久（用户令 2026-09-28；
+            // 从前这里有一条 2000ms 的上限，那正是他点名要去掉的那一条）。
+            Assert.False(chrome.Pointer(y: 500, height: 1000, ChromePart.Bar, railNear: -1, now + 5000));
+            Assert.True(chrome.State.Bar);
+            Assert.False(chrome.CursorHidden);
+        });
+
+        Test("播放器控件：面板打开或还在加载时钉住不放", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+            Assert.False(chrome.State.Any);
+
+            // 面板是从进度条上的按钮点开的，所以指针在进度条上，弹出层自己接走了后面的指针事件。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, now + 1050);
+
+            chrome.SetHold(true, now + 1100);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State);
+            Assert.False(chrome.Tick(now + 9000), "钉住期间时间流逝也不收");
+
+            chrome.SetHold(false, now + 9100);
+            Assert.True(chrome.State.Bar, "面板关掉了，指针还落在进度条上");
+
+            // 指针挪回死区才收——放开钉子本身不该当成「早就静止了」。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 9200);
+            Assert.False(chrome.State.Any);
+
+            // 还在加载的文件没有画面可挡，控件也是唯一的出路。暂停以前也钉在这里，
+            // 现在不钉了：「别什么进度条标题音量条都持久显示在画面上」。
+            chrome.SetKeep(true, now + 9800);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "还没出画面的时候控件是唯一的出路");
+
+            chrome.SetKeep(false, now + 9900);
+            Assert.False(chrome.State.Any, "加载完就交回给指针——它还在死区里");
+        });
+
+        Test("播放器控件：右键画面菜单开着时控件全部收下去", () =>
+        {
+            // 用户令 2026-10-07「右键点击画面呼出菜单的时候不要自动显示其他控件」。这只菜单锚在画面上，
+            // 与控制条上那五只浮层（SetHold 钉住三样）相反：开着时菜单本身就是全部界面。尤其要压住位置
+            // 判据那一路 —— 菜单从画面中部开出去、被屏幕下沿裁住时，指针在菜单里的每一步都躺在底边
+            // 唤出带里，那是真手，位置规则认它。
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+            Assert.False(chrome.State.Any);
+
+            // 开菜单的前一刻指针就压在底边带里（右键低处的画面，进度条已经在屏上）。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 1050);
+            Assert.True(chrome.State.Bar);
+
+            chrome.SetPictureMenu(true, now + 1100);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "菜单开着，控件一个不画");
+            Assert.False(chrome.CursorHidden, "用户正在菜单里挑，光标不能被收走");
+
+            // 菜单里那条手是真实的移动（moved:true）：回到死区不点亮什么，贴到底边带里、离音量矩形再近
+            // 也一样 —— 位置判据在菜单开着期间整段让位。
+            chrome.Pointer(y: 400, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.False(chrome.State.Any, "指针在菜单里移动不点亮任何控件");
+            chrome.Pointer(y: 980, height: 1000, ChromePart.None, railNear: 1, now + 1300);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "就在底边带里、音量条反达之内也一样");
+
+            // 键盘宽限撞上右键：宽限的「三样全给」也不许越过菜单这一支。
+            chrome.WakeFully(now + 1400);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State,
+                "带着一屏控件开菜单正是这条令要挡的场面");
+
+            // 关上：交回给位置判据 —— 指针在哪儿控件跟着哪儿，且不带别的显示理由。宽限在开菜单那一拍
+            // 就被清掉了，这一拍要是还认它，关菜单自己就会把一屏控件弹回来。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 1450);
+            chrome.SetPictureMenu(false, now + 1500);
+            Assert.Equal(new ChromeState(true, false, false), chrome.State, "指针还在底边带里，菜单关了控件照位置回来");
+            Assert.False(chrome.CursorHidden, "关上那一拍重盖了空闲钟，光标不会立刻被收走");
+            Assert.Equal(0d, chrome.IdleAgo(now + 1500), "空闲钟从关上那一拍重数");
+            chrome.Tick(now + 1600);
+            Assert.Equal(new ChromeState(true, false, false), chrome.State,
+                "过期宽限清干净了，不会再有一屏控件弹回来");
+
+            // 新一播放是自己的世界：画面菜单那一位跟纯净闸一样不活过 Reset。
+            chrome.SetPictureMenu(true, now + 2000);
+            chrome.Reset(now + 2001);
+            Assert.False(chrome.PictureMenuOpen);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "Reset 回到开场那套全显示");
+        });
+
+        Test("播放器控件：拖动标题移动窗口时不画进度条和音量条", () =>
+        {
+            // 「在播放页面中，当用户长按标题并拖动播放窗口时，拖动过程中不要显示进度条和音量条」(2026-09-22)。
+            // 拖动这一趟窗口跟着手走，两根条既没人读、又跟着一起晃；标题条必须留着 —— 手就压在它上面。
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+            Assert.False(chrome.State.Any);
+
+            // 拖动之前两根条都在，位置一并在底部带与右边缘上：这样「之后都没了」才不是因为没有理由。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: 0.5, now + 1050);
+            Assert.Equal(new ChromeState(true, false, true), chrome.State);
+
+            chrome.SetWindowDrag(true, now + 1100);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State, "拖动期间只剩标题条");
+            Assert.Equal(0d, chrome.RailStrength, "音量条连强度都是零");
+
+            // 拖动这一趟页面不再问轮询，指针停在原地 —— 先记一记「它就停在那里」，再从这一记往
+            // 前推一个空闲钟。拖动那一支不看时间，所以这一档一动不动；光标则从这一记起算，
+            // 满一秒就走（拖动不为它破例）—— 所以这里量的是 State 那一格，不是 Tick 的返回值：
+            // 那一拍 `true` 是光标变了一格，不是控件。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: 0.5, now + 1200, moved: false);
+            chrome.Tick(now + 1200 + ChromeReveal.CursorIdleMilliseconds);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State, "拖动期间时间流逝不改变这一档");
+            Assert.True(chrome.CursorHidden, "指针停着，光标该走（拖动也不为它破例）");
+
+            // 拖动自己也带「钉住」这个理由，但钉住不许把两根条带回来：拖动那一支排在钉住前面。
+            chrome.SetHold(true, now + 5100);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State, "钉住加拖动，还是只剩标题条");
+
+            // 滚轮改音量的那一记宽限也不许在拖动期间把音量条亮起来 —— 「不要显示」是整段拖动，不是「除非……」
+            chrome.FlashRail(now + 5200);
+            Assert.Equal(new ChromeState(false, true, false), chrome.State);
+
+            // 松手：钉子还在（页面那一头两把一起放），照旧是钉住的样子。
+            chrome.SetWindowDrag(false, now + 5300);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State);
+
+            chrome.SetHold(false, now + 5400);
+            Assert.Equal(new ChromeState(true, false, true), chrome.State, "放干净之后交回给指针的位置");
+        });
+
+        Test("播放器控件：键盘命令在画面中间也给反馈", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+            Assert.False(chrome.State.Any);
+
+            chrome.WakeFully(now + 1200);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State);
+
+            Assert.True(chrome.Tick(now + 2400), "宽限窗口过了就交回给指针的位置");
+            Assert.False(chrome.State.Any);
+        });
+
+        Test("播放器控件：指针离开画面照样收起", () =>
+        {
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.True(chrome.State.Bar);
+
+            // 指针在别的窗口上了，它什么都没有在要求，不必等空闲窗口。
+            Assert.True(chrome.PointerLeft(now + 10));
+            Assert.False(chrome.State.Any, "离开画面就立刻收，跟走进死区一样");
+        });
+
+        Test("播放器控件：从音量条上离开窗口也要收起音量条", () =>
+        {
+            // 「鼠标移到窗口右边显示音量条之后，再移出窗口，音量条不会自动隐藏」。
+            // 停在控件上按位置留着，离开必须自己说出来 —— 而外壳过去是拿事件里的坐标判断的，
+            // 从子元素上离开时那个坐标还在画面里。
+            //
+            // **光标那一半 2026-09-29 已分家**：两条路都「手还搭在上面」（控件按位置留着），
+            // 可只有真压在音量条**本体**上时光标才留 —— 只落在右缘进入区的按新令照走。
+            foreach (var (part, near, what) in new (ChromePart Part, double Near, string What)[]
+            {
+                (ChromePart.Volume, 1d, "指针压在音量条上"),
+                (ChromePart.None, 1d, "指针只在右边缘进入区")
+            })
+            {
+                var chrome = Chrome(out var now);
+                chrome.Tick(now + 1000);
+                Assert.False(chrome.State.Any, what);
+
+                chrome.Pointer(y: 500, height: 1000, part, near, now + 1100);
+                Assert.True(chrome.State.Rail, what);
+
+                // 光是等一会儿不行：指针停着本身就是它该在的理由（控件按位置留着），
+                // 所以「离开」得自己说出来，见下一句。量的是 State 那一格 —— 空闲钟走满那一下
+                // 光标会翻一格（带子里没人可瞄，09-29 的令），所以 Tick 的返回值本身不说明控件。
+                var patience = now + 1100 + (ChromeReveal.CursorIdleMilliseconds * 4);
+                chrome.Tick(patience);
+                Assert.True(chrome.State.Rail, $"{what}：手还搭在上面的时候不该收");
+
+                // 光标这一格按本体分家：压在音量条上留住，只在进入区里照走。
+                var onBody = ChromeReveal.HoldsCursor(part);
+                Assert.Equal(onBody, !chrome.CursorHidden,
+                    $"{what}：光标该为「压在本体上」留，进入区不该留");
+
+                // 移出窗口：控件当场收 —— 而 `PointerLeft` 报的是「这一拍有没有变化」，
+                // 所以先让光标各自走到该在的位置，别把它那一格混进这一问里。
+                var outAt = patience + 100;
+                if (!onBody) chrome.Tick(outAt);
+                Assert.True(chrome.PointerLeft(outAt), what);
+                Assert.False(chrome.State.Any, $"{what}：移出窗口就该收");
+            }
+        });
+
+        Test("播放器控件：压在音量条或进度条上多久都不收鼠标", () =>
+        {
+            // 用户令 2026-09-28：「当鼠标停留在音量条或进度条上时，不要自动隐藏鼠标指针」。
+            // 2026-09-29 收窄成「只有按钮上才不藏」之后，这一条仍然成立且更准：命中的是**本体**
+            // （ChromePart.Bar / ChromePart.Volume），光标那一格问的正是它（PointerHolds）。
+            //
+            // **这一条推翻的是 2026-09-15 那次报的毛病**（「全屏时最下方的进度条不会自动隐藏，鼠标也不会
+            // 自动隐藏」）：当时用「停靠只买耐心（2000ms）」修的，用户 2026-09-28 这条更晚的指令把它翻了过来 ——
+            // 指针压在两根条上停多久都留着，要收回来只有一条路：把指针挪回画面中间（或移出窗口）。
+            foreach (var (part, what) in new (ChromePart Part, string What)[]
+            {
+                (ChromePart.Bar, "压在进度条上"),
+                (ChromePart.Volume, "压在音量条上")
+            })
+            {
+                var chrome = Chrome(out var now);
+
+                // 指针在画面中间（那里的位置判据什么都不唤），只有命中/接近这两个理由成立。
+                chrome.Pointer(y: 500, height: 1000, part, railNear: part == ChromePart.Volume ? 1 : -1, now);
+                Assert.True(chrome.State.Any, what);
+
+                Assert.False(chrome.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 10)), what);
+                Assert.True(chrome.State.Any, $"{what}：停着不算「没人用」");
+                Assert.False(chrome.CursorHidden, $"{what}：光标不许走");
+
+                // 挪回画面中间：位置说了算，控件当场收，光标走完自己那一秒。
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 11000);
+                Assert.False(chrome.State.Any, what);
+                Assert.False(chrome.CursorHidden, what);
+
+                Assert.True(chrome.Tick(now + 11000 + ChromeReveal.CursorIdleMilliseconds), what);
+                Assert.True(chrome.CursorHidden, what);
+            }
+        });
+
+        Test("播放器控件：只有压在控件本体上才不收鼠标，停在唤出带里照收", () =>
+        {
+            // 用户令 2026-09-29：「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，
+            // 触发渐变的时候不隐藏控件，但是要隐藏鼠标。」
+            //
+            // 这一条把两半拆开量。从前光标那一格问的是「屏上有没有东西」（!State.Any），于是「指针停在
+            // 唤出带里、控件正淡入」这个位置也把光标留住了 —— 与「触发渐变时要隐藏鼠标」正相反。
+            // 现在光标只认 PointerHolds（PartAt 那四处命中）。
+            //
+            // 三个位置同一把尺：中间的死区、底部唤出带（控件亮着、但指针没碰到进度条）、底带上真压在
+            // 进度条上。第一与第二个位置光标都要走，第三个不走 —— 控件在哪儿都亮着，见每句的断言。
+            var dead = Chrome(out var now);
+            dead.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.False(dead.State.Any, "画面中间本来就什么都没有");
+            Assert.True(dead.Tick(now + ChromeReveal.CursorIdleMilliseconds + 1), "中间死区里一秒就该藏");
+            Assert.True(dead.CursorHidden, "死区：光标该走");
+
+            // 底部唤出带（y=990：离底 10px，进度条的唤出区里），但**没压在进度条本体上** —— 命中的是
+            // 位置，不是控件。控件因此留着（位置说了算），光标按新令照走。
+            var band = Chrome(out now);
+            band.Pointer(y: 990, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.True(band.State.Bar, "停在底部唤出带里，进度条要留着");
+            Assert.True(band.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "唤出带里：空闲钟走满要说出「光标变了」");
+            Assert.True(band.State.Bar, "唤出带里：控件不许被收走");
+            Assert.True(band.CursorHidden, "唤出带里：光标该走（这是本次令的正题）");
+
+            // 真压在进度条上：同一条钟，光标留住 —— 控件与光标都跟着指针。
+            var onBar = Chrome(out now);
+            onBar.Pointer(y: 990, height: 1000, ChromePart.Bar, railNear: -1, now);
+            Assert.True(onBar.State.Bar, "压在进度条上");
+            Assert.False(onBar.Tick(now + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "压在进度条上：空闲钟走满也不该改任何东西");
+            Assert.True(onBar.State.Bar, "压在进度条上：控件留着");
+            Assert.False(onBar.CursorHidden, "压在进度条上：光标不许走");
+
+            // 四条「本体」判据一次钉住：Bar / Title / Volume / Skip 都是「压在本体上」，None 不是。
+            foreach (var part in new[] { ChromePart.Bar, ChromePart.Title, ChromePart.Volume, ChromePart.Skip })
+                Assert.True(ChromeReveal.HoldsCursor(part), $"{part} 该算「压在控件本体上」");
+            Assert.False(ChromeReveal.HoldsCursor(ChromePart.None), "None 不许算「压在控件本体上」");
+        });
+
+        Test("播放器控件：停在右边缘进入区也不自动隐藏", () =>
+        {
+            // 与「指针停在唤出带里就不自动隐藏控件」同一条令：右缘那条进入带也算「渐变触发位置」——
+            // **控件**（音量条）留在屏上。光标那一半按 09-29 的令分家：进入区不是本体，光标照走。
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: 1, now + 1100);
+            Assert.True(chrome.State.Rail);
+
+            Assert.True(chrome.Tick(now + 1100 + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "指针还撂在右边缘进入区里，音量条就不该收（只有光标那一格变）");
+            Assert.True(chrome.State.Rail);
+            Assert.True(chrome.CursorHidden, "进入区还是带子，光标照走");
+
+            // 真压在音量条本体上：光标才留住。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.Volume, railNear: 1, now + 6000);
+            Assert.False(chrome.Tick(now + 6000 + (ChromeReveal.CursorIdleMilliseconds * 4)),
+                "压在音量条上：空闲钟走满也不许收");
+            Assert.True(chrome.State.Rail);
+            Assert.False(chrome.CursorHidden, "压在音量条上：光标不许走");
+
+            // 走出进入区（proximity 归零）：音量条当场收。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 12000);
+            Assert.False(chrome.State.Any);
+        });
+
+        // 音量条的尺寸线（用户令 2026-09-23「集成模式下窗口小于一定程度的时候自动隐藏音量条」）：
+        // 「什么时候不画」那半是 Core 里的算术，这里钉边界；页面那半（Render 与 RailNear 真的按它收）
+        // 归自检 ProbeRailFade —— 它手上有排过版的音量条元素，能把「门槛高过条子自己」也量出来。
+        Test("播放器控件：画面小到尺寸线以下就没有音量条", () =>
+        {
+            Assert.True(ChromeReveal.RailRoom(ChromeReveal.RailMinPictureWidth, ChromeReveal.RailMinPictureHeight),
+                "两条边正好等于阈值算容得下");
+            Assert.True(ChromeReveal.RailRoom(3840, 2160), "4K 那么大的画面当然容得下");
+
+            Assert.False(ChromeReveal.RailRoom(ChromeReveal.RailMinPictureWidth - 1, 2160),
+                "窄过线一格就不容 —— 窄而高的窗口也要收");
+            Assert.False(ChromeReveal.RailRoom(3840, ChromeReveal.RailMinPictureHeight - 1),
+                "矮过线一格就不容 —— 宽而矮的窗口也要收");
+            Assert.False(ChromeReveal.RailRoom(0, 0), "页面还没排过版（0×0）时必须是不容");
+
+            // 高度那条线是照着音量条自己量的（条子约 428 高）：线比条子矮，就意味着「容得下」的那一档里
+            // 条子会被窗口切掉。这一条只钉量级，精确那一半由自检拿真元素去比。
+            Assert.True(ChromeReveal.RailMinPictureHeight >= 500,
+                $"尺寸线比音量条自己（约 428 高）没高出多少：{ChromeReveal.RailMinPictureHeight}");
+        });
+
+        // 左上角那三块玻璃的浓度跟着指针高度走（用户令 2026-09-27 傍晚第三批「加深左上角亚克力背景的颜色，
+        // 鼠标位置越靠上亚克力背景的颜色越深」；第四批又补了「颜色深度在鼠标移动到剧名下方那条线之前一点
+        // 的时候达到最大」）。这里钉的是那条曲线 —— 它必须与标题条那条唤出带**同一条边**：玻璃最深的时候
+        // 条子一定在屏上，否则会出现一块最深、又浮在没有条子的画面上的底。颜色的那一半（这个 0..1 换成哪个
+        // alpha 字节）在 PlayerPaletteTests 里，「满深线量在哪」归自检 ProbeClearance。
+        Test("播放器控件：指针越靠顶边，左上角玻璃的深度越大", () =>
+        {
+            // 精确到浮点尾数的那种比法在这条线上不成立（0.06 / 0.12 是二进制除不尽的），所以逐档给容差。
+            static void Near(double want, double got) =>
+                Assert.True(Math.Abs(got - want) < 1e-9, $"期望 {want}，实际 {got}");
+
+            var band = ChromeReveal.EdgeBandFraction;
+
+            // 满深线摆在带子正中（页面把它量在哪儿是它自己的事，这一条只管曲线本身）。
+            var full = band / 2;
+
+            Near(1, ChromeReveal.TopGlassDepth(0, full));
+            Near(1, ChromeReveal.TopGlassDepth(full, full));
+            Near(0.5, ChromeReveal.TopGlassDepth((full + band) / 2, full));
+            Near(0, ChromeReveal.TopGlassDepth(band, full));
+
+            // 带子外面一律 0：不在带子里就谈不上「更靠上」，而条子这时也不在屏上。
+            Near(0, ChromeReveal.TopGlassDepth(band + 0.01, full));
+            Near(0, ChromeReveal.TopGlassDepth(0.5, full));
+            Near(0, ChromeReveal.TopGlassDepth(-1, full));
+
+            // 满深线压在顶边（0）上就退成上一版那条曲线：贴到顶才满。
+            Near(1, ChromeReveal.TopGlassDepth(0, 0));
+            Near(0.5, ChromeReveal.TopGlassDepth(band / 2, 0));
+            Near(0, ChromeReveal.TopGlassDepth(band, 0));
+
+            // 越界的满深线夹回带子里。跑出去（负数、或大过带子）会让整条带子一律最深 —— 那正是
+            // 「越靠上越深」这句话没有了，而屏上看着只是「这块底好像一直很深」，没人报得出来。
+            Near(1, ChromeReveal.TopGlassDepth(0, -1));
+            Near(1, ChromeReveal.TopGlassDepth(band / 2, band + 1));
+
+            // 一路往上只会更深，不许回头。
+            for (var y = band - 0.01; y > full; y -= 0.01)
+                Assert.True(ChromeReveal.TopGlassDepth(y, full) > ChromeReveal.TopGlassDepth(y + 0.01, full),
+                    $"y={y:0.00} 这一档没有比下面那一档深");
+
+            // 「之前一点」里的那一点：0 的话鼠标擦着那条线往下走玻璃就开始变淡。
+            Assert.True(ChromeReveal.TopGlassFullInset > 0, "「那条线之前一点」没有了：满深线正好压在下沿上");
+
+            // 亚克力这条曲线用的还是 EdgeBandFraction（比例），而标题条的唤出 2026-09-27 晚改成了按像素
+            // 的 uosc proximity（TopReachPixels）——两者不再是同一条线。这没关系：那几块玻璃是 TitleStrip
+            // 的孩子，条子收了就不画，而条子露不露由像素唤出说了算，所以亚克力永远越不出标题条的范围
+            // （见 EdgeBandFraction 注释）。标题条自己的唤出在「标题条越往上越明显」那条里钉。
+        });
+
+        // 需求 10 与 2026-09-28「参考独占模式修复」：音量条淡入的强度随指针靠近而升。「靠近多少」由页面量出
+        // 指针到音量条矩形的 uosc 欧氏距离 proximity（横竖两轴一次算完，见 RailProximity / ProbeRailFade），
+        // 传进来就是这里的 railNear；Core 只保证「proximity 越大越亮、贴着满、下限兜底」。旧的「两个方向各占
+        // 一半、竖向中心偏置 Centred」那套已退役，竖向衰减改由页面真几何承担。
+        Test("播放器控件：音量条越往右越明显", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            double At(double near)
+            {
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, near, now + 1100);
+                Assert.True(chrome.State.Rail, $"near={near} 时音量条本来就该在");
+                return chrome.RailStrength;
+            }
+
+            // 刚跨过进入区的内边界：已经决定要显示，所以给下限而不是给零——
+            // 一条决定要显示却淡到五个百分点的音量条不是含蓄，是故障。
+            Assert.Equal(ChromeReveal.RailFloor, At(0), "刚进来就给下限");
+
+            var quarter = At(0.25);
+            var half = At(0.5);
+            var most = At(0.75);
+            var edge = At(1);
+
+            Assert.True(quarter > ChromeReveal.RailFloor, $"往里一点就该比下限亮：{quarter}");
+            Assert.True(half > quarter, $"{half} 应当亮过 {quarter}");
+            Assert.True(most > half, $"{most} 应当亮过 {half}");
+            Assert.Equal(1d, edge, "贴着右边缘就是满的");
+        });
+
+        // 音量条那条唤出曲线本身照独占 uosc（proximity：离控件矩形近于 proximity_in 满显、远过 proximity_out
+        // 全隐、中间线性）。几何——指针到音量条矩形的欧氏距离——在页面量、由自检 ProbeRailFade 钉（它手上有排过
+        // 版的音量条元素，能量出「越偏离中心越淡」这项四角变暗）；这里钉纯曲线，接替退役的竖向中心偏置 Centred。
+        Test("播放器控件：音量条 proximity 曲线照独占", () =>
+        {
+            Assert.Equal(1d, ChromeReveal.RailProximity(0), "贴着矩形就是满");
+            Assert.Equal(1d, ChromeReveal.RailProximity(ChromeReveal.ProximityInPixels), "到 proximity_in 仍满");
+            Assert.Equal(0d, ChromeReveal.RailProximity(ChromeReveal.ProximityOutPixels), "到 proximity_out 归零");
+            Assert.Equal(0d, ChromeReveal.RailProximity(ChromeReveal.ProximityOutPixels + 40), "更远还是零");
+
+            // proximity_in 与 proximity_out 的正中（80px）正好一半——线性。
+            var mid = (ChromeReveal.ProximityInPixels + ChromeReveal.ProximityOutPixels) / 2;
+            Assert.Equal(0.5d, ChromeReveal.RailProximity(mid), "正中该是一半");
+
+            // 单调不增：离矩形越远越淡。
+            var previous = 2d;
+            for (double d = 0; d <= 160; d += 10)
+            {
+                var p = ChromeReveal.RailProximity(d);
+                Assert.True(p <= previous + 1e-9, $"距离 {d} 反而更亮：{p} > {previous}");
+                previous = p;
+            }
+        });
+
+        // 用户令 2026-09-27 四条「参独占模式……」：标题条、控制条也照音量条改成随指针靠近边缘分级淡入。
+        // 「越明显」是这里的算术（强度 0..1），页面把它写成 Opacity / 高度（由自检去量）。
+        Test("播放器控件：标题条越往上越明显（参独占淡入）", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            double At(double y)
+            {
+                chrome.Pointer(y, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+                Assert.True(chrome.State.Title, $"y={y} 时标题条本来就该在");
+                return chrome.TitleStrength;
+            }
+
+            // 满显区：离顶 ≤ TopBarPixels+ProximityInPixels（80px，照独占）都是满的。
+            Assert.Equal(1d, At(0), "贴着顶边满");
+            Assert.Equal(1d, At(70), "满显区内还是满");
+            // 渐弱区：80→160px 之间线性淡出，越靠上越明显。
+            var far = At(150);
+            var mid = At(120);
+            var close = At(90);
+            Assert.True(far > 0 && close > mid && mid > far, $"越靠上越明显：{close} > {mid} > {far} > 0");
+            // 离顶到 TopReachPixels（160px）以外就出了唤出范围，标题条不再在（+5 避开边界上的浮点尾数）。
+            chrome.Pointer(ChromeReveal.TopReachPixels + 5, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.False(chrome.State.Title, "离顶过了 TopReachPixels 就出了唤出范围");
+        });
+
+        Test("播放器控件：控制条越往下越明显（进度条同一条强度）", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            double At(double y)
+            {
+                chrome.Pointer(y, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+                Assert.True(chrome.State.Bar, $"y={y} 时控制条本来就该在");
+                return chrome.BarStrength;
+            }
+
+            // 满显区：离底 ≤ BottomBarPixels+ProximityInPixels（128px）都是满的。
+            Assert.Equal(1d, At(1000), "贴着底边满");
+            Assert.Equal(1d, At(900), "满显区内还是满");
+            // 渐弱区：128→208px 之间线性淡出，越靠下越明显。
+            var far = At(800);
+            var mid = At(820);
+            var close = At(850);
+            Assert.True(far > 0 && close > mid && mid > far, $"越靠下越明显：{close} > {mid} > {far} > 0");
+            chrome.Pointer(1000 - ChromeReveal.BottomReachPixels - 5, height: 1000, ChromePart.None, railNear: -1, now + 1200);
+            Assert.False(chrome.State.Bar, "离底过了 BottomReachPixels 就出了唤出范围");
+        });
+
+        Test("播放器控件：手压在标题/控制条上、或键盘唤出，强度一律给足", () =>
+        {
+            // 与音量条同理：手已经搭在条上、键盘命令，都是明摆着要看的，分级只给「走近」打分。
+            var onTitle = Chrome(out var now);
+            onTitle.Tick(now + 1000);
+            onTitle.Pointer(y: 10, height: 1000, ChromePart.Title, railNear: -1, now + 1100);
+            Assert.Equal(1d, onTitle.TitleStrength, "手压在标题条上给满");
+
+            var onBar = Chrome(out now);
+            onBar.Tick(now + 1000);
+            onBar.Pointer(y: 990, height: 1000, ChromePart.Bar, railNear: -1, now + 1100);
+            Assert.Equal(1d, onBar.BarStrength, "手压在控制条上给满");
+
+            // 键盘宽限：指针在正中，靠位置算强度会是 0，可键盘命令要三样全显。
+            var keys = Chrome(out now);
+            keys.Tick(now + 1000);
+            keys.WakeFully(now + 1100);
+            Assert.Equal(1d, keys.TitleStrength, "键盘唤出时标题满");
+            Assert.Equal(1d, keys.BarStrength, "键盘唤出时控制条满");
+        });
+
+        Test("播放器控件：不是靠近换来的音量条一律给足", () =>
+        {
+            // 强度只给「靠近」这一种理由打分。滚轮、键盘、手已经搭在滑杆上、面板钉住、还在加载——
+            // 这些都是用户明摆着要看的读数，把一个人正在读的数字调暗是拿分寸回答没人问的问题。
+            var wheel = Chrome(out var now);
+            wheel.Tick(now + 1000);
+            wheel.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 1100);
+            wheel.FlashRail(now + 1200);
+            Assert.Equal(1d, wheel.RailStrength, "滚轮改音量");
+
+            var keys = Chrome(out now);
+            keys.Tick(now + 1000);
+            keys.WakeFully(now + 1100);
+            Assert.Equal(1d, keys.RailStrength, "键盘命令");
+
+            var held = Chrome(out now);
+            held.Tick(now + 1000);
+            held.SetHold(true, now + 1100);
+            Assert.Equal(1d, held.RailStrength, "面板钉住");
+
+            var loading = Chrome(out now);
+            loading.Tick(now + 1000);
+            loading.SetKeep(true, now + 1100);
+            Assert.Equal(1d, loading.RailStrength, "还在加载");
+
+            // 手搭在滑杆上是在瞄，不是在靠近：哪怕进入区的读数说它才刚跨进来，也给足。
+            var onRail = Chrome(out now);
+            onRail.Tick(now + 1000);
+            onRail.Pointer(y: 500, height: 1000, ChromePart.Volume, railNear: 0, now + 1100);
+            Assert.Equal(1d, onRail.RailStrength, "手已经搭在音量条上");
+        });
+
+        Test("播放器控件：只有强度变了也要通知页面重画", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: 0.2, now + 1100);
+            var before = chrome.RailStrength;
+
+            Assert.True(chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: 0.8, now + 1200),
+                "三个开关一个没动，动的只有强度——页面还是得重画");
+            Assert.Equal(new ChromeState(false, false, true), chrome.State);
+            Assert.True(chrome.RailStrength > before, $"{chrome.RailStrength} 应当亮过 {before}");
+
+            // 反过来：强度量化到百分位，指针在桌上抖一抖不该换来一次重画。
+            Assert.False(chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: 0.8001, now + 1300),
+                "百分位没变就没有新闻");
+        });
+
+        Test("播放器控件：只有指针停在画面上且没有控件时才藏鼠标", () =>
+        {
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.False(chrome.CursorHidden, "刚动过就藏，等于在移动中间把指针弄丢");
+
+            // 死区里控件本来就不显示（2026-09-28 起按位置算），而光标还要自己那一秒才走 ——
+            // 还差一毫秒就把它弄丢，人就在一次移动的中途失去了准头。
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds - 1);
+            Assert.False(chrome.State.Any);
+            Assert.False(chrome.CursorHidden, "控件不在屏上的时候光标还得在，它等的是自己那一秒");
+
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds), "「静止一秒就藏（mpv.net 的 cursor-autohide）」");
+            Assert.True(chrome.CursorHidden);
+
+            var moved = now + ChromeReveal.CursorIdleMilliseconds + 50;
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, moved);
+            Assert.False(chrome.CursorHidden, "一动就得回来");
+
+            // 指针不在这幅画面上时绝不藏：鼠标指针是整个进程共用的。
+            chrome.PointerLeft(moved + 100);
+            chrome.Tick(moved + 100 + ChromeReveal.CursorIdleMilliseconds);
+            Assert.False(chrome.State.Any);
+            Assert.False(chrome.CursorHidden);
+        });
+
+        Test("播放器控件：回来停住的手也得让光标重新能藏", () =>
+        {
+            // 「我有时候需要点击暂停视频然后再开始才会自动隐藏鼠标指针」。手滑出窗口（去第二屏）触发了
+            // 离窗显示；回来那一下停在离出窗点五像素以内、之后一动不动——框架没有移动可报，轮询两处
+            // 都提前返回（位移为 0；或低于阈值），「离窗」的记录永远没人收走。Settle 要等指针回到画面
+            // 里才肯藏，于是光标一直亮着，直到用户点一下暂停（点击把指针的记录亲手带回来）才恢复。
+            var chrome = Chrome(out var now);
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.PointerLeft(now + 100);
+            Assert.True(chrome.PointerGone, "离窗的记录在");
+            Assert.False(chrome.CursorHidden, "离窗就该显示光标");
+
+            // 回窗：只还位置，不算动（moved:false 是「这是一份位置报告」的诚实说法）。
+            // 光标亮着的时候，停着的指针本身就是活动——跟停在控件上买到的耐心是同一条。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now + 200, moved: false);
+            Assert.False(chrome.PointerGone, "回窗之后离窗的记录必须收走，不然藏匿永远等不到指针回家");
+            Assert.False(chrome.CursorHidden, "刚回来就藏，等于在手的必经之路上把指针弄丢");
+
+            Assert.True(chrome.Tick(now + 200 + ChromeReveal.CursorIdleMilliseconds), "回来停住之后，一秒照旧要藏");
+            Assert.True(chrome.CursorHidden);
+        });
+
+        Test("播放器控件：动了但说不出动到哪，也得当活动算", () =>
+        {
+            // 日志里的「静止 156ms」就出在这儿：拿系统位置判静止的那一头记下了动的时刻，
+            // 转成画面坐标的那一头失手了（窗口还没尺寸、读不出点），规则就从一个自己没收到的
+            // 时刻开始数两秒，把正在移动的手底下的指针给弄丢了。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+
+            // 一直动，只是每次都说不出动到哪：两秒的窗口从最后一次动起算，永远熬不到期。
+            for (var t = now + 100; t <= now + 5000; t += 100)
+            {
+                chrome.Moved(t);
+                chrome.Tick(t);
+                Assert.False(chrome.CursorHidden, $"第 {t - now} 毫秒：手还在动，指针不能藏");
+            }
+
+            // 停下之后照旧藏，而且是从停下那一刻开始数的一秒（mpv.net 的 cursor-autohide）。
+            var stopped = now + 5000;
+            for (var t = stopped; t < stopped + ChromeReveal.CursorIdleMilliseconds; t += 100)
+            {
+                chrome.Tick(t);
+                Assert.False(chrome.CursorHidden, $"停了 {t - stopped} 毫秒，还不到一秒，不许藏");
+            }
+
+            Assert.True(chrome.Tick(stopped + ChromeReveal.CursorIdleMilliseconds), "停满一秒还是要藏");
+            Assert.True(chrome.CursorHidden);
+
+            // 藏着的时候动一下，同样只说得出「动了」——也得立刻回来。
+            Assert.True(chrome.Moved(stopped + ChromeReveal.CursorIdleMilliseconds + 50));
+            Assert.False(chrome.CursorHidden, "一动就得回来，哪怕不知道动到哪");
+        });
+
+        Test("播放器控件：状态推送再密也不算指针动过", () =>
+        {
+            // 「鼠标指针还是不会自动隐藏」的真正原因，也是「别什么进度条标题音量条都持久显示在画面上」的：
+            // mpv 每秒推四份以上的状态快照，页面每一份都会拿去问一次加载闩，而那个闩把「没在加载」
+            // 当成一次活动——空闲时钟一秒被重置四回，谁都熬不到期。
+            //
+            // 2026-09-28 起这条钟只量光标（控件按位置显隐），所以这一段把指针摆在画面中间量它：
+            // 死区本来就没有控件可显示，剩下要证的正是那口钟没被推密掉。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            Assert.False(chrome.State.Any);
+
+            // 四赫兹，整整四秒，每一份都说「已经出画面了」。
+            for (var t = now; t <= now + 4000; t += 250) chrome.SetKeep(false, t);
+
+            Assert.False(chrome.State.Any, "画面中间本来就没有控件");
+            Assert.True(chrome.CursorHidden, "「静止一秒就藏（mpv.net 的 cursor-autohide）」");
+
+            // 真从「加载中」翻过来的那一下仍然要重新起算：那一秒里控件是唯一的出路，刚交回来就收
+            // 等于把出路从手底下抽走（指针在死区时控件不再出现 —— 位置说了算；要紧的是光标那一秒）。
+            var load = Chrome(out var start);
+            load.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start);
+
+            load.SetKeep(true, start + 100);
+            Assert.Equal(new ChromeState(true, true, true), load.State, "还没出画面的时候控件是唯一的出路");
+
+            // 加载期间同样推得很密，同样不该被算成活动。
+            for (var t = start + 100; t <= start + 3000; t += 250) load.SetKeep(true, t);
+
+            load.SetKeep(false, start + 3100);
+            Assert.False(load.CursorHidden, "刚交回给指针的这一下不算「早就静止了」");
+
+            Assert.True(load.Tick(start + 3100 + ChromeReveal.CursorIdleMilliseconds), "从交回来的那一刻起算");
+            Assert.True(load.CursorHidden);
+        });
+
+        Test("播放器控件：换片重新全显示", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Tick(now + 1000);
+            Assert.False(chrome.State.Any);
+
+            chrome.Reset(now + 1100);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "上一集收起来的状态不属于这一集");
+            Assert.Equal(1d, chrome.RailStrength, "开场那次全显示是给足的，不是淡的");
+            Assert.False(chrome.CursorHidden);
+        });
+
+        Test("播放器控件：没有待办时不必继续轮询", () =>
+        {
+            var chrome = Chrome(out var now);
+
+            Assert.True(chrome.Pending(now), "开场是全显示的，等着收");
+
+            chrome.Tick(now + 1000);
+            Assert.False(chrome.Pending(now + 1000), "都收起来了就该把定时器停掉");
+
+            chrome.FlashRail(now + 1100);
+            Assert.True(chrome.Pending(now + 1100));
+
+            // 控件都收了、鼠标还在，也算有待办：藏鼠标等的是它自己那一秒，而定时器要是这时候停了，
+            // 就再没有人来问「该藏了吗」。
+            var idle = Chrome(out var start);
+            idle.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start);
+            idle.Tick(start + ChromeReveal.CursorIdleMilliseconds - 1);
+            Assert.False(idle.State.Any);
+            Assert.True(idle.Pending(start + ChromeReveal.CursorIdleMilliseconds - 1), "还差一次藏鼠标");
+
+            idle.Tick(start + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(idle.CursorHidden);
+            Assert.False(idle.Pending(start + ChromeReveal.CursorIdleMilliseconds), "藏完了才真的没事");
+        });
+
+        Test("播放器控件：藏匿时判的是位移，不是「离藏匿点有多远」", () =>
+        {
+            // 第四报到第六报的那一整套（藏匿点锚 + 容差 4 + WanderedFromHiding）在 2026-09-15 的单传感器
+            // 重构里整块退休了。退休的理由是：参照点这个概念只在「传感器不止一个、读数会被别人推着走」的
+            // 前提下才需要。改成单传感器之后唯一的活动源是 10Hz 轮询，它报的是绝对位置，而判据只有一条
+            // ——「这一拍与上一拍的差值够不够 Travelled」。没有锚，也就没有「参照点被推走」「迟到的报告把
+            // 刚藏下去的叫回来」这类需要额外机制去挡的边角。
+            //
+            // HC-Player 的 SetApplicationCursorHidden 与 mpv 的 input.c 都是这个形状：一个时钟记最后一次
+            // 活动，一个定时器每拍读一次位置，差够大就重置时钟。mpv 甚至更严——坐标严格相等就整个忽略。
+            // 我们留 5 像素（mpv 的 5*dpi/96、桌面实测抖动 2px 之上、手之下），这个数在 Travelled 的
+            // 例子里判，这里判的是「阈值的参照物是什么」。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            // 藏好之后桌面抖 1~2 像素：不是动手，时钟不动，光标一直藏着。步长一个都不许攒起来。
+            var idle = now + ChromeReveal.CursorIdleMilliseconds;
+            for (var i = 0; i < 100; i++) chrome.Tick(idle + 100 * (i + 1));
+            Assert.True(chrome.CursorHidden, "一百拍里一动不动，就该一直藏着");
+
+            // 手一动就是几十像素 —— 一次读数就够了，不需要「攒」。
+            Assert.True(chrome.Pointer(
+                y: 500, height: 1000, ChromePart.None, railNear: -1,
+                idle + 10_100, moved: true));
+            Assert.False(chrome.CursorHidden, "手一动就回来");
+        });
+
+        Test("播放器控件：藏匿期只有轮询一个传感器，事件不参与", () =>
+        {
+            // 单传感器（2026-09-15 重构）的正面判据：藏匿期把 XAML 事件那一路关掉之后，藏匿的维持与唤醒
+            // 完全由轮询决定。Pointer(moved:false) 就是那一路的入口（事件坐标、框架合成），它一次都不能
+            // 重置静止时钟、也不能叫醒光标。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            // 藏匿期一整串「只是位置」的报告：时钟一秒都不许被拨。
+            for (var t = now + 2100; t <= now + 4900; t += 100)
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, t, moved: false);
+            Assert.True(chrome.CursorHidden, "事件流报位置不许把它叫回来");
+
+            // 轮询说「动了」才叫醒 —— 这才是手真的落在鼠标上。
+            Assert.True(chrome.Pointer(
+                y: 500, height: 1000, ChromePart.None, railNear: -1,
+                now + ChromeReveal.CursorIdleMilliseconds + 600, moved: true));
+            Assert.False(chrome.CursorHidden, "轮询问出真移动就得回来");
+        });
+
+        Test("播放器控件：只管位置不当动的报告不许重置静止时钟", () =>
+        {
+            // 这条是「鼠标隐藏了一会然后又会自动冒出来」的另一半。Pointer() 里那行无条件
+            // `_lastActivity = now` 曾经把**每一个**报进来的位置都当成活动，于是十赫兹的轮询和每一次
+            // Resize 报来的位置都会把两秒重新拨回起点 —— 一只被桌签轻轻碰着的鼠标永远等不到两秒到期，
+            // 而日志那边看到的却是「指针根本没动过」。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            // 藏好之后：一串「只是位置，不是动」的报告进来，时钟一秒都不该被重置。
+            for (var t = now + 2100; t <= now + 2500; t += 100)
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, t, moved: false);
+
+            Assert.True(chrome.CursorHidden, "只是报位置不许把它叫回来");
+
+            // 反过来：说是「动了」的报告立刻叫醒它，这才是手真的动了一下。
+            Assert.True(chrome.Pointer(
+                y: 500, height: 1000, ChromePart.None, railNear: -1,
+                now + ChromeReveal.CursorIdleMilliseconds + 600, moved: true));
+            Assert.False(chrome.CursorHidden, "真动了就得回来");
+
+            // 只重报位置不会取消明确给出的反馈宽限；光标仍独立按空闲钟隐藏。
+            var shown = Chrome(out var start);
+            shown.WakeFully(start);
+            shown.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, start, moved: false);
+            shown.Tick(start + ChromeReveal.CursorIdleMilliseconds - 1);
+            Assert.True(shown.State.Any);
+            Assert.False(shown.CursorHidden, "还差一毫秒，光标还得在");
+            shown.Tick(start + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(shown.CursorHidden, "露着的时候照样按空闲钟走");
+            shown.Tick(start + ChromeReveal.GraceMilliseconds);
+            Assert.False(shown.State.Any, "反馈宽限到点后控件按位置收起");
+        });
+
+        Test("播放器控件：藏下去之后每一拍都稳，不是每两秒闪一下", () =>
+        {
+            // 「鼠标一闪一闪的」（第五报）的病根是 `AnchorHidden` 里那行 `_lastActivity = now`：锚定顺手把
+            // 刚刚断言过「指针两秒没动」的时钟盖成「现在」，于是成一个环 —— t 藏 → 锚定盖章 t → t+100ms
+            // 那拍算出「才静止 0.1 秒」→ 显示 → 两秒后又藏 → 又盖章 → 又显示。真片子日志里就是这个样子：
+            // 每两秒一对「藏起来了 / 又显示了」，藏的那一下只活 122ms，而两个指针计数从电影开始到结束
+            // 一动没动。
+            //
+            // 2026-09-15 的重构把 `AnchorHidden` 整个删了（参照点这个概念随单传感器一起退休），所以那条环
+            // 在结构上不可能再现。这条测试留下来换成它的正面形式：藏下去之后连着推拍，指针没动就必须一直
+            // 藏着。这是那条 bug 的用户原话（「一闪一闪」）最直接的判据。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            var hidAt = now + ChromeReveal.CursorIdleMilliseconds;
+            chrome.Tick(hidAt);
+            Assert.True(chrome.CursorHidden, "静止到点就该藏");
+
+            // 紧接着的一拍（一百毫秒后，正是十赫兹的下一拍）：必须还藏着。旧写法在这一拍就会把它放出来。
+            chrome.Tick(hidAt + 100);
+            Assert.True(chrome.CursorHidden, "藏下去之后紧接着的一拍不许把光标放出来");
+
+            // 再往后每一拍都得稳：指针没动，光标就该一直藏着，不是每两秒闪一下。
+            for (var t = hidAt + 200; t <= hidAt + 3000; t += 100) chrome.Tick(t);
+            Assert.True(chrome.CursorHidden, "指针没动，藏下去就该一直藏着，不是每两秒闪一下");
+        });
+
+        Test("播放器控件：桌面抖一两像素不算人动手，手一动就是几十", () =>
+        {
+            // 「鼠标隐藏了一会又会自动跑出来」那件就死在这条线上，而且分了两次才看清。起初的判据是「任何
+            // 一个像素都算人动手」，于是程序能把自己叫醒；改成两像素之后还不行 —— 一台真片子的日志里，没人碰
+            // 的鼠标报上来的步长是 2,0、0,2 和 1,2 逻辑像素，正好卡在阈值上，每一次都把藏下去的光标叫了回来。
+            //
+            // 五这个数出自成熟播放器：mpv 只忽略坐标严格相等的事件（input.c:914），MPC-HC 拿隐藏点做 ±1 像素
+            // 比对（PointEqualsImprecise），mpv.net 的阈值是 5 * dpi/96 —— 96 DPI 下正是五。它安全，是因为
+            // 两拨数据不重叠：桌面抖一两个像素，而手的第一个事件是几十个，中间没有读数可判错。
+            Assert.False(ChromeReveal.Travelled(0, 0), "没动就是没动");
+            Assert.False(ChromeReveal.Travelled(1, 0), "一像素");
+            Assert.False(ChromeReveal.Travelled(0, 1), "一像素，另一个轴也一样");
+            Assert.False(ChromeReveal.Travelled(1, 1), "两个轴各一像素也不够");
+            Assert.False(ChromeReveal.Travelled(2, 0), "日志里实测过的桌面抖动：2,0 曾经被当成手");
+            Assert.False(ChromeReveal.Travelled(0, 2), "0,2 也一样");
+            Assert.False(ChromeReveal.Travelled(1, 2), "1,2 也一样 —— 这三个都是真日志里的原样");
+            Assert.False(ChromeReveal.Travelled(4, 0), "四像素仍在桌面抖动的量级里");
+            Assert.True(ChromeReveal.Travelled(5, 0), "五像素才算跨过阈值");
+            Assert.True(ChromeReveal.Travelled(0, 5));
+            Assert.True(ChromeReveal.Travelled(40, 3), "手真动了是几十像素，差一个量级");
+
+            // 阈值必须留在桌面抖动的尺寸之上：降到零，「没动」和「动了」就成了同一件事，藏下去的光标会被一排
+            // 零位移的事件反复叫醒。二这个旧值也被真机日志证明太低，所以下限是一条断言而不是一句话。
+            Assert.True(ChromeReveal.MovePixels > 2, "桌面上实测到的抖动到了两像素，阈值不能停在二");
+        });
+
+        Test("播放器控件：mpv.net 的判动——离上次记录点差超五像素就是手", () =>
+        {
+            // 2026-09-16 用户拍板「完全照搬 mpv.net」：藏匿期唤醒只剩 <see cref="ChromeReveal.HandStep"/>
+            // 一行纯函数（mpv.net 的 IsCursorPosDifferent 同款问法，mpv 系阈值 5×dpi/96 的切比雪夫、
+            // 严格大于）。见证否决、净位移账本、连着拍数、回笼窗口全部退役 —— 它们挡过二十一次幽灵
+            // 唤醒，代价是慢手永远叫不回光标；这一行就是新的全部。
+            //
+            // 60 像素那记「幽灵签名」从这一刻起就是一次普通的鼠标移动：判红判绿反过来，几何没变。
+            Assert.False(ChromeReveal.HandStep(0, 0), "没动就是没动");
+            Assert.False(ChromeReveal.HandStep(2, 0), "桌面实测过的抖动：2,0");
+            Assert.False(ChromeReveal.HandStep(0, 2), "0,2 也一样");
+            Assert.False(ChromeReveal.HandStep(5, 0), "五像素不越线 —— mpv.net 的问法是严格大于");
+            Assert.False(ChromeReveal.HandStep(0, 5), "另一个轴一样");
+            Assert.True(ChromeReveal.HandStep(6, 0), "六像素过线");
+            Assert.True(ChromeReveal.HandStep(0, 6));
+            Assert.True(ChromeReveal.HandStep(60, 0), "60 像素的幽灵签名如今就是一次鼠标移动");
+            Assert.True(ChromeReveal.HandStep(-60, 0), "参数带符号：反向走也过线，参照点语义没有方向");
+            Assert.True(ChromeReveal.HandStep(60, 15), "斜着走取切比雪夫");
+
+            // 阈值必须留在桌面抖动的尺寸之上（真机日志：没人碰的鼠标报 2,0 / 0,2 / 1,2）。
+            Assert.True(ChromeReveal.MovePixels > 2, "阈值不能停在二");
+        });
+
+        Test("播放器控件：藏匿期报「动了」就能独自结束藏匿——所以事件那一路不许报动", () =>
+        {
+            // 第十一报续（2026-09-15）的判据源头。用户第三次报「还是一样的毛病」，日志那次现场是
+            // 移动=17、挡掉跳变=0、显示行挂着默认串。缺的不是判据而是**入口纪律**：Pointer(moved:true)
+            // 里那行 `if (moved || !CursorHidden) _lastActivity = now` 会重盖时钟，Settle 的 hide 随即
+            // 变回 false、CursorHidden 翻成显 —— 一次藏匿就被一声「动了」独自结束，不经过轮询那道
+            // 阈值关，也不落任何名字。
+            //
+            // 所以这条路只能由**轮询**走（过线即醒、有名字可挂），按键、点击、离窗、回窗、窗口缩放
+            // （各自挂名）。XAML 的 PointerMoved 不行 —— WinUI 会为没动过的指针抬它，外屏 AyuGram 的
+            // 动静就会让它抬一次（这条纪律在判据换成 mpv.net 的 HandStep 之后原样成立：轮询一拍之内
+            // 就能看见真位移，事件那一路没有任何非它不可的活）。这条测试把「一声没来由的动了就足以
+            // 叫醒」钉在这儿，好让 Shell 那侧「事件只报位置」成为一条有据可查的纪律，而不是一句注释。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden);
+
+            // 什么位置都没换、离藏匿点也就几个像素：只要它自称是「动」，规则就得认。
+            Assert.True(
+                chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1,
+                    now + ChromeReveal.CursorIdleMilliseconds + 100, moved: true),
+                "自称是动的报告会让规则翻转，这正是它必须来自裁决过的那一路的原因");
+            Assert.False(chrome.CursorHidden, "一声没来由的「动了」就足以结束藏匿");
+        });
+
+        Test("播放器控件：静止一秒就藏——mpv.net 的 cursor-autohide", () =>
+        {
+            // 2026-09-16 照搬 mpv.net：CursorIdle 2000 → 1000（mpv 的 cursor-autohide 默认值）。
+            // 2026-09-28 起控件那三样按位置显隐（用户令），这条钟只剩一个客户——鼠标指针；
+            // 于是「静止一秒就藏」只在画面中间（屏上什么都没有）成立，停在控件/唤出带里时不适用
+            // （见「压在音量条或进度条上多久都不收鼠标」与「指针停在唤出带里就不自动隐藏控件」两条）。
+            Assert.Equal(1000L, ChromeReveal.CursorIdleMilliseconds, "mpv.net 的默认就是 1000");
+
+            var chrome = Chrome(out var now);
+
+            // 死区：屏上什么都没有，光标走完自己那一秒。
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds - 1);
+            Assert.False(chrome.State.Any, "画面中间本来就没有控件");
+            Assert.False(chrome.CursorHidden, "还差一毫秒，别在移动的中途把指针弄丢");
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden, "静止一秒，光标该藏了");
+
+            // 停靠：指针压在进度条上，控件与光标一起留下 —— 位置说了算，多久都不收。
+            var parked = Chrome(out var start);
+            parked.Pointer(y: 950, height: 1000, ChromePart.Bar, railNear: -1, start);
+            parked.Tick(start + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(parked.State.Bar, "指针还在进度条上，控件必须在");
+            Assert.False(parked.CursorHidden, "控件在屏上，光标没有要保住的东西可藏");
+            parked.Tick(start + (ChromeReveal.CursorIdleMilliseconds * 10));
+            Assert.True(parked.State.Bar, "停多久都在（用户令 2026-09-28：不要自动隐藏这些控件）");
+            Assert.False(parked.CursorHidden);
+        });
+
+        Test("播放器控件：窗口不在前台就不藏，失焦把藏着的光标掀开", () =>
+        {
+            // mpv.net 的两问（2026-09-16 照搬）：CursorTimer_Tick 的 ActiveForm == this（未激活不藏）
+            // 与 OnLostFocus → ShowCursor（失焦显示）。合在 ChromeReveal.WindowFocused 一个位上：
+            // 外壳从 Window.Activated 喂进来，Settle 用它裁决。
+            var chrome = Chrome(out var now);
+
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds);
+            Assert.True(chrome.CursorHidden, "先得藏下去");
+
+            // 失焦：藏着的光标当场回来（OnLostFocus → ShowCursor）。
+            chrome.WindowFocused = false;
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds + 100),
+                "失焦那一拍规则要翻动");
+            Assert.False(chrome.CursorHidden, "失焦显示");
+
+            // 未激活期间永不藏：闲置再久也不行（ActiveForm == this）。
+            chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds + 60_000);
+            Assert.False(chrome.CursorHidden, "窗口不在前台，藏匿不发生");
+
+            // 回到前台：空闲钟从失焦前一路走着（没人替静止的指针重盖），位置也没变 ——
+            // mpv.net 的计时器在这个状态下同样一拍之内把光标收回去。要让它留下，动一下鼠标就行。
+            chrome.WindowFocused = true;
+            Assert.True(chrome.Tick(now + ChromeReveal.CursorIdleMilliseconds + 60_100),
+                "回前台那一拍，早已到期的空闲钟照常把光标藏起来");
+            Assert.True(chrome.CursorHidden);
+        });
+
+        Test("播放器控件：藏下去靠每拍重申，不靠往输入队列里塞东西", () =>
+        {
+            // 2026-09-14 的第二轮报修（「没修好」）追出来的根因：那条「让框架重新念一遍」的路本身就是一次
+            // 真实输入 —— 岛为它抬一次 PointerMoved，DPI 缩放把它的一个物理像素读成两个逻辑像素，正好等于
+            // 当时的阈值，于是静止时钟被重新盖章，藏下去的光标一拍之后自己冒出来。
+            //
+            // 成熟播放器没有一家这么干：mpv 有自己的消息循环、直接答 WM_SETCURSOR 并用单调计数器去重，
+            // VLC 与 MPC-HC 直接 SetCursor，IINA 用系统的 NSCursor.setHiddenUntilMouseMoves。本项目里对应的
+            // 正规设施就是三件套 —— HostWindow 在 WM_SETCURSOR 里 SetCursor(Blank) 并 return 1、十赫兹的
+            // KeepCursorHidden 重申（SetCursor + 负计数锁）、画面上的 Root.Cursor = BlankInputCursor。
+            //
+            // 而「重申」必须是每拍一次、不能限额 —— 这条是第三次报修「隐藏后过两三秒又会自动冒出来」订正出来
+            // 的：三拍的配额在头三百毫秒里就用光了，之后藏下去的那几秒里没有一个字是被说过的，框架随时可以把
+            // 自己的箭头推回来。所以这里钉的是「重申不受次数限制」这件事本身。
+            Assert.Equal(5d, ChromeReveal.MovePixels, "阈值挡的是桌面抖动，不是自己发出的位移");
+            Assert.False(ChromeReveal.Travelled(2, 0), "重申不产生位移，但桌面抖动的量级也不该叫醒");
+            Assert.True(ChromeReveal.Travelled(5, 0), "有人动手仍然要认出来");
+        });
+
+        // ---- 双击全屏的纯净闸（2026-09-18） ----
+        //
+        // 「用户双击触发全屏或还原操作时，不得呼出或显示任何 UI 控件」。Silence 把点画面那一路给的
+        // 宽限连同指针位置的显示理由一并收掉；解锁只认真手（轮询 HandStep 过线走的 Moved）、刻意唤醒
+        // （WakeFully/FlashRail）与新一播放（Reset）—— resize 的 moved:true 重报不解闸，否则进全屏
+        // 自己那一下就会把控件又摆回来。
+
+        Test("播放器控件：Silence 当场收干净，位置不再是显示理由", () =>
+        {
+            var chrome = Chrome(out var now);
+
+            // 双击前的世界：按下给了宽限，整套控件都在。
+            chrome.WakeFully(now + 10);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State);
+
+            Assert.True(chrome.Silence(now + 20));
+            Assert.Equal(new ChromeState(false, false, false), chrome.State);
+            Assert.Equal(0d, chrome.RailStrength);
+
+            // 指针就停在底部边缘带里也不出来 —— 纯净闸压过位置规则。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 30, moved: false);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "位置在带内也不再是理由");
+        });
+
+        Test("播放器控件：真手再动才解锁，位置规则随之恢复", () =>
+        {
+            var chrome = Chrome(out var now);
+            chrome.Pointer(y: 500, height: 1000, ChromePart.None, railNear: -1, now);
+            // 第一步 Pointer 已把画面中间的整套控件收掉，Silence 在这里是合法的空操作 —— 闸照样压上。
+            chrome.Silence(now + 10);
+
+            // 轮询那一路（HandStep 过线 → Moved）解开闸，之后位置规则照常说话。
+            chrome.Moved(now + 20);
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 30, moved: true);
+            Assert.True(chrome.State.Bar, "解锁之后位置规则照常");
+        });
+
+        Test("播放器控件：resize 的 moved 重报不解闸", () =>
+        {
+            var chrome = Chrome(out var now);
+            Assert.True(chrome.Silence(now));
+
+            // OnRootResized / 全屏切换自己那一下走的路：位置重报（moved:true），但不是手。
+            chrome.Pointer(y: 950, height: 1000, ChromePart.None, railNear: -1, now + 10, moved: true);
+            Assert.Equal(new ChromeState(false, false, false), chrome.State, "进全屏的 resize 不许把控件摆回来");
+        });
+
+        Test("播放器控件：刻意的唤醒与新一播放解开纯净闸", () =>
+        {
+            var chrome = Chrome(out var now);
+            Assert.True(chrome.Silence(now));
+
+            chrome.WakeFully(now + 10);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "键盘命令该亮还是要亮");
+
+            Assert.True(chrome.Silence(now + 20));
+            chrome.Reset(now + 30);
+            Assert.Equal(new ChromeState(true, true, true), chrome.State, "新的一场从全显示开场");
+        });
+    }
+
+    /// <summary>A reveal rule at a fixed clock, still in its opening 「everything showing」 state.</summary>
+    private static ChromeReveal Chrome(out long now)
+    {
+        now = 100_000;
+        return new ChromeReveal();
+    }
+
+    // ---- 窗口比例联动 ----------------------------------------------------------
+
+    private static void RegisterAspectLock()
+    {
+        Test("比例联动：拖左右边配高度，拖上下边配宽度", () =>
+        {
+            // 16:9 的片子，边框 16×39：客户区宽 1600 就该配高 900。
+            var wide = AspectLock.Apply(Rect(100, 100, 1716, 100 + 1000), ResizeEdge.Right, 16d / 9, 16, 39);
+            Assert.Equal(1600, wide.Width - 16);
+            Assert.Equal(900, wide.Height - 39);
+            Assert.Equal(100, wide.Left, "拖右边，左边不该动");
+            Assert.Equal(100, wide.Top);
+
+            var tall = AspectLock.Apply(Rect(100, 100, 100 + 800, 100 + 939), ResizeEdge.Bottom, 16d / 9, 16, 39);
+            Assert.Equal(900, tall.Height - 39, "拖下边高度就是给定的");
+            Assert.Equal(1600, tall.Width - 16, "宽度跟着高度算");
+        });
+
+        Test("比例联动：抓着的那个角不动", () =>
+        {
+            var proposed = Rect(100, 100, 1716, 1139);
+
+            // 拖右下角：左上角是锚。
+            var bottomRight = AspectLock.Apply(proposed, ResizeEdge.BottomRight, 16d / 9, 16, 39);
+            Assert.Equal(100, bottomRight.Left);
+            Assert.Equal(100, bottomRight.Top);
+
+            // 拖左上角：右下角是锚，窗口朝指针那边长。
+            var topLeft = AspectLock.Apply(proposed, ResizeEdge.TopLeft, 16d / 9, 16, 39);
+            Assert.Equal(1716, topLeft.Right);
+            Assert.Equal(1139, topLeft.Bottom);
+            Assert.Equal(1600, topLeft.Width - 16, "角的宽度照给定的算");
+
+            // 拖左边：右边是锚，上边不动。
+            var left = AspectLock.Apply(proposed, ResizeEdge.Left, 16d / 9, 16, 39);
+            Assert.Equal(1716, left.Right);
+            Assert.Equal(100, left.Top);
+        });
+
+        Test("比例联动：最小尺寸压得住比例", () =>
+        {
+            // 窄到 200 时按 16:9 只有 112 高，可窗口最矮 600——那就只能加宽。
+            var bounds = AspectLock.Apply(Rect(0, 0, 216, 639), ResizeEdge.Right, 16d / 9, 16, 39, 320, 600);
+            Assert.Equal(600, bounds.Height - 39);
+            Assert.Equal(1067, bounds.Width - 16, "高度顶住了就反过来算宽度");
+        });
+
+        Test("比例联动：没有比例可依就原样放过", () =>
+        {
+            var proposed = Rect(0, 0, 800, 600);
+
+            // 0 是常态：mpv 还没开文件的时候就是这个数，不能拿猜的比例去改窗口。
+            Assert.Equal(proposed, AspectLock.Apply(proposed, ResizeEdge.Right, 0, 16, 39));
+            Assert.Equal(proposed, AspectLock.Apply(proposed, ResizeEdge.Right, double.NaN, 16, 39));
+            Assert.Equal(proposed, AspectLock.Apply(proposed, ResizeEdge.Right, 40, 16, 39), "40:1 不是画面");
+            Assert.Equal(proposed, AspectLock.Apply(proposed, ResizeEdge.None, 16d / 9, 16, 39), "不是在拖边");
+            Assert.Equal(proposed, AspectLock.Apply(proposed, ResizeEdge.Right, 16d / 9, 900, 700), "边框比窗口还大");
+        });
+
+        Test("比例联动：比例取自 mpv 的显示尺寸，拿不到才退回服务器的", () =>
+        {
+            // 变形宽银幕：存的是 1920×1080，显示是 2560×1080，只有前者会算错。
+            Assert.Equal(2560d / 1080, AspectLock.Ratio(2560, 1080, 1920, 1080));
+            Assert.Equal(1920d / 1080, AspectLock.Ratio(0, 0, 1920, 1080), "开播前先用服务器给的");
+            Assert.Equal(0, AspectLock.Ratio(0, 0, 0, 0), "两边都没有就是「不要改」");
+        });
+
+        Test("比例联动：改完的窗口再拖一次不会越改越歪", () =>
+        {
+            var once = AspectLock.Apply(Rect(0, 0, 1616, 1039), ResizeEdge.Right, 16d / 9, 16, 39);
+            var twice = AspectLock.Apply(once, ResizeEdge.Right, 16d / 9, 16, 39);
+            Assert.Equal(once, twice, "同一个矩形送回去应当纹丝不动");
+        });
+
+        Test("开播即配比例：客户区变成画面的形状，中心不动", () =>
+        {
+            // 1280×800 的窗口、播放时没有标题栏（边框 16×16）：客户区 1264×784 是 1.612，
+            // 16:9 的片子在里面上下各留 36 像素黑边。宽度说话，高度跟上。
+            var fitted = AspectLock.Fit(Rect(100, 100, 1380, 900), 16d / 9, 16, 16);
+            Assert.Equal(1264, fitted.Width - 16);
+            Assert.Equal(711, fitted.Height - 16, "1264 ÷ 16:9");
+            Assert.Equal(740, fitted.Left + fitted.Width / 2, "左右中心不动");
+            Assert.True(Math.Abs(fitted.Top + fitted.Height / 2.0 - 500) <= 1, "上下中心也不动（取整差一个像素）");
+        });
+
+        Test("开播即配比例：已经是这个形状就一动不动", () =>
+        {
+            // 用户自己拖到位的窗口不该在开播那一刻再跳一下。
+            var already = Rect(0, 0, 1616, 916);
+            Assert.Equal(already, AspectLock.Fit(already, 16d / 9, 16, 16), "1600×900 已经是 16:9");
+            Assert.Equal(already, AspectLock.Fit(already, 16d / 9 + 0.0004, 16, 16), "差一个像素不算黑边");
+        });
+
+        Test("开播即配比例：不许长到屏幕外面去", () =>
+        {
+            // 2:1 的宽银幕，1920×1080 的桌面上工作区只有 1920×1040：先按宽度算高度还塞得下，
+            // 竖着的片子就得反过来按高度算宽度。
+            var work = Rect(0, 0, 1920, 1040);
+
+            var wide = AspectLock.Fit(Rect(0, 0, 2400, 900), 2.0, 16, 16, work);
+            Assert.Equal(1904, wide.Width - 16, "宽度顶到工作区");
+            Assert.Equal(952, wide.Height - 16);
+            Assert.Equal(0, wide.Left, "被推回工作区里面");
+
+            var tall = AspectLock.Fit(Rect(0, 0, 1200, 900), 9d / 16, 16, 16, work);
+            Assert.Equal(1024, tall.Height - 16, "高度顶到工作区");
+            Assert.Equal(576, tall.Width - 16, "宽度改跟高度算");
+            Assert.True(tall.Bottom <= 1040, "整个窗口都在工作区内");
+        });
+
+        Test("开播即配比例：最小尺寸和不认识的比例都拦得住", () =>
+        {
+            // 高度压不下去就只能加宽，和拖边时同一条规矩。
+            var floored = AspectLock.Fit(Rect(0, 0, 916, 700), 16d / 9, 16, 16, default, 900, 600);
+            Assert.Equal(600, floored.Height - 16);
+            Assert.Equal(1067, floored.Width - 16, "高度顶住了就反过来算宽度");
+
+            var window = Rect(0, 0, 1280, 800);
+            Assert.Equal(window, AspectLock.Fit(window, 0, 16, 16), "还没开文件");
+            Assert.Equal(window, AspectLock.Fit(window, double.NaN, 16, 16));
+            Assert.Equal(window, AspectLock.Fit(window, 40, 16, 16), "40:1 不是画面");
+            Assert.Equal(window, AspectLock.Fit(window, 16d / 9, 1400, 900), "边框比窗口还大");
+        });
+
+        static WindowBounds Rect(int left, int top, int right, int bottom) => new(left, top, right, bottom);
+    }
+
+    // ---- 右键画面菜单 ----------------------------------------------------------
+
+    private static void RegisterPlayerMenu()
+    {
+        Test("画面菜单：每一行都真的会做事", () =>
+        {
+            foreach (var node in PlayerMenuCatalog.Flatten(PlayerMenuCatalog.Root))
+            {
+                switch (node.Kind)
+                {
+                    case PlayerMenuKind.Command:
+                        Assert.True(node.Label.Length > 0, "命令行要有名字");
+                        Assert.True(node.Commands.Count > 0, node.Label);
+                        Assert.True(node.Commands.All(command => command.Count > 0), node.Label);
+                        Assert.True(node.Commands.All(command => command[0].Length > 0), node.Label);
+                        Assert.Equal(0, node.Children.Count, node.Label);
+                        break;
+
+                    case PlayerMenuKind.Group:
+                        // 空的子菜单是点开一片空白，比没有这一项还糟。
+                        Assert.True(node.Children.Count > 0, $"{node.Label} 是空子菜单");
+                        Assert.Equal(0, node.Commands.Count, node.Label);
+                        break;
+
+                    case PlayerMenuKind.Separator:
+                        Assert.Equal("", node.Label);
+                        Assert.Equal(0, node.Commands.Count);
+                        break;
+                }
+            }
+        });
+
+        Test("画面菜单：做了事就会在画面上说一句", () =>
+        {
+            // 没有 uosc，从 IPC 发的命令默认不出 OSD，所以反馈只能自己补。
+            foreach (var node in PlayerMenuCatalog.Flatten(PlayerMenuCatalog.Root)
+                .Where(node => node.Kind == PlayerMenuKind.Command))
+            {
+                Assert.True(node.Notice.Length > 0, node.Label);
+            }
+        });
+
+        Test("画面菜单：不留调不动脚本的行", () =>
+        {
+            foreach (var node in PlayerMenuCatalog.Flatten(PlayerMenuCatalog.Root))
+            {
+                foreach (var command in node.Commands)
+                {
+                    // libmpv 里没有 Lua，随附配置里那些 script-message 行按下去什么都不会发生。
+                    Assert.False(command[0].StartsWith("script-", StringComparison.Ordinal),
+                        $"{node.Label}：{command[0]}");
+                }
+            }
+        });
+
+        Test("画面菜单：README 点名的项目在它说的位置上", () =>
+        {
+            var picture = PlayerMenuCatalog.Root.Single(node => node.Label == "画面");
+            var panscan = picture.Children.Single(node => node.Label == "开/关 裁切填充");
+
+            // README:16 说「右键菜单 → 画面 → 开 / 关 裁切填充」，就得真在画面下面一层。
+            Assert.Equal("cycle-values panscan 0.0 1.0", string.Join(' ', panscan.Commands[0]));
+
+            foreach (var group in new[] { "导航", "画面", "视频", "视频滤镜", "音频", "字幕", "片段循环" })
+            {
+                Assert.True(PlayerMenuCatalog.Root.Any(node => node.Label == group), group);
+            }
+        });
+
+        Test("画面菜单：一行按不动的重置要把该重的都重了", () =>
+        {
+            var reset = PlayerMenuCatalog.Root
+                .Single(node => node.Label == "画面").Children
+                .Single(node => node.Label == "重置以上画面操作");
+
+            // mpv 没有一条命令能同时设六个属性，配置里的 `;` 串联是输入语法，发不进去。
+            Assert.Equal(6, reset.Commands.Count);
+            foreach (var property in new[]
+                     { "video-zoom", "panscan", "video-rotate", "video-pan-x", "video-pan-y", "video-aspect-override" })
+            {
+                Assert.True(reset.Commands.Any(command => command.Count == 3 && command[1] == property), property);
+            }
+        });
+
+        Test("画面菜单：同一层里没有两行同名", () =>
+        {
+            Check(PlayerMenuCatalog.Root, "根");
+
+            static void Check(IReadOnlyList<PlayerMenuNode> nodes, string where)
+            {
+                var labels = nodes
+                    .Where(node => node.Kind != PlayerMenuKind.Separator)
+                    .Select(node => node.Label)
+                    .ToArray();
+
+                Assert.Equal(labels.Length, labels.Distinct().Count(), where);
+
+                foreach (var node in nodes.Where(node => node.Children.Count > 0)) Check(node.Children, node.Label);
+            }
+        });
+    }
+
+    // ---- 剧集导航 --------------------------------------------------------------
+
+    /// <summary>
+    /// 上一集 / 下一集 over a whole-series episode list — the list the client asks for the moment a step
+    /// runs off the end of the season it is holding. The order is the server's
+    /// (<c>ParentIndexNumber,IndexNumber,SortName</c> ascending, verified against a real 4.9 server), so
+    /// these cases are the shapes that order really produces: a clean season boundary, a season with one
+    /// episode in it, and numbering with a hole in it.
+    /// </summary>
+    private static void RegisterEpisodeNavigation()
+    {
+        var episodes = new List<EmbyItem>
+        {
+            QueueEpisode("s1e1", "season1", 1, 1),
+            QueueEpisode("s1e2", "season1", 1, 2),
+            QueueEpisode("s2e1", "season2", 2, 1),
+            QueueEpisode("s2e2", "season2", 2, 2)
+        };
+
+        Test("剧集导航：季末下一集进入下一季第一集", () =>
+        {
+            var destination = EpisodeNavigation.Step(episodes, "s1e2", 1);
+
+            Assert.Equal("s2e1", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+            Assert.Equal("s2e1", destination?.Siblings[0].Id);
+            Assert.Equal("s2e2", destination?.Siblings[1].Id);
+        });
+
+        Test("剧集导航：季首上一集回到上一季最后一集", () =>
+        {
+            var destination = EpisodeNavigation.Step(episodes, "s2e1", -1);
+
+            Assert.Equal("s1e2", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+            Assert.Equal("s1e1", destination?.Siblings[0].Id);
+        });
+
+        Test("剧集导航：整部剧两端没有相邻单集", () =>
+        {
+            Assert.Null(EpisodeNavigation.Step(episodes, "s1e1", -1));
+            Assert.Null(EpisodeNavigation.Step(episodes, "s2e2", 1));
+            Assert.Null(EpisodeNavigation.Step(episodes, "missing", 1));
+        });
+
+        Test("剧集导航：缺少 SeasonId 时按季号归回目标季", () =>
+        {
+            var loose = new List<EmbyItem>
+            {
+                QueueEpisode("a", null, 1, 1),
+                QueueEpisode("b", null, 1, 2),
+                QueueEpisode("c", null, 2, 1)
+            };
+
+            var destination = EpisodeNavigation.Step(loose, "b", 1);
+            Assert.Equal("c", destination?.Episode.Id);
+            Assert.Equal(1, destination?.Siblings.Count ?? 0);
+        });
+
+        // 死神's shape on the real server: 本篇 holds one episode, 千年血战篇 starts at 41. The local
+        // season list is then a single row, so every step off it is a server round trip, and the step has
+        // to be a move along the list rather than 「the next episode number」.
+        Test("剧集导航：只有一集的季也能跨到下一季", () =>
+        {
+            var thin = new List<EmbyItem>
+            {
+                QueueEpisode("only", "season1", 1, 1),
+                QueueEpisode("next41", "season2", 2, 41),
+                QueueEpisode("next42", "season2", 2, 42)
+            };
+
+            var forward = EpisodeNavigation.Step(thin, "only", 1);
+            Assert.Equal("next41", forward?.Episode.Id);
+            Assert.Equal(2, forward?.Siblings.Count ?? 0);
+
+            var back = EpisodeNavigation.Step(thin, "next41", -1);
+            Assert.Equal("only", back?.Episode.Id);
+            Assert.Equal(1, back?.Siblings.Count ?? 0);
+        });
+
+        // 少年同盟's shape: season 1 runs 1..10 then jumps to 12. Walking by position keeps the missing
+        // file out of it; arithmetic on IndexNumber would have looked for an episode 11 that is not there.
+        Test("剧集导航：集号有缺口时走列表位置而不是集号", () =>
+        {
+            var gapped = new List<EmbyItem>
+            {
+                QueueEpisode("e10", "season1", 1, 10),
+                QueueEpisode("e12", "season1", 1, 12),
+                QueueEpisode("e13", "season1", 1, 13)
+            };
+
+            Assert.Equal("e12", EpisodeNavigation.Step(gapped, "e10", 1)?.Episode.Id);
+            Assert.Equal("e12", EpisodeNavigation.Step(gapped, "e13", -1)?.Episode.Id);
+        });
+
+        // The picker that opens after a cross-season step has to hold that season and nothing else: it is
+        // the list 选集 shows and the list the next step walks, so a series-wide list left in place would
+        // make 选集 a menu of the whole show.
+        Test("剧集导航：跨季后的选集列表只剩目标那一季", () =>
+        {
+            var destination = EpisodeNavigation.Step(episodes, "s1e2", 1);
+
+            Assert.NotNull(destination);
+            Assert.True(destination!.Siblings.All(sibling => sibling.SeasonId == "season2"));
+            Assert.Equal(destination.Episode.Id, destination.Siblings[0].Id);
+        });
+
+        // Only ±1 is a step. An offset of 0 or 2 is a caller bug, and a silent answer to it would be a
+        // 下一集 that skipped an episode.
+        Test("剧集导航：只接受相邻一步", () =>
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.Step(episodes, "s1e1", 0));
+            Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.Step(episodes, "s1e1", 2));
+        });
+
+        // ---- 自动连播的季内那一步（2026-09-18） ----
+        //
+        // 「当最后一季的最后一集播放结束后，直接退出播放界面或返回，不得自动续播该最后一季的第一集」。
+        // 旧版在季末退而求其次去拿全剧列表，把下一季的第一集接上来 —— 实机日志里的
+        // 《Re：从零开始的异世界生活 S01E83 播放完毕 → 自动播放下一集：S04E12》就是这条路的产物。
+        // StepInSeason 把决策钉死在本季之内：输入哪怕装着全剧列表，季末也只可能是 null。
+
+        Test("剧集导航：自动连播在本季内接下一集", () =>
+        {
+            var destination = EpisodeNavigation.StepInSeason(episodes, "s1e1", 1);
+
+            Assert.Equal("s1e2", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+            Assert.Equal("s1e1", destination?.Siblings[0].Id);
+        });
+
+        Test("剧集导航：自动连播在季末返回 null，不跨季", () =>
+        {
+            // 第 1 季的最后一集：本季到此为止，播放界面退出，第 2 季的第一集不许自动接上来。
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s1e2", 1));
+
+            // 最后一季的最后一集同理 —— 哪怕它同时是全剧的最后一集。
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s2e2", 1));
+        });
+
+        Test("剧集导航：自动连播的列表装着全剧时也只认本季", () =>
+        {
+            // FillSiblings 在单集记录缺 SeasonId 时会把一整部剧装进 Episodes；决策点必须自己缩回本季，
+            // 而不是指望每个调用方先把列表筛对。
+            Assert.Equal("s1e2", EpisodeNavigation.StepInSeason(episodes, "s1e1", 1)?.Episode.Id);
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s1e2", 1));
+
+            // 上一方向照旧在季内走：往回与往前都只在本季之内，季首再往回不越进上一季。
+            Assert.Equal("s2e1", EpisodeNavigation.StepInSeason(episodes, "s2e2", -1)?.Episode.Id);
+            Assert.Equal("s2e2", EpisodeNavigation.StepInSeason(episodes, "s2e1", 1)?.Episode.Id);
+            Assert.Null(EpisodeNavigation.StepInSeason(episodes, "s2e1", -1));
+        });
+
+        Test("剧集导航：自动连播只接受相邻一步", () =>
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.StepInSeason(episodes, "s1e1", 0));
+            Assert.Throws<ArgumentOutOfRangeException>(() => EpisodeNavigation.StepInSeason(episodes, "s1e1", 2));
+        });
+
+        // ---- 跨季落地的选集改由服务器按季返回（2026-09-24《伪恋》跨季相邻单集） ----
+        //
+        // 全剧列表里，排进 S01 播出的 air-order 特典记在 S00；按 SeasonId 本地筛 S01 只有 2 集，而服务器按季返回
+        // 会把那颗特典并进 S01。ResolveAdjacentAsync 让上一集/下一集跨季落地时的「选集」改问服务器按季要，和季详情页一致。
+
+        Test("剧集导航：跨季落地的选集改用服务器按季返回（含并进来的特典）", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("sp", "s0", 0, 1),
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            // 服务器按 S01 返回时把 air-order 特典并了进来 = 3 集；本地在全剧列表按 SeasonId 筛只会得到 e1、e2。
+            var serverSeason1 = new List<EmbyItem>
+            {
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("spInS1", "s1", 1, 2),
+                QueueEpisode("e2", "s1", 1, 3)
+            };
+
+            var destination = EpisodeNavigation.ResolveAdjacentAsync(
+                seriesWide, "sp", 1,
+                _ => Task.FromResult<IReadOnlyList<EmbyItem>>(serverSeason1)).GetAwaiter().GetResult();
+
+            Assert.Equal("e1", destination?.Episode.Id);
+            Assert.Equal(3, destination?.Siblings.Count ?? 0);
+            Assert.True(destination!.Siblings.Select(s => s.Id).SequenceEqual(new[] { "e1", "spInS1", "e2" }));
+        });
+
+        Test("剧集导航：服务器按季那份拿不到时退回本地筛的选集", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("sp", "s0", 0, 1),
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            var destination = EpisodeNavigation.ResolveAdjacentAsync(
+                seriesWide, "sp", 1,
+                _ => Task.FromResult<IReadOnlyList<EmbyItem>>([])).GetAwaiter().GetResult();
+
+            Assert.Equal("e1", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+            Assert.True(destination!.Siblings.All(s => s.SeasonId == "s1"));
+        });
+
+        Test("剧集导航：服务器那份不含落点时也退回本地选集", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("sp", "s0", 0, 1),
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            // 服务器回了一份对不上落点的列表：够不着目标，宁可用本地那份，也好过没有选集。
+            var wrong = new List<EmbyItem> { QueueEpisode("other", "s1", 1, 9) };
+
+            var destination = EpisodeNavigation.ResolveAdjacentAsync(
+                seriesWide, "sp", 1,
+                _ => Task.FromResult<IReadOnlyList<EmbyItem>>(wrong)).GetAwaiter().GetResult();
+
+            Assert.Equal("e1", destination?.Episode.Id);
+            Assert.Equal(2, destination?.Siblings.Count ?? 0);
+        });
+
+        Test("剧集导航：跨季落地在两端越界返回 null，且不问服务器", () =>
+        {
+            var seriesWide = new List<EmbyItem>
+            {
+                QueueEpisode("e1", "s1", 1, 1),
+                QueueEpisode("e2", "s1", 1, 2)
+            };
+
+            var asked = false;
+            Func<string?, Task<IReadOnlyList<EmbyItem>>> fetch = _ =>
+            {
+                asked = true;
+                return Task.FromResult<IReadOnlyList<EmbyItem>>([]);
+            };
+
+            // 最后一集再往后、第一集再往前都没有相邻集：直接 null，服务器一次都不碰。
+            Assert.Null(EpisodeNavigation.ResolveAdjacentAsync(seriesWide, "e2", 1, fetch).GetAwaiter().GetResult());
+            Assert.Null(EpisodeNavigation.ResolveAdjacentAsync(seriesWide, "e1", -1, fetch).GetAwaiter().GetResult());
+            Assert.False(asked);
+        });
+    }
+
+    // ---- 国漫标记已看 --------------------------------------------------------------
+    //
+    // 用户令 2026-09-26「新增国漫播放进度自定义百分比标记已看」：命中国漫（类型：动画 ∧ 发行公司带
+    // 腾讯/哔哩哔哩）的条目按 DonghuaMarkWatchedPercent 单独一档算，不吃全局 MarkWatchedPercent。
+    // 判定是纯函数（DonghuaRule），直接摆矩阵；阈值的选择（ShouldMarkWatched）借假后端走一遍真的播放
+    // 结束 —— 那是这条规则真正生效的地方。
+
+    private static void RegisterDonghua()
+    {
+        Test("国漫判定：类型加发行公司两关都过才算", () =>
+        {
+            Assert.True(IsDonghua(DonghuaRule.Genre, "Tencent Video"));
+            Assert.True(IsDonghua(DonghuaRule.Genre, "Tencent"));
+            Assert.True(IsDonghua(DonghuaRule.Genre, "tencent pictures"), "发行公司不分大小写");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "bilibili"));
+            Assert.True(IsDonghua(DonghuaRule.Genre, "哔哩哔哩"), "中文库把发行公司写成中文的也兜住");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "Youku"), "同日续令「把Youku和iQiyi也带上」");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "iQIYI"), "不分大小写");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "优酷"), "中文写法兜底");
+            Assert.True(IsDonghua(DonghuaRule.Genre, "爱奇艺"), "中文写法兜底");
+            Assert.True(IsDonghua(null, "Tencent Video", tags: ["国产动画"]), "类型也认标签里的");
+
+            Assert.False(IsDonghua(DonghuaRule.Genre, "企鹅影视"), "不是腾讯/哔哩哔哩的发行公司不算");
+            Assert.False(IsDonghua("科幻", "Tencent Video"), "腾讯引进的真人剧不算");
+            Assert.False(IsDonghua(DonghuaRule.Genre), "只有类型、没有发行公司不算");
+        });
+
+        Test("国漫判定：剧集条目自己不带元数据时看剧集那一层", () =>
+        {
+            var series = Item("某部国漫剧集", type: EmbyItemType.Series, genres: [DonghuaRule.Genre]);
+            series.Studios.Add(new EmbyStudio { Name = "bilibili" });
+            var episode = Item("第 1 集", type: EmbyItemType.Episode);
+
+            Assert.True(DonghuaRule.Matches(episode, series), "类型和发行公司都长在剧集上");
+            Assert.False(DonghuaRule.Matches(episode), "没有剧集那一层就谈不上国漫");
+
+            var liveAction = Item("某部真人剧集", type: EmbyItemType.Series, genres: ["科幻"]);
+            liveAction.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+            Assert.False(DonghuaRule.Matches(episode, liveAction), "腾讯引进的真人剧不算");
+        });
+
+        Test("国漫判定：计划层把结论带进播放请求", () =>
+        {
+            var (planner, _) = Planner();
+            var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+            donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+
+            Assert.True(planner.Plan(Ticket() with { Item = donghua }, Connection()).IsDonghua);
+            Assert.False(planner.Plan(Ticket(), Connection()).IsDonghua, "普通条目不命中国漫");
+        });
+
+        Test("国漫标记已看：六成停下时全局档不算看，国漫档算", () =>
+            MarkDonghuaWatchedAsync().GetAwaiter().GetResult());
+
+        Test("国漫标记已看：放到结尾不看百分比，照算看过", () =>
+            MarkDonghuaWatchedToEndAsync().GetAwaiter().GetResult());
+    }
+
+    private static bool IsDonghua(string? genre, string? studio = null, List<string>? tags = null)
+    {
+        var item = Item("某部片", genres: genre is null ? null : [genre], tags: tags);
+        if (studio is not null) item.Studios.Add(new EmbyStudio { Name = studio });
+        return DonghuaRule.Matches(item);
+    }
+
+    /// <summary>
+    /// 标记已看这条规则的端到端：<c>Source()</c> 是两小时，放到 4321 秒（六成刚过线）。全局档 90%
+    /// 明确够不着，国漫档 60% 明确够得着 —— 一位观众两个条目，差别只该出在国漫那一关上。
+    /// </summary>
+    private static async Task MarkDonghuaWatchedAsync()
+    {
+        var first = new PlaybackStubHandle();
+        var second = new PlaybackStubHandle();
+        var (service, session) = PlayingService(settings =>
+        {
+            settings.Playback.ReportProgressToServer = true;
+            settings.Playback.DonghuaMarkWatchedPercent = 60;
+        }, first, second);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        // 上报打了假传输层的 404 不要紧：上报失败不影响「算不算看过」的判定，PlaybackResult.MarkedWatched
+        // 就是 ShouldMarkWatched 的原话。
+        var plainResult = await RunOnceAsync(service, Ticket(), first, cancellation.Token,
+            endOfFile: false, positionSeconds: 4321);
+        Assert.False(plainResult.MarkedWatched, "全局档 90%：放到六成不算看过");
+
+        var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+        donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+        var donghuaResult = await RunOnceAsync(service, Ticket() with { Item = donghua }, second, cancellation.Token,
+            endOfFile: false, positionSeconds: 4321);
+        Assert.True(donghuaResult.MarkedWatched, "国漫档 60%：放到六成出头就算看过");
+    }
+
+    /// <summary>EOF 那一档不看百分比（<see cref="PlaybackService.ShouldMarkWatched"/> 的第一句），国漫条目同样照算。</summary>
+    private static async Task MarkDonghuaWatchedToEndAsync()
+    {
+        var handle = new PlaybackStubHandle();
+        var (service, session) = PlayingService(
+            settings => settings.Playback.ReportProgressToServer = true, handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+        donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+        var result = await RunOnceAsync(service, Ticket() with { Item = donghua }, handle, cancellation.Token,
+            endOfFile: true, positionSeconds: null);
+        Assert.True(result.MarkedWatched, "放到结尾（EOF）不看百分比，照算看过");
+    }
+
+    private static async Task<PlaybackResult> RunOnceAsync(
+        PlaybackService service, PlaybackTicket ticket, PlaybackStubHandle handle,
+        CancellationToken cancellation, bool endOfFile, double? positionSeconds)
+    {
+        var playing = service.PlayAsync(ticket, cancellation);
+        await handle.Started.Task.WaitAsync(cancellation);
+        handle.End(positionSeconds, endOfFile ? PlaybackEndReason.EndOfFile : PlaybackEndReason.Stopped);
+        return await playing.WaitAsync(cancellation);
+    }
+
+    // ---- 到阈值补报播放停止 ------------------------------------------------------
+    //
+    // 用户令 2026-09-29：先是「在设置的通知中新增功能，播放进度达到自定义百分比的时候，自动触发发送
+    // 播放-停止」，同日续令把判断标准改成「播放行为中的 标记已观看阈值(%)，要区分国漫」，并要求
+    // 「直接从进度条跳到已观看阈值区间时触发一次通知」。所以阈值不是另立一格 —— 就是「播放行为」里那两档
+    // （国漫走国漫那一档）；够到线就补报一趟 Sessions/Playing/Stopped，服务器上那条通知
+    // （Webhooks → MoviePilot）随即把 playback.stop 转发出去。播放本身不停，一次播放只报这一趟。
+    //
+    // 取档与阈值是纯函数，直接摆矩阵；「报了几趟、报完之后还喂不喂进度」只有走真播放才看得见 —— 假传输层
+    // 把每一趟请求都记了下来（StubTransport.SentTo），断言就落在那份清单上。
+
+    private static void RegisterStopReport()
+    {
+        Test("到阈值补报停止：阈值就是标记已看那两档，国漫走国漫那一档", () =>
+        {
+            // 用户令 2026-09-29「要区分国漫」。出厂两档是 90 与 85，用的却是同一个取数函数 —— 摆不同的数
+            // 才看得出走的是哪一档。
+            Assert.Equal(85, PlaybackService.StopReportPercent(
+                isDonghua: true, markWatchedPercent: 90, donghuaMarkWatchedPercent: 85));
+            Assert.Equal(90, PlaybackService.StopReportPercent(
+                isDonghua: false, markWatchedPercent: 90, donghuaMarkWatchedPercent: 85));
+            Assert.Equal(70, PlaybackService.StopReportPercent(
+                isDonghua: true, markWatchedPercent: 90, donghuaMarkWatchedPercent: 70));
+        });
+
+        Test("到阈值补报停止：判据只看位置够没够到线，时长读不到时不报", () =>
+        {
+            const long twoHours = 2 * TimeSpan.TicksPerHour;
+
+            Assert.False(PlaybackService.ShouldReportStop(0, twoHours, enabled: true, percent: 90));
+            Assert.False(PlaybackService.ShouldReportStop((long)(twoHours * 0.89), twoHours, enabled: true, percent: 90));
+            Assert.True(PlaybackService.ShouldReportStop((long)(twoHours * 0.90), twoHours, enabled: true, percent: 90),
+                "正好到线就算到");
+            Assert.True(PlaybackService.ShouldReportStop(twoHours, twoHours, enabled: true, percent: 90));
+
+            Assert.False(PlaybackService.ShouldReportStop(twoHours, twoHours, enabled: false, percent: 50),
+                "开关关着时位置再靠后也不报 —— 出厂就是这一档");
+            Assert.False(PlaybackService.ShouldReportStop(TimeSpan.TicksPerHour, 0, enabled: true, percent: 50),
+                "时长读不到（直播、时长还没解析出来）就没有分母，不报");
+
+            // 「一路看过去」与「拖进度条跳进去」在这里是同一件事：判据只看位置在不在线以上，不问它是怎么
+            // 到那儿的 —— 跨线那一套反而会漏（续播点本来就在区间里就产生不了一次「跨」）。
+            Assert.True(PlaybackService.ShouldReportStop(twoHours, twoHours, enabled: true, percent: 100),
+                "落在线上也算");
+            Assert.False(PlaybackService.ShouldReportStop(
+                    (long)(twoHours * 0.49), twoHours, enabled: true, percent: 1),
+                "夹取范围与标记已看那两档同一对数（50–100）：写 1 也被夹到 50，四成九够不着");
+        });
+
+        Test("到阈值补报停止：够到线报一趟，此后不再喂进度，收尾也不报第二遍", () =>
+            StopReportOnceAsync().GetAwaiter().GetResult());
+
+        Test("到阈值补报停止：拖进度条直接跳进区间，也要报一趟", () =>
+            StopReportOnSeekAsync().GetAwaiter().GetResult());
+
+        Test("到阈值补报停止：开关关着时够到线也不报，收尾那一次照旧", () =>
+            StopReportSwitchedOffAsync().GetAwaiter().GetResult());
+
+        Test("到阈值补报停止：国漫档与全局档各报各的", () =>
+            StopReportFollowsDonghuaPercentAsync().GetAwaiter().GetResult());
+    }
+
+    /// <summary>
+    /// 一路看过去的那一档。<c>Source()</c> 是两小时、阈值 90%：句柄先摆在 100 秒（远没到线），让循环先跑出
+    /// 一拍<b>进度上报</b>；再把位置推到 6500 秒（过线）—— 下一拍就该结账。此后本场不再发进度、收尾也不再
+    /// 报第二遍，三条判据都落在假传输层那份请求清单上。
+    /// <para>
+    /// 位置分两步摆是这条测试第一次跑出来教会的事：一上来就摆在线以上，循环第一拍直接结账，那一拍不会有
+    /// 进度上报 —— 于是「结账之后不再喂进度」就失去了对照（前后都是 0 趟，断言恒真）。
+    /// </para>
+    /// </summary>
+    private static async Task StopReportOnceAsync()
+    {
+        var handle = new PlaybackStubHandle { PositionSeconds = 100 };
+        var (service, session, transport) = PlayingServiceWithTransport(StopReportSettings(), handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        await handle.Started.Task.WaitAsync(cancellation.Token);
+
+        // 第一拍：位置远没到线，该有一条进度上报，一趟「播放停止」都不该有。
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Progress", 1, cancellation.Token),
+            "第一拍就该有进度上报");
+        Assert.Equal(0, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 推过线：下一拍就该把「播放停止」补报出去。
+        handle.PositionSeconds = 6500;
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Stopped", 1, cancellation.Token),
+            "进度过了标记已看阈值也没看到补报的「播放停止」");
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 报过就不再喂进度：再等两拍，进度上报的趟数一动不动。
+        // （ProgressChanged 那个事件照发 —— 屏上的进度条不该停，停的只是发往服务器的那一路。）
+        var progressAtCheckpoint = transport.SentTo("Sessions/Playing/Progress").Count;
+        Assert.True(progressAtCheckpoint > 0, "结账之前本来就该有进度上报");
+        await Task.Delay(TimeSpan.FromSeconds(2.5), cancellation.Token);
+        Assert.Equal(progressAtCheckpoint, transport.SentTo("Sessions/Playing/Progress").Count);
+
+        // 真正结束：收尾不报第二遍（用户令 2026-09-29「本次播放报过一次就不必再报了」），否则服务器上那条
+        // 通知会转发两次。
+        handle.End(6500, PlaybackEndReason.EndOfFile);
+        await playing.WaitAsync(cancellation.Token);
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 「直接从进度条跳到已观看阈值区间时触发一次通知」（用户令 2026-09-29 第二条）。位置一直摆在 100 秒，
+    /// 循环那一拍永远够不到线；只有播放器状态流把位置推过线 —— 报出去了就证明是它报的，不是循环那一拍。
+    /// <para>
+    /// 状态流这一路是必要的：循环的拍子是 <c>ProgressReportIntervalSeconds</c>（默认 5 秒），跳进去又拖回来
+    /// 就可能整段错过；状态流由 mpv 每帧报位置、压到 0.25 秒一次，跳完那一刻就报得出去。
+    /// </para>
+    /// </summary>
+    private static async Task StopReportOnSeekAsync()
+    {
+        var handle = new PlaybackStubHandle { PositionSeconds = 100 };
+        var (service, session, transport) = PlayingServiceWithTransport(StopReportSettings(), handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        await handle.Started.Task.WaitAsync(cancellation.Token);
+
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Progress", 1, cancellation.Token),
+            "第一拍就该有进度上报");
+        Assert.Equal(0, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 句柄订阅状态流是在监视开始之后才做的，与测试这一头隔着一线：推给没人听的那一拍会掉在地上，
+        // 所以推几次，直到那一趟上报露头。
+        for (var attempt = 0; attempt < 40 && transport.SentTo("Sessions/Playing/Stopped").Count == 0; attempt++)
+        {
+            handle.PublishStatus(6500);
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellation.Token);
+        }
+
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 报过之后这一场就结账了，收尾不再报第二遍。
+        handle.End(6500, PlaybackEndReason.Stopped);
+        await playing.WaitAsync(cancellation.Token);
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 开关关着的那一档（出厂默认）：位置早就过了阈值，但一趟「播放停止」都不该在播放中间发出去，收尾那一次
+    /// 的报停止照旧 —— 那是关闭条目时就有的老行为，这一格不该动它。
+    /// </summary>
+    private static async Task StopReportSwitchedOffAsync()
+    {
+        var handle = new PlaybackStubHandle { PositionSeconds = 6500 };
+        var (service, session, transport) = PlayingServiceWithTransport(StopReportSettings(on: false), handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        await handle.Started.Task.WaitAsync(cancellation.Token);
+
+        // 先确认这一场真的在报进度（否则「没有停止上报」可能只是因为它什么都没报）。
+        Assert.True(
+            await WaitForRequestsAsync(transport, "Sessions/Playing/Progress", 2, cancellation.Token),
+            "没看到进度上报，这一场等于没跑起来");
+        Assert.Equal(0, transport.SentTo("Sessions/Playing/Stopped").Count);
+
+        handle.End(6500, PlaybackEndReason.EndOfFile);
+        await playing.WaitAsync(cancellation.Token);
+        Assert.Equal(1, transport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 「要区分国漫」的端到端：<c>Source()</c> 是两小时，位置摆在 4321 秒（六成刚过线）。国漫档 60% 够得着，
+    /// 全局档 90% 明确够不着 —— 一位观众两个条目，差别只该出在国漫那一关上。位置是摆出来的（循环一路看着
+    /// 它），所以两条都是循环那一拍报的。
+    /// </summary>
+    private static async Task StopReportFollowsDonghuaPercentAsync()
+    {
+        // 全局档 90%：六成够不着，播放中间一趟都不该报。
+        var plainHandle = new PlaybackStubHandle { PositionSeconds = 4321 };
+        var (plainService, plainSession, plainTransport) =
+            PlayingServiceWithTransport(StopReportSettings(markPercent: 90, donghuaPercent: 60), plainHandle);
+        using var plainLifetime = plainSession;
+        using var plainCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var plainPlaying = plainService.PlayAsync(Ticket(), plainCancellation.Token);
+        await plainHandle.Started.Task.WaitAsync(plainCancellation.Token);
+        Assert.True(
+            await WaitForRequestsAsync(plainTransport, "Sessions/Playing/Progress", 2, plainCancellation.Token),
+            "没看到进度上报，这一场等于没跑起来");
+        Assert.Equal(0, plainTransport.SentTo("Sessions/Playing/Stopped").Count);
+        plainHandle.End(4321, PlaybackEndReason.Stopped);
+        await plainPlaying.WaitAsync(plainCancellation.Token);
+        Assert.Equal(1, plainTransport.SentTo("Sessions/Playing/Stopped").Count);
+
+        // 国漫那一档 60%：同一个位置就够得着了 —— 播放中间该报一趟，收尾不报第二遍。
+        var donghua = Item("某部国漫", id: "42", genres: [DonghuaRule.Genre]);
+        donghua.Studios.Add(new EmbyStudio { Name = "Tencent Video" });
+        var donghuaHandle = new PlaybackStubHandle { PositionSeconds = 4321 };
+        var (donghuaService, donghuaSession, donghuaTransport) =
+            PlayingServiceWithTransport(StopReportSettings(markPercent: 90, donghuaPercent: 60), donghuaHandle);
+        using var donghuaLifetime = donghuaSession;
+        using var donghuaCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var donghuaPlaying = donghuaService.PlayAsync(
+            Ticket() with { Item = donghua }, donghuaCancellation.Token);
+        await donghuaHandle.Started.Task.WaitAsync(donghuaCancellation.Token);
+
+        Assert.True(
+            await WaitForRequestsAsync(donghuaTransport, "Sessions/Playing/Stopped", 1, donghuaCancellation.Token),
+            "国漫档 60%：六成刚过线就该补报一趟「播放停止」");
+        donghuaHandle.End(4321, PlaybackEndReason.Stopped);
+        await donghuaPlaying.WaitAsync(donghuaCancellation.Token);
+        Assert.Equal(1, donghuaTransport.SentTo("Sessions/Playing/Stopped").Count);
+    }
+
+    /// <summary>
+    /// 到阈值那一批的固定拨法：开着上报、把拍子压到 1 秒（<see cref="PlaybackSettings.ProgressReportIntervalSeconds"/>
+    /// 的下限 —— 测试要看的那一拍才等得起）、拨上那一格开关，并摆好那两档标记已看阈值。
+    /// 拍子压到下限是测试的事，不是产品行为。
+    /// </summary>
+    private static Action<AppSettings> StopReportSettings(bool on = true, int markPercent = 90, int donghuaPercent = 85) =>
+        settings =>
+        {
+            settings.Playback.ReportProgressToServer = true;
+            settings.Playback.ProgressReportIntervalSeconds = 1;
+            settings.Playback.StopReportEnabled = on;
+            settings.Playback.MarkWatchedPercent = markPercent;
+            settings.Playback.DonghuaMarkWatchedPercent = donghuaPercent;
+        };
+
+    /// <summary>
+    /// 等到假传输层上某一趟请求攒到指定趟数，或者到时放弃。<b>轮询而不是睡一个固定时长</b>：这一场由
+    /// <c>PeriodicTimer</c> 的拍子推进，慢机器上「等 1 秒」本来就要花不止 1 秒，而睡多久都只是碰运气。
+    /// </summary>
+    private static async Task<bool> WaitForRequestsAsync(
+        StubTransport transport, string fragment, int count, CancellationToken cancellation)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (transport.SentTo(fragment).Count >= count) return true;
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellation);
+        }
+
+        return false;
+    }
+
+    // ---- 播放闸门 --------------------------------------------------------------
+
+    /// <summary>
+    /// The one part of <see cref="PlaybackService"/> that can be tested without mpv or a server: what
+    /// happens to its semaphore when the play attempt fails before a backend is ever built.
+    /// </summary>
+    private static void RegisterPlaybackGate()
+    {
+        Test("播放闸门：未登录时抛错后闸门要放开，第二次播放不能卡死", () =>
+        {
+            var service = SignedOutService();
+
+            // Signed out, so PlayAsync throws at its 尚未登录 check — before any backend is asked for,
+            // which is why the factory in SignedOutService throws if it is ever called.
+            Assert.Throws<InvalidOperationException>(
+                () => service.PlayAsync(Ticket(), CancellationToken.None).GetAwaiter().GetResult());
+
+            // The real defect this covers is not the first failure but the second call. The gate is a
+            // SemaphoreSlim(1, 1) released only from PlayAsync's finally; while that finally opened below
+            // the 尚未登录 check, the first failure left the gate held and every later play waited on it
+            // forever — no exception, no timeout, just the cover art staying up for the rest of the
+            // process. A leak therefore shows up here as a hang, so this is given a deadline rather than
+            // being awaited outright.
+            var second = Attempt(service);
+            Assert.True(second.Wait(TimeSpan.FromSeconds(5)), "第二次播放没能在 5 秒内返回：闸门泄漏了");
+            Assert.True(
+                second.Result is InvalidOperationException,
+                "第二次播放也应该以未登录失败，而不是别的错误");
+        });
+
+        Test("播放闸门：闸门连续放开，第三次播放同样立刻失败", () =>
+        {
+            var service = SignedOutService();
+
+            // Once, because one release could be a coincidence; three times, because a gate that is
+            // released on every failure path is the actual invariant.
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                var play = Attempt(service);
+                Assert.True(play.Wait(TimeSpan.FromSeconds(5)), $"第 {attempt} 次播放卡住了");
+                Assert.True(play.Result is InvalidOperationException, $"第 {attempt} 次播放应该以未登录失败");
+            }
+        });
+
+        Test("播放闸门：结束通知失败不遮住起播错误，也不阻断后续通知和播放", () =>
+        {
+            var service = SignedOutService();
+            var notified = 0;
+            service.NowPlayingChanged += _ => throw new InvalidDataException("模拟通知失败");
+            service.NowPlayingChanged += _ => notified++;
+
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                var error = Attempt(service).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                Assert.True(error is InvalidOperationException, "通知失败不能覆盖原来的「尚未登录」错误");
+                Assert.Equal(attempt, notified, "一个监听器失败不能跳过后面的监听器");
+            }
+        });
+
+        Test("播放闸门：释放句柄失败仍清空状态并允许下一次播放", () =>
+        {
+            var first = new PlaybackStubHandle { FailOnDispose = true };
+            var second = new PlaybackStubHandle();
+            var (service, session) = PlayingService(first, second);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            var playing = service.PlayAsync(Ticket(), cancellation.Token);
+            first.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            Assert.True(service.LaunchOptions.Count > 0, "先确认这次确实记录了启动选项");
+            first.End();
+
+            // 清理不是播放结果；即使句柄的释放失败，界面状态和下一次播放也都必须收得回来。
+            playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            Assert.False(service.IsPlaying);
+            Assert.Equal(0, service.LaunchOptions.Count);
+            Assert.Null(service.LaunchQualityPreset);
+            Assert.Null(service.LaunchShaderProfile);
+            Assert.Null(service.LaunchShaderReason);
+            Assert.Equal(1, first.DisposeCount);
+
+            var next = service.PlayAsync(Ticket(), cancellation.Token);
+            second.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            second.End();
+            next.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            Assert.Equal(1, second.DisposeCount, "第二次必须真正走完，而不是只解除一次等待");
+        });
+    }
+
+    private static void RegisterPlaybackBatches()
+    {
+        Test("播放批次：着色器写入等待中切集，剩余设置不传给下一集", () =>
+            CheckBatchSwitchAsync(shaders: true, holdDefaultRead: false).GetAwaiter().GetResult());
+
+        Test("播放批次：字幕写入等待中切集，剩余设置不传给下一集", () =>
+            CheckBatchSwitchAsync(shaders: false, holdDefaultRead: false).GetAwaiter().GetResult());
+
+        Test("播放批次：字幕默认值返回前切集，旧读数不再写入任何播放", () =>
+            CheckBatchSwitchAsync(shaders: false, holdDefaultRead: true).GetAwaiter().GetResult());
+
+        Test("轨道上报：订阅前已产生的初始选择由补读快照带入停止报告", () =>
+        {
+            var handle = new PlaybackStubHandle
+            {
+                ReadTracks = () => Task.FromResult<IReadOnlyList<MpvTrack>>([
+                    new(2, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 4 },
+                    new(1, "sub", null, null, false, false) { FfmpegIndex = 6 }
+                ])
+            };
+            var (service, session, transport) = PlayingServiceWithTransport(settings => settings.Playback.ReportProgressToServer = true, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var source = SourceWith(Stream(1, "Audio"), Stream(4, "Audio"), Stream(6, "Subtitle", codec: "srt"));
+            var playing = service.PlayAsync(Ticket() with { Source = source, AudioStreamIndex = 1, SubtitleStreamIndex = 6 }, cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            handle.End();
+            playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            using var report = System.Text.Json.JsonDocument.Parse(transport.SentTo("Playing/Stopped").Single().Body);
+            Assert.Equal(4, report.RootElement.GetProperty("AudioStreamIndex").GetInt32());
+            Assert.Equal(-1, report.RootElement.GetProperty("SubtitleStreamIndex").GetInt32());
+        });
+
+        Test("轨道上报：同句柄换片返回前的选择由新场快照补齐", () =>
+        {
+            var handle = new PlaybackStubHandle { AllowSwap = true };
+            IReadOnlyList<MpvTrack> tracks = [new(1, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 1 }];
+            handle.ReadTracks = () => Task.FromResult(tracks);
+            handle.OnSwap = () =>
+            {
+                tracks = [new(2, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 4 }];
+                handle.PublishTracks(tracks);
+            };
+            var (service, session, transport) = PlayingServiceWithTransport(settings => settings.Playback.ReportProgressToServer = true, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var source = SourceWith(Stream(1, "Audio"), Stream(4, "Audio"));
+            var ticket = Ticket() with { Source = source, AudioStreamIndex = 1 };
+            var first = service.PlayAsync(ticket, cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            var second = service.PlayAsync(ticket with { Item = Item("第二片", id: "43") }, cancellation.Token);
+            handle.Swapped.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            handle.End();
+            Task.WhenAll(first, second).WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            using var report = System.Text.Json.JsonDocument.Parse(transport.SentTo("Playing/Stopped").Last().Body);
+            Assert.Equal("43", report.RootElement.GetProperty("ItemId").GetString());
+            Assert.Equal(4, report.RootElement.GetProperty("AudioStreamIndex").GetInt32());
+        });
+
+        foreach (var supported in new bool?[] { false, true, null })
+        {
+            var available = supported;
+            Test($"字幕外观：单项默认值缺失不阻断已知颜色，支持状态={available?.ToString() ?? "未知"}", () =>
+            {
+                var handle = new PlaybackStubHandle { MissingDefault = "sub-border-style", OptionAvailable = available };
+                var (service, session) = PlayingService(settings => settings.Playback.SubtitleColor = "#123456", handle);
+                using var sessionLifetime = session;
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var playing = service.PlayAsync(Ticket(), cancellation.Token);
+                handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                try
+                {
+                    if (available == false) service.ApplySubtitleStyleAsync().GetAwaiter().GetResult();
+                    else Assert.Throws<InvalidOperationException>(() => service.ApplySubtitleStyleAsync().GetAwaiter().GetResult());
+                    Assert.Equal("#FF123456", handle.Properties.Last(pair => pair.Key == "sub-color").Value);
+                    Assert.False(handle.Properties.Any(pair => pair.Key == "sub-border-style"));
+                }
+                finally { handle.End(); playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult(); }
+            });
+        }
+
+        Test("字幕外观：原生命令拒绝必须返回失败而不是假装已应用", () =>
+        {
+            var handle = new PlaybackStubHandle { RejectedProperty = "sub-color" };
+            var (service, session) = PlayingService(handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var playing = service.PlayAsync(Ticket(), cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            try { Assert.Throws<InvalidOperationException>(() => service.ApplySubtitleStyleAsync().GetAwaiter().GetResult()); }
+            finally { handle.End(); playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult(); }
+        });
+
+        Test("轨道上报：运行中切音轨和关闭主字幕后，停止报告不沿用起播票", () =>
+        {
+            var handle = new PlaybackStubHandle();
+            var (service, session, transport) = PlayingServiceWithTransport(settings =>
+            {
+                settings.Playback.ReportProgressToServer = true;
+                settings.Playback.StopReportEnabled = false;
+            }, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var source = SourceWith(Stream(0, "Video"), Stream(1, "Audio"), Stream(4, "Audio"),
+                Stream(6, "Subtitle", codec: "srt"), Stream(7, "Subtitle", codec: "srt"));
+            var playing = service.PlayAsync(Ticket() with { Source = source, AudioStreamIndex = 1, SubtitleStreamIndex = 6 }, cancellation.Token);
+            handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            handle.PublishTracks([
+                new(2, "audio", null, null, false, true) { MainSelection = 0, FfmpegIndex = 4 },
+                new(1, "sub", null, null, false, false) { FfmpegIndex = 6 },
+                new(2, "sub", null, null, false, true) { MainSelection = 1, FfmpegIndex = 7 }
+            ]);
+            handle.End();
+            playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            using var json = System.Text.Json.JsonDocument.Parse(transport.SentTo("Playing/Stopped").Single().Body);
+            Assert.Equal(4, json.RootElement.GetProperty("AudioStreamIndex").GetInt32());
+            Assert.Equal(-1, json.RootElement.GetProperty("SubtitleStreamIndex").GetInt32());
+        });
+
+        Test("字幕外观批次：同片连续修改按提交次序完成，旧默认读数不覆盖新颜色", () =>
+        {
+            var handle = new PlaybackStubHandle();
+            AppSettings current = null!;
+            var (service, session) = PlayingService(value => current = value, handle);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstRead = true;
+            handle.BeforeRead = async () =>
+            {
+                if (!firstRead) return;
+                firstRead = false;
+                entered.TrySetResult();
+                await release.Task.WaitAsync(cancellation.Token);
+            };
+            var playing = service.PlayAsync(Ticket(), cancellation.Token);
+            try
+            {
+                handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                current.Playback.SubtitleColor = "#FFFF00";
+                var older = service.ApplySubtitleStyleAsync();
+                entered.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                current.Playback.SubtitleColor = "#FFFFFF";
+                var newer = service.ApplySubtitleStyleAsync();
+                release.TrySetResult();
+                Task.WhenAll(older, newer).WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                Assert.Equal("#FFFFFFFF", handle.Properties.Last(pair => pair.Key == "sub-color").Value);
+            }
+            finally
+            {
+                release.TrySetResult();
+                handle.End();
+                playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            }
+        });
+
+        Test("备用媒体源：起播失败后重试仍保留明确关闭字幕", () =>
+        {
+            var first = new PlaybackStubHandle();
+            var second = new PlaybackStubHandle();
+            var (service, session) = PlayingService(first, second);
+            using var sessionLifetime = session;
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var a = SourceWith(Stream(0, "Video"), Stream(1, "Audio", language: "jpn"), Stream(2, "Subtitle", codec: "srt", language: "chi"));
+            var b = SourceWith(Stream(0, "Video"), Stream(1, "Audio", language: "jpn"), Stream(2, "Subtitle", codec: "srt", language: "chi"));
+            a.Id = "first";
+            b.Id = "second";
+            var item = Item("离线备用源");
+            item.MediaSources = [a, b];
+            var playing = service.PlayAsync(new PlaybackTicket { Item = item, Source = a, SubtitlesDisabled = true }, cancellation.Token);
+            try
+            {
+                first.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                first.End(reason: PlaybackEndReason.Error);
+                second.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                Assert.True(second.Request!.SubtitlesDisabled);
+                Assert.Null(second.Request.SubtitleId);
+            }
+            finally
+            {
+                first.End();
+                second.End();
+                playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+            }
+        });
+
+        Test("播放批次：未切集时字幕和着色器设置仍完整发送", () =>
+        {
+            foreach (var shaders in new[] { false, true })
+            {
+                var handle = new PlaybackStubHandle();
+                var (service, session) = PlayingService(handle);
+                using var sessionLifetime = session;
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var playing = service.PlayAsync(Ticket(), cancellation.Token);
+
+                try
+                {
+                    handle.Started.Task.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                    ApplyBatchAsync(service, shaders).WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                    var names = handle.Properties.Select(option => option.Key).ToList();
+                    var expected = shaders
+                        ? ShaderGroupCatalog.NeutralOptions.Select(option => option.Key).ToList()
+                        : MpvOutputOptions.SubtitleStyleOptions.ToList();
+                    Assert.Equal(expected.Count, names.Count, "不能靠停止全部发送来避免跨播放写入");
+                    Assert.True(expected.All(names.Contains), "每个外观/复位选项都必须送达");
+                    if (!shaders) Assert.True(handle.Reads.Count > 0, "未指定的字幕外观仍需读取播放器默认值");
+                }
+                finally
+                {
+                    handle.End();
+                    playing.WaitAsync(cancellation.Token).GetAwaiter().GetResult();
+                }
+            }
+        });
+    }
+
+    private static async Task CheckBatchSwitchAsync(bool shaders, bool holdDefaultRead)
+    {
+        var first = new PlaybackStubHandle();
+        var second = new PlaybackStubHandle();
+        var (service, session) = PlayingService(first, second);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task HoldAsync()
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(cancellation.Token);
+        }
+
+        if (holdDefaultRead) first.BeforeRead = HoldAsync;
+        else first.BeforeSet = HoldAsync;
+
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        Task<PlaybackResult>? next = null;
+        try
+        {
+            await first.Started.Task.WaitAsync(cancellation.Token);
+            var batch = ApplyBatchAsync(service, shaders);
+            await entered.Task.WaitAsync(cancellation.Token);
+            var readsBeforeSwitch = first.Reads.Count;
+            var writesBeforeSwitch = first.Properties.Count;
+
+            // 不靠延时碰运气：把旧批次停在一次真实 await 上，完成切集后才让它回来。
+            first.End();
+            await playing.WaitAsync(cancellation.Token);
+            next = service.PlayAsync(Ticket() with { Item = Item("下一集", id: "43") }, cancellation.Token);
+            await second.Started.Task.WaitAsync(cancellation.Token);
+            release.TrySetResult();
+            await batch.WaitAsync(cancellation.Token);
+
+            Assert.Equal(0, second.Properties.Count, "旧播放的设置不能进入新句柄");
+            Assert.Equal(0, second.Reads.Count, "旧批次不能读取下一集的默认值");
+            Assert.Equal(writesBeforeSwitch, first.Properties.Count, "播放已结束，旧批次也必须停止继续写入");
+            Assert.Equal(readsBeforeSwitch, first.Reads.Count, "播放已结束，旧批次不能继续读取");
+        }
+        finally
+        {
+            release.TrySetResult();
+            first.End();
+            second.End();
+            await playing.WaitAsync(cancellation.Token);
+            if (next is not null) await next.WaitAsync(cancellation.Token);
+        }
+    }
+
+    private static Task ApplyBatchAsync(PlaybackService service, bool shaders) =>
+        shaders ? service.SetShaderGroupAsync(null) : service.ApplySubtitleStyleAsync();
+
+    /// <summary>假登录和假后端：只走内存中的传输，不访问服务器、不启动 mpv，也不写设置文件。</summary>
+    private static (PlaybackService Service, EmbySession Session) PlayingService(params PlaybackStubHandle[] handles) =>
+        PlayingService(null, handles);
+
+    /// <inheritdoc cref="PlayingService(PlaybackStubHandle[])"/>
+    /// <param name="configure">
+    /// 在服务拿到这份设置之前拨几项 —— 标记已看那批要开着上报、拨国漫阈值，基建里固定的关上报压不住它。
+    /// </param>
+    private static (PlaybackService Service, EmbySession Session) PlayingService(
+        Action<AppSettings>? configure, params PlaybackStubHandle[] handles)
+    {
+        var (service, session, _) = PlayingServiceWithTransport(configure, handles);
+        return (service, session);
+    }
+
+    /// <summary>
+    /// 同上，另外把假传输层一并交出来。「到阈值补报播放停止」那一批要断言的不是结果对象，而是**到底哪几趟
+    /// 请求发出去了** —— 那件事只有记着每一趟请求的那一层答得上（<see cref="StubTransport.SentTo"/>）。
+    /// </summary>
+    private static (PlaybackService Service, EmbySession Session, StubTransport Transport) PlayingServiceWithTransport(
+        Action<AppSettings>? configure, params PlaybackStubHandle[] handles)
+    {
+        var settings = new AppSettings();
+        settings.Playback.ReportProgressToServer = false;
+        settings.Playback.SubtitleAssOverride = "";
+        configure?.Invoke(settings);
+        var transport = new StubTransport()
+            .Answer("Views", """{ "Items": [], "TotalRecordCount": 0 }""")
+            .Answer("System/Info/Public", """{ "ServerName": "离线测试", "Id": "stub" }""")
+            // 国漫标记已看那批把上报打开了：Sessions 那三条给个空应答，别让每一趟上报都 404 出一屏噪音。
+            .Answer("Sessions", "{}")
+            .Answer("PlayedItems", "{}");
+        var session = new EmbySession(
+            settings,
+            new SettingsStore(
+                new AppPaths(Path.Combine(Path.GetTempPath(), $"momoka-playback-{Guid.NewGuid():N}")),
+                PassthroughSecretProtector.Instance),
+            new CredentialVault(PassthroughSecretProtector.Instance),
+            DeviceIdentity.Create("test-device", "1.0.0"),
+            transport);
+        var server = new ServerProfile { Url = "http://playback.invalid" };
+        var account = new AccountProfile
+        {
+            Username = "test-user",
+            UserId = "test-user",
+            ProtectedAccessToken = PassthroughSecretProtector.Instance.Protect("offline-test-token")
+        };
+        Assert.True(session.TryRestoreAsync(server, account, CancellationToken.None).GetAwaiter().GetResult());
+        var backend = new PlaybackStubBackend(handles);
+        var service = new PlaybackService(
+            session,
+            settings,
+            () => backend,
+            new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders)));
+        return (service, session, transport);
+    }
+
+    private sealed class PlaybackStubBackend(params PlaybackStubHandle[] handles) : IPlaybackBackend
+    {
+        private readonly Queue<PlaybackStubHandle> _handles = new(handles);
+
+        public string DisplayName => "离线测试";
+
+        public string? Validate() => null;
+
+        public Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken)
+        {
+            var handle = _handles.Dequeue();
+            handle.Request = request;
+            return Task.FromResult<IPlaybackHandle>(handle);
+        }
+    }
+
+    // 着色器切换的批次现在走 IPlayerControl.CommandAsync（「set 属性 值」），不再走句柄的 SetPropertyAsync；
+    // 假句柄必须也是控制通道，否则 SetShaderGroupAsync 在门口就退回 false，一行都发不出去。
+    private sealed class PlaybackStubHandle : IPlaybackHandle, IPlayerControl
+    {
+        private TaskCompletionSource<PlaybackExit> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Swapped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Action? OnSwap { get; set; }
+        public PlaybackRequest? Request { get; set; }
+        public List<KeyValuePair<string, object?>> Properties { get; } = [];
+        public List<string> Reads { get; } = [];
+        public Func<Task>? BeforeSet { get; set; }
+        public Func<Task>? BeforeRead { get; set; }
+        public Func<Task<IReadOnlyList<MpvTrack>>>? ReadTracks { get; set; }
+        public string? MissingDefault { get; set; }
+        public bool? OptionAvailable { get; set; }
+        public string? RejectedProperty { get; set; }
+        public bool AllowSwap { get; set; }
+        public bool WasHandedOver { get; private set; }
+        public bool FailOnDispose { get; init; }
+        public int DisposeCount { get; private set; }
+        public int StopCount { get; private set; }
+        public bool? PictureInHostWindow { get; init; }
+        public string? Fullscreen { get; init; }
+        public bool HasControlChannel => true;
+        public bool IsPaused => false;
+
+        /// <summary>
+        /// 进度循环读到的位置（秒）。默认 0，只有「到阈值补报播放停止」那一批把它摆到时长某个百分比上 ——
+        /// 那一条判据要的是「位置真的走过去了」，而别的测试都没问过位置。
+        /// </summary>
+        public double PositionSeconds { get; set; }
+
+        public event Action<bool>? PauseChanged { add { } remove { } }
+
+        public void End(double? positionSeconds = null, PlaybackEndReason reason = PlaybackEndReason.Stopped) =>
+            _exit.TrySetResult(new PlaybackExit(reason, positionSeconds, 0, null));
+
+        public Task<PlaybackExit> WaitForExitAsync(CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            return _exit.Task.WaitAsync(cancellationToken);
+        }
+
+        public Task StopAsync()
+        {
+            StopCount++;
+            End();
+            return Task.CompletedTask;
+        }
+
+        public bool CanSwapTo(PlaybackRequest request) => AllowSwap;
+
+        public void HandOver()
+        {
+            WasHandedOver = true;
+            End();
+        }
+
+        public Task<bool> SwapToAsync(PlaybackRequest request, CancellationToken cancellationToken)
+        {
+            _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            WasHandedOver = false;
+            Request = request;
+            OnSwap?.Invoke();
+            Swapped.TrySetResult();
+            return Task.FromResult(true);
+        }
+
+        public async Task SetPropertyAsync(string name, object? value, CancellationToken cancellationToken)
+        {
+            Properties.Add(new(name, value));
+            if (BeforeSet is { } before) await before();
+        }
+
+        public PlayerStatus Status => new();
+
+        /// <summary>
+        /// 真事件（其余那几个都是 no-op）：到阈值补报那一批里「拖进度条跳进阈值区间」走的就是这一路 ——
+        /// 它比进度循环那拍快，靠 <see cref="PublishStatus"/> 把一拍状态推出去。
+        /// </summary>
+        public event Action<PlayerStatus>? StatusChanged;
+
+        /// <summary>推一拍播放器状态出去：位置 <paramref name="seconds"/> 秒、时长 <paramref name="durationSeconds"/> 秒。</summary>
+        public void PublishStatus(double seconds, double durationSeconds = 7200) =>
+            StatusChanged?.Invoke(new PlayerStatus { Position = seconds, Duration = durationSeconds, Loaded = true });
+
+        public event Action<IReadOnlyList<MpvTrack>>? TracksChanged;
+        public void PublishTracks(IReadOnlyList<MpvTrack> tracks) => TracksChanged?.Invoke(tracks);
+
+        // 「set」就是一次属性写入：与 SetPropertyAsync 走同一条记录（含 BeforeSet 挂起点），
+        // 其余命令不是属性写，只回「已接受」。
+        public async Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+        {
+            if (arguments.Count >= 3 && string.Equals(arguments[0], "set", StringComparison.Ordinal))
+            {
+                if (arguments[1] == RejectedProperty) return false;
+                await SetPropertyAsync(arguments[1], arguments[2], cancellationToken);
+            }
+            return true;
+        }
+
+        public async Task<string?> GetTextAsync(string name, CancellationToken cancellationToken)
+        {
+            Reads.Add(name);
+            if (BeforeRead is { } before) await before();
+            if (name == $"option-info/{MissingDefault}/default-value") return null;
+            return name == "fullscreen" ? Fullscreen
+                : name == "profile-list" ? "[]" // 画质预设目录：默认设置不带 profile 项，展开器不会解析它
+                : "播放器默认值";
+        }
+
+        public Task<IReadOnlyList<string>?> GetStringListAsync(string name, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>?>([]);
+
+        public Task<double?> GetPositionAsync(CancellationToken cancellationToken) => Task.FromResult<double?>(PositionSeconds);
+        public Task ShowMessageAsync(string text) => Task.CompletedTask;
+        public Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken) =>
+            ReadTracks?.Invoke() ?? Task.FromResult<IReadOnlyList<MpvTrack>>([]);
+        public Task<bool?> HasOptionAsync(string name, CancellationToken cancellationToken) => Task.FromResult(OptionAvailable);
+        public Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken) => Task.FromResult<double?>(null);
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            if (FailOnDispose) throw new InvalidDataException("模拟句柄释放失败");
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// A service whose session was never signed in. Nothing here touches the disk: <c>AppPaths</c> only
+    /// joins strings and <c>SettingsStore</c> only remembers them, so the temp root below is a name that
+    /// is never created and never needs cleaning up.
+    /// </summary>
+    private static PlaybackService SignedOutService()
+    {
+        var settings = new AppSettings();
+        var session = new EmbySession(
+            settings,
+            new SettingsStore(
+                new AppPaths(Path.Combine(Path.GetTempPath(), $"momoka-gate-{Guid.NewGuid():N}")),
+                PassthroughSecretProtector.Instance),
+            new CredentialVault(PassthroughSecretProtector.Instance),
+            DeviceIdentity.Create("device-1", "2.0.0"));
+
+        return new PlaybackService(
+            session,
+            settings,
+            () => throw new AssertionException("未登录就不该走到后端"),
+            new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders)));
+    }
+
+    /// <summary>
+    /// One play attempt on a worker thread, returning whatever it threw instead of faulting the task.
+    /// Returning the exception rather than letting it escape is what makes the deadline above meaningful:
+    /// <c>Task.Wait(timeout)</c> throws on a faulted task instead of reporting the timeout, so a task that
+    /// never faults is the only way to tell 「failed fast」 apart from 「never came back」.
+    /// </summary>
+    private static Task<Exception?> Attempt(PlaybackService service) => Task.Run(() =>
+    {
+        try
+        {
+            service.PlayAsync(Ticket(), CancellationToken.None).GetAwaiter().GetResult();
+            return null;
+        }
+        catch (Exception error)
+        {
+            return (Exception?)error;
+        }
+    });
+
+    // ---- 叫醒窗口的那一下点击 ----------------------------------------------------
+    //
+    // 用户令 2026-09-23：「先点一下让窗口置顶，然后再点一下触发暂停/播放」。判据的主料是**上一拍**问出来的
+    // 严格前台位（播放页每拍 100ms 问一次，光标规则也要用它）：按下那一刻窗口已经是前台了（激活在按下之前只
+    // 隔 1~5ms），只有上一拍分得出「这一下之前我们在不在前台」。头一版拿「刚变前台 ≤250ms」当主料、而那个时刻
+    // 是轮询记的、轮询抓不到那 1~5ms，于是它一直是陈值、叫醒那一下反被当普通点击——用户实测「点一下就播了」正是
+    // 这个，现在「刚变前台」只留作轮询恰好抓到时的兜底。独占模式那份在 uosc 的 MOMOKA[click-pause-wake]
+    // （判据是 mpv 的 focused 属性），MpvUiTests 里对着源码钉住。
+
+    private static void RegisterWakeClick()
+    {
+        Test("叫醒点击：此刻是前台、上一拍还不是 —— 就是叫醒那一下，不该顺带暂停/播放", () =>
+        {
+            Assert.True(WakeClick.IsWaking(foregroundNow: true, wasForeground: false, foregroundForMilliseconds: 99999),
+                "点别的窗口再点画面：上一拍问到「不在前台」，这一下把窗口叫醒 —— 不作数（陈值 99999 也不影响）");
+            Assert.False(WakeClick.IsWaking(foregroundNow: true, wasForeground: true, foregroundForMilliseconds: 99999),
+                "上一拍就已经在前台 ⇒ 普通点击，照常暂停/播放");
+        });
+
+        Test("叫醒点击：轮询正好抓到激活那一拍时，靠「刚变前台」兜底", () =>
+        {
+            Assert.True(WakeClick.IsWaking(true, wasForeground: true, WakeClick.RegainedMilliseconds),
+                "轮询恰好落在激活与按下之间、把上一拍前台位写成了 true —— 靠「刚变前台 ≤250ms」仍认成叫醒");
+            Assert.False(WakeClick.IsWaking(true, true, WakeClick.RegainedMilliseconds + 1),
+                "又是前台位 true、变前台还超过 250ms ⇒ Alt+Tab 唤回后隔一会才点，照常暂停/播放");
+            Assert.False(WakeClick.IsWaking(true, true, -1), "差值为负（时刻还没记）且上一拍已是前台，不算");
+        });
+
+        Test("叫醒点击：没激活成前台的点击不可能是叫醒那一下", () =>
+        {
+            Assert.False(WakeClick.IsWaking(foregroundNow: false, wasForeground: false, 3),
+                "此刻都不是前台 ⇒ 这一下没把谁叫醒");
+        });
+    }
+
+    // ---- 点画面那一下 ----------------------------------------------------------
+    //
+    // 「双击画面全屏的时候会触发暂停和开始」。从前是单击立刻暂停、双击再撤回 —— 净状态对，可屏上闪两次徽标，
+    // mpv 也真暂停了一下又恢复。现在先攥住那一下，攥得住就一次暂停都没发出去。这一族钉的正是那个次序。
+
+    private static void RegisterPictureTap()
+    {
+        Test("点画面：押后窗口就是参考 mpv 配置那一把尺，独占模式也照它写", () =>
+        {
+            // 用户令 2026-09-23：参考 C:\mpv_config-2026.08.12 的延迟（那份配置用 inputevent.lua 按
+            // input-doubleclick-time 押后，mpv 这条属性的默认值是 300），集成与独占统一到同一个数。
+            Assert.Equal(300L, PictureTap.ClickDelayMilliseconds);
+            // 一个数管两处：独占模式的装配按它写 mpv 属性，uosc 那颗兜底命中区读的正是这个属性。
+            var ui = MpvUi.Build("mpv-ui/scripts/uosc", "mpv-ui/fonts");
+            var entries = ui.Where(option => option.Key == "input-doubleclick-time").ToList();
+            Assert.Equal(1, entries.Count);
+            Assert.Equal("300", entries[0].Value, "独占模式的押后窗口没跟集成模式那个常量走");
+        });
+
+        Test("点画面：徽标静音期比押后窗口长", () =>
+        {
+            // 撤回那一下的状态沿要走 mpv 一趟回来，静音期短于押后的时间就会漏出那一次徽标。
+            Assert.True(PictureTap.PulseMuteMilliseconds > PictureTap.ClickDelayMilliseconds);
+        });
+
+        Test("点画面：单击攥住，不当场下发", () =>
+        {
+            var tap = new PictureTap();
+            Assert.False(tap.Pending, "什么都没发生时不该攥着");
+            Assert.False(tap.Issued);
+
+            tap.First(paused: false);
+            Assert.True(tap.Pending, "攥着");
+            Assert.False(tap.Issued, "还没下发 —— 这就是这次修法的全部");
+        });
+
+        Test("点画面：攥够了才下发一次", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: false);
+
+            Assert.True(tap.Elapsed(), "到期这一下才是真的下发");
+            Assert.False(tap.Pending);
+            Assert.True(tap.Issued);
+
+            Assert.False(tap.Elapsed(), "定时器晚一拍再跳一次，不许凭空再切一下播放");
+        });
+
+        Test("点画面：快的双击 —— 一次暂停都没发出去，也没什么要还", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: false);
+
+            Assert.Null(tap.Second(), "null 就是「那一次暂停从来没发生过」");
+            Assert.False(tap.Pending, "攥着的那一下作废了");
+            Assert.False(tap.Issued);
+        });
+
+        Test("点画面：慢的双击 —— 把按下之前那个值还回去", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: true);
+            Assert.True(tap.Elapsed());
+
+            Assert.Equal(true, tap.Second(), "还的是按下之前那个值，不是再切一次");
+            Assert.False(tap.Issued, "还完就清干净");
+            Assert.Null(tap.Second(), "第二下不会来两次；来了也没有第二份账");
+        });
+
+        Test("点画面：作废之后到期不再下发", () =>
+        {
+            // 点在控制条上的那一下必须作废：不作废，接着一次落在控制条上的双击就会拿着上一次单击记下的
+            // pause 去「撤回」，把正在放的片子停掉。
+            var tap = new PictureTap();
+            tap.First(paused: false);
+            tap.Forget();
+
+            Assert.False(tap.Pending);
+            Assert.False(tap.Elapsed());
+            Assert.Null(tap.Second());
+        });
+
+        Test("点画面：新的一次单击把上一次的账清掉", () =>
+        {
+            var tap = new PictureTap();
+            tap.First(paused: false);
+            Assert.True(tap.Elapsed());
+
+            tap.First(paused: true);
+            Assert.True(tap.Pending);
+            Assert.False(tap.Issued, "上一次已经下发过的那一笔不能留着，否则这一次的双击会去还上一次的值");
+        });
+    }
+
+    // ---- 透明光标的掩码 --------------------------------------------------------
+    //
+    // 从这次起 WinUI 的输入管线会照着这张掩码画光标（见 PlayerPage.Chrome.cs 的 SetCursorHidden），所以算错
+    // 不再是「藏不掉」而是「画面正中多一块黑方块」。
+
+    private static void RegisterCursorMask()
+    {
+        Test("透明光标：32×32 那一档 AND 全 1、XOR 全 0", () =>
+        {
+            var (and, xor) = CursorMask.Transparent(32, 32);
+
+            // 32 宽 → 每行 4 字节 → 32 行 128 字节。AND=1、XOR=0 逐像素就是「透明」。
+            Assert.Equal(128, and.Length);
+            Assert.Equal(128, xor.Length);
+            Assert.True(and.All(value => value == 0xFF), "AND 掩码不是全 1，光标就不是整只透明");
+            Assert.True(xor.All(value => value == 0x00), "XOR 掩码不是全 0，透明处会被反色");
+        });
+
+        Test("透明光标：行距按 WORD 补齐，不是按字节", () =>
+        {
+            // 这一条最容易写错，而错了整张掩码逐行错位、画出来是一块斜纹。
+            Assert.Equal(2, CursorMask.Stride(1));
+            Assert.Equal(2, CursorMask.Stride(16));
+            Assert.Equal(4, CursorMask.Stride(17), "17 像素要两个 WORD");
+            Assert.Equal(4, CursorMask.Stride(24), "24 像素占 3 字节，但要补到 4");
+            Assert.Equal(4, CursorMask.Stride(32));
+            Assert.Equal(6, CursorMask.Stride(33));
+
+            var (and, _) = CursorMask.Transparent(24, 10);
+            Assert.Equal(40, and.Length, "24×10 是 4 字节一行乘 10 行");
+        });
+
+        Test("透明光标：宽或高不是正数时返回空数组，不抛", () =>
+        {
+            // 抛异常会把「藏不掉鼠标」升级成「播放器起不来」。
+            foreach (var (width, height) in new[] { (0, 32), (32, 0), (-1, 32), (32, -1), (0, 0) })
+            {
+                var (and, xor) = CursorMask.Transparent(width, height);
+                Assert.Equal(0, and.Length, $"{width}×{height}");
+                Assert.Equal(0, xor.Length, $"{width}×{height}");
+            }
+
+            Assert.Equal(0, CursorMask.Stride(0));
+            Assert.Equal(0, CursorMask.Stride(-8));
+        });
+
+        Test("透明光标检测：认出副本，拒绝黑白像素和反色", () =>
+        {
+            var (and, xor) = CursorMask.Transparent(32, 32);
+            var mask = and.Concat(xor).ToArray();
+            Assert.True(CursorMask.IsTransparent(mask, 32, 32, 4));
+            mask[5] = 0xFE;
+            Assert.False(CursorMask.IsTransparent(mask, 32, 32, 4), "黑点不能当透明");
+            mask[5] = 0xFF;
+            mask[and.Length + 5] = 1;
+            Assert.False(CursorMask.IsTransparent(mask, 32, 32, 4), "反色点不能当透明");
+            mask[5] = 0xFE;
+            Assert.False(CursorMask.IsTransparent(mask, 32, 32, 4), "白点不能当透明");
+        });
+
+        Test("透明光标检测：忽略行尾填充，只判真实像素", () =>
+        {
+            byte[] mask = [0xFF, 0x80, 0x12, 0x34, 0, 0x7F, 0xAB, 0xCD];
+            Assert.True(CursorMask.IsTransparent(mask, 9, 1, 4));
+            mask[5] = 0x80;
+            Assert.False(CursorMask.IsTransparent(mask, 9, 1, 4));
+        });
+
+        Test("透明光标检测：无效或缺失位图不判隐藏", () =>
+        {
+            Assert.False(CursorMask.IsTransparent([], 32, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[255], 32, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[256], 33, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[256], 0, 32, 4));
+            Assert.False(CursorMask.IsTransparent(new byte[256], 32, 0, 4));
+            Assert.False(CursorMask.IsTransparent([], int.MaxValue, int.MaxValue, int.MaxValue));
+        });
+    }
+
+    // ---- 暂停/播放徽标的几何 ----------------------------------------------------
+    //
+    // 「播放页面暂停和开始的图标太丑了，你换一个」（2026-09-06）。这一代把圆角画进轮廓里（不再靠描边的圆接头），
+    // 但外框分量一口价没动 —— 暂停 122×122、播放 112×122，还是当年替掉图标字时认下的那一档，不然屏上就是
+    // 「换了个图标顺手大了一圈」。外框现在从成品轮廓直接量（Bounds），不用再算描边往外长多少。
+
+    private static void RegisterPulseArt()
+    {
+        // 轮廓外框的宽高，直接从 Bounds 量。
+        static (double Width, double Height) Size(IReadOnlyList<PulseFigure> figures)
+        {
+            var (left, top, right, bottom) = PulseArt.Bounds(figures);
+            return (right - left, bottom - top);
+        }
+
+        Test("暂停徽标：成品 122×122，两条 44 宽、间距 34，和它替掉的字形同一档分量", () =>
+        {
+            var (width, height) = Size(PulseArt.Pause);
+            Assert.Equal(122.0, width);
+            Assert.Equal(122.0, height);
+
+            Assert.Equal(2, PulseArt.Pause.Count, "暂停是两条竖条");
+            var left = PulseArt.Bounds([PulseArt.Pause[0]]);
+            var right = PulseArt.Bounds([PulseArt.Pause[1]]);
+            Assert.Equal(44.0, left.Right - left.Left, "左条 44 宽");
+            Assert.Equal(44.0, right.Right - right.Left, "右条 44 宽");
+            Assert.Equal(122.0, left.Bottom - left.Top, "左条 122 高");
+            Assert.Equal(34.0, right.Left - left.Right, "两条之间的间距");
+        });
+
+        Test("播放徽标：等腰、尖角朝右，外框 112×122，摆在方框正中", () =>
+        {
+            var (width, height) = Size(PulseArt.Play);
+            Assert.Equal(112.0, width);
+            Assert.Equal(122.0, height);
+
+            Assert.Equal(1, PulseArt.Play.Count, "播放是一个三角");
+            var corners = PulseArt.Play[0].Corners;
+            Assert.Equal(3, corners.Count, "三角三个角");
+
+            // 尖角朝右、落在上下正中；底边两点同一个 x（等腰）。
+            var tip = corners.OrderByDescending(p => p.X).First();
+            var baseCorners = corners.OrderBy(p => p.X).Take(2).ToList();
+            Assert.Equal(baseCorners[0].X, baseCorners[1].X, "底边两点必须同一个 x，否则不是等腰");
+            Assert.Equal((baseCorners[0].Y + baseCorners[1].Y) / 2, tip.Y, "尖角要落在底边中点的高度上");
+            Assert.True(tip.X > baseCorners[0].X, "尖角朝右");
+        });
+
+        Test("暂停/播放徽标：两个形状都落在方框正中，也没顶出方框", () =>
+        {
+            foreach (var (name, figures) in new[] { ("暂停", PulseArt.Pause), ("播放", PulseArt.Play) })
+            {
+                var (x, y) = PulseArt.Centre(figures);
+                Assert.Equal(PulseArt.Box / 2, x, $"{name}没有水平居中");
+                Assert.Equal(PulseArt.Box / 2, y, $"{name}没有垂直居中");
+
+                var (width, height) = Size(figures);
+                Assert.True(width <= PulseArt.Box, $"{name}横向顶出了方框：{width} > {PulseArt.Box}");
+                Assert.True(height <= PulseArt.Box, $"{name}纵向顶出了方框：{height} > {PulseArt.Box}");
+            }
+        });
+
+        Test("暂停/播放徽标：圆角画进了轮廓，顺时针小弧", () =>
+        {
+            // 每个圆角在轮廓里都是一段 Arc 步；胶囊竖条四角都圆（半径 22＝条宽的一半），
+            // 三角尖角圆 22、底角圆 12。半径正确 + 弧数正确，就守住了「圆角在几何里」这件事。
+            var barArcs = PulseArt.Pause[0].Steps.Where(s => s.Arc).ToList();
+            Assert.Equal(4, barArcs.Count, "胶囊竖条四角都该是弧");
+            Assert.True(barArcs.All(s => Math.Abs(s.Radius - 22) < 1e-6), "胶囊圆角半径 22");
+
+            var triArcs = PulseArt.Play[0].Steps.Where(s => s.Arc).ToList();
+            Assert.Equal(3, triArcs.Count, "三角三个角都该是弧");
+            Assert.True(triArcs.Any(s => Math.Abs(s.Radius - 22) < 1e-6), "尖角圆 22");
+            Assert.Equal(2, triArcs.Count(s => Math.Abs(s.Radius - 12) < 1e-6), "两个底角圆 12");
+
+            // 方框留着不动 —— 它就是屏上徽标占多大，而用户认下的是这一档。
+            Assert.Equal(136.0, PulseArt.Box, "方框边长不该跟着换形状一起改");
+        });
+    }
+
+    // ---- 双管线的判别式 ----------------------------------------------------------
+    // 两条管线按 VideoPipelineKind 分流；独立播放自建顶层窗口，不向 IVideoSurface 要几何或交换链。
+    private static void RegisterPipelineDiscriminator()
+    {
+        Test("双管线：渲染管线的装机默认是独占模式（2026-09-20 改，集成模式全屏切换有合成层追尺寸的卡顿）", () =>
+        {
+            Assert.Equal(VideoPipelineKind.Standalone, new MpvSettings().Pipeline);
+        });
+
+        Test("双管线：候选版本顺序——票里那版在前，其余版本按库序跟后", () =>
+        {
+            // 服务器库里的旧条目可能挂着文件已经不在的那一版（2026-09-16 的 401/404 报告），
+            // 回退按这张顺序表换版重试。票里的排最前（用户选的），其余按条目里的库序去重补齐。
+            var mkv = new MediaSource { Id = "mediasource_9990", Container = "mkv" };
+            var mp4 = new MediaSource { Id = "mediasource_9994", Container = "mp4" };
+            var item = Watchable(EmbyItemType.Episode);
+            item.MediaSources = [mkv, mp4];
+
+            var candidates = PlaybackService.CandidateSources(new PlaybackTicket
+            {
+                Item = item,
+                Source = mkv
+            });
+
+            Assert.Equal(2, candidates.Count);
+            Assert.Equal("mediasource_9990", candidates[0].Id, "票里那一版排最前");
+            Assert.Equal("mediasource_9994", candidates[1].Id, "其余版本按库序跟后");
+        });
+
+        Test("双管线：候选版本顺序——单版条目不重复，票外无候选", () =>
+        {
+            var only = new MediaSource { Id = "mediasource_7316", Container = "mkv" };
+            var item = Watchable(EmbyItemType.Episode);
+            item.MediaSources = [only];
+
+            var candidates = PlaybackService.CandidateSources(new PlaybackTicket
+            {
+                Item = item,
+                Source = only
+            });
+
+            Assert.Equal(1, candidates.Count, "唯一的版本就是全部候选，不因 Id 相同排两遍");
+            Assert.Equal("mediasource_7316", candidates[0].Id);
+        });
+    }
+
+    private static void RegisterNativeFullscreen()
+    {
+        Test("原生全屏：无会话不读状态，集成或未知归属不处理", () =>
+        {
+            SignedOutService().ExitNativeFullscreenOrStopAsync().GetAwaiter().GetResult();
+            foreach (bool? destination in new bool?[] { true, null })
+                CheckNativeFullscreenAsync(destination, "yes", expectedReads: 0, expectedStops: 0, expectedWrites: 0).GetAwaiter().GetResult();
+        });
+
+        Test("原生全屏：全屏中只退出全屏，不停止视频", () =>
+            CheckNativeFullscreenAsync(false, "yes", 1, 0, 1).GetAwaiter().GetResult());
+        Test("原生全屏：窗口状态退出才停止当前视频", () =>
+            CheckNativeFullscreenAsync(false, "no", 1, 1, 0).GetAwaiter().GetResult());
+        Test("原生全屏：状态未知不能误停止视频", () =>
+            CheckNativeFullscreenAsync(false, null, 1, 0, 0).GetAwaiter().GetResult());
+
+        Test("原生全屏：旧状态读回前已切集，不退出或停止新旧会话", () =>
+        {
+            foreach (var fullscreen in new[] { "yes", "no" })
+                CheckNativeFullscreenSwitchAsync(fullscreen).GetAwaiter().GetResult();
+        });
+    }
+
+    private static async Task CheckNativeFullscreenAsync(
+        bool? destination, string? fullscreen, int expectedReads, int expectedStops, int expectedWrites)
+    {
+        var handle = new PlaybackStubHandle { PictureInHostWindow = destination, Fullscreen = fullscreen };
+        var (service, session) = PlayingService(handle);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        Assert.Null(service.PictureInHostWindow);
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        try
+        {
+            await handle.Started.Task.WaitAsync(cancellation.Token);
+            Assert.Equal(destination, service.PictureInHostWindow);
+            await service.ExitNativeFullscreenOrStopAsync().WaitAsync(cancellation.Token);
+            Assert.Equal(expectedReads, handle.Reads.Count);
+            Assert.Equal(expectedStops, handle.StopCount);
+            Assert.Equal(expectedWrites, handle.Properties.Count);
+            if (expectedWrites > 0)
+            {
+                Assert.Equal("fullscreen", handle.Properties[0].Key);
+                Assert.Equal<object?>(false, handle.Properties[0].Value);
+            }
+        }
+        finally
+        {
+            handle.End();
+            await playing.WaitAsync(cancellation.Token);
+        }
+        Assert.Null(service.PictureInHostWindow, "结束后不保留旧会话归属");
+    }
+
+    private static async Task CheckNativeFullscreenSwitchAsync(string fullscreen)
+    {
+        var first = new PlaybackStubHandle { PictureInHostWindow = false, Fullscreen = fullscreen };
+        var second = new PlaybackStubHandle { PictureInHostWindow = false, Fullscreen = "yes" };
+        var (service, session) = PlayingService(first, second);
+        using var sessionLifetime = session;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        first.BeforeRead = async () =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(cancellation.Token);
+        };
+        var playing = service.PlayAsync(Ticket(), cancellation.Token);
+        Task<PlaybackResult>? next = null;
+        try
+        {
+            await first.Started.Task.WaitAsync(cancellation.Token);
+            var exit = service.ExitNativeFullscreenOrStopAsync();
+            await entered.Task.WaitAsync(cancellation.Token);
+            first.End();
+            await playing.WaitAsync(cancellation.Token);
+            next = service.PlayAsync(Ticket() with { Item = Item("下一集", id: "43") }, cancellation.Token);
+            await second.Started.Task.WaitAsync(cancellation.Token);
+            release.TrySetResult();
+            await exit.WaitAsync(cancellation.Token);
+            Assert.Equal(0, first.Properties.Count);
+            Assert.Equal(0, first.StopCount);
+            Assert.Equal(0, second.Properties.Count);
+            Assert.Equal(0, second.Reads.Count);
+            Assert.Equal(0, second.StopCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            first.End();
+            second.End();
+            await playing.WaitAsync(cancellation.Token);
+            if (next is not null) await next.WaitAsync(cancellation.Token);
+        }
+    }
+
+    private static void RegisterLibMpvPipeline()
+    {
+        Test("mpv 管线：真实规划器的默认 Vulkan 在两条内置管线都不能覆盖 D3D11", () =>
+        {
+            var (planner, _) = Planner();
+            var request = planner.Plan(Ticket(), Connection());
+            Assert.Equal("vulkan", Options(request.PlayerOptions)["gpu-api"]);
+            foreach (var pipeline in new[] { VideoPipelineKind.Standalone, VideoPipelineKind.Integrated })
+            {
+                var plan = LibMpvPipelinePolicy.Build(pipeline, request.PlayerOptions, (1920, 1080));
+                Assert.Equal("d3d11", plan.Single(option => option.Name == "gpu-api").Value);
+                Assert.Equal("d3d11", plan.Single(option => option.Name == "gpu-context").Value);
+                Assert.Equal("gpu-next", plan.Single(option => option.Name == "vo").Value);
+                Assert.Equal("vulkan", Options(request.PlayerOptions)["gpu-api"], "不得修改外部 mpv 共用的请求");
+            }
+        });
+
+        Test("mpv 管线：预设、普通重复值、着色器先执行，关键选项最后且全部 fatal", () =>
+        {
+            KeyValuePair<string, string>[] input =
+            [
+                new("scale", "bilinear"), new("profile", "high-quality"),
+                new("gpu-api", "vulkan"), new("scale", "spline36"), new("gpu-context", "winvk"),
+                new("vo", "gpu-next,direct3d"), new("glsl-shaders-append", "local.glsl"),
+                new("scale", "ewa_lanczossharp"), new("d3d11-output-mode", "composition"),
+                new("d3d11-exclusive-fs", "no"), new("force-window", "no"),
+                new("input-default-bindings", "no"), new("input-vo-keyboard", "no"),
+                new("input-media-keys", "yes")
+            ];
+            var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, input);
+            Assert.Equal("scale=bilinear,profile=high-quality,scale=spline36,glsl-shaders-append=local.glsl,scale=ewa_lanczossharp",
+                string.Join(",", plan.Where(option => !option.Required).Select(option => $"{option.Name}={option.Value}")));
+            // 独占模式 force-window=no：窗口要等画面，所以不会先冒一个 960x540 的黑框再跳成整画面
+            // （2026-09-19 实测：yes 出生 960x540 居中、文件一开跳 1280x720，源打不开时那个黑框还一直挂着；
+            // no 全程无窗口，能放时以终值尺寸出生）。画面一上来由 LibMpvHandle 改回 yes 把窗口按住。
+            // 集成模式仍是 immediate，见下一条断言。
+            Assert.Equal("vo=gpu-next,gpu-api=d3d11,gpu-context=d3d11,d3d11-output-mode=window,d3d11-exclusive-fs=no,force-window=no,input-default-bindings=yes,input-vo-keyboard=yes,input-media-keys=no",
+                string.Join(",", plan.Where(option => option.Required).Select(option => $"{option.Name}={option.Value}")));
+            var firstRequired = plan.ToList().FindIndex(option => option.Required);
+            Assert.True(plan.Skip(firstRequired).All(option => option.Required), "后面不能再有普通选项覆盖管线");
+            foreach (var option in plan)
+            {
+                option.EnsureAccepted(0);
+                if (option.Required)
+                {
+                    var error = Assert.Catch<InvalidOperationException>(() => option.EnsureAccepted(-7));
+                    Assert.Contains(option.Name, error.Message);
+                }
+                else option.EnsureAccepted(-7); // Ordinary shader failures remain warnings.
+            }
+        });
+
+        Test("mpv 管线：wid、尺寸、上下文别名及 VO 列表操作在发送前过滤", () =>
+        {
+            KeyValuePair<string, string>[] conflicts =
+            [
+                new("wid", "12345"), new("--WID", "67890"), new("vo-append", "direct3d"),
+                new("vo-clr", ""), new("--gpu-context", "winvk"), new("no-force-window", ""),
+                new("d3d11-composition-size", "800x600"), new("no-input-media-keys", "no")
+            ];
+            var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Standalone, conflicts, (4096, 2160));
+            Assert.True(plan.All(option => option.Required), "冲突输入不应有一条送入 DLL");
+            Assert.False(plan.Any(option => option.Name == "wid" || option.Name == "d3d11-composition-size"));
+            Assert.False(plan.Any(option => option.Name == "fullscreen"), "管线契约不强制进入全屏");
+        });
+
+        Test("mpv 管线：集成隔离独占及原生键盘，尺寸仍来自宿主", () =>
+        {
+            var plan = LibMpvPipelinePolicy.Build(VideoPipelineKind.Integrated,
+                [new("d3d11-exclusive-fs", "yes"), new("d3d11-output-mode", "window"), new("wid", "123")], (1600, 900));
+            Assert.Equal("composition", plan.Single(option => option.Name == "d3d11-output-mode").Value);
+            Assert.Equal("no", plan.Single(option => option.Name == "d3d11-exclusive-fs").Value);
+            Assert.Equal("1600x900", plan.Single(option => option.Name == "d3d11-composition-size").Value);
+            // 集成模式必须 immediate：合成交换链要在文件加载前存在，宿主才接得进 XAML 面板。
+            // 独占模式那半（force-window=no）在上一条测试钉死，两半合起来锁住整个分叉。
+            Assert.Equal("immediate", plan.Single(option => option.Name == "force-window").Value);
+            Assert.True(plan.Where(option => option.Name.StartsWith("input-", StringComparison.Ordinal)).All(option => option.Value == "no"));
+            Assert.False(plan.Any(option => option.Name == "wid"));
+            foreach (var size in new[] { (0, 0), (1280, 0), (-1, 720) })
+                Assert.Equal("1x1", LibMpvPipelinePolicy.Build(VideoPipelineKind.Integrated, [], size)
+                    .Single(option => option.Name == "d3d11-composition-size").Value);
+        });
+
+        Test("mpv 管线：独立从不调用 surface provider，集成必须取得一次有效 surface", () =>
+        {
+            Assert.False(LibMpvPipelinePolicy.RequiresSurface(VideoPipelineKind.Standalone));
+            Assert.Null(LibMpvBackend.SelectSurface(VideoPipelineKind.Standalone,
+                () => throw new AssertionException("独立管线不能调用 provider")));
+            var calls = 0;
+            var surface = new PipelineTestSurface();
+            Assert.True(ReferenceEquals(surface, LibMpvBackend.SelectSurface(VideoPipelineKind.Integrated, () => { calls++; return surface; })));
+            Assert.Equal(1, calls);
+            Assert.Throws<InvalidOperationException>(() => LibMpvBackend.SelectSurface(VideoPipelineKind.Integrated, () => null));
+            Assert.Throws<ArgumentOutOfRangeException>(() => LibMpvPipelinePolicy.Build((VideoPipelineKind)99, []));
+        });
+
+        Test("mpv 管线：会话画面归属来自实际 surface，不调用 DLL", () =>
+        {
+            // Do not start or dispose these synthetic handles: only inspect the immutable destination.
+            // 后两个参数是换片快路（独占模式不关窗换源）的签名与「下次签名怎么算」，合成句柄一律给 null ——
+            // 没有签名的会话永远不接快路，断言就在下面那一行。
+            IPlaybackHandle native = new LibMpvHandle(IntPtr.Zero, null, null, null);
+            IPlaybackHandle integrated = new LibMpvHandle(IntPtr.Zero, new PipelineTestSurface(), null, null);
+            Assert.Equal<bool?>(false, native.PictureInHostWindow);
+            Assert.Equal<bool?>(true, integrated.PictureInHostWindow);
+
+            var anywhere = new PlaybackRequest
+            {
+                MediaUrl = new Uri("http://server/emby/Videos/1/stream.mkv"),
+                Title = "任何一集",
+            };
+            Assert.False(native.CanSwapTo(anywhere), "没有签名的会话不许接快路（退回停掉重开）");
+            Assert.False(integrated.CanSwapTo(anywhere), "集成管线按契约不接快路");
+            Assert.False(native.WasHandedOver, "没被交接过的句柄，收尾时该拆就得拆");
+        });
+    }
+
+    private sealed class PipelineTestSurface : IVideoSurface
+    {
+        public (int Width, int Height) Size => (1600, 900);
+        public event Action? GeometryChanged { add { } remove { } }
+        public void AttachSwapChain(IntPtr swapChain) => throw new AssertionException("纯策略测试不应挂链");
+    }
+
+    private static void RegisterVideoSurfaceSize()
+    {
+        Test("合成尺寸：布局 DIP 按当前缩放转换成物理像素", () =>
+        {
+            Assert.Equal((1280, 720), VideoSurfaceSize.FromDips(1280, 720, 1));
+            Assert.Equal((1600, 900), VideoSurfaceSize.FromDips(1280, 720, 1.25));
+            Assert.Equal((1920, 1080), VideoSurfaceSize.FromDips(1280, 720, 1.5));
+            Assert.Equal((2560, 1440), VideoSurfaceSize.FromDips(1280, 720, 2));
+            Assert.Equal((960, 540), VideoSurfaceSize.FromDips(1280, 720, 0.75));
+        });
+
+        Test("合成尺寸：小数向上取整，正尺寸至少占一个像素", () =>
+        {
+            Assert.Equal((126, 64), VideoSurfaceSize.FromDips(100.1, 50.5, 1.25));
+            Assert.Equal((1, 1), VideoSurfaceSize.FromDips(0.1, 0.01, 1));
+            Assert.Equal((1, 1), VideoSurfaceSize.FromDips(double.Epsilon, double.Epsilon, 0.5));
+        });
+
+        Test("合成尺寸：未布局或非法尺寸单轴归零", () =>
+        {
+            foreach (var invalid in new[] { 0d, -1, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+            {
+                Assert.Equal((0, 150), VideoSurfaceSize.FromDips(invalid, 100, 1.5));
+                Assert.Equal((150, 0), VideoSurfaceSize.FromDips(100, invalid, 1.5));
+            }
+            Assert.Equal((0, 0), VideoSurfaceSize.FromDips(0, 0, 1.5));
+        });
+
+        Test("合成尺寸：非法缩放返回未知，不猜测为百分之百", () =>
+        {
+            foreach (var invalid in new[] { 0d, -1, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+                Assert.Equal((0, 0), VideoSurfaceSize.FromDips(1280, 720, invalid));
+        });
+
+        Test("合成尺寸：超大有限输入及乘积溢出不会变负数", () =>
+        {
+            Assert.Equal((int.MaxValue, int.MaxValue), VideoSurfaceSize.FromDips(int.MaxValue, int.MaxValue, 1));
+            Assert.Equal((int.MaxValue, 2), VideoSurfaceSize.FromDips(double.MaxValue, 1, 2));
+            Assert.Equal((int.MaxValue, int.MaxValue), VideoSurfaceSize.FromDips(double.MaxValue, 2, double.MaxValue));
+        });
+    }
+
+    private static void RegisterLibMpvLifetime()
+    {
+        Test("mpv 生命周期：停止后只拦合成，控制读数仍可用于最终上报", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            var calls = 0;
+            var detaches = 0;
+            Assert.True(gate.Run(() => { calls++; return true; }, composition: true));
+            gate.StopComposition(() => detaches++);
+            gate.StopComposition(() => detaches++);
+            Assert.False(gate.Run(() => { calls++; return true; }, composition: true));
+            Assert.Equal(1, calls);
+            Assert.Equal(1, detaches, "重复 Stop/Finish/Dispose 不应再次摘掉下一场的画面");
+            Assert.Equal(42, gate.Run(() => 42));
+        });
+
+        Test("mpv 生命周期：排队中的几何刷新在停止边界之后不执行", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = 0;
+            var queued = Task.Run(async () =>
+            {
+                await release.Task.ConfigureAwait(false);
+                return gate.Run(() => { calls++; return true; }, composition: true);
+            });
+            gate.StopComposition(() => { });
+            release.SetResult();
+            Assert.False(queued.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
+            Assert.Equal(0, calls);
+        });
+
+        Test("mpv 生命周期：正在挂链与停止摘链串行，摘链始终在后", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var stopping = new ManualResetEventSlim();
+            var order = new List<string>();
+            var detached = 0;
+            var refresh = Task.Run(() => gate.Run(() =>
+            {
+                entered.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)), "挂链未获放行");
+                order.Add("attach");
+                return true;
+            }, composition: true));
+            Task stop = Task.CompletedTask;
+            try
+            {
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "刷新未进入临界区");
+                stop = Task.Run(() =>
+                {
+                    stopping.Set();
+                    gate.StopComposition(() =>
+                    {
+                        order.Add("detach");
+                        Interlocked.Increment(ref detached);
+                    });
+                });
+                Assert.True(stopping.Wait(TimeSpan.FromSeconds(5)), "停止任务未启动");
+                Assert.Equal(0, Volatile.Read(ref detached), "刷新仍持锁时不能摘链");
+            }
+            finally
+            {
+                release.Set();
+                Task.WhenAll(refresh, stop).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            }
+            Assert.Equal("attach,detach", string.Join(",", order));
+            Assert.False(gate.Run(() => true, composition: true));
+        });
+
+        Test("mpv 生命周期：销毁仅一次，迟到的控制和几何任务安全跳过", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            var destroyed = 0;
+            gate.StopComposition(() => { });
+            gate.Destroy(() => destroyed++);
+            gate.Destroy(() => destroyed++);
+            var late = Task.Run(() =>
+            {
+                Assert.Null(gate.Run<string>(() => throw new InvalidOperationException("不能访问已销毁的 mpv")));
+                Assert.False(gate.Run(() => true, composition: true));
+                gate.StopComposition(() => throw new InvalidOperationException("不能迟到摘链"));
+            });
+            late.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            Assert.Equal(1, destroyed);
+        });
+
+        Test("mpv 生命周期：回调异常仍释放锁，停止状态不会复活", () =>
+        {
+            var gate = new LibMpvLifetimeGate();
+            Assert.Throws<InvalidOperationException>(() => gate.Run<bool>(() => throw new InvalidOperationException()));
+            Assert.True(Task.Run(() => gate.Run(() => true)).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
+            Assert.Throws<InvalidOperationException>(() => gate.StopComposition(() => throw new InvalidOperationException()));
+            Assert.False(gate.Run(() => true, composition: true));
+            var destroyed = 0;
+            gate.Destroy(() => destroyed++);
+            Assert.Equal(1, destroyed);
+        });
+    }
+
+    // ---- 测试用数据 ------------------------------------------------------------
+
+    /// <summary>A 25-minute item of the given type; long enough that the run time never disqualifies it.</summary>
+    private static EmbyItem Watchable(string type, params ChapterInfo[] chapters) => new()
+    {
+        Id = "intro-1",
+        Name = "片头测试",
+        Type = type,
+        RunTimeTicks = TimeSpan.FromMinutes(25).Ticks,
+        Chapters = [.. chapters]
+    };
+
+    private static EmbyItem Episode(params ChapterInfo[] chapters) =>
+        Watchable(EmbyItemType.Episode, chapters);
+
+    private static EmbyItem QueueEpisode(string id, string? seasonId, int season, int number) => new()
+    {
+        Id = id,
+        Type = EmbyItemType.Episode,
+        SeriesId = "series1",
+        SeasonId = seasonId,
+        ParentIndexNumber = season,
+        IndexNumber = number
+    };
+
+    private static ChapterInfo Chapter(double seconds, string? name = null) => new()
+    {
+        StartPositionTicks = TimeSpan.FromSeconds(seconds).Ticks,
+        Name = name
+    };
+
+    private static (PlaybackPlanner Planner, AppSettings Settings) Planner(string? screenshots = null, string? fonts = null)
+    {
+        var settings = new AppSettings();
+
+        // 装机默认是「不开着色器」（用户 2026-09-05 定的），而这一批契约问的正是「开着的时候链有没有真的生效」，
+        // 所以这里明写开着。要问关掉那一档的测试自己再关回去。
+        settings.Shaders.Enabled = true;
+
+        return (new PlaybackPlanner(settings, new ShaderGroupResolver(settings.Shaders), null, screenshots, fonts), settings);
+    }
+
+    private static EmbyConnection Connection() => new(
+        new Uri("http://192.0.2.10:8896/emby/"),
+        "token-abc",
+        "user-1",
+        "我",
+        "果服",
+        DeviceIdentity.Create("device-1", "2.0.0"));
+
+    /// <summary>
+    /// 计划层用的票。输出尺寸给成 1440p 那块屏：<c>Source()</c> 是 1080p，于是这张票落在「实拍 · 微放大档」，
+    /// 也就是这台机器上最常见的那一格。
+    /// </summary>
+    private static PlaybackTicket Ticket() => new()
+    {
+        Item = Item("某部电影", id: "42"),
+        Source = Source(),
+        StartTicks = 0,
+        OutputWidth = 2560,
+        OutputHeight = 1440
+    };
+
+    /// <summary>1080p 电影：日/中双音轨、一条内封 ASS、一条外挂 SRT、一条无法使用的外挂 PGS。</summary>
+    private static MediaSource Source() => new()
+    {
+        Id = "src1",
+        Container = "mkv",
+        RunTimeTicks = 72_000_000_000,
+        MediaStreams =
+        [
+            Stream(0, "Video", width: 1920, height: 1080),
+            Stream(1, "Audio", language: "jpn"),
+            Stream(2, "Audio", language: "chi"),
+            Stream(3, "Subtitle", codec: "ass", language: "chi"),
+            Stream(4, "Subtitle", codec: "srt", language: "chi", external: true),
+            Stream(5, "Subtitle", codec: "pgssub", language: "eng", external: true)
+        ]
+    };
+
+    // 宽高都要给：放大倍数取的是宽比和高比里小的那个，只给高度就等于「片源尺寸未知」。
+    private static MediaSource Source1080p(double? frameRate = null) =>
+        SourceWith(Stream(0, "Video", width: 1920, height: 1080, frameRate: frameRate));
+
+    private static MediaSource Source4K() => SourceWith(Stream(0, "Video", width: 3840, height: 2160));
+
+    private static ShaderAutomationSettings Shaders(
+        bool enabled = true,
+        bool anime = true,
+        bool vintage = true,
+        GpuTier gpu = GpuTier.Low,
+        string manual = "") => new()
+        {
+            Enabled = enabled,
+            AutoAnimeProfile = anime,
+            RestoreVintageSources = vintage,
+            Gpu = gpu,
+            ManualGroup = manual
+        };
+
+    private static EmbyItem Item(
+        string name,
+        string id = "1",
+        string type = EmbyItemType.Movie,
+        List<string>? genres = null,
+        List<string>? tags = null) =>
+        new()
+        {
+            Id = id,
+            Name = name,
+            Type = type,
+            Genres = genres ?? [],
+            Tags = tags ?? []
+        };
+
+    private static PlaybackRequest Request(double start = 0) => new()
+    {
+        MediaUrl = new Uri("http://server/emby/Videos/1/stream.mkv?Static=true"),
+        Title = "片名",
+        StartSeconds = start
+    };
+
+    private static MediaSource SourceWith(params MediaStream[] streams) =>
+        new() { Id = "src1", Container = "mkv", MediaStreams = [.. streams] };
+
+    private static MediaStream Stream(
+        int index,
+        string type,
+        string? language = null,
+        string? displayLanguage = null,
+        string? codec = null,
+        string? title = null,
+        string? channelLayout = null,
+        int? channels = null,
+        int? width = null,
+        int? height = null,
+        double? frameRate = null,
+        bool external = false,
+        bool forced = false) =>
+        new()
+        {
+            Index = index,
+            Type = type,
+            Language = language,
+            DisplayLanguage = displayLanguage,
+            Codec = codec,
+            Title = title,
+            ChannelLayout = channelLayout,
+            Channels = channels,
+            Width = width,
+            Height = height,
+            AverageFrameRate = frameRate,
+            IsExternal = external,
+            IsForced = forced
+        };
+
+    /// <summary>Playback settings with the subtitle priority list under test and nothing else set.</summary>
+    private static PlaybackSettings Playback(IEnumerable<string> subtitles) =>
+        new() { SubtitleLanguages = [.. subtitles] };
+
+    /// <summary>The built mpv options as a lookup, so a test names the option it cares about.</summary>
+    private static Dictionary<string, string> Options(IReadOnlyList<KeyValuePair<string, string>> options)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in options) map[name] = value;
+        return map;
+    }
+
+    private static byte[] Bytes(string text) => Encoding.UTF8.GetBytes(text);
+
+    private static string Line(IEnumerable<string> arguments) => string.Join(' ', arguments);
+
+    private static int IndexOfPrefix(IReadOnlyList<string> arguments, string prefix)
+    {
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            if (arguments[index].StartsWith(prefix, StringComparison.Ordinal)) return index;
+        }
+
+        return -1;
+    }
+}

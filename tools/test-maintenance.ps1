@@ -48,12 +48,12 @@ Save-Script $badSyntax 'if ('
 Check ((Run-Script $checker @('-Path', $badSyntax)).ExitCode -ne 0) '脚本检查拒绝无效语法'
 
 $fixture = Join-Path $root 'publish fixture'
-foreach ($directory in @('tools', 'src\EmbyNian.Shell', 'assets\shaders', 'assets\mpv-runtime')) {
+foreach ($directory in @('tools', 'src\Momoka.Shell', 'assets\shaders', 'assets\mpv-runtime')) {
     $null = New-Item -ItemType Directory -Path (Join-Path $fixture $directory) -Force
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'publish.ps1') -Destination (Join-Path $fixture 'tools\publish.ps1')
 [System.IO.File]::WriteAllText((Join-Path $fixture 'Directory.Build.props'), '<Project><PropertyGroup><Version>0.0.0</Version></PropertyGroup></Project>')
-foreach ($file in @('src\EmbyNian.Shell\EmbyNian.Shell.csproj', 'libmpv-2.dll', 'assets\mpv-runtime\vulkan-1.dll')) {
+foreach ($file in @('src\Momoka.Shell\Momoka.Shell.csproj', 'libmpv-2.dll', 'assets\mpv-runtime\vulkan-1.dll')) {
     [System.IO.File]::WriteAllText((Join-Path $fixture $file), 'fixture')
 }
 Save-Script (Join-Path $fixture 'tools\verify-publish.ps1') '$global:LASTEXITCODE = 0'
@@ -68,7 +68,7 @@ if ($args -contains '--version') {
 $index = [array]::IndexOf($args, '-o')
 $destination = $args[$index + 1]
 $null = New-Item -ItemType Directory -Path $destination -Force
-[System.IO.File]::WriteAllText((Join-Path $destination 'EmbyNian.exe'), 'fixture')
+[System.IO.File]::WriteAllText((Join-Path $destination 'Momoka.exe'), 'fixture')
 $global:LASTEXITCODE = 0
 '@
 
@@ -83,7 +83,7 @@ foreach ($flag in @('-m:1', '-p:BuildInParallel=false', '-p:UseSharedCompilation
 $guard = Join-Path $fixture 'guard.ps1'
 Save-Script $guard @'
 function Get-Process {
-    [pscustomobject]@{ Path = (Join-Path $PSScriptRoot 'artifacts\publish\win-x64\EmbyNian.exe') }
+    [pscustomobject]@{ Path = (Join-Path $PSScriptRoot 'artifacts\publish\win-x64\Momoka.exe') }
 }
 try {
     & (Join-Path $PSScriptRoot 'tools\publish.ps1') -NoArchive -DotnetPath (Join-Path $PSScriptRoot 'dotnet.ps1')

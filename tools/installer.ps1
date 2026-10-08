@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
-$iss = Join-Path $PSScriptRoot 'installer\EmbyNian.iss'
+$iss = Join-Path $PSScriptRoot 'installer\Momoka.iss'
 $languages = Join-Path $PSScriptRoot 'installer\Languages\ChineseSimplified.isl'
 $publishRoot = Join-Path $repo 'artifacts\publish\win-x64'
 
@@ -42,8 +42,8 @@ $version = ($versionText -split '\.')[0..2] -join '.'
 $versionQuad = "$version.0"
 
 if ($SkipPublish) {
-    if (-not (Test-Path -LiteralPath (Join-Path $publishRoot 'EmbyNian.exe') -PathType Leaf)) {
-        throw "给了 -SkipPublish，但 $publishRoot 里没有 EmbyNian.exe。先跑一次不带这个开关的发布。"
+    if (-not (Test-Path -LiteralPath (Join-Path $publishRoot 'Momoka.exe') -PathType Leaf)) {
+        throw "给了 -SkipPublish，但 $publishRoot 里没有 Momoka.exe。先跑一次不带这个开关的发布。"
     }
     Write-Output "跳过发布，拿 $publishRoot 里现成的那一份（它可能不是刚构建的，见 -SkipPublish 的说明）。"
 } else {
@@ -57,11 +57,11 @@ if ($SkipPublish) {
 }
 
 # 安装包落在 artifacts 根上，跟 zip / msix 并排。
-Write-Output ("编译安装包 EmbyNian_windows-x64_{0}.exe ..." -f $version)
+Write-Output ("编译安装包 Momoka_windows-x64_{0}.exe ..." -f $version)
 & $ISCCPath ("/DMyAppVersion=$version", "/DVersionQuad=$versionQuad", $iss)
 if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败，退出码 $LASTEXITCODE。" }
 
-$setupPath = Join-Path $repo "artifacts\EmbyNian_windows-x64_$version.exe"
+$setupPath = Join-Path $repo "artifacts\Momoka_windows-x64_$version.exe"
 if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) { throw "编译说成功了，但找不到 $setupPath。" }
 $sizeMB = [math]::Round((Get-Item -LiteralPath $setupPath).Length / 1MB, 1)
 Write-Output "安装包已生成：$setupPath（$sizeMB MB）"

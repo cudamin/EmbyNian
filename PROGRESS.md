@@ -2,6 +2,64 @@
 
 最后更新：2026-10-08
 
+> **改名说明（2026-10-08）：本产品由 `EmbyNian` 改名为 `Momoka`。**
+> 起因是微软商店认证被拒：政策 10.1.1.1 判定「产品名含另一个软件或服务的名称」—— 预留名里的
+> `Emby`（Emby Media Server，Emby LLC 的产品名）通不过，10.1.1.4 又以「内容不能准确代表产品、
+> 可能让用户误认成另一个产品」同时记了一条。这是本产品的第四次改名：
+> `EmbyMpvClient`(v2) → `EmbyGearless`(v3) → `EmbyNian`(v4) → `Momoka`(v5)。
+> **本文件以下的历史条目、`docs/progress-2026-08.md`、`docs/progress-2026-09.md` 与 `work/` 里的
+> 记录一律保持原文不改** —— 它们记的是当时确实发生的事，把旧名替换掉会让日志说谎；要查旧名对应的
+> 现在叫什么，看这一句就够了。数据目录的迁移链（`EmbyMpvClient` → `EmbyGearless` → `EmbyNian` →
+> `Momoka`）见 `src/Momoka.Core/Infrastructure/AppPaths.cs` 的 `PriorRoots` 与 `LegacyDefaultRoot`。
+
+## 产品改名 EmbyNian → Momoka（2026-10-08，四道闸门全过，未提交）
+
+- **起因**：微软商店认证被拒（Store ID `9PMQ7FJ7HL4Q`，审核完成 2026-10-08，Status: Attention needed）。
+  两条都挂在政策 10.1.1「Distinct Function & Value; Accurate Representation」下：10.1.1.1 判「产品名含另一个
+  软件或服务的名称」（点名语言清单只有中文(中国)，因为只填了这一条），10.1.1.4 判「内容不能准确代表产品、
+  可能让用户误认成另一个产品」。根因是预留名里的 `Emby` —— Emby Media Server 是 Emby LLC 的产品名。
+  政策 10.1.1 原文要求「Your product title or name must be unique」「must not use a name, images, or any
+  other metadata that is the same as that of other products unless the product is also published by you」，
+  报告里那个短链指向的官方命名指南写得更直白：**Do not use trademarked names.**
+- **决定**：改名为 `Momoka`（用户 2026-10-08 令），且连内部一起改 —— 命名空间、exe 名、数据目录、技能目录名。
+  这是本产品第四次改名：`EmbyMpvClient`(v2) → `EmbyGearless`(v3) → `EmbyNian`(v4) → `Momoka`(v5)。
+- **范围**：586 项改动、541 项是重命名。目录/文件名 13 处（三个项目目录、三个 csproj、sln、installer `.iss`、
+  unblock 脚本、`embynian_shortcuts.lua`、9 个技能目录）；577 个文件里的文本，三种大小写形态各管一处：
+  `EmbyNian` 2144 处、`EMBYNIAN[...]`（给上游 uosc 打的改动标记，全仓统一）234 处、
+  `embynian`（Lua 模块名与 mpv 绑定名，生产者消费者必须一起改）469 处。
+- **刻意没改的三类**（都不是产品名，是外部/协议标识）：
+  - **GitHub 仓库地址**：6 处 `github.com/cudamin/EmbyNian` 保持原样 —— 其中 `CLAUDE.md` 那条是 git
+    remote 地址、`PRIVACY.md` 两条是**交给商店的隐私政策链接**；认证期间改仓库名会让已交的 URL 跟着变。
+    （sed 一度把这 6 处一起改了，已逐处改回。）
+  - **数据目录迁移链**：`PriorRoots` 加入 `EmbyNian` 作候选（顺序 `EmbyNian` → `EmbyGearless` →
+    `EmbyMpvClient`），`LegacyDefaultRoot` 同步，`SettingsTests` 断言跟到 `roots[^3]` —— 旧目录里的设置、
+    DPAPI 令牌、海报与着色器缓存照旧迁得过来。
+  - **`DpapiSecretProtector` 的熵 `EmbyMpvClient.Profile.v1`**：改了老密码就解不开。
+- **超出纯改名的一处补强**：`Program.cs` 的单实例互斥原来只认 `EmbyMpvClient.SingleInstance.v2`，改名后
+  新构建认不出**旧 EmbyNian 还在跑**，而两个 shell 共写 `settings.json`（那段注释写的正是这个失败）。
+  改成 `LegacyInstances` 表，把 `Local\EmbyNian.SingleInstance.v3` / `.Activate.v3` 一并纳入，
+  `LegacyInstanceIsRunning()` 返回命中的那个事件名。
+- **一处静默回归，本轮抓到并修掉**：`SelfCheckRun.Create` 从「生产数据目录」拷 `settings.json`，而改名后
+  生产目录是空的 `%LOCALAPPDATA%\Momoka`，于是静默走 `NewDefaults()` —— 没有账号、也没有存下的窗口几何，
+  自检永远登不进去，**182 项里 100 项依赖登录的检查整批不发生，报告却照旧说自己跑完了**（首轮实测
+  「85 项、1 失败、100 消失」，失败那条「窗口命令按钮」是窗口几何连带的，不是独立问题）。修法：新增
+  `AppPaths.ResolveProfile()`，按「哪份目录里真有 settings.json」找源目录 —— 自检不许迁移（不能写生产
+  目录），所以只能找；`Program.cs` 的自检入口改用它，并补了一条覆盖「只有旧目录有设置」「生产目录自己
+  有了就优先它」「一份都没有时答第一个候选」三种情形的测试。
+- **验证（四道闸门全过）**：改名前先跑一遍基线以便归因 —— 构建 0 警 0 错、`format whitespace` 通过、
+  `git diff --check` 干净、单测 1605/1605。改名后：restore 通过、全方案构建 **0 警 0 错**、
+  `format whitespace` 561 文件 0 需改、`git diff --check` 干净、单测 **1606/1606（0 失败、0 跳过）**、
+  发布验证 **533 文件 301.8 MB**（11 个 GLSL、4 个 HOOK 着色器逐文件校验）、自检 **182 项 0 失败、
+  消失 0、降级 0、新增 0**（`artifacts/selfcheck/run-b44f642327b1423e8ad60705cb626899`，登录态
+  「已登录 donxuelian @ 果服」、服务器 4.10.0.40、结果「全部通过」）。产物 `Momoka.exe`，桌面快捷方式
+  已刷新为 `Momoka.lnk`。日志 `work/momoka-rename-*.txt`、`work/momoka-fix-*.txt`，基线 `work/commit-baseline-*.txt`。
+- **未覆盖 / 待办**：商店包未重打 —— `tools/store-identity.json` 的 `identityName` 与 `packageFamilyName`
+  **故意置空**（sed 猜出来的值是错的），等用户在 Partner Center 预留 `Momoka` 后把「查看产品标识」里的
+  真值抄回来；置空状态下 `publish.ps1 -Store` 会以「缺字段」中止，这是要的。本地自签证书仍是
+  `CN=EmbyNian` 而 `sign-release.ps1` 找的是 `CN=Momoka`，下次签名前要重跑一次 `-Setup`。安装包的
+  `AppId` GUID 未动（升级链不断），但升级用户会被 Inno 装回旧文件夹名。桌面上的旧 `EmbyNian.lnk`
+  已是死链接（指向已删除的 exe），未擅自删除。
+
 ## 音频输出技能与采集报告修复（2026-10-08，已验证，未提交）
 
 - 在当前主工作树修复 `.claude/skills/embynian-audio-output`，并同步 `docs/开发与验证.md`；本会话独占写入，子代理只读复核，保留其他已有改动。技能补齐加载期 `StepVolumeAsync` → `AdjustVolumeAsync` 相对调节与读回护栏、明确该分支尚无专门正式测试；校准菜单共享常量、DRC适用范围、DLL/Python前提、相邻技能链接与字幕探针的空设备/无播放服务边界。

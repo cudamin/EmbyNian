@@ -1,4 +1,4 @@
-EmbyNian bundled shader notices
+Momoka bundled shader notices
 
 These shaders are distributed as editable GLSL/HOOK source files in the adjacent
 subdirectories. Their individual copyright and license notices are retained in

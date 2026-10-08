@@ -1,0 +1,22 @@
+<UserControl x:Class="Momoka.Shell.Views.MoviePilotSubscriptionEditor"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer MaxHeight="600" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="12" Padding="0,0,12,0">
+            <TextBlock x:Name="IdentityText" Style="{StaticResource EgCaptionStyle}" TextWrapping="Wrap" />
+            <TextBox x:Name="KeywordInput" Header="搜索关键词" />
+            <TextBox x:Name="IncludeInput" Header="包含规则（正则表达式）" />
+            <TextBox x:Name="ExcludeInput" Header="排除规则（正则表达式）" />
+            <TextBox x:Name="QualityInput" Header="质量规则" PlaceholderText="留空使用 MoviePilot 默认规则" />
+            <TextBox x:Name="ResolutionInput" Header="分辨率规则" PlaceholderText="例如 1080p|2160p" />
+            <TextBox x:Name="EffectInput" Header="特效规则" PlaceholderText="例如 HDR|DV" />
+            <Grid x:Name="EpisodeFields" ColumnSpacing="12">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <NumberBox x:Name="StartInput" Header="起始集（0 表示默认）" Minimum="0" Maximum="10000" SpinButtonPlacementMode="Compact" />
+                <NumberBox x:Name="TotalInput" Grid.Column="1" Header="总集数" Minimum="0" Maximum="10000" SpinButtonPlacementMode="Compact" />
+            </Grid>
+            <TextBlock Text="保存只更新改动的设置，站点、下载器及其他订阅选项沿用 MoviePilot 当前配置。" Style="{StaticResource EgCaptionStyle}" TextWrapping="Wrap" Foreground="{ThemeResource EgTextFaintBrush}" />
+            <TextBlock x:Name="ValidationText" Style="{StaticResource EgCaptionStyle}" TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

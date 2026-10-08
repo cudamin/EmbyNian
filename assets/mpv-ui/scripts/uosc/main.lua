@@ -1,125 +1,125 @@
 --[[ uosc | https://github.com/tomasklaen/uosc ]]
 --
--- ┌─ EmbyNian 内置分支 ─────────────────────────────────────────────────────────
+-- ┌─ Momoka 内置分支 ─────────────────────────────────────────────────────────
 -- │ 只随独占模式（libmpv 自建视频窗口）由宿主 C# LibMpvBackend 以 load-script 装载；
 -- │ 集成模式不装载任何 Lua。宿主负责 osc=no、osd-fonts-dir 与 load-script，其余照旧。
 -- │ 基线：上游 uosc 5.12.0（见下方 uosc_version）。
 -- │
--- │ 补丁清单（升级 uosc 时按此逐条重打）。每处改动都用 `EMBYNIAN[槽名]` 标记，
+-- │ 补丁清单（升级 uosc 时按此逐条重打）。每处改动都用 `MOMOKA[槽名]` 标记，
 -- │ 全仓一条命令即可枚举全部落点：
--- │     grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
+-- │     grep -rn "MOMOKA\[" assets/mpv-ui/scripts/uosc
 -- │
 -- │   main.lua（本文件）
--- │     EMBYNIAN[host]          宿主通道：embynian_notify 与 embynian-ready 握手
--- │     EMBYNIAN[pkgpath]       模块搜索路径自举（load-script 不加 package.path）
--- │     EMBYNIAN[controls]      控制条默认值与排布（换集/选集/版本/画面菜单顶替播放列表入口）
--- │     EMBYNIAN[topbar]        无边框顶栏（系统标题栏不存在，顶栏画窗口按钮）
--- │     EMBYNIAN[color]         用户原配色（Fluent 深色一档）
--- │     EMBYNIAN[topbar-pin]    右上角置顶按钮的状态来源：state.ontop 初值＋ontop 属性的观察器
+-- │     MOMOKA[host]          宿主通道：momoka_notify 与 momoka-ready 握手
+-- │     MOMOKA[pkgpath]       模块搜索路径自举（load-script 不加 package.path）
+-- │     MOMOKA[controls]      控制条默认值与排布（换集/选集/版本/画面菜单顶替播放列表入口）
+-- │     MOMOKA[topbar]        无边框顶栏（系统标题栏不存在，顶栏画窗口按钮）
+-- │     MOMOKA[color]         用户原配色（Fluent 深色一档）
+-- │     MOMOKA[topbar-pin]    右上角置顶按钮的状态来源：state.ontop 初值＋ontop 属性的观察器
 -- │                             （按钮本体与两档画法在 TopBar.lua，同一个槽名 —— 升级 uosc 时两处都要重打）
--- │     EMBYNIAN[timeline-parity] 章节别名与集成 TimelineChapterMap 一致
--- │     EMBYNIAN[drag-cancel]   cursor.lua 保留原生拖窗 canceled 松键，不把取消算成点击
--- │     EMBYNIAN[autoload]      autoload 强制 false（defaults 与读配置后各一处）
--- │     EMBYNIAN[fileend]       handle_file_end / file_end_timer 整块删除
--- │     EMBYNIAN[osddim]        d3d11 起播画布尺寸兜底观察
--- │     EMBYNIAN[ui-bind]       脚本绑定叫 embynian-ui-*，宿主消息叫 embynian-*，两套名字不许同名
--- │     EMBYNIAN[episode]       embynian-ui-* 三个绑定与裁剪说明
--- │     EMBYNIAN[version]       换版本的第四个绑定（embynian-ui-versions）：≡ 菜单里那一行，
+-- │     MOMOKA[timeline-parity] 章节别名与集成 TimelineChapterMap 一致
+-- │     MOMOKA[drag-cancel]   cursor.lua 保留原生拖窗 canceled 松键，不把取消算成点击
+-- │     MOMOKA[autoload]      autoload 强制 false（defaults 与读配置后各一处）
+-- │     MOMOKA[fileend]       handle_file_end / file_end_timer 整块删除
+-- │     MOMOKA[osddim]        d3d11 起播画布尺寸兜底观察
+-- │     MOMOKA[ui-bind]       脚本绑定叫 momoka-ui-*，宿主消息叫 momoka-*，两套名字不许同名
+-- │     MOMOKA[episode]       momoka-ui-* 三个绑定与裁剪说明
+-- │     MOMOKA[version]       换版本的第四个绑定（momoka-ui-versions）：≡ 菜单里那一行，
 -- │                             外加控制条上那颗「版本」按钮（2026-09-23 起按需露面，见下一条）。
--- │     EMBYNIAN[version-count] 宿主 → uosc 的通道：embynian-version-count <几版> 写进
+-- │     MOMOKA[version-count] 宿主 → uosc 的通道：momoka-version-count <几版> 写进
 -- │                             state.has_many_versions，控制条上那颗「版本」按钮按它露面 ——
 -- │                             只有一版时它不在屏上。uosc 的控件表本来是静态的（原来这里写着
 -- │                             「写不出有第二版才露这种条件」），照的正是它自己 has_many_edition
 -- │                             那一路的形状：has_ 开头的条件读 state 表，谁改状态谁 trigger
 -- │                             dispositions。
--- │     EMBYNIAN[episode-count] 宿主 → uosc 的通道：embynian-episode-count <0/1> 写进
+-- │     MOMOKA[episode-count] 宿主 → uosc 的通道：momoka-episode-count <0/1> 写进
 -- │                             state.has_episodes，控制条上那颗「选集」按钮按它露面 ——
 -- │                             播放电影（非单集）时它不在屏上（2026-09-26 用户令「播放电影的时候
 -- │                             不要显示这个按钮」）。与 version-count 同一条路。
--- │     EMBYNIAN[picture-menu]  第五个绑定（embynian-ui-picture-menu）：独占模式右键/菜单键，
+-- │     MOMOKA[picture-menu]  第五个绑定（momoka-ui-picture-menu）：独占模式右键/菜单键，
 -- │                             以及控制条上那颗「画面菜单」按钮 —— 三者同一份 PlayerMenuCatalog。
--- │     EMBYNIAN[skip-button]   宿主 → uosc 的通道：embynian-skip-offer <文案|空> 驱动一颗右下角的
+-- │     MOMOKA[skip-button]   宿主 → uosc 的通道：momoka-skip-offer <文案|空> 驱动一颗右下角的
 -- │                             「跳过片头/片尾」按钮（元件在 elements/SkipButton.lua）；点它回推
--- │                             embynian-skip-take（宿主 TakeSkip）。集成模式那颗是 XAML 的，独占
+-- │                             momoka-skip-take（宿主 TakeSkip）。集成模式那颗是 XAML 的，独占
 -- │                             模式画面在 mpv 窗口里、那颗不在屏上，故由宿主把 offer 推过来画。
 -- │                             start-file 时清一次（换集途中不挂上一集的 offer）。
 -- │                             **尺寸与集成那颗同一个观感**（2026-09-30 用户令「缩小图标跳过按钮
 -- │                             两倍」＋「参考集成模式的跳过按钮修改独占模式的跳过按钮」）。
--- │     EMBYNIAN[skip-keys]     同上那条 offer 的**第二半**（2026-09-30 用户报「按回车和 esc 确认
+-- │     MOMOKA[skip-keys]     同上那条 offer 的**第二半**（2026-09-30 用户报「按回车和 esc 确认
 -- │                             跳过不生效」）：offer 立着那一段，SkipButton 元件用 keybind 把
--- │                             ENTER/KP_ENTER/ESC 借到本脚本的两条无默认键绑定上（embynian-ui-skip-take /
--- │                             embynian-ui-skip-dismiss，见下面的 bind_command），收摊时把原绑定
+-- │                             ENTER/KP_ENTER/ESC 借到本脚本的两条无默认键绑定上（momoka-ui-skip-take /
+-- │                             momoka-ui-skip-dismiss，见下面的 bind_command），收摊时把原绑定
 -- │                             keybind 按回去（随包内核没有 keyunbind，2026-10-02 实测，还原写法
--- │                             见 SkipButton 的 EMBYNIAN[skip-keys-restore]）。独占模式的键盘归
+-- │                             见 SkipButton 的 MOMOKA[skip-keys-restore]）。独占模式的键盘归
 -- │                             mpv（input-default-bindings=yes），Esc 本来
 -- │                             是内建的退全屏/退出、回车没有绑定，不借这两把键，提示立着按它们
 -- │                             什么都不会发生。集成模式那半在 shell 侧（PlayerPage 的 Root 兜底
 -- │                             + Win32 钩子），不走本通道。
--- │     EMBYNIAN[topbar-subline] 宿主 → uosc 的通道：embynian-subline <分辨率·视频编码·音频格式·组名|空>
+-- │     MOMOKA[topbar-subline] 宿主 → uosc 的通道：momoka-subline <分辨率·视频编码·音频格式·组名|空>
 -- │                             写进顶栏副标题（第二行），空串＝收起。集成模式那一行是 XAML 的 SubtitleBox，
 -- │                             独占模式由 uosc 顶栏画在返回按钮正下方 —— 两模式同源同显。
--- │     EMBYNIAN[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
+-- │     MOMOKA[click-pause]   轻点空白画面切换暂停的动作（命中区在 lib/utils.lua 的 render 里）；
 -- │                             含双击闸：单击押后到 mpv 的双击窗口外才证实，第二拍「按下」即撤
 -- │                             （撤在按下不撤在松开——独占全屏切换会把光标挪走、松开过不了位置闸）
--- │     EMBYNIAN[wheel-volume]  空白画面滚轮＝音量（no-osd，只闪右侧音量条，不落 mpv 的 OSD）
+-- │     MOMOKA[wheel-volume]  空白画面滚轮＝音量（no-osd，只闪右侧音量条，不落 mpv 的 OSD）
 -- │   elements/SkipButton.lua
--- │     EMBYNIAN[skip-button]   「跳过片头/片尾」按钮元件本体（右下角常驻可见，offer 在才画）
+-- │     MOMOKA[skip-button]   「跳过片头/片尾」按钮元件本体（右下角常驻可见，offer 在才画）
 -- │   elements/Controls.lua
--- │     EMBYNIAN[episode]       控制条快捷项映射到上面的绑定
--- │     EMBYNIAN[controls]      控制条新加的两项快捷项：版本、画面菜单
+-- │     MOMOKA[episode]       控制条快捷项映射到上面的绑定
+-- │     MOMOKA[controls]      控制条新加的两项快捷项：版本、画面菜单
 -- │   elements/Menu.lua
--- │     EMBYNIAN[menu-anchor]   宿主推来的菜单（画面/选集/版本）带 embynian_anchor 时在光标处弹出、
+-- │     MOMOKA[menu-anchor]   宿主推来的菜单（画面/选集/版本）带 momoka_anchor 时在光标处弹出、
 -- │                             不屏幕居中、不压暗幕布 —— 弹出方式与集成模式的右键/按钮浮层一致
--- │     EMBYNIAN[menu-style]    菜单界面整把复刻参考项目右键菜单（用户令 2026-10-07 晚「参考这个项目的
+-- │     MOMOKA[menu-style]    菜单界面整把复刻参考项目右键菜单（用户令 2026-10-07 晚「参考这个项目的
 -- │                             lua 脚本右键菜单界面修改本项目独占模式的右键菜单界面（只复刻界面，
 -- │                             不抄功能选项）」）：#2C2C2C 不透明底板＋圆角 5＋0.5 白描边、行高＝
 -- │                             字号×1.2（fs20）、悬停行 #353535 白字、hint 全亮右对齐、分隔线
 -- │                             #3E3E3E 上下各让 4；子面板贴父面板右缘零缝、顶边对齐父项行、父面板
 -- │                             不动；无标题/脚注/最小宽。缩放仍走 state.scale（DPI，全屏/最大化
 -- │                             ×1.3 —— 同日早些「大小跟集成模式一致」那道令保留的部分）。逐项映射
--- │                             见本文件选项区 EMBYNIAN[menu-style]，几何与上色在 Menu.lua 同名槽
+-- │                             见本文件选项区 MOMOKA[menu-style]，几何与上色在 Menu.lua 同名槽
 -- │   elements/TopBar.lua
--- │     EMBYNIAN[topbar-back]   左上角返回按钮：退出 mpv＝回到外壳详情页（与集成模式左上角返回同位同义）
--- │     EMBYNIAN[topbar-pin]    右上角置顶按钮（push_pin）：点它 cycle ontop（置顶这块 mpv 窗口）；状态画在
+-- │     MOMOKA[topbar-back]   左上角返回按钮：退出 mpv＝回到外壳详情页（与集成模式左上角返回同位同义）
+-- │     MOMOKA[topbar-pin]    右上角置顶按钮（push_pin）：点它 cycle ontop（置顶这块 mpv 窗口）；状态画在
 -- │                             图钉的姿势上 —— 未置顶斜 35°、置顶立正（用户令 2026-09-29「置顶不要长亮」，
--- │                             见 render 里 EMBYNIAN[topbar-pin-tilt]）；状态由 main.lua 的 ontop 观察器送进来
--- │     EMBYNIAN[ontop-follows-pause] 置顶跟着播放状态走：在播 ontop yes、暂停 no（用户令 2026-09-29
+-- │                             见 render 里 MOMOKA[topbar-pin-tilt]）；状态由 main.lua 的 ontop 观察器送进来
+-- │     MOMOKA[ontop-follows-pause] 置顶跟着播放状态走：在播 ontop yes、暂停 no（用户令 2026-09-29
 -- │                             「播放时自动置顶，暂停时自动取消置顶」），换片由 file-loaded 补一拍，
 -- │                             空闲不跟；手动 cycle ontop 仍即时生效，只撑到下一条边沿
--- │     EMBYNIAN[topbar-back-glass] 返回键可见底与标题那块玻璃**同形同色**：都高 size-2*margin、同从
+-- │     MOMOKA[topbar-back-glass] 返回键可见底与标题那块玻璃**同形同色**：都高 size-2*margin、同从
 -- │                             self.ay+margin 起；返回键那一块四周各让 margin（左缘＝窗口左缘＋margin，
 -- │                             用户令 2026-09-28 更晚「左边的空隙要和上面的一样大」）；静止档不透明度取
 -- │                             config.opacity.title（用户令 2026-09-28 晚「返回按钮的背景要和标题的
 -- │                             背景一致」）。那条「返回键与标题的间隙＝下面那条缝」同批收紧到 title_spacing＝1。
--- │     EMBYNIAN[topbar-subline-italic] 副标题（第二行）走斜体（用户令 2026-09-28 晚「标题下方的视频
+-- │     MOMOKA[topbar-subline-italic] 副标题（第二行）走斜体（用户令 2026-09-28 晚「标题下方的视频
 -- │                             元数据改为斜体」）；顶栏每一行的玻璃回到 uosc 自家「上下各让 margin」那一条
 -- │                             （用户令 2026-09-28 晚「把标题的大小改回跟 mpv_config 项目一样大小」）。
--- │     EMBYNIAN[topbar-subline-dim] 副标题字色从与标题同色（bgt）改成浅灰 c8c8c8（用户令 2026-09-28
+-- │     MOMOKA[topbar-subline-dim] 副标题字色从与标题同色（bgt）改成浅灰 c8c8c8（用户令 2026-09-28
 -- │                             更晚「元数据的字体加点灰色」）；左缘跟返回键玻璃同一条（窗口左缘＋margin）。
--- │     EMBYNIAN[topbar-subline-branch] 副标题前面缀「└ 」树干（用户令 2026-09-28 更晚「把这个添加到元数据
+-- │     MOMOKA[topbar-subline-branch] 副标题前面缀「└ 」树干（用户令 2026-09-28 更晚「把这个添加到元数据
 -- │                             的前面」；照参考项目 uosc 给章节行加的那个前缀）。
--- │     EMBYNIAN[topbar-subline] 顶栏副标题（第二行）由宿主经 embynian-subline 直接写进来（set_subline），
+-- │     MOMOKA[topbar-subline] 顶栏副标题（第二行）由宿主经 momoka-subline 直接写进来（set_subline），
 -- │                             挂在返回按钮正下方；顶栏的 top_bar_alt_title 选项留空、不吃模板
 -- │                             —— 与集成模式那一行同源同显。
--- │     EMBYNIAN[topbar-no-chapter] 标题下方的「当前章节＋剩余时间」一行整段撤下（用户令 2026-09-28
+-- │     MOMOKA[topbar-no-chapter] 标题下方的「当前章节＋剩余时间」一行整段撤下（用户令 2026-09-28
 -- │                             「去掉独占模式下左上角标题下方的章节和时间」）；章节菜单（控制条那颗）照旧。
 -- │   elements/Volume.lua
--- │     EMBYNIAN[vol-osd]       音量条自己改音量也走 no-osd（拖条/滚条不再冒 mpv 的 OSD）
+-- │     MOMOKA[vol-osd]       音量条自己改音量也走 no-osd（拖条/滚条不再冒 mpv 的 OSD）
 -- │   lib/cursor.lua
--- │     EMBYNIAN[cursor-hold]   指针压在控件本体的命中区上（进度条、控制条/顶栏那一排按钮、音量条）时把
+-- │     MOMOKA[cursor-hold]   指针压在控件本体的命中区上（进度条、控制条/顶栏那一排按钮、音量条）时把
 -- │                             cursor-autohide 钉成 no，离开时还原 —— 用户令 2026-09-29
 -- │                             「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，
 -- │                             触发渐变的时候不隐藏控件，但是要隐藏鼠标」
 -- │                             （控件的显隐本来就是位置驱动的，不用改；见该处的长注与
 -- │                             work/probe-hold-visible-*.txt）
 -- │   lib/utils.lua
--- │     EMBYNIAN[nav-removed]   目录/播放列表导航与删文件整块删除
--- │     EMBYNIAN[click-pause]   每帧登记「轻点暂停」的兜底命中区（登记顺序＝最低优先级）
--- │     EMBYNIAN[wheel-volume]  同一处登记「滚轮音量」的兜底命中区（同上）
+-- │     MOMOKA[nav-removed]   目录/播放列表导航与删文件整块删除
+-- │     MOMOKA[click-pause]   每帧登记「轻点暂停」的兜底命中区（登记顺序＝最低优先级）
+-- │     MOMOKA[wheel-volume]  同一处登记「滚轮音量」的兜底命中区（同上）
 -- │   lib/menus.lua
--- │     EMBYNIAN[subdl-removed] 在线字幕下载整块删除
+-- │     MOMOKA[subdl-removed] 在线字幕下载整块删除
 -- │
--- │ 宿主消息契约（embynian-* 值域）与验证步骤见 assets/mpv-ui/README.md。
+-- │ 宿主消息契约（momoka-* 值域）与验证步骤见 assets/mpv-ui/README.md。
 -- └─────────────────────────────────────────────────────────────────────────────
 local uosc_version = '5.12.0'
 
@@ -127,19 +127,19 @@ mp.commandv('script-message', 'uosc-version', uosc_version)
 
 mp.set_property('osc', 'no')
 
---[[ EMBYNIAN[host] — 宿主通道（握手 + 命令转发） ]]
+--[[ MOMOKA[host] — 宿主通道（握手 + 命令转发） ]]
 
 -- 与 C# 宿主（LibMpvBackend/LibMpvHandle）的通道：宿主在 MPV_EVENT_CLIENT_MESSAGE 上
--- 只认第一个参数以 `embynian-` 开头的 script-message，其余一律忽略。uosc 对 mpv 自身的
+-- 只认第一个参数以 `momoka-` 开头的 script-message，其余一律忽略。uosc 对 mpv 自身的
 -- 控制（拖进度条、换轨、全部菜单命令）直接走 mpv 命令，不经过宿主 —— 宿主通过属性观察
 -- 收到结果，不需要通知。装载完成先握手：宿主据此在日志里证明 Lua UI 活着。
 --
--- ⚠️ 发给宿主的 key 不许与任何脚本绑定同名（见下方 EMBYNIAN[ui-bind]）：mpv 把 script-message
--- 也派给同名绑定，同名＝这条消息把自己再叫醒一次，自激成刷屏。绑定统一叫 embynian-ui-…。
-function embynian_notify(key, value) mp.commandv('script-message', key, value) end
-embynian_notify('embynian-ready', uosc_version)
+-- ⚠️ 发给宿主的 key 不许与任何脚本绑定同名（见下方 MOMOKA[ui-bind]）：mpv 把 script-message
+-- 也派给同名绑定，同名＝这条消息把自己再叫醒一次，自激成刷屏。绑定统一叫 momoka-ui-…。
+function momoka_notify(key, value) mp.commandv('script-message', key, value) end
+momoka_notify('momoka-ready', uosc_version)
 
--- EMBYNIAN[pkgpath] — 模块搜索路径自举：mpv 只在「配置目录扫描」装载脚本时把脚本目录加进 package.path；
+-- MOMOKA[pkgpath] — 模块搜索路径自举：mpv 只在「配置目录扫描」装载脚本时把脚本目录加进 package.path；
 -- 宿主经 load-script/scripts 选项按绝对路径装载时不会加，require('lib/std') 找不到
 -- 同目录的模块（实测 2026-09-19：握手能发出来纯因它在第一个 require 之前）。
 -- 不能用 mp.get_script_directory()——实测 --script=<文件> 装载下它返回空；直接从
@@ -181,22 +181,22 @@ defaults = {
 	timeline_cache = true,
 	timeline_heatmap = 'overlay',
 
-	-- EMBYNIAN[controls] — 控制条默认值与排布（2026-09-23 用户令两轮；09-24 再一轮：字幕与音频互换；
+	-- MOMOKA[controls] — 控制条默认值与排布（2026-09-23 用户令两轮；09-24 再一轮：字幕与音频互换；
 	--   09-27 再一轮：撤下左下那颗画面菜单按钮）：
 	--   左下：上一集、下一集、统计、章节（有章节时）、**选集、版本**；
 	--   中下：上一章节、倍速、下一章节（有章节时）；
 	--   右下：字幕、audio、（空一个按钮宽）、全屏。
 	-- 与旧版不同处，各有原因：
-	--   · **左下角那颗 `embynian-ui-picture-menu` 撤下了**（2026-09-27 用户令「移除集成模式和独占模式左下角的
+	--   · **左下角那颗 `momoka-ui-picture-menu` 撤下了**（2026-09-27 用户令「移除集成模式和独占模式左下角的
 	--     画面按钮」）。那颗开的是**画面菜单** —— 与集成模式的「更多」按钮、独占模式的右键同一份
 	--     PlayerMenuCatalog（09-23 用户令「改成右键画面呼出的那个菜单」）。撤下来不是删功能：右键画面那一棵
-	--     照旧在（uosc 自己的右键菜单），绑定 `uosc/embynian-ui-picture-menu` 与宿主通道
-	--     `embynian-picture-menu` 都还在、只是控制条上不再有它的入口。uosc 自带的 ≡ 菜单也照旧。
+	--     照旧在（uosc 自己的右键菜单），绑定 `uosc/momoka-ui-picture-menu` 与宿主通道
+	--     `momoka-picture-menu` 都还在、只是控制条上不再有它的入口。uosc 自带的 ≡ 菜单也照旧。
 	--   · **选集与版本挪到左下**（用户令「把独占模式里的选集和选版本的按钮移动到左下」，左→右次序
 	--     按原话：选集倒数第二个、版本最后一个）；**版本那颗按需露面**（<has_many_versions>，
-	--     只有一版时整颗不在屏上）—— 见文件头的 EMBYNIAN[version-count]。**选集那颗也按需露面**
+	--     只有一版时整颗不在屏上）—— 见文件头的 MOMOKA[version-count]。**选集那颗也按需露面**
 	--     （2026-09-26 用户令「播放电影的时候不要显示这个按钮」：门 <has_episodes>，宿主的
-	--     embynian-episode-count 写它，播电影＝0＝整颗不在屏上）—— 见文件头的 EMBYNIAN[episode-count]。
+	--     momoka-episode-count 写它，播电影＝0＝整颗不在屏上）—— 见文件头的 MOMOKA[episode-count]。
 	--   · **音频与字幕往左让，与全屏之间空出一个按钮宽**（用户令「把字幕和音轨按钮往左移动一些，
 	--     让音轨按钮和全屏/窗口按钮相隔一个按钮的空位」）：那颗 `gap:1` 就是那个空位 —— uosc 的 gap
 	--     是本项宽度的倍数（默认 0.3），写 1 正好一个按钮。**2026-09-24 用户令「把独占模式下字幕和
@@ -206,12 +206,12 @@ defaults = {
 --     向左移一个键的空位（参考独占模式）」：`PlayerPage.xaml` 那两颗也是字幕在前、音频在后，音频与全屏
 --     之间同样空一个按钮格 —— 空位写在 AudioButton 的右边距上）。**音频**照旧不带 <has_many_audio> 条件（只有一条音轨
 	--     时那颗按钮也要在；简写自带的 #audio>1 徽章照旧：一轨以上才在角上标数字）。
-	--   · 「版本」按钮是 Emby 的媒体源切换（embynian-ui-versions → 宿主把这一条的媒体源推回菜单），
+	--   · 「版本」按钮是 Emby 的媒体源切换（momoka-ui-versions → 宿主把这一条的媒体源推回菜单），
 	--     不是上游的 <has_many_edition>editions（mpv 自己的剪辑版本，那颗已撤 —— 两颗都叫「版本」
 	--     只会让人点错；要看 mpv 的剪辑版本，≡ 菜单的「工具 → 剪辑版本」还在）。
 	-- 播放列表/目录导航、打开文件、单曲循环（宿主裁定连播归宿主）、流画质（外部脚本）不设。
 	controls =
-	'<video,audio>embynian-ui-prev,<video,audio>embynian-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,<has_episodes>embynian-ui-episodes,<has_many_versions>embynian-ui-versions,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,<video,audio>subtitles,audio,gap:1,fullscreen',
+	'<video,audio>momoka-ui-prev,<video,audio>momoka-ui-next,command:analytics:script-binding stats/cycle-stats?统计：播放统计 → 着色器统计 → 关闭,<has_chapter>chapters,<has_episodes>momoka-ui-episodes,<has_many_versions>momoka-ui-versions,space,<has_chapter>command:skip_previous:add chapter -1?上一章节,<video,audio>speed,<has_chapter>command:skip_next:add chapter 1?下一章节,space,<video,audio>subtitles,audio,gap:1,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
@@ -227,7 +227,7 @@ defaults = {
 	speed_step = 0.1,
 	speed_step_is_factor = false,
 
-	-- EMBYNIAN[menu-style] — 界面整把复刻参考项目（C:\mpv_config-2026.08.12）右键菜单的样子：
+	-- MOMOKA[menu-style] — 界面整把复刻参考项目（C:\mpv_config-2026.08.12）右键菜单的样子：
 	-- 2026-10-07 晚用户令「参考这个项目的 lua 脚本右键菜单界面修改本项目独占模式的右键菜单界面
 	-- （只复刻界面，不抄功能选项）」，随图实测定数（截图逐像素量过，见 work/ref-menu/）：
 	--   · 底板不透明 #2C2C2C、圆角 5、0.5 白细描边；行高＝字号×(1+gap)=字号×1.2（行与行贴着排，
@@ -265,7 +265,7 @@ defaults = {
 	-- 用户原配置：输入即搜索会锁死「同键关闭菜单」，嵌入后保持 no
 	menu_type_to_search = false,
 
-	-- EMBYNIAN[topbar] — mpv 窗口以 border=no 无边框起播（宿主固定），系统标题栏不再存在——uosc 顶栏顶上：
+	-- MOMOKA[topbar] — mpv 窗口以 border=no 无边框起播（宿主固定），系统标题栏不再存在——uosc 顶栏顶上：
 	-- 标题＋最小化/最大化/关闭画进画面（右上），与用户原 mpv 配置同款。关闭=quit，宿主
 	-- 把它当停止处理。
 	top_bar = 'no-border',
@@ -279,7 +279,7 @@ defaults = {
 
 	window_border_size = 0,
 
-	-- EMBYNIAN[autoload] — 宿主拥有「播什么、播完去哪」（选集/连播都走 Emby），uosc 的目录续播一律关死，
+	-- MOMOKA[autoload] — 宿主拥有「播什么、播完去哪」（选集/连播都走 Emby），uosc 的目录续播一律关死，
 	-- 也不再让它反过来改 keep-open。
 	autoload = false,
 	shuffle = false,
@@ -290,10 +290,10 @@ defaults = {
 	font_scale = 1,
 	text_border = 1.2,
 	border_radius = 2,
-	-- EMBYNIAN[color] — 用户原配色（Fluent 深色一档），与 EmbyNian 外壳的五套深色主题同族
+	-- MOMOKA[color] — 用户原配色（Fluent 深色一档），与 Momoka 外壳的五套深色主题同族
 	color = 'foreground=FFFBFE,foreground_text=1C1B1F,background=1C1B1F,background_text=FFFBFE',
-	-- EMBYNIAN[menu-style] — menu/submenu 两档自 2026-09-29 起不再被菜单吃（菜单底板改不透明，见上方
-	-- 选项区 EMBYNIAN[menu-style]）；值留着不动，免得 uosc 内部默认值在别处兜底出新花样。
+	-- MOMOKA[menu-style] — menu/submenu 两档自 2026-09-29 起不再被菜单吃（菜单底板改不透明，见上方
+	-- 选项区 MOMOKA[menu-style]）；值留着不动，免得 uosc 内部默认值在别处兜底出新花样。
 	opacity = 'menu=0.9,submenu=0.7,curtain=0.5',
 	animation_duration = 100,
 	refine = 'sorting',
@@ -323,7 +323,7 @@ defaults = {
 	use_trash = false,
 	adjust_osd_margins = true,
 	chapter_ranges = 'openings:30abf964,endings:30abf964,ads:c54e4e80',
-	-- EMBYNIAN[timeline-parity] 标题先转小写；别名与集成 TimelineChapterMap 保持一致。
+	-- MOMOKA[timeline-parity] 标题先转小写；别名与集成 TimelineChapterMap 保持一致。
 	chapter_range_patterns = 'openings:^intro%s*start,^intro$,オープニング$,^片头$,片头开始$;endings:^end$,エンディング$,^片尾$,片尾开始$,^credits$;intros:preview$,预告$,予告$;outros:credits$',
 	languages = 'slang,en',
 	subtitles_directory = '~~/subtitles',
@@ -343,7 +343,7 @@ function handle_options(changed_options)
 	request_render()
 end
 opt.read_options(options, 'uosc', handle_options)
--- EMBYNIAN[autoload] — 宿主裁定（见 defaults 注释）：autoload 在嵌入环境里没有任何合法入口，
+-- MOMOKA[autoload] — 宿主裁定（见 defaults 注释）：autoload 在嵌入环境里没有任何合法入口，
 -- 手改的 script-opts 也不允许把它打开 —— 目录续播会 loadfile 任意本机文件。
 options.autoload = false
 -- Normalize values
@@ -536,14 +536,14 @@ function create_default_menu_items()
 	return {
 		{title = '字幕', value = 'script-binding uosc/subtitles'},
 		{title = '音轨', value = 'script-binding uosc/audio'},
-		-- EMBYNIAN[version] — 换版本（同一部片的另一个文件）走宿主的 Emby 导航，同选集：这一项只把请求
-		-- 发给宿主（embynian-ui-versions → embynian-versions），菜单由宿主推回。
+		-- MOMOKA[version] — 换版本（同一部片的另一个文件）走宿主的 Emby 导航，同选集：这一项只把请求
+		-- 发给宿主（momoka-ui-versions → momoka-versions），菜单由宿主推回。
 		-- 标题写死中文而不是 t('Versions')：uosc 的本地化按 slang 找 intl/<lang>.json，而宿主的 slang 是
 		-- 「chi,zho,…」这类语言代码，目录里没有对应文件，t() 会原样吐回英文键名。上游自带的几个键有中文
 		-- 译文也不会命中，所以这里不跟它走。
 		-- 2026-09-22：其余几项一并写死中文（原来是这条注释末尾的「另案」）。理由与上面同一条 —— t() 在这
 		-- 台机器上命中不了；而半张中文半张英文的菜单比全英文更糟。
-		{title = '版本', value = 'script-binding uosc/embynian-ui-versions'},
+		{title = '版本', value = 'script-binding uosc/momoka-ui-versions'},
 		{title = '章节', value = 'script-binding uosc/chapters'},
 		{
 			title = '工具',
@@ -605,7 +605,7 @@ state = {
 	fullscreen = mp.get_property_native('fullscreen'),
 	maximized = mp.get_property_native('window-maximized'),
 	fullormaxed = mp.get_property_native('fullscreen') or mp.get_property_native('window-maximized'),
-	-- EMBYNIAN[topbar-pin] — 顶栏那颗置顶按钮的状态（用户令 2026-09-28 晚「给独占模式右上角也加个置顶图标」）：
+	-- MOMOKA[topbar-pin] — 顶栏那颗置顶按钮的状态（用户令 2026-09-28 晚「给独占模式右上角也加个置顶图标」）：
 	-- mpv 窗口自己的 ontop，与 fullscreen／maximized 同一路从属性里读初值，随后由下面的观察器维护。
 	ontop = mp.get_property_native('ontop'),
 	render_timer = nil,
@@ -623,11 +623,11 @@ state = {
 	has_audio = false,
 	has_sub = false,
 	has_chapter = false,
-	-- EMBYNIAN[version-count] — 这个条目挂了几版文件，由宿主的 embynian-version-count 消息写进来
+	-- MOMOKA[version-count] — 这个条目挂了几版文件，由宿主的 momoka-version-count 消息写进来
 	-- （uosc 自己问不出 Emby 的媒体源表）。默认 false＝那颗「版本」按钮先不画：宿主在装载握手那一刻
 	-- 就会把真答案送过来（它能早答，是因为「播哪一条、这条有几版」在 mpv 起来之前就已经在它手上了）。
 	has_many_versions = false,
-	-- EMBYNIAN[episode-count] — 正在放的是不是单集，由宿主的 embynian-episode-count 消息写进来
+	-- MOMOKA[episode-count] — 正在放的是不是单集，由宿主的 momoka-episode-count 消息写进来
 	-- （mpv 只看见一条文件，分不出电影与剧）。默认 false＝那颗「选集」按钮先不画：宿主在装载握手那一刻
 	-- 就会把真答案送过来。默认不画的另一面是「播电影时它不在屏上」（2026-09-26 用户令）。
 	has_episodes = false,
@@ -800,7 +800,7 @@ function set_state(name, value)
 	Elements:trigger('prop_' .. name, value)
 end
 
--- EMBYNIAN[fileend] — handle_file_end 与 file_end_timer 整块删除 —— 播放列表/目录续播的入口
+-- MOMOKA[fileend] — handle_file_end 与 file_end_timer 整块删除 —— 播放列表/目录续播的入口
 -- （autoplay、shuffle、playlist 导航）已全部裁掉，「播完去哪」只归 C# 宿主的连播规则管。
 
 function update_render_delay(name, fps)
@@ -893,7 +893,7 @@ mp.observe_property('playlist-count', 'number', function(_, value)
 end)
 mp.observe_property('fullscreen', 'bool', create_state_setter('fullscreen', update_fullormaxed))
 mp.observe_property('window-maximized', 'bool', create_state_setter('maximized', update_fullormaxed))
--- EMBYNIAN[topbar-pin] — 顶栏那颗置顶按钮（TopBar.lua 的 push_pin）要的第二个数：mpv 窗口此刻是不是置顶。
+-- MOMOKA[topbar-pin] — 顶栏那颗置顶按钮（TopBar.lua 的 push_pin）要的第二个数：mpv 窗口此刻是不是置顶。
 -- 形状与上面两条一模一样（同一个 create_state_setter：写 state + request_render 各一次），因为「谁改的它」
 -- 不重要 —— 按钮自己（cycle ontop）、mpv 自己的快捷键或将来别处改了，都从这里回到顶栏重画一遍。
 -- **不经过宿主**：置顶在这里就是一扇 mpv 窗口的属性，宿主那边的 TopMost 管的是它自己的主窗口（集成模式）。
@@ -904,7 +904,7 @@ mp.observe_property('idle-active', 'bool', function(_, idle)
 	mp.commandv('script-message-to', 'thumbfast', 'clear')
 end)
 mp.observe_property('pause', 'bool', create_state_setter('pause'))
--- EMBYNIAN[ontop-follows-pause] — 独占那颗图钉跟着播放状态走（用户令 2026-09-29「播放时自动置顶，暂停时
+-- MOMOKA[ontop-follows-pause] — 独占那颗图钉跟着播放状态走（用户令 2026-09-29「播放时自动置顶，暂停时
 -- 自动取消置顶」）：在播＝ontop yes、暂停＝ontop no，顶栏图钉立没立正由上面那条 ontop 观察器跟着画。
 -- 手动那颗（cycle ontop）仍即时生效，只是只撑到下一条边沿 —— 与集成那头 SetPinned 的规矩同一句
 -- （PlayerPage.OnStatusApplied）。两处来源：pause 的每一条边沿（uosc 按钮、快捷键、宿主经 IPC 暂停，
@@ -924,7 +924,7 @@ mp.observe_property('osd-dimensions', 'native', function(name, val)
 	update_display_dimensions()
 	request_render()
 end)
--- EMBYNIAN[osddim] — 画布尺寸兜底（实测 2026-09-19）：d3d11 窗口管线下 osd-dimensions 的 native
+-- MOMOKA[osddim] — 画布尺寸兜底（实测 2026-09-19）：d3d11 窗口管线下 osd-dimensions 的 native
 -- 观察在起播初段会漏掉「画布=视频尺寸 → 画布=窗口尺寸」那一次变化，uosc 拿着旧画布布局，
 -- 控件画得出来而点击热区全部错位（菜单/字幕「点了没反应」）。number 观察两个尺寸属性，
 -- 每次变化都强制重测——重复调 update_display_dimensions 是幂等的。
@@ -1134,78 +1134,78 @@ bind_command('editions', create_self_updating_menu_opener({
 	end,
 	on_activate = function(event) mp.commandv('set', 'edition', event.value) end,
 }))
--- EMBYNIAN[episode] — 绑定裁剪：stream-quality（外部 quality-menu 脚本不在宿主里）、open-file/items/
+-- MOMOKA[episode] — 绑定裁剪：stream-quality（外部 quality-menu 脚本不在宿主里）、open-file/items/
 -- first/last 系（文件与播放列表导航，宿主禁止）、shuffle、paste 系（绕过宿主 loadfile）、
 -- delete-file 系（删除用户文件）、show-in-directory / open-config-directory（拉起外部进程）
--- 全部删除；换集经 embynian-ui-* 交给宿主的 Emby 导航（见 Controls 快捷项），
--- 选集菜单向宿主要数据（embynian-episodes → 宿主 open-menu 推回）。
+-- 全部删除；换集经 momoka-ui-* 交给宿主的 Emby 导航（见 Controls 快捷项），
+-- 选集菜单向宿主要数据（momoka-episodes → 宿主 open-menu 推回）。
 --
--- EMBYNIAN[ui-bind] — 绑定名（embynian-ui-…）与宿主消息名（embynian-…）必须分家，这不是口味问题：
--- mpv 把一条 `script-message <名字>` 同时派给**同名**的脚本绑定。旧版这里叫 embynian-episodes，
+-- MOMOKA[ui-bind] — 绑定名（momoka-ui-…）与宿主消息名（momoka-…）必须分家，这不是口味问题：
+-- mpv 把一条 `script-message <名字>` 同时派给**同名**的脚本绑定。旧版这里叫 momoka-episodes，
 -- 于是按钮发的消息又把按钮自己叫醒，一条消息变 1.3 万条/秒的刷屏（2026-09-19 实测：单发一条
 -- script-message 得 120657 条回声），视频卡顿、菜单被宿主逐条 open-menu 重建到点不动 —— 用户
 -- 报的「点选集卡顿／点一集不换／点击变暂停／退不出去」全出自这一条。上一集/下一集没这个毛病，
--- 正是因为它们的绑定叫 embynian-episode-prev/next、消息叫 embynian-episode，本来就不同名。
-bind_command('embynian-ui-prev', function() embynian_notify('embynian-episode', '-1') end)
-bind_command('embynian-ui-next', function() embynian_notify('embynian-episode', '1') end)
-bind_command('embynian-ui-episodes', function() embynian_notify('embynian-episodes', '') end)
--- EMBYNIAN[version] — 版本菜单向宿主要数据（embynian-versions → 宿主 open-menu 推回这一条目的媒体源）。
--- 与上面三条同一个形状：绑定叫 embynian-ui-…，消息叫 embynian-…，两套名字不许同名。
-bind_command('embynian-ui-versions', function() embynian_notify('embynian-versions', '') end)
--- EMBYNIAN[picture-menu] — 右键点画面呼出的「画面菜单」向宿主要数据（embynian-picture-menu → 宿主把
+-- 正是因为它们的绑定叫 momoka-episode-prev/next、消息叫 momoka-episode，本来就不同名。
+bind_command('momoka-ui-prev', function() momoka_notify('momoka-episode', '-1') end)
+bind_command('momoka-ui-next', function() momoka_notify('momoka-episode', '1') end)
+bind_command('momoka-ui-episodes', function() momoka_notify('momoka-episodes', '') end)
+-- MOMOKA[version] — 版本菜单向宿主要数据（momoka-versions → 宿主 open-menu 推回这一条目的媒体源）。
+-- 与上面三条同一个形状：绑定叫 momoka-ui-…，消息叫 momoka-…，两套名字不许同名。
+bind_command('momoka-ui-versions', function() momoka_notify('momoka-versions', '') end)
+-- MOMOKA[picture-menu] — 右键点画面呼出的「画面菜单」向宿主要数据（momoka-picture-menu → 宿主把
 -- PlayerMenuCatalog 那张树 open-menu 推回，与集成模式右键同一份）。右键/菜单键的绑定由宿主起播后经
 -- keybind 补上（config=no 之下 input.conf 不读、uosc 默认不绑键，见 MpvUi.MenuKeys）。同一个形状：绑定叫
--- embynian-ui-picture-menu、消息叫 embynian-picture-menu，两套名字不许同名（理由见上面 EMBYNIAN[ui-bind]）。
-bind_command('embynian-ui-picture-menu', function() embynian_notify('embynian-picture-menu', '') end)
+-- momoka-ui-picture-menu、消息叫 momoka-picture-menu，两套名字不许同名（理由见上面 MOMOKA[ui-bind]）。
+bind_command('momoka-ui-picture-menu', function() momoka_notify('momoka-picture-menu', '') end)
 
--- EMBYNIAN[version-count] — 宿主 → uosc 的通道：这个条目挂了几版文件。
+-- MOMOKA[version-count] — 宿主 → uosc 的通道：这个条目挂了几版文件。
 -- 上面那一排都是 uosc 向宿主要东西，这一条反过来 —— 宿主主动把答案送来，控制条上那颗「版本」按钮按它
 -- 露面（只有一版时整颗不在屏上；用户令 2026-09-23「只有一个版本的情况下不显示…」）。
 --
--- 门写在 controls 串里（<has_many_versions>embynian-ui-versions），形状照 mpv 自己的 <has_many_edition>——
+-- 门写在 controls 串里（<has_many_versions>momoka-ui-versions），形状照 mpv 自己的 <has_many_edition>——
 -- uosc 的 has_ 开头的显示条件读的是 state 表，所以这里只需写格 + 催一次 dispositions（等于
 -- chapter-list / editions 那两个观察器做的事）。**不改 controls 串**：uosc 的 options 只在装载时读一遍，
 -- 运行期换整张控件表反而要重造全部按钮。
 --
--- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：绑定一律 embynian-ui-…，这条是 embynian-…，
+-- 消息名照旧不与任何脚本绑定同名（MOMOKA[ui-bind]）：绑定一律 momoka-ui-…，这条是 momoka-…，
 -- 而且 uosc 这边只有 register_script_message，没有同名的 bind_command。
-mp.register_script_message('embynian-version-count', function(value)
+mp.register_script_message('momoka-version-count', function(value)
 	set_state('has_many_versions', (tonumber(value) or 0) > 1)
 	Elements:trigger('dispositions')
 end)
 
--- EMBYNIAN[episode-count] — 宿主 → uosc 的通道：正在放的是不是单集（0＝电影，1＝单集）。
--- 与 version-count 同一条路、同一个形状：门写在 controls 串里（<has_episodes>embynian-ui-episodes），
+-- MOMOKA[episode-count] — 宿主 → uosc 的通道：正在放的是不是单集（0＝电影，1＝单集）。
+-- 与 version-count 同一条路、同一个形状：门写在 controls 串里（<has_episodes>momoka-ui-episodes），
 -- 播电影时那颗「选集」按钮整颗不在屏上（2026-09-26 用户令「播放电影的时候不要显示这个按钮」）。
--- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：uosc 这边只有 register_script_message。
-mp.register_script_message('embynian-episode-count', function(value)
+-- 消息名照旧不与任何脚本绑定同名（MOMOKA[ui-bind]）：uosc 这边只有 register_script_message。
+mp.register_script_message('momoka-episode-count', function(value)
 	set_state('has_episodes', (tonumber(value) or 0) > 0)
 	Elements:trigger('dispositions')
 end)
 
--- EMBYNIAN[topbar-subline] — 宿主 → uosc 的通道：左上角第二行那句文件信息（分辨率 · 视频编码 · 音频格式 ·
+-- MOMOKA[topbar-subline] — 宿主 → uosc 的通道：左上角第二行那句文件信息（分辨率 · 视频编码 · 音频格式 ·
 -- 组名，空串＝收起）。集成模式那一行是 XAML 的 SubtitleBox（PlayerViewModel.Subtitle 驱动）；独占模式画面在
 -- mpv 窗口里，那一行由 uosc 顶栏画，于是宿主把同一句话推过来（两模式同源、显示一致，用户令 2026-09-27、
 -- 内容 2026-09-28 加分辨率）。主标题走 force-media-title，副标题走这条 —— TopBar 把它画在返回按钮正下方。
--- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：uosc 这边只有 register_script_message。
-mp.register_script_message('embynian-subline', function(text)
+-- 消息名照旧不与任何脚本绑定同名（MOMOKA[ui-bind]）：uosc 这边只有 register_script_message。
+mp.register_script_message('momoka-subline', function(text)
 	if Elements.top_bar then Elements.top_bar:set_subline(text or '') end
 end)
 
--- EMBYNIAN[skip-button] — 宿主 → uosc 的通道：跳过片头/片尾的 offer 文案（空串＝收摊）。
+-- MOMOKA[skip-button] — 宿主 → uosc 的通道：跳过片头/片尾的 offer 文案（空串＝收摊）。
 -- 集成模式那颗按钮是 XAML 的（PlayerPage.xaml，SkipOffered 驱动）；独占模式画面在 mpv 窗口里、
 -- 那颗不在屏上，于是宿主把这份 offer 推过来由 skip_button 元件画。offer 站多久、何时收摊全归宿主的
--- SkipCoordinator 判，本元件不自己计时；点它由元件回推 embynian-skip-take（宿主 TakeSkip）。
--- 消息名照旧不与任何脚本绑定同名（EMBYNIAN[ui-bind]）：uosc 这边只有 register_script_message，
--- 那颗按钮点击直接 embynian_notify('embynian-skip-take')，不是 bind_command。
-mp.register_script_message('embynian-skip-offer', function(caption)
+-- SkipCoordinator 判，本元件不自己计时；点它由元件回推 momoka-skip-take（宿主 TakeSkip）。
+-- 消息名照旧不与任何脚本绑定同名（MOMOKA[ui-bind]）：uosc 这边只有 register_script_message，
+-- 那颗按钮点击直接 momoka_notify('momoka-skip-take')，不是 bind_command。
+mp.register_script_message('momoka-skip-offer', function(caption)
 	if Elements.skip_button then Elements.skip_button:set_offer(caption) end
 end)
 
-bind_command('embynian-ui-skip-take', function() embynian_notify('embynian-skip-take', '') end)
-bind_command('embynian-ui-skip-dismiss', function() embynian_notify('embynian-skip-dismiss', '') end)
+bind_command('momoka-ui-skip-take', function() momoka_notify('momoka-skip-take', '') end)
+bind_command('momoka-ui-skip-dismiss', function() momoka_notify('momoka-skip-dismiss', '') end)
 
-require('lib/embynian_shortcuts')
+require('lib/momoka_shortcuts')
 
 bind_command('menu-prev', function() Elements:maybe('menu', 'navigate_by_items', -1) end)
 bind_command('menu-next', function() Elements:maybe('menu', 'navigate_by_items', 1) end)
@@ -1250,11 +1250,11 @@ bind_command('copy-to-clipboard', function()
 	end
 end)
 
--- EMBYNIAN[click-pause] — 轻点空白画面切换暂停/播放（动作在这里，命中区每帧登记在 lib/utils.lua）。
+-- MOMOKA[click-pause] — 轻点空白画面切换暂停/播放（动作在这里，命中区每帧登记在 lib/utils.lua）。
 --
 -- 为什么不再用 mp.add_key_binding('MBTN_LEFT', …)（旧版即此，2026-09-19 撤）：那是拿第二条路去和
 -- uosc 的 force 绑定抢同一个键，而「这一下点击归谁」取决于每帧 decide_keybinds 是否及时 —— 脚本
--- 一旦被什么拖住（比如 EMBYNIAN[ui-bind] 那场自激刷屏），命中区状态就是陈的，点菜单、点控件会穿
+-- 一旦被什么拖住（比如 MOMOKA[ui-bind] 那场自激刷屏），命中区状态就是陈的，点菜单、点控件会穿
 -- 透到这条备用绑定上，于是「点选集里的一集」变成「暂停」——用户报的「点击操作会触发自动暂停」。
 -- 改成 uosc 自己的兜底命中区之后每一下点击只有一个答主：find_zone 从后往前找，元素与菜单先登记，
 -- 轮不到它就说明指针在空白画面上。
@@ -1279,51 +1279,51 @@ end)
 --     脚本只读它，不自己定数。
 --   · 第二拍按下若落在控件命中区上（find_zone('primary_down') 有主），不算双击 —— 那是「点完画面
 --     马上去点按钮」，押后的暂停照给；控件上 mpv 的内建 DBL 本来就被 uosc 的 ignore 闸住，不全屏。
---   · 叫醒窗口的那一下不作数：见下面 EMBYNIAN[click-pause-wake]。
+--   · 叫醒窗口的那一下不作数：见下面 MOMOKA[click-pause-wake]。
 --   · 代价与集成模式同款：轻点暂停比手慢一个押后窗口（300 毫秒）。
 -- 判据与读数：work/probe-click-pause-wheel.py（命令账）＋ work/probe-doubleclick-real.py（真窗口）。
--- ⚠️ embynian_fallback = true：这条命中区罩着整个画布，算「画面」不算「控件」—— cursor.lua 的
+-- ⚠️ momoka_fallback = true：这条命中区罩着整个画布，算「画面」不算「控件」—— cursor.lua 的
 -- cursor:on_control()（光标保活判据）靠这个标记跳过它，否则指针停在空白画面上也会被当成「压在控件上」，
 -- cursor-autohide 被钉成 no、光标永不藏（2026-09-29 用户报「独占模式下鼠标不会自动隐藏」的根因）。
-embynian_click_pause_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, window_drag = true, embynian_fallback = true}
-embynian_click_pause_pending = nil  -- 还没到期的那一拍（在飞＝这一下还没被证明是单击）
-embynian_click_pause_press_last = nil -- 上一次左键按下的时刻（任意位置，判第二拍用）
-embynian_click_pause_second_half = false -- 最近一次按下是不是「画布上的双击第二拍」
+momoka_click_pause_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, window_drag = true, momoka_fallback = true}
+momoka_click_pause_pending = nil  -- 还没到期的那一拍（在飞＝这一下还没被证明是单击）
+momoka_click_pause_press_last = nil -- 上一次左键按下的时刻（任意位置，判第二拍用）
+momoka_click_pause_second_half = false -- 最近一次按下是不是「画布上的双击第二拍」
 
-function embynian_click_pause_window()
+function momoka_click_pause_window()
 	local option = mp.get_property_native('input-doubleclick-time')
 	return type(option) == 'number' and option > 0 and option / 1000 or 0.3
 end
 
--- EMBYNIAN[click-pause-wake] — **叫醒窗口的那一下不作数**（用户令 2026-09-23：「先点一下让窗口置顶，
+-- MOMOKA[click-pause-wake] — **叫醒窗口的那一下不作数**（用户令 2026-09-23：「先点一下让窗口置顶，
 -- 然后再点一下触发暂停/播放」）。这是 Windows 上内容区的通用规矩：激活点击只激活、不落在内容上；
 -- 不加这一条，从别的窗口回来点画面的第一下会当场切掉暂停/播放（实测 work/probe-activation-click-*.txt）。
 -- 判据是 mpv 的 focused 属性：w32 的 VO 在 WM_SETFOCUS/WM_KILLFOCUS 上更新它（w32_common.c 的
 -- VOCTRL_GET_FOCUSED），于是「按下的时刻 − 窗口变成前台的时刻 ≤ 0.4 秒」就是这一下。
 -- Alt+Tab 唤回不算 —— 那种第一次点击本来就该照常暂停，而 mpv 分不出两者，所以取的是「刚变前台」这个
 -- 更宽的口子：代价是唤回之后 0.4 秒内的第一下点击会被吃掉一次（与 Windows 自己那一套同款）。
-embynian_click_pause_focus_at = nil
+momoka_click_pause_focus_at = nil
 mp.observe_property('focused', 'bool', function(_, value)
-	if value then embynian_click_pause_focus_at = mp.get_time() end
+	if value then momoka_click_pause_focus_at = mp.get_time() end
 end)
 
-function embynian_click_pause_waking(press_time)
-	return embynian_click_pause_focus_at ~= nil
-		and press_time - embynian_click_pause_focus_at <= 0.4
+function momoka_click_pause_waking(press_time)
+	return momoka_click_pause_focus_at ~= nil
+		and press_time - momoka_click_pause_focus_at <= 0.4
 end
 
 -- 押后到期：窗口里没有第二拍按下 ⇒ 单击证实，发那一条暂停。
-function embynian_click_pause_commit()
-	embynian_click_pause_pending = nil
+function momoka_click_pause_commit()
+	momoka_click_pause_pending = nil
 	mp.commandv('cycle', 'pause')
 	Elements:flash({'pause_indicator'})
 end
 
 -- 双击的第二拍（或换源/收摊）：作废已押后的那一拍。
-function embynian_click_pause_cancel()
-	if embynian_click_pause_pending then
-		embynian_click_pause_pending:kill()
-		embynian_click_pause_pending = nil
+function momoka_click_pause_cancel()
+	if momoka_click_pause_pending then
+		momoka_click_pause_pending:kill()
+		momoka_click_pause_pending = nil
 	end
 end
 
@@ -1332,44 +1332,44 @@ end
 cursor:on('primary_down', function()
 	local now = mp.get_time()
 	local zone = cursor:find_zone('primary_click')
-	local on_canvas = zone and zone.hitbox == embynian_click_pause_hitbox
-	embynian_click_pause_second_half = on_canvas
-		and embynian_click_pause_press_last ~= nil
-		and now - embynian_click_pause_press_last < embynian_click_pause_window()
-	embynian_click_pause_press_last = on_canvas and now or nil
-	if embynian_click_pause_second_half then embynian_click_pause_cancel() end
+	local on_canvas = zone and zone.hitbox == momoka_click_pause_hitbox
+	momoka_click_pause_second_half = on_canvas
+		and momoka_click_pause_press_last ~= nil
+		and now - momoka_click_pause_press_last < momoka_click_pause_window()
+	momoka_click_pause_press_last = on_canvas and now or nil
+	if momoka_click_pause_second_half then momoka_click_pause_cancel() end
 end)
 
 cursor:on('primary_up', function(shortcut)
 	if shortcut and shortcut.canceled then
-		embynian_click_pause_press_last = nil
-		embynian_click_pause_second_half = false
+		momoka_click_pause_press_last = nil
+		momoka_click_pause_second_half = false
 	end
 end)
 
 -- 押后那一拍要是撞上换源/收摊（片尾自动连播、用户换集）就作废 —— 与 ChromeReveal 的「新一播放＝Reset」
 -- 同一条道理：那一拍不该打在新一集身上。
-function embynian_click_pause_reset()
-	embynian_click_pause_cancel()
-	embynian_click_pause_press_last = nil
-	embynian_click_pause_second_half = false
+function momoka_click_pause_reset()
+	momoka_click_pause_cancel()
+	momoka_click_pause_press_last = nil
+	momoka_click_pause_second_half = false
 	cursor.last_events.primary_down = nil
 	cursor.last_events.secondary_down = nil
 	if Menu:is_open() then Menu:close(true) end
 end
 
-for _, embynian_event in ipairs({'start-file', 'end-file'}) do
-	mp.register_event(embynian_event, embynian_click_pause_reset)
+for _, momoka_event in ipairs({'start-file', 'end-file'}) do
+	mp.register_event(momoka_event, momoka_click_pause_reset)
 end
 
--- EMBYNIAN[skip-button] — 换源即收起上一片的「跳过」offer：宿主下一拍也会按新片重推，但换集加载途中
+-- MOMOKA[skip-button] — 换源即收起上一片的「跳过」offer：宿主下一拍也会按新片重推，但换集加载途中
 -- 不该还挂着上一集的「跳过片尾」。宿主发空文案是常规收摊路径，这一条是保险。
 mp.register_event('start-file', function()
 	if Elements.skip_button then Elements.skip_button:set_offer('') end
 end)
 
-function embynian_click_pause_zone()
-	local hitbox = embynian_click_pause_hitbox
+function momoka_click_pause_zone()
+	local hitbox = momoka_click_pause_hitbox
 	hitbox.bx, hitbox.by = display.width, display.height
 	cursor:zone('primary_click', hitbox, function()
 		local down = cursor.last_events.primary_down
@@ -1379,16 +1379,16 @@ function embynian_click_pause_zone()
 		-- ② 时窗 0.5s、③ 位移 ≤6px；原生拖窗必须靠 canceled 排除，窗口跟手时局部坐标可能不变。
 		if down and not down.zone_handled and mp.get_time() - down.time < 0.5
 			and math.abs(cursor.x - down.x) + math.abs(cursor.y - down.y) <= 6 then
-			if embynian_click_pause_second_half then return end -- 双击的第二拍：全屏/还原归 mpv，这里不发
-			if embynian_click_pause_waking(down.time) then return end -- 叫醒窗口的那一下不作数（见上面那条）
-			embynian_click_pause_pending = mp.add_timeout(
-				math.max(0, down.time + embynian_click_pause_window() - mp.get_time()),
-				embynian_click_pause_commit)
+			if momoka_click_pause_second_half then return end -- 双击的第二拍：全屏/还原归 mpv，这里不发
+			if momoka_click_pause_waking(down.time) then return end -- 叫醒窗口的那一下不作数（见上面那条）
+			momoka_click_pause_pending = mp.add_timeout(
+				math.max(0, down.time + momoka_click_pause_window() - mp.get_time()),
+				momoka_click_pause_commit)
 		end
 	end)
 end
 
--- EMBYNIAN[wheel-volume] — 空白画面上的滚轮＝音量，反馈只落 uosc 自己那根（右侧音量条）。
+-- MOMOKA[wheel-volume] — 空白画面上的滚轮＝音量，反馈只落 uosc 自己那根（右侧音量条）。
 --
 -- 为什么要有这一条：mpv 内建的 `WHEEL_UP add volume 2` 会带出**左上角**那行 OSD「Volume」
 -- （uosc 关掉的只是 mpv 自带的 OSC，不是这层 OSD；宿主已设的 osd-bar=no 也拦不住它的文字），
@@ -1398,21 +1398,21 @@ end
 -- 命中区登记位置与规矩同上面那条：render 里最前面＝最低优先级，指针落在时间轴/速度条/音量条上时
 -- 它们的命中区先命中，滚轮仍归它们（跳转 / 倍速 / volume_step）；只有空白画面才落到这里。
 -- 步进 2 与 mpv 内建同速（实测 work/probe-input-before.txt 的 `add volume  2`），换了实现不许改手感。
--- embynian_fallback = true 的用意见上面 click_pause_hitbox 那条注释：整画布兜底区不算控件，
+-- momoka_fallback = true 的用意见上面 click_pause_hitbox 那条注释：整画布兜底区不算控件，
 -- cursor:on_control() 光标保活判据靠这个标记跳过它。
-embynian_wheel_volume_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, embynian_fallback = true}
-embynian_wheel_volume_step = 2
+momoka_wheel_volume_hitbox = {ax = 0, ay = 0, bx = 1280, by = 720, momoka_fallback = true}
+momoka_wheel_volume_step = 2
 
-function embynian_set_volume(delta)
+function momoka_set_volume(delta)
 	mp.commandv('no-osd', 'add', 'volume', tostring(delta))
 	Elements:flash({'volume'})
 end
 
-function embynian_wheel_volume_zone()
-	local hitbox = embynian_wheel_volume_hitbox
+function momoka_wheel_volume_zone()
+	local hitbox = momoka_wheel_volume_hitbox
 	hitbox.bx, hitbox.by = display.width, display.height
-	cursor:zone('wheel_up', hitbox, function() embynian_set_volume(embynian_wheel_volume_step) end)
-	cursor:zone('wheel_down', hitbox, function() embynian_set_volume(-embynian_wheel_volume_step) end)
+	cursor:zone('wheel_up', hitbox, function() momoka_set_volume(momoka_wheel_volume_step) end)
+	cursor:zone('wheel_down', hitbox, function() momoka_set_volume(-momoka_wheel_volume_step) end)
 end
 
 --[[ MESSAGE HANDLERS ]]
@@ -1501,7 +1501,7 @@ local constructors = {
 
 -- Required elements
 require('elements/Curtain'):new()
--- EMBYNIAN[skip-button] — 独占模式「跳过片头/片尾」按钮（宿主经 embynian-skip-offer 驱动，见上面的
+-- MOMOKA[skip-button] — 独占模式「跳过片头/片尾」按钮（宿主经 momoka-skip-offer 驱动，见上面的
 -- 消息处理器与 elements/SkipButton.lua）。与 Curtain 一样直接实例化：它不进 Manager 的可禁用清单。
 require('elements/SkipButton'):new()
 

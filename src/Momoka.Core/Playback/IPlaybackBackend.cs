@@ -1,0 +1,181 @@
+namespace Momoka.Playback;
+
+/// <summary>
+/// How playback actually happens. Two implementations: the in-process libmpv player that renders
+/// into the client's own window, and the user's <c>mpv.exe</c> in a window of its own.
+/// <para>
+/// The seam is what makes both possible at once. Everything above it — the planner, the progress
+/// reports, the player chrome — only ever sees a <see cref="PlaybackRequest"/> going in and an
+/// <see cref="IPlaybackHandle"/> coming out, so the choice is a per-play setting rather than an
+/// architectural commitment.
+/// </para>
+/// </summary>
+public interface IPlaybackBackend
+{
+    string DisplayName { get; }
+
+    /// <summary>Null when the backend can run, otherwise the reason to show the user.</summary>
+    string? Validate();
+
+    Task<IPlaybackHandle> StartAsync(PlaybackRequest request, CancellationToken cancellationToken);
+}
+
+/// <summary>One running playback.</summary>
+public interface IPlaybackHandle : IAsyncDisposable
+{
+    /// <summary>False when no control channel came up: position and pause state are unknown.</summary>
+    bool HasControlChannel { get; }
+
+    /// <summary>
+    /// The actual session's picture destination, independent of mutable settings. Null when the
+    /// backend does not report it; false means the video lives outside the client's host window.
+    /// </summary>
+    bool? PictureInHostWindow => null;
+
+    bool IsPaused { get; }
+
+    /// <summary>Position in seconds, or null when it cannot be known.</summary>
+    Task<double?> GetPositionAsync(CancellationToken cancellationToken);
+
+    /// <summary>Raised when mpv pauses or resumes.</summary>
+    event Action<bool>? PauseChanged;
+
+    /// <summary>Completes when playback is over, whatever ended it.</summary>
+    Task<PlaybackExit> WaitForExitAsync(CancellationToken cancellationToken);
+
+    /// <summary>Asks mpv to quit, falling back to killing it if it will not.</summary>
+    Task StopAsync();
+
+    /// <summary>
+    /// 能不能把 <paramref name="request"/> 这一票接过来，在**同一个**实例里播 —— 同一个 mpv、同一个窗口、
+    /// 同一套 Lua UI。默认不行：外部 <c>mpv.exe</c> 每次起播都是一个新进程，集成管线的画面挂在宿主的
+    /// 合成树上，换片快路只给独占模式的内置播放器（2026-09-19 用户令「换集不要每次都关窗重开」）。
+    /// </summary>
+    bool CanSwapTo(PlaybackRequest request) => false;
+
+    /// <summary>
+    /// 把当前这一跑的收场信号交给调用方：正在等它的监视据此收尾（发「停止」与最后位置的上报），**但不让
+    /// mpv 退出** —— 同一个实例紧接着要放下一集。默认什么都不做（那些后端本来就没得交接）。
+    /// <para>
+    /// 与 <see cref="StopAsync"/> 的分界就是这条快路的全部：一个 quit 掉窗口，一个留着它。
+    /// </para>
+    /// </summary>
+    void HandOver()
+    {
+    }
+
+    /// <summary>
+    /// 在这个实例上换片：把这一票的运行期部分写下去（见 <c>InlineSwitch</c>），再 <c>loadfile</c>。
+    /// false＝没接住（签名对不上、实例已经在收场、命令被拒），调用方回到「停掉重开」那条路。
+    /// </summary>
+    Task<bool> SwapToAsync(PlaybackRequest request, CancellationToken cancellationToken) => Task.FromResult(false);
+
+    /// <summary>
+    /// 这一跑是否已经被交接给下一集。收尾据此不拆实例、不退订、不清 <c>_current</c> —— 下一集正在用它们。
+    /// </summary>
+    bool WasHandedOver => false;
+
+    /// <summary>Shows a message on mpv's OSD; silently does nothing without a control channel.</summary>
+    Task ShowMessageAsync(string text);
+
+    /// <summary>Sets an mpv property while playback runs (volume, aid, sid, glsl-shaders…).</summary>
+    Task SetPropertyAsync(string name, object? value, CancellationToken cancellationToken);
+
+    /// <summary>The current track list, or empty when it cannot be read.</summary>
+    Task<IReadOnlyList<MpvTrack>> GetTracksAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// mpv's own <c>chapter-list</c> — the marks written into the file — read in one call. Empty
+    /// when the file has none or the backend cannot answer; the caller (skip-section refinement)
+    /// keeps polling on empty and falls back to Emby's own marks when its attempts run out.
+    /// <para>
+    /// One call rather than the <c>chapter-list/count</c> then <c>chapter-list/{i}/time</c> walk:
+    /// two round trips instead of two per chapter, and one atomic snapshot instead of a list
+    /// assembled an index at a time — on the external backend that walk was a JSON round trip a
+    /// question, so twenty chapters made forty-two, all inside a one-second poll interval.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<SkipChapter>> GetChaptersAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<SkipChapter>>([]);
+
+    /// <summary>
+    /// Whether several property reads may be in flight at once, which decides how the statistics panel
+    /// asks for its twenty-one properties: together, or one after another.
+    /// <para>
+    /// False by default, and false for the in-process player, where a read is a native call made on the
+    /// calling thread behind a one-at-a-time gate — issuing them together would serialise anyway and only
+    /// add scheduling. True across the pipe to an external <c>mpv.exe</c>, where each read is a real round
+    /// trip matched to its reply by request id: twenty-one of those in sequence can outlast the second
+    /// they were meant to fill, and the same twenty-one pipelined cost one wait.
+    /// </para>
+    /// </summary>
+    bool ReadsOverlap => false;
+
+    /// <summary>A numeric property (e.g. volume), or null when it cannot be read.</summary>
+    Task<double?> GetNumberAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// A property as mpv's own formatted text (e.g. <c>video-codec</c>, <c>hwdec-current</c>), or
+    /// null when it cannot be read. Text rather than a number because the interesting half of what a
+    /// statistics readout wants — codec names, pixel formats, the decoder in use — has no numeric
+    /// form at all.
+    /// </summary>
+    Task<string?> GetTextAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>A lossless string-list snapshot; null means unavailable, not an empty list.</summary>
+    Task<IReadOnlyList<string>?> GetStringListAsync(string name, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<string>?>(null);
+
+    /// <summary>Whether this kernel exposes an option; null when the capability cannot be read.</summary>
+    Task<bool?> HasOptionAsync(string name, CancellationToken cancellationToken) => Task.FromResult<bool?>(null);
+}
+
+/// <summary>
+/// The live half of a playback: what the player chrome needs to draw itself and the one channel
+/// it needs to act. Separate from <see cref="IPlaybackHandle"/> because a backend can run a file
+/// to the end without any of it — an <c>mpv.exe</c> launched with the control channel switched
+/// off still plays, it just cannot be driven — so the chrome asks for this and hides the controls
+/// it did not get.
+/// </summary>
+public interface IPlayerControl
+{
+    /// <summary>The last known state; never stale by more than one mpv notification.</summary>
+    PlayerStatus Status { get; }
+
+    /// <summary>Raised whenever anything the chrome draws changed. Not on the UI thread.</summary>
+    event Action<PlayerStatus>? StatusChanged;
+
+    /// <summary>
+    /// Raised when mpv publishes a track list — on file load and whenever tracks are added,
+    /// which is what external subtitle files do a moment after playback starts.
+    /// </summary>
+    event Action<IReadOnlyList<MpvTrack>>? TracksChanged;
+
+    /// <summary>
+    /// Runs one mpv command (<c>seek</c>, <c>cycle</c>, <c>frame-step</c>, <c>sub-reload</c>…).
+    /// One entry point rather than a method per action: mpv's command set is the vocabulary the
+    /// player already speaks, and every command it grows becomes available without a new seam.
+    /// <para>
+    /// <b>True only when mpv accepted it.</b> Both backends know the answer and used to throw it away — the
+    /// in-process one from <c>mpv_command</c>'s return value, the external one from the reply on the pipe — so
+    /// the 画面 menu announced 「已保存到 …」 for a screenshot mpv had refused to write. False also covers
+    /// 「there was nobody to ask」: a context already torn down, or a pipe that is not connected.
+    /// </para>
+    /// </summary>
+    Task<bool> CommandAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// 独占模式视频窗里 Lua UI（uosc 嵌入版）与宿主的通道。只有内置 libmpv 的独占会话实现它；
+/// 外部 mpv.exe 后端没有这条通道，也不需要 —— 判据是类型测试（<c>handle is IPlayerHostMessages</c>），
+/// 不让 <see cref="IPlayerControl"/> 背上第二份「控制」含义。
+/// <para>
+/// 事件从 mpv 的事件线程发出，订阅方（<see cref="PlaybackService"/>）原样转发，落到界面线程的事
+/// 归最终订阅者。契约见 <see cref="Mpv.VideoWindowContract"/>。
+/// </para>
+/// </summary>
+public interface IPlayerHostMessages
+{
+    /// <summary>一条已通过契约解析的 <c>momoka-*</c> 消息（key、value）。</summary>
+    event Action<string, string>? HostMessageReceived;
+}

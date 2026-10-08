@@ -106,17 +106,17 @@ function Menu:init(data, callback, opts)
 	-----@type fun()
 	self.callback = callback
 	self.opts = opts or {}
-	self.anchor = nil -- EMBYNIAN[menu-anchor]: {x,y} 光标锚点；set 时菜单在光标处弹出、不居中、不压暗幕布。
+	self.anchor = nil -- MOMOKA[menu-anchor]: {x,y} 光标锚点；set 时菜单在光标处弹出、不居中、不压暗幕布。
 	self.mouse_nav = self.opts.mouse_nav -- Stops pre-selecting items
 	self.item_height = nil
 	self.min_width = nil
-	self.menu_scale = state.scale -- EMBYNIAN[menu-style]：菜单自己的缩放（DPI×全屏/最大化 1.3），update_content_dimensions 重算
-	self.radius = state.radius -- EMBYNIAN[menu-style]：菜单面板的圆角基准（同上）
-	self.item_spacing = 0 -- EMBYNIAN[menu-style]：行距在 update_content_dimensions 里按字号重算
-	self.item_indent = nil -- EMBYNIAN[menu-style]：文字左缩进（参考菜单左侧留白显著大于右侧）
-	self.item_pad_right = nil -- EMBYNIAN[menu-style]：右列（hint/▸）距面板右缘的贴边距
-	self.hover_inset = nil -- EMBYNIAN[menu-style]：悬停行四边让空
-	self.hover_radius = nil -- EMBYNIAN[menu-style]：悬停行圆角
+	self.menu_scale = state.scale -- MOMOKA[menu-style]：菜单自己的缩放（DPI×全屏/最大化 1.3），update_content_dimensions 重算
+	self.radius = state.radius -- MOMOKA[menu-style]：菜单面板的圆角基准（同上）
+	self.item_spacing = 0 -- MOMOKA[menu-style]：行距在 update_content_dimensions 里按字号重算
+	self.item_indent = nil -- MOMOKA[menu-style]：文字左缩进（参考菜单左侧留白显著大于右侧）
+	self.item_pad_right = nil -- MOMOKA[menu-style]：右列（hint/▸）距面板右缘的贴边距
+	self.hover_inset = nil -- MOMOKA[menu-style]：悬停行四边让空
+	self.hover_radius = nil -- MOMOKA[menu-style]：悬停行圆角
 	self.item_padding = nil
 	self.separator_size = nil
 	self.padding = nil
@@ -125,8 +125,8 @@ function Menu:init(data, callback, opts)
 	self.font_size_hint = nil
 	self.scroll_step = nil -- Item height (separators take their own, smaller slot — see update_content_dimensions).
 	self.scroll_height = nil -- Items + spacings - container height.
-	self.layout = nil -- EMBYNIAN[menu-style]：可见面板矩形表 {menu, x, y, w, h}（bg 坐标），render/compute_layout 维护
-	self.drag_panel_id = nil -- EMBYNIAN[menu-style]：拖拽起始面板（拖哪条滚哪条）
+	self.layout = nil -- MOMOKA[menu-style]：可见面板矩形表 {menu, x, y, w, h}（bg 坐标），render/compute_layout 维护
+	self.drag_panel_id = nil -- MOMOKA[menu-style]：拖拽起始面板（拖哪条滚哪条）
 	self.opacity = 0 -- Used to fade in/out.
 	self.type = data.type
 	---@type MenuStack Root MenuStack.
@@ -147,11 +147,11 @@ function Menu:init(data, callback, opts)
 		utils.shared_script_property_set('uosc-menu-type', self.type or 'undefined')
 	end
 	mp.set_property_native('user-data/uosc/menu/type', self.type or 'undefined')
-	-- EMBYNIAN[menu-anchor] — 宿主推来的画面/选集/版本菜单要像集成模式那样在光标处弹出（右键点哪弹哪），
+	-- MOMOKA[menu-anchor] — 宿主推来的画面/选集/版本菜单要像集成模式那样在光标处弹出（右键点哪弹哪），
 	-- 不走 uosc 默认的屏幕居中大模态：**在 update(data) 之前**记下打开时的光标位置当锚点 —— 首次量算
 	-- （update_dimensions/update_coordinates）就得用它，晚一步菜单会先居中再跳。锚点在时还跳过压暗整屏
 	-- 的幕布（见下）。锚点缺席（普通键盘菜单、或光标不可用）时一切照旧居中，无回归。
-	if data.embynian_anchor and type(cursor.x) == 'number' and cursor.x ~= math.huge
+	if data.momoka_anchor and type(cursor.x) == 'number' and cursor.x ~= math.huge
 		and type(cursor.y) == 'number' and cursor.y ~= math.huge then
 		self.anchor = {x = cursor.x, y = cursor.y}
 	end
@@ -162,7 +162,7 @@ function Menu:init(data, callback, opts)
 	if self.mouse_nav then self.current.selected_index = nil end
 
 	self:tween_property('opacity', 0, 1)
-	if embynian_clear_shortcuts then embynian_clear_shortcuts() end
+	if momoka_clear_shortcuts then momoka_clear_shortcuts() end
 	self:enable_key_bindings()
 	if not self.anchor then Elements:maybe('curtain', 'register', self.id) end
 
@@ -183,7 +183,7 @@ function Menu:destroy()
 		utils.shared_script_property_set('uosc-menu-type', nil)
 	end
 	mp.set_property_native('user-data/uosc/menu/type', nil)
-	if not self.is_being_replaced and embynian_refresh_shortcuts then embynian_refresh_shortcuts() end
+	if not self.is_being_replaced and momoka_refresh_shortcuts then momoka_refresh_shortcuts() end
 end
 
 ---@param data MenuData
@@ -312,7 +312,7 @@ function Menu:update_items(items)
 end
 
 function Menu:update_content_dimensions()
-	-- EMBYNIAN[menu-style] — 尺子整把换成参考项目（C:\mpv_config-2026.08.12）右键菜单的实测值：
+	-- MOMOKA[menu-style] — 尺子整把换成参考项目（C:\mpv_config-2026.08.12）右键菜单的实测值：
 	-- 2026-10-07 晚用户令「只复刻界面，不抄功能选项」。字号 20、行高＝字号×(1+gap)＝字号×1.2（行与行
 	-- 贴着排，参考图行距/字号≈22/20）；文字左缩进 36、右列贴边 8（参考图左松右紧）；面板不再有最小
 	-- 宽度（贴内容）。分隔符占自己的小槽位（上下各让 padding 的 1px 细线，参考图过分隔符行距 32＝
@@ -358,7 +358,7 @@ function Menu:update_content_dimensions()
 
 		menu.max_width = max_width
 
-		-- EMBYNIAN[menu-style] — 行位置前缀和：普通行高 item_height，分隔符槽位＝1px 线＋上下各让
+		-- MOMOKA[menu-style] — 行位置前缀和：普通行高 item_height，分隔符槽位＝1px 线＋上下各让
 		-- padding（参考图分隔符上下各 4px 留空）。所有滚动/命中/绘制都改读这张表。
 		local item_tops = {}
 		local y = 0
@@ -401,7 +401,7 @@ function Menu:update_dimensions()
 	for _, menu in ipairs(self.all) do
 		local width = math.max(menu.search and menu.search.max_width or 0, menu.max_width)
 		menu.width = round(clamp(min_width, width, width_available))
-		-- EMBYNIAN[menu-style] — 标题行整块撤下（参考菜单没有标题），只有搜索输入还在上方占一格；
+		-- MOMOKA[menu-style] — 标题行整块撤下（参考菜单没有标题），只有搜索输入还在上方占一格；
 		-- 脚注随之整块撤下，不再预留高度。
 		local title_height = menu.search and self.scroll_step + self.separator_size + 1 or 0
 		local max_height = height_available - title_height
@@ -409,7 +409,7 @@ function Menu:update_dimensions()
 		menu.height = math.min(content_height, max_height)
 		local min_top = title_height + margin + self.padding
 		if menu.is_root and self.anchor then
-			-- EMBYNIAN[menu-anchor] — 上缘贴着光标（搜索框在其上方，留一格 padding）；顶到下边就上移，整menu保持在屏内。
+			-- MOMOKA[menu-anchor] — 上缘贴着光标（搜索框在其上方，留一格 padding）；顶到下边就上移，整menu保持在屏内。
 			local max_top = display.height - margin - self.padding - menu.height
 			menu.top = clamp(min_top, self.anchor.y + title_height + self.padding, math.max(min_top, max_top))
 		else
@@ -430,7 +430,7 @@ function Menu:update_dimensions()
 	self:update_coordinates()
 end
 
--- EMBYNIAN[menu-style] — 参考菜单的级联布局：根面板在锚点/居中的位置上，子面板贴着父面板右缘
+-- MOMOKA[menu-style] — 参考菜单的级联布局：根面板在锚点/居中的位置上，子面板贴着父面板右缘
 -- （零缝、共用那根白描边）、顶边对齐父项里通往它的那一行，父面板原地不动（用户令 2026-10-07 晚
 -- 「只复刻界面」；上游那套「子菜单坐屏幕中、父面板往左排队」的几何退役）。返回可见面板表
 -- （{menu, x, y, w, h}，面板 bg 坐标，根在前），最后一级是 current 选中项的子菜单预览。
@@ -442,7 +442,7 @@ function Menu:compute_layout()
 	local root_w = root.width + self.padding * 2
 	local root_x
 	if self.anchor then
-		-- EMBYNIAN[menu-anchor] — 锚点在时左缘贴光标（横向夹住不越屏）；否则照旧屏幕居中。
+		-- MOMOKA[menu-anchor] — 锚点在时左缘贴光标（横向夹住不越屏）；否则照旧屏幕居中。
 		root_x = round(clamp(0, self.anchor.x - self.padding, math.max(0, display.width - root_w - self.padding)))
 	else
 		root_x = round((display.width - root_w) / 2)
@@ -551,7 +551,7 @@ function Menu:back()
 
 	local parent = self.current.parent_menu
 
-	-- EMBYNIAN[menu-style] — 级联布局里面板位置由父项行钉死，进出子菜单不再有横移动画
+	-- MOMOKA[menu-style] — 级联布局里面板位置由父项行钉死，进出子菜单不再有横移动画
 	-- （上游的 slide_in_menu/set_offset_x 随旧几何一起退役）。
 	if parent then
 		self:activate_menu(parent.id)
@@ -625,7 +625,7 @@ function Menu:scroll_to_index(index, menu_id, immediate)
 	local menu = self:get_menu(menu_id)
 	if not menu then return end
 	if (index and index >= 1 and index <= #menu.items) then
-		-- EMBYNIAN[menu-style] — 行位置查前缀和表（分隔符占小槽位，行不再等高）
+		-- MOMOKA[menu-style] — 行位置查前缀和表（分隔符占小槽位，行不再等高）
 		local position = round((menu.item_tops and menu.item_tops[index] or self.scroll_step * (index - 1))
 			- ((menu.height - self.scroll_step) / 2))
 		if immediate then
@@ -771,7 +771,7 @@ function Menu:activate_selected_item(shortcut, is_pointer)
 		-- Is submenu
 		if item.items then
 			self:activate_menu(item.id)
-			-- EMBYNIAN[menu-style] — 开子菜单时首行即选中（参考截图里子面板第一行就是高亮那格）；
+			-- MOMOKA[menu-style] — 开子菜单时首行即选中（参考截图里子面板第一行就是高亮那格）；
 			-- 键盘路径 reset_navigation 已做过同一件事，这里统一再归一一次（幂等）。
 			self:select_by_offset(0, item)
 			self.opacity = 1
@@ -823,7 +823,7 @@ function Menu:on_display() self:update_content_dimensions() end
 function Menu:on_prop_fullormaxed() self:update_content_dimensions() end
 function Menu:on_options() self:update_content_dimensions() end
 
--- EMBYNIAN[menu-style] — 面板感知版选行：光标在哪块可见面板上，就在哪块菜单里选行
+-- MOMOKA[menu-style] — 面板感知版选行：光标在哪块可见面板上，就在哪块菜单里选行
 -- （父面板/预览子面板都是活面板，参考菜单的用法）。
 ---@param panel? {menu: MenuStack, x: number, y: number, w: number, h: number}
 function Menu:select_from_cursor(panel)
@@ -914,7 +914,7 @@ function Menu:on_global_mouse_move()
 	request_render()
 end
 
--- EMBYNIAN[menu-style] — 滚轮滚光标底下那块面板（参考菜单每一层都是活面板）；不在面板上时落回当前面板。
+-- MOMOKA[menu-style] — 滚轮滚光标底下那块面板（参考菜单每一层都是活面板）；不在面板上时落回当前面板。
 function Menu:handle_wheel_up() self:scroll_by(self.scroll_step * -3, self:wheel_panel_id(), {update_cursor = true}) end
 function Menu:handle_wheel_down() self:scroll_by(self.scroll_step * 3, self:wheel_panel_id(), {update_cursor = true}) end
 
@@ -1545,7 +1545,7 @@ function Menu:command_or_event(command, params, event)
 	return nil
 end
 
--- EMBYNIAN[menu-style] — 参考菜单的渲染：每帧按 compute_layout 画全部可见面板（根、祖先链、
+-- MOMOKA[menu-style] — 参考菜单的渲染：每帧按 compute_layout 画全部可见面板（根、祖先链、
 -- current 选中项的子菜单预览），元素边界＝面板并集；无标题/脚注/左缘指示条；悬停行 #353535
 -- 白字（左右各让 hover_inset、圆角 hover_radius）；分隔符＝通宽 1px 细线（menu_separator_color）
 -- 坐在自己的小槽位正中；hint 列全亮白、右缘贴 item_pad_right；文字左缘从 item_indent 起算
@@ -1652,7 +1652,7 @@ function Menu:draw_panel(ass, panel)
 		local item_by = item_ay + item_height
 
 		-- Separator
-		-- EMBYNIAN[menu-style] — 通宽 1px 细线坐在槽位正中（参考图实测线色 ≈ #3E3E3E、上下各让 4px）
+		-- MOMOKA[menu-style] — 通宽 1px 细线坐在槽位正中（参考图实测线色 ≈ #3E3E3E、上下各让 4px）
 		if item.separator then
 			if item_by <= content_rect.by then
 				local line_ay = round(item_ay + item_height / 2 - self.separator_size / 2)
@@ -1664,7 +1664,7 @@ function Menu:draw_panel(ass, panel)
 			local item_center_y = item_ay + item_height / 2
 			local item_clip = (item_ay < content_rect.ay or item_by > content_rect.by) and scroll_clip or nil
 			local is_selected = menu.selected_index == index
-			-- EMBYNIAN[menu-style] — 文字左缘从 item_indent 起算，右列（hint/▸）贴 item_pad_right
+			-- MOMOKA[menu-style] — 文字左缘从 item_indent 起算，右列（hint/▸）贴 item_pad_right
 			local text_ax, text_bx = panel.x + self.item_indent, panel.x + panel.w - self.item_pad_right
 			local font_color = is_selected and options.menu_focused_color or item.active and fgt or bgt
 			local actions = is_selected and (item.actions or menu.item_actions) -- not nil = actions are visible
@@ -1673,7 +1673,7 @@ function Menu:draw_panel(ass, panel)
 			if action then selected_action = action end
 
 			-- Hover/active row highlight
-			-- EMBYNIAN[menu-style] — 悬停/键盘所在行＝#353535 浅灰底、**字色保持白**（参考图悬停行
+			-- MOMOKA[menu-style] — 悬停/键盘所在行＝#353535 浅灰底、**字色保持白**（参考图悬停行
 			-- 实测 53 底 255 字）；active 行（当前值）照旧 fg@0.8＋深字，叠加时取悬停底色。
 			local highlight_opacity = (item.active and 0.8 or 0) + (is_selected and 1 or 0)
 			if highlight_opacity > 0 then
@@ -1793,7 +1793,7 @@ function Menu:draw_panel(ass, panel)
 			end
 
 			-- Hint
-			-- EMBYNIAN[menu-style] — 快捷键/动态值那列全亮白（参考图 b/q/PGUP 与正文同色），右缘贴边
+			-- MOMOKA[menu-style] — 快捷键/动态值那列全亮白（参考图 b/q/PGUP 与正文同色），右缘贴边
 			if item.hint then
 				item.ass_safe_hint = item.ass_safe_hint or ass_escape(item.hint)
 				local clip = '\\clip(' .. title_clip_bx + self.item_padding .. ','
@@ -1831,7 +1831,7 @@ function Menu:draw_panel(ass, panel)
 			end
 
 			-- Select hovered item
-			-- EMBYNIAN[menu-style] — 每块可见面板都是活面板：光标停在哪块上，哪块的行跟着亮
+			-- MOMOKA[menu-style] — 每块可见面板都是活面板：光标停在哪块上，哪块的行跟着亮
 			-- （父面板高亮不吹掉，参考图「导航＋子面板首行」双高亮）；当前面板保留上游的
 			-- 吹掉（悬空白处取消选中）与去程守卫（朝预览子面板走时不换行）。
 			local item_rect_hitbox = {
@@ -1865,7 +1865,7 @@ function Menu:draw_panel(ass, panel)
 	end
 
 	-- We are in mouse nav and cursor isn't hovering any row of the current panel
-	-- EMBYNIAN[menu-style] — 只在光标确实待在本面板里扫空时才吹掉选中；光标在别的面板上（比如
+	-- MOMOKA[menu-style] — 只在光标确实待在本面板里扫空时才吹掉选中；光标在别的面板上（比如
 	-- 子菜单开着、光标停在父面板那行）时保留 —— 参考图「父行＋子面板首行」两行同灰就是这条。
 	if blur_selected_index and self:panel_at(cursor.x, cursor.y) == panel then
 		menu.selected_index = nil
@@ -1875,7 +1875,7 @@ function Menu:draw_panel(ass, panel)
 		request_render()
 	end
 
-	-- Search input（标题行整块撤下后的唯一上方部件；EmbyNian 菜单 type_to_search=no，仅 '/' 呼出）
+	-- Search input（标题行整块撤下后的唯一上方部件；Momoka 菜单 type_to_search=no，仅 '/' 呼出）
 	if menu.search then
 		local title_height = self.item_height + self.padding - 3
 		local requires_submit = menu.search_debounce == 'submit'

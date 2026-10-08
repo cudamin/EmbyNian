@@ -1,14 +1,14 @@
-# EmbyNian 隐私政策
+# Momoka 隐私政策
 
 最后更新：2026-10-08
 
 ## 一句话
 
-EmbyNian 是一个本地播放客户端。**开发者不收集、不上传、不分享你的任何数据**；应用只连接你自己配置的服务器，信息都留在你自己的电脑上。
+Momoka 是一个本地播放客户端。**开发者不收集、不上传、不分享你的任何数据**；应用只连接你自己配置的服务器，信息都留在你自己的电脑上。
 
 ## 1. 适用范围
 
-本政策适用于 Windows 桌面应用 EmbyNian（Microsoft Store 包身份 `MOMOKA.EmbyNian`）。应用运行在你自己的设备上，配合你自己搭建或你已获授权使用的 Emby 媒体服务器工作。
+本政策适用于 Windows 桌面应用 Momoka（Microsoft Store 上架）。应用运行在你自己的设备上，配合你自己搭建或你已获授权使用的 Emby 媒体服务器工作。
 
 ## 2. 开发者收集的数据
 
@@ -18,7 +18,7 @@ EmbyNian 是一个本地播放客户端。**开发者不收集、不上传、不
 
 ## 3. 应用在你设备上保存的数据
 
-全部保存在本机，默认位置是 `%LOCALAPPDATA%\EmbyNian`：
+全部保存在本机，默认位置是 `%LOCALAPPDATA%\Momoka`：
 
 | 内容 | 位置 | 说明 |
 | --- | --- | --- |
@@ -42,7 +42,7 @@ EmbyNian 是一个本地播放客户端。**开发者不收集、不上传、不
 2. **你自己配置的第三方片库管理服务**（可选功能） —— 你在应用里填的地址。用于搜索、订阅与整理。
 3. **你的服务器在元数据里给出的图片地址** —— 海报与背景图可能由你的服务器指向第三方图片服务（例如 `image.tmdb.org`）。应用只是按服务器给出的地址取图，不自行决定去哪个第三方。
 
-发往 Emby 服务器的请求带有这些标识：客户端名 `EmbyNian`、**本机计算机名**、随机生成并保存在本机的设备 ID、应用版本号，以及你的访问令牌。这些只发给**你自己的服务器**，用途是让服务器认出「这是哪台设备」。
+发往 Emby 服务器的请求带有这些标识：客户端名 `Momoka`、**本机计算机名**、随机生成并保存在本机的设备 ID、应用版本号，以及你的访问令牌。这些只发给**你自己的服务器**，用途是让服务器认出「这是哪台设备」。
 
 **应用不会把上述任何内容发送给开发者或任何第三方。**
 
@@ -60,7 +60,7 @@ EmbyNian 是一个本地播放客户端。**开发者不收集、不上传、不
 ## 7. 数据删除
 
 - 卸载应用**不会**删除第 3 节列出的数据。
-- 要彻底清除：删除 `%LOCALAPPDATA%\EmbyNian` 整个目录，以及你自己设置的截图目录与下载目录。
+- 要彻底清除：删除 `%LOCALAPPDATA%\Momoka` 整个目录，以及你自己设置的截图目录与下载目录。
 - 要撤销服务器上的登录：在你的 Emby 服务器上删除对应的设备或访问令牌。
 
 ## 8. 第三方组件
@@ -79,19 +79,19 @@ EmbyNian 是一个本地播放客户端。**开发者不收集、不上传、不
 
 ---
 
-# EmbyNian Privacy Policy
+# Momoka Privacy Policy
 
 Last updated: 2026-10-08
 
-EmbyNian is a Windows desktop client for an Emby media server that you own or are authorized to use.
+Momoka is a Windows desktop client for an Emby media server that you own or are authorized to use.
 
 **The developer collects, uploads, and shares no data.** The app contains no telemetry, analytics, advertising, or crash reporting, and does not contact any service operated by the developer.
 
-Everything the app stores stays on your machine, under `%LOCALAPPDATA%\EmbyNian`: your server address, account name and preferences (`settings.json`); your password and access token, encrypted with the Windows Data Protection API (DPAPI) so that only the current Windows account on this machine can decrypt them; logs, in which request URLs are recorded without query parameters and credentials are never written; a poster and backdrop image cache; a shader compilation cache; screenshots you take; and WebView2 browsing data created by the embedded server console page. The app also reads the local font list for subtitle font selection; that information is only displayed locally.
+Everything the app stores stays on your machine, under `%LOCALAPPDATA%\Momoka`: your server address, account name and preferences (`settings.json`); your password and access token, encrypted with the Windows Data Protection API (DPAPI) so that only the current Windows account on this machine can decrypt them; logs, in which request URLs are recorded without query parameters and credentials are never written; a poster and backdrop image cache; a shader compilation cache; screenshots you take; and WebView2 browsing data created by the embedded server console page. The app also reads the local font list for subtitle font selection; that information is only displayed locally.
 
-The app connects only to: (1) your own Emby server, at the address you enter, to sign in, browse your library, report playback progress, and sync resume positions; (2) a third-party library-management service that you configure yourself, if you enable that feature, at the address you enter; and (3) image URLs that your own server supplies in its metadata (for example `image.tmdb.org`). Requests to your Emby server carry the client name `EmbyNian`, this computer's machine name, a randomly generated device ID stored locally, the app version, and your access token — sent only to your own server, so it can identify this device.
+The app connects only to: (1) your own Emby server, at the address you enter, to sign in, browse your library, report playback progress, and sync resume positions; (2) a third-party library-management service that you configure yourself, if you enable that feature, at the address you enter; and (3) image URLs that your own server supplies in its metadata (for example `image.tmdb.org`). Requests to your Emby server carry the client name `Momoka`, this computer's machine name, a randomly generated device ID stored locally, the app version, and your access token — sent only to your own server, so it can identify this device.
 
-Uninstalling the app does not delete the data listed above; delete the `%LOCALAPPDATA%\EmbyNian` folder (and any screenshot or download folders you configured) to remove it. To revoke access, remove the corresponding device or token on your Emby server.
+Uninstalling the app does not delete the data listed above; delete the `%LOCALAPPDATA%\Momoka` folder (and any screenshot or download folders you configured) to remove it. To revoke access, remove the corresponding device or token on your Emby server.
 
 Bundled third-party components — mpv / libmpv, uosc and Material Icons, the ArtCNN / ravu / CfL / SSimDownscaler shaders, and the Microsoft Windows App SDK and WebView2 Runtime — follow their own licenses, with license and attribution texts shipped alongside the app. They do not collect data.
 

@@ -1,7 +1,7 @@
 # libmpv 的运行时依赖
 
 这里只放一个文件：`vulkan-1.dll`。它是 `libmpv-2.dll` **唯一一个不属于 Windows 系统的依赖**，
-由 `src/EmbyNian.Shell/EmbyNian.Shell.csproj` 当普通内容文件拷到 exe 旁边，普通构建和发布都拷。
+由 `src/Momoka.Shell/Momoka.Shell.csproj` 当普通内容文件拷到 exe 旁边，普通构建和发布都拷。
 
 2026-09-04 入库。**从前它不在仓库里** —— 发布时从 `C:\mpv_config-2026.08.12`（用户自己那套便携版 mpv）
 的根目录现拷，也就是说这个程序能不能发布、发出来能不能起播，取决于另一个软件的安装目录还在不在。

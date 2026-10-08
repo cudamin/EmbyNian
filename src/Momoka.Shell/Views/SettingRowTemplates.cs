@@ -1,0 +1,96 @@
+using Momoka.Shell.ViewModels;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+
+namespace Momoka.Shell.Views;
+
+/// <summary>
+/// Picks the template for a settings row from the row's type.
+/// <para>
+/// The settings page is around sixty rows of a handful of shapes, so the shapes are written once as
+/// templates and the rows are data. This is what joins the two. The alternative — a <c>Visibility</c> per
+/// shape on every row, with every shape's controls built for each — realises the controls of every shape
+/// on every row and leaves that many bindings live, all but one of them pointed at properties its row does
+/// not have.
+/// </para>
+/// <para>
+/// The templates are set from XAML rather than found by convention, so a missing one is visible in the
+/// markup next to the templates themselves instead of being a null returned at runtime.
+/// </para>
+/// </summary>
+public sealed partial class SettingRowTemplates : DataTemplateSelector
+{
+    public DataTemplate? Choice { get; set; }
+
+    public DataTemplate? Toggle { get; set; }
+
+    public DataTemplate? ToggleGroup { get; set; }
+
+    public DataTemplate? Number { get; set; }
+
+    public DataTemplate? OptionalNumber { get; set; }
+
+    public DataTemplate? Slider { get; set; }
+
+    public DataTemplate? Text { get; set; }
+
+    public DataTemplate? Font { get; set; }
+
+    /// <summary>一个 HTML 颜色代码，色块点开是拾色器，见 <see cref="SettingColorRow"/>。</summary>
+    public DataTemplate? Color { get; set; }
+
+    /// <summary>字幕卡顶上那条「字幕示例」预览，只画不写，见 <see cref="SettingSubtitlePreviewRow"/>。</summary>
+    public DataTemplate? Preview { get; set; }
+
+    public DataTemplate? Theme { get; set; }
+
+    /// <summary>一行读数加一颗可有可无的按钮，见 <see cref="SettingFactRow"/>。</summary>
+    public DataTemplate? Fact { get; set; }
+
+    /// <summary>一行一个可重绑的播放器快捷键，见 <see cref="SettingShortcutRow"/>。</summary>
+    public DataTemplate? Shortcut { get; set; }
+
+    /// <summary>主页版面那张可拖拽、带勾选的表，见 <see cref="SettingHomeLayoutRow"/>。</summary>
+    public DataTemplate? HomeLayout { get; set; }
+
+    /// <summary>字幕语言优先级那颗下拉，点开是一张可拖拽、带勾选的语言表，见 <see cref="SettingLanguagesRow"/>。</summary>
+    public DataTemplate? Languages { get; set; }
+
+    /// <summary>字幕标题筛选那张表：一行一个关键词加优先/默认/排除，可自定义添加，见 <see cref="SettingTitleRulesRow"/>。</summary>
+    public DataTemplate? TitleRules { get; set; }
+
+    /// <summary>MoviePilot 接入卡：一个开关、两个输入框、一颗测试按钮，见 <see cref="SettingMoviePilotRow"/>。</summary>
+    public DataTemplate? MoviePilot { get; set; }
+
+    protected override DataTemplate? SelectTemplateCore(object item) => item switch
+    {
+        // Before the two numeric rows, because a slider row is not a number row but reads like one; and
+        // before the plain toggle, because a group of toggles is not one toggle.
+        SettingThemeRow => Theme,
+        SettingHomeLayoutRow => HomeLayout,
+        SettingLanguagesRow => Languages,
+        SettingTitleRulesRow => TitleRules,
+        SettingMoviePilotRow => MoviePilot,
+        SettingFactRow => Fact,
+        SettingShortcutRow => Shortcut,
+        SettingChoiceRow => Choice,
+        SettingToggleGroupRow => ToggleGroup,
+        SettingToggleRow => Toggle,
+        SettingSliderRow => Slider,
+        SettingNumberRow => Number,
+        SettingOptionalNumberRow => OptionalNumber,
+        SettingFontRow => Font,
+        SettingColorRow => Color,
+        SettingSubtitlePreviewRow => Preview,
+        SettingTextRow => Text,
+        _ => null
+    };
+
+    /// <summary>
+    /// The overload an <c>ItemsControl</c> actually calls. It does not fall back to the one-argument form on
+    /// its own, so a selector that overrides only that one returns null for every row and the page comes up
+    /// empty — with no error, because returning no template is legal.
+    /// </summary>
+    protected override DataTemplate? SelectTemplateCore(object item, DependencyObject container) =>
+        SelectTemplateCore(item);
+}

@@ -1,8 +1,8 @@
-# EmbyNian
+# Momoka
 
 自用的Emby客户端，由天才程序员Claude、GPT、DeepSeek、GLM完成开发。
 
-telegram 发布频道：https://t.me/EmbyNian
+telegram 发布频道：https://t.me/Momoka
 
 界面是原生 WinUI 3，播放器内核是 libmpv。
 ## 设计参考
@@ -32,5 +32,5 @@ telegram 发布频道：https://t.me/EmbyNian
 
 ### 下载
 
-到 [Releases](https://github.com/cudamin/EmbyNian/releases) 下载最新的 `EmbyNian_windows-x64_x.x.x.exe` 安装包。
+到 [Releases](https://github.com/cudamin/EmbyNian/releases) 下载最新的 `Momoka_windows-x64_x.x.x.exe` 安装包。
 

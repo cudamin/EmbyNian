@@ -24,17 +24,17 @@ function TopBar:init()
 	local close = {icon = 'close', hover_bg = '2311e8', hover_fg = 'ffffff', command = function() mp.command('quit') end}
 	local max = {icon = 'crop_square', command = maximized_command, is_max = true}
 	local min = {icon = 'minimize', command = function() mp.command('cycle window-minimized') end}
-	-- EMBYNIAN[topbar-pin] — 置顶按钮（用户令 2026-09-28 晚「给独占模式右上角也加个置顶图标」）。
+	-- MOMOKA[topbar-pin] — 置顶按钮（用户令 2026-09-28 晚「给独占模式右上角也加个置顶图标」）。
 	-- 与集成模式右上角那一颗**同位同义**：集成那颗切宿主窗口的 TopMost（PlayerPage.Input.cs 的 SetPinned），
-	-- 这颗切 mpv 窗口自己的 ontop —— 独占模式的窗口就是 mpv 那个顶层窗（见文件头 EMBYNIAN[topbar]：
+	-- 这颗切 mpv 窗口自己的 ontop —— 独占模式的窗口就是 mpv 那个顶层窗（见文件头 MOMOKA[topbar]：
 	-- border=no、系统标题栏不存在），所以「置顶」在这个窗口上就是 mpv 的 ontop 属性，不需要经过宿主。
 	-- 排在窗口三颗的**左边**（集成那一排也正是「置顶、最小化、最大化、关闭」），top_bar_controls='left'
 	-- 时整排镜子一样翻过去、它落在最右。图标 push_pin —— 装箱的 MaterialIconsRound 里确有此字形（与集成
-	-- 那颗 PathIcon 的图钉同义）。已置顶那一档怎么画见 render 里 EMBYNIAN[topbar-pin-tilt] 那段。
+	-- 那颗 PathIcon 的图钉同义）。已置顶那一档怎么画见 render 里 MOMOKA[topbar-pin-tilt] 那段。
 	local pin = {icon = 'push_pin', command = function() mp.command('cycle ontop') end, is_pin = true}
 	self.buttons = options.top_bar_controls == 'left' and {close, max, min, pin} or {pin, min, max, close}
 
-	-- EMBYNIAN[topbar-back] — 左上角返回按钮：独占窗口是独立顶层窗，退出 mpv 即回到外壳（详情页），
+	-- MOMOKA[topbar-back] — 左上角返回按钮：独占窗口是独立顶层窗，退出 mpv 即回到外壳（详情页），
 	-- 与集成模式左上角的返回同位同义（用户令 2026-09-26「给独占模式左上角加个返回按钮」）。图标用
 	-- arrow_back_ios（uosc 上一集按钮同款，装箱的 Material Icons Round 里确有此字形）。
 	self.back_button = {icon = 'arrow_back_ios', command = function() mp.command('quit') end}
@@ -142,10 +142,10 @@ function TopBar:update_render_titles()
 	request_render()
 end
 
--- EMBYNIAN[topbar-subline] — 宿主 → uosc 的副标题（第二行）：分辨率 · 视频编码 · 音频格式 · 组名
+-- MOMOKA[topbar-subline] — 宿主 → uosc 的副标题（第二行）：分辨率 · 视频编码 · 音频格式 · 组名
 -- （用户令 2026-09-28「下方那一栏改为分辨率+视频编码+音频格式+组名」，2026-09-27 那批的前置分辨率版）。
 -- 独占模式的 top_bar_alt_title 选项留空（register_observers 因此不给它挂模板监听），副标题改由宿主经
--- embynian-subline 直接写进来。位置**不跟着主标题走**：画在左上角返回按钮的正下方（左缘＝窗口左缘，
+-- momoka-subline 直接写进来。位置**不跟着主标题走**：画在左上角返回按钮的正下方（左缘＝窗口左缘，
 -- 用户令 2026-09-28「移动到返回按钮的下方」），主标题仍在返回按钮右边一行。空串＝收起副标题；
 -- ass_escape 与主标题那条模板路一致（组名取自文件名，可能带需要转义的字符）。
 -- 写完催一次 update_render_titles（内部会 update_dimensions＋request_render）。
@@ -168,7 +168,7 @@ function TopBar:update_dimensions()
 	self.ax = window_border_size
 	self.ay = window_border_size
 	self.bx = display.width - window_border_size
-	-- EMBYNIAN[topbar-no-chapter] — 命中区的加高只为副标题那一行（章节那一行已整段撤下，见 render）。
+	-- MOMOKA[topbar-no-chapter] — 命中区的加高只为副标题那一行（章节那一行已整段撤下，见 render）。
 	self.by = math.max(self.size + window_border_size, min_hitbox_height - options.proximity_in)
 end
 
@@ -238,9 +238,9 @@ function TopBar:render()
 
 			local rect = {ax = button_ax, ay = ay, bx = button_ax + self.size, by = by, input_owner = button}
 			local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
-			-- EMBYNIAN[topbar-pin-tilt] — 状态画在图钉的姿势上（用户令 2026-09-29「置顶不要长亮，改为非置顶
+			-- MOMOKA[topbar-pin-tilt] — 状态画在图钉的姿势上（用户令 2026-09-29「置顶不要长亮，改为非置顶
 			-- 的时候图标是斜的，置顶的时候恢复原样」）：未置顶斜 35°、置顶立正。角度取自
-			-- EmbyNian.Shell 那颗的 PinTiltDegrees（PlayerPage.Input.cs）—— 两头同一个姿势、同一份来历。
+			-- Momoka.Shell 那颗的 PinTiltDegrees（PlayerPage.Input.cs）—— 两头同一个姿势、同一份来历。
 			-- libass 的 \frz 正角是**逆时针**，集成那头 WinUI RotateTransform 正角是顺时针，所以这里取
 			-- 负号：-35 画出来与集成 +35 同一个方向（钉头向右倒）。ass:txt 的 opts.rotate 原生接这个标记
 			-- （lib/ass.lua），icon 把 opts 整包递下去，不用另开一路。旋转绕锚点（\an5 的字面中心）转，
@@ -275,9 +275,9 @@ function TopBar:render()
 		end
 	end
 
-	-- EMBYNIAN[topbar-back] — 返回按钮画在窗口标题左侧（点它退出 mpv＝回到外壳详情页）。放在窗口控制块之后、
+	-- MOMOKA[topbar-back] — 返回按钮画在窗口标题左侧（点它退出 mpv＝回到外壳详情页）。放在窗口控制块之后、
 	-- 标题之前：控制块在右侧（top_bar_controls='right'，独占默认）时不动 ax，返回按钮就落在最左。
-	-- EMBYNIAN[topbar-back-glass] — 可见底与标题那块玻璃**同形同色**（用户令 2026-09-28 晚「返回按钮的背景要和
+	-- MOMOKA[topbar-back-glass] — 可见底与标题那块玻璃**同形同色**（用户令 2026-09-28 晚「返回按钮的背景要和
 	-- 标题的背景一致」，问实了＝连大小一起跟标题一致）：高 size-2*margin、四周各让 margin（左缘＝窗口左缘＋
 	-- margin，与上沿同一个数）、贴到窗口左缘内侧（与它正下方的副标题同一左缘）。2026-09-28 那版「整格 size
 	-- 见方、贴角」按这条令撤回；**同日更晚又按「左边的空隙要和上面的一样大」把左缘也让进 margin** —— 于是
@@ -293,9 +293,9 @@ function TopBar:render()
 			input_owner = self.back_button,
 		}
 		local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
-		-- EMBYNIAN[topbar-back] — 返回键始终带一块可见背景：uosc 窗口按钮默认 opacity.controls=0，静止时只有
+		-- MOMOKA[topbar-back] — 返回键始终带一块可见背景：uosc 窗口按钮默认 opacity.controls=0，静止时只有
 		-- 图标、没有底（压在亮画面上看不清），用户要「给返回键加背景」。静止＝深底＋亮箭头，悬停＝翻成亮底暗箭头。
-		-- EMBYNIAN[topbar-back-glass] — 静止档的不透明度取 config.opacity.title（与标题那块玻璃同一个数，用户令
+		-- MOMOKA[topbar-back-glass] — 静止档的不透明度取 config.opacity.title（与标题那块玻璃同一个数，用户令
 		-- 2026-09-28 晚「返回按钮的背景要和标题的背景一致」）：原来是写死的 0.55，比标题淡一层、压在画面上发灰。
 		local bg_opacity = is_hover and 1 or config.opacity.title
 		local button_fg = is_hover and bg or fg
@@ -317,7 +317,7 @@ function TopBar:render()
 			border = options.text_border * state.scale,
 		})
 
-		-- EMBYNIAN[topbar-back-glass] — 标题那一块从这里起：缝＝title_spacing（用户令 2026-09-28 晚「返回键跟
+		-- MOMOKA[topbar-back-glass] — 标题那一块从这里起：缝＝title_spacing（用户令 2026-09-28 晚「返回键跟
 		-- 标题的间隙右边要跟下面一致」—— 两行之间本来就是 title_spacing，右边那条缝照样收成它）。标题左缘
 		-- 不再另加 margin：uosc 原版那个 margin 是「窗口左缘到标题」的量，这里已经由返回键玻璃左边那条
 		-- 让出去了（见上，返回键玻璃左缘＝窗口左缘＋margin，与标题上沿同一个数）。
@@ -329,7 +329,7 @@ function TopBar:render()
 	if main_title or state.has_playlist then
 		local padding = round(self.font_size / 2)
 		local left_aligned = options.top_bar_controls == 'left'
-		-- EMBYNIAN[topbar-back-glass] — 标题玻璃回到 uosc 自家那一条（用户令 2026-09-28 晚「把标题的大小改回跟
+		-- MOMOKA[topbar-back-glass] — 标题玻璃回到 uosc 自家那一条（用户令 2026-09-28 晚「把标题的大小改回跟
 		-- C:\mpv_config-2026.08.12 这个项目一样大小」）：高 size-2*margin、从 self.ay+margin 起，上下各让
 		-- margin —— 2026-09-28 那版「画满整格 size 高」按这条令撤回。左缘不再另加 margin（缝已由返回键推进 ax）。
 		local title_ax, title_bx, title_ay = ax, bx - margin, self.ay + margin
@@ -379,7 +379,7 @@ function TopBar:render()
 				local rect_ideal_width = round(text_width(main_title, opts) + padding * 2)
 				local rect_width = math.min(rect_ideal_width, title_bx - title_ax)
 				local ax = left_aligned and title_bx - rect_width or title_ax
-				-- EMBYNIAN[topbar-back-glass] — 标题玻璃下沿同样让进 margin（与参考项目「上下各让 margin」一条）。
+				-- MOMOKA[topbar-back-glass] — 标题玻璃下沿同样让进 margin（与参考项目「上下各让 margin」一条）。
 				local by = by - margin
 				local title_rect = {ax = ax, ay = title_ay, bx = ax + rect_width, by = by, input_owner = self}
 
@@ -397,18 +397,18 @@ function TopBar:render()
 			end
 
 			-- Alt title
-			-- EMBYNIAN[topbar-subline] — 副标题（宿主经 embynian-subline 写进来的文件信息行）挂在**返回按钮的
+			-- MOMOKA[topbar-subline] — 副标题（宿主经 momoka-subline 写进来的文件信息行）挂在**返回按钮的
 			-- 正下方**：左缘＝返回键玻璃的左缘（＝窗口左缘＋margin，用户令 2026-09-28 晚「左边的空隙要和上面
 			-- 的一样大」把整簇按 margin 内缩之后，返回键玻璃与自己正下方这一行仍共用同一条左缘），不再跟着
 			-- 主标题的左缘走（用户令 2026-09-28「移动到返回按钮的下方」）。top_bar_controls='left' 的老摆法照旧。
 			if alt_title and options.top_bar_alt_title_place == 'below' then
 				local by = title_ay + self.alt_title_size
-				-- EMBYNIAN[topbar-subline-branch] — 副标题前面缀一个「└ 」（用户令 2026-09-28 更晚「把这个添加到
+				-- MOMOKA[topbar-subline-branch] — 副标题前面缀一个「└ 」（用户令 2026-09-28 更晚「把这个添加到
 				-- 元数据的前面」）：参考项目 uosc 原版给**章节那一行**加的就是这个树干，这里照它画在副标题上 ——
 				-- 上面主标题那一行是树干、副标题挂在它底下。量字宽与画字都用带前缀的那一串（框宽跟着一起宽），
 				-- 前缀画在玻璃里面（与参考项目同一个位置）。top_bar_controls='left' 的老摆法不加前缀（同参考条件）。
 				local subline_text = left_aligned and alt_title or '└ ' .. alt_title
-				-- EMBYNIAN[topbar-subline-size] — 字号是 alt_title_size 的一档缩小。原版 0.77（窗口档 \fs18、
+				-- MOMOKA[topbar-subline-size] — 字号是 alt_title_size 的一档缩小。原版 0.77（窗口档 \fs18、
 				-- 全屏档 \fs24），用户令 2026-09-29「元数据缩小一点点，集成模式和独占模式大小要一致」收到
 				-- 0.71（两档正好落到 \fs17 / \fs22）。集成那头的 Shell 字号 = 这里的 \fs × 0.75（libass \fs
 				-- 是 72 DPI pt、WinUI FontSize 是 96 DPI px，见 Styles.xaml 注），两头必须一起改：
@@ -416,12 +416,12 @@ function TopBar:render()
 				-- ＋ PlayerPage.SelfCheck.Chrome.cs 的 SubtitleFontSize 断言。
 				local opts = {
 					size = round(self.alt_title_size * 0.71),
-					-- EMBYNIAN[topbar-subline-italic] — 副标题（分辨率 · 视频编码 · 音频格式 · 组名）走斜体，
+					-- MOMOKA[topbar-subline-italic] — 副标题（分辨率 · 视频编码 · 音频格式 · 组名）走斜体，
 					-- 用户令 2026-09-28 晚「标题下方的视频元数据改为斜体」；字宽算量同样认这个标记
 					-- （lib/text.lua 的 whole_text_width 会把斜体那点倾斜算进去），框宽跟着对得上。
 					italic = true,
 					wrap = 2,
-					-- EMBYNIAN[topbar-subline-dim] — 字色比标题淡一档的浅灰（用户令 2026-09-28 晚「元数据的
+					-- MOMOKA[topbar-subline-dim] — 字色比标题淡一档的浅灰（用户令 2026-09-28 晚「元数据的
 					-- 字体加点灰色」）：原来是 bgt（＝background_text FFFBFE，与标题同色）。**ass.txt 把 opts.color
 					-- 原样接在 `\1c&H` 后面**（lib/ass.lua），也就是这里要写 ASS 的 BBGGRR 顺序 —— 本值是中性灰、
 					-- 两个顺序同一个串，不踩那个坑。想再深/再浅改这一个数即可。

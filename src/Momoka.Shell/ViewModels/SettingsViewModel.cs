@@ -1,0 +1,1843 @@
+using Momoka.Infrastructure;
+using System.Collections.ObjectModel;
+using System.Globalization;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Momoka.Configuration;
+using Momoka.Diagnostics;
+using Momoka.MoviePilot;
+using Momoka.Mpv;
+using Momoka.Playback;
+using Momoka.Services;
+using Momoka.Theming;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+
+namespace Momoka.Shell.ViewModels;
+
+/// <summary>保留分类字符串作为导航键；分组只决定左栏的标题和顺序。</summary>
+public sealed class SettingsCategoryGroup(string name, IEnumerable<string> items) : List<string>(items)
+{
+    public string Name { get; } = name;
+}
+
+/// <summary>One card on the settings page: a heading, a sentence about it, and the rows under it.</summary>
+public sealed partial class SettingSection : ObservableObject
+{
+    internal SettingSection(string category, string title, string description, IReadOnlyList<SettingRow> rows)
+    {
+        Category = category;
+        Title = title;
+        Description = description;
+        Rows = rows;
+    }
+
+    /// <summary>
+    /// The entry in the left-hand list that shows this card. Kept separate from <see cref="Title"/> because
+    /// several cards can share one category — 「画质与着色器」 under 「视频输出」 — and matching
+    /// the two by substring, as this page used to, makes every future heading a trap.
+    /// </summary>
+    public string Category { get; }
+
+    public string Title { get; }
+
+    public string Description { get; }
+
+    public IReadOnlyList<SettingRow> Rows { get; }
+
+    /// <summary>
+    /// 卡片牌子右端那个读数：这张卡管着几件事。
+    /// <para>
+    /// 数的是设置的件数，不是树上的容器数（那是 <see cref="SettingsViewModel.Containers"/> 的活）—— 一组
+    /// 开关是好几件事，而包着它们的那一行本身不是一件；一行色板是一件事，不是六件。
+    /// </para>
+    /// </summary>
+    public string Count => $"{Rows.Sum(row => row is SettingToggleGroupRow group ? group.Toggles.Count : 1)} 项";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SectionVisibility))]
+    public partial bool IsVisible { get; set; }
+
+    /// <summary>
+    /// Every card is built and kept; picking a category only changes which one is shown. The page has no
+    /// server data in it, so building all of them costs nothing measurable, and a card that stays alive
+    /// keeps any half-typed text across a trip through the category list.
+    /// </summary>
+    public Visibility SectionVisibility => IsVisible ? Visibility.Visible : Visibility.Collapsed;
+}
+
+/// <summary>
+/// The settings page, as data. Builds the cards and their rows out of <see cref="AppSettings"/> and
+/// the mpv option catalogues, and saves the settings document on every edit.
+/// <para>
+/// There is no 「loading」 flag here. Each row reads its starting value in its own constructor and only
+/// writes from that point on, so nothing has to suppress writes while the page is being built — which is
+/// what the page-wide flag was for, and it had to be held during any programmatic refresh, suppressing
+/// genuine edits along with the spurious ones.
+/// </para>
+/// </summary>
+public sealed partial class SettingsViewModel : PageViewModel
+{
+    private static readonly (string Label, MpvBackendKind Value)[] Backends =
+    [
+        ("内置 libmpv（窗口内播放）", MpvBackendKind.BuiltInLibMpv),
+        ("外部 mpv.exe（独立窗口）", MpvBackendKind.ExternalMpv)
+    ];
+
+    private static readonly (string Label, VideoPipelineKind Value)[] Pipelines =
+    [
+        ("集成模式（与界面混排）", VideoPipelineKind.Integrated),
+        ("独占模式（mpv 自管交换链）", VideoPipelineKind.Standalone)
+    ];
+
+    private static readonly (string Label, SkipSectionMode Value)[] SkipModes =
+    [
+        ("询问（显示跳过按钮）", SkipSectionMode.Ask),
+        ("自动跳过", SkipSectionMode.Auto),
+        ("关闭", SkipSectionMode.Off)
+    ];
+
+    // 媒体源排序（「在设置中新增自定义选项，媒体源排序 默认/新入库在前」，2026-09-24）。两档照他点的名。
+    private static readonly (string Label, Emby.MediaSourceOrder Value)[] MediaSourceOrders =
+    [
+        ("默认", Emby.MediaSourceOrder.Default),
+        ("新入库在前", Emby.MediaSourceOrder.NewestFirst)
+    ];
+
+    private static readonly (string Label, SubtitleMode Value)[] SubtitleModes =
+    [
+        ("总是显示匹配字幕", SubtitleMode.Always),
+        ("只显示强制字幕", SubtitleMode.ForcedOnly),
+        ("音轨为外语时显示", SubtitleMode.ForeignAudioOnly),
+        ("从不显示", SubtitleMode.Off)
+    ];
+
+    private ISettingsService? _settings;
+    private ShaderStaging? _shaders;
+    private FontLibrary? _fonts;
+    private AppPaths? _paths;
+    private Platform.ISystemLauncher? _launcher;
+    private MoviePilotProbe? _moviePilot;
+    private MoviePilotCredentials? _moviePilotCredentials;
+    private SettingMoviePilotRow? _moviePilotRow;
+    private SettingFontRow? _subtitleFont;
+    private AudioDeviceCatalogue? _audioDevices;
+    private SettingChoiceRow? _audioDevice;
+    private SettingSubtitlePreviewRow? _subtitlePreview;
+    private Func<Task>? _pushSubtitleStyle;
+
+    /// <summary>「把 截图保存目录 推给正在播的那部」，见 <see cref="Attach"/> 的 <c>pushScreenshotDirectory</c>。</summary>
+    private Func<string, Task>? _pushScreenshotDirectory;
+
+    /// <summary>
+    /// 「关于」卡上那行「截图目录」，握着好让「播放器」卡上的目录一改它就当场跟上（同 <see cref="HomeRows"/>
+    /// 那样握着一行的理由）。只在 <see cref="AboutCard"/> 建出来时有值；没有「关于」卡（测试路径）就是 null，
+    /// 改目录那一头 null 检查过。
+    /// </summary>
+    private SettingFactRow? _screenshotFact;
+
+    /// <summary>快捷键卡里那 21 行可重绑的行，握着好在重绑/清空之后逐行刷新显示（同 <see cref="HomeRows"/> 那样握着一行的理由）。</summary>
+    private readonly List<SettingShortcutRow> _shortcutRows = [];
+
+    /// <summary>The cards, in the order they appear in the left-hand list.</summary>
+    /// <remarks>
+    /// MoviePilot sits between 界面 and 快捷键 — near the end, because it is an optional second service rather
+    /// than part of the app's own behaviour, and not last, because 快捷键 and 关于 are the two entries people
+    /// scroll to the bottom for.
+    /// </remarks>
+    private static readonly string[] CardCategories =
+        ["播放器", "播放行为", "字幕", "视频输出", "音频输出", "主页", "界面", "MoviePilot", "快捷键", "关于"];
+
+    /// <summary>
+    /// 需求 2 的后半句：「诊断和服务器移动到设置里」，加上需求 8 的 Emby 网页控制台. Entries in the same list
+    /// that are not cards but whole pages — a server list that talks to the network, a log view that tails a
+    /// file, an embedded browser on the server's own console — hosted in the settings page's own frame rather
+    /// than flattened into setting rows they do not fit.
+    /// <para>
+    /// 「通知」也住这一边（2026-09-25）：它原是一张普通设置卡（客户端直发 webhook 的那套）；改走 Emby 服务器的
+    /// 通知系统之后，它要的是「条目列表 + 增删改 + 测试」——和服务器页一样是一整页会说话的东西，塞进行卡片里
+    /// 反而两头不是。
+    /// </para>
+    /// <para>
+    /// Public and static because three places have to agree on the same names: the list built here, the
+    /// page's <c>Hosted</c> switch that knows what to navigate to, and the self-check's comparison of the
+    /// list against the cards — which without this would report them as entries selecting nothing.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> HostedCategories { get; } =
+        ["服务器", "诊断", ServerDashboardCategory, ServerUsersCategory, ServerLibrariesCategory, NotificationsCategory, DashboardCategory];
+
+    /// <summary>
+    /// 「通知」那一页. Named because the navigation switch and the self-check both have to say it —
+    /// same reason as <see cref="DashboardCategory"/>.
+    /// </summary>
+    public const string NotificationsCategory = "通知";
+
+    /// <summary>
+    /// 需求 8 的那一页. Named because the page's navigation switch and the self-check both have to say it,
+    /// and a string literal in three files is a rename waiting to go wrong.
+    /// </summary>
+    public const string DashboardCategory = "网页控制台";
+
+    public const string ServerDashboardCategory = "控制台";
+    public const string ServerUsersCategory = "用户";
+    public const string ServerLibrariesCategory = "媒体库";
+
+    /// <summary>The left-hand list. Order is the order of the cards, then the hosted pages.</summary>
+    /// <remarks>
+    /// 「恢复默认」曾是这份名单末尾的一项（2026-09-13～2026-09-24）；2026-09-24 按「把恢复默认设置移动到关于中」
+    /// 搬进了「关于」卡，和新增的「备份配置文件」「恢复配置」并作三颗动作按钮 —— 见 <see cref="AboutCard"/>。它不再
+    /// 是名单里的一项，所以这里也不再有它。
+    /// </remarks>
+    public IReadOnlyList<SettingsCategoryGroup> CategoryGroups { get; } =
+    [
+        new("Momoka", [.. CardCategories, "服务器", "诊断"]),
+        new("EmbyServer", [ServerDashboardCategory, ServerUsersCategory, ServerLibrariesCategory, NotificationsCategory, DashboardCategory])
+    ];
+
+    public IReadOnlyList<string> Categories { get; } = [.. CardCategories, .. HostedCategories];
+
+    public ObservableCollection<SettingSection> Sections { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsHosted))]
+    [NotifyPropertyChangedFor(nameof(CardsVisibility))]
+    [NotifyPropertyChangedFor(nameof(HostedVisibility))]
+    public partial string SelectedCategory { get; set; } = "播放器";
+
+    /// <summary>
+    /// Whether the selected entry is one of the two pages rather than one of the cards. The page watches
+    /// this to navigate its frame, and the two visibilities below are the same question drawn.
+    /// </summary>
+    public bool ShowsHosted => HostedCategories.Contains(SelectedCategory, StringComparer.Ordinal);
+
+    public Visibility CardsVisibility => Show(!ShowsHosted);
+
+    public Visibility HostedVisibility => Show(ShowsHosted);
+
+    /// <summary>
+    /// Where the page goes when it is opened without a category, or with one it does not have. Not a
+    /// literal 「播放器」 in three places: the first card is what this page has always opened on, and the
+    /// day its order changes that should follow.
+    /// </summary>
+    internal static string FirstCardCategory => CardCategories[0];
+
+    /// <summary>
+    /// 这个名字是不是一张设置卡（不是 服务器／诊断／通知／服务器控制台 那几页）。给「点进去落在哪张卡」这类
+    /// 读数当判据用：播放页右键菜单末尾那三行设置入口（<see cref="Momoka.Mpv.PlayerSettingsLinks"/>）拿它
+    /// 对账，卡片改名而那一张表没跟上时当场报红 —— 找不到名字时 <c>SettingsPage.Select</c> 会安静地退回
+    /// 「播放器」，用户点「字幕」却开在别的卡上，那种错靠看是看不出来的。
+    /// </summary>
+    internal static bool IsCardCategory(string category) =>
+        CardCategories.Contains(category, StringComparer.Ordinal);
+
+    /// <summary>主题那一行的色板，同样是为了让自检不必去树上找它。</summary>
+    internal SettingThemeRow? Themes { get; private set; }
+
+    /// <summary>
+    /// How many row containers the cards would put on the visual tree between them; the self-check
+    /// compares this to what really rendered.
+    /// </summary>
+    internal int RowCount => Sections.Sum(Containers);
+
+    /// <summary>
+    /// Each card in the order they appear, and the containers it holds. What the self-check walks: it steps
+    /// through the categories and checks the tree against the running total, because a collapsed card never
+    /// builds its rows and a single look at this page would leave every card but one untouched.
+    /// </summary>
+    internal IReadOnlyList<(string Category, int Rows)> Cards =>
+        [.. Sections.GroupBy(section => section.Category, StringComparer.Ordinal)
+            .Select(group => (group.Key, group.Sum(Containers)))];
+
+    /// <summary>
+    /// Row containers one card puts on the tree, which is not the same as its row count: a toggle group is one
+    /// row holding an <c>ItemsControl</c>, so it realises a container for itself and another for each switch
+    /// under it. Counting rows instead would leave the tree looking five containers too full.
+    /// </summary>
+    internal static int Containers(SettingSection section) =>
+        section.Rows.Sum(row => row is SettingToggleGroupRow group ? 1 + group.Toggles.Count : 1);
+
+    /// <summary>
+    /// The capabilities this page needs, and nothing else: the settings document with its write-back, the
+    /// shader catalogue the 着色器 card offers, the machine's fonts for the 字幕 card's picker, and — for the
+    /// 关于 card — where this app keeps its files and how to show a folder. Named rather than handed the whole
+    /// composition root — a page that edits settings has no business being able to reach the session or the
+    /// player.
+    /// </summary>
+    /// <param name="pushSubtitleStyle">
+    /// 「把 字幕外观 推给正在播的那部片子」, handed over as one method rather than as the player it belongs to —
+    /// which is how this page gains that one ability without gaining 播放 / 停止 / 跳转 along with it, and how
+    /// the sentence above stays true. <see cref="PlaybackService.ApplySubtitleStyleAsync"/> is what arrives
+    /// here; it does nothing when nothing is playing, so this page never has to ask.
+    /// </param>
+    /// <param name="pushScreenshotDirectory">
+    /// 「把 截图保存目录 推给正在播的那部片子」, same seam as <paramref name="pushSubtitleStyle"/> one slot up:
+    /// <see cref="PlaybackService.ApplyScreenshotDirectoryAsync"/> arrives, nothing else of the player does,
+    /// and nothing is playing means nothing happens.
+    /// </param>
+    internal void Attach(
+        ISettingsService settings,
+        ShaderStaging shaders,
+        FontLibrary fonts,
+        AppPaths paths,
+        Platform.ISystemLauncher launcher,
+        AudioDeviceCatalogue audioDevices,
+        Func<Task> pushSubtitleStyle,
+        Func<string, Task> pushScreenshotDirectory,
+        MoviePilotProbe moviePilot,
+        MoviePilotCredentials moviePilotCredentials)
+    {
+        _settings = settings;
+        _shaders = shaders;
+        _fonts = fonts;
+        _paths = paths;
+        _launcher = launcher;
+        _audioDevices = audioDevices;
+        _pushSubtitleStyle = pushSubtitleStyle;
+        _pushScreenshotDirectory = pushScreenshotDirectory;
+        _moviePilot = moviePilot;
+        _moviePilotCredentials = moviePilotCredentials;
+    }
+
+    /// <summary>
+    /// Whether the font picker holds the machine's fonts rather than just the stored one. Only the
+    /// self-check reads it: the scan lands a moment after the page does, and a report written in that
+    /// moment would be reporting on a list that had not arrived yet.
+    /// </summary>
+    internal bool FontsReady { get; private set; }
+
+    /// <summary>
+    /// The 字幕 → 字体 picker, put through a search and back. Null when the card has not been built.
+    /// </summary>
+    internal SettingFontRow.Probe? MeasureFontPicker() => _subtitleFont?.Measure();
+
+    /// <summary>
+    /// Builds every card. Nothing here waits on the network — the settings document is already in memory —
+    /// so this is synchronous work behind the async signature the base class defines for the pages that do
+    /// have something to fetch. The one thing it does not have in hand is the font list, which is handed to
+    /// the 字幕 card's picker whenever the scan comes back; the page is usable in the meantime.
+    /// </summary>
+    public override Task ReloadAsync()
+    {
+        if (_settings is null) return Task.CompletedTask;
+        HasUnsavedChanges = _settings.HasUnsavedChanges;
+
+        // 精简模式是页级状态（SettingRow.NotesHidden），建卡之前先对齐 —— 行的可见性在容器落到树上那一刻
+        // 才求值，这里晚了才是错的。恢复默认那趟重走这里，同一句话把它拨回新文档的样子。
+        SettingRow.NotesHidden = Settings.Ui.CompactMode;
+
+        Sections.Clear();
+        Sections.Add(PlayerCard());
+        Sections.Add(PlaybackCard());
+        Sections.Add(SubtitleCard());
+        Sections.Add(VideoCard());
+        Sections.Add(HdrCard());
+        Sections.Add(ShaderCard());
+        Sections.Add(AudioCard());
+        Sections.Add(HomeCard());
+        Sections.Add(InterfaceCard());
+        Sections.Add(MoviePilotCard());
+        Sections.Add(ShortcutsCard());
+        Sections.Add(AboutCard());
+
+        ShowCategory(SelectedCategory);
+        IsReady = true;
+
+        return Task.WhenAll(FillFontsAsync(), FillAudioDevicesAsync());
+    }
+
+    /// <summary>
+    /// Re-enumerates the 音频输出设备 row on a cached page's re-entry. The page is deliberately cached
+    /// (half-typed text survives navigation), so ReloadAsync does not run again — but a device list is a
+    /// reading, not a preference, and the row's own note promises a fresh enumeration every visit. Only
+    /// this one row refreshes; every other card keeps its in-progress edits.
+    /// </summary>
+    internal Task RefreshAudioDevicesAsync() => FillAudioDevicesAsync();
+
+    /// <summary>
+    /// Hands the 音频输出设备 row the machine's real devices once they have been enumerated. Same shape and same
+    /// reason as <see cref="FillFontsAsync"/>: the list comes out of a throwaway libmpv context, which is tens
+    /// of milliseconds of native work, and the page is worth more than that one row being complete on the first
+    /// frame. Until it lands the row holds 「跟随系统默认设备」 plus whatever the settings file names.
+    /// </summary>
+    private async Task FillAudioDevicesAsync()
+    {
+        if (_audioDevices is null || _audioDevice is null) return;
+
+        var row = _audioDevice;
+        var devices = await _audioDevices.LoadAsync().ConfigureAwait(true);
+        if (!ReferenceEquals(row, _audioDevice)) return;
+
+        var audio = Settings.Audio;
+        var (choices, selected) = DeviceChoices(audio, devices);
+        row.Fill(choices, selected);
+    }
+
+    /// <summary>
+    /// The 音频输出设备 drop-down: 「跟随系统默认设备」 first, then whatever mpv found. Passing an empty list is
+    /// the normal first-frame state and the permanent state on a machine where libmpv could not enumerate —
+    /// the row is still usable, it just offers the default and whatever the settings file names.
+    /// <para>
+    /// mpv's own <c>auto</c> entry never reaches here: <see cref="AudioDeviceCatalogue.Selectable"/> drops it,
+    /// in Core, where a unit test can hold it down. Leaving it in put the same behaviour on the list twice —
+    /// 「跟随系统默认设备」 and, right underneath, mpv's English 「Autoselect device」. Two rows for one answer is
+    /// bad enough; picking the second one also stored <c>auto</c> instead of the empty string, so the row
+    /// afterwards read 「Autoselect device」 to somebody who believed he had chosen the system default.
+    /// </para>
+    /// </summary>
+    private (List<SettingChoice> Choices, SettingChoice? Selected) DeviceChoices(
+        AudioSettings audio,
+        IReadOnlyList<AudioDevice> devices)
+    {
+        (string Label, string Value)[] options =
+        [
+            ("跟随系统默认设备", ""),
+            .. devices.Select(device => (Label: device.Label, Value: device.Name))
+        ];
+
+        return Options(
+            options,
+            () => audio.Device,
+            value => audio.Device = value,
+            StringComparer.OrdinalIgnoreCase,
+            stored => $"{stored}（已保存，本次内置设备名单中未找到）");
+    }
+
+    /// <summary>
+    /// Hands the font picker the machine's families once they have been read. Awaited by nobody — the page
+    /// is shown before this returns — so the row filling itself is the only visible effect.
+    /// </summary>
+    private async Task FillFontsAsync()
+    {
+        if (_fonts is null || _subtitleFont is null)
+        {
+            // Nothing to wait for: without a library the row keeps the one family the settings file names.
+            FontsReady = true;
+            return;
+        }
+
+        var catalogue = await _fonts.LoadAsync().ConfigureAwait(true);
+
+        // The row may have been rebuilt while the scan ran — a second visit to the page does that — so the
+        // current one is asked for rather than the one captured above.
+        _subtitleFont?.Fill(catalogue);
+        FontsReady = true;
+    }
+
+    /// <summary>
+    /// 「恢复默认」「恢复配置」都要弹一次确认框，而 <c>ContentDialog</c> 同时只许一个 —— 这一挡挡掉对话框还没
+    /// 合上时的第二次点击。备份不弹框（它不动任何东西），不占这一挡。
+    /// </summary>
+    private bool _restoring;
+
+    /// <summary>选中的分类变了：换一张卡。内嵌页（服务器 / 诊断 / 控制台）由页面盯着 <see cref="SelectedCategory"/> 自己导航。</summary>
+    partial void OnSelectedCategoryChanged(string value) => ShowCategory(value);
+
+    /// <summary>存文件框：给一个建议文件名，回来的是用户选的落点（取消或弹不出来是 null）。见 <see cref="Views.SettingsFile"/>。</summary>
+    internal delegate Task<string?> SaveFileRequest(string suggestedName);
+
+    /// <summary>开文件框：回来的是用户挑的那个文件的路径（取消或弹不出来是 null）。见 <see cref="Views.SettingsFile"/>。</summary>
+    internal delegate Task<string?> OpenFileRequest();
+
+    private SaveFileRequest? _saveFile;
+    private OpenFileRequest? _openFile;
+
+    /// <summary>
+    /// 页面把两个文件框交进来（备份要存、恢复配置要开），和基类的 <c>UseConfirm</c> 交确认框是同一手：文件框
+    /// 要页面的 <see cref="Microsoft.UI.Xaml.XamlRoot"/> 才拿得到窗口句柄，摆得出它的只有页面。
+    /// </summary>
+    internal void UseFilePickers(SaveFileRequest save, OpenFileRequest open)
+    {
+        _saveFile = save;
+        _openFile = open;
+    }
+
+    /// <summary>
+    /// 自检用：备份 / 恢复配置那两颗按钮的文件框接上了没有 —— 没接上点下去弹不出框，什么都不会发生，屏上一个
+    /// 字都不说（同基类的 <c>CanConfirm</c> 盯确认框那根线）。
+    /// </summary>
+    internal bool CanPickFiles => _saveFile is not null && _openFile is not null;
+
+    private void ShowCategory(string category)
+    {
+        foreach (var section in Sections)
+            section.IsVisible = string.Equals(section.Category, category, StringComparison.Ordinal);
+    }
+
+    private AppSettings Settings => _settings!.Settings;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UnsavedVisibility))]
+    [NotifyCanExecuteChangedFor(nameof(RetrySaveCommand))]
+    public partial bool HasUnsavedChanges { get; set; }
+
+    public Visibility UnsavedVisibility => Show(HasUnsavedChanges);
+
+    private void Save()
+    {
+        if (_settings is null) return;
+        HasUnsavedChanges = !_settings.TrySave();
+    }
+
+    [RelayCommand(CanExecute = nameof(HasUnsavedChanges))]
+    private void RetrySave()
+    {
+        Save();
+        if (!HasUnsavedChanges) Notify(null, "设置已保存。", InfoBarSeverity.Success);
+    }
+
+    // ── Cards ────────────────────────────────────────────────────────────────────────────────────────
+
+    private SettingSection PlayerCard() =>
+        new("播放器", "播放器", "用程序里内置的播放器播，还是调起独立的 mpv.exe 来播。",
+        [
+            Pick("播放后端", null, Backends, () => Settings.Mpv.Backend, value => Settings.Mpv.Backend = value,
+                EqualityComparer<MpvBackendKind>.Default, after: RefreshVideoBackend),
+
+            Choice("渲染管线", Pipelines, () => Settings.Mpv.Pipeline, value => Settings.Mpv.Pipeline = value,
+                "集成模式把视频与 WinUI 控件混排；独占模式固定使用 D3D11，由 mpv 自建窗口、自管交换链，"
+                    + "视频不经过 WinUI 合成器，屏幕控件由窗里装箱的 uosc 提供（进度条、暂停、音量、倍速、"
+                    + "音轨字幕菜单、上下集；F 全屏、空格暂停、Q 停止）。独占模式播放时主窗口留在原页不动，"
+                    + "可以一边挂着片子一边继续翻媒体库，再点别的片子直接换成新点的这部；关掉视频窗就是"
+                    + "停止播放。只对内置 libmpv 有效，下一次播放生效。"),
+
+            // 认证只经过核验了服务端进程身份的管道。关闭进度不关闭这个启动必需通道；失败就停止，
+            // 不退回命令行或临时明文文件。它仍然信任所选程序和同一 Windows 用户下的代码。
+            PathBox("mpv.exe 路径", "mpv.exe 路径", () => Settings.Mpv.ExecutablePath, value => Settings.Mpv.ExecutablePath = value,
+                "只有「外部 mpv.exe」后端需要它。访问令牌通过核验进程身份的管道传递，不放进命令行或临时文件；"
+                    + "无法建立安全通道就停止起播。请只选择可信的 mpv.exe，同一 Windows 用户下的恶意程序仍可能窃取凭据。"),
+
+            Toggle("启用 IPC 进度通道", "关掉后不读取或上报进度，也不提供客户端控制；安全起播和退出仍需管道", () => Settings.Mpv.EnableIpc, value => Settings.Mpv.EnableIpc = value),
+
+            // 「在设置中新增截图保存目录」（用户令 2026-09-29）。空 = 装机落点，裁决在 Core 的
+            // AppPaths.ResolveScreenshotDirectory。每敲一键提交一次（SettingTextRow 的节奏），所以这里只做
+            // 三件不要钱的事：写设置、刷新「关于」卡那行读数、把裁决后的目录推给正在播的那部 ——
+            // 建目录不在这一档（会把路径的每个前缀都建成文件夹），它归启动和「关于」卡的「打开」。
+            PathBox("截图保存目录", "例如 D:\\影屏截图", () => Settings.Mpv.ScreenshotDirectory, value =>
+            {
+                Settings.Mpv.ScreenshotDirectory = value;
+                AnnounceScreenshotDirectory();
+            }, "播放器「画面」菜单里三档截图存到这儿，文件名是片名加时间码。留空用装机落点（数据目录下的 "
+                + "screenshots 文件夹）；改完当场生效，正播着的那部也从下一张截图起落进新目录")
+        ]);
+
+    private SettingSection PlaybackCard()
+    {
+        var playback = Settings.Playback;
+        return new SettingSection("播放行为", "播放行为", "断点续播、进度上报、片头片尾和音轨选择。",
+        [
+            Toggle("向服务器汇报播放进度", "关掉后 Emby 就不记你看过的进度了", () => playback.ReportProgressToServer, value => playback.ReportProgressToServer = value),
+            Toggle("从服务器保存的位置继续", "关掉后每次都从片头放起", () => playback.ResumeFromSavedPosition, value => playback.ResumeFromSavedPosition = value),
+            Toggle("自动播放下一集", "一集放完自动接下一集，本季放完退出播放", () => playback.AutoPlayNextEpisode, value => playback.AutoPlayNextEpisode = value),
+
+            // 「在设置中新增一个开始播放后自动全屏的功能」（用户的话，2026-09-13）。这一行只影响「下一个
+            // 播放怎么开始」，改完当场生效 —— 设置页里改这一下，播放器那一头下一次起播就认新的了（现读
+            // 同一个设置），所以没有 ShellPrefs 那一句：那个东西是给「已经摆在屏上的东西要重排」用的
+            // （主页、图片预算），这一行底下没有已经摆着的东西要动。
+            // 「用独立窗口播放」那一行曾在这附近（2026-09-13～2026-09-19）：行为并入独占模式后开关随令
+            // 删除；同日独立控制窗也随令退场，独占模式以视频窗里的 uosc 为唯一控制面 ——
+            // 见 PlayerViewModel.HeadlessPlayback。
+            Toggle("开始播放后自动全屏", "每开始放一部片子就自动进全屏，不用再按 F。只在开始播放那一下进，"
+                + "连播的下一集不会把你从全屏里顶出来，按 F 退出后也不会被下一集顶回去",
+                () => playback.AutoFullscreenOnPlayback, value => playback.AutoFullscreenOnPlayback = value),
+
+            // 「调整窗口大小后继续播放」（用户令 2026-09-23）：拖窗口边沿那一趟会先把 mpv 冻住再抓帧（同
+            // 2026-09-22 切全屏那一趟 —— 覆盖层上那帧与撤掉时屏上那帧同帧），这一行只管松手之后往哪边走。
+            // 冻那一半没有开关；而且用户自己按下的暂停一根手指都不碰，与这一档无关。
+            // 现读设置，不走任何通知管道：下一次拖边收尾就认新的值。
+            Toggle("调整窗口大小后继续播放",
+                "拖窗口边沿改大小的时候画面会先停住，松开鼠标后自动接着放。关掉它就停在暂停，要自己按播放。"
+                + "只对集成模式有效（画面嵌在本窗口里的那种）；独占模式的窗口归 mpv 自己管，拖动不经过这里",
+                () => playback.ResumeAfterWindowResize, value => playback.ResumeAfterWindowResize = value),
+
+            Number("标记已观看阈值（%）", 50, 100, () => playback.MarkWatchedPercent, value => playback.MarkWatchedPercent = value,
+                "放到这个百分比以上，这一条就算看过"),
+
+            // 国漫单独一档（「新增国漫播放进度自定义百分比标记已看」，用户令 2026-09-26）：命中的判定在 Core 的
+            // DonghuaRule（类型：动画 ∧ 发行公司带腾讯/哔哩哔哩），这里只管数值。现读设置，下一次播放结束就认。
+            Number("国漫标记已观看阈值（%）", 50, 100, () => playback.DonghuaMarkWatchedPercent, value => playback.DonghuaMarkWatchedPercent = value,
+                "类型为动画、发行公司带腾讯、哔哩哔哩、优酷或爱奇艺的片子单独按这一档算，不吃上面那行的值"),
+            // 四颗方向键、两对步长（2026-09-20 用户令）：← / → 用上面这两行，↑ / ↓ 用下面那两行。两对都印在
+            // 设置页上，因为两个管线各有一套输入处理 —— 集成模式的键盘归 shell 的快捷键表，独占模式的键盘是
+            // mpv 自己那层（keybind，见 <c>MpvSeekKeys</c>）—— 而两套都从这几个字段取值。屏上印的数字与按下
+            // 去的位移因此永远对得上，不会出现「改了设置、按键还是老样子」那种界面在骗人。
+            Number("快进跨度（秒）", 1, 600, () => playback.SeekForwardSeconds, value => playback.SeekForwardSeconds = value,
+                "→ 键跳这么多秒"),
+            Number("快退跨度（秒）", 1, 600, () => playback.SeekBackwardSeconds, value => playback.SeekBackwardSeconds = value,
+                "← 键跳这么多秒"),
+            Number("大步快进跨度（秒）", 1, 600, () => playback.SeekForwardLongSeconds, value => playback.SeekForwardLongSeconds = value,
+                "↑ 键跳这么多秒"),
+            Number("大步快退跨度（秒）", 1, 600, () => playback.SeekBackwardLongSeconds, value => playback.SeekBackwardLongSeconds = value,
+                "↓ 键跳这么多秒"),
+            Number("续播自动快退（秒）", 0, 120, () => playback.ResumeRewindSeconds, value => playback.ResumeRewindSeconds = value),
+            Number("进度上报间隔（秒）", 1, 60, () => playback.ProgressReportIntervalSeconds, value => playback.ProgressReportIntervalSeconds = value),
+            Choice("跳过片头片尾", SkipModes, () => playback.SkipSections, value => playback.SkipSections = value),
+
+            // 音轨语言优先级, the same drop-down as the 字幕 card's since 2026-09-22（「给音轨新增语言优先级和格式
+            // 优先级」——语言这栏跟字幕一样改成勾选下拉）. It was a single-pick up to v9, which could not express
+            // 「日语 > 粤语 > 英语」 at all; an empty list is 「跟随服务器默认音轨」. Unlike 字幕, 音轨 keeps 普通话／粤语
+            // in the menu —— they name a spoken variant, which is exactly an 音轨 distinction.
+            LanguagePriority("音轨语言优先级", "未指定，跟随服务器默认音轨", () => playback.AudioLanguages, value => playback.AudioLanguages = value,
+                "点开勾语言，越靠上越优先，按住或用箭头换次序。空着就是「跟随服务器默认音轨」。"
+                    + "「其他字幕」这类兜底项对音轨同样代表「前面都没有时，有一条别的语言的总比没有好」。下次播放生效"),
+
+            // 音轨格式筛选（「给音轨新增语言优先级和格式优先级」，2026-09-22）：语言选完之后，在同一语言那批轨里按
+            // 编码／声道的关键词再挑一遍。和字幕标题筛选、视频文件名筛选同一套控件与打分（KeywordRules），只是它看的
+            // 是 TrueHD／DTS-HD／Atmos／7.1／5.1 这些格式词。出厂几条常见词都设成默认（不生效）。
+            KeywordRules("音轨格式筛选", () => playback.AudioFormatRules, value => playback.AudioFormatRules = value,
+                "语言选出「哪几条是这个语言」之后，再按编码／声道里的词挑一遍：优先＝含这个词的排前头，候补＝排到最后"
+                    + "（同语言只剩它时仍会给一条），默认＝不生效。预置 Atmos、TrueHD、DTS-HD、DTS、FLAC、7.1、5.1，"
+                    + "输入框可自定义添加。格式只在同一语言内部作用，不会越过语言优先级。下次播放生效"),
+
+            // 媒体源排序（2026-09-24）：一个条目挂多版本时详情页媒体源行、播放器版本菜单的次序，也顺带决定
+            // 没挑到规则时默认播哪一版。现读设置 —— 下一次打开详情页或下一次起播就认新的值，没有已经摆着的
+            // 东西要重排。
+            Choice("媒体源排序", MediaSourceOrders, () => playback.MediaSourceOrder, value => playback.MediaSourceOrder = value,
+                "一部片子有多个版本（多个文件）时，详情页「媒体源」那一行和播放器里「版本」菜单的次序："
+                    + "默认＝服务器给的次序；新入库在前＝最新入库的那一版排最前（按服务器记的入库时间，"
+                    + "每一版要多问一次服务器）。没有文件名规则可依时，默认播的也是排在最前的那一版。"
+                    + "只有一个版本的片子不受影响。下次打开详情页或下次播放生效"),
+
+            // 视频文件名筛选（「参考标题筛选，新增视频文件名筛选」，2026-09-22）：一个条目挂多版本（多个文件）时，
+            // 默认播哪一版按文件名里的关键词挑。和字幕标题筛选同一套控件与打分，只是它筛的是版本文件名。
+            KeywordRules("视频文件名筛选", () => playback.VideoFileRules, value => playback.VideoFileRules = value,
+                "一部片子有多个版本（多个文件）时，按文件名里的词决定默认播哪一版：优先＝含这个词的版本优先，"
+                    + "候补＝往后排（只剩它时仍会用它），默认＝不生效。输入框可自定义添加，如 REMUX、4K、HDR、枪版。"
+                    + "只有一个版本的片子不受影响。下次播放生效")
+        ]);
+    }
+
+    private SettingSection SubtitleCard()
+    {
+        var playback = Settings.Playback;
+
+        // 「参考图2新增字幕外观功能」（2026-09-06）：卡顶这条「字幕示例」，照下面外观各行的当前值实时画。
+        // 它是行列表的第一行，重画的线只有 Live<T> 那一条 —— 外观每一行写完设置都从那儿过，所以预览
+        // 不可能停在旧样子上。
+        var preview = new SettingSubtitlePreviewRow("字幕示例",
+            "纯文本字幕的样式示意：两行文字可比较逐行盒与整体背景盒，大小会跟随字号和缩放。"
+                + "不是 libass 播放画面；实际尺寸还受窗口大小与字幕格式影响。", playback);
+        _subtitlePreview = preview;
+
+        // 底板颜色 states which of its two jobs it is doing, so the row above it cannot be a lie: mpv
+        // shares one colour between the plate and the drop shadow, and 字幕底板 is what decides which of
+        // them gets painted. Same shape as 视频输出's 视频同步 row — one writer, and the row states the
+        // value in force — and for the same reason: this pair drew nothing at all for as long as nobody
+        // sent the style option, and 「界面在骗人」 is the bug that costs the most to find.
+        SettingColorRow? backColor = null;
+        backColor = ColorRow("底板颜色",
+            () => playback.SubtitleBackColor, Live<string>(value => playback.SubtitleBackColor = value),
+            "sub-back-color", BackColorNote(playback));
+
+        return new SettingSection("字幕", "字幕", "语言优先级和字幕外观。勾选语言并排序，越靠上越优先，"
+            + "「其他字幕」代表任何别的语言的字幕、放在最后可兜底。"
+            + "外观这一组改完立刻作用到正在播的片子；语言、显示模式和字幕编码下次播放生效。",
+        [
+            preview,
+
+            LanguagePriority("字幕语言优先级", "未指定，跟随文件默认字幕", () => playback.SubtitleLanguages, value => playback.SubtitleLanguages = value,
+                "点开勾语言，越靠上越优先，按住或用箭头换次序。「其他字幕」是一个预设项，代表任何别的语言的字幕 —— "
+                    + "排在最后就是「前面都不匹配时，有一条别的语言的总比没有好」。空列表只跟随明确的默认轨；"
+                    + "仍服从显示模式，没有默认轨就不显示。下次播放生效",
+                // 普通话、粤语是「说的是哪种」，那是音轨的区分，字幕轨不按这个标；字幕表不列它们（音轨那份仍可用）。
+                exclude: ["普通话", "粤语"]),
+
+            // 标题筛选：语言选完之后按标题里的关键词再挑一遍（「先确定哪几条是中文，再决定不要双语和特效」）。
+            // 语言和标题从此分家 —— 语言只看轨的语言字段，这里只看标题。
+            KeywordRules("标题筛选", () => playback.SubtitleTitleRules, value => playback.SubtitleTitleRules = value,
+                "语言选出「哪几条是中文」之后，再按标题里的词挑一遍：优先＝含这个词的排前头，候补＝排到最后（同语言"
+                    + "只剩它时仍会给一条，不至于没字幕），默认＝不生效。输入框可自定义添加词。"
+                    + "另：字幕语言里选了「简体中文」时，会自动把标题带「繁 / 繁体」的排为候补。下次播放生效"),
+            Choice("显示模式", SubtitleModes, () => playback.SubtitleMode, value => playback.SubtitleMode = value),
+            Toggle("没有匹配语言时使用默认字幕", "只回退服务器指定或文件标记的默认字幕，不再按标题改选别的轨道；没有默认轨就不显示。"
+                + "允许任意语言兜底请在语言列表末尾加入「其他字幕」。空语言列表不受本开关影响", () => playback.SubtitleFallbackToDefault, value => playback.SubtitleFallbackToDefault = value),
+
+            // 这一行管着它下面那一整组。放在这儿而不是外观末尾：番剧和压制组的内封字幕大量是 ASS，
+            // 而 mpv 默认让 ASS 自己的样式说话 —— 也就是说下面九行对那些文件一个字都改不动。
+            Mpv("外观应用范围", MpvOutputOptions.SubtitleStyleScopes,
+                () => playback.SubtitleAssOverride, Live<string>(value => playback.SubtitleAssOverride = value),
+                "sub-ass-override",
+                "ASS/SSA 字幕自带字体和颜色，默认由它自己说了算，下面这些外观只对纯文本字幕（srt/vtt）生效。"
+                    + "强制覆盖可能破坏 ASS 的定位与特效。蓝光原盘的图形字幕（PGS/VOBSUB）是图片，字体和文字颜色无法改变它"),
+
+            Font("字体", "列出这台机器装的字体和程序自带的字体，可搜索；mpv 认的是字体族名，不是文件路径",
+                () => playback.SubtitleFontFamily, Live<string>(value => playback.SubtitleFontFamily = value), "sub-font"),
+
+            // 字号那一行原本能存 0（「不指定，mpv 自己是 38」），滑块没有「不指定」这个状态，所以装值时把 0
+            // 落到 38 上 —— 那是同一个大小换了个写法；拖一下就把 38 写实了（见 UnitSlider 那条注释，同一件事）。
+            Slider("字号", PlaybackSettings.MinimumSubtitleFontSize, PlaybackSettings.MaximumSubtitleFontSize, 1,
+                () => playback.SubtitleFontSize > 0 ? playback.SubtitleFontSize : SubtitlePreviewPlan.MpvDefaultFontSize,
+                Live<double>(value => playback.SubtitleFontSize = PlaybackSettings.ClampFontSize((int)value)),
+                "字幕文字的大小，出厂 50；mpv 自己是 38", "sub-font-size"),
+            Slider("字幕缩放（%）", PlaybackSettings.MinimumSubtitleScale, PlaybackSettings.MaximumSubtitleScale, 5,
+                () => playback.SubtitleScalePercent, Live<double>(value => playback.SubtitleScalePercent = (int)value),
+                "在字号之上再乘一次。ASS/SSA 字幕不用「强制」也认这一项，是唯一能把它们调大的旋钮。"
+                    + "出厂默认 100，就是「不缩放」；想回去就拖回 100", "sub-scale"),
+
+            // 字幕加粗（2026-09-22「删掉字重选项，改为 sub-bold」）。mpv 没有连续字重可调，能开关的只有
+            // sub-bold 这一个，所以早先那个三档字重（v18–v19）退回成一个开关：开了字体用粗体、没真粗体的由
+            // libmpv 合成。选值经 Live 走，一改就把整套字幕外观重发给正在播的片子（sub-bold 在
+            // SubtitleStyleOptions 里，一起被重推）。
+            Toggle("字幕加粗", "开了字幕用粗体：字体有真粗体就用真的，没有的由 libmpv 合成加粗",
+                () => playback.SubtitleBold, Live<bool>(value => playback.SubtitleBold = value), "sub-bold"),
+            ColorRow("文字颜色", () => playback.SubtitleColor, Live<string>(value => playback.SubtitleColor = value), "sub-color",
+                "HTML 颜色代码（#RRGGBB），点色块从拾色器里挑，随便什么颜色都能给"),
+            UnitSlider("描边大小", SubtitlePreviewPlan.MpvDefaultBorderSize,
+                () => playback.SubtitleBorderSize, Live<string>(value => playback.SubtitleBorderSize = value),
+                "文字外那一圈边的宽度，拖到 0 就是没有描边。出厂 0.5，mpv 自己是 1.65", "sub-border-size"),
+            ColorRow("描边颜色", () => playback.SubtitleBorderColor, Live<string>(value => playback.SubtitleBorderColor = value), "sub-border-color"),
+            UnitSlider("阴影偏移 / 背景盒留白", 0,
+                () => playback.SubtitleShadowOffset, Live<string>(value => playback.SubtitleShadowOffset = value),
+                "普通样式和逐行盒：阴影向右下偏移；整体背景盒：控制底板留白，不另画文字阴影。"
+                    + "出厂 0.5；阴影与背景盒都使用下面的底板颜色", "sub-shadow-offset"),
+
+            Mpv("字幕底板", MpvOutputOptions.SubtitleBackStyles, () => playback.SubtitleBackStyle,
+                Live<string>(value =>
+                {
+                    playback.SubtitleBackStyle = value;
+
+                    // 这一项一变，下面那一行颜色画的是底板还是阴影就变了。页面没有整体刷新，只有因果关系
+                    // 明确的这一处自己去改那一行。annotate 一起带上，不然重述一次那一行末尾的
+                    // 「mpv：sub-back-color」就掉了。
+                    backColor!.Restate(Annotate(BackColorNote(playback), "sub-back-color")!);
+                }),
+                "sub-border-style", "亮画面上最管用的一项。关着的时候只有描边和阴影"),
+            backColor!,
+            Slider("底板不透明度（%）", 0, 100, 5, () => playback.SubtitleBackOpacity, Live<double>(value => playback.SubtitleBackOpacity = (int)value),
+                "控制底板颜色的透明度；颜色选「不设置」时使用黑色，透明度仍按此值。逐行盒的描边盒由描边颜色控制", "sub-back-color"),
+
+            Mpv("字幕编码", MpvOutputOptions.SubtitleCodepages, () => playback.SubtitleCodepage, value => playback.SubtitleCodepage = value,
+                "sub-codepage", "只对不是 UTF-8 的文本字幕有意义。选了具体编码就不再自动识别了，"
+                    + "所以简体那一档会把 Big5 的繁体字幕读成乱码。下次播放生效"),
+            Toggle("拉伸图形字幕到画面", "画面比 16:9 更宽的电影，把图形字幕（PGS/VOBSUB）拉伸到画面里，"
+                + "免得字幕落到画面外头去。下次播放生效", () => playback.StretchWideImageSubtitles, value => playback.StretchWideImageSubtitles = value,
+                "stretch-image-subs-to-screen")
+        ]);
+    }
+
+    /// <summary>
+    /// 底板颜色 那一行的说明，照 <see cref="PlaybackSettings.SubtitleBackStyle"/> 的当前值写：mpv 把底板和
+    /// 阴影用的是同一个颜色，所以这一行到底在给什么上色，只有上面那一行能回答。
+    /// </summary>
+    private static string BackColorNote(PlaybackSettings playback) =>
+        playback.SubtitleBackStyle switch
+        {
+            "background-box" => "给包住所有文字行的背景盒上色；不设置时使用黑色，透明度由下一行控制",
+            "opaque-box" => "给逐行盒的阴影上色；描边盒使用描边颜色。不设置时使用黑色",
+            _ => "给文字阴影上色；字幕底板关闭时不画背景盒。不设置时使用黑色"
+        };
+
+    /// <summary>
+    /// 字幕外观那一组的写入口：写完设置，再推给正在播的那部片子，再喊卡顶那条「字幕示例」重画一遍。
+    /// <para>
+    /// 包一层而不是给十一行各挂一个 <c>after</c>：那几个行工厂里只有一半带 <c>after</c> 这个参数（Toggle、
+    /// Slider、Font 都没有），补齐参数是为一件小事改四个签名。这一层还顺手把「哪些行是外观」画在了一处 ——
+    /// 语言、显示模式、字幕编码和图形字幕拉伸没有从这儿过，因为它们本来就只能下次播放生效。预览也只从
+    /// 这儿跟：它照的是这张卡的外观，语言那些行动了它本来就不该动。
+    /// </para>
+    /// </summary>
+    private Action<T> Live<T>(Action<T> write) =>
+        value =>
+        {
+            write(value);
+            _subtitlePreview?.Refresh();
+            _ = PushSubtitleStyleAsync();
+        };
+
+    private async Task<bool> PushSubtitleStyleAsync()
+    {
+        if (_pushSubtitleStyle is null) return true;
+        try
+        {
+            await _pushSubtitleStyle().ConfigureAwait(true);
+            return true;
+        }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception error)
+        {
+            Report("当前播放的字幕外观未完全更新", error);
+            return false;
+        }
+    }
+
+    private SettingSection AudioCard()
+    {
+        var audio = Settings.Audio;
+
+        // 直通说明的共同尾巴。直通绕过 mpv 的混音与处理链这件事比「原样解码」四个字更要紧：开了直通还
+        // 指望音量均衡、下混归一化或音量条起作用，是这一页最容易被骗的一处（mpv 手册对 audio-spdif 的
+        // 警告也是同一句）。逐格式只说差别，共同代价写一遍。
+        const string PassthroughTail =
+            "需要功放/电视支持这一格式；直通后音量均衡、下混归一化和音量条都不再作用于这条音轨";
+        var passthroughNotes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ac3"] = $"交给功放原样解码（杜比数字）。{PassthroughTail}",
+            ["eac3"] = $"交给功放原样解码（杜比数字加）。{PassthroughTail}",
+            ["dts"] = $"交给功放原样解码（DTS 核心流）。{PassthroughTail}",
+            ["dts-hd"] = $"交给功放原样解码（DTS-HD MA；与「直通 DTS」同时勾选时按这一档处理）。{PassthroughTail}",
+            ["truehd"] = $"交给功放原样解码（杜比 TrueHD，仅 HDMI）。{PassthroughTail}",
+        };
+
+        var passthrough = MpvOutputOptions.PassthroughCodecs
+            .Select(codec => Toggle($"直通 {codec.Label}",
+                passthroughNotes.GetValueOrDefault(codec.Value, "交给功放原样解码"),
+                () => audio.PassthroughCodecs.Contains(codec.Value, StringComparer.OrdinalIgnoreCase),
+                value =>
+                {
+                    if (value && !audio.PassthroughCodecs.Contains(codec.Value, StringComparer.OrdinalIgnoreCase))
+                        audio.PassthroughCodecs.Add(codec.Value);
+                    if (!value)
+                        audio.PassthroughCodecs.RemoveAll(item => string.Equals(item, codec.Value, StringComparison.OrdinalIgnoreCase));
+                },
+                "audio-spdif"))
+            .ToList();
+
+        // 生效时机写在页头而不是每行重复：这一页的行只改设置并保存，没有字幕外观那种实时推送 —— 正在放
+        // 的片子不因这里而变（2026-09-30 审查补的说明，免得「改了却听不出变化」被当成坏了）。
+        return new SettingSection("音频输出", "音频输出", "输出设备、声道布局、响度、独占模式和功放直通。"
+            + "这一页的改动保存后从下一次播放开始生效，正在放的片子不受影响；播放中的临时调整在画面菜单里，不保存。",
+        [
+            // 音频输出设备. Built from whatever has already been enumerated — nothing on the first frame — and
+            // refilled by FillAudioDevicesAsync a moment later. Held in a field for exactly that.
+            _audioDevice = DeviceRow(audio),
+            Mpv("扬声器布局", MpvOutputOptions.Channels, () => audio.Channels, value => audio.Channels = value,
+                "audio-channels"),
+
+            // 「只对 AC-3 / E-AC-3 有效」 is the whole point of this note. The option itself is fine and stays —
+            // it really does work on an AC-3 track that carries DRC metadata — but the row used to read as the
+            // general 「让对白清楚一点」 control, and on a DTS or TrueHD track it does exactly nothing. That is
+            // the 「界面在骗人」 class of defect, so the row now names its own range and points at the next one.
+            Mpv("动态范围压缩", MpvOutputOptions.DynamicRange, () => audio.DynamicRange, value => audio.DynamicRange = value,
+                "ad-lavc-ac3drc",
+                "只对 AC-3 / E-AC-3 音轨有效，而且要片源自带 DRC 信息；DTS、TrueHD、AAC、FLAC 一律没有反应，"
+                + "那些请用下面的「音量均衡」"),
+            Mpv("音量均衡", MpvOutputOptions.VolumeNormalizers, () => audio.VolumeNormalize, value => audio.VolumeNormalize = value,
+                "af", "对解码后的音频有效（直通除外），代价是动态范围被压窄；播放器右键菜单里可以当场试听这三档"),
+            Toggle("5.1 下混到两声道时归一化",
+                "多声道下混时防削波：把混音系数整体压到不超载，代价是整体变轻。它不单独抬高对白 —— "
+                + "想要对白清楚请用上面的「音量均衡」。只在下混由 mpv 完成时有效，这台机器上量过确实如此",
+                () => audio.NormalizeDownmix, value => audio.NormalizeDownmix = value,
+                "audio-normalize-downmix"),
+            Toggle("音频独占模式", "播放时把声卡占下来、绕过系统混音，声音更原样；代价是放片的时候别的程序出不了声",
+                () => audio.ExclusiveMode, value => audio.ExclusiveMode = value,
+                "audio-exclusive"),
+            Number("全局音频延迟（毫秒）", -5000, 5000, () => audio.DelayMilliseconds, value => audio.DelayMilliseconds = value,
+                "正值＝声音推迟，负值＝声音提前；清空输入框不会归零，灰字是仍在生效的值", null, "audio-delay"),
+            new SettingToggleGroupRow("直通格式", passthrough)
+        ]);
+    }
+
+    /// <summary>
+    /// 音频输出设备. Its own factory rather than an inline <see cref="Pick"/> call because the note is the point
+    /// of the row: 独占模式 without this could only ever take over 「whatever Windows calls the default right
+    /// now」, and the whole reason to choose a device by hand is to say which one that is.
+    /// </summary>
+    private SettingChoiceRow DeviceRow(AudioSettings audio)
+    {
+        var (choices, selected) = DeviceChoices(audio, _audioDevices?.Known ?? []);
+
+        return new SettingChoiceRow(
+            "音频输出设备",
+            Annotate("每次打开设置会重新读取内置 libmpv 的设备名单；内置后端起播前再次核对，"
+                + "未找到时本次尝试系统默认，不改已保存的选择。外部 mpv 使用自己的设备表，不保证这些名称可用，也不执行此回退。"
+                + "播放中拔插或设备无法打开仍可能无声", "audio-device"),
+            choices,
+            selected,
+            Save);
+    }
+
+    /// <summary>
+    /// 主页：那几排的次序和显示与否 —— 「把媒体库的列表也添加到主页之中，新增页里拖拽决定这些列表的顺序，勾选
+    /// 显示或者不勾选取消显示」。
+    /// <para>
+    /// 表里那几项从设置文件里那份版面读（<see cref="Emby.HomeLayout"/> 归一化过的那一份，主页每次读完都写回来），
+    /// 所以这一头不用问服务器有哪几个媒体库 —— 设置窗口连不上服务器时这张卡照样写得出每一排叫什么。改一下（拖过
+    /// 或者点过勾）就立刻写回设置并喊一声（<see cref="ShellPrefs"/>），主页那一头照新的重排。
+    /// </para>
+    /// </summary>
+    private SettingSection HomeCard()
+    {
+        var ui = Settings.Ui;
+        var plan = Emby.HomeLayout.Plan(ui.HomeRows, null);
+
+        HomeRows = new SettingHomeLayoutRow(
+            "主页上放哪几排",
+            "按住一行往上下拖、或者按右边那两颗箭头决定次序，取消勾选就不显示。媒体库那一排是进各媒体库的入口"
+                + "（点上面的卡片打开那个库），那几排装的是每个库最近添加的内容。",
+            plan.Select(row => new HomeRowChoice(row.Key, row.Title, row.Visible)),
+            rows =>
+            {
+                ui.HomeRows = [.. rows.Select(row => new Configuration.HomeRowSetting
+                {
+                    Key = row.Key,
+                    Title = row.Title,
+                    Visible = row.Visible
+                })];
+
+                Save();
+                ShellPrefs.Apply(ui);
+            });
+
+        // 「新增在设置中设置轮播图要使用什么媒体，和要使用最近添加还是随机的还有数量的选项。还有封面的
+        // 轮换的秒数」（用户的话，2026-09-13）。四行照他点的名落：站哪一类、从哪来、几张、一张站几秒。
+        // 全部当场生效（ShellPrefs）：来源、媒体和张数是主页重新取数的事，秒数是那条带换钟的事 ——
+        // 改完不用回主页，也不用重启。
+        (string Label, Emby.CarouselMediaType Value)[] carouselMedia =
+        [
+            ("全部媒体", Emby.CarouselMediaType.All),
+            ("只看电影", Emby.CarouselMediaType.Movies),
+            ("只看剧集", Emby.CarouselMediaType.Series)
+        ];
+
+        (string Label, Emby.CarouselSource Value)[] carouselSource =
+        [
+            ("最近添加", Emby.CarouselSource.Recent),
+            ("随机挑选", Emby.CarouselSource.Random)
+        ];
+
+        return new SettingSection("主页", "主页", "顶上那张轮播大图，以及主页上那几排的次序和显示与否，包括每个"
+            + "媒体库自己那一排。",
+        [
+            // 「在设置中新增关闭轮播图的功能」（用户的话，2026-09-05）。摆在四行轮播设置和拖拽表上面，
+            // 因为它管的是整个第一屏：关掉之后顶上那张大图整个没有，那张表里的每一排照旧横着排在各自的
+            // 位置上。改完当场喊一声（ShellPrefs），主页那一头照新的重排 —— 和下面几行走同一条路。
+            Toggle("显示主页轮播大图",
+                "主页最上面那张会自己走的大图。开着的时候它是一块四边留白的大卡片，剧照铺满整张卡、下面那几排"
+                    + "接在它下面（第一屏里就看得见）；关掉之后这张图整个没有，整页就是一叠横着排的普通货架。"
+                    + "大图上放哪些条目，由下面四行轮播设置说了算。",
+                () => ui.ShowHomeBanner,
+                value =>
+                {
+                    ui.ShowHomeBanner = value;
+                    ShellPrefs.Apply(ui);
+                }),
+
+            Choice("轮播图用什么媒体", carouselMedia,
+                () => ui.CarouselMedia,
+                value =>
+                {
+                    ui.CarouselMedia = value;
+                    ShellPrefs.Apply(ui);
+                },
+                "顶上那张大图站哪一类。音乐类从不出现在轮播里"),
+
+            Choice("轮播图条目来源", carouselSource,
+                () => ui.CarouselSource,
+                value =>
+                {
+                    ui.CarouselSource = value;
+                    ShellPrefs.Apply(ui);
+                },
+                "最近添加按服务器记录的入库时间从新到旧；随机挑选拿到的是服务器随手给的一批，回到主页就可能换一批"),
+
+            Number("轮播图张数", Emby.HomeCarousel.MinSlots, Emby.HomeCarousel.MaxSlots,
+                () => ui.CarouselCount,
+                value =>
+                {
+                    ui.CarouselCount = value;
+                    ShellPrefs.Apply(ui);
+                },
+                $"这条带最多摆几张，{Emby.HomeCarousel.MinSlots}–{Emby.HomeCarousel.MaxSlots}。"
+                    + "筛掉没有宽图的条目之后可能不足这个数"),
+
+            Number("封面轮换秒数", Emby.HomeCarousel.MinDwellSeconds, Emby.HomeCarousel.MaxDwellSeconds,
+                () => ui.CarouselSeconds,
+                value =>
+                {
+                    ui.CarouselSeconds = value;
+                    ShellPrefs.Apply(ui);
+                },
+                "一张封面站多少秒再换下一张，指针停在带上的时候不计时"),
+
+            HomeRows
+        ]);
+    }
+
+    /// <summary>自检用：那张可拖拽的表这一次建出来的那一行。</summary>
+    internal SettingHomeLayoutRow? HomeRows { get; private set; }
+
+    /// <summary>
+    /// 自检用：「图片缓存上限（MB）」那一行。
+    /// <para>
+    /// 存着它是因为这件事真会坏的地方不在这一页上：设置页开在另一个窗口里，它只把数字写进设置文档然后喊一声
+    /// （<see cref="ShellPrefs"/>），是主窗口那一头把新预算交给图片仓库的。那根绳子断了的样子是「三处读数全对、
+    /// 缓存照旧按旧上限清」—— 屏上没有任何东西说得出现在生效的是哪个数。
+    /// </para>
+    /// </summary>
+    internal SettingNumberRow? ImageBudget { get; private set; }
+
+    /// <summary>
+    /// 自检：把这一行拨动一格，看图片仓库的预算跟不跟得上，再拨回去。
+    /// <para>
+    /// **只拨一格（±1 MB）**，不是拨到上限。两个理由：拨到上限对「上限本来就是上限」的人是一次空操作
+    /// （<c>SettingNumberRow.Value</c> 是 <c>[ObservableProperty]</c>，相等就直接返回，<c>after</c> 一次都不跑），
+    /// 这一关于是变成一句永远为真的空话；而万一还原那一步没走到，留在设置文件里的差别只有 1 MB，不是「上限没了」。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureImageBudget(Emby.EmbyImageStore images)
+    {
+        if (ImageBudget is not { } row) return null;
+
+        var before = Settings.Ui.ImageCacheMegabytes;
+        var probe = before < Emby.ImageCachePolicy.MaxMegabytes ? before + 1 : before - 1;
+
+        var agreedBefore = images.MaxBytes == Emby.ImageCachePolicy.BudgetBytes(before);
+
+        row.Value = probe;
+        var moved = Settings.Ui.ImageCacheMegabytes == probe;
+        var followed = images.MaxBytes == Emby.ImageCachePolicy.BudgetBytes(probe);
+
+        row.Value = before;
+        var restored = Settings.Ui.ImageCacheMegabytes == before
+            && images.MaxBytes == Emby.ImageCachePolicy.BudgetBytes(before);
+
+        return (agreedBefore && moved && followed && restored,
+            $"设置里 {before} MB、仓库 {images.MaxBytes / 1024 / 1024} MB（一致={agreedBefore}）"
+            + $"；拨到 {probe} MB → 设置{(moved ? "跟上" : "没跟上")}、仓库{(followed ? "跟上" : "没跟上")}"
+            + $"；拨回 {before} MB → {(restored ? "两头都还原了" : "没还原")}"
+            + $"；范围 {Emby.ImageCachePolicy.MinMegabytes}–{Emby.ImageCachePolicy.MaxMegabytes}");
+    }
+
+    /// <summary>
+    /// 自检：那张表和设置文件里那一份对得上没有 —— 存着几排，表里就该有几排，钥匙和次序都一样。
+    /// <para>
+    /// 这一条盯的是设置窗口这一头拿不到服务器那份媒体库列表：媒体库那几排的名字只能从存档里记着的那句标题来
+    /// （见 <see cref="Emby.HomeLayout.Plan"/> 里那一手）。那一手断掉的样子是屏上一张只有四行固定排的表 ——
+    /// 看着完全正常，而用户在上面随手拖一下，就把媒体库那几排从设置文件里抹掉了。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureHomeRows()
+    {
+        if (HomeRows is not { } row) return null;
+
+        var saved = Settings.Ui.HomeRows;
+        var keys = row.Rows.Select(choice => choice.Key).ToList();
+        var ok = keys.Count == saved.Count
+            && saved.Select(entry => entry.Key).SequenceEqual(keys, StringComparer.Ordinal);
+
+        return (ok, $"表里 {keys.Count} 排、存档 {saved.Count} 排"
+            + $"：{(keys.Count == 0 ? "无" : string.Join('、', row.Rows.Select(choice =>
+                $"{choice.Title}{(choice.Visible ? "✓" : "✗")}")))}");
+    }
+
+    private SettingSection InterfaceCard()
+    {
+        var ui = Settings.Ui;
+        Themes = ThemeSwatches(ui);
+
+        // Held as well as placed, the same way the two shader thresholds are: the self-check drives this row to
+        // prove that a changed budget really reaches the image store, and the row is the only end of that rope
+        // it can reach from here.
+        ImageBudget = Number("图片缓存上限（MB）",
+            Emby.ImageCachePolicy.MinMegabytes,
+            Emby.ImageCachePolicy.MaxMegabytes,
+            () => ui.ImageCacheMegabytes,
+            value => ui.ImageCacheMegabytes = value,
+            $"海报和剧照在磁盘上最多占多少，装机是 {Emby.ImageCachePolicy.DefaultMegabytes} MB。这一行是填进去的，"
+                + "不是用箭头拨的；填小了当场就会把最久没看过的那些删到新上限以下。缓存删掉不影响任何设置，"
+                + "只是下次看到那些封面时要重新下载一遍。",
+            after: () => ShellPrefs.Apply(ui));
+
+        return new SettingSection("界面", "界面", "配色主题、UI 动画、隐藏功能下方说明、媒体库分页和图片缓存上限。",
+        [
+            Themes,
+
+            Toggle("UI 动画", "控制页面切换、卡片悬停等界面动效，修改后立即生效；开启时仍遵循 Windows 动画设置",
+                () => ui.AnimationsEnabled,
+                value => ui.AnimationsEnabled = value,
+                after: () => ShellPrefs.Apply(ui)),
+
+            // 「锁定窗口比例大小」原来就在这里，2026-09-05 按用户的话整条删掉了（「删除设置中锁定比例的功能」）
+            // —— 浏览时的窗口从此随便拉，放片子时形状照旧跟着画面走。紧跟着那一行是「默认收起侧边栏」，
+            // 2026-09-06 跟着侧边栏本身一起删掉了（「删掉侧边栏」）：媒体库后来从主页那一排卡片进，没有栏可收。
+            // 那一行原来还负责「改完当场生效」这条线（ShellPrefs），而那条线还在 —— 图片缓存上限和主页版面
+            // 照旧走它。
+
+            // Both ranges match what SettingsMigration.Normalize clamps these to. They have to: a box narrower
+            // than its setting shows a clamped number the file does not contain and writes it back on the next
+            // touch, and a box wider than its setting lets a value be typed that the save then silently moves.
+            Number("每页条目数", 20, 500, () => ui.PageSize, value => ui.PageSize = value,
+                "媒体库一页列多少个，翻页按这个数走"),
+
+            // 「海报宽度（像素）」原来在这一行下面，2026-09-05 按用户的话整行删掉了（「删掉设置中的海报宽度」）
+            // —— 卡片回到 CardSize 固定的默认尺寸，AppSettings.UiSettings 里那句注释记着这件事。
+
+            // 「新增可在设置中调整图片缓存大小的功能」. Built above so the self-check can drive it; see ImageBudget.
+            ImageBudget,
+
+            // 「加入显示评分改为豆瓣评分的功能，可在设置使用豆瓣、tmdb、烂番茄等平台的评分」. The catalogue is
+            // ItemScore's, so the four names exist in exactly one place — and what each option can actually do is in
+            // that class's remarks, which the note below says in the user's own words.
+            Choice("评分来源", Emby.ItemScore.Catalogue,
+                () => ui.ScoreSource,
+                value => ui.ScoreSource = value,
+                note: "详情页那个分显示哪一家的。「烂番茄」读的是服务器上的「影评指数」，是唯一真正独立的第二个分；"
+                    + "「豆瓣」和「TMDB」换的是分数旁边那个署名 —— 服务器上三家的大众分都写在同一个字段里，"
+                    + "客户端换不出来，只能在服务器认出这个条目属于哪一家时把那一家的名字写上去，认不出来就写"
+                    + "「公众评分」。豆瓣要服务器上装了豆瓣刮削插件才认得出来。"),
+
+            Toggle("显示观看状态标记", "在海报角上显示已看和收藏状态", () => ui.ShowWatchedIndicators, value => ui.ShowWatchedIndicators = value),
+
+            // 「在设置中新增一个精简模式，开启后隐藏各项功能下方的说明」（用户的话，2026-09-25）。收放是页级
+            // 的事（SettingRow.NotesHidden），所以 after 里先对齐标记、再逐行喊一遍 —— 与 ShowHomeBanner 不同，
+            // 这件事不出设置页，不走 ShellPrefs。开关行自己的说明也在「各项功能」之列：开着它，连介绍它自己的
+            // 那行小字一起收走 —— 趁它还显示着，把这句话读完再拨。
+            // 屏上的名字改成新话：「把极简模式改名为隐藏功能下方说明」（用户的话，2026-09-26）—— 名字
+            // 直接说它干什么；键名 CompactMode、自检里的 ProbeCompactMode 不动，改的只是给人看的字。
+            Toggle("隐藏功能下方说明", "开启后，这一页每一条设置下面的小字说明都收起来，只留标签和控件；想看某条是"
+                + "什么意思，把它关掉就放回来",
+                () => ui.CompactMode,
+                value => ui.CompactMode = value,
+                after: () =>
+                {
+                    SettingRow.NotesHidden = ui.CompactMode;
+                    RefreshNoteVisibility();
+                })
+        ]);
+    }
+
+    /// <summary>
+    /// 精简模式拨了一下：整页每一行的说明可见性都变了，逐行把消息喊过去。The page deliberately has no refresh
+    /// pass — this is not one: no value is recomputed, each row is only told that a property it already exposes
+    /// moved, which is exactly the message the Note setter sends when 视频同步's row restates itself. Rows in
+    /// cards that have never been opened have no containers yet, so there is nothing to tell — their bindings
+    /// read the flag when they are first built.
+    /// </summary>
+    private void RefreshNoteVisibility()
+    {
+        foreach (var section in Sections)
+            foreach (var row in section.Rows)
+                row.RefreshNoteVisibility();
+    }
+
+    /// <summary>
+    /// 快捷键：播放器那些键盘动作，做成参考图那样一行一个、右边一个可重绑的方框（「参考上图在设置中新增快捷键
+    /// 功能」，2026-09-08）。21 行可改的走 <see cref="SettingShortcutRow"/>；Esc、回车两个固定键以只读行显示，
+    /// 让人看到全貌（为什么固定见 <see cref="ShortcutCatalog.ReservedKeys"/>）；末一行一颗「恢复默认快捷键」，只清
+    /// 快捷键、不动别的。判断全在 Core 的 <see cref="ShortcutCatalog"/>；这里只把动作翻成行、把方框敲定的键交回去。
+    /// </summary>
+    private SettingSection ShortcutsCard()
+    {
+        // 每次建卡都重来一份：ReloadAsync 会被再调（恢复默认那一趟就重建整页），握着的这份行要跟着换新。
+        _shortcutRows.Clear();
+
+        var effective = ShortcutCatalog.Resolve(Settings.Shortcuts.Bindings);
+        var rows = new List<SettingRow>();
+
+        foreach (var action in ShortcutCatalog.Actions)
+        {
+            var id = action.Id;
+            var row = new SettingShortcutRow(action.Label, id, ShortcutCatalog.Format(effective[id]),
+                token => ApplyShortcut(id, token));
+            _shortcutRows.Add(row);
+            rows.Add(row);
+        }
+
+        // 两个固定键，只读显示，让人看到全貌（为什么固定见 ShortcutCatalog.ReservedKeys）。
+        // 2026-09-26（用户令）：确认跳过 Y→回车、关闭跳过提示 N→Esc —— Esc 因此先兼「关闭提示」那一档。
+        rows.Add(Fact("退出全屏 / 停止", "固定，不可更改；跳过提示立着时先关闭提示", "Esc"));
+        rows.Add(Fact("确认跳过片头 / 片尾", "固定，不可更改；只在出现跳过提示时有效", "回车"));
+
+        // 只清快捷键、不动别的（列表最下面那颗「恢复默认」清的是全部设置，作用域比这颗宽）。
+        rows.Add(Fact("恢复默认快捷键", "把上面这些快捷键改回装机时的默认，其他设置不受影响",
+            $"{ShortcutCatalog.Actions.Count} 个可改快捷键", "恢复默认", ClearAllShortcuts));
+
+        return new SettingSection("快捷键", "快捷键",
+            "播放时的键盘快捷键。点一下右边的方框，再按你想要的组合键（可带 Ctrl / Alt / Shift）就改绑了，× 清除。"
+            + "这些只在播放窗口里生效。", rows);
+    }
+
+    /// <summary>
+    /// 一次重绑（方框敲定了一个键 token，空串=按了 ×）。判断在 <see cref="ShortcutCatalog"/>：冲突就拦下、提示，
+    /// 一个绑定都不改（那一行方框还显示着原来的，因为 <c>ComboText</c> 没动）；否则写回、落盘、逐行刷新显示。
+    /// 写回一份新字典即可，播放器那头每次按键现读同一个单例设置，所以已经开着的播放器也当场跟上。
+    /// </summary>
+    private void ApplyShortcut(string id, string token)
+    {
+        var bindings = Settings.Shortcuts.Bindings;
+
+        if (token.Length == 0)
+        {
+            Settings.Shortcuts.Bindings = new Dictionary<string, string>(ShortcutCatalog.Clear(bindings, id), StringComparer.Ordinal);
+        }
+        else
+        {
+            if (!ShortcutCatalog.TryParse(token, out var stroke)) return;
+
+            var result = ShortcutCatalog.Rebind(bindings, id, stroke);
+            if (result.Conflict is { } occupant)
+            {
+                Notify("快捷键冲突",
+                    $"「{ShortcutCatalog.Format(stroke)}」已经是「{ShortcutCatalog.Label(occupant)}」的快捷键了。先把那边清掉，再绑到这里。",
+                    InfoBarSeverity.Warning);
+                return;
+            }
+
+            Settings.Shortcuts.Bindings = new Dictionary<string, string>(result.Bindings, StringComparer.Ordinal);
+        }
+
+        Save();
+        RefreshShortcutRows();
+    }
+
+    /// <summary>「恢复默认快捷键」：改动全清掉（Bindings 变回空＝全默认），落盘、刷新、说一声。</summary>
+    private void ClearAllShortcuts()
+    {
+        Settings.Shortcuts.Bindings = new Dictionary<string, string>(StringComparer.Ordinal);
+        Save();
+        RefreshShortcutRows();
+        Notify(null, HasUnsavedChanges ? "快捷键已在本次运行恢复默认，但尚未保存。" : "播放器快捷键已恢复默认。其他设置没有动。",
+            HasUnsavedChanges ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
+    }
+
+    /// <summary>照当前绑定把每一行的显示串重算一遍（重绑、清一个、清全部之后都走它）。</summary>
+    private void RefreshShortcutRows()
+    {
+        var effective = ShortcutCatalog.Resolve(Settings.Shortcuts.Bindings);
+        foreach (var row in _shortcutRows)
+            row.ComboText = ShortcutCatalog.Format(effective[row.Id]);
+        ShellPrefs.ApplyShortcuts();
+    }
+
+    /// <summary>
+    /// MoviePilot 接入卡（用户的话，2026-09-14：「放设置页」）。一个开关、服务地址、用户名、密码、一颗测试按钮。
+    /// <para>
+    /// <b>为什么先做这张卡</b>：它是后面所有 MoviePilot 功能的地基，而且它自己是能独立验完的一步 —— 填上地址按下
+    /// 测试，通没通当场看得见。缺集提醒、搜索订阅那几件都要先有「这台 MoviePilot 说什么话、连的是哪个 Emby」这些
+    /// 事实，而那些事实正是这张卡测出来的。
+    /// </para>
+    /// <para>
+    /// <b>密码为什么存得下来</b>：MoviePilot 的 API_TOKEN 那条路在这台服务器上是断的 —— 认证能过，但每个接口都
+    /// 回「SUPERUSER 对应用户不存在、未启用或非超级管理员」（实测 2026-09-14）。账号密码换 JWT 那条路是通的，
+    /// 所以这张卡收用户名密码，用 DPAPI 包起来存（<see cref="MoviePilotCredentials"/>），和 Emby 的密码同一套。
+    /// 代价是它比一个长期 token 危险一点，这也是为什么它默认关着、密码框永远不回填。
+    /// </para>
+    /// <para>
+    /// 每个输入框改了就地写盘，和这一页别的行一样；测试按钮是唯一会碰网络的东西，而且只在按下去的那一刻碰。
+    /// </para>
+    /// </summary>
+    private SettingSection MoviePilotCard()
+    {
+        var moviePilot = Settings.MoviePilot;
+
+        // 行本身只拿读写对，不碰设置对象（同这一页每一条的规矩）。密码那一对是个例外里的例外：写进去的是明文、
+        // 存下来的是密文，所以包一层 —— 行永远只见到明文，包和拆都在 MoviePilotCredentials 里。
+        _moviePilotRow = new SettingMoviePilotRow(
+            "MoviePilot",
+            "接上你自己的 MoviePilot，之后就能在库里查缺集、直接订阅还搜得到资源的那一部。"
+                + "地址填 MoviePilot 的 API 端口（默认 3001），不是网页界面那个端口。",
+            moviePilot.Enabled,
+            moviePilot.Url,
+            moviePilot.Username,
+            moviePilot.HasSavedPassword,
+            value => moviePilot.Enabled = value,
+            value => moviePilot.Url = value,
+            value => moviePilot.Username = value,
+            value =>
+            {
+                // 空串＝把已存的清掉，不是「留空不动」—— 「留空则用已保存的那个」承诺在按钮那一边（测试时用
+                // 存下来的），而一个用户主动清空的框该真的清掉。
+                _moviePilotCredentials?.SetPassword(moviePilot, value);
+                _moviePilotRow?.MarkPasswordSaved(moviePilot.HasSavedPassword);
+            },
+            Save,
+            TestMoviePilotAsync);
+
+        return new SettingSection("MoviePilot", "MoviePilot",
+            "这是一个可选的服务：接上之后，这个程序能替你去 MoviePilot 那边找片、订阅、查缺集。不接也能正常用。",
+            [_moviePilotRow]);
+    }
+
+    /// <summary>
+    /// 按下「测试连接」之后的那一路：把地址理一遍 → 拿框里的密码（框里空着就用存下来的）→ 登录 + 问三个接口 →
+    /// 把结果拼成一句话交给行去显示。
+    /// <para>
+    /// 丢出来的异常原样交给行显示，因为这一路上的每一句话都是写给用户看的（客户端那几个异常的 <c>Message</c>
+    /// 已经是「用户名或密码不正确」「无法连接到 x.x.x.x」这种）。这里只加一句「还没填地址」—— 那是唯一一件
+    /// 按钮自己就能判断、不必去网络上白跑一趟的事。
+    /// </para>
+    /// <para>
+    /// 用的是框里的密码优先、存下来的兜底，这样「换了密码想试一下」和「每次点都省得重打」两件事都成立，
+    /// 也正好和密码框上那句提示对上。
+    /// </para>
+    /// </summary>
+    private async Task<string> TestMoviePilotAsync(CancellationToken cancellationToken)
+    {
+        if (_moviePilot is null || _moviePilotCredentials is null) return "设置页还没准备好，稍后再试";
+
+        var row = _moviePilotRow;
+        var moviePilot = Settings.MoviePilot;
+
+        if (!MoviePilotAddress.TryNormalize(row?.Url ?? moviePilot.Url, out var address, out var error))
+            return error;
+
+        if (address is null) return "先填上 MoviePilot 的服务地址";
+
+        var username = (row?.Username ?? moviePilot.Username).Trim();
+        var password = row?.Password is { Length: > 0 } typed
+            ? typed
+            : _moviePilotCredentials.GetPassword(moviePilot);
+
+        if (username.Length == 0) return "先填上用户名";
+        if (password.Length == 0) return "先填上密码（或者是密码没存下来，重新输一次）";
+
+        var status = await _moviePilot
+            .RunAsync(address, username, password, cancellationToken)
+            .ConfigureAwait(true);
+
+        // 通了才把这些写回去 —— 地址归一化过、用户名是这次真的登进去的那个、时间戳记下「什么时候通的」。
+        // 没通就一个字都不改，否则一个打错的地址会把对的那个覆盖掉。
+        moviePilot.Url = MoviePilotAddress.ToDisplayString(address);
+        moviePilot.Username = username;
+        moviePilot.LastUserName = username;
+        moviePilot.LastConnected = DateTimeOffset.Now;
+
+        // 这回真的用上了，顺手把开关打开 —— 按了「测试连接」就是想让它在用的意思。
+        if (!moviePilot.Enabled)
+        {
+            moviePilot.Enabled = true;
+            if (row is not null) row.Enabled = true;
+        }
+
+        Save();
+
+        var servers = status.MediaServers.Count > 0 ? string.Join("、", status.MediaServers) : "无";
+        var downloaders = status.Downloaders.Count > 0 ? string.Join("、", status.Downloaders) : "无";
+
+        return $"连接成功：MoviePilot {status.Version}"
+            + (status.OperatingSystem.Length > 0 ? $"（{status.OperatingSystem}）" : "")
+            + $"\n已连的媒体服务器：{servers}"
+            + $"\n已连的下载器：{downloaders}";
+    }
+
+    // ── 截图保存目录 ──────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 截图往哪儿落 —— <see cref="AppPaths.ResolveScreenshotDirectory"/> 的那一句答案：设置里填了的（清掉
+    /// 引号空白、展开成绝对）就是它，空着就是装机落点。没有 <see cref="_paths"/>（测试路径）时兜底也是空，
+    /// 调用方各有空串的走法。
+    /// </summary>
+    private string ScreenshotDirectory() =>
+        AppPaths.ResolveScreenshotDirectory(Settings.Mpv.ScreenshotDirectory, _paths?.ScreenshotDirectory) ?? "";
+
+    /// <summary>
+    /// 截图保存目录动过了，把两处「印着它」的地方当场带上：关于卡那行读数（不重开设置窗口，屏上说的也得是
+    /// 新目录），和正播着的那一部 —— mpv 的 <c>screenshot-directory</c> 属性，下一张截图起就落进新目录，
+    /// 画面菜单副标题里展开的也是它。推送没接上（测试路径）就略过；推送本身没有可败之处（<c>PlaybackService</c>
+    /// 里裹着 try），同 <see cref="_pushSubtitleStyle"/> 的调法一样不另设防。
+    /// </summary>
+    private void AnnounceScreenshotDirectory()
+    {
+        var directory = ScreenshotDirectory();
+        if (_screenshotFact is { } fact) fact.Value = directory;
+        if (directory.Length > 0) _ = _pushScreenshotDirectory?.Invoke(directory);
+    }
+
+    /// <summary>
+    /// 关于卡「截图目录」那颗「打开」：建得起就先建再开。建目录不放进行提交那一路 —— 每敲一键提交一次，
+    /// 会把路径的每个前缀都建成文件夹 —— 归启动时和这里各一道；刚改完目录还没重开过程序的人，点按钮也有
+    /// 地方可去。
+    /// </summary>
+    private void OpenScreenshotDirectory()
+    {
+        var directory = ScreenshotDirectory();
+        if (directory.Length == 0) return;
+
+        try { Directory.CreateDirectory(directory); }
+        catch (Exception) { /* 建不起就算了：盘不在、写不进，打开那一步资源管理器自己会说。 */ }
+
+        _launcher?.OpenFolder(directory);
+    }
+
+    /// <summary>
+    /// 关于：这份程序是哪一版、拿哪个内核在放、它的东西放在磁盘上哪儿。
+    /// <para>
+    /// 在这张卡之前，版本号只写进日志和自检报告 —— 界面上一次都没出现过，所以「你用的是哪一版」这句话答不上来；
+    /// 而设置文件和缓存目录也没有一处能一键打开（诊断页那颗按钮只开日志）。三行读数由 Core 那边算
+    /// （<see cref="AboutFacts"/>，读不到就明说读不到），四行目录各带一颗按钮。
+    /// </para>
+    /// <para>
+    /// 没有 <see cref="AppPaths"/> 或者打不开资源管理器的时候（测试和自检的那一路）这张卡照旧建出来，只是那四颗
+    /// 按钮不画：一张空卡比一张会抛的卡好，而「这一版是哪一版」不该因为拿不到路径就说不出来。
+    /// </para>
+    /// </summary>
+    private SettingSection AboutCard()
+    {
+        var home = AppContext.BaseDirectory;
+        var rows = new List<SettingRow>
+        {
+            // 三行读数不带说明行（他 2026-09-14：「不要显示这些字」）。原来那三句 ——「改动记在 PROGRESS.md 里，
+            // 版本号不随每次改动走」「这份 exe 落到磁盘上的时间」「这个文件的版本不要换」—— 是写给做这个程序的
+            // 人看的：它们讲的是版本号怎么走、构建时间取的是哪个时间、那个 dll 的版本为什么别动，不是读这张卡
+            // 的人关心的事。规矩没丢，它们本来就在别处（版本号在 Directory.Build.props 与 PROGRESS.md，
+            // 构建时间的取法在 AboutFacts.BuiltAt 的注释里）。
+            // 底下四行目录的说明留着：那几句说的是「点开这颗按钮会看到什么」，本来就是给用它的人读的。
+            Fact("客户端版本", null, AboutFacts.Client),
+            Fact("构建时间", null, AboutFacts.BuiltAt(Path.Combine(home, "Momoka.exe"))),
+            Fact("播放内核", null, AboutFacts.PlaybackCore(home))
+        };
+
+        if (_paths is { } paths)
+        {
+            rows.Add(Fact("设置文件", "所有设置都在这一份 JSON 里，token 是 DPAPI 包过的", paths.SettingsFile,
+                "打开所在文件夹", () => _launcher?.OpenFolder(paths.Root)));
+            rows.Add(Fact("日志目录", "自检报告和界面树也在这儿", paths.LogDirectory,
+                "打开", () => _launcher?.OpenFolder(paths.LogDirectory)));
+            rows.Add(Fact("缓存目录", "海报和着色器缓存，删掉不会丢设置", Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root,
+                "打开", () => _launcher?.OpenFolder(Path.GetDirectoryName(paths.ImageCacheDirectory) ?? paths.Root)));
+
+            // 播放器右键菜单 → 截图 的落点。这一行不是装饰：截图这个功能从前根本没做，理由正是
+            // 「--no-config 之下没有 screenshot-directory，文件会落到 exe 旁边而不告诉用户」——
+            // 所以「告诉用户落在哪儿」和截图本身是同一件事的两半。2026-09-29 起这个落点跟着设置走
+            // （播放器卡的「截图保存目录」），这一行握在 _screenshotFact 上，那头一改它当场换。
+            _screenshotFact = Fact("截图目录", "播放器右键菜单 → 截图 存到这儿，文件名是片名加时间码",
+                ScreenshotDirectory(), "打开", OpenScreenshotDirectory);
+            rows.Add(_screenshotFact);
+        }
+
+        // 「把恢复默认设置移动到关于中，在关于中新增配置文件备份和恢复配置的功能」（用户令 2026-09-24）。三行都是
+        // 动作行：只有标签、说明和一颗按钮，没有值（Value 空 → SettingFactRow.ValueVisibility 收起那一行）。三件事
+        // 都只碰「偏好设置」那一摊，判据在 Core 的 SettingsPreferences —— 服务器、账号、登录状态和窗口位置一个字
+        // 不动。破坏性的「恢复默认设置」摆在最末，是从上读到下的人最后才遇到的东西（同它从前在左边名单末尾那会儿）。
+        // 备份 / 恢复配置要弹文件框，文件框由页面交进来（UseFilePickers）；没有页面（测试路径）时那两颗按下去
+        // 什么都不发生，恢复默认仍能走（它只用确认框，不用文件框）。
+        rows.Add(Fact("备份配置文件",
+            "把你的偏好设置（播放、字幕、画质、音频、快捷键、主题、界面等）导出成一个文件；不含服务器、账号和登录信息，"
+                + "可以带到别的机器或重装之后用来恢复", "",
+            "备份到文件…", () => _ = BackupAsync()));
+        rows.Add(Fact("恢复配置",
+            "从之前备份的文件里读回偏好设置，覆盖当前这些设置。服务器、账号和登录不受影响；这一步不能撤销", "",
+            "从文件恢复…", () => _ = RestoreFromFileAsync()));
+        rows.Add(Fact("恢复默认设置",
+            "把设置页管的每一项改回装机时的样子。服务器、账号、登录状态和窗口位置都不动；这一步不能撤销", "",
+            "恢复默认", () => _ = RestoreDefaultsAsync()));
+
+        return new SettingSection("关于", "关于",
+            "版本、播放内核，这个程序在磁盘上的几个位置，以及配置的备份、恢复和恢复默认。", rows);
+    }
+
+    /// <summary>
+    /// 「恢复默认设置」确认对话框那两句话。提出来是因为自检要盯「按下之前把『服务器和账号不动』讲清楚」的那句话
+    /// 还在不在 —— 「关于」卡上那颗「恢复默认」按钮没有 ToolTip（Fact 行也不给），对话框成了按下之前唯一把这件事
+    /// 讲全的地方，所以自检改盯这两个常量（见 ShellSelfCheck.Settings）。
+    /// </summary>
+    internal const string ResetDialogTitle = "恢复默认设置";
+
+    /// <summary>同 <see cref="ResetDialogTitle"/>；「不会退出登录」四个字是自检认它的记号，别改掉。</summary>
+    internal const string ResetDialogMessage =
+        "所有设置都会改回装机时的样子，这一步不能撤销。\n\n"
+        + "服务器和账号不会动（不会退出登录），窗口位置和大小、各媒体库的排序筛选视图、播放器音量也都保留。";
+
+    /// <summary>
+    /// 「恢复配置」确认对话框那两句话。和恢复默认同一副骨架，把「服务器、账号、登录不动」讲清楚 —— 这一步同样
+    /// 不能撤销，覆盖的是当前那一摊偏好。
+    /// </summary>
+    internal const string RestoreDialogTitle = "恢复配置";
+
+    /// <summary>同 <see cref="RestoreDialogTitle"/>。</summary>
+    internal const string RestoreDialogMessage =
+        "会用备份文件里的偏好设置覆盖当前的播放、字幕、画质、音频、快捷键、主题、界面等设置，这一步不能撤销。\n\n"
+        + "服务器和账号不会动（不会退出登录），窗口位置和大小、各媒体库的排序筛选视图、播放器音量也都保留。";
+
+    /// <summary>
+    /// 「恢复默认设置」被按下之后的那一路（按钮住在「关于」卡上，见 <see cref="AboutCard"/>）。哪些回默认、哪些
+    /// 不动由 Core 那一头判（<see cref="SettingsReset.Restore"/> → <see cref="SettingsPreferences"/>，单测钉着），
+    /// 这里剩下的是「问一次」和「改完让屏上跟上」。<see cref="_restoring"/> 挡掉对话框还没合上时的第二次点击。
+    /// 善后（重刷主题、喊 ShellPrefs、整页重建）和恢复配置共用 <see cref="ReapplyAndReloadAsync"/>，那一段说清了
+    /// 三件为什么一件都不能少。
+    /// </summary>
+    private async Task RestoreDefaultsAsync()
+    {
+        if (_settings is null || _restoring) return;
+        _restoring = true;
+        try
+        {
+            var agreed = await ConfirmAsync(ResetDialogTitle, ResetDialogMessage, "恢复默认").ConfigureAwait(true);
+            if (!agreed) return;
+
+            SettingsReset.Restore(_settings.Settings);
+            Save();
+
+            // 顺带把「没动的是哪些」再讲一遍 —— 本来就都在默认值上的人按一下屏上什么都不变，一颗看起来没反应的
+            // 按钮，下一步就是再按一遍。
+            await ReapplyAndReloadAsync("设置已改回装机时的样子。服务器、账号、窗口位置和各媒体库的排序筛选都没有动。")
+                .ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            Report("恢复默认设置失败", error);
+        }
+        finally
+        {
+            _restoring = false;
+        }
+    }
+
+    /// <summary>
+    /// 「备份配置文件」：把偏好设置导出成用户选的一个文件。只含偏好，不含服务器、账号、令牌和窗口位置（判据在
+    /// <see cref="SettingsPreferences"/>），所以这个文件可以安全带到别的机器。不问确认 —— 它不动现有的任何东西。
+    /// 文件框由页面交进来（<see cref="UseFilePickers"/>）；没接上（没有页面的测试路径）就直接返回，不假装成功。
+    /// </summary>
+    private async Task BackupAsync()
+    {
+        if (_settings is null || _saveFile is null) return;
+
+        var path = await _saveFile.Invoke($"Momoka-偏好设置-{DateTime.Now:yyyyMMdd-HHmmss}.json").ConfigureAwait(true);
+        if (path is null) return;
+
+        try
+        {
+            _settings.ExportPreferences(path);
+            Notify(null, $"偏好设置已备份到：{path}", InfoBarSeverity.Success);
+        }
+        catch (Exception error)
+        {
+            Report("备份配置文件失败", error);
+        }
+    }
+
+    /// <summary>
+    /// 「恢复配置」：从备份文件读回偏好设置，盖掉当前这些偏好。服务器、账号、登录状态和窗口位置不受影响（同恢复
+    /// 默认，判据在 <see cref="SettingsPreferences"/>）。不能撤销，所以<b>先读、确认是个有效备份、再问</b> —— 免得
+    /// 用户点了「恢复」才发现挑错了文件。认不出来的文件在 <see cref="ISettingsService.ReadBackup"/> 里就抛了。
+    /// 确认之后走的善后和恢复默认同一段（<see cref="ReapplyAndReloadAsync"/>）。
+    /// </summary>
+    private async Task RestoreFromFileAsync()
+    {
+        if (_settings is null || _openFile is null || _restoring) return;
+        _restoring = true;
+        try
+        {
+            var path = await _openFile.Invoke().ConfigureAwait(true);
+            if (path is null) return;
+
+            AppSettings loaded;
+            try
+            {
+                loaded = _settings.ReadBackup(path);
+            }
+            catch (Exception error)
+            {
+                Notify("这个文件不是有效的配置备份", Failure.Describe(error), InfoBarSeverity.Warning);
+                return;
+            }
+
+            var agreed = await ConfirmAsync(RestoreDialogTitle, RestoreDialogMessage, "恢复").ConfigureAwait(true);
+            if (!agreed) return;
+
+            SettingsPreferences.Apply(_settings.Settings, loaded);
+            Save();
+            await ReapplyAndReloadAsync("已从备份恢复偏好设置。服务器、账号、登录状态和窗口位置都没有动。")
+                .ConfigureAwait(true);
+        }
+        catch (Exception error)
+        {
+            Report("恢复配置失败", error);
+        }
+        finally
+        {
+            _restoring = false;
+        }
+    }
+
+    /// <summary>
+    /// 恢复默认 / 恢复配置 改完设置文档之后的善后（落盘那一步在各自调用方，因为两条各 Save 一次）。三件一件都
+    /// 不能少，而少了哪一件屏上都只是「设置了但没用」：主题当场重刷（不然颜色要等下次启动才变），
+    /// <see cref="ShellPrefs"/> 喊一声（侧边栏、图片缓存上限、主页版面改完当场生效的唯一一根线 —— 设置页开在
+    /// 另一个窗口，手上没有主窗口的 HWND、也没有主页那一页），整页重建（每一行只在造出来时读一次设置、此后
+    /// 只写，见类注释，不重建的话文件已经变了、屏上六十行还是旧的）。重建走 <see cref="ReloadAsync"/> 本身，
+    /// 字体名单按进程缓存；音频设备每次重建重新枚举，旧名单不能当成设备仍在线的依据。
+    /// </summary>
+    internal async Task<bool> ProbeSubtitleRestoreAsync()
+    {
+        if (App.Instance?.SubtitleProbeActive != true || _settings is null || _paths is null) return false;
+        var push = _pushSubtitleStyle;
+        var count = 0;
+        _pushSubtitleStyle = async () => { count++; if (push is not null) await push(); };
+        UseConfirm((_, _, _) => Task.FromResult(true));
+        try
+        {
+            Settings.Playback.SubtitleFontSize = 72;
+            await RestoreDefaultsAsync();
+            var reset = count == 1 && Settings.Playback.SubtitleFontSize == new PlaybackSettings().SubtitleFontSize;
+            var backup = Path.Combine(_paths.Root, "subtitle-probe-backup.json");
+            Settings.Playback.SubtitleFontSize = 64;
+            _settings.ExportPreferences(backup);
+            Settings.Playback.SubtitleFontSize = 80;
+            _openFile = () => Task.FromResult<string?>(backup);
+            await RestoreFromFileAsync();
+            return reset && count == 2 && Settings.Playback.SubtitleFontSize == 64 && !HasUnsavedChanges;
+        }
+        finally { _pushSubtitleStyle = push; }
+    }
+
+    internal async Task<bool> ProbeSubtitlePushFailureAsync()
+    {
+        if (App.Instance?.SubtitleProbeActive != true) return false;
+        var push = _pushSubtitleStyle;
+        _pushSubtitleStyle = () => Task.FromException(new InvalidOperationException("离线模拟：字幕选项读数失败"));
+        try
+        {
+            var applied = await PushSubtitleStyleAsync();
+            return !applied && NoticeOpen && NoticeTitle == "当前播放的字幕外观未完全更新"
+                && NoticeMessage?.Contains("字幕选项读数失败", StringComparison.Ordinal) == true;
+        }
+        finally { _pushSubtitleStyle = push; }
+    }
+
+    private async Task ReapplyAndReloadAsync(string notice)
+    {
+        var ui = Settings.Ui;
+        ThemeHost.Apply(ui.Theme);
+        ShellPrefs.Apply(ui);
+        ShellPrefs.ApplyShortcuts();
+
+        await ReloadAsync().ConfigureAwait(true);
+        var subtitlesApplied = await PushSubtitleStyleAsync().ConfigureAwait(true);
+        AnnounceScreenshotDirectory();
+        if (!subtitlesApplied) return;
+
+        Notify(null, HasUnsavedChanges ? "偏好已在本次运行应用，但尚未保存；请重试保存。" : notice,
+            HasUnsavedChanges ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
+    }
+
+    /// <summary>
+    /// 主题色板。点中就立刻换，不等保存 —— 一套配色是看着挑的，不是填完表格再确认的。
+    /// <para>
+    /// 这里原先是个下拉框。一套主题该让人看见它的颜色，而不是读它的名字，所以现在是几块各自画着自己那套
+    /// 配色的方块，点哪块是哪块（见 <see cref="SettingThemeRow"/>）。
+    /// </para>
+    /// <para>
+    /// 直接调 <see cref="ThemeHost.Apply(UiTheme)"/>：它是这次换肤的那一个执行点，同一个程序集里的静态类，
+    /// 再包一层接口注进来只是为了好看。写进设置文档的仍然只有 id，落盘由行自己的 <c>Save</c> 负责。
+    /// </para>
+    /// <para>
+    /// 认不出来的 id 走不到这里 —— <c>SettingsMigration.Normalize</c> 已经在读盘时拨回默认那套了 —— 但真漏
+    /// 过来一个，角标会落在实际生效的那一套上（见 <c>SettingThemeRow.Sync</c>），而不是几块全不带角标。
+    /// </para>
+    /// </summary>
+    private SettingThemeRow ThemeSwatches(UiSettings ui) =>
+        new(
+            "主题",
+            $"点中即生效，{UiThemes.All.Count} 套配色都过了正文对比度 4.5:1 的门槛。",
+            UiThemes.All,
+            () => ui.Theme,
+            value =>
+            {
+                ui.Theme = value;
+                ThemeHost.Apply(value);
+            },
+            Save);
+
+    // ── Row factories ────────────────────────────────────────────────────────────────────────────────
+
+    private SettingChoiceRow Pick<T>(string label, string? note, IEnumerable<(string Label, T Value)> options, Func<T> read, Action<T> write, IEqualityComparer<T> comparer, Func<T, string>? describe = null, Action? after = null)
+    {
+        var (choices, selected) = Options(options, read, write, comparer, describe);
+        return new SettingChoiceRow(label, note, choices, selected, Save, after);
+    }
+
+    /// <summary>
+    /// The entries of one drop-down and which of them is current. Split out of <see cref="Pick"/> for the one
+    /// row whose list arrives after the page does — 音频输出设备, whose devices have to be read out of a
+    /// throwaway libmpv context — so that refilling it goes through exactly the same arithmetic, the fallback
+    /// entry below included, rather than a second copy of it.
+    /// </summary>
+    private static (List<SettingChoice> Choices, SettingChoice? Selected) Options<T>(
+        IEnumerable<(string Label, T Value)> options,
+        Func<T> read,
+        Action<T> write,
+        IEqualityComparer<T> comparer,
+        Func<T, string>? describe)
+    {
+        var current = read();
+        var choices = new List<SettingChoice>();
+        SettingChoice? selected = null;
+
+        foreach (var (text, value) in options)
+        {
+            var captured = value;
+            var choice = new SettingChoice(text, () => write(captured));
+            choices.Add(choice);
+            if (selected is null && comparer.Equals(captured, current)) selected = choice;
+        }
+
+        // What is stored is none of the offered values — a language code this catalogue has no name for, a
+        // shader group removed since it was picked, a pair of headphones that has been unplugged. Leaving the
+        // box empty hides the setting, and worse, arms it: an unselected ComboBox takes whatever the next click
+        // lands on, and the stored value is never written back, so opening the list to see what it says is
+        // enough to lose it. It gets an entry of its own instead, marked as having come from the file, and
+        // choosing it writes the same value again.
+        if (selected is null && current?.ToString() is { Length: > 0 } stored)
+        {
+            selected = new SettingChoice(describe?.Invoke(current) ?? $"{stored}（设置文件中的值）", () => write(current));
+            choices.Add(selected);
+        }
+
+        return (choices, selected);
+    }
+
+    private SettingChoiceRow Choice<T>(string label, IEnumerable<(string Label, T Value)> options, Func<T> read, Action<T> write, string? note = null, Func<T, string>? describe = null) =>
+        Pick(label, note, options, read, write, EqualityComparer<T>.Default, describe);
+
+    /// <summary>
+    /// A drop-down over one of the mpv option catalogues. Matched case-insensitively, because these values
+    /// go into a settings file a person may well have edited by hand, and mpv itself does not care.
+    /// <para>
+    /// <paramref name="mpvOption"/> is required rather than optional: every row built by this helper exists to
+    /// set one named mpv option, so the one that forgets to say which is a compile error rather than a row the
+    /// reader has to guess at. See <see cref="Annotate"/>.
+    /// </para>
+    /// </summary>
+    private SettingChoiceRow Mpv(string label, IReadOnlyList<MpvChoice> options, Func<string> read, Action<string> write, string mpvOption, string? note = null, Action? after = null) =>
+        Pick(label, Annotate(note, mpvOption), options.Select(option => (Label: option.Label, Value: option.Value)), read, write, StringComparer.OrdinalIgnoreCase, after: after);
+
+    /// <summary>
+    /// One of the three 字幕颜色 rows: <c>#RRGGBB</c> through the HTML 颜色选择器 the swatch opens, or the
+    /// empty string for 「不设置，跟随 mpv 自己的默认」. The picker is the row's own business through the
+    /// two-way binding on <see cref="SettingColorRow.Color"/> — this factory only builds the row.
+    /// </summary>
+    private SettingColorRow ColorRow(string label, Func<string> read, Action<string> write, string mpvOption, string? note = null) =>
+        new(label, Annotate(note, mpvOption), read(), write, Save);
+
+    /// <summary>
+    /// 一行开关。The optional <c>after</c> hook mirrors the Choice row's: fired after the save, for the one
+    /// switch whose flip means more than the document — 精简模式，整页的说明跟着它收放（2026-09-25）。
+    /// </summary>
+    private SettingToggleRow Toggle(string label, string note, Func<bool> read, Action<bool> write, string mpvOption = "", Action? after = null) =>
+        new(label, Annotate(note, mpvOption) ?? "", read(), write, Save, after);
+
+    private SettingNumberRow Number(string label, double minimum, double maximum, Func<int> read, Action<int> write, string? note = null, Action? after = null, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption), minimum, maximum, read(), value => write((int)value), () => read(), Save, after);
+
+    private SettingSliderRow Slider(string label, double minimum, double maximum, double step, Func<double> read, Action<double> write, string? note = null, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption), minimum, maximum, step, read(), write, Save);
+
+    /// <summary>
+    /// mpv 单位的滑块（描边大小、阴影共用，2026-09-06「把字号、描边大小，阴影也改成滑块」，取代上一批的
+    /// 自由数字输入行）。设置文件里存的是字符串、空串是「不设置，mpv 自己说了算」，而滑块没有「不填」这个
+    /// 状态，所以装值时把「不设置」落到 mpv 自己的默认上 —— 那是同一个样子换了个写法；拖一下就写实了。
+    /// 写回去的是规范数字（和 <see cref="MpvOutputOptions.ClampSubtitleUnit"/> 落盘的格式一致），范围仍是
+    /// mpv 自己的 0–10，手改设置文件越界的照样在每次读盘时被它拦回来。
+    /// </summary>
+    private SettingSliderRow UnitSlider(string label, double whenUnset, Func<string> read, Action<string> write, string? note = null, string mpvOption = "") =>
+        new(label, Annotate(note, mpvOption),
+            MpvOutputOptions.SubtitleUnitMinimum, MpvOutputOptions.SubtitleUnitMaximum, 0.05,
+            ParseUnit(read()) ?? whenUnset,
+            value => write(value.ToString("0.###", CultureInfo.InvariantCulture)),
+            Save);
+
+    private static double? ParseUnit(string? value) =>
+        double.TryParse((value ?? "").Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+
+    /// <summary>
+    /// A row's note with the mpv option it writes named at the end — 「补偿刷新率不匹配造成的抖动（mpv：
+    /// interpolation）」, or just 「mpv：gpu-api」 on a row that had no note of its own.
+    /// <para>
+    /// Composed here rather than typed into two dozen note strings, so the shape cannot drift row to row. It
+    /// exists because the page could not answer 「哪一行是 interpolation」 — the notes said what each row does
+    /// and never what mpv calls it, which is the name every piece of mpv documentation is indexed by. Rows whose
+    /// setting is this client's own behaviour rather than an mpv option pass nothing and read as before.
+    /// </para>
+    /// </summary>
+    private static string? Annotate(string? note, string mpvOption)
+    {
+        var option = mpvOption.Trim();
+        if (option.Length == 0) return note;
+
+        return string.IsNullOrWhiteSpace(note) ? $"mpv：{option}" : $"{note}（mpv：{option}）";
+    }
+
+    /// <summary>
+    /// A searchable list of the machine's font families. Kept in a field as well as returned: the scan
+    /// finishes after the card is built, and this is the row it has to be handed to.
+    /// <para>
+    /// Whatever has already been scanned goes in immediately, which is what a second visit to the page
+    /// gets — the library reads the font files once per session, so only the first visit ever sees the
+    /// row hold nothing but the stored value.
+    /// </para>
+    /// </summary>
+    private SettingFontRow Font(string label, string? note, Func<string> read, Action<string> write, string mpvOption = "")
+    {
+        var row = new SettingFontRow(label, Annotate(note, mpvOption), read(), write, Save);
+
+        if (_fonts is { Ready.Families.Count: > 0 } library) row.Fill(library.Ready);
+
+        _subtitleFont = row;
+        return row;
+    }
+
+    private SettingTextRow Text(string label, string placeholder, Func<string> read, Action<string> write, string? note = null) =>
+        new(label, note, placeholder, read(), typed =>
+        {
+            var value = typed.Trim();
+            write(value);
+            return value;
+        }, Save);
+
+    /// <summary>
+    /// 一行读数，见 <see cref="SettingFactRow"/>。不接设置，所以不带 <see cref="Save"/> —— 它只是把一件事
+    /// 说出来，顺带给一个去处。
+    /// </summary>
+    private static SettingFactRow Fact(string label, string? note, string value, string? actionLabel = null, Action? act = null) =>
+        new(label, note, value, actionLabel, act);
+
+    /// <summary>
+    /// A text box holding a filesystem path. <see cref="Text"/> with one pair of surrounding double quotes
+    /// taken off as well as the whitespace: Explorer's 「复制为路径」 puts them on the clipboard, pasting one in
+    /// is the ordinary way to fill such a box, and a double quote cannot occur in a Windows path — so a value
+    /// wearing them is always a paste and never a filename. See <see cref="TypedPath.Clean"/>.
+    /// </summary>
+    private SettingTextRow PathBox(string label, string placeholder, Func<string> read, Action<string> write, string? note = null) =>
+        new(label, note, placeholder, TypedPath.Clean(read()), typed =>
+        {
+            var value = TypedPath.Clean(typed);
+            write(value);
+            return value;
+        }, Save);
+
+    /// <summary>
+    /// A comma-separated list in a text box. The box is redisplayed from the parsed list, so what is on
+    /// screen once the box loses focus is what was actually stored — separators tidied, blanks and
+    /// duplicates gone — rather than the raw typing.
+    /// </summary>
+    private SettingTextRow List(string label, string placeholder, Func<List<string>> read, Action<List<string>> write) =>
+        new(label, null, placeholder, string.Join(", ", read()), typed =>
+        {
+            var items = Split(typed);
+            write(items);
+            return string.Join(", ", items);
+        }, Save);
+
+    /// <summary>
+    /// A priority list picked from a drop-down of check-boxes rather than typed out — 字幕语言优先级 became this
+    /// on 2026-09-22（「参考上图改成复选下拉」）. The list arrives ordered by <see cref="TrackLanguagePriority.OrderedChoices"/>
+    /// (chosen first, in stored order, then the rest of the catalogue, then 其他字幕); ticking a language adds it,
+    /// dragging or the arrows set its priority, and what is stored is the ticked names in that order. See
+    /// <see cref="SettingLanguagesRow"/> — it and <see cref="Languages"/> reach the same
+    /// <see cref="PlaybackSettings.SubtitleLanguages"/>, so a settings file written by either still reads back.
+    /// <paramref name="placeholder"/> is what the drop-down button shows while nothing is ticked.
+    /// </summary>
+    private SettingLanguagesRow LanguagePriority(string label, string placeholder, Func<List<string>> read, Action<List<string>> write, string? note = null, IReadOnlyCollection<string>? exclude = null) =>
+        new(label, note, placeholder, read, write, Save, exclude);
+
+    /// <summary>
+    /// 一张关键词规则表：一行一个词加 优先／默认／候补，可自定义添加。字幕标题筛选、视频文件名筛选两处共用同一套
+    /// <see cref="KeywordRule"/>／<see cref="KeywordFilter"/>／<see cref="SettingTitleRulesRow"/>。
+    /// </summary>
+    private SettingTitleRulesRow KeywordRules(string label, Func<List<KeywordRule>> read, Action<List<KeywordRule>> write, string? note = null) =>
+        new(label, note, read, write, Save);
+
+    /// <summary>
+    /// Splits a typed list of plain words. Both widths of comma and semicolon, plus the ideographic comma —
+    /// 「动画、动漫」 is how the list this serves gets written on a Chinese keyboard, and it used to come out
+    /// as one keyword. The priority marks <c>&gt;</c> and <c>→</c> are deliberately not separators here:
+    /// these lists are unordered, and a word is a likelier thing to find around an arrow than a boundary.
+    /// </summary>
+    private static List<string> Split(string value) =>
+        value.Split([',', '，', ';', '；', '、'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+}

@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = 'src/EmbyNian.Shell';
+const ROOT = 'src/Momoka.Shell';
 // The set WUI2020 checks, plus TextBox / ListView / GridView from winui-code-review's checklist.
 const TAGS = String.raw`Button|RepeatButton|ToggleButton|HyperlinkButton|DropDownButton|SplitButton|ToggleSplitButton|PasswordBox|NumberBox|AutoSuggestBox|ComboBox|CheckBox|RadioButton|ToggleSwitch|Slider|RatingControl|GridView|ListView|TextBox|NavigationViewItem|MenuBarItem|MenuFlyoutItem|CalendarDatePicker|DatePicker|TimePicker|ColorPicker`;
 

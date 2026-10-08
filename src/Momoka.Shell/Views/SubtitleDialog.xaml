@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「搜索和修改字幕」。一张表上两件事：这个文件现在挂着哪几条外挂字幕（可以删），和按语言去刮削源上搜一批
+  （可以下）。
+
+  没有「确定」键，只有「关闭」：删和下都是按下那一行的按钮当场就做的，没有一个「保存」时刻。表关掉之后
+  ItemCommands 才决定要不要让这一页重读（见 Touched）。
+-->
+<ContentDialog x:Uid="SubtitleDialog_ContentDialog1"
+    x:Class="Momoka.Shell.Views.SubtitleDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="using:Momoka.Shell.Views">
+
+    <ContentDialog.Resources>
+        <x:Double x:Key="ContentDialogMaxWidth">760</x:Double>
+    </ContentDialog.Resources>
+
+    <!-- MinWidth 而不是 Width：这张表里两个列表本身没有宽度，光靠内容撑的话整张表会缩成三百来像素宽，
+         而写死一个宽度在小窗口上会被裁掉右边那颗按钮。 -->
+    <StackPanel MinWidth="560" Spacing="12">
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Uid="SubtitleDialog_TextBlock2" Style="{StaticResource EgSectionTitleStyle}" VerticalAlignment="Center" />
+            <Button x:Name="RefreshTracksButton" Grid.Column="1" Content="刷新字幕列表" Click="OnRefreshTracks" />
+        </Grid>
+
+        <TextBlock
+            x:Name="NoTracks"
+                x:Uid="SubtitleDialog_NoTracks"
+            Style="{StaticResource EgDataStyle}"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
+
+        <ItemsControl x:Name="Tracks">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="views:SubtitleTrack">
+                    <Grid ColumnSpacing="12" Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock
+                            MaxLines="1"
+                            Style="{StaticResource EgBodyStyle}"
+                            Text="{x:Bind Label}"
+                            TextTrimming="CharacterEllipsis"
+                            VerticalAlignment="Center" />
+
+                        <Button x:Name="DeleteSubtitleButton" x:Uid="SubtitleDialog_Button3"
+                            Click="OnDelete"
+                            Grid.Column="1" />
+                    </Grid>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <Border x:Name="DeleteConfirmation" Visibility="Collapsed" BorderBrush="{ThemeResource EgBorderBrush}"
+            BorderThickness="1" Padding="12">
+            <StackPanel Spacing="8">
+                <TextBlock Text="删除服务器字幕文件？" Style="{StaticResource EgSectionTitleStyle}" />
+                <TextBlock x:Name="DeleteConfirmationText" TextWrapping="Wrap" Style="{StaticResource EgBodyStyle}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="CancelDeleteButton" Content="取消" Click="OnCancelDelete" />
+                    <Button x:Name="ConfirmDeleteButton" Content="删除服务器文件" Click="OnConfirmDelete" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource EgRuleStyle}" />
+
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 名字不叫 Language：那和 FrameworkElement.Language 撞名，生成的字段会隐藏基类那个属性
+                 （CS0108）。 -->
+            <ComboBox
+                x:Name="LanguageBox"
+                x:Uid="SubtitleDialog_LanguageBox"
+                MinWidth="140" />
+
+            <Button
+                x:Name="SearchButton"
+                x:Uid="SubtitleDialog_SearchButton"
+                Click="OnSearch"
+                Grid.Column="1"
+                Style="{StaticResource AccentButtonStyle}"
+                VerticalAlignment="Bottom" />
+
+            <ProgressRing
+                x:Name="Busy"
+                Grid.Column="2"
+                HorizontalAlignment="Left"
+                IsActive="False"
+                VerticalAlignment="Bottom" />
+        </Grid>
+
+        <TextBlock
+            x:Name="Status"
+            Style="{StaticResource EgDataStyle}"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
+
+        <ListView
+            x:Name="Results"
+            MaxHeight="260"
+            SelectionMode="None">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="views:SubtitleCandidate">
+                    <Grid ColumnSpacing="12" Padding="0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel>
+                            <TextBlock
+                                MaxLines="1"
+                                Style="{StaticResource EgBodyStyle}"
+                                Text="{x:Bind Name}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                MaxLines="1"
+                                Style="{StaticResource EgDataStyle}"
+                                Text="{x:Bind Detail}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+
+                        <Button x:Name="DownloadSubtitleButton" x:Uid="SubtitleDialog_Button4"
+                            Click="OnDownload"
+                            Grid.Column="1"
+                            VerticalAlignment="Center" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </StackPanel>
+</ContentDialog>

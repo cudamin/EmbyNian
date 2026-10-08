@@ -90,7 +90,7 @@ try {
 using System;
 using System.IO;
 using System.Reflection;
-[assembly: AssemblyMetadata("EmbyNian.SelfCheckIsolation", "1")]
+[assembly: AssemblyMetadata("Momoka.SelfCheckIsolation", "1")]
 public static class Fixture {
     public static int Main(string[] args) {
         string home = AppDomain.CurrentDomain.BaseDirectory;
@@ -102,7 +102,7 @@ public static class Fixture {
         if (mode == "ignore") return 0;
         string logs = Path.Combine(root, "logs");
         Directory.CreateDirectory(logs);
-        if (mode != "missing-receipt") File.WriteAllText(Path.Combine(logs, "selfcheck-isolation.txt"), "EmbyNian.SelfCheckIsolation=1\n" + (mode == "wrong-root" ? home : root) + "\n");
+        if (mode != "missing-receipt") File.WriteAllText(Path.Combine(logs, "selfcheck-isolation.txt"), "Momoka.SelfCheckIsolation=1\n" + (mode == "wrong-root" ? home : root) + "\n");
         if (mode != "missing-log") File.WriteAllText(Path.Combine(logs, "selfcheck-shell.txt"), "[通过] A\n结果：全部通过\n");
         return mode == "nonzero" ? 7 : 0;
     }

@@ -7,8 +7,8 @@ $run = Join-Path $repo ('artifacts\shader-publish-tests\' + [guid]::NewGuid().To
 $root = Join-Path $run 'publish'
 [System.IO.Directory]::CreateDirectory($root) | Out-Null
 $required = @(
-    'EmbyNian.exe', 'EmbyNian.deps.json', 'EmbyNian.runtimeconfig.json', 'libmpv-2.dll', 'vulkan-1.dll',
-    'EmbyNian.pri', 'mpv-ui\scripts\uosc\main.lua', 'mpv-ui\scripts\uosc\lib\utils.lua',
+    'Momoka.exe', 'Momoka.deps.json', 'Momoka.runtimeconfig.json', 'libmpv-2.dll', 'vulkan-1.dll',
+    'Momoka.pri', 'mpv-ui\scripts\uosc\main.lua', 'mpv-ui\scripts\uosc\lib\utils.lua',
     'mpv-ui\scripts\uosc\elements\Timeline.lua', 'mpv-ui\fonts\uosc_textures.ttf',
     'mpv-ui\fonts\MaterialIconsRound-Regular.otf', 'mpv-ui\LICENSE.LGPL'
 )

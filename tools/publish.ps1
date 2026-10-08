@@ -55,7 +55,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
-$project = Join-Path $repo 'src\EmbyNian.Shell\EmbyNian.Shell.csproj'
+$project = Join-Path $repo 'src\Momoka.Shell\Momoka.Shell.csproj'
 $verify = Join-Path $PSScriptRoot 'verify-publish.ps1'
 $shortcutScript = Join-Path $PSScriptRoot 'shortcut.ps1'
 
@@ -133,18 +133,18 @@ $packageVersion = "$version.0"
 
 $outputRootResolved = [System.IO.Path]::GetFullPath($OutputRoot)
 $publishRoot = Join-Path $outputRootResolved "publish\$Runtime"
-$zipPath = Join-Path $outputRootResolved "EmbyNian-$version-$Runtime.zip"
+$zipPath = Join-Path $outputRootResolved "Momoka-$version-$Runtime.zip"
 # 上架包与旁加载包分开命名：两者包身份不同，混在一个文件名下迟早拿错。
 $msixPath = if ($Store) {
-    Join-Path $outputRootResolved "EmbyNian-$version-$Runtime-store.msix"
+    Join-Path $outputRootResolved "Momoka-$version-$Runtime-store.msix"
 } else {
-    Join-Path $outputRootResolved "EmbyNian-$version-$Runtime.msix"
+    Join-Path $outputRootResolved "Momoka-$version-$Runtime.msix"
 }
 $stageRoot = Join-Path $outputRootResolved "msix-stage\$Runtime"
 
 if (-not $SkipPublish) {
-    $targetExe = Join-Path $publishRoot 'EmbyNian.exe'
-    foreach ($running in @(Get-Process -Name 'EmbyNian' -ErrorAction SilentlyContinue)) {
+    $targetExe = Join-Path $publishRoot 'Momoka.exe'
+    foreach ($running in @(Get-Process -Name 'Momoka' -ErrorAction SilentlyContinue)) {
         if (-not $running.Path -or [string]::Equals($running.Path, $targetExe, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw '交付程序仍在运行或无法确认它的路径。请先关闭目标应用再发布；原发布目录尚未清理。'
         }
@@ -200,8 +200,8 @@ $publishArgs = @(
 )
 
 if ($SkipPublish) {
-    if (-not (Test-Path -LiteralPath (Join-Path $publishRoot 'EmbyNian.exe') -PathType Leaf)) {
-        throw "给了 -SkipPublish，但 $publishRoot 里没有 EmbyNian.exe。先跑一次不带这个开关的发布。"
+    if (-not (Test-Path -LiteralPath (Join-Path $publishRoot 'Momoka.exe') -PathType Leaf)) {
+        throw "给了 -SkipPublish，但 $publishRoot 里没有 Momoka.exe。先跑一次不带这个开关的发布。"
     }
     Write-Output "跳过发布，拿 $publishRoot 里现成的那一份（它可能不是刚构建的，见 -SkipPublish 的说明）。"
 } else {
@@ -221,7 +221,7 @@ if ($NoArchive) {
 }
 
 if ($Shortcut) {
-    & $shortcutScript -Exe (Join-Path $publishRoot 'EmbyNian.exe')
+    & $shortcutScript -Exe (Join-Path $publishRoot 'Momoka.exe')
 }
 
 if ($Msix) {
@@ -264,7 +264,7 @@ if ($Msix) {
     # 清单从仓库里那一份来，不再在这个脚本里写第二遍。它是包身份唯一的出处，`winapp cert generate
     # --manifest` 也是从它读 Publisher 的；版本号则相反 —— 它在 Directory.Build.props 里，下面按那一份
     # 改写清单里的占位值，好让程序集和包不会各报一个版本。
-    $manifestSource = Join-Path $repo 'src\EmbyNian.Shell\Package.appxmanifest'
+    $manifestSource = Join-Path $repo 'src\Momoka.Shell\Package.appxmanifest'
     if (-not (Test-Path -LiteralPath $manifestSource -PathType Leaf)) {
         throw "找不到 $manifestSource。它是包身份唯一的出处，winui-packaging 那条「不要删掉 Package.appxmanifest」说的就是它。"
     }
@@ -307,7 +307,7 @@ if ($Msix) {
         if (-not (Test-Path -LiteralPath $cert -PathType Leaf)) { throw "找不到证书：$cert" }
     }
 
-    # --skip-pri 是必须的，不是省一步。发布目录里那个 EmbyNian.pri 已经把框架那三份并进来了（见
+    # --skip-pri 是必须的，不是省一步。发布目录里那个 Momoka.pri 已经把框架那三份并进来了（见
     # verify-publish.ps1 里那一大段），让 winapp 再生成一遍会盖掉它、并出一个 103 KB 的版本 —— 装出来的
     # 程序一启动就死在 App.xaml。
     $packArgs = @('package', $stageRoot, '--manifest', $manifestPath, '--output', $msixPath, '--skip-pri')

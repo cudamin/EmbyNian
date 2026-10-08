@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Baseline) { $Baseline = Join-Path $repo 'docs\selfcheck-baseline.txt' }
-if (-not $Exe) { $Exe = Join-Path $repo 'artifacts\publish\win-x64\EmbyNian.exe' }
+if (-not $Exe) { $Exe = Join-Path $repo 'artifacts\publish\win-x64\Momoka.exe' }
 
 function Shorten([string]$Text) {
     if ($Text.Length -le 220) { return $Text }
@@ -49,7 +49,7 @@ try {
         # loading/running code (Windows PowerShell cannot reflection-load a .NET 10 assembly).
         $assemblyPath = [IO.Path]::ChangeExtension($exePath, '.dll')
         if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) { throw '缺少带隔离协议声明的应用程序集；未启动。' }
-        $key = 'EmbyNian.SelfCheckIsolation'
+        $key = 'Momoka.SelfCheckIsolation'
         $blob = [string][char]1 + [char]0 + [char]$key.Length + $key + [char]1 + '1' + [char]0 + [char]0
         $assemblyText = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($assemblyPath))
         if (-not $assemblyText.Contains($blob)) { throw '该构建未声明自检隔离协议 1；拒绝启动旧 exe。' }
@@ -68,7 +68,7 @@ try {
         $receiptPath = Join-Path $runRoot 'logs\selfcheck-isolation.txt'
         if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { throw '缺少本次隔离回执，不能将忽略新参数的 exe 当作正常运行。' }
         $receipt = @(Get-Content -LiteralPath $receiptPath -Encoding UTF8)
-        if ($receipt.Count -ne 2 -or $receipt[0] -cne 'EmbyNian.SelfCheckIsolation=1' -or
+        if ($receipt.Count -ne 2 -or $receipt[0] -cne 'Momoka.SelfCheckIsolation=1' -or
             -not [string]::Equals($receipt[1], $runRoot, [StringComparison]::OrdinalIgnoreCase)) {
             throw '隔离回执不属于本次确定目录。'
         }

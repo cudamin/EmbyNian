@@ -17,7 +17,7 @@ root = args.root.resolve()
 output = args.output.resolve()
 output.mkdir(parents=True, exist_ok=False)
 source = root / 'assets/mpv-ui/scripts/uosc'
-tests = root / 'tests/EmbyNian.Tests/Lua/uosc-interaction-tests.lua'
+tests = root / 'tests/Momoka.Tests/Lua/uosc-interaction-tests.lua'
 script = output / 'uosc'
 shutil.copytree(source, script)
 main = script / 'main.lua'

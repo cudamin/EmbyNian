@@ -8,7 +8,7 @@
 
     所以这支脚本有三条铁律：不 SetForegroundWindow、不 SetWindowPos、不 SetCursorPos。它只看，不碰。
 
-    用法（配 EmbyNian.exe --hide-cursor）：
+    用法（配 Momoka.exe --hide-cursor）：
       powershell -NoProfile -ExecutionPolicy Bypass -File tools/cursor-watch.ps1 `
         -Seconds 8 -ShotAt "0.5,3.5" -Out artifacts/shots/cursor
 

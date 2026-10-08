@@ -1,9 +1,10 @@
 {
   "_comment": "Microsoft Store 预留身份 —— 来自 Partner Center「产品版本 → 查看产品标识」。publish.ps1 -Store 用这里的前三个值覆盖 Package.appxmanifest 里的本地/旁加载身份；商店那边改了预留（改名、换发布者）就同步这一份，不要在脚本里另写一遍。后两个只作记录，打包用不到。",
-  "_source": "https://partner.microsoft.com/dashboard → 产品 → EmbyNian → 产品版本 → 查看产品标识",
-  "identityName": "MOMOKA.EmbyNian",
+  "_pending": "2026-10-08 产品改名 EmbyNian → Momoka（微软商店认证 10.1.1.1：产品名不得含他人产品名），identityName 与 packageFamilyName 已置空 —— 这两个值由 Partner Center 按预留名分配，改名前那组（MOMOKA.EmbyNian / MOMOKA.EmbyNian_ft387wphrtwme）不再适用。请去 Partner Center 预留 Momoka，再打开「产品版本 → 查看产品标识」，把 Identity Name / Package Family Name 原样抄回下面两行。置空是故意的：publish.ps1 -Store 会以「store-identity.json 缺字段：identityName」中止，宁可停也不要打一个身份不对的包。注意身份名不一定跟着显示名走 —— 若那里仍写着 MOMOKA.EmbyNian，就照抄，不要按产品名推。storeId 同理由 Partner Center 核对：同一产品内改名则不变，另建产品则会换。",
+  "_source": "https://partner.microsoft.com/dashboard → 产品 → Momoka → 产品版本 → 查看产品标识",
+  "identityName": "",
   "publisher": "CN=1AA8C022-887D-4E5B-BB1D-970781A617A5",
   "publisherDisplayName": "MOMOKA",
-  "packageFamilyName": "MOMOKA.EmbyNian_ft387wphrtwme",
+  "packageFamilyName": "",
   "storeId": "9PMQ7FJ7HL4Q"
 }

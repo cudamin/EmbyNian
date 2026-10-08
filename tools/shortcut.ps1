@@ -1,18 +1,18 @@
-﻿# Puts 「EmbyNian」 on the desktop, pointing at a published build.
+﻿# Puts 「Momoka」 on the desktop, pointing at a published build.
 #
 # The shortcut has been part of the deliverable since the fourth phase, but nothing in the repository
 # recreated it: it was made by hand once, against a path that has since moved twice (the WinForms shell went
 # away, and the target framework went from net8.0 to net10.0). So it was gone, and there was nothing to run
 # to get it back. This is that thing to run.
 #
-#   .\tools\shortcut.ps1                     指向 artifacts\publish\win-x64\EmbyNian.exe
+#   .\tools\shortcut.ps1                     指向 artifacts\publish\win-x64\Momoka.exe
 #   .\tools\shortcut.ps1 -Exe <路径>         指向别的 exe（比如调试输出）
 #   .\tools\shortcut.ps1 -Remove             删掉桌面上那个快捷方式
 [CmdletBinding()]
 param(
     [string]$Exe,
 
-    [string]$Name = 'EmbyNian',
+    [string]$Name = 'Momoka',
 
     [switch]$Remove
 )
@@ -38,11 +38,11 @@ if ($Remove) {
 }
 
 if ([string]::IsNullOrWhiteSpace($Exe)) {
-    $Exe = Join-Path $repo 'artifacts\publish\win-x64\EmbyNian.exe'
+    $Exe = Join-Path $repo 'artifacts\publish\win-x64\Momoka.exe'
 }
 
 if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
-    throw "找不到 $Exe。先跑 .\tools\publish.ps1 生成发行版，或者用 -Exe 指向别的 EmbyNian.exe。"
+    throw "找不到 $Exe。先跑 .\tools\publish.ps1 生成发行版，或者用 -Exe 指向别的 Momoka.exe。"
 }
 
 $target = (Resolve-Path -LiteralPath $Exe).Path
@@ -58,7 +58,7 @@ try {
     # anything ever does resolve a relative path.
     $shortcut.WorkingDirectory = $folder
     $shortcut.IconLocation = "$target,0"
-    $shortcut.Description = 'EmbyNian —— Emby 的 Windows 播放客户端'
+    $shortcut.Description = 'Momoka —— 你自己 Emby 媒体服务器的 Windows 播放客户端'
     $shortcut.Save()
 } finally {
     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)

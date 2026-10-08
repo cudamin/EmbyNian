@@ -50,24 +50,24 @@ function Controls:init_options()
 		['items'] = 'command:list_alt:script-binding uosc/items#playlist>1?' .. t('Playlist/Files'),
 		prev = 'command:arrow_back_ios:script-binding uosc/prev?' .. t('Previous'),
 		next = 'command:arrow_forward_ios:script-binding uosc/next?' .. t('Next'),
-		-- EMBYNIAN[episode] — 换集不经 mpv 播放列表，转成 embynian-episode 消息交给 C# 宿主的 Emby 导航；
-		-- 选集列表向宿主要数据（embynian-episodes），宿主以 open-menu 推回本季单集。
-		-- 绑定名 embynian-ui-… 与消息名 embynian-… 分家是硬规矩：同名会被 script-message 喂回来自激（见 main.lua）。
-		['embynian-ui-prev'] = 'command:skip_previous:script-binding uosc/embynian-ui-prev?' .. t('Previous'),
-		['embynian-ui-next'] = 'command:skip_next:script-binding uosc/embynian-ui-next?' .. t('Next'),
-		['embynian-ui-episodes'] = 'command:list_alt:script-binding uosc/embynian-ui-episodes?选集',
-		-- EMBYNIAN[controls] — 控制条上补的两颗（2026-09-23）：版本与画面菜单。两者都只是把宿主那两条
+		-- MOMOKA[episode] — 换集不经 mpv 播放列表，转成 momoka-episode 消息交给 C# 宿主的 Emby 导航；
+		-- 选集列表向宿主要数据（momoka-episodes），宿主以 open-menu 推回本季单集。
+		-- 绑定名 momoka-ui-… 与消息名 momoka-… 分家是硬规矩：同名会被 script-message 喂回来自激（见 main.lua）。
+		['momoka-ui-prev'] = 'command:skip_previous:script-binding uosc/momoka-ui-prev?' .. t('Previous'),
+		['momoka-ui-next'] = 'command:skip_next:script-binding uosc/momoka-ui-next?' .. t('Next'),
+		['momoka-ui-episodes'] = 'command:list_alt:script-binding uosc/momoka-ui-episodes?选集',
+		-- MOMOKA[controls] — 控制条上补的两颗（2026-09-23）：版本与画面菜单。两者都只是把宿主那两条
 		-- 既有通道摆到按钮上 —— 画面菜单与集成模式的「更多」按钮、独占模式的右键点画面是同一份
-		-- PlayerMenuCatalog（绑定同一个 uosc/embynian-ui-picture-menu）；版本菜单向宿主要这一条目的媒体源。
+		-- PlayerMenuCatalog（绑定同一个 uosc/momoka-ui-picture-menu）；版本菜单向宿主要这一条目的媒体源。
 		-- tooltip 写死中文：t() 的译文只在 intl/<slang>.json 命中时才有（见 main.lua
 		-- create_default_menu_items 的同一条注释），这几颗新补丁不跟它走；图标名是 Material Icons 的名字，
 		-- settings 与集成模式的「更多」同形，movie_filter 与上游的剪辑版本同形。
 		-- 选集那颗 2026-09-26 起也写死中文（用户令「改名为 选集」，原来走 t('Episodes') 落在英文上）。
 		-- **画面菜单那颗的按钮 2026-09-27 晚从控制条上撤下**（用户令「移除集成模式和独占模式左下角的画面
-		-- 画面按钮」）：这条简写留着是因为**右键点画面**仍旧通过 uosc/embynian-ui-picture-menu 这一条绑定
+		-- 画面按钮」）：这条简写留着是因为**右键点画面**仍旧通过 uosc/momoka-ui-picture-menu 这一条绑定
 		-- 呼出同一份菜单（见 main.lua 的 MenuKeys 与 bind_command），删了它右键就没菜单了。
-		['embynian-ui-versions'] = 'command:movie_filter:script-binding uosc/embynian-ui-versions?版本',
-		['embynian-ui-picture-menu'] = 'command:settings:script-binding uosc/embynian-ui-picture-menu?画面菜单',
+		['momoka-ui-versions'] = 'command:movie_filter:script-binding uosc/momoka-ui-versions?版本',
+		['momoka-ui-picture-menu'] = 'command:settings:script-binding uosc/momoka-ui-picture-menu?画面菜单',
 		first = 'command:first_page:script-binding uosc/first?' .. t('First'),
 		last = 'command:last_page:script-binding uosc/last?' .. t('Last'),
 		['loop-playlist'] = 'cycle:repeat:loop-playlist:no/inf!?' .. t('Loop playlist'),

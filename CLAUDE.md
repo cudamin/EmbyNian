@@ -1,4 +1,4 @@
-# EmbyNian — Claude 常设规则
+# Momoka — Claude 常设规则
 
 本文件是当前开发规则的权威出处；命令与操作细节见 [docs/开发与验证.md](docs/开发与验证.md)，项目技能保存专项方法，源码与脚本是版本、参数和能力的事实来源。[PROGRESS.md](PROGRESS.md) 记录在途工作与历史证据，按任务需要读取；历史记录不替代现行规则。
 
@@ -14,24 +14,24 @@
 
 Emby 桌面客户端：WinUI 3、Windows App SDK、.NET 10、C#，非打包、x64，播放内核 libmpv。SDK 版本见 `global.json`，包版本见各项目的 csproj。
 
-- `src/EmbyNian.Core`：不依赖 UI 框架。目前不引用 NuGet 包，这是保持轻量的选择，不是“有包就不能测试”的限制。
-- `src/EmbyNian.Shell`：WinUI 外壳。
-- `tests/EmbyNian.Tests`：目前只引用 Core 的离线控制台测试运行器。需要覆盖其他无 UI 逻辑时可以调整测试边界，不必为了现有引用把所有判断搬进 Core。
+- `src/Momoka.Core`：不依赖 UI 框架。目前不引用 NuGet 包，这是保持轻量的选择，不是“有包就不能测试”的限制。
+- `src/Momoka.Shell`：WinUI 外壳。
+- `tests/Momoka.Tests`：目前只引用 Core 的离线控制台测试运行器。需要覆盖其他无 UI 逻辑时可以调整测试边界，不必为了现有引用把所有判断搬进 Core。
 
-**播放管线与后端是两件事。** 集成管线将 mpv 的 Composition 交换链嵌入 WinUI 视觉树；独占管线（Standalone，亦称独立模式）使用 mpv 自建的顶层窗口，控件来自 `assets/mpv-ui` 的 uosc，同窗换片兼容性由 `src/EmbyNian.Core/Mpv/InlineSwitch.cs` 判定。默认管线以 `AppSettings.cs` 为准；内置 libmpv 与外部 mpv 进程后端的细节见播放技能。
+**播放管线与后端是两件事。** 集成管线将 mpv 的 Composition 交换链嵌入 WinUI 视觉树；独占管线（Standalone，亦称独立模式）使用 mpv 自建的顶层窗口，控件来自 `assets/mpv-ui` 的 uosc，同窗换片兼容性由 `src/Momoka.Core/Mpv/InlineSwitch.cs` 判定。默认管线以 `AppSettings.cs` 为准；内置 libmpv 与外部 mpv 进程后端的细节见播放技能。
 
 按任务读取随代码入库的技能：
 
-- [embynian-winui-shell](.claude/skills/embynian-winui-shell/SKILL.md)：修改或审查 C# / XAML 前读取，说明分层、DI、Attach 与 UI 陷阱。
-- [embynian-emby-api](.claude/skills/embynian-emby-api/SKILL.md)：与服务器对话的协议面——请求基址与鉴权头、重定向与凭据边界、错误语义、接口清单与规格缺口。
-- [embynian-playback](.claude/skills/embynian-playback/SKILL.md)：播放后端、进度上报、字幕音轨、换片，以及 `assets/mpv-ui` 中的 Lua/uosc 独占控件。
-- [embynian-subtitles](.claude/skills/embynian-subtitles/SKILL.md)：字幕设置的审查、修复与验证——语言选择、强制/外语音轨、ASS/SRT/PGS 样式、双语/次字幕、颜色输入、预览与服务器字幕管理。
-- [embynian-verification](.claude/skills/embynian-verification/SKILL.md)：验证读数、截图、指针移动及其证据。
+- [momoka-winui-shell](.claude/skills/momoka-winui-shell/SKILL.md)：修改或审查 C# / XAML 前读取，说明分层、DI、Attach 与 UI 陷阱。
+- [momoka-emby-api](.claude/skills/momoka-emby-api/SKILL.md)：与服务器对话的协议面——请求基址与鉴权头、重定向与凭据边界、错误语义、接口清单与规格缺口。
+- [momoka-playback](.claude/skills/momoka-playback/SKILL.md)：播放后端、进度上报、字幕音轨、换片，以及 `assets/mpv-ui` 中的 Lua/uosc 独占控件。
+- [momoka-subtitles](.claude/skills/momoka-subtitles/SKILL.md)：字幕设置的审查、修复与验证——语言选择、强制/外语音轨、ASS/SRT/PGS 样式、双语/次字幕、颜色输入、预览与服务器字幕管理。
+- [momoka-verification](.claude/skills/momoka-verification/SKILL.md)：验证读数、截图、指针移动及其证据。
 - [mpv-shader-quality](.claude/skills/mpv-shader-quality/SKILL.md)：着色器档位与画质链。
-- [embynian-video-output](.claude/skills/embynian-video-output/SKILL.md)：视频输出三卡（基础输出、HDR 与杜比视界、画质与着色器）与 mpv 选项的落地。
-- [embynian-audio-output](.claude/skills/embynian-audio-output/SKILL.md)：音频输出设置的审查、修复与验证——设备核对与回退、声道、直通、响度、延迟与音量记忆，及随包 libmpv 的无声探针。
-- [embynian-moviepilot](.claude/skills/embynian-moviepilot/SKILL.md)：MoviePilot 接入的来源身份（TMDB／豆瓣／IMDb）、搜索、订阅管理与入库播放、原记录重整协议及验证边界。
-- [embynian-skill-creator](.claude/skills/embynian-skill-creator/SKILL.md)：新建、改写、拆分、合并或退役项目技能时读取——先查重、英文编写与资源审查、description 触发词、正文分层、清单登记，以及区分技能场景评估和项目验证的验收方式。
+- [momoka-video-output](.claude/skills/momoka-video-output/SKILL.md)：视频输出三卡（基础输出、HDR 与杜比视界、画质与着色器）与 mpv 选项的落地。
+- [momoka-audio-output](.claude/skills/momoka-audio-output/SKILL.md)：音频输出设置的审查、修复与验证——设备核对与回退、声道、直通、响度、延迟与音量记忆，及随包 libmpv 的无声探针。
+- [momoka-moviepilot](.claude/skills/momoka-moviepilot/SKILL.md)：MoviePilot 接入的来源身份（TMDB／豆瓣／IMDb）、搜索、订阅管理与入库播放、原记录重整协议及验证边界。
+- [momoka-skill-creator](.claude/skills/momoka-skill-creator/SKILL.md)：新建、改写、拆分、合并或退役项目技能时读取——先查重、英文编写与资源审查、description 触发词、正文分层、清单登记，以及区分技能场景评估和项目验证的验收方式。
 
 通用 `winui-*` 技能来自用户级技能目录或插件。**与本文件冲突时以本文件为准。** 规则改动须同步相关技能、开发文档、脚本帮助与运行提示；不在技能里另立升级、验证或安全政策，不在 `.workbuddy/`、`.zcode/` 复制规则。当前文件数、测试数、控件数从本次源码或工具输出获取。
 
@@ -41,7 +41,7 @@ Emby 桌面客户端：WinUI 3、Windows App SDK、.NET 10、C#，非打包、x6
 
 - **纯 UI 行为可以留在 code-behind。** 显隐、Frame 导航和返回栈、菜单项构建、窗口按钮及需要知道事件来源的行为，不必为 MVVM 增加中间层。
 - **业务与外部交互经 Service。** HTTP/Emby 调用、持久化和播放生命周期不放进页面；视图模型从服务取得能力，普通 MVVM 管道使用 CommunityToolkit.Mvvm。`Views/ItemCommands.cs` 是现有旧债，不作为新增代码模板。
-- 无 UI 依赖的业务能力优先住 Core；需要共享依赖或生命周期的服务注册于 `src/EmbyNian.Shell/Composition/ShellServices.cs`，然后注入。纯函数、模型和无依赖的小工具不需要为“进容器”包装成服务。
+- 无 UI 依赖的业务能力优先住 Core；需要共享依赖或生命周期的服务注册于 `src/Momoka.Shell/Composition/ShellServices.cs`，然后注入。纯函数、模型和无依赖的小工具不需要为“进容器”包装成服务。
 - **重要业务规则、容易回归的算法和可复用的计算优先成为 Core 中的命名纯函数，并用测试验证。** 局部展示判断就近保留；续播、选集、设置迁移等业务语义不能以“只是一个判断”为由逃避测试。
 - 不因为类进了 DI 就加接口。接口用于替换、隔离或收窄能力；`ISettingsService`、`IServerCapabilities` 等收窄访问范围的接口不要机械地换成具体类。
 - 页面默认自建视图模型，通过 `Attach(...)` 接收依赖，并守卫尚未附加的调用。`PlayerViewModel` 由容器持有，因为播放状态需要跨页面导航存活。
@@ -52,7 +52,7 @@ Emby 桌面客户端：WinUI 3、Windows App SDK、.NET 10、C#，非打包、x6
 
 ## 项目约定与自动检查
 
-`tests/EmbyNian.Tests/AgreementsTests.cs` 与同目录 `Agreements.txt` 记录约定。**基线是要求复核的提醒，不是禁止合法重构。** 新增、改名、合并或退役检查时，先核对调用者、自动化脚本和相关文档，说明旧检查为何不再适用、保留什么覆盖，再逐行更新基线并运行受影响检查；不为让测试变绿整份接受新快照。仅因检查难跑或出现失败，不构成退役理由。
+`tests/Momoka.Tests/AgreementsTests.cs` 与同目录 `Agreements.txt` 记录约定。**基线是要求复核的提醒，不是禁止合法重构。** 新增、改名、合并或退役检查时，先核对调用者、自动化脚本和相关文档，说明旧检查为何不再适用、保留什么覆盖，再逐行更新基线并运行受影响检查；不为让测试变绿整份接受新快照。仅因检查难跑或出现失败，不构成退役理由。
 
 - **嵌套绑定**：Shell csproj 对 `WUI2010` 的压制有明确前提，原因与失效条件写在 `NoWarn` 旁。新增三段绑定路径时先读那里；`bind` 基线提醒复核。其他分析器警告也要调查，不能无依据消音。
 - **自动化定位**：没有显式 AutomationId 时，WinUI 会把 `x:Name` 作为句柄；已有它就不重复添加同值属性，`x:Uid` 不算句柄。普通交互控件应可稳定定位。模板与复用控件允许“所属列表项 + 局部句柄”，不要求全局唯一。新增交互控件后运行 `tools/scan-automation-ids.js`；脚本跳过模板与部分复用控件，这些范围仍需检查运行中的 UIA 树。`handle` 基线防止已有句柄无意消失，改名须同步使用者。

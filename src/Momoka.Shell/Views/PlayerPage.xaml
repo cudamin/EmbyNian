@@ -1,0 +1,1427 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The player's on-screen controls, drawn over the video surface in this same visual tree: the
+  picture is the grid's first child (a SpriteVisual carrying mpv's D3D11 composition swapchain),
+  and every overlay after it sits above it by tree order. The pane and the header must not stay on
+  screen behind a film, so this is a sibling of the navigation shell rather than a page in its
+  frame. It replaces five WinForms classes that between them ran to some three and a half thousand
+  lines — PlayerBar 1291, PlayerFlyout 813, VolumeRail 283, SkipSectionButton 205, Chrome 696 — and
+  four things the rewrite bought are worth naming:
+
+    * Requirement 1, resizing. Nine SetWindowPos calls per WM_SIZE became layout: the chrome resizes
+      because it is laid out, not moved, and the picture now resizes the same way — a size option
+      for mpv, no window geometry at all.
+    * Requirement 12, the mess when switching episodes. The video and the chrome are one tree, so
+      nothing has to be brought to the front and the handover cover cannot lose a z-order race it
+      used to lose.
+    * Requirements 9/10/11, the reveal rule. Real pointer events arrive here, so ChromeReveal is
+      driven one event at a time instead of off a 40 ms Cursor.Position poll.
+    * The pickers. MenuFlyout gets a genuine DesktopAcrylicBackdrop from the framework's own
+      generic.xaml, keyboard navigation and narrator names, none of which PlayerFlyout had.
+
+  No transitions and no fades on the two overlays the pointer's own bands reveal: requirement 9 was
+  「不要淡入淡出了，鼠标移动到对应位置直接显示」, so the transport bar and the title strip are Visibility
+  flips. The volume rail is the exception the user asked for afterwards —
+  「加大音量条的尺寸，显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」 — and it fades through an
+  implicit ScalarTransition on its own Opacity, explained where it is declared. The one storyboard in
+  the file is PulseBadge's, which nobody reveals — it is the one-second 暂停/播放 acknowledgement the
+  user asked to have an animation, and it explains itself down there.
+
+  Every readout here is bound to PlayerViewModel with x:Bind rather than assigned from code-behind —
+  the clock, the seek and volume sliders, the play glyph, the source line, the skip offer, the chapter
+  peek and the handover cover — and the transport buttons are Command bindings. What is left as a
+  Click= or an Opened= handler is there because it is a WinUI behaviour rather than player state: the
+  window commands, the fullscreen and 置顶 toggles, the six menus (whose rows are built on open), the
+  seek track's own size and hover, and the mute button, which flashes the volume rail as well as
+  muting. Visibility on Bar/TitleStrip/ThinLine and the rail's Opacity stay code-owned for the same
+  reason: they are the reveal rule's output, not a property of what is playing.
+
+  The title backing remains a translucent color. In-app acrylic cannot sample mpv's external
+  swapchain directly, even though ordinary composition children can participate in its backdrop —
+  an AcrylicBrush over the picture is a near-opaque black (the full account lives in
+  PlayerPalette.GlassAlpha's comment). The timeline tried carrying a video sample under one anyway
+  (2026-09-28) and the user retired it the same day — 「进度条上升时候亚克力效果时有时无，去掉亚克力效果吧」:
+  the sample only existed between successful captures, so the frosted look blinked in and out with
+  every seek and scrub. The timeline now wears one translucent color, the same at all times.
+-->
+<UserControl
+    x:Class="Momoka.Shell.Views.PlayerPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Momoka.Shell.Views"
+    xmlns:vm="using:Momoka.Shell.ViewModels"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    RequestedTheme="Dark"
+    FontFamily="{StaticResource EgUiFontFamily}"
+    FontSize="{StaticResource EgBodyFontSize}"
+    IsTabStop="True"
+    UseSystemFocusVisuals="False"
+    RenderTransformOrigin="0.5,0.5"
+    Visibility="Collapsed">
+
+    <UserControl.RenderTransform>
+        <CompositeTransform x:Name="PageTransform" />
+    </UserControl.RenderTransform>
+
+    <UserControl.Resources>
+        <!-- Turns the slider's own 0..1000 into a clock, which is what makes hovering the seek bar
+             say 「1:07:32」 for free. A stateful converter because the duration is the file's, not the
+             slider's; the page keeps it current. -->
+        <local:SeekClockConverter x:Key="SeekClockConverter" />
+
+        <!-- ================= The palette =================
+             Twenty-seven brushes, not a colour among them:
+             the values are PlayerPalette's, in Core, and PaintPalette fills these shells in from that
+             table right after InitializeComponent. (Twenty-seven rather than the table's twenty-six — the
+             exit backdrop's brush is the odd one out and is painted from the running theme, see below.)
+             A SolidColorBrush is a shared object and Color is a dependency
+             property, so painting it there reaches every StaticResource consumer below — the same
+             mechanism DetailPage.PaintScrim uses for the hero's gradient.
+
+             Why Core and not here: thirty-five literals lived in this file, nine distinct colours
+             written between two and seven times each, and nothing could check them. The table can be
+             unit-tested — the ink rungs really do descend in luminance, the three panels really do
+             ascend in opacity, the ticks really are brighter than the buffered fill — and the test
+             project cannot reference this assembly, only Core.
+
+             A brush per role rather than a colour per use also matters for the ticks: the chapter marks
+             are rebuilt on every resize and every chapter list, and a hundred brushes for a hundred
+             chapters is a hundred more composition objects than the picture needs.
+
+             Unpainted, a SolidColorBrush is transparent — invisible text, not a crash — which is why
+             ProbePalette walks this dictionary against the same table on every self-check. -->
+        <SolidColorBrush x:Key="PlayerInkBrush" />
+        <SolidColorBrush x:Key="PlayerInkSoftBrush" />
+        <SolidColorBrush x:Key="PlayerInkDimBrush" />
+        <SolidColorBrush x:Key="PlayerInkFaintBrush" />
+        <SolidColorBrush x:Key="PlayerInkMetaBrush" />
+        <SolidColorBrush x:Key="PlayerRailBrush" />
+        <SolidColorBrush x:Key="PlayerPeekBrush" />
+        <SolidColorBrush x:Key="PlayerSkipBrush" />
+        <SolidColorBrush x:Key="PlayerSkipHoverBrush" />
+        <SolidColorBrush x:Key="PlayerSkipPressedBrush" />
+        <SolidColorBrush x:Key="PlayerCoverBrush" />
+        <SolidColorBrush x:Key="PlayerStageBrush" />
+        <!-- 退场底那一支：与 PlayerStageBrush 分开一支，因为它的色号不由播放页的调色板上，而是由
+             PaintPalette 按应用当前主题写进来（见标记里 ExitBackdrop 那段）。 -->
+        <SolidColorBrush x:Key="PlayerExitBrush" />
+        <SolidColorBrush x:Key="PlayerEdgeFaintBrush" />
+        <SolidColorBrush x:Key="PlayerEdgeBrush" />
+        <SolidColorBrush x:Key="PlayerEdgeStrongBrush" />
+        <SolidColorBrush x:Key="PlayerTickBrush" />
+        <SolidColorBrush x:Key="PlayerTrackBrush" />
+        <SolidColorBrush x:Key="PlayerTrackFillBrush" />
+        <SolidColorBrush x:Key="PlayerLineBrush" />
+        <SolidColorBrush x:Key="PlayerPulseBrush" />
+
+        <!-- 上下两条浮层底共用的一支：标题条与控制条。2026-09-27 按用户的话换过来（原话：「去掉黑色渐变，
+             给红框的位置加一层亚克力背景」，随后「进度条的背景也改成跟标题一样的亚克力」），但换到的**不是
+             亚克力**，是半透明的近黑 —— 压在视频上时应用内亚克力什么也采不到，屏上只剩一块不透的黑（整笔账
+             在 PlayerPalette.GlassAlpha 的注释里）。空壳子，颜色由 PaintPalette 从 Core 那张表写进来；
+             控制条背后原来那道「上沿全透明、往下渐深到 0xF0」的罩子随第二条令一起退役了。 -->
+        <SolidColorBrush x:Key="PlayerGlassBrush" />
+
+        <!-- 左上角那三块（返回键、标题、剧名）共用的那一支 —— 2026-09-27 傍晚用户令「加深左上角亚克力背景的
+             颜色，鼠标位置越靠上亚克力背景的颜色越深」。它和上下两条浮层那支（PlayerGlassBrush）同一个色号，
+             也是同两档之间的同一个字节表：**表里填的是最浅那一档**（与浮层一样），指针往顶边走的时候由
+             PaintPalette 旁边那支 ApplyTopGlass 逐拍写深 —— 于是「跟指针变深」这件事只有一处算术
+             （Core 的 PlayerPalette.TopGlassAlphaAt）与一处接线（页面按指针高度调它）。
+             空壳子，颜色由 PaintPalette 从 Core 那张表写进来。 -->
+        <SolidColorBrush x:Key="PlayerGlassTopBrush" />
+
+        <!-- 跳过按钮那颗的三个字号，**窗口档**的初值（全屏档由 ApplySkipScale 摆上）。
+             2026-09-30 用户令「缩小图标跳过按钮两倍」：整颗减半，基准 16/16/12 → 8/8/6。
+             2026-10-01 用户令「跳过按钮太小，调大 1.5 倍」：8/8/6 → 12/12/9（＝最初基准的 0.75）。
+             写成这一档的键而不是照抄 Eg* 那七级：那条刻度是整个外壳的内容字号（11/12/14/16/18/20/36/52），
+             播放页浮层的尺寸另有一条路 —— PlayerPage.Chrome.cs 的 WindowSkip* 一族是唯一的事实源、随窗口
+             形态两档切换，这里只是它在 XAML 里的初值（XAML 先立起来、Attach 后由 ApplySkipScale 收编）。
+             不用内联数字：约定「内联字号只减不增」（Agreements.txt）要的就是「字号有名字」。 -->
+        <x:Double x:Key="PlayerSkipGlyphFontSize">12</x:Double>
+        <x:Double x:Key="PlayerSkipCaptionFontSize">12</x:Double>
+        <x:Double x:Key="PlayerSkipTipFontSize">9</x:Double>
+
+        <!-- 标题条右上那五颗（统计、置顶、最小化、最大化、关闭）鼠标压上去时那两档的底 —— 2026-09-27 傍晚
+             第四批用户令「鼠标移动到右上角的关闭的时候背景要和首页一样变成红色，然后右上角另外几个按钮鼠标
+             移动到按钮上的时候背景颜色太浅了容易和画面合在一起」，第五批把那后半句改实了：「这四个按钮鼠标
+             移到上面的时候要用白色亚克力背景」（圈的是统计、置顶、最小化、最大化四颗）。
+             `PlayerStripHoverInkBrush` 是那层白**上面**的前景色 —— 白底白图标会糊成一片，所以指针压着的那一颗
+             图标转深色（**只换那一颗**，其余几颗是白的）；关闭那颗不用它（红底上的白叉本来就是对的）。
+             五支的用法在 WindowButtons 那段标记里：那五颗各自把它们按回自己的资源字典（框架的 Button 模板
+             进 PointerOver/Pressed 两态就把底与前景换成那几个键，光写控件自己的 Background 没用）。
+             空壳子，颜色由 PaintPalette 从 Core 那张表写进来。 -->
+        <SolidColorBrush x:Key="PlayerStripHoverBrush" />
+        <SolidColorBrush x:Key="PlayerStripPressedBrush" />
+        <SolidColorBrush x:Key="PlayerStripHoverInkBrush" />
+        <SolidColorBrush x:Key="PlayerCloseHoverBrush" />
+        <SolidColorBrush x:Key="PlayerClosePressedBrush" />
+
+        <!-- Flat, borderless and see-through until pointed at: over a picture, a button's own filled
+             background is more visible than its glyph and reads as a panel rather than a control.
+
+             The focus rectangle is asked for explicitly here. The page itself refuses one (see
+             UseSystemFocusVisuals on the UserControl above) because the page is a tab stop — it has to be,
+             the single-letter commands are its own — and a ring drawn around the whole film would be
+             absurd. That reasoning does not extend to the controls inside it: someone driving the transport
+             from the keyboard has no pointer to look at, so the only thing telling them which button Space
+             will press is this rectangle. -->
+        <Style x:Key="OsdButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{StaticResource PlayerInkBrush}" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="MinWidth" Value="40" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="FontFamily" Value="{StaticResource EgUiFontFamily}" />
+            <Setter Property="UseSystemFocusVisuals" Value="True" />
+        </Style>
+
+        <Style x:Key="OsdGlyphStyle" TargetType="FontIcon">
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="16" />
+        </Style>
+
+        <!-- 右上角那一排（置顶＋最小化＋最大化＋关闭）里**三颗窗口命令**的图标（用户令 2026-09-28 晚
+             「集成模式窗口化的时候右上角的图标太大了，改成跟独立模式窗口化时一样大」）。**13.125 是量出来的。**
+
+             独占那一头是 uosc 的 `elements/TopBar.lua`：每颗窗口命令占 `top_bar_size`＝40 见方，图标画在
+             **可见底**（40 减去 margin＝`floor((size - font_size)/4)`＝5，即 35 见方）的**中心**、直径＝
+             可见底的一半 ＝ **17.5**（`ass:icon(bg_ax + bg_size/2, …, bg_size * 0.5, button.icon, …)`）。
+             而 uosc 的 `\fs` 按 72 DPI 的 pt 渲染、WinUI 的 `FontSize` 是 96 DPI 的 px —— **乘 0.75 才
+             等大**（同 `TransportGlyphStyle` 与 `ApplyTitleScale` 那两笔）：17.5 × 0.75 = **13.125**。
+             全屏那一档独占整条顶栏按 `state.scale`＝1.3 放大（size 52、font_size 26、margin 6、可见底 46、
+             图标 23）⇒ **大档 17.25**，由 `ApplyWindowGlyphScale` 摆上。**大档＝全屏或最大化**（用户令
+             2026-09-28 更晚那两条：独占的 `state.scale` 就是 fullormaxed，页面上时间轴一直这么判，
+             `BigChrome` 是全页唯一那一处判据）。
+
+             实拍为证（`work/probe-topbar-buttons.py` 独占那头：真窗口 ＋ 真 libass ＋ 中灰底
+             `av://lavfi:color=c=gray` ＋ `set-min-visibility 1 top_bar` 绕显隐闸；`work/shot-topstrip-int.py`
+             集成这头：那条钉住浮层的命令行开关（`pinned`）＋ 屏幕 DC 抓客户区 ＋ 指针停进顶部唤出带）。
+             窗口档逐颗墨迹（集成只算**应用自己那三颗** —— 系统标题栏那一层要先剔掉，见下）：
+
+             · 关闭（叉）：独占 13（含 1.2px 描边）／白核 9 → 集成改前 16 → 改后 13；
+             · 最大化（方框）：独占 15 ／白核 11 → 集成改前 16 → 改后 13；
+             · 最小化（横杠）：独占 11 ／白核 9 → 集成改前 16×2 → 改后 14×2。
+
+             **⚠️ 量这四格有一层必须先认出来**：那条钉浮层的命令行开关那条路上没有摘掉 WS_CAPTION，系统标题栏那三颗
+             窗口键就压在应用自己那一排上、高 8 像素、更暗（2026-09-28 晚第一次量就把它们读成了「应用自己
+             还有第二颗图标」—— 最大化那颗因此量出 23×21 的「双方框」，多出来的那个小方块其实是系统那颗）。
+             置顶那颗没有系统对应物，所以整排里只有它是干净的；把纵带收到 y≥17 再量才只量得到应用那三颗。
+             真播放里 WS_CAPTION 是被摘掉的，屏上没有这一层。
+
+             三颗按同一个 13.125 画出来（Segoe Fluent Icons 这几个符号的墨框＝1.0 em，与独占那颗
+             MaterialIcons 的 0.56~0.65 em 不是一回事），**逐颗对不齐是正常的** —— 形状不同、墨框／字号的
+             差也逐颗不同，按平均对齐即可（与进度条那一行同一条规矩）。关闭那一颗最干净：独占屏上 13、
+             集成照 13.125 画出来 13，一格不差。
+             **置顶那颗当时不动**（`PinOffIcon`／`PinOnIcon` 是 16 见方的 PathIcon，独占那头没有对应物）：
+             它的墨迹本来就只有 6×12，缩了三颗之后整排正好齐平。
+
+             <p>**2026-09-28 晚第三批用户令「把集成模式右上角的这四个图标缩小 1.3 倍」**：这一排**四颗一起**
+             缩 —— 上面那三颗窗口命令 **13.125 ÷ 1.3 ＝ 10.096**（全屏档 17.25 ÷ 1.3 ＝ 13.269，见
+             ApplyWindowGlyphScale），置顶那颗的 PathIcon 也从 16 见方收到 **12.31**（＝16 ÷ 1.3；它本来
+             就一个数、不分档，缩完照旧一个数）。上面那句「置顶不动」按这一条令作废 —— 用户点的是**四个**
+             图标（截图上就是图钉、最小化、最大化、关闭四颗）。**格不动**（仍 40 见方、无缝、往下让 4），
+             整排另按用户令左移 5 像素（见 WindowButtons 的右边距）。独占那一头一个字没动：左右两排的等比
+             关系（1.3 那一档）本轮不管，用户点的是集成这一排。
+
+             <p>**2026-09-28 深夜第五批用户令「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的
+             窗口模式下右上角的一样大」把上面那一笔整段撤回**：三颗窗口命令回到 **13.125 / 17.25**
+             （＝ 10.096 × 1.3、13.269 × 1.3，见 `ApplyWindowGlyphScale`）。置顶那一颗不再是「16 见方 ÷ 1.3」
+             的自绘几何 —— 它换成**独占同一支字体、同一个字形**：`assets/mpv-ui/fonts/MaterialIconsRound-Regular.otf`
+             里 `push_pin`（cmap 0xF10D）的轮廓，upem 512 里占 298 × 426 单位，Y 轴翻过来、**再按实框等比缩放
+             到 9.793 × 14** 就是下面 `PinGlyph` 那份 Data（`F1` ＝ 非零环绕：字形的轮廓方向用得上，与这一排
+             别的 PathIcon 同一条）。尺寸照独占的实拍定：`work/probe-topbar-pin.txt`（1280×720、阈值 200 的
+             白核连通域）读到 **9 × 14**，宽跟着高走 ⇒ **9.793 × 14**（＝ 14 × 298/426），全屏档乘 1.3 ⇒
+             12.731 × 18.2（`WindowPinGlyph`）。
+
+             ⚠️ **那一步等比缩放不是装饰**：`PathIcon` **不缩放几何**（既不缩放也不居中 —— `ShellPage` 那
+             五颗图标的注释就是为这个坑写的）。把字体的原始坐标（0~512）直接填进来，整颗会被顶到 9.793 × 14
+             的框外面，屏上什么都看不见：2026-09-28 深夜第五批的第一版就是这样，轮廓从字体里抠得一个单位不差，
+             实拍里那颗图钉却是**空的**（白底上一个深色像素都没有）。所以 Data 的坐标与控件尺寸**同尺度**，
+             1:1 画出来正好是那一对实框 —— 自检里那条「墨框与实框同尺度」钉的就是这件事。
+
+             同一条令的另一半是**背景**：四颗的可见底从 40 见方收进 **35**（＝独占 `size 40 − margin 5`，
+             `margin ＝ floor((40−20)/4) ＝ 5`），40 那个数改由这一栏的 `Spacing="5"` 维持成**步进** ——
+             四颗各 35 见方、彼此隔 5，整排仍是 4 × 40 ＝ 160 的占位、贴右上角、右缘让 5。于是屏幕上看得见的
+             方块与独占一样大，**点击格与贴角位置一个字没动**（自检那两条「35×35」与「格距仍是 40」一起钉）。
+             置顶那颗的**状态**也跟着换成独占总表示法（见 `WindowButtons` 那段与 `SetPinned`）：一颗实心
+             图钉（2026-09-29 起状态画在姿势上 —— 未置顶斜 35°、置顶立正，「整颗常亮」那一档同日撤下）。 -->
+        <Style x:Key="WindowGlyphStyle" TargetType="FontIcon" BasedOn="{StaticResource OsdGlyphStyle}">
+            <Setter Property="FontSize" Value="13.125" />
+        </Style>
+
+
+        <Style x:Key="TransportButtonStyle" TargetType="Button" BasedOn="{StaticResource OsdButtonStyle}">
+            <Setter Property="Width" Value="32" /><Setter Property="Height" Value="32" />
+            <Setter Property="MinWidth" Value="32" /><Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="0" /><Setter Property="CornerRadius" Value="2" />
+        </Style>
+        <!-- 进度条上面那一行按钮的图标（用户令 2026-09-28「集成模式进度条上面的图标要和独占模式一样，全屏时
+             稍微放大」）。**这两档数是量出来的，不是估的。**
+
+             独占那一行是 uosc 的 `ass:icon(x, y, font_size, 'skip_previous', …)`，`font_size = round(32 *
+             scale * 0.7)`：窗口档 22、全屏档 `round(round(32 × 1.3) × 0.7)`＝29。而 uosc 的 `\fs` 按 72 DPI 的
+             pt 渲染、WinUI 的 `FontSize` 是 96 DPI 的 px，**乘 0.75 才等大**（与标题簇那条同一条换算，见
+             ApplyTitleScale）。实拍为证（`work/probe-controlbar-look.py`：真窗口 + 真 libass + 中灰底
+             `av://lavfi:color=c=gray`，逐格量墨迹）：独占 22 号档下 `skip_previous` 10×10、`analytics` 16×16、
+             `movie_filter` 18×14、`closed_caption` 16×14、`graphic_eq` 16×18、`crop_free` 16×16，平均 14.3×14.8；
+             集成照旧 22px 画出来是 **19.25 墨高**（Segoe Fluent Icons 的墨框／字号 ≈ 0.875）—— 大出约三分之一，
+             与「后面的元数据体积太大了，与独占模式不一致」是同一笔账（那一笔是 18 → 13.5）。
+
+             **两档因此写死 16.5 / 21.75**（＝22×0.75 / 29×0.75）；大档由 `ApplyTransportScale` 摆上，
+             与标题簇两档走同一组调用点。**大档＝全屏或最大化**（用户令 2026-09-28 更晚「跟独占模式一样，
+             全屏的时候放大，窗口化的时候缩小」＋「包括进度条上方的按钮」；独占那边的判据同样是 fullormaxed，
+             页面上时间轴一直这么判 —— `BigChrome` 是全页唯一那一处）。
+             按钮格起初没动（2026-09-28 那一批用户点的是图标，32 见方、间距 2、左右 8 只照窗口档），
+             **2026-09-28 更晚用户令「复刻独占模式的控件放大策略到集成模式」把格也并了进来**：大档连格
+             一起涨到 **42 / 3 / 10**（＝round(32×1.3) / round(2×1.3) / round(8×1.3)，uosc `Controls.lua`
+             的 size/spacing/margin 同一条链），圆角 2 → 3；由 `ApplyTransportScale` 摆上，下面这些
+             32 / 2 / 8 / 圆角 2 仍是窗口档初值。 -->
+        <Style x:Key="TransportGlyphStyle" TargetType="FontIcon" BasedOn="{StaticResource OsdGlyphStyle}">
+            <Setter Property="FontSize" Value="16.5" />
+        </Style>
+
+        <!-- 右缘那条音量杆上的静音键：**不跟上面那一行**。独占那边这一颗属于 `volume_size = 40` 那一档
+             （`font_size = round(40 × 0.7)`＝28 号 ＝ 21px），本来就比控制条那排图标（16.5px）大一档，
+             所以从 TransportGlyphStyle 里分出来单立一支，免得被那一行的改动一起带下去。
+             用户令点的是「进度条上面的图标」，窗口档这一颗照旧 22（第五批拍板的现值，没跟那一行对齐成 21）；
+             **「复刻独占模式的控件放大策略到集成模式」（2026-09-28 更晚）之后全屏/最大化档 ×1.3 ＝ 28.6**，
+             由 `ApplyRailScale` 摆上 —— 与整条音量条（宽 40→52、静音键格 40→52）同一批。 -->
+        <Style x:Key="RailGlyphStyle" TargetType="FontIcon" BasedOn="{StaticResource OsdGlyphStyle}">
+            <Setter Property="FontSize" Value="22" />
+        </Style>
+        <!-- Keep Slider's native range, keyboard and automation contract; only replace its artwork. -->
+        <Style x:Key="BlockSliderStyle" TargetType="Slider">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource PlayerInkSoftBrush}" />
+            <Setter Property="UseSystemFocusVisuals" Value="True" />
+            <Setter Property="FocusVisualMargin" Value="2" />
+            <Setter Property="ManipulationMode" Value="None" />
+            <Setter Property="Template">
+                <Setter.Value><ControlTemplate TargetType="Slider">
+                    <Grid x:Name="SliderContainer" Background="Transparent" Control.IsTemplateFocusTarget="True">
+                        <Grid.Resources>
+                            <Style x:Key="BlockThumbStyle" TargetType="Thumb">
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Thumb">
+                                    <Border Background="{TemplateBinding Background}" />
+                                </ControlTemplate></Setter.Value></Setter>
+                            </Style>
+                        </Grid.Resources>
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal" /><VisualState x:Name="PointerOver" /><VisualState x:Name="Pressed" />
+                                <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="SliderContainer.Opacity" Value="0.4" /></VisualState.Setters></VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                        <Grid x:Name="HorizontalTemplate">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Rectangle x:Name="HorizontalTrackRect" Grid.ColumnSpan="3" Fill="{TemplateBinding Background}" />
+                            <Rectangle x:Name="HorizontalDecreaseRect" Fill="{TemplateBinding Foreground}" />
+                            <Thumb x:Name="HorizontalThumb" Grid.Column="1" Width="1" IsHitTestVisible="False" Style="{StaticResource BlockThumbStyle}" AutomationProperties.AccessibilityView="Raw" />
+                        </Grid>
+                        <Grid x:Name="VerticalTemplate" Visibility="Collapsed">
+                            <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Rectangle x:Name="VerticalTrackRect" Grid.RowSpan="3" Fill="{TemplateBinding Background}" />
+                            <Rectangle x:Name="VerticalDecreaseRect" Grid.Row="2" Fill="{TemplateBinding Foreground}" />
+                            <Thumb x:Name="VerticalThumb" Grid.Row="1" Height="1" IsHitTestVisible="False" Style="{StaticResource BlockThumbStyle}" AutomationProperties.AccessibilityView="Raw" />
+                        </Grid>
+                    </Grid>
+                </ControlTemplate></Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 每颗控件自己那块玻璃（用户令 2026-09-27：「给每个按钮单独设置亚克力背景，不要一大块」，来由见
+             TitleStrip 那段标记）。空壳子，颜色由 PaintPalette 与标题条那一支一起写进来 —— 是同一支
+             PlayerGlassBrush，所以「嫌厚嫌薄」仍然只有 GlassAlpha 一个字节。
+             （2026-09-27 晚控制条自己那块大底撤下之后，PlayerGlassBrush 只剩这里与标题条两处可见。）
+
+             为什么是**排在控件之下的兄弟 Border**，而不是控件自己的 Background：框架的 Button 模板在
+             悬停/按下两态会把 ContentPresenter.Background 换成主题里那两支画刷，玻璃写在按钮的
+             Background 上，指针一进就没了（自检那两关也钉死了按钮自己不铺底 ——「两档都不画底色」）。
+
+             IsHitTestVisible=False 与舞台、说明牌同理：光标那一套按「指针上压着谁」判，这几块底必须当它们
+             不在（OnStripControl 的名单只有那五颗控件，压在标题文字上仍算按在条上、可以拖窗口）。 -->
+        <Style x:Key="OsdGlassStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource PlayerGlassBrush}" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="IsHitTestVisible" Value="False" />
+        </Style>
+
+        <!-- 这一页原来还有四支 TextControl 的底与四支边线（2026-09-26 用户令「集成模式播放页面的搜索框背景要
+             透明的」＋「改成白色的框」），只服务 需求 7 那颗字幕字体搜索框。2026-09-27 傍晚用户令「去掉这个
+             功能」把那个框整个拿掉之后，这一页上一个文本控件都没有了，八支键随之退役 —— 真要有，它会落回
+             Palette.xaml 里应用级那一套（不透明的卡面色），也就是设置页那些坐在卡上的输入框的样子。
+             上面 OsdButtonStyle / OsdGlassStyle 那两条「控件浮在画面上不带底」的规矩不受影响：那是画刷写在
+             控件与那块玻璃上的，与角色表无关。 -->
+
+        <!-- ================= 暂停/播放 那两个形状 =================
+             「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」, and 「太丑」 was measurable
+             rather than a matter of taste: U+E769 and U+E768 in Segoe Fluent Icons are *outline* glyphs — the
+             pause one carries four contours, two outer boxes with two inner boxes cut out of them, wall
+             thickness 128 of 2048 units, which at the 140 the badge used comes to 8.75 pixels. Blown up to a
+             third of the picture's height that is a wireframe drawing, not an icon. The fallback font is the
+             same story. What the request asks for is the solid shapes underneath.
+
+             The geometry is not here. It is PulseArt's, in Core, because 「what weight class does this sit in」
+             is arithmetic and the answer has to stay in the one the user recognized two shapes ago — each
+             figure keeps its corner polygon, so Bounds reads the box off that (the rounded outline is cut
+             inward and never exceeds it), and PlaybackTests pins it, centred.
+
+             The outlines carry their rounded corners in the geometry itself (tangent cut plus a tangent arc at
+             every corner), which the previous generation could not do: it drew a sharp polygon and let a
+             round-join stroke of fixed width fatten it, which caps every corner at half the stroke width — six
+             pixels of rounding on a 136 box, a wireframe's idea of soft. The arc trick is also what the five
+             title-bar icons in ShellPage.xaml could not have used — a PathIcon has no arcs — which is why those
+             needed an awk script to work out their corners. -->
+
+        <!-- The 暂停/播放 badge's fifth of a second, and the only storyboard in the file — see PulseBadge for
+             why this one is not the fade the reveal rule refuses.
+
+             It was a whole second: 「暂停后显示一秒暂停图标就行（开启播放也弄个一秒的动画）」 was the request
+             that put it there, and 「把暂和开始的动画改为 0.2 秒」 is the one that shortened it. Both are kept
+             above because the second only makes sense as an edit to the first.
+
+             The three phases are re-cut rather than scaled by a fifth. Scaling would give 18 ms to arrive —
+             one frame at 60 Hz, which reads as a hard cut, not as an animation — and 76 ms to leave. So:
+             50 ms up, 60 ms at full, 90 ms out. The fade takes nearly half of the fifth of a second because
+             it is the whole of 「it left by itself」; under about 80 ms it stops reading as a fade at all.
+
+             The scale travels less far so that it travels at the same speed: 0.72 → 1 over 220 ms was 0.00127
+             per millisecond, and 0.86 → 1 over 110 ms is the same figure, so the growth feels exactly as it
+             did. The drift outward cannot keep that speed (0.18 over 780 ms would be 0.02 over 90 ms, which is
+             nothing), so 1.06 is a compromise — still drifting outward rather than retreating, which is the
+             thing that makes it read as an acknowledgement rather than as a cancellation.
+
+             Opacity and scale are both composition properties, so this runs off the UI thread and needs no
+             EnableDependentAnimation. Completed collapses the badge: left visible at zero opacity it would
+             still be a hit-test-free but laid-out element on every subsequent frame. -->
+        <Storyboard x:Key="PulseStoryboard" Completed="OnPulseCompleted">
+            <DoubleAnimationUsingKeyFrames
+                Storyboard.TargetName="PulseBadge"
+                Storyboard.TargetProperty="Opacity">
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.05" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.11" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.2" Value="0" />
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames
+                Storyboard.TargetName="PulseScale"
+                Storyboard.TargetProperty="ScaleX">
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.86" />
+                <SplineDoubleKeyFrame KeyTime="0:0:0.11" KeySpline="0.1,0.9 0.2,1" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.2" Value="1.06" />
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames
+                Storyboard.TargetName="PulseScale"
+                Storyboard.TargetProperty="ScaleY">
+                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.86" />
+                <SplineDoubleKeyFrame KeyTime="0:0:0.11" KeySpline="0.1,0.9 0.2,1" Value="1" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.2" Value="1.06" />
+            </DoubleAnimationUsingKeyFrames>
+        </Storyboard>
+    </UserControl.Resources>
+
+    <!-- Transparent, not null: a null background is not hit-testable, and every pointer event the
+         reveal rule runs on lands on this grid. It is also what lets the video show through.
+
+         A PictureSurface rather than a Grid, and it is a Grid with one thing added — a way in to
+         UIElement.ProtectedCursor, which is protected and therefore only reachable from a derived type. That
+         is what actually hides the mouse pointer over the picture: while the pointer is over XAML content the
+         shape on screen is the framework's, and nothing this process does on the UI thread is on that path.
+         See PictureSurface and HostWindow.BlankInputCursor.
+
+         AllowDrop + DragOver/Drop 只服务集成管线那一条：画面嵌在本窗口的视觉树里、VideoHost 又
+         IsHitTestVisible=False，所以拖到画面上的文件落在 Root 上，交给 OnPictureDrop 挂字幕。独占窗口
+         与外部 mpv.exe 的画面另起顶层窗口，拖拽由 mpv 原生的 drag-and-drop 接住，走不到这里。 -->
+    <local:PictureSurface x:Name="Root" Background="Transparent" SizeChanged="OnRootResized"
+                          AllowDrop="True" DragOver="OnPictureDragOver" Drop="OnPictureDrop">
+
+        <!-- ================= 右键画面菜单 =================
+             The tree is PlayerMenuCatalog's, harvested from the bundled input.conf's own uosc menu, so
+             「右键 → 画面 → 开/关 裁切填充」 is where someone who has used that configuration expects it.
+             Built on first open rather than in XAML because it is a hundred-odd rows of data, and as a
+             ContextFlyout rather than a RightTapped handler so the menu key and Shift+F10 reach it too. -->
+        <local:PictureSurface.ContextFlyout>
+            <MenuFlyout x:Name="PictureMenu" Opening="OnPictureMenuOpening" />
+        </local:PictureSurface.ContextFlyout>
+
+        <!-- ================= 进出播放页的舞台 =================
+             这一页在屏上的那一块底。Root 自己是 Transparent（理由写在上面），垫在它下面的是窗口与岛自己的
+             底色 —— 于是「淡入这一页」原本没有任何东西可淡。这块不透明的底把这一页变成一张「面」，进出的
+             转场（见 PlayerPage.Transition.cs）才有可溶解的两半。
+
+             它只在真的进出播放时立起来：命令行那条 show-osd 的路子（ShowChromeForShot）是直接把这一页摆到当前
+             那一页上面拍照，浮层背后要的正是浏览页的真内容，舞台必须当不存在。所以它是 Collapsed 起步、由转场
+             驱动开关。
+
+             排在最前：画面用的 SpriteVisual 挂在 VideoHost 上，树序即 z 序，所以舞台在画面和所有控件之下。
+             IsHitTestVisible=False 与 VideoHost、StandaloneHint 同理 —— 光标那一套按「指针上压着谁」判，
+             这一块必须当它不在。 -->
+        <Grid
+            x:Name="Stage"
+            Background="{StaticResource PlayerStageBrush}"
+            IsHitTestVisible="False"
+            Visibility="Collapsed" />
+
+        <!-- ================= 退场底 =================
+             退出播放那一趟立起来的一块保险面，只有退场期间在（EnterPlayer 里一定收掉，见 PlayerPage.Exit.cs）。
+             它铺的是窗口洗出来的那支底，也就是浏览页的底。
+
+             它为什么还在（2026-09-20 晚重新设计之后，它已经不是淡出的主角）：退场那一拍窗口会从播放几何
+             一口气跳成浏览几何，而画面是挂在 VideoHost 上的 SpriteVisual，要到同一帧的布局里才被摆到新
+             尺寸上。这一块面就压在那道缝下面 —— 万一画面那一拍没盖满新宿主，露出来的是浏览页同色的底，
+             而不是一圈 #16181C 的窗口色（2026-09-20 用户第二张截图量到的正是那一圈）。
+
+             真正在动的是画面自己：CompositionVideoTarget.RetainDim 被逐拍拧上去（PlayerMotion.ExitDimAt），
+             最后一帧从全亮一路溶解到零，底下的浏览页因此是「浮现」出来的。这块面随本页的不透明度一起淡，
+             但它排在画面**之下**，正常情况下从头到尾看不见。
+
+             底色写 PlayerExitBrush 而不是直接 {ThemeResource LayerFillColorDefaultBrush}：写主题键的话它
+             会在本页的主题作用域里求值，而这一页是 RequestedTheme="Dark" —— 一套浅色主题上退出播放会露
+             出一块深色的面。这一支由 PaintPalette 按**应用**当前主题上色（两支本来就是同一个色号）。
+
+             z 序：舞台 → 退场底 → 画面 → 控件。两处 IsHitTestVisible 都是 False，所以这一块不吃指针，
+             也不影响「指针上压着谁」那条光标判据。 -->
+        <Grid
+            x:Name="ExitBackdrop"
+            Background="{StaticResource PlayerExitBrush}"
+            IsHitTestVisible="False"
+            Visibility="Collapsed" />
+
+        <!-- 视频宿主紧随舞台：其 SpriteVisual 画在宿主内容之上、后续 XAML OSD 之下，而舞台排在它前面，
+             所以画面压着舞台。composition 交换链经 ICompositionSurface / CompositionSurfaceBrush 进入同一
+             合成树。不创建视频 HWND，不接管焦点；输入仍由 Root 和上层控件处理。
+             独立管线由 mpv 自建窗口，这个宿主保持为空。 -->
+        <Grid x:Name="VideoHost" IsHitTestVisible="False" />
+
+        <!-- ================= 独立播放说明牌 =================
+             画面不在这一页时替黑舞台说一句话。同样 IsHitTestVisible=False：光标战争读「指针上的部件」，
+             说明牌必须当不存在。默认收起，EnterPlayer 按管线档位放行。 -->
+        <TextBlock x:Name="StandaloneHint"
+                   x:Uid="PlayerPage_StandaloneHint"
+                   IsHitTestVisible="False"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Style="{StaticResource BodyTextBlockStyle}"
+                   Margin="24" TextWrapping="Wrap" TextAlignment="Center"
+                   Visibility="Collapsed" />
+
+        <!-- ================= 顶部：标题与窗口操作 =================
+             The three window commands are the last column rather than a separate overlay of the shell's,
+             and that is the whole of 「全屏后右上角的图标不会自动隐藏，鼠标移到左上角时会跟置顶跟统计重叠」:
+             an overlay outside this strip could neither come and go with the reveal rule nor be kept out
+             of 统计/置顶's corner, and it did both wrong at once. As a column it hides with the strip and
+             the grid guarantees no two of them can ever share a pixel.
+
+             <p>常驻玻璃现在只剩**左上角那三块**（用户令 2026-09-27：「给每个按钮单独设置亚克力背景，不要一大块」
+             把原来那一条跨满四列的 Border 撤掉，换成每块自己的底；随后几条令把右上角那几颗的底都收走了 ——
+             「鼠标没移到按钮上的时候不要显示背景」收掉了置顶与三颗窗口命令，第三批「把统计的亚克力背景去掉」
+             收掉了统计）。留下的三块是：返回键那一块，以及标题与剧名那两块。
+
+             每一块都是控件**之下**的兄弟 Border（所在 Grid 的第一个孩子），控件自己的 Background 照旧透明
+             —— 自检那两关（「两档都不画底色」「两档底色和别的按钮同一支」）钉的就是这件事，而框架的 Button
+             模板在悬停/按下两态会把 ContentPresenter 的底色换掉，理由写在 OsdGlassStyle 那段标记里。
+             IsHitTestVisible=False 与舞台、说明牌同理：光标那一套按「指针上压着谁」判，这几块底必须当它们
+             不在（OnStripControl 的名单只有那五颗控件，压在标题文字上仍算按在条上、可以拖窗口）。
+
+             <p>那三块共用同一支 PlayerGlassTopBrush（**跟着指针高度变深**，见下面 TitleTexts 那段）；
+             上下两条浮层仍旧共用 PlayerGlassBrush（不变的半透明近黑）。星号那一列里只有标题那一行，
+             ColumnSpacing 收到 0，那条缝交给标题自己的左边距 —— 2026-09-28 更晚「复刻标题」之后它是 1
+             （＝独占的 `title_spacing`）。 -->
+        <Grid
+            x:Name="TitleStrip"
+            Height="96"
+            VerticalAlignment="Top"
+            ColumnSpacing="0"
+            Visibility="Collapsed">
+            <!-- 标题条按指针离顶边的近度淡入（用户令 2026-09-27「参独占模式鼠标位置越靠近窗口上方标题越
+                 明显」）：强度是 ChromeReveal.TitleStrength，页面写在 Opacity 上，这支隐式过渡把每一档的跳变
+                 交给合成器补间 —— 与音量条那支同款同时长（写法与理由见 Rail 的 OpacityTransition）。 -->
+            <Grid.OpacityTransition>
+                <ScalarTransition Duration="0:0:0.22" />
+            </Grid.OpacityTransition>
+            <!-- 行内容（返回键、标题、右上那一排）包在这一层三列 Grid 里；第二行那块文件信息框在它**外面**
+                 直接挂 TitleStrip（见下面 SubtitleBox 那段）—— 它比 0 号列宽得多，放进列里会把 Auto 列撑开、
+                 把标题推右。 -->
+            <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 那一层整宽的底随用户令退役（见上）。96 仍然是这一条的命中区与拖动区（唤出用不带这块 ——
+                 ChromeReveal 的顶部带按窗口高度的比例算，与此无关），从客户区最左边到最右边都是。
+
+                 <p>返回与片名要**紧凑**（用户令 2026-09-27 傍晚第三批「让返回和片名紧凑一点」）：星号那一列
+                 的间距从 8 收到 0，左边那颗按钮与标题那块玻璃之间就只剩标题自己那点左边距。这一条与
+                 2026-09-28 更晚「复刻标题」叠起来的结果是那个 1：返回键玻璃右缘 35、标题玻璃左缘 36，
+                 中间一条 1px 的缝，正是独占的 `title_spacing`。 -->
+
+            <!-- Every glyph-only control from here down carries an AutomationProperties.Name, and they are
+                 not decoration. A Button whose whole content is a FontIcon has no text for a screen reader
+                 to read: the glyph is a private-use codepoint in an icon font, so Narrator announces the
+                 control as 「按钮」 and nothing else — nine of the transport's twelve buttons were that. The
+                 tooltip does not stand in for it (a tooltip is a pointer affordance, and this is the case
+                 where there is no pointer), and neither does the name of the command behind it.
+
+                 Where the player also owns a single key for the same action, that key is AcceleratorKey
+                 rather than part of the name, which is what keeps the announcement 「返回」 instead of
+                 「返回左括号 Esc 右括号」 while still telling a keyboard user the shortcut exists. -->
+            <!-- 返回：**30 见方、四周各让 5**（用户令 2026-09-28 更晚「把独占模式的标题复刻到集成模式」）。
+                 这一条把同日的「统一集成模式和独占模式左上角返回按钮的大小……40 见方」那一批翻回：独占那头
+                 当晚先按「把标题的大小改回跟 mpv_config 项目一样大小」回到 uosc 自家的 margin 内缩
+                 （玻璃＝整格 top_bar_size 40 里上下左右各让 margin＝5，见 `elements/TopBar.lua` 的
+                 MOMOKA[topbar-back-glass]），集成这一头同一批照它复刻 —— 玻璃 30 见方，格子的上沿与左缘
+                 都是 5。于是左上角那三块（返回键玻璃、标题、第二行文件信息）的上沿与左缘与独占逐像素一致
+                 （独占实测：返回键玻璃 x[5..34] y[5..35]、标题左缘 36）。
+                 **代价说在明处**：右上那一排仍是 40 见方、往下让 4（2026-09-28「复刻独占的窗口按钮」那批），
+                 左上与右上于是不再同一条基线 —— 独占那边本来也不同（它那三颗窗口键的可见底 35 见方、中心
+                 22.5，左边这三块中心 20），所以「同形」指的是左上角这三块的内部关系，不是整条顶栏一刀切。
+                 玻璃照旧常驻（2026-09-26 用户令「给返回键加背景」），仍是左上角那支跟指针变深的
+                 PlayerGlassTopBrush。全屏那一档照独占放大（玻璃 40 见方、让 6，见 ApplyTitleScale）。 -->
+            <Grid Grid.Column="0" VerticalAlignment="Top" Margin="5,5,0,0">
+                <Border Style="{StaticResource OsdGlassStyle}" Background="{StaticResource PlayerGlassTopBrush}" />
+
+                <Button
+                    x:Name="BackButton"
+                    x:Uid="PlayerPage_BackButton"
+                    Command="{x:Bind ViewModel.StopCommand}"
+                    Style="{StaticResource OsdButtonStyle}"
+                    CornerRadius="2"
+                    Width="30"
+                    Height="30"
+                    MinWidth="30"
+                    Padding="0"
+                    VerticalAlignment="Top"
+                    AutomationProperties.AcceleratorKey="Esc">
+                    <FontIcon Glyph="&#xE72B;" Style="{StaticResource OsdGlyphStyle}" />
+                </Button>
+            </Grid>
+
+            <!-- 标题与第二行：**两块，不是一块**（用户令 2026-09-27「下方的片名单独一个框」；2026-09-28「两模式一致」
+                 把第二行的内容从剧名换成文件信息「分辨率 · 视频编码 · 音频格式 · 组名」，见 PlaybackTitles.Subline）。
+                 独占模式里正是两块：主标题一个框画在返回键右边、副标题另起一个框画在**返回键的正下方**
+                 （`elements/TopBar.lua` 的 Main title / Alt title 两段 `ass:rect`）。
+                 于是这里：主标题框贴在星号列里（HorizontalAlignment=Left，铺满会变回一条长色带），第二行挪出
+                 星号列、直接挂在 TitleStrip 底下。**两块的落点照独占逐像素复刻**（用户令 2026-09-28 更晚
+                 「把独占模式的标题复刻到集成模式」；独占实测：返回键玻璃 x[5..34] y[5..35]、标题玻璃左缘 36
+                 上沿 5 高 30、第二行左缘 5 上沿 36 高 24）：主标题框左缘 36＝0 号列宽 35（返回键格 5＋30）
+                 ＋那条 1px 的缝（＝独占的 `title_spacing`），上沿 5、高 30；第二行左缘 5（与返回键玻璃同一
+                 左缘）、上沿 36＝返回键玻璃下沿（5＋30）＋1、高 24（＝独占的 `alt_title_size`）。第二行的字
+                 走斜体、用 PlayerInkMetaBrush（中性浅灰 `c8c8c8`，与独占那一行同一个值 —— 用户令
+                 「元数据的字体加点灰色」）、前面缀一个「└ 」（独占 `MOMOKA[topbar-subline-branch]`，uosc
+                 原版给章节行加的就是这个树干），字号 **12.75**（独占 uosc 那一行是 `round(alt_title_size *
+                 0.71)` ＝ `\fs` 17，2026-09-29 令「元数据缩小一点点，两模式大小要一致」从 0.77/`\fs` 18 收小；
+                 但 libass 的 `\fs` 是 **72 DPI 的 pt**、这里的 `FontSize` 是 **96 DPI 的 px**，乘 0.75 才等大
+                 —— 用户令 2026-09-28 更晚「集成模式下面的元数据体积太大了」修的换算；详见 `Styles.xaml`
+                 的 EgSublineFontSize）。
+                 Visibility 挪到框上 —— 自己是一个框，收起时连框一起收（Subtitle 空串＝SubtitleVisibility
+                 收起）。主标题框字号 20、文字垂直居中。
+
+                 <p>**基线**（用户令 2026-09-28「返回按钮高度和右边的标题一样高」＋「复刻独占的三颗窗口按钮」）：
+                 标题框与返回键玻璃同高同顶（窗口档 30、上沿 5；全屏 40、上沿 6），右上那三颗仍是 40×40 贴顶
+                 往下让 4。**左上与右上自此不在一条基线上** —— 这是「复刻独占」的必然结果，独占那头也一样
+                 （它那三颗窗口键的可见底 35 见方、中心 22.5，左边这三块中心 20）。`ProbeClearance` 量的是
+                 左上这三块的内部关系：返回键玻璃与标题玻璃同高同顶、第二行挂在返回键玻璃正下方一条缝上。
+
+                 <p>这两块用的**不是**上下两条浮层那一支：它们和左边那颗返回键共用 PlayerGlassTopBrush，
+                 也就是跟着指针高度变深的那一支（用户令 2026-09-27 傍晚第三批「加深左上角亚克力背景的颜色，
+                 鼠标位置越靠上亚克力背景的颜色越深」，问实了＝返回键＋片名两块一起跟指针走）。底下那支
+                 PlayerGlassBrush 如今只管标题条那一块 —— 2026-09-27 晚控制条自己那块大底撤下后它不再铺控制条
+                 （它离「左上角」很远，本就不该跟着指针一起变）。
+
+                 <p>**圆角 8 → 2**（用户令 2026-09-28「左上角标题太圆了，改成跟独占一样」＝问实了照独占的
+                 `border_radius=2`）。结果仍是**左上角三块与右上几颗同一个数**（都 2），`ProbeClearance` 那一问比的是
+                 这几颗的 CornerRadius 互相相等、不是写死的数 —— 8 换 2 它照样绿。满深线从第二行那块
+                 玻璃的下沿量出来（TopGlassFullAt），跟着走 —— 左上这一簇改尺寸之后它跟着下移。
+
+                 <p>**窗口 / 全屏两档尺寸**（用户令 2026-09-28「参考独占模式为集成模式的窗口和全屏设置不一样的
+                 标题尺寸」；更晚的「复刻标题」把两档的数改成照独占的公式推）：独占 uosc 全屏时整条顶栏按
+                 `scale_fullscreen=1.3` 放大（main.lua 的 state.scale），size 40→52、字号 20→26、margin 5→6
+                 —— 于是全屏档返回键玻璃 40 见方、让 6，标题框 40 高，第二行上沿 47、高 31，字号 26/16.5、
+                 内边距 13（照写 ApplyTitleScale，挂在 ApplyFullscreen 上）。窗口档就是本段写的这些数。 -->
+            <Border
+                x:Name="TitleBox"
+                Grid.Column="1"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Margin="1,5,0,0"
+                Height="30"
+                Padding="10,0"
+                CornerRadius="2"
+                Background="{StaticResource PlayerGlassTopBrush}"
+                IsHitTestVisible="False">
+                <TextBlock
+                    x:Name="TitleText"
+                    FontSize="{StaticResource EgTitleFontSize}"
+                    FontWeight="SemiBold"
+                    VerticalAlignment="Center"
+                    MaxLines="1"
+                    Text="{x:Bind ViewModel.Title, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis" />
+            </Border>
+
+
+            <!-- 右上角这一栏：**置顶、最小化、最大化、关闭**（用户令 2026-09-27 傍晚第三批「把统计的
+                 亚克力背景去掉，然后换个图标，排列在置顶的左边」；置顶那颗是同一批前一条令搬进来的）。
+                 **2026-09-27 晚统计那颗也撤下了**（用户令「移除集成模式右上角的统计按钮」）：这一栏由五颗
+                 变回四颗；三态统计只剩控制条左下那颗（`TransportStatsButton`），独占模式那颗照旧在 uosc 控制条上。
+
+                 窗口三颗是真的客户区按钮，因为播放时 WS_CAPTION 被摘掉、画面要铺到顶边，Windows 不会给
+                 caption 按钮。**尺寸复刻独占模式顶栏那三颗**（用户令 2026-09-28「复刻独占模式右上角的最小化、
+                 窗口化、关闭三个按钮，替换掉集成模式右上角的 winui 按钮」）：独占 `elements/TopBar.lua` 里每颗窗口
+                 命令占 `top_bar_size`＝40 的**一格**、彼此紧挨、贴右上角，平时无底、鼠标移上去才亮一块；而它画出
+                 来的**可见底**是 `size − margin`＝**35**（`margin ＝ floor((40−20)/4) ＝ 5`）。第一版集成照 40
+                 收的（从首页 caption 的 46×32），**2026-09-28 深夜第五批按用户令「四个图标还有这四个图标的背景
+                 改成跟独占模式的窗口模式下右上角的一样大」收到 35** —— 也就是那一层可见底，带上独占的**圆角 2**、
+                 不带常驻玻璃（「鼠标没移到按钮上的时候不要显示背景」；悬停那一层由框架的 Button 模板给）。
+                 40 那个数留着当**步进**：四颗各 35 见方、`Spacing="5"`，于是整排仍占 4 × 40 ＝ 160、贴角、
+                 右缘让 5，与独占逐项相同（自检那两条「35×35」与「格距仍是 40」把它一起钉住）。
+                 置顶那颗自始同尺寸、同格（它不是要替换的 winui 窗口按钮，功能不动）。
+
+                 **图标与可见底是 2026-09-28 晚起的两笔**（第一笔「集成模式窗口化的时候右上角的图标太大了，改成跟
+                 独立模式窗口化时一样大」：那一批只复刻了「格」，字号仍是照首页 caption 抄来的 16，比独占那一头
+                 大出 1.2~1.5 倍；第二笔「把集成模式右上角的这四个图标缩小 1.3 倍，向左移五个像素」；**深夜第五批
+                 「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的窗口模式下右上角的一样大」
+                 把第二笔整段撤回、并把「背景」一起对齐**）：现在按 uosc 的算式换算成 **13.125**（窗口档）／
+                 **17.25**（全屏档，独占 `state.scale`＝1.3），来历、量尺读数与实拍都在 `WindowGlyphStyle`
+                 那段标记里；两档由 `ApplyWindowGlyphScale` 摆上，挂在 `ApplyTitleScale` 上（与标题簇、进度条
+                 那一行同一组调用点）。
+                 **四颗各 35 见方、彼此隔 5**（＝独占 `size 40 − margin 5` 那一层可见底；40 那个数由上面
+                 `Spacing` 维持成步进）、往下让 4（＝独占的 `margin`）；整排左移那 5 像素是下面 `Margin` 的
+                 右值 —— 这一栏住在 2 号 Auto 列里，右边让出 5 等于整排往左挪 5。
+                 **这些格也分两档了**（2026-09-28 深夜第六批补批，用户令「这四个按钮全屏和最大化时没放大」）：
+                 全屏/最大化档由 `ApplyWindowGlyphScale` 连格一起摆成 **46 见方、缝 6、右让 6、圆角 3**
+                 （＝独占 `TopBar.lua` 的 `bg_size ＝ size − margin`、`bg_ay ＝ ay ＋ margin` 那批公式在
+                 `state.scale` 1.3 档的读数：size 52、margin 6），往下让位 4 → 5.2（×1.3）。下面写的
+                 35 / 5 / 4 / 5 / 圆角 2 仍是窗口档初值，与自检那两条「35×35」「格距 40」（量的是窗口档）相安。
+
+                 置顶那颗**一个人一颗图钉**（2026-09-28 深夜第五批，用户令「把集成模式右上角的置顶图标换成跟
+                 独占模式一样的」）：**实心 `push_pin`**，几何与尺寸都从独占那一头来（来历见 `WindowGlyphStyle`
+                 那段与 `PinGlyph` 的 Data）。**状态画在图钉的姿势上**（2026-09-29，用户令「置顶不要长亮，改为
+                 非置顶的时候图标是斜的，置顶的时候恢复原样」）：未置顶斜 35°、置顶立正（角度归
+                 `SetPinned`，见 `PinTiltDegrees`；独占那头同一批换，`TopBar.lua` 的
+                 MOMOKA[topbar-pin-tilt]），不再有「两颗图钉切换」，也不再有「已置顶时整颗常亮」那层底 ——
+                 底从此与其余几颗同一套，只剩悬停/按下那两档。
+                 它的名字与 tooltip 不在这里写：SetPinned 两边一起写，因为两者都得说出当前是哪一档。
+
+                 三颗窗口命令**全档都在**，全屏那一档也不例外：最右边那颗在全屏时换成「还原」的图标、点下去
+                 退出全屏。从前它在全屏时被收起（理由是全屏下最大化什么也做不了），可那个位置空着看上去就是
+                 少了东西 —— 2026-09-14。
+
+                 <p>**悬停/按下那两档自己按回来**（用户令 2026-09-27 傍晚第四批「鼠标移动到右上角的关闭的时候
+                 背景要和首页一样变成红色，然后右上角另外几个按钮鼠标移动到按钮上的时候背景颜色太浅了容易和画面
+                 合在一起」，第五批「这四个按钮鼠标移到上面的时候要用白色亚克力背景」，2026-09-28 晚第三条令
+                 「集成模式右上角的这个背景太透明了」把白那两档从五成/六成提到**八成/九成**）：常驻底撤掉之后，指针压
+                 上去的那一层就是这几颗**唯一**的可见反馈，而框架默认那一层（深色主题里白一成上下）压在画面上
+                 几乎看不见。于是几颗各自在自己的资源字典里把 `ButtonBackgroundPointerOver`／
+                 `ButtonBackgroundPressed` 按到调色板上（与「跳过」那颗、滑杆白条同一手法，理由同 `OsdGlassStyle`
+                 那段：模板进这两态会把 `ContentPresenter` 的底换掉，写在控件自己的 `Background` 上没有用）——
+                 置顶/最小化/最大化三颗是**一层半透明的白**（悬停八成、按下九成；真亚克力采不到视频那一层，
+                 只能是半透明白，理由见 `PlayerPalette.StripHoverAlpha` 的注释），关闭那颗是系统 caption 关闭键
+                 的红（`#C42B1C`，按下压暗一成），也就是首页那颗的样子。
+                 （统计那颗撤下后白底那几颗只剩三颗，调色板与自检名单同步收窄。）
+                 （置顶那颗 2026-09-29 起不再有已置顶那一档的底，上一版「SetPinned 把
+                 `PlayerStripHoverBrush` 写进控件自己的 Background」那半条随之撤下 —— 常驻底这一问回到
+                 「四颗都没有」一条上。图标那一半仍归 `SetStripGlyphInk`。）
+
+                 <p>**白底上的图标归 C# 换**（同一条令里问实的那一半）：那几颗的图标本身是白的，压在白上会糊成
+                 一片，所以悬停时转深色 —— 而模板那两态换的是 `ContentPresenter.Foreground`，`FontIcon`／
+                 `PathIcon` 的 Foreground **不从那里继承下来**（实测：模板那一层换了、图标还是白的），于是这一条
+                 走 `SetStripGlyphInk`，由这一栏的 `PointerMoved`／`PointerExited` 推。**只换指针压着的那一颗**
+                 （第一版写成四颗一起换，用户当场问「怎么是四个按钮一起变色」）。置顶那颗 2026-09-29 起与其余
+                 几颗同一句：常亮那一档撤了，墨色不再由置顶状态钉在深色上，只看指针。
+                 关闭那颗不进这一条
+                 （红底上的白叉本来就是对的）。自检走 `VisualStateManager.GoToState` 把两态推上去读模板里的底与
+                 前景，另外**逐颗**调 `SetStripGlyphInk`、把每一颗自己的墨与其余几颗都读一遍 —— 照片拍不到这几档
+                 （这台机器注不进鼠标事件），而**指针事件那一小段接线**（两个属性）只有读码与实机验收看得见。 -->
+            <StackPanel
+                x:Name="WindowButtons"
+                Grid.Column="2"
+                Orientation="Horizontal"
+                Spacing="5"
+                VerticalAlignment="Top"
+                Margin="0,4,5,0"
+                PointerMoved="OnWindowButtonsPointerMoved"
+                PointerExited="OnWindowButtonsPointerExited">
+                <Button
+                    x:Name="PinButton"
+                    Click="OnTogglePin"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    CornerRadius="2"
+                    Foreground="{StaticResource PlayerInkBrush}"
+                    Padding="0"
+                    Width="35"
+                    Height="35"
+                    UseSystemFocusVisuals="True"
+                    AutomationProperties.AcceleratorKey="T">
+                    <Button.Resources>
+                        <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                        <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                        <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                        <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                    </Button.Resources>
+                    <!-- 外面这层 Viewbox 是**两档尺寸**的落点（见 WindowPinGlyph）：PathIcon 不缩放几何，那份
+                         Data 的坐标只对应窗口档那一对实框，全屏档要放大 1.3 就只能在框上做。
+                         也是**姿势的转轴**（2026-09-29，未置顶斜 35°、置顶立正，角度归 SetPinned 的
+                         PinTiltDegrees）：原点钉在框心 —— RenderTransform 不进布局，两档实框的读数不受搅动；
+                         斜过来后墨迹的外接框约 16×17（窗口档），35 见方的格装得下。 -->
+                    <Viewbox
+                        x:Name="PinGlyphBox"
+                        Width="9.793"
+                        Height="14"
+                        Stretch="Uniform"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Viewbox.RenderTransform>
+                            <RotateTransform Angle="35" />
+                        </Viewbox.RenderTransform>
+                        <PathIcon
+                            x:Name="PinGlyph"
+                            Width="9.793"
+                            Height="14"
+                            Data="F1 M 9.793 7.624 C 9.793 7.296 9.563 7 9.235 6.934 C 8.347 6.671 7.69 5.85 7.69 4.897 V 1.38 H 8.413 C 8.775 1.38 9.103 1.085 9.103 0.69 C 9.103 0.296 8.775 0 8.413 0 H 1.38 C 1.019 0 0.69 0.296 0.69 0.69 C 0.69 1.085 1.019 1.38 1.38 1.38 H 2.103 V 4.897 C 2.103 5.85 1.446 6.671 0.559 6.934 C 0.23 7 0 7.296 0 7.624 V 7.69 C 0 8.085 0.296 8.413 0.69 8.413 H 4.174 L 4.207 13.31 C 4.207 13.704 4.502 14 4.897 14 C 5.291 14 5.587 13.704 5.587 13.31 V 8.413 H 9.103 C 9.498 8.413 9.793 8.085 9.793 7.69 V 7.624 Z" />
+                    </Viewbox>
+                </Button>
+                <Button
+                    x:Name="MinimizeButton"
+                    x:Uid="PlayerPage_MinimizeButton"
+                    Click="OnMinimizeWindow"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    CornerRadius="2"
+                    Foreground="{StaticResource PlayerInkBrush}"
+                    Padding="0"
+                    Width="35"
+                    Height="35">
+                    <Button.Resources>
+                        <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                        <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                        <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                        <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                    </Button.Resources>
+                    <FontIcon
+                        x:Name="MinimizeGlyph"
+                        Style="{StaticResource WindowGlyphStyle}"
+                        Glyph="&#xE921;"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
+                <Button
+                    x:Name="MaximizeButton"
+                    x:Uid="PlayerPage_MaximizeButton"
+                    Click="OnToggleMaximizeWindow"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    CornerRadius="2"
+                    Foreground="{StaticResource PlayerInkBrush}"
+                    Padding="0"
+                    Width="35"
+                    Height="35">
+                    <Button.Resources>
+                        <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                        <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                        <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                        <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                    </Button.Resources>
+                    <FontIcon
+                        x:Name="MaximizeGlyph"
+                        Style="{StaticResource WindowGlyphStyle}"
+                        Glyph="&#xE922;"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
+                <Button
+                    x:Name="CloseButton"
+                    x:Uid="PlayerPage_CloseButton"
+                    Click="OnCloseWindow"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    CornerRadius="2"
+                    Padding="0"
+                    Width="35"
+                    Height="35">
+                    <Button.Resources>
+                        <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerCloseHoverBrush" />
+                        <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerClosePressedBrush" />
+                    </Button.Resources>
+                    <FontIcon
+                        x:Name="CloseGlyph"
+                        Style="{StaticResource WindowGlyphStyle}"
+                        Foreground="{StaticResource PlayerInkBrush}"
+                        Glyph="&#xE8BB;"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Button>
+            </StackPanel>
+            </Grid>
+
+            <!-- 第二行（文件信息「分辨率 · 视频编码 · 音频格式 · 组名」）在**返回键的正下方**，不在上面那个
+                 三列 Grid 的列里 —— 这行字比 0 号列宽得多，放进列里会把 Auto 列撑开、把标题推右（用户令
+                 2026-09-28「下方那一栏……移动到返回按钮的下方」）。左缘 5＝返回键那块玻璃的左缘（用户令
+                 2026-09-28 更晚「把独占模式的标题复刻到集成模式」；独占那头副标题左缘＝窗口左缘＋margin，
+                 见 TopBar.lua 的 MOMOKA[topbar-subline]）；顶上 36＝返回键玻璃的下沿（5＋30）加 1px 的缝，
+                 1 就是独占那两行之间的 `title_spacing`；高 24＝独占的 `alt_title_size`。全屏档这几处
+                 （上沿 47、高 31、内边距 13、字号 16.5）由 ApplyTitleScale 一起改。IsHitTestVisible=False：
+                 压在这行字上仍然算按在条上、可以拖窗口。 -->
+            <Border
+                x:Name="SubtitleBox"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Margin="5,36,0,0"
+                Height="24"
+                Padding="10,0"
+                CornerRadius="2"
+                Background="{StaticResource PlayerGlassTopBrush}"
+                IsHitTestVisible="False"
+                Visibility="{x:Bind ViewModel.SubtitleVisibility, Mode=OneWay}">
+                <TextBlock
+                    x:Name="SubtitleText"
+                    FontSize="{StaticResource EgSublineFontSize}"
+                    FontStyle="Italic"
+                    Foreground="{StaticResource PlayerInkMetaBrush}"
+                    VerticalAlignment="Center"
+                    MaxLines="1"
+                    TextTrimming="CharacterEllipsis">
+                    <Run Text="└ " /><Run Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" />
+                </TextBlock>
+            </Border>
+        </Grid>
+
+        <!-- 播放统计面板 2026-09-22 起不在这棵树上：它由 mpv 自己画进 OSD 层（中文覆盖版脚本装箱在
+             mpv-ui/scripts/stats.lua，装配见 Core 的 MpvStats）。集成模式的画面本来就是 mpv 的输出，
+             所以它照样出现在这里；绘制、读数、按键与生命周期都归 mpv —— 因为验收要的是「统计项与参考
+             项目逐项一致」加「全中文」，而自绘的那十一行两条都做不到。 -->
+
+        <!-- A linear, filled volume rail; the mute button is its bottom cell. -->
+        <Border x:Name="Rail" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,20,0"
+                Width="40" Background="{StaticResource PlayerRailBrush}" Opacity="0" IsHitTestVisible="False">
+            <Border.OpacityTransition><ScalarTransition Duration="0:0:0.22" /></Border.OpacityTransition>
+            <StackPanel x:Name="RailStack" Spacing="0">
+                <Grid x:Name="VolumeTrack" Height="280" SizeChanged="OnVolumeTrackResized">
+                    <local:PlayerSlider x:Name="VolumeSlider" x:Uid="PlayerPage_VolumeSlider" Style="{StaticResource BlockSliderStyle}"
+                            Orientation="Vertical" Width="40" Minimum="0" Maximum="{x:Bind ViewModel.VolumeMaximum, Mode=OneWay}"
+                            StepFrequency="1" IsThumbToolTipEnabled="False" Value="{x:Bind ViewModel.Volume, Mode=TwoWay}" />
+                    <Border x:Name="VolumeHundredMark" Height="2" VerticalAlignment="Top" BorderThickness="6,0,6,0"
+                            BorderBrush="{StaticResource PlayerStageBrush}" IsHitTestVisible="False" />
+                    <TextBlock x:Name="VolumeText" Text="{x:Bind ViewModel.VolumeLabel, Mode=OneWay}" Margin="0,0,0,8"
+                               HorizontalAlignment="Center" VerticalAlignment="Bottom" Foreground="{StaticResource PlayerInkBrush}"
+                               AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" />
+                    <Grid x:Name="VolumeFilledLabel" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                        <Grid.Clip><RectangleGeometry x:Name="VolumeLabelClip" /></Grid.Clip>
+                        <TextBlock Text="{x:Bind ViewModel.VolumeLabel, Mode=OneWay}" Margin="0,0,0,8"
+                                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Foreground="{StaticResource PlayerStageBrush}" />
+                    </Grid>
+                </Grid>
+                <Button x:Name="MuteButton" x:Uid="PlayerPage_MuteButton" Click="OnToggleMute" Width="40" Height="40"
+                        Style="{StaticResource OsdButtonStyle}" Padding="0" AutomationProperties.AcceleratorKey="M">
+                    <FontIcon x:Name="MuteGlyph" Glyph="{x:Bind ViewModel.SoundGlyph, Mode=OneWay}" Style="{StaticResource RailGlyphStyle}" />
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- ================= 跳过片头/片尾 =================
+
+             The one button here whose name is bound rather than written: what it says depends on what is
+             being offered （跳过片头, 跳过片尾, 跳过预告）, so a fixed name would be wrong half the time.
+             It needs a declared name at all because its content is a panel — a button announces its own
+             content only when that content is text, and 「跳过片头」 sitting one level down inside a
+             StackPanel is not text as far as the announcement is concerned. Measured: with the name
+             removed this was the single control the narration probe reported as 哑的.
+
+             No bottom inset here either: it sits above the transport bar, and the bar has no declared
+             height at all — two auto rows and its padding, so its height is whatever its buttons and its
+             fonts come to. PlayerPage.PlaceOverlays measures it. The 148 that used to be here was a guess
+             at that height, and one larger font in the transport row would have had this offer drawn
+             across the seek slider.
+
+             厚度加倍（用户令 2026-09-26「跳过片头/片尾的按钮厚度*2」）：垂直 padding 14→28，圆角 20→28、
+             行距 6→10、图标行距 8→10、倒计时条 2→4 一并跟上 —— 只加高不加这些，内容会在加厚后的壳里显得
+             上下两块各漂各的；水平 padding 20→24 让左右留白和新的高度成比例。占位与避让仍由 PlaceOverlays
+             量出来，这里没有需要跟着改的硬编码高度。
+
+             悬停不再变透明（用户令 2026-09-26「鼠标移到按钮上的时候背景会变成透明的」）：默认模板的
+             PointerOver/Pressed 态各拿一套系统 ThemeResource 盖底 —— 深色自定义底上就是「变透明」。修法与
+             ProbeSeekTrack 修滑杆白条同款：在按钮自己的资源字典里把那四个键按回来，底用调色板新添的
+             悬停/按下两支（同一个 Raised，悬停实一档、按下暗一档），边框照旧 PlayerEdgeStrongBrush。 -->
+        <Button
+            x:Name="SkipButton"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            Margin="0,0,21,0"
+            Padding="18,21"
+            Background="{StaticResource PlayerSkipBrush}"
+            BorderBrush="{StaticResource PlayerEdgeStrongBrush}"
+            BorderThickness="1"
+            CornerRadius="21"
+            Command="{x:Bind ViewModel.TakeSkipCommand}"
+            AutomationProperties.Name="{x:Bind ViewModel.SkipCaption, Mode=OneWay}"
+            Visibility="{x:Bind ViewModel.SkipVisibility, Mode=OneWay}">
+            <Button.Resources>
+                <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerSkipHoverBrush" />
+                <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerSkipPressedBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="PlayerEdgeStrongBrush" />
+                <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="PlayerEdgeStrongBrush" />
+            </Button.Resources>
+            <StackPanel x:Name="SkipStack" Spacing="7.5">
+                <StackPanel x:Name="SkipRow" Orientation="Horizontal" Spacing="7.5">
+                    <!-- 字号是这一档的键（窗口档 12；全屏档 15.6 由 ApplySkipScale 摆上）。2026-09-30 减半、
+                         2026-10-01 用户令「调大 1.5 倍」后的落点；不用 OsdGlyphStyle 那个 16。 -->
+                    <FontIcon x:Name="SkipGlyph" Glyph="&#xE893;" FontSize="{StaticResource PlayerSkipGlyphFontSize}"
+                              FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" />
+                    <TextBlock x:Name="SkipText" Text="{x:Bind ViewModel.SkipCaption, Mode=OneWay}" FontSize="{StaticResource PlayerSkipCaptionFontSize}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="SkipTip" Text="{x:Bind ViewModel.SkipTip, Mode=OneWay}" Foreground="{StaticResource PlayerInkFaintBrush}" FontSize="{StaticResource PlayerSkipTipFontSize}" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <!-- The offer's own fifteen seconds, drawn rather than merely counted: a button that is
+                     about to lapse should look like one. SkipPrompt.Remaining runs 1 down to 0.
+
+                     Raw, like the other three bars that are pictures of something already said in words:
+                     inside a button it would otherwise be read out as a second child with a percentage,
+                     and 「跳过片头 15 秒后消失 · 87%」 is not the button's name. -->
+                <ProgressBar
+                    x:Name="SkipCountdown"
+                    Height="3"
+                    Maximum="1"
+                    Minimum="0"
+                    Value="{x:Bind ViewModel.SkipRemaining, Mode=OneWay}"
+                    AutomationProperties.AccessibilityView="Raw"
+                    Background="{StaticResource PlayerLineBrush}"
+                    Foreground="{StaticResource PlayerInkFaintBrush}" />
+            </StackPanel>
+        </Button>
+
+        <!-- The timeline shares the bottom edge with uosc; its controls sit above it.
+             2026-09-27 晚用户令「移除集成模式进度条上方的一大块背景」：控制条原先铺的那层半透明近黑
+             （PlayerGlassBrush，不透明度 GlassAlpha=0x40）整块撤掉 —— 按钮与进度条现在直接压在画面上。
+             进度条那一行仍有自己的轨道底（SeekTrack 的 PlayerRailBrush），所以拖拽目标照旧看得见；
+             只去掉「按钮那一行」背后那块罩子。标题条（TitleStrip）那支玻璃不受影响。 -->
+        <Grid x:Name="Bar" VerticalAlignment="Bottom"
+              SizeChanged="OnBarResized" Visibility="Collapsed">
+            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="31" /></Grid.RowDefinitions>
+            <Grid x:Name="TransportRow" Margin="8,8,8,8" ColumnSpacing="2" SizeChanged="OnTransportResized"
+                  PointerMoved="OnTransportPointerMoved" PointerExited="OnTransportPointerExited">
+                <!-- 这一整排按钮的悬停/按下两档（用户令 2026-09-29「集成模式进度条上方的按钮，鼠标移动到按钮上
+                     时背景过于透明，请参考右上角的按钮进行修改」）：照右上那几颗的同一套 —— 框架模板那两态
+                     的默认底压在画面上几乎看不见（「过于透明」的就是它），把那四个键按到调色板上：底＝半透明
+                     的白（悬停 0xCC／按下 0xE6，同 PlayerPalette.StripHoverAlpha 那笔账），前景＝白底上的深墨。
+                     **一排 13 颗、每颗自己一份**（下面各自的 Button.Resources，与右上那批、跳过那颗同一手法）：
+                     第一版写在 TransportRow 的行字典里图省事，当轮自检红 —— 事后查明红的主因是自检把
+                     ArrangeTransport **收掉的按钮**也拿去量（模板不物化，读回空，红得冤枉；在屏的那四颗走
+                     行字典倒是过的）。但那轮已经多花一趟，这里就不再替「祖先字典」那一路赌第二轮，
+                     换成全页统一的每颗自己的一份。图标墨色那半不在这里 —— 模板换不到 FontIcon 的
+                     Foreground，由 SetTransportGlyphInk 随指针一笔笔写（与右上同一句，见 PlayerPage.Input.cs）。 -->
+                <!-- 按钮条按指针离底边的近度淡入（用户令 2026-09-27「参独占模式鼠标位置越靠近窗口下方按钮条
+                     越明显」）：强度是 ChromeReveal.BarStrength，页面写在这一行的 Opacity 上；进度条（下面的
+                     SeekTrack）用同一条强度长高。只淡按钮这一行，进度条那一行另走裁剪生长。 -->
+                <Grid.OpacityTransition>
+                    <ScalarTransition Duration="0:0:0.22" />
+                </Grid.OpacityTransition>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel x:Name="TransportLeft" Orientation="Horizontal" Spacing="2" VerticalAlignment="Bottom">
+                    <Button x:Name="PreviousButton" x:Uid="PlayerPage_PreviousButton" Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.PreviousEpisodeCommand}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE892;" Style="{StaticResource TransportGlyphStyle}" />
+                    </Button>
+                    <Button x:Name="PlayButton" x:Uid="PlayerPage_PlayButton" Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.TogglePauseCommand}" AutomationProperties.AcceleratorKey="Space">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon x:Name="PlayGlyph" Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" Style="{StaticResource TransportGlyphStyle}" />
+                    </Button>
+                    <Button x:Name="NextButton" x:Uid="PlayerPage_NextButton" Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.NextEpisodeCommand}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE893;" Style="{StaticResource TransportGlyphStyle}" />
+                    </Button>
+                    <Button x:Name="TransportStatsButton"  Style="{StaticResource TransportButtonStyle}" Command="{x:Bind ViewModel.CycleStatsCommand}" AutomationProperties.Name="统计" ToolTipService.ToolTip="统计">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE9D9;" Style="{StaticResource TransportGlyphStyle}" />
+                    </Button>
+                    <Button x:Name="ChapterButton"  Style="{StaticResource TransportButtonStyle}" AutomationProperties.Name="章节" ToolTipService.ToolTip="章节">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE8FD;" Style="{StaticResource TransportGlyphStyle}" />
+                        <Button.Flyout><MenuFlyout x:Name="ChapterMenu" Placement="Top" Opening="OnChapterMenuOpening" /></Button.Flyout>
+                    </Button>
+                    <Button x:Name="EpisodeButton" x:Uid="PlayerPage_EpisodeButton" Style="{StaticResource TransportButtonStyle}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE8F1;" Style="{StaticResource TransportGlyphStyle}" />
+                        <Button.Flyout><MenuFlyout x:Name="EpisodeMenu" Placement="Top" Opening="OnEpisodeMenuOpening" /></Button.Flyout>
+                    </Button>
+                    <Button x:Name="VersionButton" x:Uid="PlayerPage_VersionButton" Style="{StaticResource TransportButtonStyle}">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE8B7;" Style="{StaticResource TransportGlyphStyle}" />
+                        <Button.Flyout><MenuFlyout x:Name="VersionMenu" Placement="Top" Opening="OnVersionMenuOpening" /></Button.Flyout>
+                    </Button>
+                </StackPanel>
+                <StackPanel x:Name="TransportMiddle" Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Bottom">
+                    <Button x:Name="PreviousChapterButton" VerticalAlignment="Bottom"  Style="{StaticResource TransportButtonStyle}" Click="OnPreviousChapter" AutomationProperties.Name="上一章节" ToolTipService.ToolTip="上一章节">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE892;" Style="{StaticResource TransportGlyphStyle}" />
+                    </Button>
+                    <Grid x:Name="SpeedStrip" Width="146" Height="42" Background="{StaticResource PlayerRailBrush}">
+                        <local:PlayerSlider x:Name="InlineSpeedSlider" Style="{StaticResource BlockSliderStyle}"
+                                            Minimum="0.1" Maximum="20" StepFrequency="0.1" SmallChange="0.1" LargeChange="0.5"
+                                            Foreground="Transparent" IsThumbToolTipEnabled="False"
+                                            Value="{x:Bind ViewModel.SpeedValue, Mode=TwoWay}" AutomationProperties.Name="播放速度"
+                                            ToolTipService.ToolTip="滚轮调速，左右拖动，右键恢复 1×" />
+                        <TextBlock Text="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                   Foreground="{StaticResource PlayerInkBrush}" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw" />
+                        <Canvas x:Name="SpeedNotches" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw" />
+                        <Path Data="M 0,4 L 4,0 L 8,4 Z" Fill="{StaticResource PlayerInkBrush}" HorizontalAlignment="Center"
+                              VerticalAlignment="Bottom" Margin="0,0,0,2" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw" />
+                    </Grid>
+                    <Button x:Name="SpeedButton"
+                x:Uid="PlayerPage_SpeedButton" Content="{x:Bind ViewModel.SpeedLabel, Mode=OneWay}" Style="{StaticResource TransportButtonStyle}" Width="64" Visibility="Collapsed">
+                        <!-- 文字倍速键同一套悬停（内容是 TextBlock，跟着模板前景走，白底上字转深）。 -->
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <Button.Flyout>
+                            <Flyout x:Name="SpeedWheelFlyout" Placement="Top" Opened="OnSpeedWheelOpened" Closed="OnSpeedWheelClosed">
+                                <Flyout.FlyoutPresenterStyle>
+                                    <Style TargetType="FlyoutPresenter">
+                                        <!-- 壳一层全部脱掉：底、边、内边距、圆角、阴影都归下面这块面板自己画，
+                                             否则菜单壳的浅色底会从轮盘四周露出一圈。 -->
+                                        <Setter Property="Background" Value="Transparent" />
+                                        <Setter Property="BorderThickness" Value="0" />
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="CornerRadius" Value="0" />
+                                        <Setter Property="IsDefaultShadowEnabled" Value="False" />
+                                    </Style>
+                                </Flyout.FlyoutPresenterStyle>
+                                <Border
+                                    x:Name="SpeedWheelPanel"
+                                    Width="104"
+                                    Height="252"
+                                    Background="{StaticResource PlayerRailBrush}"
+                                    CornerRadius="20">
+                                    <Grid>
+                                        <!-- 中线高亮带：当前值停的那一格。IsHitTestVisible=False —— 拖拽的
+                                             手从头到尾只归面板一家记，刻度与高亮带都不许抢。 -->
+                                        <Border
+                                            Height="40"
+                                            Margin="10,0"
+                                            VerticalAlignment="Center"
+                                            Background="{StaticResource PlayerTrackBrush}"
+                                            CornerRadius="10"
+                                            IsHitTestVisible="False" />
+                                        <!-- 刻度带：刻度由代码摆上来（PlayerPage.SpeedWheel.BuildSpeedWheel），
+                                             Canvas.Top 按 SpeedWheel.TickOffset 逐拍走。 -->
+                                        <Canvas x:Name="SpeedWheelTrack" />
+                                    </Grid>
+                                </Border>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button x:Name="NextChapterButton" VerticalAlignment="Bottom"  Style="{StaticResource TransportButtonStyle}" Click="OnNextChapter" AutomationProperties.Name="下一章节" ToolTipService.ToolTip="下一章节">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE893;" Style="{StaticResource TransportGlyphStyle}" />
+                    </Button>
+                </StackPanel>
+                <StackPanel x:Name="TransportRight" Grid.Column="4" Orientation="Horizontal" Spacing="2" VerticalAlignment="Bottom">
+                    <!-- 字幕、音轨与全屏之间的空位（用户令 2026-09-29「集成模式右下角的字幕和音轨键向左移一个键的
+                         空位（参考独占模式）」）：独占那边是 uosc 控制条音频与全屏之间的 `gap:1`（main.lua
+                         MOMOKA[controls]），净宽＝行内缝＋一格（窗口 2＋32、全屏 3＋42）。这边把空位写成
+                         AudioButton 的右边距（＝格宽，XAML 初值 32 是窗口档），行缝由 StackPanel 的 Spacing 在
+                         它右侧补上，全屏键照旧钉在右缘；全屏/最大化档随 ApplyTransportScale 摆成 42。 -->
+                    <Button x:Name="SubtitleButton" x:Uid="PlayerPage_SubtitleButton" Style="{StaticResource TransportButtonStyle}" >
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xED1E;" Style="{StaticResource TransportGlyphStyle}" />
+                        <Button.Flyout><MenuFlyout x:Name="SubtitleMenu" Placement="Top" Opening="OnSubtitleMenuOpening" /></Button.Flyout>
+                    </Button>
+                    <Button x:Name="AudioButton" x:Uid="PlayerPage_AudioButton" Style="{StaticResource TransportButtonStyle}" Margin="0,0,32,0" >
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon Glyph="&#xE8D6;" Style="{StaticResource TransportGlyphStyle}" />
+                        <Button.Flyout><MenuFlyout x:Name="AudioMenu" Placement="Top" Opening="OnAudioMenuOpening" /></Button.Flyout>
+                    </Button>
+                    <Button x:Name="FullscreenButton" x:Uid="PlayerPage_FullscreenButton" Style="{StaticResource TransportButtonStyle}" Click="OnToggleFullscreen" AutomationProperties.AcceleratorKey="F">
+                        <Button.Resources>
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="PlayerStripHoverBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="PlayerStripPressedBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="PlayerStripHoverInkBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="PlayerStripHoverInkBrush" />
+                        </Button.Resources>
+                        <FontIcon x:Name="FullscreenGlyph" Glyph="&#xE740;" Style="{StaticResource TransportGlyphStyle}" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+            <Grid x:Name="SeekTrack" Grid.Row="1" Height="31" VerticalAlignment="Bottom" Background="Transparent" SizeChanged="OnSeekTrackResized">
+                <!-- 进度条那一行自己的底（用户令 2026-09-28 晚「亚克力效果时有时无，去掉亚克力效果吧」）：
+                     2026-09-28 白天它曾是「视频取样底图 ＋ AcrylicBrush」两层（取样成功才摆上来），但取样被
+                     seek/拖动/换片一次次作废，两层跟着一次次熄掉 —— 用户看到的就是「时有时无」。两层都拆了，
+                     TimelineMaterial 只剩一支**恒定**的半透明底色：高级效果开着是 _timelineFallback
+                     （TimelineChapterMap.Background 的 0x70），关了是实色 _timelinePaper，高对比度是系统底色
+                     —— 换挡逻辑在 UpdateTimelineMaterial，与亚克力时代相同，只是不再有「取样成功才显示」的那一档。
+                     独占模式 uosc 时间轴压在画面上的也是一层恒定的半透明深色，两边现在一致。 -->
+                <Grid x:Name="TimelineMaterial" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw" />
+                <local:PlayerSlider x:Name="SeekSlider" x:Uid="PlayerPage_SeekSlider" Style="{StaticResource BlockSliderStyle}"
+                        Minimum="0" Maximum="1000" StepFrequency="0.001" VerticalAlignment="Stretch"
+                        IsThumbToolTipEnabled="False" Value="{x:Bind ViewModel.SeekValue, Mode=TwoWay}" />
+                <Canvas x:Name="CacheBar" AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" />
+                <Canvas x:Name="TimelineSections" AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" />
+                <Border Height="1" VerticalAlignment="Top" Background="{StaticResource PlayerStageBrush}" IsHitTestVisible="False" />
+                <Canvas x:Name="ChapterTicks" Height="1" VerticalAlignment="Top" AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" />
+                <Canvas x:Name="TimelineLoops" AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" />
+                <Grid x:Name="TimelineLabels" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                    <TextBlock x:Name="PositionText" Margin="8,0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                               Text="{x:Bind ViewModel.PositionClock, Mode=OneWay}" Foreground="{StaticResource PlayerInkBrush}" />
+                    <TextBlock x:Name="DurationText" Margin="8,0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{x:Bind ViewModel.RemainingClock, Mode=OneWay}" Foreground="{StaticResource PlayerInkBrush}" />
+                    <TextBlock x:Name="TimelineBufferedText" HorizontalAlignment="Left" VerticalAlignment="Center"
+                               FontSize="{StaticResource EgCaptionFontSize}" Foreground="{StaticResource PlayerInkBrush}" Opacity="0.6" Visibility="Collapsed" />
+                </Grid>
+                <Grid x:Name="TimelinePlayedLabels" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                    <Grid.Clip><RectangleGeometry x:Name="TimelineLabelClip" /></Grid.Clip>
+                    <TextBlock Margin="8,0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                               Text="{x:Bind ViewModel.PositionClock, Mode=OneWay}" Foreground="{StaticResource PlayerStageBrush}" />
+                    <TextBlock Margin="8,0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{x:Bind ViewModel.RemainingClock, Mode=OneWay}" Foreground="{StaticResource PlayerStageBrush}" />
+                    <TextBlock x:Name="TimelineBufferedPlayedText" HorizontalAlignment="Left" VerticalAlignment="Center"
+                               FontSize="{StaticResource EgCaptionFontSize}" Foreground="{StaticResource PlayerStageBrush}" Opacity="0.6" Visibility="Collapsed" />
+                </Grid>
+                <Border x:Name="SeekHoverLine" Width="1" Opacity="0.33" HorizontalAlignment="Left" Background="{StaticResource PlayerInkBrush}" Visibility="Collapsed" IsHitTestVisible="False" />
+            </Grid>
+        </Grid>
+
+        <!-- ================= 浮层收起时的细进度线 =================
+             Two pixels at the very bottom edge, shown only while the chrome is hidden: with the bar
+             gone there is nothing on screen that says how far in we are, and the answer is worth two
+             pixels. Not hit-testable — reaching for it reveals the real bar, which is the thing that
+             can be dragged. Inverse of Bar's visibility, so the two are never both up. -->
+        <Grid x:Name="ThinLine" Height="2" VerticalAlignment="Bottom"
+              AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" Visibility="Collapsed">
+            <ProgressBar x:Name="ThinProgress" Height="2" Maximum="1" Minimum="0"
+                         Value="{x:Bind ViewModel.ThinFraction, Mode=OneWay}"
+                         Background="{StaticResource PlayerLineBrush}" Foreground="{StaticResource PlayerInkSoftBrush}" />
+            <Canvas x:Name="ThinTimelineCache" />
+            <Canvas x:Name="ThinTimelineSections" />
+        </Grid>
+
+        <!-- ================= 暂停/播放提示 =================
+             「暂停后显示一秒暂停图标就行（开启播放也弄个一秒的动画），别什么进度条标题音量条都持久显示在
+             画面上」. Pausing used to pin the whole chrome — bar, title strip and volume rail — for as long
+             as the file stayed paused, on the reasoning that a frozen frame has nothing to watch so the way
+             out should stay visible. But 「the way out」 is one bit of information, and three overlays is not
+             how you spell it: they cover the frame the pause was called to look at. So the pin is gone (see
+             OnStatusApplied) and this is what says it instead — one glyph, in the middle, for a second.
+
+             The one animation in this file, and the exception to the header's 「no storyboards anywhere」.
+             That rule is about reveals the pointer asks for: a control you are already reaching for must be
+             there the instant you arrive, and a fade only delays it. This is the opposite kind of thing —
+             nobody is reaching for it, it appears and leaves on its own, and 「弄个一秒的动画」 is the request.
+             A badge that simply blinked on and off for a second would read as a glitch; growing and fading
+             reads as an acknowledgement.
+
+             Not hit-testable, and starts collapsed with zero opacity so a layout pass before the first
+             pause cannot flash it.
+
+             「不要黑色的圆形边框，只要白色的三角形就可以，然后再放大一些」 took away the dark plate and its
+             hairline ring; 「暂停和开始的图标太丑了弄一个白色三角形方块和两个白色的长方块就可以」 took away the
+             icon font as well; and 「点击画面暂停和开始的图标要纯白色，去掉灰色」 (2026-09-05) took away the last
+             thing that was not white — the same geometry stroked more heavily behind it, which came out as a
+             5-pixel grey rim hugging the shape. What is left is one white shape, and the cost of that is
+             recorded rather than argued with: over a nearly white frame it is not visible at all.
+
+             「播放页面暂停和开始的图标太丑了，你换一个」 (2026-09-06) is the latest word, and this time what he
+             was looking at was the shape itself: sharp-corners-plus-stroke comes out hard-edged, every corner
+             rounded only six pixels and the play triangle ending in a point. PulseArt now draws the rounded
+             corners into the geometry — pause is two capsule bars (corner radius = half the bar width), play a
+             triangle whose base corners round 12 and whose tip rounds 22 — at the same outer sizes as before,
+             so the swap changes the softness and not the weight. Fill only: with the corners in the geometry
+             there is no stroke to fill, and the self-check holds that line.
+
+             The Canvas must keep its Width and Height. A Canvas does not measure its children, so dropping
+             them measures the whole badge as 0×0 — nothing on screen, and every other reading still correct.
+             It is a Canvas rather than a Grid so the path draws from (0,0) and is therefore centred by
+             construction: inside a Grid it would be centred on its own DesiredSize instead, which is what the
+             box's own margin (PulseArt.Box) is there to leave room for. -->
+        <Border
+            x:Name="PulseBadge"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            AutomationProperties.AccessibilityView="Raw"
+            IsHitTestVisible="False"
+            Opacity="0"
+            RenderTransformOrigin="0.5,0.5"
+            Visibility="Collapsed">
+            <Border.RenderTransform>
+                <ScaleTransform x:Name="PulseScale" ScaleX="1" ScaleY="1" />
+            </Border.RenderTransform>
+            <Canvas x:Name="PulseArtBox" Width="136" Height="136">
+                <Path
+                    x:Name="PulseShape"
+                    Fill="{StaticResource PlayerPulseBrush}" />
+            </Canvas>
+        </Border>
+        <!-- ================= 章节缩略图 =================
+             Emby's own chapter still for wherever the pointer is over the seek bar. The server drew
+             these when it scanned the file, so this is a cache read rather than a decode — mpv cannot
+             be asked for a frame it is not currently showing without seeking to it, and seeking to
+             every pixel the pointer crosses is not a preview.
+
+             A server that extracted no chapter images has none to send, and quite a few do not: the
+             extraction is off by default on some builds and skipped for some containers. So the picture
+             is collapsed rather than left as an empty frame — 「预览没有画面」 was a 212×119 hole with a
+             chapter name under it — and what is left is an honest chip: which chapter, and the moment
+             the pointer is on.
+
+             Each of the three lines stands on its own, because a file can be missing any of them. No
+             chapter marks at all — which is a whole class of server, not an edge case — leaves the time
+             by itself, and that is still worth showing: the slider's own tooltip appears only while the
+             thumb is being dragged, so hovering the bar would otherwise read as nothing at all.
+
+             Positioned in code: Left/Top alignment plus a TranslateTransform the page sets from
+             SeekTrack's own position, which is the only way the popup can sit above the bar without
+             this file knowing how tall the bar happens to be. -->
+        <Border
+            x:Name="ChapterPeek"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            Padding="4"
+            AutomationProperties.AccessibilityView="Raw"
+            Background="{StaticResource PlayerPeekBrush}"
+            BorderBrush="{StaticResource PlayerEdgeBrush}"
+            BorderThickness="1"
+            CornerRadius="2"
+            IsHitTestVisible="False"
+            Visibility="Collapsed">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="ChapterPeekOffset" />
+            </Border.RenderTransform>
+            <StackPanel Spacing="4">
+                <Image
+                    x:Name="ChapterImage"
+                    Source="{x:Bind ViewModel.ChapterStill, Mode=OneWay}"
+                    Width="212"
+                    Height="119"
+                    Stretch="UniformToFill"
+                    Visibility="{x:Bind ViewModel.ChapterStillVisibility, Mode=OneWay}" />
+                <TextBlock
+                    x:Name="ChapterCaption"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="{StaticResource PlayerInkSoftBrush}"
+                    HorizontalAlignment="Center"
+                    FontWeight="SemiBold"
+                    MaxLines="3"
+                    MaxWidth="360"
+                    TextWrapping="Wrap"
+                    Text="{x:Bind ViewModel.ChapterCaption, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis"
+                    Visibility="{x:Bind ViewModel.ChapterCaptionVisibility, Mode=OneWay}" />
+
+                <!-- The hovered moment. The slider's own thumb tooltip only appears while the thumb is
+                     being dragged, so hovering the track had no time readout at all. -->
+                <TextBlock
+                    x:Name="ChapterClock"
+                    FontFamily="Consolas,Cascadia Mono,Segoe UI"
+                    FontSize="{StaticResource EgCaptionFontSize}"
+                    Foreground="{StaticResource PlayerInkDimBrush}"
+                    HorizontalAlignment="Center"
+                    Text="{x:Bind ViewModel.ChapterClock, Mode=OneWay}" />
+            </StackPanel>
+        </Border>
+
+        <!-- ================= 换集时的遮挡层 =================
+             Requirement 12. The video surface and mpv's child inside it both stay alive across an
+             episode change, which is what stops the window from collapsing and rebuilding — but it
+             also means the last frame of the finished episode sits there while mpv tears down one
+             file and opens the next at whatever size and format it turns out to be. Nothing is wrong
+             with the decode; it is simply nobody's job to have painted over it. This is that job.
+
+             Opaque, and above everything else in the grid, so it cannot lose the race the WinForms
+             cover kept losing. -->
+        <!-- 换集时立即盖住旧帧；首帧与输出尺寸就绪之后再淡出，见 PlayerPage.Cover.cs。 -->
+        <Grid x:Name="Cover" Background="{StaticResource PlayerCoverBrush}" Visibility="Collapsed">
+            <!-- 「视频刚开播还在加载缓存没有正片画面时背景要用背景图，全屏播放时背景图要占满全屏，别只在
+                 左上角显示」（2026-09-15）。遮罩网格本身铺满整个窗口（全屏时就是整个屏幕），垫底图用
+                 UniformToFill 跟着占满、不留边也不变形；压到半透明，进度环和文字才读得清，取不到图时
+                 Source 为空，垫底照旧退回纯色。装饰图，不参与命中与朗读。 -->
+            <Grid x:Name="CoverArtwork" Opacity="0.5" IsHitTestVisible="False"
+                  AutomationProperties.AccessibilityView="Raw">
+                <Grid.Background>
+                    <ImageBrush ImageSource="{x:Bind ViewModel.CoverBackdrop, Mode=OneWay}"
+                                Stretch="UniformToFill" AlignmentX="Center" AlignmentY="Center" />
+                </Grid.Background>
+            </Grid>
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
+                <!-- IsActive follows the cover rather than sitting on True. A ProgressRing animates through
+                     the compositor, which does not stop because an ancestor is collapsed — and this page is
+                     built when the shell starts, so a ring left active would be spinning behind a collapsed
+                     grid from launch until exit, for every minute the app is not changing episodes. Bound to
+                     CoverUp rather than to the Visibility it produces so there is one source for the state. -->
+                <ProgressRing
+                    x:Name="CoverRing"
+                    IsActive="{x:Bind ViewModel.CoverUp, Mode=OneWay}"
+                    Width="40"
+                    Height="40"
+                    AutomationProperties.AccessibilityView="Raw" />
+                <TextBlock x:Name="CoverText" HorizontalAlignment="Center" Foreground="{StaticResource PlayerInkDimBrush}" Text="{x:Bind ViewModel.CoverMessage, Mode=OneWay}" />
+            </StackPanel>
+        </Grid>
+    </local:PictureSurface>
+</UserControl>

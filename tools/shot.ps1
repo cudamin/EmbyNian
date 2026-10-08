@@ -2,7 +2,7 @@
 # Screen capture rather than PrintWindow: the UI is a XAML island composited by DWM, and PrintWindow
 # on the host HWND returns the erased background without the island's content.
 param(
-    [string]$Exe = "src\EmbyNian.Shell\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\EmbyNian.exe",
+    [string]$Exe = "src\Momoka.Shell\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\Momoka.exe",
     [string]$Out = "shell.png",
     # Long enough for the saved token, the library list and the home page's three requests: the shot
     # is of real server data now, not of a mock grid that was up the moment the window was.
@@ -65,10 +65,10 @@ public static class Shot {
 "@
 
 if ($Attach) {
-    $process = Get-Process -Name "EmbyNian" -ErrorAction SilentlyContinue |
+    $process = Get-Process -Name "Momoka" -ErrorAction SilentlyContinue |
         Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
         Select-Object -First 1
-    if (-not $process) { throw "没有正在运行的 EmbyNian 窗口可供附着" }
+    if (-not $process) { throw "没有正在运行的 Momoka 窗口可供附着" }
 }
 else {
     $launch = @{ FilePath = (Resolve-Path $Exe); PassThru = $true }

@@ -1,4 +1,4 @@
-# EmbyNian code style.
+# Momoka code style.
 #
 # winui-code-review's references/quality-rules.md says 「the project's .editorconfig is the source of
 # truth for code style」 and names three rules by hand: private fields use _camelCase, file-scoped

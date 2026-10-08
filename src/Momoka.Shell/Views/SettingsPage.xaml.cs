@@ -1,0 +1,538 @@
+using Momoka.Infrastructure;
+using Momoka.Configuration;
+using Momoka.Diagnostics;
+using Momoka.MoviePilot;
+using Momoka.Playback;
+using Momoka.Services;
+using Momoka.Shell.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Navigation;
+
+namespace Momoka.Shell.Views;
+
+/// <summary>
+/// What <see cref="SettingsPage"/> needs: somewhere to resolve its services from, and which entry in the
+/// left-hand list to open on; see <see cref="LibraryRequest"/> for why it is passed rather than reached for.
+/// <para>
+/// <paramref name="Category"/> is what makes 服务器 and 诊断 reachable from anywhere: both are entries in
+/// this page's own list now (需求 2), so 「open 设置 on 诊断」 is one navigation rather than a page of its
+/// own. Empty means 「wherever it was left」 — the page is cached, and re-opening it on the card the user was
+/// last reading is the reason it is.
+/// </para>
+/// </summary>
+internal sealed record SettingsRequest(IServiceProvider Services, string Category = "");
+
+/// <summary>
+/// 设置页。左侧分类，右侧卡片，播放、字幕、视频输出、音频和着色器的修改会立即写入设置文件。
+/// <para>
+/// What each row is, what it reads and what it writes now lives in <see cref="SettingsViewModel"/>, and what
+/// each row looks like lives in the templates in this page's XAML. What is left here is what only a page can
+/// do: read the navigation parameter, host the pages that are not cards, and answer the self-check.
+/// </para>
+/// <para>
+/// The procedural version this replaces built all sixty-odd rows in C#, which put the labels and ranges, the
+/// layout, and the settings access in one file and gave the page a 703-line code-behind. It also needed two
+/// mechanisms this does not have: a list of refresher closures replayed to push settings into controls, and
+/// a page-wide 「syncing」 flag to stop those pushes from being written straight back. Each row now seeds
+/// itself from its setting once and writes from then on, so neither exists.
+/// </para>
+/// </summary>
+public sealed partial class SettingsPage : Page, IShellContent
+{
+    private const string Category = "设置";
+
+    private SettingsRequest? _request;
+
+    public SettingsPage()
+    {
+        InitializeComponent();
+        CategoryGroupsSource.Source = ViewModel.CategoryGroups;
+        Loaded += (_, _) => QueueSettingsEntrance();
+        Unloaded += (_, _) => StopSettingsEntrance();
+
+        // Kept alive across navigations, which is what makes half-typed text in a box — and which card was
+        // open — survive a trip to another page and back. Signing out drops the frame's content entirely, so
+        // nothing outlives a session; within one, leaving this page no longer costs an edit.
+        NavigationCacheMode = NavigationCacheMode.Required;
+
+        // 「恢复默认设置」按下之后要问一次，而对话框要这一页的 XamlRoot（见 ConfirmDialog）。同 ServersPage 的
+        // 那一句，也是同一个理由：视图模型手上只有问题和答案，摆得出对话框的只有页面。
+        ViewModel.UseConfirm(ConfirmDialog.For(this));
+
+        // 「关于」卡上的「备份配置文件」「恢复配置」两颗按钮要弹文件框，而文件框同样要这一页的 XamlRoot 才拿得到
+        // 窗口句柄（见 SettingsFile）。同上一句一手交出去。
+        ViewModel.UseFilePickers(SettingsFile.SaveFor(this), SettingsFile.OpenFor(this));
+
+        // The two hosted entries are selected the same way a card is, so the frame that holds them has to
+        // follow the selection rather than only the navigation parameter.
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.SelectedCategory))
+            {
+                ShowHosted();
+                QueueSettingsEntrance();
+            }
+        };
+    }
+
+    internal SettingsViewModel ViewModel { get; } = new();
+
+    internal bool IsReady => ViewModel.IsReady;
+
+    /// <summary>
+    /// Whether the 字幕 card's font picker holds the machine's families yet. Read by the self-check only:
+    /// the scan lands a moment after the page does, and a report written in that moment would be a report
+    /// about a list that had not arrived.
+    /// </summary>
+    internal bool FontsReady => ViewModel.FontsReady;
+
+    /// <summary>The font picker, put through a search and put back. Null before the 字幕 card exists.</summary>
+    internal SettingFontRow.Probe? MeasureFontPicker() => ViewModel.MeasureFontPicker();
+
+    /// <summary>
+    /// 自检：主题色板 —— 那一行自己答的几件事（见 <see cref="SettingThemeRow.Measure"/>），加上屏上真的画出
+    /// 了几块。null 表示界面那张卡片还没建出来。
+    /// <para>
+    /// 后半句非得在树上数不可：色板缺席在别的读数里一点动静都没有 —— 那一行本身照样是一个行容器，
+    /// <see cref="Realised"/> 照样把它数进去。模板选择器少一个 case、或者模板里写错一个资源键，屏上就是一行
+    /// 标题底下空着一块，而这一页每一个数字都对得上。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureThemeSwatches()
+    {
+        if (ViewModel.Themes is not { } row) return null;
+
+        var drawn = 0;
+        CountSwatches(this, ref drawn);
+
+        var probe = row.Measure();
+        return (probe.Ok && drawn == row.Swatches.Count, $"{probe.Detail}；屏上 {drawn} 块");
+    }
+
+    /// <summary>
+    /// 自检：主页版面那张表 —— 那一行自己答的（见 <see cref="SettingsViewModel.MeasureHomeRows"/>），加上屏上
+    /// 真的画出了几行、那几行装不装得下。null 表示主页那张卡片还没建出来。
+    /// <para>
+    /// 屏上那半非得在树上数：模板选择器少一个 case，屏上就是一行标题底下空着一块，而这一页别的数字一个都不会动
+    /// （同 <see cref="MeasureThemeSwatches"/>）。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureHomeRows()
+    {
+        if (ViewModel.MeasureHomeRows() is not { } probe) return null;
+
+        var drawn = 0;
+        CountHomeRows(this, ref drawn);
+
+        var expected = ViewModel.HomeRows?.Rows.Count ?? 0;
+
+        // 那张表是给死了高度的（ListHeight），所以一行只要变高，末一排就落在框外面 —— 而它照样算「画出来了」，
+        // 上面那两个数一个都不会动。往一行里加控件（那两颗箭头就是）之后最容易踩这一脚。
+        var (fits, room) = HomeRowsFit();
+
+        return (probe.Ok && drawn == expected && fits, $"{probe.Detail}；屏上 {drawn} 行、{room}");
+    }
+
+    /// <summary>
+    /// 那张表装不装得下自己那几行：几行合起来多高，对上表自己多高。见 <see cref="MeasureHomeRows"/>。
+    /// </summary>
+    private (bool Fits, string Detail) HomeRowsFit()
+    {
+        if (FindHomeList(this) is not { } list) return (false, "找不到那张表");
+
+        var tallest = 0d;
+        var stack = 0d;
+
+        for (var index = 0; index < list.Items.Count; index++)
+        {
+            if (list.ContainerFromIndex(index) is not FrameworkElement item) continue;
+
+            tallest = Math.Max(tallest, item.ActualHeight);
+            stack += item.ActualHeight;
+        }
+
+        return (stack > 0 && stack <= list.ActualHeight + 0.5,
+            $"一行最高 {tallest:0}、合起来 {stack:0} 对表高 {list.ActualHeight:0}"
+                + (stack <= list.ActualHeight + 0.5 ? "" : "（末一排落在框外面）"));
+    }
+
+    /// <summary>
+    /// 自检：那张表真换得了次序 —— 「设置里新增拖拽排序」。
+    /// <para>
+    /// 拖那一下没法自动做一遍：这台机器上注不进鼠标事件（见 CLAUDE.md）。所以这一条问两件事。一是拖的那条路按
+    /// 官方那份配方接齐了没有 —— <c>CanReorderItems</c> ＋ <c>AllowDrop</c> 才是「鼠标拖得动」的那两位；
+    /// <c>CanDragItems</c> 管的是把一项当数据拖出去（以及收不收 <c>DragItemsStarting</c>），换位不经过它，每个
+    /// 容器上的 <c>CanDrag</c> 也只是它的回声，所以那一位只报数不判红。二是不使指针的那条路真换得动：那两颗箭头
+    /// 就地在一张三行的假表上按几下（<see cref="SettingHomeLayoutRow.Probe"/>），并且屏上这张表的两头真按
+    /// 「到顶了」置了灰。
+    /// </para>
+    /// <para>
+    /// 一张换不了次序的表在屏上和换得了的长得一模一样，行数、勾选、存档那几行读数也一个都不会差 —— 这一条是那件
+    /// 事唯一的证人。
+    /// </para>
+    /// </summary>
+    internal (bool Ok, string Detail)? MeasureHomeDrag()
+    {
+        if (FindHomeList(this) is not { } list) return null;
+
+        var rows = list.Items.Count;
+        var draggable = 0;
+
+        for (var index = 0; index < rows; index++)
+            if (list.ContainerFromIndex(index) is ListViewItem { CanDrag: true }) draggable++;
+
+        // 屏上这张表的两头：头一行的「上移」和末一行的「下移」是灰的。
+        var table = ViewModel.HomeRows;
+        var ends = table is { Rows.Count: > 1 }
+            && !table.Rows[0].CanUp && table.Rows[0].CanDown
+            && table.Rows[^1].CanUp && !table.Rows[^1].CanDown;
+
+        var arrows = SettingHomeLayoutRow.Probe();
+
+        static string On(bool value) => value ? "开" : "关";
+
+        return (rows > 0 && list.CanReorderItems && list.AllowDrop && arrows.Ok && ends,
+            $"表里 {rows} 行，拖那条路 CanReorderItems {On(list.CanReorderItems)}、"
+                + $"AllowDrop {On(list.AllowDrop)}、ReorderMode {list.ReorderMode}"
+                + $"（另报：CanDragItems {On(list.CanDragItems)}、容器上 CanDrag {draggable} 行，换位用不到）；"
+                + $"箭头那条路 {arrows.Detail}；屏上两头{(ends ? "置了灰" : "没置灰")}");
+    }
+
+    /// <summary>
+    /// What the self-check reports: the cards and rows that were built, and the category on screen.
+    /// </summary>
+    internal (int Sections, int Rows, string SelectedCategory, int VisibleRows) Summary => (
+        ViewModel.Cards.Count,
+        ViewModel.RowCount,
+        SelectedCategory,
+        VisibleRows);
+
+    /// <summary>How many row containers the card currently on screen holds.</summary>
+    internal int VisibleRows => ViewModel.Sections
+        .Where(section => section.IsVisible)
+        .Sum(SettingsViewModel.Containers);
+
+    /// <summary>The cards in order, and the containers each one holds. What the self-check walks.</summary>
+    internal IReadOnlyList<(string Category, int Rows)> Cards => ViewModel.Cards;
+
+    /// <summary>
+    /// The left-hand list. Reported separately from <see cref="Cards"/> so the self-check can check the two
+    /// against each other: the list and the cards are written out by hand in different places, and a typo in
+    /// either is an entry that selects nothing or a card nothing selects.
+    /// </summary>
+    internal IReadOnlyList<string> Categories => ViewModel.Categories;
+
+    /// <summary>
+    /// Shows one card, the same as clicking its entry in the left-hand list — the list's selection is bound
+    /// two-way, so it follows. Settable for the self-check's walk, which has to open each card to make it
+    /// build its rows.
+    /// </summary>
+    internal string SelectedCategory
+    {
+        get => ViewModel.SelectedCategory;
+        set => ViewModel.SelectedCategory = value;
+    }
+
+    /// <summary>
+    /// How many setting rows really made it onto the visual tree, counted off the tree rather than off the
+    /// view model.
+    /// <para>
+    /// The same distinction <see cref="ServersPage.Realised"/> and <see cref="DiagnosticsPage.Realised"/>
+    /// exist for, and it matters more here than on either of them: those pages have one template, this page
+    /// has eight and picks between them at runtime. A bad resource key inside one of them, a literal of the
+    /// wrong type, or a shape the selector has no case for are all invisible to the build and show up as a
+    /// row that is simply not there. Counting the rows that rendered is what turns that into a failure.
+    /// </para>
+    /// <para>
+    /// This counts what is realised now, which is the visible card — collapsed cards do not build their
+    /// rows. So the number to compare it against is <see cref="VisibleRows"/>, not
+    /// <see cref="SettingsViewModel.RowCount"/>, and the self-check walks the categories to reach the
+    /// templates that only later cards use.
+    /// </para>
+    /// </summary>
+    internal int Realised
+    {
+        get
+        {
+            var rows = 0;
+            Count(this, ref rows);
+            return rows;
+        }
+    }
+
+    public object? NavigationRequest => _request;
+
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+
+        if (e.Parameter is not SettingsRequest request)
+        {
+            Log.Warn(Category, "导航参数缺失");
+            return;
+        }
+
+        Tag = "settings";
+
+        // This page is cached, so coming back to it normally means everything is already built — including
+        // any half-typed text in a box, which is the point of caching it. Rebuilt only when the container is
+        // a different one, i.e. after signing out and back in, where every row's closure would otherwise
+        // still be reading the previous session's settings document. The container is what is compared and
+        // not the request: the shell builds a fresh request per navigation, so comparing those would rebuild
+        // the page — and throw the typing away — on every visit.
+        var built = ReferenceEquals(_request?.Services, request.Services) && ViewModel.IsReady;
+
+        _request = request;
+
+        if (!built)
+        {
+            ViewModel.Attach(
+                request.Services.GetRequiredService<ISettingsService>(),
+                request.Services.GetRequiredService<ShaderStaging>(),
+                request.Services.GetRequiredService<FontLibrary>(),
+                request.Services.GetRequiredService<AppPaths>(),
+                request.Services.GetRequiredService<Platform.ISystemLauncher>(),
+                request.Services.GetRequiredService<AudioDeviceCatalogue>(),
+
+                // 字幕外观改一行就推给正在播的那部片子。交出去的是一个方法而不是 PlaybackService 本身：
+                // 这一页要的是「重发一遍字幕外观」这一件事，不是播放器。同 ShellServices 里把后端工厂当方法组
+                // 递出去的写法。
+                request.Services.GetRequiredService<PlaybackService>().ApplySubtitleStyleAsync,
+
+                // 截图保存目录同理：改一行就写进正播那部的 screenshot-directory 属性，交方法不交服务。
+                request.Services.GetRequiredService<PlaybackService>().ApplyScreenshotDirectoryAsync,
+
+                request.Services.GetRequiredService<MoviePilotProbe>(),
+                request.Services.GetRequiredService<MoviePilotCredentials>());
+            _ = ViewModel.ReloadAsync();
+        }
+
+        // Only when the page was cached, i.e. built on an earlier visit: the fresh path's ReloadAsync
+        // already fills the device row. A cached page skips ReloadAsync by design (in-progress edits are
+        // the point), but the device list is a reading, not an edit — it re-enumerates on re-entry.
+        if (built) _ = ViewModel.RefreshAudioDevicesAsync();
+
+        // Both paths, and after the build: the cached path used to return before reading the parameter at
+        // all, which is the whole of 「open 设置 on 诊断」 — the second time it was asked for, it opened on
+        // whatever card was last read instead. ShowHosted is called either way, because a cached page whose
+        // selection is already 诊断 has to put that page back in the frame after a session change dropped it.
+        //
+        // 只有在选择没动的时候才自己喊一次：动了的话 SelectedCategory 的通知已经把 ShowHosted 喊过了（见构造
+        // 函数里那个订阅），紧接着再喊一遍就是把内嵌页面建两次 —— 头一个刚 OnNavigatedTo 就被第二次导航
+        // OnNavigatedFrom 掉。第一次打开「服务器」「诊断」「服务器控制台」正是选择会动的那一次，也就是说这三页
+        // 每一次头回打开都白建一个，控制台那一页还白起一次 WebView2。
+        if (!Select(request.Category)) ShowHosted();
+        QueueSettingsEntrance();
+    }
+
+    /// <summary>
+    /// Opens one entry in the left-hand list. Blank leaves the selection alone — the page is cached, and
+    /// pressing 设置 again is a request to see it, not to go back to the first card. A name the list does not
+    /// hold falls back to the first card rather than selecting nothing, which would show an empty column.
+    /// </summary>
+    /// <returns>
+    /// True when the selection really moved, which means <see cref="ShowHosted"/> has already run off the
+    /// property notification and must not be run again. See the call site.
+    /// </returns>
+    private bool Select(string category)
+    {
+        if (category == "服务器控制台") category = SettingsViewModel.ServerDashboardCategory;
+        if (string.IsNullOrEmpty(category)) return false;
+        if (category == "着色器") category = "视频输出";
+
+        var target = ViewModel.Categories.Contains(category, StringComparer.Ordinal)
+            ? category
+            : SettingsViewModel.FirstCardCategory;
+
+        if (target == ViewModel.SelectedCategory) return false;
+
+        ViewModel.SelectedCategory = target;
+        return true;
+    }
+
+    /// <summary>
+    /// Keeps <c>HostedFrame</c> in step with the selected category: 服务器, 诊断 and 服务器控制台 are pages,
+    /// not cards.
+    /// <para>
+    /// Navigated afresh every time rather than left in place, because all three load when they are navigated
+    /// to and none is worth showing stale — a server list from five minutes ago, a log that stopped tailing
+    /// and a console whose token has since been replaced are exactly what these exist to not be. Selecting a
+    /// card cancels whatever the page had in flight, which is what the frame would have done had we navigated
+    /// away from it.
+    /// </para>
+    /// </summary>
+    private void ShowHosted()
+    {
+        if (_request is null) return;
+
+        if (!ViewModel.ShowsHosted)
+        {
+            (HostedFrame.Content as IShellContent)?.Release();
+            return;
+        }
+
+        var services = _request.Services;
+
+        Type page;
+        object parameter;
+
+        if (ViewModel.SelectedCategory == "服务器")
+        {
+            page = typeof(ServersPage);
+            parameter = new ServerRequest(services);
+        }
+        else if (ViewModel.SelectedCategory == "诊断")
+        {
+            page = typeof(DiagnosticsPage);
+            parameter = new DiagnosticsRequest(services);
+        }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.NotificationsCategory)
+        {
+            page = typeof(NotificationsPage);
+            parameter = new NotificationsRequest(services);
+        }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.ServerDashboardCategory)
+        {
+            page = typeof(ServerDashboardPage);
+            parameter = new ServerDashboardRequest(services, () => ViewModel.SelectedCategory = SettingsViewModel.DashboardCategory);
+        }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.ServerUsersCategory)
+        {
+            page = typeof(ServerUsersPage);
+            parameter = new ServerUsersRequest(services, userId =>
+            {
+                HostedFrame.Navigate(typeof(DashboardPage), new DashboardRequest(services, userId, ShowHosted));
+                HostedFrame.BackStack.Clear();
+            });
+        }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.ServerLibrariesCategory)
+        {
+            page = typeof(ServerLibrariesPage);
+            parameter = new ServerLibrariesRequest(services);
+        }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.DashboardCategory)
+        {
+            page = typeof(DashboardPage);
+            parameter = new DashboardRequest(services);
+        }
+        else
+        {
+            Log.Warn(Category, $"没有页面对应设置分类 {ViewModel.SelectedCategory}");
+            return;
+        }
+
+        HostedFrame.Navigate(page, parameter);
+
+        // Nothing in this frame goes back, and a stack that grows by one per visit keeps a page alive with it.
+        HostedFrame.BackStack.Clear();
+    }
+
+    /// <summary>
+    /// What is really on screen in the right-hand column: the hosted page when one is showing, otherwise
+    /// this page. The self-check reads the settings tree through this, so 服务器 and 诊断 are reported on
+    /// where they now live rather than where they used to be.
+    /// </summary>
+    internal object CurrentPage =>
+        ViewModel.ShowsHosted && HostedFrame.Content is { } hosted ? hosted : this;
+
+    /// <summary>需求 8 的内嵌控制台，只在它正显示时不为 null；自检通过它读那一页的状态。</summary>
+    internal DashboardPage? Dashboard => HostedFrame.Content as DashboardPage;
+
+    /// <summary>「通知」那一页正住在这个框里时的引用；自检读它。</summary>
+    internal NotificationsPage? Notifications => HostedFrame.Content as NotificationsPage;
+
+    /// <summary>
+    /// Drops whatever the hosted frame is holding, without changing which category is selected.
+    /// <para>
+    /// For the settings window's two hide paths. That window is hidden and shown again rather than destroyed,
+    /// and 需求 8's console is a live browser process — which must not keep running behind a window the user
+    /// has closed. Releasing rather than navigating away keeps the selection, so reopening shows the same
+    /// page, navigated afresh by <see cref="ShowHosted"/>.
+    /// </para>
+    /// </summary>
+    internal void ReleaseHosted()
+    {
+        StopSettingsEntrance();
+        (HostedFrame.Content as IShellContent)?.Release();
+        if (HostedFrame.Content is Page { Content: FrameworkElement layout }) HomeMotion.Stop(layout);
+    }
+
+    /// <summary>
+    /// Lets go of the hosted page. This page itself has nothing in flight and subscribes to nothing —
+    /// every row holds a closure over the settings document, which the container owns and outlives the page
+    /// anyway — but the frame on its right may be holding 服务器, 诊断 or 需求 8's console.
+    /// <para>
+    /// <b>The hosted page is why this body is not empty.</b> A nested frame's content gets no
+    /// <c>OnNavigatedFrom</c> when the outer page is navigated away from or dropped, so without this line the
+    /// 控制台 kept a live WebView2 — a browser process the user cannot see — behind whatever page they went
+    /// to next, and its log tail and pending requests kept running with it. The settings *window* was never
+    /// affected: it calls <see cref="ReleaseHosted"/> itself on both of its hide paths. The path that was
+    /// leaking is the fallback one, where the window could not be created and this page opens in the shell's
+    /// own frame (see <c>ShellPage.ShowSettings</c>) — that frame both navigates away from it and, on
+    /// signing out, drops it through <c>ReleaseContent</c>.
+    /// </para>
+    /// <para>
+    /// The frame's content is left in place rather than cleared: <see cref="ShowHosted"/> navigates afresh on
+    /// every visit anyway, and keeping it means the selection and the page on screen still agree.
+    /// </para>
+    /// </summary>
+    public void Release() => ReleaseHosted();
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        Release();
+        base.OnNavigatedFrom(e);
+    }
+
+    /// <summary>
+    /// Counts realised row containers. <c>Content</c> rather than <c>DataContext</c>, for the reason spelled
+    /// out on <see cref="ServersPage"/>'s counter: everything inside a realised row inherits that row as its
+    /// data context, so counting by data context counts the controls in a row instead.
+    /// </summary>
+    private static void Count(DependencyObject node, ref int rows)
+    {
+        if (node is ContentPresenter { Content: SettingRow }) rows++;
+
+        var children = VisualTreeHelper.GetChildrenCount(node);
+        for (var index = 0; index < children; index++)
+            Count(VisualTreeHelper.GetChild(node, index), ref rows);
+    }
+
+    /// <summary>Same walk, for the theme row's swatches. See <see cref="MeasureThemeSwatches"/>.</summary>
+    private static void CountSwatches(DependencyObject node, ref int swatches)
+    {
+        if (node is ContentPresenter { Content: ThemeSwatch }) swatches++;
+
+        var children = VisualTreeHelper.GetChildrenCount(node);
+        for (var index = 0; index < children; index++)
+            CountSwatches(VisualTreeHelper.GetChild(node, index), ref swatches);
+    }
+
+    /// <summary>同上，数主页版面那张表画出来的行。见 <see cref="MeasureHomeRows"/>。</summary>
+    private static void CountHomeRows(DependencyObject node, ref int rows)
+    {
+        if (node is ContentPresenter { Content: HomeRowChoice }) rows++;
+
+        var children = VisualTreeHelper.GetChildrenCount(node);
+        for (var index = 0; index < children; index++)
+            CountHomeRows(VisualTreeHelper.GetChild(node, index), ref rows);
+    }
+
+    /// <summary>
+    /// 主页版面那张表本身，按「装的是版面项」认它 —— 这一页上再没有第二张这样的表。见
+    /// <see cref="MeasureHomeDrag"/>，那一条要问的是表和它的容器，不是模板里的那几件东西。
+    /// </summary>
+    private static ListView? FindHomeList(DependencyObject node)
+    {
+        if (node is ListView list && list.Items.Count > 0 && list.Items[0] is HomeRowChoice) return list;
+
+        var children = VisualTreeHelper.GetChildrenCount(node);
+        for (var index = 0; index < children; index++)
+            if (FindHomeList(VisualTreeHelper.GetChild(node, index)) is { } found) return found;
+
+        return null;
+    }
+}

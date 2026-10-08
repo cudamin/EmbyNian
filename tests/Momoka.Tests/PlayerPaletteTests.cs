@@ -1,0 +1,338 @@
+using Momoka.Playback;
+using Momoka.Theming;
+using static Momoka.Tests.TestHarness;
+
+namespace Momoka.Tests;
+
+/// <summary>
+/// 播放器浮层那张颜色表（<see cref="PlayerPalette"/>）。
+/// <para>
+/// 这些色值从前是 <c>PlayerPage.xaml</c> 里三十五处写死的 hex，谁也量不了 —— 外壳那个程序集测试项目引不进来
+/// （它是 <c>net10.0-windows…</c>，这边是 <c>net10.0</c>），所以留在 XAML 里的颜色等于没人看着的颜色。搬进
+/// Core 换到的就是下面这些：四档墨真的一档比一档暗，三块牌子真的一块比一块实，刻度真的比缓冲亮，压在近黑的
+/// 画面上真的读得出来。
+/// </para>
+/// <para>
+/// 为什么这些不是「看一眼就知道」：深色底上的半档差别眼睛认不出来。次要读数比正文亮半档、章节刻度掉到缓冲
+/// 色以下，屏上看着都像本来的设计，只有量出来才知道错了。
+/// </para>
+/// </summary>
+internal static class PlayerPaletteTests
+{
+    public static void Register()
+    {
+        RegisterLadder();
+        RegisterSurfaces();
+        RegisterTable();
+        RegisterGlass();
+        RegisterContrast();
+    }
+
+    private static void RegisterLadder()
+    {
+        Test("播放器配色：四档墨一档比一档暗，四档都不透明", () =>
+        {
+            var rungs = new (string Name, ThemeColor Color)[]
+            {
+                ("正文", PlayerPalette.Ink),
+                ("退半档", PlayerPalette.InkSoft),
+                ("次要读数", PlayerPalette.InkDim),
+                ("最淡", PlayerPalette.InkFaint)
+            };
+
+            for (var index = 1; index < rungs.Length; index++)
+                Assert.True(rungs[index].Color.Luminance < rungs[index - 1].Color.Luminance,
+                    $"{rungs[index].Name}（{rungs[index].Color.ToHex()}）没有比"
+                    + $"{rungs[index - 1].Name}（{rungs[index - 1].Color.ToHex()}）暗");
+
+            // 一档墨半透明就等于「这行字的颜色由它压着的那一帧决定」，而它压的是一部电影。
+            foreach (var (name, colour) in rungs)
+                Assert.Equal((byte)0xFF, colour.A, $"{name}那一档是半透明的");
+        });
+    }
+
+    private static void RegisterSurfaces()
+    {
+        Test("播放器配色：两块牌子同一个底色，透明度递增", () =>
+        {
+            var rail = Find("PlayerRailBrush");
+            var peek = Find("PlayerPeekBrush");
+
+            // 同一个 RGB：两块牌子并排浮在同一帧画面上，底色差一点点就是「其中一块看着发蓝」。
+            //
+            // 2026-09-22 起只剩两块：统计面板那份 PlayerStatsBrush 随自绘面板一起退场（面板改由 mpv 画进
+            // OSD 层），而它原本是这三块里最透的那一头。
+            foreach (var (name, colour) in new[] { ("音量条", rail), ("章节预览", peek) })
+                Assert.Equal(PlayerPalette.Panel with { A = colour.A }, colour, $"{name}的底色不是那块牌子的底色");
+
+            // 次序是有理由的：章节预览里装着一张缩略图，底一透缩略图就发灰，所以最实。
+            Assert.True(rail.A < peek.A, "音量条没有比章节预览更透");
+        });
+
+        Test("播放器配色：三档描边都是纯白，越该被注意的越亮", () =>
+        {
+            var faint = Find("PlayerEdgeFaintBrush");
+            var plain = Find("PlayerEdgeBrush");
+            var strong = Find("PlayerEdgeStrongBrush");
+
+            foreach (var (name, colour) in new[] { ("淡", faint), ("中", plain), ("强", strong) })
+            {
+                Assert.Equal((byte)0xFF, colour.R, $"{name}那档描边不是纯白");
+                Assert.Equal((byte)0xFF, colour.G, $"{name}那档描边不是纯白");
+                Assert.Equal((byte)0xFF, colour.B, $"{name}那档描边不是纯白");
+                Assert.True(colour.A < 0xFF, $"{name}那档描边不透明，压在画面上就是一道实线");
+            }
+
+            Assert.True(faint.A < plain.A, "统计面板那圈没有比章节预览那圈淡");
+            Assert.True(plain.A < strong.A, "章节预览那圈没有比「跳过」那颗按钮淡");
+        });
+
+        Test("播放器配色：进度条那一带，刻度最亮、空轨最淡", () =>
+        {
+            var tick = Find("PlayerTickBrush");
+            var fill = Find("PlayerTrackFillBrush");
+            var track = Find("PlayerTrackBrush");
+            var line = Find("PlayerLineBrush");
+
+            foreach (var (name, colour) in new[] { ("刻度", tick), ("已缓冲", fill), ("空轨", track), ("细线", line) })
+            {
+                Assert.Equal((byte)0xFF, colour.R, $"{name}不是纯白");
+                Assert.Equal((byte)0xFF, colour.G, $"{name}不是纯白");
+                Assert.Equal((byte)0xFF, colour.B, $"{name}不是纯白");
+            }
+
+            // 刻度掉到缓冲色以下，章节分界就在已缓冲那一段里消失 —— 而已缓冲那一段正是它最该被看见的地方。
+            Assert.True(tick.A > fill.A, "章节刻度没有比已缓冲那一段亮，分界会在缓冲区里看不见");
+            Assert.True(fill.A > track.A, "已缓冲那一段没有比空轨亮");
+            Assert.True(track.A > line.A, "空轨没有比细线亮");
+        });
+
+        Test("播放器配色：换集时那层遮挡必须是全不透明的近黑", () =>
+        {
+            var cover = Find("PlayerCoverBrush");
+
+            // 它盖的是上一集的最后一帧。半透明的话，换集那一下就能从缝里看见上一部片子。
+            Assert.Equal((byte)0xFF, cover.A, "遮挡层是半透明的，换集时会透出上一集最后一帧");
+            Assert.Equal(PlayerPalette.Film with { A = 0xFF }, cover, "遮挡层不是画面上那个近黑");
+        });
+
+        Test("播放器配色：进出转场那块舞台必须是全不透明的近黑", () =>
+        {
+            var stage = Find("PlayerStageBrush");
+
+            // 舞台是这一页在屏上的底，而它压的不是一帧画面 —— 是「播放页有没有自己的面」这件事本身
+            // （进出转场的那两百毫秒就溶解在这块面上，见 PlayerPage.Transition.cs）。半透明的话，整部片子里
+            // 背后那一页都会透过来。
+            Assert.Equal((byte)0xFF, stage.A, "舞台是半透明的，播放时背后的浏览页会透出来");
+            Assert.Equal(PlayerPalette.Film with { A = 0xFF }, stage, "舞台不是画面上那个近黑");
+        });
+    }
+
+    private static void RegisterTable()
+    {
+        Test("播放器配色：键不重复、都带 Player 前缀、没有一支是全透明的", () =>
+        {
+            var keys = PlayerPalette.Brushes.Select(entry => entry.Key).ToArray();
+
+            Assert.Equal(keys.Length, keys.Distinct(StringComparer.Ordinal).Count());
+
+            foreach (var (key, colour) in PlayerPalette.Brushes)
+            {
+                // 前缀分的是「跟主题走的那一套」和「不跟的这一套」：应用那边是 Eg*，画刷同名就会串。
+                Assert.True(key.StartsWith("Player", StringComparison.Ordinal), $"{key} 没带 Player 前缀");
+                Assert.True(key.EndsWith("Brush", StringComparison.Ordinal), $"{key} 不像一支画刷的键名");
+
+                // 全透明是「这支画刷忘了填」的那个样子，表里出现就等于把自检那一关的判据抹掉了。
+                Assert.True(colour.A > 0, $"{key} 是全透明的");
+            }
+        });
+
+        Test("播放器配色：暂停/播放徽标只剩纯白一支", () =>
+        {
+            // 「点击画面暂停和开始的图标要纯白色，去掉灰色」（2026-09-05）。从前它背后还有一支
+            // PlayerPulseRimBrush（35% 的黑），屏上是贴着白形状的一道 5 像素灰边；那支跟着形状一起删了，
+            // 而「删干净了没有」正是这条要钉的东西 —— 留在表里的一支孤儿画刷 XAML 里没人用，谁也看不见。
+            Assert.Equal("#FFFFFFFF", Find("PlayerPulseBrush").ToHex(), "徽标不是纯白、不透明");
+
+            foreach (var (key, _) in PlayerPalette.Brushes)
+                Assert.False(key.Contains("PulseRim", StringComparison.Ordinal), $"{key} 还留在表里");
+        });
+    }
+
+    private static void RegisterGlass()
+    {
+        Test("播放器配色：上下两条浮层底共用一支半透明的近黑，落在「透」那一侧", () =>
+        {
+            // 2026-09-27 用户令「去掉黑色渐变，给红框的位置加一层亚克力背景」；他看过一版之后连着两句
+            // 「太厚了，而且不够透明」「透明度调到最透」，随后又一条「进度条的背景也改成跟标题一样的
+            // 亚克力」—— 于是上下两条浮层共用这一支，控制条背后那道「上沿全透明、往下渐深到 0xF0」的罩子
+            // 退役（原来钉它的那条测试随它一起走）。
+            //
+            // **它不是亚克力，是半透明的纯色**：压在它下面的是视频，而视频那一层不参与应用内亚克力的
+            // backdrop 采样（他的播放截图量出来整条只透出百分之二，屏上是一块不透的黑）—— 玻璃采不到它
+            // 就只剩自己的底色，越调越黑。纯色与下面那层做普通的 alpha 混合，视频也好 XAML 也好一视同仁。
+            // 整笔账见 PlayerPalette.GlassAlpha 的注释。
+            var glass = Find("PlayerGlassBrush");
+
+            // 近黑：这两条底压在画面上，亮起来靠的是透上来的光，不是自己的色。
+            Assert.Equal(PlayerPalette.Film.R, glass.R);
+            Assert.Equal(PlayerPalette.Film.G, glass.G);
+            Assert.Equal(PlayerPalette.Film.B, glass.B);
+
+            Assert.Equal(PlayerPalette.GlassAlpha, glass.A);
+
+            // 落在「透」那一侧，但还不是什么都没有：上界 0x66（四成）过去就是一块灰板，下界 0x33（两成）
+            // 再过去那两行白字在亮画面上就没有底了。取值是用户点名的「最透」那一侧的四分之一。
+            Assert.True((int)glass.A is >= 0x33 and <= 0x66,
+                $"遮 {glass.A * 100 / 255}%：既不是「透」，也谈不上「有底」");
+
+            // 左上角那三块（返回键、标题、剧名）共用那一支（用户令 2026-09-27 傍晚第三批「加深左上角亚克力
+            // 背景的颜色，鼠标位置越靠上亚克力背景的颜色越深」）：表里给的是**最浅那一档** —— 与上面那支
+            // 同一个色号、同一档浓度。屏上那一刻到底是哪一档不归这张表管，归 TopGlassAlphaAt 那条直线管
+            // （下一条钉它）；这里钉的是「表里那一档是对的」，也就是「指针还没说过话时，那三块和上下两条浮层
+            // 一样透」。
+            var top = Find(PlayerPalette.TopGlassKey);
+
+            Assert.Equal(PlayerPalette.Film.R, top.R);
+            Assert.Equal(PlayerPalette.Film.G, top.G);
+            Assert.Equal(PlayerPalette.Film.B, top.B);
+            Assert.Equal(PlayerPalette.GlassAlpha, top.A);
+        });
+
+        Test("播放器配色：左上角那块玻璃越靠顶边越深，两端正好是那两档", () =>
+        {
+            // 同一条令的另一半。这条直线的两头与单调性就是「越靠上越深」那句话的全部内容：0 ＝ 与上下两条
+            // 浮层同一档，1 ＝ 贴顶那一档，中间一路往上走、不许回头。
+            var ladder = new[] { 0.0, 0.25, 0.5, 0.75, 1.0 }
+                .Select(PlayerPalette.TopGlassAlphaAt)
+                .ToList();
+
+            Assert.Equal(PlayerPalette.GlassAlpha, ladder[0]);
+            Assert.Equal(PlayerPalette.TopGlassAlpha, ladder[^1]);
+
+            for (var rung = 1; rung < ladder.Count; rung++)
+                Assert.True(ladder[rung] > ladder[rung - 1],
+                    $"第 {rung} 档 {ladder[rung]:X2} 不比上一档深：越靠上越深没有发生");
+
+            // 「加深」那一半也得成立：最深一档要真的比原来那颗返回键（0x8C）深，但不能深到全黑 ——
+            // 那是实心板，不是玻璃。
+            Assert.True(PlayerPalette.TopGlassAlpha > 0x8C,
+                $"最深那一档 {PlayerPalette.TopGlassAlpha:X2} 不比原来那颗返回键（0x8C）深，「加深」没有发生");
+            Assert.True(PlayerPalette.TopGlassAlpha < byte.MaxValue,
+                $"最深那一档是全黑：那不是一块玻璃，是一块板");
+
+            // 越界的深度与拿不到的读数都要落回基准档：一个跑到 [0,1] 外面的数在这里绕一圈会变成**另一个**
+            // 合法档，屏上不是「更淡一点」而是方向不明的另一档，而它压在画面上，没人看得出来。
+            Assert.Equal(PlayerPalette.GlassAlpha, PlayerPalette.TopGlassAlphaAt(-1));
+            Assert.Equal(PlayerPalette.GlassAlpha, PlayerPalette.TopGlassAlphaAt(double.NaN));
+            Assert.Equal(PlayerPalette.TopGlassAlpha, PlayerPalette.TopGlassAlphaAt(2));
+        });
+
+        Test("播放器配色：标题条右上那几颗的悬停底 —— 四颗一层白、关闭那颗是首页那个红", () =>
+        {
+            // 用户令 2026-09-27 傍晚第四批「鼠标移动到右上角的关闭的时候背景要和首页一样变成红色，然后右上角
+            // 另外几个按钮鼠标移动到按钮上的时候背景颜色太浅了容易和画面合在一起」；第五批把后半句改实了：
+            // 「这四个按钮鼠标移到上面的时候要用白色亚克力背景」；**2026-09-28 晚又往实里提了一档** ——
+            // 「集成模式右上角的这个背景太透明了」（量过用户那张截图：五成的白压在蓝天白云上仍会糊进去），
+            // 于是悬停 0x80 → 0xCC、按下 0x99 → 0xE6。
+            var hover = Find("PlayerStripHoverBrush");
+            var pressed = Find("PlayerStripPressedBrush");
+
+            // 四颗那一族是**白的**，只换 alpha —— 上一版那支近黑（film 遮九成）随这一条令退役。
+            Assert.Equal(0xFF, hover.R);
+            Assert.Equal(0xFF, hover.G);
+            Assert.Equal(0xFF, hover.B);
+            Assert.Equal(PlayerPalette.StripHoverAlpha, hover.A);
+            Assert.Equal(PlayerPalette.StripPressedAlpha, pressed.A);
+
+            // 「亚克力」在本架构下只能是**半透明的白**（真亚克力采不到视频那一层，整笔账见 GlassAlpha 的注释），
+            // 所以两头都要卡住：太淡就是用户抱怨过的「太浅了容易和画面合在一起」，太白就是一块白板 ——
+            // 底下那层画面一个像素都看不见，那也正是亚克力这条路走过的死胡同。**上界随用户令挪过一次**：
+            // 起初卡 0xC0（75%），2026-09-28 晚那条「太透明了」把悬停定到 0xCC（八成），上界相应放到 0xE0
+            // （87.5%）—— 再往上就真是一块板了。
+            Assert.True(hover.A >= 0x66, $"悬停只有 {hover.A * 100 / 255}% 的白：还是太浅，压不住画面");
+            Assert.True(hover.A <= 0xE0, $"悬停有 {hover.A * 100 / 255}% 的白：那不是一层玻璃，是一块白板");
+            Assert.True(hover.A < pressed.A, "按下没有比悬停更实一档");
+            Assert.True(pressed.A < byte.MaxValue, "按下是全白：底下的画面一个像素都看不见了");
+
+            // 白底上的墨（同一条令里问实的那一半）：那四颗的图标悬停时转深色，否则白图标压在白底上糊成一片。
+            var ink = Find("PlayerStripHoverInkBrush");
+
+            Assert.True(ink.A > 0xE0, $"那支墨自己带透明度（{ink.ToHex()}）：压在白底上会发灰");
+            Assert.True(ink.R < 0x40 && ink.G < 0x40 && ink.B < 0x40,
+                $"白底上的墨是 {ink.ToHex()}：不够深，白图标换过去也读不出来");
+
+            // 关闭那颗：首页那颗窗口关闭键是**系统画的** caption 按钮（外壳 ExtendsContentIntoTitleBar），
+            // Win11 上悬停就是 #C42B1C —— 这一条钉的就是那个值，不是随便挑一个红。
+            var close = Find("PlayerCloseHoverBrush");
+
+            Assert.Equal("#FFC42B1C", close.ToHex(), "不是首页那颗关闭键的红");
+            Assert.Equal(byte.MaxValue, close.A);
+
+            var closePressed = Find("PlayerClosePressedBrush");
+
+            Assert.Equal(byte.MaxValue, closePressed.A);
+            Assert.True(closePressed.R < close.R && closePressed.G < close.G && closePressed.B < close.B,
+                $"关闭那颗按下没有压暗一档：{closePressed.ToHex()}");
+        });
+    }
+
+    private static void RegisterContrast()
+    {
+        Test("播放器配色：四档墨压在画面那个近黑上都读得出来", () =>
+        {
+            var film = PlayerPalette.Film;
+
+            // 门槛按用途分：前三档是正文和读数，最淡那一档只用在「跳过」按钮上那行小字。量出来分别是
+            // 17.6、15.2、8.6、6.2，所以这四条线还留着余量 —— 写成量出来的数就成了「不许动」。
+            Ratio("正文/画面", PlayerPalette.Ink, film, 12);
+            Ratio("退半档/画面", PlayerPalette.InkSoft, film, 12);
+            Ratio("次要读数/画面", PlayerPalette.InkDim, film, 7);
+            Ratio("最淡/画面", PlayerPalette.InkFaint, film, 4.5);
+        });
+
+        Test("播放器配色：四档墨压在牌子底上也都够 4.5:1", () =>
+        {
+            // 三块牌子是同一个 RGB，所以量一次就够；alpha 不参与，而三块都压在更暗的画面上，
+            // 真实对比度只会比这里量出来的更高。
+            var panel = PlayerPalette.Panel;
+
+            Ratio("正文/牌子", PlayerPalette.Ink, panel, 4.5);
+            Ratio("退半档/牌子", PlayerPalette.InkSoft, panel, 4.5);
+            Ratio("次要读数/牌子", PlayerPalette.InkDim, panel, 4.5);
+            Ratio("最淡/牌子", PlayerPalette.InkFaint, panel, 4.5);
+        });
+
+        Test("播放器配色：这一套不跟主题走，每一套主题下都是同一张表", () =>
+        {
+            // 这一条钉的是「不要把这张表接到主题上去」。浮层压的是一帧视频，不是应用那张面。
+            //
+            // 从前这里拿「晴昼」（唯一那套浅色）的正文色当靶子：谁把 Ink 接成 UiTheme.Text，那一套的深字就会在
+            // 这儿撞上。**晴昼 2026-09-05 按用户的话删了**（见 UiThemes 的类注释），而剩下五套的正文色本来就都是
+            // 浅墨 —— Ink 现在恰好和默认那套的 Text 同色，所以那句断言换成任何一套都变成了句假话，删掉了。剩下
+            // 这两句是这张表自己守得住的：墨是浅的，而且最淡那一档压在画面上仍够 4.5:1，不管挑的是哪套主题。
+            Assert.True(PlayerPalette.Ink.Luminance > 0.5,
+                $"浮层正文那档墨（{PlayerPalette.Ink.ToHex()}）不是浅墨，压在近黑上读不出来");
+
+            foreach (var theme in UiThemes.All)
+                Ratio($"最淡/画面（{theme.Id}）", PlayerPalette.InkFaint, PlayerPalette.Film, 4.5);
+        });
+    }
+
+    /// <summary>表上某一支画刷的颜色。键写错了当场炸，而不是静悄悄测了个不存在的东西。</summary>
+    private static ThemeColor Find(string key)
+    {
+        foreach (var (name, colour) in PlayerPalette.Brushes)
+            if (string.Equals(name, key, StringComparison.Ordinal)) return colour;
+
+        throw new AssertionException($"表上没有 {key} 这一支");
+    }
+
+    /// <summary>量一对颜色，不够就把是哪一对、差多少一起说出来。</summary>
+    private static void Ratio(string what, ThemeColor front, ThemeColor back, double least)
+    {
+        var ratio = ThemeColor.Contrast(front, back);
+        Assert.True(ratio >= least,
+            $"{what}：{front.ToHex()} 压在 {back.ToHex()} 上只有 {ratio:0.00}:1，要 {least:0.0}:1");
+    }
+}

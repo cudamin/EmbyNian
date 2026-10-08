@@ -6,7 +6,7 @@
     Core and Tests still take no package references at all, which is worth keeping: it makes
     them buildable against the shared frameworks alone and keeps the test project honest about what
     it is testing. That is a preference now rather than a constraint — this used to say the machine
-    had an empty NuGet cache and had to build offline, which is no longer true. EmbyNian.Shell
+    had an empty NuGet cache and had to build offline, which is no longer true. Momoka.Shell
     references the Windows App SDK as its own sub-packages (Microsoft.WindowsAppSDK.Base and five
     more, see that csproj), restored from nuget.org (pinned in nuget.config).
   -->
@@ -22,12 +22,12 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Product>EmbyNian</Product>
-    <Company>EmbyNian</Company>
+    <Product>Momoka</Product>
+    <Company>Momoka</Company>
     <Version>0.1.2</Version>
     <AssemblyVersion>0.1.2.0</AssemblyVersion>
     <FileVersion>0.1.2.0</FileVersion>
-    <Copyright>EmbyNian</Copyright>
+    <Copyright>Momoka</Copyright>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
     <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\work\**\*;$(MSBuildProjectDirectory)\work-*\**\*</DefaultItemExcludes>
   </PropertyGroup>
@@ -62,15 +62,15 @@
     comment saying which measurement made the rule wrong for this code.
   -->
   <PropertyGroup>
-    <EmbyNianAnalyzerDir>$(MSBuildThisFileDirectory)tools\analyzers\</EmbyNianAnalyzerDir>
+    <MomokaAnalyzerDir>$(MSBuildThisFileDirectory)tools\analyzers\</MomokaAnalyzerDir>
   </PropertyGroup>
 
-  <ItemGroup Condition="Exists('$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.dll')">
-    <Analyzer Include="$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.dll" />
+  <ItemGroup Condition="Exists('$(MomokaAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.dll')">
+    <Analyzer Include="$(MomokaAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.dll" />
   </ItemGroup>
 
-  <Import Project="$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets"
-          Condition="Exists('$(EmbyNianAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets')" />
+  <Import Project="$(MomokaAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets"
+          Condition="Exists('$(MomokaAnalyzerDir)Microsoft.WindowsAppSDK.Analyzers.targets')" />
 
   <!--
     NuGet 分析器三个，用户原话「把你建议装的装上吧」2026-09-29 引入。只进 Core 与 Shell，
@@ -97,7 +97,7 @@
     版本是 2026-09-29 查的 nuget.org 最新稳定版；升级按 CLAUDE.md「依赖与分析器升级」
     一节：不进 preview，独立成轮，先 restore 再验。
   -->
-  <ItemGroup Condition="'$(MSBuildProjectName)' != 'EmbyNian.Tests'">
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'Momoka.Tests'">
     <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.7.23" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" PrivateAssets="all" />
     <!-- Roslynator 5.0.0：先实测后采纳（主包不含格式规则，格式辖区仍是闸门 1 的 dotnet format）。

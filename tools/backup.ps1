@@ -16,7 +16,7 @@
 [CmdletBinding()]
 param(
     # 放在 %USERPROFILE% 下而不是仓库里：备份不能被 artifacts 的清理、发布校验或者下一次打包扫到。
-    [string]$OutputRoot = (Join-Path $env:USERPROFILE 'EmbyNian-backups'),
+    [string]$OutputRoot = (Join-Path $env:USERPROFILE 'Momoka-backups'),
 
     # 追在文件名后面的一句话，方便半个月后认出「这是哪一次的备份」。
     [string]$Label = ''
@@ -31,7 +31,7 @@ $skip = @('bin', 'obj', 'artifacts', '.vs')
 if (-not (Test-Path $OutputRoot)) { New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null }
 
 $stamp = $started.ToString('yyyyMMdd-HHmm')
-$name = if ($Label) { "EmbyNian-$stamp-$Label.zip" } else { "EmbyNian-$stamp.zip" }
+$name = if ($Label) { "Momoka-$stamp-$Label.zip" } else { "Momoka-$stamp.zip" }
 $target = Join-Path $OutputRoot $name
 
 if (Test-Path $target) { Remove-Item $target -Force }
@@ -53,7 +53,7 @@ Write-Host ("要打包 {0} 个文件，{1:N1} MB" -f $files.Count, ($bytes / 1MB
 $head = & git -C $root rev-parse --short HEAD 2>$null
 $dirty = (& git -C $root status --porcelain 2>$null | Measure-Object -Line).Lines
 $notes = @"
-EmbyNian 工作树备份
+Momoka 工作树备份
 时间：$($started.ToString('yyyy-MM-dd HH:mm:ss zzz'))
 来源：$root
 git：HEAD $head，工作树里有 $dirty 个文件与 HEAD 不同（这棵树本来就是未提交状态，不是异常）
@@ -61,7 +61,7 @@ git：HEAD $head，工作树里有 $dirty 个文件与 HEAD 不同（这棵树�
 文件数：$($files.Count)，原始大小 $("{0:N1}" -f ($bytes / 1MB)) MB
 
 还原：把这个 zip 解压覆盖回 $root，然后
-    "%USERPROFILE%\.dotnet\dotnet.exe" build EmbyNian.sln -c Release -m:1
+    "%USERPROFILE%\.dotnet\dotnet.exe" build Momoka.sln -c Release -m:1
     powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish.ps1
 "@
 

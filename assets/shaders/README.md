@@ -3,8 +3,8 @@
 这十五个文件是 2026-09-03 从上游取下来入库的（当时是二十一个 —— Anime4K Mode A 那六个 2026-09-04
 出箱了，见下面「出过箱的文件」）。**从前它们不在仓库里** —— 发布脚本从
 `C:\mpv_config-2026.08.12\portable_config\shaders` 现拷，也就是说这个程序发不发得出正确的画质，
-取决于另一个软件的安装目录还在不在。入库之后 `src/EmbyNian.Shell/EmbyNian.Shell.csproj` 从这里拷，
-清单由单测钉着不许和 `src/EmbyNian.Core/Mpv/ShaderGroupCatalog.cs` 里的档位表跑偏 —— 两个方向都钉：
+取决于另一个软件的安装目录还在不在。入库之后 `src/Momoka.Shell/Momoka.Shell.csproj` 从这里拷，
+清单由单测钉着不许和 `src/Momoka.Core/Mpv/ShaderGroupCatalog.cs` 里的档位表跑偏 —— 两个方向都钉：
 表点了一个磁盘上没有的文件是一种错，仓库里躺着一个没有任何档位用得上的文件是另一种。
 
 记录过的本地算法改动只有一处，见下面 `igv/adaptive-sharpen.glsl` 那一行；其余文件保留入库版本，不用当前上游分支冒充当年取件的逐字节证明。

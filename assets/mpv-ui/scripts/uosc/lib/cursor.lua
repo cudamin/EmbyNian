@@ -162,7 +162,7 @@ end
 function cursor:trigger(event, shortcut)
 	local forward, zone_handled = true, false
 	local meta = self.event_meta[event]
-	-- EMBYNIAN[drag-cancel] — mpv 交给原生拖窗前发 canceled 的松键；它只负责收尾，不能变成点击。
+	-- MOMOKA[drag-cancel] — mpv 交给原生拖窗前发 canceled 的松键；它只负责收尾，不能变成点击。
 	local canceled = shortcut and shortcut.canceled == true
 	if canceled and meta and meta.is_end then
 		self.last_events[meta.start_event] = nil
@@ -384,7 +384,7 @@ end
 
 function cursor:leave() self:move(math.huge, math.huge) end
 
---[[ EMBYNIAN[cursor-hold] — 指针压在控件的**本体**上（进度条、控制条/顶栏那一排按钮、音量条）时，不让
+--[[ MOMOKA[cursor-hold] — 指针压在控件的**本体**上（进度条、控制条/顶栏那一排按钮、音量条）时，不让
 -- mpv 收走光标。只是停在唤出带里（触发渐变的位置）不算。
 
 用户令 2026-09-29：「只有鼠标停在控件，进度条和上方的按钮还有音量条上的时候才不隐藏鼠标，触发渐变的时候
@@ -411,11 +411,11 @@ function cursor:leave() self:move(math.huge, math.huge) end
 小矩形**，而元件本体（如 `controls` 那条整幅宽的控制条）比它们大得多。**这一问因此比按元件矩形算更窄也更
 准**，正好落在用户点名的「按钮」上。
 
-⚠️ **问命中区时必须跳过 EMBYNIAN 的两条兜底区**（点画面暂停＝`primary_click`、滚轮音量＝`wheel_up`/`wheel_down`，
+⚠️ **问命中区时必须跳过 MOMOKA 的两条兜底区**（点画面暂停＝`primary_click`、滚轮音量＝`wheel_up`/`wheel_down`，
 见 main.lua）：它们的 hitbox 罩着**整个画布**，是「画面」的交互区、不是「控件」——不跳过的话，指针停在
 空白画面上也命中，hold 恒真、`cursor-autohide` 恒为 `no`，光标永远不藏（2026-09-29 用户报
 「独占模式下鼠标不会自动隐藏」的根因；work/probe-hold-visible-repro.txt 实锤：激活那一拍 autohide 就翻 no，
-死区停四秒光标不藏）。两条兜底区的 hitbox 都带着 `embynian_fallback` 标记，判据里一律跳过。
+死区停四秒光标不藏）。两条兜底区的 hitbox 都带着 `momoka_fallback` 标记，判据里一律跳过。
 
 `no` 是 mpv 认的取值：playloop 每拍重算 `mouse_cursor_visible`，`cursor_autohide_delay == -1` 那一支
 直接置真并推 VOCTRL_SET_CURSOR_VISIBILITY，于是**已经藏着的光标也会当场放回来**（player/playloop.c
@@ -429,12 +429,12 @@ do
 	-- 指针此刻正压在控件本体上吗。判据是「有没有一条非兜底的命中区罩着它」，见上面那段注释。
 	-- 自己遍历（从后往前＝先查后登记的高优先级区）而不是 find_zone：find_zone 只回第一个命中的区，
 	-- 而兜底区每帧登记在最前（render 最先＝优先级最低），空白画面上它就是唯一命中，拿回来还得自己丢，
-	-- 等于没问；跳过判据见 hitbox 上的 embynian_fallback 标记（main.lua）。
+	-- 等于没问；跳过判据见 hitbox 上的 momoka_fallback 标记（main.lua）。
 	function cursor:on_control()
 		if self.hidden or self.disabled then return false end
 		for i = #self.zones, 1, -1 do
 			local zone = self.zones[i]
-			if not zone.hitbox.embynian_fallback
+			if not zone.hitbox.momoka_fallback
 				and (zone.event == 'primary_down' or zone.event == 'primary_click'
 					or zone.event == 'wheel_up' or zone.event == 'wheel_down')
 				and self:collides_with(zone.hitbox) then
@@ -469,7 +469,7 @@ function cursor:autohide()
 end
 
 function cursor:queue_autohide()
-	-- EMBYNIAN[cursor-hold]：先问一次「指针压在本体上了吗」。放在那道 `options.autohide` 闸前面 ——
+	-- MOMOKA[cursor-hold]：先问一次「指针压在本体上了吗」。放在那道 `options.autohide` 闸前面 ——
 	-- 装箱的默认是 autohide=false（收光标的事整个交给 mpv 的 cursor-autohide），这一句要是排在闸后就永远
 	-- 跑不到。落点挑这里是因为每一次鼠标移动（cursor:move）与每一次鼠标事件（cursor:trigger）都会经过它。
 	self:refresh_hold()
@@ -555,7 +555,7 @@ local primary_bindings = {}
 for i = 1, #modifiers do
 	local mods = modifiers[i]
 	local mp_name = (mods and mods .. '+' or '') .. 'mbtn_left'
-	local binding = 'embynian-primary-' .. i
+	local binding = 'momoka-primary-' .. i
 	mp.add_key_binding(nil, binding, cursor:create_primary_handler(mods), {complex = true})
 	primary_bindings[#primary_bindings + 1] = {mp_name, 'script-binding ' .. mp.get_script_name() .. '/' .. binding}
 end

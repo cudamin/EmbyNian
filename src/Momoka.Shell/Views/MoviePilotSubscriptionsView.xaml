@@ -1,0 +1,34 @@
+<UserControl
+    x:Class="Momoka.Shell.Views.MoviePilotSubscriptionsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Momoka.Shell.Views"
+    xmlns:vm="using:Momoka.Shell.ViewModels">
+    <UserControl.Resources>
+        <DataTemplate x:Key="SubscriptionTemplate" x:DataType="vm:MoviePilotSubscriptionCard">
+            <StackPanel Width="{x:Bind CardWidth}" Spacing="8" Loaded="OnCardLoaded" Tag="{x:Bind}">
+                <local:MoviePilotSubscriptionPoster Card="{x:Bind}" Width="{x:Bind CardWidth}" Height="{x:Bind PosterHeight}"
+                    OpenRequested="OnPosterOpen" MenuRequested="OnPosterMenu" />
+                <TextBlock Text="{x:Bind Title, Mode=OneWay}" TextTrimming="CharacterEllipsis" MaxLines="2" TextWrapping="Wrap"
+                    Style="{StaticResource EgBodyStyle}" ToolTipService.ToolTip="{x:Bind Title, Mode=OneWay}" />
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+    <!-- 上边那 24 从前挂在宿主（HomePage 里那个 MoviePilotSubscriptionsView）上：那时这一块只要 MoviePilot
+         开着就一直在屏上，边距也就不用收。现在它是「真有订阅才显示」（见 ViewModel.Visible），边距必须长在
+         这一层 —— 长在宿主上的话，板块收起来之后主页底下会留 24 个谁也看不见的像素。 -->
+    <StackPanel Margin="0,24,0,0" Spacing="16" Visibility="{x:Bind ViewModel.Visible, Mode=OneWay}">
+        <Grid>
+            <local:ShelfHead Title="MoviePilot订阅电影" Note="{x:Bind ViewModel.MoviesNote, Mode=OneWay}" />
+            <Button x:Name="RefreshSubscriptions" HorizontalAlignment="Right" Content="刷新订阅" Style="{StaticResource EgSecondaryButtonStyle}" Command="{x:Bind ViewModel.RefreshCommand}" />
+        </Grid>
+        <ProgressBar IsIndeterminate="True" Visibility="{x:Bind ViewModel.BusyVisibility, Mode=OneWay}" />
+        <InfoBar IsOpen="{x:Bind ViewModel.NoticeOpen, Mode=TwoWay}" Severity="{x:Bind ViewModel.NoticeSeverity, Mode=OneWay}"
+            Title="{x:Bind ViewModel.NoticeTitle, Mode=OneWay}" Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}" />
+        <local:ShelfStrip x:Name="MovieSubscriptions" ItemsSource="{x:Bind ViewModel.Movies, Mode=OneWay}" ItemTemplate="{StaticResource SubscriptionTemplate}"
+            ItemSpacing="18" Height="{x:Bind ViewModel.RowHeight, Mode=OneWay}" Visibility="{x:Bind ViewModel.MoviesVisibility, Mode=OneWay}" />
+        <local:ShelfHead Title="MoviePilot订阅电视剧" Note="{x:Bind ViewModel.SeriesNote, Mode=OneWay}" />
+        <local:ShelfStrip x:Name="SeriesSubscriptions" ItemsSource="{x:Bind ViewModel.Series, Mode=OneWay}" ItemTemplate="{StaticResource SubscriptionTemplate}"
+            ItemSpacing="18" Height="{x:Bind ViewModel.RowHeight, Mode=OneWay}" Visibility="{x:Bind ViewModel.SeriesVisibility, Mode=OneWay}" />
+    </StackPanel>
+</UserControl>

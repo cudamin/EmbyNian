@@ -1,0 +1,1977 @@
+using Momoka.Diagnostics;
+using Momoka.Infrastructure;
+using Momoka.Playback;
+using Momoka.Shell.Interop;
+using Momoka.Shell.ViewModels;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Windows.Foundation;
+
+namespace Momoka.Shell.Views;
+
+/// <summary>
+/// The player's chrome half: what the reveal rule's answer looks like on screen, the hit tests that
+/// answer is computed from, and the seek bar's two decorations — the chapter ticks and the hover
+/// preview.
+/// <para>
+/// The rule itself is <see cref="ChromeReveal"/>'s, in Core and under test; this file is the half that
+/// cannot be tested there because it is <c>Visibility</c>, <c>TransformToVisual</c> and a Win32 cursor
+/// counter. Nothing here decides when the chrome should be up — it asks, and draws the answer.
+/// </para>
+/// </summary>
+public sealed partial class PlayerPage
+{
+    // ---- where the pointer is ---------------------------------------------------
+
+    /// <summary>
+    /// Where the pointer is on the desktop, asked of the OS once per tick and shared for the rest of it.
+    /// <para>
+    /// Four things in one tick want to know — 「has it moved since last time」, 「is it still inside the
+    /// window」, a held button standing in for the events a motionless drag never sends, and the guard that
+    /// takes a stranded chapter preview away — and each used to ask user32 for itself. The cost is the
+    /// smaller half of why that is wrong: separate readings make one tick incoherent, because the pointer
+    /// can move between two of them. The reseed can place it on a control and the departure check can then
+    /// find it outside the window, and the chrome goes away under a hand that is on it. One reading makes
+    /// the tick's answers agree with each other.
+    /// </para>
+    /// <para>
+    /// Shared only for the length of the tick that took it. A pointer event or a probe asking in between
+    /// reads the OS as it always did: a position from up to a tenth of a second ago is precisely the wrong
+    /// answer to 「did the pointer really leave the track」.
+    /// </para>
+    /// </summary>
+    private bool CursorScreen(out NativePoint screen)
+    {
+        if (_cursorShared)
+        {
+            screen = _cursorAt;
+            return _cursorAtKnown;
+        }
+
+        return Native.GetCursorPos(out screen);
+    }
+
+    /// <summary>
+    /// Whether the cursor is over our own client area, according to the OS. Falls back to 「inside」
+    /// whenever it cannot tell, because the cost of a wrong 「outside」 is chrome vanishing under a hand
+    /// that is still using it, and the cost of a wrong 「inside」 is one more 100 ms tick before it goes.
+    /// </summary>
+    private bool PointerInside()
+    {
+        var handle = _window?.Handle ?? IntPtr.Zero;
+        if (handle == IntPtr.Zero) return true;
+
+        if (!CursorScreen(out var cursor)) return true;
+        if (!Native.ScreenToClient(handle, ref cursor)) return true;
+        if (!Native.GetClientRect(handle, out var client)) return true;
+
+        return cursor.X >= client.Left && cursor.X < client.Right
+            && cursor.Y >= client.Top && cursor.Y < client.Bottom;
+    }
+
+    /// <summary>
+    /// Where the cursor is in the picture's own coordinates, or false when the OS will not say. The
+    /// pointer arrives from Win32 in physical pixels and every layout question here is in logical ones,
+    /// which is the whole of the conversion: the XAML island covers the client area, so the client origin
+    /// and <c>Root</c>'s origin are the same point.
+    /// </summary>
+    private bool CursorPoint(out Point point)
+    {
+        point = default;
+
+        var handle = _window?.Handle ?? IntPtr.Zero;
+        if (handle == IntPtr.Zero) return false;
+
+        if (!CursorScreen(out var cursor)) return false;
+        if (!Native.ScreenToClient(handle, ref cursor)) return false;
+
+        var scale = XamlRoot?.RasterizationScale ?? 1;
+        if (scale <= 0) scale = 1;
+
+        point = new Point(cursor.X / scale, cursor.Y / scale);
+        return true;
+    }
+
+    /// <summary>
+    /// Asks the OS where the pointer is and tells the reveal rule, as though a pointer event had said so.
+    /// <para>
+    /// For the moments when no event will. A fullscreen or maximize transition moves every control out
+    /// from under a pointer that never moved, so the recorded position — a fraction of a client height that
+    /// no longer exists, and a hit test against a bar that has since moved to the bottom of the screen — is
+    /// answering a question about a window that is gone. And a drag holds still as often as it moves, while
+    /// the chrome's patience for a still pointer now has a limit; a slider that vanished mid-drag would
+    /// take the pointer capture with it and drop the thumb.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// True when the reveal rule was actually told something. False means the position could not be turned
+    /// into a point on the picture — no size yet, no reading — and the rule still believes whatever it did
+    /// before, which matters to <see cref="PollPointer"/> and to nobody else.
+    /// </returns>
+    private bool ReseedPointer() => ReseedPointer(moved: false);
+
+    /// <summary>
+    /// The same, for the two callers that mean different things by it. A resize genuinely moves every control
+    /// out from under a pointer that never moved, so 「the pointer is not still」 is true and
+    /// <paramref name="moved"/> is true; the ten-hertz poll has already asked the question properly, against
+    /// the point the cursor was hidden at, and by the time it gets here it is only reporting a position.
+    /// </summary>
+    private bool ReseedPointer(bool moved)
+    {
+        // Nothing better to say than what is already recorded: a failed read is not a departure.
+        if (!CursorPoint(out var point)) return false;
+
+        if (Root.ActualWidth <= 0 || Root.ActualHeight <= 0) return false;
+
+        if (point.X < 0 || point.Y < 0 || point.X >= Root.ActualWidth || point.Y >= Root.ActualHeight)
+        {
+            // 二十报补的名牌。**第二十一报第二轮把这一路的后果改掉了**：藏匿期再走 PointerLeft 已经
+            // 不会显示（keepHidden，见 ChromeReveal.PointerLeft），而那条路正是报上来的几何 ——
+            // AyuGram 在第二块屏上、幽灵把指针往那边搬，窗口化播放时客户区又小，一记六十像素的横跳
+            // 随手就出界，而它当时是以零路程掀掉藏匿的。牌子留着，读作「读数落到画面外」；显示与否
+            // 由 keepHidden 决定。
+            if (_cursorHidden && _woke.StartsWith("未标注", StringComparison.Ordinal))
+                _woke = "指针读数落到画面外（PointerLeft 出界）";
+            if (_chrome.PointerLeft(Now, keepHidden: _cursorHidden)) Render();
+            return true;
+        }
+
+        // Recorded as well as reported: this is the same knowledge in the same coordinates the pointer events
+        // are filtered against, and an anchor left behind by a fullscreen transition would make the next
+        // event look like a move whether or not the hand had moved.
+        var part = PartAt(point);
+        NotePointer(point, part);
+
+        if (_chrome.Pointer(point.Y, Root.ActualHeight, part, RailNear(point), Now, moved)) Render();
+        return true;
+    }
+
+    /// <summary>
+    /// 记下指针此刻在画面里的位置，并顺手把左上角那三块玻璃的浓度推到位。
+    /// <para>
+    /// 前两句原来是抄成两份的 —— 十赫兹那条轮询路 <see cref="ReseedPointer(bool)"/> 一份，输入那一侧的
+    /// <c>Moved</c>（WinUI 事件路）一份；2026-09-27 傍晚起它们还各有一句玻璃要说，于是并到这一处。
+    /// </para>
+    /// <para>
+    /// 玻璃写在这里而不是写在 <see cref="Render"/> 里：<c>Render</c> 只在显隐规则改了主意的时候跑，
+    /// 而指针在顶部带里上下走的时候规则什么都不改 —— 「越靠上越深」要的正是那种时候。
+    /// </para>
+    /// </summary>
+    private void NotePointer(Point point, ChromePart part)
+    {
+        _pointerAt = point;
+        _pointerOn = part;
+        ApplyTopGlass(TopGlassDepth());
+    }
+
+    /// <summary>
+    /// 左上角那三块玻璃此刻该有多深，0..1（<see cref="ChromeReveal.TopGlassDepth"/> 那条直线）。
+    /// <para>
+    /// 两处答 0：指针读数还没有过（<c>_pointerAt</c> 是 NaN，页面刚构造完正是这一档），或者画面还没排过版
+    /// （高度 0，换算不出来）。这两处那几块要么不在屏上、要么是钉住露出来的（开着菜单、<c>--show-osd</c>
+    /// 拍照那一路），该停在最浅那一档 —— 不能凭空给一块最深的底。
+    /// </para>
+    /// </summary>
+    private double TopGlassDepth()
+    {
+        if (double.IsNaN(_pointerAt.Y) || Root.ActualHeight <= 0) return 0;
+
+        return ChromeReveal.TopGlassDepth(_pointerAt.Y / Root.ActualHeight, TopGlassFullAt());
+    }
+
+    /// <summary>
+    /// 左上角那几块玻璃「深到底」那条线在画面高度的哪个位置 —— 也就是「鼠标走到哪就算靠到顶了」。
+    /// <para>
+    /// 用户令 2026-09-27 傍晚第四批「左上角的颜色深度在鼠标移动到剧名下方那条线之前一点的时候达到最大」：
+    /// 量的是左簇里**最下面那块玻璃**的下沿（有剧名时就是剧名那块 —— 那句话里的「剧名下方那条线」；
+    /// 没有剧名时退到标题那块与返回键里靠下的那一个），再往上让
+    /// <see cref="ChromeReveal.TopGlassFullInset"/> 那么多像素。**量出来的而不是写死的**：剧名的字号、
+    /// 有没有剧名、返回键长多高，任何一样改了它都跟着走。
+    /// </para>
+    /// <para>
+    /// 条子收起时那几个元素还留着上一次排版的高度，这里照量 —— 算出来的仍是「那几块玻璃的下沿」，
+    /// 而真正用得上这个值的时候条子都在屏上（指针就在带子里）。
+    /// </para>
+    /// </summary>
+    private double TopGlassFullAt()
+    {
+        if (Root.ActualHeight <= 0) return 0;
+
+        var lowest = 0.0;
+
+        foreach (var block in new FrameworkElement[] { TitleBox, SubtitleBox, BackButton })
+        {
+            if (block.Visibility != Visibility.Visible) continue;
+
+            lowest = Math.Max(lowest, OriginIn(block).Y + block.ActualHeight);
+        }
+
+        return Math.Max(0, lowest - ChromeReveal.TopGlassFullInset) / Root.ActualHeight;
+    }
+
+    /// <summary>
+    /// 左上角标题簇（返回键、标题框、第二行文件信息框）的**两档尺寸**（用户令 2026-09-28
+    /// 「参考独占模式为集成模式的窗口和全屏设置不一样的标题尺寸」；更晚「把独占模式的标题复刻到集成模式」
+    /// 把两档的数改成照独占的公式推）。
+    /// <para>
+    /// <b>哪一档由窗口形态定：全屏**或最大化**都是大档，只有普通窗口才是小档</b>（用户令 2026-09-28
+    /// 更晚「你就不能跟独占模式一样，全屏的时候放大，窗口化的时候缩小吗」＋「包括进度条上方的按钮」）。
+    /// 独占那一头正是这样：`state.scale = hidpi * (fullormaxed and scale_fullscreen or scale)`
+    /// —— `fullormaxed` 把最大化一起算进 1.3 那一档。判据只有一处：<see cref="BigChrome"/>。
+    /// 这一处摆的也不只是标题簇：<see cref="ApplyTransportScale"/>（进度条上面那一行）与
+    /// <see cref="ApplyWindowGlyphScale"/>（右上三颗窗口命令）都由它带上。
+    /// </para>
+    /// 独占 uosc 顶栏的尺寸全由一个 <c>top_bar_size</c> 推出来（<c>elements/TopBar.lua</c>）：
+    /// 字号 <c>floor((size - ceil(size*0.25)*2) * font_scale)</c>、内缩 <c>margin = floor((size-font_size)/4)</c>、
+    /// 玻璃 <c>size - 2*margin</c> 见方、两行之间的缝 <c>title_spacing = round(1 * scale)</c>、
+    /// 第二行高 <c>alt_title_size = round(font_size * 1.2)</c>、第二行字号 <c>round(alt_title_size * 0.71)</c>
+    /// （2026-09-29 从 0.77 收小，用户令「元数据缩小一点点」，见 TopBar.lua 的 <c>MOMOKA[topbar-subline-size]</c>）、
+    /// 左右内边距 <c>round(font_size / 2)</c>；全屏档把 size 从 40 提到 52（<c>scale_fullscreen = 1.3</c>）。
+    /// 两档数出来是：
+    /// </summary>
+    /// <remarks>
+    /// <list type="bullet">
+    /// <item>窗口档 size 40 / 字号 20 / margin 5 —— 返回键玻璃 30 见方、四周各让 5；标题玻璃高 30、上沿 5、
+    /// 左缘＝返回键玻璃右缘＋<see cref="TitleGap"/>（＝36）；第二行左缘 5、上沿 36（＝返回键玻璃下沿 35＋1）、
+    /// 高 24、左右内边距 10。</item>
+    /// <item>全屏档 size 52 / 字号 26 / margin 6 —— 玻璃 40 见方、让 6；标题玻璃高 40、上沿 6、左缘 47；
+    /// 第二行左缘 6、上沿 47、高 31、左右内边距 13。</item>
+    /// </list>
+    /// <para>
+    /// <b>字号是两套刻度，不是同一个数。</b>几何（玻璃、内缩、缝、行高）照抄 uosc 的值就对，唯独字号要乘
+    /// <b>0.75</b>：uosc 的 `\fs` 按 <b>72 DPI 的 pt</b> 渲染，WinUI 的 <c>FontSize</c> 是 <b>96 DPI 的 px</b>
+    /// （72/96 ＝ 0.75）。实测为证（两头同串）：独占窗口档 `\fs18` 屏上墨迹宽 292、全屏档 `\fs24` 宽 388
+    /// （比值 1.33 ＝ 字号比，说明换算是线性的），而集成照抄 18px 画出来是 385。
+    /// 所以第二行的字号是 <b>12.75 / 16.5</b>（＝ 17×0.75 ／ 22×0.75；第一行的 20 / 26 同样偏大，用户那一轮
+    /// 只点了第二行，见 PROGRESS）。用户令 2026-09-28 更晚「集成模式下面的元数据体积太大了，与独占模式
+    /// 不一致」修的是换算这一条；用户令 2026-09-29「元数据缩小一点点，集成模式和独占模式大小要一致」
+    /// 把独占那头的因子 0.77 收到 0.71（两档 `\fs` 18→17、24→22），这里跟着落 12.75 / 16.5 —— 两头的数
+    /// 必须一起改（TopBar.lua 的 <c>MOMOKA[topbar-subline-size]</c> 有同一份清单）。
+    /// </para>
+    /// <para>
+    /// 窗口档的数就是 XAML 里写的那些，进页面先按窗口档归位（退场那一路直接改
+    /// <c>HostWindow.Fullscreen</c> 不经过 <see cref="ApplyFullscreen"/>，所以这里幂等、进页面就摆一次）。
+    /// 字号不再按「窗口档基准 ×1.3」推：那一版窗口档是 20/16，16×1.3 取整只有 21，而独占全屏那一档是 24
+    /// —— 复刻之后两档都照上表写死，原来那两个基准字段随之退役。
+    /// </para>
+    /// </remarks>
+    private const double WindowTitleFont = 20;
+    private const double WindowSubtitleFont = 12.75;
+    private const double FullscreenTitleFont = 26;
+    private const double FullscreenSubtitleFont = 16.5;
+
+    /// <summary>
+    /// 进度条上面那一行按钮的图标字号，窗口档（＝独占 `\fs22` × 0.75，与 <c>TransportGlyphStyle</c> 同一个数）
+    /// 与全屏档（＝独占 `\fs29` × 0.75）。两档由 <see cref="ApplyTransportScale"/> 摆上，来历与实拍读数见
+    /// <c>PlayerPage.xaml</c> 里 <c>TransportGlyphStyle</c> 那段标记。
+    /// </summary>
+    private const double WindowTransportGlyph = 16.5;
+
+    /// <inheritdoc cref="WindowTransportGlyph"/>
+    private const double FullscreenTransportGlyph = 21.75;
+
+    /// <summary>
+    /// 右上角那三颗窗口命令（最小化／最大化／关闭）的图标字号，窗口档（＝独占 <c>top_bar_size</c> 40 里可见底
+    /// 35 的一半 ＝ 17.5，`\fs` 是 72 DPI 的 pt ⇒ × 0.75 ＝ 13.125）与全屏档（独占整条顶栏按
+    /// `state.scale`＝1.3 放大：size 52、margin 6、可见底 46、图标 23 ⇒ 17.25）。两档由
+    /// <see cref="ApplyWindowGlyphScale"/> 摆上；来历与实拍读数见 <c>PlayerPage.xaml</c> 里
+    /// <c>WindowGlyphStyle</c> 那段标记。
+    /// <para>
+    /// <b>2026-09-28 深夜第五批用户令「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的
+    /// 窗口模式下右上角的一样大」把「缩小 1.3 倍」那一笔整段撤销</b>：那两个数各自乘 1.3 回到
+    /// <b>13.125 / 17.25</b>（曾经是 10.096 / 13.269），置顶那颗也不再是「16 见方 ÷ 1.3 的 12.31」——
+    /// 它换成了独占同一支字体的同一颗图钉，尺寸另行给出（见 <see cref="WindowPinGlyph"/>）。
+    /// 同一条令的另一半是**背景**：四颗的可见底从 40 见方收进 35（＝独占 `size 40 − margin 5`，
+    /// 落的格与步进写在 <c>PlayerPage.xaml</c> 那一栏的标记里）。
+    /// </para>
+    /// </summary>
+    private const double WindowCommandGlyph = 13.125;
+
+    /// <inheritdoc cref="WindowCommandGlyph"/>
+    private const double FullscreenCommandGlyph = 17.25;
+
+    /// <summary>
+    /// 右上角**置顶那一颗**的实框边长（宽 × 高），两档。它和三颗窗口命令不一样：那三颗是
+    /// <c>FontIcon</c>、只报一个字号，这一颗是 <c>PathIcon</c>、几何自己带比例，所以宽高各一个数。
+    /// <para>
+    /// 数的来历是**独占同一支字体的同一个字形**：独占那颗是 uosc 的
+    /// <c>ass:icon(…, bg_size * 0.5, 'push_pin', …)</c>，字号 17.5；字形取自装箱的
+    /// <c>MaterialIconsRound-Regular.otf</c>（upem 512），<c>push_pin</c> 的墨框是 298 × 426 单位
+    /// ⇒ 屏幕上 17.5 × 298/512 ＝ 10.2 宽、17.5 × 426/512 ＝ 14.6 高。实拍（`work/probe-topbar-pin.txt`，
+    /// 1280×720、阈值 200 的白核连通域）读到 **9 × 14** —— 边缘约一个像素被抗锯齿吃掉，取的是实拍值。
+    /// 宽跟着高走：14 × 298/426 ＝ **9.793**，于是这一颗在集成里的墨迹与独占那颗**同一个大小、同一个形状**
+    /// （几何就是从那一支字体里取的轮廓，见 PlayerPage.xaml 里 <c>PinGlyph</c> 的 Data）。
+    /// </para>
+    /// <para>
+    /// 全屏档＝独占有 <c>state.scale</c>＝1.3 的那一档整条顶栏等比放大，那两个数乘 1.3：
+    /// 9.793 → <b>12.731</b>、14 → <b>18.2</b>。两档由 <see cref="ApplyWindowGlyphScale"/> 摆上 ——
+    /// 摆的是外面那层 <c>PinGlyphBox</c>（Viewbox）。
+    /// </para>
+    /// <para>
+    /// <b>XAML 里那份 Data 的坐标也是按窗口档这两个数给的（0~9.793 × 0~14，由字体单位等比缩来）。</b>
+    /// 这一步不能省：<c>PathIcon</c> **不缩放几何**，把字体的原始坐标（0~512）直接填进去，整颗会落在框外，
+    /// 屏上什么都看不见 —— 2026-09-28 深夜第五批的第一版正是这样（轮廓抠得一个单位不差，实拍里却是空的）。
+    /// 同理，全屏档那个 1.3 也只能在外面那层 Viewbox 上做。判据见 <c>PlayerPage.SelfCheck.Window.cs</c> 里
+    /// 「图钉的墨框就是窗口档那一对」那一条。
+    /// </para>
+    /// </summary>
+    private static readonly (double Width, double Height) WindowPinGlyph = (9.793, 14);
+
+    /// <inheritdoc cref="WindowPinGlyph"/>
+    private static readonly (double Width, double Height) FullscreenPinGlyph = (12.731, 18.2);
+
+    /// <summary>
+    /// 右上四颗（置顶＋三颗窗口命令）的**可见底、彼此的缝、贴角让位**，两档（2026-09-28 深夜第六批补批，
+    /// 用户令「这四个按钮全屏和最大化时没放大」—— 此前只有图标字号与图钉两档，格是 XAML 写死的窗口档）。
+    /// <para>
+    /// 窗口档＝XAML 初值：35 见方、缝 5、右让 5（第五批照独占 `size 40 − margin 5` 收的）。全屏档照独占
+    /// `TopBar.lua` 的同一批公式在 `state.scale` 1.3 下重算：size 52（round(40×1.3)）、margin 6
+    /// （floor((52−26)/4)）⇒ 可见底 **46**（52−6）、缝 **6**（＝margin）、右让 **6**；圆角照
+    /// <c>state.radius</c> 2→**3**。往下让位窗口档是 4（第五批拍板，无独占链），按本策略 ×1.3 ＝ **5.2**。
+    /// </para>
+    /// </summary>
+    private const double WindowCommandCell = 35;
+    private const double FullscreenCommandCell = 46;
+    private const double WindowCommandGap = 5;
+    private const double FullscreenCommandGap = 6;
+    private const double WindowCommandInset = 5;
+    private const double FullscreenCommandInset = 6;
+    private const double WindowCommandTop = 4;
+    private const double FullscreenCommandTop = 5.2;
+
+    /// <summary>
+    /// 进度条上方那一行按钮的**按钮格、行内缝与四周内缩**，两档（用户令 2026-09-28 更晚
+    /// 「复刻独占模式的控件放大策略到集成模式」—— 前一批只点了图标字号，XAML 里那句
+    /// 「按钮格没动……要对齐说一声」等的正是这一轮）。
+    /// <para>
+    /// 数来自 uosc 的 <c>elements/Controls.lua</c>：<c>size = round(controls_size × state.scale)</c>、
+    /// <c>spacing = round(controls_spacing × state.scale)</c>、<c>margin = round(controls_margin × state.scale)</c>，
+    /// 而 main.lua 的默认是 <c>controls_size=32 / controls_spacing=2 / controls_margin=8</c> ⇒
+    /// 窗口档 32 / 2 / 8（＝XAML 初值），全屏档 round(32×1.3)=<b>42</b> / round(2×1.3)=<b>3</b> /
+    /// round(8×1.3)=<b>10</b>。圆角照 <c>state.radius = round(border_radius × scale)</c>：2 → 3。
+    /// </para>
+    /// </summary>
+    private const double WindowTransportCell = 32;
+    private const double FullscreenTransportCell = 42;
+    private const double WindowTransportGap = 2;
+    private const double FullscreenTransportGap = 3;
+    private const double WindowTransportInset = 8;
+    private const double FullscreenTransportInset = 10;
+
+    /// <summary>
+    /// 中间那格**倍速条**（Grid，146×42）与文字倍速键（64 宽，平时收起）的窗口档尺寸，及全屏档
+    /// ×1.3（54.6 / 83.2）。宽度那一维归 <see cref="ArrangeTransport"/> 按窗口宽度分档
+    /// （100/146 两档），这里只摆高度与文字键的宽度。
+    /// </summary>
+    private const double WindowSpeedStripHeight = 42;
+    private const double FullscreenSpeedStripHeight = 54.6;
+    private const double WindowSpeedButtonWidth = 64;
+    private const double FullscreenSpeedButtonWidth = 83.2;
+
+    /// <summary>
+    /// 右缘**音量条**的两档：宽度（uosc <c>Volume.lua</c> 的 <c>size = round(volume_size × state.scale)</c>，
+    /// 默认 volume_size=40 ⇒ 窗口 40、全屏 round(40×1.3)=<b>52</b>；滑杆、静音键格同宽）、贴右缘的让位
+    /// （20 → 26）、静音键图标（窗口档 22 是 09-28 第五批拍板的现值，全屏档按本策略 ×1.3 ——
+    /// 不照 uosc 的 <c>round(size×0.7)</c> 链重推：那条链给 27，可窗口档那颗本来就与 21 差 1，
+    /// 重推反而两档对不上）、轨高上限（280 是 <see cref="ArrangeTransport"/> 公式里的夹取上限，
+    /// ×1.3 = 364；公式本体不随档，上限之外的部分在矮窗里本来就被夹住）。
+    /// </summary>
+    private const double WindowRailSize = 40;
+    private const double FullscreenRailSize = 52;
+    private const double WindowRailInset = 20;
+    private const double FullscreenRailInset = 26;
+    private const double WindowRailGlyph = 22;
+    private const double FullscreenRailGlyph = 28.6;
+    private const double WindowRailTrack = 280;
+    private const double FullscreenRailTrack = 364;
+
+    /// <summary>
+    /// **跳过按钮**的两档。<b>2026-09-30 用户令「缩小图标跳过按钮两倍」：整颗按钮一律减半</b>（那一批
+    /// 之前窗口档是内边距 24×28、圆角 28、右让位 28（09-26「厚度加倍」那批）、两组行距 10、
+    /// 倒计时条高 4、图标 16（＝OsdGlyphStyle 基准）、标题 16（＝EgSubheadFontSize）、提示 12
+    /// （＝EgCaptionFontSize））。<b>2026-10-01 用户令「跳过按钮太小，调大 1.5 倍」：在减半的基础上
+    /// 每一项 ×1.5 写死</b>（＝最初基准的 0.75；不是乘一个系数——两档的落点要能一眼读出「今天窗口档
+    /// 是几」）。全屏档一律 ×1.3（＝独占的 <c>scale_fullscreen</c>）——
+    /// uosc 那颗 SkipButton 同样随 state.scale 缩（<c>elements/SkipButton.lua</c> 的字号、内边距、
+    /// 让位全乘 scale，那边的基准数两轮都跟着集成走）。
+    /// <para>
+    /// 尺度跟着图标走：图标是用户两轮都点名的那个量（16→8→12），其余几项跟着图标走才不显得
+    /// 「小图标配大留白」——内边距、行距、标题、提示、倒计时条都是同一把尺上的量。
+    /// </para>
+    /// </summary>
+    private const double WindowSkipPadX = 18;
+    private const double FullscreenSkipPadX = 23.4;
+    private const double WindowSkipPadY = 21;
+    private const double FullscreenSkipPadY = 27.3;
+    private const double WindowSkipGap = 7.5;
+    private const double FullscreenSkipGap = 9.75;
+    private const double WindowSkipGlyph = 12;
+    private const double FullscreenSkipGlyph = 15.6;
+    private const double WindowSkipCaption = 12;
+    private const double FullscreenSkipCaption = 15.6;
+    private const double WindowSkipTip = 9;
+    private const double FullscreenSkipTip = 11.7;
+    private const double WindowSkipCountdown = 3;
+    private const double FullscreenSkipCountdown = 3.9;
+
+    /// <summary>
+    /// 返回键玻璃右缘与标题玻璃左缘之间那条缝（独占的 <c>title_spacing</c>＝<c>round(1 * scale)</c>，
+    /// 两档都是 1）。它在这里是标题框的左边距 —— 0 号列（Auto）的宽度正是返回键那一格（玻璃＋左内缩），
+    /// 所以「格子宽＋这个数」就是标题玻璃的左缘。
+    /// </summary>
+    private const double TitleGap = 1;
+
+    /// <summary>
+    /// 此刻摆上去的是哪一档（大档＝全屏或最大化）。<see cref="SyncChromeScale"/> 靠它只为「档位真的变了」
+    /// 重摆一次 —— 窗口几何那个事件在拖动改尺寸时每几毫秒就来一次。
+    /// </summary>
+    private bool _chromeBig;
+
+    /// <summary>
+    /// 两档的**唯一判据**：全屏**或最大化**算大档、普通窗口算小档 —— 就是独占 <c>state.scale</c> 那句
+    /// <c>fullormaxed</c>（用户令 2026-09-28 更晚「跟独占模式一样，全屏的时候放大，窗口化的时候缩小」＋
+    /// 「包括进度条上方的按钮」「包括进度条」）。
+    /// <para>
+    /// 页面上本来就有这一档的先例：**时间轴**一直这么判（<c>Timeline.cs</c> 的 <c>TimelineFullHeight</c>
+    /// ＝31 / 40，那一路连「最大化」一起算）。2026-09-28 的几批把标题簇、进度条上面那一行、右上那三颗
+    /// 并了过来；更晚「复刻独占模式的控件放大策略到集成模式」把剩下的**按钮格/行缝/内缩、倍速条、
+    /// 音量条、跳过按钮**也一并归进来 —— 自此整条浮层（标题簇、时间轴、按钮行、音量条、跳过按钮、
+    /// 右上四颗）一个口径，判据只有这一处。弹层不在其列：菜单/轮盘/seek 预览是另一族表面
+    /// （独占那边随 scale 缩的是 uosc 自己画的 Menu，集成这边是系统样式的 Flyout，两边的弹层都没跟）。
+    /// </para>
+    /// </summary>
+    private bool BigChrome => _window is { Fullscreen: true } or { IsMaximized: true };
+
+    /// <summary>
+    /// 「按窗口尺寸现算」的两处（<see cref="ArrangeTransport"/> 的倍速条宽度档与音量轨高度上限）用的
+    /// 档位倍率 —— 就是独占 <c>scale_fullscreen</c> 那个 1.3，判据同 <see cref="BigChrome"/>。写死的两档
+    /// 常量不走它；只有动态公式里这两处拿它乘，免得再埋一份判据。hidpi 那一半不用复刻：WinUI 的
+    /// 有效像素本来就随系统 DPI 走（uosc 的 hidpi_scale 是给 ASS 物理像素补的那一层）。
+    /// </summary>
+    private double ChromeFactor => BigChrome ? 1.3 : 1.0;
+
+    /// <summary>按窗口**这一刻的形态**摆两档尺寸（判据见 <see cref="BigChrome"/>）。进页面、窗口形态变了都走它。</summary>
+    internal void ApplyChromeScale() => ApplyTitleScale(BigChrome);
+
+    /// <summary>
+    /// 窗口形态变了（全屏进出、最大化／还原、Aero Snap、双击标题）就按新形态重摆两档。
+    /// 形态变化没有一条统一的通知路：全屏那两条走 <c>ApplyFullscreen</c>、最大化那颗按钮走
+    /// <c>RequestMaximize</c>，而系统那几条（双击、Win+↑、拖到顶）谁都不经过 —— 它们共同留下的痕迹只有
+    /// <c>WM_SIZE</c>，所以兜底摆在 <see cref="OnGeometryChanged"/> 里。
+    /// </summary>
+    private void SyncChromeScale()
+    {
+        if (_chromeBig != BigChrome) ApplyTitleScale(BigChrome);
+    }
+
+    internal void ApplyTitleScale(bool fullscreen)
+    {
+        // 记下这一档：SyncChromeScale 拿它比「档位变了没有」。
+        _chromeBig = fullscreen;
+
+        // 与标题簇同一批的还有四处（2026-09-28 起逐批并档，更晚「复刻独占模式的控件放大策略到集成模式」
+        // 收齐）：进度条上面那一行（图标＋按钮格，ApplyTransportScale）、右上四颗（ApplyWindowGlyphScale）、
+        // 右缘音量条（ApplyRailScale）、跳过按钮（ApplySkipScale）。进出全屏与进页面这几条路都只调
+        // 这一个方法，五处一起摆 —— 分开写迟早会漏掉一条。
+        // 先摆图标：它们只是字号，不动布局；标题那五个数里有几项会改行高。
+        ApplyTransportScale(fullscreen);
+        ApplyWindowGlyphScale(fullscreen);
+        ApplyRailScale(fullscreen);
+        ApplySkipScale(fullscreen);
+
+        // 宽度分档与高度公式那两处（倍速条宽度档、音量轨上限）按新档重算一遍：形态变了但 Root 尺寸
+        // 恰好没变的路（最大化↔全屏尺寸相同时）没有 SizeChanged 来替它跑。没进页面时它自己会早退，
+        // XAML 初值（窗口档）接着用 —— 与本方法其余各档一致。
+        ArrangeTransport();
+
+        // 每一档把五个数一次摆全：返回键（含它所在格子的内缩）、标题框（高/上沿/左右内边距）、第二行
+        // （上沿/高/左右内边距）、两行字号。逐档写死而不是抽成一个公式 —— summary 里那两个整数的来历
+        // 比算式本身重要，照公式现推一遍反而看不出「哪个数是哪来的」。
+        if (!fullscreen)
+        {
+            BackButton.Width = BackButton.Height = BackButton.MinWidth = 30;
+            if (BackButton.Parent is Grid backCell) backCell.Margin = new Thickness(5, 5, 0, 0);
+
+            TitleBox.Height = 30;
+            TitleBox.Margin = new Thickness(TitleGap, 5, 0, 0);
+            TitleBox.Padding = new Thickness(10, 0, 10, 0);
+
+            SubtitleBox.Height = 24;
+            SubtitleBox.Margin = new Thickness(5, 36, 0, 0);
+            SubtitleBox.Padding = new Thickness(10, 0, 10, 0);
+
+            TitleText.FontSize = WindowTitleFont;
+            SubtitleText.FontSize = WindowSubtitleFont;
+            return;
+        }
+
+        BackButton.Width = BackButton.Height = BackButton.MinWidth = 40;
+        if (BackButton.Parent is Grid fullCell) fullCell.Margin = new Thickness(6, 6, 0, 0);
+
+        TitleBox.Height = 40;
+        TitleBox.Margin = new Thickness(TitleGap, 6, 0, 0);
+        TitleBox.Padding = new Thickness(13, 0, 13, 0);
+
+        SubtitleBox.Height = 31;
+        SubtitleBox.Margin = new Thickness(6, 47, 0, 0);
+        SubtitleBox.Padding = new Thickness(13, 0, 13, 0);
+
+        TitleText.FontSize = FullscreenTitleFont;
+        SubtitleText.FontSize = FullscreenSubtitleFont;
+    }
+
+    /// <summary>
+    /// 进度条上面那一行按钮的**两档**：图标字号（用户令 2026-09-28「集成模式进度条上面的图标要和独占模式
+    /// 一样，全屏时稍微放大」；更晚「你就不能跟独占模式一样，全屏的时候放大，窗口化的时候缩小吗」＋
+    /// 「包括进度条上方的按钮」把大档从「全屏」放宽到「全屏或最大化」，见 <see cref="BigChrome"/>），
+    /// 以及同一条令收进来的**按钮格、行内缝、四周内缩与圆角**（2026-09-28 更晚「复刻独占模式的控件放大
+    /// 策略到集成模式」—— 独占全屏连格一起涨到 42 / 3 / 10，见 <see cref="WindowTransportCell"/>）。
+    /// <para>
+    /// 字号的数与来历写在 <c>PlayerPage.xaml</c> 的 <c>TransportGlyphStyle</c> 那段标记里：独占是 uosc 的
+    /// <c>ass:icon(…, font_size = round(32 * scale * 0.7), …)</c>，窗口档 22、全屏档 29（`\fs` 是 72 DPI 的
+    /// pt ⇒ 乘 0.75），所以这里是 16.5 / 21.75。窗口档那些数同时是 XAML 里的初值 —— 只 build 不经过这里
+    /// 的那几条路（探针、--show-osd）也还是对的。
+    /// </para>
+    /// <para>
+    /// 宽度分档（<see cref="ArrangeTransport"/> 按窗口宽度收放哪几颗、倍速条两档宽度）一个字没碰 ——
+    /// 那一头自己读 <see cref="ChromeFactor"/>。
+    /// </para>
+    /// <para>
+    /// 2026-09-29 用户令「集成模式右下角的字幕和音轨键向左移一个键的空位（参考独占模式）」又加一笔：
+    /// AudioButton 的右边距随档摆成格宽（32 / 42），字幕、音轨与全屏之间因此空出一个键位 —— 独占控制条
+    /// 音频与全屏之间 <c>gap:1</c> 的同款（净宽＝行内缝＋一格）。
+    /// </para>
+    /// </summary>
+    internal void ApplyTransportScale(bool fullscreen)
+    {
+        var glyph = fullscreen ? FullscreenTransportGlyph : WindowTransportGlyph;
+        var cell = fullscreen ? FullscreenTransportCell : WindowTransportCell;
+        var gap = fullscreen ? FullscreenTransportGap : WindowTransportGap;
+        var corner = fullscreen ? 3d : 2d;
+        TransportRow.Margin = new Thickness(fullscreen ? FullscreenTransportInset : WindowTransportInset);
+        TransportRow.ColumnSpacing = gap;
+        foreach (var group in new[] { TransportLeft, TransportMiddle, TransportRight })
+        {
+            group.Spacing = gap;
+            foreach (var child in group.Children)
+            {
+                if (child is not Button button) continue;
+                if (ReferenceEquals(button, SpeedButton))
+                {
+                    // 文字倍速键：内容是文字不是 FontIcon，随档的只有宽度。
+                    button.Width = fullscreen ? FullscreenSpeedButtonWidth : WindowSpeedButtonWidth;
+                    continue;
+                }
+                // 那一排其余每颗的内容都是一个 FontIcon；图标与格一起摆（独占全屏连格一起涨）。
+                if (button.Content is FontIcon icon) icon.FontSize = glyph;
+                button.Width = button.MinWidth = cell;
+                button.Height = button.MinHeight = cell;
+                button.CornerRadius = new CornerRadius(corner);
+            }
+        }
+        // 字幕/音轨与全屏之间空一个键位（用户令 2026-09-29「集成模式右下角的字幕和音轨键向左移一个键的空位，
+        // 参考独占模式」——独占控制条音频与全屏之间是 uosc 的 gap:1，净宽＝行内缝＋一格）：空位写成
+        // AudioButton 的右边距（＝格宽），StackPanel 的 Spacing 在它右侧补那一道缝；XAML 初值 32 是窗口档。
+        AudioButton.Margin = new Thickness(0, 0, cell, 0);
+        // 倍速条是这一格里唯一不是 Button 的（Grid）：高度随档，宽度归 ArrangeTransport。
+        SpeedStrip.Height = fullscreen ? FullscreenSpeedStripHeight : WindowSpeedStripHeight;
+    }
+
+    /// <summary>
+    /// 右上角**四颗**（三颗窗口命令＋置顶那颗）两档的图标尺寸与**格**（用户令 2026-09-28 晚「集成模式窗口化的时候
+    /// 右上角的图标太大了，改成跟独立模式窗口化时一样大」；更晚那条把大档放宽到「全屏或最大化」，见
+    /// <see cref="BigChrome"/>；深夜第三批「把集成模式右上角的这四个图标缩小 1.3 倍」缩过一轮，第五批
+    /// 「把集成模式右上角的四个图标还有这四个图标的背景改成跟独占模式的窗口模式下右上角的一样大」
+    /// 又把那一笔整段撤回 —— 现行数是 13.125 / 17.25）。
+    /// <para>
+    /// 数与来历写在 <c>PlayerPage.xaml</c> 的 <c>WindowGlyphStyle</c> 那段标记里：独占是 uosc 的
+    /// <c>ass:icon(bg_ax + bg_size / 2, …, bg_size * 0.5, button.icon, …)</c> —— 图标画在**可见底**（40 减去
+    /// margin 5 ＝ 35）的中心、直径是它的一半：窗口档 17.5、全屏档 23（`\fs` 是 72 DPI 的 pt ⇒ 乘 0.75 ⇒
+    /// 13.125 / 17.25）。窗口档那两个数同时是 XAML 里的初值 —— 只 build 不经过这里的那几条路（探针、
+    /// --show-osd）也还是对的。
+    /// </para>
+    /// <para>
+    /// **四颗分两套摆**：三颗窗口命令是 <c>FontIcon</c>，只报一个字号；置顶那颗是 <c>PathIcon</c>，报的是
+    /// 一对实框（<see cref="WindowPinGlyph"/>）—— 几何自己带比例、不吃字号，所以要单给宽高。
+    /// **第六批补批把格也并进来**（用户令「这四个按钮全屏和最大化时没放大」）：可见底 35→46、彼此的缝
+    /// 5→6、右让 5→6（＝独占 <c>TopBar.lua</c> 的 bg_size＝size−margin、bg_ay＝ay＋margin 那一批公式在
+    /// 1.3 档的读数，见 <see cref="WindowCommandCell"/>）、圆角 2→3；往下让位 4→5.2（×1.3）。
+    /// </para>
+    /// </summary>
+    internal void ApplyWindowGlyphScale(bool fullscreen)
+    {
+        var size = fullscreen ? FullscreenCommandGlyph : WindowCommandGlyph;
+        MinimizeGlyph.FontSize = size;
+        MaximizeGlyph.FontSize = size;
+        CloseGlyph.FontSize = size;
+
+        // 置顶那颗是 PathIcon —— 它不吃 FontSize，两档各给一对实框（数与来历见 WindowPinGlyph）。这一对摆的是
+        // 外面那层 Viewbox 而不是控件自己：**PathIcon 不缩放几何**，那份 Data 的坐标只对应窗口档那一对，
+        // 全屏档要放大 1.3 就只能交给外面那个框（见 PlayerPage.xaml 里 PinGlyphBox 那段标记）。
+        var pin = fullscreen ? FullscreenPinGlyph : WindowPinGlyph;
+        PinGlyphBox.Width = pin.Width;
+        PinGlyphBox.Height = pin.Height;
+
+        // 格：可见底就是按钮自己的 Width/Height（悬停那两档底画在这块上，格涨它们跟着涨；置顶那颗
+        // 2026-09-29 起不再有已置顶那一档的底）。
+        var cell = fullscreen ? FullscreenCommandCell : WindowCommandCell;
+        var corner = fullscreen ? 3d : 2d;
+        foreach (var button in new[] { PinButton, MinimizeButton, MaximizeButton, CloseButton })
+        {
+            button.Width = button.Height = cell;
+            button.CornerRadius = new CornerRadius(corner);
+        }
+        WindowButtons.Spacing = fullscreen ? FullscreenCommandGap : WindowCommandGap;
+        WindowButtons.Margin = new Thickness(0,
+            fullscreen ? FullscreenCommandTop : WindowCommandTop,
+            fullscreen ? FullscreenCommandInset : WindowCommandInset, 0);
+    }
+
+    /// <summary>
+    /// 右缘音量条的**两档**（用户令 2026-09-28 更晚「复刻独占模式的控件放大策略到集成模式」）。
+    /// 独占那头是 uosc 的 <c>Volume.lua</c>：<c>size = round(volume_size × state.scale)</c> ⇒ 40 / 52，
+    /// 整条（滑杆、静音键格、贴缘让位）随档；轨的**高度**在集成里是按画面高度现算的
+    /// （<see cref="ArrangeTransport"/>，上限两档见 <see cref="WindowRailTrack"/>），不在这里摆。
+    /// <para>
+    /// <see cref="PaintTransportReadouts"/> 里那块数字裁剪以前手抄轨宽 40 —— 本轮改成读
+    /// <c>VolumeTrack.ActualWidth</c>，宽到 52 时数字才不会被裁掉一截。
+    /// </para>
+    /// </summary>
+    internal void ApplyRailScale(bool fullscreen)
+    {
+        var size = fullscreen ? FullscreenRailSize : WindowRailSize;
+        Rail.Width = size;
+        Rail.Margin = new Thickness(0, 0, fullscreen ? FullscreenRailInset : WindowRailInset, 0);
+        VolumeSlider.Width = size;
+        MuteButton.Width = MuteButton.Height = size;
+        MuteGlyph.FontSize = fullscreen ? FullscreenRailGlyph : WindowRailGlyph;
+        var mark = fullscreen ? 7.8 : 6.0;
+        VolumeHundredMark.BorderThickness = new Thickness(mark, 0, mark, 0);
+        var label = fullscreen ? 10.4 : 8.0;
+        VolumeText.Margin = new Thickness(0, 0, 0, label);
+        VolumeFilledLabel.Margin = new Thickness(0, 0, 0, label);
+    }
+
+    /// <summary>
+    /// 跳过按钮的**两档**（用户令 2026-09-28 更晚「复刻独占模式的控件放大策略到集成模式」，
+    /// 2026-09-30「缩小图标跳过按钮两倍」把窗口档整颗减半，2026-10-01「调大 1.5 倍」再各乘 1.5）：
+    /// uosc 那颗 SkipButton 的字号、内边距、
+    /// 让位全乘 state.scale，集成这颗照同一个策略 ×1.3。两档的数在
+    /// <see cref="WindowSkipPadX"/> 那一族常量里，这里的字形与间距只是把它们铺上去。
+    /// <para>
+    /// **底边让位是 <see cref="PlaceOverlays"/> 的**：它每趟整条重写 Margin、右值从现值读 ——
+    /// 这里只换右让位、把现值 Bottom 原样带回去，等 Bar 因按钮格变高而重排时它自己会再落一次。
+    /// </para>
+    /// </summary>
+    internal void ApplySkipScale(bool fullscreen)
+    {
+        var padX = fullscreen ? FullscreenSkipPadX : WindowSkipPadX;
+        var padY = fullscreen ? FullscreenSkipPadY : WindowSkipPadY;
+        SkipButton.Margin = new Thickness(0, 0, padY, SkipButton.Margin.Bottom);
+        SkipButton.Padding = new Thickness(padX, padY, padX, padY);
+        SkipButton.CornerRadius = new CornerRadius(padY);
+        SkipStack.Spacing = SkipRow.Spacing = fullscreen ? FullscreenSkipGap : WindowSkipGap;
+        SkipCountdown.Height = fullscreen ? FullscreenSkipCountdown : WindowSkipCountdown;
+        SkipGlyph.FontSize = fullscreen ? FullscreenSkipGlyph : WindowSkipGlyph;
+        SkipText.FontSize = fullscreen ? FullscreenSkipCaption : WindowSkipCaption;
+        SkipTip.FontSize = fullscreen ? FullscreenSkipTip : WindowSkipTip;
+    }
+
+    /// <summary>
+    /// Asks the OS whether the mouse has moved since the last tick, and tells the reveal rule when it has.
+    /// <para>
+    /// <b>This is the only sensor the hide is driven by, and the refactor of 2026-09-15 is what made it the
+    /// only one.</b> It used to share the job with WinUI's <c>PointerMoved</c> and spend its time arbitrating
+    /// that event rather than reading the mouse: the event is raised for a pointer that never moved (once per
+    /// change to the tree under it — the chrome collapsing at 650 ms is one such change), its coordinates come
+    /// from a base the framework re-derives, and a real film caught the consequence — a cursor hidden for 29.7
+    /// seconds woken by an event claiming 「5,0 逻辑像素」 while this reading had not changed by a pixel. A
+    /// position read out of the OS has none of those problems: changed is movement, unchanged is stillness, and
+    /// 「unchanged」 is answered by saying nothing, which is what lets the idle clock run out. One source, one
+    /// clock, one answer — HC-Player's <c>RegisterCursorActivity</c> and mpv's mouse-event counter are built
+    /// the same way.
+    /// </para>
+    /// <para>
+    /// The threshold is <see cref="ChromeReveal.MovePixels"/>: a mouse resting on a desk rattles a pixel, up to
+    /// two on this machine's own log, and a hand's first movement is tens.
+    /// </para>
+    /// <para>
+    /// <b>参照点只剩一种推进规矩（2026-09-17，参考 dyphire/mpv-config 的播放光标语义统一）。</b>
+    /// 显示态与藏匿态同用 mpv.net 的那一问（<see cref="ChromeReveal.HandStep"/>：位置离「上次记录点」
+    /// 的切比雪夫距离过线即是手），参照点只在过线那一刻推进（<see cref="WakeFromPoll"/>）。这是 mpv
+    /// 「坐标变了的输入就是活动」（<c>cursor-autohide</c> 的根基，uosc 的 <c>lib/cursor.lua</c> 同理：
+    /// 任何一次 <c>mouse-pos</c> 变化都重置自动隐藏的定时器）在十赫兹轮询传感器上的等价物：慢移对着
+    /// 同一个点累计，六拍之内必然过线，空闲钟跟着重盖——移动着的手永远不会半路丢光标，这正是 mpv
+    /// 的样子；「每拍不足五像素的慢手走不到终点」那条 2026-09-16 记录在案的代价就此了结。桌面抖动
+    /// 照旧过不了线：它绕着停点打转，离开不上次过线点五像素——藏匿期用同一问活了这么久，就是这一
+    /// 性质的实机记录。2026-09-16 那版「显示态每拍推进参照」（<see cref="ChromeReveal.Travelled"/>
+    /// 量的每拍速度）随这条统一退役：它把慢手读成了静止，光标死在半路。
+    /// </para>
+    /// <para>
+    /// <b>第二十一报的整套藏匿期判据在这一天随「完全照搬 mpv.net」的拍板退役：</b>见证否决票、
+    /// 净位移账本、连着拍数、幽灵回笼，全都不在唤醒的路上了。一台机器上它们挡过二十一次幽灵唤醒，
+    /// 代价是每拍不足五像素的慢手永远叫不回光标；mpv.net 用最简单的那一问活在所有这些机器上，
+    /// 冒出来的不过是一支一两秒后自己藏回去的箭头。现在两个状态都是 mpv.net 的行为，包括它的代价
+    /// （幽灵唤醒回归，更轻的形式）——历史与证据链在 PROGRESS.md 与 daily log，见证仍在取证记账。
+    /// </para>
+    /// </summary>
+    private void PollPointer()
+    {
+        if (!CursorScreen(out var screen)) return;
+
+        // 参照点还没立起来：这一拍只播种。第一次读数不是位移（没有「上次」可比），mpv 里第一帧
+        // mouse-pos 同样不算活动。播种不计数也不唤醒——指针在哪，由 OnTick 的回家路（PointerGone
+        // → ReseedPointer）在同一拍里告诉规则，那是位置，不是移动（位置是位置、动是动）。
+        if (!_polledKnown)
+        {
+            _polled = screen;
+            _polledKnown = true;
+            return;
+        }
+
+        var dx = Math.Abs(screen.X - _polled.X);
+        var dy = Math.Abs(screen.Y - _polled.Y);
+
+        // ---- 两个状态同一问（2026-09-17 统一）----
+        //
+        // 位置离「上次记录点」的切比雪夫距离超过阈值就是手（ChromeReveal.HandStep），过线即醒、
+        // 不过线就是没动——静止的读数什么都不说，空闲钟照走，这正是「静止到点就藏」的全部依托。
+        // 参照点（_polled）冻在这里，过了线才在 WakeFromPoll 里推进；慢移对着同一个点累计，
+        // 六拍之内必然过线。快过线的一记（包括幽灵的 60 像素签名）在哪个状态都醒，那是接受的代价。
+        if (!ChromeReveal.HandStep(dx, dy)) return;
+
+        WakeFromPoll(screen, dx, dy, _cursorHidden ? "位置离上次记录点超过阈值（mpv.net 规则）" : null);
+    }
+
+    /// <summary>
+    /// 一只真手把光标挪到了 <paramref name="screen"/>：记账、挂牌、重置两个时钟。
+    /// <para>
+    /// 从 <see cref="PollPointer"/> 里拆出来是因为第十一报之后它有<b>两个入口</b>：常规那条路（显示态
+    /// 下的位移、或者藏匿期第一个位移但当时不在挂起状态），以及挂起确认成手之后的补报 —— 后者必须
+    /// <b>绕过</b>「藏匿期第一个够阈值的位移先挂起」那一条，否则每拍都在挂起，唤醒永远轮不到。
+    /// </para>
+    /// </summary>
+    /// <param name="screen">这一拍读到的真实位置。</param>
+    /// <param name="dx">离参照点的横向位移，只用于日志。</param>
+    /// <param name="dy">离参照点的纵向位移，只用于日志。</param>
+    /// <param name="verdict">这一记是**过了藏匿期裁决**才判成手的，写清楚是哪一支：免检的一记，还是挂起之后
+    /// 走开的那一记。空表示藏匿期之外（或没藏）的普通移动。第十五报加的：显示行要把「哪条路叫醒的」说到
+    /// 具体分支，下一次报告才不用再猜。</param>
+    private void WakeFromPoll(NativePoint screen, int dx, int dy, string? verdict = null)
+    {
+        _polled = screen;
+        _polledKnown = true;
+        _polledMoves++;
+        _pointerMovedAt = Now;
+
+        var wasHidden = _cursorHidden;
+
+        // Said BEFORE the reseed, not after. The show line is written inside SetCursorHidden, which the reseed
+        // reaches through Render — so anything assigned after it is assigned too late and the log prints the
+        // previous wake's reason or the default. That is exactly what the sixth report cost: a hide ended by
+        // this poll's reading printed as 「没记到移动（按键、菜单或窗口变化）」, and three rounds of looking
+        // everywhere but here because the log swore no pointer path had spoken. The reason exists before the
+        // consequence; write it in that order.
+        if (wasHidden)
+        {
+            _woke = $"轮询问出了 {dx},{dy} 物理像素{(verdict is null ? string.Empty : $"（{verdict}）")}"
+                + $"，读数 {screen.X},{screen.Y}，{PointerOwner()}";
+        }
+
+        // Render() outside the condition, and that is a fix rather than a shrug. Both calls inside report 「did
+        // the rule change its mind」, and 「no」 is a legitimate answer — the pointer moved through a stretch
+        // where the chrome was already up and the rule stays up. But _cursorHidden is this side's copy of that
+        // answer and Render is the only place the two are reconciled, so skipping it on 「no」 lets the copy
+        // drift from the rule. Drifting is not cosmetic: the next poll tests _cursorHidden to decide whether a
+        // movement is a wake or something to suspend, and a copy stuck on 「hidden」 makes a real hand's second
+        // step look like the first step of a warp — the cursor stays down while the hand keeps moving. Found by
+        // the self-check's 「真手连着走两拍」, which is the only place that reads this side's copy right after a
+        // wake. The reseed renders for itself when it has something to say, so this extra call is only paid on
+        // 「the rule was already awake」 — once per wake, which is nothing.
+        // 真手这一记先落账（ChromeReveal.Moved）：重盖空闲钟，并解开双击全屏的纯净闸 —— 轮询的
+        // HandStep 是唯一有权解开它的路。ReseedPointer 的 moved:true 只是「重报位置」，不解闸：
+        // 进退全屏、最大化自己那一下的 resize 也走那条路（见 OnRootResized），解了闸控件就会在
+        // 切换的同一拍被位置规则摆回来。
+        _chrome.Moved(Now);
+        ReseedPointer(moved: true);
+        Render();
+    }
+
+    /// <summary>
+    /// 光标没藏的时候，把「卡在哪一条」写出来 —— 2026-09-16 晚加，起因是用户报「现在的问题是鼠标
+    /// 已经不会自动隐藏了」，而日志里同时有反例（18:53:37 进播放、18:53:40 就藏了）。
+    /// <para>
+    /// 藏不藏由 <c>ChromeReveal.Settle</c> 那一句决定，四个条件：<b>指针没压在控件本体上</b>
+    /// （<c>!PointerHolds</c>，2026-09-29 起它取代了从前的 <c>!State.Any</c> —— 那句话把「控件在带里
+    /// 露着脸」也当成不藏的理由）、<b>指针在画面内</b>（<c>_pointerY &gt;= 0</c>）、<b>没有 hold/keep</b>、
+    /// <b>空闲钟走满 <see cref="ChromeReveal.CursorIdleMilliseconds"/></b>。前三个在 Core 上各有现成的读数
+    /// （控件那一问看 <c>_pointerOn</c>），第四个看 <see cref="ChromeReveal.IdleAgo"/> —— 它小得不正常就意味着
+    /// 有人每拍重盖时钟（鼠标键按着、XAML 的事件、窗口变化都会），那才是「永远不藏」的真实样子。
+    /// </para>
+    /// <para>
+    /// 每秒至多一行，只在播放页（<see cref="Attached"/>）且外壳这本账认为光标还亮着的时候写。日志级
+    /// DEBUG，改状态一个字都没有。
+    /// </para>
+    /// </summary>
+    private void ExplainNoHide()
+    {
+        if (!Attached || _cursorHidden) return;
+        if (Now - _noHideLoggedAt < 1000) return;
+        _noHideLoggedAt = Now;
+
+        Log.Debug(Category, $"光标没藏：chrome{(_chrome.State.Any ? "还在" : "已收")}"
+            + (ChromeReveal.HoldsCursor(_pointerOn) ? "且指针压在控件上" : string.Empty)
+            + $"，指针{(_chrome.PointerGone ? "不在画面内" : "在画面内")}"
+            + $"，hold={_chrome.HoldChrome}/keep={_chrome.KeepChrome}"
+            + $"，空闲 {_chrome.IdleAgo(Now)}/{ChromeReveal.CursorIdleMilliseconds}ms"
+            + $"，前台={(_window is null ? "无窗口" : Native.GetForegroundWindow() == _window.Handle ? "是" : "否")}"
+            + $"，焦点位={_chrome.WindowFocused}"
+            + $"，指针上的部件={_pointerOn}"
+            + $"，指针={(_cursorAtKnown ? $"{_cursorAt.X},{_cursorAt.Y}" : "读不到")}"
+            + $"，按住鼠标={Native.MouseButtonDown()}"
+            + $"，见证={(_window?.Witness.Ready == true ? "就绪" : "缺席")}");
+    }
+
+    /// <summary>上面那行诊断的节流（每秒至多一行）。</summary>
+    private long _noHideLoggedAt;
+
+    /// <summary>
+    /// The picture changed size — 全屏, 最大化, a dragged window edge — and the pointer said nothing about
+    /// it. 「全屏时最下方的进度条不会自动隐藏」 was this: entering fullscreen from the bar's own ⛶ leaves the
+    /// pointer recorded as resting on a control, and in fullscreen there is no longer anywhere for it to
+    /// leave to.
+    /// </summary>
+    private void OnRootResized(object sender, SizeChangedEventArgs e)
+    {
+        // A movement, deliberately: every control has just been put somewhere else under a pointer that never
+        // moved, so 「the pointer has not been still」 is the true answer and the idle clock has to start again.
+        if (!Attached) return;
+
+        // 音量条那道尺寸线（用户令 2026-09-23）：画面跨过阈值时，规则那一头什么都不会变 —— 指针没动、
+        // 显隐也没翻 —— 所以这一趟必须自己画一遍，否则缩到阈值以下的窗口里音量条会照旧挂着，直到下一次
+        // 指针移动（而那时它才「忽然」消失，看着像掉了一拍）。不加缓存位、无条件调 Render：它里面每一句
+        // 赋值都带值比较（Visibility 同值、FadeRail 比 opacity、ThinLine 同值），没变的那几样本来就不会
+        // 碰布局树 —— 而「画面多大」只有一个答主，另存一份就是又一条会发霉的手抄副本（见 PlaceOverlays
+        // 里关于「重赋同一个边距会让指针事件重盖空闲钟」的那段，说的正是这件事的另一面）。
+        ArrangeTransport();
+        Render();
+
+        // 藏匿期例外（2026-09-16 第二轮复核）：这条路同样以零路程、无见证、无累加掀掉藏匿，而它的
+        // 触发源与本项目无关 —— DPI 变化、显示器拓扑变化（AyuGram 就在第二块屏上）、工作区变化、
+        // mpv 重建交换链，任何一次都可能。藏匿期 chrome 本来就是收的，「窗口大小变了所以控件挪了位」
+        // 要修的是控件与指针的关系，与光标该不该露面无关。所以藏匿期只重报位置、不报「动过」：
+        // chrome 的重算一分不少，空闲时钟不被重盖，而二十报挂在这条路上的那句名牌（「窗口改变了
+        // 大小」）随之退休 —— 它标的是「这次显示是被谁挑起的」，而藏匿期这条路已经不再挑起显示。
+        ReseedPointer(moved: !_cursorHidden);
+    }
+
+    /// <summary>取证行已报到多少条真输入（十八报）：只在涨的时候写一行，幽灵输入连发时每秒至多一条。</summary>
+    private int _forensicsSeen;
+
+    /// <summary>
+    /// 藏匿期的取证取样（2026-09-15，第十四报）：每秒一次，把「外面此刻是什么样」写进日志。
+    /// <para>
+    /// 用户报「屏幕二的 AyuGram 收到静音群消息，屏幕一已隐藏的光标就冒出来」，而两轮日志里那批唤醒的
+    /// 共同点是<b>没有任何一条路认领</b>——现在路都挂名了，剩下的可能是「没人叫它，它自己出来的」，
+    /// 也就是外部的另一个进程/线程在画。要判这一条，需要的不是我们这边的计数，而是<b>别人那边的状态</b>：
+    /// 指针压在哪个窗口上、那个窗口的队列属谁、OS 说屏幕上是什么形状、我们这个窗口的矩形有没有被搬动。
+    /// </para>
+    /// <para>
+    /// <b>只写日志，不判任何东西、不改任何行为。</b>取样本身用 <c>GetCursorPos</c>/<c>GetCursorInfo</c>，
+    /// 两个都是纯读；不 SetCursor、不 ShowCursor、不 Nudge —— 任何写都会把「取证」变成「扰动」，
+    /// 而 fourteenth 报的第十四次教训正在这里：对静止指针的任何写都会被它自己读成一次事件。
+    /// </para>
+    /// <para>
+    /// 一秒一次的频率是算出来的而不是拍的：藏匿期最短两秒，一次复现（AyuGram 收消息）总在几秒内，
+    /// 所以最快也要留下两三条；而十赫兹全记会在一次两小时的片子里写出一百多万行。
+    /// </para>
+    /// </summary>
+    private void SampleHiddenState()
+    {
+        if (Now - _hiddenSampleAt < 1000) return;
+        _hiddenSampleAt = Now;
+
+        var spot = Native.GetCursorPos(out var at) ? $"{at.X},{at.Y}" : "问不出";
+        var rect = _window is not null && Native.GetWindowRect(_window.Handle, out var r)
+            ? $"{r.Right - r.Left}x{r.Bottom - r.Top}@{r.Left},{r.Top}"
+            : "问不出";
+        var desk = Native.VirtualScreen();
+
+        // 「本线程队列的形状」与「系统此刻的形状」是两个量，取样必须分开写：判「谁在画」看的正是这两个
+        // 之间的差 —— 队列是空的（0）而系统是个箭头形状，说明画的人不是我们这一队列。
+        //
+        // 第十六报补的第四组数：见证的账。真/注两个计数一秒一次往外报 —— 注入计数涨起来而真计数
+        // 不动，就是「有程序在注入输入」的直接证据；真计数涨起来，说明这台机器的真手被见证看见了。
+        // 照搬 mpv.net 之后见证不再参与裁决，这两个数只剩取证的价值：下一次幽灵报告的「真/注」
+        // 对账靠它们。
+        //
+        // 十八报补的两笔：末真设备（VID/PID 点名）与藏匿期逐条短账 —— 「真计数在涨」之后下一个
+        // 必然要问的就是「哪块硬件」，独立成行是因为它只在涨的时候写。
+        var witness = _window?.Witness;
+        if (witness is { Ready: true } && witness.CapturedRealTotal > _forensicsSeen)
+        {
+            _forensicsSeen = witness.CapturedRealTotal;
+            var head = string.Join("；", witness.CapturedReal.Take(4));
+            Log.Debug(Category, $"藏匿期真输入取证：本段 {witness.CapturedRealTotal} 记（{head}"
+                + (witness.CapturedRealTotal > 4 ? " …" : string.Empty) + "）");
+        }
+
+        Log.Debug(Category, $"藏匿取样：指针 {spot}，本队列形状 0x{Native.GetCursor():X}，{PointerOwner()}"
+            + $"，我们窗口 {rect}，虚拟屏 {desk.Width}x{desk.Height}@{desk.X},{desk.Y}"
+            + $"，本段重申 {_nudgesThisHide} 次、形状被放回 {_shapeBack} 拍、屏上异形 {_foreignShapes} 拍（连续 {_foreignStreak}、重发布 {_republished}、1px 往返 {_foreignPokes}）、负计数锁 {_window?.CursorSuppressRestates ?? 0} 次"
+            + $"，见证{(witness?.Ready == true ? $"就绪（真 {witness.RealMoves}/注 {witness.InjectedMoves}/伪 {witness.Forged}，末次真输入 {witness.LastRealMoveAgo}，末真设备 {witness.LastRealDevice}）" : "缺席（只作取证）")}");
+    }
+
+    // ---- 两处竖直间距 -------------------------------------------------------------
+
+    /// <summary>
+    /// The transport bar was laid out, so what stands above it may have to move. Raised the first time the
+    /// bar comes up, and again whenever its height changes — a dragged window edge, a font the settings
+    /// window changed, a row that grew.
+    /// </summary>
+    private void OnBarResized(object sender, SizeChangedEventArgs e) => PlaceOverlays();
+
+    /// <summary>
+    /// Places the two overlays whose position is really a statement about a different overlay: 统计 sits
+    /// under the title strip, and the 跳过 button sits over the transport bar.
+    /// <para>
+    /// Both were written down instead. The panel's 104 was the strip's declared 96 plus a gap, restated in a
+    /// second file where nothing would notice the two drifting apart; the button's 148 was a guess at a
+    /// height nothing declares at all — the bar has no <c>Height</c>, it is two auto rows and its padding,
+    /// so it is whatever its buttons and its fonts come to. That number was never checked against the bar
+    /// and had no way to follow it: one larger font in the transport row and the 跳过 offer would have been
+    /// drawn across the seek slider, which is the one control it must never cover.
+    /// </para>
+    /// <para>
+    /// Only the vertical halves are computed. The left and right insets are the overlays' own — how far from
+    /// the edge of the picture they sit is a matter of taste rather than of clearance — so they stay in the
+    /// markup where they can be seen, and are read back out of the margin here rather than restated.
+    /// </para>
+    /// <para>
+    /// Each margin is written only when it has actually changed, which matters more than it looks: this is
+    /// called every time the bar's size changes, and the bar changes size every time the chrome goes down or
+    /// comes up. A margin assigned again with the number it already held would invalidate layout under a
+    /// pointer that has not moved, and WinUI answers a change to the tree beneath the pointer with a
+    /// <c>PointerMoved</c> — which the reveal rule can only read as a hand on the mouse, restarting the two
+    /// seconds before the cursor hides, every time, forever.
+    /// </para>
+    /// </summary>
+    private void PlaceOverlays()
+    {
+        // 2026-09-26 起在「让开」之上再抬一段 SkipLift（用户令「上移按钮」）—— 只贴着进度条时，够按钮的
+        // 手势总要擦着进度条走，而压上按钮又不再点亮它（ChromeReveal 的 Skip 支）。
+        Nudge(SkipButton, new Thickness(0, 0, SkipButton.Margin.Right, BarHeight() + OverlayGap + SkipLift));
+
+        static void Nudge(FrameworkElement element, Thickness margin)
+        {
+            if (element.Margin != margin) element.Margin = margin;
+        }
+    }
+
+    /// <summary>
+    /// How tall the transport bar is, from the last time it was arranged if it has been and from a measure
+    /// on the spot if it has not.
+    /// <para>
+    /// The fallback is not hypothetical bookkeeping: this is called before the first frame of a playback, at
+    /// a point where the bar has been made visible but nothing has been laid out yet, so
+    /// <c>ActualHeight</c> is still zero. A collapsed or unarranged element measures nothing, hence the flip
+    /// — the same trick the probes use, and safe for the same reason: it is put back inside this call, so no
+    /// frame is composed with the bar up.
+    /// </para>
+    /// </summary>
+    private double BarHeight()
+    {
+        if (Bar.ActualHeight > 0) return _barHeight = Bar.ActualHeight;
+        if (_barHeight > 0) return _barHeight;
+
+        var was = Bar.Visibility;
+        Bar.Visibility = Visibility.Visible;
+        Bar.Measure(new Size(Root.ActualWidth > 0 ? Root.ActualWidth : double.PositiveInfinity, double.PositiveInfinity));
+        Bar.Visibility = was;
+
+        return _barHeight = Bar.DesiredSize.Height;
+    }
+
+    /// <summary>
+    /// Whether a tap at <paramref name="point"/> landed on the picture rather than on something drawn
+    /// over it. Everything hidden answers 「picture」, which is the common case: with the chrome down the
+    /// whole window is the film.
+    /// <para>
+    /// The 「正在切换…」 cover is asked about separately from <see cref="PartAt(Point)"/> because it is not
+    /// part of the reveal rule — it belongs to the handover — but a click on it is still not a click on the
+    /// film. (统计 used to be asked about here too; since 2026-09-22 it is not a page element at all but
+    /// mpv's own OSD, so a click on those numbers is a click on the picture, as it is in mpv itself.)
+    /// </para>
+    /// <para>
+    /// <paramref name="origin"/> is the element the tap actually landed on, and it is the half geometry
+    /// cannot answer: 「跳过片头后会自动暂停」 (2026-09-04). The 跳过 button takes itself off screen inside
+    /// its own <c>Click</c>, which runs before the <c>Tapped</c> that follows the same release — so by the
+    /// time this is asked, there is no button under the pointer any more, the hit test says 「picture」, and
+    /// the click that skipped the opening pauses the film 150 ms later. Any control that hides or moves
+    /// itself when pressed would do the same; what the tap hit does not change underneath us.
+    /// </para>
+    /// </summary>
+    private bool TapOnPicture(Point point, object? origin = null) =>
+        !FromChrome(origin) && PartAt(point) == ChromePart.None
+        && !Covers(Cover, point);
+
+    /// <summary>
+    /// Whether the tap landed inside one of the overlays rather than on the film. Walks up from the element
+    /// the framework hit, and stops at <see cref="Root"/> — reaching the picture without meeting an overlay
+    /// is the answer 「no」. Collapsing an element does not take it out of the visual tree, which is exactly
+    /// why this survives the case <see cref="TapOnPicture"/> describes.
+    /// <para>
+    /// Subtractive on purpose: it can only ever refuse a tap that geometry would have accepted. Deciding
+    /// 「the picture」 from the origin instead — anything that is not <c>Root</c> is chrome — would hand the
+    /// 点击画面暂停 gesture to whatever element happens to be hit-testable over the film, and losing that
+    /// gesture is a worse fault than the one being fixed.
+    /// </para>
+    /// </summary>
+    private bool FromChrome(object? origin)
+    {
+        for (var node = origin as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (ReferenceEquals(node, Bar) || ReferenceEquals(node, TitleStrip) || ReferenceEquals(node, Rail)
+                || ReferenceEquals(node, SkipButton)
+                || ReferenceEquals(node, Cover))
+                return true;
+
+            if (ReferenceEquals(node, Root)) return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Which piece of chrome a point is on. Asked separately from <see cref="RailNear"/> on purpose:
+    /// a hit test has to pick a single winner, and the skip button and the top strip both overlap the
+    /// right edge, which is how 「音量条判定有问题，我鼠标移到窗口右边有时候不会显示」 happened.
+    /// </summary>
+    private ChromePart PartAt(Point point)
+    {
+        if (Covers(Bar, point)) return ChromePart.Bar;
+        if (Covers(TitleStrip, point)) return ChromePart.Title;
+        if (Covers(Rail, point)) return ChromePart.Volume;
+        if (Covers(SkipButton, point)) return ChromePart.Skip;
+        return ChromePart.None;
+    }
+
+    /// <summary>
+    /// 画面此刻多大 —— 平常就是这一页自己的读数，而自检可以临时把答案换掉。
+    /// <para>
+    /// 这一道缝只为 <see cref="ProbeRailFade"/> 存在：音量条那条尺寸门槛（<see cref="ChromeReveal.RailRoom"/>）
+    /// 的「假」那一支要在真窗口里验，而探针改不了窗口大小。默认分支永远是真实读数，见两个属性的
+    /// <c>??</c>；覆盖只发生在那个探针方法里，且出去就还回去。
+    /// </para>
+    /// </summary>
+    private Size? _probePictureSize;
+
+    private double PictureWidth => _probePictureSize?.Width ?? Root.ActualWidth;
+
+    private double PictureHeight => _probePictureSize?.Height ?? Root.ActualHeight;
+
+    /// <summary>
+    /// 这个画面容得下音量条吗（<see cref="ChromeReveal.RailRoom"/>）。假的时候音量条一个像素都不画 ——
+    /// <see cref="Render"/> 那一支是唯一的落点，而 <see cref="RailNear"/> 也一并答「指针不在唤出带里」，
+    /// 于是规则那一头压根不会以为它该露面（<c>ChromeState.Rail</c> 为假，右缘因此也不再吊住控件与光标）。
+    /// </summary>
+    private bool RailRoom() => ChromeReveal.RailRoom(PictureWidth, PictureHeight);
+
+    /// <summary>
+    /// The volume rail's uosc proximity for a pointer at <paramref name="point"/> (Root coordinates): the
+    /// euclidean distance from the pointer to the rail's own rectangle, run through uosc's proximity curve
+    /// (<see cref="ChromeReveal.RailProximity"/>). -1 when the rail is no reason to show at all — a proximity
+    /// of 0 (at or past the reveal reach) is folded into -1 so 「离得刚好够远」 stops counting, matching uosc's
+    /// proximity 0 ＝ 不画. The rule turns the value into both 「show the rail」 and 「how strongly」.
+    /// <para>
+    /// 照独占逐像素量<b>真矩形</b>（<c>elements/Volume.lua</c> ＋ <c>get_point_to_rectangle_proximity</c>），
+    /// 而不是从常量重算一份几何：音量条 <c>Rail</c> 排成 40 宽、右边距 20、纵向居中，与 uosc 的音量矩形同几何
+    /// （2026-09-28「参考独占模式修复」，接替旧的 160px 横向线性带 ＋ 竖向中心偏置）。量真元素，唤出范围就跟着
+    /// XAML 走，没有会漂的第二份尺寸——触发线因此回到独占的「离右缘约 180px 起淡、约 100px 满」。
+    /// </para>
+    /// <para>
+    /// 这条唤出整个不存在于小窗口里（用户令 2026-09-23「窗口小于一定程度的时候自动隐藏音量条」）：
+    /// <see cref="RailRoom"/> 为假时一律答 -1，于是「指针走到右缘」不再是音量条的理由，也不再算「停在控件上」
+    /// （那一位从 2026-09-28 起只影响光标：指针在控件上时屏上有东西，光标不藏）。
+    /// </para>
+    /// </summary>
+    private double RailNear(Point point)
+    {
+        if (PictureWidth <= 0 || !RailRoom()) return -1;
+
+        var w = Rail.ActualWidth;
+        var h = Rail.ActualHeight;
+        if (w <= 0 || h <= 0) return -1;
+
+        // uosc's get_point_to_rectangle_proximity: signed distance outside the rect on each axis, then the
+        // euclidean length of the positive (outside) parts — 0 anywhere inside the rectangle. Root coordinates
+        // throughout, so OriginIn(Rail) and the incoming point share an origin (the same pair PartAt uses).
+        var origin = OriginIn(Rail);
+        var dx = Math.Max(origin.X - point.X, point.X - (origin.X + w));
+        var dy = Math.Max(origin.Y - point.Y, point.Y - (origin.Y + h));
+        var distance = Math.Sqrt(Math.Max(0, dx) * Math.Max(0, dx) + Math.Max(0, dy) * Math.Max(0, dy));
+
+        var proximity = ChromeReveal.RailProximity(distance);
+        return proximity <= 0 ? -1 : proximity;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="element"/> is drawn under <paramref name="point"/>. Faded out counts as not
+    /// there: the rail is the one overlay that arrives by degrees rather than by a <c>Visibility</c> flip
+    /// — 「显示方式改为淡入淡出」 — so it stays in the tree at zero opacity, and a rail nobody can see must
+    /// not swallow a click meant for the picture behind it. <c>IsHitTestVisible</c> is what the fade turns
+    /// off, and it is the same question this method is being asked.
+    /// </summary>
+    private bool Covers(FrameworkElement element, Point point)
+    {
+        if (element.Visibility != Visibility.Visible || !element.IsHitTestVisible
+            || element.ActualWidth <= 0 || element.ActualHeight <= 0)
+            return false;
+
+        var origin = OriginIn(element);
+        return point.X >= origin.X && point.X <= origin.X + element.ActualWidth
+            && point.Y >= origin.Y && point.Y <= origin.Y + element.ActualHeight;
+    }
+
+    /// <summary>
+    /// Where <paramref name="element"/>'s top-left corner sits in <c>Root</c>'s own coordinates, summed out
+    /// of what Arrange already worked out rather than asked for as a transform.
+    /// <para>
+    /// <c>TransformToVisual</c> answers the same question and builds a <c>GeneralTransform</c> across the
+    /// WinRT boundary to do it. That is nothing once — but <see cref="PartAt"/> asks it of up to four
+    /// elements per pointer move as well as per tick, and a hand crossing the picture raises hundreds of
+    /// moves a second. <c>ActualOffset</c> is a struct read of a value that is already computed, so this
+    /// walk allocates nothing whatever.
+    /// </para>
+    /// <para>
+    /// The two answers agree for as long as nothing between the element and <c>Root</c> is scaled or
+    /// render-transformed. That holds for everything asked about here — this page's only two
+    /// <c>TranslateTransform</c>s are on the 暂停 badge and on the preview box, and neither is ever the
+    /// subject of a hit test — and the self-check compares the two answers element by element, so it is a
+    /// measurement rather than a promise.
+    /// </para>
+    /// </summary>
+    private Point OriginIn(FrameworkElement element)
+    {
+        var x = 0d;
+        var y = 0d;
+
+        DependencyObject? node = element;
+
+        while (node is UIElement step && !ReferenceEquals(node, Root))
+        {
+            var offset = step.ActualOffset;
+            x += offset.X;
+            y += offset.Y;
+            node = VisualTreeHelper.GetParent(node);
+        }
+
+        return new Point(x, y);
+    }
+
+    // ---- what that comes to on screen -------------------------------------------
+
+    /// <summary>
+    /// The reveal rule's whole visible effect: two <c>Visibility</c> flips, the rail's fade, and the
+    /// cursor. Flips for the bar and the strip because requirement 9 was
+    /// 「不要淡入淡出了，鼠标移动到对应位置直接显示」; the rail is the one exception the user later asked for,
+    /// see <see cref="FadeRail"/>.
+    /// <para>
+    /// 音量条那道尺寸门槛（用户令 2026-09-23「窗口小于一定程度的时候自动隐藏音量条」）也收在这一句里：
+    /// 画面小到一定程度就<b>一个像素都不画</b> —— 不为指针走近右缘画，也不为滚轮／按键的读数画。
+    /// 这是唯一收得住两边的地方：<c>Rail.Opacity</c> 只有 <see cref="FadeRail"/> 会写，而 FadeRail
+    /// 只有这里会调（<see cref="RailNear"/> 那一半管的是「规则以为它该不该出现」）。规则那一头照旧算它的
+    /// 答案，页面只是在画的时候把这一档扣掉 —— 于是窗口重新变大时不需要任何补偿动作。
+    /// </para>
+    /// </summary>
+    private void Render()
+    {
+        var duration = HomeMotion.AnimationsEnabled ? TimeSpan.FromMilliseconds(220) : TimeSpan.Zero;
+        if (TitleStrip.OpacityTransition.Duration != duration) TitleStrip.OpacityTransition.Duration = duration;
+        if (TransportRow.OpacityTransition.Duration != duration) TransportRow.OpacityTransition.Duration = duration;
+        if (Rail.OpacityTransition.Duration != duration) Rail.OpacityTransition.Duration = duration;
+
+        var state = _chrome.State;
+        Bar.Visibility = state.Bar ? Visibility.Visible : Visibility.Collapsed;
+        TitleStrip.Visibility = state.Title ? Visibility.Visible : Visibility.Collapsed;
+
+        // 三条边现在都按指针的近度分级淡入，不再二值直显（用户令 2026-09-27「参独占模式……」，见
+        // ChromeReveal 类注里那次反转）：标题条与按钮行写各自的强度到 Opacity（隐式过渡在 XAML 里补间），
+        // 进度条按同一条底边强度长高。State 那三个布尔仍旧只管「该不该出现」——收起时把它们收干净、且不吃
+        // 命中，与音量条 FadeRail 同法。
+        FadeStrip(TitleStrip, state.Title ? _chrome.TitleStrength : 0);
+        FadeStrip(TransportRow, state.Bar && !_timelineHovering ? _chrome.BarStrength : 0);
+        GrowTimeline(state.Bar ? _chrome.BarStrength : 0);
+        FadeRail(state.Rail && RailRoom() ? _chrome.RailStrength : 0);
+
+        // 左上角那三块玻璃的浓度也在这里重推一遍：深度是拿指针的 Y 除以**画面高度**得来的，
+        // 窗口一换尺寸，同一个 Y 就是另一档；而那类变化（全屏、最大化、拖边）不一定经过一次指针读数。
+        // 指针每动一次的那一档归 NotePointer —— 那一处是主路，这一处是兜底。
+        ApplyTopGlass(TopGlassDepth());
+
+        // The three window commands live in the strip, so they come and go with it. What is left to decide
+        // per reveal is which of 最大化/还原 the middle one is offering, and whether it is offering anything.
+        if (state.Title) UpdateMaximizeGlyph();
+
+        // 视频进度条预览不会自动消失: the preview belongs to the bar it hovers, and the bar can go without
+        // the pointer ever leaving the track — it goes when the pointer leaves the window entirely, which
+        // raises no Exited over the track at all. A preview outliving its bar is a thumbnail stranded over
+        // the picture with nothing to explain it.
+        if (!state.Bar) HideChapterPeek();
+
+        // 「浮层收起时底边留一条细进度线」 — windowed, where it is a readout along the edge of a window that
+        // already has edges. Not full screen: 全屏时最下方会有进度条 is those same two pixels drawn bright
+        // across the whole bottom of the monitor with nothing to frame them, and the point of full screen is
+        // that nothing but the film is on screen. Only while the player is up either way, or it would draw a
+        // line across the bottom of the library grid the moment the page went away.
+        //
+        // 退场那 220ms 里也一样要收：细线画在画面的下边缘，而退场是把这一页整个淡掉 —— 页面淡到零时它还
+        // 是满亮的两像素，正是 2026-09-20 用户截图里那条横贯底边的白线。判据取 _inputSuspended（退场第 0 拍
+        // 立起、落定拍撤下），不取 _onStage：后者在退场一开始就是假的，而这条线要消失的只是后半段。
+        //
+        // 拖动标题移动窗口那一趟也不画（2026-09-22，与「拖动过程中不要显示进度条和音量条」同一句话）：
+        // 它补的正是「进度条收起时仍留一条读数」，而拖动期间进度条是**特地**收起来的 —— 照旧亮起来，那句话
+        // 就被一根两像素的进度线拆掉了。规则那边收了 Bar/Title/Rail 三样里的两样，这一样不归它管，在这里收。
+        ThinLine.Visibility = !state.Bar && !_chrome.WindowDragging && !_inputSuspended
+            && Visibility == Visibility.Visible && _window?.OccupiesScreen != true
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        SetCursorHidden(_chrome.CursorHidden);
+    }
+
+    /// <summary>
+    /// Takes the volume rail to <paramref name="strength"/>, fading rather than flipping —
+    /// 「显示方式改为淡入淡出，鼠标指针越接近右边的中心显示越明显」.
+    /// <para>
+    /// An <c>OpacityTransition</c> declared on the rail does the animating, which is why this is an
+    /// assignment and not a storyboard: the transition is an implicit one, so the property holds the value
+    /// asked for the instant it is asked while the compositor takes the pixels there over its own duration.
+    /// That matters beyond brevity — everything that reads the rail back, from the tap test to the
+    /// self-check, then reads what the rule decided rather than whichever frame of an animation it caught.
+    /// A storyboard would have inverted that: the value would lag the decision, and 「is the rail up」 would
+    /// have become a question about timing.
+    /// </para>
+    /// <para>
+    /// The rail therefore stays in the tree at zero opacity instead of collapsing, since a collapse would
+    /// cut the fade off at its first frame. What has to be turned off with it is hit testing: an invisible
+    /// rail that still answered <see cref="Covers"/> would swallow clicks on the picture behind it and stop
+    /// 「点击画面暂停」 working along the right edge. Layout is unaffected either way — the rail is aligned
+    /// to the right of a grid cell it shares with nothing.
+    /// </para>
+    /// </summary>
+    private void FadeRail(double strength)
+    {
+        var wanted = Math.Clamp(strength, 0, 1);
+        if (Math.Abs(Rail.Opacity - wanted) < 0.001) return;
+
+        Rail.Opacity = wanted;
+        Rail.IsHitTestVisible = wanted > 0;
+    }
+
+    /// <summary>
+    /// 把一条浮层（标题条、按钮行）淡到 <paramref name="strength"/> 这一档。透明度交给 XAML 里那支隐式
+    /// <c>ScalarTransition</c> 补间，与 <see cref="FadeRail"/> 同法；强度到 0 就连命中一起收 —— 一块看不见
+    /// 的条子会吞掉画面上的点击（标题条里还压着窗口按钮）。「该不该出现」仍由 <see cref="Render"/> 按
+    /// <c>State</c> 收 <c>Visibility</c>，这里只管明不明显。
+    /// </summary>
+    private static void FadeStrip(FrameworkElement element, double strength)
+    {
+        var wanted = Math.Clamp(strength, 0, 1);
+        if (Math.Abs(element.Opacity - wanted) >= 0.001) element.Opacity = wanted;
+
+        var hit = wanted > 0;
+        if (element.IsHitTestVisible != hit) element.IsHitTestVisible = hit;
+    }
+
+    private const double TimelineThin = 2;
+
+    // Reserve the row while the artwork grows, so the buttons never jump or clip chapter diamonds.
+    private void GrowTimeline(double strength)
+    {
+        _timelineStrength = Math.Clamp(strength, 0, 1);
+        var full = TimelineFullHeight;
+        Bar.RowDefinitions[1].Height = new GridLength(full);
+        var height = TimelineThin + Math.Ceiling((full - TimelineThin) * _timelineStrength);
+        if (Math.Abs(SeekTrack.Height - height) > 0.01) SeekTrack.Height = height;
+        RenderTimelineLayers();
+        UpdateTimelineMaterial();
+    }
+
+    /// <summary>
+    /// 工具用（<c>--show-osd [pinned|paused|playing]</c>）：把播放浮层摆到屏上留着，好让 <c>tools/shot.ps1</c>
+    /// 拍一张。一个字节的视频都不播 —— <see cref="Render"/> 只读显隐规则，不问在放什么。
+    /// <para>
+    /// 不是探针，所以不住 <c>SelfCheck.*</c> 里。它存在的理由和 <c>--show-menu</c> 一模一样：这几层只有指针走到
+    /// 对应的位置才浮上来，而这台机器上注不进鼠标事件，于是浮层上任何看得见的改动本来都拍不到照 —— 而浮层正是
+    /// 用户最常盯着看的一片。
+    /// </para>
+    /// <para>
+    /// 用 <see cref="ChromeHold"/> 钉住而不是靠 <c>WakeFully</c>：后者只撑一个宽限期，一秒多之后浮层自己就收了，
+    /// 而拍照要等窗口稳下来。音量条走 <see cref="ChromeReveal.FlashRail"/> —— 那是滚轮调音量走的同一条路，一律
+    /// 给足强度。徽标停在满亮上而不是让它跑那 0.2 秒的动画：0.2 秒里拍不到任何一帧。
+    /// </para>
+    /// </summary>
+    internal void ShowChromeForShot(string? state)
+    {
+        Visibility = Visibility.Visible;
+        UpdateLayout();
+
+        if (string.Equals(state, "pinned", StringComparison.OrdinalIgnoreCase))
+        {
+            SetPinned(true);
+
+            // 钉住浮层这一条路上 ViewModel 是空的 —— 标题与第二行那两块玻璃会缩成最小尺寸、第二行干脆
+            // 收起（Subtitle 空串＝SubtitleVisibility 收起），照片上量不出「有字时」的样子。
+            // 于是这里摆一行真数据：用户令 2026-09-28「集成模式下面的元数据体积太大了，与独占模式不一致」
+            // 那一轮需要一张两头同串的对照照片，而这是唯一能拍到集成这一头的路（真播放会写进观看历史，
+            // 不走）。摆的串与 `ProbeClearance` 那一关、以及独占探针 `work/probe-topbar-look.py` 的
+            // SUBLINE 是同一份 —— 同串才比得出两边的玻璃与墨迹。
+            if (ViewModel.Title is not { Length: > 0 })
+            {
+                ViewModel.Title = "本地动画验证";
+                ViewModel.Subtitle = "1920 x 1080 · HEVC · AAC · Studio GreenTea";
+            }
+        }
+
+        if (state is "paused" or "playing")
+        {
+            PulseShape.Data = state == "paused" ? _pauseArt : _playArt;
+            PulseBadge.Visibility = Visibility.Visible;
+            PulseBadge.Opacity = 1;
+        }
+
+        Hold(true, ChromeHold.Shot);
+        _chrome.WakeFully(Now);
+        _chrome.FlashRail(Now);
+        Render();
+        UpdateLayout();
+
+        // 右上那几颗也是「指针压上去才有底」，而这台机器注不进鼠标事件 —— 悬停态本来拍不到照。把「最小化」
+        // 那颗按进 PointerOver（走的正是自检里那条 GoToState，不是另开一条路），照片里就量得到那一档白底的
+        // 实际浓度与转深后的图标（用户令 2026-09-28 晚「集成模式右上角的这个背景太透明了」那一轮提浓度，
+        // 判据要的就是这张照片）。两件事缺一不可，都是实测撞出来的：
+        // ① 推在 `UpdateLayout()` **之后** —— 放在前面那一版拍回来是一块光板，那时布局还没落定；
+        // ② 这一栏那两个指针处理器先**断掉** —— 窗口出现、被置顶激活时这一栏仍会收到一次 PointerExited，
+        //    把状态抹回 Normal，连 `SetStripGlyphInk` 写的墨也一并回白。
+        // 只在这一条取样路上做，正常进页面一个字都不动。
+        WindowButtons.PointerMoved -= OnWindowButtonsPointerMoved;
+        WindowButtons.PointerExited -= OnWindowButtonsPointerExited;
+        VisualStateManager.GoToState(MinimizeButton, "PointerOver", false);
+        SetStripGlyphInk(MinimizeButton);
+    }
+
+    /// <summary>
+    /// Hides or shows the mouse cursor. There is no WinUI way to do this —
+    /// <c>UIElement.ProtectedCursor</c> can name a shape but has no way to say 「none」 — so it is the window's
+    /// job: <see cref="HostWindow.CursorHidden"/> says <c>SetCursor(NULL)</c> now and keeps saying it while
+    /// this is on. Guarded because the counter below is a counter rather than a flag.
+    /// <para>
+    /// The counter alone used to be the whole of it, and it is why 「鼠标指针还是不会自动隐藏」 survived a fix
+    /// to the rule that decides <em>when</em>: <c>ShowCursor</c> reaches user32 and has no effect whatever on
+    /// a WinUI 3 island. It is kept because it is still the right thing to say to the OS about surfaces the
+    /// island does not cover, and because the count it returns is one more thing a probe can read.
+    /// </para>
+    /// </summary>
+    private void SetCursorHidden(bool hidden)
+    {
+        if (_cursorHidden == hidden) return;
+
+        _cursorHidden = hidden;
+
+        if (_window is { } cursorWindow && hidden && !ViewModel.PlayingNow)
+            _cursorVisibilityEvents ??= new CursorVisibilityEvents(cursorWindow.Handle, OnSystemCursorChanged);
+        _cursorVisibilityEvents?.SetHidden(hidden && (ViewModel.PictureInHostWindow || !ViewModel.PlayingNow));
+
+        if (_window is not null) _window.CursorHidden = hidden;
+
+        // 十八报（2026-09-16）：藏匿期给见证的取证口开闸。手不在的这一段本该一条真输入都没有 ——
+        // 有账就点名（VID/PID），12:43 那场「真 +7、位移 8,2」的幽灵输入，下一次直接写出是谁。
+        // 取证自身只读不写：BeginCapture/EndCapture 碰的只是本类自己的字段。
+        if (_window?.Witness is { } witnessForCapture)
+        {
+            _forensicsSeen = 0;
+            if (hidden)
+            {
+                witnessForCapture.BeginCapture();
+            }
+            else
+            {
+                witnessForCapture.EndCapture();
+
+                // 十九报（2026-09-16）：逐条账在显示时刻结转。13:29 那场 56 条真输入全落在最后
+                // 0.9 秒，SampleHiddenState 的每秒取证行还没轮到打就被唤醒打断 —— 账在手里、
+                // 日志上一条没有。显示必经此路，结转放在这，无论哪条显示路径都把账带出来。
+                if (witnessForCapture.CapturedRealTotal > 0)
+                {
+                    Log.Debug(Category,
+                        $"藏匿期真输入账（显示时结转）：共 {witnessForCapture.CapturedRealTotal} 条" +
+                        $"（{string.Join("；", witnessForCapture.CapturedReal)}）");
+                }
+            }
+        }
+
+        // And the one that actually does it while the pointer is over the picture. The four levers around this
+        // line — SetCursor on this queue, ShowCursor's counter, the window classes, the nudge that makes the OS
+        // work the shape out again — are all Win32, and Win32 is not who draws the pointer over XAML content:
+        // the framework's own input pipeline is. A real film's log settles it. One hide lasted 2 minutes 5
+        // seconds; across some twelve hundred ticks not one found a shape put back on this queue (_shapeBack
+        // stayed at 0), the show count was −1, five window classes were blank, the nudge had been sent — and
+        // GetCursorInfo answered 「system arrow, 0x10003」 the whole way through. Eighteen hides in that one
+        // film, all identical.
+        //
+        // One clause of that has to be read with 2026-09-05 in mind: 「the nudge had been sent」 was a call that
+        // produced no message whatever, so the four Win32 levers were never actually asked in that film. They
+        // are not exonerated by it and they are not convicted by it — see Native.NudgeCursorState. And that
+        // nudge itself was retired on 2026-09-14: it was real input, it woke the player out of its own hide,
+        // and nothing injects it any more.
+        //
+        // ProtectedCursor is the framework's own lever and the only one it consults. Null hands the shape back
+        // to it, which is an ordinary arrow. The four Win32 levers stay: they cover the windows the island is
+        // not — the host window's non-client area, libmpv's child, XAML's own popup windows.
+        //
+        // NOT YET SHOWN TO REACH THE SCREEN, and that has to be written down rather than assumed. Measured
+        // 2026-09-03 with the pointer parked on this window by SetCursorPos from another process: everything
+        // this process can say about the cursor was set — this queue holding the blank shape, the show count at
+        // −1, five window classes blanked, the nudge going out ten times a second, and this line — and
+        // GetCursorInfo went on answering 「system arrow 0x10003」 for five seconds. The control experiment says
+        // more: replacing the blank with a plainly visible Wait cursor did not put an hourglass on screen
+        // either, so in this hosting model ProtectedCursor changed nothing observable at all.
+        //
+        // Kept, for three reasons. It is the framework's own documented lever and the only one left untried; it
+        // costs one assignment per hide and is fully guarded (null when the wrapping fails); and every
+        // measurement above used a pointer warped by SetCursorPos, which does not own the cursor the way a hand
+        // does — the only reading taken with a real hand on a real film is the log line this writes, so the
+        // next report will say which layer is still holding the arrow instead of guessing again.
+        if (hidden) Root.BeginCursorHide(_window?.BlankInputCursor);
+        else Root.EndCursorHide();
+
+        // And the same thing said to libmpv about its own window, which no call of ours can reach: see
+        // PlayerViewModel.ShowMpvCursor.
+        ViewModel.ShowMpvCursor(!hidden);
+
+        // Kept because it is the OS's own answer about the one thing here that leaves the process: the new
+        // display count, which has to be below zero for a hidden cursor and back at zero for a shown one.
+        // Read by the self-check, which otherwise could only ask this file what it believes.
+        // 第九报（2026-09-15）：show 侧从「拉一格」改成「拉到非负」（用户原话「你直接抄这些开源项目吧」，
+        // HC-Player 的 while (ShowCursor(TRUE) < 0) {}）——藏匿期间计数可能被压得很深（每拍重锁 + 历史残留），
+        // 单次 ShowCursor(TRUE) 只抬一格，残负会把下一次显示整个吞掉。hide 侧维持一次即可：HostWindow 每拍
+        // 的重锁（SuppressCursorDisplay）会兜住任何抬回。
+        if (hidden)
+        {
+            _cursorCount = Native.ShowCursor(false);
+        }
+        else
+        {
+            while ((_cursorCount = Native.ShowCursor(true)) < 0) { }
+        }
+
+        if (hidden)
+        {
+            _shapeBack = 0;
+
+            // 第二十七报的账随每段藏匿重开：这些说的都是「这段藏匿里发生了什么」。
+            _foreignShapes = 0;
+            _foreignStreak = 0;
+            _republished = 0;
+            _foreignPokes = 0;
+            _screenCursorShape = IntPtr.Zero;
+            _screenCursorTransparent = false;
+        }
+
+        // And say the policy again, without asking the OS for anything. Every 「no cursor」 above is an answer —
+        // this queue's shape, the class cursors, mpv's own setting, and above all the transparent
+        // ProtectedCursor on the line above, which is the only one of them that reaches the pixels a pointer
+        // over XAML content is on. WinUI reads that property while it is handling pointer input, so a value
+        // assigned during stillness is a value nobody has read: the arrow the last real movement worked out
+        // stays on the screen, which is 「静止超过两秒后鼠标指针还是不会自动隐藏」 from a player whose own
+        // readings all say hidden.
+        //
+        // This used to be a one-pixel injection through the real input queue, and it is not any more — see
+        // Nudge for what that cost and what replaced it.
+        // 第九报（2026-09-15）：藏点的屏幕绝对坐标，纯取证。用户报「屏幕一全屏播放时，屏幕二的 AyuGram
+        // 收到消息会唤起屏幕一静止隐藏的鼠标指针」，日志里那批唤醒都是同一签名：一拍之内横跳整整 60px、
+        // 纵向恒 0。藏匿行带上藏点绝对坐标，与唤醒行的读数、虚拟屏度量三方对账——唤醒那一刻读数变了而
+        // 虚拟屏矩形没变＝真有进程在注入位移；矩形变了＝桌面重排把坐标搬走，唤醒是误报。
+        string hideAnchor = "？";
+
+        if (hidden)
+        {
+            _nudgesThisHide = 0;
+            _woke = "未标注的显示路径（见到此串即有路漏标）";
+
+            // 第十四报：取样的第一条从藏匿那一刻算起，不是从上一段藏匿的最后一拍算起。置成 Now-1000
+            // 而不是 Now —— 那表示「已经到期」，藏匿后的第一拍就写下第一条读数。用户报的唤醒恰恰总在
+            // 藏起来之后的头几秒，等满一秒才落笔就会把最关键的那一段漏掉。
+            _hiddenSampleAt = Now - 1000;
+
+            // The poll's reference is pinned here so that the first tick after the hide measures movement from
+            // the moment it went, not from wherever the last tick happened to leave it. Not an anchor the hide
+            // is held to — see PollPointer: the reference is the previous reading either way, and hiding does
+            // not change which question is being asked.
+            if (CursorScreen(out var hiding))
+            {
+                _polled = hiding;
+                _polledKnown = true;
+                hideAnchor = $"{hiding.X},{hiding.Y}";
+            }
+
+            if (CursorPoint(out var onPicture)) _pointerAt = onPicture;
+
+            Nudge();
+        }
+
+        // Written to the log because this is the one thing in the player a probe can only ask about under
+        // conditions it made up, and 「没有变化」 three times over is what asking the wrong conditions costs.
+        // Two transitions a film, so the cost is nothing.
+        // <para>
+        // The hide line carries who owns the pixels, because the last round proved the rule right and the
+        // screen wrong: it fired on time, this thread's queue went to 「no shape」, and the arrow stayed. A
+        // shape set here only reaches the screen while the pointer is over a window this thread owns, and
+        // during playback the window under the pointer may be the island's or libmpv's rather than ours —
+        // which is a fact about a real film, unavailable to any probe. The show line carries the count of
+        // ticks that found a shape back while we still wanted none, which is the other way this can fail,
+        // and now also who moved the pointer: 「鼠标隐藏了一会又会自动跑出来」 was reported against a log that
+        // said the cursor was back and never said what had brought it, and one number — tens of pixels is a
+        // hand, one is a leak — is the whole difference.
+        // </para>
+        Log.Debug(Category, hidden
+            ? $"鼠标藏起来了：静止 {Now - _pointerMovedAt}ms，其间空事件 {_stillMoves} 次，线程形状"
+              + $"{(_window?.CursorShapeGone == true ? "无" : "还在")}，计数 {_cursorCount}"
+              + $"，藏点屏幕 {hideAnchor}"
+              + $"，框架光标{(Root.Cursor is null ? "＝默认（没换上）" : "＝透明")}，{PointerOwner()}"
+              + $"，{PointerElements()}"
+              + $"，见证{(_window?.Witness.Ready == true ? "就绪" : "缺席（只作取证）")}"
+            : $"鼠标又显示了：{_woke}；轮询问出的移动共 {_polledMoves} 次，计数 {_cursorCount}"
+              + $"，藏着期间重申了 {_nudgesThisHide} 次、有 {_shapeBack} 拍发现形状又被放回来了"
+              + $"，负计数锁被抬回又压回 {_window?.CursorSuppressRestates ?? 0} 次"
+              + $"，见证{(_window?.Witness.Ready == true ? $"真 {_window.Witness.RealMoves}/注 {_window.Witness.InjectedMoves}" : "缺席（只作取证）")}");
+    }
+
+    /// <summary>
+    /// Says 「no cursor」 again, without asking the OS for anything. Called once when the hide begins and again
+    /// on every tick for as long as it holds.
+    /// <para>
+    /// The repetition is not belt and braces. WinUI re-reads the picture's <c>ProtectedCursor</c> every time it
+    /// handles pointer input, and a playing film produces pointer input continuously, so a policy announced
+    /// once is a policy that gets overwritten at some arbitrary later moment. Three announces and then silence
+    /// was tried for a few hours on 2026-09-14 and produced 「隐藏后过两三秒又会自动冒出来」 with hides that
+    /// lasted fifteen seconds, four seconds and one hundred and eighty milliseconds in the same film. The two
+    /// counts are for the log: <see cref="_nudgesThisHide"/> is per hide, because that is the window the
+    /// question 「重申活着吗」 is asked about.
+    /// </para>
+    /// <para>
+    /// This used to inject a one-pixel round trip through the real input queue to force the framework to run
+    /// that round. That injection worked and cost the fix it was built to serve — the island raised a
+    /// <c>PointerMoved</c> for it, DPI scaling read its one pixel as two, and the player woke itself out of its
+    /// own hide. It is gone; see <c>PollPointer</c> for the single sensor that replaced the whole arrangement.
+    /// </para>
+    /// </summary>
+    private void Nudge()
+    {
+        _nudgesThisHide++;
+        _cursorNudges++;
+
+        _cursorVisibilityEvents?.Refresh();
+        _window?.KeepCursorHidden();
+
+        Root.KeepCursorHidden(_window?.BlankInputCursor);
+    }
+
+    /// <summary>
+    /// Repairs a visible cursor only while the pointer still belongs to this player's window.
+    /// WinUI may publish a transparent copy with a different handle, so bitmap transparency is authoritative.
+    /// </summary>
+    private void OnSystemCursorChanged()
+    {
+        if (!Attached || !_cursorHidden) return;
+        _window?.KeepCursorHidden();
+        Root.KeepCursorHidden(_window?.BlankInputCursor);
+    }
+
+    private void ChaseForeignCursor()
+    {
+        if (!_cursorHidden || _window is not { } window
+            || (ViewModel.PlayingNow && !ViewModel.PictureInHostWindow)
+            || !PointerInside() || Native.MouseButtonDown())
+        {
+            _foreignStreak = 0;
+            return;
+        }
+
+        if (Native.CursorSnapshot() is not { } snap
+            || Native.GetAncestor(Native.WindowFromPoint(snap.At), Native.GaRoot) != window.Handle)
+        {
+            _foreignStreak = 0;
+            return;
+        }
+
+        if (ScreenCursorGone(snap.Flags, snap.Shape))
+        {
+            _foreignStreak = 0;
+            return;
+        }
+
+        _foreignShapes++;
+        _foreignStreak++;
+        _republished++;
+        Root.RepublishCursor(window.BlankInputCursor);
+
+        if (_foreignStreak < ForeignStreakForPoke || Now - _lastPokeAt < PokeCooldown) return;
+
+        _lastPokeAt = Now;
+        if (PokeForeignCursor(snap.At))
+        {
+            _foreignPokes++;
+            Log.Debug(Category, $"屏上可见光标 0x{snap.Shape:X} 持续 {_foreignStreak} 拍，已通过输入队列刷新");
+        }
+    }
+
+    private bool ScreenCursorGone(int flags, IntPtr shape)
+    {
+        if ((flags & Native.CurShowing) == 0 || shape == IntPtr.Zero || shape == _window?.BlankCursor)
+            return true;
+
+        if (_screenCursorShape != shape)
+        {
+            _screenCursorShape = shape;
+            _screenCursorTransparent = Native.CursorIsTransparent(shape);
+        }
+        return _screenCursorTransparent;
+    }
+
+    /// <summary>
+    /// SetCursorPos changes coordinates without delivering pointer input to the island. A paired
+    /// SendInput move does reach it; its net zero displacement cannot pass the wake threshold.
+    /// </summary>
+    private bool PokeForeignCursor(NativePoint at)
+    {
+        if (_window is not { } window || Native.MouseButtonDown()
+            || !Native.GetCursorPos(out var current) || current.X != at.X || current.Y != at.Y
+            || Native.GetAncestor(Native.WindowFromPoint(current), Native.GaRoot) != window.Handle) return false;
+
+        return Native.NudgeCursorState();
+    }
+
+    /// <summary>
+    /// 框架此刻认为指针压在哪几个元素上，最上面那个写在最前。
+    /// <para>
+    /// 「透明光标设在 <c>Root</c> 上、屏上却还是箭头」的头一个嫌疑就是<b>框架命中的根本不是 <c>Root</c></b>：压在
+    /// 它上面还有一个可命中的元素（换集时那块不透明的遮挡、钉住的浮层、一颗按钮），那个元素的
+    /// <c>ProtectedCursor</c> 是空的，于是框架照旧画它自己的箭头。这一句就是为了让下一次报告能直接指出是哪一个，
+    /// 而不用再猜一轮。
+    /// </para>
+    /// <para>
+    /// 只写日志，不判任何东西：这一读数要一只真手压在真片子上才算数，而那种时刻自检到不了 —— 这台机器上注不进
+    /// 真实指针输入（自检报告里那句「真实输入注不进」）。
+    /// </para>
+    /// </summary>
+    private string PointerElements()
+    {
+        if (!CursorPoint(out var point)) return "问不出指针压在哪个元素上";
+
+        try
+        {
+            var hits = VisualTreeHelper.FindElementsInHostCoordinates(point, Root)
+                .OfType<FrameworkElement>()
+                .Take(4)
+                .Select(element => element.Name is { Length: > 0 } name
+                    ? $"{element.GetType().Name}#{name}"
+                    : element.GetType().Name)
+                .ToList();
+
+            return hits.Count == 0
+                ? "框架说指针不压在任何元素上"
+                : $"框架命中 {string.Join(" ← ", hits)}";
+        }
+        catch (Exception error)
+        {
+            return $"命中测试问不出（{Failure.Describe(error)}）";
+        }
+    }
+
+    /// <summary>
+    /// Who owns the cursor at this instant, in the OS's words: the class of the window under the pointer,
+    /// whether its message queue is this thread's, and what the OS says is on screen. Three facts, because
+    /// hiding a cursor is per queue and the window under a playing film is not always one of ours.
+    /// </summary>
+    private static string PointerOwner()
+    {
+        if (!Native.GetCursorPos(out var at)) return "问不出指针位置";
+
+        var under = Native.WindowFromPoint(at);
+        var owner = Native.GetWindowThreadProcessId(under, out _);
+        var mine = owner == Native.GetCurrentThreadId();
+        var says = Native.CursorSnapshot() is { } cursor ? $"[标志 0x{cursor.Flags:X2}，形状 0x{cursor.Shape:X}]" : "问不出";
+
+        return $"指针上的窗口={ClassOf(under)}（{(mine ? "本线程" : $"线程 {owner}，不是本线程")}），系统 {says}";
+    }
+
+    /// <summary>
+    /// Why the chrome is being kept on screen regardless of the pointer. Three independent things ask for
+    /// it and they overlap: a menu can be opened and closed while a dialog is up, and so on.
+    /// </summary>
+    [Flags]
+    private enum ChromeHold
+    {
+        None = 0,
+
+        /// <summary>One of the control-bar menus is open — the pointer is in it, not resting on the picture.
+        /// 右键画面菜单不在此列（2026-10-07 起它走 <see cref="HoldPictureMenu"/> 把控件收下去，而不是钉住），
+        /// 但键盘兜底那道闸照样给它让路（读 <see cref="ChromeReveal.PictureMenuOpen"/>）。</summary>
+        Menu = 1,
+
+        /// <summary>The window is being dragged by the title strip, which reports nothing while the hand holds still.
+        /// 也是唯一一个带例外的理由：钉住三样控件，但进度条与音量条在拖动期间不许出现（2026-09-22 用户令），
+        /// 由 <see cref="ChromeReveal.SetWindowDrag"/> 单独告诉规则。</summary>
+        Drag = 2,
+
+        /// <summary>播放信息 is up.</summary>
+        Dialog = 4,
+
+        /// <summary>
+        /// 工具用：<c>--show-osd</c> 把浮层钉在屏上好拍照。<see cref="ChromeReveal.WakeFully"/> 的宽限期只有一秒多，
+        /// 等不到窗口稳下来、更等不到截图脚本按下快门。
+        /// </summary>
+        Shot = 16,
+
+        Timeline = 32,
+
+        Speed = 64
+    }
+
+    /// <summary>
+    /// A flyout is open, a drag is running, or a dialog is up: the chrome
+    /// stays regardless of the pointer.
+    /// <para>
+    /// Reason-flagged rather than a plain boolean, because <see cref="ChromeReveal.SetHold"/> is one flag
+    /// for the whole page and the reasons genuinely overlap: opening a menu while the search box has focus
+    /// and then closing it would otherwise release a hold the box still needs, and the strip would slide
+    /// away from under the caret. The rule in Core keeps a single flag on purpose — 「something is holding
+    /// it」 is all a reveal rule can act on — so the bookkeeping belongs here, where the reasons are.
+    /// </para>
+    /// <para>
+    /// <see cref="ChromeHold.Drag"/> 是唯一一个「钉住」还带着条件放行的理由（2026-09-22 用户令「拖动过程中
+    /// 不要显示进度条和音量条」）：拖动期间窗口在动，两根条谁也没空读，所以它是单独一位告诉规则的
+    /// （<see cref="ChromeReveal.SetWindowDrag"/>），而标题条照旧被钉着 —— 手就在它上面。这一位与钉住由同一个
+    /// 位推出，因此拖动那三处收尾（正常松开、指针事件丢了的对账、进退全屏前先收）都不必各自记得再放一次。
+    /// </para>
+    /// </summary>
+    private void Hold(bool held, ChromeHold reason, long? now = null)
+    {
+        var before = _holds;
+        _holds = held ? _holds | reason : _holds & ~reason;
+
+        // Not a shortcut for its own sake: SetHold restamps the idle clock when a hold is released, and
+        // releasing one that was never taken restarts the countdown from here — which leaves the chrome
+        // standing over the picture for another window's worth of it.
+        if (_holds == before) return;
+
+        // 时钟默认是真的 Environment.TickCount64；只有 ProbeReveal 会传进它那套合成时钟 —— 那一关把空闲/停靠
+        // 两个窗口快进了好几秒，若这里仍按真 Now 落账，松手那一拍规则会拿「合成的现在」减「真的刚才」算出好几秒
+        // 的空闲，把控件当场收掉。生产路径一律不传，照旧走 Now。
+        var stamp = now ?? Now;
+
+        // 两问都先落进规则，再画一次：中间那个状态（钉子已放而拖动还在，或反过来）绝不能被合成器看见 ——
+        // 拖动开始那一拍它正是「三样齐全」，一帧都不能画出去。
+        var changed = _chrome.SetHold(_holds != ChromeHold.None, stamp);
+        if (_chrome.SetWindowDrag(_holds.HasFlag(ChromeHold.Drag), stamp)) changed = true;
+        if (changed) Render();
+    }
+
+    /// <summary>
+    /// 右键画面菜单的挂牌，与 <see cref="Hold"/> 那把反着来：那把把三样钉在屏上（控制条上的浮层，控件是
+    /// 回得去的来路），这一把把三样收下去 —— 菜单锚在画面上，开着时它本身就是全部界面（2026-10-07 用户令，
+    /// 规则那一支见 <see cref="ChromeReveal.SetPictureMenu"/>）。不进 <see cref="_holds"/> 那本账：那本账
+    /// 只答「钉没钉住」，收下去是另一个动词，混进去两边都得加例外。
+    /// </summary>
+    private void HoldPictureMenu(bool held)
+    {
+        if (_chrome.SetPictureMenu(held, Now)) Render();
+    }
+
+    /// <summary>
+    /// Ten hertz, and the three things that expire rather than happen. Two of them are here because a
+    /// pointer can leave without saying so; the third is the view model's, and is simply handed the tick.
+    /// <para>
+    /// The tick opens by asking the OS where the cursor is, once, and closes by giving that answer back. Up
+    /// to four of the steps below want the position and every one of them used to ask for itself — see
+    /// <see cref="CursorScreen"/> for why that made a single tick able to disagree with itself.
+    /// </para>
+    /// </summary>
+    private void OnTick(object? sender, object e)
+    {
+        if (!Attached) return;
+
+        _tickCount++;
+
+        // Eagerly, not on first use: the sharing has to cover every step below equally, and a lazy read
+        // would put the reading inside whichever of them happened to run first — which on a tick where the
+        // pointer left the window is a different step from the tick before.
+        _cursorAtKnown = Native.GetCursorPos(out _cursorAt);
+        _cursorShared = true;
+
+        // 拖动对账（2026-09-18，用户报「双击标题之后控件不会自动隐藏」）：Drag hold 挂着而鼠标键已经
+        // 松开，就是一笔悬账 —— Decide 的第一行被 HoldChrome 压着，控件从此永远全显。实机日志里
+        // 这笔账挂过 9~18 秒（hold=True、按住鼠标=False），直到下一次完整的按下再松开才被冲掉。
+        // 悬账的来源不止一条（release 事件没到、DragTo 在全屏那一拍把起点丢了而 Hold 没人放），所以
+        // 不逐路去堵，每拍对一次账：键已松 = 拖动已了，Hold 就该放。Hold 自带锁存，重复放是空操作。
+        if (_holds.HasFlag(ChromeHold.Drag) && !Native.MouseButtonDown())
+        {
+            EndWindowDrag();
+
+            // EndWindowDrag 只在它真的结束了一场拖动时放 Hold（dragged 才放）；若起点早已被
+            // DragTo 丢掉（Dragging 为假），上面那趟是空手而归 —— 这里补一刀，把账平掉。
+            if (_holds.HasFlag(ChromeHold.Drag)) Hold(false, ChromeHold.Drag);
+        }
+
+        // A drag in progress, ten times a second, whatever the pointer events are doing. They are the fast
+        // path and this is the guarantee: the window is moving with the cursor, so the cursor is not moving
+        // relative to the window, and there is no promise that a pointer event arrives for a move that
+        // changes nothing about where the pointer sits inside the client area. This is also where a drag
+        // whose release happened somewhere we never saw gets ended.
+        TryBeginPictureDrag();
+        if (_window?.Dragging == true) DragWindow();
+
+        // 「移动了没有」, asked of the OS. Not while a drag is running: the window is moving with the cursor,
+        // so the cursor is not moving relative to anything the rule cares about, and the line above has
+        // already dealt with it.
+        else PollPointer();
+
+        // The departure the events can miss entirely. PointerExited is not guaranteed: alt-tab, another
+        // window opening over ours, a cursor warped away by something else — in every one of those the
+        // pointer's last known position is still parked on a control, and 「parked」 is precisely the
+        // state the idle countdown does not apply to, so the chrome would stay up until the pointer came
+        // back. Ten hertz makes the stuck state impossible rather than merely unlikely.
+        if (!PointerInside())
+        {
+            // The departure the events can miss gets a name too: 「指针走了」 is a different wake from
+            // 「按键」 or 「点击」, and the show line is where that difference has to survive.
+            //
+            // 藏匿期另算（2026-09-16 第二轮复核）：那时「指针出了画面」可能只是幽灵把读数搬到了屏幕
+            // 边缘外（AyuGram 在第二块屏上），而藏匿期本来就没有 chrome 可收 —— 这一记不许自己就是
+            // 一次显示，所以 keepHidden 传进去，名字也不必挂（没有显示就没有「谁叫醒的」）。
+            if (_cursorHidden)
+            {
+                if (_chrome.PointerLeft(Now, keepHidden: true)) Render();
+            }
+            else
+            {
+                _woke = "指针离开了画面";
+                if (_chrome.PointerLeft(Now)) Render();
+            }
+        }
+        else if (_chrome.PointerGone)
+        {
+            // The homecoming the events and the poll both miss. A hand that comes back and stops within
+            // five pixels of where it left raises no pointer event at all, and the poll's two early
+            // returns (a zero step; one under the threshold against its last accepted reading) both fire
+            // before a position ever reaches the rule — so the departure above would stand forever, and
+            // 「有时候要点一下暂停再播放鼠标才会自动隐藏」 was the click doing this reseed's job by hand.
+            // Not a movement: the pointer is where it is, 位置是位置、动是动, and the settle clock keeps
+            // running on its own terms (a report with the cursor showing restamps it anyway, which is the
+            // same patience a parked pointer always bought).
+            //
+            // 第八报（2026-09-15）补的名牌：这条 reseed 展开控件栏时就是一次显示（chrome 出、光标随它
+            // 出），22:56:59 两条「未标注的显示路径」正是它和下一行在进退全屏的同一毫秒里留下的。
+            if (_cursorHidden) _woke = "指针回到了画面";
+            ReseedPointer(moved: false);
+        }
+
+        // A held mouse button with chrome on screen is a drag on one of the two sliders — or at least may
+        // be — and a drag reports nothing at all while the hand holds still. The reveal rule's patience for
+        // a still pointer is finite now, and a slider collapsing under a held thumb would lose the pointer
+        // capture with it, so the button's own state stands in for the events that are not coming.
+        //
+        // 第八报（2026-09-15）补的名牌：这条 reseed 也会展开控件栏（chrome 出、光标随它出），是 22:56:59
+        // 「未标注」的另一半。只在光标已藏时挂名——常态（chrome 在屏、光标本就显示）不给 _woke 塞旧账。
+        if (Native.MouseButtonDown() && _chrome.State.Any)
+        {
+            if (_cursorHidden) _woke = "按住鼠标（滑块拖动）";
+            ReseedPointer(moved: true);
+        }
+
+        // 焦点位每拍重问（第二十九报，2026-09-17 接替 Activated 事件路）：mpv.net 的 ActiveForm == this
+        // 仍在这条位上（假着时 Settle 永远不藏），但「归不归我们管」的判据换成指针压在谁家画面上——
+        // 窗口失焦而指针仍停在我们的画面上（用户把鼠标从别的窗口移回来、还没点击激活），下一拍照样藏；
+        // 窗口被盖住而指针压在别人家的窗口上（二十一报实测的 TrayNotifyWnd 那类），前台与指针两问都答
+        // 不上，照旧不藏。被动失焦也不再掀光标：指针还停在我们画面上时那一拍 focused 仍真，「窗口失去
+        // 焦点」的显示路只对「指针同时也不在我们画面上」的失焦成立——二十七报挂观察的那条无输入显示
+        // 路由此退役。
+        var handle = _window?.Handle ?? IntPtr.Zero;
+        var focused = handle == IntPtr.Zero
+            || Native.GetForegroundWindow() == handle
+            || (CursorScreen(out var focusAt)
+                && Native.WindowFromPoint(focusAt) is var under
+                && under != IntPtr.Zero
+                && Native.GetWindowThreadProcessId(under, out _) == Native.GetCurrentThreadId());
+
+        // 「叫醒窗口的那一下点击不作数」（用户令 2026-09-23）要的是**严格**的前台位，而且必须是**每一拍**问的：
+        // 按下送到页面时窗口已经是前台了（激活在按下之前），现问是问不出来的 —— 判据（上一拍的前台位是主料，
+        // 「刚变前台多久」只作兜底）与理由见 WakeClick。上面那个 focused 宽到「指针还在我们窗口上」，拿来判这个
+        // 会把「点桌面」那条路也算成前台，所以这里另问一次严格前台位记着，给下一次按下用。
+        var foreground = handle != IntPtr.Zero && Native.GetForegroundWindow() == handle;
+        if (foreground && !_wasForeground) _foregroundSinceAt = Now;
+        _wasForeground = foreground;
+
+        if (_chrome.WindowFocused != focused)
+        {
+            if (!focused && _cursorHidden) _woke = "窗口失去焦点";
+            _chrome.WindowFocused = focused;
+        }
+
+        if (_chrome.Tick(Now)) Render();
+
+        // 诊断：光标该藏不藏的时候，把「卡在哪一条」写进日志（每秒至多一行）。
+        ExplainNoHide();
+
+        // Said again while it holds, because saying it once is only enough if nothing puts a shape back: see
+        // HostWindow.KeepCursorHidden. Guarded on our own flag so a shown cursor costs nothing.
+        // <para>
+        // Counted, too. 「Something puts a shape back」 is a supposition every fix here has rested on and
+        // nothing has ever measured: if these ticks keep finding a shape on the queue, the arrow the user
+        // sees is being re-set ten times a second and hiding it once was never going to be enough. The count
+        // goes out with the show line, so an ordinary film answers it.
+        // </para>
+        if (_cursorHidden)
+        {
+            if (_window?.CursorShapeGone == false) _shapeBack++;
+
+            // 第二十七报（2026-09-17）：屏上挂着外来箭头吗？挂着就一层层夺回来。检测纯读、
+            // 夺回无输入，详见 ChaseForeignCursor。
+            ChaseForeignCursor();
+
+            // 第十四报（2026-09-15）：藏匿期每秒记一条「外面此刻什么样」。只读、不改，理由见 SampleHiddenState。
+            SampleHiddenState();
+
+            // And say the policy again — every tick, for as long as the hide lasts. That is not belt and
+            // braces: the framework re-reads ProtectedCursor every time it handles pointer input, and a film
+            // produces pointer input continuously, so a policy announced once is a policy that is overwritten
+            // at some arbitrary later moment. See Nudge.
+            Nudge();
+        }
+
+        // The same guarantee for the chapter preview, and for the same reason: it hides on the pointer
+        // leaving the seek track, and PointerExited is not raised when the pointer leaves the window from
+        // over it — alt-tab, a screenshot tool taking the foreground, a cursor warped elsewhere. Asking
+        // the OS ten times a second where the cursor actually is makes a stranded preview impossible
+        // rather than merely unlikely, which is what 视频进度条预览不会自动消失 turned out to be.
+        //
+        // Not while the thumb is being dragged: a drag captures the pointer, so it keeps arriving here
+        // from wherever the hand has wandered to, and the preview is exactly what that hand is reading.
+        if (!ViewModel.Scrubbing && ChapterPeek.Visibility == Visibility.Visible && !PointerOverSeekTrack())
+            HideChapterPeek();
+
+        // The coalesced seek, the 统计 refresh and the 跳过 countdown: all three are about what is
+        // playing rather than about what is on screen, so all three are one call.
+        ViewModel.Tick();
+
+        // And the shared reading expires with the tick that took it. Not in a finally: this page's tick
+        // cannot swallow an exception — App leaves Handled false on purpose, so a throw here takes the
+        // process with it — and there is nothing to put back afterwards.
+        _cursorShared = false;
+    }
+
+}

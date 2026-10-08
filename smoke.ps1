@@ -14,9 +14,9 @@ param(
 if (-not $Exe) {
     # x64 rather than AnyCPU: WinUI 3 has no AnyCPU, and the csproj pins Platform.
     $Exe = if ($Release) {
-        Join-Path $PSScriptRoot 'artifacts\publish\win-x64\EmbyNian.exe'
+        Join-Path $PSScriptRoot 'artifacts\publish\win-x64\Momoka.exe'
     } else {
-        Join-Path $PSScriptRoot 'src\EmbyNian.Shell\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\EmbyNian.exe'
+        Join-Path $PSScriptRoot 'src\Momoka.Shell\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\Momoka.exe'
     }
 }
 
@@ -26,7 +26,7 @@ if (-not (Test-Path $Exe)) {
 }
 
 Write-Output ("启动 {0}" -f $Exe)
-$log = Join-Path $env:LOCALAPPDATA ("EmbyNian\logs\app-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
+$log = Join-Path $env:LOCALAPPDATA ("Momoka\logs\app-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
 
 $before = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
 

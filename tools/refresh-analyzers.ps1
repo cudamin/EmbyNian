@@ -7,7 +7,7 @@
 #   tools\refresh-analyzers.ps1          把技能里的两份拷过来，并打印新哈希
 #   tools\refresh-analyzers.ps1 -Check   只比本机候选与仓库载荷，供独立升级评估，不是发版必过项
 #
-# 拷完把哈希写进 tests\EmbyNian.Tests\Agreements.txt 的 analyzer 行 —— 那里有一条测试会先红给你看
+# 拷完把哈希写进 tests\Momoka.Tests\Agreements.txt 的 analyzer 行 —— 那里有一条测试会先红给你看
 # （AgreementsTests「tools/analyzers 那份副本还在、没被换过」）。
 [CmdletBinding()]
 param(

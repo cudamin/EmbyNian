@@ -3,7 +3,7 @@
 
     先说清这条路能做什么、不能做什么（2026-10-01 实测并对照微软文档）：
 
-    * **能**：在这台机器上，让 Windows 认出「这是 EmbyNian 发的」，双击不再弹「发布者未知」。
+    * **能**：在这台机器上，让 Windows 认出「这是 Momoka 发的」，双击不再弹「发布者未知」。
       前提是证书被装进本机受信任存储（本脚本的 -Setup 做这件事，需要管理员终端一次）。
     * **不能**：对别人的机器无效。自签证书在别人那里不是受信任根，SmartScreen 的判定与不签名
       相同（微软文档 smartscreen-reputation 原文：Self-signed Certificate → 与不签名同行为）。
@@ -16,8 +16,8 @@
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Setup
 
     之后（普通终端即可）：
-        powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Path artifacts\publish\win-x64\EmbyNian.exe
-        powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Path artifacts\EmbyNian_windows-x64_0.1.1.exe
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Path artifacts\publish\win-x64\Momoka.exe
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Path artifacts\Momoka_windows-x64_0.1.1.exe
 
     看现状：
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Status
@@ -30,7 +30,7 @@ param(
     # 要看的东西：文件或目录（目录会挑出 .exe / .msix / .dll）。
     [string[]]$Path,
 
-    # 证书指纹。不给就自动找本机 CN=EmbyNian 的那张。
+    # 证书指纹。不给就自动找本机 CN=Momoka 的那张。
     [string]$Thumbprint,
 
     # 时间戳服务器。生产签名要加，否则证书一过期签名就失效。
@@ -67,7 +67,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
-$pfxPath = Join-Path $repo 'artifacts\code-signing-EmbyNian.pfx'
+$pfxPath = Join-Path $repo 'artifacts\code-signing-Momoka.pfx'
 
 # signtool 没有随系统装（这台机器没有 Windows SDK），但 SDK.BuildTools 这个 NuGet 包里有，
 # 本机 NuGet 缓存里就有三份。挑版本最高的一份用。
@@ -83,7 +83,7 @@ function Get-SignTool {
     throw '找不到 signtool.exe。装了 Windows SDK 或让 NuGet 有 microsoft.windows.sdk.buildtools 这个包再来。'
 }
 
-function Get-EmbyNianCert {
+function Get-MomokaCert {
     param([string]$WantThumbprint)
     if ($WantThumbprint) {
         $found = Get-ChildItem Cert:\CurrentUser\My, Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
@@ -92,10 +92,10 @@ function Get-EmbyNianCert {
         return $found[0]
     }
     $found = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
-        Where-Object { $_.Subject -eq 'CN=EmbyNian' -and $_.HasPrivateKey } |
+        Where-Object { $_.Subject -eq 'CN=Momoka' -and $_.HasPrivateKey } |
         Sort-Object NotAfter -Descending | Select-Object -First 1
     if (-not $found) {
-        throw '本机没有 CN=EmbyNian 的签名证书。先跑一次 -Setup（管理员终端）。'
+        throw '本机没有 CN=Momoka 的签名证书。先跑一次 -Setup（管理员终端）。'
     }
     return $found
 }
@@ -141,8 +141,8 @@ function Get-TrustPublisherState {
 }
 
 function Show-CertStatus {
-    Write-Output '==== 本机 CN=EmbyNian 证书 ===='
-    $certs = @(Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue | Where-Object { $_.Subject -eq 'CN=EmbyNian' })
+    Write-Output '==== 本机 CN=Momoka 证书 ===='
+    $certs = @(Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue | Where-Object { $_.Subject -eq 'CN=Momoka' })
     if ($certs.Count -eq 0) {
         Write-Output '  用户证书库里没有。（-Setup 会在那里建一张）'
     } else {
@@ -156,14 +156,14 @@ function Show-CertStatus {
 
     Write-Output '==== 受信任存储里有没有它 ===='
     foreach ($store in @('Cert:\CurrentUser\Root', 'Cert:\LocalMachine\Root', 'Cert:\LocalMachine\TrustedPeople')) {
-        $hit = Get-ChildItem $store -ErrorAction SilentlyContinue | Where-Object { $_.Subject -eq 'CN=EmbyNian' }
+        $hit = Get-ChildItem $store -ErrorAction SilentlyContinue | Where-Object { $_.Subject -eq 'CN=Momoka' }
         if ($hit) { Write-Output ("  有：{0}" -f $store) } else { Write-Output ("  无：{0}" -f $store) }
     }
 
     Write-Output '==== 链能不能建起来（能不能建起来决定 SmartScreen 认不认）===='
     # 只用 5.1 上确实存在的 API：X509ChainPolicy.TrustMode 是 .NET Core 才加的，
     # 在 Windows PowerShell 里取它就是「找不到属性 TrustMode」—— 本脚本第一版就死在这里。
-    $cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue | Where-Object { $_.Subject -eq 'CN=EmbyNian' -and $_.HasPrivateKey } | Select-Object -First 1
+    $cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue | Where-Object { $_.Subject -eq 'CN=Momoka' -and $_.HasPrivateKey } | Select-Object -First 1
     if ($cert) {
         $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
         $chain.ChainPolicy.RevocationMode = 'NoCheck'
@@ -219,9 +219,9 @@ if ($Setup) {
         throw '建证书并装进本机受信任存储需要管理员权限。请用「以管理员身份运行」的 PowerShell 重跑这条命令。'
     }
 
-    Write-Output '==== 建一张代码签名证书（CN=EmbyNian）===='
+    Write-Output '==== 建一张代码签名证书（CN=Momoka）===='
     $new = New-SelfSignedCertificate `
-        -Subject 'CN=EmbyNian' `
+        -Subject 'CN=Momoka' `
         -Type CodeSigningCert `
         -KeyUsage DigitalSignature `
         -KeyAlgorithm RSA `
@@ -235,12 +235,12 @@ if ($Setup) {
 
     Write-Output '==== 导出带私钥的 pfx（artifacts 已被 git 忽略，私钥不进仓库）===='
     New-Item -ItemType Directory -Path (Split-Path -Parent $pfxPath) -Force | Out-Null
-    $pwd = ConvertTo-SecureString -String 'embynian' -Force -AsPlainText
+    $pwd = ConvertTo-SecureString -String 'momoka' -Force -AsPlainText
     Export-PfxCertificate -Cert $new -FilePath $pfxPath -Password $pwd | Out-Null
     Write-Output ("  已导出：{0}" -f $pfxPath)
 
     Write-Output '==== 装进本机受信任存储（这一步才是让 SmartScreen 不再问的关键）===='
-    $pub = Join-Path $env:TEMP 'EmbyNian-code-signing.cer'
+    $pub = Join-Path $env:TEMP 'Momoka-code-signing.cer'
     Export-Certificate -Cert $new -FilePath $pub -Force | Out-Null
     Import-Certificate -FilePath $pub -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
     Import-Certificate -FilePath $pub -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
@@ -249,7 +249,7 @@ if ($Setup) {
 
     Write-Output ''
     Write-Output '下一步（普通终端）：'
-    Write-Output ("    powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Path artifacts\publish\win-x64\EmbyNian.exe")
+    Write-Output ("    powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -Path artifacts\publish\win-x64\Momoka.exe")
     return
 }
 
@@ -322,7 +322,7 @@ if ($TrustPublisher) {
     if (-not (Test-Admin)) {
         throw '登记「受信任的发布者」要写 HKLM，需要管理员权限。请用「以管理员身份运行」的 PowerShell 重跑。'
     }
-    $cert = Get-EmbyNianCert -WantThumbprint $Thumbprint
+    $cert = Get-MomokaCert -WantThumbprint $Thumbprint
     $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Safer\CodeIdentifiers\262144\Paths'
     New-Item -Path $key -Force | Out-Null
     # 条目名是证书指纹；Authenticode 说的是「按证书信任」，TrustedPublisher 说的是「它是可信发布者」。
@@ -332,7 +332,7 @@ if ($TrustPublisher) {
     New-ItemProperty -Path $entry -Name 'TrustedPublisher' -PropertyType DWord -Value 1 -Force | Out-Null
     New-ItemProperty -Path $entry -Name 'SaferFlags' -PropertyType DWord -Value 0 -Force | Out-Null
     New-ItemProperty -Path $entry -Name 'ItemData' -PropertyType String -Value '' -Force | Out-Null
-    New-ItemProperty -Path $entry -Name 'Description' -PropertyType String -Value 'EmbyNian（本机自签发布者）' -Force | Out-Null
+    New-ItemProperty -Path $entry -Name 'Description' -PropertyType String -Value 'Momoka（本机自签发布者）' -Force | Out-Null
     New-ItemProperty -Path $entry -Name 'LastModified' -PropertyType DWord -Value ([int][double]::Parse((Get-Date -UFormat %s))) -Force | Out-Null
 
     # ！这一步不能省：**光有 Paths 里的条目，规则不会被读**。
@@ -391,7 +391,7 @@ foreach ($p in $Path) {
 }
 if ($targets.Count -eq 0) { throw '没找到可签的文件。' }
 
-$cert = Get-EmbyNianCert -WantThumbprint $Thumbprint
+$cert = Get-MomokaCert -WantThumbprint $Thumbprint
 $signtool = Get-SignTool
 
 Write-Output ("用证书 {0}（到 {1:yyyy-MM-dd}）签 {2} 个文件" -f $cert.Thumbprint, $cert.NotAfter, $targets.Count)

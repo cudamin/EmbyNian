@@ -44,19 +44,19 @@ set "REPO=%~dp0.."
 
 rem Plain exit /b preserves the child exit code; percent expansion happens before a block runs.
 if /I "%~1"=="restore" (
-    "%DOTNET%" restore "%REPO%\EmbyNian.sln" --disable-parallel -m:1 -p:BuildInParallel=false
+    "%DOTNET%" restore "%REPO%\Momoka.sln" --disable-parallel -m:1 -p:BuildInParallel=false
     exit /b
 )
 
 if /I "%~1"=="build" (
-    "%DOTNET%" build "%REPO%\EmbyNian.sln" -c Release --no-restore -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false -p:MSBuildNodeReuse=false
+    "%DOTNET%" build "%REPO%\Momoka.sln" -c Release --no-restore -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false -p:MSBuildNodeReuse=false
     exit /b
 )
 
 if /I "%~1"=="test" (
-    "%DOTNET%" build "%REPO%\tests\EmbyNian.Tests\EmbyNian.Tests.csproj" -c Release --no-restore -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false -p:MSBuildNodeReuse=false
+    "%DOTNET%" build "%REPO%\tests\Momoka.Tests\Momoka.Tests.csproj" -c Release --no-restore -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false -p:MSBuildNodeReuse=false
     if errorlevel 1 exit /b
-    "%DOTNET%" run --project "%REPO%\tests\EmbyNian.Tests\EmbyNian.Tests.csproj" -c Release --no-build
+    "%DOTNET%" run --project "%REPO%\tests\Momoka.Tests\Momoka.Tests.csproj" -c Release --no-build
     exit /b
 )
 

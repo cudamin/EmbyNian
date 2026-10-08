@@ -1787,7 +1787,7 @@ display_timer = mp.add_periodic_timer(o.duration,
     end)
 display_timer:kill()
 
--- EMBYNIAN[cycle]：三态循环 —— 关闭 → 播放统计(第1页) → 着色器统计(第2页) → 关闭。用实际显示页作
+-- MOMOKA[cycle]：三态循环 —— 关闭 → 播放统计(第1页) → 着色器统计(第2页) → 关闭。用实际显示页作
 -- 状态源，键盘、uosc 菜单和集成模式那颗按钮混用也不会走散（都进这一个函数）。命名函数而非内联闭包，
 -- 便于离线探针直接调它验三态（work/probe-stats-cycle.py）。
 local function cycle_stats()

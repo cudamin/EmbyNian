@@ -85,10 +85,10 @@ function Send([int]$x, [int]$y) {
     [void][Poke]::SendInput(1, @($event), [System.Runtime.InteropServices.Marshal]::SizeOf($event))
 }
 
-$process = Get-Process -Name "EmbyNian" -ErrorAction SilentlyContinue |
+$process = Get-Process -Name "Momoka" -ErrorAction SilentlyContinue |
     Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
     Select-Object -First 1
-if (-not $process) { throw "没有正在运行的 EmbyNian 窗口" }
+if (-not $process) { throw "没有正在运行的 Momoka 窗口" }
 
 $handle = $process.MainWindowHandle
 $client = New-Object Poke+RECT
