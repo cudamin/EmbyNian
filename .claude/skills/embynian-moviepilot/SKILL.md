@@ -1,6 +1,6 @@
 ---
 name: embynian-moviepilot
-description: "Develop, review and verify EmbyNian's MoviePilot integration: media-source identity, TMDB/Douban/IMDb searches, torrent results, subscriptions, and history-based reorganization. Use for MoviePilot C# or WinUI changes and safe live troubleshooting in this repository, not general playback work."
+description: "Develop, review and verify EmbyNian's MoviePilot integration: media-source identity, TMDB/Douban/IMDb searches, torrent results, subscription management, library-availability statistics and library playback entries, and history-based reorganization. Use for MoviePilot C# or WinUI changes and safe live troubleshooting in this repository; the playback pipeline itself belongs to the playback skill."
 ---
 
 # EmbyNian — MoviePilot integration
@@ -10,19 +10,20 @@ description: "Develop, review and verify EmbyNian's MoviePilot integration: medi
 ## 开始之前
 
 - 当前工作树里的 `src/EmbyNian.Core/MoviePilot/` 是协议与业务规则；Shell 的 `MoviePilot*ViewModel` / `MoviePilot*` 视图负责界面；服务注册在 `Composition/ShellServices.cs`。
-- 先确认实际 MoviePilot 版本。过去某次连接成功不代表服务器仍是该版本。读取已授权服务的 `dashboard/system` 与 `openapi.json`，再对照对应 tag 的官方前后端源码。
+- 先确认实际 MoviePilot 版本。过去某次连接成功不代表服务器仍是该版本。`dashboard/system` 的 `version` 是可靠入口；`openapi.json` 未必可用（在 API 基址下曾返回 404），拿不到就以对应 tag 的官方前后端源码为准，不要猜字段，也不要因此跳过版本确认。
 - 不整份输出 OpenAPI、设置或资源回话。按当前接口投影字段；`torrent_info` 可能带站点 Cookie、下载凭据和私有 URL。
 - 本仓库 ignored `work/` 的上游快照和诊断宿主只可作为经检查后的本机辅助；干净检出不能依赖它们。正式测试使用匿名夹具与 `StubTransport`。
 
 ## 按问题选择资料
 
 - 搜片、来源选择、跨库编号、同名结果、订阅身份：[来源与搜索](references/search-identity.md)。
+- 订阅列表与管理、文件统计（已入库／待入库／缺集）、已入库内容的播放入口：[订阅与入库](references/subscriptions.md)。
 - 原记录、路径、预览、重新整理、部分成功：[整理与副作用](references/reorganization.md)。
 - 资源列表与验证：下方规则足够；只有接口变化时再读上游 schema。
 
 ## 三种身份不要混为一谈
 
-1. Emby 条目 ID 是库内导航身份，不是 MoviePilot 媒体 ID。
+1. Emby 条目 ID 是库内导航身份，不是 MoviePilot 媒体 ID。MoviePilot 文件统计里的 `itemid` 属于它自己配置的那台媒体服务器，同样不是当前 Emby 的编号——跨服务器播放必须先按主身份或文件路径在当前账号下重新定位。
 2. MoviePilot 媒体以 `media_source`、`media_id` 和必要的媒体类型联合定位。相同数字在不同来源、甚至 TMDB 的电影与电视剧中，可能表示完全不同作品。
 3. `torrent_info` 是可下载资源；站点名称不是媒体数据源，种子 `page_url` 不是媒体详情页，`enclosure` 不是可安全交给系统的网页地址。
 
@@ -38,15 +39,25 @@ description: "Develop, review and verify EmbyNian's MoviePilot integration: medi
 - 新查询、空查询、来源变化与页面释放均须使旧请求失效。切到资源面板时隐藏底层可交互内容，新媒体搜索时收起旧资源层。
 - “种子页面”只接受合法 http(s) 网页地址；不执行本地文件、自定义协议，不把 Cookie 或下载凭据拼进启动参数。外部浏览器登录状态不等于 MoviePilot 的服务会话。
 
+## 订阅管理与入库播放
+
+- 列表、单条、文件统计，以及编辑／暂停／搜索／重置／取消的接口、字段与版本差异见 [订阅与入库](references/subscriptions.md)。搜索与重置的方法在各版本间对不上（公开文档只登记 GET，官方后端同时注册 GET 与 POST），客户端优先 POST、**仅在明确 405 时**改发 GET；超时不改发、不重放。全量列表靠省略 `page` / `count`，别把一批分页结果当全量。
+- `total_episode` / `lack_episode` 是订阅目标范围内的下载进度，不是入库进度。已入库只由 `subscribe/files/{id}` 的 `library` 决定；`download` 只是已下载，显示为“待入库”；缺集包含已下载待整理和尚未播出的集。空回话、错误与 `subscribe:null` 都是“统计不可用”，不能显示成 `0 / N` 或全部入库。
+- 订阅写操作按有副作用处理，与 HTTP 方法无关：只提交实际改动的字段，提交中锁住再次提交，结果不明时按订阅逐条保留状态、要求用户先核对服务器再显式解除，不自动重发。回执只代表请求已提交，不代表已找到资源或已入库。
+- 已入库内容的播放入口必须先在**当前 Emby 账号**下重新定位：按主身份查 `AnyProviderIdEquals=<provider>.<mediaId>`，电视剧另核季号与集号；文件统计里的 `itemid` 属于别的媒体服务器，只能在 `server_type` 与文件路径同时对上时才接受，多候选先按入库文件路径筛。找不到、无权读取、待入库与缺集都不启用播放；页面只读取，点播放才起播。
+
 ## 验证要回答的问题
 
 - 先用 Core 单测验证来源/编号配对、类型冲突、缺身份、数字或字符串字段、完整/部分失败回执；服务测试断言路径、参数与实际请求次数，而不只判断文案。
 - 实际只读验证时，白名单限制为本轮需要的读取。某些 POST（如 `storage/list`、`preview:true`）在对应版本中是只读，必须按请求体核对；不能因为都是 POST 就混入提交，也不能因为都是 GET 就放行 `transfer/now` 等有副作用入口。
 - GUI 分开验证搜索结果、来源标签、资源过滤、空/错/忙状态，以及下载和订阅的确认/取消。取消不是下载或订阅已成功的证据。
+- 订阅按请求方法、请求体与**请求次数**断言：POST 成功、POST 405 才改发 GET、超时不得改发、结果不明锁定后不重发；编辑的请求体只含实际改动的字段。
+- 文件统计覆盖电影零号条目、`library` 的字符串与数组两种形态、`subscribe:null`、空 `episodes`、范围外的集被过滤、未播出集被补齐，以及“统计不可用”不显示为全缺或全入库。
+- 入库播放覆盖跨服务器 `itemid` 不被直接信任、同名多候选、路径唯一命中与大小写、无权或不存在条目的禁用；断言播放交给的是匹配到的那个 Emby 条目。
 - 新控件检查自动化句柄；截图检查受影响尺寸，颜色变化按主规则覆盖主题。不要用属性断言代替实际画面。
 - 真实整理只在明确授权的条目范围执行，完成后核对原源仍符合预期、目标文件、整理新记录和 Emby 索引；`accepted` 不等于 `completed`，Emby 收录不等于已播放。
 - 子代理遇到暂时性限流且允许重试时，保留任务身份和已完成工作，适当退避再续跑；遵守用户的并行上限。权限拒绝、用户取消、确定性错误或有副作用请求结果不明，都不能盲目自动重放。
 
 ## 交付
 
-运行 [开发与验证](../../../docs/开发与验证.md) 中适用的检查并更新实际发布目录。报告实测、未覆盖与失败项；不把历史失败当成通过，不用改基线消除未经解决的红项。项目规则和入口从源码获取，避免在技能里固化当前版本号、测试数、真实账号或某次媒体路径。
+运行 [开发与验证](../../../docs/开发与验证.md) 中适用的检查并更新实际发布目录；订阅与入库功能的对外说明在 [MoviePilot订阅](../../../docs/MoviePilot订阅.md)。报告实测、未覆盖与失败项；不把历史失败当成通过，不用改基线消除未经解决的红项。项目规则和入口从源码获取，避免在技能里固化当前版本号、测试数、真实账号或某次媒体路径。

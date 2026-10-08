@@ -9,7 +9,7 @@ EmbyNian is a WinUI 3 + .NET desktop client, unpackaged and x64, with libmpv as 
 
 **Policy lives in [CLAUDE.md](../../../CLAUDE.md)**: playback authorization and probe coverage, credentials, navigation, dependency upgrades and verification gates. Read that policy rather than maintaining another copy here. `PROGRESS.md` records in-flight work and earlier measurements.
 
-Architecture is `embynian-winui-shell`; evidence and measurements are `embynian-verification`; shaders are `mpv-shader-quality`.
+Architecture is `embynian-winui-shell`; evidence and measurements are `embynian-verification`; shaders are `mpv-shader-quality`; the server REST layer behind stream, subtitle and progress URLs is `embynian-emby-api`.
 
 Operational details:
 
