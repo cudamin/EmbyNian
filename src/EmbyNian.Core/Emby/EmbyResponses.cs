@@ -59,6 +59,15 @@ public sealed class EmbySystemInfo
 
     public string? OperatingSystemDisplayName { get; set; }
 
+    public string? PackageName { get; set; }
+    public string? ProgramDataPath { get; set; }
+    public string? CachePath { get; set; }
+    public string? LogPath { get; set; }
+    public string? InternalMetadataPath { get; set; }
+    public string? TranscodingTempPath { get; set; }
+    public bool? CanSelfRestart { get; set; }
+    public bool IsShuttingDown { get; set; }
+
     /// <summary>The port the server answers plain HTTP on; admin-only.</summary>
     public int? HttpServerPortNumber { get; set; }
 

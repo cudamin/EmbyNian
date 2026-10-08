@@ -32,6 +32,9 @@ internal static class Program
         HtmlColorTests.Register();
         SubtitlePreviewTests.Register();
         EmbyTests.Register();
+        DashboardTests.Register();
+        UserManagementTests.Register();
+        LibraryManagementTests.Register();
         SessionTests.Register();
         IdentityRegressionTests.Register();
         HttpRedirectTests.Register();
@@ -76,6 +79,7 @@ internal static class Program
         PinIndicatorTests.Register();
         AboutTests.Register();
         MoviePilotTests.Register();
+        MoviePilotSubscriptionTests.Register();
         MoviePilotAuditTests.Register();
         MoviePilotTransferTests.Register();
         MoviePilotVersionQueryTests.Register();

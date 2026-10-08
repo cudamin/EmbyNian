@@ -18,7 +18,8 @@ namespace EmbyNian.Shell.Views;
 internal sealed record HomeRequest(
     IServiceProvider Services,
     IReadOnlyList<EmbyItem> LibraryViews,
-    Windowing.HostWindow? Window);
+    Windowing.HostWindow? Window,
+    Action<MoviePilotSubscription>? OpenSubscription = null);
 
 /// <summary>
 /// The home page's view. All of it: what is left here is the three translations XAML cannot do for
@@ -1145,6 +1146,7 @@ public sealed partial class HomePage : Page, IShellContent
         _actions = services.GetRequiredService<IShellActions>();
         var settings = services.GetRequiredService<ISettingsService>();
 
+        Subscriptions.Attach(services.GetRequiredService<MoviePilotService>(), request.OpenSubscription);
         ViewModel.Attach(
             _actions,
             request.LibraryViews,
@@ -1166,6 +1168,7 @@ public sealed partial class HomePage : Page, IShellContent
 
     public void Release()
     {
+        Subscriptions.Release();
         ShellPrefs.Changed -= OnShellPrefsChanged;
         if (_window is not null) _window.PlayerLayerEnded -= OnPlayerLayerEnded;
 

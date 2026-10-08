@@ -17,7 +17,8 @@
 <UserControl
     x:Class="EmbyNian.Shell.Views.EpisodeRow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:EmbyNian.Shell.Views">
 
     <UserControl.Resources>
         <!-- 中央播放键，比 PosterCard 的 48 略小：列表行的图没有卡片那么大。BasedOn 是必须的，
@@ -57,7 +58,7 @@
         PointerExited="OnPointerExited">
 
         <Grid.ColumnDefinitions>
-            <!-- 三列，和下面三个 Grid.Column 对得上：左缘竖条、16:9 大图、文字。第二列曾经漏掉过，而
+            <!-- 四列：左缘竖条、16:9 大图、文字及可选的右侧播放键。第二列曾经漏掉过，而
                  WinUI 会把越界的 Grid.Column 夹到最后一列上 —— 于是文字和图片挤在同一列里互相压着，
                  简介从大图底下穿过去。列数写少一个不报错，所以只有看一眼画面才会发现。
 
@@ -66,6 +67,7 @@
             <ColumnDefinition Width="10" />
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
 
         <!-- 「你在这里」：这一集正是当前打开的那一页。剧集页会把自己所在的整季都列出来，所以列表里
@@ -165,5 +167,11 @@
                 TextWrapping="Wrap"
                 Visibility="{x:Bind Card.RowOverviewVisibility, Mode=OneWay}" />
         </StackPanel>
+        <Button x:Name="TrailingPlay" Grid.Column="3" Style="{StaticResource EgIconButtonStyle}" Margin="0,0,12,0"
+            VerticalAlignment="Center" Click="OnPlayClicked" ToolTipService.ToolTip="{x:Bind Card.PlayActionTip, Mode=OneWay}"
+            AutomationProperties.Name="{x:Bind Card.PlayActionTip, Mode=OneWay}"
+            Visibility="{x:Bind local:EpisodeRow.TrailingVisibility(ShowTrailingPlay, Card.PlayVisibility), Mode=OneWay}">
+            <FontIcon Glyph="&#xE768;" />
+        </Button>
     </Grid>
 </UserControl>

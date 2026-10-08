@@ -383,6 +383,8 @@
                         </ItemsRepeater.Layout>
                     </ItemsRepeater>
 
+                    <local:MoviePilotSubscriptionsView x:Name="Subscriptions" Margin="0,24,0,0" />
+
                     <TextBlock x:Uid="HomePage_TextBlock1"
                         Foreground="{ThemeResource EgTextFaintBrush}"
                         Margin="0,24,0,0"

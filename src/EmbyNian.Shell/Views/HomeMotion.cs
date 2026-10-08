@@ -83,7 +83,7 @@ internal static class HomeMotion
         element.Loaded += handler;
     }
 
-    private static void Reveal(FrameworkElement element, int delay)
+    internal static void Reveal(FrameworkElement element, int delay, int durationMs = DurationMs, double distance = 20)
     {
         Stop(element);
         if (element.XamlRoot is null || !AnimationsEnabled) return;
@@ -96,12 +96,12 @@ internal static class HomeMotion
         // Storyboard：Opacity 与 RenderTransform 都不参与布局、不占用 composition，与 HomeBanner 的
         // Rise/Push 同一条路。
         var drift = DriftFor(element);
-        if (drift is not null) drift.Y = 20;
+        if (drift is not null) drift.Y = distance;
         element.Opacity = 0;
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         var begin = TimeSpan.FromMilliseconds(delay);
-        var duration = new Duration(TimeSpan.FromMilliseconds(DurationMs));
+        var duration = new Duration(TimeSpan.FromMilliseconds(durationMs));
         var board = new Storyboard();
 
         var fade = new DoubleAnimation
@@ -120,7 +120,7 @@ internal static class HomeMotion
         {
             var rise = new DoubleAnimation
             {
-                From = 20,
+                From = distance,
                 To = 0,
                 Duration = duration,
                 BeginTime = begin,

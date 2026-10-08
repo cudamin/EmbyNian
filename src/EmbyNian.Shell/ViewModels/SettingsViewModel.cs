@@ -15,6 +15,12 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace EmbyNian.Shell.ViewModels;
 
+/// <summary>保留分类字符串作为导航键；分组只决定左栏的标题和顺序。</summary>
+public sealed class SettingsCategoryGroup(string name, IEnumerable<string> items) : List<string>(items)
+{
+    public string Name { get; } = name;
+}
+
 /// <summary>One card on the settings page: a heading, a sentence about it, and the rows under it.</summary>
 public sealed partial class SettingSection : ObservableObject
 {
@@ -159,7 +165,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// </para>
     /// </summary>
     public static IReadOnlyList<string> HostedCategories { get; } =
-        ["服务器", "诊断", NotificationsCategory, DashboardCategory];
+        ["服务器", "诊断", ServerDashboardCategory, ServerUsersCategory, ServerLibrariesCategory, NotificationsCategory, DashboardCategory];
 
     /// <summary>
     /// 「通知」那一页. Named because the navigation switch and the self-check both have to say it —
@@ -171,7 +177,11 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// 需求 8 的那一页. Named because the page's navigation switch and the self-check both have to say it,
     /// and a string literal in three files is a rename waiting to go wrong.
     /// </summary>
-    public const string DashboardCategory = "服务器控制台";
+    public const string DashboardCategory = "网页控制台";
+
+    public const string ServerDashboardCategory = "控制台";
+    public const string ServerUsersCategory = "用户";
+    public const string ServerLibrariesCategory = "媒体库";
 
     /// <summary>The left-hand list. Order is the order of the cards, then the hosted pages.</summary>
     /// <remarks>
@@ -179,6 +189,12 @@ public sealed partial class SettingsViewModel : PageViewModel
     /// 搬进了「关于」卡，和新增的「备份配置文件」「恢复配置」并作三颗动作按钮 —— 见 <see cref="AboutCard"/>。它不再
     /// 是名单里的一项，所以这里也不再有它。
     /// </remarks>
+    public IReadOnlyList<SettingsCategoryGroup> CategoryGroups { get; } =
+    [
+        new("EmbyNian", [.. CardCategories, "服务器", "诊断"]),
+        new("EmbyServer", [ServerDashboardCategory, ServerUsersCategory, ServerLibrariesCategory, NotificationsCategory, DashboardCategory])
+    ];
+
     public IReadOnlyList<string> Categories { get; } = [.. CardCategories, .. HostedCategories];
 
     public ObservableCollection<SettingSection> Sections { get; } = [];

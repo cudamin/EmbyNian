@@ -118,6 +118,7 @@
                 Padding="0">
                 <local:EpisodeRow
                     ActionRequested="OnCardActionRequested"
+                    ShowTrailingPlay="True"
                     Card="{x:Bind}" />
             </Button>
         </DataTemplate>

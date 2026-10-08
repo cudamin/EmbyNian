@@ -5,6 +5,7 @@ using EmbyNian.Diagnostics;
 using EmbyNian.Emby;
 using EmbyNian.Infrastructure;
 using EmbyNian.Mpv;
+using EmbyNian.MoviePilot;
 using EmbyNian.Playback;
 using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
@@ -884,7 +885,7 @@ public sealed partial class ShellPage : UserControl, IShellActions
 
         if (tag == "home")
         {
-            Open(typeof(HomePage), new HomeRequest(_services, _libraryViews.ToArray(), _window), "主页", tag);
+            Open(typeof(HomePage), new HomeRequest(_services, _libraryViews.ToArray(), _window, OpenSubscription), "主页", tag);
             return;
         }
 
@@ -1067,6 +1068,20 @@ public sealed partial class ShellPage : UserControl, IShellActions
     /// One item's detail page, one level deeper. Same trail behaviour as <see cref="OpenChild"/> —
     /// a detail page is a drill-down that no pane entry points at.
     /// </summary>
+    private void OpenSubscription(MoviePilotSubscription subscription)
+    {
+        if (_services is null) return;
+        var service = _services.GetRequiredService<MoviePilotService>();
+        if (!service.IsCurrentSubscription(subscription)) return;
+        RememberTrail();
+        ContentFrame.Navigate(typeof(MoviePilotSubscriptionPage), new MoviePilotSubscriptionRequest(service, subscription,
+            _session?.IsSignedIn == true ? _session.Capture() : null,
+            target => ((IShellActions)this).PlayAsync(target.Item, target.Parent, episodes: target.Episodes)), BrowseTransition());
+        _trail.Add(new Crumb(subscription.Title, string.Empty));
+        _current = null;
+        SyncChrome();
+    }
+
     internal void OpenDetail(DetailRequest request)
     {
         RememberTrail();

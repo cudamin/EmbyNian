@@ -44,6 +44,7 @@
             </StackPanel>
             <CommandBar Grid.Row="1" Grid.ColumnSpan="2" HorizontalAlignment="Stretch"
                 DefaultLabelPosition="Right" Background="{ThemeResource EgSurfaceBrush}" CornerRadius="12" IsOpen="False">
+                <AppBarButton x:Name="DashboardBackToUsers" Label="返回用户" Icon="Back" Visibility="Collapsed" Click="OnBackToUsers" />
                 <AppBarButton x:Uid="DashboardPage_RefreshAction" AutomationProperties.AutomationId="DashboardRefreshButton"
                     Icon="Refresh" Click="OnRefresh" />
                 <AppBarButton x:Uid="DashboardPage_OpenAction" AutomationProperties.AutomationId="DashboardOpenInBrowserButton"

@@ -49,8 +49,9 @@ public sealed partial class SettingsPage : Page, IShellContent
     public SettingsPage()
     {
         InitializeComponent();
-        Loaded += (_, _) => HomeMotion.Reveal(SettingsLayout);
-        Unloaded += (_, _) => HomeMotion.Stop(SettingsLayout);
+        CategoryGroupsSource.Source = ViewModel.CategoryGroups;
+        Loaded += (_, _) => QueueSettingsEntrance();
+        Unloaded += (_, _) => StopSettingsEntrance();
 
         // Kept alive across navigations, which is what makes half-typed text in a box — and which card was
         // open — survive a trip to another page and back. Signing out drops the frame's content entirely, so
@@ -72,7 +73,7 @@ public sealed partial class SettingsPage : Page, IShellContent
             if (e.PropertyName == nameof(SettingsViewModel.SelectedCategory))
             {
                 ShowHosted();
-                HomeMotion.Reveal(SettingsContent);
+                QueueSettingsEntrance();
             }
         };
     }
@@ -324,6 +325,7 @@ public sealed partial class SettingsPage : Page, IShellContent
         // OnNavigatedFrom 掉。第一次打开「服务器」「诊断」「服务器控制台」正是选择会动的那一次，也就是说这三页
         // 每一次头回打开都白建一个，控制台那一页还白起一次 WebView2。
         if (!Select(request.Category)) ShowHosted();
+        QueueSettingsEntrance();
     }
 
     /// <summary>
@@ -337,6 +339,7 @@ public sealed partial class SettingsPage : Page, IShellContent
     /// </returns>
     private bool Select(string category)
     {
+        if (category == "服务器控制台") category = SettingsViewModel.ServerDashboardCategory;
         if (string.IsNullOrEmpty(category)) return false;
         if (category == "着色器") category = "视频输出";
 
@@ -391,6 +394,25 @@ public sealed partial class SettingsPage : Page, IShellContent
             page = typeof(NotificationsPage);
             parameter = new NotificationsRequest(services);
         }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.ServerDashboardCategory)
+        {
+            page = typeof(ServerDashboardPage);
+            parameter = new ServerDashboardRequest(services, () => ViewModel.SelectedCategory = SettingsViewModel.DashboardCategory);
+        }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.ServerUsersCategory)
+        {
+            page = typeof(ServerUsersPage);
+            parameter = new ServerUsersRequest(services, userId =>
+            {
+                HostedFrame.Navigate(typeof(DashboardPage), new DashboardRequest(services, userId, ShowHosted));
+                HostedFrame.BackStack.Clear();
+            });
+        }
+        else if (ViewModel.SelectedCategory == SettingsViewModel.ServerLibrariesCategory)
+        {
+            page = typeof(ServerLibrariesPage);
+            parameter = new ServerLibrariesRequest(services);
+        }
         else if (ViewModel.SelectedCategory == SettingsViewModel.DashboardCategory)
         {
             page = typeof(DashboardPage);
@@ -431,7 +453,12 @@ public sealed partial class SettingsPage : Page, IShellContent
     /// page, navigated afresh by <see cref="ShowHosted"/>.
     /// </para>
     /// </summary>
-    internal void ReleaseHosted() => (HostedFrame.Content as IShellContent)?.Release();
+    internal void ReleaseHosted()
+    {
+        StopSettingsEntrance();
+        (HostedFrame.Content as IShellContent)?.Release();
+        if (HostedFrame.Content is Page { Content: FrameworkElement layout }) HomeMotion.Stop(layout);
+    }
 
     /// <summary>
     /// Lets go of the hosted page. This page itself has nothing in flight and subscribes to nothing —

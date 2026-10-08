@@ -205,6 +205,17 @@ public sealed class MoviePilotClient : IDisposable
     /// 交出去，想要数组的调用方照样拿得到数组。
     /// </para>
     /// </summary>
+    internal async Task<JsonElement> MutateAsync(Uri apiBase, string token, HttpMethod method, string path,
+        object? body, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(method, MoviePilotAddress.Combine(apiBase, BasePath + path));
+        if (body is not null)
+            request.Content = new StringContent(JsonSerializer.Serialize(body, Emby.EmbyHttp.Json), Encoding.UTF8, "application/json");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return DataOrThrow(await ReadReplyAsync(response, cancellationToken, requireEnvelope: true).ConfigureAwait(false));
+    }
+
     private static async Task<JsonElement> ReadDataAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken) =>

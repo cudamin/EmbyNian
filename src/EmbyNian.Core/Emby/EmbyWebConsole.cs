@@ -57,6 +57,32 @@ public static class EmbyWebConsole
     /// <summary>The page 需求 8 names, hash route and all.</summary>
     public static string Url(Uri apiBase) => $"{Root(apiBase)}/web/index.html#!/dashboard";
 
+    /// <summary>服务器插件的设置入口只在当前服务器的网页来源内打开。</summary>
+    public static string PageUrl(Uri apiBase, string route)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(route);
+        var webRoot = new Uri($"{Root(apiBase)}/web/");
+        if (Uri.TryCreate(route, UriKind.Absolute, out var absolute))
+        {
+            if (!webRoot.IsBaseOf(absolute) || absolute.UserInfo.Length > 0) throw new ArgumentException("配置页面不属于当前服务器。");
+            return absolute.AbsoluteUri;
+        }
+        route = route.Trim();
+        if (route.StartsWith("//", StringComparison.Ordinal) || route.Contains('\\') || route.Contains("..", StringComparison.Ordinal)) throw new ArgumentException("配置页面地址无效。");
+        if (route.StartsWith("#!/", StringComparison.Ordinal)) route = route[3..];
+        else if (route.StartsWith("#", StringComparison.Ordinal)) route = route[1..].TrimStart('/');
+        else route = route.TrimStart('/');
+        if (route.StartsWith("web/", StringComparison.OrdinalIgnoreCase)) route = route[4..];
+        if (route.StartsWith("index.html", StringComparison.OrdinalIgnoreCase)) return new Uri(webRoot, route).AbsoluteUri;
+        return $"{webRoot}index.html#!/{route}";
+    }
+
+    public static string UserPreferencesUrl(Uri apiBase, string userId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userId);
+        return $"{Root(apiBase)}/web/index.html#!/settings?userId={Uri.EscapeDataString(userId)}";
+    }
+
     /// <summary>
     /// Where the web client is served from: the API base without <c>/emby/</c>. The same string the client
     /// computes for itself — <c>app.js</c> takes <c>location.href</c> up to the last <c>/web</c> — so a

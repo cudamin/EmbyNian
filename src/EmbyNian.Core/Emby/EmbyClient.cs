@@ -8,7 +8,7 @@ namespace EmbyNian.Emby;
 /// produces a new client rather than mutating shared state, which is what made v1's
 /// settings object double as session state.
 /// </summary>
-public sealed class EmbyClient(EmbyHttp http, EmbyConnection connection)
+public sealed partial class EmbyClient(EmbyHttp http, EmbyConnection connection)
 {
     private const string Category = "emby";
 

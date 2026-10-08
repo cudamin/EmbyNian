@@ -21,6 +21,7 @@
     Background="{ThemeResource LayerFillColorDefaultBrush}">
 
     <Page.Resources>
+        <CollectionViewSource x:Name="CategoryGroupsSource" IsSourceGrouped="True" />
         <!-- 左边分类那一列的图标：分类名 → 一个 Segoe 字形，见 SettingsCategoryGlyphConverter。 -->
         <local:SettingsCategoryGlyphConverter x:Key="CategoryGlyph" />
         <!-- MoviePilot 那一行换官方图标的白色重绘版：这个转换器回答「这一行是不是 MoviePilot」——
@@ -1351,8 +1352,24 @@
                 CornerRadius="16"
                 Padding="8"
                 IsItemClickEnabled="False"
-                ItemsSource="{x:Bind ViewModel.Categories, Mode=OneWay}"
+                ItemsSource="{x:Bind CategoryGroupsSource.View, Mode=OneWay}"
                 SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}">
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsStackPanel AreStickyGroupHeadersEnabled="True" />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+                <ListView.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate x:DataType="vm:SettingsCategoryGroup">
+                                <TextBlock Text="{x:Bind Name}" Margin="12,16,0,8"
+                                    Style="{StaticResource EgCaptionStyle}" FontWeight="SemiBold"
+                                    AutomationProperties.HeadingLevel="Level2" />
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ListView.GroupStyle>
                 <!--
                   参考图那样每个分类左边一个图标。分类还是字符串（十来处共用那份），所以模板的 x:DataType 是
                   x:String、{x:Bind} 就是分类名本身：字形走 CategoryGlyph 转换器，标题直接显示。图标和标题都不写
@@ -1416,7 +1433,7 @@
                     VerticalScrollBarVisibility="Auto"
                     Visibility="{x:Bind ViewModel.CardsVisibility, Mode=OneWay}">
                     <StackPanel>
-                        <ItemsControl ItemsSource="{x:Bind ViewModel.Sections, Mode=OneWay}" MaxWidth="900">
+                        <ItemsControl x:Name="SettingsSections" ItemsSource="{x:Bind ViewModel.Sections, Mode=OneWay}" MaxWidth="900">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <!--
@@ -1438,7 +1455,10 @@
                                       全装进去。行自己的卡皮撤了（EgSettingRowStyle / EgSettingBlockStyle），
                                       卡皮由这里的 Border 一处画。
                                     -->
-                                    <StackPanel Spacing="12" Margin="0,0,0,36" Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
+                                    <StackPanel x:Name="SettingsSection" Spacing="12" Margin="0,0,0,36" Visibility="{x:Bind SectionVisibility, Mode=OneWay}">
+                                        <StackPanel.RenderTransform>
+                                            <TranslateTransform />
+                                        </StackPanel.RenderTransform>
                                         <!--
                                           设置分组的牌子和卡片带的牌子是同一块木头（local:ShelfHead）：分区标题、
                                           右端一个等宽读数、底下一条通栏发丝线。这一页原先自己写了个标题 —— 只有

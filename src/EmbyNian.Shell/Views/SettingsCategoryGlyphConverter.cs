@@ -33,7 +33,10 @@ public sealed class SettingsCategoryGlyphConverter : IValueConverter
         ["服务器"] = 0xE753,       // Cloud（远端服务器）
         ["诊断"] = 0xE8A5,         // Document（日志）
         ["通知"] = 0xE7E7,         // Mail（转发出去的消息；与通知页自己的头图标同一个字形）
-        ["服务器控制台"] = 0xE774, // Globe（内嵌网页控制台）
+        ["控制台"] = 0xE9D9,       // ViewDashboard
+        ["用户"] = 0xE716,         // People
+        ["媒体库"] = 0xE8B7,       // Folder
+        ["网页控制台"] = 0xE774,   // Globe
         ["恢复默认"] = 0xE72C      // Refresh（还原、重来一遍）
     };
 

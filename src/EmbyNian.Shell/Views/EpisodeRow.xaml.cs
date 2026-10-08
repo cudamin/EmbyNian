@@ -39,6 +39,17 @@ public sealed partial class EpisodeRow : UserControl
         typeof(EpisodeRow),
         new PropertyMetadata(null, OnCardChanged));
 
+    public static readonly DependencyProperty ShowTrailingPlayProperty = DependencyProperty.Register(
+        nameof(ShowTrailingPlay), typeof(bool), typeof(EpisodeRow), new PropertyMetadata(false));
+
+    public bool ShowTrailingPlay
+    {
+        get => (bool)GetValue(ShowTrailingPlayProperty);
+        set => SetValue(ShowTrailingPlayProperty, value);
+    }
+
+    public static Visibility TrailingVisibility(bool enabled, Visibility playable) => enabled ? playable : Visibility.Collapsed;
+
     /// <summary>
     /// Tracked rather than read from <c>IsLoaded</c>, as on <see cref="PosterCard"/>: the two events
     /// below are the authority on when a recycled container is in the tree, and a field cannot disagree

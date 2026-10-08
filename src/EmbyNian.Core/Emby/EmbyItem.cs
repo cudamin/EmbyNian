@@ -409,6 +409,8 @@ public sealed class EmbyItem
 
     public int? IndexNumber { get; set; }
 
+    public int? IndexNumberEnd { get; set; }
+
     public int? ParentIndexNumber { get; set; }
 
     public bool IsFolder { get; set; }

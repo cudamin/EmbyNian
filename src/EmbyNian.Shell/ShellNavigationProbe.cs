@@ -64,6 +64,20 @@ internal sealed partial class ShellNavigationProbe
             await CaseAsync("封面迟到图片不复活", CoverLateImageAsync);
             await CaseAsync("完整返回历史和主页按钮", ShellHistoryAsync);
             await CaseAsync("播放返回主页不补播入场", HomePlaybackReturnAsync);
+            await CaseAsync("设置分类动效与快速切换", SettingsEntranceAsync);
+            await CaseAsync("原生控制台分区、响应布局与离页取消", ServerDashboardAsync);
+            await CaseAsync("服务器管理菜单、确认与身份隔离", ServerAdministrationAsync);
+            await CaseAsync("用户管理导航、页签与权限保存", ServerUsersAsync);
+            await CaseAsync("用户创建、复制、头像、删除与重试", ServerUsersMutationsAsync);
+            await CaseAsync("用户管理离页、切服与普通账号隔离", ServerUsersIdentityAsync);
+            await CaseAsync("媒体库页面、动态选项与并发保存", ServerLibrariesAsync);
+            await CaseAsync("媒体库新建、目录、扫描与移除", ServerLibraryOperationsAsync);
+            await CaseAsync("媒体库高级设置和部分失败重试", ServerLibraryAdvancedAsync);
+            await CaseAsync("媒体库离页、切服与管理权限", ServerLibraryIdentityAsync);
+            await CaseAsync("MoviePilot 订阅分区、封面与管理操作", MoviePilotSubscriptionsAsync);
+            await CaseAsync("MoviePilot 订阅详情、入库缺集与编辑", MoviePilotSubscriptionDetailAsync);
+            await CaseAsync("MoviePilot 订阅切服、旧确认与离页取消", MoviePilotSubscriptionIdentityAsync);
+            await CaseAsync("季页面右侧播放图标与原播放路由", SeasonTrailingPlayAsync);
             await CaseAsync("旧登录目录不覆盖新身份", ShellIdentityAsync);
             await CaseAsync("切服逆序完成不退旧登录", ShellSwitchRaceAsync);
             await CaseAsync("目录首次失败可重试", ShellDirectoryRetryAsync);
@@ -259,9 +273,15 @@ internal sealed partial class ShellNavigationProbe
     private sealed class FakeActions : IShellActions
     {
         public int Plays { get; private set; }
-        public void OpenItem(EmbyItem item) { }
+        public int Opened { get; private set; }
+        public Action<EmbyItem, IReadOnlyList<EmbyItem>?>? CapturePlay { get; set; }
+        public void OpenItem(EmbyItem item) => Opened++;
         public Task PlayAsync(EmbyItem item, EmbyItem? parent = null, PlaybackChoice? choice = null, IReadOnlyList<EmbyItem>? episodes = null)
-        { Plays++; throw new InvalidOperationException("探针禁止播放"); }
+        {
+            Plays++;
+            if (CapturePlay is { } capture) { capture(item, episodes); return Task.CompletedTask; }
+            throw new InvalidOperationException("探针禁止播放");
+        }
         public void Notify(string message, InfoBarSeverity severity = InfoBarSeverity.Informational) { }
         public bool TryOpenLibrary(string id) => false;
         public void OpenGenre(string genre) { }
