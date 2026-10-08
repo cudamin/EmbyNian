@@ -290,8 +290,9 @@ public sealed partial class PlayerPage
         _wheelFrom = _wheelPosition;
         _wheelTo = targetIndex;
 
-        if (Math.Abs(_wheelTo - _wheelFrom) < 0.001)
+        if (!HomeMotion.AnimationsEnabled || Math.Abs(_wheelTo - _wheelFrom) < 0.001)
         {
+            StopWheelAnimation();
             _wheelPosition = _wheelTo;
             RenderWheel();
             ApplyWheelCrossing();
@@ -305,7 +306,9 @@ public sealed partial class PlayerPage
 
     private void AdvanceWheel()
     {
-        var progress = Math.Clamp((Now - _wheelStartedAt) / (double)WheelSettleMilliseconds, 0, 1);
+        var progress = HomeMotion.AnimationsEnabled
+            ? Math.Clamp((Now - _wheelStartedAt) / (double)WheelSettleMilliseconds, 0, 1)
+            : 1;
         var eased = 1 - Math.Pow(1 - progress, 3);
 
         _wheelPosition = _wheelFrom + (_wheelTo - _wheelFrom) * eased;

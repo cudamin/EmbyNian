@@ -214,8 +214,7 @@ public sealed partial class PlayerViewModel
     /// 设置、连播同一格、播放信息同一份正文。**改任何一边的行集、次序或文案，另一边要跟上** —— 两处
     /// 旁边的注释就是互相指认的路标。
     /// <para>
-    /// 2026-10-01 末尾再加三行「去设置里改」（字幕／视频输出／音频输出）：与上面那几行不同，这三行的行集
-    /// 不在这里各写一份，而是读 Core 那张表 <see cref="PlayerSettingsLinks.All"/> —— 集成侧读的也是它。
+    /// 末尾「播放设置」中的字幕／视频输出／音频输出共用 <see cref="PlayerSettingsLinks"/> 的名称与行集。
     /// </para>
     /// </summary>
     private async Task PushPictureMenuAsync()
@@ -249,18 +248,14 @@ public sealed partial class PlayerViewModel
             $"script-message {VideoWindowContract.AutoPlayNext} toggle", true, AutoPlayNextEpisode, Separator: true));
         items.Add(new UoscMenuItem("播放信息…", $"script-message {VideoWindowContract.MediaInfo} open", true, false));
 
-        // —— 末尾那三行「去设置里改」（2026-10-01 用户令「在右键菜单中添加字幕、视频输出、音频输出三个按钮，
-        // 点击后打开设置页面」）。行集、次序与文案照抄集成侧 OnMoreMenuOpening 的同名三行，数据源就是那一张表
-        // （PlayerSettingsLinks.All）—— 两边各写一份的那天就是它们开始不一样的那天。
+        // 与集成侧 OnMoreMenuOpening 同样折叠进「播放设置」，子项保留原来的宿主消息。
         items[^1] = items[^1] with { Separator = true };
-        foreach (var link in PlayerSettingsLinks.All)
-        {
-            items.Add(new UoscMenuItem(
+        var settings = PlayerSettingsLinks.All.Select(link => new UoscMenuItem(
                 link.Label,
                 $"script-message {VideoWindowContract.OpenSettings} {link.Token}",
                 true,
-                false));
-        }
+                false)).ToList();
+        items.Add(new UoscMenuItem(PlayerSettingsLinks.MenuLabel, null, true, false, Items: settings));
 
         // title 传 null：画面菜单不画顶部那行「画面」（用户令 2026-09-26）；仍带 anchor 贴光标弹。
         await SendMenuAsync("picture", null, items, anchor: true).ConfigureAwait(true);

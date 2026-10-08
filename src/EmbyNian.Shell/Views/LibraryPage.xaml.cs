@@ -68,6 +68,10 @@ public sealed partial class LibraryPage : Page, IShellContent
         // crashes the page. Subscribing after InitializeComponent skips that init-time firing; every later
         // change lands with the whole tree in place.
         SourceTabs.SelectionChanged += OnSourceChanged;
+        HeaderLayout.SizeChanged += OnHeaderSizeChanged;
+        SearchSurface.SizeChanged += OnHeaderSizeChanged;
+        Toolbar.SizeChanged += OnHeaderSizeChanged;
+        LibraryTitle.SizeChanged += OnHeaderSizeChanged;
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
@@ -360,6 +364,9 @@ public sealed partial class LibraryPage : Page, IShellContent
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        ApplyHeaderLayout();
+        if (_request?.IsSearch == true) HomeMotion.Reveal(SearchSurface, 0, 220, 8);
+
         // The search page opens with an empty box and nothing to look at, so the caret belongs in the box.
         // Here rather than in OnNavigatedTo: nothing can take focus before it is in the tree.
         if (_request is { IsSearch: true } && ViewModel.SearchText.Length == 0)
@@ -382,10 +389,49 @@ public sealed partial class LibraryPage : Page, IShellContent
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        HomeMotion.Stop(SearchSurface);
         if (_scroll is null) return;
 
         _scroll.ViewChanged -= OnViewChanged;
         _scroll = null;
+    }
+
+    private void OnHeaderSizeChanged(object sender, SizeChangedEventArgs e) => ApplyHeaderLayout();
+
+    /// <summary>按内容区宽度给搜索区留出对称空间；侧栏、按钮文字和来源显隐都参与实际测量。</summary>
+    private void ApplyHeaderLayout()
+    {
+        var width = HeaderLayout.ActualWidth;
+        if (width <= 0) return;
+
+        var search = _request?.IsSearch == true;
+        ToolbarSurface.ColumnSpacing = search ? 0 : 12;
+        SearchInput.Width = Math.Min(240, Math.Max(0, width - 22));
+        SearchSurface.MaxWidth = width;
+
+        var tabsWidth = SourceTabs.Visibility == Visibility.Visible ? SourceTabs.DesiredSize.Width : 0;
+        var stackSource = tabsWidth > 0 && width < SearchInput.Width + tabsWidth + 34;
+        Grid.SetRow(SourceTabs, stackSource ? 1 : 0);
+        Grid.SetColumn(SourceTabs, stackSource ? 0 : 1);
+        SourceTabs.HorizontalAlignment = stackSource ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+        SearchForm.ColumnSpacing = tabsWidth > 0 && !stackSource ? 12 : 0;
+        SearchForm.RowSpacing = stackSource ? 8 : 0;
+
+        var searchWidth = stackSource ? Math.Max(SearchInput.Width, tabsWidth) + 22
+            : SearchInput.Width + tabsWidth + SearchForm.ColumnSpacing + 22;
+        var buttons = Toolbar.Children.OfType<FrameworkElement>()
+            .Where(button => button.Visibility == Visibility.Visible).ToArray();
+        var toolsWidth = buttons.Sum(button => button.DesiredSize.Width)
+            + Math.Max(0, buttons.Length - 1) * Toolbar.Spacing + 22;
+        var sideWidth = Math.Max(toolsWidth, Math.Min(240, LibraryTitle.DesiredSize.Width));
+        var stacked = search && (width - searchWidth) / 2 < sideWidth + 24;
+
+        HeaderLayout.RowSpacing = stacked ? 12 : 0;
+        Grid.SetRow(LibraryTitle, stacked ? 1 : 0);
+        Grid.SetRow(ToolbarSurface, stacked ? 1 : 0);
+        // 两行时给标题留下可读的宽度；极窄时按钮本身也能在有限宽度里继续换行。
+        ToolbarSurface.MaxWidth = Math.Max(0, width - Math.Min(120, width / 3) - 24);
+        LibraryTitle.MaxWidth = search && !stacked ? Math.Max(0, (width - searchWidth) / 2 - 24) : double.PositiveInfinity;
     }
 
     /// <summary>
@@ -559,6 +605,8 @@ public sealed partial class LibraryPage : Page, IShellContent
         MoviePilotPanel.Visibility = moviePilot ? Visibility.Visible : Visibility.Collapsed;
         EmbyContent.Visibility = moviePilot ? Visibility.Collapsed : Visibility.Visible;
         Toolbar.Visibility = moviePilot ? Visibility.Collapsed : Visibility.Visible;
+        ToolbarSurface.Visibility = Toolbar.Visibility;
+        ApplyHeaderLayout();
 
         if (!moviePilot)
         {

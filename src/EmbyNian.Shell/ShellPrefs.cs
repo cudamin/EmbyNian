@@ -30,5 +30,9 @@ public static class ShellPrefs
     public static void ApplyShortcuts() => ShortcutsChanged?.Invoke();
 
     /// <summary>由设置页那一头喊：这一份刚改过，请各位跟上。</summary>
-    public static void Apply(UiSettings ui) => Changed?.Invoke(ui);
+    public static void Apply(UiSettings ui)
+    {
+        Views.HomeMotion.ApplyPreference(ui.AnimationsEnabled);
+        Changed?.Invoke(ui);
+    }
 }

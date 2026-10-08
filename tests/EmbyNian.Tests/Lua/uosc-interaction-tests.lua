@@ -4,6 +4,8 @@ do
 	local results = {}
 	local clock, timers, commands, properties, keys
 	local original_request_render, original_tween = request_render, tween
+	local original_primary_up = {}
+	for _, callback in ipairs(cursor.handlers.primary_up) do original_primary_up[#original_primary_up + 1] = callback end
 	local function require_equal(actual, expected, message)
 		if actual ~= expected then error((message or 'mismatch') .. ': ' .. tostring(actual) .. ' ~= ' .. tostring(expected)) end
 	end
@@ -37,6 +39,7 @@ do
 	end
 	local function down() cursor:trigger('primary_down', create_shortcut('primary_down')) end
 	local function up() cursor:trigger('primary_up', create_shortcut('primary_up')) end
+	local function cancel_up() cursor:create_primary_handler()({event = 'up', canceled = true}) end
 	local function menu(data)
 		local value
 		local item = Menu:open(data or {type = 'fixture', items = {{title = 'one', value = 1}, {title = 'two', value = 2}, {title = 'three', value = 3}}},
@@ -51,6 +54,7 @@ do
 		state.ime_active = false
 		cursor.last_events = {}
 		cursor.handlers.primary_up = {}
+		for _, callback in ipairs(original_primary_up) do cursor.handlers.primary_up[#cursor.handlers.primary_up + 1] = callback end
 		cursor.history:clear()
 		cursor.first_real_mouse_move_received = true
 		cursor.x, cursor.y, cursor.hidden, cursor.disabled = 400, 350, false, false
@@ -252,6 +256,34 @@ do
 			test('double picture click never toggles pause', function()
 				down(); advance(0.05); up(); advance(0.1); down(); advance(0.05); up(); advance(0.5)
 				require_equal(count_command('cycle', 'pause'), 0)
+			end)
+			test('native window drag cancellation never pauses even within the click distance', function()
+				down(); advance(0.05); cursor.x = cursor.x + 4; cancel_up(); advance(0.5); up(); advance(0.5)
+				require_equal(count_command('cycle', 'pause'), 0)
+				require_equal(cursor.last_events.primary_down, nil)
+			end)
+			test('click after canceled drag starts a new gesture', function()
+				down(); advance(0.05); cancel_up(); advance(0.05); down(); advance(0.05); up(); advance(0.5)
+				require_equal(count_command('cycle', 'pause'), 1)
+			end)
+			test('canceling a later control gesture retains the earlier picture click', function()
+				down(); advance(0.05); up(); advance(0.05)
+				cursor:zone('primary_click', {ax = 350, ay = 300, bx = 450, by = 400}, function() error('canceled click') end)
+				down(); advance(0.05); cancel_up(); advance(0.5)
+				require_equal(count_command('cycle', 'pause'), 1)
+			end)
+			test('canceled release skips menu activation but runs release cleanup', function()
+				local clicked, cleaned = 0, false
+				cursor:zone('primary_up', display, function() clicked = clicked + 1 end)
+				cursor:once('primary_up', function() cleaned = true end)
+				down(); cancel_up()
+				require_equal(clicked, 0); require_equal(cleaned, true)
+			end)
+			test('complex left binding preserves normal down and up with modifiers', function()
+				properties['mouse-pos'] = {x = 400, y = 350, hover = true}
+				local handler = cursor:create_primary_handler('ctrl')
+				handler({event = 'down'}); advance(0.05); handler({event = 'repeat'}); handler({event = 'up'}); advance(0.5)
+				require_equal(count_command('cycle', 'pause'), 1)
 			end)
 			test('picture press cannot survive across a file boundary', function()
 				down(); emit('start-file'); advance(0.05); canvas(); up(); advance(0.5)

@@ -31,7 +31,7 @@ Emby 桌面客户端：WinUI 3、Windows App SDK、.NET 10、C#，非打包、x6
 - [embynian-video-output](.claude/skills/embynian-video-output/SKILL.md)：视频输出三卡（基础输出、HDR 与杜比视界、画质与着色器）与 mpv 选项的落地。
 - [embynian-audio-output](.claude/skills/embynian-audio-output/SKILL.md)：音频输出设置的审查、修复与验证——设备核对与回退、声道、直通、响度、延迟与音量记忆，及随包 libmpv 的无声探针。
 - [embynian-moviepilot](.claude/skills/embynian-moviepilot/SKILL.md)：MoviePilot 接入的来源身份（TMDB／豆瓣／IMDb）、搜索、订阅管理与入库播放、原记录重整协议及验证边界。
-- [embynian-skill-creator](.claude/skills/embynian-skill-creator/SKILL.md)：新建、改写、拆分、合并或退役项目技能时读取——先查重、description 触发词写法、正文取舍与分层、清单登记与验收方式。
+- [embynian-skill-creator](.claude/skills/embynian-skill-creator/SKILL.md)：新建、改写、拆分、合并或退役项目技能时读取——先查重、英文编写与资源审查、description 触发词、正文分层、清单登记，以及区分技能场景评估和项目验证的验收方式。
 
 通用 `winui-*` 技能来自用户级技能目录或插件。**与本文件冲突时以本文件为准。** 规则改动须同步相关技能、开发文档、脚本帮助与运行提示；不在技能里另立升级、验证或安全政策，不在 `.workbuddy/`、`.zcode/` 复制规则。当前文件数、测试数、控件数从本次源码或工具输出获取。
 

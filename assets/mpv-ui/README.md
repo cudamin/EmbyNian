@@ -164,7 +164,9 @@ grep -rn "EMBYNIAN\[" assets/mpv-ui/scripts/uosc
 2. **lib/utils.lua**：目录/播放列表导航（`get_adjacent_files`、`decide_navigation_in_list`、
    `navigate_*`）与删文件（`delete_file`、`delete_file_navigate`）整块删除；`render()` 里
    `cursor:clear_zones()` 之后多登记一个「轻点空白画面切换暂停」的兜底命中区（动作在 main.lua）。
-3. **lib/cursor.lua**：`EMBYNIAN[cursor-hold]` —— 指针正压在**控件本体**的命中区上（进度条 / 时间轴、
+3. **lib/cursor.lua**：`EMBYNIAN[drag-cancel]` 用 complex 左键回调保留 mpv 在原生拖窗前发出的 canceled 松键，
+   取消时只清理拖动，不触发画面暂停、菜单激活或点击转发；原有绑定分组继续允许原生拖窗和光标隐藏。
+   `EMBYNIAN[cursor-hold]` —— 指针正压在**控件本体**的命中区上（进度条 / 时间轴、
    控制条与顶栏那一排按钮、音量条及其静音键、跳过按钮）时，把 mpv 的 `cursor-autohide` 钉成 `no`，
    离开时把装配时的原值还回去（用户令 2026-09-29「只有鼠标停在控件，进度条和上方的按钮还有音量条上的
    时候才不隐藏鼠标，触发渐变的时候不隐藏控件，但是要隐藏鼠标」）。三点要说清：

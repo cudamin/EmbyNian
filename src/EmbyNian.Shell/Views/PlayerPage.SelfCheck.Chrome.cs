@@ -285,9 +285,11 @@ public sealed partial class PlayerPage
         // 淡入淡出, and the standing visibility it needs: the rail is the one piece of chrome that is always
         // laid out and only ever changes strength, so a Visibility flip creeping back in here would take the
         // fade with it.
+        Render();
         var fade = Rail.OpacityTransition;
         report.Add($"淡入淡出={(fade is null ? "无" : $"{fade.Duration.TotalMilliseconds:F0}ms")}");
-        Want("淡入淡出", fade is not null && fade.Duration > TimeSpan.Zero);
+        Want("淡入淡出遵循动画开关", fade is not null && fade.Duration ==
+            (HomeMotion.AnimationsEnabled ? TimeSpan.FromMilliseconds(220) : TimeSpan.Zero));
         Want("音量条常驻可见", Rail.Visibility == Visibility.Visible);
 
         // One pointer position, through the page's own geometry, read back off the element.
@@ -1078,9 +1080,11 @@ public sealed partial class PlayerPage
         var countdownAnchor = Now;
         report.Add($"倒计时 表开={_skipCountdownTimer?.IsRunning == true}，锚 {SkipCountdown.Value:0.###}，"
             + $"750ms 后应到 {SkipCountdownShown(countdownAnchor + 750):0.###}");
-        Want("倒计时表开着", _skipCountdownTimer?.IsRunning == true);
+        Want("倒计时插值遵循动画开关", (_skipCountdownTimer?.IsRunning == true) == HomeMotion.AnimationsEnabled);
         Want("倒计时锚点当拍铺上", Math.Abs(SkipCountdown.Value - 1.0) < 0.005);
-        Want("倒计时沿满速走", Math.Abs(SkipCountdownShown(countdownAnchor + 750) - 0.95) < 0.02);
+        Want("倒计时读数", HomeMotion.AnimationsEnabled
+            ? Math.Abs(SkipCountdownShown(countdownAnchor + 750) - 0.95) < 0.02
+            : Math.Abs(SkipCountdown.Value - ViewModel.SkipRemaining) < 0.005);
 
         // 按下判定（用户令 2026-09-26「点击按钮跳过片头/片尾的时候 进度条会出来闪一下」）：offer 立着时
         // 按在按钮上的那一下算按钮的、不叫控件 —— 判定（PressOnSkipButton）与几何在这里钉住；接线本身

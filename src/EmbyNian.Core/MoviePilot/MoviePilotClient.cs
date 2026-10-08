@@ -49,7 +49,7 @@ public sealed class MoviePilotClient : IDisposable
 
         // 图片代理（system/cache/image）只认网页端登录流程种下的资源 Cookie，不认 Bearer 头。好在带 Bearer 的
         // 每一趟 API 调用，服务器都会顺手在响应里 Set-Cookie 一枚资源令牌（v2/v3 的 verify_token 都这么做）——
-        // 所以这里挂一个 CookieContainer，让任何一趟轮询顺手把种子带上，之后的取图请求就都带着它了。测试注入的
+        // 所以这里挂一个 CookieContainer，让订阅等 API 请求保存资源令牌，之后的取图请求就都带着它了。测试注入的
         // 假传输层不是 SocketsHttpHandler，跳过（假传输层不认 Cookie，测试也不测它）。
         if (handler is SocketsHttpHandler sockets) sockets.CookieContainer = new CookieContainer();
 
@@ -110,8 +110,8 @@ public sealed class MoviePilotClient : IDisposable
     }
 
     /// <summary>
-    /// 取一份任意网址的原始字节。给下载卡片的封面用：MoviePilot 的图片代理（同一个主机，资源 Cookie 已在
-    /// <see cref="_http"/> 的罐子里）和 TMDB 的直连网址都从这一条走。不拆信封 —— 图片不是 API，没有信封。
+    /// 取一份任意网址的原始字节。给订阅海报和单集缩略图用：MoviePilot 的图片代理（同一个主机，资源 Cookie 已在
+    /// <see cref="_http"/> 的罐子里）从这一条走。不拆信封 —— 图片不是 API，没有信封。
     /// <para>
     /// 调用方自带取消；超时由调用方用链接的 <see cref="CancellationTokenSource"/> 自己掐 —— 这一份 http 的
     /// 120 秒是给资源搜索备的，图片等不起那么久。

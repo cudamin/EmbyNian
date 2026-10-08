@@ -31,7 +31,9 @@ description: "Develop, review and verify EmbyNian's MoviePilot integration: medi
 
 ## 资源列表
 
-- `search/media/{id}` 是已选媒体的精确搜索；带 `media_source`、类型 `mtype` 和已指定的 `season`（0 是特别篇，缺失不猜 1）。保留回话中与所选来源、编号和类型一致的 `media_info`；带可信媒体信息的下载走 `download/` 的 `media_in`，不能退回 `download/add` 再按种子标题猜片。后者没有影视 `mtype` 参数。`search/title` 是关键词搜索，不能借用前一次选择的媒体身份。
+- `search/media/{id}` 是已选媒体的精确搜索；带 `media_source`、类型 `mtype` 和已指定的 `season`（0 是特别篇，缺失不猜 1）。`search/title` 是关键词搜索，不能借用前一次选择的媒体身份。
+- 精确搜索只保留与所选来源、编号和类型一致的完整 `media_info`。即使身份一致，回话显式返回 `media_info_is_target=false`，或返回的字符串 `match_status` 不是 `exact`，仍须禁用下载，不能把候选当精确命中。这两个标志缺失时，仍按身份、类型和媒体快照的其他条件判断，不仅因缺字段拒绝；对应规则在 `MoviePilotMediaParser.ToResource`。
+- 带可信媒体信息的下载走 `download/` 的 `media_in`，不能退回 `download/add` 再按种子标题猜片；后者没有影视 `mtype` 参数。
 - 搜索结果绑定获取时的连接与账号。订阅、下载和整理的防重状态由服务持有，不随重搜、新行或窗口重建清空；网络结果不明时保留“请先核对”，不开放直接重试。当前防重仅在本进程有效，不是跨进程幂等或服务器最终完成证明。
 - 资源字段来自 `torrent_info`：`page_url`、`description`、`labels`、`pubdate`、`downloadvolumefactor`、`uploadvolumefactor`、`freedate`、`hit_and_run`。清晰度通常来自 `meta_info.resource_pix`。
 - 体积可能是浮点 JSON 数字，优惠因子可能是字符串；缺失不能默认为“免费”。原始数据保留在内存用于下载，显示模型只取必要字段。
@@ -42,13 +44,14 @@ description: "Develop, review and verify EmbyNian's MoviePilot integration: medi
 ## 订阅管理与入库播放
 
 - 列表、单条、文件统计，以及编辑／暂停／搜索／重置／取消的接口、字段与版本差异见 [订阅与入库](references/subscriptions.md)。搜索与重置的方法在各版本间对不上（公开文档只登记 GET，官方后端同时注册 GET 与 POST），客户端优先 POST、**仅在明确 405 时**改发 GET；超时不改发、不重放。全量列表靠省略 `page` / `count`，别把一批分页结果当全量。
-- `total_episode` / `lack_episode` 是订阅目标范围内的下载进度，不是入库进度。已入库只由 `subscribe/files/{id}` 的 `library` 决定；`download` 只是已下载，显示为“待入库”；缺集包含已下载待整理和尚未播出的集。空回话、错误与 `subscribe:null` 都是“统计不可用”，不能显示成 `0 / N` 或全部入库。
+- `total_episode` / `lack_episode` 是订阅目标范围内的下载进度，不是入库进度。已入库只由 `subscribe/files/{id}` 的 `library` 决定；只有 `download` 有文件记录而 `library` 没有时才显示“已下载 · 待入库”，两者都有仍是“已入库”；缺集包含已下载待整理和尚未播出的集。空回话、错误与 `subscribe:null` 都是“统计不可用”，不能显示成 `0 / N` 或全部入库。
 - 订阅写操作按有副作用处理，与 HTTP 方法无关：只提交实际改动的字段，提交中锁住再次提交，结果不明时按订阅逐条保留状态、要求用户先核对服务器再显式解除，不自动重发。回执只代表请求已提交，不代表已找到资源或已入库。
 - 已入库内容的播放入口必须先在**当前 Emby 账号**下重新定位：按主身份查 `AnyProviderIdEquals=<provider>.<mediaId>`，电视剧另核季号与集号；文件统计里的 `itemid` 属于别的媒体服务器，只能在 `server_type` 与文件路径同时对上时才接受，多候选先按入库文件路径筛。找不到、无权读取、待入库与缺集都不启用播放；页面只读取，点播放才起播。
 
 ## 验证要回答的问题
 
 - 先用 Core 单测验证来源/编号配对、类型冲突、缺身份、数字或字符串字段、完整/部分失败回执；服务测试断言路径、参数与实际请求次数，而不只判断文案。
+- 精确资源覆盖身份相同但 `media_info_is_target=false`、字符串 `match_status` 非 `exact` 的场景，两个否决条件分别断言；另覆盖标志缺失且其余条件满足时仍允许下载。沿用 `MoviePilotQuerySafetyTests` 的匿名夹具，并断言下载被阻断而不只检查显示文案。
 - 实际只读验证时，白名单限制为本轮需要的读取。某些 POST（如 `storage/list`、`preview:true`）在对应版本中是只读，必须按请求体核对；不能因为都是 POST 就混入提交，也不能因为都是 GET 就放行 `transfer/now` 等有副作用入口。
 - GUI 分开验证搜索结果、来源标签、资源过滤、空/错/忙状态，以及下载和订阅的确认/取消。取消不是下载或订阅已成功的证据。
 - 订阅按请求方法、请求体与**请求次数**断言：POST 成功、POST 405 才改发 GET、超时不得改发、结果不明锁定后不重发；编辑的请求体只含实际改动的字段。
@@ -60,4 +63,4 @@ description: "Develop, review and verify EmbyNian's MoviePilot integration: medi
 
 ## 交付
 
-运行 [开发与验证](../../../docs/开发与验证.md) 中适用的检查并更新实际发布目录；订阅与入库功能的对外说明在 [MoviePilot订阅](../../../docs/MoviePilot订阅.md)。报告实测、未覆盖与失败项；不把历史失败当成通过，不用改基线消除未经解决的红项。项目规则和入口从源码获取，避免在技能里固化当前版本号、测试数、真实账号或某次媒体路径。
+按 [CLAUDE.md 的改动类型表](../../../CLAUDE.md#四道闸门与日常交付) 选择本轮验证与交付要求，具体命令见 [开发与验证](../../../docs/开发与验证.md)；订阅与入库功能的对外说明在 [MoviePilot订阅](../../../docs/MoviePilot订阅.md)。报告实测、未覆盖与失败项；不把历史失败当成通过，不用改基线消除未经解决的红项。项目规则和入口从源码获取，避免在技能里固化当前版本号、测试数、真实账号或某次媒体路径。

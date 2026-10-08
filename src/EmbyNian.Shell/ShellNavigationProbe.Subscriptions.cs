@@ -24,12 +24,23 @@ internal sealed partial class ShellNavigationProbe
         var host = new Page { Content = scroll, Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(ThemeHost.ToColor(ThemeHost.Current.Colors.Window)) };
         _root.Children.Add(host);
         MoviePilotSubscription? opened = null;
+
+        // 「开应用／返回主页闪一下空板块」那一条（2026-10-08）：整块板块只在真有订阅时才立着 ——
+        // 从前它认的是「MoviePilot 开着」，Attach 和 ReloadAsync 都在数据到达之前就把它摆上屏，屏上先出两块
+        // 「暂无…」的空牌子、等异步请求回来才填卡片。
+        //
+        // 这一条用一块单独的视图模型量，而且**把那一趟列表请求扣在手里**（PendingList）：响应没放行之前，屏上
+        // 该是什么、放开之后又该是什么，两头都读得到，不靠「哪一拍先跑」的运气。控件的 x:Bind 要等上场才求值，
+        // 所以这里量的是 Visible 本身（绑定源），控件外那层 StackPanel 只是它的落点。
+        await SubscriptionSectionVisibilityAsync(server);
+
         view.Attach(service, subscription => opened = subscription);
         try
         {
             var vm = view.ViewModel;
             await UntilAsync(() => vm.IsReady);
             Require(vm.Movies.Count == 3 && vm.Series.Count == 2, "订阅没有分成电影和电视剧：" + vm.NoticeMessage);
+            Require(((StackPanel)view.Content).Visibility == Visibility.Visible, "订阅读回来了，板块却没有出现");
             foreach (var width in new[] { 1240, 760 })
             {
                 ResizeInspect(width, 1000); await LayoutAsync(scroll);
@@ -43,10 +54,15 @@ internal sealed partial class ShellNavigationProbe
             }
             var poster = Descendants(view).OfType<MoviePilotSubscriptionPoster>().First();
             var more = Get<Button>(poster, "SubscriptionMore");
+            poster.SetHovered(false);
+            Require(more.Visibility == Visibility.Collapsed, "未悬停封面时订阅管理按钮仍然显示");
+            poster.SetHovered(true); await LayoutAsync(poster);
             var morePosition = more.TransformToVisual(poster).TransformPoint(default);
-            Require(morePosition.X >= poster.ActualWidth - more.ActualWidth - 9
-                && morePosition.Y >= poster.ActualHeight - more.ActualHeight - 9, "更多按钮没有固定在封面右下角");
+            Require(more.Visibility == Visibility.Visible && more.ActualWidth == 32 && more.ActualHeight == 32
+                && Math.Abs(poster.ActualWidth - morePosition.X - more.ActualWidth - 7) < 1
+                && Math.Abs(poster.ActualHeight - morePosition.Y - more.ActualHeight - 5) < 1, "更多按钮没有与媒体库封面右下角对齐");
             var seriesPoster = Descendants(view).OfType<MoviePilotSubscriptionPoster>().First(item => item.Card?.Subscription.IsSeries == true);
+            seriesPoster.SetHovered(true); await LayoutAsync(seriesPoster);
             var progress = Get<Border>(seriesPoster, "SubscriptionProgress");
             var progressPosition = progress.TransformToVisual(seriesPoster).TransformPoint(default);
             var seriesMore = Get<Button>(seriesPoster, "SubscriptionMore");
@@ -54,14 +70,17 @@ internal sealed partial class ShellNavigationProbe
                 && progressPosition.Y >= seriesPoster.ActualHeight - progress.ActualHeight - 9
                 && progressPosition.X + progress.ActualWidth < seriesMore.TransformToVisual(seriesPoster).TransformPoint(default).X,
                 "订阅进度没有放在封面内部左下角，或与更多按钮重叠");
-            Require(!Descendants(view).OfType<TextBlock>().Any(text => text.Text is "订阅中" or "入库情况见文件统计"), "旧状态标签或说明仍然显示");
+            Require(Descendants(progress).OfType<TextBlock>().Single().Text == seriesPoster.Card!.ProgressCount,
+                "封面集数丢失或仍带有订阅进度标签");
+            Require(!Descendants(view).OfType<TextBlock>().Any(text => text.Text is "订阅中" or "入库情况见文件统计" or "订阅进度"), "旧状态标签或说明仍然显示");
             Get<Button>(view, "RefreshSubscriptions").Focus(FocusState.Programmatic);
             poster.SetHovered(false); await Task.Delay(250);
             poster.SetHovered(true); await Task.Delay(80);
             if (HomeMotion.AnimationsEnabled) Require(poster.Zoom > 1 && poster.Zoom <= 1.045, "悬停未产生图片推近动画");
             await SaveUsersFrameAsync(host, "mp-subscription-hover.png");
             poster.SetHovered(false); await Task.Delay(250);
-            Require(Math.Abs(poster.Zoom - 1) < 0.001, "鼠标离开后缩放没有复原");
+            Require(Math.Abs(poster.Zoom - 1) < 0.001 && more.Visibility == Visibility.Collapsed, "鼠标离开后缩放没有复原或管理按钮没有隐藏");
+            seriesPoster.SetHovered(false);
             var first = vm.Movies[0];
             await vm.ReloadAsync();
             Require(ReferenceEquals(first, vm.Movies[0]), "刷新重建卡片而丢失行状态");
@@ -180,6 +199,43 @@ internal sealed partial class ShellNavigationProbe
         late.SetResult(Json(new { success = true, data = server.Items.Values.ToArray() }));
         await loading;
         Require(vm.Movies.Count == 0 && !vm.CanManage, "离页后迟到请求复活列表");
+    }
+
+    /// <summary>
+    /// 订阅板块的显隐判据（2026-10-08「开应用／返回主页会闪一下空板块」）：把列表那一趟扣在手里，读「数据还没
+    /// 回来」和「数据回来了」两头。判据是 <see cref="MoviePilotSubscriptionsViewModel.Visible"/>，不掺时序：
+    /// 假传输同步完成与否都不影响结论。
+    /// </summary>
+    private async Task SubscriptionSectionVisibilityAsync(SubscriptionProbeServer server)
+    {
+        var (_, service) = SubscriptionService(server);
+        var vm = new MoviePilotSubscriptionsViewModel();
+
+        // 1. MoviePilot 开着、卡片一张都没有：整块收着。从前这里就是 Visible —— Attach 一上来凭 Enabled 把
+        //    空板块摆上屏，正是开应用／返回主页看到的那一帧。
+        vm.Attach(service);
+        Require(vm.Visible == Visibility.Collapsed, "一条订阅也没有，空板块却要立起来（开应用／返回主页会闪一下）");
+
+        // 2. **列表还扣在手里**（真实的开应用那一拍）：整块仍须收着，等数据真回来才和内容一起出现。
+        var gate = Pending<HttpResponseMessage>();
+        server.PendingList = gate;
+        var loading = vm.ReloadAsync();
+        Require(vm.Visible == Visibility.Collapsed, "列表还扣在手里，板块就已经立起来了");
+        gate.SetResult(Json(new { success = true, data = server.Items.Values.ToArray() }));
+        await loading;
+        Require(vm.Movies.Count == 3 && vm.Visible == Visibility.Visible, "订阅读回来了，板块却没有立起来");
+
+        // 3. 一条订阅都没有的账号：读完了也不该出现这块（从前只看「开着 MoviePilot」就会摆出来）。
+        var empty = Pending<HttpResponseMessage>();
+        server.PendingList = empty;
+        var reloading = vm.ReloadAsync();
+        empty.SetResult(Json(new { success = true, data = Array.Empty<object>() }));
+        await reloading;
+        Require(vm.Movies.Count == 0 && vm.Series.Count == 0 && vm.Visible == Visibility.Collapsed,
+            "一条订阅都没有，空板块还是立着");
+
+        server.PendingList = null;
+        vm.Cancel();
     }
 
     private static void InvokeSubscriptionButton(Button button)

@@ -518,8 +518,8 @@ public sealed partial class HomeBanner : UserControl
     ];
 
     /// <summary>
-    /// 跑一段有明确所有者的动画。没进树、或系统关闭动画（只对 <paramref name="followAnimationSwitch"/> 那一路
-    /// 生效）时直接落定；完成后撤掉故事板，再写回终值。
+    /// 跑一段有明确所有者的动画。没进树、应用关闭动画、或系统关闭动画（只对
+    /// <paramref name="followAnimationSwitch"/> 那一路生效）时直接落定；完成后撤掉故事板，再写回终值。
     /// <para>
     /// 自检里这份控件没有 <c>XamlRoot</c>，那时 <c>Begin()</c> 既没人看也没有意义；而故事板照样是搭出来的，
     /// 所以 <c>SetTarget</c> 拿到一个空的变换（标记里漏了一个 <c>TranslateTransform</c>）在那里就抛。
@@ -533,7 +533,8 @@ public sealed partial class HomeBanner : UserControl
     /// </summary>
     private void Play(Storyboard board, Action settle, string channel, bool followAnimationSwitch = true)
     {
-        if (!_active || XamlRoot is null || (followAnimationSwitch && !_uiSettings.AnimationsEnabled))
+        if (!_active || XamlRoot is null || !HomeMotion.PreferenceEnabled
+            || (followAnimationSwitch && !HomeMotion.AnimationsEnabled))
         {
             settle();
             return;
@@ -637,7 +638,8 @@ public sealed partial class HomeBanner : UserControl
     /// 「动画效果」是关的，而 v0.0.6 起这道闸里还站着一条 <c>AnimationsEnabled</c>，关动画的机器上钟永远起不来，
     /// 八张剧照站成一张静画）。底下那道进度条同罪同免：同一天下午他点名「把下方那条线弄成进度条，跑满进度条
     /// 就翻页」，而这条线在动画开关关着的机器上从前永远停在 0，看着就是一根死线 —— 它和钟是同一类东西，报的
-    /// 是「还剩几秒翻页」这个内容事实，不是装饰（<see cref="Play"/> 给它留了旁路）。真正的装饰 —— 换片的
+    /// 是「还剩几秒翻页」这个内容事实，不是装饰（<see cref="Play"/> 给系统设置留了旁路；应用自己的 UI 动画
+    /// 开关仍会关闭视觉补间）。真正的装饰 —— 换片的
     /// 交叉淡入、字块抬升 —— 照旧跟着开关走。
     /// </para>
     /// </summary>
@@ -652,6 +654,9 @@ public sealed partial class HomeBanner : UserControl
         if (_slides.Count <= 1 || _hover || _focusWithin || !_active) return;
 
         _timer.Start();
+
+        // 关闭 UI 动画仍按时换图，但不再绘制连续增长的倒计时。
+        if (!HomeMotion.PreferenceEnabled) return;
 
         var board = new Storyboard();
         var countdown = new DoubleAnimation
@@ -868,6 +873,7 @@ public sealed partial class HomeBanner : UserControl
         if (!_settingsObserved)
         {
             _uiSettings.AnimationsEnabledChanged += OnAnimationsEnabledChanged;
+            HomeMotion.PreferenceChanged += OnAnimationPreferenceChanged;
             _settingsObserved = true;
         }
 
@@ -905,6 +911,7 @@ public sealed partial class HomeBanner : UserControl
         if (_settingsObserved)
         {
             _uiSettings.AnimationsEnabledChanged -= OnAnimationsEnabledChanged;
+            HomeMotion.PreferenceChanged -= OnAnimationPreferenceChanged;
             _settingsObserved = false;
         }
 
@@ -918,11 +925,14 @@ public sealed partial class HomeBanner : UserControl
     }
 
     private void OnAnimationsEnabledChanged(UISettings sender, object args) => DispatcherQueue.TryEnqueue(() =>
+        OnAnimationPreferenceChanged());
+
+    private void OnAnimationPreferenceChanged()
     {
         if (!_active) return;
         StopMotions();
         SyncTimer();
-    });
+    }
 
     /// <summary>把窗口那一头的订退掉。<see langword="null"/> 进来就是「本来没订」。</summary>
     private void UnwatchViewport(XamlRoot? root)

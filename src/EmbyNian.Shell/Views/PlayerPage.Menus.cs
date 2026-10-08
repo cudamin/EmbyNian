@@ -258,20 +258,17 @@ public sealed partial class PlayerPage
         info.Click += (_, _) => _ = ShowMediaInfoAsync();
         menu.Items.Add(info);
 
-        // 2026-10-01 用户令「在右键菜单中添加字幕、视频输出、音频输出三个按钮，点击后打开设置页面」：末尾
-        // 三行，第一段分隔线与「更多」那一棵其余几行分开 —— 上面那几行改的是这一部片子当下的行为，这三行
-        // 开的是设置窗口（改了从下一次播放开始生效）。
-        //
-        // 行集、次序与文案读的是 Core 那张表（PlayerSettingsLinks.All），不是这里现写三段字：独占模式的画面
-        // 菜单推的是同一张表（PlayerViewModel.PushPictureMenuAsync），那边若各写一份，两边迟早不一样。
-        // 点了以后走 ViewModel.RequestSettings —— 与独占模式同一条出口，开窗归外壳（ShellPage）。
+        // 两条管线都将设置入口收进「播放设置」，名称与次序共用 Core 那张表。
+        // 子项仍走 ViewModel.RequestSettings，由外壳打开对应设置卡。
         menu.Items.Add(new MenuFlyoutSeparator());
+        var settings = new MenuFlyoutSubItem { Text = PlayerSettingsLinks.MenuLabel, Name = "PlaybackSettingsMenu" };
         foreach (var link in PlayerSettingsLinks.All)
         {
-            var row = new MenuFlyoutItem { Text = link.Label, Tag = link };
+            var row = new MenuFlyoutItem { Text = link.Label, Tag = link, Name = $"PlaybackSettings_{link.Token}" };
             row.Click += OnPictureSettingsRow;
-            menu.Items.Add(row);
+            settings.Items.Add(row);
         }
+        menu.Items.Add(settings);
 
         void AddAction(string label, Action action)
         {
@@ -282,7 +279,7 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 点了「更多」末尾那三行设置入口之一（2026-10-01 用户令）：把这一行交给 view model，由外壳开设置窗口。
+    /// 点了「播放设置」中的设置入口：把这一行交给 view model，由外壳开设置窗口。
     /// <para>
     /// 命名方法而不是就地写一个 lambda，是为了自检能点到同一下（<c>ClickPictureSettingsRow</c>）——
     /// 那一条读数要的是「按真菜单行的真处理器会发生什么」，不是自检另起一句等价的话。

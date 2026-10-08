@@ -1188,6 +1188,11 @@ public sealed partial class PlayerPage
     /// </summary>
     private void Render()
     {
+        var duration = HomeMotion.AnimationsEnabled ? TimeSpan.FromMilliseconds(220) : TimeSpan.Zero;
+        if (TitleStrip.OpacityTransition.Duration != duration) TitleStrip.OpacityTransition.Duration = duration;
+        if (TransportRow.OpacityTransition.Duration != duration) TransportRow.OpacityTransition.Duration = duration;
+        if (Rail.OpacityTransition.Duration != duration) Rail.OpacityTransition.Duration = duration;
+
         var state = _chrome.State;
         Bar.Visibility = state.Bar ? Visibility.Visible : Visibility.Collapsed;
         TitleStrip.Visibility = state.Title ? Visibility.Visible : Visibility.Collapsed;
@@ -1827,6 +1832,7 @@ public sealed partial class PlayerPage
         // relative to the window, and there is no promise that a pointer event arrives for a move that
         // changes nothing about where the pointer sits inside the client area. This is also where a drag
         // whose release happened somewhere we never saw gets ended.
+        TryBeginPictureDrag();
         if (_window?.Dragging == true) DragWindow();
 
         // 「移动了没有」, asked of the OS. Not while a drag is running: the window is moving with the cursor,

@@ -15,8 +15,7 @@ namespace EmbyNian.Mpv;
 public sealed record PlayerSettingsLink(string Label, string Token, string Category);
 
 /// <summary>
-/// 右键画面菜单最末尾那三行设置入口（2026-10-01 用户令「在右键菜单中添加字幕、视频输出、音频输出三个按钮，
-/// 点击后打开设置页面」）。
+/// 右键画面菜单「播放设置」子菜单中的三行设置入口。
 /// <para>
 /// 放在 Core 而不是画在某一侧的界面里，理由与 <see cref="PlayerMenuCatalog"/> 一字不差：这两条管线各画各的
 /// 菜单（集成侧是 XAML 行、走 <c>PlayerPage.OnMoreMenuOpening</c>；独占侧是 uosc 菜单行、走
@@ -31,6 +30,8 @@ public sealed record PlayerSettingsLink(string Label, string Token, string Categ
 /// </summary>
 public static class PlayerSettingsLinks
 {
+    public const string MenuLabel = "播放设置";
+
     /// <summary>The three rows, in the order both menus draw them.</summary>
     public static IReadOnlyList<PlayerSettingsLink> All { get; } =
     [

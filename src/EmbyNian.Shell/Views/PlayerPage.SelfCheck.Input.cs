@@ -427,6 +427,36 @@ public sealed partial class PlayerPage
         Want("落在控件上的那一下作废", !_tapHold.IsEnabled && !_tap.Pending && !_tap.Issued);
         report.Add("点在控件上→作废");
 
+        // 暂停和恢复两种单击都走真实到期处理器；只合成状态，不启动任何媒体。
+        var status = ViewModel.Status;
+        var marks = ViewModel.ChapterMarks;
+        var wasTop = _window?.TopMost == true;
+        var keptChrome = _chrome.KeepChrome;
+        try
+        {
+            foreach (var paused in new[] { false, true })
+            {
+                ViewModel.SetTransportProbeStatus(new PlayerStatus { Duration = 1200, Loaded = true, Paused = paused }, []);
+                _chrome.SetKeep(false, Now);
+                _chrome.Reset(Now - SettleMilliseconds);
+                _chrome.Tick(Now);
+                Render();
+                Want("单击前控件已收起", !_chrome.State.Any);
+                TapPicture();
+                OnTapHoldElapsed(this, EventArgs.Empty);
+                Want(paused ? "恢复播放不唤出控件" : "暂停不唤出控件", !_chrome.State.Any);
+            }
+            report.Add("暂停/恢复单击均不唤出标题、进度和音量控件");
+        }
+        finally
+        {
+            ViewModel.SetTransportProbeStatus(status, marks);
+            _chrome.SetKeep(keptChrome, Now);
+            SetPinned(wasTop);
+            _chrome.Reset(Now);
+            Render();
+        }
+
         DropTapHold();
         HidePulse();
         _pulseMutedAt = wasMuted;

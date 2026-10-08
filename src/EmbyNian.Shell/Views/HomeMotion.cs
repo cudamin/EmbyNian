@@ -20,7 +20,23 @@ internal static class HomeMotion
     private static readonly ConditionalWeakTable<FrameworkElement, RoutedEventHandler> Waiting = new();
     private static readonly ConditionalWeakTable<ItemsRepeater, ShelfEntrance> Shelves = new();
 
-    internal static bool AnimationsEnabled => Settings.AnimationsEnabled;
+    internal static bool PreferenceEnabled { get; private set; } = true;
+    internal static bool AnimationsEnabled => PreferenceEnabled && Settings.AnimationsEnabled;
+
+    internal static event Action? PreferenceChanged;
+
+    /// <summary>启动、设置开关及恢复配置共用；关闭时将尚未完成的入场直接落定。</summary>
+    internal static void ApplyPreference(bool enabled)
+    {
+        if (PreferenceEnabled == enabled) return;
+        PreferenceEnabled = enabled;
+        if (!enabled)
+        {
+            foreach (var element in Active.Select(pair => pair.Key).ToArray()) Stop(element);
+            foreach (var element in Waiting.Select(pair => pair.Key).ToArray()) Stop(element);
+        }
+        PreferenceChanged?.Invoke();
+    }
 
     /// <summary>
     /// 进场动画真正落在的元素：ItemsRepeater 直接子的第一个视觉孩子（模板根）。直接子本身 —— 不管是

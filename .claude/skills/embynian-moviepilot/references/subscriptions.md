@@ -18,12 +18,12 @@
 - **搜索与重置的方法在各版本之间对不上。** 官方公开文档只登记 `GET`；官方后端 `v3.1.2-1` 的 `app/api/endpoints/submaintenance.py` 对这两个路径**同时**注册了 `@router.get` 和 `@router.post`，该版本前端也走 POST。客户端优先 POST，只在明确收到 HTTP 405 时改发 GET。超时、断线、5xx 都不是"方法不对"，不触发改发，也不重放。
 - 分页靠 `resolve_compatible_pagination`：`page` 与 `count` 都省略才是全量，只给一个或都给了就是分页。集合总数走响应头（`openapi_extra` 声明的那个），不在正文。主页要全量就别带分页参数，也别把一批分页结果当全量。
 - 列表字段（该版本实测）：`id`、`name`、`year`、`type`、`keyword`、`media_source`、`media_id`、`season`、`poster`、`backdrop`、`description`、`include`、`exclude`、`quality`、`resolution`、`effect`、`total_episode`、`start_episode`、`lack_episode`、`completed_episode`、`state`、`last_update`、`sites`、`downloader`、`save_path` 等。只投影界面要用的字段。
-- 该服务器 `GET /api/v1/openapi.json` 返回 **404**，而同一会话里 `GET /api/v1/dashboard/system` 正常返回 `version`。所以 `MoviePilotProbe` 的 openapi 一步在这类部署上不可靠：**契约以对应 tag 的官方源码为准**。拿不到 schema 不等于可以跳过版本确认，也不是猜字段的理由。
+- 上述只读核对中，该服务器 `GET /api/v1/openapi.json` 返回 **404**，而同一会话里 `GET /api/v1/dashboard/system` 正常返回 `version`。这是该次部署的观测；项目的 `MoviePilotProbe.RunAsync` 在登录后读取 `dashboard/system`、`mediaserver/clients` 和 `download/clients`，没有 OpenAPI 请求。拿不到 schema 时，**契约以对应 tag 的官方源码为准**；不能跳过版本确认，也不能猜字段。
 
 ## 三个进度不是一回事
 
 - `total_episode` / `lack_episode` 是**订阅目标范围内的下载进度**。`total_episode - lack_episode` 不等于已入库集数；界面上叫"订阅进度"，不要叫"下载进度"，更不能当入库进度。
-- 已入库**只由** `subscribe/files/{id}` 的 `library` 决定。`download` 只是已下载文件：两者都有才是"已下载 · 待入库"，只有 `download` 不算入库。
+- 已入库**只由** `subscribe/files/{id}` 的 `library` 决定。有 `library` 文件记录就是"已入库"，即使同时有 `download`；只有 `download` 有文件记录而 `library` 没有时才是"已下载 · 待入库"，两者都没有则是"缺集"。这些状态用于有效统计中的目标条目，统计不可用不套用缺集状态。
 - 缺集是目标范围内**所有未入库**的集，包括已下载待整理的和尚未播出的。按 `start_episode` / `total_episode` 过滤，不混入范围外的集。
 - `state`：`S` 暂停、`R` 订阅中、`N` 或 `P` 待处理。暂停不代表入库事实停止。
 
@@ -59,7 +59,7 @@
 
 - **方法差异**：POST 成功、POST 405 才改 GET、POST 超时不得改发、PUT / DELETE 结果不明后锁定且不重发。
 - **字段差量**：只改一个字段时的请求体、清空发 `null`、未改动的站点／下载器字段不出现。
-- **统计语义**：电影零号条目、`library` 的字符串与数组两种形态、`subscribe:null`、空 `episodes`、范围外的集被过滤、未播出集被补齐、"统计不可用"不显示为全缺或全入库。
+- **统计语义**：电影零号条目、`library` 的字符串与数组两种形态、只有 `library`／只有 `download`／两者都有／两者都没有的状态判定、`subscribe:null`、空 `episodes`、范围外的集被过滤、未播出集被补齐、"统计不可用"不显示为全缺或全入库。
 - **播放匹配**：跨服务器 `itemid` 不被直接信任、同名多候选、路径唯一命中、路径大小写、无权与不存在的条目。
 - **界面**：进度写在封面内且不与更多按钮重叠、空统计不显示为全入库、离页与切服后旧按钮失效。
 - `--probe-shell` 的三个订阅检查只操作假服务器与捕获的假播放动作；真实只读核对另行进行，且不写订阅、不起播放器。

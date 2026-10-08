@@ -28,7 +28,7 @@ internal static class MoviePilotTests
         SearchParserTests();
         ClientPostTests();
         SearchServiceTests();
-        DownloadMonitorTests();
+        ImageServiceTests();
     }
 
     // ── 地址归一化 ───────────────────────────────────────────────────────────────────────────────────
@@ -393,7 +393,13 @@ internal static class MoviePilotTests
             Assert.Equal("站点A", list[0].SiteName);
             Assert.Equal("1080p", list[0].Resolution);
             Assert.Equal(12, list[0].Seeders);
-            Assert.Contains("GB", list[0].SizeText, "5368709120 字节该显示成 5 GB");
+            Assert.Equal("5 GB", list[0].SizeText);
+            Assert.Equal("", (list[0] with { Size = 0 }).SizeText);
+            Assert.Equal("", (list[0] with { Size = -1 }).SizeText);
+            Assert.Equal("1023 B", (list[0] with { Size = 1023 }).SizeText);
+            Assert.Equal("1 KB", (list[0] with { Size = 1024 }).SizeText);
+            Assert.Equal("1.5 MB", (list[0] with { Size = 1572864 }).SizeText);
+            Assert.Equal("1 TB", (list[0] with { Size = 1099511627776 }).SizeText);
             Assert.Equal("themoviedb", list[0].MediaSource, "身份对盖的是搜的那部片");
             Assert.Equal("1", list[0].MediaId);
             Assert.Equal("Some.Movie.1080p.WEB-DL", list[0].TorrentInfo.GetProperty("title").GetString(), "整份种子信息原样留着");
@@ -603,184 +609,20 @@ internal static class MoviePilotTests
         });
     }
 
-    // ── 下载监控：download/ 的解析、差量与取图 ─────────────────────────────────────────────────────
-
-    /// <summary>
-    /// 首页「正在下载」一排的地基。<c>GET download/</c> 回的 <c>DownloaderTorrent</c> 按 v2 与 v3.0.1 的
-    /// schema 共同形状收（两版逐字段比对过，media 键名一致）；差量钉住「同一张卡就地改，不整排重搭」。
-    /// 夹具按上游 schema 抄，不是编的。
-    /// </summary>
-    private static void DownloadMonitorTests()
+    private static void ImageServiceTests()
     {
-        const string bareList = """
-            [
-              {
-                "downloader": "qbittorrent",
-                "hash": "9f1c8a4b2e6d7c0a1b3f5e8d9c2a4b6e8d0f2a4c",
-                "title": "某剧 S01E05 2024 1080p WEB-DL",
-                "site_name": "站点A",
-                "name": "Some.Show.S01E05.1080p.WEB-DL",
-                "year": "2024",
-                "season_episode": "S01E05",
-                "size": 5368709120.0,
-                "progress": 42.5,
-                "state": "downloading",
-                "dlspeed": "2.5 M",
-                "left_time": "1时20分30秒",
-                "media": {
-                  "type": "电视剧",
-                  "title": "某剧",
-                  "poster": "https://image.tmdb.org/t/p/w600_and_h900_bestv2/abc.jpg",
-                  "backdrop": "https://image.tmdb.org/t/p/original/def.jpg"
-                }
-              },
-              {
-                "downloader": "qbittorrent",
-                "hash": "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d",
-                "title": "某电影 2023 2160p",
-                "progress": 100.0,
-                "state": "paused",
-                "dlspeed": "0"
-              }
-            ]
-            """;
-
-        Test("MoviePilot 下载：裸数组拆成任务行，识别出的媒体名和海报都跟着来", () =>
-        {
-            var tasks = MoviePilotDownload.Parse(Json(bareList));
-
-            Assert.Equal(2, tasks.Count);
-
-            var episode = tasks[0];
-            Assert.Equal("9f1c8a4b2e6d7c0a1b3f5e8d9c2a4b6e8d0f2a4c", episode.Hash);
-            Assert.Equal("某剧", episode.Title, "标题优先用识别入库留下的媒体名");
-            Assert.Equal("S01E05", episode.SeasonEpisode);
-            Assert.Equal("2024", episode.Year);
-            Assert.Equal("电视剧", episode.MediaType);
-            Assert.Equal(42.5, episode.Progress);
-            Assert.Equal("2.5 M", episode.Speed);
-            Assert.Equal("1时20分30秒", episode.LeftTime);
-            Assert.Equal("https://image.tmdb.org/t/p/w600_and_h900_bestv2/abc.jpg", episode.ImageUrl);
-
-            // 没有识别历史的行照样是合法一行：种子标题当名字，海报空着（灰底字形兜底）。
-            var bare = tasks[1];
-            Assert.Equal("某电影 2023 2160p", bare.Title);
-            Assert.Equal("", bare.ImageUrl);
-            Assert.False(bare.IsDownloading, "paused 不是下载中");
-        });
-
-        Test("MoviePilot 下载：被信封包了一层数组也认，没有 hash 的行跳过", () =>
-        {
-            var wrapped = MoviePilotDownload.Parse(Json($$"""{"success":true,"data":{{bareList}}}"""));
-            Assert.Equal(2, wrapped.Count);
-
-            var listed = MoviePilotDownload.Parse(Json($$"""{"list":{{bareList}}}"""));
-            Assert.Equal(2, listed.Count);
-
-            var hashed = MoviePilotDownload.Parse(Json(
-                """[{"title":"没有 hash 的一行"},{"hash":"aa","title":"有 hash 的一行"}]"""));
-            Assert.Equal(1, hashed.Count, "hash 是跨轮询认人的钥匙，没有它不能进排");
-            Assert.Equal("有 hash 的一行", hashed[0].Title);
-        });
-
-        Test("MoviePilot 下载：标题三级回退、进度夹在 0 到 100", () =>
-        {
-            var mediaFirst = MoviePilotDownload.Parse(Json(
-                """[{"hash":"a","title":"种子标题","name":"文件名","media":{"title":"媒体名"}}]"""));
-            Assert.Equal("媒体名", mediaFirst[0].Title);
-
-            var torrentSecond = MoviePilotDownload.Parse(Json("""[{"hash":"a","title":"种子标题","name":"文件名"}]"""));
-            Assert.Equal("种子标题", torrentSecond[0].Title);
-
-            var nameThird = MoviePilotDownload.Parse(Json("""[{"hash":"a","name":"文件名"}]"""));
-            Assert.Equal("文件名", nameThird[0].Title);
-
-            var clamped = MoviePilotDownload.Parse(Json("""[{"hash":"a","title":"t","progress":137.5}]"""));
-            Assert.Equal(100.0, clamped[0].Progress);
-
-            var floored = MoviePilotDownload.Parse(Json("""[{"hash":"a","title":"t","progress":-4}]"""));
-            Assert.Equal(0.0, floored[0].Progress);
-        });
-
-        Test("MoviePilot 下载：海报只认 http(s) 绝对地址，退而背景图", () =>
-        {
-            var relative = MoviePilotDownload.Parse(Json(
-                """[{"hash":"a","title":"t","media":{"poster":"/img/poster.jpg","backdrop":"https://image.tmdb.org/t/p/original/x.jpg"}}]"""));
-            Assert.Equal("https://image.tmdb.org/t/p/original/x.jpg", relative[0].ImageUrl, "相对路径不当海报");
-
-            var absent = MoviePilotDownload.Parse(Json("""[{"hash":"a","title":"t"}]"""));
-            Assert.Equal("", absent[0].ImageUrl);
-        });
-
-        Test("MoviePilot 下载：卡片那两行字——百分比打头、暂停直说、零速不占格", () =>
-        {
-            var downloading = new MoviePilotDownloadTask(
-                "a", "某剧", "2024", "S01E05", "电视剧", 5368709120, 42.5, "downloading",
-                "2.5 M", "1时20分30秒", "站点A", "", "");
-            Assert.Equal("43% · 2.5 M/s · 剩 1时20分30秒", MoviePilotDownload.InfoLine(downloading));
-
-            var paused = downloading with { State = "paused", Speed = "0" };
-            Assert.Equal("已暂停 · 43%", MoviePilotDownload.InfoLine(paused));
-
-            var noEta = downloading with { LeftTime = "" };
-            Assert.Equal("43% · 2.5 M/s", MoviePilotDownload.InfoLine(noEta));
-
-            // 有些版本的速度串已经带斜杠：原样保留，不再叠一个 /s。
-            var preSlashed = downloading with { Speed = "2.5 M/s", LeftTime = "" };
-            Assert.Equal("43% · 2.5 M/s", MoviePilotDownload.InfoLine(preSlashed));
-
-            Assert.Equal("5 GB", MoviePilotDownload.SizeText(5368709120));
-            Assert.Equal("", MoviePilotDownload.SizeText(0));
-        });
-
-        Test("MoviePilot 下载：差量——多了的按服务器次序插、没了的删、两边都有的就地改", () =>
-        {
-            var first = new MoviePilotDownloadTask("h1", "一", "", "", "", 0, 10, "downloading", "", "", "", "", "");
-            var second = new MoviePilotDownloadTask("h2", "二", "", "", "", 0, 20, "downloading", "", "", "", "", "");
-            var third = new MoviePilotDownloadTask("h3", "三", "", "", "", 0, 30, "downloading", "", "", "", "", "");
-
-            // 第一轮：空行对上一批 → 全部新增，位置就是服务器那一串里的位置。
-            var seed = MoviePilotDownload.Plan([], [first, second]);
-            Assert.Equal(2, seed.Additions.Count);
-            Assert.Equal(0, seed.Additions[0].Index);
-            Assert.Equal(1, seed.Additions[1].Index);
-            Assert.True(seed.IsEmpty == false);
-
-            // 第二轮：h2 有了新读数，h1 没了，h3 新来（服务器把它排在中间）。
-            var secondRound = MoviePilotDownload.Plan([first, second],
-                [third with { }, second with { Progress = 55, Speed = "1.2 M" }]);
-
-            Assert.Equal(1, secondRound.Removals.Count);
-            Assert.Equal("h1", secondRound.Removals[0]);
-            Assert.Equal(1, secondRound.Additions.Count);
-            Assert.Equal("h3", secondRound.Additions[0].Task.Hash);
-            Assert.Equal(0, secondRound.Additions[0].Index, "服务器那一串里 h3 排在中间，插进来的位置也是中间");
-            Assert.Equal(1, secondRound.Updates.Count);
-            Assert.Equal("h2", secondRound.Updates[0].Hash);
-            Assert.Equal(55, secondRound.Updates[0].Progress);
-
-            // 第三轮：什么都没变 —— 这一份空差量正是「不重画一排」的凭据。
-            var quiet = MoviePilotDownload.Plan([third, second], [third with { }, second with { }]);
-            Assert.True(quiet.IsEmpty);
-        });
-
-        Test("MoviePilot 连接：下载监控 GET download/，取图走 system/cache/image 的代理", () =>
+        Test("MoviePilot 连接：订阅取图走 system/cache/image 的代理", () =>
         {
             var transport = new StubTransport()
-                .Answer("login/access-token", """{"access_token":"jwt","super_user":true,"user_name":"docuser","user_id":1}""")
-                .Answer("download/", bareList)
                 .Answer("cache/image", "JPGDATA");
 
             var service = ServiceOn(transport);
 
-            var tasks = service.DownloadingAsync(CancellationToken.None).GetAwaiter().GetResult();
-            Assert.Equal(2, tasks.Count);
-            var sent = transport.Only("download/");
-            Assert.Contains("/api/v1/download/", sent.Url);
-
-            var bytes = service.FetchImageAsync(tasks[0].ImageUrl, CancellationToken.None).GetAwaiter().GetResult();
+            var bytes = service.FetchImageAsync("https://image.tmdb.org/t/p/w500/abc.jpg", CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Equal(1, transport.Total, "取图不读取下载列表");
             Assert.Equal("JPGDATA", System.Text.Encoding.UTF8.GetString(bytes));
             var image = transport.Only("cache/image");
+            Assert.Equal("GET", image.Method);
             Assert.Contains("/api/v1/system/cache/image?url=", image.Url, "走服务器的图片代理");
             Assert.Contains("image.tmdb.org", image.Url);
             Assert.Contains("%2F", image.Url, "图址要整串转义，别把路径当查询参数拆开");

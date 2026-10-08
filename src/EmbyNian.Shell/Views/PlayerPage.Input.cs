@@ -42,6 +42,10 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private bool _wakingTap;
 
+    private (Pointer Pointer, NativePoint Grab, PlayerViewModel.InteractionContext Context)? _pictureDragPress;
+    private bool _pictureDragged;
+    private const int PictureDragPixels = 6;
+
     /// <summary>
     /// 严格前台位的两个派生量，每拍在 <c>PlayerPage.Chrome.cs</c> 的轮询里更新：<c>_wasForeground</c> 是
     /// <b>上一拍</b>问到的严格前台位（叫醒判据的主料），<c>_foregroundSinceAt</c> 是轮询看到「窗口变成前台」
@@ -72,6 +76,7 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
+        TryBeginPictureDrag();
         // A drag in progress is the only thing the pointer can be saying: the strip is under the cursor
         // and staying there, which is the one case where the reveal rule has nothing to decide.
         if (_window?.Dragging == true)
@@ -218,12 +223,12 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     /// <summary>
     /// Any press is activity, including one that lands on a control and stops there — except a press on
-    /// the picture itself, whose chrome wake waits for the tap hold to prove it a single click.
+    /// the picture itself, which acknowledges pause/resume with the badge instead of waking the chrome.
     /// <para>
     /// 「双击触发全屏或还原时不得呼出任何控件」（用户令 2026-09-18）：双击的第一个按下和单击的第一个
     /// 按下此刻无法区分，宽限一旦当场给出，双击就注定要闪一次控件。所以点在画面上的那一下不再立刻
-    /// <see cref="ChromeReveal.WakeFully"/>，交给 <see cref="OnTapHoldElapsed"/>（单击证实，与暂停徽标
-    /// 同一拍）或 <see cref="OnDoubleTapped"/>（双击，<see cref="ChromeReveal.Silence"/> 收干净）决定。
+    /// <see cref="ChromeReveal.WakeFully"/>；<see cref="OnTapHoldElapsed"/> 证实单击后只切换播放，
+    /// <see cref="OnDoubleTapped"/> 则用 <see cref="ChromeReveal.Silence"/> 收干净。
     /// 点在控件、统计面板、切换遮罩上的按下照旧立刻算活动 —— 那些不是画面纯净要管的东西。
     /// </para>
     /// </summary>
@@ -231,6 +236,8 @@ public sealed partial class PlayerPage : IWin32KeySink
     {
         if (!Attached || _inputSuspended) return;
         var point = e.GetCurrentPoint(Root).Position;
+        _pictureDragPress = null;
+        _pictureDragged = false;
 
         // **叫醒窗口的那一下不作数**（用户令 2026-09-23：「先点一下让窗口置顶，然后再点一下触发暂停/播放」）：
         // 判据的主料是**上一拍**问到的严格前台位 _wasForeground —— 按下这一刻窗口已经是前台了（激活在按下
@@ -250,10 +257,15 @@ public sealed partial class PlayerPage : IWin32KeySink
             return;
         }
 
-        // 点在画面上的那一下：宽限押后。单击在攥够那一刻给（OnTapHoldElapsed），双击根本不给。
+        // 点在画面上的那一下不唤控件；位移越过阈值才变成拖窗。
         if (TapOnPicture(point, e.OriginalSource))
         {
             _wakingTap = waking;
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse
+                && e.GetCurrentPoint(Root).Properties.IsLeftButtonPressed
+                && _window is { PlaybackTitleBar: true, OccupiesScreen: false }
+                && Native.GetCursorPos(out var grab))
+                _pictureDragPress = (e.Pointer, grab, ViewModel.CaptureInteraction());
 
             // 点击手势的第一环留一行（另两环见 OnTapHoldElapsed 与 SecondTapOnPicture）。用户报过
             // 「点第一下没反应、要再点一下」，而这几行是唯一能把几种坏法分开的读数：这一下**根本没到过
@@ -313,6 +325,30 @@ public sealed partial class PlayerPage : IWin32KeySink
         return true;
     }
 
+    /// <summary>画面按下先保留单击/双击；按住移动超过阈值才接管为拖窗。用屏幕坐标，窗口跟手时局部坐标不会变。</summary>
+    private void TryBeginPictureDrag()
+    {
+        if (_pictureDragPress is not { } press) return;
+        if (_inputSuspended || !Native.LeftButtonDown() || !ViewModel.IsCurrentInteraction(press.Context))
+        {
+            _pictureDragPress = null;
+            return;
+        }
+        if (!Native.GetCursorPos(out var cursor)
+            || Math.Abs(cursor.X - press.Grab.X) + Math.Abs(cursor.Y - press.Grab.Y) <= PictureDragPixels) return;
+
+        _pictureDragPress = null;
+        if (_window?.BeginDrag(press.Grab) != true) return;
+
+        // 松手后 WinUI 仍可能递来 Tapped/DoubleTapped；这笔消费记录留到下一次按下，不能随 EndWindowDrag 清掉。
+        _pictureDragged = true;
+        _wakingTap = false;
+        DropTapHold();
+        _dragPointer = Root.CapturePointer(press.Pointer) ? press.Pointer : null;
+        Hold(true, ChromeHold.Drag);
+        _window.DragTo(cursor);
+    }
+
     /// <summary>
     /// Whether a point in the title strip is on one of the controls it carries. Its own method because the
     /// self-check reads it: a control left off this list is a control whose press starts a window drag
@@ -344,6 +380,7 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        _pictureDragPress = null;
         if (_window?.Dragging != true) return;
 
         EndWindowDrag();
@@ -355,6 +392,7 @@ public sealed partial class PlayerPage : IWin32KeySink
 
     private void EndWindowDrag()
     {
+        _pictureDragPress = null;
         if (_window is null) return;
 
         // Cleared before the capture is given back, because releasing it raises CaptureLost straight back
@@ -380,6 +418,12 @@ public sealed partial class PlayerPage : IWin32KeySink
     private void OnDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
         if (!Attached || _inputSuspended) return;
+        if (_pictureDragged)
+        {
+            DropTapHold();
+            e.Handled = true;
+            return;
+        }
         if (!DoubleTapOnPicture(e.GetPosition(Root), e.OriginalSource))
         {
             DropTapHold();
@@ -417,6 +461,12 @@ public sealed partial class PlayerPage : IWin32KeySink
     /// </summary>
     private void OnTapped(object sender, TappedRoutedEventArgs e)
     {
+        if (_pictureDragged)
+        {
+            DropTapHold();
+            e.Handled = true;
+            return;
+        }
         if (!Attached || _inputSuspended || !TapOnPicture(e.GetPosition(Root), e.OriginalSource))
         {
             DropTapHold();
@@ -482,10 +532,8 @@ public sealed partial class PlayerPage : IWin32KeySink
     }
 
     /// <summary>
-    /// The hold expired with no second click: now the tap means what it always meant. The chrome wake that
-    /// <see cref="OnPointerPressed"/> used to give on the spot arrives here instead — a single click
-    /// confirmed, at the same beat as the pause badge it accompanies. A double click never reaches this:
-    /// its hold is consumed by <see cref="SecondTapOnPicture"/>.
+    /// The hold expired with no second click: toggle playback and let the pause badge acknowledge it.
+    /// Picture clicks do not reveal the controls, whether pausing or resuming.
     /// </summary>
     private void OnTapHoldElapsed(object? sender, object e)
     {
@@ -496,18 +544,8 @@ public sealed partial class PlayerPage : IWin32KeySink
             // 点击手势的第二环（另两环见 OnPointerPressed 与 SecondTapOnPicture）。
             Log.Debug(LogCategory, "点击画面：攥够到点，下发暂停/播放");
 
-            // 用户令 2026-10-07「暂停时不要自动显示播放控件」：落在暂停上的这一下不唤控件（暂停/播放
-            // 的回执是那枚徽标）；恢复播放照旧给宽限。
-            var resuming = ViewModel.Paused;
+            // 暂停与恢复都只反馈徽标；控件显隐继续由指针位置决定（用户令 2026-10-08）。
             ViewModel.TogglePause();
-
-            // 单击证实了才给控件宽限（2026-09-18 随「双击不呼出控件」从按压挪到这里）：快双击从头到尾
-            // 没有控件可闪；慢双击的闪只剩攥不住的那一小段，且在切换全屏的当拍由 Silence 收回。
-            if (resuming)
-            {
-                if (_cursorHidden) _woke = "点击（画面上按下）";
-                if (_chrome.WakeFully(Now)) Render();
-            }
         }
     }
 

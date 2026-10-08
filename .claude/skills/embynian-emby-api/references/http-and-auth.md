@@ -34,7 +34,9 @@ Accept: application/json
 
 ## 重定向与凭据边界
 
-`AllowAutoRedirect = false`、`UseCookies = false` —— **构造时强制覆盖，注入自定义 handler 也绕不过**（`EmbyHttp.cs:52-62`）。跳转由 `EmbyHttpRedirect` 手工跟，规则：
+`EmbyHttp` 默认禁用 `AllowAutoRedirect` 和 `UseCookies`；构造函数也会覆盖**直接传入**的 `SocketsHttpHandler` 或 `HttpClientHandler` 的这两个属性。它不会遍历 `DelegatingHandler.InnerHandler`：增加日志、重试等包装层时，必须显式禁用末端传输 handler 的自动跳转和 Cookie，并验证包装链，不能套用直接 handler 的测试结论。否则自动跟随的跳转不会交给 `EmbyHttpRedirect` 检查。
+
+跳转由 `EmbyHttpRedirect` 手工跟，规则：
 
 - 上限 5 跳。
 - **认证只属于最初来源。** 一旦跳到别的源，`authenticated` 永久置 false，**整条链都不能再拿回认证**。
@@ -73,11 +75,11 @@ Accept: application/json
 
 ## 正文形状不是一套
 
-同一个"上传一张图"，两条路的正文完全不同，混用必然失败：
+当前客户端的两条图片上传路径发送不同正文，修改时先核对对应实现：
 
 | 场景 | 正文 | 出处 |
 | --- | --- | --- |
 | 条目封面 | 图片**原始字节** + 真实 content type | `PostBytesAsync`，见 `EmbyUrl.Image` 一族 |
 | 用户头像 | **Base64 的 ASCII 文本**，content type 仍写 `image/jpeg` / `image/png` | `EmbyClient.Users.cs:74-79` |
 
-`EmbyClient.Users.cs:74` 那行注释就是为这件事留的。按网页端的行为抄，别按另一条路的直觉推。
+稳定入口是 `EmbyClient.UploadImageAsync` 和 `UploadManagedUserImageAsync`。本地 `4.10.0.40` 规格的两条上传操作 summary 都要求 Base64，requestBody 又都描述为 binary stream；它与当前条目图片的发送方式存在冲突。这里记录源码行为，不把它当作已验证的服务器保证。变更编码前核对既有实测证据，若需实际上传则按 CLAUDE.md 的服务器写操作范围执行。

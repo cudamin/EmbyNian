@@ -162,6 +162,12 @@ end
 function cursor:trigger(event, shortcut)
 	local forward, zone_handled = true, false
 	local meta = self.event_meta[event]
+	-- EMBYNIAN[drag-cancel] — mpv 交给原生拖窗前发 canceled 的松键；它只负责收尾，不能变成点击。
+	local canceled = shortcut and shortcut.canceled == true
+	if canceled and meta and meta.is_end then
+		self.last_events[meta.start_event] = nil
+		Elements:trigger('global_mouse_leave')
+	end
 	local start_zone = meta and meta.is_start and self:find_zone(meta.trigger_event)
 
 	-- Call raw event handlers.
@@ -169,7 +175,7 @@ function cursor:trigger(event, shortcut)
 	local callbacks = self.handlers[event]
 	if zone or #callbacks > 0 then
 		forward = false
-		if zone and shortcut then
+		if zone and shortcut and not canceled then
 			zone.handler(shortcut)
 			zone_handled = true
 		end
@@ -178,7 +184,7 @@ function cursor:trigger(event, shortcut)
 
 	if event ~= 'move' then
 		-- Call compound/parent (click) event handlers if both start and end events are within `parent_zone.hitbox`.
-		if meta then
+		if meta and not canceled then
 			-- Trigger compound event
 			local parent_zone = self:find_zone(meta.trigger_event)
 			if parent_zone then
@@ -195,7 +201,7 @@ function cursor:trigger(event, shortcut)
 		end
 
 		-- Forward unhandled events.
-		if forward then
+		if forward and not canceled then
 			local forward_name = self.event_forward_map[event]
 			local last_down = meta and meta.is_end and self.last_events[meta.start_event]
 			local down_zone_handled = last_down and last_down.zone_handled
@@ -531,19 +537,27 @@ end
 mp.observe_property('mouse-pos', 'native', handle_mouse_pos)
 mp.observe_property('touch-pos', 'native', handle_touch_pos)
 
+-- 保留原 mbtn_left 分组的 allow-vo-dragging/allow-hide-cursor；旧 set_key_bindings 回调会丢 canceled。
+function cursor:create_primary_handler(mods)
+	return function(info)
+		if self.disabled or (info.event ~= 'down' and info.event ~= 'up') then return end
+		local event = info.event == 'down' and 'primary_down' or 'primary_up'
+		if info.event == 'down' then handle_mouse_pos(nil, mp.get_property_native('mouse-pos')) end
+		local shortcut = create_shortcut(event, mods)
+		shortcut.canceled = info.canceled == true
+		self:trigger(event, shortcut)
+	end
+end
+
 -- Key binding groups
 local modifiers = {nil, 'alt', 'alt+ctrl', 'alt+shift', 'alt+ctrl+shift', 'ctrl', 'ctrl+shift', 'shift'}
 local primary_bindings = {}
 for i = 1, #modifiers do
 	local mods = modifiers[i]
 	local mp_name = (mods and mods .. '+' or '') .. 'mbtn_left'
-	primary_bindings[#primary_bindings + 1] = {
-		mp_name,
-		cursor:create_handler('primary_up', create_shortcut('primary_up', mods)),
-		cursor:create_handler('primary_down', create_shortcut('primary_down', mods), function(...)
-			handle_mouse_pos(nil, mp.get_property_native('mouse-pos'))
-		end),
-	}
+	local binding = 'embynian-primary-' .. i
+	mp.add_key_binding(nil, binding, cursor:create_primary_handler(mods), {complex = true})
+	primary_bindings[#primary_bindings + 1] = {mp_name, 'script-binding ' .. mp.get_script_name() .. '/' .. binding}
 end
 mp.set_key_bindings(primary_bindings, 'mbtn_left', 'force')
 mp.set_key_bindings({

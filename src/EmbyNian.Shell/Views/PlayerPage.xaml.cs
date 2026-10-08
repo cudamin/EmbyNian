@@ -78,6 +78,7 @@ public sealed partial class PlayerPage : UserControl
     /// cannot change.
     /// </summary>
     private readonly Storyboard _pulse;
+    private readonly (DoubleKeyFrame Frame, double AnimatedValue)[] _pulseFrames;
 
     /// <summary>
     /// The two geometries the badge draws with, pause and play. Read once for the same reason
@@ -370,6 +371,8 @@ public sealed partial class PlayerPage : UserControl
         _seekClock.Scale = PlayerViewModel.SeekScale;
 
         _pulse = (Storyboard)Resources["PulseStoryboard"];
+        _pulseFrames = _pulse.Children.OfType<DoubleAnimationUsingKeyFrames>()
+            .SelectMany(animation => animation.KeyFrames).Select(frame => (frame, frame.Value)).ToArray();
         _pauseArt = Build(PulseArt.Pause);
         _playArt = Build(PulseArt.Play);
 
@@ -385,6 +388,7 @@ public sealed partial class PlayerPage : UserControl
         // on a control that handles it, and a capture can be taken away without any release at all.
         Root.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnPointerReleased), handledEventsToo: true);
         Root.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnPointerCaptureLost), handledEventsToo: true);
+        Root.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnPointerCaptureLost), handledEventsToo: true);
 
         // Same reason again, one level down: the slider fills the track and handles every move over it,
         // so a preview listening on its own PointerMoved would only ever see the two-pixel margin.
@@ -566,6 +570,7 @@ public sealed partial class PlayerPage : UserControl
         _presentationGeneration++;
         CancelWindowChange();
         _ticker.Stop();
+        EndWindowDrag();
         DropTapHold();
         StopSkipCountdown();
 
@@ -897,6 +902,7 @@ public sealed partial class PlayerPage : UserControl
     private void OnPlaybackStarted()
     {
         if (!Attached || !_onStage) return;
+        EndWindowDrag();
         DropTapHold();
         // Whatever the last file's pause state was, this one has not been paused by anybody yet.
         _paused = null;
@@ -1024,6 +1030,14 @@ public sealed partial class PlayerPage : UserControl
         // Restarted rather than layered: a second toggle inside the first fifth of a second is one new
         // acknowledgement, not two overlapping ones.
         _pulse.Stop();
+        // 关闭动效仍保留 200 ms 的静态反馈；同一故事板只负责计时，透明度与缩放始终为 1。
+        var animate = HomeMotion.AnimationsEnabled;
+        if (!animate)
+        {
+            PulseBadge.Opacity = 1;
+            PulseScale.ScaleX = PulseScale.ScaleY = 1;
+        }
+        foreach (var (frame, value) in _pulseFrames) frame.Value = animate ? value : 1;
         _pulse.Begin();
     }
 

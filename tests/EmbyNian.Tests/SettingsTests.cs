@@ -114,6 +114,15 @@ internal static class SettingsTests
 
     private static void RegisterMigration()
     {
+        Test("设置：UI 动画旧配置默认开启，关闭后保存读回仍关闭", () =>
+        {
+            var settings = SettingsMigration.FromJson("{\"Ui\":{}}", Protector);
+            Assert.True(settings.Ui.AnimationsEnabled);
+            settings.Ui.AnimationsEnabled = false;
+            var saved = JsonSerializer.Serialize(settings, SettingsSerializer.WriteOptions);
+            Assert.False(SettingsMigration.FromJson(saved, Protector).Ui.AnimationsEnabled);
+        });
+
         Test("迁移：空文件与损坏内容都回到默认设置", () =>
         {
             foreach (var json in new[] { "", "   ", "[]", "\"文本\"" })
@@ -1449,6 +1458,7 @@ internal static class SettingsTests
             ui.ShowWatchedIndicators = false;
             ui.ShowHomeBanner = false;
             ui.CompactMode = true;
+            ui.AnimationsEnabled = false;
             ui.ImageCacheMegabytes = ImageCachePolicy.MaxMegabytes;
             ui.ScoreSource = ScoreSource.Critic;
             ui.HomeRows = [new HomeRowSetting { Key = "library:1", Title = "改过", Visible = false }];
@@ -1472,6 +1482,7 @@ internal static class SettingsTests
             Assert.Equal(fresh.ShowWatchedIndicators, ui.ShowWatchedIndicators);
             Assert.Equal(fresh.ShowHomeBanner, ui.ShowHomeBanner, "「恢复默认」之后主页轮播大图要是开的");
             Assert.Equal(fresh.CompactMode, ui.CompactMode, "「恢复默认」之后精简模式要是关的（说明全部放回来）");
+            Assert.True(ui.AnimationsEnabled, "恢复默认重新开启 UI 动画");
             Assert.Equal(fresh.ImageCacheMegabytes, ui.ImageCacheMegabytes);
             Assert.Equal(fresh.ScoreSource, ui.ScoreSource);
             Assert.Equal(0, ui.HomeRows.Count, "主页版面回到空，也就是「照默认版面排」");
@@ -1589,6 +1600,7 @@ internal static class SettingsTests
                     Assert.True(MutateAll(group) > 0, $"{group.GetType().Name} 一项都没改，这一条会变空话");
                 source.Ui.Theme = "midnight";
                 source.Ui.PageSize = 37;
+                source.Ui.AnimationsEnabled = false;
                 source.Shortcuts.Bindings["toggle-pause"] = "F";
                 source.Audio.ExclusiveMode = true;
                 source.Audio.DelayMilliseconds = 250;
@@ -1616,6 +1628,7 @@ internal static class SettingsTests
                 AssertDefaults(target.Shaders, loaded.Shaders);
                 Assert.Equal("midnight", target.Ui.Theme);
                 Assert.Equal(37, target.Ui.PageSize);
+                Assert.False(target.Ui.AnimationsEnabled, "UI 动画偏好随备份恢复");
                 Assert.Equal("F", target.Shortcuts.Bindings["toggle-pause"]);
                 Assert.True(target.Audio.ExclusiveMode, "音频独占是偏好，跟着备份走");
                 Assert.Equal(250, target.Audio.DelayMilliseconds, "音频延迟是偏好，跟着备份走");

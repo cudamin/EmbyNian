@@ -85,21 +85,29 @@ public sealed partial class PlayerPage
     }
 
     /// <summary>
-    /// 画面菜单最末尾那三行设置入口逐行对账：表里每一行都要在菜单里找得到同名行、行上带着同一个设置落点，而
+    /// 「播放设置」内的三行入口逐行对账：表里每一行都要在子菜单里找得到同名行、行上带着同一个设置落点，而
     /// 那个落点必须是一张真的设置卡（<see cref="SettingsViewModel.IsCardCategory"/>）。
     /// <para>
     /// 期望值从 <see cref="PlayerSettingsLinks.All"/> 现取，不写死三个名字 —— 表里加一行、改一行，这条当天跟上。
-    /// 独占模式推的是同一张表，那边点中回宿主也是同一句执行（<c>PlayerViewModel.RequestSettings</c>），所以这
-    /// 一条读数同时替两条管线看着「按钮在不在、点下去开哪张卡」。
+    /// 独占模式共用这张表与执行出口，但这里的控件检查只覆盖集成菜单。
     /// </para>
     /// </summary>
     private static (bool Ok, string Detail) ProbeSettingsRows(IEnumerable<MenuFlyoutItemBase> items)
     {
-        var rows = items.OfType<MenuFlyoutItem>()
+        var roots = items.ToList();
+        var groups = roots.OfType<MenuFlyoutSubItem>()
+            .Where(item => item.Text == PlayerSettingsLinks.MenuLabel).ToList();
+        if (groups.Count != 1) return (false, $"「{PlayerSettingsLinks.MenuLabel}」子菜单应有 1 个，实际 {groups.Count} 个");
+
+        var rows = groups[0].Items.OfType<MenuFlyoutItem>()
             .Where(item => item.Tag is PlayerSettingsLink)
             .ToList();
 
         var trouble = new List<string>();
+        if (roots.OfType<MenuFlyoutItem>().Any(item => item.Tag is PlayerSettingsLink))
+            trouble.Add("设置入口仍在根菜单平铺");
+        if (!rows.Select(item => item.Text).SequenceEqual(PlayerSettingsLinks.All.Select(link => link.Label)))
+            trouble.Add("播放设置子项的顺序与设置表不一致");
 
         foreach (var link in PlayerSettingsLinks.All)
         {
@@ -122,12 +130,12 @@ public sealed partial class PlayerPage
 
         return (trouble.Count == 0,
             trouble.Count == 0
-                ? $"{rows.Count} 行都在、都落在一张真卡上（{string.Join('、', PlayerSettingsLinks.All.Select(link => link.Label))}）"
+                ? $"{rows.Count} 行都在「{PlayerSettingsLinks.MenuLabel}」内、都落在一张真卡上（{string.Join('、', PlayerSettingsLinks.All.Select(link => link.Label))}）"
                 : string.Join('、', trouble));
     }
 
     /// <summary>
-    /// 点一下右键画面菜单末尾那三行设置入口里的一行：按真菜单行的真处理器走（<c>OnPictureSettingsRow</c>），
+    /// 点一下「播放设置」中的一行：按真菜单行的真处理器走（<c>OnPictureSettingsRow</c>），
     /// 不是自检另起一句「等于点了它」—— 这条读数要连起来的是「菜单行 → view model → 外壳开窗」整根链子。
     /// 菜单行不在（没挂上、或表里没有这个名字）返回 false。
     /// <para>
@@ -138,7 +146,9 @@ public sealed partial class PlayerPage
     {
         OnPictureMenuOpening(this, new object());
 
-        var row = PictureMenu.Items.OfType<MenuFlyoutItem>().FirstOrDefault(item =>
+        var settings = PictureMenu.Items.OfType<MenuFlyoutSubItem>()
+            .FirstOrDefault(item => item.Text == PlayerSettingsLinks.MenuLabel);
+        var row = settings?.Items.OfType<MenuFlyoutItem>().FirstOrDefault(item =>
             item.Tag is PlayerSettingsLink link && string.Equals(link.Label, label, StringComparison.Ordinal));
 
         if (row is null) return false;

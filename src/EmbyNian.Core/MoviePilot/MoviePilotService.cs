@@ -168,23 +168,9 @@ public sealed partial class MoviePilotService(
     }
 
     /// <summary>
-    /// 下载管理的那一眼（<c>GET download/</c>）：正在下载的每一行，识别入库留下的媒体名和海报都带着。
-    /// 首页的「正在下载」一排每几秒问一次的就是这一条 —— 所以计数只在 Debug 级记（Info 级五秒一条，日志就成了流水账）。
-    /// </summary>
-    public async Task<IReadOnlyList<MoviePilotDownloadTask>> DownloadingAsync(CancellationToken cancellationToken)
-    {
-        var data = await CallAsync((apiBase, token) =>
-            client.GetAsync(apiBase, token, "download/", cancellationToken), cancellationToken).ConfigureAwait(false);
-
-        var tasks = MoviePilotDownload.Parse(data);
-        Log.Debug(Category, $"MoviePilot 正在下载：{tasks.Count} 个任务");
-        return tasks;
-    }
-
-    /// <summary>
     /// 经 MoviePilot 取一张图（<c>system/cache/image</c>）。这个接口不认 Bearer 头，认的是网页端那枚资源 Cookie
     /// —— 而那枚 Cookie 由之前任何一趟带 Bearer 的 API 调用顺手种进客户端的 Cookie 罐子（见
-    /// <see cref="MoviePilotClient"/> 构造器那段），轮询先于取图，次序天然是对的。服务器自己够得着图源
+    /// <see cref="MoviePilotClient"/> 构造器那段）；订阅列表或文件统计读取后再请求图片。服务器自己够得着图源
     /// （TMDB）还开着磁盘缓存，客户端直连不上图源时这条路是唯一能出图的。取不到抛异常，由调用方决定兜底。
     /// </summary>
     public async Task<byte[]> FetchImageAsync(string url, CancellationToken cancellationToken)
@@ -194,10 +180,6 @@ public sealed partial class MoviePilotService(
             apiBase, $"api/v1/system/cache/image?url={Uri.EscapeDataString(url)}");
         return await client.GetBytesAsync(proxy, cancellationToken).ConfigureAwait(false);
     }
-
-    /// <summary>直连取图：客户端自己够得着图源时最快的一条，也不惊动服务器。</summary>
-    public Task<byte[]> FetchImageDirectAsync(string url, CancellationToken cancellationToken) =>
-        client.GetBytesAsync(new Uri(url), cancellationToken);
 
     /// <summary>
     /// 一趟需要登录态的调用：先拿到（必要时现登录）会话，遇到令牌过期就作废、重登一次再重放。只重放一次 —— 重登

@@ -46,6 +46,7 @@ internal sealed partial class ShellNavigationProbe
             await CaseAsync("离页不会复活补页", PagingCancelAsync);
             await CaseAsync("新查询失败不混旧页", QueryFailureAsync);
             await CaseAsync("同词重试并保留导航参数", SearchStateAsync);
+            await CaseAsync("搜索居中、工具栏换行和来源切换", SearchHeaderLayoutAsync);
             await CaseAsync("加载中禁止播放全部", PlaybackBusyAsync);
             await CaseAsync("字母查询过期不继续", JumpCancelAsync);
             await CaseAsync("切季回到原季撤销旧请求", SeasonCancelAsync);

@@ -36,7 +36,7 @@ public sealed partial class MoviePilotSubscriptionPoster : UserControl
     }
     public event EventHandler? OpenRequested;
     public event EventHandler? MenuRequested;
-    internal FrameworkElement MenuAnchor => SubscriptionMore;
+    internal FrameworkElement MenuAnchor => SubscriptionMore.Visibility == Visibility.Visible ? SubscriptionMore : SubscriptionCover;
     internal double Zoom => PosterMotion.ScaleX;
     internal int PointerEntries { get; private set; }
     private static void OnCardChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args) =>
@@ -56,7 +56,13 @@ public sealed partial class MoviePilotSubscriptionPoster : UserControl
     private void OnLostFocus(object sender, RoutedEventArgs args) { _focused = false; Animate(); }
     private void OnPressed(object sender, PointerRoutedEventArgs args) { _pressed = true; Animate(); }
     private void OnReleased(object sender, PointerRoutedEventArgs args) { _pressed = false; Animate(); }
-    internal void SetHovered(bool value) { _hovered = value; if (!value) _pressed = false; Animate(); }
+    internal void SetHovered(bool value)
+    {
+        _hovered = value;
+        SubscriptionMore.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+        if (!value) _pressed = false;
+        Animate();
+    }
 
     private void Animate()
     {
@@ -103,6 +109,7 @@ public sealed partial class MoviePilotSubscriptionPoster : UserControl
     {
         _watch?.Leave();
         _hovered = _focused = _pressed = false;
+        SubscriptionMore.Visibility = Visibility.Collapsed;
         _motion?.Stop(); _motion = null;
         PosterMotion.ScaleX = PosterMotion.ScaleY = PressMotion.ScaleX = PressMotion.ScaleY = 1;
         Art.Style = (Style)Application.Current.Resources["EgFrameStyle"];

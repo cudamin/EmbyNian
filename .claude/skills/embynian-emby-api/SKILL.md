@@ -19,7 +19,7 @@ GET {ApiBase}openapi          # 例如 http://host:8896/emby/openapi
 
 - **不需要任何凭据**：实测不带 `api_key`、不带 `X-Emby-Token` 也返回 200。
 - 实测（2026-10-08，本机那台）：3.5 MB、OpenAPI `3.0.1`、`info.version` = `4.10.0.40`、434 条路径 / 500 个操作 / 340 个 schema。**这是观测值不是常量** —— 服务器升级就变，用之前重取一次。
-- 官方 UI 壳：`https://swagger.emby.media/?api_key=<key>&url=<urlencoded 规格地址>`。那个 `api_key` 只给 UI 试调用用，不是取规格的前提。
+- 官方 UI 壳：`https://swagger.emby.media/?url=<urlencoded 规格地址>`，仅用于匿名查看规格。不要把令牌填入这个第三方站点或 URL；需要鉴权的核对，通过进程内请求头直接访问受信任的服务器，并遵守 CLAUDE.md 的操作授权范围。
 - 落盘快照在 `work/emby-openapi.json`（`work/` 已被 gitignore），只作离线对照，不作事实来源。
 
 ## 地形
@@ -48,9 +48,9 @@ Videos/{itemId}/stream{ext}?Static=true&MediaSourceId=…
 
 ### 2. 规格有缺口，客户端在用规格里没有的接口
 
-`Notifications/Services`（GET，`EmbyClient.cs:460`）和 `Notifications/Services/Configured`（GET / POST / DELETE，`:470/482/486`）**在规格里都搜不到**；规格只登记了 `/Notifications/Types`、`/Notifications/Admin`、`/Notifications/Services/Test`、`/Notifications/Services/Defaults`。
+本地 `4.10.0.40` 规格未登记客户端使用的 `GET Notifications/Services`、`GET / POST / DELETE Notifications/Services/Configured`，也未登记通知配置选项使用的 `GET Users` 和 `GET Library/VirtualFolders`。后两条分别由 `GetNotificationUsersAsync`、`GetNotificationLibrariesAsync` 调用，返回列表，不能直接替换成返回分页结果的查询接口。
 
-**结论：规格是"服务器实现"的近似，不是全集。** 客户端在用的路径如果规格里没有，先确认是缺口，而不是自己写错。发现新的缺口就登记到 [接口清单](references/endpoints.md)。
+**规格缺项不证明接口不存在，源码调用也不证明当前服务器支持它。** 分别记录源码请求、规格覆盖和实测证据；没有实测时保留待核实状态。发现新的缺口就登记到 [接口清单](references/endpoints.md)。
 
 ### 3. 参数名不一样不代表接口不一样
 
@@ -63,12 +63,12 @@ Videos/{itemId}/stream{ext}?Static=true&MediaSourceId=…
 | `Items/{itemId}/Images/{imageType}` | `/Items/{Id}/Images/{Type}` |
 | `Users/{sourceId}/CopyData` | `/Users/{UserId}/CopyData` |
 
-是**同一条路**。用规格校对时按结构对，别按字面量 grep —— 字面量对不上是常态。反过来，`Items/{Id}/Images/Chapter/{Index}` 没有独立条目，靠通配形式 `/Items/{Id}/Images/{Type}/{Index}/…` 覆盖。
+是**同一条路**。用规格校对时按结构对，别按字面量 grep —— 字面量对不上是常态。章节图使用规格已登记的 `/Items/{Id}/Images/{Type}/{Index}`，其中 `Type=Chapter`；不要把它写成带任意尾部的通配路由。
 
 ## 别自己发明的地方
 
 - **基址只在一处归一。** `EmbyServerAddress.Normalize` 把任何输入统一成恒以 `/emby/` 结尾的 `ApiBase`（用户粘进来的 `/emby` 先被剥掉再拼回）。所以 `EmbyUrl.Combine` 里的相对路径**不带 `/emby`**。
-- **凭据进头不进 URL。** `EmbyHttp.cs:310-312` 发 `X-Emby-Authorization` + `X-Emby-Token`。`EmbyUrl.Stream` 的注释写死了"流地址刻意不带 `api_key`"，token 由 mpv 用 `--http-header-fields` 送 —— 这样它不会进代理和服务器访问日志。**不要把 `api_key` 塞回 query**，`Redact`（`EmbyHttp.cs:419`）剥 query 正是为此。
+- **凭据通过头传递，传递通道同样要核对。** `EmbyHttp.SendAsync` 为每次请求设置 `X-Emby-Authorization` 和 `X-Emby-Token`，`EmbyUrl.Stream` 不带 `api_key`。内置后端由 `LibMpvBackend` 通过进程内 API 设置 `http-header-fields`；外部后端先由 `MpvProcessBackend` 校验 IPC 服务端属于刚启动的进程，再发送 `MpvArgumentBuilder.LoadCommands` 构造的请求头和加载命令。不要将令牌放入 URL、启动参数或日志；具体链路见 [播放技能](../embynian-playback/SKILL.md)。`EmbyHttp.Redact` 去掉日志 URL 的 query，不能代替这些传递边界。
 - **逐请求头，别动 `DefaultRequestHeaders`。** v1 在每次调用前改它，一并发取海报就自己跟自己抢（`EmbyHttp.cs:13-16`）。
 - **路径段要过守卫。** `LibraryId`（`EmbyClient.Libraries.cs:120`）和 `UserSegment`（`EmbyClient.Users.cs:130`）拒绝 `.`、`..` 和含 `/ \ ? #` 的 id，再 `Uri.EscapeDataString`。新写把 id 拼进路径的方法时照抄这两个，别直接插值。
 

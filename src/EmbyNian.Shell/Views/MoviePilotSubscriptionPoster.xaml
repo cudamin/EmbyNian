@@ -21,14 +21,19 @@
         <Border x:Name="SubscriptionProgress" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8,8,56,8" MaxWidth="106"
             Background="{ThemeResource EgScrimBrush}" CornerRadius="8" Padding="8,4" IsHitTestVisible="False"
             Visibility="{x:Bind Card.ProgressVisibility, Mode=OneWay}">
-            <StackPanel>
-                <TextBlock Text="订阅进度" Style="{StaticResource EgCaptionStyle}" Foreground="{ThemeResource EgOnScrimBrush}" />
-                <TextBlock Text="{x:Bind Card.ProgressCount, Mode=OneWay}" Style="{StaticResource EgCaptionStyle}" Foreground="{ThemeResource EgOnScrimBrush}" />
-            </StackPanel>
+            <TextBlock Text="{x:Bind Card.ProgressCount, Mode=OneWay}" Style="{StaticResource EgCaptionStyle}" Foreground="{ThemeResource EgOnScrimBrush}" />
         </Border>
+        <!-- 与 PosterCard 的 32px 更多按钮对齐；这里位于画框外层，边距包含画框的 1px 边线。 -->
         <Button x:Name="SubscriptionMore" Style="{StaticResource EgIconButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-            Margin="8" Background="{ThemeResource EgScrimBrush}" Foreground="{ThemeResource EgOnScrimBrush}"
+            Width="32" Height="32" MinWidth="0" Margin="0,0,7,5" Visibility="Collapsed"
+            Background="Transparent" Foreground="{ThemeResource EgOnScrimBrush}"
             Click="OnMore" Tag="{x:Bind Card, Mode=OneWay}" AutomationProperties.Name="订阅管理" ToolTipService.ToolTip="订阅管理">
+            <Button.Resources>
+                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="EgOnScrimBrush" />
+                <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="EgOnScrimDimBrush" />
+            </Button.Resources>
             <FontIcon Glyph="&#xE712;" />
         </Button>
     </Grid>

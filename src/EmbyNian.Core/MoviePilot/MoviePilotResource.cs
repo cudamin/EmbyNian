@@ -33,7 +33,25 @@ public sealed record MoviePilotResource
         (MediaId is { Length: > 0 } ? $"媒体：{MoviePilotSourceNames.Label(MediaSource)} · {MediaId} · {MediaType ?? "类型未提供"}\n" : "") +
         $"{PromotionText}\n" + (HitAndRun ? "此资源有 HR 考核，请先在种子页面核对做种要求。" : "优惠和下载规则以站点当前页面为准。");
 
-    public string SizeText => Size > 0 ? MoviePilotDownload.SizeText(Size) : "";
+    public string SizeText
+    {
+        get
+        {
+            if (Size <= 0) return "";
+
+            string[] units = ["B", "KB", "MB", "GB", "TB"];
+            var size = (double)Size;
+            var unit = 0;
+            while (size >= 1024 && unit < units.Length - 1)
+            {
+                size /= 1024;
+                unit++;
+            }
+
+            return $"{size.ToString(unit == 0 ? "0" : "0.##", CultureInfo.InvariantCulture)} {units[unit]}";
+        }
+    }
+
     public string LabelsText => string.Join(" · ", Labels);
     public string PublishedLine => PublishedAt is { } time
         ? $"发布于 {time.ToLocalTime():yyyy-MM-dd HH:mm}"

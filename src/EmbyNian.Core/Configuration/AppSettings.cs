@@ -1176,6 +1176,9 @@ public sealed class UiSettings
     /// </summary>
     public string Theme { get; set; } = Theming.UiThemes.DefaultId;
 
+    /// <summary>界面动效开关；默认保留现有动画，关闭时直接显示最终状态。仍遵循 Windows 的动画设置。</summary>
+    public bool AnimationsEnabled { get; set; } = true;
+
     // 「海报宽度（像素）」那一行 2026-09-05 按用户的话删掉了（「删掉设置中的海报宽度」）：卡片从此固定用
     // CardSize 的默认尺寸（海报 170、剧照 300、演职人员人像 124）。这里不留一个存而不用的键 —— 反序列化碰到
     // 没处放的键本来就不出声，所以旧设置文件里留下的那一行照旧读得起来，只是没人再听它的。

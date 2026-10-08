@@ -102,6 +102,7 @@ public partial class App : Application
             _container = services;
 
             var ui = services.GetRequiredService<ISettingsService>().Settings.Ui;
+            Views.HomeMotion.ApplyPreference(ui.AnimationsEnabled);
 
             // 设置里配了的截图目录（设置 → 播放器）也要一开始就在。mpv 会在第一张截图时自己建它，可「关于」卡
             // 的「打开」和自检的「截图有落点」都等不到那一张。建失败不挡启动：没有这块盘的机器照样能用，

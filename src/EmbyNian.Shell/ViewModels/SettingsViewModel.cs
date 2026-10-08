@@ -1038,9 +1038,14 @@ public sealed partial class SettingsViewModel : PageViewModel
                 + "只是下次看到那些封面时要重新下载一遍。",
             after: () => ShellPrefs.Apply(ui));
 
-        return new SettingSection("界面", "界面", "配色主题、隐藏功能下方说明、媒体库分页和图片缓存上限。",
+        return new SettingSection("界面", "界面", "配色主题、UI 动画、隐藏功能下方说明、媒体库分页和图片缓存上限。",
         [
             Themes,
+
+            Toggle("UI 动画", "控制页面切换、卡片悬停等界面动效，修改后立即生效；开启时仍遵循 Windows 动画设置",
+                () => ui.AnimationsEnabled,
+                value => ui.AnimationsEnabled = value,
+                after: () => ShellPrefs.Apply(ui)),
 
             // 「锁定窗口比例大小」原来就在这里，2026-09-05 按用户的话整条删掉了（「删除设置中锁定比例的功能」）
             // —— 浏览时的窗口从此随便拉，放片子时形状照旧跟着画面走。紧跟着那一行是「默认收起侧边栏」，

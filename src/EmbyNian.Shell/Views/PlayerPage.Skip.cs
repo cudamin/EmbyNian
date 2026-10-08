@@ -44,7 +44,11 @@ public sealed partial class PlayerPage
         }
 
         // 关动效的那一档不插值：绑定量自带的阶梯就是它要的「不动画」。
-        if (!HomeMotion.AnimationsEnabled) return;
+        if (!HomeMotion.AnimationsEnabled)
+        {
+            StopSkipCountdown();
+            return;
+        }
 
         _skipCountdownValue = ViewModel.SkipRemaining;
         _skipCountdownAt = Now;
@@ -85,9 +89,10 @@ public sealed partial class PlayerPage
         timer.Interval = TimeSpan.FromMilliseconds(SkipCountdownTickMilliseconds);
         timer.Tick += (_, _) =>
         {
-            if (!ViewModel.SkipOffered)
+            if (!ViewModel.SkipOffered || !HomeMotion.AnimationsEnabled)
             {
                 StopSkipCountdown();
+                SkipCountdown.Value = ViewModel.SkipRemaining;
                 return;
             }
 

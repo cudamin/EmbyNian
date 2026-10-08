@@ -7,6 +7,7 @@
 读取默认值、候选选项、滤镜循环与共享/失效端点/null AO 的零信号用例。
 固定 config=no、load-scripts=no、vo=null、video=no、audio-exclusive=no。
 安全选项失败即中止并释放句柄；不读用户配置、不播放媒体库、不申请独占。
+采集前独占创建新报告；逐阶段保留用例、选项和初始化/日志订阅返回码。
 退出0只表示采集完整，须判读报告中的返回码、读数、警告和预期失败。
 """
 import argparse
@@ -77,29 +78,41 @@ def decode(pointer):
 
 
 class Session:
-    def __init__(self, options=None):
-        selected = dict(options or {})
-        for name, value in selected.items():
-            if name in BASE and value != BASE[name]:
-                raise ValueError(f"不能覆盖隔离选项 {name}")
-        self.handle = MPV.mpv_create()
-        if not self.handle:
-            raise RuntimeError("mpv_create 返回空句柄")
+    def __init__(self, options=None, record=None):
+        self.handle = None
         self.logs = []
-        self.option_results = {}
+        self.record = record if record is not None else {}
+        self.option_results = self.record.setdefault("option_results", {})
+        selected = dict(options or {})
+        self.record["options"] = {**BASE, **selected}
+        self.record["stage"] = "validate-options"
         try:
-            for name, value in {**BASE, **selected}.items():
+            for name, value in selected.items():
+                if name in BASE and value != BASE[name]:
+                    raise ValueError(f"不能覆盖隔离选项 {name}")
+            self.record["stage"] = "create"
+            self.handle = MPV.mpv_create()
+            if not self.handle:
+                raise RuntimeError("mpv_create 返回空句柄")
+            for name, value in self.record["options"].items():
+                self.record["stage"] = f"option:{name}"
                 code = MPV.mpv_set_option_string(self.handle, name.encode(), str(value).encode())
                 self.option_results[name] = code
                 if code < 0:
                     raise RuntimeError(f"设置选项 {name} 失败：{code}")
+            self.record["stage"] = "initialize"
             code = MPV.mpv_initialize(self.handle)
+            self.record["initialize_code"] = code
             if code < 0:
                 raise RuntimeError(f"initialize 失败：{code}")
+            self.record["stage"] = "request-log-messages"
             code = MPV.mpv_request_log_messages(self.handle, b"v")
+            self.record["log_request_code"] = code
             if code < 0:
                 raise RuntimeError(f"订阅日志失败：{code}")
-        except BaseException:
+            self.record["stage"] = "ready"
+        except BaseException as error:
+            self.record["error"] = f"{type(error).__name__}: {error}"
             self.close()
             raise
 
@@ -140,31 +153,42 @@ class Session:
 
 
 def collect(report):
-    session = Session({"ao": "null"})
+    # Register each record before constructing its native session so startup failures retain evidence.
+    bootstrap = report["bootstrap"] = {"name": "bootstrap", "completed": False, "option_results": {}}
+    report["bootstrap_options"] = bootstrap["option_results"]
+    session = Session({"ao": "null"}, bootstrap)
     try:
+        bootstrap["stage"] = "versions"
         report["versions"] = {key: session.prop(key) for key in ["mpv-version", "ffmpeg-version"]}
-        report["bootstrap_options"] = session.option_results
         names = ["audio-device", "ao", "audio-channels", "audio-spdif", "audio-exclusive", "ad-lavc-ac3drc",
                  "audio-normalize-downmix", "audio-pitch-correction", "audio-samplerate", "audio-format",
                  "gapless-audio", "replaygain", "volume", "volume-max", "audio-delay", "af"]
+        bootstrap["stage"] = "option-info"
         report["option_info"] = {name: {kind: session.prop(f"option-info/{name}/{kind}") for kind in
                                         ["default-value", "choices", "min", "max"]} for name in names}
         values = {"audio-channels": ["auto-safe", "auto", "stereo", "5.1", "7.1", "7.1,5.1,stereo"],
                   "ad-lavc-ac3drc": ["0", "0.5", "1"], "audio-spdif": ["ac3,eac3,dts,dts-hd,truehd", ""],
                   "af": [DYNA, LOUD, ""], "audio-delay": ["-5", "0.001", "5", "0"], "volume": ["0", "100", "130"]}
+        bootstrap["stage"] = "accepted-values"
         report["accepted_values"] = {name: [{"value": value, "code": session.set(name, value), "readback": session.prop(name)}
                                             for value in candidates]
                                      for name, candidates in values.items()}
+        bootstrap["stage"] = "filter-cycles"
         report["filter_cycles"] = []
         for _ in range(4):
             code = session.command("cycle-values", "af", "", DYNA, LOUD)
             report["filter_cycles"].append({"code": code, "af": session.prop("af")})
+        bootstrap["stage"] = "delay"
         report["delay_nudges"] = []
-        session.set("audio-delay", "0.9")
+        report["delay_seed"] = {"code": session.set("audio-delay", "0.9"), "seconds": session.prop("audio-delay")}
         for _ in range(3):
             code = session.command("add", "audio-delay", "0.1")
             report["delay_nudges"].append({"code": code, "seconds": session.prop("audio-delay")})
         report["delay_reset"] = {"code": session.command("set", "audio-delay", "0"), "seconds": session.prop("audio-delay")}
+        bootstrap.update(stage="complete", completed=True)
+    except BaseException as error:
+        bootstrap["error"] = f"{type(error).__name__}: {error}"
+        raise
     finally:
         session.close()
 
@@ -175,14 +199,22 @@ def collect(report):
         ("null-dyna", {"ao": "null", "audio-channels": "stereo", "af": DYNA}),
         ("null-loud", {"ao": "null", "audio-channels": "stereo", "af": LOUD}),
     ]:
-        session = Session(options)
+        case = {"name": label, "completed": False}
+        report["silent_device_cases"].append(case)
+        session = Session(options, case)
         try:
-            code = session.command("loadfile", "av://lavfi:anullsrc=r=48000:cl=5.1:d=12", "replace")
+            case["stage"] = "loadfile"
+            case["load_code"] = session.command("loadfile", "av://lavfi:anullsrc=r=48000:cl=5.1:d=12", "replace")
+            case["stage"] = "pump"
             session.pump(2.0)
-            report["silent_device_cases"].append({"name": label, "option_results": session.option_results, "load_code": code,
-                "during": session.snapshot(),
-                "warnings": [entry for entry in session.logs if entry["level"] in ("warn", "error", "fatal")]})
+            case["stage"] = "snapshot"
+            case["during"] = session.snapshot()
+            case.update(stage="complete", completed=True)
+        except BaseException as error:
+            case["error"] = f"{type(error).__name__}: {error}"
+            raise
         finally:
+            case["warnings"] = [entry for entry in session.logs if entry["level"] in ("warn", "error", "fatal")]
             session.close()
 
 
@@ -194,28 +226,37 @@ def main(argv=None):
     args = parser.parse_args(argv)
     dll = args.dll.resolve()
     output = args.out or repo_root() / "work" / f"audio-probe-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    if output.exists():
-        parser.error("报告已存在，请使用新的 --out 路径")
     output.parent.mkdir(parents=True, exist_ok=True)
-    report = {"dll": str(dll), "scope": "无声隔离采集：不发可闻信号、不申请独占、不读用户配置", "completed": False}
-    code = 1
     try:
-        report["dll_sha256"] = hashlib.sha256(dll.read_bytes()).hexdigest()
-        MPV = load_dll(dll)
-        collect(report)
-        report["completed"] = True
-        code = 0
-    except Exception as error:
-        report["error"] = f"{type(error).__name__}: {error}"
-    finally:
-        if MPV is not None:
-            MPV._directory_stack.close()
-            MPV = None
-        output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # Reserve the path before loading native code; a competing run cannot replace our evidence.
+        output_file = output.open("x", encoding="utf-8", newline="\n")
+    except FileExistsError:
+        parser.error("报告已存在，请使用新的 --out 路径")
+    with output_file:
+        report = {"dll": str(dll), "scope": "无声隔离采集：不发可闻信号、不申请独占、不读用户配置", "completed": False}
+        code = 1
+        try:
+            report["stage"] = "hash-library"
+            report["dll_sha256"] = hashlib.sha256(dll.read_bytes()).hexdigest()
+            report["stage"] = "load-library"
+            MPV = load_dll(dll)
+            report["stage"] = "collect"
+            collect(report)
+            report.update(stage="complete", completed=True)
+            code = 0
+        except Exception as error:
+            report["error"] = f"{type(error).__name__}: {error}"
+        finally:
+            if MPV is not None:
+                MPV._directory_stack.close()
+                MPV = None
+            json.dump(report, output_file, ensure_ascii=False, indent=2)
+            output_file.write("\n")
     print(json.dumps({"report": str(output), "completed": report["completed"], "error": report.get("error"),
                       "mpv": report.get("versions", {}).get("mpv-version"),
-                      "cases": [{"name": case["name"], "current_ao": case["during"]["current-ao"],
-                                 "warnings": [entry["text"] for entry in case["warnings"]]}
+                      "cases": [{"name": case["name"], "stage": case["stage"], "error": case.get("error"),
+                                 "current_ao": case.get("during", {}).get("current-ao"),
+                                 "warnings": [entry["text"] for entry in case.get("warnings", [])]}
                                 for case in report.get("silent_device_cases", [])]}, ensure_ascii=False, indent=2))
     return code
 

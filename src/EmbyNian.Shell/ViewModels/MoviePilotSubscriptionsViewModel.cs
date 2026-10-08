@@ -75,7 +75,31 @@ public sealed partial class MoviePilotSubscriptionsViewModel : PageViewModel
     public ObservableCollection<MoviePilotSubscriptionEpisodeRow> Episodes { get; } = [];
     public string MoviesNote => Movies.Count == 0 ? "暂无电影订阅" : $"{Movies.Count} 部电影";
     public string SeriesNote => Series.Count == 0 ? "暂无电视剧订阅" : $"{Series.Count} 条订阅";
-    public Visibility Visible => Show(_service?.Enabled == true);
+
+    /// <summary>
+    /// 整块板块（两个标题、两条空态说明、刷新键）在不在屏上。
+    /// <para>
+    /// **这一条曾经只认 <c>_service.Enabled</c>**：MoviePilot 一开着，<see cref="Attach"/> 和
+    /// <see cref="ReloadAsync"/> 就在数据到达之前把整块摆上屏，屏上先是「MoviePilot订阅电影／暂无电影订阅」＋
+    /// 「MoviePilot订阅电视剧／暂无电视剧订阅」两块空牌子，等到那一次异步请求回来才填进卡片 —— 开应用和
+    /// 从播放返回主页都会重走一遍，用户看到的就是订阅板块闪一下（2026-10-08「打开应用和返回主页的时候会显示
+    /// MoviePilot订阅电影和电影然后再播放ui动画」）。
+    /// </para>
+    /// <para>
+    /// 改成**真有内容才显示**：电影或电视剧至少排出一张卡，整块才出现，出现时就是最终样子，没有「先空后满」那
+    /// 一帧。一条订阅都没有的账号本来看不到这块，刷新键和空态说明都不必存在 —— 没有内容时它们也点不出东西。
+    /// </para>
+    /// <para>
+    /// <b>失败也要立着</b>：这一块里唯一的报错出口是那条 <c>InfoBar</c>，而它就在这一块里面。「读订阅失败」
+    /// 一旦真的发生，多半正是一条订阅都没排出来的那一趟 —— 只看卡片的话，用户看到的就是「主页上什么都没少，
+    /// 也没人告诉他出了什么事」。所以提示条开着的时候整块一律显出来（那时两块空牌子是应该看见的：它们在说
+    /// 「这里本来该有内容」）。
+    /// </para>
+    /// <para>
+    /// 明细模式下（从主页点订阅卡进来）这一块本来就不在主页上，<see cref="Visible"/> 与它无关。
+    /// </para>
+    /// </summary>
+    public Visibility Visible => Show(Movies.Count > 0 || Series.Count > 0 || NoticeOpen);
     public Visibility MoviesVisibility => Show(Movies.Count > 0);
     public Visibility SeriesVisibility => Show(Series.Count > 0);
     public double RowHeight => CardSize.HeightFor(CardSize.PosterWidth, false) + CardSize.Chrome;
@@ -117,6 +141,14 @@ public sealed partial class MoviePilotSubscriptionsViewModel : PageViewModel
     partial void OnDeletedChanged(bool value) => RefreshPlayback();
     private void RefreshPlayback() { foreach (var row in _episodes) row.Refresh(); }
 
+    public MoviePilotSubscriptionsViewModel() =>
+        // Visible 也看 NoticeOpen（见它的说明），而那条属性住在基类上 —— 生成器的 On…Changed 只长在声明它的
+        // 那个类里，这里够不着，就听 PropertyChanged 这一路。提示条一开一关，整块板块跟着立起来或塌下去。
+        PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(NoticeOpen)) OnPropertyChanged(nameof(Visible));
+        };
+
     internal void AttachPlayback(EmbySessionScope? scope, Func<MoviePilotPlaybackTarget, Task>? play)
     { _playbackScope = scope; _play = play; }
 
@@ -130,13 +162,15 @@ public sealed partial class MoviePilotSubscriptionsViewModel : PageViewModel
         Selected = selected is null ? null : new(selected);
         try { _connection = selected?.ConnectionStamp ?? service.ConnectionStamp; }
         catch (MoviePilotException error) { Report("MoviePilot 未连接", error); }
-        OnPropertyChanged(nameof(Visible));
+
+        // 进这一页/返回主页时先把上一批卡片收干净，整块板块跟着塌下来；真的取到订阅时再由 NotifyRows 立起来。
+        // 不能在这里凭 Enabled 就把整块摆上屏 —— 那正是「先看到两块空牌子」的那一帧（见 Visible）。
+        ClearCards();
     }
 
     public override async Task ReloadAsync()
     {
         if (Working || _service is null || _lifetime is not { IsCancellationRequested: false }) return;
-        OnPropertyChanged(nameof(Visible));
         if (!_service.Enabled) { ClearCards(); OnPropertyChanged(nameof(CanManage)); return; }
         var token = BeginLoad();
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(token, _lifetime.Token);
@@ -338,6 +372,9 @@ public sealed partial class MoviePilotSubscriptionsViewModel : PageViewModel
 
     private void NotifyRows()
     {
+        // Visible 是 Movies/Series 的派生读数（见它的说明），卡片一增一减这里必须一起报 —— 漏掉它的症状是
+        // 「数据回来了，板块却不出现」，比闪现更难查。
+        OnPropertyChanged(nameof(Visible));
         OnPropertyChanged(nameof(MoviesNote)); OnPropertyChanged(nameof(SeriesNote));
         OnPropertyChanged(nameof(MoviesVisibility)); OnPropertyChanged(nameof(SeriesVisibility));
     }
@@ -352,6 +389,10 @@ public sealed partial class MoviePilotSubscriptionsViewModel : PageViewModel
         foreach (var row in _episodes) row.Retire();
         _episodes = []; Episodes.Clear();
         Working = false;
+
+        // 离页/换连接时把上一次的报错一起收掉：那条提示条也在 Visible 的判据里（见它），留着就是「返回主页
+        // 又弹出一块已经过时的空板块」。这一句放在 ClearCards 前面，收起卡片那一下按的是同一条新判据。
+        ClearNotice();
         ClearCards();
         base.Cancel();
         OnPropertyChanged(nameof(CanManage));

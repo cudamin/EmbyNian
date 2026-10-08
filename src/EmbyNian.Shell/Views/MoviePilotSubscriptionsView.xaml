@@ -14,7 +14,10 @@
             </StackPanel>
         </DataTemplate>
     </UserControl.Resources>
-    <StackPanel Spacing="16" Visibility="{x:Bind ViewModel.Visible, Mode=OneWay}">
+    <!-- 上边那 24 从前挂在宿主（HomePage 里那个 MoviePilotSubscriptionsView）上：那时这一块只要 MoviePilot
+         开着就一直在屏上，边距也就不用收。现在它是「真有订阅才显示」（见 ViewModel.Visible），边距必须长在
+         这一层 —— 长在宿主上的话，板块收起来之后主页底下会留 24 个谁也看不见的像素。 -->
+    <StackPanel Margin="0,24,0,0" Spacing="16" Visibility="{x:Bind ViewModel.Visible, Mode=OneWay}">
         <Grid>
             <local:ShelfHead Title="MoviePilot订阅电影" Note="{x:Bind ViewModel.MoviesNote, Mode=OneWay}" />
             <Button x:Name="RefreshSubscriptions" HorizontalAlignment="Right" Content="刷新订阅" Style="{StaticResource EgSecondaryButtonStyle}" Command="{x:Bind ViewModel.RefreshCommand}" />

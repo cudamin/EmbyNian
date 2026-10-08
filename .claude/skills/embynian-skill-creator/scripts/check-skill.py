@@ -3,7 +3,7 @@
 
 只做机械检查，不判断内容对不对：
 
-  - SKILL.md 存在，frontmatter 能解析
+  - SKILL.md 存在，frontmatter 的受支持单行标量语法合法
   - name 与目录名一致、kebab-case、长度合规
   - description 存在、不含尖括号、长度合规
   - 正文行数（超过阈值提醒分层）
@@ -18,7 +18,7 @@
 
 退出码：有 error 返回 1；只有 warning 或全部通过返回 0。
 只依赖标准库；frontmatter 按本仓实际的 `key: "value"` 单行写法解析，
-多行或嵌套值会被记为 warning 而不是尝试完整实现 YAML。
+多行、集合或其他未支持的 YAML 结构会被记为 warning，而不是声称已验证。
 """
 
 from __future__ import annotations
@@ -45,10 +45,17 @@ ALLOWED_KEYS = {
 }
 
 KEBAB_RE = re.compile(r"^[a-z0-9-]+$")
-KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):[ \t]?(.*)$")
+KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):(?=[ \t]|$)[ \t]*(.*)$")
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)")
 FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~)", re.MULTILINE)
 SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+ESCAPE_RE = re.compile(r"\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|.)")
+YAML_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "n": "\n",
+    "v": "\v", "f": "\f", "r": "\r", "e": "\x1b", " ": " ", "\t": "\t",
+    '"': '"', "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0",
+    "L": "\u2028", "P": "\u2029",
+}
 
 
 class Report:
@@ -87,12 +94,39 @@ def split_frontmatter(text: str) -> tuple[str | None, str]:
 
 
 def parse_scalar(raw: str) -> str:
+    """解析单行字符串；非法语法报错，未支持的 YAML 结构交给调用方警告。"""
     raw = raw.strip()
-    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
-        quote = raw[0]
-        inner = raw[1:-1]
-        return inner.replace("\\" + quote, quote).replace("\\\\", "\\")
-    return raw
+    if raw.startswith("'"):
+        match = re.fullmatch(r"'((?:[^']|'')*)'[ \t]*(?:#.*)?", raw)
+        if not match:
+            raise ValueError("单引号未闭合、内部引号未写成两个单引号，或闭引号后有多余内容")
+        return match.group(1).replace("''", "'")
+    if raw.startswith('"'):
+        match = re.fullmatch(r'"((?:[^"\\]|\\.)*)"[ \t]*(?:#.*)?', raw)
+        if not match:
+            raise ValueError("双引号未闭合、内部引号未转义，或闭引号后有多余内容")
+
+        def unescape(escape: re.Match[str]) -> str:
+            value = escape.group()[1:]
+            if value in YAML_ESCAPES:
+                return YAML_ESCAPES[value]
+            if len(value) > 1 and value[0] in "xuU":
+                codepoint = int(value[1:], 16)
+                if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+                    raise ValueError("Unicode 转义不是有效的 Unicode 标量")
+                return chr(codepoint)
+            raise ValueError("双引号中有非法或不完整的 YAML 转义；字面反斜线须写成两个反斜线")
+
+        return ESCAPE_RE.sub(unescape, match.group(1))
+
+    if raw and raw[0] in "{[|>&*!?":
+        raise NotImplementedError("集合、块标量、标签或锚点不在单行字符串检查范围内")
+    value = re.split(r"[ \t]+#", raw, maxsplit=1)[0].rstrip()
+    if re.search(r":(?:[ \t]|$)", value):
+        raise ValueError("未加引号的值含冒号加空白或末尾冒号，请给字符串加引号")
+    if value and (value[0] in "}],%@`#" or re.match(r"^-(?:[ \t]|$)", value)):
+        raise ValueError("未加引号的值以 YAML 保留符号开头，请给字符串加引号")
+    return value
 
 
 def parse_frontmatter(block: str, report: Report) -> dict[str, str]:
@@ -107,7 +141,15 @@ def parse_frontmatter(block: str, report: Report) -> dict[str, str]:
                 f"{line.strip()[:60]!r}"
             )
             continue
-        key, value = match.group(1), parse_scalar(match.group(2))
+        key, raw = match.group(1), match.group(2)
+        try:
+            value = parse_scalar(raw)
+        except ValueError as error:
+            report.error(f"frontmatter 第 {lineno} 行 `{key}`：{error}")
+            continue
+        except NotImplementedError as error:
+            report.warn(f"frontmatter 第 {lineno} 行 `{key}` 未校验：{error}")
+            value = raw.strip()
         if key in fields:
             report.warn(f"frontmatter 里 `{key}` 出现多次，只取最后一条")
         fields[key] = value
@@ -135,7 +177,7 @@ def check_frontmatter(fields: dict[str, str], skill_dir: Path, report: Report) -
 
     description = fields.get("description")
     if description is None:
-        report.error("frontmatter 缺 `description`（这是唯一的触发机制）")
+        report.error("frontmatter 缺 `description`（技能发现的主要信号）")
     elif not description:
         report.error("`description` 为空")
     else:
@@ -179,7 +221,7 @@ def check_registration(root: Path | None, name: str, report: Report) -> None:
     claude_md = root / "CLAUDE.md"
     expected = f".claude/skills/{name}/SKILL.md"
     if expected not in claude_md.read_text(encoding="utf-8"):
-        report.error(f"CLAUDE.md 的技能清单里没有登记 `{expected}`；漏登记等于技能不存在")
+        report.error(f"CLAUDE.md 的技能清单里没有登记 `{expected}`")
 
 
 def check_skill(skill_dir: Path, root: Path | None) -> Report:

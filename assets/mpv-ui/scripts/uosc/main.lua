@@ -18,6 +18,7 @@
 -- │     EMBYNIAN[topbar-pin]    右上角置顶按钮的状态来源：state.ontop 初值＋ontop 属性的观察器
 -- │                             （按钮本体与两档画法在 TopBar.lua，同一个槽名 —— 升级 uosc 时两处都要重打）
 -- │     EMBYNIAN[timeline-parity] 章节别名与集成 TimelineChapterMap 一致
+-- │     EMBYNIAN[drag-cancel]   cursor.lua 保留原生拖窗 canceled 松键，不把取消算成点击
 -- │     EMBYNIAN[autoload]      autoload 强制 false（defaults 与读配置后各一处）
 -- │     EMBYNIAN[fileend]       handle_file_end / file_end_timer 整块删除
 -- │     EMBYNIAN[osddim]        d3d11 起播画布尺寸兜底观察
@@ -1262,7 +1263,7 @@ end)
 --     装配）；也让 decide_keybinds 把等级留在 1 而不是 2（等级 2 顺带禁掉光标自动隐藏，等级 1 的
 --     allow-vo-dragging+allow-hide-cursor 正是要的）。
 --   · 菜单开着时它天然让位：菜单的 primary_down/up 是 primary_click 的传播阻断者（lib/cursor.lua）。
---   · 位移阈值 6px 与 0.5s 时窗把「拖窗口」和「轻点」分开，与旧版同一条判据。
+--   · 原生拖窗的 canceled 松键由 cursor.lua 排除；6px 与 0.5s 只过滤普通轻点。
 -- 双击闸（2026-09-19，用户令「双击画面 全屏/还原时不要触发开始和暂停」；修法对齐集成模式的
 -- TapPicture/SecondTapOnPicture：单击押后到双击窗口之外才证实，第二拍「按下」即撤）。
 -- 为什么撤在第二拍的**按下**而不是松开 —— 真窗口实测（work/probe-doubleclick-real-trace.txt，
@@ -1339,6 +1340,13 @@ cursor:on('primary_down', function()
 	if embynian_click_pause_second_half then embynian_click_pause_cancel() end
 end)
 
+cursor:on('primary_up', function(shortcut)
+	if shortcut and shortcut.canceled then
+		embynian_click_pause_press_last = nil
+		embynian_click_pause_second_half = false
+	end
+end)
+
 -- 押后那一拍要是撞上换源/收摊（片尾自动连播、用户换集）就作废 —— 与 ChromeReveal 的「新一播放＝Reset」
 -- 同一条道理：那一拍不该打在新一集身上。
 function embynian_click_pause_reset()
@@ -1368,7 +1376,7 @@ function embynian_click_pause_zone()
 		-- 三道具闸，缺一条都会误伤：① 这一下按下的「起点」必须没被别的区接管（zone_handled）——
 		-- 点菜单外那一下正是靠它躲开的：菜单的兜底区接下了按下（顺手关菜单），松开时菜单已经拆完，
 		-- 光看命中区会以为这是一次空白点击，于是「关菜单」顺带把片子暂停（2026-09-19 探针实测）；
-		-- ② 时窗 0.5s、③ 位移 ≤6px —— 把上一次的按下、把拖动窗口都排除在外。
+		-- ② 时窗 0.5s、③ 位移 ≤6px；原生拖窗必须靠 canceled 排除，窗口跟手时局部坐标可能不变。
 		if down and not down.zone_handled and mp.get_time() - down.time < 0.5
 			and math.abs(cursor.x - down.x) + math.abs(cursor.y - down.y) <= 6 then
 			if embynian_click_pause_second_half then return end -- 双击的第二拍：全屏/还原归 mpv，这里不发

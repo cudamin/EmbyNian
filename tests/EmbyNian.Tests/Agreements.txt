@@ -202,7 +202,6 @@ handle  Views/HomeBanner.xaml  TitleText
 handle  Views/HomeBanner.xaml  Top
 handle  Views/HomePage.xaml  Banner
 handle  Views/HomePage.xaml  BannerZone
-handle  Views/HomePage.xaml  DownloadRepeater
 handle  Views/HomePage.xaml  LibraryHost
 handle  Views/HomePage.xaml  LibraryOverlay
 handle  Views/HomePage.xaml  Overlay

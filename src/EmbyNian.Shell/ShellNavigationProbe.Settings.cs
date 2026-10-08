@@ -6,6 +6,9 @@ using EmbyNian.Services;
 using EmbyNian.Shell.ViewModels;
 using EmbyNian.Shell.Views;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
@@ -33,6 +36,7 @@ internal sealed partial class ShellNavigationProbe
         try
         {
             await LayoutAsync(page);
+            await SettingsAnimationToggleAsync(page, fixture);
             foreach (var width in new[] { 1100, 760 })
             {
                 ResizeInspect(width, 900);
@@ -118,6 +122,75 @@ internal sealed partial class ShellNavigationProbe
             _root.Children.Remove(page);
             ResizeInspect(1420, 980);
             File.WriteAllLines(Path.Combine(_options.Paths.LogDirectory, "settings-motion.txt"), evidence);
+        }
+    }
+
+    private async Task SettingsAnimationToggleAsync(SettingsPage page, Fixture fixture)
+    {
+        var original = HomeMotion.PreferenceEnabled;
+        var systemAnimations = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled;
+        var player = new PlayerPage { IsHitTestVisible = false };
+        try
+        {
+            page.SelectedCategory = "界面";
+            await LayoutAsync(page);
+            var toggle = Descendants(page).OfType<ToggleSwitch>()
+                .Single(control => AutomationProperties.GetName(control) == "UI 动画");
+            var peer = new ToggleSwitchAutomationPeer(toggle);
+            Require(peer.GetName() == "UI 动画" && peer.GetPattern(PatternInterface.Toggle) is IToggleProvider,
+                "UI 动画开关没有可访问名称或切换模式");
+            var provider = (IToggleProvider)peer.GetPattern(PatternInterface.Toggle);
+            Require(toggle.IsOn, "新配置的 UI 动画没有默认开启");
+            provider.Toggle();
+            Require(!toggle.IsOn && !fixture.Settings.Ui.AnimationsEnabled && !HomeMotion.AnimationsEnabled
+                && !fixture.SettingsService.HasUnsavedChanges, "关闭开关没有同步到配置、动画入口或磁盘");
+
+            foreach (var width in new[] { 1100, 760 })
+            {
+                ResizeInspect(width, 900);
+                page.SelectedCategory = "视频输出";
+                page.SelectedCategory = "界面";
+                await LayoutAsync(page);
+                AssertSettingsSettled(page);
+                Require(Get<List<FrameworkElement>>(page, "_enteringSections").Count == 0,
+                    "关闭动画后仍启动设置分组入场");
+                await SaveReturnFrameAsync(page, $"settings-animation-off-{width}.png");
+            }
+
+            // 假宿主不附加播放服务，只验证 UI；不加载媒体，也不下发播放或倍速命令。
+            player.Visibility = Visibility.Visible;
+            _root.Children.Add(player);
+            await LayoutAsync(player);
+            Call(player, "Pulse", true);
+            Require(Get<Border>(player, "PulseBadge").Opacity == 1
+                && Get<ScaleTransform>(player, "PulseScale").ScaleX == 1,
+                "关闭动画后暂停提示没有静态显示");
+            await UntilAsync(() => Get<Border>(player, "PulseBadge").Visibility == Visibility.Collapsed);
+            Call(player, "AnimateWheelTo", 3);
+            Require(Get<double>(player, "_wheelPosition") == 3 && !Get<bool>(player, "_wheelAnimating"),
+                "关闭动画后倍速刻度没有立即落定");
+            Call(player, "Render");
+            Require(Get<Grid>(player, "TitleStrip").OpacityTransition.Duration == TimeSpan.Zero
+                && Get<Grid>(player, "TransportRow").OpacityTransition.Duration == TimeSpan.Zero
+                && Get<Border>(player, "Rail").OpacityTransition.Duration == TimeSpan.Zero,
+                "关闭动画后播放器仍有隐式淡入");
+
+            provider.Toggle();
+            Require(toggle.IsOn && fixture.Settings.Ui.AnimationsEnabled
+                && HomeMotion.AnimationsEnabled == systemAnimations, "重新开启没有遵循系统动画设置");
+            Call(player, "Render");
+            Require(Get<Grid>(player, "TitleStrip").OpacityTransition.Duration ==
+                (systemAnimations ? TimeSpan.FromMilliseconds(220) : TimeSpan.Zero), "重新开启没有恢复过渡时长");
+            _root.Children.Remove(player);
+            await Task.Delay(250); // 原生 ToggleSwitch 的滑块先完成状态过渡，再留截图。
+            await SaveReturnFrameAsync(page, "settings-animation-on-760.png");
+        }
+        finally
+        {
+            Call(player, "HidePulse");
+            _root.Children.Remove(player);
+            player.ReleaseVideoSurface();
+            HomeMotion.ApplyPreference(original);
         }
     }
 
