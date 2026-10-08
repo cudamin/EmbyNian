@@ -23,7 +23,7 @@ Keep these paths conceptually separate:
 | Location | Role |
 | --- | --- |
 | `.claude/skills/` in the current tree | Authoritative location for repository-owned skills |
-| `https://github.com/cudamin/EmbyNian/tree/master/.claude/skills` | Remote discovery and comparison; not an editing destination |
+| `https://github.com/cudamin/Momoka/tree/master/.claude/skills` | Remote discovery and comparison; not an editing destination |
 | User-level or plugin-managed skill directories | Separate installations; do not silently synchronize them |
 | Ignored `work/`, `artifacts/` and `outputs/` | Scratch evidence and deliverables, not clean-checkout dependencies |
 

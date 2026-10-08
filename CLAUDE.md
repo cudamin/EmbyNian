@@ -119,7 +119,7 @@ Emby 令牌用 DPAPI 加密存储，**不打印、不写日志/自检报告，�
 
 ## Git 与协作
 
-- `origin` 是 `https://github.com/cudamin/EmbyNian.git`；凭据由本机 Git Credential Manager 保管，不进命令、脚本或远程 URL。
+- `origin` 是 `https://github.com/cudamin/Momoka.git`；凭据由本机 Git Credential Manager 保管，不进命令、脚本或远程 URL。
 - 长期主干是 `master`，不维护第二条跟随主干的长活分支。隔离工作可用临时分支，不假定任意工作树的 HEAD 在 master。主干交付推 `git push origin master`，不做 `git push . <branch>:<branch>` 的 ref 搬运。
 - **同树同时只有一个写入会话。** 先检查状态，保护已有未提交工作；并行写入使用独立 `git worktree`，在各自 PROGRESS 记树和文件范围。构建、测试和临时产物各自在本树；运行验证与交付按上方规则串行。
 - **命令定位当前工作树。** 优先绝对文件路径，根目录须与 `git rev-parse --show-toplevel` 一致；不依赖上一轮 shell 的 `cd`，不固定跳回主目录。

@@ -75,7 +75,7 @@ Momoka 是一个本地播放客户端。**开发者不收集、不上传、不�
 
 ## 10. 联系方式
 
-问题或请求请通过项目仓库的议题页提出：<https://github.com/cudamin/EmbyNian/issues>
+问题或请求请通过项目仓库的议题页提出：<https://github.com/cudamin/Momoka/issues>
 
 ---
 
@@ -95,4 +95,4 @@ Uninstalling the app does not delete the data listed above; delete the `%LOCALAP
 
 Bundled third-party components — mpv / libmpv, uosc and Material Icons, the ArtCNN / ravu / CfL / SSimDownscaler shaders, and the Microsoft Windows App SDK and WebView2 Runtime — follow their own licenses, with license and attribution texts shipped alongside the app. They do not collect data.
 
-Questions: <https://github.com/cudamin/EmbyNian/issues>
+Questions: <https://github.com/cudamin/Momoka/issues>

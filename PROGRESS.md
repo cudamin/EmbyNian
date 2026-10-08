@@ -27,14 +27,17 @@
   unblock 脚本、`embynian_shortcuts.lua`、9 个技能目录）；577 个文件里的文本，三种大小写形态各管一处：
   `EmbyNian` 2144 处、`EMBYNIAN[...]`（给上游 uosc 打的改动标记，全仓统一）234 处、
   `embynian`（Lua 模块名与 mpv 绑定名，生产者消费者必须一起改）469 处。
-- **刻意没改的三类**（都不是产品名，是外部/协议标识）：
-  - **GitHub 仓库地址**：6 处 `github.com/cudamin/EmbyNian` 保持原样 —— 其中 `CLAUDE.md` 那条是 git
-    remote 地址、`PRIVACY.md` 两条是**交给商店的隐私政策链接**；认证期间改仓库名会让已交的 URL 跟着变。
-    （sed 一度把这 6 处一起改了，已逐处改回。）
+- **刻意没改的两类**（不是产品名，是协议标识）：
   - **数据目录迁移链**：`PriorRoots` 加入 `EmbyNian` 作候选（顺序 `EmbyNian` → `EmbyGearless` →
     `EmbyMpvClient`），`LegacyDefaultRoot` 同步，`SettingsTests` 断言跟到 `roots[^3]` —— 旧目录里的设置、
     DPAPI 令牌、海报与着色器缓存照旧迁得过来。
   - **`DpapiSecretProtector` 的熵 `EmbyMpvClient.Profile.v1`**：改了老密码就解不开。
+- **GitHub 仓库也跟着改名了**（用户 2026-10-08 深夜在网页端改的，同时把 README 标题与描述一起改了）：
+  `cudamin/EmbyNian` → `cudamin/Momoka`。仓内 6 处旧地址（`CLAUDE.md` 的 origin、`PRIVACY.md` 两条
+  议题页、`README.md` 的 Releases、技能里的远端对照、`assets/shaders/NOTICE.txt`）已同步，本地
+  `git remote set-url` 也换了。**提交里的隐私政策 URL 要跟着换成新地址**（GitHub 对旧地址有跳转，
+  但没必要让它走一跳）。改名前 sed 曾把这 6 处一起改掉、当时按「认证期间不动仓库名」改回过一次 ——
+  仓库真改名后它们是对的，已再次改过来。
 - **超出纯改名的一处补强**：`Program.cs` 的单实例互斥原来只认 `EmbyMpvClient.SingleInstance.v2`，改名后
   新构建认不出**旧 EmbyNian 还在跑**，而两个 shell 共写 `settings.json`（那段注释写的正是这个失败）。
   改成 `LegacyInstances` 表，把 `Local\EmbyNian.SingleInstance.v3` / `.Activate.v3` 一并纳入，

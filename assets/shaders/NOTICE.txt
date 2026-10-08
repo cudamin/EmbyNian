@@ -38,4 +38,4 @@ License text sources (SPDX license-list-data, retrieved 2026-10-04):
 The source-file notices retain the option to use a later license version.
 
 The complete distributed shader source and change history are also available at:
-  https://github.com/cudamin/EmbyNian/tree/master/assets/shaders
+  https://github.com/cudamin/Momoka/tree/master/assets/shaders
