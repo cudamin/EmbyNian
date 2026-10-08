@@ -1,6 +1,6 @@
 # Momoka
 
-自用的Emby客户端，由天才程序员Claude、GPT、DeepSeek、GLM完成开发。
+自用的媒体库客户端，由天才程序员Claude、GPT、DeepSeek、GLM完成开发。
 
 telegram 发布频道：[https://t.me/EmbyNian](https://t.me/Ebizuka_Tomo)
 
