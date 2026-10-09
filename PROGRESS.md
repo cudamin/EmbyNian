@@ -6,9 +6,9 @@
 
 - 汇总同树已完成的详情页亚克力下拉和技能文档修改，版本从 0.1.2 升到 0.1.3。按 WinUI 构建、代码审查和项目验证技能复核改动，保留既有功能范围。
 - 完整 Release 构建 0 警告、0 错误；1606 项测试全部通过、0 失败、0 跳过，包含仓库分析器载荷哈希检查；whitespace 退出码 0（报告工作区加载提示），18 个 PowerShell 脚本编码与语法检查通过，Git 空白检查通过。
-- 当前树实际交付目录已刷新：533 文件、301.8 MB。当前发布件自检 182 项、0 失败、0 消失、0 降级，日志 `artifacts/selfcheck/run-afd4fc68134f49c8a9f6e4166367e24a/logs/selfcheck-shell.txt`。未执行真实服务器媒体播放；既有详情页截图范围和主题覆盖缺口仍见下方原改动记录，本轮没有扩大该视觉覆盖。
+- 当前树实际交付目录已刷新：533 文件、301.8 MB。当前发布件自检 182 项、0 失败、0 消失、0 降级，日志 `artifacts/selfcheck/run-afd4fc68134f49c8a9f6e4166367e24a/logs/selfcheck-shell.txt`。未执行真实服务器媒体播放；既有详情页截图范围和主题覆盖缺口仍见下方原改动记录，本轮没有扩大该视觉覆盖。另为商店展示运行当前发布件离线 Shell 探针，45 项检查全部通过，取其真实设置页生成两张 1920×1080 展示图，未含真实账号或媒体库数据；原始报告在 `%LOCALAPPDATA%/Momoka/logs/shell-probe-20261009-031106852-20712/logs/`。
 - 从同一份已验证发布目录生成 `Momoka_windows-x64_0.1.3.exe`、`Momoka-0.1.3-win-x64.zip` 和未签名的 `Momoka-0.1.3-win-x64-store.msix`。运行日志及发布说明在 `artifacts/release-0.1.3/`。
-- 按用户给出的 Partner Center 新产品页核对正式身份：`MOMOKA.Momoka`、`MOMOKA.Momoka_ft387wphrtwme`、Store ID `9NQJL7K0H8X0`，发布者保持 `MOMOKA`；同步 `tools/store-identity.json` 并移除待核对占位。包版本为 `0.1.3.0`。商店提交编号 `1152921505702076039`；属性与隐私政策已保存，IARC 生成 3+ 分级，用户明确同意邮箱共享及 IARC 条款。GitHub 上传和商店提交结果在完成后补记。
+- 按用户给出的 Partner Center 新产品页核对正式身份：`MOMOKA.Momoka`、`MOMOKA.Momoka_ft387wphrtwme`、Store ID `9NQJL7K0H8X0`，发布者保持 `MOMOKA`；同步 `tools/store-identity.json` 并移除待核对占位。包版本为 `0.1.3.0`。商店提交编号 `1152921505702076039`；属性与隐私政策已保存，IARC 生成 3+ 分级，用户明确同意邮箱共享及 IARC 条款。代码已推送至 master（`9c75f99`，包含远端 README 频道文字修正），GitHub Release `v0.1.3` 已正式发布；安装程序、ZIP、SHA256SUMS 三项资产的远端 SHA-256 与本地一致。商店包由用户手动选择上传，Partner Center 已显示 Validated / 完成；审核说明按用户选择写明由审核人员自建测试服务器，不提供真实账号。中文一览及最终认证提交尚在进行。
 
 ## 着色器技能审查修复（2026-10-09，文档验证通过）
 
