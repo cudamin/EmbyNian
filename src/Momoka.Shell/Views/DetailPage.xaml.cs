@@ -845,27 +845,49 @@ public sealed partial class DetailPage : Page, IShellContent
             : (PickerPanel, PickerPanel.Padding, SourcePicker, AudioPicker, SubtitlePicker);
 
     /// <summary>
-    /// Tooling: 把这一页那颗字幕下拉弹开留着（<c>--show-picker</c> 用的）。
+    /// Tooling: 把这一页的一颗下拉弹开留着（<c>--show-picker</c> 用的）。
     /// <para>
     /// 挑屏上那一份问（<see cref="PickerSet"/>）：集页宽版式那三颗在片名栏里，其余页面和紧凑版式在尾部，
     /// 两份只有一份在屏上 —— 写死问尾部那一份的版本在集页上会回一句「没有可弹的」，而浮层明明就在上面。
     /// </para>
     /// <para>
-    /// 弹的是字幕那一颗：用户 2026-09-27 那张截图里开着的就是它，而它也是三颗里最长的一颗（「自动 · Chinese
-    /// （默认 SUBRIP）」），底下压着的照旧是头图那张剧照 —— 浮层透不透，这张照片量得出来。
+    /// 弹哪一颗由 <see cref="PickerToOpen"/> 定：字幕优先（用户 2026-09-27 那张截图里开着的就是它，而它
+    /// 也是三颗里最长的一颗「自动 · Chinese（默认 SUBRIP）」，底下压着的照旧是头图那张剧照 —— 浮层透不透，
+    /// 这张照片量得出来），没有字幕轨的片子退到音频。
     /// </para>
     /// </summary>
     internal bool OpenPickerMenu()
     {
-        var (_, _, _, _, subtitle) = PickerSet;
-        if (!PickerReady) return false;
+        if (PickerToOpen is not { } picker) return false;
 
-        subtitle.IsDropDownOpen = true;
-        return subtitle.IsDropDownOpen;
+        picker.IsDropDownOpen = true;
+        return picker.IsDropDownOpen;
     }
 
     /// <summary>
-    /// Tooling: 这一页那颗字幕下拉这一刻能不能弹 —— <c>--show-picker</c> 等的就是这一位。
+    /// 屏上那一份三颗里，这一刻真能弹开的那一颗 —— 字幕优先（它最长，底下压着的剧照最能说明浮层透不透），
+    /// 没有字幕轨的片子退到音频，再退到媒体源。
+    /// <para>
+    /// 2026-10-09 加：从前只认字幕那一颗，而用户那一轮要看的是**闭合态和展开态一不一样**，手上那部剧
+    /// （黑暗召唤师在地下恋爱中）只有一条音轨、没有字幕 —— 开关于是回一句「这一页上没有可弹的字幕下拉」，
+    /// 屏上那两颗明明都在。判据与 <see cref="PickerReady"/> 共用这一处，别在两处各写一遍。
+    /// </para>
+    /// </summary>
+    private ComboBox? PickerToOpen
+    {
+        get
+        {
+            var (_, _, source, audio, subtitle) = PickerSet;
+            foreach (var picker in new[] { subtitle, audio, source })
+                if (picker.Visibility == Visibility.Visible && picker.Items.Count > 0)
+                    return picker;
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Tooling: 这一页这一刻有没有一颗能弹开的下拉 —— <c>--show-picker</c> 等的就是这一位。
     /// <para>
     /// 为什么要单独留一位：那几颗下拉的单子不跟页面同一次到。集页面上它随详情一起来的，点进去就在；
     /// 剧页／电影页上它挂在播放落点那一次请求上，要晚好几拍。2026-09-27 拍「剧页面」那张时
@@ -874,14 +896,7 @@ public sealed partial class DetailPage : Page, IShellContent
     /// 「剧页面、电影页面，集页面，季页面，把音频和字幕的选择栏改成亚克力背景」，四页都得拍得出来）。
     /// </para>
     /// </summary>
-    internal bool PickerReady
-    {
-        get
-        {
-            var (_, _, _, _, subtitle) = PickerSet;
-            return subtitle.Visibility == Visibility.Visible && subtitle.Items.Count > 0;
-        }
-    }
+    internal bool PickerReady => PickerToOpen is not null;
 
     /// <summary>
     /// 自检：这一行那几颗下拉的浮层开在<em>同一棵树</em>里没有 —— 详情页那七颗是 <see cref="EgPicker"/>，

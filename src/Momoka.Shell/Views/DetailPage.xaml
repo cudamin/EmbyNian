@@ -963,13 +963,47 @@
                              三颗都是 local:EgPicker 而不是框架的 ComboBox —— 它是 ComboBox 的一点壳，只把弹层
                              从「开窗口」改回「同一棵树」，好让浮层那支应用内亚克力采得到底下这一页（用户
                              2026-09-27：「把音频和字幕的选择栏改成亚克力背景」；为什么这么改写在 EgPicker.cs）。
-                             同一页上另有集页宽版式那三颗和季那一颗，一共七颗，别处（设置页等）照旧。 -->
+                             同一页上另有集页宽版式那三颗和季那一颗，一共七颗，别处（设置页等）照旧。
+
+                             **闭合态那圈底（2026-10-09，用户：「剧页面 季页面 电影页面这三个页面的音频、
+                             字幕、版本选择框背景要用透明的亚克力背景」）**：这三颗从 2026-09-25 起是不透明的
+                             实心块（`ComboBoxBackground` = 抬升一档的面色），浮在压暗的剧照上就是
+                             「贴上去的一块」。用户在截图里圈的就是这一块，要它跟这一页正文那几块玻璃同一种
+                             材料。覆盖写在这颗 StackPanel 的 Resources 里，不去动 Palette 那两个全局键 ——
+                             `ComboBoxBackground` 一族是设置页、诊断页等处每一颗下拉共用的，用户点名的是
+                             剧、季、电影这三页；「按页面点名的范围改，改一处记一处」是这一族的老规矩
+                             （同 EgPicker 那一段、首页那支收窄的滚动条）。元素级覆盖也正好是 HomePage 给
+                             自己那颗 ScrollView 换滚动条用的手法。
+
+                             指向的是 `EgPickerGlassBrush`（`Palette.xaml` 里新开的一支：两个 tint 参数留小、
+                             浓度由画笔自己的 `Opacity` 定 —— 为什么是这么个形状、每一档屏上量出来是什么样，
+                             写在那一支的注释里）。第一版直接指到浮层那支 `ComboBoxDropDownBackground`
+                             （0.55/0.55），用户看完一句「不够透明」。
+                             **弹层那一支也一并指过来**（用户同日第二条令：「展开后背景要和未展开一样」）——
+                             只改闭合态的话，点开那一下浓度会跳一档。别的页面的弹层照旧走全局那支。
+                             五个背景键一起指过去（含 PointerOver/Pressed/Focused/Unfocused）：只改静止态的
+                             话，指针一压上去就跳回实心块。悬停的反馈仍由框线和那颗下拉箭头给，同「选完落回来
+                             像什么都没发生过」那套（见 Palette 里闭合态五件套的说明）。
+                             边框不碰：那一圈是「哪儿能点」的读法，用户要去掉的从来只是底色。
+
+                             集页那三颗（ColumnPickers）不在内 —— 它们压在片名底下那张剧照上，而这三颗底下是
+                             压暗了七成二的画面；用户这一轮点名的也是电影、剧、季三页。 -->
                         <StackPanel
                             x:Name="PickerPanel"
                             Style="{StaticResource EgBodyPanelStyle}"
                             Background="Transparent"
                             BorderThickness="0"
                             Visibility="{x:Bind ViewModel.PickersVisibility, Mode=OneWay}">
+                            <StackPanel.Resources>
+                                <!-- 弹层那支也跟着走（用户 2026-10-09 第二条：「展开后背景要和未展开一样」）：
+                                     点开时那圈底换成另一支浓度，屏上就是「一开就变浓」的一跳。 -->
+                                <StaticResource x:Key="ComboBoxDropDownBackground" ResourceKey="EgPickerGlassBrush" />
+                                <StaticResource x:Key="ComboBoxBackground" ResourceKey="EgPickerGlassBrush" />
+                                <StaticResource x:Key="ComboBoxBackgroundPointerOver" ResourceKey="EgPickerGlassBrush" />
+                                <StaticResource x:Key="ComboBoxBackgroundPressed" ResourceKey="EgPickerGlassBrush" />
+                                <StaticResource x:Key="ComboBoxBackgroundFocused" ResourceKey="EgPickerGlassBrush" />
+                                <StaticResource x:Key="ComboBoxBackgroundUnfocused" ResourceKey="EgPickerGlassBrush" />
+                            </StackPanel.Resources>
                             <local:WrapRow RowSpacing="10" Spacing="14">
                                 <local:EgPicker
                                     x:Name="SourcePicker"

@@ -116,6 +116,11 @@ public static class ThemeHost
         ("ComboBoxDropDownBackground", theme => theme.Colors.SurfaceElevated),
         ("ComboBoxDropDownBorderBrush", theme => theme.Colors.Border),
 
+        // 详情页三颗文件选项下拉**闭合态**的底（2026-10-09）。tint 与上面那支同取抬升面，两个 Opacity
+        // 归 Palette 两份字典 —— 比浮层那支松一档，闭合态才透得出底下那张压暗的剧照。这键不加进表里
+        // 的话，自检「主题角色覆盖」那条红：调色板里有了，ThemeHost 却不涂。
+        ("EgPickerGlassBrush", theme => theme.Colors.SurfaceElevated),
+
         // 闭合态的五件套（同轮他指「没有展开的时候颜色和背景不一样」——框架那档是 4% 透明白，压在卡上
         // 色相不亲）。停着/聚焦/失焦都在抬升档，悬停/按下抬到 hover 档给反馈；选完落回来跟停着一样，
         // 是 QQ 那张图的样子。

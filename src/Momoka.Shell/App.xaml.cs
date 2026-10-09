@@ -234,8 +234,9 @@ public partial class App : Application
         // --show-detail 之后 —— 它自己就走一遍那一步，先弹面板再走就白走了。
         if (_options.ShowCover) await shell.ShowCoverAsync().ConfigureAwait(true);
 
-        // Tooling: --show-picker 把详情页那颗字幕下拉弹开留着。同 --show-cover 的位置：它自己就走一遍
-        // --show-detail 那两步（已经在详情页上就不走），所以摆在那一步之后。
+        // Tooling: --show-picker 把详情页的一颗下拉弹开留着（字幕优先，没有字幕轨的片子退到音频）。
+        // 同 --show-cover 的位置：它自己就走一遍 --show-detail 那两步（已经在详情页上就不走），
+        // 所以摆在那一步之后。
         if (_options.ShowPicker) await shell.ShowPickerMenuAsync().ConfigureAwait(true);
 
         // Tooling: --play puts real video on screen. Last, because it does not come back until playback

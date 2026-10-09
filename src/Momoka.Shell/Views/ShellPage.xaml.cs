@@ -1321,7 +1321,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
     }
 
     /// <summary>
-    /// Tooling: 把详情页那颗字幕下拉弹开留着（<c>--show-picker</c>），好给它拍一张。
+    /// Tooling: 把详情页的一颗下拉弹开留着（<c>--show-picker</c>），好给它拍一张。弹哪一颗由
+    /// <c>DetailPage.PickerToOpen</c> 定：字幕优先，没有字幕轨的片子退到音频。
     /// <para>
     /// 和 <see cref="ShowCardMenuAsync"/> 同一条理由：浮层只在点开之后存在，等是等不出来的。弹层往后走的样子
     /// —— 它开在哪一棵树里、底下那一页透不透上来 —— 只有照片答得出来（用户的判据也是照片）。
@@ -1350,8 +1351,8 @@ public sealed partial class ShellPage : UserControl, IShellActions
         }
 
         Log.Info(Category, page.OpenPickerMenu()
-            ? "--show-picker：已弹开字幕下拉"
-            : "--show-picker：这一页上没有可弹的字幕下拉");
+            ? "--show-picker：已弹开下拉"
+            : "--show-picker：这一页上没有可弹的下拉");
     }
 
     /// <summary>

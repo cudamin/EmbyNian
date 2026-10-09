@@ -100,9 +100,11 @@ igv 那三个的 gist 地址（更新时按这个取）：
 
 ## 两个没有装箱、但被考虑过的文件
 
-- `agyild` 的 `CAS.glsl`：门控是 `!(比例>1) && !(比例<1)`，也就是**只有输出面积和片源面积一模一样时才跑**。
-  在这套档位里它一格都命中不了（缩小档在缩小，其余三档在放大），所以没有装箱 —— 和
-  `FSRCNNX_x1`（根本不放大）是同一类错。要锐化就用 `igv/adaptive-sharpen.glsl`，它挂在 `OUTPUT` 上、没有门控。
+- `agyild` 的 [CAS.glsl（固定版本）](https://gist.githubusercontent.com/agyild/bbb4e58298b2f86aa24da3032a0d2ee6/raw/10e4ca1b6ef173b64391ce2c81b9a95fcd095931/CAS.glsl)：门控是
+  `!(面积比例>1) && !(面积比例<1)`，也就是**只有 OUTPUT 与 LUMA 面积相等时才跑**。
+  当前缩小档包含原生 1:1，因此 1920×1080→1920×1080 时门控成立；同档的真正缩小情形则不成立。
+  它不能覆盖整个档位，不能写成整档完全无效；前序着色器可能改变 LUMA 尺寸，仍须按实际输入核对门控。
+  本项目仍未装箱 CAS，现有锐化使用 `igv/adaptive-sharpen.glsl`，它挂在 `OUTPUT` 上、没有门控。
 - `igv/adaptive-sharpen_luma.glsl`：上游 gist 里没有这个文件（只有 `SCALED` 那一版），
   用户机器上那一份是第三方把 `//!HOOK SCALED` 改成 `//!HOOK LUMA` 得来的。不入库。
 

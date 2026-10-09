@@ -182,6 +182,36 @@
                 TintOpacity="0.55" />
             <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="{StaticResource EgBorderColor}" />
 
+            <!-- 详情页那三颗文件选项下拉（媒体源／音频／字幕）的玻璃（2026-10-09）。用户两条令：先是
+                 「剧页面 季页面 电影页面这三个页面的音频、字幕、版本选择框背景要用透明的亚克力背景」，
+                 第一版把闭合态那五个键指到上面那支浮层底（0.55/0.55），他看完说「不够透明」；随后第二条
+                 「展开后背景要和未展开一样」。
+
+                 调透这一轮踩到的事，写下来省得下次再摸：**TintOpacity / TintLuminosityOpacity 在低值
+                 区间几乎不再生效**。两轮都拿副屏实拍量框内那一格的中位数（十进制 RGB）—— 0.55 时框内是
+                 中性偏冷的一块 (38,40,43)，面色主导，底下那张暖色木柜的色相透不上来；0.30 时暖调开始
+                 上来、但 G/B 仍被冷灰压着，框内 (42,42,44) 对同一行框外的 (40,28,30)；再松到 0.15，
+                 框内只动了 1 级 (42,40,41) —— 这两个参数到这里已经到顶。真正的开关是画笔自己的
+                 `Opacity`：0.6 一加，框内当场落到 (37,34,32)，屏上是「底下那一页的模糊版」，木柜的
+                 结构看得见。所以这一支的形状是「两个 tint 参数留小 + Opacity 定浓度」，不是纯靠 tint 参数。
+
+                 这一排站在头图下沿那段压暗七成二的剧照上，透上来的是暗画面，所以透到这个份上也不伤框里
+                 那行白字（最亮的一格算下来还有 11:1，正文的底线是 4.5:1）。tint 仍取抬升一档的面色
+                 （同浮层底）：这一层是「压在图上的一层色」，不是另一种颜色；FallbackColor 也照旧 ——
+                 关掉透明效果时屏上就剩它，仍是一块不透明的窗口面色。
+
+                 上面那支浮层底（ComboBoxDropDownBackground）不动：它是用户 2026-09-27 验收过的一支，
+                 别的页面（设置页、诊断页）的弹层还在用它。这一页那一排的弹层由 DetailPage 自己在
+                 PickerPanel.Resources 里一并指到这一支来（用户第二条令）—— 两颗键在同一个作用域里指着
+                 同一个对象，屏上就不可能分叉。 -->
+            <AcrylicBrush
+                x:Key="EgPickerGlassBrush"
+                FallbackColor="{StaticResource EgSurfaceElevatedColor}"
+                TintColor="{StaticResource EgSurfaceElevatedColor}"
+                TintLuminosityOpacity="0.15"
+                TintOpacity="0.15"
+                Opacity="0.6" />
+
             <!-- 下拉框闭合态的皮（同轮他指「没有展开的时候颜色和背景不一样」）：框架那一档是 4% 的透明白
                  压在卡上，色相跟卡不亲。照 QQ 的分法换成抬升一档的面色（比卡亮半档、同一色相），悬停/按下
                  再抬到 hover 档给反馈；打开/聚焦那几态跟闭合同档 —— QQ 那张图里选完落回来就是
@@ -325,6 +355,18 @@
                 TintLuminosityOpacity="0.9"
                 TintOpacity="0.62" />
             <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="{StaticResource EgBorderColor}" />
+
+            <!-- 同 Dark 那条：详情页三颗文件选项下拉的玻璃（2026-10-09）。形状一样（两个 tint 参数留小 +
+                 `Opacity` 定浓度），只是浅色这边整体收一档（0.50/0.30、Opacity 0.75）—— 浮层底那一段的
+                 理由在这里同样成立：浅色主题下透上来的是暗画面，玻璃被压低、深色字更难读，跟
+                 EgFrostBrush 那一边是同一条 4.5:1 的账。 -->
+            <AcrylicBrush
+                x:Key="EgPickerGlassBrush"
+                FallbackColor="{StaticResource EgSurfaceElevatedColor}"
+                TintColor="{StaticResource EgSurfaceElevatedColor}"
+                TintLuminosityOpacity="0.5"
+                TintOpacity="0.3"
+                Opacity="0.75" />
 
             <!-- 闭合态的五件套同 Dark 那条，色值落在浅色这边的同名字角色上（抬升档比卡面暗半档，
                  方向跟深色那边相反、道理相同）。 -->

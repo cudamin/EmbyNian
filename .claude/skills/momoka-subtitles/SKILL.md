@@ -1,18 +1,18 @@
 ---
-name: momoka-subtitles
-description: Audit, fix and verify Momoka subtitle settings and playback behavior. Use for subtitle language selection, forced/foreign-audio modes, ASS/SRT/PGS styling, bilingual or secondary subtitles, color inputs, previews, external subtitle management, settings persistence and same-window episode switching; also use when comparing subtitle features with mpv.conf, dyphire/mpv-config, IINA or mpv.net.
+name: "momoka-subtitles"
+description: "Audit, fix and verify Momoka subtitle settings and playback behavior. Use for subtitle language selection, forced/foreign-audio modes, ASS/SRT/PGS styling, bilingual or secondary subtitles, color inputs, previews, external subtitle management, settings persistence and same-window episode switching; also use when comparing subtitle features with mpv.conf, dyphire/mpv-config, IINA or mpv.net."
 ---
 
 # Momoka 字幕审查、修复与验证
 
-先读仓库 `CLAUDE.md`。播放边界、凭据、并行写入和交付要求以它为准；本技能提供字幕专项方法，不另立安全或发布政策。
+先读仓库 [CLAUDE.md](../../../CLAUDE.md)。播放边界、凭据、并行写入和交付要求以它为准；当前命令、开关和报告路径见 [开发与验证](../../../docs/开发与验证.md)。本技能提供字幕专项方法，不另立安全或发布政策。
+
+字幕选择、外观和服务器字幕管理由本技能负责。涉及后端、管线、播放生命周期或 uosc 时联读 [momoka-playback](../momoka-playback/SKILL.md)；Emby 请求和鉴权见 [momoka-emby-api](../momoka-emby-api/SKILL.md)，设置页与控件接线见 [momoka-winui-shell](../momoka-winui-shell/SKILL.md)，验证结果和截图的判读见 [momoka-verification](../momoka-verification/SKILL.md)。
 
 ## 先判断任务类型
 
 - 用户只问“审查／缺什么／是否正常”：只给评估，不直接改代码。默认只读，工作要点保留在对话中；只有任务授权了验证或文件报告时才构建、运行探针或写报告，纯审查不发布应用。
 - 用户明确要求修复：只修已确认问题，增加双字幕面板、AI、独立下载源等属于扩展，不混进缺陷修复。“补功能”先盘点已有能力，只有明确了具体新增范围、依赖与副作用才实施；不能从参考项目整包推定授权。
-- 用户限制同时一个子代理时串行执行；限流且已授权自动重试时，等待当前代理结束后重试同一个代理，主代理继续非重叠工作。不要把失败代理说成完成，也不要反复要求用户催促。
-- 会话很长时把已确认事实收拢到一个简短工作记录，继续从它执行；不要重新搜索已核对过的文件和参考资料，也不要声称工具已清空了无法控制的对话上下文。
 
 ## 用一条完整链确认功能
 
@@ -91,7 +91,7 @@ description: Audit, fix and verify Momoka subtitle settings and playback behavio
 
 ## 验证阶梯
 
-1. **纯规则测试。** 先编译当前 Core＋测试，再跑 runner。相关套件有 `SubtitleBehaviorTests`、`SubtitlePreviewTests`、`HtmlColorTests`、`ServiceTests`、`PlaybackTests`、`InlineSwitchTests`。
+1. **纯规则测试。** 先编译当前 Core＋测试，再跑 runner。相关套件位于 `tests/Momoka.Tests/`：`SubtitleBehaviorTests`、[SubtitleManagementTests](../../../tests/Momoka.Tests/SubtitleManagementTests.cs)（切服、注销与删除前快照核对）、`SubtitlePreviewTests`、`HtmlColorTests`、`ServiceTests`、`PlaybackTests`、`InlineSwitchTests`。
 2. **裸内核。** 无媒体上下文读取参数；需要测换片时只用本地临时 SRT＋合成画面，禁用户配置、脚本和网络。明确裸内核不等于完整 uosc 验收。
 3. **真实控件离线探针。** `--probe-subtitles` 在真实设置加载前分流，使用临时默认设置、假操作委托和禁止 HTTP 的处理器。`inspect` 留屏，供原生桌面工具检查；用 `--screen`、`--theme`，不要与播放/导航/自检开关混用。
 4. **视觉和 UI 操作。** 使用可用的官方 Computer Use 技能，先语义定位。验证取消仍留字幕、未保存/重试、双行背景盒、窄窗口与缩放。没有挂树的 TextBox 可能不发 TextChanged；先让真实控件 Loaded，再检查结果，别直接放宽断言。

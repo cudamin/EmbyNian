@@ -20,7 +20,7 @@ Techniques and traps for the shader / 画质档位 side of the player, and the l
 
 1. **Get the file in.** `assets/shaders/<vendor>/`, upstream filename and extension unchanged (ravu ships `.hook`), and its row in that README — upstream URL, licence, date, and any local edit — in the same change. No licence statement upstream means don't ship it.
 2. **Read it before placing it** (next section). Does it scale, what is its gate, which hook point, which plane, is it multi-pass?
-3. **Place it, then check the gate against the tier.** A shader whose gate never opens for a cell's factor range is a no-op in that cell — that is how `FSRCNNX_x1` and `CAS` got proposed for tiers they could never act in.
+3. **Place it, then check the gate against the tier.** A shader whose gate never opens for a cell's factor range is a no-op in that cell. Distinguish a gate that opens in only part of the range from a whole-cell no-op.
 4. **Its prerequisites travel with it.** Chain options are derived from the chain in the catalog rather than written per cell, so teach the derivation once instead of copying options into every cell.
 5. **The C# 档位表 and the shipped files must not drift**: Core tests compare the catalogue against GLSL/HOOK sources; `verify-publish.ps1` separately hashes every shipped shader and licence/notice text against the repository. Exercise missing HOOK, corrupt and extra files with `test-shader-publish.ps1`. A complete source tree does not prove a complete release folder.
 6. **New mpv option → `NeutralOptions` entry + the both-directions round-trip test.** No exceptions; see the traps below.
@@ -28,7 +28,7 @@ Techniques and traps for the shader / 画质档位 side of the player, and the l
 
 ## Never judge a shader by its filename
 
-Three separate mistakes here came from reading the name instead of the file, and none of the three is boxed: `FSRCNNX_x1` was taken for the low-resolution "upscaler" though it does not upscale at all (README lists it among the considered-but-not-boxed files); `CAS` was proposed for a matrix where its gate can never fire; `Ani4Kv2_ArtCNN_C4F32_i2` turned out to be a third-party repack of upstream ArtCNN carrying a CC BY-NC weight licence. Open the file — four things are readable at the top of each pass:
+Three unshipped files illustrate different checks: `FSRCNNX_x1` does not upscale at all despite being proposed as a low-resolution upscaler; `CAS` can run at native 1:1 within 缩小档 but cannot cover that whole tier (see the shader README); `Ani4Kv2_ArtCNN_C4F32_i2` is a third-party repack of upstream ArtCNN carrying a CC BY-NC weight licence. Open the file — four things are readable at the top of each pass:
 
 - `//!WIDTH` / `//!HEIGHT` — whether it changes resolution and by how much (`LUMA.w 2.0 *` is a 2× doubler). **No such directive anywhere in the file means it does not scale**, whatever the name says.
 - `//!WHEN` — its gate. `OUTPUT.w LUMA.w / 1.3 >` means it silently does nothing below 1.3×.
@@ -41,7 +41,9 @@ Several shipped files gate themselves, so a chain that looks right on paper can 
 
 ## Order
 
-Only the order *within one hook point* comes from the chain list; mpv's renderer fixes the rest, and the repo's own conclusion (see `ShaderGroup.cs`) is that every LUMA hook runs before every CHROMA hook, both before POSTKERNEL, POSTKERNEL before SCALED. So "written first in the list" does not mean "runs first" — write the list in pipeline order anyway, because that is what makes 「hdeband 必须在最前面」 true where it matters (hdeband shares the LUMA hook with the luma upscaler) and readable everywhere else. A chroma-from-luma shader therefore reads luma *after* a doubler has run, which is what you want; if you ever doubt an ordering, measure it and pin the conclusion in a test rather than a comment.
+Within one hook point, the chain list controls execution order; the renderer fixes the order between stages. LUMA hooks run before CHROMA, both before POSTKERNEL, and POSTKERNEL before SCALED. Keep the list in pipeline order: hdeband must precede the luma upscaler because they share the LUMA hook.
+
+**Execution order and texture binding are separate.** The RAVU/CfL comparison in the [shader README](../../../assets/shaders/README.md) and `ShaderGroup.cs` records that the list still determines which LUMA texture CfL binds across hook stages. CfL listed after the upscaler reads enlarged luma; listed before it, CfL reads original luma and leaves `cscale` to finish the job. Keep CfL after the luma upscaler. When changing that order or the renderer, verify the bound and output sizes as well as pass order; CHROMA executing later does not by itself prove which luma it read.
 
 ## Prerequisites are part of the shader, not decoration
 
@@ -60,7 +62,7 @@ Per automatic chain: at most one top-level luma upscaler, at most one post-sharp
 ## Two traps that have already bitten
 
 - **Option residue.** Every mpv option any chain sets must appear in the `NeutralOptions` restore table, with the round-trip test in both directions. Miss one and switching away from that chain leaves the option — possibly a whole shader file — still in effect.
-- **The UI lying.** Quality presets and chains both wrote `scale`/`cscale`/`dscale`; the chain is applied last, so the chain always won while the settings page kept displaying the preset. Whenever two layers can write the same mpv option, one of them must stop, and a test should assert what the renderer actually ends up with rather than what the decision layer intended.
+- **The UI lying.** The old project-authored presets explicitly wrote `scale`/`cscale`/`dscale` and were then overwritten by the chain. Do not restore those hand-written preset scaler assignments. Built-in mpv profiles legitimately overlap with later options: the precedence is profile → user video options → chain prerequisites. Test the effective values and verify that removing the chain restores this playback's baseline, including expanded profile values. Use [momoka-video-output](../momoka-video-output/SKILL.md) for profile expansion, switch failures and restoration; overlapping option names alone are not a defect.
 - **着色器 is off out of the box and 画质预设 is not its sub-option** (both the user's call, 2026-09-05). So 画质预设 is the first row of the 画质与着色器 card, above 启用着色器, and it is decided independently of that switch — a contract test pins that the `profile` handed to mpv does not change with the 启用着色器 state (the `default` preset sends no `profile` key at all; the others send `profile=<preset>`). Don't make the preset conditional on a chain existing, and don't reorder the card back.
 
 ## Inspecting a permitted local render
@@ -69,7 +71,7 @@ The following measurements apply to an isolated local-file run permitted by CLAU
 
 - mpv's stats page lists every pass with its output size. That answers "is this shader running at all", "at what size" and "how expensive is it" directly. If you ever need a cost number, use measured pass times; don't invent cost tiers.
 - `screenshot window` captures the rendered result including shaders, so an A/B is two PNGs.
-- `--msg-level=vo/gpu=v` shows hook resolution and shader compile failures.
+- Select the log module for the actual renderer. Current built-in pipelines force `vo=gpu-next`, so use `--msg-level=vo/gpu-next=v` for detailed rendering and compilation diagnostics; `--msg-level=vo/gpu=v` applies to `vo=gpu` and does not match `vo/gpu-next`. Read the diagnostics together with `vo-passes` to establish which algorithms executed.
 - **Know what the fixture actually is before reading anything into a shot.** The `ffmpeg-probe` skill (user scope, `py <script>` — see `CLAUDE.md`) reads bit depth, chroma subsampling and HDR side data out of a file in one command, and `ffmpeg-hdr-color` covers PQ/HLG and tone mapping; a chroma-reconstruction or deband A/B against a source whose subsampling or transfer you guessed at proves nothing.
 
 The user judges whether the picture is preferable; the assistant verifies that the intended chain ran and that the comparison used equivalent source, geometry and output conditions. Provide a switchable A/B with a visible chain readout rather than treating passing rules as proof of better image quality.

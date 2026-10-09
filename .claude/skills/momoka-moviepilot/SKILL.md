@@ -32,7 +32,7 @@ description: "Develop, review and verify Momoka's MoviePilot integration: media-
 ## 资源列表
 
 - `search/media/{id}` 是已选媒体的精确搜索；带 `media_source`、类型 `mtype` 和已指定的 `season`（0 是特别篇，缺失不猜 1）。`search/title` 是关键词搜索，不能借用前一次选择的媒体身份。
-- 精确搜索只保留与所选来源、编号和类型一致的完整 `media_info`。即使身份一致，回话显式返回 `media_info_is_target=false`，或返回的字符串 `match_status` 不是 `exact`，仍须禁用下载，不能把候选当精确命中。这两个标志缺失时，仍按身份、类型和媒体快照的其他条件判断，不仅因缺字段拒绝；对应规则在 `MoviePilotMediaParser.ToResource`。
+- 精确搜索只保留与所选来源、编号和类型一致的完整 `media_info`。即使身份一致，回话显式返回 `media_info_is_target=false`，或解析得到的非空 `match_status` 不是 `exact`，仍须禁用下载，不能把候选当精确命中。缺少这两个标志或 `match_status` 为空字符串本身不构成否决，仍须核对身份、类型和媒体快照；对应规则在 `MoviePilotMediaParser.ToResource`。
 - 带可信媒体信息的下载走 `download/` 的 `media_in`，不能退回 `download/add` 再按种子标题猜片；后者没有影视 `mtype` 参数。
 - 搜索结果绑定获取时的连接与账号。订阅、下载和整理的防重状态由服务持有，不随重搜、新行或窗口重建清空；网络结果不明时保留“请先核对”，不开放直接重试。当前防重仅在本进程有效，不是跨进程幂等或服务器最终完成证明。
 - 资源字段来自 `torrent_info`：`page_url`、`description`、`labels`、`pubdate`、`downloadvolumefactor`、`uploadvolumefactor`、`freedate`、`hit_and_run`。清晰度通常来自 `meta_info.resource_pix`。
@@ -51,7 +51,7 @@ description: "Develop, review and verify Momoka's MoviePilot integration: media-
 ## 验证要回答的问题
 
 - 先用 Core 单测验证来源/编号配对、类型冲突、缺身份、数字或字符串字段、完整/部分失败回执；服务测试断言路径、参数与实际请求次数，而不只判断文案。
-- 精确资源覆盖身份相同但 `media_info_is_target=false`、字符串 `match_status` 非 `exact` 的场景，两个否决条件分别断言；另覆盖标志缺失且其余条件满足时仍允许下载。沿用 `MoviePilotQuerySafetyTests` 的匿名夹具，并断言下载被阻断而不只检查显示文案。
+- 精确资源覆盖身份相同但 `media_info_is_target=false`、解析得到非空且非 `exact` 的 `match_status` 的场景，两个否决条件分别断言；另覆盖标志缺失或 `match_status` 为空字符串、且其余条件满足时仍允许下载。沿用 `MoviePilotQuerySafetyTests` 的匿名夹具，并断言下载请求体能否构造，而不只检查显示文案。
 - 实际只读验证时，白名单限制为本轮需要的读取。某些 POST（如 `storage/list`、`preview:true`）在对应版本中是只读，必须按请求体核对；不能因为都是 POST 就混入提交，也不能因为都是 GET 就放行 `transfer/now` 等有副作用入口。
 - GUI 分开验证搜索结果、来源标签、资源过滤、空/错/忙状态，以及下载和订阅的确认/取消。取消不是下载或订阅已成功的证据。
 - 订阅按请求方法、请求体与**请求次数**断言：POST 成功、POST 405 才改发 GET、超时不得改发、结果不明锁定后不重发；编辑的请求体只含实际改动的字段。

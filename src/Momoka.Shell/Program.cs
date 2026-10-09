@@ -169,8 +169,9 @@ public sealed record StartupOptions
     public bool ScrollHalf { get; init; }
 
     /// <summary>
-    /// Tooling only: 把详情页那颗字幕下拉弹开留着，好给它拍一张（<c>--show-picker</c>）。配 <c>--show-detail</c>
-    /// 或 <c>--show-episode</c> 用；单独用时自己走到第一个图书馆的第一张详情页。
+    /// Tooling only: 把详情页的一颗下拉弹开留着，好给它拍一张（<c>--show-picker</c>）。配 <c>--show-detail</c>
+    /// 或 <c>--show-episode</c> 用；单独用时自己走到第一个图书馆的第一张详情页。弹哪一颗由
+    /// <c>DetailPage.PickerToOpen</c> 定：字幕优先，没有字幕轨的片子退到音频。
     /// <para>
     /// 和 <see cref="ShowMenu"/> 同一条理由：浮层只在点开的那一瞬之后存在，等是等不出来的，而这台机器上注不进
     /// 鼠标事件。弹层开在哪一棵树里、透不透得出底下那一页，是 2026-09-27「音频和字幕的选择栏改成亚克力背景」
