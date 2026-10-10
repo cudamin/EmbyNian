@@ -4,7 +4,7 @@
 
 telegram 发布频道：[https://t.me/Ebizuka_Tomo](https://t.me/Ebizuka_Tomo)
 
-观影交流群：1039548970
+观影交流群：[1039548970](https://qm.qq.com/q/vXph3vMyFW)
 
 
 ## 设计参考
