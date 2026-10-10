@@ -4,6 +4,8 @@
 
 telegram 发布频道：[https://t.me/Ebizuka_Tomo](https://t.me/Ebizuka_Tomo)
 
+观影交流群：1039548970
+
 界面是原生 WinUI 3，播放器内核是 libmpv。
 ## 设计参考
 
